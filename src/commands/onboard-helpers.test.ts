@@ -12,7 +12,13 @@ const mocks = vi.hoisted(() => ({
     (
       argv: string[],
       options?: { timeoutMs?: number; windowsVerbatimArguments?: boolean },
-    ) => Promise<{ stdout: string; stderr: string; code: number; signal: null; killed: boolean }>
+    ) => Promise<{
+      stdout: string;
+      stderr: string;
+      code: number;
+      signal: null;
+      killed: boolean;
+    }>
   >(async () => ({
     stdout: "",
     stderr: "",
@@ -39,7 +45,9 @@ describe("openUrl", () => {
   it("quotes URLs on win32 so '&' is not treated as cmd separator", async () => {
     vi.stubEnv("VITEST", "");
     vi.stubEnv("NODE_ENV", "");
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const platformSpy = vi
+      .spyOn(process, "platform", "get")
+      .mockReturnValue("win32");
     vi.stubEnv("VITEST", "");
     vi.stubEnv("NODE_ENV", "development");
 
@@ -64,7 +72,9 @@ describe("openUrl", () => {
 
 describe("resolveBrowserOpenCommand", () => {
   it("marks win32 commands as quoteUrl=true", async () => {
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const platformSpy = vi
+      .spyOn(process, "platform", "get")
+      .mockReturnValue("win32");
     const resolved = await resolveBrowserOpenCommand();
     expect(resolved.argv).toEqual(["cmd", "/c", "start", ""]);
     expect(resolved.quoteUrl).toBe(true);

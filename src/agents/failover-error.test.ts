@@ -10,7 +10,9 @@ import {
 describe("failover-error", () => {
   it("infers failover reason from HTTP status", () => {
     expect(resolveFailoverReasonFromError({ status: 402 })).toBe("billing");
-    expect(resolveFailoverReasonFromError({ statusCode: "429" })).toBe("rate_limit");
+    expect(resolveFailoverReasonFromError({ statusCode: "429" })).toBe(
+      "rate_limit",
+    );
     expect(resolveFailoverReasonFromError({ status: 403 })).toBe("auth");
     expect(resolveFailoverReasonFromError({ status: 408 })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ status: 400 })).toBe("format");
@@ -29,16 +31,26 @@ describe("failover-error", () => {
   });
 
   it("infers timeout from common node error codes", () => {
-    expect(resolveFailoverReasonFromError({ code: "ETIMEDOUT" })).toBe("timeout");
-    expect(resolveFailoverReasonFromError({ code: "ECONNRESET" })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ code: "ETIMEDOUT" })).toBe(
+      "timeout",
+    );
+    expect(resolveFailoverReasonFromError({ code: "ECONNRESET" })).toBe(
+      "timeout",
+    );
   });
 
   it("infers timeout from abort stop-reason messages", () => {
-    expect(resolveFailoverReasonFromError({ message: "Unhandled stop reason: abort" })).toBe(
+    expect(
+      resolveFailoverReasonFromError({
+        message: "Unhandled stop reason: abort",
+      }),
+    ).toBe("timeout");
+    expect(
+      resolveFailoverReasonFromError({ message: "stop reason: abort" }),
+    ).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ message: "reason: abort" })).toBe(
       "timeout",
     );
-    expect(resolveFailoverReasonFromError({ message: "stop reason: abort" })).toBe("timeout");
-    expect(resolveFailoverReasonFromError({ message: "reason: abort" })).toBe("timeout");
   });
 
   it("treats AbortError reason=abort as timeout", () => {
@@ -71,20 +83,30 @@ describe("failover-error", () => {
   });
 
   it("401/403 with generic message still returns auth (backward compat)", () => {
-    expect(resolveFailoverReasonFromError({ status: 401, message: "Unauthorized" })).toBe("auth");
-    expect(resolveFailoverReasonFromError({ status: 403, message: "Forbidden" })).toBe("auth");
+    expect(
+      resolveFailoverReasonFromError({ status: 401, message: "Unauthorized" }),
+    ).toBe("auth");
+    expect(
+      resolveFailoverReasonFromError({ status: 403, message: "Forbidden" }),
+    ).toBe("auth");
   });
 
   it("401 with permanent auth message returns auth_permanent", () => {
-    expect(resolveFailoverReasonFromError({ status: 401, message: "invalid_api_key" })).toBe(
-      "auth_permanent",
-    );
+    expect(
+      resolveFailoverReasonFromError({
+        status: 401,
+        message: "invalid_api_key",
+      }),
+    ).toBe("auth_permanent");
   });
 
   it("403 with revoked key message returns auth_permanent", () => {
-    expect(resolveFailoverReasonFromError({ status: 403, message: "api key revoked" })).toBe(
-      "auth_permanent",
-    );
+    expect(
+      resolveFailoverReasonFromError({
+        status: 403,
+        message: "api key revoked",
+      }),
+    ).toBe("auth_permanent");
   });
 
   it("resolveFailoverStatus maps auth_permanent to 403", () => {

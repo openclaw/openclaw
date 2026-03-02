@@ -1,7 +1,11 @@
 import { Command } from "commander";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createIosNodeListResponse } from "./program.nodes-test-helpers.js";
-import { callGateway, installBaseProgramMocks, runtime } from "./program.test-mocks.js";
+import {
+  callGateway,
+  installBaseProgramMocks,
+  runtime,
+} from "./program.test-mocks.js";
 
 installBaseProgramMocks();
 let registerNodesCli: (program: Command) => void;
@@ -10,7 +14,11 @@ function formatRuntimeLogCallArg(value: unknown): string {
   if (typeof value === "string") {
     return value;
   }
-  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+  if (
+    typeof value === "number" ||
+    typeof value === "boolean" ||
+    typeof value === "bigint"
+  ) {
     return String(value);
   }
   if (value == null) {
@@ -39,10 +47,15 @@ describe("cli program (nodes basics)", () => {
   }
 
   function getRuntimeOutput() {
-    return runtime.log.mock.calls.map((c) => formatRuntimeLogCallArg(c[0])).join("\n");
+    return runtime.log.mock.calls
+      .map((c) => formatRuntimeLogCallArg(c[0]))
+      .join("\n");
   }
 
-  function mockGatewayWithIosNodeListAnd(method: "node.describe" | "node.invoke", result: unknown) {
+  function mockGatewayWithIosNodeListAnd(
+    method: "node.describe" | "node.invoke",
+    result: unknown,
+  ) {
     callGateway.mockImplementation(async (...args: unknown[]) => {
       const opts = (args[0] ?? {}) as { method?: string };
       if (opts.method === "node.list") {
@@ -94,7 +107,9 @@ describe("cli program (nodes basics)", () => {
     });
     await runProgram(["nodes", "list", "--connected"]);
 
-    expect(callGateway).toHaveBeenCalledWith(expect.objectContaining({ method: "node.list" }));
+    expect(callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({ method: "node.list" }),
+    );
     const output = getRuntimeOutput();
     expect(output).toContain("One");
     expect(output).not.toContain("Two");
@@ -126,7 +141,9 @@ describe("cli program (nodes basics)", () => {
     });
     await runProgram(["nodes", "status", "--last-connected", "24h"]);
 
-    expect(callGateway).toHaveBeenCalledWith(expect.objectContaining({ method: "node.pair.list" }));
+    expect(callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({ method: "node.pair.list" }),
+    );
     const output = getRuntimeOutput();
     expect(output).toContain("One");
     expect(output).not.toContain("Two");
@@ -186,22 +203,25 @@ describe("cli program (nodes basics)", () => {
         "canvas",
       ],
     },
-  ])("runs nodes status and renders $label", async ({ node, expectedOutput }) => {
-    callGateway.mockResolvedValue({
-      ts: Date.now(),
-      nodes: [node],
-    });
-    await runProgram(["nodes", "status"]);
+  ])(
+    "runs nodes status and renders $label",
+    async ({ node, expectedOutput }) => {
+      callGateway.mockResolvedValue({
+        ts: Date.now(),
+        nodes: [node],
+      });
+      await runProgram(["nodes", "status"]);
 
-    expect(callGateway).toHaveBeenCalledWith(
-      expect.objectContaining({ method: "node.list", params: {} }),
-    );
+      expect(callGateway).toHaveBeenCalledWith(
+        expect.objectContaining({ method: "node.list", params: {} }),
+      );
 
-    const output = getRuntimeOutput();
-    for (const expected of expectedOutput) {
-      expect(output).toContain(expected);
-    }
-  });
+      const output = getRuntimeOutput();
+      for (const expected of expectedOutput) {
+        expect(output).toContain(expected);
+      }
+    },
+  );
 
   it("runs nodes describe and calls node.describe", async () => {
     mockGatewayWithIosNodeListAnd("node.describe", {

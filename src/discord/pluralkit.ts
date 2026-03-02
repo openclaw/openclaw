@@ -43,9 +43,12 @@ export async function fetchPluralKitMessageInfo(params: {
   if (params.config.token?.trim()) {
     headers.Authorization = params.config.token.trim();
   }
-  const res = await fetchImpl(`${PLURALKIT_API_BASE}/messages/${params.messageId}`, {
-    headers,
-  });
+  const res = await fetchImpl(
+    `${PLURALKIT_API_BASE}/messages/${params.messageId}`,
+    {
+      headers,
+    },
+  );
   if (res.status === 404) {
     return null;
   }

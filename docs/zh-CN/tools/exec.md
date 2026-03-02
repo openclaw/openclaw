@@ -144,7 +144,12 @@ openclaw config set agents.list[0].tools.exec.node "node-id-or-name"
 粘贴（默认带括号）：
 
 ```json
-{ "tool": "process", "action": "paste", "sessionId": "<id>", "text": "line1\nline2\n" }
+{
+  "tool": "process",
+  "action": "paste",
+  "sessionId": "<id>",
+  "text": "line1\nline2\n"
+}
 ```
 
 ## apply_patch（实验性）

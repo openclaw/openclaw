@@ -7,7 +7,12 @@ import {
 
 export type AuthProfileSource = "store";
 
-export type AuthProfileHealthStatus = "ok" | "expiring" | "expired" | "missing" | "static";
+export type AuthProfileHealthStatus =
+  | "ok"
+  | "expiring"
+  | "expired"
+  | "missing"
+  | "static";
 
 export type AuthProfileHealth = {
   profileId: string;
@@ -20,7 +25,12 @@ export type AuthProfileHealth = {
   label: string;
 };
 
-export type AuthProviderHealthStatus = "ok" | "expiring" | "expired" | "missing" | "static";
+export type AuthProviderHealthStatus =
+  | "ok"
+  | "expiring"
+  | "expired"
+  | "missing"
+  | "static";
 
 export type AuthProviderHealth = {
   provider: string;
@@ -39,7 +49,9 @@ export type AuthHealthSummary = {
 
 export const DEFAULT_OAUTH_WARN_MS = 24 * 60 * 60 * 1000;
 
-export function resolveAuthProfileSource(_profileId: string): AuthProfileSource {
+export function resolveAuthProfileSource(
+  _profileId: string,
+): AuthProfileSource {
   return "store";
 }
 
@@ -114,7 +126,8 @@ function buildProfileHealth(params: {
 
   if (credential.type === "token") {
     const expiresAt =
-      typeof credential.expires === "number" && Number.isFinite(credential.expires)
+      typeof credential.expires === "number" &&
+      Number.isFinite(credential.expires)
         ? credential.expires
         : undefined;
     if (!expiresAt || expiresAt <= 0) {
@@ -127,7 +140,11 @@ function buildProfileHealth(params: {
         label,
       };
     }
-    const { status, remainingMs } = resolveOAuthStatus(expiresAt, now, warnAfterMs);
+    const { status, remainingMs } = resolveOAuthStatus(
+      expiresAt,
+      now,
+      warnAfterMs,
+    );
     return {
       profileId,
       provider: credential.provider,
@@ -140,7 +157,8 @@ function buildProfileHealth(params: {
     };
   }
 
-  const hasRefreshToken = typeof credential.refresh === "string" && credential.refresh.length > 0;
+  const hasRefreshToken =
+    typeof credential.refresh === "string" && credential.refresh.length > 0;
   const { status: rawStatus, remainingMs } = resolveOAuthStatus(
     credential.expires,
     now,
@@ -149,7 +167,9 @@ function buildProfileHealth(params: {
   // OAuth credentials with a valid refresh token auto-renew on first API call,
   // so don't warn about access token expiration.
   const status =
-    hasRefreshToken && (rawStatus === "expired" || rawStatus === "expiring") ? "ok" : rawStatus;
+    hasRefreshToken && (rawStatus === "expired" || rawStatus === "expiring")
+      ? "ok"
+      : rawStatus;
   return {
     profileId,
     provider: credential.provider,
@@ -175,7 +195,9 @@ export function buildAuthHealthSummary(params: {
     : null;
 
   const profiles = Object.entries(params.store.profiles)
-    .filter(([_, cred]) => (providerFilter ? providerFilter.has(cred.provider) : true))
+    .filter(([_, cred]) =>
+      providerFilter ? providerFilter.has(cred.provider) : true,
+    )
     .map(([profileId, credential]) =>
       buildProfileHealth({
         profileId,
@@ -227,7 +249,9 @@ export function buildAuthHealthSummary(params: {
 
     const oauthProfiles = provider.profiles.filter((p) => p.type === "oauth");
     const tokenProfiles = provider.profiles.filter((p) => p.type === "token");
-    const apiKeyProfiles = provider.profiles.filter((p) => p.type === "api_key");
+    const apiKeyProfiles = provider.profiles.filter(
+      (p) => p.type === "api_key",
+    );
 
     const expirable = [...oauthProfiles, ...tokenProfiles];
     if (expirable.length === 0) {

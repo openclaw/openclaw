@@ -33,7 +33,10 @@ describe("hasAnyWhatsAppAuth", () => {
   });
 
   it("returns true when legacy auth exists", () => {
-    fs.writeFileSync(path.join(tempOauthDir ?? "", "creds.json"), JSON.stringify({ me: {} }));
+    fs.writeFileSync(
+      path.join(tempOauthDir ?? "", "creds.json"),
+      JSON.stringify({ me: {} }),
+    );
     expect(hasAnyWhatsAppAuth({})).toBe(true);
   });
 
@@ -43,7 +46,9 @@ describe("hasAnyWhatsAppAuth", () => {
   });
 
   it("includes authDir overrides", () => {
-    const customDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-wa-auth-"));
+    const customDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "openclaw-wa-auth-"),
+    );
     try {
       writeCreds(customDir);
       const cfg = {

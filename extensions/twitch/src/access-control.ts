@@ -112,7 +112,10 @@ export function checkTwitchAccessControl(params: {
 /**
  * Check if the sender has any of the allowed roles
  */
-function checkSenderRoles(params: { message: TwitchChatMessage; allowedRoles: string[] }): boolean {
+function checkSenderRoles(params: {
+  message: TwitchChatMessage;
+  allowedRoles: string[];
+}): boolean {
   const { message, allowedRoles } = params;
   const { isMod, isOwner, isVip, isSub } = message;
 

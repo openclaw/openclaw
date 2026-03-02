@@ -11,6 +11,8 @@ describe("readNextcloudTalkWebhookBody", () => {
 
   it("rejects when payload exceeds max bytes", async () => {
     const req = createMockIncomingRequest(["x".repeat(300)]);
-    await expect(readNextcloudTalkWebhookBody(req, 128)).rejects.toThrow("PayloadTooLarge");
+    await expect(readNextcloudTalkWebhookBody(req, 128)).rejects.toThrow(
+      "PayloadTooLarge",
+    );
   });
 });

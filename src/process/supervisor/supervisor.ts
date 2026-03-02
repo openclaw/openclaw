@@ -35,7 +35,10 @@ export function createProcessSupervisor(): ProcessSupervisor {
   const registry = createRunRegistry();
   const active = new Map<string, ActiveRun>();
 
-  const cancel = (runId: string, reason: TerminationReason = "manual-cancel") => {
+  const cancel = (
+    runId: string,
+    reason: TerminationReason = "manual-cancel",
+  ) => {
     const current = active.get(runId);
     if (!current) {
       return;
@@ -46,7 +49,10 @@ export function createProcessSupervisor(): ProcessSupervisor {
     current.run.cancel(reason);
   };
 
-  const cancelScope = (scopeKey: string, reason: TerminationReason = "manual-cancel") => {
+  const cancelScope = (
+    scopeKey: string,
+    reason: TerminationReason = "manual-cancel",
+  ) => {
     if (!scopeKey.trim()) {
       return;
     }
@@ -210,7 +216,8 @@ export function createProcessSupervisor(): ProcessSupervisor {
         active.delete(runId);
 
         const reason: TerminationReason =
-          forcedReason ?? (result.signal != null ? ("signal" as const) : ("exit" as const));
+          forcedReason ??
+          (result.signal != null ? ("signal" as const) : ("exit" as const));
         const exit: RunExit = {
           reason,
           exitCode: result.code,

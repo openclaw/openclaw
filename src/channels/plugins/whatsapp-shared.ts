@@ -7,7 +7,9 @@ export function resolveWhatsAppGroupIntroHint(): string {
   return WHATSAPP_GROUP_INTRO_HINT;
 }
 
-export function resolveWhatsAppMentionStripPatterns(ctx: { To?: string | null }): string[] {
+export function resolveWhatsAppMentionStripPatterns(ctx: {
+  To?: string | null;
+}): string[] {
   const selfE164 = (ctx.To ?? "").replace(/^whatsapp:/, "");
   if (!selfE164) {
     return [];

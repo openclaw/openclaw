@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { looksLikeIMessageTargetId, normalizeIMessageMessagingTarget } from "./imessage.js";
-import { looksLikeWhatsAppTargetId, normalizeWhatsAppMessagingTarget } from "./whatsapp.js";
+import {
+  looksLikeIMessageTargetId,
+  normalizeIMessageMessagingTarget,
+} from "./imessage.js";
+import {
+  looksLikeWhatsAppTargetId,
+  normalizeWhatsAppMessagingTarget,
+} from "./whatsapp.js";
 
 describe("normalize target helpers", () => {
   describe("iMessage", () => {

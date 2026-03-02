@@ -9,7 +9,13 @@ const mocks = vi.hoisted(() => ({
   logWarn: vi.fn(),
   logDebug: vi.fn(),
 }));
-const { createService, shutdown, registerUnhandledRejectionHandler, logWarn, logDebug } = mocks;
+const {
+  createService,
+  shutdown,
+  registerUnhandledRejectionHandler,
+  logWarn,
+  logDebug,
+} = mocks;
 const getLoggerInfo = vi.fn();
 
 const asString = (value: unknown, fallback: string) =>
@@ -38,7 +44,8 @@ function mockCiaoService(params?: {
       destroy,
       serviceState: params?.serviceState ?? "announced",
       on,
-      getFQDN: () => `${asString(options.type, "service")}.${asString(options.domain, "local")}.`,
+      getFQDN: () =>
+        `${asString(options.type, "service")}.${asString(options.domain, "local")}.`,
       getHostname: () => asString(options.hostname, "unknown"),
       getPort: () => Number(options.port ?? -1),
     };
@@ -47,7 +54,8 @@ function mockCiaoService(params?: {
 }
 
 vi.mock("../logger.js", async () => {
-  const actual = await vi.importActual<typeof import("../logger.js")>("../logger.js");
+  const actual =
+    await vi.importActual<typeof import("../logger.js")>("../logger.js");
   return {
     ...actual,
     logWarn: (message: string) => logWarn(message),
@@ -70,8 +78,9 @@ vi.mock("@homebridge/ciao", () => {
 
 vi.mock("./unhandled-rejections.js", () => {
   return {
-    registerUnhandledRejectionHandler: (handler: (reason: unknown) => boolean) =>
-      registerUnhandledRejectionHandler(handler),
+    registerUnhandledRejectionHandler: (
+      handler: (reason: unknown) => boolean,
+    ) => registerUnhandledRejectionHandler(handler),
   };
 });
 
@@ -133,20 +142,30 @@ describe("gateway bonjour advertiser", () => {
     });
 
     expect(createService).toHaveBeenCalledTimes(1);
-    const [gatewayCall] = createService.mock.calls as Array<[Record<string, unknown>]>;
+    const [gatewayCall] = createService.mock.calls as Array<
+      [Record<string, unknown>]
+    >;
     expect(gatewayCall?.[0]?.type).toBe("openclaw-gw");
     const gatewayType = asString(gatewayCall?.[0]?.type, "");
     expect(gatewayType.length).toBeLessThanOrEqual(15);
     expect(gatewayCall?.[0]?.port).toBe(18789);
     expect(gatewayCall?.[0]?.domain).toBe("local");
     expect(gatewayCall?.[0]?.hostname).toBe("test-host");
-    expect((gatewayCall?.[0]?.txt as Record<string, string>)?.lanHost).toBe("test-host.local");
-    expect((gatewayCall?.[0]?.txt as Record<string, string>)?.gatewayPort).toBe("18789");
-    expect((gatewayCall?.[0]?.txt as Record<string, string>)?.sshPort).toBe("2222");
+    expect((gatewayCall?.[0]?.txt as Record<string, string>)?.lanHost).toBe(
+      "test-host.local",
+    );
+    expect((gatewayCall?.[0]?.txt as Record<string, string>)?.gatewayPort).toBe(
+      "18789",
+    );
+    expect((gatewayCall?.[0]?.txt as Record<string, string>)?.sshPort).toBe(
+      "2222",
+    );
     expect((gatewayCall?.[0]?.txt as Record<string, string>)?.cliPath).toBe(
       "/opt/homebrew/bin/openclaw",
     );
-    expect((gatewayCall?.[0]?.txt as Record<string, string>)?.transport).toBe("gateway");
+    expect((gatewayCall?.[0]?.txt as Record<string, string>)?.transport).toBe(
+      "gateway",
+    );
 
     // We don't await `advertise()`, but it should still be called for each service.
     expect(advertise).toHaveBeenCalledTimes(1);
@@ -172,9 +191,15 @@ describe("gateway bonjour advertiser", () => {
       minimal: true,
     });
 
-    const [gatewayCall] = createService.mock.calls as Array<[Record<string, unknown>]>;
-    expect((gatewayCall?.[0]?.txt as Record<string, string>)?.sshPort).toBeUndefined();
-    expect((gatewayCall?.[0]?.txt as Record<string, string>)?.cliPath).toBeUndefined();
+    const [gatewayCall] = createService.mock.calls as Array<
+      [Record<string, unknown>]
+    >;
+    expect(
+      (gatewayCall?.[0]?.txt as Record<string, string>)?.sshPort,
+    ).toBeUndefined();
+    expect(
+      (gatewayCall?.[0]?.txt as Record<string, string>)?.cliPath,
+    ).toBeUndefined();
 
     await started.stop();
   });
@@ -197,7 +222,10 @@ describe("gateway bonjour advertiser", () => {
     });
 
     // 1 service × 2 listeners
-    expect(onCalls.map((c) => c.event)).toEqual(["name-change", "hostname-change"]);
+    expect(onCalls.map((c) => c.event)).toEqual([
+      "name-change",
+      "hostname-change",
+    ]);
 
     await started.stop();
   });
@@ -251,7 +279,9 @@ describe("gateway bonjour advertiser", () => {
 
     // allow promise rejection handler to run
     await Promise.resolve();
-    expect(logWarn).toHaveBeenCalledWith(expect.stringContaining("advertise failed"));
+    expect(logWarn).toHaveBeenCalledWith(
+      expect.stringContaining("advertise failed"),
+    );
 
     // watchdog should attempt re-advertise at the 60s interval tick
     await vi.advanceTimersByTimeAsync(60_000);
@@ -278,7 +308,9 @@ describe("gateway bonjour advertiser", () => {
     });
 
     expect(advertise).toHaveBeenCalledTimes(1);
-    expect(logWarn).toHaveBeenCalledWith(expect.stringContaining("advertise threw"));
+    expect(logWarn).toHaveBeenCalledWith(
+      expect.stringContaining("advertise threw"),
+    );
 
     await started.stop();
   });
@@ -303,7 +335,9 @@ describe("gateway bonjour advertiser", () => {
     expect(gatewayCall?.[0]?.name).toBe("openclaw (OpenClaw)");
     expect(gatewayCall?.[0]?.domain).toBe("local");
     expect(gatewayCall?.[0]?.hostname).toBe("openclaw");
-    expect((gatewayCall?.[0]?.txt as Record<string, string>)?.lanHost).toBe("openclaw.local");
+    expect((gatewayCall?.[0]?.txt as Record<string, string>)?.lanHost).toBe(
+      "openclaw.local",
+    );
 
     await started.stop();
   });

@@ -71,9 +71,12 @@ describe("registerSkillsCli", () => {
   it("runs list command with resolved report and formatter options", async () => {
     await runCli(["skills", "list", "--eligible", "--verbose", "--json"]);
 
-    expect(buildWorkspaceSkillStatusMock).toHaveBeenCalledWith("/tmp/workspace", {
-      config: { gateway: {} },
-    });
+    expect(buildWorkspaceSkillStatusMock).toHaveBeenCalledWith(
+      "/tmp/workspace",
+      {
+        config: { gateway: {} },
+      },
+    );
     expect(formatSkillsListMock).toHaveBeenCalledWith(
       report,
       expect.objectContaining({
@@ -99,7 +102,10 @@ describe("registerSkillsCli", () => {
   it("runs check command and writes formatter output", async () => {
     await runCli(["skills", "check"]);
 
-    expect(formatSkillsCheckMock).toHaveBeenCalledWith(report, expect.any(Object));
+    expect(formatSkillsCheckMock).toHaveBeenCalledWith(
+      report,
+      expect.any(Object),
+    );
     expect(runtime.log).toHaveBeenCalledWith("skills-check-output");
   });
 

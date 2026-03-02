@@ -8,7 +8,10 @@ import {
 } from "./channel-access.js";
 
 function createPrompter(params?: {
-  confirm?: (options: { message: string; initialValue: boolean }) => Promise<boolean>;
+  confirm?: (options: {
+    message: string;
+    initialValue: boolean;
+  }) => Promise<boolean>;
   select?: (options: {
     message: string;
     options: Array<{ value: string; label: string }>;

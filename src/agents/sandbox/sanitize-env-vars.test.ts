@@ -14,7 +14,9 @@ describe("sanitizeEnvVars", () => {
       NODE_ENV: "test",
       FOO: "bar",
     });
-    expect(result.blocked).toEqual(expect.arrayContaining(["OPENAI_API_KEY", "GITHUB_TOKEN"]));
+    expect(result.blocked).toEqual(
+      expect.arrayContaining(["OPENAI_API_KEY", "GITHUB_TOKEN"]),
+    );
   });
 
   it("blocks credentials even when suffix pattern matches", () => {
@@ -25,7 +27,9 @@ describe("sanitizeEnvVars", () => {
     });
 
     expect(result.allowed).toEqual({ USER: "alice" });
-    expect(result.blocked).toEqual(expect.arrayContaining(["MY_TOKEN", "MY_SECRET"]));
+    expect(result.blocked).toEqual(
+      expect.arrayContaining(["MY_TOKEN", "MY_SECRET"]),
+    );
   });
 
   it("adds warnings for suspicious values", () => {
@@ -39,7 +43,9 @@ describe("sanitizeEnvVars", () => {
 
     expect(result.allowed).toEqual({ USER: "alice", SAFE_TEXT: base64Like });
     expect(result.blocked).toContain("NULL");
-    expect(result.warnings).toContain("SAFE_TEXT: Value looks like base64-encoded credential data");
+    expect(result.warnings).toContain(
+      "SAFE_TEXT: Value looks like base64-encoded credential data",
+    );
   });
 
   it("supports strict mode with explicit allowlist", () => {

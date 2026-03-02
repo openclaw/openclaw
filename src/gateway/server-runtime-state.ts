@@ -1,7 +1,10 @@
 import type { Server as HttpServer } from "node:http";
 import { WebSocketServer } from "ws";
 import { CANVAS_HOST_PATH } from "../canvas-host/a2ui.js";
-import { type CanvasHostHandler, createCanvasHostHandler } from "../canvas-host/server.js";
+import {
+  type CanvasHostHandler,
+  createCanvasHostHandler,
+} from "../canvas-host/server.js";
 import type { CliDeps } from "../cli/deps.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginRegistry } from "../plugins/registry.js";
@@ -23,7 +26,10 @@ import {
   createToolEventRecipientRegistry,
 } from "./server-chat.js";
 import { MAX_PAYLOAD_BYTES } from "./server-constants.js";
-import { attachGatewayUpgradeHandler, createGatewayHttpServer } from "./server-http.js";
+import {
+  attachGatewayUpgradeHandler,
+  createGatewayHttpServer,
+} from "./server-http.js";
 import type { DedupeEntry } from "./server-shared.js";
 import { createGatewayHooksRequestHandler } from "./server/hooks.js";
 import { listenGatewayHttpServer } from "./server/http-listen.js";
@@ -105,7 +111,9 @@ export async function createGatewayRuntimeState(params: {
   }
 
   const clients = new Set<GatewayWsClient>();
-  const { broadcast, broadcastToConnIds } = createGatewayBroadcaster({ clients });
+  const { broadcast, broadcastToConnIds } = createGatewayBroadcaster({
+    clients,
+  });
 
   const handleHooksRequest = createGatewayHooksRequestHandler({
     deps: params.deps,
@@ -119,8 +127,13 @@ export async function createGatewayRuntimeState(params: {
     registry: params.pluginRegistry,
     log: params.logPlugins,
   });
-  const shouldEnforcePluginGatewayAuth = (pathContext: PluginRoutePathContext): boolean => {
-    return shouldEnforceGatewayAuthForPluginPath(params.pluginRegistry, pathContext);
+  const shouldEnforcePluginGatewayAuth = (
+    pathContext: PluginRoutePathContext,
+  ): boolean => {
+    return shouldEnforceGatewayAuthForPluginPath(
+      params.pluginRegistry,
+      pathContext,
+    );
   };
 
   const bindHosts = await resolveGatewayListenHosts(params.bindHost);
@@ -130,7 +143,10 @@ export async function createGatewayRuntimeState(params: {
         "Ensure authentication is configured before exposing to public networks.",
     );
   }
-  if (params.cfg.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true) {
+  if (
+    params.cfg.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback ===
+    true
+  ) {
     params.log.warn(
       "⚠️  gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true is enabled. " +
         "Host-header origin fallback weakens origin checks and should only be used as break-glass.",
@@ -154,7 +170,9 @@ export async function createGatewayRuntimeState(params: {
       shouldEnforcePluginGatewayAuth,
       resolvedAuth: params.resolvedAuth,
       rateLimiter: params.rateLimiter,
-      tlsOptions: params.gatewayTls?.enabled ? params.gatewayTls.tlsOptions : undefined,
+      tlsOptions: params.gatewayTls?.enabled
+        ? params.gatewayTls.tlsOptions
+        : undefined,
     });
     try {
       await listenGatewayHttpServer({

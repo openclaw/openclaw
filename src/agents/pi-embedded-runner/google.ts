@@ -57,13 +57,19 @@ const GOOGLE_SCHEMA_UNSUPPORTED_KEYWORDS = new Set([
 const INTER_SESSION_PREFIX_BASE = "[Inter-session message]";
 
 function buildInterSessionPrefix(message: AgentMessage): string {
-  const provenance = normalizeInputProvenance((message as { provenance?: unknown }).provenance);
+  const provenance = normalizeInputProvenance(
+    (message as { provenance?: unknown }).provenance,
+  );
   if (!provenance) {
     return INTER_SESSION_PREFIX_BASE;
   }
   const details = [
-    provenance.sourceSessionKey ? `sourceSession=${provenance.sourceSessionKey}` : undefined,
-    provenance.sourceChannel ? `sourceChannel=${provenance.sourceChannel}` : undefined,
+    provenance.sourceSessionKey
+      ? `sourceSession=${provenance.sourceSessionKey}`
+      : undefined,
+    provenance.sourceChannel
+      ? `sourceChannel=${provenance.sourceChannel}`
+      : undefined,
     provenance.sourceTool ? `sourceTool=${provenance.sourceTool}` : undefined,
   ].filter(Boolean);
   if (details.length === 0) {
@@ -72,11 +78,17 @@ function buildInterSessionPrefix(message: AgentMessage): string {
   return `${INTER_SESSION_PREFIX_BASE} ${details.join(" ")}`;
 }
 
-function annotateInterSessionUserMessages(messages: AgentMessage[]): AgentMessage[] {
+function annotateInterSessionUserMessages(
+  messages: AgentMessage[],
+): AgentMessage[] {
   let touched = false;
   const out: AgentMessage[] = [];
   for (const msg of messages) {
-    if (!hasInterSessionUserProvenance(msg as { role?: unknown; provenance?: unknown })) {
+    if (
+      !hasInterSessionUserProvenance(
+        msg as { role?: unknown; provenance?: unknown },
+      )
+    ) {
       out.push(msg);
       continue;
     }
@@ -108,7 +120,10 @@ function annotateInterSessionUserMessages(messages: AgentMessage[]): AgentMessag
     );
 
     if (textIndex >= 0) {
-      const existing = user.content[textIndex] as { type: "text"; text: string };
+      const existing = user.content[textIndex] as {
+        type: "text";
+        text: string;
+      };
       if (existing.text.startsWith(prefix)) {
         out.push(msg);
         continue;
@@ -148,7 +163,9 @@ function parseMessageTimestamp(value: unknown): number | null {
   return null;
 }
 
-function stripStaleAssistantUsageBeforeLatestCompaction(messages: AgentMessage[]): AgentMessage[] {
+function stripStaleAssistantUsageBeforeLatestCompaction(
+  messages: AgentMessage[],
+): AgentMessage[] {
   let latestCompactionSummaryIndex = -1;
   let latestCompactionTimestamp: number | null = null;
   for (let i = 0; i < messages.length; i += 1) {
@@ -200,7 +217,10 @@ function stripStaleAssistantUsageBeforeLatestCompaction(messages: AgentMessage[]
   return touched ? out : messages;
 }
 
-function findUnsupportedSchemaKeywords(schema: unknown, path: string): string[] {
+function findUnsupportedSchemaKeywords(
+  schema: unknown,
+  path: string,
+): string[] {
   if (!schema || typeof schema !== "object") {
     return [];
   }
@@ -212,12 +232,16 @@ function findUnsupportedSchemaKeywords(schema: unknown, path: string): string[] 
   const record = schema as Record<string, unknown>;
   const violations: string[] = [];
   const properties =
-    record.properties && typeof record.properties === "object" && !Array.isArray(record.properties)
+    record.properties &&
+    typeof record.properties === "object" &&
+    !Array.isArray(record.properties)
       ? (record.properties as Record<string, unknown>)
       : undefined;
   if (properties) {
     for (const [key, value] of Object.entries(properties)) {
-      violations.push(...findUnsupportedSchemaKeywords(value, `${path}.properties.${key}`));
+      violations.push(
+        ...findUnsupportedSchemaKeywords(value, `${path}.properties.${key}`),
+      );
     }
   }
   for (const [key, value] of Object.entries(record)) {
@@ -228,7 +252,9 @@ function findUnsupportedSchemaKeywords(schema: unknown, path: string): string[] 
       violations.push(`${path}.${key}`);
     }
     if (value && typeof value === "object") {
-      violations.push(...findUnsupportedSchemaKeywords(value, `${path}.${key}`));
+      violations.push(
+        ...findUnsupportedSchemaKeywords(value, `${path}.${key}`),
+      );
     }
   }
   return violations;
@@ -261,7 +287,10 @@ export function sanitizeToolsForGoogle<
   });
 }
 
-export function logToolSchemasForGoogle(params: { tools: AgentTool[]; provider: string }) {
+export function logToolSchemasForGoogle(params: {
+  tools: AgentTool[];
+  provider: string;
+}) {
   if (params.provider !== "google-gemini-cli") {
     return;
   }
@@ -273,7 +302,10 @@ export function logToolSchemasForGoogle(params: { tools: AgentTool[]; provider: 
     tools: toolNames,
   });
   for (const [index, tool] of tools.entries()) {
-    const violations = findUnsupportedSchemaKeywords(tool.parameters, `${tool.name}.parameters`);
+    const violations = findUnsupportedSchemaKeywords(
+      tool.parameters,
+      `${tool.name}.parameters`,
+    );
     if (violations.length > 0) {
       log.warn("google tool schema has unsupported keywords", {
         index,
@@ -297,7 +329,9 @@ export type CompactionFailureListener = (reason: string) => void;
  * e.g., when the summarization request itself exceeds the model's token limit.
  * Returns an unsubscribe function.
  */
-export function onUnhandledCompactionFailure(cb: CompactionFailureListener): () => void {
+export function onUnhandledCompactionFailure(
+  cb: CompactionFailureListener,
+): () => void {
   compactionFailureEmitter.on("failure", cb);
   return () => compactionFailureEmitter.off("failure", cb);
 }
@@ -323,12 +357,17 @@ type ModelSnapshotEntry = {
 
 const MODEL_SNAPSHOT_CUSTOM_TYPE = "model-snapshot";
 
-function readLastModelSnapshot(sessionManager: SessionManager): ModelSnapshotEntry | null {
+function readLastModelSnapshot(
+  sessionManager: SessionManager,
+): ModelSnapshotEntry | null {
   try {
     const entries = sessionManager.getEntries();
     for (let i = entries.length - 1; i >= 0; i--) {
       const entry = entries[i] as CustomEntryLike;
-      if (entry?.type !== "custom" || entry?.customType !== MODEL_SNAPSHOT_CUSTOM_TYPE) {
+      if (
+        entry?.type !== "custom" ||
+        entry?.customType !== MODEL_SNAPSHOT_CUSTOM_TYPE
+      ) {
         continue;
       }
       const data = entry?.data as ModelSnapshotEntry | undefined;
@@ -342,7 +381,10 @@ function readLastModelSnapshot(sessionManager: SessionManager): ModelSnapshotEnt
   return null;
 }
 
-function appendModelSnapshot(sessionManager: SessionManager, data: ModelSnapshotEntry): void {
+function appendModelSnapshot(
+  sessionManager: SessionManager,
+  data: ModelSnapshotEntry,
+): void {
   try {
     sessionManager.appendCustomEntry(MODEL_SNAPSHOT_CUSTOM_TYPE, data);
   } catch {
@@ -350,7 +392,10 @@ function appendModelSnapshot(sessionManager: SessionManager, data: ModelSnapshot
   }
 }
 
-function isSameModelSnapshot(a: ModelSnapshotEntry, b: ModelSnapshotEntry): boolean {
+function isSameModelSnapshot(
+  a: ModelSnapshotEntry,
+  b: ModelSnapshotEntry,
+): boolean {
   const normalize = (value?: string | null) => value ?? "";
   return (
     normalize(a.provider) === normalize(b.provider) &&
@@ -366,7 +411,8 @@ function hasGoogleTurnOrderingMarker(sessionManager: SessionManager): boolean {
       .some(
         (entry) =>
           (entry as CustomEntryLike)?.type === "custom" &&
-          (entry as CustomEntryLike)?.customType === GOOGLE_TURN_ORDERING_CUSTOM_TYPE,
+          (entry as CustomEntryLike)?.customType ===
+            GOOGLE_TURN_ORDERING_CUSTOM_TYPE,
       );
   } catch {
     return false;
@@ -393,7 +439,9 @@ export function applyGoogleTurnOrderingFix(params: {
   if (!isGoogleModelApi(params.modelApi)) {
     return { messages: params.messages, didPrepend: false };
   }
-  const first = params.messages[0] as { role?: unknown; content?: unknown } | undefined;
+  const first = params.messages[0] as
+    | { role?: unknown; content?: unknown }
+    | undefined;
   if (first?.role !== "assistant") {
     return { messages: params.messages, didPrepend: false };
   }
@@ -401,7 +449,9 @@ export function applyGoogleTurnOrderingFix(params: {
   const didPrepend = sanitized !== params.messages;
   if (didPrepend && !hasGoogleTurnOrderingMarker(params.sessionManager)) {
     const warn = params.warn ?? ((message: string) => log.warn(message));
-    warn(`google turn ordering fixup: prepended user bootstrap (sessionId=${params.sessionId})`);
+    warn(
+      `google turn ordering fixup: prepended user bootstrap (sessionId=${params.sessionId})`,
+    );
     markGoogleTurnOrderingMarker(params.sessionManager);
   }
   return { messages: sanitized, didPrepend };
@@ -426,7 +476,9 @@ export async function sanitizeSessionHistory(params: {
       provider: params.provider,
       modelId: params.modelId,
     });
-  const withInterSessionMarkers = annotateInterSessionUserMessages(params.messages);
+  const withInterSessionMarkers = annotateInterSessionUserMessages(
+    params.messages,
+  );
   const sanitizedImages = await sanitizeSessionMessagesImages(
     withInterSessionMarkers,
     "session:history",
@@ -453,9 +505,14 @@ export async function sanitizeSessionHistory(params: {
     stripStaleAssistantUsageBeforeLatestCompaction(sanitizedToolResults);
 
   const isOpenAIResponsesApi =
-    params.modelApi === "openai-responses" || params.modelApi === "openai-codex-responses";
-  const hasSnapshot = Boolean(params.provider || params.modelApi || params.modelId);
-  const priorSnapshot = hasSnapshot ? readLastModelSnapshot(params.sessionManager) : null;
+    params.modelApi === "openai-responses" ||
+    params.modelApi === "openai-codex-responses";
+  const hasSnapshot = Boolean(
+    params.provider || params.modelApi || params.modelId,
+  );
+  const priorSnapshot = hasSnapshot
+    ? readLastModelSnapshot(params.sessionManager)
+    : null;
   const modelChanged = priorSnapshot
     ? !isSameModelSnapshot(priorSnapshot, {
         timestamp: 0,

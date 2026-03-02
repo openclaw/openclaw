@@ -44,7 +44,11 @@ export function readTextFileIfExists(pathname: string): string | null {
   return fs.readFileSync(pathname, "utf8");
 }
 
-export function writeTextFileAtomic(pathname: string, value: string, mode = 0o600): void {
+export function writeTextFileAtomic(
+  pathname: string,
+  value: string,
+  mode = 0o600,
+): void {
   ensureDirForFile(pathname);
   const tempPath = `${pathname}.tmp-${process.pid}-${Date.now()}`;
   fs.writeFileSync(tempPath, value, "utf8");

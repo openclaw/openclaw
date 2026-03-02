@@ -2,7 +2,10 @@ import { runSubagentAnnounceFlow } from "../../agents/subagent-announce.js";
 import { countActiveDescendantRuns } from "../../agents/subagent-registry.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
-import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
+import {
+  createOutboundSendDeps,
+  type CliDeps,
+} from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions.js";
 import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
@@ -33,7 +36,11 @@ export function matchesMessagingToolDeliveryTarget(
   if (provider && provider !== "message" && provider !== channel) {
     return false;
   }
-  if (target.accountId && delivery.accountId && target.accountId !== delivery.accountId) {
+  if (
+    target.accountId &&
+    delivery.accountId &&
+    target.accountId !== delivery.accountId
+  ) {
     return false;
   }
   // Strip :topic:NNN suffix from target.to before comparing — the cron delivery.to
@@ -47,7 +54,10 @@ export function resolveCronDeliveryBestEffort(job: CronJob): boolean {
   if (typeof job.delivery?.bestEffort === "boolean") {
     return job.delivery.bestEffort;
   }
-  if (job.payload.kind === "agentTurn" && typeof job.payload.bestEffortDeliver === "boolean") {
+  if (
+    job.payload.kind === "agentTurn" &&
+    typeof job.payload.bestEffortDeliver === "boolean"
+  ) {
     return job.payload.bestEffortDeliver;
   }
   return false;
@@ -87,7 +97,10 @@ async function resolveCronAnnounceSessionKey(params: {
   return params.fallbackSessionKey;
 }
 
-export type SuccessfulDeliveryTarget = Extract<DeliveryTargetResolution, { ok: true }>;
+export type SuccessfulDeliveryTarget = Extract<
+  DeliveryTargetResolution,
+  { ok: true }
+>;
 
 type DispatchCronDeliveryParams = {
   cfg: OpenClawConfig;
@@ -155,7 +168,10 @@ export async function dispatchCronDelivery(
   const deliverViaDirect = async (
     delivery: SuccessfulDeliveryTarget,
   ): Promise<RunCronAgentTurnResult | null> => {
-    const identity = resolveAgentOutboundIdentity(params.cfgWithAgentDefaults, params.agentId);
+    const identity = resolveAgentOutboundIdentity(
+      params.cfgWithAgentDefaults,
+      params.agentId,
+    );
     try {
       const payloadsForDelivery =
         deliveryPayloads.length > 0
@@ -237,14 +253,17 @@ export async function dispatchCronDelivery(
         : `cron:${params.job.id}`;
     const initialSynthesizedText = synthesizedText.trim();
     let activeSubagentRuns = countActiveDescendantRuns(params.agentSessionKey);
-    const expectedSubagentFollowup = expectsSubagentFollowup(initialSynthesizedText);
+    const expectedSubagentFollowup = expectsSubagentFollowup(
+      initialSynthesizedText,
+    );
     const hadActiveDescendants = activeSubagentRuns > 0;
     if (activeSubagentRuns > 0 || expectedSubagentFollowup) {
       let finalReply = await waitForDescendantSubagentSummary({
         sessionKey: params.agentSessionKey,
         initialReply: initialSynthesizedText,
         timeoutMs: params.timeoutMs,
-        observedActiveDescendants: activeSubagentRuns > 0 || expectedSubagentFollowup,
+        observedActiveDescendants:
+          activeSubagentRuns > 0 || expectedSubagentFollowup,
       });
       activeSubagentRuns = countActiveDescendantRuns(params.agentSessionKey);
       if (
@@ -267,7 +286,12 @@ export async function dispatchCronDelivery(
     if (activeSubagentRuns > 0) {
       // Parent orchestration is still in progress; avoid announcing a partial
       // update to the main requester.
-      return params.withRunSession({ status: "ok", summary, outputText, ...params.telemetry });
+      return params.withRunSession({
+        status: "ok",
+        summary,
+        outputText,
+        ...params.telemetry,
+      });
     }
     if (
       (hadActiveDescendants || expectedSubagentFollowup) &&
@@ -277,7 +301,12 @@ export async function dispatchCronDelivery(
     ) {
       // Descendants existed but no post-orchestration synthesis arrived, so
       // suppress stale parent text like "on it, pulling everything together".
-      return params.withRunSession({ status: "ok", summary, outputText, ...params.telemetry });
+      return params.withRunSession({
+        status: "ok",
+        summary,
+        outputText,
+        ...params.telemetry,
+      });
     }
     if (synthesizedText.toUpperCase() === SILENT_REPLY_TOKEN.toUpperCase()) {
       return params.withRunSession({
@@ -384,7 +413,9 @@ export async function dispatchCronDelivery(
           deliveryPayloads,
         };
       }
-      logWarn(`[cron:${params.job.id}] ${params.resolvedDelivery.error.message}`);
+      logWarn(
+        `[cron:${params.job.id}] ${params.resolvedDelivery.error.message}`,
+      );
       return {
         result: params.withRunSession({
           status: "ok",
@@ -411,7 +442,8 @@ export async function dispatchCronDelivery(
     // be swallowed by ANNOUNCE_SKIP/NO_REPLY in the target agent turn, which
     // silently drops cron output for topic-bound sessions.
     const useDirectDelivery =
-      params.deliveryPayloadHasStructuredContent || params.resolvedDelivery.threadId != null;
+      params.deliveryPayloadHasStructuredContent ||
+      params.resolvedDelivery.threadId != null;
     if (useDirectDelivery) {
       const directResult = await deliverViaDirect(params.resolvedDelivery);
       if (directResult) {

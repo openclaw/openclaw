@@ -20,10 +20,15 @@ export type CreateTypingCallbacksParams = {
   maxDurationMs?: number;
 };
 
-export function createTypingCallbacks(params: CreateTypingCallbacksParams): TypingCallbacks {
+export function createTypingCallbacks(
+  params: CreateTypingCallbacksParams,
+): TypingCallbacks {
   const stop = params.stop;
   const keepaliveIntervalMs = params.keepaliveIntervalMs ?? 3_000;
-  const maxConsecutiveFailures = Math.max(1, params.maxConsecutiveFailures ?? 2);
+  const maxConsecutiveFailures = Math.max(
+    1,
+    params.maxConsecutiveFailures ?? 2,
+  );
   const maxDurationMs = params.maxDurationMs ?? 60_000; // Default 60s TTL
   let stopSent = false;
   let closed = false;
@@ -55,7 +60,9 @@ export function createTypingCallbacks(params: CreateTypingCallbacksParams): Typi
     clearTtlTimer();
     ttlTimer = setTimeout(() => {
       if (!closed) {
-        console.warn(`[typing] TTL exceeded (${maxDurationMs}ms), auto-stopping typing indicator`);
+        console.warn(
+          `[typing] TTL exceeded (${maxDurationMs}ms), auto-stopping typing indicator`,
+        );
         fireStop();
       }
     }, maxDurationMs);
@@ -92,7 +99,9 @@ export function createTypingCallbacks(params: CreateTypingCallbacksParams): Typi
       return;
     }
     stopSent = true;
-    void stop().catch((err) => (params.onStopError ?? params.onStartError)(err));
+    void stop().catch((err) =>
+      (params.onStopError ?? params.onStartError)(err),
+    );
   };
 
   return { onReplyStart, onIdle: fireStop, onCleanup: fireStop };

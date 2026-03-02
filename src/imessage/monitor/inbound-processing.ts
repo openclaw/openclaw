@@ -11,7 +11,10 @@ import {
   type HistoryEntry,
 } from "../../auto-reply/reply/history.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
-import { buildMentionRegexes, matchesMentionPatterns } from "../../auto-reply/reply/mentions.js";
+import {
+  buildMentionRegexes,
+  matchesMentionPatterns,
+} from "../../auto-reply/reply/mentions.js";
 import { resolveControlCommandGate } from "../../channels/command-gating.js";
 import { logInboundDrop } from "../../channels/logging.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -49,7 +52,9 @@ function normalizeReplyField(value: unknown): string | undefined {
   return undefined;
 }
 
-function describeReplyContext(message: IMessagePayload): IMessageReplyContext | null {
+function describeReplyContext(
+  message: IMessagePayload,
+): IMessageReplyContext | null {
   const body = normalizeReplyField(message.reply_to_text);
   if (!body) {
     return null;
@@ -99,7 +104,12 @@ export function resolveIMessageInboundDecision(params: {
   storeAllowFrom: string[];
   historyLimit: number;
   groupHistories: Map<string, HistoryEntry[]>;
-  echoCache?: { has: (scope: string, lookup: { text?: string; messageId?: string }) => boolean };
+  echoCache?: {
+    has: (
+      scope: string,
+      lookup: { text?: string; messageId?: string },
+    ) => boolean;
+  };
   logVerbose?: (msg: string) => void;
 }): IMessageInboundDecision {
   const senderRaw = params.message.sender ?? "";
@@ -134,7 +144,9 @@ export function resolveIMessageInboundDecision(params: {
   // If the owner explicitly configures a chat_id under imessage.groups, treat that thread as a
   // "group" for permission gating + session isolation, even when is_group=false.
   const treatAsGroupByConfig = Boolean(
-    groupIdCandidate && groupListPolicy.allowlistEnabled && groupListPolicy.groupConfig,
+    groupIdCandidate &&
+    groupListPolicy.allowlistEnabled &&
+    groupListPolicy.groupConfig,
   );
   const isGroup = Boolean(params.message.is_group) || treatAsGroupByConfig;
   if (isGroup && !chatId) {
@@ -164,30 +176,52 @@ export function resolveIMessageInboundDecision(params: {
 
   if (accessDecision.decision !== "allow") {
     if (isGroup) {
-      if (accessDecision.reasonCode === DM_GROUP_ACCESS_REASON.GROUP_POLICY_DISABLED) {
-        params.logVerbose?.("Blocked iMessage group message (groupPolicy: disabled)");
+      if (
+        accessDecision.reasonCode ===
+        DM_GROUP_ACCESS_REASON.GROUP_POLICY_DISABLED
+      ) {
+        params.logVerbose?.(
+          "Blocked iMessage group message (groupPolicy: disabled)",
+        );
         return { kind: "drop", reason: "groupPolicy disabled" };
       }
-      if (accessDecision.reasonCode === DM_GROUP_ACCESS_REASON.GROUP_POLICY_EMPTY_ALLOWLIST) {
+      if (
+        accessDecision.reasonCode ===
+        DM_GROUP_ACCESS_REASON.GROUP_POLICY_EMPTY_ALLOWLIST
+      ) {
         params.logVerbose?.(
           "Blocked iMessage group message (groupPolicy: allowlist, no groupAllowFrom)",
         );
-        return { kind: "drop", reason: "groupPolicy allowlist (empty groupAllowFrom)" };
+        return {
+          kind: "drop",
+          reason: "groupPolicy allowlist (empty groupAllowFrom)",
+        };
       }
-      if (accessDecision.reasonCode === DM_GROUP_ACCESS_REASON.GROUP_POLICY_NOT_ALLOWLISTED) {
-        params.logVerbose?.(`Blocked iMessage sender ${sender} (not in groupAllowFrom)`);
+      if (
+        accessDecision.reasonCode ===
+        DM_GROUP_ACCESS_REASON.GROUP_POLICY_NOT_ALLOWLISTED
+      ) {
+        params.logVerbose?.(
+          `Blocked iMessage sender ${sender} (not in groupAllowFrom)`,
+        );
         return { kind: "drop", reason: "not in groupAllowFrom" };
       }
-      params.logVerbose?.(`Blocked iMessage group message (${accessDecision.reason})`);
+      params.logVerbose?.(
+        `Blocked iMessage group message (${accessDecision.reason})`,
+      );
       return { kind: "drop", reason: accessDecision.reason };
     }
-    if (accessDecision.reasonCode === DM_GROUP_ACCESS_REASON.DM_POLICY_DISABLED) {
+    if (
+      accessDecision.reasonCode === DM_GROUP_ACCESS_REASON.DM_POLICY_DISABLED
+    ) {
       return { kind: "drop", reason: "dmPolicy disabled" };
     }
     if (accessDecision.decision === "pairing") {
       return { kind: "pairing", senderId: senderNormalized };
     }
-    params.logVerbose?.(`Blocked iMessage sender ${sender} (dmPolicy=${params.dmPolicy})`);
+    params.logVerbose?.(
+      `Blocked iMessage sender ${sender} (dmPolicy=${params.dmPolicy})`,
+    );
     return { kind: "drop", reason: "dmPolicy blocked" };
   }
 
@@ -216,7 +250,8 @@ export function resolveIMessageInboundDecision(params: {
 
   // Echo detection: check if the received message matches a recently sent message (within 5 seconds).
   // Scope by conversation so same text in different chats is not conflated.
-  const inboundMessageId = params.message.id != null ? String(params.message.id) : undefined;
+  const inboundMessageId =
+    params.message.id != null ? String(params.message.id) : undefined;
   if (params.echoCache && (messageText || inboundMessageId)) {
     const echoScope = buildIMessageEchoScope({
       accountId: params.accountId,
@@ -231,19 +266,26 @@ export function resolveIMessageInboundDecision(params: {
       })
     ) {
       params.logVerbose?.(
-        describeIMessageEchoDropLog({ messageText, messageId: inboundMessageId }),
+        describeIMessageEchoDropLog({
+          messageText,
+          messageId: inboundMessageId,
+        }),
       );
       return { kind: "drop", reason: "echo" };
     }
   }
 
   const replyContext = describeReplyContext(params.message);
-  const createdAt = params.message.created_at ? Date.parse(params.message.created_at) : undefined;
+  const createdAt = params.message.created_at
+    ? Date.parse(params.message.created_at)
+    : undefined;
   const historyKey = isGroup
     ? String(chatId ?? chatGuid ?? chatIdentifier ?? "unknown")
     : undefined;
 
-  const mentioned = isGroup ? matchesMentionPatterns(messageText, mentionRegexes) : true;
+  const mentioned = isGroup
+    ? matchesMentionPatterns(messageText, mentionRegexes)
+    : true;
   const requireMention = resolveChannelGroupRequireMention({
     cfg: params.cfg,
     channel: "imessage",
@@ -280,8 +322,14 @@ export function resolveIMessageInboundDecision(params: {
   const commandGate = resolveControlCommandGate({
     useAccessGroups,
     authorizers: [
-      { configured: commandDmAllowFrom.length > 0, allowed: ownerAllowedForCommands },
-      { configured: effectiveGroupAllowFrom.length > 0, allowed: groupAllowedForCommands },
+      {
+        configured: commandDmAllowFrom.length > 0,
+        allowed: ownerAllowedForCommands,
+      },
+      {
+        configured: effectiveGroupAllowFrom.length > 0,
+        allowed: groupAllowedForCommands,
+      },
     ],
     allowTextCommands: true,
     hasControlCommand: hasControlCommandInMessage,
@@ -300,9 +348,19 @@ export function resolveIMessageInboundDecision(params: {
   }
 
   const shouldBypassMention =
-    isGroup && requireMention && !mentioned && commandAuthorized && hasControlCommandInMessage;
+    isGroup &&
+    requireMention &&
+    !mentioned &&
+    commandAuthorized &&
+    hasControlCommandInMessage;
   const effectiveWasMentioned = mentioned || shouldBypassMention;
-  if (isGroup && requireMention && canDetectMention && !mentioned && !shouldBypassMention) {
+  if (
+    isGroup &&
+    requireMention &&
+    canDetectMention &&
+    !mentioned &&
+    !shouldBypassMention
+  ) {
     params.logVerbose?.(`imessage: skipping group message (no mention)`);
     recordPendingHistoryEntryIfEnabled({
       historyMap: params.groupHistories,
@@ -313,7 +371,9 @@ export function resolveIMessageInboundDecision(params: {
             sender: senderNormalized,
             body: bodyText,
             timestamp: createdAt,
-            messageId: params.message.id ? String(params.message.id) : undefined,
+            messageId: params.message.id
+              ? String(params.message.id)
+              : undefined,
           }
         : null,
     });
@@ -363,11 +423,14 @@ export function buildIMessageInboundContext(params: {
   imessageTo: string;
   inboundHistory?: Array<{ sender: string; body: string; timestamp?: number }>;
 } {
-  const envelopeOptions = params.envelopeOptions ?? resolveEnvelopeFormatOptions(params.cfg);
+  const envelopeOptions =
+    params.envelopeOptions ?? resolveEnvelopeFormatOptions(params.cfg);
   const { decision } = params;
   const chatId = decision.chatId;
   const chatTarget =
-    decision.isGroup && chatId != null ? formatIMessageChatTarget(chatId) : undefined;
+    decision.isGroup && chatId != null
+      ? formatIMessageChatTarget(chatId)
+      : undefined;
 
   const replySuffix = decision.replyContext
     ? `\n\n[Replying to ${decision.replyContext.sender ?? "unknown sender"}${
@@ -415,7 +478,9 @@ export function buildIMessageInboundContext(params: {
     });
   }
 
-  const imessageTo = (decision.isGroup ? chatTarget : undefined) || `imessage:${decision.sender}`;
+  const imessageTo =
+    (decision.isGroup ? chatTarget : undefined) ||
+    `imessage:${decision.sender}`;
   const inboundHistory =
     decision.isGroup && decision.historyKey && params.historyLimit > 0
       ? (params.groupHistories.get(decision.historyKey) ?? []).map((entry) => ({
@@ -439,7 +504,9 @@ export function buildIMessageInboundContext(params: {
     AccountId: decision.route.accountId,
     ChatType: decision.isGroup ? "group" : "direct",
     ConversationLabel: fromLabel,
-    GroupSubject: decision.isGroup ? (params.message.chat_name ?? undefined) : undefined,
+    GroupSubject: decision.isGroup
+      ? (params.message.chat_name ?? undefined)
+      : undefined,
     GroupMembers: decision.isGroup
       ? (params.message.participants ?? []).filter(Boolean).join(", ")
       : undefined,
@@ -456,11 +523,17 @@ export function buildIMessageInboundContext(params: {
     MediaType: params.media?.type,
     MediaUrl: params.media?.path,
     MediaPaths:
-      params.media?.paths && params.media.paths.length > 0 ? params.media.paths : undefined,
+      params.media?.paths && params.media.paths.length > 0
+        ? params.media.paths
+        : undefined,
     MediaTypes:
-      params.media?.types && params.media.types.length > 0 ? params.media.types : undefined,
+      params.media?.types && params.media.types.length > 0
+        ? params.media.types
+        : undefined,
     MediaUrls:
-      params.media?.paths && params.media.paths.length > 0 ? params.media.paths : undefined,
+      params.media?.paths && params.media.paths.length > 0
+        ? params.media.paths
+        : undefined,
     MediaRemoteHost: params.remoteHost,
     WasMentioned: decision.effectiveWasMentioned,
     CommandAuthorized: decision.commandAuthorized,

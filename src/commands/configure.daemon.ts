@@ -4,7 +4,10 @@ import { resolveGatewayService } from "../daemon/service.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { note } from "../terminal/note.js";
 import { confirm, select } from "./configure.shared.js";
-import { buildGatewayInstallPlan, gatewayInstallErrorHint } from "./daemon-install-helpers.js";
+import {
+  buildGatewayInstallPlan,
+  gatewayInstallErrorHint,
+} from "./daemon-install-helpers.js";
 import {
   DEFAULT_GATEWAY_DAEMON_RUNTIME,
   GATEWAY_DAEMON_RUNTIME_OPTIONS,
@@ -70,7 +73,9 @@ export async function maybeInstallDaemon(params: {
     let installError: string | null = null;
     if (!params.daemonRuntime) {
       if (GATEWAY_DAEMON_RUNTIME_OPTIONS.length === 1) {
-        daemonRuntime = GATEWAY_DAEMON_RUNTIME_OPTIONS[0]?.value ?? DEFAULT_GATEWAY_DAEMON_RUNTIME;
+        daemonRuntime =
+          GATEWAY_DAEMON_RUNTIME_OPTIONS[0]?.value ??
+          DEFAULT_GATEWAY_DAEMON_RUNTIME;
       } else {
         daemonRuntime = guardCancel(
           await select({
@@ -88,14 +93,15 @@ export async function maybeInstallDaemon(params: {
         progress.setLabel("Preparing Gateway service…");
 
         const cfg = loadConfig();
-        const { programArguments, workingDirectory, environment } = await buildGatewayInstallPlan({
-          env: process.env,
-          port: params.port,
-          token: params.gatewayToken,
-          runtime: daemonRuntime,
-          warn: (message, title) => note(message, title),
-          config: cfg,
-        });
+        const { programArguments, workingDirectory, environment } =
+          await buildGatewayInstallPlan({
+            env: process.env,
+            port: params.port,
+            token: params.gatewayToken,
+            runtime: daemonRuntime,
+            warn: (message, title) => note(message, title),
+            config: cfg,
+          });
 
         progress.setLabel("Installing Gateway service…");
         try {

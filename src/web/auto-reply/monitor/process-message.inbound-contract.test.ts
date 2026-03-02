@@ -31,7 +31,10 @@ function makeProcessMessageArgs(params: {
 }) {
   return {
     // oxlint-disable-next-line typescript/no-explicit-any
-    cfg: (params.cfg ?? { messages: {}, session: { store: sessionStorePath } }) as any,
+    cfg: (params.cfg ?? {
+      messages: {},
+      session: { store: sessionStorePath },
+    }) as any,
     // oxlint-disable-next-line typescript/no-explicit-any
     msg: params.msg as any,
     route: {
@@ -52,7 +55,8 @@ function makeProcessMessageArgs(params: {
     replyLogger: defaultReplyLogger as any,
     backgroundTasks,
     rememberSentText:
-      params.rememberSentText ?? ((_text: string | undefined, _opts: unknown) => {}),
+      params.rememberSentText ??
+      ((_text: string | undefined, _opts: unknown) => {}),
     echoHas: () => false,
     echoForget: () => {},
     buildCombinedEchoKey: () => "echo",
@@ -71,7 +75,10 @@ vi.mock("../../../auto-reply/reply/provider-dispatcher.js", () => ({
 }));
 
 vi.mock("./last-route.js", () => ({
-  trackBackgroundTask: (tasks: Set<Promise<unknown>>, task: Promise<unknown>) => {
+  trackBackgroundTask: (
+    tasks: Set<Promise<unknown>>,
+    task: Promise<unknown>,
+  ) => {
     tasks.add(task);
     void task.finally(() => {
       tasks.delete(task);
@@ -93,7 +100,9 @@ describe("web processMessage inbound contract", () => {
     capturedDispatchParams = undefined;
     backgroundTasks = new Set();
     deliverWebReplyMock.mockClear();
-    sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-process-message-"));
+    sessionDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-process-message-"),
+    );
     sessionStorePath = path.join(sessionDir, "sessions.json");
   });
 
@@ -174,13 +183,19 @@ describe("web processMessage inbound contract", () => {
               {
                 id: "main",
                 default: true,
-                identity: { name: "Mainbot", emoji: "🦞", theme: "space lobster" },
+                identity: {
+                  name: "Mainbot",
+                  emoji: "🦞",
+                  theme: "space lobster",
+                },
               },
             ],
           },
           messages: {},
           session: { store: sessionStorePath },
-        } as unknown as ReturnType<typeof import("../../../config/config.js").loadConfig>,
+        } as unknown as ReturnType<
+          typeof import("../../../config/config.js").loadConfig
+        >,
         msg: {
           id: "msg1",
           from: "+1555",
@@ -193,13 +208,17 @@ describe("web processMessage inbound contract", () => {
     );
 
     // oxlint-disable-next-line typescript/no-explicit-any
-    const dispatcherOptions = (capturedDispatchParams as any)?.dispatcherOptions;
+    const dispatcherOptions = (capturedDispatchParams as any)
+      ?.dispatcherOptions;
     expect(dispatcherOptions?.responsePrefix).toBe("[Mainbot]");
   });
 
   it("clears pending group history when the dispatcher does not queue a final reply", async () => {
     capturedCtx = undefined;
-    const groupHistories = new Map<string, Array<{ sender: string; body: string }>>([
+    const groupHistories = new Map<
+      string,
+      Array<{ sender: string; body: string }>
+    >([
       [
         "whatsapp:default:group:123@g.us",
         [
@@ -219,7 +238,9 @@ describe("web processMessage inbound contract", () => {
         cfg: {
           messages: {},
           session: { store: sessionStorePath },
-        } as unknown as ReturnType<typeof import("../../../config/config.js").loadConfig>,
+        } as unknown as ReturnType<
+          typeof import("../../../config/config.js").loadConfig
+        >,
         msg: {
           id: "g1",
           from: "123@g.us",
@@ -238,7 +259,9 @@ describe("web processMessage inbound contract", () => {
       }),
     );
 
-    expect(groupHistories.get("whatsapp:default:group:123@g.us") ?? []).toHaveLength(0);
+    expect(
+      groupHistories.get("whatsapp:default:group:123@g.us") ?? [],
+    ).toHaveLength(0);
   });
 
   it("suppresses non-final WhatsApp payload delivery", async () => {
@@ -252,7 +275,9 @@ describe("web processMessage inbound contract", () => {
           channels: { whatsapp: { blockStreaming: true } },
           messages: {},
           session: { store: sessionStorePath },
-        } as unknown as ReturnType<typeof import("../../../config/config.js").loadConfig>,
+        } as unknown as ReturnType<
+          typeof import("../../../config/config.js").loadConfig
+        >,
         msg: {
           id: "msg1",
           from: "+1555",
@@ -264,8 +289,12 @@ describe("web processMessage inbound contract", () => {
     );
 
     // oxlint-disable-next-line typescript/no-explicit-any
-    const deliver = (capturedDispatchParams as any)?.dispatcherOptions?.deliver as
-      | ((payload: { text?: string }, info: { kind: "tool" | "block" | "final" }) => Promise<void>)
+    const deliver = (capturedDispatchParams as any)?.dispatcherOptions
+      ?.deliver as
+      | ((
+          payload: { text?: string },
+          info: { kind: "tool" | "block" | "final" },
+        ) => Promise<void>)
       | undefined;
     expect(deliver).toBeTypeOf("function");
 
@@ -288,7 +317,9 @@ describe("web processMessage inbound contract", () => {
           channels: { whatsapp: { blockStreaming: true } },
           messages: {},
           session: { store: sessionStorePath },
-        } as unknown as ReturnType<typeof import("../../../config/config.js").loadConfig>,
+        } as unknown as ReturnType<
+          typeof import("../../../config/config.js").loadConfig
+        >,
         msg: {
           id: "msg1",
           from: "+1555",

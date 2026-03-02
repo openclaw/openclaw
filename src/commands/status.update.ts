@@ -33,9 +33,13 @@ export type UpdateAvailability = {
   gitBehind: number | null;
 };
 
-export function resolveUpdateAvailability(update: UpdateCheckResult): UpdateAvailability {
+export function resolveUpdateAvailability(
+  update: UpdateCheckResult,
+): UpdateAvailability {
   const latestVersion = update.registry?.latestVersion ?? null;
-  const registryCmp = latestVersion ? compareSemverStrings(VERSION, latestVersion) : null;
+  const registryCmp = latestVersion
+    ? compareSemverStrings(VERSION, latestVersion)
+    : null;
   const hasRegistryUpdate = registryCmp != null && registryCmp < 0;
   const gitBehind =
     update.installKind === "git" && typeof update.git?.behind === "number"
@@ -52,7 +56,9 @@ export function resolveUpdateAvailability(update: UpdateCheckResult): UpdateAvai
   };
 }
 
-export function formatUpdateAvailableHint(update: UpdateCheckResult): string | null {
+export function formatUpdateAvailableHint(
+  update: UpdateCheckResult,
+): string | null {
   const availability = resolveUpdateAvailability(update);
   if (!availability.available) {
     return null;
@@ -106,7 +112,9 @@ export function formatUpdateOneLiner(update: UpdateCheckResult): string {
       } else if (update.git.behind === 0 && update.git.ahead > 0) {
         parts.push(`ahead ${update.git.ahead}`);
       } else if (update.git.behind > 0 && update.git.ahead > 0) {
-        parts.push(`diverged (ahead ${update.git.ahead}, behind ${update.git.behind})`);
+        parts.push(
+          `diverged (ahead ${update.git.ahead}, behind ${update.git.behind})`,
+        );
       }
     }
     if (update.git.fetchOk === false) {
@@ -114,7 +122,9 @@ export function formatUpdateOneLiner(update: UpdateCheckResult): string {
     }
     appendRegistryUpdateSummary();
   } else {
-    parts.push(update.packageManager !== "unknown" ? update.packageManager : "pkg");
+    parts.push(
+      update.packageManager !== "unknown" ? update.packageManager : "pkg",
+    );
     appendRegistryUpdateSummary();
   }
 

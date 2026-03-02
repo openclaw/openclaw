@@ -1,12 +1,21 @@
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import {
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "../agents/agent-scope.js";
 import { buildWorkspaceSkillStatus } from "../agents/skills-status.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadOpenClawPlugins } from "../plugins/loader.js";
 import { note } from "../terminal/note.js";
-import { detectLegacyWorkspaceDirs, formatLegacyWorkspaceWarning } from "./doctor-workspace.js";
+import {
+  detectLegacyWorkspaceDirs,
+  formatLegacyWorkspaceWarning,
+} from "./doctor-workspace.js";
 
 export function noteWorkspaceStatus(cfg: OpenClawConfig) {
-  const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
+  const workspaceDir = resolveAgentWorkspaceDir(
+    cfg,
+    resolveDefaultAgentId(cfg),
+  );
   const legacyWorkspace = detectLegacyWorkspaceDirs({ workspaceDir });
   if (legacyWorkspace.legacyDirs.length > 0) {
     note(formatLegacyWorkspaceWarning(legacyWorkspace), "Extra workspace");
@@ -17,8 +26,9 @@ export function noteWorkspaceStatus(cfg: OpenClawConfig) {
     [
       `Eligible: ${skillsReport.skills.filter((s) => s.eligible).length}`,
       `Missing requirements: ${
-        skillsReport.skills.filter((s) => !s.eligible && !s.disabled && !s.blockedByAllowlist)
-          .length
+        skillsReport.skills.filter(
+          (s) => !s.eligible && !s.disabled && !s.blockedByAllowlist,
+        ).length
       }`,
       `Blocked by allowlist: ${skillsReport.skills.filter((s) => s.blockedByAllowlist).length}`,
     ].join("\n"),
@@ -37,7 +47,9 @@ export function noteWorkspaceStatus(cfg: OpenClawConfig) {
   });
   if (pluginRegistry.plugins.length > 0) {
     const loaded = pluginRegistry.plugins.filter((p) => p.status === "loaded");
-    const disabled = pluginRegistry.plugins.filter((p) => p.status === "disabled");
+    const disabled = pluginRegistry.plugins.filter(
+      (p) => p.status === "disabled",
+    );
     const errored = pluginRegistry.plugins.filter((p) => p.status === "error");
 
     const lines = [

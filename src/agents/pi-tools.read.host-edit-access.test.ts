@@ -12,10 +12,14 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@mariozechner/pi-coding-agent", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@mariozechner/pi-coding-agent")>();
+  const actual =
+    await importOriginal<typeof import("@mariozechner/pi-coding-agent")>();
   return {
     ...actual,
-    createEditTool: (_cwd: string, options?: { operations?: CapturedEditOperations }) => {
+    createEditTool: (
+      _cwd: string,
+      options?: { operations?: CapturedEditOperations },
+    ) => {
       mocks.operations = options?.operations;
       return {
         name: "edit",
@@ -45,7 +49,9 @@ describe("createHostWorkspaceEditTool host access mapping", () => {
   it.runIf(process.platform !== "win32")(
     "silently passes access for outside-workspace paths so readFile reports the real error",
     async () => {
-      tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-edit-access-test-"));
+      tmpDir = await fs.mkdtemp(
+        path.join(os.tmpdir(), "openclaw-edit-access-test-"),
+      );
       const workspaceDir = path.join(tmpDir, "workspace");
       const outsideDir = path.join(tmpDir, "outside");
       const linkDir = path.join(workspaceDir, "escape");
@@ -63,7 +69,9 @@ describe("createHostWorkspaceEditTool host access mapping", () => {
       // By resolving silently the subsequent readFile call surfaces the real
       // "Path escapes workspace root" / "outside-workspace" error instead.
       await expect(
-        mocks.operations!.access(path.join(workspaceDir, "escape", "secret.txt")),
+        mocks.operations!.access(
+          path.join(workspaceDir, "escape", "secret.txt"),
+        ),
       ).resolves.toBeUndefined();
     },
   );

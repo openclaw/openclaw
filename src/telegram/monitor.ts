@@ -14,7 +14,10 @@ import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { createTelegramBot } from "./bot.js";
 import { isRecoverableTelegramNetworkError } from "./network-errors.js";
 import { makeProxyFetch } from "./proxy.js";
-import { readTelegramUpdateOffset, writeTelegramUpdateOffset } from "./update-offset-store.js";
+import {
+  readTelegramUpdateOffset,
+  writeTelegramUpdateOffset,
+} from "./update-offset-store.js";
 import { startTelegramWebhook } from "./webhook.js";
 
 export type MonitorTelegramOpts = {
@@ -32,7 +35,9 @@ export type MonitorTelegramOpts = {
   webhookUrl?: string;
 };
 
-export function createTelegramRunnerOptions(cfg: OpenClawConfig): RunOptions<unknown> {
+export function createTelegramRunnerOptions(
+  cfg: OpenClawConfig,
+): RunOptions<unknown> {
   return {
     sink: {
       concurrency: resolveAgentMaxConcurrent(cfg),
@@ -103,7 +108,9 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
   // (e.g., from setMyCommands during bot setup).
   // We gate on isGrammyHttpError to avoid suppressing non-Telegram errors.
   const unregisterHandler = registerUnhandledRejectionHandler((err) => {
-    const isNetworkError = isRecoverableTelegramNetworkError(err, { context: "polling" });
+    const isNetworkError = isRecoverableTelegramNetworkError(err, {
+      context: "polling",
+    });
     if (isGrammyHttpError(err) && isNetworkError) {
       log(`[telegram] Suppressed network error: ${formatErrorMessage(err)}`);
       return true; // handled - don't crash
@@ -135,7 +142,8 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
     }
 
     const proxyFetch =
-      opts.proxyFetch ?? (account.config.proxy ? makeProxyFetch(account.config.proxy) : undefined);
+      opts.proxyFetch ??
+      (account.config.proxy ? makeProxyFetch(account.config.proxy) : undefined);
 
     let lastUpdateId = await readTelegramUpdateOffset({
       accountId: account.accountId,
@@ -181,9 +189,14 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
     let restartAttempts = 0;
     let webhookCleared = false;
     const runnerOptions = createTelegramRunnerOptions(cfg);
-    const waitBeforeRestart = async (buildLine: (delay: string) => string): Promise<boolean> => {
+    const waitBeforeRestart = async (
+      buildLine: (delay: string) => string,
+    ): Promise<boolean> => {
       restartAttempts += 1;
-      const delayMs = computeBackoff(TELEGRAM_POLL_RESTART_POLICY, restartAttempts);
+      const delayMs = computeBackoff(
+        TELEGRAM_POLL_RESTART_POLICY,
+        restartAttempts,
+      );
       const delay = formatDurationPrecise(delayMs);
       log(buildLine(delay));
       try {
@@ -208,7 +221,8 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
         throw err;
       }
       return waitBeforeRestart(
-        (delay) => `${logPrefix}: ${formatErrorMessage(err)}; retrying in ${delay}.`,
+        (delay) =>
+          `${logPrefix}: ${formatErrorMessage(err)}; retrying in ${delay}.`,
       );
     };
 
@@ -237,7 +251,9 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       }
     };
 
-    const ensureWebhookCleanup = async (bot: TelegramBot): Promise<"ready" | "retry" | "exit"> => {
+    const ensureWebhookCleanup = async (
+      bot: TelegramBot,
+    ): Promise<"ready" | "retry" | "exit"> => {
       if (webhookCleared) {
         return "ready";
       }
@@ -258,7 +274,9 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       }
     };
 
-    const runPollingCycle = async (bot: TelegramBot): Promise<"continue" | "exit"> => {
+    const runPollingCycle = async (
+      bot: TelegramBot,
+    ): Promise<"continue" | "exit"> => {
       const runner = run(bot, runnerOptions);
       activeRunner = runner;
       let stopPromise: Promise<void> | undefined;
@@ -294,7 +312,8 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
           : "runner stopped (maxRetryTime exceeded or graceful stop)";
         forceRestarted = false;
         const shouldRestart = await waitBeforeRestart(
-          (delay) => `Telegram polling runner stopped (${reason}); restarting in ${delay}.`,
+          (delay) =>
+            `Telegram polling runner stopped (${reason}); restarting in ${delay}.`,
         );
         return shouldRestart ? "continue" : "exit";
       } catch (err) {
@@ -303,7 +322,9 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
           throw err;
         }
         const isConflict = isGetUpdatesConflict(err);
-        const isRecoverable = isRecoverableTelegramNetworkError(err, { context: "polling" });
+        const isRecoverable = isRecoverableTelegramNetworkError(err, {
+          context: "polling",
+        });
         if (!isConflict && !isRecoverable) {
           throw err;
         }

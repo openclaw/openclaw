@@ -1,5 +1,13 @@
 import { Command } from "commander";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
 
 /**
@@ -15,8 +23,10 @@ const mockWriteConfigFile = vi.fn<
 
 vi.mock("../config/config.js", () => ({
   readConfigFileSnapshot: () => mockReadConfigFileSnapshot(),
-  writeConfigFile: (cfg: OpenClawConfig, options?: { unsetPaths?: string[][] }) =>
-    mockWriteConfigFile(cfg, options),
+  writeConfigFile: (
+    cfg: OpenClawConfig,
+    options?: { unsetPaths?: string[][] },
+  ) => mockWriteConfigFile(cfg, options),
 }));
 
 const mockLog = vi.fn();
@@ -53,7 +63,9 @@ function buildSnapshot(params: {
 }
 
 function setSnapshot(resolved: OpenClawConfig, config: OpenClawConfig) {
-  mockReadConfigFileSnapshot.mockResolvedValueOnce(buildSnapshot({ resolved, config }));
+  mockReadConfigFileSnapshot.mockResolvedValueOnce(
+    buildSnapshot({ resolved, config }),
+  );
 }
 
 function setSnapshotOnce(snapshot: ConfigFileSnapshot) {
@@ -86,7 +98,10 @@ describe("config cli", () => {
     it("preserves existing config keys when setting a new value", async () => {
       const resolved: OpenClawConfig = {
         agents: {
-          list: [{ id: "main" }, { id: "oracle", workspace: "~/oracle-workspace" }],
+          list: [
+            { id: "main" },
+            { id: "oracle", workspace: "~/oracle-workspace" },
+          ],
         },
         gateway: { port: 18789 },
         tools: { allow: ["group:fs"] },
@@ -152,7 +167,12 @@ describe("config cli", () => {
       };
       setSnapshot(resolved, resolved);
 
-      await runConfigCommand(["config", "set", "models.providers.ollama.apiKey", '"ollama-local"']);
+      await runConfigCommand([
+        "config",
+        "set",
+        "models.providers.ollama.apiKey",
+        '"ollama-local"',
+      ]);
 
       expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
       const written = mockWriteConfigFile.mock.calls[0]?.[0];
@@ -193,7 +213,9 @@ describe("config cli", () => {
 
       expect(mockExit).not.toHaveBeenCalled();
       expect(mockError).not.toHaveBeenCalled();
-      expect(mockLog).toHaveBeenCalledWith(expect.stringContaining("Config valid:"));
+      expect(mockLog).toHaveBeenCalledWith(
+        expect.stringContaining("Config valid:"),
+      );
     });
 
     it("prints issues and exits 1 when config is invalid", async () => {
@@ -215,9 +237,13 @@ describe("config cli", () => {
         legacyIssues: [],
       });
 
-      await expect(runConfigCommand(["config", "validate"])).rejects.toThrow("__exit__:1");
+      await expect(runConfigCommand(["config", "validate"])).rejects.toThrow(
+        "__exit__:1",
+      );
 
-      expect(mockError).toHaveBeenCalledWith(expect.stringContaining("Config invalid at"));
+      expect(mockError).toHaveBeenCalledWith(
+        expect.stringContaining("Config invalid at"),
+      );
       expect(mockError).toHaveBeenCalledWith(
         expect.stringContaining("agents.defaults.suppressToolErrorWarnings"),
       );
@@ -238,9 +264,9 @@ describe("config cli", () => {
         legacyIssues: [],
       });
 
-      await expect(runConfigCommand(["config", "validate", "--json"])).rejects.toThrow(
-        "__exit__:1",
-      );
+      await expect(
+        runConfigCommand(["config", "validate", "--json"]),
+      ).rejects.toThrow("__exit__:1");
 
       const raw = mockLog.mock.calls.at(0)?.[0];
       expect(typeof raw).toBe("string");
@@ -251,7 +277,9 @@ describe("config cli", () => {
       };
       expect(payload.valid).toBe(false);
       expect(payload.path).toBe("/tmp/custom-openclaw.json");
-      expect(payload.issues).toEqual([{ path: "gateway.bind", message: "Invalid enum value" }]);
+      expect(payload.issues).toEqual([
+        { path: "gateway.bind", message: "Invalid enum value" },
+      ]);
       expect(mockError).not.toHaveBeenCalled();
     });
 
@@ -269,8 +297,12 @@ describe("config cli", () => {
         legacyIssues: [],
       });
 
-      await expect(runConfigCommand(["config", "validate"])).rejects.toThrow("__exit__:1");
-      expect(mockError).toHaveBeenCalledWith(expect.stringContaining("Config file not found:"));
+      await expect(runConfigCommand(["config", "validate"])).rejects.toThrow(
+        "__exit__:1",
+      );
+      expect(mockError).toHaveBeenCalledWith(
+        expect.stringContaining("Config file not found:"),
+      );
       expect(mockLog).not.toHaveBeenCalled();
     });
   });
@@ -289,7 +321,13 @@ describe("config cli", () => {
 
     it("throws when strict parsing is enabled via --strict-json", async () => {
       await expect(
-        runConfigCommand(["config", "set", "gateway.auth.mode", "{bad", "--strict-json"]),
+        runConfigCommand([
+          "config",
+          "set",
+          "gateway.auth.mode",
+          "{bad",
+          "--strict-json",
+        ]),
       ).rejects.toThrow("__exit__:1");
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
@@ -298,7 +336,13 @@ describe("config cli", () => {
 
     it("keeps --json as a strict parsing alias", async () => {
       await expect(
-        runConfigCommand(["config", "set", "gateway.auth.mode", "{bad", "--json"]),
+        runConfigCommand([
+          "config",
+          "set",
+          "gateway.auth.mode",
+          "{bad",
+          "--json",
+        ]),
       ).rejects.toThrow("__exit__:1");
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
@@ -309,8 +353,12 @@ describe("config cli", () => {
       const program = new Command();
       registerConfigCli(program);
 
-      const configCommand = program.commands.find((command) => command.name() === "config");
-      const setCommand = configCommand?.commands.find((command) => command.name() === "set");
+      const configCommand = program.commands.find(
+        (command) => command.name() === "config",
+      );
+      const setCommand = configCommand?.commands.find(
+        (command) => command.name() === "set",
+      );
       const helpText = setCommand?.helpInformation() ?? "";
 
       expect(helpText).toContain("--strict-json");
@@ -321,9 +369,9 @@ describe("config cli", () => {
 
   describe("path hardening", () => {
     it("rejects blocked prototype-key segments for config get", async () => {
-      await expect(runConfigCommand(["config", "get", "gateway.__proto__.token"])).rejects.toThrow(
-        "Invalid path segment: __proto__",
-      );
+      await expect(
+        runConfigCommand(["config", "get", "gateway.__proto__.token"]),
+      ).rejects.toThrow("Invalid path segment: __proto__");
 
       expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
@@ -331,7 +379,12 @@ describe("config cli", () => {
 
     it("rejects blocked prototype-key segments for config set", async () => {
       await expect(
-        runConfigCommand(["config", "set", "tools.constructor.profile", '"sandbox"']),
+        runConfigCommand([
+          "config",
+          "set",
+          "tools.constructor.profile",
+          '"sandbox"',
+        ]),
       ).rejects.toThrow("Invalid path segment: constructor");
 
       expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
@@ -405,7 +458,9 @@ describe("config cli", () => {
 
       await runConfigCommand(["config", "file"]);
 
-      expect(mockLog).toHaveBeenCalledWith("/home/user/.openclaw/openclaw.json");
+      expect(mockLog).toHaveBeenCalledWith(
+        "/home/user/.openclaw/openclaw.json",
+      );
     });
   });
 });

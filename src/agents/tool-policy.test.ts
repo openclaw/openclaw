@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { isToolAllowed, resolveSandboxToolPolicyForAgent } from "./sandbox/tool-policy.js";
+import {
+  isToolAllowed,
+  resolveSandboxToolPolicyForAgent,
+} from "./sandbox/tool-policy.js";
 import type { SandboxToolPolicy } from "./sandbox/types.js";
 import { TOOL_POLICY_CONFORMANCE } from "./tool-policy.conformance.js";
 import {
@@ -42,7 +45,12 @@ function createOwnerPolicyTools() {
 
 describe("tool-policy", () => {
   it("expands groups and normalizes aliases", () => {
-    const expanded = expandToolGroups(["group:runtime", "BASH", "apply-patch", "group:fs"]);
+    const expanded = expandToolGroups([
+      "group:runtime",
+      "BASH",
+      "apply-patch",
+      "group:fs",
+    ]);
     const set = new Set(expanded);
     expect(set.has("exec")).toBe(true);
     expect(set.has("process")).toBe(true);
@@ -92,7 +100,12 @@ describe("tool-policy", () => {
   it("keeps owner-only tools for the owner sender", async () => {
     const tools = createOwnerPolicyTools();
     const filtered = applyOwnerOnlyToolPolicy(tools, true);
-    expect(filtered.map((t) => t.name)).toEqual(["read", "cron", "gateway", "whatsapp_login"]);
+    expect(filtered.map((t) => t.name)).toEqual([
+      "read",
+      "cron",
+      "gateway",
+      "whatsapp_login",
+    ]);
   });
 
   it("honors ownerOnly metadata for custom tool names", async () => {
@@ -178,7 +191,10 @@ describe("resolveSandboxToolPolicyForAgent", () => {
     expect(resolved.allow).toEqual([]);
     expect(resolved.deny).toEqual(["browser"]);
 
-    const policy: SandboxToolPolicy = { allow: resolved.allow, deny: resolved.deny };
+    const policy: SandboxToolPolicy = {
+      allow: resolved.allow,
+      deny: resolved.deny,
+    };
     expect(isToolAllowed(policy, "read")).toBe(true);
     expect(isToolAllowed(policy, "browser")).toBe(false);
   });

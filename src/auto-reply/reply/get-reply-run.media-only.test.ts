@@ -45,7 +45,9 @@ vi.mock("./agent-runner.js", () => ({
 }));
 
 vi.mock("./body.js", () => ({
-  applySessionHints: vi.fn().mockImplementation(async ({ baseBody }) => baseBody),
+  applySessionHints: vi
+    .fn()
+    .mockImplementation(async ({ baseBody }) => baseBody),
 }));
 
 vi.mock("./groups.js", () => ({
@@ -67,11 +69,13 @@ vi.mock("./route-reply.js", () => ({
 }));
 
 vi.mock("./session-updates.js", () => ({
-  ensureSkillSnapshot: vi.fn().mockImplementation(async ({ sessionEntry, systemSent }) => ({
-    sessionEntry,
-    systemSent,
-    skillsSnapshot: undefined,
-  })),
+  ensureSkillSnapshot: vi
+    .fn()
+    .mockImplementation(async ({ sessionEntry, systemSent }) => ({
+      sessionEntry,
+      systemSent,
+      skillsSnapshot: undefined,
+    })),
   buildQueuedSystemPrompt: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -167,9 +171,15 @@ describe("runPreparedReply media-only handling", () => {
 
     const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
     expect(call).toBeTruthy();
-    expect(call?.followupRun.prompt).toContain("[Thread history - for context]");
-    expect(call?.followupRun.prompt).toContain("Earlier message in this thread");
-    expect(call?.followupRun.prompt).toContain("[User sent media without caption]");
+    expect(call?.followupRun.prompt).toContain(
+      "[Thread history - for context]",
+    );
+    expect(call?.followupRun.prompt).toContain(
+      "Earlier message in this thread",
+    );
+    expect(call?.followupRun.prompt).toContain(
+      "[User sent media without caption]",
+    );
   });
 
   it("keeps thread history context on follow-up turns", async () => {
@@ -182,8 +192,12 @@ describe("runPreparedReply media-only handling", () => {
 
     const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
     expect(call).toBeTruthy();
-    expect(call?.followupRun.prompt).toContain("[Thread history - for context]");
-    expect(call?.followupRun.prompt).toContain("Earlier message in this thread");
+    expect(call?.followupRun.prompt).toContain(
+      "[Thread history - for context]",
+    );
+    expect(call?.followupRun.prompt).toContain(
+      "Earlier message in this thread",
+    );
   });
 
   it("returns the empty-body reply when there is no text and no media", async () => {
@@ -218,7 +232,9 @@ describe("runPreparedReply media-only handling", () => {
     const resetNoticeCall = vi.mocked(routeReply).mock.calls[0]?.[0] as
       | { payload?: { text?: string } }
       | undefined;
-    expect(resetNoticeCall?.payload?.text).toContain("✅ New session started · model:");
+    expect(resetNoticeCall?.payload?.text).toContain(
+      "✅ New session started · model:",
+    );
     expect(resetNoticeCall?.payload?.text).not.toContain("🔑");
     expect(resetNoticeCall?.payload?.text).not.toContain("api-key");
     expect(resetNoticeCall?.payload?.text).not.toContain("env:");
@@ -306,7 +322,11 @@ describe("runPreparedReply media-only handling", () => {
     const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
     expect(call).toBeTruthy();
     expect(call?.commandBody).not.toContain("Runtime System Events");
-    expect(call?.followupRun.run.extraSystemPrompt).toContain("Runtime System Events");
-    expect(call?.followupRun.run.extraSystemPrompt).toContain("Model switched.");
+    expect(call?.followupRun.run.extraSystemPrompt).toContain(
+      "Runtime System Events",
+    );
+    expect(call?.followupRun.run.extraSystemPrompt).toContain(
+      "Model switched.",
+    );
   });
 });

@@ -34,7 +34,10 @@ export function logWarn(message: string, runtime: RuntimeEnv = defaultRuntime) {
   getLogger().warn(message);
 }
 
-export function logSuccess(message: string, runtime: RuntimeEnv = defaultRuntime) {
+export function logSuccess(
+  message: string,
+  runtime: RuntimeEnv = defaultRuntime,
+) {
   const parsed = runtime === defaultRuntime ? splitSubsystem(message) : null;
   if (parsed) {
     createSubsystemLogger(parsed.subsystem).info(parsed.rest);
@@ -44,7 +47,10 @@ export function logSuccess(message: string, runtime: RuntimeEnv = defaultRuntime
   getLogger().info(message);
 }
 
-export function logError(message: string, runtime: RuntimeEnv = defaultRuntime) {
+export function logError(
+  message: string,
+  runtime: RuntimeEnv = defaultRuntime,
+) {
   const parsed = runtime === defaultRuntime ? splitSubsystem(message) : null;
   if (parsed) {
     createSubsystemLogger(parsed.subsystem).error(parsed.rest);

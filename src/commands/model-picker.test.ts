@@ -51,13 +51,17 @@ const OPENROUTER_CATALOG = [
 
 function expectRouterModelFiltering(options: Array<{ value: string }>) {
   expect(options.some((opt) => opt.value === "openrouter/auto")).toBe(false);
-  expect(options.some((opt) => opt.value === "openrouter/meta-llama/llama-3.3-70b:free")).toBe(
-    true,
-  );
+  expect(
+    options.some(
+      (opt) => opt.value === "openrouter/meta-llama/llama-3.3-70b:free",
+    ),
+  ).toBe(true);
 }
 
 function createSelectAllMultiselect() {
-  return vi.fn(async (params) => params.options.map((option: { value: string }) => option.value));
+  return vi.fn(async (params) =>
+    params.options.map((option: { value: string }) => option.value),
+  );
 }
 
 describe("promptDefaultModel", () => {
@@ -71,7 +75,9 @@ describe("promptDefaultModel", () => {
     ]);
 
     const select = vi.fn(async (params) => {
-      const vllm = params.options.find((opt: { value: string }) => opt.value === "__vllm__");
+      const vllm = params.options.find(
+        (opt: { value: string }) => opt.value === "__vllm__",
+      );
       return (vllm?.value ?? "") as never;
     });
     const text = vi
@@ -104,7 +110,10 @@ describe("promptDefaultModel", () => {
       api: "openai-completions",
       apiKey: "VLLM_API_KEY",
       models: [
-        { id: "meta-llama/Meta-Llama-3-8B-Instruct", name: "meta-llama/Meta-Llama-3-8B-Instruct" },
+        {
+          id: "meta-llama/Meta-Llama-3-8B-Instruct",
+          name: "meta-llama/Meta-Llama-3-8B-Instruct",
+        },
       ],
     });
   });
@@ -173,7 +182,9 @@ describe("router model filtering", () => {
     expectRouterModelFiltering(defaultOptions);
 
     const allowlistCall = multiselect.mock.calls[0]?.[0];
-    expectRouterModelFiltering(allowlistCall?.options as Array<{ value: string }>);
+    expectRouterModelFiltering(
+      allowlistCall?.options as Array<{ value: string }>,
+    );
     expect(allowlistCall?.searchable).toBe(true);
   });
 });
@@ -237,7 +248,10 @@ describe("applyModelFallbacksFromSelection", () => {
     const config = {
       agents: {
         defaults: {
-          model: { primary: "anthropic/claude-opus-4-5", fallbacks: ["openai/gpt-5.2"] },
+          model: {
+            primary: "anthropic/claude-opus-4-5",
+            fallbacks: ["openai/gpt-5.2"],
+          },
         },
       },
     } as OpenClawConfig;

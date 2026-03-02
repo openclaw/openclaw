@@ -20,14 +20,22 @@ type ToolStreamCase = {
 };
 
 function runToolStreamCase(params: ToolStreamCase) {
-  const payload: Record<string, unknown> = { model: params.model.id, messages: [] };
+  const payload: Record<string, unknown> = {
+    model: params.model.id,
+    messages: [],
+  };
   const baseStreamFn: StreamFn = (_model, _context, options) => {
     options?.onPayload?.(payload);
     return {} as ReturnType<StreamFn>;
   };
   const agent = { streamFn: baseStreamFn };
 
-  applyExtraParamsToAgent(agent, params.cfg, params.applyProvider, params.applyModelId);
+  applyExtraParamsToAgent(
+    agent,
+    params.cfg,
+    params.applyProvider,
+    params.applyModelId,
+  );
 
   const context: Context = { messages: [] };
   void agent.streamFn?.(params.model, context, params.options ?? {});

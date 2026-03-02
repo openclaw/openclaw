@@ -1,4 +1,12 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 const noop = () => {};
 const MAIN_REQUESTER_SESSION_KEY = "agent:main:main";
@@ -85,7 +93,11 @@ describe("subagent registry lifecycle error grace", () => {
     await Promise.resolve();
   };
 
-  function registerCompletionRun(runId: string, childSuffix: string, task: string) {
+  function registerCompletionRun(
+    runId: string,
+    childSuffix: string,
+    task: string,
+  ) {
     mod.registerSubagentRun({
       runId,
       childSessionKey: `agent:main:subagent:${childSuffix}`,
@@ -106,7 +118,9 @@ describe("subagent registry lifecycle error grace", () => {
   }
 
   function readFirstAnnounceOutcome() {
-    const announceCalls = announceSpy.mock.calls as unknown as Array<Array<unknown>>;
+    const announceCalls = announceSpy.mock.calls as unknown as Array<
+      Array<unknown>
+    >;
     const first = (announceCalls[0]?.[0] ?? {}) as {
       outcome?: { status?: string; error?: string };
     };
@@ -114,7 +128,11 @@ describe("subagent registry lifecycle error grace", () => {
   }
 
   it("ignores transient lifecycle errors when run retries and then ends successfully", async () => {
-    registerCompletionRun("run-transient-error", "transient-error", "transient error test");
+    registerCompletionRun(
+      "run-transient-error",
+      "transient-error",
+      "transient error test",
+    );
 
     emitLifecycleEvent("run-transient-error", {
       phase: "error",
@@ -127,7 +145,10 @@ describe("subagent registry lifecycle error grace", () => {
     await vi.advanceTimersByTimeAsync(14_999);
     expect(announceSpy).not.toHaveBeenCalled();
 
-    emitLifecycleEvent("run-transient-error", { phase: "start", startedAt: 1_050 });
+    emitLifecycleEvent("run-transient-error", {
+      phase: "start",
+      startedAt: 1_050,
+    });
     await flushAsync();
 
     await vi.advanceTimersByTimeAsync(20_000);
@@ -141,7 +162,11 @@ describe("subagent registry lifecycle error grace", () => {
   });
 
   it("announces error when lifecycle error remains terminal after grace window", async () => {
-    registerCompletionRun("run-terminal-error", "terminal-error", "terminal error test");
+    registerCompletionRun(
+      "run-terminal-error",
+      "terminal-error",
+      "terminal error test",
+    );
 
     emitLifecycleEvent("run-terminal-error", {
       phase: "error",

@@ -29,7 +29,9 @@ export function isSecretRef(value: unknown): value is SecretRef {
     return false;
   }
   return (
-    (value.source === "env" || value.source === "file" || value.source === "exec") &&
+    (value.source === "env" ||
+      value.source === "file" ||
+      value.source === "exec") &&
     typeof value.provider === "string" &&
     value.provider.trim().length > 0 &&
     typeof value.id === "string" &&
@@ -44,7 +46,9 @@ function isLegacySecretRefWithoutProvider(
     return false;
   }
   return (
-    (value.source === "env" || value.source === "file" || value.source === "exec") &&
+    (value.source === "env" ||
+      value.source === "file" ||
+      value.source === "exec") &&
     typeof value.id === "string" &&
     value.id.trim().length > 0 &&
     value.provider === undefined

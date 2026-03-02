@@ -35,7 +35,9 @@ export function normalizeAccountId(value: string | undefined | null): string {
   return normalizeCanonicalAccountId(trimmed) || DEFAULT_ACCOUNT_ID;
 }
 
-export function normalizeOptionalAccountId(value: string | undefined | null): string | undefined {
+export function normalizeOptionalAccountId(
+  value: string | undefined | null,
+): string | undefined {
   const trimmed = (value ?? "").trim();
   if (!trimmed) {
     return undefined;

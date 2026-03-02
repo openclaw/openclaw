@@ -49,7 +49,10 @@ describe("runHeartbeatOnce ack handling", () => {
   ) {
     return {
       ...(params.sendWhatsApp
-        ? { sendWhatsApp: params.sendWhatsApp as unknown as HeartbeatDeps["sendWhatsApp"] }
+        ? {
+            sendWhatsApp:
+              params.sendWhatsApp as unknown as HeartbeatDeps["sendWhatsApp"],
+          }
         : {}),
       getQueueSize: params.getQueueSize ?? (() => 0),
       nowMs: params.nowMs ?? (() => 0),
@@ -67,7 +70,10 @@ describe("runHeartbeatOnce ack handling", () => {
   ) {
     return {
       ...(params.sendTelegram
-        ? { sendTelegram: params.sendTelegram as unknown as HeartbeatDeps["sendTelegram"] }
+        ? {
+            sendTelegram:
+              params.sendTelegram as unknown as HeartbeatDeps["sendTelegram"],
+          }
         : {}),
       getQueueSize: params.getQueueSize ?? (() => 0),
       nowMs: params.nowMs ?? (() => 0),
@@ -207,7 +213,11 @@ describe("runHeartbeatOnce ack handling", () => {
       });
 
       expect(sendWhatsApp).toHaveBeenCalledTimes(1);
-      expect(sendWhatsApp).toHaveBeenCalledWith(WHATSAPP_GROUP, "HEARTBEAT_OK", expect.any(Object));
+      expect(sendWhatsApp).toHaveBeenCalledWith(
+        WHATSAPP_GROUP,
+        "HEARTBEAT_OK",
+        expect.any(Object),
+      );
     });
   });
 
@@ -218,7 +228,8 @@ describe("runHeartbeatOnce ack handling", () => {
       expectedCalls: 0,
     },
     {
-      title: "strips responsePrefix before HEARTBEAT_OK detection and suppresses short ack text",
+      title:
+        "strips responsePrefix before HEARTBEAT_OK detection and suppresses short ack text",
       replyText: "[openclaw] HEARTBEAT_OK all good",
       messages: { responsePrefix: "[openclaw]" },
       expectedCalls: 0,
@@ -231,20 +242,26 @@ describe("runHeartbeatOnce ack handling", () => {
       expectedText: "History check complete",
     },
   ])("$title", async ({ replyText, messages, expectedCalls, expectedText }) => {
-    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
-      const sendTelegram = await runTelegramHeartbeatWithDefaults({
-        tmpDir,
-        storePath,
-        replySpy,
-        replyText,
-        messages,
-      });
+    await withTempTelegramHeartbeatSandbox(
+      async ({ tmpDir, storePath, replySpy }) => {
+        const sendTelegram = await runTelegramHeartbeatWithDefaults({
+          tmpDir,
+          storePath,
+          replySpy,
+          replyText,
+          messages,
+        });
 
-      expect(sendTelegram).toHaveBeenCalledTimes(expectedCalls);
-      if (expectedText) {
-        expect(sendTelegram).toHaveBeenCalledWith(TELEGRAM_GROUP, expectedText, expect.any(Object));
-      }
-    });
+        expect(sendTelegram).toHaveBeenCalledTimes(expectedCalls);
+        if (expectedText) {
+          expect(sendTelegram).toHaveBeenCalledWith(
+            TELEGRAM_GROUP,
+            expectedText,
+            expect.any(Object),
+          );
+        }
+      },
+    );
   });
 
   it("skips heartbeat LLM calls when visibility disables all output", async () => {
@@ -311,7 +328,10 @@ describe("runHeartbeatOnce ack handling", () => {
 
       replySpy.mockImplementationOnce(async () => {
         const raw = await fs.readFile(storePath, "utf-8");
-        const parsed = JSON.parse(raw) as Record<string, { updatedAt?: number } | undefined>;
+        const parsed = JSON.parse(raw) as Record<
+          string,
+          { updatedAt?: number } | undefined
+        >;
         if (parsed[sessionKey]) {
           parsed[sessionKey] = {
             ...parsed[sessionKey],
@@ -327,10 +347,9 @@ describe("runHeartbeatOnce ack handling", () => {
         deps: makeWhatsAppDeps(),
       });
 
-      const finalStore = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-        string,
-        { updatedAt?: number } | undefined
-      >;
+      const finalStore = JSON.parse(
+        await fs.readFile(storePath, "utf-8"),
+      ) as Record<string, { updatedAt?: number } | undefined>;
       expect(finalStore[sessionKey]?.updatedAt).toBe(bumpedUpdatedAt);
     });
   });
@@ -365,34 +384,39 @@ describe("runHeartbeatOnce ack handling", () => {
     telegram: Record<string, unknown>;
     expectedAccountId: string | undefined;
   }): Promise<void> {
-    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
-      const cfg = createHeartbeatConfig({
-        tmpDir,
-        storePath,
-        heartbeat: params.heartbeat,
-        channels: { telegram: params.telegram },
-      });
-      await seedMainSessionStore(storePath, cfg, {
-        lastChannel: "telegram",
-        lastProvider: "telegram",
-        lastTo: TELEGRAM_GROUP,
-      });
+    await withTempTelegramHeartbeatSandbox(
+      async ({ tmpDir, storePath, replySpy }) => {
+        const cfg = createHeartbeatConfig({
+          tmpDir,
+          storePath,
+          heartbeat: params.heartbeat,
+          channels: { telegram: params.telegram },
+        });
+        await seedMainSessionStore(storePath, cfg, {
+          lastChannel: "telegram",
+          lastProvider: "telegram",
+          lastTo: TELEGRAM_GROUP,
+        });
 
-      replySpy.mockResolvedValue({ text: "Hello from heartbeat" });
-      const sendTelegram = createMessageSendSpy({ chatId: TELEGRAM_GROUP });
+        replySpy.mockResolvedValue({ text: "Hello from heartbeat" });
+        const sendTelegram = createMessageSendSpy({ chatId: TELEGRAM_GROUP });
 
-      await runHeartbeatOnce({
-        cfg,
-        deps: makeTelegramDeps({ sendTelegram }),
-      });
+        await runHeartbeatOnce({
+          cfg,
+          deps: makeTelegramDeps({ sendTelegram }),
+        });
 
-      expect(sendTelegram).toHaveBeenCalledTimes(1);
-      expect(sendTelegram).toHaveBeenCalledWith(
-        TELEGRAM_GROUP,
-        "Hello from heartbeat",
-        expect.objectContaining({ accountId: params.expectedAccountId, verbose: false }),
-      );
-    });
+        expect(sendTelegram).toHaveBeenCalledTimes(1);
+        expect(sendTelegram).toHaveBeenCalledWith(
+          TELEGRAM_GROUP,
+          "Hello from heartbeat",
+          expect.objectContaining({
+            accountId: params.expectedAccountId,
+            verbose: false,
+          }),
+        );
+      },
+    );
   }
 
   it.each([
@@ -403,7 +427,8 @@ describe("runHeartbeatOnce ack handling", () => {
       expectedAccountId: undefined,
     },
     {
-      title: "does not pre-resolve telegram accountId (allows config-only account tokens)",
+      title:
+        "does not pre-resolve telegram accountId (allows config-only account tokens)",
       heartbeat: { every: "5m", target: "telegram" },
       telegram: {
         accounts: {
@@ -423,6 +448,10 @@ describe("runHeartbeatOnce ack handling", () => {
       expectedAccountId: "work",
     },
   ])("$title", async ({ heartbeat, telegram, expectedAccountId }) => {
-    await expectTelegramHeartbeatAccountId({ heartbeat, telegram, expectedAccountId });
+    await expectTelegramHeartbeatAccountId({
+      heartbeat,
+      telegram,
+      expectedAccountId,
+    });
   });
 });

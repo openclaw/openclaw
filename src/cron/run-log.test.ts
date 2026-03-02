@@ -38,7 +38,10 @@ describe("cron run log", () => {
     });
   });
 
-  async function withRunLogDir(prefix: string, run: (dir: string) => Promise<void>) {
+  async function withRunLogDir(
+    prefix: string,
+    run: (dir: string) => Promise<void>,
+  ) {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
     try {
       await run(dir);
@@ -50,20 +53,22 @@ describe("cron run log", () => {
   it("resolves store path to per-job runs/<jobId>.jsonl", () => {
     const storePath = path.join(os.tmpdir(), "cron", "jobs.json");
     const p = resolveCronRunLogPath({ storePath, jobId: "job-1" });
-    expect(p.endsWith(path.join(os.tmpdir(), "cron", "runs", "job-1.jsonl"))).toBe(true);
+    expect(
+      p.endsWith(path.join(os.tmpdir(), "cron", "runs", "job-1.jsonl")),
+    ).toBe(true);
   });
 
   it("rejects unsafe job ids when resolving run log path", () => {
     const storePath = path.join(os.tmpdir(), "cron", "jobs.json");
-    expect(() => resolveCronRunLogPath({ storePath, jobId: "../job-1" })).toThrow(
-      /invalid cron run log job id/i,
-    );
-    expect(() => resolveCronRunLogPath({ storePath, jobId: "nested/job-1" })).toThrow(
-      /invalid cron run log job id/i,
-    );
-    expect(() => resolveCronRunLogPath({ storePath, jobId: "..\\job-1" })).toThrow(
-      /invalid cron run log job id/i,
-    );
+    expect(() =>
+      resolveCronRunLogPath({ storePath, jobId: "../job-1" }),
+    ).toThrow(/invalid cron run log job id/i);
+    expect(() =>
+      resolveCronRunLogPath({ storePath, jobId: "nested/job-1" }),
+    ).toThrow(/invalid cron run log job id/i);
+    expect(() =>
+      resolveCronRunLogPath({ storePath, jobId: "..\\job-1" }),
+    ).toThrow(/invalid cron run log job id/i);
   });
 
   it("appends JSONL and prunes by line count", async () => {
@@ -159,7 +164,12 @@ describe("cron run log", () => {
         logPath,
         [
           '{"bad":',
-          JSON.stringify({ ts: 1, jobId: "job-1", action: "started", status: "ok" }),
+          JSON.stringify({
+            ts: 1,
+            jobId: "job-1",
+            action: "started",
+            status: "ok",
+          }),
           JSON.stringify({
             ts: 2,
             jobId: "job-1",
@@ -173,7 +183,10 @@ describe("cron run log", () => {
         "utf-8",
       );
 
-      const entries = await readCronRunLogEntries(logPath, { limit: 10, jobId: "job-1" });
+      const entries = await readCronRunLogEntries(logPath, {
+        limit: 10,
+        jobId: "job-1",
+      });
       expect(entries).toHaveLength(1);
       expect(entries[0]?.ts).toBe(2);
       expect(entries[0]?.delivered).toBe(true);
@@ -216,7 +229,10 @@ describe("cron run log", () => {
         "utf-8",
       );
 
-      const entries = await readCronRunLogEntries(logPath, { limit: 10, jobId: "job-1" });
+      const entries = await readCronRunLogEntries(logPath, {
+        limit: 10,
+        jobId: "job-1",
+      });
       expect(entries[0]?.model).toBe("gpt-5.2");
       expect(entries[0]?.provider).toBe("openai");
       expect(entries[0]?.usage).toEqual({

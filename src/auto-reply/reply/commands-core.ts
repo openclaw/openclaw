@@ -1,6 +1,9 @@
 import fs from "node:fs/promises";
 import { logVerbose } from "../../globals.js";
-import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
+import {
+  createInternalHookEvent,
+  triggerInternalHook,
+} from "../../hooks/internal-hooks.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { shouldHandleTextCommands } from "../commands-registry.js";
@@ -55,13 +58,18 @@ export async function emitResetCommandHooks(params: {
   previousSessionEntry?: HandleCommandsParams["previousSessionEntry"];
   workspaceDir: string;
 }): Promise<void> {
-  const hookEvent = createInternalHookEvent("command", params.action, params.sessionKey ?? "", {
-    sessionEntry: params.sessionEntry,
-    previousSessionEntry: params.previousSessionEntry,
-    commandSource: params.command.surface,
-    senderId: params.command.senderId,
-    cfg: params.cfg, // Pass config for LLM slug generation
-  });
+  const hookEvent = createInternalHookEvent(
+    "command",
+    params.action,
+    params.sessionKey ?? "",
+    {
+      sessionEntry: params.sessionEntry,
+      previousSessionEntry: params.previousSessionEntry,
+      commandSource: params.command.surface,
+      senderId: params.command.senderId,
+      cfg: params.cfg, // Pass config for LLM slug generation
+    },
+  );
   await triggerInternalHook(hookEvent);
   params.command.resetHookTriggered = true;
 
@@ -69,9 +77,11 @@ export async function emitResetCommandHooks(params: {
   if (hookEvent.messages.length > 0) {
     // Use OriginatingChannel/To if available, otherwise fall back to command channel/from
     // oxlint-disable-next-line typescript/no-explicit-any
-    const channel = params.ctx.OriginatingChannel || (params.command.channel as any);
+    const channel =
+      params.ctx.OriginatingChannel || (params.command.channel as any);
     // For replies, use 'from' (the sender) not 'to' (which might be the bot itself)
-    const to = params.ctx.OriginatingTo || params.command.from || params.command.to;
+    const to =
+      params.ctx.OriginatingTo || params.command.from || params.command.to;
 
     if (channel && to) {
       const hookReply = { text: hookEvent.messages.join("\n\n") };
@@ -112,7 +122,9 @@ export async function emitResetCommandHooks(params: {
             }
           }
         } else {
-          logVerbose("before_reset: no session file available, firing hook with empty messages");
+          logVerbose(
+            "before_reset: no session file available, firing hook with empty messages",
+          );
         }
         await hookRunner.runBeforeReset(
           { sessionFile, messages, reason: params.action },
@@ -130,7 +142,9 @@ export async function emitResetCommandHooks(params: {
   }
 }
 
-export async function handleCommands(params: HandleCommandsParams): Promise<CommandHandlerResult> {
+export async function handleCommands(
+  params: HandleCommandsParams,
+): Promise<CommandHandlerResult> {
   if (HANDLERS === null) {
     HANDLERS = [
       // Plugin commands are processed first, before built-in commands
@@ -160,7 +174,9 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
       handleAbortTrigger,
     ];
   }
-  const resetMatch = params.command.commandBodyNormalized.match(/^\/(new|reset)(?:\s|$)/);
+  const resetMatch = params.command.commandBodyNormalized.match(
+    /^\/(new|reset)(?:\s|$)/,
+  );
   const resetRequested = Boolean(resetMatch);
   if (resetRequested && !params.command.isAuthorizedSender) {
     logVerbose(
@@ -171,7 +187,8 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
 
   // Trigger internal hook for reset/new commands
   if (resetRequested && params.command.isAuthorizedSender) {
-    const commandAction: ResetCommandAction = resetMatch?.[1] === "reset" ? "reset" : "new";
+    const commandAction: ResetCommandAction =
+      resetMatch?.[1] === "reset" ? "reset" : "new";
     await emitResetCommandHooks({
       action: commandAction,
       ctx: params.ctx,
@@ -205,7 +222,9 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
     chatType: params.sessionEntry?.chatType,
   });
   if (sendPolicy === "deny") {
-    logVerbose(`Send blocked by policy for session ${params.sessionKey ?? "unknown"}`);
+    logVerbose(
+      `Send blocked by policy for session ${params.sessionKey ?? "unknown"}`,
+    );
     return { shouldContinue: false };
   }
 

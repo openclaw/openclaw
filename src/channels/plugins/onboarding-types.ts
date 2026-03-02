@@ -31,7 +31,9 @@ export type PromptAccountIdParams = {
   defaultAccountId: string;
 };
 
-export type PromptAccountId = (params: PromptAccountIdParams) => Promise<string>;
+export type PromptAccountId = (
+  params: PromptAccountIdParams,
+) => Promise<string>;
 
 export type ChannelOnboardingStatus = {
   channel: ChannelId;
@@ -62,12 +64,15 @@ export type ChannelOnboardingResult = {
   accountId?: string;
 };
 
-export type ChannelOnboardingConfiguredResult = ChannelOnboardingResult | "skip";
+export type ChannelOnboardingConfiguredResult =
+  | ChannelOnboardingResult
+  | "skip";
 
-export type ChannelOnboardingInteractiveContext = ChannelOnboardingConfigureContext & {
-  configured: boolean;
-  label: string;
-};
+export type ChannelOnboardingInteractiveContext =
+  ChannelOnboardingConfigureContext & {
+    configured: boolean;
+    label: string;
+  };
 
 export type ChannelOnboardingDmPolicy = {
   label: string;
@@ -85,8 +90,12 @@ export type ChannelOnboardingDmPolicy = {
 
 export type ChannelOnboardingAdapter = {
   channel: ChannelId;
-  getStatus: (ctx: ChannelOnboardingStatusContext) => Promise<ChannelOnboardingStatus>;
-  configure: (ctx: ChannelOnboardingConfigureContext) => Promise<ChannelOnboardingResult>;
+  getStatus: (
+    ctx: ChannelOnboardingStatusContext,
+  ) => Promise<ChannelOnboardingStatus>;
+  configure: (
+    ctx: ChannelOnboardingConfigureContext,
+  ) => Promise<ChannelOnboardingResult>;
   configureInteractive?: (
     ctx: ChannelOnboardingInteractiveContext,
   ) => Promise<ChannelOnboardingConfiguredResult>;
@@ -94,6 +103,9 @@ export type ChannelOnboardingAdapter = {
     ctx: ChannelOnboardingInteractiveContext,
   ) => Promise<ChannelOnboardingConfiguredResult>;
   dmPolicy?: ChannelOnboardingDmPolicy;
-  onAccountRecorded?: (accountId: string, options?: SetupChannelsOptions) => void;
+  onAccountRecorded?: (
+    accountId: string,
+    options?: SetupChannelsOptions,
+  ) => void;
   disable?: (cfg: OpenClawConfig) => OpenClawConfig;
 };

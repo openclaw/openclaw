@@ -12,12 +12,23 @@ import {
   speak as speakWithContext,
   speakInitialMessage as speakInitialMessageWithContext,
 } from "./manager/outbound.js";
-import { getCallHistoryFromStore, loadActiveCallsFromStore } from "./manager/store.js";
+import {
+  getCallHistoryFromStore,
+  loadActiveCallsFromStore,
+} from "./manager/store.js";
 import type { VoiceCallProvider } from "./providers/base.js";
-import type { CallId, CallRecord, NormalizedEvent, OutboundCallOptions } from "./types.js";
+import type {
+  CallId,
+  CallRecord,
+  NormalizedEvent,
+  OutboundCallOptions,
+} from "./types.js";
 import { resolveUserPath } from "./utils.js";
 
-function resolveDefaultStoreBase(config: VoiceCallConfig, storePath?: string): string {
+function resolveDefaultStoreBase(
+  config: VoiceCallConfig,
+  storePath?: string,
+): string {
   const rawOverride = storePath?.trim() || config.store?.trim();
   if (rawOverride) {
     return resolveUserPath(rawOverride);
@@ -27,7 +38,9 @@ function resolveDefaultStoreBase(config: VoiceCallConfig, storePath?: string): s
   const existing =
     candidates.find((dir) => {
       try {
-        return fs.existsSync(path.join(dir, "calls.jsonl")) || fs.existsSync(dir);
+        return (
+          fs.existsSync(path.join(dir, "calls.jsonl")) || fs.existsSync(dir)
+        );
       } catch {
         return false;
       }
@@ -100,7 +113,10 @@ export class CallManager {
   /**
    * Speak to user in an active call.
    */
-  async speak(callId: CallId, text: string): Promise<{ success: boolean; error?: string }> {
+  async speak(
+    callId: CallId,
+    text: string,
+  ): Promise<{ success: boolean; error?: string }> {
     return speakWithContext(this.getContext(), callId, text);
   }
 
@@ -156,7 +172,9 @@ export class CallManager {
 
   private maybeSpeakInitialMessageOnAnswered(call: CallRecord): void {
     const initialMessage =
-      typeof call.metadata?.initialMessage === "string" ? call.metadata.initialMessage.trim() : "";
+      typeof call.metadata?.initialMessage === "string"
+        ? call.metadata.initialMessage.trim()
+        : "";
 
     if (!initialMessage) {
       return;

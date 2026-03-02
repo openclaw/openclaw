@@ -158,7 +158,10 @@ function resolveLidMappingDirs(opts?: JidToE164Options): string[] {
   return [...dirs];
 }
 
-function readLidReverseMapping(lid: string, opts?: JidToE164Options): string | null {
+function readLidReverseMapping(
+  lid: string,
+  opts?: JidToE164Options,
+): string | null {
   const mappingFilename = `lid-mapping-${lid}_reverse.json`;
   const mappingDirs = resolveLidMappingDirs(opts);
   for (const dir of mappingDirs) {
@@ -245,11 +248,20 @@ function isLowSurrogate(codeUnit: number): boolean {
   return codeUnit >= 0xdc00 && codeUnit <= 0xdfff;
 }
 
-export function sliceUtf16Safe(input: string, start: number, end?: number): string {
+export function sliceUtf16Safe(
+  input: string,
+  start: number,
+  end?: number,
+): string {
   const len = input.length;
 
   let from = start < 0 ? Math.max(len + start, 0) : Math.min(start, len);
-  let to = end === undefined ? len : end < 0 ? Math.max(len + end, 0) : Math.min(end, len);
+  let to =
+    end === undefined
+      ? len
+      : end < 0
+        ? Math.max(len + end, 0)
+        : Math.min(end, len);
 
   if (to < from) {
     const tmp = from;
@@ -259,7 +271,10 @@ export function sliceUtf16Safe(input: string, start: number, end?: number): stri
 
   if (from > 0 && from < len) {
     const codeUnit = input.charCodeAt(from);
-    if (isLowSurrogate(codeUnit) && isHighSurrogate(input.charCodeAt(from - 1))) {
+    if (
+      isLowSurrogate(codeUnit) &&
+      isHighSurrogate(input.charCodeAt(from - 1))
+    ) {
       from += 1;
     }
   }
@@ -305,7 +320,8 @@ export function resolveConfigDir(
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = os.homedir,
 ): string {
-  const override = env.OPENCLAW_STATE_DIR?.trim() || env.CLAWDBOT_STATE_DIR?.trim();
+  const override =
+    env.OPENCLAW_STATE_DIR?.trim() || env.CLAWDBOT_STATE_DIR?.trim();
   if (override) {
     return resolveUserPath(override);
   }
@@ -325,7 +341,9 @@ export function resolveHomeDir(): string | undefined {
   return resolveEffectiveHomeDir(process.env, os.homedir);
 }
 
-function resolveHomeDisplayPrefix(): { home: string; prefix: string } | undefined {
+function resolveHomeDisplayPrefix():
+  | { home: string; prefix: string }
+  | undefined {
   const home = resolveHomeDir();
   if (!home) {
     return undefined;
@@ -383,7 +401,11 @@ export function formatTerminalLink(
   const safeLabel = label.replaceAll(esc, "");
   const safeUrl = url.replaceAll(esc, "");
   const allow =
-    opts?.force === true ? true : opts?.force === false ? false : Boolean(process.stdout.isTTY);
+    opts?.force === true
+      ? true
+      : opts?.force === false
+        ? false
+        : Boolean(process.stdout.isTTY);
   if (!allow) {
     return opts?.fallback ?? `${safeLabel} (${safeUrl})`;
   }

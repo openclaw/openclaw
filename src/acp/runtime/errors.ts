@@ -14,7 +14,11 @@ export class AcpRuntimeError extends Error {
   readonly code: AcpRuntimeErrorCode;
   override readonly cause?: unknown;
 
-  constructor(code: AcpRuntimeErrorCode, message: string, options?: { cause?: unknown }) {
+  constructor(
+    code: AcpRuntimeErrorCode,
+    message: string,
+    options?: { cause?: unknown },
+  ) {
     super(message);
     this.name = "AcpRuntimeError";
     this.code = code;

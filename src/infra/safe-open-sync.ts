@@ -11,12 +11,19 @@ export type SafeOpenSyncAllowedType = "file" | "directory";
 
 type SafeOpenSyncFs = Pick<
   typeof fs,
-  "constants" | "lstatSync" | "realpathSync" | "openSync" | "fstatSync" | "closeSync"
+  | "constants"
+  | "lstatSync"
+  | "realpathSync"
+  | "openSync"
+  | "fstatSync"
+  | "closeSync"
 >;
 
 function isExpectedPathError(error: unknown): boolean {
   const code =
-    typeof error === "object" && error !== null && "code" in error ? String(error.code) : "";
+    typeof error === "object" && error !== null && "code" in error
+      ? String(error.code)
+      : "";
   return code === "ENOENT" || code === "ENOTDIR" || code === "ELOOP";
 }
 
@@ -37,7 +44,9 @@ export function openVerifiedFileSync(params: {
   const allowedType = params.allowedType ?? "file";
   const openReadFlags =
     ioFs.constants.O_RDONLY |
-    (typeof ioFs.constants.O_NOFOLLOW === "number" ? ioFs.constants.O_NOFOLLOW : 0);
+    (typeof ioFs.constants.O_NOFOLLOW === "number"
+      ? ioFs.constants.O_NOFOLLOW
+      : 0);
   let fd: number | null = null;
   try {
     if (params.rejectPathSymlink) {
@@ -52,7 +61,11 @@ export function openVerifiedFileSync(params: {
     if (!isAllowedType(preOpenStat, allowedType)) {
       return { ok: false, reason: "validation" };
     }
-    if (params.rejectHardlinks && preOpenStat.isFile() && preOpenStat.nlink > 1) {
+    if (
+      params.rejectHardlinks &&
+      preOpenStat.isFile() &&
+      preOpenStat.nlink > 1
+    ) {
       return { ok: false, reason: "validation" };
     }
     if (
@@ -71,7 +84,11 @@ export function openVerifiedFileSync(params: {
     if (params.rejectHardlinks && openedStat.isFile() && openedStat.nlink > 1) {
       return { ok: false, reason: "validation" };
     }
-    if (params.maxBytes !== undefined && openedStat.isFile() && openedStat.size > params.maxBytes) {
+    if (
+      params.maxBytes !== undefined &&
+      openedStat.isFile() &&
+      openedStat.size > params.maxBytes
+    ) {
       return { ok: false, reason: "validation" };
     }
     if (!sameFileIdentity(preOpenStat, openedStat)) {
@@ -93,7 +110,10 @@ export function openVerifiedFileSync(params: {
   }
 }
 
-function isAllowedType(stat: fs.Stats, allowedType: SafeOpenSyncAllowedType): boolean {
+function isAllowedType(
+  stat: fs.Stats,
+  allowedType: SafeOpenSyncAllowedType,
+): boolean {
   if (allowedType === "directory") {
     return stat.isDirectory();
   }

@@ -1,8 +1,15 @@
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { loadSessionStore, resolveStorePath, type SessionEntry } from "../../config/sessions.js";
+import {
+  loadSessionStore,
+  resolveStorePath,
+  type SessionEntry,
+} from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
-import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
+import {
+  createInternalHookEvent,
+  triggerInternalHook,
+} from "../../hooks/internal-hooks.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import {
   logMessageProcessed,
@@ -11,13 +18,23 @@ import {
 } from "../../logging/diagnostic.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
-import { maybeApplyTtsToPayload, normalizeTtsAutoMode, resolveTtsConfig } from "../../tts/tts.js";
-import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
+import {
+  maybeApplyTtsToPayload,
+  normalizeTtsAutoMode,
+  resolveTtsConfig,
+} from "../../tts/tts.js";
+import {
+  INTERNAL_MESSAGE_CHANNEL,
+  normalizeMessageChannel,
+} from "../../utils/message-channel.js";
 import { getReplyFromConfig } from "../reply.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { formatAbortReplyText, tryFastAbortFromMessage } from "./abort.js";
-import { shouldBypassAcpDispatchForCommand, tryDispatchAcpReply } from "./dispatch-acp.js";
+import {
+  shouldBypassAcpDispatchForCommand,
+  tryDispatchAcpReply,
+} from "./dispatch-acp.js";
 import { shouldSkipDuplicateInbound } from "./inbound-dedupe.js";
 import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
 import { shouldSuppressReasoningPayload } from "./reply-payloads.js";
@@ -26,7 +43,8 @@ import { resolveRunTypingPolicy } from "./typing-policy.js";
 
 const AUDIO_PLACEHOLDER_RE = /^<media:audio>(\s*\([^)]*\))?$/i;
 const AUDIO_HEADER_RE = /^\[Audio\b/i;
-const normalizeMediaType = (value: string): string => value.split(";")[0]?.trim().toLowerCase();
+const normalizeMediaType = (value: string): string =>
+  value.split(";")[0]?.trim().toLowerCase();
 
 const isInboundAudioContext = (ctx: FinalizedMsgContext): boolean => {
   const rawTypes = [
@@ -66,7 +84,9 @@ const resolveSessionStoreEntry = (
   entry?: SessionEntry;
 } => {
   const targetSessionKey =
-    ctx.CommandSource === "native" ? ctx.CommandTargetSessionKey?.trim() : undefined;
+    ctx.CommandSource === "native"
+      ? ctx.CommandTargetSessionKey?.trim()
+      : undefined;
   const sessionKey = (targetSessionKey ?? ctx.SessionKey)?.trim();
   if (!sessionKey) {
     return {};
@@ -100,7 +120,9 @@ export async function dispatchReplyFromConfig(params: {
 }): Promise<DispatchFromConfigResult> {
   const { ctx, cfg, dispatcher } = params;
   const diagnosticsEnabled = isDiagnosticsEnabled(cfg);
-  const channel = String(ctx.Surface ?? ctx.Provider ?? "unknown").toLowerCase();
+  const channel = String(
+    ctx.Surface ?? ctx.Provider ?? "unknown",
+  ).toLowerCase();
   const chatId = ctx.To ?? ctx.From;
   const messageId = ctx.MessageSid ?? ctx.MessageSidFirst ?? ctx.MessageSidLast;
   const sessionKey = ctx.SessionKey;
@@ -164,9 +186,14 @@ export async function dispatchReplyFromConfig(params: {
 
   // Extract message context for hooks (plugin and internal)
   const timestamp =
-    typeof ctx.Timestamp === "number" && Number.isFinite(ctx.Timestamp) ? ctx.Timestamp : undefined;
+    typeof ctx.Timestamp === "number" && Number.isFinite(ctx.Timestamp)
+      ? ctx.Timestamp
+      : undefined;
   const messageIdForHook =
-    ctx.MessageSidFull ?? ctx.MessageSid ?? ctx.MessageSidFirst ?? ctx.MessageSidLast;
+    ctx.MessageSidFull ??
+    ctx.MessageSid ??
+    ctx.MessageSidFirst ??
+    ctx.MessageSidLast;
   const content =
     typeof ctx.BodyForCommands === "string"
       ? ctx.BodyForCommands
@@ -175,7 +202,12 @@ export async function dispatchReplyFromConfig(params: {
         : typeof ctx.Body === "string"
           ? ctx.Body
           : "";
-  const channelId = (ctx.OriginatingChannel ?? ctx.Surface ?? ctx.Provider ?? "").toLowerCase();
+  const channelId = (
+    ctx.OriginatingChannel ??
+    ctx.Surface ??
+    ctx.Provider ??
+    ""
+  ).toLowerCase();
   const conversationId = ctx.OriginatingTo ?? ctx.To ?? ctx.From ?? undefined;
 
   // Trigger plugin hooks (fire-and-forget)
@@ -209,7 +241,9 @@ export async function dispatchReplyFromConfig(params: {
         },
       )
       .catch((err) => {
-        logVerbose(`dispatch-from-config: message_received plugin hook failed: ${String(err)}`);
+        logVerbose(
+          `dispatch-from-config: message_received plugin hook failed: ${String(err)}`,
+        );
       });
   }
 
@@ -238,7 +272,9 @@ export async function dispatchReplyFromConfig(params: {
         },
       }),
     ).catch((err) => {
-      logVerbose(`dispatch-from-config: message_received internal hook failed: ${String(err)}`);
+      logVerbose(
+        `dispatch-from-config: message_received internal hook failed: ${String(err)}`,
+      );
     });
   }
 
@@ -256,11 +292,15 @@ export async function dispatchReplyFromConfig(params: {
   // Prefer provider channel because surface may carry origin metadata in relayed flows.
   const currentSurface = providerChannel ?? surfaceChannel;
   const shouldRouteToOriginating = Boolean(
-    isRoutableChannel(originatingChannel) && originatingTo && originatingChannel !== currentSurface,
+    isRoutableChannel(originatingChannel) &&
+    originatingTo &&
+    originatingChannel !== currentSurface,
   );
   const shouldSuppressTyping =
     shouldRouteToOriginating || originatingChannel === INTERNAL_MESSAGE_CHANNEL;
-  const ttsChannel = shouldRouteToOriginating ? originatingChannel : currentSurface;
+  const ttsChannel = shouldRouteToOriginating
+    ? originatingChannel
+    : currentSurface;
 
   /**
    * Helper to send a payload via route-reply (async).
@@ -293,7 +333,9 @@ export async function dispatchReplyFromConfig(params: {
       mirror,
     });
     if (!result.ok) {
-      logVerbose(`dispatch-from-config: route-reply failed: ${result.error ?? "unknown error"}`);
+      logVerbose(
+        `dispatch-from-config: route-reply failed: ${result.error ?? "unknown error"}`,
+      );
     }
   };
 
@@ -360,7 +402,8 @@ export async function dispatchReplyFromConfig(params: {
       return { queuedFinal: false, counts };
     }
 
-    const shouldSendToolSummaries = ctx.ChatType !== "group" && ctx.CommandSource !== "native";
+    const shouldSendToolSummaries =
+      ctx.ChatType !== "group" && ctx.CommandSource !== "native";
     const acpDispatch = await tryDispatchAcpReply({
       ctx,
       cfg,
@@ -388,13 +431,16 @@ export async function dispatchReplyFromConfig(params: {
     let accumulatedBlockText = "";
     let blockCount = 0;
 
-    const resolveToolDeliveryPayload = (payload: ReplyPayload): ReplyPayload | null => {
+    const resolveToolDeliveryPayload = (
+      payload: ReplyPayload,
+    ): ReplyPayload | null => {
       if (shouldSendToolSummaries) {
         return payload;
       }
       // Group/native flows intentionally suppress tool summary text, but media-only
       // tool results (for example TTS audio) must still be delivered.
-      const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
+      const hasMedia =
+        Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
       if (!hasMedia) {
         return null;
       }
@@ -402,7 +448,8 @@ export async function dispatchReplyFromConfig(params: {
     };
     const typing = resolveRunTypingPolicy({
       requestedPolicy: params.replyOptions?.typingPolicy,
-      suppressTyping: params.replyOptions?.suppressTyping === true || shouldSuppressTyping,
+      suppressTyping:
+        params.replyOptions?.suppressTyping === true || shouldSuppressTyping,
       originatingChannel,
       systemEvent: shouldRouteToOriginating,
     });
@@ -471,7 +518,11 @@ export async function dispatchReplyFromConfig(params: {
       cfg,
     );
 
-    const replies = replyResult ? (Array.isArray(replyResult) ? replyResult : [replyResult]) : [];
+    const replies = replyResult
+      ? Array.isArray(replyResult)
+        ? replyResult
+        : [replyResult]
+      : [];
 
     let queuedFinal = false;
     let routedFinalCount = 0;

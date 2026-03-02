@@ -1,4 +1,7 @@
-import { parseNodeList, parsePairingList } from "../../shared/node-list-parse.js";
+import {
+  parseNodeList,
+  parsePairingList,
+} from "../../shared/node-list-parse.js";
 import type { NodeListNode } from "../../shared/node-list-types.js";
 import { resolveNodeIdFromCandidates } from "../../shared/node-match.js";
 import { callGatewayTool, type GatewayCallOptions } from "./gateway.js";
@@ -79,8 +82,12 @@ function isLocalMacNode(node: NodeListNode): boolean {
 }
 
 function compareDefaultNodeOrder(a: NodeListNode, b: NodeListNode): number {
-  const aConnectedAt = Number.isFinite(a.connectedAtMs) ? (a.connectedAtMs ?? 0) : -1;
-  const bConnectedAt = Number.isFinite(b.connectedAtMs) ? (b.connectedAtMs ?? 0) : -1;
+  const aConnectedAt = Number.isFinite(a.connectedAtMs)
+    ? (a.connectedAtMs ?? 0)
+    : -1;
+  const bConnectedAt = Number.isFinite(b.connectedAtMs)
+    ? (b.connectedAtMs ?? 0)
+    : -1;
   if (aConnectedAt !== bConnectedAt) {
     return bConnectedAt - aConnectedAt;
   }
@@ -93,7 +100,9 @@ export function selectDefaultNodeFromList(
 ): NodeListNode | null {
   const capability = options.capability?.trim();
   const withCapability = capability
-    ? nodes.filter((n) => (Array.isArray(n.caps) ? n.caps.includes(capability) : true))
+    ? nodes.filter((n) =>
+        Array.isArray(n.caps) ? n.caps.includes(capability) : true,
+      )
     : nodes;
   if (withCapability.length === 0) {
     return null;
@@ -133,7 +142,9 @@ function pickDefaultNode(nodes: NodeListNode[]): NodeListNode | null {
   });
 }
 
-export async function listNodes(opts: GatewayCallOptions): Promise<NodeListNode[]> {
+export async function listNodes(
+  opts: GatewayCallOptions,
+): Promise<NodeListNode[]> {
   return loadNodes(opts);
 }
 

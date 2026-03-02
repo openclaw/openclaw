@@ -70,7 +70,10 @@ describe("status", () => {
         },
       };
 
-      const issues = collectTwitchStatusIssues(snapshots, () => mockCfg as never);
+      const issues = collectTwitchStatusIssues(
+        snapshots,
+        () => mockCfg as never,
+      );
 
       const clientIdIssue = issues.find((i) => i.message.includes("client ID"));
       expect(clientIdIssue).toBeDefined();
@@ -96,7 +99,10 @@ describe("status", () => {
         },
       };
 
-      const issues = collectTwitchStatusIssues(snapshots, () => mockCfg as never);
+      const issues = collectTwitchStatusIssues(
+        snapshots,
+        () => mockCfg as never,
+      );
 
       const prefixIssue = issues.find((i) => i.message.includes("oauth:"));
       expect(prefixIssue).toBeDefined();
@@ -125,9 +131,14 @@ describe("status", () => {
         },
       };
 
-      const issues = collectTwitchStatusIssues(snapshots, () => mockCfg as never);
+      const issues = collectTwitchStatusIssues(
+        snapshots,
+        () => mockCfg as never,
+      );
 
-      const secretIssue = issues.find((i) => i.message.includes("clientSecret"));
+      const secretIssue = issues.find((i) =>
+        i.message.includes("clientSecret"),
+      );
       expect(secretIssue).toBeDefined();
     });
 
@@ -152,9 +163,14 @@ describe("status", () => {
         },
       };
 
-      const issues = collectTwitchStatusIssues(snapshots, () => mockCfg as never);
+      const issues = collectTwitchStatusIssues(
+        snapshots,
+        () => mockCfg as never,
+      );
 
-      const allowFromIssue = issues.find((i) => i.message.includes("allowFrom"));
+      const allowFromIssue = issues.find((i) =>
+        i.message.includes("allowFrom"),
+      );
       expect(allowFromIssue).toBeDefined();
     });
 
@@ -180,7 +196,10 @@ describe("status", () => {
         },
       };
 
-      const issues = collectTwitchStatusIssues(snapshots, () => mockCfg as never);
+      const issues = collectTwitchStatusIssues(
+        snapshots,
+        () => mockCfg as never,
+      );
 
       const conflictIssue = issues.find((i) => i.kind === "intent");
       expect(conflictIssue).toBeDefined();

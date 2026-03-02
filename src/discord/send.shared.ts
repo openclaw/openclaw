@@ -13,12 +13,19 @@ import type { ChunkMode } from "../auto-reply/chunk.js";
 import { loadConfig } from "../config/config.js";
 import type { RetryRunner } from "../infra/retry-policy.js";
 import { buildOutboundMediaLoadOptions } from "../media/load-options.js";
-import { normalizePollDurationHours, normalizePollInput, type PollInput } from "../polls.js";
+import {
+  normalizePollDurationHours,
+  normalizePollInput,
+  type PollInput,
+} from "../polls.js";
 import { loadWebMedia } from "../web/media.js";
 import { resolveDiscordAccount } from "./accounts.js";
 import { chunkDiscordTextWithMode } from "./chunk.js";
 import { createDiscordClient, resolveDiscordRest } from "./client.js";
-import { fetchChannelPermissionsDiscord, isThreadChannelType } from "./send.permissions.js";
+import {
+  fetchChannelPermissionsDiscord,
+  isThreadChannelType,
+} from "./send.permissions.js";
 import { DiscordSendError } from "./send.types.js";
 import { parseDiscordTarget, resolveDiscordTarget } from "./targets.js";
 
@@ -31,8 +38,12 @@ const DISCORD_CANNOT_DM = 50007;
 
 type DiscordRequest = RetryRunner;
 
-export type DiscordSendComponentFactory = (text: string) => TopLevelComponents[];
-export type DiscordSendComponents = TopLevelComponents[] | DiscordSendComponentFactory;
+export type DiscordSendComponentFactory = (
+  text: string,
+) => TopLevelComponents[];
+export type DiscordSendComponents =
+  | TopLevelComponents[]
+  | DiscordSendComponentFactory;
 export type DiscordSendEmbeds = Array<APIEmbed | Embed>;
 
 type DiscordRecipient =
@@ -248,7 +259,9 @@ export async function resolveDiscordChannelType(
   channelId: string,
 ): Promise<number | undefined> {
   try {
-    const channel = (await rest.get(Routes.channel(channelId))) as APIChannel | undefined;
+    const channel = (await rest.get(Routes.channel(channelId))) as
+      | APIChannel
+      | undefined;
     return channel?.type;
   } catch {
     return undefined;
@@ -260,7 +273,11 @@ export const SUPPRESS_NOTIFICATIONS_FLAG = 1 << 12;
 
 export function buildDiscordTextChunks(
   text: string,
-  opts: { maxLinesPerMessage?: number; chunkMode?: ChunkMode; maxChars?: number } = {},
+  opts: {
+    maxLinesPerMessage?: number;
+    chunkMode?: ChunkMode;
+    maxChars?: number;
+  } = {},
 ): string[] {
   if (!text) {
     return [];
@@ -277,7 +294,9 @@ export function buildDiscordTextChunks(
 }
 
 function hasV2Components(components?: TopLevelComponents[]): boolean {
-  return Boolean(components?.some((component) => "isV2" in component && component.isV2));
+  return Boolean(
+    components?.some((component) => "isV2" in component && component.isV2),
+  );
 }
 
 export function resolveDiscordSendComponents(params: {
@@ -293,11 +312,15 @@ export function resolveDiscordSendComponents(params: {
     : params.components;
 }
 
-function normalizeDiscordEmbeds(embeds?: DiscordSendEmbeds): Embed[] | undefined {
+function normalizeDiscordEmbeds(
+  embeds?: DiscordSendEmbeds,
+): Embed[] | undefined {
   if (!embeds?.length) {
     return undefined;
   }
-  return embeds.map((embed) => (embed instanceof Embed ? embed : new Embed(embed)));
+  return embeds.map((embed) =>
+    embed instanceof Embed ? embed : new Embed(embed),
+  );
 }
 
 export function resolveDiscordSendEmbeds(params: {
@@ -339,7 +362,9 @@ export function buildDiscordMessagePayload(params: {
 }
 
 export function stripUndefinedFields<T extends object>(value: T): T {
-  return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined)) as T;
+  return Object.fromEntries(
+    Object.entries(value).filter(([, entry]) => entry !== undefined),
+  ) as T;
 }
 
 export function toDiscordFileBlob(data: Blob | Uint8Array): Blob {
@@ -366,9 +391,14 @@ async function sendDiscordText(
   if (!text.trim()) {
     throw new Error("Message must be non-empty for Discord sends");
   }
-  const messageReference = replyTo ? { message_id: replyTo, fail_if_not_exists: false } : undefined;
+  const messageReference = replyTo
+    ? { message_id: replyTo, fail_if_not_exists: false }
+    : undefined;
   const flags = silent ? SUPPRESS_NOTIFICATIONS_FLAG : undefined;
-  const chunks = buildDiscordTextChunks(text, { maxLinesPerMessage, chunkMode });
+  const chunks = buildDiscordTextChunks(text, {
+    maxLinesPerMessage,
+    chunkMode,
+  });
   const sendChunk = async (chunk: string, isFirst: boolean) => {
     const chunkComponents = resolveDiscordSendComponents({
       components,
@@ -421,10 +451,17 @@ async function sendDiscordMedia(
   chunkMode?: ChunkMode,
   silent?: boolean,
 ) {
-  const media = await loadWebMedia(mediaUrl, buildOutboundMediaLoadOptions({ mediaLocalRoots }));
-  const chunks = text ? buildDiscordTextChunks(text, { maxLinesPerMessage, chunkMode }) : [];
+  const media = await loadWebMedia(
+    mediaUrl,
+    buildOutboundMediaLoadOptions({ mediaLocalRoots }),
+  );
+  const chunks = text
+    ? buildDiscordTextChunks(text, { maxLinesPerMessage, chunkMode })
+    : [];
   const caption = chunks[0] ?? "";
-  const messageReference = replyTo ? { message_id: replyTo, fail_if_not_exists: false } : undefined;
+  const messageReference = replyTo
+    ? { message_id: replyTo, fail_if_not_exists: false }
+    : undefined;
   const flags = silent ? SUPPRESS_NOTIFICATIONS_FLAG : undefined;
   const fileData = toDiscordFileBlob(media.buffer);
   const captionComponents = resolveDiscordSendComponents({
@@ -475,14 +512,20 @@ async function sendDiscordMedia(
   return res;
 }
 
-function buildReactionIdentifier(emoji: { id?: string | null; name?: string | null }) {
+function buildReactionIdentifier(emoji: {
+  id?: string | null;
+  name?: string | null;
+}) {
   if (emoji.id && emoji.name) {
     return `${emoji.name}:${emoji.id}`;
   }
   return emoji.name ?? "";
 }
 
-function formatReactionEmoji(emoji: { id?: string | null; name?: string | null }) {
+function formatReactionEmoji(emoji: {
+  id?: string | null;
+  name?: string | null;
+}) {
   return buildReactionIdentifier(emoji);
 }
 

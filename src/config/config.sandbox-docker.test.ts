@@ -13,7 +13,10 @@ describe("sandbox docker config", () => {
         defaults: {
           sandbox: {
             docker: {
-              binds: ["/home/user/source:/source:rw", "/var/data/myapp:/data:ro"],
+              binds: [
+                "/home/user/source:/source:rw",
+                "/var/data/myapp:/data:ro",
+              ],
             },
           },
         },

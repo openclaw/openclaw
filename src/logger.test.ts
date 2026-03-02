@@ -126,7 +126,11 @@ describe("stripRedundantSubsystemPrefixForConsole", () => {
     const cases = [
       { input: "discord: hello", subsystem: "discord", expected: "hello" },
       { input: "WhatsApp: hello", subsystem: "whatsapp", expected: "hello" },
-      { input: "discord gateway: closed", subsystem: "discord", expected: "gateway: closed" },
+      {
+        input: "discord gateway: closed",
+        subsystem: "discord",
+        expected: "gateway: closed",
+      },
       {
         input: "[discord] connection stalled",
         subsystem: "discord",
@@ -135,21 +139,27 @@ describe("stripRedundantSubsystemPrefixForConsole", () => {
     ];
 
     for (const testCase of cases) {
-      expect(stripRedundantSubsystemPrefixForConsole(testCase.input, testCase.subsystem)).toBe(
-        testCase.expected,
-      );
+      expect(
+        stripRedundantSubsystemPrefixForConsole(
+          testCase.input,
+          testCase.subsystem,
+        ),
+      ).toBe(testCase.expected);
     }
   });
 
   it("keeps messages that do not start with the subsystem", () => {
-    expect(stripRedundantSubsystemPrefixForConsole("discordant: hello", "discord")).toBe(
-      "discordant: hello",
-    );
+    expect(
+      stripRedundantSubsystemPrefixForConsole("discordant: hello", "discord"),
+    ).toBe("discordant: hello");
   });
 });
 
 function pathForTest() {
-  const file = path.join(os.tmpdir(), `openclaw-log-${crypto.randomUUID()}.log`);
+  const file = path.join(
+    os.tmpdir(),
+    `openclaw-log-${crypto.randomUUID()}.log`,
+  );
   fs.mkdirSync(path.dirname(file), { recursive: true });
   return file;
 }

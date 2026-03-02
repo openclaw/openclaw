@@ -12,14 +12,16 @@ export function resolvePinnedNpmSpec(params: {
   pin: boolean;
   resolvedSpec?: string;
 }): { recordSpec: string; pinWarning?: string; pinNotice?: string } {
-  const recordSpec = params.pin && params.resolvedSpec ? params.resolvedSpec : params.rawSpec;
+  const recordSpec =
+    params.pin && params.resolvedSpec ? params.resolvedSpec : params.rawSpec;
   if (!params.pin) {
     return { recordSpec };
   }
   if (!params.resolvedSpec) {
     return {
       recordSpec,
-      pinWarning: "Could not resolve exact npm version for --pin; storing original npm spec.",
+      pinWarning:
+        "Could not resolve exact npm version for --pin; storing original npm spec.",
     };
   }
   return {

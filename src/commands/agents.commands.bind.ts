@@ -49,7 +49,10 @@ function resolveAgentId(
   return null;
 }
 
-function hasAgent(cfg: Awaited<ReturnType<typeof requireValidConfig>>, agentId: string): boolean {
+function hasAgent(
+  cfg: Awaited<ReturnType<typeof requireValidConfig>>,
+  agentId: string,
+): boolean {
   if (!cfg) {
     return false;
   }
@@ -85,7 +88,8 @@ function formatBindingConflicts(
   conflicts: Array<{ binding: AgentBinding; existingAgentId: string }>,
 ): string[] {
   return conflicts.map(
-    (conflict) => `${describeBinding(conflict.binding)} (agent=${conflict.existingAgentId})`,
+    (conflict) =>
+      `${describeBinding(conflict.binding)} (agent=${conflict.existingAgentId})`,
   );
 }
 
@@ -96,14 +100,20 @@ function resolveParsedBindingsOrExit(params: {
   bindValues: string[] | undefined;
   emptyMessage: string;
 }): ReturnType<typeof parseBindingSpecs> | null {
-  const specs = (params.bindValues ?? []).map((value) => value.trim()).filter(Boolean);
+  const specs = (params.bindValues ?? [])
+    .map((value) => value.trim())
+    .filter(Boolean);
   if (specs.length === 0) {
     params.runtime.error(params.emptyMessage);
     params.runtime.exit(1);
     return null;
   }
 
-  const parsed = parseBindingSpecs({ agentId: params.agentId, specs, config: params.cfg });
+  const parsed = parseBindingSpecs({
+    agentId: params.agentId,
+    specs,
+    config: params.cfg,
+  });
   if (parsed.errors.length > 0) {
     params.runtime.error(parsed.errors.join("\n"));
     params.runtime.exit(1);
@@ -150,7 +160,8 @@ export async function agentsBindingsCommand(
   }
 
   const filtered = (cfg.bindings ?? []).filter(
-    (binding) => !filterAgentId || normalizeAgentId(binding.agentId) === filterAgentId,
+    (binding) =>
+      !filterAgentId || normalizeAgentId(binding.agentId) === filterAgentId,
   );
   if (opts.json) {
     runtime.log(
@@ -169,7 +180,9 @@ export async function agentsBindingsCommand(
 
   if (filtered.length === 0) {
     runtime.log(
-      filterAgentId ? `No routing bindings for agent "${filterAgentId}".` : "No routing bindings.",
+      filterAgentId
+        ? `No routing bindings for agent "${filterAgentId}".`
+        : "No routing bindings.",
     );
     return;
   }
@@ -191,7 +204,11 @@ export async function agentsBindCommand(
     return;
   }
 
-  const agentId = resolveTargetAgentIdOrExit({ cfg, runtime, agentInput: opts.agent });
+  const agentId = resolveTargetAgentIdOrExit({
+    cfg,
+    runtime,
+    agentInput: opts.agent,
+  });
   if (!agentId) {
     return;
   }
@@ -223,7 +240,12 @@ export async function agentsBindCommand(
     conflicts: formatBindingConflicts(result.conflicts),
   };
   if (
-    emitJsonPayload({ runtime, json: opts.json, payload, conflictCount: result.conflicts.length })
+    emitJsonPayload({
+      runtime,
+      json: opts.json,
+      payload,
+      conflictCount: result.conflicts.length,
+    })
   ) {
     return;
   }
@@ -254,7 +276,9 @@ export async function agentsBindCommand(
   if (result.conflicts.length > 0) {
     runtime.error("Skipped bindings already claimed by another agent:");
     for (const conflict of result.conflicts) {
-      runtime.error(`- ${describeBinding(conflict.binding)} (agent=${conflict.existingAgentId})`);
+      runtime.error(
+        `- ${describeBinding(conflict.binding)} (agent=${conflict.existingAgentId})`,
+      );
     }
     runtime.exit(1);
   }
@@ -269,7 +293,11 @@ export async function agentsUnbindCommand(
     return;
   }
 
-  const agentId = resolveTargetAgentIdOrExit({ cfg, runtime, agentInput: opts.agent });
+  const agentId = resolveTargetAgentIdOrExit({
+    cfg,
+    runtime,
+    agentInput: opts.agent,
+  });
   if (!agentId) {
     return;
   }
@@ -281,8 +309,12 @@ export async function agentsUnbindCommand(
 
   if (opts.all) {
     const existing = cfg.bindings ?? [];
-    const removed = existing.filter((binding) => normalizeAgentId(binding.agentId) === agentId);
-    const kept = existing.filter((binding) => normalizeAgentId(binding.agentId) !== agentId);
+    const removed = existing.filter(
+      (binding) => normalizeAgentId(binding.agentId) === agentId,
+    );
+    const kept = existing.filter(
+      (binding) => normalizeAgentId(binding.agentId) !== agentId,
+    );
     if (removed.length === 0) {
       runtime.log(`No bindings to remove for agent "${agentId}".`);
       return;
@@ -313,7 +345,8 @@ export async function agentsUnbindCommand(
     cfg,
     agentId,
     bindValues: opts.bind,
-    emptyMessage: "Provide at least one --bind <channel[:accountId]> or use --all.",
+    emptyMessage:
+      "Provide at least one --bind <channel[:accountId]> or use --all.",
   });
   if (!parsed) {
     return;
@@ -334,7 +367,12 @@ export async function agentsUnbindCommand(
     conflicts: formatBindingConflicts(result.conflicts),
   };
   if (
-    emitJsonPayload({ runtime, json: opts.json, payload, conflictCount: result.conflicts.length })
+    emitJsonPayload({
+      runtime,
+      json: opts.json,
+      payload,
+      conflictCount: result.conflicts.length,
+    })
   ) {
     return;
   }
@@ -356,7 +394,9 @@ export async function agentsUnbindCommand(
   if (result.conflicts.length > 0) {
     runtime.error("Bindings are owned by another agent:");
     for (const conflict of result.conflicts) {
-      runtime.error(`- ${describeBinding(conflict.binding)} (agent=${conflict.existingAgentId})`);
+      runtime.error(
+        `- ${describeBinding(conflict.binding)} (agent=${conflict.existingAgentId})`,
+      );
     }
     runtime.exit(1);
   }

@@ -8,7 +8,11 @@ import {
   resolveRuntimeHandleIdentifiersFromIdentity,
   resolveSessionIdentityFromMeta,
 } from "../runtime/session-identity.js";
-import type { AcpRuntime, AcpRuntimeHandle, AcpRuntimeStatus } from "../runtime/types.js";
+import type {
+  AcpRuntime,
+  AcpRuntimeHandle,
+  AcpRuntimeStatus,
+} from "../runtime/types.js";
 import type { SessionAcpMeta, SessionEntry } from "./manager.types.js";
 import { hasLegacyAcpIdentityProjection } from "./manager.utils.js";
 
@@ -72,7 +76,8 @@ export async function reconcileManagerRuntimeSessionIdentifiers(params: {
       }),
       now,
     }) ?? currentIdentity;
-  const handleIdentifiers = resolveRuntimeHandleIdentifiersFromIdentity(nextIdentity);
+  const handleIdentifiers =
+    resolveRuntimeHandleIdentifiersFromIdentity(nextIdentity);
   const handleChanged =
     handleIdentifiers.backendSessionId !== params.handle.backendSessionId ||
     handleIdentifiers.agentSessionId !== params.handle.agentSessionId;
@@ -92,7 +97,8 @@ export async function reconcileManagerRuntimeSessionIdentifiers(params: {
   }
 
   const metaChanged =
-    !identityEquals(currentIdentity, nextIdentity) || hasLegacyAcpIdentityProjection(params.meta);
+    !identityEquals(currentIdentity, nextIdentity) ||
+    hasLegacyAcpIdentityProjection(params.meta);
   if (!metaChanged) {
     return {
       handle: nextHandle,
@@ -106,7 +112,9 @@ export async function reconcileManagerRuntimeSessionIdentifiers(params: {
     runtimeSessionName: params.meta.runtimeSessionName,
     ...(nextIdentity ? { identity: nextIdentity } : {}),
     mode: params.meta.mode,
-    ...(params.meta.runtimeOptions ? { runtimeOptions: params.meta.runtimeOptions } : {}),
+    ...(params.meta.runtimeOptions
+      ? { runtimeOptions: params.meta.runtimeOptions }
+      : {}),
     ...(params.meta.cwd ? { cwd: params.meta.cwd } : {}),
     lastActivityAt: now,
     state: params.meta.state,

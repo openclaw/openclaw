@@ -7,7 +7,10 @@ import { resolveControlUiRootSync } from "../infra/control-ui-assets.js";
 import { isWithinDir } from "../infra/path-safety.js";
 import { openVerifiedFileSync } from "../infra/safe-open-sync.js";
 import { AVATAR_MAX_BYTES } from "../shared/avatar-policy.js";
-import { DEFAULT_ASSISTANT_IDENTITY, resolveAssistantIdentity } from "./assistant-identity.js";
+import {
+  DEFAULT_ASSISTANT_IDENTITY,
+  resolveAssistantIdentity,
+} from "./assistant-identity.js";
 import {
   CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
   type ControlUiBootstrapConfig,
@@ -125,7 +128,10 @@ function isValidAgentId(agentId: string): boolean {
 export function handleControlUiAvatarRequest(
   req: IncomingMessage,
   res: ServerResponse,
-  opts: { basePath?: string; resolveAvatar: (agentId: string) => ControlUiAvatarResolution },
+  opts: {
+    basePath?: string;
+    resolveAvatar: (agentId: string) => ControlUiAvatarResolution;
+  },
 ): boolean {
   const urlRaw = req.url;
   if (!urlRaw) {
@@ -147,7 +153,10 @@ export function handleControlUiAvatarRequest(
 
   applyControlUiSecurityHeaders(res);
 
-  const agentIdParts = pathname.slice(pathWithBase.length).split("/").filter(Boolean);
+  const agentIdParts = pathname
+    .slice(pathWithBase.length)
+    .split("/")
+    .filter(Boolean);
   const agentId = agentIdParts[0] ?? "";
   if (agentIdParts.length !== 1 || !agentId || !isValidAgentId(agentId)) {
     respondControlUiNotFound(res);
@@ -180,7 +189,10 @@ export function handleControlUiAvatarRequest(
   try {
     if (req.method === "HEAD") {
       res.statusCode = 200;
-      res.setHeader("Content-Type", contentTypeForExt(path.extname(safeAvatar.path).toLowerCase()));
+      res.setHeader(
+        "Content-Type",
+        contentTypeForExt(path.extname(safeAvatar.path).toLowerCase()),
+      );
       res.setHeader("Cache-Control", "no-cache");
       res.end();
       return true;
@@ -201,7 +213,11 @@ function setStaticFileHeaders(res: ServerResponse, filePath: string) {
   res.setHeader("Cache-Control", "no-cache");
 }
 
-function serveResolvedFile(res: ServerResponse, filePath: string, body: Buffer) {
+function serveResolvedFile(
+  res: ServerResponse,
+  filePath: string,
+  body: Buffer,
+) {
   setStaticFileHeaders(res, filePath);
   res.end(body);
 }
@@ -214,11 +230,15 @@ function serveResolvedIndexHtml(res: ServerResponse, body: string) {
 
 function isExpectedSafePathError(error: unknown): boolean {
   const code =
-    typeof error === "object" && error !== null && "code" in error ? String(error.code) : "";
+    typeof error === "object" && error !== null && "code" in error
+      ? String(error.code)
+      : "";
   return code === "ENOENT" || code === "ENOTDIR" || code === "ELOOP";
 }
 
-function resolveSafeAvatarFile(filePath: string): { path: string; fd: number } | null {
+function resolveSafeAvatarFile(
+  filePath: string,
+): { path: string; fd: number } | null {
   const opened = openVerifiedFileSync({
     filePath,
     rejectPathSymlink: true,
@@ -391,7 +411,9 @@ export function handleControlUiHttpRequest(
   }
 
   const uiPath =
-    basePath && pathname.startsWith(`${basePath}/`) ? pathname.slice(basePath.length) : pathname;
+    basePath && pathname.startsWith(`${basePath}/`)
+      ? pathname.slice(basePath.length)
+      : pathname;
   const rel = (() => {
     if (uiPath === ROOT_PREFIX) {
       return "";

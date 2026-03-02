@@ -1,5 +1,8 @@
 import { getAcpSessionManager } from "../../acp/control-plane/manager.js";
-import { resolveAcpAgentPolicyError, resolveAcpDispatchPolicyError } from "../../acp/policy.js";
+import {
+  resolveAcpAgentPolicyError,
+  resolveAcpDispatchPolicyError,
+} from "../../acp/policy.js";
 import { formatAcpRuntimeErrorText } from "../../acp/runtime/error-text.js";
 import { toAcpRuntimeError } from "../../acp/runtime/errors.js";
 import { resolveAcpThreadSessionDetailLines } from "../../acp/runtime/session-identifiers.js";
@@ -36,7 +39,9 @@ type DispatchProcessedRecorder = (
 
 function resolveFirstContextText(
   ctx: FinalizedMsgContext,
-  keys: Array<"BodyForAgent" | "BodyForCommands" | "CommandBody" | "RawBody" | "Body">,
+  keys: Array<
+    "BodyForAgent" | "BodyForCommands" | "CommandBody" | "RawBody" | "Body"
+  >,
 ): string {
   for (const key of keys) {
     const value = ctx[key];
@@ -58,7 +63,12 @@ function resolveAcpPromptText(ctx: FinalizedMsgContext): string {
 }
 
 function resolveCommandCandidateText(ctx: FinalizedMsgContext): string {
-  return resolveFirstContextText(ctx, ["CommandBody", "BodyForCommands", "RawBody", "Body"]).trim();
+  return resolveFirstContextText(ctx, [
+    "CommandBody",
+    "BodyForCommands",
+    "RawBody",
+    "Body",
+  ]).trim();
 }
 
 export function shouldBypassAcpDispatchForCommand(
@@ -95,7 +105,11 @@ export function shouldBypassAcpDispatchForCommand(
 }
 
 function resolveAcpRequestId(ctx: FinalizedMsgContext): string {
-  const id = ctx.MessageSidFull ?? ctx.MessageSid ?? ctx.MessageSidFirst ?? ctx.MessageSidLast;
+  const id =
+    ctx.MessageSidFull ??
+    ctx.MessageSid ??
+    ctx.MessageSidFirst ??
+    ctx.MessageSidLast;
   if (typeof id === "string" && id.trim()) {
     return id.trim();
   }
@@ -129,7 +143,9 @@ function hasBoundConversationForSession(params: {
     const bindingAccountId = String(binding.conversation.accountId ?? "")
       .trim()
       .toLowerCase();
-    const conversationId = String(binding.conversation.conversationId ?? "").trim();
+    const conversationId = String(
+      binding.conversation.conversationId ?? "",
+    ).trim();
     return (
       bindingChannel === channel &&
       (bindingAccountId || "default") === normalizedAccountId &&
@@ -198,14 +214,22 @@ export async function tryDispatchAcpReply(params: {
   }
 
   const identityPendingBeforeTurn = isSessionIdentityPending(
-    resolveSessionIdentityFromMeta(acpResolution.kind === "ready" ? acpResolution.meta : undefined),
+    resolveSessionIdentityFromMeta(
+      acpResolution.kind === "ready" ? acpResolution.meta : undefined,
+    ),
   );
   const shouldEmitResolvedIdentityNotice =
     identityPendingBeforeTurn &&
-    (Boolean(params.ctx.MessageThreadId != null && String(params.ctx.MessageThreadId).trim()) ||
+    (Boolean(
+      params.ctx.MessageThreadId != null &&
+      String(params.ctx.MessageThreadId).trim(),
+    ) ||
       hasBoundConversationForSession({
         sessionKey,
-        channelRaw: params.ctx.OriginatingChannel ?? params.ctx.Surface ?? params.ctx.Provider,
+        channelRaw:
+          params.ctx.OriginatingChannel ??
+          params.ctx.Surface ??
+          params.ctx.Provider,
         accountIdRaw: params.ctx.AccountId,
       }));
 
@@ -234,7 +258,10 @@ export async function tryDispatchAcpReply(params: {
     if (acpResolution.kind === "stale") {
       throw acpResolution.error;
     }
-    const agentPolicyError = resolveAcpAgentPolicyError(params.cfg, resolvedAcpAgent);
+    const agentPolicyError = resolveAcpAgentPolicyError(
+      params.cfg,
+      resolvedAcpAgent,
+    );
     if (agentPolicyError) {
       throw agentPolicyError;
     }
@@ -259,7 +286,11 @@ export async function tryDispatchAcpReply(params: {
     await projector.flush(true);
     const ttsMode = resolveTtsConfig(params.cfg).mode ?? "final";
     const accumulatedBlockText = delivery.getAccumulatedBlockText();
-    if (ttsMode === "final" && delivery.getBlockCount() > 0 && accumulatedBlockText.trim()) {
+    if (
+      ttsMode === "final" &&
+      delivery.getBlockCount() > 0 &&
+      accumulatedBlockText.trim()
+    ) {
       try {
         const ttsSyntheticReply = await maybeApplyTtsToPayload({
           payload: { text: accumulatedBlockText },
@@ -296,7 +327,9 @@ export async function tryDispatchAcpReply(params: {
         });
         if (resolvedDetails.length > 0) {
           const delivered = await delivery.deliver("final", {
-            text: prefixSystemMessage(["Session ids resolved.", ...resolvedDetails].join("\n")),
+            text: prefixSystemMessage(
+              ["Session ids resolved.", ...resolvedDetails].join("\n"),
+            ),
           });
           queuedFinal = queuedFinal || delivered;
         }

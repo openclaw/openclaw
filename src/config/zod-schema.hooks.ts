@@ -29,7 +29,10 @@ function isSafeRelativeModulePath(raw: string): boolean {
 
 const SafeRelativeModulePathSchema = z
   .string()
-  .refine(isSafeRelativeModulePath, "module must be a safe relative path (no absolute paths)");
+  .refine(
+    isSafeRelativeModulePath,
+    "module must be a safe relative path (no absolute paths)",
+  );
 
 export const HookMappingSchema = z
   .object({
@@ -41,7 +44,9 @@ export const HookMappingSchema = z
       })
       .optional(),
     action: z.union([z.literal("wake"), z.literal("agent")]).optional(),
-    wakeMode: z.union([z.literal("now"), z.literal("next-heartbeat")]).optional(),
+    wakeMode: z
+      .union([z.literal("now"), z.literal("next-heartbeat")])
+      .optional(),
     name: z.string().optional(),
     agentId: z.string().optional(),
     sessionKey: z.string().optional().register(sensitive),
@@ -140,7 +145,9 @@ export const HooksGmailSchema = z
       .optional(),
     tailscale: z
       .object({
-        mode: z.union([z.literal("off"), z.literal("serve"), z.literal("funnel")]).optional(),
+        mode: z
+          .union([z.literal("off"), z.literal("serve"), z.literal("funnel")])
+          .optional(),
         path: z.string().optional(),
         target: z.string().optional(),
       })

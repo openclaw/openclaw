@@ -119,7 +119,11 @@ export function spawnSignalDaemon(opts: SignalDaemonOpts): SignalDaemonHandle {
       signal: signal ?? null,
     });
     error(
-      formatSignalDaemonExit({ source: "process", code: code ?? null, signal: signal ?? null }),
+      formatSignalDaemonExit({
+        source: "process",
+        code: code ?? null,
+        signal: signal ?? null,
+      }),
     );
   });
   child.once("close", (code, signal) => {

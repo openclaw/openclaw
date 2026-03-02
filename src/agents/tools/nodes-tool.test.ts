@@ -21,7 +21,9 @@ const screenMocks = vi.hoisted(() => ({
     hasAudio: true,
   })),
   screenRecordTempPath: vi.fn(() => "/tmp/screen-record.mp4"),
-  writeScreenRecordToFile: vi.fn(async () => ({ path: "/tmp/screen-record.mp4" })),
+  writeScreenRecordToFile: vi.fn(async () => ({
+    path: "/tmp/screen-record.mp4",
+  })),
 }));
 
 vi.mock("./gateway.js", () => ({

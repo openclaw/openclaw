@@ -1,6 +1,9 @@
 import type { Command } from "commander";
 import { sandboxExplainCommand } from "../commands/sandbox-explain.js";
-import { sandboxListCommand, sandboxRecreateCommand } from "../commands/sandbox.js";
+import {
+  sandboxListCommand,
+  sandboxRecreateCommand,
+} from "../commands/sandbox.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
@@ -17,7 +20,10 @@ const SANDBOX_EXAMPLES = {
     ["openclaw sandbox list", "List all sandbox containers."],
     ["openclaw sandbox list --browser", "List only browser containers."],
     ["openclaw sandbox recreate --all", "Recreate all containers."],
-    ["openclaw sandbox recreate --session main", "Recreate a specific session."],
+    [
+      "openclaw sandbox recreate --session main",
+      "Recreate a specific session.",
+    ],
     ["openclaw sandbox recreate --agent mybot", "Recreate agent containers."],
     ["openclaw sandbox explain", "Explain effective sandbox config."],
   ],
@@ -28,21 +34,36 @@ const SANDBOX_EXAMPLES = {
   ],
   recreate: [
     ["openclaw sandbox recreate --all", "Recreate all containers."],
-    ["openclaw sandbox recreate --session main", "Recreate a specific session."],
-    ["openclaw sandbox recreate --agent mybot", "Recreate a specific agent (includes sub-agents)."],
-    ["openclaw sandbox recreate --browser --all", "Recreate only browser containers."],
+    [
+      "openclaw sandbox recreate --session main",
+      "Recreate a specific session.",
+    ],
+    [
+      "openclaw sandbox recreate --agent mybot",
+      "Recreate a specific agent (includes sub-agents).",
+    ],
+    [
+      "openclaw sandbox recreate --browser --all",
+      "Recreate only browser containers.",
+    ],
     ["openclaw sandbox recreate --all --force", "Skip confirmation."],
   ],
   explain: [
     ["openclaw sandbox explain", "Show effective sandbox config."],
-    ["openclaw sandbox explain --session agent:main:main", "Explain a specific session."],
+    [
+      "openclaw sandbox explain --session agent:main:main",
+      "Explain a specific session.",
+    ],
     ["openclaw sandbox explain --agent work", "Explain an agent sandbox."],
     ["openclaw sandbox explain --json", "JSON output."],
   ],
 } as const;
 
 function createRunner(
-  commandFn: (opts: CommandOptions, runtime: typeof defaultRuntime) => Promise<void>,
+  commandFn: (
+    opts: CommandOptions,
+    runtime: typeof defaultRuntime,
+  ) => Promise<void>,
 ) {
   return async (opts: CommandOptions) => {
     try {
@@ -62,7 +83,8 @@ export function registerSandboxCli(program: Command) {
     .description("Manage sandbox containers (Docker-based agent isolation)")
     .addHelpText(
       "after",
-      () => `\n${theme.heading("Examples:")}\n${formatHelpExamples(SANDBOX_EXAMPLES.main)}\n`,
+      () =>
+        `\n${theme.heading("Examples:")}\n${formatHelpExamples(SANDBOX_EXAMPLES.main)}\n`,
     )
     .addHelpText(
       "after",
@@ -152,12 +174,16 @@ export function registerSandboxCli(program: Command) {
   sandbox
     .command("explain")
     .description("Explain effective sandbox/tool policy for a session/agent")
-    .option("--session <key>", "Session key to inspect (defaults to agent main)")
+    .option(
+      "--session <key>",
+      "Session key to inspect (defaults to agent main)",
+    )
     .option("--agent <id>", "Agent id to inspect (defaults to derived agent)")
     .option("--json", "Output result as JSON", false)
     .addHelpText(
       "after",
-      () => `\n${theme.heading("Examples:")}\n${formatHelpExamples(SANDBOX_EXAMPLES.explain)}\n`,
+      () =>
+        `\n${theme.heading("Examples:")}\n${formatHelpExamples(SANDBOX_EXAMPLES.explain)}\n`,
     )
     .action(
       createRunner((opts) =>

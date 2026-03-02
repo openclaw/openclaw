@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { buildCopilotModelDefinition, getDefaultCopilotModelIds } from "./github-copilot-models.js";
+import {
+  buildCopilotModelDefinition,
+  getDefaultCopilotModelIds,
+} from "./github-copilot-models.js";
 
 describe("github-copilot-models", () => {
   describe("getDefaultCopilotModelIds", () => {
@@ -32,8 +35,12 @@ describe("github-copilot-models", () => {
     });
 
     it("throws on empty model id", () => {
-      expect(() => buildCopilotModelDefinition("")).toThrow("Model id required");
-      expect(() => buildCopilotModelDefinition("  ")).toThrow("Model id required");
+      expect(() => buildCopilotModelDefinition("")).toThrow(
+        "Model id required",
+      );
+      expect(() => buildCopilotModelDefinition("  ")).toThrow(
+        "Model id required",
+      );
     });
   });
 });

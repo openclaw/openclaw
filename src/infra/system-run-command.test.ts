@@ -7,7 +7,10 @@ import {
 } from "./system-run-command.js";
 
 describe("system run command helpers", () => {
-  function expectRawCommandMismatch(params: { argv: string[]; rawCommand: string }) {
+  function expectRawCommandMismatch(params: {
+    argv: string[];
+    rawCommand: string;
+  }) {
     const res = validateSystemRunCommandConsistency(params);
     expect(res.ok).toBe(false);
     if (res.ok) {
@@ -26,24 +29,41 @@ describe("system run command helpers", () => {
   });
 
   test("extractShellCommandFromArgv extracts sh -lc command", () => {
-    expect(extractShellCommandFromArgv(["/bin/sh", "-lc", "echo hi"])).toBe("echo hi");
+    expect(extractShellCommandFromArgv(["/bin/sh", "-lc", "echo hi"])).toBe(
+      "echo hi",
+    );
   });
 
   test("extractShellCommandFromArgv extracts cmd.exe /c command", () => {
-    expect(extractShellCommandFromArgv(["cmd.exe", "/d", "/s", "/c", "echo hi"])).toBe("echo hi");
+    expect(
+      extractShellCommandFromArgv(["cmd.exe", "/d", "/s", "/c", "echo hi"]),
+    ).toBe("echo hi");
   });
 
   test("extractShellCommandFromArgv unwraps /usr/bin/env shell wrappers", () => {
-    expect(extractShellCommandFromArgv(["/usr/bin/env", "bash", "-lc", "echo hi"])).toBe("echo hi");
-    expect(extractShellCommandFromArgv(["/usr/bin/env", "FOO=bar", "zsh", "-c", "echo hi"])).toBe(
-      "echo hi",
-    );
+    expect(
+      extractShellCommandFromArgv(["/usr/bin/env", "bash", "-lc", "echo hi"]),
+    ).toBe("echo hi");
+    expect(
+      extractShellCommandFromArgv([
+        "/usr/bin/env",
+        "FOO=bar",
+        "zsh",
+        "-c",
+        "echo hi",
+      ]),
+    ).toBe("echo hi");
   });
 
   test("extractShellCommandFromArgv unwraps known dispatch wrappers before shell wrappers", () => {
-    expect(extractShellCommandFromArgv(["/usr/bin/nice", "/bin/bash", "-lc", "echo hi"])).toBe(
-      "echo hi",
-    );
+    expect(
+      extractShellCommandFromArgv([
+        "/usr/bin/nice",
+        "/bin/bash",
+        "-lc",
+        "echo hi",
+      ]),
+    ).toBe("echo hi");
     expect(
       extractShellCommandFromArgv([
         "/usr/bin/timeout",
@@ -57,26 +77,46 @@ describe("system run command helpers", () => {
   });
 
   test("extractShellCommandFromArgv supports fish and pwsh wrappers", () => {
-    expect(extractShellCommandFromArgv(["fish", "-c", "echo hi"])).toBe("echo hi");
-    expect(extractShellCommandFromArgv(["pwsh", "-Command", "Get-Date"])).toBe("Get-Date");
+    expect(extractShellCommandFromArgv(["fish", "-c", "echo hi"])).toBe(
+      "echo hi",
+    );
+    expect(extractShellCommandFromArgv(["pwsh", "-Command", "Get-Date"])).toBe(
+      "Get-Date",
+    );
   });
 
   test("extractShellCommandFromArgv unwraps busybox/toybox shell applets", () => {
-    expect(extractShellCommandFromArgv(["busybox", "sh", "-c", "echo hi"])).toBe("echo hi");
-    expect(extractShellCommandFromArgv(["toybox", "ash", "-lc", "echo hi"])).toBe("echo hi");
+    expect(
+      extractShellCommandFromArgv(["busybox", "sh", "-c", "echo hi"]),
+    ).toBe("echo hi");
+    expect(
+      extractShellCommandFromArgv(["toybox", "ash", "-lc", "echo hi"]),
+    ).toBe("echo hi");
   });
 
   test("extractShellCommandFromArgv ignores env wrappers when no shell wrapper follows", () => {
-    expect(extractShellCommandFromArgv(["/usr/bin/env", "FOO=bar", "/usr/bin/printf", "ok"])).toBe(
-      null,
-    );
+    expect(
+      extractShellCommandFromArgv([
+        "/usr/bin/env",
+        "FOO=bar",
+        "/usr/bin/printf",
+        "ok",
+      ]),
+    ).toBe(null);
     expect(extractShellCommandFromArgv(["/usr/bin/env", "FOO=bar"])).toBe(null);
   });
 
   test("extractShellCommandFromArgv includes trailing cmd.exe args after /c", () => {
-    expect(extractShellCommandFromArgv(["cmd.exe", "/d", "/s", "/c", "echo", "SAFE&&whoami"])).toBe(
-      "echo SAFE&&whoami",
-    );
+    expect(
+      extractShellCommandFromArgv([
+        "cmd.exe",
+        "/d",
+        "/s",
+        "/c",
+        "echo",
+        "SAFE&&whoami",
+      ]),
+    ).toBe("echo SAFE&&whoami");
   });
 
   test("validateSystemRunCommandConsistency accepts rawCommand matching direct argv", () => {
@@ -124,7 +164,13 @@ describe("system run command helpers", () => {
 
   test("validateSystemRunCommandConsistency rejects shell-only rawCommand for env assignment prelude", () => {
     expectRawCommandMismatch({
-      argv: ["/usr/bin/env", "BASH_ENV=/tmp/payload.sh", "bash", "-lc", "echo hi"],
+      argv: [
+        "/usr/bin/env",
+        "BASH_ENV=/tmp/payload.sh",
+        "bash",
+        "-lc",
+        "echo hi",
+      ],
       rawCommand: "echo hi",
     });
   });
@@ -132,7 +178,13 @@ describe("system run command helpers", () => {
   test("validateSystemRunCommandConsistency accepts full rawCommand for env assignment prelude", () => {
     const raw = '/usr/bin/env BASH_ENV=/tmp/payload.sh bash -lc "echo hi"';
     const res = validateSystemRunCommandConsistency({
-      argv: ["/usr/bin/env", "BASH_ENV=/tmp/payload.sh", "bash", "-lc", "echo hi"],
+      argv: [
+        "/usr/bin/env",
+        "BASH_ENV=/tmp/payload.sh",
+        "bash",
+        "-lc",
+        "echo hi",
+      ],
       rawCommand: raw,
     });
     expect(res.ok).toBe(true);
@@ -176,7 +228,14 @@ describe("system run command helpers", () => {
     if (!res.ok) {
       throw new Error("unreachable");
     }
-    expect(res.argv).toEqual(["cmd.exe", "/d", "/s", "/c", "echo", "SAFE&&whoami"]);
+    expect(res.argv).toEqual([
+      "cmd.exe",
+      "/d",
+      "/s",
+      "/c",
+      "echo",
+      "SAFE&&whoami",
+    ]);
     expect(res.shellCommand).toBe("echo SAFE&&whoami");
     expect(res.cmdText).toBe("echo SAFE&&whoami");
   });
@@ -190,18 +249,28 @@ describe("system run command helpers", () => {
       throw new Error("unreachable");
     }
     expect(res.shellCommand).toBe('$0 "$1"');
-    expect(res.cmdText).toBe('/bin/sh -lc "$0 \\"$1\\"" /usr/bin/touch /tmp/marker');
+    expect(res.cmdText).toBe(
+      '/bin/sh -lc "$0 \\"$1\\"" /usr/bin/touch /tmp/marker',
+    );
   });
 
   test("resolveSystemRunCommand binds cmdText to full argv when env prelude modifies shell wrapper", () => {
     const res = resolveSystemRunCommand({
-      command: ["/usr/bin/env", "BASH_ENV=/tmp/payload.sh", "bash", "-lc", "echo hi"],
+      command: [
+        "/usr/bin/env",
+        "BASH_ENV=/tmp/payload.sh",
+        "bash",
+        "-lc",
+        "echo hi",
+      ],
     });
     expect(res.ok).toBe(true);
     if (!res.ok) {
       throw new Error("unreachable");
     }
     expect(res.shellCommand).toBe("echo hi");
-    expect(res.cmdText).toBe('/usr/bin/env BASH_ENV=/tmp/payload.sh bash -lc "echo hi"');
+    expect(res.cmdText).toBe(
+      '/usr/bin/env BASH_ENV=/tmp/payload.sh bash -lc "echo hi"',
+    );
   });
 });

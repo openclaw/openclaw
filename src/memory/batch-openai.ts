@@ -97,7 +97,9 @@ async function fetchOpenAiFileContent(params: {
     onResponse: async (res) => {
       if (!res.ok) {
         const text = await res.text();
-        throw new Error(`openai batch file content failed: ${res.status} ${text}`);
+        throw new Error(
+          `openai batch file content failed: ${res.status} ${text}`,
+        );
       }
       return await res.text();
     },
@@ -152,7 +154,9 @@ async function waitForOpenAiBatch(params: {
     const state = status.status ?? "unknown";
     if (state === "completed") {
       if (!status.output_file_id) {
-        throw new Error(`openai batch ${params.batchId} completed without output file`);
+        throw new Error(
+          `openai batch ${params.batchId} completed without output file`,
+        );
       }
       return {
         outputFileId: status.output_file_id,
@@ -161,18 +165,27 @@ async function waitForOpenAiBatch(params: {
     }
     if (["failed", "expired", "cancelled", "canceled"].includes(state)) {
       const detail = status.error_file_id
-        ? await readOpenAiBatchError({ openAi: params.openAi, errorFileId: status.error_file_id })
+        ? await readOpenAiBatchError({
+            openAi: params.openAi,
+            errorFileId: status.error_file_id,
+          })
         : undefined;
       const suffix = detail ? `: ${detail}` : "";
       throw new Error(`openai batch ${params.batchId} ${state}${suffix}`);
     }
     if (!params.wait) {
-      throw new Error(`openai batch ${params.batchId} still ${state}; wait disabled`);
+      throw new Error(
+        `openai batch ${params.batchId} still ${state}; wait disabled`,
+      );
     }
     if (Date.now() - start > params.timeoutMs) {
-      throw new Error(`openai batch ${params.batchId} timed out after ${params.timeoutMs}ms`);
+      throw new Error(
+        `openai batch ${params.batchId} timed out after ${params.timeoutMs}ms`,
+      );
     }
-    params.debug?.(`openai batch ${params.batchId} ${state}; waiting ${params.pollIntervalMs}ms`);
+    params.debug?.(
+      `openai batch ${params.batchId} ${state}; waiting ${params.pollIntervalMs}ms`,
+    );
     await new Promise((resolve) => setTimeout(resolve, params.pollIntervalMs));
     current = undefined;
   }
@@ -230,7 +243,9 @@ export async function runOpenAiEmbeddingBatches(
               initial: batchInfo,
             });
       if (!completed.outputFileId) {
-        throw new Error(`openai batch ${batchInfo.id} completed without output file`);
+        throw new Error(
+          `openai batch ${batchInfo.id} completed without output file`,
+        );
       }
 
       const content = await fetchOpenAiFileContent({
@@ -246,7 +261,9 @@ export async function runOpenAiEmbeddingBatches(
       }
 
       if (errors.length > 0) {
-        throw new Error(`openai batch ${batchInfo.id} failed: ${errors.join("; ")}`);
+        throw new Error(
+          `openai batch ${batchInfo.id} failed: ${errors.join("; ")}`,
+        );
       }
       if (remaining.size > 0) {
         throw new Error(

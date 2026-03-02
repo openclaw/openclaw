@@ -5,11 +5,17 @@ import { resolveUserPath } from "../utils.js";
 
 export function resolveOpenClawAgentDir(): string {
   const override =
-    process.env.OPENCLAW_AGENT_DIR?.trim() || process.env.PI_CODING_AGENT_DIR?.trim();
+    process.env.OPENCLAW_AGENT_DIR?.trim() ||
+    process.env.PI_CODING_AGENT_DIR?.trim();
   if (override) {
     return resolveUserPath(override);
   }
-  const defaultAgentDir = path.join(resolveStateDir(), "agents", DEFAULT_AGENT_ID, "agent");
+  const defaultAgentDir = path.join(
+    resolveStateDir(),
+    "agents",
+    DEFAULT_AGENT_ID,
+    "agent",
+  );
   return resolveUserPath(defaultAgentDir);
 }
 

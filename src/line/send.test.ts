@@ -1,4 +1,12 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 const {
   pushMessageMock,
@@ -99,7 +107,10 @@ describe("LINE send helpers", () => {
   });
 
   it("limits quick reply items to 13", () => {
-    const labels = Array.from({ length: 20 }, (_, index) => `Option ${index + 1}`);
+    const labels = Array.from(
+      { length: 20 },
+      (_, index) => `Option ${index + 1}`,
+    );
     const quickReply = sendModule.createQuickReplyItems(labels);
 
     expect(quickReply.items).toHaveLength(13);
@@ -205,7 +216,9 @@ describe("LINE send helpers", () => {
   it("continues when loading animation is unsupported", async () => {
     showLoadingAnimationMock.mockRejectedValueOnce(new Error("unsupported"));
 
-    await expect(sendModule.showLoadingAnimation("line:room:R1")).resolves.toBeUndefined();
+    await expect(
+      sendModule.showLoadingAnimation("line:room:R1"),
+    ).resolves.toBeUndefined();
 
     expect(logVerboseMock).toHaveBeenCalledWith(
       expect.stringContaining("line: loading animation failed (non-fatal)"),

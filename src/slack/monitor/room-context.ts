@@ -18,9 +18,9 @@ export function resolveSlackRoomContextHints(params: {
     entries: [params.channelInfo?.topic, params.channelInfo?.purpose],
   });
 
-  const systemPromptParts = [params.channelConfig?.systemPrompt?.trim() || null].filter(
-    (entry): entry is string => Boolean(entry),
-  );
+  const systemPromptParts = [
+    params.channelConfig?.systemPrompt?.trim() || null,
+  ].filter((entry): entry is string => Boolean(entry));
   const groupSystemPrompt =
     systemPromptParts.length > 0 ? systemPromptParts.join("\n\n") : undefined;
 

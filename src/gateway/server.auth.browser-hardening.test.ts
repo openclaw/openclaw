@@ -8,7 +8,10 @@ import {
   publicKeyRawBase64UrlFromPem,
   signDevicePayload,
 } from "../infra/device-identity.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../utils/message-channel.js";
 import { buildDeviceAuthPayload } from "./device-auth.js";
 import {
   connectReq,
@@ -31,7 +34,10 @@ const TEST_OPERATOR_CLIENT = {
 const originForPort = (port: number) => `http://127.0.0.1:${port}`;
 
 const openWs = async (port: number, headers?: Record<string, string>) => {
-  const ws = new WebSocket(`ws://127.0.0.1:${port}`, headers ? { headers } : undefined);
+  const ws = new WebSocket(
+    `ws://127.0.0.1:${port}`,
+    headers ? { headers } : undefined,
+  );
   trackConnectChallengeNonce(ws);
   await new Promise<void>((resolve) => ws.once("open", resolve));
   return ws;
@@ -94,7 +100,12 @@ describe("gateway auth browser hardening", () => {
     testState.gatewayAuth = {
       mode: "token",
       token: "secret",
-      rateLimit: { maxAttempts: 1, windowMs: 60_000, lockoutMs: 60_000, exemptLoopback: true },
+      rateLimit: {
+        maxAttempts: 1,
+        windowMs: 60_000,
+        lockoutMs: 60_000,
+        exemptLoopback: true,
+      },
     };
     await withGatewayServer(async ({ port }) => {
       const firstWs = await openWs(port, { origin: originForPort(port) });
@@ -131,7 +142,10 @@ describe("gateway auth browser hardening", () => {
           scopes: ["operator.admin"],
           clientId: TEST_OPERATOR_CLIENT.id,
           clientMode: TEST_OPERATOR_CLIENT.mode,
-          identityPath: path.join(os.tmpdir(), `openclaw-browser-device-${randomUUID()}.json`),
+          identityPath: path.join(
+            os.tmpdir(),
+            `openclaw-browser-device-${randomUUID()}.json`,
+          ),
           nonce: String(nonce ?? ""),
         });
         const res = await connectReq(browserWs, {
@@ -144,7 +158,9 @@ describe("gateway auth browser hardening", () => {
         expect(res.error?.message ?? "").toContain("pairing required");
 
         const pairing = await listDevicePairing();
-        const pending = pairing.pending.find((entry) => entry.deviceId === identity.deviceId);
+        const pending = pairing.pending.find(
+          (entry) => entry.deviceId === identity.deviceId,
+        );
         expect(pending).toBeTruthy();
         expect(pending?.silent).toBe(false);
       } finally {

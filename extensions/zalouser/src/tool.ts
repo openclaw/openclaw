@@ -1,5 +1,9 @@
 import { Type } from "@sinclair/typebox";
-import { sendImageZalouser, sendLinkZalouser, sendMessageZalouser } from "./send.js";
+import {
+  sendImageZalouser,
+  sendLinkZalouser,
+  sendMessageZalouser,
+} from "./send.js";
 import {
   checkZaloAuthenticated,
   getZaloUserInfo,
@@ -7,7 +11,15 @@ import {
   listZaloGroupsMatching,
 } from "./zalo-js.js";
 
-const ACTIONS = ["send", "image", "link", "friends", "groups", "me", "status"] as const;
+const ACTIONS = [
+  "send",
+  "image",
+  "link",
+  "friends",
+  "groups",
+  "me",
+  "status",
+] as const;
 
 type AgentToolResult = {
   content: Array<{ type: string; text: string }>;
@@ -27,8 +39,12 @@ function stringEnum<T extends readonly string[]>(
 
 export const ZalouserToolSchema = Type.Object(
   {
-    action: stringEnum(ACTIONS, { description: `Action to perform: ${ACTIONS.join(", ")}` }),
-    threadId: Type.Optional(Type.String({ description: "Thread ID for messaging" })),
+    action: stringEnum(ACTIONS, {
+      description: `Action to perform: ${ACTIONS.join(", ")}`,
+    }),
+    threadId: Type.Optional(
+      Type.String({ description: "Thread ID for messaging" }),
+    ),
     message: Type.Optional(Type.String({ description: "Message text" })),
     isGroup: Type.Optional(Type.Boolean({ description: "Is group chat" })),
     profile: Type.Optional(Type.String({ description: "Profile name" })),
@@ -67,10 +83,14 @@ export async function executeZalouserTool(
         if (!params.threadId || !params.message) {
           throw new Error("threadId and message required for send action");
         }
-        const result = await sendMessageZalouser(params.threadId, params.message, {
-          profile: params.profile,
-          isGroup: params.isGroup,
-        });
+        const result = await sendMessageZalouser(
+          params.threadId,
+          params.message,
+          {
+            profile: params.profile,
+            isGroup: params.isGroup,
+          },
+        );
         if (!result.ok) {
           throw new Error(result.error || "Failed to send message");
         }
@@ -111,7 +131,10 @@ export async function executeZalouserTool(
       }
 
       case "friends": {
-        const rows = await listZaloFriendsMatching(params.profile, params.query);
+        const rows = await listZaloFriendsMatching(
+          params.profile,
+          params.query,
+        );
         return json(rows);
       }
 

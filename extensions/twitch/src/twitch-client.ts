@@ -2,7 +2,11 @@ import { RefreshingAuthProvider, StaticAuthProvider } from "@twurple/auth";
 import { ChatClient, LogLevel } from "@twurple/chat";
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import { resolveTwitchToken } from "./token.js";
-import type { ChannelLogSink, TwitchAccountConfig, TwitchChatMessage } from "./types.js";
+import type {
+  ChannelLogSink,
+  TwitchAccountConfig,
+  TwitchChatMessage,
+} from "./types.js";
 import { normalizeToken } from "./utils/twitch.js";
 
 /**
@@ -10,7 +14,10 @@ import { normalizeToken } from "./utils/twitch.js";
  */
 export class TwitchClientManager {
   private clients = new Map<string, ChatClient>();
-  private messageHandlers = new Map<string, (message: TwitchChatMessage) => void>();
+  private messageHandlers = new Map<
+    string,
+    (message: TwitchChatMessage) => void
+  >();
 
   constructor(private logger: ChannelLogSink) {}
 
@@ -56,18 +63,24 @@ export class TwitchClientManager {
       });
 
       authProvider.onRefreshFailure((userId, error) => {
-        this.logger.error(`Failed to refresh access token for user ${userId}: ${error.message}`);
+        this.logger.error(
+          `Failed to refresh access token for user ${userId}: ${error.message}`,
+        );
       });
 
       const refreshStatus = account.refreshToken
         ? "automatic token refresh enabled"
         : "token refresh disabled (no refresh token)";
-      this.logger.info(`Using RefreshingAuthProvider for ${account.username} (${refreshStatus})`);
+      this.logger.info(
+        `Using RefreshingAuthProvider for ${account.username} (${refreshStatus})`,
+      );
 
       return authProvider;
     }
 
-    this.logger.info(`Using StaticAuthProvider for ${account.username} (no clientSecret provided)`);
+    this.logger.info(
+      `Using StaticAuthProvider for ${account.username} (no clientSecret provided)`,
+    );
     return new StaticAuthProvider(account.clientId, normalizedToken);
   }
 
@@ -97,16 +110,23 @@ export class TwitchClientManager {
       throw new Error("Missing Twitch token");
     }
 
-    this.logger.debug?.(`Using ${tokenResolution.source} token source for ${account.username}`);
+    this.logger.debug?.(
+      `Using ${tokenResolution.source} token source for ${account.username}`,
+    );
 
     if (!account.clientId) {
-      this.logger.error(`Missing Twitch client ID for account ${account.username}`);
+      this.logger.error(
+        `Missing Twitch client ID for account ${account.username}`,
+      );
       throw new Error("Missing Twitch client ID");
     }
 
     const normalizedToken = normalizeToken(tokenResolution.token);
 
-    const authProvider = await this.createAuthProvider(account, normalizedToken);
+    const authProvider = await this.createAuthProvider(
+      account,
+      normalizedToken,
+    );
 
     const client = new ChatClient({
       authProvider,
@@ -155,14 +175,19 @@ export class TwitchClientManager {
   /**
    * Set up message and event handlers for a client
    */
-  private setupClientHandlers(client: ChatClient, account: TwitchAccountConfig): void {
+  private setupClientHandlers(
+    client: ChatClient,
+    account: TwitchAccountConfig,
+  ): void {
     const key = this.getAccountKey(account);
 
     // Handle incoming messages
     client.onMessage((channelName, _user, messageText, msg) => {
       const handler = this.messageHandlers.get(key);
       if (handler) {
-        const normalizedChannel = channelName.startsWith("#") ? channelName.slice(1) : channelName;
+        const normalizedChannel = channelName.startsWith("#")
+          ? channelName.slice(1)
+          : channelName;
         const from = `twitch:${msg.userInfo.userName}`;
         const preview = messageText.slice(0, 100).replace(/\n/g, "\\n");
         this.logger.debug?.(

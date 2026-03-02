@@ -34,11 +34,18 @@ afterEach(() => {
 
 describe("resolveGatewayDevMode", () => {
   it("detects dev mode for src ts entrypoints", () => {
-    expect(resolveGatewayDevMode(["node", "/Users/me/openclaw/src/cli/index.ts"])).toBe(true);
-    expect(resolveGatewayDevMode(["node", "C:\\Users\\me\\openclaw\\src\\cli\\index.ts"])).toBe(
-      true,
-    );
-    expect(resolveGatewayDevMode(["node", "/Users/me/openclaw/dist/cli/index.js"])).toBe(false);
+    expect(
+      resolveGatewayDevMode(["node", "/Users/me/openclaw/src/cli/index.ts"]),
+    ).toBe(true);
+    expect(
+      resolveGatewayDevMode([
+        "node",
+        "C:\\Users\\me\\openclaw\\src\\cli\\index.ts",
+      ]),
+    ).toBe(true);
+    expect(
+      resolveGatewayDevMode(["node", "/Users/me/openclaw/dist/cli/index.js"]),
+    ).toBe(false);
   });
 });
 

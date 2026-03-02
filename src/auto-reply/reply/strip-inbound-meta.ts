@@ -37,12 +37,19 @@ function isInboundMetaSentinelLine(line: string): boolean {
   return INBOUND_META_SENTINELS.some((sentinel) => sentinel === trimmed);
 }
 
-function shouldStripTrailingUntrustedContext(lines: string[], index: number): boolean {
+function shouldStripTrailingUntrustedContext(
+  lines: string[],
+  index: number,
+): boolean {
   if (lines[index]?.trim() !== UNTRUSTED_CONTEXT_HEADER) {
     return false;
   }
-  const probe = lines.slice(index + 1, Math.min(lines.length, index + 8)).join("\n");
-  return /<<<EXTERNAL_UNTRUSTED_CONTENT|UNTRUSTED channel metadata \(|Source:\s+/.test(probe);
+  const probe = lines
+    .slice(index + 1, Math.min(lines.length, index + 8))
+    .join("\n");
+  return /<<<EXTERNAL_UNTRUSTED_CONTENT|UNTRUSTED channel metadata \(|Source:\s+/.test(
+    probe,
+  );
 }
 
 function stripTrailingUntrustedContextSuffix(lines: string[]): string[] {
@@ -175,6 +182,8 @@ export function stripLeadingInboundMetadata(text: string): string {
     }
   }
 
-  const strippedRemainder = stripTrailingUntrustedContextSuffix(lines.slice(index));
+  const strippedRemainder = stripTrailingUntrustedContextSuffix(
+    lines.slice(index),
+  );
   return strippedRemainder.join("\n");
 }

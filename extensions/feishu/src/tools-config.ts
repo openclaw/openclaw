@@ -17,6 +17,8 @@ export const DEFAULT_TOOLS_CONFIG: Required<FeishuToolsConfig> = {
 /**
  * Resolve tools config with defaults.
  */
-export function resolveToolsConfig(cfg?: FeishuToolsConfig): Required<FeishuToolsConfig> {
+export function resolveToolsConfig(
+  cfg?: FeishuToolsConfig,
+): Required<FeishuToolsConfig> {
   return { ...DEFAULT_TOOLS_CONFIG, ...cfg };
 }

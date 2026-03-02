@@ -11,7 +11,9 @@ export type OutboundMediaLoadOptions = {
 export function resolveOutboundMediaLocalRoots(
   mediaLocalRoots?: readonly string[],
 ): readonly string[] | undefined {
-  return mediaLocalRoots && mediaLocalRoots.length > 0 ? mediaLocalRoots : undefined;
+  return mediaLocalRoots && mediaLocalRoots.length > 0
+    ? mediaLocalRoots
+    : undefined;
 }
 
 export function buildOutboundMediaLoadOptions(

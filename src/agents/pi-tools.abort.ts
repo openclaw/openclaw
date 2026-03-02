@@ -16,7 +16,10 @@ function isAbortSignal(obj: unknown): obj is AbortSignal {
   return obj instanceof AbortSignal;
 }
 
-function combineAbortSignals(a?: AbortSignal, b?: AbortSignal): AbortSignal | undefined {
+function combineAbortSignals(
+  a?: AbortSignal,
+  b?: AbortSignal,
+): AbortSignal | undefined {
   if (!a && !b) {
     return undefined;
   }
@@ -32,7 +35,11 @@ function combineAbortSignals(a?: AbortSignal, b?: AbortSignal): AbortSignal | un
   if (b?.aborted) {
     return b;
   }
-  if (typeof AbortSignal.any === "function" && isAbortSignal(a) && isAbortSignal(b)) {
+  if (
+    typeof AbortSignal.any === "function" &&
+    isAbortSignal(a) &&
+    isAbortSignal(b)
+  ) {
     return AbortSignal.any([a, b]);
   }
 

@@ -16,13 +16,18 @@ import {
   shouldSkipMessageByAbortCutoff,
   tryFastAbortFromMessage,
 } from "./abort.js";
-import { enqueueFollowupRun, getFollowupQueueDepth, type FollowupRun } from "./queue.js";
+import {
+  enqueueFollowupRun,
+  getFollowupQueueDepth,
+  type FollowupRun,
+} from "./queue.js";
 import { initSessionState } from "./session.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 vi.mock("../../agents/pi-embedded.js", () => ({
   abortEmbeddedPiRun: vi.fn().mockReturnValue(true),
-  resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
+  resolveEmbeddedSessionLane: (key: string) =>
+    `session:${key.trim() || "main"}`,
 }));
 
 const commandQueueMocks = vi.hoisted(() => ({
@@ -32,14 +37,15 @@ const commandQueueMocks = vi.hoisted(() => ({
 vi.mock("../../process/command-queue.js", () => commandQueueMocks);
 
 const subagentRegistryMocks = vi.hoisted(() => ({
-  listSubagentRunsForRequester: vi.fn<(requesterSessionKey: string) => SubagentRunRecord[]>(
-    () => [],
-  ),
+  listSubagentRunsForRequester: vi.fn<
+    (requesterSessionKey: string) => SubagentRunRecord[]
+  >(() => []),
   markSubagentRunTerminated: vi.fn(() => 1),
 }));
 
 vi.mock("../../agents/subagent-registry.js", () => ({
-  listSubagentRunsForRequester: subagentRegistryMocks.listSubagentRunsForRequester,
+  listSubagentRunsForRequester:
+    subagentRegistryMocks.listSubagentRunsForRequester,
   markSubagentRunTerminated: subagentRegistryMocks.markSubagentRunTerminated,
 }));
 
@@ -116,9 +122,13 @@ describe("abort detection", () => {
         Surface: "telegram",
         From: params.from,
         To: params.to,
-        ...(params.targetSessionKey ? { CommandTargetSessionKey: params.targetSessionKey } : {}),
+        ...(params.targetSessionKey
+          ? { CommandTargetSessionKey: params.targetSessionKey }
+          : {}),
         ...(params.messageSid ? { MessageSid: params.messageSid } : {}),
-        ...(typeof params.timestamp === "number" ? { Timestamp: params.timestamp } : {}),
+        ...(typeof params.timestamp === "number"
+          ? { Timestamp: params.timestamp }
+          : {}),
       }),
       cfg: params.cfg,
     });
@@ -158,12 +168,16 @@ describe("abort detection", () => {
   }
 
   function expectSessionLaneCleared(sessionKey: string) {
-    expect(commandQueueMocks.clearCommandLane).toHaveBeenCalledWith(`session:${sessionKey}`);
+    expect(commandQueueMocks.clearCommandLane).toHaveBeenCalledWith(
+      `session:${sessionKey}`,
+    );
   }
 
   afterEach(() => {
     resetAbortMemoryForTest();
-    acpManagerMocks.resolveSession.mockReset().mockReturnValue({ kind: "none" });
+    acpManagerMocks.resolveSession
+      .mockReset()
+      .mockReturnValue({ kind: "none" });
     acpManagerMocks.cancelSession.mockReset().mockResolvedValue(undefined);
   });
 
@@ -261,8 +275,12 @@ describe("abort detection", () => {
     expect(isAbortRequestText("stopp")).toBe(true);
     expect(isAbortRequestText("pare")).toBe(true);
     expect(isAbortRequestText(" توقف ")).toBe(true);
-    expect(isAbortRequestText("/stop@openclaw_bot", { botUsername: "openclaw_bot" })).toBe(true);
-    expect(isAbortRequestText("/Stop@openclaw_bot", { botUsername: "openclaw_bot" })).toBe(true);
+    expect(
+      isAbortRequestText("/stop@openclaw_bot", { botUsername: "openclaw_bot" }),
+    ).toBe(true);
+    expect(
+      isAbortRequestText("/Stop@openclaw_bot", { botUsername: "openclaw_bot" }),
+    ).toBe(true);
 
     expect(isAbortRequestText("/status")).toBe(false);
     expect(isAbortRequestText("do not do that")).toBe(true);
@@ -430,7 +448,9 @@ describe("abort detection", () => {
       sessionKey,
       meta: {} as never,
     });
-    acpManagerMocks.cancelSession.mockRejectedValueOnce(new Error("cancel failed"));
+    acpManagerMocks.cancelSession.mockRejectedValueOnce(
+      new Error("cancel failed"),
+    );
 
     const result = await runStopCommand({
       cfg,
@@ -462,7 +482,10 @@ describe("abort detection", () => {
     });
 
     expect(result.handled).toBe(true);
-    const store = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<string, unknown>;
+    const store = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<
+      string,
+      unknown
+    >;
     const entry = store[sessionKey] as {
       abortedLastRun?: boolean;
       abortCutoffMessageSid?: string;
@@ -492,7 +515,10 @@ describe("abort detection", () => {
     });
 
     expect(result.handled).toBe(true);
-    const store = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<string, unknown>;
+    const store = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<
+      string,
+      unknown
+    >;
     const entry = store[targetSessionKey] as {
       abortedLastRun?: boolean;
       abortCutoffMessageSid?: string;
@@ -599,7 +625,8 @@ describe("abort detection", () => {
     subagentRegistryMocks.markSubagentRunTerminated.mockClear();
     const sessionKey = "telegram:parent";
     const depth1Key = "agent:main:subagent:child-ended";
-    const depth2Key = "agent:main:subagent:child-ended:subagent:grandchild-active";
+    const depth2Key =
+      "agent:main:subagent:child-ended:subagent:grandchild-active";
     const now = Date.now();
     const { cfg } = await createAbortConfig({
       nowMs: now,
@@ -650,7 +677,9 @@ describe("abort detection", () => {
     // Should skip killing the ended depth-1 run itself, but still kill depth-2.
     expect(result.stoppedSubagents).toBe(1);
     expectSessionLaneCleared(depth2Key);
-    expect(subagentRegistryMocks.markSubagentRunTerminated).toHaveBeenCalledWith(
+    expect(
+      subagentRegistryMocks.markSubagentRunTerminated,
+    ).toHaveBeenCalledWith(
       expect.objectContaining({ runId: "run-2", childSessionKey: depth2Key }),
     );
   });

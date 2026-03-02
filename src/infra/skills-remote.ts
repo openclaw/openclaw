@@ -39,10 +39,18 @@ function extractErrorMessage(err: unknown): string | undefined {
   if (err instanceof Error) {
     return err.message;
   }
-  if (typeof err === "object" && "message" in err && typeof err.message === "string") {
+  if (
+    typeof err === "object" &&
+    "message" in err &&
+    typeof err.message === "string"
+  ) {
     return err.message;
   }
-  if (typeof err === "number" || typeof err === "boolean" || typeof err === "bigint") {
+  if (
+    typeof err === "number" ||
+    typeof err === "boolean" ||
+    typeof err === "bigint"
+  ) {
     return String(err);
   }
   if (typeof err === "symbol") {
@@ -63,12 +71,17 @@ function logRemoteBinProbeFailure(nodeId: string, err: unknown) {
   const label = describeNode(nodeId);
   // Node unavailable errors (not connected or disconnected mid-operation) are expected
   // when nodes have transient connections - log at info level instead of warn
-  if (message?.includes("node not connected") || message?.includes("node disconnected")) {
+  if (
+    message?.includes("node not connected") ||
+    message?.includes("node disconnected")
+  ) {
     log.info(`remote bin probe skipped: node unavailable (${label})`);
     return;
   }
   if (message?.includes("invoke timed out") || message?.includes("timeout")) {
-    log.warn(`remote bin probe timed out (${label}); check node connectivity for ${label}`);
+    log.warn(
+      `remote bin probe timed out (${label}); check node connectivity for ${label}`,
+    );
     return;
   }
   log.warn(`remote bin probe error (${label}): ${message ?? "unknown"}`);
@@ -141,7 +154,10 @@ export async function primeRemoteSkillsCache() {
         remoteIp: node.remoteIp,
         bins: node.bins,
       });
-      if (isMacPlatform(node.platform, node.deviceFamily) && supportsSystemRun(node.commands)) {
+      if (
+        isMacPlatform(node.platform, node.deviceFamily) &&
+        supportsSystemRun(node.commands)
+      ) {
         sawMac = true;
       }
     }
@@ -172,7 +188,10 @@ export function removeRemoteNodeInfo(nodeId: string) {
   remoteNodes.delete(nodeId);
 }
 
-function collectRequiredBins(entries: SkillEntry[], targetPlatform: string): string[] {
+function collectRequiredBins(
+  entries: SkillEntry[],
+  targetPlatform: string,
+): string[] {
   const bins = new Set<string>();
   for (const entry of entries) {
     const os = entry.metadata?.os ?? [];
@@ -196,11 +215,16 @@ function collectRequiredBins(entries: SkillEntry[], targetPlatform: string): str
 }
 
 function buildBinProbeScript(bins: string[]): string {
-  const escaped = bins.map((bin) => `'${bin.replace(/'/g, `'\\''`)}'`).join(" ");
+  const escaped = bins
+    .map((bin) => `'${bin.replace(/'/g, `'\\''`)}'`)
+    .join(" ");
   return `for b in ${escaped}; do if command -v "$b" >/dev/null 2>&1; then echo "$b"; fi; done`;
 }
 
-function parseBinProbePayload(payloadJSON: string | null | undefined, payload?: unknown): string[] {
+function parseBinProbePayload(
+  payloadJSON: string | null | undefined,
+  payload?: unknown,
+): string[] {
   if (!payloadJSON && !payload) {
     return [];
   }
@@ -261,7 +285,9 @@ export async function refreshRemoteNodeBins(params: {
   const workspaceDirs = listAgentWorkspaceDirs(params.cfg);
   const requiredBins = new Set<string>();
   for (const workspaceDir of workspaceDirs) {
-    const entries = loadWorkspaceSkillEntries(workspaceDir, { config: params.cfg });
+    const entries = loadWorkspaceSkillEntries(workspaceDir, {
+      config: params.cfg,
+    });
     for (const bin of collectRequiredBins(entries, "darwin")) {
       requiredBins.add(bin);
     }
@@ -308,9 +334,13 @@ export async function refreshRemoteNodeBins(params: {
   }
 }
 
-export function getRemoteSkillEligibility(): SkillEligibilityContext["remote"] | undefined {
+export function getRemoteSkillEligibility():
+  | SkillEligibilityContext["remote"]
+  | undefined {
   const macNodes = [...remoteNodes.values()].filter(
-    (node) => isMacPlatform(node.platform, node.deviceFamily) && supportsSystemRun(node.commands),
+    (node) =>
+      isMacPlatform(node.platform, node.deviceFamily) &&
+      supportsSystemRun(node.commands),
   );
   if (macNodes.length === 0) {
     return undefined;
@@ -321,7 +351,9 @@ export function getRemoteSkillEligibility(): SkillEligibilityContext["remote"] |
       bins.add(bin);
     }
   }
-  const labels = macNodes.map((node) => node.displayName ?? node.nodeId).filter(Boolean);
+  const labels = macNodes
+    .map((node) => node.displayName ?? node.nodeId)
+    .filter(Boolean);
   const note =
     labels.length > 0
       ? `Remote macOS node available (${labels.join(", ")}). Run macOS-only skills via nodes.run on that node.`

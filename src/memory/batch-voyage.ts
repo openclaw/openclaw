@@ -106,7 +106,9 @@ async function readVoyageBatchError(params: {
       onResponse: async (res) => {
         if (!res.ok) {
           const text = await res.text();
-          throw new Error(`voyage batch error file content failed: ${res.status} ${text}`);
+          throw new Error(
+            `voyage batch error file content failed: ${res.status} ${text}`,
+          );
         }
         const text = await res.text();
         if (!text.trim()) {
@@ -146,7 +148,9 @@ async function waitForVoyageBatch(params: {
     const state = status.status ?? "unknown";
     if (state === "completed") {
       if (!status.output_file_id) {
-        throw new Error(`voyage batch ${params.batchId} completed without output file`);
+        throw new Error(
+          `voyage batch ${params.batchId} completed without output file`,
+        );
       }
       return {
         outputFileId: status.output_file_id,
@@ -155,18 +159,27 @@ async function waitForVoyageBatch(params: {
     }
     if (["failed", "expired", "cancelled", "canceled"].includes(state)) {
       const detail = status.error_file_id
-        ? await readVoyageBatchError({ client: params.client, errorFileId: status.error_file_id })
+        ? await readVoyageBatchError({
+            client: params.client,
+            errorFileId: status.error_file_id,
+          })
         : undefined;
       const suffix = detail ? `: ${detail}` : "";
       throw new Error(`voyage batch ${params.batchId} ${state}${suffix}`);
     }
     if (!params.wait) {
-      throw new Error(`voyage batch ${params.batchId} still ${state}; wait disabled`);
+      throw new Error(
+        `voyage batch ${params.batchId} still ${state}; wait disabled`,
+      );
     }
     if (Date.now() - start > params.timeoutMs) {
-      throw new Error(`voyage batch ${params.batchId} timed out after ${params.timeoutMs}ms`);
+      throw new Error(
+        `voyage batch ${params.batchId} timed out after ${params.timeoutMs}ms`,
+      );
     }
-    params.debug?.(`voyage batch ${params.batchId} ${state}; waiting ${params.pollIntervalMs}ms`);
+    params.debug?.(
+      `voyage batch ${params.batchId} ${state}; waiting ${params.pollIntervalMs}ms`,
+    );
     await new Promise((resolve) => setTimeout(resolve, params.pollIntervalMs));
     current = undefined;
   }
@@ -224,7 +237,9 @@ export async function runVoyageEmbeddingBatches(
               initial: batchInfo,
             });
       if (!completed.outputFileId) {
-        throw new Error(`voyage batch ${batchInfo.id} completed without output file`);
+        throw new Error(
+          `voyage batch ${batchInfo.id} completed without output file`,
+        );
       }
 
       const baseUrl = normalizeBatchBaseUrl(params.client);
@@ -240,7 +255,9 @@ export async function runVoyageEmbeddingBatches(
         onResponse: async (contentRes) => {
           if (!contentRes.ok) {
             const text = await contentRes.text();
-            throw new Error(`voyage batch file content failed: ${contentRes.status} ${text}`);
+            throw new Error(
+              `voyage batch file content failed: ${contentRes.status} ${text}`,
+            );
           }
 
           if (!contentRes.body) {
@@ -258,13 +275,20 @@ export async function runVoyageEmbeddingBatches(
               continue;
             }
             const line = JSON.parse(rawLine) as VoyageBatchOutputLine;
-            applyEmbeddingBatchOutputLine({ line, remaining, errors, byCustomId });
+            applyEmbeddingBatchOutputLine({
+              line,
+              remaining,
+              errors,
+              byCustomId,
+            });
           }
         },
       });
 
       if (errors.length > 0) {
-        throw new Error(`voyage batch ${batchInfo.id} failed: ${errors.join("; ")}`);
+        throw new Error(
+          `voyage batch ${batchInfo.id} failed: ${errors.join("; ")}`,
+        );
       }
       if (remaining.size > 0) {
         throw new Error(

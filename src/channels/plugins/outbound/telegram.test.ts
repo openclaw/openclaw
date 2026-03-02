@@ -4,7 +4,9 @@ import { telegramOutbound } from "./telegram.js";
 
 describe("telegramOutbound", () => {
   it("passes parsed reply/thread ids for sendText", async () => {
-    const sendTelegram = vi.fn().mockResolvedValue({ messageId: "tg-text-1", chatId: "123" });
+    const sendTelegram = vi
+      .fn()
+      .mockResolvedValue({ messageId: "tg-text-1", chatId: "123" });
     const sendText = telegramOutbound.sendText;
     expect(sendText).toBeDefined();
 
@@ -29,11 +31,17 @@ describe("telegramOutbound", () => {
         messageThreadId: 55,
       }),
     );
-    expect(result).toEqual({ channel: "telegram", messageId: "tg-text-1", chatId: "123" });
+    expect(result).toEqual({
+      channel: "telegram",
+      messageId: "tg-text-1",
+      chatId: "123",
+    });
   });
 
   it("parses scoped DM thread ids for sendText", async () => {
-    const sendTelegram = vi.fn().mockResolvedValue({ messageId: "tg-text-2", chatId: "12345" });
+    const sendTelegram = vi
+      .fn()
+      .mockResolvedValue({ messageId: "tg-text-2", chatId: "12345" });
     const sendText = telegramOutbound.sendText;
     expect(sendText).toBeDefined();
 
@@ -59,7 +67,9 @@ describe("telegramOutbound", () => {
   });
 
   it("passes media options for sendMedia", async () => {
-    const sendTelegram = vi.fn().mockResolvedValue({ messageId: "tg-media-1", chatId: "123" });
+    const sendTelegram = vi
+      .fn()
+      .mockResolvedValue({ messageId: "tg-media-1", chatId: "123" });
     const sendMedia = telegramOutbound.sendMedia;
     expect(sendMedia).toBeDefined();
 
@@ -83,7 +93,11 @@ describe("telegramOutbound", () => {
         mediaLocalRoots: ["/tmp/media"],
       }),
     );
-    expect(result).toEqual({ channel: "telegram", messageId: "tg-media-1", chatId: "123" });
+    expect(result).toEqual({
+      channel: "telegram",
+      messageId: "tg-media-1",
+      chatId: "123",
+    });
   });
 
   it("sends payload media list and applies buttons only to first message", async () => {
@@ -135,8 +149,15 @@ describe("telegramOutbound", () => {
         quoteText: "quoted",
       }),
     );
-    const secondCallOpts = sendTelegram.mock.calls[1]?.[2] as Record<string, unknown>;
+    const secondCallOpts = sendTelegram.mock.calls[1]?.[2] as Record<
+      string,
+      unknown
+    >;
     expect(secondCallOpts?.buttons).toBeUndefined();
-    expect(result).toEqual({ channel: "telegram", messageId: "tg-2", chatId: "123" });
+    expect(result).toEqual({
+      channel: "telegram",
+      messageId: "tg-2",
+      chatId: "123",
+    });
   });
 });

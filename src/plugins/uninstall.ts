@@ -40,7 +40,10 @@ export function resolveUninstallDirectoryTarget(params: {
 
   let defaultPath: string;
   try {
-    defaultPath = resolvePluginInstallDir(params.pluginId, params.extensionsDir);
+    defaultPath = resolvePluginInstallDir(
+      params.pluginId,
+      params.extensionsDir,
+    );
   } catch {
     return null;
   }
@@ -110,7 +113,10 @@ export function removePluginFromConfig(
     const loadPaths = load?.paths;
     if (Array.isArray(loadPaths) && loadPaths.includes(sourcePath)) {
       const nextLoadPaths = loadPaths.filter((p) => p !== sourcePath);
-      load = nextLoadPaths.length > 0 ? { ...load, paths: nextLoadPaths } : undefined;
+      load =
+        nextLoadPaths.length > 0
+          ? { ...load, paths: nextLoadPaths }
+          : undefined;
       actions.loadPath = true;
     }
   }
@@ -157,7 +163,8 @@ export function removePluginFromConfig(
 
   const config: OpenClawConfig = {
     ...cfg,
-    plugins: Object.keys(cleanedPlugins).length > 0 ? cleanedPlugins : undefined,
+    plugins:
+      Object.keys(cleanedPlugins).length > 0 ? cleanedPlugins : undefined,
   };
 
   return { config, actions };
@@ -191,7 +198,10 @@ export async function uninstallPlugin(
   const isLinked = installRecord?.source === "path";
 
   // Remove from config
-  const { config: newConfig, actions: configActions } = removePluginFromConfig(config, pluginId);
+  const { config: newConfig, actions: configActions } = removePluginFromConfig(
+    config,
+    pluginId,
+  );
 
   const actions: UninstallActions = {
     ...configActions,

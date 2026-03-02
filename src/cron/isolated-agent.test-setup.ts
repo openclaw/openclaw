@@ -4,7 +4,10 @@ import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { runSubagentAnnounceFlow } from "../agents/subagent-announce.js";
 import { telegramOutbound } from "../channels/plugins/outbound/telegram.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
+import {
+  createOutboundTestPlugin,
+  createTestRegistry,
+} from "../test-utils/channel-plugins.js";
 
 export function setupIsolatedAgentTurnMocks(params?: { fast?: boolean }): void {
   if (params?.fast) {
@@ -17,7 +20,10 @@ export function setupIsolatedAgentTurnMocks(params?: { fast?: boolean }): void {
     createTestRegistry([
       {
         pluginId: "telegram",
-        plugin: createOutboundTestPlugin({ id: "telegram", outbound: telegramOutbound }),
+        plugin: createOutboundTestPlugin({
+          id: "telegram",
+          outbound: telegramOutbound,
+        }),
         source: "test",
       },
     ]),

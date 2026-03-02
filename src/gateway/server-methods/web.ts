@@ -13,7 +13,9 @@ const WEB_LOGIN_METHODS = new Set(["web.login.start", "web.login.wait"]);
 
 const resolveWebLoginProvider = () =>
   listChannelPlugins().find((plugin) =>
-    (plugin.gatewayMethods ?? []).some((method) => WEB_LOGIN_METHODS.has(method)),
+    (plugin.gatewayMethods ?? []).some((method) =>
+      WEB_LOGIN_METHODS.has(method),
+    ),
   ) ?? null;
 
 function resolveAccountId(params: unknown): string | undefined {
@@ -26,7 +28,10 @@ function respondProviderUnavailable(respond: RespondFn) {
   respond(
     false,
     undefined,
-    errorShape(ErrorCodes.INVALID_REQUEST, "web login provider is not available"),
+    errorShape(
+      ErrorCodes.INVALID_REQUEST,
+      "web login provider is not available",
+    ),
   );
 }
 
@@ -34,7 +39,10 @@ function respondProviderUnsupported(respond: RespondFn, providerId: string) {
   respond(
     false,
     undefined,
-    errorShape(ErrorCodes.INVALID_REQUEST, `web login is not supported by provider ${providerId}`),
+    errorShape(
+      ErrorCodes.INVALID_REQUEST,
+      `web login is not supported by provider ${providerId}`,
+    ),
   );
 }
 
@@ -74,7 +82,11 @@ export const webHandlers: GatewayRequestHandlers = {
       });
       respond(true, result, undefined);
     } catch (err) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)),
+      );
     }
   },
   "web.login.wait": async ({ params, respond, context }) => {
@@ -112,7 +124,11 @@ export const webHandlers: GatewayRequestHandlers = {
       }
       respond(true, result, undefined);
     } catch (err) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)),
+      );
     }
   },
 };

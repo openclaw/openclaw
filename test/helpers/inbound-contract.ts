@@ -13,7 +13,8 @@ export function expectInboundContextContract(ctx: MsgContext) {
 
   const chatType = normalizeChatType(ctx.ChatType);
   if (chatType && chatType !== "direct") {
-    const label = ctx.ConversationLabel?.trim() || resolveConversationLabel(ctx);
+    const label =
+      ctx.ConversationLabel?.trim() || resolveConversationLabel(ctx);
     expect(label).toBeTruthy();
   }
 }

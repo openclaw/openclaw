@@ -140,7 +140,14 @@ To reduce risk, restrict tools for that channel.
         "#tuirc-dev": {
           allowFrom: ["*"],
           tools: {
-            deny: ["group:runtime", "group:fs", "gateway", "nodes", "cron", "browser"],
+            deny: [
+              "group:runtime",
+              "group:fs",
+              "gateway",
+              "nodes",
+              "cron",
+              "browser",
+            ],
           },
         },
       },
@@ -162,7 +169,14 @@ Use `toolsBySender` to apply a stricter policy to `"*"` and a looser one to your
           allowFrom: ["*"],
           toolsBySender: {
             "*": {
-              deny: ["group:runtime", "group:fs", "gateway", "nodes", "cron", "browser"],
+              deny: [
+                "group:runtime",
+                "group:fs",
+                "gateway",
+                "nodes",
+                "cron",
+                "browser",
+              ],
             },
             "id:eigen": {
               deny: ["gateway", "nodes", "cron"],

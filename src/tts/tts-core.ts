@@ -32,13 +32,20 @@ function normalizeElevenLabsBaseUrl(baseUrl: string): string {
   return trimmed.replace(/\/+$/, "");
 }
 
-function requireInRange(value: number, min: number, max: number, label: string): void {
+function requireInRange(
+  value: number,
+  min: number,
+  max: number,
+  label: string,
+): void {
   if (!Number.isFinite(value) || value < min || value > max) {
     throw new Error(`${label} must be between ${min} and ${max}`);
   }
 }
 
-function assertElevenLabsVoiceSettings(settings: ResolvedTtsConfig["elevenlabs"]["voiceSettings"]) {
+function assertElevenLabsVoiceSettings(
+  settings: ResolvedTtsConfig["elevenlabs"]["voiceSettings"],
+) {
   requireInRange(settings.stability, 0, 1, "stability");
   requireInRange(settings.similarityBoost, 0, 1, "similarityBoost");
   requireInRange(settings.style, 0, 1, "style");
@@ -52,12 +59,16 @@ function normalizeLanguageCode(code?: string): string | undefined {
   }
   const normalized = trimmed.toLowerCase();
   if (!/^[a-z]{2}$/.test(normalized)) {
-    throw new Error("languageCode must be a 2-letter ISO 639-1 code (e.g. en, de, fr)");
+    throw new Error(
+      "languageCode must be a 2-letter ISO 639-1 code (e.g. en, de, fr)",
+    );
   }
   return normalized;
 }
 
-function normalizeApplyTextNormalization(mode?: string): "auto" | "on" | "off" | undefined {
+function normalizeApplyTextNormalization(
+  mode?: string,
+): "auto" | "on" | "off" | undefined {
   const trimmed = mode?.trim();
   if (!trimmed) {
     return undefined;
@@ -101,7 +112,12 @@ export function parseTtsDirectives(
   policy: ResolvedTtsModelOverrides,
 ): TtsDirectiveParseResult {
   if (!policy.enabled) {
-    return { cleanedText: text, overrides: {}, warnings: [], hasDirective: false };
+    return {
+      cleanedText: text,
+      overrides: {},
+      warnings: [],
+      hasDirective: false,
+    };
   }
 
   const overrides: TtsDirectiveOverrides = {};
@@ -139,7 +155,11 @@ export function parseTtsDirectives(
             if (!policy.allowProvider) {
               break;
             }
-            if (rawValue === "openai" || rawValue === "elevenlabs" || rawValue === "edge") {
+            if (
+              rawValue === "openai" ||
+              rawValue === "elevenlabs" ||
+              rawValue === "edge"
+            ) {
               overrides.provider = rawValue;
             } else {
               warnings.push(`unsupported provider "${rawValue}"`);
@@ -165,7 +185,10 @@ export function parseTtsDirectives(
               break;
             }
             if (isValidVoiceId(rawValue)) {
-              overrides.elevenlabs = { ...overrides.elevenlabs, voiceId: rawValue };
+              overrides.elevenlabs = {
+                ...overrides.elevenlabs,
+                voiceId: rawValue,
+              };
             } else {
               warnings.push(`invalid ElevenLabs voiceId "${rawValue}"`);
             }
@@ -183,7 +206,10 @@ export function parseTtsDirectives(
             if (isValidOpenAIModel(rawValue)) {
               overrides.openai = { ...overrides.openai, model: rawValue };
             } else {
-              overrides.elevenlabs = { ...overrides.elevenlabs, modelId: rawValue };
+              overrides.elevenlabs = {
+                ...overrides.elevenlabs,
+                modelId: rawValue,
+              };
             }
             break;
           case "stability":
@@ -199,7 +225,10 @@ export function parseTtsDirectives(
               requireInRange(value, 0, 1, "stability");
               overrides.elevenlabs = {
                 ...overrides.elevenlabs,
-                voiceSettings: { ...overrides.elevenlabs?.voiceSettings, stability: value },
+                voiceSettings: {
+                  ...overrides.elevenlabs?.voiceSettings,
+                  stability: value,
+                },
               };
             }
             break;
@@ -218,7 +247,10 @@ export function parseTtsDirectives(
               requireInRange(value, 0, 1, "similarityBoost");
               overrides.elevenlabs = {
                 ...overrides.elevenlabs,
-                voiceSettings: { ...overrides.elevenlabs?.voiceSettings, similarityBoost: value },
+                voiceSettings: {
+                  ...overrides.elevenlabs?.voiceSettings,
+                  similarityBoost: value,
+                },
               };
             }
             break;
@@ -235,7 +267,10 @@ export function parseTtsDirectives(
               requireInRange(value, 0, 1, "style");
               overrides.elevenlabs = {
                 ...overrides.elevenlabs,
-                voiceSettings: { ...overrides.elevenlabs?.voiceSettings, style: value },
+                voiceSettings: {
+                  ...overrides.elevenlabs?.voiceSettings,
+                  style: value,
+                },
               };
             }
             break;
@@ -252,7 +287,10 @@ export function parseTtsDirectives(
               requireInRange(value, 0.5, 2, "speed");
               overrides.elevenlabs = {
                 ...overrides.elevenlabs,
-                voiceSettings: { ...overrides.elevenlabs?.voiceSettings, speed: value },
+                voiceSettings: {
+                  ...overrides.elevenlabs?.voiceSettings,
+                  speed: value,
+                },
               };
             }
             break;
@@ -271,7 +309,10 @@ export function parseTtsDirectives(
               }
               overrides.elevenlabs = {
                 ...overrides.elevenlabs,
-                voiceSettings: { ...overrides.elevenlabs?.voiceSettings, useSpeakerBoost: value },
+                voiceSettings: {
+                  ...overrides.elevenlabs?.voiceSettings,
+                  useSpeakerBoost: value,
+                },
               };
             }
             break;
@@ -325,7 +366,11 @@ export function parseTtsDirectives(
   };
 }
 
-export const OPENAI_TTS_MODELS = ["gpt-4o-mini-tts", "tts-1", "tts-1-hd"] as const;
+export const OPENAI_TTS_MODELS = [
+  "gpt-4o-mini-tts",
+  "tts-1",
+  "tts-1-hd",
+] as const;
 
 /**
  * Custom OpenAI-compatible TTS endpoint.
@@ -335,10 +380,9 @@ export const OPENAI_TTS_MODELS = ["gpt-4o-mini-tts", "tts-1", "tts-1-hd"] as con
  * Note: Read at runtime (not module load) to support config.env loading.
  */
 function getOpenAITtsBaseUrl(): string {
-  return (process.env.OPENAI_TTS_BASE_URL?.trim() || "https://api.openai.com/v1").replace(
-    /\/+$/,
-    "",
-  );
+  return (
+    process.env.OPENAI_TTS_BASE_URL?.trim() || "https://api.openai.com/v1"
+  ).replace(/\/+$/, "");
 }
 
 function isCustomOpenAIEndpoint(): boolean {
@@ -368,7 +412,9 @@ export function isValidOpenAIModel(model: string): boolean {
   if (isCustomOpenAIEndpoint()) {
     return true;
   }
-  return OPENAI_TTS_MODELS.includes(model as (typeof OPENAI_TTS_MODELS)[number]);
+  return OPENAI_TTS_MODELS.includes(
+    model as (typeof OPENAI_TTS_MODELS)[number],
+  );
 }
 
 export function isValidOpenAIVoice(voice: string): voice is OpenAiTtsVoice {
@@ -401,7 +447,10 @@ function resolveSummaryModelRef(
     return { ref: defaultRef, source: "default" };
   }
 
-  const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider: defaultRef.provider });
+  const aliasIndex = buildModelAliasIndex({
+    cfg,
+    defaultProvider: defaultRef.provider,
+  });
   const resolved = resolveModelRefFromString({
     raw: override,
     defaultProvider: defaultRef.provider,
@@ -433,7 +482,9 @@ export async function summarizeText(params: {
   const { ref } = resolveSummaryModelRef(cfg, config);
   const resolved = resolveModel(ref.provider, ref.model, undefined, cfg);
   if (!resolved.model) {
-    throw new Error(resolved.error ?? `Unknown summary model: ${ref.provider}/${ref.model}`);
+    throw new Error(
+      resolved.error ?? `Unknown summary model: ${ref.provider}/${ref.model}`,
+    );
   }
   const apiKey = requireApiKey(
     await getApiKeyForModel({ model: resolved.model, cfg }),
@@ -542,14 +593,18 @@ export async function elevenLabsTTS(params: {
   }
   assertElevenLabsVoiceSettings(voiceSettings);
   const normalizedLanguage = normalizeLanguageCode(languageCode);
-  const normalizedNormalization = normalizeApplyTextNormalization(applyTextNormalization);
+  const normalizedNormalization = normalizeApplyTextNormalization(
+    applyTextNormalization,
+  );
   const normalizedSeed = normalizeSeed(seed);
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    const url = new URL(`${normalizeElevenLabsBaseUrl(baseUrl)}/v1/text-to-speech/${voiceId}`);
+    const url = new URL(
+      `${normalizeElevenLabsBaseUrl(baseUrl)}/v1/text-to-speech/${voiceId}`,
+    );
     if (outputFormat) {
       url.searchParams.set("output_format", outputFormat);
     }
@@ -645,7 +700,11 @@ export function inferEdgeExtension(outputFormat: string): string {
   if (normalized.includes("opus")) {
     return ".opus";
   }
-  if (normalized.includes("wav") || normalized.includes("riff") || normalized.includes("pcm")) {
+  if (
+    normalized.includes("wav") ||
+    normalized.includes("riff") ||
+    normalized.includes("pcm")
+  ) {
     return ".wav";
   }
   return ".mp3";

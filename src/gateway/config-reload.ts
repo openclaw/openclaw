@@ -1,7 +1,14 @@
 import { isDeepStrictEqual } from "node:util";
 import chokidar from "chokidar";
-import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
-import type { OpenClawConfig, ConfigFileSnapshot, GatewayReloadMode } from "../config/config.js";
+import {
+  type ChannelId,
+  listChannelPlugins,
+} from "../channels/plugins/index.js";
+import type {
+  OpenClawConfig,
+  ConfigFileSnapshot,
+  GatewayReloadMode,
+} from "../config/config.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { isPlainObject } from "../utils.js";
 
@@ -105,22 +112,28 @@ function listReloadRules(): ReloadRule[] {
     return cachedReloadRules;
   }
   // Channel docking: plugins contribute hot reload/no-op prefixes here.
-  const channelReloadRules: ReloadRule[] = listChannelPlugins().flatMap((plugin) => [
-    ...(plugin.reload?.configPrefixes ?? []).map(
-      (prefix): ReloadRule => ({
-        prefix,
-        kind: "hot",
-        actions: [`restart-channel:${plugin.id}` as ReloadAction],
-      }),
-    ),
-    ...(plugin.reload?.noopPrefixes ?? []).map(
-      (prefix): ReloadRule => ({
-        prefix,
-        kind: "none",
-      }),
-    ),
-  ]);
-  const rules = [...BASE_RELOAD_RULES, ...channelReloadRules, ...BASE_RELOAD_RULES_TAIL];
+  const channelReloadRules: ReloadRule[] = listChannelPlugins().flatMap(
+    (plugin) => [
+      ...(plugin.reload?.configPrefixes ?? []).map(
+        (prefix): ReloadRule => ({
+          prefix,
+          kind: "hot",
+          actions: [`restart-channel:${plugin.id}` as ReloadAction],
+        }),
+      ),
+      ...(plugin.reload?.noopPrefixes ?? []).map(
+        (prefix): ReloadRule => ({
+          prefix,
+          kind: "none",
+        }),
+      ),
+    ],
+  );
+  const rules = [
+    ...BASE_RELOAD_RULES,
+    ...channelReloadRules,
+    ...BASE_RELOAD_RULES_TAIL,
+  ];
   cachedReloadRules = rules;
   return rules;
 }
@@ -134,7 +147,11 @@ function matchRule(path: string): ReloadRule | null {
   return null;
 }
 
-export function diffConfigPaths(prev: unknown, next: unknown, prefix = ""): string[] {
+export function diffConfigPaths(
+  prev: unknown,
+  next: unknown,
+  prefix = "",
+): string[] {
   if (prev === next) {
     return [];
   }
@@ -165,10 +182,15 @@ export function diffConfigPaths(prev: unknown, next: unknown, prefix = ""): stri
   return [prefix || "<root>"];
 }
 
-export function resolveGatewayReloadSettings(cfg: OpenClawConfig): GatewayReloadSettings {
+export function resolveGatewayReloadSettings(
+  cfg: OpenClawConfig,
+): GatewayReloadSettings {
   const rawMode = cfg.gateway?.reload?.mode;
   const mode =
-    rawMode === "off" || rawMode === "restart" || rawMode === "hot" || rawMode === "hybrid"
+    rawMode === "off" ||
+    rawMode === "restart" ||
+    rawMode === "hot" ||
+    rawMode === "hybrid"
       ? rawMode
       : DEFAULT_RELOAD_SETTINGS.mode;
   const debounceRaw = cfg.gateway?.reload?.debounceMs;
@@ -179,7 +201,9 @@ export function resolveGatewayReloadSettings(cfg: OpenClawConfig): GatewayReload
   return { mode, debounceMs };
 }
 
-export function buildGatewayReloadPlan(changedPaths: string[]): GatewayReloadPlan {
+export function buildGatewayReloadPlan(
+  changedPaths: string[],
+): GatewayReloadPlan {
   const plan: GatewayReloadPlan = {
     changedPaths,
     restartGateway: false,
@@ -257,8 +281,14 @@ export type GatewayConfigReloader = {
 export function startGatewayConfigReloader(opts: {
   initialConfig: OpenClawConfig;
   readSnapshot: () => Promise<ConfigFileSnapshot>;
-  onHotReload: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => Promise<void>;
-  onRestart: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => void | Promise<void>;
+  onHotReload: (
+    plan: GatewayReloadPlan,
+    nextConfig: OpenClawConfig,
+  ) => Promise<void>;
+  onRestart: (
+    plan: GatewayReloadPlan,
+    nextConfig: OpenClawConfig,
+  ) => void | Promise<void>;
   log: {
     info: (msg: string) => void;
     warn: (msg: string) => void;
@@ -289,7 +319,10 @@ export function startGatewayConfigReloader(opts: {
   const schedule = () => {
     scheduleAfter(settings.debounceMs);
   };
-  const queueRestart = (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => {
+  const queueRestart = (
+    plan: GatewayReloadPlan,
+    nextConfig: OpenClawConfig,
+  ) => {
     if (restartQueued) {
       return;
     }
@@ -327,7 +360,9 @@ export function startGatewayConfigReloader(opts: {
     if (snapshot.valid) {
       return false;
     }
-    const issues = snapshot.issues.map((issue) => `${issue.path}: ${issue.message}`).join(", ");
+    const issues = snapshot.issues
+      .map((issue) => `${issue.path}: ${issue.message}`)
+      .join(", ");
     opts.log.warn(`config reload skipped (invalid config): ${issues}`);
     return true;
   };
@@ -340,7 +375,9 @@ export function startGatewayConfigReloader(opts: {
       return;
     }
 
-    opts.log.info(`config change detected; evaluating reload (${changedPaths.join(", ")})`);
+    opts.log.info(
+      `config change detected; evaluating reload (${changedPaths.join(", ")})`,
+    );
     const plan = buildGatewayReloadPlan(changedPaths);
     if (settings.mode === "off") {
       opts.log.info("config reload disabled (gateway.reload.mode=off)");

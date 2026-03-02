@@ -133,7 +133,9 @@ describe("security/dm-policy-shared", () => {
       isSenderAllowed: (allowFrom) => allowFrom.includes("paired-user"),
     });
     expect(resolved.decision).toBe("allow");
-    expect(resolved.reasonCode).toBe(DM_GROUP_ACCESS_REASON.DM_POLICY_ALLOWLISTED);
+    expect(resolved.reasonCode).toBe(
+      DM_GROUP_ACCESS_REASON.DM_POLICY_ALLOWLISTED,
+    );
     expect(resolved.reason).toBe("dmPolicy=pairing (allowlisted)");
     expect(resolved.effectiveAllowFrom).toEqual(["owner", "paired-user"]);
     expect(resolved.effectiveGroupAllowFrom).toEqual(["group:room"]);
@@ -230,7 +232,9 @@ describe("security/dm-policy-shared", () => {
       isSenderAllowed: () => false,
     });
     expect(resolved.decision).toBe("block");
-    expect(resolved.reasonCode).toBe(DM_GROUP_ACCESS_REASON.DM_POLICY_NOT_ALLOWLISTED);
+    expect(resolved.reasonCode).toBe(
+      DM_GROUP_ACCESS_REASON.DM_POLICY_NOT_ALLOWLISTED,
+    );
     expect(resolved.reason).toBe("dmPolicy=allowlist (not allowlisted)");
     expect(resolved.effectiveAllowFrom).toEqual(["owner"]);
   });
@@ -316,7 +320,8 @@ describe("security/dm-policy-shared", () => {
         allowFrom: ["owner"] as string[],
         groupAllowFrom: ["group-owner"] as string[],
         storeAllowFrom: ["paired-user"] as string[],
-        isSenderAllowed: (allowFrom: string[]) => allowFrom.includes("paired-user"),
+        isSenderAllowed: (allowFrom: string[]) =>
+          allowFrom.includes("paired-user"),
         expectedDecision: "block" as const,
         expectedReactionAllowed: false,
       },
@@ -334,7 +339,9 @@ describe("security/dm-policy-shared", () => {
           isSenderAllowed: testCase.isSenderAllowed,
         });
         const reactionAllowed = access.decision === "allow";
-        expect(access.decision, `[${channel}] ${testCase.name}`).toBe(testCase.expectedDecision);
+        expect(access.decision, `[${channel}] ${testCase.name}`).toBe(
+          testCase.expectedDecision,
+        );
         expect(reactionAllowed, `[${channel}] ${testCase.name} reaction`).toBe(
           testCase.expectedReactionAllowed,
         );

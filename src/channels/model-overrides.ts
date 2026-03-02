@@ -32,12 +32,14 @@ function resolveProviderEntry(
   modelByChannel: ChannelModelByChannelConfig | undefined,
   channel: string,
 ): Record<string, string> | undefined {
-  const normalized = normalizeMessageChannel(channel) ?? channel.trim().toLowerCase();
+  const normalized =
+    normalizeMessageChannel(channel) ?? channel.trim().toLowerCase();
   return (
     modelByChannel?.[normalized] ??
     modelByChannel?.[
       Object.keys(modelByChannel ?? {}).find((key) => {
-        const normalizedKey = normalizeMessageChannel(key) ?? key.trim().toLowerCase();
+        const normalizedKey =
+          normalizeMessageChannel(key) ?? key.trim().toLowerCase();
         return normalizedKey === normalized;
       }) ?? ""
     ]
@@ -53,7 +55,9 @@ function resolveParentGroupId(groupId: string | undefined): string | undefined {
   return parent && parent !== raw ? parent : undefined;
 }
 
-function resolveGroupIdFromSessionKey(sessionKey?: string | null): string | undefined {
+function resolveGroupIdFromSessionKey(
+  sessionKey?: string | null,
+): string | undefined {
   const raw = sessionKey?.trim();
   if (!raw) {
     return undefined;
@@ -73,15 +77,21 @@ function buildChannelCandidates(
 ) {
   const groupId = params.groupId?.trim();
   const parentGroupId = resolveParentGroupId(groupId);
-  const parentGroupIdFromSession = resolveGroupIdFromSessionKey(params.parentSessionKey);
+  const parentGroupIdFromSession = resolveGroupIdFromSessionKey(
+    params.parentSessionKey,
+  );
   const parentGroupIdResolved =
     resolveParentGroupId(parentGroupIdFromSession) ?? parentGroupIdFromSession;
   const groupChannel = params.groupChannel?.trim();
   const groupSubject = params.groupSubject?.trim();
   const channelBare = groupChannel ? groupChannel.replace(/^#/, "") : undefined;
   const subjectBare = groupSubject ? groupSubject.replace(/^#/, "") : undefined;
-  const channelSlug = channelBare ? normalizeChannelSlug(channelBare) : undefined;
-  const subjectSlug = subjectBare ? normalizeChannelSlug(subjectBare) : undefined;
+  const channelSlug = channelBare
+    ? normalizeChannelSlug(channelBare)
+    : undefined;
+  const subjectSlug = subjectBare
+    ? normalizeChannelSlug(subjectBare)
+    : undefined;
 
   return buildChannelKeyCandidates(
     groupId,

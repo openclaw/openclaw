@@ -14,7 +14,9 @@ describe("resolveAuthProfileOrder", () => {
     orderSource: "store" | "config";
     usageStats: NonNullable<AuthProfileStore["usageStats"]>;
   }) {
-    const configuredOrder = { anthropic: ["anthropic:default", "anthropic:work"] };
+    const configuredOrder = {
+      anthropic: ["anthropic:default", "anthropic:work"],
+    };
     return resolveAuthProfileOrder({
       cfg:
         params.orderSource === "config"
@@ -134,7 +136,9 @@ describe("resolveAuthProfileOrder", () => {
             : undefined,
         store: {
           version: 1,
-          ...(orderSource === "store" ? { order: { openrouter: explicitOrder } } : {}),
+          ...(orderSource === "store"
+            ? { order: { openrouter: explicitOrder } }
+            : {}),
           profiles: {
             "openrouter:default": {
               type: "api_key",

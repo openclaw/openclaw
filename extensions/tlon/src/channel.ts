@@ -74,9 +74,8 @@ function applyTlonSetupConfig(params: {
         accounts: {
           ...(base as { accounts?: Record<string, unknown> }).accounts,
           [accountId]: {
-            ...(base as { accounts?: Record<string, Record<string, unknown>> }).accounts?.[
-              accountId
-            ],
+            ...(base as { accounts?: Record<string, Record<string, unknown>> })
+              .accounts?.[accountId],
             enabled: true,
             ...payload,
           },
@@ -113,8 +112,12 @@ const tlonOutbound: ChannelOutboundAdapter = {
       throw new Error(`Invalid Tlon target. Use ${formatTargetHint()}`);
     }
 
-    const ssrfPolicy = ssrfPolicyFromAllowPrivateNetwork(account.allowPrivateNetwork);
-    const cookie = await authenticate(account.url, account.code, { ssrfPolicy });
+    const ssrfPolicy = ssrfPolicyFromAllowPrivateNetwork(
+      account.allowPrivateNetwork,
+    );
+    const cookie = await authenticate(account.url, account.code, {
+      ssrfPolicy,
+    });
     const api = new UrbitChannelClient(account.url, cookie, {
       ship: account.ship.replace(/^~/, ""),
       ssrfPolicy,
@@ -130,7 +133,8 @@ const tlonOutbound: ChannelOutboundAdapter = {
           text,
         });
       }
-      const replyId = (replyToId ?? threadId) ? String(replyToId ?? threadId) : undefined;
+      const replyId =
+        (replyToId ?? threadId) ? String(replyToId ?? threadId) : undefined;
       return await sendGroupMessage({
         api,
         fromShip,
@@ -143,7 +147,15 @@ const tlonOutbound: ChannelOutboundAdapter = {
       await api.close();
     }
   },
-  sendMedia: async ({ cfg, to, text, mediaUrl, accountId, replyToId, threadId }) => {
+  sendMedia: async ({
+    cfg,
+    to,
+    text,
+    mediaUrl,
+    accountId,
+    replyToId,
+    threadId,
+  }) => {
     const mergedText = buildMediaText(text, mediaUrl);
     return await tlonOutbound.sendText!({
       cfg,
@@ -179,7 +191,8 @@ export const tlonPlugin: ChannelPlugin = {
   configSchema: tlonChannelConfigSchema,
   config: {
     listAccountIds: (cfg) => listTlonAccountIds(cfg),
-    resolveAccount: (cfg, accountId) => resolveTlonAccount(cfg, accountId ?? undefined),
+    resolveAccount: (cfg, accountId) =>
+      resolveTlonAccount(cfg, accountId ?? undefined),
     defaultAccountId: () => "default",
     setAccountEnabled: ({ cfg, accountId, enabled }) => {
       const useDefault = !accountId || accountId === "default";
@@ -216,10 +229,8 @@ export const tlonPlugin: ChannelPlugin = {
       const useDefault = !accountId || accountId === "default";
       if (useDefault) {
         // oxlint-disable-next-line no-unused-vars
-        const { ship, code, url, name, ...rest } = (cfg.channels?.tlon ?? {}) as Record<
-          string,
-          unknown
-        >;
+        const { ship, code, url, name, ...rest } = (cfg.channels?.tlon ??
+          {}) as Record<string, unknown>;
         return {
           ...cfg,
           channels: {
@@ -229,8 +240,8 @@ export const tlonPlugin: ChannelPlugin = {
         } as OpenClawConfig;
       }
       // oxlint-disable-next-line no-unused-vars
-      const { [accountId]: removed, ...remainingAccounts } = (cfg.channels?.tlon?.accounts ??
-        {}) as Record<string, unknown>;
+      const { [accountId]: removed, ...remainingAccounts } = (cfg.channels?.tlon
+        ?.accounts ?? {}) as Record<string, unknown>;
       return {
         ...cfg,
         channels: {
@@ -331,12 +342,21 @@ export const tlonPlugin: ChannelPlugin = {
       url: (snapshot as { url?: string | null }).url ?? null,
     }),
     probeAccount: async ({ account }) => {
-      if (!account.configured || !account.ship || !account.url || !account.code) {
+      if (
+        !account.configured ||
+        !account.ship ||
+        !account.url ||
+        !account.code
+      ) {
         return { ok: false, error: "Not configured" };
       }
       try {
-        const ssrfPolicy = ssrfPolicyFromAllowPrivateNetwork(account.allowPrivateNetwork);
-        const cookie = await authenticate(account.url, account.code, { ssrfPolicy });
+        const ssrfPolicy = ssrfPolicyFromAllowPrivateNetwork(
+          account.allowPrivateNetwork,
+        );
+        const cookie = await authenticate(account.url, account.code, {
+          ssrfPolicy,
+        });
         const api = new UrbitChannelClient(account.url, cookie, {
           ship: account.ship.replace(/^~/, ""),
           ssrfPolicy,
@@ -348,7 +368,10 @@ export const tlonPlugin: ChannelPlugin = {
           await api.close();
         }
       } catch (error) {
-        return { ok: false, error: (error as { message?: string })?.message ?? String(error) };
+        return {
+          ok: false,
+          error: (error as { message?: string })?.message ?? String(error),
+        };
       }
     },
     buildAccountSnapshot: ({ account, runtime, probe }) => ({
@@ -373,7 +396,9 @@ export const tlonPlugin: ChannelPlugin = {
         ship: account.ship,
         url: account.url,
       } as ChannelAccountSnapshot);
-      ctx.log?.info(`[${account.accountId}] starting Tlon provider for ${account.ship ?? "tlon"}`);
+      ctx.log?.info(
+        `[${account.accountId}] starting Tlon provider for ${account.ship ?? "tlon"}`,
+      );
       return monitorTlonProvider({
         runtime: ctx.runtime,
         abortSignal: ctx.abortSignal,

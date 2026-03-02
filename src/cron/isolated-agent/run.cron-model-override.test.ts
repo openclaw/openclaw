@@ -113,7 +113,9 @@ describe("runCronIsolatedAgentTurn — cron model override (#21057)", () => {
 
   it("persists cron payload model on session entry even when the run throws", async () => {
     // Simulate the agent run throwing (e.g. LLM provider timeout)
-    runWithModelFallbackMock.mockRejectedValueOnce(new Error("LLM provider timeout"));
+    runWithModelFallbackMock.mockRejectedValueOnce(
+      new Error("LLM provider timeout"),
+    );
 
     const result = await runCronIsolatedAgentTurn(makeParams());
 
@@ -200,9 +202,13 @@ describe("runCronIsolatedAgentTurn — cron model override (#21057)", () => {
       ref: { provider: "anthropic", model: "claude-haiku-4-5" },
     });
 
-    runWithModelFallbackMock.mockRejectedValueOnce(new Error("LLM provider timeout"));
+    runWithModelFallbackMock.mockRejectedValueOnce(
+      new Error("LLM provider timeout"),
+    );
 
-    const result = await runCronIsolatedAgentTurn(makeParams({ job: jobWithoutModel }));
+    const result = await runCronIsolatedAgentTurn(
+      makeParams({ job: jobWithoutModel }),
+    );
 
     expect(result.status).toBe("error");
     // Even though the run failed, the session-level model override should
@@ -240,9 +246,13 @@ describe("runCronIsolatedAgentTurn — cron model override (#21057)", () => {
       payload: { kind: "agentTurn", message: "run daily digest" },
     });
 
-    runWithModelFallbackMock.mockRejectedValueOnce(new Error("LLM provider timeout"));
+    runWithModelFallbackMock.mockRejectedValueOnce(
+      new Error("LLM provider timeout"),
+    );
 
-    const result = await runCronIsolatedAgentTurn(makeParams({ job: jobWithoutModel }));
+    const result = await runCronIsolatedAgentTurn(
+      makeParams({ job: jobWithoutModel }),
+    );
 
     expect(result.status).toBe("error");
     // With no override, the default model (Opus) should still be persisted

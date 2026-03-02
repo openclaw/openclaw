@@ -56,7 +56,8 @@ export function normalizePollInput(
 
   const durationSecondsRaw = input.durationSeconds;
   const durationSeconds =
-    typeof durationSecondsRaw === "number" && Number.isFinite(durationSecondsRaw)
+    typeof durationSecondsRaw === "number" &&
+    Number.isFinite(durationSecondsRaw)
       ? Math.floor(durationSecondsRaw)
       : undefined;
   if (durationSeconds !== undefined && durationSeconds < 1) {
@@ -88,6 +89,8 @@ export function normalizePollDurationHours(
   options: { defaultHours: number; maxHours: number },
 ): number {
   const base =
-    typeof value === "number" && Number.isFinite(value) ? Math.floor(value) : options.defaultHours;
+    typeof value === "number" && Number.isFinite(value)
+      ? Math.floor(value)
+      : options.defaultHours;
   return Math.min(Math.max(base, 1), options.maxHours);
 }

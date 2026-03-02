@@ -1,5 +1,8 @@
 import { describe, it, expect, vi } from "vitest";
-import { handleFeishuCardAction, type FeishuCardActionEvent } from "./card-action.js";
+import {
+  handleFeishuCardAction,
+  type FeishuCardActionEvent,
+} from "./card-action.js";
 
 // Mock resolveFeishuAccount
 vi.mock("./accounts.js", () => ({

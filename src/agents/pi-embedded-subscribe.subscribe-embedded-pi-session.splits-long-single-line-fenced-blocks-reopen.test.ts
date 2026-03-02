@@ -130,7 +130,13 @@ describe("subscribeEmbeddedPiSession", () => {
             cacheRead: 5,
             cacheWrite: 0,
             totalTokens: 155,
-            cost: { input: 0.001, output: 0.002, cacheRead: 0, cacheWrite: 0, total: 0.003 },
+            cost: {
+              input: 0.001,
+              output: 0.002,
+              cacheRead: 0,
+              cacheWrite: 0,
+              total: 0.003,
+            },
           },
         },
       ],
@@ -149,7 +155,8 @@ describe("subscribeEmbeddedPiSession", () => {
       listener({ type: "auto_compaction_end", willRetry: false });
     }
 
-    const usage = (session.messages?.[0] as { usage?: unknown } | undefined)?.usage;
+    const usage = (session.messages?.[0] as { usage?: unknown } | undefined)
+      ?.usage;
     expect(usage).toEqual(makeZeroUsageSnapshot());
   });
 });

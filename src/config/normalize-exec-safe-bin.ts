@@ -2,7 +2,9 @@ import { normalizeSafeBinProfileFixtures } from "../infra/exec-safe-bin-policy.j
 import { normalizeTrustedSafeBinDirs } from "../infra/exec-safe-bin-trust.js";
 import type { OpenClawConfig } from "./types.js";
 
-export function normalizeExecSafeBinProfilesInConfig(cfg: OpenClawConfig): void {
+export function normalizeExecSafeBinProfilesInConfig(
+  cfg: OpenClawConfig,
+): void {
   const normalizeExec = (exec: unknown) => {
     if (!exec || typeof exec !== "object" || Array.isArray(exec)) {
       return;
@@ -23,8 +25,12 @@ export function normalizeExecSafeBinProfilesInConfig(cfg: OpenClawConfig): void 
       >,
     );
     typedExec.safeBinProfiles =
-      Object.keys(normalizedProfiles).length > 0 ? normalizedProfiles : undefined;
-    const normalizedTrustedDirs = normalizeTrustedSafeBinDirs(typedExec.safeBinTrustedDirs);
+      Object.keys(normalizedProfiles).length > 0
+        ? normalizedProfiles
+        : undefined;
+    const normalizedTrustedDirs = normalizeTrustedSafeBinDirs(
+      typedExec.safeBinTrustedDirs,
+    );
     typedExec.safeBinTrustedDirs =
       normalizedTrustedDirs.length > 0 ? normalizedTrustedDirs : undefined;
   };

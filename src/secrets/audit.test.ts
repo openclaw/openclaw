@@ -19,7 +19,10 @@ async function writeJsonFile(filePath: string, value: unknown): Promise<void> {
 }
 
 function resolveRuntimePathEnv(): string {
-  if (typeof process.env.PATH === "string" && process.env.PATH.trim().length > 0) {
+  if (
+    typeof process.env.PATH === "string" &&
+    process.env.PATH.trim().length > 0
+  ) {
     return process.env.PATH;
   }
   return "/usr/bin:/bin";
@@ -29,15 +32,31 @@ function hasFinding(
   report: Awaited<ReturnType<typeof runSecretsAudit>>,
   predicate: (entry: { code: string; file: string }) => boolean,
 ): boolean {
-  return report.findings.some((entry) => predicate(entry as { code: string; file: string }));
+  return report.findings.some((entry) =>
+    predicate(entry as { code: string; file: string }),
+  );
 }
 
 async function createAuditFixture(): Promise<AuditFixture> {
-  const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-audit-"));
+  const rootDir = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-secrets-audit-"),
+  );
   const stateDir = path.join(rootDir, ".openclaw");
   const configPath = path.join(stateDir, "openclaw.json");
-  const authStorePath = path.join(stateDir, "agents", "main", "agent", "auth-profiles.json");
-  const authJsonPath = path.join(stateDir, "agents", "main", "agent", "auth.json");
+  const authStorePath = path.join(
+    stateDir,
+    "agents",
+    "main",
+    "agent",
+    "auth-profiles.json",
+  );
+  const authJsonPath = path.join(
+    stateDir,
+    "agents",
+    "main",
+    "agent",
+    "auth.json",
+  );
   const envPath = path.join(stateDir, ".env");
 
   await fs.mkdir(path.dirname(configPath), { recursive: true });
@@ -85,7 +104,11 @@ async function seedAuditFixture(fixture: AuditFixture): Promise<void> {
     version: 1,
     profiles: Object.fromEntries(seededProfiles),
   });
-  await fs.writeFile(fixture.envPath, "OPENAI_API_KEY=sk-openai-plaintext\n", "utf8");
+  await fs.writeFile(
+    fixture.envPath,
+    "OPENAI_API_KEY=sk-openai-plaintext\n",
+    "utf8",
+  );
 }
 
 describe("secrets audit", () => {
@@ -105,8 +128,12 @@ describe("secrets audit", () => {
     expect(report.status).toBe("findings");
     expect(report.summary.plaintextCount).toBeGreaterThan(0);
     expect(report.summary.shadowedRefCount).toBeGreaterThan(0);
-    expect(hasFinding(report, (entry) => entry.code === "REF_SHADOWED")).toBe(true);
-    expect(hasFinding(report, (entry) => entry.code === "PLAINTEXT_FOUND")).toBe(true);
+    expect(hasFinding(report, (entry) => entry.code === "REF_SHADOWED")).toBe(
+      true,
+    );
+    expect(
+      hasFinding(report, (entry) => entry.code === "PLAINTEXT_FOUND"),
+    ).toBe(true);
   });
 
   it("does not mutate legacy auth.json during audit", async () => {
@@ -119,9 +146,13 @@ describe("secrets audit", () => {
     });
 
     const report = await runSecretsAudit({ env: fixture.env });
-    expect(hasFinding(report, (entry) => entry.code === "LEGACY_RESIDUE")).toBe(true);
+    expect(hasFinding(report, (entry) => entry.code === "LEGACY_RESIDUE")).toBe(
+      true,
+    );
     await expect(fs.stat(fixture.authJsonPath)).resolves.toBeTruthy();
-    await expect(fs.stat(fixture.authStorePath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.stat(fixture.authStorePath)).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 
   it("reports malformed sidecar JSON as findings instead of crashing", async () => {
@@ -129,9 +160,15 @@ describe("secrets audit", () => {
     await fs.writeFile(fixture.authJsonPath, "{invalid-json", "utf8");
 
     const report = await runSecretsAudit({ env: fixture.env });
-    expect(hasFinding(report, (entry) => entry.file === fixture.authStorePath)).toBe(true);
-    expect(hasFinding(report, (entry) => entry.file === fixture.authJsonPath)).toBe(true);
-    expect(hasFinding(report, (entry) => entry.code === "REF_UNRESOLVED")).toBe(true);
+    expect(
+      hasFinding(report, (entry) => entry.file === fixture.authStorePath),
+    ).toBe(true);
+    expect(
+      hasFinding(report, (entry) => entry.file === fixture.authJsonPath),
+    ).toBe(true);
+    expect(hasFinding(report, (entry) => entry.code === "REF_UNRESOLVED")).toBe(
+      true,
+    );
   });
 
   it("batches ref resolution per provider during audit", async () => {
@@ -168,13 +205,21 @@ describe("secrets audit", () => {
           openai: {
             baseUrl: "https://api.openai.com/v1",
             api: "openai-completions",
-            apiKey: { source: "exec", provider: "execmain", id: "providers/openai/apiKey" },
+            apiKey: {
+              source: "exec",
+              provider: "execmain",
+              id: "providers/openai/apiKey",
+            },
             models: [{ id: "gpt-5", name: "gpt-5" }],
           },
           moonshot: {
             baseUrl: "https://api.moonshot.cn/v1",
             api: "openai-completions",
-            apiKey: { source: "exec", provider: "execmain", id: "providers/moonshot/apiKey" },
+            apiKey: {
+              source: "exec",
+              provider: "execmain",
+              id: "providers/moonshot/apiKey",
+            },
             models: [{ id: "moonshot-v1-8k", name: "moonshot-v1-8k" }],
           },
         },
@@ -187,7 +232,9 @@ describe("secrets audit", () => {
     expect(report.summary.unresolvedRefCount).toBe(0);
 
     const callLog = await fs.readFile(execLogPath, "utf8");
-    const callCount = callLog.split("\n").filter((line) => line.trim().length > 0).length;
+    const callCount = callLog
+      .split("\n")
+      .filter((line) => line.trim().length > 0).length;
     expect(callCount).toBe(1);
   });
 });

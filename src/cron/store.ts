@@ -26,15 +26,20 @@ export async function loadCronStore(storePath: string): Promise<CronStoreFile> {
     try {
       parsed = JSON5.parse(raw);
     } catch (err) {
-      throw new Error(`Failed to parse cron store at ${storePath}: ${String(err)}`, {
-        cause: err,
-      });
+      throw new Error(
+        `Failed to parse cron store at ${storePath}: ${String(err)}`,
+        {
+          cause: err,
+        },
+      );
     }
     const parsedRecord =
       parsed && typeof parsed === "object" && !Array.isArray(parsed)
         ? (parsed as Record<string, unknown>)
         : {};
-    const jobs = Array.isArray(parsedRecord.jobs) ? (parsedRecord.jobs as never[]) : [];
+    const jobs = Array.isArray(parsedRecord.jobs)
+      ? (parsedRecord.jobs as never[])
+      : [];
     return {
       version: 1,
       jobs: jobs.filter(Boolean) as never as CronStoreFile["jobs"],
@@ -85,7 +90,9 @@ async function renameWithRetry(src: string, dest: string): Promise<void> {
     } catch (err) {
       const code = (err as { code?: string }).code;
       if (code === "EBUSY" && attempt < RENAME_MAX_RETRIES) {
-        await new Promise((resolve) => setTimeout(resolve, RENAME_BASE_DELAY_MS * 2 ** attempt));
+        await new Promise((resolve) =>
+          setTimeout(resolve, RENAME_BASE_DELAY_MS * 2 ** attempt),
+        );
         continue;
       }
       // Windows doesn't reliably support atomic replace via rename when dest exists.

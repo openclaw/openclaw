@@ -18,7 +18,13 @@ export const imessageOutbound = createDirectTextMediaOutbound({
     accountId: accountId ?? undefined,
     replyToId: replyToId ?? undefined,
   }),
-  buildMediaOptions: ({ mediaUrl, maxBytes, accountId, replyToId, mediaLocalRoots }) => ({
+  buildMediaOptions: ({
+    mediaUrl,
+    maxBytes,
+    accountId,
+    replyToId,
+    mediaLocalRoots,
+  }) => ({
     mediaUrl,
     maxBytes,
     accountId: accountId ?? undefined,

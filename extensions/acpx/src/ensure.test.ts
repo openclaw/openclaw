@@ -42,7 +42,11 @@ describe("acpx ensure", () => {
       JSON.stringify({ name: "acpx", version }, null, 2),
       "utf8",
     );
-    fs.writeFileSync(path.join(packageRoot, "dist", "cli.js"), "#!/usr/bin/env node\n", "utf8");
+    fs.writeFileSync(
+      path.join(packageRoot, "dist", "cli.js"),
+      "#!/usr/bin/env node\n",
+      "utf8",
+    );
     const binPath = path.join(root, "node_modules", ".bin", "acpx");
     fs.symlinkSync(path.join(packageRoot, "dist", "cli.js"), binPath);
     return binPath;
@@ -181,7 +185,12 @@ describe("acpx ensure", () => {
     expect(spawnAndCollectMock).toHaveBeenCalledTimes(3);
     expect(spawnAndCollectMock.mock.calls[1]?.[0]).toMatchObject({
       command: "npm",
-      args: ["install", "--omit=dev", "--no-save", `acpx@${ACPX_PINNED_VERSION}`],
+      args: [
+        "install",
+        "--omit=dev",
+        "--no-save",
+        `acpx@${ACPX_PINNED_VERSION}`,
+      ],
       cwd: "/plugin",
     });
   });

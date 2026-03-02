@@ -37,7 +37,10 @@ function listDirectIncludes(parsed: unknown): string[] {
   return out;
 }
 
-function resolveIncludePath(baseConfigPath: string, includePath: string): string {
+function resolveIncludePath(
+  baseConfigPath: string,
+  includePath: string,
+): string {
   return path.normalize(
     path.isAbsolute(includePath)
       ? includePath
@@ -52,7 +55,11 @@ export async function collectIncludePathsRecursive(params: {
   const visited = new Set<string>();
   const result: string[] = [];
 
-  const walk = async (basePath: string, parsed: unknown, depth: number): Promise<void> => {
+  const walk = async (
+    basePath: string,
+    parsed: unknown,
+    depth: number,
+  ): Promise<void> => {
     if (depth > MAX_INCLUDE_DEPTH) {
       return;
     }

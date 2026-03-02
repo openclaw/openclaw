@@ -13,9 +13,12 @@ function createLimiterSpy(): AuthRateLimiter & {
   reset: ReturnType<typeof vi.fn>;
 } {
   const check = vi.fn<AuthRateLimiter["check"]>(
-    (_ip, _scope) => ({ allowed: true, remaining: 10, retryAfterMs: 0 }) as const,
+    (_ip, _scope) =>
+      ({ allowed: true, remaining: 10, retryAfterMs: 0 }) as const,
   );
-  const recordFailure = vi.fn<AuthRateLimiter["recordFailure"]>((_ip, _scope) => {});
+  const recordFailure = vi.fn<AuthRateLimiter["recordFailure"]>(
+    (_ip, _scope) => {},
+  );
   const reset = vi.fn<AuthRateLimiter["reset"]>((_ip, _scope) => {});
   return {
     check,
@@ -68,8 +71,12 @@ describe("gateway auth", () => {
   }
 
   async function expectTailscaleHeaderAuthResult(params: {
-    authorize: typeof authorizeHttpGatewayConnect | typeof authorizeWsControlUiGatewayConnect;
-    expected: { ok: false; reason: string } | { ok: true; method: string; user: string };
+    authorize:
+      | typeof authorizeHttpGatewayConnect
+      | typeof authorizeWsControlUiGatewayConnect;
+    expected:
+      | { ok: false; reason: string }
+      | { ok: true; method: string; user: string };
   }) {
     const res = await params.authorize({
       auth: { mode: "token", token: "secret", allowTailscale: true },
@@ -314,7 +321,10 @@ describe("gateway auth", () => {
       reqHeaders: { "x-forwarded-for": "203.0.113.10" },
     });
     expect(limiter.check).toHaveBeenCalledWith("203.0.113.10", "shared-secret");
-    expect(limiter.recordFailure).toHaveBeenCalledWith("203.0.113.10", "shared-secret");
+    expect(limiter.recordFailure).toHaveBeenCalledWith(
+      "203.0.113.10",
+      "shared-secret",
+    );
   });
 
   it("ignores X-Real-IP fallback by default for rate-limit checks", async () => {
@@ -322,7 +332,10 @@ describe("gateway auth", () => {
       reqHeaders: { "x-real-ip": "203.0.113.77" },
     });
     expect(limiter.check).toHaveBeenCalledWith("127.0.0.1", "shared-secret");
-    expect(limiter.recordFailure).toHaveBeenCalledWith("127.0.0.1", "shared-secret");
+    expect(limiter.recordFailure).toHaveBeenCalledWith(
+      "127.0.0.1",
+      "shared-secret",
+    );
   });
 
   it("uses X-Real-IP when fallback is explicitly enabled", async () => {
@@ -331,7 +344,10 @@ describe("gateway auth", () => {
       allowRealIpFallback: true,
     });
     expect(limiter.check).toHaveBeenCalledWith("203.0.113.77", "shared-secret");
-    expect(limiter.recordFailure).toHaveBeenCalledWith("203.0.113.77", "shared-secret");
+    expect(limiter.recordFailure).toHaveBeenCalledWith(
+      "203.0.113.77",
+      "shared-secret",
+    );
   });
 
   it("passes custom rate-limit scope to limiter operations", async () => {
@@ -346,7 +362,10 @@ describe("gateway auth", () => {
     expect(res.ok).toBe(false);
     expect(res.reason).toBe("password_mismatch");
     expect(limiter.check).toHaveBeenCalledWith(undefined, "custom-scope");
-    expect(limiter.recordFailure).toHaveBeenCalledWith(undefined, "custom-scope");
+    expect(limiter.recordFailure).toHaveBeenCalledWith(
+      undefined,
+      "custom-scope",
+    );
   });
 });
 

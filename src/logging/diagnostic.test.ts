@@ -1,6 +1,9 @@
 import fs from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { onDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
+import {
+  onDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+} from "../infra/diagnostic-events.js";
 import {
   diagnosticSessionStates,
   getDiagnosticSessionStateCountForTest,
@@ -107,13 +110,19 @@ describe("stuck session diagnostics threshold", () => {
           stuckSessionWarnMs: 30_000,
         },
       });
-      logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+      logSessionStateChange({
+        sessionId: "s1",
+        sessionKey: "main",
+        state: "processing",
+      });
       vi.advanceTimersByTime(61_000);
     } finally {
       unsubscribe();
     }
 
-    expect(events.filter((event) => event.type === "session.stuck")).toHaveLength(1);
+    expect(
+      events.filter((event) => event.type === "session.stuck"),
+    ).toHaveLength(1);
   });
 
   it("falls back to default threshold when config is absent", () => {
@@ -123,18 +132,28 @@ describe("stuck session diagnostics threshold", () => {
     });
     try {
       startDiagnosticHeartbeat();
-      logSessionStateChange({ sessionId: "s2", sessionKey: "main", state: "processing" });
+      logSessionStateChange({
+        sessionId: "s2",
+        sessionKey: "main",
+        state: "processing",
+      });
       vi.advanceTimersByTime(31_000);
     } finally {
       unsubscribe();
     }
 
-    expect(events.filter((event) => event.type === "session.stuck")).toHaveLength(0);
+    expect(
+      events.filter((event) => event.type === "session.stuck"),
+    ).toHaveLength(0);
   });
 
   it("uses default threshold for invalid values", () => {
-    expect(resolveStuckSessionWarnMs({ diagnostics: { stuckSessionWarnMs: -1 } })).toBe(120_000);
-    expect(resolveStuckSessionWarnMs({ diagnostics: { stuckSessionWarnMs: 0 } })).toBe(120_000);
+    expect(
+      resolveStuckSessionWarnMs({ diagnostics: { stuckSessionWarnMs: -1 } }),
+    ).toBe(120_000);
+    expect(
+      resolveStuckSessionWarnMs({ diagnostics: { stuckSessionWarnMs: 0 } }),
+    ).toBe(120_000);
     expect(resolveStuckSessionWarnMs()).toBe(120_000);
   });
 });

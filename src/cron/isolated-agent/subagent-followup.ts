@@ -88,7 +88,9 @@ export async function readDescendantSubagentFallbackReply(params: {
     .toSorted((a, b) => (a.endedAt ?? 0) - (b.endedAt ?? 0))
     .slice(-4);
   for (const entry of latestRuns) {
-    const reply = (await readLatestAssistantReply({ sessionKey: entry.childSessionKey }))?.trim();
+    const reply = (
+      await readLatestAssistantReply({ sessionKey: entry.childSessionKey })
+    )?.trim();
     if (!reply || reply.toUpperCase() === SILENT_REPLY_TOKEN.toUpperCase()) {
       continue;
     }
@@ -110,7 +112,9 @@ export async function waitForDescendantSubagentSummary(params: {
   observedActiveDescendants?: boolean;
 }): Promise<string | undefined> {
   const initialReply = params.initialReply?.trim();
-  const deadline = Date.now() + Math.max(CRON_SUBAGENT_WAIT_MIN_MS, Math.floor(params.timeoutMs));
+  const deadline =
+    Date.now() +
+    Math.max(CRON_SUBAGENT_WAIT_MIN_MS, Math.floor(params.timeoutMs));
   let sawActiveDescendants = params.observedActiveDescendants === true;
   let drainedAtMs: number | undefined;
   while (Date.now() < deadline) {
@@ -118,7 +122,9 @@ export async function waitForDescendantSubagentSummary(params: {
     if (activeDescendants > 0) {
       sawActiveDescendants = true;
       drainedAtMs = undefined;
-      await new Promise((resolve) => setTimeout(resolve, CRON_SUBAGENT_WAIT_POLL_MS));
+      await new Promise((resolve) =>
+        setTimeout(resolve, CRON_SUBAGENT_WAIT_POLL_MS),
+      );
       continue;
     }
     if (!sawActiveDescendants) {
@@ -127,7 +133,9 @@ export async function waitForDescendantSubagentSummary(params: {
     if (!drainedAtMs) {
       drainedAtMs = Date.now();
     }
-    const latest = (await readLatestAssistantReply({ sessionKey: params.sessionKey }))?.trim();
+    const latest = (
+      await readLatestAssistantReply({ sessionKey: params.sessionKey })
+    )?.trim();
     if (
       latest &&
       latest.toUpperCase() !== SILENT_REPLY_TOKEN.toUpperCase() &&
@@ -138,9 +146,13 @@ export async function waitForDescendantSubagentSummary(params: {
     if (Date.now() - drainedAtMs >= CRON_SUBAGENT_FINAL_REPLY_GRACE_MS) {
       return undefined;
     }
-    await new Promise((resolve) => setTimeout(resolve, CRON_SUBAGENT_WAIT_POLL_MS));
+    await new Promise((resolve) =>
+      setTimeout(resolve, CRON_SUBAGENT_WAIT_POLL_MS),
+    );
   }
-  const latest = (await readLatestAssistantReply({ sessionKey: params.sessionKey }))?.trim();
+  const latest = (
+    await readLatestAssistantReply({ sessionKey: params.sessionKey })
+  )?.trim();
   if (
     latest &&
     latest.toUpperCase() !== SILENT_REPLY_TOKEN.toUpperCase() &&

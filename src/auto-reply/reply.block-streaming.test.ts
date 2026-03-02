@@ -6,7 +6,8 @@ import type { OpenClawConfig } from "../config/config.js";
 import { withTempHome as withTempHomeHarness } from "../config/home-env.test-harness.js";
 import { getReplyFromConfig } from "./reply.js";
 
-type RunEmbeddedPiAgent = typeof import("../agents/pi-embedded.js").runEmbeddedPiAgent;
+type RunEmbeddedPiAgent =
+  typeof import("../agents/pi-embedded.js").runEmbeddedPiAgent;
 type RunEmbeddedPiAgentParams = Parameters<RunEmbeddedPiAgent>[0];
 type RunEmbeddedPiAgentReply = Awaited<ReturnType<RunEmbeddedPiAgent>>;
 
@@ -14,7 +15,8 @@ const piEmbeddedMock = vi.hoisted(() => ({
   abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
   runEmbeddedPiAgent: vi.fn<RunEmbeddedPiAgent>(),
   queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
-  resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
+  resolveEmbeddedSessionLane: (key: string) =>
+    `session:${key.trim() || "main"}`,
   isEmbeddedPiRunActive: vi.fn().mockReturnValue(false),
   isEmbeddedPiRunStreaming: vi.fn().mockReturnValue(false),
 }));
@@ -81,7 +83,9 @@ async function runTelegramReply(params: {
 
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
   return withTempHomeHarness("openclaw-stream-", async (home) => {
-    await fs.mkdir(path.join(home, ".openclaw", "agents", "main", "sessions"), { recursive: true });
+    await fs.mkdir(path.join(home, ".openclaw", "agents", "main", "sessions"), {
+      recursive: true,
+    });
     return fn(home);
   });
 }
@@ -156,7 +160,9 @@ describe("block streaming", () => {
         streamMode: "block",
       });
 
-      const streamPayload = Array.isArray(resStreamMode) ? resStreamMode[0] : resStreamMode;
+      const streamPayload = Array.isArray(resStreamMode)
+        ? resStreamMode[0]
+        : resStreamMode;
       expect(streamPayload?.text).toBe("final");
       expect(onBlockReplyStreamMode).not.toHaveBeenCalled();
     });

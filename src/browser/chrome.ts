@@ -16,7 +16,11 @@ import {
   CHROME_STOP_TIMEOUT_MS,
   CHROME_WS_READY_TIMEOUT_MS,
 } from "./cdp-timeouts.js";
-import { appendCdpPath, fetchCdpChecked, openCdpWebSocket } from "./cdp.helpers.js";
+import {
+  appendCdpPath,
+  fetchCdpChecked,
+  openCdpWebSocket,
+} from "./cdp.helpers.js";
 import { normalizeCdpWsUrl } from "./cdp.js";
 import {
   type BrowserExecutable,
@@ -27,7 +31,10 @@ import {
   ensureProfileCleanExit,
   isProfileDecorated,
 } from "./chrome.profile-decoration.js";
-import type { ResolvedBrowserConfig, ResolvedBrowserProfile } from "./config.js";
+import type {
+  ResolvedBrowserConfig,
+  ResolvedBrowserProfile,
+} from "./config.js";
 import {
   DEFAULT_OPENCLAW_BROWSER_COLOR,
   DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
@@ -65,11 +72,15 @@ export type RunningChrome = {
   proc: ChildProcessWithoutNullStreams;
 };
 
-function resolveBrowserExecutable(resolved: ResolvedBrowserConfig): BrowserExecutable | null {
+function resolveBrowserExecutable(
+  resolved: ResolvedBrowserConfig,
+): BrowserExecutable | null {
   return resolveBrowserExecutableForPlatform(resolved, process.platform);
 }
 
-export function resolveOpenClawUserDataDir(profileName = DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME) {
+export function resolveOpenClawUserDataDir(
+  profileName = DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
+) {
   return path.join(CONFIG_DIR, "browser", profileName, "user-data");
 }
 
@@ -99,7 +110,9 @@ async function fetchChromeVersion(
   const t = setTimeout(ctrl.abort.bind(ctrl), timeoutMs);
   try {
     const versionUrl = appendCdpPath(cdpUrl, "/json/version");
-    const res = await fetchCdpChecked(versionUrl, timeoutMs, { signal: ctrl.signal });
+    const res = await fetchCdpChecked(versionUrl, timeoutMs, {
+      signal: ctrl.signal,
+    });
     const data = (await res.json()) as ChromeVersion;
     if (!data || typeof data !== "object") {
       return null;
@@ -176,7 +189,9 @@ export async function launchOpenClawChrome(
   profile: ResolvedBrowserProfile,
 ): Promise<RunningChrome> {
   if (!profile.cdpIsLoopback) {
-    throw new Error(`Profile "${profile.name}" is remote; cannot launch local Chrome.`);
+    throw new Error(
+      `Profile "${profile.name}" is remote; cannot launch local Chrome.`,
+    );
   }
   await ensurePortAvailable(profile.cdpPort);
 
@@ -372,7 +387,12 @@ export async function stopOpenClawChrome(
     if (!proc.exitCode && proc.killed) {
       break;
     }
-    if (!(await isChromeReachable(cdpUrlForPort(running.cdpPort), CHROME_STOP_PROBE_TIMEOUT_MS))) {
+    if (
+      !(await isChromeReachable(
+        cdpUrlForPort(running.cdpPort),
+        CHROME_STOP_PROBE_TIMEOUT_MS,
+      ))
+    ) {
       return;
     }
     await new Promise((r) => setTimeout(r, 100));

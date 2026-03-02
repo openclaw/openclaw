@@ -7,7 +7,9 @@ export const PROXY_ENV_KEYS = [
   "all_proxy",
 ] as const;
 
-export function hasProxyEnvConfigured(env: NodeJS.ProcessEnv = process.env): boolean {
+export function hasProxyEnvConfigured(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
   for (const key of PROXY_ENV_KEYS) {
     const value = env[key];
     if (typeof value === "string" && value.trim().length > 0) {

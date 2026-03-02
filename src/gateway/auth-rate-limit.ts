@@ -92,7 +92,9 @@ export function normalizeRateLimitClientIp(ip: string | undefined): string {
   return resolveClientIp({ remoteAddr: ip }) ?? "unknown";
 }
 
-export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter {
+export function createAuthRateLimiter(
+  config?: RateLimitConfig,
+): AuthRateLimiter {
   const maxAttempts = config?.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
   const windowMs = config?.windowMs ?? DEFAULT_WINDOW_MS;
   const lockoutMs = config?.lockoutMs ?? DEFAULT_LOCKOUT_MS;
@@ -102,14 +104,18 @@ export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter
   const entries = new Map<string, RateLimitEntry>();
 
   // Periodic cleanup to avoid unbounded map growth.
-  const pruneTimer = pruneIntervalMs > 0 ? setInterval(() => prune(), pruneIntervalMs) : null;
+  const pruneTimer =
+    pruneIntervalMs > 0 ? setInterval(() => prune(), pruneIntervalMs) : null;
   // Allow the Node.js process to exit even if the timer is still active.
   if (pruneTimer?.unref) {
     pruneTimer.unref();
   }
 
   function normalizeScope(scope: string | undefined): string {
-    return (scope ?? AUTH_RATE_LIMIT_SCOPE_DEFAULT).trim() || AUTH_RATE_LIMIT_SCOPE_DEFAULT;
+    return (
+      (scope ?? AUTH_RATE_LIMIT_SCOPE_DEFAULT).trim() ||
+      AUTH_RATE_LIMIT_SCOPE_DEFAULT
+    );
   }
 
   function normalizeIp(ip: string | undefined): string {
@@ -138,7 +144,10 @@ export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter
     entry.attempts = entry.attempts.filter((ts) => ts > cutoff);
   }
 
-  function check(rawIp: string | undefined, rawScope?: string): RateLimitCheckResult {
+  function check(
+    rawIp: string | undefined,
+    rawScope?: string,
+  ): RateLimitCheckResult {
     const { key, ip } = resolveKey(rawIp, rawScope);
     if (isExempt(ip)) {
       return { allowed: true, remaining: maxAttempts, retryAfterMs: 0 };

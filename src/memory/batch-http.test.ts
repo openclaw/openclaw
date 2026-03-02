@@ -60,7 +60,9 @@ describe("postJsonWithRetry", () => {
 
   it("attaches status to non-ok errors", async () => {
     postJsonMock.mockRejectedValueOnce(
-      Object.assign(new Error("memory batch failed: 503 backend down"), { status: 503 }),
+      Object.assign(new Error("memory batch failed: 503 backend down"), {
+        status: 503,
+      }),
     );
 
     await expect(

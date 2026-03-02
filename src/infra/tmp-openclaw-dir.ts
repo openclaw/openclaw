@@ -14,7 +14,10 @@ type ResolvePreferredOpenClawTmpDirOptions = {
     mode?: number;
     uid?: number;
   };
-  mkdirSync?: (path: string, opts: { recursive: boolean; mode?: number }) => void;
+  mkdirSync?: (
+    path: string,
+    opts: { recursive: boolean; mode?: number },
+  ) => void;
   getuid?: () => number | undefined;
   tmpdir?: () => string;
   warn?: (message: string) => void;
@@ -22,7 +25,10 @@ type ResolvePreferredOpenClawTmpDirOptions = {
 
 type MaybeNodeError = { code?: string };
 
-function isNodeErrorWithCode(err: unknown, code: string): err is MaybeNodeError {
+function isNodeErrorWithCode(
+  err: unknown,
+  code: string,
+): err is MaybeNodeError {
   return (
     typeof err === "object" &&
     err !== null &&
@@ -43,7 +49,9 @@ export function resolvePreferredOpenClawTmpDir(
     options.getuid ??
     (() => {
       try {
-        return typeof process.getuid === "function" ? process.getuid() : undefined;
+        return typeof process.getuid === "function"
+          ? process.getuid()
+          : undefined;
       } catch {
         return undefined;
       }
@@ -80,7 +88,9 @@ export function resolvePreferredOpenClawTmpDir(
     return st.isDirectory() && !st.isSymbolicLink() && isSecureDirForUser(st);
   };
 
-  const resolveDirState = (candidatePath: string): "available" | "missing" | "invalid" => {
+  const resolveDirState = (
+    candidatePath: string,
+  ): "available" | "missing" | "invalid" => {
     try {
       const candidate = lstatSync(candidatePath);
       if (!isTrustedTmpDir(candidate)) {
@@ -132,9 +142,14 @@ export function resolvePreferredOpenClawTmpDir(
       mkdirSync(fallbackPath, { recursive: true, mode: 0o700 });
       chmodSync(fallbackPath, 0o700);
     } catch {
-      throw new Error(`Unable to create fallback OpenClaw temp dir: ${fallbackPath}`);
+      throw new Error(
+        `Unable to create fallback OpenClaw temp dir: ${fallbackPath}`,
+      );
     }
-    if (resolveDirState(fallbackPath) !== "available" && !tryRepairWritableBits(fallbackPath)) {
+    if (
+      resolveDirState(fallbackPath) !== "available" &&
+      !tryRepairWritableBits(fallbackPath)
+    ) {
       throw new Error(`Unsafe fallback OpenClaw temp dir: ${fallbackPath}`);
     }
     return fallbackPath;

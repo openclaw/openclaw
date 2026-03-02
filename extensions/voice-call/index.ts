@@ -1,5 +1,8 @@
 import { Type } from "@sinclair/typebox";
-import type { GatewayRequestHandlerOptions, OpenClawPluginApi } from "openclaw/plugin-sdk";
+import type {
+  GatewayRequestHandlerOptions,
+  OpenClawPluginApi,
+} from "openclaw/plugin-sdk";
 import { registerVoiceCallCli } from "./src/cli.js";
 import {
   VoiceCallConfigSchema,
@@ -8,7 +11,10 @@ import {
   type VoiceCallConfig,
 } from "./src/config.js";
 import type { CoreConfig } from "./src/core-bridge.js";
-import { createVoiceCallRuntime, type VoiceCallRuntime } from "./src/runtime.js";
+import {
+  createVoiceCallRuntime,
+  type VoiceCallRuntime,
+} from "./src/runtime.js";
 
 const voiceCallConfigSchema = {
   parse(value: unknown): VoiceCallConfig {
@@ -18,7 +24,8 @@ const voiceCallConfigSchema = {
         : {};
 
     const twilio = raw.twilio as Record<string, unknown> | undefined;
-    const legacyFrom = typeof twilio?.from === "string" ? twilio.from : undefined;
+    const legacyFrom =
+      typeof twilio?.from === "string" ? twilio.from : undefined;
 
     const enabled = typeof raw.enabled === "boolean" ? raw.enabled : true;
     const providerRaw = raw.provider === "log" ? "mock" : raw.provider;
@@ -112,7 +119,9 @@ const VoiceCallToolSchema = Type.Union([
     action: Type.Literal("initiate_call"),
     to: Type.Optional(Type.String({ description: "Call target" })),
     message: Type.String({ description: "Intro message" }),
-    mode: Type.Optional(Type.Union([Type.Literal("notify"), Type.Literal("conversation")])),
+    mode: Type.Optional(
+      Type.Union([Type.Literal("notify"), Type.Literal("conversation")]),
+    ),
   }),
   Type.Object({
     action: Type.Literal("continue_call"),
@@ -133,10 +142,14 @@ const VoiceCallToolSchema = Type.Union([
     callId: Type.String({ description: "Call ID" }),
   }),
   Type.Object({
-    mode: Type.Optional(Type.Union([Type.Literal("call"), Type.Literal("status")])),
+    mode: Type.Optional(
+      Type.Union([Type.Literal("call"), Type.Literal("status")]),
+    ),
     to: Type.Optional(Type.String({ description: "Call target" })),
     sid: Type.Optional(Type.String({ description: "Call SID" })),
-    message: Type.Optional(Type.String({ description: "Optional intro message" })),
+    message: Type.Optional(
+      Type.String({ description: "Optional intro message" }),
+    ),
   }),
 ]);
 
@@ -146,17 +159,23 @@ const voiceCallPlugin = {
   description: "Voice-call plugin with Telnyx/Twilio/Plivo providers",
   configSchema: voiceCallConfigSchema,
   register(api: OpenClawPluginApi) {
-    const config = resolveVoiceCallConfig(voiceCallConfigSchema.parse(api.pluginConfig));
+    const config = resolveVoiceCallConfig(
+      voiceCallConfigSchema.parse(api.pluginConfig),
+    );
     const validation = validateProviderConfig(config);
 
     if (api.pluginConfig && typeof api.pluginConfig === "object") {
       const raw = api.pluginConfig as Record<string, unknown>;
       const twilio = raw.twilio as Record<string, unknown> | undefined;
       if (raw.provider === "log") {
-        api.logger.warn('[voice-call] provider "log" is deprecated; use "mock" instead');
+        api.logger.warn(
+          '[voice-call] provider "log" is deprecated; use "mock" instead',
+        );
       }
       if (typeof twilio?.from === "string") {
-        api.logger.warn("[voice-call] twilio.from is deprecated; use fromNumber instead");
+        api.logger.warn(
+          "[voice-call] twilio.from is deprecated; use fromNumber instead",
+        );
       }
     }
 
@@ -185,13 +204,22 @@ const voiceCallPlugin = {
       return runtime;
     };
 
-    const sendError = (respond: (ok: boolean, payload?: unknown) => void, err: unknown) => {
-      respond(false, { error: err instanceof Error ? err.message : String(err) });
+    const sendError = (
+      respond: (ok: boolean, payload?: unknown) => void,
+      err: unknown,
+    ) => {
+      respond(false, {
+        error: err instanceof Error ? err.message : String(err),
+      });
     };
 
-    const resolveCallMessageRequest = async (params: GatewayRequestHandlerOptions["params"]) => {
-      const callId = typeof params?.callId === "string" ? params.callId.trim() : "";
-      const message = typeof params?.message === "string" ? params.message.trim() : "";
+    const resolveCallMessageRequest = async (
+      params: GatewayRequestHandlerOptions["params"],
+    ) => {
+      const callId =
+        typeof params?.callId === "string" ? params.callId.trim() : "";
+      const message =
+        typeof params?.message === "string" ? params.message.trim() : "";
       if (!callId || !message) {
         return { error: "callId and message required" } as const;
       }
@@ -203,7 +231,8 @@ const voiceCallPlugin = {
       "voicecall.initiate",
       async ({ params, respond }: GatewayRequestHandlerOptions) => {
         try {
-          const message = typeof params?.message === "string" ? params.message.trim() : "";
+          const message =
+            typeof params?.message === "string" ? params.message.trim() : "";
           if (!message) {
             respond(false, { error: "message required" });
             return;
@@ -218,7 +247,9 @@ const voiceCallPlugin = {
             return;
           }
           const mode =
-            params?.mode === "notify" || params?.mode === "conversation" ? params.mode : undefined;
+            params?.mode === "notify" || params?.mode === "conversation"
+              ? params.mode
+              : undefined;
           const result = await rt.manager.initiateCall(to, undefined, {
             message,
             mode,
@@ -243,7 +274,10 @@ const voiceCallPlugin = {
             respond(false, { error: request.error });
             return;
           }
-          const result = await request.rt.manager.continueCall(request.callId, request.message);
+          const result = await request.rt.manager.continueCall(
+            request.callId,
+            request.message,
+          );
           if (!result.success) {
             respond(false, { error: result.error || "continue failed" });
             return;
@@ -264,7 +298,10 @@ const voiceCallPlugin = {
             respond(false, { error: request.error });
             return;
           }
-          const result = await request.rt.manager.speak(request.callId, request.message);
+          const result = await request.rt.manager.speak(
+            request.callId,
+            request.message,
+          );
           if (!result.success) {
             respond(false, { error: result.error || "speak failed" });
             return;
@@ -280,7 +317,8 @@ const voiceCallPlugin = {
       "voicecall.end",
       async ({ params, respond }: GatewayRequestHandlerOptions) => {
         try {
-          const callId = typeof params?.callId === "string" ? params.callId.trim() : "";
+          const callId =
+            typeof params?.callId === "string" ? params.callId.trim() : "";
           if (!callId) {
             respond(false, { error: "callId required" });
             return;
@@ -313,7 +351,8 @@ const voiceCallPlugin = {
             return;
           }
           const rt = await ensureRuntime();
-          const call = rt.manager.getCall(raw) || rt.manager.getCallByProviderCallId(raw);
+          const call =
+            rt.manager.getCall(raw) || rt.manager.getCallByProviderCallId(raw);
           if (!call) {
             respond(true, { found: false });
             return;
@@ -330,7 +369,8 @@ const voiceCallPlugin = {
       async ({ params, respond }: GatewayRequestHandlerOptions) => {
         try {
           const to = typeof params?.to === "string" ? params.to.trim() : "";
-          const message = typeof params?.message === "string" ? params.message.trim() : "";
+          const message =
+            typeof params?.message === "string" ? params.message.trim() : "";
           if (!to) {
             respond(false, { error: "to required" });
             return;
@@ -353,11 +393,14 @@ const voiceCallPlugin = {
     api.registerTool({
       name: "voice_call",
       label: "Voice Call",
-      description: "Make phone calls and have voice conversations via the voice-call plugin.",
+      description:
+        "Make phone calls and have voice conversations via the voice-call plugin.",
       parameters: VoiceCallToolSchema,
       async execute(_toolCallId, params) {
         const json = (payload: unknown) => ({
-          content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }],
+          content: [
+            { type: "text" as const, text: JSON.stringify(payload, null, 2) },
+          ],
           details: payload,
         });
 
@@ -431,7 +474,8 @@ const voiceCallPlugin = {
                   throw new Error("callId required");
                 }
                 const call =
-                  rt.manager.getCall(callId) || rt.manager.getCallByProviderCallId(callId);
+                  rt.manager.getCall(callId) ||
+                  rt.manager.getCallByProviderCallId(callId);
                 return json(call ? { found: true, call } : { found: false });
               }
             }
@@ -443,7 +487,9 @@ const voiceCallPlugin = {
             if (!sid) {
               throw new Error("sid required for status");
             }
-            const call = rt.manager.getCall(sid) || rt.manager.getCallByProviderCallId(sid);
+            const call =
+              rt.manager.getCall(sid) ||
+              rt.manager.getCallByProviderCallId(sid);
             return json(call ? { found: true, call } : { found: false });
           }
 

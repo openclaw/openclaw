@@ -3,7 +3,10 @@ import { getSlashCommands, helpText, parseCommand } from "./commands.js";
 
 describe("parseCommand", () => {
   it("normalizes aliases and keeps command args", () => {
-    expect(parseCommand("/elev full")).toEqual({ name: "elevated", args: "full" });
+    expect(parseCommand("/elev full")).toEqual({
+      name: "elevated",
+      args: "full",
+    });
   });
 
   it("returns empty name for empty input", () => {
@@ -15,7 +18,9 @@ describe("getSlashCommands", () => {
   it("provides level completions for built-in toggles", () => {
     const commands = getSlashCommands();
     const verbose = commands.find((command) => command.name === "verbose");
-    const activation = commands.find((command) => command.name === "activation");
+    const activation = commands.find(
+      (command) => command.name === "activation",
+    );
     expect(verbose?.getArgumentCompletions?.("o")).toEqual([
       { value: "on", label: "on" },
       { value: "off", label: "off" },

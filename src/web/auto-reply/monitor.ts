@@ -28,7 +28,11 @@ import { whatsappHeartbeatLog, whatsappLog } from "./loggers.js";
 import { buildMentionConfig } from "./mentions.js";
 import { createEchoTracker } from "./monitor/echo.js";
 import { createWebOnMessageHandler } from "./monitor/on-message.js";
-import type { WebChannelStatus, WebInboundMsg, WebMonitorTuning } from "./types.js";
+import type {
+  WebChannelStatus,
+  WebInboundMsg,
+  WebMonitorTuning,
+} from "./types.js";
 import { isLikelyWhatsAppCryptoError } from "./util.js";
 
 function isNonRetryableWebCloseStatus(statusCode: unknown): boolean {
@@ -63,7 +67,9 @@ export async function monitorWebChannel(
   const emitStatus = () => {
     tuning.statusSink?.({
       ...status,
-      lastDisconnect: status.lastDisconnect ? { ...status.lastDisconnect } : null,
+      lastDisconnect: status.lastDisconnect
+        ? { ...status.lastDisconnect }
+        : null,
     });
   };
   emitStatus();
@@ -98,7 +104,10 @@ export async function monitorWebChannel(
     typeof configuredMaxMb === "number" && configuredMaxMb > 0
       ? configuredMaxMb * 1024 * 1024
       : DEFAULT_WEB_MEDIA_BYTES;
-  const heartbeatSeconds = resolveHeartbeatSeconds(cfg, tuning.heartbeatSeconds);
+  const heartbeatSeconds = resolveHeartbeatSeconds(
+    cfg,
+    tuning.heartbeatSeconds,
+  );
   const reconnectPolicy = resolveReconnectPolicy(cfg, tuning.reconnect);
   const baseMentionConfig = buildMentionConfig(cfg);
   const groupHistoryLimit =
@@ -121,7 +130,8 @@ export async function monitorWebChannel(
 
   const sleep =
     tuning.sleep ??
-    ((ms: number, signal?: AbortSignal) => sleepWithAbort(ms, signal ?? abortSignal));
+    ((ms: number, signal?: AbortSignal) =>
+      sleepWithAbort(ms, signal ?? abortSignal));
   const stopRequested = () => abortSignal?.aborted === true;
   const abortPromise =
     abortSignal &&
@@ -182,7 +192,10 @@ export async function monitorWebChannel(
       account,
     });
 
-    const inboundDebounceMs = resolveInboundDebounceMs({ cfg, channel: "whatsapp" });
+    const inboundDebounceMs = resolveInboundDebounceMs({
+      cfg,
+      channel: "whatsapp",
+    });
     const shouldDebounce = (msg: WebInboundMsg) => {
       if (msg.mediaPath || msg.mediaType) {
         return false;
@@ -228,9 +241,12 @@ export async function monitorWebChannel(
       channel: "whatsapp",
       accountId: account.accountId,
     });
-    enqueueSystemEvent(`WhatsApp gateway connected${selfE164 ? ` as ${selfE164}` : ""}.`, {
-      sessionKey: connectRoute.sessionKey,
-    });
+    enqueueSystemEvent(
+      `WhatsApp gateway connected${selfE164 ? ` as ${selfE164}` : ""}.`,
+      {
+        sessionKey: connectRoute.sessionKey,
+      },
+    );
 
     setActiveWebListener(account.accountId, listener);
     unregisterUnhandled = registerUnhandledRejectionHandler((reason) => {
@@ -293,7 +309,10 @@ export async function monitorWebChannel(
         };
 
         if (minutesSinceLastMessage && minutesSinceLastMessage > 30) {
-          heartbeatLogger.warn(logData, "⚠️ web gateway heartbeat - no messages in 30+ minutes");
+          heartbeatLogger.warn(
+            logData,
+            "⚠️ web gateway heartbeat - no messages in 30+ minutes",
+          );
         } else {
           heartbeatLogger.info(logData, "web gateway heartbeat");
         }
@@ -307,7 +326,9 @@ export async function monitorWebChannel(
         if (timeSinceLastMessage <= MESSAGE_TIMEOUT_MS) {
           return;
         }
-        const minutesSinceLastMessage = Math.floor(timeSinceLastMessage / 60000);
+        const minutesSinceLastMessage = Math.floor(
+          timeSinceLastMessage / 60000,
+        );
         heartbeatLogger.warn(
           {
             connectionId,
@@ -344,7 +365,10 @@ export async function monitorWebChannel(
 
     const reason = await Promise.race([
       listener.onClose?.catch((err) => {
-        reconnectLogger.error({ error: formatError(err) }, "listener.onClose rejected");
+        reconnectLogger.error(
+          { error: formatError(err) },
+          "listener.onClose rejected",
+        );
         return { status: 500, isLoggedOut: false, error: err };
       }) ?? waitForever(),
       abortPromise ?? waitForever(),
@@ -396,9 +420,12 @@ export async function monitorWebChannel(
       "web reconnect: connection closed",
     );
 
-    enqueueSystemEvent(`WhatsApp gateway disconnected (status ${statusCode ?? "unknown"})`, {
-      sessionKey: connectRoute.sessionKey,
-    });
+    enqueueSystemEvent(
+      `WhatsApp gateway disconnected (status ${statusCode ?? "unknown"})`,
+      {
+        sessionKey: connectRoute.sessionKey,
+      },
+    );
 
     if (loggedOut) {
       runtime.error(
@@ -427,7 +454,10 @@ export async function monitorWebChannel(
     reconnectAttempts += 1;
     status.reconnectAttempts = reconnectAttempts;
     emitStatus();
-    if (reconnectPolicy.maxAttempts > 0 && reconnectAttempts >= reconnectPolicy.maxAttempts) {
+    if (
+      reconnectPolicy.maxAttempts > 0 &&
+      reconnectAttempts >= reconnectPolicy.maxAttempts
+    ) {
       reconnectLogger.warn(
         {
           connectionId,

@@ -9,7 +9,9 @@ import {
 
 describe("resolveDiffsPluginDefaults", () => {
   it("returns built-in defaults when config is missing", () => {
-    expect(resolveDiffsPluginDefaults(undefined)).toEqual(DEFAULT_DIFFS_TOOL_DEFAULTS);
+    expect(resolveDiffsPluginDefaults(undefined)).toEqual(
+      DEFAULT_DIFFS_TOOL_DEFAULTS,
+    );
   });
 
   it("applies configured defaults from plugin config", () => {
@@ -132,8 +134,12 @@ describe("resolveDiffsPluginDefaults", () => {
     });
 
     expect(resolveDiffImageRenderOptions({ defaults }).format).toBe("pdf");
-    expect(resolveDiffImageRenderOptions({ defaults, fileFormat: "png" }).format).toBe("png");
-    expect(resolveDiffImageRenderOptions({ defaults, format: "png" }).format).toBe("png");
+    expect(
+      resolveDiffImageRenderOptions({ defaults, fileFormat: "png" }).format,
+    ).toBe("png");
+    expect(
+      resolveDiffImageRenderOptions({ defaults, format: "png" }).format,
+    ).toBe("png");
   });
 
   it("accepts format as a config alias for fileFormat", () => {
@@ -169,11 +175,15 @@ describe("resolveDiffsPluginDefaults", () => {
 
 describe("resolveDiffsPluginSecurity", () => {
   it("defaults to local-only viewer access", () => {
-    expect(resolveDiffsPluginSecurity(undefined)).toEqual(DEFAULT_DIFFS_PLUGIN_SECURITY);
+    expect(resolveDiffsPluginSecurity(undefined)).toEqual(
+      DEFAULT_DIFFS_PLUGIN_SECURITY,
+    );
   });
 
   it("allows opt-in remote viewer access", () => {
-    expect(resolveDiffsPluginSecurity({ security: { allowRemoteViewer: true } })).toEqual({
+    expect(
+      resolveDiffsPluginSecurity({ security: { allowRemoteViewer: true } }),
+    ).toEqual({
       allowRemoteViewer: true,
     });
   });

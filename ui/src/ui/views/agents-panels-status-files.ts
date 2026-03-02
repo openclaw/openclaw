@@ -66,7 +66,9 @@ function resolveChannelLabel(snapshot: ChannelsStatusSnapshot, id: string) {
   return snapshot.channelLabels?.[id] ?? id;
 }
 
-function resolveChannelEntries(snapshot: ChannelsStatusSnapshot | null): ChannelSummaryEntry[] {
+function resolveChannelEntries(
+  snapshot: ChannelsStatusSnapshot | null,
+): ChannelSummaryEntry[] {
   if (!snapshot) {
     return [];
   }
@@ -81,7 +83,9 @@ function resolveChannelEntries(snapshot: ChannelsStatusSnapshot | null): Channel
     ids.add(id);
   }
   const ordered: string[] = [];
-  const seed = snapshot.channelOrder?.length ? snapshot.channelOrder : Array.from(ids);
+  const seed = snapshot.channelOrder?.length
+    ? snapshot.channelOrder
+    : Array.from(ids);
   for (const id of seed) {
     if (!ids.has(id)) {
       continue;
@@ -107,10 +111,13 @@ function summarizeChannelAccounts(accounts: ChannelAccountSnapshot[]) {
   let enabled = 0;
   for (const account of accounts) {
     const probeOk =
-      account.probe && typeof account.probe === "object" && "ok" in account.probe
+      account.probe &&
+      typeof account.probe === "object" &&
+      "ok" in account.probe
         ? Boolean((account.probe as { ok?: unknown }).ok)
         : false;
-    const isConnected = account.connected === true || account.running === true || probeOk;
+    const isConnected =
+      account.connected === true || account.running === true || probeOk;
     if (isConnected) {
       connected += 1;
     }
@@ -144,77 +151,85 @@ export function renderAgentChannels(params: {
     : "never";
   return html`
     <section class="grid grid-cols-2">
-      ${renderAgentContextCard(params.context, "Workspace, identity, and model configuration.")}
+      ${renderAgentContextCard(
+        params.context,
+        "Workspace, identity, and model configuration.",
+      )}
       <section class="card">
         <div class="row" style="justify-content: space-between;">
           <div>
             <div class="card-title">Channels</div>
             <div class="card-sub">Gateway-wide channel status snapshot.</div>
           </div>
-          <button class="btn btn--sm" ?disabled=${params.loading} @click=${params.onRefresh}>
+          <button
+            class="btn btn--sm"
+            ?disabled=${params.loading}
+            @click=${params.onRefresh}
+          >
             ${params.loading ? "Refreshing…" : "Refresh"}
           </button>
         </div>
         <div class="muted" style="margin-top: 8px;">
           Last refresh: ${lastSuccessLabel}
         </div>
-        ${
-          params.error
-            ? html`<div class="callout danger" style="margin-top: 12px;">${params.error}</div>`
-            : nothing
-        }
-        ${
-          !params.snapshot
-            ? html`
-                <div class="callout info" style="margin-top: 12px">Load channels to see live status.</div>
-              `
-            : nothing
-        }
-        ${
-          entries.length === 0
-            ? html`
-                <div class="muted" style="margin-top: 16px">No channels found.</div>
-              `
-            : html`
-                <div class="list" style="margin-top: 16px;">
-                  ${entries.map((entry) => {
-                    const summary = summarizeChannelAccounts(entry.accounts);
-                    const status = summary.total
-                      ? `${summary.connected}/${summary.total} connected`
-                      : "no accounts";
-                    const config = summary.configured
-                      ? `${summary.configured} configured`
-                      : "not configured";
-                    const enabled = summary.total ? `${summary.enabled} enabled` : "disabled";
-                    const extras = resolveChannelExtrasFromConfig({
-                      configForm: params.configForm,
-                      channelId: entry.id,
-                      fields: CHANNEL_EXTRA_FIELDS,
-                    });
-                    return html`
-                      <div class="list-item">
-                        <div class="list-main">
-                          <div class="list-title">${entry.label}</div>
-                          <div class="list-sub mono">${entry.id}</div>
-                        </div>
-                        <div class="list-meta">
-                          <div>${status}</div>
-                          <div>${config}</div>
-                          <div>${enabled}</div>
-                          ${
-                            extras.length > 0
-                              ? extras.map(
-                                  (extra) => html`<div>${extra.label}: ${extra.value}</div>`,
-                                )
-                              : nothing
-                          }
-                        </div>
+        ${params.error
+          ? html`<div class="callout danger" style="margin-top: 12px;">
+              ${params.error}
+            </div>`
+          : nothing}
+        ${!params.snapshot
+          ? html`
+              <div class="callout info" style="margin-top: 12px">
+                Load channels to see live status.
+              </div>
+            `
+          : nothing}
+        ${entries.length === 0
+          ? html`
+              <div class="muted" style="margin-top: 16px">
+                No channels found.
+              </div>
+            `
+          : html`
+              <div class="list" style="margin-top: 16px;">
+                ${entries.map((entry) => {
+                  const summary = summarizeChannelAccounts(entry.accounts);
+                  const status = summary.total
+                    ? `${summary.connected}/${summary.total} connected`
+                    : "no accounts";
+                  const config = summary.configured
+                    ? `${summary.configured} configured`
+                    : "not configured";
+                  const enabled = summary.total
+                    ? `${summary.enabled} enabled`
+                    : "disabled";
+                  const extras = resolveChannelExtrasFromConfig({
+                    configForm: params.configForm,
+                    channelId: entry.id,
+                    fields: CHANNEL_EXTRA_FIELDS,
+                  });
+                  return html`
+                    <div class="list-item">
+                      <div class="list-main">
+                        <div class="list-title">${entry.label}</div>
+                        <div class="list-sub mono">${entry.id}</div>
                       </div>
-                    `;
-                  })}
-                </div>
-              `
-        }
+                      <div class="list-meta">
+                        <div>${status}</div>
+                        <div>${config}</div>
+                        <div>${enabled}</div>
+                        ${extras.length > 0
+                          ? extras.map(
+                              (extra) =>
+                                html`<div>${extra.label}: ${extra.value}</div>`,
+                            )
+                          : nothing}
+                      </div>
+                    </div>
+                  `;
+                })}
+              </div>
+            `}
       </section>
     </section>
   `;
@@ -232,14 +247,21 @@ export function renderAgentCron(params: {
   const jobs = params.jobs.filter((job) => job.agentId === params.agentId);
   return html`
     <section class="grid grid-cols-2">
-      ${renderAgentContextCard(params.context, "Workspace and scheduling targets.")}
+      ${renderAgentContextCard(
+        params.context,
+        "Workspace and scheduling targets.",
+      )}
       <section class="card">
         <div class="row" style="justify-content: space-between;">
           <div>
             <div class="card-title">Scheduler</div>
             <div class="card-sub">Gateway cron status.</div>
           </div>
-          <button class="btn btn--sm" ?disabled=${params.loading} @click=${params.onRefresh}>
+          <button
+            class="btn btn--sm"
+            ?disabled=${params.loading}
+            @click=${params.onRefresh}
+          >
             ${params.loading ? "Refreshing…" : "Refresh"}
           </button>
         </div>
@@ -256,54 +278,54 @@ export function renderAgentCron(params: {
           </div>
           <div class="stat">
             <div class="stat-label">Next wake</div>
-            <div class="stat-value">${formatNextRun(params.status?.nextWakeAtMs ?? null)}</div>
+            <div class="stat-value">
+              ${formatNextRun(params.status?.nextWakeAtMs ?? null)}
+            </div>
           </div>
         </div>
-        ${
-          params.error
-            ? html`<div class="callout danger" style="margin-top: 12px;">${params.error}</div>`
-            : nothing
-        }
+        ${params.error
+          ? html`<div class="callout danger" style="margin-top: 12px;">
+              ${params.error}
+            </div>`
+          : nothing}
       </section>
     </section>
     <section class="card">
       <div class="card-title">Agent Cron Jobs</div>
       <div class="card-sub">Scheduled jobs targeting this agent.</div>
-      ${
-        jobs.length === 0
-          ? html`
-              <div class="muted" style="margin-top: 16px">No jobs assigned.</div>
-            `
-          : html`
-              <div class="list" style="margin-top: 16px;">
-                ${jobs.map(
-                  (job) => html`
-                    <div class="list-item">
-                      <div class="list-main">
-                        <div class="list-title">${job.name}</div>
-                        ${
-                          job.description
-                            ? html`<div class="list-sub">${job.description}</div>`
-                            : nothing
-                        }
-                        <div class="chip-row" style="margin-top: 6px;">
-                          <span class="chip">${formatCronSchedule(job)}</span>
-                          <span class="chip ${job.enabled ? "chip-ok" : "chip-warn"}">
-                            ${job.enabled ? "enabled" : "disabled"}
-                          </span>
-                          <span class="chip">${job.sessionTarget}</span>
-                        </div>
-                      </div>
-                      <div class="list-meta">
-                        <div class="mono">${formatCronState(job)}</div>
-                        <div class="muted">${formatCronPayload(job)}</div>
+      ${jobs.length === 0
+        ? html`
+            <div class="muted" style="margin-top: 16px">No jobs assigned.</div>
+          `
+        : html`
+            <div class="list" style="margin-top: 16px;">
+              ${jobs.map(
+                (job) => html`
+                  <div class="list-item">
+                    <div class="list-main">
+                      <div class="list-title">${job.name}</div>
+                      ${job.description
+                        ? html`<div class="list-sub">${job.description}</div>`
+                        : nothing}
+                      <div class="chip-row" style="margin-top: 6px;">
+                        <span class="chip">${formatCronSchedule(job)}</span>
+                        <span
+                          class="chip ${job.enabled ? "chip-ok" : "chip-warn"}"
+                        >
+                          ${job.enabled ? "enabled" : "disabled"}
+                        </span>
+                        <span class="chip">${job.sessionTarget}</span>
                       </div>
                     </div>
-                  `,
-                )}
-              </div>
-            `
-      }
+                    <div class="list-meta">
+                      <div class="mono">${formatCronState(job)}</div>
+                      <div class="muted">${formatCronPayload(job)}</div>
+                    </div>
+                  </div>
+                `,
+              )}
+            </div>
+          `}
     </section>
   `;
 }
@@ -323,10 +345,15 @@ export function renderAgentFiles(params: {
   onFileReset: (name: string) => void;
   onFileSave: (name: string) => void;
 }) {
-  const list = params.agentFilesList?.agentId === params.agentId ? params.agentFilesList : null;
+  const list =
+    params.agentFilesList?.agentId === params.agentId
+      ? params.agentFilesList
+      : null;
   const files = list?.files ?? [];
   const active = params.agentFileActive ?? null;
-  const activeEntry = active ? (files.find((file) => file.name === active) ?? null) : null;
+  const activeEntry = active
+    ? (files.find((file) => file.name === active) ?? null)
+    : null;
   const baseContent = active ? (params.agentFileContents[active] ?? "") : "";
   const draft = active ? (params.agentFileDrafts[active] ?? baseContent) : "";
   const isDirty = active ? draft !== baseContent : false;
@@ -336,7 +363,9 @@ export function renderAgentFiles(params: {
       <div class="row" style="justify-content: space-between;">
         <div>
           <div class="card-title">Core Files</div>
-          <div class="card-sub">Bootstrap persona, identity, and tool guidance.</div>
+          <div class="card-sub">
+            Bootstrap persona, identity, and tool guidance.
+          </div>
         </div>
         <button
           class="btn btn--sm"
@@ -346,96 +375,95 @@ export function renderAgentFiles(params: {
           ${params.agentFilesLoading ? "Loading…" : "Refresh"}
         </button>
       </div>
-      ${
-        list
-          ? html`<div class="muted mono" style="margin-top: 8px;">Workspace: ${list.workspace}</div>`
-          : nothing
-      }
-      ${
-        params.agentFilesError
-          ? html`<div class="callout danger" style="margin-top: 12px;">${params.agentFilesError}</div>`
-          : nothing
-      }
-      ${
-        !list
-          ? html`
-              <div class="callout info" style="margin-top: 12px">
-                Load the agent workspace files to edit core instructions.
+      ${list
+        ? html`<div class="muted mono" style="margin-top: 8px;">
+            Workspace: ${list.workspace}
+          </div>`
+        : nothing}
+      ${params.agentFilesError
+        ? html`<div class="callout danger" style="margin-top: 12px;">
+            ${params.agentFilesError}
+          </div>`
+        : nothing}
+      ${!list
+        ? html`
+            <div class="callout info" style="margin-top: 12px">
+              Load the agent workspace files to edit core instructions.
+            </div>
+          `
+        : html`
+            <div class="agent-files-grid" style="margin-top: 16px;">
+              <div class="agent-files-list">
+                ${files.length === 0
+                  ? html` <div class="muted">No files found.</div> `
+                  : files.map((file) =>
+                      renderAgentFileRow(file, active, () =>
+                        params.onSelectFile(file.name),
+                      ),
+                    )}
               </div>
-            `
-          : html`
-              <div class="agent-files-grid" style="margin-top: 16px;">
-                <div class="agent-files-list">
-                  ${
-                    files.length === 0
-                      ? html`
-                          <div class="muted">No files found.</div>
-                        `
-                      : files.map((file) =>
-                          renderAgentFileRow(file, active, () => params.onSelectFile(file.name)),
-                        )
-                  }
-                </div>
-                <div class="agent-files-editor">
-                  ${
-                    !activeEntry
-                      ? html`
-                          <div class="muted">Select a file to edit.</div>
-                        `
-                      : html`
-                          <div class="agent-file-header">
-                            <div>
-                              <div class="agent-file-title mono">${activeEntry.name}</div>
-                              <div class="agent-file-sub mono">${activeEntry.path}</div>
-                            </div>
-                            <div class="agent-file-actions">
-                              <button
-                                class="btn btn--sm"
-                                ?disabled=${!isDirty}
-                                @click=${() => params.onFileReset(activeEntry.name)}
-                              >
-                                Reset
-                              </button>
-                              <button
-                                class="btn btn--sm primary"
-                                ?disabled=${params.agentFileSaving || !isDirty}
-                                @click=${() => params.onFileSave(activeEntry.name)}
-                              >
-                                ${params.agentFileSaving ? "Saving…" : "Save"}
-                              </button>
-                            </div>
+              <div class="agent-files-editor">
+                ${!activeEntry
+                  ? html` <div class="muted">Select a file to edit.</div> `
+                  : html`
+                      <div class="agent-file-header">
+                        <div>
+                          <div class="agent-file-title mono">
+                            ${activeEntry.name}
                           </div>
-                          ${
-                            activeEntry.missing
-                              ? html`
-                                  <div class="callout info" style="margin-top: 10px">
-                                    This file is missing. Saving will create it in the agent workspace.
-                                  </div>
-                                `
-                              : nothing
-                          }
-                          <label class="field" style="margin-top: 12px;">
-                            <span>Content</span>
-                            <textarea
-                              .value=${draft}
-                              @input=${(e: Event) =>
-                                params.onFileDraftChange(
-                                  activeEntry.name,
-                                  (e.target as HTMLTextAreaElement).value,
-                                )}
-                            ></textarea>
-                          </label>
-                        `
-                  }
-                </div>
+                          <div class="agent-file-sub mono">
+                            ${activeEntry.path}
+                          </div>
+                        </div>
+                        <div class="agent-file-actions">
+                          <button
+                            class="btn btn--sm"
+                            ?disabled=${!isDirty}
+                            @click=${() => params.onFileReset(activeEntry.name)}
+                          >
+                            Reset
+                          </button>
+                          <button
+                            class="btn btn--sm primary"
+                            ?disabled=${params.agentFileSaving || !isDirty}
+                            @click=${() => params.onFileSave(activeEntry.name)}
+                          >
+                            ${params.agentFileSaving ? "Saving…" : "Save"}
+                          </button>
+                        </div>
+                      </div>
+                      ${activeEntry.missing
+                        ? html`
+                            <div class="callout info" style="margin-top: 10px">
+                              This file is missing. Saving will create it in the
+                              agent workspace.
+                            </div>
+                          `
+                        : nothing}
+                      <label class="field" style="margin-top: 12px;">
+                        <span>Content</span>
+                        <textarea
+                          .value=${draft}
+                          @input=${(e: Event) =>
+                            params.onFileDraftChange(
+                              activeEntry.name,
+                              (e.target as HTMLTextAreaElement).value,
+                            )}
+                        ></textarea>
+                      </label>
+                    `}
               </div>
-            `
-      }
+            </div>
+          `}
     </section>
   `;
 }
 
-function renderAgentFileRow(file: AgentFileEntry, active: string | null, onSelect: () => void) {
+function renderAgentFileRow(
+  file: AgentFileEntry,
+  active: string | null,
+  onSelect: () => void,
+) {
   const status = file.missing
     ? "Missing"
     : `${formatBytes(file.size)} · ${formatRelativeTimestamp(file.updatedAtMs ?? null)}`;
@@ -449,13 +477,9 @@ function renderAgentFileRow(file: AgentFileEntry, active: string | null, onSelec
         <div class="agent-file-name mono">${file.name}</div>
         <div class="agent-file-meta">${status}</div>
       </div>
-      ${
-        file.missing
-          ? html`
-              <span class="agent-pill warn">missing</span>
-            `
-          : nothing
-      }
+      ${file.missing
+        ? html` <span class="agent-pill warn">missing</span> `
+        : nothing}
     </button>
   `;
 }

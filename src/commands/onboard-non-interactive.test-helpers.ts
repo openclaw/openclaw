@@ -32,7 +32,8 @@ export async function runNonInteractiveOnboarding(
   options: Record<string, unknown>,
   runtime: NonInteractiveRuntime,
 ): Promise<void> {
-  const { runNonInteractiveOnboarding: run } = await import("./onboard-non-interactive.js");
+  const { runNonInteractiveOnboarding: run } =
+    await import("./onboard-non-interactive.js");
   await run(options, runtime);
 }
 

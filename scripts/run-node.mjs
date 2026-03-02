@@ -91,7 +91,13 @@ const resolveGitHead = (deps) => {
 
 const hasDirtySourceTree = (deps) => {
   const output = runGit(
-    ["status", "--porcelain", "--untracked-files=normal", "--", ...runNodeWatchedPaths],
+    [
+      "status",
+      "--porcelain",
+      "--untracked-files=normal",
+      "--",
+      ...runNodeWatchedPaths,
+    ],
     deps,
   );
   if (output === null) {
@@ -111,7 +117,10 @@ const readBuildStamp = (deps) => {
       return { mtime, head: null };
     }
     const parsed = JSON.parse(raw);
-    const head = typeof parsed?.head === "string" && parsed.head.trim() ? parsed.head.trim() : null;
+    const head =
+      typeof parsed?.head === "string" && parsed.head.trim()
+        ? parsed.head.trim()
+        : null;
     return { mtime, head };
   } catch {
     return { mtime, head: null };
@@ -177,11 +186,15 @@ const logRunner = (message, deps) => {
 };
 
 const runOpenClaw = async (deps) => {
-  const nodeProcess = deps.spawn(deps.execPath, ["openclaw.mjs", ...deps.args], {
-    cwd: deps.cwd,
-    env: deps.env,
-    stdio: "inherit",
-  });
+  const nodeProcess = deps.spawn(
+    deps.execPath,
+    ["openclaw.mjs", ...deps.args],
+    {
+      cwd: deps.cwd,
+      env: deps.env,
+      stdio: "inherit",
+    },
+  );
   const res = await new Promise((resolve) => {
     nodeProcess.on("exit", (exitCode, exitSignal) => {
       resolve({ exitCode, exitSignal });
@@ -203,7 +216,10 @@ const writeBuildStamp = (deps) => {
     deps.fs.writeFileSync(deps.buildStampPath, `${JSON.stringify(stamp)}\n`);
   } catch (error) {
     // Best-effort stamp; still allow the runner to start.
-    logRunner(`Failed to write build stamp: ${error?.message ?? "unknown error"}`, deps);
+    logRunner(
+      `Failed to write build stamp: ${error?.message ?? "unknown error"}`,
+      deps,
+    );
   }
 };
 
@@ -224,7 +240,10 @@ export async function runNodeMain(params = {}) {
   deps.distEntry = path.join(deps.distRoot, "/entry.js");
   deps.buildStampPath = path.join(deps.distRoot, ".buildstamp");
   deps.srcRoot = path.join(deps.cwd, "src");
-  deps.configFiles = [path.join(deps.cwd, "tsconfig.json"), path.join(deps.cwd, "package.json")];
+  deps.configFiles = [
+    path.join(deps.cwd, "tsconfig.json"),
+    path.join(deps.cwd, "package.json"),
+  ];
 
   if (!shouldBuild(deps)) {
     return await runOpenClaw(deps);
@@ -233,7 +252,9 @@ export async function runNodeMain(params = {}) {
   logRunner("Building TypeScript (dist is stale).", deps);
   const buildCmd = deps.platform === "win32" ? "cmd.exe" : "pnpm";
   const buildArgs =
-    deps.platform === "win32" ? ["/d", "/s", "/c", "pnpm", ...compilerArgs] : compilerArgs;
+    deps.platform === "win32"
+      ? ["/d", "/s", "/c", "pnpm", ...compilerArgs]
+      : compilerArgs;
   const build = deps.spawn(buildCmd, buildArgs, {
     cwd: deps.cwd,
     env: deps.env,
@@ -241,7 +262,9 @@ export async function runNodeMain(params = {}) {
   });
 
   const buildRes = await new Promise((resolve) => {
-    build.on("exit", (exitCode, exitSignal) => resolve({ exitCode, exitSignal }));
+    build.on("exit", (exitCode, exitSignal) =>
+      resolve({ exitCode, exitSignal }),
+    );
   });
   if (buildRes.exitSignal) {
     return 1;

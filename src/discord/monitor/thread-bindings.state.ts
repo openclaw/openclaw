@@ -2,7 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { resolveStateDir } from "../../config/paths.js";
 import { loadJsonFile, saveJsonFile } from "../../infra/json-file.js";
-import { normalizeAccountId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import {
+  normalizeAccountId,
+  resolveAgentIdFromSessionKey,
+} from "../../routing/session-key.js";
 import {
   DEFAULT_THREAD_BINDING_IDLE_TIMEOUT_MS,
   DEFAULT_THREAD_BINDING_MAX_AGE_MS,
@@ -20,8 +23,14 @@ type ThreadBindingsGlobalState = {
   bindingsByThreadId: Map<string, ThreadBindingRecord>;
   bindingsBySessionKey: Map<string, Set<string>>;
   tokensByAccountId: Map<string, string>;
-  recentUnboundWebhookEchoesByBindingKey: Map<string, { webhookId: string; expiresAt: number }>;
-  reusableWebhooksByAccountChannel: Map<string, { webhookId: string; webhookToken: string }>;
+  recentUnboundWebhookEchoesByBindingKey: Map<
+    string,
+    { webhookId: string; expiresAt: number }
+  >;
+  reusableWebhooksByAccountChannel: Map<
+    string,
+    { webhookId: string; webhookToken: string }
+  >;
   persistByAccountId: Map<string, boolean>;
   loadedBindings: boolean;
   lastPersistedAtMs: number;
@@ -56,7 +65,8 @@ function resolveThreadBindingsGlobalState(): ThreadBindingsGlobalState {
     [THREAD_BINDINGS_STATE_KEY]?: ThreadBindingsGlobalState;
   };
   if (!runtimeGlobal[THREAD_BINDINGS_STATE_KEY]) {
-    runtimeGlobal[THREAD_BINDINGS_STATE_KEY] = createThreadBindingsGlobalState();
+    runtimeGlobal[THREAD_BINDINGS_STATE_KEY] =
+      createThreadBindingsGlobalState();
   }
   return runtimeGlobal[THREAD_BINDINGS_STATE_KEY];
 }
@@ -65,7 +75,8 @@ const THREAD_BINDINGS_STATE = resolveThreadBindingsGlobalState();
 
 export const MANAGERS_BY_ACCOUNT_ID = THREAD_BINDINGS_STATE.managersByAccountId;
 export const BINDINGS_BY_THREAD_ID = THREAD_BINDINGS_STATE.bindingsByThreadId;
-export const BINDINGS_BY_SESSION_KEY = THREAD_BINDINGS_STATE.bindingsBySessionKey;
+export const BINDINGS_BY_SESSION_KEY =
+  THREAD_BINDINGS_STATE.bindingsBySessionKey;
 export const TOKENS_BY_ACCOUNT_ID = THREAD_BINDINGS_STATE.tokensByAccountId;
 export const RECENT_UNBOUND_WEBHOOK_ECHOES_BY_BINDING_KEY =
   THREAD_BINDINGS_STATE.recentUnboundWebhookEchoesByBindingKey;
@@ -74,7 +85,10 @@ export const REUSABLE_WEBHOOKS_BY_ACCOUNT_CHANNEL =
 export const PERSIST_BY_ACCOUNT_ID = THREAD_BINDINGS_STATE.persistByAccountId;
 export const THREAD_BINDING_TOUCH_PERSIST_MIN_INTERVAL_MS = 15_000;
 
-export function rememberThreadBindingToken(params: { accountId?: string; token?: string }) {
+export function rememberThreadBindingToken(params: {
+  accountId?: string;
+  token?: string;
+}) {
   const normalizedAccountId = normalizeAccountId(params.accountId);
   const token = params.token?.trim();
   if (!token) {
@@ -96,7 +110,11 @@ export function shouldDefaultPersist(): boolean {
 }
 
 export function resolveThreadBindingsPath(): string {
-  return path.join(resolveStateDir(process.env), "discord", "thread-bindings.json");
+  return path.join(
+    resolveStateDir(process.env),
+    "discord",
+    "thread-bindings.json",
+  );
 }
 
 export function normalizeTargetKind(
@@ -120,7 +138,10 @@ export function normalizeThreadId(raw: unknown): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
-export function toBindingRecordKey(params: { accountId: string; threadId: string }): string {
+export function toBindingRecordKey(params: {
+  accountId: string;
+  threadId: string;
+}): string {
   return `${normalizeAccountId(params.accountId)}:${params.threadId.trim()}`;
 }
 
@@ -138,13 +159,17 @@ export function resolveBindingRecordKey(params: {
   });
 }
 
-function normalizePersistedBinding(threadIdKey: string, raw: unknown): ThreadBindingRecord | null {
+function normalizePersistedBinding(
+  threadIdKey: string,
+  raw: unknown,
+): ThreadBindingRecord | null {
   if (!raw || typeof raw !== "object") {
     return null;
   }
   const value = raw as Partial<PersistedThreadBindingRecord>;
   const threadId = normalizeThreadId(value.threadId ?? threadIdKey);
-  const channelId = typeof value.channelId === "string" ? value.channelId.trim() : "";
+  const channelId =
+    typeof value.channelId === "string" ? value.channelId.trim() : "";
   const targetSessionKey =
     typeof value.targetSessionKey === "string"
       ? value.targetSessionKey.trim()
@@ -156,24 +181,37 @@ function normalizePersistedBinding(threadIdKey: string, raw: unknown): ThreadBin
   }
   const accountId = normalizeAccountId(value.accountId);
   const targetKind = normalizeTargetKind(value.targetKind, targetSessionKey);
-  const agentIdRaw = typeof value.agentId === "string" ? value.agentId.trim() : "";
+  const agentIdRaw =
+    typeof value.agentId === "string" ? value.agentId.trim() : "";
   const agentId = agentIdRaw || resolveAgentIdFromSessionKey(targetSessionKey);
-  const label = typeof value.label === "string" ? value.label.trim() || undefined : undefined;
+  const label =
+    typeof value.label === "string"
+      ? value.label.trim() || undefined
+      : undefined;
   const webhookId =
-    typeof value.webhookId === "string" ? value.webhookId.trim() || undefined : undefined;
+    typeof value.webhookId === "string"
+      ? value.webhookId.trim() || undefined
+      : undefined;
   const webhookToken =
-    typeof value.webhookToken === "string" ? value.webhookToken.trim() || undefined : undefined;
-  const boundBy = typeof value.boundBy === "string" ? value.boundBy.trim() || "system" : "system";
+    typeof value.webhookToken === "string"
+      ? value.webhookToken.trim() || undefined
+      : undefined;
+  const boundBy =
+    typeof value.boundBy === "string"
+      ? value.boundBy.trim() || "system"
+      : "system";
   const boundAt =
     typeof value.boundAt === "number" && Number.isFinite(value.boundAt)
       ? Math.floor(value.boundAt)
       : Date.now();
   const lastActivityAt =
-    typeof value.lastActivityAt === "number" && Number.isFinite(value.lastActivityAt)
+    typeof value.lastActivityAt === "number" &&
+    Number.isFinite(value.lastActivityAt)
       ? Math.max(0, Math.floor(value.lastActivityAt))
       : boundAt;
   const idleTimeoutMs =
-    typeof value.idleTimeoutMs === "number" && Number.isFinite(value.idleTimeoutMs)
+    typeof value.idleTimeoutMs === "number" &&
+    Number.isFinite(value.idleTimeoutMs)
       ? Math.max(0, Math.floor(value.idleTimeoutMs))
       : undefined;
   const maxAgeMs =
@@ -183,7 +221,10 @@ function normalizePersistedBinding(threadIdKey: string, raw: unknown): ThreadBin
   const legacyExpiresAt =
     typeof (value as { expiresAt?: unknown }).expiresAt === "number" &&
     Number.isFinite((value as { expiresAt?: unknown }).expiresAt)
-      ? Math.max(0, Math.floor((value as { expiresAt?: number }).expiresAt ?? 0))
+      ? Math.max(
+          0,
+          Math.floor((value as { expiresAt?: number }).expiresAt ?? 0),
+        )
       : undefined;
 
   let migratedIdleTimeoutMs = idleTimeoutMs;
@@ -200,7 +241,10 @@ function normalizePersistedBinding(threadIdKey: string, raw: unknown): ThreadBin
       const baseBoundAt = boundAt > 0 ? boundAt : lastActivityAt;
       // Legacy expiresAt represented an absolute timestamp; map it to max-age and disable idle timeout.
       migratedIdleTimeoutMs = 0;
-      migratedMaxAgeMs = Math.max(1, legacyExpiresAt - Math.max(0, baseBoundAt));
+      migratedMaxAgeMs = Math.max(
+        1,
+        legacyExpiresAt - Math.max(0, baseBoundAt),
+      );
     }
   }
 
@@ -222,7 +266,10 @@ function normalizePersistedBinding(threadIdKey: string, raw: unknown): ThreadBin
   };
 }
 
-export function normalizeThreadBindingDurationMs(raw: unknown, defaultsTo: number): number {
+export function normalizeThreadBindingDurationMs(
+  raw: unknown,
+  defaultsTo: number,
+): number {
   if (typeof raw !== "number" || !Number.isFinite(raw)) {
     return defaultsTo;
   }
@@ -316,7 +363,10 @@ function unlinkSessionBinding(targetSessionKey: string, bindingKey: string) {
   }
 }
 
-export function toReusableWebhookKey(params: { accountId: string; channelId: string }): string {
+export function toReusableWebhookKey(params: {
+  accountId: string;
+  channelId: string;
+}): string {
   return `${params.accountId.trim().toLowerCase()}:${params.channelId.trim()}`;
 }
 
@@ -374,7 +424,9 @@ export function setBindingRecord(record: ThreadBindingRecord) {
   rememberReusableWebhook(record);
 }
 
-export function removeBindingRecord(bindingKeyRaw: string): ThreadBindingRecord | null {
+export function removeBindingRecord(
+  bindingKeyRaw: string,
+): ThreadBindingRecord | null {
   const key = bindingKeyRaw.trim();
   if (!key) {
     return null;
@@ -404,7 +456,8 @@ export function isRecentlyUnboundThreadWebhookMessage(params: {
   if (!bindingKey) {
     return false;
   }
-  const suppressed = RECENT_UNBOUND_WEBHOOK_ECHOES_BY_BINDING_KEY.get(bindingKey);
+  const suppressed =
+    RECENT_UNBOUND_WEBHOOK_ECHOES_BY_BINDING_KEY.get(bindingKey);
   if (!suppressed) {
     return false;
   }
@@ -431,12 +484,15 @@ export function shouldPersistBindingMutations(): boolean {
   return fs.existsSync(resolveThreadBindingsPath());
 }
 
-export function saveBindingsToDisk(params: { force?: boolean; minIntervalMs?: number } = {}) {
+export function saveBindingsToDisk(
+  params: { force?: boolean; minIntervalMs?: number } = {},
+) {
   if (!params.force && !shouldPersistAnyBindingState()) {
     return;
   }
   const minIntervalMs =
-    typeof params.minIntervalMs === "number" && Number.isFinite(params.minIntervalMs)
+    typeof params.minIntervalMs === "number" &&
+    Number.isFinite(params.minIntervalMs)
       ? Math.max(0, Math.floor(params.minIntervalMs))
       : 0;
   const now = Date.now();
@@ -474,7 +530,11 @@ export function ensureBindingsLoaded() {
     return;
   }
   const payload = raw as Partial<PersistedThreadBindingsPayload>;
-  if (payload.version !== 1 || !payload.bindings || typeof payload.bindings !== "object") {
+  if (
+    payload.version !== 1 ||
+    !payload.bindings ||
+    typeof payload.bindings !== "object"
+  ) {
     return;
   }
 

@@ -5,7 +5,10 @@ import type { ToolCard } from "../types/chat-types.ts";
 import { TOOL_INLINE_THRESHOLD } from "./constants.ts";
 import { extractTextCached } from "./message-extract.ts";
 import { isToolResultMessage } from "./message-normalizer.ts";
-import { formatToolOutputForSidebar, getTruncatedPreview } from "./tool-helpers.ts";
+import {
+  formatToolOutputForSidebar,
+  getTruncatedPreview,
+} from "./tool-helpers.ts";
 
 export function extractToolCards(message: unknown): ToolCard[] {
   const m = message as Record<string, unknown>;
@@ -36,7 +39,10 @@ export function extractToolCards(message: unknown): ToolCard[] {
     cards.push({ kind: "result", name, text });
   }
 
-  if (isToolResultMessage(message) && !cards.some((card) => card.kind === "result")) {
+  if (
+    isToolResultMessage(message) &&
+    !cards.some((card) => card.kind === "result")
+  ) {
     const name =
       (typeof m.toolName === "string" && m.toolName) ||
       (typeof m.tool_name === "string" && m.tool_name) ||
@@ -48,7 +54,10 @@ export function extractToolCards(message: unknown): ToolCard[] {
   return cards;
 }
 
-export function renderToolCardSidebar(card: ToolCard, onOpenSidebar?: (content: string) => void) {
+export function renderToolCardSidebar(
+  card: ToolCard,
+  onOpenSidebar?: (content: string) => void,
+) {
   const display = resolveToolDisplay({ name: card.name, args: card.args });
   const detail = formatToolDetail(display);
   const hasText = Boolean(card.text?.trim());
@@ -78,44 +87,44 @@ export function renderToolCardSidebar(card: ToolCard, onOpenSidebar?: (content: 
       @click=${handleClick}
       role=${canClick ? "button" : nothing}
       tabindex=${canClick ? "0" : nothing}
-      @keydown=${
-        canClick
-          ? (e: KeyboardEvent) => {
-              if (e.key !== "Enter" && e.key !== " ") {
-                return;
-              }
-              e.preventDefault();
-              handleClick?.();
+      @keydown=${canClick
+        ? (e: KeyboardEvent) => {
+            if (e.key !== "Enter" && e.key !== " ") {
+              return;
             }
-          : nothing
-      }
+            e.preventDefault();
+            handleClick?.();
+          }
+        : nothing}
     >
       <div class="chat-tool-card__header">
         <div class="chat-tool-card__title">
           <span class="chat-tool-card__icon">${icons[display.icon]}</span>
           <span>${display.label}</span>
         </div>
-        ${
-          canClick
-            ? html`<span class="chat-tool-card__action">${hasText ? "View" : ""} ${icons.check}</span>`
-            : nothing
-        }
-        ${isEmpty && !canClick ? html`<span class="chat-tool-card__status">${icons.check}</span>` : nothing}
+        ${canClick
+          ? html`<span class="chat-tool-card__action"
+              >${hasText ? "View" : ""} ${icons.check}</span
+            >`
+          : nothing}
+        ${isEmpty && !canClick
+          ? html`<span class="chat-tool-card__status">${icons.check}</span>`
+          : nothing}
       </div>
-      ${detail ? html`<div class="chat-tool-card__detail">${detail}</div>` : nothing}
-      ${
-        isEmpty
-          ? html`
-              <div class="chat-tool-card__status-text muted">Completed</div>
-            `
-          : nothing
-      }
-      ${
-        showCollapsed
-          ? html`<div class="chat-tool-card__preview mono">${getTruncatedPreview(card.text!)}</div>`
-          : nothing
-      }
-      ${showInline ? html`<div class="chat-tool-card__inline mono">${card.text}</div>` : nothing}
+      ${detail
+        ? html`<div class="chat-tool-card__detail">${detail}</div>`
+        : nothing}
+      ${isEmpty
+        ? html` <div class="chat-tool-card__status-text muted">Completed</div> `
+        : nothing}
+      ${showCollapsed
+        ? html`<div class="chat-tool-card__preview mono">
+            ${getTruncatedPreview(card.text!)}
+          </div>`
+        : nothing}
+      ${showInline
+        ? html`<div class="chat-tool-card__inline mono">${card.text}</div>`
+        : nothing}
     </div>
   `;
 }

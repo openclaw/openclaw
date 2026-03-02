@@ -6,7 +6,10 @@ import {
   replaceSubagentRunAfterSteer,
   markSubagentRunForSteerRestart,
 } from "../../../agents/subagent-registry.js";
-import { loadSessionStore, resolveStorePath } from "../../../config/sessions.js";
+import {
+  loadSessionStore,
+  resolveStorePath,
+} from "../../../config/sessions.js";
 import { callGateway } from "../../../gateway/call.js";
 import { logVerbose } from "../../../globals.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../../utils/message-channel.js";
@@ -46,7 +49,9 @@ export async function handleSubagentsSendAction(
     return targetResolution.reply;
   }
   if (steerRequested && targetResolution.entry.endedAt) {
-    return stopWithText(`${formatRunLabel(targetResolution.entry)} is already finished.`);
+    return stopWithText(
+      `${formatRunLabel(targetResolution.entry)} is already finished.`,
+    );
   }
 
   const { entry: targetSessionEntry } = loadSubagentSessionEntry(
@@ -58,7 +63,8 @@ export async function handleSubagentsSendAction(
     },
   );
   const targetSessionId =
-    typeof targetSessionEntry?.sessionId === "string" && targetSessionEntry.sessionId.trim()
+    typeof targetSessionEntry?.sessionId === "string" &&
+    targetSessionEntry.sessionId.trim()
       ? targetSessionEntry.sessionId.trim()
       : undefined;
 
@@ -69,7 +75,10 @@ export async function handleSubagentsSendAction(
       abortEmbeddedPiRun(targetSessionId);
     }
 
-    const cleared = clearSessionQueues([targetResolution.entry.childSessionKey, targetSessionId]);
+    const cleared = clearSessionQueues([
+      targetResolution.entry.childSessionKey,
+      targetSessionId,
+    ]);
     if (cleared.followupCleared > 0 || cleared.laneCleared > 0) {
       logVerbose(
         `subagents steer: cleared followups=${cleared.followupCleared} lane=${cleared.laneCleared} keys=${cleared.keys.join(",")}`,
@@ -107,7 +116,8 @@ export async function handleSubagentsSendAction(
       },
       timeoutMs: 10_000,
     });
-    const responseRunId = typeof response?.runId === "string" ? response.runId : undefined;
+    const responseRunId =
+      typeof response?.runId === "string" ? response.runId : undefined;
     if (responseRunId) {
       runId = responseRunId;
     }
@@ -116,7 +126,11 @@ export async function handleSubagentsSendAction(
       clearSubagentRunSteerRestart(targetResolution.entry.runId);
     }
     const messageText =
-      err instanceof Error ? err.message : typeof err === "string" ? err : "error";
+      err instanceof Error
+        ? err.message
+        : typeof err === "string"
+          ? err
+          : "error";
     return stopWithText(`send failed: ${messageText}`);
   }
 
@@ -139,21 +153,29 @@ export async function handleSubagentsSendAction(
     timeoutMs: waitMs + 2000,
   });
   if (wait?.status === "timeout") {
-    return stopWithText(`⏳ Subagent still running (run ${runId.slice(0, 8)}).`);
+    return stopWithText(
+      `⏳ Subagent still running (run ${runId.slice(0, 8)}).`,
+    );
   }
   if (wait?.status === "error") {
-    const waitError = typeof wait.error === "string" ? wait.error : "unknown error";
-    return stopWithText(`⚠️ Subagent error: ${waitError} (run ${runId.slice(0, 8)}).`);
+    const waitError =
+      typeof wait.error === "string" ? wait.error : "unknown error";
+    return stopWithText(
+      `⚠️ Subagent error: ${waitError} (run ${runId.slice(0, 8)}).`,
+    );
   }
 
   const history = await callGateway<{ messages: Array<unknown> }>({
     method: "chat.history",
     params: { sessionKey: targetResolution.entry.childSessionKey, limit: 50 },
   });
-  const filtered = stripToolMessages(Array.isArray(history?.messages) ? history.messages : []);
+  const filtered = stripToolMessages(
+    Array.isArray(history?.messages) ? history.messages : [],
+  );
   const last = filtered.length > 0 ? filtered[filtered.length - 1] : undefined;
   const replyText = last ? extractAssistantText(last) : undefined;
   return stopWithText(
-    replyText ?? `✅ Sent to ${formatRunLabel(targetResolution.entry)} (run ${runId.slice(0, 8)}).`,
+    replyText ??
+      `✅ Sent to ${formatRunLabel(targetResolution.entry)} (run ${runId.slice(0, 8)}).`,
   );
 }

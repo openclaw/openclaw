@@ -86,7 +86,10 @@ function parseMattermostTarget(raw: string): MattermostTarget {
   return { kind: "channel", id: trimmed };
 }
 
-async function resolveBotUser(baseUrl: string, token: string): Promise<MattermostUser> {
+async function resolveBotUser(
+  baseUrl: string,
+  token: string,
+): Promise<MattermostUser> {
   const key = cacheKey(baseUrl, token);
   const cached = botUserCache.get(key);
   if (cached) {
@@ -135,7 +138,10 @@ async function resolveTargetChannelId(params: {
     baseUrl: params.baseUrl,
     botToken: params.token,
   });
-  const channel = await createMattermostDirectChannel(client, [botUser.id, userId]);
+  const channel = await createMattermostDirectChannel(client, [
+    botUser.id,
+    userId,
+  ]);
   return channel.id;
 }
 

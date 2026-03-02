@@ -3,7 +3,10 @@ import {
   ListFoundationModelsCommand,
   type ListFoundationModelsCommandOutput,
 } from "@aws-sdk/client-bedrock";
-import type { BedrockDiscoveryConfig, ModelDefinitionConfig } from "../config/types.js";
+import type {
+  BedrockDiscoveryConfig,
+  ModelDefinitionConfig,
+} from "../config/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 
 const log = createSubsystemLogger("bedrock-discovery");
@@ -18,7 +21,9 @@ const DEFAULT_COST = {
   cacheWrite: 0,
 };
 
-type BedrockModelSummary = NonNullable<ListFoundationModelsCommandOutput["modelSummaries"]>[number];
+type BedrockModelSummary = NonNullable<
+  ListFoundationModelsCommandOutput["modelSummaries"]
+>[number];
 
 type BedrockDiscoveryCacheEntry = {
   expiresAt: number;
@@ -34,7 +39,9 @@ function normalizeProviderFilter(filter?: string[]): string[] {
     return [];
   }
   const normalized = new Set(
-    filter.map((entry) => entry.trim().toLowerCase()).filter((entry) => entry.length > 0),
+    filter
+      .map((entry) => entry.trim().toLowerCase())
+      .filter((entry) => entry.length > 0),
   );
   return Array.from(normalized).toSorted();
 }
@@ -58,7 +65,9 @@ function isActive(summary: BedrockModelSummary): boolean {
   return typeof status === "string" ? status.toUpperCase() === "ACTIVE" : false;
 }
 
-function mapInputModalities(summary: BedrockModelSummary): Array<"text" | "image"> {
+function mapInputModalities(
+  summary: BedrockModelSummary,
+): Array<"text" | "image"> {
   const inputs = summary.inputModalities ?? [];
   const mapped = new Set<"text" | "image">();
   for (const modality of inputs) {
@@ -77,12 +86,15 @@ function mapInputModalities(summary: BedrockModelSummary): Array<"text" | "image
 }
 
 function inferReasoningSupport(summary: BedrockModelSummary): boolean {
-  const haystack = `${summary.modelId ?? ""} ${summary.modelName ?? ""}`.toLowerCase();
+  const haystack =
+    `${summary.modelId ?? ""} ${summary.modelName ?? ""}`.toLowerCase();
   return haystack.includes("reasoning") || haystack.includes("thinking");
 }
 
 function resolveDefaultContextWindow(config?: BedrockDiscoveryConfig): number {
-  const value = Math.floor(config?.defaultContextWindow ?? DEFAULT_CONTEXT_WINDOW);
+  const value = Math.floor(
+    config?.defaultContextWindow ?? DEFAULT_CONTEXT_WINDOW,
+  );
   return value > 0 ? value : DEFAULT_CONTEXT_WINDOW;
 }
 
@@ -91,13 +103,18 @@ function resolveDefaultMaxTokens(config?: BedrockDiscoveryConfig): number {
   return value > 0 ? value : DEFAULT_MAX_TOKENS;
 }
 
-function matchesProviderFilter(summary: BedrockModelSummary, filter: string[]): boolean {
+function matchesProviderFilter(
+  summary: BedrockModelSummary,
+  filter: string[],
+): boolean {
   if (filter.length === 0) {
     return true;
   }
   const providerName =
     summary.providerName ??
-    (typeof summary.modelId === "string" ? summary.modelId.split(".")[0] : undefined);
+    (typeof summary.modelId === "string"
+      ? summary.modelId.split(".")[0]
+      : undefined);
   const normalized = providerName?.trim().toLowerCase();
   if (!normalized) {
     return false;
@@ -105,7 +122,10 @@ function matchesProviderFilter(summary: BedrockModelSummary, filter: string[]): 
   return filter.includes(normalized);
 }
 
-function shouldIncludeSummary(summary: BedrockModelSummary, filter: string[]): boolean {
+function shouldIncludeSummary(
+  summary: BedrockModelSummary,
+  filter: string[],
+): boolean {
   if (!summary.modelId?.trim()) {
     return false;
   }
@@ -153,7 +173,9 @@ export async function discoverBedrockModels(params: {
 }): Promise<ModelDefinitionConfig[]> {
   const refreshIntervalSeconds = Math.max(
     0,
-    Math.floor(params.config?.refreshInterval ?? DEFAULT_REFRESH_INTERVAL_SECONDS),
+    Math.floor(
+      params.config?.refreshInterval ?? DEFAULT_REFRESH_INTERVAL_SECONDS,
+    ),
   );
   const providerFilter = normalizeProviderFilter(params.config?.providerFilter);
   const defaultContextWindow = resolveDefaultContextWindow(params.config);
@@ -177,7 +199,8 @@ export async function discoverBedrockModels(params: {
     }
   }
 
-  const clientFactory = params.clientFactory ?? ((region: string) => new BedrockClient({ region }));
+  const clientFactory =
+    params.clientFactory ?? ((region: string) => new BedrockClient({ region }));
   const client = clientFactory(params.region);
 
   const discoveryPromise = (async () => {

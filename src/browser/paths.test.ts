@@ -10,8 +10,13 @@ import {
   resolveWritablePathWithinRoot,
 } from "./paths.js";
 
-async function createFixtureRoot(): Promise<{ baseDir: string; uploadsDir: string }> {
-  const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-browser-paths-"));
+async function createFixtureRoot(): Promise<{
+  baseDir: string;
+  uploadsDir: string;
+}> {
+  const baseDir = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-browser-paths-"),
+  );
   const uploadsDir = path.join(baseDir, "uploads");
   await fs.mkdir(uploadsDir, { recursive: true });
   return { baseDir, uploadsDir };
@@ -147,7 +152,11 @@ describe("resolveExistingPathsWithinRoot", () => {
       await withFixtureRoot(async ({ baseDir, uploadsDir }) => {
         const outsideDir = path.join(baseDir, "outside");
         await fs.mkdir(outsideDir, { recursive: true });
-        await fs.writeFile(path.join(outsideDir, "secret.txt"), "secret", "utf8");
+        await fs.writeFile(
+          path.join(outsideDir, "secret.txt"),
+          "secret",
+          "utf8",
+        );
         await fs.symlink(outsideDir, path.join(uploadsDir, "alias"));
 
         const result = await resolveWithinUploads({
@@ -339,7 +348,10 @@ describe("resolvePathsWithinRoot", () => {
     });
     expect(result).toEqual({
       ok: true,
-      paths: [path.resolve("/tmp/uploads", "a.txt"), path.resolve("/tmp/uploads", "nested/b.txt")],
+      paths: [
+        path.resolve("/tmp/uploads", "a.txt"),
+        path.resolve("/tmp/uploads", "nested/b.txt"),
+      ],
     });
   });
 

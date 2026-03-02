@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { resolveDefaultFeishuAccountId, resolveFeishuAccount } from "./accounts.js";
+import {
+  resolveDefaultFeishuAccountId,
+  resolveFeishuAccount,
+} from "./accounts.js";
 
 describe("resolveDefaultFeishuAccountId", () => {
   it("prefers channels.feishu.defaultAccount when configured", () => {
@@ -58,13 +61,20 @@ describe("resolveFeishuAccount", () => {
           defaultAccount: "router-d",
           accounts: {
             default: { enabled: true },
-            "router-d": { appId: "cli_router", appSecret: "secret_router", enabled: true },
+            "router-d": {
+              appId: "cli_router",
+              appSecret: "secret_router",
+              enabled: true,
+            },
           },
         },
       },
     };
 
-    const account = resolveFeishuAccount({ cfg: cfg as never, accountId: undefined });
+    const account = resolveFeishuAccount({
+      cfg: cfg as never,
+      accountId: undefined,
+    });
     expect(account.accountId).toBe("router-d");
     expect(account.configured).toBe(true);
     expect(account.appId).toBe("cli_router");
@@ -83,7 +93,10 @@ describe("resolveFeishuAccount", () => {
       },
     };
 
-    const account = resolveFeishuAccount({ cfg: cfg as never, accountId: "default" });
+    const account = resolveFeishuAccount({
+      cfg: cfg as never,
+      accountId: "default",
+    });
     expect(account.accountId).toBe("default");
     expect(account.appId).toBe("cli_default");
   });

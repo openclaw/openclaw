@@ -1,16 +1,22 @@
 import type { OutboundIdentity } from "../../../infra/outbound/identity.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
-import { sendMessageSlack, type SlackSendIdentity } from "../../../slack/send.js";
+import {
+  sendMessageSlack,
+  type SlackSendIdentity,
+} from "../../../slack/send.js";
 import type { ChannelOutboundAdapter } from "../types.js";
 
-function resolveSlackSendIdentity(identity?: OutboundIdentity): SlackSendIdentity | undefined {
+function resolveSlackSendIdentity(
+  identity?: OutboundIdentity,
+): SlackSendIdentity | undefined {
   if (!identity) {
     return undefined;
   }
   const username = identity.name?.trim() || undefined;
   const iconUrl = identity.avatarUrl?.trim() || undefined;
   const rawEmoji = identity.emoji?.trim();
-  const iconEmoji = !iconUrl && rawEmoji && /^:[^:\s]+:$/.test(rawEmoji) ? rawEmoji : undefined;
+  const iconEmoji =
+    !iconUrl && rawEmoji && /^:[^:\s]+:$/.test(rawEmoji) ? rawEmoji : undefined;
   if (!username && !iconUrl && !iconEmoji) {
     return undefined;
   }
@@ -60,7 +66,8 @@ async function sendSlackOutboundMessage(params: {
   const send = params.deps?.sendSlack ?? sendMessageSlack;
   // Use threadId fallback so routed tool notifications stay in the Slack thread.
   const threadTs =
-    params.replyToId ?? (params.threadId != null ? String(params.threadId) : undefined);
+    params.replyToId ??
+    (params.threadId != null ? String(params.threadId) : undefined);
   const hookResult = await applySlackMessageSendingHooks({
     to: params.to,
     text: params.text,
@@ -119,14 +126,27 @@ export const slackOutbound: ChannelOutboundAdapter = {
       return lastResult;
     }
     const limit = slackOutbound.textChunkLimit;
-    const chunks = limit && slackOutbound.chunker ? slackOutbound.chunker(text, limit) : [text];
-    let lastResult: Awaited<ReturnType<NonNullable<typeof slackOutbound.sendText>>>;
+    const chunks =
+      limit && slackOutbound.chunker
+        ? slackOutbound.chunker(text, limit)
+        : [text];
+    let lastResult: Awaited<
+      ReturnType<NonNullable<typeof slackOutbound.sendText>>
+    >;
     for (const chunk of chunks) {
       lastResult = await slackOutbound.sendText!({ ...ctx, text: chunk });
     }
     return lastResult!;
   },
-  sendText: async ({ to, text, accountId, deps, replyToId, threadId, identity }) => {
+  sendText: async ({
+    to,
+    text,
+    accountId,
+    deps,
+    replyToId,
+    threadId,
+    identity,
+  }) => {
     return await sendSlackOutboundMessage({
       to,
       text,

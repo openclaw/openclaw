@@ -26,13 +26,17 @@ describe("irc protocol", () => {
   });
 
   it("sanitizes outbound text to prevent command injection", () => {
-    expect(sanitizeIrcOutboundText("hello\\r\\nJOIN #oops")).toBe("hello JOIN #oops");
+    expect(sanitizeIrcOutboundText("hello\\r\\nJOIN #oops")).toBe(
+      "hello JOIN #oops",
+    );
     expect(sanitizeIrcOutboundText("\\u0001test\\u0000")).toBe("test");
   });
 
   it("validates targets and rejects control characters", () => {
     expect(sanitizeIrcTarget("#openclaw")).toBe("#openclaw");
-    expect(() => sanitizeIrcTarget("#bad\\nPING")).toThrow(/Invalid IRC target/);
+    expect(() => sanitizeIrcTarget("#bad\\nPING")).toThrow(
+      /Invalid IRC target/,
+    );
     expect(() => sanitizeIrcTarget(" user")).toThrow(/Invalid IRC target/);
   });
 

@@ -18,7 +18,10 @@ const ZERO_USAGE: AssistantMessage["usage"] = {
 export function makeAssistantMessageFixture(
   overrides: Partial<AssistantMessage> = {},
 ): AssistantMessage {
-  const errorText = typeof overrides.errorMessage === "string" ? overrides.errorMessage : "error";
+  const errorText =
+    typeof overrides.errorMessage === "string"
+      ? overrides.errorMessage
+      : "error";
   return {
     role: "assistant",
     api: "openai-responses",

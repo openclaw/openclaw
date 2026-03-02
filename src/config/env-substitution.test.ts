@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { MissingEnvVarError, resolveConfigEnvVars } from "./env-substitution.js";
+import {
+  MissingEnvVarError,
+  resolveConfigEnvVars,
+} from "./env-substitution.js";
 
 describe("resolveConfigEnvVars", () => {
   describe("basic substitution", () => {
@@ -280,7 +283,9 @@ describe("resolveConfigEnvVars", () => {
       ];
 
       for (const scenario of scenarios) {
-        expect(resolveConfigEnvVars(scenario.config, {})).toEqual(scenario.expected);
+        expect(resolveConfigEnvVars(scenario.config, {})).toEqual(
+          scenario.expected,
+        );
       }
     });
   });

@@ -10,7 +10,8 @@ export function resolveOriginMessageProvider(params: {
   provider?: string;
 }): string | undefined {
   return (
-    normalizeProviderValue(params.originatingChannel) ?? normalizeProviderValue(params.provider)
+    normalizeProviderValue(params.originatingChannel) ??
+    normalizeProviderValue(params.provider)
   );
 }
 

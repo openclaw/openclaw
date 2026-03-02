@@ -1,6 +1,8 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
 
-function isOpenAiCompletionsModel(model: Model<Api>): model is Model<"openai-completions"> {
+function isOpenAiCompletionsModel(
+  model: Model<Api>,
+): model is Model<"openai-completions"> {
   return model.api === "openai-completions";
 }
 
@@ -12,7 +14,9 @@ function isDashScopeCompatibleEndpoint(baseUrl: string): boolean {
   );
 }
 
-function isAnthropicMessagesModel(model: Model<Api>): model is Model<"anthropic-messages"> {
+function isAnthropicMessagesModel(
+  model: Model<Api>,
+): model is Model<"anthropic-messages"> {
   return model.api === "anthropic-messages";
 }
 
@@ -45,8 +49,12 @@ export function normalizeModelCompat(model: Model<Api>): Model<Api> {
     model.provider === "moonshot" ||
     baseUrl.includes("moonshot.ai") ||
     baseUrl.includes("moonshot.cn");
-  const isDashScope = model.provider === "dashscope" || isDashScopeCompatibleEndpoint(baseUrl);
-  if ((!isZai && !isMoonshot && !isDashScope) || !isOpenAiCompletionsModel(model)) {
+  const isDashScope =
+    model.provider === "dashscope" || isDashScopeCompatibleEndpoint(baseUrl);
+  if (
+    (!isZai && !isMoonshot && !isDashScope) ||
+    !isOpenAiCompletionsModel(model)
+  ) {
     return model;
   }
 

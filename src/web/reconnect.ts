@@ -17,7 +17,10 @@ export const DEFAULT_RECONNECT_POLICY: ReconnectPolicy = {
   maxAttempts: 12,
 };
 
-export function resolveHeartbeatSeconds(cfg: OpenClawConfig, overrideSeconds?: number): number {
+export function resolveHeartbeatSeconds(
+  cfg: OpenClawConfig,
+  overrideSeconds?: number,
+): number {
   const candidate = overrideSeconds ?? cfg.web?.heartbeatSeconds;
   if (typeof candidate === "number" && candidate > 0) {
     return candidate;

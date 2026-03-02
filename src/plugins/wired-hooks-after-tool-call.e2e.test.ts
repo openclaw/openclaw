@@ -109,10 +109,17 @@ describe("after_tool_call hook wiring", () => {
     expect(hookMocks.runner.runAfterToolCall).toHaveBeenCalledTimes(1);
     expect(hookMocks.runner.runBeforeToolCall).not.toHaveBeenCalled();
 
-    const firstCall = (hookMocks.runner.runAfterToolCall as ReturnType<typeof vi.fn>).mock.calls[0];
+    const firstCall = (
+      hookMocks.runner.runAfterToolCall as ReturnType<typeof vi.fn>
+    ).mock.calls[0];
     expect(firstCall).toBeDefined();
     const event = firstCall?.[0] as
-      | { toolName?: string; params?: unknown; error?: unknown; durationMs?: unknown }
+      | {
+          toolName?: string;
+          params?: unknown;
+          error?: unknown;
+          durationMs?: unknown;
+        }
       | undefined;
     const context = firstCall?.[1] as { toolName?: string } | undefined;
     expect(event).toBeDefined();
@@ -155,7 +162,9 @@ describe("after_tool_call hook wiring", () => {
 
     expect(hookMocks.runner.runAfterToolCall).toHaveBeenCalledTimes(1);
 
-    const firstCall = (hookMocks.runner.runAfterToolCall as ReturnType<typeof vi.fn>).mock.calls[0];
+    const firstCall = (
+      hookMocks.runner.runAfterToolCall as ReturnType<typeof vi.fn>
+    ).mock.calls[0];
     expect(firstCall).toBeDefined();
     const event = firstCall?.[0] as { error?: unknown } | undefined;
     expect(event).toBeDefined();

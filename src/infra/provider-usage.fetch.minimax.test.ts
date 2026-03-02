@@ -1,10 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { createProviderUsageFetch, makeResponse } from "../test-utils/provider-usage-fetch.js";
+import {
+  createProviderUsageFetch,
+  makeResponse,
+} from "../test-utils/provider-usage-fetch.js";
 import { fetchMinimaxUsage } from "./provider-usage.fetch.minimax.js";
 
 describe("fetchMinimaxUsage", () => {
   it("returns HTTP errors for failed requests", async () => {
-    const mockFetch = createProviderUsageFetch(async () => makeResponse(502, "bad gateway"));
+    const mockFetch = createProviderUsageFetch(async () =>
+      makeResponse(502, "bad gateway"),
+    );
     const result = await fetchMinimaxUsage("key", 5000, mockFetch);
 
     expect(result.error).toBe("HTTP 502");
@@ -12,7 +17,9 @@ describe("fetchMinimaxUsage", () => {
   });
 
   it("returns invalid JSON when payload cannot be parsed", async () => {
-    const mockFetch = createProviderUsageFetch(async () => makeResponse(200, "{not-json"));
+    const mockFetch = createProviderUsageFetch(async () =>
+      makeResponse(200, "{not-json"),
+    );
     const result = await fetchMinimaxUsage("key", 5000, mockFetch);
 
     expect(result.error).toBe("Invalid JSON");
@@ -36,7 +43,8 @@ describe("fetchMinimaxUsage", () => {
 
   it("derives usage from used/total fields and includes reset + plan", async () => {
     const mockFetch = createProviderUsageFetch(async (_url, init) => {
-      const headers = (init?.headers as Record<string, string> | undefined) ?? {};
+      const headers =
+        (init?.headers as Record<string, string> | undefined) ?? {};
       expect(headers.Authorization).toBe("Bearer key");
       expect(headers["MM-API-Source"]).toBe("OpenClaw");
 
@@ -146,6 +154,8 @@ describe("fetchMinimaxUsage", () => {
     );
 
     const result = await fetchMinimaxUsage("key", 5000, mockFetch);
-    expect(result.windows).toEqual([{ label: "1h", usedPercent: 20, resetAt: undefined }]);
+    expect(result.windows).toEqual([
+      { label: "1h", usedPercent: 20, resetAt: undefined },
+    ]);
   });
 });

@@ -1,7 +1,10 @@
 import type { PluginRuntime } from "openclaw/plugin-sdk";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "./test-mocks.js";
-import { downloadBlueBubblesAttachment, sendBlueBubblesAttachment } from "./attachments.js";
+import {
+  downloadBlueBubblesAttachment,
+  sendBlueBubblesAttachment,
+} from "./attachments.js";
 import { getCachedBlueBubblesPrivateApiStatus } from "./probe.js";
 import { setBlueBubblesRuntime } from "./runtime.js";
 import {
@@ -17,7 +20,10 @@ const fetchRemoteMediaMock = vi.fn(
   async (params: {
     url: string;
     maxBytes?: number;
-    fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+    fetchImpl?: (
+      input: RequestInfo | URL,
+      init?: RequestInit,
+    ) => Promise<Response>;
   }) => {
     const fetchFn = params.fetchImpl ?? fetch;
     const res = await fetchFn(params.url);
@@ -28,8 +34,13 @@ const fetchRemoteMediaMock = vi.fn(
       );
     }
     const buffer = Buffer.from(await res.arrayBuffer());
-    if (typeof params.maxBytes === "number" && buffer.byteLength > params.maxBytes) {
-      const error = new Error(`payload exceeds maxBytes ${params.maxBytes}`) as Error & {
+    if (
+      typeof params.maxBytes === "number" &&
+      buffer.byteLength > params.maxBytes
+    ) {
+      const error = new Error(
+        `payload exceeds maxBytes ${params.maxBytes}`,
+      ) as Error & {
         code?: string;
       };
       error.code = "max_bytes";
@@ -64,7 +75,10 @@ describe("downloadBlueBubblesAttachment", () => {
     setBlueBubblesRuntime(runtimeStub);
   });
 
-  async function expectAttachmentTooLarge(params: { bufferBytes: number; maxBytes?: number }) {
+  async function expectAttachmentTooLarge(params: {
+    bufferBytes: number;
+    maxBytes?: number;
+  }) {
     const largeBuffer = new Uint8Array(params.bufferBytes);
     mockFetch.mockResolvedValueOnce({
       ok: true,
@@ -166,7 +180,9 @@ describe("downloadBlueBubblesAttachment", () => {
       arrayBuffer: () => Promise.resolve(mockBuffer.buffer),
     });
 
-    const attachment: BlueBubblesAttachment = { guid: "att/with/special chars" };
+    const attachment: BlueBubblesAttachment = {
+      guid: "att/with/special chars",
+    };
     await downloadBlueBubblesAttachment(attachment, {
       serverUrl: "http://localhost:1234",
       password: "test",
@@ -290,7 +306,10 @@ describe("downloadBlueBubblesAttachment", () => {
       },
     });
 
-    const fetchMediaArgs = fetchRemoteMediaMock.mock.calls[0][0] as Record<string, unknown>;
+    const fetchMediaArgs = fetchRemoteMediaMock.mock.calls[0][0] as Record<
+      string,
+      unknown
+    >;
     expect(fetchMediaArgs.ssrfPolicy).toEqual({ allowPrivateNetwork: true });
   });
 
@@ -308,8 +327,13 @@ describe("downloadBlueBubblesAttachment", () => {
       password: "test",
     });
 
-    const fetchMediaArgs = fetchRemoteMediaMock.mock.calls[0][0] as Record<string, unknown>;
-    expect(fetchMediaArgs.ssrfPolicy).toEqual({ allowedHostnames: ["localhost"] });
+    const fetchMediaArgs = fetchRemoteMediaMock.mock.calls[0][0] as Record<
+      string,
+      unknown
+    >;
+    expect(fetchMediaArgs.ssrfPolicy).toEqual({
+      allowedHostnames: ["localhost"],
+    });
   });
 
   it("auto-allowlists private IP serverUrl hostname when allowPrivateNetwork is not set", async () => {
@@ -326,8 +350,13 @@ describe("downloadBlueBubblesAttachment", () => {
       password: "test",
     });
 
-    const fetchMediaArgs = fetchRemoteMediaMock.mock.calls[0][0] as Record<string, unknown>;
-    expect(fetchMediaArgs.ssrfPolicy).toEqual({ allowedHostnames: ["192.168.1.5"] });
+    const fetchMediaArgs = fetchRemoteMediaMock.mock.calls[0][0] as Record<
+      string,
+      unknown
+    >;
+    expect(fetchMediaArgs.ssrfPolicy).toEqual({
+      allowedHostnames: ["192.168.1.5"],
+    });
   });
 });
 
@@ -490,7 +519,9 @@ describe("sendBlueBubblesAttachment", () => {
     });
 
     expect(runtimeLog).toHaveBeenCalledTimes(1);
-    expect(runtimeLog.mock.calls[0]?.[0]).toContain("Private API status unknown");
+    expect(runtimeLog.mock.calls[0]?.[0]).toContain(
+      "Private API status unknown",
+    );
     const body = mockFetch.mock.calls[0][1]?.body as Uint8Array;
     const bodyText = decodeBody(body);
     expect(bodyText).not.toContain('name="selectedMessageGuid"');

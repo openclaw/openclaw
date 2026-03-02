@@ -180,7 +180,11 @@ function formatTemplateValue(value: unknown): string {
   if (typeof value === "string") {
     return value;
   }
-  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+  if (
+    typeof value === "number" ||
+    typeof value === "boolean" ||
+    typeof value === "bigint"
+  ) {
     return String(value);
   }
   if (typeof value === "symbol" || typeof value === "function") {
@@ -195,7 +199,11 @@ function formatTemplateValue(value: unknown): string {
         if (typeof entry === "string") {
           return [entry];
         }
-        if (typeof entry === "number" || typeof entry === "boolean" || typeof entry === "bigint") {
+        if (
+          typeof entry === "number" ||
+          typeof entry === "boolean" ||
+          typeof entry === "bigint"
+        ) {
           return [String(entry)];
         }
         return [];

@@ -1,16 +1,29 @@
 import type { Command } from "commander";
 import { callGateway, randomIdempotencyKey } from "../../gateway/call.js";
 import { resolveNodeIdFromCandidates } from "../../shared/node-match.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../../utils/message-channel.js";
 import { withProgress } from "../progress.js";
 import { parseNodeList, parsePairingList } from "./format.js";
 import type { NodeListNode, NodesRpcOpts } from "./types.js";
 
-export const nodesCallOpts = (cmd: Command, defaults?: { timeoutMs?: number }) =>
+export const nodesCallOpts = (
+  cmd: Command,
+  defaults?: { timeoutMs?: number },
+) =>
   cmd
-    .option("--url <url>", "Gateway WebSocket URL (defaults to gateway.remote.url when configured)")
+    .option(
+      "--url <url>",
+      "Gateway WebSocket URL (defaults to gateway.remote.url when configured)",
+    )
     .option("--token <token>", "Gateway token (if required)")
-    .option("--timeout <ms>", "Timeout in ms", String(defaults?.timeoutMs ?? 10_000))
+    .option(
+      "--timeout <ms>",
+      "Timeout in ms",
+      String(defaults?.timeoutMs ?? 10_000),
+    )
     .option("--json", "Output JSON", false);
 
 export const callGatewayCli = async (
@@ -31,7 +44,8 @@ export const callGatewayCli = async (
         token: opts.token,
         method,
         params,
-        timeoutMs: callOpts?.transportTimeoutMs ?? Number(opts.timeout ?? 10_000),
+        timeoutMs:
+          callOpts?.transportTimeoutMs ?? Number(opts.timeout ?? 10_000),
         clientName: GATEWAY_CLIENT_NAMES.CLI,
         mode: GATEWAY_CLIENT_MODES.CLI,
       }),
@@ -50,7 +64,10 @@ export function buildNodeInvokeParams(params: {
     params: params.params,
     idempotencyKey: params.idempotencyKey ?? randomIdempotencyKey(),
   };
-  if (typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)) {
+  if (
+    typeof params.timeoutMs === "number" &&
+    Number.isFinite(params.timeoutMs)
+  ) {
     invokeParams.timeoutMs = params.timeoutMs;
   }
   return invokeParams;

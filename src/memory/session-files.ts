@@ -18,7 +18,9 @@ export type SessionFileEntry = {
   lineMap: number[];
 };
 
-export async function listSessionFilesForAgent(agentId: string): Promise<string[]> {
+export async function listSessionFilesForAgent(
+  agentId: string,
+): Promise<string[]> {
   const dir = resolveSessionTranscriptsDirForAgent(agentId);
   try {
     const entries = await fs.readdir(dir, { withFileTypes: true });
@@ -71,7 +73,9 @@ export function extractSessionText(content: unknown): string | null {
   return parts.join(" ");
 }
 
-export async function buildSessionEntry(absPath: string): Promise<SessionFileEntry | null> {
+export async function buildSessionEntry(
+  absPath: string,
+): Promise<SessionFileEntry | null> {
   try {
     const stat = await fs.stat(absPath);
     const raw = await fs.readFile(absPath, "utf-8");

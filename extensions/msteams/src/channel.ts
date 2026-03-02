@@ -1,4 +1,8 @@
-import type { ChannelMessageActionName, ChannelPlugin, OpenClawConfig } from "openclaw/plugin-sdk";
+import type {
+  ChannelMessageActionName,
+  ChannelPlugin,
+  OpenClawConfig,
+} from "openclaw/plugin-sdk";
 import {
   buildBaseChannelStatusSummary,
   buildChannelConfigSchema,
@@ -9,7 +13,10 @@ import {
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
 } from "openclaw/plugin-sdk";
-import { listMSTeamsDirectoryGroupsLive, listMSTeamsDirectoryPeersLive } from "./directory-live.js";
+import {
+  listMSTeamsDirectoryGroupsLive,
+  listMSTeamsDirectoryPeersLive,
+} from "./directory-live.js";
 import { msteamsOnboardingAdapter } from "./onboarding.js";
 import { msteamsOutbound } from "./outbound.js";
 import { resolveMSTeamsGroupToolPolicy } from "./policy.js";
@@ -113,7 +120,8 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount> = {
       }
       return next;
     },
-    isConfigured: (_account, cfg) => Boolean(resolveMSTeamsCredentials(cfg.channels?.msteams)),
+    isConfigured: (_account, cfg) =>
+      Boolean(resolveMSTeamsCredentials(cfg.channels?.msteams)),
     describeAccount: (account) => ({
       accountId: account.accountId,
       enabled: account.enabled,
@@ -125,7 +133,8 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount> = {
         .map((entry) => String(entry).trim())
         .filter(Boolean)
         .map((entry) => entry.toLowerCase()),
-    resolveDefaultTo: ({ cfg }) => cfg.channels?.msteams?.defaultTo?.trim() || undefined,
+    resolveDefaultTo: ({ cfg }) =>
+      cfg.channels?.msteams?.defaultTo?.trim() || undefined,
   },
   security: {
     collectWarnings: ({ cfg }) => {
@@ -250,7 +259,8 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount> = {
       const stripPrefix = (value: string) => normalizeMSTeamsUserInput(value);
 
       if (kind === "user") {
-        const pending: Array<{ input: string; query: string; index: number }> = [];
+        const pending: Array<{ input: string; query: string; index: number }> =
+          [];
         results.forEach((entry, index) => {
           const trimmed = entry.input.trim();
           if (!trimmed) {
@@ -296,7 +306,8 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount> = {
         return results;
       }
 
-      const pending: Array<{ input: string; query: string; index: number }> = [];
+      const pending: Array<{ input: string; query: string; index: number }> =
+        [];
       results.forEach((entry, index) => {
         const trimmed = entry.input.trim();
         if (!trimmed) {
@@ -307,7 +318,9 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount> = {
         if (conversationId !== null) {
           entry.resolved = Boolean(conversationId);
           entry.id = conversationId || undefined;
-          entry.note = conversationId ? "conversation id" : "empty conversation id";
+          entry.note = conversationId
+            ? "conversation id"
+            : "empty conversation id";
           return;
         }
         const parsed = parseMSTeamsTeamChannelInput(trimmed);
@@ -315,7 +328,9 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount> = {
           entry.note = "missing team";
           return;
         }
-        const query = parsed.channel ? `${parsed.team}/${parsed.channel}` : parsed.team;
+        const query = parsed.channel
+          ? `${parsed.team}/${parsed.channel}`
+          : parsed.team;
         pending.push({ input: entry.input, query, index });
       });
 
@@ -394,7 +409,12 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount> = {
         if (!to) {
           return {
             isError: true,
-            content: [{ type: "text" as const, text: "Card send requires a target (to)." }],
+            content: [
+              {
+                type: "text" as const,
+                text: "Card send requires a target (to).",
+              },
+            ],
             details: { error: "Card send requires a target (to)." },
           };
         }
@@ -415,7 +435,11 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount> = {
               }),
             },
           ],
-          details: { ok: true, channel: "msteams", messageId: result.messageId },
+          details: {
+            ok: true,
+            channel: "msteams",
+            messageId: result.messageId,
+          },
         };
       }
       // Return null to fall through to default handler
@@ -424,7 +448,9 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount> = {
   },
   outbound: msteamsOutbound,
   status: {
-    defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID, { port: null }),
+    defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID, {
+      port: null,
+    }),
     buildChannelSummary: ({ snapshot }) => ({
       ...buildBaseChannelStatusSummary(snapshot),
       port: snapshot.port ?? null,

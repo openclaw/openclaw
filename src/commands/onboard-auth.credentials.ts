@@ -15,10 +15,14 @@ import { PROVIDER_ENV_VARS } from "../secrets/provider-env-vars.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import type { SecretInputMode } from "./onboard-types.js";
 export { CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF } from "../agents/cloudflare-ai-gateway.js";
-export { MISTRAL_DEFAULT_MODEL_REF, XAI_DEFAULT_MODEL_REF } from "./onboard-auth.models.js";
+export {
+  MISTRAL_DEFAULT_MODEL_REF,
+  XAI_DEFAULT_MODEL_REF,
+} from "./onboard-auth.models.js";
 export { KILOCODE_DEFAULT_MODEL_REF };
 
-const resolveAuthAgentDir = (agentDir?: string) => agentDir ?? resolveOpenClawAgentDir();
+const resolveAuthAgentDir = (agentDir?: string) =>
+  agentDir ?? resolveOpenClawAgentDir();
 
 const ENV_REF_PATTERN = /^\$\{([A-Z][A-Z0-9_]*)\}$/;
 
@@ -119,7 +123,8 @@ function resolveSiblingAgentDirs(primaryAgentDir: string): string[] {
   const parentOfAgent = path.dirname(normalized);
   const candidateAgentsRoot = path.dirname(parentOfAgent);
   const looksLikeStandardLayout =
-    path.basename(normalized) === "agent" && path.basename(candidateAgentsRoot) === "agents";
+    path.basename(normalized) === "agent" &&
+    path.basename(candidateAgentsRoot) === "agents";
 
   const agentsRoot = looksLikeStandardLayout
     ? candidateAgentsRoot
@@ -157,7 +162,9 @@ export async function writeOAuthCredentials(
   options?: WriteOAuthCredentialsOptions,
 ): Promise<string> {
   const email =
-    typeof creds.email === "string" && creds.email.trim() ? creds.email.trim() : "default";
+    typeof creds.email === "string" && creds.email.trim()
+      ? creds.email.trim()
+      : "default";
   const profileId = `${provider}:${email}`;
   const resolvedAgentDir = path.resolve(resolveAuthAgentDir(agentDir));
   const targetAgentDirs = options?.syncSiblingAgents
@@ -331,10 +338,12 @@ export async function setVeniceApiKey(
 export const ZAI_DEFAULT_MODEL_REF = "zai/glm-5";
 export const XIAOMI_DEFAULT_MODEL_REF = "xiaomi/mimo-v2-flash";
 export const OPENROUTER_DEFAULT_MODEL_REF = "openrouter/auto";
-export const HUGGINGFACE_DEFAULT_MODEL_REF = "huggingface/deepseek-ai/DeepSeek-R1";
+export const HUGGINGFACE_DEFAULT_MODEL_REF =
+  "huggingface/deepseek-ai/DeepSeek-R1";
 export const TOGETHER_DEFAULT_MODEL_REF = "together/moonshotai/Kimi-K2.5";
 export const LITELLM_DEFAULT_MODEL_REF = "litellm/claude-opus-4-6";
-export const VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF = "vercel-ai-gateway/anthropic/claude-opus-4.6";
+export const VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF =
+  "vercel-ai-gateway/anthropic/claude-opus-4.6";
 
 export async function setZaiApiKey(
   key: SecretInput,
@@ -370,7 +379,12 @@ export async function setOpenrouterApiKey(
   const safeKey = typeof key === "string" && key === "undefined" ? "" : key;
   upsertAuthProfile({
     profileId: "openrouter:default",
-    credential: buildApiKeyCredential("openrouter", safeKey, undefined, options),
+    credential: buildApiKeyCredential(
+      "openrouter",
+      safeKey,
+      undefined,
+      options,
+    ),
     agentDir: resolveAuthAgentDir(agentDir),
   });
 }
@@ -418,7 +432,12 @@ export async function setVercelAiGatewayApiKey(
 ) {
   upsertAuthProfile({
     profileId: "vercel-ai-gateway:default",
-    credential: buildApiKeyCredential("vercel-ai-gateway", key, undefined, options),
+    credential: buildApiKeyCredential(
+      "vercel-ai-gateway",
+      key,
+      undefined,
+      options,
+    ),
     agentDir: resolveAuthAgentDir(agentDir),
   });
 }
@@ -471,7 +490,11 @@ export function setQianfanApiKey(
   });
 }
 
-export function setXaiApiKey(key: SecretInput, agentDir?: string, options?: ApiKeyStorageOptions) {
+export function setXaiApiKey(
+  key: SecretInput,
+  agentDir?: string,
+  options?: ApiKeyStorageOptions,
+) {
   upsertAuthProfile({
     profileId: "xai:default",
     credential: buildApiKeyCredential("xai", key, undefined, options),

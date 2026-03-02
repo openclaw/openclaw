@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import { TuiStreamAssembler } from "./tui-stream-assembler.js";
 
 const text = (value: string) => ({ type: "text", text: value }) as const;
-const thinking = (value: string) => ({ type: "thinking", thinking: value }) as const;
+const thinking = (value: string) =>
+  ({ type: "thinking", thinking: value }) as const;
 const toolUse = () => ({ type: "tool_use", name: "search" }) as const;
 
 const messageWithContent = (content: readonly Record<string, unknown>[]) =>
@@ -11,7 +12,10 @@ const messageWithContent = (content: readonly Record<string, unknown>[]) =>
     content,
   }) as const;
 
-const TEXT_ONLY_TWO_BLOCKS = messageWithContent([text("Draft line 1"), text("Draft line 2")]);
+const TEXT_ONLY_TWO_BLOCKS = messageWithContent([
+  text("Draft line 1"),
+  text("Draft line 2"),
+]);
 
 type FinalizeBoundaryCase = {
   name: string;
@@ -23,13 +27,21 @@ type FinalizeBoundaryCase = {
 const FINALIZE_BOUNDARY_CASES: FinalizeBoundaryCase[] = [
   {
     name: "preserves streamed text when tool-boundary final payload drops prefix blocks",
-    streamedContent: [text("Before tool call"), toolUse(), text("After tool call")],
+    streamedContent: [
+      text("Before tool call"),
+      toolUse(),
+      text("After tool call"),
+    ],
     finalContent: [toolUse(), text("After tool call")],
     expected: "Before tool call\nAfter tool call",
   },
   {
     name: "preserves streamed text when streamed run had non-text and final drops suffix blocks",
-    streamedContent: [text("Before tool call"), toolUse(), text("After tool call")],
+    streamedContent: [
+      text("Before tool call"),
+      toolUse(),
+      text("After tool call"),
+    ],
     finalContent: [text("Before tool call")],
     expected: "Before tool call\nAfter tool call",
   },
@@ -47,7 +59,11 @@ const FINALIZE_BOUNDARY_CASES: FinalizeBoundaryCase[] = [
   },
   {
     name: "prefers final replacement text when payload is not a boundary subset",
-    streamedContent: [text("Before tool call"), toolUse(), text("After tool call")],
+    streamedContent: [
+      text("Before tool call"),
+      toolUse(),
+      text("After tool call"),
+    ],
     finalContent: [toolUse(), text("Replacement")],
     expected: "Replacement",
   },
@@ -62,10 +78,18 @@ const FINALIZE_BOUNDARY_CASES: FinalizeBoundaryCase[] = [
 describe("TuiStreamAssembler", () => {
   it("keeps thinking before content even when thinking arrives later", () => {
     const assembler = new TuiStreamAssembler();
-    const first = assembler.ingestDelta("run-1", messageWithContent([text("Hello")]), true);
+    const first = assembler.ingestDelta(
+      "run-1",
+      messageWithContent([text("Hello")]),
+      true,
+    );
     expect(first).toBe("Hello");
 
-    const second = assembler.ingestDelta("run-1", messageWithContent([thinking("Brain")]), true);
+    const second = assembler.ingestDelta(
+      "run-1",
+      messageWithContent([thinking("Brain")]),
+      true,
+    );
     expect(second).toBe("[thinking]\nBrain\n\nHello");
   });
 
@@ -81,22 +105,42 @@ describe("TuiStreamAssembler", () => {
 
   it("falls back to streamed text on empty final payload", () => {
     const assembler = new TuiStreamAssembler();
-    assembler.ingestDelta("run-3", messageWithContent([text("Streamed")]), false);
-    const finalText = assembler.finalize("run-3", { role: "assistant", content: [] }, false);
+    assembler.ingestDelta(
+      "run-3",
+      messageWithContent([text("Streamed")]),
+      false,
+    );
+    const finalText = assembler.finalize(
+      "run-3",
+      { role: "assistant", content: [] },
+      false,
+    );
     expect(finalText).toBe("Streamed");
   });
 
   it("returns null when delta text is unchanged", () => {
     const assembler = new TuiStreamAssembler();
-    const first = assembler.ingestDelta("run-4", messageWithContent([text("Repeat")]), false);
+    const first = assembler.ingestDelta(
+      "run-4",
+      messageWithContent([text("Repeat")]),
+      false,
+    );
     expect(first).toBe("Repeat");
-    const second = assembler.ingestDelta("run-4", messageWithContent([text("Repeat")]), false);
+    const second = assembler.ingestDelta(
+      "run-4",
+      messageWithContent([text("Repeat")]),
+      false,
+    );
     expect(second).toBeNull();
   });
 
   it("keeps streamed delta text when incoming tool boundary drops a block", () => {
     const assembler = new TuiStreamAssembler();
-    const first = assembler.ingestDelta("run-delta-boundary", TEXT_ONLY_TWO_BLOCKS, false);
+    const first = assembler.ingestDelta(
+      "run-delta-boundary",
+      TEXT_ONLY_TWO_BLOCKS,
+      false,
+    );
     expect(first).toBe("Draft line 1\nDraft line 2");
 
     const second = assembler.ingestDelta(
@@ -110,7 +154,11 @@ describe("TuiStreamAssembler", () => {
   for (const testCase of FINALIZE_BOUNDARY_CASES) {
     it(testCase.name, () => {
       const assembler = new TuiStreamAssembler();
-      assembler.ingestDelta("run-boundary", messageWithContent(testCase.streamedContent), false);
+      assembler.ingestDelta(
+        "run-boundary",
+        messageWithContent(testCase.streamedContent),
+        false,
+      );
       const finalText = assembler.finalize(
         "run-boundary",
         messageWithContent(testCase.finalContent),

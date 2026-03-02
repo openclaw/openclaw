@@ -5,7 +5,8 @@ import { unauthorizedHintForMessage } from "./rpc.js";
 
 export function getNodesTheme() {
   const rich = isRich();
-  const color = (fn: (value: string) => string) => (value: string) => (rich ? fn(value) : value);
+  const color = (fn: (value: string) => string) => (value: string) =>
+    rich ? fn(value) : value;
   return {
     rich,
     heading: color(theme.heading),

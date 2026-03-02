@@ -2,7 +2,9 @@ import { normalizeAccountId } from "../../utils/account-id.js";
 import { resolveMessageChannel } from "../../utils/message-channel.js";
 import type { AgentCommandOpts, AgentRunContext } from "./types.js";
 
-export function resolveAgentRunContext(opts: AgentCommandOpts): AgentRunContext {
+export function resolveAgentRunContext(
+  opts: AgentCommandOpts,
+): AgentRunContext {
   const merged: AgentRunContext = opts.runContext ? { ...opts.runContext } : {};
 
   const normalizedChannel = resolveMessageChannel(
@@ -13,7 +15,9 @@ export function resolveAgentRunContext(opts: AgentCommandOpts): AgentRunContext 
     merged.messageChannel = normalizedChannel;
   }
 
-  const normalizedAccountId = normalizeAccountId(merged.accountId ?? opts.accountId);
+  const normalizedAccountId = normalizeAccountId(
+    merged.accountId ?? opts.accountId,
+  );
   if (normalizedAccountId) {
     merged.accountId = normalizedAccountId;
   }
@@ -23,7 +27,9 @@ export function resolveAgentRunContext(opts: AgentCommandOpts): AgentRunContext 
     merged.groupId = groupId;
   }
 
-  const groupChannel = (merged.groupChannel ?? opts.groupChannel)?.toString().trim();
+  const groupChannel = (merged.groupChannel ?? opts.groupChannel)
+    ?.toString()
+    .trim();
   if (groupChannel) {
     merged.groupChannel = groupChannel;
   }

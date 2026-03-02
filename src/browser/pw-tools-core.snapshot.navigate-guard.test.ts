@@ -24,7 +24,9 @@ describe("pw-tools-core.snapshot navigate guard", () => {
       }),
     ).rejects.toBeInstanceOf(InvalidBrowserNavigationUrlError);
 
-    expect(getPwToolsCoreSessionMocks().getPageForTargetId).not.toHaveBeenCalled();
+    expect(
+      getPwToolsCoreSessionMocks().getPageForTargetId,
+    ).not.toHaveBeenCalled();
     expect(goto).not.toHaveBeenCalled();
   });
 
@@ -63,11 +65,15 @@ describe("pw-tools-core.snapshot navigate guard", () => {
       ssrfPolicy: { allowPrivateNetwork: true },
     });
 
-    expect(getPwToolsCoreSessionMocks().getPageForTargetId).toHaveBeenCalledTimes(2);
-    expect(getPwToolsCoreSessionMocks().forceDisconnectPlaywrightForTarget).toHaveBeenCalledTimes(
-      1,
-    );
-    expect(getPwToolsCoreSessionMocks().forceDisconnectPlaywrightForTarget).toHaveBeenCalledWith({
+    expect(
+      getPwToolsCoreSessionMocks().getPageForTargetId,
+    ).toHaveBeenCalledTimes(2);
+    expect(
+      getPwToolsCoreSessionMocks().forceDisconnectPlaywrightForTarget,
+    ).toHaveBeenCalledTimes(1);
+    expect(
+      getPwToolsCoreSessionMocks().forceDisconnectPlaywrightForTarget,
+    ).toHaveBeenCalledWith({
       cdpUrl: "http://127.0.0.1:18792",
       targetId: "tab-1",
       reason: "retry navigate after detached frame",

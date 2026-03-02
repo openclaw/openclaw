@@ -20,11 +20,15 @@ type OptionsValidationModule = {
     res: RelayCheckResponse | null | undefined,
     port: number,
   ) => RelayCheckStatus;
-  classifyRelayCheckException: (err: unknown, port: number) => RelayCheckExceptionStatus;
+  classifyRelayCheckException: (
+    err: unknown,
+    port: number,
+  ) => RelayCheckExceptionStatus;
 };
 
 const require = createRequire(import.meta.url);
-const OPTIONS_VALIDATION_MODULE = "../../assets/chrome-extension/options-validation.js";
+const OPTIONS_VALIDATION_MODULE =
+  "../../assets/chrome-extension/options-validation.js";
 
 async function loadOptionsValidation(): Promise<OptionsValidationModule> {
   try {
@@ -38,11 +42,15 @@ async function loadOptionsValidation(): Promise<OptionsValidationModule> {
   }
 }
 
-const { classifyRelayCheckException, classifyRelayCheckResponse } = await loadOptionsValidation();
+const { classifyRelayCheckException, classifyRelayCheckResponse } =
+  await loadOptionsValidation();
 
 describe("chrome extension options validation", () => {
   it("maps 401 response to token rejected error", () => {
-    const result = classifyRelayCheckResponse({ status: 401, ok: false }, 18792);
+    const result = classifyRelayCheckResponse(
+      { status: 401, ok: false },
+      18792,
+    );
     expect(result).toEqual({
       action: "status",
       kind: "error",
@@ -52,7 +60,12 @@ describe("chrome extension options validation", () => {
 
   it("maps non-json 200 response to wrong-port error", () => {
     const result = classifyRelayCheckResponse(
-      { status: 200, ok: true, contentType: "text/html; charset=utf-8", json: null },
+      {
+        status: 200,
+        ok: true,
+        contentType: "text/html; charset=utf-8",
+        json: null,
+      },
       18792,
     );
     expect(result).toEqual({
@@ -65,7 +78,12 @@ describe("chrome extension options validation", () => {
 
   it("maps json response without CDP keys to wrong-port error", () => {
     const result = classifyRelayCheckResponse(
-      { status: 200, ok: true, contentType: "application/json", json: { ok: true } },
+      {
+        status: 200,
+        ok: true,
+        contentType: "application/json",
+        json: { ok: true },
+      },
       18792,
     );
     expect(result).toEqual({
@@ -94,7 +112,10 @@ describe("chrome extension options validation", () => {
   });
 
   it("maps syntax/json exceptions to wrong-endpoint error", () => {
-    const result = classifyRelayCheckException(new Error("SyntaxError: Unexpected token <"), 18792);
+    const result = classifyRelayCheckException(
+      new Error("SyntaxError: Unexpected token <"),
+      18792,
+    );
     expect(result).toEqual({
       kind: "error",
       message:
@@ -103,7 +124,10 @@ describe("chrome extension options validation", () => {
   });
 
   it("maps generic exceptions to relay unreachable error", () => {
-    const result = classifyRelayCheckException(new Error("TypeError: Failed to fetch"), 18792);
+    const result = classifyRelayCheckException(
+      new Error("TypeError: Failed to fetch"),
+      18792,
+    );
     expect(result).toEqual({
       kind: "error",
       message:

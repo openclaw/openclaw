@@ -57,8 +57,14 @@ export async function withTempHeartbeatSandbox<T>(
     unsetEnvVars?: string[];
   },
 ): Promise<T> {
-  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), options?.prefix ?? "openclaw-hb-"));
-  await fs.writeFile(path.join(tmpDir, "HEARTBEAT.md"), "- Check status\n", "utf-8");
+  const tmpDir = await fs.mkdtemp(
+    path.join(os.tmpdir(), options?.prefix ?? "openclaw-hb-"),
+  );
+  await fs.writeFile(
+    path.join(tmpDir, "HEARTBEAT.md"),
+    "- Check status\n",
+    "utf-8",
+  );
   const storePath = path.join(tmpDir, "sessions.json");
   const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
   const previousEnv = new Map<string, string | undefined>();
@@ -101,6 +107,8 @@ export function setupTelegramHeartbeatPluginRuntimeForTests() {
   const runtime = createPluginRuntime();
   setTelegramRuntime(runtime);
   setActivePluginRegistry(
-    createTestRegistry([{ pluginId: "telegram", plugin: telegramPlugin, source: "test" }]),
+    createTestRegistry([
+      { pluginId: "telegram", plugin: telegramPlugin, source: "test" },
+    ]),
   );
 }

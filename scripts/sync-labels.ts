@@ -18,9 +18,18 @@ const COLOR_BY_PREFIX = new Map<string, string>([
 ]);
 
 const configPath = resolve(".github/labeler.yml");
-const EXTRA_LABELS = ["size: XS", "size: S", "size: M", "size: L", "size: XL"] as const;
+const EXTRA_LABELS = [
+  "size: XS",
+  "size: S",
+  "size: M",
+  "size: L",
+  "size: XL",
+] as const;
 const labelNames = [
-  ...new Set([...extractLabelNames(readFileSync(configPath, "utf8")), ...EXTRA_LABELS]),
+  ...new Set([
+    ...extractLabelNames(readFileSync(configPath, "utf8")),
+    ...EXTRA_LABELS,
+  ]),
 ];
 
 if (!labelNames.length) {
@@ -40,7 +49,16 @@ for (const label of missing) {
   const color = pickColor(label);
   execFileSync(
     "gh",
-    ["api", "-X", "POST", `repos/${repo}/labels`, "-f", `name=${label}`, "-f", `color=${color}`],
+    [
+      "api",
+      "-X",
+      "POST",
+      `repos/${repo}/labels`,
+      "-f",
+      `name=${label}`,
+      "-f",
+      `color=${color}`,
+    ],
     { stdio: "inherit" },
   );
   console.log(`Created label: ${label}`);
@@ -67,7 +85,9 @@ function extractLabelNames(contents: string): string[] {
 }
 
 function pickColor(label: string): string {
-  const prefix = label.includes(":") ? label.split(":", 1)[0].trim() : label.trim();
+  const prefix = label.includes(":")
+    ? label.split(":", 1)[0].trim()
+    : label.trim();
   return COLOR_BY_PREFIX.get(prefix) ?? "ededed";
 }
 
@@ -92,9 +112,13 @@ function resolveRepo(): string {
 }
 
 function fetchExistingLabels(repo: string): Map<string, RepoLabel> {
-  const raw = execFileSync("gh", ["api", `repos/${repo}/labels?per_page=100`, "--paginate"], {
-    encoding: "utf8",
-  });
+  const raw = execFileSync(
+    "gh",
+    ["api", `repos/${repo}/labels?per_page=100`, "--paginate"],
+    {
+      encoding: "utf8",
+    },
+  );
   const labels = JSON.parse(raw) as RepoLabel[];
   return new Map(labels.map((label) => [label.name, label]));
 }

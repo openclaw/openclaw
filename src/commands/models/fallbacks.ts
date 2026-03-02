@@ -10,10 +10,17 @@ export async function modelsFallbacksListCommand(
   opts: { json?: boolean; plain?: boolean },
   runtime: RuntimeEnv,
 ) {
-  return await listFallbacksCommand({ label: "Fallbacks", key: "model" }, opts, runtime);
+  return await listFallbacksCommand(
+    { label: "Fallbacks", key: "model" },
+    opts,
+    runtime,
+  );
 }
 
-export async function modelsFallbacksAddCommand(modelRaw: string, runtime: RuntimeEnv) {
+export async function modelsFallbacksAddCommand(
+  modelRaw: string,
+  runtime: RuntimeEnv,
+) {
   return await addFallbackCommand(
     { label: "Fallbacks", key: "model", logPrefix: "Fallbacks" },
     modelRaw,
@@ -21,7 +28,10 @@ export async function modelsFallbacksAddCommand(modelRaw: string, runtime: Runti
   );
 }
 
-export async function modelsFallbacksRemoveCommand(modelRaw: string, runtime: RuntimeEnv) {
+export async function modelsFallbacksRemoveCommand(
+  modelRaw: string,
+  runtime: RuntimeEnv,
+) {
   return await removeFallbackCommand(
     {
       label: "Fallbacks",

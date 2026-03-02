@@ -1,6 +1,10 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { buildConfigSchema } from "./schema.js";
-import { applyDerivedTags, CONFIG_TAGS, deriveTagsForPath } from "./schema.tags.js";
+import {
+  applyDerivedTags,
+  CONFIG_TAGS,
+  deriveTagsForPath,
+} from "./schema.tags.js";
 
 describe("config schema", () => {
   let baseSchema: ReturnType<typeof buildConfigSchema>;
@@ -18,7 +22,9 @@ describe("config schema", () => {
     expect(schema.properties?.$schema).toBeUndefined();
     expect(res.uiHints.gateway?.label).toBe("Gateway");
     expect(res.uiHints["gateway.auth.token"]?.sensitive).toBe(true);
-    expect(res.uiHints["channels.discord.threadBindings.spawnAcpSessions"]?.label).toBeTruthy();
+    expect(
+      res.uiHints["channels.discord.threadBindings.spawnAcpSessions"]?.label,
+    ).toBeTruthy();
     expect(res.version).toBeTruthy();
     expect(res.generatedAt).toBeTruthy();
   });
@@ -39,11 +45,16 @@ describe("config schema", () => {
     });
 
     expect(res.uiHints["plugins.entries.voice-call"]?.label).toBe("Voice Call");
-    expect(res.uiHints["plugins.entries.voice-call.config"]?.label).toBe("Voice Call Config");
-    expect(res.uiHints["plugins.entries.voice-call.config.twilio.authToken"]?.label).toBe(
-      "Auth Token",
+    expect(res.uiHints["plugins.entries.voice-call.config"]?.label).toBe(
+      "Voice Call Config",
     );
-    expect(res.uiHints["plugins.entries.voice-call.config.twilio.authToken"]?.sensitive).toBe(true);
+    expect(
+      res.uiHints["plugins.entries.voice-call.config.twilio.authToken"]?.label,
+    ).toBe("Auth Token");
+    expect(
+      res.uiHints["plugins.entries.voice-call.config.twilio.authToken"]
+        ?.sensitive,
+    ).toBe(true);
   });
 
   it("does not re-mark existing non-sensitive token-like fields", () => {
@@ -58,7 +69,9 @@ describe("config schema", () => {
       ],
     });
 
-    expect(res.uiHints["plugins.entries.voice-call.config.tokens"]?.sensitive).toBe(false);
+    expect(
+      res.uiHints["plugins.entries.voice-call.config.tokens"]?.sensitive,
+    ).toBe(false);
   });
 
   it("merges plugin + channel schemas", () => {
@@ -92,20 +105,44 @@ describe("config schema", () => {
     const schema = res.schema as {
       properties?: Record<string, unknown>;
     };
-    const pluginsNode = schema.properties?.plugins as Record<string, unknown> | undefined;
-    const entriesNode = pluginsNode?.properties as Record<string, unknown> | undefined;
-    const entriesProps = entriesNode?.entries as Record<string, unknown> | undefined;
-    const entryProps = entriesProps?.properties as Record<string, unknown> | undefined;
-    const pluginEntry = entryProps?.["voice-call"] as Record<string, unknown> | undefined;
-    const pluginConfig = pluginEntry?.properties as Record<string, unknown> | undefined;
-    const pluginConfigSchema = pluginConfig?.config as Record<string, unknown> | undefined;
-    const pluginConfigProps = pluginConfigSchema?.properties as Record<string, unknown> | undefined;
+    const pluginsNode = schema.properties?.plugins as
+      | Record<string, unknown>
+      | undefined;
+    const entriesNode = pluginsNode?.properties as
+      | Record<string, unknown>
+      | undefined;
+    const entriesProps = entriesNode?.entries as
+      | Record<string, unknown>
+      | undefined;
+    const entryProps = entriesProps?.properties as
+      | Record<string, unknown>
+      | undefined;
+    const pluginEntry = entryProps?.["voice-call"] as
+      | Record<string, unknown>
+      | undefined;
+    const pluginConfig = pluginEntry?.properties as
+      | Record<string, unknown>
+      | undefined;
+    const pluginConfigSchema = pluginConfig?.config as
+      | Record<string, unknown>
+      | undefined;
+    const pluginConfigProps = pluginConfigSchema?.properties as
+      | Record<string, unknown>
+      | undefined;
     expect(pluginConfigProps?.provider).toBeTruthy();
 
-    const channelsNode = schema.properties?.channels as Record<string, unknown> | undefined;
-    const channelsProps = channelsNode?.properties as Record<string, unknown> | undefined;
-    const channelSchema = channelsProps?.matrix as Record<string, unknown> | undefined;
-    const channelProps = channelSchema?.properties as Record<string, unknown> | undefined;
+    const channelsNode = schema.properties?.channels as
+      | Record<string, unknown>
+      | undefined;
+    const channelsProps = channelsNode?.properties as
+      | Record<string, unknown>
+      | undefined;
+    const channelSchema = channelsProps?.matrix as
+      | Record<string, unknown>
+      | undefined;
+    const channelProps = channelSchema?.properties as
+      | Record<string, unknown>
+      | undefined;
     expect(channelProps?.accessToken).toBeTruthy();
   });
 

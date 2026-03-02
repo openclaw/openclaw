@@ -57,7 +57,9 @@ export function hardenApprovedExecutionPaths(params: {
   approvedByAsk: boolean;
   argv: string[];
   cwd: string | undefined;
-}): { ok: true; argv: string[]; cwd: string | undefined } | { ok: false; message: string } {
+}):
+  | { ok: true; argv: string[]; cwd: string | undefined }
+  | { ok: false; message: string } {
   if (!params.approvedByAsk) {
     return { ok: true, argv: params.argv, cwd: params.cwd };
   }
@@ -77,7 +79,8 @@ export function hardenApprovedExecutionPaths(params: {
     } catch {
       return {
         ok: false,
-        message: "SYSTEM_RUN_DENIED: approval requires an existing canonical cwd",
+        message:
+          "SYSTEM_RUN_DENIED: approval requires an existing canonical cwd",
       };
     }
     if (!cwdStat.isDirectory()) {
@@ -89,13 +92,15 @@ export function hardenApprovedExecutionPaths(params: {
     if (hasMutableSymlinkPathComponentSync(requestedCwd)) {
       return {
         ok: false,
-        message: "SYSTEM_RUN_DENIED: approval requires canonical cwd (no symlink path components)",
+        message:
+          "SYSTEM_RUN_DENIED: approval requires canonical cwd (no symlink path components)",
       };
     }
     if (cwdLstat.isSymbolicLink()) {
       return {
         ok: false,
-        message: "SYSTEM_RUN_DENIED: approval requires canonical cwd (no symlink cwd)",
+        message:
+          "SYSTEM_RUN_DENIED: approval requires canonical cwd (no symlink cwd)",
       };
     }
     if (
@@ -116,7 +121,8 @@ export function hardenApprovedExecutionPaths(params: {
   }
 
   const resolution = resolveCommandResolutionFromArgv(params.argv, hardenedCwd);
-  const pinnedExecutable = resolution?.resolvedRealPath ?? resolution?.resolvedPath;
+  const pinnedExecutable =
+    resolution?.resolvedRealPath ?? resolution?.resolvedPath;
   if (!pinnedExecutable) {
     return {
       ok: false,
@@ -135,7 +141,9 @@ export function buildSystemRunApprovalPlan(params: {
   cwd?: unknown;
   agentId?: unknown;
   sessionKey?: unknown;
-}): { ok: true; plan: SystemRunApprovalPlan; cmdText: string } | { ok: false; message: string } {
+}):
+  | { ok: true; plan: SystemRunApprovalPlan; cmdText: string }
+  | { ok: false; message: string } {
   const command = resolveSystemRunCommand({
     command: params.command,
     rawCommand: params.rawCommand,

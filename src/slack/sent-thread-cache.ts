@@ -9,7 +9,11 @@ const MAX_ENTRIES = 5000;
 
 const threadParticipation = new Map<string, number>();
 
-function makeKey(accountId: string, channelId: string, threadTs: string): string {
+function makeKey(
+  accountId: string,
+  channelId: string,
+  threadTs: string,
+): string {
   return `${accountId}:${channelId}:${threadTs}`;
 }
 

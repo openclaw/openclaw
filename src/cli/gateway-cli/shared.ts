@@ -60,11 +60,15 @@ export function extractGatewayMiskeys(parsed: unknown): {
   const hasGatewayToken = "token" in (gateway as Record<string, unknown>);
   const remote = (gateway as Record<string, unknown>).remote;
   const hasRemoteToken =
-    remote && typeof remote === "object" ? "token" in (remote as Record<string, unknown>) : false;
+    remote && typeof remote === "object"
+      ? "token" in (remote as Record<string, unknown>)
+      : false;
   return { hasGatewayToken, hasRemoteToken };
 }
 
-export function renderGatewayServiceStopHints(env: NodeJS.ProcessEnv = process.env): string[] {
+export function renderGatewayServiceStopHints(
+  env: NodeJS.ProcessEnv = process.env,
+): string[] {
   const profile = env.OPENCLAW_PROFILE;
   switch (process.platform) {
     case "darwin":

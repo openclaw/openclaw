@@ -25,7 +25,9 @@ const channel = "msteams" as const;
 function setMSTeamsDmPolicy(cfg: OpenClawConfig, dmPolicy: DmPolicy) {
   const allowFrom =
     dmPolicy === "open"
-      ? addWildcardAllowFrom(cfg.channels?.msteams?.allowFrom)?.map((entry) => String(entry))
+      ? addWildcardAllowFrom(cfg.channels?.msteams?.allowFrom)?.map((entry) =>
+          String(entry),
+        )
       : undefined;
   return {
     ...cfg,
@@ -40,7 +42,10 @@ function setMSTeamsDmPolicy(cfg: OpenClawConfig, dmPolicy: DmPolicy) {
   };
 }
 
-function setMSTeamsAllowFrom(cfg: OpenClawConfig, allowFrom: string[]): OpenClawConfig {
+function setMSTeamsAllowFrom(
+  cfg: OpenClawConfig,
+  allowFrom: string[],
+): OpenClawConfig {
   return {
     ...cfg,
     channels: {
@@ -112,11 +117,15 @@ async function promptMSTeamsAllowFrom(params: {
       message: "MS Teams allowFrom (usernames or ids)",
       placeholder: "alex@example.com, Alex Johnson",
       initialValue: existing[0] ? String(existing[0]) : undefined,
-      validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
+      validate: (value) =>
+        String(value ?? "").trim() ? undefined : "Required",
     });
     const parts = parseAllowFromInput(String(entry));
     if (parts.length === 0) {
-      await params.prompter.note("Enter at least one user.", "MS Teams allowlist");
+      await params.prompter.note(
+        "Enter at least one user.",
+        "MS Teams allowlist",
+      );
       continue;
     }
 
@@ -153,7 +162,9 @@ async function promptMSTeamsAllowFrom(params: {
   }
 }
 
-async function noteMSTeamsCredentialHelp(prompter: WizardPrompter): Promise<void> {
+async function noteMSTeamsCredentialHelp(
+  prompter: WizardPrompter,
+): Promise<void> {
   await prompter.note(
     [
       "1) Azure Bot registration → get App ID + Tenant ID",
@@ -188,7 +199,9 @@ function setMSTeamsTeamsAllowlist(
   entries: Array<{ teamKey: string; channelKey?: string }>,
 ): OpenClawConfig {
   const baseTeams = cfg.channels?.msteams?.teams ?? {};
-  const teams: Record<string, { channels?: Record<string, unknown> }> = { ...baseTeams };
+  const teams: Record<string, { channels?: Record<string, unknown> }> = {
+    ...baseTeams,
+  };
   for (const entry of entries) {
     const teamKey = entry.teamKey;
     if (!teamKey) {
@@ -229,11 +242,15 @@ const dmPolicy: ChannelOnboardingDmPolicy = {
 export const msteamsOnboardingAdapter: ChannelOnboardingAdapter = {
   channel,
   getStatus: async ({ cfg }) => {
-    const configured = Boolean(resolveMSTeamsCredentials(cfg.channels?.msteams));
+    const configured = Boolean(
+      resolveMSTeamsCredentials(cfg.channels?.msteams),
+    );
     return {
       channel,
       configured,
-      statusLines: [`MS Teams: ${configured ? "configured" : "needs app credentials"}`],
+      statusLines: [
+        `MS Teams: ${configured ? "configured" : "needs app credentials"}`,
+      ],
       selectionHint: configured ? "configured" : "needs app creds",
       quickstartScore: configured ? 2 : 0,
     };
@@ -276,7 +293,8 @@ export const msteamsOnboardingAdapter: ChannelOnboardingAdapter = {
           },
         };
       } else {
-        ({ appId, appPassword, tenantId } = await promptMSTeamsCredentials(prompter));
+        ({ appId, appPassword, tenantId } =
+          await promptMSTeamsCredentials(prompter));
       }
     } else if (hasConfigCreds) {
       const keep = await prompter.confirm({
@@ -284,10 +302,12 @@ export const msteamsOnboardingAdapter: ChannelOnboardingAdapter = {
         initialValue: true,
       });
       if (!keep) {
-        ({ appId, appPassword, tenantId } = await promptMSTeamsCredentials(prompter));
+        ({ appId, appPassword, tenantId } =
+          await promptMSTeamsCredentials(prompter));
       }
     } else {
-      ({ appId, appPassword, tenantId } = await promptMSTeamsCredentials(prompter));
+      ({ appId, appPassword, tenantId } =
+        await promptMSTeamsCredentials(prompter));
     }
 
     if (appId && appPassword && tenantId) {
@@ -306,16 +326,16 @@ export const msteamsOnboardingAdapter: ChannelOnboardingAdapter = {
       };
     }
 
-    const currentEntries = Object.entries(next.channels?.msteams?.teams ?? {}).flatMap(
-      ([teamKey, value]) => {
-        const channels = value?.channels ?? {};
-        const channelKeys = Object.keys(channels);
-        if (channelKeys.length === 0) {
-          return [teamKey];
-        }
-        return channelKeys.map((channelKey) => `${teamKey}/${channelKey}`);
-      },
-    );
+    const currentEntries = Object.entries(
+      next.channels?.msteams?.teams ?? {},
+    ).flatMap(([teamKey, value]) => {
+      const channels = value?.channels ?? {};
+      const channelKeys = Object.keys(channels);
+      if (channelKeys.length === 0) {
+        return [teamKey];
+      }
+      return channelKeys.map((channelKey) => `${teamKey}/${channelKey}`);
+    });
     const accessConfig = await promptChannelAccessConfig({
       prompter,
       label: "MS Teams channels",
@@ -331,7 +351,10 @@ export const msteamsOnboardingAdapter: ChannelOnboardingAdapter = {
         let entries = accessConfig.entries
           .map((entry) => parseMSTeamsTeamEntry(entry))
           .filter(Boolean) as Array<{ teamKey: string; channelKey?: string }>;
-        if (accessConfig.entries.length > 0 && resolveMSTeamsCredentials(next.channels?.msteams)) {
+        if (
+          accessConfig.entries.length > 0 &&
+          resolveMSTeamsCredentials(next.channels?.msteams)
+        ) {
           try {
             const resolved = await resolveMSTeamsChannelAllowlist({
               cfg: next,
@@ -355,10 +378,16 @@ export const msteamsOnboardingAdapter: ChannelOnboardingAdapter = {
               ...resolvedTeams.map((entry) => ({
                 teamKey: entry.teamId as string,
               })),
-              ...unresolved.map((entry) => parseMSTeamsTeamEntry(entry)).filter(Boolean),
+              ...unresolved
+                .map((entry) => parseMSTeamsTeamEntry(entry))
+                .filter(Boolean),
             ] as Array<{ teamKey: string; channelKey?: string }>;
 
-            if (resolvedChannels.length > 0 || resolvedTeams.length > 0 || unresolved.length > 0) {
+            if (
+              resolvedChannels.length > 0 ||
+              resolvedTeams.length > 0 ||
+              unresolved.length > 0
+            ) {
               const summary: string[] = [];
               if (resolvedChannels.length > 0) {
                 summary.push(
@@ -377,7 +406,9 @@ export const msteamsOnboardingAdapter: ChannelOnboardingAdapter = {
                 );
               }
               if (unresolved.length > 0) {
-                summary.push(`Unresolved (kept as typed): ${unresolved.join(", ")}`);
+                summary.push(
+                  `Unresolved (kept as typed): ${unresolved.join(", ")}`,
+                );
               }
               await prompter.note(summary.join("\n"), "MS Teams channels");
             }

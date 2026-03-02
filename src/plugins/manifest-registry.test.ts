@@ -9,14 +9,21 @@ import { loadPluginManifestRegistry } from "./manifest-registry.js";
 const tempDirs: string[] = [];
 
 function makeTempDir() {
-  const dir = path.join(os.tmpdir(), `openclaw-manifest-registry-${randomUUID()}`);
+  const dir = path.join(
+    os.tmpdir(),
+    `openclaw-manifest-registry-${randomUUID()}`,
+  );
   fs.mkdirSync(dir, { recursive: true });
   tempDirs.push(dir);
   return dir;
 }
 
 function writeManifest(dir: string, manifest: Record<string, unknown>) {
-  fs.writeFileSync(path.join(dir, "openclaw.plugin.json"), JSON.stringify(manifest), "utf-8");
+  fs.writeFileSync(
+    path.join(dir, "openclaw.plugin.json"),
+    JSON.stringify(manifest),
+    "utf-8",
+  );
 }
 
 function createPluginCandidate(params: {
@@ -40,10 +47,13 @@ function loadRegistry(candidates: PluginCandidate[]) {
   });
 }
 
-function countDuplicateWarnings(registry: ReturnType<typeof loadPluginManifestRegistry>): number {
+function countDuplicateWarnings(
+  registry: ReturnType<typeof loadPluginManifestRegistry>,
+): number {
   return registry.diagnostics.filter(
     (diagnostic) =>
-      diagnostic.level === "warn" && diagnostic.message?.includes("duplicate plugin id"),
+      diagnostic.level === "warn" &&
+      diagnostic.message?.includes("duplicate plugin id"),
   ).length;
 }
 
@@ -119,7 +129,10 @@ describe("loadPluginManifestRegistry", () => {
 
   it("suppresses duplicate warning when candidates have identical rootDir paths", () => {
     const dir = makeTempDir();
-    const manifest = { id: "same-path-plugin", configSchema: { type: "object" } };
+    const manifest = {
+      id: "same-path-plugin",
+      configSchema: { type: "object" },
+    };
     writeManifest(dir, manifest);
 
     const candidates: PluginCandidate[] = [
@@ -143,7 +156,10 @@ describe("loadPluginManifestRegistry", () => {
   it("prefers higher-precedence origins for the same physical directory (config > workspace > global > bundled)", () => {
     const dir = makeTempDir();
     fs.mkdirSync(path.join(dir, "sub"), { recursive: true });
-    const manifest = { id: "precedence-plugin", configSchema: { type: "object" } };
+    const manifest = {
+      id: "precedence-plugin",
+      configSchema: { type: "object" },
+    };
     writeManifest(dir, manifest);
 
     // Use a different-but-equivalent path representation without requiring symlinks.
@@ -173,10 +189,17 @@ describe("loadPluginManifestRegistry", () => {
     const outsideDir = makeTempDir();
     const outsideManifest = path.join(outsideDir, "openclaw.plugin.json");
     const linkedManifest = path.join(rootDir, "openclaw.plugin.json");
-    fs.writeFileSync(path.join(rootDir, "index.ts"), "export default function () {}", "utf-8");
+    fs.writeFileSync(
+      path.join(rootDir, "index.ts"),
+      "export default function () {}",
+      "utf-8",
+    );
     fs.writeFileSync(
       outsideManifest,
-      JSON.stringify({ id: "unsafe-symlink", configSchema: { type: "object" } }),
+      JSON.stringify({
+        id: "unsafe-symlink",
+        configSchema: { type: "object" },
+      }),
       "utf-8",
     );
     try {
@@ -194,7 +217,9 @@ describe("loadPluginManifestRegistry", () => {
     ]);
     expect(registry.plugins).toHaveLength(0);
     expect(
-      registry.diagnostics.some((diag) => diag.message.includes("unsafe plugin manifest path")),
+      registry.diagnostics.some((diag) =>
+        diag.message.includes("unsafe plugin manifest path"),
+      ),
     ).toBe(true);
   });
 
@@ -206,10 +231,17 @@ describe("loadPluginManifestRegistry", () => {
     const outsideDir = makeTempDir();
     const outsideManifest = path.join(outsideDir, "openclaw.plugin.json");
     const linkedManifest = path.join(rootDir, "openclaw.plugin.json");
-    fs.writeFileSync(path.join(rootDir, "index.ts"), "export default function () {}", "utf-8");
+    fs.writeFileSync(
+      path.join(rootDir, "index.ts"),
+      "export default function () {}",
+      "utf-8",
+    );
     fs.writeFileSync(
       outsideManifest,
-      JSON.stringify({ id: "unsafe-hardlink", configSchema: { type: "object" } }),
+      JSON.stringify({
+        id: "unsafe-hardlink",
+        configSchema: { type: "object" },
+      }),
       "utf-8",
     );
     try {
@@ -230,7 +262,9 @@ describe("loadPluginManifestRegistry", () => {
     ]);
     expect(registry.plugins).toHaveLength(0);
     expect(
-      registry.diagnostics.some((diag) => diag.message.includes("unsafe plugin manifest path")),
+      registry.diagnostics.some((diag) =>
+        diag.message.includes("unsafe plugin manifest path"),
+      ),
     ).toBe(true);
   });
 });

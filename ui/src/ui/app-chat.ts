@@ -3,7 +3,11 @@ import { scheduleChatScroll } from "./app-scroll.ts";
 import { setLastActiveSessionKey } from "./app-settings.ts";
 import { resetToolStream } from "./app-tool-stream.ts";
 import type { OpenClawApp } from "./app.ts";
-import { abortChatRun, loadChatHistory, sendChatMessage } from "./controllers/chat.ts";
+import {
+  abortChatRun,
+  loadChatHistory,
+  sendChatMessage,
+} from "./controllers/chat.ts";
 import { loadSessions } from "./controllers/sessions.ts";
 import type { GatewayHelloOk } from "./gateway.ts";
 import { normalizeBasePath } from "./navigation.ts";
@@ -85,7 +89,9 @@ function enqueueChatMessage(
       id: generateUUID(),
       text: trimmed,
       createdAt: Date.now(),
-      attachments: hasAttachments ? attachments?.map((att) => ({ ...att })) : undefined,
+      attachments: hasAttachments
+        ? attachments?.map((att) => ({ ...att }))
+        : undefined,
       refreshSessions,
     },
   ];
@@ -104,7 +110,11 @@ async function sendChatMessageNow(
   },
 ) {
   resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
-  const runId = await sendChatMessage(host as unknown as OpenClawApp, message, opts?.attachments);
+  const runId = await sendChatMessage(
+    host as unknown as OpenClawApp,
+    message,
+    opts?.attachments,
+  );
   const ok = Boolean(runId);
   if (!ok && opts?.previousDraft != null) {
     host.chatMessage = opts.previousDraft;
@@ -124,7 +134,9 @@ async function sendChatMessageNow(
   if (ok && opts?.restoreAttachments && opts.previousAttachments?.length) {
     host.chatAttachments = opts.previousAttachments;
   }
-  scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
+  scheduleChatScroll(
+    host as unknown as Parameters<typeof scheduleChatScroll>[0],
+  );
   if (ok && !host.chatRunId) {
     void flushChatQueue(host);
   }
@@ -202,7 +214,10 @@ export async function handleSendChat(
   });
 }
 
-export async function refreshChat(host: ChatHost, opts?: { scheduleScroll?: boolean }) {
+export async function refreshChat(
+  host: ChatHost,
+  opts?: { scheduleScroll?: boolean },
+) {
   await Promise.all([
     loadChatHistory(host as unknown as OpenClawApp),
     loadSessions(host as unknown as OpenClawApp, {
@@ -211,7 +226,9 @@ export async function refreshChat(host: ChatHost, opts?: { scheduleScroll?: bool
     refreshChatAvatar(host),
   ]);
   if (opts?.scheduleScroll !== false) {
-    scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
+    scheduleChatScroll(
+      host as unknown as Parameters<typeof scheduleChatScroll>[0],
+    );
   }
 }
 
@@ -236,7 +253,9 @@ function resolveAgentIdForSession(host: ChatHost): string | null {
 function buildAvatarMetaUrl(basePath: string, agentId: string): string {
   const base = normalizeBasePath(basePath);
   const encoded = encodeURIComponent(agentId);
-  return base ? `${base}/avatar/${encoded}?meta=1` : `/avatar/${encoded}?meta=1`;
+  return base
+    ? `${base}/avatar/${encoded}?meta=1`
+    : `/avatar/${encoded}?meta=1`;
 }
 
 export async function refreshChatAvatar(host: ChatHost) {
@@ -258,7 +277,8 @@ export async function refreshChatAvatar(host: ChatHost) {
       return;
     }
     const data = (await res.json()) as { avatarUrl?: unknown };
-    const avatarUrl = typeof data.avatarUrl === "string" ? data.avatarUrl.trim() : "";
+    const avatarUrl =
+      typeof data.avatarUrl === "string" ? data.avatarUrl.trim() : "";
     host.chatAvatarUrl = avatarUrl || null;
   } catch {
     host.chatAvatarUrl = null;

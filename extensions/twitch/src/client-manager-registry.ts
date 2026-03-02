@@ -62,7 +62,9 @@ export function getOrCreateClientManager(
  * @param accountId - The account ID
  * @returns The client manager, or undefined if not registered
  */
-export function getClientManager(accountId: string): TwitchClientManager | undefined {
+export function getClientManager(
+  accountId: string,
+): TwitchClientManager | undefined {
   return registry.get(accountId)?.manager;
 }
 
@@ -92,7 +94,9 @@ export async function removeClientManager(accountId: string): Promise<void> {
  * @returns Promise that resolves when all cleanup is complete
  */
 export async function removeAllClientManagers(): Promise<void> {
-  const promises = [...registry.keys()].map((accountId) => removeClientManager(accountId));
+  const promises = [...registry.keys()].map((accountId) =>
+    removeClientManager(accountId),
+  );
   await Promise.all(promises);
 }
 

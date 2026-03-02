@@ -11,7 +11,9 @@ describe("scp remote host", () => {
 
   it("rejects unsafe host tokens", () => {
     expect(isSafeScpRemoteHost("-oProxyCommand=whoami")).toBe(false);
-    expect(isSafeScpRemoteHost("bot@gateway-host -oStrictHostKeyChecking=no")).toBe(false);
+    expect(
+      isSafeScpRemoteHost("bot@gateway-host -oStrictHostKeyChecking=no"),
+    ).toBe(false);
     expect(isSafeScpRemoteHost("bot@host:22")).toBe(false);
     expect(isSafeScpRemoteHost("bot@/tmp/host")).toBe(false);
     expect(isSafeScpRemoteHost("bot@@host")).toBe(false);

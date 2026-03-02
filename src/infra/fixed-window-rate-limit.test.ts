@@ -12,7 +12,10 @@ describe("fixed-window rate limiter", () => {
 
     expect(limiter.consume()).toMatchObject({ allowed: true, remaining: 1 });
     expect(limiter.consume()).toMatchObject({ allowed: true, remaining: 0 });
-    expect(limiter.consume()).toMatchObject({ allowed: false, retryAfterMs: 1_000 });
+    expect(limiter.consume()).toMatchObject({
+      allowed: false,
+      retryAfterMs: 1_000,
+    });
 
     nowMs += 1_000;
     expect(limiter.consume()).toMatchObject({ allowed: true, remaining: 1 });

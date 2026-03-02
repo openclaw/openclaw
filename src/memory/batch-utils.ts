@@ -26,7 +26,10 @@ export function buildBatchHeaders(
   return headers;
 }
 
-export function splitBatchRequests<T>(requests: T[], maxRequests: number): T[][] {
+export function splitBatchRequests<T>(
+  requests: T[],
+  maxRequests: number,
+): T[][] {
   if (requests.length <= maxRequests) {
     return [requests];
   }

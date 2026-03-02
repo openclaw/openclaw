@@ -3,7 +3,9 @@ import { DEFAULT_GATEWAY_PORT } from "./paths.js";
 
 export type GatewayNonLoopbackBindMode = "lan" | "tailnet" | "custom";
 
-export function isGatewayNonLoopbackBindMode(bind: unknown): bind is GatewayNonLoopbackBindMode {
+export function isGatewayNonLoopbackBindMode(
+  bind: unknown,
+): bind is GatewayNonLoopbackBindMode {
   return bind === "lan" || bind === "tailnet" || bind === "custom";
 }
 
@@ -16,7 +18,9 @@ export function hasConfiguredControlUiAllowedOrigins(params: {
   }
   return (
     Array.isArray(params.allowedOrigins) &&
-    params.allowedOrigins.some((origin) => typeof origin === "string" && origin.trim().length > 0)
+    params.allowedOrigins.some(
+      (origin) => typeof origin === "string" && origin.trim().length > 0,
+    )
   );
 }
 
@@ -55,7 +59,10 @@ export function ensureControlUiAllowedOriginsForNonLoopbackBind(
   if (!isGatewayNonLoopbackBindMode(bind)) {
     return { config, seededOrigins: null, bind: null };
   }
-  if (opts?.requireControlUiEnabled && config.gateway?.controlUi?.enabled === false) {
+  if (
+    opts?.requireControlUiEnabled &&
+    config.gateway?.controlUi?.enabled === false
+  ) {
     return { config, seededOrigins: null, bind };
   }
   if (
@@ -68,7 +75,10 @@ export function ensureControlUiAllowedOriginsForNonLoopbackBind(
     return { config, seededOrigins: null, bind };
   }
 
-  const port = resolveGatewayPortWithDefault(config.gateway?.port, opts?.defaultPort);
+  const port = resolveGatewayPortWithDefault(
+    config.gateway?.port,
+    opts?.defaultPort,
+  );
   const seededOrigins = buildDefaultControlUiAllowedOrigins({
     port,
     bind,

@@ -21,7 +21,9 @@ export async function postJson<T>(params: {
     onResponse: async (res) => {
       if (!res.ok) {
         const text = await res.text();
-        const err = new Error(`${params.errorPrefix}: ${res.status} ${text}`) as Error & {
+        const err = new Error(
+          `${params.errorPrefix}: ${res.status} ${text}`,
+        ) as Error & {
           status?: number;
         };
         if (params.attachStatus) {

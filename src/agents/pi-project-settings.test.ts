@@ -15,12 +15,16 @@ describe("resolveEmbeddedPiProjectSettingsPolicy", () => {
   it("accepts trusted and ignore modes", () => {
     expect(
       resolveEmbeddedPiProjectSettingsPolicy({
-        agents: { defaults: { embeddedPi: { projectSettingsPolicy: "trusted" } } },
+        agents: {
+          defaults: { embeddedPi: { projectSettingsPolicy: "trusted" } },
+        },
       }),
     ).toBe("trusted");
     expect(
       resolveEmbeddedPiProjectSettingsPolicy({
-        agents: { defaults: { embeddedPi: { projectSettingsPolicy: "ignore" } } },
+        agents: {
+          defaults: { embeddedPi: { projectSettingsPolicy: "ignore" } },
+        },
       }),
     ).toBe("ignore");
   });

@@ -1,18 +1,29 @@
 import fs from "node:fs/promises";
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
-const { TEST_STATE_DIR, SANDBOX_REGISTRY_PATH, SANDBOX_BROWSER_REGISTRY_PATH } = vi.hoisted(() => {
-  const path = require("node:path");
-  const { mkdtempSync } = require("node:fs");
-  const { tmpdir } = require("node:os");
-  const baseDir = mkdtempSync(path.join(tmpdir(), "openclaw-sandbox-registry-"));
+const { TEST_STATE_DIR, SANDBOX_REGISTRY_PATH, SANDBOX_BROWSER_REGISTRY_PATH } =
+  vi.hoisted(() => {
+    const path = require("node:path");
+    const { mkdtempSync } = require("node:fs");
+    const { tmpdir } = require("node:os");
+    const baseDir = mkdtempSync(
+      path.join(tmpdir(), "openclaw-sandbox-registry-"),
+    );
 
-  return {
-    TEST_STATE_DIR: baseDir,
-    SANDBOX_REGISTRY_PATH: path.join(baseDir, "containers.json"),
-    SANDBOX_BROWSER_REGISTRY_PATH: path.join(baseDir, "browsers.json"),
-  };
-});
+    return {
+      TEST_STATE_DIR: baseDir,
+      SANDBOX_REGISTRY_PATH: path.join(baseDir, "containers.json"),
+      SANDBOX_BROWSER_REGISTRY_PATH: path.join(baseDir, "browsers.json"),
+    };
+  });
 
 vi.mock("./constants.js", () => ({
   SANDBOX_STATE_DIR: TEST_STATE_DIR,
@@ -20,7 +31,10 @@ vi.mock("./constants.js", () => ({
   SANDBOX_BROWSER_REGISTRY_PATH,
 }));
 
-import type { SandboxBrowserRegistryEntry, SandboxRegistryEntry } from "./registry.js";
+import type {
+  SandboxBrowserRegistryEntry,
+  SandboxRegistryEntry,
+} from "./registry.js";
 import {
   readBrowserRegistry,
   readRegistry,
@@ -41,7 +55,10 @@ type WriteDelayConfig = {
 let activeWriteGate: WriteDelayConfig | null = null;
 const realFsWriteFile = fs.writeFile;
 
-function payloadMentionsContainer(payload: string, containerName: string): boolean {
+function payloadMentionsContainer(
+  payload: string,
+  containerName: string,
+): boolean {
   return (
     payload.includes(`"containerName":"${containerName}"`) ||
     payload.includes(`"containerName": "${containerName}"`)
@@ -56,7 +73,11 @@ function writeText(content: Parameters<typeof fs.writeFile>[1]): string {
     return Buffer.from(content).toString("utf-8");
   }
   if (ArrayBuffer.isView(content)) {
-    return Buffer.from(content.buffer, content.byteOffset, content.byteLength).toString("utf-8");
+    return Buffer.from(
+      content.buffer,
+      content.byteOffset,
+      content.byteLength,
+    ).toString("utf-8");
   }
   return "";
 }
@@ -148,7 +169,9 @@ function browserEntry(
   };
 }
 
-function containerEntry(overrides: Partial<SandboxRegistryEntry> = {}): SandboxRegistryEntry {
+function containerEntry(
+  overrides: Partial<SandboxRegistryEntry> = {},
+): SandboxRegistryEntry {
   return {
     containerName: "container-a",
     sessionKey: "agent:main",
@@ -160,7 +183,11 @@ function containerEntry(overrides: Partial<SandboxRegistryEntry> = {}): SandboxR
 }
 
 async function seedContainerRegistry(entries: SandboxRegistryEntry[]) {
-  await fs.writeFile(SANDBOX_REGISTRY_PATH, `${JSON.stringify({ entries }, null, 2)}\n`, "utf-8");
+  await fs.writeFile(
+    SANDBOX_REGISTRY_PATH,
+    `${JSON.stringify({ entries }, null, 2)}\n`,
+    "utf-8",
+  );
 }
 
 async function seedBrowserRegistry(entries: SandboxBrowserRegistryEntry[]) {
@@ -189,7 +216,9 @@ describe("registry race safety", () => {
   });
 
   it("prevents concurrent container remove/update from resurrecting deleted entries", async () => {
-    await seedContainerRegistry([containerEntry({ containerName: "container-x" })]);
+    await seedContainerRegistry([
+      containerEntry({ containerName: "container-x" }),
+    ]);
     const writeGate = installWriteGate("containers.json", "container-x");
 
     const updatePromise = updateRegistry(
@@ -207,7 +236,9 @@ describe("registry race safety", () => {
   it("keeps both browser updates under concurrent writes", async () => {
     await Promise.all([
       updateBrowserRegistry(browserEntry({ containerName: "browser-a" })),
-      updateBrowserRegistry(browserEntry({ containerName: "browser-b", cdpPort: 9223 })),
+      updateBrowserRegistry(
+        browserEntry({ containerName: "browser-b", cdpPort: 9223 }),
+      ),
     ]);
 
     const registry = await readBrowserRegistry();

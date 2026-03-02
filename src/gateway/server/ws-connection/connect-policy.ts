@@ -22,7 +22,8 @@ export function resolveControlUiAuthPolicy(params: {
   const allowInsecureAuthConfigured =
     params.isControlUi && params.controlUiConfig?.allowInsecureAuth === true;
   const dangerouslyDisableDeviceAuth =
-    params.isControlUi && params.controlUiConfig?.dangerouslyDisableDeviceAuth === true;
+    params.isControlUi &&
+    params.controlUiConfig?.dangerouslyDisableDeviceAuth === true;
   return {
     allowInsecureAuthConfigured,
     dangerouslyDisableDeviceAuth,
@@ -88,7 +89,10 @@ export function evaluateMissingDeviceIdentity(params: {
     // (needed for device identity) is unavailable in insecure HTTP contexts.
     // Remote connections are still rejected to preserve the MitM protection
     // that the security fix (#20684) intended.
-    if (!params.controlUiAuthPolicy.allowInsecureAuthConfigured || !params.isLocalClient) {
+    if (
+      !params.controlUiAuthPolicy.allowInsecureAuthConfigured ||
+      !params.isLocalClient
+    ) {
       return { kind: "reject-control-ui-insecure-auth" };
     }
   }

@@ -1,8 +1,13 @@
-import { deriveSessionTotalTokens, type NormalizedUsage } from "../../agents/usage.js";
+import {
+  deriveSessionTotalTokens,
+  type NormalizedUsage,
+} from "../../agents/usage.js";
 import { incrementCompactionCount } from "./session-updates.js";
 import { persistSessionUsageUpdate } from "./session-usage.js";
 
-type PersistRunSessionUsageParams = Parameters<typeof persistSessionUsageUpdate>[0];
+type PersistRunSessionUsageParams = Parameters<
+  typeof persistSessionUsageUpdate
+>[0];
 
 type IncrementRunCompactionCountParams = Omit<
   Parameters<typeof incrementCompactionCount>[0],
@@ -12,7 +17,9 @@ type IncrementRunCompactionCountParams = Omit<
   contextTokensUsed?: number;
 };
 
-export async function persistRunSessionUsage(params: PersistRunSessionUsageParams): Promise<void> {
+export async function persistRunSessionUsage(
+  params: PersistRunSessionUsageParams,
+): Promise<void> {
   await persistSessionUsageUpdate(params);
 }
 

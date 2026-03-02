@@ -15,7 +15,10 @@ vi.mock("../../../pairing/pairing-store.js", () => ({
   readChannelAllowFromStore: pinAllowMock,
 }));
 
-type PinHandler = (args: { event: Record<string, unknown>; body: unknown }) => Promise<void>;
+type PinHandler = (args: {
+  event: Record<string, unknown>;
+  body: unknown;
+}) => Promise<void>;
 
 type PinCase = {
   body?: unknown;
@@ -46,7 +49,8 @@ function installPinHandlers(args: {
 }) {
   const harness = buildPinHarness(args.overrides);
   if (args.shouldDropMismatchedSlackEvent) {
-    harness.ctx.shouldDropMismatchedSlackEvent = args.shouldDropMismatchedSlackEvent;
+    harness.ctx.shouldDropMismatchedSlackEvent =
+      args.shouldDropMismatchedSlackEvent;
   }
   registerSlackPinEvents({ ctx: harness.ctx, trackEvent: args.trackEvent });
   return {

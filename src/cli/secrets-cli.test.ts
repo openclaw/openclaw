@@ -14,8 +14,12 @@ const { defaultRuntime, runtimeLogs, runtimeErrors, resetRuntimeCapture } =
 
 vi.mock("./gateway-rpc.js", () => ({
   addGatewayClientOptions: (cmd: Command) => cmd,
-  callGatewayFromCli: (method: string, opts: unknown, params?: unknown, extra?: unknown) =>
-    callGatewayFromCli(method, opts, params, extra),
+  callGatewayFromCli: (
+    method: string,
+    opts: unknown,
+    params?: unknown,
+    extra?: unknown,
+  ) => callGatewayFromCli(method, opts, params, extra),
 }));
 
 vi.mock("../runtime.js", () => ({
@@ -75,7 +79,9 @@ describe("secrets CLI", () => {
 
   it("prints JSON when requested", async () => {
     callGatewayFromCli.mockResolvedValue({ ok: true, warningCount: 0 });
-    await createProgram().parseAsync(["secrets", "reload", "--json"], { from: "user" });
+    await createProgram().parseAsync(["secrets", "reload", "--json"], {
+      from: "user",
+    });
     expect(runtimeLogs.at(-1)).toContain('"ok": true');
   });
 
@@ -95,10 +101,15 @@ describe("secrets CLI", () => {
     resolveSecretsAuditExitCode.mockReturnValue(1);
 
     await expect(
-      createProgram().parseAsync(["secrets", "audit", "--check"], { from: "user" }),
+      createProgram().parseAsync(["secrets", "audit", "--check"], {
+        from: "user",
+      }),
     ).rejects.toBeTruthy();
     expect(runSecretsAudit).toHaveBeenCalled();
-    expect(resolveSecretsAuditExitCode).toHaveBeenCalledWith(expect.anything(), true);
+    expect(resolveSecretsAuditExitCode).toHaveBeenCalledWith(
+      expect.anything(),
+      true,
+    );
   });
 
   it("runs secrets configure then apply when confirmed", async () => {
@@ -138,7 +149,9 @@ describe("secrets CLI", () => {
       warnings: [],
     });
 
-    await createProgram().parseAsync(["secrets", "configure"], { from: "user" });
+    await createProgram().parseAsync(["secrets", "configure"], {
+      from: "user",
+    });
     expect(runSecretsConfigureInteractive).toHaveBeenCalled();
     expect(runSecretsApply).toHaveBeenCalledWith(
       expect.objectContaining({

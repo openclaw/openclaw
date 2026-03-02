@@ -31,7 +31,10 @@ export function registerMessageCommands(program: Command, ctx: ProgramContext) {
         `
 ${theme.heading("Examples:")}
 ${formatHelpExamples([
-  ['openclaw message send --target +15555550123 --message "Hi"', "Send a text message."],
+  [
+    'openclaw message send --target +15555550123 --message "Hi"',
+    "Send a text message.",
+  ],
   [
     'openclaw message send --target +15555550123 --message "Hi" --media photo.jpg',
     "Send a message with media.",

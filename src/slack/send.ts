@@ -56,7 +56,9 @@ type SlackSendOpts = {
 };
 
 function hasCustomIdentity(identity?: SlackSendIdentity): boolean {
-  return Boolean(identity?.username || identity?.iconUrl || identity?.iconEmoji);
+  return Boolean(
+    identity?.username || identity?.iconUrl || identity?.iconEmoji,
+  );
 }
 
 function isSlackCustomizeScopeError(err: unknown): boolean {
@@ -105,26 +107,37 @@ async function postSlackMessageBestEffort(params: {
     if (params.identity?.iconUrl) {
       return await params.client.chat.postMessage({
         ...basePayload,
-        ...(params.identity.username ? { username: params.identity.username } : {}),
+        ...(params.identity.username
+          ? { username: params.identity.username }
+          : {}),
         icon_url: params.identity.iconUrl,
       });
     }
     if (params.identity?.iconEmoji) {
       return await params.client.chat.postMessage({
         ...basePayload,
-        ...(params.identity.username ? { username: params.identity.username } : {}),
+        ...(params.identity.username
+          ? { username: params.identity.username }
+          : {}),
         icon_emoji: params.identity.iconEmoji,
       });
     }
     return await params.client.chat.postMessage({
       ...basePayload,
-      ...(params.identity?.username ? { username: params.identity.username } : {}),
+      ...(params.identity?.username
+        ? { username: params.identity.username }
+        : {}),
     });
   } catch (err) {
-    if (!hasCustomIdentity(params.identity) || !isSlackCustomizeScopeError(err)) {
+    if (
+      !hasCustomIdentity(params.identity) ||
+      !isSlackCustomizeScopeError(err)
+    ) {
       throw err;
     }
-    logVerbose("slack send: missing chat:write.customize, retrying without custom identity");
+    logVerbose(
+      "slack send: missing chat:write.customize, retrying without custom identity",
+    );
     return params.client.chat.postMessage(basePayload);
   }
 }
@@ -176,7 +189,8 @@ async function resolveChannelId(
   // files.uploadV2 → completeUploadExternal validates channel_id against
   // ^[CGDZ][A-Z0-9]{8,}$ and rejects U-prefixed IDs.  Always resolve user
   // IDs via conversations.open to obtain the DM channel ID.
-  const isUserId = recipient.kind === "user" || /^U[A-Z0-9]+$/i.test(recipient.id);
+  const isUserId =
+    recipient.kind === "user" || /^U[A-Z0-9]+$/i.test(recipient.id);
   if (!isUserId) {
     return { channelId: recipient.id };
   }
@@ -197,10 +211,13 @@ async function uploadSlackFile(params: {
   threadTs?: string;
   maxBytes?: number;
 }): Promise<string> {
-  const { buffer, contentType, fileName } = await loadWebMedia(params.mediaUrl, {
-    maxBytes: params.maxBytes,
-    localRoots: params.mediaLocalRoots,
-  });
+  const { buffer, contentType, fileName } = await loadWebMedia(
+    params.mediaUrl,
+    {
+      maxBytes: params.maxBytes,
+      localRoots: params.mediaLocalRoots,
+    },
+  );
   // Use the 3-step upload flow (getUploadURLExternal -> POST -> completeUploadExternal)
   // instead of files.uploadV2 which relies on the deprecated files.upload endpoint
   // and can fail with missing_scope even when files:write is granted.
@@ -208,8 +225,14 @@ async function uploadSlackFile(params: {
     filename: fileName ?? "upload",
     length: buffer.length,
   });
-  if (!uploadUrlResp.ok || !uploadUrlResp.upload_url || !uploadUrlResp.file_id) {
-    throw new Error(`Failed to get upload URL: ${uploadUrlResp.error ?? "unknown error"}`);
+  if (
+    !uploadUrlResp.ok ||
+    !uploadUrlResp.upload_url ||
+    !uploadUrlResp.file_id
+  ) {
+    throw new Error(
+      `Failed to get upload URL: ${uploadUrlResp.error ?? "unknown error"}`,
+    );
   }
 
   // Upload the file content to the presigned URL
@@ -242,7 +265,9 @@ async function uploadSlackFile(params: {
     ...(params.threadTs ? { thread_ts: params.threadTs } : {}),
   });
   if (!completeResp.ok) {
-    throw new Error(`Failed to complete upload: ${completeResp.error ?? "unknown error"}`);
+    throw new Error(
+      `Failed to complete upload: ${completeResp.error ?? "unknown error"}`,
+    );
   }
 
   return uploadUrlResp.file_id;
@@ -258,7 +283,8 @@ export async function sendMessageSlack(
     logVerbose("slack send: suppressed NO_REPLY token before API call");
     return { messageId: "suppressed", channelId: "" };
   }
-  const blocks = opts.blocks == null ? undefined : validateSlackBlocksArray(opts.blocks);
+  const blocks =
+    opts.blocks == null ? undefined : validateSlackBlocksArray(opts.blocks);
   if (!trimmedMessage && !opts.mediaUrl && !blocks) {
     throw new Error("Slack send requires text, blocks, or media");
   }

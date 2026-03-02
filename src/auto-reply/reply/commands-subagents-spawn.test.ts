@@ -11,7 +11,8 @@ const hoisted = vi.hoisted(() => {
 });
 
 vi.mock("../../agents/subagent-spawn.js", () => ({
-  spawnSubagentDirect: (...args: unknown[]) => hoisted.spawnSubagentDirectMock(...args),
+  spawnSubagentDirect: (...args: unknown[]) =>
+    hoisted.spawnSubagentDirectMock(...args),
   SUBAGENT_SPAWN_MODES: ["run", "session"],
 }));
 
@@ -23,11 +24,14 @@ installSubagentsCommandCoreMocks();
 
 // Dynamic import to ensure mocks are installed first.
 const { handleSubagentsCommand } = await import("./commands-subagents.js");
-const { buildCommandTestParams } = await import("./commands-spawn.test-harness.js");
+const { buildCommandTestParams } =
+  await import("./commands-spawn.test-harness.js");
 
 const { spawnSubagentDirectMock } = hoisted;
 
-function acceptedResult(overrides?: Partial<SpawnSubagentResult>): SpawnSubagentResult {
+function acceptedResult(
+  overrides?: Partial<SpawnSubagentResult>,
+): SpawnSubagentResult {
   return {
     status: "accepted",
     childSessionKey: "agent:beta:subagent:test-uuid",
@@ -73,7 +77,9 @@ describe("/subagents spawn command", () => {
   async function runSuccessfulSpawn(params?: {
     commandText?: string;
     context?: Record<string, unknown>;
-    mutateParams?: (commandParams: ReturnType<typeof buildCommandTestParams>) => void;
+    mutateParams?: (
+      commandParams: ReturnType<typeof buildCommandTestParams>,
+    ) => void;
   }) {
     spawnSubagentDirectMock.mockResolvedValue(acceptedResult());
     const commandParams = buildCommandTestParams(
@@ -108,7 +114,9 @@ describe("/subagents spawn command", () => {
 
   it("spawns subagent and confirms reply text and child session key", async () => {
     const { spawnParams, spawnCtx, commandResult } = await runSuccessfulSpawn();
-    expect(commandResult?.reply?.text).toContain("agent:beta:subagent:test-uuid");
+    expect(commandResult?.reply?.text).toContain(
+      "agent:beta:subagent:test-uuid",
+    );
     expect(commandResult?.reply?.text).toContain("run-spaw");
     expect(spawnSubagentDirectMock).toHaveBeenCalledOnce();
     expect(spawnParams.task).toBe("do the thing");
@@ -184,9 +192,14 @@ describe("/subagents spawn command", () => {
   });
   it("returns forbidden for unauthorized cross-agent spawn", async () => {
     spawnSubagentDirectMock.mockResolvedValue(
-      forbiddenResult("agentId is not allowed for sessions_spawn (allowed: alpha)"),
+      forbiddenResult(
+        "agentId is not allowed for sessions_spawn (allowed: alpha)",
+      ),
     );
-    const params = buildCommandTestParams("/subagents spawn beta do the thing", baseCfg);
+    const params = buildCommandTestParams(
+      "/subagents spawn beta do the thing",
+      baseCfg,
+    );
     const result = await handleSubagentsCommand(params, true);
     expect(result).not.toBeNull();
     expect(result?.reply?.text).toContain("Spawn failed");
@@ -199,9 +212,13 @@ describe("/subagents spawn command", () => {
   });
 
   it("ignores unauthorized sender (silent, no reply)", async () => {
-    const params = buildCommandTestParams("/subagents spawn beta do the thing", baseCfg, {
-      CommandAuthorized: false,
-    });
+    const params = buildCommandTestParams(
+      "/subagents spawn beta do the thing",
+      baseCfg,
+      {
+        CommandAuthorized: false,
+      },
+    );
     params.command.isAuthorizedSender = false;
     const result = await handleSubagentsCommand(params, true);
     expect(result).not.toBeNull();
@@ -211,7 +228,10 @@ describe("/subagents spawn command", () => {
   });
 
   it("returns null when text commands disabled", async () => {
-    const params = buildCommandTestParams("/subagents spawn beta do the thing", baseCfg);
+    const params = buildCommandTestParams(
+      "/subagents spawn beta do the thing",
+      baseCfg,
+    );
     const result = await handleSubagentsCommand(params, false);
     expect(result).toBeNull();
     expect(spawnSubagentDirectMock).not.toHaveBeenCalled();

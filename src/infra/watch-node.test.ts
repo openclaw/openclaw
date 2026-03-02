@@ -39,7 +39,10 @@ describe("watch-node script", () => {
     expect(spawn).toHaveBeenCalledWith(
       "/usr/local/bin/node",
       [
-        ...runNodeWatchedPaths.flatMap((watchPath) => ["--watch-path", watchPath]),
+        ...runNodeWatchedPaths.flatMap((watchPath) => [
+          "--watch-path",
+          watchPath,
+        ]),
         "--watch-preserve-output",
         "scripts/run-node.mjs",
         "gateway",

@@ -27,7 +27,10 @@ function parseTimeoutMs(timeout: unknown): number | null | undefined {
 
 async function runWithVerboseAndTimeout(
   opts: { verbose?: boolean; debug?: boolean; timeout?: unknown },
-  action: (params: { verbose: boolean; timeoutMs: number | undefined }) => Promise<void>,
+  action: (params: {
+    verbose: boolean;
+    timeoutMs: number | undefined;
+  }) => Promise<void>,
 ): Promise<void> {
   const verbose = resolveVerbose(opts);
   setVerbose(verbose);
@@ -47,7 +50,11 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     .option("--json", "Output JSON instead of text", false)
     .option("--all", "Full diagnosis (read-only, pasteable)", false)
     .option("--usage", "Show model provider usage/quota snapshots", false)
-    .option("--deep", "Probe channels (WhatsApp Web + Telegram + Discord + Slack + Signal)", false)
+    .option(
+      "--deep",
+      "Probe channels (WhatsApp Web + Telegram + Discord + Slack + Signal)",
+      false,
+    )
     .option("--timeout <ms>", "Probe timeout in milliseconds", "10000")
     .option("--verbose", "Verbose logging", false)
     .option("--debug", "Alias for --verbose", false)
@@ -58,7 +65,10 @@ export function registerStatusHealthSessionsCommands(program: Command) {
           ["openclaw status", "Show channel health + session summary."],
           ["openclaw status --all", "Full diagnosis (read-only)."],
           ["openclaw status --json", "Machine-readable output."],
-          ["openclaw status --usage", "Show model provider usage/quota snapshots."],
+          [
+            "openclaw status --usage",
+            "Show model provider usage/quota snapshots.",
+          ],
           [
             "openclaw status --deep",
             "Run channel probes (WA + Telegram + Discord + Slack + Signal).",
@@ -117,20 +127,39 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     .description("List stored conversation sessions")
     .option("--json", "Output as JSON", false)
     .option("--verbose", "Verbose logging", false)
-    .option("--store <path>", "Path to session store (default: resolved from config)")
-    .option("--agent <id>", "Agent id to inspect (default: configured default agent)")
-    .option("--all-agents", "Aggregate sessions across all configured agents", false)
-    .option("--active <minutes>", "Only show sessions updated within the past N minutes")
+    .option(
+      "--store <path>",
+      "Path to session store (default: resolved from config)",
+    )
+    .option(
+      "--agent <id>",
+      "Agent id to inspect (default: configured default agent)",
+    )
+    .option(
+      "--all-agents",
+      "Aggregate sessions across all configured agents",
+      false,
+    )
+    .option(
+      "--active <minutes>",
+      "Only show sessions updated within the past N minutes",
+    )
     .addHelpText(
       "after",
       () =>
         `\n${theme.heading("Examples:")}\n${formatHelpExamples([
           ["openclaw sessions", "List all sessions."],
           ["openclaw sessions --agent work", "List sessions for one agent."],
-          ["openclaw sessions --all-agents", "Aggregate sessions across agents."],
+          [
+            "openclaw sessions --all-agents",
+            "Aggregate sessions across agents.",
+          ],
           ["openclaw sessions --active 120", "Only last 2 hours."],
           ["openclaw sessions --json", "Machine-readable output."],
-          ["openclaw sessions --store ./tmp/sessions.json", "Use a specific session store."],
+          [
+            "openclaw sessions --store ./tmp/sessions.json",
+            "Use a specific session store.",
+          ],
         ])}\n\n${theme.muted(
           "Shows token usage per session when the agent reports it; set agents.defaults.contextTokens to cap the window and show %.",
         )}`,
@@ -158,17 +187,34 @@ export function registerStatusHealthSessionsCommands(program: Command) {
   sessionsCmd
     .command("cleanup")
     .description("Run session-store maintenance now")
-    .option("--store <path>", "Path to session store (default: resolved from config)")
-    .option("--agent <id>", "Agent id to maintain (default: configured default agent)")
-    .option("--all-agents", "Run maintenance across all configured agents", false)
+    .option(
+      "--store <path>",
+      "Path to session store (default: resolved from config)",
+    )
+    .option(
+      "--agent <id>",
+      "Agent id to maintain (default: configured default agent)",
+    )
+    .option(
+      "--all-agents",
+      "Run maintenance across all configured agents",
+      false,
+    )
     .option("--dry-run", "Preview maintenance actions without writing", false)
-    .option("--enforce", "Apply maintenance even when configured mode is warn", false)
+    .option(
+      "--enforce",
+      "Apply maintenance even when configured mode is warn",
+      false,
+    )
     .option(
       "--fix-missing",
       "Remove store entries whose transcript files are missing (bypasses age/count retention)",
       false,
     )
-    .option("--active-key <key>", "Protect this session key from budget-eviction")
+    .option(
+      "--active-key <key>",
+      "Protect this session key from budget-eviction",
+    )
     .option("--json", "Output JSON", false)
     .addHelpText(
       "after",
@@ -180,8 +226,14 @@ export function registerStatusHealthSessionsCommands(program: Command) {
             "Also preview pruning entries with missing transcript files.",
           ],
           ["openclaw sessions cleanup --enforce", "Apply maintenance now."],
-          ["openclaw sessions cleanup --agent work --dry-run", "Preview one agent store."],
-          ["openclaw sessions cleanup --all-agents --dry-run", "Preview all agent stores."],
+          [
+            "openclaw sessions cleanup --agent work --dry-run",
+            "Preview one agent store.",
+          ],
+          [
+            "openclaw sessions cleanup --all-agents --dry-run",
+            "Preview all agent stores.",
+          ],
           [
             "openclaw sessions cleanup --enforce --store ./tmp/sessions.json",
             "Use a specific store.",

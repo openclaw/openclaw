@@ -1,6 +1,12 @@
-import { buildUsageHttpErrorSnapshot, fetchJson } from "./provider-usage.fetch.shared.js";
+import {
+  buildUsageHttpErrorSnapshot,
+  fetchJson,
+} from "./provider-usage.fetch.shared.js";
 import { clampPercent, PROVIDER_LABELS } from "./provider-usage.shared.js";
-import type { ProviderUsageSnapshot, UsageWindow } from "./provider-usage.types.js";
+import type {
+  ProviderUsageSnapshot,
+  UsageWindow,
+} from "./provider-usage.types.js";
 
 type CopilotUsageResponse = {
   quota_snapshots?: {
@@ -40,7 +46,8 @@ export async function fetchCopilotUsage(
   const windows: UsageWindow[] = [];
 
   if (data.quota_snapshots?.premium_interactions) {
-    const remaining = data.quota_snapshots.premium_interactions.percent_remaining;
+    const remaining =
+      data.quota_snapshots.premium_interactions.percent_remaining;
     windows.push({
       label: "Premium",
       usedPercent: clampPercent(100 - (remaining ?? 0)),

@@ -34,7 +34,9 @@ export function sparkleBuildFloorsFromShortVersion(
     return null;
   }
 
-  const dateKey = Number(`${year}${String(month).padStart(2, "0")}${String(day).padStart(2, "0")}`);
+  const dateKey = Number(
+    `${year}${String(month).padStart(2, "0")}${String(day).padStart(2, "0")}`,
+  );
   const legacyFloor = Number(`${dateKey}0`);
 
   let lane = 90;
@@ -52,7 +54,9 @@ export function sparkleBuildFloorsFromShortVersion(
   return { dateKey, legacyFloor, laneFloor, lane };
 }
 
-export function canonicalSparkleBuildFromVersion(shortVersion: string): number | null {
+export function canonicalSparkleBuildFromVersion(
+  shortVersion: string,
+): number | null {
   return sparkleBuildFloorsFromShortVersion(shortVersion)?.laneFloor ?? null;
 }
 

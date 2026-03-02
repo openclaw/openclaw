@@ -16,7 +16,13 @@ import {
   SELECTOR_UNSUPPORTED_MESSAGE,
 } from "./agent.shared.js";
 import type { BrowserRouteRegistrar } from "./types.js";
-import { jsonError, toBoolean, toNumber, toStringArray, toStringOrEmpty } from "./utils.js";
+import {
+  jsonError,
+  toBoolean,
+  toNumber,
+  toStringArray,
+  toStringOrEmpty,
+} from "./utils.js";
 
 export function registerBrowserAgentActRoutes(
   app: BrowserRouteRegistrar,
@@ -141,7 +147,9 @@ export function registerBrowserAgentActRoutes(
               return jsonError(res, 400, "ref is required");
             }
             const timeoutMs = toNumber(body.timeoutMs);
-            const scrollRequest: Parameters<typeof pw.scrollIntoViewViaPlaywright>[0] = {
+            const scrollRequest: Parameters<
+              typeof pw.scrollIntoViewViaPlaywright
+            >[0] = {
               cdpUrl,
               targetId: tab.targetId,
               ref,
@@ -191,7 +199,9 @@ export function registerBrowserAgentActRoutes(
                 if (!field || typeof field !== "object") {
                   return null;
                 }
-                return normalizeBrowserFormField(field as Record<string, unknown>);
+                return normalizeBrowserFormField(
+                  field as Record<string, unknown>,
+                );
               })
               .filter((field): field is BrowserFormField => field !== null);
             if (!fields.length) {
@@ -291,13 +301,14 @@ export function registerBrowserAgentActRoutes(
             }
             const ref = toStringOrEmpty(body.ref) || undefined;
             const evalTimeoutMs = toNumber(body.timeoutMs);
-            const evalRequest: Parameters<typeof pw.evaluateViaPlaywright>[0] = {
-              cdpUrl,
-              targetId: tab.targetId,
-              fn,
-              ref,
-              signal: req.signal,
-            };
+            const evalRequest: Parameters<typeof pw.evaluateViaPlaywright>[0] =
+              {
+                cdpUrl,
+                targetId: tab.targetId,
+                fn,
+                ref,
+                signal: req.signal,
+              };
             if (evalTimeoutMs !== undefined) {
               evalRequest.timeoutMs = evalTimeoutMs;
             }

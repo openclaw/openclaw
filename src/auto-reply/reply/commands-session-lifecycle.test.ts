@@ -13,12 +13,17 @@ const hoisted = vi.hoisted(() => {
 });
 
 vi.mock("../../discord/monitor/thread-bindings.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../discord/monitor/thread-bindings.js")>();
+  const actual =
+    await importOriginal<
+      typeof import("../../discord/monitor/thread-bindings.js")
+    >();
   return {
     ...actual,
     getThreadBindingManager: hoisted.getThreadBindingManagerMock,
-    setThreadBindingIdleTimeoutBySessionKey: hoisted.setThreadBindingIdleTimeoutBySessionKeyMock,
-    setThreadBindingMaxAgeBySessionKey: hoisted.setThreadBindingMaxAgeBySessionKeyMock,
+    setThreadBindingIdleTimeoutBySessionKey:
+      hoisted.setThreadBindingIdleTimeoutBySessionKeyMock,
+    setThreadBindingMaxAgeBySessionKey:
+      hoisted.setThreadBindingMaxAgeBySessionKeyMock,
   };
 });
 
@@ -43,7 +48,10 @@ type FakeBinding = {
   maxAgeMs?: number;
 };
 
-function createDiscordCommandParams(commandBody: string, overrides?: Record<string, unknown>) {
+function createDiscordCommandParams(
+  commandBody: string,
+  overrides?: Record<string, unknown>,
+) {
   return buildCommandTestParams(commandBody, baseCfg, {
     Provider: "discord",
     Surface: "discord",
@@ -92,7 +100,9 @@ describe("/session idle and /session max-age", () => {
     vi.setSystemTime(new Date("2026-02-20T00:00:00.000Z"));
 
     const binding = createFakeBinding();
-    hoisted.getThreadBindingManagerMock.mockReturnValue(createFakeThreadBindingManager(binding));
+    hoisted.getThreadBindingManagerMock.mockReturnValue(
+      createFakeThreadBindingManager(binding),
+    );
     hoisted.setThreadBindingIdleTimeoutBySessionKeyMock.mockReturnValue([
       {
         ...binding,
@@ -101,10 +111,15 @@ describe("/session idle and /session max-age", () => {
       },
     ]);
 
-    const result = await handleSessionCommand(createDiscordCommandParams("/session idle 2h"), true);
+    const result = await handleSessionCommand(
+      createDiscordCommandParams("/session idle 2h"),
+      true,
+    );
     const text = result?.reply?.text ?? "";
 
-    expect(hoisted.setThreadBindingIdleTimeoutBySessionKeyMock).toHaveBeenCalledWith({
+    expect(
+      hoisted.setThreadBindingIdleTimeoutBySessionKeyMock,
+    ).toHaveBeenCalledWith({
       targetSessionKey: "agent:main:subagent:child",
       accountId: "default",
       idleTimeoutMs: 2 * 60 * 60 * 1000,
@@ -121,9 +136,14 @@ describe("/session idle and /session max-age", () => {
       idleTimeoutMs: 2 * 60 * 60 * 1000,
       lastActivityAt: Date.now(),
     });
-    hoisted.getThreadBindingManagerMock.mockReturnValue(createFakeThreadBindingManager(binding));
+    hoisted.getThreadBindingManagerMock.mockReturnValue(
+      createFakeThreadBindingManager(binding),
+    );
 
-    const result = await handleSessionCommand(createDiscordCommandParams("/session idle"), true);
+    const result = await handleSessionCommand(
+      createDiscordCommandParams("/session idle"),
+      true,
+    );
     expect(result?.reply?.text).toContain("Idle timeout active (2h");
     expect(result?.reply?.text).toContain("2026-02-20T02:00:00.000Z");
   });
@@ -133,7 +153,9 @@ describe("/session idle and /session max-age", () => {
     vi.setSystemTime(new Date("2026-02-20T00:00:00.000Z"));
 
     const binding = createFakeBinding();
-    hoisted.getThreadBindingManagerMock.mockReturnValue(createFakeThreadBindingManager(binding));
+    hoisted.getThreadBindingManagerMock.mockReturnValue(
+      createFakeThreadBindingManager(binding),
+    );
     hoisted.setThreadBindingMaxAgeBySessionKeyMock.mockReturnValue([
       {
         ...binding,
@@ -148,42 +170,54 @@ describe("/session idle and /session max-age", () => {
     );
     const text = result?.reply?.text ?? "";
 
-    expect(hoisted.setThreadBindingMaxAgeBySessionKeyMock).toHaveBeenCalledWith({
-      targetSessionKey: "agent:main:subagent:child",
-      accountId: "default",
-      maxAgeMs: 3 * 60 * 60 * 1000,
-    });
+    expect(hoisted.setThreadBindingMaxAgeBySessionKeyMock).toHaveBeenCalledWith(
+      {
+        targetSessionKey: "agent:main:subagent:child",
+        accountId: "default",
+        maxAgeMs: 3 * 60 * 60 * 1000,
+      },
+    );
     expect(text).toContain("Max age set to 3h");
     expect(text).toContain("2026-02-20T03:00:00.000Z");
   });
 
   it("disables max age when set to off", async () => {
     const binding = createFakeBinding({ maxAgeMs: 2 * 60 * 60 * 1000 });
-    hoisted.getThreadBindingManagerMock.mockReturnValue(createFakeThreadBindingManager(binding));
-    hoisted.setThreadBindingMaxAgeBySessionKeyMock.mockReturnValue([{ ...binding, maxAgeMs: 0 }]);
+    hoisted.getThreadBindingManagerMock.mockReturnValue(
+      createFakeThreadBindingManager(binding),
+    );
+    hoisted.setThreadBindingMaxAgeBySessionKeyMock.mockReturnValue([
+      { ...binding, maxAgeMs: 0 },
+    ]);
 
     const result = await handleSessionCommand(
       createDiscordCommandParams("/session max-age off"),
       true,
     );
 
-    expect(hoisted.setThreadBindingMaxAgeBySessionKeyMock).toHaveBeenCalledWith({
-      targetSessionKey: "agent:main:subagent:child",
-      accountId: "default",
-      maxAgeMs: 0,
-    });
+    expect(hoisted.setThreadBindingMaxAgeBySessionKeyMock).toHaveBeenCalledWith(
+      {
+        targetSessionKey: "agent:main:subagent:child",
+        accountId: "default",
+        maxAgeMs: 0,
+      },
+    );
     expect(result?.reply?.text).toContain("Max age disabled");
   });
 
   it("is unavailable outside discord", async () => {
     const params = buildCommandTestParams("/session idle 2h", baseCfg);
     const result = await handleSessionCommand(params, true);
-    expect(result?.reply?.text).toContain("currently available for Discord thread-bound sessions");
+    expect(result?.reply?.text).toContain(
+      "currently available for Discord thread-bound sessions",
+    );
   });
 
   it("requires binding owner for lifecycle updates", async () => {
     const binding = createFakeBinding({ boundBy: "owner-1" });
-    hoisted.getThreadBindingManagerMock.mockReturnValue(createFakeThreadBindingManager(binding));
+    hoisted.getThreadBindingManagerMock.mockReturnValue(
+      createFakeThreadBindingManager(binding),
+    );
 
     const result = await handleSessionCommand(
       createDiscordCommandParams("/session idle 2h", {
@@ -192,7 +226,11 @@ describe("/session idle and /session max-age", () => {
       true,
     );
 
-    expect(hoisted.setThreadBindingIdleTimeoutBySessionKeyMock).not.toHaveBeenCalled();
-    expect(result?.reply?.text).toContain("Only owner-1 can update session lifecycle settings");
+    expect(
+      hoisted.setThreadBindingIdleTimeoutBySessionKeyMock,
+    ).not.toHaveBeenCalled();
+    expect(result?.reply?.text).toContain(
+      "Only owner-1 can update session lifecycle settings",
+    );
   });
 });

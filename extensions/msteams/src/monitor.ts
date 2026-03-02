@@ -10,7 +10,10 @@ import { createMSTeamsConversationStoreFs } from "./conversation-store-fs.js";
 import type { MSTeamsConversationStore } from "./conversation-store.js";
 import { formatUnknownError } from "./errors.js";
 import type { MSTeamsAdapter } from "./messenger.js";
-import { registerMSTeamsHandlers, type MSTeamsActivityHandler } from "./monitor-handler.js";
+import {
+  registerMSTeamsHandlers,
+  type MSTeamsActivityHandler,
+} from "./monitor-handler.js";
 import { createMSTeamsPollStoreFs, type MSTeamsPollStore } from "./polls.js";
 import {
   resolveMSTeamsChannelAllowlist,
@@ -99,7 +102,10 @@ export async function monitorMSTeamsProvider(
         ?.map((entry) => cleanAllowEntry(String(entry)))
         .filter((entry) => entry && entry !== "*") ?? [];
     if (allowEntries.length > 0) {
-      const { additions } = await resolveAllowlistUsers("msteams users", allowEntries);
+      const { additions } = await resolveAllowlistUsers(
+        "msteams users",
+        allowEntries,
+      );
       allowFrom = mergeAllowlist({ existing: allowFrom, additions });
     }
 
@@ -108,13 +114,23 @@ export async function monitorMSTeamsProvider(
         .map((entry) => cleanAllowEntry(String(entry)))
         .filter((entry) => entry && entry !== "*");
       if (groupEntries.length > 0) {
-        const { additions } = await resolveAllowlistUsers("msteams group users", groupEntries);
-        groupAllowFrom = mergeAllowlist({ existing: groupAllowFrom, additions });
+        const { additions } = await resolveAllowlistUsers(
+          "msteams group users",
+          groupEntries,
+        );
+        groupAllowFrom = mergeAllowlist({
+          existing: groupAllowFrom,
+          additions,
+        });
       }
     }
 
     if (teamsConfig && Object.keys(teamsConfig).length > 0) {
-      const entries: Array<{ input: string; teamKey: string; channelKey?: string }> = [];
+      const entries: Array<{
+        input: string;
+        teamKey: string;
+        channelKey?: string;
+      }> = [];
       for (const [teamKey, teamCfg] of Object.entries(teamsConfig)) {
         if (teamKey === "*") {
           continue;
@@ -163,7 +179,11 @@ export async function monitorMSTeamsProvider(
             ...sourceTeam.channels,
             ...existing.channels,
           };
-          const mergedTeam = { ...sourceTeam, ...existing, channels: mergedChannels };
+          const mergedTeam = {
+            ...sourceTeam,
+            ...existing,
+            channels: mergedChannels,
+          };
           nextTeams[entry.teamId] = mergedTeam;
           if (source.channelKey && entry.channelId) {
             const sourceChannel = sourceTeam.channels?.[source.channelKey];
@@ -187,7 +207,9 @@ export async function monitorMSTeamsProvider(
       }
     }
   } catch (err) {
-    runtime.log?.(`msteams resolve failed; using config entries. ${String(err)}`);
+    runtime.log?.(
+      `msteams resolve failed; using config entries. ${String(err)}`,
+    );
   }
 
   msteamsCfg = {
@@ -209,10 +231,12 @@ export async function monitorMSTeamsProvider(
   const MB = 1024 * 1024;
   const agentDefaults = cfg.agents?.defaults;
   const mediaMaxBytes =
-    typeof agentDefaults?.mediaMaxMb === "number" && agentDefaults.mediaMaxMb > 0
+    typeof agentDefaults?.mediaMaxMb === "number" &&
+    agentDefaults.mediaMaxMb > 0
       ? Math.floor(agentDefaults.mediaMaxMb * MB)
       : 8 * MB;
-  const conversationStore = opts.conversationStore ?? createMSTeamsConversationStoreFs();
+  const conversationStore =
+    opts.conversationStore ?? createMSTeamsConversationStoreFs();
   const pollStore = opts.pollStore ?? createMSTeamsPollStoreFs();
 
   log.info(`starting provider (port ${port})`);
@@ -227,29 +251,44 @@ export async function monitorMSTeamsProvider(
   const tokenProvider = new MsalTokenProvider(authConfig);
   const adapter = createMSTeamsAdapter(authConfig, sdk);
 
-  const handler = registerMSTeamsHandlers(new ActivityHandler() as MSTeamsActivityHandler, {
-    cfg,
-    runtime,
-    appId,
-    adapter: adapter as unknown as MSTeamsAdapter,
-    tokenProvider,
-    textLimit,
-    mediaMaxBytes,
-    conversationStore,
-    pollStore,
-    log,
-  });
+  const handler = registerMSTeamsHandlers(
+    new ActivityHandler() as MSTeamsActivityHandler,
+    {
+      cfg,
+      runtime,
+      appId,
+      adapter: adapter as unknown as MSTeamsAdapter,
+      tokenProvider,
+      textLimit,
+      mediaMaxBytes,
+      conversationStore,
+      pollStore,
+      log,
+    },
+  );
 
   // Create Express server
   const expressApp = express.default();
   expressApp.use(express.json({ limit: MSTEAMS_WEBHOOK_MAX_BODY_BYTES }));
-  expressApp.use((err: unknown, _req: Request, res: Response, next: (err?: unknown) => void) => {
-    if (err && typeof err === "object" && "status" in err && err.status === 413) {
-      res.status(413).json({ error: "Payload too large" });
-      return;
-    }
-    next(err);
-  });
+  expressApp.use(
+    (
+      err: unknown,
+      _req: Request,
+      res: Response,
+      next: (err?: unknown) => void,
+    ) => {
+      if (
+        err &&
+        typeof err === "object" &&
+        "status" in err &&
+        err.status === 413
+      ) {
+        res.status(413).json({ error: "Payload too large" });
+        return;
+      }
+      next(err);
+    },
+  );
   expressApp.use(authorizeJWT(authConfig));
 
   // Set up the messages endpoint - use configured path and /api/messages as fallback

@@ -1,12 +1,18 @@
 import { getAcpSessionManager } from "../../../acp/control-plane/manager.js";
 import { formatAcpRuntimeErrorText } from "../../../acp/runtime/error-text.js";
 import { toAcpRuntimeError } from "../../../acp/runtime/errors.js";
-import { getAcpRuntimeBackend, requireAcpRuntimeBackend } from "../../../acp/runtime/registry.js";
+import {
+  getAcpRuntimeBackend,
+  requireAcpRuntimeBackend,
+} from "../../../acp/runtime/registry.js";
 import { resolveSessionStorePathForAcp } from "../../../acp/runtime/session-meta.js";
 import { loadSessionStore } from "../../../config/sessions.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
-import type { CommandHandlerResult, HandleCommandsParams } from "../commands-types.js";
+import type {
+  CommandHandlerResult,
+  HandleCommandsParams,
+} from "../commands-types.js";
 import { resolveAcpCommandBindingContext } from "./context.js";
 import {
   ACP_DOCTOR_USAGE,
@@ -30,11 +36,17 @@ export async function handleAcpDoctorAction(
   const backendId = resolveConfiguredAcpBackendId(params.cfg);
   const installHint = resolveAcpInstallCommandHint(params.cfg);
   const registeredBackend = getAcpRuntimeBackend(backendId);
-  const managerSnapshot = getAcpSessionManager().getObservabilitySnapshot(params.cfg);
+  const managerSnapshot = getAcpSessionManager().getObservabilitySnapshot(
+    params.cfg,
+  );
   const lines = ["ACP doctor:", "-----", `configuredBackend: ${backendId}`];
-  lines.push(`activeRuntimeSessions: ${managerSnapshot.runtimeCache.activeSessions}`);
+  lines.push(
+    `activeRuntimeSessions: ${managerSnapshot.runtimeCache.activeSessions}`,
+  );
   lines.push(`runtimeIdleTtlMs: ${managerSnapshot.runtimeCache.idleTtlMs}`);
-  lines.push(`evictedIdleRuntimes: ${managerSnapshot.runtimeCache.evictedTotal}`);
+  lines.push(
+    `evictedIdleRuntimes: ${managerSnapshot.runtimeCache.evictedTotal}`,
+  );
   lines.push(`activeTurns: ${managerSnapshot.turns.active}`);
   lines.push(`queueDepth: ${managerSnapshot.turns.queueDepth}`);
   lines.push(
@@ -57,7 +69,9 @@ export async function handleAcpDoctorAction(
   if (registeredBackend?.runtime.doctor) {
     try {
       const report = await registeredBackend.runtime.doctor();
-      lines.push(`runtimeDoctor: ${report.ok ? "ok" : "error"} (${report.message})`);
+      lines.push(
+        `runtimeDoctor: ${report.ok ? "ok" : "error"} (${report.message})`,
+      );
       if (report.code) {
         lines.push(`runtimeDoctorCode: ${report.code}`);
       }
@@ -86,7 +100,9 @@ export async function handleAcpDoctorAction(
       ? await backend.runtime.getCapabilities({})
       : { controls: [] as string[], configOptionKeys: [] as string[] };
     lines.push("healthy: yes");
-    lines.push(`capabilities: ${formatAcpCapabilitiesText(capabilities.controls ?? [])}`);
+    lines.push(
+      `capabilities: ${formatAcpCapabilitiesText(capabilities.controls ?? [])}`,
+    );
     if ((capabilities.configOptionKeys?.length ?? 0) > 0) {
       lines.push(`configKeys: ${capabilities.configOptionKeys?.join(", ")}`);
     }
@@ -100,7 +116,9 @@ export async function handleAcpDoctorAction(
     lines.push("healthy: no");
     lines.push(formatAcpRuntimeErrorText(acpError));
     lines.push(`next: ${installHint}`);
-    lines.push(`next: openclaw config set plugins.entries.${backendId}.enabled true`);
+    lines.push(
+      `next: openclaw config set plugins.entries.${backendId}.enabled true`,
+    );
     if (backendId.toLowerCase() === "acpx") {
       lines.push("next: verify acpx is installed (`acpx --help`).");
     }
@@ -152,7 +170,8 @@ export function handleAcpSessionsAction(
     return stopWithText(ACP_SESSIONS_USAGE);
   }
 
-  const currentSessionKey = resolveBoundAcpThreadSessionKey(params) || params.sessionKey;
+  const currentSessionKey =
+    resolveBoundAcpThreadSessionKey(params) || params.sessionKey;
   if (!currentSessionKey) {
     return stopWithText("⚠️ Missing session key.");
   }
@@ -183,8 +202,10 @@ export function handleAcpSessionsAction(
         .listBySession(key)
         .find(
           (binding) =>
-            (!normalizedChannel || binding.conversation.channel === normalizedChannel) &&
-            (!normalizedAccountId || binding.conversation.accountId === normalizedAccountId),
+            (!normalizedChannel ||
+              binding.conversation.channel === normalizedChannel) &&
+            (!normalizedAccountId ||
+              binding.conversation.accountId === normalizedAccountId),
         )?.conversation.conversationId;
       return formatAcpSessionLine({
         key,

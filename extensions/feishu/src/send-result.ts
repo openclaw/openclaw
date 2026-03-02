@@ -11,7 +11,9 @@ export function assertFeishuMessageApiSuccess(
   errorPrefix: string,
 ) {
   if (response.code !== 0) {
-    throw new Error(`${errorPrefix}: ${response.msg || `code ${response.code}`}`);
+    throw new Error(
+      `${errorPrefix}: ${response.msg || `code ${response.code}`}`,
+    );
   }
 }
 

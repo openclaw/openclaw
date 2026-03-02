@@ -3,7 +3,11 @@ import { buildQueuedSystemPrompt } from "../auto-reply/reply/session-updates.js"
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { isCronSystemEvent } from "./heartbeat-runner.js";
-import { enqueueSystemEvent, peekSystemEvents, resetSystemEventsForTest } from "./system-events.js";
+import {
+  enqueueSystemEvent,
+  peekSystemEvents,
+  resetSystemEventsForTest,
+} from "./system-events.js";
 
 const cfg = {} as unknown as OpenClawConfig;
 const mainKey = resolveMainSessionKey(cfg);
@@ -20,7 +24,9 @@ describe("system events (session routing)", () => {
     });
 
     expect(peekSystemEvents(mainKey)).toEqual([]);
-    expect(peekSystemEvents("discord:group:123")).toEqual(["Discord reaction added: ✅"]);
+    expect(peekSystemEvents("discord:group:123")).toEqual([
+      "Discord reaction added: ✅",
+    ]);
 
     const main = await buildQueuedSystemPrompt({
       cfg,
@@ -29,7 +35,9 @@ describe("system events (session routing)", () => {
       isNewSession: false,
     });
     expect(main).toBeUndefined();
-    expect(peekSystemEvents("discord:group:123")).toEqual(["Discord reaction added: ✅"]);
+    expect(peekSystemEvents("discord:group:123")).toEqual([
+      "Discord reaction added: ✅",
+    ]);
 
     const discord = await buildQueuedSystemPrompt({
       cfg,
@@ -43,12 +51,18 @@ describe("system events (session routing)", () => {
   });
 
   it("requires an explicit session key", () => {
-    expect(() => enqueueSystemEvent("Node: Mac Studio", { sessionKey: " " })).toThrow("sessionKey");
+    expect(() =>
+      enqueueSystemEvent("Node: Mac Studio", { sessionKey: " " }),
+    ).toThrow("sessionKey");
   });
 
   it("returns false for consecutive duplicate events", () => {
-    const first = enqueueSystemEvent("Node connected", { sessionKey: "agent:main:main" });
-    const second = enqueueSystemEvent("Node connected", { sessionKey: "agent:main:main" });
+    const first = enqueueSystemEvent("Node connected", {
+      sessionKey: "agent:main:main",
+    });
+    const second = enqueueSystemEvent("Node connected", {
+      sessionKey: "agent:main:main",
+    });
 
     expect(first).toBe(true);
     expect(second).toBe(false);
@@ -56,7 +70,9 @@ describe("system events (session routing)", () => {
 
   it("filters heartbeat/noise lines from queued system prompt", async () => {
     const key = "agent:main:test-heartbeat-filter";
-    enqueueSystemEvent("Read HEARTBEAT.md before continuing", { sessionKey: key });
+    enqueueSystemEvent("Read HEARTBEAT.md before continuing", {
+      sessionKey: key,
+    });
     enqueueSystemEvent("heartbeat poll: pending", { sessionKey: key });
     enqueueSystemEvent("reason periodic: 5m", { sessionKey: key });
 
@@ -72,7 +88,9 @@ describe("system events (session routing)", () => {
 
   it("scrubs node last-input suffix in queued system prompt", async () => {
     const key = "agent:main:test-node-scrub";
-    enqueueSystemEvent("Node: Mac Studio · last input /tmp/secret.txt", { sessionKey: key });
+    enqueueSystemEvent("Node: Mac Studio · last input /tmp/secret.txt", {
+      sessionKey: key,
+    });
 
     const prompt = await buildQueuedSystemPrompt({
       cfg,
@@ -105,11 +123,15 @@ describe("isCronSystemEvent", () => {
   });
 
   it("returns false for exec completion events", () => {
-    expect(isCronSystemEvent("Exec finished (gateway id=abc, code 0)")).toBe(false);
+    expect(isCronSystemEvent("Exec finished (gateway id=abc, code 0)")).toBe(
+      false,
+    );
   });
 
   it("returns true for real cron reminder content", () => {
     expect(isCronSystemEvent("Reminder: Check Base Scout results")).toBe(true);
-    expect(isCronSystemEvent("Send weekly status update to the team")).toBe(true);
+    expect(isCronSystemEvent("Send weekly status update to the team")).toBe(
+      true,
+    );
   });
 });

@@ -48,30 +48,52 @@ describe("resolveMainSessionAlias", () => {
 
 describe("session key display/internal mapping", () => {
   it("maps alias and main key to display main", () => {
-    expect(resolveDisplaySessionKey({ key: "global", alias: "global", mainKey: "main" })).toBe(
-      "main",
-    );
-    expect(resolveDisplaySessionKey({ key: "main", alias: "global", mainKey: "main" })).toBe(
-      "main",
-    );
     expect(
-      resolveDisplaySessionKey({ key: "agent:ops:main", alias: "global", mainKey: "main" }),
+      resolveDisplaySessionKey({
+        key: "global",
+        alias: "global",
+        mainKey: "main",
+      }),
+    ).toBe("main");
+    expect(
+      resolveDisplaySessionKey({
+        key: "main",
+        alias: "global",
+        mainKey: "main",
+      }),
+    ).toBe("main");
+    expect(
+      resolveDisplaySessionKey({
+        key: "agent:ops:main",
+        alias: "global",
+        mainKey: "main",
+      }),
     ).toBe("agent:ops:main");
   });
 
   it("maps input main to alias for internal routing", () => {
-    expect(resolveInternalSessionKey({ key: "main", alias: "global", mainKey: "main" })).toBe(
-      "global",
-    );
     expect(
-      resolveInternalSessionKey({ key: "agent:ops:main", alias: "global", mainKey: "main" }),
+      resolveInternalSessionKey({
+        key: "main",
+        alias: "global",
+        mainKey: "main",
+      }),
+    ).toBe("global");
+    expect(
+      resolveInternalSessionKey({
+        key: "agent:ops:main",
+        alias: "global",
+        mainKey: "main",
+      }),
     ).toBe("agent:ops:main");
   });
 });
 
 describe("session reference shape detection", () => {
   it("detects session ids", () => {
-    expect(looksLikeSessionId("d4f5a5a1-9f75-42cf-83a6-8d170e6a1538")).toBe(true);
+    expect(looksLikeSessionId("d4f5a5a1-9f75-42cf-83a6-8d170e6a1538")).toBe(
+      true,
+    );
     expect(looksLikeSessionId("not-a-uuid")).toBe(false);
   });
 
@@ -86,7 +108,9 @@ describe("session reference shape detection", () => {
 
   it("treats non-keys as session-id candidates", () => {
     expect(shouldResolveSessionIdInput("agent:main:main")).toBe(false);
-    expect(shouldResolveSessionIdInput("d4f5a5a1-9f75-42cf-83a6-8d170e6a1538")).toBe(true);
+    expect(
+      shouldResolveSessionIdInput("d4f5a5a1-9f75-42cf-83a6-8d170e6a1538"),
+    ).toBe(true);
     expect(shouldResolveSessionIdInput("random-slug")).toBe(true);
   });
 });

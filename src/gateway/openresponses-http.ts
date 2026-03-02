@@ -69,11 +69,15 @@ type ResolvedResponsesLimits = {
   images: InputImageLimits;
 };
 
-function normalizeHostnameAllowlist(values: string[] | undefined): string[] | undefined {
+function normalizeHostnameAllowlist(
+  values: string[] | undefined,
+): string[] | undefined {
   if (!values || values.length === 0) {
     return undefined;
   }
-  const normalized = values.map((value) => value.trim()).filter((value) => value.length > 0);
+  const normalized = values
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0);
   return normalized.length > 0 ? normalized : undefined;
 }
 
@@ -96,7 +100,10 @@ function resolveResponsesLimits(
     images: {
       allowUrl: images?.allowUrl ?? true,
       urlAllowlist: normalizeHostnameAllowlist(images?.urlAllowlist),
-      allowedMimes: normalizeMimeList(images?.allowedMimes, DEFAULT_INPUT_IMAGE_MIMES),
+      allowedMimes: normalizeMimeList(
+        images?.allowedMimes,
+        DEFAULT_INPUT_IMAGE_MIMES,
+      ),
       maxBytes: images?.maxBytes ?? DEFAULT_INPUT_IMAGE_MAX_BYTES,
       maxRedirects: images?.maxRedirects ?? DEFAULT_INPUT_MAX_REDIRECTS,
       timeoutMs: images?.timeoutMs ?? DEFAULT_INPUT_TIMEOUT_MS,
@@ -127,7 +134,8 @@ function applyToolChoice(params: {
     }
     return {
       tools,
-      extraSystemPrompt: "You must call one of the available tools before responding.",
+      extraSystemPrompt:
+        "You must call one of the available tools before responding.",
     };
   }
 
@@ -190,11 +198,19 @@ function toUsage(
 }
 
 function extractUsageFromResult(result: unknown): Usage {
-  const meta = (result as { meta?: { agentMeta?: { usage?: unknown } } } | null)?.meta;
-  const usage = meta && typeof meta === "object" ? meta.agentMeta?.usage : undefined;
+  const meta = (result as { meta?: { agentMeta?: { usage?: unknown } } } | null)
+    ?.meta;
+  const usage =
+    meta && typeof meta === "object" ? meta.agentMeta?.usage : undefined;
   return toUsage(
     usage as
-      | { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; total?: number }
+      | {
+          input?: number;
+          output?: number;
+          cacheRead?: number;
+          cacheWrite?: number;
+          total?: number;
+        }
       | undefined,
   );
 }
@@ -247,7 +263,8 @@ async function runResponsesAgentCommand(params: {
     {
       message: params.message,
       images: params.images.length > 0 ? params.images : undefined,
-      clientTools: params.clientTools.length > 0 ? params.clientTools : undefined,
+      clientTools:
+        params.clientTools.length > 0 ? params.clientTools : undefined,
       extraSystemPrompt: params.extraSystemPrompt || undefined,
       streamParams: params.streamParams ?? undefined,
       sessionKey: params.sessionKey,
@@ -271,7 +288,11 @@ export async function handleOpenResponsesHttpRequest(
     opts.maxBodyBytes ??
     (opts.config?.maxBodyBytes
       ? limits.maxBodyBytes
-      : Math.max(limits.maxBodyBytes, limits.files.maxBytes * 2, limits.images.maxBytes * 2));
+      : Math.max(
+          limits.maxBodyBytes,
+          limits.files.maxBytes * 2,
+          limits.images.maxBytes * 2,
+        ));
   const handled = await handleGatewayPostJsonEndpoint(req, res, {
     pathname: "/v1/responses",
     auth: opts.auth,
@@ -291,7 +312,9 @@ export async function handleOpenResponsesHttpRequest(
   const parseResult = CreateResponseBodySchema.safeParse(handled.body);
   if (!parseResult.success) {
     const issue = parseResult.error.issues[0];
-    const message = issue ? `${issue.path.join(".")}: ${issue.message}` : "Invalid request body";
+    const message = issue
+      ? `${issue.path.join(".")}: ${issue.message}`
+      : "Invalid request body";
     sendJson(res, 400, {
       error: { message, type: "invalid_request_error" },
     });
@@ -328,9 +351,13 @@ export async function handleOpenResponsesHttpRequest(
                 media_type?: string;
               };
               const sourceType =
-                source.type === "base64" || source.type === "url" ? source.type : undefined;
+                source.type === "base64" || source.type === "url"
+                  ? source.type
+                  : undefined;
               if (!sourceType) {
-                throw new Error("input_image must have 'source.url' or 'source.data'");
+                throw new Error(
+                  "input_image must have 'source.url' or 'source.data'",
+                );
               }
               if (sourceType === "url") {
                 markUrlPart();
@@ -341,7 +368,10 @@ export async function handleOpenResponsesHttpRequest(
                 data: source.data,
                 mediaType: source.media_type,
               };
-              const image = await extractImageContentFromSource(imageSource, limits.images);
+              const image = await extractImageContentFromSource(
+                imageSource,
+                limits.images,
+              );
               images.push(image);
               continue;
             }
@@ -355,9 +385,13 @@ export async function handleOpenResponsesHttpRequest(
                 filename?: string;
               };
               const sourceType =
-                source.type === "base64" || source.type === "url" ? source.type : undefined;
+                source.type === "base64" || source.type === "url"
+                  ? source.type
+                  : undefined;
               if (!sourceType) {
-                throw new Error("input_file must have 'source.url' or 'source.data'");
+                throw new Error(
+                  "input_file must have 'source.url' or 'source.data'",
+                );
               }
               if (sourceType === "url") {
                 markUrlPart();
@@ -373,7 +407,9 @@ export async function handleOpenResponsesHttpRequest(
                 limits: limits.files,
               });
               if (file.text?.trim()) {
-                fileContexts.push(`<file name="${file.filename}">\n${file.text}\n</file>`);
+                fileContexts.push(
+                  `<file name="${file.filename}">\n${file.text}\n</file>`,
+                );
               } else if (file.images && file.images.length > 0) {
                 fileContexts.push(
                   `<file name="${file.filename}">[PDF content rendered to images]</file>`,
@@ -408,7 +444,10 @@ export async function handleOpenResponsesHttpRequest(
   } catch (err) {
     logWarn(`openresponses: tool configuration failed: ${String(err)}`);
     sendJson(res, 400, {
-      error: { message: "invalid tool configuration", type: "invalid_request_error" },
+      error: {
+        message: "invalid tool configuration",
+        type: "invalid_request_error",
+      },
     });
     return true;
   }
@@ -418,7 +457,8 @@ export async function handleOpenResponsesHttpRequest(
   // Build prompt from input
   const prompt = buildAgentPrompt(payload.input);
 
-  const fileContext = fileContexts.length > 0 ? fileContexts.join("\n\n") : undefined;
+  const fileContext =
+    fileContexts.length > 0 ? fileContexts.join("\n\n") : undefined;
   const toolChoiceContext = toolChoicePrompt?.trim();
 
   // Handle instructions + file context as extra system prompt
@@ -462,19 +502,34 @@ export async function handleOpenResponsesHttpRequest(
         deps,
       });
 
-      const payloads = (result as { payloads?: Array<{ text?: string }> } | null)?.payloads;
+      const payloads = (
+        result as { payloads?: Array<{ text?: string }> } | null
+      )?.payloads;
       const usage = extractUsageFromResult(result);
       const meta = (result as { meta?: unknown } | null)?.meta;
       const stopReason =
-        meta && typeof meta === "object" ? (meta as { stopReason?: string }).stopReason : undefined;
+        meta && typeof meta === "object"
+          ? (meta as { stopReason?: string }).stopReason
+          : undefined;
       const pendingToolCalls =
         meta && typeof meta === "object"
-          ? (meta as { pendingToolCalls?: Array<{ id: string; name: string; arguments: string }> })
-              .pendingToolCalls
+          ? (
+              meta as {
+                pendingToolCalls?: Array<{
+                  id: string;
+                  name: string;
+                  arguments: string;
+                }>;
+              }
+            ).pendingToolCalls
           : undefined;
 
       // If agent called a client tool, return function_call instead of text
-      if (stopReason === "tool_calls" && pendingToolCalls && pendingToolCalls.length > 0) {
+      if (
+        stopReason === "tool_calls" &&
+        pendingToolCalls &&
+        pendingToolCalls.length > 0
+      ) {
         const functionCall = pendingToolCalls[0];
         const functionCallItemId = `call_${randomUUID()}`;
         const response = createResponseResource({
@@ -509,7 +564,11 @@ export async function handleOpenResponsesHttpRequest(
         model,
         status: "completed",
         output: [
-          createAssistantOutputItem({ id: outputItemId, text: content, status: "completed" }),
+          createAssistantOutputItem({
+            id: outputItemId,
+            text: content,
+            status: "completed",
+          }),
         ],
         usage,
       });
@@ -540,7 +599,10 @@ export async function handleOpenResponsesHttpRequest(
   let closed = false;
   let unsubscribe = () => {};
   let finalUsage: Usage | undefined;
-  let finalizeRequested: { status: ResponseResource["status"]; text: string } | null = null;
+  let finalizeRequested: {
+    status: ResponseResource["status"];
+    text: string;
+  } | null = null;
 
   const maybeFinalize = () => {
     if (closed) {
@@ -598,7 +660,10 @@ export async function handleOpenResponsesHttpRequest(
     res.end();
   };
 
-  const requestFinalize = (status: ResponseResource["status"], text: string) => {
+  const requestFinalize = (
+    status: ResponseResource["status"],
+    text: string,
+  ) => {
     if (finalizeRequested) {
       return;
     }
@@ -615,7 +680,10 @@ export async function handleOpenResponsesHttpRequest(
   });
 
   writeSseEvent(res, { type: "response.created", response: initialResponse });
-  writeSseEvent(res, { type: "response.in_progress", response: initialResponse });
+  writeSseEvent(res, {
+    type: "response.in_progress",
+    response: initialResponse,
+  });
 
   // Add output item
   const outputItem = createAssistantOutputItem({
@@ -703,7 +771,10 @@ export async function handleOpenResponsesHttpRequest(
 
       // Fallback: if no streaming deltas were received, send the full response
       if (!sawAssistantDelta) {
-        const resultAny = result as { payloads?: Array<{ text?: string }>; meta?: unknown };
+        const resultAny = result as {
+          payloads?: Array<{ text?: string }>;
+          meta?: unknown;
+        };
         const payloads = resultAny.payloads;
         const meta = resultAny.meta;
         const stopReason =
@@ -714,13 +785,21 @@ export async function handleOpenResponsesHttpRequest(
           meta && typeof meta === "object"
             ? (
                 meta as {
-                  pendingToolCalls?: Array<{ id: string; name: string; arguments: string }>;
+                  pendingToolCalls?: Array<{
+                    id: string;
+                    name: string;
+                    arguments: string;
+                  }>;
                 }
               ).pendingToolCalls
             : undefined;
 
         // If agent called a client tool, emit function_call instead of text
-        if (stopReason === "tool_calls" && pendingToolCalls && pendingToolCalls.length > 0) {
+        if (
+          stopReason === "tool_calls" &&
+          pendingToolCalls &&
+          pendingToolCalls.length > 0
+        ) {
           const functionCall = pendingToolCalls[0];
           const usage = finalUsage ?? createEmptyUsage();
 
@@ -778,7 +857,10 @@ export async function handleOpenResponsesHttpRequest(
           });
           closed = true;
           unsubscribe();
-          writeSseEvent(res, { type: "response.completed", response: incompleteResponse });
+          writeSseEvent(res, {
+            type: "response.completed",
+            response: incompleteResponse,
+          });
           writeDone(res);
           res.end();
           return;

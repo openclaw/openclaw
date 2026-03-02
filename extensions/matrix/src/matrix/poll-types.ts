@@ -83,7 +83,9 @@ export function getTextContent(text?: TextContent): string {
   return text["m.text"] ?? text["org.matrix.msc1767.text"] ?? text.body ?? "";
 }
 
-export function parsePollStartContent(content: PollStartContent): PollSummary | null {
+export function parsePollStartContent(
+  content: PollStartContent,
+): PollSummary | null {
   const poll =
     (content as Record<string, PollStartSubtype | undefined>)[M_POLL_START] ??
     (content as Record<string, PollStartSubtype | undefined>)[ORG_POLL_START] ??

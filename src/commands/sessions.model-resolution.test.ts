@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mockSessionsConfig, runSessionsJson, writeStore } from "./sessions.test-helpers.js";
+import {
+  mockSessionsConfig,
+  runSessionsJson,
+  writeStore,
+} from "./sessions.test-helpers.js";
 
 mockSessionsConfig();
 
@@ -27,8 +31,13 @@ async function resolveSubagentModel(
     "sessions-model",
   );
 
-  const payload = await runSessionsJson<SessionsJsonPayload>(sessionsCommand, store);
-  return payload.sessions?.find((row) => row.key === "agent:research:subagent:demo")?.model;
+  const payload = await runSessionsJson<SessionsJsonPayload>(
+    sessionsCommand,
+    store,
+  );
+  return payload.sessions?.find(
+    (row) => row.key === "agent:research:subagent:demo",
+  )?.model;
 }
 
 describe("sessionsCommand model resolution", () => {

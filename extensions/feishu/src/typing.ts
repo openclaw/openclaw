@@ -54,12 +54,17 @@ export function isFeishuBackoffError(err: unknown): boolean {
   }
 
   // AxiosError shape: err.response.status / err.response.data.code
-  const response = (err as { response?: { status?: number; data?: { code?: number } } }).response;
+  const response = (
+    err as { response?: { status?: number; data?: { code?: number } } }
+  ).response;
   if (response) {
     if (response.status === 429) {
       return true;
     }
-    if (typeof response.data?.code === "number" && FEISHU_BACKOFF_CODES.has(response.data.code)) {
+    if (
+      typeof response.data?.code === "number" &&
+      FEISHU_BACKOFF_CODES.has(response.data.code)
+    ) {
       return true;
     }
   }
@@ -80,7 +85,9 @@ export function isFeishuBackoffError(err: unknown): boolean {
  * API-level error code in the response body. This must be detected so the
  * circuit breaker can trip. See codex review on #28157.
  */
-export function getBackoffCodeFromResponse(response: unknown): number | undefined {
+export function getBackoffCodeFromResponse(
+  response: unknown,
+): number | undefined {
   if (typeof response !== "object" || response === null) {
     return undefined;
   }
@@ -140,7 +147,9 @@ export async function addTypingIndicator(params: {
   } catch (err) {
     if (isFeishuBackoffError(err)) {
       if (getFeishuRuntime().logging.shouldLogVerbose()) {
-        runtime?.log?.("[feishu] typing indicator hit rate-limit/quota, stopping keepalive");
+        runtime?.log?.(
+          "[feishu] typing indicator hit rate-limit/quota, stopping keepalive",
+        );
       }
       throw err;
     }
@@ -204,7 +213,9 @@ export async function removeTypingIndicator(params: {
     }
     // Silently fail for other non-critical errors
     if (getFeishuRuntime().logging.shouldLogVerbose()) {
-      runtime?.log?.(`[feishu] failed to remove typing indicator: ${String(err)}`);
+      runtime?.log?.(
+        `[feishu] failed to remove typing indicator: ${String(err)}`,
+      );
     }
   }
 }

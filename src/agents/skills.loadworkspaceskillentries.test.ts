@@ -14,7 +14,9 @@ async function createTempWorkspaceDir() {
 
 afterEach(async () => {
   await Promise.all(
-    tempDirs.splice(0, tempDirs.length).map((dir) => fs.rm(dir, { recursive: true, force: true })),
+    tempDirs
+      .splice(0, tempDirs.length)
+      .map((dir) => fs.rm(dir, { recursive: true, force: true })),
   );
 });
 
@@ -22,7 +24,12 @@ async function setupWorkspaceWithProsePlugin() {
   const workspaceDir = await createTempWorkspaceDir();
   const managedDir = path.join(workspaceDir, ".managed");
   const bundledDir = path.join(workspaceDir, ".bundled");
-  const pluginRoot = path.join(workspaceDir, ".openclaw", "extensions", "open-prose");
+  const pluginRoot = path.join(
+    workspaceDir,
+    ".openclaw",
+    "extensions",
+    "open-prose",
+  );
 
   await fs.mkdir(path.join(pluginRoot, "skills", "prose"), { recursive: true });
   await fs.writeFile(
@@ -31,14 +38,22 @@ async function setupWorkspaceWithProsePlugin() {
       {
         id: "open-prose",
         skills: ["./skills"],
-        configSchema: { type: "object", additionalProperties: false, properties: {} },
+        configSchema: {
+          type: "object",
+          additionalProperties: false,
+          properties: {},
+        },
       },
       null,
       2,
     ),
     "utf-8",
   );
-  await fs.writeFile(path.join(pluginRoot, "index.ts"), "export {};\n", "utf-8");
+  await fs.writeFile(
+    path.join(pluginRoot, "index.ts"),
+    "export {};\n",
+    "utf-8",
+  );
   await fs.writeFile(
     path.join(pluginRoot, "skills", "prose", "SKILL.md"),
     `---\nname: prose\ndescription: test\n---\n`,
@@ -63,7 +78,8 @@ describe("loadWorkspaceSkillEntries", () => {
   });
 
   it("includes plugin-shipped skills when the plugin is enabled", async () => {
-    const { workspaceDir, managedDir, bundledDir } = await setupWorkspaceWithProsePlugin();
+    const { workspaceDir, managedDir, bundledDir } =
+      await setupWorkspaceWithProsePlugin();
 
     const entries = loadWorkspaceSkillEntries(workspaceDir, {
       config: {
@@ -79,7 +95,8 @@ describe("loadWorkspaceSkillEntries", () => {
   });
 
   it("excludes plugin-shipped skills when the plugin is not allowed", async () => {
-    const { workspaceDir, managedDir, bundledDir } = await setupWorkspaceWithProsePlugin();
+    const { workspaceDir, managedDir, bundledDir } =
+      await setupWorkspaceWithProsePlugin();
 
     const entries = loadWorkspaceSkillEntries(workspaceDir, {
       config: {

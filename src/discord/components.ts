@@ -24,15 +24,29 @@ import {
   type ComponentParserResult,
   type TopLevelComponents,
 } from "@buape/carbon";
-import { ButtonStyle, MessageFlags, TextInputStyle } from "discord-api-types/v10";
+import {
+  ButtonStyle,
+  MessageFlags,
+  TextInputStyle,
+} from "discord-api-types/v10";
 
 export const DISCORD_COMPONENT_CUSTOM_ID_KEY = "occomp";
 export const DISCORD_MODAL_CUSTOM_ID_KEY = "ocmodal";
 export const DISCORD_COMPONENT_ATTACHMENT_PREFIX = "attachment://";
 
-export type DiscordComponentButtonStyle = "primary" | "secondary" | "success" | "danger" | "link";
+export type DiscordComponentButtonStyle =
+  | "primary"
+  | "secondary"
+  | "success"
+  | "danger"
+  | "link";
 
-export type DiscordComponentSelectType = "string" | "user" | "role" | "mentionable" | "channel";
+export type DiscordComponentSelectType =
+  | "string"
+  | "user"
+  | "role"
+  | "mentionable"
+  | "channel";
 
 export type DiscordComponentModalFieldType =
   | "text"
@@ -220,7 +234,11 @@ function requireObject(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function readString(value: unknown, label: string, opts?: { allowEmpty?: boolean }): string {
+function readString(
+  value: unknown,
+  label: string,
+  opts?: { allowEmpty?: boolean },
+): string {
   if (typeof value !== "string") {
     throw new Error(`${label} must be a string`);
   }
@@ -239,7 +257,10 @@ function readOptionalString(value: unknown): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
-function readOptionalStringArray(value: unknown, label: string): string[] | undefined {
+function readOptionalStringArray(
+  value: unknown,
+  label: string,
+): string[] | undefined {
   if (value === undefined) {
     return undefined;
   }
@@ -267,12 +288,19 @@ function normalizeModalFieldName(value: string | undefined, index: number) {
   return `field_${index + 1}`;
 }
 
-function normalizeAttachmentRef(value: string, label: string): `attachment://${string}` {
+function normalizeAttachmentRef(
+  value: string,
+  label: string,
+): `attachment://${string}` {
   const trimmed = value.trim();
   if (!trimmed.startsWith(DISCORD_COMPONENT_ATTACHMENT_PREFIX)) {
-    throw new Error(`${label} must start with "${DISCORD_COMPONENT_ATTACHMENT_PREFIX}"`);
+    throw new Error(
+      `${label} must start with "${DISCORD_COMPONENT_ATTACHMENT_PREFIX}"`,
+    );
   }
-  const attachmentName = trimmed.slice(DISCORD_COMPONENT_ATTACHMENT_PREFIX.length).trim();
+  const attachmentName = trimmed
+    .slice(DISCORD_COMPONENT_ATTACHMENT_PREFIX.length)
+    .trim();
   if (!attachmentName) {
     throw new Error(`${label} must include an attachment filename`);
   }
@@ -286,7 +314,9 @@ export function resolveDiscordComponentAttachmentName(value: string): string {
       `Attachment reference must start with "${DISCORD_COMPONENT_ATTACHMENT_PREFIX}"`,
     );
   }
-  const attachmentName = trimmed.slice(DISCORD_COMPONENT_ATTACHMENT_PREFIX.length).trim();
+  const attachmentName = trimmed
+    .slice(DISCORD_COMPONENT_ATTACHMENT_PREFIX.length)
+    .trim();
   if (!attachmentName) {
     throw new Error("Attachment reference must include a filename");
   }
@@ -310,12 +340,16 @@ function mapButtonStyle(style?: DiscordComponentButtonStyle): ButtonStyle {
 }
 
 function mapTextInputStyle(style?: DiscordModalFieldSpec["style"]) {
-  return style === "paragraph" ? TextInputStyle.Paragraph : TextInputStyle.Short;
+  return style === "paragraph"
+    ? TextInputStyle.Paragraph
+    : TextInputStyle.Short;
 }
 
 function normalizeBlockType(raw: string) {
   const lowered = raw.trim().toLowerCase();
-  return BLOCK_ALIASES.get(lowered) ?? (lowered as DiscordComponentBlock["type"]);
+  return (
+    BLOCK_ALIASES.get(lowered) ?? (lowered as DiscordComponentBlock["type"])
+  );
 }
 
 function parseSelectOptions(
@@ -343,7 +377,8 @@ function parseSelectOptions(
               ),
               id: readOptionalString((obj.emoji as { id?: unknown }).id),
               animated:
-                typeof (obj.emoji as { animated?: unknown }).animated === "boolean"
+                typeof (obj.emoji as { animated?: unknown }).animated ===
+                "boolean"
                   ? (obj.emoji as { animated?: boolean }).animated
                   : undefined,
             }
@@ -353,9 +388,14 @@ function parseSelectOptions(
   });
 }
 
-function parseButtonSpec(raw: unknown, label: string): DiscordComponentButtonSpec {
+function parseButtonSpec(
+  raw: unknown,
+  label: string,
+): DiscordComponentButtonSpec {
   const obj = requireObject(raw, label);
-  const style = readOptionalString(obj.style) as DiscordComponentButtonStyle | undefined;
+  const style = readOptionalString(obj.style) as
+    | DiscordComponentButtonStyle
+    | undefined;
   const url = readOptionalString(obj.url);
   if ((style === "link" || url) && !url) {
     throw new Error(`${label}.url is required for link buttons`);
@@ -367,22 +407,34 @@ function parseButtonSpec(raw: unknown, label: string): DiscordComponentButtonSpe
     emoji:
       typeof obj.emoji === "object" && obj.emoji && !Array.isArray(obj.emoji)
         ? {
-            name: readString((obj.emoji as { name?: unknown }).name, `${label}.emoji.name`),
+            name: readString(
+              (obj.emoji as { name?: unknown }).name,
+              `${label}.emoji.name`,
+            ),
             id: readOptionalString((obj.emoji as { id?: unknown }).id),
             animated:
-              typeof (obj.emoji as { animated?: unknown }).animated === "boolean"
+              typeof (obj.emoji as { animated?: unknown }).animated ===
+              "boolean"
                 ? (obj.emoji as { animated?: boolean }).animated
                 : undefined,
           }
         : undefined,
     disabled: typeof obj.disabled === "boolean" ? obj.disabled : undefined,
-    allowedUsers: readOptionalStringArray(obj.allowedUsers, `${label}.allowedUsers`),
+    allowedUsers: readOptionalStringArray(
+      obj.allowedUsers,
+      `${label}.allowedUsers`,
+    ),
   };
 }
 
-function parseSelectSpec(raw: unknown, label: string): DiscordComponentSelectSpec {
+function parseSelectSpec(
+  raw: unknown,
+  label: string,
+): DiscordComponentSelectSpec {
   const obj = requireObject(raw, label);
-  const type = readOptionalString(obj.type) as DiscordComponentSelectType | undefined;
+  const type = readOptionalString(obj.type) as
+    | DiscordComponentSelectType
+    | undefined;
   const allowedTypes: DiscordComponentSelectType[] = [
     "string",
     "user",
@@ -402,7 +454,11 @@ function parseSelectSpec(raw: unknown, label: string): DiscordComponentSelectSpe
   };
 }
 
-function parseModalField(raw: unknown, label: string, index: number): DiscordModalFieldSpec {
+function parseModalField(
+  raw: unknown,
+  label: string,
+  index: number,
+): DiscordModalFieldSpec {
   const obj = requireObject(raw, label);
   const type = readString(
     obj.type,
@@ -420,7 +476,10 @@ function parseModalField(raw: unknown, label: string, index: number): DiscordMod
     throw new Error(`${label}.type must be one of ${supported.join(", ")}`);
   }
   const options = parseSelectOptions(obj.options, `${label}.options`);
-  if (["checkbox", "radio", "select"].includes(type) && (!options || options.length === 0)) {
+  if (
+    ["checkbox", "radio", "select"].includes(type) &&
+    (!options || options.length === 0)
+  ) {
     throw new Error(`${label}.options is required for ${type} fields`);
   }
   return {
@@ -439,7 +498,10 @@ function parseModalField(raw: unknown, label: string, index: number): DiscordMod
   };
 }
 
-function parseComponentBlock(raw: unknown, label: string): DiscordComponentBlock {
+function parseComponentBlock(
+  raw: unknown,
+  label: string,
+): DiscordComponentBlock {
   const obj = requireObject(raw, label);
   const typeRaw = readString(obj.type, `${label}.type`).toLowerCase();
   const type = normalizeBlockType(typeRaw);
@@ -453,10 +515,14 @@ function parseComponentBlock(raw: unknown, label: string): DiscordComponentBlock
       const text = readOptionalString(obj.text);
       const textsRaw = obj.texts;
       const texts = Array.isArray(textsRaw)
-        ? textsRaw.map((entry, idx) => readString(entry, `${label}.texts[${idx}]`))
+        ? textsRaw.map((entry, idx) =>
+            readString(entry, `${label}.texts[${idx}]`),
+          )
         : undefined;
       if (!text && (!texts || texts.length === 0)) {
-        throw new Error(`${label}.text or ${label}.texts is required for section blocks`);
+        throw new Error(
+          `${label}.text or ${label}.texts is required for section blocks`,
+        );
       }
       let accessory: DiscordComponentSectionAccessory | undefined;
       if (obj.accessory !== undefined) {
@@ -473,10 +539,15 @@ function parseComponentBlock(raw: unknown, label: string): DiscordComponentBlock
         } else if (accessoryType === "button") {
           accessory = {
             type: "button",
-            button: parseButtonSpec(accessoryObj.button, `${label}.accessory.button`),
+            button: parseButtonSpec(
+              accessoryObj.button,
+              `${label}.accessory.button`,
+            ),
           };
         } else {
-          throw new Error(`${label}.accessory.type must be "thumbnail" or "button"`);
+          throw new Error(
+            `${label}.accessory.type must be "thumbnail" or "button"`,
+          );
         }
       }
       return {
@@ -496,7 +567,8 @@ function parseComponentBlock(raw: unknown, label: string): DiscordComponentBlock
       } else if (spacingRaw !== undefined) {
         throw new Error(`${label}.spacing must be "small", "large", 1, or 2`);
       }
-      const divider = typeof obj.divider === "boolean" ? obj.divider : undefined;
+      const divider =
+        typeof obj.divider === "boolean" ? obj.divider : undefined;
       return {
         type: "separator",
         spacing,
@@ -506,9 +578,13 @@ function parseComponentBlock(raw: unknown, label: string): DiscordComponentBlock
     case "actions": {
       const buttonsRaw = obj.buttons;
       const buttons = Array.isArray(buttonsRaw)
-        ? buttonsRaw.map((entry, idx) => parseButtonSpec(entry, `${label}.buttons[${idx}]`))
+        ? buttonsRaw.map((entry, idx) =>
+            parseButtonSpec(entry, `${label}.buttons[${idx}]`),
+          )
         : undefined;
-      const select = obj.select ? parseSelectSpec(obj.select, `${label}.select`) : undefined;
+      const select = obj.select
+        ? parseSelectSpec(obj.select, `${label}.select`)
+        : undefined;
       if ((!buttons || buttons.length === 0) && !select) {
         throw new Error(`${label} requires buttons or select`);
       }
@@ -531,7 +607,8 @@ function parseComponentBlock(raw: unknown, label: string): DiscordComponentBlock
         return {
           url: readString(itemObj.url, `${label}.items[${idx}].url`),
           description: readOptionalString(itemObj.description),
-          spoiler: typeof itemObj.spoiler === "boolean" ? itemObj.spoiler : undefined,
+          spoiler:
+            typeof itemObj.spoiler === "boolean" ? itemObj.spoiler : undefined,
         };
       });
       return {
@@ -552,14 +629,18 @@ function parseComponentBlock(raw: unknown, label: string): DiscordComponentBlock
   }
 }
 
-export function readDiscordComponentSpec(raw: unknown): DiscordComponentMessageSpec | null {
+export function readDiscordComponentSpec(
+  raw: unknown,
+): DiscordComponentMessageSpec | null {
   if (raw === undefined || raw === null) {
     return null;
   }
   const obj = requireObject(raw, "components");
   const blocksRaw = obj.blocks;
   const blocks = Array.isArray(blocksRaw)
-    ? blocksRaw.map((entry, idx) => parseComponentBlock(entry, `components.blocks[${idx}]`))
+    ? blocksRaw.map((entry, idx) =>
+        parseComponentBlock(entry, `components.blocks[${idx}]`),
+      )
     : undefined;
   const modalRaw = obj.modal;
   const reusable = typeof obj.reusable === "boolean" ? obj.reusable : undefined;
@@ -579,7 +660,9 @@ export function readDiscordComponentSpec(raw: unknown): DiscordComponentMessageS
     modal = {
       title: readString(modalObj.title, "components.modal.title"),
       triggerLabel: readOptionalString(modalObj.triggerLabel),
-      triggerStyle: readOptionalString(modalObj.triggerStyle) as DiscordComponentButtonStyle,
+      triggerStyle: readOptionalString(
+        modalObj.triggerStyle,
+      ) as DiscordComponentButtonStyle,
       fields,
     };
   }
@@ -587,14 +670,15 @@ export function readDiscordComponentSpec(raw: unknown): DiscordComponentMessageS
     text: readOptionalString(obj.text),
     reusable,
     container:
-      typeof obj.container === "object" && obj.container && !Array.isArray(obj.container)
+      typeof obj.container === "object" &&
+      obj.container &&
+      !Array.isArray(obj.container)
         ? {
-            accentColor: (obj.container as { accentColor?: unknown }).accentColor as
-              | string
-              | number
-              | undefined,
+            accentColor: (obj.container as { accentColor?: unknown })
+              .accentColor as string | number | undefined,
             spoiler:
-              typeof (obj.container as { spoiler?: unknown }).spoiler === "boolean"
+              typeof (obj.container as { spoiler?: unknown }).spoiler ===
+              "boolean"
                 ? ((obj.container as { spoiler?: boolean }).spoiler as boolean)
                 : undefined,
           }
@@ -630,7 +714,8 @@ export function parseDiscordComponentCustomId(
   const modalId = parsed.data.mid;
   return {
     componentId,
-    modalId: typeof modalId === "string" && modalId.trim() ? modalId : undefined,
+    modalId:
+      typeof modalId === "string" && modalId.trim() ? modalId : undefined,
   };
 }
 
@@ -650,7 +735,9 @@ function isDiscordComponentWildcardRegistrationId(id: string): boolean {
   return /^__openclaw_discord_component_[a-z_]+_wildcard__$/.test(id);
 }
 
-export function parseDiscordComponentCustomIdForCarbon(id: string): ComponentParserResult {
+export function parseDiscordComponentCustomIdForCarbon(
+  id: string,
+): ComponentParserResult {
   if (id === "*" || isDiscordComponentWildcardRegistrationId(id)) {
     return { key: "*", data: {} };
   }
@@ -661,7 +748,9 @@ export function parseDiscordComponentCustomIdForCarbon(id: string): ComponentPar
   return { key: "*", data: parsed.data };
 }
 
-export function parseDiscordModalCustomIdForCarbon(id: string): ComponentParserResult {
+export function parseDiscordModalCustomIdForCarbon(
+  id: string,
+): ComponentParserResult {
   if (id === "*" || isDiscordComponentWildcardRegistrationId(id)) {
     return { key: "*", data: {} };
   }
@@ -736,7 +825,9 @@ function createSelectComponent(params: {
     | ChannelSelectMenu;
   entry: DiscordComponentEntry;
 } {
-  const type = (params.spec.type ?? "string").toLowerCase() as DiscordComponentSelectType;
+  const type = (
+    params.spec.type ?? "string"
+  ).toLowerCase() as DiscordComponentSelectType;
   const componentId = params.componentId ?? createShortId("sel_");
   const customId = buildDiscordComponentCustomId({ componentId });
   if (type === "string") {
@@ -759,7 +850,10 @@ function createSelectComponent(params: {
         kind: "select",
         label: params.spec.placeholder ?? "select",
         selectType: "string",
-        options: options.map((option) => ({ value: option.value, label: option.label })),
+        options: options.map((option) => ({
+          value: option.value,
+          label: option.label,
+        })),
       },
     };
   }
@@ -854,7 +948,13 @@ function isSelectComponent(
 
 function createModalFieldComponent(
   field: DiscordModalFieldDefinition,
-): TextInput | StringSelectMenu | UserSelectMenu | RoleSelectMenu | CheckboxGroup | RadioGroup {
+):
+  | TextInput
+  | StringSelectMenu
+  | UserSelectMenu
+  | RoleSelectMenu
+  | CheckboxGroup
+  | RadioGroup {
   if (field.type === "text") {
     class DynamicTextInput extends TextInput {
       customId = field.id;
@@ -976,7 +1076,9 @@ export function buildDiscordComponentMessage(params: {
       if (block.accessory?.type === "thumbnail") {
         accessory = new Thumbnail(block.accessory.url);
       } else if (block.accessory?.type === "button") {
-        const { component, entry } = createButtonComponent({ spec: block.accessory.button });
+        const { component, entry } = createButtonComponent({
+          spec: block.accessory.button,
+        });
         accessory = component;
         if (entry) {
           addEntry(entry);
@@ -986,7 +1088,9 @@ export function buildDiscordComponentMessage(params: {
       continue;
     }
     if (block.type === "separator") {
-      containerChildren.push(new Separator({ spacing: block.spacing, divider: block.divider }));
+      containerChildren.push(
+        new Separator({ spacing: block.spacing, divider: block.divider }),
+      );
       continue;
     }
     if (block.type === "media-gallery") {
@@ -1019,7 +1123,9 @@ export function buildDiscordComponentMessage(params: {
           }
         }
       } else if (block.select) {
-        const { component, entry } = createSelectComponent({ spec: block.select });
+        const { component, entry } = createSelectComponent({
+          spec: block.select,
+        });
         rowComponents.push(component);
         addEntry(entry);
       }
@@ -1071,7 +1177,9 @@ export function buildDiscordComponentMessage(params: {
     const lastChild = containerChildren.at(-1);
     if (lastChild instanceof Row) {
       const row = lastChild;
-      const hasSelect = row.components.some((entry) => isSelectComponent(entry));
+      const hasSelect = row.components.some((entry) =>
+        isSelectComponent(entry),
+      );
       if (row.components.length < 5 && !hasSelect) {
         row.addComponent(component as Button);
       } else {
@@ -1083,7 +1191,9 @@ export function buildDiscordComponentMessage(params: {
   }
 
   if (containerChildren.length === 0) {
-    throw new Error("components must include at least one block, text, or modal trigger");
+    throw new Error(
+      "components must include at least one block, text, or modal trigger",
+    );
   }
 
   const container = new Container(containerChildren, params.spec.container);
@@ -1104,7 +1214,11 @@ export class DiscordFormModal extends Modal {
   components: Array<Label | TextDisplay>;
   customIdParser = parseDiscordModalCustomIdForCarbon;
 
-  constructor(params: { modalId: string; title: string; fields: DiscordModalFieldDefinition[] }) {
+  constructor(params: {
+    modalId: string;
+    title: string;
+    fields: DiscordModalFieldDefinition[];
+  }) {
     super();
     this.title = params.title;
     this.customId = buildDiscordModalCustomId(params.modalId);

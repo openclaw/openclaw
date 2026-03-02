@@ -3,7 +3,11 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
-import { resolveConfigPath, resolveGatewayLockDir, resolveStateDir } from "../config/paths.js";
+import {
+  resolveConfigPath,
+  resolveGatewayLockDir,
+  resolveStateDir,
+} from "../config/paths.js";
 import { isPidAlive } from "../shared/pid-alive.js";
 
 const DEFAULT_TIMEOUT_MS = 5000;
@@ -70,7 +74,11 @@ function isGatewayArgv(args: string[]): boolean {
     "scripts/run-node.mjs",
     "src/index.ts",
   ];
-  if (normalized.some((arg) => entryCandidates.some((entry) => arg.endsWith(entry)))) {
+  if (
+    normalized.some((arg) =>
+      entryCandidates.some((entry) => arg.endsWith(entry)),
+    )
+  ) {
     return true;
   }
 
@@ -103,7 +111,10 @@ function readLinuxStartTime(pid: number): number | null {
   }
 }
 
-async function checkPortFree(port: number, host = "127.0.0.1"): Promise<boolean> {
+async function checkPortFree(
+  port: number,
+  host = "127.0.0.1",
+): Promise<boolean> {
   return await new Promise<boolean>((resolve) => {
     const socket = net.createConnection({ port, host });
     let settled = false;
@@ -180,7 +191,8 @@ async function readLockPayload(lockPath: string): Promise<LockPayload | null> {
     if (typeof parsed.configPath !== "string") {
       return null;
     }
-    const startTime = typeof parsed.startTime === "number" ? parsed.startTime : undefined;
+    const startTime =
+      typeof parsed.startTime === "number" ? parsed.startTime : undefined;
     return {
       pid: parsed.pid,
       createdAt: parsed.createdAt,
@@ -195,7 +207,10 @@ async function readLockPayload(lockPath: string): Promise<LockPayload | null> {
 function resolveGatewayLockPath(env: NodeJS.ProcessEnv) {
   const stateDir = resolveStateDir(env);
   const configPath = resolveConfigPath(env, stateDir);
-  const hash = createHash("sha256").update(configPath).digest("hex").slice(0, 8);
+  const hash = createHash("sha256")
+    .update(configPath)
+    .digest("hex")
+    .slice(0, 8);
   const lockDir = resolveGatewayLockDir();
   const lockPath = path.join(lockDir, `gateway.${hash}.lock`);
   return { lockPath, configPath };
@@ -227,7 +242,8 @@ export async function acquireGatewayLock(
   while (Date.now() - startedAt < timeoutMs) {
     try {
       const handle = await fs.open(lockPath, "wx");
-      const startTime = platform === "linux" ? readLinuxStartTime(process.pid) : null;
+      const startTime =
+        platform === "linux" ? readLinuxStartTime(process.pid) : null;
       const payload: LockPayload = {
         pid: process.pid,
         createdAt: new Date().toISOString(),
@@ -248,7 +264,10 @@ export async function acquireGatewayLock(
     } catch (err) {
       const code = (err as { code?: unknown }).code;
       if (code !== "EEXIST") {
-        throw new GatewayLockError(`failed to acquire gateway lock at ${lockPath}`, err);
+        throw new GatewayLockError(
+          `failed to acquire gateway lock at ${lockPath}`,
+          err,
+        );
       }
 
       lastPayload = await readLockPayload(lockPath);
@@ -264,7 +283,9 @@ export async function acquireGatewayLock(
         let stale = false;
         if (lastPayload?.createdAt) {
           const createdAt = Date.parse(lastPayload.createdAt);
-          stale = Number.isFinite(createdAt) ? Date.now() - createdAt > staleMs : false;
+          stale = Number.isFinite(createdAt)
+            ? Date.now() - createdAt > staleMs
+            : false;
         }
         if (!stale) {
           try {
@@ -289,5 +310,7 @@ export async function acquireGatewayLock(
   }
 
   const owner = lastPayload?.pid ? ` (pid ${lastPayload.pid})` : "";
-  throw new GatewayLockError(`gateway already running${owner}; lock timeout after ${timeoutMs}ms`);
+  throw new GatewayLockError(
+    `gateway already running${owner}; lock timeout after ${timeoutMs}ms`,
+  );
 }

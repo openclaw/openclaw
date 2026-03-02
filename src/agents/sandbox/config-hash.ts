@@ -1,5 +1,9 @@
 import { hashTextSha256 } from "./hash.js";
-import type { SandboxBrowserConfig, SandboxDockerConfig, SandboxWorkspaceAccess } from "./types.js";
+import type {
+  SandboxBrowserConfig,
+  SandboxDockerConfig,
+  SandboxWorkspaceAccess,
+} from "./types.js";
 
 type SandboxHashInput = {
   docker: SandboxDockerConfig;
@@ -12,7 +16,12 @@ type SandboxBrowserHashInput = {
   docker: SandboxDockerConfig;
   browser: Pick<
     SandboxBrowserConfig,
-    "cdpPort" | "cdpSourceRange" | "vncPort" | "noVncPort" | "headless" | "enableNoVnc"
+    | "cdpPort"
+    | "cdpSourceRange"
+    | "vncPort"
+    | "noVncPort"
+    | "headless"
+    | "enableNoVnc"
   >;
   securityEpoch: string;
   workspaceAccess: SandboxWorkspaceAccess;
@@ -25,10 +34,14 @@ function normalizeForHash(value: unknown): unknown {
     return undefined;
   }
   if (Array.isArray(value)) {
-    return value.map(normalizeForHash).filter((item): item is unknown => item !== undefined);
+    return value
+      .map(normalizeForHash)
+      .filter((item): item is unknown => item !== undefined);
   }
   if (value && typeof value === "object") {
-    const entries = Object.entries(value).toSorted(([a], [b]) => a.localeCompare(b));
+    const entries = Object.entries(value).toSorted(([a], [b]) =>
+      a.localeCompare(b),
+    );
     const normalized: Record<string, unknown> = {};
     for (const [key, entryValue] of entries) {
       const next = normalizeForHash(entryValue);
@@ -45,7 +58,9 @@ export function computeSandboxConfigHash(input: SandboxHashInput): string {
   return computeHash(input);
 }
 
-export function computeSandboxBrowserConfigHash(input: SandboxBrowserHashInput): string {
+export function computeSandboxBrowserConfigHash(
+  input: SandboxBrowserHashInput,
+): string {
   return computeHash(input);
 }
 

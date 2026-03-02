@@ -6,13 +6,34 @@ describe("markdownToSignalText", () => {
     it("does not duplicate URL for normalized equivalent labels", () => {
       const equivalentCases = [
         { input: "[selfh.st](http://selfh.st)", expected: "selfh.st" },
-        { input: "[example.com](https://example.com)", expected: "example.com" },
-        { input: "[www.example.com](https://example.com)", expected: "www.example.com" },
-        { input: "[example.com](https://example.com/)", expected: "example.com" },
-        { input: "[example.com](https://example.com///)", expected: "example.com" },
-        { input: "[example.com](https://www.example.com)", expected: "example.com" },
-        { input: "[EXAMPLE.COM](https://example.com)", expected: "EXAMPLE.COM" },
-        { input: "[example.com/page](https://example.com/page)", expected: "example.com/page" },
+        {
+          input: "[example.com](https://example.com)",
+          expected: "example.com",
+        },
+        {
+          input: "[www.example.com](https://example.com)",
+          expected: "www.example.com",
+        },
+        {
+          input: "[example.com](https://example.com/)",
+          expected: "example.com",
+        },
+        {
+          input: "[example.com](https://example.com///)",
+          expected: "example.com",
+        },
+        {
+          input: "[example.com](https://www.example.com)",
+          expected: "example.com",
+        },
+        {
+          input: "[EXAMPLE.COM](https://example.com)",
+          expected: "EXAMPLE.COM",
+        },
+        {
+          input: "[example.com/page](https://example.com/page)",
+          expected: "example.com/page",
+        },
       ] as const;
 
       for (const { input, expected } of equivalentCases) {
@@ -28,7 +49,9 @@ describe("markdownToSignalText", () => {
 
     it("handles URL with path - should show URL when label is just domain", () => {
       // Label is just domain, URL has path - these are meaningfully different
-      const res = markdownToSignalText("[example.com](https://example.com/page)");
+      const res = markdownToSignalText(
+        "[example.com](https://example.com/page)",
+      );
       expect(res.text).toBe("example.com (https://example.com/page)");
     });
   });

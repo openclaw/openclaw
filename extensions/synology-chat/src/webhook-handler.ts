@@ -6,8 +6,16 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import * as querystring from "node:querystring";
 import { sendMessage } from "./client.js";
-import { validateToken, authorizeUserForDm, sanitizeInput, RateLimiter } from "./security.js";
-import type { SynologyWebhookPayload, ResolvedSynologyChatAccount } from "./types.js";
+import {
+  validateToken,
+  authorizeUserForDm,
+  sanitizeInput,
+  RateLimiter,
+} from "./security.js";
+import type {
+  SynologyWebhookPayload,
+  ResolvedSynologyChatAccount,
+} from "./types.js";
 
 // One rate limiter per account, created lazily
 const rateLimiters = new Map<string, RateLimiter>();
@@ -79,7 +87,11 @@ function parsePayload(body: string): SynologyWebhookPayload | null {
 }
 
 /** Send a JSON response. */
-function respond(res: ServerResponse, statusCode: number, body: Record<string, unknown>) {
+function respond(
+  res: ServerResponse,
+  statusCode: number,
+  body: Record<string, unknown>,
+) {
   res.writeHead(statusCode, { "Content-Type": "application/json" });
   res.end(JSON.stringify(body));
 }
@@ -138,7 +150,9 @@ export function createWebhookHandler(deps: WebhookHandlerDeps) {
     // Parse payload
     const payload = parsePayload(body);
     if (!payload) {
-      respond(res, 400, { error: "Missing required fields (token, user_id, text)" });
+      respond(res, 400, {
+        error: "Missing required fields (token, user_id, text)",
+      });
       return;
     }
 
@@ -150,16 +164,23 @@ export function createWebhookHandler(deps: WebhookHandlerDeps) {
     }
 
     // DM policy authorization
-    const auth = authorizeUserForDm(payload.user_id, account.dmPolicy, account.allowedUserIds);
+    const auth = authorizeUserForDm(
+      payload.user_id,
+      account.dmPolicy,
+      account.allowedUserIds,
+    );
     if (!auth.allowed) {
       if (auth.reason === "disabled") {
         respond(res, 403, { error: "DMs are disabled" });
         return;
       }
       if (auth.reason === "allowlist-empty") {
-        log?.warn("Synology Chat allowlist is empty while dmPolicy=allowlist; rejecting message");
+        log?.warn(
+          "Synology Chat allowlist is empty while dmPolicy=allowlist; rejecting message",
+        );
         respond(res, 403, {
-          error: "Allowlist is empty. Configure allowedUserIds or use dmPolicy=open.",
+          error:
+            "Allowlist is empty. Configure allowedUserIds or use dmPolicy=open.",
         });
         return;
       }
@@ -188,8 +209,11 @@ export function createWebhookHandler(deps: WebhookHandlerDeps) {
       return;
     }
 
-    const preview = cleanText.length > 100 ? `${cleanText.slice(0, 100)}...` : cleanText;
-    log?.info(`Message from ${payload.username} (${payload.user_id}): ${preview}`);
+    const preview =
+      cleanText.length > 100 ? `${cleanText.slice(0, 100)}...` : cleanText;
+    log?.info(
+      `Message from ${payload.username} (${payload.user_id}): ${preview}`,
+    );
 
     // Respond 200 immediately to avoid Synology Chat timeout
     respond(res, 200, { text: "Processing..." });
@@ -208,20 +232,34 @@ export function createWebhookHandler(deps: WebhookHandlerDeps) {
       });
 
       const timeoutPromise = new Promise<null>((_, reject) =>
-        setTimeout(() => reject(new Error("Agent response timeout (120s)")), 120_000),
+        setTimeout(
+          () => reject(new Error("Agent response timeout (120s)")),
+          120_000,
+        ),
       );
 
       const reply = await Promise.race([deliverPromise, timeoutPromise]);
 
       // Send reply back to Synology Chat
       if (reply) {
-        await sendMessage(account.incomingUrl, reply, payload.user_id, account.allowInsecureSsl);
-        const replyPreview = reply.length > 100 ? `${reply.slice(0, 100)}...` : reply;
-        log?.info(`Reply sent to ${payload.username} (${payload.user_id}): ${replyPreview}`);
+        await sendMessage(
+          account.incomingUrl,
+          reply,
+          payload.user_id,
+          account.allowInsecureSsl,
+        );
+        const replyPreview =
+          reply.length > 100 ? `${reply.slice(0, 100)}...` : reply;
+        log?.info(
+          `Reply sent to ${payload.username} (${payload.user_id}): ${replyPreview}`,
+        );
       }
     } catch (err) {
-      const errMsg = err instanceof Error ? `${err.message}\n${err.stack}` : String(err);
-      log?.error(`Failed to process message from ${payload.username}: ${errMsg}`);
+      const errMsg =
+        err instanceof Error ? `${err.message}\n${err.stack}` : String(err);
+      log?.error(
+        `Failed to process message from ${payload.username}: ${errMsg}`,
+      );
       await sendMessage(
         account.incomingUrl,
         "Sorry, an error occurred while processing your message.",

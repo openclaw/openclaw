@@ -2,7 +2,11 @@
 
 import ts from "typescript";
 import { runCallsiteGuard } from "./lib/callsite-guard.mjs";
-import { runAsScript, toLine, unwrapExpression } from "./lib/ts-guard-utils.mjs";
+import {
+  runAsScript,
+  toLine,
+  unwrapExpression,
+} from "./lib/ts-guard-utils.mjs";
 
 const sourceRoots = [
   "src/channels",
@@ -21,7 +25,10 @@ function collectOsTmpdirImports(sourceFile) {
     if (!ts.isImportDeclaration(statement)) {
       continue;
     }
-    if (!statement.importClause || !ts.isStringLiteral(statement.moduleSpecifier)) {
+    if (
+      !statement.importClause ||
+      !ts.isStringLiteral(statement.moduleSpecifier)
+    ) {
       continue;
     }
     if (!osModuleSpecifiers.has(statement.moduleSpecifier.text)) {
@@ -48,8 +55,14 @@ function collectOsTmpdirImports(sourceFile) {
 }
 
 export function findMessagingTmpdirCallLines(content, fileName = "source.ts") {
-  const sourceFile = ts.createSourceFile(fileName, content, ts.ScriptTarget.Latest, true);
-  const { osNamespaceOrDefault, namedTmpdir } = collectOsTmpdirImports(sourceFile);
+  const sourceFile = ts.createSourceFile(
+    fileName,
+    content,
+    ts.ScriptTarget.Latest,
+    true,
+  );
+  const { osNamespaceOrDefault, namedTmpdir } =
+    collectOsTmpdirImports(sourceFile);
   const lines = [];
 
   const visit = (node) => {
@@ -79,7 +92,8 @@ export async function main() {
     sourceRoots,
     findCallLines: findMessagingTmpdirCallLines,
     skipRelativePath: (relativePath) => allowedRelativePaths.has(relativePath),
-    header: "Found os.tmpdir()/tmpdir() usage in messaging/channel runtime sources:",
+    header:
+      "Found os.tmpdir()/tmpdir() usage in messaging/channel runtime sources:",
     footer:
       "Use resolvePreferredOpenClawTmpDir() or plugin-sdk temp helpers instead of host tmp defaults.",
     sortViolations: false,

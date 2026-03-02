@@ -15,9 +15,13 @@ describe("markdownToSignalText", () => {
   });
 
   it("renders links as label plus url when needed", () => {
-    const res = markdownToSignalText("see [docs](https://example.com) and https://example.com");
+    const res = markdownToSignalText(
+      "see [docs](https://example.com) and https://example.com",
+    );
 
-    expect(res.text).toBe("see docs (https://example.com) and https://example.com");
+    expect(res.text).toBe(
+      "see docs (https://example.com) and https://example.com",
+    );
     expect(res.styles).toEqual([]);
   });
 
@@ -30,7 +34,9 @@ describe("markdownToSignalText", () => {
       "first (https://example.com/first) bold second (https://example.com/second)";
 
     expect(res.text).toBe(expectedText);
-    expect(res.styles).toEqual([{ start: expectedText.indexOf("bold"), length: 4, style: "BOLD" }]);
+    expect(res.styles).toEqual([
+      { start: expectedText.indexOf("bold"), length: 4, style: "BOLD" },
+    ]);
   });
 
   it("applies spoiler styling", () => {
@@ -41,14 +47,18 @@ describe("markdownToSignalText", () => {
   });
 
   it("renders fenced code blocks with monospaced styles", () => {
-    const res = markdownToSignalText("before\n\n```\nconst x = 1;\n```\n\nafter");
+    const res = markdownToSignalText(
+      "before\n\n```\nconst x = 1;\n```\n\nafter",
+    );
 
     const prefix = "before\n\n";
     const code = "const x = 1;\n";
     const suffix = "\nafter";
 
     expect(res.text).toBe(`${prefix}${code}${suffix}`);
-    expect(res.styles).toEqual([{ start: prefix.length, length: code.length, style: "MONOSPACE" }]);
+    expect(res.styles).toEqual([
+      { start: prefix.length, length: code.length, style: "MONOSPACE" },
+    ]);
   });
 
   it("renders lists without extra block markup", () => {
@@ -63,6 +73,8 @@ describe("markdownToSignalText", () => {
 
     const prefix = "😀 ";
     expect(res.text).toBe(`${prefix}bold`);
-    expect(res.styles).toEqual([{ start: prefix.length, length: 4, style: "BOLD" }]);
+    expect(res.styles).toEqual([
+      { start: prefix.length, length: 4, style: "BOLD" },
+    ]);
   });
 });

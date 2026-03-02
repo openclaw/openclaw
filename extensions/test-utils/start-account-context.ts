@@ -6,7 +6,9 @@ import type {
 import { vi } from "vitest";
 import { createRuntimeEnv } from "./runtime-env.js";
 
-export function createStartAccountContext<TAccount extends { accountId: string }>(params: {
+export function createStartAccountContext<
+  TAccount extends { accountId: string },
+>(params: {
   account: TAccount;
   abortSignal: AbortSignal;
   statusPatchSink?: (next: ChannelAccountSnapshot) => void;

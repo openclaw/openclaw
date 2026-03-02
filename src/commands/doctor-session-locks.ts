@@ -1,5 +1,8 @@
 import { resolveAgentSessionDirs } from "../agents/session-dirs.js";
-import { cleanStaleLockFiles, type SessionLockInspection } from "../agents/session-write-lock.js";
+import {
+  cleanStaleLockFiles,
+  type SessionLockInspection,
+} from "../agents/session-write-lock.js";
 import { resolveStateDir } from "../config/paths.js";
 import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
@@ -26,7 +29,9 @@ function formatAge(ageMs: number | null): string {
 
 function formatLockLine(lock: SessionLockInspection): string {
   const pidStatus =
-    lock.pid === null ? "pid=missing" : `pid=${lock.pid} (${lock.pidAlive ? "alive" : "dead"})`;
+    lock.pid === null
+      ? "pid=missing"
+      : `pid=${lock.pid} (${lock.pidAlive ? "alive" : "dead"})`;
   const ageStatus = `age=${formatAge(lock.ageMs)}`;
   const staleStatus = lock.stale
     ? `stale=yes (${lock.staleReasons.join(", ") || "unknown"})`
@@ -35,14 +40,20 @@ function formatLockLine(lock: SessionLockInspection): string {
   return `- ${shortenHomePath(lock.lockPath)} ${pidStatus} ${ageStatus} ${staleStatus}${removedStatus}`;
 }
 
-export async function noteSessionLockHealth(params?: { shouldRepair?: boolean; staleMs?: number }) {
+export async function noteSessionLockHealth(params?: {
+  shouldRepair?: boolean;
+  staleMs?: number;
+}) {
   const shouldRepair = params?.shouldRepair === true;
   const staleMs = params?.staleMs ?? DEFAULT_STALE_MS;
   let sessionDirs: string[] = [];
   try {
     sessionDirs = await resolveAgentSessionDirs(resolveStateDir(process.env));
   } catch (err) {
-    note(`- Failed to inspect session lock files: ${String(err)}`, "Session locks");
+    note(
+      `- Failed to inspect session lock files: ${String(err)}`,
+      "Session locks",
+    );
     return;
   }
 
@@ -68,12 +79,18 @@ export async function noteSessionLockHealth(params?: { shouldRepair?: boolean; s
   const removedCount = allLocks.filter((lock) => lock.removed).length;
   const lines: string[] = [
     `- Found ${allLocks.length} session lock file${allLocks.length === 1 ? "" : "s"}.`,
-    ...allLocks.toSorted((a, b) => a.lockPath.localeCompare(b.lockPath)).map(formatLockLine),
+    ...allLocks
+      .toSorted((a, b) => a.lockPath.localeCompare(b.lockPath))
+      .map(formatLockLine),
   ];
 
   if (staleCount > 0 && !shouldRepair) {
-    lines.push(`- ${staleCount} lock file${staleCount === 1 ? " is" : "s are"} stale.`);
-    lines.push('- Run "openclaw doctor --fix" to remove stale lock files automatically.');
+    lines.push(
+      `- ${staleCount} lock file${staleCount === 1 ? " is" : "s are"} stale.`,
+    );
+    lines.push(
+      '- Run "openclaw doctor --fix" to remove stale lock files automatically.',
+    );
   }
   if (shouldRepair && removedCount > 0) {
     lines.push(

@@ -38,7 +38,9 @@ describe("sanitizeToolCallInputs redacts sessions_spawn attachments", () => {
       arguments?: { attachments?: Array<{ content?: string }> };
     } | null;
     expect(tool?.name).toBe("sessions_spawn");
-    expect(tool?.arguments?.attachments?.[0]?.content).toBe("__OPENCLAW_REDACTED__");
+    expect(tool?.arguments?.attachments?.[0]?.content).toBe(
+      "__OPENCLAW_REDACTED__",
+    );
     expect(JSON.stringify(out)).not.toContain(secret);
   });
 
@@ -69,7 +71,8 @@ describe("sanitizeToolCallInputs redacts sessions_spawn attachments", () => {
       arguments?: { attachments?: Array<{ content?: string }> };
     } | null;
     expect(
-      tool?.input?.attachments?.[0]?.content || tool?.arguments?.attachments?.[0]?.content,
+      tool?.input?.attachments?.[0]?.content ||
+        tool?.arguments?.attachments?.[0]?.content,
     ).toBe("__OPENCLAW_REDACTED__");
     expect(JSON.stringify(out)).not.toContain(secret);
   });

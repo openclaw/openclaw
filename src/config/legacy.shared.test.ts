@@ -8,16 +8,17 @@ describe("mergeMissing prototype pollution guard", () => {
 
   it("ignores __proto__ keys without polluting Object.prototype", () => {
     const target = { safe: { keep: true } } as Record<string, unknown>;
-    const source = JSON.parse('{"safe":{"next":1},"__proto__":{"polluted":true}}') as Record<
-      string,
-      unknown
-    >;
+    const source = JSON.parse(
+      '{"safe":{"next":1},"__proto__":{"polluted":true}}',
+    ) as Record<string, unknown>;
 
     mergeMissing(target, source);
 
     expect((target.safe as Record<string, unknown>).keep).toBe(true);
     expect((target.safe as Record<string, unknown>).next).toBe(1);
     expect(target.polluted).toBeUndefined();
-    expect((Object.prototype as Record<string, unknown>).polluted).toBeUndefined();
+    expect(
+      (Object.prototype as Record<string, unknown>).polluted,
+    ).toBeUndefined();
   });
 });

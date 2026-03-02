@@ -1,7 +1,10 @@
 import { createAccountActionGate } from "../channels/plugins/account-action-gate.js";
 import { createAccountListHelpers } from "../channels/plugins/account-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
-import type { DiscordAccountConfig, DiscordActionConfig } from "../config/types.js";
+import type {
+  DiscordAccountConfig,
+  DiscordActionConfig,
+} from "../config/types.js";
 import { resolveAccountEntry } from "../routing/account-lookup.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 import { resolveDiscordToken } from "./token.js";
@@ -15,7 +18,8 @@ export type ResolvedDiscordAccount = {
   config: DiscordAccountConfig;
 };
 
-const { listAccountIds, resolveDefaultAccountId } = createAccountListHelpers("discord");
+const { listAccountIds, resolveDefaultAccountId } =
+  createAccountListHelpers("discord");
 export const listDiscordAccountIds = listAccountIds;
 export const resolveDefaultDiscordAccountId = resolveDefaultAccountId;
 
@@ -26,8 +30,12 @@ function resolveAccountConfig(
   return resolveAccountEntry(cfg.channels?.discord?.accounts, accountId);
 }
 
-function mergeDiscordAccountConfig(cfg: OpenClawConfig, accountId: string): DiscordAccountConfig {
-  const { accounts: _ignored, ...base } = (cfg.channels?.discord ?? {}) as DiscordAccountConfig & {
+function mergeDiscordAccountConfig(
+  cfg: OpenClawConfig,
+  accountId: string,
+): DiscordAccountConfig {
+  const { accounts: _ignored, ...base } = (cfg.channels?.discord ??
+    {}) as DiscordAccountConfig & {
     accounts?: unknown;
   };
   const account = resolveAccountConfig(cfg, accountId) ?? {};
@@ -65,7 +73,9 @@ export function resolveDiscordAccount(params: {
   };
 }
 
-export function listEnabledDiscordAccounts(cfg: OpenClawConfig): ResolvedDiscordAccount[] {
+export function listEnabledDiscordAccounts(
+  cfg: OpenClawConfig,
+): ResolvedDiscordAccount[] {
   return listDiscordAccountIds(cfg)
     .map((accountId) => resolveDiscordAccount({ cfg, accountId }))
     .filter((account) => account.enabled);

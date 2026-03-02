@@ -38,4 +38,5 @@ export const TlonConfigSchema = z.object({
   accounts: z.record(z.string(), TlonAccountSchema).optional(),
 });
 
-export const tlonChannelConfigSchema = buildChannelConfigSchema(TlonConfigSchema);
+export const tlonChannelConfigSchema =
+  buildChannelConfigSchema(TlonConfigSchema);

@@ -7,7 +7,8 @@ const hoisted = vi.hoisted(() => ({
 }));
 
 vi.mock("./monitor.js", async () => {
-  const actual = await vi.importActual<typeof import("./monitor.js")>("./monitor.js");
+  const actual =
+    await vi.importActual<typeof import("./monitor.js")>("./monitor.js");
   return {
     ...actual,
     monitorNextcloudTalkProvider: hoisted.monitorNextcloudTalkProvider,

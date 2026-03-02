@@ -67,7 +67,8 @@ repos:
     rev: v1.22.0
     hooks:
       - id: zizmor
-        args: [--persona=regular, --min-severity=medium, --min-confidence=medium]
+        args:
+          [--persona=regular, --min-severity=medium, --min-confidence=medium]
         exclude: "^(vendor/|Swabble/)"
 
   # Python checks for skills scripts

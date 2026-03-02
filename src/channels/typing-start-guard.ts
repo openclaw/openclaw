@@ -1,5 +1,7 @@
 export type TypingStartGuard = {
-  run: (start: () => Promise<void> | void) => Promise<"started" | "skipped" | "failed" | "tripped">;
+  run: (
+    start: () => Promise<void> | void,
+  ) => Promise<"started" | "skipped" | "failed" | "tripped">;
   reset: () => void;
   isTripped: () => boolean;
 };
@@ -13,7 +15,8 @@ export function createTypingStartGuard(params: {
   rethrowOnError?: boolean;
 }): TypingStartGuard {
   const maxConsecutiveFailures =
-    typeof params.maxConsecutiveFailures === "number" && params.maxConsecutiveFailures > 0
+    typeof params.maxConsecutiveFailures === "number" &&
+    params.maxConsecutiveFailures > 0
       ? Math.floor(params.maxConsecutiveFailures)
       : undefined;
   let consecutiveFailures = 0;
@@ -43,7 +46,10 @@ export function createTypingStartGuard(params: {
       if (params.rethrowOnError) {
         throw err;
       }
-      if (maxConsecutiveFailures && consecutiveFailures >= maxConsecutiveFailures) {
+      if (
+        maxConsecutiveFailures &&
+        consecutiveFailures >= maxConsecutiveFailures
+      ) {
         tripped = true;
         params.onTrip?.();
         return "tripped";

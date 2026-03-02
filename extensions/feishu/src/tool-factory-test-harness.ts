@@ -4,7 +4,9 @@ type ToolContextLike = {
   agentAccountId?: string;
 };
 
-type ToolFactoryLike = (ctx: ToolContextLike) => AnyAgentTool | AnyAgentTool[] | null | undefined;
+type ToolFactoryLike = (
+  ctx: ToolContextLike,
+) => AnyAgentTool | AnyAgentTool[] | null | undefined;
 
 export type ToolLike = {
   name: string;
@@ -16,7 +18,9 @@ type RegisteredTool = {
   opts?: { name?: string };
 };
 
-function toToolList(value: AnyAgentTool | AnyAgentTool[] | null | undefined): AnyAgentTool[] {
+function toToolList(
+  value: AnyAgentTool | AnyAgentTool[] | null | undefined,
+): AnyAgentTool[] {
   if (!value) return [];
   return Array.isArray(value) ? value : [value];
 }
@@ -26,7 +30,9 @@ function asToolLike(tool: AnyAgentTool, fallbackName?: string): ToolLike {
   const name = candidate.name ?? fallbackName;
   const execute = candidate.execute;
   if (!name || typeof execute !== "function") {
-    throw new Error(`Resolved tool is missing required fields (name=${String(name)})`);
+    throw new Error(
+      `Resolved tool is missing required fields (name=${String(name)})`,
+    );
   }
   return {
     name,
@@ -58,7 +64,9 @@ export function createToolFactoryHarness(cfg: OpenClawPluginApi["config"]) {
 
       if (typeof entry.tool === "function") {
         const builtTools = toToolList(entry.tool(ctx));
-        const hit = builtTools.find((tool) => (tool as { name?: string }).name === name);
+        const hit = builtTools.find(
+          (tool) => (tool as { name?: string }).name === name,
+        );
         if (hit) {
           return asToolLike(hit, name);
         }

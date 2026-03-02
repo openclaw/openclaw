@@ -73,7 +73,9 @@ export function buildInboundMediaNote(ctx: MsgContext): string | undefined {
       }
     }
   }
-  const pathsFromArray = Array.isArray(ctx.MediaPaths) ? ctx.MediaPaths : undefined;
+  const pathsFromArray = Array.isArray(ctx.MediaPaths)
+    ? ctx.MediaPaths
+    : undefined;
   const paths =
     pathsFromArray && pathsFromArray.length > 0
       ? pathsFromArray
@@ -95,7 +97,8 @@ export function buildInboundMediaNote(ctx: MsgContext): string | undefined {
   const hasTranscript = Boolean(ctx.Transcript?.trim());
   // Transcript alone does not identify an attachment index; only use it as a fallback
   // when there is a single attachment to avoid stripping unrelated audio files.
-  const canStripSingleAttachmentByTranscript = hasTranscript && paths.length === 1;
+  const canStripSingleAttachmentByTranscript =
+    hasTranscript && paths.length === 1;
 
   const entries = paths
     .map((entry, index) => ({
@@ -113,7 +116,8 @@ export function buildInboundMediaNote(ctx: MsgContext): string | undefined {
       // Note: Only trust MIME type from per-entry types array, not fallback ctx.MediaType
       // which could misclassify non-audio attachments (greptile review feedback)
       const hasPerEntryType = types !== undefined;
-      const isAudioByMime = hasPerEntryType && entry.type?.toLowerCase().startsWith("audio/");
+      const isAudioByMime =
+        hasPerEntryType && entry.type?.toLowerCase().startsWith("audio/");
       const isAudioEntry = isAudioPath(entry.path) || isAudioByMime;
       if (!isAudioEntry) {
         return true;

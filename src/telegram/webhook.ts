@@ -52,7 +52,9 @@ function resolveWebhookPublicUrl(params: {
   const address = params.server.address();
   if (address && typeof address !== "string") {
     const resolvedHost =
-      params.host === "0.0.0.0" || address.address === "0.0.0.0" || address.address === "::"
+      params.host === "0.0.0.0" ||
+      address.address === "0.0.0.0" ||
+      address.address === "::"
         ? "localhost"
         : address.address;
     return `http://${resolvedHost}:${address.port}${params.path}`;
@@ -66,7 +68,9 @@ async function initializeTelegramWebhookBot(params: {
   runtime: RuntimeEnv;
   abortSignal?: AbortSignal;
 }) {
-  const initSignal = params.abortSignal as Parameters<(typeof params.bot)["init"]>[0];
+  const initSignal = params.abortSignal as Parameters<
+    (typeof params.bot)["init"]
+  >[0];
   await withTelegramApiErrorLogging({
     operation: "getMe",
     runtime: params.runtime,
@@ -128,7 +132,9 @@ export async function startTelegramWebhook(opts: {
       if (res.headersSent || res.writableEnded) {
         return;
       }
-      res.writeHead(statusCode, { "Content-Type": "text/plain; charset=utf-8" });
+      res.writeHead(statusCode, {
+        "Content-Type": "text/plain; charset=utf-8",
+      });
       res.end(text);
     };
 
@@ -178,7 +184,9 @@ export async function startTelegramWebhook(opts: {
         if (res.headersSent || res.writableEnded) {
           return;
         }
-        res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+        res.writeHead(200, {
+          "Content-Type": "application/json; charset=utf-8",
+        });
         res.end(json);
       };
       const unauthorized = async () => {
@@ -189,7 +197,9 @@ export async function startTelegramWebhook(opts: {
         respondText(401, "unauthorized");
       };
       const secretHeaderRaw = req.headers["x-telegram-bot-api-secret-token"];
-      const secretHeader = Array.isArray(secretHeaderRaw) ? secretHeaderRaw[0] : secretHeaderRaw;
+      const secretHeader = Array.isArray(secretHeaderRaw)
+        ? secretHeaderRaw[0]
+        : secretHeaderRaw;
 
       await handler(body.value, reply, secretHeader, unauthorized);
       if (!replied) {
@@ -223,7 +233,8 @@ export async function startTelegramWebhook(opts: {
     host,
   });
   const boundAddress = server.address();
-  const boundPort = boundAddress && typeof boundAddress !== "string" ? boundAddress.port : port;
+  const boundPort =
+    boundAddress && typeof boundAddress !== "string" ? boundAddress.port : port;
 
   const publicUrl = resolveWebhookPublicUrl({
     configuredPublicUrl: opts.publicUrl,

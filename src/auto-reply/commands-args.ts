@@ -1,6 +1,8 @@
 import type { CommandArgValues } from "./commands-registry.types.js";
 
-export type CommandArgsFormatter = (values: CommandArgValues) => string | undefined;
+export type CommandArgsFormatter = (
+  values: CommandArgValues,
+) => string | undefined;
 
 function normalizeArgValue(value: unknown): string | undefined {
   if (value == null) {
@@ -9,7 +11,11 @@ function normalizeArgValue(value: unknown): string | undefined {
   let text: string;
   if (typeof value === "string") {
     text = value.trim();
-  } else if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+  } else if (
+    typeof value === "number" ||
+    typeof value === "boolean" ||
+    typeof value === "bigint"
+  ) {
     text = String(value).trim();
   } else if (typeof value === "symbol") {
     text = value.toString().trim();
@@ -25,7 +31,10 @@ function normalizeArgValue(value: unknown): string | undefined {
 function formatActionArgs(
   values: CommandArgValues,
   params: {
-    formatKnownAction: (action: string, path: string | undefined) => string | undefined;
+    formatKnownAction: (
+      action: string,
+      path: string | undefined,
+    ) => string | undefined;
   },
 ): string | undefined {
   const action = normalizeArgValue(values.action)?.toLowerCase();

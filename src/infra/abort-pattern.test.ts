@@ -56,7 +56,9 @@ describe("abort pattern: .bind() vs arrow closure (#7174)", () => {
     // Demonstrates the bug: .abort.bind() passes the Event as abort reason
     const parentA = new AbortController();
     const childA = new AbortController();
-    parentA.signal.addEventListener("abort", childA.abort.bind(childA), { once: true });
+    parentA.signal.addEventListener("abort", childA.abort.bind(childA), {
+      once: true,
+    });
     parentA.abort();
     // childA.signal.reason is the Event, NOT an AbortError
     expect(childA.signal.reason).not.toBeInstanceOf(DOMException);
@@ -64,7 +66,9 @@ describe("abort pattern: .bind() vs arrow closure (#7174)", () => {
     // The fix: bindAbortRelay() ignores the Event argument
     const parentB = new AbortController();
     const childB = new AbortController();
-    parentB.signal.addEventListener("abort", bindAbortRelay(childB), { once: true });
+    parentB.signal.addEventListener("abort", bindAbortRelay(childB), {
+      once: true,
+    });
     parentB.abort();
     // childB.signal.reason IS the default AbortError
     expect(childB.signal.reason).toBeInstanceOf(DOMException);

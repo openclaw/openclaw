@@ -6,12 +6,15 @@ import { registerFeishuPermTools } from "./perm.js";
 import { createToolFactoryHarness } from "./tool-factory-test-harness.js";
 import { registerFeishuWikiTools } from "./wiki.js";
 
-const createFeishuClientMock = vi.fn((account: { appId?: string } | undefined) => ({
-  __appId: account?.appId,
-}));
+const createFeishuClientMock = vi.fn(
+  (account: { appId?: string } | undefined) => ({
+    __appId: account?.appId,
+  }),
+);
 
 vi.mock("./client.js", () => ({
-  createFeishuClient: (account: { appId?: string } | undefined) => createFeishuClientMock(account),
+  createFeishuClient: (account: { appId?: string } | undefined) =>
+    createFeishuClientMock(account),
 }));
 
 function createConfig(params: {
@@ -119,7 +122,9 @@ describe("feishu tool account routing", () => {
     const { api, resolveTool } = createToolFactoryHarness(createConfig({}));
     registerFeishuBitableTools(api);
 
-    const tool = resolveTool("feishu_bitable_get_meta", { agentAccountId: "b" });
+    const tool = resolveTool("feishu_bitable_get_meta", {
+      agentAccountId: "b",
+    });
     await tool.execute("call-ctx", { url: "invalid-url" });
     await tool.execute("call-override", { url: "invalid-url", accountId: "a" });
 

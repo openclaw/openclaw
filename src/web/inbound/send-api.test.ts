@@ -21,7 +21,9 @@ describe("createWebSendApi", () => {
 
   it("uses sendOptions fileName for outbound documents", async () => {
     const payload = Buffer.from("pdf");
-    await api.sendMessage("+1555", "doc", payload, "application/pdf", { fileName: "invoice.pdf" });
+    await api.sendMessage("+1555", "doc", payload, "application/pdf", {
+      fileName: "invoice.pdf",
+    });
     expect(sendMessage).toHaveBeenCalledWith(
       "1555@s.whatsapp.net",
       expect.objectContaining({
@@ -54,7 +56,9 @@ describe("createWebSendApi", () => {
 
   it("sends plain text messages", async () => {
     await api.sendMessage("+1555", "hello");
-    expect(sendMessage).toHaveBeenCalledWith("1555@s.whatsapp.net", { text: "hello" });
+    expect(sendMessage).toHaveBeenCalledWith("1555@s.whatsapp.net", {
+      text: "hello",
+    });
     expect(recordChannelActivity).toHaveBeenCalledWith({
       channel: "whatsapp",
       accountId: "main",
@@ -77,7 +81,9 @@ describe("createWebSendApi", () => {
 
   it("supports audio as push-to-talk voice note", async () => {
     const payload = Buffer.from("aud");
-    await api.sendMessage("+1555", "", payload, "audio/ogg", { accountId: "alt" });
+    await api.sendMessage("+1555", "", payload, "audio/ogg", {
+      accountId: "alt",
+    });
     expect(sendMessage).toHaveBeenCalledWith(
       "1555@s.whatsapp.net",
       expect.objectContaining({
@@ -95,7 +101,9 @@ describe("createWebSendApi", () => {
 
   it("supports video media and gifPlayback option", async () => {
     const payload = Buffer.from("vid");
-    await api.sendMessage("+1555", "cap", payload, "video/mp4", { gifPlayback: true });
+    await api.sendMessage("+1555", "cap", payload, "video/mp4", {
+      gifPlayback: true,
+    });
     expect(sendMessage).toHaveBeenCalledWith(
       "1555@s.whatsapp.net",
       expect.objectContaining({
@@ -153,6 +161,9 @@ describe("createWebSendApi", () => {
 
   it("sends composing presence updates to the recipient JID", async () => {
     await api.sendComposingTo("+1555");
-    expect(sendPresenceUpdate).toHaveBeenCalledWith("composing", "1555@s.whatsapp.net");
+    expect(sendPresenceUpdate).toHaveBeenCalledWith(
+      "composing",
+      "1555@s.whatsapp.net",
+    );
   });
 });

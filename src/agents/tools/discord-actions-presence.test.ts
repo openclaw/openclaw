@@ -1,17 +1,24 @@
 import type { GatewayPlugin } from "@buape/carbon/gateway";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DiscordActionConfig } from "../../config/config.js";
-import { clearGateways, registerGateway } from "../../discord/monitor/gateway-registry.js";
+import {
+  clearGateways,
+  registerGateway,
+} from "../../discord/monitor/gateway-registry.js";
 import type { ActionGate } from "./common.js";
 import { handleDiscordPresenceAction } from "./discord-actions-presence.js";
 
 const mockUpdatePresence = vi.fn();
 
 function createMockGateway(connected = true): GatewayPlugin {
-  return { isConnected: connected, updatePresence: mockUpdatePresence } as unknown as GatewayPlugin;
+  return {
+    isConnected: connected,
+    updatePresence: mockUpdatePresence,
+  } as unknown as GatewayPlugin;
 }
 
-const presenceEnabled: ActionGate<DiscordActionConfig> = (key) => key === "presence";
+const presenceEnabled: ActionGate<DiscordActionConfig> = (key) =>
+  key === "presence";
 const presenceDisabled: ActionGate<DiscordActionConfig> = () => false;
 
 describe("handleDiscordPresenceAction", () => {
@@ -56,7 +63,9 @@ describe("handleDiscordPresenceAction", () => {
         activityName: "My Stream",
         activityUrl: "https://twitch.tv/example",
       },
-      expectedActivities: [{ name: "My Stream", type: 1, url: "https://twitch.tv/example" }],
+      expectedActivities: [
+        { name: "My Stream", type: 1, url: "https://twitch.tv/example" },
+      ],
     },
     {
       name: "streaming activity without URL",
@@ -80,7 +89,11 @@ describe("handleDiscordPresenceAction", () => {
     },
     {
       name: "activity with state",
-      params: { activityType: "playing", activityName: "My Game", activityState: "In the lobby" },
+      params: {
+        activityType: "playing",
+        activityName: "My Game",
+        activityState: "In the lobby",
+      },
       expectedActivities: [{ name: "My Game", type: 0, state: "In the lobby" }],
     },
     {
@@ -109,7 +122,11 @@ describe("handleDiscordPresenceAction", () => {
   });
 
   it.each([
-    { name: "invalid status", params: { status: "offline" }, expectedMessage: /Invalid status/ },
+    {
+      name: "invalid status",
+      params: { status: "offline" },
+      expectedMessage: /Invalid status/,
+    },
     {
       name: "invalid activity type",
       params: { activityType: "invalid" },
@@ -121,28 +138,40 @@ describe("handleDiscordPresenceAction", () => {
 
   it("defaults status to online", async () => {
     await setPresence({ activityType: "playing", activityName: "test" });
-    expect(mockUpdatePresence).toHaveBeenCalledWith(expect.objectContaining({ status: "online" }));
+    expect(mockUpdatePresence).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "online" }),
+    );
   });
 
   it("respects presence gating", async () => {
-    await expect(setPresence({ status: "online" }, presenceDisabled)).rejects.toThrow(/disabled/);
+    await expect(
+      setPresence({ status: "online" }, presenceDisabled),
+    ).rejects.toThrow(/disabled/);
   });
 
   it("errors when gateway is not registered", async () => {
     clearGateways();
-    await expect(setPresence({ status: "dnd" })).rejects.toThrow(/not available/);
+    await expect(setPresence({ status: "dnd" })).rejects.toThrow(
+      /not available/,
+    );
   });
 
   it("errors when gateway is not connected", async () => {
     clearGateways();
     registerGateway(undefined, createMockGateway(false));
-    await expect(setPresence({ status: "dnd" })).rejects.toThrow(/not connected/);
+    await expect(setPresence({ status: "dnd" })).rejects.toThrow(
+      /not connected/,
+    );
   });
 
   it("uses accountId to resolve gateway", async () => {
     const accountGateway = createMockGateway();
     registerGateway("my-account", accountGateway);
-    await setPresence({ accountId: "my-account", activityType: "playing", activityName: "test" });
+    await setPresence({
+      accountId: "my-account",
+      activityType: "playing",
+      activityName: "test",
+    });
     expect(mockUpdatePresence).toHaveBeenCalled();
   });
 
@@ -153,8 +182,8 @@ describe("handleDiscordPresenceAction", () => {
   });
 
   it("rejects unknown presence actions", async () => {
-    await expect(handleDiscordPresenceAction("unknownAction", {}, presenceEnabled)).rejects.toThrow(
-      /Unknown presence action/,
-    );
+    await expect(
+      handleDiscordPresenceAction("unknownAction", {}, presenceEnabled),
+    ).rejects.toThrow(/Unknown presence action/);
   });
 });

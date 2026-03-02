@@ -53,7 +53,9 @@ beforeAll(async () => {
 describe("registerAgentCommands", () => {
   async function runCli(args: string[]) {
     const program = new Command();
-    registerAgentCommands(program, { agentChannelOptions: "last|telegram|discord" });
+    registerAgentCommands(program, {
+      agentChannelOptions: "last|telegram|discord",
+    });
     await program.parseAsync(args, { from: "user" });
   }
 
@@ -191,8 +193,12 @@ describe("registerAgentCommands", () => {
 
   it("documents bind accountId resolution behavior in help text", () => {
     const program = new Command();
-    registerAgentCommands(program, { agentChannelOptions: "last|telegram|discord" });
-    const agents = program.commands.find((command) => command.name() === "agents");
+    registerAgentCommands(program, {
+      agentChannelOptions: "last|telegram|discord",
+    });
+    const agents = program.commands.find(
+      (command) => command.name() === "agents",
+    );
     const bind = agents?.commands.find((command) => command.name() === "bind");
     const help = bind?.helpInformation() ?? "";
     expect(help).toContain("accountId is resolved by channel defaults/hooks");

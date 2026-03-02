@@ -22,7 +22,9 @@ export function formatAllowlistMatchMeta(
   return `matchKey=${match?.matchKey ?? "none"} matchSource=${match?.matchSource ?? "none"}`;
 }
 
-export function resolveAllowlistMatchByCandidates<TSource extends string>(params: {
+export function resolveAllowlistMatchByCandidates<
+  TSource extends string,
+>(params: {
   allowList: string[];
   candidates: Array<{ value?: string; source: TSource }>;
 }): AllowlistMatch<TSource> {
@@ -64,7 +66,11 @@ export function resolveAllowlistMatchSimple(params: {
   }
 
   const senderName = params.senderName?.toLowerCase();
-  if (params.allowNameMatching === true && senderName && allowFrom.includes(senderName)) {
+  if (
+    params.allowNameMatching === true &&
+    senderName &&
+    allowFrom.includes(senderName)
+  ) {
     return { allowed: true, matchKey: senderName, matchSource: "name" };
   }
 

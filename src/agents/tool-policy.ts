@@ -16,7 +16,10 @@ export {
 export type { ToolProfileId } from "./tool-policy-shared.js";
 
 // Keep tool-policy browser-safe: do not import tools/common at runtime.
-function wrapOwnerOnlyToolExecution(tool: AnyAgentTool, senderIsOwner: boolean): AnyAgentTool {
+function wrapOwnerOnlyToolExecution(
+  tool: AnyAgentTool,
+  senderIsOwner: boolean,
+): AnyAgentTool {
   if (tool.ownerOnly !== true || senderIsOwner || !tool.execute) {
     return tool;
   }
@@ -28,7 +31,11 @@ function wrapOwnerOnlyToolExecution(tool: AnyAgentTool, senderIsOwner: boolean):
   };
 }
 
-const OWNER_ONLY_TOOL_NAME_FALLBACKS = new Set<string>(["whatsapp_login", "cron", "gateway"]);
+const OWNER_ONLY_TOOL_NAME_FALLBACKS = new Set<string>([
+  "whatsapp_login",
+  "cron",
+  "gateway",
+]);
 
 export function isOwnerOnlyToolName(name: string) {
   return OWNER_ONLY_TOOL_NAME_FALLBACKS.has(normalizeToolName(name));
@@ -38,7 +45,10 @@ function isOwnerOnlyTool(tool: AnyAgentTool) {
   return tool.ownerOnly === true || isOwnerOnlyToolName(tool.name);
 }
 
-export function applyOwnerOnlyToolPolicy(tools: AnyAgentTool[], senderIsOwner: boolean) {
+export function applyOwnerOnlyToolPolicy(
+  tools: AnyAgentTool[],
+  senderIsOwner: boolean,
+) {
   const withGuard = tools.map((tool) => {
     if (!isOwnerOnlyTool(tool)) {
       return tool;
@@ -67,7 +77,9 @@ export type AllowlistResolution = {
   strippedAllowlist: boolean;
 };
 
-export function collectExplicitAllowlist(policies: Array<ToolPolicyLike | undefined>): string[] {
+export function collectExplicitAllowlist(
+  policies: Array<ToolPolicyLike | undefined>,
+): string[] {
   const entries: string[] = [];
   for (const policy of policies) {
     if (!policy?.allow) {
@@ -170,7 +182,9 @@ export function stripPluginOnlyAllowlist(
       continue;
     }
     const isPluginEntry =
-      entry === "group:plugins" || pluginIds.has(entry) || pluginTools.has(entry);
+      entry === "group:plugins" ||
+      pluginIds.has(entry) ||
+      pluginTools.has(entry);
     const expanded = expandToolGroups([entry]);
     const isCoreEntry = expanded.some((tool) => coreTools.has(tool));
     if (isCoreEntry) {
@@ -201,5 +215,8 @@ export function mergeAlsoAllowPolicy<TPolicy extends { allow?: string[] }>(
   if (!policy?.allow || !Array.isArray(alsoAllow) || alsoAllow.length === 0) {
     return policy;
   }
-  return { ...policy, allow: Array.from(new Set([...policy.allow, ...alsoAllow])) };
+  return {
+    ...policy,
+    allow: Array.from(new Set([...policy.allow, ...alsoAllow])),
+  };
 }

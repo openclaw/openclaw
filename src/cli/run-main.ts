@@ -55,7 +55,10 @@ export function shouldEnsureCliPath(argv: string[]): boolean {
   if (primary === "config" && (secondary === "get" || secondary === "unset")) {
     return false;
   }
-  if (primary === "models" && (secondary === "list" || secondary === "status")) {
+  if (
+    primary === "models" &&
+    (secondary === "list" || secondary === "status")
+  ) {
     return false;
   }
   return true;
@@ -99,15 +102,18 @@ export async function runCli(argv: string[] = process.argv) {
     const { getProgramContext } = await import("./program/program-context.js");
     const ctx = getProgramContext(program);
     if (ctx) {
-      const { registerCoreCliByName } = await import("./program/command-registry.js");
+      const { registerCoreCliByName } =
+        await import("./program/command-registry.js");
       await registerCoreCliByName(program, ctx, primary, parseArgv);
     }
-    const { registerSubCliByName } = await import("./program/register.subclis.js");
+    const { registerSubCliByName } =
+      await import("./program/register.subclis.js");
     await registerSubCliByName(program, primary);
   }
 
   const hasBuiltinPrimary =
-    primary !== null && program.commands.some((command) => command.name() === primary);
+    primary !== null &&
+    program.commands.some((command) => command.name() === primary);
   const shouldSkipPluginRegistration = shouldSkipPluginCommandRegistration({
     argv: parseArgv,
     primary,

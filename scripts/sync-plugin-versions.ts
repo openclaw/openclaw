@@ -40,15 +40,17 @@ function stripWorkspaceOpenclawDevDependency(pkg: PackageJson): boolean {
 
 export function syncPluginVersions(rootDir = resolve(".")) {
   const rootPackagePath = join(rootDir, "package.json");
-  const rootPackage = JSON.parse(readFileSync(rootPackagePath, "utf8")) as PackageJson;
+  const rootPackage = JSON.parse(
+    readFileSync(rootPackagePath, "utf8"),
+  ) as PackageJson;
   const targetVersion = rootPackage.version;
   if (!targetVersion) {
     throw new Error("Root package.json missing version.");
   }
 
   const extensionsDir = join(rootDir, "extensions");
-  const dirs = readdirSync(extensionsDir, { withFileTypes: true }).filter((entry) =>
-    entry.isDirectory(),
+  const dirs = readdirSync(extensionsDir, { withFileTypes: true }).filter(
+    (entry) => entry.isDirectory(),
   );
 
   const updated: string[] = [];
@@ -75,7 +77,8 @@ export function syncPluginVersions(rootDir = resolve(".")) {
       changelogged.push(pkg.name);
     }
 
-    const removedWorkspaceDevDependency = stripWorkspaceOpenclawDevDependency(pkg);
+    const removedWorkspaceDevDependency =
+      stripWorkspaceOpenclawDevDependency(pkg);
     if (removedWorkspaceDevDependency) {
       strippedWorkspaceDevDeps.push(pkg.name);
     }

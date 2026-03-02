@@ -24,7 +24,9 @@ export function parseStreamingMode(value: unknown): StreamingMode | null {
   return null;
 }
 
-export function parseDiscordPreviewStreamMode(value: unknown): DiscordPreviewStreamMode | null {
+export function parseDiscordPreviewStreamMode(
+  value: unknown,
+): DiscordPreviewStreamMode | null {
   const parsed = parseStreamingMode(value);
   if (!parsed) {
     return null;
@@ -32,9 +34,15 @@ export function parseDiscordPreviewStreamMode(value: unknown): DiscordPreviewStr
   return parsed === "progress" ? "partial" : parsed;
 }
 
-export function parseSlackLegacyDraftStreamMode(value: unknown): SlackLegacyDraftStreamMode | null {
+export function parseSlackLegacyDraftStreamMode(
+  value: unknown,
+): SlackLegacyDraftStreamMode | null {
   const normalized = normalizeStreamingMode(value);
-  if (normalized === "replace" || normalized === "status_final" || normalized === "append") {
+  if (
+    normalized === "replace" ||
+    normalized === "status_final" ||
+    normalized === "append"
+  ) {
     return normalized;
   }
   return null;
@@ -52,7 +60,9 @@ export function mapSlackLegacyDraftStreamModeToStreaming(
   return "partial";
 }
 
-export function mapStreamingModeToSlackLegacyDraftStreamMode(mode: StreamingMode) {
+export function mapStreamingModeToSlackLegacyDraftStreamMode(
+  mode: StreamingMode,
+) {
   if (mode === "block") {
     return "append" as const;
   }

@@ -23,7 +23,10 @@ function resolveActiveHoursTimezone(cfg: OpenClawConfig, raw?: string): string {
   }
 }
 
-function parseActiveHoursTime(opts: { allow24: boolean }, raw?: string): number | null {
+function parseActiveHoursTime(
+  opts: { allow24: boolean },
+  raw?: string,
+): number | null {
   if (!raw || !ACTIVE_HOURS_TIME_PATTERN.test(raw)) {
     return null;
   }
@@ -42,7 +45,10 @@ function parseActiveHoursTime(opts: { allow24: boolean }, raw?: string): number 
   return hour * 60 + minute;
 }
 
-function resolveMinutesInTimeZone(nowMs: number, timeZone: string): number | null {
+function resolveMinutesInTimeZone(
+  nowMs: number,
+  timeZone: string,
+): number | null {
   try {
     const parts = new Intl.DateTimeFormat("en-US", {
       timeZone,

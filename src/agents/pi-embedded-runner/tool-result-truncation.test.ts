@@ -68,7 +68,10 @@ describe("truncateToolResultText", () => {
   });
 
   it("tries to break at newline boundary", () => {
-    const lines = Array.from({ length: 100 }, (_, i) => `line ${i}: ${"x".repeat(50)}`).join("\n");
+    const lines = Array.from(
+      { length: 100 },
+      (_, i) => `line ${i}: ${"x".repeat(50)}`,
+    ).join("\n");
     const result = truncateToolResultText(lines, 3000);
     // Should contain truncation notice
     expect(result).toContain("truncated");
@@ -102,7 +105,10 @@ describe("getToolResultTextLength", () => {
       role: "toolResult",
       content: [
         { type: "text", text: "abc" },
-        { type: "image", source: { type: "base64", mediaType: "image/png", data: "x" } },
+        {
+          type: "image",
+          source: { type: "base64", mediaType: "image/png", data: "x" },
+        },
         { type: "text", text: "12345" },
       ],
     } as unknown as AgentMessage;
@@ -179,10 +185,8 @@ describe("truncateOversizedToolResultsInMessages", () => {
       makeAssistantMessage("using tool"),
       makeToolResult("small result"),
     ];
-    const { messages: result, truncatedCount } = truncateOversizedToolResultsInMessages(
-      messages,
-      200_000,
-    );
+    const { messages: result, truncatedCount } =
+      truncateOversizedToolResultsInMessages(messages, 200_000);
     expect(truncatedCount).toBe(0);
     expect(result).toEqual(messages);
   });
@@ -194,10 +198,8 @@ describe("truncateOversizedToolResultsInMessages", () => {
       makeAssistantMessage("reading file"),
       makeToolResult(bigContent),
     ];
-    const { messages: result, truncatedCount } = truncateOversizedToolResultsInMessages(
-      messages,
-      128_000,
-    );
+    const { messages: result, truncatedCount } =
+      truncateOversizedToolResultsInMessages(messages, 128_000);
     expect(truncatedCount).toBe(1);
     const toolResult = result[2] as { content: Array<{ text: string }> };
     expect(toolResult.content[0].text.length).toBeLessThan(bigContent.length);
@@ -210,7 +212,10 @@ describe("truncateOversizedToolResultsInMessages", () => {
       makeAssistantMessage("reading file"),
       makeToolResult("x".repeat(500_000)),
     ];
-    const { messages: result } = truncateOversizedToolResultsInMessages(messages, 128_000);
+    const { messages: result } = truncateOversizedToolResultsInMessages(
+      messages,
+      128_000,
+    );
     expect(result[0]).toBe(messages[0]); // Same reference
     expect(result[1]).toBe(messages[1]); // Same reference
   });
@@ -222,10 +227,8 @@ describe("truncateOversizedToolResultsInMessages", () => {
       makeToolResult("x".repeat(500_000), "call_1"),
       makeToolResult("y".repeat(500_000), "call_2"),
     ];
-    const { messages: result, truncatedCount } = truncateOversizedToolResultsInMessages(
-      messages,
-      128_000,
-    );
+    const { messages: result, truncatedCount } =
+      truncateOversizedToolResultsInMessages(messages, 128_000);
     expect(truncatedCount).toBe(2);
     for (const msg of result.slice(2)) {
       const tr = msg as { content: Array<{ text: string }> };
@@ -246,7 +249,10 @@ describe("sessionLikelyHasOversizedToolResults", () => {
   });
 
   it("returns true when a tool result is oversized", () => {
-    const messages = [makeUserMessage("hello"), makeToolResult("x".repeat(500_000))];
+    const messages = [
+      makeUserMessage("hello"),
+      makeToolResult("x".repeat(500_000)),
+    ];
     expect(
       sessionLikelyHasOversizedToolResults({
         messages,

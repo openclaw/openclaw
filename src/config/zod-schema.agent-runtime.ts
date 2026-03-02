@@ -54,7 +54,11 @@ export const HeartbeatSchema = z
       return;
     }
     const timePattern = /^([01]\d|2[0-3]|24):([0-5]\d)$/;
-    const validateTime = (raw: string | undefined, opts: { allow24: boolean }, path: string) => {
+    const validateTime = (
+      raw: string | undefined,
+      opts: { allow24: boolean },
+      path: string,
+    ) => {
       if (!raw) {
         return;
       }
@@ -140,12 +144,15 @@ export const SandboxDockerSchema = z
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
             path: ["binds", i],
-            message: "Sandbox security: bind mount entry must be a non-empty string.",
+            message:
+              "Sandbox security: bind mount entry must be a non-empty string.",
           });
           continue;
         }
         const firstColon = bind.indexOf(":");
-        const source = (firstColon <= 0 ? bind : bind.slice(0, firstColon)).trim();
+        const source = (
+          firstColon <= 0 ? bind : bind.slice(0, firstColon)
+        ).trim();
         if (!source.startsWith("/")) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
@@ -159,7 +166,8 @@ export const SandboxDockerSchema = z
     }
     const blockedNetworkReason = getBlockedNetworkModeReason({
       network: data.network,
-      allowContainerNamespaceJoin: data.dangerouslyAllowContainerNamespaceJoin === true,
+      allowContainerNamespaceJoin:
+        data.dangerouslyAllowContainerNamespaceJoin === true,
     });
     if (blockedNetworkReason === "host") {
       ctx.addIssue({
@@ -245,15 +253,22 @@ const ToolPolicyBaseSchema = z
   })
   .strict();
 
-export const ToolPolicySchema = ToolPolicyBaseSchema.superRefine((value, ctx) => {
-  if (value.allow && value.allow.length > 0 && value.alsoAllow && value.alsoAllow.length > 0) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message:
-        "tools policy cannot set both allow and alsoAllow in the same scope (merge alsoAllow into allow, or remove allow and use profile + alsoAllow)",
-    });
-  }
-}).optional();
+export const ToolPolicySchema = ToolPolicyBaseSchema.superRefine(
+  (value, ctx) => {
+    if (
+      value.allow &&
+      value.allow.length > 0 &&
+      value.alsoAllow &&
+      value.alsoAllow.length > 0
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "tools policy cannot set both allow and alsoAllow in the same scope (merge alsoAllow into allow, or remove allow and use profile + alsoAllow)",
+      });
+    }
+  },
+).optional();
 
 export const ToolsWebSearchSchema = z
   .object({
@@ -328,7 +343,12 @@ export const ToolsWebSchema = z
   .optional();
 
 export const ToolProfileSchema = z
-  .union([z.literal("minimal"), z.literal("coding"), z.literal("messaging"), z.literal("full")])
+  .union([
+    z.literal("minimal"),
+    z.literal("coding"),
+    z.literal("messaging"),
+    z.literal("full"),
+  ])
   .optional();
 
 type AllowlistPolicy = {
@@ -341,7 +361,12 @@ function addAllowAlsoAllowConflictIssue(
   ctx: z.RefinementCtx,
   message: string,
 ): void {
-  if (value.allow && value.allow.length > 0 && value.alsoAllow && value.alsoAllow.length > 0) {
+  if (
+    value.allow &&
+    value.allow.length > 0 &&
+    value.alsoAllow &&
+    value.alsoAllow.length > 0
+  ) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       message,
@@ -396,7 +421,9 @@ const ToolExecBaseShape = {
   pathPrepend: z.array(z.string()).optional(),
   safeBins: z.array(z.string()).optional(),
   safeBinTrustedDirs: z.array(z.string()).optional(),
-  safeBinProfiles: z.record(z.string(), ToolExecSafeBinProfileSchema).optional(),
+  safeBinProfiles: z
+    .record(z.string(), ToolExecSafeBinProfileSchema)
+    .optional(),
   backgroundMs: z.number().int().positive().optional(),
   timeoutSec: z.number().int().positive().optional(),
   cleanupMs: z.number().int().positive().optional(),
@@ -450,7 +477,8 @@ const ToolLoopDetectionSchema = z
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["criticalThreshold"],
-        message: "tools.loopDetection.warningThreshold must be lower than criticalThreshold.",
+        message:
+          "tools.loopDetection.warningThreshold must be lower than criticalThreshold.",
       });
     }
     if (
@@ -470,10 +498,18 @@ const ToolLoopDetectionSchema = z
 
 export const AgentSandboxSchema = z
   .object({
-    mode: z.union([z.literal("off"), z.literal("non-main"), z.literal("all")]).optional(),
-    workspaceAccess: z.union([z.literal("none"), z.literal("ro"), z.literal("rw")]).optional(),
-    sessionToolsVisibility: z.union([z.literal("spawned"), z.literal("all")]).optional(),
-    scope: z.union([z.literal("session"), z.literal("agent"), z.literal("shared")]).optional(),
+    mode: z
+      .union([z.literal("off"), z.literal("non-main"), z.literal("all")])
+      .optional(),
+    workspaceAccess: z
+      .union([z.literal("none"), z.literal("ro"), z.literal("rw")])
+      .optional(),
+    sessionToolsVisibility: z
+      .union([z.literal("spawned"), z.literal("all")])
+      .optional(),
+    scope: z
+      .union([z.literal("session"), z.literal("agent"), z.literal("shared")])
+      .optional(),
     perSession: z.boolean().optional(),
     workspaceRoot: z.string().optional(),
     docker: SandboxDockerSchema,
@@ -484,7 +520,8 @@ export const AgentSandboxSchema = z
   .superRefine((data, ctx) => {
     const blockedBrowserNetworkReason = getBlockedNetworkModeReason({
       network: data.browser?.network,
-      allowContainerNamespaceJoin: data.docker?.dangerouslyAllowContainerNamespaceJoin === true,
+      allowContainerNamespaceJoin:
+        data.docker?.dangerouslyAllowContainerNamespaceJoin === true,
     });
     if (blockedBrowserNetworkReason === "container_namespace_join") {
       ctx.addIssue({
@@ -539,7 +576,9 @@ export const AgentToolsSchema = z
 export const MemorySearchSchema = z
   .object({
     enabled: z.boolean().optional(),
-    sources: z.array(z.union([z.literal("memory"), z.literal("sessions")])).optional(),
+    sources: z
+      .array(z.union([z.literal("memory"), z.literal("sessions")]))
+      .optional(),
     extraPaths: z.array(z.string()).optional(),
     experimental: z
       .object({

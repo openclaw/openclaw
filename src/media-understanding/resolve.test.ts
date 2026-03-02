@@ -1,9 +1,15 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveEntriesWithActiveFallback, resolveModelEntries } from "./resolve.js";
+import {
+  resolveEntriesWithActiveFallback,
+  resolveModelEntries,
+} from "./resolve.js";
 import type { MediaUnderstandingCapability } from "./types.js";
 
-const providerRegistry = new Map<string, { capabilities: MediaUnderstandingCapability[] }>([
+const providerRegistry = new Map<
+  string,
+  { capabilities: MediaUnderstandingCapability[] }
+>([
   ["openai", { capabilities: ["image"] }],
   ["groq", { capabilities: ["audio"] }],
 ]);
@@ -57,7 +63,13 @@ describe("resolveModelEntries", () => {
     const cfg: OpenClawConfig = {
       tools: {
         media: {
-          models: [{ type: "cli", command: "gemini", args: ["--file", "{{MediaPath}}"] }],
+          models: [
+            {
+              type: "cli",
+              command: "gemini",
+              args: ["--file", "{{MediaPath}}"],
+            },
+          ],
         },
       },
     };
@@ -72,8 +84,13 @@ describe("resolveModelEntries", () => {
 });
 
 describe("resolveEntriesWithActiveFallback", () => {
-  type ResolveWithFallbackInput = Parameters<typeof resolveEntriesWithActiveFallback>[0];
-  const defaultActiveModel = { provider: "groq", model: "whisper-large-v3" } as const;
+  type ResolveWithFallbackInput = Parameters<
+    typeof resolveEntriesWithActiveFallback
+  >[0];
+  const defaultActiveModel = {
+    provider: "groq",
+    model: "whisper-large-v3",
+  } as const;
 
   function resolveWithActiveFallback(params: {
     cfg: ResolveWithFallbackInput["cfg"];
@@ -111,7 +128,10 @@ describe("resolveEntriesWithActiveFallback", () => {
     const cfg: OpenClawConfig = {
       tools: {
         media: {
-          audio: { enabled: true, models: [{ provider: "openai", model: "whisper-1" }] },
+          audio: {
+            enabled: true,
+            models: [{ provider: "openai", model: "whisper-1" }],
+          },
         },
       },
     };

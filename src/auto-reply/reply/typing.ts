@@ -1,6 +1,10 @@
 import { createTypingKeepaliveLoop } from "../../channels/typing-lifecycle.js";
 import { createTypingStartGuard } from "../../channels/typing-start-guard.js";
-import { isSilentReplyPrefixText, isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
+import {
+  isSilentReplyPrefixText,
+  isSilentReplyText,
+  SILENT_REPLY_TOKEN,
+} from "../tokens.js";
 
 export type TypingController = {
   onReplyStart: () => Promise<void>;
@@ -93,7 +97,9 @@ export function createTypingController(params: {
       if (!typingLoop.isRunning()) {
         return;
       }
-      log?.(`typing TTL reached (${formatTypingTtl(typingTtlMs)}); stopping typing indicator`);
+      log?.(
+        `typing TTL reached (${formatTypingTtl(typingTtlMs)}); stopping typing indicator`,
+      );
       cleanup();
     }, typingTtlMs);
   };
@@ -175,7 +181,8 @@ export function createTypingController(params: {
     }
     if (
       silentToken &&
-      (isSilentReplyText(trimmed, silentToken) || isSilentReplyPrefixText(trimmed, silentToken))
+      (isSilentReplyText(trimmed, silentToken) ||
+        isSilentReplyPrefixText(trimmed, silentToken))
     ) {
       return;
     }
@@ -192,7 +199,9 @@ export function createTypingController(params: {
     if (!sealed && !dispatchIdle) {
       dispatchIdleTimer = setTimeout(() => {
         if (!sealed && !dispatchIdle) {
-          log?.("typing: dispatch idle not received after run complete; forcing cleanup");
+          log?.(
+            "typing: dispatch idle not received after run complete; forcing cleanup",
+          );
           cleanup();
         }
       }, DISPATCH_IDLE_GRACE_MS);

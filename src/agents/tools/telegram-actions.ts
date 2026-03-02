@@ -1,7 +1,10 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { OpenClawConfig } from "../../config/config.js";
 import { createTelegramActionGate } from "../../telegram/accounts.js";
-import type { TelegramButtonStyle, TelegramInlineButtons } from "../../telegram/button-types.js";
+import type {
+  TelegramButtonStyle,
+  TelegramInlineButtons,
+} from "../../telegram/button-types.js";
 import {
   resolveTelegramInlineButtonsScope,
   resolveTelegramTargetChatType,
@@ -25,7 +28,11 @@ import {
   readStringParam,
 } from "./common.js";
 
-const TELEGRAM_BUTTON_STYLES: readonly TelegramButtonStyle[] = ["danger", "success", "primary"];
+const TELEGRAM_BUTTON_STYLES: readonly TelegramButtonStyle[] = [
+  "danger",
+  "success",
+  "primary",
+];
 
 export function readTelegramButtons(
   params: Record<string, unknown>,
@@ -43,18 +50,23 @@ export function readTelegramButtons(
     }
     return row.map((button, buttonIndex) => {
       if (!button || typeof button !== "object") {
-        throw new Error(`buttons[${rowIndex}][${buttonIndex}] must be an object`);
+        throw new Error(
+          `buttons[${rowIndex}][${buttonIndex}] must be an object`,
+        );
       }
       const text =
         typeof (button as { text?: unknown }).text === "string"
           ? (button as { text: string }).text.trim()
           : "";
       const callbackData =
-        typeof (button as { callback_data?: unknown }).callback_data === "string"
+        typeof (button as { callback_data?: unknown }).callback_data ===
+        "string"
           ? (button as { callback_data: string }).callback_data.trim()
           : "";
       if (!text || !callbackData) {
-        throw new Error(`buttons[${rowIndex}][${buttonIndex}] requires text and callback_data`);
+        throw new Error(
+          `buttons[${rowIndex}][${buttonIndex}] requires text and callback_data`,
+        );
       }
       if (callbackData.length > 64) {
         throw new Error(
@@ -62,11 +74,19 @@ export function readTelegramButtons(
         );
       }
       const styleRaw = (button as { style?: unknown }).style;
-      const style = typeof styleRaw === "string" ? styleRaw.trim().toLowerCase() : undefined;
+      const style =
+        typeof styleRaw === "string"
+          ? styleRaw.trim().toLowerCase()
+          : undefined;
       if (styleRaw !== undefined && !style) {
-        throw new Error(`buttons[${rowIndex}][${buttonIndex}] style must be string`);
+        throw new Error(
+          `buttons[${rowIndex}][${buttonIndex}] style must be string`,
+        );
       }
-      if (style && !TELEGRAM_BUTTON_STYLES.includes(style as TelegramButtonStyle)) {
+      if (
+        style &&
+        !TELEGRAM_BUTTON_STYLES.includes(style as TelegramButtonStyle)
+      ) {
         throw new Error(
           `buttons[${rowIndex}][${buttonIndex}] style must be one of ${TELEGRAM_BUTTON_STYLES.join(", ")}`,
         );
@@ -121,7 +141,11 @@ export async function handleTelegramAction(
     const messageId = readNumberParam(params, "messageId", {
       integer: true,
     });
-    if (typeof messageId !== "number" || !Number.isFinite(messageId) || messageId <= 0) {
+    if (
+      typeof messageId !== "number" ||
+      !Number.isFinite(messageId) ||
+      messageId <= 0
+    ) {
       return jsonResult({
         ok: false,
         reason: "missing_message_id",
@@ -141,11 +165,16 @@ export async function handleTelegramAction(
     }
     let reactionResult: Awaited<ReturnType<typeof reactMessageTelegram>>;
     try {
-      reactionResult = await reactMessageTelegram(chatId ?? "", messageId ?? 0, emoji ?? "", {
-        token,
-        remove,
-        accountId: accountId ?? undefined,
-      });
+      reactionResult = await reactMessageTelegram(
+        chatId ?? "",
+        messageId ?? 0,
+        emoji ?? "",
+        {
+          token,
+          remove,
+          accountId: accountId ?? undefined,
+        },
+      );
     } catch (err) {
       const isInvalid = String(err).includes("REACTION_INVALID");
       return jsonResult({
@@ -201,7 +230,9 @@ export async function handleTelegramAction(
           );
         }
         if (inlineButtonsScope === "dm" && targetType !== "direct") {
-          throw new Error('Telegram inline buttons are limited to DMs when inlineButtons="dm".');
+          throw new Error(
+            'Telegram inline buttons are limited to DMs when inlineButtons="dm".',
+          );
         }
         if (inlineButtonsScope === "group" && targetType !== "group") {
           throw new Error(
@@ -300,11 +331,16 @@ export async function handleTelegramAction(
         "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
       );
     }
-    const result = await editMessageTelegram(chatId ?? "", messageId ?? 0, content, {
-      token,
-      accountId: accountId ?? undefined,
-      buttons,
-    });
+    const result = await editMessageTelegram(
+      chatId ?? "",
+      messageId ?? 0,
+      content,
+      {
+        token,
+        accountId: accountId ?? undefined,
+        buttons,
+      },
+    );
     return jsonResult({
       ok: true,
       messageId: result.messageId,

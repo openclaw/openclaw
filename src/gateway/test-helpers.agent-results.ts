@@ -8,7 +8,11 @@ export function extractPayloadText(result: unknown): string {
   const record = result as Record<string, unknown>;
   const payloads = Array.isArray(record.payloads) ? record.payloads : [];
   const texts = payloads
-    .map((p) => (p && typeof p === "object" ? (p as Record<string, unknown>).text : undefined))
+    .map((p) =>
+      p && typeof p === "object"
+        ? (p as Record<string, unknown>).text
+        : undefined,
+    )
     .filter((t): t is string => typeof t === "string" && t.trim().length > 0);
   return texts.join("\n").trim();
 }

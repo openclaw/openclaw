@@ -1,6 +1,10 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import { resolveMattermostAccount } from "./accounts.js";
-import { createMattermostClient, fetchMattermostMe, type MattermostClient } from "./client.js";
+import {
+  createMattermostClient,
+  fetchMattermostMe,
+  type MattermostClient,
+} from "./client.js";
 
 type Result = { ok: true } | { ok: false; error: string };
 type ReactionParams = {
@@ -10,7 +14,10 @@ type ReactionParams = {
   accountId?: string | null;
   fetchImpl?: typeof fetch;
 };
-type ReactionMutation = (client: MattermostClient, params: MutationPayload) => Promise<void>;
+type ReactionMutation = (
+  client: MattermostClient,
+  params: MutationPayload,
+) => Promise<void>;
 type MutationPayload = { userId: string; postId: string; emojiName: string };
 
 const BOT_USER_CACHE_TTL_MS = 10 * 60_000;
@@ -29,7 +36,10 @@ async function resolveBotUserId(
   if (!userId) {
     return null;
   }
-  botUserIdCache.set(cacheKey, { userId, expiresAt: Date.now() + BOT_USER_CACHE_TTL_MS });
+  botUserIdCache.set(cacheKey, {
+    userId,
+    expiresAt: Date.now() + BOT_USER_CACHE_TTL_MS,
+  });
   return userId;
 }
 
@@ -70,7 +80,10 @@ async function runMattermostReaction(
     mutation: ReactionMutation;
   },
 ): Promise<Result> {
-  const resolved = resolveMattermostAccount({ cfg: params.cfg, accountId: params.accountId });
+  const resolved = resolveMattermostAccount({
+    cfg: params.cfg,
+    accountId: params.accountId,
+  });
   const baseUrl = resolved.baseUrl?.trim();
   const botToken = resolved.botToken?.trim();
   if (!baseUrl || !botToken) {
@@ -86,7 +99,10 @@ async function runMattermostReaction(
   const cacheKey = `${baseUrl}:${botToken}`;
   const userId = await resolveBotUserId(client, cacheKey);
   if (!userId) {
-    return { ok: false, error: "Mattermost reactions failed: could not resolve bot user id." };
+    return {
+      ok: false,
+      error: "Mattermost reactions failed: could not resolve bot user id.",
+    };
   }
 
   try {
@@ -96,13 +112,19 @@ async function runMattermostReaction(
       emojiName: params.emojiName,
     });
   } catch (err) {
-    return { ok: false, error: `Mattermost ${options.action} reaction failed: ${String(err)}` };
+    return {
+      ok: false,
+      error: `Mattermost ${options.action} reaction failed: ${String(err)}`,
+    };
   }
 
   return { ok: true };
 }
 
-async function createReaction(client: MattermostClient, params: MutationPayload): Promise<void> {
+async function createReaction(
+  client: MattermostClient,
+  params: MutationPayload,
+): Promise<void> {
   await client.request<Record<string, unknown>>("/reactions", {
     method: "POST",
     body: JSON.stringify({
@@ -113,7 +135,10 @@ async function createReaction(client: MattermostClient, params: MutationPayload)
   });
 }
 
-async function deleteReaction(client: MattermostClient, params: MutationPayload): Promise<void> {
+async function deleteReaction(
+  client: MattermostClient,
+  params: MutationPayload,
+): Promise<void> {
   const emoji = encodeURIComponent(params.emojiName);
   await client.request<unknown>(
     `/users/${params.userId}/posts/${params.postId}/reactions/${emoji}`,

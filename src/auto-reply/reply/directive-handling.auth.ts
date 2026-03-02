@@ -10,7 +10,10 @@ import {
   resolveAuthProfileOrder,
   resolveEnvApiKey,
 } from "../../agents/model-auth.js";
-import { findNormalizedProviderValue, normalizeProviderId } from "../../agents/model-selection.js";
+import {
+  findNormalizedProviderValue,
+  normalizeProviderId,
+} from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { shortenHomePath } from "../../utils.js";
 import { maskApiKey } from "../../utils/mask-api-key.js";
@@ -46,7 +49,8 @@ export const resolveAuthLabel = async (
       const configProfile = cfg.auth?.profiles?.[profileId];
       const missing =
         !profile ||
-        (configProfile?.provider && configProfile.provider !== profile.provider) ||
+        (configProfile?.provider &&
+          configProfile.provider !== profile.provider) ||
         (configProfile?.mode &&
           configProfile.mode !== profile.type &&
           !(configProfile.mode === "oauth" && profile.type === "token"));
@@ -101,7 +105,11 @@ export const resolveAuthLabel = async (
       }
       if (isProfileInCooldown(store, profileId)) {
         const until = store.usageStats?.[profileId]?.cooldownUntil;
-        if (typeof until === "number" && Number.isFinite(until) && until > now) {
+        if (
+          typeof until === "number" &&
+          Number.isFinite(until) &&
+          until > now
+        ) {
           flags.push(`cooldown ${formatUntil(until)}`);
         } else {
           flags.push("cooldown");
@@ -109,7 +117,8 @@ export const resolveAuthLabel = async (
       }
       if (
         !profile ||
-        (configProfile?.provider && configProfile.provider !== profile.provider) ||
+        (configProfile?.provider &&
+          configProfile.provider !== profile.provider) ||
         (configProfile?.mode &&
           configProfile.mode !== profile.type &&
           !(configProfile.mode === "oauth" && profile.type === "token"))
@@ -127,7 +136,11 @@ export const resolveAuthLabel = async (
           Number.isFinite(profile.expires) &&
           profile.expires > 0
         ) {
-          flags.push(profile.expires <= now ? "expired" : `exp ${formatUntil(profile.expires)}`);
+          flags.push(
+            profile.expires <= now
+              ? "expired"
+              : `exp ${formatUntil(profile.expires)}`,
+          );
         }
         const suffix = flags.length > 0 ? ` (${flags.join(", ")})` : "";
         return `${profileId}=token:${maskApiKey(profile.token)}${suffix}`;
@@ -148,7 +161,11 @@ export const resolveAuthLabel = async (
         Number.isFinite(profile.expires) &&
         profile.expires > 0
       ) {
-        flags.push(profile.expires <= now ? "expired" : `exp ${formatUntil(profile.expires)}`);
+        flags.push(
+          profile.expires <= now
+            ? "expired"
+            : `exp ${formatUntil(profile.expires)}`,
+        );
       }
       const suffixLabel = suffix ? ` ${suffix}` : "";
       const suffixFlags = flags.length > 0 ? ` (${flags.join(", ")})` : "";
@@ -172,7 +189,8 @@ export const resolveAuthLabel = async (
   if (customKey) {
     return {
       label: maskApiKey(customKey),
-      source: mode === "verbose" ? `models.json: ${formatPath(modelsPath)}` : "",
+      source:
+        mode === "verbose" ? `models.json: ${formatPath(modelsPath)}` : "",
     };
   }
   return { label: "missing", source: "missing" };

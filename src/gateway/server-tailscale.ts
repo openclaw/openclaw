@@ -25,7 +25,9 @@ export async function startGatewayTailscaleExposure(params: {
     }
     const host = await getTailnetHostname().catch(() => null);
     if (host) {
-      const uiPath = params.controlUiBasePath ? `${params.controlUiBasePath}/` : "/";
+      const uiPath = params.controlUiBasePath
+        ? `${params.controlUiBasePath}/`
+        : "/";
       params.logTailscale.info(
         `${params.tailscaleMode} enabled: https://${host}${uiPath} (WS via wss://${host})`,
       );

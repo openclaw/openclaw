@@ -56,7 +56,10 @@ function emit(event: SkillsChangeEvent) {
   }
 }
 
-function resolveWatchPaths(workspaceDir: string, config?: OpenClawConfig): string[] {
+function resolveWatchPaths(
+  workspaceDir: string,
+  config?: OpenClawConfig,
+): string[] {
   const paths: string[] = [];
   if (workspaceDir.trim()) {
     paths.push(path.join(workspaceDir, "skills"));
@@ -81,7 +84,10 @@ function toWatchGlobRoot(raw: string): string {
   return raw.replaceAll("\\", "/").replace(/\/+$/, "");
 }
 
-function resolveWatchTargets(workspaceDir: string, config?: OpenClawConfig): string[] {
+function resolveWatchTargets(
+  workspaceDir: string,
+  config?: OpenClawConfig,
+): string[] {
   // Skills are defined by SKILL.md; watch only those files to avoid traversing
   // or watching unrelated large trees (e.g. datasets) that can exhaust FDs.
   const targets = new Set<string>();
@@ -95,7 +101,9 @@ function resolveWatchTargets(workspaceDir: string, config?: OpenClawConfig): str
   return Array.from(targets).toSorted();
 }
 
-export function registerSkillsChangeListener(listener: (event: SkillsChangeEvent) => void) {
+export function registerSkillsChangeListener(
+  listener: (event: SkillsChangeEvent) => void,
+) {
   listeners.add(listener);
   return () => {
     listeners.delete(listener);
@@ -129,7 +137,10 @@ export function getSkillsSnapshotVersion(workspaceDir?: string): number {
   return Math.max(globalVersion, local);
 }
 
-export function ensureSkillsWatcher(params: { workspaceDir: string; config?: OpenClawConfig }) {
+export function ensureSkillsWatcher(params: {
+  workspaceDir: string;
+  config?: OpenClawConfig;
+}) {
   const workspaceDir = params.workspaceDir.trim();
   if (!workspaceDir) {
     return;
@@ -155,7 +166,11 @@ export function ensureSkillsWatcher(params: { workspaceDir: string; config?: Ope
 
   const watchTargets = resolveWatchTargets(workspaceDir, params.config);
   const pathsKey = watchTargets.join("|");
-  if (existing && existing.pathsKey === pathsKey && existing.debounceMs === debounceMs) {
+  if (
+    existing &&
+    existing.pathsKey === pathsKey &&
+    existing.debounceMs === debounceMs
+  ) {
     return;
   }
   if (existing) {

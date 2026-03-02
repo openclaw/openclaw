@@ -29,7 +29,9 @@ function pruneSlackExternalArgMenuStore(
   }
 }
 
-function createSlackExternalArgMenuToken(store: Map<string, SlackExternalArgMenuEntry>): string {
+function createSlackExternalArgMenuToken(
+  store: Map<string, SlackExternalArgMenuEntry>,
+): string {
   let token = "";
   do {
     token = generateSecureToken(SLACK_EXTERNAL_ARG_MENU_TOKEN_BYTES);
@@ -55,13 +57,21 @@ export function createSlackExternalArgMenuStore() {
       return token;
     },
     readToken(raw: unknown): string | undefined {
-      if (typeof raw !== "string" || !raw.startsWith(SLACK_EXTERNAL_ARG_MENU_PREFIX)) {
+      if (
+        typeof raw !== "string" ||
+        !raw.startsWith(SLACK_EXTERNAL_ARG_MENU_PREFIX)
+      ) {
         return undefined;
       }
       const token = raw.slice(SLACK_EXTERNAL_ARG_MENU_PREFIX.length).trim();
-      return SLACK_EXTERNAL_ARG_MENU_TOKEN_PATTERN.test(token) ? token : undefined;
+      return SLACK_EXTERNAL_ARG_MENU_TOKEN_PATTERN.test(token)
+        ? token
+        : undefined;
     },
-    get(token: string, now = Date.now()): SlackExternalArgMenuEntry | undefined {
+    get(
+      token: string,
+      now = Date.now(),
+    ): SlackExternalArgMenuEntry | undefined {
       pruneSlackExternalArgMenuStore(store, now);
       return store.get(token);
     },

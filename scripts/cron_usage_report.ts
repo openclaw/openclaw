@@ -64,7 +64,9 @@ function usageAndExit(code: number): never {
 }
 
 async function listJsonlFiles(dir: string): Promise<string[]> {
-  const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
+  const entries = await fs
+    .readdir(dir, { withFileTypes: true })
+    .catch(() => []);
   return entries
     .filter((e) => e.isFile() && e.name.endsWith(".jsonl"))
     .map((e) => path.join(dir, e.name));
@@ -98,9 +100,11 @@ function fmtInt(n: number) {
 export async function main() {
   const args = parseArgs(process.argv);
   const store = typeof args.store === "string" ? args.store : undefined;
-  const runsDirArg = typeof args.runsDir === "string" ? args.runsDir : undefined;
+  const runsDirArg =
+    typeof args.runsDir === "string" ? args.runsDir : undefined;
   const runsDir =
-    runsDirArg ?? (store ? path.join(path.dirname(path.resolve(store)), "runs") : null);
+    runsDirArg ??
+    (store ? path.join(path.dirname(path.resolve(store)), "runs") : null);
   if (!runsDir) {
     usageAndExit(2);
   }
@@ -110,7 +114,8 @@ export async function main() {
   const fromMs =
     typeof args.from === "string"
       ? Date.parse(args.from)
-      : toMs - Math.max(1, Number.isFinite(hours) ? hours : 24) * 60 * 60 * 1000;
+      : toMs -
+        Math.max(1, Number.isFinite(hours) ? hours : 24) * 60 * 60 * 1000;
 
   if (!Number.isFinite(fromMs) || !Number.isFinite(toMs)) {
     console.error("Invalid --from/--to timestamp");
@@ -170,7 +175,9 @@ export async function main() {
       const jobId = entry.jobId;
       const usage = entry.usage;
       const hasUsage = Boolean(
-        usage && (usage.total_tokens ?? usage.input_tokens ?? usage.output_tokens) !== undefined,
+        usage &&
+        (usage.total_tokens ?? usage.input_tokens ?? usage.output_tokens) !==
+          undefined,
       );
 
       const jobAgg = (totalsByJob[jobId] ??= {
@@ -202,7 +209,10 @@ export async function main() {
 
       const input = Math.max(0, Math.trunc(usage?.input_tokens ?? 0));
       const output = Math.max(0, Math.trunc(usage?.output_tokens ?? 0));
-      const total = Math.max(0, Math.trunc(usage?.total_tokens ?? input + output));
+      const total = Math.max(
+        0,
+        Math.trunc(usage?.total_tokens ?? input + output),
+      );
 
       jobAgg.input_tokens += input;
       jobAgg.output_tokens += output;
@@ -217,7 +227,9 @@ export async function main() {
   const rows = Object.values(totalsByJob)
     .map((r) => ({
       ...r,
-      models: Object.values(r.models).toSorted((a, b) => b.total_tokens - a.total_tokens),
+      models: Object.values(r.models).toSorted(
+        (a, b) => b.total_tokens - a.total_tokens,
+      ),
     }))
     .toSorted((a, b) => b.total_tokens - a.total_tokens);
 
@@ -239,7 +251,9 @@ export async function main() {
 
   console.log(`Cron usage report`);
   console.log(`  runsDir: ${runsDir}`);
-  console.log(`  window: ${new Date(fromMs).toISOString()} → ${new Date(toMs).toISOString()}`);
+  console.log(
+    `  window: ${new Date(fromMs).toISOString()} → ${new Date(toMs).toISOString()}`,
+  );
   if (filterJobId) {
     console.log(`  filter jobId: ${filterJobId}`);
   }
@@ -255,7 +269,9 @@ export async function main() {
 
   for (const job of rows) {
     console.log(`jobId: ${job.jobId}`);
-    console.log(`  runs: ${fmtInt(job.runs)} (missing usage: ${fmtInt(job.missingUsageRuns)})`);
+    console.log(
+      `  runs: ${fmtInt(job.runs)} (missing usage: ${fmtInt(job.missingUsageRuns)})`,
+    );
     console.log(
       `  tokens: total ${fmtInt(job.total_tokens)} (in ${fmtInt(job.input_tokens)} / out ${fmtInt(job.output_tokens)})`,
     );

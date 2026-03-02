@@ -177,9 +177,13 @@ function ensureDir(filePath: string) {
 
 // Coerce legacy/corrupted allowlists into `ExecAllowlistEntry[]` before we spread
 // entries to add ids (spreading strings creates {"0":"l","1":"s",...}).
-function coerceAllowlistEntries(allowlist: unknown): ExecAllowlistEntry[] | undefined {
+function coerceAllowlistEntries(
+  allowlist: unknown,
+): ExecAllowlistEntry[] | undefined {
   if (!Array.isArray(allowlist) || allowlist.length === 0) {
-    return Array.isArray(allowlist) ? (allowlist as ExecAllowlistEntry[]) : undefined;
+    return Array.isArray(allowlist)
+      ? (allowlist as ExecAllowlistEntry[])
+      : undefined;
   }
   let changed = false;
   const result: ExecAllowlistEntry[] = [];
@@ -203,7 +207,11 @@ function coerceAllowlistEntries(allowlist: unknown): ExecAllowlistEntry[] | unde
       changed = true; // dropped invalid entry
     }
   }
-  return changed ? (result.length > 0 ? result : undefined) : (allowlist as ExecAllowlistEntry[]);
+  return changed
+    ? result.length > 0
+      ? result
+      : undefined
+    : (allowlist as ExecAllowlistEntry[]);
 }
 
 function ensureAllowlistIds(
@@ -223,14 +231,18 @@ function ensureAllowlistIds(
   return changed ? next : allowlist;
 }
 
-export function normalizeExecApprovals(file: ExecApprovalsFile): ExecApprovalsFile {
+export function normalizeExecApprovals(
+  file: ExecApprovalsFile,
+): ExecApprovalsFile {
   const socketPath = file.socket?.path?.trim();
   const token = file.socket?.token?.trim();
   const agents = { ...file.agents };
   const legacyDefault = agents.default;
   if (legacyDefault) {
     const main = agents[DEFAULT_AGENT_ID];
-    agents[DEFAULT_AGENT_ID] = main ? mergeLegacyAgent(main, legacyDefault) : legacyDefault;
+    agents[DEFAULT_AGENT_ID] = main
+      ? mergeLegacyAgent(main, legacyDefault)
+      : legacyDefault;
     delete agents.default;
   }
   for (const [key, agent] of Object.entries(agents)) {
@@ -264,7 +276,9 @@ export function mergeExecApprovalsSocketDefaults(params: {
   const currentSocketPath = params.current?.socket?.path?.trim();
   const currentToken = params.current?.socket?.token?.trim();
   const socketPath =
-    params.normalized.socket?.path?.trim() ?? currentSocketPath ?? resolveExecApprovalsSocketPath();
+    params.normalized.socket?.path?.trim() ??
+    currentSocketPath ??
+    resolveExecApprovalsSocketPath();
   const token = params.normalized.socket?.token?.trim() ?? currentToken ?? "";
   return {
     ...params.normalized,
@@ -331,7 +345,9 @@ export function loadExecApprovals(): ExecApprovalsFile {
 export function saveExecApprovals(file: ExecApprovalsFile) {
   const filePath = resolveExecApprovalsPath();
   ensureDir(filePath);
-  fs.writeFileSync(filePath, `${JSON.stringify(file, null, 2)}\n`, { mode: 0o600 });
+  fs.writeFileSync(filePath, `${JSON.stringify(file, null, 2)}\n`, {
+    mode: 0o600,
+  });
   try {
     fs.chmodSync(filePath, 0o600);
   } catch {
@@ -347,7 +363,10 @@ export function ensureExecApprovals(): ExecApprovalsFile {
   const updated: ExecApprovalsFile = {
     ...next,
     socket: {
-      path: socketPath && socketPath.length > 0 ? socketPath : resolveExecApprovalsSocketPath(),
+      path:
+        socketPath && socketPath.length > 0
+          ? socketPath
+          : resolveExecApprovalsSocketPath(),
       token: token && token.length > 0 ? token : generateToken(),
     },
   };
@@ -355,7 +374,10 @@ export function ensureExecApprovals(): ExecApprovalsFile {
   return updated;
 }
 
-function normalizeSecurity(value: ExecSecurity | undefined, fallback: ExecSecurity): ExecSecurity {
+function normalizeSecurity(
+  value: ExecSecurity | undefined,
+  fallback: ExecSecurity,
+): ExecSecurity {
   if (value === "allowlist" || value === "full" || value === "deny") {
     return value;
   }
@@ -386,7 +408,9 @@ export function resolveExecApprovals(
     agentId,
     overrides,
     path: resolveExecApprovalsPath(),
-    socketPath: expandHomePrefix(file.socket?.path ?? resolveExecApprovalsSocketPath()),
+    socketPath: expandHomePrefix(
+      file.socket?.path ?? resolveExecApprovalsSocketPath(),
+    ),
     token: file.socket?.token ?? "",
   });
 }
@@ -406,8 +430,10 @@ export function resolveExecApprovalsFromFile(params: {
   const wildcard = file.agents?.["*"] ?? {};
   const fallbackSecurity = params.overrides?.security ?? DEFAULT_SECURITY;
   const fallbackAsk = params.overrides?.ask ?? DEFAULT_ASK;
-  const fallbackAskFallback = params.overrides?.askFallback ?? DEFAULT_ASK_FALLBACK;
-  const fallbackAutoAllowSkills = params.overrides?.autoAllowSkills ?? DEFAULT_AUTO_ALLOW_SKILLS;
+  const fallbackAskFallback =
+    params.overrides?.askFallback ?? DEFAULT_ASK_FALLBACK;
+  const fallbackAutoAllowSkills =
+    params.overrides?.autoAllowSkills ?? DEFAULT_AUTO_ALLOW_SKILLS;
   const resolvedDefaults: Required<ExecApprovalsDefaults> = {
     security: normalizeSecurity(defaults.security, fallbackSecurity),
     ask: normalizeAsk(defaults.ask, fallbackAsk),
@@ -415,20 +441,27 @@ export function resolveExecApprovalsFromFile(params: {
       defaults.askFallback ?? fallbackAskFallback,
       fallbackAskFallback,
     ),
-    autoAllowSkills: Boolean(defaults.autoAllowSkills ?? fallbackAutoAllowSkills),
+    autoAllowSkills: Boolean(
+      defaults.autoAllowSkills ?? fallbackAutoAllowSkills,
+    ),
   };
   const resolvedAgent: Required<ExecApprovalsDefaults> = {
     security: normalizeSecurity(
       agent.security ?? wildcard.security ?? resolvedDefaults.security,
       resolvedDefaults.security,
     ),
-    ask: normalizeAsk(agent.ask ?? wildcard.ask ?? resolvedDefaults.ask, resolvedDefaults.ask),
+    ask: normalizeAsk(
+      agent.ask ?? wildcard.ask ?? resolvedDefaults.ask,
+      resolvedDefaults.ask,
+    ),
     askFallback: normalizeSecurity(
       agent.askFallback ?? wildcard.askFallback ?? resolvedDefaults.askFallback,
       resolvedDefaults.askFallback,
     ),
     autoAllowSkills: Boolean(
-      agent.autoAllowSkills ?? wildcard.autoAllowSkills ?? resolvedDefaults.autoAllowSkills,
+      agent.autoAllowSkills ??
+      wildcard.autoAllowSkills ??
+      resolvedDefaults.autoAllowSkills,
     ),
   };
   const allowlist = [
@@ -438,7 +471,9 @@ export function resolveExecApprovalsFromFile(params: {
   return {
     path: params.path ?? resolveExecApprovalsPath(),
     socketPath: expandHomePrefix(
-      params.socketPath ?? file.socket?.path ?? resolveExecApprovalsSocketPath(),
+      params.socketPath ??
+        file.socket?.path ??
+        resolveExecApprovalsSocketPath(),
     ),
     token: params.token ?? file.socket?.token ?? "",
     defaults: resolvedDefaults,
@@ -505,14 +540,22 @@ export function addAllowlistEntry(
   if (allowlist.some((entry) => entry.pattern === trimmed)) {
     return;
   }
-  allowlist.push({ id: crypto.randomUUID(), pattern: trimmed, lastUsedAt: Date.now() });
+  allowlist.push({
+    id: crypto.randomUUID(),
+    pattern: trimmed,
+    lastUsedAt: Date.now(),
+  });
   agents[target] = { ...existing, allowlist };
   approvals.agents = agents;
   saveExecApprovals(approvals);
 }
 
 export function minSecurity(a: ExecSecurity, b: ExecSecurity): ExecSecurity {
-  const order: Record<ExecSecurity, number> = { deny: 0, allowlist: 1, full: 2 };
+  const order: Record<ExecSecurity, number> = {
+    deny: 0,
+    allowlist: 1,
+    full: 2,
+  };
   return order[a] <= order[b] ? a : b;
 }
 

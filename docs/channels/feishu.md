@@ -123,7 +123,11 @@ On **Permissions**, click **Batch import** and paste:
       "im:message:send_as_bot",
       "im:resource"
     ],
-    "user": ["aily:file:read", "aily:file:write", "im:chat.access_event.bot_p2p_chat:read"]
+    "user": [
+      "aily:file:read",
+      "aily:file:write",
+      "im:chat.access_event.bot_p2p_chat:read"
+    ]
   }
 }
 ```

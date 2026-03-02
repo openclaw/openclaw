@@ -25,7 +25,11 @@ export function deriveSessionKey(scope: SessionScope, ctx: MsgContext) {
  * Resolve the session key with a canonical direct-chat bucket (default: "main").
  * All non-group direct chats collapse to this bucket; groups stay isolated.
  */
-export function resolveSessionKey(scope: SessionScope, ctx: MsgContext, mainKey?: string) {
+export function resolveSessionKey(
+  scope: SessionScope,
+  ctx: MsgContext,
+  mainKey?: string,
+) {
   const explicit = ctx.SessionKey?.trim();
   if (explicit) {
     return explicit.toLowerCase();

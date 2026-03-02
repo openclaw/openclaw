@@ -4,10 +4,14 @@ import { registerDiscordComponentEntries } from "./components-registry.js";
 import { sendDiscordComponentMessage } from "./send.components.js";
 import { makeDiscordRest } from "./send.test-harness.js";
 
-const loadConfigMock = vi.hoisted(() => vi.fn(() => ({ session: { dmScope: "main" } })));
+const loadConfigMock = vi.hoisted(() =>
+  vi.fn(() => ({ session: { dmScope: "main" } })),
+);
 
 vi.mock("../config/config.js", async () => {
-  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
+  const actual = await vi.importActual<typeof import("../config/config.js")>(
+    "../config/config.js",
+  );
   return {
     ...actual,
     loadConfig: (..._args: unknown[]) => loadConfigMock(),
@@ -48,6 +52,8 @@ describe("sendDiscordComponentMessage", () => {
 
     expect(registerMock).toHaveBeenCalledTimes(1);
     const args = registerMock.mock.calls[0]?.[0];
-    expect(args?.entries[0]?.sessionKey).toBe("agent:main:discord:channel:dm-1");
+    expect(args?.entries[0]?.sessionKey).toBe(
+      "agent:main:discord:channel:dm-1",
+    );
   });
 });

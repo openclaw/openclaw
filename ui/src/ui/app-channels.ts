@@ -93,7 +93,9 @@ export function handleNostrProfileEdit(
   profile: NostrProfile | null,
 ) {
   host.nostrProfileAccountId = accountId;
-  host.nostrProfileFormState = createNostrProfileFormState(profile ?? undefined);
+  host.nostrProfileFormState = createNostrProfileFormState(
+    profile ?? undefined,
+  );
 }
 
 export function handleNostrProfileCancel(host: OpenClawApp) {
@@ -166,7 +168,8 @@ export async function handleNostrProfileSave(host: OpenClawApp) {
     } | null;
 
     if (!response.ok || data?.ok === false || !data) {
-      const errorMessage = data?.error ?? `Profile update failed (${response.status})`;
+      const errorMessage =
+        data?.error ?? `Profile update failed (${response.status})`;
       host.nostrProfileFormState = {
         ...state,
         saving: false,
@@ -238,7 +241,8 @@ export async function handleNostrProfileImport(host: OpenClawApp) {
     } | null;
 
     if (!response.ok || data?.ok === false || !data) {
-      const errorMessage = data?.error ?? `Profile import failed (${response.status})`;
+      const errorMessage =
+        data?.error ?? `Profile import failed (${response.status})`;
       host.nostrProfileFormState = {
         ...state,
         importing: false,
@@ -251,7 +255,10 @@ export async function handleNostrProfileImport(host: OpenClawApp) {
     const merged = data.merged ?? data.imported ?? null;
     const nextValues = merged ? { ...state.values, ...merged } : state.values;
     const showAdvanced = Boolean(
-      nextValues.banner || nextValues.website || nextValues.nip05 || nextValues.lud16,
+      nextValues.banner ||
+      nextValues.website ||
+      nextValues.nip05 ||
+      nextValues.lud16,
     );
 
     host.nostrProfileFormState = {

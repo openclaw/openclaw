@@ -1,6 +1,10 @@
 import type { OpenClawConfig, RuntimeEnv } from "openclaw/plugin-sdk";
 import type { MSTeamsConversationStore } from "./conversation-store.js";
-import { buildFileInfoCard, parseFileConsentInvoke, uploadToConsentUrl } from "./file-consent.js";
+import {
+  buildFileInfoCard,
+  parseFileConsentInvoke,
+  uploadToConsentUrl,
+} from "./file-consent.js";
 import { normalizeMSTeamsConversationId } from "./inbound.js";
 import type { MSTeamsAdapter } from "./messenger.js";
 import { createMSTeamsMessageHandler } from "./monitor-handler/message-handler.js";
@@ -62,9 +66,16 @@ async function handleFileConsentInvoke(
       : undefined;
   const pendingFile = getPendingUpload(uploadId);
   if (pendingFile) {
-    const pendingConversationId = normalizeMSTeamsConversationId(pendingFile.conversationId);
-    const invokeConversationId = normalizeMSTeamsConversationId(activity.conversation?.id ?? "");
-    if (!invokeConversationId || pendingConversationId !== invokeConversationId) {
+    const pendingConversationId = normalizeMSTeamsConversationId(
+      pendingFile.conversationId,
+    );
+    const invokeConversationId = normalizeMSTeamsConversationId(
+      activity.conversation?.id ?? "",
+    );
+    if (
+      !invokeConversationId ||
+      pendingConversationId !== invokeConversationId
+    ) {
       log.info("file consent conversation mismatch", {
         uploadId,
         expectedConversationId: pendingConversationId,
@@ -142,13 +153,21 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
     handler.run = async (context: unknown) => {
       const ctx = context as MSTeamsTurnContext;
       // Handle file consent invokes before passing to normal flow
-      if (ctx.activity?.type === "invoke" && ctx.activity?.name === "fileConsent/invoke") {
+      if (
+        ctx.activity?.type === "invoke" &&
+        ctx.activity?.name === "fileConsent/invoke"
+      ) {
         // Send invoke response IMMEDIATELY to prevent Teams timeout
-        await ctx.sendActivity({ type: "invokeResponse", value: { status: 200 } });
+        await ctx.sendActivity({
+          type: "invokeResponse",
+          value: { status: 200 },
+        });
 
         // Handle file upload asynchronously (don't await)
         handleFileConsentInvoke(ctx, deps.log).catch((err) => {
-          deps.log.debug?.("file consent handler error", { error: String(err) });
+          deps.log.debug?.("file consent handler error", {
+            error: String(err),
+          });
         });
         return;
       }
@@ -166,9 +185,12 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
   });
 
   handler.onMembersAdded(async (context, next) => {
-    const membersAdded = (context as MSTeamsTurnContext).activity?.membersAdded ?? [];
+    const membersAdded =
+      (context as MSTeamsTurnContext).activity?.membersAdded ?? [];
     for (const member of membersAdded) {
-      if (member.id !== (context as MSTeamsTurnContext).activity?.recipient?.id) {
+      if (
+        member.id !== (context as MSTeamsTurnContext).activity?.recipient?.id
+      ) {
         deps.log.debug?.("member added", { member: member.id });
         // Don't send welcome message - let the user initiate conversation.
       }

@@ -1,6 +1,8 @@
 import { isCanonicalDottedDecimalIPv4 } from "./ip.js";
 
-export function validateDottedDecimalIPv4Input(value: string | undefined): string | undefined {
+export function validateDottedDecimalIPv4Input(
+  value: string | undefined,
+): string | undefined {
   if (!value) {
     return "IP address is required for custom bind mode";
   }
@@ -11,6 +13,8 @@ export function validateDottedDecimalIPv4Input(value: string | undefined): strin
 }
 
 // Backward-compatible alias for callers using the old helper name.
-export function validateIPv4AddressInput(value: string | undefined): string | undefined {
+export function validateIPv4AddressInput(
+  value: string | undefined,
+): string | undefined {
   return validateDottedDecimalIPv4Input(value);
 }

@@ -14,7 +14,12 @@ if (checkOnly && args.has("--write")) {
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..");
-const policyPath = path.join(repoRoot, "src", "infra", "host-env-security-policy.json");
+const policyPath = path.join(
+  repoRoot,
+  "src",
+  "infra",
+  "host-env-security-policy.json",
+);
 const outputPath = path.join(
   repoRoot,
   "apps",
@@ -27,7 +32,8 @@ const outputPath = path.join(
 /** @type {{blockedKeys: string[]; blockedOverrideKeys?: string[]; blockedPrefixes: string[]}} */
 const policy = JSON.parse(fs.readFileSync(policyPath, "utf8"));
 
-const renderSwiftStringArray = (items) => items.map((item) => `        "${item}"`).join(",\n");
+const renderSwiftStringArray = (items) =>
+  items.map((item) => `        "${item}"`).join(",\n");
 
 const generated = `// Generated file. Do not edit directly.
 // Source: src/infra/host-env-security-policy.json
@@ -50,7 +56,9 @@ ${renderSwiftStringArray(policy.blockedPrefixes)}
 }
 `;
 
-const current = fs.existsSync(outputPath) ? fs.readFileSync(outputPath, "utf8") : null;
+const current = fs.existsSync(outputPath)
+  ? fs.readFileSync(outputPath, "utf8")
+  : null;
 
 if (checkOnly) {
   if (current === generated) {

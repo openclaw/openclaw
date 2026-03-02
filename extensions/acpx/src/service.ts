@@ -4,8 +4,14 @@ import type {
   OpenClawPluginServiceContext,
   PluginLogger,
 } from "openclaw/plugin-sdk";
-import { registerAcpRuntimeBackend, unregisterAcpRuntimeBackend } from "openclaw/plugin-sdk";
-import { resolveAcpxPluginConfig, type ResolvedAcpxPluginConfig } from "./config.js";
+import {
+  registerAcpRuntimeBackend,
+  unregisterAcpRuntimeBackend,
+} from "openclaw/plugin-sdk";
+import {
+  resolveAcpxPluginConfig,
+  type ResolvedAcpxPluginConfig,
+} from "./config.js";
 import { ensureAcpx } from "./ensure.js";
 import { ACPX_BACKEND_ID, AcpxRuntime } from "./runtime.js";
 
@@ -25,7 +31,9 @@ type CreateAcpxRuntimeServiceParams = {
   runtimeFactory?: (params: AcpxRuntimeFactoryParams) => AcpxRuntimeLike;
 };
 
-function createDefaultRuntime(params: AcpxRuntimeFactoryParams): AcpxRuntimeLike {
+function createDefaultRuntime(
+  params: AcpxRuntimeFactoryParams,
+): AcpxRuntimeLike {
   return new AcpxRuntime(params.pluginConfig, {
     logger: params.logger,
     queueOwnerTtlSeconds: params.queueOwnerTtlSeconds,
@@ -58,7 +66,9 @@ export function createAcpxRuntimeService(
         healthy: () => runtime?.isHealthy() ?? false,
       });
       const expectedVersionLabel = pluginConfig.expectedVersion ?? "any";
-      const installLabel = pluginConfig.allowPluginLocalInstall ? "enabled" : "disabled";
+      const installLabel = pluginConfig.allowPluginLocalInstall
+        ? "enabled"
+        : "disabled";
       ctx.logger.info(
         `acpx runtime backend registered (command: ${pluginConfig.command}, expectedVersion: ${expectedVersionLabel}, pluginLocalInstall: ${installLabel})`,
       );
@@ -83,7 +93,9 @@ export function createAcpxRuntimeService(
           if (runtime?.isHealthy()) {
             ctx.logger.info("acpx runtime backend ready");
           } else {
-            ctx.logger.warn("acpx runtime backend probe failed after local install");
+            ctx.logger.warn(
+              "acpx runtime backend probe failed after local install",
+            );
           }
         } catch (err) {
           if (currentRevision !== lifecycleRevision) {

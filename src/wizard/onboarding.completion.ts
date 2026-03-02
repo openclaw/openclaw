@@ -13,12 +13,20 @@ import type { WizardPrompter } from "./prompts.js";
 
 type CompletionDeps = {
   resolveCliName: () => string;
-  checkShellCompletionStatus: (binName: string) => Promise<ShellCompletionStatus>;
+  checkShellCompletionStatus: (
+    binName: string,
+  ) => Promise<ShellCompletionStatus>;
   ensureCompletionCacheExists: (binName: string) => Promise<boolean>;
-  installCompletion: (shell: string, yes: boolean, binName?: string) => Promise<void>;
+  installCompletion: (
+    shell: string,
+    yes: boolean,
+    binName?: string,
+  ) => Promise<void>;
 };
 
-async function resolveProfileHint(shell: ShellCompletionStatus["shell"]): Promise<string> {
+async function resolveProfileHint(
+  shell: ShellCompletionStatus["shell"],
+): Promise<string> {
   const home = process.env.HOME || os.homedir();
   if (shell === "zsh") {
     return "~/.zshrc";
@@ -34,7 +42,10 @@ async function resolveProfileHint(shell: ShellCompletionStatus["shell"]): Promis
   return "$PROFILE";
 }
 
-function formatReloadHint(shell: ShellCompletionStatus["shell"], profileHint: string): string {
+function formatReloadHint(
+  shell: ShellCompletionStatus["shell"],
+  profileHint: string,
+): string {
   if (shell === "powershell") {
     return "Restart your shell (or reload your PowerShell profile).";
   }

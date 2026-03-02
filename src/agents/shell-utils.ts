@@ -4,7 +4,8 @@ import path from "node:path";
 
 export function resolvePowerShellPath(): string {
   // Prefer PowerShell 7 when available; PS 5.1 lacks "&&" support.
-  const programFiles = process.env.ProgramFiles || process.env.PROGRAMFILES || "C:\\Program Files";
+  const programFiles =
+    process.env.ProgramFiles || process.env.PROGRAMFILES || "C:\\Program Files";
   const pwsh7 = path.join(programFiles, "PowerShell", "7", "pwsh.exe");
   if (fs.existsSync(pwsh7)) {
     return pwsh7;

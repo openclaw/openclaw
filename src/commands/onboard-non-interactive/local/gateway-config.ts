@@ -1,6 +1,9 @@
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { RuntimeEnv } from "../../../runtime.js";
-import { normalizeGatewayTokenInput, randomToken } from "../../onboard-helpers.js";
+import {
+  normalizeGatewayTokenInput,
+  randomToken,
+} from "../../onboard-helpers.js";
 import type { OnboardOptions } from "../../onboard-types.js";
 
 export function applyNonInteractiveGatewayConfig(params: {
@@ -20,13 +23,18 @@ export function applyNonInteractiveGatewayConfig(params: {
   const { opts, runtime } = params;
 
   const hasGatewayPort = opts.gatewayPort !== undefined;
-  if (hasGatewayPort && (!Number.isFinite(opts.gatewayPort) || (opts.gatewayPort ?? 0) <= 0)) {
+  if (
+    hasGatewayPort &&
+    (!Number.isFinite(opts.gatewayPort) || (opts.gatewayPort ?? 0) <= 0)
+  ) {
     runtime.error("Invalid --gateway-port");
     runtime.exit(1);
     return null;
   }
 
-  const port = hasGatewayPort ? (opts.gatewayPort as number) : params.defaultPort;
+  const port = hasGatewayPort
+    ? (opts.gatewayPort as number)
+    : params.defaultPort;
   let bind = opts.gatewayBind ?? "loopback";
   const authModeRaw = opts.gatewayAuth ?? "token";
   if (authModeRaw !== "token" && authModeRaw !== "password") {

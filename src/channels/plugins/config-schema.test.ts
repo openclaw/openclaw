@@ -10,9 +10,14 @@ describe("buildChannelConfigSchema", () => {
   });
 
   it("falls back when toJSONSchema is missing (zod v3 plugin compatibility)", () => {
-    const legacySchema = {} as unknown as Parameters<typeof buildChannelConfigSchema>[0];
+    const legacySchema = {} as unknown as Parameters<
+      typeof buildChannelConfigSchema
+    >[0];
     const result = buildChannelConfigSchema(legacySchema);
-    expect(result.schema).toEqual({ type: "object", additionalProperties: true });
+    expect(result.schema).toEqual({
+      type: "object",
+      additionalProperties: true,
+    });
   });
 
   it("passes draft-07 compatibility options to toJSONSchema", () => {
@@ -20,7 +25,9 @@ describe("buildChannelConfigSchema", () => {
       type: "object",
       properties: { enabled: { type: "boolean" } },
     }));
-    const schema = { toJSONSchema } as unknown as Parameters<typeof buildChannelConfigSchema>[0];
+    const schema = { toJSONSchema } as unknown as Parameters<
+      typeof buildChannelConfigSchema
+    >[0];
 
     const result = buildChannelConfigSchema(schema);
 

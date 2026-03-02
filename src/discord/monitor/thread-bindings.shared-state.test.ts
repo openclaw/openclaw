@@ -11,7 +11,9 @@ type ThreadBindingsModule = {
 
 async function loadThreadBindingsViaAlternateLoader(): Promise<ThreadBindingsModule> {
   const fallbackPath = "./thread-bindings.ts?vitest-loader-fallback";
-  return (await import(/* @vite-ignore */ fallbackPath)) as ThreadBindingsModule;
+  return (await import(
+    /* @vite-ignore */ fallbackPath
+  )) as ThreadBindingsModule;
 }
 
 describe("thread binding manager state", () => {

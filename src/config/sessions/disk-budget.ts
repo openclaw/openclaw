@@ -1,6 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
-import { isPrimarySessionTranscriptFileName, isSessionArchiveArtifactName } from "./artifacts.js";
+import {
+  isPrimarySessionTranscriptFileName,
+  isSessionArchiveArtifactName,
+} from "./artifacts.js";
 import { resolveSessionFilePath } from "./paths.js";
 import type { SessionEntry } from "./types.js";
 
@@ -53,14 +56,19 @@ function measureStoreBytes(store: Record<string, SessionEntry>): number {
 
 function measureStoreEntryChunkBytes(key: string, entry: SessionEntry): number {
   const singleEntryStore = JSON.stringify({ [key]: entry }, null, 2);
-  if (!singleEntryStore.startsWith("{\n") || !singleEntryStore.endsWith("\n}")) {
+  if (
+    !singleEntryStore.startsWith("{\n") ||
+    !singleEntryStore.endsWith("\n}")
+  ) {
     return measureStoreBytes({ [key]: entry }) - 4;
   }
   const chunk = singleEntryStore.slice(2, -2);
   return Buffer.byteLength(chunk, "utf-8");
 }
 
-function buildStoreEntryChunkSizeMap(store: Record<string, SessionEntry>): Map<string, number> {
+function buildStoreEntryChunkSizeMap(
+  store: Record<string, SessionEntry>,
+): Map<string, number> {
   const out = new Map<string, number>();
   for (const [key, entry] of Object.entries(store)) {
     out.set(key, measureStoreEntryChunkBytes(key, entry));
@@ -76,7 +84,9 @@ function getEntryUpdatedAt(entry?: SessionEntry): number {
   return Number.isFinite(updatedAt) ? updatedAt : 0;
 }
 
-function buildSessionIdRefCounts(store: Record<string, SessionEntry>): Map<string, number> {
+function buildSessionIdRefCounts(
+  store: Record<string, SessionEntry>,
+): Map<string, number> {
   const counts = new Map<string, number>();
   for (const entry of Object.values(store)) {
     const sessionId = entry?.sessionId;
@@ -96,10 +106,16 @@ function resolveSessionTranscriptPathForEntry(params: {
     return null;
   }
   try {
-    const resolved = resolveSessionFilePath(params.entry.sessionId, params.entry, {
-      sessionsDir: params.sessionsDir,
-    });
-    const resolvedSessionsDir = canonicalizePathForComparison(params.sessionsDir);
+    const resolved = resolveSessionFilePath(
+      params.entry.sessionId,
+      params.entry,
+      {
+        sessionsDir: params.sessionsDir,
+      },
+    );
+    const resolvedSessionsDir = canonicalizePathForComparison(
+      params.sessionsDir,
+    );
     const resolvedPath = canonicalizePathForComparison(resolved);
     const relative = path.relative(resolvedSessionsDir, resolvedPath);
     if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
@@ -128,7 +144,9 @@ function resolveReferencedSessionTranscriptPaths(params: {
   return referenced;
 }
 
-async function readSessionsDirFiles(sessionsDir: string): Promise<SessionsDirFileStat[]> {
+async function readSessionsDirFiles(
+  sessionsDir: string,
+): Promise<SessionsDirFileStat[]> {
   const dirEntries = await fs.promises
     .readdir(sessionsDir, { withFileTypes: true })
     .catch(() => []);
@@ -170,7 +188,8 @@ async function removeFileForBudget(params: {
   simulatedRemovedPaths: Set<string>;
 }): Promise<number> {
   const resolvedPath = path.resolve(params.filePath);
-  const canonicalPath = params.canonicalPath ?? canonicalizePathForComparison(resolvedPath);
+  const canonicalPath =
+    params.canonicalPath ?? canonicalizePathForComparison(resolvedPath);
   if (params.dryRun) {
     if (params.simulatedRemovedPaths.has(canonicalPath)) {
       return 0;
@@ -203,13 +222,19 @@ export async function enforceSessionDiskBudget(params: {
   const dryRun = params.dryRun === true;
   const sessionsDir = path.dirname(params.storePath);
   const files = await readSessionsDirFiles(sessionsDir);
-  const fileSizesByPath = new Map(files.map((file) => [file.canonicalPath, file.size]));
+  const fileSizesByPath = new Map(
+    files.map((file) => [file.canonicalPath, file.size]),
+  );
   const simulatedRemovedPaths = new Set<string>();
   const resolvedStorePath = canonicalizePathForComparison(params.storePath);
-  const storeFile = files.find((file) => file.canonicalPath === resolvedStorePath);
+  const storeFile = files.find(
+    (file) => file.canonicalPath === resolvedStorePath,
+  );
   let projectedStoreBytes = measureStoreBytes(params.store);
   let total =
-    files.reduce((sum, file) => sum + file.size, 0) - (storeFile?.size ?? 0) + projectedStoreBytes;
+    files.reduce((sum, file) => sum + file.size, 0) -
+    (storeFile?.size ?? 0) +
+    projectedStoreBytes;
   const totalBefore = total;
   if (total <= maxBytes) {
     return {
@@ -255,7 +280,8 @@ export async function enforceSessionDiskBudget(params: {
     .filter(
       (file) =>
         isSessionArchiveArtifactName(file.name) ||
-        (isPrimarySessionTranscriptFileName(file.name) && !referencedPaths.has(file.canonicalPath)),
+        (isPrimarySessionTranscriptFileName(file.name) &&
+          !referencedPaths.has(file.canonicalPath)),
     )
     .toSorted((a, b) => a.mtimeMs - b.mtimeMs);
   for (const file of removableFileQueue) {
@@ -301,9 +327,16 @@ export async function enforceSessionDiskBudget(params: {
       delete params.store[key];
       const chunkBytes = entryChunkBytesByKey.get(key);
       entryChunkBytesByKey.delete(key);
-      if (typeof chunkBytes === "number" && Number.isFinite(chunkBytes) && chunkBytes >= 0) {
+      if (
+        typeof chunkBytes === "number" &&
+        Number.isFinite(chunkBytes) &&
+        chunkBytes >= 0
+      ) {
         // Removing any one pretty-printed top-level entry always removes the entry chunk plus ",\n" (2 bytes).
-        projectedStoreBytes = Math.max(2, projectedStoreBytes - (chunkBytes + 2));
+        projectedStoreBytes = Math.max(
+          2,
+          projectedStoreBytes - (chunkBytes + 2),
+        );
       } else {
         projectedStoreBytes = measureStoreBytes(params.store);
       }
@@ -320,7 +353,10 @@ export async function enforceSessionDiskBudget(params: {
         continue;
       }
       sessionIdRefCounts.delete(sessionId);
-      const transcriptPath = resolveSessionTranscriptPathForEntry({ sessionsDir, entry });
+      const transcriptPath = resolveSessionTranscriptPathForEntry({
+        sessionsDir,
+        entry,
+      });
       if (!transcriptPath) {
         continue;
       }
@@ -341,14 +377,17 @@ export async function enforceSessionDiskBudget(params: {
 
   if (!dryRun) {
     if (total > highWaterBytes) {
-      log.warn("session disk budget still above high-water target after cleanup", {
-        sessionsDir,
-        totalBytes: total,
-        maxBytes,
-        highWaterBytes,
-        removedFiles,
-        removedEntries,
-      });
+      log.warn(
+        "session disk budget still above high-water target after cleanup",
+        {
+          sessionsDir,
+          totalBytes: total,
+          maxBytes,
+          highWaterBytes,
+          removedFiles,
+          removedEntries,
+        },
+      );
     } else if (removedFiles > 0 || removedEntries > 0) {
       log.info("applied session disk budget cleanup", {
         sessionsDir,

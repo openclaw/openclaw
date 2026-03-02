@@ -22,14 +22,21 @@ export class UnauthorizedFloodGuard {
   private suppressedSinceLastLog = 0;
 
   constructor(options?: UnauthorizedFloodGuardOptions) {
-    this.closeAfter = Math.max(1, Math.floor(options?.closeAfter ?? DEFAULT_CLOSE_AFTER));
-    this.logEvery = Math.max(1, Math.floor(options?.logEvery ?? DEFAULT_LOG_EVERY));
+    this.closeAfter = Math.max(
+      1,
+      Math.floor(options?.closeAfter ?? DEFAULT_CLOSE_AFTER),
+    );
+    this.logEvery = Math.max(
+      1,
+      Math.floor(options?.logEvery ?? DEFAULT_LOG_EVERY),
+    );
   }
 
   registerUnauthorized(): UnauthorizedFloodDecision {
     this.count += 1;
     const shouldClose = this.count > this.closeAfter;
-    const shouldLog = this.count === 1 || this.count % this.logEvery === 0 || shouldClose;
+    const shouldLog =
+      this.count === 1 || this.count % this.logEvery === 0 || shouldClose;
 
     if (!shouldLog) {
       this.suppressedSinceLastLog += 1;

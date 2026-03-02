@@ -34,6 +34,8 @@ describe("command-tree", () => {
     program.command("alpha");
 
     expect(removeCommandByName(program, "missing")).toBe(false);
-    expect(program.commands.map((command) => command.name())).toEqual(["alpha"]);
+    expect(program.commands.map((command) => command.name())).toEqual([
+      "alpha",
+    ]);
   });
 });

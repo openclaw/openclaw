@@ -3,7 +3,9 @@ import { describe, expect, it } from "vitest";
 import type { SessionsListResult } from "../types.ts";
 import { renderSessions, type SessionsProps } from "./sessions.ts";
 
-function buildResult(session: SessionsListResult["sessions"][number]): SessionsListResult {
+function buildResult(
+  session: SessionsListResult["sessions"][number],
+): SessionsListResult {
   return {
     ts: Date.now(),
     path: "(multiple)",
@@ -51,7 +53,11 @@ describe("sessions view", () => {
     const selects = container.querySelectorAll("select");
     const verbose = selects[1] as HTMLSelectElement | undefined;
     expect(verbose?.value).toBe("full");
-    expect(Array.from(verbose?.options ?? []).some((option) => option.value === "full")).toBe(true);
+    expect(
+      Array.from(verbose?.options ?? []).some(
+        (option) => option.value === "full",
+      ),
+    ).toBe(true);
   });
 
   it("keeps unknown stored values selectable instead of forcing inherit", async () => {
@@ -75,7 +81,9 @@ describe("sessions view", () => {
     const reasoning = selects[2] as HTMLSelectElement | undefined;
     expect(reasoning?.value).toBe("custom-mode");
     expect(
-      Array.from(reasoning?.options ?? []).some((option) => option.value === "custom-mode"),
+      Array.from(reasoning?.options ?? []).some(
+        (option) => option.value === "custom-mode",
+      ),
     ).toBe(true);
   });
 });

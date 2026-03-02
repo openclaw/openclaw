@@ -7,9 +7,9 @@ import {
 
 describe("normalizeHostnameSuffixAllowlist", () => {
   it("uses defaults when input is missing", () => {
-    expect(normalizeHostnameSuffixAllowlist(undefined, ["GRAPH.MICROSOFT.COM"])).toEqual([
-      "graph.microsoft.com",
-    ]);
+    expect(
+      normalizeHostnameSuffixAllowlist(undefined, ["GRAPH.MICROSOFT.COM"]),
+    ).toEqual(["graph.microsoft.com"]);
   });
 
   it("normalizes wildcard prefixes and deduplicates", () => {
@@ -27,24 +27,34 @@ describe("normalizeHostnameSuffixAllowlist", () => {
 describe("isHttpsUrlAllowedByHostnameSuffixAllowlist", () => {
   it("requires https", () => {
     expect(
-      isHttpsUrlAllowedByHostnameSuffixAllowlist("http://a.example.com/x", ["example.com"]),
+      isHttpsUrlAllowedByHostnameSuffixAllowlist("http://a.example.com/x", [
+        "example.com",
+      ]),
     ).toBe(false);
   });
 
   it("supports exact and suffix match", () => {
     expect(
-      isHttpsUrlAllowedByHostnameSuffixAllowlist("https://example.com/x", ["example.com"]),
+      isHttpsUrlAllowedByHostnameSuffixAllowlist("https://example.com/x", [
+        "example.com",
+      ]),
     ).toBe(true);
     expect(
-      isHttpsUrlAllowedByHostnameSuffixAllowlist("https://a.example.com/x", ["example.com"]),
+      isHttpsUrlAllowedByHostnameSuffixAllowlist("https://a.example.com/x", [
+        "example.com",
+      ]),
     ).toBe(true);
-    expect(isHttpsUrlAllowedByHostnameSuffixAllowlist("https://evil.com/x", ["example.com"])).toBe(
-      false,
-    );
+    expect(
+      isHttpsUrlAllowedByHostnameSuffixAllowlist("https://evil.com/x", [
+        "example.com",
+      ]),
+    ).toBe(false);
   });
 
   it("supports wildcard allowlist", () => {
-    expect(isHttpsUrlAllowedByHostnameSuffixAllowlist("https://evil.com/x", ["*"])).toBe(true);
+    expect(
+      isHttpsUrlAllowedByHostnameSuffixAllowlist("https://evil.com/x", ["*"]),
+    ).toBe(true);
   });
 });
 
@@ -55,12 +65,18 @@ describe("buildHostnameAllowlistPolicyFromSuffixAllowlist", () => {
   });
 
   it("returns undefined when wildcard host is present", () => {
-    expect(buildHostnameAllowlistPolicyFromSuffixAllowlist(["*"])).toBeUndefined();
-    expect(buildHostnameAllowlistPolicyFromSuffixAllowlist(["example.com", "*"])).toBeUndefined();
+    expect(
+      buildHostnameAllowlistPolicyFromSuffixAllowlist(["*"]),
+    ).toBeUndefined();
+    expect(
+      buildHostnameAllowlistPolicyFromSuffixAllowlist(["example.com", "*"]),
+    ).toBeUndefined();
   });
 
   it("expands a suffix entry to exact + wildcard hostname allowlist patterns", () => {
-    expect(buildHostnameAllowlistPolicyFromSuffixAllowlist(["sharepoint.com"])).toEqual({
+    expect(
+      buildHostnameAllowlistPolicyFromSuffixAllowlist(["sharepoint.com"]),
+    ).toEqual({
       hostnameAllowlist: ["sharepoint.com", "*.sharepoint.com"],
     });
   });

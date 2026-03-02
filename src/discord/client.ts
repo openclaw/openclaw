@@ -1,6 +1,9 @@
 import { RequestClient } from "@buape/carbon";
 import { loadConfig } from "../config/config.js";
-import { createDiscordRetryRunner, type RetryRunner } from "../infra/retry-policy.js";
+import {
+  createDiscordRetryRunner,
+  type RetryRunner,
+} from "../infra/retry-policy.js";
 import type { RetryConfig } from "../infra/retry.js";
 import { resolveDiscordAccount } from "./accounts.js";
 import { normalizeDiscordToken } from "./token.js";
@@ -13,7 +16,11 @@ export type DiscordClientOpts = {
   verbose?: boolean;
 };
 
-function resolveToken(params: { explicit?: string; accountId: string; fallbackToken?: string }) {
+function resolveToken(params: {
+  explicit?: string;
+  accountId: string;
+  fallbackToken?: string;
+}) {
   const explicit = normalizeDiscordToken(params.explicit);
   if (explicit) {
     return explicit;
@@ -31,7 +38,10 @@ function resolveRest(token: string, rest?: RequestClient) {
   return rest ?? new RequestClient(token);
 }
 
-export function createDiscordRestClient(opts: DiscordClientOpts, cfg = loadConfig()) {
+export function createDiscordRestClient(
+  opts: DiscordClientOpts,
+  cfg = loadConfig(),
+) {
   const account = resolveDiscordAccount({ cfg, accountId: opts.accountId });
   const token = resolveToken({
     explicit: opts.token,

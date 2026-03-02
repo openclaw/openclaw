@@ -176,7 +176,9 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
     typingIntervalSeconds: 5,
     sendPolicy: {
       default: "allow",
-      rules: [{ action: "deny", match: { channel: "discord", chatType: "group" } }],
+      rules: [
+        { action: "deny", match: { channel: "discord", chatType: "group" } },
+      ],
     },
   },
 
@@ -488,7 +490,10 @@ If more than one person can DM your bot (multiple entries in `allowFrom`, pairin
     discord: {
       enabled: true,
       token: "YOUR_DISCORD_BOT_TOKEN",
-      dm: { enabled: true, allowFrom: ["123456789012345678", "987654321098765432"] },
+      dm: {
+        enabled: true,
+        allowFrom: ["123456789012345678", "987654321098765432"],
+      },
     },
   },
 }

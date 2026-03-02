@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { captureEnv } from "../../test-utils/env.js";
-import { handleTelegramAction, readTelegramButtons } from "./telegram-actions.js";
+import {
+  handleTelegramAction,
+  readTelegramButtons,
+} from "./telegram-actions.js";
 
 const reactMessageTelegram = vi.fn(async () => ({ ok: true }));
 const sendMessageTelegram = vi.fn(async () => ({
@@ -34,7 +37,9 @@ describe("handleTelegramAction", () => {
     emoji: "✅",
   } as const;
 
-  function reactionConfig(reactionLevel: "minimal" | "extensive" | "off" | "ack"): OpenClawConfig {
+  function reactionConfig(
+    reactionLevel: "minimal" | "extensive" | "off" | "ack",
+  ): OpenClawConfig {
     return {
       channels: { telegram: { botToken: "tok", reactionLevel } },
     } as OpenClawConfig;
@@ -52,7 +57,10 @@ describe("handleTelegramAction", () => {
   }
 
   async function expectReactionAdded(reactionLevel: "minimal" | "extensive") {
-    await handleTelegramAction(defaultReactionAction, reactionConfig(reactionLevel));
+    await handleTelegramAction(
+      defaultReactionAction,
+      reactionConfig(reactionLevel),
+    );
     expect(reactMessageTelegram).toHaveBeenCalledWith(
       "123",
       456,
@@ -83,10 +91,15 @@ describe("handleTelegramAction", () => {
       ok: false,
       warning: "Reaction unavailable: ✅",
     } as unknown as Awaited<ReturnType<typeof reactMessageTelegram>>);
-    const result = await handleTelegramAction(defaultReactionAction, reactionConfig("minimal"));
+    const result = await handleTelegramAction(
+      defaultReactionAction,
+      reactionConfig("minimal"),
+    );
     const textPayload = result.content.find((item) => item.type === "text");
     expect(textPayload?.type).toBe("text");
-    const parsed = JSON.parse((textPayload as { type: "text"; text: string }).text) as {
+    const parsed = JSON.parse(
+      (textPayload as { type: "text"; text: string }).text,
+    ) as {
       ok: boolean;
       warning?: string;
       added?: string;
@@ -164,7 +177,9 @@ describe("handleTelegramAction", () => {
   });
 
   it("rejects sticker actions when disabled by default", async () => {
-    const cfg = { channels: { telegram: { botToken: "tok" } } } as OpenClawConfig;
+    const cfg = {
+      channels: { telegram: { botToken: "tok" } },
+    } as OpenClawConfig;
     await expect(
       handleTelegramAction(
         {
@@ -461,19 +476,22 @@ describe("handleTelegramAction", () => {
       inlineButtons: "dm" as const,
       expectedMessage: /inline buttons are limited to DMs/i,
     },
-  ])("blocks inline buttons when $name", async ({ to, inlineButtons, expectedMessage }) => {
-    await expect(
-      handleTelegramAction(
-        {
-          action: "sendMessage",
-          to,
-          content: "Choose",
-          buttons: [[{ text: "Ok", callback_data: "cmd:ok" }]],
-        },
-        telegramConfig({ capabilities: { inlineButtons } }),
-      ),
-    ).rejects.toThrow(expectedMessage);
-  });
+  ])(
+    "blocks inline buttons when $name",
+    async ({ to, inlineButtons, expectedMessage }) => {
+      await expect(
+        handleTelegramAction(
+          {
+            action: "sendMessage",
+            to,
+            content: "Choose",
+            buttons: [[{ text: "Ok", callback_data: "cmd:ok" }]],
+          },
+          telegramConfig({ capabilities: { inlineButtons } }),
+        ),
+      ).rejects.toThrow(expectedMessage);
+    },
+  );
 
   it("allows inline buttons in DMs with tg: prefixed targets", async () => {
     const cfg = telegramConfig({ capabilities: { inlineButtons: "dm" } });
@@ -594,14 +612,19 @@ describe("readTelegramButtons", () => {
   it("rejects unsupported button style", () => {
     expect(() =>
       readTelegramButtons({
-        buttons: [[{ text: "Option A", callback_data: "cmd:a", style: "secondary" }]],
+        buttons: [
+          [{ text: "Option A", callback_data: "cmd:a", style: "secondary" }],
+        ],
       }),
     ).toThrow(/style must be one of danger, success, primary/i);
   });
 });
 
 describe("handleTelegramAction per-account gating", () => {
-  async function expectAccountStickerSend(cfg: OpenClawConfig, accountId = "media") {
+  async function expectAccountStickerSend(
+    cfg: OpenClawConfig,
+    accountId = "media",
+  ) {
     await handleTelegramAction(
       { action: "sendSticker", to: "123", fileId: "sticker-id", accountId },
       cfg,
@@ -639,7 +662,12 @@ describe("handleTelegramAction per-account gating", () => {
 
     await expect(
       handleTelegramAction(
-        { action: "sendSticker", to: "123", fileId: "sticker-id", accountId: "chat" },
+        {
+          action: "sendSticker",
+          to: "123",
+          fileId: "sticker-id",
+          accountId: "chat",
+        },
         cfg,
       ),
     ).rejects.toThrow(/sticker actions are disabled/i);
@@ -694,7 +722,10 @@ describe("handleTelegramAction per-account gating", () => {
         telegram: {
           actions: { reactions: false },
           accounts: {
-            media: { botToken: "tok-media", actions: { sticker: true, reactions: true } },
+            media: {
+              botToken: "tok-media",
+              actions: { sticker: true, reactions: true },
+            },
           },
         },
       },

@@ -5,8 +5,10 @@ const resolveAuthProfileOrderMock = vi.hoisted(() => vi.fn());
 const resolveAuthProfileDisplayLabelMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./auth-profiles.js", () => ({
-  ensureAuthProfileStore: (...args: unknown[]) => ensureAuthProfileStoreMock(...args),
-  resolveAuthProfileOrder: (...args: unknown[]) => resolveAuthProfileOrderMock(...args),
+  ensureAuthProfileStore: (...args: unknown[]) =>
+    ensureAuthProfileStoreMock(...args),
+  resolveAuthProfileOrder: (...args: unknown[]) =>
+    resolveAuthProfileOrderMock(...args),
   resolveAuthProfileDisplayLabel: (...args: unknown[]) =>
     resolveAuthProfileDisplayLabelMock(...args),
 }));
@@ -37,7 +39,9 @@ describe("resolveModelAuthLabel", () => {
       },
     } as never);
     resolveAuthProfileOrderMock.mockReturnValue(["github-copilot:default"]);
-    resolveAuthProfileDisplayLabelMock.mockReturnValue("github-copilot:default");
+    resolveAuthProfileDisplayLabelMock.mockReturnValue(
+      "github-copilot:default",
+    );
 
     const label = resolveModelAuthLabel({
       provider: "github-copilot",

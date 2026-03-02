@@ -408,7 +408,15 @@ const ENUM_EXPECTATIONS: Record<string, string[]> = {
   "discovery.mdns.mode": ['"off"', '"minimal"', '"full"'],
   "wizard.lastRunMode": ['"local"', '"remote"'],
   "diagnostics.otel.protocol": ['"http/protobuf"', '"grpc"'],
-  "logging.level": ['"silent"', '"fatal"', '"error"', '"warn"', '"info"', '"debug"', '"trace"'],
+  "logging.level": [
+    '"silent"',
+    '"fatal"',
+    '"error"',
+    '"warn"',
+    '"info"',
+    '"debug"',
+    '"trace"',
+  ],
   "logging.consoleLevel": [
     '"silent"',
     '"fatal"',
@@ -422,7 +430,11 @@ const ENUM_EXPECTATIONS: Record<string, string[]> = {
   "logging.redactSensitive": ['"off"', '"tools"'],
   "update.channel": ['"stable"', '"beta"', '"dev"'],
   "agents.defaults.compaction.mode": ['"default"', '"safeguard"'],
-  "agents.defaults.compaction.identifierPolicy": ['"strict"', '"off"', '"custom"'],
+  "agents.defaults.compaction.identifierPolicy": [
+    '"strict"',
+    '"off"',
+    '"custom"',
+  ],
 };
 
 const TOOLS_HOOKS_TARGET_KEYS = [
@@ -561,7 +573,9 @@ describe("config help copy quality", () => {
     for (const key of keys) {
       const help = FIELD_HELP[key];
       expect(help, `missing help for ${key}`).toBeDefined();
-      expect(help.length, `help too short for ${key}`).toBeGreaterThanOrEqual(minLength);
+      expect(help.length, `help too short for ${key}`).toBeGreaterThanOrEqual(
+        minLength,
+      );
       expect(
         guidancePattern.test(help),
         `help should include operational guidance for ${key}`,
@@ -578,7 +592,10 @@ describe("config help copy quality", () => {
 
   it("keeps labels in parity for all help keys", () => {
     for (const key of Object.keys(FIELD_HELP)) {
-      expect(FIELD_LABELS[key], `missing label for help key ${key}`).toBeDefined();
+      expect(
+        FIELD_LABELS[key],
+        `missing label for help key ${key}`,
+      ).toBeDefined();
     }
   });
 
@@ -615,7 +632,9 @@ describe("config help copy quality", () => {
       const help = FIELD_HELP[key];
       expect(help, `missing help for enum key ${key}`).toBeDefined();
       for (const token of options) {
-        expect(help.includes(token), `missing option ${token} in ${key}`).toBe(true);
+        expect(help.includes(token), `missing option ${token} in ${key}`).toBe(
+          true,
+        );
       }
     }
   });
@@ -630,9 +649,13 @@ describe("config help copy quality", () => {
   });
 
   it("includes concrete examples on path and interval fields", () => {
-    expect(FIELD_HELP["memory.qmd.paths.pattern"].includes("**/*.md")).toBe(true);
+    expect(FIELD_HELP["memory.qmd.paths.pattern"].includes("**/*.md")).toBe(
+      true,
+    );
     expect(FIELD_HELP["memory.qmd.update.interval"].includes("5m")).toBe(true);
-    expect(FIELD_HELP["memory.qmd.update.embedInterval"].includes("60m")).toBe(true);
+    expect(FIELD_HELP["memory.qmd.update.embedInterval"].includes("60m")).toBe(
+      true,
+    );
     expect(FIELD_HELP["agents.defaults.memorySearch.store.path"]).toContain(
       "~/.openclaw/memory/{agentId}.sqlite",
     );
@@ -664,7 +687,8 @@ describe("config help copy quality", () => {
     const keyPrefix = FIELD_HELP["session.sendPolicy.rules[].match.keyPrefix"];
     expect(/normalized/i.test(keyPrefix)).toBe(true);
 
-    const rawKeyPrefix = FIELD_HELP["session.sendPolicy.rules[].match.rawKeyPrefix"];
+    const rawKeyPrefix =
+      FIELD_HELP["session.sendPolicy.rules[].match.rawKeyPrefix"];
     expect(/raw|unnormalized/i.test(rawKeyPrefix)).toBe(true);
   });
 
@@ -681,7 +705,8 @@ describe("config help copy quality", () => {
     expect(/deprecated/i.test(deprecated)).toBe(true);
     expect(deprecated.includes("session.maintenance.pruneAfter")).toBe(true);
 
-    const resetRetention = FIELD_HELP["session.maintenance.resetArchiveRetention"];
+    const resetRetention =
+      FIELD_HELP["session.maintenance.resetArchiveRetention"];
     expect(resetRetention.includes(".reset.")).toBe(true);
     expect(/false/i.test(resetRetention)).toBe(true);
 
@@ -731,7 +756,9 @@ describe("config help copy quality", () => {
   it("documents hook transform safety and queue behavior options", () => {
     const transformModule = FIELD_HELP["hooks.mappings[].transform.module"];
     expect(/relative/i.test(transformModule)).toBe(true);
-    expect(/path traversal|reviewed|controlled/i.test(transformModule)).toBe(true);
+    expect(/path traversal|reviewed|controlled/i.test(transformModule)).toBe(
+      true,
+    );
 
     const queueMode = FIELD_HELP["messages.queue.mode"];
     expect(queueMode.includes('"interrupt"')).toBe(true);
@@ -769,7 +796,8 @@ describe("config help copy quality", () => {
     const providerKey = FIELD_HELP["models.providers.*.apiKey"];
     expect(/secret|env|credential/i.test(providerKey)).toBe(true);
 
-    const bedrockRefresh = FIELD_HELP["models.bedrockDiscovery.refreshInterval"];
+    const bedrockRefresh =
+      FIELD_HELP["models.bedrockDiscovery.refreshInterval"];
     expect(/refresh|seconds|interval/i.test(bedrockRefresh)).toBe(true);
     expect(/cost|noise|api/i.test(bedrockRefresh)).toBe(true);
 
@@ -782,10 +810,12 @@ describe("config help copy quality", () => {
     expect(mode.includes('"default"')).toBe(true);
     expect(mode.includes('"safeguard"')).toBe(true);
 
-    const historyShare = FIELD_HELP["agents.defaults.compaction.maxHistoryShare"];
+    const historyShare =
+      FIELD_HELP["agents.defaults.compaction.maxHistoryShare"];
     expect(/0\\.1-0\\.9|fraction|share/i.test(historyShare)).toBe(true);
 
-    const identifierPolicy = FIELD_HELP["agents.defaults.compaction.identifierPolicy"];
+    const identifierPolicy =
+      FIELD_HELP["agents.defaults.compaction.identifierPolicy"];
     expect(identifierPolicy.includes('"strict"')).toBe(true);
     expect(identifierPolicy.includes('"off"')).toBe(true);
     expect(identifierPolicy.includes('"custom"')).toBe(true);

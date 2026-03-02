@@ -23,6 +23,8 @@ describe("monitorLineProvider fail-closed webhook auth", () => {
         config: {} as OpenClawConfig,
         runtime: {} as RuntimeEnv,
       }),
-    ).rejects.toThrow("LINE webhook mode requires a non-empty channel access token.");
+    ).rejects.toThrow(
+      "LINE webhook mode requires a non-empty channel access token.",
+    );
   });
 });

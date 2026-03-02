@@ -1,7 +1,15 @@
 import { extractQueryTerms } from "../usage-helpers.ts";
-import { CostDailyEntry, UsageAggregates, UsageSessionEntry } from "./usageTypes.ts";
+import {
+  CostDailyEntry,
+  UsageAggregates,
+  UsageSessionEntry,
+} from "./usageTypes.ts";
 
-function downloadTextFile(filename: string, content: string, type = "text/plain") {
+function downloadTextFile(
+  filename: string,
+  content: string,
+  type = "text/plain",
+) {
   const blob = new Blob([content], { type: `${type};charset=utf-8` });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -135,7 +143,10 @@ const buildQuerySuggestions = (
   const tokens = trimmed.length ? trimmed.split(/\s+/) : [];
   const lastToken = tokens.length ? tokens[tokens.length - 1] : "";
   const [rawKey, rawValue] = lastToken.includes(":")
-    ? [lastToken.slice(0, lastToken.indexOf(":")), lastToken.slice(lastToken.indexOf(":") + 1)]
+    ? [
+        lastToken.slice(0, lastToken.indexOf(":")),
+        lastToken.slice(lastToken.indexOf(":") + 1),
+      ]
     : ["", ""];
 
   const key = rawKey.toLowerCase();
@@ -162,7 +173,10 @@ const buildQuerySuggestions = (
     ...sessions.map((s) => s.model),
     ...(aggregates?.byModel.map((m) => m.model) ?? []),
   ]).slice(0, 6);
-  const tools = unique(aggregates?.tools.tools.map((t) => t.name) ?? []).slice(0, 6);
+  const tools = unique(aggregates?.tools.tools.map((t) => t.name) ?? []).slice(
+    0,
+    6,
+  );
 
   if (!key) {
     return [
@@ -182,7 +196,10 @@ const buildQuerySuggestions = (
   const addValues = (prefix: string, values: string[]) => {
     for (const val of values) {
       if (!value || val.toLowerCase().includes(value)) {
-        suggestions.push({ label: `${prefix}:${val}`, value: `${prefix}:${val}` });
+        suggestions.push({
+          label: `${prefix}:${val}`,
+          value: `${prefix}:${val}`,
+        });
       }
     }
   };
@@ -204,11 +221,13 @@ const buildQuerySuggestions = (
       addValues("tool", tools);
       break;
     case "has":
-      ["errors", "tools", "context", "usage", "model", "provider"].forEach((entry) => {
-        if (!value || entry.includes(value)) {
-          suggestions.push({ label: `has:${entry}`, value: `has:${entry}` });
-        }
-      });
+      ["errors", "tools", "context", "usage", "model", "provider"].forEach(
+        (entry) => {
+          if (!value || entry.includes(value)) {
+            suggestions.push({ label: `has:${entry}`, value: `has:${entry}` });
+          }
+        },
+      );
       break;
     default:
       break;
@@ -227,7 +246,8 @@ const applySuggestionToQuery = (query: string, suggestion: string): string => {
   return `${tokens.join(" ")} `;
 };
 
-const normalizeQueryText = (value: string): string => value.trim().toLowerCase();
+const normalizeQueryText = (value: string): string =>
+  value.trim().toLowerCase();
 
 const addQueryToken = (query: string, token: string): string => {
   const trimmed = query.trim();
@@ -254,7 +274,11 @@ const removeQueryToken = (query: string, token: string): string => {
   return next.length ? `${next.join(" ")} ` : "";
 };
 
-const setQueryTokensForKey = (query: string, key: string, values: string[]): string => {
+const setQueryTokensForKey = (
+  query: string,
+  key: string,
+  values: string[],
+): string => {
   const normalizedKey = normalizeQueryText(key);
   const tokens = extractQueryTerms(query)
     .filter((term) => normalizeQueryText(term.key ?? "") !== normalizedKey)

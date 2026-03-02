@@ -19,7 +19,12 @@ function fakeApi(overrides: any = {}) {
     name: "llm-task",
     source: "test",
     config: {
-      agents: { defaults: { workspace: "/tmp", model: { primary: "openai-codex/gpt-5.2" } } },
+      agents: {
+        defaults: {
+          workspace: "/tmp",
+          model: { primary: "openai-codex/gpt-5.2" },
+        },
+      },
     },
     pluginConfig: {},
     runtime: { version: "test" },
@@ -81,7 +86,9 @@ describe("llm-task tool (json-only)", () => {
       payloads: [{ text: "not-json" }],
     });
     const tool = createLlmTaskTool(fakeApi());
-    await expect(tool.execute("id", { prompt: "x" })).rejects.toThrow(/invalid json/i);
+    await expect(tool.execute("id", { prompt: "x" })).rejects.toThrow(
+      /invalid json/i,
+    );
   });
 
   it("throws on schema mismatch", async () => {
@@ -91,8 +98,14 @@ describe("llm-task tool (json-only)", () => {
       payloads: [{ text: JSON.stringify({ foo: 1 }) }],
     });
     const tool = createLlmTaskTool(fakeApi());
-    const schema = { type: "object", properties: { foo: { type: "string" } }, required: ["foo"] };
-    await expect(tool.execute("id", { prompt: "x", schema })).rejects.toThrow(/match schema/i);
+    const schema = {
+      type: "object",
+      properties: { foo: { type: "string" } },
+      required: ["foo"],
+    };
+    await expect(tool.execute("id", { prompt: "x", schema })).rejects.toThrow(
+      /match schema/i,
+    );
   });
 
   it("passes provider/model overrides to embedded runner", async () => {
@@ -102,7 +115,11 @@ describe("llm-task tool (json-only)", () => {
       payloads: [{ text: JSON.stringify({ ok: true }) }],
     });
     const tool = createLlmTaskTool(fakeApi());
-    await tool.execute("id", { prompt: "x", provider: "anthropic", model: "claude-4-sonnet" });
+    await tool.execute("id", {
+      prompt: "x",
+      provider: "anthropic",
+      model: "claude-4-sonnet",
+    });
     // oxlint-disable-next-line typescript/no-explicit-any
     const call = (runEmbeddedPiAgent as any).mock.calls[0]?.[0];
     expect(call.provider).toBe("anthropic");
@@ -119,7 +136,11 @@ describe("llm-task tool (json-only)", () => {
       fakeApi({ pluginConfig: { allowedModels: ["openai-codex/gpt-5.2"] } }),
     );
     await expect(
-      tool.execute("id", { prompt: "x", provider: "anthropic", model: "claude-4-sonnet" }),
+      tool.execute("id", {
+        prompt: "x",
+        provider: "anthropic",
+        model: "claude-4-sonnet",
+      }),
     ).rejects.toThrow(/not allowed/i);
   });
 

@@ -32,7 +32,9 @@ function filterHookEntries(
   config?: OpenClawConfig,
   eligibility?: HookEligibilityContext,
 ): HookEntry[] {
-  return entries.filter((entry) => shouldIncludeHook({ entry, config, eligibility }));
+  return entries.filter((entry) =>
+    shouldIncludeHook({ entry, config, eligibility }),
+  );
 }
 
 function readHookPackageManifest(dir: string): HookPackageManifest | null {
@@ -57,10 +59,15 @@ function resolvePackageHooks(manifest: HookPackageManifest): string[] {
   if (!Array.isArray(raw)) {
     return [];
   }
-  return raw.map((entry) => (typeof entry === "string" ? entry.trim() : "")).filter(Boolean);
+  return raw
+    .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+    .filter(Boolean);
 }
 
-function resolveContainedDir(baseDir: string, targetDir: string): string | null {
+function resolveContainedDir(
+  baseDir: string,
+  targetDir: string,
+): string | null {
   const base = path.resolve(baseDir);
   const resolved = path.resolve(baseDir, targetDir);
   if (
@@ -91,10 +98,16 @@ function loadHookFromDir(params: {
   try {
     const frontmatter = parseFrontmatter(content);
 
-    const name = frontmatter.name || params.nameHint || path.basename(params.hookDir);
+    const name =
+      frontmatter.name || params.nameHint || path.basename(params.hookDir);
     const description = frontmatter.description || "";
 
-    const handlerCandidates = ["handler.ts", "handler.js", "index.ts", "index.js"];
+    const handlerCandidates = [
+      "handler.ts",
+      "handler.js",
+      "index.ts",
+      "index.js",
+    ];
     let handlerPath: string | undefined;
     for (const candidate of handlerCandidates) {
       const candidatePath = path.join(params.hookDir, candidate);
@@ -110,7 +123,9 @@ function loadHookFromDir(params: {
     }
 
     if (!handlerPath) {
-      log.warn(`Hook "${name}" has HOOK.md but no handler file in ${params.hookDir}`);
+      log.warn(
+        `Hook "${name}" has HOOK.md but no handler file in ${params.hookDir}`,
+      );
       return null;
     }
 
@@ -124,7 +139,8 @@ function loadHookFromDir(params: {
       handlerPath,
     };
   } catch (err) {
-    const message = err instanceof Error ? (err.stack ?? err.message) : String(err);
+    const message =
+      err instanceof Error ? (err.stack ?? err.message) : String(err);
     log.warn(`Failed to load hook from ${params.hookDir}: ${message}`);
     return null;
   }
@@ -133,7 +149,11 @@ function loadHookFromDir(params: {
 /**
  * Scan a directory for hooks (subdirectories containing HOOK.md)
  */
-function loadHooksFromDir(params: { dir: string; source: HookSource; pluginId?: string }): Hook[] {
+function loadHooksFromDir(params: {
+  dir: string;
+  source: HookSource;
+  pluginId?: string;
+}): Hook[] {
   const { dir, source, pluginId } = params;
 
   if (!fs.existsSync(dir)) {
@@ -235,7 +255,8 @@ function loadHookEntries(
     bundledHooksDir?: string;
   },
 ): HookEntry[] {
-  const managedHooksDir = opts?.managedHooksDir ?? path.join(CONFIG_DIR, "hooks");
+  const managedHooksDir =
+    opts?.managedHooksDir ?? path.join(CONFIG_DIR, "hooks");
   const workspaceHooksDir = path.join(workspaceDir, "hooks");
   const bundledHooksDir = opts?.bundledHooksDir ?? resolveBundledHooksDir();
   const extraDirsRaw = opts?.config?.hooks?.internal?.load?.extraDirs ?? [];
@@ -311,7 +332,11 @@ export function buildWorkspaceHookSnapshot(
   },
 ): HookSnapshot {
   const hookEntries = opts?.entries ?? loadHookEntries(workspaceDir, opts);
-  const eligible = filterHookEntries(hookEntries, opts?.config, opts?.eligibility);
+  const eligible = filterHookEntries(
+    hookEntries,
+    opts?.config,
+    opts?.eligibility,
+  );
 
   return {
     hooks: eligible.map((entry) => ({

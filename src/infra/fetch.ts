@@ -1,12 +1,17 @@
 import { bindAbortRelay } from "../utils/fetch-timeout.js";
 
 type FetchWithPreconnect = typeof fetch & {
-  preconnect: (url: string, init?: { credentials?: RequestCredentials }) => void;
+  preconnect: (
+    url: string,
+    init?: { credentials?: RequestCredentials },
+  ) => void;
 };
 
 type RequestInitWithDuplex = RequestInit & { duplex?: "half" };
 
-const wrapFetchWithAbortSignalMarker = Symbol.for("openclaw.fetch.abort-signal-wrapped");
+const wrapFetchWithAbortSignalMarker = Symbol.for(
+  "openclaw.fetch.abort-signal-wrapped",
+);
 
 type FetchWithAbortSignalMarker = typeof fetch & {
   [wrapFetchWithAbortSignalMarker]?: true;
@@ -33,8 +38,12 @@ function withDuplex(
     : ({ duplex: "half" as const } as RequestInitWithDuplex);
 }
 
-export function wrapFetchWithAbortSignal(fetchImpl: typeof fetch): typeof fetch {
-  if ((fetchImpl as FetchWithAbortSignalMarker)[wrapFetchWithAbortSignalMarker]) {
+export function wrapFetchWithAbortSignal(
+  fetchImpl: typeof fetch,
+): typeof fetch {
+  if (
+    (fetchImpl as FetchWithAbortSignalMarker)[wrapFetchWithAbortSignalMarker]
+  ) {
     return fetchImpl;
   }
 
@@ -63,7 +72,10 @@ export function wrapFetchWithAbortSignal(fetchImpl: typeof fetch): typeof fetch 
       listenerAttached = true;
     }
     const cleanup = () => {
-      if (!listenerAttached || typeof signal.removeEventListener !== "function") {
+      if (
+        !listenerAttached ||
+        typeof signal.removeEventListener !== "function"
+      ) {
         return;
       }
       listenerAttached = false;
@@ -75,7 +87,10 @@ export function wrapFetchWithAbortSignal(fetchImpl: typeof fetch): typeof fetch 
       }
     };
     try {
-      const response = fetchImpl(input, { ...patchedInit, signal: controller.signal });
+      const response = fetchImpl(input, {
+        ...patchedInit,
+        signal: controller.signal,
+      });
       return response.finally(cleanup);
     } catch (error) {
       cleanup();
@@ -100,7 +115,9 @@ export function wrapFetchWithAbortSignal(fetchImpl: typeof fetch): typeof fetch 
   return wrappedFetch;
 }
 
-export function resolveFetch(fetchImpl?: typeof fetch): typeof fetch | undefined {
+export function resolveFetch(
+  fetchImpl?: typeof fetch,
+): typeof fetch | undefined {
   const resolved = fetchImpl ?? globalThis.fetch;
   if (!resolved) {
     return undefined;

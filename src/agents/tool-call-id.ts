@@ -17,7 +17,10 @@ export type ToolCallLike = {
  * - "strict" mode: only [a-zA-Z0-9]
  * - "strict9" mode: only [a-zA-Z0-9], length 9 (Mistral tool call requirement)
  */
-export function sanitizeToolCallId(id: string, mode: ToolCallIdMode = "strict"): string {
+export function sanitizeToolCallId(
+  id: string,
+  mode: ToolCallIdMode = "strict",
+): string {
   if (!id || typeof id !== "string") {
     if (mode === "strict9") {
       return "defaultid";
@@ -82,7 +85,10 @@ export function extractToolResultId(
   return null;
 }
 
-export function isValidCloudCodeAssistToolId(id: string, mode: ToolCallIdMode = "strict"): boolean {
+export function isValidCloudCodeAssistToolId(
+  id: string,
+  mode: ToolCallIdMode = "strict",
+): boolean {
   if (!id || typeof id !== "string") {
     return false;
   }
@@ -97,10 +103,15 @@ function shortHash(text: string, length = 8): string {
   return createHash("sha256").update(text).digest("hex").slice(0, length);
 }
 
-function makeUniqueToolId(params: { id: string; used: Set<string>; mode: ToolCallIdMode }): string {
+function makeUniqueToolId(params: {
+  id: string;
+  used: Set<string>;
+  mode: ToolCallIdMode;
+}): string {
   if (params.mode === "strict9") {
     const base = sanitizeToolCallId(params.id, params.mode);
-    const candidate = base.length >= STRICT9_LEN ? base.slice(0, STRICT9_LEN) : "";
+    const candidate =
+      base.length >= STRICT9_LEN ? base.slice(0, STRICT9_LEN) : "";
     if (candidate && !params.used.has(candidate)) {
       return candidate;
     }
@@ -126,7 +137,8 @@ function makeUniqueToolId(params: { id: string; used: Set<string>; mode: ToolCal
   // Use separator based on mode: none for strict, underscore for non-strict variants
   const separator = params.mode === "strict" ? "" : "_";
   const maxBaseLen = MAX_LEN - separator.length - hash.length;
-  const clippedBase = base.length > maxBaseLen ? base.slice(0, maxBaseLen) : base;
+  const clippedBase =
+    base.length > maxBaseLen ? base.slice(0, maxBaseLen) : base;
   const candidate = `${clippedBase}${separator}${hash}`;
   if (!params.used.has(candidate)) {
     return candidate;
@@ -191,7 +203,8 @@ function rewriteToolResultIds(params: {
       ? params.message.toolCallId
       : undefined;
   const toolUseId = (params.message as { toolUseId?: unknown }).toolUseId;
-  const toolUseIdStr = typeof toolUseId === "string" && toolUseId ? toolUseId : undefined;
+  const toolUseIdStr =
+    typeof toolUseId === "string" && toolUseId ? toolUseId : undefined;
 
   const nextToolCallId = toolCallId ? params.resolve(toolCallId) : undefined;
   const nextToolUseId = toolUseIdStr ? params.resolve(toolUseIdStr) : undefined;

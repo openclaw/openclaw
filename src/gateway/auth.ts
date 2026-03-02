@@ -4,7 +4,10 @@ import type {
   GatewayTailscaleMode,
   GatewayTrustedProxyConfig,
 } from "../config/config.js";
-import { readTailscaleWhoisIdentity, type TailscaleWhoisIdentity } from "../infra/tailscale.js";
+import {
+  readTailscaleWhoisIdentity,
+  type TailscaleWhoisIdentity,
+} from "../infra/tailscale.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
 import {
   AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
@@ -19,7 +22,11 @@ import {
   resolveClientIp,
 } from "./net.js";
 
-export type ResolvedGatewayAuthMode = "none" | "token" | "password" | "trusted-proxy";
+export type ResolvedGatewayAuthMode =
+  | "none"
+  | "token"
+  | "password"
+  | "trusted-proxy";
 export type ResolvedGatewayAuthModeSource =
   | "override"
   | "config"
@@ -38,7 +45,13 @@ export type ResolvedGatewayAuth = {
 
 export type GatewayAuthResult = {
   ok: boolean;
-  method?: "none" | "token" | "password" | "tailscale" | "device-token" | "trusted-proxy";
+  method?:
+    | "none"
+    | "token"
+    | "password"
+    | "tailscale"
+    | "device-token"
+    | "trusted-proxy";
   user?: string;
   reason?: string;
   /** Present when the request was blocked by the rate limiter. */
@@ -81,7 +94,9 @@ type TailscaleUser = {
   profilePic?: string;
 };
 
-type TailscaleWhoisLookup = (ip: string) => Promise<TailscaleWhoisIdentity | null>;
+type TailscaleWhoisLookup = (
+  ip: string,
+) => Promise<TailscaleWhoisIdentity | null>;
 
 function normalizeLogin(login: string): string {
   return login.trim().toLowerCase();
@@ -129,7 +144,8 @@ export function isLocalDirectRequest(
   if (!req) {
     return false;
   }
-  const clientIp = resolveRequestClientIp(req, trustedProxies, allowRealIpFallback) ?? "";
+  const clientIp =
+    resolveRequestClientIp(req, trustedProxies, allowRealIpFallback) ?? "";
   if (!isLoopbackAddress(clientIp)) {
     return false;
   }
@@ -140,8 +156,13 @@ export function isLocalDirectRequest(
     req.headers?.["x-forwarded-host"],
   );
 
-  const remoteIsTrustedProxy = isTrustedProxyAddress(req.socket?.remoteAddress, trustedProxies);
-  return isLocalishHost(req.headers?.host) && (!hasForwarded || remoteIsTrustedProxy);
+  const remoteIsTrustedProxy = isTrustedProxyAddress(
+    req.socket?.remoteAddress,
+    trustedProxies,
+  );
+  return (
+    isLocalishHost(req.headers?.host) && (!hasForwarded || remoteIsTrustedProxy)
+  );
 }
 
 function getTailscaleUser(req?: IncomingMessage): TailscaleUser | null {
@@ -154,11 +175,17 @@ function getTailscaleUser(req?: IncomingMessage): TailscaleUser | null {
   }
   const nameRaw = req.headers["tailscale-user-name"];
   const profilePic = req.headers["tailscale-user-profile-pic"];
-  const name = typeof nameRaw === "string" && nameRaw.trim() ? nameRaw.trim() : login.trim();
+  const name =
+    typeof nameRaw === "string" && nameRaw.trim()
+      ? nameRaw.trim()
+      : login.trim();
   return {
     login: login.trim(),
     name,
-    profilePic: typeof profilePic === "string" && profilePic.trim() ? profilePic.trim() : undefined,
+    profilePic:
+      typeof profilePic === "string" && profilePic.trim()
+        ? profilePic.trim()
+        : undefined,
   };
 }
 
@@ -177,7 +204,10 @@ function isTailscaleProxyRequest(req?: IncomingMessage): boolean {
   if (!req) {
     return false;
   }
-  return isLoopbackAddress(req.socket?.remoteAddress) && hasTailscaleProxyHeaders(req);
+  return (
+    isLoopbackAddress(req.socket?.remoteAddress) &&
+    hasTailscaleProxyHeaders(req)
+  );
 }
 
 async function resolveVerifiedTailscaleUser(params: {
@@ -276,7 +306,9 @@ export function resolveGatewayAuth(params: {
 
   const allowTailscale =
     authConfig.allowTailscale ??
-    (params.tailscaleMode === "serve" && mode !== "password" && mode !== "trusted-proxy");
+    (params.tailscaleMode === "serve" &&
+      mode !== "password" &&
+      mode !== "trusted-proxy");
 
   return {
     mode,
@@ -298,7 +330,9 @@ export function assertGatewayAuthConfigured(auth: ResolvedGatewayAuth): void {
     );
   }
   if (auth.mode === "password" && !auth.password) {
-    throw new Error("gateway auth mode is password, but no password was configured");
+    throw new Error(
+      "gateway auth mode is password, but no password was configured",
+    );
   }
   if (auth.mode === "trusted-proxy") {
     if (!auth.trustedProxy) {
@@ -306,7 +340,10 @@ export function assertGatewayAuthConfigured(auth: ResolvedGatewayAuth): void {
         "gateway auth mode is trusted-proxy, but no trustedProxy config was provided (set gateway.auth.trustedProxy)",
       );
     }
-    if (!auth.trustedProxy.userHeader || auth.trustedProxy.userHeader.trim() === "") {
+    if (
+      !auth.trustedProxy.userHeader ||
+      auth.trustedProxy.userHeader.trim() === ""
+    ) {
       throw new Error(
         "gateway auth mode is trusted-proxy, but trustedProxy.userHeader is empty (set gateway.auth.trustedProxy.userHeader)",
       );
@@ -342,7 +379,9 @@ function authorizeTrustedProxy(params: {
     }
   }
 
-  const userHeaderValue = headerValue(req.headers[trustedProxyConfig.userHeader.toLowerCase()]);
+  const userHeaderValue = headerValue(
+    req.headers[trustedProxyConfig.userHeader.toLowerCase()],
+  );
   if (!userHeaderValue || userHeaderValue.trim() === "") {
     return { reason: "trusted_proxy_user_missing" };
   }
@@ -357,7 +396,9 @@ function authorizeTrustedProxy(params: {
   return { user };
 }
 
-function shouldAllowTailscaleHeaderAuth(authSurface: GatewayAuthSurface): boolean {
+function shouldAllowTailscaleHeaderAuth(
+  authSurface: GatewayAuthSurface,
+): boolean {
   return authSurface === "ws-control-ui";
 }
 
@@ -401,9 +442,14 @@ export async function authorizeGatewayConnect(
   const limiter = params.rateLimiter;
   const ip =
     params.clientIp ??
-    resolveRequestClientIp(req, trustedProxies, params.allowRealIpFallback === true) ??
+    resolveRequestClientIp(
+      req,
+      trustedProxies,
+      params.allowRealIpFallback === true,
+    ) ??
     req?.socket?.remoteAddress;
-  const rateLimitScope = params.rateLimitScope ?? AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET;
+  const rateLimitScope =
+    params.rateLimitScope ?? AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET;
   if (limiter) {
     const rlCheck: RateLimitCheckResult = limiter.check(ip, rateLimitScope);
     if (!rlCheck.allowed) {

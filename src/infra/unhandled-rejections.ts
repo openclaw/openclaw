@@ -13,7 +13,11 @@ const FATAL_ERROR_CODES = new Set([
   "ERR_WORKER_INITIALIZATION_FAILED",
 ]);
 
-const CONFIG_ERROR_CODES = new Set(["INVALID_CONFIG", "MISSING_API_KEY", "MISSING_CREDENTIALS"]);
+const CONFIG_ERROR_CODES = new Set([
+  "INVALID_CONFIG",
+  "MISSING_API_KEY",
+  "MISSING_CREDENTIALS",
+]);
 
 // Network error codes that indicate transient failures (shouldn't crash the gateway)
 const TRANSIENT_NETWORK_CODES = new Set([
@@ -147,7 +151,8 @@ export function isAbortError(err: unknown): boolean {
     return true;
   }
   // Check for "This operation was aborted" message from Node's undici
-  const message = "message" in err && typeof err.message === "string" ? err.message : "";
+  const message =
+    "message" in err && typeof err.message === "string" ? err.message : "";
   if (message === "This operation was aborted") {
     return true;
   }
@@ -183,7 +188,10 @@ export function isTransientNetworkError(err: unknown): boolean {
       return true;
     }
 
-    if (candidate instanceof TypeError && candidate.message === "fetch failed") {
+    if (
+      candidate instanceof TypeError &&
+      candidate.message === "fetch failed"
+    ) {
       return true;
     }
 
@@ -191,7 +199,8 @@ export function isTransientNetworkError(err: unknown): boolean {
       continue;
     }
     const rawMessage = (candidate as { message?: unknown }).message;
-    const message = typeof rawMessage === "string" ? rawMessage.toLowerCase().trim() : "";
+    const message =
+      typeof rawMessage === "string" ? rawMessage.toLowerCase().trim() : "";
     if (!message) {
       continue;
     }
@@ -201,7 +210,11 @@ export function isTransientNetworkError(err: unknown): boolean {
     if (message === "fetch failed") {
       return true;
     }
-    if (TRANSIENT_NETWORK_MESSAGE_SNIPPETS.some((snippet) => message.includes(snippet))) {
+    if (
+      TRANSIENT_NETWORK_MESSAGE_SNIPPETS.some((snippet) =>
+        message.includes(snippet),
+      )
+    ) {
       return true;
     }
   }
@@ -209,7 +222,9 @@ export function isTransientNetworkError(err: unknown): boolean {
   return false;
 }
 
-export function registerUnhandledRejectionHandler(handler: UnhandledRejectionHandler): () => void {
+export function registerUnhandledRejectionHandler(
+  handler: UnhandledRejectionHandler,
+): () => void {
   handlers.add(handler);
   return () => {
     handlers.delete(handler);
@@ -241,18 +256,27 @@ export function installUnhandledRejectionHandler(): void {
     // AbortError is typically an intentional cancellation (e.g., during shutdown)
     // Log it but don't crash - these are expected during graceful shutdown
     if (isAbortError(reason)) {
-      console.warn("[openclaw] Suppressed AbortError:", formatUncaughtError(reason));
+      console.warn(
+        "[openclaw] Suppressed AbortError:",
+        formatUncaughtError(reason),
+      );
       return;
     }
 
     if (isFatalError(reason)) {
-      console.error("[openclaw] FATAL unhandled rejection:", formatUncaughtError(reason));
+      console.error(
+        "[openclaw] FATAL unhandled rejection:",
+        formatUncaughtError(reason),
+      );
       process.exit(1);
       return;
     }
 
     if (isConfigError(reason)) {
-      console.error("[openclaw] CONFIGURATION ERROR - requires fix:", formatUncaughtError(reason));
+      console.error(
+        "[openclaw] CONFIGURATION ERROR - requires fix:",
+        formatUncaughtError(reason),
+      );
       process.exit(1);
       return;
     }
@@ -265,7 +289,10 @@ export function installUnhandledRejectionHandler(): void {
       return;
     }
 
-    console.error("[openclaw] Unhandled promise rejection:", formatUncaughtError(reason));
+    console.error(
+      "[openclaw] Unhandled promise rejection:",
+      formatUncaughtError(reason),
+    );
     process.exit(1);
   });
 }

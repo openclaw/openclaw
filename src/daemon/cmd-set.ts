@@ -2,12 +2,18 @@ export type CmdSetAssignment = { key: string; value: string };
 
 export function assertNoCmdLineBreak(value: string, field: string): void {
   if (/[\r\n]/.test(value)) {
-    throw new Error(`${field} cannot contain CR or LF in Windows task scripts.`);
+    throw new Error(
+      `${field} cannot contain CR or LF in Windows task scripts.`,
+    );
   }
 }
 
 function escapeCmdSetAssignmentComponent(value: string): string {
-  return value.replace(/\^/g, "^^").replace(/%/g, "%%").replace(/!/g, "^!").replace(/"/g, '^"');
+  return value
+    .replace(/\^/g, "^^")
+    .replace(/%/g, "%%")
+    .replace(/!/g, "^!")
+    .replace(/"/g, '^"');
 }
 
 function unescapeCmdSetAssignmentComponent(value: string): string {

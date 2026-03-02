@@ -5,7 +5,10 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.js";
 import { buildTestCtx } from "./test-ctx.js";
-import { createAcpSessionMeta, createAcpTestConfig } from "./test-fixtures/acp-runtime.js";
+import {
+  createAcpSessionMeta,
+  createAcpTestConfig,
+} from "./test-fixtures/acp-runtime.js";
 
 const managerMocks = vi.hoisted(() => ({
   resolveSession: vi.fn(),
@@ -17,14 +20,19 @@ const managerMocks = vi.hoisted(() => ({
 }));
 
 const policyMocks = vi.hoisted(() => ({
-  resolveAcpDispatchPolicyError: vi.fn<(cfg: OpenClawConfig) => AcpRuntimeError | null>(() => null),
-  resolveAcpAgentPolicyError: vi.fn<(cfg: OpenClawConfig, agent: string) => AcpRuntimeError | null>(
-    () => null,
-  ),
+  resolveAcpDispatchPolicyError: vi.fn<
+    (cfg: OpenClawConfig) => AcpRuntimeError | null
+  >(() => null),
+  resolveAcpAgentPolicyError: vi.fn<
+    (cfg: OpenClawConfig, agent: string) => AcpRuntimeError | null
+  >(() => null),
 }));
 
 const routeMocks = vi.hoisted(() => ({
-  routeReply: vi.fn(async (_params: unknown) => ({ ok: true, messageId: "mock" })),
+  routeReply: vi.fn(async (_params: unknown) => ({
+    ok: true,
+    messageId: "mock",
+  })),
 }));
 
 const messageActionMocks = vi.hoisted(() => ({
@@ -41,12 +49,17 @@ const ttsMocks = vi.hoisted(() => ({
 
 const sessionMetaMocks = vi.hoisted(() => ({
   readAcpSessionEntry: vi.fn<
-    (params: { sessionKey: string; cfg?: OpenClawConfig }) => AcpSessionStoreEntry | null
+    (params: {
+      sessionKey: string;
+      cfg?: OpenClawConfig;
+    }) => AcpSessionStoreEntry | null
   >(() => null),
 }));
 
 const bindingServiceMocks = vi.hoisted(() => ({
-  listBySession: vi.fn<(sessionKey: string) => SessionBindingRecord[]>(() => []),
+  listBySession: vi.fn<(sessionKey: string) => SessionBindingRecord[]>(
+    () => [],
+  ),
 }));
 
 vi.mock("../../acp/control-plane/manager.js", () => ({
@@ -65,11 +78,13 @@ vi.mock("./route-reply.js", () => ({
 }));
 
 vi.mock("../../infra/outbound/message-action-runner.js", () => ({
-  runMessageAction: (params: unknown) => messageActionMocks.runMessageAction(params),
+  runMessageAction: (params: unknown) =>
+    messageActionMocks.runMessageAction(params),
 }));
 
 vi.mock("../../tts/tts.js", () => ({
-  maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
+  maybeApplyTtsToPayload: (params: unknown) =>
+    ttsMocks.maybeApplyTtsToPayload(params),
   resolveTtsConfig: (cfg: OpenClawConfig) => ttsMocks.resolveTtsConfig(cfg),
 }));
 
@@ -80,7 +95,8 @@ vi.mock("../../acp/runtime/session-meta.js", () => ({
 
 vi.mock("../../infra/outbound/session-binding-service.js", () => ({
   getSessionBindingService: () => ({
-    listBySession: (sessionKey: string) => bindingServiceMocks.listBySession(sessionKey),
+    listBySession: (sessionKey: string) =>
+      bindingServiceMocks.listBySession(sessionKey),
   }),
 }));
 
@@ -219,7 +235,9 @@ describe("tryDispatchAcpReply", () => {
     routeMocks.routeReply.mockReset();
     routeMocks.routeReply.mockResolvedValue({ ok: true, messageId: "mock" });
     messageActionMocks.runMessageAction.mockReset();
-    messageActionMocks.runMessageAction.mockResolvedValue({ ok: true as const });
+    messageActionMocks.runMessageAction.mockResolvedValue({
+      ok: true as const,
+    });
     ttsMocks.maybeApplyTtsToPayload.mockClear();
     ttsMocks.resolveTtsConfig.mockReset();
     ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
@@ -233,7 +251,11 @@ describe("tryDispatchAcpReply", () => {
     setReadyAcpResolution();
     managerMocks.runTurn.mockImplementation(
       async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
-        await onEvent({ type: "text_delta", text: "hello", tag: "agent_message_chunk" });
+        await onEvent({
+          type: "text_delta",
+          text: "hello",
+          tag: "agent_message_chunk",
+        });
         await onEvent({ type: "done" });
       },
     );
@@ -258,7 +280,10 @@ describe("tryDispatchAcpReply", () => {
   it("edits ACP tool lifecycle updates in place when supported", async () => {
     setReadyAcpResolution();
     mockToolLifecycleTurn("call-1");
-    routeMocks.routeReply.mockResolvedValueOnce({ ok: true, messageId: "tool-msg-1" });
+    routeMocks.routeReply.mockResolvedValueOnce({
+      ok: true,
+      messageId: "tool-msg-1",
+    });
 
     const { dispatcher } = createDispatcher();
     await runDispatch({
@@ -285,7 +310,9 @@ describe("tryDispatchAcpReply", () => {
     routeMocks.routeReply
       .mockResolvedValueOnce({ ok: true, messageId: "tool-msg-2" })
       .mockResolvedValueOnce({ ok: true, messageId: "tool-msg-2-fallback" });
-    messageActionMocks.runMessageAction.mockRejectedValueOnce(new Error("edit unsupported"));
+    messageActionMocks.runMessageAction.mockRejectedValueOnce(
+      new Error("edit unsupported"),
+    );
 
     const { dispatcher } = createDispatcher();
     await runDispatch({
@@ -356,7 +383,10 @@ describe("tryDispatchAcpReply", () => {
   it("surfaces ACP policy errors as final error replies", async () => {
     setReadyAcpResolution();
     policyMocks.resolveAcpDispatchPolicyError.mockReturnValue(
-      new AcpRuntimeError("ACP_DISPATCH_DISABLED", "ACP dispatch is disabled by policy."),
+      new AcpRuntimeError(
+        "ACP_DISPATCH_DISABLED",
+        "ACP dispatch is disabled by policy.",
+      ),
     );
     const { dispatcher } = createDispatcher();
 

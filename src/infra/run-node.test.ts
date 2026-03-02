@@ -29,14 +29,20 @@ describe("run-node script", () => {
           if (cmd === "pnpm") {
             fsSync.writeFileSync(argsPath, args.join(" "), "utf-8");
             if (!args.includes("--no-clean")) {
-              fsSync.rmSync(path.join(tmp, "dist", "control-ui"), { recursive: true, force: true });
+              fsSync.rmSync(path.join(tmp, "dist", "control-ui"), {
+                recursive: true,
+                force: true,
+              });
             }
           }
           if (cmd === process.execPath) {
             nodeCalls.push([cmd, ...args]);
           }
           return {
-            on: (event: string, cb: (code: number | null, signal: string | null) => void) => {
+            on: (
+              event: string,
+              cb: (code: number | null, signal: string | null) => void,
+            ) => {
               if (event === "exit") {
                 queueMicrotask(() => cb(0, null));
               }
@@ -60,9 +66,15 @@ describe("run-node script", () => {
         });
 
         expect(exitCode).toBe(0);
-        await expect(fs.readFile(argsPath, "utf-8")).resolves.toContain("exec tsdown --no-clean");
-        await expect(fs.readFile(indexPath, "utf-8")).resolves.toContain("sentinel");
-        expect(nodeCalls).toEqual([[process.execPath, "openclaw.mjs", "--version"]]);
+        await expect(fs.readFile(argsPath, "utf-8")).resolves.toContain(
+          "exec tsdown --no-clean",
+        );
+        await expect(fs.readFile(indexPath, "utf-8")).resolves.toContain(
+          "sentinel",
+        );
+        expect(nodeCalls).toEqual([
+          [process.execPath, "openclaw.mjs", "--version"],
+        ]);
       });
     },
   );

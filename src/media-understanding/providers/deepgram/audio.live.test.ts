@@ -15,7 +15,10 @@ const LIVE =
 
 const describeLive = LIVE && DEEPGRAM_KEY ? describe : describe.skip;
 
-async function fetchSampleBuffer(url: string, timeoutMs: number): Promise<Buffer> {
+async function fetchSampleBuffer(
+  url: string,
+  timeoutMs: number,
+): Promise<Buffer> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), Math.max(1, timeoutMs));
   try {

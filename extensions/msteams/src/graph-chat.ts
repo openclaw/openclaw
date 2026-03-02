@@ -39,7 +39,8 @@ export function buildTeamsFileInfoCard(file: DriveItemProperties): {
 
   // Extract file extension from filename
   const lastDot = file.name.lastIndexOf(".");
-  const fileType = lastDot >= 0 ? file.name.slice(lastDot + 1).toLowerCase() : "";
+  const fileType =
+    lastDot >= 0 ? file.name.slice(lastDot + 1).toLowerCase() : "";
 
   return {
     contentType: "application/vnd.microsoft.teams.card.file.info",

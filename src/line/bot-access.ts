@@ -21,8 +21,12 @@ function normalizeAllowEntry(value: string | number): string {
   return trimmed.replace(/^line:(?:user:)?/i, "");
 }
 
-export const normalizeAllowFrom = (list?: Array<string | number>): NormalizedAllowFrom => {
-  const entries = (list ?? []).map((value) => normalizeAllowEntry(value)).filter(Boolean);
+export const normalizeAllowFrom = (
+  list?: Array<string | number>,
+): NormalizedAllowFrom => {
+  const entries = (list ?? [])
+    .map((value) => normalizeAllowEntry(value))
+    .filter(Boolean);
   const hasWildcard = entries.includes("*");
   return {
     entries,

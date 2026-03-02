@@ -16,7 +16,10 @@ describe("log file size cap", () => {
   let logPath = "";
 
   beforeEach(() => {
-    logPath = path.join(os.tmpdir(), `openclaw-log-cap-${crypto.randomUUID()}.log`);
+    logPath = path.join(
+      os.tmpdir(),
+      `openclaw-log-cap-${crypto.randomUUID()}.log`,
+    );
     resetLogger();
     setLoggerOverride(null);
   });
@@ -34,7 +37,9 @@ describe("log file size cap", () => {
 
   it("defaults maxFileBytes to 500 MB when unset", () => {
     setLoggerOverride({ level: "info", file: logPath });
-    expect(getResolvedLoggerSettings().maxFileBytes).toBe(DEFAULT_MAX_FILE_BYTES);
+    expect(getResolvedLoggerSettings().maxFileBytes).toBe(
+      DEFAULT_MAX_FILE_BYTES,
+    );
   });
 
   it("uses configured maxFileBytes", () => {

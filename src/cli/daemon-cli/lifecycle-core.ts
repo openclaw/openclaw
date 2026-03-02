@@ -31,7 +31,9 @@ async function maybeAugmentSystemdHints(hints: string[]): Promise<string[]> {
   if (process.platform !== "linux") {
     return hints;
   }
-  const systemdAvailable = await isSystemdUserServiceAvailable().catch(() => false);
+  const systemdAvailable = await isSystemdUserServiceAvailable().catch(
+    () => false,
+  );
   if (systemdAvailable) {
     return hints;
   }
@@ -74,7 +76,9 @@ async function handleServiceNotLoaded(params: {
     service: buildDaemonServiceSnapshot(params.service, params.loaded),
   });
   if (!params.json) {
-    defaultRuntime.log(`${params.serviceNoun} service ${params.service.notLoadedText}.`);
+    defaultRuntime.log(
+      `${params.serviceNoun} service ${params.service.notLoadedText}.`,
+    );
     for (const hint of hints) {
       defaultRuntime.log(`Start with: ${hint}`);
     }
@@ -219,7 +223,9 @@ export async function runServiceStop(params: {
       service: buildDaemonServiceSnapshot(params.service, loaded),
     });
     if (!json) {
-      defaultRuntime.log(`${params.serviceNoun} service ${params.service.notLoadedText}.`);
+      defaultRuntime.log(
+        `${params.serviceNoun} service ${params.service.notLoadedText}.`,
+      );
     }
     return;
   }

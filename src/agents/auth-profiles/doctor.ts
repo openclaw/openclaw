@@ -38,7 +38,9 @@ export function formatAuthDoctorHint(params: {
     "Doctor hint (for GitHub issue):",
     `- provider: ${providerKey}`,
     `- config: ${legacyProfileId}${
-      cfgProvider || cfgMode ? ` (provider=${cfgProvider ?? "?"}, mode=${cfgMode ?? "?"})` : ""
+      cfgProvider || cfgMode
+        ? ` (provider=${cfgProvider ?? "?"}, mode=${cfgMode ?? "?"})`
+        : ""
     }`,
     `- auth store oauth profiles: ${storeOauthProfiles || "(none)"}`,
     `- suggested profile: ${suggested}`,

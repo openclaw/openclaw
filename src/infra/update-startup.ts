@@ -8,8 +8,15 @@ import { runCommandWithTimeout } from "../process/exec.js";
 import { VERSION } from "../version.js";
 import { writeJsonAtomic } from "./json-files.js";
 import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
-import { normalizeUpdateChannel, DEFAULT_PACKAGE_CHANNEL } from "./update-channels.js";
-import { compareSemverStrings, resolveNpmChannelTag, checkUpdateStatus } from "./update-check.js";
+import {
+  normalizeUpdateChannel,
+  DEFAULT_PACKAGE_CHANNEL,
+} from "./update-channels.js";
+import {
+  compareSemverStrings,
+  resolveNpmChannelTag,
+  checkUpdateStatus,
+} from "./update-check.js";
 
 type UpdateCheckState = {
   lastCheckedAt?: string;
@@ -76,18 +83,23 @@ function shouldSkipCheck(allowInTests: boolean): boolean {
   return false;
 }
 
-function resolveAutoUpdatePolicy(cfg: ReturnType<typeof loadConfig>): AutoUpdatePolicy {
+function resolveAutoUpdatePolicy(
+  cfg: ReturnType<typeof loadConfig>,
+): AutoUpdatePolicy {
   const auto = cfg.update?.auto;
   const stableDelayHours =
-    typeof auto?.stableDelayHours === "number" && Number.isFinite(auto.stableDelayHours)
+    typeof auto?.stableDelayHours === "number" &&
+    Number.isFinite(auto.stableDelayHours)
       ? Math.max(0, auto.stableDelayHours)
       : AUTO_STABLE_DELAY_HOURS_DEFAULT;
   const stableJitterHours =
-    typeof auto?.stableJitterHours === "number" && Number.isFinite(auto.stableJitterHours)
+    typeof auto?.stableJitterHours === "number" &&
+    Number.isFinite(auto.stableJitterHours)
       ? Math.max(0, auto.stableJitterHours)
       : AUTO_STABLE_JITTER_HOURS_DEFAULT;
   const betaCheckIntervalHours =
-    typeof auto?.betaCheckIntervalHours === "number" && Number.isFinite(auto.betaCheckIntervalHours)
+    typeof auto?.betaCheckIntervalHours === "number" &&
+    Number.isFinite(auto.betaCheckIntervalHours)
       ? Math.max(0.25, auto.betaCheckIntervalHours)
       : AUTO_BETA_CHECK_INTERVAL_HOURS_DEFAULT;
 
@@ -100,13 +112,17 @@ function resolveAutoUpdatePolicy(cfg: ReturnType<typeof loadConfig>): AutoUpdate
 }
 
 function resolveCheckIntervalMs(cfg: ReturnType<typeof loadConfig>): number {
-  const channel = normalizeUpdateChannel(cfg.update?.channel) ?? DEFAULT_PACKAGE_CHANNEL;
+  const channel =
+    normalizeUpdateChannel(cfg.update?.channel) ?? DEFAULT_PACKAGE_CHANNEL;
   const auto = resolveAutoUpdatePolicy(cfg);
   if (!auto.enabled) {
     return UPDATE_CHECK_INTERVAL_MS;
   }
   if (channel === "beta") {
-    return Math.max(ONE_HOUR_MS / 4, Math.floor(auto.betaCheckIntervalHours * ONE_HOUR_MS));
+    return Math.max(
+      ONE_HOUR_MS / 4,
+      Math.floor(auto.betaCheckIntervalHours * ONE_HOUR_MS),
+    );
   }
   if (channel === "stable") {
     return ONE_HOUR_MS;
@@ -124,11 +140,17 @@ async function readState(statePath: string): Promise<UpdateCheckState> {
   }
 }
 
-async function writeState(statePath: string, state: UpdateCheckState): Promise<void> {
+async function writeState(
+  statePath: string,
+  state: UpdateCheckState,
+): Promise<void> {
   await writeJsonAtomic(statePath, state);
 }
 
-function sameUpdateAvailable(a: UpdateAvailable | null, b: UpdateAvailable | null): boolean {
+function sameUpdateAvailable(
+  a: UpdateAvailable | null,
+  b: UpdateAvailable | null,
+): boolean {
   if (a === b) {
     return true;
   }
@@ -153,7 +175,9 @@ function setUpdateAvailableCache(params: {
   params.onUpdateAvailableChange?.(params.next);
 }
 
-function resolvePersistedUpdateAvailable(state: UpdateCheckState): UpdateAvailable | null {
+function resolvePersistedUpdateAvailable(
+  state: UpdateCheckState,
+): UpdateAvailable | null {
   const latestVersion = state.lastAvailableVersion?.trim();
   if (!latestVersion) {
     return null;
@@ -196,7 +220,8 @@ function resolveStableAutoApplyAtMs(params: {
   stableJitterHours: number;
 }): number {
   if (!params.nextState.autoInstallId) {
-    params.nextState.autoInstallId = params.state.autoInstallId?.trim() || randomUUID();
+    params.nextState.autoInstallId =
+      params.state.autoInstallId?.trim() || randomUUID();
   }
   const installId = params.nextState.autoInstallId;
   const matchesExisting =
@@ -324,7 +349,9 @@ export async function runGatewayUpdateCheck(params: {
   const statePath = path.join(resolveStateDir(), UPDATE_CHECK_FILENAME);
   const state = await readState(statePath);
   const now = Date.now();
-  const lastCheckedAt = state.lastCheckedAt ? Date.parse(state.lastCheckedAt) : null;
+  const lastCheckedAt = state.lastCheckedAt
+    ? Date.parse(state.lastCheckedAt)
+    : null;
   if (shouldRunUpdateHints) {
     const persistedAvailable = resolvePersistedUpdateAvailable(state);
     setUpdateAvailableCache({
@@ -373,7 +400,9 @@ export async function runGatewayUpdateCheck(params: {
     return;
   }
 
-  const channel = normalizeUpdateChannel(params.cfg.update?.channel) ?? DEFAULT_PACKAGE_CHANNEL;
+  const channel =
+    normalizeUpdateChannel(params.cfg.update?.channel) ??
+    DEFAULT_PACKAGE_CHANNEL;
   const resolved = await resolveNpmChannelTag({ channel, timeoutMs: 2500 });
   const tag = resolved.tag;
   if (!resolved.version) {
@@ -397,7 +426,8 @@ export async function runGatewayUpdateCheck(params: {
     nextState.lastAvailableVersion = resolved.version;
     nextState.lastAvailableTag = tag;
     const shouldNotify =
-      state.lastNotifiedVersion !== resolved.version || state.lastNotifiedTag !== tag;
+      state.lastNotifiedVersion !== resolved.version ||
+      state.lastNotifiedTag !== tag;
     if (shouldRunUpdateHints && shouldNotify) {
       params.log.info(
         `update available (${tag}): v${resolved.version} (current v${VERSION}). Run: ${formatCliCommand("openclaw update")}`,
@@ -410,9 +440,14 @@ export async function runGatewayUpdateCheck(params: {
       const runAuto = params.runAutoUpdate ?? runAutoUpdateCommand;
       const attemptIntervalMs =
         channel === "beta"
-          ? Math.max(ONE_HOUR_MS / 4, Math.floor(auto.betaCheckIntervalHours * ONE_HOUR_MS))
+          ? Math.max(
+              ONE_HOUR_MS / 4,
+              Math.floor(auto.betaCheckIntervalHours * ONE_HOUR_MS),
+            )
           : ONE_HOUR_MS;
-      const lastAttemptAt = state.autoLastAttemptAt ? Date.parse(state.autoLastAttemptAt) : null;
+      const lastAttemptAt = state.autoLastAttemptAt
+        ? Date.parse(state.autoLastAttemptAt)
+        : null;
       const recentAttemptForSameVersion =
         state.autoLastAttemptVersion === resolved.version &&
         lastAttemptAt != null &&
@@ -438,7 +473,9 @@ export async function runGatewayUpdateCheck(params: {
         params.log.info("auto-update deferred (stable rollout window active)", {
           version: resolved.version,
           tag,
-          applyAfter: applyAfterMs ? new Date(applyAfterMs).toISOString() : undefined,
+          applyAfter: applyAfterMs
+            ? new Date(applyAfterMs).toISOString()
+            : undefined,
         });
       } else if (recentAttemptForSameVersion) {
         params.log.info("auto-update deferred (recent attempt exists)", {

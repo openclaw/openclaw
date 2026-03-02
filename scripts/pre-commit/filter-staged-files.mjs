@@ -16,12 +16,24 @@ const rawArgs = process.argv.slice(3);
 const files = rawArgs[0] === "--" ? rawArgs.slice(1) : rawArgs;
 
 if (mode !== "lint" && mode !== "format") {
-  process.stderr.write("usage: filter-staged-files.mjs <lint|format> -- <files...>\n");
+  process.stderr.write(
+    "usage: filter-staged-files.mjs <lint|format> -- <files...>\n",
+  );
   process.exit(2);
 }
 
 const lintExts = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"]);
-const formatExts = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".json", ".md", ".mdx"]);
+const formatExts = new Set([
+  ".ts",
+  ".tsx",
+  ".js",
+  ".jsx",
+  ".mjs",
+  ".cjs",
+  ".json",
+  ".md",
+  ".mdx",
+]);
 
 const shouldSelect = (filePath) => {
   const ext = path.extname(filePath).toLowerCase();

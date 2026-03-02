@@ -57,7 +57,10 @@ function buildAgentCommandInput(params: {
   };
 }
 
-function writeAssistantRoleChunk(res: ServerResponse, params: { runId: string; model: string }) {
+function writeAssistantRoleChunk(
+  res: ServerResponse,
+  params: { runId: string; model: string },
+) {
   writeSse(res, {
     id: params.runId,
     object: "chat.completion.chunk",
@@ -69,7 +72,12 @@ function writeAssistantRoleChunk(res: ServerResponse, params: { runId: string; m
 
 function writeAssistantContentChunk(
   res: ServerResponse,
-  params: { runId: string; model: string; content: string; finishReason: "stop" | null },
+  params: {
+    runId: string;
+    model: string;
+    content: string;
+    finishReason: "stop" | null;
+  },
 ) {
   writeSse(res, {
     id: params.runId,
@@ -144,7 +152,11 @@ function buildAgentPrompt(messagesUnknown: unknown): {
     }
 
     const normalizedRole = role === "function" ? "tool" : role;
-    if (normalizedRole !== "user" && normalizedRole !== "assistant" && normalizedRole !== "tool") {
+    if (
+      normalizedRole !== "user" &&
+      normalizedRole !== "assistant" &&
+      normalizedRole !== "tool"
+    ) {
       continue;
     }
 
@@ -168,7 +180,8 @@ function buildAgentPrompt(messagesUnknown: unknown): {
 
   return {
     message,
-    extraSystemPrompt: systemParts.length > 0 ? systemParts.join("\n\n") : undefined,
+    extraSystemPrompt:
+      systemParts.length > 0 ? systemParts.join("\n\n") : undefined,
   };
 }
 
@@ -188,7 +201,8 @@ function coerceRequest(val: unknown): OpenAiChatCompletionRequest {
 }
 
 function resolveAgentResponseText(result: unknown): string {
-  const payloads = (result as { payloads?: Array<{ text?: string }> } | null)?.payloads;
+  const payloads = (result as { payloads?: Array<{ text?: string }> } | null)
+    ?.payloads;
   if (!Array.isArray(payloads) || payloads.length === 0) {
     return "No response from OpenClaw.";
   }
@@ -350,7 +364,9 @@ export async function handleOpenAiHttpRequest(
         });
       }
     } catch (err) {
-      logWarn(`openai-compat: streaming chat completion failed: ${String(err)}`);
+      logWarn(
+        `openai-compat: streaming chat completion failed: ${String(err)}`,
+      );
       if (closed) {
         return;
       }

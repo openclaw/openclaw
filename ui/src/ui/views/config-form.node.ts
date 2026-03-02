@@ -9,7 +9,14 @@ import {
   type JsonSchema,
 } from "./config-form.shared.ts";
 
-const META_KEYS = new Set(["title", "description", "default", "nullable", "tags", "x-tags"]);
+const META_KEYS = new Set([
+  "title",
+  "description",
+  "default",
+  "nullable",
+  "tags",
+  "x-tags",
+]);
 
 function isAnySchema(schema: JsonSchema): boolean {
   const keys = Object.keys(schema ?? {}).filter((key) => !META_KEYS.has(key));
@@ -76,7 +83,9 @@ const icons = {
       stroke-linejoin="round"
     >
       <polyline points="3 6 5 6 21 6"></polyline>
-      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+      <path
+        d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"
+      ></path>
     </svg>
   `,
   edit: html`
@@ -88,7 +97,9 @@ const icons = {
       stroke-linecap="round"
       stroke-linejoin="round"
     >
-      <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+      <path
+        d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"
+      ></path>
       <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
     </svg>
   `,
@@ -105,22 +116,29 @@ export type ConfigSearchCriteria = {
   tags: string[];
 };
 
-function hasSearchCriteria(criteria: ConfigSearchCriteria | undefined): boolean {
-  return Boolean(criteria && (criteria.text.length > 0 || criteria.tags.length > 0));
+function hasSearchCriteria(
+  criteria: ConfigSearchCriteria | undefined,
+): boolean {
+  return Boolean(
+    criteria && (criteria.text.length > 0 || criteria.tags.length > 0),
+  );
 }
 
 export function parseConfigSearchQuery(query: string): ConfigSearchCriteria {
   const tags: string[] = [];
   const seen = new Set<string>();
   const raw = query.trim();
-  const stripped = raw.replace(/(^|\s)tag:([^\s]+)/gi, (_, leading: string, token: string) => {
-    const normalized = token.trim().toLowerCase();
-    if (normalized && !seen.has(normalized)) {
-      seen.add(normalized);
-      tags.push(normalized);
-    }
-    return leading;
-  });
+  const stripped = raw.replace(
+    /(^|\s)tag:([^\s]+)/gi,
+    (_, leading: string, token: string) => {
+      const normalized = token.trim().toLowerCase();
+      if (normalized && !seen.has(normalized)) {
+        seen.add(normalized);
+        tags.push(normalized);
+      }
+      return leading;
+    },
+  );
   return {
     text: stripped.trim().toLowerCase(),
     tags,
@@ -168,7 +186,10 @@ function resolveFieldMeta(
   };
 }
 
-function matchesText(text: string, candidates: Array<string | undefined>): boolean {
+function matchesText(
+  text: string,
+  candidates: Array<string | undefined>,
+): boolean {
   if (!text) {
     return true;
   }
@@ -285,11 +306,17 @@ export function matchesNodeSearch(params: {
   }
 
   if (type === "array") {
-    const itemsSchema = Array.isArray(schema.items) ? schema.items[0] : schema.items;
+    const itemsSchema = Array.isArray(schema.items)
+      ? schema.items[0]
+      : schema.items;
     if (!itemsSchema) {
       return false;
     }
-    const arr = Array.isArray(value) ? value : Array.isArray(schema.default) ? schema.default : [];
+    const arr = Array.isArray(value)
+      ? value
+      : Array.isArray(schema.default)
+        ? schema.default
+        : [];
     if (arr.length === 0) {
       return false;
     }
@@ -358,7 +385,11 @@ export function renderNode(params: {
   if (schema.anyOf || schema.oneOf) {
     const variants = schema.anyOf ?? schema.oneOf ?? [];
     const nonNull = variants.filter(
-      (v) => !(v.type === "null" || (Array.isArray(v.type) && v.type.includes("null"))),
+      (v) =>
+        !(
+          v.type === "null" ||
+          (Array.isArray(v.type) && v.type.includes("null"))
+        ),
     );
 
     if (nonNull.length === 1) {
@@ -383,27 +414,32 @@ export function renderNode(params: {
       const resolvedValue = value ?? schema.default;
       return html`
         <div class="cfg-field">
-          ${showLabel ? html`<label class="cfg-field__label">${label}</label>` : nothing}
+          ${showLabel
+            ? html`<label class="cfg-field__label">${label}</label>`
+            : nothing}
           ${help ? html`<div class="cfg-field__help">${help}</div>` : nothing}
           ${renderTags(tags)}
           <div class="cfg-segmented">
             ${literals.map(
               (lit) => html`
-              <button
-                type="button"
-                class="cfg-segmented__btn ${
-                  // oxlint-disable typescript/no-base-to-string
-                  lit === resolvedValue || String(lit) === String(resolvedValue) ? "active" : ""
-                }"
-                ?disabled=${disabled}
-                @click=${() => onPatch(path, lit)}
-              >
-                ${
-                  // oxlint-disable typescript/no-base-to-string
-                  String(lit)
-                }
-              </button>
-            `,
+                <button
+                  type="button"
+                  class="cfg-segmented__btn ${
+                    // oxlint-disable typescript/no-base-to-string
+                    lit === resolvedValue ||
+                    String(lit) === String(resolvedValue)
+                      ? "active"
+                      : ""
+                  }"
+                  ?disabled=${disabled}
+                  @click=${() => onPatch(path, lit)}
+                >
+                  ${
+                    // oxlint-disable typescript/no-base-to-string
+                    String(lit)
+                  }
+                </button>
+              `,
             )}
           </div>
         </div>
@@ -412,16 +448,26 @@ export function renderNode(params: {
 
     if (allLiterals && literals.length > 5) {
       // Use dropdown for larger sets
-      return renderSelect({ ...params, options: literals, value: value ?? schema.default });
+      return renderSelect({
+        ...params,
+        options: literals,
+        value: value ?? schema.default,
+      });
     }
 
     // Handle mixed primitive types
-    const primitiveTypes = new Set(nonNull.map((variant) => schemaType(variant)).filter(Boolean));
+    const primitiveTypes = new Set(
+      nonNull.map((variant) => schemaType(variant)).filter(Boolean),
+    );
     const normalizedTypes = new Set(
       [...primitiveTypes].map((v) => (v === "integer" ? "number" : v)),
     );
 
-    if ([...normalizedTypes].every((v) => ["string", "number", "boolean"].includes(v as string))) {
+    if (
+      [...normalizedTypes].every((v) =>
+        ["string", "number", "boolean"].includes(v as string),
+      )
+    ) {
       const hasString = normalizedTypes.has("string");
       const hasNumber = normalizedTypes.has("number");
       const hasBoolean = normalizedTypes.has("boolean");
@@ -429,7 +475,12 @@ export function renderNode(params: {
       if (hasBoolean && normalizedTypes.size === 1) {
         return renderNode({
           ...params,
-          schema: { ...schema, type: "boolean", anyOf: undefined, oneOf: undefined },
+          schema: {
+            ...schema,
+            type: "boolean",
+            anyOf: undefined,
+            oneOf: undefined,
+          },
         });
       }
 
@@ -449,21 +500,26 @@ export function renderNode(params: {
       const resolvedValue = value ?? schema.default;
       return html`
         <div class="cfg-field">
-          ${showLabel ? html`<label class="cfg-field__label">${label}</label>` : nothing}
+          ${showLabel
+            ? html`<label class="cfg-field__label">${label}</label>`
+            : nothing}
           ${help ? html`<div class="cfg-field__help">${help}</div>` : nothing}
           ${renderTags(tags)}
           <div class="cfg-segmented">
             ${options.map(
               (opt) => html`
-              <button
-                type="button"
-                class="cfg-segmented__btn ${opt === resolvedValue || String(opt) === String(resolvedValue) ? "active" : ""}"
-                ?disabled=${disabled}
-                @click=${() => onPatch(path, opt)}
-              >
-                ${String(opt)}
-              </button>
-            `,
+                <button
+                  type="button"
+                  class="cfg-segmented__btn ${opt === resolvedValue ||
+                  String(opt) === String(resolvedValue)
+                    ? "active"
+                    : ""}"
+                  ?disabled=${disabled}
+                  @click=${() => onPatch(path, opt)}
+                >
+                  ${String(opt)}
+                </button>
+              `,
             )}
           </div>
         </div>
@@ -494,7 +550,9 @@ export function renderNode(params: {
       <label class="cfg-toggle-row ${disabled ? "disabled" : ""}">
         <div class="cfg-toggle-row__content">
           <span class="cfg-toggle-row__label">${label}</span>
-          ${help ? html`<span class="cfg-toggle-row__help">${help}</span>` : nothing}
+          ${help
+            ? html`<span class="cfg-toggle-row__help">${help}</span>`
+            : nothing}
           ${renderTags(tags)}
         </div>
         <div class="cfg-toggle">
@@ -502,7 +560,8 @@ export function renderNode(params: {
             type="checkbox"
             .checked=${displayValue}
             ?disabled=${disabled}
-            @change=${(e: Event) => onPatch(path, (e.target as HTMLInputElement).checked)}
+            @change=${(e: Event) =>
+              onPatch(path, (e.target as HTMLInputElement).checked)}
           />
           <span class="cfg-toggle__track"></span>
         </div>
@@ -524,7 +583,9 @@ export function renderNode(params: {
   return html`
     <div class="cfg-field cfg-field--error">
       <div class="cfg-field__label">${label}</div>
-      <div class="cfg-field__error">Unsupported type: ${type}. Use Raw mode.</div>
+      <div class="cfg-field__error">
+        Unsupported type: ${type}. Use Raw mode.
+      </div>
     </div>
   `;
 }
@@ -545,7 +606,8 @@ function renderTextInput(params: {
   const hint = hintForPath(path, hints);
   const { label, help, tags } = resolveFieldMeta(path, schema, hints);
   const isSensitive =
-    (hint?.sensitive ?? false) && !/^\$\{[^}]*\}$/.test(String(value ?? "").trim());
+    (hint?.sensitive ?? false) &&
+    !/^\$\{[^}]*\}$/.test(String(value ?? "").trim());
   const placeholder =
     hint?.placeholder ??
     // oxlint-disable typescript/no-base-to-string
@@ -558,7 +620,9 @@ function renderTextInput(params: {
 
   return html`
     <div class="cfg-field">
-      ${showLabel ? html`<label class="cfg-field__label">${label}</label>` : nothing}
+      ${showLabel
+        ? html`<label class="cfg-field__label">${label}</label>`
+        : nothing}
       ${help ? html`<div class="cfg-field__help">${help}</div>` : nothing}
       ${renderTags(tags)}
       <div class="cfg-input-wrap">
@@ -589,19 +653,19 @@ function renderTextInput(params: {
             onPatch(path, raw.trim());
           }}
         />
-        ${
-          schema.default !== undefined
-            ? html`
-          <button
-            type="button"
-            class="cfg-input__reset"
-            title="Reset to default"
-            ?disabled=${disabled}
-            @click=${() => onPatch(path, schema.default)}
-          >↺</button>
-        `
-            : nothing
-        }
+        ${schema.default !== undefined
+          ? html`
+              <button
+                type="button"
+                class="cfg-input__reset"
+                title="Reset to default"
+                ?disabled=${disabled}
+                @click=${() => onPatch(path, schema.default)}
+              >
+                ↺
+              </button>
+            `
+          : nothing}
       </div>
     </div>
   `;
@@ -625,7 +689,9 @@ function renderNumberInput(params: {
 
   return html`
     <div class="cfg-field">
-      ${showLabel ? html`<label class="cfg-field__label">${label}</label>` : nothing}
+      ${showLabel
+        ? html`<label class="cfg-field__label">${label}</label>`
+        : nothing}
       ${help ? html`<div class="cfg-field__help">${help}</div>` : nothing}
       ${renderTags(tags)}
       <div class="cfg-number">
@@ -634,7 +700,9 @@ function renderNumberInput(params: {
           class="cfg-number__btn"
           ?disabled=${disabled}
           @click=${() => onPatch(path, numValue - 1)}
-        >−</button>
+        >
+          −
+        </button>
         <input
           type="number"
           class="cfg-number__input"
@@ -651,7 +719,9 @@ function renderNumberInput(params: {
           class="cfg-number__btn"
           ?disabled=${disabled}
           @click=${() => onPatch(path, numValue + 1)}
-        >+</button>
+        >
+          +
+        </button>
       </div>
     </div>
   `;
@@ -679,7 +749,9 @@ function renderSelect(params: {
 
   return html`
     <div class="cfg-field">
-      ${showLabel ? html`<label class="cfg-field__label">${label}</label>` : nothing}
+      ${showLabel
+        ? html`<label class="cfg-field__label">${label}</label>`
+        : nothing}
       ${help ? html`<div class="cfg-field__help">${help}</div>` : nothing}
       ${renderTags(tags)}
       <select
@@ -694,8 +766,8 @@ function renderSelect(params: {
         <option value=${unset}>Select...</option>
         ${options.map(
           (opt, idx) => html`
-          <option value=${String(idx)}>${String(opt)}</option>
-        `,
+            <option value=${String(idx)}>${String(opt)}</option>
+          `,
         )}
       </select>
     </div>
@@ -713,7 +785,16 @@ function renderObject(params: {
   searchCriteria?: ConfigSearchCriteria;
   onPatch: (path: Array<string | number>, value: unknown) => void;
 }): TemplateResult {
-  const { schema, value, path, hints, unsupported, disabled, onPatch, searchCriteria } = params;
+  const {
+    schema,
+    value,
+    path,
+    hints,
+    unsupported,
+    disabled,
+    onPatch,
+    searchCriteria,
+  } = params;
   const showLabel = params.showLabel ?? true;
   const { label, help, tags } = resolveFieldMeta(path, schema, hints);
   const selfMatched =
@@ -757,38 +838,28 @@ function renderObject(params: {
         onPatch,
       }),
     )}
-    ${
-      allowExtra
-        ? renderMapField({
-            schema: additional,
-            value: obj,
-            path,
-            hints,
-            unsupported,
-            disabled,
-            reservedKeys: reserved,
-            searchCriteria: childSearchCriteria,
-            onPatch,
-          })
-        : nothing
-    }
+    ${allowExtra
+      ? renderMapField({
+          schema: additional,
+          value: obj,
+          path,
+          hints,
+          unsupported,
+          disabled,
+          reservedKeys: reserved,
+          searchCriteria: childSearchCriteria,
+          onPatch,
+        })
+      : nothing}
   `;
 
   // For top-level, don't wrap in collapsible
   if (path.length === 1) {
-    return html`
-      <div class="cfg-fields">
-        ${fields}
-      </div>
-    `;
+    return html` <div class="cfg-fields">${fields}</div> `;
   }
 
   if (!showLabel) {
-    return html`
-      <div class="cfg-fields cfg-fields--inline">
-        ${fields}
-      </div>
-    `;
+    return html` <div class="cfg-fields cfg-fields--inline">${fields}</div> `;
   }
 
   // Nested objects get collapsible treatment
@@ -802,9 +873,7 @@ function renderObject(params: {
         <span class="cfg-object__chevron">${icons.chevronDown}</span>
       </summary>
       ${help ? html`<div class="cfg-object__help">${help}</div>` : nothing}
-      <div class="cfg-object__content">
-        ${fields}
-      </div>
+      <div class="cfg-object__content">${fields}</div>
     </details>
   `;
 }
@@ -820,7 +889,16 @@ function renderArray(params: {
   searchCriteria?: ConfigSearchCriteria;
   onPatch: (path: Array<string | number>, value: unknown) => void;
 }): TemplateResult {
-  const { schema, value, path, hints, unsupported, disabled, onPatch, searchCriteria } = params;
+  const {
+    schema,
+    value,
+    path,
+    hints,
+    unsupported,
+    disabled,
+    onPatch,
+    searchCriteria,
+  } = params;
   const showLabel = params.showLabel ?? true;
   const { label, help, tags } = resolveFieldMeta(path, schema, hints);
   const selfMatched =
@@ -829,26 +907,38 @@ function renderArray(params: {
       : false;
   const childSearchCriteria = selfMatched ? undefined : searchCriteria;
 
-  const itemsSchema = Array.isArray(schema.items) ? schema.items[0] : schema.items;
+  const itemsSchema = Array.isArray(schema.items)
+    ? schema.items[0]
+    : schema.items;
   if (!itemsSchema) {
     return html`
       <div class="cfg-field cfg-field--error">
         <div class="cfg-field__label">${label}</div>
-        <div class="cfg-field__error">Unsupported array schema. Use Raw mode.</div>
+        <div class="cfg-field__error">
+          Unsupported array schema. Use Raw mode.
+        </div>
       </div>
     `;
   }
 
-  const arr = Array.isArray(value) ? value : Array.isArray(schema.default) ? schema.default : [];
+  const arr = Array.isArray(value)
+    ? value
+    : Array.isArray(schema.default)
+      ? schema.default
+      : [];
 
   return html`
     <div class="cfg-array">
       <div class="cfg-array__header">
         <div class="cfg-array__title">
-          ${showLabel ? html`<span class="cfg-array__label">${label}</span>` : nothing}
+          ${showLabel
+            ? html`<span class="cfg-array__label">${label}</span>`
+            : nothing}
           ${renderTags(tags)}
         </div>
-        <span class="cfg-array__count">${arr.length} item${arr.length !== 1 ? "s" : ""}</span>
+        <span class="cfg-array__count"
+          >${arr.length} item${arr.length !== 1 ? "s" : ""}</span
+        >
         <button
           type="button"
           class="cfg-array__add"
@@ -863,52 +953,51 @@ function renderArray(params: {
         </button>
       </div>
       ${help ? html`<div class="cfg-array__help">${help}</div>` : nothing}
-
-      ${
-        arr.length === 0
-          ? html`
-              <div class="cfg-array__empty">No items yet. Click "Add" to create one.</div>
-            `
-          : html`
-        <div class="cfg-array__items">
-          ${arr.map(
-            (item, idx) => html`
-            <div class="cfg-array__item">
-              <div class="cfg-array__item-header">
-                <span class="cfg-array__item-index">#${idx + 1}</span>
-                <button
-                  type="button"
-                  class="cfg-array__item-remove"
-                  title="Remove item"
-                  ?disabled=${disabled}
-                  @click=${() => {
-                    const next = [...arr];
-                    next.splice(idx, 1);
-                    onPatch(path, next);
-                  }}
-                >
-                  ${icons.trash}
-                </button>
-              </div>
-              <div class="cfg-array__item-content">
-                ${renderNode({
-                  schema: itemsSchema,
-                  value: item,
-                  path: [...path, idx],
-                  hints,
-                  unsupported,
-                  disabled,
-                  searchCriteria: childSearchCriteria,
-                  showLabel: false,
-                  onPatch,
-                })}
-              </div>
+      ${arr.length === 0
+        ? html`
+            <div class="cfg-array__empty">
+              No items yet. Click "Add" to create one.
             </div>
-          `,
-          )}
-        </div>
-      `
-      }
+          `
+        : html`
+            <div class="cfg-array__items">
+              ${arr.map(
+                (item, idx) => html`
+                  <div class="cfg-array__item">
+                    <div class="cfg-array__item-header">
+                      <span class="cfg-array__item-index">#${idx + 1}</span>
+                      <button
+                        type="button"
+                        class="cfg-array__item-remove"
+                        title="Remove item"
+                        ?disabled=${disabled}
+                        @click=${() => {
+                          const next = [...arr];
+                          next.splice(idx, 1);
+                          onPatch(path, next);
+                        }}
+                      >
+                        ${icons.trash}
+                      </button>
+                    </div>
+                    <div class="cfg-array__item-content">
+                      ${renderNode({
+                        schema: itemsSchema,
+                        value: item,
+                        path: [...path, idx],
+                        hints,
+                        unsupported,
+                        disabled,
+                        searchCriteria: childSearchCriteria,
+                        showLabel: false,
+                        onPatch,
+                      })}
+                    </div>
+                  </div>
+                `,
+              )}
+            </div>
+          `}
     </div>
   `;
 }
@@ -936,7 +1025,9 @@ function renderMapField(params: {
     searchCriteria,
   } = params;
   const anySchema = isAnySchema(schema);
-  const entries = Object.entries(value ?? {}).filter(([key]) => !reservedKeys.has(key));
+  const entries = Object.entries(value ?? {}).filter(
+    ([key]) => !reservedKeys.has(key),
+  );
   const visibleEntries =
     searchCriteria && hasSearchCriteria(searchCriteria)
       ? entries.filter(([key, entryValue]) =>
@@ -975,99 +1066,95 @@ function renderMapField(params: {
         </button>
       </div>
 
-      ${
-        visibleEntries.length === 0
-          ? html`
-              <div class="cfg-map__empty">No custom entries.</div>
-            `
-          : html`
-        <div class="cfg-map__items">
-          ${visibleEntries.map(([key, entryValue]) => {
-            const valuePath = [...path, key];
-            const fallback = jsonValue(entryValue);
-            return html`
-              <div class="cfg-map__item">
-                <div class="cfg-map__item-header">
-                  <div class="cfg-map__item-key">
-                    <input
-                      type="text"
-                      class="cfg-input cfg-input--sm"
-                      placeholder="Key"
-                      .value=${key}
-                      ?disabled=${disabled}
-                      @change=${(e: Event) => {
-                        const nextKey = (e.target as HTMLInputElement).value.trim();
-                        if (!nextKey || nextKey === key) {
-                          return;
-                        }
-                        const next = { ...value };
-                        if (nextKey in next) {
-                          return;
-                        }
-                        next[nextKey] = next[key];
-                        delete next[key];
-                        onPatch(path, next);
-                      }}
-                    />
-                  </div>
-                  <button
-                    type="button"
-                    class="cfg-map__item-remove"
-                    title="Remove entry"
-                    ?disabled=${disabled}
-                    @click=${() => {
-                      const next = { ...value };
-                      delete next[key];
-                      onPatch(path, next);
-                    }}
-                  >
-                    ${icons.trash}
-                  </button>
-                </div>
-                <div class="cfg-map__item-value">
-                  ${
-                    anySchema
-                      ? html`
-                        <textarea
-                          class="cfg-textarea cfg-textarea--sm"
-                          placeholder="JSON value"
-                          rows="2"
-                          .value=${fallback}
+      ${visibleEntries.length === 0
+        ? html` <div class="cfg-map__empty">No custom entries.</div> `
+        : html`
+            <div class="cfg-map__items">
+              ${visibleEntries.map(([key, entryValue]) => {
+                const valuePath = [...path, key];
+                const fallback = jsonValue(entryValue);
+                return html`
+                  <div class="cfg-map__item">
+                    <div class="cfg-map__item-header">
+                      <div class="cfg-map__item-key">
+                        <input
+                          type="text"
+                          class="cfg-input cfg-input--sm"
+                          placeholder="Key"
+                          .value=${key}
                           ?disabled=${disabled}
                           @change=${(e: Event) => {
-                            const target = e.target as HTMLTextAreaElement;
-                            const raw = target.value.trim();
-                            if (!raw) {
-                              onPatch(valuePath, undefined);
+                            const nextKey = (
+                              e.target as HTMLInputElement
+                            ).value.trim();
+                            if (!nextKey || nextKey === key) {
                               return;
                             }
-                            try {
-                              onPatch(valuePath, JSON.parse(raw));
-                            } catch {
-                              target.value = fallback;
+                            const next = { ...value };
+                            if (nextKey in next) {
+                              return;
                             }
+                            next[nextKey] = next[key];
+                            delete next[key];
+                            onPatch(path, next);
                           }}
-                        ></textarea>
-                      `
-                      : renderNode({
-                          schema,
-                          value: entryValue,
-                          path: valuePath,
-                          hints,
-                          unsupported,
-                          disabled,
-                          searchCriteria,
-                          showLabel: false,
-                          onPatch,
-                        })
-                  }
-                </div>
-              </div>
-            `;
-          })}
-        </div>
-      `
-      }
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        class="cfg-map__item-remove"
+                        title="Remove entry"
+                        ?disabled=${disabled}
+                        @click=${() => {
+                          const next = { ...value };
+                          delete next[key];
+                          onPatch(path, next);
+                        }}
+                      >
+                        ${icons.trash}
+                      </button>
+                    </div>
+                    <div class="cfg-map__item-value">
+                      ${anySchema
+                        ? html`
+                            <textarea
+                              class="cfg-textarea cfg-textarea--sm"
+                              placeholder="JSON value"
+                              rows="2"
+                              .value=${fallback}
+                              ?disabled=${disabled}
+                              @change=${(e: Event) => {
+                                const target = e.target as HTMLTextAreaElement;
+                                const raw = target.value.trim();
+                                if (!raw) {
+                                  onPatch(valuePath, undefined);
+                                  return;
+                                }
+                                try {
+                                  onPatch(valuePath, JSON.parse(raw));
+                                } catch {
+                                  target.value = fallback;
+                                }
+                              }}
+                            ></textarea>
+                          `
+                        : renderNode({
+                            schema,
+                            value: entryValue,
+                            path: valuePath,
+                            hints,
+                            unsupported,
+                            disabled,
+                            searchCriteria,
+                            showLabel: false,
+                            onPatch,
+                          })}
+                    </div>
+                  </div>
+                `;
+              })}
+            </div>
+          `}
     </div>
   `;
 }

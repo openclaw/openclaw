@@ -22,11 +22,12 @@ export function evaluateSenderGroupAccess(params: {
   senderId: string;
   isSenderAllowed: (senderId: string, allowFrom: string[]) => boolean;
 }): SenderGroupAccessDecision {
-  const { groupPolicy, providerMissingFallbackApplied } = resolveOpenProviderRuntimeGroupPolicy({
-    providerConfigPresent: params.providerConfigPresent,
-    groupPolicy: params.configuredGroupPolicy,
-    defaultGroupPolicy: params.defaultGroupPolicy,
-  });
+  const { groupPolicy, providerMissingFallbackApplied } =
+    resolveOpenProviderRuntimeGroupPolicy({
+      providerConfigPresent: params.providerConfigPresent,
+      groupPolicy: params.configuredGroupPolicy,
+      defaultGroupPolicy: params.defaultGroupPolicy,
+    });
 
   if (groupPolicy === "disabled") {
     return {

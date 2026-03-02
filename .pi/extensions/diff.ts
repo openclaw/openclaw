@@ -24,7 +24,9 @@ export default function (pi: ExtensionAPI) {
       }
 
       // Get changed files from git status
-      const result = await pi.exec("git", ["status", "--porcelain"], { cwd: ctx.cwd });
+      const result = await pi.exec("git", ["status", "--porcelain"], {
+        cwd: ctx.cwd,
+      });
 
       if (result.code !== 0) {
         ctx.ui.notify(`git status failed: ${result.stderr}`, "error");
@@ -95,7 +97,8 @@ export default function (pi: ExtensionAPI) {
             await pi.exec("code", ["-g", fileInfo.file], { cwd: ctx.cwd });
           }
         } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
+          const message =
+            error instanceof Error ? error.message : String(error);
           ctx.ui.notify(`Failed to open ${fileInfo.file}: ${message}`, "error");
         }
       };

@@ -10,7 +10,10 @@ import type { AuthRateLimiter } from "../auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "../auth.js";
 import { isLoopbackAddress } from "../net.js";
 import { getHandshakeTimeoutMs } from "../server-constants.js";
-import type { GatewayRequestContext, GatewayRequestHandlers } from "../server-methods/types.js";
+import type {
+  GatewayRequestContext,
+  GatewayRequestHandlers,
+} from "../server-methods/types.js";
 import { formatError } from "../server-utils.js";
 import { logWs } from "../ws-log.js";
 import { getHealthVersion, incrementPresenceVersion } from "./health-state.js";
@@ -105,15 +108,18 @@ export function attachGatewayWsConnectionHandler(params: {
     broadcast,
     buildRequestContext,
   } = params;
-  const originCheckMetrics: WsOriginCheckMetrics = { hostHeaderFallbackAccepted: 0 };
+  const originCheckMetrics: WsOriginCheckMetrics = {
+    hostHeaderFallbackAccepted: 0,
+  };
 
   wss.on("connection", (socket, upgradeReq) => {
     let client: GatewayWsClient | null = null;
     let closed = false;
     const openedAt = Date.now();
     const connId = randomUUID();
-    const remoteAddr = (socket as WebSocket & { _socket?: { remoteAddress?: string } })._socket
-      ?.remoteAddress;
+    const remoteAddr = (
+      socket as WebSocket & { _socket?: { remoteAddress?: string } }
+    )._socket?.remoteAddress;
     const headerValue = (value: string | string[] | undefined) =>
       Array.isArray(value) ? value[0] : value;
     const requestHost = headerValue(upgradeReq.headers.host);
@@ -122,9 +128,12 @@ export function attachGatewayWsConnectionHandler(params: {
     const forwardedFor = headerValue(upgradeReq.headers["x-forwarded-for"]);
     const realIp = headerValue(upgradeReq.headers["x-real-ip"]);
 
-    const canvasHostPortForWs = canvasHostServerPort ?? (canvasHostEnabled ? port : undefined);
+    const canvasHostPortForWs =
+      canvasHostServerPort ?? (canvasHostEnabled ? port : undefined);
     const canvasHostOverride =
-      gatewayHost && gatewayHost !== "0.0.0.0" && gatewayHost !== "::" ? gatewayHost : undefined;
+      gatewayHost && gatewayHost !== "0.0.0.0" && gatewayHost !== "::"
+        ? gatewayHost
+        : undefined;
     const canvasHostUrl = resolveCanvasHostUrl({
       canvasPort: canvasHostPortForWs,
       hostOverride: canvasHostServerPort ? canvasHostOverride : undefined,
@@ -150,7 +159,11 @@ export function attachGatewayWsConnectionHandler(params: {
       }
     };
 
-    const setLastFrameMeta = (meta: { type?: string; method?: string; id?: string }) => {
+    const setLastFrameMeta = (meta: {
+      type?: string;
+      method?: string;
+      id?: string;
+    }) => {
       if (meta.type || meta.method || meta.id) {
         lastFrameType = meta.type ?? lastFrameType;
         lastFrameMethod = meta.method ?? lastFrameMethod;
@@ -190,13 +203,19 @@ export function attachGatewayWsConnectionHandler(params: {
     };
 
     socket.once("error", (err) => {
-      logWsControl.warn(`error conn=${connId} remote=${remoteAddr ?? "?"}: ${formatError(err)}`);
+      logWsControl.warn(
+        `error conn=${connId} remote=${remoteAddr ?? "?"}: ${formatError(err)}`,
+      );
       close();
     });
 
-    const isNoisySwiftPmHelperClose = (userAgent: string | undefined, remote: string | undefined) =>
+    const isNoisySwiftPmHelperClose = (
+      userAgent: string | undefined,
+      remote: string | undefined,
+    ) =>
       Boolean(
-        userAgent?.toLowerCase().includes("swiftpm-testing-helper") && isLoopbackAddress(remote),
+        userAgent?.toLowerCase().includes("swiftpm-testing-helper") &&
+        isLoopbackAddress(remote),
       );
 
     socket.once("close", (code, reason) => {
@@ -235,7 +254,11 @@ export function attachGatewayWsConnectionHandler(params: {
       }
       if (client?.presenceKey) {
         upsertPresence(client.presenceKey, { reason: "disconnect" });
-        broadcastPresenceSnapshot({ broadcast, incrementPresenceVersion, getHealthVersion });
+        broadcastPresenceSnapshot({
+          broadcast,
+          incrementPresenceVersion,
+          getHealthVersion,
+        });
       }
       if (client?.connect?.role === "node") {
         const context = buildRequestContext();
@@ -266,7 +289,9 @@ export function attachGatewayWsConnectionHandler(params: {
         setCloseCause("handshake-timeout", {
           handshakeMs: Date.now() - openedAt,
         });
-        logWsControl.warn(`handshake timeout conn=${connId} remote=${remoteAddr ?? "?"}`);
+        logWsControl.warn(
+          `handshake timeout conn=${connId} remote=${remoteAddr ?? "?"}`,
+        );
         close();
       }
     }, handshakeTimeoutMs);

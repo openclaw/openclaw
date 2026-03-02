@@ -200,14 +200,24 @@ describe("hooks", () => {
     }> = [
       {
         name: "returns true for gateway:startup events with expected context",
-        event: createInternalHookEvent("gateway", "startup", "gateway:startup", {
-          cfg: {},
-        } satisfies GatewayStartupHookContext),
+        event: createInternalHookEvent(
+          "gateway",
+          "startup",
+          "gateway:startup",
+          {
+            cfg: {},
+          } satisfies GatewayStartupHookContext,
+        ),
         expected: true,
       },
       {
         name: "returns false for non-startup gateway events",
-        event: createInternalHookEvent("gateway", "shutdown", "gateway:shutdown", {}),
+        event: createInternalHookEvent(
+          "gateway",
+          "shutdown",
+          "gateway:shutdown",
+          {},
+        ),
         expected: false,
       },
     ];
@@ -314,7 +324,11 @@ describe("hooks", () => {
           match: isMessageSentEvent,
         },
       ];
-      const nonMessageEvent = createInternalHookEvent("command", "new", "test-session");
+      const nonMessageEvent = createInternalHookEvent(
+        "command",
+        "new",
+        "test-session",
+      );
       const missingReceivedContext = createInternalHookEvent(
         "message",
         "received",
@@ -324,11 +338,16 @@ describe("hooks", () => {
           // missing channelId
         },
       );
-      const missingSentContext = createInternalHookEvent("message", "sent", "test-session", {
-        to: "+1234567890",
-        channelId: "whatsapp",
-        // missing success
-      });
+      const missingSentContext = createInternalHookEvent(
+        "message",
+        "sent",
+        "test-session",
+        {
+          to: "+1234567890",
+          channelId: "whatsapp",
+          // missing success
+        },
+      );
 
       for (const testCase of cases) {
         expect(testCase.match(nonMessageEvent)).toBe(false);
@@ -349,7 +368,12 @@ describe("hooks", () => {
         channelId: "whatsapp",
         conversationId: "chat-123",
       };
-      const event = createInternalHookEvent("message", "received", "test-session", context);
+      const event = createInternalHookEvent(
+        "message",
+        "received",
+        "test-session",
+        context,
+      );
       await triggerInternalHook(event);
 
       expect(handler).toHaveBeenCalledWith(event);
@@ -366,7 +390,12 @@ describe("hooks", () => {
         channelId: "telegram",
         messageId: "msg-123",
       };
-      const event = createInternalHookEvent("message", "sent", "test-session", context);
+      const event = createInternalHookEvent(
+        "message",
+        "sent",
+        "test-session",
+        context,
+      );
       await triggerInternalHook(event);
 
       expect(handler).toHaveBeenCalledWith(event);
@@ -395,7 +424,12 @@ describe("hooks", () => {
         success: true,
         channelId: "whatsapp",
       };
-      const sentEvent = createInternalHookEvent("message", "sent", "test-session", sentContext);
+      const sentEvent = createInternalHookEvent(
+        "message",
+        "sent",
+        "test-session",
+        sentContext,
+      );
       await triggerInternalHook(sentEvent);
 
       expect(handler).toHaveBeenCalledTimes(2);
@@ -417,7 +451,12 @@ describe("hooks", () => {
         content: "Hello",
         channelId: "whatsapp",
       };
-      const event = createInternalHookEvent("message", "received", "test-session", context);
+      const event = createInternalHookEvent(
+        "message",
+        "received",
+        "test-session",
+        context,
+      );
       await triggerInternalHook(event);
 
       // Both handlers were called

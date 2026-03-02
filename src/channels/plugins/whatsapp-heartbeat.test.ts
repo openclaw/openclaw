@@ -40,7 +40,12 @@ describe("resolveWhatsAppHeartbeatRecipients", () => {
 
   function setSingleUnauthorizedSessionWithAllowFrom() {
     setSessionStore({
-      a: { lastChannel: "whatsapp", lastTo: "+15550000099", updatedAt: 2, sessionId: "a" },
+      a: {
+        lastChannel: "whatsapp",
+        lastTo: "+15550000099",
+        updatedAt: 2,
+        sessionId: "a",
+      },
     });
     setAllowFromStore(["+15550000001"]);
   }
@@ -53,14 +58,27 @@ describe("resolveWhatsAppHeartbeatRecipients", () => {
 
   it("uses allowFrom store recipients when session recipients are ambiguous", () => {
     setSessionStore({
-      a: { lastChannel: "whatsapp", lastTo: "+15550000001", updatedAt: 2, sessionId: "a" },
-      b: { lastChannel: "whatsapp", lastTo: "+15550000002", updatedAt: 1, sessionId: "b" },
+      a: {
+        lastChannel: "whatsapp",
+        lastTo: "+15550000001",
+        updatedAt: 2,
+        sessionId: "a",
+      },
+      b: {
+        lastChannel: "whatsapp",
+        lastTo: "+15550000002",
+        updatedAt: 1,
+        sessionId: "b",
+      },
     });
     setAllowFromStore(["+15550000001"]);
 
     const result = resolveWith();
 
-    expect(result).toEqual({ recipients: ["+15550000001"], source: "session-single" });
+    expect(result).toEqual({
+      recipients: ["+15550000001"],
+      source: "session-single",
+    });
   });
 
   it("falls back to allowFrom when no session recipient is authorized", () => {
@@ -68,7 +86,10 @@ describe("resolveWhatsAppHeartbeatRecipients", () => {
 
     const result = resolveWith();
 
-    expect(result).toEqual({ recipients: ["+15550000001"], source: "allowFrom" });
+    expect(result).toEqual({
+      recipients: ["+15550000001"],
+      source: "allowFrom",
+    });
   });
 
   it("includes both session and allowFrom recipients when --all is set", () => {
@@ -84,7 +105,12 @@ describe("resolveWhatsAppHeartbeatRecipients", () => {
 
   it("returns explicit --to recipient and source flag", () => {
     setSessionStore({
-      a: { lastChannel: "whatsapp", lastTo: "+15550000099", updatedAt: 2, sessionId: "a" },
+      a: {
+        lastChannel: "whatsapp",
+        lastTo: "+15550000099",
+        updatedAt: 2,
+        sessionId: "a",
+      },
     });
     const result = resolveWith({}, { to: " +1 555 000 7777 " });
     expect(result).toEqual({ recipients: ["+15550007777"], source: "flag" });
@@ -92,8 +118,18 @@ describe("resolveWhatsAppHeartbeatRecipients", () => {
 
   it("returns ambiguous session recipients when no allowFrom list exists", () => {
     setSessionStore({
-      a: { lastChannel: "whatsapp", lastTo: "+15550000001", updatedAt: 2, sessionId: "a" },
-      b: { lastChannel: "whatsapp", lastTo: "+15550000002", updatedAt: 1, sessionId: "b" },
+      a: {
+        lastChannel: "whatsapp",
+        lastTo: "+15550000001",
+        updatedAt: 2,
+        sessionId: "a",
+      },
+      b: {
+        lastChannel: "whatsapp",
+        lastTo: "+15550000002",
+        updatedAt: 1,
+        sessionId: "b",
+      },
     });
     const result = resolveWith();
     expect(result).toEqual({
@@ -104,17 +140,40 @@ describe("resolveWhatsAppHeartbeatRecipients", () => {
 
   it("returns single session recipient when allowFrom is empty", () => {
     setSessionStore({
-      a: { lastChannel: "whatsapp", lastTo: "+15550000001", updatedAt: 2, sessionId: "a" },
+      a: {
+        lastChannel: "whatsapp",
+        lastTo: "+15550000001",
+        updatedAt: 2,
+        sessionId: "a",
+      },
     });
     const result = resolveWith();
-    expect(result).toEqual({ recipients: ["+15550000001"], source: "session-single" });
+    expect(result).toEqual({
+      recipients: ["+15550000001"],
+      source: "session-single",
+    });
   });
 
   it("returns all authorized session recipients when allowFrom matches multiple", () => {
     setSessionStore({
-      a: { lastChannel: "whatsapp", lastTo: "+15550000001", updatedAt: 2, sessionId: "a" },
-      b: { lastChannel: "whatsapp", lastTo: "+15550000002", updatedAt: 1, sessionId: "b" },
-      c: { lastChannel: "whatsapp", lastTo: "+15550000003", updatedAt: 0, sessionId: "c" },
+      a: {
+        lastChannel: "whatsapp",
+        lastTo: "+15550000001",
+        updatedAt: 2,
+        sessionId: "a",
+      },
+      b: {
+        lastChannel: "whatsapp",
+        lastTo: "+15550000002",
+        updatedAt: 1,
+        sessionId: "b",
+      },
+      c: {
+        lastChannel: "whatsapp",
+        lastTo: "+15550000003",
+        updatedAt: 0,
+        sessionId: "c",
+      },
     });
     setAllowFromStore(["+15550000001", "+15550000002"]);
     const result = resolveWith();
@@ -126,12 +185,20 @@ describe("resolveWhatsAppHeartbeatRecipients", () => {
 
   it("ignores session store when session scope is global", () => {
     setSessionStore({
-      a: { lastChannel: "whatsapp", lastTo: "+15550000001", updatedAt: 2, sessionId: "a" },
+      a: {
+        lastChannel: "whatsapp",
+        lastTo: "+15550000001",
+        updatedAt: 2,
+        sessionId: "a",
+      },
     });
     const result = resolveWith({
       session: { scope: "global" } as OpenClawConfig["session"],
       channels: { whatsapp: { allowFrom: ["*", "+15550000009"] } as never },
     });
-    expect(result).toEqual({ recipients: ["+15550000009"], source: "allowFrom" });
+    expect(result).toEqual({
+      recipients: ["+15550000009"],
+      source: "allowFrom",
+    });
   });
 });

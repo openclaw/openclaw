@@ -9,7 +9,9 @@ type BatchOutputErrorLike = {
   };
 };
 
-function getResponseErrorMessage(line: BatchOutputErrorLike | undefined): string | undefined {
+function getResponseErrorMessage(
+  line: BatchOutputErrorLike | undefined,
+): string | undefined {
   const body = line?.response?.body;
   if (typeof body === "string") {
     return body || undefined;
@@ -17,11 +19,17 @@ function getResponseErrorMessage(line: BatchOutputErrorLike | undefined): string
   if (!body || typeof body !== "object") {
     return undefined;
   }
-  return typeof body.error?.message === "string" ? body.error.message : undefined;
+  return typeof body.error?.message === "string"
+    ? body.error.message
+    : undefined;
 }
 
-export function extractBatchErrorMessage(lines: BatchOutputErrorLike[]): string | undefined {
-  const first = lines.find((line) => line.error?.message || getResponseErrorMessage(line));
+export function extractBatchErrorMessage(
+  lines: BatchOutputErrorLike[],
+): string | undefined {
+  const first = lines.find(
+    (line) => line.error?.message || getResponseErrorMessage(line),
+  );
   return first?.error?.message ?? getResponseErrorMessage(first);
 }
 

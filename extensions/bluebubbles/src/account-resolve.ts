@@ -8,7 +8,9 @@ export type BlueBubblesAccountResolveOpts = {
   cfg?: OpenClawConfig;
 };
 
-export function resolveBlueBubblesServerAccount(params: BlueBubblesAccountResolveOpts): {
+export function resolveBlueBubblesServerAccount(
+  params: BlueBubblesAccountResolveOpts,
+): {
   baseUrl: string;
   password: string;
   accountId: string;

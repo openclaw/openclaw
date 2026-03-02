@@ -78,7 +78,11 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     payload: ReplyPayload,
     toolCallId: string,
   ): Promise<boolean> => {
-    if (!params.shouldRouteToOriginating || !params.originatingChannel || !params.originatingTo) {
+    if (
+      !params.shouldRouteToOriginating ||
+      !params.originatingChannel ||
+      !params.originatingTo
+    ) {
       return false;
     }
     const handle = state.toolMessageByCallId.get(toolCallId);
@@ -127,7 +131,11 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       state.blockCount += 1;
     }
 
-    if ((payload.text?.trim() ?? "").length > 0 || payload.mediaUrl || payload.mediaUrls?.length) {
+    if (
+      (payload.text?.trim() ?? "").length > 0 ||
+      payload.mediaUrl ||
+      payload.mediaUrls?.length
+    ) {
       await startReplyLifecycleOnce();
     }
 
@@ -140,7 +148,11 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       ttsAuto: params.sessionTtsAuto,
     });
 
-    if (params.shouldRouteToOriginating && params.originatingChannel && params.originatingTo) {
+    if (
+      params.shouldRouteToOriginating &&
+      params.originatingChannel &&
+      params.originatingTo
+    ) {
       const toolCallId = meta?.toolCallId?.trim();
       if (kind === "tool" && meta?.allowEdit === true && toolCallId) {
         const edited = await tryEditToolMessage(ttsPayload, toolCallId);
@@ -169,7 +181,9 @@ export function createAcpDispatchDeliveryCoordinator(params: {
           channel: params.originatingChannel,
           accountId: params.ctx.AccountId,
           to: params.originatingTo,
-          ...(params.ctx.MessageThreadId != null ? { threadId: params.ctx.MessageThreadId } : {}),
+          ...(params.ctx.MessageThreadId != null
+            ? { threadId: params.ctx.MessageThreadId }
+            : {}),
           messageId: result.messageId,
         });
       }

@@ -92,7 +92,10 @@ describe("env test utils", () => {
     const key = "OPENCLAW_ENV_TEST_ASYNC_OK";
     const prev = process.env[key];
 
-    const seen = await withEnvAsync({ [key]: "inside" }, async () => process.env[key]);
+    const seen = await withEnvAsync(
+      { [key]: "inside" },
+      async () => process.env[key],
+    );
 
     expect(seen).toBe("inside");
     expect(process.env[key]).toBe(prev);
@@ -103,7 +106,10 @@ describe("env test utils", () => {
     const prev = process.env[key];
     process.env[key] = "outer";
 
-    const seen = await withEnvAsync({ [key]: undefined }, async () => process.env[key]);
+    const seen = await withEnvAsync(
+      { [key]: undefined },
+      async () => process.env[key],
+    );
 
     expect(seen).toBeUndefined();
     expect(process.env[key]).toBe("outer");

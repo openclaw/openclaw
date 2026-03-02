@@ -44,9 +44,11 @@ const {
     createdBindingManagers,
     listNativeCommandSpecsForConfigMock: vi.fn(() => [{ name: "cmd" }]),
     listSkillCommandsForAgentsMock: vi.fn(() => []),
-    monitorLifecycleMock: vi.fn(async (params: { threadBindings: { stop: () => void } }) => {
-      params.threadBindings.stop();
-    }),
+    monitorLifecycleMock: vi.fn(
+      async (params: { threadBindings: { stop: () => void } }) => {
+        params.threadBindings.stop();
+      },
+    ),
     resolveDiscordAccountMock: vi.fn(() => ({
       accountId: "default",
       token: "cfg-token",
@@ -141,7 +143,11 @@ vi.mock("../../logging/subsystem.js", () => ({
 }));
 
 vi.mock("../../runtime.js", () => ({
-  createNonExitingRuntime: () => ({ log: vi.fn(), error: vi.fn(), exit: vi.fn() }),
+  createNonExitingRuntime: () => ({
+    log: vi.fn(),
+    error: vi.fn(),
+    exit: vi.fn(),
+  }),
 }));
 
 vi.mock("../accounts.js", () => ({
@@ -212,7 +218,9 @@ vi.mock("./message-handler.js", () => ({
 vi.mock("./native-command.js", () => ({
   createDiscordCommandArgFallbackButton: () => ({ id: "arg-fallback" }),
   createDiscordModelPickerFallbackButton: () => ({ id: "model-fallback-btn" }),
-  createDiscordModelPickerFallbackSelect: () => ({ id: "model-fallback-select" }),
+  createDiscordModelPickerFallbackSelect: () => ({
+    id: "model-fallback-select",
+  }),
   createDiscordNativeCommand: createDiscordNativeCommandMock,
 }));
 
@@ -262,7 +270,9 @@ describe("monitorDiscordProvider", () => {
     clientConstructorOptionsMock.mockClear();
     clientFetchUserMock.mockClear().mockResolvedValue({ id: "bot-1" });
     clientGetPluginMock.mockClear().mockReturnValue(undefined);
-    createDiscordNativeCommandMock.mockClear().mockReturnValue({ name: "mock-command" });
+    createDiscordNativeCommandMock
+      .mockClear()
+      .mockReturnValue({ name: "mock-command" });
     createNoopThreadBindingManagerMock.mockClear();
     createThreadBindingManagerMock.mockClear();
     reconcileAcpThreadBindingsOnStartupMock.mockClear().mockReturnValue({
@@ -271,7 +281,9 @@ describe("monitorDiscordProvider", () => {
       staleSessionKeys: [],
     });
     createdBindingManagers.length = 0;
-    listNativeCommandSpecsForConfigMock.mockClear().mockReturnValue([{ name: "cmd" }]);
+    listNativeCommandSpecsForConfigMock
+      .mockClear()
+      .mockReturnValue([{ name: "cmd" }]);
     listSkillCommandsForAgentsMock.mockClear().mockReturnValue([]);
     monitorLifecycleMock.mockClear().mockImplementation(async (params) => {
       params.threadBindings.stop();

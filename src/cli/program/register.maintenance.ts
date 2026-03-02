@@ -17,13 +17,29 @@ export function registerMaintenanceCommands(program: Command) {
       () =>
         `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/doctor", "docs.openclaw.ai/cli/doctor")}\n`,
     )
-    .option("--no-workspace-suggestions", "Disable workspace memory system suggestions", false)
+    .option(
+      "--no-workspace-suggestions",
+      "Disable workspace memory system suggestions",
+      false,
+    )
     .option("--yes", "Accept defaults without prompting", false)
     .option("--repair", "Apply recommended repairs without prompting", false)
     .option("--fix", "Apply recommended repairs (alias for --repair)", false)
-    .option("--force", "Apply aggressive repairs (overwrites custom service config)", false)
-    .option("--non-interactive", "Run without prompts (safe migrations only)", false)
-    .option("--generate-gateway-token", "Generate and configure a gateway token", false)
+    .option(
+      "--force",
+      "Apply aggressive repairs (overwrites custom service config)",
+      false,
+    )
+    .option(
+      "--non-interactive",
+      "Run without prompts (safe migrations only)",
+      false,
+    )
+    .option(
+      "--generate-gateway-token",
+      "Generate and configure a gateway token",
+      false,
+    )
     .option("--deep", "Scan system services for extra gateway installs", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
@@ -65,9 +81,16 @@ export function registerMaintenanceCommands(program: Command) {
       () =>
         `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/reset", "docs.openclaw.ai/cli/reset")}\n`,
     )
-    .option("--scope <scope>", "config|config+creds+sessions|full (default: interactive prompt)")
+    .option(
+      "--scope <scope>",
+      "config|config+creds+sessions|full (default: interactive prompt)",
+    )
     .option("--yes", "Skip confirmation prompts", false)
-    .option("--non-interactive", "Disable prompts (requires --scope + --yes)", false)
+    .option(
+      "--non-interactive",
+      "Disable prompts (requires --scope + --yes)",
+      false,
+    )
     .option("--dry-run", "Print actions without removing files", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {

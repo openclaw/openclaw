@@ -11,7 +11,8 @@ vi.mock("../terminal/note.js", () => ({
 }));
 
 vi.mock("./doctor-legacy-config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./doctor-legacy-config.js")>();
+  const actual =
+    await importOriginal<typeof import("./doctor-legacy-config.js")>();
   return {
     ...actual,
     normalizeCompatibilityConfigValues: (cfg: unknown) => ({

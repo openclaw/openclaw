@@ -6,7 +6,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionStore, saveSessionStore } from "../../config/sessions.js";
 import { onAgentEvent } from "../../infra/agent-events.js";
-import { peekSystemEvents, resetSystemEventsForTest } from "../../infra/system-events.js";
+import {
+  peekSystemEvents,
+  resetSystemEventsForTest,
+} from "../../infra/system-events.js";
 import type { TemplateContext } from "../templating.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import { createMockTypingController } from "./test-helpers.js";
@@ -25,9 +28,9 @@ vi.mock("../../agents/model-fallback.js", () => ({
 }));
 
 vi.mock("../../agents/pi-embedded.js", async () => {
-  const actual = await vi.importActual<typeof import("../../agents/pi-embedded.js")>(
-    "../../agents/pi-embedded.js",
-  );
+  const actual = await vi.importActual<
+    typeof import("../../agents/pi-embedded.js")
+  >("../../agents/pi-embedded.js");
   return {
     ...actual,
     queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
@@ -36,9 +39,9 @@ vi.mock("../../agents/pi-embedded.js", async () => {
 });
 
 vi.mock("../../agents/cli-runner.js", async () => {
-  const actual = await vi.importActual<typeof import("../../agents/cli-runner.js")>(
-    "../../agents/cli-runner.js",
-  );
+  const actual = await vi.importActual<
+    typeof import("../../agents/cli-runner.js")
+  >("../../agents/cli-runner.js");
   return {
     ...actual,
     runCliAgent: (params: unknown) => runCliAgentMock(params),
@@ -46,7 +49,10 @@ vi.mock("../../agents/cli-runner.js", async () => {
 });
 
 vi.mock("../../runtime.js", async () => {
-  const actual = await vi.importActual<typeof import("../../runtime.js")>("../../runtime.js");
+  const actual =
+    await vi.importActual<typeof import("../../runtime.js")>(
+      "../../runtime.js",
+    );
   return {
     ...actual,
     defaultRuntime: {
@@ -59,7 +65,8 @@ vi.mock("../../runtime.js", async () => {
 });
 
 vi.mock("./queue.js", async () => {
-  const actual = await vi.importActual<typeof import("./queue.js")>("./queue.js");
+  const actual =
+    await vi.importActual<typeof import("./queue.js")>("./queue.js");
   return {
     ...actual,
     enqueueFollowupRun: vi.fn(),
@@ -177,7 +184,9 @@ describe("runReplyAgent onAgentRunStart", () => {
 
     expect(onAgentRunStart).not.toHaveBeenCalled();
     expect(result).toMatchObject({
-      text: expect.stringContaining('No API key found for provider "anthropic".'),
+      text: expect.stringContaining(
+        'No API key found for provider "anthropic".',
+      ),
     });
   });
 
@@ -215,7 +224,10 @@ describe("runReplyAgent authProfileId fallback scoping", () => {
       }),
     );
 
-    runEmbeddedPiAgentMock.mockResolvedValue({ payloads: [{ text: "ok" }], meta: {} });
+    runEmbeddedPiAgentMock.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: {},
+    });
 
     const typing = createMockTypingController();
     const sessionCtx = {
@@ -370,7 +382,9 @@ describe("runReplyAgent auto-compaction token update", () => {
   }
 
   it("updates totalTokens after auto-compaction using lastCallUsage", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compact-tokens-"));
+    const tmp = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-compact-tokens-"),
+    );
     const storePath = path.join(tmp, "sessions.json");
     const sessionKey = "main";
     const sessionEntry = {
@@ -382,23 +396,31 @@ describe("runReplyAgent auto-compaction token update", () => {
 
     await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
 
-    runEmbeddedPiAgentMock.mockImplementation(async (params: EmbeddedRunParams) => {
-      // Simulate auto-compaction during agent run
-      params.onAgentEvent?.({ stream: "compaction", data: { phase: "start" } });
-      params.onAgentEvent?.({ stream: "compaction", data: { phase: "end", willRetry: false } });
-      return {
-        payloads: [{ text: "done" }],
-        meta: {
-          agentMeta: {
-            // Accumulated usage across pre+post compaction calls — inflated
-            usage: { input: 190_000, output: 8_000, total: 198_000 },
-            // Last individual API call's usage — actual post-compaction context
-            lastCallUsage: { input: 10_000, output: 3_000, total: 13_000 },
-            compactionCount: 1,
+    runEmbeddedPiAgentMock.mockImplementation(
+      async (params: EmbeddedRunParams) => {
+        // Simulate auto-compaction during agent run
+        params.onAgentEvent?.({
+          stream: "compaction",
+          data: { phase: "start" },
+        });
+        params.onAgentEvent?.({
+          stream: "compaction",
+          data: { phase: "end", willRetry: false },
+        });
+        return {
+          payloads: [{ text: "done" }],
+          meta: {
+            agentMeta: {
+              // Accumulated usage across pre+post compaction calls — inflated
+              usage: { input: 190_000, output: 8_000, total: 198_000 },
+              // Last individual API call's usage — actual post-compaction context
+              lastCallUsage: { input: 10_000, output: 3_000, total: 13_000 },
+              compactionCount: 1,
+            },
           },
-        },
-      };
-    });
+        };
+      },
+    );
 
     // Disable memory flush so we isolate the auto-compaction path
     const config = {
@@ -444,7 +466,9 @@ describe("runReplyAgent auto-compaction token update", () => {
   });
 
   it("updates totalTokens from lastCallUsage even without compaction", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-usage-last-"));
+    const tmp = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-usage-last-"),
+    );
     const storePath = path.join(tmp, "sessions.json");
     const sessionKey = "main";
     const sessionEntry = {
@@ -502,7 +526,9 @@ describe("runReplyAgent auto-compaction token update", () => {
   });
 
   it("does not enqueue legacy post-compaction audit warnings", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-no-audit-warning-"));
+    const tmp = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-no-audit-warning-"),
+    );
     const workspaceDir = path.join(tmp, "workspace");
     await fs.mkdir(workspaceDir, { recursive: true });
     const sessionFile = path.join(tmp, "session.jsonl");
@@ -523,20 +549,28 @@ describe("runReplyAgent auto-compaction token update", () => {
 
     await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
 
-    runEmbeddedPiAgentMock.mockImplementation(async (params: EmbeddedRunParams) => {
-      params.onAgentEvent?.({ stream: "compaction", data: { phase: "start" } });
-      params.onAgentEvent?.({ stream: "compaction", data: { phase: "end", willRetry: false } });
-      return {
-        payloads: [{ text: "done" }],
-        meta: {
-          agentMeta: {
-            usage: { input: 11_000, output: 500, total: 11_500 },
-            lastCallUsage: { input: 10_500, output: 500, total: 11_000 },
-            compactionCount: 1,
+    runEmbeddedPiAgentMock.mockImplementation(
+      async (params: EmbeddedRunParams) => {
+        params.onAgentEvent?.({
+          stream: "compaction",
+          data: { phase: "start" },
+        });
+        params.onAgentEvent?.({
+          stream: "compaction",
+          data: { phase: "end", willRetry: false },
+        });
+        return {
+          payloads: [{ text: "done" }],
+          meta: {
+            agentMeta: {
+              usage: { input: 11_000, output: 500, total: 11_500 },
+              lastCallUsage: { input: 10_500, output: 500, total: 11_000 },
+              compactionCount: 1,
+            },
           },
-        },
-      };
-    });
+        };
+      },
+    );
 
     const config = {
       agents: { defaults: { compaction: { memoryFlush: { enabled: false } } } },
@@ -575,8 +609,14 @@ describe("runReplyAgent auto-compaction token update", () => {
     });
 
     const queuedSystemEvents = peekSystemEvents(sessionKey);
-    expect(queuedSystemEvents.some((event) => event.includes("Post-Compaction Audit"))).toBe(false);
-    expect(queuedSystemEvents.some((event) => event.includes("WORKFLOW_AUTO.md"))).toBe(false);
+    expect(
+      queuedSystemEvents.some((event) =>
+        event.includes("Post-Compaction Audit"),
+      ),
+    ).toBe(false);
+    expect(
+      queuedSystemEvents.some((event) => event.includes("WORKFLOW_AUTO.md")),
+    ).toBe(false);
   });
 });
 
@@ -584,7 +624,9 @@ describe("runReplyAgent block streaming", () => {
   it("coalesces duplicate text_end block replies", async () => {
     const onBlockReply = vi.fn();
     runEmbeddedPiAgentMock.mockImplementationOnce(async (params) => {
-      const block = params.onBlockReply as ((payload: { text?: string }) => void) | undefined;
+      const block = params.onBlockReply as
+        | ((payload: { text?: string }) => void)
+        | undefined;
       block?.({ text: "Hello" });
       block?.({ text: "Hello" });
       return {
@@ -687,7 +729,9 @@ describe("runReplyAgent block streaming", () => {
     });
 
     runEmbeddedPiAgentMock.mockImplementationOnce(async (params) => {
-      const block = params.onBlockReply as ((payload: { text?: string }) => void) | undefined;
+      const block = params.onBlockReply as
+        | ((payload: { text?: string }) => void)
+        | undefined;
       block?.({ text: "Chunk" });
       return {
         payloads: [{ text: "Final message" }],
@@ -937,7 +981,9 @@ describe("runReplyAgent messaging tool suppression", () => {
     runEmbeddedPiAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "hello world!" }],
       messagingToolSentTexts: ["different message"],
-      messagingToolSentTargets: [{ tool: "slack", provider: "slack", to: "channel:C1" }],
+      messagingToolSentTargets: [
+        { tool: "slack", provider: "slack", to: "channel:C1" },
+      ],
       meta: {},
     });
 
@@ -950,7 +996,9 @@ describe("runReplyAgent messaging tool suppression", () => {
     runEmbeddedPiAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "hello world!" }],
       messagingToolSentTexts: ["different message"],
-      messagingToolSentTargets: [{ tool: "discord", provider: "discord", to: "channel:C1" }],
+      messagingToolSentTargets: [
+        { tool: "discord", provider: "discord", to: "channel:C1" },
+      ],
       meta: {},
     });
 
@@ -963,7 +1011,9 @@ describe("runReplyAgent messaging tool suppression", () => {
     runEmbeddedPiAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "hello world!" }],
       messagingToolSentTexts: ["hello world!"],
-      messagingToolSentTargets: [{ tool: "discord", provider: "discord", to: "channel:C1" }],
+      messagingToolSentTargets: [
+        { tool: "discord", provider: "discord", to: "channel:C1" },
+      ],
       meta: {},
     });
 
@@ -1004,7 +1054,9 @@ describe("runReplyAgent messaging tool suppression", () => {
     runEmbeddedPiAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "hello world!" }],
       messagingToolSentTexts: ["different message"],
-      messagingToolSentTargets: [{ tool: "slack", provider: "slack", to: "channel:C1" }],
+      messagingToolSentTargets: [
+        { tool: "slack", provider: "slack", to: "channel:C1" },
+      ],
       meta: {
         agentMeta: {
           usage: { input: 10, output: 5 },
@@ -1037,7 +1089,9 @@ describe("runReplyAgent messaging tool suppression", () => {
     runEmbeddedPiAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "hello world!" }],
       messagingToolSentTexts: ["different message"],
-      messagingToolSentTargets: [{ tool: "slack", provider: "slack", to: "channel:C1" }],
+      messagingToolSentTargets: [
+        { tool: "slack", provider: "slack", to: "channel:C1" },
+      ],
       meta: {
         agentMeta: {
           usage: { input: 10, output: 5 },
@@ -1074,7 +1128,9 @@ describe("runReplyAgent messaging tool suppression", () => {
     runEmbeddedPiAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "hello world!" }],
       messagingToolSentTexts: ["different message"],
-      messagingToolSentTargets: [{ tool: "slack", provider: "slack", to: "channel:C1" }],
+      messagingToolSentTargets: [
+        { tool: "slack", provider: "slack", to: "channel:C1" },
+      ],
       meta: {
         agentMeta: {
           promptTokens: 41_000,
@@ -1270,22 +1326,28 @@ describe("runReplyAgent fallback reasoning tags", () => {
 
     await createRun();
 
-    const call = runEmbeddedPiAgentMock.mock.calls[0]?.[0] as EmbeddedPiAgentParams | undefined;
+    const call = runEmbeddedPiAgentMock.mock.calls[0]?.[0] as
+      | EmbeddedPiAgentParams
+      | undefined;
     expect(call?.enforceFinalTag).toBe(true);
   });
 
   it("enforces <final> during memory flush on fallback providers", async () => {
-    runEmbeddedPiAgentMock.mockImplementation(async (params: EmbeddedPiAgentParams) => {
-      if (params.prompt?.includes("Pre-compaction memory flush.")) {
-        return { payloads: [], meta: {} };
-      }
-      return { payloads: [{ text: "ok" }], meta: {} };
-    });
-    runWithModelFallbackMock.mockImplementation(async ({ run }: RunWithModelFallbackParams) => ({
-      result: await run("google-gemini-cli", "gemini-3"),
-      provider: "google-gemini-cli",
-      model: "gemini-3",
-    }));
+    runEmbeddedPiAgentMock.mockImplementation(
+      async (params: EmbeddedPiAgentParams) => {
+        if (params.prompt?.includes("Pre-compaction memory flush.")) {
+          return { payloads: [], meta: {} };
+        }
+        return { payloads: [{ text: "ok" }], meta: {} };
+      },
+    );
+    runWithModelFallbackMock.mockImplementation(
+      async ({ run }: RunWithModelFallbackParams) => ({
+        result: await run("google-gemini-cli", "gemini-3"),
+        provider: "google-gemini-cli",
+        model: "gemini-3",
+      }),
+    );
 
     await createRun({
       sessionEntry: {
@@ -1307,7 +1369,10 @@ describe("runReplyAgent fallback reasoning tags", () => {
 });
 
 describe("runReplyAgent response usage footer", () => {
-  function createRun(params: { responseUsage: "tokens" | "full"; sessionKey: string }) {
+  function createRun(params: {
+    responseUsage: "tokens" | "full";
+    sessionKey: string;
+  }) {
     const typing = createMockTypingController();
     const sessionCtx = {
       Provider: "whatsapp",
@@ -1391,7 +1456,9 @@ describe("runReplyAgent response usage footer", () => {
     const res = await createRun({ responseUsage: "full", sessionKey });
     const payload = Array.isArray(res) ? res[0] : res;
     expect(String(payload?.text ?? "")).toContain("Usage:");
-    expect(String(payload?.text ?? "")).toContain(`· session \`${sessionKey}\``);
+    expect(String(payload?.text ?? "")).toContain(
+      `· session \`${sessionKey}\``,
+    );
   });
 
   it("does not append session key when responseUsage=tokens", async () => {

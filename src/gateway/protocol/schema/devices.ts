@@ -1,7 +1,10 @@
 import { Type } from "@sinclair/typebox";
 import { NonEmptyString } from "./primitives.js";
 
-export const DevicePairListParamsSchema = Type.Object({}, { additionalProperties: false });
+export const DevicePairListParamsSchema = Type.Object(
+  {},
+  { additionalProperties: false },
+);
 
 export const DevicePairApproveParamsSchema = Type.Object(
   { requestId: NonEmptyString },

@@ -120,7 +120,9 @@ describe("browser control evaluate gating", () => {
     expect(evalRes.error).toContain("browser.evaluateEnabled=false");
     expect(pwMocks.evaluateViaPlaywright).not.toHaveBeenCalled();
 
-    const cookiesRes = (await realFetch(`${base}/cookies`).then((r) => r.json())) as {
+    const cookiesRes = (await realFetch(`${base}/cookies`).then((r) =>
+      r.json(),
+    )) as {
       ok: boolean;
       cookies?: Array<{ name: string }>;
     };
@@ -131,8 +133,8 @@ describe("browser control evaluate gating", () => {
       targetId: "tab-1",
     });
 
-    const storageRes = (await realFetch(`${base}/storage/local?key=token`).then((r) =>
-      r.json(),
+    const storageRes = (await realFetch(`${base}/storage/local?key=token`).then(
+      (r) => r.json(),
     )) as {
       ok: boolean;
       values?: Record<string, string>;

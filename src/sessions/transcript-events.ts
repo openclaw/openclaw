@@ -6,7 +6,9 @@ type SessionTranscriptListener = (update: SessionTranscriptUpdate) => void;
 
 const SESSION_TRANSCRIPT_LISTENERS = new Set<SessionTranscriptListener>();
 
-export function onSessionTranscriptUpdate(listener: SessionTranscriptListener): () => void {
+export function onSessionTranscriptUpdate(
+  listener: SessionTranscriptListener,
+): () => void {
   SESSION_TRANSCRIPT_LISTENERS.add(listener);
   return () => {
     SESSION_TRANSCRIPT_LISTENERS.delete(listener);

@@ -29,7 +29,9 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-function getMessages(sm: ReturnType<typeof guardSessionManager>): AgentMessage[] {
+function getMessages(
+  sm: ReturnType<typeof guardSessionManager>,
+): AgentMessage[] {
   return sm
     .getEntries()
     .filter((e) => e.type === "message")
@@ -43,7 +45,9 @@ describe("flushPendingToolResultsAfterIdle", () => {
 
   it("waits for idle so real tool results can land before flush", async () => {
     const sm = guardSessionManager(SessionManager.inMemory());
-    const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
+    const appendMessage = sm.appendMessage.bind(sm) as unknown as (
+      message: AgentMessage,
+    ) => void;
     const idle = deferred<void>();
     const agent = { waitForIdle: () => idle.promise };
 
@@ -66,14 +70,17 @@ describe("flushPendingToolResultsAfterIdle", () => {
     const messages = getMessages(sm);
     expect(messages.map((m) => m.role)).toEqual(["assistant", "toolResult"]);
     expect((messages[1] as { isError?: boolean }).isError).not.toBe(true);
-    expect((messages[1] as { content?: Array<{ text?: string }> }).content?.[0]?.text).toBe(
-      "command output here",
-    );
+    expect(
+      (messages[1] as { content?: Array<{ text?: string }> }).content?.[0]
+        ?.text,
+    ).toBe("command output here");
   });
 
   it("flushes pending tool call after timeout when idle never resolves", async () => {
     const sm = guardSessionManager(SessionManager.inMemory());
-    const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
+    const appendMessage = sm.appendMessage.bind(sm) as unknown as (
+      message: AgentMessage,
+    ) => void;
     vi.useFakeTimers();
     const agent = { waitForIdle: () => new Promise<void>(() => {}) };
 
@@ -92,9 +99,9 @@ describe("flushPendingToolResultsAfterIdle", () => {
     expect(entries.length).toBe(2);
     expect(entries[1].role).toBe("toolResult");
     expect((entries[1] as { isError?: boolean }).isError).toBe(true);
-    expect((entries[1] as { content?: Array<{ text?: string }> }).content?.[0]?.text).toContain(
-      "missing tool result",
-    );
+    expect(
+      (entries[1] as { content?: Array<{ text?: string }> }).content?.[0]?.text,
+    ).toContain("missing tool result");
   });
 
   it("clears timeout handle when waitForIdle resolves first", async () => {

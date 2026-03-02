@@ -87,6 +87,8 @@ export async function getChannelHistory(
     return cache.slice(0, count);
   }
 
-  runtime?.log?.(`[tlon] Cache has ${cache.length} messages, need ${count}, fetching from scry...`);
+  runtime?.log?.(
+    `[tlon] Cache has ${cache.length} messages, need ${count}, fetching from scry...`,
+  );
   return await fetchChannelHistory(api, channelNest, count, runtime);
 }

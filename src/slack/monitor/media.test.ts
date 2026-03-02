@@ -4,7 +4,10 @@ import * as mediaFetch from "../../media/fetch.js";
 import type { SavedMedia } from "../../media/store.js";
 import * as mediaStore from "../../media/store.js";
 import { mockPinnedHostnameResolution } from "../../test-helpers/ssrf.js";
-import { type FetchMock, withFetchPreconnect } from "../../test-utils/fetch-mock.js";
+import {
+  type FetchMock,
+  withFetchPreconnect,
+} from "../../test-utils/fetch-mock.js";
 import {
   fetchWithSlackAuth,
   resolveSlackAttachmentContent,
@@ -15,7 +18,10 @@ import {
 // Store original fetch
 const originalFetch = globalThis.fetch;
 let mockFetch: ReturnType<typeof vi.fn<FetchMock>>;
-const createSavedMedia = (filePath: string, contentType: string): SavedMedia => ({
+const createSavedMedia = (
+  filePath: string,
+  contentType: string,
+): SavedMedia => ({
   id: "saved-media-id",
   path: filePath,
   size: 128,
@@ -44,7 +50,10 @@ describe("fetchWithSlackAuth", () => {
     });
     mockFetch.mockResolvedValueOnce(mockResponse);
 
-    const result = await fetchWithSlackAuth("https://files.slack.com/test.jpg", "xoxb-test-token");
+    const result = await fetchWithSlackAuth(
+      "https://files.slack.com/test.jpg",
+      "xoxb-test-token",
+    );
 
     expect(result).toBe(mockResponse);
 
@@ -69,7 +78,9 @@ describe("fetchWithSlackAuth", () => {
     // First call: redirect response from Slack
     const redirectResponse = new Response(null, {
       status: 302,
-      headers: { location: "https://cdn.slack-edge.com/presigned-url?sig=abc123" },
+      headers: {
+        location: "https://cdn.slack-edge.com/presigned-url?sig=abc123",
+      },
     });
 
     // Second call: actual file content from CDN
@@ -78,18 +89,27 @@ describe("fetchWithSlackAuth", () => {
       headers: { "content-type": "image/jpeg" },
     });
 
-    mockFetch.mockResolvedValueOnce(redirectResponse).mockResolvedValueOnce(fileResponse);
+    mockFetch
+      .mockResolvedValueOnce(redirectResponse)
+      .mockResolvedValueOnce(fileResponse);
 
-    const result = await fetchWithSlackAuth("https://files.slack.com/test.jpg", "xoxb-test-token");
+    const result = await fetchWithSlackAuth(
+      "https://files.slack.com/test.jpg",
+      "xoxb-test-token",
+    );
 
     expect(result).toBe(fileResponse);
     expect(mockFetch).toHaveBeenCalledTimes(2);
 
     // First call should have Authorization header and manual redirect
-    expect(mockFetch).toHaveBeenNthCalledWith(1, "https://files.slack.com/test.jpg", {
-      headers: { Authorization: "Bearer xoxb-test-token" },
-      redirect: "manual",
-    });
+    expect(mockFetch).toHaveBeenNthCalledWith(
+      1,
+      "https://files.slack.com/test.jpg",
+      {
+        headers: { Authorization: "Bearer xoxb-test-token" },
+        redirect: "manual",
+      },
+    );
 
     // Second call should follow the redirect without Authorization
     expect(mockFetch).toHaveBeenNthCalledWith(
@@ -111,14 +131,23 @@ describe("fetchWithSlackAuth", () => {
       headers: { "content-type": "image/jpeg" },
     });
 
-    mockFetch.mockResolvedValueOnce(redirectResponse).mockResolvedValueOnce(fileResponse);
+    mockFetch
+      .mockResolvedValueOnce(redirectResponse)
+      .mockResolvedValueOnce(fileResponse);
 
-    await fetchWithSlackAuth("https://files.slack.com/original.jpg", "xoxb-test-token");
+    await fetchWithSlackAuth(
+      "https://files.slack.com/original.jpg",
+      "xoxb-test-token",
+    );
 
     // Second call should resolve the relative URL against the original
-    expect(mockFetch).toHaveBeenNthCalledWith(2, "https://files.slack.com/files/redirect-target", {
-      redirect: "follow",
-    });
+    expect(mockFetch).toHaveBeenNthCalledWith(
+      2,
+      "https://files.slack.com/files/redirect-target",
+      {
+        redirect: "follow",
+      },
+    );
   });
 
   it("returns redirect response when no location header is provided", async () => {
@@ -130,7 +159,10 @@ describe("fetchWithSlackAuth", () => {
 
     mockFetch.mockResolvedValueOnce(redirectResponse);
 
-    const result = await fetchWithSlackAuth("https://files.slack.com/test.jpg", "xoxb-test-token");
+    const result = await fetchWithSlackAuth(
+      "https://files.slack.com/test.jpg",
+      "xoxb-test-token",
+    );
 
     // Should return the redirect response directly
     expect(result).toBe(redirectResponse);
@@ -144,7 +176,10 @@ describe("fetchWithSlackAuth", () => {
 
     mockFetch.mockResolvedValueOnce(errorResponse);
 
-    const result = await fetchWithSlackAuth("https://files.slack.com/test.jpg", "xoxb-test-token");
+    const result = await fetchWithSlackAuth(
+      "https://files.slack.com/test.jpg",
+      "xoxb-test-token",
+    );
 
     expect(result).toBe(errorResponse);
     expect(mockFetch).toHaveBeenCalledTimes(1);
@@ -160,14 +195,23 @@ describe("fetchWithSlackAuth", () => {
       status: 200,
     });
 
-    mockFetch.mockResolvedValueOnce(redirectResponse).mockResolvedValueOnce(fileResponse);
+    mockFetch
+      .mockResolvedValueOnce(redirectResponse)
+      .mockResolvedValueOnce(fileResponse);
 
-    await fetchWithSlackAuth("https://files.slack.com/test.jpg", "xoxb-test-token");
+    await fetchWithSlackAuth(
+      "https://files.slack.com/test.jpg",
+      "xoxb-test-token",
+    );
 
     expect(mockFetch).toHaveBeenCalledTimes(2);
-    expect(mockFetch).toHaveBeenNthCalledWith(2, "https://cdn.slack.com/new-url", {
-      redirect: "follow",
-    });
+    expect(mockFetch).toHaveBeenNthCalledWith(
+      2,
+      "https://cdn.slack.com/new-url",
+      {
+        redirect: "follow",
+      },
+    );
   });
 });
 
@@ -217,7 +261,9 @@ describe("resolveSlackMedia", () => {
     mockFetch.mockRejectedValueOnce(new Error("Network error"));
 
     const result = await resolveSlackMedia({
-      files: [{ url_private: "https://files.slack.com/test.jpg", name: "test.jpg" }],
+      files: [
+        { url_private: "https://files.slack.com/test.jpg", name: "test.jpg" },
+      ],
       token: "xoxb-test-token",
       maxBytes: 1024 * 1024,
     });
@@ -256,7 +302,9 @@ describe("resolveSlackMedia", () => {
     );
 
     const result = await resolveSlackMedia({
-      files: [{ url_private: "https://files.slack.com/test.jpg", name: "test.jpg" }],
+      files: [
+        { url_private: "https://files.slack.com/test.jpg", name: "test.jpg" },
+      ],
       token: "xoxb-test-token",
       maxBytes: 1024 * 1024,
     });
@@ -380,12 +428,17 @@ describe("resolveSlackMedia", () => {
       headers: { "content-type": "image/jpeg" },
     });
 
-    mockFetch.mockResolvedValueOnce(errorResponse).mockResolvedValueOnce(successResponse);
+    mockFetch
+      .mockResolvedValueOnce(errorResponse)
+      .mockResolvedValueOnce(successResponse);
 
     const result = await resolveSlackMedia({
       files: [
         { url_private: "https://files.slack.com/first.jpg", name: "first.jpg" },
-        { url_private: "https://files.slack.com/second.jpg", name: "second.jpg" },
+        {
+          url_private: "https://files.slack.com/second.jpg",
+          name: "second.jpg",
+        },
       ],
       token: "xoxb-test-token",
       maxBytes: 1024 * 1024,
@@ -397,20 +450,26 @@ describe("resolveSlackMedia", () => {
   });
 
   it("returns all successfully downloaded files as an array", async () => {
-    vi.spyOn(mediaStore, "saveMediaBuffer").mockImplementation(async (buffer, _contentType) => {
-      const text = Buffer.from(buffer).toString("utf8");
-      if (text.includes("image a")) {
-        return createSavedMedia("/tmp/a.jpg", "image/jpeg");
-      }
-      if (text.includes("image b")) {
-        return createSavedMedia("/tmp/b.png", "image/png");
-      }
-      return createSavedMedia("/tmp/unknown", "application/octet-stream");
-    });
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockImplementation(
+      async (buffer, _contentType) => {
+        const text = Buffer.from(buffer).toString("utf8");
+        if (text.includes("image a")) {
+          return createSavedMedia("/tmp/a.jpg", "image/jpeg");
+        }
+        if (text.includes("image b")) {
+          return createSavedMedia("/tmp/b.png", "image/png");
+        }
+        return createSavedMedia("/tmp/unknown", "application/octet-stream");
+      },
+    );
 
     mockFetch.mockImplementation(async (input: RequestInfo | URL) => {
       const url =
-        typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+        typeof input === "string"
+          ? input
+          : input instanceof URL
+            ? input.toString()
+            : input.url;
       if (url.includes("/a.jpg")) {
         return new Response(Buffer.from("image a"), {
           status: 200,
@@ -492,26 +551,37 @@ describe("Slack media SSRF policy", () => {
       createSavedMedia("/tmp/test.jpg", "image/jpeg"),
     );
     mockFetch.mockResolvedValueOnce(
-      new Response(Buffer.from("img"), { status: 200, headers: { "content-type": "image/jpeg" } }),
+      new Response(Buffer.from("img"), {
+        status: 200,
+        headers: { "content-type": "image/jpeg" },
+      }),
     );
 
     const spy = vi.spyOn(mediaFetch, "fetchRemoteMedia");
 
     await resolveSlackMedia({
-      files: [{ url_private: "https://files.slack.com/test.jpg", name: "test.jpg" }],
+      files: [
+        { url_private: "https://files.slack.com/test.jpg", name: "test.jpg" },
+      ],
       token: "xoxb-test-token",
       maxBytes: 1024,
     });
 
     expect(spy).toHaveBeenCalledWith(
       expect.objectContaining({
-        ssrfPolicy: expect.objectContaining({ allowRfc2544BenchmarkRange: true }),
+        ssrfPolicy: expect.objectContaining({
+          allowRfc2544BenchmarkRange: true,
+        }),
       }),
     );
 
     const policy = spy.mock.calls[0][0].ssrfPolicy;
     expect(policy?.allowedHostnames).toEqual(
-      expect.arrayContaining(["*.slack.com", "*.slack-edge.com", "*.slack-files.com"]),
+      expect.arrayContaining([
+        "*.slack.com",
+        "*.slack-edge.com",
+        "*.slack-files.com",
+      ]),
     );
   });
 
@@ -519,29 +589,41 @@ describe("Slack media SSRF policy", () => {
     vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue(
       createSavedMedia("/tmp/fwd.jpg", "image/jpeg"),
     );
-    vi.spyOn(ssrf, "resolvePinnedHostnameWithPolicy").mockImplementation(async (hostname) => {
-      const normalized = hostname.trim().toLowerCase().replace(/\.$/, "");
-      return {
-        hostname: normalized,
-        addresses: ["93.184.216.34"],
-        lookup: ssrf.createPinnedLookup({ hostname: normalized, addresses: ["93.184.216.34"] }),
-      };
-    });
+    vi.spyOn(ssrf, "resolvePinnedHostnameWithPolicy").mockImplementation(
+      async (hostname) => {
+        const normalized = hostname.trim().toLowerCase().replace(/\.$/, "");
+        return {
+          hostname: normalized,
+          addresses: ["93.184.216.34"],
+          lookup: ssrf.createPinnedLookup({
+            hostname: normalized,
+            addresses: ["93.184.216.34"],
+          }),
+        };
+      },
+    );
     mockFetch.mockResolvedValueOnce(
-      new Response(Buffer.from("fwd"), { status: 200, headers: { "content-type": "image/jpeg" } }),
+      new Response(Buffer.from("fwd"), {
+        status: 200,
+        headers: { "content-type": "image/jpeg" },
+      }),
     );
 
     const spy = vi.spyOn(mediaFetch, "fetchRemoteMedia");
 
     await resolveSlackAttachmentContent({
-      attachments: [{ is_share: true, image_url: "https://files.slack.com/forwarded.jpg" }],
+      attachments: [
+        { is_share: true, image_url: "https://files.slack.com/forwarded.jpg" },
+      ],
       token: "xoxb-test-token",
       maxBytes: 1024,
     });
 
     expect(spy).toHaveBeenCalledWith(
       expect.objectContaining({
-        ssrfPolicy: expect.objectContaining({ allowRfc2544BenchmarkRange: true }),
+        ssrfPolicy: expect.objectContaining({
+          allowRfc2544BenchmarkRange: true,
+        }),
       }),
     );
   });
@@ -551,15 +633,17 @@ describe("resolveSlackAttachmentContent", () => {
   beforeEach(() => {
     mockFetch = vi.fn();
     globalThis.fetch = withFetchPreconnect(mockFetch);
-    vi.spyOn(ssrf, "resolvePinnedHostnameWithPolicy").mockImplementation(async (hostname) => {
-      const normalized = hostname.trim().toLowerCase().replace(/\.$/, "");
-      const addresses = ["93.184.216.34"];
-      return {
-        hostname: normalized,
-        addresses,
-        lookup: ssrf.createPinnedLookup({ hostname: normalized, addresses }),
-      };
-    });
+    vi.spyOn(ssrf, "resolvePinnedHostnameWithPolicy").mockImplementation(
+      async (hostname) => {
+        const normalized = hostname.trim().toLowerCase().replace(/\.$/, "");
+        const addresses = ["93.184.216.34"];
+        return {
+          hostname: normalized,
+          addresses,
+          lookup: ssrf.createPinnedLookup({ hostname: normalized, addresses }),
+        };
+      },
+    );
   });
 
   afterEach(() => {
@@ -608,7 +692,9 @@ describe("resolveSlackAttachmentContent", () => {
     const saveMediaBufferMock = vi.spyOn(mediaStore, "saveMediaBuffer");
 
     const result = await resolveSlackAttachmentContent({
-      attachments: [{ is_share: true, image_url: "https://example.com/forwarded.jpg" }],
+      attachments: [
+        { is_share: true, image_url: "https://example.com/forwarded.jpg" },
+      ],
       token: "xoxb-test-token",
       maxBytes: 1024 * 1024,
     });
@@ -631,7 +717,9 @@ describe("resolveSlackAttachmentContent", () => {
     );
 
     const result = await resolveSlackAttachmentContent({
-      attachments: [{ is_share: true, image_url: "https://files.slack.com/forwarded.jpg" }],
+      attachments: [
+        { is_share: true, image_url: "https://files.slack.com/forwarded.jpg" },
+      ],
       token: "xoxb-test-token",
       maxBytes: 1024 * 1024,
     });
@@ -650,7 +738,9 @@ describe("resolveSlackAttachmentContent", () => {
     expect(firstCall?.[0]).toBe("https://files.slack.com/forwarded.jpg");
     const firstInit = firstCall?.[1];
     expect(firstInit?.redirect).toBe("manual");
-    expect(new Headers(firstInit?.headers).get("Authorization")).toBe("Bearer xoxb-test-token");
+    expect(new Headers(firstInit?.headers).get("Authorization")).toBe(
+      "Bearer xoxb-test-token",
+    );
   });
 });
 

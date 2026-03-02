@@ -1,4 +1,7 @@
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import {
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "../agents/agent-scope.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { buildWorkspaceHookStatus } from "../hooks/hooks-status.js";
@@ -21,7 +24,10 @@ export async function setupInternalHooks(
   );
 
   // Discover available hooks using the hook discovery system
-  const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
+  const workspaceDir = resolveAgentWorkspaceDir(
+    cfg,
+    resolveDefaultAgentId(cfg),
+  );
   const report = buildWorkspaceHookStatus(workspaceDir, { config: cfg });
 
   // Show every eligible hook so users can opt in during onboarding.

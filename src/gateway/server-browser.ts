@@ -11,18 +11,29 @@ export async function startBrowserControlServerIfEnabled(): Promise<BrowserContr
   // Lazy import: keeps startup fast, but still bundles for the embedded
   // gateway (bun --compile) via the static specifier path.
   const override = process.env.OPENCLAW_BROWSER_CONTROL_MODULE?.trim();
-  const mod = override ? await import(override) : await import("../browser/server.js");
+  const mod = override
+    ? await import(override)
+    : await import("../browser/server.js");
   const start =
     typeof (mod as { startBrowserControlServiceFromConfig?: unknown })
       .startBrowserControlServiceFromConfig === "function"
-      ? (mod as { startBrowserControlServiceFromConfig: () => Promise<unknown> })
-          .startBrowserControlServiceFromConfig
-      : (mod as { startBrowserControlServerFromConfig?: () => Promise<unknown> })
-          .startBrowserControlServerFromConfig;
+      ? (
+          mod as {
+            startBrowserControlServiceFromConfig: () => Promise<unknown>;
+          }
+        ).startBrowserControlServiceFromConfig
+      : (
+          mod as {
+            startBrowserControlServerFromConfig?: () => Promise<unknown>;
+          }
+        ).startBrowserControlServerFromConfig;
   const stop =
-    typeof (mod as { stopBrowserControlService?: unknown }).stopBrowserControlService === "function"
-      ? (mod as { stopBrowserControlService: () => Promise<void> }).stopBrowserControlService
-      : (mod as { stopBrowserControlServer?: () => Promise<void> }).stopBrowserControlServer;
+    typeof (mod as { stopBrowserControlService?: unknown })
+      .stopBrowserControlService === "function"
+      ? (mod as { stopBrowserControlService: () => Promise<void> })
+          .stopBrowserControlService
+      : (mod as { stopBrowserControlServer?: () => Promise<void> })
+          .stopBrowserControlServer;
   if (!start) {
     return null;
   }

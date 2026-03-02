@@ -1,4 +1,8 @@
-import { ErrorCodes, errorShape, validateNodeInvokeResultParams } from "../protocol/index.js";
+import {
+  ErrorCodes,
+  errorShape,
+  validateNodeInvokeResultParams,
+} from "../protocol/index.js";
 import { respondInvalidParams } from "./nodes.helpers.js";
 import type { GatewayRequestHandler } from "./types.js";
 
@@ -10,7 +14,10 @@ function normalizeNodeInvokeResultParams(params: unknown): unknown {
   const normalized: Record<string, unknown> = { ...raw };
   if (normalized.payloadJSON === null) {
     delete normalized.payloadJSON;
-  } else if (normalized.payloadJSON !== undefined && typeof normalized.payloadJSON !== "string") {
+  } else if (
+    normalized.payloadJSON !== undefined &&
+    typeof normalized.payloadJSON !== "string"
+  ) {
     if (normalized.payload === undefined) {
       normalized.payload = normalized.payloadJSON;
     }
@@ -45,9 +52,14 @@ export const handleNodeInvokeResult: GatewayRequestHandler = async ({
     payloadJSON?: string | null;
     error?: { code?: string; message?: string } | null;
   };
-  const callerNodeId = client?.connect?.device?.id ?? client?.connect?.client?.id;
+  const callerNodeId =
+    client?.connect?.device?.id ?? client?.connect?.client?.id;
   if (callerNodeId && callerNodeId !== p.nodeId) {
-    respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "nodeId mismatch"));
+    respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.INVALID_REQUEST, "nodeId mismatch"),
+    );
     return;
   }
 
@@ -62,7 +74,9 @@ export const handleNodeInvokeResult: GatewayRequestHandler = async ({
   if (!ok) {
     // Late-arriving results (after invoke timeout) are expected and harmless.
     // Return success instead of error to reduce log noise; client can discard.
-    context.logGateway.debug(`late invoke result ignored: id=${p.id} node=${p.nodeId}`);
+    context.logGateway.debug(
+      `late invoke result ignored: id=${p.id} node=${p.nodeId}`,
+    );
     respond(true, { ok: true, ignored: true }, undefined);
     return;
   }

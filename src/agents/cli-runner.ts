@@ -7,7 +7,10 @@ import { isTruthyEnvValue } from "../infra/env.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import { resolveSessionAgentIds } from "./agent-scope.js";
-import { makeBootstrapWarn, resolveBootstrapContextForRun } from "./bootstrap-files.js";
+import {
+  makeBootstrapWarn,
+  resolveBootstrapContextForRun,
+} from "./bootstrap-files.js";
 import { resolveCliBackendConfig } from "./cli-backends.js";
 import {
   appendImagePathsToPrompt,
@@ -26,9 +29,15 @@ import {
 } from "./cli-runner/helpers.js";
 import { resolveOpenClawDocsPath } from "./docs-path.js";
 import { FailoverError, resolveFailoverStatus } from "./failover-error.js";
-import { classifyFailoverReason, isFailoverErrorMessage } from "./pi-embedded-helpers.js";
+import {
+  classifyFailoverReason,
+  isFailoverErrorMessage,
+} from "./pi-embedded-helpers.js";
 import type { EmbeddedPiRunResult } from "./pi-embedded-runner.js";
-import { redactRunIdentifier, resolveRunWorkspaceDir } from "./workspace-run.js";
+import {
+  redactRunIdentifier,
+  resolveRunWorkspaceDir,
+} from "./workspace-run.js";
 
 const log = createSubsystemLogger("agent/claude-cli");
 
@@ -69,7 +78,10 @@ export async function runCliAgent(params: {
   }
   const workspaceDir = resolvedWorkspace;
 
-  const backendResolved = resolveCliBackendConfig(params.provider, params.config);
+  const backendResolved = resolveCliBackendConfig(
+    params.provider,
+    params.config,
+  );
   if (!backendResolved) {
     throw new Error(`Unknown CLI backend: ${params.provider}`);
   }
@@ -91,7 +103,10 @@ export async function runCliAgent(params: {
     config: params.config,
     sessionKey: params.sessionKey,
     sessionId: params.sessionId,
-    warn: makeBootstrapWarn({ sessionLabel, warn: (message) => log.warn(message) }),
+    warn: makeBootstrapWarn({
+      sessionLabel,
+      warn: (message) => log.warn(message),
+    }),
   });
   const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({
     sessionKey: params.sessionKey,
@@ -100,7 +115,9 @@ export async function runCliAgent(params: {
   });
   const heartbeatPrompt =
     sessionAgentId === defaultAgentId
-      ? resolveHeartbeatPrompt(params.config?.agents?.defaults?.heartbeat?.prompt)
+      ? resolveHeartbeatPrompt(
+          params.config?.agents?.defaults?.heartbeat?.prompt,
+        )
       : undefined;
   const docsPath = await resolveOpenClawDocsPath({
     workspaceDir,
@@ -141,7 +158,10 @@ export async function runCliAgent(params: {
       cliSessionId: cliSessionIdToUse,
     });
     const useResume = Boolean(
-      cliSessionIdToUse && resolvedSessionId && backend.resumeArgs && backend.resumeArgs.length > 0,
+      cliSessionIdToUse &&
+      resolvedSessionId &&
+      backend.resumeArgs &&
+      backend.resumeArgs.length > 0,
     );
     const systemPromptArg = resolveSystemPromptUsage({
       backend,
@@ -166,9 +186,13 @@ export async function runCliAgent(params: {
       prompt,
     });
     const stdinPayload = stdin ?? "";
-    const baseArgs = useResume ? (backend.resumeArgs ?? backend.args ?? []) : (backend.args ?? []);
+    const baseArgs = useResume
+      ? (backend.resumeArgs ?? backend.args ?? [])
+      : (backend.args ?? []);
     const resolvedArgs = useResume
-      ? baseArgs.map((entry) => entry.replaceAll("{sessionId}", resolvedSessionId ?? ""))
+      ? baseArgs.map((entry) =>
+          entry.replaceAll("{sessionId}", resolvedSessionId ?? ""),
+        )
       : baseArgs;
     const args = buildCliArgs({
       backend,
@@ -182,21 +206,28 @@ export async function runCliAgent(params: {
     });
 
     const serialize = backend.serialize ?? true;
-    const queueKey = serialize ? backendResolved.id : `${backendResolved.id}:${params.runId}`;
+    const queueKey = serialize
+      ? backendResolved.id
+      : `${backendResolved.id}:${params.runId}`;
 
     try {
       const output = await enqueueCliRun(queueKey, async () => {
         log.info(
           `cli exec: provider=${params.provider} model=${normalizedModel} promptChars=${params.prompt.length}`,
         );
-        const logOutputText = isTruthyEnvValue(process.env.OPENCLAW_CLAUDE_CLI_LOG_OUTPUT);
+        const logOutputText = isTruthyEnvValue(
+          process.env.OPENCLAW_CLAUDE_CLI_LOG_OUTPUT,
+        );
         if (logOutputText) {
           const logArgs: string[] = [];
           for (let i = 0; i < args.length; i += 1) {
             const arg = args[i] ?? "";
             if (arg === backend.systemPromptArg) {
               const systemPromptValue = args[i + 1] ?? "";
-              logArgs.push(arg, `<systemPrompt:${systemPromptValue.length} chars>`);
+              logArgs.push(
+                arg,
+                `<systemPrompt:${systemPromptValue.length} chars>`,
+              );
               i += 1;
               continue;
             }
@@ -280,7 +311,10 @@ export async function runCliAgent(params: {
         }
 
         if (result.exitCode !== 0 || result.reason !== "exit") {
-          if (result.reason === "no-output-timeout" || result.noOutputTimedOut) {
+          if (
+            result.reason === "no-output-timeout" ||
+            result.noOutputTimedOut
+          ) {
             const timeoutReason = `CLI produced no output for ${Math.round(noOutputTimeoutMs / 1000)}s and was terminated.`;
             log.warn(
               `cli watchdog timeout: provider=${params.provider} model=${modelId} session=${resolvedSessionId ?? params.sessionId} noOutputTimeoutMs=${noOutputTimeoutMs} pid=${managedRun.pid ?? "unknown"}`,
@@ -312,7 +346,9 @@ export async function runCliAgent(params: {
           });
         }
 
-        const outputMode = useResume ? (backend.resumeOutput ?? backend.output) : backend.output;
+        const outputMode = useResume
+          ? (backend.resumeOutput ?? backend.output)
+          : backend.output;
 
         if (outputMode === "text") {
           return { text: stdout, sessionId: undefined };
@@ -345,7 +381,8 @@ export async function runCliAgent(params: {
       meta: {
         durationMs: Date.now() - started,
         agentMeta: {
-          sessionId: output.sessionId ?? params.cliSessionId ?? params.sessionId ?? "",
+          sessionId:
+            output.sessionId ?? params.cliSessionId ?? params.sessionId ?? "",
           provider: params.provider,
           model: modelId,
           usage: output.usage,
@@ -355,7 +392,11 @@ export async function runCliAgent(params: {
   } catch (err) {
     if (err instanceof FailoverError) {
       // Check if this is a session expired error and we have a session to clear
-      if (err.reason === "session_expired" && params.cliSessionId && params.sessionKey) {
+      if (
+        err.reason === "session_expired" &&
+        params.cliSessionId &&
+        params.sessionKey
+      ) {
         log.warn(
           `CLI session expired, clearing session ID and retrying: provider=${params.provider} session=${redactRunIdentifier(params.cliSessionId)}`,
         );

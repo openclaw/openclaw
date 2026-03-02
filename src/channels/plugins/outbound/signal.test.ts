@@ -17,7 +17,9 @@ describe("signalOutbound", () => {
   };
 
   it("passes account-scoped maxBytes for sendText", async () => {
-    const sendSignal = vi.fn().mockResolvedValue({ messageId: "sig-text-1", timestamp: 123 });
+    const sendSignal = vi
+      .fn()
+      .mockResolvedValue({ messageId: "sig-text-1", timestamp: 123 });
     const sendText = signalOutbound.sendText;
     expect(sendText).toBeDefined();
 
@@ -37,11 +39,17 @@ describe("signalOutbound", () => {
         maxBytes: 4 * 1024 * 1024,
       }),
     );
-    expect(result).toEqual({ channel: "signal", messageId: "sig-text-1", timestamp: 123 });
+    expect(result).toEqual({
+      channel: "signal",
+      messageId: "sig-text-1",
+      timestamp: 123,
+    });
   });
 
   it("passes mediaUrl/mediaLocalRoots for sendMedia", async () => {
-    const sendSignal = vi.fn().mockResolvedValue({ messageId: "sig-media-1", timestamp: 456 });
+    const sendSignal = vi
+      .fn()
+      .mockResolvedValue({ messageId: "sig-media-1", timestamp: 456 });
     const sendMedia = signalOutbound.sendMedia;
     expect(sendMedia).toBeDefined();
 
@@ -65,6 +73,10 @@ describe("signalOutbound", () => {
         maxBytes: 8 * 1024 * 1024,
       }),
     );
-    expect(result).toEqual({ channel: "signal", messageId: "sig-media-1", timestamp: 456 });
+    expect(result).toEqual({
+      channel: "signal",
+      messageId: "sig-media-1",
+      timestamp: 456,
+    });
   });
 });

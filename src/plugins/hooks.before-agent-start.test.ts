@@ -8,12 +8,17 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { createHookRunner } from "./hooks.js";
 import { createEmptyPluginRegistry, type PluginRegistry } from "./registry.js";
-import type { PluginHookBeforeAgentStartResult, PluginHookRegistration } from "./types.js";
+import type {
+  PluginHookBeforeAgentStartResult,
+  PluginHookRegistration,
+} from "./types.js";
 
 function addBeforeAgentStartHook(
   registry: PluginRegistry,
   pluginId: string,
-  handler: () => PluginHookBeforeAgentStartResult | Promise<PluginHookBeforeAgentStartResult>,
+  handler: () =>
+    | PluginHookBeforeAgentStartResult
+    | Promise<PluginHookBeforeAgentStartResult>,
   priority?: number,
 ) {
   registry.typedHooks.push({
@@ -39,7 +44,10 @@ describe("before_agent_start hook merger", () => {
     registry = createEmptyPluginRegistry();
   });
 
-  const runWithSingleHook = async (result: PluginHookBeforeAgentStartResult, priority?: number) => {
+  const runWithSingleHook = async (
+    result: PluginHookBeforeAgentStartResult,
+    priority?: number,
+  ) => {
     addBeforeAgentStartHook(registry, "plugin-a", () => result, priority);
     const runner = createHookRunner(registry);
     return await runner.runBeforeAgentStart({ prompt: "hello" }, stubCtx);
@@ -69,14 +77,22 @@ describe("before_agent_start hook merger", () => {
     }));
 
     const runner = createHookRunner(registry);
-    const result = await runner.runBeforeAgentStart({ prompt: "hello" }, stubCtx);
+    const result = await runner.runBeforeAgentStart(
+      { prompt: "hello" },
+      stubCtx,
+    );
 
     expect(result?.modelOverride).toBe("llama3.3:8b");
     expect(result?.providerOverride).toBe("ollama");
   });
 
   it("higher-priority plugin wins for modelOverride", async () => {
-    addBeforeAgentStartHook(registry, "low-priority", () => ({ modelOverride: "gpt-4o" }), 1);
+    addBeforeAgentStartHook(
+      registry,
+      "low-priority",
+      () => ({ modelOverride: "gpt-4o" }),
+      1,
+    );
     addBeforeAgentStartHook(
       registry,
       "high-priority",
@@ -85,7 +101,10 @@ describe("before_agent_start hook merger", () => {
     );
 
     const runner = createHookRunner(registry);
-    const result = await runner.runBeforeAgentStart({ prompt: "PII prompt" }, stubCtx);
+    const result = await runner.runBeforeAgentStart(
+      { prompt: "PII prompt" },
+      stubCtx,
+    );
 
     expect(result?.modelOverride).toBe("llama3.3:8b");
   });
@@ -105,7 +124,10 @@ describe("before_agent_start hook merger", () => {
     );
 
     const runner = createHookRunner(registry);
-    const result = await runner.runBeforeAgentStart({ prompt: "hello" }, stubCtx);
+    const result = await runner.runBeforeAgentStart(
+      { prompt: "hello" },
+      stubCtx,
+    );
 
     // High-priority ran first (priority 10), low-priority ran second (priority 1).
     // Low-priority didn't return modelOverride, so ?? falls back to acc's value.
@@ -134,7 +156,10 @@ describe("before_agent_start hook merger", () => {
     );
 
     const runner = createHookRunner(registry);
-    const result = await runner.runBeforeAgentStart({ prompt: "hello" }, stubCtx);
+    const result = await runner.runBeforeAgentStart(
+      { prompt: "hello" },
+      stubCtx,
+    );
 
     expect(result?.prependContext).toBe("context A\n\ncontext B");
     expect(result?.modelOverride).toBe("llama3.3:8b");
@@ -146,7 +171,10 @@ describe("before_agent_start hook merger", () => {
     }));
 
     const runner = createHookRunner(registry);
-    const result = await runner.runBeforeAgentStart({ prompt: "hello" }, stubCtx);
+    const result = await runner.runBeforeAgentStart(
+      { prompt: "hello" },
+      stubCtx,
+    );
 
     expect(result?.prependContext).toBe("legacy context");
     expect(result?.modelOverride).toBeUndefined();
@@ -160,7 +188,10 @@ describe("before_agent_start hook merger", () => {
 
   it("returns undefined when no hooks are registered", async () => {
     const runner = createHookRunner(registry);
-    const result = await runner.runBeforeAgentStart({ prompt: "hello" }, stubCtx);
+    const result = await runner.runBeforeAgentStart(
+      { prompt: "hello" },
+      stubCtx,
+    );
 
     expect(result).toBeUndefined();
   });
@@ -173,7 +204,10 @@ describe("before_agent_start hook merger", () => {
     }));
 
     const runner = createHookRunner(registry);
-    const result = await runner.runBeforeAgentStart({ prompt: "hello" }, stubCtx);
+    const result = await runner.runBeforeAgentStart(
+      { prompt: "hello" },
+      stubCtx,
+    );
 
     expect(result?.systemPrompt).toBe("You are a helpful assistant");
     expect(result?.modelOverride).toBe("llama3.3:8b");

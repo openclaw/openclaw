@@ -1,6 +1,9 @@
 import type { BrowserFormField } from "./client-actions-core.js";
 import { DEFAULT_FILL_FIELD_TYPE } from "./form-fields.js";
-import { DEFAULT_UPLOAD_DIR, resolveStrictExistingPathsWithinRoot } from "./paths.js";
+import {
+  DEFAULT_UPLOAD_DIR,
+  resolveStrictExistingPathsWithinRoot,
+} from "./paths.js";
 import {
   ensurePageState,
   forceDisconnectPlaywrightForTarget,
@@ -8,7 +11,11 @@ import {
   refLocator,
   restoreRoleRefsForTarget,
 } from "./pw-session.js";
-import { normalizeTimeoutMs, requireRef, toAIFriendlyError } from "./pw-tools-core.shared.js";
+import {
+  normalizeTimeoutMs,
+  requireRef,
+  toAIFriendlyError,
+} from "./pw-tools-core.shared.js";
 
 export async function highlightViaPlaywright(opts: {
   cdpUrl: string;
@@ -17,7 +24,11 @@ export async function highlightViaPlaywright(opts: {
 }): Promise<void> {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
-  restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
+  restoreRoleRefsForTarget({
+    cdpUrl: opts.cdpUrl,
+    targetId: opts.targetId,
+    page,
+  });
   const ref = requireRef(opts.ref);
   try {
     await refLocator(page, ref).highlight();
@@ -40,10 +51,17 @@ export async function clickViaPlaywright(opts: {
     targetId: opts.targetId,
   });
   ensurePageState(page);
-  restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
+  restoreRoleRefsForTarget({
+    cdpUrl: opts.cdpUrl,
+    targetId: opts.targetId,
+    page,
+  });
   const ref = requireRef(opts.ref);
   const locator = refLocator(page, ref);
-  const timeout = Math.max(500, Math.min(60_000, Math.floor(opts.timeoutMs ?? 8000)));
+  const timeout = Math.max(
+    500,
+    Math.min(60_000, Math.floor(opts.timeoutMs ?? 8000)),
+  );
   try {
     if (opts.doubleClick) {
       await locator.dblclick({
@@ -72,7 +90,11 @@ export async function hoverViaPlaywright(opts: {
   const ref = requireRef(opts.ref);
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
-  restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
+  restoreRoleRefsForTarget({
+    cdpUrl: opts.cdpUrl,
+    targetId: opts.targetId,
+    page,
+  });
   try {
     await refLocator(page, ref).hover({
       timeout: Math.max(500, Math.min(60_000, opts.timeoutMs ?? 8000)),
@@ -96,7 +118,11 @@ export async function dragViaPlaywright(opts: {
   }
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
-  restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
+  restoreRoleRefsForTarget({
+    cdpUrl: opts.cdpUrl,
+    targetId: opts.targetId,
+    page,
+  });
   try {
     await refLocator(page, startRef).dragTo(refLocator(page, endRef), {
       timeout: Math.max(500, Math.min(60_000, opts.timeoutMs ?? 8000)),
@@ -119,7 +145,11 @@ export async function selectOptionViaPlaywright(opts: {
   }
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
-  restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
+  restoreRoleRefsForTarget({
+    cdpUrl: opts.cdpUrl,
+    targetId: opts.targetId,
+    page,
+  });
   try {
     await refLocator(page, ref).selectOption(opts.values, {
       timeout: Math.max(500, Math.min(60_000, opts.timeoutMs ?? 8000)),
@@ -158,7 +188,11 @@ export async function typeViaPlaywright(opts: {
   const text = String(opts.text ?? "");
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
-  restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
+  restoreRoleRefsForTarget({
+    cdpUrl: opts.cdpUrl,
+    targetId: opts.targetId,
+    page,
+  });
   const ref = requireRef(opts.ref);
   const locator = refLocator(page, ref);
   const timeout = Math.max(500, Math.min(60_000, opts.timeoutMs ?? 8000));
@@ -185,11 +219,16 @@ export async function fillFormViaPlaywright(opts: {
 }): Promise<void> {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
-  restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
+  restoreRoleRefsForTarget({
+    cdpUrl: opts.cdpUrl,
+    targetId: opts.targetId,
+    page,
+  });
   const timeout = Math.max(500, Math.min(60_000, opts.timeoutMs ?? 8000));
   for (const field of opts.fields) {
     const ref = field.ref.trim();
-    const type = (field.type || DEFAULT_FILL_FIELD_TYPE).trim() || DEFAULT_FILL_FIELD_TYPE;
+    const type =
+      (field.type || DEFAULT_FILL_FIELD_TYPE).trim() || DEFAULT_FILL_FIELD_TYPE;
     const rawValue = field.value;
     const value =
       typeof rawValue === "string"
@@ -203,7 +242,10 @@ export async function fillFormViaPlaywright(opts: {
     const locator = refLocator(page, ref);
     if (type === "checkbox" || type === "radio") {
       const checked =
-        rawValue === true || rawValue === 1 || rawValue === "1" || rawValue === "true";
+        rawValue === true ||
+        rawValue === 1 ||
+        rawValue === "1" ||
+        rawValue === "true";
       try {
         await locator.setChecked(checked, { timeout });
       } catch (err) {
@@ -233,7 +275,11 @@ export async function evaluateViaPlaywright(opts: {
   }
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
-  restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
+  restoreRoleRefsForTarget({
+    cdpUrl: opts.cdpUrl,
+    targetId: opts.targetId,
+    page,
+  });
   // Clamp evaluate timeout to prevent permanently blocking Playwright's command queue.
   // Without this, a long-running async evaluate blocks all subsequent page operations
   // because Playwright serializes CDP commands per page.
@@ -308,7 +354,10 @@ export async function evaluateViaPlaywright(opts: {
           throw new Error("Invalid evaluate function: " + (err && err.message ? err.message : String(err)));
         }
         `,
-      ) as (el: Element, args: { fnBody: string; timeoutMs: number }) => unknown;
+      ) as (
+        el: Element,
+        args: { fnBody: string; timeoutMs: number },
+      ) => unknown;
       const evalPromise = locator.evaluate(elementEvaluator, {
         fnBody: fnText,
         timeoutMs: evaluateTimeout,
@@ -377,7 +426,11 @@ export async function scrollIntoViewViaPlaywright(opts: {
 }): Promise<void> {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
-  restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
+  restoreRoleRefsForTarget({
+    cdpUrl: opts.cdpUrl,
+    targetId: opts.targetId,
+    page,
+  });
   const timeout = normalizeTimeoutMs(opts.timeoutMs, 20_000);
 
   const ref = requireRef(opts.ref);
@@ -423,7 +476,10 @@ export async function waitForViaPlaywright(opts: {
   if (opts.selector) {
     const selector = String(opts.selector).trim();
     if (selector) {
-      await page.locator(selector).first().waitFor({ state: "visible", timeout });
+      await page
+        .locator(selector)
+        .first()
+        .waitFor({ state: "visible", timeout });
     }
   }
   if (opts.url) {
@@ -453,7 +509,11 @@ export async function takeScreenshotViaPlaywright(opts: {
 }): Promise<{ buffer: Buffer }> {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
-  restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
+  restoreRoleRefsForTarget({
+    cdpUrl: opts.cdpUrl,
+    targetId: opts.targetId,
+    page,
+  });
   const type = opts.type ?? "png";
   if (opts.ref) {
     if (opts.fullPage) {
@@ -487,7 +547,11 @@ export async function screenshotWithLabelsViaPlaywright(opts: {
 }): Promise<{ buffer: Buffer; labels: number; skipped: number }> {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
-  restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
+  restoreRoleRefsForTarget({
+    cdpUrl: opts.cdpUrl,
+    targetId: opts.targetId,
+    page,
+  });
   const type = opts.type ?? "png";
   const maxLabels =
     typeof opts.maxLabels === "number" && Number.isFinite(opts.maxLabels)
@@ -502,7 +566,13 @@ export async function screenshotWithLabelsViaPlaywright(opts: {
   }));
 
   const refs = Object.keys(opts.refs ?? {});
-  const boxes: Array<{ ref: string; x: number; y: number; w: number; h: number }> = [];
+  const boxes: Array<{
+    ref: string;
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+  }> = [];
   let skipped = 0;
 
   for (const ref of refs) {
@@ -614,11 +684,16 @@ export async function setInputFilesViaPlaywright(opts: {
 }): Promise<void> {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
-  restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
+  restoreRoleRefsForTarget({
+    cdpUrl: opts.cdpUrl,
+    targetId: opts.targetId,
+    page,
+  });
   if (!opts.paths.length) {
     throw new Error("paths are required");
   }
-  const inputRef = typeof opts.inputRef === "string" ? opts.inputRef.trim() : "";
+  const inputRef =
+    typeof opts.inputRef === "string" ? opts.inputRef.trim() : "";
   const element = typeof opts.element === "string" ? opts.element.trim() : "";
   if (inputRef && element) {
     throw new Error("inputRef and element are mutually exclusive");
@@ -627,7 +702,9 @@ export async function setInputFilesViaPlaywright(opts: {
     throw new Error("inputRef or element is required");
   }
 
-  const locator = inputRef ? refLocator(page, inputRef) : page.locator(element).first();
+  const locator = inputRef
+    ? refLocator(page, inputRef)
+    : page.locator(element).first();
   const uploadPathsResult = await resolveStrictExistingPathsWithinRoot({
     rootDir: DEFAULT_UPLOAD_DIR,
     requestedPaths: opts.paths,

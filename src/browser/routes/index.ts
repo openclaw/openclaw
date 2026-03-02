@@ -4,7 +4,10 @@ import { registerBrowserBasicRoutes } from "./basic.js";
 import { registerBrowserTabRoutes } from "./tabs.js";
 import type { BrowserRouteRegistrar } from "./types.js";
 
-export function registerBrowserRoutes(app: BrowserRouteRegistrar, ctx: BrowserRouteContext) {
+export function registerBrowserRoutes(
+  app: BrowserRouteRegistrar,
+  ctx: BrowserRouteContext,
+) {
   registerBrowserBasicRoutes(app, ctx);
   registerBrowserTabRoutes(app, ctx);
   registerBrowserAgentRoutes(app, ctx);

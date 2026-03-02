@@ -10,7 +10,13 @@
   </head>
   <body>
     <button id="hamburger" title="Open sidebar">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+      <svg
+        width="14"
+        height="14"
+        viewBox="0 0 24 24"
+        fill="currentColor"
+        stroke="none"
+      >
         <circle cx="6" cy="6" r="2.5" />
         <circle cx="6" cy="18" r="2.5" />
         <circle cx="18" cy="12" r="2.5" />
@@ -23,23 +29,52 @@
       <aside id="sidebar">
         <div class="sidebar-header">
           <div class="sidebar-controls">
-            <input type="text" class="sidebar-search" id="tree-search" placeholder="Search..." />
+            <input
+              type="text"
+              class="sidebar-search"
+              id="tree-search"
+              placeholder="Search..."
+            />
           </div>
           <div class="sidebar-filters">
-            <button class="filter-btn active" data-filter="default" title="Hide settings entries">
+            <button
+              class="filter-btn active"
+              data-filter="default"
+              title="Hide settings entries"
+            >
               Default
             </button>
-            <button class="filter-btn" data-filter="no-tools" title="Default minus tool results">
+            <button
+              class="filter-btn"
+              data-filter="no-tools"
+              title="Default minus tool results"
+            >
               No-tools
             </button>
-            <button class="filter-btn" data-filter="user-only" title="Only user messages">
+            <button
+              class="filter-btn"
+              data-filter="user-only"
+              title="Only user messages"
+            >
               User
             </button>
-            <button class="filter-btn" data-filter="labeled-only" title="Only labeled entries">
+            <button
+              class="filter-btn"
+              data-filter="labeled-only"
+              title="Only labeled entries"
+            >
               Labeled
             </button>
-            <button class="filter-btn" data-filter="all" title="Show everything">All</button>
-            <button class="sidebar-close" id="sidebar-close" title="Close">✕</button>
+            <button
+              class="filter-btn"
+              data-filter="all"
+              title="Show everything"
+            >
+              All
+            </button>
+            <button class="sidebar-close" id="sidebar-close" title="Close">
+              ✕
+            </button>
           </div>
         </div>
         <div class="tree-container" id="tree-container"></div>

@@ -4,7 +4,9 @@ import { describe, expect, it } from "vitest";
 import { assertNoPathAliasEscape } from "./path-alias-guards.js";
 
 async function withTempRoot<T>(run: (root: string) => Promise<T>): Promise<T> {
-  const base = await fs.mkdtemp(path.join(process.cwd(), "openclaw-path-alias-"));
+  const base = await fs.mkdtemp(
+    path.join(process.cwd(), "openclaw-path-alias-"),
+  );
   const root = path.join(base, "root");
   await fs.mkdir(root, { recursive: true });
   try {

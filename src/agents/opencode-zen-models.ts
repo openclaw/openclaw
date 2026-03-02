@@ -267,7 +267,9 @@ interface ZenModelsResponse {
  * @param apiKey - OpenCode Zen API key for authentication
  * @returns Array of model definitions, or static fallback on failure
  */
-export async function fetchOpencodeZenModels(apiKey?: string): Promise<ModelDefinitionConfig[]> {
+export async function fetchOpencodeZenModels(
+  apiKey?: string,
+): Promise<ModelDefinitionConfig[]> {
   // Return cached models if still valid
   const now = Date.now();
   if (cachedModels && now - cacheTimestamp < CACHE_TTL_MS) {
@@ -289,7 +291,9 @@ export async function fetchOpencodeZenModels(apiKey?: string): Promise<ModelDefi
     });
 
     if (!response.ok) {
-      throw new Error(`API returned ${response.status}: ${response.statusText}`);
+      throw new Error(
+        `API returned ${response.status}: ${response.statusText}`,
+      );
     }
 
     const data = (await response.json()) as ZenModelsResponse;

@@ -18,7 +18,10 @@ export function isWordBoundary(text: string, index: number): boolean {
  * Find index where query matches at a word boundary in text.
  * Returns null if no match.
  */
-export function findWordBoundaryIndex(text: string, query: string): number | null {
+export function findWordBoundaryIndex(
+  text: string,
+  query: string,
+): number | null {
   if (!query) {
     return null;
   }
@@ -40,7 +43,10 @@ export function findWordBoundaryIndex(text: string, query: string): number | nul
  * Fuzzy match with pre-lowercased inputs (avoids toLowerCase on every keystroke).
  * Returns score (lower = better) or null if no match.
  */
-export function fuzzyMatchLower(queryLower: string, textLower: string): number | null {
+export function fuzzyMatchLower(
+  queryLower: string,
+  textLower: string,
+): number | null {
   if (queryLower.length === 0) {
     return 0;
   }

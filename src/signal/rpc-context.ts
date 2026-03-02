@@ -19,6 +19,7 @@ export function resolveSignalRpcContext(
   if (!baseUrl) {
     throw new Error("Signal base URL is required");
   }
-  const account = opts.account?.trim() || resolvedAccount?.config.account?.trim();
+  const account =
+    opts.account?.trim() || resolvedAccount?.config.account?.trim();
   return { baseUrl, account };
 }

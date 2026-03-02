@@ -20,7 +20,9 @@ export function installWebFetchSsrfHarness() {
   });
 }
 
-export function createBaseWebFetchToolConfig(opts?: { maxResponseBytes?: number }): {
+export function createBaseWebFetchToolConfig(opts?: {
+  maxResponseBytes?: number;
+}): {
   config: {
     tools: {
       web: {
@@ -40,7 +42,9 @@ export function createBaseWebFetchToolConfig(opts?: { maxResponseBytes?: number 
           fetch: {
             cacheTtlMinutes: 0,
             firecrawl: { enabled: false },
-            ...(opts?.maxResponseBytes ? { maxResponseBytes: opts.maxResponseBytes } : {}),
+            ...(opts?.maxResponseBytes
+              ? { maxResponseBytes: opts.maxResponseBytes }
+              : {}),
           },
         },
       },

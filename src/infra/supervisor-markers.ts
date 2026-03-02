@@ -12,7 +12,9 @@ export const SUPERVISOR_HINT_ENV_VARS = [
   "JOURNAL_STREAM",
 ] as const;
 
-export function hasSupervisorHint(env: NodeJS.ProcessEnv = process.env): boolean {
+export function hasSupervisorHint(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
   return SUPERVISOR_HINT_ENV_VARS.some((key) => {
     const value = env[key];
     return typeof value === "string" && value.trim().length > 0;

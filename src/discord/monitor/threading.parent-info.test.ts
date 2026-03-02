@@ -62,7 +62,9 @@ describe("resolveDiscordThreadParentInfo", () => {
       return null;
     });
 
-    const client = { fetchChannel } as unknown as import("@buape/carbon").Client;
+    const client = {
+      fetchChannel,
+    } as unknown as import("@buape/carbon").Client;
     const result = await resolveDiscordThreadParentInfo({
       client,
       threadChannel: {
@@ -94,7 +96,9 @@ describe("resolveDiscordThreadParentInfo", () => {
       return null;
     });
 
-    const client = { fetchChannel } as unknown as import("@buape/carbon").Client;
+    const client = {
+      fetchChannel,
+    } as unknown as import("@buape/carbon").Client;
     const result = await resolveDiscordThreadParentInfo({
       client,
       threadChannel: {

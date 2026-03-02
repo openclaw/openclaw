@@ -13,7 +13,10 @@ import {
 
 const getCore = () => getMatrixRuntime();
 
-export function buildTextContent(body: string, relation?: MatrixRelation): MatrixTextContent {
+export function buildTextContent(
+  body: string,
+  relation?: MatrixRelation,
+): MatrixTextContent {
   const content: MatrixTextContent = relation
     ? {
         msgtype: MsgType.Text,
@@ -28,7 +31,10 @@ export function buildTextContent(body: string, relation?: MatrixRelation): Matri
   return content;
 }
 
-export function applyMatrixFormatting(content: MatrixFormattedContent, body: string): void {
+export function applyMatrixFormatting(
+  content: MatrixFormattedContent,
+  body: string,
+): void {
   const formatted = markdownToMatrixHtml(body ?? "");
   if (!formatted) {
     return;
@@ -37,7 +43,9 @@ export function applyMatrixFormatting(content: MatrixFormattedContent, body: str
   content.formatted_body = formatted;
 }
 
-export function buildReplyRelation(replyToId?: string): MatrixReplyRelation | undefined {
+export function buildReplyRelation(
+  replyToId?: string,
+): MatrixReplyRelation | undefined {
   const trimmed = replyToId?.trim();
   if (!trimmed) {
     return undefined;
@@ -45,7 +53,10 @@ export function buildReplyRelation(replyToId?: string): MatrixReplyRelation | un
   return { "m.in_reply_to": { event_id: trimmed } };
 }
 
-export function buildThreadRelation(threadId: string, replyToId?: string): MatrixThreadRelation {
+export function buildThreadRelation(
+  threadId: string,
+  replyToId?: string,
+): MatrixThreadRelation {
   const trimmed = threadId.trim();
   return {
     rel_type: RelationType.Thread,
@@ -55,7 +66,10 @@ export function buildThreadRelation(threadId: string, replyToId?: string): Matri
   };
 }
 
-export function resolveMatrixMsgType(contentType?: string, _fileName?: string): MatrixMediaMsgType {
+export function resolveMatrixMsgType(
+  contentType?: string,
+  _fileName?: string,
+): MatrixMediaMsgType {
   const kind = getCore().media.mediaKindFromMime(contentType ?? "");
   switch (kind) {
     case "image":
@@ -83,7 +97,10 @@ export function resolveMatrixVoiceDecision(opts: {
   return { useVoice: false };
 }
 
-function isMatrixVoiceCompatibleAudio(opts: { contentType?: string; fileName?: string }): boolean {
+function isMatrixVoiceCompatibleAudio(opts: {
+  contentType?: string;
+  fileName?: string;
+}): boolean {
   // Matrix currently shares the core voice compatibility policy.
   // Keep this wrapper as the seam if Matrix policy diverges later.
   return getCore().media.isVoiceCompatibleAudio({

@@ -11,6 +11,8 @@ describe("jsonUtf8Bytes", () => {
   it("falls back to string conversion when JSON serialization throws", () => {
     const circular: { self?: unknown } = {};
     circular.self = circular;
-    expect(jsonUtf8Bytes(circular)).toBe(Buffer.byteLength("[object Object]", "utf8"));
+    expect(jsonUtf8Bytes(circular)).toBe(
+      Buffer.byteLength("[object Object]", "utf8"),
+    );
   });
 });

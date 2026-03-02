@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { createTempHomeHarness, makeReplyConfig } from "./reply.test-harness.js";
+import {
+  createTempHomeHarness,
+  makeReplyConfig,
+} from "./reply.test-harness.js";
 
 const agentMocks = vi.hoisted(() => ({
   runEmbeddedPiAgent: vi.fn(),
@@ -14,7 +17,8 @@ vi.mock("../agents/pi-embedded.js", () => ({
   abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
   runEmbeddedPiAgent: agentMocks.runEmbeddedPiAgent,
   queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
-  resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
+  resolveEmbeddedSessionLane: (key: string) =>
+    `session:${key.trim() || "main"}`,
   isEmbeddedPiRunActive: vi.fn().mockReturnValue(false),
   isEmbeddedPiRunStreaming: vi.fn().mockReturnValue(false),
 }));
@@ -61,7 +65,9 @@ describe("RawBody directive parsing", () => {
         Body: "/think:high status please",
         BodyForAgent: "/think:high status please",
         RawBody: "/think:high status please",
-        InboundHistory: [{ sender: "Peter", body: "hello", timestamp: 1700000000000 }],
+        InboundHistory: [
+          { sender: "Peter", body: "hello", timestamp: 1700000000000 },
+        ],
         From: "+1222",
         To: "+1222",
         ChatType: "group",
@@ -81,9 +87,14 @@ describe("RawBody directive parsing", () => {
       expect(text).toBe("ok");
       expect(agentMocks.runEmbeddedPiAgent).toHaveBeenCalledOnce();
       const prompt =
-        (agentMocks.runEmbeddedPiAgent.mock.calls[0]?.[0] as { prompt?: string } | undefined)
-          ?.prompt ?? "";
-      expect(prompt).toContain("Chat history since last reply (untrusted, for context):");
+        (
+          agentMocks.runEmbeddedPiAgent.mock.calls[0]?.[0] as
+            | { prompt?: string }
+            | undefined
+        )?.prompt ?? "";
+      expect(prompt).toContain(
+        "Chat history since last reply (untrusted, for context):",
+      );
       expect(prompt).toContain('"sender": "Peter"');
       expect(prompt).toContain('"body": "hello"');
       expect(prompt).toContain("status please");

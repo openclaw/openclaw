@@ -63,7 +63,11 @@ function toError(err: unknown): Error {
   return new Error(typeof err === "string" ? err : JSON.stringify(err));
 }
 
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  label: string,
+): Promise<T> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(
       () => reject(new Error(`${label} timed out after ${timeoutMs}ms`)),
@@ -93,7 +97,9 @@ function buildFallbackNick(nick: string): string {
   return `${base}${suffix}`;
 }
 
-export function buildIrcNickServCommands(options?: IrcNickServOptions): string[] {
+export function buildIrcNickServCommands(
+  options?: IrcNickServOptions,
+): string[] {
   if (!options || options.enabled === false) {
     return [];
   }
@@ -113,8 +119,11 @@ export function buildIrcNickServCommands(options?: IrcNickServOptions): string[]
   return commands;
 }
 
-export async function connectIrcClient(options: IrcClientOptions): Promise<IrcClient> {
-  const timeoutMs = options.connectTimeoutMs != null ? options.connectTimeoutMs : 15000;
+export async function connectIrcClient(
+  options: IrcClientOptions,
+): Promise<IrcClient> {
+  const timeoutMs =
+    options.connectTimeoutMs != null ? options.connectTimeoutMs : 15000;
   const messageChunkMaxChars =
     options.messageChunkMaxChars != null ? options.messageChunkMaxChars : 350;
 
@@ -171,11 +180,15 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
 
   const tryRecoverNickCollision = (): boolean => {
     const nickServEnabled = options.nickserv?.enabled !== false;
-    const nickservPassword = sanitizeIrcOutboundText(options.nickserv?.password ?? "");
+    const nickservPassword = sanitizeIrcOutboundText(
+      options.nickserv?.password ?? "",
+    );
     if (nickServEnabled && !nickServRecoverAttempted && nickservPassword) {
       nickServRecoverAttempted = true;
       try {
-        const service = sanitizeIrcTarget(options.nickserv?.service?.trim() || "NickServ");
+        const service = sanitizeIrcTarget(
+          options.nickserv?.service?.trim() || "NickServ",
+        );
         sendRaw(`PRIVMSG ${service} :GHOST ${desiredNick} ${nickservPassword}`);
         sendRaw(`NICK ${desiredNick}`);
         return true;
@@ -281,14 +294,21 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
 
       if (line.command === "PING") {
         const payload =
-          line.trailing != null ? line.trailing : line.params[0] != null ? line.params[0] : "";
+          line.trailing != null
+            ? line.trailing
+            : line.params[0] != null
+              ? line.params[0]
+              : "";
         sendRaw(`PONG :${payload}`);
         continue;
       }
 
       if (line.command === "NICK") {
         const prefix = parseIrcPrefix(line.prefix);
-        if (prefix.nick && prefix.nick.toLowerCase() === currentNick.toLowerCase()) {
+        if (
+          prefix.nick &&
+          prefix.nick.toLowerCase() === currentNick.toLowerCase()
+        ) {
           const next =
             line.trailing != null
               ? line.trailing
@@ -305,7 +325,9 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
           continue;
         }
         const detail =
-          line.trailing != null ? line.trailing : line.params.join(" ") || "nickname in use";
+          line.trailing != null
+            ? line.trailing
+            : line.params.join(" ") || "nickname in use";
         fail(new Error(`IRC login failed (${line.command}): ${detail}`));
         close();
         return;
@@ -313,7 +335,9 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
 
       if (!ready && IRC_ERROR_CODES.has(line.command)) {
         const detail =
-          line.trailing != null ? line.trailing : line.params.join(" ") || "login rejected";
+          line.trailing != null
+            ? line.trailing
+            : line.params.join(" ") || "login rejected";
         fail(new Error(`IRC login failed (${line.command}): ${detail}`));
         close();
         return;
@@ -354,7 +378,10 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
 
       if (line.command === "NOTICE") {
         if (options.onNotice) {
-          options.onNotice(line.trailing != null ? line.trailing : "", line.params[0]);
+          options.onNotice(
+            line.trailing != null ? line.trailing : "",
+            line.params[0],
+          );
         }
         continue;
       }
@@ -392,7 +419,9 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
         sendRaw(`PASS ${options.password.trim()}`);
       }
       sendRaw(`NICK ${options.nick.trim()}`);
-      sendRaw(`USER ${options.username.trim()} 0 * :${sanitizeIrcOutboundText(options.realname)}`);
+      sendRaw(
+        `USER ${options.username.trim()} 0 * :${sanitizeIrcOutboundText(options.realname)}`,
+      );
     } catch (err) {
       fail(err);
       close();

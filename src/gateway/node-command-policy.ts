@@ -25,10 +25,17 @@ const SCREEN_DANGEROUS_COMMANDS = ["screen.record"];
 
 const LOCATION_COMMANDS = ["location.get"];
 const NOTIFICATION_COMMANDS = ["notifications.list"];
-const ANDROID_NOTIFICATION_COMMANDS = [...NOTIFICATION_COMMANDS, "notifications.actions"];
+const ANDROID_NOTIFICATION_COMMANDS = [
+  ...NOTIFICATION_COMMANDS,
+  "notifications.actions",
+];
 
 const DEVICE_COMMANDS = ["device.info", "device.status"];
-const ANDROID_DEVICE_COMMANDS = [...DEVICE_COMMANDS, "device.permissions", "device.health"];
+const ANDROID_DEVICE_COMMANDS = [
+  ...DEVICE_COMMANDS,
+  "device.permissions",
+  "device.health",
+];
 
 const CONTACTS_COMMANDS = ["contacts.search"];
 const CONTACTS_DANGEROUS_COMMANDS = ["contacts.add"];
@@ -139,7 +146,9 @@ const DEVICE_FAMILY_TOKEN_RULES: ReadonlyArray<{
   { id: "linux", tokens: ["linux"] },
 ] as const;
 
-function resolvePlatformIdByPrefix(value: string): Exclude<PlatformId, "unknown"> | undefined {
+function resolvePlatformIdByPrefix(
+  value: string,
+): Exclude<PlatformId, "unknown"> | undefined {
   for (const rule of PLATFORM_PREFIX_RULES) {
     if (rule.prefixes.some((prefix) => value.startsWith(prefix))) {
       return rule.id;
@@ -159,7 +168,10 @@ function resolvePlatformIdByDeviceFamily(
   return undefined;
 }
 
-function normalizePlatformId(platform?: string, deviceFamily?: string): PlatformId {
+function normalizePlatformId(
+  platform?: string,
+  deviceFamily?: string,
+): PlatformId {
   const raw = normalizeDeviceMetadataForPolicy(platform);
   const byPlatform = resolvePlatformIdByPrefix(raw);
   if (byPlatform) {
@@ -178,7 +190,9 @@ export function resolveNodeCommandAllowlist(
   const base = PLATFORM_DEFAULTS[platformId] ?? PLATFORM_DEFAULTS.unknown;
   const extra = cfg.gateway?.nodes?.allowCommands ?? [];
   const deny = new Set(cfg.gateway?.nodes?.denyCommands ?? []);
-  const allow = new Set([...base, ...extra].map((cmd) => cmd.trim()).filter(Boolean));
+  const allow = new Set(
+    [...base, ...extra].map((cmd) => cmd.trim()).filter(Boolean),
+  );
   for (const blocked of deny) {
     const trimmed = blocked.trim();
     if (trimmed) {
@@ -200,7 +214,10 @@ export function isNodeCommandAllowed(params: {
   if (!params.allowlist.has(command)) {
     return { ok: false, reason: "command not allowlisted" };
   }
-  if (Array.isArray(params.declaredCommands) && params.declaredCommands.length > 0) {
+  if (
+    Array.isArray(params.declaredCommands) &&
+    params.declaredCommands.length > 0
+  ) {
     if (!params.declaredCommands.includes(command)) {
       return { ok: false, reason: "command not declared by node" };
     }

@@ -4,7 +4,9 @@ import type { ZaloFetch } from "./api.js";
 
 const proxyCache = new Map<string, ZaloFetch>();
 
-export function resolveZaloProxyFetch(proxyUrl?: string | null): ZaloFetch | undefined {
+export function resolveZaloProxyFetch(
+  proxyUrl?: string | null,
+): ZaloFetch | undefined {
   const trimmed = proxyUrl?.trim();
   if (!trimmed) {
     return undefined;

@@ -71,11 +71,13 @@ export function resolveMatrixLocation(params: {
   const { eventType, content } = params;
   const isLocation =
     eventType === EventType.Location ||
-    (eventType === EventType.RoomMessage && content.msgtype === EventType.Location);
+    (eventType === EventType.RoomMessage &&
+      content.msgtype === EventType.Location);
   if (!isLocation) {
     return null;
   }
-  const geoUri = typeof content.geo_uri === "string" ? content.geo_uri.trim() : "";
+  const geoUri =
+    typeof content.geo_uri === "string" ? content.geo_uri.trim() : "";
   if (!geoUri) {
     return null;
   }

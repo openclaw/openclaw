@@ -3,7 +3,9 @@ import { parseNodeList, parsePairingList } from "./node-list-parse.js";
 
 describe("shared/node-list-parse", () => {
   it("parses node.list payloads", () => {
-    expect(parseNodeList({ nodes: [{ nodeId: "node-1" }] })).toEqual([{ nodeId: "node-1" }]);
+    expect(parseNodeList({ nodes: [{ nodeId: "node-1" }] })).toEqual([
+      { nodeId: "node-1" },
+    ]);
     expect(parseNodeList({ nodes: "nope" })).toEqual([]);
     expect(parseNodeList(null)).toEqual([]);
   });
@@ -18,7 +20,10 @@ describe("shared/node-list-parse", () => {
       pending: [{ requestId: "r1", nodeId: "n1", ts: 1 }],
       paired: [{ nodeId: "n1" }],
     });
-    expect(parsePairingList({ pending: 1, paired: "x" })).toEqual({ pending: [], paired: [] });
+    expect(parsePairingList({ pending: 1, paired: "x" })).toEqual({
+      pending: [],
+      paired: [],
+    });
     expect(parsePairingList(undefined)).toEqual({ pending: [], paired: [] });
   });
 });

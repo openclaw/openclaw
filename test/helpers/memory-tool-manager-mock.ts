@@ -1,20 +1,28 @@
 import { vi } from "vitest";
 
 export type SearchImpl = () => Promise<unknown[]>;
-export type MemoryReadParams = { relPath: string; from?: number; lines?: number };
+export type MemoryReadParams = {
+  relPath: string;
+  from?: number;
+  lines?: number;
+};
 export type MemoryReadResult = { text: string; path: string };
 type MemoryBackend = "builtin" | "qmd";
 
 let backend: MemoryBackend = "builtin";
 let searchImpl: SearchImpl = async () => [];
-let readFileImpl: (params: MemoryReadParams) => Promise<MemoryReadResult> = async (params) => ({
+let readFileImpl: (
+  params: MemoryReadParams,
+) => Promise<MemoryReadResult> = async (params) => ({
   text: "",
   path: params.relPath,
 });
 
 const stubManager = {
   search: vi.fn(async () => await searchImpl()),
-  readFile: vi.fn(async (params: MemoryReadParams) => await readFileImpl(params)),
+  readFile: vi.fn(
+    async (params: MemoryReadParams) => await readFileImpl(params),
+  ),
   status: () => ({
     backend,
     files: 1,

@@ -36,7 +36,11 @@ export class FilterableSelectList implements Component {
   onSelect?: (item: SelectItem) => void;
   onCancel?: () => void;
 
-  constructor(items: FilterableSelectItem[], maxVisible: number, theme: FilterableSelectListTheme) {
+  constructor(
+    items: FilterableSelectItem[],
+    maxVisible: number,
+    theme: FilterableSelectListTheme,
+  ) {
     this.allItems = prepareSearchItems(items);
     this.maxVisible = maxVisible;
     this.theme = theme;
@@ -47,7 +51,11 @@ export class FilterableSelectList implements Component {
   private applyFilter(): void {
     const queryLower = this.filterText.toLowerCase();
     if (!queryLower.trim()) {
-      this.selectList = new SelectList(this.allItems, this.maxVisible, this.theme);
+      this.selectList = new SelectList(
+        this.allItems,
+        this.maxVisible,
+        this.theme,
+      );
       return;
     }
     const filtered = fuzzyFilterLower(this.allItems, queryLower);

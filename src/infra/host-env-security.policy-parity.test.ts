@@ -10,7 +10,10 @@ type HostEnvSecurityPolicy = {
 
 function parseSwiftStringArray(source: string, marker: string): string[] {
   const escapedMarker = marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const re = new RegExp(`${escapedMarker}[\\s\\S]*?=\\s*\\[([\\s\\S]*?)\\]`, "m");
+  const re = new RegExp(
+    `${escapedMarker}[\\s\\S]*?=\\s*\\[([\\s\\S]*?)\\]`,
+    "m",
+  );
   const match = source.match(re);
   if (!match) {
     throw new Error(`Failed to parse Swift array for marker: ${marker}`);
@@ -21,7 +24,10 @@ function parseSwiftStringArray(source: string, marker: string): string[] {
 describe("host env security policy parity", () => {
   it("keeps generated macOS host env policy in sync with shared JSON policy", () => {
     const repoRoot = process.cwd();
-    const policyPath = path.join(repoRoot, "src/infra/host-env-security-policy.json");
+    const policyPath = path.join(
+      repoRoot,
+      "src/infra/host-env-security-policy.json",
+    );
     const generatedSwiftPath = path.join(
       repoRoot,
       "apps/macos/Sources/OpenClaw/HostEnvSecurityPolicy.generated.swift",
@@ -31,11 +37,16 @@ describe("host env security policy parity", () => {
       "apps/macos/Sources/OpenClaw/HostEnvSanitizer.swift",
     );
 
-    const policy = JSON.parse(fs.readFileSync(policyPath, "utf8")) as HostEnvSecurityPolicy;
+    const policy = JSON.parse(
+      fs.readFileSync(policyPath, "utf8"),
+    ) as HostEnvSecurityPolicy;
     const generatedSource = fs.readFileSync(generatedSwiftPath, "utf8");
     const sanitizerSource = fs.readFileSync(sanitizerSwiftPath, "utf8");
 
-    const swiftBlockedKeys = parseSwiftStringArray(generatedSource, "static let blockedKeys");
+    const swiftBlockedKeys = parseSwiftStringArray(
+      generatedSource,
+      "static let blockedKeys",
+    );
     const swiftBlockedOverrideKeys = parseSwiftStringArray(
       generatedSource,
       "static let blockedOverrideKeys",

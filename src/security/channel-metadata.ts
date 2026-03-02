@@ -28,7 +28,9 @@ export function buildUntrustedChannelMetadata(params: {
     .map((entry) => (typeof entry === "string" ? normalizeEntry(entry) : ""))
     .filter((entry) => Boolean(entry))
     .map((entry) => truncateText(entry, DEFAULT_MAX_ENTRY_CHARS));
-  const deduped = cleaned.filter((entry, index, list) => list.indexOf(entry) === index);
+  const deduped = cleaned.filter(
+    (entry, index, list) => list.indexOf(entry) === index,
+  );
   if (deduped.length === 0) {
     return undefined;
   }
@@ -36,7 +38,10 @@ export function buildUntrustedChannelMetadata(params: {
   const body = deduped.join("\n");
   const header = `UNTRUSTED channel metadata (${params.source})`;
   const labeled = `${params.label}:\n${body}`;
-  const truncated = truncateText(`${header}\n${labeled}`, params.maxChars ?? DEFAULT_MAX_CHARS);
+  const truncated = truncateText(
+    `${header}\n${labeled}`,
+    params.maxChars ?? DEFAULT_MAX_CHARS,
+  );
 
   return wrapExternalContent(truncated, {
     source: "channel_metadata",

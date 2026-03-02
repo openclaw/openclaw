@@ -31,7 +31,10 @@ const clamp01 = (value: number) => {
 };
 
 const hasReducedMotionPreference = () => {
-  if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+  if (
+    typeof window === "undefined" ||
+    typeof window.matchMedia !== "function"
+  ) {
     return false;
   }
   return window.matchMedia("(prefers-reduced-motion: reduce)").matches ?? false;
@@ -63,7 +66,8 @@ export const startThemeTransition = ({
   const document_ = documentReference as DocumentWithViewTransition;
   const prefersReducedMotion = hasReducedMotionPreference();
 
-  const canUseViewTransition = Boolean(document_.startViewTransition) && !prefersReducedMotion;
+  const canUseViewTransition =
+    Boolean(document_.startViewTransition) && !prefersReducedMotion;
 
   if (canUseViewTransition) {
     let xPercent = 0.5;

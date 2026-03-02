@@ -115,8 +115,12 @@ describe("talk normalization", () => {
           const io = createConfigIO({ configPath });
           const snapshot = await io.readConfigFileSnapshot();
           expect(snapshot.config.talk?.provider).toBe("elevenlabs");
-          expect(snapshot.config.talk?.providers?.elevenlabs?.voiceId).toBe("voice-123");
-          expect(snapshot.config.talk?.providers?.elevenlabs?.apiKey).toBe("env-eleven-key");
+          expect(snapshot.config.talk?.providers?.elevenlabs?.voiceId).toBe(
+            "voice-123",
+          );
+          expect(snapshot.config.talk?.providers?.elevenlabs?.apiKey).toBe(
+            "env-eleven-key",
+          );
           expect(snapshot.config.talk?.apiKey).toBe("env-eleven-key");
         },
       );
@@ -140,7 +144,9 @@ describe("talk normalization", () => {
           const io = createConfigIO({ configPath });
           const snapshot = await io.readConfigFileSnapshot();
           expect(snapshot.config.talk?.provider).toBe("acme");
-          expect(snapshot.config.talk?.providers?.acme?.voiceId).toBe("acme-voice");
+          expect(snapshot.config.talk?.providers?.acme?.voiceId).toBe(
+            "acme-voice",
+          );
           expect(snapshot.config.talk?.providers?.acme?.apiKey).toBeUndefined();
           expect(snapshot.config.talk?.apiKey).toBeUndefined();
         },

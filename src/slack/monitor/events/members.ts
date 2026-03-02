@@ -23,7 +23,9 @@ export function registerSlackMemberEvents(params: {
       trackEvent?.();
       const payload = params.event;
       const channelId = payload.channel;
-      const channelInfo = channelId ? await ctx.resolveChannelName(channelId) : {};
+      const channelInfo = channelId
+        ? await ctx.resolveChannelName(channelId)
+        : {};
       const channelType = payload.channel_type ?? channelInfo?.type;
       const ingressContext = await authorizeAndResolveSlackSystemEventContext({
         ctx,
@@ -35,20 +37,30 @@ export function registerSlackMemberEvents(params: {
       if (!ingressContext) {
         return;
       }
-      const userInfo = payload.user ? await ctx.resolveUserName(payload.user) : {};
+      const userInfo = payload.user
+        ? await ctx.resolveUserName(payload.user)
+        : {};
       const userLabel = userInfo?.name ?? payload.user ?? "someone";
-      enqueueSystemEvent(`Slack: ${userLabel} ${params.verb} ${ingressContext.channelLabel}.`, {
-        sessionKey: ingressContext.sessionKey,
-        contextKey: `slack:member:${params.verb}:${channelId ?? "unknown"}:${payload.user ?? "unknown"}`,
-      });
+      enqueueSystemEvent(
+        `Slack: ${userLabel} ${params.verb} ${ingressContext.channelLabel}.`,
+        {
+          sessionKey: ingressContext.sessionKey,
+          contextKey: `slack:member:${params.verb}:${channelId ?? "unknown"}:${payload.user ?? "unknown"}`,
+        },
+      );
     } catch (err) {
-      ctx.runtime.error?.(danger(`slack ${params.verb} handler failed: ${String(err)}`));
+      ctx.runtime.error?.(
+        danger(`slack ${params.verb} handler failed: ${String(err)}`),
+      );
     }
   };
 
   ctx.app.event(
     "member_joined_channel",
-    async ({ event, body }: SlackEventMiddlewareArgs<"member_joined_channel">) => {
+    async ({
+      event,
+      body,
+    }: SlackEventMiddlewareArgs<"member_joined_channel">) => {
       await handleMemberChannelEvent({
         verb: "joined",
         event: event as SlackMemberChannelEvent,
@@ -59,7 +71,10 @@ export function registerSlackMemberEvents(params: {
 
   ctx.app.event(
     "member_left_channel",
-    async ({ event, body }: SlackEventMiddlewareArgs<"member_left_channel">) => {
+    async ({
+      event,
+      body,
+    }: SlackEventMiddlewareArgs<"member_left_channel">) => {
       await handleMemberChannelEvent({
         verb: "left",
         event: event as SlackMemberChannelEvent,

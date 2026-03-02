@@ -33,7 +33,9 @@ export function stripMarkdownForTwitch(markdown: string): string {
       // Strikethrough (~~text~~)
       .replace(/~~([^~]+)~~/g, "$1")
       // Code blocks
-      .replace(/```[\s\S]*?```/g, (block) => block.replace(/```[^\n]*\n?/g, "").replace(/```/g, ""))
+      .replace(/```[\s\S]*?```/g, (block) =>
+        block.replace(/```[^\n]*\n?/g, "").replace(/```/g, ""),
+      )
       // Inline code
       .replace(/`([^`]+)`/g, "$1")
       // Headers

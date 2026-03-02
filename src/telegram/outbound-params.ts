@@ -1,4 +1,6 @@
-export function parseTelegramReplyToMessageId(replyToId?: string | null): number | undefined {
+export function parseTelegramReplyToMessageId(
+  replyToId?: string | null,
+): number | undefined {
   if (!replyToId) {
     return undefined;
   }
@@ -14,7 +16,9 @@ function parseIntegerId(value: string): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
-export function parseTelegramThreadId(threadId?: string | number | null): number | undefined {
+export function parseTelegramThreadId(
+  threadId?: string | number | null,
+): number | undefined {
   if (threadId == null) {
     return undefined;
   }

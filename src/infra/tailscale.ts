@@ -1,7 +1,13 @@
 import { existsSync } from "node:fs";
 import { formatCliCommand } from "../cli/command-format.js";
 import { promptYesNo } from "../cli/prompt.js";
-import { danger, info, logVerbose, shouldLogVerbose, warn } from "../globals.js";
+import {
+  danger,
+  info,
+  logVerbose,
+  shouldLogVerbose,
+  warn,
+} from "../globals.js";
 import { runExec } from "../process/exec.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { colorize, isRich, theme } from "../terminal/theme.js";
@@ -36,7 +42,9 @@ export async function findTailscaleBinary(): Promise<string | null> {
       // Use Promise.race with runExec to implement timeout
       await Promise.race([
         runExec(path, ["--version"], { timeoutMs: 3000 }),
-        new Promise<never>((_, reject) => setTimeout(() => reject(new Error("timeout")), 3000)),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("timeout")), 3000),
+        ),
       ]);
       return true;
     } catch {
@@ -90,7 +98,9 @@ export async function findTailscaleBinary(): Promise<string | null> {
     const candidates = stdout
       .trim()
       .split("\n")
-      .filter((line) => line.includes("/Tailscale.app/Contents/MacOS/Tailscale"));
+      .filter((line) =>
+        line.includes("/Tailscale.app/Contents/MacOS/Tailscale"),
+      );
     for (const candidate of candidates) {
       if (await checkBinary(candidate)) {
         return candidate;
@@ -103,7 +113,10 @@ export async function findTailscaleBinary(): Promise<string | null> {
   return null;
 }
 
-export async function getTailnetHostname(exec: typeof runExec = runExec, detectedBinary?: string) {
+export async function getTailnetHostname(
+  exec: typeof runExec = runExec,
+  detectedBinary?: string,
+) {
   // Derive tailnet hostname (or IP fallback) from tailscale status JSON.
   const candidates = detectedBinary
     ? [detectedBinary]
@@ -248,7 +261,8 @@ function extractExecErrorText(err: unknown) {
   const errOutput = err as ExecErrorDetails;
   const stdout = typeof errOutput.stdout === "string" ? errOutput.stdout : "";
   const stderr = typeof errOutput.stderr === "string" ? errOutput.stderr : "";
-  const message = typeof errOutput.message === "string" ? errOutput.message : "";
+  const message =
+    typeof errOutput.message === "string" ? errOutput.message : "";
   const code = typeof errOutput.code === "string" ? errOutput.code : "";
   return { stdout, stderr, message, code };
 }
@@ -308,10 +322,16 @@ export async function ensureFunnel(
   // Ensure Funnel is enabled and publish the webhook port.
   try {
     const tailscaleBin = await getTailscaleBinary();
-    const statusOut = (await exec(tailscaleBin, ["funnel", "status", "--json"])).stdout.trim();
-    const parsed = statusOut ? (JSON.parse(statusOut) as Record<string, unknown>) : {};
+    const statusOut = (
+      await exec(tailscaleBin, ["funnel", "status", "--json"])
+    ).stdout.trim();
+    const parsed = statusOut
+      ? (JSON.parse(statusOut) as Record<string, unknown>)
+      : {};
     if (!parsed || Object.keys(parsed).length === 0) {
-      runtime.error(danger("Tailscale Funnel is not enabled on this tailnet/device."));
+      runtime.error(
+        danger("Tailscale Funnel is not enabled on this tailnet/device."),
+      );
       runtime.error(
         info(
           "Enable in admin console: https://login.tailscale.com/admin (see https://tailscale.com/kb/1223/funnel)",
@@ -322,7 +342,10 @@ export async function ensureFunnel(
           "macOS user-space tailscaled docs: https://github.com/tailscale/tailscale/wiki/Tailscaled-on-macOS",
         ),
       );
-      const proceed = await prompt("Attempt local setup with user-space tailscaled?", true);
+      const proceed = await prompt(
+        "Attempt local setup with user-space tailscaled?",
+        true,
+      );
       if (!proceed) {
         runtime.exit(1);
       }
@@ -362,14 +385,19 @@ export async function ensureFunnel(
         );
       }
     }
-    if (stderr.includes("client version") || stdout.includes("client version")) {
+    if (
+      stderr.includes("client version") ||
+      stdout.includes("client version")
+    ) {
       console.error(
         warn(
           "Tailscale client/server version mismatch detected; try updating tailscale/tailscaled.",
         ),
       );
     }
-    runtime.error("Failed to enable Tailscale Funnel. Is it allowed on your tailnet?");
+    runtime.error(
+      "Failed to enable Tailscale Funnel. Is it allowed on your tailnet?",
+    );
     runtime.error(
       info(
         `Tip: Funnel is optional for OpenClaw. You can keep running the web gateway without it: \`${formatCliCommand("openclaw gateway")}\``,
@@ -389,12 +417,20 @@ export async function ensureFunnel(
   }
 }
 
-export async function enableTailscaleServe(port: number, exec: typeof runExec = runExec) {
+export async function enableTailscaleServe(
+  port: number,
+  exec: typeof runExec = runExec,
+) {
   const tailscaleBin = await getTailscaleBinary();
-  await execWithSudoFallback(exec, tailscaleBin, ["serve", "--bg", "--yes", `${port}`], {
-    maxBuffer: 200_000,
-    timeoutMs: 15_000,
-  });
+  await execWithSudoFallback(
+    exec,
+    tailscaleBin,
+    ["serve", "--bg", "--yes", `${port}`],
+    {
+      maxBuffer: 200_000,
+      timeoutMs: 15_000,
+    },
+  );
 }
 
 export async function disableTailscaleServe(exec: typeof runExec = runExec) {
@@ -405,12 +441,20 @@ export async function disableTailscaleServe(exec: typeof runExec = runExec) {
   });
 }
 
-export async function enableTailscaleFunnel(port: number, exec: typeof runExec = runExec) {
+export async function enableTailscaleFunnel(
+  port: number,
+  exec: typeof runExec = runExec,
+) {
   const tailscaleBin = await getTailscaleBinary();
-  await execWithSudoFallback(exec, tailscaleBin, ["funnel", "--bg", "--yes", `${port}`], {
-    maxBuffer: 200_000,
-    timeoutMs: 15_000,
-  });
+  await execWithSudoFallback(
+    exec,
+    tailscaleBin,
+    ["funnel", "--bg", "--yes", `${port}`],
+    {
+      maxBuffer: 200_000,
+      timeoutMs: 15_000,
+    },
+  );
 }
 
 export async function disableTailscaleFunnel(exec: typeof runExec = runExec) {
@@ -426,12 +470,18 @@ function getString(value: unknown): string | undefined {
 }
 
 function readRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
+  return value && typeof value === "object"
+    ? (value as Record<string, unknown>)
+    : null;
 }
 
-function parseWhoisIdentity(payload: Record<string, unknown>): TailscaleWhoisIdentity | null {
+function parseWhoisIdentity(
+  payload: Record<string, unknown>,
+): TailscaleWhoisIdentity | null {
   const userProfile =
-    readRecord(payload.UserProfile) ?? readRecord(payload.userProfile) ?? readRecord(payload.User);
+    readRecord(payload.UserProfile) ??
+    readRecord(payload.userProfile) ??
+    readRecord(payload.User);
   const login =
     getString(userProfile?.LoginName) ??
     getString(userProfile?.Login) ??
@@ -450,7 +500,10 @@ function parseWhoisIdentity(payload: Record<string, unknown>): TailscaleWhoisIde
   return { login, name };
 }
 
-function readCachedWhois(ip: string, now: number): TailscaleWhoisIdentity | null | undefined {
+function readCachedWhois(
+  ip: string,
+  now: number,
+): TailscaleWhoisIdentity | null | undefined {
   const cached = whoisCache.get(ip);
   if (!cached) {
     return undefined;
@@ -462,7 +515,11 @@ function readCachedWhois(ip: string, now: number): TailscaleWhoisIdentity | null
   return cached.value;
 }
 
-function writeCachedWhois(ip: string, value: TailscaleWhoisIdentity | null, ttlMs: number) {
+function writeCachedWhois(
+  ip: string,
+  value: TailscaleWhoisIdentity | null,
+  ttlMs: number,
+) {
   whoisCache.set(ip, { value, expiresAt: Date.now() + ttlMs });
 }
 
@@ -485,10 +542,14 @@ export async function readTailscaleWhoisIdentity(
   const errorTtlMs = opts?.errorTtlMs ?? 5_000;
   try {
     const tailscaleBin = await getTailscaleBinary();
-    const { stdout } = await exec(tailscaleBin, ["whois", "--json", normalized], {
-      timeoutMs: opts?.timeoutMs ?? 5_000,
-      maxBuffer: 200_000,
-    });
+    const { stdout } = await exec(
+      tailscaleBin,
+      ["whois", "--json", normalized],
+      {
+        timeoutMs: opts?.timeoutMs ?? 5_000,
+        maxBuffer: 200_000,
+      },
+    );
     const parsed = stdout ? parsePossiblyNoisyJsonObject(stdout) : {};
     const identity = parseWhoisIdentity(parsed);
     writeCachedWhois(normalized, identity, cacheTtlMs);

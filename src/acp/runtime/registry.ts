@@ -11,7 +11,9 @@ type AcpRuntimeRegistryGlobalState = {
   backendsById: Map<string, AcpRuntimeBackend>;
 };
 
-const ACP_RUNTIME_REGISTRY_STATE_KEY = Symbol.for("openclaw.acpRuntimeRegistryState");
+const ACP_RUNTIME_REGISTRY_STATE_KEY = Symbol.for(
+  "openclaw.acpRuntimeRegistryState",
+);
 
 function createAcpRuntimeRegistryGlobalState(): AcpRuntimeRegistryGlobalState {
   return {
@@ -24,7 +26,8 @@ function resolveAcpRuntimeRegistryGlobalState(): AcpRuntimeRegistryGlobalState {
     [ACP_RUNTIME_REGISTRY_STATE_KEY]?: AcpRuntimeRegistryGlobalState;
   };
   if (!runtimeGlobal[ACP_RUNTIME_REGISTRY_STATE_KEY]) {
-    runtimeGlobal[ACP_RUNTIME_REGISTRY_STATE_KEY] = createAcpRuntimeRegistryGlobalState();
+    runtimeGlobal[ACP_RUNTIME_REGISTRY_STATE_KEY] =
+      createAcpRuntimeRegistryGlobalState();
   }
   return runtimeGlobal[ACP_RUNTIME_REGISTRY_STATE_KEY];
 }
@@ -52,7 +55,9 @@ export function registerAcpRuntimeBackend(backend: AcpRuntimeBackend): void {
     throw new Error("ACP runtime backend id is required");
   }
   if (!backend.runtime) {
-    throw new Error(`ACP runtime backend "${id}" is missing runtime implementation`);
+    throw new Error(
+      `ACP runtime backend "${id}" is missing runtime implementation`,
+    );
   }
   ACP_BACKENDS_BY_ID.set(id, {
     ...backend,

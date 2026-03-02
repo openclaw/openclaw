@@ -1,4 +1,8 @@
-import type { AcpRuntime, AcpRuntimeHandle, AcpRuntimeSessionMode } from "../runtime/types.js";
+import type {
+  AcpRuntime,
+  AcpRuntimeHandle,
+  AcpRuntimeSessionMode,
+} from "../runtime/types.js";
 
 export type CachedRuntimeState = {
   runtime: AcpRuntime;
@@ -89,11 +93,16 @@ export class RuntimeCache {
     return entries;
   }
 
-  collectIdleCandidates(params: { maxIdleMs: number; now?: number }): CachedRuntimeSnapshot[] {
+  collectIdleCandidates(params: {
+    maxIdleMs: number;
+    now?: number;
+  }): CachedRuntimeSnapshot[] {
     if (!Number.isFinite(params.maxIdleMs) || params.maxIdleMs <= 0) {
       return [];
     }
     const now = params.now ?? Date.now();
-    return this.snapshot({ now }).filter((entry) => entry.idleMs >= params.maxIdleMs);
+    return this.snapshot({ now }).filter(
+      (entry) => entry.idleMs >= params.maxIdleMs,
+    );
   }
 }

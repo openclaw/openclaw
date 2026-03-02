@@ -83,7 +83,9 @@ function createSnapshotFromLifecycleEvent(params: {
 }): AgentRunSnapshot {
   const { runId, phase, data } = params;
   const startedAt =
-    typeof data?.startedAt === "number" ? data.startedAt : agentRunStarts.get(runId);
+    typeof data?.startedAt === "number"
+      ? data.startedAt
+      : agentRunStarts.get(runId);
   const endedAt = typeof data?.endedAt === "number" ? data.endedAt : undefined;
   const error = typeof data?.error === "string" ? data.error : undefined;
   return {
@@ -110,7 +112,10 @@ function ensureAgentRunListener() {
     }
     const phase = evt.data?.phase;
     if (phase === "start") {
-      const startedAt = typeof evt.data?.startedAt === "number" ? evt.data.startedAt : undefined;
+      const startedAt =
+        typeof evt.data?.startedAt === "number"
+          ? evt.data.startedAt
+          : undefined;
       agentRunStarts.set(evt.runId, startedAt ?? Date.now());
       clearPendingAgentRunError(evt.runId);
       // A new start means this run is active again (or retried). Drop stale
@@ -183,7 +188,10 @@ export async function waitForAgentJob(params: {
       delayMs = AGENT_RUN_ERROR_RETRY_GRACE_MS,
     ) => {
       clearPendingErrorTimer();
-      const effectiveDelay = Math.max(1, Math.min(Math.floor(delayMs), 2_147_483_647));
+      const effectiveDelay = Math.max(
+        1,
+        Math.min(Math.floor(delayMs), 2_147_483_647),
+      );
       pendingErrorTimer = setTimeout(() => {
         const latest = getCachedAgentRun(runId);
         if (latest) {
@@ -234,7 +242,10 @@ export async function waitForAgentJob(params: {
       finish(snapshot);
     });
 
-    const timerDelayMs = Math.max(1, Math.min(Math.floor(timeoutMs), 2_147_483_647));
+    const timerDelayMs = Math.max(
+      1,
+      Math.min(Math.floor(timeoutMs), 2_147_483_647),
+    );
     const timer = setTimeout(() => finish(null), timerDelayMs);
   });
 }

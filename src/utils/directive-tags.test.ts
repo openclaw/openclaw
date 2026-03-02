@@ -6,7 +6,8 @@ import {
 
 describe("stripInlineDirectiveTagsForDisplay", () => {
   test("removes reply and audio directives", () => {
-    const input = "hello [[reply_to_current]] world [[reply_to:abc-123]] [[audio_as_voice]]";
+    const input =
+      "hello [[reply_to_current]] world [[reply_to:abc-123]] [[audio_as_voice]]";
     const result = stripInlineDirectiveTagsForDisplay(input);
     expect(result.changed).toBe(true);
     expect(result.text).toBe("hello  world  ");
@@ -31,7 +32,12 @@ describe("stripInlineDirectiveTagsFromMessageForDisplay", () => {
   test("strips inline directives from text content blocks", () => {
     const input = {
       role: "assistant",
-      content: [{ type: "text", text: "hello [[reply_to_current]] world [[audio_as_voice]]" }],
+      content: [
+        {
+          type: "text",
+          text: "hello [[reply_to_current]] world [[audio_as_voice]]",
+        },
+      ],
     };
     const result = stripInlineDirectiveTagsFromMessageForDisplay(input);
     expect(result).toBeDefined();

@@ -110,7 +110,9 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
 
     // Should include version manager paths (macOS specific)
     // Note: nvm has no stable default path, relies on user's shell config
-    expect(result).toContain("/Users/testuser/Library/Application Support/fnm/aliases/default/bin"); // fnm default on macOS
+    expect(result).toContain(
+      "/Users/testuser/Library/Application Support/fnm/aliases/default/bin",
+    ); // fnm default on macOS
     expect(result).toContain("/Users/testuser/.fnm/aliases/default/bin"); // fnm if customized to ~/.fnm
     expect(result).toContain("/Users/testuser/.volta/bin");
     expect(result).toContain("/Users/testuser/.asdf/shims");
@@ -135,7 +137,9 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
     });
 
     // fnm uses aliases/default/bin (not current)
-    expect(result).toContain("/Users/testuser/Library/Application Support/fnm/aliases/default/bin");
+    expect(result).toContain(
+      "/Users/testuser/Library/Application Support/fnm/aliases/default/bin",
+    );
     // nvm: relies on NVM_DIR env var (no stable default path)
     expect(result).toContain("/Users/testuser/.nvm");
     // pnpm: binary is directly in PNPM_HOME
@@ -172,7 +176,9 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
 
 describe("buildMinimalServicePath", () => {
   const splitPath = (value: string, platform: NodeJS.Platform) =>
-    value.split(platform === "win32" ? path.win32.delimiter : path.posix.delimiter);
+    value.split(
+      platform === "win32" ? path.win32.delimiter : path.posix.delimiter,
+    );
 
   it("includes Homebrew + system dirs on macOS", () => {
     const result = buildMinimalServicePath({
@@ -454,27 +460,38 @@ describe("buildNodeServiceEnvironment", () => {
 describe("resolveGatewayStateDir", () => {
   it("uses the default state dir when no overrides are set", () => {
     const env = { HOME: "/Users/test" };
-    expect(resolveGatewayStateDir(env)).toBe(path.join("/Users/test", ".openclaw"));
+    expect(resolveGatewayStateDir(env)).toBe(
+      path.join("/Users/test", ".openclaw"),
+    );
   });
 
   it("appends the profile suffix when set", () => {
     const env = { HOME: "/Users/test", OPENCLAW_PROFILE: "rescue" };
-    expect(resolveGatewayStateDir(env)).toBe(path.join("/Users/test", ".openclaw-rescue"));
+    expect(resolveGatewayStateDir(env)).toBe(
+      path.join("/Users/test", ".openclaw-rescue"),
+    );
   });
 
   it("treats default profiles as the base state dir", () => {
     const env = { HOME: "/Users/test", OPENCLAW_PROFILE: "Default" };
-    expect(resolveGatewayStateDir(env)).toBe(path.join("/Users/test", ".openclaw"));
+    expect(resolveGatewayStateDir(env)).toBe(
+      path.join("/Users/test", ".openclaw"),
+    );
   });
 
   it("uses OPENCLAW_STATE_DIR when provided", () => {
-    const env = { HOME: "/Users/test", OPENCLAW_STATE_DIR: "/var/lib/openclaw" };
+    const env = {
+      HOME: "/Users/test",
+      OPENCLAW_STATE_DIR: "/var/lib/openclaw",
+    };
     expect(resolveGatewayStateDir(env)).toBe(path.resolve("/var/lib/openclaw"));
   });
 
   it("expands ~ in OPENCLAW_STATE_DIR", () => {
     const env = { HOME: "/Users/test", OPENCLAW_STATE_DIR: "~/openclaw-state" };
-    expect(resolveGatewayStateDir(env)).toBe(path.resolve("/Users/test/openclaw-state"));
+    expect(resolveGatewayStateDir(env)).toBe(
+      path.resolve("/Users/test/openclaw-state"),
+    );
   });
 
   it("preserves Windows absolute paths without HOME", () => {

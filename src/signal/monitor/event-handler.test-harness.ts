@@ -1,4 +1,7 @@
-import type { SignalEventHandlerDeps, SignalReactionMessage } from "./event-handler.types.js";
+import type {
+  SignalEventHandlerDeps,
+  SignalReactionMessage,
+} from "./event-handler.types.js";
 
 export function createBaseSignalEventHandlerDeps(
   overrides: Partial<SignalEventHandlerDeps> = {},
@@ -34,7 +37,9 @@ export function createBaseSignalEventHandlerDeps(
   };
 }
 
-export function createSignalReceiveEvent(envelopeOverrides: Record<string, unknown> = {}) {
+export function createSignalReceiveEvent(
+  envelopeOverrides: Record<string, unknown> = {},
+) {
   return {
     event: "receive",
     data: JSON.stringify({

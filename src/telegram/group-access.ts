@@ -134,14 +134,17 @@ export const evaluateTelegramGroupPolicyAccess = (params: {
   requireSenderForAllowlistAuthorization: boolean;
   checkChatAllowlist: boolean;
 }): TelegramGroupPolicyAccessResult => {
-  const { groupPolicy: runtimeFallbackPolicy } = resolveTelegramRuntimeGroupPolicy({
-    providerConfigPresent: params.cfg.channels?.telegram !== undefined,
-    groupPolicy: params.telegramCfg.groupPolicy,
-    defaultGroupPolicy: params.cfg.channels?.defaults?.groupPolicy,
-  });
+  const { groupPolicy: runtimeFallbackPolicy } =
+    resolveTelegramRuntimeGroupPolicy({
+      providerConfigPresent: params.cfg.channels?.telegram !== undefined,
+      groupPolicy: params.telegramCfg.groupPolicy,
+      defaultGroupPolicy: params.cfg.channels?.defaults?.groupPolicy,
+    });
   const fallbackPolicy =
-    firstDefined(params.telegramCfg.groupPolicy, params.cfg.channels?.defaults?.groupPolicy) ??
-    runtimeFallbackPolicy;
+    firstDefined(
+      params.telegramCfg.groupPolicy,
+      params.cfg.channels?.defaults?.groupPolicy,
+    ) ?? runtimeFallbackPolicy;
   const groupPolicy = params.useTopicAndGroupOverrides
     ? (firstDefined(
         params.topicConfig?.groupPolicy,
@@ -168,14 +171,22 @@ export const evaluateTelegramGroupPolicyAccess = (params: {
     // The chat is explicitly allowed when it has a dedicated entry in the groups
     // config (groupConfig is set).  A wildcard ("*") match alone does not count
     // because it only enables the group — sender-level filtering still applies.
-    if (groupAllowlist.allowlistEnabled && groupAllowlist.allowed && groupAllowlist.groupConfig) {
+    if (
+      groupAllowlist.allowlistEnabled &&
+      groupAllowlist.allowed &&
+      groupAllowlist.groupConfig
+    ) {
       chatExplicitlyAllowed = true;
     }
   }
   if (groupPolicy === "allowlist" && params.enforceAllowlistAuthorization) {
     const senderId = params.senderId ?? "";
     if (params.requireSenderForAllowlistAuthorization && !senderId) {
-      return { allowed: false, reason: "group-policy-allowlist-no-sender", groupPolicy };
+      return {
+        allowed: false,
+        reason: "group-policy-allowlist-no-sender",
+        groupPolicy,
+      };
     }
     // Skip the "empty allowlist" guard when the chat itself is explicitly
     // listed in the groups config — the group ID acts as the allowlist entry.
@@ -184,7 +195,11 @@ export const evaluateTelegramGroupPolicyAccess = (params: {
       !params.allowEmptyAllowlistEntries &&
       !params.effectiveGroupAllow.hasEntries
     ) {
-      return { allowed: false, reason: "group-policy-allowlist-empty", groupPolicy };
+      return {
+        allowed: false,
+        reason: "group-policy-allowlist-empty",
+        groupPolicy,
+      };
     }
     // When the chat is explicitly allowed and there are no sender-level entries,
     // skip the sender check — the group ID itself is the authorization.
@@ -199,7 +214,11 @@ export const evaluateTelegramGroupPolicyAccess = (params: {
         senderUsername,
       })
     ) {
-      return { allowed: false, reason: "group-policy-allowlist-unauthorized", groupPolicy };
+      return {
+        allowed: false,
+        reason: "group-policy-allowlist-unauthorized",
+        groupPolicy,
+      };
     }
   }
   return { allowed: true, groupPolicy };

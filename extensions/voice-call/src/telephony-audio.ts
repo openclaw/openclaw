@@ -7,7 +7,10 @@ function clamp16(value: number): number {
 /**
  * Resample 16-bit PCM (little-endian mono) to 8kHz using linear interpolation.
  */
-export function resamplePcmTo8k(input: Buffer, inputSampleRate: number): Buffer {
+export function resamplePcmTo8k(
+  input: Buffer,
+  inputSampleRate: number,
+): Buffer {
   if (inputSampleRate === TELEPHONY_SAMPLE_RATE) {
     return input;
   }
@@ -51,7 +54,10 @@ export function pcmToMulaw(pcm: Buffer): Buffer {
   return mulaw;
 }
 
-export function convertPcmToMulaw8k(pcm: Buffer, inputSampleRate: number): Buffer {
+export function convertPcmToMulaw8k(
+  pcm: Buffer,
+  inputSampleRate: number,
+): Buffer {
   const pcm8k = resamplePcmTo8k(pcm, inputSampleRate);
   return pcmToMulaw(pcm8k);
 }
@@ -59,7 +65,10 @@ export function convertPcmToMulaw8k(pcm: Buffer, inputSampleRate: number): Buffe
 /**
  * Chunk audio buffer into 20ms frames for streaming (8kHz mono mu-law).
  */
-export function chunkAudio(audio: Buffer, chunkSize = 160): Generator<Buffer, void, unknown> {
+export function chunkAudio(
+  audio: Buffer,
+  chunkSize = 160,
+): Generator<Buffer, void, unknown> {
   return (function* () {
     for (let i = 0; i < audio.length; i += chunkSize) {
       yield audio.subarray(i, Math.min(i + chunkSize, audio.length));
@@ -81,7 +90,11 @@ function linearToMulaw(sample: number): number {
 
   sample += BIAS;
   let exponent = 7;
-  for (let expMask = 0x4000; (sample & expMask) === 0 && exponent > 0; exponent--) {
+  for (
+    let expMask = 0x4000;
+    (sample & expMask) === 0 && exponent > 0;
+    exponent--
+  ) {
     expMask >>= 1;
   }
 

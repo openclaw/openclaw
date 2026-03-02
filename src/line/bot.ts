@@ -34,7 +34,8 @@ export function createLineBot(opts: LineBotOptions): LineBot {
     accountId: opts.accountId,
   });
 
-  const mediaMaxBytes = (opts.mediaMaxMb ?? account.config.mediaMaxMb ?? 10) * 1024 * 1024;
+  const mediaMaxBytes =
+    (opts.mediaMaxMb ?? account.config.mediaMaxMb ?? 10) * 1024 * 1024;
 
   const processMessage =
     opts.onMessage ??
@@ -66,7 +67,10 @@ export function createLineWebhookCallback(
   bot: LineBot,
   channelSecret: string,
   path = "/line/webhook",
-): { path: string; handler: (req: Request, res: Response, _next: NextFunction) => Promise<void> } {
+): {
+  path: string;
+  handler: (req: Request, res: Response, _next: NextFunction) => Promise<void>;
+} {
   const { handler } = startLineWebhook({
     channelSecret,
     onEvents: bot.handleWebhook,

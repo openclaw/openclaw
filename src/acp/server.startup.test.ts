@@ -130,7 +130,8 @@ describe("serveAcpGateway startup", () => {
     const onceSpy = vi
       .spyOn(process, "once")
       .mockImplementation(
-        ((_signal: NodeJS.Signals, _handler: () => void) => process) as typeof process.once,
+        ((_signal: NodeJS.Signals, _handler: () => void) =>
+          process) as typeof process.once,
       );
 
     try {

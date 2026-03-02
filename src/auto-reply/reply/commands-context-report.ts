@@ -51,8 +51,14 @@ async function resolveContextReport(
 
   const bootstrapMaxChars = resolveBootstrapMaxChars(params.cfg);
   const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(params.cfg);
-  const { systemPrompt, tools, skillsPrompt, bootstrapFiles, injectedFiles, sandboxRuntime } =
-    await resolveCommandsSystemPromptBundle(params);
+  const {
+    systemPrompt,
+    tools,
+    skillsPrompt,
+    bootstrapFiles,
+    injectedFiles,
+    sandboxRuntime,
+  } = await resolveCommandsSystemPromptBundle(params);
 
   return buildSystemPromptReport({
     source: "estimate",
@@ -73,7 +79,9 @@ async function resolveContextReport(
   });
 }
 
-export async function buildContextReply(params: HandleCommandsParams): Promise<ReplyPayload> {
+export async function buildContextReply(
+  params: HandleCommandsParams,
+): Promise<ReplyPayload> {
   const args = parseContextArgs(params.command.commandBodyNormalized);
   const sub = args.split(/\s+/).filter(Boolean)[0]?.toLowerCase() ?? "";
 
@@ -151,28 +159,41 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
       : "? chars";
   const bootstrapMaxChars = report.bootstrapMaxChars;
   const bootstrapTotalMaxChars = report.bootstrapTotalMaxChars;
-  const nonMissingBootstrapFiles = report.injectedWorkspaceFiles.filter((f) => !f.missing);
-  const truncatedBootstrapFiles = nonMissingBootstrapFiles.filter((f) => f.truncated);
-  const rawBootstrapChars = nonMissingBootstrapFiles.reduce((sum, file) => sum + file.rawChars, 0);
+  const nonMissingBootstrapFiles = report.injectedWorkspaceFiles.filter(
+    (f) => !f.missing,
+  );
+  const truncatedBootstrapFiles = nonMissingBootstrapFiles.filter(
+    (f) => f.truncated,
+  );
+  const rawBootstrapChars = nonMissingBootstrapFiles.reduce(
+    (sum, file) => sum + file.rawChars,
+    0,
+  );
   const injectedBootstrapChars = nonMissingBootstrapFiles.reduce(
     (sum, file) => sum + file.injectedChars,
     0,
   );
   const perFileOverLimitCount =
     typeof bootstrapMaxChars === "number"
-      ? nonMissingBootstrapFiles.filter((f) => f.rawChars > bootstrapMaxChars).length
+      ? nonMissingBootstrapFiles.filter((f) => f.rawChars > bootstrapMaxChars)
+          .length
       : 0;
   const totalOverLimit =
-    typeof bootstrapTotalMaxChars === "number" && rawBootstrapChars > bootstrapTotalMaxChars;
+    typeof bootstrapTotalMaxChars === "number" &&
+    rawBootstrapChars > bootstrapTotalMaxChars;
   const truncationCauseParts = [
-    perFileOverLimitCount > 0 ? `${perFileOverLimitCount} file(s) exceeded max/file` : null,
+    perFileOverLimitCount > 0
+      ? `${perFileOverLimitCount} file(s) exceeded max/file`
+      : null,
     totalOverLimit ? "raw total exceeded max/total" : null,
   ].filter(Boolean);
   const bootstrapWarningLines =
     truncatedBootstrapFiles.length > 0
       ? [
           `⚠ Bootstrap context is over configured limits: ${truncatedBootstrapFiles.length} file(s) truncated (${formatInt(rawBootstrapChars)} raw chars -> ${formatInt(injectedBootstrapChars)} injected chars).`,
-          ...(truncationCauseParts.length ? [`Causes: ${truncationCauseParts.join("; ")}.`] : []),
+          ...(truncationCauseParts.length
+            ? [`Causes: ${truncationCauseParts.join("; ")}.`]
+            : []),
           "Tip: increase `agents.defaults.bootstrapMaxChars` and/or `agents.defaults.bootstrapTotalMaxChars` if this truncation is not intentional.",
         ]
       : [];
@@ -192,7 +213,10 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
       30,
     );
     const perToolSummary = formatListTop(
-      report.tools.entries.map((t) => ({ name: t.name, value: t.summaryChars })),
+      report.tools.entries.map((t) => ({
+        name: t.name,
+        value: t.summaryChars,
+      })),
       30,
     );
     const toolPropsLines = report.tools.entries
@@ -216,7 +240,9 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
         "",
         skillsLine,
         skillsNamesLine,
-        ...(perSkill.lines.length ? ["Top skills (prompt entry size):", ...perSkill.lines] : []),
+        ...(perSkill.lines.length
+          ? ["Top skills (prompt entry size):", ...perSkill.lines]
+          : []),
         ...(perSkill.omitted ? [`… (+${perSkill.omitted} more skills)`] : []),
         "",
         toolListLine,
@@ -224,12 +250,18 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
         toolsNamesLine,
         "Top tools (schema size):",
         ...perToolSchema.lines,
-        ...(perToolSchema.omitted ? [`… (+${perToolSchema.omitted} more tools)`] : []),
+        ...(perToolSchema.omitted
+          ? [`… (+${perToolSchema.omitted} more tools)`]
+          : []),
         "",
         "Top tools (summary text size):",
         ...perToolSummary.lines,
-        ...(perToolSummary.omitted ? [`… (+${perToolSummary.omitted} more tools)`] : []),
-        ...(toolPropsLines.length ? ["", "Tools (param count):", ...toolPropsLines] : []),
+        ...(perToolSummary.omitted
+          ? [`… (+${perToolSummary.omitted} more tools)`]
+          : []),
+        ...(toolPropsLines.length
+          ? ["", "Tools (param count):", ...toolPropsLines]
+          : []),
         "",
         totalsLine,
         "",

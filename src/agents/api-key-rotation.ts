@@ -1,5 +1,8 @@
 import { formatErrorMessage } from "../infra/errors.js";
-import { collectProviderApiKeys, isApiKeyRateLimitError } from "./live-auth-keys.js";
+import {
+  collectProviderApiKeys,
+  isApiKeyRateLimitError,
+} from "./live-auth-keys.js";
 
 type ApiKeyRetryParams = {
   apiKey: string;
@@ -34,7 +37,10 @@ export function collectProviderApiKeysForExecution(params: {
   primaryApiKey?: string;
 }): string[] {
   const { primaryApiKey, provider } = params;
-  return dedupeApiKeys([primaryApiKey?.trim() ?? "", ...collectProviderApiKeys(provider)]);
+  return dedupeApiKeys([
+    primaryApiKey?.trim() ?? "",
+    ...collectProviderApiKeys(provider),
+  ]);
 }
 
 export async function executeWithApiKeyRotation<T>(
@@ -42,7 +48,9 @@ export async function executeWithApiKeyRotation<T>(
 ): Promise<T> {
   const keys = dedupeApiKeys(params.apiKeys);
   if (keys.length === 0) {
-    throw new Error(`No API keys configured for provider "${params.provider}".`);
+    throw new Error(
+      `No API keys configured for provider "${params.provider}".`,
+    );
   }
 
   let lastError: unknown;

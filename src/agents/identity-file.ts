@@ -44,7 +44,11 @@ export function parseIdentityMarkdown(content: string): AgentIdentityFile {
     if (colonIndex === -1) {
       continue;
     }
-    const label = cleaned.slice(0, colonIndex).replace(/[*_]/g, "").trim().toLowerCase();
+    const label = cleaned
+      .slice(0, colonIndex)
+      .replace(/[*_]/g, "")
+      .trim()
+      .toLowerCase();
     const value = cleaned
       .slice(colonIndex + 1)
       .replace(/^[*_]+|[*_]+$/g, "")
@@ -88,7 +92,9 @@ export function identityHasValues(identity: AgentIdentityFile): boolean {
   );
 }
 
-export function loadIdentityFromFile(identityPath: string): AgentIdentityFile | null {
+export function loadIdentityFromFile(
+  identityPath: string,
+): AgentIdentityFile | null {
   try {
     const content = fs.readFileSync(identityPath, "utf-8");
     const parsed = parseIdentityMarkdown(content);
@@ -101,7 +107,9 @@ export function loadIdentityFromFile(identityPath: string): AgentIdentityFile | 
   }
 }
 
-export function loadAgentIdentityFromWorkspace(workspace: string): AgentIdentityFile | null {
+export function loadAgentIdentityFromWorkspace(
+  workspace: string,
+): AgentIdentityFile | null {
   const identityPath = path.join(workspace, DEFAULT_IDENTITY_FILENAME);
   return loadIdentityFromFile(identityPath);
 }

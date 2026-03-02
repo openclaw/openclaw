@@ -1,11 +1,19 @@
 import crypto from "node:crypto";
-import type { SystemRunApprovalBinding, SystemRunApprovalPlan } from "./exec-approvals.js";
+import type {
+  SystemRunApprovalBinding,
+  SystemRunApprovalPlan,
+} from "./exec-approvals.js";
 import { normalizeEnvVarKey } from "./host-env-security.js";
-import { normalizeNonEmptyString, normalizeStringArray } from "./system-run-normalize.js";
+import {
+  normalizeNonEmptyString,
+  normalizeStringArray,
+} from "./system-run-normalize.js";
 
 type NormalizedSystemRunEnvEntry = [key: string, value: string];
 
-export function normalizeSystemRunApprovalPlan(value: unknown): SystemRunApprovalPlan | null {
+export function normalizeSystemRunApprovalPlan(
+  value: unknown,
+): SystemRunApprovalPlan | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null;
   }
@@ -23,12 +31,16 @@ export function normalizeSystemRunApprovalPlan(value: unknown): SystemRunApprova
   };
 }
 
-function normalizeSystemRunEnvEntries(env: unknown): NormalizedSystemRunEnvEntry[] {
+function normalizeSystemRunEnvEntries(
+  env: unknown,
+): NormalizedSystemRunEnvEntry[] {
   if (!env || typeof env !== "object" || Array.isArray(env)) {
     return [];
   }
   const entries: NormalizedSystemRunEnvEntry[] = [];
-  for (const [rawKey, rawValue] of Object.entries(env as Record<string, unknown>)) {
+  for (const [rawKey, rawValue] of Object.entries(
+    env as Record<string, unknown>,
+  )) {
     if (typeof rawValue !== "string") {
       continue;
     }
@@ -42,11 +54,16 @@ function normalizeSystemRunEnvEntries(env: unknown): NormalizedSystemRunEnvEntry
   return entries;
 }
 
-function hashSystemRunEnvEntries(entries: NormalizedSystemRunEnvEntry[]): string | null {
+function hashSystemRunEnvEntries(
+  entries: NormalizedSystemRunEnvEntry[],
+): string | null {
   if (entries.length === 0) {
     return null;
   }
-  return crypto.createHash("sha256").update(JSON.stringify(entries)).digest("hex");
+  return crypto
+    .createHash("sha256")
+    .update(JSON.stringify(entries))
+    .digest("hex");
 }
 
 export function buildSystemRunApprovalEnvBinding(env: unknown): {
@@ -96,16 +113,24 @@ export type SystemRunApprovalMatchResult =
   | { ok: true }
   | {
       ok: false;
-      code: "APPROVAL_REQUEST_MISMATCH" | "APPROVAL_ENV_BINDING_MISSING" | "APPROVAL_ENV_MISMATCH";
+      code:
+        | "APPROVAL_REQUEST_MISMATCH"
+        | "APPROVAL_ENV_BINDING_MISSING"
+        | "APPROVAL_ENV_MISMATCH";
       message: string;
       details?: Record<string, unknown>;
     };
 
-type SystemRunApprovalMismatch = Extract<SystemRunApprovalMatchResult, { ok: false }>;
+type SystemRunApprovalMismatch = Extract<
+  SystemRunApprovalMatchResult,
+  { ok: false }
+>;
 
 const APPROVAL_REQUEST_MISMATCH_MESSAGE = "approval id does not match request";
 
-function requestMismatch(details?: Record<string, unknown>): SystemRunApprovalMatchResult {
+function requestMismatch(
+  details?: Record<string, unknown>,
+): SystemRunApprovalMatchResult {
   return {
     ok: false,
     code: "APPROVAL_REQUEST_MISMATCH",

@@ -4,13 +4,21 @@ const mocks = vi.hoisted(() => {
   const printModelTable = vi.fn();
   return {
     loadConfig: vi.fn().mockReturnValue({
-      agents: { defaults: { model: { primary: "openai-codex/gpt-5.3-codex" } } },
+      agents: {
+        defaults: { model: { primary: "openai-codex/gpt-5.3-codex" } },
+      },
       models: { providers: {} },
     }),
-    ensureAuthProfileStore: vi.fn().mockReturnValue({ version: 1, profiles: {}, order: {} }),
+    ensureAuthProfileStore: vi
+      .fn()
+      .mockReturnValue({ version: 1, profiles: {}, order: {} }),
     loadModelRegistry: vi
       .fn()
-      .mockResolvedValue({ models: [], availableKeys: new Set(), registry: {} }),
+      .mockResolvedValue({
+        models: [],
+        availableKeys: new Set(),
+        registry: {},
+      }),
     resolveConfiguredEntries: vi.fn().mockReturnValue({
       entries: [
         {
@@ -41,7 +49,8 @@ vi.mock("../../config/config.js", () => ({
 }));
 
 vi.mock("../../agents/auth-profiles.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../agents/auth-profiles.js")>();
+  const actual =
+    await importOriginal<typeof import("../../agents/auth-profiles.js")>();
   return {
     ...actual,
     ensureAuthProfileStore: mocks.ensureAuthProfileStore,
@@ -66,7 +75,10 @@ vi.mock("./list.table.js", () => ({
 }));
 
 vi.mock("../../agents/model-forward-compat.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../agents/model-forward-compat.js")>();
+  const actual =
+    await importOriginal<
+      typeof import("../../agents/model-forward-compat.js")
+    >();
   return {
     ...actual,
     resolveForwardCompatModel: mocks.resolveForwardCompatModel,

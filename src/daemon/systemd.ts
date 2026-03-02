@@ -29,7 +29,10 @@ import {
   parseSystemdExecStart,
 } from "./systemd-unit.js";
 
-function resolveSystemdUnitPathForName(env: GatewayServiceEnv, name: string): string {
+function resolveSystemdUnitPathForName(
+  env: GatewayServiceEnv,
+  name: string,
+): string {
   const home = toPosixPath(resolveHomeDir(env));
   return path.posix.join(home, ".config", "systemd", "user", `${name}.service`);
 }
@@ -37,7 +40,9 @@ function resolveSystemdUnitPathForName(env: GatewayServiceEnv, name: string): st
 function resolveSystemdServiceName(env: GatewayServiceEnv): string {
   const override = env.OPENCLAW_SYSTEMD_UNIT?.trim();
   if (override) {
-    return override.endsWith(".service") ? override.slice(0, -".service".length) : override;
+    return override.endsWith(".service")
+      ? override.slice(0, -".service".length)
+      : override;
   }
   return resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE);
 }
@@ -142,7 +147,10 @@ async function execSystemctl(
   return await execFileUtf8("systemctl", args);
 }
 
-function readSystemctlDetail(result: { stdout: string; stderr: string }): string {
+function readSystemctlDetail(result: {
+  stdout: string;
+  stderr: string;
+}): string {
   return (result.stderr || result.stdout || "").trim();
 }
 
@@ -209,9 +217,13 @@ async function assertSystemdAvailable() {
   }
   const detail = readSystemctlDetail(res);
   if (isSystemctlMissing(detail)) {
-    throw new Error("systemctl not available; systemd user services are required on Linux.");
+    throw new Error(
+      "systemctl not available; systemd user services are required on Linux.",
+    );
   }
-  throw new Error(`systemctl --user unavailable: ${detail || "unknown error"}`.trim());
+  throw new Error(
+    `systemctl --user unavailable: ${detail || "unknown error"}`.trim(),
+  );
 }
 
 export async function installSystemdService({
@@ -238,7 +250,11 @@ export async function installSystemdService({
     // File does not exist yet — nothing to back up.
   }
 
-  const serviceDescription = resolveGatewayServiceDescription({ env, environment, description });
+  const serviceDescription = resolveGatewayServiceDescription({
+    env,
+    environment,
+    description,
+  });
   const unit = buildSystemdUnit({
     description: serviceDescription,
     programArguments,
@@ -251,17 +267,23 @@ export async function installSystemdService({
   const unitName = `${serviceName}.service`;
   const reload = await execSystemctl(["--user", "daemon-reload"]);
   if (reload.code !== 0) {
-    throw new Error(`systemctl daemon-reload failed: ${reload.stderr || reload.stdout}`.trim());
+    throw new Error(
+      `systemctl daemon-reload failed: ${reload.stderr || reload.stdout}`.trim(),
+    );
   }
 
   const enable = await execSystemctl(["--user", "enable", unitName]);
   if (enable.code !== 0) {
-    throw new Error(`systemctl enable failed: ${enable.stderr || enable.stdout}`.trim());
+    throw new Error(
+      `systemctl enable failed: ${enable.stderr || enable.stdout}`.trim(),
+    );
   }
 
   const restart = await execSystemctl(["--user", "restart", unitName]);
   if (restart.code !== 0) {
-    throw new Error(`systemctl restart failed: ${restart.stderr || restart.stdout}`.trim());
+    throw new Error(
+      `systemctl restart failed: ${restart.stderr || restart.stdout}`.trim(),
+    );
   }
 
   // Ensure we don't end up writing to a clack spinner line (wizards show progress without a newline).
@@ -315,7 +337,9 @@ async function runSystemdServiceAction(params: {
   const unitName = `${serviceName}.service`;
   const res = await execSystemctl(["--user", params.action, unitName]);
   if (res.code !== 0) {
-    throw new Error(`systemctl ${params.action} failed: ${res.stderr || res.stdout}`.trim());
+    throw new Error(
+      `systemctl ${params.action} failed: ${res.stderr || res.stdout}`.trim(),
+    );
   }
   params.stdout.write(`${formatLine(params.label, unitName)}\n`);
 }
@@ -344,7 +368,9 @@ export async function restartSystemdService({
   });
 }
 
-export async function isSystemdServiceEnabled(args: GatewayServiceEnvArgs): Promise<boolean> {
+export async function isSystemdServiceEnabled(
+  args: GatewayServiceEnvArgs,
+): Promise<boolean> {
   const serviceName = resolveSystemdServiceName(args.env ?? {});
   const unitName = `${serviceName}.service`;
   const res = await execSystemctl(["--user", "is-enabled", unitName]);
@@ -355,7 +381,9 @@ export async function isSystemdServiceEnabled(args: GatewayServiceEnvArgs): Prom
   if (isSystemctlMissing(detail) || isSystemdUnitNotEnabled(detail)) {
     return false;
   }
-  throw new Error(`systemctl is-enabled unavailable: ${detail || "unknown error"}`.trim());
+  throw new Error(
+    `systemctl is-enabled unavailable: ${detail || "unknown error"}`.trim(),
+  );
 }
 
 export async function readSystemdServiceRuntime(
@@ -390,7 +418,8 @@ export async function readSystemdServiceRuntime(
   }
   const parsed = parseSystemdShow(res.stdout || "");
   const activeState = parsed.activeState?.toLowerCase();
-  const status = activeState === "active" ? "running" : activeState ? "stopped" : "unknown";
+  const status =
+    activeState === "active" ? "running" : activeState ? "stopped" : "unknown";
   return {
     status,
     state: parsed.activeState,
@@ -415,7 +444,9 @@ async function isSystemctlAvailable(): Promise<boolean> {
   return !isSystemctlMissing(readSystemctlDetail(res));
 }
 
-export async function findLegacySystemdUnits(env: GatewayServiceEnv): Promise<LegacySystemdUnit[]> {
+export async function findLegacySystemdUnits(
+  env: GatewayServiceEnv,
+): Promise<LegacySystemdUnit[]> {
   const results: LegacySystemdUnit[] = [];
   const systemctlAvailable = await isSystemctlAvailable();
   for (const name of LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES) {
@@ -429,7 +460,11 @@ export async function findLegacySystemdUnits(env: GatewayServiceEnv): Promise<Le
     }
     let enabled = false;
     if (systemctlAvailable) {
-      const res = await execSystemctl(["--user", "is-enabled", `${name}.service`]);
+      const res = await execSystemctl([
+        "--user",
+        "is-enabled",
+        `${name}.service`,
+      ]);
       enabled = res.code === 0;
     }
     if (exists || enabled) {
@@ -451,14 +486,23 @@ export async function uninstallLegacySystemdUnits({
   const systemctlAvailable = await isSystemctlAvailable();
   for (const unit of units) {
     if (systemctlAvailable) {
-      await execSystemctl(["--user", "disable", "--now", `${unit.name}.service`]);
+      await execSystemctl([
+        "--user",
+        "disable",
+        "--now",
+        `${unit.name}.service`,
+      ]);
     } else {
-      stdout.write(`systemctl unavailable; removed legacy unit file only: ${unit.name}.service\n`);
+      stdout.write(
+        `systemctl unavailable; removed legacy unit file only: ${unit.name}.service\n`,
+      );
     }
 
     try {
       await fs.unlink(unit.unitPath);
-      stdout.write(`${formatLine("Removed legacy systemd service", unit.unitPath)}\n`);
+      stdout.write(
+        `${formatLine("Removed legacy systemd service", unit.unitPath)}\n`,
+      );
     } catch {
       stdout.write(`Legacy systemd unit not found at ${unit.unitPath}\n`);
     }

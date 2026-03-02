@@ -2,7 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 
 vi.mock("../../../slack/send.js", () => ({
-  sendMessageSlack: vi.fn().mockResolvedValue({ messageId: "1234.5678", channelId: "C123" }),
+  sendMessageSlack: vi
+    .fn()
+    .mockResolvedValue({ messageId: "1234.5678", channelId: "C123" }),
 }));
 
 vi.mock("../../../plugins/hook-runner-global.js", () => ({
@@ -32,7 +34,9 @@ const BASE_SLACK_SEND_CTX = {
 } as const;
 
 const sendSlackText = async (ctx: SlackSendTextCtx) => {
-  const sendText = slackOutbound.sendText as NonNullable<typeof slackOutbound.sendText>;
+  const sendText = slackOutbound.sendText as NonNullable<
+    typeof slackOutbound.sendText
+  >;
   return await sendText({
     cfg: {} as OpenClawConfig,
     ...ctx,
@@ -94,7 +98,10 @@ describe("slack outbound hook wiring", () => {
     });
 
     expectSlackSendCalledWith("hello", {
-      identity: { username: "My Agent", iconUrl: "https://example.com/avatar.png" },
+      identity: {
+        username: "My Agent",
+        iconUrl: "https://example.com/avatar.png",
+      },
     });
   });
 
@@ -123,7 +130,11 @@ describe("slack outbound hook wiring", () => {
 
     expect(mockRunner.hasHooks).toHaveBeenCalledWith("message_sending");
     expect(mockRunner.runMessageSending).toHaveBeenCalledWith(
-      { to: "C123", content: "hello", metadata: { threadTs: "1111.2222", channelId: "C123" } },
+      {
+        to: "C123",
+        content: "hello",
+        metadata: { threadTs: "1111.2222", channelId: "C123" },
+      },
       { channelId: "slack", accountId: "default" },
     );
     expectSlackSendCalledWith("hello");

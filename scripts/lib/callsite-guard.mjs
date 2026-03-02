@@ -34,7 +34,8 @@ export async function runCallsiteGuard(params) {
   }
 
   console.error(params.header);
-  const output = params.sortViolations === false ? violations : violations.toSorted();
+  const output =
+    params.sortViolations === false ? violations : violations.toSorted();
   for (const violation of output) {
     console.error(`- ${violation}`);
   }

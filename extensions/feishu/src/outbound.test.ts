@@ -37,8 +37,12 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
     sendMediaFeishuMock.mockResolvedValue({ messageId: "media_msg" });
   });
 
-  async function createTmpImage(ext = ".png"): Promise<{ dir: string; file: string }> {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-feishu-outbound-"));
+  async function createTmpImage(
+    ext = ".png",
+  ): Promise<{ dir: string; file: string }> {
+    const dir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-feishu-outbound-"),
+    );
     const file = path.join(dir, `sample${ext}`);
     await fs.writeFile(file, "image-data");
     return { dir, file };
@@ -134,7 +138,9 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
       }),
     );
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
-    expect(result).toEqual(expect.objectContaining({ channel: "feishu", messageId: "card_msg" }));
+    expect(result).toEqual(
+      expect.objectContaining({ channel: "feishu", messageId: "card_msg" }),
+    );
   });
 });
 
@@ -176,6 +182,8 @@ describe("feishuOutbound.sendMedia renderMode", () => {
       }),
     );
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
-    expect(result).toEqual(expect.objectContaining({ channel: "feishu", messageId: "media_msg" }));
+    expect(result).toEqual(
+      expect.objectContaining({ channel: "feishu", messageId: "media_msg" }),
+    );
   });
 });

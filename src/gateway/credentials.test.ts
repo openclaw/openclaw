@@ -9,11 +9,19 @@ function cfg(input: Partial<OpenClawConfig>): OpenClawConfig {
   return input as OpenClawConfig;
 }
 
-type ResolveFromConfigInput = Parameters<typeof resolveGatewayCredentialsFromConfig>[0];
+type ResolveFromConfigInput = Parameters<
+  typeof resolveGatewayCredentialsFromConfig
+>[0];
 type GatewayConfig = NonNullable<OpenClawConfig["gateway"]>;
 
-const DEFAULT_GATEWAY_AUTH = { token: "config-token", password: "config-password" };
-const DEFAULT_REMOTE_AUTH = { token: "remote-token", password: "remote-password" };
+const DEFAULT_GATEWAY_AUTH = {
+  token: "config-token",
+  password: "config-password",
+};
+const DEFAULT_REMOTE_AUTH = {
+  token: "remote-token",
+  password: "remote-password",
+};
 const DEFAULT_GATEWAY_ENV = {
   OPENCLAW_GATEWAY_TOKEN: "env-token",
   OPENCLAW_GATEWAY_PASSWORD: "env-password",
@@ -30,7 +38,10 @@ function resolveGatewayCredentialsFor(
   });
 }
 
-function expectEnvGatewayCredentials(resolved: { token?: string; password?: string }) {
+function expectEnvGatewayCredentials(resolved: {
+  token?: string;
+  password?: string;
+}) {
   expect(resolved).toEqual({
     token: "env-token",
     password: "env-password",
@@ -57,7 +68,10 @@ describe("resolveGatewayCredentialsFromConfig", () => {
         auth: DEFAULT_GATEWAY_AUTH,
       },
       {
-        explicitAuth: { token: "explicit-token", password: "explicit-password" },
+        explicitAuth: {
+          token: "explicit-token",
+          password: "explicit-password",
+        },
       },
     );
     expect(resolved).toEqual({

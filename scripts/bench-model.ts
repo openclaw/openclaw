@@ -13,7 +13,8 @@ type RunResult = {
   usage?: Usage;
 };
 
-const DEFAULT_PROMPT = "Reply with a single word: ok. No punctuation or extra text.";
+const DEFAULT_PROMPT =
+  "Reply with a single word: ok. No punctuation or extra text.";
 const DEFAULT_RUNS = 10;
 
 function parseArg(flag: string): string | undefined {
@@ -91,7 +92,8 @@ async function main(): Promise<void> {
     throw new Error("Missing MINIMAX_API_KEY in environment.");
   }
 
-  const minimaxBaseUrl = process.env.MINIMAX_BASE_URL?.trim() || "https://api.minimax.io/v1";
+  const minimaxBaseUrl =
+    process.env.MINIMAX_BASE_URL?.trim() || "https://api.minimax.io/v1";
   const minimaxModelId = process.env.MINIMAX_MODEL?.trim() || "MiniMax-M2.1";
 
   const minimaxModel: Model<"openai-completions"> = {
@@ -135,11 +137,16 @@ async function main(): Promise<void> {
     return { label, med, min, max };
   };
 
-  const summary = [summarize("minimax", minimaxResults), summarize("opus", opusResults)];
+  const summary = [
+    summarize("minimax", minimaxResults),
+    summarize("opus", opusResults),
+  ];
   console.log("");
   console.log("Summary (ms):");
   for (const row of summary) {
-    console.log(`${row.label.padEnd(7)} median=${row.med} min=${row.min} max=${row.max}`);
+    console.log(
+      `${row.label.padEnd(7)} median=${row.med} min=${row.min} max=${row.max}`,
+    );
   }
 }
 

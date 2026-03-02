@@ -17,7 +17,10 @@ function resolveAccountKey(accountId?: string): string {
 }
 
 /** Register a GatewayPlugin instance for an account. */
-export function registerGateway(accountId: string | undefined, gateway: GatewayPlugin): void {
+export function registerGateway(
+  accountId: string | undefined,
+  gateway: GatewayPlugin,
+): void {
   gatewayRegistry.set(resolveAccountKey(accountId), gateway);
 }
 

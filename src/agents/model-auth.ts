@@ -2,7 +2,10 @@ import path from "node:path";
 import { type Api, getEnvApiKey, type Model } from "@mariozechner/pi-ai";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
-import type { ModelProviderAuthMode, ModelProviderConfig } from "../config/types.js";
+import type {
+  ModelProviderAuthMode,
+  ModelProviderConfig,
+} from "../config/types.js";
 import { getShellEnvAppliedKeys } from "../infra/shell-env.js";
 import {
   normalizeOptionalSecretInput,
@@ -18,7 +21,10 @@ import {
 } from "./auth-profiles.js";
 import { normalizeProviderId } from "./model-selection.js";
 
-export { ensureAuthProfileStore, resolveAuthProfileOrder } from "./auth-profiles.js";
+export {
+  ensureAuthProfileStore,
+  resolveAuthProfileOrder,
+} from "./auth-profiles.js";
 
 const AWS_BEARER_ENV = "AWS_BEARER_TOKEN_BEDROCK";
 const AWS_ACCESS_KEY_ENV = "AWS_ACCESS_KEY_ID";
@@ -43,7 +49,9 @@ function resolveProviderConfig(
   }
   return (
     (providers[normalized] as ModelProviderConfig | undefined) ??
-    Object.entries(providers).find(([key]) => normalizeProviderId(key) === normalized)?.[1]
+    Object.entries(providers).find(
+      ([key]) => normalizeProviderId(key) === normalized,
+    )?.[1]
   );
 }
 
@@ -61,7 +69,12 @@ function resolveProviderAuthOverride(
 ): ModelProviderAuthMode | undefined {
   const entry = resolveProviderConfig(cfg, provider);
   const auth = entry?.auth;
-  if (auth === "api-key" || auth === "aws-sdk" || auth === "oauth" || auth === "token") {
+  if (
+    auth === "api-key" ||
+    auth === "aws-sdk" ||
+    auth === "oauth" ||
+    auth === "token"
+  ) {
     return auth;
   }
   return undefined;
@@ -72,12 +85,16 @@ function resolveEnvSourceLabel(params: {
   envVars: string[];
   label: string;
 }): string {
-  const shellApplied = params.envVars.some((envVar) => params.applied.has(envVar));
+  const shellApplied = params.envVars.some((envVar) =>
+    params.applied.has(envVar),
+  );
   const prefix = shellApplied ? "shell env: " : "env: ";
   return `${prefix}${params.label}`;
 }
 
-export function resolveAwsSdkEnvVarName(env: NodeJS.ProcessEnv = process.env): string | undefined {
+export function resolveAwsSdkEnvVarName(
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
   if (env[AWS_BEARER_ENV]?.trim()) {
     return AWS_BEARER_ENV;
   }
@@ -102,7 +119,10 @@ function resolveAwsSdkAuthInfo(): { mode: "aws-sdk"; source: string } {
       }),
     };
   }
-  if (process.env[AWS_ACCESS_KEY_ENV]?.trim() && process.env[AWS_SECRET_KEY_ENV]?.trim()) {
+  if (
+    process.env[AWS_ACCESS_KEY_ENV]?.trim() &&
+    process.env[AWS_SECRET_KEY_ENV]?.trim()
+  ) {
     return {
       mode: "aws-sdk",
       source: resolveEnvSourceLabel({
@@ -187,7 +207,8 @@ export async function resolveApiKeyForProvider(params: {
           apiKey: resolved.apiKey,
           profileId: candidate,
           source: `profile:${candidate}`,
-          mode: mode === "oauth" ? "oauth" : mode === "token" ? "token" : "api-key",
+          mode:
+            mode === "oauth" ? "oauth" : mode === "token" ? "token" : "api-key",
         };
       }
     } catch {}
@@ -233,7 +254,13 @@ export async function resolveApiKeyForProvider(params: {
 }
 
 export type EnvApiKeyResult = { apiKey: string; source: string };
-export type ModelAuthMode = "api-key" | "oauth" | "token" | "mixed" | "aws-sdk" | "unknown";
+export type ModelAuthMode =
+  | "api-key"
+  | "oauth"
+  | "token"
+  | "mixed"
+  | "aws-sdk"
+  | "unknown";
 
 export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
   const normalized = normalizeProviderId(provider);
@@ -243,12 +270,16 @@ export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
     if (!value) {
       return null;
     }
-    const source = applied.has(envVar) ? `shell env: ${envVar}` : `env: ${envVar}`;
+    const source = applied.has(envVar)
+      ? `shell env: ${envVar}`
+      : `env: ${envVar}`;
     return { apiKey: value, source };
   };
 
   if (normalized === "github-copilot") {
-    return pick("COPILOT_GITHUB_TOKEN") ?? pick("GH_TOKEN") ?? pick("GITHUB_TOKEN");
+    return (
+      pick("COPILOT_GITHUB_TOKEN") ?? pick("GH_TOKEN") ?? pick("GITHUB_TOKEN")
+    );
   }
 
   if (normalized === "anthropic") {
@@ -371,7 +402,10 @@ export function resolveModelAuthMode(
     }
   }
 
-  if (authOverride === undefined && normalizeProviderId(resolved) === "amazon-bedrock") {
+  if (
+    authOverride === undefined &&
+    normalizeProviderId(resolved) === "amazon-bedrock"
+  ) {
     return "aws-sdk";
   }
 
@@ -405,10 +439,15 @@ export async function getApiKeyForModel(params: {
   });
 }
 
-export function requireApiKey(auth: ResolvedProviderAuth, provider: string): string {
+export function requireApiKey(
+  auth: ResolvedProviderAuth,
+  provider: string,
+): string {
   const key = normalizeSecretInput(auth.apiKey);
   if (key) {
     return key;
   }
-  throw new Error(`No API key resolved for provider "${provider}" (auth mode: ${auth.mode}).`);
+  throw new Error(
+    `No API key resolved for provider "${provider}" (auth mode: ${auth.mode}).`,
+  );
 }

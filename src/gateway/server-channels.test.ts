@@ -1,12 +1,21 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { type ChannelId, type ChannelPlugin } from "../channels/plugins/types.js";
+import {
+  type ChannelId,
+  type ChannelPlugin,
+} from "../channels/plugins/types.js";
 import {
   createSubsystemLogger,
   type SubsystemLogger,
   runtimeForLogger,
 } from "../logging/subsystem.js";
-import { createEmptyPluginRegistry, type PluginRegistry } from "../plugins/registry.js";
-import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
+import {
+  createEmptyPluginRegistry,
+  type PluginRegistry,
+} from "../plugins/registry.js";
+import {
+  getActivePluginRegistry,
+  setActivePluginRegistry,
+} from "../plugins/runtime.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createChannelManager } from "./server-channels.js";
@@ -41,7 +50,9 @@ type TestAccount = {
 
 function createTestPlugin(params?: {
   account?: TestAccount;
-  startAccount?: NonNullable<ChannelPlugin<TestAccount>["gateway"]>["startAccount"];
+  startAccount?: NonNullable<
+    ChannelPlugin<TestAccount>["gateway"]
+  >["startAccount"];
   includeDescribeAccount?: boolean;
 }): ChannelPlugin<TestAccount> {
   const account = params?.account ?? { enabled: true, configured: true };
@@ -91,7 +102,10 @@ function createManager() {
   const log = createSubsystemLogger("gateway/server-channels-test");
   const channelLogs = { discord: log } as Record<ChannelId, SubsystemLogger>;
   const runtime = runtimeForLogger(log);
-  const channelRuntimeEnvs = { discord: runtime } as Record<ChannelId, RuntimeEnv>;
+  const channelRuntimeEnvs = { discord: runtime } as Record<
+    ChannelId,
+    RuntimeEnv
+  >;
   return createChannelManager({
     loadConfig: () => ({}),
     channelLogs,

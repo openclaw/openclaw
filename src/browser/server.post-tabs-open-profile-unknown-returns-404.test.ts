@@ -71,7 +71,9 @@ describe("profile CRUD endpoints", () => {
       body: JSON.stringify({}),
     });
     expect(createMissingName.status).toBe(400);
-    const createMissingNameBody = (await createMissingName.json()) as { error: string };
+    const createMissingNameBody = (await createMissingName.json()) as {
+      error: string;
+    };
     expect(createMissingNameBody.error).toContain("name is required");
 
     const createInvalidName = await realFetch(`${base}/profiles/create`, {
@@ -80,7 +82,9 @@ describe("profile CRUD endpoints", () => {
       body: JSON.stringify({ name: "Invalid Name!" }),
     });
     expect(createInvalidName.status).toBe(400);
-    const createInvalidNameBody = (await createInvalidName.json()) as { error: string };
+    const createInvalidNameBody = (await createInvalidName.json()) as {
+      error: string;
+    };
     expect(createInvalidNameBody.error).toContain("invalid profile name");
 
     const createDuplicate = await realFetch(`${base}/profiles/create`, {
@@ -89,7 +93,9 @@ describe("profile CRUD endpoints", () => {
       body: JSON.stringify({ name: "openclaw" }),
     });
     expect(createDuplicate.status).toBe(409);
-    const createDuplicateBody = (await createDuplicate.json()) as { error: string };
+    const createDuplicateBody = (await createDuplicate.json()) as {
+      error: string;
+    };
     expect(createDuplicateBody.error).toContain("already exists");
 
     const createRemote = await realFetch(`${base}/profiles/create`, {
@@ -113,7 +119,9 @@ describe("profile CRUD endpoints", () => {
       body: JSON.stringify({ name: "badremote", cdpUrl: "ws://bad" }),
     });
     expect(createBadRemote.status).toBe(400);
-    const createBadRemoteBody = (await createBadRemote.json()) as { error: string };
+    const createBadRemoteBody = (await createBadRemote.json()) as {
+      error: string;
+    };
     expect(createBadRemoteBody.error).toContain("cdpUrl");
 
     const deleteMissing = await realFetch(`${base}/profiles/nonexistent`, {
@@ -128,7 +136,9 @@ describe("profile CRUD endpoints", () => {
     });
     expect(deleteDefault.status).toBe(400);
     const deleteDefaultBody = (await deleteDefault.json()) as { error: string };
-    expect(deleteDefaultBody.error).toContain("cannot delete the default profile");
+    expect(deleteDefaultBody.error).toContain(
+      "cannot delete the default profile",
+    );
 
     const deleteInvalid = await realFetch(`${base}/profiles/Invalid-Name!`, {
       method: "DELETE",

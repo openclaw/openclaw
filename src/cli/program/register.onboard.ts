@@ -25,7 +25,9 @@ function resolveInstallDaemonFlag(
     return undefined;
   }
   const getOptionValueSource =
-    "getOptionValueSource" in command ? command.getOptionValueSource : undefined;
+    "getOptionValueSource" in command
+      ? command.getOptionValueSource
+      : undefined;
   if (typeof getOptionValueSource !== "function") {
     return undefined;
   }
@@ -49,18 +51,26 @@ const AUTH_CHOICE_HELP = formatAuthChoiceChoicesForCli({
 export function registerOnboardCommand(program: Command) {
   const command = program
     .command("onboard")
-    .description("Interactive wizard to set up the gateway, workspace, and skills")
+    .description(
+      "Interactive wizard to set up the gateway, workspace, and skills",
+    )
     .addHelpText(
       "after",
       () =>
         `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/onboard", "docs.openclaw.ai/cli/onboard")}\n`,
     )
-    .option("--workspace <dir>", "Agent workspace directory (default: ~/.openclaw/workspace)")
+    .option(
+      "--workspace <dir>",
+      "Agent workspace directory (default: ~/.openclaw/workspace)",
+    )
     .option(
       "--reset",
       "Reset config + credentials + sessions before running wizard (workspace only with --reset-scope full)",
     )
-    .option("--reset-scope <scope>", "Reset scope: config|config+creds+sessions|full")
+    .option(
+      "--reset-scope <scope>",
+      "Reset scope: config|config+creds+sessions|full",
+    )
     .option("--non-interactive", "Run without prompts", false)
     .option(
       "--accept-risk",
@@ -74,18 +84,27 @@ export function registerOnboardCommand(program: Command) {
       "--token-provider <id>",
       "Token provider id (non-interactive; used with --auth-choice token)",
     )
-    .option("--token <token>", "Token value (non-interactive; used with --auth-choice token)")
+    .option(
+      "--token <token>",
+      "Token value (non-interactive; used with --auth-choice token)",
+    )
     .option(
       "--token-profile-id <id>",
       "Auth profile id (non-interactive; default: <provider>:manual)",
     )
-    .option("--token-expires-in <duration>", "Optional token expiry duration (e.g. 365d, 12h)")
+    .option(
+      "--token-expires-in <duration>",
+      "Optional token expiry duration (e.g. 365d, 12h)",
+    )
     .option(
       "--secret-input-mode <mode>",
       "API key persistence mode: plaintext|ref (default: plaintext)",
     )
     .option("--cloudflare-ai-gateway-account-id <id>", "Cloudflare Account ID")
-    .option("--cloudflare-ai-gateway-gateway-id <id>", "Cloudflare AI Gateway ID");
+    .option(
+      "--cloudflare-ai-gateway-gateway-id <id>",
+      "Cloudflare AI Gateway ID",
+    );
 
   for (const providerFlag of ONBOARD_PROVIDER_AUTH_FLAGS) {
     command.option(providerFlag.cliOption, providerFlag.description);
@@ -95,13 +114,19 @@ export function registerOnboardCommand(program: Command) {
     .option("--custom-base-url <url>", "Custom provider base URL")
     .option("--custom-api-key <key>", "Custom provider API key (optional)")
     .option("--custom-model-id <id>", "Custom provider model ID")
-    .option("--custom-provider-id <id>", "Custom provider ID (optional; auto-derived by default)")
+    .option(
+      "--custom-provider-id <id>",
+      "Custom provider ID (optional; auto-derived by default)",
+    )
     .option(
       "--custom-compatibility <mode>",
       "Custom provider API compatibility: openai|anthropic (default: openai)",
     )
     .option("--gateway-port <port>", "Gateway port")
-    .option("--gateway-bind <mode>", "Gateway bind: loopback|tailnet|lan|auto|custom")
+    .option(
+      "--gateway-bind <mode>",
+      "Gateway bind: loopback|tailnet|lan|auto|custom",
+    )
     .option("--gateway-auth <mode>", "Gateway auth: token|password")
     .option("--gateway-token <token>", "Gateway token (token auth)")
     .option("--gateway-password <password>", "Gateway password (password auth)")
@@ -126,7 +151,9 @@ export function registerOnboardCommand(program: Command) {
         installDaemon: Boolean(opts.installDaemon),
       });
       const gatewayPort =
-        typeof opts.gatewayPort === "string" ? Number.parseInt(opts.gatewayPort, 10) : undefined;
+        typeof opts.gatewayPort === "string"
+          ? Number.parseInt(opts.gatewayPort, 10)
+          : undefined;
       await onboardCommand(
         {
           workspace: opts.workspace as string | undefined,
@@ -146,9 +173,15 @@ export function registerOnboardCommand(program: Command) {
           openrouterApiKey: opts.openrouterApiKey as string | undefined,
           kilocodeApiKey: opts.kilocodeApiKey as string | undefined,
           aiGatewayApiKey: opts.aiGatewayApiKey as string | undefined,
-          cloudflareAiGatewayAccountId: opts.cloudflareAiGatewayAccountId as string | undefined,
-          cloudflareAiGatewayGatewayId: opts.cloudflareAiGatewayGatewayId as string | undefined,
-          cloudflareAiGatewayApiKey: opts.cloudflareAiGatewayApiKey as string | undefined,
+          cloudflareAiGatewayAccountId: opts.cloudflareAiGatewayAccountId as
+            | string
+            | undefined,
+          cloudflareAiGatewayGatewayId: opts.cloudflareAiGatewayGatewayId as
+            | string
+            | undefined,
+          cloudflareAiGatewayApiKey: opts.cloudflareAiGatewayApiKey as
+            | string
+            | undefined,
           moonshotApiKey: opts.moonshotApiKey as string | undefined,
           kimiCodeApiKey: opts.kimiCodeApiKey as string | undefined,
           geminiApiKey: opts.geminiApiKey as string | undefined,
@@ -169,7 +202,10 @@ export function registerOnboardCommand(program: Command) {
           customApiKey: opts.customApiKey as string | undefined,
           customModelId: opts.customModelId as string | undefined,
           customProviderId: opts.customProviderId as string | undefined,
-          customCompatibility: opts.customCompatibility as "openai" | "anthropic" | undefined,
+          customCompatibility: opts.customCompatibility as
+            | "openai"
+            | "anthropic"
+            | undefined,
           gatewayPort:
             typeof gatewayPort === "number" && Number.isFinite(gatewayPort)
               ? gatewayPort

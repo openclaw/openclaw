@@ -107,7 +107,11 @@ function countJsonlLines(filePath: string): number {
 function findOtherStateDirs(stateDir: string): string[] {
   const resolvedState = path.resolve(stateDir);
   const roots =
-    process.platform === "darwin" ? ["/Users"] : process.platform === "linux" ? ["/home"] : [];
+    process.platform === "darwin"
+      ? ["/Users"]
+      : process.platform === "linux"
+        ? ["/home"]
+        : [];
   const found: string[] = [];
   for (const root of roots) {
     let entries: fs.Dirent[] = [];
@@ -123,7 +127,9 @@ function findOtherStateDirs(stateDir: string): string[] {
       if (entry.name.startsWith(".")) {
         continue;
       }
-      const candidates = [".openclaw"].map((dir) => path.resolve(root, entry.name, dir));
+      const candidates = [".openclaw"].map((dir) =>
+        path.resolve(root, entry.name, dir),
+      );
       for (const candidate of candidates) {
         if (candidate === resolvedState) {
           continue;
@@ -184,7 +190,12 @@ function escapeControlCharsForTerminal(value: string): string {
       continue;
     }
     const code = char.charCodeAt(0);
-    if ((code >= 0 && code <= 8) || code === 11 || code === 12 || (code >= 14 && code <= 31)) {
+    if (
+      (code >= 0 && code <= 8) ||
+      code === 11 ||
+      code === 12 ||
+      (code >= 14 && code <= 31)
+    ) {
       escaped += `\\x${code.toString(16).padStart(2, "0")}`;
       continue;
     }
@@ -264,12 +275,15 @@ function findLinuxMountInfoEntryForPath(
   const normalizedTarget = pathOps.resolve(targetPath);
   let bestMatch: LinuxMountInfoEntry | null = null;
   for (const entry of entries) {
-    if (!isPathUnderRootWithPathOps(normalizedTarget, entry.mountPoint, pathOps)) {
+    if (
+      !isPathUnderRootWithPathOps(normalizedTarget, entry.mountPoint, pathOps)
+    ) {
       continue;
     }
     if (
       !bestMatch ||
-      pathOps.resolve(entry.mountPoint).length > pathOps.resolve(bestMatch.mountPoint).length
+      pathOps.resolve(entry.mountPoint).length >
+        pathOps.resolve(bestMatch.mountPoint).length
     ) {
       bestMatch = entry;
     }
@@ -277,7 +291,10 @@ function findLinuxMountInfoEntryForPath(
   return bestMatch;
 }
 
-function isMmcDevicePath(devicePath: string, pathOps: Pick<typeof path, "basename">): boolean {
+function isMmcDevicePath(
+  devicePath: string,
+  pathOps: Pick<typeof path, "basename">,
+): boolean {
   const name = pathOps.basename(devicePath);
   return /^mmcblk\d+(?:p\d+)?$/.test(name);
 }
@@ -306,7 +323,8 @@ export function detectLinuxSdBackedStateDir(
   const linuxPath = path.posix;
 
   const resolveRealPath = deps?.resolveRealPath ?? tryResolveRealPath;
-  const resolvedStatePath = resolveRealPath(stateDir) ?? linuxPath.resolve(stateDir);
+  const resolvedStatePath =
+    resolveRealPath(stateDir) ?? linuxPath.resolve(stateDir);
   const mountInfo = deps?.mountInfo ?? tryReadLinuxMountInfo();
   if (!mountInfo) {
     return null;
@@ -323,14 +341,16 @@ export function detectLinuxSdBackedStateDir(
 
   const sourceCandidates = [mountEntry.source];
   if (mountEntry.source.startsWith("/dev/")) {
-    const resolvedDevicePath = (deps?.resolveDeviceRealPath ?? tryResolveRealPath)(
-      mountEntry.source,
-    );
+    const resolvedDevicePath = (
+      deps?.resolveDeviceRealPath ?? tryResolveRealPath
+    )(mountEntry.source);
     if (resolvedDevicePath) {
       sourceCandidates.push(linuxPath.resolve(resolvedDevicePath));
     }
   }
-  if (!sourceCandidates.some((candidate) => isMmcDevicePath(candidate, linuxPath))) {
+  if (
+    !sourceCandidates.some((candidate) => isMmcDevicePath(candidate, linuxPath))
+  ) {
     return null;
   }
 
@@ -350,8 +370,12 @@ export function formatLinuxSdBackedStateDirWarning(
     linuxSdBackedStateDir.mountPoint === "/"
       ? "/"
       : shortenHomePath(linuxSdBackedStateDir.mountPoint);
-  const safeSource = escapeControlCharsForTerminal(linuxSdBackedStateDir.source);
-  const safeFsType = escapeControlCharsForTerminal(linuxSdBackedStateDir.fsType);
+  const safeSource = escapeControlCharsForTerminal(
+    linuxSdBackedStateDir.source,
+  );
+  const safeFsType = escapeControlCharsForTerminal(
+    linuxSdBackedStateDir.fsType,
+  );
   const safeMountPoint = escapeControlCharsForTerminal(displayMountPoint);
   return [
     `- State directory appears to be on SD/eMMC storage (${displayStateDir}; device ${safeSource}, fs ${safeFsType}, mount ${safeMountPoint}).`,
@@ -382,7 +406,12 @@ export function detectMacCloudSyncedStateDir(
   const roots = [
     {
       storage: "iCloud Drive" as const,
-      root: path.join(homedir, "Library", "Mobile Documents", "com~apple~CloudDocs"),
+      root: path.join(
+        homedir,
+        "Library",
+        "Mobile Documents",
+        "com~apple~CloudDocs",
+      ),
     },
     {
       storage: "CloudStorage provider" as const,
@@ -392,7 +421,9 @@ export function detectMacCloudSyncedStateDir(
   const realPath = (deps?.resolveRealPath ?? tryResolveRealPath)(stateDir);
   // Prefer the resolved target path when available so symlink prefixes do not
   // misclassify local state dirs as cloud-synced.
-  const candidates = realPath ? [path.resolve(realPath)] : [path.resolve(stateDir)];
+  const candidates = realPath
+    ? [path.resolve(realPath)]
+    : [path.resolve(stateDir)];
 
   for (const candidate of candidates) {
     for (const { storage, root } of roots) {
@@ -443,7 +474,10 @@ function isSlashRoutingSessionKey(sessionKey: string): boolean {
   return /^[^:]+:slash:[^:]+(?:$|:)/.test(scoped);
 }
 
-function shouldRequireOAuthDir(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
+function shouldRequireOAuthDir(
+  cfg: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+): boolean {
   if (env.OPENCLAW_OAUTH_DIR?.trim()) {
     return true;
   }
@@ -480,7 +514,11 @@ export async function noteStateIntegrity(
   const defaultStateDir = path.join(homedir(), ".openclaw");
   const oauthDir = resolveOAuthDir(env, stateDir);
   const agentId = resolveDefaultAgentId(cfg);
-  const sessionsDir = resolveSessionTranscriptsDirForAgent(agentId, env, homedir);
+  const sessionsDir = resolveSessionTranscriptsDirForAgent(
+    agentId,
+    env,
+    homedir,
+  );
   const storePath = resolveStorePath(cfg.session?.store, { agentId });
   const storeDir = path.dirname(storePath);
   const absoluteStorePath = path.resolve(storePath);
@@ -488,7 +526,9 @@ export async function noteStateIntegrity(
   const displayOauthDir = shortenHomePath(oauthDir);
   const displaySessionsDir = shortenHomePath(sessionsDir);
   const displayStoreDir = shortenHomePath(storeDir);
-  const displayConfigPath = configPath ? shortenHomePath(configPath) : undefined;
+  const displayConfigPath = configPath
+    ? shortenHomePath(configPath)
+    : undefined;
   const requireOAuthDir = shouldRequireOAuthDir(cfg, env);
   const cloudSyncedStateDir = detectMacCloudSyncedStateDir(stateDir);
   const linuxSdBackedStateDir = detectLinuxSdBackedStateDir(stateDir);
@@ -504,7 +544,12 @@ export async function noteStateIntegrity(
     );
   }
   if (linuxSdBackedStateDir) {
-    warnings.push(formatLinuxSdBackedStateDirWarning(displayStateDir, linuxSdBackedStateDir));
+    warnings.push(
+      formatLinuxSdBackedStateDirWarning(
+        displayStateDir,
+        linuxSdBackedStateDir,
+      ),
+    );
   }
 
   let stateDirExists = existsDir(stateDir);
@@ -527,7 +572,9 @@ export async function noteStateIntegrity(
         changes.push(`- Created ${displayStateDir}`);
         stateDirExists = true;
       } else {
-        warnings.push(`- Failed to create ${displayStateDir}: ${created.error}`);
+        warnings.push(
+          `- Failed to create ${displayStateDir}: ${created.error}`,
+        );
       }
     }
   }
@@ -577,7 +624,9 @@ export async function noteStateIntegrity(
         }
       }
     } catch (err) {
-      warnings.push(`- Failed to read ${displayStateDir} permissions: ${String(err)}`);
+      warnings.push(
+        `- Failed to read ${displayStateDir} permissions: ${String(err)}`,
+      );
     }
   }
 
@@ -588,7 +637,9 @@ export async function noteStateIntegrity(
       // For symlinks, check the resolved target permissions. Skip the warning
       // only when the target lives in an immutable store (e.g. /nix/store/).
       const stat = isSymlink ? fs.statSync(configPath) : configLstat;
-      const resolvedConfig = isSymlink ? fs.realpathSync(configPath) : configPath;
+      const resolvedConfig = isSymlink
+        ? fs.realpathSync(configPath)
+        : configPath;
       const isImmutableConfig = resolvedConfig.startsWith("/nix/store/");
       if (!isImmutableConfig && (stat.mode & 0o077) !== 0) {
         warnings.push(
@@ -600,7 +651,9 @@ export async function noteStateIntegrity(
         });
         if (tighten) {
           fs.chmodSync(configPath, 0o600);
-          changes.push(`- Tightened permissions on ${displayConfigPath ?? configPath} to 600`);
+          changes.push(
+            `- Tightened permissions on ${displayConfigPath ?? configPath} to 600`,
+          );
         }
       }
     } catch (err) {
@@ -689,7 +742,9 @@ export async function noteStateIntegrity(
     warnings.push(
       [
         "- Multiple state directories detected. This can split session history.",
-        ...Array.from(extraStateDirs).map((dir) => `  - ${shortenHomePath(dir)}`),
+        ...Array.from(extraStateDirs).map(
+          (dir) => `  - ${shortenHomePath(dir)}`,
+        ),
         `  Active state dir: ${displayStateDir}`,
       ].join("\n"),
     );
@@ -697,23 +752,33 @@ export async function noteStateIntegrity(
 
   const store = loadSessionStore(storePath);
   const sessionPathOpts = resolveSessionFilePathOptions({ agentId, storePath });
-  const entries = Object.entries(store).filter(([, entry]) => entry && typeof entry === "object");
+  const entries = Object.entries(store).filter(
+    ([, entry]) => entry && typeof entry === "object",
+  );
   if (entries.length > 0) {
     const recent = entries
       .slice()
       .toSorted((a, b) => {
-        const aUpdated = typeof a[1].updatedAt === "number" ? a[1].updatedAt : 0;
-        const bUpdated = typeof b[1].updatedAt === "number" ? b[1].updatedAt : 0;
+        const aUpdated =
+          typeof a[1].updatedAt === "number" ? a[1].updatedAt : 0;
+        const bUpdated =
+          typeof b[1].updatedAt === "number" ? b[1].updatedAt : 0;
         return bUpdated - aUpdated;
       })
       .slice(0, 5);
-    const recentTranscriptCandidates = recent.filter(([key]) => !isSlashRoutingSessionKey(key));
+    const recentTranscriptCandidates = recent.filter(
+      ([key]) => !isSlashRoutingSessionKey(key),
+    );
     const missing = recentTranscriptCandidates.filter(([, entry]) => {
       const sessionId = entry.sessionId;
       if (!sessionId) {
         return false;
       }
-      const transcriptPath = resolveSessionFilePath(sessionId, entry, sessionPathOpts);
+      const transcriptPath = resolveSessionFilePath(
+        sessionId,
+        entry,
+        sessionPathOpts,
+      );
       return !existsFile(transcriptPath);
     });
     if (missing.length > 0) {
@@ -758,15 +823,22 @@ export async function noteStateIntegrity(
       }
       try {
         referencedTranscriptPaths.add(
-          path.resolve(resolveSessionFilePath(entry.sessionId, entry, sessionPathOpts)),
+          path.resolve(
+            resolveSessionFilePath(entry.sessionId, entry, sessionPathOpts),
+          ),
         );
       } catch {
         // ignore invalid legacy paths
       }
     }
-    const sessionDirEntries = fs.readdirSync(sessionsDir, { withFileTypes: true });
+    const sessionDirEntries = fs.readdirSync(sessionsDir, {
+      withFileTypes: true,
+    });
     const orphanTranscriptPaths = sessionDirEntries
-      .filter((entry) => entry.isFile() && isPrimarySessionTranscriptFileName(entry.name))
+      .filter(
+        (entry) =>
+          entry.isFile() && isPrimarySessionTranscriptFileName(entry.name),
+      )
       .map((entry) => path.resolve(path.join(sessionsDir, entry.name)))
       .filter((filePath) => !referencedTranscriptPaths.has(filePath));
     if (orphanTranscriptPaths.length > 0) {
@@ -792,7 +864,9 @@ export async function noteStateIntegrity(
           }
         }
         if (archived > 0) {
-          changes.push(`- Archived ${archived} orphan transcript file(s) in ${displaySessionsDir}`);
+          changes.push(
+            `- Archived ${archived} orphan transcript file(s) in ${displaySessionsDir}`,
+          );
         }
       }
     }

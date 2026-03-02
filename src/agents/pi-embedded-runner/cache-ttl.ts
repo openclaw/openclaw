@@ -17,25 +17,38 @@ const OPENROUTER_CACHE_TTL_MODEL_PREFIXES = [
 ] as const;
 
 function isOpenRouterCacheTtlModel(modelId: string): boolean {
-  return OPENROUTER_CACHE_TTL_MODEL_PREFIXES.some((prefix) => modelId.startsWith(prefix));
+  return OPENROUTER_CACHE_TTL_MODEL_PREFIXES.some((prefix) =>
+    modelId.startsWith(prefix),
+  );
 }
 
-export function isCacheTtlEligibleProvider(provider: string, modelId: string): boolean {
+export function isCacheTtlEligibleProvider(
+  provider: string,
+  modelId: string,
+): boolean {
   const normalizedProvider = provider.toLowerCase();
   const normalizedModelId = modelId.toLowerCase();
   if (CACHE_TTL_NATIVE_PROVIDERS.has(normalizedProvider)) {
     return true;
   }
-  if (normalizedProvider === "openrouter" && isOpenRouterCacheTtlModel(normalizedModelId)) {
+  if (
+    normalizedProvider === "openrouter" &&
+    isOpenRouterCacheTtlModel(normalizedModelId)
+  ) {
     return true;
   }
-  if (normalizedProvider === "kilocode" && normalizedModelId.startsWith("anthropic/")) {
+  if (
+    normalizedProvider === "kilocode" &&
+    normalizedModelId.startsWith("anthropic/")
+  ) {
     return true;
   }
   return false;
 }
 
-export function readLastCacheTtlTimestamp(sessionManager: unknown): number | null {
+export function readLastCacheTtlTimestamp(
+  sessionManager: unknown,
+): number | null {
   const sm = sessionManager as { getEntries?: () => CustomEntryLike[] };
   if (!sm?.getEntries) {
     return null;
@@ -45,7 +58,10 @@ export function readLastCacheTtlTimestamp(sessionManager: unknown): number | nul
     let last: number | null = null;
     for (let i = entries.length - 1; i >= 0; i--) {
       const entry = entries[i];
-      if (entry?.type !== "custom" || entry?.customType !== CACHE_TTL_CUSTOM_TYPE) {
+      if (
+        entry?.type !== "custom" ||
+        entry?.customType !== CACHE_TTL_CUSTOM_TYPE
+      ) {
         continue;
       }
       const data = entry?.data as Partial<CacheTtlEntryData> | undefined;
@@ -61,7 +77,10 @@ export function readLastCacheTtlTimestamp(sessionManager: unknown): number | nul
   }
 }
 
-export function appendCacheTtlTimestamp(sessionManager: unknown, data: CacheTtlEntryData): void {
+export function appendCacheTtlTimestamp(
+  sessionManager: unknown,
+  data: CacheTtlEntryData,
+): void {
   const sm = sessionManager as {
     appendCustomEntry?: (customType: string, data: unknown) => void;
   };

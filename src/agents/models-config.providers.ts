@@ -14,7 +14,10 @@ import {
   KILOCODE_MODEL_CATALOG,
 } from "../providers/kilocode-shared.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
-import { ensureAuthProfileStore, listProfilesForProvider } from "./auth-profiles.js";
+import {
+  ensureAuthProfileStore,
+  listProfilesForProvider,
+} from "./auth-profiles.js";
 import { discoverBedrockModels } from "./bedrock-discovery.js";
 import {
   buildBytePlusModelDefinition,
@@ -252,12 +255,18 @@ async function queryOllamaContextWindow(
     if (!response.ok) {
       return undefined;
     }
-    const data = (await response.json()) as { model_info?: Record<string, unknown> };
+    const data = (await response.json()) as {
+      model_info?: Record<string, unknown>;
+    };
     if (!data.model_info) {
       return undefined;
     }
     for (const [key, value] of Object.entries(data.model_info)) {
-      if (key.endsWith(".context_length") && typeof value === "number" && Number.isFinite(value)) {
+      if (
+        key.endsWith(".context_length") &&
+        typeof value === "number" &&
+        Number.isFinite(value)
+      ) {
         const contextWindow = Math.floor(value);
         if (contextWindow > 0) {
           return contextWindow;
@@ -301,14 +310,25 @@ async function discoverOllamaModels(
       );
     }
     const discovered: ModelDefinitionConfig[] = [];
-    for (let index = 0; index < modelsToInspect.length; index += OLLAMA_SHOW_CONCURRENCY) {
-      const batch = modelsToInspect.slice(index, index + OLLAMA_SHOW_CONCURRENCY);
+    for (
+      let index = 0;
+      index < modelsToInspect.length;
+      index += OLLAMA_SHOW_CONCURRENCY
+    ) {
+      const batch = modelsToInspect.slice(
+        index,
+        index + OLLAMA_SHOW_CONCURRENCY,
+      );
       const batchDiscovered = await Promise.all(
         batch.map(async (model) => {
           const modelId = model.name;
-          const contextWindow = await queryOllamaContextWindow(apiBase, modelId);
+          const contextWindow = await queryOllamaContextWindow(
+            apiBase,
+            modelId,
+          );
           const isReasoning =
-            modelId.toLowerCase().includes("r1") || modelId.toLowerCase().includes("reasoning");
+            modelId.toLowerCase().includes("r1") ||
+            modelId.toLowerCase().includes("reasoning");
           return {
             id: modelId,
             name: modelId,
@@ -346,7 +366,9 @@ async function discoverVllmModels(
   try {
     const trimmedApiKey = apiKey?.trim();
     const response = await fetch(url, {
-      headers: trimmedApiKey ? { Authorization: `Bearer ${trimmedApiKey}` } : undefined,
+      headers: trimmedApiKey
+        ? { Authorization: `Bearer ${trimmedApiKey}` }
+        : undefined,
       signal: AbortSignal.timeout(5000),
     });
     if (!response.ok) {
@@ -367,7 +389,9 @@ async function discoverVllmModels(
         const modelId = m.id;
         const lower = modelId.toLowerCase();
         const isReasoning =
-          lower.includes("r1") || lower.includes("reasoning") || lower.includes("think");
+          lower.includes("r1") ||
+          lower.includes("reasoning") ||
+          lower.includes("think");
         return {
           id: modelId,
           name: modelId,
@@ -447,7 +471,11 @@ export function normalizeGoogleModelId(id: string): string {
   return id;
 }
 
-const ANTIGRAVITY_BARE_PRO_IDS = new Set(["gemini-3-pro", "gemini-3.1-pro", "gemini-3-1-pro"]);
+const ANTIGRAVITY_BARE_PRO_IDS = new Set([
+  "gemini-3-pro",
+  "gemini-3.1-pro",
+  "gemini-3-1-pro",
+]);
 
 export function normalizeAntigravityModelId(id: string): string {
   if (ANTIGRAVITY_BARE_PRO_IDS.has(id)) {
@@ -476,7 +504,9 @@ function normalizeGoogleProvider(provider: ProviderConfig): ProviderConfig {
   return normalizeProviderModels(provider, normalizeGoogleModelId);
 }
 
-function normalizeAntigravityProvider(provider: ProviderConfig): ProviderConfig {
+function normalizeAntigravityProvider(
+  provider: ProviderConfig,
+): ProviderConfig {
   return normalizeProviderModels(provider, normalizeAntigravityModelId);
 }
 
@@ -521,12 +551,18 @@ export function normalizeProviders(params: {
     // If a provider defines models, pi's ModelRegistry requires apiKey to be set.
     // Fill it from the environment or auth profiles when possible.
     const hasModels =
-      Array.isArray(normalizedProvider.models) && normalizedProvider.models.length > 0;
-    const normalizedApiKey = normalizeOptionalSecretInput(normalizedProvider.apiKey);
-    const hasConfiguredApiKey = Boolean(normalizedApiKey || normalizedProvider.apiKey);
+      Array.isArray(normalizedProvider.models) &&
+      normalizedProvider.models.length > 0;
+    const normalizedApiKey = normalizeOptionalSecretInput(
+      normalizedProvider.apiKey,
+    );
+    const hasConfiguredApiKey = Boolean(
+      normalizedApiKey || normalizedProvider.apiKey,
+    );
     if (hasModels && !hasConfiguredApiKey) {
       const authMode =
-        normalizedProvider.auth ?? (normalizedKey === "amazon-bedrock" ? "aws-sdk" : undefined);
+        normalizedProvider.auth ??
+        (normalizedKey === "amazon-bedrock" ? "aws-sdk" : undefined);
       if (authMode === "aws-sdk") {
         const apiKey = resolveAwsSdkApiKeyVarName();
         mutated = true;
@@ -554,7 +590,8 @@ export function normalizeProviders(params: {
     }
 
     if (normalizedKey === "google-antigravity") {
-      const antigravityNormalized = normalizeAntigravityProvider(normalizedProvider);
+      const antigravityNormalized =
+        normalizeAntigravityProvider(normalizedProvider);
       if (antigravityNormalized !== normalizedProvider) {
         mutated = true;
       }
@@ -777,7 +814,9 @@ async function buildOllamaProvider(
   };
 }
 
-async function buildHuggingfaceProvider(apiKey?: string): Promise<ProviderConfig> {
+async function buildHuggingfaceProvider(
+  apiKey?: string,
+): Promise<ProviderConfig> {
   // Resolve env var name to value for discovery (GET /v1/models requires Bearer token).
   const resolvedSecret =
     apiKey?.trim() !== ""
@@ -832,7 +871,10 @@ async function buildVllmProvider(params?: {
   baseUrl?: string;
   apiKey?: string;
 }): Promise<ProviderConfig> {
-  const baseUrl = (params?.baseUrl?.trim() || VLLM_BASE_URL).replace(/\/+$/, "");
+  const baseUrl = (params?.baseUrl?.trim() || VLLM_BASE_URL).replace(
+    /\/+$/,
+    "",
+  );
   const models = await discoverVllmModels(baseUrl, params?.apiKey);
   return {
     baseUrl,
@@ -936,7 +978,10 @@ export async function resolveImplicitProviders(params: {
     providers.minimax = { ...buildMinimaxProvider(), apiKey: minimaxKey };
   }
 
-  const minimaxOauthProfile = listProfilesForProvider(authStore, "minimax-portal");
+  const minimaxOauthProfile = listProfilesForProvider(
+    authStore,
+    "minimax-portal",
+  );
   if (minimaxOauthProfile.length > 0) {
     providers["minimax-portal"] = {
       ...buildMinimaxPortalProvider(),
@@ -955,7 +1000,10 @@ export async function resolveImplicitProviders(params: {
     resolveEnvApiKeyVarName("kimi-coding") ??
     resolveApiKeyFromProfiles({ provider: "kimi-coding", store: authStore });
   if (kimiCodingKey) {
-    providers["kimi-coding"] = { ...buildKimiCodingProvider(), apiKey: kimiCodingKey };
+    providers["kimi-coding"] = {
+      ...buildKimiCodingProvider(),
+      apiKey: kimiCodingKey,
+    };
   }
 
   const syntheticKey =
@@ -1009,7 +1057,10 @@ export async function resolveImplicitProviders(params: {
     providers.xiaomi = { ...buildXiaomiProvider(), apiKey: xiaomiKey };
   }
 
-  const cloudflareProfiles = listProfilesForProvider(authStore, "cloudflare-ai-gateway");
+  const cloudflareProfiles = listProfilesForProvider(
+    authStore,
+    "cloudflare-ai-gateway",
+  );
   for (const profileId of cloudflareProfiles) {
     const cred = authStore.profiles[profileId];
     if (cred?.type !== "api_key") {
@@ -1024,7 +1075,10 @@ export async function resolveImplicitProviders(params: {
     if (!baseUrl) {
       continue;
     }
-    const apiKey = resolveEnvApiKeyVarName("cloudflare-ai-gateway") ?? cred.key?.trim() ?? "";
+    const apiKey =
+      resolveEnvApiKeyVarName("cloudflare-ai-gateway") ??
+      cred.key?.trim() ??
+      "";
     if (!apiKey) {
       continue;
     }
@@ -1062,7 +1116,11 @@ export async function resolveImplicitProviders(params: {
     const ollamaProvider = await buildOllamaProvider(ollamaBaseUrl, {
       quiet: !ollamaKey && !hasExplicitOllamaConfig,
     });
-    if (ollamaProvider.models.length > 0 || ollamaKey || explicitOllama?.apiKey) {
+    if (
+      ollamaProvider.models.length > 0 ||
+      ollamaKey ||
+      explicitOllama?.apiKey
+    ) {
       providers.ollama = {
         ...ollamaProvider,
         apiKey: ollamaKey ?? explicitOllama?.apiKey ?? "ollama-local",
@@ -1074,7 +1132,10 @@ export async function resolveImplicitProviders(params: {
   // If explicitly configured, keep user-defined models/settings as-is.
   if (!params.explicitProviders?.vllm) {
     const vllmEnvVar = resolveEnvApiKeyVarName("vllm");
-    const vllmProfileKey = resolveApiKeyFromProfiles({ provider: "vllm", store: authStore });
+    const vllmProfileKey = resolveApiKeyFromProfiles({
+      provider: "vllm",
+      store: authStore,
+    });
     const vllmKey = vllmEnvVar ?? vllmProfileKey;
     if (vllmKey) {
       const discoveryApiKey = vllmEnvVar
@@ -1119,7 +1180,10 @@ export async function resolveImplicitProviders(params: {
     resolveEnvApiKeyVarName("openrouter") ??
     resolveApiKeyFromProfiles({ provider: "openrouter", store: authStore });
   if (openrouterKey) {
-    providers.openrouter = { ...buildOpenrouterProvider(), apiKey: openrouterKey };
+    providers.openrouter = {
+      ...buildOpenrouterProvider(),
+      apiKey: openrouterKey,
+    };
   }
 
   const nvidiaKey =
@@ -1147,7 +1211,8 @@ export async function resolveImplicitCopilotProvider(params: {
   const authStore = ensureAuthProfileStore(params.agentDir, {
     allowKeychainPrompt: false,
   });
-  const hasProfile = listProfilesForProvider(authStore, "github-copilot").length > 0;
+  const hasProfile =
+    listProfilesForProvider(authStore, "github-copilot").length > 0;
   const envToken = env.COPILOT_GITHUB_TOKEN ?? env.GH_TOKEN ?? env.GITHUB_TOKEN;
   const githubToken = (envToken ?? "").trim();
 
@@ -1166,7 +1231,11 @@ export async function resolveImplicitCopilotProvider(params: {
       if (!selectedGithubToken) {
         const tokenRef = coerceSecretRef(profile.tokenRef);
         if (tokenRef?.source === "env" && tokenRef.id.trim()) {
-          selectedGithubToken = (env[tokenRef.id] ?? process.env[tokenRef.id] ?? "").trim();
+          selectedGithubToken = (
+            env[tokenRef.id] ??
+            process.env[tokenRef.id] ??
+            ""
+          ).trim();
         }
       }
     }
@@ -1213,7 +1282,11 @@ export async function resolveImplicitBedrockProvider(params: {
     return null;
   }
 
-  const region = discoveryConfig?.region ?? env.AWS_REGION ?? env.AWS_DEFAULT_REGION ?? "us-east-1";
+  const region =
+    discoveryConfig?.region ??
+    env.AWS_REGION ??
+    env.AWS_DEFAULT_REGION ??
+    "us-east-1";
   const models = await discoverBedrockModels({
     region,
     config: discoveryConfig,

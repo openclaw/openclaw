@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { buildDeviceAuthPayloadV3, normalizeDeviceMetadataForAuth } from "./device-auth.js";
+import {
+  buildDeviceAuthPayloadV3,
+  normalizeDeviceMetadataForAuth,
+} from "./device-auth.js";
 
 describe("device-auth payload vectors", () => {
   it("builds canonical v3 payload", () => {

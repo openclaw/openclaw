@@ -32,7 +32,11 @@ export function registerCronEditCommand(cron: Command) {
       .option("--description <text>", "Set description")
       .option("--enable", "Enable job", false)
       .option("--disable", "Disable job", false)
-      .option("--delete-after-run", "Delete one-shot job after it succeeds", false)
+      .option(
+        "--delete-after-run",
+        "Delete one-shot job after it succeeds",
+        false,
+      )
       .option("--keep-after-run", "Keep one-shot job after it succeeds", false)
       .option("--session <target>", "Session target (main|isolated)")
       .option("--agent <id>", "Set agent id")
@@ -51,29 +55,53 @@ export function registerCronEditCommand(cron: Command) {
       .option("--thinking <level>", "Thinking level for agent jobs")
       .option("--model <model>", "Model override for agent jobs")
       .option("--timeout-seconds <n>", "Timeout seconds for agent jobs")
-      .option("--light-context", "Enable lightweight bootstrap context for agent jobs")
-      .option("--no-light-context", "Disable lightweight bootstrap context for agent jobs")
+      .option(
+        "--light-context",
+        "Enable lightweight bootstrap context for agent jobs",
+      )
+      .option(
+        "--no-light-context",
+        "Disable lightweight bootstrap context for agent jobs",
+      )
       .option("--announce", "Announce summary to a chat (subagent-style)")
-      .option("--deliver", "Deprecated (use --announce). Announces a summary to a chat.")
+      .option(
+        "--deliver",
+        "Deprecated (use --announce). Announces a summary to a chat.",
+      )
       .option("--no-deliver", "Disable announce delivery")
-      .option("--channel <channel>", `Delivery channel (${getCronChannelOptions()})`)
+      .option(
+        "--channel <channel>",
+        `Delivery channel (${getCronChannelOptions()})`,
+      )
       .option(
         "--to <dest>",
         "Delivery destination (E.164, Telegram chatId, or Discord channel/user)",
       )
-      .option("--account <id>", "Channel account id for delivery (multi-account setups)")
+      .option(
+        "--account <id>",
+        "Channel account id for delivery (multi-account setups)",
+      )
       .option("--best-effort-deliver", "Do not fail job if delivery fails")
       .option("--no-best-effort-deliver", "Fail job when delivery fails")
       .option("--failure-alert", "Enable failure alerts for this job")
       .option("--no-failure-alert", "Disable failure alerts for this job")
-      .option("--failure-alert-after <n>", "Alert after N consecutive job errors")
+      .option(
+        "--failure-alert-after <n>",
+        "Alert after N consecutive job errors",
+      )
       .option(
         "--failure-alert-channel <channel>",
         `Failure alert channel (${getCronChannelOptions()})`,
       )
       .option("--failure-alert-to <dest>", "Failure alert destination")
-      .option("--failure-alert-cooldown <duration>", "Minimum time between alerts (e.g. 1h, 30m)")
-      .option("--failure-alert-mode <mode>", "Failure alert delivery mode (announce or webhook)")
+      .option(
+        "--failure-alert-cooldown <duration>",
+        "Minimum time between alerts (e.g. 1h, 30m)",
+      )
+      .option(
+        "--failure-alert-mode <mode>",
+        "Failure alert delivery mode (announce or webhook)",
+      )
       .option(
         "--failure-alert-account-id <id>",
         "Account ID for failure alert channel (multi-account setups)",
@@ -91,9 +119,12 @@ export function registerCronEditCommand(cron: Command) {
             );
           }
           if (opts.announce && typeof opts.deliver === "boolean") {
-            throw new Error("Choose --announce or --no-deliver (not multiple).");
+            throw new Error(
+              "Choose --announce or --no-deliver (not multiple).",
+            );
           }
-          const staggerRaw = typeof opts.stagger === "string" ? opts.stagger.trim() : "";
+          const staggerRaw =
+            typeof opts.stagger === "string" ? opts.stagger.trim() : "";
           const useExact = Boolean(opts.exact);
           if (staggerRaw && useExact) {
             throw new Error("Choose either --stagger or --exact, not both");
@@ -129,7 +160,9 @@ export function registerCronEditCommand(cron: Command) {
             patch.enabled = false;
           }
           if (opts.deleteAfterRun && opts.keepAfterRun) {
-            throw new Error("Choose --delete-after-run or --keep-after-run, not both");
+            throw new Error(
+              "Choose --delete-after-run or --keep-after-run, not both",
+            );
           }
           if (opts.deleteAfterRun) {
             patch.deleteAfterRun = true;
@@ -153,7 +186,9 @@ export function registerCronEditCommand(cron: Command) {
             patch.agentId = null;
           }
           if (opts.sessionKey && opts.clearSessionKey) {
-            throw new Error("Use --session-key or --clear-session-key, not both");
+            throw new Error(
+              "Use --session-key or --clear-session-key, not both",
+            );
           }
           if (typeof opts.sessionKey === "string" && opts.sessionKey.trim()) {
             patch.sessionKey = opts.sessionKey.trim();
@@ -162,7 +197,9 @@ export function registerCronEditCommand(cron: Command) {
             patch.sessionKey = null;
           }
 
-          const scheduleChosen = [opts.at, opts.every, opts.cron].filter(Boolean).length;
+          const scheduleChosen = [opts.at, opts.every, opts.cron].filter(
+            Boolean,
+          ).length;
           if (scheduleChosen > 1) {
             throw new Error("Choose at most one schedule change");
           }
@@ -170,7 +207,9 @@ export function registerCronEditCommand(cron: Command) {
             (requestedStaggerMs !== undefined || typeof opts.tz === "string") &&
             (opts.at || opts.every)
           ) {
-            throw new Error("--stagger/--exact/--tz are only valid for cron schedules");
+            throw new Error(
+              "--stagger/--exact/--tz are only valid for cron schedules",
+            );
           }
           if (opts.at) {
             const atIso = parseAt(String(opts.at));
@@ -188,10 +227,16 @@ export function registerCronEditCommand(cron: Command) {
             patch.schedule = {
               kind: "cron",
               expr: String(opts.cron),
-              tz: typeof opts.tz === "string" && opts.tz.trim() ? opts.tz.trim() : undefined,
+              tz:
+                typeof opts.tz === "string" && opts.tz.trim()
+                  ? opts.tz.trim()
+                  : undefined,
               staggerMs: requestedStaggerMs,
             };
-          } else if (requestedStaggerMs !== undefined || typeof opts.tz === "string") {
+          } else if (
+            requestedStaggerMs !== undefined ||
+            typeof opts.tz === "string"
+          ) {
             const listed = (await callGatewayFromCli("cron.list", opts, {
               includeDisabled: true,
             })) as { jobs?: CronJob[] } | null;
@@ -200,22 +245,30 @@ export function registerCronEditCommand(cron: Command) {
               throw new Error(`unknown cron job id: ${id}`);
             }
             if (existing.schedule.kind !== "cron") {
-              throw new Error("Current job is not a cron schedule; use --cron to convert first");
+              throw new Error(
+                "Current job is not a cron schedule; use --cron to convert first",
+              );
             }
             const tz =
-              typeof opts.tz === "string" ? opts.tz.trim() || undefined : existing.schedule.tz;
+              typeof opts.tz === "string"
+                ? opts.tz.trim() || undefined
+                : existing.schedule.tz;
             patch.schedule = {
               kind: "cron",
               expr: existing.schedule.expr,
               tz,
               staggerMs:
-                requestedStaggerMs !== undefined ? requestedStaggerMs : existing.schedule.staggerMs,
+                requestedStaggerMs !== undefined
+                  ? requestedStaggerMs
+                  : existing.schedule.staggerMs,
             };
           }
 
           const hasSystemEventPatch = typeof opts.systemEvent === "string";
           const model =
-            typeof opts.model === "string" && opts.model.trim() ? opts.model.trim() : undefined;
+            typeof opts.model === "string" && opts.model.trim()
+              ? opts.model.trim()
+              : undefined;
           const thinking =
             typeof opts.thinking === "string" && opts.thinking.trim()
               ? opts.thinking.trim()
@@ -223,9 +276,13 @@ export function registerCronEditCommand(cron: Command) {
           const timeoutSeconds = opts.timeoutSeconds
             ? Number.parseInt(String(opts.timeoutSeconds), 10)
             : undefined;
-          const hasTimeoutSeconds = Boolean(timeoutSeconds && Number.isFinite(timeoutSeconds));
-          const hasDeliveryModeFlag = opts.announce || typeof opts.deliver === "boolean";
-          const hasDeliveryTarget = typeof opts.channel === "string" || typeof opts.to === "string";
+          const hasTimeoutSeconds = Boolean(
+            timeoutSeconds && Number.isFinite(timeoutSeconds),
+          );
+          const hasDeliveryModeFlag =
+            opts.announce || typeof opts.deliver === "boolean";
+          const hasDeliveryTarget =
+            typeof opts.channel === "string" || typeof opts.to === "string";
           const hasDeliveryAccount = typeof opts.account === "string";
           const hasBestEffort = typeof opts.bestEffortDeliver === "boolean";
           const hasAgentTurnPatch =
@@ -248,10 +305,20 @@ export function registerCronEditCommand(cron: Command) {
             };
           } else if (hasAgentTurnPatch) {
             const payload: Record<string, unknown> = { kind: "agentTurn" };
-            assignIf(payload, "message", String(opts.message), typeof opts.message === "string");
+            assignIf(
+              payload,
+              "message",
+              String(opts.message),
+              typeof opts.message === "string",
+            );
             assignIf(payload, "model", model, Boolean(model));
             assignIf(payload, "thinking", thinking, Boolean(thinking));
-            assignIf(payload, "timeoutSeconds", timeoutSeconds, hasTimeoutSeconds);
+            assignIf(
+              payload,
+              "timeoutSeconds",
+              timeoutSeconds,
+              hasTimeoutSeconds,
+            );
             assignIf(
               payload,
               "lightContext",
@@ -261,10 +328,16 @@ export function registerCronEditCommand(cron: Command) {
             patch.payload = payload;
           }
 
-          if (hasDeliveryModeFlag || hasDeliveryTarget || hasDeliveryAccount || hasBestEffort) {
+          if (
+            hasDeliveryModeFlag ||
+            hasDeliveryTarget ||
+            hasDeliveryAccount ||
+            hasBestEffort
+          ) {
             const delivery: Record<string, unknown> = {};
             if (hasDeliveryModeFlag) {
-              delivery.mode = opts.announce || opts.deliver === true ? "announce" : "none";
+              delivery.mode =
+                opts.announce || opts.deliver === true ? "announce" : "none";
             } else if (hasBestEffort) {
               // Back-compat: toggling best-effort alone has historically implied announce mode.
               delivery.mode = "announce";
@@ -287,12 +360,16 @@ export function registerCronEditCommand(cron: Command) {
             patch.delivery = delivery;
           }
 
-          const hasFailureAlertAfter = typeof opts.failureAlertAfter === "string";
-          const hasFailureAlertChannel = typeof opts.failureAlertChannel === "string";
+          const hasFailureAlertAfter =
+            typeof opts.failureAlertAfter === "string";
+          const hasFailureAlertChannel =
+            typeof opts.failureAlertChannel === "string";
           const hasFailureAlertTo = typeof opts.failureAlertTo === "string";
-          const hasFailureAlertCooldown = typeof opts.failureAlertCooldown === "string";
+          const hasFailureAlertCooldown =
+            typeof opts.failureAlertCooldown === "string";
           const hasFailureAlertMode = typeof opts.failureAlertMode === "string";
-          const hasFailureAlertAccountId = typeof opts.failureAlertAccountId === "string";
+          const hasFailureAlertAccountId =
+            typeof opts.failureAlertAccountId === "string";
           const hasFailureAlertFields =
             hasFailureAlertAfter ||
             hasFailureAlertChannel ||
@@ -301,9 +378,13 @@ export function registerCronEditCommand(cron: Command) {
             hasFailureAlertMode ||
             hasFailureAlertAccountId;
           const failureAlertFlag =
-            typeof opts.failureAlert === "boolean" ? opts.failureAlert : undefined;
+            typeof opts.failureAlert === "boolean"
+              ? opts.failureAlert
+              : undefined;
           if (failureAlertFlag === false && hasFailureAlertFields) {
-            throw new Error("Use --no-failure-alert alone (without failure-alert-* options).");
+            throw new Error(
+              "Use --no-failure-alert alone (without failure-alert-* options).",
+            );
           }
           if (failureAlertFlag === false) {
             patch.failureAlert = false;
@@ -312,12 +393,16 @@ export function registerCronEditCommand(cron: Command) {
             if (hasFailureAlertAfter) {
               const after = Number.parseInt(String(opts.failureAlertAfter), 10);
               if (!Number.isFinite(after) || after <= 0) {
-                throw new Error("Invalid --failure-alert-after (must be a positive integer).");
+                throw new Error(
+                  "Invalid --failure-alert-after (must be a positive integer).",
+                );
               }
               failureAlert.after = after;
             }
             if (hasFailureAlertChannel) {
-              const channel = String(opts.failureAlertChannel).trim().toLowerCase();
+              const channel = String(opts.failureAlertChannel)
+                .trim()
+                .toLowerCase();
               failureAlert.channel = channel ? channel : undefined;
             }
             if (hasFailureAlertTo) {
@@ -325,7 +410,9 @@ export function registerCronEditCommand(cron: Command) {
               failureAlert.to = to ? to : undefined;
             }
             if (hasFailureAlertCooldown) {
-              const cooldownMs = parseDurationMs(String(opts.failureAlertCooldown));
+              const cooldownMs = parseDurationMs(
+                String(opts.failureAlertCooldown),
+              );
               if (!cooldownMs && cooldownMs !== 0) {
                 throw new Error("Invalid --failure-alert-cooldown.");
               }
@@ -334,7 +421,9 @@ export function registerCronEditCommand(cron: Command) {
             if (hasFailureAlertMode) {
               const mode = String(opts.failureAlertMode).trim().toLowerCase();
               if (mode !== "announce" && mode !== "webhook") {
-                throw new Error("Invalid --failure-alert-mode (must be 'announce' or 'webhook').");
+                throw new Error(
+                  "Invalid --failure-alert-mode (must be 'announce' or 'webhook').",
+                );
               }
               failureAlert.mode = mode;
             }

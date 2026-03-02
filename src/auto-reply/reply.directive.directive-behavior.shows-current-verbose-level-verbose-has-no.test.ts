@@ -25,7 +25,10 @@ const COMMAND_MESSAGE_BASE = {
 async function runCommand(
   home: string,
   body: string,
-  options: { defaults?: Record<string, unknown>; extra?: Record<string, unknown> } = {},
+  options: {
+    defaults?: Record<string, unknown>;
+    extra?: Record<string, unknown>;
+  } = {},
 ) {
   const res = await getReplyFromConfig(
     { ...COMMAND_MESSAGE_BASE, Body: body },
@@ -136,7 +139,9 @@ describe("directive behavior", () => {
       expect(reasoningText).toContain("Current reasoning level: off");
       expect(reasoningText).toContain("Options: on, off, stream.");
 
-      const elevatedText = replyText(await runElevatedCommand(home, "/elevated"));
+      const elevatedText = replyText(
+        await runElevatedCommand(home, "/elevated"),
+      );
       expect(elevatedText).toContain("Current elevated level: on");
       expect(elevatedText).toContain("Options: on, off, ask, full.");
 
@@ -165,17 +170,25 @@ describe("directive behavior", () => {
     await withTempHome(async (home) => {
       const storePath = sessionStorePath(home);
 
-      const offStatusText = replyText(await runElevatedCommand(home, "/elevated off\n/status"));
+      const offStatusText = replyText(
+        await runElevatedCommand(home, "/elevated off\n/status"),
+      );
       expect(offStatusText).toContain("Session: agent:main:main");
       assertElevatedOffStatusReply(offStatusText);
 
-      const offLevelText = replyText(await runElevatedCommand(home, "/elevated"));
+      const offLevelText = replyText(
+        await runElevatedCommand(home, "/elevated"),
+      );
       expect(offLevelText).toContain("Current elevated level: off");
-      expect(loadSessionStore(storePath)["agent:main:main"]?.elevatedLevel).toBe("off");
+      expect(
+        loadSessionStore(storePath)["agent:main:main"]?.elevatedLevel,
+      ).toBe("off");
 
       await runElevatedCommand(home, "/elevated on");
       const onStatusText = replyText(await runElevatedCommand(home, "/status"));
-      const optionsLine = onStatusText?.split("\n").find((line) => line.trim().startsWith("⚙️"));
+      const optionsLine = onStatusText
+        ?.split("\n")
+        .find((line) => line.trim().startsWith("⚙️"));
       expect(optionsLine).toBeTruthy();
       expect(optionsLine).toContain("elevated");
 
@@ -232,7 +245,9 @@ describe("directive behavior", () => {
       );
 
       const deniedText = replyText(deniedRes);
-      expect(deniedText).toContain("agents.list[].tools.elevated.allowFrom.whatsapp");
+      expect(deniedText).toContain(
+        "agents.list[].tools.elevated.allowFrom.whatsapp",
+      );
 
       const allowedRes = await getReplyFromConfig(
         {
@@ -253,7 +268,9 @@ describe("directive behavior", () => {
       for (const scenario of [
         {
           body: "/elevated off",
-          config: makeAllowlistedElevatedConfig(home, { sandbox: { mode: "off" } }),
+          config: makeAllowlistedElevatedConfig(home, {
+            sandbox: { mode: "off" },
+          }),
           expectedSnippets: [
             "Elevated mode disabled.",
             "Runtime is direct; sandboxing does not apply.",
@@ -267,7 +284,10 @@ describe("directive behavior", () => {
         {
           body: "/elevated off\n/verbose on",
           config: makeAllowlistedElevatedConfig(home),
-          expectedSnippets: ["Elevated mode disabled.", "Verbose logging enabled."],
+          expectedSnippets: [
+            "Elevated mode disabled.",
+            "Verbose logging enabled.",
+          ],
         },
       ]) {
         const res = await getReplyFromConfig(

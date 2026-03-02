@@ -62,7 +62,10 @@ export async function resolveTwitchTargets(
 
   const normalizedToken = normalizeToken(account.accessToken);
 
-  const authProvider = new StaticAuthProvider(account.clientId, normalizedToken);
+  const authProvider = new StaticAuthProvider(
+    account.clientId,
+    normalizedToken,
+  );
   const apiClient = new ApiClient({ authProvider });
 
   const results: ChannelResolveResult[] = [];
@@ -110,9 +113,14 @@ export async function resolveTwitchTargets(
             resolved: true,
             id: user.id,
             name: user.name,
-            note: user.displayName !== user.name ? `display: ${user.displayName}` : undefined,
+            note:
+              user.displayName !== user.name
+                ? `display: ${user.displayName}`
+                : undefined,
           });
-          log.debug?.(`Resolved username ${normalized} -> ${user.id} (${user.name})`);
+          log.debug?.(
+            `Resolved username ${normalized} -> ${user.id} (${user.name})`,
+          );
         } else {
           results.push({
             input,
@@ -123,7 +131,8 @@ export async function resolveTwitchTargets(
         }
       }
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
       results.push({
         input,
         resolved: false,

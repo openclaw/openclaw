@@ -1,6 +1,9 @@
 import type { Command } from "commander";
 import { normalizeChannelId } from "../channels/plugins/index.js";
-import { listPairingChannels, notifyPairingApproved } from "../channels/plugins/pairing.js";
+import {
+  listPairingChannels,
+  notifyPairingApproved,
+} from "../channels/plugins/pairing.js";
 import { loadConfig } from "../config/config.js";
 import { resolvePairingIdLabel } from "../pairing/pairing-labels.js";
 import {
@@ -15,7 +18,10 @@ import { theme } from "../terminal/theme.js";
 import { formatCliCommand } from "./command-format.js";
 
 /** Parse channel, allowing extension channels not in core registry. */
-function parseChannel(raw: unknown, channels: PairingChannel[]): PairingChannel {
+function parseChannel(
+  raw: unknown,
+  channels: PairingChannel[],
+): PairingChannel {
   const value = (
     typeof raw === "string"
       ? raw
@@ -68,7 +74,10 @@ export function registerPairingCli(program: Command) {
     .argument("[channel]", `Channel (${channels.join(", ")})`)
     .option("--json", "Print JSON", false)
     .action(async (channelArg, opts) => {
-      const channelRaw = opts.channel ?? channelArg ?? (channels.length === 1 ? channels[0] : "");
+      const channelRaw =
+        opts.channel ??
+        channelArg ??
+        (channels.length === 1 ? channels[0] : "");
       if (!channelRaw) {
         throw new Error(
           `Channel required. Use --channel <channel> or pass it as the first argument (expected one of: ${channels.join(", ")})`,
@@ -84,7 +93,9 @@ export function registerPairingCli(program: Command) {
         return;
       }
       if (requests.length === 0) {
-        defaultRuntime.log(theme.muted(`No pending ${channel} pairing requests.`));
+        defaultRuntime.log(
+          theme.muted(`No pending ${channel} pairing requests.`),
+        );
         return;
       }
       const idLabel = resolvePairingIdLabel(channel);
@@ -156,7 +167,9 @@ export function registerPairingCli(program: Command) {
             code: String(resolvedCode),
           });
       if (!approved) {
-        throw new Error(`No pending pairing request found for code: ${String(resolvedCode)}`);
+        throw new Error(
+          `No pending pairing request found for code: ${String(resolvedCode)}`,
+        );
       }
 
       defaultRuntime.log(
@@ -167,7 +180,9 @@ export function registerPairingCli(program: Command) {
         return;
       }
       await notifyApproved(channel, approved.id).catch((err) => {
-        defaultRuntime.log(theme.warn(`Failed to notify requester: ${String(err)}`));
+        defaultRuntime.log(
+          theme.warn(`Failed to notify requester: ${String(err)}`),
+        );
       });
     });
 }

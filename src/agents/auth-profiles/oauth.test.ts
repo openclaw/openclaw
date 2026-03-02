@@ -3,7 +3,11 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { resolveApiKeyForProfile } from "./oauth.js";
 import type { AuthProfileStore } from "./types.js";
 
-function cfgFor(profileId: string, provider: string, mode: "api_key" | "token" | "oauth") {
+function cfgFor(
+  profileId: string,
+  provider: string,
+  mode: "api_key" | "token" | "oauth",
+) {
   return {
     auth: {
       profiles: {
@@ -183,7 +187,11 @@ describe("resolveApiKeyForProfile secret refs", () => {
             [profileId]: {
               type: "api_key",
               provider: "openai",
-              keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+              keyRef: {
+                source: "env",
+                provider: "default",
+                id: "OPENAI_API_KEY",
+              },
             },
           },
         },
@@ -217,7 +225,11 @@ describe("resolveApiKeyForProfile secret refs", () => {
               type: "token",
               provider: "github-copilot",
               token: "",
-              tokenRef: { source: "env", provider: "default", id: "GITHUB_TOKEN" },
+              tokenRef: {
+                source: "env",
+                provider: "default",
+                id: "GITHUB_TOKEN",
+              },
             },
           },
         },

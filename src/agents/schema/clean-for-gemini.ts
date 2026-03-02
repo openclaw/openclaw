@@ -31,7 +31,10 @@ export const GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS = new Set([
 
 const SCHEMA_META_KEYS = ["description", "title", "default"] as const;
 
-function copySchemaMeta(from: Record<string, unknown>, to: Record<string, unknown>): void {
+function copySchemaMeta(
+  from: Record<string, unknown>,
+  to: Record<string, unknown>,
+): void {
   for (const key of SCHEMA_META_KEYS) {
     if (key in from && from[key] !== undefined) {
       to[key] = from[key];
@@ -43,7 +46,9 @@ function copySchemaMeta(from: Record<string, unknown>, to: Record<string, unknow
 // TypeBox Type.Literal generates { const: "value", type: "string" }.
 // Some schemas may use { enum: ["value"], type: "string" }.
 // Both patterns are flattened to { type: "string", enum: ["a", "b", ...] }.
-function tryFlattenLiteralAnyOf(variants: unknown[]): { type: string; enum: unknown[] } | null {
+function tryFlattenLiteralAnyOf(
+  variants: unknown[],
+): { type: string; enum: unknown[] } | null {
   if (variants.length === 0) {
     return null;
   }
@@ -100,7 +105,11 @@ function isNullSchema(variant: unknown): boolean {
   if (typeValue === "null") {
     return true;
   }
-  if (Array.isArray(typeValue) && typeValue.length === 1 && typeValue[0] === "null") {
+  if (
+    Array.isArray(typeValue) &&
+    typeValue.length === 1 &&
+    typeValue[0] === "null"
+  ) {
     return true;
   }
   return false;
@@ -127,7 +136,9 @@ function extendSchemaDefs(
   schema: Record<string, unknown>,
 ): SchemaDefs | undefined {
   const defsEntry =
-    schema.$defs && typeof schema.$defs === "object" && !Array.isArray(schema.$defs)
+    schema.$defs &&
+    typeof schema.$defs === "object" &&
+    !Array.isArray(schema.$defs)
       ? (schema.$defs as Record<string, unknown>)
       : undefined;
   const legacyDefsEntry =
@@ -159,7 +170,10 @@ function decodeJsonPointerSegment(segment: string): string {
   return segment.replaceAll("~1", "/").replaceAll("~0", "~");
 }
 
-function tryResolveLocalRef(ref: string, defs: SchemaDefs | undefined): unknown {
+function tryResolveLocalRef(
+  ref: string,
+  defs: SchemaDefs | undefined,
+): unknown {
   if (!defs) {
     return undefined;
   }
@@ -174,7 +188,10 @@ function tryResolveLocalRef(ref: string, defs: SchemaDefs | undefined): unknown 
   return defs.get(name);
 }
 
-function simplifyUnionVariants(params: { obj: Record<string, unknown>; variants: unknown[] }): {
+function simplifyUnionVariants(params: {
+  obj: Record<string, unknown>;
+  variants: unknown[];
+}): {
   variants: unknown[];
   simplified?: unknown;
 } {
@@ -216,7 +233,9 @@ function cleanSchemaForGeminiWithDefs(
     return schema;
   }
   if (Array.isArray(schema)) {
-    return schema.map((item) => cleanSchemaForGeminiWithDefs(item, defs, refStack));
+    return schema.map((item) =>
+      cleanSchemaForGeminiWithDefs(item, defs, refStack),
+    );
   }
 
   const obj = schema as Record<string, unknown>;
@@ -233,7 +252,11 @@ function cleanSchemaForGeminiWithDefs(
       const nextRefStack = refStack ? new Set(refStack) : new Set<string>();
       nextRefStack.add(refValue);
 
-      const cleaned = cleanSchemaForGeminiWithDefs(resolved, nextDefs, nextRefStack);
+      const cleaned = cleanSchemaForGeminiWithDefs(
+        resolved,
+        nextDefs,
+        nextRefStack,
+      );
       if (!cleaned || typeof cleaned !== "object" || Array.isArray(cleaned)) {
         return cleaned;
       }
@@ -264,7 +287,10 @@ function cleanSchemaForGeminiWithDefs(
     : undefined;
 
   if (hasAnyOf) {
-    const simplified = simplifyUnionVariants({ obj, variants: cleanedAnyOf ?? [] });
+    const simplified = simplifyUnionVariants({
+      obj,
+      variants: cleanedAnyOf ?? [],
+    });
     cleanedAnyOf = simplified.variants;
     if ("simplified" in simplified) {
       return simplified.simplified;
@@ -272,7 +298,10 @@ function cleanSchemaForGeminiWithDefs(
   }
 
   if (hasOneOf) {
-    const simplified = simplifyUnionVariants({ obj, variants: cleanedOneOf ?? [] });
+    const simplified = simplifyUnionVariants({
+      obj,
+      variants: cleanedOneOf ?? [],
+    });
     cleanedOneOf = simplified.variants;
     if ("simplified" in simplified) {
       return simplified.simplified;
@@ -325,11 +354,15 @@ function cleanSchemaForGeminiWithDefs(
     } else if (key === "anyOf" && Array.isArray(value)) {
       cleaned[key] =
         cleanedAnyOf ??
-        value.map((variant) => cleanSchemaForGeminiWithDefs(variant, nextDefs, refStack));
+        value.map((variant) =>
+          cleanSchemaForGeminiWithDefs(variant, nextDefs, refStack),
+        );
     } else if (key === "oneOf" && Array.isArray(value)) {
       cleaned[key] =
         cleanedOneOf ??
-        value.map((variant) => cleanSchemaForGeminiWithDefs(variant, nextDefs, refStack));
+        value.map((variant) =>
+          cleanSchemaForGeminiWithDefs(variant, nextDefs, refStack),
+        );
     } else if (key === "allOf" && Array.isArray(value)) {
       cleaned[key] = value.map((variant) =>
         cleanSchemaForGeminiWithDefs(variant, nextDefs, refStack),

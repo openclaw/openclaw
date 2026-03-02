@@ -3,9 +3,16 @@ import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 import { convertMarkdownTables } from "../markdown/tables.js";
 import { mediaKindFromMime } from "../media/constants.js";
 import { resolveOutboundAttachmentFromUrl } from "../media/outbound-attachment.js";
-import { resolveIMessageAccount, type ResolvedIMessageAccount } from "./accounts.js";
+import {
+  resolveIMessageAccount,
+  type ResolvedIMessageAccount,
+} from "./accounts.js";
 import { createIMessageRpcClient, type IMessageRpcClient } from "./client.js";
-import { formatIMessageChatTarget, type IMessageService, parseIMessageTarget } from "./targets.js";
+import {
+  formatIMessageChatTarget,
+  type IMessageService,
+  parseIMessageTarget,
+} from "./targets.js";
 
 export type IMessageSendOpts = {
   cliPath?: string;
@@ -27,7 +34,10 @@ export type IMessageSendOpts = {
     maxBytes: number,
     options?: { localRoots?: readonly string[] },
   ) => Promise<{ path: string; contentType?: string }>;
-  createClient?: (params: { cliPath: string; dbPath?: string }) => Promise<IMessageRpcClient>;
+  createClient?: (params: {
+    cliPath: string;
+    dbPath?: string;
+  }) => Promise<IMessageRpcClient>;
 };
 
 export type IMessageSendResult = {
@@ -79,7 +89,9 @@ function prependReplyTagIfNeeded(message: string, replyToId?: string): string {
   return trimmedMessage ? `${replyTag} ${trimmedMessage}` : replyTag;
 }
 
-function resolveMessageId(result: Record<string, unknown> | null | undefined): string | null {
+function resolveMessageId(
+  result: Record<string, unknown> | null | undefined,
+): string | null {
   if (!result) {
     return null;
   }
@@ -88,7 +100,9 @@ function resolveMessageId(result: Record<string, unknown> | null | undefined): s
     (typeof result.message_id === "string" && result.message_id.trim()) ||
     (typeof result.id === "string" && result.id.trim()) ||
     (typeof result.guid === "string" && result.guid.trim()) ||
-    (typeof result.message_id === "number" ? String(result.message_id) : null) ||
+    (typeof result.message_id === "number"
+      ? String(result.message_id)
+      : null) ||
     (typeof result.id === "number" ? String(result.id) : null);
   return raw ? String(raw).trim() : null;
 }
@@ -105,9 +119,12 @@ export async function sendMessageIMessage(
       cfg,
       accountId: opts.accountId,
     });
-  const cliPath = opts.cliPath?.trim() || account.config.cliPath?.trim() || "imsg";
+  const cliPath =
+    opts.cliPath?.trim() || account.config.cliPath?.trim() || "imsg";
   const dbPath = opts.dbPath?.trim() || account.config.dbPath?.trim();
-  const target = parseIMessageTarget(opts.chatId ? formatIMessageChatTarget(opts.chatId) : to);
+  const target = parseIMessageTarget(
+    opts.chatId ? formatIMessageChatTarget(opts.chatId) : to,
+  );
   const service =
     opts.service ??
     (target.kind === "handle" ? target.service : undefined) ??
@@ -123,7 +140,8 @@ export async function sendMessageIMessage(
   let filePath: string | undefined;
 
   if (opts.mediaUrl?.trim()) {
-    const resolveAttachmentFn = opts.resolveAttachmentImpl ?? resolveOutboundAttachmentFromUrl;
+    const resolveAttachmentFn =
+      opts.resolveAttachmentImpl ?? resolveOutboundAttachmentFromUrl;
     const resolved = await resolveAttachmentFn(opts.mediaUrl.trim(), maxBytes, {
       localRoots: opts.mediaLocalRoots,
     });

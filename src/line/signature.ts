@@ -5,7 +5,10 @@ export function validateLineSignature(
   signature: string,
   channelSecret: string,
 ): boolean {
-  const hash = crypto.createHmac("SHA256", channelSecret).update(body).digest("base64");
+  const hash = crypto
+    .createHmac("SHA256", channelSecret)
+    .update(body)
+    .digest("base64");
   const hashBuffer = Buffer.from(hash);
   const signatureBuffer = Buffer.from(signature);
 

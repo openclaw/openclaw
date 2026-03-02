@@ -79,7 +79,10 @@ export function formatDurationCompact(
  * Rounded single-unit duration for display: "500ms", "5s", "3m", "2h", "5d".
  * Returns fallback string for null/undefined/non-finite input.
  */
-export function formatDurationHuman(ms?: number | null, fallback = "n/a"): string {
+export function formatDurationHuman(
+  ms?: number | null,
+  fallback = "n/a",
+): string {
   if (ms == null || !Number.isFinite(ms) || ms < 0) {
     return fallback;
   }

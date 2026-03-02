@@ -19,7 +19,9 @@ export function formatStatusSummary(summary: GatewayStatusSummary) {
     lines.push(`${linkLabel}: ${linked ? "linked" : "not linked"}${authAge}`);
   }
 
-  const providerSummary = Array.isArray(summary.providerSummary) ? summary.providerSummary : [];
+  const providerSummary = Array.isArray(summary.providerSummary)
+    ? summary.providerSummary
+    : [];
   if (providerSummary.length > 0) {
     lines.push("");
     lines.push("System:");
@@ -59,11 +61,16 @@ export function formatStatusSummary(summary: GatewayStatusSummary) {
   const sessionCount = summary.sessions?.count ?? 0;
   lines.push(`Active sessions: ${sessionCount}`);
 
-  const recent = Array.isArray(summary.sessions?.recent) ? summary.sessions?.recent : [];
+  const recent = Array.isArray(summary.sessions?.recent)
+    ? summary.sessions?.recent
+    : [];
   if (recent.length > 0) {
     lines.push("Recent sessions:");
     for (const entry of recent) {
-      const ageLabel = typeof entry.age === "number" ? formatTimeAgo(entry.age) : "no activity";
+      const ageLabel =
+        typeof entry.age === "number"
+          ? formatTimeAgo(entry.age)
+          : "no activity";
       const model = entry.model ?? "unknown";
       const usage = formatContextUsageLine({
         total: entry.totalTokens ?? null,
@@ -71,14 +78,18 @@ export function formatStatusSummary(summary: GatewayStatusSummary) {
         remaining: entry.remainingTokens ?? null,
         percent: entry.percentUsed ?? null,
       });
-      const flags = entry.flags?.length ? ` | flags: ${entry.flags.join(", ")}` : "";
+      const flags = entry.flags?.length
+        ? ` | flags: ${entry.flags.join(", ")}`
+        : "";
       lines.push(
         `- ${entry.key}${entry.kind ? ` [${entry.kind}]` : ""} | ${ageLabel} | model ${model} | ${usage}${flags}`,
       );
     }
   }
 
-  const queued = Array.isArray(summary.queuedSystemEvents) ? summary.queuedSystemEvents : [];
+  const queued = Array.isArray(summary.queuedSystemEvents)
+    ? summary.queuedSystemEvents
+    : [];
   if (queued.length > 0) {
     const preview = queued.slice(0, 3).join(" | ");
     lines.push(`Queued system events (${queued.length}): ${preview}`);

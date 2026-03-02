@@ -36,7 +36,9 @@ function extractTailnetHostFromStatusJson(raw: string): string | null {
   if (dns && dns.length > 0) {
     return dns.replace(/\.$/, "");
   }
-  const ips = Array.isArray(self?.TailscaleIPs) ? (self.TailscaleIPs as string[]) : [];
+  const ips = Array.isArray(self?.TailscaleIPs)
+    ? (self.TailscaleIPs as string[])
+    : [];
   return ips.length > 0 ? (ips[0] ?? null) : null;
 }
 
@@ -48,9 +50,12 @@ export async function resolveTailnetHostWithRunner(
   }
   for (const candidate of TAILSCALE_STATUS_COMMAND_CANDIDATES) {
     try {
-      const result = await runCommandWithTimeout([candidate, "status", "--json"], {
-        timeoutMs: 5000,
-      });
+      const result = await runCommandWithTimeout(
+        [candidate, "status", "--json"],
+        {
+          timeoutMs: 5000,
+        },
+      );
       if (result.code !== 0) {
         continue;
       }

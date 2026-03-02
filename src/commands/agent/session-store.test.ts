@@ -20,7 +20,9 @@ function acpMeta() {
 
 describe("updateSessionStoreAfterAgentRun", () => {
   it("preserves ACP metadata when caller has a stale session snapshot", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-store-"));
+    const dir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-session-store-"),
+    );
     const storePath = path.join(dir, "sessions.json");
     const sessionKey = `agent:codex:acp:${randomUUID()}`;
     const sessionId = randomUUID();
@@ -30,7 +32,11 @@ describe("updateSessionStoreAfterAgentRun", () => {
       updatedAt: Date.now(),
       acp: acpMeta(),
     };
-    await fs.writeFile(storePath, JSON.stringify({ [sessionKey]: existing }, null, 2), "utf8");
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({ [sessionKey]: existing }, null, 2),
+      "utf8",
+    );
 
     const staleInMemory: Record<string, SessionEntry> = {
       [sessionKey]: {
@@ -59,7 +65,9 @@ describe("updateSessionStoreAfterAgentRun", () => {
       } as never,
     });
 
-    const persisted = loadSessionStore(storePath, { skipCache: true })[sessionKey];
+    const persisted = loadSessionStore(storePath, { skipCache: true })[
+      sessionKey
+    ];
     expect(persisted?.acp).toBeDefined();
     expect(staleInMemory[sessionKey]?.acp).toBeDefined();
   });

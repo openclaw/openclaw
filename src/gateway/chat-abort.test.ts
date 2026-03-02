@@ -69,9 +69,16 @@ describe("abortChatRunById", () => {
     const ops = createOps({ runId, entry, buffer: "  Partial reply  " });
     ops.agentRunSeq.set(runId, 2);
     ops.agentRunSeq.set("client-run-1", 4);
-    ops.removeChatRun.mockReturnValue({ sessionKey, clientRunId: "client-run-1" });
+    ops.removeChatRun.mockReturnValue({
+      sessionKey,
+      clientRunId: "client-run-1",
+    });
 
-    const result = abortChatRunById(ops, { runId, sessionKey, stopReason: "user" });
+    const result = abortChatRunById(ops, {
+      runId,
+      sessionKey,
+      stopReason: "user",
+    });
 
     expect(result).toEqual({ aborted: true });
     expect(entry.controller.signal.aborted).toBe(true);
@@ -99,8 +106,14 @@ describe("abortChatRunById", () => {
         content: [{ type: "text", text: "  Partial reply  " }],
       }),
     );
-    expect((payload.message as { timestamp?: unknown }).timestamp).toEqual(expect.any(Number));
-    expect(ops.nodeSendToSession).toHaveBeenCalledWith(sessionKey, "chat", payload);
+    expect((payload.message as { timestamp?: unknown }).timestamp).toEqual(
+      expect.any(Number),
+    );
+    expect(ops.nodeSendToSession).toHaveBeenCalledWith(
+      sessionKey,
+      "chat",
+      payload,
+    );
   });
 
   it("omits aborted message when buffered text is empty", () => {

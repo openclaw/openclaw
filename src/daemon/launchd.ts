@@ -24,7 +24,9 @@ import type {
   GatewayServiceManageArgs,
 } from "./service-types.js";
 
-function resolveLaunchAgentLabel(args?: { env?: Record<string, string | undefined> }): string {
+function resolveLaunchAgentLabel(args?: {
+  env?: Record<string, string | undefined>;
+}): string {
   const envLabel = args?.env?.OPENCLAW_LAUNCHD_LABEL?.trim();
   if (envLabel) {
     return envLabel;
@@ -101,7 +103,11 @@ async function execLaunchctl(
   const isWindows = process.platform === "win32";
   const file = isWindows ? (process.env.ComSpec ?? "cmd.exe") : "launchctl";
   const fileArgs = isWindows ? ["/d", "/s", "/c", "launchctl", ...args] : args;
-  return await execFileUtf8(file, fileArgs, isWindows ? { windowsHide: true } : {});
+  return await execFileUtf8(
+    file,
+    fileArgs,
+    isWindows ? { windowsHide: true } : {},
+  );
 }
 
 function resolveGuiDomain(): string {
@@ -146,23 +152,31 @@ export function parseLaunchctlPrint(output: string): LaunchctlPrintInfo {
   return info;
 }
 
-export async function isLaunchAgentLoaded(args: GatewayServiceEnvArgs): Promise<boolean> {
+export async function isLaunchAgentLoaded(
+  args: GatewayServiceEnvArgs,
+): Promise<boolean> {
   const domain = resolveGuiDomain();
   const label = resolveLaunchAgentLabel({ env: args.env });
   const res = await execLaunchctl(["print", `${domain}/${label}`]);
   return res.code === 0;
 }
 
-export async function isLaunchAgentListed(args: GatewayServiceEnvArgs): Promise<boolean> {
+export async function isLaunchAgentListed(
+  args: GatewayServiceEnvArgs,
+): Promise<boolean> {
   const label = resolveLaunchAgentLabel({ env: args.env });
   const res = await execLaunchctl(["list"]);
   if (res.code !== 0) {
     return false;
   }
-  return res.stdout.split(/\r?\n/).some((line) => line.trim().split(/\s+/).at(-1) === label);
+  return res.stdout
+    .split(/\r?\n/)
+    .some((line) => line.trim().split(/\s+/).at(-1) === label);
 }
 
-export async function launchAgentPlistExists(env: GatewayServiceEnv): Promise<boolean> {
+export async function launchAgentPlistExists(
+  env: GatewayServiceEnv,
+): Promise<boolean> {
   try {
     const plistPath = resolveLaunchAgentPlistPath(env);
     await fs.access(plistPath);
@@ -188,7 +202,12 @@ export async function readLaunchAgentRuntime(
   const parsed = parseLaunchctlPrint(res.stdout || res.stderr || "");
   const plistExists = await launchAgentPlistExists(env);
   const state = parsed.state?.toLowerCase();
-  const status = state === "running" || parsed.pid ? "running" : state ? "stopped" : "unknown";
+  const status =
+    state === "running" || parsed.pid
+      ? "running"
+      : state
+        ? "stopped"
+        : "unknown";
   return {
     status,
     state: parsed.state,
@@ -208,11 +227,17 @@ export async function repairLaunchAgentBootstrap(args: {
   const plistPath = resolveLaunchAgentPlistPath(env);
   const boot = await execLaunchctl(["bootstrap", domain, plistPath]);
   if (boot.code !== 0) {
-    return { ok: false, detail: (boot.stderr || boot.stdout).trim() || undefined };
+    return {
+      ok: false,
+      detail: (boot.stderr || boot.stdout).trim() || undefined,
+    };
   }
   const kick = await execLaunchctl(["kickstart", "-k", `${domain}/${label}`]);
   if (kick.code !== 0) {
-    return { ok: false, detail: (kick.stderr || kick.stdout).trim() || undefined };
+    return {
+      ok: false,
+      detail: (kick.stderr || kick.stdout).trim() || undefined,
+    };
   }
   return { ok: true };
 }
@@ -224,10 +249,14 @@ export type LegacyLaunchAgent = {
   exists: boolean;
 };
 
-export async function findLegacyLaunchAgents(env: GatewayServiceEnv): Promise<LegacyLaunchAgent[]> {
+export async function findLegacyLaunchAgents(
+  env: GatewayServiceEnv,
+): Promise<LegacyLaunchAgent[]> {
   const domain = resolveGuiDomain();
   const results: LegacyLaunchAgent[] = [];
-  for (const label of resolveLegacyGatewayLaunchAgentLabels(env.OPENCLAW_PROFILE)) {
+  for (const label of resolveLegacyGatewayLaunchAgentLabels(
+    env.OPENCLAW_PROFILE,
+  )) {
     const plistPath = resolveLaunchAgentPlistPathForLabel(env, label);
     const res = await execLaunchctl(["print", `${domain}/${label}`]);
     const loaded = res.code === 0;
@@ -276,9 +305,13 @@ export async function uninstallLegacyLaunchAgents({
     const dest = path.join(trashDir, `${agent.label}.plist`);
     try {
       await fs.rename(agent.plistPath, dest);
-      stdout.write(`${formatLine("Moved legacy LaunchAgent to Trash", dest)}\n`);
+      stdout.write(
+        `${formatLine("Moved legacy LaunchAgent to Trash", dest)}\n`,
+      );
     } catch {
-      stdout.write(`Legacy LaunchAgent remains at ${agent.plistPath} (could not move)\n`);
+      stdout.write(
+        `Legacy LaunchAgent remains at ${agent.plistPath} (could not move)\n`,
+      );
     }
   }
 
@@ -314,7 +347,11 @@ export async function uninstallLaunchAgent({
   }
 }
 
-function isLaunchctlNotLoaded(res: { stdout: string; stderr: string; code: number }): boolean {
+function isLaunchctlNotLoaded(res: {
+  stdout: string;
+  stderr: string;
+  code: number;
+}): boolean {
   const detail = (res.stderr || res.stdout).toLowerCase();
   return (
     detail.includes("no such process") ||
@@ -359,12 +396,17 @@ async function waitForPidExit(pid: number): Promise<void> {
   }
 }
 
-export async function stopLaunchAgent({ stdout, env }: GatewayServiceControlArgs): Promise<void> {
+export async function stopLaunchAgent({
+  stdout,
+  env,
+}: GatewayServiceControlArgs): Promise<void> {
   const domain = resolveGuiDomain();
   const label = resolveLaunchAgentLabel({ env });
   const res = await execLaunchctl(["bootout", `${domain}/${label}`]);
   if (res.code !== 0 && !isLaunchctlNotLoaded(res)) {
-    throw new Error(`launchctl bootout failed: ${res.stderr || res.stdout}`.trim());
+    throw new Error(
+      `launchctl bootout failed: ${res.stderr || res.stdout}`.trim(),
+    );
   }
   stdout.write(`${formatLine("Stopped LaunchAgent", `${domain}/${label}`)}\n`);
 }
@@ -382,8 +424,13 @@ export async function installLaunchAgent({
 
   const domain = resolveGuiDomain();
   const label = resolveLaunchAgentLabel({ env });
-  for (const legacyLabel of resolveLegacyGatewayLaunchAgentLabels(env.OPENCLAW_PROFILE)) {
-    const legacyPlistPath = resolveLaunchAgentPlistPathForLabel(env, legacyLabel);
+  for (const legacyLabel of resolveLegacyGatewayLaunchAgentLabels(
+    env.OPENCLAW_PROFILE,
+  )) {
+    const legacyPlistPath = resolveLaunchAgentPlistPathForLabel(
+      env,
+      legacyLabel,
+    );
     await execLaunchctl(["bootout", domain, legacyPlistPath]);
     await execLaunchctl(["unload", legacyPlistPath]);
     try {
@@ -396,7 +443,11 @@ export async function installLaunchAgent({
   const plistPath = resolveLaunchAgentPlistPathForLabel(env, label);
   await fs.mkdir(path.dirname(plistPath), { recursive: true });
 
-  const serviceDescription = resolveGatewayServiceDescription({ env, environment, description });
+  const serviceDescription = resolveGatewayServiceDescription({
+    env,
+    environment,
+    description,
+  });
   const plist = buildLaunchAgentPlist({
     label,
     comment: serviceDescription,
@@ -459,7 +510,9 @@ export async function restartLaunchAgent({
 
   const stop = await execLaunchctl(["bootout", `${domain}/${label}`]);
   if (stop.code !== 0 && !isLaunchctlNotLoaded(stop)) {
-    throw new Error(`launchctl bootout failed: ${stop.stderr || stop.stdout}`.trim());
+    throw new Error(
+      `launchctl bootout failed: ${stop.stderr || stop.stdout}`.trim(),
+    );
   }
   if (typeof previousPid === "number") {
     await waitForPidExit(previousPid);
@@ -484,10 +537,14 @@ export async function restartLaunchAgent({
 
   const start = await execLaunchctl(["kickstart", "-k", `${domain}/${label}`]);
   if (start.code !== 0) {
-    throw new Error(`launchctl kickstart failed: ${start.stderr || start.stdout}`.trim());
+    throw new Error(
+      `launchctl kickstart failed: ${start.stderr || start.stdout}`.trim(),
+    );
   }
   try {
-    stdout.write(`${formatLine("Restarted LaunchAgent", `${domain}/${label}`)}\n`);
+    stdout.write(
+      `${formatLine("Restarted LaunchAgent", `${domain}/${label}`)}\n`,
+    );
   } catch (err: unknown) {
     if ((err as NodeJS.ErrnoException)?.code !== "EPIPE") {
       throw err;

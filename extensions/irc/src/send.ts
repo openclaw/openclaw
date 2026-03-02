@@ -55,8 +55,13 @@ export async function sendMessageIrc(
     channel: "irc",
     accountId: account.accountId,
   });
-  const prepared = runtime.channel.text.convertMarkdownTables(text.trim(), tableMode);
-  const payload = opts.replyTo ? `${prepared}\n\n[reply:${opts.replyTo}]` : prepared;
+  const prepared = runtime.channel.text.convertMarkdownTables(
+    text.trim(),
+    tableMode,
+  );
+  const payload = opts.replyTo
+    ? `${prepared}\n\n[reply:${opts.replyTo}]`
+    : prepared;
 
   if (!payload.trim()) {
     throw new Error("Message must be non-empty for IRC sends");

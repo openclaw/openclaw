@@ -1,13 +1,17 @@
 import chalk from "chalk";
 import { isVerbose } from "../globals.js";
 import { shouldLogSubsystemToConsole } from "../logging/console.js";
-import { getDefaultRedactPatterns, redactSensitiveText } from "../logging/redact.js";
+import {
+  getDefaultRedactPatterns,
+  redactSensitiveText,
+} from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { DEFAULT_WS_SLOW_MS, getGatewayWsLogStyle } from "./ws-logging.js";
 
 const LOG_VALUE_LIMIT = 240;
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const WS_LOG_REDACT_OPTIONS = {
   mode: "tools" as const,
   patterns: getDefaultRedactPatterns(),
@@ -110,7 +114,8 @@ export function formatForLog(value: unknown): string {
         parts.push(value.message);
       }
       const code =
-        "code" in value && (typeof value.code === "string" || typeof value.code === "number")
+        "code" in value &&
+        (typeof value.code === "string" || typeof value.code === "number")
           ? String(value.code)
           : "";
       if (code) {
@@ -128,7 +133,9 @@ export function formatForLog(value: unknown): string {
       if (typeof rec.message === "string" && rec.message.trim()) {
         const name = typeof rec.name === "string" ? rec.name.trim() : "";
         const code =
-          typeof rec.code === "string" || typeof rec.code === "number" ? String(rec.code) : "";
+          typeof rec.code === "string" || typeof rec.code === "number"
+            ? String(rec.code)
+            : "";
         const parts = [name, rec.message.trim()].filter(Boolean);
         if (code) {
           parts.push(`code=${code}`);
@@ -163,7 +170,9 @@ function compactPreview(input: string, maxLen = 160): string {
   return `${oneLine.slice(0, Math.max(0, maxLen - 1))}…`;
 }
 
-export function summarizeAgentEventForWsLog(payload: unknown): Record<string, unknown> {
+export function summarizeAgentEventForWsLog(
+  payload: unknown,
+): Record<string, unknown> {
   if (!payload || typeof payload !== "object") {
     return {};
   }
@@ -171,9 +180,12 @@ export function summarizeAgentEventForWsLog(payload: unknown): Record<string, un
   const runId = typeof rec.runId === "string" ? rec.runId : undefined;
   const stream = typeof rec.stream === "string" ? rec.stream : undefined;
   const seq = typeof rec.seq === "number" ? rec.seq : undefined;
-  const sessionKey = typeof rec.sessionKey === "string" ? rec.sessionKey : undefined;
+  const sessionKey =
+    typeof rec.sessionKey === "string" ? rec.sessionKey : undefined;
   const data =
-    rec.data && typeof rec.data === "object" ? (rec.data as Record<string, unknown>) : undefined;
+    rec.data && typeof rec.data === "object"
+      ? (rec.data as Record<string, unknown>)
+      : undefined;
 
   const extra: Record<string, unknown> = {};
   if (runId) {
@@ -204,7 +216,9 @@ export function summarizeAgentEventForWsLog(payload: unknown): Record<string, un
     if (text?.trim()) {
       extra.text = compactPreview(text);
     }
-    const mediaUrls = Array.isArray(data.mediaUrls) ? data.mediaUrls : undefined;
+    const mediaUrls = Array.isArray(data.mediaUrls)
+      ? data.mediaUrls
+      : undefined;
     if (mediaUrls && mediaUrls.length > 0) {
       extra.media = mediaUrls.length;
     }
@@ -217,7 +231,8 @@ export function summarizeAgentEventForWsLog(payload: unknown): Record<string, un
     if (phase || name) {
       extra.tool = `${phase ?? "?"}:${name ?? "?"}`;
     }
-    const toolCallId = typeof data.toolCallId === "string" ? data.toolCallId : undefined;
+    const toolCallId =
+      typeof data.toolCallId === "string" ? data.toolCallId : undefined;
     if (toolCallId) {
       extra.call = shortId(toolCallId);
     }
@@ -253,7 +268,11 @@ export function summarizeAgentEventForWsLog(payload: unknown): Record<string, un
   return extra;
 }
 
-export function logWs(direction: "in" | "out", kind: string, meta?: Record<string, unknown>) {
+export function logWs(
+  direction: "in" | "out",
+  kind: string,
+  meta?: Record<string, unknown>,
+) {
   if (!shouldLogSubsystemToConsole("gateway/ws")) {
     return;
   }
@@ -298,7 +317,8 @@ export function logWs(direction: "in" | "out", kind: string, meta?: Record<strin
   const headline = buildWsHeadline({ kind, method, event });
   const statusToken = buildWsStatusToken(kind, ok);
 
-  const durationToken = typeof durationMs === "number" ? chalk.dim(`${durationMs}ms`) : undefined;
+  const durationToken =
+    typeof durationMs === "number" ? chalk.dim(`${durationMs}ms`) : undefined;
 
   const restMeta = collectWsRestMeta(meta);
 
@@ -310,10 +330,21 @@ export function logWs(direction: "in" | "out", kind: string, meta?: Record<strin
     trailing.push(`${chalk.dim("id")}=${chalk.gray(shortId(id))}`);
   }
 
-  logWsInfoLine({ prefix, statusToken, headline, durationToken, restMeta, trailing });
+  logWsInfoLine({
+    prefix,
+    statusToken,
+    headline,
+    durationToken,
+    restMeta,
+    trailing,
+  });
 }
 
-function logWsOptimized(direction: "in" | "out", kind: string, meta?: Record<string, unknown>) {
+function logWsOptimized(
+  direction: "in" | "out",
+  kind: string,
+  meta?: Record<string, unknown>,
+) {
   const connId = typeof meta?.connId === "string" ? meta.connId : undefined;
   const id = typeof meta?.id === "string" ? meta.id : undefined;
   const ok = typeof meta?.ok === "boolean" ? meta.ok : undefined;
@@ -330,7 +361,8 @@ function logWsOptimized(direction: "in" | "out", kind: string, meta?: Record<str
   }
 
   if (kind === "parse-error") {
-    const errorMsg = typeof meta?.error === "string" ? formatForLog(meta.error) : undefined;
+    const errorMsg =
+      typeof meta?.error === "string" ? formatForLog(meta.error) : undefined;
     wsLog.warn(
       [
         `${chalk.redBright("✗")} ${chalk.bold("parse-error")}`,
@@ -347,20 +379,25 @@ function logWsOptimized(direction: "in" | "out", kind: string, meta?: Record<str
     return;
   }
 
-  const startedAt = inflightKey ? wsInflightOptimized.get(inflightKey) : undefined;
+  const startedAt = inflightKey
+    ? wsInflightOptimized.get(inflightKey)
+    : undefined;
   if (inflightKey) {
     wsInflightOptimized.delete(inflightKey);
   }
-  const durationMs = typeof startedAt === "number" ? Date.now() - startedAt : undefined;
+  const durationMs =
+    typeof startedAt === "number" ? Date.now() - startedAt : undefined;
 
   const shouldLog =
-    ok === false || (typeof durationMs === "number" && durationMs >= DEFAULT_WS_SLOW_MS);
+    ok === false ||
+    (typeof durationMs === "number" && durationMs >= DEFAULT_WS_SLOW_MS);
   if (!shouldLog) {
     return;
   }
 
   const statusToken = buildWsStatusToken("res", ok);
-  const durationToken = typeof durationMs === "number" ? chalk.dim(`${durationMs}ms`) : undefined;
+  const durationToken =
+    typeof durationMs === "number" ? chalk.dim(`${durationMs}ms`) : undefined;
 
   const restMeta = collectWsRestMeta(meta);
 
@@ -377,7 +414,11 @@ function logWsOptimized(direction: "in" | "out", kind: string, meta?: Record<str
   });
 }
 
-function logWsCompact(direction: "in" | "out", kind: string, meta?: Record<string, unknown>) {
+function logWsCompact(
+  direction: "in" | "out",
+  kind: string,
+  meta?: Record<string, unknown>,
+) {
   const now = Date.now();
   const connId = typeof meta?.connId === "string" ? meta.connId : undefined;
   const id = typeof meta?.id === "string" ? meta.id : undefined;
@@ -415,7 +456,9 @@ function logWsCompact(direction: "in" | "out", kind: string, meta?: Record<strin
     wsInflightCompact.delete(inflightKey);
   }
   const durationToken =
-    typeof startedAt === "number" ? chalk.dim(`${now - startedAt}ms`) : undefined;
+    typeof startedAt === "number"
+      ? chalk.dim(`${now - startedAt}ms`)
+      : undefined;
 
   const headline = buildWsHeadline({
     kind,
@@ -434,5 +477,12 @@ function logWsCompact(direction: "in" | "out", kind: string, meta?: Record<strin
     trailing.push(`${chalk.dim("id")}=${chalk.gray(shortId(id))}`);
   }
 
-  logWsInfoLine({ prefix, statusToken, headline, durationToken, restMeta, trailing });
+  logWsInfoLine({
+    prefix,
+    statusToken,
+    headline,
+    durationToken,
+    restMeta,
+    trailing,
+  });
 }

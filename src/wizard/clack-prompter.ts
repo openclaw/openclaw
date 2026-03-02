@@ -14,7 +14,11 @@ import {
 import { createCliProgress } from "../cli/progress.js";
 import { stripAnsi } from "../terminal/ansi.js";
 import { note as emitNote } from "../terminal/note.js";
-import { stylePromptHint, stylePromptMessage, stylePromptTitle } from "../terminal/prompt-style.js";
+import {
+  stylePromptHint,
+  stylePromptMessage,
+  stylePromptTitle,
+} from "../terminal/prompt-style.js";
 import { theme } from "../terminal/theme.js";
 import type { WizardProgress, WizardPrompter } from "./prompts.js";
 import { WizardCancelledError } from "./prompts.js";
@@ -42,7 +46,10 @@ function buildOptionSearchText<T>(option: Option<T>): string {
   return `${label} ${hint} ${value}`.toLowerCase();
 }
 
-export function tokenizedOptionFilter<T>(search: string, option: Option<T>): boolean {
+export function tokenizedOptionFilter<T>(
+  search: string,
+  option: Option<T>,
+): boolean {
   const tokens = normalizeSearchTokens(search);
   if (tokens.length === 0) {
     return true;
@@ -68,7 +75,9 @@ export function createClackPrompter(): WizardPrompter {
           message: stylePromptMessage(params.message),
           options: params.options.map((opt) => {
             const base = { value: opt.value, label: opt.label };
-            return opt.hint === undefined ? base : { ...base, hint: stylePromptHint(opt.hint) };
+            return opt.hint === undefined
+              ? base
+              : { ...base, hint: stylePromptHint(opt.hint) };
           }) as Option<(typeof params.options)[number]["value"]>[],
           initialValue: params.initialValue,
         }),
@@ -76,7 +85,9 @@ export function createClackPrompter(): WizardPrompter {
     multiselect: async (params) => {
       const options = params.options.map((opt) => {
         const base = { value: opt.value, label: opt.label };
-        return opt.hint === undefined ? base : { ...base, hint: stylePromptHint(opt.hint) };
+        return opt.hint === undefined
+          ? base
+          : { ...base, hint: stylePromptHint(opt.hint) };
       }) as Option<(typeof params.options)[number]["value"]>[];
 
       if (params.searchable) {

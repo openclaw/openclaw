@@ -85,9 +85,9 @@ describe("loginWeb coverage", () => {
       output: { statusCode: DisconnectReason.loggedOut },
     });
 
-    await expect(loginWeb(false, waitForWaConnectionMock as never)).rejects.toThrow(
-      /cache cleared/i,
-    );
+    await expect(
+      loginWeb(false, waitForWaConnectionMock as never),
+    ).rejects.toThrow(/cache cleared/i);
     expect(rmMock).toHaveBeenCalledWith(authDir, {
       recursive: true,
       force: true,
@@ -96,9 +96,9 @@ describe("loginWeb coverage", () => {
 
   it("formats and rethrows generic errors", async () => {
     waitForWaConnectionMock.mockRejectedValueOnce(new Error("boom"));
-    await expect(loginWeb(false, waitForWaConnectionMock as never)).rejects.toThrow(
-      "formatted:Error: boom",
-    );
+    await expect(
+      loginWeb(false, waitForWaConnectionMock as never),
+    ).rejects.toThrow("formatted:Error: boom");
     expect(formatErrorMock).toHaveBeenCalled();
   });
 });

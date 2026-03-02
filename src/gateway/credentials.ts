@@ -13,7 +13,9 @@ export type ResolvedGatewayCredentials = {
 export type GatewayCredentialMode = "local" | "remote";
 export type GatewayCredentialPrecedence = "env-first" | "config-first";
 export type GatewayRemoteCredentialPrecedence = "remote-first" | "env-first";
-export type GatewayRemoteCredentialFallback = "remote-env-local" | "remote-only";
+export type GatewayRemoteCredentialFallback =
+  | "remote-env-local"
+  | "remote-only";
 
 export function trimToUndefined(value: unknown): string | undefined {
   if (typeof value !== "string") {
@@ -115,7 +117,8 @@ export function resolveGatewayCredentialsFromConfig(params: {
   }
 
   const mode: GatewayCredentialMode =
-    params.modeOverride ?? (params.cfg.gateway?.mode === "remote" ? "remote" : "local");
+    params.modeOverride ??
+    (params.cfg.gateway?.mode === "remote" ? "remote" : "local");
   const remote = params.cfg.gateway?.remote;
   const envToken = readGatewayTokenEnv(env, includeLegacyEnv);
   const envPassword = readGatewayPasswordEnv(env, includeLegacyEnv);
@@ -146,9 +149,11 @@ export function resolveGatewayCredentialsFromConfig(params: {
   }
 
   const remoteTokenFallback = params.remoteTokenFallback ?? "remote-env-local";
-  const remotePasswordFallback = params.remotePasswordFallback ?? "remote-env-local";
+  const remotePasswordFallback =
+    params.remotePasswordFallback ?? "remote-env-local";
   const remoteTokenPrecedence = params.remoteTokenPrecedence ?? "remote-first";
-  const remotePasswordPrecedence = params.remotePasswordPrecedence ?? "env-first";
+  const remotePasswordPrecedence =
+    params.remotePasswordPrecedence ?? "env-first";
 
   const token =
     remoteTokenFallback === "remote-only"

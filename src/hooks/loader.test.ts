@@ -1,7 +1,15 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+} from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { captureEnv } from "../test-utils/env.js";
 import {
@@ -19,7 +27,9 @@ describe("loader", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
 
   beforeAll(async () => {
-    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hooks-loader-"));
+    fixtureRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-hooks-loader-"),
+    );
   });
 
   beforeEach(async () => {
@@ -91,7 +101,10 @@ describe("loader", () => {
           // Test handler
         }
       `;
-      const handlerPath = await writeHandlerModule("test-handler.js", handlerCode);
+      const handlerPath = await writeHandlerModule(
+        "test-handler.js",
+        handlerCode,
+      );
       const cfg = createEnabledHooksConfig([
         {
           event: "command:new",
@@ -131,7 +144,10 @@ describe("loader", () => {
           // Named export handler
         }
       `;
-      const handlerPath = await writeHandlerModule("named-export.js", handlerCode);
+      const handlerPath = await writeHandlerModule(
+        "named-export.js",
+        handlerCode,
+      );
 
       const cfg = createEnabledHooksConfig([
         {
@@ -206,7 +222,10 @@ describe("loader", () => {
           return callCount;
         }
       `;
-      const handlerPath = await writeHandlerModule("callable-handler.js", handlerCode);
+      const handlerPath = await writeHandlerModule(
+        "callable-handler.js",
+        handlerCode,
+      );
 
       const cfg = createEnabledHooksConfig([
         {
@@ -228,8 +247,15 @@ describe("loader", () => {
     });
 
     it("rejects directory hook handlers that escape hook dir via symlink", async () => {
-      const outsideHandlerPath = path.join(fixtureRoot, `outside-handler-${caseId}.js`);
-      await fs.writeFile(outsideHandlerPath, "export default async function() {}", "utf-8");
+      const outsideHandlerPath = path.join(
+        fixtureRoot,
+        `outside-handler-${caseId}.js`,
+      );
+      await fs.writeFile(
+        outsideHandlerPath,
+        "export default async function() {}",
+        "utf-8",
+      );
 
       const hookDir = path.join(tmpDir, "hooks", "symlink-hook");
       await fs.mkdir(hookDir, { recursive: true });
@@ -260,8 +286,15 @@ describe("loader", () => {
     });
 
     it("rejects legacy handler modules that escape workspace via symlink", async () => {
-      const outsideHandlerPath = path.join(fixtureRoot, `outside-legacy-${caseId}.js`);
-      await fs.writeFile(outsideHandlerPath, "export default async function() {}", "utf-8");
+      const outsideHandlerPath = path.join(
+        fixtureRoot,
+        `outside-legacy-${caseId}.js`,
+      );
+      await fs.writeFile(
+        outsideHandlerPath,
+        "export default async function() {}",
+        "utf-8",
+      );
 
       const linkedHandlerPath = path.join(tmpDir, "legacy-handler.js");
       try {
@@ -286,8 +319,15 @@ describe("loader", () => {
       if (process.platform === "win32") {
         return;
       }
-      const outsideHandlerPath = path.join(fixtureRoot, `outside-handler-hardlink-${caseId}.js`);
-      await fs.writeFile(outsideHandlerPath, "export default async function() {}", "utf-8");
+      const outsideHandlerPath = path.join(
+        fixtureRoot,
+        `outside-handler-hardlink-${caseId}.js`,
+      );
+      await fs.writeFile(
+        outsideHandlerPath,
+        "export default async function() {}",
+        "utf-8",
+      );
 
       const hookDir = path.join(tmpDir, "hooks", "hardlink-hook");
       await fs.mkdir(hookDir, { recursive: true });
@@ -323,8 +363,15 @@ describe("loader", () => {
       if (process.platform === "win32") {
         return;
       }
-      const outsideHandlerPath = path.join(fixtureRoot, `outside-legacy-hardlink-${caseId}.js`);
-      await fs.writeFile(outsideHandlerPath, "export default async function() {}", "utf-8");
+      const outsideHandlerPath = path.join(
+        fixtureRoot,
+        `outside-legacy-hardlink-${caseId}.js`,
+      );
+      await fs.writeFile(
+        outsideHandlerPath,
+        "export default async function() {}",
+        "utf-8",
+      );
 
       const linkedHandlerPath = path.join(tmpDir, "legacy-handler.js");
       try {

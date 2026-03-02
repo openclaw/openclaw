@@ -1,7 +1,11 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { serializePayload, type MessagePayloadObject, type RequestClient } from "@buape/carbon";
+import {
+  serializePayload,
+  type MessagePayloadObject,
+  type RequestClient,
+} from "@buape/carbon";
 import { ChannelType, Routes } from "discord-api-types/v10";
 import { resolveChunkMode } from "../auto-reply/chunk.js";
 import { loadConfig } from "../config/config.js";
@@ -97,12 +101,18 @@ function deriveForumThreadName(text: string): string {
       .split("\n")
       .find((l) => l.trim())
       ?.trim() ?? "";
-  return firstLine.slice(0, DISCORD_THREAD_NAME_LIMIT) || new Date().toISOString().slice(0, 16);
+  return (
+    firstLine.slice(0, DISCORD_THREAD_NAME_LIMIT) ||
+    new Date().toISOString().slice(0, 16)
+  );
 }
 
 /** Forum/Media channels cannot receive regular messages; detect them here. */
 function isForumLikeType(channelType?: number): boolean {
-  return channelType === ChannelType.GuildForum || channelType === ChannelType.GuildMedia;
+  return (
+    channelType === ChannelType.GuildForum ||
+    channelType === ChannelType.GuildMedia
+  );
 }
 
 function toDiscordSendResult(
@@ -118,7 +128,11 @@ function toDiscordSendResult(
 async function resolveDiscordSendTarget(
   to: string,
   opts: DiscordSendOpts,
-): Promise<{ rest: RequestClient; request: DiscordClientRequest; channelId: string }> {
+): Promise<{
+  rest: RequestClient;
+  request: DiscordClientRequest;
+  channelId: string;
+}> {
   const cfg = loadConfig();
   const { rest, request } = createDiscordClient(opts, cfg);
   const recipient = await parseAndResolveRecipient(to, opts.accountId);
@@ -162,7 +176,10 @@ export async function sendMessageDiscord(
       text: starterContent,
       isFirst: true,
     });
-    const starterEmbeds = resolveDiscordSendEmbeds({ embeds: opts.embeds, isFirst: true });
+    const starterEmbeds = resolveDiscordSendEmbeds({
+      embeds: opts.embeds,
+      isFirst: true,
+    });
     const silentFlags = opts.silent ? 1 << 12 : undefined;
     const starterPayload: MessagePayloadObject = buildDiscordMessagePayload({
       text: starterContent,
@@ -179,7 +196,10 @@ export async function sendMessageDiscord(
               name: threadName,
               message: stripUndefinedFields(serializePayload(starterPayload)),
             },
-          }) as Promise<{ id: string; message?: { id: string; channel_id: string } }>,
+          }) as Promise<{
+            id: string;
+            message?: { id: string; channel_id: string };
+          }>,
         "forum-thread",
       )) as { id: string; message?: { id: string; channel_id: string } };
     } catch (err) {
@@ -256,7 +276,9 @@ export async function sendMessageDiscord(
     );
   }
 
-  let result: { id: string; channel_id: string } | { id: string | null; channel_id: string };
+  let result:
+    | { id: string; channel_id: string }
+    | { id: string | null; channel_id: string };
   try {
     if (opts.mediaUrl) {
       result = await sendDiscordMedia(
@@ -325,7 +347,11 @@ function resolveWebhookExecutionUrl(params: {
     `https://discord.com/api/v10/webhooks/${encodeURIComponent(params.webhookId)}/${encodeURIComponent(params.webhookToken)}`,
   );
   baseUrl.searchParams.set("wait", params.wait === false ? "false" : "true");
-  if (params.threadId !== undefined && params.threadId !== null && params.threadId !== "") {
+  if (
+    params.threadId !== undefined &&
+    params.threadId !== null &&
+    params.threadId !== ""
+  ) {
     baseUrl.searchParams.set("thread_id", String(params.threadId));
   }
   return baseUrl.toString();
@@ -342,7 +368,9 @@ export async function sendWebhookMessageDiscord(
   }
 
   const replyTo = typeof opts.replyTo === "string" ? opts.replyTo.trim() : "";
-  const messageReference = replyTo ? { message_id: replyTo, fail_if_not_exists: false } : undefined;
+  const messageReference = replyTo
+    ? { message_id: replyTo, fail_if_not_exists: false }
+    : undefined;
 
   const response = await fetch(
     resolveWebhookExecutionUrl({
@@ -427,7 +455,9 @@ export async function sendPollDiscord(
   const { rest, request, channelId } = await resolveDiscordSendTarget(to, opts);
   const content = opts.content?.trim();
   if (poll.durationSeconds !== undefined) {
-    throw new Error("Discord polls do not support durationSeconds; use durationHours");
+    throw new Error(
+      "Discord polls do not support durationSeconds; use durationHours",
+    );
   }
   const payload = normalizeDiscordPollInput(poll);
   const flags = opts.silent ? SUPPRESS_NOTIFICATIONS_FLAG : undefined;
@@ -455,12 +485,16 @@ type VoiceMessageOpts = {
   silent?: boolean;
 };
 
-async function materializeVoiceMessageInput(mediaUrl: string): Promise<{ filePath: string }> {
+async function materializeVoiceMessageInput(
+  mediaUrl: string,
+): Promise<{ filePath: string }> {
   // Security: reuse the standard media loader so we apply SSRF guards + allowed-local-root checks.
   // Then write to a private temp file so ffmpeg/ffprobe never sees the original URL/path string.
   const media = await loadWebMediaRaw(mediaUrl, maxBytesForKind("audio"));
   const extFromName = media.fileName ? path.extname(media.fileName) : "";
-  const extFromMime = media.contentType ? extensionForMime(media.contentType) : "";
+  const extFromMime = media.contentType
+    ? extensionForMime(media.contentType)
+    : "";
   const ext = extFromName || extFromMime || ".bin";
   const tempDir = resolvePreferredOpenClawTmpDir();
   const filePath = path.join(tempDir, `voice-src-${crypto.randomUUID()}${ext}`);
@@ -483,7 +517,8 @@ export async function sendVoiceMessageDiscord(
   audioPath: string,
   opts: VoiceMessageOpts = {},
 ): Promise<DiscordSendResult> {
-  const { filePath: localInputPath } = await materializeVoiceMessageInput(audioPath);
+  const { filePath: localInputPath } =
+    await materializeVoiceMessageInput(audioPath);
   let oggPath: string | null = null;
   let oggCleanup = false;
   let token: string | undefined;

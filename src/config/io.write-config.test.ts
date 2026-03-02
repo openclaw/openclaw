@@ -13,14 +13,18 @@ describe("config io write", () => {
     error: () => {},
   };
 
-  async function withSuiteHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
+  async function withSuiteHome<T>(
+    fn: (home: string) => Promise<T>,
+  ): Promise<T> {
     const home = path.join(fixtureRoot, `case-${homeCaseId++}`);
     await fs.mkdir(home, { recursive: true });
     return fn(home);
   }
 
   beforeAll(async () => {
-    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-config-io-"));
+    fixtureRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-config-io-"),
+    );
   });
 
   afterAll(async () => {
@@ -35,7 +39,11 @@ describe("config io write", () => {
   }) {
     const configPath = path.join(params.home, ".openclaw", "openclaw.json");
     await fs.mkdir(path.dirname(configPath), { recursive: true });
-    await fs.writeFile(configPath, JSON.stringify(params.initialConfig, null, 2), "utf-8");
+    await fs.writeFile(
+      configPath,
+      JSON.stringify(params.initialConfig, null, 2),
+      "utf-8",
+    );
 
     const io = createConfigIO({
       env: params.env ?? {},
@@ -62,7 +70,10 @@ describe("config io write", () => {
       auth: { mode: "token" },
     };
     await params.io.writeConfigFile(next);
-    return JSON.parse(await fs.readFile(params.configPath, "utf-8")) as Record<string, unknown>;
+    return JSON.parse(await fs.readFile(params.configPath, "utf-8")) as Record<
+      string,
+      unknown
+    >;
   }
 
   async function writeGatewayPatchAndReadLastAuditEntry(params: {
@@ -80,7 +91,12 @@ describe("config io write", () => {
         error: vi.fn(),
       },
     });
-    const auditPath = path.join(params.home, ".openclaw", "logs", "config-audit.jsonl");
+    const auditPath = path.join(
+      params.home,
+      ".openclaw",
+      "logs",
+      "config-audit.jsonl",
+    );
     const next = structuredClone(snapshot.config);
     const gateway =
       next.gateway && typeof next.gateway === "object"
@@ -91,7 +107,10 @@ describe("config io write", () => {
       ...params.gatewayPatch,
     };
     await io.writeConfigFile(next);
-    const lines = (await fs.readFile(auditPath, "utf-8")).trim().split("\n").filter(Boolean);
+    const lines = (await fs.readFile(auditPath, "utf-8"))
+      .trim()
+      .split("\n")
+      .filter(Boolean);
     const last = JSON.parse(lines.at(-1) ?? "{}") as Record<string, unknown>;
     return { last, lines, configPath };
   }
@@ -102,7 +121,9 @@ describe("config io write", () => {
   });
 
   const expectInputOwnerDisplayUnchanged = (input: Record<string, unknown>) => {
-    expect((input.commands as Record<string, unknown>).ownerDisplay).toBe("hash");
+    expect((input.commands as Record<string, unknown>).ownerDisplay).toBe(
+      "hash",
+    );
   };
 
   const readPersistedCommands = async (configPath: string) => {
@@ -112,7 +133,10 @@ describe("config io write", () => {
     return persisted.commands;
   };
 
-  async function runUnsetNoopCase(params: { home: string; unsetPaths: string[][] }) {
+  async function runUnsetNoopCase(params: {
+    home: string;
+    unsetPaths: string[][];
+  }) {
     const { configPath, io } = await writeConfigAndCreateIo({
       home: params.home,
       initialConfig: createGatewayCommandsInput(),
@@ -122,7 +146,9 @@ describe("config io write", () => {
     await io.writeConfigFile(input, { unsetPaths: params.unsetPaths });
 
     expectInputOwnerDisplayUnchanged(input);
-    expect((await readPersistedCommands(configPath))?.ownerDisplay).toBe("hash");
+    expect((await readPersistedCommands(configPath))?.ownerDisplay).toBe(
+      "hash",
+    );
   }
 
   it("persists caller changes onto resolved config without leaking runtime defaults", async () => {
@@ -131,7 +157,11 @@ describe("config io write", () => {
         home,
         initialConfig: { gateway: { port: 18789 } },
       });
-      const persisted = await writeTokenAuthAndReadConfig({ io, snapshot, configPath });
+      const persisted = await writeTokenAuthAndReadConfig({
+        io,
+        snapshot,
+        configPath,
+      });
       expect(persisted.gateway).toEqual({
         port: 18789,
         auth: { mode: "token" },
@@ -178,7 +208,10 @@ describe("config io write", () => {
         },
       });
 
-      const next = structuredClone(snapshot.resolved) as Record<string, unknown>;
+      const next = structuredClone(snapshot.resolved) as Record<
+        string,
+        unknown
+      >;
       if (
         next.commands &&
         typeof next.commands === "object" &&
@@ -187,7 +220,9 @@ describe("config io write", () => {
         delete (next.commands as Record<string, unknown>).ownerDisplay;
       }
 
-      await io.writeConfigFile(next, { unsetPaths: [["commands", "ownerDisplay"]] });
+      await io.writeConfigFile(next, {
+        unsetPaths: [["commands", "ownerDisplay"]],
+      });
 
       const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
         commands?: Record<string, unknown>;
@@ -210,14 +245,18 @@ describe("config io write", () => {
         commands: { ownerDisplay: "hash" },
       };
 
-      await io.writeConfigFile(input, { unsetPaths: [["commands", "ownerDisplay"]] });
+      await io.writeConfigFile(input, {
+        unsetPaths: [["commands", "ownerDisplay"]],
+      });
 
       expect(input).toEqual({
         gateway: { mode: "local" },
         commands: { ownerDisplay: "hash" },
       });
       expectInputOwnerDisplayUnchanged(input);
-      expect((await readPersistedCommands(configPath)) ?? {}).not.toHaveProperty("ownerDisplay");
+      expect(
+        (await readPersistedCommands(configPath)) ?? {},
+      ).not.toHaveProperty("ownerDisplay");
     });
   });
 
@@ -232,10 +271,14 @@ describe("config io write", () => {
       });
 
       const input = structuredClone(snapshot.config) as Record<string, unknown>;
-      await io.writeConfigFile(input, { unsetPaths: [["commands", "ownerDisplay"]] });
+      await io.writeConfigFile(input, {
+        unsetPaths: [["commands", "ownerDisplay"]],
+      });
 
       expectInputOwnerDisplayUnchanged(input);
-      expect((await readPersistedCommands(configPath)) ?? {}).not.toHaveProperty("ownerDisplay");
+      expect(
+        (await readPersistedCommands(configPath)) ?? {},
+      ).not.toHaveProperty("ownerDisplay");
     });
   });
 
@@ -250,9 +293,15 @@ describe("config io write", () => {
       });
 
       const input = structuredClone(snapshot.config) as Record<string, unknown>;
-      await io.writeConfigFile(input, { unsetPaths: [["tools", "alsoAllow", "1"]] });
+      await io.writeConfigFile(input, {
+        unsetPaths: [["tools", "alsoAllow", "1"]],
+      });
 
-      expect((input.tools as { alsoAllow: string[] }).alsoAllow).toEqual(["exec", "fetch", "read"]);
+      expect((input.tools as { alsoAllow: string[] }).alsoAllow).toEqual([
+        "exec",
+        "fetch",
+        "read",
+      ]);
       const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
         tools?: { alsoAllow?: string[] };
       };
@@ -303,13 +352,21 @@ describe("config io write", () => {
           gateway: { port: 18789 },
         },
       });
-      const persisted = (await writeTokenAuthAndReadConfig({ io, snapshot, configPath })) as {
-        agents: { defaults: { cliBackends: { codex: { env: { OPENAI_API_KEY: string } } } } };
+      const persisted = (await writeTokenAuthAndReadConfig({
+        io,
+        snapshot,
+        configPath,
+      })) as {
+        agents: {
+          defaults: {
+            cliBackends: { codex: { env: { OPENAI_API_KEY: string } } };
+          };
+        };
         gateway: { port: number; auth: { mode: string } };
       };
-      expect(persisted.agents.defaults.cliBackends.codex.env.OPENAI_API_KEY).toBe(
-        "${OPENAI_API_KEY}",
-      );
+      expect(
+        persisted.agents.defaults.cliBackends.codex.env.OPENAI_API_KEY,
+      ).toBe("${OPENAI_API_KEY}");
       expect(persisted.gateway).toEqual({
         port: 18789,
         auth: { mode: "token" },
@@ -338,11 +395,17 @@ describe("config io write", () => {
 
       const next = structuredClone(snapshot.config);
       // Simulate doctor removing legacy keys while keeping dm enabled.
-      if (next.channels?.discord?.dm && typeof next.channels.discord.dm === "object") {
+      if (
+        next.channels?.discord?.dm &&
+        typeof next.channels.discord.dm === "object"
+      ) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test helper
         delete (next.channels.discord.dm as any).policy;
       }
-      if (next.channels?.slack?.dm && typeof next.channels.slack.dm === "object") {
+      if (
+        next.channels?.slack?.dm &&
+        typeof next.channels.slack.dm === "object"
+      ) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test helper
         delete (next.channels.slack.dm as any).policy;
       }
@@ -408,7 +471,10 @@ describe("config io write", () => {
             ...next.agents?.defaults?.cliBackends,
             codex: {
               ...codexBackend,
-              command: typeof codexBackend?.command === "string" ? codexBackend.command : "codex",
+              command:
+                typeof codexBackend?.command === "string"
+                  ? codexBackend.command
+                  : "codex",
               args: [...args, "456"],
             },
           },
@@ -458,7 +524,10 @@ describe("config io write", () => {
 
       const overwriteLog = warn.mock.calls
         .map((call) => call[0])
-        .find((entry) => typeof entry === "string" && entry.startsWith("Config overwrite:"));
+        .find(
+          (entry) =>
+            typeof entry === "string" && entry.startsWith("Config overwrite:"),
+        );
       expect(typeof overwriteLog).toBe("string");
       expect(overwriteLog).toContain(configPath);
       expect(overwriteLog).toContain(`${configPath}.bak`);
@@ -483,7 +552,9 @@ describe("config io write", () => {
       });
 
       const overwriteLogs = warn.mock.calls.filter(
-        (call) => typeof call[0] === "string" && call[0].startsWith("Config overwrite:"),
+        (call) =>
+          typeof call[0] === "string" &&
+          call[0].startsWith("Config overwrite:"),
       );
       expect(overwriteLogs).toHaveLength(0);
     });
@@ -491,12 +562,13 @@ describe("config io write", () => {
 
   it("appends config write audit JSONL entries with forensic metadata", async () => {
     await withSuiteHome(async (home) => {
-      const { configPath, lines, last } = await writeGatewayPatchAndReadLastAuditEntry({
-        home,
-        initialConfig: { gateway: { port: 18789 } },
-        gatewayPatch: { mode: "local" },
-        env: {} as NodeJS.ProcessEnv,
-      });
+      const { configPath, lines, last } =
+        await writeGatewayPatchAndReadLastAuditEntry({
+          home,
+          initialConfig: { gateway: { port: 18789 } },
+          gatewayPatch: { mode: "local" },
+          env: {} as NodeJS.ProcessEnv,
+        });
       expect(lines.length).toBeGreaterThan(0);
       expect(last.source).toBe("config-io");
       expect(last.event).toBe("config.write");
@@ -505,7 +577,9 @@ describe("config io write", () => {
       expect(last.hasMetaAfter).toBe(true);
       expect(last.previousHash).toBeTypeOf("string");
       expect(last.nextHash).toBeTypeOf("string");
-      expect(last.result === "rename" || last.result === "copy-fallback").toBe(true);
+      expect(last.result === "rename" || last.result === "copy-fallback").toBe(
+        true,
+      );
     });
   });
 

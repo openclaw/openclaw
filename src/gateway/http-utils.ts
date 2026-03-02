@@ -1,8 +1,14 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";
-import { buildAgentMainSessionKey, normalizeAgentId } from "../routing/session-key.js";
+import {
+  buildAgentMainSessionKey,
+  normalizeAgentId,
+} from "../routing/session-key.js";
 
-export function getHeader(req: IncomingMessage, name: string): string | undefined {
+export function getHeader(
+  req: IncomingMessage,
+  name: string,
+): string | undefined {
   const raw = req.headers[name.toLowerCase()];
   if (typeof raw === "string") {
     return raw;
@@ -22,7 +28,9 @@ export function getBearerToken(req: IncomingMessage): string | undefined {
   return token || undefined;
 }
 
-export function resolveAgentIdFromHeader(req: IncomingMessage): string | undefined {
+export function resolveAgentIdFromHeader(
+  req: IncomingMessage,
+): string | undefined {
   const raw =
     getHeader(req, "x-openclaw-agent-id")?.trim() ||
     getHeader(req, "x-openclaw-agent")?.trim() ||
@@ -33,7 +41,9 @@ export function resolveAgentIdFromHeader(req: IncomingMessage): string | undefin
   return normalizeAgentId(raw);
 }
 
-export function resolveAgentIdFromModel(model: string | undefined): string | undefined {
+export function resolveAgentIdFromModel(
+  model: string | undefined,
+): string | undefined {
   const raw = model?.trim();
   if (!raw) {
     return undefined;
@@ -74,6 +84,8 @@ export function resolveSessionKey(params: {
   }
 
   const user = params.user?.trim();
-  const mainKey = user ? `${params.prefix}-user:${user}` : `${params.prefix}:${randomUUID()}`;
+  const mainKey = user
+    ? `${params.prefix}-user:${user}`
+    : `${params.prefix}:${randomUUID()}`;
   return buildAgentMainSessionKey({ agentId: params.agentId, mainKey });
 }

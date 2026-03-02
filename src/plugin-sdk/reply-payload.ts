@@ -11,11 +11,14 @@ export function normalizeOutboundReplyPayload(
   const text = typeof payload.text === "string" ? payload.text : undefined;
   const mediaUrls = Array.isArray(payload.mediaUrls)
     ? payload.mediaUrls.filter(
-        (entry): entry is string => typeof entry === "string" && entry.length > 0,
+        (entry): entry is string =>
+          typeof entry === "string" && entry.length > 0,
       )
     : undefined;
-  const mediaUrl = typeof payload.mediaUrl === "string" ? payload.mediaUrl : undefined;
-  const replyToId = typeof payload.replyToId === "string" ? payload.replyToId : undefined;
+  const mediaUrl =
+    typeof payload.mediaUrl === "string" ? payload.mediaUrl : undefined;
+  const replyToId =
+    typeof payload.replyToId === "string" ? payload.replyToId : undefined;
   return {
     text,
     mediaUrls,

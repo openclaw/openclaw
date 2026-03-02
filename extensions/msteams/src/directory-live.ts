@@ -19,7 +19,8 @@ export async function listMSTeamsDirectoryPeersLive(params: {
     return [];
   }
   const token = await resolveGraphToken(params.cfg);
-  const limit = typeof params.limit === "number" && params.limit > 0 ? params.limit : 20;
+  const limit =
+    typeof params.limit === "number" && params.limit > 0 ? params.limit : 20;
 
   const users = await searchGraphUsers({ token, query, top: limit });
 
@@ -52,7 +53,8 @@ export async function listMSTeamsDirectoryGroupsLive(params: {
     return [];
   }
   const token = await resolveGraphToken(params.cfg);
-  const limit = typeof params.limit === "number" && params.limit > 0 ? params.limit : 20;
+  const limit =
+    typeof params.limit === "number" && params.limit > 0 ? params.limit : 20;
   const [teamQuery, channelQuery] = rawQuery.includes("/")
     ? rawQuery
         .split("/", 2)

@@ -42,12 +42,20 @@ describe("mapSensitivePaths", () => {
         nested: z.string().register(sensitive),
       }),
       list: z.array(z.string().register(sensitive)),
-      listOfObjects: z.array(z.object({ nested: z.string().register(sensitive) })),
+      listOfObjects: z.array(
+        z.object({ nested: z.string().register(sensitive) }),
+      ),
       headers: z.record(z.string(), z.string().register(sensitive)),
-      headersNested: z.record(z.string(), z.object({ nested: z.string().register(sensitive) })),
+      headersNested: z.record(
+        z.string(),
+        z.object({ nested: z.string().register(sensitive) }),
+      ),
       auth: z.union([
         z.object({ type: z.literal("none") }),
-        z.object({ type: z.literal("token"), value: z.string().register(sensitive) }),
+        z.object({
+          type: z.literal("token"),
+          value: z.string().register(sensitive),
+        }),
       ]),
       merged: z
         .object({ id: z.string() })
@@ -82,7 +90,9 @@ describe("mapSensitivePaths", () => {
         z.object({ type: z.literal("none") }),
         z.object({ type: z.literal("token"), value: z.string() }),
       ]),
-      merged: z.object({ id: z.string() }).and(z.object({ nested: z.string() })),
+      merged: z
+        .object({ id: z.string() })
+        .and(z.object({ nested: z.string() })),
     });
 
     const result = mapSensitivePaths(GrandSchema, "", {});
@@ -130,8 +140,12 @@ describe("mapSensitivePaths", () => {
     schema.title = "OpenClawConfig";
     const hints = mapSensitivePaths(OpenClawSchema, "", {});
 
-    expect(hints["agents.defaults.memorySearch.remote.apiKey"]?.sensitive).toBe(true);
-    expect(hints["agents.list[].memorySearch.remote.apiKey"]?.sensitive).toBe(true);
+    expect(hints["agents.defaults.memorySearch.remote.apiKey"]?.sensitive).toBe(
+      true,
+    );
+    expect(hints["agents.list[].memorySearch.remote.apiKey"]?.sensitive).toBe(
+      true,
+    );
     expect(hints["channels.discord.accounts.*.token"]?.sensitive).toBe(true);
     expect(hints["channels.googlechat.serviceAccount"]?.sensitive).toBe(true);
     expect(hints["gateway.auth.token"]?.sensitive).toBe(true);

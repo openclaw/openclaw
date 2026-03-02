@@ -2,7 +2,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const resolveFeishuSendTargetMock = vi.hoisted(() => vi.fn());
 const resolveMarkdownTableModeMock = vi.hoisted(() => vi.fn(() => "preserve"));
-const convertMarkdownTablesMock = vi.hoisted(() => vi.fn((text: string) => text));
+const convertMarkdownTablesMock = vi.hoisted(() =>
+  vi.fn((text: string) => text),
+);
 
 vi.mock("./send-target.js", () => ({
   resolveFeishuSendTarget: resolveFeishuSendTargetMock,

@@ -41,7 +41,9 @@ describe("createDiffsHttpHandler", () => {
     expect(handled).toBe(true);
     expect(res.statusCode).toBe(200);
     expect(res.body).toBe("<html>viewer</html>");
-    expect(res.getHeader("content-security-policy")).toContain("default-src 'none'");
+    expect(res.getHeader("content-security-policy")).toContain(
+      "default-src 'none'",
+    );
   });
 
   it("rejects invalid tokens", async () => {
@@ -94,7 +96,9 @@ describe("createDiffsHttpHandler", () => {
 
     expect(handled).toBe(true);
     expect(res.statusCode).toBe(200);
-    expect(String(res.body)).toContain("/plugins/diffs/assets/viewer-runtime.js?v=");
+    expect(String(res.body)).toContain(
+      "/plugins/diffs/assets/viewer-runtime.js?v=",
+    );
   });
 
   it("serves the shared viewer runtime asset", async () => {

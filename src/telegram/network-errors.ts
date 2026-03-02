@@ -27,7 +27,10 @@ const RECOVERABLE_ERROR_NAMES = new Set([
   "BodyTimeoutError",
 ]);
 
-const ALWAYS_RECOVERABLE_MESSAGES = new Set(["fetch failed", "typeerror: fetch failed"]);
+const ALWAYS_RECOVERABLE_MESSAGES = new Set([
+  "fetch failed",
+  "typeerror: fetch failed",
+]);
 
 const RECOVERABLE_MESSAGE_SNIPPETS = [
   "undici",
@@ -113,11 +116,18 @@ function collectErrorCandidates(err: unknown): unknown[] {
   return candidates;
 }
 
-export type TelegramNetworkErrorContext = "polling" | "send" | "webhook" | "unknown";
+export type TelegramNetworkErrorContext =
+  | "polling"
+  | "send"
+  | "webhook"
+  | "unknown";
 
 export function isRecoverableTelegramNetworkError(
   err: unknown,
-  options: { context?: TelegramNetworkErrorContext; allowMessageMatch?: boolean } = {},
+  options: {
+    context?: TelegramNetworkErrorContext;
+    allowMessageMatch?: boolean;
+  } = {},
 ): boolean {
   if (!err) {
     return false;
@@ -143,7 +153,11 @@ export function isRecoverableTelegramNetworkError(
       return true;
     }
     if (allowMessageMatch && message) {
-      if (RECOVERABLE_MESSAGE_SNIPPETS.some((snippet) => message.includes(snippet))) {
+      if (
+        RECOVERABLE_MESSAGE_SNIPPETS.some((snippet) =>
+          message.includes(snippet),
+        )
+      ) {
         return true;
       }
     }

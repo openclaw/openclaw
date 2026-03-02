@@ -23,8 +23,8 @@ describe("readFields", () => {
   });
 
   it("requires ref", async () => {
-    await expect(readFields({ fields: '[{"type":"textbox","value":"world"}]' })).rejects.toThrow(
-      "fields[0] must include ref",
-    );
+    await expect(
+      readFields({ fields: '[{"type":"textbox","value":"world"}]' }),
+    ).rejects.toThrow("fields[0] must include ref");
   });
 });

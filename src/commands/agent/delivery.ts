@@ -1,6 +1,12 @@
 import { AGENT_LANE_NESTED } from "../../agents/lanes.js";
-import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
-import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
+import {
+  getChannelPlugin,
+  normalizeChannelId,
+} from "../../channels/plugins/index.js";
+import {
+  createOutboundSendDeps,
+  type CliDeps,
+} from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
@@ -22,12 +28,17 @@ import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import type { AgentCommandOpts } from "./types.js";
 
 type RunResult = Awaited<
-  ReturnType<(typeof import("../../agents/pi-embedded.js"))["runEmbeddedPiAgent"]>
+  ReturnType<
+    (typeof import("../../agents/pi-embedded.js"))["runEmbeddedPiAgent"]
+  >
 >;
 
 const NESTED_LOG_PREFIX = "[agent:nested]";
 
-function formatNestedLogPrefix(opts: AgentCommandOpts, sessionKey?: string): string {
+function formatNestedLogPrefix(
+  opts: AgentCommandOpts,
+  sessionKey?: string,
+): string {
   const parts = [NESTED_LOG_PREFIX];
   const session = sessionKey ?? opts.sessionKey ?? opts.sessionId;
   if (session) {
@@ -74,11 +85,21 @@ export async function deliverAgentCommandResult(params: {
   result: RunResult;
   payloads: RunResult["payloads"];
 }) {
-  const { cfg, deps, runtime, opts, outboundSession, sessionEntry, payloads, result } = params;
+  const {
+    cfg,
+    deps,
+    runtime,
+    opts,
+    outboundSession,
+    sessionEntry,
+    payloads,
+    result,
+  } = params;
   const effectiveSessionKey = outboundSession?.key ?? opts.sessionKey;
   const deliver = opts.deliver === true;
   const bestEffortDeliver = opts.bestEffortDeliver === true;
-  const turnSourceChannel = opts.runContext?.messageChannel ?? opts.messageChannel;
+  const turnSourceChannel =
+    opts.runContext?.messageChannel ?? opts.messageChannel;
   const turnSourceTo = opts.runContext?.currentChannelId ?? opts.to;
   const turnSourceAccountId = opts.runContext?.accountId ?? opts.accountId;
   const turnSourceThreadId = opts.runContext?.currentThreadTs ?? opts.threadId;
@@ -96,7 +117,11 @@ export async function deliverAgentCommandResult(params: {
   });
   let deliveryChannel = deliveryPlan.resolvedChannel;
   const explicitChannelHint = (opts.replyChannel ?? opts.channel)?.trim();
-  if (deliver && isInternalMessageChannel(deliveryChannel) && !explicitChannelHint) {
+  if (
+    deliver &&
+    isInternalMessageChannel(deliveryChannel) &&
+    !explicitChannelHint
+  ) {
     try {
       const selection = await resolveMessageChannelSelection({ cfg });
       deliveryChannel = selection.channel;
@@ -141,8 +166,11 @@ export async function deliverAgentCommandResult(params: {
   const deliveryTarget = resolved.resolvedTo;
   const resolvedThreadId = deliveryPlan.resolvedThreadId ?? opts.threadId;
   const resolvedReplyToId =
-    deliveryChannel === "slack" && resolvedThreadId != null ? String(resolvedThreadId) : undefined;
-  const resolvedThreadTarget = deliveryChannel === "slack" ? undefined : resolvedThreadId;
+    deliveryChannel === "slack" && resolvedThreadId != null
+      ? String(resolvedThreadId)
+      : undefined;
+  const resolvedThreadTarget =
+    deliveryChannel === "slack" ? undefined : resolvedThreadId;
 
   const logDeliveryError = (err: unknown) => {
     const message = `Delivery failed (${deliveryChannel}${deliveryTarget ? ` to ${deliveryTarget}` : ""}): ${String(err)}`;
@@ -217,7 +245,11 @@ export async function deliverAgentCommandResult(params: {
       logPayload(payload);
     }
   }
-  if (deliver && deliveryChannel && !isInternalMessageChannel(deliveryChannel)) {
+  if (
+    deliver &&
+    deliveryChannel &&
+    !isInternalMessageChannel(deliveryChannel)
+  ) {
     if (deliveryTarget) {
       await deliverOutboundPayloads({
         cfg,

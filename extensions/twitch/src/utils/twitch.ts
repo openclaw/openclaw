@@ -30,7 +30,9 @@ export function normalizeTwitchChannel(channel: string): string {
  * @returns Error object with descriptive message
  */
 export function missingTargetError(provider: string, hint?: string): Error {
-  return new Error(`Delivering to ${provider} requires target${hint ? ` ${hint}` : ""}`);
+  return new Error(
+    `Delivering to ${provider} requires target${hint ? ` ${hint}` : ""}`,
+  );
 }
 
 /**

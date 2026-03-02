@@ -1,7 +1,10 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
-import { createGatewayRequest, createHooksConfig } from "./hooks-test-helpers.js";
+import {
+  createGatewayRequest,
+  createHooksConfig,
+} from "./hooks-test-helpers.js";
 
 const { readJsonBodyMock } = vi.hoisted(() => ({
   readJsonBodyMock: vi.fn(),
@@ -69,7 +72,8 @@ function createHandler(params?: {
         return;
       }) as HooksHandlerDeps["dispatchWakeHook"]),
     dispatchAgentHook:
-      params?.dispatchAgentHook ?? ((() => "run-1") as HooksHandlerDeps["dispatchAgentHook"]),
+      params?.dispatchAgentHook ??
+      ((() => "run-1") as HooksHandlerDeps["dispatchAgentHook"]),
   });
 }
 
@@ -79,7 +83,10 @@ describe("createHooksRequestHandler timeout status mapping", () => {
   });
 
   test("returns 408 for request body timeout", async () => {
-    readJsonBodyMock.mockResolvedValue({ ok: false, error: "request body timeout" });
+    readJsonBodyMock.mockResolvedValue({
+      ok: false,
+      error: "request body timeout",
+    });
     const dispatchWakeHook = vi.fn();
     const dispatchAgentHook = vi.fn(() => "run-1");
     const handler = createHandler({ dispatchWakeHook, dispatchAgentHook });
@@ -90,7 +97,9 @@ describe("createHooksRequestHandler timeout status mapping", () => {
 
     expect(handled).toBe(true);
     expect(res.statusCode).toBe(408);
-    expect(end).toHaveBeenCalledWith(JSON.stringify({ ok: false, error: "request body timeout" }));
+    expect(end).toHaveBeenCalledWith(
+      JSON.stringify({ ok: false, error: "request body timeout" }),
+    );
     expect(dispatchWakeHook).not.toHaveBeenCalled();
     expect(dispatchAgentHook).not.toHaveBeenCalled();
   });

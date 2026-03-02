@@ -1,11 +1,18 @@
 import { describe, expect, test } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
-import { A2UI_PATH, CANVAS_HOST_PATH, CANVAS_WS_PATH } from "../canvas-host/a2ui.js";
+import {
+  A2UI_PATH,
+  CANVAS_HOST_PATH,
+  CANVAS_WS_PATH,
+} from "../canvas-host/a2ui.js";
 import type { CanvasHostHandler } from "../canvas-host/server.js";
 import { createAuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { CANVAS_CAPABILITY_PATH_PREFIX } from "./canvas-capability.js";
-import { attachGatewayUpgradeHandler, createGatewayHttpServer } from "./server-http.js";
+import {
+  attachGatewayUpgradeHandler,
+  createGatewayHttpServer,
+} from "./server-http.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { withTempConfig } from "./test-temp-config.js";
 
@@ -41,7 +48,10 @@ async function expectWsRejected(
 ): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     const ws = new WebSocket(url, { headers });
-    const timer = setTimeout(() => reject(new Error("timeout")), WS_REJECT_TIMEOUT_MS);
+    const timer = setTimeout(
+      () => reject(new Error("timeout")),
+      WS_REJECT_TIMEOUT_MS,
+    );
     ws.once("open", () => {
       clearTimeout(timer);
       ws.terminate();
@@ -62,7 +72,10 @@ async function expectWsRejected(
 async function expectWsConnected(url: string): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     const ws = new WebSocket(url);
-    const timer = setTimeout(() => reject(new Error("timeout")), WS_CONNECT_TIMEOUT_MS);
+    const timer = setTimeout(
+      () => reject(new Error("timeout")),
+      WS_CONNECT_TIMEOUT_MS,
+    );
     ws.once("open", () => {
       clearTimeout(timer);
       ws.terminate();
@@ -103,9 +116,15 @@ function scopedCanvasPath(capability: string, path: string): string {
   return `${CANVAS_CAPABILITY_PATH_PREFIX}/${encodeURIComponent(capability)}${path}`;
 }
 
-const allowCanvasHostHttp: CanvasHostHandler["handleHttpRequest"] = async (req, res) => {
+const allowCanvasHostHttp: CanvasHostHandler["handleHttpRequest"] = async (
+  req,
+  res,
+) => {
   const url = new URL(req.url ?? "/", "http://localhost");
-  if (url.pathname !== CANVAS_HOST_PATH && !url.pathname.startsWith(`${CANVAS_HOST_PATH}/`)) {
+  if (
+    url.pathname !== CANVAS_HOST_PATH &&
+    !url.pathname.startsWith(`${CANVAS_HOST_PATH}/`)
+  ) {
     return false;
   }
   res.statusCode = 200;
@@ -181,7 +200,10 @@ describe("gateway canvas host auth", () => {
     allowTailscale: false,
   };
 
-  const withLoopbackTrustedProxy = async (run: () => Promise<void>, prefix?: string) => {
+  const withLoopbackTrustedProxy = async (
+    run: () => Promise<void>,
+    prefix?: string,
+  ) => {
     await withTempConfig({
       cfg: {
         gateway: {
@@ -203,10 +225,18 @@ describe("gateway canvas host auth", () => {
           const operatorOnlyCapability = "operator-only";
           const expiredNodeCapability = "expired-node";
           const activeNodeCapability = "active-node";
-          const activeCanvasPath = scopedCanvasPath(activeNodeCapability, `${CANVAS_HOST_PATH}/`);
-          const activeWsPath = scopedCanvasPath(activeNodeCapability, CANVAS_WS_PATH);
+          const activeCanvasPath = scopedCanvasPath(
+            activeNodeCapability,
+            `${CANVAS_HOST_PATH}/`,
+          );
+          const activeWsPath = scopedCanvasPath(
+            activeNodeCapability,
+            CANVAS_WS_PATH,
+          );
 
-          const unauthCanvas = await fetch(`http://${host}:${listener.port}${CANVAS_HOST_PATH}/`);
+          const unauthCanvas = await fetch(
+            `http://${host}:${listener.port}${CANVAS_HOST_PATH}/`,
+          );
           expect(unauthCanvas.status).toBe(401);
 
           const malformedScoped = await fetch(
@@ -256,7 +286,9 @@ describe("gateway canvas host auth", () => {
           });
           clients.add(activeNodeClient);
 
-          const scopedCanvas = await fetch(`http://${host}:${listener.port}${activeCanvasPath}`);
+          const scopedCanvas = await fetch(
+            `http://${host}:${listener.port}${activeCanvasPath}`,
+          );
           expect(scopedCanvas.status).toBe(200);
           expect(await scopedCanvas.text()).toBe("ok");
 
@@ -265,7 +297,9 @@ describe("gateway canvas host auth", () => {
           );
           expect(scopedA2ui.status).toBe(200);
 
-          await expectWsConnected(`ws://${host}:${listener.port}${activeWsPath}`);
+          await expectWsConnected(
+            `ws://${host}:${listener.port}${activeWsPath}`,
+          );
 
           clients.delete(activeNodeClient);
 
@@ -273,7 +307,10 @@ describe("gateway canvas host auth", () => {
             `http://${host}:${listener.port}${activeCanvasPath}`,
           );
           expect(disconnectedNodeBlocked.status).toBe(401);
-          await expectWsRejected(`ws://${host}:${listener.port}${activeWsPath}`, {});
+          await expectWsRejected(
+            `ws://${host}:${listener.port}${activeWsPath}`,
+            {},
+          );
         },
       });
     }, "openclaw-canvas-auth-test-");
@@ -296,10 +333,15 @@ describe("gateway canvas host auth", () => {
             }),
           );
 
-          const res = await fetch(`http://127.0.0.1:${listener.port}${CANVAS_HOST_PATH}/`);
+          const res = await fetch(
+            `http://127.0.0.1:${listener.port}${CANVAS_HOST_PATH}/`,
+          );
           expect(res.status).toBe(401);
 
-          await expectWsRejected(`ws://127.0.0.1:${listener.port}${CANVAS_WS_PATH}`, {});
+          await expectWsRejected(
+            `ws://127.0.0.1:${listener.port}${CANVAS_WS_PATH}`,
+            {},
+          );
         },
       });
     });
@@ -331,9 +373,14 @@ describe("gateway canvas host auth", () => {
                 }),
               );
 
-              const canvasPath = scopedCanvasPath(capability, `${CANVAS_HOST_PATH}/`);
+              const canvasPath = scopedCanvasPath(
+                capability,
+                `${CANVAS_HOST_PATH}/`,
+              );
               const wsPath = scopedCanvasPath(capability, CANVAS_WS_PATH);
-              const scopedCanvas = await fetch(`http://[::1]:${listener.port}${canvasPath}`);
+              const scopedCanvas = await fetch(
+                `http://[::1]:${listener.port}${canvasPath}`,
+              );
               expect(scopedCanvas.status).toBe(200);
 
               await expectWsConnected(`ws://[::1]:${listener.port}${wsPath}`);
@@ -341,7 +388,10 @@ describe("gateway canvas host auth", () => {
           });
         } catch (err) {
           const message = String(err);
-          if (message.includes("EAFNOSUPPORT") || message.includes("EADDRNOTAVAIL")) {
+          if (
+            message.includes("EAFNOSUPPORT") ||
+            message.includes("EADDRNOTAVAIL")
+          ) {
             return;
           }
           throw err;
@@ -367,18 +417,28 @@ describe("gateway canvas host auth", () => {
             authorization: "Bearer wrong",
             "x-forwarded-for": "203.0.113.99",
           };
-          const first = await fetch(`http://127.0.0.1:${listener.port}${CANVAS_HOST_PATH}/`, {
-            headers,
-          });
+          const first = await fetch(
+            `http://127.0.0.1:${listener.port}${CANVAS_HOST_PATH}/`,
+            {
+              headers,
+            },
+          );
           expect(first.status).toBe(401);
 
-          const second = await fetch(`http://127.0.0.1:${listener.port}${CANVAS_HOST_PATH}/`, {
-            headers,
-          });
+          const second = await fetch(
+            `http://127.0.0.1:${listener.port}${CANVAS_HOST_PATH}/`,
+            {
+              headers,
+            },
+          );
           expect(second.status).toBe(429);
           expect(second.headers.get("retry-after")).toBeTruthy();
 
-          await expectWsRejected(`ws://127.0.0.1:${listener.port}${CANVAS_WS_PATH}`, headers, 429);
+          await expectWsRejected(
+            `ws://127.0.0.1:${listener.port}${CANVAS_WS_PATH}`,
+            headers,
+            429,
+          );
         },
       });
     });

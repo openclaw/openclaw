@@ -11,7 +11,10 @@ describe("restart-helper", () => {
   const originalPlatform = process.platform;
   const originalGetUid = process.getuid;
 
-  async function prepareAndReadScript(env: Record<string, string>, gatewayPort = 18789) {
+  async function prepareAndReadScript(
+    env: Record<string, string>,
+    gatewayPort = 18789,
+  ) {
     const scriptPath = await prepareRestartScript(env, gatewayPort);
     expect(scriptPath).toBeTruthy();
     const content = await fs.readFile(scriptPath!, "utf-8");
@@ -35,11 +38,26 @@ describe("restart-helper", () => {
     const endIndex = content.indexOf(endCommand);
     const attemptsInitIndex = content.indexOf(pollAttemptsInit, endIndex);
     const pollLabelIndex = content.indexOf(pollLabel, attemptsInitIndex);
-    const pollAttemptIncrementIndex = content.indexOf(pollAttemptIncrement, pollLabelIndex);
-    const pollNetstatCheckIndex = content.indexOf(pollNetstatCheck, pollAttemptIncrementIndex);
-    const forceKillLabelIndex = content.indexOf(forceKillLabel, pollNetstatCheckIndex);
-    const forceKillCommandIndex = content.indexOf(forceKillCommand, forceKillLabelIndex);
-    const portReleasedLabelIndex = content.indexOf(portReleasedLabel, forceKillCommandIndex);
+    const pollAttemptIncrementIndex = content.indexOf(
+      pollAttemptIncrement,
+      pollLabelIndex,
+    );
+    const pollNetstatCheckIndex = content.indexOf(
+      pollNetstatCheck,
+      pollAttemptIncrementIndex,
+    );
+    const forceKillLabelIndex = content.indexOf(
+      forceKillLabel,
+      pollNetstatCheckIndex,
+    );
+    const forceKillCommandIndex = content.indexOf(
+      forceKillCommand,
+      forceKillLabelIndex,
+    );
+    const portReleasedLabelIndex = content.indexOf(
+      portReleasedLabel,
+      forceKillCommandIndex,
+    );
     const runIndex = content.indexOf(runCommand, portReleasedLabelIndex);
 
     expect(endIndex).toBeGreaterThanOrEqual(0);
@@ -72,7 +90,9 @@ describe("restart-helper", () => {
       });
       expect(scriptPath.endsWith(".sh")).toBe(true);
       expect(content).toContain("#!/bin/sh");
-      expect(content).toContain("systemctl --user restart 'openclaw-gateway.service'");
+      expect(content).toContain(
+        "systemctl --user restart 'openclaw-gateway.service'",
+      );
       // Script should self-cleanup
       expect(content).toContain('rm -f "$0"');
       await cleanupScript(scriptPath);
@@ -84,7 +104,9 @@ describe("restart-helper", () => {
         OPENCLAW_PROFILE: "default",
         OPENCLAW_SYSTEMD_UNIT: "custom-gateway",
       });
-      expect(content).toContain("systemctl --user restart 'custom-gateway.service'");
+      expect(content).toContain(
+        "systemctl --user restart 'custom-gateway.service'",
+      );
       await cleanupScript(scriptPath);
     });
 
@@ -97,7 +119,9 @@ describe("restart-helper", () => {
       });
       expect(scriptPath.endsWith(".sh")).toBe(true);
       expect(content).toContain("#!/bin/sh");
-      expect(content).toContain("launchctl kickstart -k 'gui/501/ai.openclaw.gateway'");
+      expect(content).toContain(
+        "launchctl kickstart -k 'gui/501/ai.openclaw.gateway'",
+      );
       expect(content).toContain('rm -f "$0"');
       await cleanupScript(scriptPath);
     });
@@ -110,7 +134,9 @@ describe("restart-helper", () => {
         OPENCLAW_PROFILE: "default",
         OPENCLAW_LAUNCHD_LABEL: "com.custom.openclaw",
       });
-      expect(content).toContain("launchctl kickstart -k 'gui/501/com.custom.openclaw'");
+      expect(content).toContain(
+        "launchctl kickstart -k 'gui/501/com.custom.openclaw'",
+      );
       await cleanupScript(scriptPath);
     });
 
@@ -137,8 +163,12 @@ describe("restart-helper", () => {
         OPENCLAW_PROFILE: "default",
         OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Gateway (custom)",
       });
-      expect(content).toContain('schtasks /End /TN "OpenClaw Gateway (custom)"');
-      expect(content).toContain('schtasks /Run /TN "OpenClaw Gateway (custom)"');
+      expect(content).toContain(
+        'schtasks /End /TN "OpenClaw Gateway (custom)"',
+      );
+      expect(content).toContain(
+        'schtasks /Run /TN "OpenClaw Gateway (custom)"',
+      );
       expectWindowsRestartWaitOrdering(content);
       await cleanupScript(scriptPath);
     });
@@ -153,7 +183,9 @@ describe("restart-helper", () => {
         },
         customPort,
       );
-      expect(content).toContain(`netstat -ano | findstr /R /C:":${customPort} .*LISTENING" >nul`);
+      expect(content).toContain(
+        `netstat -ano | findstr /R /C:":${customPort} .*LISTENING" >nul`,
+      );
       expect(content).toContain(
         `for /f "tokens=5" %%P in ('netstat -ano ^| findstr /R /C:":${customPort} .*LISTENING"') do (`,
       );
@@ -187,7 +219,9 @@ describe("restart-helper", () => {
       const { scriptPath, content } = await prepareAndReadScript({
         OPENCLAW_PROFILE: "production",
       });
-      expect(content).toContain('schtasks /End /TN "OpenClaw Gateway (production)"');
+      expect(content).toContain(
+        'schtasks /End /TN "OpenClaw Gateway (production)"',
+      );
       expectWindowsRestartWaitOrdering(content);
       await cleanupScript(scriptPath);
     });

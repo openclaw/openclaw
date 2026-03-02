@@ -28,7 +28,9 @@ describe("resolveOpencodeZenAlias", () => {
   });
 
   it("returns input if no alias exists", () => {
-    expect(resolveOpencodeZenAlias("some-unknown-model")).toBe("some-unknown-model");
+    expect(resolveOpencodeZenAlias("some-unknown-model")).toBe(
+      "some-unknown-model",
+    );
   });
 
   it("is case-insensitive", () => {
@@ -39,13 +41,19 @@ describe("resolveOpencodeZenAlias", () => {
 
 describe("resolveOpencodeZenModelApi", () => {
   it("maps APIs by model family", () => {
-    expect(resolveOpencodeZenModelApi("claude-opus-4-6")).toBe("anthropic-messages");
-    expect(resolveOpencodeZenModelApi("gemini-3-pro")).toBe("google-generative-ai");
+    expect(resolveOpencodeZenModelApi("claude-opus-4-6")).toBe(
+      "anthropic-messages",
+    );
+    expect(resolveOpencodeZenModelApi("gemini-3-pro")).toBe(
+      "google-generative-ai",
+    );
     expect(resolveOpencodeZenModelApi("gpt-5.2")).toBe("openai-responses");
     expect(resolveOpencodeZenModelApi("alpha-gd4")).toBe("openai-completions");
     expect(resolveOpencodeZenModelApi("big-pickle")).toBe("openai-completions");
     expect(resolveOpencodeZenModelApi("glm-4.7")).toBe("openai-completions");
-    expect(resolveOpencodeZenModelApi("some-unknown-model")).toBe("openai-completions");
+    expect(resolveOpencodeZenModelApi("some-unknown-model")).toBe(
+      "openai-completions",
+    );
   });
 });
 

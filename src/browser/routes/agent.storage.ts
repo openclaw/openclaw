@@ -5,7 +5,11 @@ import {
   resolveTargetIdFromQuery,
   withPlaywrightRouteContext,
 } from "./agent.shared.js";
-import type { BrowserRequest, BrowserResponse, BrowserRouteRegistrar } from "./types.js";
+import type {
+  BrowserRequest,
+  BrowserResponse,
+  BrowserRouteRegistrar,
+} from "./types.js";
 import { jsonError, toBoolean, toNumber, toStringOrEmpty } from "./utils.js";
 
 type StorageKind = "local" | "session";
@@ -54,7 +58,10 @@ function parseStorageMutationOrRespond(
   return parsed;
 }
 
-function parseStorageMutationFromRequest(req: BrowserRequest, res: BrowserResponse) {
+function parseStorageMutationFromRequest(
+  req: BrowserRequest,
+  res: BrowserResponse,
+) {
   const body = readBody(req);
   const parsed = parseStorageMutationOrRespond(res, req.params.kind, body);
   if (!parsed) {
@@ -89,7 +96,9 @@ export function registerBrowserAgentStorageRoutes(
     const body = readBody(req);
     const targetId = resolveTargetIdFromBody(body);
     const cookie =
-      body.cookie && typeof body.cookie === "object" && !Array.isArray(body.cookie)
+      body.cookie &&
+      typeof body.cookie === "object" &&
+      !Array.isArray(body.cookie)
         ? (body.cookie as Record<string, unknown>)
         : null;
     if (!cookie) {
@@ -183,7 +192,8 @@ export function registerBrowserAgentStorageRoutes(
     if (!key) {
       return jsonError(res, 400, "key is required");
     }
-    const value = typeof mutation.body.value === "string" ? mutation.body.value : "";
+    const value =
+      typeof mutation.body.value === "string" ? mutation.body.value : "";
 
     await withPlaywrightRouteContext({
       req,
@@ -256,7 +266,9 @@ export function registerBrowserAgentStorageRoutes(
     const body = readBody(req);
     const targetId = resolveTargetIdFromBody(body);
     const headers =
-      body.headers && typeof body.headers === "object" && !Array.isArray(body.headers)
+      body.headers &&
+      typeof body.headers === "object" &&
+      !Array.isArray(body.headers)
         ? (body.headers as Record<string, unknown>)
         : null;
     if (!headers) {
@@ -292,7 +304,8 @@ export function registerBrowserAgentStorageRoutes(
     const targetId = resolveTargetIdFromBody(body);
     const clear = toBoolean(body.clear) ?? false;
     const username = toStringOrEmpty(body.username) || undefined;
-    const password = typeof body.password === "string" ? body.password : undefined;
+    const password =
+      typeof body.password === "string" ? body.password : undefined;
 
     await withPlaywrightRouteContext({
       req,
@@ -348,13 +361,19 @@ export function registerBrowserAgentStorageRoutes(
     const targetId = resolveTargetIdFromBody(body);
     const schemeRaw = toStringOrEmpty(body.colorScheme);
     const colorScheme =
-      schemeRaw === "dark" || schemeRaw === "light" || schemeRaw === "no-preference"
+      schemeRaw === "dark" ||
+      schemeRaw === "light" ||
+      schemeRaw === "no-preference"
         ? schemeRaw
         : schemeRaw === "none"
           ? null
           : undefined;
     if (colorScheme === undefined) {
-      return jsonError(res, 400, "colorScheme must be dark|light|no-preference|none");
+      return jsonError(
+        res,
+        400,
+        "colorScheme must be dark|light|no-preference|none",
+      );
     }
 
     await withPlaywrightRouteContext({

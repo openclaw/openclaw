@@ -44,10 +44,14 @@ export function listMattermostAccountIds(cfg: OpenClawConfig): string[] {
 }
 
 export function resolveDefaultMattermostAccountId(cfg: OpenClawConfig): string {
-  const preferred = normalizeOptionalAccountId(cfg.channels?.mattermost?.defaultAccount);
+  const preferred = normalizeOptionalAccountId(
+    cfg.channels?.mattermost?.defaultAccount,
+  );
   if (
     preferred &&
-    listMattermostAccountIds(cfg).some((accountId) => normalizeAccountId(accountId) === preferred)
+    listMattermostAccountIds(cfg).some(
+      (accountId) => normalizeAccountId(accountId) === preferred,
+    )
   ) {
     return preferred;
   }
@@ -85,7 +89,9 @@ function mergeMattermostAccountConfig(
   return { ...base, ...account };
 }
 
-function resolveMattermostRequireMention(config: MattermostAccountConfig): boolean | undefined {
+function resolveMattermostRequireMention(
+  config: MattermostAccountConfig,
+): boolean | undefined {
   if (config.chatmode === "oncall") {
     return true;
   }
@@ -109,7 +115,9 @@ export function resolveMattermostAccount(params: {
   const enabled = baseEnabled && accountEnabled;
 
   const allowEnv = accountId === DEFAULT_ACCOUNT_ID;
-  const envToken = allowEnv ? process.env.MATTERMOST_BOT_TOKEN?.trim() : undefined;
+  const envToken = allowEnv
+    ? process.env.MATTERMOST_BOT_TOKEN?.trim()
+    : undefined;
   const envUrl = allowEnv ? process.env.MATTERMOST_URL?.trim() : undefined;
   const configToken = merged.botToken?.trim();
   const configUrl = merged.baseUrl?.trim();
@@ -117,8 +125,16 @@ export function resolveMattermostAccount(params: {
   const baseUrl = normalizeMattermostBaseUrl(configUrl || envUrl);
   const requireMention = resolveMattermostRequireMention(merged);
 
-  const botTokenSource: MattermostTokenSource = configToken ? "config" : envToken ? "env" : "none";
-  const baseUrlSource: MattermostBaseUrlSource = configUrl ? "config" : envUrl ? "env" : "none";
+  const botTokenSource: MattermostTokenSource = configToken
+    ? "config"
+    : envToken
+      ? "env"
+      : "none";
+  const baseUrlSource: MattermostBaseUrlSource = configUrl
+    ? "config"
+    : envUrl
+      ? "env"
+      : "none";
 
   return {
     accountId,
@@ -138,7 +154,9 @@ export function resolveMattermostAccount(params: {
   };
 }
 
-export function listEnabledMattermostAccounts(cfg: OpenClawConfig): ResolvedMattermostAccount[] {
+export function listEnabledMattermostAccounts(
+  cfg: OpenClawConfig,
+): ResolvedMattermostAccount[] {
   return listMattermostAccountIds(cfg)
     .map((accountId) => resolveMattermostAccount({ cfg, accountId }))
     .filter((account) => account.enabled);

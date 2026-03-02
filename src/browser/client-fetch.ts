@@ -98,7 +98,11 @@ function withLoopbackBrowserAuth(
   });
 }
 
-function enhanceBrowserFetchError(url: string, err: unknown, timeoutMs: number): Error {
+function enhanceBrowserFetchError(
+  url: string,
+  err: unknown,
+  timeoutMs: number,
+): Error {
   const isLocal = !isAbsoluteHttp(url);
   // Human-facing hint for logs/diagnostics.
   const operatorHint = isLocal
@@ -140,7 +144,9 @@ async function fetchHttpJson<T>(
       ctrl.abort(upstreamSignal.reason);
     } else {
       upstreamAbortListener = () => ctrl.abort(upstreamSignal.reason);
-      upstreamSignal.addEventListener("abort", upstreamAbortListener, { once: true });
+      upstreamSignal.addEventListener("abort", upstreamAbortListener, {
+        once: true,
+      });
     }
   }
 
@@ -174,7 +180,9 @@ export async function fetchBrowserJson<T>(
     if (!started) {
       throw new Error("browser control disabled");
     }
-    const dispatcher = createBrowserRouteDispatcher(createBrowserControlContext());
+    const dispatcher = createBrowserRouteDispatcher(
+      createBrowserControlContext(),
+    );
     const parsed = new URL(url, "http://localhost");
     const query: Record<string, unknown> = {};
     for (const [key, value] of parsed.searchParams.entries()) {
@@ -197,7 +205,9 @@ export async function fetchBrowserJson<T>(
         abortCtrl.abort(upstreamSignal.reason);
       } else {
         upstreamAbortListener = () => abortCtrl.abort(upstreamSignal.reason);
-        upstreamSignal.addEventListener("abort", upstreamAbortListener, { once: true });
+        upstreamSignal.addEventListener("abort", upstreamAbortListener, {
+          once: true,
+        });
       }
     }
 
@@ -205,13 +215,19 @@ export async function fetchBrowserJson<T>(
     const abortPromise: Promise<never> = abortCtrl.signal.aborted
       ? Promise.reject(abortCtrl.signal.reason ?? new Error("aborted"))
       : new Promise((_, reject) => {
-          abortListener = () => reject(abortCtrl.signal.reason ?? new Error("aborted"));
-          abortCtrl.signal.addEventListener("abort", abortListener, { once: true });
+          abortListener = () =>
+            reject(abortCtrl.signal.reason ?? new Error("aborted"));
+          abortCtrl.signal.addEventListener("abort", abortListener, {
+            once: true,
+          });
         });
 
     let timer: ReturnType<typeof setTimeout> | undefined;
     if (timeoutMs) {
-      timer = setTimeout(() => abortCtrl.abort(new Error("timed out")), timeoutMs);
+      timer = setTimeout(
+        () => abortCtrl.abort(new Error("timed out")),
+        timeoutMs,
+      );
     }
 
     const dispatchPromise = dispatcher.dispatch({
@@ -227,17 +243,19 @@ export async function fetchBrowserJson<T>(
       signal: abortCtrl.signal,
     });
 
-    const result = await Promise.race([dispatchPromise, abortPromise]).finally(() => {
-      if (timer) {
-        clearTimeout(timer);
-      }
-      if (abortListener) {
-        abortCtrl.signal.removeEventListener("abort", abortListener);
-      }
-      if (upstreamSignal && upstreamAbortListener) {
-        upstreamSignal.removeEventListener("abort", upstreamAbortListener);
-      }
-    });
+    const result = await Promise.race([dispatchPromise, abortPromise]).finally(
+      () => {
+        if (timer) {
+          clearTimeout(timer);
+        }
+        if (abortListener) {
+          abortCtrl.signal.removeEventListener("abort", abortListener);
+        }
+        if (upstreamSignal && upstreamAbortListener) {
+          upstreamSignal.removeEventListener("abort", upstreamAbortListener);
+        }
+      },
+    );
 
     if (result.status >= 400) {
       const message =

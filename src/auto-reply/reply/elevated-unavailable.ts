@@ -10,7 +10,9 @@ export function formatElevatedUnavailableMessage(params: {
     `elevated is not available right now (runtime=${params.runtimeSandboxed ? "sandboxed" : "direct"}).`,
   );
   if (params.failures.length > 0) {
-    lines.push(`Failing gates: ${params.failures.map((f) => `${f.gate} (${f.key})`).join(", ")}`);
+    lines.push(
+      `Failing gates: ${params.failures.map((f) => `${f.gate} (${f.key})`).join(", ")}`,
+    );
   } else {
     lines.push(
       "Failing gates: enabled (tools.elevated.enabled / agents.list[].tools.elevated.enabled), allowFrom (tools.elevated.allowFrom.<provider>).",

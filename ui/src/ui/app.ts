@@ -19,7 +19,10 @@ import {
   handleSendChat as handleSendChatInternal,
   removeQueuedMessage as removeQueuedMessageInternal,
 } from "./app-chat.ts";
-import { DEFAULT_CRON_FORM, DEFAULT_LOG_LEVEL_FILTERS } from "./app-defaults.ts";
+import {
+  DEFAULT_CRON_FORM,
+  DEFAULT_LOG_LEVEL_FILTERS,
+} from "./app-defaults.ts";
 import type { EventLogEntry } from "./app-events.ts";
 import { connectGateway as connectGatewayInternal } from "./app-gateway.ts";
 import {
@@ -56,7 +59,10 @@ import { loadAssistantIdentity as loadAssistantIdentityInternal } from "./contro
 import type { CronFieldErrors } from "./controllers/cron.ts";
 import type { DevicePairingList } from "./controllers/devices.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
-import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
+import type {
+  ExecApprovalsFile,
+  ExecApprovalsSnapshot,
+} from "./controllers/exec-approvals.ts";
 import type { SkillMessage } from "./controllers/skills.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 import type { Tab } from "./navigation.ts";
@@ -82,7 +88,11 @@ import type {
   StatusSummary,
   NostrProfile,
 } from "./types.ts";
-import { type ChatAttachment, type ChatQueueItem, type CronFormState } from "./ui-types.ts";
+import {
+  type ChatAttachment,
+  type ChatQueueItem,
+  type CronFormState,
+} from "./ui-types.ts";
 import { generateUUID } from "./uuid.ts";
 import type { NostrProfileFormState } from "./views/channels.nostr-profile-form.ts";
 
@@ -104,7 +114,12 @@ function resolveOnboardingMode(): boolean {
     return false;
   }
   const normalized = raw.trim().toLowerCase();
-  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
+  return (
+    normalized === "1" ||
+    normalized === "true" ||
+    normalized === "yes" ||
+    normalized === "on"
+  );
 }
 
 @customElement("openclaw-app")
@@ -221,8 +236,13 @@ export class OpenClawApp extends LitElement {
   @state() toolsCatalogLoading = false;
   @state() toolsCatalogError: string | null = null;
   @state() toolsCatalogResult: ToolsCatalogResult | null = null;
-  @state() agentsPanel: "overview" | "files" | "tools" | "skills" | "channels" | "cron" =
-    "overview";
+  @state() agentsPanel:
+    | "overview"
+    | "files"
+    | "tools"
+    | "skills"
+    | "channels"
+    | "cron" = "overview";
   @state() agentFilesLoading = false;
   @state() agentFilesError: string | null = null;
   @state() agentFilesList: AgentsFilesListResult | null = null;
@@ -249,7 +269,8 @@ export class OpenClawApp extends LitElement {
 
   @state() usageLoading = false;
   @state() usageResult: import("./types.js").SessionsUsageResult | null = null;
-  @state() usageCostSummary: import("./types.js").CostUsageSummary | null = null;
+  @state() usageCostSummary: import("./types.js").CostUsageSummary | null =
+    null;
   @state() usageError: string | null = null;
   @state() usageStartDate = (() => {
     const d = new Date();
@@ -266,18 +287,26 @@ export class OpenClawApp extends LitElement {
   @state() usageDailyChartMode: "total" | "by-type" = "by-type";
   @state() usageTimeSeriesMode: "cumulative" | "per-turn" = "per-turn";
   @state() usageTimeSeriesBreakdownMode: "total" | "by-type" = "by-type";
-  @state() usageTimeSeries: import("./types.js").SessionUsageTimeSeries | null = null;
+  @state() usageTimeSeries: import("./types.js").SessionUsageTimeSeries | null =
+    null;
   @state() usageTimeSeriesLoading = false;
   @state() usageTimeSeriesCursorStart: number | null = null;
   @state() usageTimeSeriesCursorEnd: number | null = null;
-  @state() usageSessionLogs: import("./views/usage.js").SessionLogEntry[] | null = null;
+  @state() usageSessionLogs:
+    | import("./views/usage.js").SessionLogEntry[]
+    | null = null;
   @state() usageSessionLogsLoading = false;
   @state() usageSessionLogsExpanded = false;
   // Applied query (used to filter the already-loaded sessions list client-side).
   @state() usageQuery = "";
   // Draft query text (updates immediately as the user types; applied via debounce or "Search").
   @state() usageQueryDraft = "";
-  @state() usageSessionSort: "tokens" | "cost" | "recent" | "messages" | "errors" = "recent";
+  @state() usageSessionSort:
+    | "tokens"
+    | "cost"
+    | "recent"
+    | "messages"
+    | "errors" = "recent";
   @state() usageSessionSortDir: "desc" | "asc" = "desc";
   @state() usageRecentSessions: string[] = [];
   @state() usageTimeZone: "local" | "utc" = "local";
@@ -294,7 +323,8 @@ export class OpenClawApp extends LitElement {
     "errors",
     "duration",
   ];
-  @state() usageLogFilterRoles: import("./views/usage.js").SessionLogRole[] = [];
+  @state() usageLogFilterRoles: import("./views/usage.js").SessionLogRole[] =
+    [];
   @state() usageLogFilterTools: string[] = [];
   @state() usageLogFilterHasTools = false;
   @state() usageLogFilterQuery = "";
@@ -310,10 +340,13 @@ export class OpenClawApp extends LitElement {
   @state() cronJobsNextOffset: number | null = null;
   @state() cronJobsLimit = 50;
   @state() cronJobsQuery = "";
-  @state() cronJobsEnabledFilter: import("./types.js").CronJobsEnabledFilter = "all";
-  @state() cronJobsScheduleKindFilter: import("./controllers/cron.js").CronJobsScheduleKindFilter =
+  @state() cronJobsEnabledFilter: import("./types.js").CronJobsEnabledFilter =
     "all";
-  @state() cronJobsLastStatusFilter: import("./controllers/cron.js").CronJobsLastStatusFilter =
+  @state()
+  cronJobsScheduleKindFilter: import("./controllers/cron.js").CronJobsScheduleKindFilter =
+    "all";
+  @state()
+  cronJobsLastStatusFilter: import("./controllers/cron.js").CronJobsLastStatusFilter =
     "all";
   @state() cronJobsSortBy: import("./types.js").CronJobsSortBy = "nextRunAtMs";
   @state() cronJobsSortDir: import("./types.js").CronSortDir = "asc";
@@ -331,8 +364,10 @@ export class OpenClawApp extends LitElement {
   @state() cronRunsLimit = 50;
   @state() cronRunsScope: import("./types.js").CronRunScope = "all";
   @state() cronRunsStatuses: import("./types.js").CronRunsStatusValue[] = [];
-  @state() cronRunsDeliveryStatuses: import("./types.js").CronDeliveryStatus[] = [];
-  @state() cronRunsStatusFilter: import("./types.js").CronRunsStatusFilter = "all";
+  @state() cronRunsDeliveryStatuses: import("./types.js").CronDeliveryStatus[] =
+    [];
+  @state() cronRunsStatusFilter: import("./types.js").CronRunsStatusFilter =
+    "all";
   @state() cronRunsQuery = "";
   @state() cronRunsSortDir: import("./types.js").CronSortDir = "desc";
   @state() cronModelSuggestions: string[] = [];
@@ -389,9 +424,12 @@ export class OpenClawApp extends LitElement {
   refreshSessionsAfterChat = new Set<string>();
   basePath = "";
   private popStateHandler = () =>
-    onPopStateInternal(this as unknown as Parameters<typeof onPopStateInternal>[0]);
+    onPopStateInternal(
+      this as unknown as Parameters<typeof onPopStateInternal>[0],
+    );
   private themeMedia: MediaQueryList | null = null;
-  private themeMediaHandler: ((event: MediaQueryListEvent) => void) | null = null;
+  private themeMediaHandler: ((event: MediaQueryListEvent) => void) | null =
+    null;
   private topbarObserver: ResizeObserver | null = null;
 
   createRenderRoot() {
@@ -404,20 +442,29 @@ export class OpenClawApp extends LitElement {
   }
 
   protected firstUpdated() {
-    handleFirstUpdated(this as unknown as Parameters<typeof handleFirstUpdated>[0]);
+    handleFirstUpdated(
+      this as unknown as Parameters<typeof handleFirstUpdated>[0],
+    );
   }
 
   disconnectedCallback() {
-    handleDisconnected(this as unknown as Parameters<typeof handleDisconnected>[0]);
+    handleDisconnected(
+      this as unknown as Parameters<typeof handleDisconnected>[0],
+    );
     super.disconnectedCallback();
   }
 
   protected updated(changed: Map<PropertyKey, unknown>) {
-    handleUpdated(this as unknown as Parameters<typeof handleUpdated>[0], changed);
+    handleUpdated(
+      this as unknown as Parameters<typeof handleUpdated>[0],
+      changed,
+    );
   }
 
   connect() {
-    connectGatewayInternal(this as unknown as Parameters<typeof connectGatewayInternal>[0]);
+    connectGatewayInternal(
+      this as unknown as Parameters<typeof connectGatewayInternal>[0],
+    );
   }
 
   handleChatScroll(event: Event) {
@@ -439,15 +486,21 @@ export class OpenClawApp extends LitElement {
   }
 
   resetToolStream() {
-    resetToolStreamInternal(this as unknown as Parameters<typeof resetToolStreamInternal>[0]);
+    resetToolStreamInternal(
+      this as unknown as Parameters<typeof resetToolStreamInternal>[0],
+    );
   }
 
   resetChatScroll() {
-    resetChatScrollInternal(this as unknown as Parameters<typeof resetChatScrollInternal>[0]);
+    resetChatScrollInternal(
+      this as unknown as Parameters<typeof resetChatScrollInternal>[0],
+    );
   }
 
   scrollToBottom(opts?: { smooth?: boolean }) {
-    resetChatScrollInternal(this as unknown as Parameters<typeof resetChatScrollInternal>[0]);
+    resetChatScrollInternal(
+      this as unknown as Parameters<typeof resetChatScrollInternal>[0],
+    );
     scheduleChatScrollInternal(
       this as unknown as Parameters<typeof scheduleChatScrollInternal>[0],
       true,
@@ -460,27 +513,43 @@ export class OpenClawApp extends LitElement {
   }
 
   applySettings(next: UiSettings) {
-    applySettingsInternal(this as unknown as Parameters<typeof applySettingsInternal>[0], next);
+    applySettingsInternal(
+      this as unknown as Parameters<typeof applySettingsInternal>[0],
+      next,
+    );
   }
 
   setTab(next: Tab) {
-    setTabInternal(this as unknown as Parameters<typeof setTabInternal>[0], next);
+    setTabInternal(
+      this as unknown as Parameters<typeof setTabInternal>[0],
+      next,
+    );
   }
 
   setTheme(next: ThemeMode, context?: Parameters<typeof setThemeInternal>[2]) {
-    setThemeInternal(this as unknown as Parameters<typeof setThemeInternal>[0], next, context);
+    setThemeInternal(
+      this as unknown as Parameters<typeof setThemeInternal>[0],
+      next,
+      context,
+    );
   }
 
   async loadOverview() {
-    await loadOverviewInternal(this as unknown as Parameters<typeof loadOverviewInternal>[0]);
+    await loadOverviewInternal(
+      this as unknown as Parameters<typeof loadOverviewInternal>[0],
+    );
   }
 
   async loadCron() {
-    await loadCronInternal(this as unknown as Parameters<typeof loadCronInternal>[0]);
+    await loadCronInternal(
+      this as unknown as Parameters<typeof loadCronInternal>[0],
+    );
   }
 
   async handleAbortChat() {
-    await handleAbortChatInternal(this as unknown as Parameters<typeof handleAbortChatInternal>[0]);
+    await handleAbortChatInternal(
+      this as unknown as Parameters<typeof handleAbortChatInternal>[0],
+    );
   }
 
   removeQueuedMessage(id: string) {
@@ -545,7 +614,9 @@ export class OpenClawApp extends LitElement {
     handleNostrProfileToggleAdvancedInternal(this);
   }
 
-  async handleExecApprovalDecision(decision: "allow-once" | "allow-always" | "deny") {
+  async handleExecApprovalDecision(
+    decision: "allow-once" | "allow-always" | "deny",
+  ) {
     const active = this.execApprovalQueue[0];
     if (!active || !this.client || this.execApprovalBusy) {
       return;
@@ -557,7 +628,9 @@ export class OpenClawApp extends LitElement {
         id: active.id,
         decision,
       });
-      this.execApprovalQueue = this.execApprovalQueue.filter((entry) => entry.id !== active.id);
+      this.execApprovalQueue = this.execApprovalQueue.filter(
+        (entry) => entry.id !== active.id,
+      );
     } catch (err) {
       this.execApprovalError = `Exec approval failed: ${String(err)}`;
     } finally {
@@ -571,10 +644,13 @@ export class OpenClawApp extends LitElement {
       return;
     }
     this.pendingGatewayUrl = null;
-    applySettingsInternal(this as unknown as Parameters<typeof applySettingsInternal>[0], {
-      ...this.settings,
-      gatewayUrl: nextGatewayUrl,
-    });
+    applySettingsInternal(
+      this as unknown as Parameters<typeof applySettingsInternal>[0],
+      {
+        ...this.settings,
+        gatewayUrl: nextGatewayUrl,
+      },
+    );
     this.connect();
   }
 

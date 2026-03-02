@@ -9,7 +9,10 @@ export type EchoTracker = {
   ) => void;
   has: (key: string) => boolean;
   forget: (key: string) => void;
-  buildCombinedKey: (params: { sessionKey: string; combinedBody: string }) => string;
+  buildCombinedKey: (params: {
+    sessionKey: string;
+    combinedBody: string;
+  }) => string;
 };
 
 export function createEchoTracker(params: {

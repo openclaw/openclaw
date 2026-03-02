@@ -21,7 +21,8 @@ const GATEWAY_E2E_TIMEOUT_MS = 30_000;
 
 describe("gateway e2e", () => {
   beforeAll(async () => {
-    ({ writeConfigFile, resolveConfigPath } = await import("../config/config.js"));
+    ({ writeConfigFile, resolveConfigPath } =
+      await import("../config/config.js"));
   });
 
   it(
@@ -41,7 +42,9 @@ describe("gateway e2e", () => {
 
       const { baseUrl: openaiBaseUrl, restore } = installOpenAiResponsesMock();
 
-      const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-mock-home-"));
+      const tempHome = await fs.mkdtemp(
+        path.join(os.tmpdir(), "openclaw-gw-mock-home-"),
+      );
       process.env.HOME = tempHome;
       process.env.OPENCLAW_SKIP_CHANNELS = "1";
       process.env.OPENCLAW_SKIP_GMAIL_WATCHER = "1";
@@ -57,7 +60,10 @@ describe("gateway e2e", () => {
 
       const nonceA = randomUUID();
       const nonceB = randomUUID();
-      const toolProbePath = path.join(workspaceDir, `.openclaw-tool-probe.${nonceA}.txt`);
+      const toolProbePath = path.join(
+        workspaceDir,
+        `.openclaw-tool-probe.${nonceA}.txt`,
+      );
       await fs.writeFile(toolProbePath, `nonceA=${nonceA}\nnonceB=${nonceB}\n`);
 
       const configDir = path.join(tempHome, ".openclaw");
@@ -144,7 +150,9 @@ describe("gateway e2e", () => {
       process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER = "1";
       delete process.env.OPENCLAW_GATEWAY_TOKEN;
 
-      const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-wizard-home-"));
+      const tempHome = await fs.mkdtemp(
+        path.join(os.tmpdir(), "openclaw-wizard-home-"),
+      );
       process.env.HOME = tempHome;
       delete process.env.OPENCLAW_STATE_DIR;
       delete process.env.OPENCLAW_CONFIG_PATH;
@@ -179,7 +187,13 @@ describe("gateway e2e", () => {
           status: "running" | "done" | "cancelled" | "error";
           step?: {
             id: string;
-            type: "note" | "select" | "text" | "confirm" | "multiselect" | "progress";
+            type:
+              | "note"
+              | "select"
+              | "text"
+              | "confirm"
+              | "multiselect"
+              | "progress";
           };
           error?: string;
         }>("wizard.start", { mode: "local" });
@@ -206,11 +220,15 @@ describe("gateway e2e", () => {
         expect(didSendToken).toBe(true);
         expect(next.status).toBe("done");
 
-        const parsed = JSON.parse(await fs.readFile(resolveConfigPath(), "utf8"));
+        const parsed = JSON.parse(
+          await fs.readFile(resolveConfigPath(), "utf8"),
+        );
         const token = (parsed as Record<string, unknown>)?.gateway as
           | Record<string, unknown>
           | undefined;
-        expect((token?.auth as { token?: string } | undefined)?.token).toBe(wizardToken);
+        expect((token?.auth as { token?: string } | undefined)?.token).toBe(
+          wizardToken,
+        );
       } finally {
         client.stop();
         await server.close({ reason: "wizard e2e complete" });

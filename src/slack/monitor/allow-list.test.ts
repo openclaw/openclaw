@@ -9,14 +9,19 @@ import {
 
 describe("slack/allow-list", () => {
   it("normalizes lists and slugs", () => {
-    expect(normalizeAllowList(["  Alice  ", 7, "", "  "])).toEqual(["Alice", "7"]);
+    expect(normalizeAllowList(["  Alice  ", 7, "", "  "])).toEqual([
+      "Alice",
+      "7",
+    ]);
     expect(normalizeAllowListLower(["  Alice  ", 7])).toEqual(["alice", "7"]);
     expect(normalizeSlackSlug(" Team Space  ")).toBe("team-space");
     expect(normalizeSlackSlug(" #Ops.Room ")).toBe("#ops.room");
   });
 
   it("matches wildcard and id candidates by default", () => {
-    expect(resolveSlackAllowListMatch({ allowList: ["*"], id: "u1", name: "alice" })).toEqual({
+    expect(
+      resolveSlackAllowListMatch({ allowList: ["*"], id: "u1", name: "alice" }),
+    ).toEqual({
       allowed: true,
       matchKey: "*",
       matchSource: "wildcard",
@@ -57,9 +62,19 @@ describe("slack/allow-list", () => {
   });
 
   it("allows all users when allowList is empty and denies unknown entries", () => {
-    expect(resolveSlackUserAllowed({ allowList: [], userId: "u1", userName: "alice" })).toBe(true);
-    expect(resolveSlackUserAllowed({ allowList: ["u2"], userId: "u1", userName: "alice" })).toBe(
-      false,
-    );
+    expect(
+      resolveSlackUserAllowed({
+        allowList: [],
+        userId: "u1",
+        userName: "alice",
+      }),
+    ).toBe(true);
+    expect(
+      resolveSlackUserAllowed({
+        allowList: ["u2"],
+        userId: "u1",
+        userName: "alice",
+      }),
+    ).toBe(false);
   });
 });

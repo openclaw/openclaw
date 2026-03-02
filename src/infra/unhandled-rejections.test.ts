@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { isAbortError, isTransientNetworkError } from "./unhandled-rejections.js";
+import {
+  isAbortError,
+  isTransientNetworkError,
+} from "./unhandled-rejections.js";
 
 describe("isAbortError", () => {
   it("returns true for error with name AbortError", () => {
@@ -15,7 +18,9 @@ describe("isAbortError", () => {
 
   it("returns true for undici-style AbortError", () => {
     // Node's undici throws errors with this exact message
-    const error = Object.assign(new Error("This operation was aborted"), { name: "AbortError" });
+    const error = Object.assign(new Error("This operation was aborted"), {
+      name: "AbortError",
+    });
     expect(isAbortError(error)).toBe(true);
   });
 
@@ -74,34 +79,47 @@ describe("isTransientNetworkError", () => {
   });
 
   it("returns true for fetch failed with network cause", () => {
-    const cause = Object.assign(new Error("getaddrinfo ENOTFOUND"), { code: "ENOTFOUND" });
+    const cause = Object.assign(new Error("getaddrinfo ENOTFOUND"), {
+      code: "ENOTFOUND",
+    });
     const error = Object.assign(new TypeError("fetch failed"), { cause });
     expect(isTransientNetworkError(error)).toBe(true);
   });
 
   it("returns true for fetch failed with unclassified cause", () => {
-    const cause = Object.assign(new Error("unknown socket state"), { code: "UNKNOWN" });
+    const cause = Object.assign(new Error("unknown socket state"), {
+      code: "UNKNOWN",
+    });
     const error = Object.assign(new TypeError("fetch failed"), { cause });
     expect(isTransientNetworkError(error)).toBe(true);
   });
 
   it("returns true for nested cause chain with network error", () => {
-    const innerCause = Object.assign(new Error("connection reset"), { code: "ECONNRESET" });
-    const outerCause = Object.assign(new Error("wrapper"), { cause: innerCause });
-    const error = Object.assign(new TypeError("fetch failed"), { cause: outerCause });
+    const innerCause = Object.assign(new Error("connection reset"), {
+      code: "ECONNRESET",
+    });
+    const outerCause = Object.assign(new Error("wrapper"), {
+      cause: innerCause,
+    });
+    const error = Object.assign(new TypeError("fetch failed"), {
+      cause: outerCause,
+    });
     expect(isTransientNetworkError(error)).toBe(true);
   });
 
   it("returns true for Slack request errors that wrap network codes in .original", () => {
-    const error = Object.assign(new Error("A request error occurred: getaddrinfo EAI_AGAIN"), {
-      code: "slack_webapi_request_error",
-      original: {
-        errno: -3001,
-        code: "EAI_AGAIN",
-        syscall: "getaddrinfo",
-        hostname: "slack.com",
+    const error = Object.assign(
+      new Error("A request error occurred: getaddrinfo EAI_AGAIN"),
+      {
+        code: "slack_webapi_request_error",
+        original: {
+          errno: -3001,
+          code: "EAI_AGAIN",
+          syscall: "getaddrinfo",
+          hostname: "slack.com",
+        },
       },
-    });
+    );
     expect(isTransientNetworkError(error)).toBe(true);
   });
 
@@ -117,15 +135,23 @@ describe("isTransientNetworkError", () => {
   });
 
   it("returns true for AggregateError containing network errors", () => {
-    const networkError = Object.assign(new Error("timeout"), { code: "ETIMEDOUT" });
+    const networkError = Object.assign(new Error("timeout"), {
+      code: "ETIMEDOUT",
+    });
     const error = new AggregateError([networkError], "Multiple errors");
     expect(isTransientNetworkError(error)).toBe(true);
   });
 
   it("returns false for regular errors without network codes", () => {
-    expect(isTransientNetworkError(new Error("Something went wrong"))).toBe(false);
-    expect(isTransientNetworkError(new TypeError("Cannot read property"))).toBe(false);
-    expect(isTransientNetworkError(new RangeError("Invalid array length"))).toBe(false);
+    expect(isTransientNetworkError(new Error("Something went wrong"))).toBe(
+      false,
+    );
+    expect(isTransientNetworkError(new TypeError("Cannot read property"))).toBe(
+      false,
+    );
+    expect(
+      isTransientNetworkError(new RangeError("Invalid array length")),
+    ).toBe(false);
   });
 
   it("returns false for errors with non-network codes", () => {
@@ -153,7 +179,10 @@ describe("isTransientNetworkError", () => {
   );
 
   it("returns false for AggregateError with only non-network errors", () => {
-    const error = new AggregateError([new Error("regular error")], "Multiple errors");
+    const error = new AggregateError(
+      [new Error("regular error")],
+      "Multiple errors",
+    );
     expect(isTransientNetworkError(error)).toBe(false);
   });
 });

@@ -102,7 +102,10 @@ export async function sweepCronRunSessions(params: {
       }
     });
   } catch (err) {
-    params.log.warn({ err: String(err) }, "cron-reaper: failed to sweep session store");
+    params.log.warn(
+      { err: String(err) },
+      "cron-reaper: failed to sweep session store",
+    );
     return { swept: false, pruned: 0 };
   }
 
@@ -141,7 +144,10 @@ export async function sweepCronRunSessions(params: {
         });
       }
     } catch (err) {
-      params.log.warn({ err: String(err) }, "cron-reaper: transcript cleanup failed");
+      params.log.warn(
+        { err: String(err) },
+        "cron-reaper: transcript cleanup failed",
+      );
     }
   }
 

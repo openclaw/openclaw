@@ -55,15 +55,24 @@ describe("resolveNativeSkillsEnabled", () => {
 
 describe("resolveNativeCommandsEnabled", () => {
   it("follows the same provider default heuristic", () => {
-    expect(resolveNativeCommandsEnabled({ providerId: "discord", globalSetting: "auto" })).toBe(
-      true,
-    );
-    expect(resolveNativeCommandsEnabled({ providerId: "telegram", globalSetting: "auto" })).toBe(
-      true,
-    );
-    expect(resolveNativeCommandsEnabled({ providerId: "slack", globalSetting: "auto" })).toBe(
-      false,
-    );
+    expect(
+      resolveNativeCommandsEnabled({
+        providerId: "discord",
+        globalSetting: "auto",
+      }),
+    ).toBe(true);
+    expect(
+      resolveNativeCommandsEnabled({
+        providerId: "telegram",
+        globalSetting: "auto",
+      }),
+    ).toBe(true);
+    expect(
+      resolveNativeCommandsEnabled({
+        providerId: "slack",
+        globalSetting: "auto",
+      }),
+    ).toBe(false);
   });
 
   it("honors explicit provider/global booleans", () => {
@@ -86,16 +95,28 @@ describe("resolveNativeCommandsEnabled", () => {
 describe("isNativeCommandsExplicitlyDisabled", () => {
   it("returns true only for explicit false at provider or fallback global", () => {
     expect(
-      isNativeCommandsExplicitlyDisabled({ providerSetting: false, globalSetting: true }),
+      isNativeCommandsExplicitlyDisabled({
+        providerSetting: false,
+        globalSetting: true,
+      }),
     ).toBe(true);
     expect(
-      isNativeCommandsExplicitlyDisabled({ providerSetting: undefined, globalSetting: false }),
+      isNativeCommandsExplicitlyDisabled({
+        providerSetting: undefined,
+        globalSetting: false,
+      }),
     ).toBe(true);
     expect(
-      isNativeCommandsExplicitlyDisabled({ providerSetting: true, globalSetting: false }),
+      isNativeCommandsExplicitlyDisabled({
+        providerSetting: true,
+        globalSetting: false,
+      }),
     ).toBe(false);
     expect(
-      isNativeCommandsExplicitlyDisabled({ providerSetting: "auto", globalSetting: false }),
+      isNativeCommandsExplicitlyDisabled({
+        providerSetting: "auto",
+        globalSetting: false,
+      }),
     ).toBe(false);
   });
 });
@@ -120,8 +141,12 @@ describe("isRestartEnabled", () => {
 
 describe("isCommandFlagEnabled", () => {
   it("requires own boolean true", () => {
-    expect(isCommandFlagEnabled({ commands: { bash: true } }, "bash")).toBe(true);
-    expect(isCommandFlagEnabled({ commands: { bash: false } }, "bash")).toBe(false);
+    expect(isCommandFlagEnabled({ commands: { bash: true } }, "bash")).toBe(
+      true,
+    );
+    expect(isCommandFlagEnabled({ commands: { bash: false } }, "bash")).toBe(
+      false,
+    );
     expect(
       isCommandFlagEnabled(
         {

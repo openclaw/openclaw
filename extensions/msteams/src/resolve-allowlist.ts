@@ -28,7 +28,9 @@ function stripProviderPrefix(raw: string): string {
   return raw.replace(/^(msteams|teams):/i, "");
 }
 
-export function normalizeMSTeamsMessagingTarget(raw: string): string | undefined {
+export function normalizeMSTeamsMessagingTarget(
+  raw: string,
+): string | undefined {
   let trimmed = raw.trim();
   if (!trimmed) {
     return undefined;
@@ -72,7 +74,10 @@ function normalizeMSTeamsChannelKey(raw?: string | null): string | undefined {
   return trimmed || undefined;
 }
 
-export function parseMSTeamsTeamChannelInput(raw: string): { team?: string; channel?: string } {
+export function parseMSTeamsTeamChannelInput(raw: string): {
+  team?: string;
+  channel?: string;
+} {
   const trimmed = stripProviderPrefix(raw).trim();
   if (!trimmed) {
     return {};
@@ -80,7 +85,9 @@ export function parseMSTeamsTeamChannelInput(raw: string): { team?: string; chan
   const parts = trimmed.split("/");
   const team = normalizeMSTeamsTeamKey(parts[0] ?? "");
   const channel =
-    parts.length > 1 ? normalizeMSTeamsChannelKey(parts.slice(1).join("/")) : undefined;
+    parts.length > 1
+      ? normalizeMSTeamsChannelKey(parts.slice(1).join("/"))
+      : undefined;
   return {
     ...(team ? { team } : {}),
     ...(channel ? { channel } : {}),
@@ -140,7 +147,9 @@ export async function resolveMSTeamsChannelAllowlist(params: {
     const channels = await listChannelsForTeam(token, teamId);
     const channelMatch =
       channels.find((item) => item.id === channel) ??
-      channels.find((item) => item.displayName?.toLowerCase() === channel.toLowerCase()) ??
+      channels.find(
+        (item) => item.displayName?.toLowerCase() === channel.toLowerCase(),
+      ) ??
       channels.find((item) =>
         item.displayName?.toLowerCase().includes(channel.toLowerCase() ?? ""),
       );

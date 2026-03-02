@@ -4,7 +4,10 @@ import { describe, expect, it } from "vitest";
 import { withTempHome } from "./home-env.test-harness.js";
 import { createConfigIO } from "./io.js";
 
-async function waitForPersistedSecret(configPath: string, expectedSecret: string): Promise<void> {
+async function waitForPersistedSecret(
+  configPath: string,
+  expectedSecret: string,
+): Promise<void> {
   const deadline = Date.now() + 3_000;
   while (Date.now() < deadline) {
     const raw = await fs.readFile(configPath, "utf-8");

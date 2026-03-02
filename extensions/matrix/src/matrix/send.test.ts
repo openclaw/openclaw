@@ -40,13 +40,16 @@ const runtimeStub = {
     loadConfig: () => ({}),
   },
   media: {
-    loadWebMedia: loadWebMediaMock as unknown as PluginRuntime["media"]["loadWebMedia"],
+    loadWebMedia:
+      loadWebMediaMock as unknown as PluginRuntime["media"]["loadWebMedia"],
     mediaKindFromMime:
       mediaKindFromMimeMock as unknown as PluginRuntime["media"]["mediaKindFromMime"],
     isVoiceCompatibleAudio:
       isVoiceCompatibleAudioMock as unknown as PluginRuntime["media"]["isVoiceCompatibleAudio"],
-    getImageMetadata: getImageMetadataMock as unknown as PluginRuntime["media"]["getImageMetadata"],
-    resizeToJpeg: resizeToJpegMock as unknown as PluginRuntime["media"]["resizeToJpeg"],
+    getImageMetadata:
+      getImageMetadataMock as unknown as PluginRuntime["media"]["getImageMetadata"],
+    resizeToJpeg:
+      resizeToJpegMock as unknown as PluginRuntime["media"]["resizeToJpeg"],
   },
   channel: {
     text: {

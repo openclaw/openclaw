@@ -39,7 +39,9 @@ describe("fetchRemoteEmbeddingVectors", () => {
   });
 
   it("throws a status-rich error on non-ok responses", async () => {
-    postJsonMock.mockRejectedValueOnce(new Error("embedding fetch failed: 403 forbidden"));
+    postJsonMock.mockRejectedValueOnce(
+      new Error("embedding fetch failed: 403 forbidden"),
+    );
 
     await expect(
       fetchRemoteEmbeddingVectors({

@@ -33,7 +33,10 @@ export type SkillInstallResult = {
   warnings?: string[];
 };
 
-function withWarnings(result: SkillInstallResult, warnings: string[]): SkillInstallResult {
+function withWarnings(
+  result: SkillInstallResult,
+  warnings: string[],
+): SkillInstallResult {
   if (warnings.length === 0) {
     return result;
   }
@@ -55,7 +58,9 @@ function formatScanFindingDetail(
   return `${finding.message} (${filePath}:${finding.line})`;
 }
 
-async function collectSkillInstallScanWarnings(entry: SkillEntry): Promise<string[]> {
+async function collectSkillInstallScanWarnings(
+  entry: SkillEntry,
+): Promise<string[]> {
   const warnings: string[] = [];
   const skillName = entry.skill.name;
   const skillDir = path.resolve(entry.skill.baseDir);
@@ -88,7 +93,10 @@ function resolveInstallId(spec: SkillInstallSpec, index: number): string {
   return (spec.id ?? `${spec.kind}-${index}`).trim();
 }
 
-function findInstallSpec(entry: SkillEntry, installId: string): SkillInstallSpec | undefined {
+function findInstallSpec(
+  entry: SkillEntry,
+  installId: string,
+): SkillInstallSpec | undefined {
   const specs = entry.metadata?.install ?? [];
   for (const [index, spec] of specs.entries()) {
     if (resolveInstallId(spec, index) === installId) {
@@ -98,7 +106,10 @@ function findInstallSpec(entry: SkillEntry, installId: string): SkillInstallSpec
   return undefined;
 }
 
-function buildNodeInstallCommand(packageName: string, prefs: SkillsInstallPreferences): string[] {
+function buildNodeInstallCommand(
+  packageName: string,
+  prefs: SkillsInstallPreferences,
+): string[] {
   switch (prefs.nodeManager) {
     case "pnpm":
       return ["pnpm", "add", "-g", "--ignore-scripts", packageName];
@@ -153,7 +164,10 @@ function buildInstallCommand(
   }
 }
 
-async function resolveBrewBinDir(timeoutMs: number, brewExe?: string): Promise<string | undefined> {
+async function resolveBrewBinDir(
+  timeoutMs: number,
+  brewExe?: string,
+): Promise<string | undefined> {
   const exe = brewExe ?? (hasBinary("brew") ? "brew" : resolveBrewExecutable());
   if (!exe) {
     return undefined;
@@ -282,7 +296,9 @@ async function ensureUvInstalled(params: {
   });
 }
 
-async function installGoViaApt(timeoutMs: number): Promise<SkillInstallResult | undefined> {
+async function installGoViaApt(
+  timeoutMs: number,
+): Promise<SkillInstallResult | undefined> {
   const aptInstallArgv = ["apt-get", "install", "-y", "golang-go"];
   const aptUpdateArgv = ["apt-get", "update", "-qq"];
   const aptFailureMessage =
@@ -345,9 +361,12 @@ async function ensureGoInstalled(params: {
   }
 
   if (params.brewExe) {
-    const brewResult = await runCommandSafely([params.brewExe, "install", "go"], {
-      timeoutMs: params.timeoutMs,
-    });
+    const brewResult = await runCommandSafely(
+      [params.brewExe, "install", "go"],
+      {
+        timeoutMs: params.timeoutMs,
+      },
+    );
     if (brewResult.code === 0) {
       return undefined;
     }
@@ -389,8 +408,13 @@ async function executeInstallCommand(params: {
   });
 }
 
-export async function installSkill(params: SkillInstallRequest): Promise<SkillInstallResult> {
-  const timeoutMs = Math.min(Math.max(params.timeoutMs ?? 300_000, 1_000), 900_000);
+export async function installSkill(
+  params: SkillInstallRequest,
+): Promise<SkillInstallResult> {
+  const timeoutMs = Math.min(
+    Math.max(params.timeoutMs ?? 300_000, 1_000),
+    900_000,
+  );
   const workspaceDir = resolveUserPath(params.workspaceDir);
   const entries = loadWorkspaceSkillEntries(workspaceDir);
   const entry = entries.find((item) => item.skill.name === params.skillName);
@@ -419,7 +443,11 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
     );
   }
   if (spec.kind === "download") {
-    const downloadResult = await installDownloadSpec({ entry, spec, timeoutMs });
+    const downloadResult = await installDownloadSpec({
+      entry,
+      spec,
+      timeoutMs,
+    });
     return withWarnings(downloadResult, warnings);
   }
 
@@ -443,12 +471,20 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
     return withWarnings(resolveBrewMissingFailure(spec), warnings);
   }
 
-  const uvInstallFailure = await ensureUvInstalled({ spec, brewExe, timeoutMs });
+  const uvInstallFailure = await ensureUvInstalled({
+    spec,
+    brewExe,
+    timeoutMs,
+  });
   if (uvInstallFailure) {
     return withWarnings(uvInstallFailure, warnings);
   }
 
-  const goInstallFailure = await ensureGoInstalled({ spec, brewExe, timeoutMs });
+  const goInstallFailure = await ensureGoInstalled({
+    spec,
+    brewExe,
+    timeoutMs,
+  });
   if (goInstallFailure) {
     return withWarnings(goInstallFailure, warnings);
   }
@@ -466,5 +502,8 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
     }
   }
 
-  return withWarnings(await executeInstallCommand({ argv, timeoutMs, env }), warnings);
+  return withWarnings(
+    await executeInstallCommand({ argv, timeoutMs, env }),
+    warnings,
+  );
 }

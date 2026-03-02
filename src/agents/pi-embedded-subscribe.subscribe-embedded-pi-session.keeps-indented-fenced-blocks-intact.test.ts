@@ -21,7 +21,9 @@ describe("subscribeEmbeddedPiSession", () => {
     emitAssistantTextDeltaAndEnd({ emit, text });
 
     expect(onBlockReply).toHaveBeenCalledTimes(3);
-    expect(onBlockReply.mock.calls[1][0].text).toBe("  ```js\n  const x = 1;\n  ```");
+    expect(onBlockReply.mock.calls[1][0].text).toBe(
+      "  ```js\n  const x = 1;\n  ```",
+    );
   });
   it("accepts longer fence markers for close", () => {
     const onBlockReply = vi.fn();

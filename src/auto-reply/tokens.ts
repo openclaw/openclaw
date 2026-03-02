@@ -22,7 +22,10 @@ export function isSilentReplyText(
  * Returns the remaining text with the token removed (trimmed).
  * If the result is empty, the entire message should be treated as silent.
  */
-export function stripSilentToken(text: string, token: string = SILENT_REPLY_TOKEN): string {
+export function stripSilentToken(
+  text: string,
+  token: string = SILENT_REPLY_TOKEN,
+): string {
   const escaped = escapeRegExp(token);
   return text.replace(new RegExp(`(?:^|\\s+)${escaped}\\s*$`), "").trim();
 }

@@ -85,7 +85,14 @@ Example (DMs on host, groups sandboxed + messaging-only tools):
       tools: {
         // If allow is non-empty, everything else is blocked (deny still wins).
         allow: ["group:messaging", "group:sessions"],
-        deny: ["group:runtime", "group:fs", "group:ui", "nodes", "cron", "gateway"],
+        deny: [
+          "group:runtime",
+          "group:fs",
+          "group:ui",
+          "nodes",
+          "cron",
+          "gateway",
+        ],
       },
     },
   },

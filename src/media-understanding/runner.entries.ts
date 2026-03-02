@@ -4,7 +4,10 @@ import {
   collectProviderApiKeysForExecution,
   executeWithApiKeyRotation,
 } from "../agents/api-key-rotation.js";
-import { requireApiKey, resolveApiKeyForProvider } from "../agents/model-auth.js";
+import {
+  requireApiKey,
+  resolveApiKeyForProvider,
+} from "../agents/model-auth.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import { applyTemplate } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -25,8 +28,16 @@ import { MediaUnderstandingSkipError } from "./errors.js";
 import { fileExists } from "./fs.js";
 import { extractGeminiResponse } from "./output-extract.js";
 import { describeImageWithModel } from "./providers/image.js";
-import { getMediaUnderstandingProvider, normalizeMediaProviderId } from "./providers/index.js";
-import { resolveMaxBytes, resolveMaxChars, resolvePrompt, resolveTimeoutMs } from "./resolve.js";
+import {
+  getMediaUnderstandingProvider,
+  normalizeMediaProviderId,
+} from "./providers/index.js";
+import {
+  resolveMaxBytes,
+  resolveMaxChars,
+  resolvePrompt,
+  resolveTimeoutMs,
+} from "./resolve.js";
 import type {
   MediaUnderstandingCapability,
   MediaUnderstandingDecision,
@@ -109,7 +120,10 @@ function hasArg(args: string[], keys: string[]): boolean {
   return args.some((arg) => keys.includes(arg));
 }
 
-function resolveWhisperOutputPath(args: string[], mediaPath: string): string | null {
+function resolveWhisperOutputPath(
+  args: string[],
+  mediaPath: string,
+): string | null {
   const outputDir = findArgValue(args, ["--output_dir", "-o"]);
   const outputFormat = findArgValue(args, ["--output_format"]);
   if (!outputDir || !outputFormat) {
@@ -239,7 +253,10 @@ function resolveProviderQuery(params: {
     return mergedOptions;
   }
   const query = normalizeDeepgramQueryKeys(mergedOptions ?? {});
-  const compat = buildDeepgramCompatQuery({ ...config?.deepgram, ...entry.deepgram });
+  const compat = buildDeepgramCompatQuery({
+    ...config?.deepgram,
+    ...entry.deepgram,
+  });
   for (const [key, value] of Object.entries(compat ?? {})) {
     if (query[key] === undefined) {
       query[key] = value;
@@ -265,7 +282,9 @@ export function buildModelDecision(params: {
     };
   }
   const providerIdRaw = params.entry.provider?.trim();
-  const providerId = providerIdRaw ? normalizeMediaProviderId(providerIdRaw) : undefined;
+  const providerId = providerIdRaw
+    ? normalizeMediaProviderId(providerIdRaw)
+    : undefined;
   return {
     type: "provider",
     provider: providerId ?? providerIdRaw,
@@ -282,8 +301,18 @@ function resolveEntryRunOptions(params: {
   config?: MediaUnderstandingConfig;
 }): { maxBytes: number; maxChars?: number; timeoutMs: number; prompt: string } {
   const { capability, entry, cfg } = params;
-  const maxBytes = resolveMaxBytes({ capability, entry, cfg, config: params.config });
-  const maxChars = resolveMaxChars({ capability, entry, cfg, config: params.config });
+  const maxBytes = resolveMaxBytes({
+    capability,
+    entry,
+    cfg,
+    config: params.config,
+  });
+  const maxChars = resolveMaxChars({
+    capability,
+    entry,
+    cfg,
+    config: params.config,
+  });
   const timeoutMs = resolveTimeoutMs(
     entry.timeoutSeconds ??
       params.config?.timeoutSeconds ??
@@ -292,7 +321,9 @@ function resolveEntryRunOptions(params: {
   );
   const prompt = resolvePrompt(
     capability,
-    entry.prompt ?? params.config?.prompt ?? cfg.tools?.media?.[capability]?.prompt,
+    entry.prompt ??
+      params.config?.prompt ??
+      cfg.tools?.media?.[capability]?.prompt,
     maxChars,
   );
   return { maxBytes, maxChars, timeoutMs, prompt };
@@ -333,17 +364,21 @@ async function resolveProviderExecutionContext(params: {
     entry: params.entry,
     agentDir: params.agentDir,
   });
-  const baseUrl = params.entry.baseUrl ?? params.config?.baseUrl ?? providerConfig?.baseUrl;
+  const baseUrl =
+    params.entry.baseUrl ?? params.config?.baseUrl ?? providerConfig?.baseUrl;
   const mergedHeaders = {
     ...providerConfig?.headers,
     ...params.config?.headers,
     ...params.entry.headers,
   };
-  const headers = Object.keys(mergedHeaders).length > 0 ? mergedHeaders : undefined;
+  const headers =
+    Object.keys(mergedHeaders).length > 0 ? mergedHeaders : undefined;
   return { apiKeys, baseUrl, headers };
 }
 
-export function formatDecisionSummary(decision: MediaUnderstandingDecision): string {
+export function formatDecisionSummary(
+  decision: MediaUnderstandingDecision,
+): string {
   const total = decision.attachments.length;
   const success = decision.attachments.filter(
     (entry) => entry.chosen?.outcome === "success",
@@ -351,9 +386,15 @@ export function formatDecisionSummary(decision: MediaUnderstandingDecision): str
   const chosen = decision.attachments.find((entry) => entry.chosen)?.chosen;
   const provider = chosen?.provider?.trim();
   const model = chosen?.model?.trim();
-  const modelLabel = provider ? (model ? `${provider}/${model}` : provider) : undefined;
+  const modelLabel = provider
+    ? model
+      ? `${provider}/${model}`
+      : provider
+    : undefined;
   const reason = decision.attachments
-    .flatMap((entry) => entry.attempts.map((attempt) => attempt.reason).filter(Boolean))
+    .flatMap((entry) =>
+      entry.attempts.map((attempt) => attempt.reason).filter(Boolean),
+    )
     .find(Boolean);
   const shortReason = reason ? reason.split(":")[0]?.trim() : undefined;
   const countLabel = total > 0 ? ` (${success}/${total})` : "";
@@ -399,7 +440,10 @@ export async function runProviderEntry(params: {
       maxBytes,
       timeoutMs,
     });
-    const provider = getMediaUnderstandingProvider(providerId, params.providerRegistry);
+    const provider = getMediaUnderstandingProvider(
+      providerId,
+      params.providerRegistry,
+    );
     const result = provider?.describeImage
       ? await provider.describeImage({
           buffer: media.buffer,
@@ -436,14 +480,19 @@ export async function runProviderEntry(params: {
     };
   }
 
-  const provider = getMediaUnderstandingProvider(providerId, params.providerRegistry);
+  const provider = getMediaUnderstandingProvider(
+    providerId,
+    params.providerRegistry,
+  );
   if (!provider) {
     throw new Error(`Media provider not available: ${providerId}`);
   }
 
   if (capability === "audio") {
     if (!provider.transcribeAudio) {
-      throw new Error(`Audio transcription provider "${providerId}" not available.`);
+      throw new Error(
+        `Audio transcription provider "${providerId}" not available.`,
+      );
     }
     const transcribeAudio = provider.transcribeAudio;
     const media = await params.cache.getBuffer({
@@ -451,19 +500,22 @@ export async function runProviderEntry(params: {
       maxBytes,
       timeoutMs,
     });
-    const { apiKeys, baseUrl, headers } = await resolveProviderExecutionContext({
-      providerId,
-      cfg,
-      entry,
-      config: params.config,
-      agentDir: params.agentDir,
-    });
+    const { apiKeys, baseUrl, headers } = await resolveProviderExecutionContext(
+      {
+        providerId,
+        cfg,
+        entry,
+        config: params.config,
+        agentDir: params.agentDir,
+      },
+    );
     const providerQuery = resolveProviderQuery({
       providerId,
       config: params.config,
       entry,
     });
-    const model = entry.model?.trim() || DEFAULT_AUDIO_MODELS[providerId] || entry.model;
+    const model =
+      entry.model?.trim() || DEFAULT_AUDIO_MODELS[providerId] || entry.model;
     const result = await executeWithApiKeyRotation({
       provider: providerId,
       apiKeys,
@@ -476,7 +528,10 @@ export async function runProviderEntry(params: {
           baseUrl,
           headers,
           model,
-          language: entry.language ?? params.config?.language ?? cfg.tools?.media?.audio?.language,
+          language:
+            entry.language ??
+            params.config?.language ??
+            cfg.tools?.media?.audio?.language,
           prompt,
           query: providerQuery,
           timeoutMs,
@@ -492,7 +547,9 @@ export async function runProviderEntry(params: {
   }
 
   if (!provider.describeVideo) {
-    throw new Error(`Video understanding provider "${providerId}" not available.`);
+    throw new Error(
+      `Video understanding provider "${providerId}" not available.`,
+    );
   }
   const describeVideo = provider.describeVideo;
   const media = await params.cache.getBuffer({
@@ -603,7 +660,10 @@ export async function runCliEntry(params: {
       return null;
     }
     return {
-      kind: capability === "audio" ? "audio.transcription" : `${capability}.description`,
+      kind:
+        capability === "audio"
+          ? "audio.transcription"
+          : `${capability}.description`,
       attachmentIndex: params.attachmentIndex,
       text,
       provider: "cli",

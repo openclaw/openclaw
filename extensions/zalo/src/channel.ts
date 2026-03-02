@@ -65,8 +65,8 @@ export const zaloDock: ChannelDock = {
   outbound: { textChunkLimit: 2000 },
   config: {
     resolveAllowFrom: ({ cfg, accountId }) =>
-      (resolveZaloAccount({ cfg: cfg, accountId }).config.allowFrom ?? []).map((entry) =>
-        String(entry),
+      (resolveZaloAccount({ cfg: cfg, accountId }).config.allowFrom ?? []).map(
+        (entry) => String(entry),
       ),
     formatAllowFrom: ({ allowFrom }) =>
       formatAllowFromLowercase({ allowFrom, stripPrefixRe: /^(zalo|zl):/i }),
@@ -96,7 +96,8 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount> = {
   configSchema: buildChannelConfigSchema(ZaloConfigSchema),
   config: {
     listAccountIds: (cfg) => listZaloAccountIds(cfg),
-    resolveAccount: (cfg, accountId) => resolveZaloAccount({ cfg: cfg, accountId }),
+    resolveAccount: (cfg, accountId) =>
+      resolveZaloAccount({ cfg: cfg, accountId }),
     defaultAccountId: (cfg) => resolveDefaultZaloAccountId(cfg),
     setAccountEnabled: ({ cfg, accountId, enabled }) =>
       setAccountEnabledInConfigSection({
@@ -122,15 +123,16 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount> = {
       tokenSource: account.tokenSource,
     }),
     resolveAllowFrom: ({ cfg, accountId }) =>
-      (resolveZaloAccount({ cfg: cfg, accountId }).config.allowFrom ?? []).map((entry) =>
-        String(entry),
+      (resolveZaloAccount({ cfg: cfg, accountId }).config.allowFrom ?? []).map(
+        (entry) => String(entry),
       ),
     formatAllowFrom: ({ allowFrom }) =>
       formatAllowFromLowercase({ allowFrom, stripPrefixRe: /^(zalo|zl):/i }),
   },
   security: {
     resolveDmPolicy: ({ cfg, accountId, account }) => {
-      const resolvedAccountId = accountId ?? account.accountId ?? DEFAULT_ACCOUNT_ID;
+      const resolvedAccountId =
+        accountId ?? account.accountId ?? DEFAULT_ACCOUNT_ID;
       const basePath = resolveChannelAccountConfigBasePath({
         cfg,
         channelKey: "zalo",
@@ -155,12 +157,16 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount> = {
       if (groupPolicy !== "open") {
         return [];
       }
-      const explicitGroupAllowFrom = (account.config.groupAllowFrom ?? []).map((entry) =>
+      const explicitGroupAllowFrom = (account.config.groupAllowFrom ?? []).map(
+        (entry) => String(entry),
+      );
+      const dmAllowFrom = (account.config.allowFrom ?? []).map((entry) =>
         String(entry),
       );
-      const dmAllowFrom = (account.config.allowFrom ?? []).map((entry) => String(entry));
       const effectiveAllowFrom =
-        explicitGroupAllowFrom.length > 0 ? explicitGroupAllowFrom : dmAllowFrom;
+        explicitGroupAllowFrom.length > 0
+          ? explicitGroupAllowFrom
+          : dmAllowFrom;
       if (effectiveAllowFrom.length > 0) {
         return [
           `- Zalo groups: groupPolicy="open" allows any member to trigger (mention-gated). Set channels.zalo.groupPolicy="allowlist" + channels.zalo.groupAllowFrom to restrict senders.`,
@@ -294,7 +300,9 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount> = {
       if (!account.token) {
         throw new Error("Zalo token not configured");
       }
-      await sendMessageZalo(id, PAIRING_APPROVED_MESSAGE, { token: account.token });
+      await sendMessageZalo(id, PAIRING_APPROVED_MESSAGE, {
+        token: account.token,
+      });
     },
   },
   outbound: {
@@ -329,8 +337,11 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount> = {
       }
       const outbound = zaloPlugin.outbound!;
       const limit = outbound.textChunkLimit;
-      const chunks = limit && outbound.chunker ? outbound.chunker(text, limit) : [text];
-      let lastResult: Awaited<ReturnType<NonNullable<typeof outbound.sendText>>>;
+      const chunks =
+        limit && outbound.chunker ? outbound.chunker(text, limit) : [text];
+      let lastResult: Awaited<
+        ReturnType<NonNullable<typeof outbound.sendText>>
+      >;
       for (const chunk of chunks) {
         lastResult = await outbound.sendText!({ ...ctx, text: chunk });
       }
@@ -371,9 +382,14 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount> = {
       lastError: null,
     },
     collectStatusIssues: collectZaloStatusIssues,
-    buildChannelSummary: ({ snapshot }) => buildTokenChannelStatusSummary(snapshot),
+    buildChannelSummary: ({ snapshot }) =>
+      buildTokenChannelStatusSummary(snapshot),
     probeAccount: async ({ account, timeoutMs }) =>
-      probeZalo(account.token, timeoutMs, resolveZaloProxyFetch(account.config.proxy)),
+      probeZalo(
+        account.token,
+        timeoutMs,
+        resolveZaloProxyFetch(account.config.proxy),
+      ),
     buildAccountSnapshot: ({ account, runtime }) => {
       const configured = Boolean(account.token?.trim());
       return {
@@ -425,7 +441,8 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount> = {
         webhookSecret: account.config.webhookSecret,
         webhookPath: account.config.webhookPath,
         fetcher,
-        statusSink: (patch) => ctx.setStatus({ accountId: ctx.accountId, ...patch }),
+        statusSink: (patch) =>
+          ctx.setStatus({ accountId: ctx.accountId, ...patch }),
       });
     },
   },

@@ -24,7 +24,9 @@ type ApplyFixture = {
 function stripVolatileConfigMeta(input: string): Record<string, unknown> {
   const parsed = JSON.parse(input) as Record<string, unknown>;
   const meta =
-    parsed.meta && typeof parsed.meta === "object" && !Array.isArray(parsed.meta)
+    parsed.meta &&
+    typeof parsed.meta === "object" &&
+    !Array.isArray(parsed.meta)
       ? { ...(parsed.meta as Record<string, unknown>) }
       : undefined;
   if (meta && "lastTouchedAt" in meta) {
@@ -55,7 +57,13 @@ function buildFixturePaths(rootDir: string) {
     rootDir,
     stateDir,
     configPath: path.join(stateDir, "openclaw.json"),
-    authStorePath: path.join(stateDir, "agents", "main", "agent", "auth-profiles.json"),
+    authStorePath: path.join(
+      stateDir,
+      "agents",
+      "main",
+      "agent",
+      "auth-profiles.json",
+    ),
     authJsonPath: path.join(stateDir, "agents", "main", "agent", "auth.json"),
     envPath: path.join(stateDir, ".env"),
   };
@@ -122,9 +130,9 @@ async function expectInvalidTargetPath(
   target: SecretsApplyPlan["targets"][number],
 ): Promise<void> {
   const plan = createPlan({ targets: [target] });
-  await expect(runSecretsApply({ plan, env: fixture.env, write: false })).rejects.toThrow(
-    "Invalid plan target path",
-  );
+  await expect(
+    runSecretsApply({ plan, env: fixture.env, write: false }),
+  ).rejects.toThrow("Invalid plan target path");
 }
 
 function createPlan(params: {
@@ -140,8 +148,12 @@ function createPlan(params: {
     generatedBy: "manual",
     targets: params.targets,
     ...(params.options ? { options: params.options } : {}),
-    ...(params.providerUpserts ? { providerUpserts: params.providerUpserts } : {}),
-    ...(params.providerDeletes ? { providerDeletes: params.providerDeletes } : {}),
+    ...(params.providerUpserts
+      ? { providerUpserts: params.providerUpserts }
+      : {}),
+    ...(params.providerDeletes
+      ? { providerDeletes: params.providerDeletes }
+      : {}),
   };
 }
 
@@ -185,29 +197,42 @@ describe("secrets apply", () => {
       options: createOneWayScrubOptions(),
     });
 
-    const dryRun = await runSecretsApply({ plan, env: fixture.env, write: false });
+    const dryRun = await runSecretsApply({
+      plan,
+      env: fixture.env,
+      write: false,
+    });
     expect(dryRun.mode).toBe("dry-run");
     expect(dryRun.changed).toBe(true);
 
-    const applied = await runSecretsApply({ plan, env: fixture.env, write: true });
+    const applied = await runSecretsApply({
+      plan,
+      env: fixture.env,
+      write: true,
+    });
     expect(applied.mode).toBe("write");
     expect(applied.changed).toBe(true);
 
-    const nextConfig = JSON.parse(await fs.readFile(fixture.configPath, "utf8")) as {
+    const nextConfig = JSON.parse(
+      await fs.readFile(fixture.configPath, "utf8"),
+    ) as {
       models: { providers: { openai: { apiKey: unknown } } };
     };
-    expect(nextConfig.models.providers.openai.apiKey).toEqual(OPENAI_API_KEY_ENV_REF);
+    expect(nextConfig.models.providers.openai.apiKey).toEqual(
+      OPENAI_API_KEY_ENV_REF,
+    );
 
-    const nextAuthStore = JSON.parse(await fs.readFile(fixture.authStorePath, "utf8")) as {
+    const nextAuthStore = JSON.parse(
+      await fs.readFile(fixture.authStorePath, "utf8"),
+    ) as {
       profiles: { "openai:default": { key?: string; keyRef?: unknown } };
     };
     expect(nextAuthStore.profiles["openai:default"].key).toBeUndefined();
     expect(nextAuthStore.profiles["openai:default"].keyRef).toBeUndefined();
 
-    const nextAuthJson = JSON.parse(await fs.readFile(fixture.authJsonPath, "utf8")) as Record<
-      string,
-      unknown
-    >;
+    const nextAuthJson = JSON.parse(
+      await fs.readFile(fixture.authJsonPath, "utf8"),
+    ) as Record<string, unknown>;
     expect(nextAuthJson.openai).toBeUndefined();
 
     const nextEnv = await fs.readFile(fixture.envPath, "utf8");
@@ -221,25 +246,42 @@ describe("secrets apply", () => {
       options: createOneWayScrubOptions(),
     });
 
-    const first = await runSecretsApply({ plan, env: fixture.env, write: true });
+    const first = await runSecretsApply({
+      plan,
+      env: fixture.env,
+      write: true,
+    });
     expect(first.changed).toBe(true);
     const configAfterFirst = await fs.readFile(fixture.configPath, "utf8");
-    const authStoreAfterFirst = await fs.readFile(fixture.authStorePath, "utf8");
+    const authStoreAfterFirst = await fs.readFile(
+      fixture.authStorePath,
+      "utf8",
+    );
     const authJsonAfterFirst = await fs.readFile(fixture.authJsonPath, "utf8");
     const envAfterFirst = await fs.readFile(fixture.envPath, "utf8");
 
     await fs.chmod(fixture.configPath, 0o400);
     await fs.chmod(fixture.authStorePath, 0o400);
 
-    const second = await runSecretsApply({ plan, env: fixture.env, write: true });
+    const second = await runSecretsApply({
+      plan,
+      env: fixture.env,
+      write: true,
+    });
     expect(second.mode).toBe("write");
     const configAfterSecond = await fs.readFile(fixture.configPath, "utf8");
     expect(stripVolatileConfigMeta(configAfterSecond)).toEqual(
       stripVolatileConfigMeta(configAfterFirst),
     );
-    await expect(fs.readFile(fixture.authStorePath, "utf8")).resolves.toBe(authStoreAfterFirst);
-    await expect(fs.readFile(fixture.authJsonPath, "utf8")).resolves.toBe(authJsonAfterFirst);
-    await expect(fs.readFile(fixture.envPath, "utf8")).resolves.toBe(envAfterFirst);
+    await expect(fs.readFile(fixture.authStorePath, "utf8")).resolves.toBe(
+      authStoreAfterFirst,
+    );
+    await expect(fs.readFile(fixture.authJsonPath, "utf8")).resolves.toBe(
+      authJsonAfterFirst,
+    );
+    await expect(fs.readFile(fixture.envPath, "utf8")).resolves.toBe(
+      envAfterFirst,
+    );
   });
 
   it("applies targets safely when map keys contain dots", async () => {
@@ -271,7 +313,9 @@ describe("secrets apply", () => {
         providers?: Record<string, { apiKey?: unknown }>;
       };
     }>(fixture, plan);
-    expect(nextConfig.models?.providers?.["openai.dev"]?.apiKey).toEqual(OPENAI_API_KEY_ENV_REF);
+    expect(nextConfig.models?.providers?.["openai.dev"]?.apiKey).toEqual(
+      OPENAI_API_KEY_ENV_REF,
+    );
     expect(nextConfig.models?.providers?.openai).toBeUndefined();
   });
 
@@ -294,7 +338,9 @@ describe("secrets apply", () => {
 
     const plan = createPlan({
       targets: [
-        createOpenAiProviderTarget({ pathSegments: ["models", "providers", "openai", "apiKey"] }),
+        createOpenAiProviderTarget({
+          pathSegments: ["models", "providers", "openai", "apiKey"],
+        }),
         {
           type: "skills.entries.apiKey",
           path: "skills.entries.qa-secret-test.apiKey",
@@ -309,8 +355,12 @@ describe("secrets apply", () => {
       models: { providers: { openai: { apiKey: unknown } } };
       skills: { entries: { "qa-secret-test": { apiKey: unknown } } };
     }>(fixture, plan);
-    expect(nextConfig.models.providers.openai.apiKey).toEqual(OPENAI_API_KEY_ENV_REF);
-    expect(nextConfig.skills.entries["qa-secret-test"].apiKey).toEqual(OPENAI_API_KEY_ENV_REF);
+    expect(nextConfig.models.providers.openai.apiKey).toEqual(
+      OPENAI_API_KEY_ENV_REF,
+    );
+    expect(nextConfig.skills.entries["qa-secret-test"].apiKey).toEqual(
+      OPENAI_API_KEY_ENV_REF,
+    );
 
     const rawConfig = await fs.readFile(fixture.configPath, "utf8");
     expect(rawConfig).not.toContain("sk-openai-plaintext");
@@ -337,7 +387,11 @@ describe("secrets apply", () => {
       secrets: {
         providers: {
           envmain: { source: "env" },
-          fileold: { source: "file", path: "/tmp/old-secrets.json", mode: "json" },
+          fileold: {
+            source: "file",
+            path: "/tmp/old-secrets.json",
+            mode: "json",
+          },
         },
       },
       models: {

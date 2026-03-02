@@ -59,7 +59,9 @@ export class IMessageRpcClient {
 
   constructor(opts: IMessageRpcClientOptions = {}) {
     this.cliPath = opts.cliPath?.trim() || "imsg";
-    this.dbPath = opts.dbPath?.trim() ? resolveUserPath(opts.dbPath) : undefined;
+    this.dbPath = opts.dbPath?.trim()
+      ? resolveUserPath(opts.dbPath)
+      : undefined;
     this.runtime = opts.runtime;
     this.onNotification = opts.onNotification;
     this.closed = new Promise((resolve) => {
@@ -72,7 +74,9 @@ export class IMessageRpcClient {
       return;
     }
     if (isTestEnv()) {
-      throw new Error("Refusing to start imsg rpc in test environment; mock iMessage RPC client");
+      throw new Error(
+        "Refusing to start imsg rpc in test environment; mock iMessage RPC client",
+      );
     }
     const args = ["rpc"];
     if (this.dbPath) {
@@ -214,12 +218,17 @@ export class IMessageRpcClient {
         }
         if (details !== undefined) {
           const detailText =
-            typeof details === "string" ? details : JSON.stringify(details, null, 2);
+            typeof details === "string"
+              ? details
+              : JSON.stringify(details, null, 2);
           if (detailText) {
             suffixes.push(detailText);
           }
         }
-        const msg = suffixes.length > 0 ? `${baseMessage}: ${suffixes.join(" ")}` : baseMessage;
+        const msg =
+          suffixes.length > 0
+            ? `${baseMessage}: ${suffixes.join(" ")}`
+            : baseMessage;
         pending.reject(new Error(msg));
         return;
       }

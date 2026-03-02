@@ -44,7 +44,10 @@ describe("applyAuthChoiceMiniMax", () => {
 
   async function readAuthProfiles(agentDir: string) {
     return await readAuthProfilesForAgent<{
-      profiles?: Record<string, { key?: string; keyRef?: { source: string; id: string } }>;
+      profiles?: Record<
+        string,
+        { key?: string; keyRef?: { source: string; id: string } }
+      >;
     }>(agentDir);
   }
 
@@ -124,7 +127,14 @@ describe("applyAuthChoiceMiniMax", () => {
     },
   ])(
     "$caseName",
-    async ({ authChoice, tokenProvider, token, profileId, provider, expectedModel }) => {
+    async ({
+      authChoice,
+      tokenProvider,
+      token,
+      profileId,
+      provider,
+      expectedModel,
+    }) => {
       const { agentDir, result, text, confirm } = await runMiniMaxChoice({
         authChoice,
         opts: {
@@ -138,9 +148,9 @@ describe("applyAuthChoiceMiniMax", () => {
         provider,
         mode: "api_key",
       });
-      expect(resolveAgentModelPrimaryValue(result?.config.agents?.defaults?.model)).toBe(
-        expectedModel,
-      );
+      expect(
+        resolveAgentModelPrimaryValue(result?.config.agents?.defaults?.model),
+      ).toBe(expectedModel);
       expect(text).not.toHaveBeenCalled();
       expect(confirm).not.toHaveBeenCalled();
 
@@ -177,13 +187,15 @@ describe("applyAuthChoiceMiniMax", () => {
 
     expect(result).not.toBeNull();
     if (!opts) {
-      expect(result?.config.auth?.profiles?.["minimax-cn:default"]).toMatchObject({
+      expect(
+        result?.config.auth?.profiles?.["minimax-cn:default"],
+      ).toMatchObject({
         provider: "minimax-cn",
         mode: "api_key",
       });
-      expect(resolveAgentModelPrimaryValue(result?.config.agents?.defaults?.model)).toBe(
-        "minimax-cn/MiniMax-M2.5",
-      );
+      expect(
+        resolveAgentModelPrimaryValue(result?.config.agents?.defaults?.model),
+      ).toBe("minimax-cn/MiniMax-M2.5");
     }
     expect(text).not.toHaveBeenCalled();
     expect(confirm).toHaveBeenCalledTimes(expectConfirmCalls);
@@ -191,7 +203,9 @@ describe("applyAuthChoiceMiniMax", () => {
     const parsed = await readAuthProfiles(agentDir);
     expect(parsed.profiles?.["minimax-cn:default"]?.key).toBe(expectKey);
     if (expectKeyRef) {
-      expect(parsed.profiles?.["minimax-cn:default"]?.keyRef).toEqual(expectKeyRef);
+      expect(parsed.profiles?.["minimax-cn:default"]?.keyRef).toEqual(
+        expectKeyRef,
+      );
     } else {
       expect(parsed.profiles?.["minimax-cn:default"]?.keyRef).toBeUndefined();
     }
@@ -211,13 +225,15 @@ describe("applyAuthChoiceMiniMax", () => {
       provider: "minimax",
       mode: "api_key",
     });
-    expect(resolveAgentModelPrimaryValue(result?.config.agents?.defaults?.model)).toBe(
-      "minimax/MiniMax-M2.5-Lightning",
-    );
+    expect(
+      resolveAgentModelPrimaryValue(result?.config.agents?.defaults?.model),
+    ).toBe("minimax/MiniMax-M2.5-Lightning");
     expect(text).not.toHaveBeenCalled();
     expect(confirm).not.toHaveBeenCalled();
 
     const parsed = await readAuthProfiles(agentDir);
-    expect(parsed.profiles?.["minimax:default"]?.key).toBe("mm-lightning-token");
+    expect(parsed.profiles?.["minimax:default"]?.key).toBe(
+      "mm-lightning-token",
+    );
   });
 });

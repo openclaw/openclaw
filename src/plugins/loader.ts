@@ -19,7 +19,11 @@ import { discoverOpenClawPlugins } from "./discovery.js";
 import { initializeGlobalHookRunner } from "./hook-runner-global.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import { isPathInside, safeStatSync } from "./path-safety.js";
-import { createPluginRegistry, type PluginRecord, type PluginRegistry } from "./registry.js";
+import {
+  createPluginRegistry,
+  type PluginRecord,
+  type PluginRegistry,
+} from "./registry.js";
 import { setActivePluginRegistry } from "./runtime.js";
 import { createPluginRuntime } from "./runtime/index.js";
 import { validateJsonSchemaValue } from "./schema-validator.js";
@@ -58,8 +62,18 @@ const resolvePluginSdkAliasFile = (params: {
     const isDistRuntime = normalizedModulePath.includes("/dist/");
     let cursor = path.dirname(modulePath);
     for (let i = 0; i < 6; i += 1) {
-      const srcCandidate = path.join(cursor, "src", "plugin-sdk", params.srcFile);
-      const distCandidate = path.join(cursor, "dist", "plugin-sdk", params.distFile);
+      const srcCandidate = path.join(
+        cursor,
+        "src",
+        "plugin-sdk",
+        params.srcFile,
+      );
+      const distCandidate = path.join(
+        cursor,
+        "dist",
+        "plugin-sdk",
+        params.distFile,
+      );
       const orderedCandidates = isDistRuntime
         ? [distCandidate, srcCandidate]
         : isProduction
@@ -88,7 +102,10 @@ const resolvePluginSdkAlias = (): string | null =>
   resolvePluginSdkAliasFile({ srcFile: "index.ts", distFile: "index.js" });
 
 const resolvePluginSdkAccountIdAlias = (): string | null => {
-  return resolvePluginSdkAliasFile({ srcFile: "account-id.ts", distFile: "account-id.js" });
+  return resolvePluginSdkAliasFile({
+    srcFile: "account-id.ts",
+    distFile: "account-id.js",
+  });
 };
 
 export const __testing = {
@@ -99,7 +116,9 @@ function buildCacheKey(params: {
   workspaceDir?: string;
   plugins: NormalizedPluginsConfig;
 }): string {
-  const workspaceKey = params.workspaceDir ? resolveUserPath(params.workspaceDir) : "";
+  const workspaceKey = params.workspaceDir
+    ? resolveUserPath(params.workspaceDir)
+    : "";
   return `${workspaceKey}::${JSON.stringify(params.plugins)}`;
 }
 
@@ -110,7 +129,10 @@ function validatePluginConfig(params: {
 }): { ok: boolean; value?: Record<string, unknown>; errors?: string[] } {
   const schema = params.schema;
   if (!schema) {
-    return { ok: true, value: params.value as Record<string, unknown> | undefined };
+    return {
+      ok: true,
+      value: params.value as Record<string, unknown> | undefined,
+    };
   }
   const cacheKey = params.cacheKey ?? JSON.stringify(schema);
   const result = validateJsonSchemaValue({
@@ -119,7 +141,10 @@ function validatePluginConfig(params: {
     value: params.value ?? {},
   });
   if (result.ok) {
-    return { ok: true, value: params.value as Record<string, unknown> | undefined };
+    return {
+      ok: true,
+      value: params.value as Record<string, unknown> | undefined,
+    };
   }
   return { ok: false, errors: result.errors };
 }
@@ -209,7 +234,10 @@ function recordPluginError(params: {
   });
 }
 
-function pushDiagnostics(diagnostics: PluginDiagnostic[], append: PluginDiagnostic[]) {
+function pushDiagnostics(
+  diagnostics: PluginDiagnostic[],
+  append: PluginDiagnostic[],
+) {
   diagnostics.push(...append);
 }
 
@@ -313,7 +341,11 @@ function warnWhenAllowlistIsOpen(params: {
   logger: PluginLogger;
   pluginsEnabled: boolean;
   allow: string[];
-  discoverablePlugins: Array<{ id: string; source: string; origin: PluginRecord["origin"] }>;
+  discoverablePlugins: Array<{
+    id: string;
+    source: string;
+    origin: PluginRecord["origin"];
+  }>;
 }) {
   if (!params.pluginsEnabled) {
     return;
@@ -321,7 +353,9 @@ function warnWhenAllowlistIsOpen(params: {
   if (params.allow.length > 0) {
     return;
   }
-  const nonBundled = params.discoverablePlugins.filter((entry) => entry.origin !== "bundled");
+  const nonBundled = params.discoverablePlugins.filter(
+    (entry) => entry.origin !== "bundled",
+  );
   if (nonBundled.length === 0) {
     return;
   }
@@ -329,7 +363,8 @@ function warnWhenAllowlistIsOpen(params: {
     .slice(0, 6)
     .map((entry) => `${entry.id} (${entry.source})`)
     .join(", ");
-  const extra = nonBundled.length > 6 ? ` (+${nonBundled.length - 6} more)` : "";
+  const extra =
+    nonBundled.length > 6 ? ` (+${nonBundled.length - 6} more)` : "";
   params.logger.warn(
     `[plugins] plugins.allow is empty; discovered non-bundled plugins may auto-load: ${preview}${extra}. Set plugins.allow to explicit trusted ids.`,
   );
@@ -365,12 +400,17 @@ function warnAboutUntrackedLoadedPlugins(params: {
   }
 }
 
-function activatePluginRegistry(registry: PluginRegistry, cacheKey: string): void {
+function activatePluginRegistry(
+  registry: PluginRegistry,
+  cacheKey: string,
+): void {
   setActivePluginRegistry(registry, cacheKey);
   initializeGlobalHookRunner(registry);
 }
 
-export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegistry {
+export function loadOpenClawPlugins(
+  options: PluginLoadOptions = {},
+): PluginRegistry {
   // Test env: default-disable plugins unless explicitly configured.
   // This keeps unit/gateway suites fast and avoids loading heavyweight plugin deps by accident.
   const cfg = applyTestPluginDefaults(options.config ?? {}, process.env);
@@ -397,7 +437,10 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   const { registry, createApi } = createPluginRegistry({
     logger,
     runtime,
-    coreGatewayHandlers: options.coreGatewayHandlers as Record<string, GatewayRequestHandler>,
+    coreGatewayHandlers: options.coreGatewayHandlers as Record<
+      string,
+      GatewayRequestHandler
+    >,
   });
 
   const discovery = discoverOpenClawPlugins({
@@ -437,11 +480,24 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     const pluginSdkAccountIdAlias = resolvePluginSdkAccountIdAlias();
     jitiLoader = createJiti(import.meta.url, {
       interopDefault: true,
-      extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],
+      extensions: [
+        ".ts",
+        ".tsx",
+        ".mts",
+        ".cts",
+        ".mtsx",
+        ".ctsx",
+        ".js",
+        ".mjs",
+        ".cjs",
+        ".json",
+      ],
       ...(pluginSdkAlias || pluginSdkAccountIdAlias
         ? {
             alias: {
-              ...(pluginSdkAlias ? { "openclaw/plugin-sdk": pluginSdkAlias } : {}),
+              ...(pluginSdkAlias
+                ? { "openclaw/plugin-sdk": pluginSdkAlias }
+                : {}),
               ...(pluginSdkAccountIdAlias
                 ? { "openclaw/plugin-sdk/account-id": pluginSdkAccountIdAlias }
                 : {}),
@@ -542,7 +598,8 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     });
     if (!opened.ok) {
       record.status = "error";
-      record.error = "plugin entry path escapes plugin root or fails alias checks";
+      record.error =
+        "plugin entry path escapes plugin root or fails alias checks";
       registry.plugins.push(record);
       seenIds.set(pluginId, candidate.origin);
       registry.diagnostics.push({
@@ -633,7 +690,9 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     });
 
     if (!validatedConfig.ok) {
-      logger.error(`[plugins] ${record.id} invalid config: ${validatedConfig.errors?.join(", ")}`);
+      logger.error(
+        `[plugins] ${record.id} invalid config: ${validatedConfig.errors?.join(", ")}`,
+      );
       record.status = "error";
       record.error = `invalid config: ${validatedConfig.errors?.join(", ")}`;
       registry.plugins.push(record);
@@ -680,7 +739,8 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           level: "warn",
           pluginId: record.id,
           source: record.source,
-          message: "plugin register returned a promise; async registration is ignored",
+          message:
+            "plugin register returned a promise; async registration is ignored",
         });
       }
       registry.plugins.push(record);

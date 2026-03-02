@@ -1,8 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
+import {
+  baseConfigSnapshot,
+  createTestRuntime,
+} from "./test-runtime-config-helpers.js";
 
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
-const writeConfigFileMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+const writeConfigFileMock = vi.hoisted(() =>
+  vi.fn().mockResolvedValue(undefined),
+);
 
 const wizardMocks = vi.hoisted(() => ({
   createClackPrompter: vi.fn(),
@@ -38,7 +43,9 @@ describe("agents add command", () => {
 
     await agentsAddCommand({ name: "Work" }, runtime, { hasFlags: true });
 
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("--workspace"));
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("--workspace"),
+    );
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(writeConfigFileMock).not.toHaveBeenCalled();
   });
@@ -50,7 +57,9 @@ describe("agents add command", () => {
       hasFlags: false,
     });
 
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("--workspace"));
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("--workspace"),
+    );
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(writeConfigFileMock).not.toHaveBeenCalled();
   });

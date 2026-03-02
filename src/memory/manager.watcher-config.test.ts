@@ -18,7 +18,10 @@ vi.mock("chokidar", () => ({
 }));
 
 vi.mock("./sqlite-vec.js", () => ({
-  loadSqliteVecExtension: async () => ({ ok: false, error: "sqlite-vec disabled in tests" }),
+  loadSqliteVecExtension: async () => ({
+    ok: false,
+    error: "sqlite-vec disabled in tests",
+  }),
 }));
 
 vi.mock("./embeddings.js", () => ({
@@ -52,7 +55,9 @@ describe("memory watcher config", () => {
   });
 
   it("watches markdown globs and ignores dependency directories", async () => {
-    workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-watch-"));
+    workspaceDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-memory-watch-"),
+    );
     extraDir = path.join(workspaceDir, "extra");
     await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
     await fs.mkdir(extraDir, { recursive: true });
@@ -65,8 +70,16 @@ describe("memory watcher config", () => {
           memorySearch: {
             provider: "openai",
             model: "mock-embed",
-            store: { path: path.join(workspaceDir, "index.sqlite"), vector: { enabled: false } },
-            sync: { watch: true, watchDebounceMs: 25, onSessionStart: false, onSearch: false },
+            store: {
+              path: path.join(workspaceDir, "index.sqlite"),
+              vector: { enabled: false },
+            },
+            sync: {
+              watch: true,
+              watchDebounceMs: 25,
+              onSessionStart: false,
+              onSearch: false,
+            },
             query: { minScore: 0, hybrid: { enabled: false } },
             extraPaths: [extraDir],
           },
@@ -96,14 +109,25 @@ describe("memory watcher config", () => {
       ]),
     );
     expect(options.ignoreInitial).toBe(true);
-    expect(options.awaitWriteFinish).toEqual({ stabilityThreshold: 25, pollInterval: 100 });
+    expect(options.awaitWriteFinish).toEqual({
+      stabilityThreshold: 25,
+      pollInterval: 100,
+    });
 
-    const ignored = options.ignored as ((watchPath: string) => boolean) | undefined;
+    const ignored = options.ignored as
+      | ((watchPath: string) => boolean)
+      | undefined;
     expect(ignored).toBeTypeOf("function");
-    expect(ignored?.(path.join(workspaceDir, "memory", "node_modules", "pkg", "index.md"))).toBe(
-      true,
-    );
-    expect(ignored?.(path.join(workspaceDir, "memory", ".venv", "lib", "python.md"))).toBe(true);
-    expect(ignored?.(path.join(workspaceDir, "memory", "project", "notes.md"))).toBe(false);
+    expect(
+      ignored?.(
+        path.join(workspaceDir, "memory", "node_modules", "pkg", "index.md"),
+      ),
+    ).toBe(true);
+    expect(
+      ignored?.(path.join(workspaceDir, "memory", ".venv", "lib", "python.md")),
+    ).toBe(true);
+    expect(
+      ignored?.(path.join(workspaceDir, "memory", "project", "notes.md")),
+    ).toBe(false);
   });
 });

@@ -178,7 +178,12 @@ Submit (send CR only):
 Paste (bracketed by default):
 
 ```json
-{ "tool": "process", "action": "paste", "sessionId": "<id>", "text": "line1\nline2\n" }
+{
+  "tool": "process",
+  "action": "paste",
+  "sessionId": "<id>",
+  "text": "line1\nline2\n"
+}
 ```
 
 ## apply_patch (experimental)
@@ -190,7 +195,11 @@ Enable it explicitly:
 {
   tools: {
     exec: {
-      applyPatch: { enabled: true, workspaceOnly: true, allowModels: ["gpt-5.2"] },
+      applyPatch: {
+        enabled: true,
+        workspaceOnly: true,
+        allowModels: ["gpt-5.2"],
+      },
     },
   },
 }

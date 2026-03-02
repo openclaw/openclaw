@@ -67,7 +67,8 @@ vi.mock("../../agents/model-catalog.js", () => ({
 }));
 
 vi.mock("../../agents/model-selection.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../agents/model-selection.js")>();
+  const actual =
+    await importOriginal<typeof import("../../agents/model-selection.js")>();
   return {
     ...actual,
     getModelRefStatus: getModelRefStatusMock,
@@ -131,16 +132,21 @@ vi.mock("../../cli/outbound-send-deps.js", () => ({
 
 vi.mock("../../config/sessions.js", () => ({
   resolveAgentMainSessionKey: vi.fn().mockReturnValue("main:default"),
-  resolveSessionTranscriptPath: vi.fn().mockReturnValue("/tmp/transcript.jsonl"),
+  resolveSessionTranscriptPath: vi
+    .fn()
+    .mockReturnValue("/tmp/transcript.jsonl"),
   setSessionRuntimeModel: vi.fn(),
   updateSessionStore: updateSessionStoreMock,
 }));
 
 vi.mock("../../routing/session-key.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../routing/session-key.js")>();
+  const actual =
+    await importOriginal<typeof import("../../routing/session-key.js")>();
   return {
     ...actual,
-    buildAgentMainSessionKey: vi.fn().mockReturnValue("agent:default:cron:test"),
+    buildAgentMainSessionKey: vi
+      .fn()
+      .mockReturnValue("agent:default:cron:test"),
     normalizeAgentId: vi.fn((id: string) => id),
   };
 });
@@ -200,7 +206,9 @@ vi.mock("../../agents/defaults.js", () => ({
   DEFAULT_PROVIDER: "openai",
 }));
 
-export function makeCronSessionEntry(overrides?: Record<string, unknown>): CronSessionEntry {
+export function makeCronSessionEntry(
+  overrides?: Record<string, unknown>,
+): CronSessionEntry {
   return {
     sessionId: "test-session-id",
     updatedAt: 0,
@@ -210,7 +218,9 @@ export function makeCronSessionEntry(overrides?: Record<string, unknown>): CronS
   };
 }
 
-export function makeCronSession(overrides?: Record<string, unknown>): CronSession {
+export function makeCronSession(
+  overrides?: Record<string, unknown>,
+): CronSession {
   return {
     storePath: "/tmp/store.json",
     store: {},
@@ -251,8 +261,13 @@ export function resetRunCronIsolatedAgentTurnHarness(): void {
   resolveAgentModelFallbacksOverrideMock.mockReturnValue(undefined);
   resolveAgentSkillsFilterMock.mockReturnValue(undefined);
 
-  resolveConfiguredModelRefMock.mockReturnValue({ provider: "openai", model: "gpt-4" });
-  resolveAllowedModelRefMock.mockReturnValue({ ref: { provider: "openai", model: "gpt-4" } });
+  resolveConfiguredModelRefMock.mockReturnValue({
+    provider: "openai",
+    model: "gpt-4",
+  });
+  resolveAllowedModelRefMock.mockReturnValue({
+    ref: { provider: "openai", model: "gpt-4" },
+  });
   resolveHooksGmailModelMock.mockReturnValue(null);
   resolveThinkingDefaultMock.mockReturnValue(undefined);
   getModelRefStatusMock.mockReturnValue({ allowed: false });
@@ -281,7 +296,9 @@ export function clearFastTestEnv(): string | undefined {
   return previousFastTestEnv;
 }
 
-export function restoreFastTestEnv(previousFastTestEnv: string | undefined): void {
+export function restoreFastTestEnv(
+  previousFastTestEnv: string | undefined,
+): void {
   if (previousFastTestEnv == null) {
     delete process.env.OPENCLAW_TEST_FAST;
     return;

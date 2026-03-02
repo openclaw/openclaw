@@ -18,8 +18,14 @@ import {
 import type { APIStringSelectComponent } from "discord-api-types/v10";
 import { ButtonStyle, ChannelType } from "discord-api-types/v10";
 import { resolveHumanDelayConfig } from "../../agents/identity.js";
-import { resolveChunkMode, resolveTextChunkLimit } from "../../auto-reply/chunk.js";
-import { formatInboundEnvelope, resolveEnvelopeFormatOptions } from "../../auto-reply/envelope.js";
+import {
+  resolveChunkMode,
+  resolveTextChunkLimit,
+} from "../../auto-reply/chunk.js";
+import {
+  formatInboundEnvelope,
+  resolveEnvelopeFormatOptions,
+} from "../../auto-reply/envelope.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../../auto-reply/reply/provider-dispatcher.js";
 import { createReplyReferencePlanner } from "../../auto-reply/reply/reply-reference.js";
@@ -29,7 +35,10 @@ import { recordInboundSession } from "../../channels/session.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { isDangerousNameMatchingEnabled } from "../../config/dangerous-name-matching.js";
 import { resolveMarkdownTableMode } from "../../config/markdown-tables.js";
-import { readSessionUpdatedAt, resolveStorePath } from "../../config/sessions.js";
+import {
+  readSessionUpdatedAt,
+  resolveStorePath,
+} from "../../config/sessions.js";
 import type { DiscordAccountConfig } from "../../config/types.discord.js";
 import { logVerbose } from "../../globals.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
@@ -39,7 +48,10 @@ import { upsertChannelPairingRequest } from "../../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import { createNonExitingRuntime, type RuntimeEnv } from "../../runtime.js";
 import { readStoreAllowFromForDmPolicy } from "../../security/dm-policy-shared.js";
-import { resolveDiscordComponentEntry, resolveDiscordModalEntry } from "../components-registry.js";
+import {
+  resolveDiscordComponentEntry,
+  resolveDiscordModalEntry,
+} from "../components-registry.js";
 import {
   createDiscordFormModal,
   formatDiscordComponentEventText,
@@ -78,7 +90,9 @@ type AgentComponentMessageInteraction =
   | MentionableSelectMenuInteraction
   | ChannelSelectMenuInteraction;
 
-type AgentComponentInteraction = AgentComponentMessageInteraction | ModalInteraction;
+type AgentComponentInteraction =
+  | AgentComponentMessageInteraction
+  | ModalInteraction;
 
 type ComponentInteractionContext = NonNullable<
   Awaited<ReturnType<typeof resolveComponentInteractionContext>>
@@ -113,7 +127,9 @@ function resolveAgentComponentRoute(params: {
       kind: params.isDirectMessage ? "direct" : "channel",
       id: params.isDirectMessage ? params.userId : params.channelId,
     },
-    parentPeer: params.parentId ? { kind: "channel", id: params.parentId } : undefined,
+    parentPeer: params.parentId
+      ? { kind: "channel", id: params.parentId }
+      : undefined,
   });
 }
 
@@ -128,7 +144,9 @@ async function ackComponentInteraction(params: {
       ...params.replyOpts,
     });
   } catch (err) {
-    logError(`${params.label}: failed to acknowledge interaction: ${String(err)}`);
+    logError(
+      `${params.label}: failed to acknowledge interaction: ${String(err)}`,
+    );
   }
 }
 
@@ -136,9 +154,11 @@ function resolveDiscordChannelContext(
   interaction: AgentComponentInteraction,
 ): DiscordChannelContext {
   const channel = interaction.channel;
-  const channelName = channel && "name" in channel ? (channel.name as string) : undefined;
+  const channelName =
+    channel && "name" in channel ? (channel.name as string) : undefined;
   const channelSlug = channelName ? normalizeDiscordSlug(channelName) : "";
-  const channelType = channel && "type" in channel ? (channel.type as number) : undefined;
+  const channelType =
+    channel && "type" in channel ? (channel.type as number) : undefined;
   const isThread = isThreadChannelType(channelType);
 
   let parentId: string | undefined;
@@ -155,7 +175,15 @@ function resolveDiscordChannelContext(
     }
   }
 
-  return { channelName, channelSlug, channelType, isThread, parentId, parentName, parentSlug };
+  return {
+    channelName,
+    channelSlug,
+    channelType,
+    isThread,
+    parentId,
+    parentName,
+    parentSlug,
+  };
 }
 
 async function resolveComponentInteractionContext(params: {
@@ -195,7 +223,9 @@ async function resolveComponentInteractionContext(params: {
   // can safely edit the original deferred response.
   if (shouldDefer) {
     try {
-      await (interaction as AgentComponentMessageInteraction).defer({ ephemeral: true });
+      await (interaction as AgentComponentMessageInteraction).defer({
+        ephemeral: true,
+      });
       didDefer = true;
     } catch (err) {
       logError(`${label}: failed to defer interaction: ${String(err)}`);
@@ -274,7 +304,9 @@ async function ensureGuildComponentMemberAllowed(params: {
     sender: {
       id: user.id,
       name: user.username,
-      tag: user.discriminator ? `${user.username}#${user.discriminator}` : undefined,
+      tag: user.discriminator
+        ? `${user.username}#${user.discriminator}`
+        : undefined,
     },
     allowNameMatching: params.allowNameMatching,
   });
@@ -282,7 +314,9 @@ async function ensureGuildComponentMemberAllowed(params: {
     return true;
   }
 
-  logVerbose(`agent ${componentLabel}: blocked user ${user.id} (not in users/roles allowlist)`);
+  logVerbose(
+    `agent ${componentLabel}: blocked user ${user.id} (not in users/roles allowlist)`,
+  );
   try {
     await interaction.reply({
       content: unauthorizedReply,
@@ -440,7 +474,11 @@ function parseAgentComponentData(data: ComponentData): {
   };
 
   const componentId =
-    typeof raw === "string" ? decodeSafe(raw) : typeof raw === "number" ? String(raw) : null;
+    typeof raw === "string"
+      ? decodeSafe(raw)
+      : typeof raw === "number"
+        ? String(raw)
+        : null;
 
   if (!componentId) {
     return null;
@@ -448,7 +486,10 @@ function parseAgentComponentData(data: ComponentData): {
   return { componentId };
 }
 
-function formatUsername(user: { username: string; discriminator?: string | null }): string {
+function formatUsername(user: {
+  username: string;
+  discriminator?: string | null;
+}): string {
   if (user.discriminator && user.discriminator !== "0") {
     return `${user.username}#${user.discriminator}`;
   }
@@ -497,7 +538,11 @@ async function ensureDmComponentAuthorized(params: {
     dmPolicy,
   });
   const effectiveAllowFrom = [...(ctx.allowFrom ?? []), ...storeAllowFrom];
-  const allowList = normalizeDiscordAllowList(effectiveAllowFrom, ["discord:", "user:", "pk:"]);
+  const allowList = normalizeDiscordAllowList(effectiveAllowFrom, [
+    "discord:",
+    "user:",
+    "pk:",
+  ]);
   const allowMatch = allowList
     ? resolveDiscordAllowListMatch({
         allowList,
@@ -540,7 +585,9 @@ async function ensureDmComponentAuthorized(params: {
     return false;
   }
 
-  logVerbose(`agent ${componentLabel}: blocked DM user ${user.id} (not in allowFrom)`);
+  logVerbose(
+    `agent ${componentLabel}: blocked DM user ${user.id} (not in allowFrom)`,
+  );
   try {
     await interaction.reply({
       content: `You are not authorized to use this ${componentLabel}.`,
@@ -602,7 +649,9 @@ function parseDiscordComponentData(
   }
   const rawComponentId = readParsedComponentId(data);
   const rawModalId =
-    "mid" in data ? (data as { mid?: unknown }).mid : (data as { modalId?: unknown }).modalId;
+    "mid" in data
+      ? (data as { mid?: unknown }).mid
+      : (data as { modalId?: unknown }).modalId;
   let componentId = normalizeComponentId(rawComponentId);
   let modalId = normalizeComponentId(rawModalId);
   if (!componentId && customId) {
@@ -618,10 +667,15 @@ function parseDiscordComponentData(
   return { componentId, modalId };
 }
 
-function parseDiscordModalId(data: ComponentData, customId?: string): string | null {
+function parseDiscordModalId(
+  data: ComponentData,
+  customId?: string,
+): string | null {
   if (data && typeof data === "object") {
     const rawModalId =
-      "mid" in data ? (data as { mid?: unknown }).mid : (data as { modalId?: unknown }).modalId;
+      "mid" in data
+        ? (data as { mid?: unknown }).mid
+        : (data as { modalId?: unknown }).modalId;
     const modalId = normalizeComponentId(rawModalId);
     if (modalId) {
       return modalId;
@@ -633,7 +687,9 @@ function parseDiscordModalId(data: ComponentData, customId?: string): string | n
   return null;
 }
 
-function resolveInteractionCustomId(interaction: AgentComponentInteraction): string | undefined {
+function resolveInteractionCustomId(
+  interaction: AgentComponentInteraction,
+): string | undefined {
   if (!interaction?.rawData || typeof interaction.rawData !== "object") {
     return undefined;
   }
@@ -660,7 +716,10 @@ function mapOptionLabels(
   return values.map((value) => map.get(value) ?? value);
 }
 
-function mapSelectValues(entry: DiscordComponentEntry, values: string[]): string[] {
+function mapSelectValues(
+  entry: DiscordComponentEntry,
+  values: string[],
+): string[] {
   if (entry.selectType === "string") {
     return mapOptionLabels(entry.options, values);
   }
@@ -692,7 +751,9 @@ function resolveModalFieldValues(
   try {
     switch (field.type) {
       case "text": {
-        const value = required ? fields.getText(field.id, true) : fields.getText(field.id);
+        const value = required
+          ? fields.getText(field.id, true)
+          : fields.getText(field.id);
         return value ? [value] : [];
       }
       case "select":
@@ -761,7 +822,11 @@ function resolveComponentCommandAuthorized(params: {
     return true;
   }
 
-  const ownerAllowList = normalizeDiscordAllowList(ctx.allowFrom, ["discord:", "user:", "pk:"]);
+  const ownerAllowList = normalizeDiscordAllowList(ctx.allowFrom, [
+    "discord:",
+    "user:",
+    "pk:",
+  ]);
   const ownerOk = ownerAllowList
     ? resolveDiscordAllowListMatch({
         allowList: ownerAllowList,
@@ -774,17 +839,18 @@ function resolveComponentCommandAuthorized(params: {
       }).allowed
     : false;
 
-  const { hasAccessRestrictions, memberAllowed } = resolveDiscordMemberAccessState({
-    channelConfig,
-    guildInfo,
-    memberRoleIds: interactionCtx.memberRoleIds,
-    sender: {
-      id: interactionCtx.user.id,
-      name: interactionCtx.user.username,
-      tag: formatDiscordUserTag(interactionCtx.user),
-    },
-    allowNameMatching: params.allowNameMatching,
-  });
+  const { hasAccessRestrictions, memberAllowed } =
+    resolveDiscordMemberAccessState({
+      channelConfig,
+      guildInfo,
+      memberRoleIds: interactionCtx.memberRoleIds,
+      sender: {
+        id: interactionCtx.user.id,
+        name: interactionCtx.user.username,
+        tag: formatDiscordUserTag(interactionCtx.user),
+      },
+      allowNameMatching: params.allowNameMatching,
+    });
   const useAccessGroups = ctx.cfg.commands?.useAccessGroups !== false;
   const authorizers = useAccessGroups
     ? [
@@ -808,9 +874,14 @@ async function dispatchDiscordComponentEvent(params: {
   guildInfo: ReturnType<typeof resolveDiscordGuildEntry>;
   eventText: string;
   replyToId?: string;
-  routeOverrides?: { sessionKey?: string; agentId?: string; accountId?: string };
+  routeOverrides?: {
+    sessionKey?: string;
+    agentId?: string;
+    accountId?: string;
+  };
 }): Promise<void> {
-  const { ctx, interaction, interactionCtx, channelCtx, guildInfo, eventText } = params;
+  const { ctx, interaction, interactionCtx, channelCtx, guildInfo, eventText } =
+    params;
   const runtime = ctx.runtime ?? createNonExitingRuntime();
   const route = resolveAgentRoute({
     cfg: ctx.cfg,
@@ -820,9 +891,13 @@ async function dispatchDiscordComponentEvent(params: {
     memberRoleIds: interactionCtx.memberRoleIds,
     peer: {
       kind: interactionCtx.isDirectMessage ? "direct" : "channel",
-      id: interactionCtx.isDirectMessage ? interactionCtx.userId : interactionCtx.channelId,
+      id: interactionCtx.isDirectMessage
+        ? interactionCtx.userId
+        : interactionCtx.channelId,
     },
-    parentPeer: channelCtx.parentId ? { kind: "channel", id: channelCtx.parentId } : undefined,
+    parentPeer: channelCtx.parentId
+      ? { kind: "channel", id: channelCtx.parentId }
+      : undefined,
   });
   const sessionKey = params.routeOverrides?.sessionKey ?? route.sessionKey;
   const agentId = params.routeOverrides?.agentId ?? route.agentId;
@@ -835,14 +910,17 @@ async function dispatchDiscordComponentEvent(params: {
         channelName: channelCtx.channelName ?? interactionCtx.channelId,
         channelId: interactionCtx.channelId,
       });
-  const senderName = interactionCtx.user.globalName ?? interactionCtx.user.username;
+  const senderName =
+    interactionCtx.user.globalName ?? interactionCtx.user.username;
   const senderUsername = interactionCtx.user.username;
   const senderTag = formatDiscordUserTag(interactionCtx.user);
   const groupChannel =
     !interactionCtx.isDirectMessage && channelCtx.channelSlug
       ? `#${channelCtx.channelSlug}`
       : undefined;
-  const groupSubject = interactionCtx.isDirectMessage ? undefined : groupChannel;
+  const groupSubject = interactionCtx.isDirectMessage
+    ? undefined
+    : groupChannel;
   const channelConfig = resolveDiscordChannelConfigWithFallback({
     guildInfo,
     channelId: interactionCtx.channelId,
@@ -858,7 +936,11 @@ async function dispatchDiscordComponentEvent(params: {
   const ownerAllowFrom = resolveDiscordOwnerAllowFrom({
     channelConfig,
     guildInfo,
-    sender: { id: interactionCtx.user.id, name: interactionCtx.user.username, tag: senderTag },
+    sender: {
+      id: interactionCtx.user.id,
+      name: interactionCtx.user.username,
+      tag: senderTag,
+    },
     allowNameMatching,
   });
   const commandAuthorized = resolveComponentCommandAuthorized({
@@ -905,8 +987,14 @@ async function dispatchDiscordComponentEvent(params: {
     SenderTag: senderTag,
     GroupSubject: groupSubject,
     GroupChannel: groupChannel,
-    GroupSystemPrompt: interactionCtx.isDirectMessage ? undefined : groupSystemPrompt,
-    GroupSpace: guildInfo?.id ?? guildInfo?.slug ?? interactionCtx.rawGuildId ?? undefined,
+    GroupSystemPrompt: interactionCtx.isDirectMessage
+      ? undefined
+      : groupSystemPrompt,
+    GroupSpace:
+      guildInfo?.id ??
+      guildInfo?.slug ??
+      interactionCtx.rawGuildId ??
+      undefined,
     OwnerAllowFrom: ownerAllowFrom,
     Provider: "discord" as const,
     Surface: "discord" as const,
@@ -932,7 +1020,9 @@ async function dispatchDiscordComponentEvent(params: {
         }
       : undefined,
     onRecordError: (err) => {
-      logVerbose(`discord: failed updating component session meta: ${String(err)}`);
+      logVerbose(
+        `discord: failed updating component session meta: ${String(err)}`,
+      );
     },
   });
 
@@ -954,7 +1044,9 @@ async function dispatchDiscordComponentEvent(params: {
   });
   const token = ctx.token ?? "";
   const replyToMode =
-    ctx.discordConfig?.replyToMode ?? ctx.cfg.channels?.discord?.replyToMode ?? "off";
+    ctx.discordConfig?.replyToMode ??
+    ctx.cfg.channels?.discord?.replyToMode ??
+    "off";
   const replyReference = createReplyReferencePlanner({
     replyToMode,
     startId: params.replyToId,
@@ -987,9 +1079,14 @@ async function dispatchDiscordComponentEvent(params: {
       },
       onReplyStart: async () => {
         try {
-          await sendTyping({ client: interaction.client, channelId: typingChannelId });
+          await sendTyping({
+            client: interaction.client,
+            channelId: typingChannelId,
+          });
         } catch (err) {
-          logVerbose(`discord: typing failed for component reply: ${String(err)}`);
+          logVerbose(
+            `discord: typing failed for component reply: ${String(err)}`,
+          );
         }
       },
       onError: (err) => {
@@ -1024,7 +1121,10 @@ async function handleDiscordComponentEvent(params: {
     return;
   }
 
-  const entry = resolveDiscordComponentEntry({ id: parsed.componentId, consume: false });
+  const entry = resolveDiscordComponentEntry({
+    id: parsed.componentId,
+    consume: false,
+  });
   if (!entry) {
     try {
       await params.interaction.reply({
@@ -1046,7 +1146,8 @@ async function handleDiscordComponentEvent(params: {
   if (!interactionCtx) {
     return;
   }
-  const { channelId, user, replyOpts, rawGuildId, memberRoleIds } = interactionCtx;
+  const { channelId, user, replyOpts, rawGuildId, memberRoleIds } =
+    interactionCtx;
   const guildInfo = resolveDiscordGuildEntry({
     guild: params.interaction.guild ?? undefined,
     guildEntries: params.ctx.guildEntries,
@@ -1111,7 +1212,9 @@ async function handleDiscordComponentEvent(params: {
     return;
   }
 
-  const values = params.values ? mapSelectValues(consumed, params.values) : undefined;
+  const values = params.values
+    ? mapSelectValues(consumed, params.values)
+    : undefined;
   const eventText = formatDiscordComponentEventText({
     kind: consumed.kind === "select" ? "select" : "button",
     label: consumed.label,
@@ -1121,7 +1224,9 @@ async function handleDiscordComponentEvent(params: {
   try {
     await params.interaction.reply({ content: "✓", ...replyOpts });
   } catch (err) {
-    logError(`${params.label}: failed to acknowledge interaction: ${String(err)}`);
+    logError(
+      `${params.label}: failed to acknowledge interaction: ${String(err)}`,
+    );
   }
 
   await dispatchDiscordComponentEvent({
@@ -1162,7 +1267,10 @@ async function handleDiscordModalTrigger(params: {
     }
     return;
   }
-  const entry = resolveDiscordComponentEntry({ id: parsed.componentId, consume: false });
+  const entry = resolveDiscordComponentEntry({
+    id: parsed.componentId,
+    consume: false,
+  });
   if (!entry || entry.kind !== "modal-trigger") {
     try {
       await params.interaction.reply({
@@ -1198,7 +1306,8 @@ async function handleDiscordModalTrigger(params: {
   if (!interactionCtx) {
     return;
   }
-  const { channelId, user, replyOpts, rawGuildId, memberRoleIds } = interactionCtx;
+  const { channelId, user, replyOpts, rawGuildId, memberRoleIds } =
+    interactionCtx;
   const guildInfo = resolveDiscordGuildEntry({
     guild: params.interaction.guild ?? undefined,
     guildEntries: params.ctx.guildEntries,
@@ -1252,7 +1361,10 @@ async function handleDiscordModalTrigger(params: {
   }
 
   const resolvedModalId = consumed.modalId ?? modalId;
-  const modalEntry = resolveDiscordModalEntry({ id: resolvedModalId, consume: false });
+  const modalEntry = resolveDiscordModalEntry({
+    id: resolvedModalId,
+    consume: false,
+  });
   if (!modalEntry) {
     try {
       await params.interaction.reply({
@@ -1283,7 +1395,10 @@ export class AgentComponentButton extends Button {
     this.ctx = ctx;
   }
 
-  async run(interaction: ButtonInteraction, data: ComponentData): Promise<void> {
+  async run(
+    interaction: ButtonInteraction,
+    data: ComponentData,
+  ): Promise<void> {
     // Parse componentId from Carbon's parsed ComponentData
     const parsed = parseAgentComponentData(data);
     if (!parsed) {
@@ -1351,14 +1466,20 @@ export class AgentComponentButton extends Button {
 
     const eventText = `[Discord component: ${componentId} clicked by ${username} (${userId})]`;
 
-    logDebug(`agent button: enqueuing event for channel ${channelId}: ${eventText}`);
+    logDebug(
+      `agent button: enqueuing event for channel ${channelId}: ${eventText}`,
+    );
 
     enqueueSystemEvent(eventText, {
       sessionKey: route.sessionKey,
       contextKey: `discord:agent-button:${channelId}:${componentId}:${userId}`,
     });
 
-    await ackComponentInteraction({ interaction, replyOpts, label: "agent button" });
+    await ackComponentInteraction({
+      interaction,
+      replyOpts,
+      label: "agent button",
+    });
   }
 }
 
@@ -1372,7 +1493,10 @@ export class AgentSelectMenu extends StringSelectMenu {
     this.ctx = ctx;
   }
 
-  async run(interaction: StringSelectMenuInteraction, data: ComponentData): Promise<void> {
+  async run(
+    interaction: StringSelectMenuInteraction,
+    data: ComponentData,
+  ): Promise<void> {
     // Parse componentId from Carbon's parsed ComponentData
     const parsed = parseAgentComponentData(data);
     if (!parsed) {
@@ -1429,7 +1553,8 @@ export class AgentSelectMenu extends StringSelectMenu {
 
     // Extract selected values
     const values = interaction.values ?? [];
-    const valuesText = values.length > 0 ? ` (selected: ${values.join(", ")})` : "";
+    const valuesText =
+      values.length > 0 ? ` (selected: ${values.join(", ")})` : "";
 
     const route = resolveAgentComponentRoute({
       ctx: this.ctx,
@@ -1443,14 +1568,20 @@ export class AgentSelectMenu extends StringSelectMenu {
 
     const eventText = `[Discord select menu: ${componentId} interacted by ${username} (${userId})${valuesText}]`;
 
-    logDebug(`agent select: enqueuing event for channel ${channelId}: ${eventText}`);
+    logDebug(
+      `agent select: enqueuing event for channel ${channelId}: ${eventText}`,
+    );
 
     enqueueSystemEvent(eventText, {
       sessionKey: route.sessionKey,
       contextKey: `discord:agent-select:${channelId}:${componentId}:${userId}`,
     });
 
-    await ackComponentInteraction({ interaction, replyOpts, label: "agent select" });
+    await ackComponentInteraction({
+      interaction,
+      replyOpts,
+      label: "agent select",
+    });
   }
 }
 
@@ -1466,8 +1597,14 @@ class DiscordComponentButton extends Button {
     this.ctx = ctx;
   }
 
-  async run(interaction: ButtonInteraction, data: ComponentData): Promise<void> {
-    const parsed = parseDiscordComponentData(data, resolveInteractionCustomId(interaction));
+  async run(
+    interaction: ButtonInteraction,
+    data: ComponentData,
+  ): Promise<void> {
+    const parsed = parseDiscordComponentData(
+      data,
+      resolveInteractionCustomId(interaction),
+    );
     if (parsed?.modalId) {
       await handleDiscordModalTrigger({
         ctx: this.ctx,
@@ -1498,7 +1635,10 @@ class DiscordComponentStringSelect extends StringSelectMenu {
     this.ctx = ctx;
   }
 
-  async run(interaction: StringSelectMenuInteraction, data: ComponentData): Promise<void> {
+  async run(
+    interaction: StringSelectMenuInteraction,
+    data: ComponentData,
+  ): Promise<void> {
     await handleDiscordComponentEvent({
       ctx: this.ctx,
       interaction,
@@ -1520,7 +1660,10 @@ class DiscordComponentUserSelect extends UserSelectMenu {
     this.ctx = ctx;
   }
 
-  async run(interaction: UserSelectMenuInteraction, data: ComponentData): Promise<void> {
+  async run(
+    interaction: UserSelectMenuInteraction,
+    data: ComponentData,
+  ): Promise<void> {
     await handleDiscordComponentEvent({
       ctx: this.ctx,
       interaction,
@@ -1542,7 +1685,10 @@ class DiscordComponentRoleSelect extends RoleSelectMenu {
     this.ctx = ctx;
   }
 
-  async run(interaction: RoleSelectMenuInteraction, data: ComponentData): Promise<void> {
+  async run(
+    interaction: RoleSelectMenuInteraction,
+    data: ComponentData,
+  ): Promise<void> {
     await handleDiscordComponentEvent({
       ctx: this.ctx,
       interaction,
@@ -1564,7 +1710,10 @@ class DiscordComponentMentionableSelect extends MentionableSelectMenu {
     this.ctx = ctx;
   }
 
-  async run(interaction: MentionableSelectMenuInteraction, data: ComponentData): Promise<void> {
+  async run(
+    interaction: MentionableSelectMenuInteraction,
+    data: ComponentData,
+  ): Promise<void> {
     await handleDiscordComponentEvent({
       ctx: this.ctx,
       interaction,
@@ -1586,7 +1735,10 @@ class DiscordComponentChannelSelect extends ChannelSelectMenu {
     this.ctx = ctx;
   }
 
-  async run(interaction: ChannelSelectMenuInteraction, data: ComponentData): Promise<void> {
+  async run(
+    interaction: ChannelSelectMenuInteraction,
+    data: ComponentData,
+  ): Promise<void> {
     await handleDiscordComponentEvent({
       ctx: this.ctx,
       interaction,
@@ -1611,7 +1763,10 @@ class DiscordComponentModal extends Modal {
   }
 
   async run(interaction: ModalInteraction, data: ComponentData): Promise<void> {
-    const modalId = parseDiscordModalId(data, resolveInteractionCustomId(interaction));
+    const modalId = parseDiscordModalId(
+      data,
+      resolveInteractionCustomId(interaction),
+    );
     if (!modalId) {
       logError("discord component modal: missing modal id");
       try {
@@ -1625,7 +1780,10 @@ class DiscordComponentModal extends Modal {
       return;
     }
 
-    const modalEntry = resolveDiscordModalEntry({ id: modalId, consume: false });
+    const modalEntry = resolveDiscordModalEntry({
+      id: modalId,
+      consume: false,
+    });
     if (!modalEntry) {
       try {
         await interaction.reply({
@@ -1648,7 +1806,8 @@ class DiscordComponentModal extends Modal {
     if (!interactionCtx) {
       return;
     }
-    const { channelId, user, replyOpts, rawGuildId, memberRoleIds } = interactionCtx;
+    const { channelId, user, replyOpts, rawGuildId, memberRoleIds } =
+      interactionCtx;
     const guildInfo = resolveDiscordGuildEntry({
       guild: interaction.guild ?? undefined,
       guildEntries: this.ctx.guildEntries,
@@ -1690,7 +1849,9 @@ class DiscordComponentModal extends Modal {
     try {
       await interaction.acknowledge();
     } catch (err) {
-      logError(`discord component modal: failed to acknowledge: ${String(err)}`);
+      logError(
+        `discord component modal: failed to acknowledge: ${String(err)}`,
+      );
     }
 
     const eventText = formatModalSubmissionText(consumed, interaction);
@@ -1715,23 +1876,33 @@ export function createAgentComponentButton(ctx: AgentComponentContext): Button {
   return new AgentComponentButton(ctx);
 }
 
-export function createAgentSelectMenu(ctx: AgentComponentContext): StringSelectMenu {
+export function createAgentSelectMenu(
+  ctx: AgentComponentContext,
+): StringSelectMenu {
   return new AgentSelectMenu(ctx);
 }
 
-export function createDiscordComponentButton(ctx: AgentComponentContext): Button {
+export function createDiscordComponentButton(
+  ctx: AgentComponentContext,
+): Button {
   return new DiscordComponentButton(ctx);
 }
 
-export function createDiscordComponentStringSelect(ctx: AgentComponentContext): StringSelectMenu {
+export function createDiscordComponentStringSelect(
+  ctx: AgentComponentContext,
+): StringSelectMenu {
   return new DiscordComponentStringSelect(ctx);
 }
 
-export function createDiscordComponentUserSelect(ctx: AgentComponentContext): UserSelectMenu {
+export function createDiscordComponentUserSelect(
+  ctx: AgentComponentContext,
+): UserSelectMenu {
   return new DiscordComponentUserSelect(ctx);
 }
 
-export function createDiscordComponentRoleSelect(ctx: AgentComponentContext): RoleSelectMenu {
+export function createDiscordComponentRoleSelect(
+  ctx: AgentComponentContext,
+): RoleSelectMenu {
   return new DiscordComponentRoleSelect(ctx);
 }
 
@@ -1741,7 +1912,9 @@ export function createDiscordComponentMentionableSelect(
   return new DiscordComponentMentionableSelect(ctx);
 }
 
-export function createDiscordComponentChannelSelect(ctx: AgentComponentContext): ChannelSelectMenu {
+export function createDiscordComponentChannelSelect(
+  ctx: AgentComponentContext,
+): ChannelSelectMenu {
   return new DiscordComponentChannelSelect(ctx);
 }
 

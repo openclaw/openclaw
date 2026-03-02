@@ -27,7 +27,11 @@ export function uriAction(label: string, uri: string): Action {
 /**
  * Create a postback action (sends data to webhook when tapped)
  */
-export function postbackAction(label: string, data: string, displayText?: string): Action {
+export function postbackAction(
+  label: string,
+  data: string,
+  displayText?: string,
+): Action {
   return {
     type: "postback",
     label: label.slice(0, 20),

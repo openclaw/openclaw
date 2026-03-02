@@ -27,7 +27,8 @@ export async function recordInboundSession(params: {
   updateLastRoute?: InboundLastRouteUpdate;
   onRecordError: (err: unknown) => void;
 }): Promise<void> {
-  const { storePath, sessionKey, ctx, groupResolution, createIfMissing } = params;
+  const { storePath, sessionKey, ctx, groupResolution, createIfMissing } =
+    params;
   const canonicalSessionKey = normalizeSessionStoreKey(sessionKey);
   void recordSessionMetaFromInbound({
     storePath,

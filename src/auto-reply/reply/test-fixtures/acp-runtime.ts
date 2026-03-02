@@ -1,7 +1,9 @@
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { SessionAcpMeta } from "../../../config/sessions/types.js";
 
-export function createAcpTestConfig(overrides?: Partial<OpenClawConfig>): OpenClawConfig {
+export function createAcpTestConfig(
+  overrides?: Partial<OpenClawConfig>,
+): OpenClawConfig {
   return {
     acp: {
       enabled: true,
@@ -14,7 +16,9 @@ export function createAcpTestConfig(overrides?: Partial<OpenClawConfig>): OpenCl
   } as OpenClawConfig;
 }
 
-export function createAcpSessionMeta(overrides?: Partial<SessionAcpMeta>): SessionAcpMeta {
+export function createAcpSessionMeta(
+  overrides?: Partial<SessionAcpMeta>,
+): SessionAcpMeta {
   return {
     backend: "acpx",
     agent: "codex",

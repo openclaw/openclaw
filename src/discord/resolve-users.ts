@@ -127,7 +127,11 @@ export async function resolveDiscordUserAllowlist(params: {
         ? allGuilds.filter((g) => g.slug === normalizeDiscordSlug(guildName))
         : allGuilds;
 
-    let best: { member: DiscordMember; guild: DiscordGuildSummary; score: number } | null = null;
+    let best: {
+      member: DiscordMember;
+      guild: DiscordGuildSummary;
+      score: number;
+    } | null = null;
     let matches = 0;
 
     for (const guild of guildList) {
@@ -155,7 +159,10 @@ export async function resolveDiscordUserAllowlist(params: {
     if (best) {
       const user = best.member.user;
       const name =
-        best.member.nick?.trim() || user.global_name?.trim() || user.username?.trim() || undefined;
+        best.member.nick?.trim() ||
+        user.global_name?.trim() ||
+        user.username?.trim() ||
+        undefined;
       results.push({
         input,
         resolved: true,

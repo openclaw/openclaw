@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { withEnv } from "../test-utils/env.js";
-import { resolveBrowserConfig, resolveProfile, shouldStartLocalBrowserServer } from "./config.js";
+import {
+  resolveBrowserConfig,
+  resolveProfile,
+  shouldStartLocalBrowserServer,
+} from "./config.js";
 
 describe("browser config", () => {
   it("defaults to enabled with loopback defaults and lobster-orange color", () => {
@@ -42,7 +46,9 @@ describe("browser config", () => {
 
   it("derives default ports from gateway.port when env is unset", () => {
     withEnv({ OPENCLAW_GATEWAY_PORT: undefined }, () => {
-      const resolved = resolveBrowserConfig(undefined, { gateway: { port: 19011 } });
+      const resolved = resolveBrowserConfig(undefined, {
+        gateway: { port: 19011 },
+      });
       expect(resolved.controlPort).toBe(19013);
       const chrome = resolveProfile(resolved, "chrome");
       expect(chrome?.driver).toBe("extension");
@@ -141,7 +147,11 @@ describe("browser config", () => {
     const resolved = resolveBrowserConfig({
       attachOnly: false,
       profiles: {
-        remote: { cdpUrl: "http://127.0.0.1:9222", attachOnly: true, color: "#0066CC" },
+        remote: {
+          cdpUrl: "http://127.0.0.1:9222",
+          attachOnly: true,
+          color: "#0066CC",
+        },
       },
     });
 
@@ -162,7 +172,9 @@ describe("browser config", () => {
   });
 
   it("rejects unsupported protocols", () => {
-    expect(() => resolveBrowserConfig({ cdpUrl: "ws://127.0.0.1:18791" })).toThrow(/must be http/i);
+    expect(() =>
+      resolveBrowserConfig({ cdpUrl: "ws://127.0.0.1:18791" }),
+    ).toThrow(/must be http/i);
   });
 
   it("does not add the built-in chrome extension profile if the derived relay port is already used", () => {
@@ -196,7 +208,14 @@ describe("browser config", () => {
 
   it("filters out non-string entries from extraArgs", () => {
     const resolved = resolveBrowserConfig({
-      extraArgs: ["--flag", 42, null, undefined, true, "--other"] as unknown as string[],
+      extraArgs: [
+        "--flag",
+        42,
+        null,
+        undefined,
+        true,
+        "--other",
+      ] as unknown as string[],
     });
     expect(resolved.extraArgs).toEqual(["--flag", "--other"]);
   });

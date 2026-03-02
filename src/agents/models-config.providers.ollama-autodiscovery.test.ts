@@ -39,7 +39,10 @@ describe("Ollama auto-discovery", () => {
         return {
           ok: true,
           json: async () => ({
-            models: [{ name: "deepseek-r1:latest" }, { name: "llama3.3:latest" }],
+            models: [
+              { name: "deepseek-r1:latest" },
+              { name: "llama3.3:latest" },
+            ],
           }),
         };
       }

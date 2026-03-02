@@ -16,7 +16,9 @@ const OAUTH_PLACEHOLDER = "qwen-oauth";
 function normalizeBaseUrl(value: string | undefined): string {
   const raw = value?.trim() || DEFAULT_BASE_URL;
   const withProtocol = raw.startsWith("http") ? raw : `https://${raw}`;
-  return withProtocol.endsWith("/v1") ? withProtocol : `${withProtocol.replace(/\/+$/, "")}/v1`;
+  return withProtocol.endsWith("/v1")
+    ? withProtocol
+    : `${withProtocol.replace(/\/+$/, "")}/v1`;
 }
 
 function buildModelDefinition(params: {

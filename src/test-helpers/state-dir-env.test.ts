@@ -57,15 +57,22 @@ describe("state-dir-env helpers", () => {
 
     let capturedTempRoot = "";
     let capturedStateDir = "";
-    await withStateDirEnv("openclaw-state-dir-env-", async ({ tempRoot, stateDir }) => {
-      capturedTempRoot = tempRoot;
-      capturedStateDir = stateDir;
-      expect(process.env.OPENCLAW_STATE_DIR).toBe(stateDir);
-      expect(process.env.CLAWDBOT_STATE_DIR).toBeUndefined();
-      await fs.writeFile(path.join(stateDir, "probe.txt"), "ok", "utf8");
-    });
+    await withStateDirEnv(
+      "openclaw-state-dir-env-",
+      async ({ tempRoot, stateDir }) => {
+        capturedTempRoot = tempRoot;
+        capturedStateDir = stateDir;
+        expect(process.env.OPENCLAW_STATE_DIR).toBe(stateDir);
+        expect(process.env.CLAWDBOT_STATE_DIR).toBeUndefined();
+        await fs.writeFile(path.join(stateDir, "probe.txt"), "ok", "utf8");
+      },
+    );
 
-    await expectStateDirEnvRestored({ prev, capturedStateDir, capturedTempRoot });
+    await expectStateDirEnvRestored({
+      prev,
+      capturedStateDir,
+      capturedTempRoot,
+    });
   });
 
   it("withStateDirEnv restores env and cleans temp root when callback throws", async () => {
@@ -74,14 +81,21 @@ describe("state-dir-env helpers", () => {
     let capturedTempRoot = "";
     let capturedStateDir = "";
     await expect(
-      withStateDirEnv("openclaw-state-dir-env-", async ({ tempRoot, stateDir }) => {
-        capturedTempRoot = tempRoot;
-        capturedStateDir = stateDir;
-        throw new Error("boom");
-      }),
+      withStateDirEnv(
+        "openclaw-state-dir-env-",
+        async ({ tempRoot, stateDir }) => {
+          capturedTempRoot = tempRoot;
+          capturedStateDir = stateDir;
+          throw new Error("boom");
+        },
+      ),
     ).rejects.toThrow("boom");
 
-    await expectStateDirEnvRestored({ prev, capturedStateDir, capturedTempRoot });
+    await expectStateDirEnvRestored({
+      prev,
+      capturedStateDir,
+      capturedTempRoot,
+    });
   });
 
   it("withStateDirEnv restores both env vars when legacy var was previously set", async () => {
@@ -93,14 +107,21 @@ describe("state-dir-env helpers", () => {
     let capturedTempRoot = "";
     let capturedStateDir = "";
     try {
-      await withStateDirEnv("openclaw-state-dir-env-", async ({ tempRoot, stateDir }) => {
-        capturedTempRoot = tempRoot;
-        capturedStateDir = stateDir;
-        expect(process.env.OPENCLAW_STATE_DIR).toBe(stateDir);
-        expect(process.env.CLAWDBOT_STATE_DIR).toBeUndefined();
-      });
+      await withStateDirEnv(
+        "openclaw-state-dir-env-",
+        async ({ tempRoot, stateDir }) => {
+          capturedTempRoot = tempRoot;
+          capturedStateDir = stateDir;
+          expect(process.env.OPENCLAW_STATE_DIR).toBe(stateDir);
+          expect(process.env.CLAWDBOT_STATE_DIR).toBeUndefined();
+        },
+      );
 
-      await expectStateDirEnvRestored({ prev, capturedStateDir, capturedTempRoot });
+      await expectStateDirEnvRestored({
+        prev,
+        capturedStateDir,
+        capturedTempRoot,
+      });
     } finally {
       restoreStateDirEnv(testSnapshot);
     }

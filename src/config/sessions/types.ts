@@ -171,7 +171,9 @@ function normalizeRuntimeField(value: string | undefined): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
-export function normalizeSessionRuntimeModelFields(entry: SessionEntry): SessionEntry {
+export function normalizeSessionRuntimeModelFields(
+  entry: SessionEntry,
+): SessionEntry {
   const normalizedModel = normalizeRuntimeField(entry.model);
   const normalizedProvider = normalizeRuntimeField(entry.modelProvider);
   let next = entry;
@@ -229,10 +231,19 @@ export function mergeSessionEntry(
   existing: SessionEntry | undefined,
   patch: Partial<SessionEntry>,
 ): SessionEntry {
-  const sessionId = patch.sessionId ?? existing?.sessionId ?? crypto.randomUUID();
-  const updatedAt = Math.max(existing?.updatedAt ?? 0, patch.updatedAt ?? 0, Date.now());
+  const sessionId =
+    patch.sessionId ?? existing?.sessionId ?? crypto.randomUUID();
+  const updatedAt = Math.max(
+    existing?.updatedAt ?? 0,
+    patch.updatedAt ?? 0,
+    Date.now(),
+  );
   if (!existing) {
-    return normalizeSessionRuntimeModelFields({ ...patch, sessionId, updatedAt });
+    return normalizeSessionRuntimeModelFields({
+      ...patch,
+      sessionId,
+      updatedAt,
+    });
   }
   const next = { ...existing, ...patch, sessionId, updatedAt };
 

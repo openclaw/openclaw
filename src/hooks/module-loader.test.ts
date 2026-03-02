@@ -1,12 +1,17 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
-import { resolveFileModuleUrl, resolveFunctionModuleExport } from "./module-loader.js";
+import {
+  resolveFileModuleUrl,
+  resolveFunctionModuleExport,
+} from "./module-loader.js";
 
 describe("hooks module loader helpers", () => {
   it("builds a file URL without cache-busting by default", () => {
     const modulePath = path.resolve("/tmp/hook-handler.js");
-    expect(resolveFileModuleUrl({ modulePath })).toBe(pathToFileURL(modulePath).href);
+    expect(resolveFileModuleUrl({ modulePath })).toBe(
+      pathToFileURL(modulePath).href,
+    );
   });
 
   it("adds a cache-busting query when requested", () => {

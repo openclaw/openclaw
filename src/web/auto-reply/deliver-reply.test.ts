@@ -53,15 +53,15 @@ function mockFirstSendMediaFailure(msg: WebInboundMsg, message: string) {
 }
 
 function mockFirstReplyFailure(msg: WebInboundMsg, message: string) {
-  (msg.reply as unknown as { mockRejectedValueOnce: (v: unknown) => void }).mockRejectedValueOnce(
-    new Error(message),
-  );
+  (
+    msg.reply as unknown as { mockRejectedValueOnce: (v: unknown) => void }
+  ).mockRejectedValueOnce(new Error(message));
 }
 
 function mockSecondReplySuccess(msg: WebInboundMsg) {
-  (msg.reply as unknown as { mockResolvedValueOnce: (v: unknown) => void }).mockResolvedValueOnce(
-    undefined,
-  );
+  (
+    msg.reply as unknown as { mockResolvedValueOnce: (v: unknown) => void }
+  ).mockResolvedValueOnce(undefined);
 }
 
 const replyLogger = {
@@ -106,7 +106,9 @@ describe("deliverWebReply", () => {
     const msg = makeMsg();
 
     await deliverWebReply({
-      replyResult: { text: "Intro line\nReasoning: appears in content but is not a prefix" },
+      replyResult: {
+        text: "Intro line\nReasoning: appears in content but is not a prefix",
+      },
       msg,
       maxMediaBytes: 1024 * 1024,
       textLimit: 200,
@@ -135,7 +137,10 @@ describe("deliverWebReply", () => {
     expect(msg.reply).toHaveBeenCalledTimes(2);
     expect(msg.reply).toHaveBeenNthCalledWith(1, "aaa");
     expect(msg.reply).toHaveBeenNthCalledWith(2, "aaa");
-    expect(replyLogger.info).toHaveBeenCalledWith(expect.any(Object), "auto-reply sent (text)");
+    expect(replyLogger.info).toHaveBeenCalledWith(
+      expect.any(Object),
+      "auto-reply sent (text)",
+    );
   });
 
   it.each(["connection closed", "operation timed out"])(
@@ -187,7 +192,10 @@ describe("deliverWebReply", () => {
       }),
     );
     expect(msg.reply).toHaveBeenCalledWith("aaa");
-    expect(replyLogger.info).toHaveBeenCalledWith(expect.any(Object), "auto-reply sent (media)");
+    expect(replyLogger.info).toHaveBeenCalledWith(
+      expect.any(Object),
+      "auto-reply sent (media)",
+    );
     expect(logVerbose).toHaveBeenCalled();
   });
 
@@ -196,7 +204,9 @@ describe("deliverWebReply", () => {
     mockLoadedImageMedia();
     mockFirstSendMediaFailure(msg, "socket reset");
     (
-      msg.sendMedia as unknown as { mockResolvedValueOnce: (v: unknown) => void }
+      msg.sendMedia as unknown as {
+        mockResolvedValueOnce: (v: unknown) => void;
+      }
     ).mockResolvedValueOnce(undefined);
 
     await deliverWebReply({
@@ -228,7 +238,10 @@ describe("deliverWebReply", () => {
 
     expect(msg.reply).toHaveBeenCalledTimes(1);
     expect(
-      String((msg.reply as unknown as { mock: { calls: unknown[][] } }).mock.calls[0]?.[0]),
+      String(
+        (msg.reply as unknown as { mock: { calls: unknown[][] } }).mock
+          .calls[0]?.[0],
+      ),
     ).toContain("⚠️ Media failed");
     expect(replyLogger.warn).toHaveBeenCalledWith(
       expect.objectContaining({ mediaUrl: "http://example.com/img.jpg" }),

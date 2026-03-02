@@ -19,7 +19,9 @@ vi.mock("../infra/heartbeat-wake.js", () => ({
 }));
 
 vi.mock("../config/config.js", async () => {
-  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
+  const actual = await vi.importActual<typeof import("../config/config.js")>(
+    "../config/config.js",
+  );
   return {
     ...actual,
     loadConfig: () => loadConfigMock(),
@@ -99,7 +101,9 @@ describe("buildGatewayCronService", () => {
 
     loadConfigMock.mockReturnValue(cfg);
     fetchWithSsrFGuardMock.mockRejectedValue(
-      new SsrFBlockedError("Blocked: resolves to private/internal/special-use IP address"),
+      new SsrFBlockedError(
+        "Blocked: resolves to private/internal/special-use IP address",
+      ),
     );
 
     const state = buildGatewayCronService({

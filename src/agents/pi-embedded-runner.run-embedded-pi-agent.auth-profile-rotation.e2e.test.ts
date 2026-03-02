@@ -7,7 +7,8 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { AuthProfileFailureReason } from "./auth-profiles.js";
 import type { EmbeddedRunAttemptResult } from "./pi-embedded-runner/run/types.js";
 
-const runEmbeddedAttemptMock = vi.fn<(params: unknown) => Promise<EmbeddedRunAttemptResult>>();
+const runEmbeddedAttemptMock =
+  vi.fn<(params: unknown) => Promise<EmbeddedRunAttemptResult>>();
 const resolveCopilotApiTokenMock = vi.fn();
 
 vi.mock("./pi-embedded-runner/run/attempt.js", () => ({
@@ -16,7 +17,8 @@ vi.mock("./pi-embedded-runner/run/attempt.js", () => ({
 
 vi.mock("../providers/github-copilot-token.js", () => ({
   DEFAULT_COPILOT_API_BASE_URL: "https://api.individual.githubcopilot.com",
-  resolveCopilotApiToken: (...args: unknown[]) => resolveCopilotApiTokenMock(...args),
+  resolveCopilotApiToken: (...args: unknown[]) =>
+    resolveCopilotApiTokenMock(...args),
 }));
 
 vi.mock("./pi-embedded-runner/compact.js", () => ({
@@ -54,7 +56,9 @@ const baseUsage = {
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 };
 
-const buildAssistant = (overrides: Partial<AssistantMessage>): AssistantMessage => ({
+const buildAssistant = (
+  overrides: Partial<AssistantMessage>,
+): AssistantMessage => ({
   role: "assistant",
   content: [],
   api: "openai-responses",
@@ -66,7 +70,9 @@ const buildAssistant = (overrides: Partial<AssistantMessage>): AssistantMessage 
   ...overrides,
 });
 
-const makeAttempt = (overrides: Partial<EmbeddedRunAttemptResult>): EmbeddedRunAttemptResult => ({
+const makeAttempt = (
+  overrides: Partial<EmbeddedRunAttemptResult>,
+): EmbeddedRunAttemptResult => ({
   aborted: false,
   timedOut: false,
   timedOutDuringCompaction: false,
@@ -85,7 +91,10 @@ const makeAttempt = (overrides: Partial<EmbeddedRunAttemptResult>): EmbeddedRunA
   ...overrides,
 });
 
-const makeConfig = (opts?: { fallbacks?: string[]; apiKey?: string }): OpenClawConfig =>
+const makeConfig = (opts?: {
+  fallbacks?: string[];
+  apiKey?: string;
+}): OpenClawConfig =>
   ({
     agents: {
       defaults: {
@@ -203,7 +212,13 @@ const writeAuthStore = async (
       "openai:p1": { type: "api_key", provider: "openai", key: "sk-one" },
       "openai:p2": { type: "api_key", provider: "openai", key: "sk-two" },
       ...(opts?.includeAnthropic
-        ? { "anthropic:default": { type: "api_key", provider: "anthropic", key: "sk-anth" } }
+        ? {
+            "anthropic:default": {
+              type: "api_key",
+              provider: "anthropic",
+              key: "sk-anth",
+            },
+          }
         : {}),
     },
     usageStats:
@@ -221,14 +236,22 @@ const writeCopilotAuthStore = async (agentDir: string, token = "gh-token") => {
   const payload = {
     version: 1,
     profiles: {
-      "github-copilot:github": { type: "token", provider: "github-copilot", token },
+      "github-copilot:github": {
+        type: "token",
+        provider: "github-copilot",
+        token,
+      },
     },
   };
   await fs.writeFile(authPath, JSON.stringify(payload));
 };
 
 const buildCopilotAssistant = (overrides: Partial<AssistantMessage> = {}) =>
-  buildAssistant({ provider: "github-copilot", model: copilotModelId, ...overrides });
+  buildAssistant({
+    provider: "github-copilot",
+    model: copilotModelId,
+    ...overrides,
+  });
 
 const mockFailedThenSuccessfulAttempt = (errorMessage = "rate limit") => {
   runEmbeddedAttemptMock
@@ -351,12 +374,20 @@ function mockSingleErrorAttempt(params: {
 }
 
 async function withTimedAgentWorkspace<T>(
-  run: (ctx: { agentDir: string; workspaceDir: string; now: number }) => Promise<T>,
+  run: (ctx: {
+    agentDir: string;
+    workspaceDir: string;
+    now: number;
+  }) => Promise<T>,
 ) {
   vi.useFakeTimers();
   try {
-    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-"));
+    const agentDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-agent-"),
+    );
+    const workspaceDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-workspace-"),
+    );
     const now = Date.now();
     vi.setSystemTime(now);
 
@@ -375,7 +406,9 @@ async function withAgentWorkspace<T>(
   run: (ctx: { agentDir: string; workspaceDir: string }) => Promise<T>,
 ) {
   const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
-  const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-"));
+  const workspaceDir = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-workspace-"),
+  );
   try {
     return await run({ agentDir, workspaceDir });
   } finally {
@@ -390,40 +423,46 @@ async function runTurnWithCooldownSeed(params: {
   authProfileId: string | undefined;
   authProfileIdSource: "auto" | "user";
 }) {
-  return await withTimedAgentWorkspace(async ({ agentDir, workspaceDir, now }) => {
-    await writeAuthStore(agentDir, {
-      usageStats: {
-        "openai:p1": { lastUsed: 1, cooldownUntil: now + 60 * 60 * 1000 },
-        "openai:p2": { lastUsed: 2 },
-      },
-    });
-    mockSingleSuccessfulAttempt();
+  return await withTimedAgentWorkspace(
+    async ({ agentDir, workspaceDir, now }) => {
+      await writeAuthStore(agentDir, {
+        usageStats: {
+          "openai:p1": { lastUsed: 1, cooldownUntil: now + 60 * 60 * 1000 },
+          "openai:p2": { lastUsed: 2 },
+        },
+      });
+      mockSingleSuccessfulAttempt();
 
-    await runEmbeddedPiAgent({
-      sessionId: "session:test",
-      sessionKey: params.sessionKey,
-      sessionFile: path.join(workspaceDir, "session.jsonl"),
-      workspaceDir,
-      agentDir,
-      config: makeConfig(),
-      prompt: "hello",
-      provider: "openai",
-      model: "mock-1",
-      authProfileId: params.authProfileId,
-      authProfileIdSource: params.authProfileIdSource,
-      timeoutMs: 5_000,
-      runId: params.runId,
-    });
+      await runEmbeddedPiAgent({
+        sessionId: "session:test",
+        sessionKey: params.sessionKey,
+        sessionFile: path.join(workspaceDir, "session.jsonl"),
+        workspaceDir,
+        agentDir,
+        config: makeConfig(),
+        prompt: "hello",
+        provider: "openai",
+        model: "mock-1",
+        authProfileId: params.authProfileId,
+        authProfileIdSource: params.authProfileIdSource,
+        timeoutMs: 5_000,
+        runId: params.runId,
+      });
 
-    expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(1);
-    return { usageStats: await readUsageStats(agentDir), now };
-  });
+      expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(1);
+      return { usageStats: await readUsageStats(agentDir), now };
+    },
+  );
 }
 
 describe("runEmbeddedPiAgent auth profile rotation", () => {
   it("refreshes copilot token after auth error and retries once", async () => {
-    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-"));
+    const agentDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-agent-"),
+    );
+    const workspaceDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-workspace-"),
+    );
     vi.useFakeTimers();
     try {
       await writeCopilotAuthStore(agentDir);
@@ -489,8 +528,12 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
   });
 
   it("allows another auth refresh after a successful retry", async () => {
-    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-"));
+    const agentDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-agent-"),
+    );
+    const workspaceDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-workspace-"),
+    );
     vi.useFakeTimers();
     try {
       await writeCopilotAuthStore(agentDir);
@@ -576,8 +619,12 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
   });
 
   it("does not reschedule copilot refresh after shutdown", async () => {
-    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-"));
+    const agentDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-agent-"),
+    );
+    const workspaceDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-workspace-"),
+    );
     vi.useFakeTimers();
     try {
       await writeCopilotAuthStore(agentDir);
@@ -896,7 +943,10 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
     try {
       await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
         const authPath = path.join(agentDir, "auth-profiles.json");
-        await fs.writeFile(authPath, JSON.stringify({ version: 1, profiles: {}, usageStats: {} }));
+        await fs.writeFile(
+          authPath,
+          JSON.stringify({ version: 1, profiles: {}, usageStats: {} }),
+        );
 
         await expect(
           runEmbeddedPiAgent({
@@ -963,7 +1013,9 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
         model: "mock-rotated",
       });
       expect(thrown).toBeInstanceOf(Error);
-      expect((thrown as Error).message).toContain("openai (mock-rotated) returned a billing error");
+      expect((thrown as Error).message).toContain(
+        "openai (mock-rotated) returned a billing error",
+      );
       expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(1);
     });
   });

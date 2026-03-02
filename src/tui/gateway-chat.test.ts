@@ -13,7 +13,10 @@ describe("resolveGatewayConnection", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
 
   beforeEach(() => {
-    envSnapshot = captureEnv(["OPENCLAW_GATEWAY_TOKEN", "OPENCLAW_GATEWAY_PASSWORD"]);
+    envSnapshot = captureEnv([
+      "OPENCLAW_GATEWAY_TOKEN",
+      "OPENCLAW_GATEWAY_PASSWORD",
+    ]);
     loadConfig.mockClear();
     resolveGatewayPort.mockClear();
     pickPrimaryTailnetIPv4.mockClear();
@@ -32,9 +35,9 @@ describe("resolveGatewayConnection", () => {
   it("throws when url override is missing explicit credentials", () => {
     loadConfig.mockReturnValue({ gateway: { mode: "local" } });
 
-    expect(() => resolveGatewayConnection({ url: "wss://override.example/ws" })).toThrow(
-      "explicit credentials",
-    );
+    expect(() =>
+      resolveGatewayConnection({ url: "wss://override.example/ws" }),
+    ).toThrow("explicit credentials");
   });
 
   it.each([
@@ -93,7 +96,9 @@ describe("resolveGatewayConnection", () => {
   });
 
   it("falls back to config auth token when env token is missing", () => {
-    loadConfig.mockReturnValue({ gateway: { mode: "local", auth: { token: "config-token" } } });
+    loadConfig.mockReturnValue({
+      gateway: { mode: "local", auth: { token: "config-token" } },
+    });
 
     const result = resolveGatewayConnection({});
     expect(result.token).toBe("config-token");
@@ -103,7 +108,11 @@ describe("resolveGatewayConnection", () => {
     loadConfig.mockReturnValue({
       gateway: {
         mode: "remote",
-        remote: { url: "wss://remote.example/ws", token: "remote-token", password: "remote-pass" },
+        remote: {
+          url: "wss://remote.example/ws",
+          token: "remote-token",
+          password: "remote-pass",
+        },
       },
     });
 

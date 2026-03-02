@@ -98,7 +98,9 @@ rm -f "$0"
         return null;
       }
       const port =
-        Number.isFinite(gatewayPort) && gatewayPort > 0 ? gatewayPort : DEFAULT_GATEWAY_PORT;
+        Number.isFinite(gatewayPort) && gatewayPort > 0
+          ? gatewayPort
+          : DEFAULT_GATEWAY_PORT;
       filename = `openclaw-restart-${timestamp}.bat`;
       scriptContent = `@echo off
 REM Standalone restart script — survives parent process termination.

@@ -5,7 +5,10 @@ import type {
   SlackThreadBroadcastEvent,
 } from "../types.js";
 
-type SupportedSubtype = "message_changed" | "message_deleted" | "thread_broadcast";
+type SupportedSubtype =
+  | "message_changed"
+  | "message_deleted"
+  | "thread_broadcast";
 
 export type SlackMessageSubtypeHandler = {
   subtype: SupportedSubtype;
@@ -25,7 +28,10 @@ const changedHandler: SlackMessageSubtypeHandler = {
     const changed = event as SlackMessageChangedEvent;
     const channelId = changed.channel ?? "unknown";
     const messageId =
-      changed.message?.ts ?? changed.previous_message?.ts ?? changed.event_ts ?? "unknown";
+      changed.message?.ts ??
+      changed.previous_message?.ts ??
+      changed.event_ts ??
+      "unknown";
     return `slack:message:changed:${channelId}:${messageId}`;
   },
   resolveSenderId: (event) => {
@@ -62,7 +68,8 @@ const deletedHandler: SlackMessageSubtypeHandler = {
 const threadBroadcastHandler: SlackMessageSubtypeHandler = {
   subtype: "thread_broadcast",
   eventKind: "thread_broadcast",
-  describe: (channelLabel) => `Slack thread reply broadcast in ${channelLabel}.`,
+  describe: (channelLabel) =>
+    `Slack thread reply broadcast in ${channelLabel}.`,
   contextKey: (event) => {
     const thread = event as SlackThreadBroadcastEvent;
     const channelId = thread.channel ?? "unknown";
@@ -77,7 +84,10 @@ const threadBroadcastHandler: SlackMessageSubtypeHandler = {
   resolveChannelType: () => undefined,
 };
 
-const SUBTYPE_HANDLER_REGISTRY: Record<SupportedSubtype, SlackMessageSubtypeHandler> = {
+const SUBTYPE_HANDLER_REGISTRY: Record<
+  SupportedSubtype,
+  SlackMessageSubtypeHandler
+> = {
   message_changed: changedHandler,
   message_deleted: deletedHandler,
   thread_broadcast: threadBroadcastHandler,

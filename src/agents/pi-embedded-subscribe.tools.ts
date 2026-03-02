@@ -1,4 +1,7 @@
-import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
+import {
+  getChannelPlugin,
+  normalizeChannelId,
+} from "../channels/plugins/index.js";
 import { normalizeTargetForProvider } from "../infra/outbound/target-normalization.js";
 import { splitMediaFromOutput } from "../media/parse.js";
 import { truncateUtf16Safe } from "../utils.js";
@@ -44,7 +47,9 @@ function isErrorLikeStatus(status: string): boolean {
   ) {
     return false;
   }
-  return /error|fail|timeout|timed[_\s-]?out|denied|cancel|invalid|forbidden/.test(normalized);
+  return /error|fail|timeout|timed[_\s-]?out|denied|cancel|invalid|forbidden/.test(
+    normalized,
+  );
 }
 
 function readErrorCandidate(value: unknown): string | undefined {
@@ -286,7 +291,9 @@ export function extractToolErrorMessage(result: unknown): string | undefined {
   return normalizeToolErrorText(text);
 }
 
-function resolveMessageToolTarget(args: Record<string, unknown>): string | undefined {
+function resolveMessageToolTarget(
+  args: Record<string, unknown>,
+): string | undefined {
   const toRaw = typeof args.to === "string" ? args.to : undefined;
   if (toRaw) {
     return toRaw;
@@ -300,7 +307,8 @@ export function extractMessagingToolSend(
 ): MessagingToolSend | undefined {
   // Provider docking: new provider tools must implement plugin.actions.extractToolSend.
   const action = typeof args.action === "string" ? args.action.trim() : "";
-  const accountIdRaw = typeof args.accountId === "string" ? args.accountId.trim() : undefined;
+  const accountIdRaw =
+    typeof args.accountId === "string" ? args.accountId.trim() : undefined;
   const accountId = accountIdRaw ? accountIdRaw : undefined;
   if (toolName === "message") {
     if (action !== "send" && action !== "thread-reply") {
@@ -310,11 +318,14 @@ export function extractMessagingToolSend(
     if (!toRaw) {
       return undefined;
     }
-    const providerRaw = typeof args.provider === "string" ? args.provider.trim() : "";
-    const channelRaw = typeof args.channel === "string" ? args.channel.trim() : "";
+    const providerRaw =
+      typeof args.provider === "string" ? args.provider.trim() : "";
+    const channelRaw =
+      typeof args.channel === "string" ? args.channel.trim() : "";
     const providerHint = providerRaw || channelRaw;
     const providerId = providerHint ? normalizeChannelId(providerHint) : null;
-    const provider = providerId ?? (providerHint ? providerHint.toLowerCase() : "message");
+    const provider =
+      providerId ?? (providerHint ? providerHint.toLowerCase() : "message");
     const to = normalizeTargetForProvider(provider, toRaw);
     return to ? { tool: toolName, provider, accountId, to } : undefined;
   }

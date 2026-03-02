@@ -1,5 +1,8 @@
 import { resolveIdentityNamePrefix } from "../../../agents/identity.js";
-import { resolveChunkMode, resolveTextChunkLimit } from "../../../auto-reply/chunk.js";
+import {
+  resolveChunkMode,
+  resolveTextChunkLimit,
+} from "../../../auto-reply/chunk.js";
 import { shouldComputeCommandAuthorized } from "../../../auto-reply/command-detection.js";
 import {
   formatInboundEnvelope,
@@ -40,7 +43,10 @@ import type { WebInboundMsg } from "../types.js";
 import { elide } from "../util.js";
 import { maybeSendAckReaction } from "./ack-reaction.js";
 import { formatGroupMembers } from "./group-members.js";
-import { trackBackgroundTask, updateLastRouteInBackground } from "./last-route.js";
+import {
+  trackBackgroundTask,
+  updateLastRouteInBackground,
+} from "./last-route.js";
 import { buildInboundLine } from "./message-line.js";
 
 export type GroupHistoryEntry = {
@@ -62,18 +68,24 @@ async function resolveWhatsAppCommandAuthorized(params: {
 
   const isGroup = params.msg.chatType === "group";
   const senderE164 = normalizeE164(
-    isGroup ? (params.msg.senderE164 ?? "") : (params.msg.senderE164 ?? params.msg.from ?? ""),
+    isGroup
+      ? (params.msg.senderE164 ?? "")
+      : (params.msg.senderE164 ?? params.msg.from ?? ""),
   );
   if (!senderE164) {
     return false;
   }
 
-  const account = resolveWhatsAppAccount({ cfg: params.cfg, accountId: params.msg.accountId });
+  const account = resolveWhatsAppAccount({
+    cfg: params.cfg,
+    accountId: params.msg.accountId,
+  });
   const dmPolicy = account.dmPolicy ?? "pairing";
   const groupPolicy = account.groupPolicy ?? "allowlist";
   const configuredAllowFrom = account.allowFrom ?? [];
   const configuredGroupAllowFrom =
-    account.groupAllowFrom ?? (configuredAllowFrom.length > 0 ? configuredAllowFrom : undefined);
+    account.groupAllowFrom ??
+    (configuredAllowFrom.length > 0 ? configuredAllowFrom : undefined);
 
   const storeAllowFrom = isGroup
     ? []
@@ -136,7 +148,10 @@ export async function processMessage(params: {
   ) => void;
   echoHas: (key: string) => boolean;
   echoForget: (key: string) => void;
-  buildCombinedEchoKey: (p: { sessionKey: string; combinedBody: string }) => string;
+  buildCombinedEchoKey: (p: {
+    sessionKey: string;
+    combinedBody: string;
+  }) => string;
   maxMediaTextChunkLimit?: number;
   groupHistory?: GroupHistoryEntry[];
   suppressGroupHistoryClear?: boolean;
@@ -160,7 +175,10 @@ export async function processMessage(params: {
   let shouldClearGroupHistory = false;
 
   if (params.msg.chatType === "group") {
-    const history = params.groupHistory ?? params.groupHistories.get(params.groupHistoryKey) ?? [];
+    const history =
+      params.groupHistory ??
+      params.groupHistories.get(params.groupHistoryKey) ??
+      [];
     if (history.length > 0) {
       const historyEntries: HistoryEntry[] = history.map((m) => ({
         sender: m.sender,
@@ -225,7 +243,8 @@ export async function processMessage(params: {
     "inbound web message",
   );
 
-  const fromDisplay = params.msg.chatType === "group" ? conversationId : params.msg.from;
+  const fromDisplay =
+    params.msg.chatType === "group" ? conversationId : params.msg.from;
   const kindLabel = params.msg.mediaType ? `, ${params.msg.mediaType}` : "";
   whatsappInboundLog.info(
     `Inbound message ${fromDisplay} -> ${params.msg.to} (${params.msg.chatType}${kindLabel}, ${combinedBody.length} chars)`,
@@ -248,18 +267,33 @@ export async function processMessage(params: {
         })()
       : undefined;
 
-  const textLimit = params.maxMediaTextChunkLimit ?? resolveTextChunkLimit(params.cfg, "whatsapp");
-  const chunkMode = resolveChunkMode(params.cfg, "whatsapp", params.route.accountId);
+  const textLimit =
+    params.maxMediaTextChunkLimit ??
+    resolveTextChunkLimit(params.cfg, "whatsapp");
+  const chunkMode = resolveChunkMode(
+    params.cfg,
+    "whatsapp",
+    params.route.accountId,
+  );
   const tableMode = resolveMarkdownTableMode({
     cfg: params.cfg,
     channel: "whatsapp",
     accountId: params.route.accountId,
   });
-  const mediaLocalRoots = getAgentScopedMediaLocalRoots(params.cfg, params.route.agentId);
+  const mediaLocalRoots = getAgentScopedMediaLocalRoots(
+    params.cfg,
+    params.route.agentId,
+  );
   let didLogHeartbeatStrip = false;
   let didSendReply = false;
-  const commandAuthorized = shouldComputeCommandAuthorized(params.msg.body, params.cfg)
-    ? await resolveWhatsAppCommandAuthorized({ cfg: params.cfg, msg: params.msg })
+  const commandAuthorized = shouldComputeCommandAuthorized(
+    params.msg.body,
+    params.cfg,
+  )
+    ? await resolveWhatsAppCommandAuthorized({
+        cfg: params.cfg,
+        msg: params.msg,
+      })
     : undefined;
   const configuredResponsePrefix = params.cfg.messages?.responsePrefix;
   const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
@@ -275,18 +309,21 @@ export async function processMessage(params: {
   const responsePrefix =
     prefixOptions.responsePrefix ??
     (configuredResponsePrefix === undefined && isSelfChat
-      ? (resolveIdentityNamePrefix(params.cfg, params.route.agentId) ?? "[openclaw]")
+      ? (resolveIdentityNamePrefix(params.cfg, params.route.agentId) ??
+        "[openclaw]")
       : undefined);
 
   const inboundHistory =
     params.msg.chatType === "group"
-      ? (params.groupHistory ?? params.groupHistories.get(params.groupHistoryKey) ?? []).map(
-          (entry) => ({
-            sender: entry.sender,
-            body: entry.body,
-            timestamp: entry.timestamp,
-          }),
-        )
+      ? (
+          params.groupHistory ??
+          params.groupHistories.get(params.groupHistoryKey) ??
+          []
+        ).map((entry) => ({
+          sender: entry.sender,
+          body: entry.body,
+          timestamp: entry.timestamp,
+        }))
       : undefined;
 
   const ctxPayload = finalizeInboundContext({
@@ -307,7 +344,8 @@ export async function processMessage(params: {
     MediaUrl: params.msg.mediaUrl,
     MediaType: params.msg.mediaType,
     ChatType: params.msg.chatType,
-    ConversationLabel: params.msg.chatType === "group" ? conversationId : params.msg.from,
+    ConversationLabel:
+      params.msg.chatType === "group" ? conversationId : params.msg.from,
     GroupSubject: params.msg.groupSubject,
     GroupMembers: formatGroupMembers({
       participants: params.msg.groupParticipants,
@@ -329,7 +367,10 @@ export async function processMessage(params: {
   // Only update main session's lastRoute when DM actually IS the main session.
   // When dmScope="per-channel-peer", the DM uses an isolated sessionKey,
   // and updating mainSessionKey would corrupt routing for the session owner.
-  if (dmRouteTarget && params.route.sessionKey === params.route.mainSessionKey) {
+  if (
+    dmRouteTarget &&
+    params.route.sessionKey === params.route.mainSessionKey
+  ) {
     updateLastRouteInBackground({
       cfg: params.cfg,
       backgroundTasks: params.backgroundTasks,
@@ -399,12 +440,19 @@ export async function processMessage(params: {
           logVerboseMessage: shouldLog,
         });
         const fromDisplay =
-          params.msg.chatType === "group" ? conversationId : (params.msg.from ?? "unknown");
+          params.msg.chatType === "group"
+            ? conversationId
+            : (params.msg.from ?? "unknown");
         const hasMedia = Boolean(payload.mediaUrl || payload.mediaUrls?.length);
-        whatsappOutboundLog.info(`Auto-replied to ${fromDisplay}${hasMedia ? " (media)" : ""}`);
+        whatsappOutboundLog.info(
+          `Auto-replied to ${fromDisplay}${hasMedia ? " (media)" : ""}`,
+        );
         if (shouldLogVerbose()) {
-          const preview = payload.text != null ? elide(payload.text, 400) : "<media>";
-          whatsappOutboundLog.debug(`Reply body: ${preview}${hasMedia ? " (media)" : ""}`);
+          const preview =
+            payload.text != null ? elide(payload.text, 400) : "<media>";
+          whatsappOutboundLog.debug(
+            `Reply body: ${preview}${hasMedia ? " (media)" : ""}`,
+          );
         }
       },
       onError: (err, info) => {
@@ -432,7 +480,9 @@ export async function processMessage(params: {
     if (shouldClearGroupHistory) {
       params.groupHistories.set(params.groupHistoryKey, []);
     }
-    logVerbose("Skipping auto-reply: silent token or no text/media returned from resolver");
+    logVerbose(
+      "Skipping auto-reply: silent token or no text/media returned from resolver",
+    );
     return false;
   }
 

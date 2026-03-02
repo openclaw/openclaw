@@ -82,11 +82,18 @@ function credentialsFilename(profile: string): string {
   return `credentials-${encodeURIComponent(trimmed)}.json`;
 }
 
-function resolveCredentialsPath(profile: string, env: NodeJS.ProcessEnv = process.env): string {
+function resolveCredentialsPath(
+  profile: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
   return path.join(resolveCredentialsDir(env), credentialsFilename(profile));
 }
 
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  label: string,
+): Promise<T> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       reject(new Error(label));
@@ -141,7 +148,8 @@ function normalizeMessageContent(content: unknown): string {
   }
   const record = content as Record<string, unknown>;
   const title = typeof record.title === "string" ? record.title.trim() : "";
-  const description = typeof record.description === "string" ? record.description.trim() : "";
+  const description =
+    typeof record.description === "string" ? record.description.trim() : "";
   const href = typeof record.href === "string" ? record.href.trim() : "";
   const combined = [title, description, href].filter(Boolean).join("\n").trim();
   if (combined) {
@@ -234,12 +242,19 @@ function resolveMediaFileName(params: {
 function mapFriend(friend: User): ZcaFriend {
   return {
     userId: String(friend.userId),
-    displayName: friend.displayName || friend.zaloName || friend.username || String(friend.userId),
+    displayName:
+      friend.displayName ||
+      friend.zaloName ||
+      friend.username ||
+      String(friend.userId),
     avatar: friend.avatar || undefined,
   };
 }
 
-function mapGroup(groupId: string, group: GroupInfo & Record<string, unknown>): ZaloGroup {
+function mapGroup(
+  groupId: string,
+  group: GroupInfo & Record<string, unknown>,
+): ZaloGroup {
   const totalMember =
     typeof group.totalMember === "number" && Number.isFinite(group.totalMember)
       ? group.totalMember
@@ -272,9 +287,14 @@ function readCredentials(profile: string): StoredZaloCredentials | null {
       imei: parsed.imei,
       cookie: parsed.cookie as Credentials["cookie"],
       userAgent: parsed.userAgent,
-      language: typeof parsed.language === "string" ? parsed.language : undefined,
-      createdAt: typeof parsed.createdAt === "string" ? parsed.createdAt : new Date().toISOString(),
-      lastUsedAt: typeof parsed.lastUsedAt === "string" ? parsed.lastUsedAt : undefined,
+      language:
+        typeof parsed.language === "string" ? parsed.language : undefined,
+      createdAt:
+        typeof parsed.createdAt === "string"
+          ? parsed.createdAt
+          : new Date().toISOString(),
+      lastUsedAt:
+        typeof parsed.lastUsedAt === "string" ? parsed.lastUsedAt : undefined,
     };
   } catch {
     return null;
@@ -292,7 +312,11 @@ function touchCredentials(profile: string): void {
   };
   const dir = resolveCredentialsDir();
   fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(resolveCredentialsPath(profile), JSON.stringify(next, null, 2), "utf-8");
+  fs.writeFileSync(
+    resolveCredentialsPath(profile),
+    JSON.stringify(next, null, 2),
+    "utf-8",
+  );
 }
 
 function writeCredentials(
@@ -308,7 +332,11 @@ function writeCredentials(
     createdAt: existing?.createdAt ?? now,
     lastUsedAt: now,
   };
-  fs.writeFileSync(resolveCredentialsPath(profile), JSON.stringify(next, null, 2), "utf-8");
+  fs.writeFileSync(
+    resolveCredentialsPath(profile),
+    JSON.stringify(next, null, 2),
+    "utf-8",
+  );
 }
 
 function clearCredentials(profile: string): boolean {
@@ -406,7 +434,10 @@ function resetQrLogin(profileInput?: string | null): void {
   activeQrLogins.delete(profile);
 }
 
-async function fetchGroupsByIds(api: API, ids: string[]): Promise<Map<string, GroupInfo>> {
+async function fetchGroupsByIds(
+  api: API,
+  ids: string[],
+): Promise<Map<string, GroupInfo>> {
   const result = new Map<string, GroupInfo>();
   for (let index = 0; index < ids.length; index += GROUP_INFO_CHUNK_SIZE) {
     const chunk = ids.slice(index, index + GROUP_INFO_CHUNK_SIZE);
@@ -437,7 +468,10 @@ function toInboundMessage(message: Message): ZaloInboundMessage | null {
     threadId,
     isGroup,
     senderId,
-    senderName: typeof data.dName === "string" ? data.dName.trim() || undefined : undefined,
+    senderName:
+      typeof data.dName === "string"
+        ? data.dName.trim() || undefined
+        : undefined,
     content,
     timestampMs: resolveInboundTimestamp(data.ts),
     msgId: typeof data.msgId === "string" ? data.msgId : undefined,
@@ -451,14 +485,20 @@ export function zalouserSessionExists(profileInput?: string | null): boolean {
   return readCredentials(profile) !== null;
 }
 
-export async function checkZaloAuthenticated(profileInput?: string | null): Promise<boolean> {
+export async function checkZaloAuthenticated(
+  profileInput?: string | null,
+): Promise<boolean> {
   const profile = normalizeProfile(profileInput);
   if (!zalouserSessionExists(profile)) {
     return false;
   }
   try {
     const api = await ensureApi(profile, 12_000);
-    await withTimeout(api.fetchAccountInfo(), 12_000, "Timed out checking Zalo session");
+    await withTimeout(
+      api.fetchAccountInfo(),
+      12_000,
+      "Timed out checking Zalo session",
+    );
     return true;
   } catch {
     invalidateApi(profile);
@@ -466,12 +506,16 @@ export async function checkZaloAuthenticated(profileInput?: string | null): Prom
   }
 }
 
-export async function getZaloUserInfo(profileInput?: string | null): Promise<ZcaUserInfo | null> {
+export async function getZaloUserInfo(
+  profileInput?: string | null,
+): Promise<ZcaUserInfo | null> {
   const profile = normalizeProfile(profileInput);
   const api = await ensureApi(profile);
   const info = await api.fetchAccountInfo();
   const user =
-    info && typeof info === "object" && "profile" in info ? (info.profile as User) : (info as User);
+    info && typeof info === "object" && "profile" in info
+      ? (info.profile as User)
+      : (info as User);
   if (!user?.userId) {
     return null;
   }
@@ -482,7 +526,9 @@ export async function getZaloUserInfo(profileInput?: string | null): Promise<Zca
   };
 }
 
-export async function listZaloFriends(profileInput?: string | null): Promise<ZcaFriend[]> {
+export async function listZaloFriends(
+  profileInput?: string | null,
+): Promise<ZcaFriend[]> {
   const profile = normalizeProfile(profileInput);
   const api = await ensureApi(profile);
   const friends = await api.getAllFriends();
@@ -511,7 +557,9 @@ export async function listZaloFriendsMatching(
   return scored.map((entry) => entry.friend);
 }
 
-export async function listZaloGroups(profileInput?: string | null): Promise<ZaloGroup[]> {
+export async function listZaloGroups(
+  profileInput?: string | null,
+): Promise<ZaloGroup[]> {
   const profile = normalizeProfile(profileInput);
   const api = await ensureApi(profile);
   const allGroups = await api.getAllGroups();
@@ -569,9 +617,14 @@ export async function listZaloGroupMembers(
   const memVerIds = Array.isArray(groupInfo.memVerList)
     ? groupInfo.memVerList.map((id: unknown) => toNumberId(id)).filter(Boolean)
     : [];
-  const currentMembers = Array.isArray(groupInfo.currentMems) ? groupInfo.currentMems : [];
+  const currentMembers = Array.isArray(groupInfo.currentMems)
+    ? groupInfo.currentMems
+    : [];
 
-  const currentById = new Map<string, { displayName?: string; avatar?: string }>();
+  const currentById = new Map<
+    string,
+    { displayName?: string; avatar?: string }
+  >();
   for (const member of currentMembers) {
     const id = toNumberId(member?.id);
     if (!id) {
@@ -587,7 +640,10 @@ export async function listZaloGroupMembers(
     new Set<string>([...memberIds, ...memVerIds, ...currentById.keys()]),
   );
 
-  const profileMap = new Map<string, { displayName?: string; avatar?: string }>();
+  const profileMap = new Map<
+    string,
+    { displayName?: string; avatar?: string }
+  >();
   if (uniqueIds.length > 0) {
     const profiles = await api.getGroupMembersInfo(uniqueIds);
     const profileEntries = profiles.profiles as Record<
@@ -600,12 +656,16 @@ export async function listZaloGroupMembers(
       }
     >;
     for (const [rawId, profileValue] of Object.entries(profileEntries)) {
-      const id = toNumberId(rawId) || toNumberId((profileValue as { id?: unknown })?.id);
+      const id =
+        toNumberId(rawId) || toNumberId((profileValue as { id?: unknown })?.id);
       if (!id || !profileValue) {
         continue;
       }
       profileMap.set(id, {
-        displayName: profileValue.displayName?.trim() || profileValue.zaloName?.trim() || undefined,
+        displayName:
+          profileValue.displayName?.trim() ||
+          profileValue.zaloName?.trim() ||
+          undefined,
         avatar: profileValue.avatar || undefined,
       });
     }
@@ -613,7 +673,8 @@ export async function listZaloGroupMembers(
 
   return uniqueIds.map((id) => ({
     userId: id,
-    displayName: profileMap.get(id)?.displayName || currentById.get(id)?.displayName || id,
+    displayName:
+      profileMap.get(id)?.displayName || currentById.get(id)?.displayName || id,
     avatar: profileMap.get(id)?.avatar || currentById.get(id)?.avatar,
   }));
 }
@@ -663,7 +724,11 @@ export async function sendZaloTextMessage(
       return { ok: true, messageId: extractSendMessageId(response) };
     }
 
-    const response = await api.sendMessage(text.slice(0, 2000), trimmedThreadId, type);
+    const response = await api.sendMessage(
+      text.slice(0, 2000),
+      trimmedThreadId,
+      type,
+    );
     return { ok: true, messageId: extractSendMessageId(response) };
   } catch (error) {
     return { ok: false, error: toErrorMessage(error) };
@@ -740,58 +805,67 @@ export async function startZaloQrLogin(params: {
     };
 
     login.waitPromise = (async () => {
-      let capturedCredentials: Omit<StoredZaloCredentials, "createdAt" | "lastUsedAt"> | null =
-        null;
+      let capturedCredentials: Omit<
+        StoredZaloCredentials,
+        "createdAt" | "lastUsedAt"
+      > | null = null;
       try {
         const zalo = new Zalo({ logging: false, selfListen: false });
-        const api = await zalo.loginQR(undefined, (event: LoginQRCallbackEvent) => {
-          const current = activeQrLogins.get(profile);
-          if (!current || current.id !== login.id) {
-            return;
-          }
+        const api = await zalo.loginQR(
+          undefined,
+          (event: LoginQRCallbackEvent) => {
+            const current = activeQrLogins.get(profile);
+            if (!current || current.id !== login.id) {
+              return;
+            }
 
-          if (event.actions?.abort) {
-            current.abort = () => {
-              try {
-                event.actions?.abort?.();
-              } catch {
-                // ignore
-              }
-            };
-          }
-
-          switch (event.type) {
-            case LoginQRCallbackEventType.QRCodeGenerated: {
-              const image = event.data.image.replace(/^data:image\/png;base64,/, "");
-              current.qrDataUrl = image.startsWith("data:image")
-                ? image
-                : `data:image/png;base64,${image}`;
-              break;
-            }
-            case LoginQRCallbackEventType.QRCodeExpired: {
-              try {
-                event.actions.retry();
-              } catch {
-                current.error = "QR expired before confirmation. Start login again.";
-              }
-              break;
-            }
-            case LoginQRCallbackEventType.QRCodeDeclined: {
-              current.error = "QR login was declined on the phone.";
-              break;
-            }
-            case LoginQRCallbackEventType.GotLoginInfo: {
-              capturedCredentials = {
-                imei: event.data.imei,
-                cookie: event.data.cookie,
-                userAgent: event.data.userAgent,
+            if (event.actions?.abort) {
+              current.abort = () => {
+                try {
+                  event.actions?.abort?.();
+                } catch {
+                  // ignore
+                }
               };
-              break;
             }
-            default:
-              break;
-          }
-        });
+
+            switch (event.type) {
+              case LoginQRCallbackEventType.QRCodeGenerated: {
+                const image = event.data.image.replace(
+                  /^data:image\/png;base64,/,
+                  "",
+                );
+                current.qrDataUrl = image.startsWith("data:image")
+                  ? image
+                  : `data:image/png;base64,${image}`;
+                break;
+              }
+              case LoginQRCallbackEventType.QRCodeExpired: {
+                try {
+                  event.actions.retry();
+                } catch {
+                  current.error =
+                    "QR expired before confirmation. Start login again.";
+                }
+                break;
+              }
+              case LoginQRCallbackEventType.QRCodeDeclined: {
+                current.error = "QR login was declined on the phone.";
+                break;
+              }
+              case LoginQRCallbackEventType.GotLoginInfo: {
+                capturedCredentials = {
+                  imei: event.data.imei,
+                  cookie: event.data.cookie,
+                  userAgent: event.data.userAgent,
+                };
+                break;
+              }
+              default:
+                break;
+            }
+          },
+        );
 
         const current = activeQrLogins.get(profile);
         if (!current || current.id !== login.id) {
@@ -830,7 +904,10 @@ export async function startZaloQrLogin(params: {
     return { message: "Failed to initialize Zalo QR login." };
   }
 
-  const timeoutMs = Math.max(params.timeoutMs ?? DEFAULT_QR_START_TIMEOUT_MS, 3000);
+  const timeoutMs = Math.max(
+    params.timeoutMs ?? DEFAULT_QR_START_TIMEOUT_MS,
+    3000,
+  );
   const deadline = Date.now() + timeoutMs;
 
   while (Date.now() < deadline) {
@@ -871,7 +948,9 @@ export async function waitForZaloQrLogin(params: {
     const connected = await checkZaloAuthenticated(profile);
     return {
       connected,
-      message: connected ? "Zalo session is ready." : "No active Zalo QR login in progress.",
+      message: connected
+        ? "Zalo session is ready."
+        : "No active Zalo QR login in progress.",
     };
   }
 
@@ -883,7 +962,10 @@ export async function waitForZaloQrLogin(params: {
     };
   }
 
-  const timeoutMs = Math.max(params.timeoutMs ?? DEFAULT_QR_WAIT_TIMEOUT_MS, 1000);
+  const timeoutMs = Math.max(
+    params.timeoutMs ?? DEFAULT_QR_WAIT_TIMEOUT_MS,
+    1000,
+  );
   const deadline = Date.now() + timeoutMs;
 
   while (Date.now() < deadline) {
@@ -935,7 +1017,9 @@ export async function logoutZaloProfile(profileInput?: string | null): Promise<{
   return {
     cleared,
     loggedOut: true,
-    message: cleared ? "Logged out and cleared local session." : "No local session to clear.",
+    message: cleared
+      ? "Logged out and cleared local session."
+      : "No local session to clear.",
   };
 }
 
@@ -1001,7 +1085,9 @@ export async function startZaloListener(params: {
     if (stopped || params.abortSignal.aborted) {
       return;
     }
-    params.onError(new Error(`Zalo listener closed (${code}): ${reason || "no reason"}`));
+    params.onError(
+      new Error(`Zalo listener closed (${code}): ${reason || "no reason"}`),
+    );
   };
 
   api.listener.on("message", onMessage);
@@ -1058,14 +1144,18 @@ export async function resolveZaloGroupsByEntries(params: {
     }
     const candidates = byName.get(trimmed.toLowerCase()) ?? [];
     const match = candidates[0];
-    return match ? { input, resolved: true, id: match.groupId } : { input, resolved: false };
+    return match
+      ? { input, resolved: true, id: match.groupId }
+      : { input, resolved: false };
   });
 }
 
 export async function resolveZaloAllowFromEntries(params: {
   profile?: string | null;
   entries: string[];
-}): Promise<Array<{ input: string; resolved: boolean; id?: string; note?: string }>> {
+}): Promise<
+  Array<{ input: string; resolved: boolean; id?: string; note?: string }>
+> {
   const friends = await listZaloFriends(params.profile);
   const byName = new Map<string, ZcaFriend[]>();
   for (const friend of friends) {
@@ -1100,7 +1190,9 @@ export async function resolveZaloAllowFromEntries(params: {
   });
 }
 
-export async function clearProfileRuntimeArtifacts(profileInput?: string | null): Promise<void> {
+export async function clearProfileRuntimeArtifacts(
+  profileInput?: string | null,
+): Promise<void> {
   const profile = normalizeProfile(profileInput);
   resetQrLogin(profile);
   const listener = activeListeners.get(profile);
@@ -1109,5 +1201,7 @@ export async function clearProfileRuntimeArtifacts(profileInput?: string | null)
     activeListeners.delete(profile);
   }
   invalidateApi(profile);
-  await fsp.mkdir(resolveCredentialsDir(), { recursive: true }).catch(() => undefined);
+  await fsp
+    .mkdir(resolveCredentialsDir(), { recursive: true })
+    .catch(() => undefined);
 }

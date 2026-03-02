@@ -3,7 +3,10 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { formatErrorMessage } from "./errors.js";
 import { type RetryConfig, resolveRetryConfig, retryAsync } from "./retry.js";
 
-export type RetryRunner = <T>(fn: () => Promise<T>, label?: string) => Promise<T>;
+export type RetryRunner = <T>(
+  fn: () => Promise<T>,
+  label?: string,
+) => Promise<T>;
 
 export const DISCORD_RETRY_DEFAULTS = {
   attempts: 3,
@@ -19,7 +22,8 @@ export const TELEGRAM_RETRY_DEFAULTS = {
   jitter: 0.1,
 };
 
-const TELEGRAM_RETRY_RE = /429|timeout|connect|reset|closed|unavailable|temporarily/i;
+const TELEGRAM_RETRY_RE =
+  /429|timeout|connect|reset|closed|unavailable|temporarily/i;
 const log = createSubsystemLogger("retry-policy");
 
 function getTelegramRetryAfterMs(err: unknown): number | undefined {
@@ -38,10 +42,16 @@ function getTelegramRetryAfterMs(err: unknown): number | undefined {
               parameters?: { retry_after?: unknown };
             }
           ).parameters?.retry_after
-        : "error" in err && err.error && typeof err.error === "object" && "parameters" in err.error
-          ? (err.error as { parameters?: { retry_after?: unknown } }).parameters?.retry_after
+        : "error" in err &&
+            err.error &&
+            typeof err.error === "object" &&
+            "parameters" in err.error
+          ? (err.error as { parameters?: { retry_after?: unknown } }).parameters
+              ?.retry_after
           : undefined;
-  return typeof candidate === "number" && Number.isFinite(candidate) ? candidate * 1000 : undefined;
+  return typeof candidate === "number" && Number.isFinite(candidate)
+    ? candidate * 1000
+    : undefined;
 }
 
 export function createDiscordRetryRunner(params: {
@@ -58,7 +68,8 @@ export function createDiscordRetryRunner(params: {
       ...retryConfig,
       label,
       shouldRetry: (err) => err instanceof RateLimitError,
-      retryAfterMs: (err) => (err instanceof RateLimitError ? err.retryAfter * 1000 : undefined),
+      retryAfterMs: (err) =>
+        err instanceof RateLimitError ? err.retryAfter * 1000 : undefined,
       onRetry: params.verbose
         ? (info) => {
             const labelText = info.label ?? "request";
@@ -82,7 +93,9 @@ export function createTelegramRetryRunner(params: {
     ...params.retry,
   });
   const shouldRetry = params.shouldRetry
-    ? (err: unknown) => params.shouldRetry?.(err) || TELEGRAM_RETRY_RE.test(formatErrorMessage(err))
+    ? (err: unknown) =>
+        params.shouldRetry?.(err) ||
+        TELEGRAM_RETRY_RE.test(formatErrorMessage(err))
     : (err: unknown) => TELEGRAM_RETRY_RE.test(formatErrorMessage(err));
 
   return <T>(fn: () => Promise<T>, label?: string) =>

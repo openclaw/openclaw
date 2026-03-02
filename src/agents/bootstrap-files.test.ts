@@ -7,7 +7,10 @@ import {
   type AgentBootstrapHookContext,
 } from "../hooks/internal-hooks.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
-import { resolveBootstrapContextForRun, resolveBootstrapFilesForRun } from "./bootstrap-files.js";
+import {
+  resolveBootstrapContextForRun,
+  resolveBootstrapFilesForRun,
+} from "./bootstrap-files.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
 
 function registerExtraBootstrapFileHook() {
@@ -62,7 +65,9 @@ describe("resolveBootstrapFilesForRun", () => {
     const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
     const files = await resolveBootstrapFilesForRun({ workspaceDir });
 
-    expect(files.some((file) => file.path === path.join(workspaceDir, "EXTRA.md"))).toBe(true);
+    expect(
+      files.some((file) => file.path === path.join(workspaceDir, "EXTRA.md")),
+    ).toBe(true);
   });
 
   it("drops malformed hook files with missing/invalid paths", async () => {
@@ -76,7 +81,9 @@ describe("resolveBootstrapFilesForRun", () => {
     });
 
     expect(
-      files.every((file) => typeof file.path === "string" && file.path.trim().length > 0),
+      files.every(
+        (file) => typeof file.path === "string" && file.path.trim().length > 0,
+      ),
     ).toBe(true);
     expect(warnings).toHaveLength(3);
     expect(warnings[0]).toContain('missing or invalid "path" field');
@@ -101,7 +108,11 @@ describe("resolveBootstrapContextForRun", () => {
 
   it("uses heartbeat-only bootstrap files in lightweight heartbeat mode", async () => {
     const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
-    await fs.writeFile(path.join(workspaceDir, "HEARTBEAT.md"), "check inbox", "utf8");
+    await fs.writeFile(
+      path.join(workspaceDir, "HEARTBEAT.md"),
+      "check inbox",
+      "utf8",
+    );
     await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "persona", "utf8");
 
     const files = await resolveBootstrapFilesForRun({
@@ -116,7 +127,11 @@ describe("resolveBootstrapContextForRun", () => {
 
   it("keeps bootstrap context empty in lightweight cron mode", async () => {
     const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
-    await fs.writeFile(path.join(workspaceDir, "HEARTBEAT.md"), "check inbox", "utf8");
+    await fs.writeFile(
+      path.join(workspaceDir, "HEARTBEAT.md"),
+      "check inbox",
+      "utf8",
+    );
 
     const files = await resolveBootstrapFilesForRun({
       workspaceDir,

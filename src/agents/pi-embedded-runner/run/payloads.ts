@@ -1,7 +1,13 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { parseReplyDirectives } from "../../../auto-reply/reply/reply-directives.js";
-import type { ReasoningLevel, VerboseLevel } from "../../../auto-reply/thinking.js";
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
+import type {
+  ReasoningLevel,
+  VerboseLevel,
+} from "../../../auto-reply/thinking.js";
+import {
+  isSilentReplyText,
+  SILENT_REPLY_TOKEN,
+} from "../../../auto-reply/tokens.js";
 import { formatToolAggregate } from "../../../auto-reply/tool-meta.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import {
@@ -45,7 +51,9 @@ const RECOVERABLE_TOOL_ERROR_KEYWORDS = [
 
 function isRecoverableToolError(error: string | undefined): boolean {
   const errorLower = (error ?? "").toLowerCase();
-  return RECOVERABLE_TOOL_ERROR_KEYWORDS.some((keyword) => errorLower.includes(keyword));
+  return RECOVERABLE_TOOL_ERROR_KEYWORDS.some((keyword) =>
+    errorLower.includes(keyword),
+  );
 }
 
 function isVerboseToolDetailEnabled(level?: VerboseLevel): boolean {
@@ -64,7 +72,10 @@ function resolveToolErrorWarningPolicy(params: {
     return { showWarning: false, includeDetails };
   }
   const normalizedToolName = params.lastToolError.toolName.trim().toLowerCase();
-  if ((normalizedToolName === "exec" || normalizedToolName === "bash") && !includeDetails) {
+  if (
+    (normalizedToolName === "exec" || normalizedToolName === "bash") &&
+    !includeDetails
+  ) {
     return { showWarning: false, includeDetails };
   }
   // sessions_send timeouts and errors are transient inter-session communication
@@ -74,7 +85,8 @@ function resolveToolErrorWarningPolicy(params: {
     return { showWarning: false, includeDetails };
   }
   const isMutatingToolError =
-    params.lastToolError.mutatingAction ?? isLikelyMutatingToolName(params.lastToolError.toolName);
+    params.lastToolError.mutatingAction ??
+    isLikelyMutatingToolName(params.lastToolError.toolName);
   if (isMutatingToolError) {
     return { showWarning: true, includeDetails };
   }
@@ -82,7 +94,9 @@ function resolveToolErrorWarningPolicy(params: {
     return { showWarning: false, includeDetails };
   }
   return {
-    showWarning: !params.hasUserFacingReply && !isRecoverableToolError(params.lastToolError.error),
+    showWarning:
+      !params.hasUserFacingReply &&
+      !isRecoverableToolError(params.lastToolError.error),
     includeDetails,
   };
 }
@@ -149,15 +163,22 @@ export function buildEmbeddedRunPayloads(params: {
   const normalizedRawErrorText = rawErrorMessage
     ? normalizeTextForComparison(rawErrorMessage)
     : null;
-  const normalizedErrorText = errorText ? normalizeTextForComparison(errorText) : null;
-  const normalizedGenericBillingErrorText = normalizeTextForComparison(BILLING_ERROR_USER_MESSAGE);
-  const genericErrorText = "The AI service returned an error. Please try again.";
+  const normalizedErrorText = errorText
+    ? normalizeTextForComparison(errorText)
+    : null;
+  const normalizedGenericBillingErrorText = normalizeTextForComparison(
+    BILLING_ERROR_USER_MESSAGE,
+  );
+  const genericErrorText =
+    "The AI service returned an error. Please try again.";
   if (errorText) {
     replyItems.push({ text: errorText, isError: true });
   }
 
   const inlineToolResults =
-    params.inlineToolResultsAllowed && params.verboseLevel !== "off" && params.toolMetas.length > 0;
+    params.inlineToolResultsAllowed &&
+    params.verboseLevel !== "off" &&
+    params.toolMetas.length > 0;
   if (inlineToolResults) {
     for (const { toolName, meta } of params.toolMetas) {
       const agg = formatToolAggregate(toolName, meta ? [meta] : [], {
@@ -192,7 +213,9 @@ export function buildEmbeddedRunPayloads(params: {
     replyItems.push({ text: reasoningText, isReasoning: true });
   }
 
-  const fallbackAnswerText = params.lastAssistant ? extractAssistantText(params.lastAssistant) : "";
+  const fallbackAnswerText = params.lastAssistant
+    ? extractAssistantText(params.lastAssistant)
+    : "";
   const shouldSuppressRawErrorText = (text: string) => {
     if (!lastAssistantErrored) {
       return false;
@@ -203,7 +226,11 @@ export function buildEmbeddedRunPayloads(params: {
     }
     if (errorText) {
       const normalized = normalizeTextForComparison(trimmed);
-      if (normalized && normalizedErrorText && normalized === normalizedErrorText) {
+      if (
+        normalized &&
+        normalizedErrorText &&
+        normalized === normalizedErrorText
+      ) {
         return true;
       }
       if (trimmed === genericErrorText) {
@@ -261,7 +288,11 @@ export function buildEmbeddedRunPayloads(params: {
       replyToTag,
       replyToCurrent,
     } = parseReplyDirectives(text);
-    if (!cleanedText && (!mediaUrls || mediaUrls.length === 0) && !audioAsVoice) {
+    if (
+      !cleanedText &&
+      (!mediaUrls || mediaUrls.length === 0) &&
+      !audioAsVoice
+    ) {
       continue;
     }
     replyItems.push({
@@ -304,7 +335,10 @@ export function buildEmbeddedRunPayloads(params: {
               return false;
             }
             const normalizedExisting = normalizeTextForComparison(item.text);
-            return normalizedExisting.length > 0 && normalizedExisting === normalizedWarning;
+            return (
+              normalizedExisting.length > 0 &&
+              normalizedExisting === normalizedWarning
+            );
           })
         : false;
       if (!duplicateWarning) {
@@ -326,10 +360,15 @@ export function buildEmbeddedRunPayloads(params: {
       replyToId: item.replyToId,
       replyToTag: item.replyToTag,
       replyToCurrent: item.replyToCurrent,
-      audioAsVoice: item.audioAsVoice || Boolean(hasAudioAsVoiceTag && item.media?.length),
+      audioAsVoice:
+        item.audioAsVoice || Boolean(hasAudioAsVoiceTag && item.media?.length),
     }))
     .filter((p) => {
-      if (!p.text && !p.mediaUrl && (!p.mediaUrls || p.mediaUrls.length === 0)) {
+      if (
+        !p.text &&
+        !p.mediaUrl &&
+        (!p.mediaUrls || p.mediaUrls.length === 0)
+      ) {
         return false;
       }
       if (p.text && isSilentReplyText(p.text, SILENT_REPLY_TOKEN)) {

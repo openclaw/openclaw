@@ -79,7 +79,10 @@ describe("hooks install (e2e)", () => {
     );
 
     const hooksDir = path.join(baseDir, "managed-hooks");
-    const installResult = await installHooksFromPath({ path: packDir, hooksDir });
+    const installResult = await installHooksFromPath({
+      path: packDir,
+      hooksDir,
+    });
     expect(installResult.ok).toBe(true);
     if (!installResult.ok) {
       return;

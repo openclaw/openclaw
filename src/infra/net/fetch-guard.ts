@@ -11,14 +11,18 @@ import {
   type SsrFPolicy,
 } from "./ssrf.js";
 
-type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+type FetchLike = (
+  input: RequestInfo | URL,
+  init?: RequestInit,
+) => Promise<Response>;
 
 export const GUARDED_FETCH_MODE = {
   STRICT: "strict",
   TRUSTED_ENV_PROXY: "trusted_env_proxy",
 } as const;
 
-export type GuardedFetchMode = (typeof GUARDED_FETCH_MODE)[keyof typeof GUARDED_FETCH_MODE];
+export type GuardedFetchMode =
+  (typeof GUARDED_FETCH_MODE)[keyof typeof GUARDED_FETCH_MODE];
 
 export type GuardedFetchOptions = {
   url: string;
@@ -59,7 +63,9 @@ const CROSS_ORIGIN_REDIRECT_SENSITIVE_HEADERS = [
   "cookie2",
 ];
 
-export function withStrictGuardedFetchMode(params: GuardedFetchPresetOptions): GuardedFetchOptions {
+export function withStrictGuardedFetchMode(
+  params: GuardedFetchPresetOptions,
+): GuardedFetchOptions {
   return { ...params, mode: GUARDED_FETCH_MODE.STRICT };
 }
 
@@ -69,21 +75,34 @@ export function withTrustedEnvProxyGuardedFetchMode(
   return { ...params, mode: GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY };
 }
 
-function resolveGuardedFetchMode(params: GuardedFetchOptions): GuardedFetchMode {
+function resolveGuardedFetchMode(
+  params: GuardedFetchOptions,
+): GuardedFetchMode {
   if (params.mode) {
     return params.mode;
   }
-  if (params.proxy === "env" && params.dangerouslyAllowEnvProxyWithoutPinnedDns === true) {
+  if (
+    params.proxy === "env" &&
+    params.dangerouslyAllowEnvProxyWithoutPinnedDns === true
+  ) {
     return GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY;
   }
   return GUARDED_FETCH_MODE.STRICT;
 }
 
 function isRedirectStatus(status: number): boolean {
-  return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
+  return (
+    status === 301 ||
+    status === 302 ||
+    status === 303 ||
+    status === 307 ||
+    status === 308
+  );
 }
 
-function stripSensitiveHeadersForCrossOriginRedirect(init?: RequestInit): RequestInit | undefined {
+function stripSensitiveHeadersForCrossOriginRedirect(
+  init?: RequestInit,
+): RequestInit | undefined {
   if (!init?.headers) {
     return init;
   }
@@ -94,7 +113,10 @@ function stripSensitiveHeadersForCrossOriginRedirect(init?: RequestInit): Reques
   return { ...init, headers };
 }
 
-function buildAbortSignal(params: { timeoutMs?: number; signal?: AbortSignal }): {
+function buildAbortSignal(params: {
+  timeoutMs?: number;
+  signal?: AbortSignal;
+}): {
   signal?: AbortSignal;
   cleanup: () => void;
 } {
@@ -128,14 +150,17 @@ function buildAbortSignal(params: { timeoutMs?: number; signal?: AbortSignal }):
   return { signal: controller.signal, cleanup };
 }
 
-export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<GuardedFetchResult> {
+export async function fetchWithSsrFGuard(
+  params: GuardedFetchOptions,
+): Promise<GuardedFetchResult> {
   const fetcher: FetchLike | undefined = params.fetchImpl ?? globalThis.fetch;
   if (!fetcher) {
     throw new Error("fetch is not available");
   }
 
   const maxRedirects =
-    typeof params.maxRedirects === "number" && Number.isFinite(params.maxRedirects)
+    typeof params.maxRedirects === "number" &&
+    Number.isFinite(params.maxRedirects)
       ? Math.max(0, Math.floor(params.maxRedirects))
       : DEFAULT_MAX_REDIRECTS;
   const mode = resolveGuardedFetchMode(params);
@@ -180,7 +205,8 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
         policy: params.policy,
       });
       const canUseTrustedEnvProxy =
-        mode === GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY && hasProxyEnvConfigured();
+        mode === GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY &&
+        hasProxyEnvConfigured();
       if (canUseTrustedEnvProxy) {
         dispatcher = new EnvHttpProxyAgent();
       } else if (params.pinDns !== false) {
@@ -200,7 +226,9 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
         const location = response.headers.get("location");
         if (!location) {
           await release(dispatcher);
-          throw new Error(`Redirect missing location header (${response.status})`);
+          throw new Error(
+            `Redirect missing location header (${response.status})`,
+          );
         }
         redirectCount += 1;
         if (redirectCount > maxRedirects) {
@@ -214,7 +242,8 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
           throw new Error("Redirect loop detected");
         }
         if (nextParsedUrl.origin !== parsedUrl.origin) {
-          currentInit = stripSensitiveHeadersForCrossOriginRedirect(currentInit);
+          currentInit =
+            stripSensitiveHeadersForCrossOriginRedirect(currentInit);
         }
         visited.add(nextUrl);
         void response.body?.cancel();

@@ -4,7 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
-const run = (cwd: string, cmd: string, args: string[] = [], env?: NodeJS.ProcessEnv) => {
+const run = (
+  cwd: string,
+  cmd: string,
+  args: string[] = [],
+  env?: NodeJS.ProcessEnv,
+) => {
   return execFileSync(cmd, args, {
     cwd,
     encoding: "utf8",
@@ -39,10 +44,14 @@ describe("git-hooks/pre-commit (integration)", () => {
     );
     const fakeBinDir = path.join(dir, "bin");
     mkdirSync(fakeBinDir, { recursive: true });
-    writeFileSync(path.join(fakeBinDir, "node"), "#!/usr/bin/env bash\nexit 0\n", {
-      encoding: "utf8",
-      mode: 0o755,
-    });
+    writeFileSync(
+      path.join(fakeBinDir, "node"),
+      "#!/usr/bin/env bash\nexit 0\n",
+      {
+        encoding: "utf8",
+        mode: 0o755,
+      },
+    );
 
     // Create an untracked file that should NOT be staged by the hook.
     writeFileSync(path.join(dir, "secret.txt"), "do-not-stage\n", "utf8");
@@ -56,7 +65,9 @@ describe("git-hooks/pre-commit (integration)", () => {
       PATH: `${fakeBinDir}:${process.env.PATH ?? ""}`,
     });
 
-    const staged = run(dir, "git", ["diff", "--cached", "--name-only"]).split("\n").filter(Boolean);
+    const staged = run(dir, "git", ["diff", "--cached", "--name-only"])
+      .split("\n")
+      .filter(Boolean);
     expect(staged).toEqual(["--all"]);
   });
 });

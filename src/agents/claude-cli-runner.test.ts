@@ -31,7 +31,12 @@ function createDeferred<T>() {
 
 function createManagedRun(
   exit: Promise<{
-    reason: "exit" | "overall-timeout" | "no-output-timeout" | "signal" | "manual-cancel";
+    reason:
+      | "exit"
+      | "overall-timeout"
+      | "no-output-timeout"
+      | "signal"
+      | "manual-cancel";
     exitCode: number | null;
     exitSignal: NodeJS.Signals | null;
     durationMs: number;
@@ -63,7 +68,10 @@ function successExit(payload: { message: string; session_id: string }) {
   };
 }
 
-async function waitForCalls(mockFn: { mock: { calls: unknown[][] } }, count: number) {
+async function waitForCalls(
+  mockFn: { mock: { calls: unknown[][] } },
+  count: number,
+) {
   await vi.waitFor(
     () => {
       expect(mockFn.mock.calls.length).toBeGreaterThanOrEqual(count);
@@ -79,7 +87,9 @@ describe("runClaudeCliAgent", () => {
 
   it("starts a new session with --session-id when none is provided", async () => {
     mocks.spawn.mockResolvedValueOnce(
-      createManagedRun(Promise.resolve(successExit({ message: "ok", session_id: "sid-1" }))),
+      createManagedRun(
+        Promise.resolve(successExit({ message: "ok", session_id: "sid-1" })),
+      ),
     );
 
     await runClaudeCliAgent({
@@ -93,7 +103,10 @@ describe("runClaudeCliAgent", () => {
     });
 
     expect(mocks.spawn).toHaveBeenCalledTimes(1);
-    const spawnInput = mocks.spawn.mock.calls[0]?.[0] as { argv: string[]; mode: string };
+    const spawnInput = mocks.spawn.mock.calls[0]?.[0] as {
+      argv: string[];
+      mode: string;
+    };
     expect(spawnInput.mode).toBe("child");
     expect(spawnInput.argv).toContain("claude");
     expect(spawnInput.argv).toContain("--session-id");
@@ -102,7 +115,9 @@ describe("runClaudeCliAgent", () => {
 
   it("uses --resume when a claude session id is provided", async () => {
     mocks.spawn.mockResolvedValueOnce(
-      createManagedRun(Promise.resolve(successExit({ message: "ok", session_id: "sid-2" }))),
+      createManagedRun(
+        Promise.resolve(successExit({ message: "ok", session_id: "sid-2" })),
+      ),
     );
 
     await runClaudeCliAgent({

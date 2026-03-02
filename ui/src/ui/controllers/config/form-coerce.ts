@@ -1,6 +1,9 @@
 import { schemaType, type JsonSchema } from "../../views/config-form.shared.ts";
 
-function coerceNumberString(value: string, integer: boolean): number | undefined | string {
+function coerceNumberString(
+  value: string,
+  integer: boolean,
+): number | undefined | string {
   const trimmed = value.trim();
   if (trimmed === "") {
     return undefined;
@@ -55,7 +58,11 @@ export function coerceFormValues(value: unknown, schema: JsonSchema): unknown {
   // Handle anyOf/oneOf — try to match the value against a variant
   if (schema.anyOf || schema.oneOf) {
     const variants = (schema.anyOf ?? schema.oneOf ?? []).filter(
-      (v) => !(v.type === "null" || (Array.isArray(v.type) && v.type.includes("null"))),
+      (v) =>
+        !(
+          v.type === "null" ||
+          (Array.isArray(v.type) && v.type.includes("null"))
+        ),
     );
 
     if (variants.length === 1) {
@@ -84,7 +91,11 @@ export function coerceFormValues(value: unknown, schema: JsonSchema): unknown {
     // For non-string values (objects, arrays), try to recurse into matching variant
     for (const variant of variants) {
       const variantType = schemaType(variant);
-      if (variantType === "object" && typeof value === "object" && !Array.isArray(value)) {
+      if (
+        variantType === "object" &&
+        typeof value === "object" &&
+        !Array.isArray(value)
+      ) {
         return coerceFormValues(value, variant);
       }
       if (variantType === "array" && Array.isArray(value)) {
@@ -122,7 +133,8 @@ export function coerceFormValues(value: unknown, schema: JsonSchema): unknown {
     const obj = value as Record<string, unknown>;
     const props = schema.properties ?? {};
     const additional =
-      schema.additionalProperties && typeof schema.additionalProperties === "object"
+      schema.additionalProperties &&
+      typeof schema.additionalProperties === "object"
         ? schema.additionalProperties
         : null;
     const result: Record<string, unknown> = {};
@@ -153,7 +165,9 @@ export function coerceFormValues(value: unknown, schema: JsonSchema): unknown {
     if (!itemsSchema) {
       return value;
     }
-    return value.map((item) => coerceFormValues(item, itemsSchema)).filter((v) => v !== undefined);
+    return value
+      .map((item) => coerceFormValues(item, itemsSchema))
+      .filter((v) => v !== undefined);
   }
 
   return value;

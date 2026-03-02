@@ -18,12 +18,16 @@ import {
   sanitizeDiscordThreadName,
   shouldEmitDiscordReactionNotification,
 } from "./monitor.js";
-import { DiscordMessageListener, DiscordReactionListener } from "./monitor/listeners.js";
+import {
+  DiscordMessageListener,
+  DiscordReactionListener,
+} from "./monitor/listeners.js";
 
 const readAllowFromStoreMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../pairing/pairing-store.js", () => ({
-  readChannelAllowFromStore: (...args: unknown[]) => readAllowFromStoreMock(...args),
+  readChannelAllowFromStore: (...args: unknown[]) =>
+    readAllowFromStoreMock(...args),
 }));
 
 const fakeGuild = (id: string, name: string) => ({ id, name }) as Guild;
@@ -156,7 +160,9 @@ describe("DiscordMessageListener", () => {
     const logger = {
       warn: vi.fn(),
       error: vi.fn(),
-    } as unknown as ReturnType<typeof import("../logging/subsystem.js").createSubsystemLogger>;
+    } as unknown as ReturnType<
+      typeof import("../logging/subsystem.js").createSubsystemLogger
+    >;
     const handler = vi.fn(async () => {
       throw new Error("boom");
     });
@@ -167,7 +173,9 @@ describe("DiscordMessageListener", () => {
       {} as unknown as import("@buape/carbon").Client,
     );
     await vi.waitFor(() => {
-      expect(logger.error).toHaveBeenCalledWith(expect.stringContaining("discord handler failed"));
+      expect(logger.error).toHaveBeenCalledWith(
+        expect.stringContaining("discord handler failed"),
+      );
     });
   });
 
@@ -181,7 +189,9 @@ describe("DiscordMessageListener", () => {
       const logger = {
         warn: vi.fn(),
         error: vi.fn(),
-      } as unknown as ReturnType<typeof import("../logging/subsystem.js").createSubsystemLogger>;
+      } as unknown as ReturnType<
+        typeof import("../logging/subsystem.js").createSubsystemLogger
+      >;
       const listener = new DiscordMessageListener(handler, logger);
 
       // handle() should release immediately.
@@ -200,9 +210,12 @@ describe("DiscordMessageListener", () => {
       await Promise.resolve();
 
       expect(logger.warn).toHaveBeenCalled();
-      const warnMock = logger.warn as unknown as { mock: { calls: unknown[][] } };
+      const warnMock = logger.warn as unknown as {
+        mock: { calls: unknown[][] };
+      };
       const [, meta] = warnMock.mock.calls[0] ?? [];
-      const durationMs = (meta as { durationMs?: number } | undefined)?.durationMs;
+      const durationMs = (meta as { durationMs?: number } | undefined)
+        ?.durationMs;
       expect(durationMs).toBeGreaterThanOrEqual(30_000);
     } finally {
       vi.useRealTimers();
@@ -212,7 +225,9 @@ describe("DiscordMessageListener", () => {
 
 describe("discord allowlist helpers", () => {
   it("normalizes slugs", () => {
-    expect(normalizeDiscordSlug("Friends of OpenClaw")).toBe("friends-of-openclaw");
+    expect(normalizeDiscordSlug("Friends of OpenClaw")).toBe(
+      "friends-of-openclaw",
+    );
     expect(normalizeDiscordSlug("#General")).toBe("general");
     expect(normalizeDiscordSlug("Dev__Chat")).toBe("dev-chat");
   });
@@ -228,16 +243,31 @@ describe("discord allowlist helpers", () => {
     }
     expect(allowListMatches(allow, { id: "123" })).toBe(true);
     expect(allowListMatches(allow, { name: "steipete" })).toBe(false);
-    expect(allowListMatches(allow, { name: "friends-of-openclaw" })).toBe(false);
-    expect(allowListMatches(allow, { name: "steipete" }, { allowNameMatching: true })).toBe(true);
+    expect(allowListMatches(allow, { name: "friends-of-openclaw" })).toBe(
+      false,
+    );
     expect(
-      allowListMatches(allow, { name: "friends-of-openclaw" }, { allowNameMatching: true }),
+      allowListMatches(
+        allow,
+        { name: "steipete" },
+        { allowNameMatching: true },
+      ),
+    ).toBe(true);
+    expect(
+      allowListMatches(
+        allow,
+        { name: "friends-of-openclaw" },
+        { allowNameMatching: true },
+      ),
     ).toBe(true);
     expect(allowListMatches(allow, { name: "other" })).toBe(false);
   });
 
   it("matches pk-prefixed allowlist entries", () => {
-    const allow = normalizeDiscordAllowList(["pk:member-123"], ["discord:", "user:", "pk:"]);
+    const allow = normalizeDiscordAllowList(
+      ["pk:member-123"],
+      ["discord:", "user:", "pk:"],
+    );
     expect(allow).not.toBeNull();
     if (!allow) {
       throw new Error("Expected allow list to be normalized");
@@ -490,7 +520,11 @@ describe("discord mention gating", () => {
     const cases = [
       { name: "bot-owned thread", threadOwnerId: "bot123", expected: false },
       { name: "user-owned thread", threadOwnerId: "user456", expected: true },
-      { name: "unknown thread owner", threadOwnerId: undefined, expected: true },
+      {
+        name: "unknown thread owner",
+        threadOwnerId: undefined,
+        expected: true,
+      },
     ] as const;
 
     for (const testCase of cases) {
@@ -605,7 +639,9 @@ describe("discord groupPolicy gating", () => {
     ] as const;
 
     for (const testCase of cases) {
-      expect(isDiscordGroupAllowedByPolicy(testCase.input), testCase.name).toBe(testCase.expected);
+      expect(isDiscordGroupAllowedByPolicy(testCase.input), testCase.name).toBe(
+        testCase.expected,
+      );
     }
   });
 });
@@ -645,7 +681,12 @@ describe("discord group DM gating", () => {
 describe("discord reply target selection", () => {
   it("handles off/first/all reply modes", () => {
     const cases = [
-      { name: "off mode", replyToMode: "off" as const, hasReplied: false, expected: undefined },
+      {
+        name: "off mode",
+        replyToMode: "off" as const,
+        hasReplied: false,
+        expected: undefined,
+      },
       {
         name: "first mode before reply",
         replyToMode: "first" as const,
@@ -687,7 +728,10 @@ describe("discord reply target selection", () => {
 
 describe("discord autoThread name sanitization", () => {
   it("strips mentions and collapses whitespace", () => {
-    const name = sanitizeDiscordThreadName("  <@123>  <@&456> <#789>  Help   here  ", "msg-1");
+    const name = sanitizeDiscordThreadName(
+      "  <@123>  <@&456> <#789>  Help   here  ",
+      "msg-1",
+    );
     expect(name).toBe("Help here");
   });
 
@@ -839,8 +883,16 @@ describe("discord media payload", () => {
     expect(payload.MediaPath).toBe("/tmp/a.png");
     expect(payload.MediaUrl).toBe("/tmp/a.png");
     expect(payload.MediaType).toBe("image/png");
-    expect(payload.MediaPaths).toEqual(["/tmp/a.png", "/tmp/b.png", "/tmp/c.png"]);
-    expect(payload.MediaUrls).toEqual(["/tmp/a.png", "/tmp/b.png", "/tmp/c.png"]);
+    expect(payload.MediaPaths).toEqual([
+      "/tmp/a.png",
+      "/tmp/b.png",
+      "/tmp/c.png",
+    ]);
+    expect(payload.MediaUrls).toEqual([
+      "/tmp/a.png",
+      "/tmp/b.png",
+      "/tmp/c.png",
+    ]);
   });
 });
 
@@ -855,7 +907,9 @@ const { enqueueSystemEventSpy, resolveAgentRouteMock } = vi.hoisted(() => ({
     channel: "discord",
     accountId: "acc-1",
     sessionKey: "discord:acc-1:dm:user-1",
-    ...(typeof params === "object" && params !== null ? { _params: params } : {}),
+    ...(typeof params === "object" && params !== null
+      ? { _params: params }
+      : {}),
   })),
 }));
 
@@ -885,7 +939,9 @@ function makeReactionEvent(overrides?: {
     overrides?.messageFetch ??
     vi.fn(async () => ({
       author: {
-        id: overrides?.messageAuthorId ?? (overrides?.botAsAuthor ? "bot-1" : "other-user"),
+        id:
+          overrides?.messageAuthorId ??
+          (overrides?.botAsAuthor ? "bot-1" : "other-user"),
         username: overrides?.botAsAuthor ? "bot" : "otheruser",
         discriminator: "0",
       },
@@ -916,14 +972,19 @@ function makeReactionClient(options?: {
 }) {
   const channelType = options?.channelType ?? ChannelType.DM;
   const channelName =
-    options?.channelName ?? (channelType === ChannelType.DM ? undefined : "test-channel");
+    options?.channelName ??
+    (channelType === ChannelType.DM ? undefined : "test-channel");
   const parentId = options?.parentId;
   const parentName = options?.parentName ?? "parent-channel";
 
   return {
     fetchChannel: vi.fn(async (channelId: string) => {
       if (parentId && channelId === parentId) {
-        return { type: ChannelType.GuildText, name: parentName, parentId: undefined };
+        return {
+          type: ChannelType.GuildText,
+          name: parentName,
+          parentId: undefined,
+        };
       }
       return { type: channelType, name: channelName, parentId };
     }),
@@ -959,7 +1020,9 @@ function makeReactionListenerParams(overrides?: {
       warn: vi.fn(),
       error: vi.fn(),
       debug: vi.fn(),
-    } as unknown as ReturnType<typeof import("../logging/subsystem.js").createSubsystemLogger>,
+    } as unknown as ReturnType<
+      typeof import("../logging/subsystem.js").createSubsystemLogger
+    >,
   };
 }
 
@@ -1221,7 +1284,11 @@ describe("discord reaction notification modes", () => {
       resolveAgentRouteMock.mockClear();
 
       const messageFetch = vi.fn(async () => ({
-        author: { id: testCase.messageAuthorId, username: "author", discriminator: "0" },
+        author: {
+          id: testCase.messageAuthorId,
+          username: "author",
+          discriminator: "0",
+        },
       }));
       const data = makeReactionEvent({
         guildId,
@@ -1240,11 +1307,15 @@ describe("discord reaction notification modes", () => {
           users: testCase.users ? [...testCase.users] : undefined,
         },
       });
-      const listener = new DiscordReactionListener(makeReactionListenerParams({ guildEntries }));
+      const listener = new DiscordReactionListener(
+        makeReactionListenerParams({ guildEntries }),
+      );
 
       await listener.handle(data, client);
 
-      expect(messageFetch, testCase.name).toHaveBeenCalledTimes(testCase.expectedMessageFetchCalls);
+      expect(messageFetch, testCase.name).toHaveBeenCalledTimes(
+        testCase.expectedMessageFetchCalls,
+      );
       expect(enqueueSystemEventSpy, testCase.name).toHaveBeenCalledTimes(
         testCase.expectedEnqueueCalls,
       );

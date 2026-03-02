@@ -33,7 +33,9 @@ export function makeModelSnapshotEntry(data: {
   };
 }
 
-export function makeInMemorySessionManager(entries: SessionEntry[]): SessionManager {
+export function makeInMemorySessionManager(
+  entries: SessionEntry[],
+): SessionManager {
   return {
     getEntries: vi.fn(() => entries),
     appendCustomEntry: vi.fn((customType: string, data: unknown) => {
@@ -56,7 +58,9 @@ export function makeSimpleUserMessages(): AgentMessage[] {
 
 export async function loadSanitizeSessionHistoryWithCleanMocks(): Promise<SanitizeSessionHistoryFn> {
   vi.resetAllMocks();
-  vi.mocked(helpers.sanitizeSessionMessagesImages).mockImplementation(async (msgs) => msgs);
+  vi.mocked(helpers.sanitizeSessionMessagesImages).mockImplementation(
+    async (msgs) => msgs,
+  );
   const mod = await import("./pi-embedded-runner/google.js");
   return mod.sanitizeSessionHistory;
 }
@@ -134,7 +138,10 @@ export async function expectGoogleModelApiFullSanitizeCall(params: {
   expect(helpers.sanitizeSessionMessagesImages).toHaveBeenCalledWith(
     params.messages,
     "session:history",
-    expect.objectContaining({ sanitizeMode: "full", sanitizeToolCallIds: true }),
+    expect.objectContaining({
+      sanitizeMode: "full",
+      sanitizeToolCallIds: true,
+    }),
   );
 }
 
@@ -156,7 +163,8 @@ export function makeSnapshotChangedOpenAIReasoningScenario() {
 export async function sanitizeSnapshotChangedOpenAIReasoning(params: {
   sanitizeSessionHistory: SanitizeSessionHistoryFn;
 }) {
-  const { sessionManager, messages, modelId } = makeSnapshotChangedOpenAIReasoningScenario();
+  const { sessionManager, messages, modelId } =
+    makeSnapshotChangedOpenAIReasoningScenario();
   return await sanitizeWithOpenAIResponses({
     sanitizeSessionHistory: params.sanitizeSessionHistory,
     messages,

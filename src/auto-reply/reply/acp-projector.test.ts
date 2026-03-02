@@ -5,7 +5,9 @@ import { createAcpTestConfig as createCfg } from "./test-fixtures/acp-runtime.js
 
 type Delivery = { kind: string; text?: string };
 
-function createProjectorHarness(cfgOverrides?: Parameters<typeof createCfg>[0]) {
+function createProjectorHarness(
+  cfgOverrides?: Parameters<typeof createCfg>[0],
+) {
   const deliveries: Delivery[] = [];
   const projector = createAcpReplyProjector({
     cfg: createCfg(cfgOverrides),
@@ -62,9 +64,17 @@ describe("createAcpReplyProjector", () => {
       },
     });
 
-    await projector.onEvent({ type: "text_delta", text: "A", tag: "agent_message_chunk" });
+    await projector.onEvent({
+      type: "text_delta",
+      text: "A",
+      tag: "agent_message_chunk",
+    });
     await projector.onEvent({ type: "done", stopReason: "end_turn" });
-    await projector.onEvent({ type: "text_delta", text: "A", tag: "agent_message_chunk" });
+    await projector.onEvent({
+      type: "text_delta",
+      text: "A",
+      tag: "agent_message_chunk",
+    });
     await projector.onEvent({ type: "done", stopReason: "end_turn" });
 
     expect(blockDeliveries(deliveries)).toEqual([
@@ -87,15 +97,27 @@ describe("createAcpReplyProjector", () => {
         },
       });
 
-      await projector.onEvent({ type: "text_delta", text: "A", tag: "agent_message_chunk" });
+      await projector.onEvent({
+        type: "text_delta",
+        text: "A",
+        tag: "agent_message_chunk",
+      });
       await vi.advanceTimersByTimeAsync(760);
       await projector.flush(false);
 
-      await projector.onEvent({ type: "text_delta", text: "B", tag: "agent_message_chunk" });
+      await projector.onEvent({
+        type: "text_delta",
+        text: "B",
+        tag: "agent_message_chunk",
+      });
       await vi.advanceTimersByTimeAsync(760);
       await projector.flush(false);
 
-      await projector.onEvent({ type: "text_delta", text: "C", tag: "agent_message_chunk" });
+      await projector.onEvent({
+        type: "text_delta",
+        text: "C",
+        tag: "agent_message_chunk",
+      });
       await vi.advanceTimersByTimeAsync(760);
       await projector.flush(false);
 
@@ -122,7 +144,11 @@ describe("createAcpReplyProjector", () => {
     });
 
     const text = `${"a".repeat(50)}${"b".repeat(50)}${"c".repeat(20)}`;
-    await projector.onEvent({ type: "text_delta", text, tag: "agent_message_chunk" });
+    await projector.onEvent({
+      type: "text_delta",
+      text,
+      tag: "agent_message_chunk",
+    });
     await projector.flush(true);
 
     expect(blockDeliveries(deliveries)).toEqual([
@@ -265,7 +291,8 @@ describe("createAcpReplyProjector", () => {
   });
 
   it("suppresses usage_update by default and allows deduped usage when tag-visible", async () => {
-    const { deliveries: hidden, projector: hiddenProjector } = createProjectorHarness();
+    const { deliveries: hidden, projector: hiddenProjector } =
+      createProjectorHarness();
     await hiddenProjector.onEvent({
       type: "status",
       text: "usage updated: 10/100",
@@ -275,19 +302,20 @@ describe("createAcpReplyProjector", () => {
     });
     expect(hidden).toEqual([]);
 
-    const { deliveries: shown, projector: shownProjector } = createProjectorHarness({
-      acp: {
-        enabled: true,
-        stream: {
-          coalesceIdleMs: 0,
-          maxChunkChars: 64,
-          deliveryMode: "live",
-          tagVisibility: {
-            usage_update: true,
+    const { deliveries: shown, projector: shownProjector } =
+      createProjectorHarness({
+        acp: {
+          enabled: true,
+          stream: {
+            coalesceIdleMs: 0,
+            maxChunkChars: 64,
+            deliveryMode: "live",
+            tagVisibility: {
+              usage_update: true,
+            },
           },
         },
-      },
-    });
+      });
 
     await shownProjector.onEvent({
       type: "status",
@@ -540,8 +568,14 @@ describe("createAcpReplyProjector", () => {
     });
 
     expect(deliveries).toEqual([
-      { kind: "tool", text: prefixSystemMessage("available commands updated (7)") },
-      { kind: "tool", text: prefixSystemMessage("available commands updated (8)") },
+      {
+        kind: "tool",
+        text: prefixSystemMessage("available commands updated (7)"),
+      },
+      {
+        kind: "tool",
+        text: prefixSystemMessage("available commands updated (8)"),
+      },
     ]);
   });
 
@@ -627,7 +661,11 @@ describe("createAcpReplyProjector", () => {
       },
     });
 
-    await projector.onEvent({ type: "text_delta", text: "fallback.", tag: "agent_message_chunk" });
+    await projector.onEvent({
+      type: "text_delta",
+      text: "fallback.",
+      tag: "agent_message_chunk",
+    });
     await projector.onEvent({
       type: "tool_call",
       tag: "tool_call",
@@ -636,7 +674,11 @@ describe("createAcpReplyProjector", () => {
       title: "Run test",
       text: "Run test (in_progress)",
     });
-    await projector.onEvent({ type: "text_delta", text: "I don't", tag: "agent_message_chunk" });
+    await projector.onEvent({
+      type: "text_delta",
+      text: "I don't",
+      tag: "agent_message_chunk",
+    });
     await projector.flush(true);
 
     expect(combinedBlockText(deliveries)).toBe("fallback. I don't");
@@ -658,7 +700,11 @@ describe("createAcpReplyProjector", () => {
       },
     });
 
-    await projector.onEvent({ type: "text_delta", text: "fallback.", tag: "agent_message_chunk" });
+    await projector.onEvent({
+      type: "text_delta",
+      text: "fallback.",
+      tag: "agent_message_chunk",
+    });
     await projector.onEvent({
       type: "tool_call",
       tag: "tool_call",
@@ -675,7 +721,11 @@ describe("createAcpReplyProjector", () => {
       title: "Run test",
       text: "Run test (in_progress)",
     });
-    await projector.onEvent({ type: "text_delta", text: "I don't", tag: "agent_message_chunk" });
+    await projector.onEvent({
+      type: "text_delta",
+      text: "I don't",
+      tag: "agent_message_chunk",
+    });
     await projector.flush(true);
 
     expect(combinedBlockText(deliveries)).toBe("fallback. I don't");
@@ -694,7 +744,11 @@ describe("createAcpReplyProjector", () => {
       },
     });
 
-    await projector.onEvent({ type: "text_delta", text: "fallback.", tag: "agent_message_chunk" });
+    await projector.onEvent({
+      type: "text_delta",
+      text: "fallback.",
+      tag: "agent_message_chunk",
+    });
     await projector.onEvent({
       type: "tool_call",
       tag: "tool_call",
@@ -703,7 +757,11 @@ describe("createAcpReplyProjector", () => {
       title: "Run test",
       text: "Run test (in_progress)",
     });
-    await projector.onEvent({ type: "text_delta", text: "I don't", tag: "agent_message_chunk" });
+    await projector.onEvent({
+      type: "text_delta",
+      text: "I don't",
+      tag: "agent_message_chunk",
+    });
     await projector.flush(true);
 
     expect(combinedBlockText(deliveries)).toBe("fallback. I don't");
@@ -722,7 +780,11 @@ describe("createAcpReplyProjector", () => {
       },
     });
 
-    await projector.onEvent({ type: "text_delta", text: "fallback.", tag: "agent_message_chunk" });
+    await projector.onEvent({
+      type: "text_delta",
+      text: "fallback.",
+      tag: "agent_message_chunk",
+    });
     await projector.onEvent({
       type: "tool_call",
       tag: "tool_call",
@@ -731,7 +793,11 @@ describe("createAcpReplyProjector", () => {
       title: "Run test",
       text: "Run test (in_progress)",
     });
-    await projector.onEvent({ type: "text_delta", text: "I don't", tag: "agent_message_chunk" });
+    await projector.onEvent({
+      type: "text_delta",
+      text: "I don't",
+      tag: "agent_message_chunk",
+    });
     await projector.flush(true);
 
     expect(combinedBlockText(deliveries)).toBe("fallback.I don't");
@@ -762,7 +828,11 @@ describe("createAcpReplyProjector", () => {
       title: "Run test",
       text: "Run test (in_progress)",
     });
-    await projector.onEvent({ type: "text_delta", text: "I don't", tag: "agent_message_chunk" });
+    await projector.onEvent({
+      type: "text_delta",
+      text: "I don't",
+      tag: "agent_message_chunk",
+    });
     await projector.flush(true);
 
     expect(combinedBlockText(deliveries)).toBe("fallback.\nI don't");
@@ -780,13 +850,21 @@ describe("createAcpReplyProjector", () => {
       },
     });
 
-    await projector.onEvent({ type: "text_delta", text: "A", tag: "agent_message_chunk" });
+    await projector.onEvent({
+      type: "text_delta",
+      text: "A",
+      tag: "agent_message_chunk",
+    });
     await projector.onEvent({
       type: "status",
       tag: "available_commands_update",
       text: "available commands updated",
     });
-    await projector.onEvent({ type: "text_delta", text: "B", tag: "agent_message_chunk" });
+    await projector.onEvent({
+      type: "text_delta",
+      text: "B",
+      tag: "agent_message_chunk",
+    });
     await projector.flush(true);
 
     expect(combinedBlockText(deliveries)).toBe("AB");

@@ -4,7 +4,10 @@ import { createArmableStallWatchdog } from "../../channels/transport/stall-watch
 import { danger } from "../../globals.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { attachDiscordGatewayLogging } from "../gateway-logging.js";
-import { getDiscordGatewayEmitter, waitForDiscordGatewayStop } from "../monitor.gateway.js";
+import {
+  getDiscordGatewayEmitter,
+  waitForDiscordGatewayStop,
+} from "../monitor.gateway.js";
 import type { DiscordVoiceManager } from "../voice/manager.js";
 import { registerGateway, unregisterGateway } from "./gateway-registry.js";
 import type { DiscordMonitorStatusSink } from "./status.js";
@@ -214,7 +217,8 @@ export async function runDiscordGatewayLifecycle(params: {
         resetHelloStallCounter();
       } else {
         consecutiveHelloStalls += 1;
-        const forceFreshIdentify = consecutiveHelloStalls >= MAX_CONSECUTIVE_HELLO_STALLS;
+        const forceFreshIdentify =
+          consecutiveHelloStalls >= MAX_CONSECUTIVE_HELLO_STALLS;
         const stalledAt = Date.now();
         reconnectStallWatchdog.arm(stalledAt);
         pushStatus({

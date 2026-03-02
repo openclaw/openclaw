@@ -3,7 +3,8 @@ import { normalizeHyphenSlug } from "../../shared/string-normalization.js";
 import { listDeliverableMessageChannels } from "../../utils/message-channel.js";
 import type { GroupKeyResolution } from "./types.js";
 
-const getGroupSurfaces = () => new Set<string>([...listDeliverableMessageChannels(), "webchat"]);
+const getGroupSurfaces = () =>
+  new Set<string>([...listDeliverableMessageChannels(), "webchat"]);
 
 function normalizeGroupLabel(raw?: string) {
   return normalizeHyphenSlug(raw);
@@ -45,17 +46,28 @@ export function buildGroupDisplayName(params: {
   if (!params.groupChannel && token.startsWith("#")) {
     token = token.replace(/^#+/, "");
   }
-  if (token && !/^[@#]/.test(token) && !token.startsWith("g-") && !token.includes("#")) {
+  if (
+    token &&
+    !/^[@#]/.test(token) &&
+    !token.startsWith("g-") &&
+    !token.includes("#")
+  ) {
     token = `g-${token}`;
   }
   return token ? `${providerKey}:${token}` : providerKey;
 }
 
-export function resolveGroupSessionKey(ctx: MsgContext): GroupKeyResolution | null {
+export function resolveGroupSessionKey(
+  ctx: MsgContext,
+): GroupKeyResolution | null {
   const from = typeof ctx.From === "string" ? ctx.From.trim() : "";
   const chatType = ctx.ChatType?.trim().toLowerCase();
   const normalizedChatType =
-    chatType === "channel" ? "channel" : chatType === "group" ? "group" : undefined;
+    chatType === "channel"
+      ? "channel"
+      : chatType === "group"
+        ? "group"
+        : undefined;
 
   const isWhatsAppGroupId = from.toLowerCase().endsWith("@g.us");
   const looksLikeGroup =

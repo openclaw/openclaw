@@ -54,17 +54,23 @@ export function buildGatewayRuntimeHints(
     hints.push(
       `LaunchAgent label cached but plist missing. Clear with: launchctl bootout gui/$UID/${label}`,
     );
-    hints.push(`Then reinstall: ${formatCliCommand("openclaw gateway install", env)}`);
+    hints.push(
+      `Then reinstall: ${formatCliCommand("openclaw gateway install", env)}`,
+    );
   }
   if (runtime.missingUnit) {
-    hints.push(`Service not installed. Run: ${formatCliCommand("openclaw gateway install", env)}`);
+    hints.push(
+      `Service not installed. Run: ${formatCliCommand("openclaw gateway install", env)}`,
+    );
     if (fileLog) {
       hints.push(`File logs: ${fileLog}`);
     }
     return hints;
   }
   if (runtime.status === "stopped") {
-    hints.push("Service is loaded but not running (likely exited immediately).");
+    hints.push(
+      "Service is loaded but not running (likely exited immediately).",
+    );
     if (fileLog) {
       hints.push(`File logs: ${fileLog}`);
     }
@@ -74,7 +80,9 @@ export function buildGatewayRuntimeHints(
       hints.push(`Launchd stderr (if installed): ${logs.stderrPath}`);
     } else if (platform === "linux") {
       const unit = resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE);
-      hints.push(`Logs: journalctl --user -u ${unit}.service -n 200 --no-pager`);
+      hints.push(
+        `Logs: journalctl --user -u ${unit}.service -n 200 --no-pager`,
+      );
     } else if (platform === "win32") {
       const task = resolveGatewayWindowsTaskName(env.OPENCLAW_PROFILE);
       hints.push(`Logs: schtasks /Query /TN "${task}" /V /FO LIST`);

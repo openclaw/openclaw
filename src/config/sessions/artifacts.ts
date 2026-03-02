@@ -1,9 +1,13 @@
 export type SessionArchiveReason = "bak" | "reset" | "deleted";
 
-const ARCHIVE_TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}(?:\.\d{3})?Z$/;
+const ARCHIVE_TIMESTAMP_RE =
+  /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}(?:\.\d{3})?Z$/;
 const LEGACY_STORE_BACKUP_RE = /^sessions\.json\.bak\.\d+$/;
 
-function hasArchiveSuffix(fileName: string, reason: SessionArchiveReason): boolean {
+function hasArchiveSuffix(
+  fileName: string,
+  reason: SessionArchiveReason,
+): boolean {
   const marker = `.${reason}.`;
   const index = fileName.lastIndexOf(marker);
   if (index < 0) {

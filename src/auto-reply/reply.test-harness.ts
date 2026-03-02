@@ -35,7 +35,10 @@ function restoreHomeEnv(snapshot: HomeEnvSnapshot) {
   }
 }
 
-export function createTempHomeHarness(options: { prefix: string; beforeEachCase?: () => void }) {
+export function createTempHomeHarness(options: {
+  prefix: string;
+  beforeEachCase?: () => void;
+}) {
   let fixtureRoot = "";
   let caseId = 0;
 
@@ -52,7 +55,9 @@ export function createTempHomeHarness(options: { prefix: string; beforeEachCase?
 
   async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
     const home = path.join(fixtureRoot, `case-${++caseId}`);
-    await fs.mkdir(path.join(home, ".openclaw", "agents", "main", "sessions"), { recursive: true });
+    await fs.mkdir(path.join(home, ".openclaw", "agents", "main", "sessions"), {
+      recursive: true,
+    });
     const envSnapshot = snapshotHomeEnv();
     process.env.HOME = home;
     process.env.USERPROFILE = home;

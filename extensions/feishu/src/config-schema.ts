@@ -203,7 +203,8 @@ export const FeishuConfigSchema = z
     webhookPath: z.string().optional().default("/feishu/events"),
     ...FeishuSharedConfigShape,
     dmPolicy: DmPolicySchema.optional().default("pairing"),
-    reactionNotifications: ReactionNotificationModeSchema.optional().default("own"),
+    reactionNotifications:
+      ReactionNotificationModeSchema.optional().default("own"),
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),
     requireMention: z.boolean().optional().default(true),
     groupSessionScope: GroupSessionScopeSchema,
@@ -214,14 +215,25 @@ export const FeishuConfigSchema = z
     typingIndicator: z.boolean().optional().default(true),
     resolveSenderNames: z.boolean().optional().default(true),
     // Multi-account configuration
-    accounts: z.record(z.string(), FeishuAccountConfigSchema.optional()).optional(),
+    accounts: z
+      .record(z.string(), FeishuAccountConfigSchema.optional())
+      .optional(),
   })
   .strict()
   .superRefine((value, ctx) => {
     const defaultAccount = value.defaultAccount?.trim();
-    if (defaultAccount && value.accounts && Object.keys(value.accounts).length > 0) {
+    if (
+      defaultAccount &&
+      value.accounts &&
+      Object.keys(value.accounts).length > 0
+    ) {
       const normalizedDefaultAccount = normalizeAccountId(defaultAccount);
-      if (!Object.prototype.hasOwnProperty.call(value.accounts, normalizedDefaultAccount)) {
+      if (
+        !Object.prototype.hasOwnProperty.call(
+          value.accounts,
+          normalizedDefaultAccount,
+        )
+      ) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path: ["defaultAccount"],
@@ -245,7 +257,8 @@ export const FeishuConfigSchema = z
       if (!account) {
         continue;
       }
-      const accountConnectionMode = account.connectionMode ?? defaultConnectionMode;
+      const accountConnectionMode =
+        account.connectionMode ?? defaultConnectionMode;
       if (accountConnectionMode !== "webhook") {
         continue;
       }
@@ -264,7 +277,9 @@ export const FeishuConfigSchema = z
 
     if (value.dmPolicy === "open") {
       const allowFrom = value.allowFrom ?? [];
-      const hasWildcard = allowFrom.some((entry) => String(entry).trim() === "*");
+      const hasWildcard = allowFrom.some(
+        (entry) => String(entry).trim() === "*",
+      );
       if (!hasWildcard) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,

@@ -35,7 +35,8 @@ vi.mock("./system-events.js", () => ({
   enqueueSystemEvent: mocks.enqueueSystemEvent,
 }));
 
-const { deliverSessionMaintenanceWarning } = await import("./session-maintenance-warning.js");
+const { deliverSessionMaintenanceWarning } =
+  await import("./session-maintenance-warning.js");
 
 describe("deliverSessionMaintenanceWarning", () => {
   let prevVitest: string | undefined;

@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { createProviderUsageFetch, makeResponse } from "../test-utils/provider-usage-fetch.js";
+import {
+  createProviderUsageFetch,
+  makeResponse,
+} from "../test-utils/provider-usage-fetch.js";
 import { fetchCodexUsage } from "./provider-usage.fetch.codex.js";
 
 describe("fetchCodexUsage", () => {
@@ -25,7 +28,8 @@ describe("fetchCodexUsage", () => {
 
   it("parses windows, reset times, and plan balance", async () => {
     const mockFetch = createProviderUsageFetch(async (_url, init) => {
-      const headers = (init?.headers as Record<string, string> | undefined) ?? {};
+      const headers =
+        (init?.headers as Record<string, string> | undefined) ?? {};
       expect(headers["ChatGPT-Account-Id"]).toBe("acct-1");
       return makeResponse(200, {
         rate_limit: {

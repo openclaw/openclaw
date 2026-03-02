@@ -4,7 +4,10 @@ import { execSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { sparkleBuildFloorsFromShortVersion, type SparkleBuildFloors } from "./sparkle-build.ts";
+import {
+  sparkleBuildFloorsFromShortVersion,
+  type SparkleBuildFloors,
+} from "./sparkle-build.ts";
 
 type PackFile = { path: string };
 type PackResult = { files?: PackFile[] };
@@ -46,9 +49,13 @@ function runPackDry(): PackResult[] {
 
 function checkPluginVersions() {
   const rootPackagePath = resolve("package.json");
-  const rootPackage = JSON.parse(readFileSync(rootPackagePath, "utf8")) as PackageJson;
+  const rootPackage = JSON.parse(
+    readFileSync(rootPackagePath, "utf8"),
+  ) as PackageJson;
   const targetVersion = rootPackage.version;
-  const targetBaseVersion = targetVersion ? normalizePluginSyncVersion(targetVersion) : null;
+  const targetBaseVersion = targetVersion
+    ? normalizePluginSyncVersion(targetVersion)
+    : null;
 
   if (!targetVersion || !targetBaseVersion) {
     console.error("release-check: root package.json missing version.");
@@ -56,8 +63,8 @@ function checkPluginVersions() {
   }
 
   const extensionsDir = resolve("extensions");
-  const entries = readdirSync(extensionsDir, { withFileTypes: true }).filter((entry) =>
-    entry.isDirectory(),
+  const entries = readdirSync(extensionsDir, { withFileTypes: true }).filter(
+    (entry) => entry.isDirectory(),
   );
 
   const mismatches: string[] = [];
@@ -87,7 +94,9 @@ function checkPluginVersions() {
     for (const item of mismatches) {
       console.error(`  - ${item}`);
     }
-    console.error("release-check: run `pnpm plugins:sync` to align plugin versions.");
+    console.error(
+      "release-check: run `pnpm plugins:sync` to align plugin versions.",
+    );
     process.exit(1);
   }
 }
@@ -101,8 +110,11 @@ function extractTag(item: string, tag: string): string | null {
 export function collectAppcastSparkleVersionErrors(xml: string): string[] {
   const itemMatches = [...xml.matchAll(/<item>([\s\S]*?)<\/item>/g)];
   const errors: string[] = [];
-  const calverItems: Array<{ title: string; sparkleBuild: number; floors: SparkleBuildFloors }> =
-    [];
+  const calverItems: Array<{
+    title: string;
+    sparkleBuild: number;
+    floors: SparkleBuildFloors;
+  }> = [];
 
   if (itemMatches.length === 0) {
     errors.push("appcast.xml contains no <item> entries.");
@@ -118,7 +130,9 @@ export function collectAppcastSparkleVersionErrors(xml: string): string[] {
       continue;
     }
     if (!/^[0-9]+$/.test(sparkleVersion)) {
-      errors.push(`appcast item '${title}' has non-numeric sparkle:version '${sparkleVersion}'.`);
+      errors.push(
+        `appcast item '${title}' has non-numeric sparkle:version '${sparkleVersion}'.`,
+      );
       continue;
     }
 
@@ -144,8 +158,11 @@ export function collectAppcastSparkleVersionErrors(xml: string): string[] {
 
   for (const item of calverItems) {
     const expectLaneFloor =
-      item.sparkleBuild >= laneBuildMin || item.floors.dateKey >= effectiveLaneAdoptionDateKey;
-    const floor = expectLaneFloor ? item.floors.laneFloor : item.floors.legacyFloor;
+      item.sparkleBuild >= laneBuildMin ||
+      item.floors.dateKey >= effectiveLaneAdoptionDateKey;
+    const floor = expectLaneFloor
+      ? item.floors.laneFloor
+      : item.floors.legacyFloor;
     if (item.sparkleBuild < floor) {
       const floorLabel = expectLaneFloor ? "lane floor" : "legacy floor";
       errors.push(
@@ -180,7 +197,9 @@ function main() {
   const missing = requiredPathGroups
     .flatMap((group) => {
       if (Array.isArray(group)) {
-        return group.some((path) => paths.has(path)) ? [] : [group.join(" or ")];
+        return group.some((path) => paths.has(path))
+          ? []
+          : [group.join(" or ")];
       }
       return paths.has(group) ? [] : [group];
     })

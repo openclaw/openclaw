@@ -77,7 +77,9 @@ When you configure a Hugging Face API key (via onboarding, `HUGGINGFACE_HUB_TOKE
     defaults: {
       models: {
         "huggingface/deepseek-ai/DeepSeek-R1": { alias: "DeepSeek R1 (fast)" },
-        "huggingface/deepseek-ai/DeepSeek-R1:cheapest": { alias: "DeepSeek R1 (cheap)" },
+        "huggingface/deepseek-ai/DeepSeek-R1:cheapest": {
+          alias: "DeepSeek R1 (cheap)",
+        },
       },
     },
   },
@@ -167,7 +169,9 @@ You can append `:fastest`, `:cheapest`, or `:provider` (e.g. `:together`, `:samb
       },
       models: {
         "huggingface/deepseek-ai/DeepSeek-V3.2": { alias: "DeepSeek V3.2" },
-        "huggingface/meta-llama/Llama-3.3-70B-Instruct": { alias: "Llama 3.3 70B" },
+        "huggingface/meta-llama/Llama-3.3-70B-Instruct": {
+          alias: "Llama 3.3 70B",
+        },
         "huggingface/openai/gpt-oss-120b": { alias: "GPT-OSS 120B" },
       },
     },
@@ -183,7 +187,9 @@ You can append `:fastest`, `:cheapest`, or `:provider` (e.g. `:together`, `:samb
     defaults: {
       model: { primary: "huggingface/deepseek-ai/DeepSeek-R1:together" },
       models: {
-        "huggingface/deepseek-ai/DeepSeek-R1:together": { alias: "DeepSeek R1 (Together)" },
+        "huggingface/deepseek-ai/DeepSeek-R1:together": {
+          alias: "DeepSeek R1 (Together)",
+        },
       },
     },
   },
@@ -199,9 +205,15 @@ You can append `:fastest`, `:cheapest`, or `:provider` (e.g. `:together`, `:samb
       model: { primary: "huggingface/Qwen/Qwen2.5-7B-Instruct:cheapest" },
       models: {
         "huggingface/Qwen/Qwen2.5-7B-Instruct": { alias: "Qwen2.5 7B" },
-        "huggingface/Qwen/Qwen2.5-7B-Instruct:cheapest": { alias: "Qwen2.5 7B (cheap)" },
-        "huggingface/deepseek-ai/DeepSeek-R1:fastest": { alias: "DeepSeek R1 (fast)" },
-        "huggingface/meta-llama/Llama-3.1-8B-Instruct": { alias: "Llama 3.1 8B" },
+        "huggingface/Qwen/Qwen2.5-7B-Instruct:cheapest": {
+          alias: "Qwen2.5 7B (cheap)",
+        },
+        "huggingface/deepseek-ai/DeepSeek-R1:fastest": {
+          alias: "DeepSeek R1 (fast)",
+        },
+        "huggingface/meta-llama/Llama-3.1-8B-Instruct": {
+          alias: "Llama 3.1 8B",
+        },
       },
     },
   },

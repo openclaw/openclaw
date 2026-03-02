@@ -47,7 +47,8 @@ type FinalizeOnboardingOptions = {
 export async function finalizeOnboardingWizard(
   options: FinalizeOnboardingOptions,
 ): Promise<{ launchedTui: boolean }> {
-  const { flow, opts, baseConfig, nextConfig, settings, prompter, runtime } = options;
+  const { flow, opts, baseConfig, nextConfig, settings, prompter, runtime } =
+    options;
 
   const withWizardProgress = async <T>(
     label: string,
@@ -72,7 +73,8 @@ export async function finalizeOnboardingWizard(
   }
 
   if (process.platform === "linux" && systemdAvailable) {
-    const { ensureSystemdUserLingerInteractive } = await import("../commands/systemd-linger.js");
+    const { ensureSystemdUserLingerInteractive } =
+      await import("../commands/systemd-linger.js");
     await ensureSystemdUserLingerInteractive({
       runtime,
       prompter: {
@@ -153,25 +155,32 @@ export async function finalizeOnboardingWizard(
           { doneMessage: "Gateway service uninstalled." },
           async (progress) => {
             progress.update("Uninstalling Gateway service…");
-            await service.uninstall({ env: process.env, stdout: process.stdout });
+            await service.uninstall({
+              env: process.env,
+              stdout: process.stdout,
+            });
           },
         );
       }
     }
 
-    if (!loaded || (loaded && !(await service.isLoaded({ env: process.env })))) {
+    if (
+      !loaded ||
+      (loaded && !(await service.isLoaded({ env: process.env })))
+    ) {
       const progress = prompter.progress("Gateway service");
       let installError: string | null = null;
       try {
         progress.update("Preparing Gateway service…");
-        const { programArguments, workingDirectory, environment } = await buildGatewayInstallPlan({
-          env: process.env,
-          port: settings.port,
-          token: settings.gatewayToken,
-          runtime: daemonRuntime,
-          warn: (message, title) => prompter.note(message, title),
-          config: nextConfig,
-        });
+        const { programArguments, workingDirectory, environment } =
+          await buildGatewayInstallPlan({
+            env: process.env,
+            port: settings.port,
+            token: settings.gatewayToken,
+            runtime: daemonRuntime,
+            warn: (message, title) => prompter.note(message, title),
+            config: nextConfig,
+          });
 
         progress.update("Installing Gateway service…");
         await service.install({
@@ -185,11 +194,16 @@ export async function finalizeOnboardingWizard(
         installError = err instanceof Error ? err.message : String(err);
       } finally {
         progress.stop(
-          installError ? "Gateway service install failed." : "Gateway service installed.",
+          installError
+            ? "Gateway service install failed."
+            : "Gateway service installed.",
         );
       }
       if (installError) {
-        await prompter.note(`Gateway service install failed: ${installError}`, "Gateway");
+        await prompter.note(
+          `Gateway service install failed: ${installError}`,
+          "Gateway",
+        );
         await prompter.note(gatewayInstallErrorHint(), "Gateway");
       }
     }
@@ -224,7 +238,9 @@ export async function finalizeOnboardingWizard(
   }
 
   const controlUiEnabled =
-    nextConfig.gateway?.controlUi?.enabled ?? baseConfig.gateway?.controlUi?.enabled ?? true;
+    nextConfig.gateway?.controlUi?.enabled ??
+    baseConfig.gateway?.controlUi?.enabled ??
+    true;
   if (!opts.skipUi && controlUiEnabled) {
     const controlUiAssets = await ensureControlUiAssetsBuilt(runtime);
     if (!controlUiAssets.ok && controlUiAssets.message) {
@@ -243,7 +259,8 @@ export async function finalizeOnboardingWizard(
   );
 
   const controlUiBasePath =
-    nextConfig.gateway?.controlUi?.basePath ?? baseConfig.gateway?.controlUi?.basePath;
+    nextConfig.gateway?.controlUi?.basePath ??
+    baseConfig.gateway?.controlUi?.basePath;
   const links = resolveControlUiLinks({
     bind: settings.bind,
     port: settings.port,
@@ -257,7 +274,10 @@ export async function finalizeOnboardingWizard(
   const gatewayProbe = await probeGatewayReachable({
     url: links.wsUrl,
     token: settings.authMode === "token" ? settings.gatewayToken : undefined,
-    password: settings.authMode === "password" ? nextConfig.gateway?.auth?.password : "",
+    password:
+      settings.authMode === "password"
+        ? nextConfig.gateway?.auth?.password
+        : "",
   });
   const gatewayStatusLine = gatewayProbe.ok
     ? "Gateway: reachable"
@@ -332,8 +352,12 @@ export async function finalizeOnboardingWizard(
       restoreTerminalState("pre-onboarding tui", { resumeStdinIfPaused: true });
       await runTui({
         url: links.wsUrl,
-        token: settings.authMode === "token" ? settings.gatewayToken : undefined,
-        password: settings.authMode === "password" ? nextConfig.gateway?.auth?.password : "",
+        token:
+          settings.authMode === "token" ? settings.gatewayToken : undefined,
+        password:
+          settings.authMode === "password"
+            ? nextConfig.gateway?.auth?.password
+            : "",
         // Safety: onboarding TUI should not auto-deliver to lastProvider/lastTo.
         deliver: false,
         message: hasBootstrap ? "Wake up, my friend!" : undefined,
@@ -347,14 +371,16 @@ export async function finalizeOnboardingWizard(
           controlUiOpenHint = formatControlUiSshHint({
             port: settings.port,
             basePath: controlUiBasePath,
-            token: settings.authMode === "token" ? settings.gatewayToken : undefined,
+            token:
+              settings.authMode === "token" ? settings.gatewayToken : undefined,
           });
         }
       } else {
         controlUiOpenHint = formatControlUiSshHint({
           port: settings.port,
           basePath: controlUiBasePath,
-          token: settings.authMode === "token" ? settings.gatewayToken : undefined,
+          token:
+            settings.authMode === "token" ? settings.gatewayToken : undefined,
         });
       }
       await prompter.note(

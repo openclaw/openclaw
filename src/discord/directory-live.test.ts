@@ -19,9 +19,14 @@ vi.mock("./token.js", () => ({
   normalizeDiscordToken: mocks.normalizeDiscordToken,
 }));
 
-import { listDiscordDirectoryGroupsLive, listDiscordDirectoryPeersLive } from "./directory-live.js";
+import {
+  listDiscordDirectoryGroupsLive,
+  listDiscordDirectoryPeersLive,
+} from "./directory-live.js";
 
-function makeParams(overrides: Partial<DirectoryConfigParams> = {}): DirectoryConfigParams {
+function makeParams(
+  overrides: Partial<DirectoryConfigParams> = {},
+): DirectoryConfigParams {
   return {
     cfg: {} as DirectoryConfigParams["cfg"],
     ...overrides,
@@ -32,20 +37,26 @@ describe("discord directory live lookups", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.resolveDiscordAccount.mockReturnValue({ token: "test-token" });
-    mocks.normalizeDiscordToken.mockImplementation((token: string) => token.trim());
+    mocks.normalizeDiscordToken.mockImplementation((token: string) =>
+      token.trim(),
+    );
   });
 
   it("returns empty group directory when token is missing", async () => {
     mocks.normalizeDiscordToken.mockReturnValue("");
 
-    const rows = await listDiscordDirectoryGroupsLive(makeParams({ query: "general" }));
+    const rows = await listDiscordDirectoryGroupsLive(
+      makeParams({ query: "general" }),
+    );
 
     expect(rows).toEqual([]);
     expect(mocks.fetchDiscord).not.toHaveBeenCalled();
   });
 
   it("returns empty peer directory without query and skips guild listing", async () => {
-    const rows = await listDiscordDirectoryPeersLive(makeParams({ query: "  " }));
+    const rows = await listDiscordDirectoryPeersLive(
+      makeParams({ query: "  " }),
+    );
 
     expect(rows).toEqual([]);
     expect(mocks.fetchDiscord).not.toHaveBeenCalled();
@@ -71,11 +82,21 @@ describe("discord directory live lookups", () => {
       return [];
     });
 
-    const rows = await listDiscordDirectoryGroupsLive(makeParams({ query: "an", limit: 2 }));
+    const rows = await listDiscordDirectoryGroupsLive(
+      makeParams({ query: "an", limit: 2 }),
+    );
 
     expect(rows).toEqual([
-      expect.objectContaining({ kind: "group", id: "channel:c2", name: "random" }),
-      expect.objectContaining({ kind: "group", id: "channel:c3", name: "announcements" }),
+      expect.objectContaining({
+        kind: "group",
+        id: "channel:c2",
+        name: "random",
+      }),
+      expect.objectContaining({
+        kind: "group",
+        id: "channel:c3",
+        name: "announcements",
+      }),
     ]);
   });
 
@@ -97,7 +118,9 @@ describe("discord directory live lookups", () => {
       return [];
     });
 
-    const rows = await listDiscordDirectoryPeersLive(makeParams({ query: "alice", limit: 2 }));
+    const rows = await listDiscordDirectoryPeersLive(
+      makeParams({ query: "alice", limit: 2 }),
+    );
 
     expect(rows).toEqual([
       expect.objectContaining({

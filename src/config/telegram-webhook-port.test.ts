@@ -40,7 +40,11 @@ describe("Telegram webhookPort config", () => {
     });
     expect(res.ok).toBe(false);
     if (!res.ok) {
-      expect(res.issues.some((issue) => issue.path === "channels.telegram.webhookPort")).toBe(true);
+      expect(
+        res.issues.some(
+          (issue) => issue.path === "channels.telegram.webhookPort",
+        ),
+      ).toBe(true);
     }
   });
 });

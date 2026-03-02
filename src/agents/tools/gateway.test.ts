@@ -48,7 +48,11 @@ describe("gateway tool defaults", () => {
     callGatewayMock.mockResolvedValueOnce({ ok: true });
     await callGatewayTool(
       "health",
-      { gatewayUrl: "ws://127.0.0.1:18789", gatewayToken: "t", timeoutMs: 5000 },
+      {
+        gatewayUrl: "ws://127.0.0.1:18789",
+        gatewayToken: "t",
+        timeoutMs: 5000,
+      },
       {},
     );
     expect(callGatewayMock).toHaveBeenCalledWith(
@@ -159,10 +163,18 @@ describe("gateway tool defaults", () => {
 
   it("rejects non-allowlisted overrides (SSRF hardening)", async () => {
     await expect(
-      callGatewayTool("health", { gatewayUrl: "ws://127.0.0.1:8080", gatewayToken: "t" }, {}),
+      callGatewayTool(
+        "health",
+        { gatewayUrl: "ws://127.0.0.1:8080", gatewayToken: "t" },
+        {},
+      ),
     ).rejects.toThrow(/gatewayUrl override rejected/i);
     await expect(
-      callGatewayTool("health", { gatewayUrl: "ws://169.254.169.254", gatewayToken: "t" }, {}),
+      callGatewayTool(
+        "health",
+        { gatewayUrl: "ws://169.254.169.254", gatewayToken: "t" },
+        {},
+      ),
     ).rejects.toThrow(/gatewayUrl override rejected/i);
   });
 });

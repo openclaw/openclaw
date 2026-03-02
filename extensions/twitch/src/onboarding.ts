@@ -36,7 +36,8 @@ function setTwitchAccount(
     clientSecret: account.clientSecret ?? existing?.clientSecret,
     refreshToken: account.refreshToken ?? existing?.refreshToken,
     expiresIn: account.expiresIn ?? existing?.expiresIn,
-    obtainmentTimestamp: account.obtainmentTimestamp ?? existing?.obtainmentTimestamp,
+    obtainmentTimestamp:
+      account.obtainmentTimestamp ?? existing?.obtainmentTimestamp,
   };
 
   return {
@@ -50,7 +51,9 @@ function setTwitchAccount(
         enabled: true,
         accounts: {
           ...((
-            (cfg.channels as Record<string, unknown>)?.twitch as Record<string, unknown> | undefined
+            (cfg.channels as Record<string, unknown>)?.twitch as
+              | Record<string, unknown>
+              | undefined
           )?.accounts as Record<string, unknown> | undefined),
           [DEFAULT_ACCOUNT_ID]: merged,
         },
@@ -174,7 +177,8 @@ async function promptRefreshTokenSetup(
   account: TwitchAccountConfig | null,
 ): Promise<{ clientSecret?: string; refreshToken?: string }> {
   const useRefresh = await prompter.confirm({
-    message: "Enable automatic token refresh (requires client secret and refresh token)?",
+    message:
+      "Enable automatic token refresh (requires client secret and refresh token)?",
     initialValue: Boolean(account?.clientSecret && account?.refreshToken),
   });
 
@@ -215,7 +219,8 @@ async function configureWithEnvToken(
   dmPolicy: ChannelOnboardingDmPolicy,
 ): Promise<{ cfg: OpenClawConfig } | null> {
   const useEnv = await prompter.confirm({
-    message: "Twitch env var OPENCLAW_TWITCH_ACCESS_TOKEN detected. Use env token?",
+    message:
+      "Twitch env var OPENCLAW_TWITCH_ACCESS_TOKEN detected. Use env token?",
     initialValue: true,
   });
   if (!useEnv) {
@@ -233,7 +238,9 @@ async function configureWithEnvToken(
   });
 
   if (forceAllowFrom && dmPolicy.promptAllowFrom) {
-    return { cfg: await dmPolicy.promptAllowFrom({ cfg: cfgWithAccount, prompter }) };
+    return {
+      cfg: await dmPolicy.promptAllowFrom({ cfg: cfgWithAccount, prompter }),
+    };
   }
 
   return { cfg: cfgWithAccount };
@@ -285,9 +292,12 @@ const dmPolicy: ChannelOnboardingDmPolicy = {
     const existingAllowFrom = account?.allowFrom ?? [];
 
     const entry = await prompter.text({
-      message: "Twitch allowFrom (user IDs, one per line, recommended for security)",
+      message:
+        "Twitch allowFrom (user IDs, one per line, recommended for security)",
       placeholder: "123456789",
-      initialValue: existingAllowFrom[0] ? String(existingAllowFrom[0]) : undefined,
+      initialValue: existingAllowFrom[0]
+        ? String(existingAllowFrom[0])
+        : undefined,
     });
 
     const allowFrom = String(entry ?? "")
@@ -311,7 +321,9 @@ export const twitchOnboardingAdapter: ChannelOnboardingAdapter = {
     return {
       channel,
       configured,
-      statusLines: [`Twitch: ${configured ? "configured" : "needs username, token, and clientId"}`],
+      statusLines: [
+        `Twitch: ${configured ? "configured" : "needs username, token, and clientId"}`,
+      ],
       selectionHint: configured ? "configured" : "needs setup",
     };
   },
@@ -344,7 +356,10 @@ export const twitchOnboardingAdapter: ChannelOnboardingAdapter = {
     const token = await promptToken(prompter, account, envToken);
     const clientId = await promptClientId(prompter, account);
     const channelName = await promptChannelName(prompter, account);
-    const { clientSecret, refreshToken } = await promptRefreshTokenSetup(prompter, account);
+    const { clientSecret, refreshToken } = await promptRefreshTokenSetup(
+      prompter,
+      account,
+    );
 
     const cfgWithAccount = setTwitchAccount(cfg, {
       username,
@@ -384,7 +399,11 @@ export const twitchOnboardingAdapter: ChannelOnboardingAdapter = {
               ? ["moderator", "vip"]
               : [];
 
-        const cfgWithAccessControl = setTwitchAccessControl(cfgWithAllowFrom, allowedRoles, true);
+        const cfgWithAccessControl = setTwitchAccessControl(
+          cfgWithAllowFrom,
+          allowedRoles,
+          true,
+        );
         return { cfg: cfgWithAccessControl };
       }
     }

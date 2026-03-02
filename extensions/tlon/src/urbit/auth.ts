@@ -5,7 +5,10 @@ import { urbitFetch } from "./fetch.js";
 export type UrbitAuthenticateOptions = {
   ssrfPolicy?: SsrFPolicy;
   lookupFn?: LookupFn;
-  fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+  fetchImpl?: (
+    input: RequestInfo | URL,
+    init?: RequestInit,
+  ) => Promise<Response>;
   timeoutMs?: number;
 };
 
@@ -32,14 +35,20 @@ export async function authenticate(
 
   try {
     if (!response.ok) {
-      throw new UrbitAuthError("auth_failed", `Login failed with status ${response.status}`);
+      throw new UrbitAuthError(
+        "auth_failed",
+        `Login failed with status ${response.status}`,
+      );
     }
 
     // Some Urbit setups require the response body to be read before cookie headers finalize.
     await response.text().catch(() => {});
     const cookie = response.headers.get("set-cookie");
     if (!cookie) {
-      throw new UrbitAuthError("missing_cookie", "No authentication cookie received");
+      throw new UrbitAuthError(
+        "missing_cookie",
+        "No authentication cookie received",
+      );
     }
     return cookie;
   } finally {

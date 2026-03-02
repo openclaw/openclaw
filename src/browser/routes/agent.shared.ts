@@ -22,17 +22,27 @@ export function readBody(req: BrowserRequest): Record<string, unknown> {
   return body;
 }
 
-export function resolveTargetIdFromBody(body: Record<string, unknown>): string | undefined {
-  const targetId = typeof body.targetId === "string" ? body.targetId.trim() : "";
+export function resolveTargetIdFromBody(
+  body: Record<string, unknown>,
+): string | undefined {
+  const targetId =
+    typeof body.targetId === "string" ? body.targetId.trim() : "";
   return targetId || undefined;
 }
 
-export function resolveTargetIdFromQuery(query: Record<string, unknown>): string | undefined {
-  const targetId = typeof query.targetId === "string" ? query.targetId.trim() : "";
+export function resolveTargetIdFromQuery(
+  query: Record<string, unknown>,
+): string | undefined {
+  const targetId =
+    typeof query.targetId === "string" ? query.targetId.trim() : "";
   return targetId || undefined;
 }
 
-export function handleRouteError(ctx: BrowserRouteContext, res: BrowserResponse, err: unknown) {
+export function handleRouteError(
+  ctx: BrowserRouteContext,
+  res: BrowserResponse,
+  err: unknown,
+) {
   const mapped = ctx.mapTabError(err);
   if (mapped) {
     return jsonError(res, mapped.status, mapped.message);

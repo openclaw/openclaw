@@ -165,7 +165,12 @@ export async function searchKeyword(params: {
         ` ORDER BY rank ASC\n` +
         ` LIMIT ?`,
     )
-    .all(ftsQuery, ...modelParams, ...params.sourceFilter.params, params.limit) as Array<{
+    .all(
+      ftsQuery,
+      ...modelParams,
+      ...params.sourceFilter.params,
+      params.limit,
+    ) as Array<{
     id: string;
     path: string;
     source: SearchSource;

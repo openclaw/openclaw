@@ -11,7 +11,11 @@ export function formatUnknownError(err: unknown): string {
   if (err === undefined) {
     return "undefined";
   }
-  if (typeof err === "number" || typeof err === "boolean" || typeof err === "bigint") {
+  if (
+    typeof err === "number" ||
+    typeof err === "boolean" ||
+    typeof err === "bigint"
+  ) {
     return String(err);
   }
   if (typeof err === "symbol") {
@@ -111,7 +115,9 @@ function extractRetryAfterMs(err: unknown): number | null {
     "get" in headers &&
     typeof (headers as { get?: unknown }).get === "function"
   ) {
-    const raw = (headers as { get: (name: string) => string | null }).get("retry-after");
+    const raw = (headers as { get: (name: string) => string | null }).get(
+      "retry-after",
+    );
     if (raw) {
       const parsed = Number.parseFloat(raw);
       if (Number.isFinite(parsed) && parsed >= 0) {
@@ -123,7 +129,12 @@ function extractRetryAfterMs(err: unknown): number | null {
   return null;
 }
 
-export type MSTeamsSendErrorKind = "auth" | "throttled" | "transient" | "permanent" | "unknown";
+export type MSTeamsSendErrorKind =
+  | "auth"
+  | "throttled"
+  | "transient"
+  | "permanent"
+  | "unknown";
 
 export type MSTeamsSendErrorClassification = {
   kind: MSTeamsSendErrorKind;
@@ -139,7 +150,9 @@ export type MSTeamsSendErrorClassification = {
  * For transport-level errors where delivery is ambiguous, we prefer to avoid
  * retries to reduce the chance of duplicate posts.
  */
-export function classifyMSTeamsSendError(err: unknown): MSTeamsSendErrorClassification {
+export function classifyMSTeamsSendError(
+  err: unknown,
+): MSTeamsSendErrorClassification {
   const statusCode = extractStatusCode(err);
   const retryAfterMs = extractRetryAfterMs(err);
 

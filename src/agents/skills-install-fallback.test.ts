@@ -1,7 +1,15 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import { installSkill } from "./skills-install.js";
 import {
   hasBinaryMock,
@@ -11,7 +19,8 @@ import {
 import { buildWorkspaceSkillStatus } from "./skills-status.js";
 
 vi.mock("../process/exec.js", () => ({
-  runCommandWithTimeout: (...args: unknown[]) => runCommandWithTimeoutMock(...args),
+  runCommandWithTimeout: (...args: unknown[]) =>
+    runCommandWithTimeoutMock(...args),
 }));
 
 vi.mock("../infra/net/fetch-guard.js", () => ({
@@ -20,11 +29,13 @@ vi.mock("../infra/net/fetch-guard.js", () => ({
 
 vi.mock("../security/skill-scanner.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../security/skill-scanner.js")>()),
-  scanDirectoryWithSummary: (...args: unknown[]) => scanDirectoryWithSummaryMock(...args),
+  scanDirectoryWithSummary: (...args: unknown[]) =>
+    scanDirectoryWithSummaryMock(...args),
 }));
 
 vi.mock("../shared/config-eval.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../shared/config-eval.js")>();
+  const actual =
+    await importOriginal<typeof import("../shared/config-eval.js")>();
   return {
     ...actual,
     hasBinary: (bin: string) => hasBinaryMock(bin),
@@ -64,7 +75,9 @@ async function writeSkillWithInstaller(
   kind: string,
   extra: Record<string, string>,
 ): Promise<string> {
-  return writeSkillWithInstallers(workspaceDir, name, [{ id: "deps", kind, ...extra }]);
+  return writeSkillWithInstallers(workspaceDir, name, [
+    { id: "deps", kind, ...extra },
+  ]);
 }
 
 function mockAvailableBinaries(binaries: string[]) {
@@ -74,7 +87,8 @@ function mockAvailableBinaries(binaries: string[]) {
 
 function assertNoAptGetFallbackCalls() {
   const aptCalls = runCommandWithTimeoutMock.mock.calls.filter(
-    (call) => Array.isArray(call[0]) && (call[0] as string[]).includes("apt-get"),
+    (call) =>
+      Array.isArray(call[0]) && (call[0] as string[]).includes("apt-get"),
   );
   expect(aptCalls).toHaveLength(0);
 }
@@ -83,7 +97,9 @@ describe("skills-install fallback edge cases", () => {
   let workspaceDir: string;
 
   beforeAll(async () => {
-    workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-fallback-test-"));
+    workspaceDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-fallback-test-"),
+    );
     await writeSkillWithInstaller(workspaceDir, "go-tool-single", "go", {
       module: "example.com/tool@latest",
     });
@@ -100,11 +116,17 @@ describe("skills-install fallback edge cases", () => {
     runCommandWithTimeoutMock.mockClear();
     scanDirectoryWithSummaryMock.mockClear();
     hasBinaryMock.mockClear();
-    scanDirectoryWithSummaryMock.mockResolvedValue({ critical: 0, warn: 0, findings: [] });
+    scanDirectoryWithSummaryMock.mockResolvedValue({
+      critical: 0,
+      warn: 0,
+      findings: [],
+    });
   });
 
   afterAll(async () => {
-    await fs.rm(workspaceDir, { recursive: true, force: true }).catch(() => undefined);
+    await fs
+      .rm(workspaceDir, { recursive: true, force: true })
+      .catch(() => undefined);
   });
 
   it("handles sudo probe failures for go install without apt fallback", async () => {
@@ -187,7 +209,9 @@ describe("skills-install fallback edge cases", () => {
     });
 
     expect(result.ok).toBe(false);
-    expect(result.message).toContain("https://docs.astral.sh/uv/getting-started/installation/");
+    expect(result.message).toContain(
+      "https://docs.astral.sh/uv/getting-started/installation/",
+    );
 
     // Verify NO curl command was attempted (no auto-install)
     expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();

@@ -24,13 +24,15 @@ vi.mock("../auto-reply/reply/inbound-context.js", () => ({
   finalizeInboundContext: vi.fn((ctx: unknown) => ctx),
 }));
 vi.mock("../auto-reply/reply/provider-dispatcher.js", () => ({
-  dispatchReplyWithBufferedBlockDispatcher: replyMocks.dispatchReplyWithBufferedBlockDispatcher,
+  dispatchReplyWithBufferedBlockDispatcher:
+    replyMocks.dispatchReplyWithBufferedBlockDispatcher,
 }));
 vi.mock("../channels/reply-prefix.js", () => ({
   createReplyPrefixOptions: vi.fn(() => ({ onModelSelected: () => {} })),
 }));
 vi.mock("../auto-reply/skill-commands.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../auto-reply/skill-commands.js")>();
+  const actual =
+    await importOriginal<typeof import("../auto-reply/skill-commands.js")>();
   return { ...actual, listSkillCommandsForAgents: vi.fn(() => []) };
 });
 vi.mock("../plugins/commands.js", () => ({
@@ -64,7 +66,9 @@ function buildStatusCommandContext() {
   };
 }
 
-function registerAndResolveStatusHandler(cfg: OpenClawConfig): TelegramCommandHandler {
+function registerAndResolveStatusHandler(
+  cfg: OpenClawConfig,
+): TelegramCommandHandler {
   const commandHandlers = new Map<string, TelegramCommandHandler>();
   registerTelegramNativeCommands({
     ...createNativeCommandTestParams({
@@ -76,7 +80,9 @@ function registerAndResolveStatusHandler(cfg: OpenClawConfig): TelegramCommandHa
         command: vi.fn((name: string, cb: TelegramCommandHandler) => {
           commandHandlers.set(name, cb);
         }),
-      } as unknown as Parameters<typeof registerTelegramNativeCommands>[0]["bot"],
+      } as unknown as Parameters<
+        typeof registerTelegramNativeCommands
+      >[0]["bot"],
       cfg,
       allowFrom: ["*"],
     }),
@@ -89,9 +95,15 @@ function registerAndResolveStatusHandler(cfg: OpenClawConfig): TelegramCommandHa
 
 describe("registerTelegramNativeCommands — session metadata", () => {
   beforeEach(() => {
-    sessionMocks.recordSessionMetaFromInbound.mockClear().mockResolvedValue(undefined);
-    sessionMocks.resolveStorePath.mockClear().mockReturnValue("/tmp/openclaw-sessions.json");
-    replyMocks.dispatchReplyWithBufferedBlockDispatcher.mockClear().mockResolvedValue(undefined);
+    sessionMocks.recordSessionMetaFromInbound
+      .mockClear()
+      .mockResolvedValue(undefined);
+    sessionMocks.resolveStorePath
+      .mockClear()
+      .mockReturnValue("/tmp/openclaw-sessions.json");
+    replyMocks.dispatchReplyWithBufferedBlockDispatcher
+      .mockClear()
+      .mockResolvedValue(undefined);
   });
 
   it("calls recordSessionMetaFromInbound after a native slash command", async () => {
@@ -102,7 +114,12 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     expect(sessionMocks.recordSessionMetaFromInbound).toHaveBeenCalledTimes(1);
     const call = (
       sessionMocks.recordSessionMetaFromInbound.mock.calls as unknown as Array<
-        [{ sessionKey?: string; ctx?: { OriginatingChannel?: string; Provider?: string } }]
+        [
+          {
+            sessionKey?: string;
+            ctx?: { OriginatingChannel?: string; Provider?: string };
+          },
+        ]
       >
     )[0]?.[0];
     expect(call?.ctx?.OriginatingChannel).toBe("telegram");
@@ -119,13 +136,19 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     const runPromise = handler(buildStatusCommandContext());
 
     await vi.waitFor(() => {
-      expect(sessionMocks.recordSessionMetaFromInbound).toHaveBeenCalledTimes(1);
+      expect(sessionMocks.recordSessionMetaFromInbound).toHaveBeenCalledTimes(
+        1,
+      );
     });
-    expect(replyMocks.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+    expect(
+      replyMocks.dispatchReplyWithBufferedBlockDispatcher,
+    ).not.toHaveBeenCalled();
 
     deferred.resolve();
     await runPromise;
 
-    expect(replyMocks.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
+    expect(
+      replyMocks.dispatchReplyWithBufferedBlockDispatcher,
+    ).toHaveBeenCalledTimes(1);
   });
 });

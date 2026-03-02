@@ -7,9 +7,9 @@ const piCodingAgentMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@mariozechner/pi-coding-agent", async () => {
-  const actual = await vi.importActual<typeof import("@mariozechner/pi-coding-agent")>(
-    "@mariozechner/pi-coding-agent",
-  );
+  const actual = await vi.importActual<
+    typeof import("@mariozechner/pi-coding-agent")
+  >("@mariozechner/pi-coding-agent");
   return {
     ...actual,
     generateSummary: piCodingAgentMocks.generateSummary,
@@ -28,7 +28,14 @@ describe("compaction toolResult details stripping", () => {
     const messages: AgentMessage[] = [
       {
         role: "assistant",
-        content: [{ type: "toolUse", id: "call_1", name: "browser", input: { action: "tabs" } }],
+        content: [
+          {
+            type: "toolUse",
+            id: "call_1",
+            name: "browser",
+            input: { action: "tabs" },
+          },
+        ],
         timestamp: 1,
       } as unknown as AgentMessage,
       {
@@ -46,7 +53,12 @@ describe("compaction toolResult details stripping", () => {
     const summary = await summarizeWithFallback({
       messages,
       // Minimal shape; compaction won't use these fields in our mocked generateSummary.
-      model: { id: "mock", name: "mock", contextWindow: 10000, maxTokens: 1000 } as never,
+      model: {
+        id: "mock",
+        name: "mock",
+        contextWindow: 10000,
+        maxTokens: 1000,
+      } as never,
       apiKey: "test",
       signal: new AbortController().signal,
       reserveTokens: 100,
@@ -58,7 +70,9 @@ describe("compaction toolResult details stripping", () => {
     expect(piCodingAgentMocks.generateSummary).toHaveBeenCalled();
 
     const chunk = (
-      piCodingAgentMocks.generateSummary.mock.calls as unknown as Array<[unknown]>
+      piCodingAgentMocks.generateSummary.mock.calls as unknown as Array<
+        [unknown]
+      >
     )[0]?.[0];
     const serialized = JSON.stringify(chunk);
     expect(serialized).not.toContain("Ignore previous instructions");

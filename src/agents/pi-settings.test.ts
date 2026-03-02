@@ -16,7 +16,9 @@ describe("applyPiCompactionSettingsFromConfig", () => {
     const result = applyPiCompactionSettingsFromConfig({ settingsManager });
 
     expect(result.didOverride).toBe(true);
-    expect(result.compaction.reserveTokens).toBe(DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR);
+    expect(result.compaction.reserveTokens).toBe(
+      DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR,
+    );
     expect(settingsManager.applyOverrides).toHaveBeenCalledWith({
       compaction: { reserveTokens: DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR },
     });
@@ -114,7 +116,11 @@ describe("applyPiCompactionSettingsFromConfig", () => {
 
     const result = applyPiCompactionSettingsFromConfig({
       settingsManager,
-      cfg: { agents: { defaults: { compaction: { mode: "safeguard", keepRecentTokens: 0 } } } },
+      cfg: {
+        agents: {
+          defaults: { compaction: { mode: "safeguard", keepRecentTokens: 0 } },
+        },
+      },
     });
 
     expect(result.compaction.keepRecentTokens).toBe(20_000);
@@ -124,7 +130,9 @@ describe("applyPiCompactionSettingsFromConfig", () => {
 
 describe("resolveCompactionReserveTokensFloor", () => {
   it("returns the default when config is missing", () => {
-    expect(resolveCompactionReserveTokensFloor()).toBe(DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR);
+    expect(resolveCompactionReserveTokensFloor()).toBe(
+      DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR,
+    );
   });
 
   it("accepts configured floors, including zero", () => {

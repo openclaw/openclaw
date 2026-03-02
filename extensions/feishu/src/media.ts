@@ -6,7 +6,10 @@ import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
 import { getFeishuRuntime } from "./runtime.js";
-import { assertFeishuMessageApiSuccess, toFeishuSendResult } from "./send-result.js";
+import {
+  assertFeishuMessageApiSuccess,
+  toFeishuSendResult,
+} from "./send-result.js";
 import { resolveFeishuSendTarget } from "./send-target.js";
 
 export type DownloadImageResult = {
@@ -29,7 +32,9 @@ async function readFeishuResponseBuffer(params: {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK response type
   const responseAny = response as any;
   if (responseAny.code !== undefined && responseAny.code !== 0) {
-    throw new Error(`${params.errorPrefix}: ${responseAny.msg || `code ${responseAny.code}`}`);
+    throw new Error(
+      `${params.errorPrefix}: ${responseAny.msg || `code ${responseAny.code}`}`,
+    );
   }
 
   if (Buffer.isBuffer(response)) {
@@ -53,10 +58,13 @@ async function readFeishuResponseBuffer(params: {
     return Buffer.concat(chunks);
   }
   if (typeof responseAny.writeFile === "function") {
-    return await withTempDownloadPath({ prefix: params.tmpDirPrefix }, async (tmpPath) => {
-      await responseAny.writeFile(tmpPath);
-      return await fs.promises.readFile(tmpPath);
-    });
+    return await withTempDownloadPath(
+      { prefix: params.tmpDirPrefix },
+      async (tmpPath) => {
+        await responseAny.writeFile(tmpPath);
+        return await fs.promises.readFile(tmpPath);
+      },
+    );
   }
   if (typeof responseAny[Symbol.asyncIterator] === "function") {
     const chunks: Buffer[] = [];
@@ -75,7 +83,9 @@ async function readFeishuResponseBuffer(params: {
 
   const keys = Object.keys(responseAny);
   const types = keys.map((k) => `${k}: ${typeof responseAny[k]}`).join(", ");
-  throw new Error(`${params.errorPrefix}: unexpected response format. Keys: [${types}]`);
+  throw new Error(
+    `${params.errorPrefix}: unexpected response format. Keys: [${types}]`,
+  );
 }
 
 /**
@@ -125,7 +135,9 @@ export async function downloadMessageResourceFeishu(params: {
   const { cfg, messageId, fileKey, type, accountId } = params;
   const normalizedFileKey = normalizeFeishuExternalKey(fileKey);
   if (!normalizedFileKey) {
-    throw new Error("Feishu message resource download failed: invalid file_key");
+    throw new Error(
+      "Feishu message resource download failed: invalid file_key",
+    );
   }
   const account = resolveFeishuAccount({ cfg, accountId });
   if (!account.configured) {
@@ -181,7 +193,8 @@ export async function uploadImageFeishu(params: {
   // SDK accepts Buffer directly or fs.ReadStream for file paths
   // Using Readable.from(buffer) causes issues with form-data library
   // See: https://github.com/larksuite/node-sdk/issues/121
-  const imageData = typeof image === "string" ? fs.createReadStream(image) : image;
+  const imageData =
+    typeof image === "string" ? fs.createReadStream(image) : image;
 
   const response = await client.im.image.create({
     data: {
@@ -196,7 +209,9 @@ export async function uploadImageFeishu(params: {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK response type
   const responseAny = response as any;
   if (responseAny.code !== undefined && responseAny.code !== 0) {
-    throw new Error(`Feishu image upload failed: ${responseAny.msg || `code ${responseAny.code}`}`);
+    throw new Error(
+      `Feishu image upload failed: ${responseAny.msg || `code ${responseAny.code}`}`,
+    );
   }
 
   const imageKey = responseAny.image_key ?? responseAny.data?.image_key;
@@ -246,7 +261,9 @@ export async function uploadFileFeishu(params: {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK response type
   const responseAny = response as any;
   if (responseAny.code !== undefined && responseAny.code !== 0) {
-    throw new Error(`Feishu file upload failed: ${responseAny.msg || `code ${responseAny.code}`}`);
+    throw new Error(
+      `Feishu file upload failed: ${responseAny.msg || `code ${responseAny.code}`}`,
+    );
   }
 
   const fileKey = responseAny.file_key ?? responseAny.data?.file_key;
@@ -268,7 +285,8 @@ export async function sendImageFeishu(params: {
   replyInThread?: boolean;
   accountId?: string;
 }): Promise<SendMediaResult> {
-  const { cfg, to, imageKey, replyToMessageId, replyInThread, accountId } = params;
+  const { cfg, to, imageKey, replyToMessageId, replyInThread, accountId } =
+    params;
   const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({
     cfg,
     to,
@@ -314,7 +332,8 @@ export async function sendFileFeishu(params: {
   replyInThread?: boolean;
   accountId?: string;
 }): Promise<SendMediaResult> {
-  const { cfg, to, fileKey, replyToMessageId, replyInThread, accountId } = params;
+  const { cfg, to, fileKey, replyToMessageId, replyInThread, accountId } =
+    params;
   const msgType = params.msgType ?? "file";
   const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({
     cfg,
@@ -433,11 +452,31 @@ export async function sendMediaFeishu(params: {
 
   // Determine if it's an image based on extension
   const ext = path.extname(name).toLowerCase();
-  const isImage = [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".ico", ".tiff"].includes(ext);
+  const isImage = [
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".gif",
+    ".webp",
+    ".bmp",
+    ".ico",
+    ".tiff",
+  ].includes(ext);
 
   if (isImage) {
-    const { imageKey } = await uploadImageFeishu({ cfg, image: buffer, accountId });
-    return sendImageFeishu({ cfg, to, imageKey, replyToMessageId, replyInThread, accountId });
+    const { imageKey } = await uploadImageFeishu({
+      cfg,
+      image: buffer,
+      accountId,
+    });
+    return sendImageFeishu({
+      cfg,
+      to,
+      imageKey,
+      replyToMessageId,
+      replyInThread,
+      accountId,
+    });
   } else {
     const fileType = detectFileType(name);
     const { fileKey } = await uploadFileFeishu({

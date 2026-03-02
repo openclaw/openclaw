@@ -39,7 +39,9 @@ vi.mock("../config/config.js", () => ({
 }));
 
 vi.mock("../config/sessions.js", () => {
-  const sessionStore = new Proxy<Record<string, { sessionId: string; updatedAt: number }>>(
+  const sessionStore = new Proxy<
+    Record<string, { sessionId: string; updatedAt: number }>
+  >(
     {},
     {
       get(target, prop, receiver) {
@@ -64,7 +66,9 @@ vi.mock("../config/sessions.js", () => {
 });
 
 const announceSpy = vi.fn(async (_params: unknown) => true);
-const runSubagentEndedHookMock = vi.fn(async (_event?: unknown, _ctx?: unknown) => {});
+const runSubagentEndedHookMock = vi.fn(
+  async (_event?: unknown, _ctx?: unknown) => {},
+);
 vi.mock("./subagent-announce.js", () => ({
   runSubagentAnnounceFlow: announceSpy,
 }));
@@ -96,7 +100,9 @@ describe("subagent registry steer restarts", () => {
   };
 
   const withPendingAgentWait = async <T>(run: () => Promise<T>): Promise<T> => {
-    const callGateway = vi.mocked((await import("../gateway/call.js")).callGateway);
+    const callGateway = vi.mocked(
+      (await import("../gateway/call.js")).callGateway,
+    );
     const originalCallGateway = callGateway.getMockImplementation();
     callGateway.mockImplementation(async (request: unknown) => {
       const typed = request as { method?: string };
@@ -104,7 +110,9 @@ describe("subagent registry steer restarts", () => {
         return new Promise<unknown>(() => undefined);
       }
       if (originalCallGateway) {
-        return originalCallGateway(request as Parameters<typeof callGateway>[0]);
+        return originalCallGateway(
+          request as Parameters<typeof callGateway>[0],
+        );
       }
       return {};
     });
@@ -159,14 +167,19 @@ describe("subagent registry steer restarts", () => {
       requesterSessionKey?: string;
       requesterDisplayKey?: string;
     } & Partial<
-      Pick<RegisterSubagentRunInput, "spawnMode" | "requesterOrigin" | "expectsCompletionMessage">
+      Pick<
+        RegisterSubagentRunInput,
+        "spawnMode" | "requesterOrigin" | "expectsCompletionMessage"
+      >
     >,
   ): void => {
     mod.registerSubagentRun({
       runId: params.runId,
       childSessionKey: params.childSessionKey,
-      requesterSessionKey: params.requesterSessionKey ?? MAIN_REQUESTER_SESSION_KEY,
-      requesterDisplayKey: params.requesterDisplayKey ?? MAIN_REQUESTER_DISPLAY_KEY,
+      requesterSessionKey:
+        params.requesterSessionKey ?? MAIN_REQUESTER_SESSION_KEY,
+      requesterDisplayKey:
+        params.requesterDisplayKey ?? MAIN_REQUESTER_DISPLAY_KEY,
       requesterOrigin: params.requesterOrigin,
       task: params.task,
       cleanup: "keep",
@@ -175,7 +188,8 @@ describe("subagent registry steer restarts", () => {
     });
   };
 
-  const listMainRuns = () => mod.listSubagentRunsForRequester(MAIN_REQUESTER_SESSION_KEY);
+  const listMainRuns = () =>
+    mod.listSubagentRunsForRequester(MAIN_REQUESTER_SESSION_KEY);
 
   const emitLifecycleEnd = (
     runId: string,
@@ -248,7 +262,9 @@ describe("subagent registry steer restarts", () => {
       }),
     );
 
-    const announce = (announceSpy.mock.calls[0]?.[0] ?? {}) as { childRunId?: string };
+    const announce = (announceSpy.mock.calls[0]?.[0] ?? {}) as {
+      childRunId?: string;
+    };
     expect(announce.childRunId).toBe("run-new");
   });
 
@@ -399,7 +415,9 @@ describe("subagent registry steer restarts", () => {
     await flushAnnounce();
 
     expect(announceSpy).toHaveBeenCalledTimes(1);
-    const announce = (announceSpy.mock.calls[0]?.[0] ?? {}) as { childRunId?: string };
+    const announce = (announceSpy.mock.calls[0]?.[0] ?? {}) as {
+      childRunId?: string;
+    };
     expect(announce.childRunId).toBe("run-failed-restart");
   });
 
@@ -530,7 +548,8 @@ describe("subagent registry steer restarts", () => {
     );
     registerRun({
       runId: "run-child-active",
-      childSessionKey: "agent:main:subagent:parent-expiry:subagent:child-active",
+      childSessionKey:
+        "agent:main:subagent:parent-expiry:subagent:child-active",
       requesterSessionKey: "agent:main:subagent:parent-expiry",
       requesterDisplayKey: "parent-expiry",
       task: "child still running",
@@ -545,7 +564,10 @@ describe("subagent registry steer restarts", () => {
 
     const parentHookCall = runSubagentEndedHookMock.mock.calls.find((call) => {
       const event = call[0] as { runId?: string; reason?: string };
-      return event.runId === "run-parent-expiry" && event.reason === "subagent-complete";
+      return (
+        event.runId === "run-parent-expiry" &&
+        event.reason === "subagent-complete"
+      );
     });
     expect(parentHookCall).toBeUndefined();
     const parent = mod

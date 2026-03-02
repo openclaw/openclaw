@@ -3,7 +3,9 @@ import path from "node:path";
 
 export type DetectedPackageManager = "pnpm" | "bun" | "npm";
 
-export async function detectPackageManager(root: string): Promise<DetectedPackageManager | null> {
+export async function detectPackageManager(
+  root: string,
+): Promise<DetectedPackageManager | null> {
   try {
     const raw = await fs.readFile(path.join(root, "package.json"), "utf-8");
     const parsed = JSON.parse(raw) as { packageManager?: string };

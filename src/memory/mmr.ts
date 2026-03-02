@@ -38,7 +38,10 @@ export function tokenize(text: string): Set<string> {
  * Compute Jaccard similarity between two token sets.
  * Returns a value in [0, 1] where 1 means identical sets.
  */
-export function jaccardSimilarity(setA: Set<string>, setB: Set<string>): number {
+export function jaccardSimilarity(
+  setA: Set<string>,
+  setB: Set<string>,
+): number {
   if (setA.size === 0 && setB.size === 0) {
     return 1;
   }
@@ -83,7 +86,8 @@ function maxSimilarityToSelected(
   const itemTokens = tokenCache.get(item.id) ?? tokenize(item.content);
 
   for (const selected of selectedItems) {
-    const selectedTokens = tokenCache.get(selected.id) ?? tokenize(selected.content);
+    const selectedTokens =
+      tokenCache.get(selected.id) ?? tokenize(selected.content);
     const sim = jaccardSimilarity(itemTokens, selectedTokens);
     if (sim > maxSim) {
       maxSim = sim;
@@ -97,7 +101,11 @@ function maxSimilarityToSelected(
  * Compute MMR score for a candidate item.
  * MMR = λ * relevance - (1-λ) * max_similarity_to_selected
  */
-export function computeMMRScore(relevance: number, maxSimilarity: number, lambda: number): number {
+export function computeMMRScore(
+  relevance: number,
+  maxSimilarity: number,
+  lambda: number,
+): number {
   return lambda * relevance - (1 - lambda) * maxSimilarity;
 }
 
@@ -113,8 +121,14 @@ export function computeMMRScore(relevance: number, maxSimilarity: number, lambda
  * @param config - MMR configuration (lambda, enabled)
  * @returns Re-ranked items in MMR order
  */
-export function mmrRerank<T extends MMRItem>(items: T[], config: Partial<MMRConfig> = {}): T[] {
-  const { enabled = DEFAULT_MMR_CONFIG.enabled, lambda = DEFAULT_MMR_CONFIG.lambda } = config;
+export function mmrRerank<T extends MMRItem>(
+  items: T[],
+  config: Partial<MMRConfig> = {},
+): T[] {
+  const {
+    enabled = DEFAULT_MMR_CONFIG.enabled,
+    lambda = DEFAULT_MMR_CONFIG.lambda,
+  } = config;
 
   // Early exits
   if (!enabled || items.length <= 1) {
@@ -158,12 +172,17 @@ export function mmrRerank<T extends MMRItem>(items: T[], config: Partial<MMRConf
     for (const candidate of remaining) {
       const normalizedRelevance = normalizeScore(candidate.score);
       const maxSim = maxSimilarityToSelected(candidate, selected, tokenCache);
-      const mmrScore = computeMMRScore(normalizedRelevance, maxSim, clampedLambda);
+      const mmrScore = computeMMRScore(
+        normalizedRelevance,
+        maxSim,
+        clampedLambda,
+      );
 
       // Use original score as tiebreaker (higher is better)
       if (
         mmrScore > bestMMRScore ||
-        (mmrScore === bestMMRScore && candidate.score > (bestItem?.score ?? -Infinity))
+        (mmrScore === bestMMRScore &&
+          candidate.score > (bestItem?.score ?? -Infinity))
       ) {
         bestMMRScore = mmrScore;
         bestItem = candidate;

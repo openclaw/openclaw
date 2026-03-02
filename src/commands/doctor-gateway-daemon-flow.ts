@@ -20,13 +20,19 @@ import { isWSL } from "../infra/wsl.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { note } from "../terminal/note.js";
 import { sleep } from "../utils.js";
-import { buildGatewayInstallPlan, gatewayInstallErrorHint } from "./daemon-install-helpers.js";
+import {
+  buildGatewayInstallPlan,
+  gatewayInstallErrorHint,
+} from "./daemon-install-helpers.js";
 import {
   DEFAULT_GATEWAY_DAEMON_RUNTIME,
   GATEWAY_DAEMON_RUNTIME_OPTIONS,
   type GatewayDaemonRuntime,
 } from "./daemon-runtime.js";
-import { buildGatewayRuntimeHints, formatGatewayRuntimeSummary } from "./doctor-format.js";
+import {
+  buildGatewayRuntimeHints,
+  formatGatewayRuntimeSummary,
+} from "./doctor-format.js";
 import type { DoctorOptions, DoctorPrompter } from "./doctor-prompter.js";
 import { formatHealthCheckFailure } from "./health-format.js";
 import { healthCommand } from "./health.js";
@@ -56,7 +62,10 @@ async function maybeRepairLaunchAgentBootstrap(params: {
     return false;
   }
 
-  note("LaunchAgent is listed but not loaded in launchd.", `${params.title} LaunchAgent`);
+  note(
+    "LaunchAgent is listed but not loaded in launchd.",
+    `${params.title} LaunchAgent`,
+  );
 
   const shouldFix = await params.prompter.confirmSkipInNonInteractive({
     message: `Repair ${params.title} LaunchAgent bootstrap now?`,
@@ -77,7 +86,9 @@ async function maybeRepairLaunchAgentBootstrap(params: {
 
   const verified = await isLaunchAgentLoaded({ env: params.env });
   if (!verified) {
-    params.runtime.error(`${params.title} LaunchAgent still not loaded after repair.`);
+    params.runtime.error(
+      `${params.title} LaunchAgent still not loaded after repair.`,
+    );
     return false;
   }
 
@@ -105,9 +116,13 @@ export async function maybeRepairGatewayDaemon(params: {
   } catch {
     loaded = false;
   }
-  let serviceRuntime: Awaited<ReturnType<typeof service.readRuntime>> | undefined;
+  let serviceRuntime:
+    | Awaited<ReturnType<typeof service.readRuntime>>
+    | undefined;
   if (loaded) {
-    serviceRuntime = await service.readRuntime(process.env).catch(() => undefined);
+    serviceRuntime = await service
+      .readRuntime(process.env)
+      .catch(() => undefined);
   }
 
   if (process.platform === "darwin" && params.cfg.gateway?.mode !== "remote") {
@@ -129,7 +144,9 @@ export async function maybeRepairGatewayDaemon(params: {
     if (gatewayRepaired) {
       loaded = await service.isLoaded({ env: process.env });
       if (loaded) {
-        serviceRuntime = await service.readRuntime(process.env).catch(() => undefined);
+        serviceRuntime = await service
+          .readRuntime(process.env)
+          .catch(() => undefined);
       }
     }
   }
@@ -149,7 +166,9 @@ export async function maybeRepairGatewayDaemon(params: {
 
   if (!loaded) {
     if (process.platform === "linux") {
-      const systemdAvailable = await isSystemdUserServiceAvailable().catch(() => false);
+      const systemdAvailable = await isSystemdUserServiceAvailable().catch(
+        () => false,
+      );
       if (!systemdAvailable) {
         const wsl = await isWSL();
         note(renderSystemdUnavailableHints({ wsl }).join("\n"), "Gateway");
@@ -163,23 +182,27 @@ export async function maybeRepairGatewayDaemon(params: {
         initialValue: true,
       });
       if (install) {
-        const daemonRuntime = await params.prompter.select<GatewayDaemonRuntime>(
-          {
-            message: "Gateway service runtime",
-            options: GATEWAY_DAEMON_RUNTIME_OPTIONS,
-            initialValue: DEFAULT_GATEWAY_DAEMON_RUNTIME,
-          },
-          DEFAULT_GATEWAY_DAEMON_RUNTIME,
-        );
+        const daemonRuntime =
+          await params.prompter.select<GatewayDaemonRuntime>(
+            {
+              message: "Gateway service runtime",
+              options: GATEWAY_DAEMON_RUNTIME_OPTIONS,
+              initialValue: DEFAULT_GATEWAY_DAEMON_RUNTIME,
+            },
+            DEFAULT_GATEWAY_DAEMON_RUNTIME,
+          );
         const port = resolveGatewayPort(params.cfg, process.env);
-        const { programArguments, workingDirectory, environment } = await buildGatewayInstallPlan({
-          env: process.env,
-          port,
-          token: params.cfg.gateway?.auth?.token ?? process.env.OPENCLAW_GATEWAY_TOKEN,
-          runtime: daemonRuntime,
-          warn: (message, title) => note(message, title),
-          config: params.cfg,
-        });
+        const { programArguments, workingDirectory, environment } =
+          await buildGatewayInstallPlan({
+            env: process.env,
+            port,
+            token:
+              params.cfg.gateway?.auth?.token ??
+              process.env.OPENCLAW_GATEWAY_TOKEN,
+            runtime: daemonRuntime,
+            warn: (message, title) => note(message, title),
+            config: params.cfg,
+          });
         try {
           await service.install({
             env: process.env,

@@ -17,7 +17,9 @@ function resolveSecretOption(params: {
   const direct = params.direct?.trim();
   const file = params.file?.trim();
   if (direct && file) {
-    throw new Error(`Use either ${params.directFlag} or ${params.fileFlag} for ${params.label}.`);
+    throw new Error(
+      `Use either ${params.directFlag} or ${params.fileFlag} for ${params.label}.`,
+    );
   }
   if (file) {
     return readSecretFromFile(file, params.label);
@@ -32,23 +34,37 @@ function warnSecretCliFlag(flag: "--token" | "--password") {
 }
 
 export function registerAcpCli(program: Command) {
-  const acp = program.command("acp").description("Run an ACP bridge backed by the Gateway");
+  const acp = program
+    .command("acp")
+    .description("Run an ACP bridge backed by the Gateway");
 
   acp
-    .option("--url <url>", "Gateway WebSocket URL (defaults to gateway.remote.url when configured)")
+    .option(
+      "--url <url>",
+      "Gateway WebSocket URL (defaults to gateway.remote.url when configured)",
+    )
     .option("--token <token>", "Gateway token (if required)")
     .option("--token-file <path>", "Read gateway token from file")
     .option("--password <password>", "Gateway password (if required)")
     .option("--password-file <path>", "Read gateway password from file")
     .option("--session <key>", "Default session key (e.g. agent:main:main)")
     .option("--session-label <label>", "Default session label to resolve")
-    .option("--require-existing", "Fail if the session key/label does not exist", false)
+    .option(
+      "--require-existing",
+      "Fail if the session key/label does not exist",
+      false,
+    )
     .option("--reset-session", "Reset the session key before first use", false)
-    .option("--no-prefix-cwd", "Do not prefix prompts with the working directory", false)
+    .option(
+      "--no-prefix-cwd",
+      "Do not prefix prompts with the working directory",
+      false,
+    )
     .option("-v, --verbose", "Verbose logging to stderr", false)
     .addHelpText(
       "after",
-      () => `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/acp", "docs.openclaw.ai/cli/acp")}\n`,
+      () =>
+        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/acp", "docs.openclaw.ai/cli/acp")}\n`,
     )
     .action(async (opts) => {
       try {
@@ -95,10 +111,17 @@ export function registerAcpCli(program: Command) {
     .option("--cwd <dir>", "Working directory for the ACP session")
     .option("--server <command>", "ACP server command (default: openclaw)")
     .option("--server-args <args...>", "Extra arguments for the ACP server")
-    .option("--server-verbose", "Enable verbose logging on the ACP server", false)
+    .option(
+      "--server-verbose",
+      "Enable verbose logging on the ACP server",
+      false,
+    )
     .option("-v, --verbose", "Verbose client logging", false)
     .action(async (opts, command) => {
-      const inheritedVerbose = inheritOptionFromParent<boolean>(command, "verbose");
+      const inheritedVerbose = inheritOptionFromParent<boolean>(
+        command,
+        "verbose",
+      );
       try {
         await runAcpClientInteractive({
           cwd: opts.cwd as string | undefined,

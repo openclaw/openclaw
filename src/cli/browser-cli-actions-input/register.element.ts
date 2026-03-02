@@ -2,7 +2,11 @@ import type { Command } from "commander";
 import { danger } from "../../globals.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { BrowserParentOpts } from "../browser-cli-shared.js";
-import { callBrowserAct, requireRef, resolveBrowserActionContext } from "./shared.js";
+import {
+  callBrowserAct,
+  requireRef,
+  resolveBrowserActionContext,
+} from "./shared.js";
 
 export function registerBrowserElementCommands(
   browser: Command,
@@ -102,7 +106,11 @@ export function registerBrowserElementCommands(
         const result = await callBrowserAct({
           parent,
           profile,
-          body: { kind: "press", key, targetId: opts.targetId?.trim() || undefined },
+          body: {
+            kind: "press",
+            key,
+            targetId: opts.targetId?.trim() || undefined,
+          },
         });
         if (parent?.json) {
           defaultRuntime.log(JSON.stringify(result, null, 2));
@@ -126,7 +134,11 @@ export function registerBrowserElementCommands(
         const result = await callBrowserAct({
           parent,
           profile,
-          body: { kind: "hover", ref, targetId: opts.targetId?.trim() || undefined },
+          body: {
+            kind: "hover",
+            ref,
+            targetId: opts.targetId?.trim() || undefined,
+          },
         });
         if (parent?.json) {
           defaultRuntime.log(JSON.stringify(result, null, 2));
@@ -144,8 +156,10 @@ export function registerBrowserElementCommands(
     .description("Scroll an element into view by ref from snapshot")
     .argument("<ref>", "Ref id from snapshot")
     .option("--target-id <id>", "CDP target id (or unique prefix)")
-    .option("--timeout-ms <ms>", "How long to wait for scroll (default: 20000)", (v: string) =>
-      Number(v),
+    .option(
+      "--timeout-ms <ms>",
+      "How long to wait for scroll (default: 20000)",
+      (v: string) => Number(v),
     )
     .action(async (ref: string | undefined, opts, cmd) => {
       const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
@@ -161,9 +175,13 @@ export function registerBrowserElementCommands(
             kind: "scrollIntoView",
             ref: refValue,
             targetId: opts.targetId?.trim() || undefined,
-            timeoutMs: Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : undefined,
+            timeoutMs: Number.isFinite(opts.timeoutMs)
+              ? opts.timeoutMs
+              : undefined,
           },
-          timeoutMs: Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : undefined,
+          timeoutMs: Number.isFinite(opts.timeoutMs)
+            ? opts.timeoutMs
+            : undefined,
         });
         if (parent?.json) {
           defaultRuntime.log(JSON.stringify(result, null, 2));

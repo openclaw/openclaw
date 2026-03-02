@@ -55,7 +55,8 @@ describe("resolveMentions", () => {
         content: {
           msgtype: "m.text",
           body: "Bot: hello",
-          formatted_body: '<a href="https://matrix.to/#/@bot:matrix.org">Bot</a>: hello',
+          formatted_body:
+            '<a href="https://matrix.to/#/@bot:matrix.org">Bot</a>: hello',
         },
         userId,
         text: "Bot: hello",
@@ -69,7 +70,8 @@ describe("resolveMentions", () => {
         content: {
           msgtype: "m.text",
           body: "Bot: hello",
-          formatted_body: '<a href="https://matrix.to/#/%40bot%3Amatrix.org">Bot</a>: hello',
+          formatted_body:
+            '<a href="https://matrix.to/#/%40bot%3Amatrix.org">Bot</a>: hello',
         },
         userId,
         text: "Bot: hello",
@@ -83,7 +85,8 @@ describe("resolveMentions", () => {
         content: {
           msgtype: "m.text",
           body: "Bot: hello",
-          formatted_body: "<a href='https://matrix.to/#/@bot:matrix.org'>Bot</a>: hello",
+          formatted_body:
+            "<a href='https://matrix.to/#/@bot:matrix.org'>Bot</a>: hello",
         },
         userId,
         text: "Bot: hello",
@@ -97,7 +100,8 @@ describe("resolveMentions", () => {
         content: {
           msgtype: "m.text",
           body: "Other: hello",
-          formatted_body: '<a href="https://matrix.to/#/@other:matrix.org">Other</a>: hello',
+          formatted_body:
+            '<a href="https://matrix.to/#/@other:matrix.org">Other</a>: hello',
         },
         userId,
         text: "Other: hello",
@@ -111,7 +115,8 @@ describe("resolveMentions", () => {
         content: {
           msgtype: "m.text",
           body: "Bot2: hello",
-          formatted_body: '<a href="https://matrix.to/#/@bot2:matrix.org">Bot2</a>: hello',
+          formatted_body:
+            '<a href="https://matrix.to/#/@bot2:matrix.org">Bot2</a>: hello',
         },
         userId: "@bot:matrix.org",
         text: "Bot2: hello",

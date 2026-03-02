@@ -2,7 +2,10 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { resolveApiKeyForProvider, resolveEnvApiKey } from "../agents/model-auth.js";
+import {
+  resolveApiKeyForProvider,
+  resolveEnvApiKey,
+} from "../agents/model-auth.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { captureEnv } from "../test-utils/env.js";
@@ -40,7 +43,9 @@ describe("Kilo Gateway provider config", () => {
     });
 
     it("KILOCODE_DEFAULT_MODEL_REF includes provider prefix", () => {
-      expect(KILOCODE_DEFAULT_MODEL_REF).toBe("kilocode/anthropic/claude-opus-4.6");
+      expect(KILOCODE_DEFAULT_MODEL_REF).toBe(
+        "kilocode/anthropic/claude-opus-4.6",
+      );
     });
 
     it("KILOCODE_DEFAULT_MODEL_ID is anthropic/claude-opus-4.6", () => {
@@ -100,7 +105,8 @@ describe("Kilo Gateway provider config", () => {
           },
         },
       });
-      const modelIds = result.models?.providers?.kilocode?.models?.map((m) => m.id) ?? [];
+      const modelIds =
+        result.models?.providers?.kilocode?.models?.map((m) => m.id) ?? [];
       for (const modelId of KILOCODE_MODEL_IDS) {
         expect(modelIds).toContain(modelId);
       }
@@ -108,7 +114,8 @@ describe("Kilo Gateway provider config", () => {
 
     it("sets Kilo Gateway alias in agent default models", () => {
       const result = applyKilocodeProviderConfig(emptyCfg);
-      const agentModel = result.agents?.defaults?.models?.[KILOCODE_DEFAULT_MODEL_REF];
+      const agentModel =
+        result.agents?.defaults?.models?.[KILOCODE_DEFAULT_MODEL_REF];
       expect(agentModel).toBeDefined();
       expect(agentModel?.alias).toBe("Kilo Gateway");
     });
@@ -124,7 +131,8 @@ describe("Kilo Gateway provider config", () => {
         },
       };
       const result = applyKilocodeProviderConfig(cfg);
-      const agentModel = result.agents?.defaults?.models?.[KILOCODE_DEFAULT_MODEL_REF];
+      const agentModel =
+        result.agents?.defaults?.models?.[KILOCODE_DEFAULT_MODEL_REF];
       expect(agentModel?.alias).toBe("My Custom Alias");
     });
 
@@ -137,16 +145,18 @@ describe("Kilo Gateway provider config", () => {
         },
       };
       const result = applyKilocodeProviderConfig(cfg);
-      expect(resolveAgentModelPrimaryValue(result.agents?.defaults?.model)).toBe("openai/gpt-5");
+      expect(
+        resolveAgentModelPrimaryValue(result.agents?.defaults?.model),
+      ).toBe("openai/gpt-5");
     });
   });
 
   describe("applyKilocodeConfig", () => {
     it("sets kilocode as the default model", () => {
       const result = applyKilocodeConfig(emptyCfg);
-      expect(resolveAgentModelPrimaryValue(result.agents?.defaults?.model)).toBe(
-        KILOCODE_DEFAULT_MODEL_REF,
-      );
+      expect(
+        resolveAgentModelPrimaryValue(result.agents?.defaults?.model),
+      ).toBe(KILOCODE_DEFAULT_MODEL_REF);
     });
 
     it("also registers the provider", () => {

@@ -8,9 +8,9 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../config/sessions.js", async () => {
-  const actual = await vi.importActual<typeof import("../../config/sessions.js")>(
-    "../../config/sessions.js",
-  );
+  const actual = await vi.importActual<
+    typeof import("../../config/sessions.js")
+  >("../../config/sessions.js");
   return {
     ...actual,
     loadSessionStore: mocks.loadSessionStore,
@@ -42,8 +42,12 @@ describe("resolveSessionKeyForRequest", () => {
     );
   };
 
-  const mockStoresByPath = (stores: Partial<Record<string, SessionStoreMap>>) => {
-    mocks.loadSessionStore.mockImplementation((storePath: string) => stores[storePath] ?? {});
+  const mockStoresByPath = (
+    stores: Partial<Record<string, SessionStoreMap>>,
+  ) => {
+    mocks.loadSessionStore.mockImplementation(
+      (storePath: string) => stores[storePath] ?? {},
+    );
   };
 
   beforeEach(() => {
@@ -108,7 +112,9 @@ describe("resolveSessionKeyForRequest", () => {
       cfg: baseCfg,
       sessionId: "target-session-id",
     });
-    expect(result.sessionStore["agent:mybot:main"]?.sessionId).toBe("target-session-id");
+    expect(result.sessionStore["agent:mybot:main"]?.sessionId).toBe(
+      "target-session-id",
+    );
   });
 
   it("returns undefined sessionKey when sessionId not found in any store", async () => {
@@ -171,7 +177,9 @@ describe("resolveSessionKeyForRequest", () => {
 
     // loadSessionStore should be called twice: once for main, once for mybot
     // (not twice for main)
-    const storePaths = mocks.loadSessionStore.mock.calls.map((call) => String(call[0]));
+    const storePaths = mocks.loadSessionStore.mock.calls.map((call) =>
+      String(call[0]),
+    );
     expect(storePaths).toHaveLength(2);
     expect(storePaths).toContain(MAIN_STORE_PATH);
     expect(storePaths).toContain(MYBOT_STORE_PATH);

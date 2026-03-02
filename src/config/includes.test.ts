@@ -42,7 +42,11 @@ function createMockResolver(files: Record<string, unknown>): IncludeResolver {
   };
 }
 
-function resolve(obj: unknown, files: Record<string, unknown> = {}, basePath = DEFAULT_BASE_PATH) {
+function resolve(
+  obj: unknown,
+  files: Record<string, unknown> = {},
+  basePath = DEFAULT_BASE_PATH,
+) {
   return resolveConfigIncludes(obj, basePath, createMockResolver(files));
 }
 
@@ -86,7 +90,10 @@ describe("resolveConfigIncludes", () => {
     const absolute = etcOpenClawPath("agents.json");
     const files = { [absolute]: { list: [{ id: "main" }] } };
     const obj = { agents: { $include: absolute } };
-    expectResolveIncludeError(() => resolve(obj, files), /escapes config directory/);
+    expectResolveIncludeError(
+      () => resolve(obj, files),
+      /escapes config directory/,
+    );
   });
 
   it("resolves single and array include merges", () => {
@@ -116,7 +123,9 @@ describe("resolveConfigIncludes", () => {
       {
         name: "array include overlapping keys",
         files: {
-          [configPath("a.json")]: { agents: { defaults: { workspace: "~/a" } } },
+          [configPath("a.json")]: {
+            agents: { defaults: { workspace: "~/a" } },
+          },
           [configPath("b.json")]: { agents: { list: [{ id: "main" }] } },
         },
         obj: { $include: ["./a.json", "./b.json"] },
@@ -130,7 +139,9 @@ describe("resolveConfigIncludes", () => {
     ] as const;
 
     for (const testCase of cases) {
-      expect(resolve(testCase.obj, testCase.files), testCase.name).toEqual(testCase.expected);
+      expect(resolve(testCase.obj, testCase.files), testCase.name).toEqual(
+        testCase.expected,
+      );
     }
   });
 
@@ -220,7 +231,9 @@ describe("resolveConfigIncludes", () => {
     } catch (err) {
       expect(err).toBeInstanceOf(CircularIncludeError);
       const circular = err as CircularIncludeError;
-      expect(circular.chain).toEqual(expect.arrayContaining([DEFAULT_BASE_PATH, aPath, bPath]));
+      expect(circular.chain).toEqual(
+        expect.arrayContaining([DEFAULT_BASE_PATH, aPath, bPath]),
+      );
       expect(circular.message).toMatch(/Circular include detected/);
       expect(circular.message).toContain("a.json");
       expect(circular.message).toContain("b.json");
@@ -249,7 +262,10 @@ describe("resolveConfigIncludes", () => {
     ] as const;
 
     for (const testCase of cases) {
-      expectResolveIncludeError(() => resolve(testCase.obj, files), testCase.expectedPattern);
+      expectResolveIncludeError(
+        () => resolve(testCase.obj, files),
+        testCase.expectedPattern,
+      );
     }
   });
 
@@ -263,7 +279,10 @@ describe("resolveConfigIncludes", () => {
     files[configPath("level15.json")] = { done: true };
 
     const obj = { $include: "./level0.json" };
-    expectResolveIncludeError(() => resolve(obj, files), /Maximum include depth/);
+    expectResolveIncludeError(
+      () => resolve(obj, files),
+      /Maximum include depth/,
+    );
   });
 
   it("allows depth 10 but rejects depth 11", () => {
@@ -331,7 +350,9 @@ describe("resolveConfigIncludes", () => {
       resolve(
         { $include: "./sub/child.json" },
         {
-          [configPath("sub", "child.json")]: { $include: "../shared/common.json" },
+          [configPath("sub", "child.json")]: {
+            $include: "../shared/common.json",
+          },
           [configPath("shared", "common.json")]: { shared: true },
         },
       ),
@@ -379,9 +400,18 @@ describe("real-world config patterns", () => {
         expected: {
           gateway: { port: 18789 },
           agents: [
-            { id: "mueller-screenshot", workspace: "~/clients/mueller/screenshot" },
-            { id: "mueller-transcribe", workspace: "~/clients/mueller/transcribe" },
-            { id: "schmidt-screenshot", workspace: "~/clients/schmidt/screenshot" },
+            {
+              id: "mueller-screenshot",
+              workspace: "~/clients/mueller/screenshot",
+            },
+            {
+              id: "mueller-transcribe",
+              workspace: "~/clients/mueller/transcribe",
+            },
+            {
+              id: "schmidt-screenshot",
+              workspace: "~/clients/schmidt/screenshot",
+            },
           ],
           broadcast: {
             "group-mueller": ["mueller-screenshot", "mueller-transcribe"],
@@ -396,37 +426,54 @@ describe("real-world config patterns", () => {
             gateway: { port: 18789, bind: "loopback" },
           },
           [configPath("channels", "whatsapp.json")]: {
-            channels: { whatsapp: { dmPolicy: "pairing", allowFrom: ["+49123"] } },
+            channels: {
+              whatsapp: { dmPolicy: "pairing", allowFrom: ["+49123"] },
+            },
           },
           [configPath("agents", "defaults.json")]: {
             agents: { defaults: { sandbox: { mode: "all" } } },
           },
         },
         obj: {
-          $include: ["./gateway.json", "./channels/whatsapp.json", "./agents/defaults.json"],
+          $include: [
+            "./gateway.json",
+            "./channels/whatsapp.json",
+            "./agents/defaults.json",
+          ],
         },
         expected: {
           gateway: { port: 18789, bind: "loopback" },
-          channels: { whatsapp: { dmPolicy: "pairing", allowFrom: ["+49123"] } },
+          channels: {
+            whatsapp: { dmPolicy: "pairing", allowFrom: ["+49123"] },
+          },
           agents: { defaults: { sandbox: { mode: "all" } } },
         },
       },
     ] as const;
 
     for (const testCase of cases) {
-      expect(resolve(testCase.obj, testCase.files), testCase.name).toEqual(testCase.expected);
+      expect(resolve(testCase.obj, testCase.files), testCase.name).toEqual(
+        testCase.expected,
+      );
     }
   });
 });
 describe("security: path traversal protection (CWE-22)", () => {
   function expectRejectedTraversalPaths(
-    cases: ReadonlyArray<{ includePath: string; expectEscapesMessage: boolean }>,
+    cases: ReadonlyArray<{
+      includePath: string;
+      expectEscapesMessage: boolean;
+    }>,
   ) {
     for (const testCase of cases) {
       const obj = { $include: testCase.includePath };
-      expect(() => resolve(obj, {}), testCase.includePath).toThrow(ConfigIncludeError);
+      expect(() => resolve(obj, {}), testCase.includePath).toThrow(
+        ConfigIncludeError,
+      );
       if (testCase.expectEscapesMessage) {
-        expect(() => resolve(obj, {}), testCase.includePath).toThrow(/escapes config directory/);
+        expect(() => resolve(obj, {}), testCase.includePath).toThrow(
+          /escapes config directory/,
+        );
       }
     }
   }
@@ -436,7 +483,10 @@ describe("security: path traversal protection (CWE-22)", () => {
       const cases = [
         { includePath: "/etc/passwd", expectEscapesMessage: true },
         { includePath: "/etc/shadow", expectEscapesMessage: true },
-        { includePath: `${process.env.HOME}/.ssh/id_rsa`, expectEscapesMessage: false },
+        {
+          includePath: `${process.env.HOME}/.ssh/id_rsa`,
+          expectEscapesMessage: false,
+        },
         { includePath: "/tmp/malicious.json", expectEscapesMessage: false },
         { includePath: "/", expectEscapesMessage: false },
       ] as const;
@@ -449,9 +499,18 @@ describe("security: path traversal protection (CWE-22)", () => {
       const cases = [
         { includePath: "../../etc/passwd", expectEscapesMessage: true },
         { includePath: "../../../etc/shadow", expectEscapesMessage: false },
-        { includePath: "../../../../../../../../etc/passwd", expectEscapesMessage: false },
-        { includePath: "../sibling-dir/secret.json", expectEscapesMessage: false },
-        { includePath: "/config/../../../etc/passwd", expectEscapesMessage: false },
+        {
+          includePath: "../../../../../../../../etc/passwd",
+          expectEscapesMessage: false,
+        },
+        {
+          includePath: "../sibling-dir/secret.json",
+          expectEscapesMessage: false,
+        },
+        {
+          includePath: "/config/../../../etc/passwd",
+          expectEscapesMessage: false,
+        },
       ] as const;
       expectRejectedTraversalPaths(cases);
     });
@@ -488,7 +547,9 @@ describe("security: path traversal protection (CWE-22)", () => {
 
       for (const testCase of cases) {
         const obj = { $include: testCase.includePath };
-        expect(resolve(obj, testCase.files), testCase.name).toEqual(testCase.expected);
+        expect(resolve(obj, testCase.files), testCase.name).toEqual(
+          testCase.expected,
+        );
       }
     });
 
@@ -510,7 +571,10 @@ describe("security: path traversal protection (CWE-22)", () => {
         },
         {
           includePath: "../../etc/passwd",
-          expectedMessageIncludes: ["escapes config directory", "../../etc/passwd"],
+          expectedMessageIncludes: [
+            "escapes config directory",
+            "../../etc/passwd",
+          ],
         },
       ] as const;
 
@@ -521,14 +585,19 @@ describe("security: path traversal protection (CWE-22)", () => {
           expect.fail("Should have thrown");
         } catch (err) {
           expect(err, testCase.includePath).toBeInstanceOf(ConfigIncludeError);
-          expect(err, testCase.includePath).toHaveProperty("name", "ConfigIncludeError");
-          expect((err as ConfigIncludeError).includePath, testCase.includePath).toBe(
-            testCase.includePath,
+          expect(err, testCase.includePath).toHaveProperty(
+            "name",
+            "ConfigIncludeError",
           );
+          expect(
+            (err as ConfigIncludeError).includePath,
+            testCase.includePath,
+          ).toBe(testCase.includePath);
           for (const messagePart of testCase.expectedMessageIncludes) {
-            expect((err as Error).message, `${testCase.includePath}: ${messagePart}`).toContain(
-              messagePart,
-            );
+            expect(
+              (err as Error).message,
+              `${testCase.includePath}: ${messagePart}`,
+            ).toContain(messagePart);
           }
         }
       }
@@ -552,7 +621,9 @@ describe("security: path traversal protection (CWE-22)", () => {
 
       for (const testCase of cases) {
         const obj = { $include: testCase.includePaths };
-        expect(() => resolve(obj, testCase.files), testCase.name).toThrow(ConfigIncludeError);
+        expect(() => resolve(obj, testCase.files), testCase.name).toThrow(
+          ConfigIncludeError,
+        );
       }
     });
 
@@ -588,7 +659,9 @@ describe("security: path traversal protection (CWE-22)", () => {
 
       for (const testCase of cases) {
         const result = deepMerge(testCase.base, testCase.incoming);
-        expect((Object.prototype as Record<string, unknown>).polluted).toBeUndefined();
+        expect(
+          (Object.prototype as Record<string, unknown>).polluted,
+        ).toBeUndefined();
         expect(result).toEqual(testCase.expected);
       }
     });
@@ -612,7 +685,10 @@ describe("security: path traversal protection (CWE-22)", () => {
     });
 
     it("allows child include when config is at filesystem root", () => {
-      const rootConfigPath = path.join(path.parse(process.cwd()).root, "test.json");
+      const rootConfigPath = path.join(
+        path.parse(process.cwd()).root,
+        "test.json",
+      );
       const childPath = path.join(path.parse(process.cwd()).root, "child.json");
       const files = { [childPath]: { root: true } };
       const obj = { $include: childPath };
@@ -620,7 +696,9 @@ describe("security: path traversal protection (CWE-22)", () => {
     });
 
     it("allows include files when the config root path is a symlink", async () => {
-      const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-includes-symlink-"));
+      const tempRoot = await fs.mkdtemp(
+        path.join(os.tmpdir(), "openclaw-includes-symlink-"),
+      );
       try {
         const realRoot = path.join(tempRoot, "real");
         const linkRoot = path.join(tempRoot, "link");
@@ -630,7 +708,11 @@ describe("security: path traversal protection (CWE-22)", () => {
           "{ logging: { redactSensitive: 'tools' } }\n",
           "utf-8",
         );
-        await fs.symlink(realRoot, linkRoot, process.platform === "win32" ? "junction" : undefined);
+        await fs.symlink(
+          realRoot,
+          linkRoot,
+          process.platform === "win32" ? "junction" : undefined,
+        );
 
         const result = resolveConfigIncludes(
           { $include: "./includes/extra.json5" },
@@ -646,7 +728,9 @@ describe("security: path traversal protection (CWE-22)", () => {
       if (process.platform === "win32") {
         return;
       }
-      const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-includes-hardlink-"));
+      const tempRoot = await fs.mkdtemp(
+        path.join(os.tmpdir(), "openclaw-includes-hardlink-"),
+      );
       try {
         const configDir = path.join(tempRoot, "config");
         const outsideDir = path.join(tempRoot, "outside");
@@ -654,7 +738,11 @@ describe("security: path traversal protection (CWE-22)", () => {
         await fs.mkdir(outsideDir, { recursive: true });
         const includePath = path.join(configDir, "extra.json5");
         const outsidePath = path.join(outsideDir, "secret.json5");
-        await fs.writeFile(outsidePath, '{"logging":{"redactSensitive":"tools"}}\n', "utf-8");
+        await fs.writeFile(
+          outsidePath,
+          '{"logging":{"redactSensitive":"tools"}}\n',
+          "utf-8",
+        );
         try {
           await fs.link(outsidePath, includePath);
         } catch (err) {
@@ -676,7 +764,9 @@ describe("security: path traversal protection (CWE-22)", () => {
     });
 
     it("rejects oversized include files", async () => {
-      const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-includes-big-"));
+      const tempRoot = await fs.mkdtemp(
+        path.join(os.tmpdir(), "openclaw-includes-big-"),
+      );
       try {
         const configDir = path.join(tempRoot, "config");
         await fs.mkdir(configDir, { recursive: true });
@@ -685,7 +775,10 @@ describe("security: path traversal protection (CWE-22)", () => {
         await fs.writeFile(includePath, `{"blob":"${payload}"}`, "utf-8");
 
         expect(() =>
-          resolveConfigIncludes({ $include: "./big.json5" }, path.join(configDir, "openclaw.json")),
+          resolveConfigIncludes(
+            { $include: "./big.json5" },
+            path.join(configDir, "openclaw.json"),
+          ),
         ).toThrow(/security checks|max/i);
       } finally {
         await fs.rm(tempRoot, { recursive: true, force: true });

@@ -13,7 +13,11 @@ function isPathLikeToken(value: string): boolean {
   if (trimmed === "-") {
     return false;
   }
-  if (trimmed.startsWith("./") || trimmed.startsWith("../") || trimmed.startsWith("~")) {
+  if (
+    trimmed.startsWith("./") ||
+    trimmed.startsWith("../") ||
+    trimmed.startsWith("~")
+  ) {
     return true;
   }
   if (trimmed.startsWith("/")) {
@@ -86,7 +90,9 @@ function consumeLongOptionToken(params: {
   if (!expectsValue) {
     return params.index + 1;
   }
-  return isInvalidValueToken(params.args[params.index + 1]) ? -1 : params.index + 2;
+  return isInvalidValueToken(params.args[params.index + 1])
+    ? -1
+    : params.index + 2;
 }
 
 function consumeShortOptionClusterToken(params: {
@@ -109,7 +115,9 @@ function consumeShortOptionClusterToken(params: {
     if (inlineValue) {
       return isSafeLiteralToken(inlineValue) ? params.index + 1 : -1;
     }
-    return isInvalidValueToken(params.args[params.index + 1]) ? -1 : params.index + 2;
+    return isInvalidValueToken(params.args[params.index + 1])
+      ? -1
+      : params.index + 2;
   }
   return -1;
 }
@@ -122,21 +130,33 @@ function consumePositionalToken(token: string, positional: string[]): boolean {
   return true;
 }
 
-function validatePositionalCount(positional: string[], profile: SafeBinProfile): boolean {
+function validatePositionalCount(
+  positional: string[],
+  profile: SafeBinProfile,
+): boolean {
   const minPositional = profile.minPositional ?? 0;
   if (positional.length < minPositional) {
     return false;
   }
-  return typeof profile.maxPositional !== "number" || positional.length <= profile.maxPositional;
+  return (
+    typeof profile.maxPositional !== "number" ||
+    positional.length <= profile.maxPositional
+  );
 }
 
-export function validateSafeBinArgv(args: string[], profile: SafeBinProfile): boolean {
+export function validateSafeBinArgv(
+  args: string[],
+  profile: SafeBinProfile,
+): boolean {
   const allowedValueFlags = profile.allowedValueFlags ?? NO_FLAGS;
   const deniedFlags = profile.deniedFlags ?? NO_FLAGS;
   const knownLongFlags =
-    profile.knownLongFlags ?? collectKnownLongFlags(allowedValueFlags, deniedFlags);
-  const knownLongFlagsSet = profile.knownLongFlagsSet ?? new Set(knownLongFlags);
-  const longFlagPrefixMap = profile.longFlagPrefixMap ?? buildLongFlagPrefixMap(knownLongFlags);
+    profile.knownLongFlags ??
+    collectKnownLongFlags(allowedValueFlags, deniedFlags);
+  const knownLongFlagsSet =
+    profile.knownLongFlagsSet ?? new Set(knownLongFlags);
+  const longFlagPrefixMap =
+    profile.longFlagPrefixMap ?? buildLongFlagPrefixMap(knownLongFlags);
 
   const positional: string[] = [];
   let i = 0;

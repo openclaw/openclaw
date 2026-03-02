@@ -1,4 +1,9 @@
-import { type Api, type Context, complete, type Model } from "@mariozechner/pi-ai";
+import {
+  type Api,
+  type Context,
+  complete,
+  type Model,
+} from "@mariozechner/pi-ai";
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveUserPath } from "../../utils.js";
@@ -11,7 +16,10 @@ import {
   type ImageModelConfig,
   resolveProviderVisionModelFromConfig,
 } from "./image-tool.helpers.js";
-import { hasAuthForProvider, resolveDefaultModelRef } from "./model-config.helpers.js";
+import {
+  hasAuthForProvider,
+  resolveDefaultModelRef,
+} from "./model-config.helpers.js";
 import {
   createSandboxBridgeReadFile,
   discoverAuthStorage,
@@ -39,7 +47,10 @@ export const __testing = {
   resolveImageToolMaxTokens,
 } as const;
 
-function resolveImageToolMaxTokens(modelMaxTokens: number | undefined, requestedMaxTokens = 4096) {
+function resolveImageToolMaxTokens(
+  modelMaxTokens: number | undefined,
+  requestedMaxTokens = 4096,
+) {
   if (
     typeof modelMaxTokens !== "number" ||
     !Number.isFinite(modelMaxTokens) ||
@@ -152,12 +163,23 @@ export function resolveImageModelConfigForTool(params: {
   return null;
 }
 
-function pickMaxBytes(cfg?: OpenClawConfig, maxBytesMb?: number): number | undefined {
-  if (typeof maxBytesMb === "number" && Number.isFinite(maxBytesMb) && maxBytesMb > 0) {
+function pickMaxBytes(
+  cfg?: OpenClawConfig,
+  maxBytesMb?: number,
+): number | undefined {
+  if (
+    typeof maxBytesMb === "number" &&
+    Number.isFinite(maxBytesMb) &&
+    maxBytesMb > 0
+  ) {
     return Math.floor(maxBytesMb * 1024 * 1024);
   }
   const configured = cfg?.agents?.defaults?.mediaMaxMb;
-  if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
+  if (
+    typeof configured === "number" &&
+    Number.isFinite(configured) &&
+    configured > 0
+  ) {
     return Math.floor(configured * 1024 * 1024);
   }
   return undefined;
@@ -168,7 +190,8 @@ function buildImageContext(
   images: Array<{ base64: string; mimeType: string }>,
 ): Context {
   const content: Array<
-    { type: "text"; text: string } | { type: "image"; data: string; mimeType: string }
+    | { type: "text"; text: string }
+    | { type: "image"; data: string; mimeType: string }
   > = [{ type: "text", text: prompt }];
   for (const img of images) {
     content.push({ type: "image", data: img.base64, mimeType: img.mimeType });
@@ -228,7 +251,9 @@ async function runImagePrompt(params: {
         throw new Error(`Unknown model: ${provider}/${modelId}`);
       }
       if (!model.input?.includes("image")) {
-        throw new Error(`Model does not support images: ${provider}/${modelId}`);
+        throw new Error(
+          `Model does not support images: ${provider}/${modelId}`,
+        );
       }
       const apiKeyInfo = await getApiKeyForModel({
         model,
@@ -323,10 +348,13 @@ export function createImageTool(options?: {
     description,
     parameters: Type.Object({
       prompt: Type.Optional(Type.String()),
-      image: Type.Optional(Type.String({ description: "Single image path or URL." })),
+      image: Type.Optional(
+        Type.String({ description: "Single image path or URL." }),
+      ),
       images: Type.Optional(
         Type.Array(Type.String(), {
-          description: "Multiple image paths or URLs (up to maxImages, default 20).",
+          description:
+            "Multiple image paths or URLs (up to maxImages, default 20).",
         }),
       ),
       model: Type.Optional(Type.String()),
@@ -334,7 +362,10 @@ export function createImageTool(options?: {
       maxImages: Type.Optional(Type.Number()),
     }),
     execute: async (_toolCallId, args) => {
-      const record = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
+      const record =
+        args && typeof args === "object"
+          ? (args as Record<string, unknown>)
+          : {};
 
       // MARK: - Normalize image + images input and dedupe while preserving order
       const imageCandidates: string[] = [];
@@ -342,7 +373,9 @@ export function createImageTool(options?: {
         imageCandidates.push(record.image);
       }
       if (Array.isArray(record.images)) {
-        imageCandidates.push(...record.images.filter((v): v is string => typeof v === "string"));
+        imageCandidates.push(
+          ...record.images.filter((v): v is string => typeof v === "string"),
+        );
       }
 
       const seenImages = new Set<string>();
@@ -363,9 +396,12 @@ export function createImageTool(options?: {
       }
 
       // MARK: - Enforce max images cap
-      const maxImagesRaw = typeof record.maxImages === "number" ? record.maxImages : undefined;
+      const maxImagesRaw =
+        typeof record.maxImages === "number" ? record.maxImages : undefined;
       const maxImages =
-        typeof maxImagesRaw === "number" && Number.isFinite(maxImagesRaw) && maxImagesRaw > 0
+        typeof maxImagesRaw === "number" &&
+        Number.isFinite(maxImagesRaw) &&
+        maxImagesRaw > 0
           ? Math.floor(maxImagesRaw)
           : DEFAULT_MAX_IMAGES;
       if (imageInputs.length > maxImages) {
@@ -376,7 +412,11 @@ export function createImageTool(options?: {
               text: `Too many images: ${imageInputs.length} provided, maximum is ${maxImages}. Please reduce the number of images.`,
             },
           ],
-          details: { error: "too_many_images", count: imageInputs.length, max: maxImages },
+          details: {
+            error: "too_many_images",
+            count: imageInputs.length,
+            max: maxImages,
+          },
         };
       }
 
@@ -385,8 +425,11 @@ export function createImageTool(options?: {
           ? record.prompt.trim()
           : DEFAULT_PROMPT;
       const modelOverride =
-        typeof record.model === "string" && record.model.trim() ? record.model.trim() : undefined;
-      const maxBytesMb = typeof record.maxBytesMb === "number" ? record.maxBytesMb : undefined;
+        typeof record.model === "string" && record.model.trim()
+          ? record.model.trim()
+          : undefined;
+      const maxBytesMb =
+        typeof record.maxBytesMb === "number" ? record.maxBytesMb : undefined;
       const maxBytes = pickMaxBytes(options?.config, maxBytesMb);
 
       const sandboxConfig: SandboxedBridgeMediaPathConfig | null =
@@ -408,7 +451,9 @@ export function createImageTool(options?: {
 
       for (const imageRawInput of imageInputs) {
         const trimmed = imageRawInput.trim();
-        const imageRaw = trimmed.startsWith("@") ? trimmed.slice(1).trim() : trimmed;
+        const imageRaw = trimmed.startsWith("@")
+          ? trimmed.slice(1).trim()
+          : trimmed;
         if (!imageRaw) {
           throw new Error("image required (empty string in array)");
         }
@@ -423,7 +468,13 @@ export function createImageTool(options?: {
         const isFileUrl = /^file:/i.test(imageRaw);
         const isHttpUrl = /^https?:\/\//i.test(imageRaw);
         const isDataUrl = /^data:/i.test(imageRaw);
-        if (hasScheme && !looksLikeWindowsDrivePath && !isFileUrl && !isHttpUrl && !isDataUrl) {
+        if (
+          hasScheme &&
+          !looksLikeWindowsDrivePath &&
+          !isFileUrl &&
+          !isHttpUrl &&
+          !isDataUrl
+        ) {
           return {
             content: [
               {
@@ -451,19 +502,20 @@ export function createImageTool(options?: {
           }
           return imageRaw;
         })();
-        const resolvedPathInfo: { resolved: string; rewrittenFrom?: string } = isDataUrl
-          ? { resolved: "" }
-          : sandboxConfig
-            ? await resolveSandboxedBridgeMediaPath({
-                sandbox: sandboxConfig,
-                mediaPath: resolvedImage,
-                inboundFallbackDir: "media/inbound",
-              })
-            : {
-                resolved: resolvedImage.startsWith("file://")
-                  ? resolvedImage.slice("file://".length)
-                  : resolvedImage,
-              };
+        const resolvedPathInfo: { resolved: string; rewrittenFrom?: string } =
+          isDataUrl
+            ? { resolved: "" }
+            : sandboxConfig
+              ? await resolveSandboxedBridgeMediaPath({
+                  sandbox: sandboxConfig,
+                  mediaPath: resolvedImage,
+                  inboundFallbackDir: "media/inbound",
+                })
+              : {
+                  resolved: resolvedImage.startsWith("file://")
+                    ? resolvedImage.slice("file://".length)
+                    : resolvedImage,
+                };
         const resolvedPath = isDataUrl ? null : resolvedPathInfo.resolved;
 
         const media = isDataUrl
@@ -472,7 +524,9 @@ export function createImageTool(options?: {
             ? await loadWebMedia(resolvedPath ?? resolvedImage, {
                 maxBytes,
                 sandboxValidated: true,
-                readFile: createSandboxBridgeReadFile({ sandbox: sandboxConfig }),
+                readFile: createSandboxBridgeReadFile({
+                  sandbox: sandboxConfig,
+                }),
               })
             : await loadWebMedia(resolvedPath ?? resolvedImage, {
                 maxBytes,
@@ -504,7 +558,10 @@ export function createImageTool(options?: {
         imageModelConfig,
         modelOverride,
         prompt: promptRaw,
-        images: loadedImages.map((img) => ({ base64: img.base64, mimeType: img.mimeType })),
+        images: loadedImages.map((img) => ({
+          base64: img.base64,
+          mimeType: img.mimeType,
+        })),
       });
 
       const imageDetails =
@@ -518,7 +575,9 @@ export function createImageTool(options?: {
           : {
               images: loadedImages.map((img) => ({
                 image: img.resolvedImage,
-                ...(img.rewrittenFrom ? { rewrittenFrom: img.rewrittenFrom } : {}),
+                ...(img.rewrittenFrom
+                  ? { rewrittenFrom: img.rewrittenFrom }
+                  : {}),
               })),
             };
 

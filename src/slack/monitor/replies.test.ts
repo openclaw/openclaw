@@ -34,11 +34,16 @@ describe("deliverReplies identity passthrough", () => {
 
   it("passes identity to sendMessageSlack for media replies", async () => {
     sendMock.mockResolvedValue(undefined);
-    const identity = { username: "Bot", iconUrl: "https://example.com/icon.png" };
+    const identity = {
+      username: "Bot",
+      iconUrl: "https://example.com/icon.png",
+    };
     await deliverReplies(
       baseParams({
         identity,
-        replies: [{ text: "caption", mediaUrls: ["https://example.com/img.png"] }],
+        replies: [
+          { text: "caption", mediaUrls: ["https://example.com/img.png"] },
+        ],
       }),
     );
 

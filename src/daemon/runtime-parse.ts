@@ -1,4 +1,7 @@
-export function parseKeyValueOutput(output: string, separator: string): Record<string, string> {
+export function parseKeyValueOutput(
+  output: string,
+  separator: string,
+): Record<string, string> {
   const entries: Record<string, string> = {};
   for (const rawLine of output.split(/\r?\n/)) {
     const line = rawLine.trim();

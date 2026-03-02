@@ -62,7 +62,8 @@ export async function persistSessionUsageUpdate(params: {
     typeof params.promptTokens === "number" &&
     Number.isFinite(params.promptTokens) &&
     params.promptTokens > 0;
-  const hasFreshContextSnapshot = Boolean(params.lastCallUsage) || hasPromptTokens;
+  const hasFreshContextSnapshot =
+    Boolean(params.lastCallUsage) || hasPromptTokens;
 
   if (hasUsage || hasFreshContextSnapshot) {
     try {
@@ -70,12 +71,14 @@ export async function persistSessionUsageUpdate(params: {
         storePath,
         sessionKey,
         update: async (entry) => {
-          const resolvedContextTokens = params.contextTokensUsed ?? entry.contextTokens;
+          const resolvedContextTokens =
+            params.contextTokensUsed ?? entry.contextTokens;
           // Use last-call usage for totalTokens when available. The accumulated
           // `usage.input` sums input tokens from every API call in the run
           // (tool-use loops, compaction retries), overstating actual context.
           // `lastCallUsage` reflects only the final API call — the true context.
-          const usageForContext = params.lastCallUsage ?? (hasUsage ? params.usage : undefined);
+          const usageForContext =
+            params.lastCallUsage ?? (hasUsage ? params.usage : undefined);
           const totalTokens = hasFreshContextSnapshot
             ? deriveSessionTotalTokens({
                 usage: usageForContext,
@@ -87,7 +90,8 @@ export async function persistSessionUsageUpdate(params: {
             modelProvider: params.providerUsed ?? entry.modelProvider,
             model: params.modelUsed ?? entry.model,
             contextTokens: resolvedContextTokens,
-            systemPromptReport: params.systemPromptReport ?? entry.systemPromptReport,
+            systemPromptReport:
+              params.systemPromptReport ?? entry.systemPromptReport,
             updatedAt: Date.now(),
           };
           if (hasUsage) {
@@ -122,14 +126,17 @@ export async function persistSessionUsageUpdate(params: {
             modelProvider: params.providerUsed ?? entry.modelProvider,
             model: params.modelUsed ?? entry.model,
             contextTokens: params.contextTokensUsed ?? entry.contextTokens,
-            systemPromptReport: params.systemPromptReport ?? entry.systemPromptReport,
+            systemPromptReport:
+              params.systemPromptReport ?? entry.systemPromptReport,
             updatedAt: Date.now(),
           };
           return applyCliSessionIdToSessionPatch(params, entry, patch);
         },
       });
     } catch (err) {
-      logVerbose(`failed to persist ${label}model/context update: ${String(err)}`);
+      logVerbose(
+        `failed to persist ${label}model/context update: ${String(err)}`,
+      );
     }
   }
 }

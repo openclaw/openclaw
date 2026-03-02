@@ -8,7 +8,10 @@ export type ParsedSlashCommand =
   | { ok: true; action: string; args: string }
   | { ok: false; message: string };
 
-export function parseSlashCommandActionArgs(raw: string, slash: string): SlashCommandParseResult {
+export function parseSlashCommandActionArgs(
+  raw: string,
+  slash: string,
+): SlashCommandParseResult {
   const trimmed = raw.trim();
   const slashLower = slash.toLowerCase();
   if (!trimmed.toLowerCase().startsWith(slashLower)) {

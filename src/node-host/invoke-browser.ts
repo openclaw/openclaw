@@ -32,7 +32,9 @@ type BrowserProxyResult = {
 const BROWSER_PROXY_MAX_FILE_BYTES = 10 * 1024 * 1024;
 
 function normalizeProfileAllowlist(raw?: string[]): string[] {
-  return Array.isArray(raw) ? raw.map((entry) => entry.trim()).filter(Boolean) : [];
+  return Array.isArray(raw)
+    ? raw.map((entry) => entry.trim()).filter(Boolean)
+    : [];
 }
 
 function resolveBrowserProxyConfig() {
@@ -63,7 +65,10 @@ async function ensureBrowserControlService(): Promise<void> {
   return browserControlReady;
 }
 
-function isProfileAllowed(params: { allowProfiles: string[]; profile?: string | null }) {
+function isProfileAllowed(params: {
+  allowProfiles: string[];
+  profile?: string | null;
+}) {
   const { allowProfiles, profile } = params;
   if (!allowProfiles.length) {
     return true;
@@ -77,7 +82,9 @@ function isProfileAllowed(params: { allowProfiles: string[]; profile?: string | 
 function collectBrowserProxyPaths(payload: unknown): string[] {
   const paths = new Set<string>();
   const obj =
-    typeof payload === "object" && payload !== null ? (payload as Record<string, unknown>) : null;
+    typeof payload === "object" && payload !== null
+      ? (payload as Record<string, unknown>)
+      : null;
   if (!obj) {
     return [];
   }
@@ -97,7 +104,9 @@ function collectBrowserProxyPaths(payload: unknown): string[] {
   return [...paths];
 }
 
-async function readBrowserProxyFile(filePath: string): Promise<BrowserProxyFile | null> {
+async function readBrowserProxyFile(
+  filePath: string,
+): Promise<BrowserProxyFile | null> {
   const stat = await fsPromises.stat(filePath).catch(() => null);
   if (!stat || !stat.isFile()) {
     return null;
@@ -119,7 +128,9 @@ function decodeParams<T>(raw?: string | null): T {
   return JSON.parse(raw) as T;
 }
 
-export async function runBrowserProxyCommand(paramsJSON?: string | null): Promise<string> {
+export async function runBrowserProxyCommand(
+  paramsJSON?: string | null,
+): Promise<string> {
   const params = decodeParams<BrowserProxyParams>(paramsJSON);
   const pathValue = typeof params.path === "string" ? params.path.trim() : "";
   if (!pathValue) {
@@ -133,22 +144,34 @@ export async function runBrowserProxyCommand(paramsJSON?: string | null): Promis
   await ensureBrowserControlService();
   const cfg = loadConfig();
   const resolved = resolveBrowserConfig(cfg.browser, cfg);
-  const requestedProfile = typeof params.profile === "string" ? params.profile.trim() : "";
+  const requestedProfile =
+    typeof params.profile === "string" ? params.profile.trim() : "";
   const allowedProfiles = proxyConfig.allowProfiles;
   if (allowedProfiles.length > 0) {
     if (pathValue !== "/profiles") {
       const profileToCheck = requestedProfile || resolved.defaultProfile;
-      if (!isProfileAllowed({ allowProfiles: allowedProfiles, profile: profileToCheck })) {
+      if (
+        !isProfileAllowed({
+          allowProfiles: allowedProfiles,
+          profile: profileToCheck,
+        })
+      ) {
         throw new Error("INVALID_REQUEST: browser profile not allowed");
       }
     } else if (requestedProfile) {
-      if (!isProfileAllowed({ allowProfiles: allowedProfiles, profile: requestedProfile })) {
+      if (
+        !isProfileAllowed({
+          allowProfiles: allowedProfiles,
+          profile: requestedProfile,
+        })
+      ) {
         throw new Error("INVALID_REQUEST: browser profile not allowed");
       }
     }
   }
 
-  const method = typeof params.method === "string" ? params.method.toUpperCase() : "GET";
+  const method =
+    typeof params.method === "string" ? params.method.toUpperCase() : "GET";
   const path = pathValue.startsWith("/") ? pathValue : `/${pathValue}`;
   const body = params.body;
   const query: Record<string, unknown> = {};
@@ -163,11 +186,14 @@ export async function runBrowserProxyCommand(paramsJSON?: string | null): Promis
     query[key] = typeof value === "string" ? value : String(value);
   }
 
-  const dispatcher = createBrowserRouteDispatcher(createBrowserControlContext());
+  const dispatcher = createBrowserRouteDispatcher(
+    createBrowserControlContext(),
+  );
   const response = await withTimeout(
     (signal) =>
       dispatcher.dispatch({
-        method: method === "DELETE" ? "DELETE" : method === "POST" ? "POST" : "GET",
+        method:
+          method === "DELETE" ? "DELETE" : method === "POST" ? "POST" : "GET",
         path,
         query,
         body,
@@ -178,7 +204,9 @@ export async function runBrowserProxyCommand(paramsJSON?: string | null): Promis
   );
   if (response.status >= 400) {
     const message =
-      response.body && typeof response.body === "object" && "error" in response.body
+      response.body &&
+      typeof response.body === "object" &&
+      "error" in response.body
         ? String((response.body as { error?: unknown }).error)
         : `HTTP ${response.status}`;
     throw new Error(message);
@@ -187,7 +215,9 @@ export async function runBrowserProxyCommand(paramsJSON?: string | null): Promis
   const result = response.body;
   if (allowedProfiles.length > 0 && path === "/profiles") {
     const obj =
-      typeof result === "object" && result !== null ? (result as Record<string, unknown>) : {};
+      typeof result === "object" && result !== null
+        ? (result as Record<string, unknown>)
+        : {};
     const profiles = Array.isArray(obj.profiles) ? obj.profiles : [];
     obj.profiles = profiles.filter((entry) => {
       if (!entry || typeof entry !== "object") {
@@ -210,9 +240,12 @@ export async function runBrowserProxyCommand(paramsJSON?: string | null): Promis
           }
           return file;
         } catch (err) {
-          throw new Error(`browser proxy file read failed for ${p}: ${String(err)}`, {
-            cause: err,
-          });
+          throw new Error(
+            `browser proxy file read failed for ${p}: ${String(err)}`,
+            {
+              cause: err,
+            },
+          );
         }
       }),
     );

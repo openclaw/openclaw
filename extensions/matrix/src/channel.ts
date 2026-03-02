@@ -14,7 +14,10 @@ import {
 } from "openclaw/plugin-sdk";
 import { matrixMessageActions } from "./actions.js";
 import { MatrixConfigSchema } from "./config-schema.js";
-import { listMatrixDirectoryGroupsLive, listMatrixDirectoryPeersLive } from "./directory-live.js";
+import {
+  listMatrixDirectoryGroupsLive,
+  listMatrixDirectoryPeersLive,
+} from "./directory-live.js";
 import {
   resolveMatrixGroupRequireMention,
   resolveMatrixGroupToolPolicy,
@@ -27,7 +30,10 @@ import {
   type ResolvedMatrixAccount,
 } from "./matrix/accounts.js";
 import { resolveMatrixAuth } from "./matrix/client.js";
-import { normalizeMatrixAllowList, normalizeMatrixUserId } from "./matrix/monitor/allowlist.js";
+import {
+  normalizeMatrixAllowList,
+  normalizeMatrixUserId,
+} from "./matrix/monitor/allowlist.js";
 import { probeMatrix } from "./matrix/probe.js";
 import { sendMessageMatrix } from "./matrix/send.js";
 import { matrixOnboardingAdapter } from "./onboarding.js";
@@ -116,7 +122,8 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
   configSchema: buildChannelConfigSchema(MatrixConfigSchema),
   config: {
     listAccountIds: (cfg) => listMatrixAccountIds(cfg as CoreConfig),
-    resolveAccount: (cfg, accountId) => resolveMatrixAccount({ cfg: cfg as CoreConfig, accountId }),
+    resolveAccount: (cfg, accountId) =>
+      resolveMatrixAccount({ cfg: cfg as CoreConfig, accountId }),
     defaultAccountId: (cfg) => resolveDefaultMatrixAccountId(cfg as CoreConfig),
     setAccountEnabled: ({ cfg, accountId, enabled }) =>
       setAccountEnabledInConfigSection({
@@ -150,8 +157,13 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
       baseUrl: account.homeserver,
     }),
     resolveAllowFrom: ({ cfg, accountId }) => {
-      const matrixConfig = resolveMatrixAccountConfig({ cfg: cfg as CoreConfig, accountId });
-      return (matrixConfig.dm?.allowFrom ?? []).map((entry: string | number) => String(entry));
+      const matrixConfig = resolveMatrixAccountConfig({
+        cfg: cfg as CoreConfig,
+        accountId,
+      });
+      return (matrixConfig.dm?.allowFrom ?? []).map((entry: string | number) =>
+        String(entry),
+      );
     },
     formatAllowFrom: ({ allowFrom }) => normalizeMatrixAllowList(allowFrom),
   },
@@ -174,7 +186,8 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
     collectWarnings: ({ account, cfg }) => {
       const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg as CoreConfig);
       const { groupPolicy } = resolveAllowlistProviderRuntimeGroupPolicy({
-        providerConfigPresent: (cfg as CoreConfig).channels?.matrix !== undefined,
+        providerConfigPresent:
+          (cfg as CoreConfig).channels?.matrix !== undefined,
         groupPolicy: account.config.groupPolicy,
         defaultGroupPolicy,
       });
@@ -192,13 +205,16 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
   },
   threading: {
     resolveReplyToMode: ({ cfg, accountId }) =>
-      resolveMatrixAccountConfig({ cfg: cfg as CoreConfig, accountId }).replyToMode ?? "off",
+      resolveMatrixAccountConfig({ cfg: cfg as CoreConfig, accountId })
+        .replyToMode ?? "off",
     buildToolContext: ({ context, hasRepliedRef }) => {
       const currentTarget = context.To;
       return {
         currentChannelId: currentTarget?.trim() || undefined,
         currentThreadTs:
-          context.MessageThreadId != null ? String(context.MessageThreadId) : context.ReplyToId,
+          context.MessageThreadId != null
+            ? String(context.MessageThreadId)
+            : context.ReplyToId,
         hasRepliedRef,
       };
     },
@@ -222,7 +238,10 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
   directory: {
     self: async () => null,
     listPeers: async ({ cfg, accountId, query, limit }) => {
-      const account = resolveMatrixAccount({ cfg: cfg as CoreConfig, accountId });
+      const account = resolveMatrixAccount({
+        cfg: cfg as CoreConfig,
+        accountId,
+      });
       const q = query?.trim().toLowerCase() || "";
       const ids = new Set<string>();
 
@@ -258,7 +277,9 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
         .filter(Boolean)
         .map((raw) => {
           const lowered = raw.toLowerCase();
-          const cleaned = lowered.startsWith("user:") ? raw.slice("user:".length).trim() : raw;
+          const cleaned = lowered.startsWith("user:")
+            ? raw.slice("user:".length).trim()
+            : raw;
           if (cleaned.startsWith("@")) {
             return `user:${cleaned}`;
           }
@@ -272,12 +293,17 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
           return {
             kind: "user",
             id,
-            ...(incomplete ? { name: "incomplete id; expected @user:server" } : {}),
+            ...(incomplete
+              ? { name: "incomplete id; expected @user:server" }
+              : {}),
           };
         });
     },
     listGroups: async ({ cfg, accountId, query, limit }) => {
-      const account = resolveMatrixAccount({ cfg: cfg as CoreConfig, accountId });
+      const account = resolveMatrixAccount({
+        cfg: cfg as CoreConfig,
+        accountId,
+      });
       const q = query?.trim().toLowerCase() || "";
       const groups = account.config.groups ?? account.config.rooms ?? {};
       const ids = Object.keys(groups)
@@ -381,7 +407,8 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
     },
     collectStatusIssues: (accounts) =>
       accounts.flatMap((account) => {
-        const lastError = typeof account.lastError === "string" ? account.lastError.trim() : "";
+        const lastError =
+          typeof account.lastError === "string" ? account.lastError.trim() : "";
         if (!lastError) {
           return [];
         }
@@ -395,7 +422,9 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
         ];
       }),
     buildChannelSummary: ({ snapshot }) =>
-      buildProbeChannelStatusSummary(snapshot, { baseUrl: snapshot.baseUrl ?? null }),
+      buildProbeChannelStatusSummary(snapshot, {
+        baseUrl: snapshot.baseUrl ?? null,
+      }),
     probeAccount: async ({ account, timeoutMs, cfg }) => {
       try {
         const auth = await resolveMatrixAuth({
@@ -439,7 +468,9 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
         accountId: account.accountId,
         baseUrl: account.homeserver,
       });
-      ctx.log?.info(`[${account.accountId}] starting provider (${account.homeserver ?? "matrix"})`);
+      ctx.log?.info(
+        `[${account.accountId}] starting provider (${account.homeserver ?? "matrix"})`,
+      );
 
       // Serialize startup: wait for any previous startup to complete import phase.
       // This works around a race condition with concurrent dynamic imports.

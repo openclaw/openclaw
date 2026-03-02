@@ -7,6 +7,9 @@ export function generatePairingToken(): string {
   return randomBytes(PAIRING_TOKEN_BYTES).toString("base64url");
 }
 
-export function verifyPairingToken(provided: string, expected: string): boolean {
+export function verifyPairingToken(
+  provided: string,
+  expected: string,
+): boolean {
   return safeEqualSecret(provided, expected);
 }

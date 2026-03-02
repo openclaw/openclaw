@@ -16,7 +16,8 @@ import {
 } from "./doctor.e2e-harness.js";
 import "./doctor.fast-path-mocks.js";
 
-const DOCTOR_MIGRATION_TIMEOUT_MS = process.platform === "win32" ? 60_000 : 45_000;
+const DOCTOR_MIGRATION_TIMEOUT_MS =
+  process.platform === "win32" ? 60_000 : 45_000;
 const { doctorCommand } = await import("./doctor.js");
 
 describe("doctor command", () => {
@@ -48,7 +49,10 @@ describe("doctor command", () => {
     await doctorCommand(runtime, { repair: true });
 
     expect(writeConfigFile).toHaveBeenCalledTimes(1);
-    const written = writeConfigFile.mock.calls[0]?.[0] as Record<string, unknown>;
+    const written = writeConfigFile.mock.calls[0]?.[0] as Record<
+      string,
+      unknown
+    >;
     const gateway = (written.gateway as Record<string, unknown>) ?? {};
     const auth = gateway.auth as Record<string, unknown> | undefined;
     const remote = gateway.remote as Record<string, unknown>;
@@ -111,10 +115,14 @@ describe("doctor command", () => {
 
     await doctorCommand(createDoctorRuntime());
 
-    expect(runGatewayUpdate).toHaveBeenCalledWith(expect.objectContaining({ cwd: root }));
+    expect(runGatewayUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ cwd: root }),
+    );
     expect(readConfigFileSnapshot).not.toHaveBeenCalled();
     expect(
-      note.mock.calls.some(([, title]) => typeof title === "string" && title === "Update result"),
+      note.mock.calls.some(
+        ([, title]) => typeof title === "string" && title === "Update result",
+      ),
     ).toBe(true);
   });
 });

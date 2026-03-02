@@ -16,8 +16,10 @@ export function parseStandardSetUnsetSlashCommand<T>(params: {
     invalidMessage: params.invalidMessage,
     usageMessage: params.usageMessage,
     onKnownAction: params.onKnownAction,
-    onSet: params.onSet ?? ((path, value) => ({ action: "set", path, value }) as T),
+    onSet:
+      params.onSet ?? ((path, value) => ({ action: "set", path, value }) as T),
     onUnset: params.onUnset ?? ((path) => ({ action: "unset", path }) as T),
-    onError: params.onError ?? ((message) => ({ action: "error", message }) as T),
+    onError:
+      params.onError ?? ((message) => ({ action: "error", message }) as T),
   });
 }

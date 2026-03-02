@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { JsonSchema } from "../../views/config-form.shared.ts";
 import { coerceFormValues } from "./form-coerce.ts";
-import { cloneConfigObject, serializeConfigForm, setPathValue } from "./form-utils.ts";
+import {
+  cloneConfigObject,
+  serializeConfigForm,
+  setPathValue,
+} from "./form-utils.ts";
 
 /**
  * Minimal model provider schema matching the Zod-generated JSON Schema for
@@ -80,7 +84,12 @@ function makeConfigWithProvider(): Record<string, unknown> {
               name: "Grok 4",
               contextWindow: 131072,
               maxTokens: 8192,
-              cost: { input: 0.5, output: 1.0, cacheRead: 0.1, cacheWrite: 0.2 },
+              cost: {
+                input: 0.5,
+                output: 1.0,
+                cacheRead: 0.1,
+                cacheWrite: 0.2,
+              },
             },
           ],
         },
@@ -89,7 +98,9 @@ function makeConfigWithProvider(): Record<string, unknown> {
   };
 }
 
-function getFirstXaiModel(payload: Record<string, unknown>): Record<string, unknown> {
+function getFirstXaiModel(
+  payload: Record<string, unknown>,
+): Record<string, unknown> {
   const model = payload.models as Record<string, unknown>;
   const providers = model.providers as Record<string, unknown>;
   const xai = providers.xai as Record<string, unknown>;
@@ -109,7 +120,10 @@ describe("form-utils preserves numeric types", () => {
     const form = makeConfigWithProvider();
     const raw = serializeConfigForm(form);
     const parsed = JSON.parse(raw);
-    const model = parsed.models.providers.xai.models[0] as Record<string, unknown>;
+    const model = parsed.models.providers.xai.models[0] as Record<
+      string,
+      unknown
+    >;
     const cost = model.cost as Record<string, unknown>;
 
     expectNumericModelCore(model);
@@ -142,7 +156,12 @@ describe("coerceFormValues", () => {
                 name: "Grok 4",
                 contextWindow: "131072",
                 maxTokens: "8192",
-                cost: { input: "0.5", output: "1.0", cacheRead: "0.1", cacheWrite: "0.2" },
+                cost: {
+                  input: "0.5",
+                  output: "1.0",
+                  cacheRead: "0.1",
+                  cacheWrite: "0.2",
+                },
               },
             ],
           },
@@ -150,7 +169,10 @@ describe("coerceFormValues", () => {
       },
     };
 
-    const coerced = coerceFormValues(form, topLevelSchema) as Record<string, unknown>;
+    const coerced = coerceFormValues(form, topLevelSchema) as Record<
+      string,
+      unknown
+    >;
     const first = getFirstXaiModel(coerced);
 
     expectNumericModelCore(first);
@@ -168,7 +190,10 @@ describe("coerceFormValues", () => {
 
   it("preserves already-correct numeric values", () => {
     const form = makeConfigWithProvider();
-    const coerced = coerceFormValues(form, topLevelSchema) as Record<string, unknown>;
+    const coerced = coerceFormValues(form, topLevelSchema) as Record<
+      string,
+      unknown
+    >;
     const first = getFirstXaiModel(coerced);
     expect(typeof first.maxTokens).toBe("number");
     expect(first.maxTokens).toBe(8192);
@@ -192,7 +217,10 @@ describe("coerceFormValues", () => {
       },
     };
 
-    const coerced = coerceFormValues(form, topLevelSchema) as Record<string, unknown>;
+    const coerced = coerceFormValues(form, topLevelSchema) as Record<
+      string,
+      unknown
+    >;
     const first = getFirstXaiModel(coerced);
 
     expect(first.maxTokens).toBe("not-a-number");
@@ -216,7 +244,10 @@ describe("coerceFormValues", () => {
       },
     };
 
-    const coerced = coerceFormValues(form, topLevelSchema) as Record<string, unknown>;
+    const coerced = coerceFormValues(form, topLevelSchema) as Record<
+      string,
+      unknown
+    >;
     const first = getFirstXaiModel(coerced);
     expect(first.reasoning).toBe(true);
   });
@@ -239,7 +270,10 @@ describe("coerceFormValues", () => {
       },
     };
 
-    const coerced = coerceFormValues(form, topLevelSchema) as Record<string, unknown>;
+    const coerced = coerceFormValues(form, topLevelSchema) as Record<
+      string,
+      unknown
+    >;
     const first = getFirstXaiModel(coerced);
     expect(first.maxTokens).toBeUndefined();
   });
@@ -358,7 +392,10 @@ describe("coerceFormValues", () => {
           anyOf: [
             {
               type: "array",
-              items: { type: "object", properties: { count: { type: "number" } } },
+              items: {
+                type: "object",
+                properties: { count: { type: "number" } },
+              },
             },
             { type: "null" },
           ],

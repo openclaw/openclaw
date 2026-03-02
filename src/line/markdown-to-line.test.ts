@@ -89,7 +89,9 @@ And more text.`;
     const withLanguageResult = extractCodeBlocks(withLanguage);
     expect(withLanguageResult.codeBlocks).toHaveLength(1);
     expect(withLanguageResult.codeBlocks[0].language).toBe("javascript");
-    expect(withLanguageResult.codeBlocks[0].code).toBe("const x = 1;\nconsole.log(x);");
+    expect(withLanguageResult.codeBlocks[0].code).toBe(
+      "const x = 1;\nconsole.log(x);",
+    );
     expect(withLanguageResult.textWithoutCode).toContain("Here is some code:");
     expect(withLanguageResult.textWithoutCode).toContain("And more text.");
     expect(withLanguageResult.textWithoutCode).not.toContain("```");
@@ -120,7 +122,8 @@ echo "world"
 
 describe("extractLinks", () => {
   it("extracts markdown links", () => {
-    const text = "Check out [Google](https://google.com) and [GitHub](https://github.com).";
+    const text =
+      "Check out [Google](https://google.com) and [GitHub](https://github.com).";
 
     const { links, textWithLinks } = extractLinks(text);
 
@@ -138,10 +141,18 @@ describe("stripMarkdown", () => {
       ["strips bold __", "This is __bold__ text", "This is bold text"],
       ["strips italic *", "This is *italic* text", "This is italic text"],
       ["strips italic _", "This is _italic_ text", "This is italic text"],
-      ["strips strikethrough", "This is ~~deleted~~ text", "This is deleted text"],
+      [
+        "strips strikethrough",
+        "This is ~~deleted~~ text",
+        "This is deleted text",
+      ],
       ["removes hr ---", "Above\n---\nBelow", "Above\n\nBelow"],
       ["removes hr ***", "Above\n***\nBelow", "Above\n\nBelow"],
-      ["strips inline code markers", "Use `const` keyword", "Use const keyword"],
+      [
+        "strips inline code markers",
+        "Use `const` keyword",
+        "Use const keyword",
+      ],
     ] as const;
     for (const [name, input, expected] of cases) {
       expect(stripMarkdown(input), name).toBe(expected);
@@ -179,9 +190,13 @@ describe("convertTableToFlexBubble", () => {
 
     const bubble = convertTableToFlexBubble(table);
     const body = bubble.body as {
-      contents: Array<{ contents?: Array<{ contents?: Array<{ text: string }> }> }>;
+      contents: Array<{
+        contents?: Array<{ contents?: Array<{ text: string }> }>;
+      }>;
     };
-    const rowsBox = body.contents[2] as { contents: Array<{ contents: Array<{ text: string }> }> };
+    const rowsBox = body.contents[2] as {
+      contents: Array<{ contents: Array<{ text: string }> }>;
+    };
 
     expect(rowsBox.contents[0].contents[0].text).toBe("-");
     expect(rowsBox.contents[0].contents[1].text).toBe("-");
@@ -197,8 +212,12 @@ describe("convertTableToFlexBubble", () => {
     const body = bubble.body as {
       contents: Array<{ contents?: Array<{ text: string; weight?: string }> }>;
     };
-    const headerRow = body.contents[0] as { contents: Array<{ text: string; weight?: string }> };
-    const dataRow = body.contents[2] as { contents: Array<{ text: string; weight?: string }> };
+    const headerRow = body.contents[0] as {
+      contents: Array<{ text: string; weight?: string }>;
+    };
+    const dataRow = body.contents[2] as {
+      contents: Array<{ text: string; weight?: string }>;
+    };
 
     expect(headerRow.contents[0].text).toBe("Name");
     expect(headerRow.contents[0].weight).toBe("bold");
@@ -232,7 +251,9 @@ describe("convertCodeBlockToFlexBubble", () => {
 
     const bubble = convertCodeBlockToFlexBubble(block);
 
-    const body = bubble.body as { contents: Array<{ contents: Array<{ text: string }> }> };
+    const body = bubble.body as {
+      contents: Array<{ contents: Array<{ text: string }> }>;
+    };
     const codeText = body.contents[1].contents[0].text;
     expect(codeText.length).toBeLessThan(longCode.length);
     expect(codeText).toContain("...");

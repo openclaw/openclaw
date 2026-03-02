@@ -8,18 +8,25 @@ export type RegisteredWebhookTarget<T> = {
 };
 
 export type RegisterWebhookTargetOptions<T extends { path: string }> = {
-  onFirstPathTarget?: (params: { path: string; target: T }) => void | (() => void);
+  onFirstPathTarget?: (params: {
+    path: string;
+    target: T;
+  }) => void | (() => void);
   onLastPathTargetRemoved?: (params: { path: string }) => void;
 };
 
-type RegisterPluginHttpRouteParams = Parameters<typeof registerPluginHttpRoute>[0];
+type RegisterPluginHttpRouteParams = Parameters<
+  typeof registerPluginHttpRoute
+>[0];
 
 export type RegisterWebhookPluginRouteOptions = Omit<
   RegisterPluginHttpRouteParams,
   "path" | "fallbackPath"
 >;
 
-export function registerWebhookTargetWithPluginRoute<T extends { path: string }>(params: {
+export function registerWebhookTargetWithPluginRoute<
+  T extends { path: string },
+>(params: {
   targetsByPath: Map<string, T[]>;
   target: T;
   route: RegisterWebhookPluginRouteOptions;
@@ -36,9 +43,14 @@ export function registerWebhookTargetWithPluginRoute<T extends { path: string }>
   });
 }
 
-const pathTeardownByTargetMap = new WeakMap<Map<string, unknown[]>, Map<string, () => void>>();
+const pathTeardownByTargetMap = new WeakMap<
+  Map<string, unknown[]>,
+  Map<string, () => void>
+>();
 
-function getPathTeardownMap<T>(targetsByPath: Map<string, T[]>): Map<string, () => void> {
+function getPathTeardownMap<T>(
+  targetsByPath: Map<string, T[]>,
+): Map<string, () => void> {
   const mapKey = targetsByPath as unknown as Map<string, unknown[]>;
   const existing = pathTeardownByTargetMap.get(mapKey);
   if (existing) {
@@ -77,7 +89,9 @@ export function registerWebhookTarget<T extends { path: string }>(
     }
     isActive = false;
 
-    const updated = (targetsByPath.get(key) ?? []).filter((entry) => entry !== normalizedTarget);
+    const updated = (targetsByPath.get(key) ?? []).filter(
+      (entry) => entry !== normalizedTarget,
+    );
     if (updated.length > 0) {
       targetsByPath.set(key, updated);
       return;
@@ -152,7 +166,10 @@ export async function resolveSingleWebhookTargetAsync<T>(
   return { kind: "single", target: matched };
 }
 
-export function rejectNonPostWebhookRequest(req: IncomingMessage, res: ServerResponse): boolean {
+export function rejectNonPostWebhookRequest(
+  req: IncomingMessage,
+  res: ServerResponse,
+): boolean {
   if (req.method === "POST") {
     return false;
   }

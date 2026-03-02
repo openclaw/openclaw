@@ -27,7 +27,8 @@ describe("npm-resolution helpers", () => {
     });
     expect(result).toEqual({
       recordSpec: "@openclaw/plugin-alpha@latest",
-      pinWarning: "Could not resolve exact npm version for --pin; storing original npm spec.",
+      pinWarning:
+        "Could not resolve exact npm version for --pin; storing original npm spec.",
     });
   });
 
@@ -135,7 +136,9 @@ describe("npm-resolution helpers", () => {
       shasum: undefined,
       resolvedAt: undefined,
     });
-    expect(logs).toEqual(["Pinned npm install record to @openclaw/plugin-alpha@1.2.3."]);
+    expect(logs).toEqual([
+      "Pinned npm install record to @openclaw/plugin-alpha@1.2.3.",
+    ]);
     expect(warns).toEqual([]);
   });
 

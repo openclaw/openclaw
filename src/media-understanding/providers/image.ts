@@ -3,9 +3,15 @@ import { complete } from "@mariozechner/pi-ai";
 import { minimaxUnderstandImage } from "../../agents/minimax-vlm.js";
 import { getApiKeyForModel, requireApiKey } from "../../agents/model-auth.js";
 import { ensureOpenClawModelsJson } from "../../agents/models-config.js";
-import { discoverAuthStorage, discoverModels } from "../../agents/pi-model-discovery.js";
+import {
+  discoverAuthStorage,
+  discoverModels,
+} from "../../agents/pi-model-discovery.js";
 import { coerceImageAssistantText } from "../../agents/tools/image-tool.helpers.js";
-import type { ImageDescriptionRequest, ImageDescriptionResult } from "../types.js";
+import type {
+  ImageDescriptionRequest,
+  ImageDescriptionResult,
+} from "../types.js";
 
 export async function describeImageWithModel(
   params: ImageDescriptionRequest,
@@ -13,12 +19,17 @@ export async function describeImageWithModel(
   await ensureOpenClawModelsJson(params.cfg, params.agentDir);
   const authStorage = discoverAuthStorage(params.agentDir);
   const modelRegistry = discoverModels(authStorage, params.agentDir);
-  const model = modelRegistry.find(params.provider, params.model) as Model<Api> | null;
+  const model = modelRegistry.find(
+    params.provider,
+    params.model,
+  ) as Model<Api> | null;
   if (!model) {
     throw new Error(`Unknown model: ${params.provider}/${params.model}`);
   }
   if (!model.input?.includes("image")) {
-    throw new Error(`Model does not support images: ${params.provider}/${params.model}`);
+    throw new Error(
+      `Model does not support images: ${params.provider}/${params.model}`,
+    );
   }
   const apiKeyInfo = await getApiKeyForModel({
     model,
@@ -47,7 +58,11 @@ export async function describeImageWithModel(
         role: "user",
         content: [
           { type: "text", text: params.prompt ?? "Describe the image." },
-          { type: "image", data: base64, mimeType: params.mime ?? "image/jpeg" },
+          {
+            type: "image",
+            data: base64,
+            mimeType: params.mime ?? "image/jpeg",
+          },
         ],
         timestamp: Date.now(),
       },

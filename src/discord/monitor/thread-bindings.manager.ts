@@ -6,7 +6,10 @@ import {
   type BindingTargetKind,
   type SessionBindingRecord,
 } from "../../infra/outbound/session-binding-service.js";
-import { normalizeAccountId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import {
+  normalizeAccountId,
+  resolveAgentIdFromSessionKey,
+} from "../../routing/session-key.js";
 import { createDiscordRestClient } from "../client.js";
 import {
   createThreadForBinding,
@@ -203,7 +206,8 @@ export function createThreadBindingManager(
     params.maxAgeMs,
     DEFAULT_THREAD_BINDING_MAX_AGE_MS,
   );
-  const resolveCurrentToken = () => getThreadBindingToken(accountId) ?? params.token;
+  const resolveCurrentToken = () =>
+    getThreadBindingToken(accountId) ?? params.token;
 
   let sweepTimer: NodeJS.Timeout | null = null;
 
@@ -239,7 +243,9 @@ export function createThreadBindingManager(
         .filter((entry): entry is ThreadBindingRecord => Boolean(entry));
     },
     listBindings: () =>
-      [...BINDINGS_BY_THREAD_ID.values()].filter((entry) => entry.accountId === accountId),
+      [...BINDINGS_BY_THREAD_ID.values()].filter(
+        (entry) => entry.accountId === accountId,
+      ),
     touchThread: (touchParams) => {
       const key = resolveBindingRecordKey({
         accountId,
@@ -312,7 +318,10 @@ export function createThreadBindingManager(
         return null;
       }
 
-      const targetKind = normalizeTargetKind(bindParams.targetKind, targetSessionKey);
+      const targetKind = normalizeTargetKind(
+        bindParams.targetKind,
+        targetSessionKey,
+      );
       let webhookId = bindParams.webhookId?.trim() || "";
       let webhookToken = bindParams.webhookToken?.trim() || "";
       if (!webhookId || !webhookToken) {
@@ -337,7 +346,9 @@ export function createThreadBindingManager(
         threadId,
         targetKind,
         targetSessionKey,
-        agentId: bindParams.agentId?.trim() || resolveAgentIdFromSessionKey(targetSessionKey),
+        agentId:
+          bindParams.agentId?.trim() ||
+          resolveAgentIdFromSessionKey(targetSessionKey),
         label: bindParams.label?.trim() || undefined,
         webhookId: webhookId || undefined,
         webhookToken: webhookToken || undefined,
@@ -394,7 +405,11 @@ export function createThreadBindingManager(
         });
         // Use bot send path for farewell messages so unbound threads don't process
         // webhook echoes as fresh inbound turns when allowBots is enabled.
-        void maybeSendBindingMessage({ record: removed, text: farewell, preferWebhook: false });
+        void maybeSendBindingMessage({
+          record: removed,
+          text: farewell,
+          preferWebhook: false,
+        });
       }
       return removed;
     },
@@ -477,10 +492,16 @@ export function createThreadBindingManager(
             at: number;
           }> = [];
           if (inactivityExpiresAt != null && now >= inactivityExpiresAt) {
-            expirationCandidates.push({ reason: "idle-expired", at: inactivityExpiresAt });
+            expirationCandidates.push({
+              reason: "idle-expired",
+              at: inactivityExpiresAt,
+            });
           }
           if (maxAgeExpiresAt != null && now >= maxAgeExpiresAt) {
-            expirationCandidates.push({ reason: "max-age-expired", at: maxAgeExpiresAt });
+            expirationCandidates.push({
+              reason: "max-age-expired",
+              at: maxAgeExpiresAt,
+            });
           }
           if (expirationCandidates.length > 0) {
             expirationCandidates.sort((a, b) => a.at - b.at);
@@ -558,19 +579,28 @@ export function createThreadBindingManager(
       const placement = input.placement === "child" ? "child" : "current";
       const metadata = input.metadata ?? {};
       const label =
-        typeof metadata.label === "string" ? metadata.label.trim() || undefined : undefined;
+        typeof metadata.label === "string"
+          ? metadata.label.trim() || undefined
+          : undefined;
       const threadName =
         typeof metadata.threadName === "string"
           ? metadata.threadName.trim() || undefined
           : undefined;
       const introText =
-        typeof metadata.introText === "string" ? metadata.introText.trim() || undefined : undefined;
+        typeof metadata.introText === "string"
+          ? metadata.introText.trim() || undefined
+          : undefined;
       const boundBy =
-        typeof metadata.boundBy === "string" ? metadata.boundBy.trim() || undefined : undefined;
+        typeof metadata.boundBy === "string"
+          ? metadata.boundBy.trim() || undefined
+          : undefined;
       const agentId =
-        typeof metadata.agentId === "string" ? metadata.agentId.trim() || undefined : undefined;
+        typeof metadata.agentId === "string"
+          ? metadata.agentId.trim() || undefined
+          : undefined;
       let threadId: string | undefined;
-      let channelId = input.conversation.parentConversationId?.trim() || undefined;
+      let channelId =
+        input.conversation.parentConversationId?.trim() || undefined;
       let createThread = false;
 
       if (placement === "child") {
@@ -608,13 +638,17 @@ export function createThreadBindingManager(
     listBySession: (targetSessionKey) =>
       manager
         .listBySessionKey(targetSessionKey)
-        .map((entry) => toSessionBindingRecord(entry, { idleTimeoutMs, maxAgeMs })),
+        .map((entry) =>
+          toSessionBindingRecord(entry, { idleTimeoutMs, maxAgeMs }),
+        ),
     resolveByConversation: (ref) => {
       if (ref.channel !== "discord") {
         return null;
       }
       const binding = manager.getByThreadId(ref.conversationId);
-      return binding ? toSessionBindingRecord(binding, { idleTimeoutMs, maxAgeMs }) : null;
+      return binding
+        ? toSessionBindingRecord(binding, { idleTimeoutMs, maxAgeMs })
+        : null;
     },
     touch: (bindingId, at) => {
       const threadId = resolveThreadIdFromBindingId({ accountId, bindingId });
@@ -629,7 +663,9 @@ export function createThreadBindingManager(
           targetSessionKey: input.targetSessionKey,
           reason: input.reason,
         });
-        return removed.map((entry) => toSessionBindingRecord(entry, { idleTimeoutMs, maxAgeMs }));
+        return removed.map((entry) =>
+          toSessionBindingRecord(entry, { idleTimeoutMs, maxAgeMs }),
+        );
       }
       const threadId = resolveThreadIdFromBindingId({
         accountId,
@@ -642,7 +678,9 @@ export function createThreadBindingManager(
         threadId,
         reason: input.reason,
       });
-      return removed ? [toSessionBindingRecord(removed, { idleTimeoutMs, maxAgeMs })] : [];
+      return removed
+        ? [toSessionBindingRecord(removed, { idleTimeoutMs, maxAgeMs })]
+        : [];
     },
   });
 
@@ -650,11 +688,15 @@ export function createThreadBindingManager(
   return manager;
 }
 
-export function createNoopThreadBindingManager(accountId?: string): ThreadBindingManager {
+export function createNoopThreadBindingManager(
+  accountId?: string,
+): ThreadBindingManager {
   return createNoopManager(accountId);
 }
 
-export function getThreadBindingManager(accountId?: string): ThreadBindingManager | null {
+export function getThreadBindingManager(
+  accountId?: string,
+): ThreadBindingManager | null {
   const normalized = normalizeAccountId(accountId);
   return MANAGERS_BY_ACCOUNT_ID.get(normalized) ?? null;
 }

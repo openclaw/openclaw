@@ -2,7 +2,10 @@ import { Type } from "@sinclair/typebox";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import { ACP_SPAWN_MODES, spawnAcpDirect } from "../acp-spawn.js";
 import { optionalStringEnum } from "../schema/typebox.js";
-import { SUBAGENT_SPAWN_MODES, spawnSubagentDirect } from "../subagent-spawn.js";
+import {
+  SUBAGENT_SPAWN_MODES,
+  spawnSubagentDirect,
+} from "../subagent-spawn.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readStringParam, ToolInputError } from "./common.js";
 
@@ -42,7 +45,9 @@ const SessionsSpawnToolSchema = Type.Object({
       Type.Object({
         name: Type.String(),
         content: Type.String({ maxLength: 6_700_000 }),
-        encoding: Type.Optional(optionalStringEnum(["utf8", "base64"] as const)),
+        encoding: Type.Optional(
+          optionalStringEnum(["utf8", "base64"] as const),
+        ),
         mimeType: Type.Optional(Type.String()),
       }),
       { maxItems: 50 },
@@ -78,8 +83,8 @@ export function createSessionsSpawnTool(opts?: {
     parameters: SessionsSpawnToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
-      const unsupportedParam = UNSUPPORTED_SESSIONS_SPAWN_PARAM_KEYS.find((key) =>
-        Object.hasOwn(params, key),
+      const unsupportedParam = UNSUPPORTED_SESSIONS_SPAWN_PARAM_KEYS.find(
+        (key) => Object.hasOwn(params, key),
       );
       if (unsupportedParam) {
         throw new ToolInputError(
@@ -93,9 +98,14 @@ export function createSessionsSpawnTool(opts?: {
       const modelOverride = readStringParam(params, "model");
       const thinkingOverrideRaw = readStringParam(params, "thinking");
       const cwd = readStringParam(params, "cwd");
-      const mode = params.mode === "run" || params.mode === "session" ? params.mode : undefined;
+      const mode =
+        params.mode === "run" || params.mode === "session"
+          ? params.mode
+          : undefined;
       const cleanup =
-        params.cleanup === "keep" || params.cleanup === "delete" ? params.cleanup : "keep";
+        params.cleanup === "keep" || params.cleanup === "delete"
+          ? params.cleanup
+          : "keep";
       const sandbox = params.sandbox === "require" ? "require" : "inherit";
       // Back-compat: older callers used timeoutSeconds for this tool.
       const timeoutSecondsCandidate =
@@ -105,7 +115,8 @@ export function createSessionsSpawnTool(opts?: {
             ? params.timeoutSeconds
             : undefined;
       const runTimeoutSeconds =
-        typeof timeoutSecondsCandidate === "number" && Number.isFinite(timeoutSecondsCandidate)
+        typeof timeoutSecondsCandidate === "number" &&
+        Number.isFinite(timeoutSecondsCandidate)
           ? Math.max(0, Math.floor(timeoutSecondsCandidate))
           : undefined;
       const thread = params.thread === true;
@@ -162,7 +173,10 @@ export function createSessionsSpawnTool(opts?: {
           attachments,
           attachMountPath:
             params.attachAs && typeof params.attachAs === "object"
-              ? readStringParam(params.attachAs as Record<string, unknown>, "mountPath")
+              ? readStringParam(
+                  params.attachAs as Record<string, unknown>,
+                  "mountPath",
+                )
               : undefined,
         },
         {

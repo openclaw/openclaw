@@ -12,7 +12,11 @@ const { logger: noopLogger, makeStorePath } = setupCronServiceSuite({
 describe("CronService restart catch-up", () => {
   async function writeStoreJobs(storePath: string, jobs: unknown[]) {
     await fs.mkdir(path.dirname(storePath), { recursive: true });
-    await fs.writeFile(storePath, JSON.stringify({ version: 1, jobs }, null, 2), "utf-8");
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({ version: 1, jobs }, null, 2),
+      "utf-8",
+    );
   }
 
   function createRestartCronService(params: {
@@ -26,7 +30,9 @@ describe("CronService restart catch-up", () => {
       log: noopLogger,
       enqueueSystemEvent: params.enqueueSystemEvent as never,
       requestHeartbeatNow: params.requestHeartbeatNow as never,
-      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })) as never,
+      runIsolatedAgentJob: vi.fn(async () => ({
+        status: "ok" as const,
+      })) as never,
     });
   }
 
@@ -74,8 +80,12 @@ describe("CronService restart catch-up", () => {
     const jobs = await cron.list({ includeDisabled: true });
     const updated = jobs.find((job) => job.id === "restart-overdue-job");
     expect(updated?.state.lastStatus).toBe("ok");
-    expect(updated?.state.lastRunAtMs).toBe(Date.parse("2025-12-13T17:00:00.000Z"));
-    expect(updated?.state.nextRunAtMs).toBeGreaterThan(Date.parse("2025-12-13T17:00:00.000Z"));
+    expect(updated?.state.lastRunAtMs).toBe(
+      Date.parse("2025-12-13T17:00:00.000Z"),
+    );
+    expect(updated?.state.nextRunAtMs).toBeGreaterThan(
+      Date.parse("2025-12-13T17:00:00.000Z"),
+    );
 
     cron.stop();
     await store.cleanup();
@@ -126,7 +136,10 @@ describe("CronService restart catch-up", () => {
     expect(updated?.state.runningAtMs).toBeUndefined();
     expect(updated?.state.lastStatus).toBeUndefined();
     expect(updated?.state.lastRunAtMs).toBeUndefined();
-    expect((updated?.state.nextRunAtMs ?? 0) > Date.parse("2025-12-13T17:00:00.000Z")).toBe(true);
+    expect(
+      (updated?.state.nextRunAtMs ?? 0) >
+        Date.parse("2025-12-13T17:00:00.000Z"),
+    ).toBe(true);
 
     cron.stop();
     await store.cleanup();

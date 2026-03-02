@@ -6,7 +6,11 @@ vi.mock("./client.js", () => ({
   createFeishuClient: createFeishuClientMock,
 }));
 
-import { FEISHU_PROBE_REQUEST_TIMEOUT_MS, probeFeishu, clearProbeCache } from "./probe.js";
+import {
+  FEISHU_PROBE_REQUEST_TIMEOUT_MS,
+  probeFeishu,
+  clearProbeCache,
+} from "./probe.js";
 
 function makeRequestFn(response: Record<string, unknown>) {
   return vi.fn().mockResolvedValue(response);
@@ -30,17 +34,26 @@ describe("probeFeishu", () => {
 
   it("returns error when credentials are missing", async () => {
     const result = await probeFeishu();
-    expect(result).toEqual({ ok: false, error: "missing credentials (appId, appSecret)" });
+    expect(result).toEqual({
+      ok: false,
+      error: "missing credentials (appId, appSecret)",
+    });
   });
 
   it("returns error when appId is missing", async () => {
     const result = await probeFeishu({ appSecret: "secret" } as never);
-    expect(result).toEqual({ ok: false, error: "missing credentials (appId, appSecret)" });
+    expect(result).toEqual({
+      ok: false,
+      error: "missing credentials (appId, appSecret)",
+    });
   });
 
   it("returns error when appSecret is missing", async () => {
     const result = await probeFeishu({ appId: "cli_123" } as never);
-    expect(result).toEqual({ ok: false, error: "missing credentials (appId, appSecret)" });
+    expect(result).toEqual({
+      ok: false,
+      error: "missing credentials (appId, appSecret)",
+    });
   });
 
   it("returns bot info on successful probe", async () => {
@@ -82,11 +95,17 @@ describe("probeFeishu", () => {
       const requestFn = vi.fn().mockImplementation(() => new Promise(() => {}));
       createFeishuClientMock.mockReturnValue({ request: requestFn });
 
-      const promise = probeFeishu({ appId: "cli_123", appSecret: "secret" }, { timeoutMs: 1_000 });
+      const promise = probeFeishu(
+        { appId: "cli_123", appSecret: "secret" },
+        { timeoutMs: 1_000 },
+      );
       await vi.advanceTimersByTimeAsync(1_000);
       const result = await promise;
 
-      expect(result).toMatchObject({ ok: false, error: "probe timed out after 1000ms" });
+      expect(result).toMatchObject({
+        ok: false,
+        error: "probe timed out after 1000ms",
+      });
     } finally {
       vi.useRealTimers();
     }
@@ -149,7 +168,10 @@ describe("probeFeishu", () => {
 
     const creds = { appId: "cli_123", appSecret: "secret" };
     const first = await probeFeishu(creds);
-    expect(first).toMatchObject({ ok: false, error: "API error: token expired" });
+    expect(first).toMatchObject({
+      ok: false,
+      error: "API error: token expired",
+    });
 
     // Second call should make a fresh request since failures are not cached
     await probeFeishu(creds);
@@ -209,14 +231,26 @@ describe("probeFeishu", () => {
     });
 
     // Two accounts with same appId+appSecret but different accountIds are cached separately
-    await probeFeishu({ accountId: "acct-1", appId: "cli_123", appSecret: "secret" });
+    await probeFeishu({
+      accountId: "acct-1",
+      appId: "cli_123",
+      appSecret: "secret",
+    });
     expect(requestFn).toHaveBeenCalledTimes(1);
 
-    await probeFeishu({ accountId: "acct-2", appId: "cli_123", appSecret: "secret" });
+    await probeFeishu({
+      accountId: "acct-2",
+      appId: "cli_123",
+      appSecret: "secret",
+    });
     expect(requestFn).toHaveBeenCalledTimes(2);
 
     // Same accountId should return cached
-    await probeFeishu({ accountId: "acct-1", appId: "cli_123", appSecret: "secret" });
+    await probeFeishu({
+      accountId: "acct-1",
+      appId: "cli_123",
+      appSecret: "secret",
+    });
     expect(requestFn).toHaveBeenCalledTimes(2);
   });
 

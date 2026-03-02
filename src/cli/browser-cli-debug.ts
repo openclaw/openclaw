@@ -2,7 +2,10 @@ import type { Command } from "commander";
 import { danger } from "../globals.js";
 import { defaultRuntime } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
-import { callBrowserRequest, type BrowserParentOpts } from "./browser-cli-shared.js";
+import {
+  callBrowserRequest,
+  type BrowserParentOpts,
+} from "./browser-cli-shared.js";
 import { runCommandWithRuntime } from "./cli-utils.js";
 
 function runBrowserDebug(action: () => Promise<void>) {
@@ -19,8 +22,14 @@ function resolveDebugQuery(params: {
   filter?: unknown;
 }) {
   return {
-    targetId: typeof params.targetId === "string" ? params.targetId.trim() || undefined : undefined,
-    filter: typeof params.filter === "string" ? params.filter.trim() || undefined : undefined,
+    targetId:
+      typeof params.targetId === "string"
+        ? params.targetId.trim() || undefined
+        : undefined,
+    filter:
+      typeof params.filter === "string"
+        ? params.filter.trim() || undefined
+        : undefined,
     clear: Boolean(params.clear),
     profile: params.profile,
   };
@@ -94,7 +103,10 @@ export function registerBrowserDebugCommands(
         }
         defaultRuntime.log(
           result.errors
-            .map((e) => `${e.timestamp} ${e.name ? `${e.name}: ` : ""}${e.message}`)
+            .map(
+              (e) =>
+                `${e.timestamp} ${e.name ? `${e.name}: ` : ""}${e.message}`,
+            )
             .join("\n"),
         );
       });
@@ -154,7 +166,9 @@ export function registerBrowserDebugCommands(
       });
     });
 
-  const trace = browser.command("trace").description("Record a Playwright trace");
+  const trace = browser
+    .command("trace")
+    .description("Record a Playwright trace");
 
   trace
     .command("start")

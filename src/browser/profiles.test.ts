@@ -12,12 +12,17 @@ import {
 } from "./profiles.js";
 
 describe("profile name validation", () => {
-  it.each(["openclaw", "work", "my-profile", "test123", "a", "a-b-c-1-2-3", "1test"])(
-    "accepts valid lowercase name: %s",
-    (name) => {
-      expect(isValidProfileName(name)).toBe(true);
-    },
-  );
+  it.each([
+    "openclaw",
+    "work",
+    "my-profile",
+    "test123",
+    "a",
+    "a-b-c-1-2-3",
+    "1test",
+  ])("accepts valid lowercase name: %s", (name) => {
+    expect(isValidProfileName(name)).toBe(true);
+  });
 
   it("rejects empty or missing names", () => {
     expect(isValidProfileName("")).toBe(false);
@@ -54,14 +59,22 @@ describe("profile name validation", () => {
 describe("port allocation", () => {
   it("allocates within an explicit range", () => {
     const usedPorts = new Set<number>();
-    expect(allocateCdpPort(usedPorts, { start: 20000, end: 20002 })).toBe(20000);
+    expect(allocateCdpPort(usedPorts, { start: 20000, end: 20002 })).toBe(
+      20000,
+    );
     usedPorts.add(20000);
-    expect(allocateCdpPort(usedPorts, { start: 20000, end: 20002 })).toBe(20001);
+    expect(allocateCdpPort(usedPorts, { start: 20000, end: 20002 })).toBe(
+      20001,
+    );
   });
 
   it("allocates next available port from default range", () => {
     const cases = [
-      { name: "none used", used: new Set<number>(), expected: CDP_PORT_RANGE_START },
+      {
+        name: "none used",
+        used: new Set<number>(),
+        expected: CDP_PORT_RANGE_START,
+      },
       {
         name: "sequentially used start ports",
         used: new Set([CDP_PORT_RANGE_START, CDP_PORT_RANGE_START + 1]),
@@ -80,7 +93,9 @@ describe("port allocation", () => {
     ] as const;
 
     for (const testCase of cases) {
-      expect(allocateCdpPort(testCase.used), testCase.name).toBe(testCase.expected);
+      expect(allocateCdpPort(testCase.used), testCase.name).toBe(
+        testCase.expected,
+      );
     }
   });
 
@@ -147,7 +162,9 @@ describe("port collision prevention", () => {
     // The route handler must use state.resolved.profiles, not raw config
 
     // Simulate what happens with raw config (empty) vs resolved config
-    const rawConfig: { browser: { profiles?: Record<string, { cdpPort?: number }> } } = {
+    const rawConfig: {
+      browser: { profiles?: Record<string, { cdpPort?: number }> };
+    } = {
       browser: {},
     }; // Fresh config, no profiles
     const buggyUsedPorts = getUsedPorts(rawConfig.browser?.profiles);
@@ -171,7 +188,11 @@ describe("port collision prevention", () => {
 describe("color allocation", () => {
   it("allocates next unused color from palette", () => {
     const cases = [
-      { name: "none used", used: new Set<string>(), expected: PROFILE_COLORS[0] },
+      {
+        name: "none used",
+        used: new Set<string>(),
+        expected: PROFILE_COLORS[0],
+      },
       {
         name: "first color used",
         used: new Set([PROFILE_COLORS[0].toUpperCase()]),
@@ -188,7 +209,9 @@ describe("color allocation", () => {
       },
     ] as const;
     for (const testCase of cases) {
-      expect(allocateColor(testCase.used), testCase.name).toBe(testCase.expected);
+      expect(allocateColor(testCase.used), testCase.name).toBe(
+        testCase.expected,
+      );
     }
   });
 

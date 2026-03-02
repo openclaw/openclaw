@@ -28,12 +28,11 @@ describe("cron tool flat-params", () => {
       message: "do stuff",
     });
 
-    const [method, _gatewayOpts, params] = callGatewayToolMock.mock.calls[0] as [
-      string,
-      unknown,
-      { sessionKey?: string },
-    ];
+    const [method, _gatewayOpts, params] = callGatewayToolMock.mock
+      .calls[0] as [string, unknown, { sessionKey?: string }];
     expect(method).toBe("cron.add");
-    expect(params.sessionKey).toBe("agent:main:telegram:group:-100123:topic:99");
+    expect(params.sessionKey).toBe(
+      "agent:main:telegram:group:-100123:topic:99",
+    );
   });
 });

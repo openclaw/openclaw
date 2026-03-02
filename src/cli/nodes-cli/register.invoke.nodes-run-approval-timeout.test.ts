@@ -45,9 +45,13 @@ describe("nodes run: approval transport timeout (#12098)", () => {
   });
 
   it("callGatewayCli forwards opts.timeout as the transport timeoutMs", async () => {
-    await callGatewayCli("exec.approval.request", { timeout: "35000" } as never, {
-      timeoutMs: 120_000,
-    });
+    await callGatewayCli(
+      "exec.approval.request",
+      { timeout: "35000" } as never,
+      {
+        timeoutMs: 120_000,
+      },
+    );
 
     expect(callGatewaySpy).toHaveBeenCalledTimes(1);
     const callOpts = callGatewaySpy.mock.calls[0][0];
@@ -58,7 +62,10 @@ describe("nodes run: approval transport timeout (#12098)", () => {
   it("fix: overriding transportTimeoutMs gives the approval enough transport time", async () => {
     const approvalTimeoutMs = 120_000;
     // Mirror the production code: parseTimeoutMs(opts.timeout) ?? 0
-    const transportTimeoutMs = Math.max(parseTimeoutMs("35000") ?? 0, approvalTimeoutMs + 10_000);
+    const transportTimeoutMs = Math.max(
+      parseTimeoutMs("35000") ?? 0,
+      approvalTimeoutMs + 10_000,
+    );
     expect(transportTimeoutMs).toBe(130_000);
 
     await callGatewayCli(
@@ -99,7 +106,10 @@ describe("nodes run: approval transport timeout (#12098)", () => {
     const approvalTimeoutMs = DEFAULT_EXEC_APPROVAL_TIMEOUT_MS;
     // parseTimeoutMs returns undefined for garbage input, ?? 0 ensures
     // Math.max picks the approval floor instead of producing NaN
-    const transportTimeoutMs = Math.max(parseTimeoutMs("foo") ?? 0, approvalTimeoutMs + 10_000);
+    const transportTimeoutMs = Math.max(
+      parseTimeoutMs("foo") ?? 0,
+      approvalTimeoutMs + 10_000,
+    );
     expect(transportTimeoutMs).toBe(130_000);
 
     await callGatewayCli(

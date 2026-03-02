@@ -11,7 +11,10 @@ import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { defaultRuntime } from "../runtime.js";
 import { renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../utils/message-channel.js";
 import { withProgress } from "./progress.js";
 
 type DevicesRpcOpts = {
@@ -64,13 +67,24 @@ const FALLBACK_NOTICE = "Direct scope access failed; using local fallback.";
 
 const devicesCallOpts = (cmd: Command, defaults?: { timeoutMs?: number }) =>
   cmd
-    .option("--url <url>", "Gateway WebSocket URL (defaults to gateway.remote.url when configured)")
+    .option(
+      "--url <url>",
+      "Gateway WebSocket URL (defaults to gateway.remote.url when configured)",
+    )
     .option("--token <token>", "Gateway token (if required)")
     .option("--password <password>", "Gateway password (password auth)")
-    .option("--timeout <ms>", "Timeout in ms", String(defaults?.timeoutMs ?? 10_000))
+    .option(
+      "--timeout <ms>",
+      "Timeout in ms",
+      String(defaults?.timeoutMs ?? 10_000),
+    )
     .option("--json", "Output JSON", false);
 
-const callGatewayCli = async (method: string, opts: DevicesRpcOpts, params?: unknown) =>
+const callGatewayCli = async (
+  method: string,
+  opts: DevicesRpcOpts,
+  params?: unknown,
+) =>
   withProgress(
     {
       label: `Devices ${method}`,
@@ -97,7 +111,10 @@ function normalizeErrorMessage(error: unknown): string {
   return String(error);
 }
 
-function shouldUseLocalPairingFallback(opts: DevicesRpcOpts, error: unknown): boolean {
+function shouldUseLocalPairingFallback(
+  opts: DevicesRpcOpts,
+  error: unknown,
+): boolean {
   const message = normalizeErrorMessage(error).toLowerCase();
   if (!message.includes("pairing required")) {
     return false;
@@ -126,9 +143,13 @@ function redactLocalPairedDevice(device: InfraPairedDevice): PairedDevice {
   };
 }
 
-async function listPairingWithFallback(opts: DevicesRpcOpts): Promise<DevicePairingList> {
+async function listPairingWithFallback(
+  opts: DevicesRpcOpts,
+): Promise<DevicePairingList> {
   try {
-    return parseDevicePairingList(await callGatewayCli("device.pair.list", opts, {}));
+    return parseDevicePairingList(
+      await callGatewayCli("device.pair.list", opts, {}),
+    );
   } catch (error) {
     if (!shouldUseLocalPairingFallback(opts, error)) {
       throw error;
@@ -169,7 +190,10 @@ async function approvePairingWithFallback(
 }
 
 function parseDevicePairingList(value: unknown): DevicePairingList {
-  const obj = typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
+  const obj =
+    typeof value === "object" && value !== null
+      ? (value as Record<string, unknown>)
+      : {};
   return {
     pending: Array.isArray(obj.pending) ? (obj.pending as PendingDevice[]) : [],
     paired: Array.isArray(obj.paired) ? (obj.paired as PairedDevice[]) : [],
@@ -211,7 +235,9 @@ function resolveRequiredDeviceRole(
 }
 
 export function registerDevicesCli(program: Command) {
-  const devices = program.command("devices").description("Device pairing and auth tokens");
+  const devices = program
+    .command("devices")
+    .description("Device pairing and auth tokens");
 
   devicesCallOpts(
     devices
@@ -244,7 +270,10 @@ export function registerDevicesCli(program: Command) {
                 Device: req.displayName || req.deviceId,
                 Role: req.role ?? "",
                 IP: req.remoteIp ?? "",
-                Age: typeof req.ts === "number" ? formatTimeAgo(Date.now() - req.ts) : "",
+                Age:
+                  typeof req.ts === "number"
+                    ? formatTimeAgo(Date.now() - req.ts)
+                    : "",
                 Flags: req.isRepair ? "repair" : "",
               })),
             }).trimEnd(),
@@ -293,12 +322,16 @@ export function registerDevicesCli(program: Command) {
           defaultRuntime.exit(1);
           return;
         }
-        const result = await callGatewayCli("device.pair.remove", opts, { deviceId: trimmed });
+        const result = await callGatewayCli("device.pair.remove", opts, {
+          deviceId: trimmed,
+        });
         if (opts.json) {
           defaultRuntime.log(JSON.stringify(result, null, 2));
           return;
         }
-        defaultRuntime.log(`${theme.warn("Removed")} ${theme.command(trimmed)}`);
+        defaultRuntime.log(
+          `${theme.warn("Removed")} ${theme.command(trimmed)}`,
+        );
       }),
   );
 
@@ -314,12 +347,15 @@ export function registerDevicesCli(program: Command) {
           defaultRuntime.exit(1);
           return;
         }
-        const list = parseDevicePairingList(await callGatewayCli("device.pair.list", opts, {}));
+        const list = parseDevicePairingList(
+          await callGatewayCli("device.pair.list", opts, {}),
+        );
         const removedDeviceIds: string[] = [];
         const rejectedRequestIds: string[] = [];
         const paired = Array.isArray(list.paired) ? list.paired : [];
         for (const device of paired) {
-          const deviceId = typeof device.deviceId === "string" ? device.deviceId.trim() : "";
+          const deviceId =
+            typeof device.deviceId === "string" ? device.deviceId.trim() : "";
           if (!deviceId) {
             continue;
           }
@@ -329,7 +365,8 @@ export function registerDevicesCli(program: Command) {
         if (opts.pending) {
           const pending = Array.isArray(list.pending) ? list.pending : [];
           for (const req of pending) {
-            const requestId = typeof req.requestId === "string" ? req.requestId.trim() : "";
+            const requestId =
+              typeof req.requestId === "string" ? req.requestId.trim() : "";
             if (!requestId) {
               continue;
             }
@@ -370,7 +407,9 @@ export function registerDevicesCli(program: Command) {
       .action(async (requestId: string | undefined, opts: DevicesRpcOpts) => {
         let resolvedRequestId = requestId?.trim();
         if (!resolvedRequestId || opts.latest) {
-          const latest = selectLatestPendingRequest((await listPairingWithFallback(opts)).pending);
+          const latest = selectLatestPendingRequest(
+            (await listPairingWithFallback(opts)).pending,
+          );
           resolvedRequestId = latest?.requestId?.trim();
         }
         if (!resolvedRequestId) {
@@ -378,7 +417,10 @@ export function registerDevicesCli(program: Command) {
           defaultRuntime.exit(1);
           return;
         }
-        const result = await approvePairingWithFallback(opts, resolvedRequestId);
+        const result = await approvePairingWithFallback(
+          opts,
+          resolvedRequestId,
+        );
         if (!result) {
           defaultRuntime.error("unknown requestId");
           defaultRuntime.exit(1);
@@ -388,7 +430,8 @@ export function registerDevicesCli(program: Command) {
           defaultRuntime.log(JSON.stringify(result, null, 2));
           return;
         }
-        const deviceId = (result as { device?: { deviceId?: string } })?.device?.deviceId;
+        const deviceId = (result as { device?: { deviceId?: string } })?.device
+          ?.deviceId;
         defaultRuntime.log(
           `${theme.success("Approved")} ${theme.command(deviceId ?? "ok")} ${theme.muted(`(${resolvedRequestId})`)}`,
         );
@@ -401,13 +444,17 @@ export function registerDevicesCli(program: Command) {
       .description("Reject a pending device pairing request")
       .argument("<requestId>", "Pending request id")
       .action(async (requestId: string, opts: DevicesRpcOpts) => {
-        const result = await callGatewayCli("device.pair.reject", opts, { requestId });
+        const result = await callGatewayCli("device.pair.reject", opts, {
+          requestId,
+        });
         if (opts.json) {
           defaultRuntime.log(JSON.stringify(result, null, 2));
           return;
         }
         const deviceId = (result as { deviceId?: string })?.deviceId;
-        defaultRuntime.log(`${theme.warn("Rejected")} ${theme.command(deviceId ?? "ok")}`);
+        defaultRuntime.log(
+          `${theme.warn("Rejected")} ${theme.command(deviceId ?? "ok")}`,
+        );
       }),
   );
 
@@ -417,7 +464,10 @@ export function registerDevicesCli(program: Command) {
       .description("Rotate a device token for a role")
       .requiredOption("--device <id>", "Device id")
       .requiredOption("--role <role>", "Role name")
-      .option("--scope <scope...>", "Scopes to attach to the token (repeatable)")
+      .option(
+        "--scope <scope...>",
+        "Scopes to attach to the token (repeatable)",
+      )
       .action(async (opts: DevicesRpcOpts) => {
         const required = resolveRequiredDeviceRole(opts);
         if (!required) {

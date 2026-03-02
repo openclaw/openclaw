@@ -23,14 +23,20 @@ type DefineChatCommandInput = {
   category?: CommandCategory;
 };
 
-function defineChatCommand(command: DefineChatCommandInput): ChatCommandDefinition {
-  const aliases = (command.textAliases ?? (command.textAlias ? [command.textAlias] : []))
+function defineChatCommand(
+  command: DefineChatCommandInput,
+): ChatCommandDefinition {
+  const aliases = (
+    command.textAliases ?? (command.textAlias ? [command.textAlias] : [])
+  )
     .map((alias) => alias.trim())
     .filter(Boolean);
   const scope =
-    command.scope ?? (command.nativeName ? (aliases.length ? "both" : "native") : "text");
+    command.scope ??
+    (command.nativeName ? (aliases.length ? "both" : "native") : "text");
   const acceptsArgs = command.acceptsArgs ?? Boolean(command.args?.length);
-  const argsParsing = command.argsParsing ?? (command.args?.length ? "positional" : "none");
+  const argsParsing =
+    command.argsParsing ?? (command.args?.length ? "positional" : "none");
   return {
     key: command.key,
     nativeName: command.nativeName,
@@ -58,12 +64,18 @@ function defineDockCommand(dock: ChannelDock): ChatCommandDefinition {
   });
 }
 
-function registerAlias(commands: ChatCommandDefinition[], key: string, ...aliases: string[]): void {
+function registerAlias(
+  commands: ChatCommandDefinition[],
+  key: string,
+  ...aliases: string[]
+): void {
   const command = commands.find((entry) => entry.key === key);
   if (!command) {
     throw new Error(`registerAlias: unknown command key: ${key}`);
   }
-  const existing = new Set(command.textAliases.map((alias) => alias.trim().toLowerCase()));
+  const existing = new Set(
+    command.textAliases.map((alias) => alias.trim().toLowerCase()),
+  );
   for (const alias of aliases) {
     const trimmed = alias.trim();
     if (!trimmed) {
@@ -126,7 +138,8 @@ function assertCommandRegistry(commands: ChatCommandDefinition[]): void {
 let cachedCommands: ChatCommandDefinition[] | null = null;
 let cachedRegistry: ReturnType<typeof getActivePluginRegistry> | null = null;
 let cachedNativeCommandSurfaces: Set<string> | null = null;
-let cachedNativeRegistry: ReturnType<typeof getActivePluginRegistry> | null = null;
+let cachedNativeRegistry: ReturnType<typeof getActivePluginRegistry> | null =
+  null;
 
 function buildChatCommands(): ChatCommandDefinition[] {
   const commands: ChatCommandDefinition[] = [
@@ -199,7 +212,8 @@ function buildChatCommands(): ChatCommandDefinition[] {
     defineChatCommand({
       key: "export-session",
       nativeName: "export-session",
-      description: "Export current session to HTML file with full system prompt.",
+      description:
+        "Export current session to HTML file with full system prompt.",
       textAliases: ["/export-session", "/export"],
       acceptsArgs: true,
       category: "status",
@@ -287,7 +301,8 @@ function buildChatCommands(): ChatCommandDefinition[] {
     defineChatCommand({
       key: "subagents",
       nativeName: "subagents",
-      description: "List, kill, log, spawn, or steer subagent runs for this session.",
+      description:
+        "List, kill, log, spawn, or steer subagent runs for this session.",
       textAlias: "/subagents",
       category: "management",
       args: [
@@ -353,7 +368,8 @@ function buildChatCommands(): ChatCommandDefinition[] {
     defineChatCommand({
       key: "focus",
       nativeName: "focus",
-      description: "Bind this Discord thread (or a new one) to a session target.",
+      description:
+        "Bind this Discord thread (or a new one) to a session target.",
       textAlias: "/focus",
       category: "management",
       args: [
@@ -695,7 +711,13 @@ function buildChatCommands(): ChatCommandDefinition[] {
           name: "mode",
           description: "queue mode",
           type: "string",
-          choices: ["steer", "interrupt", "followup", "collect", "steer-backlog"],
+          choices: [
+            "steer",
+            "interrupt",
+            "followup",
+            "collect",
+            "steer-backlog",
+          ],
         },
         {
           name: "debounce",

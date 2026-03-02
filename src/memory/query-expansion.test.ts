@@ -118,7 +118,9 @@ describe("extractKeywords", () => {
   });
 
   it("extracts keywords from Spanish conversational query", () => {
-    const keywords = extractKeywords("ayer hablamos sobre la estrategia de despliegue");
+    const keywords = extractKeywords(
+      "ayer hablamos sobre la estrategia de despliegue",
+    );
     expect(keywords).toContain("estrategia");
     expect(keywords).toContain("despliegue");
     expect(keywords).not.toContain("ayer");
@@ -126,7 +128,9 @@ describe("extractKeywords", () => {
   });
 
   it("extracts keywords from Portuguese conversational query", () => {
-    const keywords = extractKeywords("ontem falamos sobre a estratégia de implantação");
+    const keywords = extractKeywords(
+      "ontem falamos sobre a estratégia de implantação",
+    );
     expect(keywords).toContain("estratégia");
     expect(keywords).toContain("implantação");
     expect(keywords).not.toContain("ontem");

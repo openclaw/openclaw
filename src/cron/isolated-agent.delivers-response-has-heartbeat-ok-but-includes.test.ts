@@ -2,12 +2,24 @@ import "./isolated-agent.mocks.js";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { runSubagentAnnounceFlow } from "../agents/subagent-announce.js";
 import type { CliDeps } from "../cli/deps.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
-import { makeCfg, makeJob, writeSessionStore } from "./isolated-agent.test-harness.js";
+import {
+  makeCfg,
+  makeJob,
+  writeSessionStore,
+} from "./isolated-agent.test-harness.js";
 import { setupIsolatedAgentTurnMocks } from "./isolated-agent.test-setup.js";
 
 let tempRoot = "";
@@ -85,7 +97,9 @@ async function createTelegramDeliveryFixture(home: string): Promise<{
   return { storePath, deps };
 }
 
-function mockEmbeddedAgentPayloads(payloads: Array<{ text: string; mediaUrl?: string }>) {
+function mockEmbeddedAgentPayloads(
+  payloads: Array<{ text: string; mediaUrl?: string }>,
+) {
   vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
     payloads,
     meta: {
@@ -121,7 +135,9 @@ async function runTelegramAnnounceTurn(params: {
 
 describe("runCronIsolatedAgentTurn", () => {
   beforeAll(async () => {
-    tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-heartbeat-suite-"));
+    tempRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-cron-heartbeat-suite-"),
+    );
   });
 
   afterAll(async () => {
@@ -252,9 +268,8 @@ describe("runCronIsolatedAgentTurn", () => {
 
       expect(deleteRes.status).toBe("ok");
       expect(runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
-      const deleteArgs = vi.mocked(runSubagentAnnounceFlow).mock.calls[0]?.[0] as
-        | { cleanup?: "keep" | "delete" }
-        | undefined;
+      const deleteArgs = vi.mocked(runSubagentAnnounceFlow).mock
+        .calls[0]?.[0] as { cleanup?: "keep" | "delete" } | undefined;
       expect(deleteArgs?.cleanup).toBe("delete");
       expect(deps.sendMessageTelegram).not.toHaveBeenCalled();
     });
@@ -338,12 +353,10 @@ describe("runCronIsolatedAgentTurn", () => {
       }
 
       expect(runSubagentAnnounceFlow).toHaveBeenCalledTimes(2);
-      const firstArgs = vi.mocked(runSubagentAnnounceFlow).mock.calls[0]?.[0] as
-        | { childRunId?: string }
-        | undefined;
-      const secondArgs = vi.mocked(runSubagentAnnounceFlow).mock.calls[1]?.[0] as
-        | { childRunId?: string }
-        | undefined;
+      const firstArgs = vi.mocked(runSubagentAnnounceFlow).mock
+        .calls[0]?.[0] as { childRunId?: string } | undefined;
+      const secondArgs = vi.mocked(runSubagentAnnounceFlow).mock
+        .calls[1]?.[0] as { childRunId?: string } | undefined;
       expect(firstArgs?.childRunId).toBeTruthy();
       expect(secondArgs?.childRunId).toBeTruthy();
       expect(secondArgs?.childRunId).not.toBe(firstArgs?.childRunId);

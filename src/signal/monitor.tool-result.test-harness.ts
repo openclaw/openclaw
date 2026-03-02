@@ -17,7 +17,9 @@ type SignalToolResultTestMocks = {
   spawnSignalDaemonMock: MockFn;
 };
 
-const waitForTransportReadyMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
+const waitForTransportReadyMock = vi.hoisted(() =>
+  vi.fn(),
+) as unknown as MockFn;
 const sendMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
 const replyMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
 const updateLastRouteMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
@@ -59,7 +61,8 @@ export function createMockSignalDaemonHandle(
   } = {},
 ): SignalDaemonHandle {
   const stop = overrides.stop ?? (vi.fn() as unknown as MockFn);
-  const exited = overrides.exited ?? new Promise<SignalDaemonExitEvent>(() => {});
+  const exited =
+    overrides.exited ?? new Promise<SignalDaemonExitEvent>(() => {});
   const isExited = overrides.isExited ?? (() => false);
   return {
     stop: stop as unknown as () => void,
@@ -87,8 +90,10 @@ vi.mock("./send.js", () => ({
 }));
 
 vi.mock("../pairing/pairing-store.js", () => ({
-  readChannelAllowFromStore: (...args: unknown[]) => readAllowFromStoreMock(...args),
-  upsertChannelPairingRequest: (...args: unknown[]) => upsertPairingRequestMock(...args),
+  readChannelAllowFromStore: (...args: unknown[]) =>
+    readAllowFromStoreMock(...args),
+  upsertChannelPairingRequest: (...args: unknown[]) =>
+    upsertPairingRequestMock(...args),
 }));
 
 vi.mock("../config/sessions.js", () => ({
@@ -113,7 +118,8 @@ vi.mock("./daemon.js", async (importOriginal) => {
 });
 
 vi.mock("../infra/transport-ready.js", () => ({
-  waitForTransportReady: (...args: unknown[]) => waitForTransportReadyMock(...args),
+  waitForTransportReady: (...args: unknown[]) =>
+    waitForTransportReadyMock(...args),
 }));
 
 export function installSignalToolResultTestHooks() {
@@ -132,9 +138,13 @@ export function installSignalToolResultTestHooks() {
     streamMock.mockReset();
     signalCheckMock.mockReset().mockResolvedValue({});
     signalRpcRequestMock.mockReset().mockResolvedValue({});
-    spawnSignalDaemonMock.mockReset().mockReturnValue(createMockSignalDaemonHandle());
+    spawnSignalDaemonMock
+      .mockReset()
+      .mockReturnValue(createMockSignalDaemonHandle());
     readAllowFromStoreMock.mockReset().mockResolvedValue([]);
-    upsertPairingRequestMock.mockReset().mockResolvedValue({ code: "PAIRCODE", created: true });
+    upsertPairingRequestMock
+      .mockReset()
+      .mockResolvedValue({ code: "PAIRCODE", created: true });
     waitForTransportReadyMock.mockReset().mockResolvedValue(undefined);
 
     resetSystemEventsForTest();

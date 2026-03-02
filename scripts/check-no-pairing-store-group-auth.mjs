@@ -9,7 +9,9 @@ import {
   toLine,
 } from "./lib/ts-guard-utils.mjs";
 
-const { repoRoot, sourceRoots, resolveFromRepo } = createPairingGuardContext(import.meta.url);
+const { repoRoot, sourceRoots, resolveFromRepo } = createPairingGuardContext(
+  import.meta.url,
+);
 
 const allowedFiles = new Set([
   resolveFromRepo("src/security/dm-policy-shared.ts"),
@@ -19,7 +21,8 @@ const allowedFiles = new Set([
   resolveFromRepo("src/security/audit-channel.ts"),
 ]);
 
-const storeIdentifierRe = /^(?:storeAllowFrom|storedAllowFrom|storeAllowList)$/i;
+const storeIdentifierRe =
+  /^(?:storeAllowFrom|storedAllowFrom|storeAllowList)$/i;
 const groupNameRe =
   /(?:groupAllowFrom|effectiveGroupAllowFrom|groupAllowed|groupAllow|groupAuth|groupSender)/i;
 const storeSourceCallNames = new Set([
@@ -84,7 +87,10 @@ function isSuspiciousNormalizeWithStoreCall(node) {
   if (!ts.isCallExpression(node)) {
     return false;
   }
-  if (!ts.isIdentifier(node.expression) || node.expression.text !== "normalizeAllowFromWithStore") {
+  if (
+    !ts.isIdentifier(node.expression) ||
+    node.expression.text !== "normalizeAllowFromWithStore"
+  ) {
     return false;
   }
   const firstArg = node.arguments[0];
@@ -101,10 +107,16 @@ function isSuspiciousNormalizeWithStoreCall(node) {
     if (!name) {
       continue;
     }
-    if (name === "storeAllowFrom" && containsPairingStoreSource(property.initializer)) {
+    if (
+      name === "storeAllowFrom" &&
+      containsPairingStoreSource(property.initializer)
+    ) {
       hasStoreProp = true;
     }
-    if (name === "allowFrom" && groupNameRe.test(property.initializer.getText())) {
+    if (
+      name === "allowFrom" &&
+      groupNameRe.test(property.initializer.getText())
+    ) {
       hasGroupAllowProp = true;
     }
   }
@@ -112,13 +124,22 @@ function isSuspiciousNormalizeWithStoreCall(node) {
 }
 
 function findViolations(content, filePath) {
-  const sourceFile = ts.createSourceFile(filePath, content, ts.ScriptTarget.Latest, true);
+  const sourceFile = ts.createSourceFile(
+    filePath,
+    content,
+    ts.ScriptTarget.Latest,
+    true,
+  );
   const violations = [];
 
   const visit = (node) => {
     if (ts.isVariableDeclaration(node) && node.initializer) {
       const name = getDeclarationNameText(node.name);
-      if (name && groupNameRe.test(name) && containsPairingStoreSource(node.initializer)) {
+      if (
+        name &&
+        groupNameRe.test(name) &&
+        containsPairingStoreSource(node.initializer)
+      ) {
         const callName = getCallName(node.initializer);
         if (callName && allowedResolverCallNames.has(callName)) {
           ts.forEachChild(node, visit);
@@ -133,7 +154,11 @@ function findViolations(content, filePath) {
 
     if (ts.isPropertyAssignment(node)) {
       const propName = getPropertyNameText(node.name);
-      if (propName && groupNameRe.test(propName) && containsPairingStoreSource(node.initializer)) {
+      if (
+        propName &&
+        groupNameRe.test(propName) &&
+        containsPairingStoreSource(node.initializer)
+      ) {
         violations.push({
           line: toLine(sourceFile, node),
           reason: `group-scoped property "${propName}" references pairing-store identifiers`,
@@ -144,7 +169,8 @@ function findViolations(content, filePath) {
     if (isSuspiciousNormalizeWithStoreCall(node)) {
       violations.push({
         line: toLine(sourceFile, node),
-        reason: "group allowlist uses normalizeAllowFromWithStore(...) with pairing-store entries",
+        reason:
+          "group allowlist uses normalizeAllowFromWithStore(...) with pairing-store entries",
       });
     }
 
@@ -167,9 +193,13 @@ async function main() {
     return;
   }
 
-  console.error("Found pairing-store identifiers referenced in group auth composition:");
+  console.error(
+    "Found pairing-store identifiers referenced in group auth composition:",
+  );
   for (const violation of violations) {
-    console.error(`- ${violation.path}:${violation.line} (${violation.reason})`);
+    console.error(
+      `- ${violation.path}:${violation.line} (${violation.reason})`,
+    );
   }
   console.error(
     "Group auth must be composed via shared resolvers (resolveDmGroupAccessWithLists / resolveEffectiveAllowFromLists).",

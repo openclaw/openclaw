@@ -13,11 +13,17 @@ type GuardedSource = {
 const GUARDED_SOURCES: GuardedSource[] = [
   {
     path: "agents/acp-spawn.ts",
-    forbiddenPatterns: [/\bgetThreadBindingManager\b/, /\bparseDiscordTarget\b/],
+    forbiddenPatterns: [
+      /\bgetThreadBindingManager\b/,
+      /\bparseDiscordTarget\b/,
+    ],
   },
   {
     path: "auto-reply/reply/commands-acp/lifecycle.ts",
-    forbiddenPatterns: [/\bgetThreadBindingManager\b/, /\bunbindThreadBindingsBySessionKey\b/],
+    forbiddenPatterns: [
+      /\bgetThreadBindingManager\b/,
+      /\bunbindThreadBindingsBySessionKey\b/,
+    ],
   },
   {
     path: "auto-reply/reply/commands-acp/targets.ts",

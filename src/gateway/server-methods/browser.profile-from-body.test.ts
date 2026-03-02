@@ -1,12 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { loadConfigMock, isNodeCommandAllowedMock, resolveNodeCommandAllowlistMock } = vi.hoisted(
-  () => ({
-    loadConfigMock: vi.fn(),
-    isNodeCommandAllowedMock: vi.fn(),
-    resolveNodeCommandAllowlistMock: vi.fn(),
-  }),
-);
+const {
+  loadConfigMock,
+  isNodeCommandAllowedMock,
+  resolveNodeCommandAllowlistMock,
+} = vi.hoisted(() => ({
+  loadConfigMock: vi.fn(),
+  isNodeCommandAllowedMock: vi.fn(),
+  resolveNodeCommandAllowlistMock: vi.fn(),
+}));
 
 vi.mock("../../config/config.js", () => ({
   loadConfig: loadConfigMock,

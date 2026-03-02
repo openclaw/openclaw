@@ -4,7 +4,10 @@ import { applyModelDefaults } from "./defaults.js";
 import type { OpenClawConfig } from "./types.js";
 
 describe("applyModelDefaults", () => {
-  function buildProxyProviderConfig(overrides?: { contextWindow?: number; maxTokens?: number }) {
+  function buildProxyProviderConfig(overrides?: {
+    contextWindow?: number;
+    maxTokens?: number;
+  }) {
     return {
       models: {
         providers: {
@@ -42,8 +45,12 @@ describe("applyModelDefaults", () => {
     } satisfies OpenClawConfig;
     const next = applyModelDefaults(cfg);
 
-    expect(next.agents?.defaults?.models?.["anthropic/claude-opus-4-6"]?.alias).toBe("opus");
-    expect(next.agents?.defaults?.models?.["openai/gpt-5.2"]?.alias).toBe("gpt");
+    expect(
+      next.agents?.defaults?.models?.["anthropic/claude-opus-4-6"]?.alias,
+    ).toBe("opus");
+    expect(next.agents?.defaults?.models?.["openai/gpt-5.2"]?.alias).toBe(
+      "gpt",
+    );
   });
 
   it("does not override existing aliases", () => {
@@ -59,7 +66,9 @@ describe("applyModelDefaults", () => {
 
     const next = applyModelDefaults(cfg);
 
-    expect(next.agents?.defaults?.models?.["anthropic/claude-opus-4-5"]?.alias).toBe("Opus");
+    expect(
+      next.agents?.defaults?.models?.["anthropic/claude-opus-4-5"]?.alias,
+    ).toBe("Opus");
   });
 
   it("respects explicit empty alias disables", () => {
@@ -76,10 +85,12 @@ describe("applyModelDefaults", () => {
 
     const next = applyModelDefaults(cfg);
 
-    expect(next.agents?.defaults?.models?.["google/gemini-3-pro-preview"]?.alias).toBe("");
-    expect(next.agents?.defaults?.models?.["google/gemini-3-flash-preview"]?.alias).toBe(
-      "gemini-flash",
-    );
+    expect(
+      next.agents?.defaults?.models?.["google/gemini-3-pro-preview"]?.alias,
+    ).toBe("");
+    expect(
+      next.agents?.defaults?.models?.["google/gemini-3-flash-preview"]?.alias,
+    ).toBe("gemini-flash");
   });
 
   it("fills missing model provider defaults", () => {
@@ -90,13 +101,21 @@ describe("applyModelDefaults", () => {
 
     expect(model?.reasoning).toBe(false);
     expect(model?.input).toEqual(["text"]);
-    expect(model?.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+    expect(model?.cost).toEqual({
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+    });
     expect(model?.contextWindow).toBe(DEFAULT_CONTEXT_TOKENS);
     expect(model?.maxTokens).toBe(8192);
   });
 
   it("clamps maxTokens to contextWindow", () => {
-    const cfg = buildProxyProviderConfig({ contextWindow: 32768, maxTokens: 40960 });
+    const cfg = buildProxyProviderConfig({
+      contextWindow: 32768,
+      maxTokens: 40960,
+    });
 
     const next = applyModelDefaults(cfg);
     const model = next.models?.providers?.myproxy?.models?.[0];

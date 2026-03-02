@@ -63,7 +63,10 @@ describe("createLineNodeWebhookHandler", () => {
     });
 
     const { res } = createRes();
-    await handler({ method: "GET", headers: {} } as unknown as IncomingMessage, res);
+    await handler(
+      { method: "GET", headers: {} } as unknown as IncomingMessage,
+      res,
+    );
 
     expect(res.statusCode).toBe(200);
     expect(res.body).toBe("OK");
@@ -74,7 +77,10 @@ describe("createLineNodeWebhookHandler", () => {
     const { bot, handler } = createPostWebhookTestHarness(rawBody);
 
     const { res, headers } = createRes();
-    await handler({ method: "POST", headers: {} } as unknown as IncomingMessage, res);
+    await handler(
+      { method: "POST", headers: {} } as unknown as IncomingMessage,
+      res,
+    );
 
     expect(res.statusCode).toBe(200);
     expect(headers["content-type"]).toBe("application/json");
@@ -83,10 +89,15 @@ describe("createLineNodeWebhookHandler", () => {
   });
 
   it("returns 405 for non-GET/non-POST methods", async () => {
-    const { bot, handler } = createPostWebhookTestHarness(JSON.stringify({ events: [] }));
+    const { bot, handler } = createPostWebhookTestHarness(
+      JSON.stringify({ events: [] }),
+    );
 
     const { res, headers } = createRes();
-    await handler({ method: "PUT", headers: {} } as unknown as IncomingMessage, res);
+    await handler(
+      { method: "PUT", headers: {} } as unknown as IncomingMessage,
+      res,
+    );
 
     expect(res.statusCode).toBe(405);
     expect(headers.allow).toBe("GET, POST");
@@ -98,7 +109,10 @@ describe("createLineNodeWebhookHandler", () => {
     const { bot, handler } = createPostWebhookTestHarness(rawBody);
 
     const { res } = createRes();
-    await handler({ method: "POST", headers: {} } as unknown as IncomingMessage, res);
+    await handler(
+      { method: "POST", headers: {} } as unknown as IncomingMessage,
+      res,
+    );
 
     expect(res.statusCode).toBe(400);
     expect(bot.handleWebhook).not.toHaveBeenCalled();
@@ -119,7 +133,10 @@ describe("createLineNodeWebhookHandler", () => {
     });
 
     const { res } = createRes();
-    await handler({ method: "POST", headers: {} } as unknown as IncomingMessage, res);
+    await handler(
+      { method: "POST", headers: {} } as unknown as IncomingMessage,
+      res,
+    );
 
     expect(res.statusCode).toBe(400);
     expect(readBody).toHaveBeenCalledTimes(1);
@@ -132,7 +149,10 @@ describe("createLineNodeWebhookHandler", () => {
 
     const { res } = createRes();
     await handler(
-      { method: "POST", headers: { "x-line-signature": "bad" } } as unknown as IncomingMessage,
+      {
+        method: "POST",
+        headers: { "x-line-signature": "bad" },
+      } as unknown as IncomingMessage,
       res,
     );
 

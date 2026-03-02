@@ -38,7 +38,11 @@ function expectConfigMutationCall(params: {
   raw: string;
   sessionKey: string;
 }) {
-  expect(params.callGatewayTool).toHaveBeenCalledWith("config.get", expect.any(Object), {});
+  expect(params.callGatewayTool).toHaveBeenCalledWith(
+    "config.get",
+    expect.any(Object),
+    {},
+  );
   expect(params.callGatewayTool).toHaveBeenCalledWith(
     params.action,
     expect.any(Object),
@@ -124,7 +128,8 @@ describe("gateway tool", () => {
     const sessionKey = "agent:main:whatsapp:dm:+15555550123";
     const tool = requireGatewayTool(sessionKey);
 
-    const raw = '{\n  channels: { telegram: { groups: { "*": { requireMention: false } } } }\n}\n';
+    const raw =
+      '{\n  channels: { telegram: { groups: { "*": { requireMention: false } } } }\n}\n';
     await tool.execute("call4", {
       action: "config.patch",
       raw,

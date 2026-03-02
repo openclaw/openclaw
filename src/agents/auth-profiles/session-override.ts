@@ -1,5 +1,8 @@
 import type { OpenClawConfig } from "../../config/config.js";
-import { updateSessionStore, type SessionEntry } from "../../config/sessions.js";
+import {
+  updateSessionStore,
+  type SessionEntry,
+} from "../../config/sessions.js";
 import {
   ensureAuthProfileStore,
   isProfileInCooldown,
@@ -16,7 +19,9 @@ function isProfileForProvider(params: {
   if (!entry?.provider) {
     return false;
   }
-  return normalizeProviderId(entry.provider) === normalizeProviderId(params.provider);
+  return (
+    normalizeProviderId(entry.provider) === normalizeProviderId(params.provider)
+  );
 }
 
 export async function clearSessionAuthProfileOverride(params: {
@@ -62,22 +67,42 @@ export async function resolveSessionAuthProfileOverride(params: {
     return sessionEntry?.authProfileOverride;
   }
 
-  const store = ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false });
+  const store = ensureAuthProfileStore(agentDir, {
+    allowKeychainPrompt: false,
+  });
   const order = resolveAuthProfileOrder({ cfg, store, provider });
   let current = sessionEntry.authProfileOverride?.trim();
 
   if (current && !store.profiles[current]) {
-    await clearSessionAuthProfileOverride({ sessionEntry, sessionStore, sessionKey, storePath });
+    await clearSessionAuthProfileOverride({
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+    });
     current = undefined;
   }
 
-  if (current && !isProfileForProvider({ provider, profileId: current, store })) {
-    await clearSessionAuthProfileOverride({ sessionEntry, sessionStore, sessionKey, storePath });
+  if (
+    current &&
+    !isProfileForProvider({ provider, profileId: current, store })
+  ) {
+    await clearSessionAuthProfileOverride({
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+    });
     current = undefined;
   }
 
   if (current && order.length > 0 && !order.includes(current)) {
-    await clearSessionAuthProfileOverride({ sessionEntry, sessionStore, sessionKey, storePath });
+    await clearSessionAuthProfileOverride({
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+    });
     current = undefined;
   }
 
@@ -86,7 +111,8 @@ export async function resolveSessionAuthProfileOverride(params: {
   }
 
   const pickFirstAvailable = () =>
-    order.find((profileId) => !isProfileInCooldown(store, profileId)) ?? order[0];
+    order.find((profileId) => !isProfileInCooldown(store, profileId)) ??
+    order[0];
   const pickNextAvailable = (active: string) => {
     const startIndex = order.indexOf(active);
     if (startIndex < 0) {

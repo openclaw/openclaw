@@ -13,12 +13,16 @@ export async function withTempWorkspace(
   run: (params: { workspaceDir: string; stateDir: string }) => Promise<void>,
 ) {
   const tempHome = await createTempHomeEnv("openclaw-skills-install-home-");
-  const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skills-install-"));
+  const workspaceDir = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-skills-install-"),
+  );
   try {
     const stateDir = setTempStateDir(workspaceDir);
     await run({ workspaceDir, stateDir });
   } finally {
-    await fs.rm(workspaceDir, { recursive: true, force: true }).catch(() => undefined);
+    await fs
+      .rm(workspaceDir, { recursive: true, force: true })
+      .catch(() => undefined);
     await tempHome.restore();
   }
 }

@@ -30,7 +30,10 @@ const invokeDoctorMemoryStatus = async (respond: ReturnType<typeof vi.fn>) => {
   });
 };
 
-const expectEmbeddingErrorResponse = (respond: ReturnType<typeof vi.fn>, error: string) => {
+const expectEmbeddingErrorResponse = (
+  respond: ReturnType<typeof vi.fn>,
+  error: string,
+) => {
   expect(respond).toHaveBeenCalledWith(
     true,
     {
@@ -98,7 +101,9 @@ describe("doctor.memory.status", () => {
     getMemorySearchManager.mockResolvedValue({
       manager: {
         status: () => ({ provider: "openai" }),
-        probeEmbeddingAvailability: vi.fn().mockRejectedValue(new Error("timeout")),
+        probeEmbeddingAvailability: vi
+          .fn()
+          .mockRejectedValue(new Error("timeout")),
         close,
       },
     });
@@ -106,7 +111,10 @@ describe("doctor.memory.status", () => {
 
     await invokeDoctorMemoryStatus(respond);
 
-    expectEmbeddingErrorResponse(respond, "gateway memory probe failed: timeout");
+    expectEmbeddingErrorResponse(
+      respond,
+      "gateway memory probe failed: timeout",
+    );
     expect(close).toHaveBeenCalled();
   });
 });

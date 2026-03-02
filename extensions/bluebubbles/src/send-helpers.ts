@@ -1,7 +1,12 @@
-import { normalizeBlueBubblesHandle, parseBlueBubblesTarget } from "./targets.js";
+import {
+  normalizeBlueBubblesHandle,
+  parseBlueBubblesTarget,
+} from "./targets.js";
 import type { BlueBubblesSendTarget } from "./types.js";
 
-export function resolveBlueBubblesSendTarget(raw: string): BlueBubblesSendTarget {
+export function resolveBlueBubblesSendTarget(
+  raw: string,
+): BlueBubblesSendTarget {
   const parsed = parseBlueBubblesTarget(raw);
   if (parsed.kind === "handle") {
     return {
@@ -34,9 +39,18 @@ export function extractBlueBubblesMessageId(payload: unknown): string {
   const resultRecord = asRecord(record.result);
   const payloadRecord = asRecord(record.payload);
   const messageRecord = asRecord(record.message);
-  const dataArrayFirst = Array.isArray(record.data) ? asRecord(record.data[0]) : null;
+  const dataArrayFirst = Array.isArray(record.data)
+    ? asRecord(record.data[0])
+    : null;
 
-  const roots = [record, dataRecord, resultRecord, payloadRecord, messageRecord, dataArrayFirst];
+  const roots = [
+    record,
+    dataRecord,
+    resultRecord,
+    payloadRecord,
+    messageRecord,
+    dataArrayFirst,
+  ];
 
   for (const root of roots) {
     if (!root) {

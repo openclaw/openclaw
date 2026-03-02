@@ -1,4 +1,12 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 const { spawnMock, ptyKillMock, killProcessTreeMock } = vi.hoisted(() => ({
   spawnMock: vi.fn(),
@@ -15,15 +23,19 @@ vi.mock("../../kill-tree.js", () => ({
 }));
 
 function createStubPty(pid = 1234) {
-  let exitListener: ((event: { exitCode: number; signal?: number }) => void) | null = null;
+  let exitListener:
+    | ((event: { exitCode: number; signal?: number }) => void)
+    | null = null;
   return {
     pid,
     write: vi.fn(),
     onData: vi.fn(() => ({ dispose: vi.fn() })),
-    onExit: vi.fn((listener: (event: { exitCode: number; signal?: number }) => void) => {
-      exitListener = listener;
-      return { dispose: vi.fn() };
-    }),
+    onExit: vi.fn(
+      (listener: (event: { exitCode: number; signal?: number }) => void) => {
+        exitListener = listener;
+        return { dispose: vi.fn() };
+      },
+    ),
     kill: (signal?: string) => ptyKillMock(signal),
     emitExit: (event: { exitCode: number; signal?: number }) => {
       exitListener?.(event);
@@ -32,7 +44,9 @@ function createStubPty(pid = 1234) {
 }
 
 function expectSpawnEnv() {
-  const spawnOptions = spawnMock.mock.calls[0]?.[2] as { env?: Record<string, string> };
+  const spawnOptions = spawnMock.mock.calls[0]?.[2] as {
+    env?: Record<string, string>;
+  };
   return spawnOptions?.env;
 }
 
@@ -56,8 +70,14 @@ describe("createPtyAdapter", () => {
   });
 
   it("forwards explicit signals to node-pty kill on non-Windows", async () => {
-    const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
-    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    const originalPlatform = Object.getOwnPropertyDescriptor(
+      process,
+      "platform",
+    );
+    Object.defineProperty(process, "platform", {
+      value: "linux",
+      configurable: true,
+    });
     try {
       spawnMock.mockReturnValue(createStubPty());
 
@@ -111,7 +131,10 @@ describe("createPtyAdapter", () => {
     expect(settled).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(1);
-    await expect(waitPromise).resolves.toEqual({ code: null, signal: "SIGKILL" });
+    await expect(waitPromise).resolves.toEqual({
+      code: null,
+      signal: "SIGKILL",
+    });
   });
 
   it("prefers real PTY exit over SIGKILL fallback settle", async () => {
@@ -174,8 +197,14 @@ describe("createPtyAdapter", () => {
   });
 
   it("does not pass a signal to node-pty on Windows", async () => {
-    const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
-    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    const originalPlatform = Object.getOwnPropertyDescriptor(
+      process,
+      "platform",
+    );
+    Object.defineProperty(process, "platform", {
+      value: "win32",
+      configurable: true,
+    });
     try {
       spawnMock.mockReturnValue(createStubPty());
 
@@ -195,8 +224,14 @@ describe("createPtyAdapter", () => {
   });
 
   it("uses process-tree kill for SIGKILL on Windows", async () => {
-    const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
-    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    const originalPlatform = Object.getOwnPropertyDescriptor(
+      process,
+      "platform",
+    );
+    Object.defineProperty(process, "platform", {
+      value: "win32",
+      configurable: true,
+    });
     try {
       spawnMock.mockReturnValue(createStubPty(4567));
 

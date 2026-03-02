@@ -51,7 +51,8 @@ const QUERY_KEYS = new Set([
   "maxmessages",
 ]);
 
-const normalizeQueryText = (value: string): string => value.trim().toLowerCase();
+const normalizeQueryText = (value: string): string =>
+  value.trim().toLowerCase();
 
 const globToRegex = (pattern: string): RegExp => {
   const escaped = pattern
@@ -100,8 +101,14 @@ export const extractQueryTerms = (query: string): UsageQueryTerm[] => {
 };
 
 const getSessionText = (session: UsageSessionQueryTarget): string[] => {
-  const items: Array<string | undefined> = [session.label, session.key, session.sessionId];
-  return items.filter((item): item is string => Boolean(item)).map((item) => item.toLowerCase());
+  const items: Array<string | undefined> = [
+    session.label,
+    session.key,
+    session.sessionId,
+  ];
+  return items
+    .filter((item): item is string => Boolean(item))
+    .map((item) => item.toLowerCase());
 };
 
 const getSessionProviders = (session: UsageSessionQueryTarget): string[] => {
@@ -137,7 +144,9 @@ const getSessionModels = (session: UsageSessionQueryTarget): string[] => {
 };
 
 const getSessionTools = (session: UsageSessionQueryTarget): string[] =>
-  (session.usage?.toolUsage?.tools ?? []).map((tool) => tool.name.toLowerCase());
+  (session.usage?.toolUsage?.tools ?? []).map((tool) =>
+    tool.name.toLowerCase(),
+  );
 
 export const matchesUsageQuery = (
   session: UsageSessionQueryTarget,
@@ -160,7 +169,9 @@ export const matchesUsageQuery = (
     case "chat":
       return session.chatType?.toLowerCase().includes(value) ?? false;
     case "provider":
-      return getSessionProviders(session).some((provider) => provider.includes(value));
+      return getSessionProviders(session).some((provider) =>
+        provider.includes(value),
+      );
     case "model":
       return getSessionModels(session).some((model) => model.includes(value));
     case "tool":
@@ -173,7 +184,8 @@ export const matchesUsageQuery = (
       if (value.includes("*") || value.includes("?")) {
         const regex = globToRegex(value);
         return (
-          regex.test(session.key) || (session.sessionId ? regex.test(session.sessionId) : false)
+          regex.test(session.key) ||
+          (session.sessionId ? regex.test(session.sessionId) : false)
         );
       }
       return (
@@ -267,15 +279,27 @@ export const filterSessionsByQuery = <TSession extends UsageSessionQueryTarget>(
       warnings.push(`Missing value for ${term.key}`);
     }
     if (normalizedKey === "has") {
-      const allowed = new Set(["tools", "errors", "context", "usage", "model", "provider"]);
+      const allowed = new Set([
+        "tools",
+        "errors",
+        "context",
+        "usage",
+        "model",
+        "provider",
+      ]);
       if (term.value && !allowed.has(normalizeQueryText(term.value))) {
         warnings.push(`Unknown has:${term.value}`);
       }
     }
     if (
-      ["mintokens", "maxtokens", "mincost", "maxcost", "minmessages", "maxmessages"].includes(
-        normalizedKey,
-      )
+      [
+        "mintokens",
+        "maxtokens",
+        "mincost",
+        "maxcost",
+        "minmessages",
+        "maxmessages",
+      ].includes(normalizedKey)
     ) {
       if (term.value && parseQueryNumber(term.value) === null) {
         warnings.push(`Invalid number for ${term.key}`);
@@ -305,7 +329,9 @@ export function parseToolSummary(content: string) {
     }
     nonToolLines.push(line);
   }
-  const sortedTools = Array.from(toolCounts.entries()).toSorted((a, b) => b[1] - a[1]);
+  const sortedTools = Array.from(toolCounts.entries()).toSorted(
+    (a, b) => b[1] - a[1],
+  );
   const totalCalls = sortedTools.reduce((sum, [, count]) => sum + count, 0);
   const summary =
     sortedTools.length > 0

@@ -19,9 +19,12 @@ const ExecApprovalsPolicyFields = {
   autoAllowSkills: Type.Optional(Type.Boolean()),
 };
 
-export const ExecApprovalsDefaultsSchema = Type.Object(ExecApprovalsPolicyFields, {
-  additionalProperties: false,
-});
+export const ExecApprovalsDefaultsSchema = Type.Object(
+  ExecApprovalsPolicyFields,
+  {
+    additionalProperties: false,
+  },
+);
 
 export const ExecApprovalsAgentSchema = Type.Object(
   {
@@ -59,7 +62,10 @@ export const ExecApprovalsSnapshotSchema = Type.Object(
   { additionalProperties: false },
 );
 
-export const ExecApprovalsGetParamsSchema = Type.Object({}, { additionalProperties: false });
+export const ExecApprovalsGetParamsSchema = Type.Object(
+  {},
+  { additionalProperties: false },
+);
 
 export const ExecApprovalsSetParamsSchema = Type.Object(
   {
@@ -113,8 +119,12 @@ export const ExecApprovalRequestParamsSchema = Type.Object(
     sessionKey: Type.Optional(Type.Union([Type.String(), Type.Null()])),
     turnSourceChannel: Type.Optional(Type.Union([Type.String(), Type.Null()])),
     turnSourceTo: Type.Optional(Type.Union([Type.String(), Type.Null()])),
-    turnSourceAccountId: Type.Optional(Type.Union([Type.String(), Type.Null()])),
-    turnSourceThreadId: Type.Optional(Type.Union([Type.String(), Type.Number(), Type.Null()])),
+    turnSourceAccountId: Type.Optional(
+      Type.Union([Type.String(), Type.Null()]),
+    ),
+    turnSourceThreadId: Type.Optional(
+      Type.Union([Type.String(), Type.Number(), Type.Null()]),
+    ),
     timeoutMs: Type.Optional(Type.Integer({ minimum: 1 })),
     twoPhase: Type.Optional(Type.Boolean()),
   },

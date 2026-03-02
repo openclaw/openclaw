@@ -51,8 +51,14 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
     };
   }
 
-  async function writeAuthProfilesStore(agentDir: string, store: AuthProfileStore) {
-    await fs.writeFile(path.join(agentDir, "auth-profiles.json"), JSON.stringify(store));
+  async function writeAuthProfilesStore(
+    agentDir: string,
+    store: AuthProfileStore,
+  ) {
+    await fs.writeFile(
+      path.join(agentDir, "auth-profiles.json"),
+      JSON.stringify(store),
+    );
   }
 
   function stubOAuthRefreshFailure() {
@@ -82,7 +88,9 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
-  async function resolveOauthProfileForConfiguredMode(mode: "token" | "api_key") {
+  async function resolveOauthProfileForConfiguredMode(
+    mode: "token" | "api_key",
+  ) {
     const profileId = "anthropic:default";
     const store: AuthProfileStore = {
       version: 1,
@@ -157,7 +165,10 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
 
     // Verify the credentials were copied to the secondary agent
     const updatedSecondaryStore = JSON.parse(
-      await fs.readFile(path.join(secondaryAgentDir, "auth-profiles.json"), "utf8"),
+      await fs.readFile(
+        path.join(secondaryAgentDir, "auth-profiles.json"),
+        "utf8",
+      ),
     ) as AuthProfileStore;
     expect(updatedSecondaryStore.profiles[profileId]).toMatchObject({
       access: "fresh-access-token",
@@ -196,7 +207,10 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
     expect(result?.apiKey).toBe("main-newer-access-token");
 
     const updatedSecondaryStore = JSON.parse(
-      await fs.readFile(path.join(secondaryAgentDir, "auth-profiles.json"), "utf8"),
+      await fs.readFile(
+        path.join(secondaryAgentDir, "auth-profiles.json"),
+        "utf8",
+      ),
     ) as AuthProfileStore;
     expect(updatedSecondaryStore.profiles[profileId]).toMatchObject({
       access: "main-newer-access-token",

@@ -91,7 +91,9 @@ describe("commands registry", () => {
       },
       { skillCommands },
     );
-    expect(commands.find((spec) => spec.nativeName === "demo_skill")).toBeTruthy();
+    expect(
+      commands.find((spec) => spec.nativeName === "demo_skill"),
+    ).toBeTruthy();
 
     const native = listNativeCommandSpecsForConfig(
       { commands: { config: false, debug: false, native: true } },
@@ -123,7 +125,9 @@ describe("commands registry", () => {
 
   it("keeps discord native command specs within slash-command limits", () => {
     const cfg = { commands: { native: true } };
-    const native = listNativeCommandSpecsForConfig(cfg, { provider: "discord" });
+    const native = listNativeCommandSpecsForConfig(cfg, {
+      provider: "discord",
+    });
     for (const spec of native) {
       expect(spec.name).toMatch(/^[a-z0-9_-]{1,32}$/);
       expect(spec.description.length).toBeGreaterThan(0);
@@ -249,7 +253,9 @@ describe("commands registry", () => {
   });
 
   it("normalizes telegram-style command mentions for the current bot", () => {
-    expect(normalizeCommandBody("/help@openclaw", { botUsername: "openclaw" })).toBe("/help");
+    expect(
+      normalizeCommandBody("/help@openclaw", { botUsername: "openclaw" }),
+    ).toBe("/help");
     expect(
       normalizeCommandBody("/help@openclaw args", {
         botUsername: "openclaw",
@@ -263,9 +269,9 @@ describe("commands registry", () => {
   });
 
   it("keeps telegram-style command mentions for other bots", () => {
-    expect(normalizeCommandBody("/help@otherbot", { botUsername: "openclaw" })).toBe(
-      "/help@otherbot",
-    );
+    expect(
+      normalizeCommandBody("/help@otherbot", { botUsername: "openclaw" }),
+    ).toBe("/help@otherbot");
   });
 
   it("normalizes dock command aliases", () => {
@@ -306,12 +312,21 @@ describe("commands registry args", () => {
       args: [
         { name: "action", description: "action", type: "string" },
         { name: "path", description: "path", type: "string" },
-        { name: "value", description: "value", type: "string", captureRemaining: true },
+        {
+          name: "value",
+          description: "value",
+          type: "string",
+          captureRemaining: true,
+        },
       ],
     };
 
     const args = parseCommandArgs(command, "set foo bar baz");
-    expect(args?.values).toEqual({ action: "set", path: "foo", value: "bar baz" });
+    expect(args?.values).toEqual({
+      action: "set",
+      path: "foo",
+      value: "bar baz",
+    });
   });
 
   it("serializes args via raw first, then values", () => {
@@ -321,22 +336,35 @@ describe("commands registry args", () => {
       textAliases: [],
       scope: "both",
       argsParsing: "positional",
-      args: [{ name: "model", description: "model", type: "string", captureRemaining: true }],
+      args: [
+        {
+          name: "model",
+          description: "model",
+          type: "string",
+          captureRemaining: true,
+        },
+      ],
     };
 
-    expect(serializeCommandArgs(command, { raw: "gpt-5.2-codex" })).toBe("gpt-5.2-codex");
-    expect(serializeCommandArgs(command, { values: { model: "gpt-5.2-codex" } })).toBe(
+    expect(serializeCommandArgs(command, { raw: "gpt-5.2-codex" })).toBe(
       "gpt-5.2-codex",
     );
-    expect(buildCommandTextFromArgs(command, { values: { model: "gpt-5.2-codex" } })).toBe(
-      "/model gpt-5.2-codex",
-    );
+    expect(
+      serializeCommandArgs(command, { values: { model: "gpt-5.2-codex" } }),
+    ).toBe("gpt-5.2-codex");
+    expect(
+      buildCommandTextFromArgs(command, { values: { model: "gpt-5.2-codex" } }),
+    ).toBe("/model gpt-5.2-codex");
   });
 
   it("resolves auto arg menus when missing a choice arg", () => {
     const command = createUsageModeCommand();
 
-    const menu = resolveCommandArgMenu({ command, args: undefined, cfg: {} as never });
+    const menu = resolveCommandArgMenu({
+      command,
+      args: undefined,
+      cfg: {} as never,
+    });
     expect(menu?.arg.name).toBe("mode");
     expect(menu?.choices).toEqual([
       { label: "off", value: "off" },
@@ -378,14 +406,23 @@ describe("commands registry args", () => {
           description: "level",
           type: "string",
           choices: ({ provider, model, command, arg }) => {
-            seen = { provider, model, commandKey: command.key, argName: arg.name };
+            seen = {
+              provider,
+              model,
+              commandKey: command.key,
+              argName: arg.name,
+            };
             return ["low", "high"];
           },
         },
       ],
     };
 
-    const menu = resolveCommandArgMenu({ command, args: undefined, cfg: {} as never });
+    const menu = resolveCommandArgMenu({
+      command,
+      args: undefined,
+      cfg: {} as never,
+    });
     expect(menu?.arg.name).toBe("level");
     expect(menu?.choices).toEqual([
       { label: "low", value: "low" },

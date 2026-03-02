@@ -8,7 +8,10 @@ import { loadConfig, type OpenClawConfig } from "../../config/config.js";
 import { coerceSecretRef } from "../../config/types.secrets.js";
 import { withFileLock } from "../../infra/file-lock.js";
 import { refreshQwenPortalCredentials } from "../../providers/qwen-portal-oauth.js";
-import { resolveSecretRefString, type SecretRefResolveCache } from "../../secrets/resolve.js";
+import {
+  resolveSecretRefString,
+  type SecretRefResolveCache,
+} from "../../secrets/resolve.js";
 import { refreshChutesTokens } from "../chutes-oauth.js";
 import { AUTH_STORE_LOCK_OPTIONS, log } from "./constants.js";
 import { formatAuthDoctorHint } from "./doctor.js";
@@ -17,7 +20,9 @@ import { suggestOAuthProfileIdForLegacyDefault } from "./repair.js";
 import { ensureAuthProfileStore, saveAuthProfileStore } from "./store.js";
 import type { AuthProfileStore } from "./types.js";
 
-const OAUTH_PROVIDER_IDS = new Set<string>(getOAuthProviders().map((provider) => provider.id));
+const OAUTH_PROVIDER_IDS = new Set<string>(
+  getOAuthProviders().map((provider) => provider.id),
+);
 
 const isOAuthProvider = (provider: string): provider is OAuthProvider =>
   OAUTH_PROVIDER_IDS.has(provider);
@@ -28,7 +33,10 @@ const resolveOAuthProvider = (provider: string): OAuthProvider | null =>
 /** Bearer-token auth modes that are interchangeable (oauth tokens and raw tokens). */
 const BEARER_AUTH_MODES = new Set(["oauth", "token"]);
 
-const isCompatibleModeType = (mode: string | undefined, type: string | undefined): boolean => {
+const isCompatibleModeType = (
+  mode: string | undefined,
+  type: string | undefined,
+): boolean => {
   if (!mode || !type) {
     return false;
   }
@@ -56,7 +64,10 @@ function isProfileConfigCompatible(params: {
   return true;
 }
 
-function buildOAuthApiKey(provider: string, credentials: OAuthCredentials): string {
+function buildOAuthApiKey(
+  provider: string,
+  credentials: OAuthCredentials,
+): string {
   const needsProjectId = provider === "google-gemini-cli";
   return needsProjectId
     ? JSON.stringify({
@@ -66,7 +77,11 @@ function buildOAuthApiKey(provider: string, credentials: OAuthCredentials): stri
     : credentials.access;
 }
 
-function buildApiKeyProfileResult(params: { apiKey: string; provider: string; email?: string }) {
+function buildApiKeyProfileResult(params: {
+  apiKey: string;
+  provider: string;
+  email?: string;
+}) {
   return {
     apiKey: params.apiKey,
     provider: params.provider,
@@ -88,7 +103,10 @@ function buildOAuthProfileResult(params: {
 
 function isExpiredCredential(expires: number | undefined): boolean {
   return (
-    typeof expires === "number" && Number.isFinite(expires) && expires > 0 && Date.now() >= expires
+    typeof expires === "number" &&
+    Number.isFinite(expires) &&
+    expires > 0 &&
+    Date.now() >= expires
   );
 }
 
@@ -106,7 +124,9 @@ function adoptNewerMainOAuthCredential(params: {
   profileId: string;
   agentDir?: string;
   cred: OAuthCredentials & { type: "oauth"; provider: string; email?: string };
-}): (OAuthCredentials & { type: "oauth"; provider: string; email?: string }) | null {
+}):
+  | (OAuthCredentials & { type: "oauth"; provider: string; email?: string })
+  | null {
   if (!params.agentDir) {
     return null;
   }
@@ -117,7 +137,8 @@ function adoptNewerMainOAuthCredential(params: {
       mainCred?.type === "oauth" &&
       mainCred.provider === params.cred.provider &&
       Number.isFinite(mainCred.expires) &&
-      (!Number.isFinite(params.cred.expires) || mainCred.expires > params.cred.expires)
+      (!Number.isFinite(params.cred.expires) ||
+        mainCred.expires > params.cred.expires)
     ) {
       params.store.profiles[params.profileId] = { ...mainCred };
       saveAuthProfileStore(params.store, params.agentDir);
@@ -329,7 +350,11 @@ export async function resolveApiKeyForProfile(
     if (!key) {
       return null;
     }
-    return buildApiKeyProfileResult({ apiKey: key, provider: cred.provider, email: cred.email });
+    return buildApiKeyProfileResult({
+      apiKey: key,
+      provider: cred.provider,
+      email: cred.email,
+    });
   }
   if (cred.type === "token") {
     const token = await resolveProfileSecretString({
@@ -349,7 +374,11 @@ export async function resolveApiKeyForProfile(
     if (isExpiredCredential(cred.expires)) {
       return null;
     }
-    return buildApiKeyProfileResult({ apiKey: token, provider: cred.provider, email: cred.email });
+    return buildApiKeyProfileResult({
+      apiKey: token,
+      provider: cred.provider,
+      email: cred.email,
+    });
   }
 
   const oauthCred =

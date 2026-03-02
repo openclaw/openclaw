@@ -2,7 +2,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import { createDoctorRuntime, mockDoctorConfigSnapshot, note } from "./doctor.e2e-harness.js";
+import {
+  createDoctorRuntime,
+  mockDoctorConfigSnapshot,
+  note,
+} from "./doctor.e2e-harness.js";
 import "./doctor.fast-path-mocks.js";
 
 vi.doUnmock("./doctor-state-integrity.js");
@@ -17,7 +21,9 @@ describe("doctor command", () => {
   it("warns when the state directory is missing", async () => {
     mockDoctorConfigSnapshot();
 
-    const missingDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-missing-state-"));
+    const missingDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "openclaw-missing-state-"),
+    );
     fs.rmSync(missingDir, { recursive: true, force: true });
     process.env.OPENCLAW_STATE_DIR = missingDir;
     note.mockClear();
@@ -27,7 +33,9 @@ describe("doctor command", () => {
       workspaceSuggestions: false,
     });
 
-    const stateNote = note.mock.calls.find((call) => call[1] === "State integrity");
+    const stateNote = note.mock.calls.find(
+      (call) => call[1] === "State integrity",
+    );
     expect(stateNote).toBeTruthy();
     expect(String(stateNote?.[0])).toContain("CRITICAL");
   });
@@ -53,7 +61,8 @@ describe("doctor command", () => {
 
     const warned = note.mock.calls.some(
       ([message, title]) =>
-        title === "OpenCode Zen" && String(message).includes("models.providers.opencode"),
+        title === "OpenCode Zen" &&
+        String(message).includes("models.providers.opencode"),
     );
     expect(warned).toBe(true);
   });

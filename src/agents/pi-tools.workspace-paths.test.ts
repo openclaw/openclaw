@@ -5,7 +5,10 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { createOpenClawCodingTools } from "./pi-tools.js";
 import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
-import { expectReadWriteEditTools, getTextContent } from "./test-helpers/pi-tools-fs-helpers.js";
+import {
+  expectReadWriteEditTools,
+  getTextContent,
+} from "./test-helpers/pi-tools-fs-helpers.js";
 import { createPiToolsSandboxContext } from "./test-helpers/pi-tools-sandbox-context.js";
 
 vi.mock("../infra/shell-env.js", async (importOriginal) => {
@@ -28,11 +31,18 @@ describe("workspace path resolution", () => {
         const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(otherDir);
         try {
           const tools = createOpenClawCodingTools({ workspaceDir });
-          const { readTool, writeTool, editTool } = expectReadWriteEditTools(tools);
+          const { readTool, writeTool, editTool } =
+            expectReadWriteEditTools(tools);
 
           const readFile = "read.txt";
-          await fs.writeFile(path.join(workspaceDir, readFile), "workspace read ok", "utf8");
-          const readResult = await readTool.execute("ws-read", { path: readFile });
+          await fs.writeFile(
+            path.join(workspaceDir, readFile),
+            "workspace read ok",
+            "utf8",
+          );
+          const readResult = await readTool.execute("ws-read", {
+            path: readFile,
+          });
           expect(getTextContent(readResult)).toContain("workspace read ok");
 
           const writeFile = "write.txt";
@@ -40,20 +50,24 @@ describe("workspace path resolution", () => {
             path: writeFile,
             content: "workspace write ok",
           });
-          expect(await fs.readFile(path.join(workspaceDir, writeFile), "utf8")).toBe(
-            "workspace write ok",
-          );
+          expect(
+            await fs.readFile(path.join(workspaceDir, writeFile), "utf8"),
+          ).toBe("workspace write ok");
 
           const editFile = "edit.txt";
-          await fs.writeFile(path.join(workspaceDir, editFile), "hello world", "utf8");
+          await fs.writeFile(
+            path.join(workspaceDir, editFile),
+            "hello world",
+            "utf8",
+          );
           await editTool.execute("ws-edit", {
             path: editFile,
             oldText: "world",
             newText: "openclaw",
           });
-          expect(await fs.readFile(path.join(workspaceDir, editFile), "utf8")).toBe(
-            "hello openclaw",
-          );
+          expect(
+            await fs.readFile(path.join(workspaceDir, editFile), "utf8"),
+          ).toBe("hello openclaw");
         } finally {
           cwdSpy.mockRestore();
         }
@@ -65,7 +79,11 @@ describe("workspace path resolution", () => {
     await withTempDir("openclaw-ws-", async (workspaceDir) => {
       await withTempDir("openclaw-cwd-", async (otherDir) => {
         const testFile = "delete.txt";
-        await fs.writeFile(path.join(workspaceDir, testFile), "hello world", "utf8");
+        await fs.writeFile(
+          path.join(workspaceDir, testFile),
+          "hello world",
+          "utf8",
+        );
 
         const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(otherDir);
         try {
@@ -78,7 +96,9 @@ describe("workspace path resolution", () => {
             newText: "",
           });
 
-          expect(await fs.readFile(path.join(workspaceDir, testFile), "utf8")).toBe("hello");
+          expect(
+            await fs.readFile(path.join(workspaceDir, testFile), "utf8"),
+          ).toBe("hello");
         } finally {
           cwdSpy.mockRestore();
         }
@@ -99,7 +119,9 @@ describe("workspace path resolution", () => {
         command: "echo ok",
       });
       const cwd =
-        result?.details && typeof result.details === "object" && "cwd" in result.details
+        result?.details &&
+        typeof result.details === "object" &&
+        "cwd" in result.details
           ? (result.details as { cwd?: string }).cwd
           : undefined;
       expect(cwd).toBeTruthy();
@@ -126,7 +148,9 @@ describe("workspace path resolution", () => {
           workdir: overrideDir,
         });
         const cwd =
-          result?.details && typeof result.details === "object" && "cwd" in result.details
+          result?.details &&
+          typeof result.details === "object" &&
+          "cwd" in result.details
             ? (result.details as { cwd?: string }).cwd
             : undefined;
         expect(cwd).toBeTruthy();
@@ -145,7 +169,10 @@ describe("workspace path resolution", () => {
       const tools = createOpenClawCodingTools({ workspaceDir, config: cfg });
       const { readTool } = expectReadWriteEditTools(tools);
 
-      const outsideAbsolute = path.resolve(path.parse(workspaceDir).root, "outside-openclaw.txt");
+      const outsideAbsolute = path.resolve(
+        path.parse(workspaceDir).root,
+        "outside-openclaw.txt",
+      );
       await expect(
         readTool.execute("ws-read-at-prefix", { path: `@${outsideAbsolute}` }),
       ).rejects.toThrow(/Path escapes sandbox root/i);
@@ -175,9 +202,9 @@ describe("workspace path resolution", () => {
           }
           throw err;
         }
-        await expect(readTool.execute("ws-read-hardlink", { path: "linked.txt" })).rejects.toThrow(
-          /hardlink|sandbox/i,
-        );
+        await expect(
+          readTool.execute("ws-read-hardlink", { path: "linked.txt" }),
+        ).rejects.toThrow(/hardlink|sandbox/i);
         await expect(
           writeTool.execute("ws-write-hardlink", {
             path: "linked.txt",
@@ -206,11 +233,20 @@ describe("sandboxed workspace paths", () => {
         });
 
         const testFile = "sandbox.txt";
-        await fs.writeFile(path.join(sandboxDir, testFile), "sandbox read", "utf8");
-        await fs.writeFile(path.join(workspaceDir, testFile), "workspace read", "utf8");
+        await fs.writeFile(
+          path.join(sandboxDir, testFile),
+          "sandbox read",
+          "utf8",
+        );
+        await fs.writeFile(
+          path.join(workspaceDir, testFile),
+          "workspace read",
+          "utf8",
+        );
 
         const tools = createOpenClawCodingTools({ workspaceDir, sandbox });
-        const { readTool, writeTool, editTool } = expectReadWriteEditTools(tools);
+        const { readTool, writeTool, editTool } =
+          expectReadWriteEditTools(tools);
 
         const result = await readTool?.execute("sbx-read", { path: testFile });
         expect(getTextContent(result)).toContain("sandbox read");
@@ -219,7 +255,10 @@ describe("sandboxed workspace paths", () => {
           path: "new.txt",
           content: "sandbox write",
         });
-        const written = await fs.readFile(path.join(sandboxDir, "new.txt"), "utf8");
+        const written = await fs.readFile(
+          path.join(sandboxDir, "new.txt"),
+          "utf8",
+        );
         expect(written).toBe("sandbox write");
 
         await editTool?.execute("sbx-edit", {
@@ -227,7 +266,10 @@ describe("sandboxed workspace paths", () => {
           oldText: "write",
           newText: "edit",
         });
-        const edited = await fs.readFile(path.join(sandboxDir, "new.txt"), "utf8");
+        const edited = await fs.readFile(
+          path.join(sandboxDir, "new.txt"),
+          "utf8",
+        );
         expect(edited).toBe("sandbox edit");
       });
     });

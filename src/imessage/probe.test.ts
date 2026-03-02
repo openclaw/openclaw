@@ -10,11 +10,13 @@ vi.mock("../commands/onboard-helpers.js", () => ({
 }));
 
 vi.mock("../process/exec.js", () => ({
-  runCommandWithTimeout: (...args: unknown[]) => runCommandWithTimeoutMock(...args),
+  runCommandWithTimeout: (...args: unknown[]) =>
+    runCommandWithTimeoutMock(...args),
 }));
 
 vi.mock("./client.js", () => ({
-  createIMessageRpcClient: (...args: unknown[]) => createIMessageRpcClientMock(...args),
+  createIMessageRpcClient: (...args: unknown[]) =>
+    createIMessageRpcClientMock(...args),
 }));
 
 beforeEach(() => {

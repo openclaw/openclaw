@@ -19,7 +19,8 @@ function getCapturedCtx() {
 }
 
 vi.mock("../../auto-reply/dispatch.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../auto-reply/dispatch.js")>();
+  const actual =
+    await importOriginal<typeof import("../../auto-reply/dispatch.js")>();
   return buildDispatchInboundCaptureMock(actual, (ctx) => {
     capturedCtx = ctx as SignalMsgContext;
   });
@@ -56,7 +57,9 @@ function createMentionHandler(params: {
   requireMention: boolean;
   mentionPattern?: string;
   historyLimit?: number;
-  groupHistories?: ReturnType<typeof createBaseSignalEventHandlerDeps>["groupHistories"];
+  groupHistories?: ReturnType<
+    typeof createBaseSignalEventHandlerDeps
+  >["groupHistories"];
 }) {
   return createSignalEventHandler(
     createBaseSignalEventHandlerDeps({
@@ -64,19 +67,30 @@ function createMentionHandler(params: {
         requireMention: params.requireMention,
         mentionPattern: params.mentionPattern,
       }),
-      ...(typeof params.historyLimit === "number" ? { historyLimit: params.historyLimit } : {}),
-      ...(params.groupHistories ? { groupHistories: params.groupHistories } : {}),
+      ...(typeof params.historyLimit === "number"
+        ? { historyLimit: params.historyLimit }
+        : {}),
+      ...(params.groupHistories
+        ? { groupHistories: params.groupHistories }
+        : {}),
     }),
   );
 }
 
 function createMentionGatedHistoryHandler() {
   const groupHistories = new Map();
-  const handler = createMentionHandler({ requireMention: true, historyLimit: 5, groupHistories });
+  const handler = createMentionHandler({
+    requireMention: true,
+    historyLimit: 5,
+    groupHistories,
+  });
   return { handler, groupHistories };
 }
 
-function createSignalConfig(params: { requireMention: boolean; mentionPattern?: string }) {
+function createSignalConfig(params: {
+  requireMention: boolean;
+  mentionPattern?: string;
+}) {
   return {
     messages: {
       inbound: { debounceMs: 0 },
@@ -90,7 +104,10 @@ function createSignalConfig(params: { requireMention: boolean; mentionPattern?: 
   } as unknown as OpenClawConfig;
 }
 
-async function expectSkippedGroupHistory(opts: GroupEventOpts, expectedBody: string) {
+async function expectSkippedGroupHistory(
+  opts: GroupEventOpts,
+  expectedBody: string,
+) {
   capturedCtx = undefined;
   const { handler, groupHistories } = createMentionGatedHistoryHandler();
   await handler(makeGroupEvent(opts));
@@ -147,7 +164,10 @@ describe("signal mention gating", () => {
   });
 
   it("records quote text in pending history for skipped quote-only group messages", async () => {
-    await expectSkippedGroupHistory({ message: "", quoteText: "quoted context" }, "quoted context");
+    await expectSkippedGroupHistory(
+      { message: "", quoteText: "quoted context" },
+      "quoted context",
+    );
   });
 
   it("bypasses mention gating for authorized control commands", async () => {
@@ -172,7 +192,11 @@ describe("signal mention gating", () => {
         message,
         mentions: [
           { uuid: "123e4567", start: firstStart, length: placeholder.length },
-          { number: "+15550002222", start: secondStart, length: placeholder.length },
+          {
+            number: "+15550002222",
+            start: secondStart,
+            length: placeholder.length,
+          },
         ],
       }),
     );
@@ -220,7 +244,11 @@ describe("renderSignalMentions", () => {
     const message = `${PLACEHOLDER} hi ${PLACEHOLDER}!`;
     const normalized = renderSignalMentions(message, [
       { uuid: "abc-123", start: 0, length: 1 },
-      { number: "+15550005555", start: message.lastIndexOf(PLACEHOLDER), length: 1 },
+      {
+        number: "+15550005555",
+        start: message.lastIndexOf(PLACEHOLDER),
+        length: 1,
+      },
     ]);
 
     expect(normalized).toBe("@abc-123 hi @+15550005555!");
@@ -239,7 +267,9 @@ describe("renderSignalMentions", () => {
 
   it("clamps and truncates fractional mention offsets", () => {
     const message = `${PLACEHOLDER} ping`;
-    const normalized = renderSignalMentions(message, [{ uuid: "valid", start: -0.7, length: 1.9 }]);
+    const normalized = renderSignalMentions(message, [
+      { uuid: "valid", start: -0.7, length: 1.9 },
+    ]);
 
     expect(normalized).toBe("@valid ping");
   });

@@ -17,7 +17,9 @@ export function buildDeliveryFromLegacyPayload(
   const deliver = payload.deliver;
   const mode = deliver === false ? "none" : "announce";
   const channelRaw =
-    typeof payload.channel === "string" ? payload.channel.trim().toLowerCase() : "";
+    typeof payload.channel === "string"
+      ? payload.channel.trim().toLowerCase()
+      : "";
   const toRaw = typeof payload.to === "string" ? payload.to.trim() : "";
   const next: Record<string, unknown> = { mode };
   if (channelRaw) {

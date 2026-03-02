@@ -8,10 +8,14 @@ export type SlackModalPrivateMetadata = {
 const SLACK_PRIVATE_METADATA_MAX = 3000;
 
 function normalizeString(value: unknown) {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+  return typeof value === "string" && value.trim().length > 0
+    ? value.trim()
+    : undefined;
 }
 
-export function parseSlackModalPrivateMetadata(raw: unknown): SlackModalPrivateMetadata {
+export function parseSlackModalPrivateMetadata(
+  raw: unknown,
+): SlackModalPrivateMetadata {
   if (typeof raw !== "string" || raw.trim().length === 0) {
     return {};
   }
@@ -28,7 +32,9 @@ export function parseSlackModalPrivateMetadata(raw: unknown): SlackModalPrivateM
   }
 }
 
-export function encodeSlackModalPrivateMetadata(input: SlackModalPrivateMetadata): string {
+export function encodeSlackModalPrivateMetadata(
+  input: SlackModalPrivateMetadata,
+): string {
   const payload: SlackModalPrivateMetadata = {
     ...(input.sessionKey ? { sessionKey: input.sessionKey } : {}),
     ...(input.channelId ? { channelId: input.channelId } : {}),

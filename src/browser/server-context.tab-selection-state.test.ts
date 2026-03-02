@@ -56,13 +56,18 @@ describe("browser server-context tab selection state", () => {
   });
 
   it("closes excess managed tabs after opening a new tab", async () => {
-    vi.spyOn(cdpModule, "createTargetViaCdp").mockResolvedValue({ targetId: "NEW" });
+    vi.spyOn(cdpModule, "createTargetViaCdp").mockResolvedValue({
+      targetId: "NEW",
+    });
     const existingTabs = makeManagedTabsWithNew();
 
     const fetchMock = vi.fn(async (url: unknown) => {
       const value = String(url);
       if (value.includes("/json/list")) {
-        return { ok: true, json: async () => existingTabs } as unknown as Response;
+        return {
+          ok: true,
+          json: async () => existingTabs,
+        } as unknown as Response;
       }
       if (value.includes("/json/close/OLD1")) {
         return { ok: true, json: async () => ({}) } as unknown as Response;
@@ -91,13 +96,18 @@ describe("browser server-context tab selection state", () => {
   });
 
   it("never closes the just-opened managed tab during cap cleanup", async () => {
-    vi.spyOn(cdpModule, "createTargetViaCdp").mockResolvedValue({ targetId: "NEW" });
+    vi.spyOn(cdpModule, "createTargetViaCdp").mockResolvedValue({
+      targetId: "NEW",
+    });
     const existingTabs = makeManagedTabsWithNew({ newFirst: true });
 
     const fetchMock = vi.fn(async (url: unknown) => {
       const value = String(url);
       if (value.includes("/json/list")) {
-        return { ok: true, json: async () => existingTabs } as unknown as Response;
+        return {
+          ok: true,
+          json: async () => existingTabs,
+        } as unknown as Response;
       }
       if (value.includes("/json/close/OLD1")) {
         return { ok: true, json: async () => ({}) } as unknown as Response;
@@ -133,7 +143,9 @@ describe("browser server-context tab selection state", () => {
   });
 
   it("does not fail tab open when managed-tab cleanup list fails", async () => {
-    vi.spyOn(cdpModule, "createTargetViaCdp").mockResolvedValue({ targetId: "NEW" });
+    vi.spyOn(cdpModule, "createTargetViaCdp").mockResolvedValue({
+      targetId: "NEW",
+    });
 
     let listCount = 0;
     const fetchMock = vi.fn(async (url: unknown) => {
@@ -174,13 +186,18 @@ describe("browser server-context tab selection state", () => {
   });
 
   it("does not run managed tab cleanup in attachOnly mode", async () => {
-    vi.spyOn(cdpModule, "createTargetViaCdp").mockResolvedValue({ targetId: "NEW" });
+    vi.spyOn(cdpModule, "createTargetViaCdp").mockResolvedValue({
+      targetId: "NEW",
+    });
     const existingTabs = makeManagedTabsWithNew();
 
     const fetchMock = vi.fn(async (url: unknown) => {
       const value = String(url);
       if (value.includes("/json/list")) {
-        return { ok: true, json: async () => existingTabs } as unknown as Response;
+        return {
+          ok: true,
+          json: async () => existingTabs,
+        } as unknown as Response;
       }
       if (value.includes("/json/close/")) {
         throw new Error("should not close tabs in attachOnly mode");
@@ -203,13 +220,18 @@ describe("browser server-context tab selection state", () => {
   });
 
   it("does not block openTab on slow best-effort cleanup closes", async () => {
-    vi.spyOn(cdpModule, "createTargetViaCdp").mockResolvedValue({ targetId: "NEW" });
+    vi.spyOn(cdpModule, "createTargetViaCdp").mockResolvedValue({
+      targetId: "NEW",
+    });
     const existingTabs = makeManagedTabsWithNew();
 
     const fetchMock = vi.fn(async (url: unknown) => {
       const value = String(url);
       if (value.includes("/json/list")) {
-        return { ok: true, json: async () => existingTabs } as unknown as Response;
+        return {
+          ok: true,
+          json: async () => existingTabs,
+        } as unknown as Response;
       }
       if (value.includes("/json/close/OLD1")) {
         return new Promise<Response>(() => {});
@@ -230,7 +252,10 @@ describe("browser server-context tab selection state", () => {
     const opened = await Promise.race([
       openclaw.openTab("http://127.0.0.1:3009"),
       new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("openTab timed out waiting for cleanup")), 300),
+        setTimeout(
+          () => reject(new Error("openTab timed out waiting for cleanup")),
+          300,
+        ),
       ),
     ]);
 

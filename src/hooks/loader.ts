@@ -63,7 +63,9 @@ export async function loadInternalHooks(
     });
 
     // Filter by eligibility
-    const eligible = hookEntries.filter((entry) => shouldIncludeHook({ entry, config: cfg }));
+    const eligible = hookEntries.filter((entry) =>
+      shouldIncludeHook({ entry, config: cfg }),
+    );
 
     for (const entry of eligible) {
       const hookConfig = resolveHookConfig(cfg, entry.hook.name);
@@ -101,14 +103,18 @@ export async function loadInternalHooks(
         });
 
         if (!handler) {
-          log.error(`Handler '${exportName}' from ${entry.hook.name} is not a function`);
+          log.error(
+            `Handler '${exportName}' from ${entry.hook.name} is not a function`,
+          );
           continue;
         }
 
         // Register for all events listed in metadata
         const events = entry.metadata?.events ?? [];
         if (events.length === 0) {
-          log.warn(`Hook '${entry.hook.name}' has no events defined in metadata`);
+          log.warn(
+            `Hook '${entry.hook.name}' has no events defined in metadata`,
+          );
           continue;
         }
 
@@ -154,7 +160,9 @@ export async function loadInternalHooks(
       const modulePathSafe = safeRealpathOrResolve(modulePath);
       const rel = path.relative(baseDir, modulePath);
       if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) {
-        log.error(`Handler module path must stay within workspaceDir: ${rawModule}`);
+        log.error(
+          `Handler module path must stay within workspaceDir: ${rawModule}`,
+        );
         continue;
       }
       const opened = await openBoundaryFile({
@@ -163,7 +171,9 @@ export async function loadInternalHooks(
         boundaryLabel: "workspace directory",
       });
       if (!opened.ok) {
-        log.error(`Handler module path fails boundary checks under workspaceDir: ${rawModule}`);
+        log.error(
+          `Handler module path fails boundary checks under workspaceDir: ${rawModule}`,
+        );
         continue;
       }
       const safeModulePath = opened.path;
@@ -181,7 +191,9 @@ export async function loadInternalHooks(
       });
 
       if (!handler) {
-        log.error(`Handler '${exportName}' from ${modulePath} is not a function`);
+        log.error(
+          `Handler '${exportName}' from ${modulePath} is not a function`,
+        );
         continue;
       }
 

@@ -14,7 +14,11 @@ import "./test-helpers/fast-core-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 
 const NODE_ID = "mac-1";
-const BASE_RUN_INPUT = { action: "run", node: NODE_ID, command: ["echo", "hi"] } as const;
+const BASE_RUN_INPUT = {
+  action: "run",
+  node: NODE_ID,
+  command: ["echo", "hi"],
+} as const;
 const JPG_PAYLOAD = {
   format: "jpg",
   base64: "aGVsbG8=",
@@ -29,7 +33,9 @@ function unexpectedGatewayMethod(method: unknown): never {
 }
 
 function getNodesTool() {
-  const tool = createOpenClawTools().find((candidate) => candidate.name === "nodes");
+  const tool = createOpenClawTools().find(
+    (candidate) => candidate.name === "nodes",
+  );
   if (!tool) {
     throw new Error("missing nodes tool");
   }
@@ -49,15 +55,23 @@ function mockNodeList(commands?: string[]) {
   };
 }
 
-function expectSingleImage(result: NodesToolResult, params?: { mimeType?: string }) {
-  const images = (result.content ?? []).filter((block) => block.type === "image");
+function expectSingleImage(
+  result: NodesToolResult,
+  params?: { mimeType?: string },
+) {
+  const images = (result.content ?? []).filter(
+    (block) => block.type === "image",
+  );
   expect(images).toHaveLength(1);
   if (params?.mimeType) {
     expect(images[0]?.mimeType).toBe(params.mimeType);
   }
 }
 
-function expectFirstTextContains(result: NodesToolResult, expectedText: string) {
+function expectFirstTextContains(
+  result: NodesToolResult,
+  expectedText: string,
+) {
   expect(result.content?.[0]).toMatchObject({
     type: "text",
     text: expect.stringContaining(expectedText),
@@ -66,24 +80,28 @@ function expectFirstTextContains(result: NodesToolResult, expectedText: string) 
 
 function setupNodeInvokeMock(params: {
   commands?: string[];
-  onInvoke?: (invokeParams: unknown) => GatewayMockResult | Promise<GatewayMockResult>;
+  onInvoke?: (
+    invokeParams: unknown,
+  ) => GatewayMockResult | Promise<GatewayMockResult>;
   invokePayload?: unknown;
 }) {
-  callGateway.mockImplementation(async ({ method, params: invokeParams }: GatewayCall) => {
-    if (method === "node.list") {
-      return mockNodeList(params.commands);
-    }
-    if (method === "node.invoke") {
-      if (params.onInvoke) {
-        return await params.onInvoke(invokeParams);
+  callGateway.mockImplementation(
+    async ({ method, params: invokeParams }: GatewayCall) => {
+      if (method === "node.list") {
+        return mockNodeList(params.commands);
       }
-      if (params.invokePayload !== undefined) {
-        return { payload: params.invokePayload };
+      if (method === "node.invoke") {
+        if (params.onInvoke) {
+          return await params.onInvoke(invokeParams);
+        }
+        if (params.invokePayload !== undefined) {
+          return { payload: params.invokePayload };
+        }
+        return { payload: {} };
       }
-      return { payload: {} };
-    }
-    return unexpectedGatewayMethod(method);
-  });
+      return unexpectedGatewayMethod(method);
+    },
+  );
 }
 
 function createSystemRunPreparePayload(cwd: string | null) {
@@ -102,26 +120,33 @@ function createSystemRunPreparePayload(cwd: string | null) {
 }
 
 function setupSystemRunGateway(params: {
-  onRunInvoke: (invokeParams: unknown) => GatewayMockResult | Promise<GatewayMockResult>;
-  onApprovalRequest?: (approvalParams: unknown) => GatewayMockResult | Promise<GatewayMockResult>;
+  onRunInvoke: (
+    invokeParams: unknown,
+  ) => GatewayMockResult | Promise<GatewayMockResult>;
+  onApprovalRequest?: (
+    approvalParams: unknown,
+  ) => GatewayMockResult | Promise<GatewayMockResult>;
   prepareCwd?: string | null;
 }) {
-  callGateway.mockImplementation(async ({ method, params: gatewayParams }: GatewayCall) => {
-    if (method === "node.list") {
-      return mockNodeList(["system.run"]);
-    }
-    if (method === "node.invoke") {
-      const command = (gatewayParams as { command?: string } | undefined)?.command;
-      if (command === "system.run.prepare") {
-        return createSystemRunPreparePayload(params.prepareCwd ?? null);
+  callGateway.mockImplementation(
+    async ({ method, params: gatewayParams }: GatewayCall) => {
+      if (method === "node.list") {
+        return mockNodeList(["system.run"]);
       }
-      return await params.onRunInvoke(gatewayParams);
-    }
-    if (method === "exec.approval.request" && params.onApprovalRequest) {
-      return await params.onApprovalRequest(gatewayParams);
-    }
-    return unexpectedGatewayMethod(method);
-  });
+      if (method === "node.invoke") {
+        const command = (gatewayParams as { command?: string } | undefined)
+          ?.command;
+        if (command === "system.run.prepare") {
+          return createSystemRunPreparePayload(params.prepareCwd ?? null);
+        }
+        return await params.onRunInvoke(gatewayParams);
+      }
+      if (method === "exec.approval.request" && params.onApprovalRequest) {
+        return await params.onApprovalRequest(gatewayParams);
+      }
+      return unexpectedGatewayMethod(method);
+    },
+  );
 }
 
 beforeEach(() => {
@@ -411,7 +436,9 @@ describe("nodes run", () => {
             approvalDecision: "allow-once",
           },
         });
-        return { payload: { stdout: "", stderr: "", exitCode: 0, success: true } };
+        return {
+          payload: { stdout: "", stderr: "", exitCode: 0, success: true },
+        };
       },
       onApprovalRequest: (approvalParams) => {
         expect(approvalParams).toMatchObject({
@@ -426,7 +453,8 @@ describe("nodes run", () => {
           timeoutMs: 120_000,
         });
         approvalId =
-          typeof (approvalParams as { id?: unknown } | undefined)?.id === "string"
+          typeof (approvalParams as { id?: unknown } | undefined)?.id ===
+          "string"
             ? ((approvalParams as { id: string }).id ?? null)
             : null;
         return { decision: "allow-once" };
@@ -447,7 +475,9 @@ describe("nodes run", () => {
       },
     });
 
-    await expect(executeNodes(BASE_RUN_INPUT)).rejects.toThrow("exec denied: user denied");
+    await expect(executeNodes(BASE_RUN_INPUT)).rejects.toThrow(
+      "exec denied: user denied",
+    );
   });
 
   it("fails closed for timeout and invalid approval decisions", async () => {
@@ -459,7 +489,9 @@ describe("nodes run", () => {
         return {};
       },
     });
-    await expect(executeNodes(BASE_RUN_INPUT)).rejects.toThrow("exec denied: approval timed out");
+    await expect(executeNodes(BASE_RUN_INPUT)).rejects.toThrow(
+      "exec denied: approval timed out",
+    );
 
     setupSystemRunGateway({
       onRunInvoke: () => {

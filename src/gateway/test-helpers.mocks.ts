@@ -6,7 +6,10 @@ import path from "node:path";
 import { Mock, vi } from "vitest";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../auto-reply/types.js";
-import type { ChannelPlugin, ChannelOutboundAdapter } from "../channels/plugins/types.js";
+import type {
+  ChannelPlugin,
+  ChannelOutboundAdapter,
+} from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { AgentBinding } from "../config/types.agents.js";
@@ -28,7 +31,9 @@ type GetReplyFromConfigFn = (
   configOverride?: OpenClawConfig,
 ) => Promise<ReplyPayload | ReplyPayload[] | undefined>;
 
-const createStubOutboundAdapter = (channelId: ChannelPlugin["id"]): ChannelOutboundAdapter => ({
+const createStubOutboundAdapter = (
+  channelId: ChannelPlugin["id"],
+): ChannelOutboundAdapter => ({
   deliveryMode: "direct",
   sendText: async () => ({
     channel: channelId,
@@ -40,7 +45,9 @@ const createStubOutboundAdapter = (channelId: ChannelPlugin["id"]): ChannelOutbo
   }),
 });
 
-const createStubChannelPlugin = (params: StubChannelOptions): ChannelPlugin => ({
+const createStubChannelPlugin = (
+  params: StubChannelOptions,
+): ChannelPlugin => ({
   id: params.id,
   meta: {
     id: params.id,
@@ -121,7 +128,10 @@ const createStubPluginRegistry = (): PluginRegistry => ({
     {
       pluginId: "msteams",
       source: "test",
-      plugin: createStubChannelPlugin({ id: "msteams", label: "Microsoft Teams" }),
+      plugin: createStubChannelPlugin({
+        id: "msteams",
+        label: "Microsoft Teams",
+      }),
     },
     {
       pluginId: "matrix",
@@ -136,12 +146,18 @@ const createStubPluginRegistry = (): PluginRegistry => ({
     {
       pluginId: "zalouser",
       source: "test",
-      plugin: createStubChannelPlugin({ id: "zalouser", label: "Zalo Personal" }),
+      plugin: createStubChannelPlugin({
+        id: "zalouser",
+        label: "Zalo Personal",
+      }),
     },
     {
       pluginId: "bluebubbles",
       source: "test",
-      plugin: createStubChannelPlugin({ id: "bluebubbles", label: "BlueBubbles" }),
+      plugin: createStubChannelPlugin({
+        id: "bluebubbles",
+        label: "BlueBubbles",
+      }),
     },
   ],
   providers: [],
@@ -177,8 +193,12 @@ const hoisted = vi.hoisted(() => ({
     waitResults: new Map<string, boolean>(),
   },
   testTailscaleWhois: { value: null as TailscaleWhoisIdentity | null },
-  getReplyFromConfig: vi.fn<GetReplyFromConfigFn>().mockResolvedValue(undefined),
-  sendWhatsAppMock: vi.fn().mockResolvedValue({ messageId: "msg-1", toJid: "jid-1" }),
+  getReplyFromConfig: vi
+    .fn<GetReplyFromConfigFn>()
+    .mockResolvedValue(undefined),
+  sendWhatsAppMock: vi
+    .fn()
+    .mockResolvedValue({ messageId: "msg-1", toJid: "jid-1" }),
 }));
 
 const pluginRegistryState = {
@@ -197,7 +217,10 @@ export const resetTestPluginRegistry = () => {
 };
 
 const testConfigRoot = {
-  value: path.join(os.tmpdir(), `openclaw-gateway-test-${process.pid}-${crypto.randomUUID()}`),
+  value: path.join(
+    os.tmpdir(),
+    `openclaw-gateway-test-${process.pid}-${crypto.randomUUID()}`,
+  ),
 };
 
 export const setTestConfigRoot = (root: string) => {
@@ -210,7 +233,8 @@ export const testTailscaleWhois = hoisted.testTailscaleWhois;
 export const piSdkMock = hoisted.piSdkMock;
 export const cronIsolatedRun = hoisted.cronIsolatedRun;
 export const agentCommand: Mock<() => void> = hoisted.agentCommand;
-export const getReplyFromConfig: Mock<GetReplyFromConfigFn> = hoisted.getReplyFromConfig;
+export const getReplyFromConfig: Mock<GetReplyFromConfigFn> =
+  hoisted.getReplyFromConfig;
 
 export const testState = {
   agentConfig: undefined as Record<string, unknown> | undefined,
@@ -238,18 +262,22 @@ export const sessionStoreSaveDelayMs = hoisted.sessionStoreSaveDelayMs;
 export const embeddedRunMock = hoisted.embeddedRunMock;
 
 vi.mock("../agents/pi-model-discovery.js", async () => {
-  const actual = await vi.importActual<typeof import("../agents/pi-model-discovery.js")>(
-    "../agents/pi-model-discovery.js",
-  );
+  const actual = await vi.importActual<
+    typeof import("../agents/pi-model-discovery.js")
+  >("../agents/pi-model-discovery.js");
 
   class MockModelRegistry extends actual.ModelRegistry {
-    override getAll(): ReturnType<typeof actual.ModelRegistry.prototype.getAll> {
+    override getAll(): ReturnType<
+      typeof actual.ModelRegistry.prototype.getAll
+    > {
       if (!piSdkMock.enabled) {
         return super.getAll();
       }
       piSdkMock.discoverCalls += 1;
       // Cast to expected type for testing purposes
-      return piSdkMock.models as ReturnType<typeof actual.ModelRegistry.prototype.getAll>;
+      return piSdkMock.models as ReturnType<
+        typeof actual.ModelRegistry.prototype.getAll
+      >;
     }
   }
 
@@ -270,8 +298,9 @@ vi.mock("../infra/tailnet.js", () => ({
 }));
 
 vi.mock("../infra/tailscale.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("../infra/tailscale.js")>("../infra/tailscale.js");
+  const actual = await vi.importActual<typeof import("../infra/tailscale.js")>(
+    "../infra/tailscale.js",
+  );
   return {
     ...actual,
     readTailscaleWhoisIdentity: async () => testTailscaleWhois.value,
@@ -279,8 +308,9 @@ vi.mock("../infra/tailscale.js", async () => {
 });
 
 vi.mock("../config/sessions.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("../config/sessions.js")>("../config/sessions.js");
+  const actual = await vi.importActual<typeof import("../config/sessions.js")>(
+    "../config/sessions.js",
+  );
   return {
     ...actual,
     saveSessionStore: vi.fn(async (storePath: string, store: unknown) => {
@@ -294,8 +324,11 @@ vi.mock("../config/sessions.js", async () => {
 });
 
 vi.mock("../config/config.js", async () => {
-  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
-  const resolveConfigPath = () => path.join(testConfigRoot.value, "openclaw.json");
+  const actual = await vi.importActual<typeof import("../config/config.js")>(
+    "../config/config.js",
+  );
+  const resolveConfigPath = () =>
+    path.join(testConfigRoot.value, "openclaw.json");
   const hashConfigRaw = (raw: string | null) =>
     crypto
       .createHash("sha256")
@@ -429,7 +462,10 @@ vi.mock("../config/config.js", async () => {
         fileConfig.channels &&
         typeof fileConfig.channels === "object" &&
         !Array.isArray(fileConfig.channels)
-          ? ({ ...(fileConfig.channels as Record<string, unknown>) } as Record<string, unknown>)
+          ? ({ ...(fileConfig.channels as Record<string, unknown>) } as Record<
+              string,
+              unknown
+            >)
           : {};
       const overrideChannels =
         testState.channelsConfig && typeof testState.channelsConfig === "object"
@@ -448,7 +484,8 @@ vi.mock("../config/config.js", async () => {
           allowFrom: testState.allowFrom,
         };
       }
-      const channels = Object.keys(mergedChannels).length > 0 ? mergedChannels : undefined;
+      const channels =
+        Object.keys(mergedChannels).length > 0 ? mergedChannels : undefined;
 
       const fileSession =
         fileConfig.session &&
@@ -471,7 +508,10 @@ vi.mock("../config/config.js", async () => {
         fileConfig.gateway &&
         typeof fileConfig.gateway === "object" &&
         !Array.isArray(fileConfig.gateway)
-          ? ({ ...(fileConfig.gateway as Record<string, unknown>) } as Record<string, unknown>)
+          ? ({ ...(fileConfig.gateway as Record<string, unknown>) } as Record<
+              string,
+              unknown
+            >)
           : {};
       if (testState.gatewayBind) {
         fileGateway.bind = testState.gatewayBind;
@@ -482,24 +522,34 @@ vi.mock("../config/config.js", async () => {
       if (testState.gatewayControlUi) {
         fileGateway.controlUi = testState.gatewayControlUi;
       }
-      const gateway = Object.keys(fileGateway).length > 0 ? fileGateway : undefined;
+      const gateway =
+        Object.keys(fileGateway).length > 0 ? fileGateway : undefined;
 
       const fileCanvasHost =
         fileConfig.canvasHost &&
         typeof fileConfig.canvasHost === "object" &&
         !Array.isArray(fileConfig.canvasHost)
-          ? ({ ...(fileConfig.canvasHost as Record<string, unknown>) } as Record<string, unknown>)
+          ? ({
+              ...(fileConfig.canvasHost as Record<string, unknown>),
+            } as Record<string, unknown>)
           : {};
       if (typeof testState.canvasHostPort === "number") {
         fileCanvasHost.port = testState.canvasHostPort;
       }
-      const canvasHost = Object.keys(fileCanvasHost).length > 0 ? fileCanvasHost : undefined;
+      const canvasHost =
+        Object.keys(fileCanvasHost).length > 0 ? fileCanvasHost : undefined;
 
-      const hooks = testState.hooksConfig ?? (fileConfig.hooks as HooksConfig | undefined);
+      const hooks =
+        testState.hooksConfig ?? (fileConfig.hooks as HooksConfig | undefined);
 
       const fileCron =
-        fileConfig.cron && typeof fileConfig.cron === "object" && !Array.isArray(fileConfig.cron)
-          ? ({ ...(fileConfig.cron as Record<string, unknown>) } as Record<string, unknown>)
+        fileConfig.cron &&
+        typeof fileConfig.cron === "object" &&
+        !Array.isArray(fileConfig.cron)
+          ? ({ ...(fileConfig.cron as Record<string, unknown>) } as Record<
+              string,
+              unknown
+            >)
           : {};
       if (typeof testState.cronEnabled === "boolean") {
         fileCron.enabled = testState.cronEnabled;
@@ -540,12 +590,13 @@ vi.mock("../config/config.js", async () => {
 });
 
 vi.mock("../agents/pi-embedded.js", async () => {
-  const actual = await vi.importActual<typeof import("../agents/pi-embedded.js")>(
-    "../agents/pi-embedded.js",
-  );
+  const actual = await vi.importActual<
+    typeof import("../agents/pi-embedded.js")
+  >("../agents/pi-embedded.js");
   return {
     ...actual,
-    isEmbeddedPiRunActive: (sessionId: string) => embeddedRunMock.activeIds.has(sessionId),
+    isEmbeddedPiRunActive: (sessionId: string) =>
+      embeddedRunMock.activeIds.has(sessionId),
     abortEmbeddedPiRun: (sessionId: string) => {
       embeddedRunMock.abortCalls.push(sessionId);
       return embeddedRunMock.activeIds.has(sessionId);
@@ -570,9 +621,9 @@ vi.mock("../web/outbound.js", () => ({
     (hoisted.sendWhatsAppMock as (...args: unknown[]) => unknown)(...args),
 }));
 vi.mock("../channels/web/index.js", async () => {
-  const actual = await vi.importActual<typeof import("../channels/web/index.js")>(
-    "../channels/web/index.js",
-  );
+  const actual = await vi.importActual<
+    typeof import("../channels/web/index.js")
+  >("../channels/web/index.js");
   return {
     ...actual,
     sendMessageWhatsApp: (...args: unknown[]) =>
@@ -586,7 +637,8 @@ vi.mock("../auto-reply/reply.js", () => ({
   getReplyFromConfig,
 }));
 vi.mock("../cli/deps.js", async () => {
-  const actual = await vi.importActual<typeof import("../cli/deps.js")>("../cli/deps.js");
+  const actual =
+    await vi.importActual<typeof import("../cli/deps.js")>("../cli/deps.js");
   const base = actual.createDefaultDeps();
   return {
     ...actual,
@@ -599,8 +651,9 @@ vi.mock("../cli/deps.js", async () => {
 });
 
 vi.mock("../plugins/loader.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("../plugins/loader.js")>("../plugins/loader.js");
+  const actual = await vi.importActual<typeof import("../plugins/loader.js")>(
+    "../plugins/loader.js",
+  );
   return {
     ...actual,
     loadOpenClawPlugins: () => pluginRegistryState.registry,

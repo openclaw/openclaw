@@ -78,6 +78,8 @@ describe("buildAuthChoiceOptions", () => {
     const chutesGroup = groups.find((group) => group.value === "chutes");
 
     expect(chutesGroup).toBeDefined();
-    expect(chutesGroup?.options.some((opt) => opt.value === "chutes")).toBe(true);
+    expect(chutesGroup?.options.some((opt) => opt.value === "chutes")).toBe(
+      true,
+    );
   });
 });

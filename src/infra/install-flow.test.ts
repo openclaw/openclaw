@@ -3,14 +3,19 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as archive from "./archive.js";
-import { resolveExistingInstallPath, withExtractedArchiveRoot } from "./install-flow.js";
+import {
+  resolveExistingInstallPath,
+  withExtractedArchiveRoot,
+} from "./install-flow.js";
 import * as installSource from "./install-source-utils.js";
 
 describe("resolveExistingInstallPath", () => {
   let fixtureRoot = "";
 
   beforeEach(async () => {
-    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-install-flow-"));
+    fixtureRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-install-flow-"),
+    );
   });
 
   afterEach(async () => {
@@ -58,10 +63,17 @@ describe("withExtractedArchiveRoot", () => {
     const withTempDirSpy = vi
       .spyOn(installSource, "withTempDir")
       .mockImplementation(async (_prefix, fn) => await fn(tmpRoot));
-    const extractSpy = vi.spyOn(archive, "extractArchive").mockResolvedValue(undefined);
-    const resolveRootSpy = vi.spyOn(archive, "resolvePackedRootDir").mockResolvedValue(packageRoot);
+    const extractSpy = vi
+      .spyOn(archive, "extractArchive")
+      .mockResolvedValue(undefined);
+    const resolveRootSpy = vi
+      .spyOn(archive, "resolvePackedRootDir")
+      .mockResolvedValue(packageRoot);
 
-    const onExtracted = vi.fn(async (rootDir: string) => ({ ok: true as const, rootDir }));
+    const onExtracted = vi.fn(async (rootDir: string) => ({
+      ok: true as const,
+      rootDir,
+    }));
     const result = await withExtractedArchiveRoot({
       archivePath,
       tempDirPrefix: "openclaw-plugin-",
@@ -69,7 +81,10 @@ describe("withExtractedArchiveRoot", () => {
       onExtracted,
     });
 
-    expect(withTempDirSpy).toHaveBeenCalledWith("openclaw-plugin-", expect.any(Function));
+    expect(withTempDirSpy).toHaveBeenCalledWith(
+      "openclaw-plugin-",
+      expect.any(Function),
+    );
     expect(extractSpy).toHaveBeenCalledWith(
       expect.objectContaining({
         archivePath,
@@ -107,7 +122,9 @@ describe("withExtractedArchiveRoot", () => {
       async (_prefix, fn) => await fn("/tmp/openclaw-install-flow"),
     );
     vi.spyOn(archive, "extractArchive").mockResolvedValue(undefined);
-    vi.spyOn(archive, "resolvePackedRootDir").mockRejectedValue(new Error("invalid layout"));
+    vi.spyOn(archive, "resolvePackedRootDir").mockRejectedValue(
+      new Error("invalid layout"),
+    );
 
     const result = await withExtractedArchiveRoot({
       archivePath: "/tmp/plugin.tgz",

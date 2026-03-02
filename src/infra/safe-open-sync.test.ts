@@ -5,7 +5,10 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { openVerifiedFileSync } from "./safe-open-sync.js";
 
-async function withTempDir<T>(prefix: string, run: (dir: string) => Promise<T>): Promise<T> {
+async function withTempDir<T>(
+  prefix: string,
+  run: (dir: string) => Promise<T>,
+): Promise<T> {
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
   try {
     return await run(dir);

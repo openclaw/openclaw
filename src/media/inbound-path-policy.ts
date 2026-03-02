@@ -5,7 +5,9 @@ const WILDCARD_SEGMENT = "*";
 const WINDOWS_DRIVE_ABS_RE = /^[A-Za-z]:\//;
 const WINDOWS_DRIVE_ROOT_RE = /^[A-Za-z]:$/;
 
-export const DEFAULT_IMESSAGE_ATTACHMENT_ROOTS = ["/Users/*/Library/Messages/Attachments"] as const;
+export const DEFAULT_IMESSAGE_ATTACHMENT_ROOTS = [
+  "/Users/*/Library/Messages/Attachments",
+] as const;
 
 function normalizePosixAbsolutePath(value: string): string | undefined {
   const trimmed = value.trim();
@@ -13,11 +15,14 @@ function normalizePosixAbsolutePath(value: string): string | undefined {
     return undefined;
   }
   const normalized = path.posix.normalize(trimmed.replaceAll("\\", "/"));
-  const isAbsolute = normalized.startsWith("/") || WINDOWS_DRIVE_ABS_RE.test(normalized);
+  const isAbsolute =
+    normalized.startsWith("/") || WINDOWS_DRIVE_ABS_RE.test(normalized);
   if (!isAbsolute || normalized === "/") {
     return undefined;
   }
-  const withoutTrailingSlash = normalized.endsWith("/") ? normalized.slice(0, -1) : normalized;
+  const withoutTrailingSlash = normalized.endsWith("/")
+    ? normalized.slice(0, -1)
+    : normalized;
   if (WINDOWS_DRIVE_ROOT_RE.test(withoutTrailingSlash)) {
     return undefined;
   }
@@ -28,7 +33,10 @@ function splitPathSegments(value: string): string[] {
   return value.split("/").filter(Boolean);
 }
 
-function matchesRootPattern(params: { candidatePath: string; rootPattern: string }): boolean {
+function matchesRootPattern(params: {
+  candidatePath: string;
+  rootPattern: string;
+}): boolean {
   const candidateSegments = splitPathSegments(params.candidatePath);
   const rootSegments = splitPathSegments(params.rootPattern);
   if (candidateSegments.length < rootSegments.length) {
@@ -56,7 +64,9 @@ export function isValidInboundPathRootPattern(value: string): boolean {
   if (segments.length === 0) {
     return false;
   }
-  return segments.every((segment) => segment === WILDCARD_SEGMENT || !segment.includes("*"));
+  return segments.every(
+    (segment) => segment === WILDCARD_SEGMENT || !segment.includes("*"),
+  );
 }
 
 export function normalizeInboundPathRoots(roots?: readonly string[]): string[] {
@@ -108,14 +118,21 @@ export function isInboundPathAllowed(params: {
   }
   const roots = normalizeInboundPathRoots(params.roots);
   const effectiveRoots =
-    roots.length > 0 ? roots : normalizeInboundPathRoots(params.fallbackRoots ?? undefined);
+    roots.length > 0
+      ? roots
+      : normalizeInboundPathRoots(params.fallbackRoots ?? undefined);
   if (effectiveRoots.length === 0) {
     return false;
   }
-  return effectiveRoots.some((rootPattern) => matchesRootPattern({ candidatePath, rootPattern }));
+  return effectiveRoots.some((rootPattern) =>
+    matchesRootPattern({ candidatePath, rootPattern }),
+  );
 }
 
-function resolveIMessageAccountConfig(params: { cfg: OpenClawConfig; accountId?: string | null }) {
+function resolveIMessageAccountConfig(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+}) {
   const accountId = params.accountId?.trim();
   if (!accountId) {
     return undefined;

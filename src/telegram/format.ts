@@ -13,7 +13,10 @@ export type TelegramFormattedChunk = {
 };
 
 function escapeHtml(text: string): string {
-  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
 }
 
 function escapeHtmlAttr(text: string): string {
@@ -139,8 +142,11 @@ function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-const FILE_EXTENSIONS_PATTERN = Array.from(FILE_EXTENSIONS_WITH_TLD).map(escapeRegex).join("|");
-const AUTO_LINKED_ANCHOR_PATTERN = /<a\s+href="https?:\/\/([^"]+)"[^>]*>\1<\/a>/gi;
+const FILE_EXTENSIONS_PATTERN = Array.from(FILE_EXTENSIONS_WITH_TLD)
+  .map(escapeRegex)
+  .join("|");
+const AUTO_LINKED_ANCHOR_PATTERN =
+  /<a\s+href="https?:\/\/([^"]+)"[^>]*>\1<\/a>/gi;
 const FILE_REFERENCE_PATTERN = new RegExp(
   `(^|[^a-zA-Z0-9_\\-/])([a-zA-Z0-9_.\\-./]+\\.(?:${FILE_EXTENSIONS_PATTERN}))(?=$|[^a-zA-Z0-9_\\-/])`,
   "gi",
@@ -151,7 +157,11 @@ const ORPHANED_TLD_PATTERN = new RegExp(
 );
 const HTML_TAG_PATTERN = /(<\/?)([a-zA-Z][a-zA-Z0-9-]*)\b[^>]*?>/gi;
 
-function wrapStandaloneFileRef(match: string, prefix: string, filename: string): string {
+function wrapStandaloneFileRef(
+  match: string,
+  prefix: string,
+  filename: string,
+): string {
   if (filename.startsWith("//")) {
     return match;
   }
@@ -170,21 +180,29 @@ function wrapSegmentFileRefs(
   if (!text || codeDepth > 0 || preDepth > 0 || anchorDepth > 0) {
     return text;
   }
-  const wrappedStandalone = text.replace(FILE_REFERENCE_PATTERN, wrapStandaloneFileRef);
-  return wrappedStandalone.replace(ORPHANED_TLD_PATTERN, (match, prefix: string, tld: string) =>
-    prefix === ">" ? match : `${prefix}<code>${escapeHtml(tld)}</code>`,
+  const wrappedStandalone = text.replace(
+    FILE_REFERENCE_PATTERN,
+    wrapStandaloneFileRef,
+  );
+  return wrappedStandalone.replace(
+    ORPHANED_TLD_PATTERN,
+    (match, prefix: string, tld: string) =>
+      prefix === ">" ? match : `${prefix}<code>${escapeHtml(tld)}</code>`,
   );
 }
 
 export function wrapFileReferencesInHtml(html: string): string {
   // Safety-net: de-linkify auto-generated anchors where href="http://<label>" (defense in depth for textMode: "html")
   AUTO_LINKED_ANCHOR_PATTERN.lastIndex = 0;
-  const deLinkified = html.replace(AUTO_LINKED_ANCHOR_PATTERN, (_match, label: string) => {
-    if (!isAutoLinkedFileRef(`http://${label}`, label)) {
-      return _match;
-    }
-    return `<code>${escapeHtml(label)}</code>`;
-  });
+  const deLinkified = html.replace(
+    AUTO_LINKED_ANCHOR_PATTERN,
+    (_match, label: string) => {
+      if (!isAutoLinkedFileRef(`http://${label}`, label)) {
+        return _match;
+      }
+      return `<code>${escapeHtml(label)}</code>`;
+    },
+  );
 
   // Track nesting depth for tags that should not be modified
   let codeDepth = 0;
@@ -223,14 +241,22 @@ export function wrapFileReferencesInHtml(html: string): string {
 
   // Process remaining text
   const remainingText = deLinkified.slice(lastIndex);
-  result += wrapSegmentFileRefs(remainingText, codeDepth, preDepth, anchorDepth);
+  result += wrapSegmentFileRefs(
+    remainingText,
+    codeDepth,
+    preDepth,
+    anchorDepth,
+  );
 
   return result;
 }
 
 export function renderTelegramHtmlText(
   text: string,
-  options: { textMode?: "markdown" | "html"; tableMode?: MarkdownTableMode } = {},
+  options: {
+    textMode?: "markdown" | "html";
+    tableMode?: MarkdownTableMode;
+  } = {},
 ): string {
   const textMode = options.textMode ?? "markdown";
   if (textMode === "html") {
@@ -262,7 +288,10 @@ function splitTelegramChunkByHtmlLimit(
   if (split.length > 1) {
     return split;
   }
-  return splitMarkdownIRPreserveWhitespace(chunk, Math.max(1, Math.floor(currentTextLength / 2)));
+  return splitMarkdownIRPreserveWhitespace(
+    chunk,
+    Math.max(1, Math.floor(currentTextLength / 2)),
+  );
 }
 
 function sliceStyleSpans(
@@ -301,7 +330,10 @@ function sliceLinkSpans(
   });
 }
 
-function splitMarkdownIRPreserveWhitespace(ir: MarkdownIR, limit: number): MarkdownIR[] {
+function splitMarkdownIRPreserveWhitespace(
+  ir: MarkdownIR,
+  limit: number,
+): MarkdownIR[] {
   if (!ir.text) {
     return [];
   }
@@ -340,7 +372,11 @@ function renderTelegramChunksWithinHtmlLimit(
       rendered.push({ html, text: chunk.text });
       continue;
     }
-    const split = splitTelegramChunkByHtmlLimit(chunk, normalizedLimit, html.length);
+    const split = splitTelegramChunkByHtmlLimit(
+      chunk,
+      normalizedLimit,
+      html.length,
+    );
     if (split.length <= 1) {
       // Worst-case safety: avoid retry loops, deliver the chunk as-is.
       rendered.push({ html, text: chunk.text });
@@ -366,6 +402,9 @@ export function markdownToTelegramChunks(
   return renderTelegramChunksWithinHtmlLimit(ir, limit);
 }
 
-export function markdownToTelegramHtmlChunks(markdown: string, limit: number): string[] {
+export function markdownToTelegramHtmlChunks(
+  markdown: string,
+  limit: number,
+): string[] {
   return markdownToTelegramChunks(markdown, limit).map((chunk) => chunk.html);
 }

@@ -30,7 +30,11 @@ describe("resolveNpmChannelTag", () => {
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
         const url =
-          typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+          typeof input === "string"
+            ? input
+            : input instanceof URL
+              ? input.toString()
+              : input.url;
         const tag = decodeURIComponent(url.split("/").pop() ?? "");
         const version = versionByTag[tag] ?? null;
         return {
@@ -50,7 +54,10 @@ describe("resolveNpmChannelTag", () => {
     versionByTag.beta = "1.0.0-beta.1";
     versionByTag.latest = "1.0.1-1";
 
-    const resolved = await resolveNpmChannelTag({ channel: "beta", timeoutMs: 1000 });
+    const resolved = await resolveNpmChannelTag({
+      channel: "beta",
+      timeoutMs: 1000,
+    });
 
     expect(resolved).toEqual({ tag: "latest", version: "1.0.1-1" });
   });
@@ -59,7 +66,10 @@ describe("resolveNpmChannelTag", () => {
     versionByTag.beta = "1.0.2-beta.1";
     versionByTag.latest = "1.0.1-1";
 
-    const resolved = await resolveNpmChannelTag({ channel: "beta", timeoutMs: 1000 });
+    const resolved = await resolveNpmChannelTag({
+      channel: "beta",
+      timeoutMs: 1000,
+    });
 
     expect(resolved).toEqual({ tag: "beta", version: "1.0.2-beta.1" });
   });
@@ -68,7 +78,10 @@ describe("resolveNpmChannelTag", () => {
     versionByTag.beta = "1.0.1-beta.2";
     versionByTag.latest = "1.0.1";
 
-    const resolved = await resolveNpmChannelTag({ channel: "beta", timeoutMs: 1000 });
+    const resolved = await resolveNpmChannelTag({
+      channel: "beta",
+      timeoutMs: 1000,
+    });
 
     expect(resolved).toEqual({ tag: "latest", version: "1.0.1" });
   });

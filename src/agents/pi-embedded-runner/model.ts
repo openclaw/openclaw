@@ -60,7 +60,9 @@ export function resolveModel(
     const inlineModels = buildInlineProviderModels(providers);
     const normalizedProvider = normalizeProviderId(provider);
     const inlineMatch = inlineModels.find(
-      (entry) => normalizeProviderId(entry.provider) === normalizedProvider && entry.id === modelId,
+      (entry) =>
+        normalizeProviderId(entry.provider) === normalizedProvider &&
+        entry.id === modelId,
     );
     if (inlineMatch) {
       const normalized = normalizeModelCompat(inlineMatch as Model<Api>);
@@ -72,7 +74,11 @@ export function resolveModel(
     }
     // Forward-compat fallbacks must be checked BEFORE the generic providerCfg fallback.
     // Otherwise, configured providers can default to a generic API and break specific transports.
-    const forwardCompat = resolveForwardCompatModel(provider, modelId, modelRegistry);
+    const forwardCompat = resolveForwardCompatModel(
+      provider,
+      modelId,
+      modelRegistry,
+    );
     if (forwardCompat) {
       return { model: forwardCompat, authStorage, modelRegistry };
     }
@@ -96,7 +102,9 @@ export function resolveModel(
     }
     const providerCfg = providers[provider];
     if (providerCfg || modelId.startsWith("mock-")) {
-      const configuredModel = providerCfg?.models?.find((candidate) => candidate.id === modelId);
+      const configuredModel = providerCfg?.models?.find(
+        (candidate) => candidate.id === modelId,
+      );
       const fallbackModel: Model<Api> = normalizeModelCompat({
         id: modelId,
         name: modelId,

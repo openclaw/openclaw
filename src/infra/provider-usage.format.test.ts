@@ -4,11 +4,16 @@ import {
   formatUsageSummaryLine,
   formatUsageWindowSummary,
 } from "./provider-usage.format.js";
-import type { ProviderUsageSnapshot, UsageSummary } from "./provider-usage.types.js";
+import type {
+  ProviderUsageSnapshot,
+  UsageSummary,
+} from "./provider-usage.types.js";
 
 const now = Date.UTC(2026, 0, 7, 12, 0, 0);
 
-function makeSnapshot(windows: ProviderUsageSnapshot["windows"]): ProviderUsageSnapshot {
+function makeSnapshot(
+  windows: ProviderUsageSnapshot["windows"],
+): ProviderUsageSnapshot {
   return {
     provider: "anthropic",
     displayName: "Claude",
@@ -18,7 +23,9 @@ function makeSnapshot(windows: ProviderUsageSnapshot["windows"]): ProviderUsageS
 
 describe("provider-usage.format", () => {
   it("returns null summary for errored or empty snapshots", () => {
-    expect(formatUsageWindowSummary({ ...makeSnapshot([]), error: "HTTP 401" })).toBeNull();
+    expect(
+      formatUsageWindowSummary({ ...makeSnapshot([]), error: "HTTP 401" }),
+    ).toBeNull();
     expect(formatUsageWindowSummary(makeSnapshot([]))).toBeNull();
   });
 
@@ -27,9 +34,21 @@ describe("provider-usage.format", () => {
       makeSnapshot([
         { label: "Now", usedPercent: 10, resetAt: now - 1 },
         { label: "Minute", usedPercent: 20, resetAt: now + 30 * 60_000 },
-        { label: "Hour", usedPercent: 30, resetAt: now + 2 * 60 * 60_000 + 15 * 60_000 },
-        { label: "Day", usedPercent: 40, resetAt: now + (2 * 24 + 3) * 60 * 60_000 },
-        { label: "Date", usedPercent: 50, resetAt: Date.UTC(2026, 0, 20, 12, 0, 0) },
+        {
+          label: "Hour",
+          usedPercent: 30,
+          resetAt: now + 2 * 60 * 60_000 + 15 * 60_000,
+        },
+        {
+          label: "Day",
+          usedPercent: 40,
+          resetAt: now + (2 * 24 + 3) * 60 * 60_000,
+        },
+        {
+          label: "Date",
+          usedPercent: 50,
+          resetAt: Date.UTC(2026, 0, 20, 12, 0, 0),
+        },
       ]),
       { now, includeResets: true },
     );

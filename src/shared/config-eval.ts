@@ -57,7 +57,9 @@ type RuntimeRequirementEvalParams = {
   isConfigPathTruthy: (pathStr: string) => boolean;
 };
 
-export function evaluateRuntimeRequires(params: RuntimeRequirementEvalParams): boolean {
+export function evaluateRuntimeRequires(
+  params: RuntimeRequirementEvalParams,
+): boolean {
   const requires = params.requires;
   if (!requires) {
     return true;
@@ -141,7 +143,9 @@ export function resolveRuntimePlatform(): string {
 function windowsPathExtensions(): string[] {
   const raw = process.env.PATHEXT;
   const list =
-    raw !== undefined ? raw.split(";").map((v) => v.trim()) : [".EXE", ".CMD", ".BAT", ".COM"];
+    raw !== undefined
+      ? raw.split(";").map((v) => v.trim())
+      : [".EXE", ".CMD", ".BAT", ".COM"];
   return ["", ...list.filter(Boolean)];
 }
 
@@ -151,7 +155,8 @@ const hasBinaryCache = new Map<string, boolean>();
 
 export function hasBinary(bin: string): boolean {
   const pathEnv = process.env.PATH ?? "";
-  const pathExt = process.platform === "win32" ? (process.env.PATHEXT ?? "") : "";
+  const pathExt =
+    process.platform === "win32" ? (process.env.PATHEXT ?? "") : "";
   if (cachedHasBinaryPath !== pathEnv || cachedHasBinaryPathExt !== pathExt) {
     cachedHasBinaryPath = pathEnv;
     cachedHasBinaryPathExt = pathExt;
@@ -162,7 +167,8 @@ export function hasBinary(bin: string): boolean {
   }
 
   const parts = pathEnv.split(path.delimiter).filter(Boolean);
-  const extensions = process.platform === "win32" ? windowsPathExtensions() : [""];
+  const extensions =
+    process.platform === "win32" ? windowsPathExtensions() : [""];
   for (const part of parts) {
     for (const ext of extensions) {
       const candidate = path.join(part, bin + ext);

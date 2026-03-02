@@ -15,7 +15,10 @@ export type BlueBubblesMonitorOptions = {
   config: OpenClawConfig;
   runtime: BlueBubblesRuntimeEnv;
   abortSignal: AbortSignal;
-  statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
+  statusSink?: (patch: {
+    lastInboundAt?: number;
+    lastOutboundAt?: number;
+  }) => void;
   webhookPath?: string;
 };
 
@@ -27,12 +30,17 @@ export type WebhookTarget = {
   runtime: BlueBubblesRuntimeEnv;
   core: BlueBubblesCoreRuntime;
   path: string;
-  statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
+  statusSink?: (patch: {
+    lastInboundAt?: number;
+    lastOutboundAt?: number;
+  }) => void;
 };
 
 export const DEFAULT_WEBHOOK_PATH = "/bluebubbles-webhook";
 
-export function resolveWebhookPathFromConfig(config?: BlueBubblesAccountConfig): string {
+export function resolveWebhookPathFromConfig(
+  config?: BlueBubblesAccountConfig,
+): string {
   const raw = config?.webhookPath?.trim();
   if (raw) {
     return normalizeWebhookPath(raw);

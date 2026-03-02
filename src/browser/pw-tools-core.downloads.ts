@@ -4,7 +4,10 @@ import path from "node:path";
 import type { Page } from "playwright-core";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { writeViaSiblingTempPath } from "./output-atomic.js";
-import { DEFAULT_UPLOAD_DIR, resolveStrictExistingPathsWithinRoot } from "./paths.js";
+import {
+  DEFAULT_UPLOAD_DIR,
+  resolveStrictExistingPathsWithinRoot,
+} from "./paths.js";
 import {
   ensurePageState,
   getPageForTargetId,
@@ -24,7 +27,11 @@ import { sanitizeUntrustedFileName } from "./safe-filename.js";
 function buildTempDownloadPath(fileName: string): string {
   const id = crypto.randomUUID();
   const safeName = sanitizeUntrustedFileName(fileName, "download.bin");
-  return path.join(resolvePreferredOpenClawTmpDir(), "downloads", `${id}-${safeName}`);
+  return path.join(
+    resolvePreferredOpenClawTmpDir(),
+    "downloads",
+    `${id}-${safeName}`,
+  );
 }
 
 function createPageDownloadWaiter(page: Page, timeoutMs: number) {
@@ -85,7 +92,9 @@ type DownloadPayload = {
 async function saveDownloadPayload(download: DownloadPayload, outPath: string) {
   const suggested = download.suggestedFilename?.() || "download.bin";
   const requestedPath = outPath?.trim();
-  const resolvedOutPath = path.resolve(requestedPath || buildTempDownloadPath(suggested));
+  const resolvedOutPath = path.resolve(
+    requestedPath || buildTempDownloadPath(suggested),
+  );
   await fs.mkdir(path.dirname(resolvedOutPath), { recursive: true });
 
   if (!requestedPath) {
@@ -235,7 +244,12 @@ export async function waitForDownloadViaPlaywright(opts: {
   const armId = state.armIdDownload;
 
   const waiter = createPageDownloadWaiter(page, timeout);
-  return await awaitDownloadPayload({ waiter, state, armId, outPath: opts.path });
+  return await awaitDownloadPayload({
+    waiter,
+    state,
+    armId,
+    outPath: opts.path,
+  });
 }
 
 export async function downloadViaPlaywright(opts: {
@@ -251,7 +265,11 @@ export async function downloadViaPlaywright(opts: {
 }> {
   const page = await getPageForTargetId(opts);
   const state = ensurePageState(page);
-  restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
+  restoreRoleRefsForTarget({
+    cdpUrl: opts.cdpUrl,
+    targetId: opts.targetId,
+    page,
+  });
   const timeout = normalizeTimeoutMs(opts.timeoutMs, 120_000);
 
   const ref = requireRef(opts.ref);

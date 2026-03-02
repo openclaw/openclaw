@@ -21,7 +21,10 @@ import {
   resolveDefaultGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "../../config/runtime-group-policy.js";
-import { readSessionUpdatedAt, resolveStorePath } from "../../config/sessions.js";
+import {
+  readSessionUpdatedAt,
+  resolveStorePath,
+} from "../../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose, warn } from "../../globals.js";
 import { normalizeScpRemoteHost } from "../../infra/scp-host.js";
 import { waitForTransportReady } from "../../infra/transport-ready.js";
@@ -59,7 +62,9 @@ import type { IMessagePayload, MonitorIMessageOpts } from "./types.js";
  *   exec ssh -T mac-mini imsg "$@"
  * Returns the user@host or host portion if found, undefined otherwise.
  */
-async function detectRemoteHostFromCliPath(cliPath: string): Promise<string | undefined> {
+async function detectRemoteHostFromCliPath(
+  cliPath: string,
+): Promise<string | undefined> {
   try {
     // Expand ~ to home directory
     const expanded = cliPath.startsWith("~")
@@ -68,20 +73,26 @@ async function detectRemoteHostFromCliPath(cliPath: string): Promise<string | un
     const content = await fs.readFile(expanded, "utf8");
 
     // Match user@host pattern first (e.g., openclaw@192.168.64.3)
-    const userHostMatch = content.match(/\bssh\b[^\n]*?\s+([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+)/);
+    const userHostMatch = content.match(
+      /\bssh\b[^\n]*?\s+([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+)/,
+    );
     if (userHostMatch) {
       return userHostMatch[1];
     }
 
     // Fallback: match host-only before imsg command (e.g., ssh -T mac-mini imsg)
-    const hostOnlyMatch = content.match(/\bssh\b[^\n]*?\s+([a-zA-Z][a-zA-Z0-9._-]*)\s+\S*\bimsg\b/);
+    const hostOnlyMatch = content.match(
+      /\bssh\b[^\n]*?\s+([a-zA-Z][a-zA-Z0-9._-]*)\s+\S*\bimsg\b/,
+    );
     return hostOnlyMatch?.[1];
   } catch {
     return undefined;
   }
 }
 
-export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): Promise<void> {
+export async function monitorIMessageProvider(
+  opts: MonitorIMessageOpts = {},
+): Promise<void> {
   const runtime = resolveRuntime(opts);
   const cfg = opts.config ?? loadConfig();
   const accountInfo = resolveIMessageAccount({
@@ -97,19 +108,26 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   );
   const groupHistories = new Map<string, HistoryEntry[]>();
   const sentMessageCache = createSentMessageCache();
-  const textLimit = resolveTextChunkLimit(cfg, "imessage", accountInfo.accountId);
+  const textLimit = resolveTextChunkLimit(
+    cfg,
+    "imessage",
+    accountInfo.accountId,
+  );
   const allowFrom = normalizeAllowList(opts.allowFrom ?? imessageCfg.allowFrom);
   const groupAllowFrom = normalizeAllowList(
     opts.groupAllowFrom ??
       imessageCfg.groupAllowFrom ??
-      (imessageCfg.allowFrom && imessageCfg.allowFrom.length > 0 ? imessageCfg.allowFrom : []),
+      (imessageCfg.allowFrom && imessageCfg.allowFrom.length > 0
+        ? imessageCfg.allowFrom
+        : []),
   );
   const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
-  const { groupPolicy, providerMissingFallbackApplied } = resolveOpenProviderRuntimeGroupPolicy({
-    providerConfigPresent: cfg.channels?.imessage !== undefined,
-    groupPolicy: imessageCfg.groupPolicy,
-    defaultGroupPolicy,
-  });
+  const { groupPolicy, providerMissingFallbackApplied } =
+    resolveOpenProviderRuntimeGroupPolicy({
+      providerConfigPresent: cfg.channels?.imessage !== undefined,
+      groupPolicy: imessageCfg.groupPolicy,
+      defaultGroupPolicy,
+    });
   warnMissingProviderGroupPolicyFallbackOnce({
     providerMissingFallbackApplied,
     providerKey: "imessage",
@@ -117,11 +135,14 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     log: (message) => runtime.log?.(warn(message)),
   });
   const dmPolicy = imessageCfg.dmPolicy ?? "pairing";
-  const includeAttachments = opts.includeAttachments ?? imessageCfg.includeAttachments ?? false;
-  const mediaMaxBytes = (opts.mediaMaxMb ?? imessageCfg.mediaMaxMb ?? 16) * 1024 * 1024;
+  const includeAttachments =
+    opts.includeAttachments ?? imessageCfg.includeAttachments ?? false;
+  const mediaMaxBytes =
+    (opts.mediaMaxMb ?? imessageCfg.mediaMaxMb ?? 16) * 1024 * 1024;
   const cliPath = opts.cliPath ?? imessageCfg.cliPath ?? "imsg";
   const dbPath = opts.dbPath ?? imessageCfg.dbPath;
-  const probeTimeoutMs = imessageCfg.probeTimeoutMs ?? DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS;
+  const probeTimeoutMs =
+    imessageCfg.probeTimeoutMs ?? DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS;
   const attachmentRoots = resolveIMessageAttachmentRoots({
     cfg,
     accountId: accountInfo.accountId,
@@ -143,7 +164,9 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     const detected = await detectRemoteHostFromCliPath(cliPath);
     const normalizedDetected = normalizeScpRemoteHost(detected);
     if (detected && !normalizedDetected) {
-      logVerbose("imessage: ignoring unsafe auto-detected remoteHost from cliPath");
+      logVerbose(
+        "imessage: ignoring unsafe auto-detected remoteHost from cliPath",
+      );
     }
     remoteHost = normalizedDetected;
     if (remoteHost) {
@@ -151,76 +174,94 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     }
   }
 
-  const inboundDebounceMs = resolveInboundDebounceMs({ cfg, channel: "imessage" });
-  const inboundDebouncer = createInboundDebouncer<{ message: IMessagePayload }>({
-    debounceMs: inboundDebounceMs,
-    buildKey: (entry) => {
-      const sender = entry.message.sender?.trim();
-      if (!sender) {
-        return null;
-      }
-      const conversationId =
-        entry.message.chat_id != null
-          ? `chat:${entry.message.chat_id}`
-          : (entry.message.chat_guid ?? entry.message.chat_identifier ?? "unknown");
-      return `imessage:${accountInfo.accountId}:${conversationId}:${sender}`;
-    },
-    shouldDebounce: (entry) => {
-      const text = entry.message.text?.trim() ?? "";
-      if (!text) {
-        return false;
-      }
-      if (entry.message.attachments && entry.message.attachments.length > 0) {
-        return false;
-      }
-      return !hasControlCommand(text, cfg);
-    },
-    onFlush: async (entries) => {
-      const last = entries.at(-1);
-      if (!last) {
-        return;
-      }
-      if (entries.length === 1) {
-        await handleMessageNow(last.message);
-        return;
-      }
-      const combinedText = entries
-        .map((entry) => entry.message.text ?? "")
-        .filter(Boolean)
-        .join("\n");
-      const syntheticMessage: IMessagePayload = {
-        ...last.message,
-        text: combinedText,
-        attachments: null,
-      };
-      await handleMessageNow(syntheticMessage);
-    },
-    onError: (err) => {
-      runtime.error?.(`imessage debounce flush failed: ${String(err)}`);
-    },
+  const inboundDebounceMs = resolveInboundDebounceMs({
+    cfg,
+    channel: "imessage",
   });
+  const inboundDebouncer = createInboundDebouncer<{ message: IMessagePayload }>(
+    {
+      debounceMs: inboundDebounceMs,
+      buildKey: (entry) => {
+        const sender = entry.message.sender?.trim();
+        if (!sender) {
+          return null;
+        }
+        const conversationId =
+          entry.message.chat_id != null
+            ? `chat:${entry.message.chat_id}`
+            : (entry.message.chat_guid ??
+              entry.message.chat_identifier ??
+              "unknown");
+        return `imessage:${accountInfo.accountId}:${conversationId}:${sender}`;
+      },
+      shouldDebounce: (entry) => {
+        const text = entry.message.text?.trim() ?? "";
+        if (!text) {
+          return false;
+        }
+        if (entry.message.attachments && entry.message.attachments.length > 0) {
+          return false;
+        }
+        return !hasControlCommand(text, cfg);
+      },
+      onFlush: async (entries) => {
+        const last = entries.at(-1);
+        if (!last) {
+          return;
+        }
+        if (entries.length === 1) {
+          await handleMessageNow(last.message);
+          return;
+        }
+        const combinedText = entries
+          .map((entry) => entry.message.text ?? "")
+          .filter(Boolean)
+          .join("\n");
+        const syntheticMessage: IMessagePayload = {
+          ...last.message,
+          text: combinedText,
+          attachments: null,
+        };
+        await handleMessageNow(syntheticMessage);
+      },
+      onError: (err) => {
+        runtime.error?.(`imessage debounce flush failed: ${String(err)}`);
+      },
+    },
+  );
 
   async function handleMessageNow(message: IMessagePayload) {
     const messageText = (message.text ?? "").trim();
 
     const attachments = includeAttachments ? (message.attachments ?? []) : [];
-    const effectiveAttachmentRoots = remoteHost ? remoteAttachmentRoots : attachmentRoots;
+    const effectiveAttachmentRoots = remoteHost
+      ? remoteAttachmentRoots
+      : attachmentRoots;
     const validAttachments = attachments.filter((entry) => {
       const attachmentPath = entry?.original_path?.trim();
       if (!attachmentPath || entry?.missing) {
         return false;
       }
-      if (isInboundPathAllowed({ filePath: attachmentPath, roots: effectiveAttachmentRoots })) {
+      if (
+        isInboundPathAllowed({
+          filePath: attachmentPath,
+          roots: effectiveAttachmentRoots,
+        })
+      ) {
         return true;
       }
-      logVerbose(`imessage: dropping inbound attachment outside allowed roots: ${attachmentPath}`);
+      logVerbose(
+        `imessage: dropping inbound attachment outside allowed roots: ${attachmentPath}`,
+      );
       return false;
     });
     const firstAttachment = validAttachments[0];
     const mediaPath = firstAttachment?.original_path ?? undefined;
     const mediaType = firstAttachment?.mime_type ?? undefined;
     // Build arrays for all attachments (for multi-image support)
-    const mediaPaths = validAttachments.map((a) => a.original_path).filter(Boolean) as string[];
+    const mediaPaths = validAttachments
+      .map((a) => a.original_path)
+      .filter(Boolean) as string[];
     const mediaTypes = validAttachments.map((a) => a.mime_type ?? undefined);
     const kind = mediaKindFromMime(mediaType ?? undefined);
     const placeholder = kind
@@ -290,7 +331,9 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
             },
           );
         } catch (err) {
-          logVerbose(`imessage pairing reply failed for ${decision.senderId}: ${String(err)}`);
+          logVerbose(
+            `imessage pairing reply failed for ${decision.senderId}: ${String(err)}`,
+          );
         }
       }
       return;
@@ -339,7 +382,10 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     });
 
     if (shouldLogVerbose()) {
-      const preview = truncateUtf16Safe(String(ctxPayload.Body ?? ""), 200).replace(/\n/g, "\\n");
+      const preview = truncateUtf16Safe(
+        String(ctxPayload.Body ?? ""),
+        200,
+      ).replace(/\n/g, "\\n");
       logVerbose(
         `imessage inbound: chatId=${chatId ?? "unknown"} from=${ctxPayload.From} len=${
           String(ctxPayload.Body ?? "").length
@@ -375,7 +421,9 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         });
       },
       onError: (err, info) => {
-        runtime.error?.(danger(`imessage ${info.kind} reply failed: ${String(err)}`));
+        runtime.error?.(
+          danger(`imessage ${info.kind} reply failed: ${String(err)}`),
+        );
       },
     });
 
@@ -429,7 +477,11 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     abortSignal: opts.abortSignal,
     runtime,
     check: async () => {
-      const probe = await probeIMessage(probeTimeoutMs, { cliPath, dbPath, runtime });
+      const probe = await probeIMessage(probeTimeoutMs, {
+        cliPath,
+        dbPath,
+        runtime,
+      });
       if (probe.ok) {
         return { ok: true };
       }
@@ -468,9 +520,12 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   });
 
   try {
-    const result = await client.request<{ subscription?: number }>("watch.subscribe", {
-      attachments: includeAttachments,
-    });
+    const result = await client.request<{ subscription?: number }>(
+      "watch.subscribe",
+      {
+        attachments: includeAttachments,
+      },
+    );
     subscriptionId = result?.subscription ?? null;
     await client.waitForClose();
   } catch (err) {

@@ -35,7 +35,10 @@ type SlackListChannelsResponse = {
 };
 
 function resolveReadToken(params: DirectoryConfigParams): string | undefined {
-  const account = resolveSlackAccount({ cfg: params.cfg, accountId: params.accountId });
+  const account = resolveSlackAccount({
+    cfg: params.cfg,
+    accountId: params.accountId,
+  });
   return account.userToken ?? account.botToken?.trim();
 }
 
@@ -83,7 +86,10 @@ export async function listSlackDirectoryPeersLive(
   } while (cursor);
 
   const filtered = members.filter((member) => {
-    const name = member.profile?.display_name || member.profile?.real_name || member.real_name;
+    const name =
+      member.profile?.display_name ||
+      member.profile?.real_name ||
+      member.real_name;
     const handle = member.name;
     const email = member.profile?.email;
     const candidates = [name, handle, email]

@@ -40,7 +40,9 @@ async function readStdin(): Promise<string> {
   return Buffer.concat(chunks).toString("utf8");
 }
 
-async function resolveTargetNodeId(opts: ExecApprovalsCliOpts): Promise<string | null> {
+async function resolveTargetNodeId(
+  opts: ExecApprovalsCliOpts,
+): Promise<string | null> {
   if (opts.gateway) {
     return null;
   }
@@ -57,7 +59,11 @@ async function loadSnapshot(
 ): Promise<ExecApprovalsSnapshot> {
   const method = nodeId ? "exec.approvals.node.get" : "exec.approvals.get";
   const params = nodeId ? { nodeId } : {};
-  const snapshot = (await callGatewayFromCli(method, opts, params)) as ExecApprovalsSnapshot;
+  const snapshot = (await callGatewayFromCli(
+    method,
+    opts,
+    params,
+  )) as ExecApprovalsSnapshot;
   return snapshot;
 }
 
@@ -114,7 +120,8 @@ async function loadWritableSnapshotTarget(opts: ExecApprovalsCliOpts): Promise<{
   if (source === "local") {
     defaultRuntime.log(theme.muted("Writing local approvals."));
   }
-  const targetLabel = source === "local" ? "local" : nodeId ? `node:${nodeId}` : "gateway";
+  const targetLabel =
+    source === "local" ? "local" : nodeId ? `node:${nodeId}` : "gateway";
   const baseHash = snapshot.hash;
   if (!baseHash) {
     exitWithError("Exec approvals hash missing; reload and retry.");
@@ -133,7 +140,12 @@ async function saveSnapshotTargeted(params: {
   const next =
     params.source === "local"
       ? saveSnapshotLocal(params.file)
-      : await saveSnapshot(params.opts, params.nodeId, params.file, params.baseHash);
+      : await saveSnapshot(
+          params.opts,
+          params.nodeId,
+          params.file,
+          params.baseHash,
+        );
   if (params.opts.json) {
     defaultRuntime.log(JSON.stringify(next));
     return;
@@ -147,7 +159,10 @@ function formatCliError(err: unknown): string {
   return msg.includes("\n") ? msg.split("\n")[0] : msg;
 }
 
-function renderApprovalsSnapshot(snapshot: ExecApprovalsSnapshot, targetLabel: string) {
+function renderApprovalsSnapshot(
+  snapshot: ExecApprovalsSnapshot,
+  targetLabel: string,
+) {
   const rich = isRich();
   const heading = (text: string) => (rich ? theme.heading(text) : text);
   const muted = (text: string) => (rich ? theme.muted(text) : text);
@@ -164,8 +179,12 @@ function renderApprovalsSnapshot(snapshot: ExecApprovalsSnapshot, targetLabel: s
       : null,
   ].filter(Boolean) as string[];
   const agents = file.agents ?? {};
-  const allowlistRows: Array<{ Target: string; Agent: string; Pattern: string; LastUsed: string }> =
-    [];
+  const allowlistRows: Array<{
+    Target: string;
+    Agent: string;
+    Pattern: string;
+    LastUsed: string;
+  }> = [];
   const now = Date.now();
   for (const [agentId, agent] of Object.entries(agents)) {
     const allowlist = Array.isArray(agent.allowlist) ? agent.allowlist : [];
@@ -174,12 +193,15 @@ function renderApprovalsSnapshot(snapshot: ExecApprovalsSnapshot, targetLabel: s
       if (!pattern) {
         continue;
       }
-      const lastUsedAt = typeof entry.lastUsedAt === "number" ? entry.lastUsedAt : null;
+      const lastUsedAt =
+        typeof entry.lastUsedAt === "number" ? entry.lastUsedAt : null;
       allowlistRows.push({
         Target: targetLabel,
         Agent: agentId,
         Pattern: pattern,
-        LastUsed: lastUsedAt ? formatTimeAgo(Math.max(0, now - lastUsedAt)) : muted("unknown"),
+        LastUsed: lastUsedAt
+          ? formatTimeAgo(Math.max(0, now - lastUsedAt))
+          : muted("unknown"),
       });
     }
   }
@@ -191,7 +213,10 @@ function renderApprovalsSnapshot(snapshot: ExecApprovalsSnapshot, targetLabel: s
     { Field: "Hash", Value: snapshot.hash },
     { Field: "Version", Value: String(file.version ?? 1) },
     { Field: "Socket", Value: file.socket?.path ?? "default" },
-    { Field: "Defaults", Value: defaultsParts.length > 0 ? defaultsParts.join(", ") : "none" },
+    {
+      Field: "Defaults",
+      Value: defaultsParts.length > 0 ? defaultsParts.join(", ") : "none",
+    },
     { Field: "Agents", Value: String(Object.keys(agents).length) },
     { Field: "Allowlist", Value: String(allowlistRows.length) },
   ];
@@ -238,7 +263,11 @@ async function saveSnapshot(
 ): Promise<ExecApprovalsSnapshot> {
   const method = nodeId ? "exec.approvals.node.set" : "exec.approvals.set";
   const params = nodeId ? { nodeId, file, baseHash } : { file, baseHash };
-  const snapshot = (await callGatewayFromCli(method, opts, params)) as ExecApprovalsSnapshot;
+  const snapshot = (await callGatewayFromCli(
+    method,
+    opts,
+    params,
+  )) as ExecApprovalsSnapshot;
   return snapshot;
 }
 
@@ -247,12 +276,17 @@ function resolveAgentKey(value?: string | null): string {
   return trimmed ? trimmed : "*";
 }
 
-function normalizeAllowlistEntry(entry: { pattern?: string } | null): string | null {
+function normalizeAllowlistEntry(
+  entry: { pattern?: string } | null,
+): string | null {
   const pattern = entry?.pattern?.trim() ?? "";
   return pattern ? pattern : null;
 }
 
-function ensureAgent(file: ExecApprovalsFile, agentKey: string): ExecApprovalsAgent {
+function ensureAgent(
+  file: ExecApprovalsFile,
+  agentKey: string,
+): ExecApprovalsAgent {
   const agents = file.agents ?? {};
   const entry = agents[agentKey] ?? {};
   file.agents = agents;
@@ -287,15 +321,30 @@ async function loadWritableAllowlistAgent(opts: ExecApprovalsCliOpts): Promise<{
 
   const agentKey = resolveAgentKey(opts.agent);
   const agent = ensureAgent(file, agentKey);
-  const allowlistEntries = Array.isArray(agent.allowlist) ? agent.allowlist : [];
+  const allowlistEntries = Array.isArray(agent.allowlist)
+    ? agent.allowlist
+    : [];
 
-  return { nodeId, source, targetLabel, baseHash, file, agentKey, agent, allowlistEntries };
+  return {
+    nodeId,
+    source,
+    targetLabel,
+    baseHash,
+    file,
+    agentKey,
+    agent,
+    allowlistEntries,
+  };
 }
 
-type WritableAllowlistAgentContext = Awaited<ReturnType<typeof loadWritableAllowlistAgent>> & {
+type WritableAllowlistAgentContext = Awaited<
+  ReturnType<typeof loadWritableAllowlistAgent>
+> & {
   trimmedPattern: string;
 };
-type AllowlistMutation = (context: WritableAllowlistAgentContext) => boolean | Promise<boolean>;
+type AllowlistMutation = (
+  context: WritableAllowlistAgentContext,
+) => boolean | Promise<boolean>;
 
 async function runAllowlistMutation(
   pattern: string,
@@ -374,7 +423,8 @@ export function registerExecApprovalsCli(program: Command) {
           defaultRuntime.log(muted("Showing local approvals."));
           defaultRuntime.log("");
         }
-        const targetLabel = source === "local" ? "local" : nodeId ? `node:${nodeId}` : "gateway";
+        const targetLabel =
+          source === "local" ? "local" : nodeId ? `node:${nodeId}` : "gateway";
         renderApprovalsSnapshot(snapshot, targetLabel);
       } catch (err) {
         defaultRuntime.error(formatCliError(err));
@@ -398,8 +448,11 @@ export function registerExecApprovalsCli(program: Command) {
         if (opts.file && opts.stdin) {
           exitWithError("Use either --file or --stdin (not both).");
         }
-        const { source, nodeId, targetLabel, baseHash } = await loadWritableSnapshotTarget(opts);
-        const raw = opts.stdin ? await readStdin() : await fs.readFile(String(opts.file), "utf8");
+        const { source, nodeId, targetLabel, baseHash } =
+          await loadWritableSnapshotTarget(opts);
+        const raw = opts.stdin
+          ? await readStdin()
+          : await fs.readFile(String(opts.file), "utf8");
         let file: ExecApprovalsFile;
         try {
           file = JSON5.parse(raw);
@@ -407,7 +460,14 @@ export function registerExecApprovalsCli(program: Command) {
           exitWithError(`Failed to parse approvals JSON: ${String(err)}`);
         }
         file.version = 1;
-        await saveSnapshotTargeted({ opts, source, nodeId, file, baseHash, targetLabel });
+        await saveSnapshotTargeted({
+          opts,
+          source,
+          nodeId,
+          file,
+          baseHash,
+          targetLabel,
+        });
       } catch (err) {
         defaultRuntime.error(formatCliError(err));
         defaultRuntime.exit(1);
@@ -441,11 +501,18 @@ export function registerExecApprovalsCli(program: Command) {
     name: "add",
     description: "Add a glob pattern to an allowlist",
     mutate: ({ trimmedPattern, file, agent, agentKey, allowlistEntries }) => {
-      if (allowlistEntries.some((entry) => normalizeAllowlistEntry(entry) === trimmedPattern)) {
+      if (
+        allowlistEntries.some(
+          (entry) => normalizeAllowlistEntry(entry) === trimmedPattern,
+        )
+      ) {
         defaultRuntime.log("Already allowlisted.");
         return false;
       }
-      allowlistEntries.push({ pattern: trimmedPattern, lastUsedAt: Date.now() });
+      allowlistEntries.push({
+        pattern: trimmedPattern,
+        lastUsedAt: Date.now(),
+      });
       agent.allowlist = allowlistEntries;
       file.agents = { ...file.agents, [agentKey]: agent };
       return true;

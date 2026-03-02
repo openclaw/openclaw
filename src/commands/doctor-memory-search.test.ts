@@ -57,7 +57,10 @@ describe("noteMemorySearchHealth", () => {
     resolveApiKeyForProvider.mockReset();
     resolveApiKeyForProvider.mockRejectedValue(new Error("missing key"));
     resolveMemoryBackendConfig.mockReset();
-    resolveMemoryBackendConfig.mockReturnValue({ backend: "builtin", citations: "auto" });
+    resolveMemoryBackendConfig.mockReturnValue({
+      backend: "builtin",
+      citations: "auto",
+    });
   });
 
   it("does not warn when QMD backend is active", async () => {
@@ -159,7 +162,9 @@ describe("noteMemorySearchHealth", () => {
     });
 
     const message = note.mock.calls[0]?.[0] as string;
-    expect(message).toContain("Gateway memory probe for default agent is not ready");
+    expect(message).toContain(
+      "Gateway memory probe for default agent is not ready",
+    );
     expect(message).toContain("openclaw configure --section model");
     expect(message).not.toContain("openclaw auth add --provider");
   });

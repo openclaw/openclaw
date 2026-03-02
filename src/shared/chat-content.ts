@@ -6,7 +6,8 @@ export function extractTextFromChatContent(
     normalizeText?: (text: string) => string;
   },
 ): string | null {
-  const normalize = opts?.normalizeText ?? ((text: string) => text.replace(/\s+/g, " ").trim());
+  const normalize =
+    opts?.normalizeText ?? ((text: string) => text.replace(/\s+/g, " ").trim());
   const joinWith = opts?.joinWith ?? " ";
 
   if (typeof content === "string") {

@@ -1,6 +1,8 @@
 import type { OpenClawConfig } from "../../config/config.js";
 
-type AgentToolsConfig = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number]["tools"];
+type AgentToolsConfig = NonNullable<
+  NonNullable<OpenClawConfig["agents"]>["list"]
+>[number]["tools"];
 type SandboxToolsConfig = {
   allow?: string[];
   deny?: string[];

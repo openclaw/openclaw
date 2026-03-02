@@ -9,9 +9,15 @@ vi.mock("node:child_process", () => ({
   spawn: (...args: unknown[]) => spawnMock(...args),
 }));
 
-async function withPlatform<T>(platform: NodeJS.Platform, run: () => Promise<T> | T): Promise<T> {
+async function withPlatform<T>(
+  platform: NodeJS.Platform,
+  run: () => Promise<T> | T,
+): Promise<T> {
   const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
-  Object.defineProperty(process, "platform", { value: platform, configurable: true });
+  Object.defineProperty(process, "platform", {
+    value: platform,
+    configurable: true,
+  });
   try {
     return await run();
   } finally {
@@ -37,7 +43,10 @@ describe("killProcessTree", () => {
   });
 
   it("on Windows skips delayed force-kill when PID is already gone", async () => {
-    killSpy.mockImplementation(((pid: number, signal?: NodeJS.Signals | number) => {
+    killSpy.mockImplementation(((
+      pid: number,
+      signal?: NodeJS.Signals | number,
+    ) => {
       if (pid === 4242 && signal === 0) {
         throw new Error("ESRCH");
       }
@@ -61,7 +70,10 @@ describe("killProcessTree", () => {
   });
 
   it("on Windows force-kills after grace period only when PID still exists", async () => {
-    killSpy.mockImplementation(((pid: number, signal?: NodeJS.Signals | number) => {
+    killSpy.mockImplementation(((
+      pid: number,
+      signal?: NodeJS.Signals | number,
+    ) => {
       if (pid === 5252 && signal === 0) {
         return true;
       }
@@ -90,7 +102,10 @@ describe("killProcessTree", () => {
   });
 
   it("on Unix sends SIGTERM first and skips SIGKILL when process exits", async () => {
-    killSpy.mockImplementation(((pid: number, signal?: NodeJS.Signals | number) => {
+    killSpy.mockImplementation(((
+      pid: number,
+      signal?: NodeJS.Signals | number,
+    ) => {
       if (pid === -3333 && signal === 0) {
         throw new Error("ESRCH");
       }
@@ -112,7 +127,10 @@ describe("killProcessTree", () => {
   });
 
   it("on Unix sends SIGKILL after grace period when process is still alive", async () => {
-    killSpy.mockImplementation(((pid: number, signal?: NodeJS.Signals | number) => {
+    killSpy.mockImplementation(((
+      pid: number,
+      signal?: NodeJS.Signals | number,
+    ) => {
       if (pid === -4444 && signal === 0) {
         return true;
       }

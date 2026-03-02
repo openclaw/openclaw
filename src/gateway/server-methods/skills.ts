@@ -5,7 +5,10 @@ import {
 } from "../../agents/agent-scope.js";
 import { installSkill } from "../../agents/skills-install.js";
 import { buildWorkspaceSkillStatus } from "../../agents/skills-status.js";
-import { loadWorkspaceSkillEntries, type SkillEntry } from "../../agents/skills.js";
+import {
+  loadWorkspaceSkillEntries,
+  type SkillEntry,
+} from "../../agents/skills.js";
 import { listAgentWorkspaceDirs } from "../../agents/workspace-dirs.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig, writeConfigFile } from "../../config/config.js";
@@ -68,15 +71,21 @@ export const skillsHandlers: GatewayRequestHandlers = {
       return;
     }
     const cfg = loadConfig();
-    const agentIdRaw = typeof params?.agentId === "string" ? params.agentId.trim() : "";
-    const agentId = agentIdRaw ? normalizeAgentId(agentIdRaw) : resolveDefaultAgentId(cfg);
+    const agentIdRaw =
+      typeof params?.agentId === "string" ? params.agentId.trim() : "";
+    const agentId = agentIdRaw
+      ? normalizeAgentId(agentIdRaw)
+      : resolveDefaultAgentId(cfg);
     if (agentIdRaw) {
       const knownAgents = listAgentIds(cfg);
       if (!knownAgents.includes(agentId)) {
         respond(
           false,
           undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, `unknown agent id "${agentIdRaw}"`),
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `unknown agent id "${agentIdRaw}"`,
+          ),
         );
         return;
       }
@@ -129,7 +138,10 @@ export const skillsHandlers: GatewayRequestHandlers = {
       timeoutMs?: number;
     };
     const cfg = loadConfig();
-    const workspaceDirRaw = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
+    const workspaceDirRaw = resolveAgentWorkspaceDir(
+      cfg,
+      resolveDefaultAgentId(cfg),
+    );
     const result = await installSkill({
       workspaceDir: workspaceDirRaw,
       skillName: p.name,
@@ -140,7 +152,9 @@ export const skillsHandlers: GatewayRequestHandlers = {
     respond(
       result.ok,
       result,
-      result.ok ? undefined : errorShape(ErrorCodes.UNAVAILABLE, result.message),
+      result.ok
+        ? undefined
+        : errorShape(ErrorCodes.UNAVAILABLE, result.message),
     );
   },
   "skills.update": async ({ params, respond }) => {
@@ -199,6 +213,10 @@ export const skillsHandlers: GatewayRequestHandlers = {
       skills,
     };
     await writeConfigFile(nextConfig);
-    respond(true, { ok: true, skillKey: p.skillKey, config: current }, undefined);
+    respond(
+      true,
+      { ok: true, skillKey: p.skillKey, config: current },
+      undefined,
+    );
   },
 };

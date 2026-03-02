@@ -34,9 +34,12 @@ const MEDIA_ATTACHED_PATH_REGEX_SOURCE =
   "^\\s*(.+?\\.(?:" + IMAGE_EXTENSION_PATTERN + "))\\s*(?:\\(|$|\\|)";
 const MESSAGE_IMAGE_REGEX_SOURCE =
   "\\[Image:\\s*source:\\s*([^\\]]+\\.(?:" + IMAGE_EXTENSION_PATTERN + "))\\]";
-const FILE_URL_REGEX_SOURCE = "file://[^\\s<>\"'`\\]]+\\.(?:" + IMAGE_EXTENSION_PATTERN + ")";
+const FILE_URL_REGEX_SOURCE =
+  "file://[^\\s<>\"'`\\]]+\\.(?:" + IMAGE_EXTENSION_PATTERN + ")";
 const PATH_REGEX_SOURCE =
-  "(?:^|\\s|[\"'`(])((\\.\\.?/|[~/])[^\\s\"'`()\\[\\]]*\\.(?:" + IMAGE_EXTENSION_PATTERN + "))";
+  "(?:^|\\s|[\"'`(])((\\.\\.?/|[~/])[^\\s\"'`()\\[\\]]*\\.(?:" +
+  IMAGE_EXTENSION_PATTERN +
+  "))";
 
 /**
  * Result of detecting an image reference in text.
@@ -73,7 +76,9 @@ async function sanitizeImagesWithLog(
     imageSanitization,
   );
   if (dropped > 0) {
-    log.warn(`Native image: dropped ${dropped} image(s) after sanitization (${label}).`);
+    log.warn(
+      `Native image: dropped ${dropped} image(s) after sanitization (${label}).`,
+    );
   }
   return sanitized;
 }
@@ -109,15 +114,21 @@ export function detectImageReferences(prompt: string): DetectedImageRef[] {
       return;
     }
     seen.add(dedupeKey);
-    const resolved = trimmed.startsWith("~") ? resolveUserPath(trimmed) : trimmed;
+    const resolved = trimmed.startsWith("~")
+      ? resolveUserPath(trimmed)
+      : trimmed;
     refs.push({ raw: trimmed, type: "path", resolved });
   };
 
   // Pattern for [media attached: path (type) | url] or [media attached N/M: path (type) | url] format
   // Each bracket = ONE file. The | separates path from URL, not multiple files.
   // Multi-file format uses separate brackets on separate lines.
-  const mediaAttachedPattern = /\[media attached(?:\s+\d+\/\d+)?:\s*([^\]]+)\]/gi;
-  const mediaAttachedPathPattern = new RegExp(MEDIA_ATTACHED_PATH_REGEX_SOURCE, "i");
+  const mediaAttachedPattern =
+    /\[media attached(?:\s+\d+\/\d+)?:\s*([^\]]+)\]/gi;
+  const mediaAttachedPathPattern = new RegExp(
+    MEDIA_ATTACHED_PATH_REGEX_SOURCE,
+    "i",
+  );
   const messageImagePattern = new RegExp(MESSAGE_IMAGE_REGEX_SOURCE, "gi");
   const fileUrlPattern = new RegExp(FILE_URL_REGEX_SOURCE, "gi");
   const pathPattern = new RegExp(PATH_REGEX_SOURCE, "gi");
@@ -243,7 +254,9 @@ export async function loadImageFromRef(
       : await loadWebMedia(targetPath, options?.maxBytes);
 
     if (media.kind !== "image") {
-      log.debug(`Native image: not an image file: ${targetPath} (got ${media.kind})`);
+      log.debug(
+        `Native image: not an image file: ${targetPath} (got ${media.kind})`,
+      );
       return null;
     }
 

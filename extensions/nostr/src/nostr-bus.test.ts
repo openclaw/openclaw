@@ -8,8 +8,10 @@ import {
 } from "./nostr-bus.js";
 
 // Test private key (DO NOT use in production - this is a known test key)
-const TEST_HEX_KEY = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-const TEST_NSEC = "nsec1qypqxpq9qtpqscx7peytzfwtdjmcv0mrz5rjpej8vjppfkqfqy8skqfv3l";
+const TEST_HEX_KEY =
+  "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+const TEST_NSEC =
+  "nsec1qypqxpq9qtpqscx7peytzfwtdjmcv0mrz5rjpej8vjppfkqfqy8skqfv3l";
 
 describe("validatePrivateKey", () => {
   describe("hex format", () => {
@@ -30,7 +32,8 @@ describe("validatePrivateKey", () => {
     });
 
     it("accepts mixed case hex", () => {
-      const mixed = "0123456789ABCdef0123456789abcDEF0123456789abcdef0123456789ABCDEF";
+      const mixed =
+        "0123456789ABCdef0123456789abcDEF0123456789abcdef0123456789ABCDEF";
       const result = validatePrivateKey(mixed);
       expect(result).toBeInstanceOf(Uint8Array);
     });
@@ -58,16 +61,23 @@ describe("validatePrivateKey", () => {
     });
 
     it("rejects non-hex characters", () => {
-      const invalid = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdeg"; // 'g' at end
-      expect(() => validatePrivateKey(invalid)).toThrow("Private key must be 64 hex characters");
+      const invalid =
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdeg"; // 'g' at end
+      expect(() => validatePrivateKey(invalid)).toThrow(
+        "Private key must be 64 hex characters",
+      );
     });
 
     it("rejects empty string", () => {
-      expect(() => validatePrivateKey("")).toThrow("Private key must be 64 hex characters");
+      expect(() => validatePrivateKey("")).toThrow(
+        "Private key must be 64 hex characters",
+      );
     });
 
     it("rejects whitespace-only string", () => {
-      expect(() => validatePrivateKey("   ")).toThrow("Private key must be 64 hex characters");
+      expect(() => validatePrivateKey("   ")).toThrow(
+        "Private key must be 64 hex characters",
+      );
     });
 
     it("rejects key with 0x prefix", () => {
@@ -79,12 +89,14 @@ describe("validatePrivateKey", () => {
 
   describe("nsec format", () => {
     it("rejects invalid nsec (wrong checksum)", () => {
-      const badNsec = "nsec1invalidinvalidinvalidinvalidinvalidinvalidinvalidinvalid";
+      const badNsec =
+        "nsec1invalidinvalidinvalidinvalidinvalidinvalidinvalidinvalid";
       expect(() => validatePrivateKey(badNsec)).toThrow();
     });
 
     it("rejects npub (wrong type)", () => {
-      const npub = "npub1qypqxpq9qtpqscx7peytzfwtdjmcv0mrz5rjpej8vjppfkqfqy8s5epk55";
+      const npub =
+        "npub1qypqxpq9qtpqscx7peytzfwtdjmcv0mrz5rjpej8vjppfkqfqy8s5epk55";
       expect(() => validatePrivateKey(npub)).toThrow();
     });
   });
@@ -93,27 +105,32 @@ describe("validatePrivateKey", () => {
 describe("isValidPubkey", () => {
   describe("hex format", () => {
     it("accepts valid 64-char hex pubkey", () => {
-      const validHex = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+      const validHex =
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
       expect(isValidPubkey(validHex)).toBe(true);
     });
 
     it("accepts uppercase hex", () => {
-      const validHex = "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF";
+      const validHex =
+        "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF";
       expect(isValidPubkey(validHex)).toBe(true);
     });
 
     it("rejects 63-char hex", () => {
-      const shortHex = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde";
+      const shortHex =
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde";
       expect(isValidPubkey(shortHex)).toBe(false);
     });
 
     it("rejects 65-char hex", () => {
-      const longHex = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0";
+      const longHex =
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0";
       expect(isValidPubkey(longHex)).toBe(false);
     });
 
     it("rejects non-hex characters", () => {
-      const invalid = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdeg";
+      const invalid =
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdeg";
       expect(isValidPubkey(invalid)).toBe(false);
     });
   });
@@ -134,7 +151,8 @@ describe("isValidPubkey", () => {
     });
 
     it("handles whitespace-padded input", () => {
-      const validHex = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+      const validHex =
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
       expect(isValidPubkey(`  ${validHex}  `)).toBe(true);
     });
   });
@@ -143,18 +161,22 @@ describe("isValidPubkey", () => {
 describe("normalizePubkey", () => {
   describe("hex format", () => {
     it("lowercases hex pubkey", () => {
-      const upper = "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF";
+      const upper =
+        "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF";
       const result = normalizePubkey(upper);
       expect(result).toBe(upper.toLowerCase());
     });
 
     it("trims whitespace", () => {
-      const hex = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+      const hex =
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
       expect(normalizePubkey(`  ${hex}  `)).toBe(hex);
     });
 
     it("rejects invalid hex", () => {
-      expect(() => normalizePubkey("invalid")).toThrow("Pubkey must be 64 hex characters");
+      expect(() => normalizePubkey("invalid")).toThrow(
+        "Pubkey must be 64 hex characters",
+      );
     });
   });
 });
@@ -179,20 +201,23 @@ describe("getPublicKeyFromPrivate", () => {
 
 describe("pubkeyToNpub", () => {
   it("converts hex pubkey to npub format", () => {
-    const hex = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    const hex =
+      "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
     const npub = pubkeyToNpub(hex);
     expect(npub).toMatch(/^npub1[a-z0-9]+$/);
   });
 
   it("produces consistent output", () => {
-    const hex = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    const hex =
+      "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
     const npub1 = pubkeyToNpub(hex);
     const npub2 = pubkeyToNpub(hex);
     expect(npub1).toBe(npub2);
   });
 
   it("normalizes uppercase hex first", () => {
-    const lower = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    const lower =
+      "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
     const upper = lower.toUpperCase();
     expect(pubkeyToNpub(lower)).toBe(pubkeyToNpub(upper));
   });

@@ -73,7 +73,8 @@ export function registerCronSimpleCommands(cron: Command) {
       .action(async (opts) => {
         try {
           const limitRaw = Number.parseInt(String(opts.limit ?? "50"), 10);
-          const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? limitRaw : 50;
+          const limit =
+            Number.isFinite(limitRaw) && limitRaw > 0 ? limitRaw : 50;
           const id = String(opts.id);
           const res = await callGatewayFromCli("cron.runs", opts, {
             id,
@@ -92,7 +93,11 @@ export function registerCronSimpleCommands(cron: Command) {
       .command("run")
       .description("Run a cron job now (debug)")
       .argument("<id>", "Job id")
-      .option("--due", "Run only when due (default behavior in older versions)", false)
+      .option(
+        "--due",
+        "Run only when due (default behavior in older versions)",
+        false,
+      )
       .action(async (id, opts, command) => {
         try {
           if (command.getOptionValueSource("timeout") === "default") {

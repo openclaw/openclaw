@@ -15,13 +15,22 @@ async function withSandboxRoot<T>(run: (sandboxDir: string) => Promise<T>) {
   }
 }
 
-async function expectSandboxRejection(media: string, sandboxRoot: string, pattern: RegExp) {
-  await expect(resolveSandboxedMediaSource({ media, sandboxRoot })).rejects.toThrow(pattern);
+async function expectSandboxRejection(
+  media: string,
+  sandboxRoot: string,
+  pattern: RegExp,
+) {
+  await expect(
+    resolveSandboxedMediaSource({ media, sandboxRoot }),
+  ).rejects.toThrow(pattern);
 }
 
 function isPathInside(root: string, target: string): boolean {
   const relative = path.relative(path.resolve(root), path.resolve(target));
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+  return (
+    relative === "" ||
+    (!relative.startsWith("..") && !path.isAbsolute(relative))
+  );
 }
 
 function makeTmpProbePath(prefix: string): string {
@@ -36,9 +45,14 @@ async function withOutsideHardlinkInOpenClawTmp<T>(
   },
   run: (paths: { hardlinkPath: string; symlinkPath?: string }) => Promise<T>,
 ): Promise<void> {
-  const outsideDir = await fs.mkdtemp(path.join(process.cwd(), "sandbox-media-hardlink-outside-"));
+  const outsideDir = await fs.mkdtemp(
+    path.join(process.cwd(), "sandbox-media-hardlink-outside-"),
+  );
   const outsideFile = path.join(outsideDir, "outside-secret.txt");
-  const hardlinkPath = path.join(params.openClawTmpDir, makeTmpProbePath(params.hardlinkPrefix));
+  const hardlinkPath = path.join(
+    params.openClawTmpDir,
+    makeTmpProbePath(params.hardlinkPrefix),
+  );
   const symlinkPath = params.symlinkPrefix
     ? path.join(params.openClawTmpDir, makeTmpProbePath(params.symlinkPrefix))
     : undefined;
@@ -185,10 +199,17 @@ describe("resolveSandboxedMediaSource", () => {
     await withSandboxRoot(async (sandboxDir) => {
       await fs.access(outsideTmpTarget);
       await fs.mkdir(openClawTmpDir, { recursive: true });
-      const symlinkPath = path.join(openClawTmpDir, `tmp-link-escape-${process.pid}`);
+      const symlinkPath = path.join(
+        openClawTmpDir,
+        `tmp-link-escape-${process.pid}`,
+      );
       await fs.symlink(outsideTmpTarget, symlinkPath);
       try {
-        await expectSandboxRejection(symlinkPath, sandboxDir, /symlink|sandbox/i);
+        await expectSandboxRejection(
+          symlinkPath,
+          sandboxDir,
+          /symlink|sandbox/i,
+        );
       } finally {
         await fs.unlink(symlinkPath).catch(() => {});
       }
@@ -207,7 +228,11 @@ describe("resolveSandboxedMediaSource", () => {
       await fs.symlink(outsideDir, linkDir);
       try {
         const missingOutsidePath = path.join(linkDir, "new-file.txt");
-        await expectSandboxRejection(missingOutsidePath, sandboxDir, /symlink|sandbox/i);
+        await expectSandboxRejection(
+          missingOutsidePath,
+          sandboxDir,
+          /symlink|sandbox/i,
+        );
       } finally {
         await fs.rm(linkDir, { force: true });
         await fs.rm(outsideDir, { recursive: true, force: true });
@@ -226,7 +251,11 @@ describe("resolveSandboxedMediaSource", () => {
       },
       async ({ hardlinkPath }) => {
         await withSandboxRoot(async (sandboxDir) => {
-          await expectSandboxRejection(hardlinkPath, sandboxDir, /hard.?link|sandbox/i);
+          await expectSandboxRejection(
+            hardlinkPath,
+            sandboxDir,
+            /hard.?link|sandbox/i,
+          );
         });
       },
     );
@@ -247,7 +276,11 @@ describe("resolveSandboxedMediaSource", () => {
           return;
         }
         await withSandboxRoot(async (sandboxDir) => {
-          await expectSandboxRejection(symlinkPath, sandboxDir, /hard.?link|sandbox/i);
+          await expectSandboxRejection(
+            symlinkPath,
+            sandboxDir,
+            /hard.?link|sandbox/i,
+          );
         });
       },
     );

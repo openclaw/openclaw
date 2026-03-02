@@ -39,7 +39,10 @@ export async function loadAgents(state: AgentsState) {
   }
 }
 
-export async function loadToolsCatalog(state: AgentsState, agentId?: string | null) {
+export async function loadToolsCatalog(
+  state: AgentsState,
+  agentId?: string | null,
+) {
   if (!state.client || !state.connected) {
     return;
   }
@@ -49,10 +52,13 @@ export async function loadToolsCatalog(state: AgentsState, agentId?: string | nu
   state.toolsCatalogLoading = true;
   state.toolsCatalogError = null;
   try {
-    const res = await state.client.request<ToolsCatalogResult>("tools.catalog", {
-      agentId: agentId ?? state.agentsSelectedId ?? undefined,
-      includePlugins: true,
-    });
+    const res = await state.client.request<ToolsCatalogResult>(
+      "tools.catalog",
+      {
+        agentId: agentId ?? state.agentsSelectedId ?? undefined,
+        includePlugins: true,
+      },
+    );
     if (res) {
       state.toolsCatalogResult = res;
     }

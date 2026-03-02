@@ -3,7 +3,9 @@ import { describe, expect, it, vi } from "vitest";
 import { ircOnboardingAdapter } from "./onboarding.js";
 import type { CoreConfig } from "./types.js";
 
-const selectFirstOption = async <T>(params: { options: Array<{ value: T }> }): Promise<T> => {
+const selectFirstOption = async <T>(params: {
+  options: Array<{ value: T }>;
+}): Promise<T> => {
   const first = params.options[0];
   if (!first) {
     throw new Error("no options");
@@ -88,7 +90,10 @@ describe("irc onboarding", () => {
     expect(result.cfg.channels?.irc?.tls).toBe(true);
     expect(result.cfg.channels?.irc?.channels).toEqual(["#openclaw", "#ops"]);
     expect(result.cfg.channels?.irc?.groupPolicy).toBe("allowlist");
-    expect(Object.keys(result.cfg.channels?.irc?.groups ?? {})).toEqual(["#openclaw", "#ops"]);
+    expect(Object.keys(result.cfg.channels?.irc?.groups ?? {})).toEqual([
+      "#openclaw",
+      "#ops",
+    ]);
   });
 
   it("writes DM allowFrom to top-level config for non-default account prompts", async () => {
@@ -124,7 +129,10 @@ describe("irc onboarding", () => {
       accountId: "work",
     })) as CoreConfig;
 
-    expect(updated.channels?.irc?.allowFrom).toEqual(["alice", "bob!ident@example.org"]);
+    expect(updated.channels?.irc?.allowFrom).toEqual([
+      "alice",
+      "bob!ident@example.org",
+    ]);
     expect(updated.channels?.irc?.accounts?.work?.allowFrom).toBeUndefined();
   });
 });

@@ -31,8 +31,11 @@ export function maybeHandleQueueDirective(params: {
       sessionEntry: params.sessionEntry,
     });
     const debounceLabel =
-      typeof settings.debounceMs === "number" ? `${settings.debounceMs}ms` : "default";
-    const capLabel = typeof settings.cap === "number" ? String(settings.cap) : "default";
+      typeof settings.debounceMs === "number"
+        ? `${settings.debounceMs}ms`
+        : "default";
+    const capLabel =
+      typeof settings.cap === "number" ? String(settings.cap) : "default";
     const dropLabel = settings.dropPolicy ?? "default";
     return {
       text: withOptions(
@@ -43,13 +46,23 @@ export function maybeHandleQueueDirective(params: {
   }
 
   const queueModeInvalid =
-    !directives.queueMode && !directives.queueReset && Boolean(directives.rawQueueMode);
+    !directives.queueMode &&
+    !directives.queueReset &&
+    Boolean(directives.rawQueueMode);
   const queueDebounceInvalid =
-    directives.rawDebounce !== undefined && typeof directives.debounceMs !== "number";
-  const queueCapInvalid = directives.rawCap !== undefined && typeof directives.cap !== "number";
-  const queueDropInvalid = directives.rawDrop !== undefined && !directives.dropPolicy;
+    directives.rawDebounce !== undefined &&
+    typeof directives.debounceMs !== "number";
+  const queueCapInvalid =
+    directives.rawCap !== undefined && typeof directives.cap !== "number";
+  const queueDropInvalid =
+    directives.rawDrop !== undefined && !directives.dropPolicy;
 
-  if (queueModeInvalid || queueDebounceInvalid || queueCapInvalid || queueDropInvalid) {
+  if (
+    queueModeInvalid ||
+    queueDebounceInvalid ||
+    queueCapInvalid ||
+    queueDropInvalid
+  ) {
     const errors: string[] = [];
     if (queueModeInvalid) {
       errors.push(

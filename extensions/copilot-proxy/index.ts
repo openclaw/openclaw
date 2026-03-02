@@ -87,7 +87,9 @@ const copilotProxyPlugin = {
           label: "Local proxy",
           hint: "Configure base URL + models for the Copilot Proxy server",
           kind: "custom",
-          run: async (ctx: ProviderAuthContext): Promise<ProviderAuthResult> => {
+          run: async (
+            ctx: ProviderAuthContext,
+          ): Promise<ProviderAuthResult> => {
             const baseUrlInput = await ctx.prompter.text({
               message: "Copilot Proxy base URL",
               initialValue: DEFAULT_BASE_URL,
@@ -98,7 +100,9 @@ const copilotProxyPlugin = {
               message: "Model IDs (comma-separated)",
               initialValue: DEFAULT_MODEL_IDS.join(", "),
               validate: (value: string) =>
-                parseModelIds(value).length > 0 ? undefined : "Enter at least one model id",
+                parseModelIds(value).length > 0
+                  ? undefined
+                  : "Enter at least one model id",
             });
 
             const baseUrl = normalizeBaseUrl(baseUrlInput);
@@ -125,14 +129,19 @@ const copilotProxyPlugin = {
                       apiKey: DEFAULT_API_KEY,
                       api: "openai-completions",
                       authHeader: false,
-                      models: modelIds.map((modelId) => buildModelDefinition(modelId)),
+                      models: modelIds.map((modelId) =>
+                        buildModelDefinition(modelId),
+                      ),
                     },
                   },
                 },
                 agents: {
                   defaults: {
                     models: Object.fromEntries(
-                      modelIds.map((modelId) => [`copilot-proxy/${modelId}`, {}]),
+                      modelIds.map((modelId) => [
+                        `copilot-proxy/${modelId}`,
+                        {},
+                      ]),
                     ),
                   },
                 },

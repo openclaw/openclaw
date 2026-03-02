@@ -1,4 +1,7 @@
-import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
+import {
+  getChannelPlugin,
+  normalizeChannelId,
+} from "../channels/plugins/index.js";
 
 export type MessagingToolSend = {
   tool: string;

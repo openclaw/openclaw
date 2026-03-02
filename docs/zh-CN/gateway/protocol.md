@@ -77,7 +77,11 @@ Gateway 网关 → 客户端：
   "type": "res",
   "id": "…",
   "ok": true,
-  "payload": { "type": "hello-ok", "protocol": 3, "policy": { "tickIntervalMs": 15000 } }
+  "payload": {
+    "type": "hello-ok",
+    "protocol": 3,
+    "policy": { "tickIntervalMs": 15000 }
+  }
 }
 ```
 
@@ -112,7 +116,12 @@ Gateway 网关 → 客户端：
     "role": "node",
     "scopes": [],
     "caps": ["camera", "canvas", "screen", "location", "voice"],
-    "commands": ["camera.snap", "canvas.navigate", "screen.record", "location.get"],
+    "commands": [
+      "camera.snap",
+      "canvas.navigate",
+      "screen.record",
+      "location.get"
+    ],
     "permissions": { "camera.capture": true, "screen.record": false },
     "auth": { "token": "…" },
     "locale": "en-US",

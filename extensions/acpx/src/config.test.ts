@@ -45,7 +45,9 @@ describe("acpx plugin config parsing", () => {
       workspaceDir: "/home/user/repos/openclaw",
     });
 
-    expect(resolved.command).toBe(path.resolve("/home/user/repos/openclaw", "../acpx/dist/cli.js"));
+    expect(resolved.command).toBe(
+      path.resolve("/home/user/repos/openclaw", "../acpx/dist/cli.js"),
+    );
     expect(resolved.expectedVersion).toBeUndefined();
     expect(resolved.allowPluginLocalInstall).toBe(false);
   });

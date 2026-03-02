@@ -1,4 +1,8 @@
-import { formatRelativeTimestamp, formatDurationHuman, formatMs } from "./format.ts";
+import {
+  formatRelativeTimestamp,
+  formatDurationHuman,
+  formatMs,
+} from "./format.ts";
 import type { CronJob, GatewaySessionRow, PresenceEntry } from "./types.ts";
 
 export function formatPresenceSummary(entry: PresenceEntry): string {
@@ -18,7 +22,9 @@ export function formatNextRun(ms?: number | null) {
   if (!ms) {
     return "n/a";
   }
-  const weekday = new Date(ms).toLocaleDateString(undefined, { weekday: "short" });
+  const weekday = new Date(ms).toLocaleDateString(undefined, {
+    weekday: "short",
+  });
   return `${weekday}, ${formatMs(ms)} (${formatRelativeTimestamp(ms)})`;
 }
 

@@ -10,14 +10,21 @@ const discordSendMocks = vi.hoisted(() => ({
   hasAnyGuildPermissionDiscord: vi.fn(async () => false),
 }));
 
-const { banMemberDiscord, kickMemberDiscord, timeoutMemberDiscord, hasAnyGuildPermissionDiscord } =
-  discordSendMocks;
+const {
+  banMemberDiscord,
+  kickMemberDiscord,
+  timeoutMemberDiscord,
+  hasAnyGuildPermissionDiscord,
+} = discordSendMocks;
 
 vi.mock("../../discord/send.js", () => ({
   ...discordSendMocks,
 }));
 
-const enableAllActions = (_key: keyof DiscordActionConfig, _defaultValue = true) => true;
+const enableAllActions = (
+  _key: keyof DiscordActionConfig,
+  _defaultValue = true,
+) => true;
 
 describe("discord moderation sender authorization", () => {
   it("rejects ban when sender lacks BAN_MEMBERS", async () => {

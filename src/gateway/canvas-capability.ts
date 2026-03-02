@@ -12,7 +12,9 @@ export type NormalizedCanvasScopedUrl = {
   malformedScopedPath: boolean;
 };
 
-function normalizeCapability(raw: string | null | undefined): string | undefined {
+function normalizeCapability(
+  raw: string | null | undefined,
+): string | undefined {
   const trimmed = raw?.trim();
   return trimmed ? trimmed : undefined;
 }
@@ -21,7 +23,10 @@ export function mintCanvasCapabilityToken(): string {
   return randomBytes(18).toString("base64url");
 }
 
-export function buildCanvasScopedHostUrl(baseUrl: string, capability: string): string | undefined {
+export function buildCanvasScopedHostUrl(
+  baseUrl: string,
+  capability: string,
+): string | undefined {
   const normalizedCapability = normalizeCapability(capability);
   if (!normalizedCapability) {
     return undefined;
@@ -39,7 +44,9 @@ export function buildCanvasScopedHostUrl(baseUrl: string, capability: string): s
   }
 }
 
-export function normalizeCanvasScopedUrl(rawUrl: string): NormalizedCanvasScopedUrl {
+export function normalizeCanvasScopedUrl(
+  rawUrl: string,
+): NormalizedCanvasScopedUrl {
   const url = new URL(rawUrl, "http://localhost");
   const prefix = `${CANVAS_CAPABILITY_PATH_PREFIX}/`;
   let scopedPath = false;
@@ -68,7 +75,10 @@ export function normalizeCanvasScopedUrl(rawUrl: string): NormalizedCanvasScoped
       } else {
         url.pathname = canonicalPath;
         if (!url.searchParams.has(CANVAS_CAPABILITY_QUERY_PARAM)) {
-          url.searchParams.set(CANVAS_CAPABILITY_QUERY_PARAM, capabilityFromPath);
+          url.searchParams.set(
+            CANVAS_CAPABILITY_QUERY_PARAM,
+            capabilityFromPath,
+          );
         }
         rewrittenUrl = `${url.pathname}${url.search}`;
       }
@@ -76,7 +86,8 @@ export function normalizeCanvasScopedUrl(rawUrl: string): NormalizedCanvasScoped
   }
 
   const capability =
-    capabilityFromPath ?? normalizeCapability(url.searchParams.get(CANVAS_CAPABILITY_QUERY_PARAM));
+    capabilityFromPath ??
+    normalizeCapability(url.searchParams.get(CANVAS_CAPABILITY_QUERY_PARAM));
   return {
     pathname: url.pathname,
     capability,

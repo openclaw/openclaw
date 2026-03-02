@@ -51,7 +51,9 @@ function resolve(params: {
 function resolveDispatchDecision(params: {
   cfg: OpenClawConfig;
   message: IMessagePayload;
-  groupHistories?: Parameters<typeof resolveIMessageInboundDecision>[0]["groupHistories"];
+  groupHistories?: Parameters<
+    typeof resolveIMessageInboundDecision
+  >[0]["groupHistories"];
 }) {
   const groupHistories = params.groupHistories ?? new Map();
   const decision = resolveIMessageInboundDecision({
@@ -76,9 +78,15 @@ function resolveDispatchDecision(params: {
   return { decision, groupHistories };
 }
 
-function buildDispatchContextPayload(params: { cfg: OpenClawConfig; message: IMessagePayload }) {
+function buildDispatchContextPayload(params: {
+  cfg: OpenClawConfig;
+  message: IMessagePayload;
+}) {
   const { cfg, message } = params;
-  const { decision, groupHistories } = resolveDispatchDecision({ cfg, message });
+  const { decision, groupHistories } = resolveDispatchDecision({
+    cfg,
+    message,
+  });
 
   const { ctxPayload } = buildIMessageInboundContext({
     cfg,
@@ -157,7 +165,9 @@ describe("imessage monitor gating + envelope builders", () => {
     expect(ctxPayload.ReplyToId).toBe("9001");
     expect(ctxPayload.ReplyToBody).toBe("original message");
     expect(ctxPayload.ReplyToSender).toBe("+15559998888");
-    expect(String(ctxPayload.Body ?? "")).toContain("[Replying to +15559998888 id:9001]");
+    expect(String(ctxPayload.Body ?? "")).toContain(
+      "[Replying to +15559998888 id:9001]",
+    );
     expect(String(ctxPayload.Body ?? "")).toContain("original message");
   });
 
@@ -176,7 +186,11 @@ describe("imessage monitor gating + envelope builders", () => {
       text: "hello",
       is_group: false,
     };
-    const { decision } = resolveDispatchDecision({ cfg, message, groupHistories });
+    const { decision } = resolveDispatchDecision({
+      cfg,
+      message,
+      groupHistories,
+    });
     expect(decision.isGroup).toBe(true);
     expect(decision.route.sessionKey).toBe("agent:main:imessage:group:2");
   });

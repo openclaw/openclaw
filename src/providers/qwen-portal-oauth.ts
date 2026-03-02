@@ -33,7 +33,9 @@ export async function refreshQwenPortalCredentials(
         `Qwen OAuth refresh token expired or invalid. Re-authenticate with \`${formatCliCommand("openclaw models auth login --provider qwen-portal")}\`.`,
       );
     }
-    throw new Error(`Qwen OAuth refresh failed: ${text || response.statusText}`);
+    throw new Error(
+      `Qwen OAuth refresh failed: ${text || response.statusText}`,
+    );
   }
 
   const payload = (await response.json()) as {
@@ -48,8 +50,14 @@ export async function refreshQwenPortalCredentials(
   if (!accessToken) {
     throw new Error("Qwen OAuth refresh response missing access token.");
   }
-  if (typeof expiresIn !== "number" || !Number.isFinite(expiresIn) || expiresIn <= 0) {
-    throw new Error("Qwen OAuth refresh response missing or invalid expires_in.");
+  if (
+    typeof expiresIn !== "number" ||
+    !Number.isFinite(expiresIn) ||
+    expiresIn <= 0
+  ) {
+    throw new Error(
+      "Qwen OAuth refresh response missing or invalid expires_in.",
+    );
   }
 
   return {

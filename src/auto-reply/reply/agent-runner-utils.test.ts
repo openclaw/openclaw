@@ -18,7 +18,9 @@ const {
   resolveProviderScopedAuthProfile,
 } = await import("./agent-runner-utils.js");
 
-function makeRun(overrides: Partial<FollowupRun["run"]> = {}): FollowupRun["run"] {
+function makeRun(
+  overrides: Partial<FollowupRun["run"]> = {},
+): FollowupRun["run"] {
   return {
     sessionId: "session-1",
     agentId: "agent-1",
@@ -48,7 +50,9 @@ describe("agent-runner-utils", () => {
   });
 
   it("resolves model fallback options from run context", () => {
-    hoisted.resolveRunModelFallbacksOverrideMock.mockReturnValue(["fallback-model"]);
+    hoisted.resolveRunModelFallbacksOverrideMock.mockReturnValue([
+      "fallback-model",
+    ]);
     const run = makeRun();
 
     const resolved = resolveModelFallbackOptions(run);
@@ -68,7 +72,9 @@ describe("agent-runner-utils", () => {
   });
 
   it("passes through missing agentId for helper-based fallback resolution", () => {
-    hoisted.resolveRunModelFallbacksOverrideMock.mockReturnValue(["fallback-model"]);
+    hoisted.resolveRunModelFallbacksOverrideMock.mockReturnValue([
+      "fallback-model",
+    ]);
     const run = makeRun({ agentId: undefined });
 
     const resolved = resolveModelFallbackOptions(run);

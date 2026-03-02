@@ -14,7 +14,9 @@ const WINDOWS_UNSAFE_SHELL_ARG_PATTERN = /[\r\n"&|<>^%!]/;
 
 function usage() {
   // keep this tiny; it's invoked from npm scripts too
-  process.stderr.write("Usage: node scripts/ui.js <install|dev|build|test> [...args]\n");
+  process.stderr.write(
+    "Usage: node scripts/ui.js <install|dev|build|test> [...args]\n",
+  );
 }
 
 function which(cmd) {
@@ -25,11 +27,16 @@ function which(cmd) {
       .filter(Boolean);
     const extensions =
       process.platform === "win32"
-        ? (process.env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM").split(";").filter(Boolean)
+        ? (process.env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM")
+            .split(";")
+            .filter(Boolean)
         : [""];
     for (const entry of paths) {
       for (const ext of extensions) {
-        const candidate = path.join(entry, process.platform === "win32" ? `${cmd}${ext}` : cmd);
+        const candidate = path.join(
+          entry,
+          process.platform === "win32" ? `${cmd}${ext}` : cmd,
+        );
         try {
           if (fs.existsSync(candidate)) {
             return candidate;
@@ -65,7 +72,9 @@ export function assertSafeWindowsShellArgs(args, platform = process.platform) {
   if (platform !== "win32") {
     return;
   }
-  const unsafeArg = args.find((arg) => WINDOWS_UNSAFE_SHELL_ARG_PATTERN.test(arg));
+  const unsafeArg = args.find((arg) =>
+    WINDOWS_UNSAFE_SHELL_ARG_PATTERN.test(arg),
+  );
   if (!unsafeArg) {
     return;
   }
@@ -185,8 +194,11 @@ export function main(argv = process.argv.slice(2)) {
 
   if (!depsInstalled(action === "test" ? "test" : "build")) {
     const installEnv =
-      action === "build" ? { ...process.env, NODE_ENV: "production" } : process.env;
-    const installArgs = action === "build" ? ["install", "--prod"] : ["install"];
+      action === "build"
+        ? { ...process.env, NODE_ENV: "production" }
+        : process.env;
+    const installArgs =
+      action === "build" ? ["install", "--prod"] : ["install"];
     runSync(runner.cmd, installArgs, installEnv);
   }
 
@@ -195,7 +207,9 @@ export function main(argv = process.argv.slice(2)) {
 
 const isDirectExecution = (() => {
   const entry = process.argv[1];
-  return Boolean(entry && path.resolve(entry) === fileURLToPath(import.meta.url));
+  return Boolean(
+    entry && path.resolve(entry) === fileURLToPath(import.meta.url),
+  );
 })();
 
 if (isDirectExecution) {

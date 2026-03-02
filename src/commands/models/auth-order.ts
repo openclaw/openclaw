@@ -1,4 +1,7 @@
-import { resolveAgentDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import {
+  resolveAgentDir,
+  resolveDefaultAgentId,
+} from "../../agents/agent-scope.js";
 import {
   type AuthProfileStore,
   ensureAuthProfileStore,
@@ -17,7 +20,8 @@ function resolveTargetAgent(
   agentId: string;
   agentDir: string;
 } {
-  const agentId = resolveKnownAgentId({ cfg, rawAgentId: raw }) ?? resolveDefaultAgentId(cfg);
+  const agentId =
+    resolveKnownAgentId({ cfg, rawAgentId: raw }) ?? resolveDefaultAgentId(cfg);
   const agentDir = resolveAgentDir(cfg, agentId);
   return { agentId, agentDir };
 }
@@ -68,8 +72,14 @@ export async function modelsAuthOrderGetCommand(
 
   runtime.log(`Agent: ${agentId}`);
   runtime.log(`Provider: ${provider}`);
-  runtime.log(`Auth file: ${shortenHomePath(`${agentDir}/auth-profiles.json`)}`);
-  runtime.log(order.length > 0 ? `Order override: ${order.join(", ")}` : "Order override: (none)");
+  runtime.log(
+    `Auth file: ${shortenHomePath(`${agentDir}/auth-profiles.json`)}`,
+  );
+  runtime.log(
+    order.length > 0
+      ? `Order override: ${order.join(", ")}`
+      : "Order override: (none)",
+  );
 }
 
 export async function modelsAuthOrderClearCommand(
@@ -101,7 +111,9 @@ export async function modelsAuthOrderSetCommand(
     allowKeychainPrompt: false,
   });
   const providerKey = provider;
-  const requested = (opts.order ?? []).map((entry) => String(entry).trim()).filter(Boolean);
+  const requested = (opts.order ?? [])
+    .map((entry) => String(entry).trim())
+    .filter(Boolean);
   if (requested.length === 0) {
     throw new Error("Missing profile ids. Provide one or more profile ids.");
   }
@@ -112,7 +124,9 @@ export async function modelsAuthOrderSetCommand(
       throw new Error(`Auth profile "${profileId}" not found in ${agentDir}.`);
     }
     if (normalizeProviderId(cred.provider) !== providerKey) {
-      throw new Error(`Auth profile "${profileId}" is for ${cred.provider}, not ${provider}.`);
+      throw new Error(
+        `Auth profile "${profileId}" is for ${cred.provider}, not ${provider}.`,
+      );
     }
   }
 

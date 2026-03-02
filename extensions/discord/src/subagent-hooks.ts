@@ -24,7 +24,8 @@ export function registerDiscordSubagentHooks(api: OpenClawPluginApi) {
     });
     const baseThreadBindings = api.config.channels?.discord?.threadBindings;
     const accountThreadBindings =
-      api.config.channels?.discord?.accounts?.[account.accountId]?.threadBindings;
+      api.config.channels?.discord?.accounts?.[account.accountId]
+        ?.threadBindings;
     return {
       enabled:
         accountThreadBindings?.enabled ??
@@ -48,7 +49,9 @@ export function registerDiscordSubagentHooks(api: OpenClawPluginApi) {
       // their own thread/session provisioning without Discord blocking them.
       return;
     }
-    const threadBindingFlags = resolveThreadBindingFlags(event.requester?.accountId);
+    const threadBindingFlags = resolveThreadBindingFlags(
+      event.requester?.accountId,
+    );
     if (!threadBindingFlags.enabled) {
       return {
         status: "error" as const,
@@ -104,13 +107,16 @@ export function registerDiscordSubagentHooks(api: OpenClawPluginApi) {
     if (!event.expectsCompletionMessage) {
       return;
     }
-    const requesterChannel = event.requesterOrigin?.channel?.trim().toLowerCase();
+    const requesterChannel = event.requesterOrigin?.channel
+      ?.trim()
+      .toLowerCase();
     if (requesterChannel !== "discord") {
       return;
     }
     const requesterAccountId = event.requesterOrigin?.accountId?.trim();
     const requesterThreadId =
-      event.requesterOrigin?.threadId != null && event.requesterOrigin.threadId !== ""
+      event.requesterOrigin?.threadId != null &&
+      event.requesterOrigin.threadId !== ""
         ? String(event.requesterOrigin.threadId).trim()
         : "";
     const bindings = listThreadBindingsBySessionKey({

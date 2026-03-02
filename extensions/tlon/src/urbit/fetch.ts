@@ -9,7 +9,10 @@ export type UrbitFetchOptions = {
   init?: RequestInit;
   ssrfPolicy?: SsrFPolicy;
   lookupFn?: LookupFn;
-  fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+  fetchImpl?: (
+    input: RequestInfo | URL,
+    init?: RequestInit,
+  ) => Promise<Response>;
   timeoutMs?: number;
   maxRedirects?: number;
   signal?: AbortSignal;

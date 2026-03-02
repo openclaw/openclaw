@@ -1,11 +1,19 @@
 import type { OpenClawConfig } from "../config/config.js";
-import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
+import type {
+  ApplyAuthChoiceParams,
+  ApplyAuthChoiceResult,
+} from "./auth-choice.apply.js";
 import { promptAndConfigureVllm } from "./vllm-setup.js";
 
-function applyVllmDefaultModel(cfg: OpenClawConfig, modelRef: string): OpenClawConfig {
+function applyVllmDefaultModel(
+  cfg: OpenClawConfig,
+  modelRef: string,
+): OpenClawConfig {
   const existingModel = cfg.agents?.defaults?.model;
   const fallbacks =
-    existingModel && typeof existingModel === "object" && "fallbacks" in existingModel
+    existingModel &&
+    typeof existingModel === "object" &&
+    "fallbacks" in existingModel
       ? (existingModel as { fallbacks?: string[] }).fallbacks
       : undefined;
 
@@ -41,6 +49,9 @@ export async function applyAuthChoiceVllm(
     return { config: nextConfig, agentModelOverride: modelRef };
   }
 
-  await params.prompter.note(`Default model set to ${modelRef}`, "Model configured");
+  await params.prompter.note(
+    `Default model set to ${modelRef}`,
+    "Model configured",
+  );
   return { config: applyVllmDefaultModel(nextConfig, modelRef) };
 }

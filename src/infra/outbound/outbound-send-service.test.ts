@@ -20,7 +20,10 @@ vi.mock("../../media/local-roots.js", () => ({
   getAgentScopedMediaLocalRoots: mocks.getAgentScopedMediaLocalRoots,
 }));
 
-import { executePollAction, executeSendAction } from "./outbound-send-service.js";
+import {
+  executePollAction,
+  executeSendAction,
+} from "./outbound-send-service.js";
 
 describe("executeSendAction", () => {
   beforeEach(() => {
@@ -112,7 +115,10 @@ describe("executeSendAction", () => {
       message: "hello",
     });
 
-    expect(mocks.getAgentScopedMediaLocalRoots).toHaveBeenCalledWith({}, "agent-1");
+    expect(mocks.getAgentScopedMediaLocalRoots).toHaveBeenCalledWith(
+      {},
+      "agent-1",
+    );
     expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledWith(
       expect.objectContaining({
         mediaLocalRoots: ["/tmp/agent-roots"],

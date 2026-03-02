@@ -1,4 +1,7 @@
-import { extractReadableContent, fetchFirecrawlContent } from "../src/agents/tools/web-tools.js";
+import {
+  extractReadableContent,
+  fetchFirecrawlContent,
+} from "../src/agents/tools/web-tools.js";
 
 const DEFAULT_URLS = [
   "https://en.wikipedia.org/wiki/Web_scraping",
@@ -39,7 +42,8 @@ async function fetchHtml(url: string): Promise<{
       headers: { Accept: "*/*", "User-Agent": userAgent },
       signal: controller.signal,
     });
-    const contentType = res.headers.get("content-type") ?? "application/octet-stream";
+    const contentType =
+      res.headers.get("content-type") ?? "application/octet-stream";
     const body = await res.text();
     return {
       ok: res.ok,
@@ -55,7 +59,9 @@ async function fetchHtml(url: string): Promise<{
 
 async function run() {
   if (!apiKey) {
-    console.log("FIRECRAWL_API_KEY not set. Firecrawl comparisons will be skipped.");
+    console.log(
+      "FIRECRAWL_API_KEY not set. Firecrawl comparisons will be skipped.",
+    );
   }
 
   for (const url of targets) {
@@ -90,7 +96,9 @@ async function run() {
       localError = error instanceof Error ? error.message : String(error);
     }
 
-    console.log(`local: ${localStatus} len=${localText.length} title=${truncate(localTitle, 80)}`);
+    console.log(
+      `local: ${localStatus} len=${localText.length} title=${truncate(localTitle, 80)}`,
+    );
     if (localError) {
       console.log(`local error: ${localError}`);
     }

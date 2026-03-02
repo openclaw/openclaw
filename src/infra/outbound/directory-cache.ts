@@ -1,4 +1,7 @@
-import type { ChannelDirectoryEntryKind, ChannelId } from "../../channels/plugins/types.js";
+import type {
+  ChannelDirectoryEntryKind,
+  ChannelId,
+} from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 
 type CacheEntry<T> = {

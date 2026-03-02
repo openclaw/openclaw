@@ -3,10 +3,15 @@ import { expect } from "vitest";
 import { subscribeEmbeddedPiSession } from "./pi-embedded-subscribe.js";
 
 type SubscribeEmbeddedPiSession = typeof subscribeEmbeddedPiSession;
-type SubscribeEmbeddedPiSessionParams = Parameters<SubscribeEmbeddedPiSession>[0];
+type SubscribeEmbeddedPiSessionParams =
+  Parameters<SubscribeEmbeddedPiSession>[0];
 type PiSession = Parameters<SubscribeEmbeddedPiSession>[0]["session"];
-type OnBlockReply = NonNullable<SubscribeEmbeddedPiSessionParams["onBlockReply"]>;
-type BlockReplyChunking = NonNullable<SubscribeEmbeddedPiSessionParams["blockReplyChunking"]>;
+type OnBlockReply = NonNullable<
+  SubscribeEmbeddedPiSessionParams["onBlockReply"]
+>;
+type BlockReplyChunking = NonNullable<
+  SubscribeEmbeddedPiSessionParams["blockReplyChunking"]
+>;
 
 export const THINKING_TAG_CASES = [
   { tag: "think", open: "<think>", close: "</think>" },
@@ -90,12 +95,16 @@ export function createTextEndBlockReplyHarness(params?: {
   return { emit, onBlockReply, subscription };
 }
 
-export function extractAgentEventPayloads(calls: Array<unknown[]>): Array<Record<string, unknown>> {
+export function extractAgentEventPayloads(
+  calls: Array<unknown[]>,
+): Array<Record<string, unknown>> {
   return calls
     .map((call) => {
       const first = call?.[0] as { data?: unknown } | undefined;
       const data = first?.data;
-      return data && typeof data === "object" ? (data as Record<string, unknown>) : undefined;
+      return data && typeof data === "object"
+        ? (data as Record<string, unknown>)
+        : undefined;
     })
     .filter((value): value is Record<string, unknown> => Boolean(value));
 }
@@ -202,17 +211,26 @@ export function findLifecycleErrorAgentEvent(
   return undefined;
 }
 
-export function expectFencedChunks(calls: Array<unknown[]>, expectedPrefix: string): void {
+export function expectFencedChunks(
+  calls: Array<unknown[]>,
+  expectedPrefix: string,
+): void {
   expect(calls.length).toBeGreaterThan(1);
   for (const call of calls) {
     const chunk = (call[0] as { text?: unknown } | undefined)?.text;
-    expect(typeof chunk === "string" && chunk.startsWith(expectedPrefix)).toBe(true);
-    const fenceCount = typeof chunk === "string" ? (chunk.match(/```/g)?.length ?? 0) : 0;
+    expect(typeof chunk === "string" && chunk.startsWith(expectedPrefix)).toBe(
+      true,
+    );
+    const fenceCount =
+      typeof chunk === "string" ? (chunk.match(/```/g)?.length ?? 0) : 0;
     expect(fenceCount).toBeGreaterThanOrEqual(2);
   }
 }
 
-export function expectSingleAgentEventText(calls: Array<unknown[]>, text: string): void {
+export function expectSingleAgentEventText(
+  calls: Array<unknown[]>,
+  text: string,
+): void {
   const payloads = extractAgentEventPayloads(calls);
   expect(payloads).toHaveLength(1);
   expect(payloads[0]?.text).toBe(text);

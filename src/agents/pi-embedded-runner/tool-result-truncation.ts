@@ -68,8 +68,12 @@ export function truncateToolResultText(
  * Uses a rough 4 chars ≈ 1 token heuristic (conservative for English text;
  * actual ratio varies by tokenizer).
  */
-export function calculateMaxToolResultChars(contextWindowTokens: number): number {
-  const maxTokens = Math.floor(contextWindowTokens * MAX_TOOL_RESULT_CONTEXT_SHARE);
+export function calculateMaxToolResultChars(
+  contextWindowTokens: number,
+): number {
+  const maxTokens = Math.floor(
+    contextWindowTokens * MAX_TOOL_RESULT_CONTEXT_SHARE,
+  );
   // Rough conversion: ~4 chars per token on average
   const maxChars = maxTokens * 4;
   return Math.min(maxChars, HARD_MAX_TOOL_RESULT_CHARS);
@@ -88,7 +92,11 @@ export function getToolResultTextLength(msg: AgentMessage): number {
   }
   let totalLength = 0;
   for (const block of content) {
-    if (block && typeof block === "object" && (block as { type?: string }).type === "text") {
+    if (
+      block &&
+      typeof block === "object" &&
+      (block as { type?: string }).type === "text"
+    ) {
       const text = (block as TextContent).text;
       if (typeof text === "string") {
         totalLength += text.length;
@@ -122,7 +130,11 @@ export function truncateToolResultMessage(
 
   // Distribute the budget proportionally among text blocks
   const newContent = content.map((block: unknown) => {
-    if (!block || typeof block !== "object" || (block as { type?: string }).type !== "text") {
+    if (
+      !block ||
+      typeof block !== "object" ||
+      (block as { type?: string }).type !== "text"
+    ) {
       return block; // Keep non-text blocks (images) as-is
     }
     const textBlock = block as TextContent;
@@ -131,10 +143,16 @@ export function truncateToolResultMessage(
     }
     // Proportional budget for this block
     const blockShare = textBlock.text.length / totalTextChars;
-    const blockBudget = Math.max(minKeepChars + suffix.length, Math.floor(maxChars * blockShare));
+    const blockBudget = Math.max(
+      minKeepChars + suffix.length,
+      Math.floor(maxChars * blockShare),
+    );
     return {
       ...textBlock,
-      text: truncateToolResultText(textBlock.text, blockBudget, { suffix, minKeepChars }),
+      text: truncateToolResultText(textBlock.text, blockBudget, {
+        suffix,
+        minKeepChars,
+      }),
     };
   });
 
@@ -192,7 +210,11 @@ export async function truncateOversizedToolResultsInSession(params: {
     }
 
     if (oversizedIndices.length === 0) {
-      return { truncated: false, truncatedCount: 0, reason: "no oversized tool results" };
+      return {
+        truncated: false,
+        truncatedCount: 0,
+        reason: "no oversized tool results",
+      };
     }
 
     // Branch from the parent of the first oversized entry
@@ -230,7 +252,9 @@ export async function truncateOversizedToolResultsInSession(params: {
         }
 
         // appendMessage expects Message | CustomMessage | BashExecutionMessage
-        sessionManager.appendMessage(message as Parameters<typeof sessionManager.appendMessage>[0]);
+        sessionManager.appendMessage(
+          message as Parameters<typeof sessionManager.appendMessage>[0],
+        );
       } else if (entry.type === "compaction") {
         sessionManager.appendCompaction(
           entry.summary,
@@ -311,7 +335,10 @@ export function truncateOversizedToolResultsInMessages(
 /**
  * Check if a tool result message exceeds the size limit for a given context window.
  */
-export function isOversizedToolResult(msg: AgentMessage, contextWindowTokens: number): boolean {
+export function isOversizedToolResult(
+  msg: AgentMessage,
+  contextWindowTokens: number,
+): boolean {
   if ((msg as { role?: string }).role !== "toolResult") {
     return false;
   }

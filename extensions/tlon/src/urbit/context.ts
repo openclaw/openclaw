@@ -19,7 +19,10 @@ export function resolveShipFromHostname(hostname: string): string {
   return trimmed;
 }
 
-export function normalizeUrbitShip(ship: string | undefined, hostname: string): string {
+export function normalizeUrbitShip(
+  ship: string | undefined,
+  hostname: string,
+): string {
   const raw = ship?.replace(/^~/, "") ?? resolveShipFromHostname(hostname);
   return raw.trim();
 }

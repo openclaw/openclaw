@@ -69,13 +69,17 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
     return await ctx.listProfiles();
   };
 
-  const createProfile = async (params: CreateProfileParams): Promise<CreateProfileResult> => {
+  const createProfile = async (
+    params: CreateProfileParams,
+  ): Promise<CreateProfileResult> => {
     const name = params.name.trim();
     const rawCdpUrl = params.cdpUrl?.trim() || undefined;
     const driver = params.driver === "extension" ? "extension" : undefined;
 
     if (!isValidProfileName(name)) {
-      throw new Error("invalid profile name: use lowercase letters, numbers, and hyphens only");
+      throw new Error(
+        "invalid profile name: use lowercase letters, numbers, and hyphens only",
+      );
     }
 
     const state = ctx.state();
@@ -92,7 +96,9 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
 
     const usedColors = getUsedColors(resolvedProfiles);
     const profileColor =
-      params.color && HEX_COLOR_RE.test(params.color) ? params.color : allocateColor(usedColors);
+      params.color && HEX_COLOR_RE.test(params.color)
+        ? params.color
+        : allocateColor(usedColors);
 
     let profileConfig: BrowserProfileConfig;
     if (rawCdpUrl) {
@@ -145,7 +151,9 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
     };
   };
 
-  const deleteProfile = async (nameRaw: string): Promise<DeleteProfileResult> => {
+  const deleteProfile = async (
+    nameRaw: string,
+  ): Promise<DeleteProfileResult> => {
     const name = nameRaw.trim();
     if (!name) {
       throw new Error("profile name is required");
@@ -160,7 +168,8 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
       throw new Error(`profile "${name}" not found`);
     }
 
-    const defaultProfile = cfg.browser?.defaultProfile ?? DEFAULT_BROWSER_DEFAULT_PROFILE_NAME;
+    const defaultProfile =
+      cfg.browser?.defaultProfile ?? DEFAULT_BROWSER_DEFAULT_PROFILE_NAME;
     if (name === defaultProfile) {
       throw new Error(
         `cannot delete the default profile "${name}"; change browser.defaultProfile first`,

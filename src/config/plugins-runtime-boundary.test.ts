@@ -4,7 +4,9 @@ import { FIELD_LABELS } from "./schema.labels.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
 function hasLegacyPluginsRuntimeKeys(keys: string[]): boolean {
-  return keys.some((key) => key === "plugins.runtime" || key.startsWith("plugins.runtime."));
+  return keys.some(
+    (key) => key === "plugins.runtime" || key.startsWith("plugins.runtime."),
+  );
 }
 
 describe("plugins runtime boundary config", () => {

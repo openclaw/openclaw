@@ -2,19 +2,32 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CronService } from "./service.js";
-import { createCronStoreHarness, createNoopLogger } from "./service.test-harness.js";
+import {
+  createCronStoreHarness,
+  createNoopLogger,
+} from "./service.test-harness.js";
 import { DEFAULT_TOP_OF_HOUR_STAGGER_MS } from "./stagger.js";
 import { loadCronStore } from "./store.js";
 
 const noopLogger = createNoopLogger();
-const { makeStorePath } = createCronStoreHarness({ prefix: "openclaw-cron-migrate-" });
+const { makeStorePath } = createCronStoreHarness({
+  prefix: "openclaw-cron-migrate-",
+});
 
-async function writeLegacyStore(storePath: string, legacyJob: Record<string, unknown>) {
+async function writeLegacyStore(
+  storePath: string,
+  legacyJob: Record<string, unknown>,
+) {
   await fs.mkdir(path.dirname(storePath), { recursive: true });
-  await fs.writeFile(storePath, JSON.stringify({ version: 1, jobs: [legacyJob] }, null, 2));
+  await fs.writeFile(
+    storePath,
+    JSON.stringify({ version: 1, jobs: [legacyJob] }, null, 2),
+  );
 }
 
-async function migrateAndLoadFirstJob(storePath: string): Promise<Record<string, unknown>> {
+async function migrateAndLoadFirstJob(
+  storePath: string,
+): Promise<Record<string, unknown>> {
   const cron = new CronService({
     storePath,
     cronEnabled: true,
@@ -31,7 +44,9 @@ async function migrateAndLoadFirstJob(storePath: string): Promise<Record<string,
   return loaded.jobs[0] as Record<string, unknown>;
 }
 
-function makeLegacyJob(overrides: Record<string, unknown>): Record<string, unknown> {
+function makeLegacyJob(
+  overrides: Record<string, unknown>,
+): Record<string, unknown> {
   return {
     id: "job-legacy",
     agentId: undefined,

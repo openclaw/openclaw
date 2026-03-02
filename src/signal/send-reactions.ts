@@ -53,7 +53,11 @@ function resolveTargetAuthorParams(params: {
   targetAuthorUuid?: string;
   fallback?: string;
 }): { targetAuthor?: string } {
-  const candidates = [params.targetAuthor, params.targetAuthorUuid, params.fallback];
+  const candidates = [
+    params.targetAuthor,
+    params.targetAuthorUuid,
+    params.fallback,
+  ];
   for (const candidate of candidates) {
     const raw = candidate?.trim();
     if (!raw) {
@@ -79,7 +83,10 @@ async function sendReactionSignalCore(params: {
     cfg: loadConfig(),
     accountId: params.opts.accountId,
   });
-  const { baseUrl, account } = resolveSignalRpcContext(params.opts, accountInfo);
+  const { baseUrl, account } = resolveSignalRpcContext(
+    params.opts,
+    accountInfo,
+  );
 
   const normalizedRecipient = normalizeSignalUuid(params.recipient);
   const groupId = params.opts.groupId?.trim();
@@ -119,10 +126,14 @@ async function sendReactionSignalCore(params: {
     requestParams.account = account;
   }
 
-  const result = await signalRpcRequest<{ timestamp?: number }>("sendReaction", requestParams, {
-    baseUrl,
-    timeoutMs: params.opts.timeoutMs,
-  });
+  const result = await signalRpcRequest<{ timestamp?: number }>(
+    "sendReaction",
+    requestParams,
+    {
+      baseUrl,
+      timeoutMs: params.opts.timeoutMs,
+    },
+  );
 
   return {
     ok: true,
@@ -151,7 +162,8 @@ export async function sendReactionSignal(
     opts,
     errors: {
       missingRecipient: "Recipient or groupId is required for Signal reaction",
-      invalidTargetTimestamp: "Valid targetTimestamp is required for Signal reaction",
+      invalidTargetTimestamp:
+        "Valid targetTimestamp is required for Signal reaction",
       missingEmoji: "Emoji is required for Signal reaction",
       missingTargetAuthor: "targetAuthor is required for group reactions",
     },
@@ -178,10 +190,13 @@ export async function removeReactionSignal(
     remove: true,
     opts,
     errors: {
-      missingRecipient: "Recipient or groupId is required for Signal reaction removal",
-      invalidTargetTimestamp: "Valid targetTimestamp is required for Signal reaction removal",
+      missingRecipient:
+        "Recipient or groupId is required for Signal reaction removal",
+      invalidTargetTimestamp:
+        "Valid targetTimestamp is required for Signal reaction removal",
       missingEmoji: "Emoji is required for Signal reaction removal",
-      missingTargetAuthor: "targetAuthor is required for group reaction removal",
+      missingTargetAuthor:
+        "targetAuthor is required for group reaction removal",
     },
   });
 }

@@ -3,7 +3,9 @@ import type { ChannelAccountSnapshot, ChannelStatusIssue } from "../types.js";
 export { isRecord };
 
 export function asString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+  return typeof value === "string" && value.trim().length > 0
+    ? value.trim()
+    : undefined;
 }
 
 export function formatMatchMetadata(params: {
@@ -48,7 +50,11 @@ export function collectIssuesForEnabledAccounts<
 >(params: {
   accounts: ChannelAccountSnapshot[];
   readAccount: (value: ChannelAccountSnapshot) => T | null;
-  collectIssues: (params: { account: T; accountId: string; issues: ChannelStatusIssue[] }) => void;
+  collectIssues: (params: {
+    account: T;
+    accountId: string;
+    issues: ChannelStatusIssue[];
+  }) => void;
 }): ChannelStatusIssue[] {
   const issues: ChannelStatusIssue[] = [];
   for (const entry of params.accounts) {

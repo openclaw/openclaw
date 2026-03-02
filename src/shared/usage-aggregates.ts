@@ -86,7 +86,9 @@ export function buildUsageAggregateTail<
             count: params.latencyTotals.count,
             avgMs: params.latencyTotals.sum / params.latencyTotals.count,
             minMs:
-              params.latencyTotals.min === Number.POSITIVE_INFINITY ? 0 : params.latencyTotals.min,
+              params.latencyTotals.min === Number.POSITIVE_INFINITY
+                ? 0
+                : params.latencyTotals.min,
             maxMs: params.latencyTotals.max,
             p95Ms: params.latencyTotals.p95Max,
           }
@@ -104,6 +106,8 @@ export function buildUsageAggregateTail<
     modelDaily: Array.from(params.modelDailyMap.values()).toSorted(
       (a, b) => a.date.localeCompare(b.date) || b.cost - a.cost,
     ),
-    daily: Array.from(params.dailyMap.values()).toSorted((a, b) => a.date.localeCompare(b.date)),
+    daily: Array.from(params.dailyMap.values()).toSorted((a, b) =>
+      a.date.localeCompare(b.date),
+    ),
   };
 }

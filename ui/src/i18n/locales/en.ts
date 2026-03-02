@@ -71,7 +71,8 @@ export const en: TranslationMap = {
       uptime: "Uptime",
       tickInterval: "Tick Interval",
       lastChannelsRefresh: "Last Channels Refresh",
-      channelsHint: "Use Channels to link WhatsApp, Telegram, Discord, Signal, or iMessage.",
+      channelsHint:
+        "Use Channels to link WhatsApp, Telegram, Discord, Signal, or iMessage.",
     },
     stats: {
       instances: "Instances",
@@ -85,14 +86,16 @@ export const en: TranslationMap = {
       title: "Notes",
       subtitle: "Quick reminders for remote control setups.",
       tailscaleTitle: "Tailscale serve",
-      tailscaleText: "Prefer serve mode to keep the gateway on loopback with tailnet auth.",
+      tailscaleText:
+        "Prefer serve mode to keep the gateway on loopback with tailnet auth.",
       sessionTitle: "Session hygiene",
       sessionText: "Use /new or sessions.patch to reset context.",
       cronTitle: "Cron reminders",
       cronText: "Use isolated sessions for recurring runs.",
     },
     auth: {
-      required: "This gateway requires auth. Add a token or password, then click Connect.",
+      required:
+        "This gateway requires auth. Add a token or password, then click Connect.",
       failed:
         "Auth failed. Re-copy a tokenized URL with {command}, or update the token, then click Connect.",
     },
@@ -221,17 +224,20 @@ export const en: TranslationMap = {
       session: "Session",
       main: "Main",
       isolated: "Isolated",
-      sessionHelp: "Main posts a system event. Isolated runs a dedicated agent turn.",
+      sessionHelp:
+        "Main posts a system event. Isolated runs a dedicated agent turn.",
       wakeMode: "Wake mode",
       now: "Now",
       nextHeartbeat: "Next heartbeat",
-      wakeModeHelp: "Now triggers immediately. Next heartbeat waits for the next cycle.",
+      wakeModeHelp:
+        "Now triggers immediately. Next heartbeat waits for the next cycle.",
       payloadKind: "What should run?",
       systemEvent: "Post message to main timeline",
       agentTurn: "Run assistant task (isolated)",
       systemEventHelp:
         "Sends your text to the gateway main timeline (good for reminders/triggers).",
-      agentTurnHelp: "Starts an assistant run in its own session using your prompt.",
+      agentTurnHelp:
+        "Starts an assistant run in its own session using your prompt.",
       timeoutSeconds: "Timeout (seconds)",
       timeoutPlaceholder: "Optional, e.g. 90",
       timeoutHelp:
@@ -244,7 +250,8 @@ export const en: TranslationMap = {
       announceDefault: "Announce summary (default)",
       webhookPost: "Webhook POST",
       noneInternal: "None (internal)",
-      deliveryHelp: "Announce posts a summary to chat. None keeps execution internal.",
+      deliveryHelp:
+        "Announce posts a summary to chat. None keeps execution internal.",
       webhookUrl: "Webhook URL",
       channel: "Channel",
       webhookPlaceholder: "https://example.com/cron",
@@ -257,7 +264,8 @@ export const en: TranslationMap = {
       advancedHelp:
         "Optional overrides for delivery guarantees, schedule jitter, and model controls.",
       deleteAfterRun: "Delete after run",
-      deleteAfterRunHelp: "Best for one-shot reminders that should auto-clean up.",
+      deleteAfterRunHelp:
+        "Best for one-shot reminders that should auto-clean up.",
       clearAgentOverride: "Clear agent override",
       clearAgentHelp: "Force this job to use the gateway default assistant.",
       exactTiming: "Exact timing (no stagger)",

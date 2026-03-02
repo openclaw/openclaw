@@ -58,7 +58,9 @@ describe("telegram bot message processor", () => {
   }
 
   it("dispatches when context is available", async () => {
-    buildTelegramMessageContext.mockResolvedValue({ route: { sessionKey: "agent:main:main" } });
+    buildTelegramMessageContext.mockResolvedValue({
+      route: { sessionKey: "agent:main:main" },
+    });
 
     const processMessage = createTelegramMessageProcessor(baseDeps);
     await processSampleMessage(processMessage);

@@ -10,7 +10,10 @@
  */
 
 import type { OpenClawConfig } from "../../../src/config/config.js";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../src/routing/session-key.js";
+import {
+  DEFAULT_ACCOUNT_ID,
+  normalizeAccountId,
+} from "../../../src/routing/session-key.js";
 
 export type TwitchTokenSource = "env" | "config" | "none";
 
@@ -58,16 +61,21 @@ export function resolveTwitchToken(
   const twitchCfg = cfg?.channels?.twitch;
   const accountCfg =
     accountId === DEFAULT_ACCOUNT_ID
-      ? (twitchCfg?.accounts?.[DEFAULT_ACCOUNT_ID] as Record<string, unknown> | undefined)
-      : (twitchCfg?.accounts?.[accountId] as Record<string, unknown> | undefined);
+      ? (twitchCfg?.accounts?.[DEFAULT_ACCOUNT_ID] as
+          | Record<string, unknown>
+          | undefined)
+      : (twitchCfg?.accounts?.[accountId] as
+          | Record<string, unknown>
+          | undefined);
 
   // For default account, also check base-level config
   let token: string | undefined;
   if (accountId === DEFAULT_ACCOUNT_ID) {
     // Base-level config takes precedence
     token = normalizeTwitchToken(
-      (typeof twitchCfg?.accessToken === "string" ? twitchCfg.accessToken : undefined) ||
-        (accountCfg?.accessToken as string | undefined),
+      (typeof twitchCfg?.accessToken === "string"
+        ? twitchCfg.accessToken
+        : undefined) || (accountCfg?.accessToken as string | undefined),
     );
   } else {
     // Non-default accounts only use accounts object
@@ -81,7 +89,9 @@ export function resolveTwitchToken(
   // Environment variable (default account only)
   const allowEnv = accountId === DEFAULT_ACCOUNT_ID;
   const envToken = allowEnv
-    ? normalizeTwitchToken(opts.envToken ?? process.env.OPENCLAW_TWITCH_ACCESS_TOKEN)
+    ? normalizeTwitchToken(
+        opts.envToken ?? process.env.OPENCLAW_TWITCH_ACCESS_TOKEN,
+      )
     : undefined;
   if (envToken) {
     return { token: envToken, source: "env" };

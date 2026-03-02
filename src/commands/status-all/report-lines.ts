@@ -46,7 +46,13 @@ export async function buildStatusAllReportLines(params: {
   connectionDetailsForReport: string;
   diagnosis: Omit<
     Parameters<typeof appendStatusAllDiagnosis>[0],
-    "lines" | "progress" | "muted" | "ok" | "warn" | "fail" | "connectionDetailsForReport"
+    | "lines"
+    | "progress"
+    | "muted"
+    | "ok"
+    | "warn"
+    | "fail"
+    | "connectionDetailsForReport"
   >;
 }) {
   const rich = isRich();
@@ -128,7 +134,8 @@ export async function buildStatusAllReportLines(params: {
           ? ok("ABSENT")
           : "unknown",
     Sessions: String(a.sessionsCount),
-    Active: a.lastActiveAgeMs != null ? formatTimeAgo(a.lastActiveAgeMs) : "unknown",
+    Active:
+      a.lastActiveAgeMs != null ? formatTimeAgo(a.lastActiveAgeMs) : "unknown",
     Store: a.sessionsPath,
   }));
 

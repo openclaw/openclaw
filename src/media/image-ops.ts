@@ -12,7 +12,10 @@ export type ImageMetadata = {
 
 export const IMAGE_REDUCE_QUALITY_STEPS = [85, 75, 65, 55, 45, 35] as const;
 
-export function buildImageResizeSideGrid(maxSide: number, sideStart: number): number[] {
+export function buildImageResizeSideGrid(
+  maxSide: number,
+  sideStart: number,
+): number[] {
   return [sideStart, 1800, 1600, 1400, 1200, 1000, 800]
     .map((value) => Math.min(maxSide, value))
     .filter((value, idx, arr) => value > 0 && arr.indexOf(value) === idx)
@@ -26,7 +29,9 @@ function isBun(): boolean {
 function prefersSips(): boolean {
   return (
     process.env.OPENCLAW_IMAGE_BACKEND === "sips" ||
-    (process.env.OPENCLAW_IMAGE_BACKEND !== "sharp" && isBun() && process.platform === "darwin")
+    (process.env.OPENCLAW_IMAGE_BACKEND !== "sharp" &&
+      isBun() &&
+      process.platform === "darwin")
   );
 }
 
@@ -142,7 +147,9 @@ async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
   }
 }
 
-async function sipsMetadataFromBuffer(buffer: Buffer): Promise<ImageMetadata | null> {
+async function sipsMetadataFromBuffer(
+  buffer: Buffer,
+): Promise<ImageMetadata | null> {
   return await withTempDir(async (dir) => {
     const input = path.join(dir, "in.img");
     await fs.writeFile(input, buffer);
@@ -206,15 +213,21 @@ async function sipsConvertToJpeg(buffer: Buffer): Promise<Buffer> {
     const input = path.join(dir, "in.heic");
     const output = path.join(dir, "out.jpg");
     await fs.writeFile(input, buffer);
-    await runExec("/usr/bin/sips", ["-s", "format", "jpeg", input, "--out", output], {
-      timeoutMs: 20_000,
-      maxBuffer: 1024 * 1024,
-    });
+    await runExec(
+      "/usr/bin/sips",
+      ["-s", "format", "jpeg", input, "--out", output],
+      {
+        timeoutMs: 20_000,
+        maxBuffer: 1024 * 1024,
+      },
+    );
     return await fs.readFile(output);
   });
 }
 
-export async function getImageMetadata(buffer: Buffer): Promise<ImageMetadata | null> {
+export async function getImageMetadata(
+  buffer: Buffer,
+): Promise<ImageMetadata | null> {
   if (prefersSips()) {
     return await sipsMetadataFromBuffer(buffer).catch(() => null);
   }
@@ -239,7 +252,10 @@ export async function getImageMetadata(buffer: Buffer): Promise<ImageMetadata | 
 /**
  * Applies rotation/flip to image buffer using sips based on EXIF orientation.
  */
-async function sipsApplyOrientation(buffer: Buffer, orientation: number): Promise<Buffer> {
+async function sipsApplyOrientation(
+  buffer: Buffer,
+  orientation: number,
+): Promise<Buffer> {
   // Map EXIF orientation to sips operations
   // sips -r rotates clockwise, -f flips (horizontal/vertical)
   const ops: string[] = [];
@@ -287,7 +303,9 @@ async function sipsApplyOrientation(buffer: Buffer, orientation: number): Promis
  * Returns the buffer with correct pixel orientation (rotated if needed).
  * Falls back to original buffer if normalization fails.
  */
-export async function normalizeExifOrientation(buffer: Buffer): Promise<Buffer> {
+export async function normalizeExifOrientation(
+  buffer: Buffer,
+): Promise<Buffer> {
   if (prefersSips()) {
     try {
       const orientation = readJpegExifOrientation(buffer);

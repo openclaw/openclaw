@@ -1,9 +1,15 @@
-import { normalizeApiKeyInput, validateApiKeyInput } from "./auth-choice.api-key.js";
+import {
+  normalizeApiKeyInput,
+  validateApiKeyInput,
+} from "./auth-choice.api-key.js";
 import {
   ensureApiKeyFromOptionEnvOrPrompt,
   normalizeSecretInputModeInput,
 } from "./auth-choice.apply-helpers.js";
-import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
+import type {
+  ApplyAuthChoiceParams,
+  ApplyAuthChoiceResult,
+} from "./auth-choice.apply.js";
 import { applyPrimaryModel } from "./model-picker.js";
 import { applyAuthProfileConfig, setByteplusApiKey } from "./onboard-auth.js";
 
@@ -17,7 +23,9 @@ export async function applyAuthChoiceBytePlus(
     return null;
   }
 
-  const requestedSecretInputMode = normalizeSecretInputModeInput(params.opts?.secretInputMode);
+  const requestedSecretInputMode = normalizeSecretInputModeInput(
+    params.opts?.secretInputMode,
+  );
   await ensureApiKeyFromOptionEnvOrPrompt({
     token: params.opts?.byteplusApiKey,
     tokenProvider: "byteplus",
@@ -38,7 +46,10 @@ export async function applyAuthChoiceBytePlus(
     provider: "byteplus",
     mode: "api_key",
   });
-  const configWithModel = applyPrimaryModel(configWithAuth, BYTEPLUS_DEFAULT_MODEL);
+  const configWithModel = applyPrimaryModel(
+    configWithAuth,
+    BYTEPLUS_DEFAULT_MODEL,
+  );
   return {
     config: configWithModel,
     agentModelOverride: BYTEPLUS_DEFAULT_MODEL,

@@ -48,7 +48,11 @@ describe("zalouser account resolution", () => {
       },
     });
 
-    expect(listZalouserAccountIds(cfg)).toEqual(["default", "personal", "work"]);
+    expect(listZalouserAccountIds(cfg)).toEqual([
+      "default",
+      "personal",
+      "work",
+    ]);
   });
 
   it("uses configured defaultAccount when present", () => {
@@ -136,14 +140,20 @@ describe("zalouser account resolution", () => {
     });
 
     process.env.ZALOUSER_PROFILE = "zalo-env";
-    expect(resolveZalouserAccountSync({ cfg, accountId: "work" }).profile).toBe("zalo-env");
+    expect(resolveZalouserAccountSync({ cfg, accountId: "work" }).profile).toBe(
+      "zalo-env",
+    );
 
     delete process.env.ZALOUSER_PROFILE;
     process.env.ZCA_PROFILE = "zca-env";
-    expect(resolveZalouserAccountSync({ cfg, accountId: "work" }).profile).toBe("zca-env");
+    expect(resolveZalouserAccountSync({ cfg, accountId: "work" }).profile).toBe(
+      "zca-env",
+    );
 
     delete process.env.ZCA_PROFILE;
-    expect(resolveZalouserAccountSync({ cfg, accountId: "work" }).profile).toBe("work");
+    expect(resolveZalouserAccountSync({ cfg, accountId: "work" }).profile).toBe(
+      "work",
+    );
   });
 
   it("uses explicit profile from config over env fallback", () => {
@@ -160,7 +170,9 @@ describe("zalouser account resolution", () => {
       },
     });
 
-    expect(resolveZalouserAccountSync({ cfg, accountId: "work" }).profile).toBe("explicit-profile");
+    expect(resolveZalouserAccountSync({ cfg, accountId: "work" }).profile).toBe(
+      "explicit-profile",
+    );
   });
 
   it("checks authentication during async account resolution", async () => {
@@ -175,7 +187,10 @@ describe("zalouser account resolution", () => {
       },
     });
 
-    const resolved = await resolveZalouserAccount({ cfg, accountId: "default" });
+    const resolved = await resolveZalouserAccount({
+      cfg,
+      accountId: "default",
+    });
     expect(mockCheckAuthenticated).toHaveBeenCalledWith("default");
     expect(resolved.authenticated).toBe(true);
   });

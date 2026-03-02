@@ -12,8 +12,10 @@ const sendWebhookMessageDiscordMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../send.js", () => ({
   sendMessageDiscord: (...args: unknown[]) => sendMessageDiscordMock(...args),
-  sendVoiceMessageDiscord: (...args: unknown[]) => sendVoiceMessageDiscordMock(...args),
-  sendWebhookMessageDiscord: (...args: unknown[]) => sendWebhookMessageDiscordMock(...args),
+  sendVoiceMessageDiscord: (...args: unknown[]) =>
+    sendVoiceMessageDiscordMock(...args),
+  sendWebhookMessageDiscord: (...args: unknown[]) =>
+    sendWebhookMessageDiscordMock(...args),
 }));
 
 describe("deliverDiscordReply", () => {
@@ -70,7 +72,10 @@ describe("deliverDiscordReply", () => {
       replies: [
         {
           text: "Hello there",
-          mediaUrls: ["https://example.com/voice.ogg", "https://example.com/extra.mp3"],
+          mediaUrls: [
+            "https://example.com/voice.ogg",
+            "https://example.com/extra.mp3",
+          ],
           audioAsVoice: true,
         },
       ],
@@ -183,7 +188,9 @@ describe("deliverDiscordReply", () => {
   });
 
   it("sends bound-session text replies through webhook delivery", async () => {
-    const threadBindings = await createBoundThreadBindings({ label: "codex-refactor" });
+    const threadBindings = await createBoundThreadBindings({
+      label: "codex-refactor",
+    });
 
     await deliverDiscordReply({
       replies: [{ text: "Hello from subagent" }],
@@ -237,7 +244,9 @@ describe("deliverDiscordReply", () => {
 
   it("falls back to bot send when webhook delivery fails", async () => {
     const threadBindings = await createBoundThreadBindings();
-    sendWebhookMessageDiscordMock.mockRejectedValueOnce(new Error("rate limited"));
+    sendWebhookMessageDiscordMock.mockRejectedValueOnce(
+      new Error("rate limited"),
+    );
 
     await deliverDiscordReply({
       replies: [{ text: "Fallback path" }],

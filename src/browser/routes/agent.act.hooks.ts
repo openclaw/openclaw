@@ -1,8 +1,21 @@
 import type { BrowserRouteContext } from "../server-context.js";
-import { readBody, resolveTargetIdFromBody, withPlaywrightRouteContext } from "./agent.shared.js";
-import { DEFAULT_UPLOAD_DIR, resolveExistingPathsWithinRoot } from "./path-output.js";
+import {
+  readBody,
+  resolveTargetIdFromBody,
+  withPlaywrightRouteContext,
+} from "./agent.shared.js";
+import {
+  DEFAULT_UPLOAD_DIR,
+  resolveExistingPathsWithinRoot,
+} from "./path-output.js";
 import type { BrowserRouteRegistrar } from "./types.js";
-import { jsonError, toBoolean, toNumber, toStringArray, toStringOrEmpty } from "./utils.js";
+import {
+  jsonError,
+  toBoolean,
+  toNumber,
+  toStringArray,
+  toStringOrEmpty,
+} from "./utils.js";
 
 export function registerBrowserAgentActHookRoutes(
   app: BrowserRouteRegistrar,
@@ -40,7 +53,11 @@ export function registerBrowserAgentActHookRoutes(
 
         if (inputRef || element) {
           if (ref) {
-            return jsonError(res, 400, "ref cannot be combined with inputRef/element");
+            return jsonError(
+              res,
+              400,
+              "ref cannot be combined with inputRef/element",
+            );
           }
           await pw.setInputFilesViaPlaywright({
             cdpUrl,

@@ -21,7 +21,8 @@ function createRecord(input: SessionBindingBindInput): SessionBindingRecord {
       channel: "discord",
       accountId: "default",
       conversationId,
-      parentConversationId: input.conversation.parentConversationId?.trim() || undefined,
+      parentConversationId:
+        input.conversation.parentConversationId?.trim() || undefined,
     },
     status: "active",
     boundAt: 1,
@@ -34,7 +35,9 @@ describe("session binding service", () => {
   });
 
   it("normalizes conversation refs and infers current placement", async () => {
-    const bind = vi.fn(async (input: SessionBindingBindInput) => createRecord(input));
+    const bind = vi.fn(async (input: SessionBindingBindInput) =>
+      createRecord(input),
+    );
     registerSessionBindingAdapter({
       channel: "discord",
       accountId: "default",

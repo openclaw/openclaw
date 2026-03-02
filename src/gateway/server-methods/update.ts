@@ -9,7 +9,10 @@ import {
 import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
 import { normalizeUpdateChannel } from "../../infra/update-channels.js";
 import { runGatewayUpdate } from "../../infra/update-runner.js";
-import { formatControlPlaneActor, resolveControlPlaneActor } from "../control-plane-audit.js";
+import {
+  formatControlPlaneActor,
+  resolveControlPlaneActor,
+} from "../control-plane-audit.js";
 import { validateUpdateRunParams } from "../protocol/index.js";
 import { parseRestartRequestParams } from "./restart-request.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -17,11 +20,14 @@ import { assertValidParams } from "./validation.js";
 
 export const updateHandlers: GatewayRequestHandlers = {
   "update.run": async ({ params, respond, client, context }) => {
-    if (!assertValidParams(params, validateUpdateRunParams, "update.run", respond)) {
+    if (
+      !assertValidParams(params, validateUpdateRunParams, "update.run", respond)
+    ) {
       return;
     }
     const actor = resolveControlPlaneActor(client);
-    const { sessionKey, note, restartDelayMs } = parseRestartRequestParams(params);
+    const { sessionKey, note, restartDelayMs } =
+      parseRestartRequestParams(params);
     const { deliveryContext, threadId } = extractDeliveryInfo(sessionKey);
     const timeoutMsRaw = (params as { timeoutMs?: unknown }).timeoutMs;
     const timeoutMs =

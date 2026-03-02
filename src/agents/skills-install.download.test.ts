@@ -1,7 +1,15 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import { installDownloadSpec } from "./skills-install-download.js";
 import { setTempStateDir } from "./skills-install.download-test-utils.js";
 import {
@@ -13,7 +21,8 @@ import { resolveSkillToolsRootDir } from "./skills/tools-dir.js";
 import type { SkillEntry, SkillInstallSpec } from "./skills/types.js";
 
 vi.mock("../process/exec.js", () => ({
-  runCommandWithTimeout: (...args: unknown[]) => runCommandWithTimeoutMock(...args),
+  runCommandWithTimeout: (...args: unknown[]) =>
+    runCommandWithTimeoutMock(...args),
 }));
 
 vi.mock("../infra/net/fetch-guard.js", () => ({
@@ -108,7 +117,9 @@ function mockArchiveResponse(buffer: Uint8Array): void {
   });
 }
 
-function runCommandResult(params?: Partial<Record<"code" | "stdout" | "stderr", string | number>>) {
+function runCommandResult(
+  params?: Partial<Record<"code" | "stdout" | "stderr", string | number>>,
+) {
   return {
     code: 0,
     stdout: "",
@@ -146,13 +157,17 @@ let workspaceDir = "";
 let stateDir = "";
 
 beforeAll(async () => {
-  workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skills-install-"));
+  workspaceDir = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-skills-install-"),
+  );
   stateDir = setTempStateDir(workspaceDir);
 });
 
 afterAll(async () => {
   if (workspaceDir) {
-    await fs.rm(workspaceDir, { recursive: true, force: true }).catch(() => undefined);
+    await fs
+      .rm(workspaceDir, { recursive: true, force: true })
+      .catch(() => undefined);
     workspaceDir = "";
     stateDir = "";
   }
@@ -186,7 +201,11 @@ describe("installDownloadSpec extraction safety", () => {
     ]) {
       const entry = buildEntry(testCase.name);
       const targetDir = path.join(resolveSkillToolsRootDir(entry), "target");
-      const outsideWritePath = path.join(workspaceDir, "outside-write", "pwned.txt");
+      const outsideWritePath = path.join(
+        workspaceDir,
+        "outside-write",
+        "pwned.txt",
+      );
 
       mockArchiveResponse(new Uint8Array(testCase.buffer));
 
@@ -213,7 +232,9 @@ describe("installDownloadSpec extraction safety", () => {
       targetDir,
     });
     expect(result.ok).toBe(true);
-    expect(await fs.readFile(path.join(targetDir, "hello.txt"), "utf-8")).toBe("hi");
+    expect(await fs.readFile(path.join(targetDir, "hello.txt"), "utf-8")).toBe(
+      "hi",
+    );
   });
 
   it("rejects targetDir escapes outside the per-skill tools root", async () => {
@@ -228,7 +249,9 @@ describe("installDownloadSpec extraction safety", () => {
     });
 
     expect(result.ok).toBe(false);
-    expect(result.stderr).toContain("Refusing to install outside the skill tools directory");
+    expect(result.stderr).toContain(
+      "Refusing to install outside the skill tools directory",
+    );
     expect(fetchWithSsrFGuardMock.mock.calls.length).toBe(beforeFetchCalls);
     expect(stateDir.length).toBeGreaterThan(0);
   });
@@ -261,7 +284,8 @@ describe("installDownloadSpec extraction safety (tar.bz2)", () => {
         name: "tbz2-symlink",
         url: "https://example.invalid/evil.tbz2",
         listOutput: "link\n",
-        verboseListOutput: "lrwxr-xr-x  0 0 0 0 Jan  1 00:00 link -> ../outside\n",
+        verboseListOutput:
+          "lrwxr-xr-x  0 0 0 0 Jan  1 00:00 link -> ../outside\n",
         extract: "reject" as const,
         expectedOk: false,
         expectedExtract: false,
@@ -294,7 +318,8 @@ describe("installDownloadSpec extraction safety (tar.bz2)", () => {
         name: "tbz2-ok",
         url: "https://example.invalid/good.tbz2",
         listOutput: "package/hello.txt\n",
-        verboseListOutput: "-rw-r--r--  0 0 0 0 Jan  1 00:00 package/hello.txt\n",
+        verboseListOutput:
+          "-rw-r--r--  0 0 0 0 Jan  1 00:00 package/hello.txt\n",
         stripComponents: 1,
         extract: "ok" as const,
         expectedOk: true,
@@ -335,7 +360,9 @@ describe("installDownloadSpec extraction safety (tar.bz2)", () => {
       const extractionAttempted = runCommandWithTimeoutMock.mock.calls
         .slice(commandCallCount)
         .some((call) => (call[0] as string[])[1] === "xf");
-      expect(extractionAttempted, testCase.label).toBe(testCase.expectedExtract);
+      expect(extractionAttempted, testCase.label).toBe(
+        testCase.expectedExtract,
+      );
 
       if (typeof testCase.expectedStderrSubstring === "string") {
         expect(result.stderr.toLowerCase(), testCase.label).toContain(
@@ -362,7 +389,9 @@ describe("installDownloadSpec extraction safety (tar.bz2)", () => {
         if (archivePath) {
           await fs.appendFile(archivePath, "mutated");
         }
-        return runCommandResult({ stdout: "-rw-r--r--  0 0 0 0 Jan  1 00:00 package/hello.txt\n" });
+        return runCommandResult({
+          stdout: "-rw-r--r--  0 0 0 0 Jan  1 00:00 package/hello.txt\n",
+        });
       }
       if (cmd[0] === "tar" && cmd[1] === "xf") {
         throw new Error("should not extract");

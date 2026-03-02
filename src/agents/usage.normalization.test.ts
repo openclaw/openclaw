@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { deriveSessionTotalTokens, hasNonzeroUsage, normalizeUsage } from "./usage.js";
+import {
+  deriveSessionTotalTokens,
+  hasNonzeroUsage,
+  normalizeUsage,
+} from "./usage.js";
 
 describe("normalizeUsage", () => {
   it("normalizes Anthropic-style snake_case usage", () => {

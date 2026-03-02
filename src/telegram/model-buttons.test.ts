@@ -14,13 +14,19 @@ describe("parseModelCallbackData", () => {
     const cases = [
       ["mdl_prov", { type: "providers" }],
       ["mdl_back", { type: "back" }],
-      ["mdl_list_anthropic_2", { type: "list", provider: "anthropic", page: 2 }],
+      [
+        "mdl_list_anthropic_2",
+        { type: "list", provider: "anthropic", page: 2 },
+      ],
       ["mdl_list_open-ai_1", { type: "list", provider: "open-ai", page: 1 }],
       [
         "mdl_sel_anthropic/claude-sonnet-4-5",
         { type: "select", provider: "anthropic", model: "claude-sonnet-4-5" },
       ],
-      ["mdl_sel_openai/gpt-4/turbo", { type: "select", provider: "openai", model: "gpt-4/turbo" }],
+      [
+        "mdl_sel_openai/gpt-4/turbo",
+        { type: "select", provider: "openai", model: "gpt-4/turbo" },
+      ],
       ["  mdl_prov  ", { type: "providers" }],
     ] as const;
     for (const [input, expected] of cases) {
@@ -54,7 +60,9 @@ describe("buildProviderKeyboard", () => {
       {
         name: "single provider",
         input: [{ id: "anthropic", count: 5 }],
-        expected: [[{ text: "anthropic (5)", callback_data: "mdl_list_anthropic_1" }]],
+        expected: [
+          [{ text: "anthropic (5)", callback_data: "mdl_list_anthropic_1" }],
+        ],
       },
       {
         name: "exactly one full row",
@@ -91,7 +99,9 @@ describe("buildProviderKeyboard", () => {
     }>;
 
     for (const testCase of cases) {
-      expect(buildProviderKeyboard(testCase.input), testCase.name).toEqual(testCase.expected);
+      expect(buildProviderKeyboard(testCase.input), testCase.name).toEqual(
+        testCase.expected,
+      );
     }
   });
 });
@@ -133,7 +143,9 @@ describe("buildModelsKeyboard", () => {
       // 2 model rows + back button
       expect(result, testCase.name).toHaveLength(3);
       expect(result[0]?.[0]?.text).toBe(testCase.firstText);
-      expect(result[0]?.[0]?.callback_data).toBe("mdl_sel_anthropic/claude-sonnet-4");
+      expect(result[0]?.[0]?.callback_data).toBe(
+        "mdl_sel_anthropic/claude-sonnet-4",
+      );
       expect(result[1]?.[0]?.text).toBe("claude-opus-4");
       expect(result[2]?.[0]?.text).toBe("<< Back");
     }
@@ -173,7 +185,9 @@ describe("buildModelsKeyboard", () => {
       });
       // 2 model rows + pagination row + back button
       expect(result, testCase.name).toHaveLength(4);
-      expect(result[2]?.map((button) => button.text)).toEqual(testCase.expectedPagination);
+      expect(result[2]?.map((button) => button.text)).toEqual(
+        testCase.expectedPagination,
+      );
     }
   });
 
@@ -205,7 +219,9 @@ describe("buildModelsKeyboard", () => {
         expect(text, testCase.name).toBe(testCase.expected);
       } else {
         expect(text?.startsWith(testCase.startsWith), testCase.name).toBe(true);
-        expect(text?.length, testCase.name).toBeLessThanOrEqual(testCase.maxLength);
+        expect(text?.length, testCase.name).toBeLessThanOrEqual(
+          testCase.maxLength,
+        );
       }
     }
   });
@@ -310,7 +326,9 @@ describe("large model lists (OpenRouter-scale)", () => {
     });
 
     // Should have 2 model buttons (skipping the long one) + back
-    const modelButtons = result.filter((row) => !row[0]?.callback_data.startsWith("mdl_back"));
+    const modelButtons = result.filter(
+      (row) => !row[0]?.callback_data.startsWith("mdl_back"),
+    );
     expect(modelButtons.length).toBe(2);
     expect(modelButtons[0]?.[0]?.text).toBe("short-model");
     expect(modelButtons[1]?.[0]?.text).toBe("another-short");

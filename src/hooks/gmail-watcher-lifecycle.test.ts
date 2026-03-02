@@ -30,7 +30,10 @@ describe("startGmailWatcherWithLogs", () => {
   });
 
   it("logs startup success", async () => {
-    startGmailWatcherMock.mockResolvedValue({ started: true, reason: undefined });
+    startGmailWatcherMock.mockResolvedValue({
+      started: true,
+      reason: undefined,
+    });
 
     await startGmailWatcherWithLogs({
       cfg: {},
@@ -43,14 +46,19 @@ describe("startGmailWatcherWithLogs", () => {
   });
 
   it("logs actionable non-start reason", async () => {
-    startGmailWatcherMock.mockResolvedValue({ started: false, reason: "auth failed" });
+    startGmailWatcherMock.mockResolvedValue({
+      started: false,
+      reason: "auth failed",
+    });
 
     await startGmailWatcherWithLogs({
       cfg: {},
       log,
     });
 
-    expect(log.warn).toHaveBeenCalledWith("gmail watcher not started: auth failed");
+    expect(log.warn).toHaveBeenCalledWith(
+      "gmail watcher not started: auth failed",
+    );
   });
 
   it("suppresses expected non-start reasons", async () => {
@@ -89,6 +97,8 @@ describe("startGmailWatcherWithLogs", () => {
       log,
     });
 
-    expect(log.error).toHaveBeenCalledWith("gmail watcher failed to start: Error: boom");
+    expect(log.error).toHaveBeenCalledWith(
+      "gmail watcher failed to start: Error: boom",
+    );
   });
 });

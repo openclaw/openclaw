@@ -56,7 +56,9 @@ describe("redactSensitiveText", () => {
       mode: "tools",
       patterns: defaults,
     });
-    expect(output).toBe("GET https://api.telegram.org/bot123456…cdef/getMe HTTP/1.1");
+    expect(output).toBe(
+      "GET https://api.telegram.org/bot123456…cdef/getMe HTTP/1.1",
+    );
   });
 
   it("redacts short tokens fully", () => {
@@ -80,7 +82,11 @@ describe("redactSensitiveText", () => {
       patterns: defaults,
     });
     expect(output).toBe(
-      ["-----BEGIN PRIVATE KEY-----", "…redacted…", "-----END PRIVATE KEY-----"].join("\n"),
+      [
+        "-----BEGIN PRIVATE KEY-----",
+        "…redacted…",
+        "-----END PRIVATE KEY-----",
+      ].join("\n"),
     );
   });
 

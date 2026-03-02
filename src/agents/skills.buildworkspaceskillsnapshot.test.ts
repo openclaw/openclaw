@@ -4,7 +4,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import { withEnv } from "../test-utils/env.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import { writeSkill } from "./skills.e2e-test-helpers.js";
-import { buildWorkspaceSkillSnapshot, buildWorkspaceSkillsPrompt } from "./skills.js";
+import {
+  buildWorkspaceSkillSnapshot,
+  buildWorkspaceSkillsPrompt,
+} from "./skills.js";
 
 const tempDirs = createTrackedTempDirs();
 
@@ -216,9 +219,12 @@ describe("buildWorkspaceSkillSnapshot", () => {
 
     // Create 30 nested dirs, but only the last one is an actual skill.
     for (let i = 0; i < 30; i += 1) {
-      await fs.mkdir(path.join(repoDir, "skills", `entry-${String(i).padStart(2, "0")}`), {
-        recursive: true,
-      });
+      await fs.mkdir(
+        path.join(repoDir, "skills", `entry-${String(i).padStart(2, "0")}`),
+        {
+          recursive: true,
+        },
+      );
     }
 
     await writeSkill({

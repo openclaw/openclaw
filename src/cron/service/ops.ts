@@ -58,13 +58,17 @@ function mergeManualRunSnapshotAfterReload(params: {
     return;
   }
   if (params.removed) {
-    params.state.store.jobs = params.state.store.jobs.filter((job) => job.id !== params.jobId);
+    params.state.store.jobs = params.state.store.jobs.filter(
+      (job) => job.id !== params.jobId,
+    );
     return;
   }
   if (!params.snapshot) {
     return;
   }
-  const reloaded = params.state.store.jobs.find((job) => job.id === params.jobId);
+  const reloaded = params.state.store.jobs.find(
+    (job) => job.id === params.jobId,
+  );
   if (!reloaded) {
     return;
   }
@@ -138,28 +142,47 @@ export async function status(state: CronServiceState) {
       enabled: state.deps.cronEnabled,
       storePath: state.deps.storePath,
       jobs: state.store?.jobs.length ?? 0,
-      nextWakeAtMs: state.deps.cronEnabled ? (nextWakeAtMs(state) ?? null) : null,
+      nextWakeAtMs: state.deps.cronEnabled
+        ? (nextWakeAtMs(state) ?? null)
+        : null,
     };
   });
 }
 
-export async function list(state: CronServiceState, opts?: { includeDisabled?: boolean }) {
+export async function list(
+  state: CronServiceState,
+  opts?: { includeDisabled?: boolean },
+) {
   return await locked(state, async () => {
     await ensureLoadedForRead(state);
     const includeDisabled = opts?.includeDisabled === true;
-    const jobs = (state.store?.jobs ?? []).filter((j) => includeDisabled || j.enabled);
-    return jobs.toSorted((a, b) => (a.state.nextRunAtMs ?? 0) - (b.state.nextRunAtMs ?? 0));
+    const jobs = (state.store?.jobs ?? []).filter(
+      (j) => includeDisabled || j.enabled,
+    );
+    return jobs.toSorted(
+      (a, b) => (a.state.nextRunAtMs ?? 0) - (b.state.nextRunAtMs ?? 0),
+    );
   });
 }
 
-function resolveEnabledFilter(opts?: CronListPageOptions): CronJobsEnabledFilter {
-  if (opts?.enabled === "all" || opts?.enabled === "enabled" || opts?.enabled === "disabled") {
+function resolveEnabledFilter(
+  opts?: CronListPageOptions,
+): CronJobsEnabledFilter {
+  if (
+    opts?.enabled === "all" ||
+    opts?.enabled === "enabled" ||
+    opts?.enabled === "disabled"
+  ) {
     return opts.enabled;
   }
   return opts?.includeDisabled ? "all" : "enabled";
 }
 
-function sortJobs(jobs: CronJob[], sortBy: CronJobsSortBy, sortDir: CronSortDir) {
+function sortJobs(
+  jobs: CronJob[],
+  sortBy: CronJobsSortBy,
+  sortDir: CronSortDir,
+) {
   const dir = sortDir === "desc" ? -1 : 1;
   return jobs.toSorted((a, b) => {
     let cmp = 0;
@@ -191,7 +214,10 @@ function sortJobs(jobs: CronJob[], sortBy: CronJobsSortBy, sortDir: CronSortDir)
   });
 }
 
-export async function listPage(state: CronServiceState, opts?: CronListPageOptions) {
+export async function listPage(
+  state: CronServiceState,
+  opts?: CronListPageOptions,
+) {
   return await locked(state, async () => {
     await ensureLoadedForRead(state);
     const query = opts?.query?.trim().toLowerCase() ?? "";
@@ -209,14 +235,19 @@ export async function listPage(state: CronServiceState, opts?: CronListPageOptio
       if (!query) {
         return true;
       }
-      const haystack = [job.name, job.description ?? "", job.agentId ?? ""].join(" ").toLowerCase();
+      const haystack = [job.name, job.description ?? "", job.agentId ?? ""]
+        .join(" ")
+        .toLowerCase();
       return haystack.includes(query);
     });
     const sorted = sortJobs(filtered, sortBy, sortDir);
     const total = sorted.length;
     const offset = Math.max(0, Math.min(total, Math.floor(opts?.offset ?? 0)));
     const defaultLimit = total === 0 ? 50 : total;
-    const limit = Math.max(1, Math.min(200, Math.floor(opts?.limit ?? defaultLimit)));
+    const limit = Math.max(
+      1,
+      Math.min(200, Math.floor(opts?.limit ?? defaultLimit)),
+    );
     const jobs = sorted.slice(offset, offset + limit);
     const nextOffset = offset + jobs.length;
     return {
@@ -264,7 +295,11 @@ export async function add(state: CronServiceState, input: CronJobCreate) {
   });
 }
 
-export async function update(state: CronServiceState, id: string, patch: CronJobPatch) {
+export async function update(
+  state: CronServiceState,
+  id: string,
+  patch: CronJobPatch,
+) {
   return await locked(state, async () => {
     warnIfDisabled(state, "update");
     await ensureLoaded(state, { skipRecompute: true });
@@ -278,7 +313,8 @@ export async function update(state: CronServiceState, id: string, patch: CronJob
         const fallbackAnchorMs =
           patchSchedule?.kind === "every"
             ? now
-            : typeof job.createdAtMs === "number" && Number.isFinite(job.createdAtMs)
+            : typeof job.createdAtMs === "number" &&
+                Number.isFinite(job.createdAtMs)
               ? job.createdAtMs
               : now;
         job.schedule = {
@@ -337,7 +373,11 @@ export async function remove(state: CronServiceState, id: string) {
   });
 }
 
-export async function run(state: CronServiceState, id: string, mode?: "due" | "force") {
+export async function run(
+  state: CronServiceState,
+  id: string,
+  mode?: "due" | "force",
+) {
   const prepared = await locked(state, async () => {
     warnIfDisabled(state, "run");
     await ensureLoaded(state, { skipRecompute: true });
@@ -426,7 +466,9 @@ export async function run(state: CronServiceState, id: string, mode?: "due" | "f
     });
 
     if (shouldDelete && state.store) {
-      state.store.jobs = state.store.jobs.filter((entry) => entry.id !== job.id);
+      state.store.jobs = state.store.jobs.filter(
+        (entry) => entry.id !== job.id,
+      );
       emit(state, { jobId: job.id, action: "removed" });
     }
 

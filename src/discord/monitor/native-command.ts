@@ -13,9 +13,15 @@ import {
   type ComponentData,
   type StringSelectMenuInteraction,
 } from "@buape/carbon";
-import { ApplicationCommandOptionType, ButtonStyle } from "discord-api-types/v10";
+import {
+  ApplicationCommandOptionType,
+  ButtonStyle,
+} from "discord-api-types/v10";
 import { resolveHumanDelayConfig } from "../../agents/identity.js";
-import { resolveChunkMode, resolveTextChunkLimit } from "../../auto-reply/chunk.js";
+import {
+  resolveChunkMode,
+  resolveTextChunkLimit,
+} from "../../auto-reply/chunk.js";
 import type {
   ChatCommandDefinition,
   CommandArgDefinition,
@@ -123,13 +129,19 @@ function buildDiscordCommandOptions(params: {
       ? async (interaction: AutocompleteInteraction) => {
           const focused = interaction.options.getFocused();
           const focusValue =
-            typeof focused?.value === "string" ? focused.value.trim().toLowerCase() : "";
+            typeof focused?.value === "string"
+              ? focused.value.trim().toLowerCase()
+              : "";
           const choices = resolveCommandArgChoices({ command, arg, cfg });
           const filtered = focusValue
-            ? choices.filter((choice) => choice.label.toLowerCase().includes(focusValue))
+            ? choices.filter((choice) =>
+                choice.label.toLowerCase().includes(focusValue),
+              )
             : choices;
           await interaction.respond(
-            filtered.slice(0, 25).map((choice) => ({ name: choice.label, value: choice.value })),
+            filtered
+              .slice(0, 25)
+              .map((choice) => ({ name: choice.label, value: choice.value })),
           );
         }
       : undefined;
@@ -176,7 +188,10 @@ function readDiscordCommandArgs(
 
 const DISCORD_COMMAND_ARG_CUSTOM_ID_KEY = "cmdarg";
 
-function createCommandArgsWithValue(params: { argName: string; value: string }): CommandArgs {
+function createCommandArgsWithValue(params: {
+  argName: string;
+  value: string;
+}): CommandArgs {
   const values: CommandArgValues = { [params.argName]: params.value };
   return { values };
 }
@@ -287,7 +302,10 @@ function resolveDiscordModelPickerCommandContext(
   return null;
 }
 
-function resolveCommandArgStringValue(args: CommandArgs | undefined, key: string): string {
+function resolveCommandArgStringValue(
+  args: CommandArgs | undefined,
+  key: string,
+): string {
   const value = args?.values?.[key];
   if (typeof value !== "string") {
     return "";
@@ -304,9 +322,13 @@ function shouldOpenDiscordModelPickerFromCommand(params: {
     return null;
   }
 
-  const serializedArgs = serializeCommandArgs(params.command, params.commandArgs)?.trim() ?? "";
+  const serializedArgs =
+    serializeCommandArgs(params.command, params.commandArgs)?.trim() ?? "";
   if (context === "model") {
-    const modelValue = resolveCommandArgStringValue(params.commandArgs, "model");
+    const modelValue = resolveCommandArgStringValue(
+      params.commandArgs,
+      "model",
+    );
     return !modelValue && !serializedArgs ? context : null;
   }
 
@@ -337,7 +359,10 @@ function buildDiscordModelPickerAllowedModelRefs(
 }
 
 function resolveDiscordModelPickerPreferenceScope(params: {
-  interaction: CommandInteraction | ButtonInteraction | StringSelectMenuInteraction;
+  interaction:
+    | CommandInteraction
+    | ButtonInteraction
+    | StringSelectMenuInteraction;
   accountId: string;
   userId: string;
 }): DiscordModelPickerPreferenceScope {
@@ -348,14 +373,19 @@ function resolveDiscordModelPickerPreferenceScope(params: {
   };
 }
 
-function buildDiscordModelPickerNoticePayload(message: string): { components: Container[] } {
+function buildDiscordModelPickerNoticePayload(message: string): {
+  components: Container[];
+} {
   return {
     components: [new Container([new TextDisplay(message)])],
   };
 }
 
 async function resolveDiscordModelPickerRoute(params: {
-  interaction: CommandInteraction | ButtonInteraction | StringSelectMenuInteraction;
+  interaction:
+    | CommandInteraction
+    | ButtonInteraction
+    | StringSelectMenuInteraction;
   cfg: ReturnType<typeof loadConfig>;
   accountId: string;
   threadBindings: ThreadBindingManager;
@@ -375,13 +405,18 @@ async function resolveDiscordModelPickerRoute(params: {
     : [];
   let threadParentId: string | undefined;
   if (interaction.guild && channel && isThreadChannel && rawChannelId) {
-    const channelInfo = await resolveDiscordChannelInfo(interaction.client, rawChannelId);
+    const channelInfo = await resolveDiscordChannelInfo(
+      interaction.client,
+      rawChannelId,
+    );
     const parentInfo = await resolveDiscordThreadParentInfo({
       client: interaction.client,
       threadChannel: {
         id: rawChannelId,
-        name: "name" in channel ? (channel.name as string | undefined) : undefined,
-        parentId: "parentId" in channel ? (channel.parentId ?? undefined) : undefined,
+        name:
+          "name" in channel ? (channel.name as string | undefined) : undefined,
+        parentId:
+          "parentId" in channel ? (channel.parentId ?? undefined) : undefined,
         parent: undefined,
       },
       channelInfo,
@@ -397,16 +432,22 @@ async function resolveDiscordModelPickerRoute(params: {
     memberRoleIds,
     peer: {
       kind: isDirectMessage ? "direct" : isGroupDm ? "group" : "channel",
-      id: isDirectMessage ? (interaction.user?.id ?? rawChannelId) : rawChannelId,
+      id: isDirectMessage
+        ? (interaction.user?.id ?? rawChannelId)
+        : rawChannelId,
     },
-    parentPeer: threadParentId ? { kind: "channel", id: threadParentId } : undefined,
+    parentPeer: threadParentId
+      ? { kind: "channel", id: threadParentId }
+      : undefined,
   });
 
   const threadBinding = isThreadChannel
     ? params.threadBindings.getByThreadId(rawChannelId)
     : undefined;
   const boundSessionKey = threadBinding?.targetSessionKey?.trim();
-  const boundAgentId = boundSessionKey ? resolveAgentIdFromSessionKey(boundSessionKey) : undefined;
+  const boundAgentId = boundSessionKey
+    ? resolveAgentIdFromSessionKey(boundSessionKey)
+    : undefined;
   return boundSessionKey
     ? {
         ...route,
@@ -439,7 +480,9 @@ function resolveDiscordModelPickerCurrentModel(params: {
     if (!override?.model) {
       return fallback;
     }
-    const provider = (override.provider || params.data.resolvedDefault.provider).trim();
+    const provider = (
+      override.provider || params.data.resolvedDefault.provider
+    ).trim();
     if (!provider) {
       return fallback;
     }
@@ -450,7 +493,10 @@ function resolveDiscordModelPickerCurrentModel(params: {
 }
 
 async function replyWithDiscordModelPickerProviders(params: {
-  interaction: CommandInteraction | ButtonInteraction | StringSelectMenuInteraction;
+  interaction:
+    | CommandInteraction
+    | ButtonInteraction
+    | StringSelectMenuInteraction;
   cfg: ReturnType<typeof loadConfig>;
   command: DiscordModelPickerCommandContext;
   userId: string;
@@ -484,7 +530,9 @@ async function replyWithDiscordModelPickerProviders(params: {
     command: params.command,
     userId: params.userId,
     data,
-    provider: splitDiscordModelRef(currentModel ?? "")?.provider ?? data.resolvedDefault.provider,
+    provider:
+      splitDiscordModelRef(currentModel ?? "")?.provider ??
+      data.resolvedDefault.provider,
     page: 1,
     providerPage: 1,
     currentModel,
@@ -521,7 +569,11 @@ function resolveModelPickerSelectionValue(
 
 function buildDiscordModelPickerSelectionCommand(params: {
   modelRef: string;
-}): { command: ChatCommandDefinition; args: CommandArgs; prompt: string } | null {
+}): {
+  command: ChatCommandDefinition;
+  args: CommandArgs;
+  prompt: string;
+} | null {
   const commandDefinition =
     findCommandByNativeName("model", "discord") ??
     listChatCommands().find((entry) => entry.key === "model");
@@ -557,7 +609,10 @@ function resolveDiscordModelPickerModelIndex(params: {
   provider: string;
   model: string;
 }): number | null {
-  const models = listDiscordModelPickerProviderModels(params.data, params.provider);
+  const models = listDiscordModelPickerProviderModels(
+    params.data,
+    params.provider,
+  );
   if (!models.length) {
     return null;
   }
@@ -576,14 +631,19 @@ function resolveDiscordModelPickerModelByIndex(params: {
   if (!params.modelIndex || params.modelIndex < 1) {
     return null;
   }
-  const models = listDiscordModelPickerProviderModels(params.data, params.provider);
+  const models = listDiscordModelPickerProviderModels(
+    params.data,
+    params.provider,
+  );
   if (!models.length) {
     return null;
   }
   return models[params.modelIndex - 1] ?? null;
 }
 
-function splitDiscordModelRef(modelRef: string): { provider: string; model: string } | null {
+function splitDiscordModelRef(
+  modelRef: string,
+): { provider: string; model: string } | null {
   const trimmed = modelRef.trim();
   const slashIndex = trimmed.indexOf("/");
   if (slashIndex <= 0 || slashIndex >= trimmed.length - 1) {
@@ -615,7 +675,9 @@ async function handleDiscordModelPickerInteraction(
   }
 
   if (interaction.user?.id && interaction.user.id !== parsed.userId) {
-    await safeDiscordInteractionCall("model picker ack", () => interaction.acknowledge());
+    await safeDiscordInteractionCall("model picker ack", () =>
+      interaction.acknowledge(),
+    );
     return;
   }
 
@@ -700,11 +762,14 @@ async function handleDiscordModelPickerInteraction(
   }
 
   if (parsed.action === "provider") {
-    const selectedProvider = resolveModelPickerSelectionValue(interaction) ?? parsed.provider;
+    const selectedProvider =
+      resolveModelPickerSelectionValue(interaction) ?? parsed.provider;
     if (!selectedProvider || !pickerData.byProvider.has(selectedProvider)) {
       await safeDiscordInteractionCall("model picker update", () =>
         interaction.update(
-          buildDiscordModelPickerNoticePayload("Sorry, that provider isn't available anymore."),
+          buildDiscordModelPickerNoticePayload(
+            "Sorry, that provider isn't available anymore.",
+          ),
         ),
       );
       return;
@@ -733,7 +798,9 @@ async function handleDiscordModelPickerInteraction(
     if (!provider || !selectedModel) {
       await safeDiscordInteractionCall("model picker update", () =>
         interaction.update(
-          buildDiscordModelPickerNoticePayload("Sorry, I couldn't read that model selection."),
+          buildDiscordModelPickerNoticePayload(
+            "Sorry, I couldn't read that model selection.",
+          ),
         ),
       );
       return;
@@ -747,7 +814,9 @@ async function handleDiscordModelPickerInteraction(
     if (!modelIndex) {
       await safeDiscordInteractionCall("model picker update", () =>
         interaction.update(
-          buildDiscordModelPickerNoticePayload("Sorry, that model isn't available anymore."),
+          buildDiscordModelPickerNoticePayload(
+            "Sorry, that model isn't available anymore.",
+          ),
         ),
       );
       return;
@@ -773,7 +842,11 @@ async function handleDiscordModelPickerInteraction(
     return;
   }
 
-  if (parsed.action === "submit" || parsed.action === "reset" || parsed.action === "quick") {
+  if (
+    parsed.action === "submit" ||
+    parsed.action === "reset" ||
+    parsed.action === "quick"
+  ) {
     let modelRef: string | null = null;
 
     if (parsed.action === "reset") {
@@ -783,7 +856,9 @@ async function handleDiscordModelPickerInteraction(
       modelRef = slot >= 1 ? (quickModels[slot - 1] ?? null) : null;
     } else if (parsed.view === "recents") {
       const defaultModelRef = `${pickerData.resolvedDefault.provider}/${pickerData.resolvedDefault.model}`;
-      const dedupedRecents = quickModels.filter((ref) => ref !== defaultModelRef);
+      const dedupedRecents = quickModels.filter(
+        (ref) => ref !== defaultModelRef,
+      );
       const slot = parsed.recentSlot ?? 0;
       if (slot === 1) {
         modelRef = defaultModelRef;
@@ -797,12 +872,15 @@ async function handleDiscordModelPickerInteraction(
         provider: provider ?? "",
         modelIndex: parsed.modelIndex,
       });
-      modelRef = provider && selectedModel ? `${provider}/${selectedModel}` : null;
+      modelRef =
+        provider && selectedModel ? `${provider}/${selectedModel}` : null;
     }
     const parsedModelRef = modelRef ? splitDiscordModelRef(modelRef) : null;
     if (
       !parsedModelRef ||
-      !pickerData.byProvider.get(parsedModelRef.provider)?.has(parsedModelRef.model)
+      !pickerData.byProvider
+        .get(parsedModelRef.provider)
+        ?.has(parsedModelRef.model)
     ) {
       await safeDiscordInteractionCall("model picker update", () =>
         interaction.update(
@@ -822,16 +900,22 @@ async function handleDiscordModelPickerInteraction(
     if (!selectionCommand) {
       await safeDiscordInteractionCall("model picker update", () =>
         interaction.update(
-          buildDiscordModelPickerNoticePayload("Sorry, /model is unavailable right now."),
+          buildDiscordModelPickerNoticePayload(
+            "Sorry, /model is unavailable right now.",
+          ),
         ),
       );
       return;
     }
 
-    const updateResult = await safeDiscordInteractionCall("model picker update", () =>
-      interaction.update(
-        buildDiscordModelPickerNoticePayload(`Applying model change to ${resolvedModelRef}...`),
-      ),
+    const updateResult = await safeDiscordInteractionCall(
+      "model picker update",
+      () =>
+        interaction.update(
+          buildDiscordModelPickerNoticePayload(
+            `Applying model change to ${resolvedModelRef}...`,
+          ),
+        ),
     );
     if (updateResult === null) {
       return;
@@ -915,7 +999,11 @@ async function handleDiscordModelPickerInteraction(
   if (parsed.action === "cancel") {
     const displayModel = currentModelRef ?? "default";
     await safeDiscordInteractionCall("model picker update", () =>
-      interaction.update(buildDiscordModelPickerNoticePayload(`ℹ️ Model kept as ${displayModel}.`)),
+      interaction.update(
+        buildDiscordModelPickerNoticePayload(
+          `ℹ️ Model kept as ${displayModel}.`,
+        ),
+      ),
     );
     return;
   }
@@ -937,7 +1025,9 @@ async function handleDiscordCommandArgInteraction(
     return;
   }
   if (interaction.user?.id && interaction.user.id !== parsed.userId) {
-    await safeDiscordInteractionCall("command arg ack", () => interaction.acknowledge());
+    await safeDiscordInteractionCall("command arg ack", () =>
+      interaction.acknowledge(),
+    );
     return;
   }
   const commandDefinition =
@@ -952,11 +1042,13 @@ async function handleDiscordCommandArgInteraction(
     );
     return;
   }
-  const argUpdateResult = await safeDiscordInteractionCall("command arg update", () =>
-    interaction.update({
-      content: `✅ Selected ${parsed.value}.`,
-      components: [],
-    }),
+  const argUpdateResult = await safeDiscordInteractionCall(
+    "command arg update",
+    () =>
+      interaction.update({
+        content: `✅ Selected ${parsed.value}.`,
+        components: [],
+      }),
   );
   if (argUpdateResult === null) {
     return;
@@ -969,7 +1061,10 @@ async function handleDiscordCommandArgInteraction(
     ...commandArgs,
     raw: serializeCommandArgs(commandDefinition, commandArgs),
   };
-  const prompt = buildCommandTextFromArgs(commandDefinition, commandArgsWithRaw);
+  const prompt = buildCommandTextFromArgs(
+    commandDefinition,
+    commandArgsWithRaw,
+  );
   await dispatchDiscordCommandInteraction({
     interaction,
     prompt,
@@ -1039,7 +1134,9 @@ class DiscordCommandArgFallbackButton extends Button {
   }
 }
 
-export function createDiscordCommandArgFallbackButton(params: DiscordCommandArgContext): Button {
+export function createDiscordCommandArgFallbackButton(
+  params: DiscordCommandArgContext,
+): Button {
   return new DiscordCommandArgFallbackButton(params);
 }
 
@@ -1073,7 +1170,9 @@ class DiscordModelPickerFallbackSelect extends StringSelectMenu {
   }
 }
 
-export function createDiscordModelPickerFallbackButton(params: DiscordModelPickerContext): Button {
+export function createDiscordModelPickerFallbackButton(
+  params: DiscordModelPickerContext,
+): Button {
   return new DiscordModelPickerFallbackButton(params);
 }
 
@@ -1121,7 +1220,8 @@ function buildDiscordCommandArgMenu(params: {
     return new Row(buttons);
   });
   const content =
-    menu.title ?? `Choose ${menu.arg.description || menu.arg.name} for /${commandLabel}.`;
+    menu.title ??
+    `Choose ${menu.arg.description || menu.arg.name} for /${commandLabel}.`;
   return { content, components: rows };
 }
 
@@ -1184,15 +1284,23 @@ export function createDiscordNativeCommand(params: {
       const commandArgs = argDefinitions?.length
         ? readDiscordCommandArgs(interaction, argDefinitions)
         : command.acceptsArgs
-          ? parseCommandArgs(commandDefinition, interaction.options.getString("input") ?? "")
+          ? parseCommandArgs(
+              commandDefinition,
+              interaction.options.getString("input") ?? "",
+            )
           : undefined;
       const commandArgsWithRaw = commandArgs
         ? ({
             ...commandArgs,
-            raw: serializeCommandArgs(commandDefinition, commandArgs) ?? commandArgs.raw,
+            raw:
+              serializeCommandArgs(commandDefinition, commandArgs) ??
+              commandArgs.raw,
           } satisfies CommandArgs)
         : undefined;
-      const prompt = buildCommandTextFromArgs(commandDefinition, commandArgsWithRaw);
+      const prompt = buildCommandTextFromArgs(
+        commandDefinition,
+        commandArgsWithRaw,
+      );
       await dispatchDiscordCommandInteraction({
         interaction,
         prompt,
@@ -1210,7 +1318,10 @@ export function createDiscordNativeCommand(params: {
 }
 
 async function dispatchDiscordCommandInteraction(params: {
-  interaction: CommandInteraction | ButtonInteraction | StringSelectMenuInteraction;
+  interaction:
+    | CommandInteraction
+    | ButtonInteraction
+    | StringSelectMenuInteraction;
   prompt: string;
   command: ChatCommandDefinition;
   commandArgs?: CommandArgs;
@@ -1235,10 +1346,15 @@ async function dispatchDiscordCommandInteraction(params: {
     threadBindings,
     suppressReplies,
   } = params;
-  const respond = async (content: string, options?: { ephemeral?: boolean }) => {
+  const respond = async (
+    content: string,
+    options?: { ephemeral?: boolean },
+  ) => {
     const payload = {
       content,
-      ...(options?.ephemeral !== undefined ? { ephemeral: options.ephemeral } : {}),
+      ...(options?.ephemeral !== undefined
+        ? { ephemeral: options.ephemeral }
+        : {}),
     };
     await safeDiscordInteractionCall("interaction reply", async () => {
       if (preferFollowUp) {
@@ -1254,7 +1370,10 @@ async function dispatchDiscordCommandInteraction(params: {
   if (!user) {
     return;
   }
-  const sender = resolveDiscordSenderIdentity({ author: user, pluralkitInfo: null });
+  const sender = resolveDiscordSenderIdentity({
+    author: user,
+    pluralkitInfo: null,
+  });
   const channel = interaction.channel;
   const channelType = channel?.type;
   const isDirectMessage = channelType === ChannelType.DM;
@@ -1263,7 +1382,8 @@ async function dispatchDiscordCommandInteraction(params: {
     channelType === ChannelType.PublicThread ||
     channelType === ChannelType.PrivateThread ||
     channelType === ChannelType.AnnouncementThread;
-  const channelName = channel && "name" in channel ? (channel.name as string) : undefined;
+  const channelName =
+    channel && "name" in channel ? (channel.name as string) : undefined;
   const channelSlug = channelName ? normalizeDiscordSlug(channelName) : "";
   const rawChannelId = channel?.id ?? "";
   const memberRoleIds = Array.isArray(interaction.rawData.member?.roles)
@@ -1295,20 +1415,26 @@ async function dispatchDiscordCommandInteraction(params: {
   let threadParentSlug = "";
   if (interaction.guild && channel && isThreadChannel && rawChannelId) {
     // Threads inherit parent channel config unless explicitly overridden.
-    const channelInfo = await resolveDiscordChannelInfo(interaction.client, rawChannelId);
+    const channelInfo = await resolveDiscordChannelInfo(
+      interaction.client,
+      rawChannelId,
+    );
     const parentInfo = await resolveDiscordThreadParentInfo({
       client: interaction.client,
       threadChannel: {
         id: rawChannelId,
         name: channelName,
-        parentId: "parentId" in channel ? (channel.parentId ?? undefined) : undefined,
+        parentId:
+          "parentId" in channel ? (channel.parentId ?? undefined) : undefined,
         parent: undefined,
       },
       channelInfo,
     });
     threadParentId = parentInfo.id;
     threadParentName = parentInfo.name;
-    threadParentSlug = threadParentName ? normalizeDiscordSlug(threadParentName) : "";
+    threadParentSlug = threadParentName
+      ? normalizeDiscordSlug(threadParentName)
+      : "";
   }
   const channelConfig = interaction.guild
     ? resolveDiscordChannelConfigWithFallback({
@@ -1332,7 +1458,8 @@ async function dispatchDiscordCommandInteraction(params: {
   }
   if (useAccessGroups && interaction.guild) {
     const channelAllowlistConfigured =
-      Boolean(guildInfo?.channels) && Object.keys(guildInfo?.channels ?? {}).length > 0;
+      Boolean(guildInfo?.channels) &&
+      Object.keys(guildInfo?.channels ?? {}).length > 0;
     const channelAllowed = channelConfig?.allowed !== false;
     const { groupPolicy } = resolveOpenProviderRuntimeGroupPolicy({
       providerConfigPresent: cfg.channels?.discord !== undefined,
@@ -1351,7 +1478,8 @@ async function dispatchDiscordCommandInteraction(params: {
     }
   }
   const dmEnabled = discordConfig?.dm?.enabled ?? true;
-  const dmPolicy = discordConfig?.dmPolicy ?? discordConfig?.dm?.policy ?? "pairing";
+  const dmPolicy =
+    discordConfig?.dmPolicy ?? discordConfig?.dm?.policy ?? "pairing";
   let commandAuthorized = true;
   if (isDirectMessage) {
     if (!dmEnabled || dmPolicy === "disabled") {
@@ -1361,7 +1489,8 @@ async function dispatchDiscordCommandInteraction(params: {
     const dmAccess = await resolveDiscordDmCommandAccess({
       accountId,
       dmPolicy,
-      configuredAllowFrom: discordConfig?.allowFrom ?? discordConfig?.dm?.allowFrom ?? [],
+      configuredAllowFrom:
+        discordConfig?.allowFrom ?? discordConfig?.dm?.allowFrom ?? [],
       sender: {
         id: sender.id,
         name: sender.name,
@@ -1391,20 +1520,23 @@ async function dispatchDiscordCommandInteraction(params: {
           );
         },
         onUnauthorized: async () => {
-          await respond("You are not authorized to use this command.", { ephemeral: true });
+          await respond("You are not authorized to use this command.", {
+            ephemeral: true,
+          });
         },
       });
       return;
     }
   }
   if (!isDirectMessage) {
-    const { hasAccessRestrictions, memberAllowed } = resolveDiscordMemberAccessState({
-      channelConfig,
-      guildInfo,
-      memberRoleIds,
-      sender,
-      allowNameMatching,
-    });
+    const { hasAccessRestrictions, memberAllowed } =
+      resolveDiscordMemberAccessState({
+        channelConfig,
+        guildInfo,
+        memberRoleIds,
+        sender,
+        allowNameMatching,
+      });
     const authorizers = useAccessGroups
       ? [
           { configured: ownerAllowList != null, allowed: ownerOk },
@@ -1417,7 +1549,9 @@ async function dispatchDiscordCommandInteraction(params: {
       modeWhenAccessGroupsOff: "configured",
     });
     if (!commandAuthorized) {
-      await respond("You are not authorized to use this command.", { ephemeral: true });
+      await respond("You are not authorized to use this command.", {
+        ephemeral: true,
+      });
       return;
     }
   }
@@ -1492,11 +1626,17 @@ async function dispatchDiscordCommandInteraction(params: {
       kind: isDirectMessage ? "direct" : isGroupDm ? "group" : "channel",
       id: isDirectMessage ? user.id : channelId,
     },
-    parentPeer: threadParentId ? { kind: "channel", id: threadParentId } : undefined,
+    parentPeer: threadParentId
+      ? { kind: "channel", id: threadParentId }
+      : undefined,
   });
-  const threadBinding = isThreadChannel ? threadBindings.getByThreadId(rawChannelId) : undefined;
+  const threadBinding = isThreadChannel
+    ? threadBindings.getByThreadId(rawChannelId)
+    : undefined;
   const boundSessionKey = threadBinding?.targetSessionKey?.trim();
-  const boundAgentId = boundSessionKey ? resolveAgentIdFromSessionKey(boundSessionKey) : undefined;
+  const boundAgentId = boundSessionKey
+    ? resolveAgentIdFromSessionKey(boundSessionKey)
+    : undefined;
   const effectiveRoute = boundSessionKey
     ? {
         ...route,
@@ -1504,7 +1644,9 @@ async function dispatchDiscordCommandInteraction(params: {
         agentId: boundAgentId ?? route.agentId,
       }
     : route;
-  const conversationLabel = isDirectMessage ? (user.globalName ?? user.username) : channelId;
+  const conversationLabel = isDirectMessage
+    ? (user.globalName ?? user.username)
+    : channelId;
   const ownerAllowFrom = resolveDiscordOwnerAllowFrom({
     channelConfig,
     guildInfo,
@@ -1523,7 +1665,9 @@ async function dispatchDiscordCommandInteraction(params: {
         ? `discord:group:${channelId}`
         : `discord:channel:${channelId}`,
     To: `slash:${user.id}`,
-    SessionKey: boundSessionKey ?? `agent:${effectiveRoute.agentId}:${sessionPrefix}:${user.id}`,
+    SessionKey:
+      boundSessionKey ??
+      `agent:${effectiveRoute.agentId}:${sessionPrefix}:${user.id}`,
     CommandTargetSessionKey: boundSessionKey ?? effectiveRoute.sessionKey,
     AccountId: effectiveRoute.accountId,
     ChatType: isDirectMessage ? "direct" : isGroupDm ? "group" : "channel",
@@ -1531,22 +1675,28 @@ async function dispatchDiscordCommandInteraction(params: {
     GroupSubject: isGuild ? interaction.guild?.name : undefined,
     GroupSystemPrompt: isGuild
       ? (() => {
-          const systemPromptParts = [channelConfig?.systemPrompt?.trim() || null].filter(
-            (entry): entry is string => Boolean(entry),
-          );
-          return systemPromptParts.length > 0 ? systemPromptParts.join("\n\n") : undefined;
+          const systemPromptParts = [
+            channelConfig?.systemPrompt?.trim() || null,
+          ].filter((entry): entry is string => Boolean(entry));
+          return systemPromptParts.length > 0
+            ? systemPromptParts.join("\n\n")
+            : undefined;
         })()
       : undefined,
     UntrustedContext: isGuild
       ? (() => {
           const channelTopic =
-            channel && "topic" in channel ? (channel.topic ?? undefined) : undefined;
+            channel && "topic" in channel
+              ? (channel.topic ?? undefined)
+              : undefined;
           const untrustedChannelMetadata = buildUntrustedChannelMetadata({
             source: "discord",
             label: "Discord channel topic",
             entries: [channelTopic],
           });
-          return untrustedChannelMetadata ? [untrustedChannelMetadata] : undefined;
+          return untrustedChannelMetadata
+            ? [untrustedChannelMetadata]
+            : undefined;
         })()
       : undefined,
     OwnerAllowFrom: ownerAllowFrom,
@@ -1575,7 +1725,10 @@ async function dispatchDiscordCommandInteraction(params: {
     channel: "discord",
     accountId: effectiveRoute.accountId,
   });
-  const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, effectiveRoute.agentId);
+  const mediaLocalRoots = getAgentScopedMediaLocalRoots(
+    cfg,
+    effectiveRoute.agentId,
+  );
 
   let didReply = false;
   await dispatchReplyWithDispatcher({
@@ -1602,7 +1755,9 @@ async function dispatchDiscordCommandInteraction(params: {
           });
         } catch (error) {
           if (isDiscordUnknownInteraction(error)) {
-            logVerbose("discord: interaction reply skipped (interaction expired)");
+            logVerbose(
+              "discord: interaction reply skipped (interaction expired)",
+            );
             return;
           }
           throw error;
@@ -1610,7 +1765,8 @@ async function dispatchDiscordCommandInteraction(params: {
         didReply = true;
       },
       onError: (err, info) => {
-        const message = err instanceof Error ? (err.stack ?? err.message) : String(err);
+        const message =
+          err instanceof Error ? (err.stack ?? err.message) : String(err);
         log.error(`discord slash ${info.kind} reply failed: ${message}`);
       },
     },
@@ -1626,7 +1782,10 @@ async function dispatchDiscordCommandInteraction(params: {
 }
 
 async function deliverDiscordInteractionReply(params: {
-  interaction: CommandInteraction | ButtonInteraction | StringSelectMenuInteraction;
+  interaction:
+    | CommandInteraction
+    | ButtonInteraction
+    | StringSelectMenuInteraction;
   payload: ReplyPayload;
   mediaLocalRoots?: readonly string[];
   textLimit: number;
@@ -1634,12 +1793,23 @@ async function deliverDiscordInteractionReply(params: {
   preferFollowUp: boolean;
   chunkMode: "length" | "newline";
 }) {
-  const { interaction, payload, textLimit, maxLinesPerMessage, preferFollowUp, chunkMode } = params;
-  const mediaList = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
+  const {
+    interaction,
+    payload,
+    textLimit,
+    maxLinesPerMessage,
+    preferFollowUp,
+    chunkMode,
+  } = params;
+  const mediaList =
+    payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
   const text = payload.text ?? "";
 
   let hasReplied = false;
-  const sendMessage = async (content: string, files?: { name: string; data: Buffer }[]) => {
+  const sendMessage = async (
+    content: string,
+    files?: { name: string; data: Buffer }[],
+  ) => {
     const payload =
       files && files.length > 0
         ? {

@@ -45,15 +45,22 @@ function createUnknownUsageSessionStore() {
 function createChannelIssueCollector(channel: string) {
   return (accounts: Array<Record<string, unknown>>) =>
     accounts
-      .filter((account) => typeof account.lastError === "string" && account.lastError)
+      .filter(
+        (account) => typeof account.lastError === "string" && account.lastError,
+      )
       .map((account) => ({
         channel,
-        accountId: typeof account.accountId === "string" ? account.accountId : "default",
+        accountId:
+          typeof account.accountId === "string" ? account.accountId : "default",
         message: `Channel error: ${String(account.lastError)}`,
       }));
 }
 
-function createErrorChannelPlugin(params: { id: string; label: string; docsPath: string }) {
+function createErrorChannelPlugin(params: {
+  id: string;
+  label: string;
+  docsPath: string;
+}) {
   return {
     id: params.id,
     meta: {
@@ -74,7 +81,8 @@ function createErrorChannelPlugin(params: { id: string; label: string; docsPath:
 }
 
 async function withUnknownUsageStore(run: () => Promise<void>) {
-  const originalLoadSessionStore = mocks.loadSessionStore.getMockImplementation();
+  const originalLoadSessionStore =
+    mocks.loadSessionStore.getMockImplementation();
   mocks.loadSessionStore.mockReturnValue(createUnknownUsageSessionStore());
   try {
     await run();
@@ -93,13 +101,17 @@ function getJoinedRuntimeLogs() {
   return getRuntimeLogs().join("\n");
 }
 
-async function runStatusAndGetLogs(args: Parameters<typeof statusCommand>[0] = {}) {
+async function runStatusAndGetLogs(
+  args: Parameters<typeof statusCommand>[0] = {},
+) {
   runtimeLogMock.mockClear();
   await statusCommand(args, runtime as never);
   return getRuntimeLogs();
 }
 
-async function runStatusAndGetJoinedLogs(args: Parameters<typeof statusCommand>[0] = {}) {
+async function runStatusAndGetJoinedLogs(
+  args: Parameters<typeof statusCommand>[0] = {},
+) {
   await runStatusAndGetLogs(args);
   return getJoinedRuntimeLogs();
 }
@@ -131,7 +143,11 @@ function mockProbeGatewayResult(overrides: Partial<ProbeGatewayResult>) {
   });
 }
 
-async function withEnvVar<T>(key: string, value: string, run: () => Promise<T>): Promise<T> {
+async function withEnvVar<T>(
+  key: string,
+  value: string,
+  run: () => Promise<T>,
+): Promise<T> {
   const prevValue = process.env[key];
   process.env[key] = value;
   try {
@@ -242,7 +258,8 @@ vi.mock("../config/sessions.js", () => ({
   resolveStorePath: mocks.resolveStorePath,
   resolveFreshSessionTotalTokens: vi.fn(
     (entry?: { totalTokens?: number; totalTokensFresh?: boolean }) =>
-      typeof entry?.totalTokens === "number" && entry?.totalTokensFresh !== false
+      typeof entry?.totalTokens === "number" &&
+      entry?.totalTokensFresh !== false
         ? entry.totalTokens
         : undefined,
   ),
@@ -299,7 +316,8 @@ vi.mock("../gateway/call.js", async (importOriginal) => {
   return { ...actual, callGateway: mocks.callGateway };
 });
 vi.mock("../gateway/session-utils.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../gateway/session-utils.js")>();
+  const actual =
+    await importOriginal<typeof import("../gateway/session-utils.js")>();
   return {
     ...actual,
     listAgentsForGateway: mocks.listAgentsForGateway,
@@ -428,7 +446,9 @@ describe("statusCommand", () => {
   it("prints unknown usage in formatted output when totalTokens is missing", async () => {
     await withUnknownUsageStore(async () => {
       const logs = await runStatusAndGetLogs();
-      expect(logs.some((line) => line.includes("unknown/") && line.includes("(?%)"))).toBe(true);
+      expect(
+        logs.some((line) => line.includes("unknown/") && line.includes("(?%)")),
+      ).toBe(true);
     });
   });
 
@@ -562,7 +582,10 @@ describe("statusCommand", () => {
   it("extracts requestId from close reason when error text omits it", async () => {
     mockProbeGatewayResult({
       error: "connect failed: pairing required",
-      close: { code: 1008, reason: "pairing required (requestId: req-close-456)" },
+      close: {
+        code: 1008,
+        reason: "pairing required (requestId: req-close-456)",
+      },
     });
     const joined = await runStatusAndGetJoinedLogs();
     expect(joined).toContain("devices approve req-close-456");
@@ -570,8 +593,10 @@ describe("statusCommand", () => {
 
   it("includes sessions across agents in JSON output", async () => {
     const originalAgents = mocks.listAgentsForGateway.getMockImplementation();
-    const originalResolveStorePath = mocks.resolveStorePath.getMockImplementation();
-    const originalLoadSessionStore = mocks.loadSessionStore.getMockImplementation();
+    const originalResolveStorePath =
+      mocks.resolveStorePath.getMockImplementation();
+    const originalLoadSessionStore =
+      mocks.loadSessionStore.getMockImplementation();
 
     mocks.listAgentsForGateway.mockReturnValue({
       defaultId: "main",
@@ -608,7 +633,9 @@ describe("statusCommand", () => {
     expect(payload.sessions.count).toBe(2);
     expect(payload.sessions.paths.length).toBe(2);
     expect(
-      payload.sessions.recent.some((sess: { key?: string }) => sess.key === "agent:ops:main"),
+      payload.sessions.recent.some(
+        (sess: { key?: string }) => sess.key === "agent:ops:main",
+      ),
     ).toBe(true);
 
     if (originalAgents) {

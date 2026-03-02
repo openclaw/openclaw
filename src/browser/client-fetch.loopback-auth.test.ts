@@ -32,7 +32,9 @@ vi.mock("./routes/dispatcher.js", () => ({
 import { fetchBrowserJson } from "./client-fetch.js";
 
 function stubJsonFetchOk() {
-  const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(
+  const fetchMock = vi.fn<
+    (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
+  >(
     async () =>
       new Response(JSON.stringify({ ok: true }), {
         status: 200,
@@ -63,7 +65,9 @@ describe("fetchBrowserJson loopback auth", () => {
   it("adds bearer auth for loopback absolute HTTP URLs", async () => {
     const fetchMock = stubJsonFetchOk();
 
-    const res = await fetchBrowserJson<{ ok: boolean }>("http://127.0.0.1:18888/");
+    const res = await fetchBrowserJson<{ ok: boolean }>(
+      "http://127.0.0.1:18888/",
+    );
     expect(res.ok).toBe(true);
 
     const init = fetchMock.mock.calls[0]?.[1];

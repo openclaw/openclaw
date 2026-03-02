@@ -4,7 +4,10 @@ import JSZip from "jszip";
 import sharp from "sharp";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { isPathWithinBase } from "../../test/helpers/paths.js";
-import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
+import {
+  createTempHomeEnv,
+  type TempHomeEnv,
+} from "../test-utils/temp-home.js";
 
 describe("media store", () => {
   let store: typeof import("./store.js");
@@ -35,7 +38,9 @@ describe("media store", () => {
     await withTempStore(async (store, home) => {
       const dir = await store.ensureMediaDir();
       expect(isPathWithinBase(home, dir)).toBe(true);
-      expect(path.normalize(dir)).toContain(`${path.sep}.openclaw${path.sep}media`);
+      expect(path.normalize(dir)).toContain(
+        `${path.sep}.openclaw${path.sep}media`,
+      );
       const stat = await fs.stat(dir);
       expect(stat.isDirectory()).toBe(true);
     });
@@ -60,7 +65,9 @@ describe("media store", () => {
       expect(savedJpeg.path.endsWith(".jpg")).toBe(true);
 
       const huge = Buffer.alloc(5 * 1024 * 1024 + 1);
-      await expect(store.saveMediaBuffer(huge)).rejects.toThrow("Media exceeds 5MB limit");
+      await expect(store.saveMediaBuffer(huge)).rejects.toThrow(
+        "Media exceeds 5MB limit",
+      );
     });
   });
 
@@ -83,27 +90,38 @@ describe("media store", () => {
     });
   });
 
-  it.runIf(process.platform !== "win32")("rejects symlink sources", async () => {
-    await withTempStore(async (store, home) => {
-      const target = path.join(home, "sensitive.txt");
-      const source = path.join(home, "source.txt");
-      await fs.writeFile(target, "sensitive");
-      await fs.symlink(target, source);
+  it.runIf(process.platform !== "win32")(
+    "rejects symlink sources",
+    async () => {
+      await withTempStore(async (store, home) => {
+        const target = path.join(home, "sensitive.txt");
+        const source = path.join(home, "source.txt");
+        await fs.writeFile(target, "sensitive");
+        await fs.symlink(target, source);
 
-      await expect(store.saveMediaSource(source)).rejects.toThrow("symlink");
-      await expect(store.saveMediaSource(source)).rejects.toMatchObject({ code: "invalid-path" });
-    });
-  });
+        await expect(store.saveMediaSource(source)).rejects.toThrow("symlink");
+        await expect(store.saveMediaSource(source)).rejects.toMatchObject({
+          code: "invalid-path",
+        });
+      });
+    },
+  );
 
   it("rejects directory sources with typed error code", async () => {
     await withTempStore(async (store, home) => {
-      await expect(store.saveMediaSource(home)).rejects.toMatchObject({ code: "not-file" });
+      await expect(store.saveMediaSource(home)).rejects.toMatchObject({
+        code: "not-file",
+      });
     });
   });
 
   it("cleans old media files in first-level subdirectories", async () => {
     await withTempStore(async (store) => {
-      const saved = await store.saveMediaBuffer(Buffer.from("nested"), "text/plain", "inbound");
+      const saved = await store.saveMediaBuffer(
+        Buffer.from("nested"),
+        "text/plain",
+        "inbound",
+      );
       const inboundDir = path.dirname(saved.path);
       const past = Date.now() - 10_000;
       await fs.utimes(saved.path, past / 1000, past / 1000);
@@ -173,7 +191,8 @@ describe("media store", () => {
     await withTempStore(async (_store, home) => {
       vi.resetModules();
       vi.doMock("./mime.js", async () => {
-        const actual = await vi.importActual<typeof import("./mime.js")>("./mime.js");
+        const actual =
+          await vi.importActual<typeof import("./mime.js")>("./mime.js");
         return {
           ...actual,
           detectMime: vi.fn(async () => "audio/opus"),
@@ -183,7 +202,10 @@ describe("media store", () => {
       try {
         const storeWithMock = await import("./store.js");
         const buf = Buffer.from("fake-audio");
-        const saved = await storeWithMock.saveMediaBuffer(buf, "audio/ogg; codecs=opus");
+        const saved = await storeWithMock.saveMediaBuffer(
+          buf,
+          "audio/ogg; codecs=opus",
+        );
         expect(path.extname(saved.path)).toBe(".ogg");
         expect(saved.path.startsWith(home)).toBe(true);
       } finally {
@@ -205,7 +227,9 @@ describe("media store", () => {
     it("handles uppercase UUID pattern", async () => {
       await withTempStore(async (store) => {
         const filename = "Document---A1B2C3D4-E5F6-7890-ABCD-EF1234567890.docx";
-        const result = store.extractOriginalFilename(`/media/inbound/${filename}`);
+        const result = store.extractOriginalFilename(
+          `/media/inbound/${filename}`,
+        );
         expect(result).toBe("Document.docx");
       });
     });
@@ -214,13 +238,19 @@ describe("media store", () => {
       await withTempStore(async (store) => {
         // UUID-only filename (legacy format)
         const uuidOnly = "a1b2c3d4-e5f6-7890-abcd-ef1234567890.pdf";
-        expect(store.extractOriginalFilename(`/path/${uuidOnly}`)).toBe(uuidOnly);
+        expect(store.extractOriginalFilename(`/path/${uuidOnly}`)).toBe(
+          uuidOnly,
+        );
 
         // Regular filename without embedded pattern
-        expect(store.extractOriginalFilename("/path/to/regular.txt")).toBe("regular.txt");
+        expect(store.extractOriginalFilename("/path/to/regular.txt")).toBe(
+          "regular.txt",
+        );
 
         // Filename with --- but invalid UUID part
-        expect(store.extractOriginalFilename("/path/to/foo---bar.txt")).toBe("foo---bar.txt");
+        expect(store.extractOriginalFilename("/path/to/foo---bar.txt")).toBe(
+          "foo---bar.txt",
+        );
       });
     });
 

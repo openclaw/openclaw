@@ -20,7 +20,11 @@ describe("stripReasoningTagsFromText", () => {
           input: "Before <thinking>some thought</thinking> after",
           expected: "Before  after",
         },
-        { name: "strips thought tags", input: "A <thought>hmm</thought> B", expected: "A  B" },
+        {
+          name: "strips thought tags",
+          input: "A <thought>hmm</thought> B",
+          expected: "A  B",
+        },
         {
           name: "strips antthinking tags",
           input: "X <antthinking>internal</antthinking> Y",
@@ -61,7 +65,8 @@ describe("stripReasoningTagsFromText", () => {
           expected: "Visible text with `<think>` example.",
         },
         {
-          input: "```\n<think>code</think>\n```\n<think>real hidden</think>visible",
+          input:
+            "```\n<think>code</think>\n```\n<think>real hidden</think>visible",
           expected: "```\n<think>code</think>\n```\nvisible",
         },
       ] as const;
@@ -174,9 +179,12 @@ describe("stripReasoningTagsFromText", () => {
 
     it("handles long content and pathological backtick patterns efficiently", () => {
       const longContent = "x".repeat(10000);
-      expect(stripReasoningTagsFromText(`<think>${longContent}</think>visible`)).toBe("visible");
+      expect(
+        stripReasoningTagsFromText(`<think>${longContent}</think>visible`),
+      ).toBe("visible");
 
-      const pathological = "`".repeat(100) + "<think>test</think>" + "`".repeat(100);
+      const pathological =
+        "`".repeat(100) + "<think>test</think>" + "`".repeat(100);
       const start = Date.now();
       stripReasoningTagsFromText(pathological);
       const elapsed = Date.now() - start;
@@ -189,7 +197,10 @@ describe("stripReasoningTagsFromText", () => {
       const input = "Before <think>unclosed content after";
       const cases = [
         { mode: "strict" as const, expected: "Before" },
-        { mode: "preserve" as const, expected: "Before unclosed content after" },
+        {
+          mode: "preserve" as const,
+          expected: "Before unclosed content after",
+        },
       ];
       for (const { mode, expected } of cases) {
         expect(stripReasoningTagsFromText(input, { mode })).toBe(expected);
@@ -217,7 +228,9 @@ describe("stripReasoningTagsFromText", () => {
         },
       ] as const;
       for (const testCase of cases) {
-        expect(stripReasoningTagsFromText(testCase.input, testCase.opts)).toBe(testCase.expected);
+        expect(stripReasoningTagsFromText(testCase.input, testCase.opts)).toBe(
+          testCase.expected,
+        );
       }
     });
   });

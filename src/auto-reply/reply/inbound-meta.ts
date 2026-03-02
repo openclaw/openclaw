@@ -24,7 +24,9 @@ function formatConversationTimestamp(value: unknown): string | undefined {
     return undefined;
   }
   try {
-    const weekday = new Intl.DateTimeFormat("en-US", { weekday: "short" }).format(date);
+    const weekday = new Intl.DateTimeFormat("en-US", {
+      weekday: "short",
+    }).format(date);
     return weekday ? `${weekday} ${formatted}` : formatted;
   } catch {
     return formatted;
@@ -107,7 +109,8 @@ export function buildInboundUserContextPrefix(ctx: TemplateContext): string {
     group_channel: safeTrim(ctx.GroupChannel),
     group_space: safeTrim(ctx.GroupSpace),
     thread_label: safeTrim(ctx.ThreadLabel),
-    topic_id: ctx.MessageThreadId != null ? String(ctx.MessageThreadId) : undefined,
+    topic_id:
+      ctx.MessageThreadId != null ? String(ctx.MessageThreadId) : undefined,
     is_forum: ctx.IsForum === true ? true : undefined,
     is_group_chat: !isDirect ? true : undefined,
     was_mentioned: ctx.WasMentioned === true ? true : undefined,
@@ -146,9 +149,12 @@ export function buildInboundUserContextPrefix(ctx: TemplateContext): string {
   };
   if (senderInfo?.label) {
     blocks.push(
-      ["Sender (untrusted metadata):", "```json", JSON.stringify(senderInfo, null, 2), "```"].join(
-        "\n",
-      ),
+      [
+        "Sender (untrusted metadata):",
+        "```json",
+        JSON.stringify(senderInfo, null, 2),
+        "```",
+      ].join("\n"),
     );
   }
 
@@ -195,7 +201,10 @@ export function buildInboundUserContextPrefix(ctx: TemplateContext): string {
             title: safeTrim(ctx.ForwardedFromTitle),
             signature: safeTrim(ctx.ForwardedFromSignature),
             chat_type: safeTrim(ctx.ForwardedFromChatType),
-            date_ms: typeof ctx.ForwardedDate === "number" ? ctx.ForwardedDate : undefined,
+            date_ms:
+              typeof ctx.ForwardedDate === "number"
+                ? ctx.ForwardedDate
+                : undefined,
           },
           null,
           2,

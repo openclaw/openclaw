@@ -33,7 +33,9 @@ export const icons = {
   `,
   fileText: html`
     <svg viewBox="0 0 24 24">
-      <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z" />
+      <path
+        d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"
+      />
       <polyline points="14 2 14 8 20 8" />
       <line x1="16" x2="8" y1="13" y2="13" />
       <line x1="16" x2="8" y1="17" y2="17" />
@@ -41,7 +43,9 @@ export const icons = {
     </svg>
   `,
   zap: html`
-    <svg viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" /></svg>
+    <svg viewBox="0 0 24 24">
+      <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
+    </svg>
   `,
   monitor: html`
     <svg viewBox="0 0 24 24">
@@ -63,7 +67,9 @@ export const icons = {
       <path d="m8 2 1.88 1.88" />
       <path d="M14.12 3.88 16 2" />
       <path d="M9 7.13v-1a3.003 3.003 0 1 1 6 0v1" />
-      <path d="M12 20c-3.3 0-6-2.7-6-6v-3a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v3c0 3.3-2.7 6-6 6" />
+      <path
+        d="M12 20c-3.3 0-6-2.7-6-6v-3a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v3c0 3.3-2.7 6-6 6"
+      />
       <path d="M12 20v-9" />
       <path d="M6.53 9C4.6 8.8 3 7.1 3 5" />
       <path d="M6 13H2" />
@@ -75,7 +81,9 @@ export const icons = {
   `,
   scrollText: html`
     <svg viewBox="0 0 24 24">
-      <path d="M8 21h12a2 2 0 0 0 2-2v-2H10v2a2 2 0 1 1-4 0V5a2 2 0 1 0-4 0v3h4" />
+      <path
+        d="M8 21h12a2 2 0 0 0 2-2v-2H10v2a2 2 0 1 1-4 0V5a2 2 0 1 0-4 0v3h4"
+      />
       <path d="M19 17V5a2 2 0 0 0-2-2H4" />
       <path d="M15 8h-5" />
       <path d="M15 12h-5" />
@@ -103,9 +111,7 @@ export const icons = {
       <path d="m6 6 12 12" />
     </svg>
   `,
-  check: html`
-    <svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5" /></svg>
-  `,
+  check: html` <svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5" /></svg> `,
   arrowDown: html`
     <svg viewBox="0 0 24 24">
       <path d="M12 5v14" />
@@ -126,8 +132,12 @@ export const icons = {
   `,
   brain: html`
     <svg viewBox="0 0 24 24">
-      <path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z" />
-      <path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z" />
+      <path
+        d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"
+      />
+      <path
+        d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"
+      />
       <path d="M15 13a4.5 4.5 0 0 1-3-4 4.5 4.5 0 0 1-3 4" />
       <path d="M17.599 6.5a3 3 0 0 0 .399-1.375" />
       <path d="M6.003 5.125A3 3 0 0 0 6.401 6.5" />
@@ -139,7 +149,9 @@ export const icons = {
   `,
   book: html`
     <svg viewBox="0 0 24 24">
-      <path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20" />
+      <path
+        d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20"
+      />
     </svg>
   `,
   loader: html`
@@ -165,7 +177,9 @@ export const icons = {
   `,
   fileCode: html`
     <svg viewBox="0 0 24 24">
-      <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z" />
+      <path
+        d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"
+      />
       <polyline points="14 2 14 8 20 8" />
       <path d="m10 13-2 2 2 2" />
       <path d="m14 17 2-2-2-2" />
@@ -236,8 +250,13 @@ export function icon(name: IconName): TemplateResult {
   return icons[name];
 }
 
-export function renderIcon(name: IconName, className = "nav-item__icon"): TemplateResult {
-  return html`<span class=${className} aria-hidden="true">${icons[name]}</span>`;
+export function renderIcon(
+  name: IconName,
+  className = "nav-item__icon",
+): TemplateResult {
+  return html`<span class=${className} aria-hidden="true"
+    >${icons[name]}</span
+  >`;
 }
 
 // Legacy function for compatibility
@@ -245,7 +264,9 @@ export function renderEmojiIcon(
   iconContent: string | TemplateResult,
   className: string,
 ): TemplateResult {
-  return html`<span class=${className} aria-hidden="true">${iconContent}</span>`;
+  return html`<span class=${className} aria-hidden="true"
+    >${iconContent}</span
+  >`;
 }
 
 export function setEmojiIcon(target: HTMLElement | null, icon: string): void {

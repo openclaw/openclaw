@@ -1,5 +1,13 @@
-import type { MessageEvent, StickerEventMessage, EventSource, PostbackEvent } from "@line/bot-sdk";
-import { formatInboundEnvelope, resolveEnvelopeFormatOptions } from "../auto-reply/envelope.js";
+import type {
+  MessageEvent,
+  StickerEventMessage,
+  EventSource,
+  PostbackEvent,
+} from "@line/bot-sdk";
+import {
+  formatInboundEnvelope,
+  resolveEnvelopeFormatOptions,
+} from "../auto-reply/envelope.js";
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import { formatLocationText, toLocationContext } from "../channels/location.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -114,7 +122,8 @@ const STICKER_PACKAGES: Record<string, string> = {
 
 function describeStickerKeywords(sticker: StickerEventMessage): string {
   // Use sticker keywords if available (LINE provides these for some stickers)
-  const keywords = (sticker as StickerEventMessage & { keywords?: string[] }).keywords;
+  const keywords = (sticker as StickerEventMessage & { keywords?: string[] })
+    .keywords;
   if (keywords && keywords.length > 0) {
     return keywords.slice(0, 3).join(", ");
   }
@@ -203,8 +212,12 @@ function resolveLineAddresses(params: {
         ? `line:room:${params.roomId}`
         : `line:${params.peerId}`
     : `line:${params.userId ?? params.peerId}`;
-  const toAddress = params.isGroup ? fromAddress : `line:${params.userId ?? params.peerId}`;
-  const originatingTo = params.isGroup ? fromAddress : `line:${params.userId ?? params.peerId}`;
+  const toAddress = params.isGroup
+    ? fromAddress
+    : `line:${params.userId ?? params.peerId}`;
+  const originatingTo = params.isGroup
+    ? fromAddress
+    : `line:${params.userId ?? params.peerId}`;
   return { fromAddress, toAddress, originatingTo };
 }
 
@@ -235,7 +248,9 @@ async function finalizeLineInboundContext(params: {
   });
 
   const senderId = params.source.userId ?? "unknown";
-  const senderLabel = params.source.userId ? `user:${params.source.userId}` : "unknown";
+  const senderLabel = params.source.userId
+    ? `user:${params.source.userId}`
+    : "unknown";
   const conversationLabel = resolveLineConversationLabel({
     isGroup: params.source.isGroup,
     groupId: params.source.groupId,
@@ -319,27 +334,35 @@ async function finalizeLineInboundContext(params: {
   if (shouldLogVerbose()) {
     const preview = body.slice(0, 200).replace(/\n/g, "\\n");
     const mediaInfo =
-      params.verboseLog.kind === "inbound" && (params.verboseLog.mediaCount ?? 0) > 1
+      params.verboseLog.kind === "inbound" &&
+      (params.verboseLog.mediaCount ?? 0) > 1
         ? ` mediaCount=${params.verboseLog.mediaCount}`
         : "";
-    const label = params.verboseLog.kind === "inbound" ? "line inbound" : "line postback";
+    const label =
+      params.verboseLog.kind === "inbound" ? "line inbound" : "line postback";
     logVerbose(
       `${label}: from=${ctxPayload.From} len=${body.length}${mediaInfo} preview="${preview}"`,
     );
   }
 
-  return { ctxPayload, replyToken: (params.event as { replyToken: string }).replyToken };
+  return {
+    ctxPayload,
+    replyToken: (params.event as { replyToken: string }).replyToken,
+  };
 }
 
-export async function buildLineMessageContext(params: BuildLineMessageContextParams) {
+export async function buildLineMessageContext(
+  params: BuildLineMessageContextParams,
+) {
   const { event, allMedia, cfg, account } = params;
 
   const source = event.source;
-  const { userId, groupId, roomId, isGroup, peerId, route } = resolveLineInboundRoute({
-    source,
-    cfg,
-    account,
-  });
+  const { userId, groupId, roomId, isGroup, peerId, route } =
+    resolveLineInboundRoute({
+      source,
+      cfg,
+      account,
+    });
 
   const message = event.message;
   const messageId = message.id;
@@ -412,11 +435,12 @@ export async function buildLinePostbackContext(params: {
   const { event, cfg, account } = params;
 
   const source = event.source;
-  const { userId, groupId, roomId, isGroup, peerId, route } = resolveLineInboundRoute({
-    source,
-    cfg,
-    account,
-  });
+  const { userId, groupId, roomId, isGroup, peerId, route } =
+    resolveLineInboundRoute({
+      source,
+      cfg,
+      account,
+    });
 
   const timestamp = event.timestamp;
   const rawData = event.postback?.data?.trim() ?? "";
@@ -428,10 +452,14 @@ export async function buildLinePostbackContext(params: {
     const params = new URLSearchParams(rawData);
     const action = params.get("line.action") ?? "";
     const device = params.get("line.device");
-    rawBody = device ? `line action ${action} device ${device}` : `line action ${action}`;
+    rawBody = device
+      ? `line action ${action} device ${device}`
+      : `line action ${action}`;
   }
 
-  const messageSid = event.replyToken ? `postback:${event.replyToken}` : `postback:${timestamp}`;
+  const messageSid = event.replyToken
+    ? `postback:${event.replyToken}`
+    : `postback:${timestamp}`;
   const { ctxPayload } = await finalizeLineInboundContext({
     cfg,
     account,
@@ -463,6 +491,10 @@ export async function buildLinePostbackContext(params: {
   };
 }
 
-export type LineMessageContext = NonNullable<Awaited<ReturnType<typeof buildLineMessageContext>>>;
-export type LinePostbackContext = NonNullable<Awaited<ReturnType<typeof buildLinePostbackContext>>>;
+export type LineMessageContext = NonNullable<
+  Awaited<ReturnType<typeof buildLineMessageContext>>
+>;
+export type LinePostbackContext = NonNullable<
+  Awaited<ReturnType<typeof buildLinePostbackContext>>
+>;
 export type LineInboundContext = LineMessageContext | LinePostbackContext;

@@ -111,7 +111,9 @@ export async function expectInstallUsesIgnoreScripts(params: {
     return;
   }
   expectSingleNpmInstallIgnoreScriptsCall({
-    calls: params.run.mock.calls as Array<[unknown, { cwd?: string } | undefined]>,
+    calls: params.run.mock.calls as Array<
+      [unknown, { cwd?: string } | undefined]
+    >,
     expectedCwd: result.targetDir,
   });
 }

@@ -10,7 +10,9 @@ export type BundledPluginSource = {
 export function resolveBundledPluginSources(params: {
   workspaceDir?: string;
 }): Map<string, BundledPluginSource> {
-  const discovery = discoverOpenClawPlugins({ workspaceDir: params.workspaceDir });
+  const discovery = discoverOpenClawPlugins({
+    workspaceDir: params.workspaceDir,
+  });
   const bundled = new Map<string, BundledPluginSource>();
 
   for (const candidate of discovery.candidates) {
@@ -49,7 +51,9 @@ export function findBundledPluginByNpmSpec(params: {
   if (!targetSpec) {
     return undefined;
   }
-  const bundled = resolveBundledPluginSources({ workspaceDir: params.workspaceDir });
+  const bundled = resolveBundledPluginSources({
+    workspaceDir: params.workspaceDir,
+  });
   for (const source of bundled.values()) {
     if (source.npmSpec === targetSpec) {
       return source;

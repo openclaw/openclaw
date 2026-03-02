@@ -42,7 +42,11 @@ describe("extra-params: OpenRouter Anthropic cache_control", () => {
     runOpenRouterPayload(payload, "anthropic/claude-opus-4-6");
 
     expect(payload.messages[0].content).toEqual([
-      { type: "text", text: "You are a helpful assistant.", cache_control: { type: "ephemeral" } },
+      {
+        type: "text",
+        text: "You are a helpful assistant.",
+        cache_control: { type: "ephemeral" },
+      },
     ]);
     expect(payload.messages[1].content).toBe("Hello");
   });
@@ -62,7 +66,9 @@ describe("extra-params: OpenRouter Anthropic cache_control", () => {
 
     runOpenRouterPayload(payload, "anthropic/claude-opus-4-6");
 
-    const content = payload.messages[0].content as Array<Record<string, unknown>>;
+    const content = payload.messages[0].content as Array<
+      Record<string, unknown>
+    >;
     expect(content[0]).toEqual({ type: "text", text: "Part 1" });
     expect(content[1]).toEqual({
       type: "text",

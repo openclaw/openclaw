@@ -66,7 +66,9 @@ function createRunMessageAction() {
 
 async function runSendAction(opts: Record<string, unknown> = {}) {
   const runMessageAction = createRunMessageAction();
-  await expect(runMessageAction("send", { ...baseSendOptions, ...opts })).rejects.toThrow("exit");
+  await expect(
+    runMessageAction("send", { ...baseSendOptions, ...opts }),
+  ).rejects.toThrow("exit");
 }
 
 function expectNoAccountFieldInPassedOptions() {
@@ -103,7 +105,10 @@ describe("runMessageAction", () => {
     hasHooksMock.mockReturnValueOnce(true);
     await runSendAction();
 
-    expect(runGatewayStopMock).toHaveBeenCalledWith({ reason: "cli message action complete" }, {});
+    expect(runGatewayStopMock).toHaveBeenCalledWith(
+      { reason: "cli message action complete" },
+      {},
+    );
     expect(exitMock).toHaveBeenCalledWith(0);
   });
 
@@ -121,7 +126,10 @@ describe("runMessageAction", () => {
     messageCommandMock.mockRejectedValueOnce(new Error("send failed"));
     await runSendAction();
 
-    expect(runGatewayStopMock).toHaveBeenCalledWith({ reason: "cli message action complete" }, {});
+    expect(runGatewayStopMock).toHaveBeenCalledWith(
+      { reason: "cli message action complete" },
+      {},
+    );
     expect(exitMock).toHaveBeenCalledWith(1);
   });
 
@@ -130,7 +138,9 @@ describe("runMessageAction", () => {
     runGatewayStopMock.mockRejectedValueOnce(new Error("hook failed"));
     await runSendAction();
 
-    expect(errorMock).toHaveBeenCalledWith("gateway_stop hook failed: Error: hook failed");
+    expect(errorMock).toHaveBeenCalledWith(
+      "gateway_stop hook failed: Error: hook failed",
+    );
     expect(exitMock).toHaveBeenCalledWith(0);
   });
 
@@ -141,7 +151,10 @@ describe("runMessageAction", () => {
     await runSendAction();
 
     expect(errorMock).toHaveBeenNthCalledWith(1, "Error: send failed");
-    expect(errorMock).toHaveBeenNthCalledWith(2, "gateway_stop hook failed: Error: hook failed");
+    expect(errorMock).toHaveBeenNthCalledWith(
+      2,
+      "gateway_stop hook failed: Error: hook failed",
+    );
     expect(exitMock).toHaveBeenCalledWith(1);
   });
 
@@ -158,7 +171,9 @@ describe("runMessageAction", () => {
     messageCommandMock.mockRejectedValueOnce(new Error("boom"));
     exitMock.mockClear().mockImplementation(() => undefined as never);
     const runMessageAction = createRunMessageAction();
-    await expect(runMessageAction("send", baseSendOptions)).resolves.toBeUndefined();
+    await expect(
+      runMessageAction("send", baseSendOptions),
+    ).resolves.toBeUndefined();
 
     expect(errorMock).toHaveBeenCalledWith("Error: boom");
     expect(exitMock).toHaveBeenCalledOnce();
@@ -168,7 +183,10 @@ describe("runMessageAction", () => {
 
   it("passes action and maps account to accountId", async () => {
     const fakeCommand = { help: vi.fn() } as never;
-    const { runMessageAction } = createMessageCliHelpers(fakeCommand, "discord");
+    const { runMessageAction } = createMessageCliHelpers(
+      fakeCommand,
+      "discord",
+    );
 
     await expect(
       runMessageAction("poll", {

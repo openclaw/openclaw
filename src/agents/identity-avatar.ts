@@ -24,13 +24,20 @@ function normalizeAvatarValue(value: string | undefined | null): string | null {
   return trimmed ? trimmed : null;
 }
 
-function resolveAvatarSource(cfg: OpenClawConfig, agentId: string): string | null {
-  const fromConfig = normalizeAvatarValue(resolveAgentIdentity(cfg, agentId)?.avatar);
+function resolveAvatarSource(
+  cfg: OpenClawConfig,
+  agentId: string,
+): string | null {
+  const fromConfig = normalizeAvatarValue(
+    resolveAgentIdentity(cfg, agentId)?.avatar,
+  );
   if (fromConfig) {
     return fromConfig;
   }
   const workspace = resolveAgentWorkspaceDir(cfg, agentId);
-  const fromIdentity = normalizeAvatarValue(loadAgentIdentityFromWorkspace(workspace)?.avatar);
+  const fromIdentity = normalizeAvatarValue(
+    loadAgentIdentityFromWorkspace(workspace)?.avatar,
+  );
   return fromIdentity;
 }
 
@@ -73,7 +80,10 @@ function resolveLocalAvatarPath(params: {
   return { ok: true, filePath: realPath };
 }
 
-export function resolveAgentAvatar(cfg: OpenClawConfig, agentId: string): AgentAvatarResolution {
+export function resolveAgentAvatar(
+  cfg: OpenClawConfig,
+  agentId: string,
+): AgentAvatarResolution {
   const source = resolveAvatarSource(cfg, agentId);
   if (!source) {
     return { kind: "none", reason: "missing" };

@@ -1,6 +1,8 @@
 import AjvPkg, { type ErrorObject, type ValidateFunction } from "ajv";
 
-const ajv = new (AjvPkg as unknown as new (opts?: object) => import("ajv").default)({
+const ajv = new (AjvPkg as unknown as new (
+  opts?: object,
+) => import("ajv").default)({
   allErrors: true,
   strict: false,
   removeAdditional: false,
@@ -18,7 +20,8 @@ function formatAjvErrors(errors: ErrorObject[] | null | undefined): string[] {
     return ["invalid config"];
   }
   return errors.map((error) => {
-    const path = error.instancePath?.replace(/^\//, "").replace(/\//g, ".") || "<root>";
+    const path =
+      error.instancePath?.replace(/^\//, "").replace(/\//g, ".") || "<root>";
     const message = error.message ?? "invalid";
     return `${path}: ${message}`;
   });

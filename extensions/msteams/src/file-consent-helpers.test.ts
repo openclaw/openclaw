@@ -1,5 +1,8 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { prepareFileConsentActivity, requiresFileConsent } from "./file-consent-helpers.js";
+import {
+  prepareFileConsentActivity,
+  requiresFileConsent,
+} from "./file-consent-helpers.js";
 import * as pendingUploads from "./pending-uploads.js";
 
 describe("requiresFileConsent", () => {
@@ -129,7 +132,9 @@ describe("prepareFileConsentActivity", () => {
   const mockUploadId = "test-upload-id-123";
 
   beforeEach(() => {
-    vi.spyOn(pendingUploads, "storePendingUpload").mockReturnValue(mockUploadId);
+    vi.spyOn(pendingUploads, "storePendingUpload").mockReturnValue(
+      mockUploadId,
+    );
   });
 
   afterEach(() => {
@@ -151,8 +156,13 @@ describe("prepareFileConsentActivity", () => {
     expect(result.activity.type).toBe("message");
     expect(result.activity.attachments).toHaveLength(1);
 
-    const attachment = (result.activity.attachments as unknown[])[0] as Record<string, unknown>;
-    expect(attachment.contentType).toBe("application/vnd.microsoft.teams.card.file.consent");
+    const attachment = (result.activity.attachments as unknown[])[0] as Record<
+      string,
+      unknown
+    >;
+    expect(attachment.contentType).toBe(
+      "application/vnd.microsoft.teams.card.file.consent",
+    );
     expect(attachment.name).toBe("test.pdf");
   });
 
@@ -181,7 +191,8 @@ describe("prepareFileConsentActivity", () => {
       media: {
         buffer: Buffer.from("test"),
         filename: "document.docx",
-        contentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        contentType:
+          "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
       },
       conversationId: "conv456",
     });

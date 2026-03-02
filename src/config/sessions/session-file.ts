@@ -31,7 +31,10 @@ export async function resolveAndPersistSessionFile(params: {
     updatedAt: Date.now(),
     sessionFile,
   };
-  if (baseEntry.sessionId !== sessionId || baseEntry.sessionFile !== sessionFile) {
+  if (
+    baseEntry.sessionId !== sessionId ||
+    baseEntry.sessionFile !== sessionFile
+  ) {
     sessionStore[sessionKey] = persistedEntry;
     await updateSessionStore(
       storePath,
@@ -41,7 +44,9 @@ export async function resolveAndPersistSessionFile(params: {
           ...persistedEntry,
         };
       },
-      params.activeSessionKey ? { activeSessionKey: params.activeSessionKey } : undefined,
+      params.activeSessionKey
+        ? { activeSessionKey: params.activeSessionKey }
+        : undefined,
     );
     return { sessionFile, sessionEntry: persistedEntry };
   }

@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { ensureOwnerDisplaySecret, resolveOwnerDisplaySetting } from "./owner-display.js";
+import {
+  ensureOwnerDisplaySecret,
+  resolveOwnerDisplaySetting,
+} from "./owner-display.js";
 
 describe("resolveOwnerDisplaySetting", () => {
   it("returns keyed hash settings when hash mode has an explicit secret", () => {
@@ -57,9 +60,14 @@ describe("ensureOwnerDisplaySecret", () => {
       },
     } as OpenClawConfig;
 
-    const result = ensureOwnerDisplaySecret(cfg, () => "generated-owner-secret");
+    const result = ensureOwnerDisplaySecret(
+      cfg,
+      () => "generated-owner-secret",
+    );
     expect(result.generatedSecret).toBe("generated-owner-secret");
-    expect(result.config.commands?.ownerDisplaySecret).toBe("generated-owner-secret");
+    expect(result.config.commands?.ownerDisplaySecret).toBe(
+      "generated-owner-secret",
+    );
     expect(result.config.commands?.ownerDisplay).toBe("hash");
   });
 
@@ -71,7 +79,10 @@ describe("ensureOwnerDisplaySecret", () => {
       },
     } as OpenClawConfig;
 
-    const result = ensureOwnerDisplaySecret(cfg, () => "generated-owner-secret");
+    const result = ensureOwnerDisplaySecret(
+      cfg,
+      () => "generated-owner-secret",
+    );
     expect(result.generatedSecret).toBeUndefined();
     expect(result.config).toEqual(cfg);
   });

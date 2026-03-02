@@ -1,5 +1,6 @@
 export function normalizeTelegramAllowFromEntry(raw: unknown): string {
-  const base = typeof raw === "string" ? raw : typeof raw === "number" ? String(raw) : "";
+  const base =
+    typeof raw === "string" ? raw : typeof raw === "number" ? String(raw) : "";
   return base
     .trim()
     .replace(/^(telegram|tg):/i, "")

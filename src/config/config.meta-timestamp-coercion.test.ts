@@ -12,7 +12,9 @@ describe("meta.lastTouchedAt numeric timestamp coercion", () => {
     expect(res.ok).toBe(true);
     if (res.ok) {
       expect(typeof res.config.meta?.lastTouchedAt).toBe("string");
-      expect(res.config.meta?.lastTouchedAt).toBe(new Date(numericTimestamp).toISOString());
+      expect(res.config.meta?.lastTouchedAt).toBe(
+        new Date(numericTimestamp).toISOString(),
+      );
     }
   });
 

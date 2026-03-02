@@ -11,8 +11,14 @@ import {
 } from "../config/sessions/paths.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { stripEnvelope, stripMessageIdHints } from "../shared/chat-envelope.js";
-import { countToolResults, extractToolCallNames } from "../utils/transcript-tools.js";
-import { estimateUsageCost, resolveModelCostConfig } from "../utils/usage-format.js";
+import {
+  countToolResults,
+  extractToolCallNames,
+} from "../utils/transcript-tools.js";
+import {
+  estimateUsageCost,
+  resolveModelCostConfig,
+} from "../utils/usage-format.js";
 import type {
   CostBreakdown,
   CostUsageTotals,
@@ -77,7 +83,9 @@ const toFiniteNumber = (value: unknown): number | undefined => {
   return value;
 };
 
-const extractCostBreakdown = (usageRaw?: UsageLike | null): CostBreakdown | undefined => {
+const extractCostBreakdown = (
+  usageRaw?: UsageLike | null,
+): CostBreakdown | undefined => {
   if (!usageRaw || typeof usageRaw !== "object") {
     return undefined;
   }
@@ -120,20 +128,24 @@ const parseTimestamp = (entry: Record<string, unknown>): Date | undefined => {
   return undefined;
 };
 
-const parseTranscriptEntry = (entry: Record<string, unknown>): ParsedTranscriptEntry | null => {
+const parseTranscriptEntry = (
+  entry: Record<string, unknown>,
+): ParsedTranscriptEntry | null => {
   const message = entry.message as Record<string, unknown> | undefined;
   if (!message || typeof message !== "object") {
     return null;
   }
 
   const roleRaw = message.role;
-  const role = roleRaw === "user" || roleRaw === "assistant" ? roleRaw : undefined;
+  const role =
+    roleRaw === "user" || roleRaw === "assistant" ? roleRaw : undefined;
   if (!role) {
     return null;
   }
 
   const usageRaw =
-    (message.usage as UsageLike | undefined) ?? (entry.usage as UsageLike | undefined);
+    (message.usage as UsageLike | undefined) ??
+    (entry.usage as UsageLike | undefined);
   const usage = usageRaw ? (normalizeUsage(usageRaw) ?? undefined) : undefined;
 
   const provider =
@@ -144,7 +156,8 @@ const parseTranscriptEntry = (entry: Record<string, unknown>): ParsedTranscriptE
     (typeof entry.model === "string" ? entry.model : undefined);
 
   const costBreakdown = extractCostBreakdown(usageRaw);
-  const stopReason = typeof message.stopReason === "string" ? message.stopReason : undefined;
+  const stopReason =
+    typeof message.stopReason === "string" ? message.stopReason : undefined;
   const durationMs = toFiniteNumber(message.durationMs ?? entry.durationMs);
 
   return {
@@ -164,9 +177,13 @@ const parseTranscriptEntry = (entry: Record<string, unknown>): ParsedTranscriptE
 };
 
 const formatDayKey = (date: Date): string =>
-  date.toLocaleDateString("en-CA", { timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone });
+  date.toLocaleDateString("en-CA", {
+    timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+  });
 
-const computeLatencyStats = (values: number[]): SessionLatencyStats | undefined => {
+const computeLatencyStats = (
+  values: number[],
+): SessionLatencyStats | undefined => {
   if (!values.length) {
     return undefined;
   }
@@ -190,11 +207,17 @@ const applyUsageTotals = (totals: CostUsageTotals, usage: NormalizedUsage) => {
   totals.cacheWrite += usage.cacheWrite ?? 0;
   const totalTokens =
     usage.total ??
-    (usage.input ?? 0) + (usage.output ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
+    (usage.input ?? 0) +
+      (usage.output ?? 0) +
+      (usage.cacheRead ?? 0) +
+      (usage.cacheWrite ?? 0);
   totals.totalTokens += totalTokens;
 };
 
-const applyCostBreakdown = (totals: CostUsageTotals, costBreakdown: CostBreakdown | undefined) => {
+const applyCostBreakdown = (
+  totals: CostUsageTotals,
+  costBreakdown: CostBreakdown | undefined,
+) => {
   if (costBreakdown === undefined || costBreakdown.total === undefined) {
     return;
   }
@@ -206,7 +229,10 @@ const applyCostBreakdown = (totals: CostUsageTotals, costBreakdown: CostBreakdow
 };
 
 // Legacy function for backwards compatibility (no cost breakdown available)
-const applyCostTotal = (totals: CostUsageTotals, costTotal: number | undefined) => {
+const applyCostTotal = (
+  totals: CostUsageTotals,
+  costTotal: number | undefined,
+) => {
   if (costTotal === undefined) {
     totals.missingCostEntries += 1;
     return;
@@ -214,9 +240,14 @@ const applyCostTotal = (totals: CostUsageTotals, costTotal: number | undefined) 
   totals.totalCost += costTotal;
 };
 
-async function* readJsonlRecords(filePath: string): AsyncGenerator<Record<string, unknown>> {
+async function* readJsonlRecords(
+  filePath: string,
+): AsyncGenerator<Record<string, unknown>> {
   const fileStream = fs.createReadStream(filePath, { encoding: "utf-8" });
-  const rl = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
+  const rl = readline.createInterface({
+    input: fileStream,
+    crlfDelay: Infinity,
+  });
   try {
     for await (const line of rl) {
       const trimmed = line.trim();
@@ -314,7 +345,9 @@ export async function loadCostUsageSummary(params?: {
   const totals = emptyTotals();
 
   const sessionsDir = resolveSessionTranscriptsDirForAgent(params?.agentId);
-  const entries = await fs.promises.readdir(sessionsDir, { withFileTypes: true }).catch(() => []);
+  const entries = await fs.promises
+    .readdir(sessionsDir, { withFileTypes: true })
+    .catch(() => []);
   const files = (
     await Promise.all(
       entries
@@ -388,7 +421,9 @@ export async function discoverAllSessions(params?: {
   endMs?: number;
 }): Promise<DiscoveredSession[]> {
   const sessionsDir = resolveSessionTranscriptsDirForAgent(params?.agentId);
-  const entries = await fs.promises.readdir(sessionsDir, { withFileTypes: true }).catch(() => []);
+  const entries = await fs.promises
+    .readdir(sessionsDir, { withFileTypes: true })
+    .catch(() => []);
 
   const discovered: DiscoveredSession[] = [];
 
@@ -509,7 +544,11 @@ export async function loadSessionCostSummary(params: {
       const ts = entry.timestamp?.getTime();
 
       // Filter by date range if specified
-      if (params.startMs !== undefined && ts !== undefined && ts < params.startMs) {
+      if (
+        params.startMs !== undefined &&
+        ts !== undefined &&
+        ts < params.startMs
+      ) {
         return;
       }
       if (params.endMs !== undefined && ts !== undefined && ts > params.endMs) {
@@ -539,7 +578,9 @@ export async function loadSessionCostSummary(params: {
         if (ts !== undefined) {
           const latencyMs =
             entry.durationMs ??
-            (lastUserTimestamp !== undefined ? Math.max(0, ts - lastUserTimestamp) : undefined);
+            (lastUserTimestamp !== undefined
+              ? Math.max(0, ts - lastUserTimestamp)
+              : undefined);
           if (
             latencyMs !== undefined &&
             Number.isFinite(latencyMs) &&
@@ -582,7 +623,8 @@ export async function loadSessionCostSummary(params: {
           toolResults: 0,
           errors: 0,
         };
-        daily.total += entry.role === "user" || entry.role === "assistant" ? 1 : 0;
+        daily.total +=
+          entry.role === "user" || entry.role === "assistant" ? 1 : 0;
         if (entry.role === "user") {
           daily.user += 1;
         } else if (entry.role === "assistant") {
@@ -680,7 +722,9 @@ export async function loadSessionCostSummary(params: {
     dailyMessageMap.values(),
   ).toSorted((a, b) => a.date.localeCompare(b.date));
 
-  const dailyLatency: SessionDailyLatency[] = Array.from(dailyLatencyMap.entries())
+  const dailyLatency: SessionDailyLatency[] = Array.from(
+    dailyLatencyMap.entries(),
+  )
     .map(([date, values]) => {
       const stats = computeLatencyStats(values);
       if (!stats) {
@@ -697,7 +741,10 @@ export async function loadSessionCostSummary(params: {
 
   const toolUsage: SessionToolUsage | undefined = toolUsageMap.size
     ? {
-        totalCalls: Array.from(toolUsageMap.values()).reduce((sum, count) => sum + count, 0),
+        totalCalls: Array.from(toolUsageMap.values()).reduce(
+          (sum, count) => sum + count,
+          0,
+        ),
         uniqueTools: toolUsageMap.size,
         tools: Array.from(toolUsageMap.entries())
           .map(([name, count]) => ({ name, count }))
@@ -773,7 +820,8 @@ export async function loadSessionUsageTimeSeries(params: {
       const output = entry.usage.output ?? 0;
       const cacheRead = entry.usage.cacheRead ?? 0;
       const cacheWrite = entry.usage.cacheWrite ?? 0;
-      const totalTokens = entry.usage.total ?? input + output + cacheRead + cacheWrite;
+      const totalTokens =
+        entry.usage.total ?? input + output + cacheRead + cacheWrite;
       const cost = entry.costTotal ?? 0;
 
       cumulativeTokens += totalTokens;
@@ -876,14 +924,22 @@ export async function loadSessionLogs(params: {
       }
 
       const role = message.role as string | undefined;
-      if (role !== "user" && role !== "assistant" && role !== "tool" && role !== "toolResult") {
+      if (
+        role !== "user" &&
+        role !== "assistant" &&
+        role !== "tool" &&
+        role !== "toolResult"
+      ) {
         continue;
       }
 
       const contentParts: string[] = [];
-      const rawToolName = message.toolName ?? message.tool_name ?? message.name ?? message.tool;
+      const rawToolName =
+        message.toolName ?? message.tool_name ?? message.name ?? message.tool;
       const toolName =
-        typeof rawToolName === "string" && rawToolName.trim() ? rawToolName.trim() : undefined;
+        typeof rawToolName === "string" && rawToolName.trim()
+          ? rawToolName.trim()
+          : undefined;
       if (role === "tool" || role === "toolResult") {
         contentParts.push(`[Tool: ${toolName ?? "tool"}]`);
         contentParts.push("[Tool Result]");
@@ -922,7 +978,10 @@ export async function loadSessionLogs(params: {
 
       // OpenAI-style tool calls stored outside the content array.
       const rawToolCalls =
-        message.tool_calls ?? message.toolCalls ?? message.function_call ?? message.functionCall;
+        message.tool_calls ??
+        message.toolCalls ??
+        message.function_call ??
+        message.functionCall;
       const toolCalls = Array.isArray(rawToolCalls)
         ? rawToolCalls
         : rawToolCalls
@@ -931,7 +990,8 @@ export async function loadSessionLogs(params: {
       if (toolCalls.length > 0) {
         for (const call of toolCalls) {
           const callObj = call as Record<string, unknown>;
-          const directName = typeof callObj.name === "string" ? callObj.name : undefined;
+          const directName =
+            typeof callObj.name === "string" ? callObj.name : undefined;
           const fn = callObj.function as Record<string, unknown> | undefined;
           const fnName = typeof fn?.name === "string" ? fn.name : undefined;
           const name = directName ?? fnName ?? "unknown";

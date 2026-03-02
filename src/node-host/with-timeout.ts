@@ -21,7 +21,9 @@ export async function withTimeout<T>(
     ? Promise.reject(abortCtrl.signal.reason ?? timeoutError)
     : new Promise((_, reject) => {
         abortListener = () => reject(abortCtrl.signal.reason ?? timeoutError);
-        abortCtrl.signal.addEventListener("abort", abortListener, { once: true });
+        abortCtrl.signal.addEventListener("abort", abortListener, {
+          once: true,
+        });
       });
 
   try {

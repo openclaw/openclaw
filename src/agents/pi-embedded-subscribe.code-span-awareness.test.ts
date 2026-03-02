@@ -28,7 +28,8 @@ describe("subscribeEmbeddedPiSession thinking tag code span awareness", () => {
     });
 
     expect(onPartialReply).toHaveBeenCalled();
-    const lastCall = onPartialReply.mock.calls[onPartialReply.mock.calls.length - 1];
+    const lastCall =
+      onPartialReply.mock.calls[onPartialReply.mock.calls.length - 1];
     expect(lastCall[0].text).toContain("`<thinking>`");
   });
 
@@ -37,11 +38,13 @@ describe("subscribeEmbeddedPiSession thinking tag code span awareness", () => {
 
     emitAssistantTextDelta({
       emit,
-      delta: "Example:\n  ````\n<thinking>code example</thinking>\n  ````\nDone.",
+      delta:
+        "Example:\n  ````\n<thinking>code example</thinking>\n  ````\nDone.",
     });
 
     expect(onPartialReply).toHaveBeenCalled();
-    const lastCall = onPartialReply.mock.calls[onPartialReply.mock.calls.length - 1];
+    const lastCall =
+      onPartialReply.mock.calls[onPartialReply.mock.calls.length - 1];
     expect(lastCall[0].text).toContain("<thinking>code example</thinking>");
   });
 
@@ -54,7 +57,8 @@ describe("subscribeEmbeddedPiSession thinking tag code span awareness", () => {
     });
 
     expect(onPartialReply).toHaveBeenCalled();
-    const lastCall = onPartialReply.mock.calls[onPartialReply.mock.calls.length - 1];
+    const lastCall =
+      onPartialReply.mock.calls[onPartialReply.mock.calls.length - 1];
     expect(lastCall[0].text).not.toContain("internal thought");
     expect(lastCall[0].text).toContain("Hello");
     expect(lastCall[0].text).toContain("world");

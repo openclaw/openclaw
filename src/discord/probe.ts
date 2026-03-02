@@ -71,7 +71,10 @@ export function resolveDiscordPrivilegedIntentsFromFlags(
     return "disabled";
   };
   return {
-    presence: resolve(DISCORD_APP_FLAG_GATEWAY_PRESENCE, DISCORD_APP_FLAG_GATEWAY_PRESENCE_LIMITED),
+    presence: resolve(
+      DISCORD_APP_FLAG_GATEWAY_PRESENCE,
+      DISCORD_APP_FLAG_GATEWAY_PRESENCE_LIMITED,
+    ),
     guildMembers: resolve(
       DISCORD_APP_FLAG_GATEWAY_GUILD_MEMBERS,
       DISCORD_APP_FLAG_GATEWAY_GUILD_MEMBERS_LIMITED,
@@ -93,12 +96,16 @@ export async function fetchDiscordApplicationSummary(
     return undefined;
   }
   const flags =
-    typeof json.flags === "number" && Number.isFinite(json.flags) ? json.flags : undefined;
+    typeof json.flags === "number" && Number.isFinite(json.flags)
+      ? json.flags
+      : undefined;
   return {
     id: json.id ?? null,
     flags: flags ?? null,
     intents:
-      typeof flags === "number" ? resolveDiscordPrivilegedIntentsFromFlags(flags) : undefined,
+      typeof flags === "number"
+        ? resolveDiscordPrivilegedIntentsFromFlags(flags)
+        : undefined,
   };
 }
 
@@ -152,7 +159,11 @@ export async function probeDiscord(
     };
     if (includeApplication) {
       result.application =
-        (await fetchDiscordApplicationSummary(normalized, timeoutMs, fetcher)) ?? undefined;
+        (await fetchDiscordApplicationSummary(
+          normalized,
+          timeoutMs,
+          fetcher,
+        )) ?? undefined;
     }
     return { ...result, elapsedMs: Date.now() - started };
   } catch (err) {
@@ -183,7 +194,10 @@ export function parseApplicationIdFromToken(token: string): string | undefined {
     return undefined;
   }
   try {
-    const decoded = Buffer.from(normalized.slice(0, firstDot), "base64").toString("utf-8");
+    const decoded = Buffer.from(
+      normalized.slice(0, firstDot),
+      "base64",
+    ).toString("utf-8");
     if (/^\d+$/.test(decoded)) {
       return decoded;
     }

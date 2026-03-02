@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { createMockCronStateForJobs } from "./service.test-harness.js";
-import { recomputeNextRuns, recomputeNextRunsForMaintenance } from "./service/jobs.js";
+import {
+  recomputeNextRuns,
+  recomputeNextRunsForMaintenance,
+} from "./service/jobs.js";
 import type { CronJob } from "./types.js";
 
 /**

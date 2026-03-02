@@ -1,5 +1,9 @@
 import type { GatewayBrowserClient } from "../gateway.ts";
-import type { SessionsUsageResult, CostUsageSummary, SessionUsageTimeSeries } from "../types.ts";
+import type {
+  SessionsUsageResult,
+  CostUsageSummary,
+  SessionUsageTimeSeries,
+} from "../types.ts";
 import type { SessionLogEntry } from "../views/usage.ts";
 
 export type UsageState = {
@@ -30,10 +34,12 @@ type UsageDateInterpretationParams = {
   utcOffset?: string;
 };
 
-const LEGACY_USAGE_DATE_PARAMS_STORAGE_KEY = "openclaw.control.usage.date-params.v1";
+const LEGACY_USAGE_DATE_PARAMS_STORAGE_KEY =
+  "openclaw.control.usage.date-params.v1";
 const LEGACY_USAGE_DATE_PARAMS_DEFAULT_GATEWAY_KEY = "__default__";
 const LEGACY_USAGE_DATE_PARAMS_MODE_RE = /unexpected property ['"]mode['"]/i;
-const LEGACY_USAGE_DATE_PARAMS_OFFSET_RE = /unexpected property ['"]utcoffset['"]/i;
+const LEGACY_USAGE_DATE_PARAMS_OFFSET_RE =
+  /unexpected property ['"]utcoffset['"]/i;
 const LEGACY_USAGE_DATE_PARAMS_INVALID_RE = /invalid sessions\.usage params/i;
 
 let legacyUsageDateParamsCache: Set<string> | null = null;
@@ -59,7 +65,9 @@ function loadLegacyUsageDateParamsCache(): Set<string> {
     if (!raw) {
       return new Set<string>();
     }
-    const parsed = JSON.parse(raw) as { unsupportedGatewayKeys?: unknown } | null;
+    const parsed = JSON.parse(raw) as {
+      unsupportedGatewayKeys?: unknown;
+    } | null;
     if (!parsed || !Array.isArray(parsed.unsupportedGatewayKeys)) {
       return new Set<string>();
     }
@@ -115,7 +123,9 @@ function resolveGatewayCompatibilityKey(state: UsageState): string {
 }
 
 function shouldSendLegacyDateInterpretation(state: UsageState): boolean {
-  return !getLegacyUsageDateParamsCache().has(resolveGatewayCompatibilityKey(state));
+  return !getLegacyUsageDateParamsCache().has(
+    resolveGatewayCompatibilityKey(state),
+  );
 }
 
 function rememberLegacyDateInterpretation(state: UsageState) {
@@ -166,7 +176,11 @@ function toErrorMessage(err: unknown): string {
   if (typeof err === "string") {
     return err;
   }
-  if (err instanceof Error && typeof err.message === "string" && err.message.trim()) {
+  if (
+    err instanceof Error &&
+    typeof err.message === "string" &&
+    err.message.trim()
+  ) {
     return err.message;
   }
   if (err && typeof err === "object") {
@@ -234,10 +248,15 @@ export async function loadUsage(
 
     const includeDateInterpretation = shouldSendLegacyDateInterpretation(state);
     try {
-      const [sessionsRes, costRes] = await runUsageRequests(includeDateInterpretation);
+      const [sessionsRes, costRes] = await runUsageRequests(
+        includeDateInterpretation,
+      );
       applyUsageResults(sessionsRes, costRes);
     } catch (err) {
-      if (includeDateInterpretation && isLegacyDateInterpretationUnsupportedError(err)) {
+      if (
+        includeDateInterpretation &&
+        isLegacyDateInterpretationUnsupportedError(err)
+      ) {
         // Older gateways reject `mode`/`utcOffset` in `sessions.usage`.
         // Remember this per gateway and retry once without those fields.
         rememberLegacyDateInterpretation(state);
@@ -267,7 +286,10 @@ export const __test = {
   },
 };
 
-export async function loadSessionTimeSeries(state: UsageState, sessionKey: string) {
+export async function loadSessionTimeSeries(
+  state: UsageState,
+  sessionKey: string,
+) {
   if (!state.client || !state.connected) {
     return;
   }
@@ -277,7 +299,9 @@ export async function loadSessionTimeSeries(state: UsageState, sessionKey: strin
   state.usageTimeSeriesLoading = true;
   state.usageTimeSeries = null;
   try {
-    const res = await state.client.request("sessions.usage.timeseries", { key: sessionKey });
+    const res = await state.client.request("sessions.usage.timeseries", {
+      key: sessionKey,
+    });
     if (res) {
       state.usageTimeSeries = res as SessionUsageTimeSeries;
     }

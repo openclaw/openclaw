@@ -45,7 +45,10 @@ describe("models-config", () => {
 
         await ensureOpenClawModelsJson({ models: { providers: {} } }, agentDir);
 
-        const [, opts] = fetchMock.mock.calls[0] as [string, { headers?: Record<string, string> }];
+        const [, opts] = fetchMock.mock.calls[0] as [
+          string,
+          { headers?: Record<string, string> },
+        ];
         expect(opts?.headers?.Authorization).toBe("Bearer alpha-token");
       });
     });
@@ -67,12 +70,17 @@ describe("models-config", () => {
         });
 
         const agentDir = resolveOpenClawAgentDir();
-        const raw = await fs.readFile(path.join(agentDir, "models.json"), "utf8");
+        const raw = await fs.readFile(
+          path.join(agentDir, "models.json"),
+          "utf8",
+        );
         const parsed = JSON.parse(raw) as {
           providers: Record<string, { baseUrl?: string }>;
         };
 
-        expect(parsed.providers["github-copilot"]?.baseUrl).toBe("https://copilot.local");
+        expect(parsed.providers["github-copilot"]?.baseUrl).toBe(
+          "https://copilot.local",
+        );
       });
     });
   });
@@ -93,7 +101,11 @@ describe("models-config", () => {
                 "github-copilot:default": {
                   type: "token",
                   provider: "github-copilot",
-                  tokenRef: { source: "env", provider: "default", id: "COPILOT_REF_TOKEN" },
+                  tokenRef: {
+                    source: "env",
+                    provider: "default",
+                    id: "COPILOT_REF_TOKEN",
+                  },
                 },
               },
             },
@@ -104,7 +116,10 @@ describe("models-config", () => {
 
         await ensureOpenClawModelsJson({ models: { providers: {} } }, agentDir);
 
-        const [, opts] = fetchMock.mock.calls[0] as [string, { headers?: Record<string, string> }];
+        const [, opts] = fetchMock.mock.calls[0] as [
+          string,
+          { headers?: Record<string, string> },
+        ];
         expect(opts?.headers?.Authorization).toBe("Bearer token-from-ref-env");
         delete process.env.COPILOT_REF_TOKEN;
       });

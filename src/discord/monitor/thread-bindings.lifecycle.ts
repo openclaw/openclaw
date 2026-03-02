@@ -21,7 +21,10 @@ import {
   setBindingRecord,
   shouldPersistBindingMutations,
 } from "./thread-bindings.state.js";
-import type { ThreadBindingRecord, ThreadBindingTargetKind } from "./thread-bindings.types.js";
+import type {
+  ThreadBindingRecord,
+  ThreadBindingTargetKind,
+} from "./thread-bindings.types.js";
 
 export type AcpThreadBindingReconciliationResult = {
   checked: number;
@@ -46,7 +49,9 @@ function resolveBindingIdsForTargetSession(params: {
   if (!targetSessionKey) {
     return [];
   }
-  const accountId = params.accountId ? normalizeAccountId(params.accountId) : undefined;
+  const accountId = params.accountId
+    ? normalizeAccountId(params.accountId)
+    : undefined;
   return resolveBindingIdsForSession({
     targetSessionKey,
     accountId,
@@ -54,7 +59,9 @@ function resolveBindingIdsForTargetSession(params: {
   });
 }
 
-export function listThreadBindingsForAccount(accountId?: string): ThreadBindingRecord[] {
+export function listThreadBindingsForAccount(
+  accountId?: string,
+): ThreadBindingRecord[] {
   const manager = getThreadBindingManager(accountId);
   if (!manager) {
     return [];
@@ -273,7 +280,9 @@ export function reconcileAcpThreadBindingsOnStartup(params: {
     };
   }
 
-  const acpBindings = manager.listBindings().filter((binding) => binding.targetKind === "acp");
+  const acpBindings = manager
+    .listBindings()
+    .filter((binding) => binding.targetKind === "acp");
   const staleBindings = acpBindings.filter((binding) => {
     const sessionKey = binding.targetSessionKey.trim();
     if (!sessionKey) {

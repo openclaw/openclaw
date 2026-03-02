@@ -8,13 +8,17 @@ import { createOpenAIEmbeddingProviderMock } from "./test-embeddings-mock.js";
 import { createMemoryManagerOrThrow } from "./test-manager.js";
 
 const embedBatch = vi.fn(async (_input: string[]): Promise<number[][]> => []);
-const embedQuery = vi.fn(async (_input: string): Promise<number[]> => [0.2, 0.2, 0.2]);
+const embedQuery = vi.fn(
+  async (_input: string): Promise<number[]> => [0.2, 0.2, 0.2],
+);
 
 vi.mock("./embeddings.js", () => ({
   createEmbeddingProvider: async (_options: unknown) =>
     createOpenAIEmbeddingProviderMock({
       embedQuery: embedQuery as unknown as (input: string) => Promise<number[]>,
-      embedBatch: embedBatch as unknown as (input: string[]) => Promise<number[][]>,
+      embedBatch: embedBatch as unknown as (
+        input: string[],
+      ) => Promise<number[][]>,
     }),
 }));
 
@@ -43,11 +47,18 @@ describe("memory search async sync", () => {
 
   beforeEach(async () => {
     embedBatch.mockClear();
-    embedBatch.mockImplementation(async (input: string[]) => input.map(() => [0.2, 0.2, 0.2]));
-    workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mem-async-"));
+    embedBatch.mockImplementation(async (input: string[]) =>
+      input.map(() => [0.2, 0.2, 0.2]),
+    );
+    workspaceDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-mem-async-"),
+    );
     indexPath = path.join(workspaceDir, "index.sqlite");
     await fs.mkdir(path.join(workspaceDir, "memory"));
-    await fs.writeFile(path.join(workspaceDir, "memory", "2026-01-07.md"), "hello\n");
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "2026-01-07.md"),
+      "hello\n",
+    );
   });
 
   afterEach(async () => {

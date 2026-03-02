@@ -15,7 +15,9 @@ describe("mistralProvider", () => {
   });
 
   it("uses Mistral base URL by default", async () => {
-    const { fetchFn, getRequest } = createRequestCaptureJsonFetch({ text: "bonjour" });
+    const { fetchFn, getRequest } = createRequestCaptureJsonFetch({
+      text: "bonjour",
+    });
 
     const result = await mistralProvider.transcribeAudio!({
       buffer: Buffer.from("audio-bytes"),
@@ -25,12 +27,16 @@ describe("mistralProvider", () => {
       fetchFn,
     });
 
-    expect(getRequest().url).toBe("https://api.mistral.ai/v1/audio/transcriptions");
+    expect(getRequest().url).toBe(
+      "https://api.mistral.ai/v1/audio/transcriptions",
+    );
     expect(result.text).toBe("bonjour");
   });
 
   it("allows overriding baseUrl", async () => {
-    const { fetchFn, getRequest } = createRequestCaptureJsonFetch({ text: "ok" });
+    const { fetchFn, getRequest } = createRequestCaptureJsonFetch({
+      text: "ok",
+    });
 
     await mistralProvider.transcribeAudio!({
       buffer: Buffer.from("audio"),
@@ -41,6 +47,8 @@ describe("mistralProvider", () => {
       fetchFn,
     });
 
-    expect(getRequest().url).toBe("https://custom.mistral.example/v1/audio/transcriptions");
+    expect(getRequest().url).toBe(
+      "https://custom.mistral.example/v1/audio/transcriptions",
+    );
   });
 });

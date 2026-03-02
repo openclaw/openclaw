@@ -5,11 +5,17 @@ export function normalizeContainerPath(value: string): string {
   return normalized === "." ? "/" : normalized;
 }
 
-export function isPathInsideContainerRoot(root: string, target: string): boolean {
+export function isPathInsideContainerRoot(
+  root: string,
+  target: string,
+): boolean {
   const normalizedRoot = normalizeContainerPath(root);
   const normalizedTarget = normalizeContainerPath(target);
   if (normalizedRoot === "/") {
     return true;
   }
-  return normalizedTarget === normalizedRoot || normalizedTarget.startsWith(`${normalizedRoot}/`);
+  return (
+    normalizedTarget === normalizedRoot ||
+    normalizedTarget.startsWith(`${normalizedRoot}/`)
+  );
 }

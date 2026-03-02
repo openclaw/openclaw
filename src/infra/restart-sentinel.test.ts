@@ -66,7 +66,9 @@ describe("restart sentinel", () => {
       ts: Date.now(),
       message: "Config updated successfully",
     };
-    expect(formatRestartSentinelMessage(payload)).toBe("Config updated successfully");
+    expect(formatRestartSentinelMessage(payload)).toBe(
+      "Config updated successfully",
+    );
   });
 
   it("formatRestartSentinelMessage falls back to summary when no message", () => {

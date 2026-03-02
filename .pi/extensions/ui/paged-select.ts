@@ -38,7 +38,9 @@ export async function showPagedSelectList(params: {
     const container = new Container();
 
     container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
-    container.addChild(new Text(theme.fg("accent", theme.bold(params.title)), 0, 0));
+    container.addChild(
+      new Text(theme.fg("accent", theme.bold(params.title)), 0, 0),
+    );
 
     const visibleRows = Math.min(params.items.length, 15);
     let currentIndex = 0;
@@ -58,7 +60,11 @@ export async function showPagedSelectList(params: {
     container.addChild(selectList);
 
     container.addChild(
-      new Text(theme.fg("dim", " ↑↓ navigate • ←→ page • enter open • esc close"), 0, 0),
+      new Text(
+        theme.fg("dim", " ↑↓ navigate • ←→ page • enter open • esc close"),
+        0,
+        0,
+      ),
     );
     container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
 
@@ -70,7 +76,10 @@ export async function showPagedSelectList(params: {
           currentIndex = Math.max(0, currentIndex - visibleRows);
           selectList.setSelectedIndex(currentIndex);
         } else if (matchesKey(data, Key.right)) {
-          currentIndex = Math.min(params.items.length - 1, currentIndex + visibleRows);
+          currentIndex = Math.min(
+            params.items.length - 1,
+            currentIndex + visibleRows,
+          );
           selectList.setSelectedIndex(currentIndex);
         } else {
           selectList.handleInput(data);

@@ -1,7 +1,15 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import { telegramPlugin } from "../../extensions/telegram/src/channel.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -105,12 +113,15 @@ let setTelegramRuntime: typeof import("../../extensions/telegram/src/runtime.js"
 describe("getHealthSnapshot", () => {
   beforeAll(async () => {
     ({ createPluginRuntime } = await import("../plugins/runtime/index.js"));
-    ({ setTelegramRuntime } = await import("../../extensions/telegram/src/runtime.js"));
+    ({ setTelegramRuntime } =
+      await import("../../extensions/telegram/src/runtime.js"));
   });
 
   beforeEach(() => {
     setActivePluginRegistry(
-      createTestRegistry([{ pluginId: "telegram", plugin: telegramPlugin, source: "test" }]),
+      createTestRegistry([
+        { pluginId: "telegram", plugin: telegramPlugin, source: "test" },
+      ]),
     );
     setTelegramRuntime(createPluginRuntime());
   });
@@ -241,7 +252,9 @@ describe("getHealthSnapshot", () => {
     testStore = {};
 
     const snap = await getHealthSnapshot({ timeoutMs: 10, probe: false });
-    const byAgent = new Map(snap.agents.map((agent) => [agent.agentId, agent] as const));
+    const byAgent = new Map(
+      snap.agents.map((agent) => [agent.agentId, agent] as const),
+    );
     const main = byAgent.get("main");
     const ops = byAgent.get("ops");
 

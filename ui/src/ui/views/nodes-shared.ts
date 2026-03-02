@@ -11,7 +11,9 @@ export type ConfigAgentOption = {
   record: Record<string, unknown>;
 };
 
-export function resolveConfigAgents(config: Record<string, unknown> | null): ConfigAgentOption[] {
+export function resolveConfigAgents(
+  config: Record<string, unknown> | null,
+): ConfigAgentOption[] {
   const agentsNode = (config?.agents ?? {}) as Record<string, unknown>;
   const list = Array.isArray(agentsNode.list) ? agentsNode.list : [];
   const agents: ConfigAgentOption[] = [];
@@ -25,7 +27,8 @@ export function resolveConfigAgents(config: Record<string, unknown> | null): Con
     if (!id) {
       return;
     }
-    const name = typeof record.name === "string" ? record.name.trim() : undefined;
+    const name =
+      typeof record.name === "string" ? record.name.trim() : undefined;
     const isDefault = record.default === true;
     agents.push({ id, name: name || undefined, isDefault, index, record });
   });

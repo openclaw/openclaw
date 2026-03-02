@@ -9,7 +9,8 @@ vi.mock("node:child_process", () => ({
   spawn: (...args: unknown[]) => spawnMock(...args),
 }));
 vi.mock("./restart.js", () => ({
-  triggerOpenClawRestart: (...args: unknown[]) => triggerOpenClawRestartMock(...args),
+  triggerOpenClawRestart: (...args: unknown[]) =>
+    triggerOpenClawRestartMock(...args),
 }));
 
 import { restartGatewayProcessWithFreshPid } from "./process-respawn.js";
@@ -17,7 +18,10 @@ import { restartGatewayProcessWithFreshPid } from "./process-respawn.js";
 const originalArgv = [...process.argv];
 const originalExecArgv = [...process.execArgv];
 const envSnapshot = captureFullEnv();
-const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(
+  process,
+  "platform",
+);
 
 function setPlatform(platform: string) {
   if (!originalPlatformDescriptor) {
@@ -65,7 +69,10 @@ describe("restartGatewayProcessWithFreshPid", () => {
     setPlatform("darwin");
     process.env.LAUNCH_JOB_LABEL = "ai.openclaw.gateway";
     process.env.OPENCLAW_LAUNCHD_LABEL = "ai.openclaw.gateway";
-    triggerOpenClawRestartMock.mockReturnValue({ ok: true, method: "launchctl" });
+    triggerOpenClawRestartMock.mockReturnValue({
+      ok: true,
+      method: "launchctl",
+    });
 
     const result = restartGatewayProcessWithFreshPid();
 
@@ -106,7 +113,12 @@ describe("restartGatewayProcessWithFreshPid", () => {
     delete process.env.OPENCLAW_NO_RESPAWN;
     clearSupervisorHints();
     process.execArgv = ["--import", "tsx"];
-    process.argv = ["/usr/local/bin/node", "/repo/dist/index.js", "gateway", "run"];
+    process.argv = [
+      "/usr/local/bin/node",
+      "/repo/dist/index.js",
+      "gateway",
+      "run",
+    ];
     spawnMock.mockReturnValue({ pid: 4242, unref: vi.fn() });
 
     const result = restartGatewayProcessWithFreshPid();
@@ -126,7 +138,10 @@ describe("restartGatewayProcessWithFreshPid", () => {
     clearSupervisorHints();
     setPlatform("darwin");
     process.env.OPENCLAW_LAUNCHD_LABEL = "ai.openclaw.gateway";
-    triggerOpenClawRestartMock.mockReturnValue({ ok: true, method: "launchctl" });
+    triggerOpenClawRestartMock.mockReturnValue({
+      ok: true,
+      method: "launchctl",
+    });
     const result = restartGatewayProcessWithFreshPid();
     expect(result.mode).toBe("supervised");
     expect(triggerOpenClawRestartMock).toHaveBeenCalledOnce();

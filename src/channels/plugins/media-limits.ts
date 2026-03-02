@@ -7,7 +7,10 @@ export function resolveChannelMediaMaxBytes(params: {
   cfg: OpenClawConfig;
   // Channel-specific config lives under different keys; keep this helper generic
   // so shared plugin helpers don't need channel-id branching.
-  resolveChannelLimitMb: (params: { cfg: OpenClawConfig; accountId: string }) => number | undefined;
+  resolveChannelLimitMb: (params: {
+    cfg: OpenClawConfig;
+    accountId: string;
+  }) => number | undefined;
   accountId?: string | null;
 }): number | undefined {
   const accountId = normalizeAccountId(params.accountId);

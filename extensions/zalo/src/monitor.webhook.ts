@@ -31,7 +31,10 @@ export type ZaloWebhookTarget = {
   secret: string;
   path: string;
   mediaMaxMb: number;
-  statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
+  statusSink?: (patch: {
+    lastInboundAt?: number;
+    lastOutboundAt?: number;
+  }) => void;
   fetcher?: ZaloFetch;
 };
 
@@ -198,7 +201,8 @@ export async function handleZaloWebhookRequest(
   const raw = body.value;
 
   // Zalo sends updates directly as { event_name, message, ... }, not wrapped in { ok, result }.
-  const record = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : null;
+  const record =
+    raw && typeof raw === "object" ? (raw as Record<string, unknown>) : null;
   const update: ZaloUpdate | undefined =
     record && record.ok === true && record.result
       ? (record.result as ZaloUpdate)
@@ -219,7 +223,9 @@ export async function handleZaloWebhookRequest(
 
   target.statusSink?.({ lastInboundAt: Date.now() });
   processUpdate({ update, target }).catch((err) => {
-    target.runtime.error?.(`[${target.account.accountId}] Zalo webhook failed: ${String(err)}`);
+    target.runtime.error?.(
+      `[${target.account.accountId}] Zalo webhook failed: ${String(err)}`,
+    );
   });
 
   res.statusCode = 200;

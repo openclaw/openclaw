@@ -48,7 +48,9 @@ export function emitHeartbeatEvent(evt: Omit<HeartbeatEventPayload, "ts">) {
   }
 }
 
-export function onHeartbeatEvent(listener: (evt: HeartbeatEventPayload) => void): () => void {
+export function onHeartbeatEvent(
+  listener: (evt: HeartbeatEventPayload) => void,
+): () => void {
   listeners.add(listener);
   return () => listeners.delete(listener);
 }

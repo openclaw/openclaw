@@ -22,7 +22,10 @@ import {
   removeQueryToken,
   setQueryTokensForKey,
 } from "./usage-query.ts";
-import { renderEmptyDetailState, renderSessionDetailPanel } from "./usage-render-details.ts";
+import {
+  renderEmptyDetailState,
+  renderSessionDetailPanel,
+} from "./usage-render-details.ts";
 import {
   renderCostBreakdownCompact,
   renderDailyChartCompact,
@@ -49,19 +52,32 @@ export function renderUsage(props: UsageProps) {
     return html`
       <style>
         @keyframes initial-spin {
-          to { transform: rotate(360deg); }
+          to {
+            transform: rotate(360deg);
+          }
         }
         @keyframes initial-pulse {
-          0%, 100% { opacity: 1; }
-          50% { opacity: 0.7; }
+          0%,
+          100% {
+            opacity: 1;
+          }
+          50% {
+            opacity: 0.7;
+          }
         }
       </style>
       <section class="card">
-        <div class="row" style="justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 12px;">
+        <div
+          class="row"
+          style="justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 12px;"
+        >
           <div style="flex: 1; min-width: 250px;">
-            <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 2px;">
+            <div
+              style="display: flex; align-items: center; gap: 10px; margin-bottom: 2px;"
+            >
               <div class="card-title" style="margin: 0;">Token Usage</div>
-              <span style="
+              <span
+                style="
                 display: inline-flex;
                 align-items: center;
                 gap: 6px;
@@ -70,24 +86,39 @@ export function renderUsage(props: UsageProps) {
                 border-radius: 4px;
                 font-size: 12px;
                 color: #ff4d4d;
-              ">
-                <span style="
+              "
+              >
+                <span
+                  style="
                   width: 10px;
                   height: 10px;
                   border: 2px solid #ff4d4d;
                   border-top-color: transparent;
                   border-radius: 50%;
                   animation: initial-spin 0.6s linear infinite;
-                "></span>
+                "
+                ></span>
                 Loading
               </span>
             </div>
           </div>
-          <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 8px;">
+          <div
+            style="display: flex; flex-direction: column; align-items: flex-end; gap: 8px;"
+          >
             <div style="display: flex; gap: 8px; align-items: center;">
-              <input type="date" .value=${props.startDate} disabled style="padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); font-size: 13px; opacity: 0.6;" />
+              <input
+                type="date"
+                .value=${props.startDate}
+                disabled
+                style="padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); font-size: 13px; opacity: 0.6;"
+              />
               <span style="color: var(--muted);">to</span>
-              <input type="date" .value=${props.endDate} disabled style="padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); font-size: 13px; opacity: 0.6;" />
+              <input
+                type="date"
+                .value=${props.endDate}
+                disabled
+                style="padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); font-size: 13px; opacity: 0.6;"
+              />
             </div>
           </div>
         </div>
@@ -102,8 +133,12 @@ export function renderUsage(props: UsageProps) {
 
   // Sort sessions by tokens or cost depending on mode
   const sortedSessions = [...props.sessions].toSorted((a, b) => {
-    const valA = isTokenMode ? (a.usage?.totalTokens ?? 0) : (a.usage?.totalCost ?? 0);
-    const valB = isTokenMode ? (b.usage?.totalTokens ?? 0) : (b.usage?.totalCost ?? 0);
+    const valA = isTokenMode
+      ? (a.usage?.totalTokens ?? 0)
+      : (a.usage?.totalCost ?? 0);
+    const valB = isTokenMode
+      ? (b.usage?.totalTokens ?? 0)
+      : (b.usage?.totalCost ?? 0);
     return valB - valA;
   });
 
@@ -112,7 +147,9 @@ export function renderUsage(props: UsageProps) {
     props.selectedDays.length > 0
       ? sortedSessions.filter((s) => {
           if (s.usage?.activityDates?.length) {
-            return s.usage.activityDates.some((d) => props.selectedDays.includes(d));
+            return s.usage.activityDates.some((d) =>
+              props.selectedDays.includes(d),
+            );
           }
           if (!s.updatedAt) {
             return false;
@@ -123,7 +160,10 @@ export function renderUsage(props: UsageProps) {
         })
       : sortedSessions;
 
-  const sessionTouchesHours = (session: UsageSessionEntry, hours: number[]): boolean => {
+  const sessionTouchesHours = (
+    session: UsageSessionEntry,
+    hours: number[],
+  ): boolean => {
     if (hours.length === 0) {
       return true;
     }
@@ -151,7 +191,9 @@ export function renderUsage(props: UsageProps) {
 
   const hourFilteredSessions =
     props.selectedHours.length > 0
-      ? dayFilteredSessions.filter((s) => sessionTouchesHours(s, props.selectedHours))
+      ? dayFilteredSessions.filter((s) =>
+          sessionTouchesHours(s, props.selectedHours),
+        )
       : dayFilteredSessions;
 
   // Filter sessions by query (client-side)
@@ -180,8 +222,14 @@ export function renderUsage(props: UsageProps) {
     }
     return Array.from(set);
   };
-  const agentOptions = unique(sortedSessions.map((s) => s.agentId)).slice(0, 12);
-  const channelOptions = unique(sortedSessions.map((s) => s.channel)).slice(0, 12);
+  const agentOptions = unique(sortedSessions.map((s) => s.agentId)).slice(
+    0,
+    12,
+  );
+  const channelOptions = unique(sortedSessions.map((s) => s.channel)).slice(
+    0,
+    12,
+  );
   const providerOptions = unique([
     ...sortedSessions.map((s) => s.modelProvider),
     ...sortedSessions.map((s) => s.providerOverride),
@@ -191,10 +239,9 @@ export function renderUsage(props: UsageProps) {
     ...sortedSessions.map((s) => s.model),
     ...(props.aggregates?.byModel.map((entry) => entry.model) ?? []),
   ]).slice(0, 12);
-  const toolOptions = unique(props.aggregates?.tools.tools.map((tool) => tool.name) ?? []).slice(
-    0,
-    12,
-  );
+  const toolOptions = unique(
+    props.aggregates?.tools.tools.map((tool) => tool.name) ?? [],
+  ).slice(0, 12);
 
   // Get first selected session for detail view (timeseries, logs)
   const primarySelectedEntry =
@@ -283,7 +330,10 @@ export function renderUsage(props: UsageProps) {
     );
     displayTotals = computeSessionTotals(selectedSessionEntries);
     displaySessionCount = selectedSessionEntries.length;
-  } else if (props.selectedDays.length > 0 && props.selectedHours.length === 0) {
+  } else if (
+    props.selectedDays.length > 0 &&
+    props.selectedHours.length === 0
+  ) {
     // Days selected - use daily aggregates for accurate per-day totals
     displayTotals = computeDailyTotals(props.selectedDays);
     displaySessionCount = filteredSessions.length;
@@ -307,7 +357,10 @@ export function renderUsage(props: UsageProps) {
         : props.selectedDays.length > 0
           ? dayFilteredSessions
           : sortedSessions;
-  const activeAggregates = buildAggregatesFromSessions(aggregateSessions, props.aggregates);
+  const activeAggregates = buildAggregatesFromSessions(
+    aggregateSessions,
+    props.aggregates,
+  );
 
   // Filter daily chart data if sessions are selected
   const filteredDaily =
@@ -328,8 +381,13 @@ export function renderUsage(props: UsageProps) {
         })()
       : props.costDaily;
 
-  const insightStats = buildUsageInsightStats(aggregateSessions, displayTotals, activeAggregates);
-  const isEmpty = !props.loading && !props.totals && props.sessions.length === 0;
+  const insightStats = buildUsageInsightStats(
+    aggregateSessions,
+    displayTotals,
+    activeAggregates,
+  );
+  const isEmpty =
+    !props.loading && !props.totals && props.sessions.length === 0;
   const hasMissingCost =
     (displayTotals?.missingCostEntries ?? 0) > 0 ||
     (displayTotals
@@ -353,14 +411,21 @@ export function renderUsage(props: UsageProps) {
     props.onStartDateChange(formatIsoDate(start));
     props.onEndDateChange(formatIsoDate(end));
   };
-  const renderFilterSelect = (key: string, label: string, options: string[]) => {
+  const renderFilterSelect = (
+    key: string,
+    label: string,
+    options: string[],
+  ) => {
     if (options.length === 0) {
       return nothing;
     }
     const selected = selectedValuesFor(key);
-    const selectedSet = new Set(selected.map((value) => normalizeQueryText(value)));
+    const selectedSet = new Set(
+      selected.map((value) => normalizeQueryText(value)),
+    );
     const allSelected =
-      options.length > 0 && options.every((value) => selectedSet.has(normalizeQueryText(value)));
+      options.length > 0 &&
+      options.every((value) => selectedSet.has(normalizeQueryText(value)));
     const selectedCount = selected.length;
     return html`
       <details
@@ -382,13 +447,9 @@ export function renderUsage(props: UsageProps) {
       >
         <summary>
           <span>${label}</span>
-          ${
-            selectedCount > 0
-              ? html`<span class="usage-filter-badge">${selectedCount}</span>`
-              : html`
-                  <span class="usage-filter-badge">All</span>
-                `
-          }
+          ${selectedCount > 0
+            ? html`<span class="usage-filter-badge">${selectedCount}</span>`
+            : html` <span class="usage-filter-badge">All</span> `}
         </summary>
         <div class="usage-filter-popover">
           <div class="usage-filter-actions">
@@ -397,7 +458,9 @@ export function renderUsage(props: UsageProps) {
               @click=${(e: Event) => {
                 e.preventDefault();
                 e.stopPropagation();
-                props.onQueryDraftChange(setQueryTokensForKey(props.queryDraft, key, options));
+                props.onQueryDraftChange(
+                  setQueryTokensForKey(props.queryDraft, key, options),
+                );
               }}
               ?disabled=${allSelected}
             >
@@ -408,7 +471,9 @@ export function renderUsage(props: UsageProps) {
               @click=${(e: Event) => {
                 e.preventDefault();
                 e.stopPropagation();
-                props.onQueryDraftChange(setQueryTokensForKey(props.queryDraft, key, []));
+                props.onQueryDraftChange(
+                  setQueryTokensForKey(props.queryDraft, key, []),
+                );
               }}
               ?disabled=${selectedCount === 0}
             >
@@ -445,38 +510,38 @@ export function renderUsage(props: UsageProps) {
   const exportStamp = formatIsoDate(new Date());
 
   return html`
-    <style>${usageStylesString}</style>
+    <style>
+      ${usageStylesString}
+    </style>
 
     <section class="usage-page-header">
       <div class="usage-page-title">Usage</div>
-      <div class="usage-page-subtitle">See where tokens go, when sessions spike, and what drives cost.</div>
+      <div class="usage-page-subtitle">
+        See where tokens go, when sessions spike, and what drives cost.
+      </div>
     </section>
 
     <section class="card usage-header ${props.headerPinned ? "pinned" : ""}">
       <div class="usage-header-row">
         <div class="usage-header-title">
           <div class="card-title" style="margin: 0;">Filters</div>
-          ${
-            props.loading
-              ? html`
-                  <span class="usage-refresh-indicator">Loading</span>
-                `
-              : nothing
-          }
-          ${
-            isEmpty
-              ? html`
-                  <span class="usage-query-hint">Select a date range and click Refresh to load usage.</span>
-                `
-              : nothing
-          }
+          ${props.loading
+            ? html` <span class="usage-refresh-indicator">Loading</span> `
+            : nothing}
+          ${isEmpty
+            ? html`
+                <span class="usage-query-hint"
+                  >Select a date range and click Refresh to load usage.</span
+                >
+              `
+            : nothing}
         </div>
         <div class="usage-header-metrics">
-          ${
-            displayTotals
-              ? html`
+          ${displayTotals
+            ? html`
                 <span class="usage-metric-badge">
-                  <strong>${formatTokens(displayTotals.totalTokens)}</strong> tokens
+                  <strong>${formatTokens(displayTotals.totalTokens)}</strong>
+                  tokens
                 </span>
                 <span class="usage-metric-badge">
                   <strong>${formatCost(displayTotals.totalCost)}</strong> cost
@@ -486,8 +551,7 @@ export function renderUsage(props: UsageProps) {
                   session${displaySessionCount !== 1 ? "s" : ""}
                 </span>
               `
-              : nothing
-          }
+            : nothing}
           <button
             class="usage-pin-btn ${props.headerPinned ? "active" : ""}"
             title=${props.headerPinned ? "Unpin filters" : "Pin filters"}
@@ -556,7 +620,8 @@ export function renderUsage(props: UsageProps) {
                       ),
                       "application/json",
                     )}
-                  ?disabled=${filteredSessions.length === 0 && filteredDaily.length === 0}
+                  ?disabled=${filteredSessions.length === 0 &&
+                  filteredDaily.length === 0}
                 >
                   JSON
                 </button>
@@ -580,7 +645,10 @@ export function renderUsage(props: UsageProps) {
           <div class="usage-presets">
             ${datePresets.map(
               (preset) => html`
-                <button class="btn btn-sm" @click=${() => applyPreset(preset.days)}>
+                <button
+                  class="btn btn-sm"
+                  @click=${() => applyPreset(preset.days)}
+                >
                   ${preset.label}
                 </button>
               `,
@@ -590,20 +658,24 @@ export function renderUsage(props: UsageProps) {
             type="date"
             .value=${props.startDate}
             title="Start Date"
-            @change=${(e: Event) => props.onStartDateChange((e.target as HTMLInputElement).value)}
+            @change=${(e: Event) =>
+              props.onStartDateChange((e.target as HTMLInputElement).value)}
           />
           <span style="color: var(--muted);">to</span>
           <input
             type="date"
             .value=${props.endDate}
             title="End Date"
-            @change=${(e: Event) => props.onEndDateChange((e.target as HTMLInputElement).value)}
+            @change=${(e: Event) =>
+              props.onEndDateChange((e.target as HTMLInputElement).value)}
           />
           <select
             title="Time zone"
             .value=${props.timeZone}
             @change=${(e: Event) =>
-              props.onTimeZoneChange((e.target as HTMLSelectElement).value as "local" | "utc")}
+              props.onTimeZoneChange(
+                (e.target as HTMLSelectElement).value as "local" | "utc",
+              )}
           >
             <option value="local">Local</option>
             <option value="utc">UTC</option>
@@ -630,17 +702,17 @@ export function renderUsage(props: UsageProps) {
             Refresh
           </button>
         </div>
-        
       </div>
 
       <div style="margin-top: 12px;">
-          <div class="usage-query-bar">
+        <div class="usage-query-bar">
           <input
             class="usage-query-input"
             type="text"
             .value=${props.queryDraft}
             placeholder="Filter sessions (e.g. key:agent:main:cron* model:gpt-4o has:errors minTokens:2000)"
-            @input=${(e: Event) => props.onQueryDraftChange((e.target as HTMLInputElement).value)}
+            @input=${(e: Event) =>
+              props.onQueryDraftChange((e.target as HTMLInputElement).value)}
             @keydown=${(e: KeyboardEvent) => {
               if (e.key === "Enter") {
                 e.preventDefault();
@@ -656,17 +728,18 @@ export function renderUsage(props: UsageProps) {
             >
               Filter (client-side)
             </button>
-            ${
-              hasDraftQuery || hasQuery
-                ? html`<button class="btn btn-sm usage-action-btn usage-secondary-btn" @click=${props.onClearQuery}>Clear</button>`
-                : nothing
-            }
+            ${hasDraftQuery || hasQuery
+              ? html`<button
+                  class="btn btn-sm usage-action-btn usage-secondary-btn"
+                  @click=${props.onClearQuery}
+                >
+                  Clear
+                </button>`
+              : nothing}
             <span class="usage-query-hint">
-              ${
-                hasQuery
-                  ? `${filteredSessions.length} of ${totalSessions} sessions match`
-                  : `${totalSessions} sessions in range`
-              }
+              ${hasQuery
+                ? `${filteredSessions.length} of ${totalSessions} sessions match`
+                : `${totalSessions} sessions in range`}
             </span>
           </div>
         </div>
@@ -680,76 +753,73 @@ export function renderUsage(props: UsageProps) {
             Tip: use filters or click bars to filter days.
           </span>
         </div>
-        ${
-          queryTerms.length > 0
-            ? html`
-                <div class="usage-query-chips">
-                  ${queryTerms.map((term) => {
-                    const label = term.raw;
-                    return html`
-                      <span class="usage-query-chip">
-                        ${label}
-                        <button
-                          title="Remove filter"
-                          @click=${() =>
-                            props.onQueryDraftChange(removeQueryToken(props.queryDraft, label))}
-                        >
-                          ×
-                        </button>
-                      </span>
-                    `;
-                  })}
-                </div>
-              `
-            : nothing
-        }
-        ${
-          querySuggestions.length > 0
-            ? html`
-                <div class="usage-query-suggestions">
-                  ${querySuggestions.map(
-                    (suggestion) => html`
+        ${queryTerms.length > 0
+          ? html`
+              <div class="usage-query-chips">
+                ${queryTerms.map((term) => {
+                  const label = term.raw;
+                  return html`
+                    <span class="usage-query-chip">
+                      ${label}
                       <button
-                        class="usage-query-suggestion"
+                        title="Remove filter"
                         @click=${() =>
                           props.onQueryDraftChange(
-                            applySuggestionToQuery(props.queryDraft, suggestion.value),
+                            removeQueryToken(props.queryDraft, label),
                           )}
                       >
-                        ${suggestion.label}
+                        ×
                       </button>
-                    `,
-                  )}
-                </div>
-              `
-            : nothing
-        }
-        ${
-          queryWarnings.length > 0
-            ? html`
-                <div class="callout warning" style="margin-top: 8px;">
-                  ${queryWarnings.join(" · ")}
-                </div>
-              `
-            : nothing
-        }
-      </div>
-
-      ${
-        props.error
-          ? html`<div class="callout danger" style="margin-top: 12px;">${props.error}</div>`
-          : nothing
-      }
-
-      ${
-        props.sessionsLimitReached
-          ? html`
-              <div class="callout warning" style="margin-top: 12px">
-                Showing first 1,000 sessions. Narrow date range for complete results.
+                    </span>
+                  `;
+                })}
               </div>
             `
-          : nothing
-      }
+          : nothing}
+        ${querySuggestions.length > 0
+          ? html`
+              <div class="usage-query-suggestions">
+                ${querySuggestions.map(
+                  (suggestion) => html`
+                    <button
+                      class="usage-query-suggestion"
+                      @click=${() =>
+                        props.onQueryDraftChange(
+                          applySuggestionToQuery(
+                            props.queryDraft,
+                            suggestion.value,
+                          ),
+                        )}
+                    >
+                      ${suggestion.label}
+                    </button>
+                  `,
+                )}
+              </div>
+            `
+          : nothing}
+        ${queryWarnings.length > 0
+          ? html`
+              <div class="callout warning" style="margin-top: 8px;">
+                ${queryWarnings.join(" · ")}
+              </div>
+            `
+          : nothing}
+      </div>
+
+      ${props.error
+        ? html`<div class="callout danger" style="margin-top: 12px;">
+            ${props.error}
+          </div>`
+        : nothing}
+      ${props.sessionsLimitReached
+        ? html`
+            <div class="callout warning" style="margin-top: 12px">
+              Showing first 1,000 sessions. Narrow date range for complete
+              results.
+            </div>
+          `
+        : nothing}
     </section>
 
     ${renderUsageInsights(
@@ -761,8 +831,12 @@ export function renderUsage(props: UsageProps) {
       displaySessionCount,
       totalSessions,
     )}
-
-    ${renderUsageMosaic(aggregateSessions, props.timeZone, props.selectedHours, props.onSelectHour)}
+    ${renderUsageMosaic(
+      aggregateSessions,
+      props.timeZone,
+      props.selectedHours,
+      props.onSelectHour,
+    )}
 
     <!-- Two-column layout: Daily+Breakdown on left, Sessions on right -->
     <div class="usage-grid">
@@ -776,7 +850,9 @@ export function renderUsage(props: UsageProps) {
             props.onDailyChartModeChange,
             props.onSelectDay,
           )}
-          ${displayTotals ? renderCostBreakdownCompact(displayTotals, props.chartMode) : nothing}
+          ${displayTotals
+            ? renderCostBreakdownCompact(displayTotals, props.chartMode)
+            : nothing}
         </div>
       </div>
       <div class="usage-grid-right">
@@ -801,43 +877,41 @@ export function renderUsage(props: UsageProps) {
     </div>
 
     <!-- Session Detail Panel (when selected) or Empty State -->
-    ${
-      primarySelectedEntry
-        ? renderSessionDetailPanel(
-            primarySelectedEntry,
-            props.timeSeries,
-            props.timeSeriesLoading,
-            props.timeSeriesMode,
-            props.onTimeSeriesModeChange,
-            props.timeSeriesBreakdownMode,
-            props.onTimeSeriesBreakdownChange,
-            props.timeSeriesCursorStart,
-            props.timeSeriesCursorEnd,
-            props.onTimeSeriesCursorRangeChange,
-            props.startDate,
-            props.endDate,
-            props.selectedDays,
-            props.sessionLogs,
-            props.sessionLogsLoading,
-            props.sessionLogsExpanded,
-            props.onToggleSessionLogsExpanded,
-            {
-              roles: props.logFilterRoles,
-              tools: props.logFilterTools,
-              hasTools: props.logFilterHasTools,
-              query: props.logFilterQuery,
-            },
-            props.onLogFilterRolesChange,
-            props.onLogFilterToolsChange,
-            props.onLogFilterHasToolsChange,
-            props.onLogFilterQueryChange,
-            props.onLogFilterClear,
-            props.contextExpanded,
-            props.onToggleContextExpanded,
-            props.onClearSessions,
-          )
-        : renderEmptyDetailState()
-    }
+    ${primarySelectedEntry
+      ? renderSessionDetailPanel(
+          primarySelectedEntry,
+          props.timeSeries,
+          props.timeSeriesLoading,
+          props.timeSeriesMode,
+          props.onTimeSeriesModeChange,
+          props.timeSeriesBreakdownMode,
+          props.onTimeSeriesBreakdownChange,
+          props.timeSeriesCursorStart,
+          props.timeSeriesCursorEnd,
+          props.onTimeSeriesCursorRangeChange,
+          props.startDate,
+          props.endDate,
+          props.selectedDays,
+          props.sessionLogs,
+          props.sessionLogsLoading,
+          props.sessionLogsExpanded,
+          props.onToggleSessionLogsExpanded,
+          {
+            roles: props.logFilterRoles,
+            tools: props.logFilterTools,
+            hasTools: props.logFilterHasTools,
+            query: props.logFilterQuery,
+          },
+          props.onLogFilterRolesChange,
+          props.onLogFilterToolsChange,
+          props.onLogFilterHasToolsChange,
+          props.onLogFilterQueryChange,
+          props.onLogFilterClear,
+          props.contextExpanded,
+          props.onToggleContextExpanded,
+          props.onClearSessions,
+        )
+      : renderEmptyDetailState()}
   `;
 }
 

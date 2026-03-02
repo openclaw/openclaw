@@ -36,7 +36,9 @@ describe("MemoryIndexManager.readFile", () => {
 
   beforeEach(async () => {
     resetEmbeddingMocks();
-    workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mem-read-"));
+    workspaceDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-mem-read-"),
+    );
     indexPath = path.join(workspaceDir, "index.sqlite");
     await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
   });
@@ -64,7 +66,11 @@ describe("MemoryIndexManager.readFile", () => {
     const relPath = "memory/2026-02-20.md";
     const absPath = path.join(workspaceDir, relPath);
     await fs.mkdir(path.dirname(absPath), { recursive: true });
-    await fs.writeFile(absPath, ["line 1", "line 2", "line 3"].join("\n"), "utf-8");
+    await fs.writeFile(
+      absPath,
+      ["line 1", "line 2", "line 3"].join("\n"),
+      "utf-8",
+    );
 
     manager = await getRequiredMemoryIndexManager({
       cfg: createMemorySearchCfg({ workspaceDir, indexPath }),
@@ -107,7 +113,11 @@ describe("MemoryIndexManager.readFile", () => {
       .spyOn(fs, "readFile")
       .mockImplementation(async (...args: Parameters<typeof realReadFile>) => {
         const [target, options] = args;
-        if (!injected && typeof target === "string" && path.resolve(target) === absPath) {
+        if (
+          !injected &&
+          typeof target === "string" &&
+          path.resolve(target) === absPath
+        ) {
           injected = true;
           const err = new Error("missing") as NodeJS.ErrnoException;
           err.code = "ENOENT";

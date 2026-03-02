@@ -24,7 +24,10 @@ export type TwitchMonitorOptions = {
   config: unknown; // OpenClawConfig
   runtime: TwitchRuntimeEnv;
   abortSignal: AbortSignal;
-  statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
+  statusSink?: (patch: {
+    lastInboundAt?: number;
+    lastOutboundAt?: number;
+  }) => void;
 };
 
 export type TwitchMonitorResult = {
@@ -43,9 +46,13 @@ async function processTwitchMessage(params: {
   config: unknown;
   runtime: TwitchRuntimeEnv;
   core: TwitchCoreRuntime;
-  statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
+  statusSink?: (patch: {
+    lastInboundAt?: number;
+    lastOutboundAt?: number;
+  }) => void;
 }): Promise<void> {
-  const { message, account, accountId, config, runtime, core, statusSink } = params;
+  const { message, account, accountId, config, runtime, core, statusSink } =
+    params;
   const cfg = config as OpenClawConfig;
 
   const route = core.channel.routing.resolveAgentRoute({
@@ -147,9 +154,13 @@ async function deliverTwitchReply(params: {
   config: unknown;
   tableMode: "off" | "plain" | "markdown" | "bullets" | "code";
   runtime: TwitchRuntimeEnv;
-  statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
+  statusSink?: (patch: {
+    lastInboundAt?: number;
+    lastOutboundAt?: number;
+  }) => void;
 }): Promise<void> {
-  const { payload, channel, account, accountId, config, runtime, statusSink } = params;
+  const { payload, channel, account, accountId, config, runtime, statusSink } =
+    params;
 
   try {
     const clientManager = getOrCreateClientManager(accountId, {
@@ -192,7 +203,8 @@ async function deliverTwitchReply(params: {
 export async function monitorTwitchProvider(
   options: TwitchMonitorOptions,
 ): Promise<TwitchMonitorResult> {
-  const { account, accountId, config, runtime, abortSignal, statusSink } = options;
+  const { account, accountId, config, runtime, abortSignal, statusSink } =
+    options;
 
   const core = getTwitchRuntime();
   let stopped = false;

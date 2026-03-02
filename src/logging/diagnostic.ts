@@ -36,7 +36,10 @@ export function resolveStuckSessionWarnMs(config?: OpenClawConfig): number {
     return DEFAULT_STUCK_SESSION_WARN_MS;
   }
   const rounded = Math.floor(raw);
-  if (rounded < MIN_STUCK_SESSION_WARN_MS || rounded > MAX_STUCK_SESSION_WARN_MS) {
+  if (
+    rounded < MIN_STUCK_SESSION_WARN_MS ||
+    rounded > MAX_STUCK_SESSION_WARN_MS
+  ) {
     return DEFAULT_STUCK_SESSION_WARN_MS;
   }
   return rounded;
@@ -151,7 +154,10 @@ export function logMessageProcessed(params: {
   reason?: string;
   error?: string;
 }) {
-  const wantsLog = params.outcome === "error" ? diag.isEnabled("error") : diag.isEnabled("debug");
+  const wantsLog =
+    params.outcome === "error"
+      ? diag.isEnabled("error")
+      : diag.isEnabled("debug");
   if (wantsLog) {
     const payload = `message processed: channel=${params.channel} chatId=${
       params.chatId ?? "unknown"
@@ -218,7 +224,9 @@ export function logSessionStateChange(
   markActivity();
 }
 
-export function logSessionStuck(params: SessionRef & { state: SessionStateValue; ageMs: number }) {
+export function logSessionStuck(
+  params: SessionRef & { state: SessionStateValue; ageMs: number },
+) {
   const state = getDiagnosticSessionState(params);
   diag.warn(
     `stuck session: sessionId=${state.sessionId ?? "unknown"} sessionKey=${
@@ -246,8 +254,14 @@ export function logLaneEnqueue(lane: string, queueSize: number) {
   markActivity();
 }
 
-export function logLaneDequeue(lane: string, waitMs: number, queueSize: number) {
-  diag.debug(`lane dequeue: lane=${lane} waitMs=${waitMs} queueSize=${queueSize}`);
+export function logLaneDequeue(
+  lane: string,
+  waitMs: number,
+  queueSize: number,
+) {
+  diag.debug(
+    `lane dequeue: lane=${lane} waitMs=${waitMs} queueSize=${queueSize}`,
+  );
   emitDiagnosticEvent({
     type: "queue.lane.dequeue",
     lane,
@@ -257,7 +271,9 @@ export function logLaneDequeue(lane: string, waitMs: number, queueSize: number) 
   markActivity();
 }
 
-export function logRunAttempt(params: SessionRef & { runId: string; attempt: number }) {
+export function logRunAttempt(
+  params: SessionRef & { runId: string; attempt: number },
+) {
   diag.debug(
     `run attempt: sessionId=${params.sessionId ?? "unknown"} sessionKey=${
       params.sessionKey ?? "unknown"
@@ -278,7 +294,11 @@ export function logToolLoopAction(
     toolName: string;
     level: "warning" | "critical";
     action: "warn" | "block";
-    detector: "generic_repeat" | "known_poll_no_progress" | "global_circuit_breaker" | "ping_pong";
+    detector:
+      | "generic_repeat"
+      | "known_poll_no_progress"
+      | "global_circuit_breaker"
+      | "ping_pong";
     count: number;
     message: string;
     pairedToolName?: string;
@@ -316,7 +336,9 @@ export function logActiveRuns() {
       ([id, s]) =>
         `${id}(q=${s.queueDepth},age=${Math.round((Date.now() - s.lastActivity) / 1000)}s)`,
     );
-  diag.debug(`active runs: count=${activeSessions.length} sessions=[${activeSessions.join(", ")}]`);
+  diag.debug(
+    `active runs: count=${activeSessions.length} sessions=[${activeSessions.join(", ")}]`,
+  );
   markActivity();
 }
 
@@ -357,7 +379,11 @@ export function startDiagnosticHeartbeat(config?: OpenClawConfig) {
     if (!hasActivity) {
       return;
     }
-    if (now - lastActivityAt > 120_000 && activeCount === 0 && waitingCount === 0) {
+    if (
+      now - lastActivityAt > 120_000 &&
+      activeCount === 0 &&
+      waitingCount === 0
+    ) {
       return;
     }
 

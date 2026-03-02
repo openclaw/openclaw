@@ -15,7 +15,9 @@ export type SessionStoreTarget = {
   storePath: string;
 };
 
-function dedupeTargetsByStorePath(targets: SessionStoreTarget[]): SessionStoreTarget[] {
+function dedupeTargetsByStorePath(
+  targets: SessionStoreTarget[],
+): SessionStoreTarget[] {
   const deduped = new Map<string, SessionStoreTarget>();
   for (const target of targets) {
     if (!deduped.has(target.storePath)) {
@@ -75,7 +77,9 @@ export function resolveSessionStoreTargets(
   return [
     {
       agentId: defaultAgentId,
-      storePath: resolveStorePath(cfg.session?.store, { agentId: defaultAgentId }),
+      storePath: resolveStorePath(cfg.session?.store, {
+        agentId: defaultAgentId,
+      }),
     },
   ];
 }
@@ -88,7 +92,9 @@ export function resolveSessionStoreTargetsOrExit(params: {
   try {
     return resolveSessionStoreTargets(params.cfg, params.opts);
   } catch (error) {
-    params.runtime.error(error instanceof Error ? error.message : String(error));
+    params.runtime.error(
+      error instanceof Error ? error.message : String(error),
+    );
     params.runtime.exit(1);
     return null;
   }

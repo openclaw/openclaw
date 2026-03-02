@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { markdownToSignalTextChunks } from "./format.js";
 
-function expectChunkStyleRangesInBounds(chunks: ReturnType<typeof markdownToSignalTextChunks>) {
+function expectChunkStyleRangesInBounds(
+  chunks: ReturnType<typeof markdownToSignalTextChunks>,
+) {
   for (const chunk of chunks) {
     for (const style of chunk.styles) {
       expect(style.start).toBeGreaterThanOrEqual(0);
@@ -100,7 +102,9 @@ describe("splitSignalFormattedText", () => {
       expect(chunks.length).toBeGreaterThan(1);
 
       // Both chunks should have BOLD styles if the span was split
-      const chunksWithBold = chunks.filter((c) => c.styles.some((s) => s.style === "BOLD"));
+      const chunksWithBold = chunks.filter((c) =>
+        c.styles.some((s) => s.style === "BOLD"),
+      );
       // At least one chunk should have the bold style
       expect(chunksWithBold.length).toBeGreaterThanOrEqual(1);
 
@@ -108,7 +112,9 @@ describe("splitSignalFormattedText", () => {
       for (const chunk of chunksWithBold) {
         for (const style of chunk.styles.filter((s) => s.style === "BOLD")) {
           expect(style.start).toBeGreaterThanOrEqual(0);
-          expect(style.start + style.length).toBeLessThanOrEqual(chunk.text.length);
+          expect(style.start + style.length).toBeLessThanOrEqual(
+            chunk.text.length,
+          );
         }
       }
     });
@@ -122,14 +128,18 @@ describe("splitSignalFormattedText", () => {
       expect(chunks.length).toBeGreaterThan(1);
 
       // Find chunk with bold
-      const chunkWithBold = chunks.find((c) => c.styles.some((s) => s.style === "BOLD"));
+      const chunkWithBold = chunks.find((c) =>
+        c.styles.some((s) => s.style === "BOLD"),
+      );
       expect(chunkWithBold).toBeDefined();
 
       // Verify the bold style is valid within its chunk
       const boldStyle = chunkWithBold!.styles.find((s) => s.style === "BOLD");
       expect(boldStyle).toBeDefined();
       expect(boldStyle!.start).toBeGreaterThanOrEqual(0);
-      expect(boldStyle!.start + boldStyle!.length).toBeLessThanOrEqual(chunkWithBold!.text.length);
+      expect(boldStyle!.start + boldStyle!.length).toBeLessThanOrEqual(
+        chunkWithBold!.text.length,
+      );
     });
 
     it("style ending exactly at split point stays entirely in first chunk", () => {
@@ -142,7 +152,9 @@ describe("splitSignalFormattedText", () => {
       if (firstChunk.text.includes("bold")) {
         const boldStyle = firstChunk.styles.find((s) => s.style === "BOLD");
         expect(boldStyle).toBeDefined();
-        expect(boldStyle!.start + boldStyle!.length).toBeLessThanOrEqual(firstChunk.text.length);
+        expect(boldStyle!.start + boldStyle!.length).toBeLessThanOrEqual(
+          firstChunk.text.length,
+        );
       }
     });
 
@@ -209,18 +221,25 @@ describe("splitSignalFormattedText", () => {
       }
 
       // Find chunk(s) with bold style
-      const chunksWithBold = chunks.filter((c) => c.styles.some((s) => s.style === "BOLD"));
+      const chunksWithBold = chunks.filter((c) =>
+        c.styles.some((s) => s.style === "BOLD"),
+      );
       expect(chunksWithBold.length).toBeGreaterThanOrEqual(1);
 
       // The bold style should correctly cover "bold word" (or part of it if split)
       // and NOT incorrectly point to the first "word" in the text
       for (const chunk of chunksWithBold) {
         for (const style of chunk.styles.filter((s) => s.style === "BOLD")) {
-          const styledText = chunk.text.slice(style.start, style.start + style.length);
+          const styledText = chunk.text.slice(
+            style.start,
+            style.start + style.length,
+          );
           // The styled text should be part of "bold word", not the initial "word"
           expect(styledText).toMatch(/^(bold( word)?|word)$/);
           expect(style.start).toBeGreaterThanOrEqual(0);
-          expect(style.start + style.length).toBeLessThanOrEqual(chunk.text.length);
+          expect(style.start + style.length).toBeLessThanOrEqual(
+            chunk.text.length,
+          );
         }
       }
     });
@@ -236,7 +255,9 @@ describe("splitSignalFormattedText", () => {
       for (const chunk of chunks) {
         for (const style of chunk.styles) {
           expect(style.start).toBeGreaterThanOrEqual(0);
-          expect(style.start + style.length).toBeLessThanOrEqual(chunk.text.length);
+          expect(style.start + style.length).toBeLessThanOrEqual(
+            chunk.text.length,
+          );
         }
       }
     });
@@ -246,7 +267,8 @@ describe("splitSignalFormattedText", () => {
       // which can fail when chunkText trims whitespace or when duplicates exist.
       // Create text with lots of whitespace and repeated patterns.
       const limit = 25;
-      const markdown = "aaa   **bold**   aaa   **bold**   aaa extra text to force split";
+      const markdown =
+        "aaa   **bold**   aaa   **bold**   aaa extra text to force split";
       const chunks = markdownToSignalTextChunks(markdown, limit);
 
       // Multiple chunks expected
@@ -261,10 +283,15 @@ describe("splitSignalFormattedText", () => {
       for (const chunk of chunks) {
         for (const style of chunk.styles) {
           expect(style.start).toBeGreaterThanOrEqual(0);
-          expect(style.start + style.length).toBeLessThanOrEqual(chunk.text.length);
+          expect(style.start + style.length).toBeLessThanOrEqual(
+            chunk.text.length,
+          );
           // The styled text at that position should actually be "bold"
           if (style.style === "BOLD") {
-            const styledText = chunk.text.slice(style.start, style.start + style.length);
+            const styledText = chunk.text.slice(
+              style.start,
+              style.start + style.length,
+            );
             expect(styledText).toBe("bold");
           }
         }
@@ -374,10 +401,14 @@ describe("markdownToSignalTextChunks", () => {
       }
 
       // Spoiler style should exist and be valid
-      const chunkWithSpoiler = chunks.find((c) => c.styles.some((s) => s.style === "SPOILER"));
+      const chunkWithSpoiler = chunks.find((c) =>
+        c.styles.some((s) => s.style === "SPOILER"),
+      );
       expect(chunkWithSpoiler).toBeDefined();
 
-      const spoilerStyle = chunkWithSpoiler!.styles.find((s) => s.style === "SPOILER");
+      const spoilerStyle = chunkWithSpoiler!.styles.find(
+        (s) => s.style === "SPOILER",
+      );
       expect(spoilerStyle).toBeDefined();
       expect(spoilerStyle!.start).toBeGreaterThanOrEqual(0);
       expect(spoilerStyle!.start + spoilerStyle!.length).toBeLessThanOrEqual(

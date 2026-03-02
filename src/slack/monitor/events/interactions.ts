@@ -131,7 +131,10 @@ function truncateInteractionString(
   return `${trimmed.slice(0, max - 1)}…`;
 }
 
-function sanitizeSlackInteractionPayloadValue(value: unknown, key?: string): unknown {
+function sanitizeSlackInteractionPayloadValue(
+  value: unknown,
+  key?: string,
+): unknown {
   if (value === undefined) {
     return undefined;
   }
@@ -150,7 +153,9 @@ function sanitizeSlackInteractionPayloadValue(value: unknown, key?: string): unk
       .map((entry) => sanitizeSlackInteractionPayloadValue(entry))
       .filter((entry) => entry !== undefined);
     if (value.length > SLACK_INTERACTION_ARRAY_MAX_ITEMS) {
-      sanitized.push(`…+${value.length - SLACK_INTERACTION_ARRAY_MAX_ITEMS} more`);
+      sanitized.push(
+        `…+${value.length - SLACK_INTERACTION_ARRAY_MAX_ITEMS} more`,
+      );
     }
     return sanitized;
   }
@@ -158,8 +163,13 @@ function sanitizeSlackInteractionPayloadValue(value: unknown, key?: string): unk
     return value;
   }
   const output: Record<string, unknown> = {};
-  for (const [entryKey, entryValue] of Object.entries(value as Record<string, unknown>)) {
-    const sanitized = sanitizeSlackInteractionPayloadValue(entryValue, entryKey);
+  for (const [entryKey, entryValue] of Object.entries(
+    value as Record<string, unknown>,
+  )) {
+    const sanitized = sanitizeSlackInteractionPayloadValue(
+      entryValue,
+      entryKey,
+    );
     if (sanitized === undefined) {
       continue;
     }
@@ -231,12 +241,16 @@ function buildCompactSlackInteractionPayload(
   };
 }
 
-function formatSlackInteractionSystemEvent(payload: Record<string, unknown>): string {
+function formatSlackInteractionSystemEvent(
+  payload: Record<string, unknown>,
+): string {
   const toEventText = (value: Record<string, unknown>): string =>
     `${SLACK_INTERACTION_EVENT_PREFIX}${JSON.stringify(value)}`;
 
   const sanitizedPayload =
-    (sanitizeSlackInteractionPayloadValue(payload) as Record<string, unknown> | undefined) ?? {};
+    (sanitizeSlackInteractionPayloadValue(payload) as
+      | Record<string, unknown>
+      | undefined) ?? {};
   let eventText = toEventText(sanitizedPayload);
   if (eventText.length <= SLACK_INTERACTION_EVENT_MAX_CHARS) {
     return eventText;
@@ -264,8 +278,15 @@ function readOptionValues(options: unknown): string[] | undefined {
     return undefined;
   }
   const values = options
-    .map((option) => (option && typeof option === "object" ? (option as SelectOption).value : null))
-    .filter((value): value is string => typeof value === "string" && value.trim().length > 0);
+    .map((option) =>
+      option && typeof option === "object"
+        ? (option as SelectOption).value
+        : null,
+    )
+    .filter(
+      (value): value is string =>
+        typeof value === "string" && value.trim().length > 0,
+    );
   return values.length > 0 ? values : undefined;
 }
 
@@ -275,9 +296,14 @@ function readOptionLabels(options: unknown): string[] | undefined {
   }
   const labels = options
     .map((option) =>
-      option && typeof option === "object" ? ((option as SelectOption).text?.text ?? null) : null,
+      option && typeof option === "object"
+        ? ((option as SelectOption).text?.text ?? null)
+        : null,
     )
-    .filter((label): label is string => typeof label === "string" && label.trim().length > 0);
+    .filter(
+      (label): label is string =>
+        typeof label === "string" && label.trim().length > 0,
+    );
   return labels.length > 0 ? labels : undefined;
 }
 
@@ -368,7 +394,9 @@ function summarizeAction(
   ]);
   const selectedConversations = uniqueNonEmptyStrings([
     ...(typed.selected_conversation ? [typed.selected_conversation] : []),
-    ...(Array.isArray(typed.selected_conversations) ? typed.selected_conversations : []),
+    ...(Array.isArray(typed.selected_conversations)
+      ? typed.selected_conversations
+      : []),
   ]);
   const selectedValues = uniqueNonEmptyStrings([
     ...(typed.selected_option?.value ? [typed.selected_option.value] : []),
@@ -378,15 +406,21 @@ function summarizeAction(
     ...selectedConversations,
   ]);
   const selectedLabels = uniqueNonEmptyStrings([
-    ...(typed.selected_option?.text?.text ? [typed.selected_option.text.text] : []),
+    ...(typed.selected_option?.text?.text
+      ? [typed.selected_option.text.text]
+      : []),
     ...(readOptionLabels(typed.selected_options) ?? []),
   ]);
   const inputValue = typeof typed.value === "string" ? typed.value : undefined;
   const inputNumber =
-    actionType === "number_input" && inputValue != null ? Number.parseFloat(inputValue) : undefined;
+    actionType === "number_input" && inputValue != null
+      ? Number.parseFloat(inputValue)
+      : undefined;
   const parsedNumber = Number.isFinite(inputNumber) ? inputNumber : undefined;
   const inputEmail =
-    actionType === "email_text_input" && inputValue?.includes("@") ? inputValue : undefined;
+    actionType === "email_text_input" && inputValue?.includes("@")
+      ? inputValue
+      : undefined;
   let inputUrl: string | undefined;
   if (actionType === "url_text_input" && inputValue) {
     try {
@@ -396,7 +430,8 @@ function summarizeAction(
       inputUrl = undefined;
     }
   }
-  const richTextValue = actionType === "rich_text_input" ? typed.rich_text_value : undefined;
+  const richTextValue =
+    actionType === "rich_text_input" ? typed.rich_text_value : undefined;
   const richTextPreview = summarizeRichTextPreview(richTextValue);
   const inputKind =
     actionType === "number_input"
@@ -417,13 +452,17 @@ function summarizeAction(
     value: typed.value,
     selectedValues: selectedValues.length > 0 ? selectedValues : undefined,
     selectedUsers: selectedUsers.length > 0 ? selectedUsers : undefined,
-    selectedChannels: selectedChannels.length > 0 ? selectedChannels : undefined,
-    selectedConversations: selectedConversations.length > 0 ? selectedConversations : undefined,
+    selectedChannels:
+      selectedChannels.length > 0 ? selectedChannels : undefined,
+    selectedConversations:
+      selectedConversations.length > 0 ? selectedConversations : undefined,
     selectedLabels: selectedLabels.length > 0 ? selectedLabels : undefined,
     selectedDate: typed.selected_date,
     selectedTime: typed.selected_time,
     selectedDateTime:
-      typeof typed.selected_date_time === "number" ? typed.selected_date_time : undefined,
+      typeof typed.selected_date_time === "number"
+        ? typed.selected_date_time
+        : undefined,
     inputValue,
     inputNumber: parsedNumber,
     inputEmail,
@@ -440,7 +479,10 @@ function isBulkActionsBlock(block: InteractionMessageBlock): boolean {
     block.type === "actions" &&
     Array.isArray(block.elements) &&
     block.elements.length > 0 &&
-    block.elements.every((el) => typeof el.action_id === "string" && el.action_id.includes("_all_"))
+    block.elements.every(
+      (el) =>
+        typeof el.action_id === "string" && el.action_id.includes("_all_"),
+    )
   );
 }
 
@@ -499,15 +541,21 @@ function summarizeViewState(values: unknown): ModalInputSummary[] {
     return [];
   }
   const entries: ModalInputSummary[] = [];
-  for (const [blockId, blockValue] of Object.entries(values as Record<string, unknown>)) {
+  for (const [blockId, blockValue] of Object.entries(
+    values as Record<string, unknown>,
+  )) {
     if (!blockValue || typeof blockValue !== "object") {
       continue;
     }
-    for (const [actionId, rawAction] of Object.entries(blockValue as Record<string, unknown>)) {
+    for (const [actionId, rawAction] of Object.entries(
+      blockValue as Record<string, unknown>,
+    )) {
       if (!rawAction || typeof rawAction !== "object") {
         continue;
       }
-      const actionSummary = summarizeAction(rawAction as Record<string, unknown>);
+      const actionSummary = summarizeAction(
+        rawAction as Record<string, unknown>,
+      );
       entries.push({
         blockId,
         actionId,
@@ -574,7 +622,9 @@ function resolveSlackModalEventBase(params: {
   ctx: SlackMonitorContext;
   body: SlackModalBody;
 }): SlackModalEventBase {
-  const metadata = parseSlackModalPrivateMetadata(params.body.view?.private_metadata);
+  const metadata = parseSlackModalPrivateMetadata(
+    params.body.view?.private_metadata,
+  );
   const callbackId = params.body.view?.callback_id ?? "unknown";
   const userId = params.body.user?.id ?? "unknown";
   const viewId = params.body.view?.id;
@@ -615,11 +665,17 @@ async function emitSlackModalLifecycleEvent(params: {
   interactionType: SlackModalInteractionKind;
   contextPrefix: "slack:interaction:view" | "slack:interaction:view-closed";
 }): Promise<void> {
-  const { callbackId, userId, expectedUserId, viewId, sessionRouting, payload } =
-    resolveSlackModalEventBase({
-      ctx: params.ctx,
-      body: params.body,
-    });
+  const {
+    callbackId,
+    userId,
+    expectedUserId,
+    viewId,
+    sessionRouting,
+    payload,
+  } = resolveSlackModalEventBase({
+    ctx: params.ctx,
+    body: params.body,
+  });
   const isViewClosed = params.interactionType === "view_closed";
   const isCleared = params.body.is_cleared === true;
   const eventPayload = isViewClosed
@@ -666,7 +722,9 @@ async function emitSlackModalLifecycleEvent(params: {
 
   enqueueSystemEvent(formatSlackInteractionSystemEvent(eventPayload), {
     sessionKey: sessionRouting.sessionKey,
-    contextKey: [params.contextPrefix, callbackId, viewId, userId].filter(Boolean).join(":"),
+    contextKey: [params.contextPrefix, callbackId, viewId, userId]
+      .filter(Boolean)
+      .join(":"),
   });
 }
 
@@ -677,24 +735,29 @@ function registerModalLifecycleHandler(params: {
   interactionType: SlackModalInteractionKind;
   contextPrefix: "slack:interaction:view" | "slack:interaction:view-closed";
 }) {
-  params.register(params.matcher, async ({ ack, body }: SlackModalEventHandlerArgs) => {
-    await ack();
-    if (params.ctx.shouldDropMismatchedSlackEvent?.(body)) {
-      params.ctx.runtime.log?.(
-        `slack:interaction drop ${params.interactionType} payload (mismatched app/team)`,
-      );
-      return;
-    }
-    await emitSlackModalLifecycleEvent({
-      ctx: params.ctx,
-      body: body as SlackModalBody,
-      interactionType: params.interactionType,
-      contextPrefix: params.contextPrefix,
-    });
-  });
+  params.register(
+    params.matcher,
+    async ({ ack, body }: SlackModalEventHandlerArgs) => {
+      await ack();
+      if (params.ctx.shouldDropMismatchedSlackEvent?.(body)) {
+        params.ctx.runtime.log?.(
+          `slack:interaction drop ${params.interactionType} payload (mismatched app/team)`,
+        );
+        return;
+      }
+      await emitSlackModalLifecycleEvent({
+        ctx: params.ctx,
+        body: body as SlackModalBody,
+        interactionType: params.interactionType,
+        contextPrefix: params.contextPrefix,
+      });
+    },
+  );
 }
 
-export function registerSlackInteractionEvents(params: { ctx: SlackMonitorContext }) {
+export function registerSlackInteractionEvents(params: {
+  ctx: SlackMonitorContext;
+}) {
   const { ctx } = params;
   if (typeof ctx.app.action !== "function") {
     return;
@@ -713,14 +776,20 @@ export function registerSlackInteractionEvents(params: { ctx: SlackMonitorContex
         trigger_id?: string;
         response_url?: string;
         channel?: { id?: string };
-        container?: { channel_id?: string; message_ts?: string; thread_ts?: string };
+        container?: {
+          channel_id?: string;
+          message_ts?: string;
+          thread_ts?: string;
+        };
         message?: { ts?: string; text?: string; blocks?: unknown[] };
       };
 
       // Acknowledge the action immediately to prevent the warning icon
       await ack();
       if (ctx.shouldDropMismatchedSlackEvent?.(body)) {
-        ctx.runtime.log?.("slack:interaction drop block action payload (mismatched app/team)");
+        ctx.runtime.log?.(
+          "slack:interaction drop block action payload (mismatched app/team)",
+        );
         return;
       }
 
@@ -746,8 +815,10 @@ export function registerSlackInteractionEvents(params: { ctx: SlackMonitorContex
           : "unknown";
       const blockId = typedActionWithText.block_id;
       const userId = typedBody.user?.id ?? "unknown";
-      const channelId = typedBody.channel?.id ?? typedBody.container?.channel_id;
-      const messageTs = typedBody.message?.ts ?? typedBody.container?.message_ts;
+      const channelId =
+        typedBody.channel?.id ?? typedBody.container?.channel_id;
+      const messageTs =
+        typedBody.message?.ts ?? typedBody.container?.message_ts;
       const threadTs = typedBody.container?.thread_ts;
       const auth = await authorizeSlackSystemEventSender({
         ctx,
@@ -798,7 +869,12 @@ export function registerSlackInteractionEvents(params: { ctx: SlackMonitorContex
       });
 
       // Build context key - only include defined values to avoid "unknown" noise
-      const contextParts = ["slack:interaction", channelId, messageTs, actionId].filter(Boolean);
+      const contextParts = [
+        "slack:interaction",
+        channelId,
+        messageTs,
+        actionId,
+      ].filter(Boolean);
       const contextKey = contextParts.join(":");
 
       enqueueSystemEvent(formatSlackInteractionSystemEvent(eventPayload), {
@@ -828,7 +904,10 @@ export function registerSlackInteractionEvents(params: { ctx: SlackMonitorContex
             elements: [
               {
                 type: "mrkdwn",
-                text: formatInteractionConfirmationText({ selectedLabel, userId }),
+                text: formatInteractionConfirmationText({
+                  selectedLabel,
+                  userId,
+                }),
               },
             ],
           };
@@ -850,7 +929,9 @@ export function registerSlackInteractionEvents(params: { ctx: SlackMonitorContex
           if (typedBlock.type !== "divider") {
             return true;
           }
-          const next = updatedBlocks[index + 1] as InteractionMessageBlock | undefined;
+          const next = updatedBlocks[index + 1] as
+            | InteractionMessageBlock
+            | undefined;
           return !next || !isBulkActionsBlock(next);
         });
       }

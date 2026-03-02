@@ -5,7 +5,10 @@
 
 const ZALO_API_BASE = "https://bot-api.zaloplatforms.com";
 
-export type ZaloFetch = (input: string, init?: RequestInit) => Promise<Response>;
+export type ZaloFetch = (
+  input: string,
+  init?: RequestInit,
+) => Promise<Response>;
 
 export type ZaloApiResponse<T = unknown> = {
   ok: boolean;
@@ -136,7 +139,10 @@ export async function getMe(
   timeoutMs?: number,
   fetcher?: ZaloFetch,
 ): Promise<ZaloApiResponse<ZaloBotInfo>> {
-  return callZaloApi<ZaloBotInfo>("getMe", token, undefined, { timeoutMs, fetch: fetcher });
+  return callZaloApi<ZaloBotInfo>("getMe", token, undefined, {
+    timeoutMs,
+    fetch: fetcher,
+  });
 }
 
 /**
@@ -147,7 +153,9 @@ export async function sendMessage(
   params: ZaloSendMessageParams,
   fetcher?: ZaloFetch,
 ): Promise<ZaloApiResponse<ZaloMessage>> {
-  return callZaloApi<ZaloMessage>("sendMessage", token, params, { fetch: fetcher });
+  return callZaloApi<ZaloMessage>("sendMessage", token, params, {
+    fetch: fetcher,
+  });
 }
 
 /**
@@ -158,7 +166,9 @@ export async function sendPhoto(
   params: ZaloSendPhotoParams,
   fetcher?: ZaloFetch,
 ): Promise<ZaloApiResponse<ZaloMessage>> {
-  return callZaloApi<ZaloMessage>("sendPhoto", token, params, { fetch: fetcher });
+  return callZaloApi<ZaloMessage>("sendPhoto", token, params, {
+    fetch: fetcher,
+  });
 }
 
 /**
@@ -173,7 +183,10 @@ export async function getUpdates(
   const pollTimeoutSec = params?.timeout ?? 30;
   const timeoutMs = (pollTimeoutSec + 5) * 1000;
   const body = { timeout: String(pollTimeoutSec) };
-  return callZaloApi<ZaloUpdate>("getUpdates", token, body, { timeoutMs, fetch: fetcher });
+  return callZaloApi<ZaloUpdate>("getUpdates", token, body, {
+    timeoutMs,
+    fetch: fetcher,
+  });
 }
 
 /**
@@ -194,7 +207,9 @@ export async function deleteWebhook(
   token: string,
   fetcher?: ZaloFetch,
 ): Promise<ZaloApiResponse<boolean>> {
-  return callZaloApi<boolean>("deleteWebhook", token, undefined, { fetch: fetcher });
+  return callZaloApi<boolean>("deleteWebhook", token, undefined, {
+    fetch: fetcher,
+  });
 }
 
 /**
@@ -203,6 +218,8 @@ export async function deleteWebhook(
 export async function getWebhookInfo(
   token: string,
   fetcher?: ZaloFetch,
-): Promise<ZaloApiResponse<{ url?: string; has_custom_certificate?: boolean }>> {
+): Promise<
+  ZaloApiResponse<{ url?: string; has_custom_certificate?: boolean }>
+> {
   return callZaloApi("getWebhookInfo", token, undefined, { fetch: fetcher });
 }

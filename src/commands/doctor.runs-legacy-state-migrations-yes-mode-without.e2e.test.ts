@@ -23,10 +23,12 @@ describe("doctor command", () => {
     const { doctorCommand, runtime, runLegacyStateMigrations } =
       await arrangeLegacyStateMigrationTest();
 
-    await (doctorCommand as (runtime: unknown, opts: Record<string, unknown>) => Promise<void>)(
-      runtime,
-      { yes: true },
-    );
+    await (
+      doctorCommand as (
+        runtime: unknown,
+        opts: Record<string, unknown>,
+      ) => Promise<void>
+    )(runtime, { yes: true });
 
     expect(runLegacyStateMigrations).toHaveBeenCalledTimes(1);
     expect(confirm).not.toHaveBeenCalled();
@@ -36,10 +38,12 @@ describe("doctor command", () => {
     const { doctorCommand, runtime, runLegacyStateMigrations } =
       await arrangeLegacyStateMigrationTest();
 
-    await (doctorCommand as (runtime: unknown, opts: Record<string, unknown>) => Promise<void>)(
-      runtime,
-      { nonInteractive: true },
-    );
+    await (
+      doctorCommand as (
+        runtime: unknown,
+        opts: Record<string, unknown>,
+      ) => Promise<void>
+    )(runtime, { nonInteractive: true });
 
     expect(runLegacyStateMigrations).toHaveBeenCalledTimes(1);
     expect(confirm).not.toHaveBeenCalled();
@@ -87,8 +91,12 @@ describe("doctor command", () => {
 
     await doctorCommand(createDoctorRuntime(), { yes: true });
 
-    const written = writeConfigFile.mock.calls.at(-1)?.[0] as Record<string, unknown>;
-    const profiles = (written.auth as { profiles: Record<string, unknown> }).profiles;
+    const written = writeConfigFile.mock.calls.at(-1)?.[0] as Record<
+      string,
+      unknown
+    >;
+    const profiles = (written.auth as { profiles: Record<string, unknown> })
+      .profiles;
     expect(profiles["anthropic:me@example.com"]).toBeTruthy();
     expect(profiles["anthropic:default"]).toBeUndefined();
   }, 30_000);

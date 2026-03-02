@@ -18,7 +18,8 @@ import {
 const { monitorSlackProvider } = await import("./monitor.js");
 
 const slackTestState = getSlackTestState();
-const { sendMock, replyMock, reactMock, upsertPairingRequestMock } = slackTestState;
+const { sendMock, replyMock, reactMock, upsertPairingRequestMock } =
+  slackTestState;
 
 beforeEach(() => {
   resetInboundDedupe();
@@ -37,7 +38,9 @@ describe("monitorSlackProvider tool results", () => {
     parent_user_id?: string;
   };
 
-  function makeSlackMessageEvent(overrides: Partial<SlackMessageEvent> = {}): SlackMessageEvent {
+  function makeSlackMessageEvent(
+    overrides: Partial<SlackMessageEvent> = {},
+  ): SlackMessageEvent {
     return {
       type: "message",
       user: "U1",
@@ -88,7 +91,10 @@ describe("monitorSlackProvider tool results", () => {
     };
   }
 
-  async function runDirectMessageEvent(ts: string, extraEvent: Record<string, unknown> = {}) {
+  async function runDirectMessageEvent(
+    ts: string,
+    extraEvent: Record<string, unknown> = {},
+  ) {
     await runSlackMessageOnce(monitorSlackProvider, {
       event: makeSlackMessageEvent({ ts, ...extraEvent }),
     });
@@ -234,7 +240,8 @@ describe("monitorSlackProvider tool results", () => {
       },
     };
 
-    let capturedCtx: { Body?: string; RawBody?: string; CommandBody?: string } = {};
+    let capturedCtx: { Body?: string; RawBody?: string; CommandBody?: string } =
+      {};
     replyMock.mockImplementation(async (ctx: unknown) => {
       capturedCtx = ctx ?? {};
       return undefined;
@@ -342,7 +349,9 @@ describe("monitorSlackProvider tool results", () => {
 
   it("updates assistant thread status when replies start", async () => {
     replyMock.mockImplementation(async (...args: unknown[]) => {
-      const opts = (args[1] ?? {}) as { onReplyStart?: () => Promise<void> | void };
+      const opts = (args[1] ?? {}) as {
+        onReplyStart?: () => Promise<void> | void;
+      };
       await opts?.onReplyStart?.();
       return { text: "final reply" };
     });
@@ -371,7 +380,9 @@ describe("monitorSlackProvider tool results", () => {
     });
   });
 
-  async function expectMentionPatternMessageAccepted(text: string): Promise<void> {
+  async function expectMentionPatternMessageAccepted(
+    text: string,
+  ): Promise<void> {
     setRequireMentionChannelConfig(["\\bopenclaw\\b"]);
     replyMock.mockResolvedValue({ text: "hi" });
 
@@ -683,7 +694,9 @@ describe("monitorSlackProvider tool results", () => {
           channels: { C1: { allow: true, requireMention: false } },
         },
       },
-      bindings: [{ agentId: "support", match: { channel: "slack", teamId: "T1" } }],
+      bindings: [
+        { agentId: "support", match: { channel: "slack", teamId: "T1" } },
+      ],
     };
 
     const client = getSlackClient();
@@ -706,7 +719,9 @@ describe("monitorSlackProvider tool results", () => {
       SessionKey?: string;
       ParentSessionKey?: string;
     };
-    expect(ctx.SessionKey).toBe("agent:support:slack:channel:c1:thread:111.222");
+    expect(ctx.SessionKey).toBe(
+      "agent:support:slack:channel:c1:thread:111.222",
+    );
     expect(ctx.ParentSessionKey).toBeUndefined();
   });
 

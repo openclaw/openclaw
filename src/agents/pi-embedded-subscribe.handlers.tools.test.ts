@@ -10,8 +10,14 @@ import type {
   ToolHandlerContext,
 } from "./pi-embedded-subscribe.handlers.types.js";
 
-type ToolExecutionStartEvent = Extract<AgentEvent, { type: "tool_execution_start" }>;
-type ToolExecutionEndEvent = Extract<AgentEvent, { type: "tool_execution_end" }>;
+type ToolExecutionStartEvent = Extract<
+  AgentEvent,
+  { type: "tool_execution_start" }
+>;
+type ToolExecutionEndEvent = Extract<
+  AgentEvent,
+  { type: "tool_execution_end" }
+>;
 
 function createTestContext(): {
   ctx: ToolHandlerContext;
@@ -86,7 +92,9 @@ describe("handleToolExecutionStart read path checks", () => {
     await handleToolExecutionStart(ctx, evt);
 
     expect(warn).toHaveBeenCalledTimes(1);
-    expect(String(warn.mock.calls[0]?.[0] ?? "")).toContain("read tool called without path");
+    expect(String(warn.mock.calls[0]?.[0] ?? "")).toContain(
+      "read tool called without path",
+    );
   });
 
   it("awaits onBlockReplyFlush before continuing tool start processing", async () => {
@@ -183,12 +191,19 @@ describe("messaging tool media URL tracking", () => {
       type: "tool_execution_start",
       toolName: "message",
       toolCallId: "tool-m1",
-      args: { action: "send", to: "channel:123", content: "hi", media: "file:///img.jpg" },
+      args: {
+        action: "send",
+        to: "channel:123",
+        content: "hi",
+        media: "file:///img.jpg",
+      },
     };
 
     await handleToolExecutionStart(ctx, evt);
 
-    expect(ctx.state.pendingMessagingMediaUrls.get("tool-m1")).toEqual(["file:///img.jpg"]);
+    expect(ctx.state.pendingMessagingMediaUrls.get("tool-m1")).toEqual([
+      "file:///img.jpg",
+    ]);
   });
 
   it("commits pending media URL on tool success", async () => {
@@ -199,7 +214,12 @@ describe("messaging tool media URL tracking", () => {
       type: "tool_execution_start",
       toolName: "message",
       toolCallId: "tool-m2",
-      args: { action: "send", to: "channel:123", content: "hi", media: "file:///img.jpg" },
+      args: {
+        action: "send",
+        to: "channel:123",
+        content: "hi",
+        media: "file:///img.jpg",
+      },
     };
 
     await handleToolExecutionStart(ctx, startEvt);
@@ -286,7 +306,12 @@ describe("messaging tool media URL tracking", () => {
       type: "tool_execution_start",
       toolName: "message",
       toolCallId: "tool-cap",
-      args: { action: "send", to: "channel:123", content: "hi", media: "file:///img-new.jpg" },
+      args: {
+        action: "send",
+        to: "channel:123",
+        content: "hi",
+        media: "file:///img-new.jpg",
+      },
     };
     await handleToolExecutionStart(ctx, startEvt);
 
@@ -302,8 +327,12 @@ describe("messaging tool media URL tracking", () => {
     // Should be capped at 200, oldest removed, newest appended.
     expect(ctx.state.messagingToolSentMediaUrls).toHaveLength(200);
     expect(ctx.state.messagingToolSentMediaUrls[0]).toBe("file:///img-1.jpg");
-    expect(ctx.state.messagingToolSentMediaUrls[199]).toBe("file:///img-new.jpg");
-    expect(ctx.state.messagingToolSentMediaUrls).not.toContain("file:///img-0.jpg");
+    expect(ctx.state.messagingToolSentMediaUrls[199]).toBe(
+      "file:///img-new.jpg",
+    );
+    expect(ctx.state.messagingToolSentMediaUrls).not.toContain(
+      "file:///img-0.jpg",
+    );
   });
 
   it("discards pending media URL on tool error", async () => {
@@ -313,7 +342,12 @@ describe("messaging tool media URL tracking", () => {
       type: "tool_execution_start",
       toolName: "message",
       toolCallId: "tool-m3",
-      args: { action: "send", to: "channel:123", content: "hi", media: "file:///img.jpg" },
+      args: {
+        action: "send",
+        to: "channel:123",
+        content: "hi",
+        media: "file:///img.jpg",
+      },
     };
 
     await handleToolExecutionStart(ctx, startEvt);

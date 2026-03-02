@@ -1,4 +1,7 @@
-import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
+import {
+  resolveAgentDir,
+  resolveSessionAgentId,
+} from "../../agents/agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { resolveModelAuthLabel } from "../../agents/model-auth-label.js";
 import { loadModelCatalog } from "../../agents/model-catalog.js";
@@ -35,7 +38,9 @@ export type ModelsProviderData = {
  * Build provider/model data from config and catalog.
  * Exported for reuse by callback handlers.
  */
-export async function buildModelsProviderData(cfg: OpenClawConfig): Promise<ModelsProviderData> {
+export async function buildModelsProviderData(
+  cfg: OpenClawConfig,
+): Promise<ModelsProviderData> {
   const resolvedDefault = resolveConfiguredModelRef({
     cfg,
     defaultProvider: DEFAULT_PROVIDER,
@@ -120,7 +125,10 @@ export async function buildModelsProviderData(cfg: OpenClawConfig): Promise<Mode
   return { byProvider, providers, resolvedDefault };
 }
 
-function formatProviderLine(params: { provider: string; count: number }): string {
+function formatProviderLine(params: {
+  provider: string;
+  count: number;
+}): string {
   return `- ${params.provider} (${params.count})`;
 }
 
@@ -254,7 +262,10 @@ export async function resolveModelsCommandReply(params: {
     const lines: string[] = [
       "Providers:",
       ...providers.map((p) =>
-        formatProviderLine({ provider: p, count: byProvider.get(p)?.size ?? 0 }),
+        formatProviderLine({
+          provider: p,
+          count: byProvider.get(p)?.size ?? 0,
+        }),
       ),
       "",
       "Use: /models <provider>",
@@ -275,7 +286,9 @@ export async function resolveModelsCommandReply(params: {
     return { text: lines.join("\n") };
   }
 
-  const models = [...(byProvider.get(provider) ?? new Set<string>())].toSorted();
+  const models = [
+    ...(byProvider.get(provider) ?? new Set<string>()),
+  ].toSorted();
   const total = models.length;
   const providerLabel = resolveProviderLabel({
     provider,
@@ -324,7 +337,8 @@ export async function resolveModelsCommandReply(params: {
 
   // Text fallback for non-Telegram surfaces
   const effectivePageSize = all ? total : pageSize;
-  const pageCount = effectivePageSize > 0 ? Math.ceil(total / effectivePageSize) : 1;
+  const pageCount =
+    effectivePageSize > 0 ? Math.ceil(total / effectivePageSize) : 1;
   const safePage = all ? 1 : Math.max(1, Math.min(page, pageCount));
 
   if (!all && page !== safePage) {
@@ -360,7 +374,10 @@ export async function resolveModelsCommandReply(params: {
   return payload;
 }
 
-export const handleModelsCommand: CommandHandler = async (params, allowTextCommands) => {
+export const handleModelsCommand: CommandHandler = async (
+  params,
+  allowTextCommands,
+) => {
   if (!allowTextCommands) {
     return null;
   }
@@ -385,7 +402,9 @@ export const handleModelsCommand: CommandHandler = async (params, allowTextComma
     cfg: params.cfg,
     commandBodyNormalized,
     surface: params.ctx.Surface,
-    currentModel: params.model ? `${params.provider}/${params.model}` : undefined,
+    currentModel: params.model
+      ? `${params.provider}/${params.model}`
+      : undefined,
     agentDir: modelsAgentDir,
     sessionEntry: params.sessionEntry,
   });

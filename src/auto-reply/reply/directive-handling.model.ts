@@ -24,7 +24,10 @@ import {
   resolveProviderEndpointLabel,
 } from "./directive-handling.model-picker.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
-import { type ModelDirectiveSelection, resolveModelDirectiveSelection } from "./model-selection.js";
+import {
+  type ModelDirectiveSelection,
+  resolveModelDirectiveSelection,
+} from "./model-selection.js";
 
 function pushUniqueCatalogEntry(params: {
   keys: Set<string>;
@@ -68,7 +71,10 @@ function buildModelPickerCatalog(params: {
     const out: ModelPickerCatalogEntry[] = [];
     const keys = new Set<string>();
 
-    const pushRef = (ref: { provider: string; model: string }, name?: string) => {
+    const pushRef = (
+      ref: { provider: string; model: string },
+      name?: string,
+    ) => {
       pushUniqueCatalogEntry({
         keys,
         out,
@@ -99,7 +105,9 @@ function buildModelPickerCatalog(params: {
 
     const modelConfig = params.cfg.agents?.defaults?.model;
     const modelFallbacks =
-      modelConfig && typeof modelConfig === "object" ? (modelConfig.fallbacks ?? []) : [];
+      modelConfig && typeof modelConfig === "object"
+        ? (modelConfig.fallbacks ?? [])
+        : [];
     for (const fallback of modelFallbacks) {
       pushRaw(String(fallback ?? ""));
     }
@@ -133,7 +141,8 @@ function buildModelPickerCatalog(params: {
     });
   };
 
-  const hasAllowlist = Object.keys(params.cfg.agents?.defaults?.models ?? {}).length > 0;
+  const hasAllowlist =
+    Object.keys(params.cfg.agents?.defaults?.models ?? {}).length > 0;
   if (!hasAllowlist) {
     for (const entry of params.allowedModelCatalog) {
       push({
@@ -310,7 +319,9 @@ export async function maybeHandleModelDirectiveInfo(params: {
   const defaultLabel = `${params.defaultProvider}/${params.defaultModel}`;
   const lines = [
     `Current: ${current}${modelRefs.activeDiffers ? " (selected)" : ""}`,
-    modelRefs.activeDiffers ? `Active: ${modelRefs.active.label} (runtime)` : null,
+    modelRefs.activeDiffers
+      ? `Active: ${modelRefs.active.label} (runtime)`
+      : null,
     `Default: ${defaultLabel}`,
     `Agent: ${params.activeAgentId}`,
     `Auth file: ${formatPath(resolveAuthStorePathForDisplay(params.agentDir))}`,
@@ -346,7 +357,8 @@ export async function maybeHandleModelDirectiveInfo(params: {
     for (const entry of models) {
       const label = `${provider}/${entry.id}`;
       const aliases = params.aliasIndex.byKey.get(label);
-      const aliasSuffix = aliases && aliases.length > 0 ? ` (${aliases.join(", ")})` : "";
+      const aliasSuffix =
+        aliases && aliases.length > 0 ? ` (${aliases.join(", ")})` : "";
       lines.push(`  • ${label}${aliasSuffix}`);
     }
   }
@@ -368,7 +380,10 @@ export function resolveModelSelectionFromDirective(params: {
   profileOverride?: string;
   errorText?: string;
 } {
-  if (!params.directives.hasModelDirective || !params.directives.rawModelDirective) {
+  if (
+    !params.directives.hasModelDirective ||
+    !params.directives.rawModelDirective
+  ) {
     if (params.directives.rawModelProfile) {
       return { errorText: "Auth profile override requires a model selection." };
     }
@@ -396,7 +411,10 @@ export function resolveModelSelectionFromDirective(params: {
   });
   if (explicit) {
     const explicitKey = modelKey(explicit.ref.provider, explicit.ref.model);
-    if (params.allowedModelKeys.size === 0 || params.allowedModelKeys.has(explicitKey)) {
+    if (
+      params.allowedModelKeys.size === 0 ||
+      params.allowedModelKeys.has(explicitKey)
+    ) {
       modelSelection = {
         provider: explicit.ref.provider,
         model: explicit.ref.model,

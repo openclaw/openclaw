@@ -1,13 +1,20 @@
 import { formatCliCommand } from "../../cli/command-format.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { canonicalizeMainSessionAlias, resolveAgentMainSessionKey } from "../../config/sessions.js";
+import {
+  canonicalizeMainSessionAlias,
+  resolveAgentMainSessionKey,
+} from "../../config/sessions.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { expandToolGroups } from "../tool-policy.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
 import { resolveSandboxToolPolicyForAgent } from "./tool-policy.js";
 import type { SandboxConfig, SandboxToolPolicyResolved } from "./types.js";
 
-function shouldSandboxSession(cfg: SandboxConfig, sessionKey: string, mainSessionKey: string) {
+function shouldSandboxSession(
+  cfg: SandboxConfig,
+  sessionKey: string,
+  mainSessionKey: string,
+) {
   if (cfg.mode === "off") {
     return false;
   }
@@ -119,7 +126,9 @@ export function formatSandboxToolPolicyBlockedMessage(params: {
   }
 
   const lines: string[] = [];
-  lines.push(`Tool "${tool}" blocked by sandbox tool policy (mode=${runtime.mode}).`);
+  lines.push(
+    `Tool "${tool}" blocked by sandbox tool policy (mode=${runtime.mode}).`,
+  );
   lines.push(`Session: ${runtime.sessionKey || "(unknown)"}`);
   lines.push(`Reason: ${reasons.join(" + ")}`);
   lines.push("Fix:");

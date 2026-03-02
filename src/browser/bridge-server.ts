@@ -2,7 +2,10 @@ import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import express from "express";
 import { isLoopbackHost } from "../gateway/net.js";
-import { deleteBridgeAuthForPort, setBridgeAuthForPort } from "./bridge-auth-registry.js";
+import {
+  deleteBridgeAuthForPort,
+  setBridgeAuthForPort,
+} from "./bridge-auth-registry.js";
 import type { ResolvedBrowserConfig } from "./config.js";
 import { registerBrowserRoutes } from "./routes/index.js";
 import type { BrowserRouteRegistrar } from "./routes/types.js";
@@ -76,11 +79,15 @@ export async function startBrowserBridgeServer(params: {
 
   if (params.resolveSandboxNoVncToken) {
     app.get("/sandbox/novnc", (req, res) => {
-      res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+      res.setHeader(
+        "Cache-Control",
+        "no-store, no-cache, must-revalidate, proxy-revalidate",
+      );
       res.setHeader("Pragma", "no-cache");
       res.setHeader("Expires", "0");
       res.setHeader("Referrer-Policy", "no-referrer");
-      const rawToken = typeof req.query?.token === "string" ? req.query.token.trim() : "";
+      const rawToken =
+        typeof req.query?.token === "string" ? req.query.token.trim() : "";
       if (!rawToken) {
         res.status(400).send("Missing token");
         return;
@@ -97,9 +104,14 @@ export async function startBrowserBridgeServer(params: {
   const authToken = params.authToken?.trim() || undefined;
   const authPassword = params.authPassword?.trim() || undefined;
   if (!authToken && !authPassword) {
-    throw new Error("bridge server requires auth (authToken/authPassword missing)");
+    throw new Error(
+      "bridge server requires auth (authToken/authPassword missing)",
+    );
   }
-  installBrowserAuthMiddleware(app, { token: authToken, password: authPassword });
+  installBrowserAuthMiddleware(app, {
+    token: authToken,
+    password: authPassword,
+  });
 
   const state: BrowserServerState = {
     server: null as unknown as Server,
@@ -125,7 +137,10 @@ export async function startBrowserBridgeServer(params: {
   state.port = resolvedPort;
   state.resolved.controlPort = resolvedPort;
 
-  setBridgeAuthForPort(resolvedPort, { token: authToken, password: authPassword });
+  setBridgeAuthForPort(resolvedPort, {
+    token: authToken,
+    password: authPassword,
+  });
 
   const baseUrl = `http://${host}:${resolvedPort}`;
   return { server, port: resolvedPort, baseUrl, state };

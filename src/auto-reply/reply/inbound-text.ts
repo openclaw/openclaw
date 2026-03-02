@@ -5,7 +5,8 @@ export function normalizeInboundTextNewlines(input: string): string {
   return input.replaceAll("\r\n", "\n").replaceAll("\r", "\n");
 }
 
-const BRACKETED_SYSTEM_TAG_RE = /\[\s*(System\s*Message|System|Assistant|Internal)\s*\]/gi;
+const BRACKETED_SYSTEM_TAG_RE =
+  /\[\s*(System\s*Message|System|Assistant|Internal)\s*\]/gi;
 const LINE_SYSTEM_PREFIX_RE = /^(\s*)System:(?=\s|$)/gim;
 
 /**

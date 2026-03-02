@@ -26,7 +26,9 @@ test("exec disposes PTY listeners after normal exit", async () => {
       listener("ok");
       return { dispose: disposeData };
     },
-    onExit: (listener: (event: { exitCode: number; signal?: number }) => void) => {
+    onExit: (
+      listener: (event: { exitCode: number; signal?: number }) => void,
+    ) => {
       listener({ exitCode: 0 });
       return { dispose: disposeExit };
     },
@@ -52,7 +54,9 @@ test("exec disposes PTY listeners after normal exit", async () => {
 test("exec tears down PTY resources on timeout", async () => {
   const disposeData = vi.fn();
   const disposeExit = vi.fn();
-  let exitListener: ((event: { exitCode: number; signal?: number }) => void) | undefined;
+  let exitListener:
+    | ((event: { exitCode: number; signal?: number }) => void)
+    | undefined;
   const kill = vi.fn(() => {
     // Mirror real PTY behavior: process exits shortly after force-kill.
     exitListener?.({ exitCode: 137, signal: 9 });
@@ -62,7 +66,9 @@ test("exec tears down PTY resources on timeout", async () => {
     pid: 0,
     write: vi.fn(),
     onData: () => ({ dispose: disposeData }),
-    onExit: (listener: (event: { exitCode: number; signal?: number }) => void) => {
+    onExit: (
+      listener: (event: { exitCode: number; signal?: number }) => void,
+    ) => {
       exitListener = listener;
       return { dispose: disposeExit };
     },

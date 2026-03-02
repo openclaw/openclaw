@@ -59,7 +59,8 @@ async function sendIMessageOutbound(params: {
   replyToId?: string;
 }) {
   const send =
-    params.deps?.sendIMessage ?? getIMessageRuntime().channel.imessage.sendMessageIMessage;
+    params.deps?.sendIMessage ??
+    getIMessageRuntime().channel.imessage.sendMessageIMessage;
   const maxBytes = resolveChannelMediaMaxBytes({
     cfg: params.cfg,
     resolveChannelLimitMb: ({ cfg, accountId }) =>
@@ -86,7 +87,10 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount> = {
   pairing: {
     idLabel: "imessageSenderId",
     notifyApproval: async ({ id }) => {
-      await getIMessageRuntime().channel.imessage.sendMessageIMessage(id, PAIRING_APPROVED_MESSAGE);
+      await getIMessageRuntime().channel.imessage.sendMessageIMessage(
+        id,
+        PAIRING_APPROVED_MESSAGE,
+      );
     },
   },
   capabilities: {
@@ -97,7 +101,8 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount> = {
   configSchema: buildChannelConfigSchema(IMessageConfigSchema),
   config: {
     listAccountIds: (cfg) => listIMessageAccountIds(cfg),
-    resolveAccount: (cfg, accountId) => resolveIMessageAccount({ cfg, accountId }),
+    resolveAccount: (cfg, accountId) =>
+      resolveIMessageAccount({ cfg, accountId }),
     defaultAccountId: (cfg) => resolveDefaultIMessageAccountId(cfg),
     setAccountEnabled: ({ cfg, accountId, enabled }) =>
       setAccountEnabledInConfigSection({
@@ -121,14 +126,20 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount> = {
       enabled: account.enabled,
       configured: account.configured,
     }),
-    resolveAllowFrom: ({ cfg, accountId }) => resolveIMessageConfigAllowFrom({ cfg, accountId }),
-    formatAllowFrom: ({ allowFrom }) => formatTrimmedAllowFromEntries(allowFrom),
-    resolveDefaultTo: ({ cfg, accountId }) => resolveIMessageConfigDefaultTo({ cfg, accountId }),
+    resolveAllowFrom: ({ cfg, accountId }) =>
+      resolveIMessageConfigAllowFrom({ cfg, accountId }),
+    formatAllowFrom: ({ allowFrom }) =>
+      formatTrimmedAllowFromEntries(allowFrom),
+    resolveDefaultTo: ({ cfg, accountId }) =>
+      resolveIMessageConfigDefaultTo({ cfg, accountId }),
   },
   security: {
     resolveDmPolicy: ({ cfg, accountId, account }) => {
-      const resolvedAccountId = accountId ?? account.accountId ?? DEFAULT_ACCOUNT_ID;
-      const useAccountPath = Boolean(cfg.channels?.imessage?.accounts?.[resolvedAccountId]);
+      const resolvedAccountId =
+        accountId ?? account.accountId ?? DEFAULT_ACCOUNT_ID;
+      const useAccountPath = Boolean(
+        cfg.channels?.imessage?.accounts?.[resolvedAccountId],
+      );
       const basePath = useAccountPath
         ? `channels.imessage.accounts.${resolvedAccountId}.`
         : "channels.imessage.";
@@ -225,7 +236,8 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount> = {
   },
   outbound: {
     deliveryMode: "direct",
-    chunker: (text, limit) => getIMessageRuntime().channel.text.chunkText(text, limit),
+    chunker: (text, limit) =>
+      getIMessageRuntime().channel.text.chunkText(text, limit),
     chunkerMode: "text",
     textChunkLimit: 4000,
     sendText: async ({ cfg, to, text, accountId, deps, replyToId }) => {
@@ -239,7 +251,15 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount> = {
       });
       return { channel: "imessage", ...result };
     },
-    sendMedia: async ({ cfg, to, text, mediaUrl, accountId, deps, replyToId }) => {
+    sendMedia: async ({
+      cfg,
+      to,
+      text,
+      mediaUrl,
+      accountId,
+      deps,
+      replyToId,
+    }) => {
       const result = await sendIMessageOutbound({
         cfg,
         to,
@@ -264,7 +284,8 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount> = {
     },
     collectStatusIssues: (accounts) =>
       accounts.flatMap((account) => {
-        const lastError = typeof account.lastError === "string" ? account.lastError.trim() : "";
+        const lastError =
+          typeof account.lastError === "string" ? account.lastError.trim() : "";
         if (!lastError) {
           return [];
         }

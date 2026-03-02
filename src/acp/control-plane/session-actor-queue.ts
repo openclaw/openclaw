@@ -20,7 +20,10 @@ export class SessionActorQueue {
 
   async run<T>(actorKey: string, op: () => Promise<T>): Promise<T> {
     const previous = this.tailBySession.get(actorKey) ?? Promise.resolve();
-    this.pendingBySession.set(actorKey, (this.pendingBySession.get(actorKey) ?? 0) + 1);
+    this.pendingBySession.set(
+      actorKey,
+      (this.pendingBySession.get(actorKey) ?? 0) + 1,
+    );
     let release: () => void = () => {};
     const marker = new Promise<void>((resolve) => {
       release = resolve;

@@ -17,7 +17,10 @@ describe("splitMediaFromOutput", () => {
       ["./screenshots/image.png", "MEDIA:./screenshots/image.png"],
       ["media/inbound/image.png", "MEDIA:media/inbound/image.png"],
       ["./screenshot.png", "  MEDIA:./screenshot.png"],
-      ["C:\\Users\\pete\\Pictures\\snap.png", "MEDIA:C:\\Users\\pete\\Pictures\\snap.png"],
+      [
+        "C:\\Users\\pete\\Pictures\\snap.png",
+        "MEDIA:C:\\Users\\pete\\Pictures\\snap.png",
+      ],
       [
         "/tmp/tts-fAJy8C/voice-1770246885083.opus",
         "MEDIA:/tmp/tts-fAJy8C/voice-1770246885083.opus",

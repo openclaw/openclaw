@@ -11,8 +11,18 @@ import {
 describe("messageAction", () => {
   it("creates message actions with explicit or default text", () => {
     const cases = [
-      { name: "explicit text", label: "Help", text: "/help", expectedText: "/help" },
-      { name: "defaults to label", label: "Click", text: undefined, expectedText: "Click" },
+      {
+        name: "explicit text",
+        label: "Help",
+        text: "/help",
+        expectedText: "/help",
+      },
+      {
+        name: "defaults to label",
+        label: "Click",
+        text: undefined,
+        expectedText: "Click",
+      },
     ] as const;
     for (const testCase of cases) {
       const action = testCase.text
@@ -20,7 +30,9 @@ describe("messageAction", () => {
         : messageAction(testCase.label);
       expect(action.type, testCase.name).toBe("message");
       expect(action.label, testCase.name).toBe(testCase.label);
-      expect((action as { text: string }).text, testCase.name).toBe(testCase.expectedText);
+      expect((action as { text: string }).text, testCase.name).toBe(
+        testCase.expectedText,
+      );
     }
   });
 });
@@ -42,7 +54,8 @@ describe("action label truncation", () => {
       expectedLabel: "This is a very long ",
     },
     {
-      createAction: () => uriAction("Click here to visit our website", "https://example.com"),
+      createAction: () =>
+        uriAction("Click here to visit our website", "https://example.com"),
       expectedLabel: "Click here to visit ",
     },
   ])("truncates labels to 20 characters", ({ createAction, expectedLabel }) => {
@@ -54,12 +67,18 @@ describe("action label truncation", () => {
 
 describe("postbackAction", () => {
   it("creates a postback action", () => {
-    const action = postbackAction("Select", "action=select&item=1", "Selected item 1");
+    const action = postbackAction(
+      "Select",
+      "action=select&item=1",
+      "Selected item 1",
+    );
 
     expect(action.type).toBe("postback");
     expect(action.label).toBe("Select");
     expect((action as { data: string }).data).toBe("action=select&item=1");
-    expect((action as { displayText: string }).displayText).toBe("Selected item 1");
+    expect((action as { displayText: string }).displayText).toBe(
+      "Selected item 1",
+    );
   });
 
   it("applies postback payload truncation and displayText behavior", () => {
@@ -67,10 +86,14 @@ describe("postbackAction", () => {
     expect((truncatedData as { data: string }).data.length).toBe(300);
 
     const truncatedDisplay = postbackAction("Test", "data", "y".repeat(400));
-    expect((truncatedDisplay as { displayText: string }).displayText?.length).toBe(300);
+    expect(
+      (truncatedDisplay as { displayText: string }).displayText?.length,
+    ).toBe(300);
 
     const noDisplayText = postbackAction("Test", "data");
-    expect((noDisplayText as { displayText?: string }).displayText).toBeUndefined();
+    expect(
+      (noDisplayText as { displayText?: string }).displayText,
+    ).toBeUndefined();
   });
 });
 
@@ -79,10 +102,18 @@ describe("datetimePickerAction", () => {
     const cases = [
       { label: "Pick date", data: "date_picked", mode: "date" as const },
       { label: "Pick time", data: "time_picked", mode: "time" as const },
-      { label: "Pick datetime", data: "datetime_picked", mode: "datetime" as const },
+      {
+        label: "Pick datetime",
+        data: "datetime_picked",
+        mode: "datetime" as const,
+      },
     ];
     for (const testCase of cases) {
-      const action = datetimePickerAction(testCase.label, testCase.data, testCase.mode);
+      const action = datetimePickerAction(
+        testCase.label,
+        testCase.data,
+        testCase.mode,
+      );
       expect(action.type).toBe("datetimepicker");
       expect(action.label).toBe(testCase.label);
       expect((action as { mode: string }).mode).toBe(testCase.mode);
@@ -199,7 +230,9 @@ describe("createDefaultMenuConfig", () => {
     for (const area of config.areas) {
       expect(area.action.type).toBe("message");
     }
-    const commands = config.areas.map((a) => (a.action as { text: string }).text);
+    const commands = config.areas.map(
+      (a) => (a.action as { text: string }).text,
+    );
     expect(commands).toContain("/help");
     expect(commands).toContain("/status");
     expect(commands).toContain("/settings");

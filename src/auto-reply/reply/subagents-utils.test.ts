@@ -46,9 +46,15 @@ describe("subagents utils", () => {
   });
 
   it("resolves subagent label with fallback", () => {
-    expect(resolveSubagentLabel(makeRun({ label: "  runner " }))).toBe("runner");
-    expect(resolveSubagentLabel(makeRun({ label: " ", task: "  task value " }))).toBe("task value");
-    expect(resolveSubagentLabel(makeRun({ label: " ", task: " " }), "fallback")).toBe("fallback");
+    expect(resolveSubagentLabel(makeRun({ label: "  runner " }))).toBe(
+      "runner",
+    );
+    expect(
+      resolveSubagentLabel(makeRun({ label: " ", task: "  task value " })),
+    ).toBe("task value");
+    expect(
+      resolveSubagentLabel(makeRun({ label: " ", task: " " }), "fallback"),
+    ).toBe("fallback");
   });
 
   it("sorts by startedAt then createdAt descending", () => {
@@ -97,8 +103,13 @@ describe("subagents utils", () => {
   });
 
   it("resolves session key target and unknown session errors", () => {
-    const run = makeRun({ runId: "abc123", childSessionKey: "agent:beta:subagent:xyz" });
-    expect(resolveTarget([run], "agent:beta:subagent:xyz").entry?.runId).toBe("abc123");
+    const run = makeRun({
+      runId: "abc123",
+      childSessionKey: "agent:beta:subagent:xyz",
+    });
+    expect(resolveTarget([run], "agent:beta:subagent:xyz").entry?.runId).toBe(
+      "abc123",
+    );
     expect(resolveTarget([run], "agent:beta:subagent:missing").error).toBe(
       "unknown-session:agent:beta:subagent:missing",
     );
@@ -117,7 +128,9 @@ describe("subagents utils", () => {
 
     expect(resolveTarget(runs, "alpha core").entry?.runId).toBe("run-alpha-1");
     expect(resolveTarget(runs, "alpha").error).toBe("ambiguous-prefix:alpha");
-    expect(resolveTarget(runs, "run-alpha").error).toBe("ambiguous-run:run-alpha");
+    expect(resolveTarget(runs, "run-alpha").error).toBe(
+      "ambiguous-run:run-alpha",
+    );
     expect(resolveTarget(runs, "missing").error).toBe("unknown:missing");
     expect(resolveTarget(runs, undefined).error).toBe("missing");
   });

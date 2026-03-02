@@ -10,10 +10,12 @@ export function verifyTwilioProviderWebhook(params: {
 }): WebhookVerificationResult {
   const result = verifyTwilioWebhook(params.ctx, params.authToken, {
     publicUrl: params.currentPublicUrl || undefined,
-    allowNgrokFreeTierLoopbackBypass: params.options.allowNgrokFreeTierLoopbackBypass ?? false,
+    allowNgrokFreeTierLoopbackBypass:
+      params.options.allowNgrokFreeTierLoopbackBypass ?? false,
     skipVerification: params.options.skipVerification,
     allowedHosts: params.options.webhookSecurity?.allowedHosts,
-    trustForwardingHeaders: params.options.webhookSecurity?.trustForwardingHeaders,
+    trustForwardingHeaders:
+      params.options.webhookSecurity?.trustForwardingHeaders,
     trustedProxyIPs: params.options.webhookSecurity?.trustedProxyIPs,
     remoteIP: params.ctx.remoteAddress,
   });

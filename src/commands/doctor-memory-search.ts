@@ -1,5 +1,8 @@
 import fsSync from "node:fs";
-import { resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import {
+  resolveAgentDir,
+  resolveDefaultAgentId,
+} from "../agents/agent-scope.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import { resolveApiKeyForProvider } from "../agents/model-auth.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -28,7 +31,10 @@ export async function noteMemorySearchHealth(
   const hasRemoteApiKey = Boolean(resolved?.remote?.apiKey?.trim());
 
   if (!resolved) {
-    note("Memory search is explicitly disabled (enabled: false).", "Memory search");
+    note(
+      "Memory search is explicitly disabled (enabled: false).",
+      "Memory search",
+    );
     return;
   }
 
@@ -60,7 +66,10 @@ export async function noteMemorySearchHealth(
       return;
     }
     // Remote provider — check for API key
-    if (hasRemoteApiKey || (await hasApiKeyForProvider(resolved.provider, cfg, agentDir))) {
+    if (
+      hasRemoteApiKey ||
+      (await hasApiKeyForProvider(resolved.provider, cfg, agentDir))
+    ) {
       return;
     }
     if (opts?.gatewayMemoryProbe?.checked && opts.gatewayMemoryProbe.ready) {
@@ -74,7 +83,9 @@ export async function noteMemorySearchHealth(
       );
       return;
     }
-    const gatewayProbeWarning = buildGatewayProbeWarning(opts?.gatewayMemoryProbe);
+    const gatewayProbeWarning = buildGatewayProbeWarning(
+      opts?.gatewayMemoryProbe,
+    );
     const envVar = providerEnvVar(resolved.provider);
     note(
       [
@@ -99,7 +110,10 @@ export async function noteMemorySearchHealth(
     return;
   }
   for (const provider of ["openai", "gemini", "voyage", "mistral"] as const) {
-    if (hasRemoteApiKey || (await hasApiKeyForProvider(provider, cfg, agentDir))) {
+    if (
+      hasRemoteApiKey ||
+      (await hasApiKeyForProvider(provider, cfg, agentDir))
+    ) {
       return;
     }
   }
@@ -115,7 +129,9 @@ export async function noteMemorySearchHealth(
     );
     return;
   }
-  const gatewayProbeWarning = buildGatewayProbeWarning(opts?.gatewayMemoryProbe);
+  const gatewayProbeWarning = buildGatewayProbeWarning(
+    opts?.gatewayMemoryProbe,
+  );
 
   note(
     [

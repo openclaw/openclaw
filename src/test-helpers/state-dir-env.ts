@@ -7,7 +7,9 @@ export function snapshotStateDirEnv() {
   return captureEnv(["OPENCLAW_STATE_DIR", "CLAWDBOT_STATE_DIR"]);
 }
 
-export function restoreStateDirEnv(snapshot: ReturnType<typeof snapshotStateDirEnv>): void {
+export function restoreStateDirEnv(
+  snapshot: ReturnType<typeof snapshotStateDirEnv>,
+): void {
   snapshot.restore();
 }
 

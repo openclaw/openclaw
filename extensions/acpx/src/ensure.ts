@@ -1,7 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { PluginLogger } from "openclaw/plugin-sdk";
-import { ACPX_PINNED_VERSION, ACPX_PLUGIN_ROOT, buildAcpxLocalInstallCommand } from "./config.js";
+import {
+  ACPX_PINNED_VERSION,
+  ACPX_PLUGIN_ROOT,
+  buildAcpxLocalInstallCommand,
+} from "./config.js";
 import {
   resolveSpawnFailure,
   type SpawnCommandOptions,
@@ -18,7 +22,11 @@ export type AcpxVersionCheckResult =
     }
   | {
       ok: false;
-      reason: "missing-command" | "missing-version" | "version-mismatch" | "execution-failed";
+      reason:
+        | "missing-command"
+        | "missing-version"
+        | "version-mismatch"
+        | "execution-failed";
       message: string;
       expectedVersion?: string;
       installCommand: string;
@@ -31,12 +39,16 @@ function extractVersion(stdout: string, stderr: string): string | null {
   return match?.[0] ?? null;
 }
 
-function isExpectedVersionConfigured(value: string | undefined): value is string {
+function isExpectedVersionConfigured(
+  value: string | undefined,
+): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
 
 function supportsPathResolution(command: string): boolean {
-  return path.isAbsolute(command) || command.includes("/") || command.includes("\\");
+  return (
+    path.isAbsolute(command) || command.includes("/") || command.includes("\\")
+  );
 }
 
 function isUnsupportedVersionProbe(stdout: string, stderr: string): boolean {
@@ -44,11 +56,16 @@ function isUnsupportedVersionProbe(stdout: string, stderr: string): boolean {
   return combined.includes("unknown option") && combined.includes("--version");
 }
 
-function resolveVersionFromPackage(command: string, cwd: string): string | null {
+function resolveVersionFromPackage(
+  command: string,
+  cwd: string,
+): string | null {
   if (!supportsPathResolution(command)) {
     return null;
   }
-  const commandPath = path.isAbsolute(command) ? command : path.resolve(cwd, command);
+  const commandPath = path.isAbsolute(command)
+    ? command
+    : path.resolve(cwd, command);
   let current: string;
   try {
     current = path.dirname(fs.realpathSync(commandPath));
@@ -62,7 +79,11 @@ function resolveVersionFromPackage(command: string, cwd: string): string | null 
         name?: unknown;
         version?: unknown;
       };
-      if (parsed.name === "acpx" && typeof parsed.version === "string" && parsed.version.trim()) {
+      if (
+        parsed.name === "acpx" &&
+        typeof parsed.version === "string" &&
+        parsed.version.trim()
+      ) {
         return parsed.version.trim();
       }
     } catch {
@@ -83,7 +104,9 @@ export async function checkAcpxVersion(params: {
   spawnOptions?: SpawnCommandOptions;
 }): Promise<AcpxVersionCheckResult> {
   const expectedVersion = params.expectedVersion?.trim() || undefined;
-  const installCommand = buildAcpxLocalInstallCommand(expectedVersion ?? ACPX_PINNED_VERSION);
+  const installCommand = buildAcpxLocalInstallCommand(
+    expectedVersion ?? ACPX_PINNED_VERSION,
+  );
   const cwd = params.cwd ?? ACPX_PLUGIN_ROOT;
   const hasExpectedVersion = isExpectedVersionConfigured(expectedVersion);
   const probeArgs = hasExpectedVersion ? ["--version"] : ["--help"];
@@ -128,7 +151,10 @@ export async function checkAcpxVersion(params: {
   }
 
   if ((result.code ?? 0) !== 0) {
-    if (hasExpectedVersion && isUnsupportedVersionProbe(result.stdout, result.stderr)) {
+    if (
+      hasExpectedVersion &&
+      isUnsupportedVersionProbe(result.stdout, result.stderr)
+    ) {
       const installedVersion = resolveVersionFromPackage(params.command, cwd);
       if (installedVersion) {
         if (expectedVersion && installedVersion !== expectedVersion) {
@@ -243,15 +269,20 @@ export async function ensureAcpx(params: {
     if (install.error) {
       const spawnFailure = resolveSpawnFailure(install.error, pluginRoot);
       if (spawnFailure === "missing-command") {
-        throw new Error("npm is required to install plugin-local acpx but was not found on PATH");
+        throw new Error(
+          "npm is required to install plugin-local acpx but was not found on PATH",
+        );
       }
-      throw new Error(`failed to install plugin-local acpx: ${install.error.message}`);
+      throw new Error(
+        `failed to install plugin-local acpx: ${install.error.message}`,
+      );
     }
 
     if ((install.code ?? 0) !== 0) {
       const stderr = install.stderr.trim();
       const stdout = install.stdout.trim();
-      const detail = stderr || stdout || `npm exited with code ${install.code ?? "unknown"}`;
+      const detail =
+        stderr || stdout || `npm exited with code ${install.code ?? "unknown"}`;
       throw new Error(`failed to install plugin-local acpx: ${detail}`);
     }
 
@@ -263,10 +294,14 @@ export async function ensureAcpx(params: {
     });
 
     if (!postcheck.ok) {
-      throw new Error(`plugin-local acpx verification failed after install: ${postcheck.message}`);
+      throw new Error(
+        `plugin-local acpx verification failed after install: ${postcheck.message}`,
+      );
     }
 
-    params.logger?.info(`acpx plugin-local binary ready (version ${postcheck.version})`);
+    params.logger?.info(
+      `acpx plugin-local binary ready (version ${postcheck.version})`,
+    );
   })();
 
   try {

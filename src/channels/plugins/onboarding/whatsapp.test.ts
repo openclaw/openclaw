@@ -6,8 +6,12 @@ import { whatsappOnboardingAdapter } from "./whatsapp.js";
 
 const loginWebMock = vi.hoisted(() => vi.fn(async () => {}));
 const pathExistsMock = vi.hoisted(() => vi.fn(async () => false));
-const listWhatsAppAccountIdsMock = vi.hoisted(() => vi.fn(() => [] as string[]));
-const resolveDefaultWhatsAppAccountIdMock = vi.hoisted(() => vi.fn(() => DEFAULT_ACCOUNT_ID));
+const listWhatsAppAccountIdsMock = vi.hoisted(() =>
+  vi.fn(() => [] as string[]),
+);
+const resolveDefaultWhatsAppAccountIdMock = vi.hoisted(() =>
+  vi.fn(() => DEFAULT_ACCOUNT_ID),
+);
 const resolveWhatsAppAuthDirMock = vi.hoisted(() =>
   vi.fn(() => ({
     authDir: "/tmp/openclaw-whatsapp-test",
@@ -19,7 +23,10 @@ vi.mock("../../../channel-web.js", () => ({
 }));
 
 vi.mock("../../../utils.js", async () => {
-  const actual = await vi.importActual<typeof import("../../../utils.js")>("../../../utils.js");
+  const actual =
+    await vi.importActual<typeof import("../../../utils.js")>(
+      "../../../utils.js",
+    );
   return {
     ...actual,
     pathExists: pathExistsMock,
@@ -85,8 +92,12 @@ async function runConfigureWithHarness(params: {
   harness: ReturnType<typeof createPrompterHarness>;
   cfg?: Parameters<typeof whatsappOnboardingAdapter.configure>[0]["cfg"];
   runtime?: RuntimeEnv;
-  options?: Parameters<typeof whatsappOnboardingAdapter.configure>[0]["options"];
-  accountOverrides?: Parameters<typeof whatsappOnboardingAdapter.configure>[0]["accountOverrides"];
+  options?: Parameters<
+    typeof whatsappOnboardingAdapter.configure
+  >[0]["options"];
+  accountOverrides?: Parameters<
+    typeof whatsappOnboardingAdapter.configure
+  >[0]["accountOverrides"];
   shouldPromptAccountIds?: boolean;
   forceAllowFrom?: boolean;
 }) {
@@ -101,7 +112,10 @@ async function runConfigureWithHarness(params: {
   });
 }
 
-function createSeparatePhoneHarness(params: { selectValues: string[]; textValues?: string[] }) {
+function createSeparatePhoneHarness(params: {
+  selectValues: string[];
+  textValues?: string[];
+}) {
   return createPrompterHarness({
     confirmValues: [false],
     selectValues: params.selectValues,
@@ -109,7 +123,10 @@ function createSeparatePhoneHarness(params: { selectValues: string[]; textValues
   });
 }
 
-async function runSeparatePhoneFlow(params: { selectValues: string[]; textValues?: string[] }) {
+async function runSeparatePhoneFlow(params: {
+  selectValues: string[];
+  textValues?: string[];
+}) {
   pathExistsMock.mockResolvedValue(true);
   const harness = createSeparatePhoneHarness({
     selectValues: params.selectValues,
@@ -127,7 +144,9 @@ describe("whatsappOnboardingAdapter.configure", () => {
     pathExistsMock.mockResolvedValue(false);
     listWhatsAppAccountIdsMock.mockReturnValue([]);
     resolveDefaultWhatsAppAccountIdMock.mockReturnValue(DEFAULT_ACCOUNT_ID);
-    resolveWhatsAppAuthDirMock.mockReturnValue({ authDir: "/tmp/openclaw-whatsapp-test" });
+    resolveWhatsAppAuthDirMock.mockReturnValue({
+      authDir: "/tmp/openclaw-whatsapp-test",
+    });
   });
 
   it("applies owner allowlist when forceAllowFrom is enabled", async () => {
@@ -148,7 +167,8 @@ describe("whatsappOnboardingAdapter.configure", () => {
     expect(result.cfg.channels?.whatsapp?.allowFrom).toEqual(["+15555550123"]);
     expect(harness.text).toHaveBeenCalledWith(
       expect.objectContaining({
-        message: "Your personal WhatsApp number (the phone you will message from)",
+        message:
+          "Your personal WhatsApp number (the phone you will message from)",
       }),
     );
   });
@@ -172,7 +192,10 @@ describe("whatsappOnboardingAdapter.configure", () => {
 
     expect(result.cfg.channels?.whatsapp?.selfChatMode).toBe(false);
     expect(result.cfg.channels?.whatsapp?.dmPolicy).toBe("allowlist");
-    expect(result.cfg.channels?.whatsapp?.allowFrom).toEqual(["+15555550123", "*"]);
+    expect(result.cfg.channels?.whatsapp?.allowFrom).toEqual([
+      "+15555550123",
+      "*",
+    ]);
   });
 
   it("enables allowlist self-chat mode for personal-phone setup", async () => {
@@ -211,7 +234,10 @@ describe("whatsappOnboardingAdapter.configure", () => {
 
     expect(result.cfg.channels?.whatsapp?.selfChatMode).toBe(false);
     expect(result.cfg.channels?.whatsapp?.dmPolicy).toBe("open");
-    expect(result.cfg.channels?.whatsapp?.allowFrom).toEqual(["*", "+15555550123"]);
+    expect(result.cfg.channels?.whatsapp?.allowFrom).toEqual([
+      "*",
+      "+15555550123",
+    ]);
     expect(harness.select).toHaveBeenCalledTimes(2);
     expect(harness.text).not.toHaveBeenCalled();
   });
@@ -229,7 +255,12 @@ describe("whatsappOnboardingAdapter.configure", () => {
       runtime,
     });
 
-    expect(loginWebMock).toHaveBeenCalledWith(false, undefined, runtime, DEFAULT_ACCOUNT_ID);
+    expect(loginWebMock).toHaveBeenCalledWith(
+      false,
+      undefined,
+      runtime,
+      DEFAULT_ACCOUNT_ID,
+    );
   });
 
   it("skips relink note when already linked and relink is declined", async () => {

@@ -1,5 +1,8 @@
 import { getChannelDock } from "../channels/dock.js";
-import { getChannelPlugin, listChannelPlugins } from "../channels/plugins/index.js";
+import {
+  getChannelPlugin,
+  listChannelPlugins,
+} from "../channels/plugins/index.js";
 import type {
   ChannelAgentTool,
   ChannelMessageActionName,
@@ -20,7 +23,9 @@ export function listChannelSupportedActions(params: {
   if (!params.channel) {
     return [];
   }
-  const plugin = getChannelPlugin(params.channel as Parameters<typeof getChannelPlugin>[0]);
+  const plugin = getChannelPlugin(
+    params.channel as Parameters<typeof getChannelPlugin>[0],
+  );
   if (!plugin?.actions?.listActions) {
     return [];
   }
@@ -48,7 +53,9 @@ export function listAllChannelSupportedActions(params: {
   return Array.from(actions);
 }
 
-export function listChannelAgentTools(params: { cfg?: OpenClawConfig }): ChannelAgentTool[] {
+export function listChannelAgentTools(params: {
+  cfg?: OpenClawConfig;
+}): ChannelAgentTool[] {
   // Channel docking: aggregate channel-owned tools (login, etc.).
   const tools: ChannelAgentTool[] = [];
   for (const plugin of listChannelPlugins()) {
@@ -111,7 +118,9 @@ function logListActionsError(pluginId: string, err: unknown) {
   loggedListActionErrors.add(key);
   const stack = err instanceof Error && err.stack ? err.stack : null;
   const details = stack ?? message;
-  defaultRuntime.error?.(`[channel-tools] ${pluginId}.actions.listActions failed: ${details}`);
+  defaultRuntime.error?.(
+    `[channel-tools] ${pluginId}.actions.listActions failed: ${details}`,
+  );
 }
 
 export const __testing = {

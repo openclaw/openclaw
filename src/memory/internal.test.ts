@@ -46,7 +46,10 @@ describe("listMemoryFiles", () => {
     await fs.mkdir(extraDir, { recursive: true });
     await fs.writeFile(path.join(extraDir, "note1.md"), "# Note 1");
     await fs.writeFile(path.join(extraDir, "note2.md"), "# Note 2");
-    await fs.writeFile(path.join(extraDir, "ignore.txt"), "Not a markdown file");
+    await fs.writeFile(
+      path.join(extraDir, "ignore.txt"),
+      "Not a markdown file",
+    );
 
     const files = await listMemoryFiles(tmpDir, [extraDir]);
     expect(files).toHaveLength(3);
@@ -127,7 +130,11 @@ describe("listMemoryFiles", () => {
   it("dedupes overlapping extra paths that resolve to the same file", async () => {
     const tmpDir = getTmpDir();
     await fs.writeFile(path.join(tmpDir, "MEMORY.md"), "# Default memory");
-    const files = await listMemoryFiles(tmpDir, [tmpDir, ".", path.join(tmpDir, "MEMORY.md")]);
+    const files = await listMemoryFiles(tmpDir, [
+      tmpDir,
+      ".",
+      path.join(tmpDir, "MEMORY.md"),
+    ]);
     const memoryMatches = files.filter((file) => file.endsWith("MEMORY.md"));
     expect(memoryMatches).toHaveLength(1);
   });
@@ -175,7 +182,8 @@ describe("remapChunkLines", () => {
     const lineMap = [4, 6, 7, 10, 13];
 
     // Create chunks from content that has 5 lines
-    const content = "User: Hello\nAssistant: Hi\nUser: Question\nAssistant: Answer\nUser: Thanks";
+    const content =
+      "User: Hello\nAssistant: Hi\nUser: Question\nAssistant: Answer\nUser: Thanks";
     const chunks = chunkMarkdown(content, { tokens: 400, overlap: 0 });
     expect(chunks.length).toBeGreaterThan(0);
 

@@ -1,7 +1,10 @@
 import { abortEmbeddedPiRun } from "../../agents/pi-embedded.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
-import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
+import {
+  createInternalHookEvent,
+  triggerInternalHook,
+} from "../../hooks/internal-hooks.js";
 import {
   resolveAbortCutoffFromContext,
   shouldPersistAbortCutoff,
@@ -31,8 +34,12 @@ function resolveAbortTarget(params: {
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
 }): AbortTarget {
-  const targetSessionKey = params.ctx.CommandTargetSessionKey?.trim() || params.sessionKey;
-  const { entry, key } = resolveSessionEntryForKey(params.sessionStore, targetSessionKey);
+  const targetSessionKey =
+    params.ctx.CommandTargetSessionKey?.trim() || params.sessionKey;
+  const { entry, key } = resolveSessionEntryForKey(
+    params.sessionStore,
+    targetSessionKey,
+  );
   if (entry && key) {
     return { entry, key, sessionId: entry.sessionId };
   }
@@ -86,7 +93,10 @@ async function applyAbortTarget(params: {
   }
 }
 
-export const handleStopCommand: CommandHandler = async (params, allowTextCommands) => {
+export const handleStopCommand: CommandHandler = async (
+  params,
+  allowTextCommands,
+) => {
   if (!allowTextCommands) {
     return null;
   }
@@ -140,17 +150,26 @@ export const handleStopCommand: CommandHandler = async (params, allowTextCommand
     requesterSessionKey: abortTarget.key ?? params.sessionKey,
   });
 
-  return { shouldContinue: false, reply: { text: formatAbortReplyText(stopped) } };
+  return {
+    shouldContinue: false,
+    reply: { text: formatAbortReplyText(stopped) },
+  };
 };
 
-export const handleAbortTrigger: CommandHandler = async (params, allowTextCommands) => {
+export const handleAbortTrigger: CommandHandler = async (
+  params,
+  allowTextCommands,
+) => {
   if (!allowTextCommands) {
     return null;
   }
   if (!isAbortTrigger(params.command.rawBodyNormalized)) {
     return null;
   }
-  const unauthorizedAbortTrigger = rejectUnauthorizedCommand(params, "abort trigger");
+  const unauthorizedAbortTrigger = rejectUnauthorizedCommand(
+    params,
+    "abort trigger",
+  );
   if (unauthorizedAbortTrigger) {
     return unauthorizedAbortTrigger;
   }

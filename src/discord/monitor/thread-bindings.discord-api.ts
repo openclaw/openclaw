@@ -131,7 +131,11 @@ export async function maybeSendBindingMessage(params: {
     return;
   }
   const record = params.record;
-  if (params.preferWebhook !== false && record.webhookId && record.webhookToken) {
+  if (
+    params.preferWebhook !== false &&
+    record.webhookId &&
+    record.webhookToken
+  ) {
     try {
       await sendWebhookMessageDiscord(text, {
         webhookId: record.webhookId,
@@ -142,7 +146,9 @@ export async function maybeSendBindingMessage(params: {
       });
       return;
     } catch (err) {
-      logVerbose(`discord thread binding webhook send failed: ${summarizeDiscordError(err)}`);
+      logVerbose(
+        `discord thread binding webhook send failed: ${summarizeDiscordError(err)}`,
+      );
     }
   }
   try {
@@ -150,7 +156,9 @@ export async function maybeSendBindingMessage(params: {
       accountId: record.accountId,
     });
   } catch (err) {
-    logVerbose(`discord thread binding fallback send failed: ${summarizeDiscordError(err)}`);
+    logVerbose(
+      `discord thread binding fallback send failed: ${summarizeDiscordError(err)}`,
+    );
   }
 }
 
@@ -170,7 +178,8 @@ export async function createWebhookForChannel(params: {
       },
     })) as { id?: string; token?: string };
     const webhookId = typeof created?.id === "string" ? created.id.trim() : "";
-    const webhookToken = typeof created?.token === "string" ? created.token.trim() : "";
+    const webhookToken =
+      typeof created?.token === "string" ? created.token.trim() : "";
     if (!webhookId || !webhookToken) {
       return {};
     }
@@ -183,7 +192,10 @@ export async function createWebhookForChannel(params: {
   }
 }
 
-export function findReusableWebhook(params: { accountId: string; channelId: string }): {
+export function findReusableWebhook(params: {
+  accountId: string;
+  channelId: string;
+}): {
   webhookId?: string;
   webhookToken?: string;
 } {

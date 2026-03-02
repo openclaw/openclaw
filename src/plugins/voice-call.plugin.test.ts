@@ -53,11 +53,12 @@ function setup(config: Record<string, unknown>): Registered {
     source: "test",
     config: {},
     pluginConfig: config,
-    runtime: { tts: { textToSpeechTelephony: vi.fn() } } as unknown as Parameters<
-      typeof plugin.register
-    >[0]["runtime"],
+    runtime: {
+      tts: { textToSpeechTelephony: vi.fn() },
+    } as unknown as Parameters<typeof plugin.register>[0]["runtime"],
     logger: noopLogger,
-    registerGatewayMethod: (method: string, handler: unknown) => methods.set(method, handler),
+    registerGatewayMethod: (method: string, handler: unknown) =>
+      methods.set(method, handler),
     registerTool: (tool: unknown) => tools.push(tool),
     registerCli: () => {},
     registerService: () => {},
@@ -106,7 +107,9 @@ describe("voice-call plugin", () => {
         })),
         speak: vi.fn(async () => ({ success: true })),
         endCall: vi.fn(async () => ({ success: true })),
-        getCall: vi.fn((id: string) => (id === "call-1" ? { callId: "call-1" } : undefined)),
+        getCall: vi.fn((id: string) =>
+          id === "call-1" ? { callId: "call-1" } : undefined,
+        ),
         getCallByProviderCallId: vi.fn(() => undefined),
       },
       stop: vi.fn(async () => {}),
@@ -181,12 +184,19 @@ describe("voice-call plugin", () => {
 
   it("CLI latency summarizes turn metrics from JSONL", async () => {
     const program = new Command();
-    const tmpFile = path.join(os.tmpdir(), `voicecall-latency-${Date.now()}.jsonl`);
+    const tmpFile = path.join(
+      os.tmpdir(),
+      `voicecall-latency-${Date.now()}.jsonl`,
+    );
     fs.writeFileSync(
       tmpFile,
       [
-        JSON.stringify({ metadata: { lastTurnLatencyMs: 100, lastTurnListenWaitMs: 70 } }),
-        JSON.stringify({ metadata: { lastTurnLatencyMs: 200, lastTurnListenWaitMs: 110 } }),
+        JSON.stringify({
+          metadata: { lastTurnLatencyMs: 100, lastTurnListenWaitMs: 70 },
+        }),
+        JSON.stringify({
+          metadata: { lastTurnLatencyMs: 200, lastTurnListenWaitMs: 110 },
+        }),
       ].join("\n") + "\n",
       "utf8",
     );
@@ -196,9 +206,12 @@ describe("voice-call plugin", () => {
     try {
       await registerVoiceCallCli(program);
 
-      await program.parseAsync(["voicecall", "latency", "--file", tmpFile, "--last", "10"], {
-        from: "user",
-      });
+      await program.parseAsync(
+        ["voicecall", "latency", "--file", tmpFile, "--last", "10"],
+        {
+          from: "user",
+        },
+      );
 
       expect(logSpy).toHaveBeenCalled();
       const printed = String(logSpy.mock.calls.at(-1)?.[0] ?? "");
@@ -216,9 +229,12 @@ describe("voice-call plugin", () => {
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
     await registerVoiceCallCli(program);
 
-    await program.parseAsync(["voicecall", "start", "--to", "+1", "--message", "Hello"], {
-      from: "user",
-    });
+    await program.parseAsync(
+      ["voicecall", "start", "--to", "+1", "--message", "Hello"],
+      {
+        from: "user",
+      },
+    );
     expect(logSpy).toHaveBeenCalled();
     logSpy.mockRestore();
   });

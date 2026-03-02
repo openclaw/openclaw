@@ -41,7 +41,8 @@ const OBFUSCATION_PATTERNS: ObfuscationPattern[] = [
   {
     id: "base64-decode-to-shell",
     description: "Base64 decode piped to shell",
-    regex: /\|\s*base64\s+(?:-d|--decode)\b.*\|\s*(?:sh|bash|zsh|dash|ksh|fish)\b/i,
+    regex:
+      /\|\s*base64\s+(?:-d|--decode)\b.*\|\s*(?:sh|bash|zsh|dash|ksh|fish)\b/i,
   },
   {
     id: "pipe-to-shell",
@@ -82,7 +83,8 @@ const OBFUSCATION_PATTERNS: ObfuscationPattern[] = [
   {
     id: "python-exec-encoded",
     description: "Python/Perl/Ruby with base64 or encoded execution",
-    regex: /(?:python[23]?|perl|ruby)\s+-[ec]\s+.*(?:base64|b64decode|decode|exec|system|eval)/i,
+    regex:
+      /(?:python[23]?|perl|ruby)\s+-[ec]\s+.*(?:base64|b64decode|decode|exec|system|eval)/i,
   },
   {
     id: "curl-pipe-shell",
@@ -91,7 +93,8 @@ const OBFUSCATION_PATTERNS: ObfuscationPattern[] = [
   },
   {
     id: "var-expansion-obfuscation",
-    description: "Variable assignment chain with expansion (potential obfuscation)",
+    description:
+      "Variable assignment chain with expansion (potential obfuscation)",
     regex: /(?:[a-zA-Z_]\w{0,2}=\S+\s*;\s*){2,}.*\$(?:[a-zA-Z_]|\{[a-zA-Z_])/,
   },
 ];
@@ -102,7 +105,8 @@ const FALSE_POSITIVE_SUPPRESSIONS: Array<{
 }> = [
   {
     suppresses: ["curl-pipe-shell"],
-    regex: /curl\s+.*https?:\/\/(?:raw\.githubusercontent\.com\/Homebrew|brew\.sh)\b/i,
+    regex:
+      /curl\s+.*https?:\/\/(?:raw\.githubusercontent\.com\/Homebrew|brew\.sh)\b/i,
   },
   {
     suppresses: ["curl-pipe-shell"],
@@ -115,7 +119,9 @@ const FALSE_POSITIVE_SUPPRESSIONS: Array<{
   },
 ];
 
-export function detectCommandObfuscation(command: string): ObfuscationDetection {
+export function detectCommandObfuscation(
+  command: string,
+): ObfuscationDetection {
   if (!command || !command.trim()) {
     return { detected: false, reasons: [], matchedPatterns: [] };
   }
@@ -132,7 +138,9 @@ export function detectCommandObfuscation(command: string): ObfuscationDetection 
     const suppressed =
       urlCount <= 1 &&
       FALSE_POSITIVE_SUPPRESSIONS.some(
-        (exemption) => exemption.suppresses.includes(pattern.id) && exemption.regex.test(command),
+        (exemption) =>
+          exemption.suppresses.includes(pattern.id) &&
+          exemption.regex.test(command),
       );
 
     if (suppressed) {

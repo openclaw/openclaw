@@ -4,7 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { isNotFoundPathError, isPathInside } from "./path-guards.js";
 
-export type BoundaryPathIntent = "read" | "write" | "create" | "delete" | "stat";
+export type BoundaryPathIntent =
+  | "read"
+  | "write"
+  | "create"
+  | "delete"
+  | "stat";
 
 export type BoundaryPathAliasPolicy = {
   allowFinalSymlinkForUnlink?: boolean;
@@ -32,7 +37,12 @@ export type ResolveBoundaryPathParams = {
   rootCanonicalPath?: string;
 };
 
-export type ResolvedBoundaryPathKind = "missing" | "file" | "directory" | "symlink" | "other";
+export type ResolvedBoundaryPathKind =
+  | "missing"
+  | "file"
+  | "directory"
+  | "symlink"
+  | "other";
 
 export type ResolvedBoundaryPath = {
   absolutePath: string;
@@ -79,7 +89,9 @@ export async function resolveBoundaryPath(
   });
 }
 
-export function resolveBoundaryPathSync(params: ResolveBoundaryPathParams): ResolvedBoundaryPath {
+export function resolveBoundaryPathSync(
+  params: ResolveBoundaryPathParams,
+): ResolvedBoundaryPath {
   const rootPath = path.resolve(params.rootPath);
   const absolutePath = path.resolve(params.absolutePath);
   const rootCanonicalPath = params.rootCanonicalPath
@@ -146,7 +158,8 @@ function createLexicalTraversalState(params: {
   const relative = path.relative(params.rootPath, params.absolutePath);
   return {
     segments: relative.split(path.sep).filter(Boolean),
-    allowFinalSymlink: params.params.policy?.allowFinalSymlinkForUnlink === true,
+    allowFinalSymlink:
+      params.params.policy?.allowFinalSymlinkForUnlink === true,
     canonicalCursor: params.rootCanonicalPath,
     lexicalCursor: params.rootPath,
     preserveFinalSymlink: false,
@@ -175,7 +188,10 @@ function applyMissingSuffixToCanonicalCursor(params: {
   absolutePath: string;
 }): void {
   const missingSuffix = params.state.segments.slice(params.missingFromIndex);
-  params.state.canonicalCursor = path.resolve(params.state.canonicalCursor, ...missingSuffix);
+  params.state.canonicalCursor = path.resolve(
+    params.state.canonicalCursor,
+    ...missingSuffix,
+  );
   assertLexicalCursorInsideBoundary({
     params: params.params,
     rootCanonicalPath: params.rootCanonicalPath,
@@ -191,7 +207,10 @@ function advanceCanonicalCursorForSegment(params: {
   params: ResolveBoundaryPathParams;
   absolutePath: string;
 }): void {
-  params.state.canonicalCursor = path.resolve(params.state.canonicalCursor, params.segment);
+  params.state.canonicalCursor = path.resolve(
+    params.state.canonicalCursor,
+    params.segment,
+  );
   assertLexicalCursorInsideBoundary({
     params: params.params,
     rootCanonicalPath: params.rootCanonicalPath,
@@ -371,7 +390,9 @@ type LexicalTraversalStep = {
   isLast: boolean;
 };
 
-function* iterateLexicalTraversal(state: LexicalTraversalState): Iterable<LexicalTraversalStep> {
+function* iterateLexicalTraversal(
+  state: LexicalTraversalState,
+): Iterable<LexicalTraversalStep> {
   for (let idx = 0; idx < state.segments.length; idx += 1) {
     const segment = state.segments[idx] ?? "";
     const isLast = idx === state.segments.length - 1;
@@ -425,7 +446,10 @@ async function resolveBoundaryPathLexicalAsync(params: {
     });
   }
 
-  const kind = await getPathKind(params.absolutePath, state.preserveFinalSymlink);
+  const kind = await getPathKind(
+    params.absolutePath,
+    state.preserveFinalSymlink,
+  );
   return finalizeLexicalResolution({
     ...params,
     state,
@@ -623,7 +647,9 @@ function assertLexicalBoundaryOrCanonicalAlias(params: {
   if (params.skipLexicalRootCheck || params.lexicalInside) {
     return;
   }
-  if (isPathInside(params.rootCanonicalPath, params.canonicalOutsideLexicalPath)) {
+  if (
+    isPathInside(params.rootCanonicalPath, params.canonicalOutsideLexicalPath)
+  ) {
     return;
   }
   throw pathEscapeError({
@@ -645,13 +671,18 @@ function buildResolvedBoundaryPath(params: {
     canonicalPath: params.canonicalPath,
     rootPath: params.rootPath,
     rootCanonicalPath: params.rootCanonicalPath,
-    relativePath: relativeInsideRoot(params.rootCanonicalPath, params.canonicalPath),
+    relativePath: relativeInsideRoot(
+      params.rootCanonicalPath,
+      params.canonicalPath,
+    ),
     exists: params.kind.exists,
     kind: params.kind.kind,
   };
 }
 
-export async function resolvePathViaExistingAncestor(targetPath: string): Promise<string> {
+export async function resolvePathViaExistingAncestor(
+  targetPath: string,
+): Promise<string> {
   const normalized = path.resolve(targetPath);
   let cursor = normalized;
   const missingSuffix: string[] = [];
@@ -733,7 +764,9 @@ function getPathKindSync(
   preserveFinalSymlink: boolean,
 ): { exists: boolean; kind: ResolvedBoundaryPathKind } {
   try {
-    const stat = preserveFinalSymlink ? fs.lstatSync(absolutePath) : fs.statSync(absolutePath);
+    const stat = preserveFinalSymlink
+      ? fs.lstatSync(absolutePath)
+      : fs.statSync(absolutePath);
     return { exists: true, kind: toResolvedKind(stat) };
   } catch (error) {
     if (isNotFoundPathError(error)) {
@@ -757,7 +790,10 @@ function toResolvedKind(stat: fs.Stats): ResolvedBoundaryPathKind {
 }
 
 function relativeInsideRoot(rootPath: string, targetPath: string): string {
-  const relative = path.relative(path.resolve(rootPath), path.resolve(targetPath));
+  const relative = path.relative(
+    path.resolve(rootPath),
+    path.resolve(targetPath),
+  );
   if (!relative || relative === ".") {
     return "";
   }

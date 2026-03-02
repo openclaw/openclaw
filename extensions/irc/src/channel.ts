@@ -70,7 +70,8 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = {
   configSchema: buildChannelConfigSchema(IrcConfigSchema),
   config: {
     listAccountIds: (cfg) => listIrcAccountIds(cfg as CoreConfig),
-    resolveAccount: (cfg, accountId) => resolveIrcAccount({ cfg: cfg as CoreConfig, accountId }),
+    resolveAccount: (cfg, accountId) =>
+      resolveIrcAccount({ cfg: cfg as CoreConfig, accountId }),
     defaultAccountId: (cfg) => resolveDefaultIrcAccountId(cfg as CoreConfig),
     setAccountEnabled: ({ cfg, accountId, enabled }) =>
       setAccountEnabledInConfigSection({
@@ -111,19 +112,27 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = {
       passwordSource: account.passwordSource,
     }),
     resolveAllowFrom: ({ cfg, accountId }) =>
-      (resolveIrcAccount({ cfg: cfg as CoreConfig, accountId }).config.allowFrom ?? []).map(
-        (entry) => String(entry),
-      ),
+      (
+        resolveIrcAccount({ cfg: cfg as CoreConfig, accountId }).config
+          .allowFrom ?? []
+      ).map((entry) => String(entry)),
     formatAllowFrom: ({ allowFrom }) =>
-      allowFrom.map((entry) => normalizeIrcAllowEntry(String(entry))).filter(Boolean),
+      allowFrom
+        .map((entry) => normalizeIrcAllowEntry(String(entry)))
+        .filter(Boolean),
     resolveDefaultTo: ({ cfg, accountId }) =>
-      resolveIrcAccount({ cfg: cfg as CoreConfig, accountId }).config.defaultTo?.trim() ||
-      undefined,
+      resolveIrcAccount({
+        cfg: cfg as CoreConfig,
+        accountId,
+      }).config.defaultTo?.trim() || undefined,
   },
   security: {
     resolveDmPolicy: ({ cfg, accountId, account }) => {
-      const resolvedAccountId = accountId ?? account.accountId ?? DEFAULT_ACCOUNT_ID;
-      const useAccountPath = Boolean(cfg.channels?.irc?.accounts?.[resolvedAccountId]);
+      const resolvedAccountId =
+        accountId ?? account.accountId ?? DEFAULT_ACCOUNT_ID;
+      const useAccountPath = Boolean(
+        cfg.channels?.irc?.accounts?.[resolvedAccountId],
+      );
       const basePath = useAccountPath
         ? `channels.irc.accounts.${resolvedAccountId}.`
         : "channels.irc.";
@@ -173,7 +182,10 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = {
       if (!groupId) {
         return true;
       }
-      const match = resolveIrcGroupMatch({ groups: account.config.groups, target: groupId });
+      const match = resolveIrcGroupMatch({
+        groups: account.config.groups,
+        target: groupId,
+      });
       return resolveIrcRequireMention({
         groupConfig: match.groupConfig,
         wildcardConfig: match.wildcardConfig,
@@ -184,7 +196,10 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = {
       if (!groupId) {
         return undefined;
       }
-      const match = resolveIrcGroupMatch({ groups: account.config.groups, target: groupId });
+      const match = resolveIrcGroupMatch({
+        groups: account.config.groups,
+        target: groupId,
+      });
       return match.groupConfig?.tools ?? match.wildcardConfig?.tools;
     },
   },
@@ -207,7 +222,9 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = {
           };
         }
         if (kind === "group") {
-          const groupId = isChannelTarget(normalized) ? normalized : `#${normalized}`;
+          const groupId = isChannelTarget(normalized)
+            ? normalized
+            : `#${normalized}`;
           return {
             input,
             resolved: true,
@@ -293,7 +310,8 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = {
   },
   outbound: {
     deliveryMode: "direct",
-    chunker: (text, limit) => getIrcRuntime().channel.text.chunkMarkdownText(text, limit),
+    chunker: (text, limit) =>
+      getIrcRuntime().channel.text.chunkMarkdownText(text, limit),
     chunkerMode: "markdown",
     textChunkLimit: 350,
     sendText: async ({ to, text, accountId, replyToId }) => {
@@ -356,7 +374,8 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = {
         config: ctx.cfg as CoreConfig,
         runtime: ctx.runtime,
         abortSignal: ctx.abortSignal,
-        statusSink: (patch) => ctx.setStatus({ accountId: ctx.accountId, ...patch }),
+        statusSink: (patch) =>
+          ctx.setStatus({ accountId: ctx.accountId, ...patch }),
       });
       return { stop };
     },

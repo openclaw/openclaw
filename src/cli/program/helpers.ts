@@ -1,8 +1,13 @@
-export function collectOption(value: string, previous: string[] = []): string[] {
+export function collectOption(
+  value: string,
+  previous: string[] = [],
+): string[] {
   return [...previous, value];
 }
 
-export function parsePositiveIntOrUndefined(value: unknown): number | undefined {
+export function parsePositiveIntOrUndefined(
+  value: unknown,
+): number | undefined {
   if (value === undefined || value === null || value === "") {
     return undefined;
   }
@@ -23,10 +28,14 @@ export function parsePositiveIntOrUndefined(value: unknown): number | undefined 
   return undefined;
 }
 
-export function resolveActionArgs(actionCommand?: import("commander").Command): string[] {
+export function resolveActionArgs(
+  actionCommand?: import("commander").Command,
+): string[] {
   if (!actionCommand) {
     return [];
   }
-  const args = (actionCommand as import("commander").Command & { args?: string[] }).args;
+  const args = (
+    actionCommand as import("commander").Command & { args?: string[] }
+  ).args;
   return Array.isArray(args) ? args : [];
 }

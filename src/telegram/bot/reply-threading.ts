@@ -17,12 +17,16 @@ export function resolveReplyToForSend(params: {
   replyToMode: ReplyToMode;
   progress: DeliveryProgress;
 }): number | undefined {
-  return params.replyToId && (params.replyToMode === "all" || !params.progress.hasReplied)
+  return params.replyToId &&
+    (params.replyToMode === "all" || !params.progress.hasReplied)
     ? params.replyToId
     : undefined;
 }
 
-export function markReplyApplied(progress: DeliveryProgress, replyToId?: number): void {
+export function markReplyApplied(
+  progress: DeliveryProgress,
+  replyToId?: number,
+): void {
   if (replyToId && !progress.hasReplied) {
     progress.hasReplied = true;
   }
@@ -32,7 +36,10 @@ export function markDelivered(progress: DeliveryProgress): void {
   progress.hasDelivered = true;
 }
 
-export async function sendChunkedTelegramReplyText<TChunk, TReplyMarkup = unknown>(params: {
+export async function sendChunkedTelegramReplyText<
+  TChunk,
+  TReplyMarkup = unknown,
+>(params: {
   chunks: readonly TChunk[];
   progress: DeliveryProgress;
   replyToId?: number;

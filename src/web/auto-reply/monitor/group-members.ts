@@ -1,6 +1,10 @@
 import { normalizeE164 } from "../../../utils.js";
 
-function appendNormalizedUnique(entries: Iterable<string>, seen: Set<string>, ordered: string[]) {
+function appendNormalizedUnique(
+  entries: Iterable<string>,
+  seen: Set<string>,
+  ordered: string[],
+) {
   for (const entry of entries) {
     const normalized = normalizeE164(entry) ?? entry;
     if (!normalized || seen.has(normalized)) {

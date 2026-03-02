@@ -35,7 +35,8 @@ function resolveSendContext(options: ZaloSendOptions): {
     return { token, fetcher: resolveZaloProxyFetch(proxy) };
   }
 
-  const token = options.token ?? resolveZaloToken(undefined, options.accountId).token;
+  const token =
+    options.token ?? resolveZaloToken(undefined, options.accountId).token;
   const proxy = options.proxy;
   return { token, fetcher: resolveZaloProxyFetch(proxy) };
 }
@@ -79,7 +80,10 @@ export async function sendMessageZalo(
 
     return { ok: false, error: "Failed to send message" };
   } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : String(err),
+    };
   }
 }
 
@@ -119,6 +123,9 @@ export async function sendPhotoZalo(
 
     return { ok: false, error: "Failed to send photo" };
   } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : String(err),
+    };
   }
 }

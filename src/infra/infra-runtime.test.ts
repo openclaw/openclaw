@@ -48,15 +48,19 @@ describe("infra runtime", () => {
     });
 
     it("logs and exits when missing", async () => {
-      const exec: typeof runExec = vi.fn().mockRejectedValue(new Error("missing"));
+      const exec: typeof runExec = vi
+        .fn()
+        .mockRejectedValue(new Error("missing"));
       const error = vi.fn();
       const exit = vi.fn(() => {
         throw new Error("exit");
       });
-      await expect(ensureBinary("ghost", exec, { log: vi.fn(), error, exit })).rejects.toThrow(
-        "exit",
+      await expect(
+        ensureBinary("ghost", exec, { log: vi.fn(), error, exit }),
+      ).rejects.toThrow("exit");
+      expect(error).toHaveBeenCalledWith(
+        "Missing required binary: ghost. Please install it.",
       );
-      expect(error).toHaveBeenCalledWith("Missing required binary: ghost. Please install it.");
       expect(exit).toHaveBeenCalledWith(1);
     });
   });
@@ -72,7 +76,10 @@ describe("infra runtime", () => {
         retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
         shouldRetry: (err) => err instanceof Error && err.message === "boom",
       });
-      const fn = vi.fn().mockRejectedValueOnce(new Error("boom")).mockResolvedValue("ok");
+      const fn = vi
+        .fn()
+        .mockRejectedValueOnce(new Error("boom"))
+        .mockResolvedValue("ok");
 
       const promise = runner(fn, "request");
       await vi.runAllTimersAsync();
@@ -118,7 +125,9 @@ describe("infra runtime", () => {
         markGatewaySigusr1RestartHandled();
 
         expect(emitGatewayRestart()).toBe(true);
-        const sigusr1Emits = emitSpy.mock.calls.filter((args) => args[0] === "SIGUSR1");
+        const sigusr1Emits = emitSpy.mock.calls.filter(
+          (args) => args[0] === "SIGUSR1",
+        );
         expect(sigusr1Emits.length).toBe(2);
       } finally {
         process.removeListener("SIGUSR1", handler);
@@ -130,8 +139,14 @@ describe("infra runtime", () => {
       const handler = () => {};
       process.on("SIGUSR1", handler);
       try {
-        const first = scheduleGatewaySigusr1Restart({ delayMs: 1_000, reason: "first" });
-        const second = scheduleGatewaySigusr1Restart({ delayMs: 1_000, reason: "second" });
+        const first = scheduleGatewaySigusr1Restart({
+          delayMs: 1_000,
+          reason: "first",
+        });
+        const second = scheduleGatewaySigusr1Restart({
+          delayMs: 1_000,
+          reason: "second",
+        });
 
         expect(first.coalesced).toBe(false);
         expect(second.coalesced).toBe(true);
@@ -140,7 +155,9 @@ describe("infra runtime", () => {
         expect(emitSpy).not.toHaveBeenCalledWith("SIGUSR1");
 
         await vi.advanceTimersByTimeAsync(1);
-        const sigusr1Emits = emitSpy.mock.calls.filter((args) => args[0] === "SIGUSR1");
+        const sigusr1Emits = emitSpy.mock.calls.filter(
+          (args) => args[0] === "SIGUSR1",
+        );
         expect(sigusr1Emits.length).toBe(1);
       } finally {
         process.removeListener("SIGUSR1", handler);
@@ -152,7 +169,10 @@ describe("infra runtime", () => {
       const handler = () => {};
       process.on("SIGUSR1", handler);
       try {
-        const first = scheduleGatewaySigusr1Restart({ delayMs: 0, reason: "first" });
+        const first = scheduleGatewaySigusr1Restart({
+          delayMs: 0,
+          reason: "first",
+        });
         expect(first.coalesced).toBe(false);
         expect(first.delayMs).toBe(0);
 
@@ -160,16 +180,23 @@ describe("infra runtime", () => {
         expect(consumeGatewaySigusr1RestartAuthorization()).toBe(true);
         markGatewaySigusr1RestartHandled();
 
-        const second = scheduleGatewaySigusr1Restart({ delayMs: 0, reason: "second" });
+        const second = scheduleGatewaySigusr1Restart({
+          delayMs: 0,
+          reason: "second",
+        });
         expect(second.coalesced).toBe(false);
         expect(second.delayMs).toBe(30_000);
         expect(second.cooldownMsApplied).toBe(30_000);
 
         await vi.advanceTimersByTimeAsync(29_999);
-        expect(emitSpy.mock.calls.filter((args) => args[0] === "SIGUSR1").length).toBe(1);
+        expect(
+          emitSpy.mock.calls.filter((args) => args[0] === "SIGUSR1").length,
+        ).toBe(1);
 
         await vi.advanceTimersByTimeAsync(1);
-        expect(emitSpy.mock.calls.filter((args) => args[0] === "SIGUSR1").length).toBe(2);
+        expect(
+          emitSpy.mock.calls.filter((args) => args[0] === "SIGUSR1").length,
+        ).toBe(2);
       } finally {
         process.removeListener("SIGUSR1", handler);
       }
@@ -272,7 +299,9 @@ describe("infra runtime", () => {
   describe("tailnet address detection", () => {
     it("detects tailscale IPv4 and IPv6 addresses", () => {
       vi.spyOn(os, "networkInterfaces").mockReturnValue({
-        lo0: [{ address: "127.0.0.1", family: "IPv4", internal: true, netmask: "" }],
+        lo0: [
+          { address: "127.0.0.1", family: "IPv4", internal: true, netmask: "" },
+        ],
         utun9: [
           {
             address: "100.123.224.76",

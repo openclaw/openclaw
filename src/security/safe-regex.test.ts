@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { compileSafeRegex, hasNestedRepetition, testRegexWithBoundedInput } from "./safe-regex.js";
+import {
+  compileSafeRegex,
+  hasNestedRepetition,
+  testRegexWithBoundedInput,
+} from "./safe-regex.js";
 
 describe("safe regex", () => {
   it("flags nested repetition patterns", () => {
@@ -30,13 +34,22 @@ describe("safe regex", () => {
 
   it("checks bounded regex windows for long inputs", () => {
     expect(
-      testRegexWithBoundedInput(/^agent:main:discord:/, `agent:main:discord:${"x".repeat(5000)}`),
+      testRegexWithBoundedInput(
+        /^agent:main:discord:/,
+        `agent:main:discord:${"x".repeat(5000)}`,
+      ),
     ).toBe(true);
-    expect(testRegexWithBoundedInput(/discord:tail$/, `${"x".repeat(5000)}discord:tail`)).toBe(
-      true,
-    );
-    expect(testRegexWithBoundedInput(/discord:tail$/, `${"x".repeat(5000)}telegram:tail`)).toBe(
-      false,
-    );
+    expect(
+      testRegexWithBoundedInput(
+        /discord:tail$/,
+        `${"x".repeat(5000)}discord:tail`,
+      ),
+    ).toBe(true);
+    expect(
+      testRegexWithBoundedInput(
+        /discord:tail$/,
+        `${"x".repeat(5000)}telegram:tail`,
+      ),
+    ).toBe(false);
   });
 });

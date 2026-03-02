@@ -14,7 +14,10 @@ type BlueBubblesReplyCacheEntry = {
 };
 
 // Best-effort cache for resolving reply context when BlueBubbles webhooks omit sender/body.
-const blueBubblesReplyCacheByMessageId = new Map<string, BlueBubblesReplyCacheEntry>();
+const blueBubblesReplyCacheByMessageId = new Map<
+  string,
+  BlueBubblesReplyCacheEntry
+>();
 
 // Bidirectional maps for short ID ↔ message GUID resolution (token savings optimization)
 const blueBubblesShortIdToUuid = new Map<string, string>();
@@ -47,7 +50,11 @@ export function rememberBlueBubblesReplyCache(
     blueBubblesUuidToShortId.set(messageId, shortId);
   }
 
-  const fullEntry: BlueBubblesReplyCacheEntry = { ...entry, messageId, shortId };
+  const fullEntry: BlueBubblesReplyCacheEntry = {
+    ...entry,
+    messageId,
+    shortId,
+  };
 
   // Refresh insertion order.
   blueBubblesReplyCacheByMessageId.delete(messageId);
@@ -68,7 +75,9 @@ export function rememberBlueBubblesReplyCache(
     break;
   }
   while (blueBubblesReplyCacheByMessageId.size > REPLY_CACHE_MAX) {
-    const oldest = blueBubblesReplyCacheByMessageId.keys().next().value as string | undefined;
+    const oldest = blueBubblesReplyCacheByMessageId.keys().next().value as
+      | string
+      | undefined;
     if (!oldest) {
       break;
     }
@@ -163,7 +172,8 @@ export function resolveReplyContextFromCache(params: {
   const cachedChatGuid = trimOrUndefined(cached.chatGuid);
   const cachedChatIdentifier = trimOrUndefined(cached.chatIdentifier);
   const chatId = typeof params.chatId === "number" ? params.chatId : undefined;
-  const cachedChatId = typeof cached.chatId === "number" ? cached.chatId : undefined;
+  const cachedChatId =
+    typeof cached.chatId === "number" ? cached.chatId : undefined;
 
   // Avoid cross-chat collisions if we have identifiers.
   if (chatGuid && cachedChatGuid && chatGuid !== cachedChatGuid) {
@@ -177,7 +187,13 @@ export function resolveReplyContextFromCache(params: {
   ) {
     return null;
   }
-  if (!chatGuid && !chatIdentifier && chatId && cachedChatId && chatId !== cachedChatId) {
+  if (
+    !chatGuid &&
+    !chatIdentifier &&
+    chatId &&
+    cachedChatId &&
+    chatId !== cachedChatId
+  ) {
     return null;
   }
 

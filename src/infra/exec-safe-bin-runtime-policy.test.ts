@@ -30,10 +30,9 @@ describe("exec safe-bin runtime policy", () => {
   }
 
   it("lists interpreter-like bins from a mixed set", () => {
-    expect(listInterpreterLikeSafeBins(["jq", "python3", "myfilter", "node"])).toEqual([
-      "node",
-      "python3",
-    ]);
+    expect(
+      listInterpreterLikeSafeBins(["jq", "python3", "myfilter", "node"]),
+    ).toEqual(["node", "python3"]);
   });
 
   it("merges and normalizes safe-bin profile fixtures", () => {
@@ -94,23 +93,33 @@ describe("exec safe-bin runtime policy", () => {
 
   it("does not trust package-manager bin dirs unless explicitly configured", () => {
     const defaultPolicy = resolveExecSafeBinRuntimePolicy({});
-    expect(defaultPolicy.trustedSafeBinDirs.has(path.resolve("/opt/homebrew/bin"))).toBe(false);
-    expect(defaultPolicy.trustedSafeBinDirs.has(path.resolve("/usr/local/bin"))).toBe(false);
+    expect(
+      defaultPolicy.trustedSafeBinDirs.has(path.resolve("/opt/homebrew/bin")),
+    ).toBe(false);
+    expect(
+      defaultPolicy.trustedSafeBinDirs.has(path.resolve("/usr/local/bin")),
+    ).toBe(false);
 
     const optedIn = resolveExecSafeBinRuntimePolicy({
       global: {
         safeBinTrustedDirs: ["/opt/homebrew/bin", "/usr/local/bin"],
       },
     });
-    expect(optedIn.trustedSafeBinDirs.has(path.resolve("/opt/homebrew/bin"))).toBe(true);
-    expect(optedIn.trustedSafeBinDirs.has(path.resolve("/usr/local/bin"))).toBe(true);
+    expect(
+      optedIn.trustedSafeBinDirs.has(path.resolve("/opt/homebrew/bin")),
+    ).toBe(true);
+    expect(optedIn.trustedSafeBinDirs.has(path.resolve("/usr/local/bin"))).toBe(
+      true,
+    );
   });
 
   it("emits runtime warning when explicitly trusted dir is writable", async () => {
     if (process.platform === "win32") {
       return;
     }
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-safe-bin-runtime-"));
+    const dir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-safe-bin-runtime-"),
+    );
     try {
       await fs.chmod(dir, 0o777);
       const onWarning = vi.fn();
@@ -128,8 +137,12 @@ describe("exec safe-bin runtime policy", () => {
           worldWritable: true,
         },
       ]);
-      expect(onWarning).toHaveBeenCalledWith(expect.stringContaining(path.resolve(dir)));
-      expect(onWarning).toHaveBeenCalledWith(expect.stringContaining("world-writable"));
+      expect(onWarning).toHaveBeenCalledWith(
+        expect.stringContaining(path.resolve(dir)),
+      );
+      expect(onWarning).toHaveBeenCalledWith(
+        expect.stringContaining("world-writable"),
+      );
     } finally {
       await fs.chmod(dir, 0o755).catch(() => undefined);
       await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);

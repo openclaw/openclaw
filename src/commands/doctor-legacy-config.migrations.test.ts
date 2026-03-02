@@ -87,7 +87,9 @@ describe("normalizeCompatibilityConfigValues", () => {
   });
 
   it("copies legacy ack reaction when authDir override exists", () => {
-    const customDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-wa-auth-"));
+    const customDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "openclaw-wa-auth-"),
+    );
     try {
       writeCreds(customDir);
 
@@ -130,16 +132,26 @@ describe("normalizeCompatibilityConfigValues", () => {
         discord: {
           accounts: {
             work: {
-              dm: { policy: "allowlist", allowFrom: ["123"], groupEnabled: true },
+              dm: {
+                policy: "allowlist",
+                allowFrom: ["123"],
+                groupEnabled: true,
+              },
             },
           },
         },
       },
     });
 
-    expect(res.config.channels?.discord?.accounts?.work?.dmPolicy).toBe("allowlist");
-    expect(res.config.channels?.discord?.accounts?.work?.allowFrom).toEqual(["123"]);
-    expect(res.config.channels?.discord?.accounts?.work?.dm).toEqual({ groupEnabled: true });
+    expect(res.config.channels?.discord?.accounts?.work?.dmPolicy).toBe(
+      "allowlist",
+    );
+    expect(res.config.channels?.discord?.accounts?.work?.allowFrom).toEqual([
+      "123",
+    ]);
+    expect(res.config.channels?.discord?.accounts?.work?.dm).toEqual({
+      groupEnabled: true,
+    });
     expect(res.changes).toEqual([
       "Moved channels.discord.accounts.work.dm.policy → channels.discord.accounts.work.dmPolicy.",
       "Moved channels.discord.accounts.work.dm.allowFrom → channels.discord.accounts.work.allowFrom.",
@@ -163,7 +175,9 @@ describe("normalizeCompatibilityConfigValues", () => {
     expect(res.config.channels?.discord?.streaming).toBe("partial");
     expect(res.config.channels?.discord?.streamMode).toBeUndefined();
     expect(res.config.channels?.discord?.accounts?.work?.streaming).toBe("off");
-    expect(res.config.channels?.discord?.accounts?.work?.streamMode).toBeUndefined();
+    expect(
+      res.config.channels?.discord?.accounts?.work?.streamMode,
+    ).toBeUndefined();
     expect(res.changes).toContain(
       "Normalized channels.discord.streaming boolean → enum (partial).",
     );
@@ -257,7 +271,9 @@ describe("normalizeCompatibilityConfigValues", () => {
     expect(res.config.channels?.telegram?.allowFrom).toBeUndefined();
     expect(res.config.channels?.telegram?.groupPolicy).toBeUndefined();
     expect(res.config.channels?.telegram?.streaming).toBeUndefined();
-    expect(res.config.channels?.telegram?.accounts?.alerts?.botToken).toBe("alerts-token");
+    expect(res.config.channels?.telegram?.accounts?.alerts?.botToken).toBe(
+      "alerts-token",
+    );
     expect(res.changes).toContain(
       "Moved channels.telegram single-account top-level values into channels.telegram.accounts.default.",
     );
@@ -274,8 +290,12 @@ describe("normalizeCompatibilityConfigValues", () => {
     });
 
     expect(res.config.browser?.ssrfPolicy?.allowPrivateNetwork).toBeUndefined();
-    expect(res.config.browser?.ssrfPolicy?.dangerouslyAllowPrivateNetwork).toBe(true);
-    expect(res.config.browser?.ssrfPolicy?.allowedHostnames).toEqual(["localhost"]);
+    expect(res.config.browser?.ssrfPolicy?.dangerouslyAllowPrivateNetwork).toBe(
+      true,
+    );
+    expect(res.config.browser?.ssrfPolicy?.allowedHostnames).toEqual([
+      "localhost",
+    ]);
     expect(res.changes).toContain(
       "Moved browser.ssrfPolicy.allowPrivateNetwork → browser.ssrfPolicy.dangerouslyAllowPrivateNetwork (true).",
     );
@@ -292,7 +312,9 @@ describe("normalizeCompatibilityConfigValues", () => {
     });
 
     expect(res.config.browser?.ssrfPolicy?.allowPrivateNetwork).toBeUndefined();
-    expect(res.config.browser?.ssrfPolicy?.dangerouslyAllowPrivateNetwork).toBe(true);
+    expect(res.config.browser?.ssrfPolicy?.dangerouslyAllowPrivateNetwork).toBe(
+      true,
+    );
     expect(res.changes).toContain(
       "Moved browser.ssrfPolicy.allowPrivateNetwork → browser.ssrfPolicy.dangerouslyAllowPrivateNetwork (true).",
     );

@@ -92,7 +92,9 @@ describe("buildThreadingToolContext", () => {
       hasRepliedRef: undefined,
     });
 
-    expect(result.currentChannelId).toBe("group:VWATOdKF2hc8zdOS76q9tb0+5BI522e03QLDAq/9yPg=");
+    expect(result.currentChannelId).toBe(
+      "group:VWATOdKF2hc8zdOS76q9tb0+5BI522e03QLDAq/9yPg=",
+    );
   });
 
   it("uses the sender handle for iMessage direct chats", () => {
@@ -246,10 +248,12 @@ const baseRun: SubagentRunRecord = {
 describe("subagents utils", () => {
   it("resolves labels from label, task, or fallback", () => {
     expect(resolveSubagentLabel({ ...baseRun, label: "Label" })).toBe("Label");
-    expect(resolveSubagentLabel({ ...baseRun, label: " ", task: "Task" })).toBe("Task");
-    expect(resolveSubagentLabel({ ...baseRun, label: " ", task: " " }, "fallback")).toBe(
-      "fallback",
+    expect(resolveSubagentLabel({ ...baseRun, label: " ", task: "Task" })).toBe(
+      "Task",
     );
+    expect(
+      resolveSubagentLabel({ ...baseRun, label: " ", task: " " }, "fallback"),
+    ).toBe("fallback");
   });
 
   it("formats run labels with truncation", () => {
@@ -272,10 +276,16 @@ describe("subagents utils", () => {
 
   it("formats run status from outcome and timestamps", () => {
     expect(formatRunStatus({ ...baseRun })).toBe("running");
-    expect(formatRunStatus({ ...baseRun, endedAt: 2000, outcome: { status: "ok" } })).toBe("done");
-    expect(formatRunStatus({ ...baseRun, endedAt: 2000, outcome: { status: "timeout" } })).toBe(
-      "timeout",
-    );
+    expect(
+      formatRunStatus({ ...baseRun, endedAt: 2000, outcome: { status: "ok" } }),
+    ).toBe("done");
+    expect(
+      formatRunStatus({
+        ...baseRun,
+        endedAt: 2000,
+        outcome: { status: "timeout" },
+      }),
+    ).toBe("timeout");
   });
 
   it("formats duration compact for seconds and minutes", () => {

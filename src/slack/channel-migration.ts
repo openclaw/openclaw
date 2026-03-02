@@ -66,7 +66,10 @@ export function migrateSlackChannelConfig(params: {
   let migrated = false;
   let skippedExisting = false;
 
-  const accountChannels = resolveAccountChannels(params.cfg, params.accountId).channels;
+  const accountChannels = resolveAccountChannels(
+    params.cfg,
+    params.accountId,
+  ).channels;
   if (accountChannels) {
     const result = migrateSlackChannelsInPlace(
       accountChannels,

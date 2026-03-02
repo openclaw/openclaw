@@ -5,12 +5,16 @@ type DummyTool = { name: string };
 
 describe("tool-policy-pipeline", () => {
   test("strips allowlists that would otherwise disable core tools", () => {
-    const tools = [{ name: "exec" }, { name: "plugin_tool" }] as unknown as DummyTool[];
+    const tools = [
+      { name: "exec" },
+      { name: "plugin_tool" },
+    ] as unknown as DummyTool[];
     const filtered = applyToolPolicyPipeline({
       // oxlint-disable-next-line typescript/no-explicit-any
       tools: tools as any,
       // oxlint-disable-next-line typescript/no-explicit-any
-      toolMeta: (t: any) => (t.name === "plugin_tool" ? { pluginId: "foo" } : undefined),
+      toolMeta: (t: any) =>
+        t.name === "plugin_tool" ? { pluginId: "foo" } : undefined,
       warn: () => {},
       steps: [
         {
@@ -20,7 +24,9 @@ describe("tool-policy-pipeline", () => {
         },
       ],
     });
-    const names = filtered.map((t) => (t as unknown as DummyTool).name).toSorted();
+    const names = filtered
+      .map((t) => (t as unknown as DummyTool).name)
+      .toSorted();
     expect(names).toEqual(["exec", "plugin_tool"]);
   });
 
@@ -46,7 +52,10 @@ describe("tool-policy-pipeline", () => {
   });
 
   test("applies allowlist filtering when core tools are explicitly listed", () => {
-    const tools = [{ name: "exec" }, { name: "process" }] as unknown as DummyTool[];
+    const tools = [
+      { name: "exec" },
+      { name: "process" },
+    ] as unknown as DummyTool[];
     const filtered = applyToolPolicyPipeline({
       // oxlint-disable-next-line typescript/no-explicit-any
       tools: tools as any,
@@ -61,6 +70,8 @@ describe("tool-policy-pipeline", () => {
         },
       ],
     });
-    expect(filtered.map((t) => (t as unknown as DummyTool).name)).toEqual(["exec"]);
+    expect(filtered.map((t) => (t as unknown as DummyTool).name)).toEqual([
+      "exec",
+    ]);
   });
 });

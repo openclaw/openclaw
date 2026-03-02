@@ -272,7 +272,10 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
 `splitSdkTools()` passes all tools via `customTools`:
 
 ```typescript
-export function splitSdkTools(options: { tools: AnyAgentTool[]; sandboxEnabled: boolean }) {
+export function splitSdkTools(options: {
+  tools: AnyAgentTool[];
+  sandboxEnabled: boolean;
+}) {
   return {
     builtInTools: [], // Empty. We override everything
     customTools: toToolDefinitions(options.tools),
@@ -336,8 +339,15 @@ const compactResult = await compactEmbeddedPiSessionDirect({
 OpenClaw maintains an auth profile store with multiple API keys per provider:
 
 ```typescript
-const authStore = ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false });
-const profileOrder = resolveAuthProfileOrder({ cfg, store: authStore, provider, preferredProfile });
+const authStore = ensureAuthProfileStore(agentDir, {
+  allowKeychainPrompt: false,
+});
+const profileOrder = resolveAuthProfileOrder({
+  cfg,
+  store: authStore,
+  provider,
+  preferredProfile,
+});
 ```
 
 Profiles rotate on failures with cooldown tracking:
@@ -417,7 +427,9 @@ if (cfg?.agents?.defaults?.contextPruning?.mode === "cache-ttl") {
 `EmbeddedBlockChunker` manages streaming text into discrete reply blocks:
 
 ```typescript
-const blockChunker = blockChunking ? new EmbeddedBlockChunker(blockChunking) : null;
+const blockChunker = blockChunking
+  ? new EmbeddedBlockChunker(blockChunking)
+  : null;
 ```
 
 ### Thinking/Final Tag Stripping
@@ -425,7 +437,10 @@ const blockChunker = blockChunking ? new EmbeddedBlockChunker(blockChunking) : n
 Streaming output is processed to strip `<think>`/`<thinking>` blocks and extract `<final>` content:
 
 ```typescript
-const stripBlockTags = (text: string, state: { thinking: boolean; final: boolean }) => {
+const stripBlockTags = (
+  text: string,
+  state: { thinking: boolean; final: boolean },
+) => {
   // Strip <think>...</think> content
   // If enforceFinalTag, only return <final>...</final> content
 };
@@ -436,7 +451,12 @@ const stripBlockTags = (text: string, state: { thinking: boolean; final: boolean
 Reply directives like `[[media:url]]`, `[[voice]]`, `[[reply:id]]` are parsed and extracted:
 
 ```typescript
-const { text: cleanedText, mediaUrls, audioAsVoice, replyToId } = consumeReplyDirectives(chunk);
+const {
+  text: cleanedText,
+  mediaUrls,
+  audioAsVoice,
+  replyToId,
+} = consumeReplyDirectives(chunk);
 ```
 
 ## Error Handling

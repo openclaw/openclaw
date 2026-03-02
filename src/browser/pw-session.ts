@@ -10,7 +10,12 @@ import { chromium } from "playwright-core";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { withNoProxyForCdpUrl } from "./cdp-proxy-bypass.js";
-import { appendCdpPath, fetchJson, getHeadersWithAuth, withCdpSocket } from "./cdp.helpers.js";
+import {
+  appendCdpPath,
+  fetchJson,
+  getHeadersWithAuth,
+  withCdpSocket,
+} from "./cdp.helpers.js";
 import { normalizeCdpWsUrl } from "./cdp.js";
 import { getChromeWebSocketUrl } from "./chrome.js";
 import {
@@ -48,7 +53,9 @@ type SnapshotForAIResult = { full: string; incremental?: string };
 type SnapshotForAIOptions = { timeout?: number; track?: string };
 
 export type WithSnapshotForAI = {
-  _snapshotForAI?: (options?: SnapshotForAIOptions) => Promise<SnapshotForAIResult>;
+  _snapshotForAI?: (
+    options?: SnapshotForAIOptions,
+  ) => Promise<SnapshotForAIResult>;
 };
 
 type TargetInfoResponse = {
@@ -114,7 +121,10 @@ function normalizeCdpUrl(raw: string) {
   return raw.replace(/\/$/, "");
 }
 
-function findNetworkRequestById(state: PageState, id: string): BrowserNetworkRequest | undefined {
+function findNetworkRequestById(
+  state: PageState,
+  id: string,
+): BrowserNetworkRequest | undefined {
   for (let i = state.requests.length - 1; i >= 0; i -= 1) {
     const candidate = state.requests[i];
     if (candidate && candidate.id === id) {
@@ -334,7 +344,9 @@ async function connectBrowser(cdpUrl: string): Promise<ConnectedBrowser> {
     for (let attempt = 0; attempt < 3; attempt += 1) {
       try {
         const timeout = 5000 + attempt * 2000;
-        const wsUrl = await getChromeWebSocketUrl(normalized, timeout).catch(() => null);
+        const wsUrl = await getChromeWebSocketUrl(normalized, timeout).catch(
+          () => null,
+        );
         const endpoint = wsUrl ?? normalized;
         const headers = getHeadersWithAuth(endpoint);
         // Bypass proxy for loopback CDP connections (#31219)
@@ -346,7 +358,11 @@ async function connectBrowser(cdpUrl: string): Promise<ConnectedBrowser> {
             cached = null;
           }
         };
-        const connected: ConnectedBrowser = { browser, cdpUrl: normalized, onDisconnected };
+        const connected: ConnectedBrowser = {
+          browser,
+          cdpUrl: normalized,
+          onDisconnected,
+        };
         cached = connected;
         browser.on("disconnected", onDisconnected);
         observeBrowser(browser);
@@ -360,7 +376,9 @@ async function connectBrowser(cdpUrl: string): Promise<ConnectedBrowser> {
     if (lastErr instanceof Error) {
       throw lastErr;
     }
-    const message = lastErr ? formatErrorMessage(lastErr) : "CDP connect failed";
+    const message = lastErr
+      ? formatErrorMessage(lastErr)
+      : "CDP connect failed";
     throw new Error(message);
   };
 
@@ -380,7 +398,9 @@ async function getAllPages(browser: Browser): Promise<Page[]> {
 async function pageTargetId(page: Page): Promise<string | null> {
   const session = await page.context().newCDPSession(page);
   try {
-    const info = (await session.send("Target.getTargetInfo")) as TargetInfoResponse;
+    const info = (await session.send(
+      "Target.getTargetInfo",
+    )) as TargetInfoResponse;
     const targetId = String(info?.targetInfo?.targetId ?? "").trim();
     return targetId || null;
   } finally {
@@ -422,7 +442,9 @@ async function findPageByTargetId(
         .replace(/^ws:/, "http:")
         .replace(/\/cdp$/, "");
       const listUrl = `${baseUrl}/json/list`;
-      const response = await fetch(listUrl, { headers: getHeadersWithAuth(listUrl) });
+      const response = await fetch(listUrl, {
+        headers: getHeadersWithAuth(listUrl),
+      });
       if (response.ok) {
         const targets = (await response.json()) as Array<{
           id: string;
@@ -560,7 +582,9 @@ function cdpSocketNeedsAttach(wsUrl: string): boolean {
   try {
     const pathname = new URL(wsUrl).pathname;
     return (
-      pathname === "/cdp" || pathname.endsWith("/cdp") || pathname.includes("/devtools/browser/")
+      pathname === "/cdp" ||
+      pathname.endsWith("/cdp") ||
+      pathname.includes("/devtools/browser/")
     );
   } catch {
     return false;
@@ -592,7 +616,10 @@ async function tryTerminateExecutionViaCdp(opts: {
   const wsUrl = normalizeCdpWsUrl(wsUrlRaw, cdpHttpBase);
   const needsAttach = cdpSocketNeedsAttach(wsUrl);
 
-  const runWithTimeout = async <T>(work: Promise<T>, ms: number): Promise<T> => {
+  const runWithTimeout = async <T>(
+    work: Promise<T>,
+    ms: number,
+  ): Promise<T> => {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timeoutPromise = new Promise<never>((_, reject) => {
       timer = setTimeout(() => reject(new Error("CDP command timed out")), ms);
@@ -613,14 +640,23 @@ async function tryTerminateExecutionViaCdp(opts: {
       try {
         if (needsAttach) {
           const attached = (await runWithTimeout(
-            send("Target.attachToTarget", { targetId: opts.targetId, flatten: true }),
+            send("Target.attachToTarget", {
+              targetId: opts.targetId,
+              flatten: true,
+            }),
             1500,
           )) as { sessionId?: unknown };
-          if (typeof attached?.sessionId === "string" && attached.sessionId.trim()) {
+          if (
+            typeof attached?.sessionId === "string" &&
+            attached.sessionId.trim()
+          ) {
             sessionId = attached.sessionId;
           }
         }
-        await runWithTimeout(send("Runtime.terminateExecution", undefined, sessionId), 1500);
+        await runWithTimeout(
+          send("Runtime.terminateExecution", undefined, sessionId),
+          1500,
+        );
         if (sessionId) {
           // Best-effort cleanup; not required for termination to take effect.
           void send("Target.detachFromTarget", { sessionId }).catch(() => {});
@@ -678,7 +714,9 @@ export async function forceDisconnectPlaywrightForTarget(opts: {
     // disconnect Playwright's CDP connection.
     const targetId = opts.targetId?.trim() || "";
     if (targetId) {
-      await tryTerminateExecutionViaCdp({ cdpUrl: normalized, targetId }).catch(() => {});
+      await tryTerminateExecutionViaCdp({ cdpUrl: normalized, targetId }).catch(
+        () => {},
+      );
     }
 
     // Fire-and-forget: don't await because browser.close() may hang on the stuck CDP pipe.

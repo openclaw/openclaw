@@ -22,7 +22,10 @@ describe("bash process registry", () => {
     return createProcessSessionFixture({
       id: params.id ?? "sess",
       command: "echo test",
-      child: { pid: 123, removeAllListeners: vi.fn() } as unknown as ChildProcessWithoutNullStreams,
+      child: {
+        pid: 123,
+        removeAllListeners: vi.fn(),
+      } as unknown as ChildProcessWithoutNullStreams,
       maxOutputChars: params.maxOutputChars,
       pendingMaxOutputChars: params.pendingMaxOutputChars,
       backgrounded: params.backgrounded,

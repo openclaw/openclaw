@@ -59,7 +59,9 @@ describe("buildTelegramMessageContext group sessions without forum", () => {
 
     expect(ctx).not.toBeNull();
     // Session key should NOT include :topic:42
-    expect(ctx?.ctxPayload?.SessionKey).toBe("agent:main:telegram:group:-1001234567890");
+    expect(ctx?.ctxPayload?.SessionKey).toBe(
+      "agent:main:telegram:group:-1001234567890",
+    );
     // MessageThreadId should be undefined (not a forum)
     expect(ctx?.ctxPayload?.MessageThreadId).toBeUndefined();
   });
@@ -85,13 +87,20 @@ describe("buildTelegramMessageContext group sessions without forum", () => {
     expect(ctxWithThread).not.toBeNull();
     expect(ctxWithoutThread).not.toBeNull();
     // Both messages should use the same session key
-    expect(ctxWithThread?.ctxPayload?.SessionKey).toBe(ctxWithoutThread?.ctxPayload?.SessionKey);
+    expect(ctxWithThread?.ctxPayload?.SessionKey).toBe(
+      ctxWithoutThread?.ctxPayload?.SessionKey,
+    );
   });
 
   it("uses topic session for forum groups with message_thread_id", async () => {
     const ctx = await buildContext({
       message_id: 1,
-      chat: { id: -1001234567890, type: "supergroup", title: "Test Forum", is_forum: true },
+      chat: {
+        id: -1001234567890,
+        type: "supergroup",
+        title: "Test Forum",
+        is_forum: true,
+      },
       date: 1700000000,
       text: "@bot hello",
       message_thread_id: 99,
@@ -100,7 +109,9 @@ describe("buildTelegramMessageContext group sessions without forum", () => {
 
     expect(ctx).not.toBeNull();
     // Session key SHOULD include :topic:99 for forums
-    expect(ctx?.ctxPayload?.SessionKey).toBe("agent:main:telegram:group:-1001234567890:topic:99");
+    expect(ctx?.ctxPayload?.SessionKey).toBe(
+      "agent:main:telegram:group:-1001234567890:topic:99",
+    );
     expect(ctx?.ctxPayload?.MessageThreadId).toBe(99);
   });
 });

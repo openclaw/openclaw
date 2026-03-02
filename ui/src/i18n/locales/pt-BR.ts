@@ -38,14 +38,16 @@ export const pt_BR: TranslationMap = {
     logs: "Logs",
   },
   subtitles: {
-    agents: "Gerenciar espaços de trabalho, ferramentas e identidades de agentes.",
+    agents:
+      "Gerenciar espaços de trabalho, ferramentas e identidades de agentes.",
     overview: "Status do gateway, pontos de entrada e leitura rápida de saúde.",
     channels: "Gerenciar canais e configurações.",
     instances: "Beacons de presença de clientes e nós conectados.",
     sessions: "Inspecionar sessões ativas e ajustar padrões por sessão.",
     usage: "Monitorar uso e custos da API.",
     cron: "Agendar despertares e execuções recorrentes de agentes.",
-    skills: "Gerenciar disponibilidade de habilidades e injeção de chaves de API.",
+    skills:
+      "Gerenciar disponibilidade de habilidades e injeção de chaves de API.",
     nodes: "Dispositivos pareados, capacidades e exposição de comandos.",
     chat: "Sessão de chat direta com o gateway para intervenções rápidas.",
     config: "Editar ~/.openclaw/openclaw.json com segurança.",
@@ -71,7 +73,8 @@ export const pt_BR: TranslationMap = {
       uptime: "Tempo de Atividade",
       tickInterval: "Intervalo de Tick",
       lastChannelsRefresh: "Última Atualização de Canais",
-      channelsHint: "Use Canais para vincular WhatsApp, Telegram, Discord, Signal ou iMessage.",
+      channelsHint:
+        "Use Canais para vincular WhatsApp, Telegram, Discord, Signal ou iMessage.",
     },
     stats: {
       instances: "Instâncias",
@@ -105,14 +108,16 @@ export const pt_BR: TranslationMap = {
     },
     insecure: {
       hint: "Esta página é HTTP, então o navegador bloqueia a identidade do dispositivo. Use HTTPS (Tailscale Serve) ou abra {url} no host do gateway.",
-      stayHttp: "Se você precisar permanecer em HTTP, defina {config} (apenas token).",
+      stayHttp:
+        "Se você precisar permanecer em HTTP, defina {config} (apenas token).",
     },
   },
   chat: {
     disconnected: "Desconectado do gateway.",
     refreshTitle: "Atualizar dados do chat",
     thinkingToggle: "Alternar saída de pensamento/trabalho do assistente",
-    focusToggle: "Alternar modo de foco (ocultar barra lateral + cabeçalho da página)",
+    focusToggle:
+      "Alternar modo de foco (ocultar barra lateral + cabeçalho da página)",
     hideCronSessions: "Ocultar sessões de cron",
     showCronSessions: "Mostrar sessões de cron",
     showCronSessionsHidden: "Mostrar sessões de cron ({count} ocultas)",

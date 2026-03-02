@@ -14,7 +14,9 @@ export function normalizeSecretInput(value: unknown): string {
   return value.replace(/[\r\n\u2028\u2029]+/g, "").trim();
 }
 
-export function normalizeOptionalSecretInput(value: unknown): string | undefined {
+export function normalizeOptionalSecretInput(
+  value: unknown,
+): string | undefined {
   const normalized = normalizeSecretInput(value);
   return normalized ? normalized : undefined;
 }

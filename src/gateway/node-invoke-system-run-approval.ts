@@ -52,17 +52,25 @@ function normalizeString(value: unknown): string | null {
   return trimmed ? trimmed : null;
 }
 
-function normalizeApprovalDecision(value: unknown): "allow-once" | "allow-always" | null {
+function normalizeApprovalDecision(
+  value: unknown,
+): "allow-once" | "allow-always" | null {
   const s = normalizeString(value);
   return s === "allow-once" || s === "allow-always" ? s : null;
 }
 
 function clientHasApprovals(client: ApprovalClient | null): boolean {
-  const scopes = Array.isArray(client?.connect?.scopes) ? client?.connect?.scopes : [];
-  return scopes.includes("operator.admin") || scopes.includes("operator.approvals");
+  const scopes = Array.isArray(client?.connect?.scopes)
+    ? client?.connect?.scopes
+    : [];
+  return (
+    scopes.includes("operator.admin") || scopes.includes("operator.approvals")
+  );
 }
 
-function pickSystemRunParams(raw: Record<string, unknown>): Record<string, unknown> {
+function pickSystemRunParams(
+  raw: Record<string, unknown>,
+): Record<string, unknown> {
   // Defensive allowlist: only forward fields that the node-host `system.run` handler understands.
   // This prevents future internal control fields from being smuggled through the gateway.
   const next: Record<string, unknown> = {};
@@ -263,7 +271,10 @@ export function sanitizeSystemRunParamsForForwarding(opts: {
 
   // Normal path: enforce the decision recorded by the gateway.
   if (snapshot.decision === "allow-once") {
-    if (typeof manager.consumeAllowOnce !== "function" || !manager.consumeAllowOnce(runId)) {
+    if (
+      typeof manager.consumeAllowOnce !== "function" ||
+      !manager.consumeAllowOnce(runId)
+    ) {
       return systemRunApprovalRequired(runId);
     }
     next.approved = true;

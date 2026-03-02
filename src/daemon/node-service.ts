@@ -24,7 +24,9 @@ function withNodeServiceEnv(
   };
 }
 
-function withNodeInstallEnv(args: GatewayServiceInstallArgs): GatewayServiceInstallArgs {
+function withNodeInstallEnv(
+  args: GatewayServiceInstallArgs,
+): GatewayServiceInstallArgs {
   return {
     ...args,
     env: withNodeServiceEnv(args.env),

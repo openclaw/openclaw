@@ -49,7 +49,13 @@ function createBundledSkill(params: {
     config: string[];
     os: string[];
   };
-  missing: { bins: string[]; anyBins: string[]; env: string[]; config: string[]; os: string[] };
+  missing: {
+    bins: string[];
+    anyBins: string[];
+    env: string[];
+    config: string[];
+    os: string[];
+  };
   configChecks: [];
   install: Array<{ id: string; kind: string; label: string; bins: string[] }>;
 } {
@@ -65,14 +71,35 @@ function createBundledSkill(params: {
     disabled: false,
     blockedByAllowlist: false,
     eligible: false,
-    requirements: { bins: params.bins, anyBins: [], env: [], config: [], os: params.os ?? [] },
-    missing: { bins: params.bins, anyBins: [], env: [], config: [], os: params.os ?? [] },
+    requirements: {
+      bins: params.bins,
+      anyBins: [],
+      env: [],
+      config: [],
+      os: params.os ?? [],
+    },
+    missing: {
+      bins: params.bins,
+      anyBins: [],
+      env: [],
+      config: [],
+      os: params.os ?? [],
+    },
     configChecks: [],
-    install: [{ id: "brew", kind: "brew", label: params.installLabel, bins: params.bins }],
+    install: [
+      {
+        id: "brew",
+        kind: "brew",
+        label: params.installLabel,
+        bins: params.bins,
+      },
+    ],
   };
 }
 
-function mockMissingBrewStatus(skills: Array<ReturnType<typeof createBundledSkill>>): void {
+function mockMissingBrewStatus(
+  skills: Array<ReturnType<typeof createBundledSkill>>,
+): void {
   vi.mocked(detectBinary).mockResolvedValue(false);
   vi.mocked(installSkill).mockResolvedValue({
     ok: true,
@@ -92,7 +119,10 @@ function createPrompter(params: {
   configure?: boolean;
   showBrewInstall?: boolean;
   multiselect?: string[];
-}): { prompter: WizardPrompter; notes: Array<{ title?: string; message: string }> } {
+}): {
+  prompter: WizardPrompter;
+  notes: Array<{ title?: string; message: string }>;
+} {
   const notes: Array<{ title?: string; message: string }> = [];
 
   const confirmAnswers: boolean[] = [];
@@ -155,7 +185,8 @@ describe("setupSkills", () => {
     await setupSkills({} as OpenClawConfig, "/tmp/ws", runtime, prompter);
 
     // OS-mismatched skill should be counted as unsupported, not installable/missing.
-    const status = notes.find((n) => n.title === "Skills status")?.message ?? "";
+    const status =
+      notes.find((n) => n.title === "Skills status")?.message ?? "";
     expect(status).toContain("Unsupported on this OS: 1");
 
     const brewNote = notes.find((n) => n.title === "Homebrew recommended");
@@ -176,7 +207,9 @@ describe("setupSkills", () => {
       }),
     ]);
 
-    const { prompter, notes } = createPrompter({ multiselect: ["video-frames"] });
+    const { prompter, notes } = createPrompter({
+      multiselect: ["video-frames"],
+    });
     await setupSkills({} as OpenClawConfig, "/tmp/ws", runtime, prompter);
 
     const brewNote = notes.find((n) => n.title === "Homebrew recommended");

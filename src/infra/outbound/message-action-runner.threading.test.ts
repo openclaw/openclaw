@@ -1,4 +1,12 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import { slackPlugin } from "../../../extensions/slack/src/channel.js";
 import { telegramPlugin } from "../../../extensions/telegram/src/channel.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -11,9 +19,9 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("./outbound-send-service.js", async () => {
-  const actual = await vi.importActual<typeof import("./outbound-send-service.js")>(
-    "./outbound-send-service.js",
-  );
+  const actual = await vi.importActual<
+    typeof import("./outbound-send-service.js")
+  >("./outbound-send-service.js");
   return {
     ...actual,
     executeSendAction: mocks.executeSendAction,
@@ -21,9 +29,9 @@ vi.mock("./outbound-send-service.js", async () => {
 });
 
 vi.mock("../../config/sessions.js", async () => {
-  const actual = await vi.importActual<typeof import("../../config/sessions.js")>(
-    "../../config/sessions.js",
-  );
+  const actual = await vi.importActual<
+    typeof import("../../config/sessions.js")
+  >("../../config/sessions.js");
   return {
     ...actual,
     recordSessionMetaFromInbound: mocks.recordSessionMetaFromInbound,
@@ -64,7 +72,11 @@ async function runThreadingAction(params: {
   return mocks.executeSendAction.mock.calls[0]?.[0] as {
     threadId?: string;
     replyToId?: string;
-    ctx?: { agentId?: string; mirror?: { sessionKey?: string }; params?: Record<string, unknown> };
+    ctx?: {
+      agentId?: string;
+      mirror?: { sessionKey?: string };
+      params?: Record<string, unknown>;
+    };
   };
 }
 
@@ -87,8 +99,10 @@ let setTelegramRuntime: typeof import("../../../extensions/telegram/src/runtime.
 describe("runMessageAction threading auto-injection", () => {
   beforeAll(async () => {
     ({ createPluginRuntime } = await import("../../plugins/runtime/index.js"));
-    ({ setSlackRuntime } = await import("../../../extensions/slack/src/runtime.js"));
-    ({ setTelegramRuntime } = await import("../../../extensions/telegram/src/runtime.js"));
+    ({ setSlackRuntime } =
+      await import("../../../extensions/slack/src/runtime.js"));
+    ({ setTelegramRuntime } =
+      await import("../../../extensions/telegram/src/runtime.js"));
   });
 
   beforeEach(() => {

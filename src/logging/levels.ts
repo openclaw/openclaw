@@ -15,7 +15,9 @@ export function tryParseLogLevel(level?: string): LogLevel | undefined {
     return undefined;
   }
   const candidate = level.trim();
-  return ALLOWED_LOG_LEVELS.includes(candidate as LogLevel) ? (candidate as LogLevel) : undefined;
+  return ALLOWED_LOG_LEVELS.includes(candidate as LogLevel)
+    ? (candidate as LogLevel)
+    : undefined;
 }
 
 export function normalizeLogLevel(level?: string, fallback: LogLevel = "info") {

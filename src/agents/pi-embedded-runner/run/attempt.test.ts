@@ -12,7 +12,9 @@ import {
   wrapStreamFnTrimToolCallNames,
 } from "./attempt.js";
 
-function createOllamaProviderConfig(injectNumCtxForOpenAICompat: boolean): OpenClawConfig {
+function createOllamaProviderConfig(
+  injectNumCtxForOpenAICompat: boolean,
+): OpenClawConfig {
   return {
     models: {
       providers: {
@@ -46,7 +48,10 @@ describe("resolvePromptBuildHookResult", () => {
       messages: [],
       hookCtx: {},
       hookRunner,
-      legacyBeforeAgentStartResult: { prependContext: "from-cache", systemPrompt: "legacy-system" },
+      legacyBeforeAgentStartResult: {
+        prependContext: "from-cache",
+        systemPrompt: "legacy-system",
+      },
     });
 
     expect(hookRunner.runBeforeAgentStart).not.toHaveBeenCalled();
@@ -67,19 +72,26 @@ describe("resolvePromptBuildHookResult", () => {
     });
 
     expect(hookRunner.runBeforeAgentStart).toHaveBeenCalledTimes(1);
-    expect(hookRunner.runBeforeAgentStart).toHaveBeenCalledWith({ prompt: "hello", messages }, {});
+    expect(hookRunner.runBeforeAgentStart).toHaveBeenCalledWith(
+      { prompt: "hello", messages },
+      {},
+    );
     expect(result.prependContext).toBe("from-hook");
   });
 });
 
 describe("resolvePromptModeForSession", () => {
   it("uses minimal mode for subagent sessions", () => {
-    expect(resolvePromptModeForSession("agent:main:subagent:child")).toBe("minimal");
+    expect(resolvePromptModeForSession("agent:main:subagent:child")).toBe(
+      "minimal",
+    );
   });
 
   it("uses full mode for cron sessions", () => {
     expect(resolvePromptModeForSession("agent:main:cron:job-1")).toBe("full");
-    expect(resolvePromptModeForSession("agent:main:cron:job-1:run:run-abc")).toBe("full");
+    expect(
+      resolvePromptModeForSession("agent:main:cron:job-1:run:run-abc"),
+    ).toBe("full");
   });
 });
 
@@ -126,7 +138,10 @@ describe("resolveAttemptFsWorkspaceOnly", () => {
 });
 
 describe("wrapStreamFnTrimToolCallNames", () => {
-  function createFakeStream(params: { events: unknown[]; resultMessage: unknown }): {
+  function createFakeStream(params: {
+    events: unknown[];
+    resultMessage: unknown;
+  }): {
     result: () => Promise<unknown>;
     [Symbol.asyncIterator]: () => AsyncIterator<unknown>;
   } {
@@ -148,7 +163,10 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     baseFn: (...args: never[]) => unknown,
     allowedToolNames?: Set<string>,
   ) {
-    const wrappedFn = wrapStreamFnTrimToolCallNames(baseFn as never, allowedToolNames);
+    const wrappedFn = wrapStreamFnTrimToolCallNames(
+      baseFn as never,
+      allowedToolNames,
+    );
     return await wrappedFn({} as never, {} as never, {} as never);
   }
 
@@ -172,7 +190,10 @@ describe("wrapStreamFnTrimToolCallNames", () => {
       partial: { role: "assistant", content: [partialToolCall] },
       message: { role: "assistant", content: [messageToolCall] },
     };
-    const { baseFn, finalMessage } = createEventStream({ event, finalToolCall });
+    const { baseFn, finalMessage } = createEventStream({
+      event,
+      finalToolCall,
+    });
 
     const stream = await invokeWrappedStream(baseFn);
 
@@ -335,7 +356,9 @@ describe("wrapOllamaCompatNumCtx", () => {
   it("injects num_ctx and preserves downstream onPayload hooks", () => {
     let payloadSeen: Record<string, unknown> | undefined;
     const baseFn = vi.fn((_model, _context, options) => {
-      const payload: Record<string, unknown> = { options: { temperature: 0.1 } };
+      const payload: Record<string, unknown> = {
+        options: { temperature: 0.1 },
+      };
       options?.onPayload?.(payload);
       payloadSeen = payload;
       return {} as never;
@@ -346,14 +369,18 @@ describe("wrapOllamaCompatNumCtx", () => {
     void wrapped({} as never, {} as never, { onPayload: downstream } as never);
 
     expect(baseFn).toHaveBeenCalledTimes(1);
-    expect((payloadSeen?.options as Record<string, unknown> | undefined)?.num_ctx).toBe(202752);
+    expect(
+      (payloadSeen?.options as Record<string, unknown> | undefined)?.num_ctx,
+    ).toBe(202752);
     expect(downstream).toHaveBeenCalledTimes(1);
   });
 });
 
 describe("resolveOllamaCompatNumCtxEnabled", () => {
   it("defaults to true when config is missing", () => {
-    expect(resolveOllamaCompatNumCtxEnabled({ providerId: "ollama" })).toBe(true);
+    expect(resolveOllamaCompatNumCtxEnabled({ providerId: "ollama" })).toBe(
+      true,
+    );
   });
 
   it("defaults to true when provider config is missing", () => {

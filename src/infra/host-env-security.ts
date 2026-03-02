@@ -8,28 +8,37 @@ type HostEnvSecurityPolicy = {
   blockedPrefixes: string[];
 };
 
-const HOST_ENV_SECURITY_POLICY = HOST_ENV_SECURITY_POLICY_JSON as HostEnvSecurityPolicy;
+const HOST_ENV_SECURITY_POLICY =
+  HOST_ENV_SECURITY_POLICY_JSON as HostEnvSecurityPolicy;
 
 export const HOST_DANGEROUS_ENV_KEY_VALUES: readonly string[] = Object.freeze(
   HOST_ENV_SECURITY_POLICY.blockedKeys.map((key) => key.toUpperCase()),
 );
 export const HOST_DANGEROUS_ENV_PREFIXES: readonly string[] = Object.freeze(
-  HOST_ENV_SECURITY_POLICY.blockedPrefixes.map((prefix) => prefix.toUpperCase()),
+  HOST_ENV_SECURITY_POLICY.blockedPrefixes.map((prefix) =>
+    prefix.toUpperCase(),
+  ),
 );
-export const HOST_DANGEROUS_OVERRIDE_ENV_KEY_VALUES: readonly string[] = Object.freeze(
-  (HOST_ENV_SECURITY_POLICY.blockedOverrideKeys ?? []).map((key) => key.toUpperCase()),
+export const HOST_DANGEROUS_OVERRIDE_ENV_KEY_VALUES: readonly string[] =
+  Object.freeze(
+    (HOST_ENV_SECURITY_POLICY.blockedOverrideKeys ?? []).map((key) =>
+      key.toUpperCase(),
+    ),
+  );
+export const HOST_SHELL_WRAPPER_ALLOWED_OVERRIDE_ENV_KEY_VALUES: readonly string[] =
+  Object.freeze([
+    "TERM",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "LC_MESSAGES",
+    "COLORTERM",
+    "NO_COLOR",
+    "FORCE_COLOR",
+  ]);
+export const HOST_DANGEROUS_ENV_KEYS = new Set<string>(
+  HOST_DANGEROUS_ENV_KEY_VALUES,
 );
-export const HOST_SHELL_WRAPPER_ALLOWED_OVERRIDE_ENV_KEY_VALUES: readonly string[] = Object.freeze([
-  "TERM",
-  "LANG",
-  "LC_ALL",
-  "LC_CTYPE",
-  "LC_MESSAGES",
-  "COLORTERM",
-  "NO_COLOR",
-  "FORCE_COLOR",
-]);
-export const HOST_DANGEROUS_ENV_KEYS = new Set<string>(HOST_DANGEROUS_ENV_KEY_VALUES);
 export const HOST_DANGEROUS_OVERRIDE_ENV_KEYS = new Set<string>(
   HOST_DANGEROUS_OVERRIDE_ENV_KEY_VALUES,
 );
@@ -110,7 +119,10 @@ export function sanitizeHostExecEnv(params?: {
     if (blockPathOverrides && upper === "PATH") {
       continue;
     }
-    if (isDangerousHostEnvVarName(upper) || isDangerousHostEnvOverrideVarName(upper)) {
+    if (
+      isDangerousHostEnvVarName(upper) ||
+      isDangerousHostEnvOverrideVarName(upper)
+    ) {
       continue;
     }
     merged[key] = value;

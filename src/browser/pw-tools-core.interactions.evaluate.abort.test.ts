@@ -44,7 +44,8 @@ function createPendingEval() {
 
 describe("evaluateViaPlaywright (abort)", () => {
   beforeAll(async () => {
-    ({ evaluateViaPlaywright } = await import("./pw-tools-core.interactions.js"));
+    ({ evaluateViaPlaywright } =
+      await import("./pw-tools-core.interactions.js"));
   });
 
   beforeEach(() => {

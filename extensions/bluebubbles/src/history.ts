@@ -1,6 +1,9 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import { resolveBlueBubblesServerAccount } from "./account-resolve.js";
-import { blueBubblesFetchWithTimeout, buildBlueBubblesApiUrl } from "./types.js";
+import {
+  blueBubblesFetchWithTimeout,
+  buildBlueBubblesApiUrl,
+} from "./types.js";
 
 export type BlueBubblesHistoryEntry = {
   sender: string;
@@ -144,7 +147,10 @@ export async function fetchBlueBubblesHistory(
 
         const sender = msg.is_from_me
           ? "me"
-          : msg.sender?.display_name || msg.sender?.address || msg.handle_id || "Unknown";
+          : msg.sender?.display_name ||
+            msg.sender?.address ||
+            msg.handle_id ||
+            "Unknown";
         const timestamp = msg.date_created || msg.date_delivered;
 
         historyEntries.push({

@@ -13,11 +13,20 @@ import {
   DEFAULT_PROMPT,
 } from "./defaults.js";
 import { normalizeMediaProviderId } from "./providers/index.js";
-import { normalizeMediaUnderstandingChatType, resolveMediaUnderstandingScope } from "./scope.js";
+import {
+  normalizeMediaUnderstandingChatType,
+  resolveMediaUnderstandingScope,
+} from "./scope.js";
 import type { MediaUnderstandingCapability } from "./types.js";
 
-export function resolveTimeoutMs(seconds: number | undefined, fallbackSeconds: number): number {
-  const value = typeof seconds === "number" && Number.isFinite(seconds) ? seconds : fallbackSeconds;
+export function resolveTimeoutMs(
+  seconds: number | undefined,
+  fallbackSeconds: number,
+): number {
+  const value =
+    typeof seconds === "number" && Number.isFinite(seconds)
+      ? seconds
+      : fallbackSeconds;
   return Math.max(1000, Math.floor(value * 1000));
 }
 
@@ -41,7 +50,9 @@ export function resolveMaxChars(params: {
 }): number | undefined {
   const { capability, entry, cfg } = params;
   const configured =
-    entry.maxChars ?? params.config?.maxChars ?? cfg.tools?.media?.[capability]?.maxChars;
+    entry.maxChars ??
+    params.config?.maxChars ??
+    cfg.tools?.media?.[capability]?.maxChars;
   if (typeof configured === "number") {
     return configured;
   }
@@ -85,9 +96,13 @@ export function resolveScopeDecision(params: {
 
 function resolveEntryCapabilities(params: {
   entry: MediaUnderstandingModelConfig;
-  providerRegistry: Map<string, { capabilities?: MediaUnderstandingCapability[] }>;
+  providerRegistry: Map<
+    string,
+    { capabilities?: MediaUnderstandingCapability[] }
+  >;
 }): MediaUnderstandingCapability[] | undefined {
-  const entryType = params.entry.type ?? (params.entry.command ? "cli" : "provider");
+  const entryType =
+    params.entry.type ?? (params.entry.command ? "cli" : "provider");
   if (entryType === "cli") {
     return undefined;
   }
@@ -102,12 +117,18 @@ export function resolveModelEntries(params: {
   cfg: OpenClawConfig;
   capability: MediaUnderstandingCapability;
   config?: MediaUnderstandingConfig;
-  providerRegistry: Map<string, { capabilities?: MediaUnderstandingCapability[] }>;
+  providerRegistry: Map<
+    string,
+    { capabilities?: MediaUnderstandingCapability[] }
+  >;
 }): MediaUnderstandingModelConfig[] {
   const { cfg, capability, config } = params;
   const sharedModels = cfg.tools?.media?.models ?? [];
   const entries = [
-    ...(config?.models ?? []).map((entry) => ({ entry, source: "capability" as const })),
+    ...(config?.models ?? []).map((entry) => ({
+      entry,
+      source: "capability" as const,
+    })),
     ...sharedModels.map((entry) => ({ entry, source: "shared" as const })),
   ];
   if (entries.length === 0) {
@@ -120,7 +141,10 @@ export function resolveModelEntries(params: {
         entry.capabilities && entry.capabilities.length > 0
           ? entry.capabilities
           : source === "shared"
-            ? resolveEntryCapabilities({ entry, providerRegistry: params.providerRegistry })
+            ? resolveEntryCapabilities({
+                entry,
+                providerRegistry: params.providerRegistry,
+              })
             : undefined;
       if (!caps || caps.length === 0) {
         if (source === "shared") {
@@ -140,7 +164,11 @@ export function resolveModelEntries(params: {
 
 export function resolveConcurrency(cfg: OpenClawConfig): number {
   const configured = cfg.tools?.media?.concurrency;
-  if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
+  if (
+    typeof configured === "number" &&
+    Number.isFinite(configured) &&
+    configured > 0
+  ) {
     return Math.floor(configured);
   }
   return DEFAULT_MEDIA_CONCURRENCY;
@@ -150,7 +178,10 @@ export function resolveEntriesWithActiveFallback(params: {
   cfg: OpenClawConfig;
   capability: MediaUnderstandingCapability;
   config?: MediaUnderstandingConfig;
-  providerRegistry: Map<string, { capabilities?: MediaUnderstandingCapability[] }>;
+  providerRegistry: Map<
+    string,
+    { capabilities?: MediaUnderstandingCapability[] }
+  >;
   activeModel?: { provider: string; model?: string };
 }): MediaUnderstandingModelConfig[] {
   const entries = resolveModelEntries({
@@ -173,7 +204,8 @@ export function resolveEntriesWithActiveFallback(params: {
   if (!activeProvider) {
     return entries;
   }
-  const capabilities = params.providerRegistry.get(activeProvider)?.capabilities;
+  const capabilities =
+    params.providerRegistry.get(activeProvider)?.capabilities;
   if (!capabilities || !capabilities.includes(params.capability)) {
     return entries;
   }

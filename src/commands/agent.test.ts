@@ -1,6 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
-import { beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
+import {
+  beforeEach,
+  describe,
+  expect,
+  it,
+  type MockInstance,
+  vi,
+} from "vitest";
 import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
 import "../cron/isolated-agent.mocks.js";
 import * as cliRunnerModule from "../agents/cli-runner.js";
@@ -14,12 +21,16 @@ import * as sessionsModule from "../config/sessions.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
+import {
+  createOutboundTestPlugin,
+  createTestRegistry,
+} from "../test-utils/channel-plugins.js";
 import { agentCommand } from "./agent.js";
 import * as agentDeliveryModule from "./agent/delivery.js";
 
 vi.mock("../agents/auth-profiles.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../agents/auth-profiles.js")>();
+  const actual =
+    await importOriginal<typeof import("../agents/auth-profiles.js")>();
   return {
     ...actual,
     ensureAuthProfileStore: vi.fn(() => ({ version: 1, profiles: {} })),
@@ -27,7 +38,8 @@ vi.mock("../agents/auth-profiles.js", async (importOriginal) => {
 });
 
 vi.mock("../agents/workspace.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../agents/workspace.js")>();
+  const actual =
+    await importOriginal<typeof import("../agents/workspace.js")>();
   return {
     ...actual,
     ensureAgentWorkspace: vi.fn(async ({ dir }: { dir: string }) => ({ dir })),
@@ -52,7 +64,10 @@ const runtime: RuntimeEnv = {
 
 const configSpy = vi.spyOn(configModule, "loadConfig");
 const runCliAgentSpy = vi.spyOn(cliRunnerModule, "runCliAgent");
-const deliverAgentCommandResultSpy = vi.spyOn(agentDeliveryModule, "deliverAgentCommandResult");
+const deliverAgentCommandResultSpy = vi.spyOn(
+  agentDeliveryModule,
+  "deliverAgentCommandResult",
+);
 
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
   return withTempHomeBase(fn, { prefix: "openclaw-agent-" });
@@ -61,8 +76,12 @@ async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
 function mockConfig(
   home: string,
   storePath: string,
-  agentOverrides?: Partial<NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>>,
-  telegramOverrides?: Partial<NonNullable<NonNullable<OpenClawConfig["channels"]>["telegram"]>>,
+  agentOverrides?: Partial<
+    NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>
+  >,
+  telegramOverrides?: Partial<
+    NonNullable<NonNullable<OpenClawConfig["channels"]>["telegram"]>
+  >,
   agentsList?: Array<{ id: string; default?: boolean }>,
 ) {
   configSpy.mockReturnValue({
@@ -95,13 +114,23 @@ async function runWithDefaultAgentConfig(params: {
 
 async function runEmbeddedWithTempConfig(params: {
   args: Parameters<typeof agentCommand>[0];
-  agentOverrides?: Partial<NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>>;
-  telegramOverrides?: Partial<NonNullable<NonNullable<OpenClawConfig["channels"]>["telegram"]>>;
+  agentOverrides?: Partial<
+    NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>
+  >;
+  telegramOverrides?: Partial<
+    NonNullable<NonNullable<OpenClawConfig["channels"]>["telegram"]>
+  >;
   agentsList?: Array<{ id: string; default?: boolean }>;
 }) {
   return withTempHome(async (home) => {
     const store = path.join(home, "sessions.json");
-    mockConfig(home, store, params.agentOverrides, params.telegramOverrides, params.agentsList);
+    mockConfig(
+      home,
+      store,
+      params.agentOverrides,
+      params.telegramOverrides,
+      params.agentsList,
+    );
     await agentCommand(params.args, runtime);
     return vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0];
   });
@@ -151,7 +180,12 @@ async function withCrossAgentResumeFixture(
   }) => Promise<void>,
 ): Promise<void> {
   await withTempHome(async (home) => {
-    const storePattern = path.join(home, "sessions", "{agentId}", "sessions.json");
+    const storePattern = path.join(
+      home,
+      "sessions",
+      "{agentId}",
+      "sessions.json",
+    );
     const execStore = path.join(home, "sessions", "exec", "sessions.json");
     const sessionId = "session-exec-hook";
     const sessionKey = "agent:exec:hook:gmail:thread-1";
@@ -186,7 +220,10 @@ async function expectPersistedSessionFile(params: {
     });
     mockConfig(home, store);
     await agentCommand({ message: "hi", sessionKey: params.seedKey }, runtime);
-    const saved = readSessionStore<{ sessionId?: string; sessionFile?: string }>(store);
+    const saved = readSessionStore<{
+      sessionId?: string;
+      sessionFile?: string;
+    }>(store);
     const entry = saved[params.seedKey];
     expect(entry?.sessionId).toBe(params.sessionId);
     expect(entry?.sessionFile).toContain(params.expectedPathFragment);
@@ -199,14 +236,18 @@ async function runAgentWithSessionKey(sessionKey: string): Promise<void> {
 }
 
 async function expectDefaultThinkLevel(params: {
-  agentOverrides?: Partial<NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>>;
+  agentOverrides?: Partial<
+    NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>
+  >;
   catalogEntry: Record<string, unknown>;
   expected: string;
 }) {
   await withTempHome(async (home) => {
     const store = path.join(home, "sessions.json");
     mockConfig(home, store, params.agentOverrides);
-    vi.mocked(loadModelCatalog).mockResolvedValueOnce([params.catalogEntry as never]);
+    vi.mocked(loadModelCatalog).mockResolvedValueOnce([
+      params.catalogEntry as never,
+    ]);
     await agentCommand({ message: "hi", to: "+1555" }, runtime);
     expect(getLastEmbeddedCall()?.thinkLevel).toBe(params.expected);
   });
@@ -241,7 +282,11 @@ function createTelegramOutboundPlugin() {
       ...(mediaUrl ? { mediaUrl } : {}),
       verbose: false,
     });
-    return { channel: "telegram", messageId: result.messageId, chatId: result.chatId };
+    return {
+      channel: "telegram",
+      messageId: result.messageId,
+      chatId: result.chatId,
+    };
   };
 
   return createOutboundTestPlugin({
@@ -284,7 +329,10 @@ describe("agentCommand", () => {
       const store = path.join(home, "sessions.json");
       mockConfig(home, store);
 
-      await agentCommand({ message: "hi", to: "+1222", thinking: "high", verbose: "on" }, runtime);
+      await agentCommand(
+        { message: "hi", to: "+1222", thinking: "high", verbose: "on" },
+        runtime,
+      );
 
       const saved = JSON.parse(fs.readFileSync(store, "utf-8")) as Record<
         string,
@@ -328,7 +376,10 @@ describe("agentCommand", () => {
       });
       mockConfig(home, store);
 
-      await agentCommand({ message: "resume me", sessionId: "session-123" }, runtime);
+      await agentCommand(
+        { message: "resume me", sessionId: "session-123" },
+        runtime,
+      );
 
       const callArgs = vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0];
       expect(callArgs?.sessionId).toBe("session-123");
@@ -340,7 +391,9 @@ describe("agentCommand", () => {
       const callArgs = getLastEmbeddedCall();
       expect(callArgs?.sessionKey).toBe(sessionKey);
       expect(callArgs?.agentId).toBe("exec");
-      expect(callArgs?.agentDir).toContain(`${path.sep}agents${path.sep}exec${path.sep}agent`);
+      expect(callArgs?.agentDir).toContain(
+        `${path.sep}agents${path.sep}exec${path.sep}agent`,
+      );
     });
   });
 
@@ -363,9 +416,15 @@ describe("agentCommand", () => {
       const store = path.join(customStoreDir, "sessions.json");
       writeSessionStoreSeed(store, {});
       mockConfig(home, store);
-      const resolveSessionFilePathSpy = vi.spyOn(sessionsModule, "resolveSessionFilePath");
+      const resolveSessionFilePathSpy = vi.spyOn(
+        sessionsModule,
+        "resolveSessionFilePath",
+      );
 
-      await agentCommand({ message: "resume me", sessionId: "session-custom-123" }, runtime);
+      await agentCommand(
+        { message: "resume me", sessionId: "session-custom-123" },
+        runtime,
+      );
 
       const matchingCall = resolveSessionFilePathSpy.mock.calls.find(
         (call) => call[0] === "session-custom-123",
@@ -396,11 +455,15 @@ describe("agentCommand", () => {
       });
 
       vi.mocked(runEmbeddedPiAgent).mockImplementationOnce(async (params) => {
-        const runId = (params as { runId?: string } | undefined)?.runId ?? "run";
+        const runId =
+          (params as { runId?: string } | undefined)?.runId ?? "run";
         const data = { text: "hello", delta: "hello" };
         (
           params as {
-            onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => void;
+            onAgentEvent?: (evt: {
+              stream: string;
+              data: Record<string, unknown>;
+            }) => void;
           }
         ).onAgentEvent?.({ stream: "assistant", data });
         emitAgentEvent({ runId, stream: "assistant", data });
@@ -465,12 +528,18 @@ describe("agentCommand", () => {
         { id: "gpt-5.2", name: "GPT-5.2", provider: "openai" },
       ]);
       vi.mocked(runEmbeddedPiAgent)
-        .mockRejectedValueOnce(Object.assign(new Error("rate limited"), { status: 429 }))
+        .mockRejectedValueOnce(
+          Object.assign(new Error("rate limited"), { status: 429 }),
+        )
         .mockResolvedValueOnce({
           payloads: [{ text: "ok" }],
           meta: {
             durationMs: 5,
-            agentMeta: { sessionId: "session-subagent", provider: "openai", model: "gpt-5.2" },
+            agentMeta: {
+              sessionId: "session-subagent",
+              provider: "openai",
+              model: "gpt-5.2",
+            },
           },
         });
 
@@ -484,7 +553,10 @@ describe("agentCommand", () => {
 
       const attempts = vi
         .mocked(runEmbeddedPiAgent)
-        .mock.calls.map((call) => ({ provider: call[0]?.provider, model: call[0]?.model }));
+        .mock.calls.map((call) => ({
+          provider: call[0]?.provider,
+          model: call[0]?.model,
+        }));
       expect(attempts).toEqual([
         { provider: "anthropic", model: "claude-opus-4-5" },
         { provider: "openai", model: "gpt-5.2" },
@@ -523,8 +595,12 @@ describe("agentCommand", () => {
         string,
         { providerOverride?: string; modelOverride?: string }
       >;
-      expect(saved["agent:main:subagent:allow-any"]?.providerOverride).toBe("openai");
-      expect(saved["agent:main:subagent:allow-any"]?.modelOverride).toBe("gpt-custom-foo");
+      expect(saved["agent:main:subagent:allow-any"]?.providerOverride).toBe(
+        "openai",
+      );
+      expect(saved["agent:main:subagent:allow-any"]?.modelOverride).toBe(
+        "gpt-custom-foo",
+      );
     });
   });
 
@@ -642,7 +718,9 @@ describe("agentCommand", () => {
         agentsList: [{ id: "ops" }],
       });
       expect(callArgs?.sessionKey).toBe("agent:ops:main");
-      expect(callArgs?.sessionFile).toContain(`${path.sep}agents${path.sep}ops${path.sep}sessions`);
+      expect(callArgs?.sessionFile).toContain(
+        `${path.sep}agents${path.sep}ops${path.sep}sessions`,
+      );
     });
   });
 
@@ -679,9 +757,9 @@ describe("agentCommand", () => {
           )
           .mockRejectedValue(new Error("retry failed"));
 
-        await expect(agentCommand({ message: "hi", sessionKey }, runtime)).rejects.toThrow(
-          "retry failed",
-        );
+        await expect(
+          agentCommand({ message: "hi", sessionKey }, runtime),
+        ).rejects.toThrow("retry failed");
 
         expect(runCliAgentSpy).toHaveBeenCalledTimes(2);
         const firstCall = runCliAgentSpy.mock.calls[0]?.[0] as
@@ -695,14 +773,19 @@ describe("agentCommand", () => {
 
         const saved = JSON.parse(fs.readFileSync(store, "utf-8")) as Record<
           string,
-          { cliSessionIds?: Record<string, string>; claudeCliSessionId?: string }
+          {
+            cliSessionIds?: Record<string, string>;
+            claudeCliSessionId?: string;
+          }
         >;
         const entry = saved[sessionKey];
         expect(entry?.cliSessionIds?.["claude-cli"]).toBeUndefined();
         expect(entry?.claudeCliSessionId).toBeUndefined();
       });
     } finally {
-      vi.mocked(modelSelectionModule.isCliProvider).mockImplementation(() => false);
+      vi.mocked(modelSelectionModule.isCliProvider).mockImplementation(
+        () => false,
+      );
     }
   });
 
@@ -711,9 +794,9 @@ describe("agentCommand", () => {
       const store = path.join(home, "sessions.json");
       mockConfig(home, store);
 
-      await expect(agentCommand({ message: "hi", agentId: "ghost" }, runtime)).rejects.toThrow(
-        'Unknown agent id "ghost"',
-      );
+      await expect(
+        agentCommand({ message: "hi", agentId: "ghost" }, runtime),
+      ).rejects.toThrow('Unknown agent id "ghost"');
     });
   });
 
@@ -778,7 +861,9 @@ describe("agentCommand", () => {
 
       await agentCommand({ message: "hi", to: "+1999", json: true }, runtime);
 
-      const logged = (runtime.log as unknown as MockInstance).mock.calls.at(-1)?.[0] as string;
+      const logged = (runtime.log as unknown as MockInstance).mock.calls.at(
+        -1,
+      )?.[0] as string;
       const parsed = JSON.parse(logged) as {
         payloads: Array<{ text: string; mediaUrl?: string | null }>;
         meta: { durationMs: number };
@@ -802,12 +887,18 @@ describe("agentCommand", () => {
       mockConfig(home, store, undefined, { botToken: "t-1" });
       setActivePluginRegistry(
         createTestRegistry([
-          { pluginId: "telegram", plugin: createTelegramOutboundPlugin(), source: "test" },
+          {
+            pluginId: "telegram",
+            plugin: createTelegramOutboundPlugin(),
+            source: "test",
+          },
         ]),
       );
       const deps = {
         sendMessageWhatsApp: vi.fn(),
-        sendMessageTelegram: vi.fn().mockResolvedValue({ messageId: "t1", chatId: "123" }),
+        sendMessageTelegram: vi
+          .fn()
+          .mockResolvedValue({ messageId: "t1", chatId: "123" }),
         sendMessageSlack: vi.fn(),
         sendMessageDiscord: vi.fn(),
         sendMessageSignal: vi.fn(),

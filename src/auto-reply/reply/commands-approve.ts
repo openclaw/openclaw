@@ -9,18 +9,19 @@ import type { CommandHandler } from "./commands-types.js";
 
 const COMMAND = "/approve";
 
-const DECISION_ALIASES: Record<string, "allow-once" | "allow-always" | "deny"> = {
-  allow: "allow-once",
-  once: "allow-once",
-  "allow-once": "allow-once",
-  allowonce: "allow-once",
-  always: "allow-always",
-  "allow-always": "allow-always",
-  allowalways: "allow-always",
-  deny: "deny",
-  reject: "deny",
-  block: "deny",
-};
+const DECISION_ALIASES: Record<string, "allow-once" | "allow-always" | "deny"> =
+  {
+    allow: "allow-once",
+    once: "allow-once",
+    "allow-once": "allow-once",
+    allowonce: "allow-once",
+    always: "allow-always",
+    "allow-always": "allow-always",
+    allowalways: "allow-always",
+    deny: "deny",
+    reject: "deny",
+    block: "deny",
+  };
 
 type ParsedApproveCommand =
   | { ok: true; id: string; decision: "allow-once" | "allow-always" | "deny" }
@@ -33,11 +34,17 @@ function parseApproveCommand(raw: string): ParsedApproveCommand | null {
   }
   const rest = trimmed.slice(COMMAND.length).trim();
   if (!rest) {
-    return { ok: false, error: "Usage: /approve <id> allow-once|allow-always|deny" };
+    return {
+      ok: false,
+      error: "Usage: /approve <id> allow-once|allow-always|deny",
+    };
   }
   const tokens = rest.split(/\s+/).filter(Boolean);
   if (tokens.length < 2) {
-    return { ok: false, error: "Usage: /approve <id> allow-once|allow-always|deny" };
+    return {
+      ok: false,
+      error: "Usage: /approve <id> allow-once|allow-always|deny",
+    };
   }
 
   const first = tokens[0].toLowerCase();
@@ -57,7 +64,10 @@ function parseApproveCommand(raw: string): ParsedApproveCommand | null {
       id: tokens[0],
     };
   }
-  return { ok: false, error: "Usage: /approve <id> allow-once|allow-always|deny" };
+  return {
+    ok: false,
+    error: "Usage: /approve <id> allow-once|allow-always|deny",
+  };
 }
 
 function buildResolvedByLabel(params: Parameters<CommandHandler>[0]): string {
@@ -66,7 +76,10 @@ function buildResolvedByLabel(params: Parameters<CommandHandler>[0]): string {
   return `${channel}:${sender}`;
 }
 
-export const handleApproveCommand: CommandHandler = async (params, allowTextCommands) => {
+export const handleApproveCommand: CommandHandler = async (
+  params,
+  allowTextCommands,
+) => {
   if (!allowTextCommands) {
     return null;
   }
@@ -88,9 +101,13 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
 
   if (isInternalMessageChannel(params.command.channel)) {
     const scopes = params.ctx.GatewayClientScopes ?? [];
-    const hasApprovals = scopes.includes("operator.approvals") || scopes.includes("operator.admin");
+    const hasApprovals =
+      scopes.includes("operator.approvals") ||
+      scopes.includes("operator.admin");
     if (!hasApprovals) {
-      logVerbose("Ignoring /approve from gateway client missing operator.approvals.");
+      logVerbose(
+        "Ignoring /approve from gateway client missing operator.approvals.",
+      );
       return {
         shouldContinue: false,
         reply: {
@@ -120,6 +137,8 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
 
   return {
     shouldContinue: false,
-    reply: { text: `✅ Exec approval ${parsed.decision} submitted for ${parsed.id}.` },
+    reply: {
+      text: `✅ Exec approval ${parsed.decision} submitted for ${parsed.id}.`,
+    },
   };
 };

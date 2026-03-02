@@ -20,7 +20,10 @@ describe("resolveAgentRoute", () => {
 
   test("dmScope controls direct-message session key isolation", () => {
     const cases = [
-      { dmScope: "per-peer" as const, expected: "agent:main:direct:+15551234567" },
+      {
+        dmScope: "per-peer" as const,
+        expected: "agent:main:direct:+15551234567",
+      },
       {
         dmScope: "per-channel-peer" as const,
         expected: "agent:main:whatsapp:direct:+15551234567",
@@ -143,7 +146,9 @@ describe("resolveAgentRoute", () => {
       accountId: "default",
       peer: { kind: "channel", id: 1468834856187203680n as unknown as string },
     });
-    expect(route.sessionKey).toBe("agent:main:discord:channel:1468834856187203680");
+    expect(route.sessionKey).toBe(
+      "agent:main:discord:channel:1468834856187203680",
+    );
   });
 
   test("guild binding wins over account binding when peer not bound", () => {
@@ -338,7 +343,9 @@ describe("resolveAgentRoute", () => {
 
   test("binding accountId matching is canonicalized", () => {
     const cfg: OpenClawConfig = {
-      bindings: [{ agentId: "biz", match: { channel: "discord", accountId: "BIZ" } }],
+      bindings: [
+        { agentId: "biz", match: { channel: "discord", accountId: "BIZ" } },
+      ],
     };
     const route = resolveAgentRoute({
       cfg,
@@ -391,12 +398,17 @@ test("dmScope=per-account-channel-peer uses default accountId when not provided"
     accountId: null,
     peer: { kind: "direct", id: "7550356539" },
   });
-  expect(route.sessionKey).toBe("agent:main:telegram:default:direct:7550356539");
+  expect(route.sessionKey).toBe(
+    "agent:main:telegram:default:direct:7550356539",
+  );
 });
 
 describe("parentPeer binding inheritance (thread support)", () => {
   const threadPeer = { kind: "channel" as const, id: "thread-456" };
-  const defaultParentPeer = { kind: "channel" as const, id: "parent-channel-123" };
+  const defaultParentPeer = {
+    kind: "channel" as const,
+    id: "parent-channel-123",
+  };
 
   function makeDiscordPeerBinding(agentId: string, peerId: string) {
     return {
@@ -423,7 +435,8 @@ describe("parentPeer binding inheritance (thread support)", () => {
     parentPeer?: { kind: "channel"; id: string } | null;
     guildId?: string;
   }) {
-    const parentPeer = "parentPeer" in params ? params.parentPeer : defaultParentPeer;
+    const parentPeer =
+      "parentPeer" in params ? params.parentPeer : defaultParentPeer;
     return resolveAgentRoute({
       cfg: params.cfg,
       channel: "discord",
@@ -482,7 +495,10 @@ describe("parentPeer binding inheritance (thread support)", () => {
     const cfg: OpenClawConfig = {
       bindings: [makeDiscordPeerBinding("parent-agent", defaultParentPeer.id)],
     };
-    const route = resolveDiscordThreadRoute({ cfg, parentPeer: { kind: "channel", id: "" } });
+    const route = resolveDiscordThreadRoute({
+      cfg,
+      parentPeer: { kind: "channel", id: "" },
+    });
     expect(route.agentId).toBe("main");
     expect(route.matchedBy).toBe("default");
   });
@@ -632,7 +648,9 @@ describe("role-based agent routing", () => {
         channel: "discord",
         ...(params.includeGuildId === false ? {} : { guildId: "g1" }),
         ...(params.roles !== undefined ? { roles: params.roles } : {}),
-        ...(params.peerId ? { peer: { kind: "channel", id: params.peerId } } : {}),
+        ...(params.peerId
+          ? { peer: { kind: "channel", id: params.peerId } }
+          : {}),
       },
     };
   }
@@ -694,7 +712,10 @@ describe("role-based agent routing", () => {
   test("peer binding still beats guild+roles", () => {
     expectDiscordRoleRoute({
       bindings: [
-        makeDiscordRoleBinding("peer-agent", { peerId: "c1", includeGuildId: false }),
+        makeDiscordRoleBinding("peer-agent", {
+          peerId: "c1",
+          includeGuildId: false,
+        }),
         makeDiscordRoleBinding("roles-agent", { roles: ["r1"] }),
       ],
       memberRoleIds: ["r1"],
@@ -761,7 +782,10 @@ describe("role-based agent routing", () => {
   test("peer+guild+roles binding does not act as guild+roles fallback when peer mismatches", () => {
     expectDiscordRoleRoute({
       bindings: [
-        makeDiscordRoleBinding("peer-roles", { peerId: "c-target", roles: ["r1"] }),
+        makeDiscordRoleBinding("peer-roles", {
+          peerId: "c-target",
+          roles: ["r1"],
+        }),
         makeDiscordRoleBinding("guild-roles", { roles: ["r1"] }),
       ],
       memberRoleIds: ["r1"],

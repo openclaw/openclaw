@@ -13,7 +13,11 @@ async function createTempDir(prefix: string) {
   return dir;
 }
 
-function buildSkillsPrompt(workspaceDir: string, managedDir: string, bundledDir: string): string {
+function buildSkillsPrompt(
+  workspaceDir: string,
+  managedDir: string,
+  bundledDir: string,
+): string {
   return buildWorkspaceSkillsPrompt(workspaceDir, {
     managedSkillsDir: managedDir,
     bundledSkillsDir: bundledDir,
@@ -47,7 +51,8 @@ describe("buildWorkspaceSkillsPrompt — .agents/skills/ directories", () => {
   });
 
   it("loads project .agents/skills/ above managed and below workspace", async () => {
-    const { workspaceDir, managedDir, bundledDir } = await createWorkspaceSkillDirs();
+    const { workspaceDir, managedDir, bundledDir } =
+      await createWorkspaceSkillDirs();
 
     await writeSkill({
       dir: path.join(managedDir, "shared-skill"),
@@ -78,7 +83,8 @@ describe("buildWorkspaceSkillsPrompt — .agents/skills/ directories", () => {
   });
 
   it("loads personal ~/.agents/skills/ above managed and below project .agents/skills/", async () => {
-    const { workspaceDir, managedDir, bundledDir } = await createWorkspaceSkillDirs();
+    const { workspaceDir, managedDir, bundledDir } =
+      await createWorkspaceSkillDirs();
 
     await writeSkill({
       dir: path.join(managedDir, "shared-skill"),
@@ -109,7 +115,8 @@ describe("buildWorkspaceSkillsPrompt — .agents/skills/ directories", () => {
   });
 
   it("loads unique skills from all .agents/skills/ sources alongside others", async () => {
-    const { workspaceDir, managedDir, bundledDir } = await createWorkspaceSkillDirs();
+    const { workspaceDir, managedDir, bundledDir } =
+      await createWorkspaceSkillDirs();
 
     await writeSkill({
       dir: path.join(managedDir, "managed-only"),

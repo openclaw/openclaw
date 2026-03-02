@@ -31,7 +31,10 @@ import type {
   TextContent,
   ToolCall,
 } from "@mariozechner/pi-ai";
-import { createAssistantMessageEventStream, streamSimple } from "@mariozechner/pi-ai";
+import {
+  createAssistantMessageEventStream,
+  streamSimple,
+} from "@mariozechner/pi-ai";
 import {
   OpenAIWebSocketManager,
   type ContentPart,
@@ -147,7 +150,9 @@ function contentToOpenAIParts(content: unknown): ContentPart[] {
 }
 
 /** Convert pi-ai tool array to OpenAI FunctionToolDefinition[]. */
-export function convertTools(tools: Context["tools"]): FunctionToolDefinition[] {
+export function convertTools(
+  tools: Context["tools"],
+): FunctionToolDefinition[] {
   if (!tools || tools.length === 0) {
     return [];
   }
@@ -155,7 +160,8 @@ export function convertTools(tools: Context["tools"]): FunctionToolDefinition[] 
     type: "function" as const,
     function: {
       name: tool.name,
-      description: typeof tool.description === "string" ? tool.description : undefined,
+      description:
+        typeof tool.description === "string" ? tool.description : undefined,
       parameters: (tool.parameters ?? {}) as Record<string, unknown>,
     },
   }));
@@ -199,7 +205,10 @@ export function convertMessagesToInputItems(messages: Message[]): InputItem[] {
         }>) {
           if (block.type === "text" && typeof block.text === "string") {
             textParts.push(block.text);
-          } else if (block.type === "thinking" && typeof block.thinking === "string") {
+          } else if (
+            block.type === "thinking" &&
+            typeof block.thinking === "string"
+          ) {
             // Skip thinking blocks — not sent back to the model
           } else if (block.type === "toolCall") {
             // Push accumulated text first
@@ -214,7 +223,10 @@ export function convertMessagesToInputItems(messages: Message[]): InputItem[] {
             // Push function_call item
             items.push({
               type: "function_call",
-              call_id: typeof block.id === "string" ? block.id : `call_${randomUUID()}`,
+              call_id:
+                typeof block.id === "string"
+                  ? block.id
+                  : `call_${randomUUID()}`,
               name: block.name ?? "",
               arguments:
                 typeof block.arguments === "string"
@@ -327,12 +339,17 @@ const WARM_UP_TIMEOUT_MS = 8_000;
 
 function resolveWsTransport(options: Parameters<StreamFn>[2]): WsTransport {
   const transport = (options as { transport?: unknown } | undefined)?.transport;
-  return transport === "sse" || transport === "websocket" || transport === "auto"
+  return transport === "sse" ||
+    transport === "websocket" ||
+    transport === "auto"
     ? transport
     : "auto";
 }
 
-type WsOptions = Parameters<StreamFn>[2] & { openaiWsWarmup?: unknown; signal?: AbortSignal };
+type WsOptions = Parameters<StreamFn>[2] & {
+  openaiWsWarmup?: unknown;
+  signal?: AbortSignal;
+};
 
 function resolveWsWarmup(options: Parameters<StreamFn>[2]): boolean {
   const warmup = (options as WsOptions | undefined)?.openaiWsWarmup;
@@ -361,7 +378,11 @@ async function runWarmUp(params: {
     };
     const closeHandler = (code: number, reason: string) => {
       cleanup();
-      reject(new Error(`warm-up closed (code=${code}, reason=${reason || "unknown"})`));
+      reject(
+        new Error(
+          `warm-up closed (code=${code}, reason=${reason || "unknown"})`,
+        ),
+      );
     };
     const unsubscribe = params.manager.onMessage((event) => {
       if (event.type === "response.completed") {
@@ -373,7 +394,9 @@ async function runWarmUp(params: {
         reject(new Error(`warm-up failed: ${errMsg}`));
       } else if (event.type === "error") {
         cleanup();
-        reject(new Error(`warm-up error: ${event.message} (code=${event.code})`));
+        reject(
+          new Error(`warm-up error: ${event.message} (code=${event.code})`),
+        );
       }
     });
 
@@ -418,7 +441,13 @@ export function createOpenAIWebSocketStreamFn(
     const run = async () => {
       const transport = resolveWsTransport(options);
       if (transport === "sse") {
-        return fallbackToHttp(model, context, options, eventStream, opts.signal);
+        return fallbackToHttp(
+          model,
+          context,
+          options,
+          eventStream,
+          opts.signal,
+        );
       }
 
       // ── 1. Get or create session state ──────────────────────────────────
@@ -452,13 +481,21 @@ export function createOpenAIWebSocketStreamFn(
           session.broken = true;
           wsRegistry.delete(sessionId);
           if (transport === "websocket") {
-            throw connErr instanceof Error ? connErr : new Error(String(connErr));
+            throw connErr instanceof Error
+              ? connErr
+              : new Error(String(connErr));
           }
           log.warn(
             `[ws-stream] WebSocket connect failed for session=${sessionId}; falling back to HTTP. error=${String(connErr)}`,
           );
           // Fall back to HTTP immediately
-          return fallbackToHttp(model, context, options, eventStream, opts.signal);
+          return fallbackToHttp(
+            model,
+            context,
+            options,
+            eventStream,
+            opts.signal,
+          );
         }
       }
 
@@ -466,7 +503,9 @@ export function createOpenAIWebSocketStreamFn(
         if (transport === "websocket") {
           throw new Error("WebSocket session disconnected");
         }
-        log.warn(`[ws-stream] session=${sessionId} broken/disconnected; falling back to HTTP`);
+        log.warn(
+          `[ws-stream] session=${sessionId} broken/disconnected; falling back to HTTP`,
+        );
         // Clean up stale session to prevent next turn from using stale
         // previousResponseId / lastContextLength after a mid-request drop.
         try {
@@ -475,7 +514,13 @@ export function createOpenAIWebSocketStreamFn(
           /* ignore */
         }
         wsRegistry.delete(sessionId);
-        return fallbackToHttp(model, context, options, eventStream, opts.signal);
+        return fallbackToHttp(
+          model,
+          context,
+          options,
+          eventStream,
+          opts.signal,
+        );
       }
 
       const signal = opts.signal ?? (options as WsOptions | undefined)?.signal;
@@ -493,7 +538,9 @@ export function createOpenAIWebSocketStreamFn(
           log.debug(`[ws-stream] warm-up completed for session=${sessionId}`);
         } catch (warmErr) {
           if (signal?.aborted) {
-            throw warmErr instanceof Error ? warmErr : new Error(String(warmErr));
+            throw warmErr instanceof Error
+              ? warmErr
+              : new Error(String(warmErr));
           }
           log.warn(
             `[ws-stream] warm-up failed for session=${sessionId}; continuing without warm-up. error=${String(warmErr)}`,
@@ -509,7 +556,9 @@ export function createOpenAIWebSocketStreamFn(
         // Subsequent turn: only send new messages (tool results) since last call
         const newMessages = context.messages.slice(session.lastContextLength);
         // Filter to only tool results — the assistant message is already in server context
-        const toolResults = newMessages.filter((m) => (m as AnyMessage).role === "toolResult");
+        const toolResults = newMessages.filter(
+          (m) => (m as AnyMessage).role === "toolResult",
+        );
         if (toolResults.length === 0) {
           // Shouldn't happen in a well-formed turn, but fall back to full context
           log.debug(
@@ -580,7 +629,9 @@ export function createOpenAIWebSocketStreamFn(
       options?.onPayload?.(payload);
 
       try {
-        session.manager.send(payload as Parameters<OpenAIWebSocketManager["send"]>[0]);
+        session.manager.send(
+          payload as Parameters<OpenAIWebSocketManager["send"]>[0],
+        );
       } catch (sendErr) {
         if (transport === "websocket") {
           throw sendErr instanceof Error ? sendErr : new Error(String(sendErr));
@@ -596,7 +647,13 @@ export function createOpenAIWebSocketStreamFn(
           /* ignore */
         }
         wsRegistry.delete(sessionId);
-        return fallbackToHttp(model, context, options, eventStream, opts.signal);
+        return fallbackToHttp(
+          model,
+          context,
+          options,
+          eventStream,
+          opts.signal,
+        );
       }
 
       eventStream.push({
@@ -627,7 +684,9 @@ export function createOpenAIWebSocketStreamFn(
         const closeHandler = (code: number, reason: string) => {
           cleanup();
           reject(
-            new Error(`WebSocket closed mid-request (code=${code}, reason=${reason || "unknown"})`),
+            new Error(
+              `WebSocket closed mid-request (code=${code}, reason=${reason || "unknown"})`,
+            ),
           );
         };
         session.manager.on("close", closeHandler);
@@ -644,11 +703,14 @@ export function createOpenAIWebSocketStreamFn(
             // Update session state
             session.lastContextLength = capturedContextLength;
             // Build and emit the assistant message
-            const assistantMsg = buildAssistantMessageFromResponse(event.response, {
-              api: model.api,
-              provider: model.provider,
-              id: model.id,
-            });
+            const assistantMsg = buildAssistantMessageFromResponse(
+              event.response,
+              {
+                api: model.api,
+                provider: model.provider,
+                id: model.id,
+              },
+            );
             const reason: Extract<StopReason, "stop" | "length" | "toolUse"> =
               assistantMsg.stopReason === "toolUse" ? "toolUse" : "stop";
             eventStream.push({ type: "done", reason, message: assistantMsg });
@@ -659,14 +721,19 @@ export function createOpenAIWebSocketStreamFn(
             reject(new Error(`OpenAI WebSocket response failed: ${errMsg}`));
           } else if (event.type === "error") {
             cleanup();
-            reject(new Error(`OpenAI WebSocket error: ${event.message} (code=${event.code})`));
+            reject(
+              new Error(
+                `OpenAI WebSocket error: ${event.message} (code=${event.code})`,
+              ),
+            );
           } else if (event.type === "response.output_text.delta") {
             // Stream partial text updates for responsive UI
-            const partialMsg: AssistantMessage = buildAssistantMessageWithZeroUsage({
-              model,
-              content: [{ type: "text", text: event.delta }],
-              stopReason: "stop",
-            });
+            const partialMsg: AssistantMessage =
+              buildAssistantMessageWithZeroUsage({
+                model,
+                content: [{ type: "text", text: event.delta }],
+                stopReason: "stop",
+              });
             eventStream.push({
               type: "text_delta",
               contentIndex: 0,

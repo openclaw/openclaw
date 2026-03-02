@@ -14,7 +14,9 @@ function addTypedHook(
   handler: () =>
     | PluginHookBeforeModelResolveResult
     | PluginHookBeforePromptBuildResult
-    | Promise<PluginHookBeforeModelResolveResult | PluginHookBeforePromptBuildResult>,
+    | Promise<
+        PluginHookBeforeModelResolveResult | PluginHookBeforePromptBuildResult
+      >,
   priority?: number,
 ) {
   registry.typedHooks.push({
@@ -34,7 +36,13 @@ describe("phase hooks merger", () => {
   });
 
   it("before_model_resolve keeps higher-priority override values", async () => {
-    addTypedHook(registry, "before_model_resolve", "low", () => ({ modelOverride: "gpt-4o" }), 1);
+    addTypedHook(
+      registry,
+      "before_model_resolve",
+      "low",
+      () => ({ modelOverride: "gpt-4o" }),
+      1,
+    );
     addTypedHook(
       registry,
       "before_model_resolve",
@@ -67,7 +75,10 @@ describe("phase hooks merger", () => {
     );
 
     const runner = createHookRunner(registry);
-    const result = await runner.runBeforePromptBuild({ prompt: "test", messages: [] }, {});
+    const result = await runner.runBeforePromptBuild(
+      { prompt: "test", messages: [] },
+      {},
+    );
 
     expect(result?.prependContext).toBe("context A\n\ncontext B");
     expect(result?.systemPrompt).toBe("system A");

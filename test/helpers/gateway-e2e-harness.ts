@@ -10,7 +10,10 @@ import { connectGatewayClient } from "../../src/gateway/test-helpers.e2e.js";
 import { loadOrCreateDeviceIdentity } from "../../src/infra/device-identity.js";
 import { extractFirstTextBlock } from "../../src/shared/chat-message-content.js";
 import { sleep } from "../../src/utils.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../src/utils/message-channel.js";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../../src/utils/message-channel.js";
 
 export { extractFirstTextBlock };
 
@@ -101,11 +104,15 @@ async function waitForPortOpen(
   );
 }
 
-export async function spawnGatewayInstance(name: string): Promise<GatewayInstance> {
+export async function spawnGatewayInstance(
+  name: string,
+): Promise<GatewayInstance> {
   const port = await getFreePort();
   const hookToken = `token-${name}-${randomUUID()}`;
   const gatewayToken = `gateway-${name}-${randomUUID()}`;
-  const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), `openclaw-e2e-${name}-`));
+  const homeDir = await fs.mkdtemp(
+    path.join(os.tmpdir(), `openclaw-e2e-${name}-`),
+  );
   const configDir = path.join(homeDir, ".openclaw");
   await fs.mkdir(configDir, { recursive: true });
   const configPath = path.join(configDir, "openclaw.json");
@@ -163,7 +170,13 @@ export async function spawnGatewayInstance(name: string): Promise<GatewayInstanc
     child.stdout?.on("data", (d) => stdout.push(String(d)));
     child.stderr?.on("data", (d) => stderr.push(String(d)));
 
-    await waitForPortOpen(child, stdout, stderr, port, GATEWAY_START_TIMEOUT_MS);
+    await waitForPortOpen(
+      child,
+      stdout,
+      stderr,
+      port,
+      GATEWAY_START_TIMEOUT_MS,
+    );
 
     return {
       name,
@@ -224,42 +237,44 @@ export async function postJson(
 ): Promise<{ status: number; json: unknown }> {
   const payload = JSON.stringify(body);
   const parsed = new URL(url);
-  return await new Promise<{ status: number; json: unknown }>((resolve, reject) => {
-    const req = httpRequest(
-      {
-        method: "POST",
-        hostname: parsed.hostname,
-        port: Number(parsed.port),
-        path: `${parsed.pathname}${parsed.search}`,
-        headers: {
-          "Content-Type": "application/json",
-          "Content-Length": Buffer.byteLength(payload),
-          ...headers,
+  return await new Promise<{ status: number; json: unknown }>(
+    (resolve, reject) => {
+      const req = httpRequest(
+        {
+          method: "POST",
+          hostname: parsed.hostname,
+          port: Number(parsed.port),
+          path: `${parsed.pathname}${parsed.search}`,
+          headers: {
+            "Content-Type": "application/json",
+            "Content-Length": Buffer.byteLength(payload),
+            ...headers,
+          },
         },
-      },
-      (res) => {
-        let data = "";
-        res.setEncoding("utf8");
-        res.on("data", (chunk) => {
-          data += chunk;
-        });
-        res.on("end", () => {
-          let json: unknown = null;
-          if (data.trim()) {
-            try {
-              json = JSON.parse(data);
-            } catch {
-              json = data;
+        (res) => {
+          let data = "";
+          res.setEncoding("utf8");
+          res.on("data", (chunk) => {
+            data += chunk;
+          });
+          res.on("end", () => {
+            let json: unknown = null;
+            if (data.trim()) {
+              try {
+                json = JSON.parse(data);
+              } catch {
+                json = data;
+              }
             }
-          }
-          resolve({ status: res.statusCode ?? 0, json });
-        });
-      },
-    );
-    req.on("error", reject);
-    req.write(payload);
-    req.end();
-  });
+            resolve({ status: res.statusCode ?? 0, json });
+          });
+        },
+      );
+      req.on("error", reject);
+      req.write(payload);
+      req.end();
+    },
+  );
 }
 
 export async function connectNode(
@@ -371,12 +386,16 @@ export async function waitForChatFinalEvent(params: {
   while (Date.now() < deadline) {
     const match = params.events.find(
       (evt) =>
-        evt.runId === params.runId && evt.sessionKey === params.sessionKey && evt.state === "final",
+        evt.runId === params.runId &&
+        evt.sessionKey === params.sessionKey &&
+        evt.state === "final",
     );
     if (match) {
       return match;
     }
     await sleep(20);
   }
-  throw new Error(`timeout waiting for final chat event (runId=${params.runId})`);
+  throw new Error(
+    `timeout waiting for final chat event (runId=${params.runId})`,
+  );
 }

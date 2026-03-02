@@ -9,11 +9,9 @@ function isExpired(entry: { expiresAt?: number }, now: number) {
   return typeof entry.expiresAt === "number" && entry.expiresAt <= now;
 }
 
-function normalizeEntryTimestamps<T extends { createdAt?: number; expiresAt?: number }>(
-  entry: T,
-  now: number,
-  ttlMs: number,
-): T {
+function normalizeEntryTimestamps<
+  T extends { createdAt?: number; expiresAt?: number },
+>(entry: T, now: number, ttlMs: number): T {
   const createdAt = entry.createdAt ?? now;
   const expiresAt = entry.expiresAt ?? createdAt + ttlMs;
   return { ...entry, createdAt, expiresAt };

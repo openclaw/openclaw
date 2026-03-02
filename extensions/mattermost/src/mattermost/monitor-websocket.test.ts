@@ -26,11 +26,15 @@ class FakeWebSocket implements MattermostWebSocketLike {
       return;
     }
     if (event === "message") {
-      this.messageListeners.push(listener as (data: Buffer) => void | Promise<void>);
+      this.messageListeners.push(
+        listener as (data: Buffer) => void | Promise<void>,
+      );
       return;
     }
     if (event === "close") {
-      this.closeListeners.push(listener as (code: number, reason: Buffer) => void);
+      this.closeListeners.push(
+        listener as (code: number, reason: Buffer) => void,
+      );
       return;
     }
     this.errorListeners.push(listener as (err: unknown) => void);
@@ -100,7 +104,9 @@ describe("mattermost websocket monitor", () => {
     });
 
     const failure = connectOnce();
-    await expect(failure).rejects.toBeInstanceOf(WebSocketClosedBeforeOpenError);
+    await expect(failure).rejects.toBeInstanceOf(
+      WebSocketClosedBeforeOpenError,
+    );
     await expect(failure).rejects.toMatchObject({
       message: "websocket closed before open (code 1006)",
     });
@@ -168,7 +174,9 @@ describe("mattermost websocket monitor", () => {
     expect(onError).toHaveBeenCalledTimes(1);
     expect(reconnectDelays).toEqual([1]);
     expect(patches.some((patch) => patch.connected === true)).toBe(true);
-    expect(patches.filter((patch) => patch.connected === false)).toHaveLength(2);
+    expect(patches.filter((patch) => patch.connected === false)).toHaveLength(
+      2,
+    );
   });
 
   it("dispatches reaction events to the reaction handler", async () => {

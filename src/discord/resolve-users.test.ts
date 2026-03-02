@@ -190,7 +190,10 @@ describe("resolveDiscordUserAllowlist", () => {
     });
 
     expect(results).toHaveLength(2);
-    expect(results[0]).toMatchObject({ resolved: true, id: "123456789012345678" });
+    expect(results[0]).toMatchObject({
+      resolved: true,
+      id: "123456789012345678",
+    });
     expect(results[1]).toMatchObject({ resolved: true, id: "999" });
   });
 

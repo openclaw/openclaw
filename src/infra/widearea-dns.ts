@@ -16,7 +16,8 @@ export function resolveWideAreaDiscoveryDomain(params?: {
   configDomain?: string | null;
 }): string | null {
   const env = params?.env ?? process.env;
-  const candidate = params?.configDomain ?? env.OPENCLAW_WIDE_AREA_DOMAIN ?? null;
+  const candidate =
+    params?.configDomain ?? env.OPENCLAW_WIDE_AREA_DOMAIN ?? null;
   return normalizeWideAreaDomain(candidate);
 }
 
@@ -40,7 +41,10 @@ function dnsLabel(raw: string, fallback: string): string {
 }
 
 function txtQuote(value: string): string {
-  const escaped = value.replaceAll("\\", "\\\\").replaceAll('"', '\\"').replaceAll("\n", "\\n");
+  const escaped = value
+    .replaceAll("\\", "\\\\")
+    .replaceAll('"', '\\"')
+    .replaceAll("\n", "\\n");
   return `"${escaped}"`;
 }
 
@@ -103,10 +107,15 @@ export type WideAreaGatewayZoneOpts = {
   cliPath?: string;
 };
 
-function renderZone(opts: WideAreaGatewayZoneOpts & { serial: number }): string {
+function renderZone(
+  opts: WideAreaGatewayZoneOpts & { serial: number },
+): string {
   const hostname = os.hostname().split(".")[0] ?? "openclaw";
   const hostLabel = dnsLabel(opts.hostLabel ?? hostname, "openclaw");
-  const instanceLabel = dnsLabel(opts.instanceLabel ?? `${hostname}-gateway`, "openclaw-gw");
+  const instanceLabel = dnsLabel(
+    opts.instanceLabel ?? `${hostname}-gateway`,
+    "openclaw-gw",
+  );
   const domain = normalizeWideAreaDomain(opts.domain) ?? "local.";
 
   const txt = [
@@ -145,13 +154,19 @@ function renderZone(opts: WideAreaGatewayZoneOpts & { serial: number }): string 
   }
 
   records.push(`_openclaw-gw._tcp IN PTR ${instanceLabel}._openclaw-gw._tcp`);
-  records.push(`${instanceLabel}._openclaw-gw._tcp IN SRV 0 0 ${opts.gatewayPort} ${hostLabel}`);
-  records.push(`${instanceLabel}._openclaw-gw._tcp IN TXT ${txt.map(txtQuote).join(" ")}`);
+  records.push(
+    `${instanceLabel}._openclaw-gw._tcp IN SRV 0 0 ${opts.gatewayPort} ${hostLabel}`,
+  );
+  records.push(
+    `${instanceLabel}._openclaw-gw._tcp IN TXT ${txt.map(txtQuote).join(" ")}`,
+  );
 
   const contentBody = `${records.join("\n")}\n`;
   const hashBody = `${records
     .map((line) =>
-      line === soaLine ? `@ IN SOA ns1 hostmaster SERIAL 7200 3600 1209600 60` : line,
+      line === soaLine
+        ? `@ IN SOA ns1 hostmaster SERIAL 7200 3600 1209600 60`
+        : line,
     )
     .join("\n")}\n`;
   const contentHash = computeContentHash(hashBody);

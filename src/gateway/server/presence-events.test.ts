@@ -21,14 +21,22 @@ describe("broadcastPresenceSnapshot", () => {
     const [event, payload, opts] = broadcast.mock.calls[0] as [
       string,
       unknown,
-      { dropIfSlow?: boolean; stateVersion?: { presence?: number; health?: number } } | undefined,
+      (
+        | {
+            dropIfSlow?: boolean;
+            stateVersion?: { presence?: number; health?: number };
+          }
+        | undefined
+      ),
     ];
 
     expect(event).toBe("presence");
     if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
       throw new Error("expected object payload");
     }
-    expect(Array.isArray((payload as { presence?: unknown }).presence)).toBe(true);
+    expect(Array.isArray((payload as { presence?: unknown }).presence)).toBe(
+      true,
+    );
     expect(opts?.dropIfSlow).toBe(true);
     expect(opts?.stateVersion).toEqual({ presence: 7, health: 11 });
   });

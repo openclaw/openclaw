@@ -3,7 +3,12 @@ import fsSync from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetLogger, setLoggerOverride } from "../logging.js";
-import { baileys, getLastSocket, resetBaileysMocks, resetLoadConfigMock } from "./test-helpers.js";
+import {
+  baileys,
+  getLastSocket,
+  resetBaileysMocks,
+  resetLoadConfigMock,
+} from "./test-helpers.js";
 
 const { createWaSocket, formatError, logWebSelfId, waitForWaConnection } =
   await import("./session.js");
@@ -15,14 +20,21 @@ async function flushCredsUpdate() {
 
 async function emitCredsUpdateAndReadSaveCreds() {
   const sock = getLastSocket();
-  const saveCreds = (await useMultiFileAuthStateMock.mock.results[0]?.value)?.saveCreds;
+  const saveCreds = (await useMultiFileAuthStateMock.mock.results[0]?.value)
+    ?.saveCreds;
   sock.ev.emit("creds.update", {});
   await flushCredsUpdate();
   return saveCreds;
 }
 
 function mockCredsJsonSpies(readContents: string) {
-  const credsSuffix = path.join(".openclaw", "credentials", "whatsapp", "default", "creds.json");
+  const credsSuffix = path.join(
+    ".openclaw",
+    "credentials",
+    "whatsapp",
+    "default",
+    "creds.json",
+  );
   const copySpy = vi.spyOn(fsSync, "copyFileSync").mockImplementation(() => {});
   const existsSpy = vi.spyOn(fsSync, "existsSync").mockImplementation((p) => {
     if (typeof p !== "string") {
@@ -74,11 +86,14 @@ describe("web session", () => {
       expect.objectContaining({ printQRInTerminal: false }),
     );
     const passed = makeWASocket.mock.calls[0][0];
-    const passedLogger = (passed as { logger?: { level?: string; trace?: unknown } }).logger;
+    const passedLogger = (
+      passed as { logger?: { level?: string; trace?: unknown } }
+    ).logger;
     expect(passedLogger?.level).toBe("silent");
     expect(typeof passedLogger?.trace).toBe("function");
     const sock = getLastSocket();
-    const saveCreds = (await useMultiFileAuthStateMock.mock.results[0]?.value)?.saveCreds;
+    const saveCreds = (await useMultiFileAuthStateMock.mock.results[0]?.value)
+      ?.saveCreds;
     // trigger creds.update listener
     sock.ev.emit("creds.update", {});
     await flushCredsUpdate();

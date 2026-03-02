@@ -3,7 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
-import { getShellConfig, resolvePowerShellPath, resolveShellFromPath } from "./shell-utils.js";
+import {
+  getShellConfig,
+  resolvePowerShellPath,
+  resolveShellFromPath,
+} from "./shell-utils.js";
 
 const isWin = process.platform === "win32";
 
@@ -43,7 +47,9 @@ describe("getShellConfig", () => {
     it("uses PowerShell on Windows", () => {
       const { shell } = getShellConfig();
       const normalized = shell.toLowerCase();
-      expect(normalized.includes("powershell") || normalized.includes("pwsh")).toBe(true);
+      expect(
+        normalized.includes("powershell") || normalized.includes("pwsh"),
+      ).toBe(true);
     });
     return;
   }
@@ -101,8 +107,12 @@ describe("resolveShellFromPath", () => {
   }
 
   it("returns the first executable match from PATH", () => {
-    const notExecutable = createTempCommandDir(tempDirs, [{ name: "bash", executable: false }]);
-    const executable = createTempCommandDir(tempDirs, [{ name: "bash", executable: true }]);
+    const notExecutable = createTempCommandDir(tempDirs, [
+      { name: "bash", executable: false },
+    ]);
+    const executable = createTempCommandDir(tempDirs, [
+      { name: "bash", executable: true },
+    ]);
     process.env.PATH = [notExecutable, executable].join(path.delimiter);
     expect(resolveShellFromPath("bash")).toBe(path.join(executable, "bash"));
   });
@@ -155,8 +165,12 @@ describe("resolvePowerShellPath", () => {
   });
 
   it("prefers ProgramW6432 PowerShell 7 when ProgramFiles lacks pwsh", () => {
-    const programFiles = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-pfiles-"));
-    const programW6432 = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-pw6432-"));
+    const programFiles = fs.mkdtempSync(
+      path.join(os.tmpdir(), "openclaw-pfiles-"),
+    );
+    const programW6432 = fs.mkdtempSync(
+      path.join(os.tmpdir(), "openclaw-pw6432-"),
+    );
     tempDirs.push(programFiles, programW6432);
     const pwsh7Dir = path.join(programW6432, "PowerShell", "7");
     fs.mkdirSync(pwsh7Dir, { recursive: true });
@@ -173,7 +187,9 @@ describe("resolvePowerShellPath", () => {
   });
 
   it("finds pwsh on PATH when not in standard install locations", () => {
-    const programFiles = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-pfiles-"));
+    const programFiles = fs.mkdtempSync(
+      path.join(os.tmpdir(), "openclaw-pfiles-"),
+    );
     const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bin-"));
     tempDirs.push(programFiles, binDir);
     const pwshPath = path.join(binDir, "pwsh");
@@ -190,7 +206,9 @@ describe("resolvePowerShellPath", () => {
   });
 
   it("falls back to Windows PowerShell 5.1 path when pwsh is unavailable", () => {
-    const programFiles = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-pfiles-"));
+    const programFiles = fs.mkdtempSync(
+      path.join(os.tmpdir(), "openclaw-pfiles-"),
+    );
     const sysRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sysroot-"));
     tempDirs.push(programFiles, sysRoot);
     const ps51Dir = path.join(sysRoot, "System32", "WindowsPowerShell", "v1.0");

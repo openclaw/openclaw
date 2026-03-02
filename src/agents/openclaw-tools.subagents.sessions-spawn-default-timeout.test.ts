@@ -19,7 +19,9 @@ function getSubagentTimeout(
     if (call.method !== "agent") {
       continue;
     }
-    const params = call.params as { lane?: string; timeout?: number } | undefined;
+    const params = call.params as
+      | { lane?: string; timeout?: number }
+      | undefined;
     if (params?.lane === "subagent") {
       return params.timeout;
     }
@@ -28,7 +30,9 @@ function getSubagentTimeout(
 }
 
 async function spawnSubagent(callId: string, payload: Record<string, unknown>) {
-  const tool = await sessionsHarness.getSessionsSpawnTool({ agentSessionKey: MAIN_SESSION_KEY });
+  const tool = await sessionsHarness.getSessionsSpawnTool({
+    agentSessionKey: MAIN_SESSION_KEY,
+  });
   const result = await tool.execute(callId, payload);
   expect(result.details).toMatchObject({ status: "accepted" });
 }

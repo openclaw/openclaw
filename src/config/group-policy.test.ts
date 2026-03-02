@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "./config.js";
-import { resolveChannelGroupPolicy, resolveToolsBySender } from "./group-policy.js";
+import {
+  resolveChannelGroupPolicy,
+  resolveToolsBySender,
+} from "./group-policy.js";
 
 describe("resolveChannelGroupPolicy", () => {
   it("fails closed when groupPolicy=allowlist and groups are missing", () => {
@@ -164,7 +167,9 @@ describe("resolveToolsBySender", () => {
   });
 
   it("treats untyped legacy keys as senderId only", () => {
-    const warningSpy = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
+    const warningSpy = vi
+      .spyOn(process, "emitWarning")
+      .mockImplementation(() => undefined);
     const victimId = "legacy-owner-id";
     expect(
       resolveToolsBySender({
@@ -243,7 +248,9 @@ describe("resolveToolsBySender", () => {
   });
 
   it("emits one deprecation warning per legacy key", () => {
-    const warningSpy = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
+    const warningSpy = vi
+      .spyOn(process, "emitWarning")
+      .mockImplementation(() => undefined);
     const legacyKey = "legacy-warning-key";
     const policy = {
       [legacyKey]: { allow: ["exec"] },
@@ -260,7 +267,9 @@ describe("resolveToolsBySender", () => {
     });
 
     expect(warningSpy).toHaveBeenCalledTimes(1);
-    expect(String(warningSpy.mock.calls[0]?.[0])).toContain(`toolsBySender key "${legacyKey}"`);
+    expect(String(warningSpy.mock.calls[0]?.[0])).toContain(
+      `toolsBySender key "${legacyKey}"`,
+    );
     expect(warningSpy.mock.calls[0]?.[1]).toMatchObject({
       code: "OPENCLAW_TOOLS_BY_SENDER_UNTYPED_KEY",
     });

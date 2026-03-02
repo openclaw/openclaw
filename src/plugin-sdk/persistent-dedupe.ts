@@ -1,7 +1,10 @@
 import { createDedupeCache } from "../infra/dedupe.js";
 import type { FileLockOptions } from "./file-lock.js";
 import { withFileLock } from "./file-lock.js";
-import { readJsonFileWithFallback, writeJsonFileAtomically } from "./json-store.js";
+import {
+  readJsonFileWithFallback,
+  writeJsonFileAtomically,
+} from "./json-store.js";
 
 type PersistentDedupeData = Record<string, number>;
 
@@ -21,7 +24,10 @@ export type PersistentDedupeCheckOptions = {
 };
 
 export type PersistentDedupe = {
-  checkAndRecord: (key: string, options?: PersistentDedupeCheckOptions) => Promise<boolean>;
+  checkAndRecord: (
+    key: string,
+    options?: PersistentDedupeCheckOptions,
+  ) => Promise<boolean>;
   clearMemory: () => void;
   memorySize: () => number;
 };
@@ -37,15 +43,23 @@ const DEFAULT_LOCK_OPTIONS: FileLockOptions = {
   stale: 60_000,
 };
 
-function mergeLockOptions(overrides?: Partial<FileLockOptions>): FileLockOptions {
+function mergeLockOptions(
+  overrides?: Partial<FileLockOptions>,
+): FileLockOptions {
   return {
     stale: overrides?.stale ?? DEFAULT_LOCK_OPTIONS.stale,
     retries: {
-      retries: overrides?.retries?.retries ?? DEFAULT_LOCK_OPTIONS.retries.retries,
+      retries:
+        overrides?.retries?.retries ?? DEFAULT_LOCK_OPTIONS.retries.retries,
       factor: overrides?.retries?.factor ?? DEFAULT_LOCK_OPTIONS.retries.factor,
-      minTimeout: overrides?.retries?.minTimeout ?? DEFAULT_LOCK_OPTIONS.retries.minTimeout,
-      maxTimeout: overrides?.retries?.maxTimeout ?? DEFAULT_LOCK_OPTIONS.retries.maxTimeout,
-      randomize: overrides?.retries?.randomize ?? DEFAULT_LOCK_OPTIONS.retries.randomize,
+      minTimeout:
+        overrides?.retries?.minTimeout ??
+        DEFAULT_LOCK_OPTIONS.retries.minTimeout,
+      maxTimeout:
+        overrides?.retries?.maxTimeout ??
+        DEFAULT_LOCK_OPTIONS.retries.maxTimeout,
+      randomize:
+        overrides?.retries?.randomize ?? DEFAULT_LOCK_OPTIONS.retries.randomize,
     },
   };
 }
@@ -90,7 +104,9 @@ function pruneData(
     });
 }
 
-export function createPersistentDedupe(options: PersistentDedupeOptions): PersistentDedupe {
+export function createPersistentDedupe(
+  options: PersistentDedupeOptions,
+): PersistentDedupe {
   const ttlMs = Math.max(0, Math.floor(options.ttlMs));
   const memoryMaxSize = Math.max(0, Math.floor(options.memoryMaxSize));
   const fileMaxEntries = Math.max(1, Math.floor(options.fileMaxEntries));
@@ -112,7 +128,10 @@ export function createPersistentDedupe(options: PersistentDedupeOptions): Persis
     const path = options.resolveFilePath(namespace);
     try {
       const duplicate = await withFileLock(path, lockOptions, async () => {
-        const { value } = await readJsonFileWithFallback<PersistentDedupeData>(path, {});
+        const { value } = await readJsonFileWithFallback<PersistentDedupeData>(
+          path,
+          {},
+        );
         const data = sanitizeData(value);
         const seenAt = data[key];
         const isRecent = seenAt != null && (ttlMs <= 0 || now - seenAt < ttlMs);
@@ -147,7 +166,13 @@ export function createPersistentDedupe(options: PersistentDedupeOptions): Persis
 
     const onDiskError = dedupeOptions?.onDiskError ?? options.onDiskError;
     const now = dedupeOptions?.now ?? Date.now();
-    const work = checkAndRecordInner(trimmed, namespace, scopedKey, now, onDiskError);
+    const work = checkAndRecordInner(
+      trimmed,
+      namespace,
+      scopedKey,
+      now,
+      onDiskError,
+    );
     inflight.set(scopedKey, work);
     try {
       return await work;

@@ -25,7 +25,9 @@ export function resolveNodeHostConfigPath(): string {
   return path.join(resolveStateDir(), NODE_HOST_FILE);
 }
 
-function normalizeConfig(config: Partial<NodeHostConfig> | null): NodeHostConfig {
+function normalizeConfig(
+  config: Partial<NodeHostConfig> | null,
+): NodeHostConfig {
   const base: NodeHostConfig = {
     version: 1,
     nodeId: "",
@@ -53,7 +55,9 @@ export async function loadNodeHostConfig(): Promise<NodeHostConfig | null> {
   }
 }
 
-export async function saveNodeHostConfig(config: NodeHostConfig): Promise<void> {
+export async function saveNodeHostConfig(
+  config: NodeHostConfig,
+): Promise<void> {
   const filePath = resolveNodeHostConfigPath();
   await writeJsonAtomic(filePath, config, { mode: 0o600 });
 }

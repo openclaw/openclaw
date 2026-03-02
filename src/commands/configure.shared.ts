@@ -5,7 +5,11 @@ import {
   select as clackSelect,
   text as clackText,
 } from "@clack/prompts";
-import { stylePromptHint, stylePromptMessage, stylePromptTitle } from "../terminal/prompt-style.js";
+import {
+  stylePromptHint,
+  stylePromptMessage,
+  stylePromptTitle,
+} from "../terminal/prompt-style.js";
 
 export const CONFIGURE_WIZARD_SECTIONS = [
   "workspace",
@@ -25,13 +29,19 @@ export function parseConfigureWizardSections(raw: unknown): {
   invalid: string[];
 } {
   const sectionsRaw: string[] = Array.isArray(raw)
-    ? raw.map((value: unknown) => (typeof value === "string" ? value.trim() : "")).filter(Boolean)
+    ? raw
+        .map((value: unknown) =>
+          typeof value === "string" ? value.trim() : "",
+        )
+        .filter(Boolean)
     : [];
   if (sectionsRaw.length === 0) {
     return { sections: [], invalid: [] };
   }
 
-  const invalid = sectionsRaw.filter((s) => !CONFIGURE_WIZARD_SECTIONS.includes(s as never));
+  const invalid = sectionsRaw.filter(
+    (s) => !CONFIGURE_WIZARD_SECTIONS.includes(s as never),
+  );
   const sections = sectionsRaw.filter((s): s is WizardSection =>
     CONFIGURE_WIZARD_SECTIONS.includes(s as never),
   );
@@ -72,8 +82,10 @@ export const CONFIGURE_SECTION_OPTIONS: Array<{
   },
 ];
 
-export const intro = (message: string) => clackIntro(stylePromptTitle(message) ?? message);
-export const outro = (message: string) => clackOutro(stylePromptTitle(message) ?? message);
+export const intro = (message: string) =>
+  clackIntro(stylePromptTitle(message) ?? message);
+export const outro = (message: string) =>
+  clackOutro(stylePromptTitle(message) ?? message);
 export const text = (params: Parameters<typeof clackText>[0]) =>
   clackText({
     ...params,
@@ -89,6 +101,8 @@ export const select = <T>(params: Parameters<typeof clackSelect<T>>[0]) =>
     ...params,
     message: stylePromptMessage(params.message),
     options: params.options.map((opt) =>
-      opt.hint === undefined ? opt : { ...opt, hint: stylePromptHint(opt.hint) },
+      opt.hint === undefined
+        ? opt
+        : { ...opt, hint: stylePromptHint(opt.hint) },
     ),
   });

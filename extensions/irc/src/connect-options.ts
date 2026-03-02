@@ -3,7 +3,14 @@ import type { IrcClientOptions } from "./client.js";
 
 type IrcConnectOverrides = Omit<
   Partial<IrcClientOptions>,
-  "host" | "port" | "tls" | "nick" | "username" | "realname" | "password" | "nickserv"
+  | "host"
+  | "port"
+  | "tls"
+  | "nick"
+  | "username"
+  | "realname"
+  | "password"
+  | "nickserv"
 >;
 
 export function buildIrcConnectOptions(

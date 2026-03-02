@@ -4,7 +4,9 @@ import { createLocalShellRunner } from "./tui-local-shell.js";
 
 const createSelector = () => {
   const selector = {
-    onSelect: undefined as ((item: { value: string; label: string }) => void) | undefined,
+    onSelect: undefined as
+      | ((item: { value: string; label: string }) => void)
+      | undefined,
     onCancel: undefined as (() => void) | undefined,
     render: () => ["selector"],
     invalidate: () => {},
@@ -63,7 +65,9 @@ describe("createLocalShellRunner", () => {
     await harness.runLocalShellLine("!pwd");
 
     expect(harness.messages).toContain("local shell: not enabled");
-    expect(harness.messages).toContain("local shell: not enabled for this session");
+    expect(harness.messages).toContain(
+      "local shell: not enabled for this session",
+    );
     expect(harness.createSelectorSpy).toHaveBeenCalledTimes(1);
     expect(harness.spawnCommand).not.toHaveBeenCalled();
   });
@@ -84,7 +88,8 @@ describe("createLocalShellRunner", () => {
     });
 
     const harness = createShellHarness({
-      spawnCommand: spawnCommand as unknown as typeof import("node:child_process").spawn,
+      spawnCommand:
+        spawnCommand as unknown as typeof import("node:child_process").spawn,
       env: { PATH: "/tmp/bin", USER: "dev" },
     });
 
@@ -96,7 +101,9 @@ describe("createLocalShellRunner", () => {
 
     expect(harness.createSelectorSpy).toHaveBeenCalledTimes(1);
     expect(spawnCommand).toHaveBeenCalledTimes(1);
-    const spawnOptions = spawnCommand.mock.calls[0]?.[1] as { env?: Record<string, string> };
+    const spawnOptions = spawnCommand.mock.calls[0]?.[1] as {
+      env?: Record<string, string>;
+    };
     expect(spawnOptions.env?.OPENCLAW_SHELL).toBe("tui-local");
     expect(spawnOptions.env?.PATH).toBe("/tmp/bin");
     expect(harness.messages).toContain("local shell: enabled for this session");

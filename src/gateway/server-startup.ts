@@ -21,7 +21,10 @@ import {
 import { loadInternalHooks } from "../hooks/loader.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import type { loadOpenClawPlugins } from "../plugins/loader.js";
-import { type PluginServicesHandle, startPluginServices } from "../plugins/services.js";
+import {
+  type PluginServicesHandle,
+  startPluginServices,
+} from "../plugins/services.js";
 import { startBrowserControlServerIfEnabled } from "./server-browser.js";
 import {
   scheduleRestartSentinelWake,
@@ -62,7 +65,9 @@ export async function startGatewaySidecars(params: {
   }
 
   // Start OpenClaw browser control server (unless disabled via config).
-  let browserControl: Awaited<ReturnType<typeof startBrowserControlServerIfEnabled>> = null;
+  let browserControl: Awaited<
+    ReturnType<typeof startBrowserControlServerIfEnabled>
+  > = null;
   try {
     browserControl = await startBrowserControlServerIfEnabled();
   } catch (err) {
@@ -82,11 +87,12 @@ export async function startGatewaySidecars(params: {
       defaultProvider: DEFAULT_PROVIDER,
     });
     if (hooksModelRef) {
-      const { provider: defaultProvider, model: defaultModel } = resolveConfiguredModelRef({
-        cfg: params.cfg,
-        defaultProvider: DEFAULT_PROVIDER,
-        defaultModel: DEFAULT_MODEL,
-      });
+      const { provider: defaultProvider, model: defaultModel } =
+        resolveConfiguredModelRef({
+          cfg: params.cfg,
+          defaultProvider: DEFAULT_PROVIDER,
+          defaultModel: DEFAULT_MODEL,
+        });
       const catalog = await loadModelCatalog({ config: params.cfg });
       const status = getModelRefStatus({
         cfg: params.cfg,
@@ -112,7 +118,10 @@ export async function startGatewaySidecars(params: {
   try {
     // Clear any previously registered hooks to ensure fresh loading
     clearInternalHooks();
-    const loadedCount = await loadInternalHooks(params.cfg, params.defaultWorkspaceDir);
+    const loadedCount = await loadInternalHooks(
+      params.cfg,
+      params.defaultWorkspaceDir,
+    );
     if (loadedCount > 0) {
       params.logHooks.info(
         `loaded ${loadedCount} internal hook handler${loadedCount > 1 ? "s" : ""}`,
@@ -141,11 +150,16 @@ export async function startGatewaySidecars(params: {
 
   if (params.cfg.hooks?.internal?.enabled) {
     setTimeout(() => {
-      const hookEvent = createInternalHookEvent("gateway", "startup", "gateway:startup", {
-        cfg: params.cfg,
-        deps: params.deps,
-        workspaceDir: params.defaultWorkspaceDir,
-      });
+      const hookEvent = createInternalHookEvent(
+        "gateway",
+        "startup",
+        "gateway:startup",
+        {
+          cfg: params.cfg,
+          deps: params.deps,
+          workspaceDir: params.defaultWorkspaceDir,
+        },
+      );
       void triggerInternalHook(hookEvent);
     }, 250);
   }
@@ -173,13 +187,19 @@ export async function startGatewaySidecars(params: {
         );
       })
       .catch((err) => {
-        params.log.warn(`acp startup identity reconcile failed: ${String(err)}`);
+        params.log.warn(
+          `acp startup identity reconcile failed: ${String(err)}`,
+        );
       });
   }
 
-  void startGatewayMemoryBackend({ cfg: params.cfg, log: params.log }).catch((err) => {
-    params.log.warn(`qmd memory startup initialization failed: ${String(err)}`);
-  });
+  void startGatewayMemoryBackend({ cfg: params.cfg, log: params.log }).catch(
+    (err) => {
+      params.log.warn(
+        `qmd memory startup initialization failed: ${String(err)}`,
+      );
+    },
+  );
 
   if (shouldWakeFromRestartSentinel()) {
     setTimeout(() => {

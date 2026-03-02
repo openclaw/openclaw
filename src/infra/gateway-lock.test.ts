@@ -5,9 +5,26 @@ import fs from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveConfigPath, resolveGatewayLockDir, resolveStateDir } from "../config/paths.js";
-import { acquireGatewayLock, GatewayLockError, type GatewayLockOptions } from "./gateway-lock.js";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
+import {
+  resolveConfigPath,
+  resolveGatewayLockDir,
+  resolveStateDir,
+} from "../config/paths.js";
+import {
+  acquireGatewayLock,
+  GatewayLockError,
+  type GatewayLockOptions,
+} from "./gateway-lock.js";
 
 let fixtureRoot = "";
 let fixtureCount = 0;
@@ -41,7 +58,10 @@ async function acquireForTest(
 function resolveLockPath(env: NodeJS.ProcessEnv) {
   const stateDir = resolveStateDir(env);
   const configPath = resolveConfigPath(env, stateDir);
-  const hash = createHash("sha256").update(configPath).digest("hex").slice(0, 8);
+  const hash = createHash("sha256")
+    .update(configPath)
+    .digest("hex")
+    .slice(0, 8);
   const lockDir = resolveGatewayLockDir();
   return { lockPath: path.join(lockDir, `gateway.${hash}.lock`), configPath };
 }
@@ -74,7 +94,11 @@ function makeProcStat(pid: number, startTime: number) {
   return `${pid} (node) ${fields.join(" ")}`;
 }
 
-function createLockPayload(params: { configPath: string; startTime: number; createdAt?: string }) {
+function createLockPayload(params: {
+  configPath: string;
+  startTime: number;
+  createdAt?: string;
+}) {
   return {
     pid: process.pid,
     createdAt: params.createdAt ?? new Date().toISOString(),
@@ -85,12 +109,14 @@ function createLockPayload(params: { configPath: string; startTime: number; crea
 
 function mockProcStatRead(params: { onProcRead: () => string }) {
   const readFileSync = fsSync.readFileSync;
-  return vi.spyOn(fsSync, "readFileSync").mockImplementation((filePath, encoding) => {
-    if (filePath === `/proc/${process.pid}/stat`) {
-      return params.onProcRead();
-    }
-    return readFileSync(filePath as never, encoding as never) as never;
-  });
+  return vi
+    .spyOn(fsSync, "readFileSync")
+    .mockImplementation((filePath, encoding) => {
+      if (filePath === `/proc/${process.pid}/stat`) {
+        return params.onProcRead();
+      }
+      return readFileSync(filePath as never, encoding as never) as never;
+    });
 }
 
 async function writeLockFile(
@@ -124,7 +150,10 @@ function createPortProbeConnectionSpy(result: "connect" | "refused") {
         socket.emit("connect");
         return;
       }
-      socket.emit("error", Object.assign(new Error("ECONNREFUSED"), { code: "ECONNREFUSED" }));
+      socket.emit(
+        "error",
+        Object.assign(new Error("ECONNREFUSED"), { code: "ECONNREFUSED" }),
+      );
     });
     return socket;
   });
@@ -139,7 +168,9 @@ async function writeRecentLockFile(env: NodeJS.ProcessEnv, startTime = 111) {
 
 describe("gateway lock", () => {
   beforeAll(async () => {
-    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gateway-lock-"));
+    fixtureRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-gateway-lock-"),
+    );
   });
 
   beforeEach(() => {

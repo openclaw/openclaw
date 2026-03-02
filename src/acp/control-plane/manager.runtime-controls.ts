@@ -1,5 +1,12 @@
-import { AcpRuntimeError, withAcpRuntimeErrorBoundary } from "../runtime/errors.js";
-import type { AcpRuntime, AcpRuntimeCapabilities, AcpRuntimeHandle } from "../runtime/types.js";
+import {
+  AcpRuntimeError,
+  withAcpRuntimeErrorBoundary,
+} from "../runtime/errors.js";
+import type {
+  AcpRuntime,
+  AcpRuntimeCapabilities,
+  AcpRuntimeHandle,
+} from "../runtime/types.js";
 import type { SessionAcpMeta } from "./manager.types.js";
 import { createUnsupportedControlError } from "./manager.utils.js";
 import type { CachedRuntimeState } from "./runtime-cache.js";
@@ -17,12 +24,15 @@ export async function resolveManagerRuntimeCapabilities(params: {
   let reported: AcpRuntimeCapabilities | undefined;
   if (params.runtime.getCapabilities) {
     reported = await withAcpRuntimeErrorBoundary({
-      run: async () => await params.runtime.getCapabilities!({ handle: params.handle }),
+      run: async () =>
+        await params.runtime.getCapabilities!({ handle: params.handle }),
       fallbackCode: "ACP_TURN_FAILED",
       fallbackMessage: "Could not read ACP runtime capabilities.",
     });
   }
-  const controls = new Set<AcpRuntimeCapabilities["controls"][number]>(reported?.controls ?? []);
+  const controls = new Set<AcpRuntimeCapabilities["controls"][number]>(
+    reported?.controls ?? [],
+  );
   if (params.runtime.setMode) {
     controls.add("session/set_mode");
   }
@@ -71,7 +81,10 @@ export async function applyManagerRuntimeControls(params: {
   await withAcpRuntimeErrorBoundary({
     run: async () => {
       if (runtimeMode) {
-        if (!capabilities.controls.includes("session/set_mode") || !params.runtime.setMode) {
+        if (
+          !capabilities.controls.includes("session/set_mode") ||
+          !params.runtime.setMode
+        ) {
           throw createUnsupportedControlError({
             backend,
             control: "session/set_mode",
@@ -109,7 +122,8 @@ export async function applyManagerRuntimeControls(params: {
       }
     },
     fallbackCode: "ACP_TURN_FAILED",
-    fallbackMessage: "Could not apply ACP runtime options before turn execution.",
+    fallbackMessage:
+      "Could not apply ACP runtime options before turn execution.",
   });
 
   if (cached) {

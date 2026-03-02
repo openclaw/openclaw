@@ -8,7 +8,10 @@ import {
   parseAgentSessionKey,
 } from "../routing/session-key.js";
 import { resolveUserPath } from "../utils.js";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "./agent-scope.js";
+import {
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "./agent-scope.js";
 import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
 
 export type WorkspaceFallbackReason = "missing" | "blank" | "invalid_type";
@@ -33,7 +36,9 @@ function resolveRunAgentId(params: {
   const rawSessionKey = params.sessionKey?.trim() ?? "";
   const shape = classifySessionKeyShape(rawSessionKey);
   if (shape === "malformed_agent") {
-    throw new Error("Malformed agent session key; refusing workspace resolution.");
+    throw new Error(
+      "Malformed agent session key; refusing workspace resolution.",
+    );
   }
 
   const explicit =
@@ -88,7 +93,9 @@ export function resolveRunWorkspaceDir(params: {
     if (trimmed) {
       const sanitized = sanitizeForPromptLiteral(trimmed);
       if (sanitized !== trimmed) {
-        logWarn("Control/format characters stripped from workspaceDir (OC-19 hardening).");
+        logWarn(
+          "Control/format characters stripped from workspaceDir (OC-19 hardening).",
+        );
       }
       return {
         workspaceDir: resolveUserPath(sanitized),
@@ -100,11 +107,20 @@ export function resolveRunWorkspaceDir(params: {
   }
 
   const fallbackReason: WorkspaceFallbackReason =
-    requested == null ? "missing" : typeof requested === "string" ? "blank" : "invalid_type";
-  const fallbackWorkspace = resolveAgentWorkspaceDir(params.config ?? {}, agentId);
+    requested == null
+      ? "missing"
+      : typeof requested === "string"
+        ? "blank"
+        : "invalid_type";
+  const fallbackWorkspace = resolveAgentWorkspaceDir(
+    params.config ?? {},
+    agentId,
+  );
   const sanitizedFallback = sanitizeForPromptLiteral(fallbackWorkspace);
   if (sanitizedFallback !== fallbackWorkspace) {
-    logWarn("Control/format characters stripped from fallback workspaceDir (OC-19 hardening).");
+    logWarn(
+      "Control/format characters stripped from fallback workspaceDir (OC-19 hardening).",
+    );
   }
   return {
     workspaceDir: resolveUserPath(sanitizedFallback),

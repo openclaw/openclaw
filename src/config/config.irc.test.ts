@@ -79,8 +79,14 @@ describe("config irc", () => {
 
     const config = expectValidConfig(res);
     expect(config.channels?.irc?.allowFrom).toEqual([12345, "alice"]);
-    expect(config.channels?.irc?.groupAllowFrom).toEqual([67890, "alice!ident@example.org"]);
-    expect(config.channels?.irc?.groups?.["#ops"]?.allowFrom).toEqual([42, "alice"]);
+    expect(config.channels?.irc?.groupAllowFrom).toEqual([
+      67890,
+      "alice!ident@example.org",
+    ]);
+    expect(config.channels?.irc?.groups?.["#ops"]?.allowFrom).toEqual([
+      42,
+      "alice",
+    ]);
   });
 
   it("rejects nickserv register without registerEmail", () => {

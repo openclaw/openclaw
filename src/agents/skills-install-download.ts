@@ -20,10 +20,15 @@ import { hasBinary } from "./skills.js";
 import { resolveSkillToolsRootDir } from "./skills/tools-dir.js";
 
 function isNodeReadableStream(value: unknown): value is NodeJS.ReadableStream {
-  return Boolean(value && typeof (value as NodeJS.ReadableStream).pipe === "function");
+  return Boolean(
+    value && typeof (value as NodeJS.ReadableStream).pipe === "function",
+  );
 }
 
-function resolveDownloadTargetDir(entry: SkillEntry, spec: SkillInstallSpec): string {
+function resolveDownloadTargetDir(
+  entry: SkillEntry,
+  spec: SkillInstallSpec,
+): string {
   const safeRoot = resolveSkillToolsRootDir(entry);
   const raw = spec.targetDir?.trim();
   if (!raw) {
@@ -44,7 +49,10 @@ function resolveDownloadTargetDir(entry: SkillEntry, spec: SkillInstallSpec): st
   return resolved;
 }
 
-function resolveArchiveType(spec: SkillInstallSpec, filename: string): string | undefined {
+function resolveArchiveType(
+  spec: SkillInstallSpec,
+  filename: string,
+): string | undefined {
   const explicit = spec.archive?.trim().toLowerCase();
   if (explicit) {
     return explicit;
@@ -126,7 +134,9 @@ function parseTarVerboseSize(line: string): number {
   throw new Error(`unable to parse tar verbose metadata: ${line}`);
 }
 
-function parseTarVerboseMetadata(stdout: string): Array<{ type: string; size: number }> {
+function parseTarVerboseMetadata(
+  stdout: string,
+): Array<{ type: string; size: number }> {
   const lines = stdout
     .split("\n")
     .map((line) => line.trim())
@@ -168,7 +178,9 @@ async function downloadFile(
   });
   try {
     if (!response.ok || !response.body) {
-      throw new Error(`Download failed (${response.status} ${response.statusText})`);
+      throw new Error(
+        `Download failed (${response.status} ${response.statusText})`,
+      );
     }
     await ensureDir(path.dirname(destPath));
     const file = fs.createWriteStream(destPath);
@@ -191,7 +203,8 @@ async function extractArchive(params: {
   stripComponents?: number;
   timeoutMs: number;
 }): Promise<{ stdout: string; stderr: string; code: number | null }> {
-  const { archivePath, archiveType, targetDir, stripComponents, timeoutMs } = params;
+  const { archivePath, archiveType, targetDir, stripComponents, timeoutMs } =
+    params;
   const strip =
     typeof stripComponents === "number" && Number.isFinite(stripComponents)
       ? Math.max(0, Math.floor(stripComponents))
@@ -229,7 +242,10 @@ async function extractArchive(params: {
       const preflightHash = await hashFileSha256(archivePath);
 
       // Preflight list to prevent zip-slip style traversal before extraction.
-      const listResult = await runCommandWithTimeout(["tar", "tf", archivePath], { timeoutMs });
+      const listResult = await runCommandWithTimeout(
+        ["tar", "tf", archivePath],
+        { timeoutMs },
+      );
       if (listResult.code !== 0) {
         return {
           stdout: listResult.stdout,
@@ -242,7 +258,10 @@ async function extractArchive(params: {
         .map((line) => line.trim())
         .filter(Boolean);
 
-      const verboseResult = await runCommandWithTimeout(["tar", "tvf", archivePath], { timeoutMs });
+      const verboseResult = await runCommandWithTimeout(
+        ["tar", "tvf", archivePath],
+        { timeoutMs },
+      );
       if (verboseResult.code !== 0) {
         return {
           stdout: verboseResult.stdout,
@@ -284,7 +303,8 @@ async function extractArchive(params: {
       if (postPreflightHash !== preflightHash) {
         return {
           stdout: "",
-          stderr: "tar archive changed during safety preflight; refusing to extract",
+          stderr:
+            "tar archive changed during safety preflight; refusing to extract",
           code: 1,
         };
       }
@@ -296,7 +316,11 @@ async function extractArchive(params: {
       return await runCommandWithTimeout(argv, { timeoutMs });
     }
 
-    return { stdout: "", stderr: `unsupported archive type: ${archiveType}`, code: null };
+    return {
+      stdout: "",
+      stderr: `unsupported archive type: ${archiveType}`,
+      code: null,
+    };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return { stdout: "", stderr: message, code: 1 };

@@ -71,7 +71,9 @@ describe("createProfileResetOps", () => {
       resolveOpenClawUserDataDir: (name: string) => `/tmp/${name}`,
     });
 
-    await expect(ops.resetProfile()).rejects.toThrow(/only supported for local profiles/i);
+    await expect(ops.resetProfile()).rejects.toThrow(
+      /only supported for local profiles/i,
+    );
   });
 
   it("stops local browser, closes playwright connection, and trashes profile dir", async () => {
@@ -116,7 +118,9 @@ describe("createProfileResetOps", () => {
   });
 
   it("forces playwright disconnect when loopback cdp is occupied by non-owned process", async () => {
-    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-reset-no-own-"));
+    const tempRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "openclaw-reset-no-own-"),
+    );
     const profileDir = path.join(tempRoot, "openclaw");
     fs.mkdirSync(profileDir, { recursive: true });
 

@@ -5,7 +5,11 @@ import JSZip from "jszip";
 import * as tar from "tar";
 import { describe, expect, it } from "vitest";
 import type { ReleaseAsset } from "./signal-install.js";
-import { extractSignalCliArchive, looksLikeArchive, pickAsset } from "./signal-install.js";
+import {
+  extractSignalCliArchive,
+  looksLikeArchive,
+  pickAsset,
+} from "./signal-install.js";
 
 // Realistic asset list modelled after an actual signal-cli GitHub release.
 const SAMPLE_ASSETS: ReleaseAsset[] = [
@@ -33,7 +37,10 @@ const SAMPLE_ASSETS: ReleaseAsset[] = [
     name: "signal-cli-0.13.14-Windows-native.zip.asc",
     browser_download_url: "https://example.com/windows-native.zip.asc",
   },
-  { name: "signal-cli-0.13.14.tar.gz", browser_download_url: "https://example.com/jvm.tar.gz" },
+  {
+    name: "signal-cli-0.13.14.tar.gz",
+    browser_download_url: "https://example.com/jvm.tar.gz",
+  },
   {
     name: "signal-cli-0.13.14.tar.gz.asc",
     browser_download_url: "https://example.com/jvm.tar.gz.asc",
@@ -119,7 +126,11 @@ describe("pickAsset", () => {
     });
 
     it("falls back to first archive for unknown platform", () => {
-      const result = pickAsset(SAMPLE_ASSETS, "freebsd" as NodeJS.Platform, "x64");
+      const result = pickAsset(
+        SAMPLE_ASSETS,
+        "freebsd" as NodeJS.Platform,
+        "x64",
+      );
       expect(result).toBeDefined();
       expect(result!.name).toMatch(/\.tar\.gz$/);
     });
@@ -134,11 +145,15 @@ describe("pickAsset", () => {
 
 describe("extractSignalCliArchive", () => {
   async function withArchiveWorkspace(run: (workDir: string) => Promise<void>) {
-    const workDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-signal-install-"));
+    const workDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-signal-install-"),
+    );
     try {
       await run(workDir);
     } finally {
-      await fs.rm(workDir, { recursive: true, force: true }).catch(() => undefined);
+      await fs
+        .rm(workDir, { recursive: true, force: true })
+        .catch(() => undefined);
     }
   }
 
@@ -150,11 +165,14 @@ describe("extractSignalCliArchive", () => {
 
       const zip = new JSZip();
       zip.file("../pwned.txt", "pwnd");
-      await fs.writeFile(archivePath, await zip.generateAsync({ type: "nodebuffer" }));
-
-      await expect(extractSignalCliArchive(archivePath, extractDir, 5_000)).rejects.toThrow(
-        /(escapes destination|absolute)/i,
+      await fs.writeFile(
+        archivePath,
+        await zip.generateAsync({ type: "nodebuffer" }),
       );
+
+      await expect(
+        extractSignalCliArchive(archivePath, extractDir, 5_000),
+      ).rejects.toThrow(/(escapes destination|absolute)/i);
     });
   });
 
@@ -166,11 +184,17 @@ describe("extractSignalCliArchive", () => {
 
       const zip = new JSZip();
       zip.file("root/signal-cli", "bin");
-      await fs.writeFile(archivePath, await zip.generateAsync({ type: "nodebuffer" }));
+      await fs.writeFile(
+        archivePath,
+        await zip.generateAsync({ type: "nodebuffer" }),
+      );
 
       await extractSignalCliArchive(archivePath, extractDir, 5_000);
 
-      const extracted = await fs.readFile(path.join(extractDir, "root", "signal-cli"), "utf-8");
+      const extracted = await fs.readFile(
+        path.join(extractDir, "root", "signal-cli"),
+        "utf-8",
+      );
       expect(extracted).toBe("bin");
     });
   });
@@ -187,7 +211,10 @@ describe("extractSignalCliArchive", () => {
       await fs.mkdir(extractDir, { recursive: true });
       await extractSignalCliArchive(archivePath, extractDir, 5_000);
 
-      const extracted = await fs.readFile(path.join(extractDir, "root", "signal-cli"), "utf-8");
+      const extracted = await fs.readFile(
+        path.join(extractDir, "root", "signal-cli"),
+        "utf-8",
+      );
       expect(extracted).toBe("bin");
     });
   });

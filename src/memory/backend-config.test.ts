@@ -6,7 +6,9 @@ import { resolveMemoryBackendConfig } from "./backend-config.js";
 
 describe("resolveMemoryBackendConfig", () => {
   it("defaults to builtin backend when config missing", () => {
-    const cfg = { agents: { defaults: { workspace: "/tmp/memory-test" } } } as OpenClawConfig;
+    const cfg = {
+      agents: { defaults: { workspace: "/tmp/memory-test" } },
+    } as OpenClawConfig;
     const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
     expect(resolved.backend).toBe("builtin");
     expect(resolved.citations).toBe("auto");
@@ -31,7 +33,9 @@ describe("resolveMemoryBackendConfig", () => {
     expect(resolved.qmd?.update.commandTimeoutMs).toBe(30_000);
     expect(resolved.qmd?.update.updateTimeoutMs).toBe(120_000);
     expect(resolved.qmd?.update.embedTimeoutMs).toBe(120_000);
-    const names = new Set((resolved.qmd?.collections ?? []).map((collection) => collection.name));
+    const names = new Set(
+      (resolved.qmd?.collections ?? []).map((collection) => collection.name),
+    );
     expect(names.has("memory-root-main")).toBe(true);
     expect(names.has("memory-alt-main")).toBe(true);
     expect(names.has("memory-dir-main")).toBe(true);
@@ -71,7 +75,9 @@ describe("resolveMemoryBackendConfig", () => {
       },
     } as OpenClawConfig;
     const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
-    const custom = resolved.qmd?.collections.find((c) => c.name.startsWith("custom-notes"));
+    const custom = resolved.qmd?.collections.find((c) =>
+      c.name.startsWith("custom-notes"),
+    );
     expect(custom).toBeDefined();
     const workspaceRoot = resolveAgentWorkspaceDir(cfg, "main");
     expect(custom?.path).toBe(path.resolve(workspaceRoot, "notes"));
@@ -97,7 +103,9 @@ describe("resolveMemoryBackendConfig", () => {
     const mainResolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
     const devResolved = resolveMemoryBackendConfig({ cfg, agentId: "dev" });
     const mainNames = new Set(
-      (mainResolved.qmd?.collections ?? []).map((collection) => collection.name),
+      (mainResolved.qmd?.collections ?? []).map(
+        (collection) => collection.name,
+      ),
     );
     const devNames = new Set(
       (devResolved.qmd?.collections ?? []).map((collection) => collection.name),

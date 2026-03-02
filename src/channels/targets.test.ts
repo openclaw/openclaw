@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { buildMessagingTarget, ensureTargetId, requireTargetKind } from "./targets.js";
+import {
+  buildMessagingTarget,
+  ensureTargetId,
+  requireTargetKind,
+} from "./targets.js";
 
 describe("channel targets", () => {
   it("ensureTargetId returns the candidate when it matches", () => {
@@ -24,16 +28,22 @@ describe("channel targets", () => {
 
   it("requireTargetKind returns the target id when the kind matches", () => {
     const target = buildMessagingTarget("channel", "C123", "C123");
-    expect(requireTargetKind({ platform: "Slack", target, kind: "channel" })).toBe("C123");
+    expect(
+      requireTargetKind({ platform: "Slack", target, kind: "channel" }),
+    ).toBe("C123");
   });
 
   it("requireTargetKind throws when the kind is missing or mismatched", () => {
     expect(() =>
-      requireTargetKind({ platform: "Slack", target: undefined, kind: "channel" }),
+      requireTargetKind({
+        platform: "Slack",
+        target: undefined,
+        kind: "channel",
+      }),
     ).toThrow(/Slack channel id is required/);
     const target = buildMessagingTarget("user", "U123", "U123");
-    expect(() => requireTargetKind({ platform: "Slack", target, kind: "channel" })).toThrow(
-      /Slack channel id is required/,
-    );
+    expect(() =>
+      requireTargetKind({ platform: "Slack", target, kind: "channel" }),
+    ).toThrow(/Slack channel id is required/);
   });
 });

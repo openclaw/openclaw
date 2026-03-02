@@ -38,7 +38,9 @@ export function resolveGatewayLaunchAgentLabel(profile?: string): string {
   return `ai.openclaw.${normalized}`;
 }
 
-export function resolveLegacyGatewayLaunchAgentLabels(profile?: string): string[] {
+export function resolveLegacyGatewayLaunchAgentLabels(
+  profile?: string,
+): string[] {
   void profile;
   return [];
 }
@@ -87,7 +89,9 @@ export function resolveGatewayServiceDescription(params: {
     params.description ??
     formatGatewayServiceDescription({
       profile: params.env.OPENCLAW_PROFILE,
-      version: params.environment?.OPENCLAW_SERVICE_VERSION ?? params.env.OPENCLAW_SERVICE_VERSION,
+      version:
+        params.environment?.OPENCLAW_SERVICE_VERSION ??
+        params.env.OPENCLAW_SERVICE_VERSION,
     })
   );
 }
@@ -104,7 +108,9 @@ export function resolveNodeWindowsTaskName(): string {
   return NODE_WINDOWS_TASK_NAME;
 }
 
-export function formatNodeServiceDescription(params?: { version?: string }): string {
+export function formatNodeServiceDescription(params?: {
+  version?: string;
+}): string {
   const version = params?.version?.trim();
   if (!version) {
     return "OpenClaw Node Host";

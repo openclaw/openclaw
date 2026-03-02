@@ -18,12 +18,14 @@ async function loadCanvasModule(): Promise<CanvasModule> {
 
 async function loadPdfJsModule(): Promise<PdfJsModule> {
   if (!pdfJsModulePromise) {
-    pdfJsModulePromise = import("pdfjs-dist/legacy/build/pdf.mjs").catch((err) => {
-      pdfJsModulePromise = null;
-      throw new Error(
-        `Optional dependency pdfjs-dist is required for PDF extraction: ${String(err)}`,
-      );
-    });
+    pdfJsModulePromise = import("pdfjs-dist/legacy/build/pdf.mjs").catch(
+      (err) => {
+        pdfJsModulePromise = null;
+        throw new Error(
+          `Optional dependency pdfjs-dist is required for PDF extraction: ${String(err)}`,
+        );
+      },
+    );
   }
   return pdfJsModulePromise;
 }
@@ -47,9 +49,19 @@ export async function extractPdfContent(params: {
   pageNumbers?: number[];
   onImageExtractionError?: (error: unknown) => void;
 }): Promise<PdfExtractedContent> {
-  const { buffer, maxPages, maxPixels, minTextChars, pageNumbers, onImageExtractionError } = params;
+  const {
+    buffer,
+    maxPages,
+    maxPixels,
+    minTextChars,
+    pageNumbers,
+    onImageExtractionError,
+  } = params;
   const { getDocument } = await loadPdfJsModule();
-  const pdf = await getDocument({ data: new Uint8Array(buffer), disableWorker: true }).promise;
+  const pdf = await getDocument({
+    data: new Uint8Array(buffer),
+    disableWorker: true,
+  }).promise;
 
   const effectivePages: number[] = pageNumbers
     ? pageNumbers.filter((p) => p >= 1 && p <= pdf.numPages).slice(0, maxPages)
@@ -91,13 +103,20 @@ export async function extractPdfContent(params: {
     const pagePixels = viewport.width * viewport.height;
     const scale = Math.min(1, Math.sqrt(pixelBudget / Math.max(1, pagePixels)));
     const scaled = page.getViewport({ scale: Math.max(0.1, scale) });
-    const canvas = createCanvas(Math.ceil(scaled.width), Math.ceil(scaled.height));
+    const canvas = createCanvas(
+      Math.ceil(scaled.width),
+      Math.ceil(scaled.height),
+    );
     await page.render({
       canvas: canvas as unknown as HTMLCanvasElement,
       viewport: scaled,
     }).promise;
     const png = canvas.toBuffer("image/png");
-    images.push({ type: "image", data: png.toString("base64"), mimeType: "image/png" });
+    images.push({
+      type: "image",
+      data: png.toString("base64"),
+      mimeType: "image/png",
+    });
   }
 
   return { text, images };

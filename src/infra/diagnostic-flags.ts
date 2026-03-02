@@ -45,12 +45,17 @@ export function resolveDiagnosticFlags(
   cfg?: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,
 ): string[] {
-  const configFlags = Array.isArray(cfg?.diagnostics?.flags) ? cfg?.diagnostics?.flags : [];
+  const configFlags = Array.isArray(cfg?.diagnostics?.flags)
+    ? cfg?.diagnostics?.flags
+    : [];
   const envFlags = parseEnvFlags(env[DIAGNOSTICS_ENV]);
   return uniqueFlags([...configFlags, ...envFlags]);
 }
 
-export function matchesDiagnosticFlag(flag: string, enabledFlags: string[]): boolean {
+export function matchesDiagnosticFlag(
+  flag: string,
+  enabledFlags: string[],
+): boolean {
   const target = normalizeFlag(flag);
   if (!target) {
     return false;

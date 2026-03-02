@@ -1,8 +1,14 @@
-import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
+import type {
+  ApplyAuthChoiceParams,
+  ApplyAuthChoiceResult,
+} from "./auth-choice.apply.js";
 import { loginChutes } from "./chutes-oauth.js";
 import { isRemoteEnvironment } from "./oauth-env.js";
 import { createVpsAwareOAuthHandlers } from "./oauth-flow.js";
-import { applyAuthProfileConfig, writeOAuthCredentials } from "./onboard-auth.js";
+import {
+  applyAuthProfileConfig,
+  writeOAuthCredentials,
+} from "./onboard-auth.js";
 import { openUrl } from "./onboard-helpers.js";
 
 export async function applyAuthChoiceOAuth(
@@ -12,8 +18,10 @@ export async function applyAuthChoiceOAuth(
     let nextConfig = params.config;
     const isRemote = isRemoteEnvironment();
     const redirectUri =
-      process.env.CHUTES_OAUTH_REDIRECT_URI?.trim() || "http://127.0.0.1:1456/oauth-callback";
-    const scopes = process.env.CHUTES_OAUTH_SCOPES?.trim() || "openid profile chutes:invoke";
+      process.env.CHUTES_OAUTH_REDIRECT_URI?.trim() ||
+      "http://127.0.0.1:1456/oauth-callback";
+    const scopes =
+      process.env.CHUTES_OAUTH_SCOPES?.trim() || "openid profile chutes:invoke";
     const clientId =
       process.env.CHUTES_CLIENT_ID?.trim() ||
       String(
@@ -68,7 +76,11 @@ export async function applyAuthChoiceOAuth(
       });
 
       spin.stop("Chutes OAuth complete");
-      const profileId = await writeOAuthCredentials("chutes", creds, params.agentDir);
+      const profileId = await writeOAuthCredentials(
+        "chutes",
+        creds,
+        params.agentDir,
+      );
       nextConfig = applyAuthProfileConfig(nextConfig, {
         profileId,
         provider: "chutes",

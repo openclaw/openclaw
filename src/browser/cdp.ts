@@ -1,8 +1,21 @@
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
-import { appendCdpPath, fetchJson, isLoopbackHost, withCdpSocket } from "./cdp.helpers.js";
-import { assertBrowserNavigationAllowed, withBrowserNavigationPolicy } from "./navigation-guard.js";
+import {
+  appendCdpPath,
+  fetchJson,
+  isLoopbackHost,
+  withCdpSocket,
+} from "./cdp.helpers.js";
+import {
+  assertBrowserNavigationAllowed,
+  withBrowserNavigationPolicy,
+} from "./navigation-guard.js";
 
-export { appendCdpPath, fetchJson, fetchOk, getHeadersWithAuth } from "./cdp.helpers.js";
+export {
+  appendCdpPath,
+  fetchJson,
+  fetchOk,
+  getHeadersWithAuth,
+} from "./cdp.helpers.js";
 
 export function normalizeCdpWsUrl(wsUrl: string, cdpUrl: string): string {
   const ws = new URL(wsUrl);
@@ -50,7 +63,9 @@ export async function captureScreenshot(opts: {
   return await withCdpSocket(opts.wsUrl, async (send) => {
     await send("Page.enable");
 
-    let clip: { x: number; y: number; width: number; height: number; scale: number } | undefined;
+    let clip:
+      | { x: number; y: number; width: number; height: number; scale: number }
+      | undefined;
     if (opts.fullPage) {
       const metrics = (await send("Page.getLayoutMetrics")) as {
         cssContentSize?: { width?: number; height?: number };
@@ -66,7 +81,9 @@ export async function captureScreenshot(opts: {
 
     const format = opts.format ?? "png";
     const quality =
-      format === "jpeg" ? Math.max(0, Math.min(100, Math.round(opts.quality ?? 85))) : undefined;
+      format === "jpeg"
+        ? Math.max(0, Math.min(100, Math.round(opts.quality ?? 85)))
+        : undefined;
 
     const result = (await send("Page.captureScreenshot", {
       format,
@@ -197,7 +214,10 @@ function axValue(v: unknown): string {
   return "";
 }
 
-export function formatAriaSnapshot(nodes: RawAXNode[], limit: number): AriaSnapshotNode[] {
+export function formatAriaSnapshot(
+  nodes: RawAXNode[],
+  limit: number,
+): AriaSnapshotNode[] {
   const byId = new Map<string, RawAXNode>();
   for (const n of nodes) {
     if (n.nodeId) {
@@ -212,13 +232,16 @@ export function formatAriaSnapshot(nodes: RawAXNode[], limit: number): AriaSnaps
       referenced.add(c);
     }
   }
-  const root = nodes.find((n) => n.nodeId && !referenced.has(n.nodeId)) ?? nodes[0];
+  const root =
+    nodes.find((n) => n.nodeId && !referenced.has(n.nodeId)) ?? nodes[0];
   if (!root?.nodeId) {
     return [];
   }
 
   const out: AriaSnapshotNode[] = [];
-  const stack: Array<{ id: string; depth: number }> = [{ id: root.nodeId, depth: 0 }];
+  const stack: Array<{ id: string; depth: number }> = [
+    { id: root.nodeId, depth: 0 },
+  ];
   while (stack.length && out.length < limit) {
     const popped = stack.pop();
     if (!popped) {
@@ -240,7 +263,9 @@ export function formatAriaSnapshot(nodes: RawAXNode[], limit: number): AriaSnaps
       name: name || "",
       ...(value ? { value } : {}),
       ...(description ? { description } : {}),
-      ...(typeof n.backendDOMNodeId === "number" ? { backendDOMNodeId: n.backendDOMNodeId } : {}),
+      ...(typeof n.backendDOMNodeId === "number"
+        ? { backendDOMNodeId: n.backendDOMNodeId }
+        : {}),
       depth,
     });
 
@@ -279,7 +304,10 @@ export async function snapshotDom(opts: {
   nodes: DomSnapshotNode[];
 }> {
   const limit = Math.max(1, Math.min(5000, Math.floor(opts.limit ?? 800)));
-  const maxTextChars = Math.max(0, Math.min(5000, Math.floor(opts.maxTextChars ?? 220)));
+  const maxTextChars = Math.max(
+    0,
+    Math.min(5000, Math.floor(opts.maxTextChars ?? 220)),
+  );
 
   const expression = `(() => {
     const maxNodes = ${JSON.stringify(limit)};
@@ -361,7 +389,10 @@ export async function getDomText(opts: {
   maxChars?: number;
   selector?: string;
 }): Promise<{ text: string }> {
-  const maxChars = Math.max(0, Math.min(5_000_000, Math.floor(opts.maxChars ?? 200_000)));
+  const maxChars = Math.max(
+    0,
+    Math.min(5_000_000, Math.floor(opts.maxChars ?? 200_000)),
+  );
   const selectorExpr = opts.selector ? JSON.stringify(opts.selector) : "null";
   const expression = `(() => {
     const fmt = ${JSON.stringify(opts.format)};
@@ -406,8 +437,14 @@ export async function querySelector(opts: {
   matches: QueryMatch[];
 }> {
   const limit = Math.max(1, Math.min(200, Math.floor(opts.limit ?? 20)));
-  const maxText = Math.max(0, Math.min(5000, Math.floor(opts.maxTextChars ?? 500)));
-  const maxHtml = Math.max(0, Math.min(20000, Math.floor(opts.maxHtmlChars ?? 1500)));
+  const maxText = Math.max(
+    0,
+    Math.min(5000, Math.floor(opts.maxTextChars ?? 500)),
+  );
+  const maxHtml = Math.max(
+    0,
+    Math.min(20000, Math.floor(opts.maxHtmlChars ?? 1500)),
+  );
 
   const expression = `(() => {
     const sel = ${JSON.stringify(opts.selector)};

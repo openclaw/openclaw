@@ -2,7 +2,10 @@ import type * as Lark from "@larksuiteoapi/node-sdk";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { listEnabledFeishuAccounts } from "./accounts.js";
 import { FeishuPermSchema, type FeishuPermParams } from "./perm-schema.js";
-import { createFeishuToolClient, resolveAnyEnabledFeishuToolsConfig } from "./tool-account.js";
+import {
+  createFeishuToolClient,
+  resolveAnyEnabledFeishuToolsConfig,
+} from "./tool-account.js";
 
 // ============ Helpers ============
 
@@ -103,7 +106,10 @@ async function removeMember(
 ) {
   const res = await client.drive.permissionMember.delete({
     path: { token, member_id: memberId },
-    params: { type: type as CreateTokenType, member_type: memberType as MemberType },
+    params: {
+      type: type as CreateTokenType,
+      member_type: memberType as MemberType,
+    },
   });
   if (res.code !== 0) {
     throw new Error(res.msg);
@@ -124,13 +130,17 @@ export function registerFeishuPermTools(api: OpenClawPluginApi) {
 
   const accounts = listEnabledFeishuAccounts(api.config);
   if (accounts.length === 0) {
-    api.logger.debug?.("feishu_perm: No Feishu accounts configured, skipping perm tools");
+    api.logger.debug?.(
+      "feishu_perm: No Feishu accounts configured, skipping perm tools",
+    );
     return;
   }
 
   const toolsCfg = resolveAnyEnabledFeishuToolsConfig(accounts);
   if (!toolsCfg.perm) {
-    api.logger.debug?.("feishu_perm: perm tool disabled in config (default: false)");
+    api.logger.debug?.(
+      "feishu_perm: perm tool disabled in config (default: false)",
+    );
     return;
   }
 
@@ -157,18 +167,33 @@ export function registerFeishuPermTools(api: OpenClawPluginApi) {
                 return json(await listMembers(client, p.token, p.type));
               case "add":
                 return json(
-                  await addMember(client, p.token, p.type, p.member_type, p.member_id, p.perm),
+                  await addMember(
+                    client,
+                    p.token,
+                    p.type,
+                    p.member_type,
+                    p.member_id,
+                    p.perm,
+                  ),
                 );
               case "remove":
                 return json(
-                  await removeMember(client, p.token, p.type, p.member_type, p.member_id),
+                  await removeMember(
+                    client,
+                    p.token,
+                    p.type,
+                    p.member_type,
+                    p.member_id,
+                  ),
                 );
               default:
                 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- exhaustive check fallback
                 return json({ error: `Unknown action: ${(p as any).action}` });
             }
           } catch (err) {
-            return json({ error: err instanceof Error ? err.message : String(err) });
+            return json({
+              error: err instanceof Error ? err.message : String(err),
+            });
           }
         },
       };

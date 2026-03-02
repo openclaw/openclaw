@@ -11,18 +11,25 @@ import {
 } from "./subagent-registry.js";
 
 describe("sessions_spawn requesterOrigin threading", () => {
-  const spawnAndReadRequesterRun = async (opts?: { agentThreadId?: number }) => {
+  const spawnAndReadRequesterRun = async (opts?: {
+    agentThreadId?: number;
+  }) => {
     const tool = await getSessionsSpawnTool({
       agentSessionKey: "main",
       agentChannel: "telegram",
       agentTo: "telegram:123",
-      ...(opts?.agentThreadId === undefined ? {} : { agentThreadId: opts.agentThreadId }),
+      ...(opts?.agentThreadId === undefined
+        ? {}
+        : { agentThreadId: opts.agentThreadId }),
     });
     const result = await tool.execute("call", {
       task: "do thing",
       runTimeoutSeconds: 1,
     });
-    expect(result.details).toMatchObject({ status: "accepted", runId: "run-1" });
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      runId: "run-1",
+    });
 
     const runs = listSubagentRunsForRequester("main");
     expect(runs).toHaveLength(1);

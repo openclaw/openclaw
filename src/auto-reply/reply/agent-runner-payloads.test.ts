@@ -51,7 +51,9 @@ describe("buildReplyPayloads media filter integration", () => {
       messageProvider: "telegram",
       originatingTo: "telegram:123",
       messagingToolSentTexts: ["hello world!"],
-      messagingToolSentTargets: [{ tool: "discord", provider: "discord", to: "channel:C1" }],
+      messagingToolSentTargets: [
+        { tool: "discord", provider: "discord", to: "channel:C1" },
+      ],
     });
 
     expect(replyPayloads).toHaveLength(1);
@@ -65,7 +67,9 @@ describe("buildReplyPayloads media filter integration", () => {
       messageProvider: "telegram",
       originatingTo: "telegram:123",
       messagingToolSentMediaUrls: ["file:///tmp/photo.jpg"],
-      messagingToolSentTargets: [{ tool: "slack", provider: "slack", to: "channel:C1" }],
+      messagingToolSentTargets: [
+        { tool: "slack", provider: "slack", to: "channel:C1" },
+      ],
     });
 
     expect(replyPayloads).toHaveLength(1);
@@ -80,7 +84,9 @@ describe("buildReplyPayloads media filter integration", () => {
       originatingChannel: "telegram",
       originatingTo: "268300329",
       messagingToolSentTexts: ["different message"],
-      messagingToolSentTargets: [{ tool: "telegram", provider: "telegram", to: "268300329" }],
+      messagingToolSentTargets: [
+        { tool: "telegram", provider: "telegram", to: "268300329" },
+      ],
     });
 
     expect(replyPayloads).toHaveLength(0);
@@ -94,7 +100,9 @@ describe("buildReplyPayloads media filter integration", () => {
       originatingChannel: "feishu",
       originatingTo: "ou_abc123",
       messagingToolSentTexts: ["different message"],
-      messagingToolSentTargets: [{ tool: "message", provider: "message", to: "ou_abc123" }],
+      messagingToolSentTargets: [
+        { tool: "message", provider: "message", to: "ou_abc123" },
+      ],
     });
 
     expect(replyPayloads).toHaveLength(0);
@@ -108,7 +116,9 @@ describe("buildReplyPayloads media filter integration", () => {
       originatingChannel: "feishu",
       originatingTo: "ou_abc123",
       messagingToolSentTexts: ["different message"],
-      messagingToolSentTargets: [{ tool: "message", provider: "lark", to: "ou_abc123" }],
+      messagingToolSentTargets: [
+        { tool: "message", provider: "lark", to: "ou_abc123" },
+      ],
     });
 
     expect(replyPayloads).toHaveLength(0);

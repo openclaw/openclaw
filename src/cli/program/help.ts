@@ -5,7 +5,10 @@ import { escapeRegExp } from "../../utils.js";
 import { hasFlag, hasRootVersionAlias } from "../argv.js";
 import { formatCliBannerLine, hasEmittedCliBanner } from "../banner.js";
 import { replaceCliName, resolveCliName } from "../cli-name.js";
-import { CLI_LOG_LEVEL_VALUES, parseCliLogLevelOption } from "../log-level-option.js";
+import {
+  CLI_LOG_LEVEL_VALUES,
+  parseCliLogLevelOption,
+} from "../log-level-option.js";
 import { getCoreCliCommandsWithSubcommands } from "./command-registry.js";
 import type { ProgramContext } from "./context.js";
 import { getSubCliCommandsWithSubcommands } from "./register.subclis.js";
@@ -30,8 +33,14 @@ const EXAMPLES = [
     "Send via your web session and print JSON result.",
   ],
   ["openclaw gateway --port 18789", "Run the WebSocket Gateway locally."],
-  ["openclaw --dev gateway", "Run a dev Gateway (isolated state/config) on ws://127.0.0.1:19001."],
-  ["openclaw gateway --force", "Kill anything bound to the default gateway port, then start it."],
+  [
+    "openclaw --dev gateway",
+    "Run a dev Gateway (isolated state/config) on ws://127.0.0.1:19001.",
+  ],
+  [
+    "openclaw gateway --force",
+    "Kill anything bound to the default gateway port, then start it.",
+  ],
   ["openclaw gateway ...", "Gateway control via WebSocket."],
   [
     'openclaw agent --to +15555550123 --message "Run summary" --deliver',
@@ -73,7 +82,8 @@ export function configureProgramHelp(program: Command, ctx: ProgramContext) {
     optionTerm: (option) => theme.option(option.flags),
     subcommandTerm: (cmd) => {
       const isRootCommand = cmd.parent === program;
-      const hasSubcommands = isRootCommand && ROOT_COMMANDS_WITH_SUBCOMMANDS.has(cmd.name());
+      const hasSubcommands =
+        isRootCommand && ROOT_COMMANDS_WITH_SUBCOMMANDS.has(cmd.name());
       return theme.command(hasSubcommands ? `${cmd.name()} *` : cmd.name());
     },
   });
@@ -85,7 +95,10 @@ export function configureProgramHelp(program: Command, ctx: ProgramContext) {
       "m",
     ).test(output);
     if (isRootHelp && /^Commands:/m.test(output)) {
-      output = output.replace(/^Commands:/m, `Commands:\n  ${theme.muted(ROOT_COMMANDS_HINT)}`);
+      output = output.replace(
+        /^Commands:/m,
+        `Commands:\n  ${theme.muted(ROOT_COMMANDS_HINT)}`,
+      );
     }
 
     return output
@@ -123,7 +136,8 @@ export function configureProgramHelp(program: Command, ctx: ProgramContext) {
   });
 
   const fmtExamples = EXAMPLES.map(
-    ([cmd, desc]) => `  ${theme.command(replaceCliName(cmd, CLI_NAME))}\n    ${theme.muted(desc)}`,
+    ([cmd, desc]) =>
+      `  ${theme.command(replaceCliName(cmd, CLI_NAME))}\n    ${theme.muted(desc)}`,
   ).join("\n");
 
   program.addHelpText("afterAll", ({ command }) => {

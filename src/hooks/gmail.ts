@@ -62,8 +62,13 @@ export function generateHookToken(bytes = 24): string {
   return randomBytes(bytes).toString("hex");
 }
 
-export function mergeHookPresets(existing: string[] | undefined, preset: string): string[] {
-  const next = new Set((existing ?? []).map((item) => item.trim()).filter(Boolean));
+export function mergeHookPresets(
+  existing: string[] | undefined,
+  preset: string,
+): string[] {
+  const next = new Set(
+    (existing ?? []).map((item) => item.trim()).filter(Boolean),
+  );
   next.add(preset);
   return Array.from(next);
 }
@@ -118,7 +123,8 @@ export function resolveGmailHookRuntimeConfig(
     return { ok: false, error: "gmail topic required" };
   }
 
-  const subscription = overrides.subscription ?? gmail?.subscription ?? DEFAULT_GMAIL_SUBSCRIPTION;
+  const subscription =
+    overrides.subscription ?? gmail?.subscription ?? DEFAULT_GMAIL_SUBSCRIPTION;
 
   const pushToken = overrides.pushToken ?? gmail?.pushToken ?? "";
   if (!pushToken) {
@@ -134,11 +140,14 @@ export function resolveGmailHookRuntimeConfig(
 
   const maxBytesRaw = overrides.maxBytes ?? gmail?.maxBytes;
   const maxBytes =
-    typeof maxBytesRaw === "number" && Number.isFinite(maxBytesRaw) && maxBytesRaw > 0
+    typeof maxBytesRaw === "number" &&
+    Number.isFinite(maxBytesRaw) &&
+    maxBytesRaw > 0
       ? Math.floor(maxBytesRaw)
       : DEFAULT_GMAIL_MAX_BYTES;
 
-  const renewEveryMinutesRaw = overrides.renewEveryMinutes ?? gmail?.renewEveryMinutes;
+  const renewEveryMinutesRaw =
+    overrides.renewEveryMinutes ?? gmail?.renewEveryMinutes;
   const renewEveryMinutes =
     typeof renewEveryMinutesRaw === "number" &&
     Number.isFinite(renewEveryMinutesRaw) &&
@@ -146,10 +155,13 @@ export function resolveGmailHookRuntimeConfig(
       ? Math.floor(renewEveryMinutesRaw)
       : DEFAULT_GMAIL_RENEW_MINUTES;
 
-  const serveBind = overrides.serveBind ?? gmail?.serve?.bind ?? DEFAULT_GMAIL_SERVE_BIND;
+  const serveBind =
+    overrides.serveBind ?? gmail?.serve?.bind ?? DEFAULT_GMAIL_SERVE_BIND;
   const servePortRaw = overrides.servePort ?? gmail?.serve?.port;
   const servePort =
-    typeof servePortRaw === "number" && Number.isFinite(servePortRaw) && servePortRaw > 0
+    typeof servePortRaw === "number" &&
+    Number.isFinite(servePortRaw) &&
+    servePortRaw > 0
       ? Math.floor(servePortRaw)
       : DEFAULT_GMAIL_SERVE_PORT;
   const servePathRaw = overrides.servePath ?? gmail?.serve?.path;
@@ -157,9 +169,11 @@ export function resolveGmailHookRuntimeConfig(
     typeof servePathRaw === "string" && servePathRaw.trim().length > 0
       ? normalizeServePath(servePathRaw)
       : DEFAULT_GMAIL_SERVE_PATH;
-  const tailscaleTargetRaw = overrides.tailscaleTarget ?? gmail?.tailscale?.target;
+  const tailscaleTargetRaw =
+    overrides.tailscaleTarget ?? gmail?.tailscale?.target;
 
-  const tailscaleMode = overrides.tailscaleMode ?? gmail?.tailscale?.mode ?? "off";
+  const tailscaleMode =
+    overrides.tailscaleMode ?? gmail?.tailscale?.mode ?? "off";
   const tailscaleTarget =
     tailscaleMode !== "off" &&
     typeof tailscaleTargetRaw === "string" &&
@@ -254,7 +268,9 @@ export function buildTopicPath(projectId: string, topicName: string): string {
   return `projects/${projectId}/topics/${topicName}`;
 }
 
-export function parseTopicPath(topic: string): { projectId: string; topicName: string } | null {
+export function parseTopicPath(
+  topic: string,
+): { projectId: string; topicName: string } | null {
   const match = topic.trim().match(/^projects\/([^/]+)\/topics\/([^/]+)$/i);
   if (!match) {
     return null;

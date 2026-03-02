@@ -43,10 +43,11 @@ describe("CronService interval/cron jobs fire on time", () => {
 
   it("fires an every-type main job when the timer fires a few ms late", async () => {
     const store = await makeStorePath();
-    const { cron, enqueueSystemEvent, finished } = createStartedCronServiceWithFinishedBarrier({
-      storePath: store.storePath,
-      logger: noopLogger,
-    });
+    const { cron, enqueueSystemEvent, finished } =
+      createStartedCronServiceWithFinishedBarrier({
+        storePath: store.storePath,
+        logger: noopLogger,
+      });
 
     await cron.start();
     const job = await cron.add({
@@ -70,7 +71,9 @@ describe("CronService interval/cron jobs fire on time", () => {
     expectMainSystemEvent(enqueueSystemEvent, "tick");
     expect(updated?.state.lastStatus).toBe("ok");
     // nextRunAtMs must advance by at least one full interval past the due time.
-    expect(updated?.state.nextRunAtMs).toBeGreaterThanOrEqual(firstDueAt + 10_000);
+    expect(updated?.state.nextRunAtMs).toBeGreaterThanOrEqual(
+      firstDueAt + 10_000,
+    );
 
     cron.stop();
     await store.cleanup();
@@ -78,10 +81,11 @@ describe("CronService interval/cron jobs fire on time", () => {
 
   it("fires a cron-expression job when the timer fires a few ms late", async () => {
     const store = await makeStorePath();
-    const { cron, enqueueSystemEvent, finished } = createStartedCronServiceWithFinishedBarrier({
-      storePath: store.storePath,
-      logger: noopLogger,
-    });
+    const { cron, enqueueSystemEvent, finished } =
+      createStartedCronServiceWithFinishedBarrier({
+        storePath: store.storePath,
+        logger: noopLogger,
+      });
 
     // Set time to just before a minute boundary.
     vi.setSystemTime(new Date("2025-12-13T00:00:59.000Z"));
@@ -171,7 +175,9 @@ describe("CronService interval/cron jobs fire on time", () => {
     const sfRun = await cron.run("legacy-every", "due");
     expect(sfRun).toEqual({ ok: true, ran: true });
 
-    const sfRuns = enqueueSystemEvent.mock.calls.filter((args) => args[0] === "sf-tick").length;
+    const sfRuns = enqueueSystemEvent.mock.calls.filter(
+      (args) => args[0] === "sf-tick",
+    ).length;
     const minuteRuns = enqueueSystemEvent.mock.calls.filter(
       (args) => args[0] === "minute-tick",
     ).length;

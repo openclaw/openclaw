@@ -1,4 +1,11 @@
-export type ThinkLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive";
+export type ThinkLevel =
+  | "off"
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "adaptive";
 export type VerboseLevel = "off" | "on" | "full";
 export type NoticeLevel = "off" | "on" | "full";
 export type ElevatedLevel = "off" | "on" | "ask" | "full";
@@ -31,7 +38,9 @@ export const XHIGH_MODEL_REFS = [
   "github-copilot/gpt-5.2",
 ] as const;
 
-const XHIGH_MODEL_SET = new Set(XHIGH_MODEL_REFS.map((entry) => entry.toLowerCase()));
+const XHIGH_MODEL_SET = new Set(
+  XHIGH_MODEL_REFS.map((entry) => entry.toLowerCase()),
+);
 const XHIGH_MODEL_IDS = new Set(
   XHIGH_MODEL_REFS.map((entry) => entry.split("/")[1]?.toLowerCase()).filter(
     (entry): entry is string => Boolean(entry),
@@ -39,7 +48,9 @@ const XHIGH_MODEL_IDS = new Set(
 );
 
 // Normalize user-provided thinking level strings to the canonical enum.
-export function normalizeThinkLevel(raw?: string | null): ThinkLevel | undefined {
+export function normalizeThinkLevel(
+  raw?: string | null,
+): ThinkLevel | undefined {
   if (!raw) {
     return undefined;
   }
@@ -63,11 +74,23 @@ export function normalizeThinkLevel(raw?: string | null): ThinkLevel | undefined
   if (["low", "thinkhard", "think-hard", "think_hard"].includes(key)) {
     return "low";
   }
-  if (["mid", "med", "medium", "thinkharder", "think-harder", "harder"].includes(key)) {
+  if (
+    ["mid", "med", "medium", "thinkharder", "think-harder", "harder"].includes(
+      key,
+    )
+  ) {
     return "medium";
   }
   if (
-    ["high", "ultra", "ultrathink", "think-hard", "thinkhardest", "highest", "max"].includes(key)
+    [
+      "high",
+      "ultra",
+      "ultrathink",
+      "think-hard",
+      "thinkhardest",
+      "highest",
+      "max",
+    ].includes(key)
   ) {
     return "high";
   }
@@ -77,7 +100,10 @@ export function normalizeThinkLevel(raw?: string | null): ThinkLevel | undefined
   return undefined;
 }
 
-export function supportsXHighThinking(provider?: string | null, model?: string | null): boolean {
+export function supportsXHighThinking(
+  provider?: string | null,
+  model?: string | null,
+): boolean {
   const modelKey = model?.trim().toLowerCase();
   if (!modelKey) {
     return false;
@@ -89,7 +115,10 @@ export function supportsXHighThinking(provider?: string | null, model?: string |
   return XHIGH_MODEL_IDS.has(modelKey);
 }
 
-export function listThinkingLevels(provider?: string | null, model?: string | null): ThinkLevel[] {
+export function listThinkingLevels(
+  provider?: string | null,
+  model?: string | null,
+): ThinkLevel[] {
   const levels: ThinkLevel[] = ["off", "minimal", "low", "medium", "high"];
   if (supportsXHighThinking(provider, model)) {
     levels.push("xhigh");
@@ -98,7 +127,10 @@ export function listThinkingLevels(provider?: string | null, model?: string | nu
   return levels;
 }
 
-export function listThinkingLevelLabels(provider?: string | null, model?: string | null): string[] {
+export function listThinkingLevelLabels(
+  provider?: string | null,
+  model?: string | null,
+): string[] {
   if (isBinaryThinkingProvider(provider)) {
     return ["off", "on"];
   }
@@ -129,7 +161,9 @@ export function formatXHighModelHint(): string {
 
 type OnOffFullLevel = "off" | "on" | "full";
 
-function normalizeOnOffFullLevel(raw?: string | null): OnOffFullLevel | undefined {
+function normalizeOnOffFullLevel(
+  raw?: string | null,
+): OnOffFullLevel | undefined {
   if (!raw) {
     return undefined;
   }
@@ -147,17 +181,23 @@ function normalizeOnOffFullLevel(raw?: string | null): OnOffFullLevel | undefine
 }
 
 // Normalize verbose flags used to toggle agent verbosity.
-export function normalizeVerboseLevel(raw?: string | null): VerboseLevel | undefined {
+export function normalizeVerboseLevel(
+  raw?: string | null,
+): VerboseLevel | undefined {
   return normalizeOnOffFullLevel(raw);
 }
 
 // Normalize system notice flags used to toggle system notifications.
-export function normalizeNoticeLevel(raw?: string | null): NoticeLevel | undefined {
+export function normalizeNoticeLevel(
+  raw?: string | null,
+): NoticeLevel | undefined {
   return normalizeOnOffFullLevel(raw);
 }
 
 // Normalize response-usage display modes used to toggle per-response usage footers.
-export function normalizeUsageDisplay(raw?: string | null): UsageDisplayLevel | undefined {
+export function normalizeUsageDisplay(
+  raw?: string | null,
+): UsageDisplayLevel | undefined {
   if (!raw) {
     return undefined;
   }
@@ -177,12 +217,16 @@ export function normalizeUsageDisplay(raw?: string | null): UsageDisplayLevel | 
   return undefined;
 }
 
-export function resolveResponseUsageMode(raw?: string | null): UsageDisplayLevel {
+export function resolveResponseUsageMode(
+  raw?: string | null,
+): UsageDisplayLevel {
   return normalizeUsageDisplay(raw) ?? "off";
 }
 
 // Normalize elevated flags used to toggle elevated bash permissions.
-export function normalizeElevatedLevel(raw?: string | null): ElevatedLevel | undefined {
+export function normalizeElevatedLevel(
+  raw?: string | null,
+): ElevatedLevel | undefined {
   if (!raw) {
     return undefined;
   }
@@ -202,7 +246,9 @@ export function normalizeElevatedLevel(raw?: string | null): ElevatedLevel | und
   return undefined;
 }
 
-export function resolveElevatedMode(level?: ElevatedLevel | null): ElevatedMode {
+export function resolveElevatedMode(
+  level?: ElevatedLevel | null,
+): ElevatedMode {
   if (!level || level === "off") {
     return "off";
   }
@@ -213,15 +259,32 @@ export function resolveElevatedMode(level?: ElevatedLevel | null): ElevatedMode 
 }
 
 // Normalize reasoning visibility flags used to toggle reasoning exposure.
-export function normalizeReasoningLevel(raw?: string | null): ReasoningLevel | undefined {
+export function normalizeReasoningLevel(
+  raw?: string | null,
+): ReasoningLevel | undefined {
   if (!raw) {
     return undefined;
   }
   const key = raw.toLowerCase();
-  if (["off", "false", "no", "0", "hide", "hidden", "disable", "disabled"].includes(key)) {
+  if (
+    [
+      "off",
+      "false",
+      "no",
+      "0",
+      "hide",
+      "hidden",
+      "disable",
+      "disabled",
+    ].includes(key)
+  ) {
     return "off";
   }
-  if (["on", "true", "yes", "1", "show", "visible", "enable", "enabled"].includes(key)) {
+  if (
+    ["on", "true", "yes", "1", "show", "visible", "enable", "enabled"].includes(
+      key,
+    )
+  ) {
     return "on";
   }
   if (["stream", "streaming", "draft", "live"].includes(key)) {

@@ -124,7 +124,9 @@ describe("isBillingErrorMessage", () => {
   });
   it("still matches explicit 402 markers in long payloads", () => {
     const longStructuredError =
-      '{"error":{"code":402,"message":"payment required","details":"' + "x".repeat(700) + '"}}';
+      '{"error":{"code":402,"message":"payment required","details":"' +
+      "x".repeat(700) +
+      '"}}';
     expect(longStructuredError.length).toBeGreaterThan(512);
     expect(isBillingErrorMessage(longStructuredError)).toBe(true);
   });
@@ -188,12 +190,15 @@ describe("isCloudflareOrHtmlErrorPage", () => {
   });
 
   it("does not flag non-HTML status lines", () => {
-    expect(isCloudflareOrHtmlErrorPage("500 Internal Server Error")).toBe(false);
+    expect(isCloudflareOrHtmlErrorPage("500 Internal Server Error")).toBe(
+      false,
+    );
     expect(isCloudflareOrHtmlErrorPage("429 Too Many Requests")).toBe(false);
   });
 
   it("does not flag quoted HTML without a closing html tag", () => {
-    const plainTextWithHtmlPrefix = "500 <!DOCTYPE html> upstream responded with partial HTML text";
+    const plainTextWithHtmlPrefix =
+      "500 <!DOCTYPE html> upstream responded with partial HTML text";
     expect(isCloudflareOrHtmlErrorPage(plainTextWithHtmlPrefix)).toBe(false);
   });
 });
@@ -211,7 +216,9 @@ describe("isCompactionFailureError", () => {
     }
   });
   it("ignores non-compaction overflow errors", () => {
-    expect(isCompactionFailureError("Context overflow: prompt too large")).toBe(false);
+    expect(isCompactionFailureError("Context overflow: prompt too large")).toBe(
+      false,
+    );
     expect(isCompactionFailureError("rate limit exceeded")).toBe(false);
   });
 });
@@ -285,10 +292,18 @@ describe("isContextOverflowError", () => {
 
   it("ignores normal conversation text mentioning context overflow", () => {
     // These are legitimate conversation snippets, not error messages
-    expect(isContextOverflowError("Let's investigate the context overflow bug")).toBe(false);
-    expect(isContextOverflowError("The mystery context overflow errors are strange")).toBe(false);
-    expect(isContextOverflowError("We're debugging context overflow issues")).toBe(false);
-    expect(isContextOverflowError("Something is causing context overflow messages")).toBe(false);
+    expect(
+      isContextOverflowError("Let's investigate the context overflow bug"),
+    ).toBe(false);
+    expect(
+      isContextOverflowError("The mystery context overflow errors are strange"),
+    ).toBe(false);
+    expect(
+      isContextOverflowError("We're debugging context overflow issues"),
+    ).toBe(false);
+    expect(
+      isContextOverflowError("Something is causing context overflow messages"),
+    ).toBe(false);
   });
 
   it("excludes reasoning-required invalid-request errors", () => {
@@ -315,7 +330,11 @@ describe("error classifiers", () => {
       },
       {
         matcher: isBillingErrorMessage,
-        samples: ["rate limit exceeded", "invalid api key", "context length exceeded"],
+        samples: [
+          "rate limit exceeded",
+          "invalid api key",
+          "context length exceeded",
+        ],
       },
       {
         matcher: isCloudCodeAssistFormatError,
@@ -423,7 +442,11 @@ describe("isFailoverErrorMessage", () => {
   });
 
   it("matches abort stop-reason timeout variants", () => {
-    const samples = ["Unhandled stop reason: abort", "stop reason: abort", "reason: abort"];
+    const samples = [
+      "Unhandled stop reason: abort",
+      "stop reason: abort",
+      "reason: abort",
+    ];
     for (const sample of samples) {
       expect(isTimeoutErrorMessage(sample)).toBe(true);
       expect(classifyFailoverReason(sample)).toBe("timeout");
@@ -466,18 +489,26 @@ describe("classifyFailoverReason", () => {
         'No API key found for provider "openai". Auth store: /tmp/openclaw-agent-abc/auth-profiles.json (agentDir: /tmp/openclaw-agent-abc).',
       ),
     ).toBe("auth");
-    expect(classifyFailoverReason("You have insufficient permissions for this operation.")).toBe(
+    expect(
+      classifyFailoverReason(
+        "You have insufficient permissions for this operation.",
+      ),
+    ).toBe("auth");
+    expect(classifyFailoverReason("Missing scopes: model.request")).toBe(
       "auth",
     );
-    expect(classifyFailoverReason("Missing scopes: model.request")).toBe("auth");
     expect(classifyFailoverReason("429 too many requests")).toBe("rate_limit");
-    expect(classifyFailoverReason("resource has been exhausted")).toBe("rate_limit");
-    expect(
-      classifyFailoverReason("model_cooldown: All credentials for model gpt-5 are cooling down"),
-    ).toBe("rate_limit");
-    expect(classifyFailoverReason("all credentials for model x are cooling down")).toBe(
+    expect(classifyFailoverReason("resource has been exhausted")).toBe(
       "rate_limit",
     );
+    expect(
+      classifyFailoverReason(
+        "model_cooldown: All credentials for model gpt-5 are cooling down",
+      ),
+    ).toBe("rate_limit");
+    expect(
+      classifyFailoverReason("all credentials for model x are cooling down"),
+    ).toBe("rate_limit");
     expect(
       classifyFailoverReason(
         '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
@@ -486,13 +517,17 @@ describe("classifyFailoverReason", () => {
     expect(classifyFailoverReason("invalid request format")).toBe("format");
     expect(classifyFailoverReason("credit balance too low")).toBe("billing");
     expect(classifyFailoverReason("deadline exceeded")).toBe("timeout");
-    expect(classifyFailoverReason("request ended without sending any chunks")).toBe("timeout");
+    expect(
+      classifyFailoverReason("request ended without sending any chunks"),
+    ).toBe("timeout");
     expect(
       classifyFailoverReason(
         "521 <!DOCTYPE html><html><head><title>Web server is down</title></head><body>Cloudflare</body></html>",
       ),
     ).toBe("timeout");
-    expect(classifyFailoverReason("string should match pattern")).toBe("format");
+    expect(classifyFailoverReason("string should match pattern")).toBe(
+      "format",
+    );
     expect(classifyFailoverReason("bad request")).toBeNull();
     expect(
       classifyFailoverReason(
@@ -502,9 +537,11 @@ describe("classifyFailoverReason", () => {
     expect(classifyFailoverReason("image exceeds 5 MB maximum")).toBeNull();
   });
   it("classifies OpenAI usage limit errors as rate_limit", () => {
-    expect(classifyFailoverReason("You have hit your ChatGPT usage limit (plus plan)")).toBe(
-      "rate_limit",
-    );
+    expect(
+      classifyFailoverReason(
+        "You have hit your ChatGPT usage limit (plus plan)",
+      ),
+    ).toBe("rate_limit");
   });
   it("classifies provider high-demand / service-unavailable messages as rate_limit", () => {
     expect(
@@ -512,7 +549,9 @@ describe("classifyFailoverReason", () => {
         "This model is currently experiencing high demand. Please try again later.",
       ),
     ).toBe("rate_limit");
-    expect(classifyFailoverReason("LLM error: service unavailable")).toBe("rate_limit");
+    expect(classifyFailoverReason("LLM error: service unavailable")).toBe(
+      "rate_limit",
+    );
     expect(
       classifyFailoverReason(
         '{"error":{"code":503,"message":"The model is overloaded. Please try later","status":"UNAVAILABLE"}}',
@@ -521,9 +560,15 @@ describe("classifyFailoverReason", () => {
   });
   it("classifies permanent auth errors as auth_permanent", () => {
     expect(classifyFailoverReason("invalid_api_key")).toBe("auth_permanent");
-    expect(classifyFailoverReason("Your api key has been revoked")).toBe("auth_permanent");
-    expect(classifyFailoverReason("key has been disabled")).toBe("auth_permanent");
-    expect(classifyFailoverReason("account has been deactivated")).toBe("auth_permanent");
+    expect(classifyFailoverReason("Your api key has been revoked")).toBe(
+      "auth_permanent",
+    );
+    expect(classifyFailoverReason("key has been disabled")).toBe(
+      "auth_permanent",
+    );
+    expect(classifyFailoverReason("account has been deactivated")).toBe(
+      "auth_permanent",
+    );
   });
   it("classifies JSON api_error internal server failures as timeout", () => {
     expect(

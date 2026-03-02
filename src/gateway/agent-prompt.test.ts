@@ -46,14 +46,19 @@ describe("gateway agent prompt", () => {
       formatEntry: (e) => `${e.sender}: ${e.body}`,
     });
 
-    expect(buildAgentMessageFromConversationEntries([...entries])).toBe(expected);
+    expect(buildAgentMessageFromConversationEntries([...entries])).toBe(
+      expected,
+    );
   });
 
   it("prefers last tool entry over assistant for current message", () => {
     const entries = [
       { role: "user", entry: { sender: "User", body: "question" } },
       { role: "tool", entry: { sender: "Tool:x", body: "tool output" } },
-      { role: "assistant", entry: { sender: "Assistant", body: "assistant text" } },
+      {
+        role: "assistant",
+        entry: { sender: "Assistant", body: "assistant text" },
+      },
     ] as const;
 
     const expected = buildHistoryContextFromEntries({
@@ -62,7 +67,9 @@ describe("gateway agent prompt", () => {
       formatEntry: (e) => `${e.sender}: ${e.body}`,
     });
 
-    expect(buildAgentMessageFromConversationEntries([...entries])).toBe(expected);
+    expect(buildAgentMessageFromConversationEntries([...entries])).toBe(
+      expected,
+    );
   });
 
   it("normalizes content-array bodies in history and current message", () => {
@@ -89,9 +96,12 @@ describe("gateway agent prompt", () => {
     const expected = buildHistoryContextFromEntries({
       entries: entries.map((e) => e.entry),
       currentMessage: "User: next step",
-      formatEntry: (e) => `${e.sender}: ${extractTextFromChatContent(e.body) ?? ""}`,
+      formatEntry: (e) =>
+        `${e.sender}: ${extractTextFromChatContent(e.body) ?? ""}`,
     });
 
-    expect(buildAgentMessageFromConversationEntries([...entries])).toBe(expected);
+    expect(buildAgentMessageFromConversationEntries([...entries])).toBe(
+      expected,
+    );
   });
 });

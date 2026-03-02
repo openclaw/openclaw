@@ -1144,7 +1144,11 @@ Keep the Gateway on Linux, but make the required CLI binaries resolve to SSH wra
    ---
    name: apple-notes
    description: Manage Apple Notes via the memo CLI on macOS.
-   metadata: { "openclaw": { "os": ["darwin", "linux"], "requires": { "bins": ["memo"] } } }
+   metadata:
+     {
+       "openclaw":
+         { "os": ["darwin", "linux"], "requires": { "bins": ["memo"] } },
+     }
    ---
    ```
 

@@ -15,7 +15,9 @@ export function chunkTextByBreakResolver(
     const window = remaining.slice(0, limit);
     const candidateBreak = resolveBreakIndex(window);
     const breakIdx =
-      Number.isFinite(candidateBreak) && candidateBreak > 0 && candidateBreak <= limit
+      Number.isFinite(candidateBreak) &&
+      candidateBreak > 0 &&
+      candidateBreak <= limit
         ? candidateBreak
         : limit;
     const rawChunk = remaining.slice(0, breakIdx);
@@ -23,8 +25,12 @@ export function chunkTextByBreakResolver(
     if (chunk.length > 0) {
       chunks.push(chunk);
     }
-    const brokeOnSeparator = breakIdx < remaining.length && /\s/.test(remaining[breakIdx]);
-    const nextStart = Math.min(remaining.length, breakIdx + (brokeOnSeparator ? 1 : 0));
+    const brokeOnSeparator =
+      breakIdx < remaining.length && /\s/.test(remaining[breakIdx]);
+    const nextStart = Math.min(
+      remaining.length,
+      breakIdx + (brokeOnSeparator ? 1 : 0),
+    );
     remaining = remaining.slice(nextStart).trimStart();
   }
   if (remaining.length) {

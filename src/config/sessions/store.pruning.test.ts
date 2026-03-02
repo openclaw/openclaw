@@ -1,9 +1,21 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import { createFixtureSuite } from "../../test-utils/fixture-suite.js";
-import { capEntryCount, pruneStaleEntries, rotateSessionFile } from "./store.js";
+import {
+  capEntryCount,
+  pruneStaleEntries,
+  rotateSessionFile,
+} from "./store.js";
 import type { SessionEntry } from "./types.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -22,7 +34,9 @@ function makeEntry(updatedAt: number): SessionEntry {
   return { sessionId: crypto.randomUUID(), updatedAt };
 }
 
-function makeStore(entries: Array<[string, SessionEntry]>): Record<string, SessionEntry> {
+function makeStore(
+  entries: Array<[string, SessionEntry]>,
+): Record<string, SessionEntry> {
   return Object.fromEntries(entries);
 }
 
@@ -90,7 +104,10 @@ describe("rotateSessionFile", () => {
     const files = await fs.readdir(testDir);
     const bakFiles = files.filter((f) => f.startsWith("sessions.json.bak."));
     expect(bakFiles).toHaveLength(1);
-    const bakContent = await fs.readFile(path.join(testDir, bakFiles[0]), "utf-8");
+    const bakContent = await fs.readFile(
+      path.join(testDir, bakFiles[0]),
+      "utf-8",
+    );
     expect(bakContent).toBe(bigContent);
   });
 
@@ -108,7 +125,9 @@ describe("rotateSessionFile", () => {
     }
 
     const files = await fs.readdir(testDir);
-    const bakFiles = files.filter((f) => f.startsWith("sessions.json.bak.")).toSorted();
+    const bakFiles = files
+      .filter((f) => f.startsWith("sessions.json.bak."))
+      .toSorted();
 
     expect(bakFiles.length).toBeLessThanOrEqual(3);
   });

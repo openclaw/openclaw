@@ -25,11 +25,14 @@ function normalizeOptionalString(value: unknown): string | undefined {
 
 function isInputProvenanceKind(value: unknown): value is InputProvenanceKind {
   return (
-    typeof value === "string" && (INPUT_PROVENANCE_KIND_VALUES as readonly string[]).includes(value)
+    typeof value === "string" &&
+    (INPUT_PROVENANCE_KIND_VALUES as readonly string[]).includes(value)
   );
 }
 
-export function normalizeInputProvenance(value: unknown): InputProvenance | undefined {
+export function normalizeInputProvenance(
+  value: unknown,
+): InputProvenance | undefined {
   if (!value || typeof value !== "object") {
     return undefined;
   }
@@ -55,7 +58,9 @@ export function applyInputProvenanceToUserMessage(
   if ((message as { role?: unknown }).role !== "user") {
     return message;
   }
-  const existing = normalizeInputProvenance((message as { provenance?: unknown }).provenance);
+  const existing = normalizeInputProvenance(
+    (message as { provenance?: unknown }).provenance,
+  );
   if (existing) {
     return message;
   }

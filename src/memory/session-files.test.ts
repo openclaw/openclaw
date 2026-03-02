@@ -23,16 +23,30 @@ describe("buildSessionEntry", () => {
     // Line 6: assistant message
     // Line 7: user message
     const jsonlLines = [
-      JSON.stringify({ type: "custom", customType: "model-snapshot", data: {} }),
-      JSON.stringify({ type: "custom", customType: "openclaw.cache-ttl", data: {} }),
+      JSON.stringify({
+        type: "custom",
+        customType: "model-snapshot",
+        data: {},
+      }),
+      JSON.stringify({
+        type: "custom",
+        customType: "openclaw.cache-ttl",
+        data: {},
+      }),
       JSON.stringify({ type: "session-meta", agentId: "test" }),
-      JSON.stringify({ type: "message", message: { role: "user", content: "Hello world" } }),
+      JSON.stringify({
+        type: "message",
+        message: { role: "user", content: "Hello world" },
+      }),
       JSON.stringify({ type: "custom", customType: "tool-result", data: {} }),
       JSON.stringify({
         type: "message",
         message: { role: "assistant", content: "Hi there, how can I help?" },
       }),
-      JSON.stringify({ type: "message", message: { role: "user", content: "Tell me a joke" } }),
+      JSON.stringify({
+        type: "message",
+        message: { role: "user", content: "Tell me a joke" },
+      }),
     ];
     const filePath = path.join(tmpDir, "session.jsonl");
     await fs.writeFile(filePath, jsonlLines.join("\n"));
@@ -57,7 +71,11 @@ describe("buildSessionEntry", () => {
 
   it("returns empty lineMap when no messages are found", async () => {
     const jsonlLines = [
-      JSON.stringify({ type: "custom", customType: "model-snapshot", data: {} }),
+      JSON.stringify({
+        type: "custom",
+        customType: "model-snapshot",
+        data: {},
+      }),
       JSON.stringify({ type: "session-meta", agentId: "test" }),
     ];
     const filePath = path.join(tmpDir, "empty-session.jsonl");
@@ -73,9 +91,15 @@ describe("buildSessionEntry", () => {
     const jsonlLines = [
       "",
       "not valid json",
-      JSON.stringify({ type: "message", message: { role: "user", content: "First" } }),
+      JSON.stringify({
+        type: "message",
+        message: { role: "user", content: "First" },
+      }),
       "",
-      JSON.stringify({ type: "message", message: { role: "assistant", content: "Second" } }),
+      JSON.stringify({
+        type: "message",
+        message: { role: "assistant", content: "Second" },
+      }),
     ];
     const filePath = path.join(tmpDir, "gaps.jsonl");
     await fs.writeFile(filePath, jsonlLines.join("\n"));

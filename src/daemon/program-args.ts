@@ -25,7 +25,9 @@ async function resolveCliEntrypointPathForService(): Promise<string> {
     // since symlinks like node_modules/openclaw -> .pnpm/openclaw@X.Y.Z/...
     // are automatically updated by pnpm, while the resolved path contains
     // version-specific directories that break after updates.
-    const normalizedLooksLikeDist = /[/\\]dist[/\\].+\.(cjs|js|mjs)$/.test(normalized);
+    const normalizedLooksLikeDist = /[/\\]dist[/\\].+\.(cjs|js|mjs)$/.test(
+      normalized,
+    );
     if (normalizedLooksLikeDist && normalized !== resolvedPath) {
       try {
         await fs.access(normalized);
@@ -78,7 +80,11 @@ function buildDistCandidates(...inputs: string[]): string[] {
   return candidates;
 }
 
-function appendDistCandidates(candidates: string[], seen: Set<string>, baseDir: string): void {
+function appendDistCandidates(
+  candidates: string[],
+  seen: Set<string>,
+  baseDir: string,
+): void {
   const distDir = path.resolve(baseDir, "dist");
   const distEntries = [
     path.join(distDir, "index.js"),
@@ -168,7 +174,8 @@ async function resolveCliProgramArguments(params: {
 
   if (runtime === "node") {
     const nodePath =
-      params.nodePath ?? (isNodeRuntime(execPath) ? execPath : await resolveNodePath());
+      params.nodePath ??
+      (isNodeRuntime(execPath) ? execPath : await resolveNodePath());
     const cliEntrypointPath = await resolveCliEntrypointPathForService();
     return {
       programArguments: [nodePath, cliEntrypointPath, ...params.args],
@@ -180,7 +187,9 @@ async function resolveCliProgramArguments(params: {
       const repoRoot = resolveRepoRootForDev();
       const devCliPath = path.join(repoRoot, "src", "index.ts");
       await fs.access(devCliPath);
-      const bunPath = isBunRuntime(execPath) ? execPath : await resolveBunPath();
+      const bunPath = isBunRuntime(execPath)
+        ? execPath
+        : await resolveBunPath();
       return {
         programArguments: [bunPath, devCliPath, ...params.args],
         workingDirectory: repoRoot,
@@ -256,7 +265,14 @@ export async function resolveNodeProgramArguments(params: {
   runtime?: GatewayRuntimePreference;
   nodePath?: string;
 }): Promise<GatewayProgramArgs> {
-  const args = ["node", "run", "--host", params.host, "--port", String(params.port)];
+  const args = [
+    "node",
+    "run",
+    "--host",
+    params.host,
+    "--port",
+    String(params.port),
+  ];
   if (params.tls || params.tlsFingerprint) {
     args.push("--tls");
   }

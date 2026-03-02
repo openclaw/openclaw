@@ -7,5 +7,8 @@ export function applyGoogleGeminiModelDefault(cfg: OpenClawConfig): {
   next: OpenClawConfig;
   changed: boolean;
 } {
-  return applyAgentDefaultPrimaryModel({ cfg, model: GOOGLE_GEMINI_DEFAULT_MODEL });
+  return applyAgentDefaultPrimaryModel({
+    cfg,
+    model: GOOGLE_GEMINI_DEFAULT_MODEL,
+  });
 }

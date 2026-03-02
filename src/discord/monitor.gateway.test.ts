@@ -18,9 +18,15 @@ function startGatewayWait(params?: {
   const promise = waitForDiscordGatewayStop({
     gateway: { emitter: harness.emitter, disconnect: harness.disconnect },
     abortSignal: harness.abort.signal,
-    ...(params?.onGatewayError ? { onGatewayError: params.onGatewayError } : {}),
-    ...(params?.shouldStopOnError ? { shouldStopOnError: params.shouldStopOnError } : {}),
-    ...(params?.registerForceStop ? { registerForceStop: params.registerForceStop } : {}),
+    ...(params?.onGatewayError
+      ? { onGatewayError: params.onGatewayError }
+      : {}),
+    ...(params?.shouldStopOnError
+      ? { shouldStopOnError: params.shouldStopOnError }
+      : {}),
+    ...(params?.registerForceStop
+      ? { registerForceStop: params.registerForceStop }
+      : {}),
   });
   return { ...harness, promise };
 }
@@ -33,7 +39,9 @@ async function expectAbortToResolve(params: {
   expectedDisconnectBeforeAbort?: number;
 }) {
   if (params.expectedDisconnectBeforeAbort !== undefined) {
-    expect(params.disconnect).toHaveBeenCalledTimes(params.expectedDisconnectBeforeAbort);
+    expect(params.disconnect).toHaveBeenCalledTimes(
+      params.expectedDisconnectBeforeAbort,
+    );
   }
   expect(params.emitter.listenerCount("error")).toBe(1);
   params.abort.abort();

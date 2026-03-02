@@ -27,7 +27,10 @@ export function createDiscordDraftStream(params: {
   log?: (message: string) => void;
   warn?: (message: string) => void;
 }): DiscordDraftStream {
-  const maxChars = Math.min(params.maxChars ?? DISCORD_STREAM_MAX_CHARS, DISCORD_STREAM_MAX_CHARS);
+  const maxChars = Math.min(
+    params.maxChars ?? DISCORD_STREAM_MAX_CHARS,
+    DISCORD_STREAM_MAX_CHARS,
+  );
   const throttleMs = Math.max(250, params.throttleMs ?? DEFAULT_THROTTLE_MS);
   const minInitialChars = params.minInitialChars;
   const channelId = params.channelId;
@@ -54,7 +57,9 @@ export function createDiscordDraftStream(params: {
       // Discord messages cap at 2000 chars.
       // Stop streaming once we exceed the cap to avoid repeated API failures.
       streamState.stopped = true;
-      params.warn?.(`discord stream preview stopped (text length ${trimmed.length} > ${maxChars})`);
+      params.warn?.(
+        `discord stream preview stopped (text length ${trimmed.length} > ${maxChars})`,
+      );
       return false;
     }
     if (trimmed === lastSentText) {
@@ -62,7 +67,11 @@ export function createDiscordDraftStream(params: {
     }
 
     // Debounce first preview send for better push notification quality.
-    if (streamMessageId === undefined && minInitialChars != null && !streamState.final) {
+    if (
+      streamMessageId === undefined &&
+      minInitialChars != null &&
+      !streamState.final
+    ) {
       if (trimmed.length < minInitialChars) {
         return false;
       }
@@ -91,7 +100,9 @@ export function createDiscordDraftStream(params: {
       const sentMessageId = sent?.id;
       if (typeof sentMessageId !== "string" || !sentMessageId) {
         streamState.stopped = true;
-        params.warn?.("discord stream preview stopped (missing message id from send)");
+        params.warn?.(
+          "discord stream preview stopped (missing message id from send)",
+        );
         return false;
       }
       streamMessageId = sentMessageId;
@@ -109,7 +120,8 @@ export function createDiscordDraftStream(params: {
   const clearMessageId = () => {
     streamMessageId = undefined;
   };
-  const isValidStreamMessageId = (value: unknown): value is string => typeof value === "string";
+  const isValidStreamMessageId = (value: unknown): value is string =>
+    typeof value === "string";
   const deleteStreamMessage = async (messageId: string) => {
     await rest.delete(Routes.channelMessage(channelId, messageId));
   };
@@ -132,7 +144,9 @@ export function createDiscordDraftStream(params: {
     loop.resetPending();
   };
 
-  params.log?.(`discord stream preview ready (maxChars=${maxChars}, throttleMs=${throttleMs})`);
+  params.log?.(
+    `discord stream preview ready (maxChars=${maxChars}, throttleMs=${throttleMs})`,
+  );
 
   return {
     update,

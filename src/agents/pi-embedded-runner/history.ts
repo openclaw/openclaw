@@ -49,7 +49,8 @@ export function getHistoryLimitFromSessionKey(
   }
 
   const parts = sessionKey.split(":").filter(Boolean);
-  const providerParts = parts.length >= 3 && parts[0] === "agent" ? parts.slice(2) : parts;
+  const providerParts =
+    parts.length >= 3 && parts[0] === "agent" ? parts.slice(2) : parts;
 
   const provider = providerParts[0]?.toLowerCase();
   if (!provider) {

@@ -18,7 +18,10 @@ vi.mock("../../../pairing/pairing-store.js", () => ({
   readChannelAllowFromStore: memberMocks.readAllow,
 }));
 
-type MemberHandler = (args: { event: Record<string, unknown>; body: unknown }) => Promise<void>;
+type MemberHandler = (args: {
+  event: Record<string, unknown>;
+  body: unknown;
+}) => Promise<void>;
 
 type MemberCaseArgs = {
   event?: Record<string, unknown>;
@@ -45,9 +48,13 @@ function getMemberHandlers(params: {
 }) {
   const harness = initSlackHarness(params.overrides);
   if (params.shouldDropMismatchedSlackEvent) {
-    harness.ctx.shouldDropMismatchedSlackEvent = params.shouldDropMismatchedSlackEvent;
+    harness.ctx.shouldDropMismatchedSlackEvent =
+      params.shouldDropMismatchedSlackEvent;
   }
-  registerSlackMemberEvents({ ctx: harness.ctx, trackEvent: params.trackEvent });
+  registerSlackMemberEvents({
+    ctx: harness.ctx,
+    trackEvent: params.trackEvent,
+  });
   return {
     joined: harness.getHandler("member_joined_channel") as MemberHandler | null,
     left: harness.getHandler("member_left_channel") as MemberHandler | null,
@@ -96,7 +103,10 @@ describe("registerSlackMemberEvents", () => {
       args: {
         handler: "left" as const,
         overrides: { dmPolicy: "allowlist", allowFrom: ["U1"] },
-        event: { ...makeMemberEvent({ user: "U1" }), type: "member_left_channel" },
+        event: {
+          ...makeMemberEvent({ user: "U1" }),
+          type: "member_left_channel",
+        },
       },
       calls: 1,
     },

@@ -11,17 +11,25 @@ import { createWebFetchTool } from "./web-tools.js";
 const baseToolConfig = createBaseWebFetchToolConfig();
 installWebFetchSsrfHarness();
 
-function makeHeaders(map: Record<string, string>): { get: (key: string) => string | null } {
+function makeHeaders(map: Record<string, string>): {
+  get: (key: string) => string | null;
+} {
   return {
     get: (key) => map[key.toLowerCase()] ?? null,
   };
 }
 
-function markdownResponse(body: string, extraHeaders: Record<string, string> = {}): Response {
+function markdownResponse(
+  body: string,
+  extraHeaders: Record<string, string> = {},
+): Response {
   return {
     ok: true,
     status: 200,
-    headers: makeHeaders({ "content-type": "text/markdown; charset=utf-8", ...extraHeaders }),
+    headers: makeHeaders({
+      "content-type": "text/markdown; charset=utf-8",
+      ...extraHeaders,
+    }),
     text: async () => body,
   } as Response;
 }
@@ -37,7 +45,9 @@ function htmlResponse(body: string): Response {
 
 describe("web_fetch Cloudflare Markdown for Agents", () => {
   it("sends Accept header preferring text/markdown", async () => {
-    const fetchSpy = vi.fn().mockResolvedValue(markdownResponse("# Test Page\n\nHello world."));
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValue(markdownResponse("# Test Page\n\nHello world."));
     global.fetch = withFetchPreconnect(fetchSpy);
 
     const tool = createWebFetchTool(baseToolConfig);
@@ -46,7 +56,9 @@ describe("web_fetch Cloudflare Markdown for Agents", () => {
 
     expect(fetchSpy).toHaveBeenCalled();
     const [, init] = fetchSpy.mock.calls[0];
-    expect(init.headers.Accept).toBe("text/markdown, text/html;q=0.9, */*;q=0.1");
+    expect(init.headers.Accept).toBe(
+      "text/markdown, text/html;q=0.9, */*;q=0.1",
+    );
   });
 
   it("uses cf-markdown extractor for text/markdown responses", async () => {
@@ -56,9 +68,16 @@ describe("web_fetch Cloudflare Markdown for Agents", () => {
 
     const tool = createWebFetchTool(baseToolConfig);
 
-    const result = await tool?.execute?.("call", { url: "https://example.com/cf" });
+    const result = await tool?.execute?.("call", {
+      url: "https://example.com/cf",
+    });
     const details = result?.details as
-      | { status?: number; extractor?: string; contentType?: string; text?: string }
+      | {
+          status?: number;
+          extractor?: string;
+          contentType?: string;
+          text?: string;
+        }
       | undefined;
     expect(details).toMatchObject({
       status: 200,
@@ -78,8 +97,12 @@ describe("web_fetch Cloudflare Markdown for Agents", () => {
 
     const tool = createWebFetchTool(baseToolConfig);
 
-    const result = await tool?.execute?.("call", { url: "https://example.com/html" });
-    const details = result?.details as { extractor?: string; contentType?: string } | undefined;
+    const result = await tool?.execute?.("call", {
+      url: "https://example.com/html",
+    });
+    const details = result?.details as
+      | { extractor?: string; contentType?: string }
+      | undefined;
     expect(details?.extractor).toBe("readability");
     expect(details?.contentType).toBe("text/html");
   });
@@ -88,15 +111,21 @@ describe("web_fetch Cloudflare Markdown for Agents", () => {
     const logSpy = vi.spyOn(logger, "logDebug").mockImplementation(() => {});
     const fetchSpy = vi
       .fn()
-      .mockResolvedValue(markdownResponse("# Tokens Test", { "x-markdown-tokens": "1500" }));
+      .mockResolvedValue(
+        markdownResponse("# Tokens Test", { "x-markdown-tokens": "1500" }),
+      );
     global.fetch = withFetchPreconnect(fetchSpy);
 
     const tool = createWebFetchTool(baseToolConfig);
 
-    await tool?.execute?.("call", { url: "https://example.com/tokens/private?token=secret" });
+    await tool?.execute?.("call", {
+      url: "https://example.com/tokens/private?token=secret",
+    });
 
     expect(logSpy).toHaveBeenCalledWith(
-      expect.stringContaining("x-markdown-tokens: 1500 (https://example.com/...)"),
+      expect.stringContaining(
+        "x-markdown-tokens: 1500 (https://example.com/...)",
+      ),
     );
     const tokenLogs = logSpy.mock.calls
       .map(([message]) => String(message))
@@ -140,7 +169,8 @@ describe("web_fetch Cloudflare Markdown for Agents", () => {
     await tool?.execute?.("call", { url: "https://example.com/no-tokens" });
 
     const tokenLogs = logSpy.mock.calls.filter(
-      (args) => typeof args[0] === "string" && args[0].includes("x-markdown-tokens"),
+      (args) =>
+        typeof args[0] === "string" && args[0].includes("x-markdown-tokens"),
     );
     expect(tokenLogs).toHaveLength(0);
   });

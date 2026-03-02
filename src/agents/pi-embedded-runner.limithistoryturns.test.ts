@@ -63,7 +63,9 @@ describe("limitHistoryTurns", () => {
 
   const makeMessages = (roles: ("user" | "assistant")[]): AgentMessage[] =>
     roles.map((role, i) =>
-      role === "user" ? userMessage(`message ${i}`) : assistantTextMessage(`message ${i}`),
+      role === "user"
+        ? userMessage(`message ${i}`)
+        : assistantTextMessage(`message ${i}`),
     );
 
   it("returns all messages when limit is undefined", () => {
@@ -91,14 +93,28 @@ describe("limitHistoryTurns", () => {
   });
 
   it("limits to last N user turns", () => {
-    const messages = makeMessages(["user", "assistant", "user", "assistant", "user", "assistant"]);
+    const messages = makeMessages([
+      "user",
+      "assistant",
+      "user",
+      "assistant",
+      "user",
+      "assistant",
+    ]);
     const limited = limitHistoryTurns(messages, 2);
     expect(limited.length).toBe(4);
     expect(firstText(limited[0])).toBe("message 2");
   });
 
   it("handles single user turn limit", () => {
-    const messages = makeMessages(["user", "assistant", "user", "assistant", "user", "assistant"]);
+    const messages = makeMessages([
+      "user",
+      "assistant",
+      "user",
+      "assistant",
+      "user",
+      "assistant",
+    ]);
     const limited = limitHistoryTurns(messages, 1);
     expect(limited.length).toBe(2);
     expect(firstText(limited[0])).toBe("message 4");
@@ -106,7 +122,13 @@ describe("limitHistoryTurns", () => {
   });
 
   it("handles messages with multiple assistant responses per user turn", () => {
-    const messages = makeMessages(["user", "assistant", "assistant", "user", "assistant"]);
+    const messages = makeMessages([
+      "user",
+      "assistant",
+      "assistant",
+      "user",
+      "assistant",
+    ]);
     const limited = limitHistoryTurns(messages, 1);
     expect(limited.length).toBe(2);
     expect(limited[0].role).toBe("user");

@@ -1,8 +1,16 @@
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
-import { type ChannelId, getChannelPlugin, listChannelPlugins } from "../channels/plugins/index.js";
+import {
+  type ChannelId,
+  getChannelPlugin,
+  listChannelPlugins,
+} from "../channels/plugins/index.js";
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { type BackoffPolicy, computeBackoff, sleepWithAbort } from "../infra/backoff.js";
+import {
+  type BackoffPolicy,
+  computeBackoff,
+  sleepWithAbort,
+} from "../infra/backoff.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
@@ -19,7 +27,9 @@ const MAX_RESTART_ATTEMPTS = 10;
 
 export type ChannelRuntimeSnapshot = {
   channels: Partial<Record<ChannelId, ChannelAccountSnapshot>>;
-  channelAccounts: Partial<Record<ChannelId, Record<string, ChannelAccountSnapshot>>>;
+  channelAccounts: Partial<
+    Record<ChannelId, Record<string, ChannelAccountSnapshot>>
+  >;
 };
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
@@ -51,7 +61,10 @@ function resolveDefaultRuntime(channelId: ChannelId): ChannelAccountSnapshot {
   return plugin?.status?.defaultRuntime ?? { accountId: DEFAULT_ACCOUNT_ID };
 }
 
-function cloneDefaultRuntime(channelId: ChannelId, accountId: string): ChannelAccountSnapshot {
+function cloneDefaultRuntime(
+  channelId: ChannelId,
+  accountId: string,
+): ChannelAccountSnapshot {
   return { ...resolveDefaultRuntime(channelId), accountId };
 }
 
@@ -71,13 +84,19 @@ export type ChannelManager = {
   startChannels: () => Promise<void>;
   startChannel: (channel: ChannelId, accountId?: string) => Promise<void>;
   stopChannel: (channel: ChannelId, accountId?: string) => Promise<void>;
-  markChannelLoggedOut: (channelId: ChannelId, cleared: boolean, accountId?: string) => void;
+  markChannelLoggedOut: (
+    channelId: ChannelId,
+    cleared: boolean,
+    accountId?: string,
+  ) => void;
   isManuallyStopped: (channelId: ChannelId, accountId: string) => boolean;
   resetRestartAttempts: (channelId: ChannelId, accountId: string) => void;
 };
 
 // Channel docking: lifecycle hooks (`plugin.gateway`) flow through this manager.
-export function createChannelManager(opts: ChannelManagerOptions): ChannelManager {
+export function createChannelManager(
+  opts: ChannelManagerOptions,
+): ChannelManager {
   const { loadConfig, channelLogs, channelRuntimeEnvs } = opts;
 
   const channelStores = new Map<ChannelId, ChannelRuntimeStore>();
@@ -86,7 +105,8 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
   // Tracks accounts that were manually stopped so we don't auto-restart them.
   const manuallyStopped = new Set<string>();
 
-  const restartKey = (channelId: ChannelId, accountId: string) => `${channelId}:${accountId}`;
+  const restartKey = (channelId: ChannelId, accountId: string) =>
+    `${channelId}:${accountId}`;
 
   const getStore = (channelId: ChannelId): ChannelRuntimeStore => {
     const existing = channelStores.get(channelId);
@@ -98,9 +118,14 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     return next;
   };
 
-  const getRuntime = (channelId: ChannelId, accountId: string): ChannelAccountSnapshot => {
+  const getRuntime = (
+    channelId: ChannelId,
+    accountId: string,
+  ): ChannelAccountSnapshot => {
     const store = getStore(channelId);
-    return store.runtimes.get(accountId) ?? cloneDefaultRuntime(channelId, accountId);
+    return (
+      store.runtimes.get(accountId) ?? cloneDefaultRuntime(channelId, accountId)
+    );
   };
 
   const setRuntime = (
@@ -125,11 +150,14 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     if (!startAccount) {
       return;
     }
-    const { preserveRestartAttempts = false, preserveManualStop = false } = opts;
+    const { preserveRestartAttempts = false, preserveManualStop = false } =
+      opts;
     const cfg = loadConfig();
     resetDirectoryCache({ channel: channelId, accountId });
     const store = getStore(channelId);
-    const accountIds = accountId ? [accountId] : plugin.config.listAccountIds(cfg);
+    const accountIds = accountId
+      ? [accountId]
+      : plugin.config.listAccountIds(cfg);
     if (accountIds.length === 0) {
       return;
     }
@@ -149,7 +177,8 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             enabled: false,
             configured: true,
             running: false,
-            lastError: plugin.config.disabledReason?.(account, cfg) ?? "disabled",
+            lastError:
+              plugin.config.disabledReason?.(account, cfg) ?? "disabled",
           });
           return;
         }
@@ -164,7 +193,9 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             enabled: true,
             configured: false,
             running: false,
-            lastError: plugin.config.unconfiguredReason?.(account, cfg) ?? "not configured",
+            lastError:
+              plugin.config.unconfiguredReason?.(account, cfg) ??
+              "not configured",
           });
           return;
         }
@@ -186,7 +217,9 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           running: true,
           lastStartAt: Date.now(),
           lastError: null,
-          reconnectAttempts: preserveRestartAttempts ? (restartAttempts.get(rKey) ?? 0) : 0,
+          reconnectAttempts: preserveRestartAttempts
+            ? (restartAttempts.get(rKey) ?? 0)
+            : 0,
         });
 
         const log = channelLogs[channelId];
@@ -220,7 +253,9 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             const attempt = (restartAttempts.get(rKey) ?? 0) + 1;
             restartAttempts.set(rKey, attempt);
             if (attempt > MAX_RESTART_ATTEMPTS) {
-              log.error?.(`[${id}] giving up after ${MAX_RESTART_ATTEMPTS} restart attempts`);
+              log.error?.(
+                `[${id}] giving up after ${MAX_RESTART_ATTEMPTS} restart attempts`,
+              );
               return;
             }
             const delayMs = computeBackoff(CHANNEL_RESTART_POLICY, attempt);
@@ -271,7 +306,11 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     const plugin = getChannelPlugin(channelId);
     const store = getStore(channelId);
     // Fast path: nothing running and no explicit plugin shutdown hook to run.
-    if (!plugin?.gateway?.stopAccount && store.aborts.size === 0 && store.tasks.size === 0) {
+    if (
+      !plugin?.gateway?.stopAccount &&
+      store.aborts.size === 0 &&
+      store.tasks.size === 0
+    ) {
       return;
     }
     const cfg = loadConfig();
@@ -329,7 +368,11 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     }
   };
 
-  const markChannelLoggedOut = (channelId: ChannelId, cleared: boolean, accountId?: string) => {
+  const markChannelLoggedOut = (
+    channelId: ChannelId,
+    cleared: boolean,
+    accountId?: string,
+  ) => {
     const plugin = getChannelPlugin(channelId);
     if (!plugin) {
       return;
@@ -373,32 +416,46 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           : isAccountEnabled(account);
         const described = plugin.config.describeAccount?.(account, cfg);
         const configured = described?.configured;
-        const current = store.runtimes.get(id) ?? cloneDefaultRuntime(plugin.id, id);
+        const current =
+          store.runtimes.get(id) ?? cloneDefaultRuntime(plugin.id, id);
         const next = { ...current, accountId: id };
         next.enabled = enabled;
-        next.configured = typeof configured === "boolean" ? configured : (next.configured ?? true);
+        next.configured =
+          typeof configured === "boolean"
+            ? configured
+            : (next.configured ?? true);
         if (!next.running) {
           if (!enabled) {
-            next.lastError ??= plugin.config.disabledReason?.(account, cfg) ?? "disabled";
+            next.lastError ??=
+              plugin.config.disabledReason?.(account, cfg) ?? "disabled";
           } else if (configured === false) {
-            next.lastError ??= plugin.config.unconfiguredReason?.(account, cfg) ?? "not configured";
+            next.lastError ??=
+              plugin.config.unconfiguredReason?.(account, cfg) ??
+              "not configured";
           }
         }
         accounts[id] = next;
       }
       const defaultAccount =
-        accounts[defaultAccountId] ?? cloneDefaultRuntime(plugin.id, defaultAccountId);
+        accounts[defaultAccountId] ??
+        cloneDefaultRuntime(plugin.id, defaultAccountId);
       channels[plugin.id] = defaultAccount;
       channelAccounts[plugin.id] = accounts;
     }
     return { channels, channelAccounts };
   };
 
-  const isManuallyStopped_ = (channelId: ChannelId, accountId: string): boolean => {
+  const isManuallyStopped_ = (
+    channelId: ChannelId,
+    accountId: string,
+  ): boolean => {
     return manuallyStopped.has(restartKey(channelId, accountId));
   };
 
-  const resetRestartAttempts_ = (channelId: ChannelId, accountId: string): void => {
+  const resetRestartAttempts_ = (
+    channelId: ChannelId,
+    accountId: string,
+  ): void => {
     restartAttempts.delete(restartKey(channelId, accountId));
   };
 

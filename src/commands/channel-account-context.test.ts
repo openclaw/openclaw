@@ -14,7 +14,10 @@ describe("resolveDefaultChannelAccountContext", () => {
       },
     } as unknown as ChannelPlugin;
 
-    const result = await resolveDefaultChannelAccountContext(plugin, {} as OpenClawConfig);
+    const result = await resolveDefaultChannelAccountContext(
+      plugin,
+      {} as OpenClawConfig,
+    );
 
     expect(result.accountIds).toEqual(["acc-1"]);
     expect(result.defaultAccountId).toBe("acc-1");
@@ -37,7 +40,10 @@ describe("resolveDefaultChannelAccountContext", () => {
       },
     } as unknown as ChannelPlugin;
 
-    const result = await resolveDefaultChannelAccountContext(plugin, {} as OpenClawConfig);
+    const result = await resolveDefaultChannelAccountContext(
+      plugin,
+      {} as OpenClawConfig,
+    );
 
     expect(isEnabled).toHaveBeenCalledWith(account, {});
     expect(isConfigured).toHaveBeenCalledWith(account, {});

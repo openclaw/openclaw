@@ -37,7 +37,10 @@ describe("resolveChannelModelOverride", () => {
         channel: "telegram",
         groupId: "-100123:topic:99",
       },
-      expected: { model: "anthropic/claude-sonnet-4-6", matchKey: "-100123:topic:99" },
+      expected: {
+        model: "anthropic/claude-sonnet-4-6",
+        matchKey: "-100123:topic:99",
+      },
     },
     {
       name: "falls back to parent session key when thread id does not match",

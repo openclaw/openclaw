@@ -1,7 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
-import type { SkillStatusEntry, SkillStatusReport } from "../agents/skills-status.js";
+import type {
+  SkillStatusEntry,
+  SkillStatusReport,
+} from "../agents/skills-status.js";
 import { createEmptyInstallChecks } from "./requirements-test-fixtures.js";
-import { formatSkillInfo, formatSkillsCheck, formatSkillsList } from "./skills-cli.format.js";
+import {
+  formatSkillInfo,
+  formatSkillsCheck,
+  formatSkillsList,
+} from "./skills-cli.format.js";
 
 // Unit tests: don't pay the runtime cost of loading/parsing the real skills loader.
 vi.mock("@mariozechner/pi-coding-agent", () => ({
@@ -9,7 +16,9 @@ vi.mock("@mariozechner/pi-coding-agent", () => ({
   formatSkillsForPrompt: () => "",
 }));
 
-function createMockSkill(overrides: Partial<SkillStatusEntry> = {}): SkillStatusEntry {
+function createMockSkill(
+  overrides: Partial<SkillStatusEntry> = {},
+): SkillStatusEntry {
   return {
     name: "test-skill",
     description: "A test skill",
@@ -176,9 +185,12 @@ describe("skills-cli", () => {
     it.each([
       {
         formatter: "list",
-        output: formatSkillsList(createMockReport([createMockSkill({ name: "json-skill" })]), {
-          json: true,
-        }),
+        output: formatSkillsList(
+          createMockReport([createMockSkill({ name: "json-skill" })]),
+          {
+            json: true,
+          },
+        ),
         assert: (parsed: Record<string, unknown>) => {
           const skills = parsed.skills as Array<Record<string, unknown>>;
           expect(skills).toHaveLength(1);

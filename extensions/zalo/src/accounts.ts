@@ -5,7 +5,11 @@ import {
   normalizeOptionalAccountId,
 } from "openclaw/plugin-sdk/account-id";
 import { resolveZaloToken } from "./token.js";
-import type { ResolvedZaloAccount, ZaloAccountConfig, ZaloConfig } from "./types.js";
+import type {
+  ResolvedZaloAccount,
+  ZaloAccountConfig,
+  ZaloConfig,
+} from "./types.js";
 
 export type { ResolvedZaloAccount };
 
@@ -30,7 +34,9 @@ export function resolveDefaultZaloAccountId(cfg: OpenClawConfig): string {
   const preferred = normalizeOptionalAccountId(zaloConfig?.defaultAccount);
   if (
     preferred &&
-    listZaloAccountIds(cfg).some((accountId) => normalizeAccountId(accountId) === preferred)
+    listZaloAccountIds(cfg).some(
+      (accountId) => normalizeAccountId(accountId) === preferred,
+    )
   ) {
     return preferred;
   }
@@ -52,7 +58,10 @@ function resolveAccountConfig(
   return accounts[accountId] as ZaloAccountConfig | undefined;
 }
 
-function mergeZaloAccountConfig(cfg: OpenClawConfig, accountId: string): ZaloAccountConfig {
+function mergeZaloAccountConfig(
+  cfg: OpenClawConfig,
+  accountId: string,
+): ZaloAccountConfig {
   const raw = (cfg.channels?.zalo ?? {}) as ZaloConfig;
   const { accounts: _ignored, defaultAccount: _ignored2, ...base } = raw;
   const account = resolveAccountConfig(cfg, accountId) ?? {};
@@ -64,7 +73,8 @@ export function resolveZaloAccount(params: {
   accountId?: string | null;
 }): ResolvedZaloAccount {
   const accountId = normalizeAccountId(params.accountId);
-  const baseEnabled = (params.cfg.channels?.zalo as ZaloConfig | undefined)?.enabled !== false;
+  const baseEnabled =
+    (params.cfg.channels?.zalo as ZaloConfig | undefined)?.enabled !== false;
   const merged = mergeZaloAccountConfig(params.cfg, accountId);
   const accountEnabled = merged.enabled !== false;
   const enabled = baseEnabled && accountEnabled;
@@ -83,7 +93,9 @@ export function resolveZaloAccount(params: {
   };
 }
 
-export function listEnabledZaloAccounts(cfg: OpenClawConfig): ResolvedZaloAccount[] {
+export function listEnabledZaloAccounts(
+  cfg: OpenClawConfig,
+): ResolvedZaloAccount[] {
   return listZaloAccountIds(cfg)
     .map((accountId) => resolveZaloAccount({ cfg, accountId }))
     .filter((account) => account.enabled);

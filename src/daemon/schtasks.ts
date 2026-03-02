@@ -1,8 +1,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { parseCmdScriptCommandLine, quoteCmdScriptArg } from "./cmd-argv.js";
-import { assertNoCmdLineBreak, parseCmdSetAssignment, renderCmdSetAssignment } from "./cmd-set.js";
-import { resolveGatewayServiceDescription, resolveGatewayWindowsTaskName } from "./constants.js";
+import {
+  assertNoCmdLineBreak,
+  parseCmdSetAssignment,
+  renderCmdSetAssignment,
+} from "./cmd-set.js";
+import {
+  resolveGatewayServiceDescription,
+  resolveGatewayWindowsTaskName,
+} from "./constants.js";
 import { formatLine, writeFormattedLines } from "./output.js";
 import { resolveGatewayStateDir } from "./paths.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";
@@ -89,7 +96,10 @@ export async function readScheduledTaskCommand(
         continue;
       }
       if (lower.startsWith("cd /d ")) {
-        workingDirectory = line.slice("cd /d ".length).trim().replace(/^"|"$/g, "");
+        workingDirectory = line
+          .slice("cd /d ".length)
+          .trim()
+          .replace(/^"|"$/g, "");
         continue;
       }
       commandLine = line;
@@ -227,7 +237,11 @@ export async function installScheduledTask({
   await assertSchtasksAvailable();
   const scriptPath = resolveTaskScriptPath(env);
   await fs.mkdir(path.dirname(scriptPath), { recursive: true });
-  const taskDescription = resolveGatewayServiceDescription({ env, environment, description });
+  const taskDescription = resolveGatewayServiceDescription({
+    env,
+    environment,
+    description,
+  });
   const script = buildTaskScript({
     description: taskDescription,
     programArguments,
@@ -295,12 +309,19 @@ export async function uninstallScheduledTask({
   }
 }
 
-function isTaskNotRunning(res: { stdout: string; stderr: string; code: number }): boolean {
+function isTaskNotRunning(res: {
+  stdout: string;
+  stderr: string;
+  code: number;
+}): boolean {
   const detail = (res.stderr || res.stdout).toLowerCase();
   return detail.includes("not running");
 }
 
-export async function stopScheduledTask({ stdout, env }: GatewayServiceControlArgs): Promise<void> {
+export async function stopScheduledTask({
+  stdout,
+  env,
+}: GatewayServiceControlArgs): Promise<void> {
   await assertSchtasksAvailable();
   const taskName = resolveTaskName(env ?? (process.env as GatewayServiceEnv));
   const res = await execSchtasks(["/End", "/TN", taskName]);
@@ -324,9 +345,13 @@ export async function restartScheduledTask({
   stdout.write(`${formatLine("Restarted Scheduled Task", taskName)}\n`);
 }
 
-export async function isScheduledTaskInstalled(args: GatewayServiceEnvArgs): Promise<boolean> {
+export async function isScheduledTaskInstalled(
+  args: GatewayServiceEnvArgs,
+): Promise<boolean> {
   await assertSchtasksAvailable();
-  const taskName = resolveTaskName(args.env ?? (process.env as GatewayServiceEnv));
+  const taskName = resolveTaskName(
+    args.env ?? (process.env as GatewayServiceEnv),
+  );
   const res = await execSchtasks(["/Query", "/TN", taskName]);
   return res.code === 0;
 }
@@ -343,7 +368,14 @@ export async function readScheduledTaskRuntime(
     };
   }
   const taskName = resolveTaskName(env);
-  const res = await execSchtasks(["/Query", "/TN", taskName, "/V", "/FO", "LIST"]);
+  const res = await execSchtasks([
+    "/Query",
+    "/TN",
+    taskName,
+    "/V",
+    "/FO",
+    "LIST",
+  ]);
   if (res.code !== 0) {
     const detail = (res.stderr || res.stdout).trim();
     const missing = detail.toLowerCase().includes("cannot find the file");

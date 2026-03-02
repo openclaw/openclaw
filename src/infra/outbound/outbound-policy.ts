@@ -9,7 +9,10 @@ import {
   type CrossContextComponentsBuilder,
 } from "./channel-adapters.js";
 import { normalizeTargetForProvider } from "./target-normalization.js";
-import { formatTargetDisplay, lookupDirectoryDisplay } from "./target-resolver.js";
+import {
+  formatTargetDisplay,
+  lookupDirectoryDisplay,
+} from "./target-resolver.js";
 
 export type CrossContextDecoration = {
   prefix: string;
@@ -129,7 +132,13 @@ export function enforceCrossContextPolicy(params: {
     return;
   }
 
-  if (!isCrossContextTarget({ channel: params.channel, target, toolContext: params.toolContext })) {
+  if (
+    !isCrossContextTarget({
+      channel: params.channel,
+      target,
+      toolContext: params.toolContext,
+    })
+  ) {
     return;
   }
 
@@ -195,7 +204,9 @@ export async function buildCrossContextDecoration(params: {
   return { prefix, suffix, componentsBuilder };
 }
 
-export function shouldApplyCrossContextMarker(action: ChannelMessageActionName): boolean {
+export function shouldApplyCrossContextMarker(
+  action: ChannelMessageActionName,
+): boolean {
   return CONTEXT_MARKER_ACTIONS.has(action);
 }
 
@@ -208,7 +219,8 @@ export function applyCrossContextDecoration(params: {
   componentsBuilder?: CrossContextComponentsBuilder;
   usedComponents: boolean;
 } {
-  const useComponents = params.preferComponents && params.decoration.componentsBuilder;
+  const useComponents =
+    params.preferComponents && params.decoration.componentsBuilder;
   if (useComponents) {
     return {
       message: params.message,

@@ -36,13 +36,19 @@ describe("runCli exit behavior", () => {
 
   it("does not force process.exit after successful routed command", async () => {
     tryRouteCliMock.mockResolvedValueOnce(true);
-    const exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(((
+      code?: number,
+    ) => {
       throw new Error(`unexpected process.exit(${String(code)})`);
     }) as typeof process.exit);
 
     await runCli(["node", "openclaw", "status"]);
 
-    expect(tryRouteCliMock).toHaveBeenCalledWith(["node", "openclaw", "status"]);
+    expect(tryRouteCliMock).toHaveBeenCalledWith([
+      "node",
+      "openclaw",
+      "status",
+    ]);
     expect(exitSpy).not.toHaveBeenCalled();
     exitSpy.mockRestore();
   });

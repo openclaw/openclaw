@@ -38,11 +38,16 @@ describe("registerConfigureCommand", () => {
   it("forwards repeated --section values", async () => {
     await runCli(["configure", "--section", "auth", "--section", "channels"]);
 
-    expect(configureCommandFromSectionsArgMock).toHaveBeenCalledWith(["auth", "channels"], runtime);
+    expect(configureCommandFromSectionsArgMock).toHaveBeenCalledWith(
+      ["auth", "channels"],
+      runtime,
+    );
   });
 
   it("reports errors through runtime when configure command fails", async () => {
-    configureCommandFromSectionsArgMock.mockRejectedValueOnce(new Error("configure failed"));
+    configureCommandFromSectionsArgMock.mockRejectedValueOnce(
+      new Error("configure failed"),
+    );
 
     await runCli(["configure"]);
 

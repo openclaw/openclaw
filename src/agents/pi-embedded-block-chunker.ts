@@ -1,5 +1,9 @@
 import type { FenceSpan } from "../markdown/fences.js";
-import { findFenceSpanAt, isSafeFenceBreak, parseFenceSpans } from "../markdown/fences.js";
+import {
+  findFenceSpanAt,
+  isSafeFenceBreak,
+  parseFenceSpans,
+} from "../markdown/fences.js";
 
 export type BlockReplyChunking = {
   minChars: number;
@@ -144,7 +148,10 @@ export class EmbeddedBlockChunker {
       return;
     }
 
-    while (this.#buffer.length >= minChars || (force && this.#buffer.length > 0)) {
+    while (
+      this.#buffer.length >= minChars ||
+      (force && this.#buffer.length > 0)
+    ) {
       const breakResult =
         force && this.#buffer.length <= maxChars
           ? this.#pickSoftBreakIndex(this.#buffer, 1)
@@ -199,7 +206,10 @@ export class EmbeddedBlockChunker {
     }
   }
 
-  #emitBreakResult(breakResult: BreakResult, emit: (chunk: string) => void): boolean {
+  #emitBreakResult(
+    breakResult: BreakResult,
+    emit: (chunk: string) => void,
+  ): boolean {
     const breakIdx = breakResult.index;
     if (breakIdx <= 0) {
       return false;
@@ -207,7 +217,9 @@ export class EmbeddedBlockChunker {
 
     let rawChunk = this.#buffer.slice(0, breakIdx);
     if (rawChunk.trim().length === 0) {
-      this.#buffer = stripLeadingNewlines(this.#buffer.slice(breakIdx)).trimStart();
+      this.#buffer = stripLeadingNewlines(
+        this.#buffer.slice(breakIdx),
+      ).trimStart();
       return false;
     }
 
@@ -241,7 +253,10 @@ export class EmbeddedBlockChunker {
   }
 
   #pickSoftBreakIndex(buffer: string, minCharsOverride?: number): BreakResult {
-    const minChars = Math.max(1, Math.floor(minCharsOverride ?? this.#chunking.minChars));
+    const minChars = Math.max(
+      1,
+      Math.floor(minCharsOverride ?? this.#chunking.minChars),
+    );
     if (buffer.length < minChars) {
       return { index: -1 };
     }
@@ -273,7 +288,11 @@ export class EmbeddedBlockChunker {
     }
 
     if (preference !== "newline") {
-      const sentenceIdx = findSafeSentenceBreakIndex(buffer, fenceSpans, minChars);
+      const sentenceIdx = findSafeSentenceBreakIndex(
+        buffer,
+        fenceSpans,
+        minChars,
+      );
       if (sentenceIdx !== -1) {
         return { index: sentenceIdx };
       }
@@ -283,7 +302,10 @@ export class EmbeddedBlockChunker {
   }
 
   #pickBreakIndex(buffer: string, minCharsOverride?: number): BreakResult {
-    const minChars = Math.max(1, Math.floor(minCharsOverride ?? this.#chunking.minChars));
+    const minChars = Math.max(
+      1,
+      Math.floor(minCharsOverride ?? this.#chunking.minChars),
+    );
     const maxChars = Math.max(minChars, Math.floor(this.#chunking.maxChars));
     if (buffer.length < minChars) {
       return { index: -1 };
@@ -317,7 +339,11 @@ export class EmbeddedBlockChunker {
     }
 
     if (preference !== "newline") {
-      const sentenceIdx = findSafeSentenceBreakIndex(window, fenceSpans, minChars);
+      const sentenceIdx = findSafeSentenceBreakIndex(
+        window,
+        fenceSpans,
+        minChars,
+      );
       if (sentenceIdx !== -1) {
         return { index: sentenceIdx };
       }

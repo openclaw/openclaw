@@ -13,7 +13,10 @@ import type { ChannelOnboardingAdapter } from "./onboarding/types.js";
 type ChannelOnboardingAdapterPatch = Partial<
   Pick<
     ChannelOnboardingAdapter,
-    "configure" | "configureInteractive" | "configureWhenConfigured" | "getStatus"
+    | "configure"
+    | "configureInteractive"
+    | "configureWhenConfigured"
+    | "getStatus"
   >
 >;
 
@@ -74,7 +77,9 @@ export function patchChannelOnboardingAdapter(
     if (Object.prototype.hasOwnProperty.call(patch, "configureInteractive")) {
       adapter.configureInteractive = previous.configureInteractive;
     }
-    if (Object.prototype.hasOwnProperty.call(patch, "configureWhenConfigured")) {
+    if (
+      Object.prototype.hasOwnProperty.call(patch, "configureWhenConfigured")
+    ) {
       adapter.configureWhenConfigured = previous.configureWhenConfigured;
     }
   };

@@ -1,11 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../auto-reply/templating.js";
 
-const recordSessionMetaFromInboundMock = vi.fn((_args?: unknown) => Promise.resolve(undefined));
-const updateLastRouteMock = vi.fn((_args?: unknown) => Promise.resolve(undefined));
+const recordSessionMetaFromInboundMock = vi.fn((_args?: unknown) =>
+  Promise.resolve(undefined),
+);
+const updateLastRouteMock = vi.fn((_args?: unknown) =>
+  Promise.resolve(undefined),
+);
 
 vi.mock("../config/sessions.js", () => ({
-  recordSessionMetaFromInbound: (args: unknown) => recordSessionMetaFromInboundMock(args),
+  recordSessionMetaFromInbound: (args: unknown) =>
+    recordSessionMetaFromInboundMock(args),
   updateLastRoute: (args: unknown) => updateLastRouteMock(args),
 }));
 

@@ -17,8 +17,13 @@ vi.mock("../config/sessions.js", async (importOriginal) => {
       updateSessionStoreMock(storePath, store);
       return store;
     },
-    resolveStorePath: (_store: string | undefined, opts?: { agentId?: string }) =>
-      opts?.agentId === "support" ? "/tmp/support/sessions.json" : "/tmp/main/sessions.json",
+    resolveStorePath: (
+      _store: string | undefined,
+      opts?: { agentId?: string },
+    ) =>
+      opts?.agentId === "support"
+        ? "/tmp/support/sessions.json"
+        : "/tmp/main/sessions.json",
   };
 });
 
@@ -155,7 +160,9 @@ describe("session_status tool", () => {
 
     const tool = getSessionStatusTool();
 
-    const result = await tool.execute("call4", { sessionKey: "temp:slug-generator" });
+    const result = await tool.execute("call4", {
+      sessionKey: "temp:slug-generator",
+    });
     const details = result.details as { ok?: boolean; sessionKey?: string };
     expect(details.ok).toBe(true);
     expect(details.sessionKey).toBe("temp:slug-generator");
@@ -171,9 +178,9 @@ describe("session_status tool", () => {
 
     const tool = getSessionStatusTool("agent:main:main");
 
-    await expect(tool.execute("call5", { sessionKey: "agent:other:main" })).rejects.toThrow(
-      "Agent-to-agent status is disabled",
-    );
+    await expect(
+      tool.execute("call5", { sessionKey: "agent:other:main" }),
+    ).rejects.toThrow("Agent-to-agent status is disabled");
   });
 
   it("scopes bare session keys to the requester agent", async () => {

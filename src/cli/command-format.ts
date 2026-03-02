@@ -7,7 +7,10 @@ const DEV_FLAG_RE = /(?:^|\s)--dev(?:\s|$)/;
 
 export function formatCliCommand(
   command: string,
-  env: Record<string, string | undefined> = process.env as Record<string, string | undefined>,
+  env: Record<string, string | undefined> = process.env as Record<
+    string,
+    string | undefined
+  >,
 ): string {
   const cliName = resolveCliName();
   const normalizedCommand = replaceCliName(command, cliName);
@@ -18,8 +21,14 @@ export function formatCliCommand(
   if (!CLI_PREFIX_RE.test(normalizedCommand)) {
     return normalizedCommand;
   }
-  if (PROFILE_FLAG_RE.test(normalizedCommand) || DEV_FLAG_RE.test(normalizedCommand)) {
+  if (
+    PROFILE_FLAG_RE.test(normalizedCommand) ||
+    DEV_FLAG_RE.test(normalizedCommand)
+  ) {
     return normalizedCommand;
   }
-  return normalizedCommand.replace(CLI_PREFIX_RE, (match) => `${match} --profile ${profile}`);
+  return normalizedCommand.replace(
+    CLI_PREFIX_RE,
+    (match) => `${match} --profile ${profile}`,
+  );
 }

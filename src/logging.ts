@@ -10,8 +10,16 @@ import {
   shouldLogSubsystemToConsole,
 } from "./logging/console.js";
 import type { LogLevel } from "./logging/levels.js";
-import { ALLOWED_LOG_LEVELS, levelToMinLevel, normalizeLogLevel } from "./logging/levels.js";
-import type { LoggerResolvedSettings, LoggerSettings, PinoLikeLogger } from "./logging/logger.js";
+import {
+  ALLOWED_LOG_LEVELS,
+  levelToMinLevel,
+  normalizeLogLevel,
+} from "./logging/levels.js";
+import type {
+  LoggerResolvedSettings,
+  LoggerSettings,
+  PinoLikeLogger,
+} from "./logging/logger.js";
 import {
   DEFAULT_LOG_DIR,
   DEFAULT_LOG_FILE,

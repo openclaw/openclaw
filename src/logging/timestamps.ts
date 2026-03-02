@@ -27,7 +27,9 @@ export function formatLocalIsoWithOffset(now: Date, timeZone?: string): string {
     timeZoneName: "longOffset",
   });
 
-  const parts = Object.fromEntries(fmt.formatToParts(now).map((p) => [p.type, p.value]));
+  const parts = Object.fromEntries(
+    fmt.formatToParts(now).map((p) => [p.type, p.value]),
+  );
 
   const offsetRaw = parts.timeZoneName ?? "GMT";
   const offset = offsetRaw === "GMT" ? "+00:00" : offsetRaw.slice(3);

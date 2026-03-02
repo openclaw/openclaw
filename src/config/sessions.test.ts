@@ -28,7 +28,9 @@ describe("sessions", () => {
   };
 
   beforeAll(async () => {
-    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-suite-"));
+    fixtureRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-sessions-suite-"),
+    );
   });
 
   afterAll(async () => {
@@ -120,7 +122,9 @@ describe("sessions", () => {
 
   for (const testCase of deriveSessionKeyCases) {
     it(testCase.name, () => {
-      expect(deriveSessionKey(testCase.scope, testCase.ctx)).toBe(testCase.expected);
+      expect(deriveSessionKey(testCase.scope, testCase.ctx)).toBe(
+        testCase.expected,
+      );
     });
   }
 
@@ -190,9 +194,9 @@ describe("sessions", () => {
 
   for (const testCase of resolveSessionKeyCases) {
     it(testCase.name, () => {
-      expect(resolveSessionKey(testCase.scope, testCase.ctx, testCase.mainKey)).toBe(
-        testCase.expected,
-      );
+      expect(
+        resolveSessionKey(testCase.scope, testCase.ctx, testCase.mainKey),
+      ).toBe(testCase.expected);
     });
   }
 
@@ -409,7 +413,9 @@ describe("sessions", () => {
       sessionKey,
       update: async () => null,
     });
-    expect(result).toEqual(expect.objectContaining({ sessionId: "sess-1", thinkingLevel: "low" }));
+    expect(result).toEqual(
+      expect.objectContaining({ sessionId: "sess-1", thinkingLevel: "low" }),
+    );
 
     const store = loadSessionStore(storePath);
     expect(store[sessionKey]?.thinkingLevel).toBe("low");
@@ -422,10 +428,16 @@ describe("sessions", () => {
 
     await Promise.all([
       updateSessionStore(storePath, (store) => {
-        store["agent:main:one"] = { sessionId: "sess-1", updatedAt: Date.now() };
+        store["agent:main:one"] = {
+          sessionId: "sess-1",
+          updatedAt: Date.now(),
+        };
       }),
       updateSessionStore(storePath, (store) => {
-        store["agent:main:two"] = { sessionId: "sess-2", updatedAt: Date.now() };
+        store["agent:main:two"] = {
+          sessionId: "sess-2",
+          updatedAt: Date.now(),
+        };
       }),
     ]);
 
@@ -497,7 +509,10 @@ describe("sessions", () => {
         delete store["agent:main:old"];
       }),
       updateSessionStore(storePath, (store) => {
-        store["agent:main:new"] = { sessionId: "sess-new", updatedAt: Date.now() };
+        store["agent:main:new"] = {
+          sessionId: "sess-new",
+          updatedAt: Date.now(),
+        };
       }),
     ]);
 
@@ -529,7 +544,10 @@ describe("sessions", () => {
       "utf-8",
     );
 
-    const store = loadSessionStore(storePath) as unknown as Record<string, Record<string, unknown>>;
+    const store = loadSessionStore(storePath) as unknown as Record<
+      string,
+      Record<string, unknown>
+    >;
     const entry = store[mainSessionKey] ?? {};
     expect(entry.channel).toBe("slack");
     expect(entry.provider).toBeUndefined();
@@ -542,7 +560,9 @@ describe("sessions", () => {
       { OPENCLAW_STATE_DIR: "/custom/state" } as NodeJS.ProcessEnv,
       () => "/home/ignored",
     );
-    expect(dir).toBe(path.join(path.resolve("/custom/state"), "agents", "main", "sessions"));
+    expect(dir).toBe(
+      path.join(path.resolve("/custom/state"), "agents", "main", "sessions"),
+    );
   });
 
   it("includes topic ids in session transcript filenames", () => {
@@ -566,16 +586,27 @@ describe("sessions", () => {
         agentId: "codex",
       });
       expect(sessionFile).toBe(
-        path.join(path.resolve("/custom/state"), "agents", "codex", "sessions", "sess-2.jsonl"),
+        path.join(
+          path.resolve("/custom/state"),
+          "agents",
+          "codex",
+          "sessions",
+          "sess-2.jsonl",
+        ),
       );
     });
   });
 
   it("resolves cross-agent absolute sessionFile paths", async () => {
-    const { stateDir, bot2SessionPath } = await createAgentSessionsLayout("cross-agent");
+    const { stateDir, bot2SessionPath } =
+      await createAgentSessionsLayout("cross-agent");
     const sessionFile = withStateDir(stateDir, () =>
       // Agent bot1 resolves a sessionFile that belongs to agent bot2
-      resolveSessionFilePath("sess-1", { sessionFile: bot2SessionPath }, { agentId: "bot1" }),
+      resolveSessionFilePath(
+        "sess-1",
+        { sessionFile: bot2SessionPath },
+        { agentId: "bot1" },
+      ),
     );
     expect(await normalizePathForComparison(sessionFile)).toBe(
       await normalizePathForComparison(bot2SessionPath),
@@ -585,7 +616,13 @@ describe("sessions", () => {
   it("resolves cross-agent paths when OPENCLAW_STATE_DIR differs from stored paths", () => {
     withStateDir(path.resolve("/different/state"), () => {
       const originalBase = path.resolve("/original/state");
-      const bot2Session = path.join(originalBase, "agents", "bot2", "sessions", "sess-1.jsonl");
+      const bot2Session = path.join(
+        originalBase,
+        "agents",
+        "bot2",
+        "sessions",
+        "sess-1.jsonl",
+      );
       // sessionFile was created under a different state dir than current env
       const sessionFile = resolveSessionFilePath(
         "sess-1",
@@ -599,14 +636,28 @@ describe("sessions", () => {
   it("falls back when structural cross-root path traverses after sessions", () => {
     withStateDir(path.resolve("/different/state"), () => {
       const originalBase = path.resolve("/original/state");
-      const unsafe = path.join(originalBase, "agents", "bot2", "sessions", "..", "..", "etc");
+      const unsafe = path.join(
+        originalBase,
+        "agents",
+        "bot2",
+        "sessions",
+        "..",
+        "..",
+        "etc",
+      );
       const sessionFile = resolveSessionFilePath(
         "sess-1",
         { sessionFile: path.join(unsafe, "passwd") },
         { agentId: "bot1" },
       );
       expect(sessionFile).toBe(
-        path.join(path.resolve("/different/state"), "agents", "bot1", "sessions", "sess-1.jsonl"),
+        path.join(
+          path.resolve("/different/state"),
+          "agents",
+          "bot1",
+          "sessions",
+          "sess-1.jsonl",
+        ),
       );
     });
   });
@@ -628,7 +679,13 @@ describe("sessions", () => {
         { agentId: "bot1" },
       );
       expect(sessionFile).toBe(
-        path.join(path.resolve("/different/state"), "agents", "bot1", "sessions", "sess-1.jsonl"),
+        path.join(
+          path.resolve("/different/state"),
+          "agents",
+          "bot1",
+          "sessions",
+          "sess-1.jsonl",
+        ),
       );
     });
   });
@@ -652,7 +709,11 @@ describe("sessions", () => {
         storePath: mainStorePath,
       });
 
-      return resolveSessionFilePath("sess-1", { sessionFile: bot2SessionPath }, opts);
+      return resolveSessionFilePath(
+        "sess-1",
+        { sessionFile: bot2SessionPath },
+        opts,
+      );
     });
     expect(await normalizePathForComparison(sessionFile)).toBe(
       await normalizePathForComparison(bot2SessionPath),
@@ -660,11 +721,22 @@ describe("sessions", () => {
   });
 
   it("falls back to derived transcript path when sessionFile is outside agent sessions directories", async () => {
-    const { stateDir, outsidePath } = await createAgentSessionsLayout("outside-fallback");
+    const { stateDir, outsidePath } =
+      await createAgentSessionsLayout("outside-fallback");
     const sessionFile = withStateDir(stateDir, () =>
-      resolveSessionFilePath("sess-1", { sessionFile: outsidePath }, { agentId: "bot1" }),
+      resolveSessionFilePath(
+        "sess-1",
+        { sessionFile: outsidePath },
+        { agentId: "bot1" },
+      ),
     );
-    const expectedPath = path.join(stateDir, "agents", "bot1", "sessions", "sess-1.jsonl");
+    const expectedPath = path.join(
+      stateDir,
+      "agents",
+      "bot1",
+      "sessions",
+      "sess-1.jsonl",
+    );
     expect(await normalizePathForComparison(sessionFile)).toBe(
       await normalizePathForComparison(expectedPath),
     );
@@ -718,7 +790,9 @@ describe("sessions", () => {
     await Promise.all([p1, p2]);
 
     const store = loadSessionStore(storePath);
-    expect(store[mainSessionKey]?.modelOverride).toBe("anthropic/claude-opus-4-5");
+    expect(store[mainSessionKey]?.modelOverride).toBe(
+      "anthropic/claude-opus-4-5",
+    );
     expect(store[mainSessionKey]?.thinkingLevel).toBe("high");
     await expect(fs.stat(`${storePath}.lock`)).rejects.toThrow();
   });
@@ -737,14 +811,15 @@ describe("sessions", () => {
     });
 
     // Prime the in-process cache with the original entry.
-    expect(loadSessionStore(storePath)[mainSessionKey]?.thinkingLevel).toBe("low");
+    expect(loadSessionStore(storePath)[mainSessionKey]?.thinkingLevel).toBe(
+      "low",
+    );
     const originalStat = await fs.stat(storePath);
 
     // Simulate an external writer that updates the store but preserves mtime.
-    const externalStore = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-      string,
-      Record<string, unknown>
-    >;
+    const externalStore = JSON.parse(
+      await fs.readFile(storePath, "utf-8"),
+    ) as Record<string, Record<string, unknown>>;
     externalStore[mainSessionKey] = {
       ...externalStore[mainSessionKey],
       providerOverride: "anthropic",

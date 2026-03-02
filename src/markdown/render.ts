@@ -1,4 +1,9 @@
-import type { MarkdownIR, MarkdownLinkSpan, MarkdownStyle, MarkdownStyleSpan } from "./ir.js";
+import type {
+  MarkdownIR,
+  MarkdownLinkSpan,
+  MarkdownStyle,
+  MarkdownStyleSpan,
+} from "./ir.js";
 
 export type RenderStyleMarker = {
   open: string;
@@ -46,14 +51,19 @@ function sortStyleSpans(spans: MarkdownStyleSpan[]): MarkdownStyleSpan[] {
   });
 }
 
-export function renderMarkdownWithMarkers(ir: MarkdownIR, options: RenderOptions): string {
+export function renderMarkdownWithMarkers(
+  ir: MarkdownIR,
+  options: RenderOptions,
+): string {
   const text = ir.text ?? "";
   if (!text) {
     return "";
   }
 
   const styleMarkers = options.styleMarkers;
-  const styled = sortStyleSpans(ir.styles.filter((span) => Boolean(styleMarkers[span.style])));
+  const styled = sortStyleSpans(
+    ir.styles.filter((span) => Boolean(styleMarkers[span.style])),
+  );
 
   const boundaries = new Set<number>();
   boundaries.add(0);
@@ -171,7 +181,9 @@ export function renderMarkdownWithMarkers(ir: MarkdownIR, options: RenderOptions
           return a.kind === "link" ? -1 : 1;
         }
         if (a.kind === "style" && b.kind === "style") {
-          return (STYLE_RANK.get(a.style) ?? 0) - (STYLE_RANK.get(b.style) ?? 0);
+          return (
+            (STYLE_RANK.get(a.style) ?? 0) - (STYLE_RANK.get(b.style) ?? 0)
+          );
         }
         return a.index - b.index;
       });

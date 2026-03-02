@@ -53,7 +53,14 @@ describe("registerSetupCommand", () => {
   });
 
   it("runs onboard command when --wizard is set", async () => {
-    await runCli(["setup", "--wizard", "--mode", "remote", "--remote-url", "wss://example"]);
+    await runCli([
+      "setup",
+      "--wizard",
+      "--mode",
+      "remote",
+      "--remote-url",
+      "wss://example",
+    ]);
 
     expect(onboardCommandMock).toHaveBeenCalledWith(
       expect.objectContaining({

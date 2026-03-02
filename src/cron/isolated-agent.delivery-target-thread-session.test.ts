@@ -5,8 +5,12 @@ import type { OpenClawConfig } from "../config/config.js";
 const mockStore: Record<string, Record<string, unknown>> = {};
 vi.mock("../config/sessions.js", () => ({
   loadSessionStore: vi.fn((storePath: string) => mockStore[storePath] ?? {}),
-  resolveAgentMainSessionKey: vi.fn(({ agentId }: { agentId: string }) => `agent:${agentId}:main`),
-  resolveStorePath: vi.fn((_store: unknown, _opts: unknown) => "/mock/store.json"),
+  resolveAgentMainSessionKey: vi.fn(
+    ({ agentId }: { agentId: string }) => `agent:${agentId}:main`,
+  ),
+  resolveStorePath: vi.fn(
+    (_store: unknown, _opts: unknown) => "/mock/store.json",
+  ),
 }));
 
 // Mock channel-selection to avoid real config resolution.
@@ -27,7 +31,8 @@ vi.mock("../channels/plugins/index.js", () => ({
   normalizeChannelId: vi.fn((id: string) => id),
 }));
 
-const { resolveDeliveryTarget } = await import("./isolated-agent/delivery-target.js");
+const { resolveDeliveryTarget } =
+  await import("./isolated-agent/delivery-target.js");
 
 describe("resolveDeliveryTarget thread session lookup", () => {
   const cfg: OpenClawConfig = {};

@@ -13,7 +13,8 @@ export type ResolvedSignalAccount = {
   config: SignalAccountConfig;
 };
 
-const { listAccountIds, resolveDefaultAccountId } = createAccountListHelpers("signal");
+const { listAccountIds, resolveDefaultAccountId } =
+  createAccountListHelpers("signal");
 export const listSignalAccountIds = listAccountIds;
 export const resolveDefaultSignalAccountId = resolveDefaultAccountId;
 
@@ -24,8 +25,12 @@ function resolveAccountConfig(
   return resolveAccountEntry(cfg.channels?.signal?.accounts, accountId);
 }
 
-function mergeSignalAccountConfig(cfg: OpenClawConfig, accountId: string): SignalAccountConfig {
-  const { accounts: _ignored, ...base } = (cfg.channels?.signal ?? {}) as SignalAccountConfig & {
+function mergeSignalAccountConfig(
+  cfg: OpenClawConfig,
+  accountId: string,
+): SignalAccountConfig {
+  const { accounts: _ignored, ...base } = (cfg.channels?.signal ??
+    {}) as SignalAccountConfig & {
     accounts?: unknown;
   };
   const account = resolveAccountConfig(cfg, accountId) ?? {};
@@ -62,7 +67,9 @@ export function resolveSignalAccount(params: {
   };
 }
 
-export function listEnabledSignalAccounts(cfg: OpenClawConfig): ResolvedSignalAccount[] {
+export function listEnabledSignalAccounts(
+  cfg: OpenClawConfig,
+): ResolvedSignalAccount[] {
   return listSignalAccountIds(cfg)
     .map((accountId) => resolveSignalAccount({ cfg, accountId }))
     .filter((account) => account.enabled);

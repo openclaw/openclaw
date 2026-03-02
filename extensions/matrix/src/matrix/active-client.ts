@@ -16,7 +16,9 @@ export function setActiveMatrixClient(
   }
 }
 
-export function getActiveMatrixClient(accountId?: string | null): MatrixClient | null {
+export function getActiveMatrixClient(
+  accountId?: string | null,
+): MatrixClient | null {
   const key = normalizeAccountId(accountId);
   return activeClients.get(key) ?? null;
 }

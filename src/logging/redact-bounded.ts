@@ -12,7 +12,8 @@ export function replacePatternBounded(
   replacer: Parameters<string["replace"]>[1],
   options?: BoundedRedactOptions,
 ): string {
-  const chunkThreshold = options?.chunkThreshold ?? REDACT_REGEX_CHUNK_THRESHOLD;
+  const chunkThreshold =
+    options?.chunkThreshold ?? REDACT_REGEX_CHUNK_THRESHOLD;
   const chunkSize = options?.chunkSize ?? REDACT_REGEX_CHUNK_SIZE;
   if (chunkThreshold <= 0 || chunkSize <= 0 || text.length <= chunkThreshold) {
     return text.replace(pattern, replacer);

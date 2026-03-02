@@ -21,7 +21,10 @@ export function resolveSandboxWorkspaceDir(root: string, sessionKey: string) {
   return path.join(resolvedRoot, slug);
 }
 
-export function resolveSandboxScopeKey(scope: "session" | "agent" | "shared", sessionKey: string) {
+export function resolveSandboxScopeKey(
+  scope: "session" | "agent" | "shared",
+  sessionKey: string,
+) {
   const trimmed = sessionKey.trim() || "main";
   if (scope === "shared") {
     return "shared";

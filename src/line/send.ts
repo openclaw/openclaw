@@ -33,7 +33,10 @@ interface LineSendOpts {
 }
 
 type LineClientOpts = Pick<LineSendOpts, "channelAccessToken" | "accountId">;
-type LinePushOpts = Pick<LineSendOpts, "channelAccessToken" | "accountId" | "verbose">;
+type LinePushOpts = Pick<
+  LineSendOpts,
+  "channelAccessToken" | "accountId" | "verbose"
+>;
 
 interface LinePushBehavior {
   errorContext?: string;
@@ -133,7 +136,9 @@ function logLineHttpError(err: unknown, context: string): void {
     body?: string;
   };
   if (typeof body === "string") {
-    const summary = status ? `${status} ${statusText ?? ""}`.trim() : "unknown status";
+    const summary = status
+      ? `${status} ${statusText ?? ""}`.trim()
+      : "unknown status";
     logVerbose(`line: ${context} failed (${summary}): ${body}`);
   }
 }
@@ -247,7 +252,8 @@ export async function sendMessageLine(
 
   // Push message (for proactive messaging)
   return pushLineMessages(chatId, messages, opts, {
-    verboseMessage: (resolvedChatId) => `line: pushed message to ${resolvedChatId}`,
+    verboseMessage: (resolvedChatId) =>
+      `line: pushed message to ${resolvedChatId}`,
   });
 }
 
@@ -298,9 +304,14 @@ export async function pushImageMessage(
   previewImageUrl?: string,
   opts: LinePushOpts = {},
 ): Promise<LineSendResult> {
-  return pushLineMessages(to, [createImageMessage(originalContentUrl, previewImageUrl)], opts, {
-    verboseMessage: (chatId) => `line: pushed image to ${chatId}`,
-  });
+  return pushLineMessages(
+    to,
+    [createImageMessage(originalContentUrl, previewImageUrl)],
+    opts,
+    {
+      verboseMessage: (chatId) => `line: pushed image to ${chatId}`,
+    },
+  );
 }
 
 /**
@@ -367,7 +378,8 @@ export async function pushTextMessageWithQuickReplies(
   const message = createTextMessageWithQuickReplies(text, quickReplyLabels);
 
   return pushLineMessages(to, [message], opts, {
-    verboseMessage: (chatId) => `line: pushed message with quick replies to ${chatId}`,
+    verboseMessage: (chatId) =>
+      `line: pushed message with quick replies to ${chatId}`,
   });
 }
 
@@ -405,7 +417,11 @@ export function createTextMessageWithQuickReplies(
  */
 export async function showLoadingAnimation(
   chatId: string,
-  opts: { channelAccessToken?: string; accountId?: string; loadingSeconds?: number } = {},
+  opts: {
+    channelAccessToken?: string;
+    accountId?: string;
+    loadingSeconds?: number;
+  } = {},
 ): Promise<void> {
   const { client } = createLineMessagingClient(opts);
 
@@ -426,7 +442,11 @@ export async function showLoadingAnimation(
  */
 export async function getUserProfile(
   userId: string,
-  opts: { channelAccessToken?: string; accountId?: string; useCache?: boolean } = {},
+  opts: {
+    channelAccessToken?: string;
+    accountId?: string;
+    useCache?: boolean;
+  } = {},
 ): Promise<{ displayName: string; pictureUrl?: string } | null> {
   const useCache = opts.useCache ?? true;
 

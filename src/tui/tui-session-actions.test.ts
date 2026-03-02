@@ -51,7 +51,9 @@ describe("tui session actions", () => {
 
     const { refreshSessionInfo } = createSessionActions({
       client: { listSessions } as unknown as GatewayChatClient,
-      chatLog: { addSystem: vi.fn() } as unknown as import("./components/chat-log.js").ChatLog,
+      chatLog: {
+        addSystem: vi.fn(),
+      } as unknown as import("./components/chat-log.js").ChatLog,
       tui: { requestRender } as unknown as import("@mariozechner/pi-tui").TUI,
       opts: {},
       state,

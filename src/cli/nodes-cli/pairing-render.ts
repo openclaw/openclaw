@@ -18,7 +18,9 @@ export function renderPendingPairingRequestsTable(params: {
     Node: r.displayName?.trim() ? r.displayName.trim() : r.nodeId,
     IP: r.remoteIp ?? "",
     Requested:
-      typeof r.ts === "number" ? formatTimeAgo(Math.max(0, now - r.ts)) : theme.muted("unknown"),
+      typeof r.ts === "number"
+        ? formatTimeAgo(Math.max(0, now - r.ts))
+        : theme.muted("unknown"),
     Repair: r.isRepair ? theme.warn("yes") : "",
   }));
   return {

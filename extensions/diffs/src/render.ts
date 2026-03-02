@@ -1,4 +1,8 @@
-import type { FileContents, FileDiffMetadata, SupportedLanguages } from "@pierre/diffs";
+import type {
+  FileContents,
+  FileDiffMetadata,
+  SupportedLanguages,
+} from "@pierre/diffs";
 import { parsePatchFiles } from "@pierre/diffs";
 import { preloadFileDiff, preloadMultiFileDiff } from "@pierre/diffs/ssr";
 import type {
@@ -41,7 +45,9 @@ function buildDiffTitle(input: DiffInput): string {
   return "Patch diff";
 }
 
-function resolveBeforeAfterFileName(input: Extract<DiffInput, { kind: "before_after" }>): string {
+function resolveBeforeAfterFileName(
+  input: Extract<DiffInput, { kind: "before_after" }>,
+): string {
   if (input.path?.trim()) {
     return input.path.trim();
   }
@@ -54,7 +60,10 @@ function resolveBeforeAfterFileName(input: Extract<DiffInput, { kind: "before_af
 function buildDiffOptions(options: DiffRenderOptions): DiffViewerOptions {
   const fontFamily = escapeCssString(options.presentation.fontFamily);
   const fontSize = Math.max(10, Math.floor(options.presentation.fontSize));
-  const lineHeight = Math.max(20, Math.round(fontSize * options.presentation.lineSpacing));
+  const lineHeight = Math.max(
+    20,
+    Math.round(fontSize * options.presentation.lineSpacing),
+  );
   return {
     theme: {
       light: "pierre-light",
@@ -140,7 +149,9 @@ function buildDiffOptions(options: DiffRenderOptions): DiffViewerOptions {
   };
 }
 
-function buildImageRenderOptions(options: DiffRenderOptions): DiffRenderOptions {
+function buildImageRenderOptions(
+  options: DiffRenderOptions,
+): DiffRenderOptions {
   return {
     ...options,
     presentation: {
@@ -160,7 +171,9 @@ function buildRenderVariants(options: DiffRenderOptions): {
   };
 }
 
-function normalizeSupportedLanguage(value?: string): SupportedLanguages | undefined {
+function normalizeSupportedLanguage(
+  value?: string,
+): SupportedLanguages | undefined {
   const normalized = value?.trim();
   return normalized ? (normalized as SupportedLanguages) : undefined;
 }
@@ -340,7 +353,11 @@ function buildRenderedBodies(sections: ReadonlyArray<RenderedSection>): {
 async function renderBeforeAfterDiff(
   input: Extract<DiffInput, { kind: "before_after" }>,
   options: DiffRenderOptions,
-): Promise<{ viewerBodyHtml: string; imageBodyHtml: string; fileCount: number }> {
+): Promise<{
+  viewerBodyHtml: string;
+  imageBodyHtml: string;
+  fileCount: number;
+}> {
   const fileName = resolveBeforeAfterFileName(input);
   const lang = normalizeSupportedLanguage(input.lang);
   const oldFile: FileContents = {
@@ -389,21 +406,35 @@ async function renderBeforeAfterDiff(
 async function renderPatchDiff(
   input: Extract<DiffInput, { kind: "patch" }>,
   options: DiffRenderOptions,
-): Promise<{ viewerBodyHtml: string; imageBodyHtml: string; fileCount: number }> {
-  const files = parsePatchFiles(input.patch).flatMap((entry) => entry.files ?? []);
+): Promise<{
+  viewerBodyHtml: string;
+  imageBodyHtml: string;
+  fileCount: number;
+}> {
+  const files = parsePatchFiles(input.patch).flatMap(
+    (entry) => entry.files ?? [],
+  );
   if (files.length === 0) {
     throw new Error("Patch input did not contain any file diffs.");
   }
   if (files.length > MAX_PATCH_FILE_COUNT) {
-    throw new Error(`Patch input contains too many files (max ${MAX_PATCH_FILE_COUNT}).`);
+    throw new Error(
+      `Patch input contains too many files (max ${MAX_PATCH_FILE_COUNT}).`,
+    );
   }
   const totalLines = files.reduce((sum, fileDiff) => {
-    const splitLines = Number.isFinite(fileDiff.splitLineCount) ? fileDiff.splitLineCount : 0;
-    const unifiedLines = Number.isFinite(fileDiff.unifiedLineCount) ? fileDiff.unifiedLineCount : 0;
+    const splitLines = Number.isFinite(fileDiff.splitLineCount)
+      ? fileDiff.splitLineCount
+      : 0;
+    const unifiedLines = Number.isFinite(fileDiff.unifiedLineCount)
+      ? fileDiff.unifiedLineCount
+      : 0;
     return sum + Math.max(splitLines, unifiedLines, 0);
   }, 0);
   if (totalLines > MAX_PATCH_TOTAL_LINES) {
-    throw new Error(`Patch input is too large to render (max ${MAX_PATCH_TOTAL_LINES} lines).`);
+    throw new Error(
+      `Patch input is too large to render (max ${MAX_PATCH_TOTAL_LINES} lines).`,
+    );
   }
 
   const { viewerOptions, imageOptions } = buildRenderVariants(options);

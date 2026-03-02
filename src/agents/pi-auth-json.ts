@@ -40,11 +40,15 @@ async function readAuthJson(filePath: string): Promise<AuthJsonShape> {
  *
  * @deprecated Runtime auth now comes from OpenClaw auth-profiles snapshots.
  */
-export async function ensurePiAuthJsonFromAuthProfiles(agentDir: string): Promise<{
+export async function ensurePiAuthJsonFromAuthProfiles(
+  agentDir: string,
+): Promise<{
   wrote: boolean;
   authPath: string;
 }> {
-  const store = ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false });
+  const store = ensureAuthProfileStore(agentDir, {
+    allowKeychainPrompt: false,
+  });
   const authPath = path.join(agentDir, "auth.json");
   const providerCredentials = resolvePiCredentialMapFromStore(store);
   if (Object.keys(providerCredentials).length === 0) {
@@ -66,7 +70,9 @@ export async function ensurePiAuthJsonFromAuthProfiles(agentDir: string): Promis
   }
 
   await fs.mkdir(agentDir, { recursive: true, mode: 0o700 });
-  await fs.writeFile(authPath, `${JSON.stringify(existing, null, 2)}\n`, { mode: 0o600 });
+  await fs.writeFile(authPath, `${JSON.stringify(existing, null, 2)}\n`, {
+    mode: 0o600,
+  });
 
   return { wrote: true, authPath };
 }

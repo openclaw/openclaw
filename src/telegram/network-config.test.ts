@@ -77,19 +77,28 @@ describe("resolveTelegramAutoSelectFamilyDecision", () => {
   });
 
   it("defaults to enable on Node 22", () => {
-    const decision = resolveTelegramAutoSelectFamilyDecision({ env: {}, nodeMajor: 22 });
+    const decision = resolveTelegramAutoSelectFamilyDecision({
+      env: {},
+      nodeMajor: 22,
+    });
     expect(decision).toEqual({ value: true, source: "default-node22" });
   });
 
   it("returns null when no decision applies", () => {
-    const decision = resolveTelegramAutoSelectFamilyDecision({ env: {}, nodeMajor: 20 });
+    const decision = resolveTelegramAutoSelectFamilyDecision({
+      env: {},
+      nodeMajor: 20,
+    });
     expect(decision).toEqual({ value: null });
   });
 
   describe("WSL2 detection", () => {
     it("disables autoSelectFamily on WSL2", () => {
       vi.mocked(isWSL2Sync).mockReturnValue(true);
-      const decision = resolveTelegramAutoSelectFamilyDecision({ env: {}, nodeMajor: 22 });
+      const decision = resolveTelegramAutoSelectFamilyDecision({
+        env: {},
+        nodeMajor: 22,
+      });
       expect(decision).toEqual({ value: false, source: "default-wsl2" });
     });
 
@@ -117,7 +126,10 @@ describe("resolveTelegramAutoSelectFamilyDecision", () => {
 
     it("uses Node 22 default when not on WSL2", () => {
       vi.mocked(isWSL2Sync).mockReturnValue(false);
-      const decision = resolveTelegramAutoSelectFamilyDecision({ env: {}, nodeMajor: 22 });
+      const decision = resolveTelegramAutoSelectFamilyDecision({
+        env: {},
+        nodeMajor: 22,
+      });
       expect(decision).toEqual({ value: true, source: "default-node22" });
     });
 

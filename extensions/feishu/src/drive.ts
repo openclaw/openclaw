@@ -2,7 +2,10 @@ import type * as Lark from "@larksuiteoapi/node-sdk";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { listEnabledFeishuAccounts } from "./accounts.js";
 import { FeishuDriveSchema, type FeishuDriveParams } from "./drive-schema.js";
-import { createFeishuToolClient, resolveAnyEnabledFeishuToolsConfig } from "./tool-account.js";
+import {
+  createFeishuToolClient,
+  resolveAnyEnabledFeishuToolsConfig,
+} from "./tool-account.js";
 
 // ============ Helpers ============
 
@@ -36,7 +39,8 @@ async function getRootFolderToken(client: Lark.Client): Promise<string> {
 
 async function listFolder(client: Lark.Client, folderToken?: string) {
   // Filter out invalid folder_token values (empty, "0", etc.)
-  const validFolderToken = folderToken && folderToken !== "0" ? folderToken : undefined;
+  const validFolderToken =
+    folderToken && folderToken !== "0" ? folderToken : undefined;
   const res = await client.drive.file.list({
     params: validFolderToken ? { folder_token: validFolderToken } : {},
   });
@@ -59,7 +63,11 @@ async function listFolder(client: Lark.Client, folderToken?: string) {
   };
 }
 
-async function getFileInfo(client: Lark.Client, fileToken: string, folderToken?: string) {
+async function getFileInfo(
+  client: Lark.Client,
+  fileToken: string,
+  folderToken?: string,
+) {
   // Use list with folder_token to find file info
   const res = await client.drive.file.list({
     params: folderToken ? { folder_token: folderToken } : {},
@@ -84,7 +92,11 @@ async function getFileInfo(client: Lark.Client, fileToken: string, folderToken?:
   };
 }
 
-async function createFolder(client: Lark.Client, name: string, folderToken?: string) {
+async function createFolder(
+  client: Lark.Client,
+  name: string,
+  folderToken?: string,
+) {
   // Feishu supports using folder_token="0" as the root folder.
   // We *try* to resolve the real root token (explorer API), but fall back to "0"
   // because some tenants/apps return 400 for that explorer endpoint.
@@ -113,7 +125,12 @@ async function createFolder(client: Lark.Client, name: string, folderToken?: str
   };
 }
 
-async function moveFile(client: Lark.Client, fileToken: string, type: string, folderToken: string) {
+async function moveFile(
+  client: Lark.Client,
+  fileToken: string,
+  type: string,
+  folderToken: string,
+) {
   const res = await client.drive.file.move({
     path: { file_token: fileToken },
     data: {
@@ -139,7 +156,11 @@ async function moveFile(client: Lark.Client, fileToken: string, type: string, fo
   };
 }
 
-async function deleteFile(client: Lark.Client, fileToken: string, type: string) {
+async function deleteFile(
+  client: Lark.Client,
+  fileToken: string,
+  type: string,
+) {
   const res = await client.drive.file.delete({
     path: { file_token: fileToken },
     params: {
@@ -169,13 +190,17 @@ async function deleteFile(client: Lark.Client, fileToken: string, type: string) 
 
 export function registerFeishuDriveTools(api: OpenClawPluginApi) {
   if (!api.config) {
-    api.logger.debug?.("feishu_drive: No config available, skipping drive tools");
+    api.logger.debug?.(
+      "feishu_drive: No config available, skipping drive tools",
+    );
     return;
   }
 
   const accounts = listEnabledFeishuAccounts(api.config);
   if (accounts.length === 0) {
-    api.logger.debug?.("feishu_drive: No Feishu accounts configured, skipping drive tools");
+    api.logger.debug?.(
+      "feishu_drive: No Feishu accounts configured, skipping drive tools",
+    );
     return;
   }
 
@@ -212,7 +237,9 @@ export function registerFeishuDriveTools(api: OpenClawPluginApi) {
               case "create_folder":
                 return json(await createFolder(client, p.name, p.folder_token));
               case "move":
-                return json(await moveFile(client, p.file_token, p.type, p.folder_token));
+                return json(
+                  await moveFile(client, p.file_token, p.type, p.folder_token),
+                );
               case "delete":
                 return json(await deleteFile(client, p.file_token, p.type));
               default:
@@ -220,7 +247,9 @@ export function registerFeishuDriveTools(api: OpenClawPluginApi) {
                 return json({ error: `Unknown action: ${(p as any).action}` });
             }
           } catch (err) {
-            return json({ error: err instanceof Error ? err.message : String(err) });
+            return json({
+              error: err instanceof Error ? err.message : String(err),
+            });
           }
         },
       };

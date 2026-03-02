@@ -57,13 +57,18 @@ const DEFAULT_CATALOG_PATHS = [
   path.join(CONFIG_DIR, "plugins", "catalog.json"),
 ];
 
-const ENV_CATALOG_PATHS = ["OPENCLAW_PLUGIN_CATALOG_PATHS", "OPENCLAW_MPM_CATALOG_PATHS"];
+const ENV_CATALOG_PATHS = [
+  "OPENCLAW_PLUGIN_CATALOG_PATHS",
+  "OPENCLAW_MPM_CATALOG_PATHS",
+];
 
 type ManifestKey = typeof MANIFEST_KEY;
 
 function parseCatalogEntries(raw: unknown): ExternalCatalogEntry[] {
   if (Array.isArray(raw)) {
-    return raw.filter((entry): entry is ExternalCatalogEntry => isRecord(entry));
+    return raw.filter((entry): entry is ExternalCatalogEntry =>
+      isRecord(entry),
+    );
   }
   if (!isRecord(raw)) {
     return [];
@@ -100,7 +105,9 @@ function resolveExternalCatalogPaths(options: CatalogOptions): string[] {
   return DEFAULT_CATALOG_PATHS;
 }
 
-function loadExternalCatalogEntries(options: CatalogOptions): ExternalCatalogEntry[] {
+function loadExternalCatalogEntries(
+  options: CatalogOptions,
+): ExternalCatalogEntry[] {
   const paths = resolveExternalCatalogPaths(options);
   const entries: ExternalCatalogEntry[] = [];
   for (const rawPath of paths) {
@@ -141,15 +148,21 @@ function toChannelMeta(params: {
     docsLabel: params.channel.docsLabel?.trim() || undefined,
     blurb,
     ...(params.channel.aliases ? { aliases: params.channel.aliases } : {}),
-    ...(params.channel.preferOver ? { preferOver: params.channel.preferOver } : {}),
-    ...(params.channel.order !== undefined ? { order: params.channel.order } : {}),
+    ...(params.channel.preferOver
+      ? { preferOver: params.channel.preferOver }
+      : {}),
+    ...(params.channel.order !== undefined
+      ? { order: params.channel.order }
+      : {}),
     ...(params.channel.selectionDocsPrefix
       ? { selectionDocsPrefix: params.channel.selectionDocsPrefix }
       : {}),
     ...(params.channel.selectionDocsOmitLabel !== undefined
       ? { selectionDocsOmitLabel: params.channel.selectionDocsOmitLabel }
       : {}),
-    ...(params.channel.selectionExtras ? { selectionExtras: params.channel.selectionExtras } : {}),
+    ...(params.channel.selectionExtras
+      ? { selectionExtras: params.channel.selectionExtras }
+      : {}),
     ...(systemImage ? { systemImage } : {}),
     ...(params.channel.showConfigured !== undefined
       ? { showConfigured: params.channel.showConfigured }
@@ -162,7 +175,8 @@ function toChannelMeta(params: {
       : {}),
     ...(params.channel.preferSessionLookupForAnnounceTarget !== undefined
       ? {
-          preferSessionLookupForAnnounceTarget: params.channel.preferSessionLookupForAnnounceTarget,
+          preferSessionLookupForAnnounceTarget:
+            params.channel.preferSessionLookupForAnnounceTarget,
         }
       : {}),
   };
@@ -174,15 +188,18 @@ function resolveInstallInfo(params: {
   packageDir?: string;
   workspaceDir?: string;
 }): ChannelPluginCatalogEntry["install"] | null {
-  const npmSpec = params.manifest.install?.npmSpec?.trim() ?? params.packageName?.trim();
+  const npmSpec =
+    params.manifest.install?.npmSpec?.trim() ?? params.packageName?.trim();
   if (!npmSpec) {
     return null;
   }
   let localPath = params.manifest.install?.localPath?.trim() || undefined;
   if (!localPath && params.workspaceDir && params.packageDir) {
-    localPath = path.relative(params.workspaceDir, params.packageDir) || undefined;
+    localPath =
+      path.relative(params.workspaceDir, params.packageDir) || undefined;
   }
-  const defaultChoice = params.manifest.install?.defaultChoice ?? (localPath ? "local" : "npm");
+  const defaultChoice =
+    params.manifest.install?.defaultChoice ?? (localPath ? "local" : "npm");
   return {
     npmSpec,
     ...(localPath ? { localPath } : {}),
@@ -220,7 +237,9 @@ function buildCatalogEntry(candidate: {
   return { id, meta, install };
 }
 
-function buildExternalCatalogEntry(entry: ExternalCatalogEntry): ChannelPluginCatalogEntry | null {
+function buildExternalCatalogEntry(
+  entry: ExternalCatalogEntry,
+): ChannelPluginCatalogEntry | null {
   const manifest = entry[MANIFEST_KEY];
   return buildCatalogEntry({
     packageName: entry.name,
@@ -232,12 +251,17 @@ export function buildChannelUiCatalog(
   plugins: Array<{ id: string; meta: ChannelMeta }>,
 ): ChannelUiCatalog {
   const entries: ChannelUiMetaEntry[] = plugins.map((plugin) => {
-    const detailLabel = plugin.meta.detailLabel ?? plugin.meta.selectionLabel ?? plugin.meta.label;
+    const detailLabel =
+      plugin.meta.detailLabel ??
+      plugin.meta.selectionLabel ??
+      plugin.meta.label;
     return {
       id: plugin.id,
       label: plugin.meta.label,
       detailLabel,
-      ...(plugin.meta.systemImage ? { systemImage: plugin.meta.systemImage } : {}),
+      ...(plugin.meta.systemImage
+        ? { systemImage: plugin.meta.systemImage }
+        : {}),
     };
   });
   const order = entries.map((entry) => entry.id);
@@ -259,8 +283,13 @@ export function buildChannelUiCatalog(
 export function listChannelPluginCatalogEntries(
   options: CatalogOptions = {},
 ): ChannelPluginCatalogEntry[] {
-  const discovery = discoverOpenClawPlugins({ workspaceDir: options.workspaceDir });
-  const resolved = new Map<string, { entry: ChannelPluginCatalogEntry; priority: number }>();
+  const discovery = discoverOpenClawPlugins({
+    workspaceDir: options.workspaceDir,
+  });
+  const resolved = new Map<
+    string,
+    { entry: ChannelPluginCatalogEntry; priority: number }
+  >();
 
   for (const candidate of discovery.candidates) {
     const entry = buildCatalogEntry(candidate);
@@ -303,5 +332,7 @@ export function getChannelPluginCatalogEntry(
   if (!trimmed) {
     return undefined;
   }
-  return listChannelPluginCatalogEntries(options).find((entry) => entry.id === trimmed);
+  return listChannelPluginCatalogEntries(options).find(
+    (entry) => entry.id === trimmed,
+  );
 }

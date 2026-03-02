@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_STARTUP_GRACE_MS, isConfiguredMatrixRoomEntry } from "./index.js";
+import {
+  DEFAULT_STARTUP_GRACE_MS,
+  isConfiguredMatrixRoomEntry,
+} from "./index.js";
 
 describe("monitorMatrixProvider helpers", () => {
   it("treats !-prefixed room IDs as configured room entries", () => {

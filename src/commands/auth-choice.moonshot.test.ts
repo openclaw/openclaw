@@ -40,7 +40,9 @@ describe("applyAuthChoice (moonshot)", () => {
     setDefaultModel: boolean;
   }) {
     const text = vi.fn().mockResolvedValue("sk-moonshot-cn-test");
-    const prompter = createPrompter({ text: text as unknown as WizardPrompter["text"] });
+    const prompter = createPrompter({
+      text: text as unknown as WizardPrompter["text"],
+    });
     const runtime = createExitThrowingRuntime();
     const result = await applyAuthChoice({
       authChoice: "moonshot-api-key-cn",
@@ -73,15 +75,21 @@ describe("applyAuthChoice (moonshot)", () => {
     expect(text).toHaveBeenCalledWith(
       expect.objectContaining({ message: "Enter Moonshot API key (.cn)" }),
     );
-    expect(resolveAgentModelPrimaryValue(result.config.agents?.defaults?.model)).toBe(
-      "anthropic/claude-opus-4-5",
+    expect(
+      resolveAgentModelPrimaryValue(result.config.agents?.defaults?.model),
+    ).toBe("anthropic/claude-opus-4-5");
+    expect(result.config.models?.providers?.moonshot?.baseUrl).toBe(
+      "https://api.moonshot.cn/v1",
     );
-    expect(result.config.models?.providers?.moonshot?.baseUrl).toBe("https://api.moonshot.cn/v1");
-    expect(result.config.models?.providers?.moonshot?.models?.[0]?.input).toContain("image");
+    expect(
+      result.config.models?.providers?.moonshot?.models?.[0]?.input,
+    ).toContain("image");
     expect(result.agentModelOverride).toBe("moonshot/kimi-k2.5");
 
     const parsed = await readAuthProfiles();
-    expect(parsed.profiles?.["moonshot:default"]?.key).toBe("sk-moonshot-cn-test");
+    expect(parsed.profiles?.["moonshot:default"]?.key).toBe(
+      "sk-moonshot-cn-test",
+    );
   });
 
   it("sets the default model when setDefaultModel is true", async () => {
@@ -92,14 +100,20 @@ describe("applyAuthChoice (moonshot)", () => {
       setDefaultModel: true,
     });
 
-    expect(resolveAgentModelPrimaryValue(result.config.agents?.defaults?.model)).toBe(
-      "moonshot/kimi-k2.5",
+    expect(
+      resolveAgentModelPrimaryValue(result.config.agents?.defaults?.model),
+    ).toBe("moonshot/kimi-k2.5");
+    expect(result.config.models?.providers?.moonshot?.baseUrl).toBe(
+      "https://api.moonshot.cn/v1",
     );
-    expect(result.config.models?.providers?.moonshot?.baseUrl).toBe("https://api.moonshot.cn/v1");
-    expect(result.config.models?.providers?.moonshot?.models?.[0]?.input).toContain("image");
+    expect(
+      result.config.models?.providers?.moonshot?.models?.[0]?.input,
+    ).toContain("image");
     expect(result.agentModelOverride).toBeUndefined();
 
     const parsed = await readAuthProfiles();
-    expect(parsed.profiles?.["moonshot:default"]?.key).toBe("sk-moonshot-cn-test");
+    expect(parsed.profiles?.["moonshot:default"]?.key).toBe(
+      "sk-moonshot-cn-test",
+    );
   });
 });

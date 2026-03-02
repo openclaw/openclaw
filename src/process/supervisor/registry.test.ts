@@ -29,7 +29,11 @@ function addRunningRecord(
 describe("process supervisor run registry", () => {
   it("finalize is idempotent and preserves first terminal metadata", () => {
     const registry = createRunRegistry();
-    addRunningRecord(registry, { runId: "r1", sessionId: "s1", startedAtMs: 1 });
+    addRunningRecord(registry, {
+      runId: "r1",
+      sessionId: "s1",
+      startedAtMs: 1,
+    });
 
     const first = registry.finalize("r1", {
       reason: "overall-timeout",
@@ -57,9 +61,21 @@ describe("process supervisor run registry", () => {
 
   it("prunes oldest exited records once retention cap is exceeded", () => {
     const registry = createRunRegistry({ maxExitedRecords: 2 });
-    addRunningRecord(registry, { runId: "r1", sessionId: "s1", startedAtMs: 1 });
-    addRunningRecord(registry, { runId: "r2", sessionId: "s2", startedAtMs: 2 });
-    addRunningRecord(registry, { runId: "r3", sessionId: "s3", startedAtMs: 3 });
+    addRunningRecord(registry, {
+      runId: "r1",
+      sessionId: "s1",
+      startedAtMs: 1,
+    });
+    addRunningRecord(registry, {
+      runId: "r2",
+      sessionId: "s2",
+      startedAtMs: 2,
+    });
+    addRunningRecord(registry, {
+      runId: "r3",
+      sessionId: "s3",
+      startedAtMs: 3,
+    });
 
     registry.finalize("r1", { reason: "exit", exitCode: 0, exitSignal: null });
     registry.finalize("r2", { reason: "exit", exitCode: 0, exitSignal: null });

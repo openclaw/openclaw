@@ -27,7 +27,8 @@ function createApi(params: {
       },
       config: {
         loadConfig: () => params.getConfig(),
-        writeConfigFile: (next: Record<string, unknown>) => params.writeConfig(next),
+        writeConfigFile: (next: Record<string, unknown>) =>
+          params.writeConfig(next),
       },
     } as OpenClawPluginApi["runtime"],
     logger: { info() {}, warn() {}, error() {} },
@@ -59,13 +60,20 @@ function createCommandContext(args: string): PluginCommandContext {
 
 describe("phone-control plugin", () => {
   it("arms sms.send as part of the writes group", async () => {
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-phone-control-test-"));
+    const stateDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-phone-control-test-"),
+    );
     try {
       let config: Record<string, unknown> = {
         gateway: {
           nodes: {
             allowCommands: [],
-            denyCommands: ["calendar.add", "contacts.add", "reminders.add", "sms.send"],
+            denyCommands: [
+              "calendar.add",
+              "contacts.add",
+              "reminders.add",
+              "sms.send",
+            ],
           },
         },
       };
@@ -87,10 +95,14 @@ describe("phone-control plugin", () => {
 
       expect(command?.name).toBe("phone");
 
-      const res = await command?.handler(createCommandContext("arm writes 30s"));
+      const res = await command?.handler(
+        createCommandContext("arm writes 30s"),
+      );
       const text = String(res?.text ?? "");
       const nodes = (
-        config.gateway as { nodes?: { allowCommands?: string[]; denyCommands?: string[] } }
+        config.gateway as {
+          nodes?: { allowCommands?: string[]; denyCommands?: string[] };
+        }
       ).nodes;
 
       expect(writeConfigFile).toHaveBeenCalledTimes(1);

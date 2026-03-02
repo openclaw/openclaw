@@ -5,8 +5,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 
 const hoisted = vi.hoisted(() => {
-  const sendMessageDiscord = vi.fn(async (_to: string, _text: string, _opts?: unknown) => ({}));
-  const sendWebhookMessageDiscord = vi.fn(async (_text: string, _opts?: unknown) => ({}));
+  const sendMessageDiscord = vi.fn(
+    async (_to: string, _text: string, _opts?: unknown) => ({}),
+  );
+  const sendWebhookMessageDiscord = vi.fn(
+    async (_text: string, _opts?: unknown) => ({}),
+  );
   const restGet = vi.fn(async () => ({
     id: "thread-1",
     type: 11,
@@ -22,7 +26,9 @@ const hoisted = vi.hoisted(() => {
       post: restPost,
     },
   }));
-  const createThreadDiscord = vi.fn(async (..._args: unknown[]) => ({ id: "thread-created" }));
+  const createThreadDiscord = vi.fn(async (..._args: unknown[]) => ({
+    id: "thread-created",
+  }));
   const readAcpSessionEntry = vi.fn();
   return {
     sendMessageDiscord,
@@ -117,7 +123,9 @@ describe("thread binding lifecycle", () => {
       agentId: "codex",
       idleTimeoutMs: 24 * 60 * 60 * 1000,
       sessionCwd: "/home/bob/clawd",
-      sessionDetails: ["session ids: pending (available after the first reply)"],
+      sessionDetails: [
+        "session ids: pending (available after the first reply)",
+      ],
     });
     expect(intro).toContain("\ncwd: /home/bob/clawd\nsession ids: pending");
   });
@@ -153,7 +161,9 @@ describe("thread binding lifecycle", () => {
       expect(hoisted.restGet).not.toHaveBeenCalled();
       expect(hoisted.sendWebhookMessageDiscord).not.toHaveBeenCalled();
       expect(hoisted.sendMessageDiscord).toHaveBeenCalledTimes(1);
-      const farewell = hoisted.sendMessageDiscord.mock.calls[0]?.[1] as string | undefined;
+      const farewell = hoisted.sendMessageDiscord.mock.calls[0]?.[1] as
+        | string
+        | undefined;
       expect(farewell).toContain("after 1m of inactivity");
     } finally {
       vi.useRealTimers();
@@ -187,7 +197,9 @@ describe("thread binding lifecycle", () => {
 
       expect(manager.getByThreadId("thread-1")).toBeUndefined();
       expect(hoisted.sendMessageDiscord).toHaveBeenCalledTimes(1);
-      const farewell = hoisted.sendMessageDiscord.mock.calls[0]?.[1] as string | undefined;
+      const farewell = hoisted.sendMessageDiscord.mock.calls[0]?.[1] as
+        | string
+        | undefined;
       expect(farewell).toContain("max age of 1m");
     } finally {
       vi.useRealTimers();
@@ -263,7 +275,9 @@ describe("thread binding lifecycle", () => {
       });
 
       expect(updated).toHaveLength(1);
-      expect(updated[0]?.lastActivityAt).toBe(new Date("2026-02-20T23:15:00.000Z").getTime());
+      expect(updated[0]?.lastActivityAt).toBe(
+        new Date("2026-02-20T23:15:00.000Z").getTime(),
+      );
       expect(updated[0]?.boundAt).toBe(boundAt);
       expect(
         resolveThreadBindingInactivityExpiresAt({
@@ -304,8 +318,12 @@ describe("thread binding lifecycle", () => {
       });
 
       expect(updated).toHaveLength(1);
-      expect(updated[0]?.boundAt).toBe(new Date("2026-02-20T10:30:00.000Z").getTime());
-      expect(updated[0]?.lastActivityAt).toBe(new Date("2026-02-20T10:30:00.000Z").getTime());
+      expect(updated[0]?.boundAt).toBe(
+        new Date("2026-02-20T10:30:00.000Z").getTime(),
+      );
+      expect(updated[0]?.lastActivityAt).toBe(
+        new Date("2026-02-20T10:30:00.000Z").getTime(),
+      );
       expect(
         resolveThreadBindingMaxAgeExpiresAt({
           record: updated[0],
@@ -435,12 +453,17 @@ describe("thread binding lifecycle", () => {
       });
 
       vi.setSystemTime(new Date("2026-02-20T00:00:30.000Z"));
-      const touched = manager.touchThread({ threadId: "thread-1", persist: false });
+      const touched = manager.touchThread({
+        threadId: "thread-1",
+        persist: false,
+      });
       expect(touched).not.toBeNull();
 
       const record = manager.getByThreadId("thread-1");
       expect(record).toBeDefined();
-      expect(record?.lastActivityAt).toBe(new Date("2026-02-20T00:00:30.000Z").getTime());
+      expect(record?.lastActivityAt).toBe(
+        new Date("2026-02-20T00:00:30.000Z").getTime(),
+      );
       expect(
         resolveThreadBindingInactivityExpiresAt({
           record: record!,
@@ -455,7 +478,9 @@ describe("thread binding lifecycle", () => {
   it("persists touched activity timestamps across restart when persistence is enabled", async () => {
     vi.useFakeTimers();
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-thread-bindings-"));
+    const stateDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "openclaw-thread-bindings-"),
+    );
     process.env.OPENCLAW_STATE_DIR = stateDir;
     try {
       __testing.resetThreadBindingsForTests();
@@ -566,7 +591,9 @@ describe("thread binding lifecycle", () => {
       agentId: "main",
     });
     hoisted.createThreadDiscord.mockClear();
-    hoisted.createThreadDiscord.mockResolvedValueOnce({ id: "thread-created-2" });
+    hoisted.createThreadDiscord.mockResolvedValueOnce({
+      id: "thread-created-2",
+    });
 
     const childBinding = await autoBindSpawnedDiscordSubagent({
       accountId: "default",
@@ -584,7 +611,9 @@ describe("thread binding lifecycle", () => {
       expect.objectContaining({ autoArchiveMinutes: 60 }),
       expect.objectContaining({ accountId: "default" }),
     );
-    expect(manager.getByThreadId("thread-1")?.targetSessionKey).toBe("agent:main:subagent:parent");
+    expect(manager.getByThreadId("thread-1")?.targetSessionKey).toBe(
+      "agent:main:subagent:parent",
+    );
     expect(manager.getByThreadId("thread-created-2")?.targetSessionKey).toBe(
       "agent:main:subagent:child-2",
     );
@@ -606,7 +635,9 @@ describe("thread binding lifecycle", () => {
       parent_id: "parent-1",
     });
     hoisted.createThreadDiscord.mockClear();
-    hoisted.createThreadDiscord.mockResolvedValueOnce({ id: "thread-created-lookup" });
+    hoisted.createThreadDiscord.mockResolvedValueOnce({
+      id: "thread-created-lookup",
+    });
 
     const childBinding = await autoBindSpawnedDiscordSubagent({
       accountId: "default",
@@ -644,7 +675,9 @@ describe("thread binding lifecycle", () => {
       parent_id: "parent-runtime",
     });
     hoisted.createThreadDiscord.mockClear();
-    hoisted.createThreadDiscord.mockResolvedValueOnce({ id: "thread-created-runtime" });
+    hoisted.createThreadDiscord.mockResolvedValueOnce({
+      id: "thread-created-runtime",
+    });
 
     const childBinding = await autoBindSpawnedDiscordSubagent({
       accountId: "runtime",
@@ -655,9 +688,8 @@ describe("thread binding lifecycle", () => {
     });
 
     expect(childBinding).not.toBeNull();
-    const firstClientArgs = hoisted.createDiscordRestClient.mock.calls[0]?.[0] as
-      | { accountId?: string; token?: string }
-      | undefined;
+    const firstClientArgs = hoisted.createDiscordRestClient.mock
+      .calls[0]?.[0] as { accountId?: string; token?: string } | undefined;
     expect(firstClientArgs).toMatchObject({
       accountId: "runtime",
       token: "runtime-token",
@@ -683,7 +715,9 @@ describe("thread binding lifecycle", () => {
     });
 
     hoisted.createThreadDiscord.mockClear();
-    hoisted.createThreadDiscord.mockResolvedValueOnce({ id: "thread-created-token-refresh" });
+    hoisted.createThreadDiscord.mockResolvedValueOnce({
+      id: "thread-created-token-refresh",
+    });
     hoisted.createDiscordRestClient.mockClear();
 
     const bound = await manager.bindTarget({
@@ -701,7 +735,8 @@ describe("thread binding lifecycle", () => {
       expect.objectContaining({ accountId: "runtime", token: "token-new" }),
     );
     const usedTokenNew = hoisted.createDiscordRestClient.mock.calls.some(
-      (call) => (call?.[0] as { token?: string } | undefined)?.token === "token-new",
+      (call) =>
+        (call?.[0] as { token?: string } | undefined)?.token === "token-new",
     );
     expect(usedTokenNew).toBe(true);
   });
@@ -739,8 +774,12 @@ describe("thread binding lifecycle", () => {
 
     expect(aBinding?.accountId).toBe("a");
     expect(bBinding?.accountId).toBe("b");
-    expect(a.getByThreadId("thread-1")?.targetSessionKey).toBe("agent:main:subagent:a");
-    expect(b.getByThreadId("thread-1")?.targetSessionKey).toBe("agent:main:subagent:b");
+    expect(a.getByThreadId("thread-1")?.targetSessionKey).toBe(
+      "agent:main:subagent:a",
+    );
+    expect(b.getByThreadId("thread-1")?.targetSessionKey).toBe(
+      "agent:main:subagent:b",
+    );
 
     const removedA = a.unbindBySessionKey({
       targetSessionKey: "agent:main:subagent:a",
@@ -748,7 +787,9 @@ describe("thread binding lifecycle", () => {
     });
     expect(removedA).toHaveLength(1);
     expect(a.getByThreadId("thread-1")).toBeUndefined();
-    expect(b.getByThreadId("thread-1")?.targetSessionKey).toBe("agent:main:subagent:b");
+    expect(b.getByThreadId("thread-1")?.targetSessionKey).toBe(
+      "agent:main:subagent:b",
+    );
   });
 
   it("removes stale ACP bindings during startup reconciliation", async () => {
@@ -789,7 +830,8 @@ describe("thread binding lifecycle", () => {
     });
 
     hoisted.readAcpSessionEntry.mockImplementation((paramsUnknown: unknown) => {
-      const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey ?? "";
+      const sessionKey =
+        (paramsUnknown as { sessionKey?: string }).sessionKey ?? "";
       if (sessionKey === "agent:codex:acp:healthy") {
         return {
           sessionKey,
@@ -868,7 +910,9 @@ describe("thread binding lifecycle", () => {
 
   it("migrates legacy expiresAt bindings to idle/max-age semantics", () => {
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-thread-bindings-"));
+    const stateDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "openclaw-thread-bindings-"),
+    );
     process.env.OPENCLAW_STATE_DIR = stateDir;
     try {
       __testing.resetThreadBindingsForTests();
@@ -966,7 +1010,9 @@ describe("thread binding lifecycle", () => {
 
   it("persists unbinds even when no manager is active", () => {
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-thread-bindings-"));
+    const stateDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "openclaw-thread-bindings-"),
+    );
     process.env.OPENCLAW_STATE_DIR = stateDir;
     try {
       __testing.resetThreadBindingsForTests();

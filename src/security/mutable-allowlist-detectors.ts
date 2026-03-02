@@ -47,7 +47,9 @@ export function isGoogleChatMutableAllowEntry(raw: string): boolean {
     return false;
   }
 
-  const withoutPrefix = text.replace(/^(googlechat|google-chat|gchat):/i, "").trim();
+  const withoutPrefix = text
+    .replace(/^(googlechat|google-chat|gchat):/i, "")
+    .trim();
   if (!withoutPrefix) {
     return false;
   }

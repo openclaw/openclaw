@@ -32,7 +32,9 @@ export function resolveMatrixThreadTarget(params: {
     return undefined;
   }
   const isThreadRoot = params.isThreadRoot === true;
-  const hasInboundThread = Boolean(threadRootId && threadRootId !== messageId && !isThreadRoot);
+  const hasInboundThread = Boolean(
+    threadRootId && threadRootId !== messageId && !isThreadRoot,
+  );
   if (threadReplies === "inbound") {
     return hasInboundThread ? threadRootId : undefined;
   }

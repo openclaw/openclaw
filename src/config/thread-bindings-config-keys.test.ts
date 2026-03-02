@@ -120,17 +120,26 @@ describe("thread binding config keys", () => {
     const discord = result.config?.channels?.discord;
     expect(discord?.threadBindings?.idleHours).toBe(12);
     expect(
-      (discord?.threadBindings as Record<string, unknown> | undefined)?.ttlHours,
+      (discord?.threadBindings as Record<string, unknown> | undefined)
+        ?.ttlHours,
     ).toBeUndefined();
 
     expect(discord?.accounts?.alpha?.threadBindings?.idleHours).toBe(6);
     expect(
-      (discord?.accounts?.alpha?.threadBindings as Record<string, unknown> | undefined)?.ttlHours,
+      (
+        discord?.accounts?.alpha?.threadBindings as
+          | Record<string, unknown>
+          | undefined
+      )?.ttlHours,
     ).toBeUndefined();
 
     expect(discord?.accounts?.beta?.threadBindings?.idleHours).toBe(4);
     expect(
-      (discord?.accounts?.beta?.threadBindings as Record<string, unknown> | undefined)?.ttlHours,
+      (
+        discord?.accounts?.beta?.threadBindings as
+          | Record<string, unknown>
+          | undefined
+      )?.ttlHours,
     ).toBeUndefined();
 
     expect(result.changes).toContain(

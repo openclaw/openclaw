@@ -16,9 +16,9 @@ describe("tlon urbit auth ssrf", () => {
     const mockFetch = vi.fn();
     vi.stubGlobal("fetch", mockFetch);
 
-    await expect(authenticate("http://127.0.0.1:8080", "code")).rejects.toBeInstanceOf(
-      SsrFBlockedError,
-    );
+    await expect(
+      authenticate("http://127.0.0.1:8080", "code"),
+    ).rejects.toBeInstanceOf(SsrFBlockedError);
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
@@ -32,7 +32,9 @@ describe("tlon urbit auth ssrf", () => {
       }),
     });
     vi.stubGlobal("fetch", mockFetch);
-    const lookupFn = (async () => [{ address: "127.0.0.1", family: 4 }]) as unknown as LookupFn;
+    const lookupFn = (async () => [
+      { address: "127.0.0.1", family: 4 },
+    ]) as unknown as LookupFn;
 
     const cookie = await authenticate("http://127.0.0.1:8080", "code", {
       ssrfPolicy: { allowPrivateNetwork: true },

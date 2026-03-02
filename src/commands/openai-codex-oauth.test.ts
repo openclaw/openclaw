@@ -89,7 +89,9 @@ describe("loginOpenAICodexOAuth", () => {
     ).rejects.toThrow("oauth failed");
 
     expect(spin.stop).toHaveBeenCalledWith("OpenAI OAuth failed");
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("oauth failed"));
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("oauth failed"),
+    );
     expect(prompter.note).toHaveBeenCalledWith(
       "Trouble with OAuth? See https://docs.openclaw.ai/start/faq",
       "OAuth help",

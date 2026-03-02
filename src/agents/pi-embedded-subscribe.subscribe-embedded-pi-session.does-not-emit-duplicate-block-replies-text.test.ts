@@ -11,7 +11,9 @@ import { subscribeEmbeddedPiSession } from "./pi-embedded-subscribe.js";
 describe("subscribeEmbeddedPiSession", () => {
   it("does not emit duplicate block replies when text_end repeats", () => {
     const onBlockReply = vi.fn();
-    const { emit, subscription } = createTextEndBlockReplyHarness({ onBlockReply });
+    const { emit, subscription } = createTextEndBlockReplyHarness({
+      onBlockReply,
+    });
 
     emitAssistantTextDelta({ emit, delta: "Hello block" });
     emitAssistantTextEnd({ emit });
@@ -104,6 +106,8 @@ describe("subscribeEmbeddedPiSession", () => {
 
     emit({ type: "message_end", message: assistantMessage });
 
-    expect(subscription.assistantTexts).toEqual(["Response from non-streaming model"]);
+    expect(subscription.assistantTexts).toEqual([
+      "Response from non-streaming model",
+    ]);
   });
 });

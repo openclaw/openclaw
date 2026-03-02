@@ -4,7 +4,11 @@ export function isReadHttpMethod(method: string | undefined): boolean {
   return method === "GET" || method === "HEAD";
 }
 
-export function respondPlainText(res: ServerResponse, statusCode: number, body: string): void {
+export function respondPlainText(
+  res: ServerResponse,
+  statusCode: number,
+  body: string,
+): void {
   res.statusCode = statusCode;
   res.setHeader("Content-Type", "text/plain; charset=utf-8");
   res.end(body);

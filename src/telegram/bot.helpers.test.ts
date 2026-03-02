@@ -14,11 +14,15 @@ describe("resolveTelegramStreamMode", () => {
 
   it("maps legacy streamMode values", () => {
     expect(resolveTelegramStreamMode({ streamMode: "off" })).toBe("off");
-    expect(resolveTelegramStreamMode({ streamMode: "partial" })).toBe("partial");
+    expect(resolveTelegramStreamMode({ streamMode: "partial" })).toBe(
+      "partial",
+    );
     expect(resolveTelegramStreamMode({ streamMode: "block" })).toBe("block");
   });
 
   it("maps unified progress mode to partial on Telegram", () => {
-    expect(resolveTelegramStreamMode({ streaming: "progress" })).toBe("partial");
+    expect(resolveTelegramStreamMode({ streaming: "progress" })).toBe(
+      "partial",
+    );
   });
 });

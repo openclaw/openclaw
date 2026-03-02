@@ -56,7 +56,8 @@ describe("browser manage start timeout option", () => {
       .option("--browser-profile <name>", "Browser profile")
       .option("--json", "Output JSON", false)
       .option("--timeout <ms>", "Timeout in ms", "30000");
-    const parentOpts = (cmd: Command) => cmd.parent?.opts?.() as BrowserParentOpts;
+    const parentOpts = (cmd: Command) =>
+      cmd.parent?.opts?.() as BrowserParentOpts;
     registerBrowserManageCommands(browser, parentOpts);
     return program;
   }
@@ -70,7 +71,9 @@ describe("browser manage start timeout option", () => {
 
   it("uses parent --timeout for browser start instead of hardcoded 15s", async () => {
     const program = createProgram();
-    await program.parseAsync(["browser", "--timeout", "60000", "start"], { from: "user" });
+    await program.parseAsync(["browser", "--timeout", "60000", "start"], {
+      from: "user",
+    });
 
     const startCall = mocks.callBrowserRequest.mock.calls.find(
       (call) => ((call[1] ?? {}) as { path?: string }).path === "/start",

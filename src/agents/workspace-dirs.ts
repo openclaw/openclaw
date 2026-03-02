@@ -1,5 +1,8 @@
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "./agent-scope.js";
+import {
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "./agent-scope.js";
 
 export function listAgentWorkspaceDirs(cfg: OpenClawConfig): string[] {
   const dirs = new Set<string>();

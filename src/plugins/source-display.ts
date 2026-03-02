@@ -17,7 +17,11 @@ function tryRelative(root: string, filePath: string): string | null {
   if (rel === "..") {
     return null;
   }
-  if (rel.startsWith(`..${path.sep}`) || rel.startsWith("../") || rel.startsWith("..\\")) {
+  if (
+    rel.startsWith(`..${path.sep}`) ||
+    rel.startsWith("../") ||
+    rel.startsWith("..\\")
+  ) {
     return null;
   }
   if (path.isAbsolute(rel)) {
@@ -27,7 +31,9 @@ function tryRelative(root: string, filePath: string): string | null {
   return rel.replaceAll("\\", "/");
 }
 
-export function resolvePluginSourceRoots(params: { workspaceDir?: string }): PluginSourceRoots {
+export function resolvePluginSourceRoots(params: {
+  workspaceDir?: string;
+}): PluginSourceRoots {
   const stock = resolveBundledPluginsDir();
   const global = path.join(resolveConfigDir(), "extensions");
   const workspace = params.workspaceDir

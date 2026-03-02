@@ -25,7 +25,10 @@ function readVersionFromJsonCandidates(
     const require = createRequire(moduleUrl);
     for (const candidate of candidates) {
       try {
-        const parsed = require(candidate) as { name?: string; version?: string };
+        const parsed = require(candidate) as {
+          name?: string;
+          version?: string;
+        };
         const version = parsed.version?.trim();
         if (!version) {
           continue;
@@ -44,7 +47,9 @@ function readVersionFromJsonCandidates(
   }
 }
 
-function firstNonEmpty(...values: Array<string | undefined>): string | undefined {
+function firstNonEmpty(
+  ...values: Array<string | undefined>
+): string | undefined {
   for (const value of values) {
     const trimmed = value?.trim();
     if (trimmed) {
@@ -54,13 +59,17 @@ function firstNonEmpty(...values: Array<string | undefined>): string | undefined
   return undefined;
 }
 
-export function readVersionFromPackageJsonForModuleUrl(moduleUrl: string): string | null {
+export function readVersionFromPackageJsonForModuleUrl(
+  moduleUrl: string,
+): string | null {
   return readVersionFromJsonCandidates(moduleUrl, PACKAGE_JSON_CANDIDATES, {
     requirePackageName: true,
   });
 }
 
-export function readVersionFromBuildInfoForModuleUrl(moduleUrl: string): string | null {
+export function readVersionFromBuildInfoForModuleUrl(
+  moduleUrl: string,
+): string | null {
   return readVersionFromJsonCandidates(moduleUrl, BUILD_INFO_CANDIDATES);
 }
 
@@ -108,6 +117,7 @@ export function resolveRuntimeServiceVersion(
 // - Dev/npm builds: package.json.
 export const VERSION = resolveBinaryVersion({
   moduleUrl: import.meta.url,
-  injectedVersion: typeof __OPENCLAW_VERSION__ === "string" ? __OPENCLAW_VERSION__ : undefined,
+  injectedVersion:
+    typeof __OPENCLAW_VERSION__ === "string" ? __OPENCLAW_VERSION__ : undefined,
   bundledVersion: process.env.OPENCLAW_BUNDLED_VERSION,
 });

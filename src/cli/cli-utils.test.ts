@@ -12,7 +12,10 @@ describe("waitForever", () => {
   it("creates an unref'ed interval and returns a pending promise", () => {
     const setIntervalSpy = vi.spyOn(global, "setInterval");
     const promise = waitForever();
-    expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 1_000_000);
+    expect(setIntervalSpy).toHaveBeenCalledWith(
+      expect.any(Function),
+      1_000_000,
+    );
     expect(promise).toBeInstanceOf(Promise);
     setIntervalSpy.mockRestore();
   });
@@ -30,13 +33,17 @@ describe("shouldSkipRespawnForArgv", () => {
   });
 
   it("keeps respawn path for normal commands", () => {
-    expect(shouldSkipRespawnForArgv(["node", "openclaw", "status"])).toBe(false);
+    expect(shouldSkipRespawnForArgv(["node", "openclaw", "status"])).toBe(
+      false,
+    );
   });
 });
 
 describe("nodes canvas helpers", () => {
   it("parses canvas.snapshot payload", () => {
-    expect(parseCanvasSnapshotPayload({ format: "png", base64: "aGk=" })).toEqual({
+    expect(
+      parseCanvasSnapshotPayload({ format: "png", base64: "aGk=" }),
+    ).toEqual({
       format: "png",
       base64: "aGk=",
     });
@@ -55,7 +62,10 @@ describe("dns cli", () => {
     try {
       const program = new Command();
       registerDnsCli(program);
-      await program.parseAsync(["dns", "setup", "--domain", "openclaw.internal"], { from: "user" });
+      await program.parseAsync(
+        ["dns", "setup", "--domain", "openclaw.internal"],
+        { from: "user" },
+      );
       const output = log.mock.calls.map((call) => call.join(" ")).join("\\n");
       expect(output).toContain("DNS setup");
       expect(output).toContain("openclaw.internal");

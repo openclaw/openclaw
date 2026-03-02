@@ -55,7 +55,9 @@ export function createGatewayPluginRequestHandler(params: {
           return true;
         }
       } catch (err) {
-        log.warn(`plugin http route failed (${route.pluginId ?? "unknown"}): ${String(err)}`);
+        log.warn(
+          `plugin http route failed (${route.pluginId ?? "unknown"}): ${String(err)}`,
+        );
         if (!res.headersSent) {
           res.statusCode = 500;
           res.setHeader("Content-Type", "text/plain; charset=utf-8");

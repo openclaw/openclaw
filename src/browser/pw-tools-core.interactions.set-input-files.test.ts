@@ -43,7 +43,8 @@ let setInputFilesViaPlaywright: typeof import("./pw-tools-core.interactions.js")
 
 describe("setInputFilesViaPlaywright", () => {
   beforeAll(async () => {
-    ({ setInputFilesViaPlaywright } = await import("./pw-tools-core.interactions.js"));
+    ({ setInputFilesViaPlaywright } =
+      await import("./pw-tools-core.interactions.js"));
   });
 
   beforeEach(() => {
@@ -79,7 +80,9 @@ describe("setInputFilesViaPlaywright", () => {
       scopeLabel: "uploads directory (/tmp/openclaw/uploads)",
     });
     expect(refLocator).toHaveBeenCalledWith(page, "e7");
-    expect(setInputFiles).toHaveBeenCalledWith(["/private/tmp/openclaw/uploads/ok.txt"]);
+    expect(setInputFiles).toHaveBeenCalledWith([
+      "/private/tmp/openclaw/uploads/ok.txt",
+    ]);
   });
 
   it("throws and skips setInputFiles when use-time validation fails", async () => {

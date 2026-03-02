@@ -14,10 +14,14 @@ function asOpenClawConfig(config: Partial<OpenClawConfig>): OpenClawConfig {
 }
 
 function createToolConfig() {
-  return asOpenClawConfig({ agents: { list: [{ id: "main", default: true }] } });
+  return asOpenClawConfig({
+    agents: { list: [{ id: "main", default: true }] },
+  });
 }
 
-function createMemoryGetToolOrThrow(config: OpenClawConfig = createToolConfig()) {
+function createMemoryGetToolOrThrow(
+  config: OpenClawConfig = createToolConfig(),
+) {
   const tool = createMemoryGetTool({ config });
   if (!tool) {
     throw new Error("tool missing");
@@ -38,7 +42,10 @@ beforeEach(() => {
         source: "memory" as const,
       },
     ],
-    readFileImpl: async (params: MemoryReadParams) => ({ text: "", path: params.relPath }),
+    readFileImpl: async (params: MemoryReadParams) => ({
+      text: "",
+      path: params.relPath,
+    }),
   });
 });
 
@@ -54,7 +61,9 @@ describe("memory search citations", () => {
       throw new Error("tool missing");
     }
     const result = await tool.execute("call_citations_on", { query: "notes" });
-    const details = result.details as { results: Array<{ snippet: string; citation?: string }> };
+    const details = result.details as {
+      results: Array<{ snippet: string; citation?: string }>;
+    };
     expect(details.results[0]?.snippet).toMatch(/Source: MEMORY.md#L5-L7/);
     expect(details.results[0]?.citation).toBe("MEMORY.md#L5-L7");
   });
@@ -70,7 +79,9 @@ describe("memory search citations", () => {
       throw new Error("tool missing");
     }
     const result = await tool.execute("call_citations_off", { query: "notes" });
-    const details = result.details as { results: Array<{ snippet: string; citation?: string }> };
+    const details = result.details as {
+      results: Array<{ snippet: string; citation?: string }>;
+    };
     expect(details.results[0]?.snippet).not.toMatch(/Source:/);
     expect(details.results[0]?.citation).toBeUndefined();
   });
@@ -78,7 +89,11 @@ describe("memory search citations", () => {
   it("clamps decorated snippets to qmd injected budget", async () => {
     setMemoryBackend("qmd");
     const cfg = asOpenClawConfig({
-      memory: { citations: "on", backend: "qmd", qmd: { limits: { maxInjectedChars: 20 } } },
+      memory: {
+        citations: "on",
+        backend: "qmd",
+        qmd: { limits: { maxInjectedChars: 20 } },
+      },
       agents: { list: [{ id: "main", default: true }] },
     });
     const tool = createMemorySearchTool({ config: cfg });
@@ -86,7 +101,9 @@ describe("memory search citations", () => {
       throw new Error("tool missing");
     }
     const result = await tool.execute("call_citations_qmd", { query: "notes" });
-    const details = result.details as { results: Array<{ snippet: string; citation?: string }> };
+    const details = result.details as {
+      results: Array<{ snippet: string; citation?: string }>;
+    };
     expect(details.results[0]?.snippet.length).toBeLessThanOrEqual(20);
   });
 
@@ -146,7 +163,8 @@ describe("memory tools", () => {
       disabled: true,
       unavailable: true,
       error: "openai embeddings failed: 429 insufficient_quota",
-      warning: "Memory search is unavailable because the embedding provider quota is exhausted.",
+      warning:
+        "Memory search is unavailable because the embedding provider quota is exhausted.",
       action: "Top up or switch embedding provider, then retry memory_search.",
     });
   });
@@ -174,7 +192,9 @@ describe("memory tools", () => {
 
     const tool = createMemoryGetToolOrThrow();
 
-    const result = await tool.execute("call_enoent", { path: "memory/2026-02-19.md" });
+    const result = await tool.execute("call_enoent", {
+      path: "memory/2026-02-19.md",
+    });
     expect(result.details).toEqual({
       text: "",
       path: "memory/2026-02-19.md",

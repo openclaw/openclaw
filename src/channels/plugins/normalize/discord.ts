@@ -1,6 +1,8 @@
 import { parseDiscordTarget } from "../../../discord/targets.js";
 
-export function normalizeDiscordMessagingTarget(raw: string): string | undefined {
+export function normalizeDiscordMessagingTarget(
+  raw: string,
+): string | undefined {
   // Default bare IDs to channels so routing is stable across tool actions.
   const target = parseDiscordTarget(raw, { defaultKind: "channel" });
   return target?.normalized;

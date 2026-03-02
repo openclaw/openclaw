@@ -20,7 +20,9 @@ async function loadDiscovery() {
   return mod;
 }
 
-function mockSingleActiveSummary(overrides: Partial<typeof baseActiveAnthropicSummary> = {}): void {
+function mockSingleActiveSummary(
+  overrides: Partial<typeof baseActiveAnthropicSummary> = {},
+): void {
   sendMock.mockResolvedValueOnce({
     modelSummaries: [{ ...baseActiveAnthropicSummary, ...overrides }],
   });
@@ -75,7 +77,10 @@ describe("bedrock discovery", () => {
       ],
     });
 
-    const models = await discoverBedrockModels({ region: "us-east-1", clientFactory });
+    const models = await discoverBedrockModels({
+      region: "us-east-1",
+      clientFactory,
+    });
     expect(models).toHaveLength(1);
     expect(models[0]).toMatchObject({
       id: "anthropic.claude-3-7-sonnet-20250219-v1:0",

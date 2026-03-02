@@ -12,7 +12,10 @@ import {
   summarizeRestartSentinel,
 } from "../infra/restart-sentinel.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
-import { deliveryContextFromSession, mergeDeliveryContext } from "../utils/delivery-context.js";
+import {
+  deliveryContextFromSession,
+  mergeDeliveryContext,
+} from "../utils/delivery-context.js";
 import { loadSessionEntry } from "./session-utils.js";
 
 export async function scheduleRestartSentinelWake(_params: { deps: CliDeps }) {
@@ -31,16 +34,23 @@ export async function scheduleRestartSentinelWake(_params: { deps: CliDeps }) {
     return;
   }
 
-  const { baseSessionKey, threadId: sessionThreadId } = parseSessionThreadInfo(sessionKey);
+  const { baseSessionKey, threadId: sessionThreadId } =
+    parseSessionThreadInfo(sessionKey);
 
   const { cfg, entry } = loadSessionEntry(sessionKey);
-  const parsedTarget = resolveAnnounceTargetFromKey(baseSessionKey ?? sessionKey);
+  const parsedTarget = resolveAnnounceTargetFromKey(
+    baseSessionKey ?? sessionKey,
+  );
 
   // Prefer delivery context from sentinel (captured at restart) over session store
   // Handles race condition where store wasn't flushed before restart
   const sentinelContext = payload.deliveryContext;
   let sessionDeliveryContext = deliveryContextFromSession(entry);
-  if (!sessionDeliveryContext && baseSessionKey && baseSessionKey !== sessionKey) {
+  if (
+    !sessionDeliveryContext &&
+    baseSessionKey &&
+    baseSessionKey !== sessionKey
+  ) {
     const { entry: baseEntry } = loadSessionEntry(baseSessionKey);
     sessionDeliveryContext = deliveryContextFromSession(baseEntry);
   }
@@ -81,7 +91,10 @@ export async function scheduleRestartSentinelWake(_params: { deps: CliDeps }) {
   // so we must convert here to ensure post-restart notifications land in
   // the originating Slack thread. See #17716.
   const isSlack = channel === "slack";
-  const replyToId = isSlack && threadId != null && threadId !== "" ? String(threadId) : undefined;
+  const replyToId =
+    isSlack && threadId != null && threadId !== ""
+      ? String(threadId)
+      : undefined;
   const resolvedThreadId = isSlack ? undefined : threadId;
   const outboundSession = buildOutboundSessionContext({
     cfg,

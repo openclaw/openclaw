@@ -36,7 +36,9 @@ async function loadPwAiModule(mode: PwAiLoadMode): Promise<PwAiModule | null> {
   }
 }
 
-export async function getPwAiModule(opts?: { mode?: PwAiLoadMode }): Promise<PwAiModule | null> {
+export async function getPwAiModule(opts?: {
+  mode?: PwAiLoadMode;
+}): Promise<PwAiModule | null> {
   const mode: PwAiLoadMode = opts?.mode ?? "soft";
   if (mode === "soft") {
     if (!pwAiModuleSoft) {

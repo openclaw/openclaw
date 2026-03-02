@@ -36,7 +36,11 @@ vi.mock("./runtime.js", () => ({
   }),
 }));
 
-import { downloadImageFeishu, downloadMessageResourceFeishu, sendMediaFeishu } from "./media.js";
+import {
+  downloadImageFeishu,
+  downloadMessageResourceFeishu,
+  sendMediaFeishu,
+} from "./media.js";
 
 function expectPathIsolatedToTmpRoot(pathValue: string, key: string): void {
   expect(pathValue).not.toContain(key);
@@ -203,7 +207,10 @@ describe("sendMediaFeishu msg_type routing", () => {
     expect(messageReplyMock).toHaveBeenCalledWith(
       expect.objectContaining({
         path: { message_id: "om_parent" },
-        data: expect.objectContaining({ msg_type: "file", reply_in_thread: true }),
+        data: expect.objectContaining({
+          msg_type: "file",
+          reply_in_thread: true,
+        }),
       }),
     );
   });

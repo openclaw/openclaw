@@ -20,7 +20,9 @@ export function systemRunApprovalGuardError(params: {
   };
 }
 
-export function systemRunApprovalRequired(runId: string): SystemRunApprovalGuardError {
+export function systemRunApprovalRequired(
+  runId: string,
+): SystemRunApprovalGuardError {
   return systemRunApprovalGuardError({
     code: "APPROVAL_REQUIRED",
     message: "approval required",

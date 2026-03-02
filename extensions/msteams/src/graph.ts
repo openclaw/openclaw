@@ -44,21 +44,27 @@ export async function fetchGraphJson<T>(params: {
   });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    throw new Error(`Graph ${params.path} failed (${res.status}): ${text || "unknown error"}`);
+    throw new Error(
+      `Graph ${params.path} failed (${res.status}): ${text || "unknown error"}`,
+    );
   }
   return (await res.json()) as T;
 }
 
 export async function resolveGraphToken(cfg: unknown): Promise<string> {
   const creds = resolveMSTeamsCredentials(
-    (cfg as { channels?: { msteams?: unknown } })?.channels?.msteams as MSTeamsConfig | undefined,
+    (cfg as { channels?: { msteams?: unknown } })?.channels?.msteams as
+      | MSTeamsConfig
+      | undefined,
   );
   if (!creds) {
     throw new Error("MS Teams credentials missing");
   }
   const { sdk, authConfig } = await loadMSTeamsSdkWithAuth(creds);
   const tokenProvider = new sdk.MsalTokenProvider(authConfig);
-  const token = await tokenProvider.getAccessToken("https://graph.microsoft.com");
+  const token = await tokenProvider.getAccessToken(
+    "https://graph.microsoft.com",
+  );
   const accessToken = readAccessToken(token);
   if (!accessToken) {
     throw new Error("MS Teams graph token unavailable");
@@ -66,7 +72,10 @@ export async function resolveGraphToken(cfg: unknown): Promise<string> {
   return accessToken;
 }
 
-export async function listTeamsByName(token: string, query: string): Promise<GraphGroup[]> {
+export async function listTeamsByName(
+  token: string,
+  query: string,
+): Promise<GraphGroup[]> {
   const escaped = escapeOData(query);
   const filter = `resourceProvisioningOptions/Any(x:x eq 'Team') and startsWith(displayName,'${escaped}')`;
   const path = `/groups?$filter=${encodeURIComponent(filter)}&$select=id,displayName`;
@@ -74,8 +83,14 @@ export async function listTeamsByName(token: string, query: string): Promise<Gra
   return res.value ?? [];
 }
 
-export async function listChannelsForTeam(token: string, teamId: string): Promise<GraphChannel[]> {
+export async function listChannelsForTeam(
+  token: string,
+  teamId: string,
+): Promise<GraphChannel[]> {
   const path = `/teams/${encodeURIComponent(teamId)}/channels?$select=id,displayName`;
-  const res = await fetchGraphJson<GraphResponse<GraphChannel>>({ token, path });
+  const res = await fetchGraphJson<GraphResponse<GraphChannel>>({
+    token,
+    path,
+  });
   return res.value ?? [];
 }

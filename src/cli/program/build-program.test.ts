@@ -48,13 +48,21 @@ describe("buildProgram", () => {
     process.argv = argv;
     try {
       const program = buildProgram();
-      const ctx = createProgramContextMock.mock.results[0]?.value as ProgramContext;
+      const ctx = createProgramContextMock.mock.results[0]
+        ?.value as ProgramContext;
 
       expect(program).toBeInstanceOf(Command);
       expect(setProgramContextMock).toHaveBeenCalledWith(program, ctx);
       expect(configureProgramHelpMock).toHaveBeenCalledWith(program, ctx);
-      expect(registerPreActionHooksMock).toHaveBeenCalledWith(program, ctx.programVersion);
-      expect(registerProgramCommandsMock).toHaveBeenCalledWith(program, ctx, argv);
+      expect(registerPreActionHooksMock).toHaveBeenCalledWith(
+        program,
+        ctx.programVersion,
+      );
+      expect(registerProgramCommandsMock).toHaveBeenCalledWith(
+        program,
+        ctx,
+        argv,
+      );
     } finally {
       process.argv = originalArgv;
     }

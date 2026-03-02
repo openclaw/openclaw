@@ -20,7 +20,9 @@ vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
   };
 });
 
-async function withTempAgentDir<T>(run: (agentDir: string) => Promise<T>): Promise<T> {
+async function withTempAgentDir<T>(
+  run: (agentDir: string) => Promise<T>,
+): Promise<T> {
   const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pdf-"));
   try {
     return await run(agentDir);
@@ -73,7 +75,9 @@ async function stubPdfToolInfra(
   },
 ) {
   const webMedia = await import("../../web/media.js");
-  const loadSpy = vi.spyOn(webMedia, "loadWebMediaRaw").mockResolvedValue(FAKE_PDF_MEDIA as never);
+  const loadSpy = vi
+    .spyOn(webMedia, "loadWebMediaRaw")
+    .mockResolvedValue(FAKE_PDF_MEDIA as never);
 
   const modelDiscovery = await import("../pi-model-discovery.js");
   vi.spyOn(modelDiscovery, "discoverAuthStorage").mockReturnValue({
@@ -97,7 +101,9 @@ async function stubPdfToolInfra(
   });
 
   const modelAuth = await import("../model-auth.js");
-  vi.spyOn(modelAuth, "getApiKeyForModel").mockResolvedValue({ apiKey: "test-key" } as never);
+  vi.spyOn(modelAuth, "getApiKeyForModel").mockResolvedValue({
+    apiKey: "test-key",
+  } as never);
   vi.spyOn(modelAuth, "requireApiKey").mockReturnValue("test-key");
 
   return { loadSpy };
@@ -308,7 +314,9 @@ describe("createPdfTool", () => {
       const cfg = withDefaultModel(ANTHROPIC_PDF_MODEL);
       const tool = createPdfTool({ config: cfg, agentDir });
       expect(tool).not.toBeNull();
-      await expect(tool!.execute("t1", { prompt: "test" })).rejects.toThrow("pdf required");
+      await expect(tool!.execute("t1", { prompt: "test" })).rejects.toThrow(
+        "pdf required",
+      );
     });
   });
 
@@ -319,7 +327,10 @@ describe("createPdfTool", () => {
       const tool = createPdfTool({ config: cfg, agentDir });
       expect(tool).not.toBeNull();
       const manyPdfs = Array.from({ length: 15 }, (_, i) => `/tmp/doc${i}.pdf`);
-      const result = await tool!.execute("t1", { prompt: "test", pdfs: manyPdfs });
+      const result = await tool!.execute("t1", {
+        prompt: "test",
+        pdfs: manyPdfs,
+      });
       expect(result).toMatchObject({
         details: { error: "too_many_pdfs" },
       });
@@ -344,7 +355,9 @@ describe("createPdfTool", () => {
 
   it("deduplicates pdf inputs before loading", async () => {
     await withTempAgentDir(async (agentDir) => {
-      const { loadSpy } = await stubPdfToolInfra(agentDir, { modelFound: false });
+      const { loadSpy } = await stubPdfToolInfra(agentDir, {
+        modelFound: false,
+      });
       const cfg = withPdfModel(ANTHROPIC_PDF_MODEL);
       const tool = createPdfTool({ config: cfg, agentDir });
       expect(tool).not.toBeNull();
@@ -363,10 +376,15 @@ describe("createPdfTool", () => {
 
   it("uses native PDF path without eager extraction", async () => {
     await withTempAgentDir(async (agentDir) => {
-      await stubPdfToolInfra(agentDir, { provider: "anthropic", input: ["text", "document"] });
+      await stubPdfToolInfra(agentDir, {
+        provider: "anthropic",
+        input: ["text", "document"],
+      });
 
       const nativeProviders = await import("./pdf-native-providers.js");
-      vi.spyOn(nativeProviders, "anthropicAnalyzePdf").mockResolvedValue("native summary");
+      vi.spyOn(nativeProviders, "anthropicAnalyzePdf").mockResolvedValue(
+        "native summary",
+      );
 
       const extractModule = await import("../../media/pdf-extract.js");
       const extractSpy = vi.spyOn(extractModule, "extractPdfContent");
@@ -390,7 +408,10 @@ describe("createPdfTool", () => {
 
   it("rejects pages parameter for native PDF providers", async () => {
     await withTempAgentDir(async (agentDir) => {
-      await stubPdfToolInfra(agentDir, { provider: "anthropic", input: ["text", "document"] });
+      await stubPdfToolInfra(agentDir, {
+        provider: "anthropic",
+        input: ["text", "document"],
+      });
       const cfg = withPdfModel(ANTHROPIC_PDF_MODEL);
       const tool = createPdfTool({ config: cfg, agentDir });
       expect(tool).not.toBeNull();
@@ -410,10 +431,12 @@ describe("createPdfTool", () => {
       await stubPdfToolInfra(agentDir, { provider: "openai", input: ["text"] });
 
       const extractModule = await import("../../media/pdf-extract.js");
-      const extractSpy = vi.spyOn(extractModule, "extractPdfContent").mockResolvedValue({
-        text: "Extracted content",
-        images: [],
-      });
+      const extractSpy = vi
+        .spyOn(extractModule, "extractPdfContent")
+        .mockResolvedValue({
+          text: "Extracted content",
+          images: [],
+        });
 
       const piAi = await import("@mariozechner/pi-ai");
       vi.mocked(piAi.complete).mockResolvedValue({
@@ -468,7 +491,9 @@ describe("native PDF provider API calls", () => {
   const priorFetch = global.fetch;
   const mockFetchResponse = (response: unknown) => {
     const fetchMock = vi.fn().mockResolvedValue(response);
-    global.fetch = Object.assign(fetchMock, { preconnect: vi.fn() }) as typeof global.fetch;
+    global.fetch = Object.assign(fetchMock, {
+      preconnect: vi.fn(),
+    }) as typeof global.fetch;
     return fetchMock;
   };
 
@@ -501,7 +526,9 @@ describe("native PDF provider API calls", () => {
     expect(body.model).toBe("claude-opus-4-6");
     expect(body.messages[0].content).toHaveLength(2);
     expect(body.messages[0].content[0].type).toBe("document");
-    expect(body.messages[0].content[0].source.media_type).toBe("application/pdf");
+    expect(body.messages[0].content[0].source.media_type).toBe(
+      "application/pdf",
+    );
     expect(body.messages[0].content[1].type).toBe("text");
   });
 
@@ -570,7 +597,9 @@ describe("native PDF provider API calls", () => {
     expect(url).toContain("gemini-2.5-pro");
     const body = JSON.parse(opts.body);
     expect(body.contents[0].parts).toHaveLength(2);
-    expect(body.contents[0].parts[0].inline_data.mime_type).toBe("application/pdf");
+    expect(body.contents[0].parts[0].inline_data.mime_type).toBe(
+      "application/pdf",
+    );
     expect(body.contents[0].parts[1].text).toBe("Summarize this");
   });
 
@@ -654,7 +683,9 @@ describe("native PDF provider API calls", () => {
       baseUrl: "https://custom.example.com",
     });
 
-    expect(fetchMock.mock.calls[0][0]).toContain("https://custom.example.com/v1/messages");
+    expect(fetchMock.mock.calls[0][0]).toContain(
+      "https://custom.example.com/v1/messages",
+    );
   });
 
   it("anthropicAnalyzePdf requires apiKey", async () => {

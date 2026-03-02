@@ -15,7 +15,9 @@ describe("normalizeSandboxHostPath", () => {
 
 describe("resolveSandboxHostPathViaExistingAncestor", () => {
   it("keeps non-absolute paths unchanged", () => {
-    expect(resolveSandboxHostPathViaExistingAncestor("relative/path")).toBe("relative/path");
+    expect(resolveSandboxHostPathViaExistingAncestor("relative/path")).toBe(
+      "relative/path",
+    );
   });
 
   it("resolves symlink parents when the final leaf does not exist", () => {

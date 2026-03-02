@@ -2,7 +2,10 @@ import crypto from "node:crypto";
 import { Type } from "@sinclair/typebox";
 import { loadConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
-import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import {
+  normalizeAgentId,
+  resolveAgentIdFromSessionKey,
+} from "../../routing/session-key.js";
 import { SESSION_LABEL_MAX_LENGTH } from "../../sessions/session-label.js";
 import {
   type GatewayMessageChannel,
@@ -21,12 +24,17 @@ import {
   resolveSandboxedSessionToolContext,
   stripToolMessages,
 } from "./sessions-helpers.js";
-import { buildAgentToAgentMessageContext, resolvePingPongTurns } from "./sessions-send-helpers.js";
+import {
+  buildAgentToAgentMessageContext,
+  resolvePingPongTurns,
+} from "./sessions-send-helpers.js";
 import { runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
 
 const SessionsSendToolSchema = Type.Object({
   sessionKey: Type.Optional(Type.String()),
-  label: Type.Optional(Type.String({ minLength: 1, maxLength: SESSION_LABEL_MAX_LENGTH })),
+  label: Type.Optional(
+    Type.String({ minLength: 1, maxLength: SESSION_LABEL_MAX_LENGTH }),
+  ),
   agentId: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
   message: Type.String(),
   timeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
@@ -62,7 +70,8 @@ export function createSessionsSendTool(opts?: {
 
       const sessionKeyParam = readStringParam(params, "sessionKey");
       const labelParam = readStringParam(params, "label")?.trim() || undefined;
-      const labelAgentIdParam = readStringParam(params, "agentId")?.trim() || undefined;
+      const labelAgentIdParam =
+        readStringParam(params, "agentId")?.trim() || undefined;
       if (sessionKeyParam && labelParam) {
         return jsonResult({
           runId: crypto.randomUUID(),
@@ -73,20 +82,31 @@ export function createSessionsSendTool(opts?: {
 
       let sessionKey = sessionKeyParam;
       if (!sessionKey && labelParam) {
-        const requesterAgentId = resolveAgentIdFromSessionKey(effectiveRequesterKey);
+        const requesterAgentId = resolveAgentIdFromSessionKey(
+          effectiveRequesterKey,
+        );
         const requestedAgentId = labelAgentIdParam
           ? normalizeAgentId(labelAgentIdParam)
           : undefined;
 
-        if (restrictToSpawned && requestedAgentId && requestedAgentId !== requesterAgentId) {
+        if (
+          restrictToSpawned &&
+          requestedAgentId &&
+          requestedAgentId !== requesterAgentId
+        ) {
           return jsonResult({
             runId: crypto.randomUUID(),
             status: "forbidden",
-            error: "Sandboxed sessions_send label lookup is limited to this agent",
+            error:
+              "Sandboxed sessions_send label lookup is limited to this agent",
           });
         }
 
-        if (requesterAgentId && requestedAgentId && requestedAgentId !== requesterAgentId) {
+        if (
+          requesterAgentId &&
+          requestedAgentId &&
+          requestedAgentId !== requesterAgentId
+        ) {
           if (!a2aPolicy.enabled) {
             return jsonResult({
               runId: crypto.randomUUID(),
@@ -99,7 +119,8 @@ export function createSessionsSendTool(opts?: {
             return jsonResult({
               runId: crypto.randomUUID(),
               status: "forbidden",
-              error: "Agent-to-agent messaging denied by tools.agentToAgent.allow.",
+              error:
+                "Agent-to-agent messaging denied by tools.agentToAgent.allow.",
             });
           }
         }
@@ -116,7 +137,8 @@ export function createSessionsSendTool(opts?: {
             params: resolveParams,
             timeoutMs: 10_000,
           });
-          resolvedKey = typeof resolved?.key === "string" ? resolved.key.trim() : "";
+          resolvedKey =
+            typeof resolved?.key === "string" ? resolved.key.trim() : "";
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           if (restrictToSpawned) {
@@ -191,7 +213,8 @@ export function createSessionsSendTool(opts?: {
         });
       }
       const timeoutSeconds =
-        typeof params.timeoutSeconds === "number" && Number.isFinite(params.timeoutSeconds)
+        typeof params.timeoutSeconds === "number" &&
+        Number.isFinite(params.timeoutSeconds)
           ? Math.max(0, Math.floor(params.timeoutSeconds))
           : 30;
       const timeoutMs = timeoutSeconds * 1000;
@@ -271,7 +294,11 @@ export function createSessionsSendTool(opts?: {
           });
         } catch (err) {
           const messageText =
-            err instanceof Error ? err.message : typeof err === "string" ? err : "error";
+            err instanceof Error
+              ? err.message
+              : typeof err === "string"
+                ? err
+                : "error";
           return jsonResult({
             runId,
             status: "error",
@@ -292,7 +319,11 @@ export function createSessionsSendTool(opts?: {
         }
       } catch (err) {
         const messageText =
-          err instanceof Error ? err.message : typeof err === "string" ? err : "error";
+          err instanceof Error
+            ? err.message
+            : typeof err === "string"
+              ? err
+              : "error";
         return jsonResult({
           runId,
           status: "error",
@@ -316,7 +347,11 @@ export function createSessionsSendTool(opts?: {
         waitError = typeof wait?.error === "string" ? wait.error : undefined;
       } catch (err) {
         const messageText =
-          err instanceof Error ? err.message : typeof err === "string" ? err : "error";
+          err instanceof Error
+            ? err.message
+            : typeof err === "string"
+              ? err
+              : "error";
         return jsonResult({
           runId,
           status: messageText.includes("gateway timeout") ? "timeout" : "error",
@@ -346,8 +381,11 @@ export function createSessionsSendTool(opts?: {
         method: "chat.history",
         params: { sessionKey: resolvedKey, limit: 50 },
       });
-      const filtered = stripToolMessages(Array.isArray(history?.messages) ? history.messages : []);
-      const last = filtered.length > 0 ? filtered[filtered.length - 1] : undefined;
+      const filtered = stripToolMessages(
+        Array.isArray(history?.messages) ? history.messages : [],
+      );
+      const last =
+        filtered.length > 0 ? filtered[filtered.length - 1] : undefined;
       const reply = last ? extractAssistantText(last) : undefined;
       startA2AFlow(reply ?? undefined);
 

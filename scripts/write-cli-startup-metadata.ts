@@ -43,7 +43,11 @@ function readBundledChannelCatalogIds(): string[] {
     if (!dirEntry.isDirectory()) {
       continue;
     }
-    const packageJsonPath = path.join(extensionsDir, dirEntry.name, "package.json");
+    const packageJsonPath = path.join(
+      extensionsDir,
+      dirEntry.name,
+      "package.json",
+    );
     try {
       const raw = readFileSync(packageJsonPath, "utf8");
       const parsed = JSON.parse(raw) as {
@@ -71,7 +75,9 @@ function readBundledChannelCatalogIds(): string[] {
     }
   }
   return entries
-    .toSorted((a, b) => (a.order === b.order ? a.label.localeCompare(b.label) : a.order - b.order))
+    .toSorted((a, b) =>
+      a.order === b.order ? a.label.localeCompare(b.label) : a.order - b.order,
+    )
     .map((entry) => entry.id);
 }
 

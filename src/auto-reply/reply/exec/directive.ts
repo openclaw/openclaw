@@ -1,5 +1,12 @@
-import type { ExecAsk, ExecHost, ExecSecurity } from "../../../infra/exec-approvals.js";
-import { skipDirectiveArgPrefix, takeDirectiveToken } from "../directive-parsing.js";
+import type {
+  ExecAsk,
+  ExecHost,
+  ExecSecurity,
+} from "../../../infra/exec-approvals.js";
+import {
+  skipDirectiveArgPrefix,
+  takeDirectiveToken,
+} from "../directive-parsing.js";
 
 type ExecDirectiveParse = {
   cleaned: string;
@@ -21,7 +28,11 @@ type ExecDirectiveParse = {
 
 function normalizeExecHost(value?: string): ExecHost | undefined {
   const normalized = value?.trim().toLowerCase();
-  if (normalized === "sandbox" || normalized === "gateway" || normalized === "node") {
+  if (
+    normalized === "sandbox" ||
+    normalized === "gateway" ||
+    normalized === "node"
+  ) {
     return normalized;
   }
   return undefined;
@@ -29,7 +40,11 @@ function normalizeExecHost(value?: string): ExecHost | undefined {
 
 function normalizeExecSecurity(value?: string): ExecSecurity | undefined {
   const normalized = value?.trim().toLowerCase();
-  if (normalized === "deny" || normalized === "allowlist" || normalized === "full") {
+  if (
+    normalized === "deny" ||
+    normalized === "allowlist" ||
+    normalized === "full"
+  ) {
     return normalized;
   }
   return undefined;
@@ -37,7 +52,11 @@ function normalizeExecSecurity(value?: string): ExecSecurity | undefined {
 
 function normalizeExecAsk(value?: string): ExecAsk | undefined {
   const normalized = value?.trim().toLowerCase();
-  if (normalized === "off" || normalized === "on-miss" || normalized === "always") {
+  if (
+    normalized === "off" ||
+    normalized === "on-miss" ||
+    normalized === "always"
+  ) {
     return normalized as ExecAsk;
   }
   return undefined;

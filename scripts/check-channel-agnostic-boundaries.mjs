@@ -30,7 +30,13 @@ const acpUserFacingTextSources = [
 const systemMarkLiteralGuardSources = [
   path.join(repoRoot, "src", "auto-reply", "reply", "commands-acp"),
   path.join(repoRoot, "src", "auto-reply", "reply", "dispatch-acp.ts"),
-  path.join(repoRoot, "src", "auto-reply", "reply", "directive-handling.shared.ts"),
+  path.join(
+    repoRoot,
+    "src",
+    "auto-reply",
+    "reply",
+    "directive-handling.shared.ts",
+  ),
   path.join(repoRoot, "src", "channels", "thread-bindings-messages.ts"),
 ];
 
@@ -53,7 +59,9 @@ const channelIds = [
 ];
 
 const channelIdSet = new Set(channelIds);
-const channelSegmentRe = new RegExp(`(^|[._/-])(?:${channelIds.join("|")})([._/-]|$)`);
+const channelSegmentRe = new RegExp(
+  `(^|[._/-])(?:${channelIds.join("|")})([._/-]|$)`,
+);
 const comparisonOperators = new Set([
   ts.SyntaxKind.EqualsEqualsEqualsToken,
   ts.SyntaxKind.ExclamationEqualsEqualsToken,
@@ -67,7 +75,10 @@ function isChannelsPropertyAccess(node) {
   if (ts.isPropertyAccessExpression(node)) {
     return node.name.text === "channels";
   }
-  if (ts.isElementAccessExpression(node) && ts.isStringLiteral(node.argumentExpression)) {
+  if (
+    ts.isElementAccessExpression(node) &&
+    ts.isStringLiteral(node.argumentExpression)
+  ) {
     return node.argumentExpression.text === "channels";
   }
   return false;
@@ -117,9 +128,15 @@ export function findChannelAgnosticBoundaryViolations(
   const checkConfigPaths = options.checkConfigPaths ?? true;
   const checkChannelComparisons = options.checkChannelComparisons ?? true;
   const checkChannelAssignments = options.checkChannelAssignments ?? true;
-  const moduleSpecifierMatcher = options.moduleSpecifierMatcher ?? matchesChannelModuleSpecifier;
+  const moduleSpecifierMatcher =
+    options.moduleSpecifierMatcher ?? matchesChannelModuleSpecifier;
 
-  const sourceFile = ts.createSourceFile(fileName, content, ts.ScriptTarget.Latest, true);
+  const sourceFile = ts.createSourceFile(
+    fileName,
+    content,
+    ts.ScriptTarget.Latest,
+    true,
+  );
   const violations = [];
 
   const visit = (node) => {
@@ -227,7 +244,10 @@ export function findChannelAgnosticBoundaryViolations(
   return violations;
 }
 
-export function findChannelCoreReverseDependencyViolations(content, fileName = "source.ts") {
+export function findChannelCoreReverseDependencyViolations(
+  content,
+  fileName = "source.ts",
+) {
   return findChannelAgnosticBoundaryViolations(content, fileName, {
     checkModuleSpecifiers: true,
     checkConfigPaths: false,
@@ -237,13 +257,25 @@ export function findChannelCoreReverseDependencyViolations(content, fileName = "
   });
 }
 
-export function findAcpUserFacingChannelNameViolations(content, fileName = "source.ts") {
-  const sourceFile = ts.createSourceFile(fileName, content, ts.ScriptTarget.Latest, true);
+export function findAcpUserFacingChannelNameViolations(
+  content,
+  fileName = "source.ts",
+) {
+  const sourceFile = ts.createSourceFile(
+    fileName,
+    content,
+    ts.ScriptTarget.Latest,
+    true,
+  );
   const violations = [];
 
   const visit = (node) => {
     const text = readStringLiteral(node);
-    if (text && userFacingChannelNameRe.test(text) && !isModuleSpecifierStringNode(node)) {
+    if (
+      text &&
+      userFacingChannelNameRe.test(text) &&
+      !isModuleSpecifierStringNode(node)
+    ) {
       violations.push({
         line: toLine(sourceFile, node),
         reason: `user-facing text references channel name (${JSON.stringify(text)})`,
@@ -256,13 +288,25 @@ export function findAcpUserFacingChannelNameViolations(content, fileName = "sour
   return violations;
 }
 
-export function findSystemMarkLiteralViolations(content, fileName = "source.ts") {
-  const sourceFile = ts.createSourceFile(fileName, content, ts.ScriptTarget.Latest, true);
+export function findSystemMarkLiteralViolations(
+  content,
+  fileName = "source.ts",
+) {
+  const sourceFile = ts.createSourceFile(
+    fileName,
+    content,
+    ts.ScriptTarget.Latest,
+    true,
+  );
   const violations = [];
 
   const visit = (node) => {
     const text = readStringLiteral(node);
-    if (text && text.includes(systemMarkLiteral) && !isModuleSpecifierStringNode(node)) {
+    if (
+      text &&
+      text.includes(systemMarkLiteral) &&
+      !isModuleSpecifierStringNode(node)
+    ) {
       violations.push({
         line: toLine(sourceFile, node),
         reason: `hardcoded system mark literal (${JSON.stringify(text)})`,
@@ -279,22 +323,26 @@ const boundaryRuleSets = [
   {
     id: "acp-core",
     sources: acpCoreProtectedSources,
-    scan: (content, fileName) => findChannelAgnosticBoundaryViolations(content, fileName),
+    scan: (content, fileName) =>
+      findChannelAgnosticBoundaryViolations(content, fileName),
   },
   {
     id: "channel-core-reverse-deps",
     sources: channelCoreProtectedSources,
-    scan: (content, fileName) => findChannelCoreReverseDependencyViolations(content, fileName),
+    scan: (content, fileName) =>
+      findChannelCoreReverseDependencyViolations(content, fileName),
   },
   {
     id: "acp-user-facing-text",
     sources: acpUserFacingTextSources,
-    scan: (content, fileName) => findAcpUserFacingChannelNameViolations(content, fileName),
+    scan: (content, fileName) =>
+      findAcpUserFacingChannelNameViolations(content, fileName),
   },
   {
     id: "system-mark-literal-usage",
     sources: systemMarkLiteralGuardSources,
-    scan: (content, fileName) => findSystemMarkLiteralViolations(content, fileName),
+    scan: (content, fileName) =>
+      findSystemMarkLiteralViolations(content, fileName),
   },
 ];
 
@@ -321,7 +369,9 @@ export async function main() {
       }
       const content = await fs.readFile(filePath, "utf8");
       for (const violation of ruleSet.scan(content, relativeFile)) {
-        violations.push(`${ruleSet.id} ${relativeFile}:${violation.line}: ${violation.reason}`);
+        violations.push(
+          `${ruleSet.id} ${relativeFile}:${violation.line}: ${violation.reason}`,
+        );
       }
     }
   }
@@ -330,7 +380,9 @@ export async function main() {
     return;
   }
 
-  console.error("Found channel-specific references in channel-agnostic sources:");
+  console.error(
+    "Found channel-specific references in channel-agnostic sources:",
+  );
   for (const violation of violations) {
     console.error(`- ${violation}`);
   }

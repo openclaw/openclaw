@@ -139,7 +139,9 @@ const formatSchedule = (schedule: CronSchedule) => {
   if (schedule.kind === "every") {
     return `every ${formatDurationHuman(schedule.everyMs)}`;
   }
-  const base = schedule.tz ? `cron ${schedule.expr} @ ${schedule.tz}` : `cron ${schedule.expr}`;
+  const base = schedule.tz
+    ? `cron ${schedule.expr} @ ${schedule.tz}`
+    : `cron ${schedule.expr}`;
   const staggerMs = resolveCronStaggerMs(schedule);
   if (staggerMs <= 0) {
     return `${base} (exact)`;
@@ -190,14 +192,21 @@ export function printCronList(jobs: CronJob[], runtime = defaultRuntime) {
       job.enabled ? formatRelative(job.state.nextRunAtMs, now) : "-",
       CRON_NEXT_PAD,
     );
-    const lastLabel = pad(formatRelative(job.state.lastRunAtMs, now), CRON_LAST_PAD);
+    const lastLabel = pad(
+      formatRelative(job.state.lastRunAtMs, now),
+      CRON_LAST_PAD,
+    );
     const statusRaw = formatStatus(job);
     const statusLabel = pad(statusRaw, CRON_STATUS_PAD);
     const targetLabel = pad(job.sessionTarget ?? "-", CRON_TARGET_PAD);
-    const agentLabel = pad(truncate(job.agentId ?? "-", CRON_AGENT_PAD), CRON_AGENT_PAD);
+    const agentLabel = pad(
+      truncate(job.agentId ?? "-", CRON_AGENT_PAD),
+      CRON_AGENT_PAD,
+    );
     const modelLabel = pad(
       truncate(
-        (job.payload.kind === "agentTurn" ? job.payload.model : undefined) ?? "-",
+        (job.payload.kind === "agentTurn" ? job.payload.model : undefined) ??
+          "-",
         CRON_MODEL_PAD,
       ),
       CRON_MODEL_PAD,

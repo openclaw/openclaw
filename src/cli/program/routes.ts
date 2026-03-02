@@ -1,5 +1,10 @@
 import { defaultRuntime } from "../../runtime.js";
-import { getFlagValue, getPositiveIntFlagValue, getVerboseFlag, hasFlag } from "../argv.js";
+import {
+  getFlagValue,
+  getPositiveIntFlagValue,
+  getVerboseFlag,
+  hasFlag,
+} from "../argv.js";
 
 export type RouteSpec = {
   match: (path: string[]) => boolean;
@@ -41,7 +46,10 @@ const routeStatus: RouteSpec = {
       return false;
     }
     const { statusCommand } = await import("../../commands/status.js");
-    await statusCommand({ json, deep, all, usage, timeoutMs, verbose }, defaultRuntime);
+    await statusCommand(
+      { json, deep, all, usage, timeoutMs, verbose },
+      defaultRuntime,
+    );
     return true;
   },
 };
@@ -66,7 +74,10 @@ const routeSessions: RouteSpec = {
       return false;
     }
     const { sessionsCommand } = await import("../../commands/sessions.js");
-    await sessionsCommand({ json, store, agent, allAgents, active }, defaultRuntime);
+    await sessionsCommand(
+      { json, store, agent, allAgents, active },
+      defaultRuntime,
+    );
     return true;
   },
 };
@@ -183,7 +194,10 @@ const routeModelsList: RouteSpec = {
     const json = hasFlag(argv, "--json");
     const plain = hasFlag(argv, "--plain");
     const { modelsListCommand } = await import("../../commands/models.js");
-    await modelsListCommand({ all, local, provider, json, plain }, defaultRuntime);
+    await modelsListCommand(
+      { all, local, provider, json, plain },
+      defaultRuntime,
+    );
     return true;
   },
 };

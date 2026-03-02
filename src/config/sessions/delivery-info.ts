@@ -18,15 +18,20 @@ export function parseSessionThreadInfo(sessionKey: string | undefined): {
   const markerIndex = Math.max(topicIndex, threadIndex);
   const marker = topicIndex > threadIndex ? ":topic:" : ":thread:";
 
-  const baseSessionKey = markerIndex === -1 ? sessionKey : sessionKey.slice(0, markerIndex);
+  const baseSessionKey =
+    markerIndex === -1 ? sessionKey : sessionKey.slice(0, markerIndex);
   const threadIdRaw =
-    markerIndex === -1 ? undefined : sessionKey.slice(markerIndex + marker.length);
+    markerIndex === -1
+      ? undefined
+      : sessionKey.slice(markerIndex + marker.length);
   const threadId = threadIdRaw?.trim() || undefined;
   return { baseSessionKey, threadId };
 }
 
 export function extractDeliveryInfo(sessionKey: string | undefined): {
-  deliveryContext: { channel?: string; to?: string; accountId?: string } | undefined;
+  deliveryContext:
+    | { channel?: string; to?: string; accountId?: string }
+    | undefined;
   threadId: string | undefined;
 } {
   const { baseSessionKey, threadId } = parseSessionThreadInfo(sessionKey);
@@ -34,7 +39,9 @@ export function extractDeliveryInfo(sessionKey: string | undefined): {
     return { deliveryContext: undefined, threadId };
   }
 
-  let deliveryContext: { channel?: string; to?: string; accountId?: string } | undefined;
+  let deliveryContext:
+    | { channel?: string; to?: string; accountId?: string }
+    | undefined;
   try {
     const cfg = loadConfig();
     const storePath = resolveStorePath(cfg.session?.store);

@@ -76,7 +76,10 @@ type AuditCollector = {
   filesScanned: Set<string>;
 };
 
-function addFinding(collector: AuditCollector, finding: SecretsAuditFinding): void {
+function addFinding(
+  collector: AuditCollector,
+  finding: SecretsAuditFinding,
+): void {
   collector.findings.push(finding);
 }
 
@@ -116,7 +119,10 @@ function parseDotPath(pathname: string): string[] {
   return pathname.split(".").filter(Boolean);
 }
 
-function collectEnvPlaintext(params: { envPath: string; collector: AuditCollector }): void {
+function collectEnvPlaintext(params: {
+  envPath: string;
+  collector: AuditCollector;
+}): void {
   if (!fs.existsSync(params.envPath)) {
     return;
   }
@@ -125,7 +131,9 @@ function collectEnvPlaintext(params: { envPath: string; collector: AuditCollecto
   const raw = fs.readFileSync(params.envPath, "utf8");
   const lines = raw.split(/\r?\n/);
   for (const line of lines) {
-    const match = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
+    const match = line.match(
+      /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/,
+    );
     if (!match) {
       continue;
     }
@@ -206,7 +214,9 @@ function collectConfigSecrets(params: {
     }
   }
 
-  const entries = params.config.skills?.entries as Record<string, { apiKey?: unknown }> | undefined;
+  const entries = params.config.skills?.entries as
+    | Record<string, { apiKey?: unknown }>
+    | undefined;
   if (entries) {
     for (const [entryId, entry] of Object.entries(entries)) {
       const pathLabel = `skills.entries.${entryId}.apiKey`;
@@ -262,7 +272,10 @@ function collectConfigSecrets(params: {
       });
       return;
     }
-    if (isNonEmptyString(value) || (isRecord(value) && Object.keys(value).length > 0)) {
+    if (
+      isNonEmptyString(value) ||
+      (isRecord(value) && Object.keys(value).length > 0)
+    ) {
       addFinding(params.collector, {
         code: "PLAINTEXT_FOUND",
         severity: "warn",
@@ -325,7 +338,9 @@ function collectAuthStoreSecrets(params: {
     const provider = String(profileValue.provider);
     if (profileValue.type === "api_key") {
       const keyRef = coerceSecretRef(profileValue.keyRef, params.defaults);
-      const inlineRef = keyRef ? null : coerceSecretRef(profileValue.key, params.defaults);
+      const inlineRef = keyRef
+        ? null
+        : coerceSecretRef(profileValue.key, params.defaults);
       const ref = keyRef ?? inlineRef;
       if (ref) {
         params.collector.refAssignments.push({
@@ -353,7 +368,9 @@ function collectAuthStoreSecrets(params: {
     }
     if (profileValue.type === "token") {
       const tokenRef = coerceSecretRef(profileValue.tokenRef, params.defaults);
-      const inlineRef = tokenRef ? null : coerceSecretRef(profileValue.token, params.defaults);
+      const inlineRef = tokenRef
+        ? null
+        : coerceSecretRef(profileValue.token, params.defaults);
       const ref = tokenRef ?? inlineRef;
       if (ref) {
         params.collector.refAssignments.push({
@@ -388,7 +405,8 @@ function collectAuthStoreSecrets(params: {
           severity: "info",
           file: params.authStorePath,
           jsonPath: `profiles.${profileId}`,
-          message: "OAuth credentials are present (out of scope for static SecretRef migration).",
+          message:
+            "OAuth credentials are present (out of scope for static SecretRef migration).",
           provider,
           profileId,
         });
@@ -398,7 +416,10 @@ function collectAuthStoreSecrets(params: {
   }
 }
 
-function collectAuthJsonResidue(params: { stateDir: string; collector: AuditCollector }): void {
+function collectAuthJsonResidue(params: {
+  stateDir: string;
+  collector: AuditCollector;
+}): void {
   const agentsRoot = path.join(resolveUserPath(params.stateDir), "agents");
   if (!fs.existsSync(agentsRoot)) {
     return;
@@ -407,7 +428,12 @@ function collectAuthJsonResidue(params: { stateDir: string; collector: AuditColl
     if (!entry.isDirectory()) {
       continue;
     }
-    const authJsonPath = path.join(agentsRoot, entry.name, "agent", "auth.json");
+    const authJsonPath = path.join(
+      agentsRoot,
+      entry.name,
+      "agent",
+      "auth.json",
+    );
     if (!fs.existsSync(authJsonPath)) {
       continue;
     }
@@ -585,12 +611,20 @@ function describeUnknownError(err: unknown): string {
   }
 }
 
-function summarizeFindings(findings: SecretsAuditFinding[]): SecretsAuditReport["summary"] {
+function summarizeFindings(
+  findings: SecretsAuditFinding[],
+): SecretsAuditReport["summary"] {
   return {
-    plaintextCount: findings.filter((entry) => entry.code === "PLAINTEXT_FOUND").length,
-    unresolvedRefCount: findings.filter((entry) => entry.code === "REF_UNRESOLVED").length,
-    shadowedRefCount: findings.filter((entry) => entry.code === "REF_SHADOWED").length,
-    legacyResidueCount: findings.filter((entry) => entry.code === "LEGACY_RESIDUE").length,
+    plaintextCount: findings.filter((entry) => entry.code === "PLAINTEXT_FOUND")
+      .length,
+    unresolvedRefCount: findings.filter(
+      (entry) => entry.code === "REF_UNRESOLVED",
+    ).length,
+    shadowedRefCount: findings.filter((entry) => entry.code === "REF_SHADOWED")
+      .length,
+    legacyResidueCount: findings.filter(
+      (entry) => entry.code === "LEGACY_RESIDUE",
+    ).length,
   };
 }
 
@@ -606,7 +640,9 @@ export async function runSecretsAudit(
     const io = createSecretsConfigIO({ env });
     const snapshot = await io.readConfigFileSnapshot();
     const configPath = resolveUserPath(snapshot.path);
-    const defaults = snapshot.valid ? snapshot.config.secrets?.defaults : undefined;
+    const defaults = snapshot.valid
+      ? snapshot.config.secrets?.defaults
+      : undefined;
 
     const collector: AuditCollector = {
       findings: [],
@@ -645,7 +681,8 @@ export async function runSecretsAudit(
         severity: "error",
         file: configPath,
         jsonPath: "<root>",
-        message: "Config is invalid; cannot validate secret references reliably.",
+        message:
+          "Config is invalid; cannot validate secret references reliably.",
       });
     }
 
@@ -682,7 +719,10 @@ export async function runSecretsAudit(
   }
 }
 
-export function resolveSecretsAuditExitCode(report: SecretsAuditReport, check: boolean): number {
+export function resolveSecretsAuditExitCode(
+  report: SecretsAuditReport,
+  check: boolean,
+): number {
   if (report.summary.unresolvedRefCount > 0) {
     return 2;
   }
@@ -701,7 +741,10 @@ export function applySecretsPlanTarget(
   if (segments.length === 0) {
     throw new Error("Invalid target path.");
   }
-  let cursor: Record<string, unknown> = config as unknown as Record<string, unknown>;
+  let cursor: Record<string, unknown> = config as unknown as Record<
+    string,
+    unknown
+  >;
   for (const segment of segments.slice(0, -1)) {
     const existing = cursor[segment];
     if (!isRecord(existing)) {

@@ -8,7 +8,9 @@ import { formatGatewayChannelsStatusLines } from "./channels/status.js";
 describe("channels command", () => {
   beforeEach(() => {
     setActivePluginRegistry(
-      createTestRegistry([{ pluginId: "signal", source: "test", plugin: signalPlugin }]),
+      createTestRegistry([
+        { pluginId: "signal", source: "test", plugin: signalPlugin },
+      ]),
     );
   });
 

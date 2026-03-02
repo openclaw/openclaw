@@ -1,6 +1,9 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import type { AuthProfileConfig } from "../../config/types.js";
-import { findNormalizedProviderKey, normalizeProviderId } from "../model-selection.js";
+import {
+  findNormalizedProviderKey,
+  normalizeProviderId,
+} from "../model-selection.js";
 import { dedupeProfileIds, listProfilesForProvider } from "./profiles.js";
 import type { AuthProfileIdRepairResult, AuthProfileStore } from "./types.js";
 
@@ -41,9 +44,10 @@ export function suggestOAuthProfileIdForLegacyDefault(params: {
     return null;
   }
 
-  const oauthProfiles = listProfilesForProvider(params.store, providerKey).filter(
-    (id) => params.store.profiles[id]?.type === "oauth",
-  );
+  const oauthProfiles = listProfilesForProvider(
+    params.store,
+    providerKey,
+  ).filter((id) => params.store.profiles[id]?.type === "oauth");
   if (oauthProfiles.length === 0) {
     return null;
   }
@@ -56,14 +60,18 @@ export function suggestOAuthProfileIdForLegacyDefault(params: {
         return false;
       }
       const email = cred.email?.trim();
-      return email === configuredEmail || id === `${providerKey}:${configuredEmail}`;
+      return (
+        email === configuredEmail || id === `${providerKey}:${configuredEmail}`
+      );
     });
     if (byEmail) {
       return byEmail;
     }
   }
 
-  const lastGood = params.store.lastGood?.[providerKey] ?? params.store.lastGood?.[params.provider];
+  const lastGood =
+    params.store.lastGood?.[providerKey] ??
+    params.store.lastGood?.[params.provider];
   if (lastGood && oauthProfiles.includes(lastGood)) {
     return lastGood;
   }
@@ -96,7 +104,10 @@ export function repairOAuthProfileIdMismatch(params: {
   if (legacyCfg.mode !== "oauth") {
     return { config: params.cfg, changes: [], migrated: false };
   }
-  if (normalizeProviderId(legacyCfg.provider) !== normalizeProviderId(params.provider)) {
+  if (
+    normalizeProviderId(legacyCfg.provider) !==
+    normalizeProviderId(params.provider)
+  ) {
     return { config: params.cfg, changes: [], migrated: false };
   }
 
@@ -138,7 +149,9 @@ export function repairOAuthProfileIdMismatch(params: {
     }
     const replaced = existing
       .map((id) => (id === legacyProfileId ? toProfileId : id))
-      .filter((id): id is string => typeof id === "string" && id.trim().length > 0);
+      .filter(
+        (id): id is string => typeof id === "string" && id.trim().length > 0,
+      );
     const deduped = dedupeProfileIds(replaced);
     return { ...order, [resolvedKey]: deduped };
   })();
@@ -152,7 +165,9 @@ export function repairOAuthProfileIdMismatch(params: {
     },
   };
 
-  const changes = [`Auth: migrate ${legacyProfileId} → ${toProfileId} (OAuth profile id)`];
+  const changes = [
+    `Auth: migrate ${legacyProfileId} → ${toProfileId} (OAuth profile id)`,
+  ];
 
   return {
     config: nextCfg,

@@ -1,5 +1,8 @@
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
-import { getHealthSnapshot, type HealthSummary } from "../../commands/health.js";
+import {
+  getHealthSnapshot,
+  type HealthSummary,
+} from "../../commands/health.js";
 import { CONFIG_PATH, STATE_DIR, loadConfig } from "../../config/config.js";
 import { resolveMainSessionKey } from "../../config/sessions.js";
 import { listSystemPresence } from "../../infra/system-presence.js";
@@ -22,7 +25,10 @@ export function buildGatewaySnapshot(): Snapshot {
   const scope = cfg.session?.scope ?? "per-sender";
   const presence = listSystemPresence();
   const uptimeMs = Math.round(process.uptime() * 1000);
-  const auth = resolveGatewayAuth({ authConfig: cfg.gateway?.auth, env: process.env });
+  const auth = resolveGatewayAuth({
+    authConfig: cfg.gateway?.auth,
+    env: process.env,
+  });
   const updateAvailable = getUpdateAvailable() ?? undefined;
   // Health is async; caller should await getHealthSnapshot and replace later if needed.
   const emptyHealth: unknown = {};
@@ -62,7 +68,9 @@ export function getPresenceVersion(): number {
   return presenceVersion;
 }
 
-export function setBroadcastHealthUpdate(fn: ((snap: HealthSummary) => void) | null) {
+export function setBroadcastHealthUpdate(
+  fn: ((snap: HealthSummary) => void) | null,
+) {
   broadcastHealthUpdate = fn;
 }
 

@@ -9,7 +9,10 @@ const graphUploadMockState = vi.hoisted(() => ({
 }));
 
 vi.mock("./graph-upload.js", async () => {
-  const actual = await vi.importActual<typeof import("./graph-upload.js")>("./graph-upload.js");
+  const actual =
+    await vi.importActual<typeof import("./graph-upload.js")>(
+      "./graph-upload.js",
+    );
   return {
     ...actual,
     uploadAndShareOneDrive: graphUploadMockState.uploadAndShareOneDrive,
@@ -65,7 +68,9 @@ const createRecordedSendActivity = (
     sink.push(content);
     attempts += 1;
     if (failFirstWithStatusCode !== undefined && attempts === 1) {
-      throw Object.assign(new Error("send failed"), { statusCode: failFirstWithStatusCode });
+      throw Object.assign(new Error("send failed"), {
+        statusCode: failFirstWithStatusCode,
+      });
     }
     return { id: `id:${content}` };
   };
@@ -85,10 +90,13 @@ describe("msteams messenger", () => {
 
   describe("renderReplyPayloadsToMessages", () => {
     it("filters silent replies", () => {
-      const messages = renderReplyPayloadsToMessages([{ text: SILENT_REPLY_TOKEN }], {
-        textChunkLimit: 4000,
-        tableMode: "code",
-      });
+      const messages = renderReplyPayloadsToMessages(
+        [{ text: SILENT_REPLY_TOKEN }],
+        {
+          textChunkLimit: 4000,
+          tableMode: "code",
+        },
+      );
       expect(messages).toEqual([]);
     });
 
@@ -105,7 +113,10 @@ describe("msteams messenger", () => {
         [{ text: "hi", mediaUrl: "https://example.com/a.png" }],
         { textChunkLimit: 4000, tableMode: "code" },
       );
-      expect(messages).toEqual([{ text: "hi" }, { mediaUrl: "https://example.com/a.png" }]);
+      expect(messages).toEqual([
+        { text: "hi" },
+        { mediaUrl: "https://example.com/a.png" },
+      ]);
     });
 
     it("supports inline media mode", () => {
@@ -113,7 +124,9 @@ describe("msteams messenger", () => {
         [{ text: "hi", mediaUrl: "https://example.com/a.png" }],
         { textChunkLimit: 4000, mediaMode: "inline", tableMode: "code" },
       );
-      expect(messages).toEqual([{ text: "hi", mediaUrl: "https://example.com/a.png" }]);
+      expect(messages).toEqual([
+        { text: "hi", mediaUrl: "https://example.com/a.png" },
+      ]);
     });
 
     it("chunks long text when enabled", () => {
@@ -189,7 +202,9 @@ describe("msteams messenger", () => {
     });
 
     it("preserves parsed mentions when appending OneDrive fallback file links", async () => {
-      const tmpDir = await mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "msteams-mention-"));
+      const tmpDir = await mkdtemp(
+        path.join(resolvePreferredOpenClawTmpDir(), "msteams-mention-"),
+      );
       const localFile = path.join(tmpDir, "note.txt");
       await writeFile(localFile, "hello");
 
@@ -216,14 +231,21 @@ describe("msteams messenger", () => {
             },
           },
           context: ctx,
-          messages: [{ text: "Hello @[John](29:08q2j2o3jc09au90eucae)", mediaUrl: localFile }],
+          messages: [
+            {
+              text: "Hello @[John](29:08q2j2o3jc09au90eucae)",
+              mediaUrl: localFile,
+            },
+          ],
           tokenProvider: {
             getAccessToken: async () => "token",
           },
         });
 
         expect(ids).toEqual(["id:one"]);
-        expect(graphUploadMockState.uploadAndShareOneDrive).toHaveBeenCalledOnce();
+        expect(
+          graphUploadMockState.uploadAndShareOneDrive,
+        ).toHaveBeenCalledOnce();
         expect(sent).toHaveLength(1);
         expect(sent[0]?.text).toContain("Hello <at>John</at>");
         expect(sent[0]?.text).toContain(
@@ -261,7 +283,8 @@ describe("msteams messenger", () => {
         context: ctx,
         messages: [{ text: "one" }],
         retry: { maxAttempts: 2, baseDelayMs: 0, maxDelayMs: 0 },
-        onRetry: (e) => retryEvents.push({ nextAttempt: e.nextAttempt, delayMs: e.delayMs }),
+        onRetry: (e) =>
+          retryEvents.push({ nextAttempt: e.nextAttempt, delayMs: e.delayMs }),
       });
 
       expect(attempts).toEqual(["one", "one"]);
@@ -296,7 +319,9 @@ describe("msteams messenger", () => {
 
       const adapter: MSTeamsAdapter = {
         continueConversation: async (_appId, _reference, logic) => {
-          await logic({ sendActivity: createRecordedSendActivity(attempts, 503) });
+          await logic({
+            sendActivity: createRecordedSendActivity(attempts, 503),
+          });
         },
         process: async () => {},
       };

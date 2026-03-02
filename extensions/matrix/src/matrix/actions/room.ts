@@ -8,7 +8,9 @@ export async function getMatrixMemberInfo(
 ) {
   const { client, stopOnDone } = await resolveActionClient(opts);
   try {
-    const roomId = opts.roomId ? await resolveMatrixRoomId(client, opts.roomId) : undefined;
+    const roomId = opts.roomId
+      ? await resolveMatrixRoomId(client, opts.roomId)
+      : undefined;
     // @vector-im/matrix-bot-sdk uses getUserProfile
     const profile = await client.getUserProfile(userId);
     // Note: @vector-im/matrix-bot-sdk doesn't have getRoom().getMember() like matrix-js-sdk
@@ -31,7 +33,10 @@ export async function getMatrixMemberInfo(
   }
 }
 
-export async function getMatrixRoomInfo(roomId: string, opts: MatrixActionClientOpts = {}) {
+export async function getMatrixRoomInfo(
+  roomId: string,
+  opts: MatrixActionClientOpts = {},
+) {
   const { client, stopOnDone } = await resolveActionClient(opts);
   try {
     const resolvedRoom = await resolveMatrixRoomId(client, roomId);
@@ -42,21 +47,33 @@ export async function getMatrixRoomInfo(roomId: string, opts: MatrixActionClient
     let memberCount: number | null = null;
 
     try {
-      const nameState = await client.getRoomStateEvent(resolvedRoom, "m.room.name", "");
+      const nameState = await client.getRoomStateEvent(
+        resolvedRoom,
+        "m.room.name",
+        "",
+      );
       name = nameState?.name ?? null;
     } catch {
       // ignore
     }
 
     try {
-      const topicState = await client.getRoomStateEvent(resolvedRoom, EventType.RoomTopic, "");
+      const topicState = await client.getRoomStateEvent(
+        resolvedRoom,
+        EventType.RoomTopic,
+        "",
+      );
       topic = topicState?.topic ?? null;
     } catch {
       // ignore
     }
 
     try {
-      const aliasState = await client.getRoomStateEvent(resolvedRoom, "m.room.canonical_alias", "");
+      const aliasState = await client.getRoomStateEvent(
+        resolvedRoom,
+        "m.room.canonical_alias",
+        "",
+      );
       canonicalAlias = aliasState?.alias ?? null;
     } catch {
       // ignore

@@ -33,7 +33,9 @@ function canRunLaunchdIntegration(): boolean {
   return probe.status === 0;
 }
 
-const describeLaunchdIntegration = canRunLaunchdIntegration() ? describe : describe.skip;
+const describeLaunchdIntegration = canRunLaunchdIntegration()
+  ? describe
+  : describe.skip;
 
 async function withTimeout<T>(params: {
   run: () => Promise<T>;
@@ -45,7 +47,10 @@ async function withTimeout<T>(params: {
     return await Promise.race([
       params.run(),
       new Promise<T>((_, reject) => {
-        timer = setTimeout(() => reject(new Error(params.message)), params.timeoutMs);
+        timer = setTimeout(
+          () => reject(new Error(params.message)),
+          params.timeoutMs,
+        );
       }),
     ]);
   } finally {
@@ -92,7 +97,9 @@ describeLaunchdIntegration("launchd integration", () => {
 
   beforeAll(async () => {
     const testId = randomUUID().slice(0, 8);
-    homeDir = await fs.mkdtemp(path.join(os.tmpdir(), `openclaw-launchd-int-${testId}-`));
+    homeDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), `openclaw-launchd-int-${testId}-`),
+    );
     env = {
       HOME: homeDir,
       OPENCLAW_LAUNCHD_LABEL: `ai.openclaw.launchd-int-${testId}`,
@@ -124,7 +131,11 @@ describeLaunchdIntegration("launchd integration", () => {
           await installLaunchAgent({
             env: launchEnv,
             stdout,
-            programArguments: [process.execPath, "-e", "setInterval(() => {}, 1000);"],
+            programArguments: [
+              process.execPath,
+              "-e",
+              "setInterval(() => {}, 1000);",
+            ],
           });
           await waitForRunningRuntime({ env: launchEnv });
         },
@@ -137,7 +148,10 @@ describeLaunchdIntegration("launchd integration", () => {
     }
     const before = await waitForRunningRuntime({ env: launchEnv });
     await restartLaunchAgent({ env: launchEnv, stdout });
-    const after = await waitForRunningRuntime({ env: launchEnv, pidNot: before.pid });
+    const after = await waitForRunningRuntime({
+      env: launchEnv,
+      pidNot: before.pid,
+    });
     expect(after.pid).toBeGreaterThan(1);
     expect(after.pid).not.toBe(before.pid);
     await fs.access(resolveLaunchAgentPlistPath(launchEnv));

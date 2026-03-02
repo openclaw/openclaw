@@ -3,7 +3,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { inspect } from "node:util";
 import { cancel, isCancel } from "@clack/prompts";
-import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../agents/workspace.js";
+import {
+  DEFAULT_AGENT_WORKSPACE_DIR,
+  ensureAgentWorkspace,
+} from "../agents/workspace.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { CONFIG_PATH } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
@@ -24,9 +27,16 @@ import {
   shortenHomePath,
   sleep,
 } from "../utils.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../utils/message-channel.js";
 import { VERSION } from "../version.js";
-import type { NodeManagerChoice, OnboardMode, ResetScope } from "./onboard-types.js";
+import type {
+  NodeManagerChoice,
+  OnboardMode,
+  ResetScope,
+} from "./onboard-types.js";
 
 export function guardCancel<T>(value: T | symbol, runtime: RuntimeEnv): T {
   if (isCancel(value)) {
@@ -59,10 +69,16 @@ export function summarizeExistingConfig(config: OpenClawConfig): string {
     rows.push(shortenHomeInString(`gateway.bind: ${config.gateway.bind}`));
   }
   if (config.gateway?.remote?.url) {
-    rows.push(shortenHomeInString(`gateway.remote.url: ${config.gateway.remote.url}`));
+    rows.push(
+      shortenHomeInString(`gateway.remote.url: ${config.gateway.remote.url}`),
+    );
   }
   if (config.skills?.install?.nodeManager) {
-    rows.push(shortenHomeInString(`skills.nodeManager: ${config.skills.install.nodeManager}`));
+    rows.push(
+      shortenHomeInString(
+        `skills.nodeManager: ${config.skills.install.nodeManager}`,
+      ),
+    );
   }
   return rows.length ? rows.join("\n") : "No key settings detected.";
 }
@@ -84,7 +100,9 @@ export function normalizeGatewayTokenInput(value: unknown): string {
   return trimmed;
 }
 
-export function validateGatewayPasswordInput(value: unknown): string | undefined {
+export function validateGatewayPasswordInput(
+  value: unknown,
+): string | undefined {
   if (typeof value !== "string") {
     return "Required";
   }
@@ -115,7 +133,8 @@ export function applyWizardMetadata(
   cfg: OpenClawConfig,
   params: { command: string; mode: OnboardMode },
 ): OpenClawConfig {
-  const commit = process.env.GIT_COMMIT?.trim() || process.env.GIT_SHA?.trim() || undefined;
+  const commit =
+    process.env.GIT_COMMIT?.trim() || process.env.GIT_SHA?.trim() || undefined;
   return {
     ...cfg,
     wizard: {
@@ -148,7 +167,9 @@ type BrowserOpenCommand = {
 
 export async function resolveBrowserOpenCommand(): Promise<BrowserOpenCommand> {
   const platform = process.platform;
-  const hasDisplay = Boolean(process.env.DISPLAY || process.env.WAYLAND_DISPLAY);
+  const hasDisplay = Boolean(
+    process.env.DISPLAY || process.env.WAYLAND_DISPLAY,
+  );
   const isSsh =
     Boolean(process.env.SSH_CLIENT) ||
     Boolean(process.env.SSH_TTY) ||
@@ -168,7 +189,9 @@ export async function resolveBrowserOpenCommand(): Promise<BrowserOpenCommand> {
 
   if (platform === "darwin") {
     const hasOpen = await detectBinary("open");
-    return hasOpen ? { argv: ["open"], command: "open" } : { argv: null, reason: "missing-open" };
+    return hasOpen
+      ? { argv: ["open"], command: "open" }
+      : { argv: null, reason: "missing-open" };
   }
 
   if (platform === "linux") {
@@ -312,7 +335,10 @@ export function resolveNodeManagerOptions(): Array<{
   ];
 }
 
-export async function moveToTrash(pathname: string, runtime: RuntimeEnv): Promise<void> {
+export async function moveToTrash(
+  pathname: string,
+  runtime: RuntimeEnv,
+): Promise<void> {
   if (!pathname) {
     return;
   }
@@ -325,11 +351,17 @@ export async function moveToTrash(pathname: string, runtime: RuntimeEnv): Promis
     await runCommandWithTimeout(["trash", pathname], { timeoutMs: 5000 });
     runtime.log(`Moved to Trash: ${shortenHomePath(pathname)}`);
   } catch {
-    runtime.log(`Failed to move to Trash (manual delete): ${shortenHomePath(pathname)}`);
+    runtime.log(
+      `Failed to move to Trash (manual delete): ${shortenHomePath(pathname)}`,
+    );
   }
 }
 
-export async function handleReset(scope: ResetScope, workspaceDir: string, runtime: RuntimeEnv) {
+export async function handleReset(
+  scope: ResetScope,
+  workspaceDir: string,
+  runtime: RuntimeEnv,
+) {
   await moveToTrash(CONFIG_PATH, runtime);
   if (scope === "config") {
     return;
@@ -363,7 +395,10 @@ export async function detectBinary(name: string): Promise<boolean> {
     }
   }
 
-  const command = process.platform === "win32" ? ["where", name] : ["/usr/bin/env", "which", name];
+  const command =
+    process.platform === "win32"
+      ? ["where", name]
+      : ["/usr/bin/env", "which", name];
   try {
     const result = await runCommandWithTimeout(command, { timeoutMs: 2000 });
     return result.code === 0 && result.stdout.trim().length > 0;

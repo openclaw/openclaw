@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { createTempHomeHarness, makeReplyConfig } from "./reply.test-harness.js";
+import {
+  createTempHomeHarness,
+  makeReplyConfig,
+} from "./reply.test-harness.js";
 
 const runEmbeddedPiAgentMock = vi.fn();
 
@@ -13,7 +16,8 @@ vi.mock("../agents/pi-embedded.js", () => ({
   abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
   runEmbeddedPiAgent: (params: unknown) => runEmbeddedPiAgentMock(params),
   queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
-  resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
+  resolveEmbeddedSessionLane: (key: string) =>
+    `session:${key.trim() || "main"}`,
   isEmbeddedPiRunActive: vi.fn().mockReturnValue(false),
   isEmbeddedPiRunStreaming: vi.fn().mockReturnValue(false),
 }));
@@ -38,7 +42,9 @@ afterEach(() => {
 });
 
 describe("getReplyFromConfig typing (heartbeat)", () => {
-  async function runReplyFlow(isHeartbeat: boolean): Promise<ReturnType<typeof vi.fn>> {
+  async function runReplyFlow(
+    isHeartbeat: boolean,
+  ): Promise<ReturnType<typeof vi.fn>> {
     const onReplyStart = vi.fn();
     await withTempHome(async (home) => {
       runEmbeddedPiAgentMock.mockResolvedValueOnce({

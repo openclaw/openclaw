@@ -7,7 +7,10 @@ import type { GatewayRequestContext } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
   deliverOutboundPayloads: vi.fn(),
-  appendAssistantMessageToSessionTranscript: vi.fn(async () => ({ ok: true, sessionFile: "x" })),
+  appendAssistantMessageToSessionTranscript: vi.fn(async () => ({
+    ok: true,
+    sessionFile: "x",
+  })),
   recordSessionMetaFromInbound: vi.fn(async () => ({ ok: true })),
   resolveOutboundTarget: vi.fn(() => ({ ok: true, to: "resolved" })),
   resolveMessageChannelSelection: vi.fn(),
@@ -17,8 +20,9 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../config/config.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("../../config/config.js")>("../../config/config.js");
+  const actual = await vi.importActual<typeof import("../../config/config.js")>(
+    "../../config/config.js",
+  );
   return {
     ...actual,
     loadConfig: () => ({}),
@@ -32,7 +36,9 @@ vi.mock("../../channels/plugins/index.js", () => ({
 
 const TEST_AGENT_WORKSPACE = "/tmp/openclaw-test-workspace";
 
-function resolveAgentIdFromSessionKeyForTests(params: { sessionKey?: string }): string {
+function resolveAgentIdFromSessionKeyForTests(params: {
+  sessionKey?: string;
+}): string {
   if (typeof params.sessionKey === "string") {
     const match = params.sessionKey.match(/^agent:([^:]+)/i);
     if (match?.[1]) {
@@ -59,7 +65,8 @@ vi.mock("../../agents/agent-scope.js", () => ({
 }));
 
 vi.mock("../../config/plugin-auto-enable.js", () => ({
-  applyPluginAutoEnable: ({ config }: { config: unknown }) => passthroughPluginAutoEnable(config),
+  applyPluginAutoEnable: ({ config }: { config: unknown }) =>
+    passthroughPluginAutoEnable(config),
 }));
 
 vi.mock("../../plugins/loader.js", () => ({
@@ -79,12 +86,13 @@ vi.mock("../../infra/outbound/deliver.js", () => ({
 }));
 
 vi.mock("../../config/sessions.js", async () => {
-  const actual = await vi.importActual<typeof import("../../config/sessions.js")>(
-    "../../config/sessions.js",
-  );
+  const actual = await vi.importActual<
+    typeof import("../../config/sessions.js")
+  >("../../config/sessions.js");
   return {
     ...actual,
-    appendAssistantMessageToSessionTranscript: mocks.appendAssistantMessageToSessionTranscript,
+    appendAssistantMessageToSessionTranscript:
+      mocks.appendAssistantMessageToSessionTranscript,
     recordSessionMetaFromInbound: mocks.recordSessionMetaFromInbound,
   };
 });
@@ -121,7 +129,9 @@ async function runPoll(params: Record<string, unknown>) {
 }
 
 function mockDeliverySuccess(messageId: string) {
-  mocks.deliverOutboundPayloads.mockResolvedValue([{ messageId, channel: "slack" }]);
+  mocks.deliverOutboundPayloads.mockResolvedValue([
+    { messageId, channel: "slack" },
+  ]);
 }
 
 describe("gateway send mirroring", () => {
@@ -137,7 +147,9 @@ describe("gateway send mirroring", () => {
       configured: ["slack"],
     });
     mocks.sendPoll.mockResolvedValue({ messageId: "poll-1" });
-    mocks.getChannelPlugin.mockReturnValue({ outbound: { sendPoll: mocks.sendPoll } });
+    mocks.getChannelPlugin.mockReturnValue({
+      outbound: { sendPoll: mocks.sendPoll },
+    });
   });
 
   it("accepts media-only sends without message", async () => {
@@ -152,7 +164,13 @@ describe("gateway send mirroring", () => {
 
     expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
       expect.objectContaining({
-        payloads: [{ text: "", mediaUrl: "https://example.com/a.png", mediaUrls: undefined }],
+        payloads: [
+          {
+            text: "",
+            mediaUrl: "https://example.com/a.png",
+            mediaUrls: undefined,
+          },
+        ],
       }),
     );
     expect(respond).toHaveBeenCalledWith(
@@ -227,7 +245,9 @@ describe("gateway send mirroring", () => {
 
   it("returns invalid request when send channel selection is ambiguous", async () => {
     mocks.resolveMessageChannelSelection.mockRejectedValueOnce(
-      new Error("Channel is required when multiple channels are configured: telegram, slack"),
+      new Error(
+        "Channel is required when multiple channels are configured: telegram, slack",
+      ),
     );
 
     const { respond } = await runSend({
@@ -262,7 +282,9 @@ describe("gateway send mirroring", () => {
 
   it("returns invalid request when poll channel selection is ambiguous", async () => {
     mocks.resolveMessageChannelSelection.mockRejectedValueOnce(
-      new Error("Channel is required when multiple channels are configured: telegram, slack"),
+      new Error(
+        "Channel is required when multiple channels are configured: telegram, slack",
+      ),
     );
 
     const { respond } = await runPoll({

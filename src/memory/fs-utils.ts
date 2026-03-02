@@ -1,7 +1,9 @@
 import type { Stats } from "node:fs";
 import fs from "node:fs/promises";
 
-export type RegularFileStatResult = { missing: true } | { missing: false; stat: Stats };
+export type RegularFileStatResult =
+  | { missing: true }
+  | { missing: false; stat: Stats };
 
 export function isFileMissingError(
   err: unknown,
@@ -14,7 +16,9 @@ export function isFileMissingError(
   );
 }
 
-export async function statRegularFile(absPath: string): Promise<RegularFileStatResult> {
+export async function statRegularFile(
+  absPath: string,
+): Promise<RegularFileStatResult> {
   let stat: Stats;
   try {
     stat = await fs.lstat(absPath);

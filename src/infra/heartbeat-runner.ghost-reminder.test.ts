@@ -7,7 +7,10 @@ import {
   setupTelegramHeartbeatPluginRuntimeForTests,
   withTempHeartbeatSandbox,
 } from "./heartbeat-runner.test-utils.js";
-import { enqueueSystemEvent, resetSystemEventsForTest } from "./system-events.js";
+import {
+  enqueueSystemEvent,
+  resetSystemEventsForTest,
+} from "./system-events.js";
 
 // Avoid pulling optional runtime deps during isolated runs.
 vi.mock("jiti", () => ({ createJiti: () => () => ({}) }));
@@ -106,7 +109,9 @@ describe("Ghost reminder bug (issue #13317)", () => {
   }> => {
     return withTempHeartbeatSandbox(
       async ({ tmpDir, storePath }) => {
-        const { sendTelegram, getReplySpy } = createHeartbeatDeps(params.replyText);
+        const { sendTelegram, getReplySpy } = createHeartbeatDeps(
+          params.replyText,
+        );
         const { cfg, sessionKey } = await createConfig({
           tmpDir,
           storePath,
@@ -137,18 +142,21 @@ describe("Ghost reminder bug (issue #13317)", () => {
   };
 
   it("does not use CRON_EVENT_PROMPT when only a HEARTBEAT_OK event is present", async () => {
-    const { result, sendTelegram, calledCtx, replyCallCount } = await runHeartbeatCase({
-      tmpPrefix: "openclaw-ghost-",
-      replyText: "Heartbeat check-in",
-      reason: "cron:test-job",
-      enqueue: (sessionKey) => {
-        enqueueSystemEvent("HEARTBEAT_OK", { sessionKey });
-      },
-    });
+    const { result, sendTelegram, calledCtx, replyCallCount } =
+      await runHeartbeatCase({
+        tmpPrefix: "openclaw-ghost-",
+        replyText: "Heartbeat check-in",
+        reason: "cron:test-job",
+        enqueue: (sessionKey) => {
+          enqueueSystemEvent("HEARTBEAT_OK", { sessionKey });
+        },
+      });
     expect(result.status).toBe("ran");
     expect(replyCallCount).toBe(1);
     expect(calledCtx?.Provider).toBe("heartbeat");
-    expect(calledCtx?.Body).not.toContain("scheduled reminder has been triggered");
+    expect(calledCtx?.Body).not.toContain(
+      "scheduled reminder has been triggered",
+    );
     expect(calledCtx?.Body).not.toContain("relay this reminder");
     expect(sendTelegram).toHaveBeenCalled();
   });
@@ -157,7 +165,9 @@ describe("Ghost reminder bug (issue #13317)", () => {
     const { result, sendTelegram, calledCtx } = await runCronReminderCase(
       "openclaw-cron-",
       (sessionKey) => {
-        enqueueSystemEvent("Reminder: Check Base Scout results", { sessionKey });
+        enqueueSystemEvent("Reminder: Check Base Scout results", {
+          sessionKey,
+        });
       },
     );
     expect(result.status).toBe("ran");
@@ -170,7 +180,9 @@ describe("Ghost reminder bug (issue #13317)", () => {
       "openclaw-cron-mixed-",
       (sessionKey) => {
         enqueueSystemEvent("HEARTBEAT_OK", { sessionKey });
-        enqueueSystemEvent("Reminder: Check Base Scout results", { sessionKey });
+        enqueueSystemEvent("Reminder: Check Base Scout results", {
+          sessionKey,
+        });
       },
     );
     expect(result.status).toBe("ran");
@@ -179,17 +191,18 @@ describe("Ghost reminder bug (issue #13317)", () => {
   });
 
   it("uses CRON_EVENT_PROMPT for tagged cron events on interval wake", async () => {
-    const { result, sendTelegram, calledCtx, replyCallCount } = await runHeartbeatCase({
-      tmpPrefix: "openclaw-cron-interval-",
-      replyText: "Relay this cron update now",
-      reason: "interval",
-      enqueue: (sessionKey) => {
-        enqueueSystemEvent("Cron: QMD maintenance completed", {
-          sessionKey,
-          contextKey: "cron:qmd-maintenance",
-        });
-      },
-    });
+    const { result, sendTelegram, calledCtx, replyCallCount } =
+      await runHeartbeatCase({
+        tmpPrefix: "openclaw-cron-interval-",
+        replyText: "Relay this cron update now",
+        reason: "interval",
+        enqueue: (sessionKey) => {
+          enqueueSystemEvent("Cron: QMD maintenance completed", {
+            sessionKey,
+            contextKey: "cron:qmd-maintenance",
+          });
+        },
+      });
     expect(result.status).toBe("ran");
     expect(replyCallCount).toBe(1);
     expect(calledCtx?.Provider).toBe("cron-event");

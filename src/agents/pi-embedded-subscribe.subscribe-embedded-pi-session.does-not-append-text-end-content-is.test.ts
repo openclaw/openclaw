@@ -8,7 +8,9 @@ import {
 describe("subscribeEmbeddedPiSession", () => {
   function setupTextEndSubscription() {
     const onBlockReply = vi.fn();
-    const { emit, subscription } = createTextEndBlockReplyHarness({ onBlockReply });
+    const { emit, subscription } = createTextEndBlockReplyHarness({
+      onBlockReply,
+    });
 
     const emitDelta = (delta: string) => {
       emitAssistantTextDelta({ emit, delta });
@@ -41,7 +43,8 @@ describe("subscribeEmbeddedPiSession", () => {
       expected: "Hello world",
     },
   ])("$name", ({ delta, content, expected }) => {
-    const { onBlockReply, subscription, emitDelta, emitTextEnd } = setupTextEndSubscription();
+    const { onBlockReply, subscription, emitDelta, emitTextEnd } =
+      setupTextEndSubscription();
 
     emitDelta(delta);
     emitTextEnd(content);

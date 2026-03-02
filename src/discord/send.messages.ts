@@ -33,7 +33,10 @@ export async function readMessagesDiscord(
   if (query.around) {
     params.around = query.around;
   }
-  return (await rest.get(Routes.channelMessages(channelId), params)) as APIMessage[];
+  return (await rest.get(
+    Routes.channelMessages(channelId),
+    params,
+  )) as APIMessage[];
 }
 
 export async function fetchMessageDiscord(
@@ -42,7 +45,9 @@ export async function fetchMessageDiscord(
   opts: DiscordReactOpts = {},
 ): Promise<APIMessage> {
   const rest = resolveDiscordRest(opts);
-  return (await rest.get(Routes.channelMessage(channelId, messageId))) as APIMessage;
+  return (await rest.get(
+    Routes.channelMessage(channelId, messageId),
+  )) as APIMessage;
 }
 
 export async function editMessageDiscord(
@@ -113,16 +118,22 @@ export async function createThreadDiscord(
     // Only detect channel kind for route-less thread creation.
     // If this lookup fails, keep prior behavior and let Discord validate.
     try {
-      const channel = (await rest.get(Routes.channel(channelId))) as APIChannel | null | undefined;
+      const channel = (await rest.get(Routes.channel(channelId))) as
+        | APIChannel
+        | null
+        | undefined;
       channelType = channel?.type;
     } catch {
       channelType = undefined;
     }
   }
   const isForumLike =
-    channelType === ChannelType.GuildForum || channelType === ChannelType.GuildMedia;
+    channelType === ChannelType.GuildForum ||
+    channelType === ChannelType.GuildMedia;
   if (isForumLike) {
-    const starterContent = payload.content?.trim() ? payload.content : payload.name;
+    const starterContent = payload.content?.trim()
+      ? payload.content
+      : payload.name;
     body.message = { content: starterContent };
     if (payload.appliedTags?.length) {
       body.applied_tags = payload.appliedTags;
@@ -150,7 +161,10 @@ export async function createThreadDiscord(
   return thread;
 }
 
-export async function listThreadsDiscord(payload: DiscordThreadList, opts: DiscordReactOpts = {}) {
+export async function listThreadsDiscord(
+  payload: DiscordThreadList,
+  opts: DiscordReactOpts = {},
+) {
   const rest = resolveDiscordRest(opts);
   if (payload.includeArchived) {
     if (!payload.channelId) {
@@ -163,7 +177,10 @@ export async function listThreadsDiscord(payload: DiscordThreadList, opts: Disco
     if (payload.limit) {
       params.limit = payload.limit;
     }
-    return await rest.get(Routes.channelThreads(payload.channelId, "public"), params);
+    return await rest.get(
+      Routes.channelThreads(payload.channelId, "public"),
+      params,
+    );
   }
   return await rest.get(Routes.guildActiveThreads(payload.guildId));
 }
@@ -189,5 +206,7 @@ export async function searchMessagesDiscord(
     const limit = Math.min(Math.max(Math.floor(query.limit), 1), 25);
     params.set("limit", String(limit));
   }
-  return await rest.get(`/guilds/${query.guildId}/messages/search?${params.toString()}`);
+  return await rest.get(
+    `/guilds/${query.guildId}/messages/search?${params.toString()}`,
+  );
 }

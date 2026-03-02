@@ -11,7 +11,10 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { updateSessionStore } from "../../config/sessions.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
-import { resolveModelDirectiveSelection, type ModelDirectiveSelection } from "./model-selection.js";
+import {
+  resolveModelDirectiveSelection,
+  type ModelDirectiveSelection,
+} from "./model-selection.js";
 
 type ResetModelResult = {
   selection?: ModelDirectiveSelection;
@@ -48,7 +51,8 @@ function buildSelectionFromExplicit(params: {
     return undefined;
   }
   const isDefault =
-    resolved.ref.provider === params.defaultProvider && resolved.ref.model === params.defaultModel;
+    resolved.ref.provider === params.defaultProvider &&
+    resolved.ref.model === params.defaultModel;
   return {
     provider: resolved.ref.provider,
     model: resolved.ref.model,
@@ -64,7 +68,8 @@ function applySelectionToSession(params: {
   sessionKey?: string;
   storePath?: string;
 }) {
-  const { selection, sessionEntry, sessionStore, sessionKey, storePath } = params;
+  const { selection, sessionEntry, sessionStore, sessionKey, storePath } =
+    params;
   if (!sessionEntry || !sessionStore || !sessionKey) {
     return;
   }
@@ -169,7 +174,8 @@ export async function applyResetModelOverride(params: {
 
   if (!selection) {
     const resolved = resolveSelection(first);
-    const allowFuzzy = providers.has(normalizeProviderId(first)) || first.trim().length >= 6;
+    const allowFuzzy =
+      providers.has(normalizeProviderId(first)) || first.trim().length >= 6;
     if (allowFuzzy) {
       selection = resolved.selection;
       if (selection) {

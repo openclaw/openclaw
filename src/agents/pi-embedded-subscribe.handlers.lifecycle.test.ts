@@ -19,7 +19,8 @@ function createContext(
       onAgentEvent: overrides?.onAgentEvent,
     },
     state: {
-      lastAssistant: lastAssistant as EmbeddedPiSubscribeContext["state"]["lastAssistant"],
+      lastAssistant:
+        lastAssistant as EmbeddedPiSubscribeContext["state"]["lastAssistant"],
       pendingCompactionRetry: 0,
       blockState: {
         thinking: true,
@@ -71,6 +72,8 @@ describe("handleAgentEnd", () => {
     handleAgentEnd(ctx);
 
     expect(ctx.log.warn).not.toHaveBeenCalled();
-    expect(ctx.log.debug).toHaveBeenCalledWith("embedded run agent end: runId=run-1 isError=false");
+    expect(ctx.log.debug).toHaveBeenCalledWith(
+      "embedded run agent end: runId=run-1 isError=false",
+    );
   });
 });

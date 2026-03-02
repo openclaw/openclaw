@@ -8,7 +8,9 @@ import {
 type EvaluatePolicyParams = Parameters<typeof evaluateSystemRunPolicy>[0];
 type EvaluatePolicyDecision = ReturnType<typeof evaluateSystemRunPolicy>;
 
-const buildPolicyParams = (overrides: Partial<EvaluatePolicyParams>): EvaluatePolicyParams => {
+const buildPolicyParams = (
+  overrides: Partial<EvaluatePolicyParams>,
+): EvaluatePolicyParams => {
   return {
     security: "allowlist",
     ask: "off",
@@ -53,7 +55,9 @@ describe("resolveExecApprovalDecision", () => {
 
 describe("formatSystemRunAllowlistMissMessage", () => {
   it("returns legacy allowlist miss message by default", () => {
-    expect(formatSystemRunAllowlistMissMessage()).toBe("SYSTEM_RUN_DENIED: allowlist miss");
+    expect(formatSystemRunAllowlistMissMessage()).toBe(
+      "SYSTEM_RUN_DENIED: allowlist miss",
+    );
   });
 
   it("adds shell-wrapper guidance when wrappers are blocked", () => {
@@ -107,7 +111,9 @@ describe("evaluateSystemRunPolicy", () => {
 
   it("denies allowlist misses without approval", () => {
     const denied = expectDeniedDecision(
-      evaluateSystemRunPolicy(buildPolicyParams({ analysisOk: false, allowlistSatisfied: false })),
+      evaluateSystemRunPolicy(
+        buildPolicyParams({ analysisOk: false, allowlistSatisfied: false }),
+      ),
     );
     expect(denied.eventReason).toBe("allowlist-miss");
     expect(denied.errorMessage).toBe("SYSTEM_RUN_DENIED: allowlist miss");
@@ -115,7 +121,9 @@ describe("evaluateSystemRunPolicy", () => {
 
   it("treats shell wrappers as allowlist misses", () => {
     const denied = expectDeniedDecision(
-      evaluateSystemRunPolicy(buildPolicyParams({ shellWrapperInvocation: true })),
+      evaluateSystemRunPolicy(
+        buildPolicyParams({ shellWrapperInvocation: true }),
+      ),
     );
     expect(denied.shellWrapperBlocked).toBe(true);
     expect(denied.errorMessage).toContain("shell wrappers like sh/bash/zsh -c");
@@ -124,12 +132,18 @@ describe("evaluateSystemRunPolicy", () => {
   it("keeps Windows-specific guidance for cmd.exe wrappers", () => {
     const denied = expectDeniedDecision(
       evaluateSystemRunPolicy(
-        buildPolicyParams({ isWindows: true, cmdInvocation: true, shellWrapperInvocation: true }),
+        buildPolicyParams({
+          isWindows: true,
+          cmdInvocation: true,
+          shellWrapperInvocation: true,
+        }),
       ),
     );
     expect(denied.shellWrapperBlocked).toBe(true);
     expect(denied.windowsShellWrapperBlocked).toBe(true);
-    expect(denied.errorMessage).toContain("Windows shell wrappers like cmd.exe /c");
+    expect(denied.errorMessage).toContain(
+      "Windows shell wrappers like cmd.exe /c",
+    );
   });
 
   it("allows execution when policy checks pass", () => {

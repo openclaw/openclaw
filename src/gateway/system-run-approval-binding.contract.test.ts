@@ -34,7 +34,10 @@ type FixtureCase = {
   };
   expected: {
     ok: boolean;
-    code?: "APPROVAL_REQUEST_MISMATCH" | "APPROVAL_ENV_BINDING_MISSING" | "APPROVAL_ENV_MISMATCH";
+    code?:
+      | "APPROVAL_REQUEST_MISMATCH"
+      | "APPROVAL_ENV_BINDING_MISSING"
+      | "APPROVAL_ENV_MISMATCH";
   };
 };
 

@@ -16,7 +16,9 @@ export type AgentTaskCompletionInternalEvent = {
 
 export type AgentInternalEvent = AgentTaskCompletionInternalEvent;
 
-function formatTaskCompletionEvent(event: AgentTaskCompletionInternalEvent): string {
+function formatTaskCompletionEvent(
+  event: AgentTaskCompletionInternalEvent,
+): string {
   const lines = [
     "[Internal task completion event]",
     `source: ${event.source}`,
@@ -36,7 +38,9 @@ function formatTaskCompletionEvent(event: AgentTaskCompletionInternalEvent): str
   return lines.join("\n");
 }
 
-export function formatAgentInternalEventsForPrompt(events?: AgentInternalEvent[]): string {
+export function formatAgentInternalEventsForPrompt(
+  events?: AgentInternalEvent[],
+): string {
   if (!events || events.length === 0) {
     return "";
   }

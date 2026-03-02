@@ -30,7 +30,8 @@ function parseMetaName(raw?: unknown): { subsystem?: string; module?: string } {
   try {
     const parsed = JSON.parse(raw) as Record<string, unknown>;
     return {
-      subsystem: typeof parsed.subsystem === "string" ? parsed.subsystem : undefined,
+      subsystem:
+        typeof parsed.subsystem === "string" ? parsed.subsystem : undefined,
       module: typeof parsed.module === "string" ? parsed.module : undefined,
     };
   } catch {
@@ -43,7 +44,8 @@ export function parseLogLine(raw: string): ParsedLogLine | null {
     const parsed = JSON.parse(raw) as Record<string, unknown>;
     const meta = parsed._meta as Record<string, unknown> | undefined;
     const nameMeta = parseMetaName(meta?.name);
-    const levelRaw = typeof meta?.logLevelName === "string" ? meta.logLevelName : undefined;
+    const levelRaw =
+      typeof meta?.logLevelName === "string" ? meta.logLevelName : undefined;
     return {
       time:
         typeof parsed.time === "string"

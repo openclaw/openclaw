@@ -84,15 +84,19 @@ describe("applyAuthChoiceHuggingface", () => {
     });
 
     expect(result).not.toBeNull();
-    expect(result?.config.auth?.profiles?.["huggingface:default"]).toMatchObject({
+    expect(
+      result?.config.auth?.profiles?.["huggingface:default"],
+    ).toMatchObject({
       provider: "huggingface",
       mode: "api_key",
     });
-    expect(resolveAgentModelPrimaryValue(result?.config.agents?.defaults?.model)).toMatch(
-      /^huggingface\/.+/,
-    );
+    expect(
+      resolveAgentModelPrimaryValue(result?.config.agents?.defaults?.model),
+    ).toMatch(/^huggingface\/.+/);
     expect(text).toHaveBeenCalledWith(
-      expect.objectContaining({ message: expect.stringContaining("Hugging Face") }),
+      expect.objectContaining({
+        message: expect.stringContaining("Hugging Face"),
+      }),
     );
     expect(select).toHaveBeenCalledWith(
       expect.objectContaining({ message: "Default Hugging Face model" }),
@@ -104,7 +108,8 @@ describe("applyAuthChoiceHuggingface", () => {
 
   it.each([
     {
-      caseName: "does not prompt to reuse env token when opts.token already provided",
+      caseName:
+        "does not prompt to reuse env token when opts.token already provided",
       tokenProvider: "huggingface",
       token: "hf-opts-token",
       envToken: "hf-env-token",
@@ -160,7 +165,9 @@ describe("applyAuthChoiceHuggingface", () => {
     const text = vi.fn().mockResolvedValue("hf-test-token");
     const select: WizardPrompter["select"] = vi.fn(async (params) => {
       const options = (params.options ?? []) as Array<{ value: string }>;
-      const cheapest = options.find((option) => option.value.endsWith(":cheapest"));
+      const cheapest = options.find((option) =>
+        option.value.endsWith(":cheapest"),
+      );
       return (cheapest?.value ?? options[0]?.value ?? "") as never;
     });
     const note: WizardPrompter["note"] = vi.fn(async () => {});
@@ -176,9 +183,11 @@ describe("applyAuthChoiceHuggingface", () => {
     });
 
     expect(result).not.toBeNull();
-    expect(String(resolveAgentModelPrimaryValue(result?.config.agents?.defaults?.model))).toContain(
-      ":cheapest",
-    );
+    expect(
+      String(
+        resolveAgentModelPrimaryValue(result?.config.agents?.defaults?.model),
+      ),
+    ).toContain(":cheapest");
     expect(note).toHaveBeenCalledWith(
       "Provider locked — router will choose backend by cost or speed.",
       "Hugging Face",

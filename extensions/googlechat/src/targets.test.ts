@@ -8,13 +8,21 @@ import {
 describe("normalizeGoogleChatTarget", () => {
   it("normalizes provider prefixes", () => {
     expect(normalizeGoogleChatTarget("googlechat:users/123")).toBe("users/123");
-    expect(normalizeGoogleChatTarget("google-chat:spaces/AAA")).toBe("spaces/AAA");
-    expect(normalizeGoogleChatTarget("gchat:user:User@Example.com")).toBe("users/user@example.com");
+    expect(normalizeGoogleChatTarget("google-chat:spaces/AAA")).toBe(
+      "spaces/AAA",
+    );
+    expect(normalizeGoogleChatTarget("gchat:user:User@Example.com")).toBe(
+      "users/user@example.com",
+    );
   });
 
   it("normalizes email targets to users/<email>", () => {
-    expect(normalizeGoogleChatTarget("User@Example.com")).toBe("users/user@example.com");
-    expect(normalizeGoogleChatTarget("users/User@Example.com")).toBe("users/user@example.com");
+    expect(normalizeGoogleChatTarget("User@Example.com")).toBe(
+      "users/user@example.com",
+    );
+    expect(normalizeGoogleChatTarget("users/User@Example.com")).toBe(
+      "users/user@example.com",
+    );
   });
 
   it("preserves space targets", () => {

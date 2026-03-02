@@ -8,7 +8,8 @@ import { VIEWER_ASSET_PREFIX, getServedViewerAsset } from "./viewer-assets.js";
 
 const DEFAULT_BROWSER_IDLE_MS = 30_000;
 const SHARED_BROWSER_KEY = "__default__";
-const IMAGE_SIZE_LIMIT_ERROR = "Diff frame did not render within image size limits.";
+const IMAGE_SIZE_LIMIT_ERROR =
+  "Diff frame did not render within image size limits.";
 const PDF_REFERENCE_PAGE_HEIGHT_PX = 1_056;
 const MAX_PDF_PAGES = 50;
 
@@ -111,15 +112,22 @@ export class PlaywrightDiffScreenshotter implements DiffScreenshotter {
             body: asset.body,
           });
         });
-        await page.setContent(injectBaseHref(params.html), { waitUntil: "load" });
+        await page.setContent(injectBaseHref(params.html), {
+          waitUntil: "load",
+        });
         await page.waitForFunction(
           () => {
-            if (document.documentElement.dataset.openclawDiffsReady === "true") {
+            if (
+              document.documentElement.dataset.openclawDiffsReady === "true"
+            ) {
               return true;
             }
-            return [...document.querySelectorAll("[data-openclaw-diff-host]")].every((element) => {
+            return [
+              ...document.querySelectorAll("[data-openclaw-diff-host]"),
+            ].every((element) => {
               return (
-                element instanceof HTMLElement && element.shadowRoot?.querySelector("[data-diffs]")
+                element instanceof HTMLElement &&
+                element.shadowRoot?.querySelector("[data-diffs]")
               );
             });
           },
@@ -147,7 +155,9 @@ export class PlaywrightDiffScreenshotter implements DiffScreenshotter {
         const isPdf = params.image.format === "pdf";
         const padding = isPdf ? 0 : 20;
         const clipWidth = Math.ceil(initialBox.width + padding * 2);
-        const clipHeight = Math.ceil(Math.max(initialBox.height + padding * 2, 320));
+        const clipHeight = Math.ceil(
+          Math.max(initialBox.height + padding * 2, 320),
+        );
         await page.setViewportSize({
           width: Math.max(clipWidth + padding, 900),
           height: Math.max(clipHeight + padding, 700),
@@ -182,8 +192,13 @@ export class PlaywrightDiffScreenshotter implements DiffScreenshotter {
           const pdfWidth = Math.max(Math.ceil(pdfBox.width), 1);
           const pdfHeight = Math.max(Math.ceil(pdfBox.height), 1);
           const estimatedPixels = pdfWidth * pdfHeight;
-          const estimatedPages = Math.ceil(pdfHeight / PDF_REFERENCE_PAGE_HEIGHT_PX);
-          if (estimatedPixels > params.image.maxPixels || estimatedPages > MAX_PDF_PAGES) {
+          const estimatedPages = Math.ceil(
+            pdfHeight / PDF_REFERENCE_PAGE_HEIGHT_PX,
+          );
+          if (
+            estimatedPixels > params.image.maxPixels ||
+            estimatedPages > MAX_PDF_PAGES
+          ) {
             throw new Error(IMAGE_SIZE_LIMIT_ERROR);
           }
 
@@ -221,7 +236,9 @@ export class PlaywrightDiffScreenshotter implements DiffScreenshotter {
 
         if (estimatedPixels > params.image.maxPixels) {
           if (currentScale > 1) {
-            const maxScaleForPixels = Math.sqrt(params.image.maxPixels / (cssWidth * cssHeight));
+            const maxScaleForPixels = Math.sqrt(
+              params.image.maxPixels / (cssWidth * cssHeight),
+            );
             const reducedScale = Math.max(
               1,
               Math.round(Math.min(currentScale, maxScaleForPixels) * 100) / 100,
@@ -277,7 +294,9 @@ function injectBaseHref(html: string): string {
   return html.replace("<head>", '<head><base href="http://127.0.0.1/" />');
 }
 
-async function resolveBrowserExecutablePath(config: OpenClawConfig): Promise<string | undefined> {
+async function resolveBrowserExecutablePath(
+  config: OpenClawConfig,
+): Promise<string | undefined> {
   const cacheKey = JSON.stringify({
     configPath: config.browser?.executablePath?.trim() || "",
     env: [
@@ -292,12 +311,14 @@ async function resolveBrowserExecutablePath(config: OpenClawConfig): Promise<str
     return await executablePathCache.valuePromise;
   }
 
-  const valuePromise = resolveBrowserExecutablePathUncached(config).catch((error) => {
-    if (executablePathCache?.valuePromise === valuePromise) {
-      executablePathCache = null;
-    }
-    throw error;
-  });
+  const valuePromise = resolveBrowserExecutablePathUncached(config).catch(
+    (error) => {
+      if (executablePathCache?.valuePromise === valuePromise) {
+        executablePathCache = null;
+      }
+      throw error;
+    },
+  );
   executablePathCache = {
     key: cacheKey,
     valuePromise,
@@ -402,7 +423,10 @@ async function acquireSharedBrowser(params: {
   };
 }
 
-function scheduleIdleBrowserClose(state: SharedBrowserState, idleMs: number): void {
+function scheduleIdleBrowserClose(
+  state: SharedBrowserState,
+  idleMs: number,
+): void {
   clearIdleTimer(state);
   state.idleTimer = setTimeout(() => {
     if (sharedBrowserState === state && state.users === 0) {
@@ -426,7 +450,8 @@ async function closeSharedBrowser(): Promise<void> {
   }
   sharedBrowserState = null;
   clearIdleTimer(state);
-  const browser = state.browser ?? (await state.browserPromise.catch(() => null));
+  const browser =
+    state.browser ?? (await state.browserPromise.catch(() => null));
   await browser?.close().catch(() => {});
 }
 
@@ -478,15 +503,40 @@ function commonExecutablePathsForPlatform(): string[] {
   if (process.platform === "win32") {
     const localAppData = process.env.LOCALAPPDATA ?? "";
     const programFiles = process.env.ProgramFiles ?? "C:\\Program Files";
-    const programFilesX86 = process.env["ProgramFiles(x86)"] ?? "C:\\Program Files (x86)";
+    const programFilesX86 =
+      process.env["ProgramFiles(x86)"] ?? "C:\\Program Files (x86)";
     return [
       path.join(localAppData, "Google", "Chrome", "Application", "chrome.exe"),
       path.join(programFiles, "Google", "Chrome", "Application", "chrome.exe"),
-      path.join(programFilesX86, "Google", "Chrome", "Application", "chrome.exe"),
+      path.join(
+        programFilesX86,
+        "Google",
+        "Chrome",
+        "Application",
+        "chrome.exe",
+      ),
       path.join(programFiles, "Microsoft", "Edge", "Application", "msedge.exe"),
-      path.join(programFilesX86, "Microsoft", "Edge", "Application", "msedge.exe"),
-      path.join(programFiles, "BraveSoftware", "Brave-Browser", "Application", "brave.exe"),
-      path.join(programFilesX86, "BraveSoftware", "Brave-Browser", "Application", "brave.exe"),
+      path.join(
+        programFilesX86,
+        "Microsoft",
+        "Edge",
+        "Application",
+        "msedge.exe",
+      ),
+      path.join(
+        programFiles,
+        "BraveSoftware",
+        "Brave-Browser",
+        "Application",
+        "brave.exe",
+      ),
+      path.join(
+        programFilesX86,
+        "BraveSoftware",
+        "Brave-Browser",
+        "Application",
+        "brave.exe",
+      ),
     ];
   }
 
@@ -501,7 +551,9 @@ function commonExecutablePathsForPlatform(): string[] {
   ];
 }
 
-async function findExecutableInPath(command: string): Promise<string | undefined> {
+async function findExecutableInPath(
+  command: string,
+): Promise<string | undefined> {
   const pathValue = process.env.PATH;
   if (!pathValue) {
     return undefined;
@@ -520,7 +572,10 @@ async function findExecutableInPath(command: string): Promise<string | undefined
   return undefined;
 }
 
-async function assertExecutable(candidate: string, label: string): Promise<void> {
+async function assertExecutable(
+  candidate: string,
+  label: string,
+): Promise<void> {
   if (!(await isExecutable(candidate))) {
     throw new Error(`${label} not found or not executable: ${candidate}`);
   }

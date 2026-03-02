@@ -17,7 +17,8 @@ export function ensurePiCompactionReserveTokens(params: {
   settingsManager: PiSettingsManagerLike;
   minReserveTokens?: number;
 }): { didOverride: boolean; reserveTokens: number } {
-  const minReserveTokens = params.minReserveTokens ?? DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR;
+  const minReserveTokens =
+    params.minReserveTokens ?? DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR;
   const current = params.settingsManager.getCompactionReserveTokens();
 
   if (current >= minReserveTokens) {
@@ -31,7 +32,9 @@ export function ensurePiCompactionReserveTokens(params: {
   return { didOverride: true, reserveTokens: minReserveTokens };
 }
 
-export function resolveCompactionReserveTokensFloor(cfg?: OpenClawConfig): number {
+export function resolveCompactionReserveTokensFloor(
+  cfg?: OpenClawConfig,
+): number {
   const raw = cfg?.agents?.defaults?.compaction?.reserveTokensFloor;
   if (typeof raw === "number" && Number.isFinite(raw) && raw >= 0) {
     return Math.floor(raw);
@@ -60,19 +63,26 @@ export function applyPiCompactionSettingsFromConfig(params: {
   didOverride: boolean;
   compaction: { reserveTokens: number; keepRecentTokens: number };
 } {
-  const currentReserveTokens = params.settingsManager.getCompactionReserveTokens();
-  const currentKeepRecentTokens = params.settingsManager.getCompactionKeepRecentTokens();
+  const currentReserveTokens =
+    params.settingsManager.getCompactionReserveTokens();
+  const currentKeepRecentTokens =
+    params.settingsManager.getCompactionKeepRecentTokens();
   const compactionCfg = params.cfg?.agents?.defaults?.compaction;
 
-  const configuredReserveTokens = toNonNegativeInt(compactionCfg?.reserveTokens);
-  const configuredKeepRecentTokens = toPositiveInt(compactionCfg?.keepRecentTokens);
+  const configuredReserveTokens = toNonNegativeInt(
+    compactionCfg?.reserveTokens,
+  );
+  const configuredKeepRecentTokens = toPositiveInt(
+    compactionCfg?.keepRecentTokens,
+  );
   const reserveTokensFloor = resolveCompactionReserveTokensFloor(params.cfg);
 
   const targetReserveTokens = Math.max(
     configuredReserveTokens ?? currentReserveTokens,
     reserveTokensFloor,
   );
-  const targetKeepRecentTokens = configuredKeepRecentTokens ?? currentKeepRecentTokens;
+  const targetKeepRecentTokens =
+    configuredKeepRecentTokens ?? currentKeepRecentTokens;
 
   const overrides: { reserveTokens?: number; keepRecentTokens?: number } = {};
   if (targetReserveTokens !== currentReserveTokens) {

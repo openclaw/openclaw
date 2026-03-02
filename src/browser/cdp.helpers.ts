@@ -1,8 +1,14 @@
 import WebSocket from "ws";
 import { isLoopbackHost } from "../gateway/net.js";
 import { rawDataToString } from "../infra/ws.js";
-import { getDirectAgentForCdp, withNoProxyForCdpUrl } from "./cdp-proxy-bypass.js";
-import { CDP_HTTP_REQUEST_TIMEOUT_MS, CDP_WS_HANDSHAKE_TIMEOUT_MS } from "./cdp-timeouts.js";
+import {
+  getDirectAgentForCdp,
+  withNoProxyForCdpUrl,
+} from "./cdp-proxy-bypass.js";
+import {
+  CDP_HTTP_REQUEST_TIMEOUT_MS,
+  CDP_WS_HANDSHAKE_TIMEOUT_MS,
+} from "./cdp-timeouts.js";
 import { getChromeExtensionRelayAuthHeaders } from "./extension-relay.js";
 
 export { isLoopbackHost };
@@ -24,7 +30,10 @@ export type CdpSendFn = (
   sessionId?: string,
 ) => Promise<unknown>;
 
-export function getHeadersWithAuth(url: string, headers: Record<string, string> = {}) {
+export function getHeadersWithAuth(
+  url: string,
+  headers: Record<string, string> = {},
+) {
   const relayHeaders = getChromeExtensionRelayAuthHeaders(url);
   const mergedHeaders = { ...relayHeaders, ...headers };
   try {
@@ -36,7 +45,9 @@ export function getHeadersWithAuth(url: string, headers: Record<string, string> 
       return mergedHeaders;
     }
     if (parsed.username || parsed.password) {
-      const auth = Buffer.from(`${parsed.username}:${parsed.password}`).toString("base64");
+      const auth = Buffer.from(
+        `${parsed.username}:${parsed.password}`,
+      ).toString("base64");
       return { ...mergedHeaders, Authorization: `Basic ${auth}` };
     }
   } catch {
@@ -131,7 +142,10 @@ export async function fetchCdpChecked(
   const ctrl = new AbortController();
   const t = setTimeout(ctrl.abort.bind(ctrl), timeoutMs);
   try {
-    const headers = getHeadersWithAuth(url, (init?.headers as Record<string, string>) || {});
+    const headers = getHeadersWithAuth(
+      url,
+      (init?.headers as Record<string, string>) || {},
+    );
     const res = await withNoProxyForCdpUrl(url, () =>
       fetch(url, { ...init, headers, signal: ctrl.signal }),
     );
@@ -158,7 +172,8 @@ export function openCdpWebSocket(
 ): WebSocket {
   const headers = getHeadersWithAuth(wsUrl, opts?.headers ?? {});
   const handshakeTimeoutMs =
-    typeof opts?.handshakeTimeoutMs === "number" && Number.isFinite(opts.handshakeTimeoutMs)
+    typeof opts?.handshakeTimeoutMs === "number" &&
+    Number.isFinite(opts.handshakeTimeoutMs)
       ? Math.max(1, Math.floor(opts.handshakeTimeoutMs))
       : CDP_WS_HANDSHAKE_TIMEOUT_MS;
   const agent = getDirectAgentForCdp(wsUrl);

@@ -54,7 +54,10 @@ describe("restoreEnvVarRefs", () => {
     const incoming = { apiKey: "sk-ant-api03-real-key", newField: "hello" };
     const parsed = { apiKey: "${ANTHROPIC_API_KEY}" };
     const result = restoreEnvVarRefs(incoming, parsed, env);
-    expect(result).toEqual({ apiKey: "${ANTHROPIC_API_KEY}", newField: "hello" });
+    expect(result).toEqual({
+      apiKey: "${ANTHROPIC_API_KEY}",
+      newField: "hello",
+    });
   });
 
   it("handles non-env-var strings (no restoration needed)", () => {
@@ -115,7 +118,9 @@ describe("restoreEnvVarRefs", () => {
     // At read time, MY_VAR was "original-value" and resolved ${MY_VAR} → "original-value"
     // Then config.env or external mutation changed MY_VAR to "mutated-value"
     // Caller is writing back "original-value" (the value they got from the read)
-    const mutatedEnv = { MY_VAR: "mutated-value" } as unknown as NodeJS.ProcessEnv;
+    const mutatedEnv = {
+      MY_VAR: "mutated-value",
+    } as unknown as NodeJS.ProcessEnv;
     const incoming = { key: "original-value" };
     const parsed = { key: "${MY_VAR}" };
 
@@ -126,7 +131,9 @@ describe("restoreEnvVarRefs", () => {
   });
 
   it("correctly restores when env var value hasn't changed", () => {
-    const stableEnv = { MY_VAR: "stable-value" } as unknown as NodeJS.ProcessEnv;
+    const stableEnv = {
+      MY_VAR: "stable-value",
+    } as unknown as NodeJS.ProcessEnv;
     const incoming = { key: "stable-value" };
     const parsed = { key: "${MY_VAR}" };
 

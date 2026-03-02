@@ -18,7 +18,11 @@ import type {
  * Editorial design: Clean hierarchy with accent bar, generous spacing,
  * and subtle background zones for visual separation.
  */
-export function createInfoCard(title: string, body: string, footer?: string): FlexBubble {
+export function createInfoCard(
+  title: string,
+  body: string,
+  footer?: string,
+): FlexBubble {
   const bubble: FlexBubble = {
     type: "bubble",
     size: "mega",
@@ -195,7 +199,15 @@ export function createImageCard(
   title: string,
   body?: string,
   options?: {
-    aspectRatio?: "1:1" | "1.51:1" | "1.91:1" | "4:3" | "16:9" | "20:13" | "2:1" | "3:1";
+    aspectRatio?:
+      | "1:1"
+      | "1.51:1"
+      | "1.91:1"
+      | "4:3"
+      | "16:9"
+      | "20:13"
+      | "2:1"
+      | "3:1";
     aspectMode?: "cover" | "fit";
     action?: Action;
   },
@@ -249,7 +261,15 @@ export function createActionCard(
   actions: CardAction[],
   options?: {
     imageUrl?: string;
-    aspectRatio?: "1:1" | "1.51:1" | "1.91:1" | "4:3" | "16:9" | "20:13" | "2:1" | "3:1";
+    aspectRatio?:
+      | "1:1"
+      | "1.51:1"
+      | "1.91:1"
+      | "4:3"
+      | "16:9"
+      | "20:13"
+      | "2:1"
+      | "3:1";
   },
 ): FlexBubble {
   const bubble: FlexBubble = {

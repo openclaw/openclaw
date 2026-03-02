@@ -17,7 +17,9 @@ describe("irc policy", () => {
       target: "#ops",
     });
     expect(direct.allowed).toBe(true);
-    expect(resolveIrcRequireMention({ groupConfig: direct.groupConfig })).toBe(false);
+    expect(resolveIrcRequireMention({ groupConfig: direct.groupConfig })).toBe(
+      false,
+    );
 
     const wildcard = resolveIrcGroupMatch({
       groups: {
@@ -26,7 +28,9 @@ describe("irc policy", () => {
       target: "#random",
     });
     expect(wildcard.allowed).toBe(true);
-    expect(resolveIrcRequireMention({ wildcardConfig: wildcard.wildcardConfig })).toBe(true);
+    expect(
+      resolveIrcRequireMention({ wildcardConfig: wildcard.wildcardConfig }),
+    ).toBe(true);
   });
 
   it("enforces allowlist by default in groups", () => {

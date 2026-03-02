@@ -6,7 +6,13 @@ import { shortenHomePath } from "../../utils.js";
 import { shouldMigrateStateFromPath } from "../argv.js";
 import { formatCliCommand } from "../command-format.js";
 
-const ALLOWED_INVALID_COMMANDS = new Set(["doctor", "logs", "health", "help", "status"]);
+const ALLOWED_INVALID_COMMANDS = new Set([
+  "doctor",
+  "logs",
+  "health",
+  "help",
+  "status",
+]);
 const ALLOWED_INVALID_GATEWAY_SUBCOMMANDS = new Set([
   "status",
   "probe",
@@ -20,15 +26,18 @@ const ALLOWED_INVALID_GATEWAY_SUBCOMMANDS = new Set([
   "restart",
 ]);
 let didRunDoctorConfigFlow = false;
-let configSnapshotPromise: Promise<Awaited<ReturnType<typeof readConfigFileSnapshot>>> | null =
-  null;
+let configSnapshotPromise: Promise<
+  Awaited<ReturnType<typeof readConfigFileSnapshot>>
+> | null = null;
 
 function resetConfigGuardStateForTests() {
   didRunDoctorConfigFlow = false;
   configSnapshotPromise = null;
 }
 
-function formatConfigIssues(issues: Array<{ path: string; message: string }>): string[] {
+function formatConfigIssues(
+  issues: Array<{ path: string; message: string }>,
+): string[] {
   return issues.map((issue) => `- ${issue.path || "<root>"}: ${issue.message}`);
 }
 
@@ -59,7 +68,8 @@ export async function ensureConfigReady(params: {
     } else {
       const originalStdoutWrite = process.stdout.write.bind(process.stdout);
       const originalSuppressNotes = process.env.OPENCLAW_SUPPRESS_NOTES;
-      process.stdout.write = (() => true) as unknown as typeof process.stdout.write;
+      process.stdout.write = (() =>
+        true) as unknown as typeof process.stdout.write;
       process.env.OPENCLAW_SUPPRESS_NOTES = "1";
       try {
         await runDoctorConfigFlow();
@@ -83,10 +93,15 @@ export async function ensureConfigReady(params: {
         subcommandName &&
         ALLOWED_INVALID_GATEWAY_SUBCOMMANDS.has(subcommandName))
     : false;
-  const issues = snapshot.exists && !snapshot.valid ? formatConfigIssues(snapshot.issues) : [];
+  const issues =
+    snapshot.exists && !snapshot.valid
+      ? formatConfigIssues(snapshot.issues)
+      : [];
   const legacyIssues =
     snapshot.legacyIssues.length > 0
-      ? snapshot.legacyIssues.map((issue) => `- ${issue.path}: ${issue.message}`)
+      ? snapshot.legacyIssues.map(
+          (issue) => `- ${issue.path}: ${issue.message}`,
+        )
       : [];
 
   const invalid = snapshot.exists && !snapshot.valid;
@@ -101,14 +116,18 @@ export async function ensureConfigReady(params: {
   const commandText = (value: string) => colorize(rich, theme.command, value);
 
   params.runtime.error(heading("Config invalid"));
-  params.runtime.error(`${muted("File:")} ${muted(shortenHomePath(snapshot.path))}`);
+  params.runtime.error(
+    `${muted("File:")} ${muted(shortenHomePath(snapshot.path))}`,
+  );
   if (issues.length > 0) {
     params.runtime.error(muted("Problem:"));
     params.runtime.error(issues.map((issue) => `  ${error(issue)}`).join("\n"));
   }
   if (legacyIssues.length > 0) {
     params.runtime.error(muted("Legacy config keys detected:"));
-    params.runtime.error(legacyIssues.map((issue) => `  ${error(issue)}`).join("\n"));
+    params.runtime.error(
+      legacyIssues.map((issue) => `  ${error(issue)}`).join("\n"),
+    );
   }
   params.runtime.error("");
   params.runtime.error(

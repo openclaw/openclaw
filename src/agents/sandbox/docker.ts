@@ -164,10 +164,21 @@ export function execDockerRaw(
 import { formatCliCommand } from "../../cli/command-format.js";
 import { defaultRuntime } from "../../runtime.js";
 import { computeSandboxConfigHash } from "./config-hash.js";
-import { DEFAULT_SANDBOX_IMAGE, SANDBOX_AGENT_WORKSPACE_MOUNT } from "./constants.js";
+import {
+  DEFAULT_SANDBOX_IMAGE,
+  SANDBOX_AGENT_WORKSPACE_MOUNT,
+} from "./constants.js";
 import { readRegistry, updateRegistry } from "./registry.js";
-import { resolveSandboxAgentId, resolveSandboxScopeKey, slugifySessionKey } from "./shared.js";
-import type { SandboxConfig, SandboxDockerConfig, SandboxWorkspaceAccess } from "./types.js";
+import {
+  resolveSandboxAgentId,
+  resolveSandboxScopeKey,
+  slugifySessionKey,
+} from "./shared.js";
+import type {
+  SandboxConfig,
+  SandboxDockerConfig,
+  SandboxWorkspaceAccess,
+} from "./types.js";
 import { validateSandboxSecurity } from "./validate-sandbox-security.js";
 
 const log = createSubsystemLogger("docker");
@@ -208,7 +219,12 @@ export async function readDockerContainerEnvVar(
   envVar: string,
 ): Promise<string | null> {
   const result = await execDocker(
-    ["inspect", "-f", "{{range .Config.Env}}{{println .}}{{end}}", containerName],
+    [
+      "inspect",
+      "-f",
+      "{{range .Config.Env}}{{println .}}{{end}}",
+      containerName,
+    ],
     { allowFailure: true },
   );
   if (result.code !== 0) {
@@ -266,9 +282,12 @@ export async function ensureDockerImage(image: string) {
 }
 
 export async function dockerContainerState(name: string) {
-  const result = await execDocker(["inspect", "-f", "{{.State.Running}}", name], {
-    allowFailure: true,
-  });
+  const result = await execDocker(
+    ["inspect", "-f", "{{.State.Running}}", name],
+    {
+      allowFailure: true,
+    },
+  );
   if (result.code !== 0) {
     return { exists: false, running: false };
   }
@@ -297,8 +316,10 @@ function formatUlimitValue(
     const raw = String(value).trim();
     return raw ? `${name}=${raw}` : null;
   }
-  const soft = typeof value.soft === "number" ? Math.max(0, value.soft) : undefined;
-  const hard = typeof value.hard === "number" ? Math.max(0, value.hard) : undefined;
+  const soft =
+    typeof value.soft === "number" ? Math.max(0, value.soft) : undefined;
+  const hard =
+    typeof value.hard === "number" ? Math.max(0, value.hard) : undefined;
   if (soft === undefined && hard === undefined) {
     return null;
   }
@@ -366,10 +387,14 @@ export function buildSandboxCreateArgs(params: {
   }
   const envSanitization = sanitizeEnvVars(params.cfg.env ?? {});
   if (envSanitization.blocked.length > 0) {
-    log.warn(`Blocked sensitive environment variables: ${envSanitization.blocked.join(", ")}`);
+    log.warn(
+      `Blocked sensitive environment variables: ${envSanitization.blocked.join(", ")}`,
+    );
   }
   if (envSanitization.warnings.length > 0) {
-    log.warn(`Suspicious environment variables: ${envSanitization.warnings.join(", ")}`);
+    log.warn(
+      `Suspicious environment variables: ${envSanitization.warnings.join(", ")}`,
+    );
   }
   for (const [key, value] of Object.entries(envSanitization.allowed)) {
     args.push("--env", `${key}=${value}`);
@@ -453,9 +478,14 @@ async function createSandboxContainer(params: {
   });
   args.push("--workdir", cfg.workdir);
   const mainMountSuffix =
-    params.workspaceAccess === "ro" && workspaceDir === params.agentWorkspaceDir ? ":ro" : "";
+    params.workspaceAccess === "ro" && workspaceDir === params.agentWorkspaceDir
+      ? ":ro"
+      : "";
   args.push("-v", `${workspaceDir}:${cfg.workdir}${mainMountSuffix}`);
-  if (params.workspaceAccess !== "none" && workspaceDir !== params.agentWorkspaceDir) {
+  if (
+    params.workspaceAccess !== "none" &&
+    workspaceDir !== params.agentWorkspaceDir
+  ) {
     const agentMountSuffix = params.workspaceAccess === "ro" ? ":ro" : "";
     args.push(
       "-v",
@@ -473,13 +503,20 @@ async function createSandboxContainer(params: {
   }
 }
 
-async function readContainerConfigHash(containerName: string): Promise<string | null> {
+async function readContainerConfigHash(
+  containerName: string,
+): Promise<string | null> {
   return await readDockerContainerLabel(containerName, "openclaw.configHash");
 }
 
-function formatSandboxRecreateHint(params: { scope: SandboxConfig["scope"]; sessionKey: string }) {
+function formatSandboxRecreateHint(params: {
+  scope: SandboxConfig["scope"];
+  sessionKey: string;
+}) {
   if (params.scope === "session") {
-    return formatCliCommand(`openclaw sandbox recreate --session ${params.sessionKey}`);
+    return formatCliCommand(
+      `openclaw sandbox recreate --session ${params.sessionKey}`,
+    );
   }
   if (params.scope === "agent") {
     const agentId = resolveSandboxAgentId(params.sessionKey) ?? "main";
@@ -495,7 +532,8 @@ export async function ensureSandboxContainer(params: {
   cfg: SandboxConfig;
 }) {
   const scopeKey = resolveSandboxScopeKey(params.cfg.scope, params.sessionKey);
-  const slug = params.cfg.scope === "shared" ? "shared" : slugifySessionKey(scopeKey);
+  const slug =
+    params.cfg.scope === "shared" ? "shared" : slugifySessionKey(scopeKey);
   const name = `${params.cfg.docker.containerPrefix}${slug}`;
   const containerName = name.slice(0, 63);
   const expectedHash = computeSandboxConfigHash({
@@ -518,7 +556,9 @@ export async function ensureSandboxContainer(params: {
     | undefined;
   if (hasContainer) {
     const registry = await readRegistry();
-    registryEntry = registry.entries.find((entry) => entry.containerName === containerName);
+    registryEntry = registry.entries.find(
+      (entry) => entry.containerName === containerName,
+    );
     currentHash = await readContainerConfigHash(containerName);
     if (!currentHash) {
       currentHash = registryEntry?.configHash ?? null;
@@ -528,9 +568,13 @@ export async function ensureSandboxContainer(params: {
       const lastUsedAtMs = registryEntry?.lastUsedAtMs;
       const isHot =
         running &&
-        (typeof lastUsedAtMs !== "number" || now - lastUsedAtMs < HOT_CONTAINER_WINDOW_MS);
+        (typeof lastUsedAtMs !== "number" ||
+          now - lastUsedAtMs < HOT_CONTAINER_WINDOW_MS);
       if (isHot) {
-        const hint = formatSandboxRecreateHint({ scope: params.cfg.scope, sessionKey: scopeKey });
+        const hint = formatSandboxRecreateHint({
+          scope: params.cfg.scope,
+          sessionKey: scopeKey,
+        });
         defaultRuntime.log(
           `Sandbox config changed for ${containerName} (recently used). Recreate to apply: ${hint}`,
         );
@@ -560,7 +604,8 @@ export async function ensureSandboxContainer(params: {
     createdAtMs: now,
     lastUsedAtMs: now,
     image: params.cfg.docker.image,
-    configHash: hashMismatch && running ? (currentHash ?? undefined) : expectedHash,
+    configHash:
+      hashMismatch && running ? (currentHash ?? undefined) : expectedHash,
   });
   return containerName;
 }

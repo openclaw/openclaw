@@ -1,7 +1,10 @@
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import { evaluateEntryRequirementsForCurrentPlatform } from "../shared/entry-status.js";
-import type { RequirementConfigCheck, Requirements } from "../shared/requirements.js";
+import type {
+  RequirementConfigCheck,
+  Requirements,
+} from "../shared/requirements.js";
 import { CONFIG_DIR } from "../utils.js";
 import {
   hasBinary,
@@ -78,7 +81,9 @@ function selectPreferredInstallSpec(
   const brewAvailable = hasBinary("brew");
 
   // Table-driven preference chain; first match wins.
-  const pickers: Array<() => { spec: SkillInstallSpec; index: number } | undefined> = [
+  const pickers: Array<
+    () => { spec: SkillInstallSpec; index: number } | undefined
+  > = [
     () => (prefs.preferBrew && brewAvailable ? brewSpec : undefined),
     () => uvSpec,
     () => nodeSpec,
@@ -127,7 +132,10 @@ function normalizeInstallOptions(
     return [];
   }
 
-  const toOption = (spec: SkillInstallSpec, index: number): SkillInstallOption => {
+  const toOption = (
+    spec: SkillInstallSpec,
+    index: number,
+  ): SkillInstallOption => {
     const id = (spec.id ?? `${spec.kind}-${index}`).trim();
     const bins = spec.bins ?? [];
     let label = (spec.label ?? "").trim();
@@ -185,21 +193,28 @@ function buildSkillStatus(
       skillConfig?.env?.[envName] ||
       (skillConfig?.apiKey && entry.metadata?.primaryEnv === envName),
     );
-  const isConfigSatisfied = (pathStr: string) => isConfigPathTruthy(config, pathStr);
+  const isConfigSatisfied = (pathStr: string) =>
+    isConfigPathTruthy(config, pathStr);
   const bundled =
     bundledNames && bundledNames.size > 0
       ? bundledNames.has(entry.skill.name)
       : entry.skill.source === "openclaw-bundled";
 
-  const { emoji, homepage, required, missing, requirementsSatisfied, configChecks } =
-    evaluateEntryRequirementsForCurrentPlatform({
-      always,
-      entry,
-      hasLocalBin: hasBinary,
-      remote: eligibility?.remote,
-      isEnvSatisfied,
-      isConfigSatisfied,
-    });
+  const {
+    emoji,
+    homepage,
+    required,
+    missing,
+    requirementsSatisfied,
+    configChecks,
+  } = evaluateEntryRequirementsForCurrentPlatform({
+    always,
+    entry,
+    hasLocalBin: hasBinary,
+    remote: eligibility?.remote,
+    isEnvSatisfied,
+    isConfigSatisfied,
+  });
   const eligible = !disabled && !blockedByAllowlist && requirementsSatisfied;
 
   return {
@@ -220,7 +235,10 @@ function buildSkillStatus(
     requirements: required,
     missing,
     configChecks,
-    install: normalizeInstallOptions(entry, prefs ?? resolveSkillsInstallPreferences(config)),
+    install: normalizeInstallOptions(
+      entry,
+      prefs ?? resolveSkillsInstallPreferences(config),
+    ),
   };
 }
 
@@ -233,7 +251,8 @@ export function buildWorkspaceSkillStatus(
     eligibility?: SkillEligibilityContext;
   },
 ): SkillStatusReport {
-  const managedSkillsDir = opts?.managedSkillsDir ?? path.join(CONFIG_DIR, "skills");
+  const managedSkillsDir =
+    opts?.managedSkillsDir ?? path.join(CONFIG_DIR, "skills");
   const bundledContext = resolveBundledSkillsContext();
   const skillEntries =
     opts?.entries ??
@@ -247,7 +266,13 @@ export function buildWorkspaceSkillStatus(
     workspaceDir,
     managedSkillsDir,
     skills: skillEntries.map((entry) =>
-      buildSkillStatus(entry, opts?.config, prefs, opts?.eligibility, bundledContext.names),
+      buildSkillStatus(
+        entry,
+        opts?.config,
+        prefs,
+        opts?.eligibility,
+        bundledContext.names,
+      ),
     ),
   };
 }

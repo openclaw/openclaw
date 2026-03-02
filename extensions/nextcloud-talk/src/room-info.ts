@@ -43,7 +43,9 @@ function coerceRoomType(value: unknown): number | undefined {
   return undefined;
 }
 
-function resolveRoomKindFromType(type: number | undefined): "direct" | "group" | undefined {
+function resolveRoomKindFromType(
+  type: number | undefined,
+): "direct" | "group" | undefined {
   if (!type) {
     return undefined;
   }
@@ -86,7 +88,9 @@ export async function resolveNextcloudTalkRoomKind(params: {
   }
 
   const url = `${baseUrl}/ocs/v2.php/apps/spreed/api/v4/room/${roomToken}`;
-  const auth = Buffer.from(`${apiUser}:${apiPassword}`, "utf-8").toString("base64");
+  const auth = Buffer.from(`${apiUser}:${apiPassword}`, "utf-8").toString(
+    "base64",
+  );
 
   try {
     const response = await fetch(url, {
@@ -103,7 +107,9 @@ export async function resolveNextcloudTalkRoomKind(params: {
         fetchedAt: Date.now(),
         error: `status:${response.status}`,
       });
-      runtime?.log?.(`nextcloud-talk: room lookup failed (${response.status}) token=${roomToken}`);
+      runtime?.log?.(
+        `nextcloud-talk: room lookup failed (${response.status}) token=${roomToken}`,
+      );
       return undefined;
     }
 

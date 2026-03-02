@@ -10,6 +10,7 @@ export function extractToolSend(
   if (!to) {
     return null;
   }
-  const accountId = typeof args.accountId === "string" ? args.accountId.trim() : undefined;
+  const accountId =
+    typeof args.accountId === "string" ? args.accountId.trim() : undefined;
   return { to, accountId };
 }

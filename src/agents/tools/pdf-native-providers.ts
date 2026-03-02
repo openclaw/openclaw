@@ -59,7 +59,10 @@ export async function anthropicAnalyzePdf(params: {
   }
   content.push({ type: "text", text: params.prompt });
 
-  const baseUrl = (params.baseUrl ?? "https://api.anthropic.com").replace(/\/+$/, "");
+  const baseUrl = (params.baseUrl ?? "https://api.anthropic.com").replace(
+    /\/+$/,
+    "",
+  );
   const res = await fetch(`${baseUrl}/v1/messages`, {
     method: "POST",
     headers: {
@@ -108,7 +111,9 @@ export async function anthropicAnalyzePdf(params: {
 // Google Gemini – native PDF via generateContent API
 // ---------------------------------------------------------------------------
 
-type GeminiPart = { inline_data: { mime_type: string; data: string } } | { text: string };
+type GeminiPart =
+  | { inline_data: { mime_type: string; data: string } }
+  | { text: string };
 
 type GeminiCandidate = {
   content?: { parts?: Array<{ text?: string }> };
@@ -137,10 +142,9 @@ export async function geminiAnalyzePdf(params: {
   }
   parts.push({ text: params.prompt });
 
-  const baseUrl = (params.baseUrl ?? "https://generativelanguage.googleapis.com").replace(
-    /\/+$/,
-    "",
-  );
+  const baseUrl = (
+    params.baseUrl ?? "https://generativelanguage.googleapis.com"
+  ).replace(/\/+$/, "");
   const url = `${baseUrl}/v1beta/models/${encodeURIComponent(params.modelId)}:generateContent?key=${encodeURIComponent(apiKey)}`;
 
   const res = await fetch(url, {
@@ -168,7 +172,9 @@ export async function geminiAnalyzePdf(params: {
     throw new Error("Gemini PDF returned no candidates.");
   }
 
-  const textParts = candidates[0].content?.parts?.filter((p) => typeof p.text === "string") ?? [];
+  const textParts =
+    candidates[0].content?.parts?.filter((p) => typeof p.text === "string") ??
+    [];
   const text = textParts.map((p) => p.text!).join("");
 
   if (!text.trim()) {

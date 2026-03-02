@@ -26,7 +26,9 @@ export function loadGatewayPlugins(params: {
     coreGatewayHandlers: params.coreGatewayHandlers,
   });
   const pluginMethods = Object.keys(pluginRegistry.gatewayHandlers);
-  const gatewayMethods = Array.from(new Set([...params.baseMethods, ...pluginMethods]));
+  const gatewayMethods = Array.from(
+    new Set([...params.baseMethods, ...pluginMethods]),
+  );
   if (pluginRegistry.diagnostics.length > 0) {
     for (const diag of pluginRegistry.diagnostics) {
       const details = [

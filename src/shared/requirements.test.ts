@@ -43,12 +43,17 @@ describe("requirements helpers", () => {
         remotePlatforms: ["darwin"],
       }),
     ).toEqual([]);
-    expect(resolveMissingOs({ required: ["darwin"], localPlatform: "linux" })).toEqual(["darwin"]);
+    expect(
+      resolveMissingOs({ required: ["darwin"], localPlatform: "linux" }),
+    ).toEqual(["darwin"]);
   });
 
   it("resolveMissingEnv uses predicate", () => {
     expect(
-      resolveMissingEnv({ required: ["A", "B"], isSatisfied: (name) => name === "B" }),
+      resolveMissingEnv({
+        required: ["A", "B"],
+        isSatisfied: (name) => name === "B",
+      }),
     ).toEqual(["A"]);
   });
 
@@ -65,7 +70,12 @@ describe("requirements helpers", () => {
     const res = evaluateRequirementsFromMetadata({
       always: false,
       metadata: {
-        requires: { bins: ["a"], anyBins: ["b"], env: ["E"], config: ["cfg.value"] },
+        requires: {
+          bins: ["a"],
+          anyBins: ["b"],
+          env: ["E"],
+          config: ["cfg.value"],
+        },
         os: ["darwin"],
       },
       hasLocalBin: (bin) => bin === "a",

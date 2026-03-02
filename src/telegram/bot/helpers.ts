@@ -1,5 +1,8 @@
 import type { Chat, Message, MessageOrigin, User } from "@grammyjs/types";
-import { formatLocationText, type NormalizedLocation } from "../../channels/location.js";
+import {
+  formatLocationText,
+  type NormalizedLocation,
+} from "../../channels/location.js";
 import { resolveTelegramPreviewStreamMode } from "../../config/discord-preview-streaming.js";
 import type {
   TelegramDirectConfig,
@@ -8,7 +11,11 @@ import type {
 } from "../../config/types.js";
 import { readChannelAllowFromStore } from "../../pairing/pairing-store.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
-import { firstDefined, normalizeAllowFrom, type NormalizedAllowFrom } from "../bot-access.js";
+import {
+  firstDefined,
+  normalizeAllowFrom,
+  type NormalizedAllowFrom,
+} from "../bot-access.js";
 import type { TelegramStreamMode } from "./types.js";
 
 const TELEGRAM_GENERAL_TOPIC_ID = 1;
@@ -49,20 +56,28 @@ export async function resolveTelegramGroupAllowFromContext(params: {
     isForum: params.isForum,
     messageThreadId: params.messageThreadId,
   });
-  const resolvedThreadId = threadSpec.scope === "forum" ? threadSpec.id : undefined;
+  const resolvedThreadId =
+    threadSpec.scope === "forum" ? threadSpec.id : undefined;
   const dmThreadId = threadSpec.scope === "dm" ? threadSpec.id : undefined;
   const threadIdForConfig = resolvedThreadId ?? dmThreadId;
-  const storeAllowFrom = await readChannelAllowFromStore("telegram", process.env, accountId).catch(
-    () => [],
-  );
+  const storeAllowFrom = await readChannelAllowFromStore(
+    "telegram",
+    process.env,
+    accountId,
+  ).catch(() => []);
   const { groupConfig, topicConfig } = params.resolveTelegramGroupConfig(
     params.chatId,
     threadIdForConfig,
   );
-  const groupAllowOverride = firstDefined(topicConfig?.allowFrom, groupConfig?.allowFrom);
+  const groupAllowOverride = firstDefined(
+    topicConfig?.allowFrom,
+    groupConfig?.allowFrom,
+  );
   // Group sender access must remain explicit (groupAllowFrom/per-group allowFrom only).
   // DM pairing store entries are not a group authorization source.
-  const effectiveGroupAllow = normalizeAllowFrom(groupAllowOverride ?? params.groupAllowFrom);
+  const effectiveGroupAllow = normalizeAllowFrom(
+    groupAllowOverride ?? params.groupAllowFrom,
+  );
   const hasGroupAllowOverride = typeof groupAllowOverride !== "undefined";
   return {
     resolvedThreadId,
@@ -171,11 +186,19 @@ export function resolveTelegramStreamMode(telegramCfg?: {
   return resolveTelegramPreviewStreamMode(telegramCfg);
 }
 
-export function buildTelegramGroupPeerId(chatId: number | string, messageThreadId?: number) {
-  return messageThreadId != null ? `${chatId}:topic:${messageThreadId}` : String(chatId);
+export function buildTelegramGroupPeerId(
+  chatId: number | string,
+  messageThreadId?: number,
+) {
+  return messageThreadId != null
+    ? `${chatId}:topic:${messageThreadId}`
+    : String(chatId);
 }
 
-export function buildTelegramGroupFrom(chatId: number | string, messageThreadId?: number) {
+export function buildTelegramGroupFrom(
+  chatId: number | string,
+  messageThreadId?: number,
+) {
   return `telegram:group:${buildTelegramGroupPeerId(chatId, messageThreadId)}`;
 }
 
@@ -199,14 +222,25 @@ export function buildTelegramParentPeer(params: {
 
 export function buildSenderName(msg: Message) {
   const name =
-    [msg.from?.first_name, msg.from?.last_name].filter(Boolean).join(" ").trim() ||
-    msg.from?.username;
+    [msg.from?.first_name, msg.from?.last_name]
+      .filter(Boolean)
+      .join(" ")
+      .trim() || msg.from?.username;
   return name || undefined;
 }
 
 export function resolveTelegramMediaPlaceholder(
   msg:
-    | Pick<Message, "photo" | "video" | "video_note" | "audio" | "voice" | "document" | "sticker">
+    | Pick<
+        Message,
+        | "photo"
+        | "video"
+        | "video_note"
+        | "audio"
+        | "voice"
+        | "document"
+        | "sticker"
+      >
     | undefined
     | null,
 ): string | undefined {
@@ -242,7 +276,9 @@ export function buildSenderLabel(msg: Message, senderId?: number | string) {
   }
   const normalizedSenderId =
     senderId != null && `${senderId}`.trim() ? `${senderId}`.trim() : undefined;
-  const fallbackId = normalizedSenderId ?? (msg.from?.id != null ? String(msg.from.id) : undefined);
+  const fallbackId =
+    normalizedSenderId ??
+    (msg.from?.id != null ? String(msg.from.id) : undefined);
   const idPart = fallbackId ? `id:${fallbackId}` : undefined;
   if (label && idPart) {
     return `${label} ${idPart}`;
@@ -253,9 +289,14 @@ export function buildSenderLabel(msg: Message, senderId?: number | string) {
   return idPart ?? "id:unknown";
 }
 
-export function buildGroupLabel(msg: Message, chatId: number | string, messageThreadId?: number) {
+export function buildGroupLabel(
+  msg: Message,
+  chatId: number | string,
+  messageThreadId?: number,
+) {
   const title = msg.chat?.title;
-  const topicSuffix = messageThreadId != null ? ` topic:${messageThreadId}` : "";
+  const topicSuffix =
+    messageThreadId != null ? ` topic:${messageThreadId}` : "";
   if (title) {
     return `${title} id:${chatId}${topicSuffix}`;
   }
@@ -272,7 +313,10 @@ export function hasBotMention(msg: Message, botUsername: string) {
     if (ent.type !== "mention") {
       continue;
     }
-    const slice = (msg.text ?? msg.caption ?? "").slice(ent.offset, ent.offset + ent.length);
+    const slice = (msg.text ?? msg.caption ?? "").slice(
+      ent.offset,
+      ent.offset + ent.length,
+    );
     if (slice.toLowerCase() === `@${botUsername}`) {
       return true;
     }
@@ -287,7 +331,10 @@ type TelegramTextLinkEntity = {
   url?: string;
 };
 
-export function expandTextLinks(text: string, entities?: TelegramTextLinkEntity[] | null): string {
+export function expandTextLinks(
+  text: string,
+  entities?: TelegramTextLinkEntity[] | null,
+): string {
   if (!text || !entities?.length) {
     return text;
   }
@@ -308,7 +355,9 @@ export function expandTextLinks(text: string, entities?: TelegramTextLinkEntity[
     const linkText = text.slice(entity.offset, entity.offset + entity.length);
     const markdown = `[${linkText}](${entity.url})`;
     result =
-      result.slice(0, entity.offset) + markdown + result.slice(entity.offset + entity.length);
+      result.slice(0, entity.offset) +
+      markdown +
+      result.slice(entity.offset + entity.length);
   }
   return result;
 }
@@ -335,10 +384,12 @@ export type TelegramReplyTarget = {
 
 export function describeReplyTarget(msg: Message): TelegramReplyTarget | null {
   const reply = msg.reply_to_message;
-  const externalReply = (msg as Message & { external_reply?: Message }).external_reply;
+  const externalReply = (msg as Message & { external_reply?: Message })
+    .external_reply;
   const quoteText =
     msg.quote?.text ??
-    (externalReply as (Message & { quote?: { text?: string } }) | undefined)?.quote?.text;
+    (externalReply as (Message & { quote?: { text?: string } }) | undefined)
+      ?.quote?.text;
   let body = "";
   let kind: TelegramReplyTarget["kind"] = "reply";
 
@@ -398,7 +449,10 @@ export type TelegramForwardedContext = {
 };
 
 function normalizeForwardedUserLabel(user: User) {
-  const name = [user.first_name, user.last_name].filter(Boolean).join(" ").trim();
+  const name = [user.first_name, user.last_name]
+    .filter(Boolean)
+    .join(" ")
+    .trim();
   const username = user.username?.trim() || undefined;
   const id = String(user.id);
   const display =
@@ -408,11 +462,15 @@ function normalizeForwardedUserLabel(user: User) {
   return { display, name: name || undefined, username, id };
 }
 
-function normalizeForwardedChatLabel(chat: Chat, fallbackKind: "chat" | "channel") {
+function normalizeForwardedChatLabel(
+  chat: Chat,
+  fallbackKind: "chat" | "channel",
+) {
   const title = chat.title?.trim() || undefined;
   const username = chat.username?.trim() || undefined;
   const id = String(chat.id);
-  const display = title || (username ? `@${username}` : undefined) || `${fallbackKind}:${id}`;
+  const display =
+    title || (username ? `@${username}` : undefined) || `${fallbackKind}:${id}`;
   return { display, title, username, id };
 }
 
@@ -421,7 +479,9 @@ function buildForwardedContextFromUser(params: {
   date?: number;
   type: string;
 }): TelegramForwardedContext | null {
-  const { display, name, username, id } = normalizeForwardedUserLabel(params.user);
+  const { display, name, username, id } = normalizeForwardedUserLabel(
+    params.user,
+  );
   if (!display) {
     return null;
   }
@@ -460,13 +520,18 @@ function buildForwardedContextFromChat(params: {
   messageId?: number;
 }): TelegramForwardedContext | null {
   const fallbackKind = params.type === "channel" ? "channel" : "chat";
-  const { display, title, username, id } = normalizeForwardedChatLabel(params.chat, fallbackKind);
+  const { display, title, username, id } = normalizeForwardedChatLabel(
+    params.chat,
+    fallbackKind,
+  );
   if (!display) {
     return null;
   }
   const signature = params.signature?.trim() || undefined;
   const from = signature ? `${display} (${signature})` : display;
-  const chatType = (params.chat.type?.trim() || undefined) as Chat["type"] | undefined;
+  const chatType = (params.chat.type?.trim() || undefined) as
+    | Chat["type"]
+    | undefined;
   return {
     from,
     date: params.date,
@@ -480,7 +545,9 @@ function buildForwardedContextFromChat(params: {
   };
 }
 
-function resolveForwardOrigin(origin: MessageOrigin): TelegramForwardedContext | null {
+function resolveForwardOrigin(
+  origin: MessageOrigin,
+): TelegramForwardedContext | null {
   switch (origin.type) {
     case "user":
       return buildForwardedContextFromUser({
@@ -518,14 +585,18 @@ function resolveForwardOrigin(origin: MessageOrigin): TelegramForwardedContext |
 }
 
 /** Extract forwarded message origin info from Telegram message. */
-export function normalizeForwardedContext(msg: Message): TelegramForwardedContext | null {
+export function normalizeForwardedContext(
+  msg: Message,
+): TelegramForwardedContext | null {
   if (!msg.forward_origin) {
     return null;
   }
   return resolveForwardOrigin(msg.forward_origin);
 }
 
-export function extractTelegramLocation(msg: Message): NormalizedLocation | null {
+export function extractTelegramLocation(
+  msg: Message,
+): NormalizedLocation | null {
   const { venue, location } = msg;
 
   if (venue) {
@@ -541,7 +612,8 @@ export function extractTelegramLocation(msg: Message): NormalizedLocation | null
   }
 
   if (location) {
-    const isLive = typeof location.live_period === "number" && location.live_period > 0;
+    const isLive =
+      typeof location.live_period === "number" && location.live_period > 0;
     return {
       latitude: location.latitude,
       longitude: location.longitude,

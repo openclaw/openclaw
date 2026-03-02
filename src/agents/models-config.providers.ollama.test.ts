@@ -3,7 +3,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
-import { resolveImplicitProviders, resolveOllamaApiBase } from "./models-config.providers.js";
+import {
+  resolveImplicitProviders,
+  resolveOllamaApiBase,
+} from "./models-config.providers.js";
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -16,17 +19,27 @@ describe("resolveOllamaApiBase", () => {
   });
 
   it("strips /v1 suffix from OpenAI-compatible URLs", () => {
-    expect(resolveOllamaApiBase("http://ollama-host:11434/v1")).toBe("http://ollama-host:11434");
-    expect(resolveOllamaApiBase("http://ollama-host:11434/V1")).toBe("http://ollama-host:11434");
+    expect(resolveOllamaApiBase("http://ollama-host:11434/v1")).toBe(
+      "http://ollama-host:11434",
+    );
+    expect(resolveOllamaApiBase("http://ollama-host:11434/V1")).toBe(
+      "http://ollama-host:11434",
+    );
   });
 
   it("keeps URLs without /v1 unchanged", () => {
-    expect(resolveOllamaApiBase("http://ollama-host:11434")).toBe("http://ollama-host:11434");
+    expect(resolveOllamaApiBase("http://ollama-host:11434")).toBe(
+      "http://ollama-host:11434",
+    );
   });
 
   it("handles trailing slash before canonicalizing", () => {
-    expect(resolveOllamaApiBase("http://ollama-host:11434/v1/")).toBe("http://ollama-host:11434");
-    expect(resolveOllamaApiBase("http://ollama-host:11434/")).toBe("http://ollama-host:11434");
+    expect(resolveOllamaApiBase("http://ollama-host:11434/v1/")).toBe(
+      "http://ollama-host:11434",
+    );
+    expect(resolveOllamaApiBase("http://ollama-host:11434/")).toBe(
+      "http://ollama-host:11434",
+    );
   });
 });
 
@@ -102,13 +115,17 @@ describe("Ollama provider", () => {
         if (parsed.name === "qwen3:32b") {
           return {
             ok: true,
-            json: async () => ({ model_info: { "qwen3.context_length": 131072 } }),
+            json: async () => ({
+              model_info: { "qwen3.context_length": 131072 },
+            }),
           };
         }
         if (parsed.name === "llama3.3:70b") {
           return {
             ok: true,
-            json: async () => ({ model_info: { "llama.context_length": 65536 } }),
+            json: async () => ({
+              model_info: { "llama.context_length": 65536 },
+            }),
           };
         }
       }
@@ -146,7 +163,9 @@ describe("Ollama provider", () => {
         return {
           ok: true,
           json: async () => ({
-            models: [{ name: "qwen3:32b", modified_at: "", size: 1, digest: "" }],
+            models: [
+              { name: "qwen3:32b", modified_at: "", size: 1, digest: "" },
+            ],
           }),
         };
       }
@@ -166,7 +185,9 @@ describe("Ollama provider", () => {
 
     try {
       const providers = await resolveImplicitProviders({ agentDir });
-      const model = providers?.ollama?.models?.find((entry) => entry.id === "qwen3:32b");
+      const model = providers?.ollama?.models?.find(
+        (entry) => entry.id === "qwen3:32b",
+      );
       expect(model?.contextWindow).toBe(128000);
       const urls = fetchMock.mock.calls.map(([input]) => String(input));
       expect(urls.filter((url) => url.endsWith("/api/tags"))).toHaveLength(1);

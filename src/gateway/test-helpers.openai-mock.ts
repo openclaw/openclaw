@@ -196,7 +196,9 @@ export function buildOpenAIResponsesTextSse(text: string): Response {
   ]);
 }
 
-async function buildOpenAIResponsesSse(params: OpenAIResponsesParams): Promise<Response> {
+async function buildOpenAIResponsesSse(
+  params: OpenAIResponsesParams,
+): Promise<Response> {
   const events: OpenAIResponseStreamEvent[] = [];
   for await (const event of fakeOpenAIResponsesStream(params)) {
     events.push(event);
@@ -212,9 +214,16 @@ export function installOpenAiResponsesMock(params?: { baseUrl?: string }) {
     url === responsesUrl ||
     url.startsWith(`${responsesUrl}/`) ||
     url.startsWith(`${responsesUrl}?`);
-  const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+  const fetchImpl = async (
+    input: RequestInfo | URL,
+    init?: RequestInit,
+  ): Promise<Response> => {
     const url =
-      typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.toString()
+          : input.url;
 
     if (isResponsesRequest(url)) {
       const bodyText =
@@ -224,7 +233,9 @@ export function installOpenAiResponsesMock(params?: { baseUrl?: string }) {
             ? await input.clone().text()
             : "";
 
-      const parsed = bodyText ? (JSON.parse(bodyText) as Record<string, unknown>) : {};
+      const parsed = bodyText
+        ? (JSON.parse(bodyText) as Record<string, unknown>)
+        : {};
       const inputItems = Array.isArray(parsed.input) ? parsed.input : [];
       return await buildOpenAIResponsesSse({ input: inputItems });
     }

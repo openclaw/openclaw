@@ -3,7 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, expect } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { getEmbedBatchMock, resetEmbeddingMocks } from "./embedding.test-mocks.js";
+import {
+  getEmbedBatchMock,
+  resetEmbeddingMocks,
+} from "./embedding.test-mocks.js";
 import {
   getMemorySearchManager,
   type MemoryIndexManager,
@@ -49,7 +52,10 @@ export function installEmbeddingManagerFixture(opts: {
     if (!manager) {
       throw new Error(`${name} missing`);
     }
-    if (!("resetIndex" in manager) || typeof manager.resetIndex !== "function") {
+    if (
+      !("resetIndex" in manager) ||
+      typeof manager.resetIndex !== "function"
+    ) {
       throw new Error(`${name} is not a MemoryIndexManager`);
     }
     return manager as unknown as MemoryIndexManager;

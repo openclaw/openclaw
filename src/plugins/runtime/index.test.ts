@@ -3,7 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const runCommandWithTimeoutMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../process/exec.js", () => ({
-  runCommandWithTimeout: (...args: unknown[]) => runCommandWithTimeoutMock(...args),
+  runCommandWithTimeout: (...args: unknown[]) =>
+    runCommandWithTimeoutMock(...args),
 }));
 
 import { createPluginRuntime } from "./index.js";
@@ -26,17 +27,25 @@ describe("plugin runtime command execution", () => {
 
     const runtime = createPluginRuntime();
     await expect(
-      runtime.system.runCommandWithTimeout(["echo", "hello"], { timeoutMs: 1000 }),
+      runtime.system.runCommandWithTimeout(["echo", "hello"], {
+        timeoutMs: 1000,
+      }),
     ).resolves.toEqual(commandResult);
-    expect(runCommandWithTimeoutMock).toHaveBeenCalledWith(["echo", "hello"], { timeoutMs: 1000 });
+    expect(runCommandWithTimeoutMock).toHaveBeenCalledWith(["echo", "hello"], {
+      timeoutMs: 1000,
+    });
   });
 
   it("forwards runtime.system.runCommandWithTimeout errors", async () => {
     runCommandWithTimeoutMock.mockRejectedValue(new Error("boom"));
     const runtime = createPluginRuntime();
     await expect(
-      runtime.system.runCommandWithTimeout(["echo", "hello"], { timeoutMs: 1000 }),
+      runtime.system.runCommandWithTimeout(["echo", "hello"], {
+        timeoutMs: 1000,
+      }),
     ).rejects.toThrow("boom");
-    expect(runCommandWithTimeoutMock).toHaveBeenCalledWith(["echo", "hello"], { timeoutMs: 1000 });
+    expect(runCommandWithTimeoutMock).toHaveBeenCalledWith(["echo", "hello"], {
+      timeoutMs: 1000,
+    });
   });
 });

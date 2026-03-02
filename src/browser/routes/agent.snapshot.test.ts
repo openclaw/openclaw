@@ -24,7 +24,9 @@ describe("resolveTargetIdAfterNavigate", () => {
     const result = await resolveTargetIdAfterNavigate({
       oldTargetId: "old-123",
       navigatedUrl: "https://example.com",
-      listTabs: staticListTabs([{ targetId: "new-456", url: "https://example.com" }]),
+      listTabs: staticListTabs([
+        { targetId: "new-456", url: "https://example.com" },
+      ]),
     });
     expect(result).toBe("new-456");
   });
@@ -93,7 +95,9 @@ describe("resolveTargetIdAfterNavigate", () => {
     const result$ = resolveTargetIdAfterNavigate({
       oldTargetId: "old-123",
       navigatedUrl: "https://single-tab.com",
-      listTabs: staticListTabs([{ targetId: "only-tab", url: "https://some-other.com" }]),
+      listTabs: staticListTabs([
+        { targetId: "only-tab", url: "https://some-other.com" },
+      ]),
     });
 
     await vi.advanceTimersByTimeAsync(800);

@@ -247,7 +247,9 @@ export function activeTaglines(options: TaglineOptions = {}): string[] {
     return [DEFAULT_TAGLINE];
   }
   const today = options.now ? options.now() : new Date();
-  const filtered = TAGLINES.filter((tagline) => isTaglineActive(tagline, today));
+  const filtered = TAGLINES.filter((tagline) =>
+    isTaglineActive(tagline, today),
+  );
   return filtered.length > 0 ? filtered : TAGLINES;
 }
 

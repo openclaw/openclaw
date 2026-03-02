@@ -18,7 +18,9 @@ const windowsAuditEnv = {
   USERNAME: "Tester",
   USERDOMAIN: "DESKTOP-TEST",
 };
-const execDockerRawUnavailable: NonNullable<SecurityAuditOptions["execDockerRawFn"]> = async () => {
+const execDockerRawUnavailable: NonNullable<
+  SecurityAuditOptions["execDockerRawFn"]
+> = async () => {
   return {
     stdout: Buffer.alloc(0),
     stderr: Buffer.from("docker unavailable"),
@@ -29,7 +31,10 @@ const execDockerRawUnavailable: NonNullable<SecurityAuditOptions["execDockerRawF
 function stubChannelPlugin(params: {
   id: "discord" | "slack" | "telegram";
   label: string;
-  resolveAccount: (cfg: OpenClawConfig, accountId: string | null | undefined) => unknown;
+  resolveAccount: (
+    cfg: OpenClawConfig,
+    accountId: string | null | undefined,
+  ) => unknown;
   listAccountIds?: (cfg: OpenClawConfig) => string[];
 }): ChannelPlugin {
   return {
@@ -69,7 +74,8 @@ const discordPlugin = stubChannelPlugin({
     return ids.length > 0 ? ids : ["default"];
   },
   resolveAccount: (cfg, accountId) => {
-    const resolvedAccountId = typeof accountId === "string" && accountId ? accountId : "default";
+    const resolvedAccountId =
+      typeof accountId === "string" && accountId ? accountId : "default";
     const base = cfg.channels?.discord ?? {};
     const account = cfg.channels?.discord?.accounts?.[resolvedAccountId] ?? {};
     return { config: { ...base, ...account } };
@@ -84,7 +90,8 @@ const slackPlugin = stubChannelPlugin({
     return ids.length > 0 ? ids : ["default"];
   },
   resolveAccount: (cfg, accountId) => {
-    const resolvedAccountId = typeof accountId === "string" && accountId ? accountId : "default";
+    const resolvedAccountId =
+      typeof accountId === "string" && accountId ? accountId : "default";
     const base = cfg.channels?.slack ?? {};
     const account = cfg.channels?.slack?.accounts?.[resolvedAccountId] ?? {};
     return { config: { ...base, ...account } };
@@ -99,7 +106,8 @@ const telegramPlugin = stubChannelPlugin({
     return ids.length > 0 ? ids : ["default"];
   },
   resolveAccount: (cfg, accountId) => {
-    const resolvedAccountId = typeof accountId === "string" && accountId ? accountId : "default";
+    const resolvedAccountId =
+      typeof accountId === "string" && accountId ? accountId : "default";
     const base = cfg.channels?.telegram ?? {};
     const account = cfg.channels?.telegram?.accounts?.[resolvedAccountId] ?? {};
     return { config: { ...base, ...account } };
@@ -132,13 +140,22 @@ async function audit(
   });
 }
 
-function hasFinding(res: SecurityAuditReport, checkId: string, severity?: string): boolean {
+function hasFinding(
+  res: SecurityAuditReport,
+  checkId: string,
+  severity?: string,
+): boolean {
   return res.findings.some(
-    (f) => f.checkId === checkId && (severity == null || f.severity === severity),
+    (f) =>
+      f.checkId === checkId && (severity == null || f.severity === severity),
   );
 }
 
-function expectFinding(res: SecurityAuditReport, checkId: string, severity?: string): void {
+function expectFinding(
+  res: SecurityAuditReport,
+  checkId: string,
+  severity?: string,
+): void {
   expect(hasFinding(res, checkId, severity)).toBe(true);
 }
 
@@ -161,7 +178,9 @@ describe("security audit", () => {
     return dir;
   };
 
-  const withChannelSecurityStateDir = async (fn: (tmp: string) => Promise<void>) => {
+  const withChannelSecurityStateDir = async (
+    fn: (tmp: string) => Promise<void>,
+  ) => {
     const credentialsDir = path.join(channelSecurityStateDir, "credentials");
     await fs.rm(credentialsDir, { recursive: true, force: true });
     await fs.mkdir(credentialsDir, { recursive: true, mode: 0o700 });
@@ -212,7 +231,9 @@ description: test skill
   };
 
   beforeAll(async () => {
-    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-security-audit-"));
+    fixtureRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-security-audit-"),
+    );
     channelSecurityStateDir = path.join(fixtureRoot, "channel-security");
     await fs.mkdir(path.join(channelSecurityStateDir, "credentials"), {
       recursive: true,
@@ -221,12 +242,21 @@ description: test skill
     const codeSafetyFixture = await createSharedCodeSafetyFixture();
     sharedCodeSafetyStateDir = codeSafetyFixture.stateDir;
     sharedCodeSafetyWorkspaceDir = codeSafetyFixture.workspaceDir;
-    sharedExtensionsStateDir = path.join(fixtureRoot, "shared-extensions-state");
-    await fs.mkdir(path.join(sharedExtensionsStateDir, "extensions", "some-plugin"), {
-      recursive: true,
-      mode: 0o700,
-    });
-    sharedInstallMetadataStateDir = path.join(fixtureRoot, "shared-install-metadata-state");
+    sharedExtensionsStateDir = path.join(
+      fixtureRoot,
+      "shared-extensions-state",
+    );
+    await fs.mkdir(
+      path.join(sharedExtensionsStateDir, "extensions", "some-plugin"),
+      {
+        recursive: true,
+        mode: 0o700,
+      },
+    );
+    sharedInstallMetadataStateDir = path.join(
+      fixtureRoot,
+      "shared-install-metadata-state",
+    );
     await fs.mkdir(sharedInstallMetadataStateDir, { recursive: true });
   });
 
@@ -234,23 +264,33 @@ description: test skill
     if (!fixtureRoot) {
       return;
     }
-    await fs.rm(fixtureRoot, { recursive: true, force: true }).catch(() => undefined);
+    await fs
+      .rm(fixtureRoot, { recursive: true, force: true })
+      .catch(() => undefined);
   });
 
   it("includes an attack surface summary (info)", async () => {
     const cfg: OpenClawConfig = {
-      channels: { whatsapp: { groupPolicy: "open" }, telegram: { groupPolicy: "allowlist" } },
+      channels: {
+        whatsapp: { groupPolicy: "open" },
+        telegram: { groupPolicy: "allowlist" },
+      },
       tools: { elevated: { enabled: true, allowFrom: { whatsapp: ["+1"] } } },
       hooks: { enabled: true },
       browser: { enabled: true },
     };
 
     const res = await audit(cfg);
-    const summary = res.findings.find((f) => f.checkId === "summary.attack_surface");
+    const summary = res.findings.find(
+      (f) => f.checkId === "summary.attack_surface",
+    );
 
     expect(res.findings).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ checkId: "summary.attack_surface", severity: "info" }),
+        expect.objectContaining({
+          checkId: "summary.attack_surface",
+          severity: "info",
+        }),
       ]),
     );
     expect(summary?.detail).toContain("trust model: personal assistant");
@@ -312,7 +352,11 @@ description: test skill
             bind: "lan",
             auth: {
               token: "secret",
-              rateLimit: { maxAttempts: 10, windowMs: 60_000, lockoutMs: 300_000 },
+              rateLimit: {
+                maxAttempts: 10,
+                windowMs: 60_000,
+                lockoutMs: 300_000,
+              },
             },
           },
         },
@@ -322,9 +366,10 @@ description: test skill
     await Promise.all(
       cases.map(async (testCase) => {
         const res = await audit(testCase.cfg, { env: {} });
-        expect(hasFinding(res, "gateway.auth_no_rate_limit", "warn"), testCase.name).toBe(
-          testCase.expectWarn,
-        );
+        expect(
+          hasFinding(res, "gateway.auth_no_rate_limit", "warn"),
+          testCase.name,
+        ).toBe(testCase.expectWarn);
       }),
     );
   });
@@ -362,7 +407,11 @@ description: test skill
       cases.map(async (testCase) => {
         const res = await audit(testCase.cfg, { env: {} });
         expect(
-          hasFinding(res, "gateway.tools_invoke_http.dangerous_allow", testCase.expectedSeverity),
+          hasFinding(
+            res,
+            "gateway.tools_invoke_http.dangerous_allow",
+            testCase.expectedSeverity,
+          ),
           testCase.name,
         ).toBe(true);
       }),
@@ -427,7 +476,9 @@ description: test skill
     await Promise.all(
       cases.map(async (testCase) => {
         const res = await audit(testCase.cfg);
-        expect(hasFinding(res, testCase.checkId, "warn"), testCase.name).toBe(true);
+        expect(hasFinding(res, testCase.checkId, "warn"), testCase.name).toBe(
+          true,
+        );
       }),
     );
   });
@@ -499,7 +550,11 @@ description: test skill
       cases.map(async (testCase) => {
         const res = await audit(testCase.cfg);
         expect(
-          hasFinding(res, "tools.exec.safe_bins_interpreter_unprofiled", "warn"),
+          hasFinding(
+            res,
+            "tools.exec.safe_bins_interpreter_unprofiled",
+            "warn",
+          ),
           testCase.name,
         ).toBe(testCase.expected);
       }),
@@ -509,7 +564,10 @@ description: test skill
   it("warns for risky safeBinTrustedDirs entries", async () => {
     const riskyGlobalTrustedDirs =
       process.platform === "win32"
-        ? [String.raw`C:\Users\ci-user\bin`, String.raw`C:\Users\ci-user\.local\bin`]
+        ? [
+            String.raw`C:\Users\ci-user\bin`,
+            String.raw`C:\Users\ci-user\.local\bin`,
+          ]
         : ["/usr/local/bin", "/tmp/openclaw-safe-bins"];
     const cfg: OpenClawConfig = {
       tools: {
@@ -601,7 +659,10 @@ description: test skill
     await Promise.all(
       cases.map(async (testCase) => {
         const res = await audit(testCase.cfg, testCase.opts);
-        expect(hasFinding(res, testCase.checkId, testCase.severity), testCase.name).toBe(true);
+        expect(
+          hasFinding(res, testCase.checkId, testCase.severity),
+          testCase.name,
+        ).toBe(true);
       }),
     );
   });
@@ -680,7 +741,8 @@ description: test skill
 
     expect(
       res.findings.some(
-        (f) => f.checkId === "fs.state_dir.perms_readable" && f.severity === "warn",
+        (f) =>
+          f.checkId === "fs.state_dir.perms_readable" && f.severity === "warn",
       ),
     ).toBe(true);
   });
@@ -696,7 +758,9 @@ description: test skill
     const execDockerRawFn = (async (args: string[]) => {
       if (args[0] === "ps") {
         return {
-          stdout: Buffer.from("openclaw-sbx-browser-old\nopenclaw-sbx-browser-missing-hash\n"),
+          stdout: Buffer.from(
+            "openclaw-sbx-browser-old\nopenclaw-sbx-browser-missing-hash\n",
+          ),
           stderr: Buffer.alloc(0),
           code: 0,
         };
@@ -708,7 +772,10 @@ description: test skill
           code: 0,
         };
       }
-      if (args[0] === "inspect" && args.at(-1) === "openclaw-sbx-browser-missing-hash") {
+      if (
+        args[0] === "inspect" &&
+        args.at(-1) === "openclaw-sbx-browser-missing-hash"
+      ) {
         return {
           stdout: Buffer.from("<no value>\t<no value>\n"),
           stderr: Buffer.alloc(0),
@@ -731,8 +798,12 @@ description: test skill
       execDockerRawFn,
     });
 
-    expect(hasFinding(res, "sandbox.browser_container.hash_label_missing", "warn")).toBe(true);
-    expect(hasFinding(res, "sandbox.browser_container.hash_epoch_stale", "warn")).toBe(true);
+    expect(
+      hasFinding(res, "sandbox.browser_container.hash_label_missing", "warn"),
+    ).toBe(true);
+    expect(
+      hasFinding(res, "sandbox.browser_container.hash_epoch_stale", "warn"),
+    ).toBe(true);
     const staleEpoch = res.findings.find(
       (f) => f.checkId === "sandbox.browser_container.hash_epoch_stale",
     );
@@ -760,8 +831,12 @@ description: test skill
       execDockerRawFn,
     });
 
-    expect(hasFinding(res, "sandbox.browser_container.hash_label_missing")).toBe(false);
-    expect(hasFinding(res, "sandbox.browser_container.hash_epoch_stale")).toBe(false);
+    expect(
+      hasFinding(res, "sandbox.browser_container.hash_label_missing"),
+    ).toBe(false);
+    expect(hasFinding(res, "sandbox.browser_container.hash_epoch_stale")).toBe(
+      false,
+    );
   });
 
   it("flags sandbox browser containers with non-loopback published ports", async () => {
@@ -780,16 +855,24 @@ description: test skill
           code: 0,
         };
       }
-      if (args[0] === "inspect" && args.at(-1) === "openclaw-sbx-browser-exposed") {
+      if (
+        args[0] === "inspect" &&
+        args.at(-1) === "openclaw-sbx-browser-exposed"
+      ) {
         return {
           stdout: Buffer.from("hash123\t2026-02-21-novnc-auth-default\n"),
           stderr: Buffer.alloc(0),
           code: 0,
         };
       }
-      if (args[0] === "port" && args.at(-1) === "openclaw-sbx-browser-exposed") {
+      if (
+        args[0] === "port" &&
+        args.at(-1) === "openclaw-sbx-browser-exposed"
+      ) {
         return {
-          stdout: Buffer.from("6080/tcp -> 0.0.0.0:49101\n9222/tcp -> 127.0.0.1:49100\n"),
+          stdout: Buffer.from(
+            "6080/tcp -> 0.0.0.0:49101\n9222/tcp -> 127.0.0.1:49100\n",
+          ),
           stderr: Buffer.alloc(0),
           code: 0,
         };
@@ -810,9 +893,13 @@ description: test skill
       execDockerRawFn,
     });
 
-    expect(hasFinding(res, "sandbox.browser_container.non_loopback_publish", "critical")).toBe(
-      true,
-    );
+    expect(
+      hasFinding(
+        res,
+        "sandbox.browser_container.non_loopback_publish",
+        "critical",
+      ),
+    ).toBe(true);
   });
 
   it("uses symlink target permissions for config checks", async () => {
@@ -841,11 +928,19 @@ description: test skill
     });
 
     expect(res.findings).toEqual(
-      expect.arrayContaining([expect.objectContaining({ checkId: "fs.config.symlink" })]),
+      expect.arrayContaining([
+        expect.objectContaining({ checkId: "fs.config.symlink" }),
+      ]),
     );
-    expect(res.findings.some((f) => f.checkId === "fs.config.perms_writable")).toBe(false);
-    expect(res.findings.some((f) => f.checkId === "fs.config.perms_world_readable")).toBe(false);
-    expect(res.findings.some((f) => f.checkId === "fs.config.perms_group_readable")).toBe(false);
+    expect(
+      res.findings.some((f) => f.checkId === "fs.config.perms_writable"),
+    ).toBe(false);
+    expect(
+      res.findings.some((f) => f.checkId === "fs.config.perms_world_readable"),
+    ).toBe(false);
+    expect(
+      res.findings.some((f) => f.checkId === "fs.config.perms_group_readable"),
+    ).toBe(false);
   });
 
   it("scores small-model risk by tool/sandbox exposure", async () => {
@@ -859,7 +954,9 @@ description: test skill
         name: "small model with web and browser enabled",
         cfg: {
           agents: { defaults: { model: { primary: "ollama/mistral-8b" } } },
-          tools: { web: { search: { enabled: true }, fetch: { enabled: true } } },
+          tools: {
+            web: { search: { enabled: true }, fetch: { enabled: true } },
+          },
           browser: { enabled: true },
         },
         expectedSeverity: "critical",
@@ -869,9 +966,14 @@ description: test skill
         name: "small model with sandbox all and web/browser disabled",
         cfg: {
           agents: {
-            defaults: { model: { primary: "ollama/mistral-8b" }, sandbox: { mode: "all" } },
+            defaults: {
+              model: { primary: "ollama/mistral-8b" },
+              sandbox: { mode: "all" },
+            },
           },
-          tools: { web: { search: { enabled: false }, fetch: { enabled: false } } },
+          tools: {
+            web: { search: { enabled: false }, fetch: { enabled: false } },
+          },
           browser: { enabled: false },
         },
         expectedSeverity: "info",
@@ -881,8 +983,12 @@ description: test skill
     await Promise.all(
       cases.map(async (testCase) => {
         const res = await audit(testCase.cfg);
-        const finding = res.findings.find((f) => f.checkId === "models.small_params");
-        expect(finding?.severity, testCase.name).toBe(testCase.expectedSeverity);
+        const finding = res.findings.find(
+          (f) => f.checkId === "models.small_params",
+        );
+        expect(finding?.severity, testCase.name).toBe(
+          testCase.expectedSeverity,
+        );
         for (const text of testCase.detailIncludes) {
           expect(finding?.detail, `${testCase.name}:${text}`).toContain(text);
         }
@@ -929,9 +1035,10 @@ description: test skill
     await Promise.all(
       cases.map(async (testCase) => {
         const res = await audit(testCase.cfg);
-        expect(hasFinding(res, "sandbox.docker_config_mode_off"), testCase.name).toBe(
-          testCase.expectedPresent,
-        );
+        expect(
+          hasFinding(res, "sandbox.docker_config_mode_off"),
+          testCase.name,
+        ).toBe(testCase.expectedPresent);
       }),
     );
   });
@@ -957,7 +1064,10 @@ description: test skill
 
     expect(res.findings).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ checkId: "sandbox.dangerous_bind_mount", severity: "critical" }),
+        expect.objectContaining({
+          checkId: "sandbox.dangerous_bind_mount",
+          severity: "critical",
+        }),
         expect.objectContaining({
           checkId: "sandbox.dangerous_network_mode",
           severity: "critical",
@@ -1046,9 +1156,13 @@ description: test skill
         );
         expect(Boolean(finding), testCase.name).toBe(testCase.expectedPresent);
         if (testCase.expectedPresent) {
-          expect(finding?.severity, testCase.name).toBe(testCase.expectedSeverity);
+          expect(finding?.severity, testCase.name).toBe(
+            testCase.expectedSeverity,
+          );
           if (testCase.detailIncludes) {
-            expect(finding?.detail, testCase.name).toContain(testCase.detailIncludes);
+            expect(finding?.detail, testCase.name).toContain(
+              testCase.detailIncludes,
+            );
           }
         }
       }),
@@ -1108,7 +1222,9 @@ description: test skill
         const finding = res.findings.find(
           (f) => f.checkId === "gateway.nodes.allow_commands_dangerous",
         );
-        expect(finding?.severity, testCase.name).toBe(testCase.expectedSeverity);
+        expect(finding?.severity, testCase.name).toBe(
+          testCase.expectedSeverity,
+        );
         expect(finding?.detail, testCase.name).toContain("camera.snap");
         expect(finding?.detail, testCase.name).toContain("screen.record");
       }),
@@ -1160,7 +1276,11 @@ description: test skill
 
     const res = await audit(cfg);
 
-    expectFinding(res, "tools.elevated.allowFrom.whatsapp.wildcard", "critical");
+    expectFinding(
+      res,
+      "tools.elevated.allowFrom.whatsapp.wildcard",
+      "critical",
+    );
   });
 
   it("flags browser control without auth when browser is enabled", async () => {
@@ -1227,7 +1347,9 @@ description: test skill
         expect.objectContaining({
           checkId: "config.insecure_or_dangerous_flags",
           severity: "warn",
-          detail: expect.stringContaining("gateway.controlUi.allowInsecureAuth=true"),
+          detail: expect.stringContaining(
+            "gateway.controlUi.allowInsecureAuth=true",
+          ),
         }),
       ]),
     );
@@ -1251,7 +1373,9 @@ description: test skill
         expect.objectContaining({
           checkId: "config.insecure_or_dangerous_flags",
           severity: "warn",
-          detail: expect.stringContaining("gateway.controlUi.dangerouslyDisableDeviceAuth=true"),
+          detail: expect.stringContaining(
+            "gateway.controlUi.dangerouslyDisableDeviceAuth=true",
+          ),
         }),
       ]),
     );
@@ -1273,13 +1397,21 @@ description: test skill
     };
 
     const res = await audit(cfg);
-    const finding = res.findings.find((f) => f.checkId === "config.insecure_or_dangerous_flags");
+    const finding = res.findings.find(
+      (f) => f.checkId === "config.insecure_or_dangerous_flags",
+    );
 
     expect(finding).toBeTruthy();
     expect(finding?.severity).toBe("warn");
-    expect(finding?.detail).toContain("hooks.gmail.allowUnsafeExternalContent=true");
-    expect(finding?.detail).toContain("hooks.mappings[0].allowUnsafeExternalContent=true");
-    expect(finding?.detail).toContain("tools.exec.applyPatch.workspaceOnly=false");
+    expect(finding?.detail).toContain(
+      "hooks.gmail.allowUnsafeExternalContent=true",
+    );
+    expect(finding?.detail).toContain(
+      "hooks.mappings[0].allowUnsafeExternalContent=true",
+    );
+    expect(finding?.detail).toContain(
+      "tools.exec.applyPatch.workspaceOnly=false",
+    );
   });
 
   it("flags non-loopback Control UI without allowed origins", async () => {
@@ -1291,7 +1423,11 @@ description: test skill
     };
 
     const res = await audit(cfg);
-    expectFinding(res, "gateway.control_ui.allowed_origins_required", "critical");
+    expectFinding(
+      res,
+      "gateway.control_ui.allowed_origins_required",
+      "critical",
+    );
   });
 
   it("flags wildcard Control UI origins by exposure level", async () => {
@@ -1312,8 +1448,16 @@ description: test skill
     const loopback = await audit(loopbackCfg);
     const exposed = await audit(exposedCfg);
 
-    expectFinding(loopback, "gateway.control_ui.allowed_origins_wildcard", "warn");
-    expectFinding(exposed, "gateway.control_ui.allowed_origins_wildcard", "critical");
+    expectFinding(
+      loopback,
+      "gateway.control_ui.allowed_origins_wildcard",
+      "warn",
+    );
+    expectFinding(
+      exposed,
+      "gateway.control_ui.allowed_origins_wildcard",
+      "critical",
+    );
     expectNoFinding(exposed, "gateway.control_ui.allowed_origins_required");
   });
 
@@ -1329,9 +1473,15 @@ description: test skill
     };
 
     const res = await audit(cfg);
-    expectFinding(res, "gateway.control_ui.host_header_origin_fallback", "critical");
+    expectFinding(
+      res,
+      "gateway.control_ui.host_header_origin_fallback",
+      "critical",
+    );
     expectNoFinding(res, "gateway.control_ui.allowed_origins_required");
-    const flags = res.findings.find((f) => f.checkId === "config.insecure_or_dangerous_flags");
+    const flags = res.findings.find(
+      (f) => f.checkId === "config.insecure_or_dangerous_flags",
+    );
     expect(flags?.detail ?? "").toContain(
       "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true",
     );
@@ -1442,7 +1592,11 @@ description: test skill
       cases.map(async (testCase) => {
         const res = await audit(testCase.cfg);
         expect(
-          hasFinding(res, "gateway.real_ip_fallback_enabled", testCase.expectedSeverity),
+          hasFinding(
+            res,
+            "gateway.real_ip_fallback_enabled",
+            testCase.expectedSeverity,
+          ),
           testCase.name,
         ).toBe(true);
       }),
@@ -1493,7 +1647,11 @@ description: test skill
       cases.map(async (testCase) => {
         const res = await audit(testCase.cfg);
         expect(
-          hasFinding(res, "discovery.mdns_full_mode", testCase.expectedSeverity),
+          hasFinding(
+            res,
+            "discovery.mdns_full_mode",
+            testCase.expectedSeverity,
+          ),
           testCase.name,
         ).toBe(true);
       }),
@@ -1582,8 +1740,13 @@ description: test skill
           testCase.name,
         ).toBe(true);
         if (testCase.suppressesGenericSharedSecretFindings) {
-          expect(hasFinding(res, "gateway.bind_no_auth"), testCase.name).toBe(false);
-          expect(hasFinding(res, "gateway.auth_no_rate_limit"), testCase.name).toBe(false);
+          expect(hasFinding(res, "gateway.bind_no_auth"), testCase.name).toBe(
+            false,
+          );
+          expect(
+            hasFinding(res, "gateway.auth_no_rate_limit"),
+            testCase.name,
+          ).toBe(false);
         }
       }),
     );
@@ -1632,7 +1795,9 @@ description: test skill
         expect.objectContaining({
           checkId: "channels.whatsapp.dm.scope_main_multiuser",
           severity: "warn",
-          remediation: expect.stringContaining('config set session.dmScope "per-channel-peer"'),
+          remediation: expect.stringContaining(
+            'config set session.dmScope "per-channel-peer"',
+          ),
         }),
       ]),
     );
@@ -1746,12 +1911,17 @@ description: test skill
       });
 
       const finding = res.findings.find(
-        (entry) => entry.checkId === "channels.discord.allowFrom.name_based_entries",
+        (entry) =>
+          entry.checkId === "channels.discord.allowFrom.name_based_entries",
       );
       expect(finding).toBeDefined();
       expect(finding?.severity).toBe("warn");
-      expect(finding?.detail).toContain("channels.discord.allowFrom:Alice#1234");
-      expect(finding?.detail).toContain("channels.discord.guilds.123.users:trusted.operator");
+      expect(finding?.detail).toContain(
+        "channels.discord.allowFrom:Alice#1234",
+      );
+      expect(finding?.detail).toContain(
+        "channels.discord.guilds.123.users:trusted.operator",
+      );
       expect(finding?.detail).toContain(
         "channels.discord.guilds.123.channels.general.users:security-team",
       );
@@ -1783,7 +1953,8 @@ description: test skill
       });
 
       const finding = res.findings.find(
-        (entry) => entry.checkId === "channels.discord.allowFrom.name_based_entries",
+        (entry) =>
+          entry.checkId === "channels.discord.allowFrom.name_based_entries",
       );
       expect(finding).toBeDefined();
       expect(finding?.severity).toBe("info");
@@ -1791,7 +1962,8 @@ description: test skill
       expect(res.findings).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
-            checkId: "channels.discord.allowFrom.dangerous_name_matching_enabled",
+            checkId:
+              "channels.discord.allowFrom.dangerous_name_matching_enabled",
             severity: "info",
           }),
         ]),
@@ -1827,7 +1999,8 @@ description: test skill
       expect(res.findings).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
-            checkId: "channels.discord.allowFrom.dangerous_name_matching_enabled",
+            checkId:
+              "channels.discord.allowFrom.dangerous_name_matching_enabled",
             title: expect.stringContaining("(account: beta)"),
             severity: "info",
           }),
@@ -1865,10 +2038,13 @@ description: test skill
       });
 
       const finding = res.findings.find(
-        (entry) => entry.checkId === "channels.discord.allowFrom.name_based_entries",
+        (entry) =>
+          entry.checkId === "channels.discord.allowFrom.name_based_entries",
       );
       expect(finding).toBeDefined();
-      expect(finding?.detail).toContain("channels.discord.accounts.beta.allowFrom:Alice#1234");
+      expect(finding?.detail).toContain(
+        "channels.discord.accounts.beta.allowFrom:Alice#1234",
+      );
     });
   });
 
@@ -1888,7 +2064,11 @@ description: test skill
             ],
             guilds: {
               "123": {
-                users: ["523456789012345678", "<@623456789012345678>", "pk:member-456"],
+                users: [
+                  "523456789012345678",
+                  "<@623456789012345678>",
+                  "pk:member-456",
+                ],
                 channels: {
                   general: {
                     users: ["723456789012345678", "user:823456789012345678"],
@@ -1909,7 +2089,9 @@ description: test skill
 
       expect(res.findings).not.toEqual(
         expect.arrayContaining([
-          expect.objectContaining({ checkId: "channels.discord.allowFrom.name_based_entries" }),
+          expect.objectContaining({
+            checkId: "channels.discord.allowFrom.name_based_entries",
+          }),
         ]),
       );
     });
@@ -2121,7 +2303,10 @@ description: test skill
           probeGatewayFn: testCase.probeGatewayFn,
         });
         testCase.assertDeep?.(res);
-        expect(hasFinding(res, "gateway.probe_failed", "warn"), testCase.name).toBe(true);
+        expect(
+          hasFinding(res, "gateway.probe_failed", "warn"),
+          testCase.name,
+        ).toBe(true);
       }),
     );
   });
@@ -2156,10 +2341,16 @@ description: test skill
           agents: { defaults: { model: { primary: testCase.model } } },
         });
         for (const expected of testCase.expectedFindings ?? []) {
-          expect(hasFinding(res, expected.checkId, expected.severity), testCase.name).toBe(true);
+          expect(
+            hasFinding(res, expected.checkId, expected.severity),
+            testCase.name,
+          ).toBe(true);
         }
         if (testCase.expectedAbsentCheckId) {
-          expect(hasFinding(res, testCase.expectedAbsentCheckId), testCase.name).toBe(false);
+          expect(
+            hasFinding(res, testCase.expectedAbsentCheckId),
+            testCase.name,
+          ).toBe(false);
         }
       }),
     );
@@ -2233,11 +2424,21 @@ description: test skill
       cases.map(async (testCase) => {
         const res = await audit(testCase.cfg);
         expect(
-          hasFinding(res, "hooks.request_session_key_enabled", testCase.expectedSeverity),
+          hasFinding(
+            res,
+            "hooks.request_session_key_enabled",
+            testCase.expectedSeverity,
+          ),
           testCase.name,
         ).toBe(true);
         if (testCase.expectsPrefixesMissing) {
-          expect(hasFinding(res, "hooks.request_session_key_prefixes_missing", "warn")).toBe(true);
+          expect(
+            hasFinding(
+              res,
+              "hooks.request_session_key_prefixes_missing",
+              "warn",
+            ),
+          ).toBe(true);
         }
       }),
     );
@@ -2280,7 +2481,9 @@ description: test skill
         const res = await audit(testCase.cfg, { env: {} });
         expectFinding(res, "gateway.http.no_auth", testCase.expectedSeverity);
         if (testCase.detailIncludes) {
-          const finding = res.findings.find((entry) => entry.checkId === "gateway.http.no_auth");
+          const finding = res.findings.find(
+            (entry) => entry.checkId === "gateway.http.no_auth",
+          );
           for (const text of testCase.detailIncludes) {
             expect(finding?.detail, `${testCase.name}:${text}`).toContain(text);
           }
@@ -2341,17 +2544,27 @@ description: test skill
     await fs.mkdir(stateDir, { recursive: true, mode: 0o700 });
 
     const includePath = path.join(stateDir, "extra.json5");
-    await fs.writeFile(includePath, "{ logging: { redactSensitive: 'off' } }\n", "utf-8");
+    await fs.writeFile(
+      includePath,
+      "{ logging: { redactSensitive: 'off' } }\n",
+      "utf-8",
+    );
     if (isWindows) {
       // Grant "Everyone" write access to trigger the perms_writable check on Windows
       const { execSync } = await import("node:child_process");
-      execSync(`icacls "${includePath}" /grant Everyone:W`, { stdio: "ignore" });
+      execSync(`icacls "${includePath}" /grant Everyone:W`, {
+        stdio: "ignore",
+      });
     } else {
       await fs.chmod(includePath, 0o644);
     }
 
     const configPath = path.join(stateDir, "openclaw.json");
-    await fs.writeFile(configPath, `{ "$include": "./extra.json5" }\n`, "utf-8");
+    await fs.writeFile(
+      configPath,
+      `{ "$include": "./extra.json5" }\n`,
+      "utf-8",
+    );
     await fs.chmod(configPath, 0o600);
 
     const cfg: OpenClawConfig = { logging: { redactSensitive: "off" } };
@@ -2391,7 +2604,10 @@ description: test skill
 
     expect(res.findings).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ checkId: expectedCheckId, severity: "critical" }),
+        expect.objectContaining({
+          checkId: expectedCheckId,
+          severity: "critical",
+        }),
       ]),
     );
   });
@@ -2420,7 +2636,10 @@ description: test skill
 
       expect(res.findings).toEqual(
         expect.arrayContaining([
-          expect.objectContaining({ checkId: "plugins.extensions_no_allowlist", severity: "warn" }),
+          expect.objectContaining({
+            checkId: "plugins.extensions_no_allowlist",
+            severity: "warn",
+          }),
         ]),
       );
     } finally {
@@ -2478,10 +2697,18 @@ description: test skill
       execDockerRawFn: execDockerRawUnavailable,
     });
 
-    expect(hasFinding(res, "plugins.installs_unpinned_npm_specs", "warn")).toBe(true);
-    expect(hasFinding(res, "plugins.installs_missing_integrity", "warn")).toBe(true);
-    expect(hasFinding(res, "hooks.installs_unpinned_npm_specs", "warn")).toBe(true);
-    expect(hasFinding(res, "hooks.installs_missing_integrity", "warn")).toBe(true);
+    expect(hasFinding(res, "plugins.installs_unpinned_npm_specs", "warn")).toBe(
+      true,
+    );
+    expect(hasFinding(res, "plugins.installs_missing_integrity", "warn")).toBe(
+      true,
+    );
+    expect(hasFinding(res, "hooks.installs_unpinned_npm_specs", "warn")).toBe(
+      true,
+    );
+    expect(hasFinding(res, "hooks.installs_missing_integrity", "warn")).toBe(
+      true,
+    );
   });
 
   it("does not warn on pinned npm install specs with integrity metadata", async () => {
@@ -2575,7 +2802,9 @@ description: test skill
       execDockerRawFn: execDockerRawUnavailable,
     });
 
-    expect(hasFinding(res, "plugins.installs_version_drift", "warn")).toBe(true);
+    expect(hasFinding(res, "plugins.installs_version_drift", "warn")).toBe(
+      true,
+    );
     expect(hasFinding(res, "hooks.installs_version_drift", "warn")).toBe(true);
   });
 
@@ -2621,7 +2850,9 @@ description: test skill
     });
 
     expect(
-      res.findings.some((f) => f.checkId === "plugins.tools_reachable_permissive_policy"),
+      res.findings.some(
+        (f) => f.checkId === "plugins.tools_reachable_permissive_policy",
+      ),
     ).toBe(false);
   });
 
@@ -2672,7 +2903,9 @@ description: test skill
       stateDir: sharedCodeSafetyStateDir,
       execDockerRawFn: execDockerRawUnavailable,
     });
-    expect(nonDeepRes.findings.some((f) => f.checkId === "plugins.code_safety")).toBe(false);
+    expect(
+      nonDeepRes.findings.some((f) => f.checkId === "plugins.code_safety"),
+    ).toBe(false);
 
     // Deep-mode positive coverage lives in the detailed plugin+skills code-safety test below.
   });
@@ -2683,18 +2916,25 @@ description: test skill
     };
     const [pluginFindings, skillFindings] = await Promise.all([
       collectPluginsCodeSafetyFindings({ stateDir: sharedCodeSafetyStateDir }),
-      collectInstalledSkillsCodeSafetyFindings({ cfg, stateDir: sharedCodeSafetyStateDir }),
+      collectInstalledSkillsCodeSafetyFindings({
+        cfg,
+        stateDir: sharedCodeSafetyStateDir,
+      }),
     ]);
 
     const pluginFinding = pluginFindings.find(
-      (finding) => finding.checkId === "plugins.code_safety" && finding.severity === "critical",
+      (finding) =>
+        finding.checkId === "plugins.code_safety" &&
+        finding.severity === "critical",
     );
     expect(pluginFinding).toBeDefined();
     expect(pluginFinding?.detail).toContain("dangerous-exec");
     expect(pluginFinding?.detail).toMatch(/\.hidden[\\/]+index\.js:\d+/);
 
     const skillFinding = skillFindings.find(
-      (finding) => finding.checkId === "skills.code_safety" && finding.severity === "critical",
+      (finding) =>
+        finding.checkId === "skills.code_safety" &&
+        finding.severity === "critical",
     );
     expect(skillFinding).toBeDefined();
     expect(skillFinding?.detail).toContain("dangerous-exec");
@@ -2714,8 +2954,12 @@ description: test skill
     );
     await fs.writeFile(path.join(pluginDir, "index.js"), "export {};");
 
-    const findings = await collectPluginsCodeSafetyFindings({ stateDir: tmpDir });
-    expect(findings.some((f) => f.checkId === "plugins.code_safety.entry_escape")).toBe(true);
+    const findings = await collectPluginsCodeSafetyFindings({
+      stateDir: tmpDir,
+    });
+    expect(
+      findings.some((f) => f.checkId === "plugins.code_safety.entry_escape"),
+    ).toBe(true);
   });
 
   it("reports scan_failed when plugin code scanner throws during deep audit", async () => {
@@ -2736,8 +2980,12 @@ description: test skill
       );
       await fs.writeFile(path.join(pluginDir, "index.js"), "export {};");
 
-      const findings = await collectPluginsCodeSafetyFindings({ stateDir: tmpDir });
-      expect(findings.some((f) => f.checkId === "plugins.code_safety.scan_failed")).toBe(true);
+      const findings = await collectPluginsCodeSafetyFindings({
+        stateDir: tmpDir,
+      });
+      expect(
+        findings.some((f) => f.checkId === "plugins.code_safety.scan_failed"),
+      ).toBe(true);
     } finally {
       scanSpy.mockRestore();
     }
@@ -2796,7 +3044,9 @@ description: test skill
     const res = await audit(cfg);
 
     expect(
-      res.findings.some((f) => f.checkId === "security.exposure.open_groups_with_runtime_or_fs"),
+      res.findings.some(
+        (f) => f.checkId === "security.exposure.open_groups_with_runtime_or_fs",
+      ),
     ).toBe(false);
   });
 
@@ -2814,7 +3064,9 @@ description: test skill
     const res = await audit(cfg);
 
     expect(
-      res.findings.some((f) => f.checkId === "security.exposure.open_groups_with_runtime_or_fs"),
+      res.findings.some(
+        (f) => f.checkId === "security.exposure.open_groups_with_runtime_or_fs",
+      ),
     ).toBe(false);
   });
 
@@ -2845,7 +3097,9 @@ description: test skill
       'channels.discord.groupPolicy="allowlist" with configured group targets',
     );
     expect(finding?.detail).toContain("personal-assistant");
-    expect(finding?.remediation).toContain('agents.defaults.sandbox.mode="all"');
+    expect(finding?.remediation).toContain(
+      'agents.defaults.sandbox.mode="all"',
+    );
   });
 
   it("does not warn for multi-user heuristic when no shared-user signals are configured", async () => {
@@ -2898,7 +3152,9 @@ description: test skill
       }> = [
         {
           name: "uses local auth when gateway.mode is local",
-          cfg: { gateway: { mode: "local", auth: { token: "local-token-abc123" } } },
+          cfg: {
+            gateway: { mode: "local", auth: { token: "local-token-abc123" } },
+          },
           expectedToken: "local-token-abc123",
         },
         {
@@ -2918,7 +3174,10 @@ description: test skill
             gateway: {
               mode: "remote",
               auth: { token: "local-token-should-not-use" },
-              remote: { url: "wss://remote.example.com:18789", token: "remote-token-xyz789" },
+              remote: {
+                url: "wss://remote.example.com:18789",
+                token: "remote-token-xyz789",
+              },
             },
           },
           expectedToken: "remote-token-xyz789",
@@ -2929,7 +3188,10 @@ description: test skill
             gateway: {
               mode: "remote",
               auth: { token: "local-token-should-not-use" },
-              remote: { url: "wss://remote.example.com:18789", token: "remote-token" },
+              remote: {
+                url: "wss://remote.example.com:18789",
+                token: "remote-token",
+              },
             },
           },
           env: { token: "env-token" },
@@ -2974,7 +3236,10 @@ description: test skill
           cfg: {
             gateway: {
               mode: "remote",
-              remote: { url: "wss://remote.example.com:18789", password: "remote-pass" },
+              remote: {
+                url: "wss://remote.example.com:18789",
+                password: "remote-pass",
+              },
             },
           },
           expectedPassword: "remote-pass",
@@ -2984,7 +3249,10 @@ description: test skill
           cfg: {
             gateway: {
               mode: "remote",
-              remote: { url: "wss://remote.example.com:18789", password: "remote-pass" },
+              remote: {
+                url: "wss://remote.example.com:18789",
+                password: "remote-pass",
+              },
             },
           },
           env: { password: "env-pass" },
@@ -3001,7 +3269,9 @@ description: test skill
             probeGatewayFn,
             env: makeProbeEnv(testCase.env),
           });
-          expect(getAuth()?.password, testCase.name).toBe(testCase.expectedPassword);
+          expect(getAuth()?.password, testCase.name).toBe(
+            testCase.expectedPassword,
+          );
         }),
       );
     });

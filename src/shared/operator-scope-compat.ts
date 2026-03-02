@@ -15,12 +15,20 @@ function normalizeScopeList(scopes: readonly string[]): string[] {
   return [...out];
 }
 
-function operatorScopeSatisfied(requestedScope: string, granted: Set<string>): boolean {
-  if (granted.has(OPERATOR_ADMIN_SCOPE) && requestedScope.startsWith(OPERATOR_SCOPE_PREFIX)) {
+function operatorScopeSatisfied(
+  requestedScope: string,
+  granted: Set<string>,
+): boolean {
+  if (
+    granted.has(OPERATOR_ADMIN_SCOPE) &&
+    requestedScope.startsWith(OPERATOR_SCOPE_PREFIX)
+  ) {
     return true;
   }
   if (requestedScope === OPERATOR_READ_SCOPE) {
-    return granted.has(OPERATOR_READ_SCOPE) || granted.has(OPERATOR_WRITE_SCOPE);
+    return (
+      granted.has(OPERATOR_READ_SCOPE) || granted.has(OPERATOR_WRITE_SCOPE)
+    );
   }
   if (requestedScope === OPERATOR_WRITE_SCOPE) {
     return granted.has(OPERATOR_WRITE_SCOPE);

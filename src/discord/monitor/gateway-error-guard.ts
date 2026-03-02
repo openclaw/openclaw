@@ -6,7 +6,9 @@ export type EarlyGatewayErrorGuard = {
   release: () => void;
 };
 
-export function attachEarlyGatewayErrorGuard(client: Client): EarlyGatewayErrorGuard {
+export function attachEarlyGatewayErrorGuard(
+  client: Client,
+): EarlyGatewayErrorGuard {
   const pendingErrors: unknown[] = [];
   const gateway = client.getPlugin("gateway");
   const emitter = getDiscordGatewayEmitter(gateway);

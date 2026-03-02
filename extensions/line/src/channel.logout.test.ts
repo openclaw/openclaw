@@ -1,4 +1,8 @@
-import type { OpenClawConfig, PluginRuntime, ResolvedLineAccount } from "openclaw/plugin-sdk";
+import type {
+  OpenClawConfig,
+  PluginRuntime,
+  ResolvedLineAccount,
+} from "openclaw/plugin-sdk";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createRuntimeEnv } from "../../test-utils/runtime-env.js";
 import { linePlugin } from "./channel.js";
@@ -28,9 +32,12 @@ function createRuntime(): { runtime: PluginRuntime; mocks: LineRuntimeMocks } {
           : lineConfig;
       const hasToken =
         // oxlint-disable-next-line typescript/no-explicit-any
-        Boolean((entry as any).channelAccessToken) || Boolean((entry as any).tokenFile);
+        Boolean((entry as any).channelAccessToken) ||
+        Boolean((entry as any).tokenFile);
       // oxlint-disable-next-line typescript/no-explicit-any
-      const hasSecret = Boolean((entry as any).channelSecret) || Boolean((entry as any).secretFile);
+      const hasSecret =
+        Boolean((entry as any).channelSecret) ||
+        Boolean((entry as any).secretFile);
       return { tokenSource: hasToken && hasSecret ? "config" : "none" };
     },
   );
@@ -55,13 +62,24 @@ function resolveAccount(
   return resolver({ cfg, accountId });
 }
 
-async function runLogoutScenario(params: { cfg: OpenClawConfig; accountId: string }): Promise<{
-  result: Awaited<ReturnType<NonNullable<NonNullable<typeof linePlugin.gateway>["logoutAccount"]>>>;
+async function runLogoutScenario(params: {
+  cfg: OpenClawConfig;
+  accountId: string;
+}): Promise<{
+  result: Awaited<
+    ReturnType<
+      NonNullable<NonNullable<typeof linePlugin.gateway>["logoutAccount"]>
+    >
+  >;
   mocks: LineRuntimeMocks;
 }> {
   const { runtime, mocks } = createRuntime();
   setLineRuntime(runtime);
-  const account = resolveAccount(mocks.resolveLineAccount, params.cfg, params.accountId);
+  const account = resolveAccount(
+    mocks.resolveLineAccount,
+    params.cfg,
+    params.accountId,
+  );
   const result = await linePlugin.gateway!.logoutAccount!({
     accountId: params.accountId,
     cfg: params.cfg,

@@ -18,7 +18,9 @@ function normalizePart(value: unknown, fallback: string): string {
   return normalized.length > 0 ? normalized : fallback;
 }
 
-export function resolveControlPlaneRateLimitKey(client: GatewayClient | null): string {
+export function resolveControlPlaneRateLimitKey(
+  client: GatewayClient | null,
+): string {
   const deviceId = normalizePart(client?.connect?.device?.id, "unknown-device");
   const clientIp = normalizePart(client?.clientIp, "unknown-ip");
   if (deviceId === "unknown-device" && clientIp === "unknown-ip") {
@@ -44,7 +46,10 @@ export function consumeControlPlaneWriteBudget(params: {
   const key = resolveControlPlaneRateLimitKey(params.client);
   const bucket = controlPlaneBuckets.get(key);
 
-  if (!bucket || nowMs - bucket.windowStartMs >= CONTROL_PLANE_RATE_LIMIT_WINDOW_MS) {
+  if (
+    !bucket ||
+    nowMs - bucket.windowStartMs >= CONTROL_PLANE_RATE_LIMIT_WINDOW_MS
+  ) {
     controlPlaneBuckets.set(key, {
       count: 1,
       windowStartMs: nowMs,
@@ -74,7 +79,10 @@ export function consumeControlPlaneWriteBudget(params: {
   return {
     allowed: true,
     retryAfterMs: 0,
-    remaining: Math.max(0, CONTROL_PLANE_RATE_LIMIT_MAX_REQUESTS - bucket.count),
+    remaining: Math.max(
+      0,
+      CONTROL_PLANE_RATE_LIMIT_MAX_REQUESTS - bucket.count,
+    ),
     key,
   };
 }

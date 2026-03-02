@@ -75,7 +75,9 @@ describe("gmail hook config", () => {
       expect(result.value.label).toBe("INBOX");
       expect(result.value.includeBody).toBe(true);
       expect(result.value.serve.port).toBe(8788);
-      expect(result.value.hookUrl).toBe(`http://127.0.0.1:${DEFAULT_GATEWAY_PORT}/hooks/gmail`);
+      expect(result.value.hookUrl).toBe(
+        `http://127.0.0.1:${DEFAULT_GATEWAY_PORT}/hooks/gmail`,
+      );
     }
   });
 
@@ -97,7 +99,10 @@ describe("gmail hook config", () => {
 
   it("defaults serve path to / when tailscale is enabled", () => {
     const result = resolveWithGmailOverrides({ tailscale: { mode: "funnel" } });
-    expectResolvedPaths(result, { servePath: "/", publicPath: "/gmail-pubsub" });
+    expectResolvedPaths(result, {
+      servePath: "/",
+      publicPath: "/gmail-pubsub",
+    });
   });
 
   it("keeps the default public path when serve path is explicit", () => {
@@ -105,7 +110,10 @@ describe("gmail hook config", () => {
       serve: { path: "/gmail-pubsub" },
       tailscale: { mode: "funnel" },
     });
-    expectResolvedPaths(result, { servePath: "/", publicPath: "/gmail-pubsub" });
+    expectResolvedPaths(result, {
+      servePath: "/",
+      publicPath: "/gmail-pubsub",
+    });
   });
 
   it("keeps custom public path when serve path is set", () => {
@@ -122,6 +130,10 @@ describe("gmail hook config", () => {
       serve: { path: "/custom" },
       tailscale: { mode: "funnel", target },
     });
-    expectResolvedPaths(result, { servePath: "/custom", publicPath: "/custom", target });
+    expectResolvedPaths(result, {
+      servePath: "/custom",
+      publicPath: "/custom",
+      target,
+    });
   });
 });

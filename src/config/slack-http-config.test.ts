@@ -58,7 +58,9 @@ describe("Slack HTTP mode config", () => {
     });
     expect(res.ok).toBe(false);
     if (!res.ok) {
-      expect(res.issues[0]?.path).toBe("channels.slack.accounts.ops.signingSecret");
+      expect(res.issues[0]?.path).toBe(
+        "channels.slack.accounts.ops.signingSecret",
+      );
     }
   });
 });

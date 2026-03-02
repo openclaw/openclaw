@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { createTypingCallbacks } from "./typing.js";
 
-type TypingCallbackOverrides = Partial<Parameters<typeof createTypingCallbacks>[0]>;
+type TypingCallbackOverrides = Partial<
+  Parameters<typeof createTypingCallbacks>[0]
+>;
 type TypingHarnessStart = ReturnType<typeof vi.fn<() => Promise<void>>>;
 type TypingHarnessError = ReturnType<typeof vi.fn<(err: unknown) => void>>;
 
@@ -46,7 +48,9 @@ function createTypingHarness(overrides: TypingCallbackOverrides = {}) {
     ...(overrides.maxConsecutiveFailures !== undefined
       ? { maxConsecutiveFailures: overrides.maxConsecutiveFailures }
       : {}),
-    ...(overrides.maxDurationMs !== undefined ? { maxDurationMs: overrides.maxDurationMs } : {}),
+    ...(overrides.maxDurationMs !== undefined
+      ? { maxDurationMs: overrides.maxDurationMs }
+      : {}),
   });
   return { start, stop, onStartError, onStopError, callbacks };
 }
@@ -196,8 +200,12 @@ describe("createTypingCallbacks", () => {
   describe("TTL safety", () => {
     it("auto-stops typing after maxDurationMs", async () => {
       await withFakeTimers(async () => {
-        const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
-        const { start, stop, callbacks } = createTypingHarness({ maxDurationMs: 10_000 });
+        const consoleWarn = vi
+          .spyOn(console, "warn")
+          .mockImplementation(() => {});
+        const { start, stop, callbacks } = createTypingHarness({
+          maxDurationMs: 10_000,
+        });
 
         await callbacks.onReplyStart();
         expect(start).toHaveBeenCalledTimes(1);
@@ -208,7 +216,9 @@ describe("createTypingCallbacks", () => {
 
         // Should auto-stop
         expect(stop).toHaveBeenCalledTimes(1);
-        expect(consoleWarn).toHaveBeenCalledWith(expect.stringContaining("TTL exceeded"));
+        expect(consoleWarn).toHaveBeenCalledWith(
+          expect.stringContaining("TTL exceeded"),
+        );
 
         consoleWarn.mockRestore();
       });
@@ -216,8 +226,12 @@ describe("createTypingCallbacks", () => {
 
     it("does not auto-stop if idle is called before TTL", async () => {
       await withFakeTimers(async () => {
-        const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
-        const { stop, callbacks } = createTypingHarness({ maxDurationMs: 10_000 });
+        const consoleWarn = vi
+          .spyOn(console, "warn")
+          .mockImplementation(() => {});
+        const { stop, callbacks } = createTypingHarness({
+          maxDurationMs: 10_000,
+        });
 
         await callbacks.onReplyStart();
 
@@ -270,7 +284,9 @@ describe("createTypingCallbacks", () => {
 
     it("resets TTL timer on restart after idle", async () => {
       await withFakeTimers(async () => {
-        const { stop, callbacks } = createTypingHarness({ maxDurationMs: 10_000 });
+        const { stop, callbacks } = createTypingHarness({
+          maxDurationMs: 10_000,
+        });
 
         // First start
         await callbacks.onReplyStart();

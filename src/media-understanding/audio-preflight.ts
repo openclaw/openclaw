@@ -47,7 +47,9 @@ export async function transcribeFirstAudio(params: {
   }
 
   if (shouldLogVerbose()) {
-    logVerbose(`audio-preflight: transcribing attachment ${firstAudio.index} for mention check`);
+    logVerbose(
+      `audio-preflight: transcribing attachment ${firstAudio.index} for mention check`,
+    );
   }
 
   const providerRegistry = buildProviderRegistry(params.providers);
@@ -73,7 +75,9 @@ export async function transcribeFirstAudio(params: {
     }
 
     // Extract transcript from first audio output
-    const audioOutput = result.outputs.find((output) => output.kind === "audio.transcription");
+    const audioOutput = result.outputs.find(
+      (output) => output.kind === "audio.transcription",
+    );
     if (!audioOutput || !audioOutput.text) {
       return undefined;
     }

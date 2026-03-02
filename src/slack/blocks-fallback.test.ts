@@ -13,7 +13,11 @@ describe("buildSlackBlocksFallbackText", () => {
   it("uses image alt text", () => {
     expect(
       buildSlackBlocksFallbackText([
-        { type: "image", image_url: "https://example.com/image.png", alt_text: "Latency chart" },
+        {
+          type: "image",
+          image_url: "https://example.com/image.png",
+          alt_text: "Latency chart",
+        },
       ] as never),
     ).toBe("Latency chart");
   });

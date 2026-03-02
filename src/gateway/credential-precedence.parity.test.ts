@@ -24,7 +24,10 @@ const gatewayEnv = {
   OPENCLAW_GATEWAY_PASSWORD: "env-password",
 } as NodeJS.ProcessEnv;
 
-function makeRemoteGatewayConfig(remote: { token?: string; password?: string }): OpenClawConfig {
+function makeRemoteGatewayConfig(remote: {
+  token?: string;
+  password?: string;
+}): OpenClawConfig {
   return {
     gateway: {
       mode: "remote",
@@ -151,7 +154,9 @@ describe("gateway credential precedence parity", () => {
       mode,
       env,
     });
-    const status = withGatewayAuthEnv(env, () => resolveStatusGatewayProbeAuth(cfg));
+    const status = withGatewayAuthEnv(env, () =>
+      resolveStatusGatewayProbeAuth(cfg),
+    );
     const auth = resolveGatewayAuth({
       authConfig: cfg.gateway?.auth,
       env,
@@ -160,6 +165,8 @@ describe("gateway credential precedence parity", () => {
     expect(call).toEqual(expected.call);
     expect(probe).toEqual(expected.probe);
     expect(status).toEqual(expected.status);
-    expect({ token: auth.token, password: auth.password }).toEqual(expected.auth);
+    expect({ token: auth.token, password: auth.password }).toEqual(
+      expected.auth,
+    );
   });
 });

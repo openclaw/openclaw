@@ -7,7 +7,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const SCRIPT = path.join(process.cwd(), "scripts", "ios-team-id.sh");
 const BASH_BIN = process.platform === "win32" ? "bash" : "/bin/bash";
-const BASH_ARGS = process.platform === "win32" ? [SCRIPT] : ["--noprofile", "--norc", SCRIPT];
+const BASH_ARGS =
+  process.platform === "win32" ? [SCRIPT] : ["--noprofile", "--norc", SCRIPT];
 const BASE_PATH = process.env.PATH ?? "/usr/bin:/bin";
 const BASE_LANG = process.env.LANG ?? "C";
 let fixtureRoot = "";
@@ -46,15 +47,23 @@ function runScript(
       stdout?: string | Buffer;
       stderr?: string | Buffer;
     };
-    const stdout = typeof e.stdout === "string" ? e.stdout : (e.stdout?.toString("utf8") ?? "");
-    const stderr = typeof e.stderr === "string" ? e.stderr : (e.stderr?.toString("utf8") ?? "");
+    const stdout =
+      typeof e.stdout === "string"
+        ? e.stdout
+        : (e.stdout?.toString("utf8") ?? "");
+    const stderr =
+      typeof e.stderr === "string"
+        ? e.stderr
+        : (e.stderr?.toString("utf8") ?? "");
     return { ok: false, stdout: stdout.trim(), stderr: stderr.trim() };
   }
 }
 
 describe("scripts/ios-team-id.sh", () => {
   beforeAll(async () => {
-    fixtureRoot = await mkdtemp(path.join(os.tmpdir(), "openclaw-ios-team-id-"));
+    fixtureRoot = await mkdtemp(
+      path.join(os.tmpdir(), "openclaw-ios-team-id-"),
+    );
     sharedBinDir = path.join(fixtureRoot, "shared-bin");
     await mkdir(sharedBinDir, { recursive: true });
     await writeExecutable(
@@ -108,8 +117,13 @@ exit 1`,
     await mkdir(homeDir, { recursive: true });
     const binDir = path.join(homeDir, "bin");
     await mkdir(binDir, { recursive: true });
-    await mkdir(path.join(homeDir, "Library", "Preferences"), { recursive: true });
-    await writeFile(path.join(homeDir, "Library", "Preferences", "com.apple.dt.Xcode.plist"), "");
+    await mkdir(path.join(homeDir, "Library", "Preferences"), {
+      recursive: true,
+    });
+    await writeFile(
+      path.join(homeDir, "Library", "Preferences", "com.apple.dt.Xcode.plist"),
+      "",
+    );
     return { homeDir, binDir };
   }
 

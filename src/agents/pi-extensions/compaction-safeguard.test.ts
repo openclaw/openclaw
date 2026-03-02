@@ -1,12 +1,17 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { Api, Model } from "@mariozechner/pi-ai";
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type {
+  ExtensionAPI,
+  ExtensionContext,
+} from "@mariozechner/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import {
   getCompactionSafeguardRuntime,
   setCompactionSafeguardRuntime,
 } from "./compaction-safeguard-runtime.js";
-import compactionSafeguardExtension, { __testing } from "./compaction-safeguard.js";
+import compactionSafeguardExtension, {
+  __testing,
+} from "./compaction-safeguard.js";
 
 const {
   collectToolFailures,
@@ -37,7 +42,9 @@ function stubSessionManager(): ExtensionContext["sessionManager"] {
   return stub;
 }
 
-function createAnthropicModelFixture(overrides: Partial<Model<Api>> = {}): Model<Api> {
+function createAnthropicModelFixture(
+  overrides: Partial<Model<Api>> = {},
+): Model<Api> {
   return {
     id: "claude-opus-4-5",
     name: "Claude Opus 4.5",
@@ -68,7 +75,10 @@ const createCompactionHandler = () => {
   return compactionHandler as CompactionHandler;
 };
 
-const createCompactionEvent = (params: { messageText: string; tokensBefore: number }) => ({
+const createCompactionEvent = (params: {
+  messageText: string;
+  tokensBefore: number;
+}) => ({
   preparation: {
     messagesToSummarize: [
       { role: "user", content: params.messageText, timestamp: Date.now() },
@@ -125,7 +135,9 @@ describe("compaction-safeguard tool failures", () => {
 
     const section = formatToolFailuresSection(failures);
     expect(section).toContain("## Tool Failures");
-    expect(section).toContain("exec (status=failed exitCode=1): ENOENT: missing file");
+    expect(section).toContain(
+      "exec (status=failed exitCode=1): ENOENT: missing file",
+    );
   });
 
   it("dedupes by toolCallId and handles empty output", () => {
@@ -327,8 +339,12 @@ describe("compaction-safeguard runtime registry", () => {
     const sm2 = {};
     setCompactionSafeguardRuntime(sm1, { maxHistoryShare: 0.3 });
     setCompactionSafeguardRuntime(sm2, { maxHistoryShare: 0.8 });
-    expect(getCompactionSafeguardRuntime(sm1)).toEqual({ maxHistoryShare: 0.3 });
-    expect(getCompactionSafeguardRuntime(sm2)).toEqual({ maxHistoryShare: 0.8 });
+    expect(getCompactionSafeguardRuntime(sm1)).toEqual({
+      maxHistoryShare: 0.3,
+    });
+    expect(getCompactionSafeguardRuntime(sm2)).toEqual({
+      maxHistoryShare: 0.8,
+    });
   });
 
   it("stores and retrieves model from runtime (fallback for compact.ts workflow)", () => {

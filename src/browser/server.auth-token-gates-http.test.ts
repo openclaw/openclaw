@@ -1,4 +1,8 @@
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import {
+  createServer,
+  type IncomingMessage,
+  type ServerResponse,
+} from "node:http";
 import { fetch as realFetch } from "undici";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { isAuthorizedBrowserRequest } from "./http-auth.js";
@@ -9,7 +13,9 @@ let port = 0;
 describe("browser control HTTP auth", () => {
   beforeEach(async () => {
     server = createServer((req: IncomingMessage, res: ServerResponse) => {
-      if (!isAuthorizedBrowserRequest(req, { token: "browser-control-secret" })) {
+      if (
+        !isAuthorizedBrowserRequest(req, { token: "browser-control-secret" })
+      ) {
         res.statusCode = 401;
         res.setHeader("Content-Type", "text/plain; charset=utf-8");
         res.end("Unauthorized");

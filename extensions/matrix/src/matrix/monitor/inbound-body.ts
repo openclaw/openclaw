@@ -1,4 +1,6 @@
-export function resolveMatrixSenderUsername(senderId: string): string | undefined {
+export function resolveMatrixSenderUsername(
+  senderId: string,
+): string | undefined {
   const username = senderId.split(":")[0]?.replace(/^@/, "").trim();
   return username ? username : undefined;
 }
@@ -9,7 +11,8 @@ export function resolveMatrixInboundSenderLabel(params: {
   senderUsername?: string;
 }): string {
   const senderName = params.senderName.trim();
-  const senderUsername = params.senderUsername ?? resolveMatrixSenderUsername(params.senderId);
+  const senderUsername =
+    params.senderUsername ?? resolveMatrixSenderUsername(params.senderId);
   if (senderName && senderUsername && senderName !== senderUsername) {
     return `${senderName} (${senderUsername})`;
   }

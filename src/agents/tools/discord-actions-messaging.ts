@@ -23,7 +23,10 @@ import {
   sendVoiceMessageDiscord,
   unpinMessageDiscord,
 } from "../../discord/send.js";
-import type { DiscordSendComponents, DiscordSendEmbeds } from "../../discord/send.shared.js";
+import type {
+  DiscordSendComponents,
+  DiscordSendEmbeds,
+} from "../../discord/send.shared.js";
 import { resolveDiscordChannelId } from "../../discord/targets.js";
 import { withNormalizedTimestamp } from "../date-time.js";
 import { assertMediaNotDataUrl } from "../sandbox-paths.js";
@@ -90,7 +93,9 @@ export async function handleDiscordMessagingAction(
       });
       if (remove) {
         if (accountId) {
-          await removeReactionDiscord(channelId, messageId, emoji, { accountId });
+          await removeReactionDiscord(channelId, messageId, emoji, {
+            accountId,
+          });
         } else {
           await removeReactionDiscord(channelId, messageId, emoji);
         }
@@ -119,7 +124,9 @@ export async function handleDiscordMessagingAction(
       });
       const limitRaw = params.limit;
       const limit =
-        typeof limitRaw === "number" && Number.isFinite(limitRaw) ? limitRaw : undefined;
+        typeof limitRaw === "number" && Number.isFinite(limitRaw)
+          ? limitRaw
+          : undefined;
       const reactions = await fetchReactionsDiscord(channelId, messageId, {
         ...(accountId ? { accountId } : {}),
         limit,
@@ -157,10 +164,14 @@ export async function handleDiscordMessagingAction(
       });
       const allowMultiselectRaw = params.allowMultiselect;
       const allowMultiselect =
-        typeof allowMultiselectRaw === "boolean" ? allowMultiselectRaw : undefined;
+        typeof allowMultiselectRaw === "boolean"
+          ? allowMultiselectRaw
+          : undefined;
       const durationRaw = params.durationHours;
       const durationHours =
-        typeof durationRaw === "number" && Number.isFinite(durationRaw) ? durationRaw : undefined;
+        typeof durationRaw === "number" && Number.isFinite(durationRaw)
+          ? durationRaw
+          : undefined;
       const maxSelections = allowMultiselect ? Math.max(2, answers.length) : 1;
       await sendPollDiscord(
         to,
@@ -240,7 +251,9 @@ export async function handleDiscordMessagingAction(
       const silent = params.silent === true;
       const rawComponents = params.components;
       const componentSpec =
-        rawComponents && typeof rawComponents === "object" && !Array.isArray(rawComponents)
+        rawComponents &&
+        typeof rawComponents === "object" &&
+        !Array.isArray(rawComponents)
           ? readDiscordComponentSpec(rawComponents)
           : null;
       const components: DiscordSendComponents | undefined =
@@ -266,7 +279,9 @@ export async function handleDiscordMessagingAction(
 
       if (componentSpec) {
         if (asVoice) {
-          throw new Error("Discord components cannot be sent as voice messages.");
+          throw new Error(
+            "Discord components cannot be sent as voice messages.",
+          );
         }
         if (embeds?.length) {
           throw new Error("Discord components cannot include embeds.");
@@ -331,7 +346,12 @@ export async function handleDiscordMessagingAction(
         required: true,
       });
       const message = accountId
-        ? await editMessageDiscord(channelId, messageId, { content }, { accountId })
+        ? await editMessageDiscord(
+            channelId,
+            messageId,
+            { content },
+            { accountId },
+          )
         : await editMessageDiscord(channelId, messageId, { content });
       return jsonResult({ ok: true, message });
     }
@@ -360,7 +380,8 @@ export async function handleDiscordMessagingAction(
       const content = readStringParam(params, "content");
       const autoArchiveMinutesRaw = params.autoArchiveMinutes;
       const autoArchiveMinutes =
-        typeof autoArchiveMinutesRaw === "number" && Number.isFinite(autoArchiveMinutesRaw)
+        typeof autoArchiveMinutesRaw === "number" &&
+        Number.isFinite(autoArchiveMinutesRaw)
           ? autoArchiveMinutesRaw
           : undefined;
       const appliedTags = readStringArrayParam(params, "appliedTags");
@@ -385,7 +406,9 @@ export async function handleDiscordMessagingAction(
       });
       const channelId = readStringParam(params, "channelId");
       const includeArchived =
-        typeof params.includeArchived === "boolean" ? params.includeArchived : undefined;
+        typeof params.includeArchived === "boolean"
+          ? params.includeArchived
+          : undefined;
       const before = readStringParam(params, "before");
       const limit =
         typeof params.limit === "number" && Number.isFinite(params.limit)
@@ -467,7 +490,10 @@ export async function handleDiscordMessagingAction(
       const pins = accountId
         ? await listPinsDiscord(channelId, { accountId })
         : await listPinsDiscord(channelId);
-      return jsonResult({ ok: true, pins: pins.map((pin) => normalizeMessage(pin)) });
+      return jsonResult({
+        ok: true,
+        pins: pins.map((pin) => normalizeMessage(pin)),
+      });
     }
     case "searchMessages": {
       if (!isActionEnabled("search")) {
@@ -487,8 +513,14 @@ export async function handleDiscordMessagingAction(
         typeof params.limit === "number" && Number.isFinite(params.limit)
           ? params.limit
           : undefined;
-      const channelIdList = [...(channelIds ?? []), ...(channelId ? [channelId] : [])];
-      const authorIdList = [...(authorIds ?? []), ...(authorId ? [authorId] : [])];
+      const channelIdList = [
+        ...(channelIds ?? []),
+        ...(channelId ? [channelId] : []),
+      ];
+      const authorIdList = [
+        ...(authorIds ?? []),
+        ...(authorId ? [authorId] : []),
+      ];
       const results = accountId
         ? await searchMessagesDiscord(
             {
@@ -514,7 +546,9 @@ export async function handleDiscordMessagingAction(
       const messages = resultsRecord.messages;
       const normalizedMessages = Array.isArray(messages)
         ? messages.map((group) =>
-            Array.isArray(group) ? group.map((msg) => normalizeMessage(msg)) : group,
+            Array.isArray(group)
+              ? group.map((msg) => normalizeMessage(msg))
+              : group,
           )
         : messages;
       return jsonResult({

@@ -31,7 +31,13 @@ const READ_ONLY_ACTIONS = new Set([
   "probe",
 ]);
 
-const PROCESS_MUTATING_ACTIONS = new Set(["write", "send_keys", "submit", "paste", "kill"]);
+const PROCESS_MUTATING_ACTIONS = new Set([
+  "write",
+  "send_keys",
+  "submit",
+  "paste",
+  "kill",
+]);
 
 const MESSAGE_MUTATING_ACTIONS = new Set([
   "send",
@@ -57,7 +63,9 @@ export type ToolActionRef = {
 };
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
+  return value && typeof value === "object"
+    ? (value as Record<string, unknown>)
+    : undefined;
 }
 
 function normalizeActionName(value: unknown): string | undefined {
@@ -76,7 +84,11 @@ function normalizeFingerprintValue(value: unknown): string | undefined {
     const normalized = value.trim();
     return normalized ? normalized.toLowerCase() : undefined;
   }
-  if (typeof value === "number" || typeof value === "bigint" || typeof value === "boolean") {
+  if (
+    typeof value === "number" ||
+    typeof value === "bigint" ||
+    typeof value === "boolean"
+  ) {
     return String(value).toLowerCase();
   }
   return undefined;
@@ -117,9 +129,15 @@ export function isMutatingToolCall(toolName: string, args: unknown): boolean {
         typeof record?.message === "string"
       );
     case "session_status":
-      return typeof record?.model === "string" && record.model.trim().length > 0;
+      return (
+        typeof record?.model === "string" && record.model.trim().length > 0
+      );
     default: {
-      if (normalized === "cron" || normalized === "gateway" || normalized === "canvas") {
+      if (
+        normalized === "cron" ||
+        normalized === "gateway" ||
+        normalized === "canvas"
+      ) {
         return action == null || !READ_ONLY_ACTIONS.has(action);
       }
       if (normalized === "nodes") {
@@ -193,7 +211,10 @@ export function buildToolMutationState(
   };
 }
 
-export function isSameToolMutationAction(existing: ToolActionRef, next: ToolActionRef): boolean {
+export function isSameToolMutationAction(
+  existing: ToolActionRef,
+  next: ToolActionRef,
+): boolean {
   if (existing.actionFingerprint != null || next.actionFingerprint != null) {
     // For mutating flows, fail closed: only clear when both fingerprints exist and match.
     return (
@@ -202,5 +223,8 @@ export function isSameToolMutationAction(existing: ToolActionRef, next: ToolActi
       existing.actionFingerprint === next.actionFingerprint
     );
   }
-  return existing.toolName === next.toolName && (existing.meta ?? "") === (next.meta ?? "");
+  return (
+    existing.toolName === next.toolName &&
+    (existing.meta ?? "") === (next.meta ?? "")
+  );
 }

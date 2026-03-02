@@ -34,7 +34,10 @@ import type {
   TuiOptions,
   TuiStateAccess,
 } from "./tui-types.js";
-import { buildWaitingStatusMessage, defaultWaitingPhrases } from "./tui-waiting.js";
+import {
+  buildWaitingStatusMessage,
+  defaultWaitingPhrases,
+} from "./tui-waiting.js";
 
 export { resolveFinalAssistantText } from "./tui-formatters.js";
 export type { TuiOptions } from "./tui-types.js";
@@ -90,7 +93,10 @@ export function shouldEnableWindowsGitBashPasteFallback(params?: {
   // Some macOS terminals emit multiline paste as rapid single-line submits.
   // Enable burst coalescing so pasted blocks stay as one user message.
   if (platform === "darwin") {
-    if (termProgram.includes("iterm") || termProgram.includes("apple_terminal")) {
+    if (
+      termProgram.includes("iterm") ||
+      termProgram.includes("apple_terminal")
+    ) {
       return true;
     }
     return false;
@@ -228,7 +234,10 @@ export function resolveGatewayDisconnectState(reason?: string): {
   };
 }
 
-export function createBackspaceDeduper(params?: { dedupeWindowMs?: number; now?: () => number }) {
+export function createBackspaceDeduper(params?: {
+  dedupeWindowMs?: number;
+  now?: () => number;
+}) {
   const dedupeWindowMs = Math.max(0, Math.floor(params?.dedupeWindowMs ?? 8));
   const now = params?.now ?? (() => Date.now());
   let lastBackspaceAt = -1;
@@ -300,7 +309,8 @@ export function resolveCtrlCAction(params: {
 export async function runTui(opts: TuiOptions) {
   const config = loadConfig();
   const initialSessionInput = (opts.session ?? "").trim();
-  let sessionScope: SessionScope = (config.session?.scope ?? "per-sender") as SessionScope;
+  let sessionScope: SessionScope = (config.session?.scope ??
+    "per-sender") as SessionScope;
   let sessionMainKey = normalizeMainKey(config.session?.mainKey);
   let agentDefaultId = resolveDefaultAgentId(config);
   let currentAgentId = agentDefaultId;
@@ -612,7 +622,9 @@ export async function runTui(opts: TuiOptions) {
       return;
     }
 
-    statusLoader.setMessage(`${activityStatus} • ${elapsed} | ${connectionStatus}`);
+    statusLoader.setMessage(
+      `${activityStatus} • ${elapsed} | ${connectionStatus}`,
+    );
   };
 
   const startStatusTimer = () => {
@@ -643,7 +655,8 @@ export async function runTui(opts: TuiOptions) {
     // Pick a phrase once per waiting session.
     if (!waitingPhrase) {
       const idx = Math.floor(Math.random() * defaultWaitingPhrases.length);
-      waitingPhrase = defaultWaitingPhrases[idx] ?? defaultWaitingPhrases[0] ?? "waiting";
+      waitingPhrase =
+        defaultWaitingPhrases[idx] ?? defaultWaitingPhrases[0] ?? "waiting";
     }
 
     waitingTick = 0;
@@ -687,7 +700,9 @@ export async function runTui(opts: TuiOptions) {
       statusLoader?.stop();
       statusLoader = null;
       ensureStatusText();
-      const text = activityStatus ? `${connectionStatus} | ${activityStatus}` : connectionStatus;
+      const text = activityStatus
+        ? `${connectionStatus} | ${activityStatus}`
+        : connectionStatus;
       statusText?.setText(theme.dim(text));
     }
     lastActivityStatus = activityStatus;
@@ -723,12 +738,19 @@ export async function runTui(opts: TuiOptions) {
         ? `${sessionInfo.modelProvider}/${sessionInfo.model}`
         : sessionInfo.model
       : "unknown";
-    const tokens = formatTokens(sessionInfo.totalTokens ?? null, sessionInfo.contextTokens ?? null);
+    const tokens = formatTokens(
+      sessionInfo.totalTokens ?? null,
+      sessionInfo.contextTokens ?? null,
+    );
     const think = sessionInfo.thinkingLevel ?? "off";
     const verbose = sessionInfo.verboseLevel ?? "off";
     const reasoning = sessionInfo.reasoningLevel ?? "off";
     const reasoningLabel =
-      reasoning === "on" ? "reasoning" : reasoning === "stream" ? "reasoning:stream" : null;
+      reasoning === "on"
+        ? "reasoning"
+        : reasoning === "stream"
+          ? "reasoning:stream"
+          : null;
     const footerParts = [
       `agent ${agentLabel}`,
       `session ${sessionLabel}`,
@@ -798,28 +820,33 @@ export async function runTui(opts: TuiOptions) {
     process.exit(0);
   };
 
-  const { handleCommand, sendMessage, openModelSelector, openAgentSelector, openSessionSelector } =
-    createCommandHandlers({
-      client,
-      chatLog,
-      tui,
-      opts,
-      state,
-      deliverDefault,
-      openOverlay,
-      closeOverlay,
-      refreshSessionInfo,
-      applySessionInfoFromPatch,
-      loadHistory,
-      setSession,
-      refreshAgents,
-      abortActive,
-      setActivityStatus,
-      formatSessionKey,
-      noteLocalRunId,
-      forgetLocalRunId,
-      requestExit,
-    });
+  const {
+    handleCommand,
+    sendMessage,
+    openModelSelector,
+    openAgentSelector,
+    openSessionSelector,
+  } = createCommandHandlers({
+    client,
+    chatLog,
+    tui,
+    opts,
+    state,
+    deliverDefault,
+    openOverlay,
+    closeOverlay,
+    refreshSessionInfo,
+    applySessionInfoFromPatch,
+    loadHistory,
+    setSession,
+    refreshAgents,
+    abortActive,
+    setActivityStatus,
+    formatSessionKey,
+    noteLocalRunId,
+    forgetLocalRunId,
+    requestExit,
+  });
 
   const { runLocalShellLine } = createLocalShellRunner({
     chatLog,
@@ -908,7 +935,10 @@ export async function runTui(opts: TuiOptions) {
       await refreshAgents();
       updateHeader();
       await loadHistory();
-      setConnectionStatus(reconnected ? "gateway reconnected" : "gateway connected", 4000);
+      setConnectionStatus(
+        reconnected ? "gateway reconnected" : "gateway connected",
+        4000,
+      );
       tui.requestRender();
       if (!autoMessageSent && autoMessage) {
         autoMessageSent = true;
@@ -935,7 +965,10 @@ export async function runTui(opts: TuiOptions) {
   };
 
   client.onGap = (info) => {
-    setConnectionStatus(`event gap: expected ${info.expected}, got ${info.received}`, 5000);
+    setConnectionStatus(
+      `event gap: expected ${info.expected}, got ${info.received}`,
+      5000,
+    );
     tui.requestRender();
   };
 

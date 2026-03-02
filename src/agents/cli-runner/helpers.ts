@@ -16,10 +16,16 @@ import type { EmbeddedContextFile } from "../pi-embedded-helpers.js";
 import { detectRuntimeShell } from "../shell-utils.js";
 import { buildSystemPromptParams } from "../system-prompt-params.js";
 import { buildAgentSystemPrompt } from "../system-prompt.js";
-export { buildCliSupervisorScopeKey, resolveCliNoOutputTimeoutMs } from "./reliability.js";
+export {
+  buildCliSupervisorScopeKey,
+  resolveCliNoOutputTimeoutMs,
+} from "./reliability.js";
 
 const CLI_RUN_QUEUE = new Map<string, Promise<unknown>>();
-export function enqueueCliRun<T>(key: string, task: () => Promise<T>): Promise<T> {
+export function enqueueCliRun<T>(
+  key: string,
+  task: () => Promise<T>,
+): Promise<T> {
   const prior = CLI_RUN_QUEUE.get(key) ?? Promise.resolve();
   const chained = prior.catch(() => undefined).then(task);
   // Keep queue continuity even when a run rejects, without emitting unhandled rejections.
@@ -66,22 +72,25 @@ export function buildSystemPrompt(params: {
     agentId: params.agentId,
   });
   const defaultModelLabel = `${defaultModelRef.provider}/${defaultModelRef.model}`;
-  const { runtimeInfo, userTimezone, userTime, userTimeFormat } = buildSystemPromptParams({
-    config: params.config,
-    agentId: params.agentId,
-    workspaceDir: params.workspaceDir,
-    cwd: process.cwd(),
-    runtime: {
-      host: "openclaw",
-      os: `${os.type()} ${os.release()}`,
-      arch: os.arch(),
-      node: process.version,
-      model: params.modelDisplay,
-      defaultModel: defaultModelLabel,
-      shell: detectRuntimeShell(),
-    },
-  });
-  const ttsHint = params.config ? buildTtsSystemPromptHint(params.config) : undefined;
+  const { runtimeInfo, userTimezone, userTime, userTimeFormat } =
+    buildSystemPromptParams({
+      config: params.config,
+      agentId: params.agentId,
+      workspaceDir: params.workspaceDir,
+      cwd: process.cwd(),
+      runtime: {
+        host: "openclaw",
+        os: `${os.type()} ${os.release()}`,
+        arch: os.arch(),
+        node: process.version,
+        model: params.modelDisplay,
+        defaultModel: defaultModelLabel,
+        shell: detectRuntimeShell(),
+      },
+    });
+  const ttsHint = params.config
+    ? buildTtsSystemPromptHint(params.config)
+    : undefined;
   const ownerDisplay = resolveOwnerDisplaySetting(params.config);
   return buildAgentSystemPrompt({
     workspaceDir: params.workspaceDir,
@@ -106,7 +115,10 @@ export function buildSystemPrompt(params: {
   });
 }
 
-export function normalizeCliModel(modelId: string, backend: CliBackendConfig): string {
+export function normalizeCliModel(
+  modelId: string,
+  backend: CliBackendConfig,
+): string {
   const trimmed = modelId.trim();
   if (!trimmed) {
     return trimmed;
@@ -129,7 +141,9 @@ function toUsage(raw: Record<string, unknown>): CliUsage | undefined {
   const input = pick("input_tokens") ?? pick("inputTokens");
   const output = pick("output_tokens") ?? pick("outputTokens");
   const cacheRead =
-    pick("cache_read_input_tokens") ?? pick("cached_input_tokens") ?? pick("cacheRead");
+    pick("cache_read_input_tokens") ??
+    pick("cached_input_tokens") ??
+    pick("cacheRead");
   const cacheWrite = pick("cache_write_input_tokens") ?? pick("cacheWrite");
   const total = pick("total_tokens") ?? pick("total");
   if (!input && !output && !cacheRead && !cacheWrite && !total) {
@@ -185,7 +199,10 @@ function pickSessionId(
   return undefined;
 }
 
-export function parseCliJson(raw: string, backend: CliBackendConfig): CliOutput | null {
+export function parseCliJson(
+  raw: string,
+  backend: CliBackendConfig,
+): CliOutput | null {
   const trimmed = raw.trim();
   if (!trimmed) {
     return null;
@@ -209,7 +226,10 @@ export function parseCliJson(raw: string, backend: CliBackendConfig): CliOutput 
   return { text: text.trim(), sessionId, usage };
 }
 
-export function parseCliJsonl(raw: string, backend: CliBackendConfig): CliOutput | null {
+export function parseCliJsonl(
+  raw: string,
+  backend: CliBackendConfig,
+): CliOutput | null {
   const lines = raw
     .split(/\r?\n/g)
     .map((line) => line.trim())
@@ -294,7 +314,10 @@ export function resolveSessionIdToSend(params: {
   return { sessionId: crypto.randomUUID(), isNew: true };
 }
 
-export function resolvePromptInput(params: { backend: CliBackendConfig; prompt: string }): {
+export function resolvePromptInput(params: {
+  backend: CliBackendConfig;
+  prompt: string;
+}): {
   argsPrompt?: string;
   stdin?: string;
 } {
@@ -302,7 +325,10 @@ export function resolvePromptInput(params: { backend: CliBackendConfig; prompt: 
   if (inputMode === "stdin") {
     return { stdin: params.prompt };
   }
-  if (params.backend.maxPromptArgChars && params.prompt.length > params.backend.maxPromptArgChars) {
+  if (
+    params.backend.maxPromptArgChars &&
+    params.prompt.length > params.backend.maxPromptArgChars
+  ) {
     return { stdin: params.prompt };
   }
   return { argsPrompt: params.prompt };
@@ -325,7 +351,10 @@ function resolveImageExtension(mimeType: string): string {
   return "bin";
 }
 
-export function appendImagePathsToPrompt(prompt: string, paths: string[]): string {
+export function appendImagePathsToPrompt(
+  prompt: string,
+  paths: string[],
+): string {
   if (!paths.length) {
     return prompt;
   }
@@ -337,7 +366,9 @@ export function appendImagePathsToPrompt(prompt: string, paths: string[]): strin
 export async function writeCliImages(
   images: ImageContent[],
 ): Promise<{ paths: string[]; cleanup: () => Promise<void> }> {
-  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-images-"));
+  const tempDir = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-cli-images-"),
+  );
   const paths: string[] = [];
   for (let i = 0; i < images.length; i += 1) {
     const image = images[i];
@@ -367,7 +398,11 @@ export function buildCliArgs(params: {
   if (!params.useResume && params.backend.modelArg && params.modelId) {
     args.push(params.backend.modelArg, params.modelId);
   }
-  if (!params.useResume && params.systemPrompt && params.backend.systemPromptArg) {
+  if (
+    !params.useResume &&
+    params.systemPrompt &&
+    params.backend.systemPromptArg
+  ) {
     args.push(params.backend.systemPromptArg, params.systemPrompt);
   }
   if (!params.useResume && params.sessionId) {

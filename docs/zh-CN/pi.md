@@ -271,7 +271,10 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
 `splitSdkTools()` 通过 `customTools` 传递所有工具：
 
 ```typescript
-export function splitSdkTools(options: { tools: AnyAgentTool[]; sandboxEnabled: boolean }) {
+export function splitSdkTools(options: {
+  tools: AnyAgentTool[];
+  sandboxEnabled: boolean;
+}) {
   return {
     builtInTools: [], // Empty. We override everything
     customTools: toToolDefinitions(options.tools),
@@ -335,8 +338,15 @@ const compactResult = await compactEmbeddedPiSessionDirect({
 OpenClaw 维护一个认证配置文件存储，每个提供商有多个 API 密钥：
 
 ```typescript
-const authStore = ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false });
-const profileOrder = resolveAuthProfileOrder({ cfg, store: authStore, provider, preferredProfile });
+const authStore = ensureAuthProfileStore(agentDir, {
+  allowKeychainPrompt: false,
+});
+const profileOrder = resolveAuthProfileOrder({
+  cfg,
+  store: authStore,
+  provider,
+  preferredProfile,
+});
 ```
 
 配置文件在失败时轮换，并带有冷却跟踪：
@@ -416,7 +426,9 @@ if (cfg?.agents?.defaults?.contextPruning?.mode === "cache-ttl") {
 `EmbeddedBlockChunker` 管理将流式文本分成离散的回复块：
 
 ```typescript
-const blockChunker = blockChunking ? new EmbeddedBlockChunker(blockChunking) : null;
+const blockChunker = blockChunking
+  ? new EmbeddedBlockChunker(blockChunking)
+  : null;
 ```
 
 ### 思考/最终标签剥离
@@ -424,7 +436,10 @@ const blockChunker = blockChunking ? new EmbeddedBlockChunker(blockChunking) : n
 流式输出被处理以剥离 `<think>`/`<thinking>` 块并提取 `<final>` 内容：
 
 ```typescript
-const stripBlockTags = (text: string, state: { thinking: boolean; final: boolean }) => {
+const stripBlockTags = (
+  text: string,
+  state: { thinking: boolean; final: boolean },
+) => {
   // Strip <think>...</think> content
   // If enforceFinalTag, only return <final>...</final> content
 };
@@ -435,7 +450,12 @@ const stripBlockTags = (text: string, state: { thinking: boolean; final: boolean
 回复指令如 `[[media:url]]`、`[[voice]]`、`[[reply:id]]` 被解析和提取：
 
 ```typescript
-const { text: cleanedText, mediaUrls, audioAsVoice, replyToId } = consumeReplyDirectives(chunk);
+const {
+  text: cleanedText,
+  mediaUrls,
+  audioAsVoice,
+  replyToId,
+} = consumeReplyDirectives(chunk);
 ```
 
 ## 错误处理

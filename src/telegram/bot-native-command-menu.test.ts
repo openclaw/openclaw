@@ -18,7 +18,10 @@ describe("bot-native-command-menu", () => {
     expect(result.totalCommands).toBe(105);
     expect(result.maxCommands).toBe(100);
     expect(result.overflowCount).toBe(5);
-    expect(result.commandsToRegister[0]).toEqual({ command: "cmd_0", description: "Command 0" });
+    expect(result.commandsToRegister[0]).toEqual({
+      command: "cmd_0",
+      description: "Command 0",
+    });
     expect(result.commandsToRegister[99]).toEqual({
       command: "cmd_99",
       description: "Command 99",
@@ -39,7 +42,9 @@ describe("bot-native-command-menu", () => {
       existingCommands,
     });
 
-    expect(result.commands).toEqual([{ command: "valid", description: "Works" }]);
+    expect(result.commands).toEqual([
+      { command: "valid", description: "Works" },
+    ]);
     expect(result.issues).toContain(
       'Plugin command "/bad-name!" is invalid for Telegram (use a-z, 0-9, underscore; max 32 chars).',
     );
@@ -47,7 +52,9 @@ describe("bot-native-command-menu", () => {
       'Plugin command "/native" conflicts with an existing Telegram command.',
     );
     expect(result.issues).toContain('Plugin command "/valid" is duplicated.');
-    expect(result.issues).toContain('Plugin command "/empty" is missing a description.');
+    expect(result.issues).toContain(
+      'Plugin command "/empty" is missing a description.',
+    );
   });
 
   it("normalizes hyphenated plugin command names", () => {
@@ -56,7 +63,9 @@ describe("bot-native-command-menu", () => {
       existingCommands: new Set<string>(),
     });
 
-    expect(result.commands).toEqual([{ command: "agent_run", description: "Run agent" }]);
+    expect(result.commands).toEqual([
+      { command: "agent_run", description: "Run agent" },
+    ]);
     expect(result.issues).toEqual([]);
   });
 
@@ -91,7 +100,9 @@ describe("bot-native-command-menu", () => {
     const deleteMyCommands = vi.fn(async () => undefined);
     const setMyCommands = vi
       .fn()
-      .mockRejectedValueOnce(new Error("400: Bad Request: BOT_COMMANDS_TOO_MUCH"))
+      .mockRejectedValueOnce(
+        new Error("400: Bad Request: BOT_COMMANDS_TOO_MUCH"),
+      )
       .mockResolvedValue(undefined);
     const runtimeLog = vi.fn();
 

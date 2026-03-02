@@ -10,7 +10,12 @@ import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 
-export type InternalHookEventType = "command" | "session" | "agent" | "gateway" | "message";
+export type InternalHookEventType =
+  | "command"
+  | "session"
+  | "agent"
+  | "gateway"
+  | "message";
 
 export type AgentBootstrapHookContext = {
   workspaceDir: string;
@@ -108,7 +113,9 @@ export interface InternalHookEvent {
   messages: string[];
 }
 
-export type InternalHookHandler = (event: InternalHookEvent) => Promise<void> | void;
+export type InternalHookHandler = (
+  event: InternalHookEvent,
+) => Promise<void> | void;
 
 /** Registry of hook handlers by event key */
 const handlers = new Map<string, InternalHookHandler[]>();
@@ -133,7 +140,10 @@ const log = createSubsystemLogger("internal-hooks");
  * });
  * ```
  */
-export function registerInternalHook(eventKey: string, handler: InternalHookHandler): void {
+export function registerInternalHook(
+  eventKey: string,
+  handler: InternalHookHandler,
+): void {
   if (!handlers.has(eventKey)) {
     handlers.set(eventKey, []);
   }
@@ -146,7 +156,10 @@ export function registerInternalHook(eventKey: string, handler: InternalHookHand
  * @param eventKey - Event key the handler was registered for
  * @param handler - The handler function to remove
  */
-export function unregisterInternalHook(eventKey: string, handler: InternalHookHandler): void {
+export function unregisterInternalHook(
+  eventKey: string,
+  handler: InternalHookHandler,
+): void {
   const eventHandlers = handlers.get(eventKey);
   if (!eventHandlers) {
     return;
@@ -189,7 +202,9 @@ export function getRegisteredEventKeys(): string[] {
  *
  * @param event - The event to trigger
  */
-export async function triggerInternalHook(event: InternalHookEvent): Promise<void> {
+export async function triggerInternalHook(
+  event: InternalHookEvent,
+): Promise<void> {
   const typeHandlers = handlers.get(event.type) ?? [];
   const specificHandlers = handlers.get(`${event.type}:${event.action}`) ?? [];
 
@@ -233,7 +248,9 @@ export function createInternalHookEvent(
   };
 }
 
-export function isAgentBootstrapEvent(event: InternalHookEvent): event is AgentBootstrapHookEvent {
+export function isAgentBootstrapEvent(
+  event: InternalHookEvent,
+): event is AgentBootstrapHookEvent {
   if (event.type !== "agent" || event.action !== "bootstrap") {
     return false;
   }
@@ -247,7 +264,9 @@ export function isAgentBootstrapEvent(event: InternalHookEvent): event is AgentB
   return Array.isArray(context.bootstrapFiles);
 }
 
-export function isGatewayStartupEvent(event: InternalHookEvent): event is GatewayStartupHookEvent {
+export function isGatewayStartupEvent(
+  event: InternalHookEvent,
+): event is GatewayStartupHookEvent {
   if (event.type !== "gateway" || event.action !== "startup") {
     return false;
   }
@@ -265,10 +284,14 @@ export function isMessageReceivedEvent(
   if (!context || typeof context !== "object") {
     return false;
   }
-  return typeof context.from === "string" && typeof context.channelId === "string";
+  return (
+    typeof context.from === "string" && typeof context.channelId === "string"
+  );
 }
 
-export function isMessageSentEvent(event: InternalHookEvent): event is MessageSentHookEvent {
+export function isMessageSentEvent(
+  event: InternalHookEvent,
+): event is MessageSentHookEvent {
   if (event.type !== "message" || event.action !== "sent") {
     return false;
   }

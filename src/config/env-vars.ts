@@ -6,10 +6,14 @@ import {
 import type { OpenClawConfig } from "./types.js";
 
 function isBlockedConfigEnvVar(key: string): boolean {
-  return isDangerousHostEnvVarName(key) || isDangerousHostEnvOverrideVarName(key);
+  return (
+    isDangerousHostEnvVarName(key) || isDangerousHostEnvOverrideVarName(key)
+  );
 }
 
-function collectConfigEnvVarsByTarget(cfg?: OpenClawConfig): Record<string, string> {
+function collectConfigEnvVarsByTarget(
+  cfg?: OpenClawConfig,
+): Record<string, string> {
   const envConfig = cfg?.env;
   if (!envConfig) {
     return {};
@@ -53,16 +57,22 @@ function collectConfigEnvVarsByTarget(cfg?: OpenClawConfig): Record<string, stri
   return entries;
 }
 
-export function collectConfigRuntimeEnvVars(cfg?: OpenClawConfig): Record<string, string> {
+export function collectConfigRuntimeEnvVars(
+  cfg?: OpenClawConfig,
+): Record<string, string> {
   return collectConfigEnvVarsByTarget(cfg);
 }
 
-export function collectConfigServiceEnvVars(cfg?: OpenClawConfig): Record<string, string> {
+export function collectConfigServiceEnvVars(
+  cfg?: OpenClawConfig,
+): Record<string, string> {
   return collectConfigEnvVarsByTarget(cfg);
 }
 
 /** @deprecated Use `collectConfigRuntimeEnvVars` or `collectConfigServiceEnvVars`. */
-export function collectConfigEnvVars(cfg?: OpenClawConfig): Record<string, string> {
+export function collectConfigEnvVars(
+  cfg?: OpenClawConfig,
+): Record<string, string> {
   return collectConfigRuntimeEnvVars(cfg);
 }
 

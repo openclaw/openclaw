@@ -2,7 +2,9 @@ import { normalizeCommandBody } from "./commands-registry.js";
 
 export type SendPolicyOverride = "allow" | "deny";
 
-export function normalizeSendPolicyOverride(raw?: string | null): SendPolicyOverride | undefined {
+export function normalizeSendPolicyOverride(
+  raw?: string | null,
+): SendPolicyOverride | undefined {
   const value = raw?.trim().toLowerCase();
   if (!value) {
     return undefined;

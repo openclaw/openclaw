@@ -109,11 +109,15 @@ export async function startSlackStream(
 /**
  * Append markdown text to an active Slack stream.
  */
-export async function appendSlackStream(params: AppendSlackStreamParams): Promise<void> {
+export async function appendSlackStream(
+  params: AppendSlackStreamParams,
+): Promise<void> {
   const { session, text } = params;
 
   if (session.stopped) {
-    logVerbose("slack-stream: attempted to append to a stopped stream, ignoring");
+    logVerbose(
+      "slack-stream: attempted to append to a stopped stream, ignoring",
+    );
     return;
   }
 
@@ -131,7 +135,9 @@ export async function appendSlackStream(params: AppendSlackStreamParams): Promis
  * After calling this the stream message becomes a normal Slack message.
  * Optionally include final text to append before stopping.
  */
-export async function stopSlackStream(params: StopSlackStreamParams): Promise<void> {
+export async function stopSlackStream(
+  params: StopSlackStreamParams,
+): Promise<void> {
   const { session, text } = params;
 
   if (session.stopped) {

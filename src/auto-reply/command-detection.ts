@@ -60,7 +60,9 @@ export function isControlCommandMessage(
   if (hasControlCommand(trimmed, cfg, options)) {
     return true;
   }
-  const normalized = normalizeCommandBody(trimmed, options).trim().toLowerCase();
+  const normalized = normalizeCommandBody(trimmed, options)
+    .trim()
+    .toLowerCase();
   return isAbortTrigger(normalized);
 }
 
@@ -84,5 +86,7 @@ export function shouldComputeCommandAuthorized(
   cfg?: OpenClawConfig,
   options?: CommandNormalizeOptions,
 ): boolean {
-  return isControlCommandMessage(text, cfg, options) || hasInlineCommandTokens(text);
+  return (
+    isControlCommandMessage(text, cfg, options) || hasInlineCommandTokens(text)
+  );
 }

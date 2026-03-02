@@ -77,7 +77,8 @@ function serviceSummary(label: string, svc: BonjourService): string {
   } catch {
     // ignore
   }
-  const state = typeof svc.serviceState === "string" ? svc.serviceState : "unknown";
+  const state =
+    typeof svc.serviceState === "string" ? svc.serviceState : "unknown";
   return `${label} fqdn=${fqdn} host=${hostname} port=${port} state=${state}`;
 }
 
@@ -129,7 +130,11 @@ export async function startGatewayBonjourAdvertiser(
   }
   // In minimal mode, omit cliPath to avoid exposing filesystem structure.
   // This info can be obtained via the authenticated WebSocket if needed.
-  if (!opts.minimal && typeof opts.cliPath === "string" && opts.cliPath.trim()) {
+  if (
+    !opts.minimal &&
+    typeof opts.cliPath === "string" &&
+    opts.cliPath.trim()
+  ) {
     txtBase.cliPath = opts.cliPath.trim();
   }
 
@@ -176,16 +181,23 @@ export async function startGatewayBonjourAdvertiser(
     try {
       svc.on("name-change", (name: unknown) => {
         const next = typeof name === "string" ? name : String(name);
-        logWarn(`bonjour: ${label} name conflict resolved; newName=${JSON.stringify(next)}`);
+        logWarn(
+          `bonjour: ${label} name conflict resolved; newName=${JSON.stringify(next)}`,
+        );
       });
       svc.on("hostname-change", (nextHostname: unknown) => {
-        const next = typeof nextHostname === "string" ? nextHostname : String(nextHostname);
+        const next =
+          typeof nextHostname === "string"
+            ? nextHostname
+            : String(nextHostname);
         logWarn(
           `bonjour: ${label} hostname conflict resolved; newHostname=${JSON.stringify(next)}`,
         );
       });
     } catch (err) {
-      logDebug(`bonjour: failed to attach listeners for ${label}: ${String(err)}`);
+      logDebug(
+        `bonjour: failed to attach listeners for ${label}: ${String(err)}`,
+      );
     }
   }
 

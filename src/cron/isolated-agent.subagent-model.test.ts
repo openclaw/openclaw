@@ -100,7 +100,11 @@ async function runSubagentModelCase(params: {
   mockEmbeddedAgent();
   const job = makeJob();
   if (params.jobModelOverride) {
-    job.payload = { kind: "agentTurn", message: "do work", model: params.jobModelOverride };
+    job.payload = {
+      kind: "agentTurn",
+      message: "do work",
+      model: params.jobModelOverride,
+    };
   }
 
   await runCronIsolatedAgentTurn({
@@ -167,7 +171,10 @@ describe("runCronIsolatedAgentTurn: subagent model resolution (#11461)", () => {
                 },
               },
             } satisfies Partial<OpenClawConfig>);
-      const call = await runSubagentModelCase({ home, cfgOverrides: resolvedCfg });
+      const call = await runSubagentModelCase({
+        home,
+        cfgOverrides: resolvedCfg,
+      });
       expect(call?.provider).toBe(expectedProvider);
       expect(call?.model).toBe(expectedModel);
     });

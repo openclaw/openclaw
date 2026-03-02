@@ -1,4 +1,7 @@
-function failOrUndefined(params: { onMissing: "throw" | "undefined"; message: string }): undefined {
+function failOrUndefined(params: {
+  onMissing: "throw" | "undefined";
+  message: string;
+}): undefined {
   if (params.onMissing === "throw") {
     throw new Error(params.message);
   }
@@ -45,7 +48,11 @@ export function readJsonPointer(
       current = current[index];
       continue;
     }
-    if (typeof current !== "object" || current === null || Array.isArray(current)) {
+    if (
+      typeof current !== "object" ||
+      current === null ||
+      Array.isArray(current)
+    ) {
       return failOrUndefined({
         onMissing,
         message: `JSON pointer segment "${token}" does not exist.`,

@@ -11,9 +11,17 @@ import {
 import { loadOpenClawPlugins } from "../plugins/loader.js";
 import { guardSessionManager } from "./session-tool-result-guard-wrapper.js";
 
-const EMPTY_PLUGIN_SCHEMA = { type: "object", additionalProperties: false, properties: {} };
+const EMPTY_PLUGIN_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  properties: {},
+};
 
-function writeTempPlugin(params: { dir: string; id: string; body: string }): string {
+function writeTempPlugin(params: {
+  dir: string;
+  id: string;
+  body: string;
+}): string {
   const pluginDir = path.join(params.dir, params.id);
   fs.mkdirSync(pluginDir, { recursive: true });
   const file = path.join(pluginDir, `${params.id}.mjs`);
@@ -33,8 +41,12 @@ function writeTempPlugin(params: { dir: string; id: string; body: string }): str
   return file;
 }
 
-function appendToolCallAndResult(sm: ReturnType<typeof SessionManager.inMemory>) {
-  const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
+function appendToolCallAndResult(
+  sm: ReturnType<typeof SessionManager.inMemory>,
+) {
+  const appendMessage = sm.appendMessage.bind(sm) as unknown as (
+    message: AgentMessage,
+  ) => void;
   appendMessage({
     role: "assistant",
     content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
@@ -50,7 +62,9 @@ function appendToolCallAndResult(sm: ReturnType<typeof SessionManager.inMemory>)
   } as any);
 }
 
-function getPersistedToolResult(sm: ReturnType<typeof SessionManager.inMemory>) {
+function getPersistedToolResult(
+  sm: ReturnType<typeof SessionManager.inMemory>,
+) {
   const messages = sm
     .getEntries()
     .filter((e) => e.type === "message")
@@ -134,7 +148,9 @@ describe("tool_result_persist hook", () => {
 
 describe("before_message_write hook", () => {
   it("continues persistence when a before_message_write hook throws", () => {
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-before-write-"));
+    const tmp = fs.mkdtempSync(
+      path.join(os.tmpdir(), "openclaw-before-write-"),
+    );
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
 
     const plugin = writeTempPlugin({
@@ -163,7 +179,9 @@ describe("before_message_write hook", () => {
       agentId: "main",
       sessionKey: "main",
     });
-    const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
+    const appendMessage = sm.appendMessage.bind(sm) as unknown as (
+      message: AgentMessage,
+    ) => void;
     appendMessage({
       role: "user",
       content: "hello",

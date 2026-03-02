@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { normalizeWebhookMessage, normalizeWebhookReaction } from "./monitor-normalize.js";
+import {
+  normalizeWebhookMessage,
+  normalizeWebhookReaction,
+} from "./monitor-normalize.js";
 
 describe("normalizeWebhookMessage", () => {
   it("falls back to DM chatGuid handle when sender handle is missing", () => {

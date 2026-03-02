@@ -36,7 +36,11 @@ import {
   inferToolKind,
 } from "./event-mapper.js";
 import { readBool, readNumber, readString } from "./meta.js";
-import { parseSessionMeta, resetSessionIfNeeded, resolveSessionKey } from "./session-mapper.js";
+import {
+  parseSessionMeta,
+  resetSessionIfNeeded,
+  resolveSessionKey,
+} from "./session-mapper.js";
 import { defaultAcpSessionStore, type AcpSessionStore } from "./session.js";
 import { ACP_AGENT_INFO, type AcpServerOptions } from "./types.js";
 
@@ -78,16 +82,20 @@ export class AcpGatewayAgent implements Agent {
     this.connection = connection;
     this.gateway = gateway;
     this.opts = opts;
-    this.log = opts.verbose ? (msg: string) => process.stderr.write(`[acp] ${msg}\n`) : () => {};
+    this.log = opts.verbose
+      ? (msg: string) => process.stderr.write(`[acp] ${msg}\n`)
+      : () => {};
     this.sessionStore = opts.sessionStore ?? defaultAcpSessionStore;
     this.sessionCreateRateLimiter = createFixedWindowRateLimiter({
       maxRequests: Math.max(
         1,
-        opts.sessionCreateRateLimit?.maxRequests ?? SESSION_CREATE_RATE_LIMIT_DEFAULT_MAX_REQUESTS,
+        opts.sessionCreateRateLimit?.maxRequests ??
+          SESSION_CREATE_RATE_LIMIT_DEFAULT_MAX_REQUESTS,
       ),
       windowMs: Math.max(
         1_000,
-        opts.sessionCreateRateLimit?.windowMs ?? SESSION_CREATE_RATE_LIMIT_DEFAULT_WINDOW_MS,
+        opts.sessionCreateRateLimit?.windowMs ??
+          SESSION_CREATE_RATE_LIMIT_DEFAULT_WINDOW_MS,
       ),
     });
   }
@@ -205,16 +213,23 @@ export class AcpGatewayAgent implements Agent {
     return {};
   }
 
-  async unstable_listSessions(params: ListSessionsRequest): Promise<ListSessionsResponse> {
+  async unstable_listSessions(
+    params: ListSessionsRequest,
+  ): Promise<ListSessionsResponse> {
     const limit = readNumber(params._meta, ["limit"]) ?? 100;
-    const result = await this.gateway.request<SessionsListResult>("sessions.list", { limit });
+    const result = await this.gateway.request<SessionsListResult>(
+      "sessions.list",
+      { limit },
+    );
     const cwd = params.cwd ?? process.cwd();
     return {
       sessions: result.sessions.map((session) => ({
         sessionId: session.key,
         cwd,
         title: session.displayName ?? session.label ?? session.key,
-        updatedAt: session.updatedAt ? new Date(session.updatedAt).toISOString() : undefined,
+        updatedAt: session.updatedAt
+          ? new Date(session.updatedAt).toISOString()
+          : undefined,
         _meta: {
           sessionKey: session.key,
           kind: session.kind,
@@ -225,11 +240,15 @@ export class AcpGatewayAgent implements Agent {
     };
   }
 
-  async authenticate(_params: AuthenticateRequest): Promise<AuthenticateResponse> {
+  async authenticate(
+    _params: AuthenticateRequest,
+  ): Promise<AuthenticateResponse> {
     return {};
   }
 
-  async setSessionMode(params: SetSessionModeRequest): Promise<SetSessionModeResponse> {
+  async setSessionMode(
+    params: SetSessionModeRequest,
+  ): Promise<SetSessionModeResponse> {
     const session = this.sessionStore.getSession(params.sessionId);
     if (!session) {
       throw new Error(`Session ${params.sessionId} not found`);
@@ -266,11 +285,15 @@ export class AcpGatewayAgent implements Agent {
     const attachments = extractAttachmentsFromPrompt(params.prompt);
     const prefixCwd = meta.prefixCwd ?? this.opts.prefixCwd ?? true;
     const displayCwd = shortenHomePath(session.cwd);
-    const message = prefixCwd ? `[Working directory: ${displayCwd}]\n\n${userText}` : userText;
+    const message = prefixCwd
+      ? `[Working directory: ${displayCwd}]\n\n${userText}`
+      : userText;
 
     // Defense-in-depth: also check the final assembled message (includes cwd prefix)
     if (Buffer.byteLength(message, "utf-8") > MAX_PROMPT_BYTES) {
-      throw new Error(`Prompt exceeds maximum allowed size of ${MAX_PROMPT_BYTES} bytes`);
+      throw new Error(
+        `Prompt exceeds maximum allowed size of ${MAX_PROMPT_BYTES} bytes`,
+      );
     }
 
     const abortController = new AbortController();
@@ -316,7 +339,9 @@ export class AcpGatewayAgent implements Agent {
 
     this.sessionStore.cancelActiveRun(params.sessionId);
     try {
-      await this.gateway.request("chat.abort", { sessionKey: session.sessionKey });
+      await this.gateway.request("chat.abort", {
+        sessionKey: session.sessionKey,
+      });
     } catch (err) {
       this.log(`cancel error: ${String(err)}`);
     }
@@ -436,7 +461,9 @@ export class AcpGatewayAgent implements Agent {
     sessionId: string,
     messageData: Record<string, unknown>,
   ): Promise<void> {
-    const content = messageData.content as Array<{ type: string; text?: string }> | undefined;
+    const content = messageData.content as
+      | Array<{ type: string; text?: string }>
+      | undefined;
     const fullText = content?.find((c) => c.type === "text")?.text ?? "";
     const pending = this.pendingPrompts.get(sessionId);
     if (!pending) {
@@ -461,13 +488,19 @@ export class AcpGatewayAgent implements Agent {
     });
   }
 
-  private finishPrompt(sessionId: string, pending: PendingPrompt, stopReason: StopReason): void {
+  private finishPrompt(
+    sessionId: string,
+    pending: PendingPrompt,
+    stopReason: StopReason,
+  ): void {
     this.pendingPrompts.delete(sessionId);
     this.sessionStore.clearActiveRun(sessionId);
     pending.resolve({ stopReason });
   }
 
-  private findPendingBySessionKey(sessionKey: string): PendingPrompt | undefined {
+  private findPendingBySessionKey(
+    sessionKey: string,
+  ): PendingPrompt | undefined {
     for (const pending of this.pendingPrompts.values()) {
       if (pending.sessionKey === sessionKey) {
         return pending;
@@ -486,7 +519,9 @@ export class AcpGatewayAgent implements Agent {
     });
   }
 
-  private enforceSessionCreateRateLimit(method: "newSession" | "loadSession"): void {
+  private enforceSessionCreateRateLimit(
+    method: "newSession" | "loadSession",
+  ): void {
     const budget = this.sessionCreateRateLimiter.consume();
     if (budget.allowed) {
       return;

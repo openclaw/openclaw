@@ -63,7 +63,9 @@ function setMultiToolRegistry() {
   ]);
 }
 
-function resolveWithConflictingCoreName(options?: { suppressNameConflicts?: boolean }) {
+function resolveWithConflictingCoreName(options?: {
+  suppressNameConflicts?: boolean;
+}) {
   return resolvePluginTools({
     context: createContext() as never,
     existingToolNames: new Set(["message"]),
@@ -151,7 +153,9 @@ describe("resolvePluginTools optional tools", () => {
 
     expect(tools).toHaveLength(0);
     expect(registry.diagnostics).toHaveLength(1);
-    expect(registry.diagnostics[0]?.message).toContain("plugin id conflicts with core tool name");
+    expect(registry.diagnostics[0]?.message).toContain(
+      "plugin id conflicts with core tool name",
+    );
   });
 
   it("skips conflicting tool names but keeps other tools", () => {
@@ -160,12 +164,16 @@ describe("resolvePluginTools optional tools", () => {
 
     expect(tools.map((tool) => tool.name)).toEqual(["other_tool"]);
     expect(registry.diagnostics).toHaveLength(1);
-    expect(registry.diagnostics[0]?.message).toContain("plugin tool name conflict");
+    expect(registry.diagnostics[0]?.message).toContain(
+      "plugin tool name conflict",
+    );
   });
 
   it("suppresses conflict diagnostics when requested", () => {
     const registry = setMultiToolRegistry();
-    const tools = resolveWithConflictingCoreName({ suppressNameConflicts: true });
+    const tools = resolveWithConflictingCoreName({
+      suppressNameConflicts: true,
+    });
 
     expect(tools.map((tool) => tool.name)).toEqual(["other_tool"]);
     expect(registry.diagnostics).toHaveLength(0);

@@ -5,12 +5,21 @@ import {
   importTelegramSendModule,
   installTelegramSendTestHooks,
 } from "./send.test-harness.js";
-import { clearSentMessageCache, recordSentMessage, wasSentByBot } from "./sent-message-cache.js";
+import {
+  clearSentMessageCache,
+  recordSentMessage,
+  wasSentByBot,
+} from "./sent-message-cache.js";
 
 installTelegramSendTestHooks();
 
-const { botApi, botCtorSpy, loadConfig, loadWebMedia, maybePersistResolvedTelegramTarget } =
-  getTelegramSendTestMocks();
+const {
+  botApi,
+  botCtorSpy,
+  loadConfig,
+  loadWebMedia,
+  maybePersistResolvedTelegramTarget,
+} = getTelegramSendTestMocks();
 const {
   buildInlineKeyboard,
   createForumTopicTelegram,
@@ -164,8 +173,12 @@ describe("buildInlineKeyboard", () => {
       },
     ];
     for (const testCase of cases) {
-      const input = testCase.input?.map((row) => row.map((button) => ({ ...button })));
-      expect(buildInlineKeyboard(input), testCase.name).toEqual(testCase.expected);
+      const input = testCase.input?.map((row) =>
+        row.map((button) => ({ ...button })),
+      );
+      expect(buildInlineKeyboard(input), testCase.name).toEqual(
+        testCase.expected,
+      );
     }
   });
 });
@@ -204,7 +217,9 @@ describe("sendMessageTelegram", () => {
       expect(botCtorSpy, testCase.name).toHaveBeenCalledWith(
         "tok",
         expect.objectContaining({
-          client: expect.objectContaining({ timeoutSeconds: testCase.expectedTimeout }),
+          client: expect.objectContaining({
+            timeoutSeconds: testCase.expectedTimeout,
+          }),
         }),
       );
     }
@@ -295,9 +310,15 @@ describe("sendMessageTelegram", () => {
       {
         name: "html send succeeds",
         text: "hi",
-        sendMessage: vi.fn().mockResolvedValue({ message_id: 7, chat: { id: "123" } }),
+        sendMessage: vi
+          .fn()
+          .mockResolvedValue({ message_id: 7, chat: { id: "123" } }),
         expectedCalls: [
-          ["123", "hi", { parse_mode: "HTML", link_preview_options: { is_disabled: true } }],
+          [
+            "123",
+            "hi",
+            { parse_mode: "HTML", link_preview_options: { is_disabled: true } },
+          ],
         ],
       },
       {
@@ -325,7 +346,9 @@ describe("sendMessageTelegram", () => {
         sendMessage: typeof testCase.sendMessage;
       };
       await sendMessageTelegram("123", testCase.text, { token: "tok", api });
-      expect(testCase.sendMessage.mock.calls, testCase.name).toEqual(testCase.expectedCalls);
+      expect(testCase.sendMessage.mock.calls, testCase.name).toEqual(
+        testCase.expectedCalls,
+      );
     }
   });
 
@@ -375,8 +398,9 @@ describe("sendMessageTelegram", () => {
     });
     try {
       await sendMessageTelegram("123", "hi", { token: "tok" });
-      const clientFetch = (botCtorSpy.mock.calls[0]?.[1] as { client?: { fetch?: unknown } })
-        ?.client?.fetch;
+      const clientFetch = (
+        botCtorSpy.mock.calls[0]?.[1] as { client?: { fetch?: unknown } }
+      )?.client?.fetch;
       expect(clientFetch).toBeTypeOf("function");
       expect(clientFetch).not.toBe(fetchSpy);
     } finally {
@@ -437,7 +461,9 @@ describe("sendMessageTelegram", () => {
   });
 
   it("fails clearly when a legacy target cannot be resolved", async () => {
-    const getChat = vi.fn().mockRejectedValue(new Error("400: Bad Request: chat not found"));
+    const getChat = vi
+      .fn()
+      .mockRejectedValue(new Error("400: Bad Request: chat not found"));
     const api = { getChat } as unknown as {
       getChat: typeof getChat;
     };
@@ -705,7 +731,9 @@ describe("sendMessageTelegram", () => {
         fileName: "video.mp4",
       });
 
-      const sendOptions: NonNullable<Parameters<typeof sendMessageTelegram>[2]> = {
+      const sendOptions: NonNullable<
+        Parameters<typeof sendMessageTelegram>[2]
+      > = {
         token: "tok",
         api,
         mediaUrl: "https://example.com/video.mp4",
@@ -727,7 +755,11 @@ describe("sendMessageTelegram", () => {
         expect.anything(),
         testCase.expectedVideoNote,
       );
-      expect(sendMessage).toHaveBeenCalledWith(chatId, testCase.text, testCase.expectedMessage);
+      expect(sendMessage).toHaveBeenCalledWith(
+        chatId,
+        testCase.text,
+        testCase.expectedMessage,
+      );
     }
   });
 
@@ -764,7 +796,9 @@ describe("sendMessageTelegram", () => {
 
   it("does not retry on non-transient errors", async () => {
     const chatId = "123";
-    const sendMessage = vi.fn().mockRejectedValue(new Error("400: Bad Request"));
+    const sendMessage = vi
+      .fn()
+      .mockRejectedValue(new Error("400: Bad Request"));
     const api = { sendMessage } as unknown as {
       sendMessage: typeof sendMessage;
     };
@@ -899,16 +933,20 @@ describe("sendMessageTelegram", () => {
         api,
         mediaUrl: testCase.mediaUrl,
         ...("asVoice" in testCase && testCase.asVoice ? { asVoice: true } : {}),
-        ...("messageThreadId" in testCase && testCase.messageThreadId !== undefined
+        ...("messageThreadId" in testCase &&
+        testCase.messageThreadId !== undefined
           ? { messageThreadId: testCase.messageThreadId }
           : {}),
-        ...("replyToMessageId" in testCase && testCase.replyToMessageId !== undefined
+        ...("replyToMessageId" in testCase &&
+        testCase.replyToMessageId !== undefined
           ? { replyToMessageId: testCase.replyToMessageId }
           : {}),
       });
 
-      const called = testCase.expectedMethod === "sendVoice" ? sendVoice : sendAudio;
-      const notCalled = testCase.expectedMethod === "sendVoice" ? sendAudio : sendVoice;
+      const called =
+        testCase.expectedMethod === "sendVoice" ? sendVoice : sendAudio;
+      const notCalled =
+        testCase.expectedMethod === "sendVoice" ? sendAudio : sendVoice;
       expect(called, testCase.name).toHaveBeenCalledWith(
         testCase.chatId,
         expect.anything(),
@@ -956,17 +994,26 @@ describe("sendMessageTelegram", () => {
         messageThreadId: 271,
       });
 
-      expect(sendMessage, testCase.name).toHaveBeenCalledWith(testCase.chatId, testCase.text, {
-        parse_mode: "HTML",
-        message_thread_id: 271,
-      });
+      expect(sendMessage, testCase.name).toHaveBeenCalledWith(
+        testCase.chatId,
+        testCase.text,
+        {
+          parse_mode: "HTML",
+          message_thread_id: 271,
+        },
+      );
     }
   });
 
   it("retries sends without message_thread_id on thread-not-found", async () => {
     const cases = [
       { name: "forum", chatId: "-100123", text: "hello forum", messageId: 58 },
-      { name: "private", chatId: "123456789", text: "hello private", messageId: 59 },
+      {
+        name: "private",
+        chatId: "123456789",
+        text: "hello private",
+        messageId: 59,
+      },
     ] as const;
     const threadErr = new Error("400: Bad Request: message thread not found");
 
@@ -1016,7 +1063,11 @@ describe("sendMessageTelegram", () => {
       error: Error;
       opts?: { messageThreadId?: number };
       expectedError: RegExp | string;
-      expectedCallArgs: [string, string, { parse_mode: "HTML"; message_thread_id?: number }];
+      expectedCallArgs: [
+        string,
+        string,
+        { parse_mode: "HTML"; message_thread_id?: number },
+      ];
     }> = [
       {
         chatId: "123",
@@ -1090,10 +1141,14 @@ describe("sendMessageTelegram", () => {
       sendMessage: typeof sendMessage;
     };
 
-    await sendMessageTelegram(`telegram:group:${chatId}:topic:271`, "hello forum", {
-      token: "tok",
-      api,
-    });
+    await sendMessageTelegram(
+      `telegram:group:${chatId}:topic:271`,
+      "hello forum",
+      {
+        token: "tok",
+        api,
+      },
+    );
 
     expect(sendMessage).toHaveBeenCalledWith(chatId, "hello forum", {
       parse_mode: "HTML",
@@ -1173,13 +1228,22 @@ describe("reactMessageTelegram", () => {
       setMessageReaction: typeof setMessageReaction;
     };
 
-    await reactMessageTelegram(testCase.target, testCase.messageId, testCase.emoji, {
-      token: "tok",
-      api,
-      ...(testCase.remove ? { remove: true } : {}),
-    });
+    await reactMessageTelegram(
+      testCase.target,
+      testCase.messageId,
+      testCase.emoji,
+      {
+        token: "tok",
+        api,
+        ...(testCase.remove ? { remove: true } : {}),
+      },
+    );
 
-    expect(setMessageReaction).toHaveBeenCalledWith("123", 456, testCase.expected);
+    expect(setMessageReaction).toHaveBeenCalledWith(
+      "123",
+      456,
+      testCase.expected,
+    );
   });
 
   it("resolves legacy telegram targets before reacting", async () => {
@@ -1240,7 +1304,11 @@ describe("sendStickerTelegram", () => {
         api,
       });
 
-      expect(sendSticker).toHaveBeenCalledWith(chatId, testCase.expectedFileId, undefined);
+      expect(sendSticker).toHaveBeenCalledWith(
+        chatId,
+        testCase.expectedFileId,
+        undefined,
+      );
       expect(res.messageId).toBe(String(testCase.expectedMessageId));
       expect(res.chatId).toBe(chatId);
     });
@@ -1248,9 +1316,9 @@ describe("sendStickerTelegram", () => {
 
   it("throws error when fileId is blank", async () => {
     for (const fileId of ["", "   "]) {
-      await expect(sendStickerTelegram("123", fileId, { token: "tok" })).rejects.toThrow(
-        /file_id is required/i,
-      );
+      await expect(
+        sendStickerTelegram("123", fileId, { token: "tok" }),
+      ).rejects.toThrow(/file_id is required/i);
     }
   });
 
@@ -1277,7 +1345,12 @@ describe("sendStickerTelegram", () => {
     expect(sendSticker).toHaveBeenNthCalledWith(1, chatId, "fileId123", {
       message_thread_id: 271,
     });
-    expect(sendSticker).toHaveBeenNthCalledWith(2, chatId, "fileId123", undefined);
+    expect(sendSticker).toHaveBeenNthCalledWith(
+      2,
+      chatId,
+      "fileId123",
+      undefined,
+    );
     expect(res.messageId).toBe("109");
   });
 
@@ -1408,7 +1481,10 @@ describe("editMessageTelegram", () => {
       text: "hi",
       buttons: [] as Parameters<typeof buildInlineKeyboard>[0],
       expectedCalls: 1,
-      firstExpectReplyMarkup: { inline_keyboard: [] } as Record<string, unknown>,
+      firstExpectReplyMarkup: { inline_keyboard: [] } as Record<
+        string,
+        unknown
+      >,
       parseFallback: false,
     },
     {
@@ -1416,47 +1492,76 @@ describe("editMessageTelegram", () => {
       text: "<bad> html",
       buttons: [] as Parameters<typeof buildInlineKeyboard>[0],
       expectedCalls: 2,
-      firstExpectReplyMarkup: { inline_keyboard: [] } as Record<string, unknown>,
-      secondExpectReplyMarkup: { inline_keyboard: [] } as Record<string, unknown>,
+      firstExpectReplyMarkup: { inline_keyboard: [] } as Record<
+        string,
+        unknown
+      >,
+      secondExpectReplyMarkup: { inline_keyboard: [] } as Record<
+        string,
+        unknown
+      >,
       parseFallback: true,
     },
   ])("$name", async (testCase) => {
     if (testCase.parseFallback) {
       botApi.editMessageText
-        .mockRejectedValueOnce(new Error("400: Bad Request: can't parse entities"))
+        .mockRejectedValueOnce(
+          new Error("400: Bad Request: can't parse entities"),
+        )
         .mockResolvedValueOnce({ message_id: 1, chat: { id: "123" } });
     } else {
-      botApi.editMessageText.mockResolvedValue({ message_id: 1, chat: { id: "123" } });
+      botApi.editMessageText.mockResolvedValue({
+        message_id: 1,
+        chat: { id: "123" },
+      });
     }
 
     await editMessageTelegram("123", 1, testCase.text, {
       token: "tok",
       cfg: {},
-      buttons: testCase.buttons ? testCase.buttons.map((row) => [...row]) : testCase.buttons,
+      buttons: testCase.buttons
+        ? testCase.buttons.map((row) => [...row])
+        : testCase.buttons,
     });
 
     expect(botCtorSpy, testCase.name).toHaveBeenCalledTimes(1);
     expect(botCtorSpy.mock.calls[0]?.[0], testCase.name).toBe("tok");
-    expect(botApi.editMessageText, testCase.name).toHaveBeenCalledTimes(testCase.expectedCalls);
+    expect(botApi.editMessageText, testCase.name).toHaveBeenCalledTimes(
+      testCase.expectedCalls,
+    );
 
-    const firstParams = (botApi.editMessageText.mock.calls[0] ?? [])[3] as Record<string, unknown>;
-    expect(firstParams, testCase.name).toEqual(expect.objectContaining({ parse_mode: "HTML" }));
-    if ("firstExpectNoReplyMarkup" in testCase && testCase.firstExpectNoReplyMarkup) {
+    const firstParams = (botApi.editMessageText.mock.calls[0] ??
+      [])[3] as Record<string, unknown>;
+    expect(firstParams, testCase.name).toEqual(
+      expect.objectContaining({ parse_mode: "HTML" }),
+    );
+    if (
+      "firstExpectNoReplyMarkup" in testCase &&
+      testCase.firstExpectNoReplyMarkup
+    ) {
       expect(firstParams, testCase.name).not.toHaveProperty("reply_markup");
     }
-    if ("firstExpectReplyMarkup" in testCase && testCase.firstExpectReplyMarkup) {
+    if (
+      "firstExpectReplyMarkup" in testCase &&
+      testCase.firstExpectReplyMarkup
+    ) {
       expect(firstParams, testCase.name).toEqual(
-        expect.objectContaining({ reply_markup: testCase.firstExpectReplyMarkup }),
+        expect.objectContaining({
+          reply_markup: testCase.firstExpectReplyMarkup,
+        }),
       );
     }
 
-    if ("secondExpectReplyMarkup" in testCase && testCase.secondExpectReplyMarkup) {
-      const secondParams = (botApi.editMessageText.mock.calls[1] ?? [])[3] as Record<
-        string,
-        unknown
-      >;
+    if (
+      "secondExpectReplyMarkup" in testCase &&
+      testCase.secondExpectReplyMarkup
+    ) {
+      const secondParams = (botApi.editMessageText.mock.calls[1] ??
+        [])[3] as Record<string, unknown>;
       expect(secondParams, testCase.name).toEqual(
-        expect.objectContaining({ reply_markup: testCase.secondExpectReplyMarkup }),
+        expect.objectContaining({
+          reply_markup: testCase.secondExpectReplyMarkup,
+        }),
       );
     }
   });
@@ -1478,7 +1583,10 @@ describe("editMessageTelegram", () => {
   });
 
   it("disables link previews when linkPreview is false", async () => {
-    botApi.editMessageText.mockResolvedValue({ message_id: 1, chat: { id: "123" } });
+    botApi.editMessageText.mockResolvedValue({
+      message_id: 1,
+      chat: { id: "123" },
+    });
 
     await editMessageTelegram("123", 1, "https://example.com", {
       token: "tok",
@@ -1487,7 +1595,10 @@ describe("editMessageTelegram", () => {
     });
 
     expect(botApi.editMessageText).toHaveBeenCalledTimes(1);
-    const params = (botApi.editMessageText.mock.calls[0] ?? [])[3] as Record<string, unknown>;
+    const params = (botApi.editMessageText.mock.calls[0] ?? [])[3] as Record<
+      string,
+      unknown
+    >;
     expect(params).toEqual(
       expect.objectContaining({
         parse_mode: "HTML",
@@ -1500,7 +1611,11 @@ describe("editMessageTelegram", () => {
 describe("sendPollTelegram", () => {
   it("maps durationSeconds to open_period", async () => {
     const api = {
-      sendPoll: vi.fn(async () => ({ message_id: 123, chat: { id: 555 }, poll: { id: "p1" } })),
+      sendPoll: vi.fn(async () => ({
+        message_id: 123,
+        chat: { id: 555 },
+        poll: { id: "p1" },
+      })),
     };
 
     const res = await sendPollTelegram(
@@ -1521,7 +1636,12 @@ describe("sendPollTelegram", () => {
   it("retries without message_thread_id on thread-not-found", async () => {
     const api = {
       sendPoll: vi.fn(
-        async (_chatId: string, _question: string, _options: string[], params: unknown) => {
+        async (
+          _chatId: string,
+          _question: string,
+          _options: string[],
+          params: unknown,
+        ) => {
           const p = params as { message_thread_id?: unknown } | undefined;
           if (p?.message_thread_id) {
             throw new Error("400: Bad Request: message thread not found");
@@ -1539,10 +1659,15 @@ describe("sendPollTelegram", () => {
 
     expect(res).toEqual({ messageId: "1", chatId: "2", pollId: "p2" });
     expect(api.sendPoll).toHaveBeenCalledTimes(2);
-    expect(api.sendPoll.mock.calls[0]?.[3]).toMatchObject({ message_thread_id: 99 });
+    expect(api.sendPoll.mock.calls[0]?.[3]).toMatchObject({
+      message_thread_id: 99,
+    });
     expect(
-      (api.sendPoll.mock.calls[1]?.[3] as { message_thread_id?: unknown } | undefined)
-        ?.message_thread_id,
+      (
+        api.sendPoll.mock.calls[1]?.[3] as
+          | { message_thread_id?: unknown }
+          | undefined
+      )?.message_thread_id,
     ).toBeUndefined();
   });
 
@@ -1616,11 +1741,15 @@ describe("createForumTopicTelegram", () => {
       const createForumTopic = vi.fn().mockResolvedValue(testCase.response);
       const api = { createForumTopic } as unknown as Bot["api"];
 
-      const result = await createForumTopicTelegram(testCase.target, testCase.title, {
-        token: "tok",
-        api,
-        ...("options" in testCase ? testCase.options : {}),
-      });
+      const result = await createForumTopicTelegram(
+        testCase.target,
+        testCase.title,
+        {
+          token: "tok",
+          api,
+          ...("options" in testCase ? testCase.options : {}),
+        },
+      );
 
       expect(createForumTopic).toHaveBeenCalledWith(...testCase.expectedCall);
       expect(result).toEqual(testCase.expectedResult);

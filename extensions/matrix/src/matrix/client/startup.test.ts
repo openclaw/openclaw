@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { MATRIX_CLIENT_STARTUP_GRACE_MS, startMatrixClientWithGrace } from "./startup.js";
+import {
+  MATRIX_CLIENT_STARTUP_GRACE_MS,
+  startMatrixClientWithGrace,
+} from "./startup.js";
 
 describe("startMatrixClientWithGrace", () => {
   it("resolves after grace when start loop keeps running", async () => {

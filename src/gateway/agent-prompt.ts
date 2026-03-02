@@ -1,4 +1,7 @@
-import { buildHistoryContextFromEntries, type HistoryEntry } from "../auto-reply/reply/history.js";
+import {
+  buildHistoryContextFromEntries,
+  type HistoryEntry,
+} from "../auto-reply/reply/history.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
 
 export type ConversationEntry = {
@@ -18,7 +21,9 @@ function safeBody(body: unknown): string {
   return extractTextFromChatContent(body) ?? "";
 }
 
-export function buildAgentMessageFromConversationEntries(entries: ConversationEntry[]): string {
+export function buildAgentMessageFromConversationEntries(
+  entries: ConversationEntry[],
+): string {
   if (entries.length === 0) {
     return "";
   }
@@ -47,7 +52,8 @@ export function buildAgentMessageFromConversationEntries(entries: ConversationEn
     return safeBody(currentEntry.body);
   }
 
-  const formatEntry = (entry: HistoryEntry) => `${entry.sender}: ${safeBody(entry.body)}`;
+  const formatEntry = (entry: HistoryEntry) =>
+    `${entry.sender}: ${safeBody(entry.body)}`;
   return buildHistoryContextFromEntries({
     entries: [...historyEntries, currentEntry],
     currentMessage: formatEntry(currentEntry),

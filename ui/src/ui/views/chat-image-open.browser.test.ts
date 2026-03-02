@@ -57,7 +57,9 @@ describe("chat image open safety", () => {
 
     const openSpy = vi.spyOn(window, "open").mockReturnValue(null);
     app.chatMessages = [
-      renderAssistantImage("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' />"),
+      renderAssistantImage(
+        "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' />",
+      ),
     ];
     await app.updateComplete;
 

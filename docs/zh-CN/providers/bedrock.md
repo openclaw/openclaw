@@ -94,7 +94,9 @@ export AWS_BEARER_TOKEN_BEDROCK="..."
   },
   agents: {
     defaults: {
-      model: { primary: "amazon-bedrock/anthropic.claude-opus-4-5-20251101-v1:0" },
+      model: {
+        primary: "amazon-bedrock/anthropic.claude-opus-4-5-20251101-v1:0",
+      },
     },
   },
 }

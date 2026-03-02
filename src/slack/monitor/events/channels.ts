@@ -61,7 +61,9 @@ export function registerSlackChannelEvents(params: {
         const channelName = payload.channel?.name;
         enqueueChannelSystemEvent({ kind: "created", channelId, channelName });
       } catch (err) {
-        ctx.runtime.error?.(danger(`slack channel created handler failed: ${String(err)}`));
+        ctx.runtime.error?.(
+          danger(`slack channel created handler failed: ${String(err)}`),
+        );
       }
     },
   );
@@ -77,10 +79,13 @@ export function registerSlackChannelEvents(params: {
 
         const payload = event as SlackChannelRenamedEvent;
         const channelId = payload.channel?.id;
-        const channelName = payload.channel?.name_normalized ?? payload.channel?.name;
+        const channelName =
+          payload.channel?.name_normalized ?? payload.channel?.name;
         enqueueChannelSystemEvent({ kind: "renamed", channelId, channelName });
       } catch (err) {
-        ctx.runtime.error?.(danger(`slack channel rename handler failed: ${String(err)}`));
+        ctx.runtime.error?.(
+          danger(`slack channel rename handler failed: ${String(err)}`),
+        );
       }
     },
   );
@@ -108,7 +113,9 @@ export function registerSlackChannelEvents(params: {
         });
 
         ctx.runtime.log?.(
-          warn(`[slack] Channel ID changed: ${oldChannelId} → ${newChannelId} (${label})`),
+          warn(
+            `[slack] Channel ID changed: ${oldChannelId} → ${newChannelId} (${label})`,
+          ),
         );
 
         if (
@@ -119,7 +126,9 @@ export function registerSlackChannelEvents(params: {
           })
         ) {
           ctx.runtime.log?.(
-            warn("[slack] Config writes disabled; skipping channel config migration."),
+            warn(
+              "[slack] Config writes disabled; skipping channel config migration.",
+            ),
           );
           return;
         }
@@ -140,7 +149,9 @@ export function registerSlackChannelEvents(params: {
             newChannelId,
           });
           await writeConfigFile(currentConfig);
-          ctx.runtime.log?.(warn("[slack] Channel config migrated and saved successfully."));
+          ctx.runtime.log?.(
+            warn("[slack] Channel config migrated and saved successfully."),
+          );
         } else if (migration.skippedExisting) {
           ctx.runtime.log?.(
             warn(
@@ -155,7 +166,9 @@ export function registerSlackChannelEvents(params: {
           );
         }
       } catch (err) {
-        ctx.runtime.error?.(danger(`slack channel_id_changed handler failed: ${String(err)}`));
+        ctx.runtime.error?.(
+          danger(`slack channel_id_changed handler failed: ${String(err)}`),
+        );
       }
     },
   );

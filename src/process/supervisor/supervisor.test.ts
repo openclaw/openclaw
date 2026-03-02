@@ -3,16 +3,26 @@ import { createProcessSupervisor } from "./supervisor.js";
 
 type ProcessSupervisor = ReturnType<typeof createProcessSupervisor>;
 type SpawnOptions = Parameters<ProcessSupervisor["spawn"]>[0];
-type ChildSpawnOptions = Omit<Extract<SpawnOptions, { mode: "child" }>, "backendId" | "mode">;
+type ChildSpawnOptions = Omit<
+  Extract<SpawnOptions, { mode: "child" }>,
+  "backendId" | "mode"
+>;
 
 function createWriteStdoutArgv(output: string): string[] {
   if (process.platform === "win32") {
-    return [process.execPath, "-e", `process.stdout.write(${JSON.stringify(output)})`];
+    return [
+      process.execPath,
+      "-e",
+      `process.stdout.write(${JSON.stringify(output)})`,
+    ];
   }
   return ["/usr/bin/printf", "%s", output];
 }
 
-async function spawnChild(supervisor: ProcessSupervisor, options: ChildSpawnOptions) {
+async function spawnChild(
+  supervisor: ProcessSupervisor,
+  options: ChildSpawnOptions,
+) {
   return supervisor.spawn({
     ...options,
     backendId: "test",
@@ -71,7 +81,9 @@ describe("process supervisor", () => {
 
     const firstExit = await first.wait();
     const secondExit = await second.wait();
-    expect(firstExit.reason === "manual-cancel" || firstExit.reason === "signal").toBe(true);
+    expect(
+      firstExit.reason === "manual-cancel" || firstExit.reason === "signal",
+    ).toBe(true);
     expect(secondExit.reason).toBe("exit");
     expect(secondExit.stdout).toBe("new");
   });

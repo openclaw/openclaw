@@ -53,7 +53,9 @@ function makeRuntime(): { runtime: RuntimeEnv; logs: string[] } {
 describe("sessionsCleanupCommand", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.loadConfig.mockReturnValue({ session: { store: "/cfg/sessions.json" } });
+    mocks.loadConfig.mockReturnValue({
+      session: { store: "/cfg/sessions.json" },
+    });
     mocks.resolveSessionStoreTargets.mockReturnValue([
       { agentId: "main", storePath: "/resolved/sessions.json" },
     ]);
@@ -62,7 +64,9 @@ describe("sessionsCleanupCommand", () => {
         try {
           return mocks.resolveSessionStoreTargets(params.cfg, params.opts);
         } catch (error) {
-          params.runtime.error(error instanceof Error ? error.message : String(error));
+          params.runtime.error(
+            error instanceof Error ? error.message : String(error),
+          );
           params.runtime.exit(1);
           return null;
         }
@@ -81,7 +85,9 @@ describe("sessionsCleanupCommand", () => {
       (
         store: Record<string, SessionEntry>,
         _maxAgeMs: number,
-        opts?: { onPruned?: (params: { key: string; entry: SessionEntry }) => void },
+        opts?: {
+          onPruned?: (params: { key: string; entry: SessionEntry }) => void;
+        },
       ) => {
         if (store.stale) {
           opts?.onPruned?.({ key: "stale", entry: store.stale });
@@ -256,10 +262,20 @@ describe("sessionsCleanupCommand", () => {
       runtime,
     );
 
-    expect(logs.some((line) => line.includes("Planned session actions:"))).toBe(true);
-    expect(logs.some((line) => line.includes("Action") && line.includes("Key"))).toBe(true);
-    expect(logs.some((line) => line.includes("fresh") && line.includes("keep"))).toBe(true);
-    expect(logs.some((line) => line.includes("stale") && line.includes("prune-stale"))).toBe(true);
+    expect(logs.some((line) => line.includes("Planned session actions:"))).toBe(
+      true,
+    );
+    expect(
+      logs.some((line) => line.includes("Action") && line.includes("Key")),
+    ).toBe(true);
+    expect(
+      logs.some((line) => line.includes("fresh") && line.includes("keep")),
+    ).toBe(true);
+    expect(
+      logs.some(
+        (line) => line.includes("stale") && line.includes("prune-stale"),
+      ),
+    ).toBe(true);
   });
 
   it("returns grouped JSON for --all-agents dry-runs", async () => {
@@ -270,7 +286,9 @@ describe("sessionsCleanupCommand", () => {
     mocks.enforceSessionDiskBudget.mockResolvedValue(null);
     mocks.loadSessionStore
       .mockReturnValueOnce({ stale: { sessionId: "stale-main", updatedAt: 1 } })
-      .mockReturnValueOnce({ stale: { sessionId: "stale-work", updatedAt: 1 } });
+      .mockReturnValueOnce({
+        stale: { sessionId: "stale-work", updatedAt: 1 },
+      });
 
     const { runtime, logs } = makeRuntime();
     await sessionsCleanupCommand(

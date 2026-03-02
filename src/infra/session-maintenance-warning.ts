@@ -1,7 +1,13 @@
 import type { OpenClawConfig } from "../config/config.js";
-import type { SessionEntry, SessionMaintenanceWarning } from "../config/sessions.js";
+import type {
+  SessionEntry,
+  SessionMaintenanceWarning,
+} from "../config/sessions.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
+import {
+  isDeliverableMessageChannel,
+  normalizeMessageChannel,
+} from "../utils/message-channel.js";
 import { buildOutboundSessionContext } from "./outbound/session-context.js";
 import { resolveSessionDeliveryTarget } from "./outbound/targets.js";
 import { enqueueSystemEvent } from "./system-events.js";
@@ -58,7 +64,8 @@ function buildWarningText(warning: SessionMaintenanceWarning): string {
   if (warning.wouldCap) {
     reasons.push(`not in the most recent ${warning.maxEntries} sessions`);
   }
-  const reasonText = reasons.length > 0 ? reasons.join(" and ") : "over maintenance limits";
+  const reasonText =
+    reasons.length > 0 ? reasons.join(" and ") : "over maintenance limits";
   return (
     `⚠️ Session maintenance warning: this active session would be evicted (${reasonText}). ` +
     `Maintenance is set to warn-only, so nothing was reset. ` +
@@ -66,7 +73,9 @@ function buildWarningText(warning: SessionMaintenanceWarning): string {
   );
 }
 
-export async function deliverSessionMaintenanceWarning(params: WarningParams): Promise<void> {
+export async function deliverSessionMaintenanceWarning(
+  params: WarningParams,
+): Promise<void> {
   if (!shouldSendWarning()) {
     return;
   }

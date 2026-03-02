@@ -11,7 +11,8 @@ const hoisted = vi.hoisted(() => {
 
 vi.mock("../subagent-spawn.js", () => ({
   SUBAGENT_SPAWN_MODES: ["run", "session"],
-  spawnSubagentDirect: (...args: unknown[]) => hoisted.spawnSubagentDirectMock(...args),
+  spawnSubagentDirect: (...args: unknown[]) =>
+    hoisted.spawnSubagentDirectMock(...args),
 }));
 
 vi.mock("../acp-spawn.js", () => ({
@@ -135,7 +136,9 @@ describe("sessions_spawn tool", () => {
       status: "error",
     });
     const details = result.details as { error?: string };
-    expect(details.error).toContain("attachments are currently unsupported for runtime=acp");
+    expect(details.error).toContain(
+      "attachments are currently unsupported for runtime=acp",
+    );
     expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
     expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
   });

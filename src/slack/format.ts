@@ -1,11 +1,18 @@
 import type { MarkdownTableMode } from "../config/types.base.js";
-import { chunkMarkdownIR, markdownToIR, type MarkdownLinkSpan } from "../markdown/ir.js";
+import {
+  chunkMarkdownIR,
+  markdownToIR,
+  type MarkdownLinkSpan,
+} from "../markdown/ir.js";
 import { renderMarkdownWithMarkers } from "../markdown/render.js";
 
 // Escape special characters for Slack mrkdwn format.
 // Preserve Slack's angle-bracket tokens so mentions and links stay intact.
 function escapeSlackMrkdwnSegment(text: string): string {
-  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
 }
 
 const SLACK_ANGLE_TOKEN_RE = /<[^>\n]+>/g;
@@ -44,7 +51,9 @@ function escapeSlackMrkdwnContent(text: string): string {
     const matchIndex = match.index ?? 0;
     out.push(escapeSlackMrkdwnSegment(text.slice(lastIndex, matchIndex)));
     const token = match[0] ?? "";
-    out.push(isAllowedSlackAngleToken(token) ? token : escapeSlackMrkdwnSegment(token));
+    out.push(
+      isAllowedSlackAngleToken(token) ? token : escapeSlackMrkdwnSegment(token),
+    );
     lastIndex = matchIndex + token.length;
   }
 
@@ -75,9 +84,13 @@ function buildSlackLink(link: MarkdownLinkSpan, text: string) {
   }
   const label = text.slice(link.start, link.end);
   const trimmedLabel = label.trim();
-  const comparableHref = href.startsWith("mailto:") ? href.slice("mailto:".length) : href;
+  const comparableHref = href.startsWith("mailto:")
+    ? href.slice("mailto:".length)
+    : href;
   const useMarkup =
-    trimmedLabel.length > 0 && trimmedLabel !== href && trimmedLabel !== comparableHref;
+    trimmedLabel.length > 0 &&
+    trimmedLabel !== href &&
+    trimmedLabel !== comparableHref;
   if (!useMarkup) {
     return null;
   }

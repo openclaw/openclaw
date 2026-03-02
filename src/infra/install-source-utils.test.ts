@@ -12,7 +12,8 @@ const runCommandWithTimeoutMock = vi.fn();
 const TEMP_DIR_PREFIX = "openclaw-install-source-utils-";
 
 vi.mock("../process/exec.js", () => ({
-  runCommandWithTimeout: (...args: unknown[]) => runCommandWithTimeoutMock(...args),
+  runCommandWithTimeout: (...args: unknown[]) =>
+    runCommandWithTimeoutMock(...args),
 }));
 
 const tempDirs: string[] = [];
@@ -38,7 +39,11 @@ async function createFixtureFile(params: {
   return { dir, filePath };
 }
 
-function mockPackCommandResult(params: { stdout: string; stderr?: string; code?: number }) {
+function mockPackCommandResult(params: {
+  stdout: string;
+  stderr?: string;
+  code?: number;
+}) {
   runCommandWithTimeoutMock.mockResolvedValue({
     stdout: params.stdout,
     stderr: params.stderr ?? "",
@@ -75,12 +80,17 @@ describe("withTempDir", () => {
     let observedDir = "";
     const markerFile = "marker.txt";
 
-    const value = await withTempDir("openclaw-install-source-utils-", async (tmpDir) => {
-      observedDir = tmpDir;
-      await fs.writeFile(path.join(tmpDir, markerFile), "ok", "utf-8");
-      await expect(fs.stat(path.join(tmpDir, markerFile))).resolves.toBeDefined();
-      return "done";
-    });
+    const value = await withTempDir(
+      "openclaw-install-source-utils-",
+      async (tmpDir) => {
+        observedDir = tmpDir;
+        await fs.writeFile(path.join(tmpDir, markerFile), "ok", "utf-8");
+        await expect(
+          fs.stat(path.join(tmpDir, markerFile)),
+        ).resolves.toBeDefined();
+        return "done";
+      },
+    );
 
     expect(value).toBe("done");
     await expect(fs.stat(observedDir)).rejects.toThrow();
@@ -89,7 +99,9 @@ describe("withTempDir", () => {
 
 describe("resolveArchiveSourcePath", () => {
   it("returns not found error for missing archive paths", async () => {
-    const result = await resolveArchiveSourcePath("/tmp/does-not-exist-openclaw-archive.tgz");
+    const result = await resolveArchiveSourcePath(
+      "/tmp/does-not-exist-openclaw-archive.tgz",
+    );
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error).toContain("archive not found");
@@ -248,7 +260,8 @@ describe("packNpmSpecToArchive", () => {
     const cwd = await createFixtureDir();
     mockPackCommandResult({
       stdout: "",
-      stderr: "npm error code E404\nnpm error 404  '@openclaw/whatsapp@*' is not in this registry.",
+      stderr:
+        "npm error code E404\nnpm error 404  '@openclaw/whatsapp@*' is not in this registry.",
       code: 1,
     });
 
@@ -278,7 +291,11 @@ describe("packNpmSpecToArchive", () => {
 
   it("parses scoped metadata from id-only json output even with npm notice prefix", async () => {
     const cwd = await createFixtureDir();
-    await fs.writeFile(path.join(cwd, "openclaw-plugin-demo-2.0.0.tgz"), "", "utf-8");
+    await fs.writeFile(
+      path.join(cwd, "openclaw-plugin-demo-2.0.0.tgz"),
+      "",
+      "utf-8",
+    );
     mockPackCommandResult({
       stdout:
         "npm notice creating package\n" +

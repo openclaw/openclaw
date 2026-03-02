@@ -1,6 +1,8 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 
-function validateTurnsWithConsecutiveMerge<TRole extends "assistant" | "user">(params: {
+function validateTurnsWithConsecutiveMerge<
+  TRole extends "assistant" | "user",
+>(params: {
   messages: AgentMessage[];
   role: TRole;
   merge: (
@@ -99,7 +101,9 @@ export function mergeConsecutiveUserTurns(
  * Anthropic requires strict alternating user→assistant pattern.
  * Merges consecutive user messages together.
  */
-export function validateAnthropicTurns(messages: AgentMessage[]): AgentMessage[] {
+export function validateAnthropicTurns(
+  messages: AgentMessage[],
+): AgentMessage[] {
   return validateTurnsWithConsecutiveMerge({
     messages,
     role: "user",

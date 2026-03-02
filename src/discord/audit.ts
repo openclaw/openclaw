@@ -1,5 +1,8 @@
 import type { OpenClawConfig } from "../config/config.js";
-import type { DiscordGuildChannelConfig, DiscordGuildEntry } from "../config/types.js";
+import type {
+  DiscordGuildChannelConfig,
+  DiscordGuildEntry,
+} from "../config/types.js";
 import { isRecord } from "../utils.js";
 import { resolveDiscordAccount } from "./accounts.js";
 import { fetchChannelPermissionsDiscord } from "./send.js";
@@ -23,7 +26,9 @@ export type DiscordChannelPermissionsAudit = {
 
 const REQUIRED_CHANNEL_PERMISSIONS = ["ViewChannel", "SendMessages"] as const;
 
-function shouldAuditChannelConfig(config: DiscordGuildChannelConfig | undefined) {
+function shouldAuditChannelConfig(
+  config: DiscordGuildChannelConfig | undefined,
+) {
   if (!config) {
     return true;
   }
@@ -56,7 +61,11 @@ function listConfiguredGuildChannelKeys(
       if (!channelId) {
         continue;
       }
-      if (!shouldAuditChannelConfig(value as DiscordGuildChannelConfig | undefined)) {
+      if (
+        !shouldAuditChannelConfig(
+          value as DiscordGuildChannelConfig | undefined,
+        )
+      ) {
         continue;
       }
       ids.add(channelId);

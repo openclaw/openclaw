@@ -5,8 +5,14 @@ import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
 import { info } from "../globals.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
-import { formatUsageReportLines, loadProviderUsageSummary } from "../infra/provider-usage.js";
-import { normalizeUpdateChannel, resolveUpdateChannelDisplay } from "../infra/update-channels.js";
+import {
+  formatUsageReportLines,
+  loadProviderUsageSummary,
+} from "../infra/provider-usage.js";
+import {
+  normalizeUpdateChannel,
+  resolveUpdateChannelDisplay,
+} from "../infra/update-channels.js";
 import { formatGitInstallLabel } from "../infra/update-check.js";
 import {
   resolveMemoryCacheSummary,
@@ -22,7 +28,10 @@ import { formatHealthChannelLines, type HealthSummary } from "./health.js";
 import { resolveControlUiLinks } from "./onboard-helpers.js";
 import { statusAllCommand } from "./status-all.js";
 import { formatGatewayAuthUsed } from "./status-all/format.js";
-import { getDaemonStatusSummary, getNodeDaemonStatusSummary } from "./status.daemon.js";
+import {
+  getDaemonStatusSummary,
+  getNodeDaemonStatusSummary,
+} from "./status.daemon.js";
 import {
   formatDuration,
   formatKTokens,
@@ -60,7 +69,9 @@ function resolvePairingRecoveryContext(params: {
   }
   const requestIdMatch = source.match(/requestId:\s*([^\s)]+)/i);
   const requestId =
-    requestIdMatch && requestIdMatch[1] ? sanitizeRequestId(requestIdMatch[1]) : null;
+    requestIdMatch && requestIdMatch[1]
+      ? sanitizeRequestId(requestIdMatch[1])
+      : null;
   return { requestId: requestId || null };
 }
 
@@ -82,7 +93,10 @@ export async function statusCommand(
 
   const [scan, securityAudit] = opts.json
     ? await Promise.all([
-        scanStatus({ json: opts.json, timeoutMs: opts.timeoutMs, all: opts.all }, runtime),
+        scanStatus(
+          { json: opts.json, timeoutMs: opts.timeoutMs, all: opts.all },
+          runtime,
+        ),
         runSecurityAudit({
           config: loadConfig(),
           deep: false,
@@ -91,7 +105,10 @@ export async function statusCommand(
         }),
       ])
     : [
-        await scanStatus({ json: opts.json, timeoutMs: opts.timeoutMs, all: opts.all }, runtime),
+        await scanStatus(
+          { json: opts.json, timeoutMs: opts.timeoutMs, all: opts.all },
+          runtime,
+        ),
         await withProgress(
           {
             label: "Running security audit…",
@@ -135,7 +152,8 @@ export async function statusCommand(
           indeterminate: true,
           enabled: opts.json !== true,
         },
-        async () => await loadProviderUsageSummary({ timeoutMs: opts.timeoutMs }),
+        async () =>
+          await loadProviderUsageSummary({ timeoutMs: opts.timeoutMs }),
       )
     : undefined;
   const health: HealthSummary | undefined = opts.deep
@@ -199,7 +217,9 @@ export async function statusCommand(
           nodeService: nodeDaemon,
           agents: agentStatus,
           securityAudit,
-          ...(health || usage || lastHeartbeat ? { health, usage, lastHeartbeat } : {}),
+          ...(health || usage || lastHeartbeat
+            ? { health, usage, lastHeartbeat }
+            : {}),
         },
         null,
         2,
@@ -246,7 +266,11 @@ export async function statusCommand(
       ? warn("misconfigured (remote.url missing)")
       : gatewayReachable
         ? ok(`reachable ${formatDuration(gatewayProbe?.connectLatencyMs)}`)
-        : warn(gatewayProbe?.error ? `unreachable (${gatewayProbe.error})` : "unreachable");
+        : warn(
+            gatewayProbe?.error
+              ? `unreachable (${gatewayProbe.error})`
+              : "unreachable",
+          );
     const auth =
       gatewayReachable && !remoteUrlMissing
         ? ` · auth ${formatGatewayAuthUsed(resolveGatewayProbeAuth(cfg))}`
@@ -276,7 +300,10 @@ export async function statusCommand(
         ? `${agentStatus.bootstrapPendingCount} bootstrap file${agentStatus.bootstrapPendingCount === 1 ? "" : "s"} present`
         : "no bootstrap files";
     const def = agentStatus.agents.find((a) => a.id === agentStatus.defaultId);
-    const defActive = def?.lastActiveAgeMs != null ? formatTimeAgo(def.lastActiveAgeMs) : "unknown";
+    const defActive =
+      def?.lastActiveAgeMs != null
+        ? formatTimeAgo(def.lastActiveAgeMs)
+        : "unknown";
     const defSuffix = def ? ` · default ${def.id} active ${defActive}` : "";
     return `${agentStatus.agents.length} · ${pending} · sessions ${agentStatus.totalSessions}${defSuffix}`;
   })();
@@ -305,7 +332,9 @@ export async function statusCommand(
     ? ` (${formatKTokens(defaults.contextTokens)} ctx)`
     : "";
   const eventsValue =
-    summary.queuedSystemEvents.length > 0 ? `${summary.queuedSystemEvents.length} queued` : "none";
+    summary.queuedSystemEvents.length > 0
+      ? `${summary.queuedSystemEvents.length} queued`
+      : "none";
 
   const probesValue = health ? ok("enabled") : muted("skipped (use --deep)");
 
@@ -333,8 +362,12 @@ export async function statusCommand(
     }
     const age = formatTimeAgo(Date.now() - lastHeartbeat.ts);
     const channel = lastHeartbeat.channel ?? "unknown";
-    const accountLabel = lastHeartbeat.accountId ? `account ${lastHeartbeat.accountId}` : null;
-    return [lastHeartbeat.status, `${age} ago`, channel, accountLabel].filter(Boolean).join(" · ");
+    const accountLabel = lastHeartbeat.accountId
+      ? `account ${lastHeartbeat.accountId}`
+      : null;
+    return [lastHeartbeat.status, `${age} ago`, channel, accountLabel]
+      .filter(Boolean)
+      .join(" · ");
   })();
 
   const storeLabel =
@@ -369,13 +402,15 @@ export async function statusCommand(
     const vector = memory.vector;
     if (vector) {
       const state = resolveMemoryVectorState(vector);
-      const label = state.state === "disabled" ? "vector off" : `vector ${state.state}`;
+      const label =
+        state.state === "disabled" ? "vector off" : `vector ${state.state}`;
       parts.push(colorByTone(state.tone, label));
     }
     const fts = memory.fts;
     if (fts) {
       const state = resolveMemoryFtsState(fts);
-      const label = state.state === "disabled" ? "fts off" : `fts ${state.state}`;
+      const label =
+        state.state === "disabled" ? "fts off" : `fts ${state.state}`;
       parts.push(colorByTone(state.tone, label));
     }
     const cache = memory.cache;
@@ -407,7 +442,9 @@ export async function statusCommand(
     ...(gitLabel ? [{ Item: "Git", Value: gitLabel }] : []),
     {
       Item: "Update",
-      Value: updateAvailability.available ? warn(`available · ${updateLine}`) : updateLine,
+      Value: updateAvailability.available
+        ? warn(`available · ${updateLine}`)
+        : updateLine,
     },
     { Item: "Gateway", Value: gatewayValue },
     { Item: "Gateway service", Value: daemonValue },
@@ -417,7 +454,9 @@ export async function statusCommand(
     { Item: "Probes", Value: probesValue },
     { Item: "Events", Value: eventsValue },
     { Item: "Heartbeat", Value: heartbeatValue },
-    ...(lastHeartbeatValue ? [{ Item: "Last heartbeat", Value: lastHeartbeatValue }] : []),
+    ...(lastHeartbeatValue
+      ? [{ Item: "Last heartbeat", Value: lastHeartbeatValue }]
+      : []),
     {
       Item: "Sessions",
       Value: `${summary.sessions.count} active · default ${defaults.model ?? "unknown"}${defaultCtx} · ${storeLabel}`,
@@ -448,13 +487,23 @@ export async function statusCommand(
         ),
       );
     }
-    runtime.log(theme.muted(`Fallback: ${formatCliCommand("openclaw devices approve --latest")}`));
-    runtime.log(theme.muted(`Inspect: ${formatCliCommand("openclaw devices list")}`));
+    runtime.log(
+      theme.muted(
+        `Fallback: ${formatCliCommand("openclaw devices approve --latest")}`,
+      ),
+    );
+    runtime.log(
+      theme.muted(`Inspect: ${formatCliCommand("openclaw devices list")}`),
+    );
   }
 
   runtime.log("");
   runtime.log(theme.heading("Security audit"));
-  const fmtSummary = (value: { critical: number; warn: number; info: number }) => {
+  const fmtSummary = (value: {
+    critical: number;
+    warn: number;
+    info: number;
+  }) => {
     const parts = [
       theme.error(`${value.critical} critical`),
       theme.warn(`${value.warn} warn`),
@@ -495,8 +544,14 @@ export async function statusCommand(
       runtime.log(theme.muted(`… +${sorted.length - shown.length} more`));
     }
   }
-  runtime.log(theme.muted(`Full report: ${formatCliCommand("openclaw security audit")}`));
-  runtime.log(theme.muted(`Deep probe: ${formatCliCommand("openclaw security audit --deep")}`));
+  runtime.log(
+    theme.muted(`Full report: ${formatCliCommand("openclaw security audit")}`),
+  );
+  runtime.log(
+    theme.muted(
+      `Deep probe: ${formatCliCommand("openclaw security audit --deep")}`,
+    ),
+  );
 
   runtime.log("");
   runtime.log(theme.heading("Channels"));
@@ -524,7 +579,8 @@ export async function statusCommand(
       ],
       rows: channels.rows.map((row) => {
         const issues = channelIssuesByChannel.get(row.id) ?? [];
-        const effectiveState = row.state === "off" ? "off" : issues.length > 0 ? "warn" : row.state;
+        const effectiveState =
+          row.state === "off" ? "off" : issues.length > 0 ? "warn" : row.state;
         const issueSuffix =
           issues.length > 0
             ? ` · ${warn(`gateway: ${shortenText(issues[0]?.message ?? "issue", 84)}`)}`
@@ -606,7 +662,9 @@ export async function statusCommand(
       Detail: `${health.durationMs}ms`,
     });
 
-    for (const line of formatHealthChannelLines(health, { accountMode: "all" })) {
+    for (const line of formatHealthChannelLines(health, {
+      accountMode: "all",
+    })) {
       const colon = line.indexOf(":");
       if (colon === -1) {
         continue;
@@ -669,11 +727,19 @@ export async function statusCommand(
     runtime.log("");
   }
   runtime.log("Next steps:");
-  runtime.log(`  Need to share?      ${formatCliCommand("openclaw status --all")}`);
-  runtime.log(`  Need to debug live? ${formatCliCommand("openclaw logs --follow")}`);
+  runtime.log(
+    `  Need to share?      ${formatCliCommand("openclaw status --all")}`,
+  );
+  runtime.log(
+    `  Need to debug live? ${formatCliCommand("openclaw logs --follow")}`,
+  );
   if (gatewayReachable) {
-    runtime.log(`  Need to test channels? ${formatCliCommand("openclaw status --deep")}`);
+    runtime.log(
+      `  Need to test channels? ${formatCliCommand("openclaw status --deep")}`,
+    );
   } else {
-    runtime.log(`  Fix reachability first: ${formatCliCommand("openclaw gateway probe")}`);
+    runtime.log(
+      `  Fix reachability first: ${formatCliCommand("openclaw gateway probe")}`,
+    );
   }
 }

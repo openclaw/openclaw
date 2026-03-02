@@ -2,14 +2,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 
-const { createLineBotMock, registerPluginHttpRouteMock, unregisterHttpMock } = vi.hoisted(() => ({
-  createLineBotMock: vi.fn(() => ({
-    account: { accountId: "default" },
-    handleWebhook: vi.fn(),
-  })),
-  registerPluginHttpRouteMock: vi.fn(),
-  unregisterHttpMock: vi.fn(),
-}));
+const { createLineBotMock, registerPluginHttpRouteMock, unregisterHttpMock } =
+  vi.hoisted(() => ({
+    createLineBotMock: vi.fn(() => ({
+      account: { accountId: "default" },
+      handleWebhook: vi.fn(),
+    })),
+    registerPluginHttpRouteMock: vi.fn(),
+    unregisterHttpMock: vi.fn(),
+  }));
 
 vi.mock("./bot.js", () => ({
   createLineBot: createLineBotMock,
@@ -33,7 +34,8 @@ vi.mock("../globals.js", () => ({
 }));
 
 vi.mock("../plugins/http-path.js", () => ({
-  normalizePluginHttpPath: (_path: string | undefined, fallback: string) => fallback,
+  normalizePluginHttpPath: (_path: string | undefined, fallback: string) =>
+    fallback,
 }));
 
 vi.mock("../plugins/http-registry.js", () => ({
@@ -97,7 +99,9 @@ describe("monitorLineProvider lifecycle", () => {
       return monitor;
     });
 
-    await vi.waitFor(() => expect(registerPluginHttpRouteMock).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() =>
+      expect(registerPluginHttpRouteMock).toHaveBeenCalledTimes(1),
+    );
     expect(registerPluginHttpRouteMock).toHaveBeenCalledWith(
       expect.objectContaining({ auth: "plugin" }),
     );

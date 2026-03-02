@@ -41,7 +41,11 @@ export const ttsHandlers: GatewayRequestHandlers = {
         edgeEnabled: isTtsProviderConfigured(config, "edge"),
       });
     } catch (err) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)),
+      );
     }
   },
   "tts.enable": async ({ respond }) => {
@@ -52,7 +56,11 @@ export const ttsHandlers: GatewayRequestHandlers = {
       setTtsEnabled(prefsPath, true);
       respond(true, { enabled: true });
     } catch (err) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)),
+      );
     }
   },
   "tts.disable": async ({ respond }) => {
@@ -63,7 +71,11 @@ export const ttsHandlers: GatewayRequestHandlers = {
       setTtsEnabled(prefsPath, false);
       respond(true, { enabled: false });
     } catch (err) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)),
+      );
     }
   },
   "tts.convert": async ({ params, respond }) => {
@@ -78,7 +90,8 @@ export const ttsHandlers: GatewayRequestHandlers = {
     }
     try {
       const cfg = loadConfig();
-      const channel = typeof params.channel === "string" ? params.channel.trim() : undefined;
+      const channel =
+        typeof params.channel === "string" ? params.channel.trim() : undefined;
       const result = await textToSpeech({ text, cfg, channel });
       if (result.success && result.audioPath) {
         respond(true, {
@@ -92,15 +105,27 @@ export const ttsHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, result.error ?? "TTS conversion failed"),
+        errorShape(
+          ErrorCodes.UNAVAILABLE,
+          result.error ?? "TTS conversion failed",
+        ),
       );
     } catch (err) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)),
+      );
     }
   },
   "tts.setProvider": async ({ params, respond }) => {
-    const provider = typeof params.provider === "string" ? params.provider.trim() : "";
-    if (provider !== "openai" && provider !== "elevenlabs" && provider !== "edge") {
+    const provider =
+      typeof params.provider === "string" ? params.provider.trim() : "";
+    if (
+      provider !== "openai" &&
+      provider !== "elevenlabs" &&
+      provider !== "edge"
+    ) {
       respond(
         false,
         undefined,
@@ -118,7 +143,11 @@ export const ttsHandlers: GatewayRequestHandlers = {
       setTtsProvider(prefsPath, provider);
       respond(true, { provider });
     } catch (err) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)),
+      );
     }
   },
   "tts.providers": async ({ respond }) => {
@@ -139,7 +168,11 @@ export const ttsHandlers: GatewayRequestHandlers = {
             id: "elevenlabs",
             name: "ElevenLabs",
             configured: Boolean(resolveTtsApiKey(config, "elevenlabs")),
-            models: ["eleven_multilingual_v2", "eleven_turbo_v2_5", "eleven_monolingual_v1"],
+            models: [
+              "eleven_multilingual_v2",
+              "eleven_turbo_v2_5",
+              "eleven_monolingual_v1",
+            ],
           },
           {
             id: "edge",
@@ -151,7 +184,11 @@ export const ttsHandlers: GatewayRequestHandlers = {
         active: getTtsProvider(config, prefsPath),
       });
     } catch (err) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)),
+      );
     }
   },
 };

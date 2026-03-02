@@ -1,4 +1,8 @@
-import { asString, extractTextFromMessage, isCommandMessage } from "./tui-formatters.js";
+import {
+  asString,
+  extractTextFromMessage,
+  isCommandMessage,
+} from "./tui-formatters.js";
 import { TuiStreamAssembler } from "./tui-stream-assembler.js";
 import type { AgentEvent, ChatEvent, TuiStateAccess } from "./tui-types.js";
 
@@ -168,7 +172,11 @@ export function createEventHandlers(context: EventHandlerContext) {
       state.activeChatRunId = evt.runId;
     }
     if (evt.state === "delta") {
-      const displayText = streamAssembler.ingestDelta(evt.runId, evt.message, state.showThinking);
+      const displayText = streamAssembler.ingestDelta(
+        evt.runId,
+        evt.message,
+        state.showThinking,
+      );
       if (!displayText) {
         return;
       }
@@ -196,13 +204,20 @@ export function createEventHandlers(context: EventHandlerContext) {
       }
       maybeRefreshHistoryForRun(evt.runId);
       const stopReason =
-        evt.message && typeof evt.message === "object" && !Array.isArray(evt.message)
-          ? typeof (evt.message as Record<string, unknown>).stopReason === "string"
+        evt.message &&
+        typeof evt.message === "object" &&
+        !Array.isArray(evt.message)
+          ? typeof (evt.message as Record<string, unknown>).stopReason ===
+            "string"
             ? ((evt.message as Record<string, unknown>).stopReason as string)
             : ""
           : "";
 
-      const finalText = streamAssembler.finalize(evt.runId, evt.message, state.showThinking);
+      const finalText = streamAssembler.finalize(
+        evt.runId,
+        evt.message,
+        state.showThinking,
+      );
       const suppressEmptyExternalPlaceholder =
         finalText === "(no output)" && !isLocalRunId?.(evt.runId);
       if (suppressEmptyExternalPlaceholder) {
@@ -241,7 +256,8 @@ export function createEventHandlers(context: EventHandlerContext) {
     // active chat run id, not the session id. Tool results can arrive after the chat
     // final event, so accept finalized runs for tool updates.
     const isActiveRun = evt.runId === state.activeChatRunId;
-    const isKnownRun = isActiveRun || sessionRuns.has(evt.runId) || finalizedRuns.has(evt.runId);
+    const isKnownRun =
+      isActiveRun || sessionRuns.has(evt.runId) || finalizedRuns.has(evt.runId);
     if (!isKnownRun) {
       return;
     }
@@ -274,7 +290,11 @@ export function createEventHandlers(context: EventHandlerContext) {
             isError: Boolean(data.isError),
           });
         } else {
-          chatLog.updateToolResult(toolCallId, { content: [] }, { isError: Boolean(data.isError) });
+          chatLog.updateToolResult(
+            toolCallId,
+            { content: [] },
+            { isError: Boolean(data.isError) },
+          );
         }
       }
       tui.requestRender();

@@ -17,7 +17,10 @@ export const defaultWaitingPhrases = [
   "conjuring",
 ];
 
-export function pickWaitingPhrase(tick: number, phrases = defaultWaitingPhrases) {
+export function pickWaitingPhrase(
+  tick: number,
+  phrases = defaultWaitingPhrases,
+) {
   const idx = Math.floor(tick / 10) % phrases.length;
   return phrases[idx] ?? phrases[0] ?? "waiting";
 }

@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { stripAnsi, visibleWidth } from "../../terminal/ansi.js";
-import { SearchableSelectList, type SearchableSelectListTheme } from "./searchable-select-list.js";
+import {
+  SearchableSelectList,
+  type SearchableSelectListTheme,
+} from "./searchable-select-list.js";
 
 const mockTheme: SearchableSelectListTheme = {
   selectedPrefix: (t) => `[${t}]`,
@@ -36,8 +39,16 @@ const testItems = [
     description: "Claude 3 Sonnet",
   },
   { value: "openai/gpt-4", label: "openai/gpt-4", description: "GPT-4" },
-  { value: "openai/gpt-4-turbo", label: "openai/gpt-4-turbo", description: "GPT-4 Turbo" },
-  { value: "google/gemini-pro", label: "google/gemini-pro", description: "Gemini Pro" },
+  {
+    value: "openai/gpt-4-turbo",
+    label: "openai/gpt-4-turbo",
+    description: "GPT-4 Turbo",
+  },
+  {
+    value: "google/gemini-pro",
+    label: "google/gemini-pro",
+    description: "Gemini Pro",
+  },
 ];
 
 describe("SearchableSelectList", () => {
@@ -63,7 +74,10 @@ describe("SearchableSelectList", () => {
     expect(output.some((line) => line.includes("No matches"))).toBe(true);
   }
 
-  function expectDescriptionVisibilityAtWidth(width: number, shouldContainDescription: boolean) {
+  function expectDescriptionVisibilityAtWidth(
+    width: number,
+    shouldContainDescription: boolean,
+  ) {
     const items = [
       { value: "one", label: "one", description: "desc" },
       { value: "two", label: "two", description: "desc" },
@@ -109,7 +123,11 @@ describe("SearchableSelectList", () => {
   it("keeps ANSI-highlighted description rows within terminal width", () => {
     const label = `provider/${"x".repeat(80)}`;
     const items = [
-      { value: label, label, description: "Some description text that should not overflow" },
+      {
+        value: label,
+        label,
+        description: "Some description text that should not overflow",
+      },
       { value: "other", label: "other", description: "Other description" },
     ];
     const list = new SearchableSelectList(items, 5, ansiHighlightTheme);
@@ -126,7 +144,11 @@ describe("SearchableSelectList", () => {
 
   it("ignores ANSI escape codes in search matching", () => {
     const items = [
-      { value: "styled", label: "\u001b[32mopenai/gpt-4\u001b[0m", description: "Styled label" },
+      {
+        value: "styled",
+        label: "\u001b[32mopenai/gpt-4\u001b[0m",
+        description: "Styled label",
+      },
       { value: "plain", label: "plain-item", description: "Plain label" },
     ];
     const list = new SearchableSelectList(items, 5, mockTheme);
@@ -140,9 +162,13 @@ describe("SearchableSelectList", () => {
 
     typeInput(list, "gpt m");
 
-    const renderedLine = list.render(80).find((line) => stripAnsi(line).includes("gpt-model"));
+    const renderedLine = list
+      .render(80)
+      .find((line) => stripAnsi(line).includes("gpt-model"));
     expect(renderedLine).toBeDefined();
-    const highlightOpens = renderedLine ? renderedLine.split("\u001b[31m").length - 1 : 0;
+    const highlightOpens = renderedLine
+      ? renderedLine.split("\u001b[31m").length - 1
+      : 0;
     expect(highlightOpens).toBe(2);
   });
 
@@ -159,8 +185,16 @@ describe("SearchableSelectList", () => {
   it("prioritizes exact substring matches over fuzzy matches", () => {
     // Add items where one has early exact match, others are fuzzy or late matches
     const items = [
-      { value: "openrouter/auto", label: "openrouter/auto", description: "Routes to best" },
-      { value: "opus-direct", label: "opus-direct", description: "Direct opus model" },
+      {
+        value: "openrouter/auto",
+        label: "openrouter/auto",
+        description: "Routes to best",
+      },
+      {
+        value: "opus-direct",
+        label: "opus-direct",
+        description: "Direct opus model",
+      },
       {
         value: "anthropic/claude-3-opus",
         label: "anthropic/claude-3-opus",
@@ -180,8 +214,16 @@ describe("SearchableSelectList", () => {
   it("keeps exact label matches ahead of description matches", () => {
     const longPrefix = "x".repeat(250);
     const items = [
-      { value: "late-label", label: `${longPrefix}opus`, description: "late exact match" },
-      { value: "desc-first", label: "provider/other", description: "opus in description" },
+      {
+        value: "late-label",
+        label: `${longPrefix}opus`,
+        description: "late exact match",
+      },
+      {
+        value: "desc-first",
+        label: "provider/other",
+        description: "opus in description",
+      },
     ];
     const list = new SearchableSelectList(items, 5, mockTheme);
 
@@ -195,7 +237,11 @@ describe("SearchableSelectList", () => {
         label: "provider/other",
         description: "This mentions opus in description",
       },
-      { value: "provider/opus-model", label: "provider/opus-model", description: "Something else" },
+      {
+        value: "provider/opus-model",
+        label: "provider/opus-model",
+        description: "Something else",
+      },
     ];
     const list = new SearchableSelectList(items, 5, mockTheme);
 

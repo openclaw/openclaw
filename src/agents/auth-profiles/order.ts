@@ -1,5 +1,8 @@
 import type { OpenClawConfig } from "../../config/config.js";
-import { findNormalizedProviderValue, normalizeProviderId } from "../model-selection.js";
+import {
+  findNormalizedProviderValue,
+  normalizeProviderId,
+} from "../model-selection.js";
 import { dedupeProfileIds, listProfilesForProvider } from "./profiles.js";
 import type { AuthProfileStore } from "./types.js";
 import {
@@ -23,16 +26,24 @@ export function resolveAuthProfileOrder(params: {
   // next transient failure. See #3604.
   clearExpiredCooldowns(store, now);
   const storedOrder = findNormalizedProviderValue(store.order, providerKey);
-  const configuredOrder = findNormalizedProviderValue(cfg?.auth?.order, providerKey);
+  const configuredOrder = findNormalizedProviderValue(
+    cfg?.auth?.order,
+    providerKey,
+  );
   const explicitOrder = storedOrder ?? configuredOrder;
   const explicitProfiles = cfg?.auth?.profiles
     ? Object.entries(cfg.auth.profiles)
-        .filter(([, profile]) => normalizeProviderId(profile.provider) === providerKey)
+        .filter(
+          ([, profile]) =>
+            normalizeProviderId(profile.provider) === providerKey,
+        )
         .map(([profileId]) => profileId)
     : [];
   const baseOrder =
     explicitOrder ??
-    (explicitProfiles.length > 0 ? explicitProfiles : listProfilesForProvider(store, providerKey));
+    (explicitProfiles.length > 0
+      ? explicitProfiles
+      : listProfilesForProvider(store, providerKey));
   if (baseOrder.length === 0) {
     return [];
   }
@@ -51,7 +62,8 @@ export function resolveAuthProfileOrder(params: {
         return false;
       }
       if (profileConfig.mode !== cred.type) {
-        const oauthCompatible = profileConfig.mode === "oauth" && cred.type === "token";
+        const oauthCompatible =
+          profileConfig.mode === "oauth" && cred.type === "token";
         if (!oauthCompatible) {
           return false;
         }
@@ -84,8 +96,14 @@ export function resolveAuthProfileOrder(params: {
   // Repair config/store profile-id drift from older onboarding flows:
   // if configured profile ids no longer exist in auth-profiles.json, scan the
   // provider's stored credentials and use any valid entries.
-  const allBaseProfilesMissing = baseOrder.every((profileId) => !store.profiles[profileId]);
-  if (filtered.length === 0 && explicitProfiles.length > 0 && allBaseProfilesMissing) {
+  const allBaseProfilesMissing = baseOrder.every(
+    (profileId) => !store.profiles[profileId],
+  );
+  if (
+    filtered.length === 0 &&
+    explicitProfiles.length > 0 &&
+    allBaseProfilesMissing
+  ) {
     const storeProfiles = listProfilesForProvider(store, providerKey);
     filtered = storeProfiles.filter(isValidProfile);
   }
@@ -104,7 +122,8 @@ export function resolveAuthProfileOrder(params: {
     for (const profileId of deduped) {
       if (isProfileInCooldown(store, profileId)) {
         const cooldownUntil =
-          resolveProfileUnusableUntil(store.usageStats?.[profileId] ?? {}) ?? now;
+          resolveProfileUnusableUntil(store.usageStats?.[profileId] ?? {}) ??
+          now;
         inCooldown.push({ profileId, cooldownUntil });
       } else {
         available.push(profileId);
@@ -119,7 +138,10 @@ export function resolveAuthProfileOrder(params: {
 
     // Still put preferredProfile first if specified
     if (preferredProfile && ordered.includes(preferredProfile)) {
-      return [preferredProfile, ...ordered.filter((e) => e !== preferredProfile)];
+      return [
+        preferredProfile,
+        ...ordered.filter((e) => e !== preferredProfile),
+      ];
     }
     return ordered;
   }
@@ -136,7 +158,10 @@ export function resolveAuthProfileOrder(params: {
   return sorted;
 }
 
-function orderProfilesByMode(order: string[], store: AuthProfileStore): string[] {
+function orderProfilesByMode(
+  order: string[],
+  store: AuthProfileStore,
+): string[] {
   const now = Date.now();
 
   // Partition into available and in-cooldown
@@ -154,7 +179,8 @@ function orderProfilesByMode(order: string[], store: AuthProfileStore): string[]
   // Sort available profiles by type preference, then by lastUsed (oldest first = round-robin within type)
   const scored = available.map((profileId) => {
     const type = store.profiles[profileId]?.type;
-    const typeScore = type === "oauth" ? 0 : type === "token" ? 1 : type === "api_key" ? 2 : 3;
+    const typeScore =
+      type === "oauth" ? 0 : type === "token" ? 1 : type === "api_key" ? 2 : 3;
     const lastUsed = store.usageStats?.[profileId]?.lastUsed ?? 0;
     return { profileId, typeScore, lastUsed };
   });
@@ -176,7 +202,8 @@ function orderProfilesByMode(order: string[], store: AuthProfileStore): string[]
   const cooldownSorted = inCooldown
     .map((profileId) => ({
       profileId,
-      cooldownUntil: resolveProfileUnusableUntil(store.usageStats?.[profileId] ?? {}) ?? now,
+      cooldownUntil:
+        resolveProfileUnusableUntil(store.usageStats?.[profileId] ?? {}) ?? now,
     }))
     .toSorted((a, b) => a.cooldownUntil - b.cooldownUntil)
     .map((entry) => entry.profileId);

@@ -22,7 +22,10 @@ const MemoryGetSchema = Type.Object({
   lines: Type.Optional(Type.Number()),
 });
 
-function resolveMemoryToolContext(options: { config?: OpenClawConfig; agentSessionKey?: string }) {
+function resolveMemoryToolContext(options: {
+  config?: OpenClawConfig;
+  agentSessionKey?: string;
+}) {
   const cfg = options.config;
   if (!cfg) {
     return null;
@@ -79,9 +82,14 @@ export function createMemorySearchTool(options: {
         const resolved = resolveMemoryBackendConfig({ cfg, agentId });
         const results =
           status.backend === "qmd"
-            ? clampResultsByInjectedChars(decorated, resolved.qmd?.limits.maxInjectedChars)
+            ? clampResultsByInjectedChars(
+                decorated,
+                resolved.qmd?.limits.maxInjectedChars,
+              )
             : decorated;
-        const searchMode = (status.custom as { searchMode?: string } | undefined)?.searchMode;
+        const searchMode = (
+          status.custom as { searchMode?: string } | undefined
+        )?.searchMode;
         return jsonResult({
           results,
           provider: status.provider,
@@ -133,7 +141,12 @@ export function createMemoryGetTool(options: {
         return jsonResult(result);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        return jsonResult({ path: relPath, text: "", disabled: true, error: message });
+        return jsonResult({
+          path: relPath,
+          text: "",
+          disabled: true,
+          error: message,
+        });
       }
     },
   };
@@ -147,7 +160,10 @@ function resolveMemoryCitationsMode(cfg: OpenClawConfig): MemoryCitationsMode {
   return "auto";
 }
 
-function decorateCitations(results: MemorySearchResult[], include: boolean): MemorySearchResult[] {
+function decorateCitations(
+  results: MemorySearchResult[],
+  include: boolean,
+): MemorySearchResult[] {
   if (!include) {
     return results.map((entry) => ({ ...entry, citation: undefined }));
   }
@@ -193,8 +209,12 @@ function clampResultsByInjectedChars(
 }
 
 function buildMemorySearchUnavailableResult(error: string | undefined) {
-  const reason = (error ?? "memory search unavailable").trim() || "memory search unavailable";
-  const isQuotaError = /insufficient_quota|quota|429/.test(reason.toLowerCase());
+  const reason =
+    (error ?? "memory search unavailable").trim() ||
+    "memory search unavailable";
+  const isQuotaError = /insufficient_quota|quota|429/.test(
+    reason.toLowerCase(),
+  );
   const warning = isQuotaError
     ? "Memory search is unavailable because the embedding provider quota is exhausted."
     : "Memory search is unavailable due to an embedding/provider error.";
@@ -226,7 +246,9 @@ function shouldIncludeCitations(params: {
   return chatType === "direct";
 }
 
-function deriveChatTypeFromSessionKey(sessionKey?: string): "direct" | "group" | "channel" {
+function deriveChatTypeFromSessionKey(
+  sessionKey?: string,
+): "direct" | "group" | "channel" {
   const parsed = parseAgentSessionKey(sessionKey);
   if (!parsed?.rest) {
     return "direct";

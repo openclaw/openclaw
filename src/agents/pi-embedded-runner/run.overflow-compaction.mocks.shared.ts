@@ -43,13 +43,17 @@ vi.mock("../usage.js", () => ({
   normalizeUsage: vi.fn((usage?: unknown) =>
     usage && typeof usage === "object" ? usage : undefined,
   ),
-  derivePromptTokens: vi.fn((usage?: { input?: number; cacheRead?: number; cacheWrite?: number }) =>
-    usage
-      ? (() => {
-          const sum = (usage.input ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
-          return sum > 0 ? sum : undefined;
-        })()
-      : undefined,
+  derivePromptTokens: vi.fn(
+    (usage?: { input?: number; cacheRead?: number; cacheWrite?: number }) =>
+      usage
+        ? (() => {
+            const sum =
+              (usage.input ?? 0) +
+              (usage.cacheRead ?? 0) +
+              (usage.cacheWrite ?? 0);
+            return sum > 0 ? sum : undefined;
+          })()
+        : undefined,
   ),
   hasNonzeroUsage: vi.fn(() => false),
 }));
@@ -73,7 +77,10 @@ vi.mock("../pi-embedded-helpers.js", () => ({
   isCompactionFailureError: vi.fn(() => false),
   isLikelyContextOverflowError: vi.fn((msg?: string) => {
     const lower = (msg ?? "").toLowerCase();
-    return lower.includes("request_too_large") || lower.includes("context window exceeded");
+    return (
+      lower.includes("request_too_large") ||
+      lower.includes("context window exceeded")
+    );
   }),
   isFailoverAssistantError: vi.fn(() => false),
   isFailoverErrorMessage: vi.fn(() => false),

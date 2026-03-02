@@ -47,7 +47,9 @@ function normalizeHostnameSet(values?: string[]): Set<string> {
   if (!values || values.length === 0) {
     return new Set<string>();
   }
-  return new Set(values.map((value) => normalizeHostname(value)).filter(Boolean));
+  return new Set(
+    values.map((value) => normalizeHostname(value)).filter(Boolean),
+  );
 }
 
 function normalizeHostnameAllowlist(values?: string[]): string[] {
@@ -64,16 +66,24 @@ function normalizeHostnameAllowlist(values?: string[]): string[] {
 }
 
 export function isPrivateNetworkAllowedByPolicy(policy?: SsrFPolicy): boolean {
-  return policy?.dangerouslyAllowPrivateNetwork === true || policy?.allowPrivateNetwork === true;
+  return (
+    policy?.dangerouslyAllowPrivateNetwork === true ||
+    policy?.allowPrivateNetwork === true
+  );
 }
 
-function resolveIpv4SpecialUseBlockOptions(policy?: SsrFPolicy): Ipv4SpecialUseBlockOptions {
+function resolveIpv4SpecialUseBlockOptions(
+  policy?: SsrFPolicy,
+): Ipv4SpecialUseBlockOptions {
   return {
     allowRfc2544BenchmarkRange: policy?.allowRfc2544BenchmarkRange === true,
   };
 }
 
-function isHostnameAllowedByPattern(hostname: string, pattern: string): boolean {
+function isHostnameAllowedByPattern(
+  hostname: string,
+  pattern: string,
+): boolean {
   if (pattern.startsWith("*.")) {
     const suffix = pattern.slice(2);
     if (!suffix || hostname === suffix) {
@@ -84,11 +94,16 @@ function isHostnameAllowedByPattern(hostname: string, pattern: string): boolean 
   return hostname === pattern;
 }
 
-function matchesHostnameAllowlist(hostname: string, allowlist: string[]): boolean {
+function matchesHostnameAllowlist(
+  hostname: string,
+  allowlist: string[],
+): boolean {
   if (allowlist.length === 0) {
     return true;
   }
-  return allowlist.some((pattern) => isHostnameAllowedByPattern(hostname, pattern));
+  return allowlist.some((pattern) =>
+    isHostnameAllowedByPattern(hostname, pattern),
+  );
 }
 
 function looksLikeUnsupportedIpv4Literal(address: string): boolean {
@@ -105,7 +120,10 @@ function looksLikeUnsupportedIpv4Literal(address: string): boolean {
 }
 
 // Returns true for private/internal and special-use non-global addresses.
-export function isPrivateIpAddress(address: string, policy?: SsrFPolicy): boolean {
+export function isPrivateIpAddress(
+  address: string,
+  policy?: SsrFPolicy,
+): boolean {
   let normalized = address.trim().toLowerCase();
   if (normalized.startsWith("[") && normalized.endsWith("]")) {
     normalized = normalized.slice(1, -1);
@@ -135,7 +153,10 @@ export function isPrivateIpAddress(address: string, policy?: SsrFPolicy): boolea
     return true;
   }
 
-  if (!isCanonicalDottedDecimalIPv4(normalized) && isLegacyIpv4Literal(normalized)) {
+  if (
+    !isCanonicalDottedDecimalIPv4(normalized) &&
+    isLegacyIpv4Literal(normalized)
+  ) {
     return true;
   }
   if (looksLikeUnsupportedIpv4Literal(normalized)) {
@@ -163,18 +184,29 @@ function isBlockedHostnameNormalized(normalized: string): boolean {
   );
 }
 
-export function isBlockedHostnameOrIp(hostname: string, policy?: SsrFPolicy): boolean {
+export function isBlockedHostnameOrIp(
+  hostname: string,
+  policy?: SsrFPolicy,
+): boolean {
   const normalized = normalizeHostname(hostname);
   if (!normalized) {
     return false;
   }
-  return isBlockedHostnameNormalized(normalized) || isPrivateIpAddress(normalized, policy);
+  return (
+    isBlockedHostnameNormalized(normalized) ||
+    isPrivateIpAddress(normalized, policy)
+  );
 }
 
-const BLOCKED_HOST_OR_IP_MESSAGE = "Blocked hostname or private/internal/special-use IP address";
-const BLOCKED_RESOLVED_IP_MESSAGE = "Blocked: resolves to private/internal/special-use IP address";
+const BLOCKED_HOST_OR_IP_MESSAGE =
+  "Blocked hostname or private/internal/special-use IP address";
+const BLOCKED_RESOLVED_IP_MESSAGE =
+  "Blocked: resolves to private/internal/special-use IP address";
 
-function assertAllowedHostOrIpOrThrow(hostnameOrIp: string, policy?: SsrFPolicy): void {
+function assertAllowedHostOrIpOrThrow(
+  hostnameOrIp: string,
+  policy?: SsrFPolicy,
+): void {
   if (isBlockedHostnameOrIp(hostnameOrIp, policy)) {
     throw new SsrFBlockedError(BLOCKED_HOST_OR_IP_MESSAGE);
   }
@@ -216,7 +248,9 @@ export function createPinnedLookup(params: {
 
   return ((host: string, options?: unknown, callback?: unknown) => {
     const cb: LookupCallback =
-      typeof options === "function" ? (options as LookupCallback) : (callback as LookupCallback);
+      typeof options === "function"
+        ? (options as LookupCallback)
+        : (callback as LookupCallback);
     if (!cb) {
       return;
     }
@@ -233,7 +267,11 @@ export function createPinnedLookup(params: {
         ? (options as { all?: boolean; family?: number })
         : {};
     const requestedFamily =
-      typeof options === "number" ? options : typeof opts.family === "number" ? opts.family : 0;
+      typeof options === "number"
+        ? options
+        : typeof opts.family === "number"
+          ? opts.family
+          : 0;
     const candidates =
       requestedFamily === 4 || requestedFamily === 6
         ? records.filter((entry) => entry.family === requestedFamily)
@@ -283,13 +321,19 @@ export async function resolvePinnedHostnameWithPolicy(
   }
 
   const allowPrivateNetwork = isPrivateNetworkAllowedByPolicy(params.policy);
-  const allowedHostnames = normalizeHostnameSet(params.policy?.allowedHostnames);
-  const hostnameAllowlist = normalizeHostnameAllowlist(params.policy?.hostnameAllowlist);
+  const allowedHostnames = normalizeHostnameSet(
+    params.policy?.allowedHostnames,
+  );
+  const hostnameAllowlist = normalizeHostnameAllowlist(
+    params.policy?.hostnameAllowlist,
+  );
   const isExplicitAllowed = allowedHostnames.has(normalized);
   const skipPrivateNetworkChecks = allowPrivateNetwork || isExplicitAllowed;
 
   if (!matchesHostnameAllowlist(normalized, hostnameAllowlist)) {
-    throw new SsrFBlockedError(`Blocked hostname (not in allowlist): ${hostname}`);
+    throw new SsrFBlockedError(
+      `Blocked hostname (not in allowlist): ${hostname}`,
+    );
   }
 
   if (!skipPrivateNetworkChecks) {
@@ -337,11 +381,16 @@ export function createPinnedDispatcher(pinned: PinnedHostname): Dispatcher {
   });
 }
 
-export async function closeDispatcher(dispatcher?: Dispatcher | null): Promise<void> {
+export async function closeDispatcher(
+  dispatcher?: Dispatcher | null,
+): Promise<void> {
   if (!dispatcher) {
     return;
   }
-  const candidate = dispatcher as { close?: () => Promise<void> | void; destroy?: () => void };
+  const candidate = dispatcher as {
+    close?: () => Promise<void> | void;
+    destroy?: () => void;
+  };
   try {
     if (typeof candidate.close === "function") {
       await candidate.close();

@@ -18,7 +18,8 @@ type ReadlineMock = {
 };
 
 const { promptYesNo } = await import("./prompt.js");
-const readline = (await import("node:readline/promises")) as unknown as ReadlineMock;
+const readline =
+  (await import("node:readline/promises")) as unknown as ReadlineMock;
 
 describe("promptYesNo", () => {
   it("returns true when global --yes is set", async () => {

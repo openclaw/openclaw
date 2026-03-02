@@ -7,7 +7,10 @@ import type {
 } from "./types.base.js";
 import type { ChannelHeartbeatVisibilityConfig } from "./types.channels.js";
 import type { DmConfig, ProviderCommandsConfig } from "./types.messages.js";
-import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
+import type {
+  GroupToolPolicyBySenderConfig,
+  GroupToolPolicyConfig,
+} from "./types.tools.js";
 
 export type SlackDmConfig = {
   /** If false, ignore all incoming Slack DMs. Default: true. */
@@ -159,7 +162,9 @@ export type SlackAccountConfig = {
    * Optional per-chat-type reply threading overrides.
    * Example: { direct: "all", group: "first", channel: "off" }.
    */
-  replyToModeByChatType?: Partial<Record<"direct" | "group" | "channel", ReplyToMode>>;
+  replyToModeByChatType?: Partial<
+    Record<"direct" | "group" | "channel", ReplyToMode>
+  >;
   /** Thread session behavior. */
   thread?: SlackThreadConfig;
   actions?: SlackActionConfig;

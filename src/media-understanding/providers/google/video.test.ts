@@ -39,16 +39,18 @@ describe("describeGeminiVideo", () => {
 
   it("respects case-insensitive x-goog-api-key overrides", async () => {
     let seenKey: string | null = null;
-    const fetchFn = withFetchPreconnect(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      const headers = new Headers(init?.headers);
-      seenKey = headers.get("x-goog-api-key");
-      return new Response(
-        JSON.stringify({
-          candidates: [{ content: { parts: [{ text: "video ok" }] } }],
-        }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      );
-    });
+    const fetchFn = withFetchPreconnect(
+      async (_input: RequestInfo | URL, init?: RequestInit) => {
+        const headers = new Headers(init?.headers);
+        seenKey = headers.get("x-goog-api-key");
+        return new Response(
+          JSON.stringify({
+            candidates: [{ content: { parts: [{ text: "video ok" }] } }],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      },
+    );
 
     const result = await describeGeminiVideo({
       buffer: Buffer.from("video"),
@@ -88,7 +90,9 @@ describe("describeGeminiVideo", () => {
 
     expect(result.model).toBe("gemini-3-pro-preview");
     expect(result.text).toBe("first\nsecond");
-    expect(seenUrl).toBe("https://example.com/v1beta/models/gemini-3-pro-preview:generateContent");
+    expect(seenUrl).toBe(
+      "https://example.com/v1beta/models/gemini-3-pro-preview:generateContent",
+    );
     expect(seenInit?.method).toBe("POST");
     expect(seenInit?.signal).toBeInstanceOf(AbortSignal);
 
@@ -105,7 +109,9 @@ describe("describeGeminiVideo", () => {
           : "";
     const body = JSON.parse(bodyText);
     expect(body.contents?.[0]?.parts?.[0]?.text).toBe("Describe the video.");
-    expect(body.contents?.[0]?.parts?.[1]?.inline_data?.mime_type).toBe("video/mp4");
+    expect(body.contents?.[0]?.parts?.[1]?.inline_data?.mime_type).toBe(
+      "video/mp4",
+    );
     expect(body.contents?.[0]?.parts?.[1]?.inline_data?.data).toBe(
       Buffer.from("video-bytes").toString("base64"),
     );

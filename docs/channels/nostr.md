@@ -151,7 +151,11 @@ Defaults: `relay.damus.io` and `nos.lol`.
   "channels": {
     "nostr": {
       "privateKey": "${NOSTR_PRIVATE_KEY}",
-      "relays": ["wss://relay.damus.io", "wss://relay.primal.net", "wss://nostr.wine"]
+      "relays": [
+        "wss://relay.damus.io",
+        "wss://relay.primal.net",
+        "wss://nostr.wine"
+      ]
     }
   }
 }

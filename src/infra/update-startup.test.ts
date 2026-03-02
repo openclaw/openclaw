@@ -1,7 +1,16 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import { captureEnv } from "../test-utils/env.js";
 import type { UpdateCheckResult } from "./update-check.js";
 
@@ -10,7 +19,8 @@ vi.mock("./openclaw-root.js", () => ({
 }));
 
 vi.mock("./update-check.js", async () => {
-  const parse = (value: string) => value.split(".").map((part) => Number.parseInt(part, 10));
+  const parse = (value: string) =>
+    value.split(".").map((part) => Number.parseInt(part, 10));
   const compareSemverStrings = (a: string, b: string) => {
     const left = parse(a);
     const right = parse(b);
@@ -56,7 +66,9 @@ describe("update-startup", () => {
   let loaded = false;
 
   beforeAll(async () => {
-    suiteRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-check-suite-"));
+    suiteRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-update-check-suite-"),
+    );
   });
 
   beforeEach(async () => {
@@ -75,7 +87,8 @@ describe("update-startup", () => {
     // Perf: load mocked modules once (after timers/env are set up).
     if (!loaded) {
       ({ resolveOpenClawPackageRoot } = await import("./openclaw-root.js"));
-      ({ checkUpdateStatus, resolveNpmChannelTag } = await import("./update-check.js"));
+      ({ checkUpdateStatus, resolveNpmChannelTag } =
+        await import("./update-check.js"));
       ({ runCommandWithTimeout } = await import("../process/exec.js"));
       ({
         runGatewayUpdateCheck,
@@ -259,7 +272,9 @@ describe("update-startup", () => {
     });
 
     expect(log.info).not.toHaveBeenCalled();
-    await expect(fs.stat(path.join(tempDir, "update-check.json"))).rejects.toThrow();
+    await expect(
+      fs.stat(path.join(tempDir, "update-check.json")),
+    ).rejects.toThrow();
   });
 
   it("defers stable auto-update until rollout window is due", async () => {

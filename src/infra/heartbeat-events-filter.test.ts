@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { buildCronEventPrompt, buildExecEventPrompt } from "./heartbeat-events-filter.js";
+import {
+  buildCronEventPrompt,
+  buildExecEventPrompt,
+} from "./heartbeat-events-filter.js";
 
 describe("heartbeat event prompts", () => {
   it("builds user-relay cron prompt by default", () => {
@@ -8,7 +11,9 @@ describe("heartbeat event prompts", () => {
   });
 
   it("builds internal-only cron prompt when delivery is disabled", () => {
-    const prompt = buildCronEventPrompt(["Cron: rotate logs"], { deliverToUser: false });
+    const prompt = buildCronEventPrompt(["Cron: rotate logs"], {
+      deliverToUser: false,
+    });
     expect(prompt).toContain("Handle this reminder internally");
     expect(prompt).not.toContain("Please relay this reminder to the user");
   });

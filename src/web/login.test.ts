@@ -41,7 +41,9 @@ describe("web login", () => {
       createWaSocket as unknown as () => Promise<{ ws: { close: () => void } }>
     )();
     const close = vi.spyOn(sock.ws, "close");
-    const waiter: typeof waitForWaConnection = vi.fn().mockResolvedValue(undefined);
+    const waiter: typeof waitForWaConnection = vi
+      .fn()
+      .mockResolvedValue(undefined);
     await loginWeb(false, waiter);
     expect(close).not.toHaveBeenCalled();
 
@@ -66,6 +68,8 @@ describe("renderQrPngBase64", () => {
     expect(source).not.toContain("createRequire(");
     expect(source).not.toContain('require("qrcode-terminal/vendor/QRCode")');
     expect(source).toContain("qrcode-terminal/vendor/QRCode/index.js");
-    expect(source).toContain("qrcode-terminal/vendor/QRCode/QRErrorCorrectLevel.js");
+    expect(source).toContain(
+      "qrcode-terminal/vendor/QRCode/QRErrorCorrectLevel.js",
+    );
   });
 });

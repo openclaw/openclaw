@@ -1,7 +1,10 @@
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { listEnabledFeishuAccounts } from "./accounts.js";
-import { createFeishuToolClient, resolveAnyEnabledFeishuToolsConfig } from "./tool-account.js";
+import {
+  createFeishuToolClient,
+  resolveAnyEnabledFeishuToolsConfig,
+} from "./tool-account.js";
 import { FeishuWikiSchema, type FeishuWikiParams } from "./wiki-schema.js";
 
 // ============ Helpers ============
@@ -13,7 +16,14 @@ function json(data: unknown) {
   };
 }
 
-type ObjType = "doc" | "sheet" | "mindnote" | "bitable" | "file" | "docx" | "slides";
+type ObjType =
+  | "doc"
+  | "sheet"
+  | "mindnote"
+  | "bitable"
+  | "file"
+  | "docx"
+  | "slides";
 
 // ============ Actions ============
 
@@ -41,7 +51,11 @@ async function listSpaces(client: Lark.Client) {
   };
 }
 
-async function listNodes(client: Lark.Client, spaceId: string, parentNodeToken?: string) {
+async function listNodes(
+  client: Lark.Client,
+  spaceId: string,
+  parentNodeToken?: string,
+) {
   const res = await client.wiki.spaceNode.list({
     path: { space_id: spaceId },
     params: { parent_node_token: parentNodeToken },
@@ -137,7 +151,12 @@ async function moveNode(
   };
 }
 
-async function renameNode(client: Lark.Client, spaceId: string, nodeToken: string, title: string) {
+async function renameNode(
+  client: Lark.Client,
+  spaceId: string,
+  nodeToken: string,
+  title: string,
+) {
   const res = await client.wiki.spaceNode.updateTitle({
     path: { space_id: spaceId, node_token: nodeToken },
     data: { title },
@@ -163,7 +182,9 @@ export function registerFeishuWikiTools(api: OpenClawPluginApi) {
 
   const accounts = listEnabledFeishuAccounts(api.config);
   if (accounts.length === 0) {
-    api.logger.debug?.("feishu_wiki: No Feishu accounts configured, skipping wiki tools");
+    api.logger.debug?.(
+      "feishu_wiki: No Feishu accounts configured, skipping wiki tools",
+    );
     return;
   }
 
@@ -196,7 +217,9 @@ export function registerFeishuWikiTools(api: OpenClawPluginApi) {
               case "spaces":
                 return json(await listSpaces(client));
               case "nodes":
-                return json(await listNodes(client, p.space_id, p.parent_node_token));
+                return json(
+                  await listNodes(client, p.space_id, p.parent_node_token),
+                );
               case "get":
                 return json(await getNode(client, p.token));
               case "search":
@@ -206,7 +229,13 @@ export function registerFeishuWikiTools(api: OpenClawPluginApi) {
                 });
               case "create":
                 return json(
-                  await createNode(client, p.space_id, p.title, p.obj_type, p.parent_node_token),
+                  await createNode(
+                    client,
+                    p.space_id,
+                    p.title,
+                    p.obj_type,
+                    p.parent_node_token,
+                  ),
                 );
               case "move":
                 return json(
@@ -219,13 +248,17 @@ export function registerFeishuWikiTools(api: OpenClawPluginApi) {
                   ),
                 );
               case "rename":
-                return json(await renameNode(client, p.space_id, p.node_token, p.title));
+                return json(
+                  await renameNode(client, p.space_id, p.node_token, p.title),
+                );
               default:
                 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- exhaustive check fallback
                 return json({ error: `Unknown action: ${(p as any).action}` });
             }
           } catch (err) {
-            return json({ error: err instanceof Error ? err.message : String(err) });
+            return json({
+              error: err instanceof Error ? err.message : String(err),
+            });
           }
         },
       };

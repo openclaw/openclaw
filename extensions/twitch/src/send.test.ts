@@ -27,7 +27,8 @@ vi.mock("./config.js", () => ({
 vi.mock("./utils/twitch.js", () => ({
   generateMessageId: vi.fn(() => "test-msg-id"),
   isAccountConfigured: vi.fn(() => true),
-  normalizeTwitchChannel: (channel: string) => channel.toLowerCase().replace(/^#/, ""),
+  normalizeTwitchChannel: (channel: string) =>
+    channel.toLowerCase().replace(/^#/, ""),
 }));
 
 vi.mock("./utils/markdown.js", () => ({
@@ -94,7 +95,9 @@ describe("send", () => {
           messageId: "twitch-msg-456",
         }),
       } as unknown as ReturnType<typeof getClientManager>);
-      vi.mocked(stripMarkdownForTwitch).mockImplementation((text) => text.replace(/\*\*/g, ""));
+      vi.mocked(stripMarkdownForTwitch).mockImplementation((text) =>
+        text.replace(/\*\*/g, ""),
+      );
 
       await sendMessageTwitchInternal(
         "#testchannel",

@@ -2,7 +2,16 @@ import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 const runtime = {
   log: vi.fn(),
@@ -17,7 +26,9 @@ describe("web logout", () => {
   let logoutWeb: typeof import("./auth-store.js").logoutWeb;
 
   beforeAll(async () => {
-    fixtureRoot = await fsPromises.mkdtemp(path.join(os.tmpdir(), "openclaw-test-web-logout-"));
+    fixtureRoot = await fsPromises.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-test-web-logout-"),
+    );
     ({ logoutWeb } = await import("./auth-store.js"));
   });
 
@@ -71,12 +82,16 @@ describe("web logout", () => {
     expect(fs.existsSync(authDir)).toBe(false);
   });
 
-  it("no-ops when nothing to delete", { timeout: WEB_LOGOUT_TEST_TIMEOUT_MS }, async () => {
-    const authDir = await makeCaseDir();
-    const result = await logoutWeb({ authDir, runtime: runtime as never });
-    expect(result).toBe(false);
-    expect(runtime.log).toHaveBeenCalled();
-  });
+  it(
+    "no-ops when nothing to delete",
+    { timeout: WEB_LOGOUT_TEST_TIMEOUT_MS },
+    async () => {
+      const authDir = await makeCaseDir();
+      const result = await logoutWeb({ authDir, runtime: runtime as never });
+      expect(result).toBe(false);
+      expect(runtime.log).toHaveBeenCalled();
+    },
+  );
 
   it("keeps shared oauth.json when using legacy auth dir", async () => {
     const credsDir = await createAuthCase({

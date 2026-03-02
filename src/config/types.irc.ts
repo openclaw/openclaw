@@ -1,5 +1,8 @@
 import type { CommonChannelMessagingConfig } from "./types.channel-messaging-common.js";
-import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
+import type {
+  GroupToolPolicyBySenderConfig,
+  GroupToolPolicyConfig,
+} from "./types.tools.js";
 
 export type IrcAccountConfig = CommonChannelMessagingConfig & {
   /** IRC server hostname (example: irc.libera.chat). */

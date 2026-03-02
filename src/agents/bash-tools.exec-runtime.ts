@@ -1,7 +1,11 @@
 import path from "node:path";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
-import type { ExecAsk, ExecHost, ExecSecurity } from "../infra/exec-approvals.js";
+import type {
+  ExecAsk,
+  ExecHost,
+  ExecSecurity,
+} from "../infra/exec-approvals.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { isDangerousHostEnvVarName } from "../infra/host-env-security.js";
 import { findPathKey, mergePathPrepend } from "../infra/path-prepend.js";
@@ -9,7 +13,11 @@ import { enqueueSystemEvent } from "../infra/system-events.js";
 import type { ProcessSession } from "./bash-process-registry.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
-export { applyPathPrepend, findPathKey, normalizePathPrepend } from "../infra/path-prepend.js";
+export {
+  applyPathPrepend,
+  findPathKey,
+  normalizePathPrepend,
+} from "../infra/path-prepend.js";
 import { logWarn } from "../logger.js";
 import type { ManagedRun } from "../process/supervisor/index.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
@@ -31,7 +39,9 @@ import { getShellConfig, sanitizeBinaryOutput } from "./shell-utils.js";
 
 // Sanitize inherited host env before merge so dangerous variables from process.env
 // are not propagated into non-sandboxed executions.
-export function sanitizeHostBaseEnv(env: Record<string, string>): Record<string, string> {
+export function sanitizeHostBaseEnv(
+  env: Record<string, string>,
+): Record<string, string> {
   const sanitized: Record<string, string> = {};
   for (const [key, value] of Object.entries(env)) {
     const upperKey = key.toUpperCase();
@@ -81,7 +91,8 @@ export const DEFAULT_PENDING_MAX_OUTPUT = clampWithDefault(
   200_000,
 );
 export const DEFAULT_PATH =
-  process.env.PATH ?? "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+  process.env.PATH ??
+  "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 export const DEFAULT_NOTIFY_TAIL_CHARS = 400;
 const DEFAULT_NOTIFY_SNIPPET_CHARS = 180;
 export const DEFAULT_APPROVAL_TIMEOUT_MS = 120_000;
@@ -91,14 +102,18 @@ const APPROVAL_SLUG_LENGTH = 8;
 
 export const execSchema = Type.Object({
   command: Type.String({ description: "Shell command to execute" }),
-  workdir: Type.Optional(Type.String({ description: "Working directory (defaults to cwd)" })),
+  workdir: Type.Optional(
+    Type.String({ description: "Working directory (defaults to cwd)" }),
+  ),
   env: Type.Optional(Type.Record(Type.String(), Type.String())),
   yieldMs: Type.Optional(
     Type.Number({
       description: "Milliseconds to wait before backgrounding (default 10000)",
     }),
   ),
-  background: Type.Optional(Type.Boolean({ description: "Run in background immediately" })),
+  background: Type.Optional(
+    Type.Boolean({ description: "Run in background immediately" }),
+  ),
   timeout: Type.Optional(
     Type.Number({
       description: "Timeout in seconds (optional, kills process on expiry)",
@@ -157,15 +172,25 @@ export type ExecProcessHandle = {
 
 export function normalizeExecHost(value?: string | null): ExecHost | null {
   const normalized = value?.trim().toLowerCase();
-  if (normalized === "sandbox" || normalized === "gateway" || normalized === "node") {
+  if (
+    normalized === "sandbox" ||
+    normalized === "gateway" ||
+    normalized === "node"
+  ) {
     return normalized;
   }
   return null;
 }
 
-export function normalizeExecSecurity(value?: string | null): ExecSecurity | null {
+export function normalizeExecSecurity(
+  value?: string | null,
+): ExecSecurity | null {
   const normalized = value?.trim().toLowerCase();
-  if (normalized === "deny" || normalized === "allowlist" || normalized === "full") {
+  if (
+    normalized === "deny" ||
+    normalized === "allowlist" ||
+    normalized === "full"
+  ) {
     return normalized;
   }
   return null;
@@ -173,21 +198,32 @@ export function normalizeExecSecurity(value?: string | null): ExecSecurity | nul
 
 export function normalizeExecAsk(value?: string | null): ExecAsk | null {
   const normalized = value?.trim().toLowerCase();
-  if (normalized === "off" || normalized === "on-miss" || normalized === "always") {
+  if (
+    normalized === "off" ||
+    normalized === "on-miss" ||
+    normalized === "always"
+  ) {
     return normalized as ExecAsk;
   }
   return null;
 }
 
 export function renderExecHostLabel(host: ExecHost) {
-  return host === "sandbox" ? "sandbox" : host === "gateway" ? "gateway" : "node";
+  return host === "sandbox"
+    ? "sandbox"
+    : host === "gateway"
+      ? "gateway"
+      : "node";
 }
 
 export function normalizeNotifyOutput(value: string) {
   return value.replace(/\s+/g, " ").trim();
 }
 
-function compactNotifyOutput(value: string, maxChars = DEFAULT_NOTIFY_SNIPPET_CHARS) {
+function compactNotifyOutput(
+  value: string,
+  maxChars = DEFAULT_NOTIFY_SNIPPET_CHARS,
+) {
   const normalized = normalizeNotifyOutput(value);
   if (!normalized) {
     return "";
@@ -199,7 +235,10 @@ function compactNotifyOutput(value: string, maxChars = DEFAULT_NOTIFY_SNIPPET_CH
   return `${normalized.slice(0, safe)}…`;
 }
 
-export function applyShellPath(env: Record<string, string>, shellPath?: string | null) {
+export function applyShellPath(
+  env: Record<string, string>,
+  shellPath?: string | null,
+) {
   if (!shellPath) {
     return;
   }
@@ -217,7 +256,10 @@ export function applyShellPath(env: Record<string, string>, shellPath?: string |
   }
 }
 
-function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "failed") {
+function maybeNotifyOnExit(
+  session: ProcessSession,
+  status: "completed" | "failed",
+) {
   if (!session.backgrounded || !session.notifyOnExit || session.exitNotified) {
     return;
   }
@@ -232,7 +274,11 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
   const output = compactNotifyOutput(
     tail(session.tail || session.aggregated || "", DEFAULT_NOTIFY_TAIL_CHARS),
   );
-  if (status === "completed" && !output && session.notifyOnExitEmptySuccess !== true) {
+  if (
+    status === "completed" &&
+    !output &&
+    session.notifyOnExitEmptySuccess !== true
+  ) {
     return;
   }
   const summary = output
@@ -332,7 +378,9 @@ export async function runExecProcess(opts: {
       return;
     }
     const tailText = session.tail || session.aggregated;
-    const warningText = opts.warnings.length ? `${opts.warnings.join("\n")}\n\n` : "";
+    const warningText = opts.warnings.length
+      ? `${opts.warnings.join("\n")}\n\n`
+      : "";
     opts.onUpdate({
       content: [{ type: "text", text: warningText + (tailText || "") }],
       details: {
@@ -395,7 +443,9 @@ export async function runExecProcess(opts: {
           }),
         ],
         env: process.env,
-        stdinMode: opts.usePty ? ("pipe-open" as const) : ("pipe-closed" as const),
+        stdinMode: opts.usePty
+          ? ("pipe-open" as const)
+          : ("pipe-closed" as const),
       };
     }
     const { shell, args: shellArgs } = getShellConfig();
@@ -519,7 +569,8 @@ export async function runExecProcess(opts: {
       }
       const aggregated = session.aggregated.trim();
       if (status === "completed") {
-        const exitMsg = exitCode !== 0 ? `\n\n(Command exited with code ${exitCode})` : "";
+        const exitMsg =
+          exitCode !== 0 ? `\n\n(Command exited with code ${exitCode})` : "";
         return {
           status: "completed",
           exitCode,
@@ -556,7 +607,9 @@ export async function runExecProcess(opts: {
       markExited(session, null, null, "failed");
       maybeNotifyOnExit(session, "failed");
       const aggregated = session.aggregated.trim();
-      const message = aggregated ? `${aggregated}\n\n${String(err)}` : String(err);
+      const message = aggregated
+        ? `${aggregated}\n\n${String(err)}`
+        : String(err);
       return {
         status: "failed",
         exitCode: null,

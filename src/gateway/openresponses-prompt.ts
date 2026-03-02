@@ -65,6 +65,7 @@ export function buildAgentPrompt(input: string | ItemParam[]): {
 
   return {
     message,
-    extraSystemPrompt: systemParts.length > 0 ? systemParts.join("\n\n") : undefined,
+    extraSystemPrompt:
+      systemParts.length > 0 ? systemParts.join("\n\n") : undefined,
   };
 }

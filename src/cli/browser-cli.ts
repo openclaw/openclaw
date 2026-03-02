@@ -6,7 +6,10 @@ import { theme } from "../terminal/theme.js";
 import { registerBrowserActionInputCommands } from "./browser-cli-actions-input.js";
 import { registerBrowserActionObserveCommands } from "./browser-cli-actions-observe.js";
 import { registerBrowserDebugCommands } from "./browser-cli-debug.js";
-import { browserActionExamples, browserCoreExamples } from "./browser-cli-examples.js";
+import {
+  browserActionExamples,
+  browserCoreExamples,
+} from "./browser-cli-examples.js";
 import { registerBrowserExtensionCommands } from "./browser-cli-extension.js";
 import { registerBrowserInspectCommands } from "./browser-cli-inspect.js";
 import { registerBrowserManageCommands } from "./browser-cli-manage.js";
@@ -20,13 +23,19 @@ export function registerBrowserCli(program: Command) {
   const browser = program
     .command("browser")
     .description("Manage OpenClaw's dedicated browser (Chrome/Chromium)")
-    .option("--browser-profile <name>", "Browser profile name (default from config)")
+    .option(
+      "--browser-profile <name>",
+      "Browser profile name (default from config)",
+    )
     .option("--json", "Output machine-readable JSON", false)
     .addHelpText(
       "after",
       () =>
         `\n${theme.heading("Examples:")}\n${formatHelpExamples(
-          [...browserCoreExamples, ...browserActionExamples].map((cmd) => [cmd, ""]),
+          [...browserCoreExamples, ...browserActionExamples].map((cmd) => [
+            cmd,
+            "",
+          ]),
           true,
         )}\n\n${theme.muted("Docs:")} ${formatDocsLink(
           "/cli/browser",
@@ -36,14 +45,17 @@ export function registerBrowserCli(program: Command) {
     .action(() => {
       browser.outputHelp();
       defaultRuntime.error(
-        danger(`Missing subcommand. Try: "${formatCliCommand("openclaw browser status")}"`),
+        danger(
+          `Missing subcommand. Try: "${formatCliCommand("openclaw browser status")}"`,
+        ),
       );
       defaultRuntime.exit(1);
     });
 
   addGatewayClientOptions(browser);
 
-  const parentOpts = (cmd: Command) => cmd.parent?.opts?.() as BrowserParentOpts;
+  const parentOpts = (cmd: Command) =>
+    cmd.parent?.opts?.() as BrowserParentOpts;
 
   registerBrowserManageCommands(browser, parentOpts);
   registerBrowserExtensionCommands(browser, parentOpts);

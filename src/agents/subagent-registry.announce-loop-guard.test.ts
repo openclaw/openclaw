@@ -1,4 +1,12 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  test,
+  vi,
+} from "vitest";
 
 /**
  * Regression test for #18264: Gateway announcement delivery loop.
@@ -18,8 +26,14 @@ vi.mock("../config/config.js", () => ({
 vi.mock("../config/sessions.js", () => ({
   loadSessionStore: () => ({
     "agent:main:subagent:child-1": { sessionId: "sess-child-1", updatedAt: 1 },
-    "agent:main:subagent:expired-child": { sessionId: "sess-expired", updatedAt: 1 },
-    "agent:main:subagent:retry-budget": { sessionId: "sess-retry", updatedAt: 1 },
+    "agent:main:subagent:expired-child": {
+      sessionId: "sess-expired",
+      updatedAt: 1,
+    },
+    "agent:main:subagent:retry-budget": {
+      sessionId: "sess-retry",
+      updatedAt: 1,
+    },
   }),
   resolveAgentIdFromSessionKey: (key: string) => {
     const match = key.match(/^agent:([^:]+)/);
@@ -145,7 +159,9 @@ describe("announce loop guard (#18264)", () => {
     registry.resetSubagentRegistryForTests();
 
     const entry = createEntry(Date.now());
-    loadSubagentRegistryFromDisk.mockReturnValue(new Map([[entry.runId, entry]]));
+    loadSubagentRegistryFromDisk.mockReturnValue(
+      new Map([[entry.runId, entry]]),
+    );
 
     // Initialization attempts resume once, then gives up for exhausted entries.
     registry.initSubagentRegistry();

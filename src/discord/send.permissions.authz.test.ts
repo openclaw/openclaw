@@ -32,7 +32,9 @@ function mockGuildMemberRoutes(params: RouteMockParams): void {
         roles: params.roles.map((role) => ({
           id: role.id,
           permissions:
-            typeof role.permissions === "bigint" ? role.permissions.toString() : role.permissions,
+            typeof role.permissions === "bigint"
+              ? role.permissions.toString()
+              : role.permissions,
         })),
       };
     }
@@ -48,7 +50,10 @@ describe("discord guild permission authorization", () => {
     it("returns null when user is not a guild member", async () => {
       mockRest.get.mockRejectedValueOnce(new Error("404 Member not found"));
 
-      const result = await fetchMemberGuildPermissionsDiscord("guild-1", "user-1");
+      const result = await fetchMemberGuildPermissionsDiscord(
+        "guild-1",
+        "user-1",
+      );
       expect(result).toBeNull();
     });
 
@@ -61,14 +66,19 @@ describe("discord guild permission authorization", () => {
         memberRoles: ["role-mod"],
       });
 
-      const result = await fetchMemberGuildPermissionsDiscord("guild-1", "user-1");
+      const result = await fetchMemberGuildPermissionsDiscord(
+        "guild-1",
+        "user-1",
+      );
       expect(result).not.toBeNull();
-      expect((result! & PermissionFlagsBits.ViewChannel) === PermissionFlagsBits.ViewChannel).toBe(
-        true,
-      );
-      expect((result! & PermissionFlagsBits.KickMembers) === PermissionFlagsBits.KickMembers).toBe(
-        true,
-      );
+      expect(
+        (result! & PermissionFlagsBits.ViewChannel) ===
+          PermissionFlagsBits.ViewChannel,
+      ).toBe(true);
+      expect(
+        (result! & PermissionFlagsBits.KickMembers) ===
+          PermissionFlagsBits.KickMembers,
+      ).toBe(true);
     });
   });
 
@@ -108,7 +118,9 @@ describe("discord guild permission authorization", () => {
 
     it("returns false when user lacks all required permissions", async () => {
       mockGuildMemberRoutes({
-        roles: [{ id: "guild-1", permissions: PermissionFlagsBits.ViewChannel }],
+        roles: [
+          { id: "guild-1", permissions: PermissionFlagsBits.ViewChannel },
+        ],
         memberRoles: [],
       });
 

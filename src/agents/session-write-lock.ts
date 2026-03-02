@@ -114,7 +114,9 @@ export function resolveSessionLockMaxHoldFromTimeout(params: {
   minMs?: number;
 }): number {
   const minMs = resolvePositiveMs(params.minMs, DEFAULT_MAX_HOLD_MS);
-  const timeoutMs = resolvePositiveMs(params.timeoutMs, minMs, { allowInfinity: true });
+  const timeoutMs = resolvePositiveMs(params.timeoutMs, minMs, {
+    allowInfinity: true,
+  });
   if (timeoutMs === Number.POSITIVE_INFINITY) {
     return MAX_LOCK_HOLD_MS;
   }
@@ -203,7 +205,9 @@ async function runLockWatchdogCheck(nowMs = Date.now()): Promise<number> {
       `[session-write-lock] releasing lock held for ${heldForMs}ms (max=${held.maxHoldMs}ms): ${held.lockPath}`,
     );
 
-    const didRelease = await releaseHeldLock(sessionFile, held, { force: true });
+    const didRelease = await releaseHeldLock(sessionFile, held, {
+      force: true,
+    });
     if (didRelease) {
       released += 1;
     }
@@ -271,7 +275,9 @@ function registerCleanupHandlers(): void {
   }
 }
 
-async function readLockPayload(lockPath: string): Promise<LockFilePayload | null> {
+async function readLockPayload(
+  lockPath: string,
+): Promise<LockFilePayload | null> {
   try {
     const raw = await fs.readFile(lockPath, "utf8");
     const parsed = JSON.parse(raw) as Record<string, unknown>;
@@ -296,21 +302,29 @@ function inspectLockPayload(
   staleMs: number,
   nowMs: number,
 ): LockInspectionDetails {
-  const pid = isValidLockNumber(payload?.pid) && payload.pid > 0 ? payload.pid : null;
+  const pid =
+    isValidLockNumber(payload?.pid) && payload.pid > 0 ? payload.pid : null;
   const pidAlive = pid !== null ? isPidAlive(pid) : false;
-  const createdAt = typeof payload?.createdAt === "string" ? payload.createdAt : null;
+  const createdAt =
+    typeof payload?.createdAt === "string" ? payload.createdAt : null;
   const createdAtMs = createdAt ? Date.parse(createdAt) : Number.NaN;
-  const ageMs = Number.isFinite(createdAtMs) ? Math.max(0, nowMs - createdAtMs) : null;
+  const ageMs = Number.isFinite(createdAtMs)
+    ? Math.max(0, nowMs - createdAtMs)
+    : null;
 
   // Detect PID recycling: if the PID is alive but its start time differs from
   // what was recorded in the lock file, the original process died and the OS
   // reassigned the same PID to a different process.
-  const storedStarttime = isValidLockNumber(payload?.starttime) ? payload.starttime : null;
+  const storedStarttime = isValidLockNumber(payload?.starttime)
+    ? payload.starttime
+    : null;
   const pidRecycled =
     pidAlive && pid !== null && storedStarttime !== null
       ? (() => {
           const currentStarttime = getProcessStartTime(pid);
-          return currentStarttime !== null && currentStarttime !== storedStarttime;
+          return (
+            currentStarttime !== null && currentStarttime !== storedStarttime
+          );
         })()
       : false;
 
@@ -338,7 +352,9 @@ function inspectLockPayload(
   };
 }
 
-function lockInspectionNeedsMtimeStaleFallback(details: LockInspectionDetails): boolean {
+function lockInspectionNeedsMtimeStaleFallback(
+  details: LockInspectionDetails,
+): boolean {
   return (
     details.stale &&
     details.staleReasons.every(
@@ -378,7 +394,10 @@ export async function cleanStaleLockFiles(params: {
     warn?: (message: string) => void;
     info?: (message: string) => void;
   };
-}): Promise<{ locks: SessionLockInspection[]; cleaned: SessionLockInspection[] }> {
+}): Promise<{
+  locks: SessionLockInspection[];
+  cleaned: SessionLockInspection[];
+}> {
   const sessionsDir = path.resolve(params.sessionsDir);
   const staleMs = resolvePositiveMs(params.staleMs, DEFAULT_STALE_MS);
   const removeStale = params.removeStale !== false;
@@ -436,7 +455,9 @@ export async function acquireSessionWriteLock(params: {
   release: () => Promise<void>;
 }> {
   registerCleanupHandlers();
-  const timeoutMs = resolvePositiveMs(params.timeoutMs, 10_000, { allowInfinity: true });
+  const timeoutMs = resolvePositiveMs(params.timeoutMs, 10_000, {
+    allowInfinity: true,
+  });
   const staleMs = resolvePositiveMs(params.staleMs, DEFAULT_STALE_MS);
   const maxHoldMs = resolvePositiveMs(params.maxHoldMs, DEFAULT_MAX_HOLD_MS);
   const sessionFile = path.resolve(params.sessionFile);
@@ -448,7 +469,10 @@ export async function acquireSessionWriteLock(params: {
   } catch {
     // Fall back to the resolved path if realpath fails (permissions, transient FS).
   }
-  const normalizedSessionFile = path.join(normalizedDir, path.basename(sessionFile));
+  const normalizedSessionFile = path.join(
+    normalizedDir,
+    path.basename(sessionFile),
+  );
   const lockPath = `${normalizedSessionFile}.lock`;
 
   const allowReentrant = params.allowReentrant ?? true;
@@ -509,7 +533,14 @@ export async function acquireSessionWriteLock(params: {
       const payload = await readLockPayload(lockPath);
       const nowMs = Date.now();
       const inspected = inspectLockPayload(payload, staleMs, nowMs);
-      if (await shouldReclaimContendedLockFile(lockPath, inspected, staleMs, nowMs)) {
+      if (
+        await shouldReclaimContendedLockFile(
+          lockPath,
+          inspected,
+          staleMs,
+          nowMs,
+        )
+      ) {
         await fs.rm(lockPath, { force: true });
         continue;
       }
@@ -520,8 +551,11 @@ export async function acquireSessionWriteLock(params: {
   }
 
   const payload = await readLockPayload(lockPath);
-  const owner = typeof payload?.pid === "number" ? `pid=${payload.pid}` : "unknown";
-  throw new Error(`session file locked (timeout ${timeoutMs}ms): ${owner} ${lockPath}`);
+  const owner =
+    typeof payload?.pid === "number" ? `pid=${payload.pid}` : "unknown";
+  throw new Error(
+    `session file locked (timeout ${timeoutMs}ms): ${owner} ${lockPath}`,
+  );
 }
 
 export const __testing = {

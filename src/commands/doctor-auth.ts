@@ -95,7 +95,10 @@ function pruneAuthProfiles(
     nextProfiles || prunedOrder.next
       ? {
           ...cfg.auth,
-          profiles: nextProfiles && Object.keys(nextProfiles).length > 0 ? nextProfiles : undefined,
+          profiles:
+            nextProfiles && Object.keys(nextProfiles).length > 0
+              ? nextProfiles
+              : undefined,
           order: prunedOrder.next,
         }
       : undefined;
@@ -113,12 +116,20 @@ export async function maybeRemoveDeprecatedCliAuthProfiles(
   cfg: OpenClawConfig,
   prompter: DoctorPrompter,
 ): Promise<OpenClawConfig> {
-  const store = ensureAuthProfileStore(undefined, { allowKeychainPrompt: false });
+  const store = ensureAuthProfileStore(undefined, {
+    allowKeychainPrompt: false,
+  });
   const deprecated = new Set<string>();
-  if (store.profiles[CLAUDE_CLI_PROFILE_ID] || cfg.auth?.profiles?.[CLAUDE_CLI_PROFILE_ID]) {
+  if (
+    store.profiles[CLAUDE_CLI_PROFILE_ID] ||
+    cfg.auth?.profiles?.[CLAUDE_CLI_PROFILE_ID]
+  ) {
     deprecated.add(CLAUDE_CLI_PROFILE_ID);
   }
-  if (store.profiles[CODEX_CLI_PROFILE_ID] || cfg.auth?.profiles?.[CODEX_CLI_PROFILE_ID]) {
+  if (
+    store.profiles[CODEX_CLI_PROFILE_ID] ||
+    cfg.auth?.profiles?.[CODEX_CLI_PROFILE_ID]
+  ) {
     deprecated.add(CODEX_CLI_PROFILE_ID);
   }
 
@@ -126,7 +137,9 @@ export async function maybeRemoveDeprecatedCliAuthProfiles(
     return cfg;
   }
 
-  const lines = ["Deprecated external CLI auth profiles detected (no longer supported):"];
+  const lines = [
+    "Deprecated external CLI auth profiles detected (no longer supported):",
+  ];
   if (deprecated.has(CLAUDE_CLI_PROFILE_ID)) {
     lines.push(
       `- ${CLAUDE_CLI_PROFILE_ID} (Anthropic): use setup-token → ${formatCliCommand("openclaw models auth setup-token")}`,
@@ -176,7 +189,9 @@ export async function maybeRemoveDeprecatedCliAuthProfiles(
         }
       }
       if (nextStore.lastGood) {
-        for (const [provider, profileId] of Object.entries(nextStore.lastGood)) {
+        for (const [provider, profileId] of Object.entries(
+          nextStore.lastGood,
+        )) {
           if (deprecated.has(profileId)) {
             delete nextStore.lastGood[provider];
             mutated = true;
@@ -222,12 +237,18 @@ export function resolveUnusableProfileHint(params: {
 }
 
 function formatAuthIssueHint(issue: AuthIssue): string | null {
-  if (issue.provider === "anthropic" && issue.profileId === CLAUDE_CLI_PROFILE_ID) {
+  if (
+    issue.provider === "anthropic" &&
+    issue.profileId === CLAUDE_CLI_PROFILE_ID
+  ) {
     return `Deprecated profile. Use ${formatCliCommand("openclaw models auth setup-token")} or ${formatCliCommand(
       "openclaw configure",
     )}.`;
   }
-  if (issue.provider === "openai-codex" && issue.profileId === CODEX_CLI_PROFILE_ID) {
+  if (
+    issue.provider === "openai-codex" &&
+    issue.profileId === CODEX_CLI_PROFILE_ID
+  ) {
     return `Deprecated profile. Use ${formatCliCommand(
       "openclaw models auth login --provider openai-codex",
     )} or ${formatCliCommand("openclaw configure")}.`;
@@ -237,7 +258,9 @@ function formatAuthIssueHint(issue: AuthIssue): string | null {
 
 function formatAuthIssueLine(issue: AuthIssue): string {
   const remaining =
-    issue.remainingMs !== undefined ? ` (${formatRemainingShort(issue.remainingMs)})` : "";
+    issue.remainingMs !== undefined
+      ? ` (${formatRemainingShort(issue.remainingMs)})`
+      : "";
   const hint = formatAuthIssueHint(issue);
   return `- ${issue.profileId}: ${issue.status}${remaining}${hint ? ` — ${hint}` : ""}`;
 }
@@ -260,7 +283,8 @@ export async function noteAuthProfileHealth(params: {
       }
       const stats = store.usageStats?.[profileId];
       const remaining = formatRemainingShort(until - now);
-      const disabledActive = typeof stats?.disabledUntil === "number" && now < stats.disabledUntil;
+      const disabledActive =
+        typeof stats?.disabledUntil === "number" && now < stats.disabledUntil;
       const kind = disabledActive
         ? `disabled${stats.disabledReason ? `:${stats.disabledReason}` : ""}`
         : "cooldown";
@@ -268,7 +292,9 @@ export async function noteAuthProfileHealth(params: {
         kind: disabledActive ? "disabled" : "cooldown",
         reason: stats?.disabledReason,
       });
-      out.push(`- ${profileId}: ${kind} (${remaining})${hint ? ` — ${hint}` : ""}`);
+      out.push(
+        `- ${profileId}: ${kind} (${remaining})${hint ? ` — ${hint}` : ""}`,
+      );
     }
     return out;
   })();
@@ -305,7 +331,8 @@ export async function noteAuthProfileHealth(params: {
   if (shouldRefresh) {
     const refreshTargets = issues.filter(
       (issue) =>
-        issue.type === "oauth" && ["expired", "expiring", "missing"].includes(issue.status),
+        issue.type === "oauth" &&
+        ["expired", "expiring", "missing"].includes(issue.status),
     );
     const errors: string[] = [];
     for (const profile of refreshTargets) {
@@ -316,7 +343,9 @@ export async function noteAuthProfileHealth(params: {
           profileId: profile.profileId,
         });
       } catch (err) {
-        errors.push(`- ${profile.profileId}: ${err instanceof Error ? err.message : String(err)}`);
+        errors.push(
+          `- ${profile.profileId}: ${err instanceof Error ? err.message : String(err)}`,
+        );
       }
     }
     if (errors.length > 0) {

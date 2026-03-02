@@ -105,7 +105,10 @@ declare module "zca-js" {
     on(event: "closed", callback: (code: number, reason: string) => void): void;
     off(event: "message", callback: (message: Message) => void): void;
     off(event: "error", callback: (error: unknown) => void): void;
-    off(event: "closed", callback: (code: number, reason: string) => void): void;
+    off(
+      event: "closed",
+      callback: (code: number, reason: string) => void,
+    ): void;
     start(opts?: { retryOnClose?: boolean }): void;
     stop(): void;
   };

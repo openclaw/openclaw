@@ -2,13 +2,19 @@ export async function readResponseWithLimit(
   res: Response,
   maxBytes: number,
   opts?: {
-    onOverflow?: (params: { size: number; maxBytes: number; res: Response }) => Error;
+    onOverflow?: (params: {
+      size: number;
+      maxBytes: number;
+      res: Response;
+    }) => Error;
   },
 ): Promise<Buffer> {
   const onOverflow =
     opts?.onOverflow ??
     ((params: { size: number; maxBytes: number }) =>
-      new Error(`Content too large: ${params.size} bytes (limit: ${params.maxBytes} bytes)`));
+      new Error(
+        `Content too large: ${params.size} bytes (limit: ${params.maxBytes} bytes)`,
+      ));
 
   const body = res.body;
   if (!body || typeof body.getReader !== "function") {

@@ -33,7 +33,9 @@ describe("tokenize", () => {
     ] as const;
 
     for (const testCase of cases) {
-      expect(tokenize(testCase.input), testCase.name).toEqual(new Set(testCase.expected));
+      expect(tokenize(testCase.input), testCase.name).toEqual(
+        new Set(testCase.expected),
+      );
     }
   });
 });
@@ -47,8 +49,18 @@ describe("jaccardSimilarity", () => {
         right: new Set(["a", "b", "c"]),
         expected: 1,
       },
-      { name: "disjoint sets", left: new Set(["a", "b"]), right: new Set(["c", "d"]), expected: 0 },
-      { name: "two empty sets", left: new Set<string>(), right: new Set<string>(), expected: 1 },
+      {
+        name: "disjoint sets",
+        left: new Set(["a", "b"]),
+        right: new Set(["c", "d"]),
+        expected: 0,
+      },
+      {
+        name: "two empty sets",
+        left: new Set<string>(),
+        right: new Set<string>(),
+        expected: 1,
+      },
       {
         name: "left non-empty right empty",
         left: new Set(["a"]),
@@ -70,9 +82,10 @@ describe("jaccardSimilarity", () => {
     ] as const;
 
     for (const testCase of cases) {
-      expect(jaccardSimilarity(testCase.left, testCase.right), testCase.name).toBe(
-        testCase.expected,
-      );
+      expect(
+        jaccardSimilarity(testCase.left, testCase.right),
+        testCase.name,
+      ).toBe(testCase.expected);
     }
   });
 
@@ -86,14 +99,36 @@ describe("jaccardSimilarity", () => {
 describe("textSimilarity", () => {
   it("computes expected text-level similarity cases", () => {
     const cases = [
-      { name: "identical", left: "hello world", right: "hello world", expected: 1 },
-      { name: "same words reordered", left: "hello world", right: "world hello", expected: 1 },
-      { name: "different text", left: "hello world", right: "foo bar", expected: 0 },
-      { name: "case insensitive", left: "Hello World", right: "hello world", expected: 1 },
+      {
+        name: "identical",
+        left: "hello world",
+        right: "hello world",
+        expected: 1,
+      },
+      {
+        name: "same words reordered",
+        left: "hello world",
+        right: "world hello",
+        expected: 1,
+      },
+      {
+        name: "different text",
+        left: "hello world",
+        right: "foo bar",
+        expected: 0,
+      },
+      {
+        name: "case insensitive",
+        left: "Hello World",
+        right: "hello world",
+        expected: 1,
+      },
     ] as const;
 
     for (const testCase of cases) {
-      expect(textSimilarity(testCase.left, testCase.right), testCase.name).toBe(testCase.expected);
+      expect(textSimilarity(testCase.left, testCase.right), testCase.name).toBe(
+        testCase.expected,
+      );
     }
   });
 });
@@ -115,13 +150,29 @@ describe("computeMMRScore", () => {
         lambda: 0,
         expected: -0.5,
       },
-      { name: "lambda=0.5 mixed", relevance: 0.8, similarity: 0.6, lambda: 0.5, expected: 0.1 },
-      { name: "default lambda math", relevance: 1.0, similarity: 0.5, lambda: 0.7, expected: 0.55 },
+      {
+        name: "lambda=0.5 mixed",
+        relevance: 0.8,
+        similarity: 0.6,
+        lambda: 0.5,
+        expected: 0.1,
+      },
+      {
+        name: "default lambda math",
+        relevance: 1.0,
+        similarity: 0.5,
+        lambda: 0.7,
+        expected: 0.55,
+      },
     ] as const;
 
     for (const testCase of cases) {
       expect(
-        computeMMRScore(testCase.relevance, testCase.similarity, testCase.lambda),
+        computeMMRScore(
+          testCase.relevance,
+          testCase.similarity,
+          testCase.lambda,
+        ),
         testCase.name,
       ).toBeCloseTo(testCase.expected);
     }
@@ -255,7 +306,9 @@ describe("mmrRerank", () => {
 
       const result = mmrRerank(items, { lambda: 0.7 });
       expect(result).toHaveLength(3);
-      expect(new Set(result.map((i) => i.id))).toEqual(new Set(["1", "2", "3"]));
+      expect(new Set(result.map((i) => i.id))).toEqual(
+        new Set(["1", "2", "3"]),
+      );
     });
   });
 
@@ -363,7 +416,10 @@ describe("applyMMRToHybridResults", () => {
       },
     ];
 
-    const reranked = applyMMRToHybridResults(results, { enabled: true, lambda: 0.5 });
+    const reranked = applyMMRToHybridResults(results, {
+      enabled: true,
+      lambda: 0.5,
+    });
 
     // First stays the same (highest score)
     expect(reranked[0].path).toBe("/a.ts");
@@ -373,8 +429,22 @@ describe("applyMMRToHybridResults", () => {
 
   it("respects disabled config", () => {
     const results: HybridResult[] = [
-      { path: "/a.ts", startLine: 1, endLine: 10, score: 0.9, snippet: "test", source: "memory" },
-      { path: "/b.ts", startLine: 1, endLine: 10, score: 0.8, snippet: "test", source: "memory" },
+      {
+        path: "/a.ts",
+        startLine: 1,
+        endLine: 10,
+        score: 0.9,
+        snippet: "test",
+        source: "memory",
+      },
+      {
+        path: "/b.ts",
+        startLine: 1,
+        endLine: 10,
+        score: 0.8,
+        snippet: "test",
+        source: "memory",
+      },
     ];
 
     const reranked = applyMMRToHybridResults(results, { enabled: false });

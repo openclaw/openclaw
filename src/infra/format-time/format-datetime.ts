@@ -34,7 +34,10 @@ export type FormatZonedTimestampOptions = FormatTimestampOptions & {
  * Without seconds: `2024-01-15T14:30Z`
  * With seconds:    `2024-01-15T14:30:05Z`
  */
-export function formatUtcTimestamp(date: Date, options?: FormatTimestampOptions): string {
+export function formatUtcTimestamp(
+  date: Date,
+  options?: FormatTimestampOptions,
+): string {
   const yyyy = String(date.getUTCFullYear()).padStart(4, "0");
   const mm = String(date.getUTCMonth() + 1).padStart(2, "0");
   const dd = String(date.getUTCDate()).padStart(2, "0");
@@ -72,8 +75,11 @@ export function formatZonedTimestamp(
   if (options?.displaySeconds) {
     intlOptions.second = "2-digit";
   }
-  const parts = new Intl.DateTimeFormat("en-US", intlOptions).formatToParts(date);
-  const pick = (type: string) => parts.find((part) => part.type === type)?.value;
+  const parts = new Intl.DateTimeFormat("en-US", intlOptions).formatToParts(
+    date,
+  );
+  const pick = (type: string) =>
+    parts.find((part) => part.type === type)?.value;
   const yyyy = pick("year");
   const mm = pick("month");
   const dd = pick("day");

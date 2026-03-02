@@ -1,5 +1,8 @@
 import type { OpenClawConfig } from "../config/config.js";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
+import {
+  DEFAULT_ACCOUNT_ID,
+  normalizeAccountId,
+} from "../routing/session-key.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 
 export type PromptAccountIdParams = {
@@ -11,9 +14,12 @@ export type PromptAccountIdParams = {
   defaultAccountId: string;
 };
 
-export async function promptAccountId(params: PromptAccountIdParams): Promise<string> {
+export async function promptAccountId(
+  params: PromptAccountIdParams,
+): Promise<string> {
   const existingIds = params.listAccountIds(params.cfg);
-  const initial = params.currentId?.trim() || params.defaultAccountId || DEFAULT_ACCOUNT_ID;
+  const initial =
+    params.currentId?.trim() || params.defaultAccountId || DEFAULT_ACCOUNT_ID;
   const choice = await params.prompter.select({
     message: `${params.label} account`,
     options: [

@@ -7,7 +7,10 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveUserPath } from "../utils.js";
 import { parseBooleanValue } from "../utils/boolean.js";
 import { safeJsonStringify } from "../utils/safe-json.js";
-import { getQueuedFileWriter, type QueuedFileWriter } from "./queued-file-writer.js";
+import {
+  getQueuedFileWriter,
+  type QueuedFileWriter,
+} from "./queued-file-writer.js";
 
 type PayloadLogStage = "request" | "usage";
 
@@ -38,7 +41,8 @@ const writers = new Map<string, PayloadLogWriter>();
 const log = createSubsystemLogger("agent/anthropic-payload");
 
 function resolvePayloadLogConfig(env: NodeJS.ProcessEnv): PayloadLogConfig {
-  const enabled = parseBooleanValue(env.OPENCLAW_ANTHROPIC_PAYLOAD_LOG) ?? false;
+  const enabled =
+    parseBooleanValue(env.OPENCLAW_ANTHROPIC_PAYLOAD_LOG) ?? false;
   const fileOverride = env.OPENCLAW_ANTHROPIC_PAYLOAD_LOG_FILE?.trim();
   const filePath = fileOverride
     ? resolveUserPath(fileOverride)
@@ -57,7 +61,11 @@ function formatError(error: unknown): string | undefined {
   if (typeof error === "string") {
     return error;
   }
-  if (typeof error === "number" || typeof error === "boolean" || typeof error === "bigint") {
+  if (
+    typeof error === "number" ||
+    typeof error === "boolean" ||
+    typeof error === "bigint"
+  ) {
     return String(error);
   }
   if (error && typeof error === "object") {
@@ -78,10 +86,16 @@ function isAnthropicModel(model: Model<Api> | undefined | null): boolean {
   return (model as { api?: unknown })?.api === "anthropic-messages";
 }
 
-function findLastAssistantUsage(messages: AgentMessage[]): Record<string, unknown> | null {
+function findLastAssistantUsage(
+  messages: AgentMessage[],
+): Record<string, unknown> | null {
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const msg = messages[i] as { role?: unknown; usage?: unknown };
-    if (msg?.role === "assistant" && msg.usage && typeof msg.usage === "object") {
+    if (
+      msg?.role === "assistant" &&
+      msg.usage &&
+      typeof msg.usage === "object"
+    ) {
       return msg.usage as Record<string, unknown>;
     }
   }
@@ -152,7 +166,10 @@ export function createAnthropicPayloadLogger(params: {
     return wrapped;
   };
 
-  const recordUsage: AnthropicPayloadLogger["recordUsage"] = (messages, error) => {
+  const recordUsage: AnthropicPayloadLogger["recordUsage"] = (
+    messages,
+    error,
+  ) => {
     const usage = findLastAssistantUsage(messages);
     const errorMessage = formatError(error);
     if (!usage) {

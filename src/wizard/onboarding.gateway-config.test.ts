@@ -10,7 +10,8 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../commands/onboard-helpers.js", async (importActual) => {
-  const actual = await importActual<typeof import("../commands/onboard-helpers.js")>();
+  const actual =
+    await importActual<typeof import("../commands/onboard-helpers.js")>();
   return {
     ...actual,
     randomToken: mocks.randomToken,
@@ -25,11 +26,15 @@ vi.mock("../infra/tailscale.js", () => ({
 import { configureGatewayForOnboarding } from "./onboarding.gateway-config.js";
 
 describe("configureGatewayForOnboarding", () => {
-  function createPrompter(params: { selectQueue: string[]; textQueue: Array<string | undefined> }) {
+  function createPrompter(params: {
+    selectQueue: string[];
+    textQueue: Array<string | undefined>;
+  }) {
     const selectQueue = [...params.selectQueue];
     const textQueue = [...params.textQueue];
     const select = vi.fn(
-      async (_params: WizardSelectParams<unknown>) => selectQueue.shift() as unknown,
+      async (_params: WizardSelectParams<unknown>) =>
+        selectQueue.shift() as unknown,
     ) as unknown as WizardPrompter["select"];
 
     return buildWizardPrompter({
@@ -70,7 +75,11 @@ describe("configureGatewayForOnboarding", () => {
   }) {
     const authChoice = params?.authChoice ?? "token";
     const prompter = createPrompter({
-      selectQueue: [params?.bindChoice ?? "loopback", authChoice, params?.tailscaleChoice ?? "off"],
+      selectQueue: [
+        params?.bindChoice ?? "loopback",
+        authChoice,
+        params?.tailscaleChoice ?? "off",
+      ],
       textQueue: params?.textQueue ?? ["18789", undefined],
     });
     const runtime = createRuntime();
@@ -90,7 +99,9 @@ describe("configureGatewayForOnboarding", () => {
     const result = await runGatewayConfig();
 
     expect(result.settings.gatewayToken).toBe("generated-token");
-    expect(result.nextConfig.gateway?.nodes?.denyCommands).toEqual(DEFAULT_DANGEROUS_NODE_COMMANDS);
+    expect(result.nextConfig.gateway?.nodes?.denyCommands).toEqual(
+      DEFAULT_DANGEROUS_NODE_COMMANDS,
+    );
   });
 
   it("prefers OPENCLAW_GATEWAY_TOKEN during quickstart token setup", async () => {
@@ -121,7 +132,10 @@ describe("configureGatewayForOnboarding", () => {
       authChoice: "password",
     });
 
-    const authConfig = result.nextConfig.gateway?.auth as { mode?: string; password?: string };
+    const authConfig = result.nextConfig.gateway?.auth as {
+      mode?: string;
+      password?: string;
+    };
     expect(authConfig?.mode).toBe("password");
     expect(authConfig?.password).toBe("");
     expect(authConfig?.password).not.toBe("undefined");
@@ -158,7 +172,9 @@ describe("configureGatewayForOnboarding", () => {
       tailscaleChoice: "serve",
     });
 
-    expect(result.nextConfig.gateway?.controlUi?.allowedOrigins).toBeUndefined();
+    expect(
+      result.nextConfig.gateway?.controlUi?.allowedOrigins,
+    ).toBeUndefined();
   });
 
   it("formats IPv6 Tailscale fallback addresses as valid HTTPS origins", async () => {

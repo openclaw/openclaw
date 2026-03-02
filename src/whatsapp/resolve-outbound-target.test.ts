@@ -4,7 +4,8 @@ import { resolveWhatsAppOutboundTarget } from "./resolve-outbound-target.js";
 
 vi.mock("./normalize.js");
 vi.mock("../infra/outbound/target-errors.js", () => ({
-  missingTargetError: (platform: string, format: string) => new Error(`${platform}: ${format}`),
+  missingTargetError: (platform: string, format: string) =>
+    new Error(`${platform}: ${format}`),
 }));
 
 type ResolveParams = Parameters<typeof resolveWhatsAppOutboundTarget>[0];
@@ -52,7 +53,9 @@ describe("resolveWhatsAppOutboundTarget", () => {
 
   describe("group JID handling", () => {
     it("returns success for valid group JID regardless of mode", () => {
-      vi.mocked(normalize.normalizeWhatsAppTarget).mockReturnValueOnce("120363123456789@g.us");
+      vi.mocked(normalize.normalizeWhatsAppTarget).mockReturnValueOnce(
+        "120363123456789@g.us",
+      );
       vi.mocked(normalize.isWhatsAppGroupJid).mockReturnValueOnce(true);
 
       expectResolutionOk(
@@ -66,7 +69,9 @@ describe("resolveWhatsAppOutboundTarget", () => {
     });
 
     it("returns success for group JID in heartbeat mode", () => {
-      vi.mocked(normalize.normalizeWhatsAppTarget).mockReturnValueOnce("120363999888777@g.us");
+      vi.mocked(normalize.normalizeWhatsAppTarget).mockReturnValueOnce(
+        "120363999888777@g.us",
+      );
       vi.mocked(normalize.isWhatsAppGroupJid).mockReturnValueOnce(true);
 
       expectResolutionOk(
@@ -210,7 +215,9 @@ describe("resolveWhatsAppOutboundTarget", () => {
 
   describe("explicit/custom modes", () => {
     it("allows message in null mode when allowList is not set", () => {
-      vi.mocked(normalize.normalizeWhatsAppTarget).mockReturnValueOnce("+11234567890");
+      vi.mocked(normalize.normalizeWhatsAppTarget).mockReturnValueOnce(
+        "+11234567890",
+      );
       vi.mocked(normalize.isWhatsAppGroupJid).mockReturnValueOnce(false);
 
       expectResolutionOk(
@@ -224,7 +231,9 @@ describe("resolveWhatsAppOutboundTarget", () => {
     });
 
     it("allows message in undefined mode when allowList is not set", () => {
-      vi.mocked(normalize.normalizeWhatsAppTarget).mockReturnValueOnce("+11234567890");
+      vi.mocked(normalize.normalizeWhatsAppTarget).mockReturnValueOnce(
+        "+11234567890",
+      );
       vi.mocked(normalize.isWhatsAppGroupJid).mockReturnValueOnce(false);
 
       expectResolutionOk(
@@ -269,7 +278,9 @@ describe("resolveWhatsAppOutboundTarget", () => {
 
   describe("whitespace handling", () => {
     it("trims whitespace from to parameter", () => {
-      vi.mocked(normalize.normalizeWhatsAppTarget).mockReturnValueOnce("+11234567890");
+      vi.mocked(normalize.normalizeWhatsAppTarget).mockReturnValueOnce(
+        "+11234567890",
+      );
       vi.mocked(normalize.isWhatsAppGroupJid).mockReturnValueOnce(false);
 
       expectResolutionOk(
@@ -280,7 +291,9 @@ describe("resolveWhatsAppOutboundTarget", () => {
         },
         "+11234567890",
       );
-      expect(vi.mocked(normalize.normalizeWhatsAppTarget)).toHaveBeenCalledWith("+11234567890");
+      expect(vi.mocked(normalize.normalizeWhatsAppTarget)).toHaveBeenCalledWith(
+        "+11234567890",
+      );
     });
 
     it("trims whitespace from allowList entries", () => {
@@ -295,7 +308,9 @@ describe("resolveWhatsAppOutboundTarget", () => {
         mode: undefined,
       });
 
-      expect(vi.mocked(normalize.normalizeWhatsAppTarget)).toHaveBeenCalledWith("+11234567890");
+      expect(vi.mocked(normalize.normalizeWhatsAppTarget)).toHaveBeenCalledWith(
+        "+11234567890",
+      );
     });
   });
 });

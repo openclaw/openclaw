@@ -3,7 +3,11 @@ import type {
   ChannelMessageActionName,
   OpenClawConfig,
 } from "openclaw/plugin-sdk";
-import { extractToolSend, jsonResult, readStringParam } from "openclaw/plugin-sdk";
+import {
+  extractToolSend,
+  jsonResult,
+  readStringParam,
+} from "openclaw/plugin-sdk";
 import { listEnabledZaloAccounts } from "./accounts.js";
 import { sendMessageZalo } from "./send.js";
 
@@ -51,6 +55,8 @@ export const zaloMessageActions: ChannelMessageActionAdapter = {
       return jsonResult({ ok: true, to, messageId: result.messageId });
     }
 
-    throw new Error(`Action ${action} is not supported for provider ${providerId}.`);
+    throw new Error(
+      `Action ${action} is not supported for provider ${providerId}.`,
+    );
   },
 };

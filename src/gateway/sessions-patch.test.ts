@@ -84,7 +84,9 @@ function makeKimiSubagentCfg(params: {
         {
           id: "kimi",
           model: { primary: params.agentPrimaryModel },
-          subagents: params.agentSubagentModel ? { model: params.agentSubagentModel } : undefined,
+          subagents: params.agentSubagentModel
+            ? { model: params.agentSubagentModel }
+            : undefined,
         },
       ],
     },
@@ -219,14 +221,26 @@ describe("gateway sessions patch", () => {
     {
       name: "accepts explicit allowlisted provider/model refs from sessions.patch",
       catalog: [
-        { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },
-        { provider: "anthropic", id: "claude-sonnet-4-5", name: "Claude Sonnet 4.5" },
+        {
+          provider: "anthropic",
+          id: "claude-sonnet-4-6",
+          name: "Claude Sonnet 4.6",
+        },
+        {
+          provider: "anthropic",
+          id: "claude-sonnet-4-5",
+          name: "Claude Sonnet 4.5",
+        },
       ],
     },
     {
       name: "accepts explicit allowlisted refs absent from bundled catalog",
       catalog: [
-        { provider: "anthropic", id: "claude-sonnet-4-5", name: "Claude Sonnet 4.5" },
+        {
+          provider: "anthropic",
+          id: "claude-sonnet-4-5",
+          name: "Claude Sonnet 4.5",
+        },
         { provider: "openai", id: "gpt-5.2", name: "GPT-5.2" },
       ],
     },
@@ -297,7 +311,10 @@ describe("gateway sessions patch", () => {
 
   test("rejects invalid groupActivation values", async () => {
     const result = await runPatch({
-      patch: { key: MAIN_SESSION_KEY, groupActivation: "never" as unknown as "mention" },
+      patch: {
+        key: MAIN_SESSION_KEY,
+        groupActivation: "never" as unknown as "mention",
+      },
     });
     expectPatchError(result, "invalid groupActivation");
   });

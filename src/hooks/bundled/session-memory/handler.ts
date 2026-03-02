@@ -86,14 +86,22 @@ async function getRecentSessionContentWithResetFallback(
     const base = path.basename(sessionFilePath);
     const resetPrefix = `${base}.reset.`;
     const files = await fs.readdir(dir);
-    const resetCandidates = files.filter((name) => name.startsWith(resetPrefix)).toSorted();
+    const resetCandidates = files
+      .filter((name) => name.startsWith(resetPrefix))
+      .toSorted();
 
     if (resetCandidates.length === 0) {
       return primary;
     }
 
-    const latestResetPath = path.join(dir, resetCandidates[resetCandidates.length - 1]);
-    const fallback = await getRecentSessionContent(latestResetPath, messageCount);
+    const latestResetPath = path.join(
+      dir,
+      resetCandidates[resetCandidates.length - 1],
+    );
+    const fallback = await getRecentSessionContent(
+      latestResetPath,
+      messageCount,
+    );
 
     if (fallback) {
       log.debug("Loaded session content from reset fallback", {
@@ -195,10 +203,9 @@ const saveSessionToMemory: HookHandler = async (event) => {
 
     // Generate descriptive slug from session using LLM
     // Prefer previousSessionEntry (old session before /new) over current (which may be empty)
-    const sessionEntry = (context.previousSessionEntry || context.sessionEntry || {}) as Record<
-      string,
-      unknown
-    >;
+    const sessionEntry = (context.previousSessionEntry ||
+      context.sessionEntry ||
+      {}) as Record<string, unknown>;
     const currentSessionId = sessionEntry.sessionId as string;
     let currentSessionFile = (sessionEntry.sessionFile as string) || undefined;
 
@@ -245,7 +252,10 @@ const saveSessionToMemory: HookHandler = async (event) => {
 
     if (sessionFile) {
       // Get recent conversation content, with fallback to rotated reset transcript.
-      sessionContent = await getRecentSessionContentWithResetFallback(sessionFile, messageCount);
+      sessionContent = await getRecentSessionContentWithResetFallback(
+        sessionFile,
+        messageCount,
+      );
       log.debug("Session content loaded", {
         length: sessionContent?.length ?? 0,
         messageCount,
@@ -269,7 +279,11 @@ const saveSessionToMemory: HookHandler = async (event) => {
 
     // If no slug, use timestamp
     if (!slug) {
-      const timeSlug = now.toISOString().split("T")[1].split(".")[0].replace(/:/g, "");
+      const timeSlug = now
+        .toISOString()
+        .split("T")[1]
+        .split(".")[0]
+        .replace(/:/g, "");
       slug = timeSlug.slice(0, 4); // HHMM
       log.debug("Using fallback timestamp slug", { slug });
     }

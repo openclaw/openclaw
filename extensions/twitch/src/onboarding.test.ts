@@ -120,7 +120,9 @@ describe("onboarding helpers", () => {
       // Test the validate function
       expect(capturedValidate).toBeDefined();
       expect(capturedValidate!("")).toBe("Required");
-      expect(capturedValidate!("notoauth")).toBe("Token should start with 'oauth:'");
+      expect(capturedValidate!("notoauth")).toBe(
+        "Token should start with 'oauth:'",
+      );
     });
 
     it("should return early when no existing token and no env token", async () => {
@@ -218,7 +220,8 @@ describe("onboarding helpers", () => {
 
       expect(result).toEqual({});
       expect(mockPromptConfirm).toHaveBeenCalledWith({
-        message: "Enable automatic token refresh (requires client secret and refresh token)?",
+        message:
+          "Enable automatic token refresh (requires client secret and refresh token)?",
         initialValue: false,
       });
     });
@@ -231,7 +234,9 @@ describe("onboarding helpers", () => {
         .mockResolvedValueOnce("secret123") // clientSecret
         .mockResolvedValueOnce("refresh123"); // refreshToken
 
-      mockPromptText.mockResolvedValueOnce("secret123").mockResolvedValueOnce("refresh123");
+      mockPromptText
+        .mockResolvedValueOnce("secret123")
+        .mockResolvedValueOnce("refresh123");
 
       const result = await promptRefreshTokenSetup(mockPrompter, null);
 
@@ -309,8 +314,12 @@ describe("onboarding helpers", () => {
 
       // Should return config with username and clientId
       expect(result).not.toBeNull();
-      expect(result?.cfg.channels?.twitch?.accounts?.default?.username).toBe("testbot");
-      expect(result?.cfg.channels?.twitch?.accounts?.default?.clientId).toBe("test-client-id");
+      expect(result?.cfg.channels?.twitch?.accounts?.default?.username).toBe(
+        "testbot",
+      );
+      expect(result?.cfg.channels?.twitch?.accounts?.default?.clientId).toBe(
+        "test-client-id",
+      );
     });
   });
 });

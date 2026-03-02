@@ -10,7 +10,11 @@ import {
 import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../../config/agent-limits.js";
 import { loadConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { loadSessionStore, resolveStorePath, updateSessionStore } from "../../config/sessions.js";
+import {
+  loadSessionStore,
+  resolveStorePath,
+  updateSessionStore,
+} from "../../config/sessions.js";
 import { callGateway } from "../../gateway/call.js";
 import { logVerbose } from "../../globals.js";
 import {
@@ -40,7 +44,10 @@ import {
 } from "../subagent-registry.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
-import { resolveInternalSessionKey, resolveMainSessionAlias } from "./sessions-helpers.js";
+import {
+  resolveInternalSessionKey,
+  resolveMainSessionAlias,
+} from "./sessions-helpers.js";
 
 const SUBAGENT_ACTIONS = ["list", "kill", "steer"] as const;
 type SubagentAction = (typeof SUBAGENT_ACTIONS)[number];
@@ -71,7 +78,10 @@ type ResolvedRequesterKey = {
   callerIsSubagent: boolean;
 };
 
-function resolveRunStatus(entry: SubagentRunRecord, options?: { hasPendingDescendants?: boolean }) {
+function resolveRunStatus(
+  entry: SubagentRunRecord,
+  options?: { hasPendingDescendants?: boolean },
+) {
   if (options?.hasPendingDescendants) {
     return "active";
   }
@@ -90,7 +100,8 @@ function resolveRunStatus(entry: SubagentRunRecord, options?: { hasPendingDescen
 
 function resolveModelRef(entry?: SessionEntry) {
   const model = typeof entry?.model === "string" ? entry.model.trim() : "";
-  const provider = typeof entry?.modelProvider === "string" ? entry.modelProvider.trim() : "";
+  const provider =
+    typeof entry?.modelProvider === "string" ? entry.modelProvider.trim() : "";
   if (model.includes("/")) {
     return model;
   }
@@ -105,9 +116,12 @@ function resolveModelRef(entry?: SessionEntry) {
   }
   // Fall back to override fields which are populated at spawn time,
   // before the first run completes and writes model/modelProvider.
-  const overrideModel = typeof entry?.modelOverride === "string" ? entry.modelOverride.trim() : "";
+  const overrideModel =
+    typeof entry?.modelOverride === "string" ? entry.modelOverride.trim() : "";
   const overrideProvider =
-    typeof entry?.providerOverride === "string" ? entry.providerOverride.trim() : "";
+    typeof entry?.providerOverride === "string"
+      ? entry.providerOverride.trim()
+      : "";
   if (overrideModel.includes("/")) {
     return overrideModel;
   }
@@ -147,8 +161,10 @@ function resolveSubagentTarget(
       invalidIndex: (value) => `Invalid subagent index: ${value}`,
       unknownSession: (value) => `Unknown subagent session: ${value}`,
       ambiguousLabel: (value) => `Ambiguous subagent label: ${value}`,
-      ambiguousLabelPrefix: (value) => `Ambiguous subagent label prefix: ${value}`,
-      ambiguousRunIdPrefix: (value) => `Ambiguous subagent run id prefix: ${value}`,
+      ambiguousLabelPrefix: (value) =>
+        `Ambiguous subagent label prefix: ${value}`,
+      ambiguousRunIdPrefix: (value) =>
+        `Ambiguous subagent run id prefix: ${value}`,
       unknownTarget: (value) => `Unknown subagent target: ${value}`,
     },
   });
@@ -203,9 +219,12 @@ function resolveRequesterKey(params: {
 
   // Check if this sub-agent can spawn children (orchestrator).
   // If so, it should see its own children, not its parent's children.
-  const callerDepth = getSubagentDepthFromSessionStore(callerSessionKey, { cfg: params.cfg });
+  const callerDepth = getSubagentDepthFromSessionStore(callerSessionKey, {
+    cfg: params.cfg,
+  });
   const maxSpawnDepth =
-    params.cfg.agents?.defaults?.subagents?.maxSpawnDepth ?? DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH;
+    params.cfg.agents?.defaults?.subagents?.maxSpawnDepth ??
+    DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH;
   if (callerDepth < maxSpawnDepth) {
     // Orchestrator sub-agent: use its own session key as requester
     // so it sees children it spawned.
@@ -223,7 +242,10 @@ function resolveRequesterKey(params: {
     key: callerSessionKey,
     cache,
   }).entry;
-  const spawnedBy = typeof callerEntry?.spawnedBy === "string" ? callerEntry.spawnedBy.trim() : "";
+  const spawnedBy =
+    typeof callerEntry?.spawnedBy === "string"
+      ? callerEntry.spawnedBy.trim()
+      : "";
   return {
     requesterSessionKey: spawnedBy || callerSessionKey,
     callerSessionKey,
@@ -269,7 +291,11 @@ async function killSubagentRun(params: {
     childSessionKey,
     reason: "killed",
   });
-  const killed = marked > 0 || aborted || cleared.followupCleared > 0 || cleared.laneCleared > 0;
+  const killed =
+    marked > 0 ||
+    aborted ||
+    cleared.followupCleared > 0 ||
+    cleared.laneCleared > 0;
   return { killed, sessionId };
 }
 
@@ -343,7 +369,9 @@ function buildListText(params: {
   return lines.join("\n");
 }
 
-export function createSubagentsTool(opts?: { agentSessionKey?: string }): AnyAgentTool {
+export function createSubagentsTool(opts?: {
+  agentSessionKey?: string;
+}): AnyAgentTool {
   return {
     label: "Subagents",
     name: "subagents",
@@ -352,16 +380,22 @@ export function createSubagentsTool(opts?: { agentSessionKey?: string }): AnyAge
     parameters: SubagentsToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
-      const action = (readStringParam(params, "action") ?? "list") as SubagentAction;
+      const action = (readStringParam(params, "action") ??
+        "list") as SubagentAction;
       const cfg = loadConfig();
       const requester = resolveRequesterKey({
         cfg,
         agentSessionKey: opts?.agentSessionKey,
       });
-      const runs = sortSubagentRuns(listSubagentRunsForRequester(requester.requesterSessionKey));
+      const runs = sortSubagentRuns(
+        listSubagentRunsForRequester(requester.requesterSessionKey),
+      );
       const recentMinutesRaw = readNumberParam(params, "recentMinutes");
       const recentMinutes = recentMinutesRaw
-        ? Math.max(1, Math.min(MAX_RECENT_MINUTES, Math.floor(recentMinutesRaw)))
+        ? Math.max(
+            1,
+            Math.min(MAX_RECENT_MINUTES, Math.floor(recentMinutesRaw)),
+          )
         : DEFAULT_RECENT_MINUTES;
 
       if (action === "list") {
@@ -380,7 +414,10 @@ export function createSubagentsTool(opts?: { agentSessionKey?: string }): AnyAge
         };
 
         let index = 1;
-        const buildListEntry = (entry: SubagentRunRecord, runtimeMs: number) => {
+        const buildListEntry = (
+          entry: SubagentRunRecord,
+          runtimeMs: number,
+        ) => {
           const sessionEntry = resolveSessionEntryForKey({
             cfg,
             key: entry.childSessionKey,
@@ -409,11 +446,21 @@ export function createSubagentsTool(opts?: { agentSessionKey?: string }): AnyAge
             startedAt: entry.startedAt,
           };
           index += 1;
-          return { line, view: entry.endedAt ? { ...baseView, endedAt: entry.endedAt } : baseView };
+          return {
+            line,
+            view: entry.endedAt
+              ? { ...baseView, endedAt: entry.endedAt }
+              : baseView,
+          };
         };
         const active = runs
-          .filter((entry) => !entry.endedAt || hasPendingDescendants(entry.childSessionKey))
-          .map((entry) => buildListEntry(entry, now - (entry.startedAt ?? entry.createdAt)));
+          .filter(
+            (entry) =>
+              !entry.endedAt || hasPendingDescendants(entry.childSessionKey),
+          )
+          .map((entry) =>
+            buildListEntry(entry, now - (entry.startedAt ?? entry.createdAt)),
+          );
         const recent = runs
           .filter(
             (entry) =>
@@ -422,7 +469,10 @@ export function createSubagentsTool(opts?: { agentSessionKey?: string }): AnyAge
               (entry.endedAt ?? 0) >= recentCutoff,
           )
           .map((entry) =>
-            buildListEntry(entry, (entry.endedAt ?? now) - (entry.startedAt ?? entry.createdAt)),
+            buildListEntry(
+              entry,
+              (entry.endedAt ?? now) - (entry.startedAt ?? entry.createdAt),
+            ),
           );
 
         const text = buildListText({ active, recent, recentMinutes });
@@ -592,7 +642,8 @@ export function createSubagentsTool(opts?: { agentSessionKey?: string }): AnyAge
             target,
             runId: resolved.entry.runId,
             sessionKey: resolved.entry.childSessionKey,
-            error: "Steer rate limit exceeded. Wait a moment before sending another steer.",
+            error:
+              "Steer rate limit exceeded. Wait a moment before sending another steer.",
           });
         }
         steerRateLimit.set(rateKey, now);
@@ -607,7 +658,8 @@ export function createSubagentsTool(opts?: { agentSessionKey?: string }): AnyAge
           cache: new Map<string, Record<string, SessionEntry>>(),
         });
         const sessionId =
-          typeof targetSession.entry?.sessionId === "string" && targetSession.entry.sessionId.trim()
+          typeof targetSession.entry?.sessionId === "string" &&
+          targetSession.entry.sessionId.trim()
             ? targetSession.entry.sessionId.trim()
             : undefined;
 
@@ -615,7 +667,10 @@ export function createSubagentsTool(opts?: { agentSessionKey?: string }): AnyAge
         if (sessionId) {
           abortEmbeddedPiRun(sessionId);
         }
-        const cleared = clearSessionQueues([resolved.entry.childSessionKey, sessionId]);
+        const cleared = clearSessionQueues([
+          resolved.entry.childSessionKey,
+          sessionId,
+        ]);
         if (cleared.followupCleared > 0 || cleared.laneCleared > 0) {
           logVerbose(
             `subagents tool steer: cleared followups=${cleared.followupCleared} lane=${cleared.laneCleared} keys=${cleared.keys.join(",")}`,

@@ -37,7 +37,8 @@ const IrcNickServSchema = z
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["registerEmail"],
-        message: "channels.irc.nickserv.register=true requires channels.irc.nickserv.registerEmail",
+        message:
+          "channels.irc.nickserv.register=true requires channels.irc.nickserv.registerEmail",
       });
     }
   });
@@ -68,15 +69,18 @@ export const IrcAccountSchemaBase = z
   })
   .strict();
 
-export const IrcAccountSchema = IrcAccountSchemaBase.superRefine((value, ctx) => {
-  requireOpenAllowFrom({
-    policy: value.dmPolicy,
-    allowFrom: value.allowFrom,
-    ctx,
-    path: ["allowFrom"],
-    message: 'channels.irc.dmPolicy="open" requires channels.irc.allowFrom to include "*"',
-  });
-});
+export const IrcAccountSchema = IrcAccountSchemaBase.superRefine(
+  (value, ctx) => {
+    requireOpenAllowFrom({
+      policy: value.dmPolicy,
+      allowFrom: value.allowFrom,
+      ctx,
+      path: ["allowFrom"],
+      message:
+        'channels.irc.dmPolicy="open" requires channels.irc.allowFrom to include "*"',
+    });
+  },
+);
 
 export const IrcConfigSchema = IrcAccountSchemaBase.extend({
   accounts: z.record(z.string(), IrcAccountSchema.optional()).optional(),
@@ -87,6 +91,7 @@ export const IrcConfigSchema = IrcAccountSchemaBase.extend({
     allowFrom: value.allowFrom,
     ctx,
     path: ["allowFrom"],
-    message: 'channels.irc.dmPolicy="open" requires channels.irc.allowFrom to include "*"',
+    message:
+      'channels.irc.dmPolicy="open" requires channels.irc.allowFrom to include "*"',
   });
 });

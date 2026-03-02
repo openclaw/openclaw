@@ -82,7 +82,9 @@ describe("doctor config flow safe bins", () => {
     });
 
     expect(noteSpy).toHaveBeenCalledWith(
-      expect.stringContaining("tools.exec.safeBins includes interpreter/runtime 'python3'"),
+      expect.stringContaining(
+        "tools.exec.safeBins includes interpreter/runtime 'python3'",
+      ),
       "Doctor warnings",
     );
     expect(noteSpy).toHaveBeenCalledWith(
@@ -95,7 +97,9 @@ describe("doctor config flow safe bins", () => {
     if (process.platform === "win32") {
       return;
     }
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-doctor-safe-bins-"));
+    const dir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-doctor-safe-bins-"),
+    );
     const binPath = path.join(dir, "mydoctorbin");
     try {
       await fs.writeFile(binPath, "#!/bin/sh\necho ok\n", "utf-8");

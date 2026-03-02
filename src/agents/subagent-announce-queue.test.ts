@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { enqueueAnnounce, resetAnnounceQueuesForTests } from "./subagent-announce-queue.js";
+import {
+  enqueueAnnounce,
+  resetAnnounceQueuesForTests,
+} from "./subagent-announce-queue.js";
 
 function createRetryingSend() {
   const prompts: string[] = [];
@@ -47,7 +50,10 @@ describe("subagent-announce-queue", () => {
 
     await sender.waitForSecondAttempt;
     expect(sender.send).toHaveBeenCalledTimes(2);
-    expect(sender.prompts).toEqual(["subagent completed", "subagent completed"]);
+    expect(sender.prompts).toEqual([
+      "subagent completed",
+      "subagent completed",
+    ]);
   });
 
   it("preserves queue summary state across failed summary delivery retries", async () => {
@@ -61,7 +67,12 @@ describe("subagent-announce-queue", () => {
         enqueuedAt: Date.now(),
         sessionKey: "agent:main:telegram:dm:u1",
       },
-      settings: { mode: "followup", debounceMs: 0, cap: 1, dropPolicy: "summarize" },
+      settings: {
+        mode: "followup",
+        debounceMs: 0,
+        cap: 1,
+        dropPolicy: "summarize",
+      },
       send: sender.send,
     });
     enqueueAnnounce({
@@ -72,7 +83,12 @@ describe("subagent-announce-queue", () => {
         enqueuedAt: Date.now(),
         sessionKey: "agent:main:telegram:dm:u1",
       },
-      settings: { mode: "followup", debounceMs: 0, cap: 1, dropPolicy: "summarize" },
+      settings: {
+        mode: "followup",
+        debounceMs: 0,
+        cap: 1,
+        dropPolicy: "summarize",
+      },
       send: sender.send,
     });
 

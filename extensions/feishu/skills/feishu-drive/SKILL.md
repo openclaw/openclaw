@@ -53,7 +53,12 @@ In parent folder:
 ### Move File
 
 ```json
-{ "action": "move", "file_token": "ABC123", "type": "docx", "folder_token": "fldcnXXX" }
+{
+  "action": "move",
+  "file_token": "ABC123",
+  "type": "docx",
+  "folder_token": "fldcnXXX"
+}
 ```
 
 ### Delete File

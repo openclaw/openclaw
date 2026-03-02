@@ -25,7 +25,10 @@ export function createGatewayHooksRequestHandler(params: {
 }) {
   const { deps, getHooksConfig, bindHost, port, logHooks } = params;
 
-  const dispatchWakeHook = (value: { text: string; mode: "now" | "next-heartbeat" }) => {
+  const dispatchWakeHook = (value: {
+    text: string;
+    mode: "now" | "next-heartbeat";
+  }) => {
     const sessionKey = resolveMainSessionKeyFromConfig();
     enqueueSystemEvent(value.text, { sessionKey });
     if (value.mode === "now") {
@@ -77,9 +80,12 @@ export function createGatewayHooksRequestHandler(params: {
           sessionKey,
           lane: "cron",
         });
-        const summary = result.summary?.trim() || result.error?.trim() || result.status;
+        const summary =
+          result.summary?.trim() || result.error?.trim() || result.status;
         const prefix =
-          result.status === "ok" ? `Hook ${value.name}` : `Hook ${value.name} (${result.status})`;
+          result.status === "ok"
+            ? `Hook ${value.name}`
+            : `Hook ${value.name} (${result.status})`;
         if (!result.delivered) {
           enqueueSystemEvent(`${prefix}: ${summary}`.trim(), {
             sessionKey: mainSessionKey,

@@ -1,6 +1,8 @@
 import type { ChatEventPayload } from "./controllers/chat.ts";
 
-export function shouldReloadHistoryForFinalEvent(payload?: ChatEventPayload): boolean {
+export function shouldReloadHistoryForFinalEvent(
+  payload?: ChatEventPayload,
+): boolean {
   if (!payload || payload.state !== "final") {
     return false;
   }
@@ -8,7 +10,8 @@ export function shouldReloadHistoryForFinalEvent(payload?: ChatEventPayload): bo
     return true;
   }
   const message = payload.message as Record<string, unknown>;
-  const role = typeof message.role === "string" ? message.role.toLowerCase() : "";
+  const role =
+    typeof message.role === "string" ? message.role.toLowerCase() : "";
   if (role && role !== "assistant") {
     return true;
   }

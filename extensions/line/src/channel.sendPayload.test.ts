@@ -19,18 +19,38 @@ type LineRuntimeMocks = {
 };
 
 function createRuntime(): { runtime: PluginRuntime; mocks: LineRuntimeMocks } {
-  const pushMessageLine = vi.fn(async () => ({ messageId: "m-text", chatId: "c1" }));
-  const pushMessagesLine = vi.fn(async () => ({ messageId: "m-batch", chatId: "c1" }));
-  const pushFlexMessage = vi.fn(async () => ({ messageId: "m-flex", chatId: "c1" }));
-  const pushTemplateMessage = vi.fn(async () => ({ messageId: "m-template", chatId: "c1" }));
-  const pushLocationMessage = vi.fn(async () => ({ messageId: "m-loc", chatId: "c1" }));
+  const pushMessageLine = vi.fn(async () => ({
+    messageId: "m-text",
+    chatId: "c1",
+  }));
+  const pushMessagesLine = vi.fn(async () => ({
+    messageId: "m-batch",
+    chatId: "c1",
+  }));
+  const pushFlexMessage = vi.fn(async () => ({
+    messageId: "m-flex",
+    chatId: "c1",
+  }));
+  const pushTemplateMessage = vi.fn(async () => ({
+    messageId: "m-template",
+    chatId: "c1",
+  }));
+  const pushLocationMessage = vi.fn(async () => ({
+    messageId: "m-loc",
+    chatId: "c1",
+  }));
   const pushTextMessageWithQuickReplies = vi.fn(async () => ({
     messageId: "m-quick",
     chatId: "c1",
   }));
-  const createQuickReplyItems = vi.fn((labels: string[]) => ({ items: labels }));
+  const createQuickReplyItems = vi.fn((labels: string[]) => ({
+    items: labels,
+  }));
   const buildTemplateMessageFromPayload = vi.fn(() => ({ type: "buttons" }));
-  const sendMessageLine = vi.fn(async () => ({ messageId: "m-media", chatId: "c1" }));
+  const sendMessageLine = vi.fn(async () => ({
+    messageId: "m-media",
+    chatId: "c1",
+  }));
   const chunkMarkdownText = vi.fn((text: string) => [text]);
   const resolveTextChunkLimit = vi.fn(() => 123);
   const resolveLineAccount = vi.fn(
@@ -39,7 +59,8 @@ function createRuntime(): { runtime: PluginRuntime; mocks: LineRuntimeMocks } {
       const lineConfig = (cfg.channels?.line ?? {}) as {
         accounts?: Record<string, Record<string, unknown>>;
       };
-      const accountConfig = resolved !== "default" ? (lineConfig.accounts?.[resolved] ?? {}) : {};
+      const accountConfig =
+        resolved !== "default" ? (lineConfig.accounts?.[resolved] ?? {}) : {};
       return {
         accountId: resolved,
         config: { ...lineConfig, ...accountConfig },
@@ -114,10 +135,14 @@ describe("linePlugin outbound.sendPayload", () => {
     });
 
     expect(mocks.pushFlexMessage).toHaveBeenCalledTimes(1);
-    expect(mocks.pushMessageLine).toHaveBeenCalledWith("line:group:1", "Now playing:", {
-      verbose: false,
-      accountId: "default",
-    });
+    expect(mocks.pushMessageLine).toHaveBeenCalledWith(
+      "line:group:1",
+      "Now playing:",
+      {
+        verbose: false,
+        accountId: "default",
+      },
+    );
   });
 
   it("sends template message without dropping text", async () => {
@@ -151,10 +176,14 @@ describe("linePlugin outbound.sendPayload", () => {
 
     expect(mocks.buildTemplateMessageFromPayload).toHaveBeenCalledTimes(1);
     expect(mocks.pushTemplateMessage).toHaveBeenCalledTimes(1);
-    expect(mocks.pushMessageLine).toHaveBeenCalledWith("line:user:1", "Choose one:", {
-      verbose: false,
-      accountId: "default",
-    });
+    expect(mocks.pushMessageLine).toHaveBeenCalledWith(
+      "line:user:1",
+      "Choose one:",
+      {
+        verbose: false,
+        accountId: "default",
+      },
+    );
   });
 
   it("attaches quick replies when no text chunks are present", async () => {
@@ -233,14 +262,17 @@ describe("linePlugin outbound.sendPayload", () => {
       { verbose: false, accountId: "default" },
     );
     const mediaOrder = mocks.sendMessageLine.mock.invocationCallOrder[0];
-    const quickReplyOrder = mocks.pushTextMessageWithQuickReplies.mock.invocationCallOrder[0];
+    const quickReplyOrder =
+      mocks.pushTextMessageWithQuickReplies.mock.invocationCallOrder[0];
     expect(mediaOrder).toBeLessThan(quickReplyOrder);
   });
 
   it("uses configured text chunk limit for payloads", async () => {
     const { runtime, mocks } = createRuntime();
     setLineRuntime(runtime);
-    const cfg = { channels: { line: { textChunkLimit: 123 } } } as OpenClawConfig;
+    const cfg = {
+      channels: { line: { textChunkLimit: 123 } },
+    } as OpenClawConfig;
 
     const payload = {
       text: "Hello world",
@@ -262,9 +294,14 @@ describe("linePlugin outbound.sendPayload", () => {
       cfg,
     });
 
-    expect(mocks.resolveTextChunkLimit).toHaveBeenCalledWith(cfg, "line", "primary", {
-      fallbackLimit: 5000,
-    });
+    expect(mocks.resolveTextChunkLimit).toHaveBeenCalledWith(
+      cfg,
+      "line",
+      "primary",
+      {
+        fallbackLimit: 5000,
+      },
+    );
     expect(mocks.chunkMarkdownText).toHaveBeenCalledWith("Hello world", 123);
   });
 });

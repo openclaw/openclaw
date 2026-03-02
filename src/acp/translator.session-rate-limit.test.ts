@@ -7,7 +7,10 @@ import { describe, expect, it, vi } from "vitest";
 import type { GatewayClient } from "../gateway/client.js";
 import { createInMemorySessionStore } from "./session.js";
 import { AcpGatewayAgent } from "./translator.js";
-import { createAcpConnection, createAcpGateway } from "./translator.test-helpers.js";
+import {
+  createAcpConnection,
+  createAcpGateway,
+} from "./translator.test-helpers.js";
 
 function createNewSessionRequest(cwd = "/tmp"): NewSessionRequest {
   return {
@@ -17,7 +20,10 @@ function createNewSessionRequest(cwd = "/tmp"): NewSessionRequest {
   } as unknown as NewSessionRequest;
 }
 
-function createLoadSessionRequest(sessionId: string, cwd = "/tmp"): LoadSessionRequest {
+function createLoadSessionRequest(
+  sessionId: string,
+  cwd = "/tmp",
+): LoadSessionRequest {
   return {
     sessionId,
     cwd,
@@ -38,18 +44,29 @@ function createPromptRequest(
   } as unknown as PromptRequest;
 }
 
-async function expectOversizedPromptRejected(params: { sessionId: string; text: string }) {
+async function expectOversizedPromptRejected(params: {
+  sessionId: string;
+  text: string;
+}) {
   const request = vi.fn(async () => ({ ok: true })) as GatewayClient["request"];
   const sessionStore = createInMemorySessionStore();
-  const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
-    sessionStore,
-  });
+  const agent = new AcpGatewayAgent(
+    createAcpConnection(),
+    createAcpGateway(request),
+    {
+      sessionStore,
+    },
+  );
   await agent.loadSession(createLoadSessionRequest(params.sessionId));
 
-  await expect(agent.prompt(createPromptRequest(params.sessionId, params.text))).rejects.toThrow(
-    /maximum allowed size/i,
+  await expect(
+    agent.prompt(createPromptRequest(params.sessionId, params.text)),
+  ).rejects.toThrow(/maximum allowed size/i);
+  expect(request).not.toHaveBeenCalledWith(
+    "chat.send",
+    expect.anything(),
+    expect.anything(),
   );
-  expect(request).not.toHaveBeenCalledWith("chat.send", expect.anything(), expect.anything());
   const session = sessionStore.getSession(params.sessionId);
   expect(session?.activeRunId).toBeNull();
   expect(session?.abortController).toBeNull();
@@ -60,13 +77,17 @@ async function expectOversizedPromptRejected(params: { sessionId: string; text: 
 describe("acp session creation rate limit", () => {
   it("rate limits excessive newSession bursts", async () => {
     const sessionStore = createInMemorySessionStore();
-    const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(), {
-      sessionStore,
-      sessionCreateRateLimit: {
-        maxRequests: 2,
-        windowMs: 60_000,
+    const agent = new AcpGatewayAgent(
+      createAcpConnection(),
+      createAcpGateway(),
+      {
+        sessionStore,
+        sessionCreateRateLimit: {
+          maxRequests: 2,
+          windowMs: 60_000,
+        },
       },
-    });
+    );
 
     await agent.newSession(createNewSessionRequest());
     await agent.newSession(createNewSessionRequest());
@@ -79,19 +100,23 @@ describe("acp session creation rate limit", () => {
 
   it("does not count loadSession refreshes for an existing session ID", async () => {
     const sessionStore = createInMemorySessionStore();
-    const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(), {
-      sessionStore,
-      sessionCreateRateLimit: {
-        maxRequests: 1,
-        windowMs: 60_000,
+    const agent = new AcpGatewayAgent(
+      createAcpConnection(),
+      createAcpGateway(),
+      {
+        sessionStore,
+        sessionCreateRateLimit: {
+          maxRequests: 1,
+          windowMs: 60_000,
+        },
       },
-    });
+    );
 
     await agent.loadSession(createLoadSessionRequest("shared-session"));
     await agent.loadSession(createLoadSessionRequest("shared-session"));
-    await expect(agent.loadSession(createLoadSessionRequest("new-session"))).rejects.toThrow(
-      /session creation rate limit exceeded/i,
-    );
+    await expect(
+      agent.loadSession(createLoadSessionRequest("new-session")),
+    ).rejects.toThrow(/session creation rate limit exceeded/i);
 
     sessionStore.clearAllSessionsForTest();
   });

@@ -34,7 +34,10 @@ function isBotCommandsTooMuchError(err: unknown): boolean {
   }
   if (typeof err === "object") {
     const maybe = err as { description?: unknown; message?: unknown };
-    if (typeof maybe.description === "string" && pattern.test(maybe.description)) {
+    if (
+      typeof maybe.description === "string" &&
+      pattern.test(maybe.description)
+    ) {
       return true;
     }
     if (typeof maybe.message === "string" && pattern.test(maybe.message)) {
@@ -70,7 +73,9 @@ export function buildPluginTelegramMenuCommands(params: {
       if (pluginCommandNames.has(normalized)) {
         issues.push(`Plugin command "/${normalized}" is duplicated.`);
       } else {
-        issues.push(`Plugin command "/${normalized}" conflicts with an existing Telegram command.`);
+        issues.push(
+          `Plugin command "/${normalized}" conflicts with an existing Telegram command.`,
+        );
       }
       continue;
     }
@@ -132,9 +137,13 @@ export function syncTelegramMenuCommands(params: {
         if (!isBotCommandsTooMuchError(err)) {
           throw err;
         }
-        const nextCount = Math.floor(retryCommands.length * TELEGRAM_COMMAND_RETRY_RATIO);
+        const nextCount = Math.floor(
+          retryCommands.length * TELEGRAM_COMMAND_RETRY_RATIO,
+        );
         const reducedCount =
-          nextCount < retryCommands.length ? nextCount : retryCommands.length - 1;
+          nextCount < retryCommands.length
+            ? nextCount
+            : retryCommands.length - 1;
         if (reducedCount <= 0) {
           runtime.error?.(
             "Telegram rejected native command registration (BOT_COMMANDS_TOO_MUCH); leaving menu empty. Reduce commands or disable channels.telegram.commands.native.",

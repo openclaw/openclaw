@@ -13,7 +13,9 @@ function clampTtl(value: number | undefined) {
   return Math.min(Math.max(value, MIN_JOB_TTL_MS), MAX_JOB_TTL_MS);
 }
 
-let jobTtlMs = clampTtl(Number.parseInt(process.env.PI_BASH_JOB_TTL_MS ?? "", 10));
+let jobTtlMs = clampTtl(
+  Number.parseInt(process.env.PI_BASH_JOB_TTL_MS ?? "", 10),
+);
 
 export type ProcessStatus = "running" | "completed" | "failed" | "killed";
 
@@ -101,13 +103,21 @@ export function deleteSession(id: string) {
   finishedSessions.delete(id);
 }
 
-export function appendOutput(session: ProcessSession, stream: "stdout" | "stderr", chunk: string) {
+export function appendOutput(
+  session: ProcessSession,
+  stream: "stdout" | "stderr",
+  chunk: string,
+) {
   session.pendingStdout ??= [];
   session.pendingStderr ??= [];
   session.pendingStdoutChars ??= sumPendingChars(session.pendingStdout);
   session.pendingStderrChars ??= sumPendingChars(session.pendingStderr);
-  const buffer = stream === "stdout" ? session.pendingStdout : session.pendingStderr;
-  const bufferChars = stream === "stdout" ? session.pendingStdoutChars : session.pendingStderrChars;
+  const buffer =
+    stream === "stdout" ? session.pendingStdout : session.pendingStderr;
+  const bufferChars =
+    stream === "stdout"
+      ? session.pendingStdoutChars
+      : session.pendingStderrChars;
   const pendingCap = Math.min(
     session.pendingMaxOutputChars ?? DEFAULT_PENDING_OUTPUT_CHARS,
     session.maxOutputChars,
@@ -124,9 +134,13 @@ export function appendOutput(session: ProcessSession, stream: "stdout" | "stderr
     session.pendingStderrChars = pendingChars;
   }
   session.totalOutputChars += chunk.length;
-  const aggregated = trimWithCap(session.aggregated + chunk, session.maxOutputChars);
+  const aggregated = trimWithCap(
+    session.aggregated + chunk,
+    session.maxOutputChars,
+  );
   session.truncated =
-    session.truncated || aggregated.length < session.aggregated.length + chunk.length;
+    session.truncated ||
+    aggregated.length < session.aggregated.length + chunk.length;
   session.aggregated = aggregated;
   session.tail = tail(session.aggregated, 2000);
 }

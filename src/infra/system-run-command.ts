@@ -64,12 +64,19 @@ const POSIX_OR_POWERSHELL_INLINE_WRAPPER_NAMES = new Set([
 ]);
 
 const POSIX_INLINE_COMMAND_FLAGS = new Set(["-lc", "-c", "--command"]);
-const POWERSHELL_INLINE_COMMAND_FLAGS = new Set(["-c", "-command", "--command"]);
+const POWERSHELL_INLINE_COMMAND_FLAGS = new Set([
+  "-c",
+  "-command",
+  "--command",
+]);
 
 function unwrapShellWrapperArgv(argv: string[]): string[] {
   const dispatchUnwrapped = unwrapDispatchWrappersForResolution(argv);
-  const shellMultiplexer = unwrapKnownShellMultiplexerInvocation(dispatchUnwrapped);
-  return shellMultiplexer.kind === "unwrapped" ? shellMultiplexer.argv : dispatchUnwrapped;
+  const shellMultiplexer =
+    unwrapKnownShellMultiplexerInvocation(dispatchUnwrapped);
+  return shellMultiplexer.kind === "unwrapped"
+    ? shellMultiplexer.argv
+    : dispatchUnwrapped;
 }
 
 function resolveInlineCommandTokenIndex(
@@ -112,14 +119,23 @@ function hasTrailingPositionalArgvAfterInlineCommand(argv: string[]): boolean {
 
   const inlineCommandIndex =
     wrapper === "powershell" || wrapper === "pwsh"
-      ? resolveInlineCommandTokenIndex(wrapperArgv, POWERSHELL_INLINE_COMMAND_FLAGS)
-      : resolveInlineCommandTokenIndex(wrapperArgv, POSIX_INLINE_COMMAND_FLAGS, {
-          allowCombinedC: true,
-        });
+      ? resolveInlineCommandTokenIndex(
+          wrapperArgv,
+          POWERSHELL_INLINE_COMMAND_FLAGS,
+        )
+      : resolveInlineCommandTokenIndex(
+          wrapperArgv,
+          POSIX_INLINE_COMMAND_FLAGS,
+          {
+            allowCombinedC: true,
+          },
+        );
   if (inlineCommandIndex === null) {
     return false;
   }
-  return wrapperArgv.slice(inlineCommandIndex + 1).some((entry) => entry.trim().length > 0);
+  return wrapperArgv
+    .slice(inlineCommandIndex + 1)
+    .some((entry) => entry.trim().length > 0);
 }
 
 export function validateSystemRunCommandConsistency(params: {
@@ -132,10 +148,13 @@ export function validateSystemRunCommandConsistency(params: {
       : null;
   const shellWrapperResolution = extractShellWrapperCommand(params.argv);
   const shellCommand = shellWrapperResolution.command;
-  const shellWrapperPositionalArgv = hasTrailingPositionalArgvAfterInlineCommand(params.argv);
+  const shellWrapperPositionalArgv =
+    hasTrailingPositionalArgvAfterInlineCommand(params.argv);
   const envManipulationBeforeShellWrapper =
-    shellWrapperResolution.isWrapper && hasEnvManipulationBeforeShellWrapper(params.argv);
-  const mustBindDisplayToFullArgv = envManipulationBeforeShellWrapper || shellWrapperPositionalArgv;
+    shellWrapperResolution.isWrapper &&
+    hasEnvManipulationBeforeShellWrapper(params.argv);
+  const mustBindDisplayToFullArgv =
+    envManipulationBeforeShellWrapper || shellWrapperPositionalArgv;
   const inferred =
     shellCommand !== null && !mustBindDisplayToFullArgv
       ? shellCommand.trim()

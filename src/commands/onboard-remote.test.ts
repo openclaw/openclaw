@@ -5,9 +5,13 @@ import { captureEnv } from "../test-utils/env.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { createWizardPrompter } from "./test-wizard-helpers.js";
 
-const discoverGatewayBeacons = vi.hoisted(() => vi.fn<() => Promise<GatewayBonjourBeacon[]>>());
+const discoverGatewayBeacons = vi.hoisted(() =>
+  vi.fn<() => Promise<GatewayBonjourBeacon[]>>(),
+);
 const resolveWideAreaDiscoveryDomain = vi.hoisted(() => vi.fn(() => undefined));
-const detectBinary = vi.hoisted(() => vi.fn<(name: string) => Promise<boolean>>());
+const detectBinary = vi.hoisted(() =>
+  vi.fn<(name: string) => Promise<boolean>>(),
+);
 
 vi.mock("../infra/bonjour-discovery.js", () => ({
   discoverGatewayBeacons,
@@ -89,7 +93,9 @@ describe("promptRemoteGatewayConfig", () => {
     const next = await promptRemoteGatewayConfig(cfg, prompter);
 
     expect(next.gateway?.mode).toBe("remote");
-    expect(next.gateway?.remote?.url).toBe("wss://gateway.tailnet.ts.net:18789");
+    expect(next.gateway?.remote?.url).toBe(
+      "wss://gateway.tailnet.ts.net:18789",
+    );
     expect(next.gateway?.remote?.token).toBe("token-123");
     expect(prompter.note).toHaveBeenCalledWith(
       expect.stringContaining("Direct remote access defaults to TLS."),
@@ -101,11 +107,17 @@ describe("promptRemoteGatewayConfig", () => {
     const text: WizardPrompter["text"] = vi.fn(async (params) => {
       if (params.message === "Gateway WebSocket URL") {
         // ws:// to public IPs is rejected
-        expect(params.validate?.("ws://203.0.113.10:18789")).toContain("Use wss://");
+        expect(params.validate?.("ws://203.0.113.10:18789")).toContain(
+          "Use wss://",
+        );
         // ws:// to private IPs remains blocked by default
-        expect(params.validate?.("ws://10.0.0.8:18789")).toContain("Use wss://");
+        expect(params.validate?.("ws://10.0.0.8:18789")).toContain(
+          "Use wss://",
+        );
         expect(params.validate?.("ws://127.0.0.1:18789")).toBeUndefined();
-        expect(params.validate?.("wss://remote.example.com:18789")).toBeUndefined();
+        expect(
+          params.validate?.("wss://remote.example.com:18789"),
+        ).toBeUndefined();
         return "wss://remote.example.com:18789";
       }
       return "";

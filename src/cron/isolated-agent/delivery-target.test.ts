@@ -44,7 +44,9 @@ const DEFAULT_TARGET = {
 type SessionStore = ReturnType<typeof loadSessionStore>;
 
 function setMainSessionEntry(entry?: SessionStore[string]) {
-  const store = entry ? ({ "agent:test:main": entry } as SessionStore) : ({} as SessionStore);
+  const store = entry
+    ? ({ "agent:test:main": entry } as SessionStore)
+    : ({} as SessionStore);
   vi.mocked(loadSessionStore).mockReturnValue(store);
 }
 
@@ -62,8 +64,13 @@ async function resolveForAgent(params: {
   cfg: OpenClawConfig;
   target?: { channel?: "last" | "telegram"; to?: string };
 }) {
-  const channel = params.target ? params.target.channel : DEFAULT_TARGET.channel;
-  const to = params.target && "to" in params.target ? params.target.to : DEFAULT_TARGET.to;
+  const channel = params.target
+    ? params.target.channel
+    : DEFAULT_TARGET.channel;
+  const to =
+    params.target && "to" in params.target
+      ? params.target.to
+      : DEFAULT_TARGET.to;
   return resolveDeliveryTarget(params.cfg, AGENT_ID, {
     channel,
     to,
@@ -82,7 +89,10 @@ describe("resolveDeliveryTarget", () => {
     setStoredWhatsAppAllowFrom(["+15550000001"]);
 
     const cfg = makeCfg({ bindings: [] });
-    const result = await resolveDeliveryTarget(cfg, AGENT_ID, { channel: "last", to: undefined });
+    const result = await resolveDeliveryTarget(cfg, AGENT_ID, {
+      channel: "last",
+      to: undefined,
+    });
 
     expect(result.channel).toBe("whatsapp");
     expect(result.to).toBe("+15550000001");
@@ -234,13 +244,17 @@ describe("resolveDeliveryTarget", () => {
     if (result.ok) {
       throw new Error("expected unresolved delivery target");
     }
-    expect(result.error.message).toContain('No delivery target resolved for channel "telegram"');
+    expect(result.error.message).toContain(
+      'No delivery target resolved for channel "telegram"',
+    );
   });
 
   it("returns an error when channel selection is ambiguous", async () => {
     setMainSessionEntry(undefined);
     vi.mocked(resolveMessageChannelSelection).mockRejectedValueOnce(
-      new Error("Channel is required when multiple channels are configured: telegram, slack"),
+      new Error(
+        "Channel is required when multiple channels are configured: telegram, slack",
+      ),
     );
 
     const result = await resolveForAgent({
@@ -272,11 +286,15 @@ describe("resolveDeliveryTarget", () => {
       },
     } as SessionStore);
 
-    const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
-      channel: "last",
-      sessionKey: "agent:test:thread:42",
-      to: undefined,
-    });
+    const result = await resolveDeliveryTarget(
+      makeCfg({ bindings: [] }),
+      AGENT_ID,
+      {
+        channel: "last",
+        sessionKey: "agent:test:thread:42",
+        to: undefined,
+      },
+    );
 
     expect(result.channel).toBe("telegram");
     expect(result.to).toBe("thread-chat");
@@ -309,11 +327,15 @@ describe("resolveDeliveryTarget", () => {
       lastAccountId: "default",
     });
 
-    const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
-      channel: "telegram",
-      to: "chat-999",
-      accountId: "bot-b",
-    });
+    const result = await resolveDeliveryTarget(
+      makeCfg({ bindings: [] }),
+      AGENT_ID,
+      {
+        channel: "telegram",
+        to: "chat-999",
+        accountId: "bot-b",
+      },
+    );
 
     expect(result.ok).toBe(true);
     expect(result.accountId).toBe("bot-b");
@@ -322,7 +344,12 @@ describe("resolveDeliveryTarget", () => {
   it("explicit delivery.accountId overrides bindings-derived accountId", async () => {
     setMainSessionEntry(undefined);
     const cfg = makeCfg({
-      bindings: [{ agentId: AGENT_ID, match: { channel: "telegram", accountId: "bound" } }],
+      bindings: [
+        {
+          agentId: AGENT_ID,
+          match: { channel: "telegram", accountId: "bound" },
+        },
+      ],
     });
 
     const result = await resolveDeliveryTarget(cfg, AGENT_ID, {

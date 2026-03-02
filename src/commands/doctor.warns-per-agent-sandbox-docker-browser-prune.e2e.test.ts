@@ -2,7 +2,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import { createDoctorRuntime, mockDoctorConfigSnapshot, note } from "./doctor.e2e-harness.js";
+import {
+  createDoctorRuntime,
+  mockDoctorConfigSnapshot,
+  note,
+} from "./doctor.e2e-harness.js";
 import "./doctor.fast-path-mocks.js";
 
 vi.doUnmock("./doctor-sandbox.js");
@@ -67,7 +71,9 @@ describe("doctor command", () => {
     });
 
     note.mockClear();
-    const homedirSpy = vi.spyOn(os, "homedir").mockReturnValue("/Users/steipete");
+    const homedirSpy = vi
+      .spyOn(os, "homedir")
+      .mockReturnValue("/Users/steipete");
     const realExists = fs.existsSync;
     const legacyPath = path.join("/Users/steipete", "openclaw");
     const legacyAgentsPath = path.join(legacyPath, "AGENTS.md");
@@ -84,7 +90,9 @@ describe("doctor command", () => {
 
     await doctorCommand(createDoctorRuntime(), { nonInteractive: true });
 
-    expect(note.mock.calls.some(([_, title]) => title === "Extra workspace")).toBe(false);
+    expect(
+      note.mock.calls.some(([_, title]) => title === "Extra workspace"),
+    ).toBe(false);
 
     homedirSpy.mockRestore();
     existsSpy.mockRestore();

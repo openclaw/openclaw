@@ -37,7 +37,9 @@ const MAX_CALLBACK_DATA_BYTES = 64;
  * Parse a model callback_data string into a structured object.
  * Returns null if the data doesn't match a known pattern.
  */
-export function parseModelCallbackData(data: string): ParsedModelCallback | null {
+export function parseModelCallbackData(
+  data: string,
+): ParsedModelCallback | null {
   const trimmed = data.trim();
   if (!trimmed.startsWith("mdl_")) {
     return null;
@@ -211,7 +213,10 @@ export function getModelsPageSize(): number {
 /**
  * Calculate total pages for a model list.
  */
-export function calculateTotalPages(totalModels: number, pageSize?: number): number {
+export function calculateTotalPages(
+  totalModels: number,
+  pageSize?: number,
+): number {
   const size = pageSize ?? MODELS_PAGE_SIZE;
   return size > 0 ? Math.ceil(totalModels / size) : 1;
 }

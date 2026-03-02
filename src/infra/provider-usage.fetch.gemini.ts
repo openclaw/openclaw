@@ -1,4 +1,7 @@
-import { buildUsageHttpErrorSnapshot, fetchJson } from "./provider-usage.fetch.shared.js";
+import {
+  buildUsageHttpErrorSnapshot,
+  fetchJson,
+} from "./provider-usage.fetch.shared.js";
 import { clampPercent, PROVIDER_LABELS } from "./provider-usage.shared.js";
 import type {
   ProviderUsageSnapshot,

@@ -10,14 +10,20 @@ import { parseLineDirectives, hasLineDirectives } from "./line-directives.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import { enqueueFollowupRun, scheduleFollowupDrain } from "./queue.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
-import { createReplyToModeFilter, resolveReplyToMode } from "./reply-threading.js";
+import {
+  createReplyToModeFilter,
+  resolveReplyToMode,
+} from "./reply-threading.js";
 
 describe("normalizeInboundTextNewlines", () => {
   it("normalizes real newlines and preserves literal backslash-n sequences", () => {
     const cases = [
       { input: "hello\r\nworld", expected: "hello\nworld" },
       { input: "hello\rworld", expected: "hello\nworld" },
-      { input: "C:\\Work\\nxxx\\README.md", expected: "C:\\Work\\nxxx\\README.md" },
+      {
+        input: "C:\\Work\\nxxx\\README.md",
+        expected: "C:\\Work\\nxxx\\README.md",
+      },
       {
         input: "Please read the file at C:\\Work\\nxxx\\README.md",
         expected: "Please read the file at C:\\Work\\nxxx\\README.md",
@@ -27,7 +33,9 @@ describe("normalizeInboundTextNewlines", () => {
     ] as const;
 
     for (const testCase of cases) {
-      expect(normalizeInboundTextNewlines(testCase.input)).toBe(testCase.expected);
+      expect(normalizeInboundTextNewlines(testCase.input)).toBe(
+        testCase.expected,
+      );
     }
   });
 });
@@ -198,7 +206,10 @@ describe("hasLineDirectives", () => {
       { text: "Here are options [[quick_replies: A, B, C]]", expected: true },
       { text: "[[location: Place | Address | 35.6 | 139.7]]", expected: true },
       { text: "[[confirm: Continue? | Yes | No]]", expected: true },
-      { text: "[[buttons: Menu | Choose | Opt1:data1, Opt2:data2]]", expected: true },
+      {
+        text: "[[buttons: Menu | Choose | Opt1:data1, Opt2:data2]]",
+        expected: true,
+      },
       { text: "Just regular text", expected: false },
       { text: "[[not_a_directive: something]]", expected: false },
       { text: "[[media_player: Song | Artist | Speaker]]", expected: true },
@@ -256,7 +267,12 @@ describe("parseLineDirectives", () => {
 
   describe("location", () => {
     it("parses location variants", () => {
-      const existing = { title: "Existing", address: "Addr", latitude: 1, longitude: 2 };
+      const existing = {
+        title: "Existing",
+        address: "Addr",
+        latitude: 1,
+        longitude: 2,
+      };
       const cases: Array<{
         text: string;
         channelData?: { line: { location: typeof existing } };
@@ -390,7 +406,9 @@ describe("parseLineDirectives", () => {
         };
         expect(templateMessage?.type, testCase.name).toBe("buttons");
         if ("expectedTemplate" in testCase) {
-          expect(templateMessage, testCase.name).toEqual(testCase.expectedTemplate);
+          expect(templateMessage, testCase.name).toEqual(
+            testCase.expectedTemplate,
+          );
         }
         if ("expectedFirstAction" in testCase) {
           expect(templateMessage?.actions?.[0], testCase.name).toEqual(
@@ -439,20 +457,31 @@ describe("parseLineDirectives", () => {
         const result = parseLineDirectives({ text: testCase.text });
         const flexMessage = getLineData(result).flexMessage as {
           altText?: string;
-          contents?: { footer?: { contents?: unknown[] }; body?: { contents?: unknown[] } };
+          contents?: {
+            footer?: { contents?: unknown[] };
+            body?: { contents?: unknown[] };
+          };
         };
         expect(flexMessage, testCase.name).toBeDefined();
         if (testCase.expectedAltText !== undefined) {
-          expect(flexMessage?.altText, testCase.name).toBe(testCase.expectedAltText);
+          expect(flexMessage?.altText, testCase.name).toBe(
+            testCase.expectedAltText,
+          );
         }
         if (testCase.expectedText !== undefined) {
           expect(result.text, testCase.name).toBe(testCase.expectedText);
         }
         if (testCase.expectFooter) {
-          expect(flexMessage?.contents?.footer?.contents?.length, testCase.name).toBeGreaterThan(0);
+          expect(
+            flexMessage?.contents?.footer?.contents?.length,
+            testCase.name,
+          ).toBeGreaterThan(0);
         }
         if ("expectBodyContents" in testCase && testCase.expectBodyContents) {
-          expect(flexMessage?.contents?.body?.contents, testCase.name).toBeDefined();
+          expect(
+            flexMessage?.contents?.body?.contents,
+            testCase.name,
+          ).toBeDefined();
         }
       }
     });
@@ -473,7 +502,9 @@ describe("parseLineDirectives", () => {
 
       for (const testCase of cases) {
         const result = parseLineDirectives({ text: testCase.text });
-        const flexMessage = getLineData(result).flexMessage as { altText?: string };
+        const flexMessage = getLineData(result).flexMessage as {
+          altText?: string;
+        };
         expect(flexMessage).toBeDefined();
         expect(flexMessage?.altText).toBe(testCase.altText);
       }
@@ -495,7 +526,9 @@ describe("parseLineDirectives", () => {
 
       for (const testCase of cases) {
         const result = parseLineDirectives({ text: testCase.text });
-        const flexMessage = getLineData(result).flexMessage as { altText?: string };
+        const flexMessage = getLineData(result).flexMessage as {
+          altText?: string;
+        };
         expect(flexMessage).toBeDefined();
         expect(flexMessage?.altText).toBe(testCase.altText);
       }
@@ -517,7 +550,9 @@ describe("parseLineDirectives", () => {
 
       for (const testCase of cases) {
         const result = parseLineDirectives({ text: testCase.text });
-        const flexMessage = getLineData(result).flexMessage as { altText?: string };
+        const flexMessage = getLineData(result).flexMessage as {
+          altText?: string;
+        };
         expect(flexMessage).toBeDefined();
         expect(flexMessage?.altText).toBe(testCase.altText);
       }
@@ -539,7 +574,9 @@ describe("parseLineDirectives", () => {
 
       for (const testCase of cases) {
         const result = parseLineDirectives({ text: testCase.text });
-        const flexMessage = getLineData(result).flexMessage as { altText?: string };
+        const flexMessage = getLineData(result).flexMessage as {
+          altText?: string;
+        };
         expect(flexMessage).toBeDefined();
         if (testCase.contains) {
           expect(flexMessage?.altText).toContain(testCase.contains);
@@ -687,7 +724,9 @@ describe("followup queue deduplication", () => {
     scheduleFollowupDrain(key, runFollowup);
     await done.promise;
     // Should collect both unique messages
-    expect(calls[0]?.prompt).toContain("[Queued messages while agent was busy]");
+    expect(calls[0]?.prompt).toContain(
+      "[Queued messages while agent was busy]",
+    );
   });
 
   it("deduplicates exact prompt when routing matches and no message id", async () => {
@@ -886,7 +925,9 @@ describe("followup queue collect routing", () => {
 
     scheduleFollowupDrain(key, runFollowup);
     await done.promise;
-    expect(calls[0]?.prompt).toContain("[Queued messages while agent was busy]");
+    expect(calls[0]?.prompt).toContain(
+      "[Queued messages while agent was busy]",
+    );
     expect(calls[0]?.originatingChannel).toBe("slack");
     expect(calls[0]?.originatingTo).toBe("channel:A");
   });
@@ -932,7 +973,9 @@ describe("followup queue collect routing", () => {
 
     scheduleFollowupDrain(key, runFollowup);
     await done.promise;
-    expect(calls[0]?.prompt).toContain("[Queued messages while agent was busy]");
+    expect(calls[0]?.prompt).toContain(
+      "[Queued messages while agent was busy]",
+    );
     expect(calls[0]?.originatingThreadId).toBe("1706000000.000001");
   });
 
@@ -1043,7 +1086,9 @@ describe("followup queue collect routing", () => {
 
     scheduleFollowupDrain(key, runFollowup);
     await done.promise;
-    expect(calls[0]?.prompt).toContain("[Queue overflow] Dropped 1 message due to cap.");
+    expect(calls[0]?.prompt).toContain(
+      "[Queue overflow] Dropped 1 message due to cap.",
+    );
     expect(calls[0]?.prompt).toContain("- first");
   });
 
@@ -1092,7 +1137,9 @@ describe("followup queue collect routing", () => {
     expect(calls[0]?.originatingTo).toBe("channel:C1");
     expect(calls[0]?.originatingAccountId).toBe("work");
     expect(calls[0]?.originatingThreadId).toBe("1739142736.000100");
-    expect(calls[0]?.prompt).toContain("[Queue overflow] Dropped 1 message due to cap.");
+    expect(calls[0]?.prompt).toContain(
+      "[Queue overflow] Dropped 1 message due to cap.",
+    );
   });
 });
 
@@ -1106,13 +1153,21 @@ describe("createReplyDispatcher", () => {
     expect(dispatcher.sendFinalReply({})).toBe(false);
     expect(dispatcher.sendFinalReply({ text: " " })).toBe(false);
     expect(dispatcher.sendFinalReply({ text: SILENT_REPLY_TOKEN })).toBe(false);
-    expect(dispatcher.sendFinalReply({ text: `${SILENT_REPLY_TOKEN} -- nope` })).toBe(true);
-    expect(dispatcher.sendFinalReply({ text: `interject.${SILENT_REPLY_TOKEN}` })).toBe(true);
+    expect(
+      dispatcher.sendFinalReply({ text: `${SILENT_REPLY_TOKEN} -- nope` }),
+    ).toBe(true);
+    expect(
+      dispatcher.sendFinalReply({ text: `interject.${SILENT_REPLY_TOKEN}` }),
+    ).toBe(true);
 
     await dispatcher.waitForIdle();
     expect(deliver).toHaveBeenCalledTimes(2);
-    expect(deliver.mock.calls[0]?.[0]?.text).toBe(`${SILENT_REPLY_TOKEN} -- nope`);
-    expect(deliver.mock.calls[1]?.[0]?.text).toBe(`interject.${SILENT_REPLY_TOKEN}`);
+    expect(deliver.mock.calls[0]?.[0]?.text).toBe(
+      `${SILENT_REPLY_TOKEN} -- nope`,
+    );
+    expect(deliver.mock.calls[1]?.[0]?.text).toBe(
+      `interject.${SILENT_REPLY_TOKEN}`,
+    );
   });
 
   it("strips heartbeat tokens and applies responsePrefix", async () => {
@@ -1125,7 +1180,9 @@ describe("createReplyDispatcher", () => {
     });
 
     expect(dispatcher.sendFinalReply({ text: HEARTBEAT_TOKEN })).toBe(false);
-    expect(dispatcher.sendToolResult({ text: `${HEARTBEAT_TOKEN} hello` })).toBe(true);
+    expect(
+      dispatcher.sendToolResult({ text: `${HEARTBEAT_TOKEN} hello` }),
+    ).toBe(true);
     await dispatcher.waitForIdle();
 
     expect(deliver).toHaveBeenCalledTimes(1);
@@ -1164,7 +1221,9 @@ describe("createReplyDispatcher", () => {
     expect(deliver).toHaveBeenCalledTimes(3);
     expect(deliver.mock.calls[0][0].text).toBe("PFX already");
     expect(deliver.mock.calls[1][0].text).toBe("");
-    expect(deliver.mock.calls[2][0].text).toBe(`PFX ${SILENT_REPLY_TOKEN} -- explanation`);
+    expect(deliver.mock.calls[2][0].text).toBe(
+      `PFX ${SILENT_REPLY_TOKEN} -- explanation`,
+    );
   });
 
   it("preserves ordering across tool, block, and final replies", async () => {
@@ -1186,8 +1245,9 @@ describe("createReplyDispatcher", () => {
   });
 
   it("fires onIdle when the queue drains", async () => {
-    const deliver: Parameters<typeof createReplyDispatcher>[0]["deliver"] = async () =>
-      await Promise.resolve();
+    const deliver: Parameters<
+      typeof createReplyDispatcher
+    >[0]["deliver"] = async () => await Promise.resolve();
     const onIdle = vi.fn();
     const dispatcher = createReplyDispatcher({ deliver, onIdle });
 
@@ -1298,19 +1358,64 @@ describe("resolveReplyToMode", () => {
       { cfg: configuredCfg, channel: "telegram", expected: "all" },
       { cfg: configuredCfg, channel: "discord", expected: "first" },
       { cfg: configuredCfg, channel: "slack", expected: "all" },
-      { cfg: chatTypeCfg, channel: "slack", chatType: "direct", expected: "all" },
-      { cfg: chatTypeCfg, channel: "slack", chatType: "group", expected: "first" },
-      { cfg: chatTypeCfg, channel: "slack", chatType: "channel", expected: "off" },
-      { cfg: chatTypeCfg, channel: "slack", chatType: undefined, expected: "off" },
-      { cfg: topLevelFallbackCfg, channel: "slack", chatType: "direct", expected: "first" },
-      { cfg: topLevelFallbackCfg, channel: "slack", chatType: "channel", expected: "first" },
-      { cfg: legacyDmCfg, channel: "slack", chatType: "direct", expected: "all" },
-      { cfg: legacyDmCfg, channel: "slack", chatType: "channel", expected: "off" },
+      {
+        cfg: chatTypeCfg,
+        channel: "slack",
+        chatType: "direct",
+        expected: "all",
+      },
+      {
+        cfg: chatTypeCfg,
+        channel: "slack",
+        chatType: "group",
+        expected: "first",
+      },
+      {
+        cfg: chatTypeCfg,
+        channel: "slack",
+        chatType: "channel",
+        expected: "off",
+      },
+      {
+        cfg: chatTypeCfg,
+        channel: "slack",
+        chatType: undefined,
+        expected: "off",
+      },
+      {
+        cfg: topLevelFallbackCfg,
+        channel: "slack",
+        chatType: "direct",
+        expected: "first",
+      },
+      {
+        cfg: topLevelFallbackCfg,
+        channel: "slack",
+        chatType: "channel",
+        expected: "first",
+      },
+      {
+        cfg: legacyDmCfg,
+        channel: "slack",
+        chatType: "direct",
+        expected: "all",
+      },
+      {
+        cfg: legacyDmCfg,
+        channel: "slack",
+        chatType: "channel",
+        expected: "off",
+      },
     ];
     for (const testCase of cases) {
-      expect(resolveReplyToMode(testCase.cfg, testCase.channel, null, testCase.chatType)).toBe(
-        testCase.expected,
-      );
+      expect(
+        resolveReplyToMode(
+          testCase.cfg,
+          testCase.channel,
+          null,
+          testCase.chatType,
+        ),
+      ).toBe(testCase.expected);
     }
   });
 });
@@ -1328,7 +1433,9 @@ describe("createReplyToModeFilter", () => {
         expectedReplyToId: undefined,
       },
       {
-        filter: createReplyToModeFilter("off", { allowExplicitReplyTagsWhenOff: true }),
+        filter: createReplyToModeFilter("off", {
+          allowExplicitReplyTagsWhenOff: true,
+        }),
         input: { text: "hi", replyToId: "1", replyToTag: true },
         expectedReplyToId: "1",
       },
@@ -1339,7 +1446,9 @@ describe("createReplyToModeFilter", () => {
       },
     ];
     for (const testCase of cases) {
-      expect(testCase.filter(testCase.input).replyToId).toBe(testCase.expectedReplyToId);
+      expect(testCase.filter(testCase.input).replyToId).toBe(
+        testCase.expectedReplyToId,
+      );
     }
   });
 

@@ -4,7 +4,11 @@ import { fileURLToPath } from "node:url";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { SafeOpenError, readLocalFileSafely } from "../infra/fs-safe.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
-import { type MediaKind, maxBytesForKind, mediaKindFromMime } from "../media/constants.js";
+import {
+  type MediaKind,
+  maxBytesForKind,
+  mediaKindFromMime,
+} from "../media/constants.js";
 import { fetchRemoteMedia } from "../media/fetch.js";
 import {
   convertHeicToJpeg,
@@ -39,7 +43,10 @@ function resolveWebMediaOptions(params: {
   options?: { ssrfPolicy?: SsrFPolicy; localRoots?: readonly string[] | "any" };
   optimizeImages: boolean;
 }): WebMediaOptions {
-  if (typeof params.maxBytesOrOptions === "number" || params.maxBytesOrOptions === undefined) {
+  if (
+    typeof params.maxBytesOrOptions === "number" ||
+    params.maxBytesOrOptions === undefined
+  ) {
     return {
       maxBytes: params.maxBytesOrOptions,
       optimizeImages: params.optimizeImages,
@@ -67,7 +74,11 @@ export type LocalMediaAccessErrorCode =
 export class LocalMediaAccessError extends Error {
   code: LocalMediaAccessErrorCode;
 
-  constructor(code: LocalMediaAccessErrorCode, message: string, options?: ErrorOptions) {
+  constructor(
+    code: LocalMediaAccessErrorCode,
+    message: string,
+    options?: ErrorOptions,
+  ) {
     super(message, options);
     this.code = code;
     this.name = "LocalMediaAccessError";
@@ -99,7 +110,9 @@ async function assertLocalMediaAllowed(
   // `workspace-*` state roots via the temp-root prefix match; require explicit
   // localRoots for those.
   if (localRoots === undefined) {
-    const workspaceRoot = roots.find((root) => path.basename(root) === "workspace");
+    const workspaceRoot = roots.find(
+      (root) => path.basename(root) === "workspace",
+    );
     if (workspaceRoot) {
       const stateDir = path.dirname(workspaceRoot);
       const rel = path.relative(stateDir, resolved);
@@ -127,7 +140,10 @@ async function assertLocalMediaAllowed(
         `Invalid localRoots entry (refuses filesystem root): ${root}. Pass a narrower directory.`,
       );
     }
-    if (resolved === resolvedRoot || resolved.startsWith(resolvedRoot + path.sep)) {
+    if (
+      resolved === resolvedRoot ||
+      resolved.startsWith(resolvedRoot + path.sep)
+    ) {
       return;
     }
   }
@@ -153,7 +169,10 @@ function formatCapReduce(label: string, cap: number, size: number): string {
   return `${label} could not be reduced below ${formatMb(cap, 0)}MB (got ${formatMb(size)}MB)`;
 }
 
-function isHeicSource(opts: { contentType?: string; fileName?: string }): boolean {
+function isHeicSource(opts: {
+  contentType?: string;
+  fileName?: string;
+}): boolean {
   if (opts.contentType && HEIC_MIME_RE.test(opts.contentType.trim())) {
     return true;
   }
@@ -173,7 +192,11 @@ function toJpegFileName(fileName?: string): string | undefined {
   }
   const parsed = path.parse(trimmed);
   if (!parsed.ext || HEIC_EXT_RE.test(parsed.ext)) {
-    return path.format({ dir: parsed.dir, name: parsed.name || trimmed, ext: ".jpg" });
+    return path.format({
+      dir: parsed.dir,
+      name: parsed.name || trimmed,
+      ext: ".jpg",
+    });
   }
   return path.format({ dir: parsed.dir, name: parsed.name, ext: ".jpg" });
 }
@@ -187,7 +210,10 @@ type OptimizedImage = {
   compressionLevel?: number;
 };
 
-function logOptimizedImage(params: { originalSize: number; optimized: OptimizedImage }): void {
+function logOptimizedImage(params: {
+  originalSize: number;
+  optimized: OptimizedImage;
+}): void {
   if (!shouldLogVerbose()) {
     return;
   }
@@ -211,7 +237,9 @@ async function optimizeImageWithFallback(params: {
   meta?: { contentType?: string; fileName?: string };
 }): Promise<OptimizedImage> {
   const { buffer, cap, meta } = params;
-  const isPng = meta?.contentType === "image/png" || meta?.fileName?.toLowerCase().endsWith(".png");
+  const isPng =
+    meta?.contentType === "image/png" ||
+    meta?.fileName?.toLowerCase().endsWith(".png");
   const hasAlpha = isPng && (await hasAlphaChannel(buffer));
 
   if (hasAlpha) {
@@ -250,7 +278,10 @@ async function loadWebMediaInternal(
     try {
       mediaUrl = fileURLToPath(mediaUrl);
     } catch {
-      throw new LocalMediaAccessError("invalid-file-url", `Invalid file:// URL: ${mediaUrl}`);
+      throw new LocalMediaAccessError(
+        "invalid-file-url",
+        `Invalid file:// URL: ${mediaUrl}`,
+      );
     }
   }
 
@@ -289,12 +320,15 @@ async function loadWebMediaInternal(
   }): Promise<WebMediaResult> => {
     // If caller explicitly provides maxBytes, trust it (for channels that handle large files).
     // Otherwise fall back to per-kind defaults.
-    const cap = maxBytes !== undefined ? maxBytes : maxBytesForKind(params.kind);
+    const cap =
+      maxBytes !== undefined ? maxBytes : maxBytesForKind(params.kind);
     if (params.kind === "image") {
       const isGif = params.contentType === "image/gif";
       if (isGif || !optimizeImages) {
         if (params.buffer.length > cap) {
-          throw new Error(formatCapLimit(isGif ? "GIF" : "Media", cap, params.buffer.length));
+          throw new Error(
+            formatCapLimit(isGif ? "GIF" : "Media", cap, params.buffer.length),
+          );
         }
         return {
           buffer: params.buffer,
@@ -331,7 +365,11 @@ async function loadWebMediaInternal(
         : optimizeImages
           ? Math.max(maxBytes, defaultFetchCap)
           : maxBytes;
-    const fetched = await fetchRemoteMedia({ url: mediaUrl, maxBytes: fetchCap, ssrfPolicy });
+    const fetched = await fetchRemoteMedia({
+      url: mediaUrl,
+      maxBytes: fetchCap,
+      ssrfPolicy,
+    });
     const { buffer, contentType, fileName } = fetched;
     const kind = mediaKindFromMime(contentType);
     return await clampAndFinalize({ buffer, contentType, kind, fileName });
@@ -364,9 +402,13 @@ async function loadWebMediaInternal(
     } catch (err) {
       if (err instanceof SafeOpenError) {
         if (err.code === "not-found") {
-          throw new LocalMediaAccessError("not-found", `Local media file not found: ${mediaUrl}`, {
-            cause: err,
-          });
+          throw new LocalMediaAccessError(
+            "not-found",
+            `Local media file not found: ${mediaUrl}`,
+            {
+              cause: err,
+            },
+          );
         }
         if (err.code === "not-file") {
           throw new LocalMediaAccessError(
@@ -408,7 +450,11 @@ export async function loadWebMedia(
 ): Promise<WebMediaResult> {
   return await loadWebMediaInternal(
     mediaUrl,
-    resolveWebMediaOptions({ maxBytesOrOptions, options, optimizeImages: true }),
+    resolveWebMediaOptions({
+      maxBytesOrOptions,
+      options,
+      optimizeImages: true,
+    }),
   );
 }
 
@@ -419,7 +465,11 @@ export async function loadWebMediaRaw(
 ): Promise<WebMediaResult> {
   return await loadWebMediaInternal(
     mediaUrl,
-    resolveWebMediaOptions({ maxBytesOrOptions, options, optimizeImages: false }),
+    resolveWebMediaOptions({
+      maxBytesOrOptions,
+      options,
+      optimizeImages: false,
+    }),
   );
 }
 
@@ -439,7 +489,9 @@ export async function optimizeImageToJpeg(
     try {
       source = await convertHeicToJpeg(buffer);
     } catch (err) {
-      throw new Error(`HEIC image conversion failed: ${String(err)}`, { cause: err });
+      throw new Error(`HEIC image conversion failed: ${String(err)}`, {
+        cause: err,
+      });
     }
   }
   const sides = [2048, 1536, 1280, 1024, 800];

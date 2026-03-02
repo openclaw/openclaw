@@ -12,7 +12,10 @@ import { agentCommand } from "./agent.js";
 
 const loadConfigSpy = vi.spyOn(configModule, "loadConfig");
 const runEmbeddedPiAgentSpy = vi.spyOn(embeddedModule, "runEmbeddedPiAgent");
-const getAcpSessionManagerSpy = vi.spyOn(acpManagerModule, "getAcpSessionManager");
+const getAcpSessionManagerSpy = vi.spyOn(
+  acpManagerModule,
+  "getAcpSessionManager",
+);
 
 const runtime: RuntimeEnv = {
   log: vi.fn(),
@@ -97,7 +100,9 @@ function writeAcpSessionStore(storePath: string) {
 function resolveReadySession(
   sessionKey: string,
   agent = "codex",
-): ReturnType<ReturnType<typeof acpManagerModule.getAcpSessionManager>["resolveSession"]> {
+): ReturnType<
+  ReturnType<typeof acpManagerModule.getAcpSessionManager>["resolveSession"]
+> {
   return {
     kind: "ready",
     sessionKey,
@@ -117,7 +122,9 @@ function mockAcpManager(params: {
   resolveSession?: (params: {
     cfg: OpenClawConfig;
     sessionKey: string;
-  }) => ReturnType<ReturnType<typeof acpManagerModule.getAcpSessionManager>["resolveSession"]>;
+  }) => ReturnType<
+    ReturnType<typeof acpManagerModule.getAcpSessionManager>["resolveSession"]
+  >;
 }) {
   getAcpSessionManagerSpy.mockReturnValue({
     runTurn: params.runTurn,
@@ -141,11 +148,16 @@ async function runAcpSessionWithPolicyOverrides(params: {
     const runTurn = vi.fn(async (_params: unknown) => {});
     mockAcpManager({
       runTurn: (input: unknown) => runTurn(input),
-      ...(params.resolveSession ? { resolveSession: params.resolveSession } : {}),
+      ...(params.resolveSession
+        ? { resolveSession: params.resolveSession }
+        : {}),
     });
 
     await expect(
-      agentCommand({ message: "ping", sessionKey: "agent:codex:acp:test" }, runtime),
+      agentCommand(
+        { message: "ping", sessionKey: "agent:codex:acp:test" },
+        runtime,
+      ),
     ).rejects.toMatchObject({
       code: "ACP_DISPATCH_DISABLED",
     });
@@ -173,7 +185,11 @@ describe("agentCommand ACP runtime routing", () => {
 
       const runTurn = vi.fn(async (paramsUnknown: unknown) => {
         const params = paramsUnknown as {
-          onEvent?: (event: { type: string; text?: string; stopReason?: string }) => Promise<void>;
+          onEvent?: (event: {
+            type: string;
+            text?: string;
+            stopReason?: string;
+          }) => Promise<void>;
         };
         await params.onEvent?.({ type: "text_delta", text: "ACP_" });
         await params.onEvent?.({ type: "text_delta", text: "OK" });
@@ -184,7 +200,10 @@ describe("agentCommand ACP runtime routing", () => {
         runTurn: (params: unknown) => runTurn(params),
       });
 
-      await agentCommand({ message: "ping", sessionKey: "agent:codex:acp:test" }, runtime);
+      await agentCommand(
+        { message: "ping", sessionKey: "agent:codex:acp:test" },
+        runtime,
+      );
 
       expect(runTurn).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -196,7 +215,9 @@ describe("agentCommand ACP runtime routing", () => {
       expect(runEmbeddedPiAgentSpy).not.toHaveBeenCalled();
       const hasAckLog = vi
         .mocked(runtime.log)
-        .mock.calls.some(([first]) => typeof first === "string" && first.includes("ACP_OK"));
+        .mock.calls.some(
+          ([first]) => typeof first === "string" && first.includes("ACP_OK"),
+        );
       expect(hasAckLog).toBe(true);
     });
   });
@@ -236,7 +257,10 @@ describe("agentCommand ACP runtime routing", () => {
       });
 
       await expect(
-        agentCommand({ message: "ping", sessionKey: "agent:codex:acp:stale" }, runtime),
+        agentCommand(
+          { message: "ping", sessionKey: "agent:codex:acp:stale" },
+          runtime,
+        ),
       ).rejects.toMatchObject({
         code: "ACP_SESSION_INIT_FAILED",
         message: expect.stringContaining("ACP metadata is missing"),
@@ -249,7 +273,9 @@ describe("agentCommand ACP runtime routing", () => {
   it.each([
     {
       name: "blocks ACP turns when ACP is disabled by policy",
-      acpOverrides: { enabled: false } satisfies Partial<NonNullable<OpenClawConfig["acp"]>>,
+      acpOverrides: { enabled: false } satisfies Partial<
+        NonNullable<OpenClawConfig["acp"]>
+      >,
     },
     {
       name: "blocks ACP turns when ACP dispatch is disabled by policy",
@@ -272,11 +298,15 @@ describe("agentCommand ACP runtime routing", () => {
       const runTurn = vi.fn(async (_params: unknown) => {});
       mockAcpManager({
         runTurn: (params: unknown) => runTurn(params),
-        resolveSession: ({ sessionKey }) => resolveReadySession(sessionKey, "codex"),
+        resolveSession: ({ sessionKey }) =>
+          resolveReadySession(sessionKey, "codex"),
       });
 
       await expect(
-        agentCommand({ message: "ping", sessionKey: "agent:codex:acp:test" }, runtime),
+        agentCommand(
+          { message: "ping", sessionKey: "agent:codex:acp:test" },
+          runtime,
+        ),
       ).rejects.toMatchObject({
         code: "ACP_SESSION_INIT_FAILED",
         message: expect.stringContaining("not allowed by policy"),

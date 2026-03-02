@@ -340,7 +340,9 @@ describe("config strict validation", () => {
         const snap = await readConfigFileSnapshot();
         expect(snap.valid).toBe(false);
         expect(snap.legacyIssues).toHaveLength(0);
-        expect(snap.issues.some((issue) => issue.path === "gateway.bind")).toBe(true);
+        expect(snap.issues.some((issue) => issue.path === "gateway.bind")).toBe(
+          true,
+        );
       } finally {
         if (prev === undefined) {
           delete process.env.OPENCLAW_BIND;
@@ -365,7 +367,9 @@ describe("config strict validation", () => {
 
       const snap = await readConfigFileSnapshot();
       expect(snap.valid).toBe(false);
-      expect(snap.legacyIssues.some((issue) => issue.path === "gateway.bind")).toBe(true);
+      expect(
+        snap.legacyIssues.some((issue) => issue.path === "gateway.bind"),
+      ).toBe(true);
     });
   });
 });

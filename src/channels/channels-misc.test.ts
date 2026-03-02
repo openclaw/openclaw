@@ -16,15 +16,31 @@ describe("channel-web barrel", () => {
 });
 
 describe("normalizeChatType", () => {
-  const cases: Array<{ name: string; value: string | undefined; expected: string | undefined }> = [
+  const cases: Array<{
+    name: string;
+    value: string | undefined;
+    expected: string | undefined;
+  }> = [
     { name: "normalizes direct", value: "direct", expected: "direct" },
     { name: "normalizes dm alias", value: "dm", expected: "direct" },
     { name: "normalizes group", value: "group", expected: "group" },
     { name: "normalizes channel", value: "channel", expected: "channel" },
-    { name: "returns undefined for undefined", value: undefined, expected: undefined },
+    {
+      name: "returns undefined for undefined",
+      value: undefined,
+      expected: undefined,
+    },
     { name: "returns undefined for empty", value: "", expected: undefined },
-    { name: "returns undefined for unknown value", value: "nope", expected: undefined },
-    { name: "returns undefined for unsupported room", value: "room", expected: undefined },
+    {
+      name: "returns undefined for unknown value",
+      value: "nope",
+      expected: undefined,
+    },
+    {
+      name: "returns undefined for unsupported room",
+      value: "room",
+      expected: undefined,
+    },
   ];
 
   for (const testCase of cases) {

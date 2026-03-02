@@ -15,7 +15,9 @@ function makeMessage(id: number, size: number): AgentMessage {
 }
 
 function makeMessages(count: number, size: number): AgentMessage[] {
-  return Array.from({ length: count }, (_, index) => makeMessage(index + 1, size));
+  return Array.from({ length: count }, (_, index) =>
+    makeMessage(index + 1, size),
+  );
 }
 
 function pruneLargeSimpleHistory() {
@@ -45,7 +47,9 @@ describe("splitMessagesByTokenShare", () => {
     const messages = makeMessages(6, 4000);
 
     const parts = splitMessagesByTokenShare(messages, 3);
-    expect(parts.flat().map((msg) => msg.timestamp)).toEqual(messages.map((msg) => msg.timestamp));
+    expect(parts.flat().map((msg) => msg.timestamp)).toEqual(
+      messages.map((msg) => msg.timestamp),
+    );
   });
 });
 
@@ -54,7 +58,9 @@ describe("pruneHistoryForContextShare", () => {
     const { pruned, maxContextTokens } = pruneLargeSimpleHistory();
 
     expect(pruned.droppedChunks).toBeGreaterThan(0);
-    expect(pruned.keptTokens).toBeLessThanOrEqual(Math.floor(maxContextTokens * 0.5));
+    expect(pruned.keptTokens).toBeLessThanOrEqual(
+      Math.floor(maxContextTokens * 0.5),
+    );
     expect(pruned.messages.length).toBeGreaterThan(0);
   });
 
@@ -70,7 +76,9 @@ describe("pruneHistoryForContextShare", () => {
     });
 
     const keptIds = pruned.messages.map((msg) => msg.timestamp);
-    const expectedSuffix = messages.slice(-keptIds.length).map((msg) => msg.timestamp);
+    const expectedSuffix = messages
+      .slice(-keptIds.length)
+      .map((msg) => msg.timestamp);
     expect(keptIds).toEqual(expectedSuffix);
   });
 
@@ -106,7 +114,9 @@ describe("pruneHistoryForContextShare", () => {
       ...pruned.droppedMessagesList.map((m) => m.timestamp),
       ...pruned.messages.map((m) => m.timestamp),
     ].toSorted((a, b) => a - b);
-    const originalIds = messages.map((m) => m.timestamp).toSorted((a, b) => a - b);
+    const originalIds = messages
+      .map((m) => m.timestamp)
+      .toSorted((a, b) => a - b);
     expect(allIds).toEqual(originalIds);
   });
 
@@ -134,7 +144,12 @@ describe("pruneHistoryForContextShare", () => {
         role: "assistant",
         content: [
           { type: "text", text: "x".repeat(4000) },
-          { type: "toolCall", id: "call_123", name: "test_tool", arguments: {} },
+          {
+            type: "toolCall",
+            id: "call_123",
+            name: "test_tool",
+            arguments: {},
+          },
         ],
         timestamp: 1,
       } as unknown as AgentMessage,
@@ -168,7 +183,9 @@ describe("pruneHistoryForContextShare", () => {
     // The orphan count should be reflected in droppedMessages
     // (orphaned tool_results are dropped but not added to droppedMessagesList
     // since they lack context for summarization)
-    expect(pruned.droppedMessages).toBeGreaterThan(pruned.droppedMessagesList.length);
+    expect(pruned.droppedMessages).toBeGreaterThan(
+      pruned.droppedMessagesList.length,
+    );
   });
 
   it("keeps tool_result when its tool_use is also kept", () => {
@@ -185,7 +202,12 @@ describe("pruneHistoryForContextShare", () => {
         role: "assistant",
         content: [
           { type: "text", text: "y".repeat(500) },
-          { type: "toolCall", id: "call_456", name: "kept_tool", arguments: {} },
+          {
+            type: "toolCall",
+            id: "call_456",
+            name: "kept_tool",
+            arguments: {},
+          },
         ],
         timestamp: 2,
       } as unknown as AgentMessage,
@@ -255,7 +277,9 @@ describe("pruneHistoryForContextShare", () => {
     });
 
     // No orphaned tool_results should be in kept messages
-    const keptToolResults = pruned.messages.filter((m) => m.role === "toolResult");
+    const keptToolResults = pruned.messages.filter(
+      (m) => m.role === "toolResult",
+    );
     expect(keptToolResults).toHaveLength(0);
 
     // The orphan count should reflect both dropped tool_results

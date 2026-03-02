@@ -3,9 +3,15 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
-import { emitAgentEvent, registerAgentRunContext } from "../infra/agent-events.js";
+import {
+  emitAgentEvent,
+  registerAgentRunContext,
+} from "../infra/agent-events.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../utils/message-channel.js";
 import {
   connectOk,
   getReplyFromConfig,
@@ -49,9 +55,9 @@ describe("gateway server chat", () => {
       idempotencyKey: "idem-null-byte-1",
     });
     expect(nullByteRes.ok).toBe(false);
-    expect((nullByteRes.error as { message?: string } | undefined)?.message ?? "").toMatch(
-      /null bytes/i,
-    );
+    expect(
+      (nullByteRes.error as { message?: string } | undefined)?.message ?? "",
+    ).toMatch(/null bytes/i);
 
     const spy = vi.mocked(getReplyFromConfig);
     spy.mockClear();
@@ -115,7 +121,9 @@ describe("gateway server chat", () => {
       expect(timeoutRes.ok).toBe(true);
 
       await waitFor(() => spyCalls.length > callsBeforeTimeout);
-      const timeoutCall = spyCalls.at(-1)?.[1] as { runId?: string } | undefined;
+      const timeoutCall = spyCalls.at(-1)?.[1] as
+        | { runId?: string }
+        | undefined;
       expect(timeoutCall?.runId).toBe("idem-timeout-1");
       testState.agentConfig = undefined;
 
@@ -127,7 +135,9 @@ describe("gateway server chat", () => {
       expect(sessionRes.ok).toBe(true);
       expect(sessionRes.payload?.runId).toBe("idem-session-key-1");
 
-      const sendPolicyDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+      const sendPolicyDir = await fs.mkdtemp(
+        path.join(os.tmpdir(), "openclaw-gw-"),
+      );
       tempDirs.push(sendPolicyDir);
       testState.sessionStorePath = path.join(sendPolicyDir, "sessions.json");
       testState.sessionConfig = {
@@ -159,14 +169,16 @@ describe("gateway server chat", () => {
         idempotencyKey: "idem-1",
       });
       expect(blockedRes.ok).toBe(false);
-      expect((blockedRes.error as { message?: string } | undefined)?.message ?? "").toMatch(
-        /send blocked/i,
-      );
+      expect(
+        (blockedRes.error as { message?: string } | undefined)?.message ?? "",
+      ).toMatch(/send blocked/i);
 
       testState.sessionStorePath = undefined;
       testState.sessionConfig = undefined;
 
-      const agentBlockedDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+      const agentBlockedDir = await fs.mkdtemp(
+        path.join(os.tmpdir(), "openclaw-gw-"),
+      );
       tempDirs.push(agentBlockedDir);
       testState.sessionStorePath = path.join(agentBlockedDir, "sessions.json");
       testState.sessionConfig = {
@@ -191,9 +203,10 @@ describe("gateway server chat", () => {
         idempotencyKey: "idem-2",
       });
       expect(agentBlockedRes.ok).toBe(false);
-      expect((agentBlockedRes.error as { message?: string } | undefined)?.message ?? "").toMatch(
-        /send blocked/i,
-      );
+      expect(
+        (agentBlockedRes.error as { message?: string } | undefined)?.message ??
+          "",
+      ).toMatch(/send blocked/i);
 
       testState.sessionStorePath = undefined;
       testState.sessionConfig = undefined;
@@ -260,7 +273,9 @@ describe("gateway server chat", () => {
       expect(imgOnlyRes.ok).toBe(true);
       expect(imgOnlyRes.payload?.runId).toBeDefined();
 
-      const historyDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+      const historyDir = await fs.mkdtemp(
+        path.join(os.tmpdir(), "openclaw-gw-"),
+      );
       tempDirs.push(historyDir);
       testState.sessionStorePath = path.join(historyDir, "sessions.json");
       await writeSessionStore({
@@ -284,11 +299,19 @@ describe("gateway server chat", () => {
           }),
         );
       }
-      await fs.writeFile(path.join(historyDir, "sess-main.jsonl"), lines.join("\n"), "utf-8");
+      await fs.writeFile(
+        path.join(historyDir, "sess-main.jsonl"),
+        lines.join("\n"),
+        "utf-8",
+      );
 
-      const defaultRes = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
-        sessionKey: "main",
-      });
+      const defaultRes = await rpcReq<{ messages?: unknown[] }>(
+        ws,
+        "chat.history",
+        {
+          sessionKey: "main",
+        },
+      );
       expect(defaultRes.ok).toBe(true);
       const defaultMsgs = defaultRes.payload?.messages ?? [];
       expect(defaultMsgs.length).toBe(200);
@@ -300,7 +323,9 @@ describe("gateway server chat", () => {
       if (webchatWs) {
         webchatWs.close();
       }
-      await Promise.all(tempDirs.map((dir) => fs.rm(dir, { recursive: true, force: true })));
+      await Promise.all(
+        tempDirs.map((dir) => fs.rm(dir, { recursive: true, force: true })),
+      );
     }
   });
 
@@ -378,7 +403,10 @@ describe("gateway server chat", () => {
       {
         const agentEvtP = onceMessage(
           webchatWs,
-          (o) => o.type === "event" && o.event === "agent" && o.payload?.runId === "run-tool-1",
+          (o) =>
+            o.type === "event" &&
+            o.event === "agent" &&
+            o.payload?.runId === "run-tool-1",
           8000,
         );
 
@@ -389,7 +417,8 @@ describe("gateway server chat", () => {
         });
 
         const evt = await agentEvtP;
-        const payload = evt.payload && typeof evt.payload === "object" ? evt.payload : {};
+        const payload =
+          evt.payload && typeof evt.payload === "object" ? evt.payload : {};
         expect(payload.sessionKey).toBe("main");
         expect(payload.stream).toBe("assistant");
       }

@@ -1,4 +1,7 @@
-import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
+import type {
+  ApplyAuthChoiceParams,
+  ApplyAuthChoiceResult,
+} from "./auth-choice.apply.js";
 import { applyAuthChoicePluginProvider } from "./auth-choice.apply.plugin-provider.js";
 
 export async function applyAuthChoiceGoogleGeminiCli(
@@ -23,7 +26,10 @@ export async function applyAuthChoiceGoogleGeminiCli(
   });
 
   if (!proceed) {
-    await params.prompter.note("Skipped Google Gemini CLI OAuth setup.", "Setup skipped");
+    await params.prompter.note(
+      "Skipped Google Gemini CLI OAuth setup.",
+      "Setup skipped",
+    );
     return { config: params.config };
   }
 

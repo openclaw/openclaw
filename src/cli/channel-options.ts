@@ -36,7 +36,9 @@ function loadPrecomputedChannelOptions(): string[] | null {
     const parsed = JSON.parse(raw) as { channelOptions?: unknown };
     if (Array.isArray(parsed.channelOptions)) {
       precomputedChannelOptions = dedupe(
-        parsed.channelOptions.filter((value): value is string => typeof value === "string"),
+        parsed.channelOptions.filter(
+          (value): value is string => typeof value === "string",
+        ),
       );
       return precomputedChannelOptions;
     }

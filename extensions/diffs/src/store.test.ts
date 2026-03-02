@@ -71,9 +71,9 @@ describe("DiffArtifactStore", () => {
       fileCount: 1,
     });
 
-    await expect(store.updateFilePath(artifact.id, "../outside.png")).rejects.toThrow(
-      "escapes store root",
-    );
+    await expect(
+      store.updateFilePath(artifact.id, "../outside.png"),
+    ).rejects.toThrow("escapes store root");
   });
 
   it("rejects tampered html metadata paths outside the store root", async () => {
@@ -89,7 +89,9 @@ describe("DiffArtifactStore", () => {
     meta.htmlPath = "../outside.html";
     await fs.writeFile(metaPath, JSON.stringify(meta), "utf8");
 
-    await expect(store.readHtml(artifact.id)).rejects.toThrow("escapes store root");
+    await expect(store.readHtml(artifact.id)).rejects.toThrow(
+      "escapes store root",
+    );
   });
 
   it("creates standalone file artifacts with managed metadata", async () => {
@@ -113,7 +115,9 @@ describe("DiffArtifactStore", () => {
     vi.setSystemTime(new Date(now.getTime() + 2_000));
     await store.cleanupExpired();
 
-    await expect(fs.stat(path.dirname(standalone.filePath))).rejects.toMatchObject({
+    await expect(
+      fs.stat(path.dirname(standalone.filePath)),
+    ).rejects.toMatchObject({
       code: "ENOENT",
     });
   });
@@ -145,7 +149,9 @@ describe("DiffArtifactStore", () => {
     });
 
     const artifactPdf = store.allocateFilePath(artifact.id, "pdf");
-    const standalonePdf = await store.createStandaloneFileArtifact({ format: "pdf" });
+    const standalonePdf = await store.createStandaloneFileArtifact({
+      format: "pdf",
+    });
     expect(artifactPdf).toMatch(/preview\.pdf$/);
     expect(standalonePdf.filePath).toMatch(/preview\.pdf$/);
   });

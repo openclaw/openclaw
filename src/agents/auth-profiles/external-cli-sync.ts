@@ -9,9 +9,16 @@ import {
   MINIMAX_CLI_PROFILE_ID,
   log,
 } from "./constants.js";
-import type { AuthProfileCredential, AuthProfileStore, OAuthCredential } from "./types.js";
+import type {
+  AuthProfileCredential,
+  AuthProfileStore,
+  OAuthCredential,
+} from "./types.js";
 
-function shallowEqualOAuthCredentials(a: OAuthCredential | undefined, b: OAuthCredential): boolean {
+function shallowEqualOAuthCredentials(
+  a: OAuthCredential | undefined,
+  b: OAuthCredential,
+): boolean {
   if (!a) {
     return false;
   }
@@ -30,7 +37,10 @@ function shallowEqualOAuthCredentials(a: OAuthCredential | undefined, b: OAuthCr
   );
 }
 
-function isExternalProfileFresh(cred: AuthProfileCredential | undefined, now: number): boolean {
+function isExternalProfileFresh(
+  cred: AuthProfileCredential | undefined,
+  now: number,
+): boolean {
   if (!cred) {
     return false;
   }
@@ -56,7 +66,9 @@ function syncExternalCliCredentialsForProvider(
 ): boolean {
   const existing = store.profiles[profileId];
   const shouldSync =
-    !existing || existing.provider !== provider || !isExternalProfileFresh(existing, now);
+    !existing ||
+    existing.provider !== provider ||
+    !isExternalProfileFresh(existing, now);
   const creds = shouldSync ? readCredentials() : null;
   if (!creds) {
     return false;
@@ -108,7 +120,10 @@ export function syncExternalCliCredentials(store: AuthProfileStore): boolean {
       existingOAuth.expires <= now ||
       qwenCreds.expires > existingOAuth.expires;
 
-    if (shouldUpdate && !shallowEqualOAuthCredentials(existingOAuth, qwenCreds)) {
+    if (
+      shouldUpdate &&
+      !shallowEqualOAuthCredentials(existingOAuth, qwenCreds)
+    ) {
       store.profiles[QWEN_CLI_PROFILE_ID] = qwenCreds;
       mutated = true;
       log.info("synced qwen credentials from qwen cli", {
@@ -124,7 +139,8 @@ export function syncExternalCliCredentials(store: AuthProfileStore): boolean {
       store,
       MINIMAX_CLI_PROFILE_ID,
       "minimax-portal",
-      () => readMiniMaxCliCredentialsCached({ ttlMs: EXTERNAL_CLI_SYNC_TTL_MS }),
+      () =>
+        readMiniMaxCliCredentialsCached({ ttlMs: EXTERNAL_CLI_SYNC_TTL_MS }),
       now,
     )
   ) {

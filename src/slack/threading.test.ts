@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { resolveSlackThreadContext, resolveSlackThreadTargets } from "./threading.js";
+import {
+  resolveSlackThreadContext,
+  resolveSlackThreadTargets,
+} from "./threading.js";
 
 describe("resolveSlackThreadTargets", () => {
   it("threads replies when message is already threaded", () => {
@@ -46,15 +49,16 @@ describe("resolveSlackThreadTargets", () => {
   });
 
   it("does not treat auto-created top-level thread_ts as a real thread when mode is off", () => {
-    const { replyThreadTs, statusThreadTs, isThreadReply } = resolveSlackThreadTargets({
-      replyToMode: "off",
-      message: {
-        type: "message",
-        channel: "C1",
-        ts: "123",
-        thread_ts: "123",
-      },
-    });
+    const { replyThreadTs, statusThreadTs, isThreadReply } =
+      resolveSlackThreadTargets({
+        replyToMode: "off",
+        message: {
+          type: "message",
+          channel: "C1",
+          ts: "123",
+          thread_ts: "123",
+        },
+      });
 
     expect(isThreadReply).toBe(false);
     expect(replyThreadTs).toBeUndefined();
@@ -62,15 +66,16 @@ describe("resolveSlackThreadTargets", () => {
   });
 
   it("keeps first-mode behavior for auto-created top-level thread_ts", () => {
-    const { replyThreadTs, statusThreadTs, isThreadReply } = resolveSlackThreadTargets({
-      replyToMode: "first",
-      message: {
-        type: "message",
-        channel: "C1",
-        ts: "123",
-        thread_ts: "123",
-      },
-    });
+    const { replyThreadTs, statusThreadTs, isThreadReply } =
+      resolveSlackThreadTargets({
+        replyToMode: "first",
+        message: {
+          type: "message",
+          channel: "C1",
+          ts: "123",
+          thread_ts: "123",
+        },
+      });
 
     expect(isThreadReply).toBe(false);
     expect(replyThreadTs).toBeUndefined();

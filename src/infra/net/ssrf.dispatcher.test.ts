@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 
 const { agentCtor } = vi.hoisted(() => ({
-  agentCtor: vi.fn(function MockAgent(this: { options: unknown }, options: unknown) {
+  agentCtor: vi.fn(function MockAgent(
+    this: { options: unknown },
+    options: unknown,
+  ) {
     this.options = options;
   }),
 }));

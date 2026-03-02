@@ -34,7 +34,10 @@ export const BLOCKED_HOST_PATHS = [
 
 const BLOCKED_SECCOMP_PROFILES = new Set(["unconfined"]);
 const BLOCKED_APPARMOR_PROFILES = new Set(["unconfined"]);
-const RESERVED_CONTAINER_TARGET_PATHS = ["/workspace", SANDBOX_AGENT_WORKSPACE_MOUNT];
+const RESERVED_CONTAINER_TARGET_PATHS = [
+  "/workspace",
+  SANDBOX_AGENT_WORKSPACE_MOUNT,
+];
 
 export type ValidateBindMountsOptions = {
   allowedSourceRoots?: string[];
@@ -50,7 +53,11 @@ export type BlockedBindReason =
   | { kind: "targets"; blockedPath: string }
   | { kind: "covers"; blockedPath: string }
   | { kind: "non_absolute"; sourcePath: string }
-  | { kind: "outside_allowed_roots"; sourcePath: string; allowedRoots: string[] }
+  | {
+      kind: "outside_allowed_roots";
+      sourcePath: string;
+      allowedRoots: string[];
+    }
   | { kind: "reserved_target"; targetPath: string; reservedPath: string };
 
 type ParsedBindSpec = {
@@ -103,12 +110,17 @@ export function getBlockedBindReason(bind: string): BlockedBindReason | null {
   return getBlockedReasonForSourcePath(normalized);
 }
 
-export function getBlockedReasonForSourcePath(sourceNormalized: string): BlockedBindReason | null {
+export function getBlockedReasonForSourcePath(
+  sourceNormalized: string,
+): BlockedBindReason | null {
   if (sourceNormalized === "/") {
     return { kind: "covers", blockedPath: "/" };
   }
   for (const blocked of BLOCKED_HOST_PATHS) {
-    if (sourceNormalized === blocked || sourceNormalized.startsWith(blocked + "/")) {
+    if (
+      sourceNormalized === blocked ||
+      sourceNormalized.startsWith(blocked + "/")
+    ) {
       return { kind: "targets", blockedPath: blocked };
     }
   }
@@ -192,13 +204,19 @@ function enforceSourcePathPolicy(params: {
   if (params.allowSourcesOutsideAllowedRoots) {
     return;
   }
-  const allowedReason = getOutsideAllowedRootsReason(params.sourcePath, params.allowedRoots);
+  const allowedReason = getOutsideAllowedRootsReason(
+    params.sourcePath,
+    params.allowedRoots,
+  );
   if (allowedReason) {
     throw formatBindBlockedError({ bind: params.bind, reason: allowedReason });
   }
 }
 
-function formatBindBlockedError(params: { bind: string; reason: BlockedBindReason }): Error {
+function formatBindBlockedError(params: {
+  bind: string;
+  reason: BlockedBindReason;
+}): Error {
   if (params.reason.kind === "non_absolute") {
     return new Error(
       `Sandbox security: bind mount "${params.bind}" uses a non-absolute source path ` +
@@ -266,16 +284,19 @@ export function validateBindMounts(
       bind,
       sourcePath: sourceNormalized,
       allowedRoots,
-      allowSourcesOutsideAllowedRoots: options?.allowSourcesOutsideAllowedRoots === true,
+      allowSourcesOutsideAllowedRoots:
+        options?.allowSourcesOutsideAllowedRoots === true,
     });
 
     // Symlink escape hardening: resolve through existing ancestors and re-check.
-    const sourceCanonical = resolveSandboxHostPathViaExistingAncestor(sourceNormalized);
+    const sourceCanonical =
+      resolveSandboxHostPathViaExistingAncestor(sourceNormalized);
     enforceSourcePathPolicy({
       bind,
       sourcePath: sourceCanonical,
       allowedRoots,
-      allowSourcesOutsideAllowedRoots: options?.allowSourcesOutsideAllowedRoots === true,
+      allowSourcesOutsideAllowedRoots:
+        options?.allowSourcesOutsideAllowedRoots === true,
     });
   }
 }
@@ -336,7 +357,8 @@ export function validateSandboxSecurity(
 ): void {
   validateBindMounts(cfg.binds, cfg);
   validateNetworkMode(cfg.network, {
-    allowContainerNamespaceJoin: cfg.dangerouslyAllowContainerNamespaceJoin === true,
+    allowContainerNamespaceJoin:
+      cfg.dangerouslyAllowContainerNamespaceJoin === true,
   });
   validateSeccompProfile(cfg.seccompProfile);
   validateApparmorProfile(cfg.apparmorProfile);

@@ -34,13 +34,13 @@ export async function loadChatHistory(state: ChatState) {
   state.chatLoading = true;
   state.lastError = null;
   try {
-    const res = await state.client.request<{ messages?: Array<unknown>; thinkingLevel?: string }>(
-      "chat.history",
-      {
-        sessionKey: state.sessionKey,
-        limit: 200,
-      },
-    );
+    const res = await state.client.request<{
+      messages?: Array<unknown>;
+      thinkingLevel?: string;
+    }>("chat.history", {
+      sessionKey: state.sessionKey,
+      limit: 200,
+    });
     state.chatMessages = Array.isArray(res.messages) ? res.messages : [];
     state.chatThinkingLevel = res.thinkingLevel ?? null;
   } catch (err) {
@@ -50,7 +50,9 @@ export async function loadChatHistory(state: ChatState) {
   }
 }
 
-function dataUrlToBase64(dataUrl: string): { content: string; mimeType: string } | null {
+function dataUrlToBase64(
+  dataUrl: string,
+): { content: string; mimeType: string } | null {
   const match = /^data:([^;]+);base64,(.+)$/.exec(dataUrl);
   if (!match) {
     return null;
@@ -75,7 +77,9 @@ function normalizeAssistantMessage(
   const candidate = message as Record<string, unknown>;
   const roleValue = candidate.role;
   if (typeof roleValue === "string") {
-    const role = options.roleCaseSensitive ? roleValue : roleValue.toLowerCase();
+    const role = options.roleCaseSensitive
+      ? roleValue
+      : roleValue.toLowerCase();
     if (role !== "assistant") {
       return null;
     }
@@ -86,13 +90,18 @@ function normalizeAssistantMessage(
   if (options.requireContentArray) {
     return Array.isArray(candidate.content) ? candidate : null;
   }
-  if (!("content" in candidate) && !(options.allowTextField && "text" in candidate)) {
+  if (
+    !("content" in candidate) &&
+    !(options.allowTextField && "text" in candidate)
+  ) {
     return null;
   }
   return candidate;
 }
 
-function normalizeAbortedAssistantMessage(message: unknown): Record<string, unknown> | null {
+function normalizeAbortedAssistantMessage(
+  message: unknown,
+): Record<string, unknown> | null {
   return normalizeAssistantMessage(message, {
     roleRequirement: "required",
     roleCaseSensitive: true,
@@ -100,7 +109,9 @@ function normalizeAbortedAssistantMessage(message: unknown): Record<string, unkn
   });
 }
 
-function normalizeFinalAssistantMessage(message: unknown): Record<string, unknown> | null {
+function normalizeFinalAssistantMessage(
+  message: unknown,
+): Record<string, unknown> | null {
   return normalizeAssistantMessage(message, {
     roleRequirement: "optional",
     allowTextField: true,
@@ -124,7 +135,11 @@ export async function sendChatMessage(
   const now = Date.now();
 
   // Build user message content blocks
-  const contentBlocks: Array<{ type: string; text?: string; source?: unknown }> = [];
+  const contentBlocks: Array<{
+    type: string;
+    text?: string;
+    source?: unknown;
+  }> = [];
   if (msg) {
     contentBlocks.push({ type: "text", text: msg });
   }
@@ -208,7 +223,9 @@ export async function abortChatRun(state: ChatState): Promise<boolean> {
   try {
     await state.client.request(
       "chat.abort",
-      runId ? { sessionKey: state.sessionKey, runId } : { sessionKey: state.sessionKey },
+      runId
+        ? { sessionKey: state.sessionKey, runId }
+        : { sessionKey: state.sessionKey },
     );
     return true;
   } catch (err) {

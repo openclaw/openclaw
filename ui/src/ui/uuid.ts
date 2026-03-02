@@ -1,6 +1,8 @@
 export type CryptoLike = {
   randomUUID?: (() => string) | undefined;
-  getRandomValues?: (<T extends Exclude<BufferSource, ArrayBuffer>>(array: T) => T) | undefined;
+  getRandomValues?:
+    | (<T extends Exclude<BufferSource, ArrayBuffer>>(array: T) => T)
+    | undefined;
 };
 
 let warnedWeakCrypto = false;
@@ -41,7 +43,9 @@ function warnWeakCryptoOnce() {
   console.warn("[uuid] crypto API missing; falling back to weak randomness");
 }
 
-export function generateUUID(cryptoLike: CryptoLike | null = globalThis.crypto): string {
+export function generateUUID(
+  cryptoLike: CryptoLike | null = globalThis.crypto,
+): string {
   if (cryptoLike && typeof cryptoLike.randomUUID === "function") {
     return cryptoLike.randomUUID();
   }

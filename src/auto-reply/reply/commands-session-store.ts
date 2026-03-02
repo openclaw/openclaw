@@ -1,11 +1,16 @@
 import type { SessionEntry } from "../../config/sessions.js";
 import { updateSessionStore } from "../../config/sessions.js";
-import { applyAbortCutoffToSessionEntry, type AbortCutoff } from "./abort-cutoff.js";
+import {
+  applyAbortCutoffToSessionEntry,
+  type AbortCutoff,
+} from "./abort-cutoff.js";
 import type { CommandHandler } from "./commands-types.js";
 
 type CommandParams = Parameters<CommandHandler>[0];
 
-export async function persistSessionEntry(params: CommandParams): Promise<boolean> {
+export async function persistSessionEntry(
+  params: CommandParams,
+): Promise<boolean> {
   if (!params.sessionEntry || !params.sessionStore || !params.sessionKey) {
     return false;
   }

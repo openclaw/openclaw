@@ -1,7 +1,14 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, expectTypeOf, it } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  expectTypeOf,
+  it,
+} from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { DiscordProbe } from "../../discord/probe.js";
 import type { DiscordTokenResolution } from "../../discord/token.js";
@@ -18,7 +25,10 @@ import {
   createOutboundTestPlugin,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
-import { getChannelPluginCatalogEntry, listChannelPluginCatalogEntries } from "./catalog.js";
+import {
+  getChannelPluginCatalogEntry,
+  listChannelPluginCatalogEntries,
+} from "./catalog.js";
 import { resolveChannelConfigWrites } from "./config-writes.js";
 import {
   listDiscordDirectoryGroupsFromConfig,
@@ -33,7 +43,11 @@ import {
 import { listChannelPlugins } from "./index.js";
 import { loadChannelPlugin } from "./load.js";
 import { loadChannelOutboundAdapter } from "./outbound/load.js";
-import type { ChannelDirectoryEntry, ChannelOutboundAdapter, ChannelPlugin } from "./types.js";
+import type {
+  ChannelDirectoryEntry,
+  ChannelOutboundAdapter,
+  ChannelPlugin,
+} from "./types.js";
 import type { BaseProbeResult, BaseTokenResolution } from "./types.js";
 
 describe("channel plugin registry", () => {
@@ -116,9 +130,9 @@ describe("channel plugin catalog", () => {
       }),
     );
 
-    const ids = listChannelPluginCatalogEntries({ catalogPaths: [catalogPath] }).map(
-      (entry) => entry.id,
-    );
+    const ids = listChannelPluginCatalogEntries({
+      catalogPaths: [catalogPath],
+    }).map((entry) => entry.id);
     expect(ids).toContain("demo-channel");
   });
 });
@@ -162,7 +176,11 @@ const mstNoOutboundPlugin = createChannelTestPluginBase({
 });
 
 const registryWithMSTeamsNoOutbound = createTestRegistry([
-  { pluginId: "msteams", plugin: mstNoOutboundPlugin, source: "test-no-outbound" },
+  {
+    pluginId: "msteams",
+    plugin: mstNoOutboundPlugin,
+    source: "test-no-outbound",
+  },
 ]);
 
 function makeSlackConfigWritesCfg(accountIdKey: string) {
@@ -185,7 +203,10 @@ type DirectoryListFn = (params: {
   limit?: number | null;
 }) => Promise<ChannelDirectoryEntry[]>;
 
-async function listDirectoryEntriesWithDefaults(listFn: DirectoryListFn, cfg: OpenClawConfig) {
+async function listDirectoryEntriesWithDefaults(
+  listFn: DirectoryListFn,
+  cfg: OpenClawConfig,
+) {
   return await listFn({
     cfg,
     accountId: "default",
@@ -292,12 +313,24 @@ describe("resolveChannelConfigWrites", () => {
 
   it("account override wins over channel default", () => {
     const cfg = makeSlackConfigWritesCfg("work");
-    expect(resolveChannelConfigWrites({ cfg, channelId: "slack", accountId: "work" })).toBe(false);
+    expect(
+      resolveChannelConfigWrites({
+        cfg,
+        channelId: "slack",
+        accountId: "work",
+      }),
+    ).toBe(false);
   });
 
   it("matches account ids case-insensitively", () => {
     const cfg = makeSlackConfigWritesCfg("Work");
-    expect(resolveChannelConfigWrites({ cfg, channelId: "slack", accountId: "work" })).toBe(false);
+    expect(
+      resolveChannelConfigWrites({
+        cfg,
+        channelId: "slack",
+        accountId: "work",
+      }),
+    ).toBe(false);
   });
 });
 
@@ -322,7 +355,9 @@ describe("directory (config-backed)", () => {
       ["user:u123", "user:u234", "user:u777", "user:u999"],
       { sorted: true },
     );
-    await expectDirectoryIds(listSlackDirectoryGroupsFromConfig, cfg, ["channel:c111"]);
+    await expectDirectoryIds(listSlackDirectoryGroupsFromConfig, cfg, [
+      "channel:c111",
+    ]);
   });
 
   it("lists Discord peers/groups from config (numeric ids only)", async () => {
@@ -383,7 +418,9 @@ describe("directory (config-backed)", () => {
         sorted: true,
       },
     );
-    await expectDirectoryIds(listTelegramDirectoryGroupsFromConfig, cfg, ["-1001"]);
+    await expectDirectoryIds(listTelegramDirectoryGroupsFromConfig, cfg, [
+      "-1001",
+    ]);
   });
 
   it("lists WhatsApp peers/groups from config", async () => {
@@ -397,8 +434,12 @@ describe("directory (config-backed)", () => {
       // oxlint-disable-next-line typescript/no-explicit-any
     } as any;
 
-    await expectDirectoryIds(listWhatsAppDirectoryPeersFromConfig, cfg, ["+15550000000"]);
-    await expectDirectoryIds(listWhatsAppDirectoryGroupsFromConfig, cfg, ["999@g.us"]);
+    await expectDirectoryIds(listWhatsAppDirectoryPeersFromConfig, cfg, [
+      "+15550000000",
+    ]);
+    await expectDirectoryIds(listWhatsAppDirectoryGroupsFromConfig, cfg, [
+      "999@g.us",
+    ]);
   });
 
   it("applies query and limit filtering for config-backed directories", async () => {
@@ -441,7 +482,9 @@ describe("directory (config-backed)", () => {
       limit: 2,
     });
     expect(slackPeers).toHaveLength(2);
-    expect(slackPeers.every((entry) => entry.id.startsWith("user:u"))).toBe(true);
+    expect(slackPeers.every((entry) => entry.id.startsWith("user:u"))).toBe(
+      true,
+    );
 
     const discordGroups = await listDiscordDirectoryGroupsFromConfig({
       cfg,

@@ -14,8 +14,16 @@ function makeStoreWithProfiles(): AuthProfileStore {
   return {
     version: 1,
     profiles: {
-      "anthropic:default": { type: "api_key", provider: "anthropic", key: "sk-1" },
-      "anthropic:secondary": { type: "api_key", provider: "anthropic", key: "sk-2" },
+      "anthropic:default": {
+        type: "api_key",
+        provider: "anthropic",
+        key: "sk-1",
+      },
+      "anthropic:secondary": {
+        type: "api_key",
+        provider: "anthropic",
+        key: "sk-2",
+      },
       "openai:default": { type: "api_key", provider: "openai", key: "sk-oi" },
     },
     usageStats: {},
@@ -44,7 +52,9 @@ describe("resolveAuthProfileOrder — cooldown auto-expiry", () => {
 
     // Error state should have been reset
     expect(store.usageStats?.["anthropic:default"]?.errorCount).toBe(0);
-    expect(store.usageStats?.["anthropic:default"]?.cooldownUntil).toBeUndefined();
+    expect(
+      store.usageStats?.["anthropic:default"]?.cooldownUntil,
+    ).toBeUndefined();
   });
 
   it("places profile with expired cooldown in available list (explicit-order path)", () => {
@@ -64,7 +74,9 @@ describe("resolveAuthProfileOrder — cooldown auto-expiry", () => {
     expect(order).toContain("anthropic:default");
 
     // Expired cooldown cleared
-    expect(store.usageStats?.["anthropic:default"]?.cooldownUntil).toBeUndefined();
+    expect(
+      store.usageStats?.["anthropic:default"]?.cooldownUntil,
+    ).toBeUndefined();
     expect(store.usageStats?.["anthropic:default"]?.errorCount).toBe(0);
   });
 
@@ -105,7 +117,9 @@ describe("resolveAuthProfileOrder — cooldown auto-expiry", () => {
     // the next cooldown will be 60 seconds (errorCount 1) instead of
     // 1 hour (errorCount 5). This is the core fix for #3604.
     expect(store.usageStats?.["anthropic:default"]?.errorCount).toBe(0);
-    expect(store.usageStats?.["anthropic:default"]?.failureCounts).toBeUndefined();
+    expect(
+      store.usageStats?.["anthropic:default"]?.failureCounts,
+    ).toBeUndefined();
   });
 
   it("mixed active and expired cooldowns across profiles", () => {
@@ -124,11 +138,15 @@ describe("resolveAuthProfileOrder — cooldown auto-expiry", () => {
     const order = resolveAuthProfileOrder({ store, provider: "anthropic" });
 
     // anthropic:default should be available (expired, cleared)
-    expect(store.usageStats?.["anthropic:default"]?.cooldownUntil).toBeUndefined();
+    expect(
+      store.usageStats?.["anthropic:default"]?.cooldownUntil,
+    ).toBeUndefined();
     expect(store.usageStats?.["anthropic:default"]?.errorCount).toBe(0);
 
     // anthropic:secondary should still be in cooldown
-    expect(store.usageStats?.["anthropic:secondary"]?.cooldownUntil).toBeGreaterThan(Date.now());
+    expect(
+      store.usageStats?.["anthropic:secondary"]?.cooldownUntil,
+    ).toBeGreaterThan(Date.now());
     expect(store.usageStats?.["anthropic:secondary"]?.errorCount).toBe(2);
 
     // Available profile should come first

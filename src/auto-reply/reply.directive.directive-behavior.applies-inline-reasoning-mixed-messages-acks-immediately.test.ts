@@ -2,7 +2,11 @@ import "./reply.directive.directive-behavior.e2e-mocks.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { loadSessionStore, resolveSessionKey, saveSessionStore } from "../config/sessions.js";
+import {
+  loadSessionStore,
+  resolveSessionKey,
+  saveSessionStore,
+} from "../config/sessions.js";
 import {
   installDirectiveBehaviorE2EHooks,
   makeEmbeddedTextResult,
@@ -15,7 +19,11 @@ import {
 } from "./reply.directive.directive-behavior.e2e-harness.js";
 import { getReplyFromConfig } from "./reply.js";
 
-async function writeSkill(params: { workspaceDir: string; name: string; description: string }) {
+async function writeSkill(params: {
+  workspaceDir: string;
+  name: string;
+  description: string;
+}) {
   const { workspaceDir, name, description } = params;
   const skillDir = path.join(workspaceDir, "skills", name);
   await fs.mkdir(skillDir, { recursive: true });
@@ -35,12 +43,18 @@ async function runThinkingDirective(home: string, model: string) {
       CommandAuthorized: true,
     },
     {},
-    makeWhatsAppDirectiveConfig(home, { model }, { session: { store: sessionStorePath(home) } }),
+    makeWhatsAppDirectiveConfig(
+      home,
+      { model },
+      { session: { store: sessionStorePath(home) } },
+    ),
   );
   return replyTexts(res);
 }
 
-async function runThinkDirectiveAndGetText(home: string): Promise<string | undefined> {
+async function runThinkDirectiveAndGetText(
+  home: string,
+): Promise<string | undefined> {
   const res = await getReplyFromConfig(
     { Body: "/think", From: "+1222", To: "+1222", CommandAuthorized: true },
     {},
@@ -132,13 +146,22 @@ async function runInFlightVerboseToggleCase(params: {
 
   if (params.seedVerboseOn) {
     await getReplyFromConfig(
-      { Body: "/verbose on", From: ctx.From, To: ctx.To, CommandAuthorized: true },
+      {
+        Body: "/verbose on",
+        From: ctx.From,
+        To: ctx.To,
+        CommandAuthorized: true,
+      },
       {},
       makeRunConfig(params.home, storePath),
     );
   }
 
-  const res = await getReplyFromConfig(ctx, {}, makeRunConfig(params.home, storePath));
+  const res = await getReplyFromConfig(
+    ctx,
+    {},
+    makeRunConfig(params.home, storePath),
+  );
   return { res };
 }
 
@@ -176,14 +199,26 @@ describe("directive behavior", () => {
       const storePath = sessionStorePath(home);
 
       const enabledRes = await getReplyFromConfig(
-        { Body: "/verbose on", From: "+1222", To: "+1222", CommandAuthorized: true },
+        {
+          Body: "/verbose on",
+          From: "+1222",
+          To: "+1222",
+          CommandAuthorized: true,
+        },
         {},
-        makeWhatsAppDirectiveConfig(home, { model: "anthropic/claude-opus-4-5" }),
+        makeWhatsAppDirectiveConfig(home, {
+          model: "anthropic/claude-opus-4-5",
+        }),
       );
       expect(replyText(enabledRes)).toMatch(/^⚙️ Verbose logging enabled\./);
 
       const disabledRes = await getReplyFromConfig(
-        { Body: "/verbose off", From: "+1222", To: "+1222", CommandAuthorized: true },
+        {
+          Body: "/verbose off",
+          From: "+1222",
+          To: "+1222",
+          CommandAuthorized: true,
+        },
         {},
         makeWhatsAppDirectiveConfig(
           home,
@@ -230,14 +265,19 @@ describe("directive behavior", () => {
     await withTempHome(async (home) => {
       const text = await runThinkDirectiveAndGetText(home);
       expect(text).toContain("Current thinking level: high");
-      expect(text).toContain("Options: off, minimal, low, medium, high, adaptive.");
+      expect(text).toContain(
+        "Options: off, minimal, low, medium, high, adaptive.",
+      );
 
       for (const model of ["openai-codex/gpt-5.2-codex", "openai/gpt-5.2"]) {
         const texts = await runThinkingDirective(home, model);
         expect(texts).toContain("Thinking level set to xhigh.");
       }
 
-      const unsupportedModelTexts = await runThinkingDirective(home, "openai/gpt-4.1-mini");
+      const unsupportedModelTexts = await runThinkingDirective(
+        home,
+        "openai/gpt-4.1-mini",
+      );
       expect(unsupportedModelTexts).toContain(
         'Thinking level "xhigh" is only supported for openai/gpt-5.2, openai-codex/gpt-5.3-codex, openai-codex/gpt-5.3-codex-spark, openai-codex/gpt-5.2-codex, openai-codex/gpt-5.1-codex, github-copilot/gpt-5.2-codex or github-copilot/gpt-5.2.',
       );
@@ -302,7 +342,8 @@ describe("directive behavior", () => {
       );
 
       expect(runEmbeddedPiAgent).toHaveBeenCalled();
-      const prompt = vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0]?.prompt ?? "";
+      const prompt =
+        vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0]?.prompt ?? "";
       expect(prompt).toContain('Use the "demo-skill" skill');
     });
   });

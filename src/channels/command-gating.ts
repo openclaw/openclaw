@@ -3,7 +3,10 @@ export type CommandAuthorizer = {
   allowed: boolean;
 };
 
-export type CommandGatingModeWhenAccessGroupsOff = "allow" | "deny" | "configured";
+export type CommandGatingModeWhenAccessGroupsOff =
+  | "allow"
+  | "deny"
+  | "configured";
 
 export function resolveCommandAuthorizedFromAuthorizers(params: {
   useAccessGroups: boolean;
@@ -40,6 +43,7 @@ export function resolveControlCommandGate(params: {
     authorizers: params.authorizers,
     modeWhenAccessGroupsOff: params.modeWhenAccessGroupsOff,
   });
-  const shouldBlock = params.allowTextCommands && params.hasControlCommand && !commandAuthorized;
+  const shouldBlock =
+    params.allowTextCommands && params.hasControlCommand && !commandAuthorized;
   return { commandAuthorized, shouldBlock };
 }

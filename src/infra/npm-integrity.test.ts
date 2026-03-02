@@ -10,7 +10,10 @@ describe("resolveNpmIntegrityDrift", () => {
       resolveNpmIntegrityDrift({
         spec: "@openclaw/test@1.0.0",
         expectedIntegrity: "sha512-same",
-        resolution: { integrity: "sha512-same", resolvedAt: "2026-01-01T00:00:00.000Z" },
+        resolution: {
+          integrity: "sha512-same",
+          resolvedAt: "2026-01-01T00:00:00.000Z",
+        },
         createPayload: () => "unused",
       }),
     ).resolves.toEqual({ proceed: true });

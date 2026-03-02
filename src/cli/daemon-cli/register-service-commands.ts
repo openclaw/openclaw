@@ -25,7 +25,10 @@ function resolveInstallOptions(
   };
 }
 
-function resolveRpcOptions(cmdOpts: GatewayRpcOpts, command?: Command): GatewayRpcOpts {
+function resolveRpcOptions(
+  cmdOpts: GatewayRpcOpts,
+  command?: Command,
+): GatewayRpcOpts {
   const parentToken = inheritOptionFromParent<string>(command, "token");
   const parentPassword = inheritOptionFromParent<string>(command, "password");
   return {
@@ -35,11 +38,20 @@ function resolveRpcOptions(cmdOpts: GatewayRpcOpts, command?: Command): GatewayR
   };
 }
 
-export function addGatewayServiceCommands(parent: Command, opts?: { statusDescription?: string }) {
+export function addGatewayServiceCommands(
+  parent: Command,
+  opts?: { statusDescription?: string },
+) {
   parent
     .command("status")
-    .description(opts?.statusDescription ?? "Show gateway service status + probe the Gateway")
-    .option("--url <url>", "Gateway WebSocket URL (defaults to config/remote/local)")
+    .description(
+      opts?.statusDescription ??
+        "Show gateway service status + probe the Gateway",
+    )
+    .option(
+      "--url <url>",
+      "Gateway WebSocket URL (defaults to config/remote/local)",
+    )
     .option("--token <token>", "Gateway token (if required)")
     .option("--password <password>", "Gateway password (password auth)")
     .option("--timeout <ms>", "Timeout in ms", "10000")

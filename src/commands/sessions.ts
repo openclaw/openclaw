@@ -1,7 +1,10 @@
 import { lookupContextTokens } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 import { loadConfig } from "../config/config.js";
-import { loadSessionStore, resolveFreshSessionTotalTokens } from "../config/sessions.js";
+import {
+  loadSessionStore,
+  resolveFreshSessionTotalTokens,
+} from "../config/sessions.js";
 import { classifySessionKey } from "../gateway/session-utils.js";
 import { info } from "../globals.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
@@ -31,7 +34,8 @@ const AGENT_PAD = 10;
 const KIND_PAD = 6;
 const TOKENS_PAD = 20;
 
-const formatKTokens = (value: number) => `${(value / 1000).toFixed(value >= 10_000 ? 0 : 1)}k`;
+const formatKTokens = (value: number) =>
+  `${(value / 1000).toFixed(value >= 10_000 ? 0 : 1)}k`;
 
 const colorByPct = (label: string, pct: number | null, rich: boolean) => {
   if (!rich || pct === null) {
@@ -57,11 +61,15 @@ const formatTokensCell = (
   if (total === undefined) {
     const ctxLabel = contextTokens ? formatKTokens(contextTokens) : "?";
     const label = `unknown/${ctxLabel} (?%)`;
-    return rich ? theme.muted(label.padEnd(TOKENS_PAD)) : label.padEnd(TOKENS_PAD);
+    return rich
+      ? theme.muted(label.padEnd(TOKENS_PAD))
+      : label.padEnd(TOKENS_PAD);
   }
   const totalLabel = formatKTokens(total);
   const ctxLabel = contextTokens ? formatKTokens(contextTokens) : "?";
-  const pct = contextTokens ? Math.min(999, Math.round((total / contextTokens) * 100)) : null;
+  const pct = contextTokens
+    ? Math.min(999, Math.round((total / contextTokens) * 100))
+    : null;
   const label = `${totalLabel}/${ctxLabel} (${pct ?? "?"}%)`;
   const padded = label.padEnd(TOKENS_PAD);
   return colorByPct(padded, pct, rich);
@@ -85,7 +93,13 @@ const formatKindCell = (kind: SessionRow["kind"], rich: boolean) => {
 };
 
 export async function sessionsCommand(
-  opts: { json?: boolean; store?: string; active?: string; agent?: string; allAgents?: boolean },
+  opts: {
+    json?: boolean;
+    store?: string;
+    active?: string;
+    agent?: string;
+    allAgents?: boolean;
+  },
   runtime: RuntimeEnv,
 ) {
   const aggregateAgents = opts.allAgents === true;
@@ -161,9 +175,14 @@ export async function sessionsCommand(
               ...r,
               totalTokens: resolveFreshSessionTotalTokens(r) ?? null,
               totalTokensFresh:
-                typeof r.totalTokens === "number" ? r.totalTokensFresh !== false : false,
+                typeof r.totalTokens === "number"
+                  ? r.totalTokensFresh !== false
+                  : false,
               contextTokens:
-                r.contextTokens ?? lookupContextTokens(model) ?? configContextTokens ?? null,
+                r.contextTokens ??
+                lookupContextTokens(model) ??
+                configContextTokens ??
+                null,
               model,
             };
           }),
@@ -179,7 +198,9 @@ export async function sessionsCommand(
     runtime.log(info(`Session store: ${targets[0]?.storePath}`));
   } else {
     runtime.log(
-      info(`Session stores: ${targets.length} (${targets.map((t) => t.agentId).join(", ")})`),
+      info(
+        `Session stores: ${targets.length} (${targets.map((t) => t.agentId).join(", ")})`,
+      ),
     );
   }
   runtime.log(info(`Sessions listed: ${rows.length}`));
@@ -207,12 +228,17 @@ export async function sessionsCommand(
 
   for (const row of rows) {
     const model = resolveSessionDisplayModel(cfg, row, displayDefaults);
-    const contextTokens = row.contextTokens ?? lookupContextTokens(model) ?? configContextTokens;
+    const contextTokens =
+      row.contextTokens ?? lookupContextTokens(model) ?? configContextTokens;
     const total = resolveFreshSessionTotalTokens(row);
 
     const line = [
       ...(showAgentColumn
-        ? [rich ? theme.accentBright(row.agentId.padEnd(AGENT_PAD)) : row.agentId.padEnd(AGENT_PAD)]
+        ? [
+            rich
+              ? theme.accentBright(row.agentId.padEnd(AGENT_PAD))
+              : row.agentId.padEnd(AGENT_PAD),
+          ]
         : []),
       formatKindCell(row.kind, rich),
       formatSessionKeyCell(row.key, rich),

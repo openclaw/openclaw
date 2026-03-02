@@ -35,7 +35,10 @@ export function mockOpenAICodexTemplateModel(): void {
 
 export function buildOpenAICodexForwardCompatExpectation(
   id: string = "gpt-5.3-codex",
-): Partial<typeof OPENAI_CODEX_TEMPLATE_MODEL> & { provider: string; id: string } {
+): Partial<typeof OPENAI_CODEX_TEMPLATE_MODEL> & {
+  provider: string;
+  id: string;
+} {
   return {
     provider: "openai-codex",
     id,

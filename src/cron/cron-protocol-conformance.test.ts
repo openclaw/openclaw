@@ -29,12 +29,21 @@ function extractDeliveryModes(schema: SchemaLike): string[] {
   return Array.from(new Set(unionModes));
 }
 
-const UI_FILES = ["ui/src/ui/types.ts", "ui/src/ui/ui-types.ts", "ui/src/ui/views/cron.ts"];
+const UI_FILES = [
+  "ui/src/ui/types.ts",
+  "ui/src/ui/ui-types.ts",
+  "ui/src/ui/views/cron.ts",
+];
 
 const SWIFT_MODEL_CANDIDATES = [`${MACOS_APP_SOURCES_DIR}/CronModels.swift`];
-const SWIFT_STATUS_CANDIDATES = [`${MACOS_APP_SOURCES_DIR}/GatewayConnection.swift`];
+const SWIFT_STATUS_CANDIDATES = [
+  `${MACOS_APP_SOURCES_DIR}/GatewayConnection.swift`,
+];
 
-async function resolveSwiftFiles(cwd: string, candidates: string[]): Promise<string[]> {
+async function resolveSwiftFiles(
+  cwd: string,
+  candidates: string[],
+): Promise<string[]> {
   const matches: string[] = [];
   for (const relPath of candidates) {
     try {
@@ -45,7 +54,9 @@ async function resolveSwiftFiles(cwd: string, candidates: string[]): Promise<str
     }
   }
   if (matches.length === 0) {
-    throw new Error(`Missing Swift cron definition. Tried: ${candidates.join(", ")}`);
+    throw new Error(
+      `Missing Swift cron definition. Tried: ${candidates.join(", ")}`,
+    );
   }
   return matches;
 }
@@ -59,30 +70,42 @@ describe("cron protocol conformance", () => {
     for (const relPath of UI_FILES) {
       const content = await fs.readFile(path.join(cwd, relPath), "utf-8");
       for (const mode of modes) {
-        expect(content.includes(`"${mode}"`), `${relPath} missing delivery mode ${mode}`).toBe(
-          true,
-        );
+        expect(
+          content.includes(`"${mode}"`),
+          `${relPath} missing delivery mode ${mode}`,
+        ).toBe(true);
       }
     }
 
-    const swiftModelFiles = await resolveSwiftFiles(cwd, SWIFT_MODEL_CANDIDATES);
+    const swiftModelFiles = await resolveSwiftFiles(
+      cwd,
+      SWIFT_MODEL_CANDIDATES,
+    );
     for (const relPath of swiftModelFiles) {
       const content = await fs.readFile(path.join(cwd, relPath), "utf-8");
       for (const mode of modes) {
         const pattern = new RegExp(`\\bcase\\s+${mode}\\b`);
-        expect(pattern.test(content), `${relPath} missing case ${mode}`).toBe(true);
+        expect(pattern.test(content), `${relPath} missing case ${mode}`).toBe(
+          true,
+        );
       }
     }
   });
 
   it("cron status shape matches gateway fields in UI + Swift", async () => {
     const cwd = process.cwd();
-    const uiTypes = await fs.readFile(path.join(cwd, "ui/src/ui/types.ts"), "utf-8");
+    const uiTypes = await fs.readFile(
+      path.join(cwd, "ui/src/ui/types.ts"),
+      "utf-8",
+    );
     expect(uiTypes.includes("export type CronStatus")).toBe(true);
     expect(uiTypes.includes("jobs:")).toBe(true);
     expect(uiTypes.includes("jobCount")).toBe(false);
 
-    const [swiftRelPath] = await resolveSwiftFiles(cwd, SWIFT_STATUS_CANDIDATES);
+    const [swiftRelPath] = await resolveSwiftFiles(
+      cwd,
+      SWIFT_STATUS_CANDIDATES,
+    );
     const swiftPath = path.join(cwd, swiftRelPath);
     const swift = await fs.readFile(swiftPath, "utf-8");
     expect(swift.includes("struct CronSchedulerStatus")).toBe(true);

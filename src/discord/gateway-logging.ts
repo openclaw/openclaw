@@ -20,7 +20,11 @@ const formatGatewayMetrics = (metrics: unknown) => {
   if (typeof metrics === "string") {
     return metrics;
   }
-  if (typeof metrics === "number" || typeof metrics === "boolean" || typeof metrics === "bigint") {
+  if (
+    typeof metrics === "number" ||
+    typeof metrics === "boolean" ||
+    typeof metrics === "bigint"
+  ) {
     return String(metrics);
   }
   try {

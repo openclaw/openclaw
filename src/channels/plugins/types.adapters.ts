@@ -1,7 +1,10 @@
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { GroupToolPolicyConfig } from "../../config/types.tools.js";
-import type { OutboundDeliveryResult, OutboundSendDeps } from "../../infra/outbound/deliver.js";
+import type {
+  OutboundDeliveryResult,
+  OutboundSendDeps,
+} from "../../infra/outbound/deliver.js";
 import type { OutboundIdentity } from "../../infra/outbound/identity.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type {
@@ -50,19 +53,34 @@ export type ChannelSetupAdapter = {
 
 export type ChannelConfigAdapter<ResolvedAccount> = {
   listAccountIds: (cfg: OpenClawConfig) => string[];
-  resolveAccount: (cfg: OpenClawConfig, accountId?: string | null) => ResolvedAccount;
+  resolveAccount: (
+    cfg: OpenClawConfig,
+    accountId?: string | null,
+  ) => ResolvedAccount;
   defaultAccountId?: (cfg: OpenClawConfig) => string;
   setAccountEnabled?: (params: {
     cfg: OpenClawConfig;
     accountId: string;
     enabled: boolean;
   }) => OpenClawConfig;
-  deleteAccount?: (params: { cfg: OpenClawConfig; accountId: string }) => OpenClawConfig;
+  deleteAccount?: (params: {
+    cfg: OpenClawConfig;
+    accountId: string;
+  }) => OpenClawConfig;
   isEnabled?: (account: ResolvedAccount, cfg: OpenClawConfig) => boolean;
   disabledReason?: (account: ResolvedAccount, cfg: OpenClawConfig) => string;
-  isConfigured?: (account: ResolvedAccount, cfg: OpenClawConfig) => boolean | Promise<boolean>;
-  unconfiguredReason?: (account: ResolvedAccount, cfg: OpenClawConfig) => string;
-  describeAccount?: (account: ResolvedAccount, cfg: OpenClawConfig) => ChannelAccountSnapshot;
+  isConfigured?: (
+    account: ResolvedAccount,
+    cfg: OpenClawConfig,
+  ) => boolean | Promise<boolean>;
+  unconfiguredReason?: (
+    account: ResolvedAccount,
+    cfg: OpenClawConfig,
+  ) => string;
+  describeAccount?: (
+    account: ResolvedAccount,
+    cfg: OpenClawConfig,
+  ) => ChannelAccountSnapshot;
   resolveAllowFrom?: (params: {
     cfg: OpenClawConfig;
     accountId?: string | null;
@@ -81,7 +99,9 @@ export type ChannelConfigAdapter<ResolvedAccount> = {
 export type ChannelGroupAdapter = {
   resolveRequireMention?: (params: ChannelGroupContext) => boolean | undefined;
   resolveGroupIntroHint?: (params: ChannelGroupContext) => string | undefined;
-  resolveToolPolicy?: (params: ChannelGroupContext) => GroupToolPolicyConfig | undefined;
+  resolveToolPolicy?: (
+    params: ChannelGroupContext,
+  ) => GroupToolPolicyConfig | undefined;
 };
 
 export type ChannelOutboundContext = {
@@ -116,13 +136,19 @@ export type ChannelOutboundAdapter = {
     accountId?: string | null;
     mode?: ChannelOutboundTargetMode;
   }) => { ok: true; to: string } | { ok: false; error: Error };
-  sendPayload?: (ctx: ChannelOutboundPayloadContext) => Promise<OutboundDeliveryResult>;
+  sendPayload?: (
+    ctx: ChannelOutboundPayloadContext,
+  ) => Promise<OutboundDeliveryResult>;
   sendText?: (ctx: ChannelOutboundContext) => Promise<OutboundDeliveryResult>;
   sendMedia?: (ctx: ChannelOutboundContext) => Promise<OutboundDeliveryResult>;
   sendPoll?: (ctx: ChannelPollContext) => Promise<ChannelPollResult>;
 };
 
-export type ChannelStatusAdapter<ResolvedAccount, Probe = unknown, Audit = unknown> = {
+export type ChannelStatusAdapter<
+  ResolvedAccount,
+  Probe = unknown,
+  Audit = unknown,
+> = {
   defaultRuntime?: ChannelAccountSnapshot;
   buildChannelSummary?: (params: {
     account: ResolvedAccount;
@@ -160,7 +186,9 @@ export type ChannelStatusAdapter<ResolvedAccount, Probe = unknown, Audit = unkno
     configured: boolean;
     enabled: boolean;
   }) => ChannelAccountState;
-  collectStatusIssues?: (accounts: ChannelAccountSnapshot[]) => ChannelStatusIssue[];
+  collectStatusIssues?: (
+    accounts: ChannelAccountSnapshot[],
+  ) => ChannelStatusIssue[];
 };
 
 export type ChannelGatewayContext<ResolvedAccount = unknown> = {
@@ -209,7 +237,9 @@ export type ChannelPairingAdapter = {
 };
 
 export type ChannelGatewayAdapter<ResolvedAccount = unknown> = {
-  startAccount?: (ctx: ChannelGatewayContext<ResolvedAccount>) => Promise<unknown>;
+  startAccount?: (
+    ctx: ChannelGatewayContext<ResolvedAccount>,
+  ) => Promise<unknown>;
   stopAccount?: (ctx: ChannelGatewayContext<ResolvedAccount>) => Promise<void>;
   loginWithQrStart?: (params: {
     accountId?: string;
@@ -221,7 +251,9 @@ export type ChannelGatewayAdapter<ResolvedAccount = unknown> = {
     accountId?: string;
     timeoutMs?: number;
   }) => Promise<ChannelLoginWithQrWaitResult>;
-  logoutAccount?: (ctx: ChannelLogoutContext<ResolvedAccount>) => Promise<ChannelLogoutResult>;
+  logoutAccount?: (
+    ctx: ChannelLogoutContext<ResolvedAccount>,
+  ) => Promise<ChannelLogoutResult>;
 };
 
 export type ChannelAuthAdapter = {
@@ -240,7 +272,10 @@ export type ChannelHeartbeatAdapter = {
     accountId?: string | null;
     deps?: ChannelHeartbeatDeps;
   }) => Promise<{ ok: boolean; reason: string }>;
-  resolveRecipients?: (params: { cfg: OpenClawConfig; opts?: { to?: string; all?: boolean } }) => {
+  resolveRecipients?: (params: {
+    cfg: OpenClawConfig;
+    opts?: { to?: string; all?: boolean };
+  }) => {
     recipients: string[];
     source: string;
   };
@@ -269,11 +304,21 @@ type ChannelDirectoryListGroupMembersParams = {
 };
 
 export type ChannelDirectoryAdapter = {
-  self?: (params: ChannelDirectorySelfParams) => Promise<ChannelDirectoryEntry | null>;
-  listPeers?: (params: ChannelDirectoryListParams) => Promise<ChannelDirectoryEntry[]>;
-  listPeersLive?: (params: ChannelDirectoryListParams) => Promise<ChannelDirectoryEntry[]>;
-  listGroups?: (params: ChannelDirectoryListParams) => Promise<ChannelDirectoryEntry[]>;
-  listGroupsLive?: (params: ChannelDirectoryListParams) => Promise<ChannelDirectoryEntry[]>;
+  self?: (
+    params: ChannelDirectorySelfParams,
+  ) => Promise<ChannelDirectoryEntry | null>;
+  listPeers?: (
+    params: ChannelDirectoryListParams,
+  ) => Promise<ChannelDirectoryEntry[]>;
+  listPeersLive?: (
+    params: ChannelDirectoryListParams,
+  ) => Promise<ChannelDirectoryEntry[]>;
+  listGroups?: (
+    params: ChannelDirectoryListParams,
+  ) => Promise<ChannelDirectoryEntry[]>;
+  listGroupsLive?: (
+    params: ChannelDirectoryListParams,
+  ) => Promise<ChannelDirectoryEntry[]>;
   listGroupMembers?: (
     params: ChannelDirectoryListGroupMembersParams,
   ) => Promise<ChannelDirectoryEntry[]>;
@@ -315,5 +360,7 @@ export type ChannelSecurityAdapter<ResolvedAccount = unknown> = {
   resolveDmPolicy?: (
     ctx: ChannelSecurityContext<ResolvedAccount>,
   ) => ChannelSecurityDmPolicy | null;
-  collectWarnings?: (ctx: ChannelSecurityContext<ResolvedAccount>) => Promise<string[]> | string[];
+  collectWarnings?: (
+    ctx: ChannelSecurityContext<ResolvedAccount>,
+  ) => Promise<string[]> | string[];
 };

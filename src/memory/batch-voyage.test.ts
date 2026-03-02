@@ -1,6 +1,9 @@
 import { ReadableStream } from "node:stream/web";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import type { VoyageBatchOutputLine, VoyageBatchRequest } from "./batch-voyage.js";
+import type {
+  VoyageBatchOutputLine,
+  VoyageBatchRequest,
+} from "./batch-voyage.js";
 import type { VoyageEmbeddingClient } from "./embeddings-voyage.js";
 
 // Mock internal.js if needed, but runWithConcurrency is simple enough to keep real.
@@ -68,11 +71,17 @@ describe("runVoyageEmbeddingBatches", () => {
     const outputLines: VoyageBatchOutputLine[] = [
       {
         custom_id: "req-1",
-        response: { status_code: 200, body: { data: [{ embedding: [0.1, 0.1] }] } },
+        response: {
+          status_code: 200,
+          body: { data: [{ embedding: [0.1, 0.1] }] },
+        },
       },
       {
         custom_id: "req-2",
-        response: { status_code: 200, body: { data: [{ embedding: [0.2, 0.2] }] } },
+        response: {
+          status_code: 200,
+          body: { data: [{ embedding: [0.2, 0.2] }] },
+        },
       },
     ];
 
@@ -132,11 +141,18 @@ describe("runVoyageEmbeddingBatches", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     // 1. Upload
-    fetchMock.mockResolvedValueOnce({ ok: true, json: async () => ({ id: "f1" }) });
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ id: "f1" }),
+    });
     // 2. Create (completed immediately)
     fetchMock.mockResolvedValueOnce({
       ok: true,
-      json: async () => ({ id: "b1", status: "completed", output_file_id: "out1" }),
+      json: async () => ({
+        id: "b1",
+        status: "completed",
+        output_file_id: "out1",
+      }),
     });
     // 3. Download Content (Streaming with chunks and newlines)
     const stream = new ReadableStream({

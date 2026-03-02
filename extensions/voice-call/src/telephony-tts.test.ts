@@ -14,7 +14,9 @@ function createCoreConfig(): CoreConfig {
   return { messages: { tts } };
 }
 
-async function mergeOverride(override: unknown): Promise<Record<string, unknown>> {
+async function mergeOverride(
+  override: unknown,
+): Promise<Record<string, unknown>> {
   let mergedConfig: CoreConfig | undefined;
   const provider = createTelephonyTtsProvider({
     coreConfig: createCoreConfig(),
@@ -57,18 +59,24 @@ describe("createTelephonyTtsProvider deepMerge hardening", () => {
     );
     const openai = tts.openai as Record<string, unknown>;
 
-    expect((Object.prototype as Record<string, unknown>).polluted).toBeUndefined();
+    expect(
+      (Object.prototype as Record<string, unknown>).polluted,
+    ).toBeUndefined();
     expect(tts.polluted).toBeUndefined();
     expect(openai.voice).toBe("coral");
   });
 
   it("blocks nested __proto__ keys", async () => {
     const tts = await mergeOverride(
-      JSON.parse('{"openai":{"model":"safe","__proto__":{"polluted":"nested"}}}'),
+      JSON.parse(
+        '{"openai":{"model":"safe","__proto__":{"polluted":"nested"}}}',
+      ),
     );
     const openai = tts.openai as Record<string, unknown>;
 
-    expect((Object.prototype as Record<string, unknown>).polluted).toBeUndefined();
+    expect(
+      (Object.prototype as Record<string, unknown>).polluted,
+    ).toBeUndefined();
     expect(openai.polluted).toBeUndefined();
     expect(openai.model).toBe("safe");
   });

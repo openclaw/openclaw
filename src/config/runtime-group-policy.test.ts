@@ -16,14 +16,18 @@ beforeEach(() => {
 describe("resolveRuntimeGroupPolicy", () => {
   it.each([
     {
-      title: "fails closed when provider config is missing and no defaults are set",
+      title:
+        "fails closed when provider config is missing and no defaults are set",
       params: { providerConfigPresent: false },
       expectedPolicy: "allowlist",
       expectedFallbackApplied: true,
     },
     {
       title: "keeps configured fallback when provider config is present",
-      params: { providerConfigPresent: true, configuredFallbackPolicy: "open" as const },
+      params: {
+        providerConfigPresent: true,
+        configuredFallbackPolicy: "open" as const,
+      },
       expectedPolicy: "open",
       expectedFallbackApplied: false,
     },
@@ -41,7 +45,9 @@ describe("resolveRuntimeGroupPolicy", () => {
   ])("$title", ({ params, expectedPolicy, expectedFallbackApplied }) => {
     const resolved = resolveRuntimeGroupPolicy(params);
     expect(resolved.groupPolicy).toBe(expectedPolicy);
-    expect(resolved.providerMissingFallbackApplied).toBe(expectedFallbackApplied);
+    expect(resolved.providerMissingFallbackApplied).toBe(
+      expectedFallbackApplied,
+    );
   });
 });
 

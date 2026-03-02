@@ -23,7 +23,9 @@ type TelegramMessageProcessorDeps = Omit<
   opts: Pick<TelegramBotOptions, "token">;
 };
 
-export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDeps) => {
+export const createTelegramMessageProcessor = (
+  deps: TelegramMessageProcessorDeps,
+) => {
   const {
     bot,
     cfg,

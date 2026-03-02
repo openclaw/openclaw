@@ -62,7 +62,10 @@ export async function assertBrowserNavigationAllowed(
   // can bypass strict destination-binding intent from pre-navigation DNS checks.
   // In strict mode, fail closed unless private-network navigation is explicitly
   // enabled by policy.
-  if (hasProxyEnvConfigured() && !isPrivateNetworkAllowedByPolicy(opts.ssrfPolicy)) {
+  if (
+    hasProxyEnvConfigured() &&
+    !isPrivateNetworkAllowedByPolicy(opts.ssrfPolicy)
+  ) {
     throw new InvalidBrowserNavigationUrlError(
       "Navigation blocked: strict browser SSRF policy cannot be enforced while env proxy variables are set",
     );

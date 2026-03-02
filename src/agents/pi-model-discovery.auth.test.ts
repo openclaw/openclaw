@@ -53,8 +53,12 @@ describe("discoverAuthStorage", () => {
       expect(authStorage.hasAuth("openrouter")).toBe(true);
       expect(authStorage.hasAuth("anthropic")).toBe(true);
       expect(authStorage.hasAuth("openai-codex")).toBe(true);
-      await expect(authStorage.getApiKey("openrouter")).resolves.toBe("sk-or-v1-runtime");
-      await expect(authStorage.getApiKey("anthropic")).resolves.toBe("sk-ant-runtime");
+      await expect(authStorage.getApiKey("openrouter")).resolves.toBe(
+        "sk-or-v1-runtime",
+      );
+      await expect(authStorage.getApiKey("anthropic")).resolves.toBe(
+        "sk-ant-runtime",
+      );
       expect(authStorage.get("openai-codex")).toMatchObject({
         type: "oauth",
         access: "oauth-access",
@@ -101,7 +105,9 @@ describe("discoverAuthStorage", () => {
 
       discoverAuthStorage(agentDir);
 
-      const parsed = JSON.parse(await fs.readFile(path.join(agentDir, "auth.json"), "utf8")) as {
+      const parsed = JSON.parse(
+        await fs.readFile(path.join(agentDir, "auth.json"), "utf8"),
+      ) as {
         [key: string]: unknown;
       };
       expect(parsed.openrouter).toBeUndefined();
@@ -145,10 +151,15 @@ describe("discoverAuthStorage", () => {
 
       discoverAuthStorage(agentDir);
 
-      const parsed = JSON.parse(await fs.readFile(path.join(agentDir, "auth.json"), "utf8")) as {
+      const parsed = JSON.parse(
+        await fs.readFile(path.join(agentDir, "auth.json"), "utf8"),
+      ) as {
         [key: string]: unknown;
       };
-      expect(parsed.openrouter).toMatchObject({ type: "api_key", key: "legacy-static-key" });
+      expect(parsed.openrouter).toMatchObject({
+        type: "api_key",
+        key: "legacy-static-key",
+      });
     } finally {
       if (previous === undefined) {
         delete process.env.OPENCLAW_AUTH_STORE_READONLY;

@@ -1,10 +1,22 @@
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import {
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "../../agents/agent-scope.js";
 import { listChannelPluginCatalogEntries } from "../../channels/plugins/catalog.js";
-import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
+import {
+  getChannelPlugin,
+  normalizeChannelId,
+} from "../../channels/plugins/index.js";
 import { moveSingleAccountChannelSectionToDefaultAccount } from "../../channels/plugins/setup-helpers.js";
-import type { ChannelId, ChannelSetupInput } from "../../channels/plugins/types.js";
+import type {
+  ChannelId,
+  ChannelSetupInput,
+} from "../../channels/plugins/types.js";
 import { writeConfigFile, type OpenClawConfig } from "../../config/config.js";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
+import {
+  DEFAULT_ACCOUNT_ID,
+  normalizeAccountId,
+} from "../../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { resolveTelegramAccount } from "../../telegram/accounts.js";
 import { deleteTelegramUpdateOffset } from "../../telegram/update-offset-store.js";
@@ -26,7 +38,10 @@ export type ChannelsAddOptions = {
   initialSyncLimit?: number | string;
   groupChannels?: string;
   dmAllowlist?: string;
-} & Omit<ChannelSetupInput, "groupChannels" | "dmAllowlist" | "initialSyncLimit">;
+} & Omit<
+  ChannelSetupInput,
+  "groupChannels" | "dmAllowlist" | "initialSyncLimit"
+>;
 
 function parseList(value: string | undefined): string[] | undefined {
   if (!value?.trim()) {
@@ -44,12 +59,16 @@ function resolveCatalogChannelEntry(raw: string, cfg: OpenClawConfig | null) {
   if (!trimmed) {
     return undefined;
   }
-  const workspaceDir = cfg ? resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg)) : undefined;
+  const workspaceDir = cfg
+    ? resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg))
+    : undefined;
   return listChannelPluginCatalogEntries({ workspaceDir }).find((entry) => {
     if (entry.id.toLowerCase() === trimmed) {
       return true;
     }
-    return (entry.meta.aliases ?? []).some((alias) => alias.trim().toLowerCase() === trimmed);
+    return (entry.meta.aliases ?? []).some(
+      (alias) => alias.trim().toLowerCase() === trimmed,
+    );
   });
 }
 
@@ -151,11 +170,18 @@ export async function channelsAddCommand(
             },
           ]);
           nextConfig = bindingResult.config;
-          if (bindingResult.added.length > 0 || bindingResult.updated.length > 0) {
+          if (
+            bindingResult.added.length > 0 ||
+            bindingResult.updated.length > 0
+          ) {
             await prompter.note(
               [
-                ...bindingResult.added.map((binding) => `Added: ${describeBinding(binding)}`),
-                ...bindingResult.updated.map((binding) => `Updated: ${describeBinding(binding)}`),
+                ...bindingResult.added.map(
+                  (binding) => `Added: ${describeBinding(binding)}`,
+                ),
+                ...bindingResult.updated.map(
+                  (binding) => `Updated: ${describeBinding(binding)}`,
+                ),
               ].join("\n"),
               "Routing bindings",
             );
@@ -183,11 +209,16 @@ export async function channelsAddCommand(
 
   const rawChannel = String(opts.channel ?? "");
   let channel = normalizeChannelId(rawChannel);
-  let catalogEntry = channel ? undefined : resolveCatalogChannelEntry(rawChannel, nextConfig);
+  let catalogEntry = channel
+    ? undefined
+    : resolveCatalogChannelEntry(rawChannel, nextConfig);
 
   if (!channel && catalogEntry) {
     const prompter = createClackPrompter();
-    const workspaceDir = resolveAgentWorkspaceDir(nextConfig, resolveDefaultAgentId(nextConfig));
+    const workspaceDir = resolveAgentWorkspaceDir(
+      nextConfig,
+      resolveDefaultAgentId(nextConfig),
+    );
     const result = await ensureOnboardingPluginInstalled({
       cfg: nextConfig,
       entry: catalogEntry,
@@ -200,7 +231,8 @@ export async function channelsAddCommand(
       return;
     }
     reloadOnboardingPluginRegistry({ cfg: nextConfig, runtime, workspaceDir });
-    channel = normalizeChannelId(catalogEntry.id) ?? (catalogEntry.id as ChannelId);
+    channel =
+      normalizeChannelId(catalogEntry.id) ?? (catalogEntry.id as ChannelId);
   }
 
   if (!channel) {
@@ -222,7 +254,8 @@ export async function channelsAddCommand(
   const initialSyncLimit =
     typeof opts.initialSyncLimit === "number"
       ? opts.initialSyncLimit
-      : typeof opts.initialSyncLimit === "string" && opts.initialSyncLimit.trim()
+      : typeof opts.initialSyncLimit === "string" &&
+          opts.initialSyncLimit.trim()
         ? Number.parseInt(opts.initialSyncLimit, 10)
         : undefined;
   const groupChannels = parseList(opts.groupChannels);
@@ -299,7 +332,10 @@ export async function channelsAddCommand(
   });
 
   if (channel === "telegram") {
-    const nextTelegramToken = resolveTelegramAccount({ cfg: nextConfig, accountId }).token.trim();
+    const nextTelegramToken = resolveTelegramAccount({
+      cfg: nextConfig,
+      accountId,
+    }).token.trim();
     if (previousTelegramToken !== nextTelegramToken) {
       // Clear stale polling offsets after Telegram token rotation.
       await deleteTelegramUpdateOffset({ accountId });

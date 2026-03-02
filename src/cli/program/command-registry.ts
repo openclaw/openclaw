@@ -55,7 +55,8 @@ const coreEntries: CoreCliEntry[] = [
     commands: [
       {
         name: "onboard",
-        description: "Interactive onboarding wizard for gateway, workspace, and skills",
+        description:
+          "Interactive onboarding wizard for gateway, workspace, and skills",
         hasSubcommands: false,
       },
     ],
@@ -204,7 +205,9 @@ const coreEntries: CoreCliEntry[] = [
   },
 ];
 
-function collectCoreCliCommandNames(predicate?: (command: CoreCliCommandDescriptor) => boolean) {
+function collectCoreCliCommandNames(
+  predicate?: (command: CoreCliCommandDescriptor) => boolean,
+) {
   const seen = new Set<string>();
   const names: string[] = [];
   for (const entry of coreEntries) {
@@ -244,7 +247,9 @@ function registerLazyCoreCommand(
   entry: CoreCliEntry,
   command: CoreCliCommandDescriptor,
 ) {
-  const placeholder = program.command(command.name).description(command.description);
+  const placeholder = program
+    .command(command.name)
+    .description(command.description);
   placeholder.allowUnknownOption(true);
   placeholder.allowExcessArguments(true);
   placeholder.action(async (...actionArgs) => {
@@ -272,7 +277,11 @@ export async function registerCoreCliByName(
   return true;
 }
 
-export function registerCoreCliCommands(program: Command, ctx: ProgramContext, argv: string[]) {
+export function registerCoreCliCommands(
+  program: Command,
+  ctx: ProgramContext,
+  argv: string[],
+) {
   const primary = getPrimaryCommand(argv);
   if (primary && shouldRegisterCorePrimaryOnly(argv)) {
     const entry = coreEntries.find((candidate) =>

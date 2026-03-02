@@ -1,6 +1,9 @@
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelId } from "../../channels/plugins/types.js";
-import { getChatChannelMeta, normalizeChatChannelId } from "../../channels/registry.js";
+import {
+  getChatChannelMeta,
+  normalizeChatChannelId,
+} from "../../channels/registry.js";
 import type { OutboundDeliveryResult } from "./deliver.js";
 
 export type OutboundDeliveryJson = {
@@ -93,7 +96,11 @@ export function buildOutboundDeliveryJson(params: {
   if (result && "roomId" in result && result.roomId !== undefined) {
     payload.roomId = result.roomId;
   }
-  if (result && "conversationId" in result && result.conversationId !== undefined) {
+  if (
+    result &&
+    "conversationId" in result &&
+    result.conversationId !== undefined
+  ) {
     payload.conversationId = result.conversationId;
   }
   if (result && "timestamp" in result && result.timestamp !== undefined) {

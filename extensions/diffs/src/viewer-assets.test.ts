@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { getServedViewerAsset, VIEWER_LOADER_PATH, VIEWER_RUNTIME_PATH } from "./viewer-assets.js";
+import {
+  getServedViewerAsset,
+  VIEWER_LOADER_PATH,
+  VIEWER_RUNTIME_PATH,
+} from "./viewer-assets.js";
 
 describe("viewer assets", () => {
   it("serves a stable loader that points at the current runtime bundle", async () => {
@@ -17,6 +21,8 @@ describe("viewer assets", () => {
   });
 
   it("returns null for unknown asset paths", async () => {
-    await expect(getServedViewerAsset("/plugins/diffs/assets/not-real.js")).resolves.toBeNull();
+    await expect(
+      getServedViewerAsset("/plugins/diffs/assets/not-real.js"),
+    ).resolves.toBeNull();
   });
 });

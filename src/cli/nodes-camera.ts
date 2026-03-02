@@ -36,10 +36,21 @@ export function parseCameraSnapPayload(value: unknown): CameraSnapPayload {
   const url = asString(obj.url);
   const width = asNumber(obj.width);
   const height = asNumber(obj.height);
-  if (!format || (!base64 && !url) || width === undefined || height === undefined) {
+  if (
+    !format ||
+    (!base64 && !url) ||
+    width === undefined ||
+    height === undefined
+  ) {
     throw new Error("invalid camera.snap payload");
   }
-  return { format, ...(base64 ? { base64 } : {}), ...(url ? { url } : {}), width, height };
+  return {
+    format,
+    ...(base64 ? { base64 } : {}),
+    ...(url ? { url } : {}),
+    width,
+    height,
+  };
 }
 
 export function parseCameraClipPayload(value: unknown): CameraClipPayload {
@@ -49,10 +60,21 @@ export function parseCameraClipPayload(value: unknown): CameraClipPayload {
   const url = asString(obj.url);
   const durationMs = asNumber(obj.durationMs);
   const hasAudio = asBoolean(obj.hasAudio);
-  if (!format || (!base64 && !url) || durationMs === undefined || hasAudio === undefined) {
+  if (
+    !format ||
+    (!base64 && !url) ||
+    durationMs === undefined ||
+    hasAudio === undefined
+  ) {
     throw new Error("invalid camera.clip payload");
   }
-  return { format, ...(base64 ? { base64 } : {}), ...(url ? { url } : {}), durationMs, hasAudio };
+  return {
+    format,
+    ...(base64 ? { base64 } : {}),
+    ...(url ? { url } : {}),
+    durationMs,
+    hasAudio,
+  };
 }
 
 export function cameraTempPath(opts: {
@@ -69,22 +91,31 @@ export function cameraTempPath(opts: {
   });
   const facingPart = opts.facing ? `-${opts.facing}` : "";
   const cliName = resolveCliName();
-  return path.join(tmpDir, `${cliName}-camera-${opts.kind}${facingPart}-${id}${ext}`);
+  return path.join(
+    tmpDir,
+    `${cliName}-camera-${opts.kind}${facingPart}-${id}${ext}`,
+  );
 }
 
 export async function writeUrlToFile(filePath: string, url: string) {
   const parsed = new URL(url);
   if (parsed.protocol !== "https:") {
-    throw new Error(`writeUrlToFile: only https URLs are allowed, got ${parsed.protocol}`);
+    throw new Error(
+      `writeUrlToFile: only https URLs are allowed, got ${parsed.protocol}`,
+    );
   }
 
   const res = await fetch(url);
   if (!res.ok) {
-    throw new Error(`failed to download ${url}: ${res.status} ${res.statusText}`);
+    throw new Error(
+      `failed to download ${url}: ${res.status} ${res.statusText}`,
+    );
   }
 
   const contentLengthRaw = res.headers.get("content-length");
-  const contentLength = contentLengthRaw ? Number.parseInt(contentLengthRaw, 10) : undefined;
+  const contentLength = contentLengthRaw
+    ? Number.parseInt(contentLengthRaw, 10)
+    : undefined;
   if (
     typeof contentLength === "number" &&
     Number.isFinite(contentLength) &&

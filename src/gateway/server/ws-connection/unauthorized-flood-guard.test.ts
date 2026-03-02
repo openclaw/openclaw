@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { ErrorCodes, errorShape } from "../../protocol/index.js";
-import { isUnauthorizedRoleError, UnauthorizedFloodGuard } from "./unauthorized-flood-guard.js";
+import {
+  isUnauthorizedRoleError,
+  UnauthorizedFloodGuard,
+} from "./unauthorized-flood-guard.js";
 
 describe("UnauthorizedFloodGuard", () => {
   it("suppresses repeated unauthorized responses and closes after threshold", () => {
@@ -50,7 +53,9 @@ describe("UnauthorizedFloodGuard", () => {
 describe("isUnauthorizedRoleError", () => {
   it("detects unauthorized role responses", () => {
     expect(
-      isUnauthorizedRoleError(errorShape(ErrorCodes.INVALID_REQUEST, "unauthorized role: node")),
+      isUnauthorizedRoleError(
+        errorShape(ErrorCodes.INVALID_REQUEST, "unauthorized role: node"),
+      ),
     ).toBe(true);
   });
 
@@ -60,8 +65,10 @@ describe("isUnauthorizedRoleError", () => {
         errorShape(ErrorCodes.INVALID_REQUEST, "missing scope: operator.admin"),
       ),
     ).toBe(false);
-    expect(isUnauthorizedRoleError(errorShape(ErrorCodes.UNAVAILABLE, "service unavailable"))).toBe(
-      false,
-    );
+    expect(
+      isUnauthorizedRoleError(
+        errorShape(ErrorCodes.UNAVAILABLE, "service unavailable"),
+      ),
+    ).toBe(false);
   });
 });

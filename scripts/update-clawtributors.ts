@@ -1,7 +1,12 @@
 import { execFileSync, execSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
-import type { ApiContributor, Entry, MapConfig, User } from "./update-clawtributors.types.js";
+import type {
+  ApiContributor,
+  Entry,
+  MapConfig,
+  User,
+} from "./update-clawtributors.types.js";
 
 const REPO = "openclaw/openclaw";
 const PER_LINE = 10;
@@ -12,12 +17,18 @@ const mapConfig = JSON.parse(readFileSync(mapPath, "utf8")) as MapConfig;
 const displayName = mapConfig.displayName ?? {};
 const nameToLogin = normalizeMap(mapConfig.nameToLogin ?? {});
 const emailToLogin = normalizeMap(mapConfig.emailToLogin ?? {});
-const ensureLogins = (mapConfig.ensureLogins ?? []).map((login) => login.toLowerCase());
+const ensureLogins = (mapConfig.ensureLogins ?? []).map((login) =>
+  login.toLowerCase(),
+);
 
 const readmePath = resolve("README.md");
 const seedCommit = mapConfig.seedCommit ?? null;
-const seedEntries = seedCommit ? parseReadmeEntries(run(`git show ${seedCommit}:README.md`)) : [];
-const raw = run(`gh api "repos/${REPO}/contributors?per_page=100&anon=1" --paginate`);
+const seedEntries = seedCommit
+  ? parseReadmeEntries(run(`git show ${seedCommit}:README.md`))
+  : [];
+const raw = run(
+  `gh api "repos/${REPO}/contributors?per_page=100&anon=1" --paginate`,
+);
 const contributors = parsePaginatedJson(raw) as ApiContributor[];
 const apiByLogin = new Map<string, User>();
 const contributionsByLogin = new Map<string, number>();
@@ -65,7 +76,13 @@ for (const line of log.split("\n")) {
 
     // Track first commit date per login (log is --reverse so first seen = earliest)
     if (currentName && date) {
-      const login = resolveLogin(currentName, currentEmail, apiByLogin, nameToLogin, emailToLogin);
+      const login = resolveLogin(
+        currentName,
+        currentEmail,
+        apiByLogin,
+        nameToLogin,
+        emailToLogin,
+      );
       if (login) {
         const key = login.toLowerCase();
         if (!firstCommitByLogin.has(key)) {
@@ -98,7 +115,13 @@ for (const line of log.split("\n")) {
     continue;
   }
 
-  let login = resolveLogin(currentName, currentEmail, apiByLogin, nameToLogin, emailToLogin);
+  let login = resolveLogin(
+    currentName,
+    currentEmail,
+    apiByLogin,
+    nameToLogin,
+    emailToLogin,
+  );
   if (!login) {
     continue;
   }
@@ -140,10 +163,18 @@ const repoAgeDays = Math.max(1, (now - repoEpoch) / 86_400_000);
 //   score  = base * tenure
 // Squared curve: only true early contributors get meaningful boost.
 // Day-1 = 1.5x, halfway through repo life = 1.125x, recent = ~1.0x.
-function computeScore(loc: number, commits: number, prs: number, firstDate: string): number {
+function computeScore(
+  loc: number,
+  commits: number,
+  prs: number,
+  firstDate: string,
+): number {
   const base = commits * 2 + prs * 10 + Math.sqrt(loc);
   const daysIn = firstDate
-    ? Math.max(0, (now - new Date(firstDate.slice(0, 10)).getTime()) / 86_400_000)
+    ? Math.max(
+        0,
+        (now - new Date(firstDate.slice(0, 10)).getTime()) / 86_400_000,
+      )
     : 0;
   const tenureRatio = Math.min(1, daysIn / repoAgeDays);
   const tenure = 1.0 + tenureRatio * tenureRatio * 0.5;
@@ -189,14 +220,21 @@ for (const seed of seedEntries) {
 }
 
 for (const item of contributors) {
-  const baseName = item.name?.trim() || item.email?.trim() || item.login?.trim();
+  const baseName =
+    item.name?.trim() || item.email?.trim() || item.login?.trim();
   if (!baseName) {
     continue;
   }
 
   const resolvedLogin = item.login
     ? item.login
-    : resolveLogin(baseName, item.email ?? null, apiByLogin, nameToLogin, emailToLogin);
+    : resolveLogin(
+        baseName,
+        item.email ?? null,
+        apiByLogin,
+        nameToLogin,
+        emailToLogin,
+      );
 
   if (!resolvedLogin) {
     continue;
@@ -240,7 +278,10 @@ for (const item of contributors) {
     existing.commits = Math.max(existing.commits, commits);
     existing.prs = Math.max(existing.prs, prs);
     existing.firstCommitDate = fd || existing.firstCommitDate;
-    existing.score = Math.max(existing.score, computeScore(loc, commits, prs, fd));
+    existing.score = Math.max(
+      existing.score,
+      computeScore(loc, commits, prs, fd),
+    );
   }
 }
 
@@ -302,7 +343,9 @@ const next = `${readme.slice(0, start)}<p align="left">\n${block}${readme.slice(
 writeFileSync(readmePath, next);
 
 console.log(`Updated README clawtributors: ${entries.length} entries`);
-console.log(`\nTop 25 by composite score: (commits*2 + PRs*10 + sqrt(LOC)) * tenure`);
+console.log(
+  `\nTop 25 by composite score: (commits*2 + PRs*10 + sqrt(LOC)) * tenure`,
+);
 console.log(`  tenure = 1.0 + (days_since_first_commit / repo_age)^2 * 0.5`);
 console.log(
   `${"#".padStart(3)}  ${"login".padEnd(24)} ${"score".padStart(8)} ${"tenure".padStart(7)} ${"commits".padStart(8)} ${"PRs".padStart(6)} ${"LOC".padStart(10)}  first commit`,
@@ -312,7 +355,9 @@ for (const entry of entries.slice(0, 25)) {
   const login = (entry.login ?? entry.key).slice(0, 24);
   const fd = entry.firstCommitDate || "?";
   const daysIn =
-    fd !== "?" ? Math.max(0, (now - new Date(fd.slice(0, 10)).getTime()) / 86_400_000) : 0;
+    fd !== "?"
+      ? Math.max(0, (now - new Date(fd.slice(0, 10)).getTime()) / 86_400_000)
+      : 0;
   const tr = Math.min(1, daysIn / repoAgeDays);
   const tenure = 1.0 + tr * tr * 0.5;
   console.log(
@@ -514,8 +559,13 @@ function parseReadmeEntries(
     return [];
   }
   const block = content.slice(start, end);
-  const entries: Array<{ display: string; html_url: string; avatar_url: string }> = [];
-  const linked = /<a href="([^"]+)"><img src="([^"]+)"[^>]*alt="([^"]+)"[^>]*>/g;
+  const entries: Array<{
+    display: string;
+    html_url: string;
+    avatar_url: string;
+  }> = [];
+  const linked =
+    /<a href="([^"]+)"><img src="([^"]+)"[^>]*alt="([^"]+)"[^>]*>/g;
   for (const match of block.matchAll(linked)) {
     const [, href, src, alt] = match;
     if (!href || !src || !alt) {
@@ -529,10 +579,16 @@ function parseReadmeEntries(
     if (!src || !alt) {
       continue;
     }
-    if (entries.some((entry) => entry.display === alt && entry.avatar_url === src)) {
+    if (
+      entries.some((entry) => entry.display === alt && entry.avatar_url === src)
+    ) {
       continue;
     }
-    entries.push({ html_url: fallbackHref(alt), avatar_url: src, display: alt });
+    entries.push({
+      html_url: fallbackHref(alt),
+      avatar_url: src,
+      display: alt,
+    });
   }
   return entries;
 }
@@ -551,7 +607,9 @@ function loginFromUrl(url: string): string | null {
 
 function fallbackHref(value: string): string {
   const encoded = encodeURIComponent(value.trim());
-  return encoded ? `https://github.com/search?q=${encoded}` : "https://github.com";
+  return encoded
+    ? `https://github.com/search?q=${encoded}`
+    : "https://github.com";
 }
 
 function pickDisplay(

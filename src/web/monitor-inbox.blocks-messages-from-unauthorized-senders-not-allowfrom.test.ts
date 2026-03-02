@@ -28,7 +28,11 @@ const createNotifyUpsert = (message: Record<string, unknown>) => ({
   messages: [message],
 });
 
-const createDmMessage = (params: { id: string; remoteJid: string; conversation: string }) => ({
+const createDmMessage = (params: {
+  id: string;
+  remoteJid: string;
+  conversation: string;
+}) => ({
   key: {
     id: params.id,
     fromMe: false,
@@ -215,7 +219,9 @@ describe("web monitor inbox", () => {
   it("blocks all group messages when groupPolicy is 'disabled'", async () => {
     const { onMessage, listener, sock } = await startWebInboxMonitor({
       config: {
-        channels: { whatsapp: { allowFrom: ["+1234"], groupPolicy: "disabled" } },
+        channels: {
+          whatsapp: { allowFrom: ["+1234"], groupPolicy: "disabled" },
+        },
         messages: TIMESTAMP_OFF_MESSAGES_CFG,
       },
     });

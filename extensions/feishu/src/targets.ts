@@ -60,7 +60,9 @@ export function formatFeishuTarget(id: string, type?: FeishuIdType): string {
   return trimmed;
 }
 
-export function resolveReceiveIdType(id: string): "chat_id" | "open_id" | "user_id" {
+export function resolveReceiveIdType(
+  id: string,
+): "chat_id" | "open_id" | "user_id" {
   const trimmed = id.trim();
   const lowered = trimmed.toLowerCase();
   if (lowered.startsWith("chat:") || lowered.startsWith("group:")) {

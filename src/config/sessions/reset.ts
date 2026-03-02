@@ -93,18 +93,24 @@ export function resolveSessionResetPolicy(params: {
     ? undefined
     : (sessionCfg?.resetByType?.[params.resetType] ??
       (params.resetType === "direct"
-        ? (sessionCfg?.resetByType as { dm?: SessionResetConfig } | undefined)?.dm
+        ? (sessionCfg?.resetByType as { dm?: SessionResetConfig } | undefined)
+            ?.dm
         : undefined));
   const hasExplicitReset = Boolean(baseReset || sessionCfg?.resetByType);
-  const legacyIdleMinutes = params.resetOverride ? undefined : sessionCfg?.idleMinutes;
+  const legacyIdleMinutes = params.resetOverride
+    ? undefined
+    : sessionCfg?.idleMinutes;
   const mode =
     typeReset?.mode ??
     baseReset?.mode ??
-    (!hasExplicitReset && legacyIdleMinutes != null ? "idle" : DEFAULT_RESET_MODE);
+    (!hasExplicitReset && legacyIdleMinutes != null
+      ? "idle"
+      : DEFAULT_RESET_MODE);
   const atHour = normalizeResetAtHour(
     typeReset?.atHour ?? baseReset?.atHour ?? DEFAULT_RESET_AT_HOUR,
   );
-  const idleMinutesRaw = typeReset?.idleMinutes ?? baseReset?.idleMinutes ?? legacyIdleMinutes;
+  const idleMinutesRaw =
+    typeReset?.idleMinutes ?? baseReset?.idleMinutes ?? legacyIdleMinutes;
 
   let idleMinutes: number | undefined;
   if (idleMinutesRaw != null) {

@@ -25,7 +25,11 @@ describe("config secret refs schema", () => {
         providers: {
           openai: {
             baseUrl: "https://api.openai.com/v1",
-            apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+            apiKey: {
+              source: "env",
+              provider: "default",
+              id: "OPENAI_API_KEY",
+            },
             models: [{ id: "gpt-5", name: "gpt-5" }],
           },
         },
@@ -73,7 +77,11 @@ describe("config secret refs schema", () => {
         entries: {
           "review-pr": {
             enabled: true,
-            apiKey: { source: "env", provider: "default", id: "SKILL_REVIEW_PR_API_KEY" },
+            apiKey: {
+              source: "env",
+              provider: "default",
+              id: "SKILL_REVIEW_PR_API_KEY",
+            },
           },
         },
       },
@@ -113,7 +121,11 @@ describe("config secret refs schema", () => {
         providers: {
           openai: {
             baseUrl: "https://api.openai.com/v1",
-            apiKey: { source: "env", provider: "default", id: "bad id with spaces" },
+            apiKey: {
+              source: "env",
+              provider: "default",
+              id: "bad id with spaces",
+            },
             models: [{ id: "gpt-5", name: "gpt-5" }],
           },
         },
@@ -123,7 +135,9 @@ describe("config secret refs schema", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(
-        result.issues.some((issue) => issue.path.includes("models.providers.openai.apiKey")),
+        result.issues.some((issue) =>
+          issue.path.includes("models.providers.openai.apiKey"),
+        ),
       ).toBe(true);
     }
   });
@@ -134,7 +148,11 @@ describe("config secret refs schema", () => {
         providers: {
           openai: {
             baseUrl: "https://api.openai.com/v1",
-            apiKey: { source: "env", provider: "default", id: "/providers/openai/apiKey" },
+            apiKey: {
+              source: "env",
+              provider: "default",
+              id: "/providers/openai/apiKey",
+            },
             models: [{ id: "gpt-5", name: "gpt-5" }],
           },
         },
@@ -159,7 +177,11 @@ describe("config secret refs schema", () => {
         providers: {
           openai: {
             baseUrl: "https://api.openai.com/v1",
-            apiKey: { source: "file", provider: "default", id: "providers/openai/apiKey" },
+            apiKey: {
+              source: "file",
+              provider: "default",
+              id: "providers/openai/apiKey",
+            },
             models: [{ id: "gpt-5", name: "gpt-5" }],
           },
         },

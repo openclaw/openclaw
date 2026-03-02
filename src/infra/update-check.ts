@@ -48,12 +48,17 @@ export type UpdateCheckResult = {
   registry?: RegistryStatus;
 };
 
-export function formatGitInstallLabel(update: UpdateCheckResult): string | null {
+export function formatGitInstallLabel(
+  update: UpdateCheckResult,
+): string | null {
   if (update.installKind !== "git") {
     return null;
   }
   const shortSha = update.git?.sha ? update.git.sha.slice(0, 8) : null;
-  const branch = update.git?.branch && update.git.branch !== "HEAD" ? update.git.branch : null;
+  const branch =
+    update.git?.branch && update.git.branch !== "HEAD"
+      ? update.git.branch
+      : null;
   const tag = update.git?.tag ?? null;
   const parts = [
     branch ?? (tag ? "detached" : "git"),
@@ -77,9 +82,12 @@ async function detectPackageManager(root: string): Promise<PackageManager> {
 }
 
 async function detectGitRoot(root: string): Promise<string | null> {
-  const res = await runCommandWithTimeout(["git", "-C", root, "rev-parse", "--show-toplevel"], {
-    timeoutMs: 4000,
-  }).catch(() => null);
+  const res = await runCommandWithTimeout(
+    ["git", "-C", root, "rev-parse", "--show-toplevel"],
+    {
+      timeoutMs: 4000,
+    },
+  ).catch(() => null);
   if (!res || res.code !== 0) {
     return null;
   }
@@ -116,9 +124,12 @@ export async function checkGitUpdateStatus(params: {
   }
   const branch = branchRes.stdout.trim() || null;
 
-  const shaRes = await runCommandWithTimeout(["git", "-C", root, "rev-parse", "HEAD"], {
-    timeoutMs,
-  }).catch(() => null);
+  const shaRes = await runCommandWithTimeout(
+    ["git", "-C", root, "rev-parse", "HEAD"],
+    {
+      timeoutMs,
+    },
+  ).catch(() => null);
   const sha = shaRes && shaRes.code === 0 ? shaRes.stdout.trim() : null;
 
   const tagRes = await runCommandWithTimeout(
@@ -131,16 +142,21 @@ export async function checkGitUpdateStatus(params: {
     ["git", "-C", root, "rev-parse", "--abbrev-ref", "@{upstream}"],
     { timeoutMs },
   ).catch(() => null);
-  const upstream = upstreamRes && upstreamRes.code === 0 ? upstreamRes.stdout.trim() : null;
+  const upstream =
+    upstreamRes && upstreamRes.code === 0 ? upstreamRes.stdout.trim() : null;
 
   const dirtyRes = await runCommandWithTimeout(
     ["git", "-C", root, "status", "--porcelain", "--", ":!dist/control-ui/"],
     { timeoutMs },
   ).catch(() => null);
-  const dirty = dirtyRes && dirtyRes.code === 0 ? dirtyRes.stdout.trim().length > 0 : null;
+  const dirty =
+    dirtyRes && dirtyRes.code === 0 ? dirtyRes.stdout.trim().length > 0 : null;
 
   const fetchOk = params.fetch
-    ? await runCommandWithTimeout(["git", "-C", root, "fetch", "--quiet", "--prune"], { timeoutMs })
+    ? await runCommandWithTimeout(
+        ["git", "-C", root, "fetch", "--quiet", "--prune"],
+        { timeoutMs },
+      )
         .then((r) => r.code === 0)
         .catch(() => false)
     : null;
@@ -148,12 +164,22 @@ export async function checkGitUpdateStatus(params: {
   const counts =
     upstream && upstream.length > 0
       ? await runCommandWithTimeout(
-          ["git", "-C", root, "rev-list", "--left-right", "--count", `HEAD...${upstream}`],
+          [
+            "git",
+            "-C",
+            root,
+            "rev-list",
+            "--left-right",
+            "--count",
+            `HEAD...${upstream}`,
+          ],
           { timeoutMs },
         ).catch(() => null)
       : null;
 
-  const parseCounts = (raw: string): { ahead: number; behind: number } | null => {
+  const parseCounts = (
+    raw: string,
+  ): { ahead: number; behind: number } | null => {
     const parts = raw.trim().split(/\s+/);
     if (parts.length < 2) {
       return null;
@@ -165,7 +191,8 @@ export async function checkGitUpdateStatus(params: {
     }
     return { ahead, behind };
   };
-  const parsed = counts && counts.code === 0 ? parseCounts(counts.stdout) : null;
+  const parsed =
+    counts && counts.code === 0 ? parseCounts(counts.stdout) : null;
 
   return {
     root,
@@ -286,7 +313,10 @@ export async function checkDepsStatus(params: {
 export async function fetchNpmLatestVersion(params?: {
   timeoutMs?: number;
 }): Promise<RegistryStatus> {
-  const res = await fetchNpmTagVersion({ tag: "latest", timeoutMs: params?.timeoutMs });
+  const res = await fetchNpmTagVersion({
+    tag: "latest",
+    timeoutMs: params?.timeoutMs,
+  });
   return {
     latestVersion: res.version,
     error: res.error,
@@ -321,12 +351,18 @@ export async function resolveNpmChannelTag(params: {
   timeoutMs?: number;
 }): Promise<{ tag: string; version: string | null }> {
   const channelTag = channelToNpmTag(params.channel);
-  const channelStatus = await fetchNpmTagVersion({ tag: channelTag, timeoutMs: params.timeoutMs });
+  const channelStatus = await fetchNpmTagVersion({
+    tag: channelTag,
+    timeoutMs: params.timeoutMs,
+  });
   if (params.channel !== "beta") {
     return { tag: channelTag, version: channelStatus.version };
   }
 
-  const latestStatus = await fetchNpmTagVersion({ tag: "latest", timeoutMs: params.timeoutMs });
+  const latestStatus = await fetchNpmTagVersion({
+    tag: "latest",
+    timeoutMs: params.timeoutMs,
+  });
   if (!latestStatus.version) {
     return { tag: channelTag, version: channelStatus.version };
   }
@@ -340,7 +376,10 @@ export async function resolveNpmChannelTag(params: {
   return { tag: channelTag, version: channelStatus.version };
 }
 
-export function compareSemverStrings(a: string | null, b: string | null): number | null {
+export function compareSemverStrings(
+  a: string | null,
+  b: string | null,
+): number | null {
   const pa = parseComparableSemver(a);
   const pb = parseComparableSemver(b);
   if (!pa || !pb) {
@@ -365,14 +404,17 @@ type ComparableSemver = {
   prerelease: string[] | null;
 };
 
-function parseComparableSemver(version: string | null): ComparableSemver | null {
+function parseComparableSemver(
+  version: string | null,
+): ComparableSemver | null {
   if (!version) {
     return null;
   }
   const normalized = normalizeLegacyDotBetaVersion(version.trim());
-  const match = /^v?([0-9]+)\.([0-9]+)\.([0-9]+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/.exec(
-    normalized,
-  );
+  const match =
+    /^v?([0-9]+)\.([0-9]+)\.([0-9]+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/.exec(
+      normalized,
+    );
   if (!match) {
     return null;
   }
@@ -390,7 +432,10 @@ function parseComparableSemver(version: string | null): ComparableSemver | null 
 
 function normalizeLegacyDotBetaVersion(version: string): string {
   const trimmed = version.trim();
-  const dotBetaMatch = /^([vV]?[0-9]+\.[0-9]+\.[0-9]+)\.beta(?:\.([0-9A-Za-z.-]+))?$/.exec(trimmed);
+  const dotBetaMatch =
+    /^([vV]?[0-9]+\.[0-9]+\.[0-9]+)\.beta(?:\.([0-9A-Za-z.-]+))?$/.exec(
+      trimmed,
+    );
   if (!dotBetaMatch) {
     return trimmed;
   }
@@ -459,7 +504,9 @@ export async function checkUpdateStatus(params: {
       root: null,
       installKind: "unknown",
       packageManager: "unknown",
-      registry: params.includeRegistry ? await fetchNpmLatestVersion({ timeoutMs }) : undefined,
+      registry: params.includeRegistry
+        ? await fetchNpmLatestVersion({ timeoutMs })
+        : undefined,
     };
   }
 
@@ -467,7 +514,9 @@ export async function checkUpdateStatus(params: {
   const gitRoot = await detectGitRoot(root);
   const isGit = gitRoot && path.resolve(gitRoot) === root;
 
-  const installKind: UpdateCheckResult["installKind"] = isGit ? "git" : "package";
+  const installKind: UpdateCheckResult["installKind"] = isGit
+    ? "git"
+    : "package";
   const git = isGit
     ? await checkGitUpdateStatus({
         root,
@@ -476,7 +525,9 @@ export async function checkUpdateStatus(params: {
       })
     : undefined;
   const deps = await checkDepsStatus({ root, manager: pm });
-  const registry = params.includeRegistry ? await fetchNpmLatestVersion({ timeoutMs }) : undefined;
+  const registry = params.includeRegistry
+    ? await fetchNpmLatestVersion({ timeoutMs })
+    : undefined;
 
   return {
     root,

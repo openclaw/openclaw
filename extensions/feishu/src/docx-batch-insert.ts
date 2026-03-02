@@ -121,7 +121,10 @@ export async function insertBlocksInBatches(
 
   // Build batches ensuring each batch has ≤1000 total descendants
   const batches: { firstLevelIds: string[]; blocks: any[] }[] = [];
-  let currentBatch: { firstLevelIds: string[]; blocks: any[] } = { firstLevelIds: [], blocks: [] };
+  let currentBatch: { firstLevelIds: string[]; blocks: any[] } = {
+    firstLevelIds: [],
+    blocks: [],
+  };
   const usedBlockIds = new Set<string>();
 
   for (const firstLevelId of firstLevelBlockIds) {

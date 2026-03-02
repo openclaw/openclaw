@@ -19,7 +19,9 @@ function expectGoogleChatDmAllowFromRepaired(cfg: unknown) {
   expect(typed.channels.googlechat.allowFrom).toBeUndefined();
 }
 
-async function collectDoctorWarnings(config: Record<string, unknown>): Promise<string[]> {
+async function collectDoctorWarnings(
+  config: Record<string, unknown>,
+): Promise<string[]> {
   const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
   try {
     await runDoctorConfigWithInput({
@@ -83,7 +85,9 @@ describe("doctor config flow", () => {
         },
       },
     });
-    expect(doctorWarnings.some((line) => line.includes("mutable allowlist"))).toBe(false);
+    expect(
+      doctorWarnings.some((line) => line.includes("mutable allowlist")),
+    ).toBe(false);
   });
 
   it("does not warn about sender-based group allowlist for googlechat", async () => {
@@ -102,7 +106,9 @@ describe("doctor config flow", () => {
 
     expect(
       doctorWarnings.some(
-        (line) => line.includes('groupPolicy is "allowlist"') && line.includes("groupAllowFrom"),
+        (line) =>
+          line.includes('groupPolicy is "allowlist"') &&
+          line.includes("groupAllowFrom"),
       ),
     ).toBe(false);
   });
@@ -198,7 +204,8 @@ describe("doctor config flow", () => {
                 : null;
       return {
         ok: id != null,
-        json: async () => (id != null ? { ok: true, result: { id } } : { ok: false }),
+        json: async () =>
+          id != null ? { ok: true, result: { id } } : { ok: false },
       } as unknown as Response;
     });
     vi.stubGlobal("fetch", fetchSpy);
@@ -233,19 +240,31 @@ describe("doctor config flow", () => {
             groupAllowFrom?: string[];
             groups: Record<
               string,
-              { allowFrom: string[]; topics: Record<string, { allowFrom: string[] }> }
+              {
+                allowFrom: string[];
+                topics: Record<string, { allowFrom: string[] }>;
+              }
             >;
-            accounts: Record<string, { allowFrom?: string[]; groupAllowFrom?: string[] }>;
+            accounts: Record<
+              string,
+              { allowFrom?: string[]; groupAllowFrom?: string[] }
+            >;
           };
         };
       };
       expect(cfg.channels.telegram.allowFrom).toBeUndefined();
       expect(cfg.channels.telegram.groupAllowFrom).toBeUndefined();
-      expect(cfg.channels.telegram.groups["-100123"].allowFrom).toEqual(["333"]);
-      expect(cfg.channels.telegram.groups["-100123"].topics["99"].allowFrom).toEqual(["444"]);
+      expect(cfg.channels.telegram.groups["-100123"].allowFrom).toEqual([
+        "333",
+      ]);
+      expect(
+        cfg.channels.telegram.groups["-100123"].topics["99"].allowFrom,
+      ).toEqual(["444"]);
       expect(cfg.channels.telegram.accounts.alerts.allowFrom).toEqual(["444"]);
       expect(cfg.channels.telegram.accounts.default.allowFrom).toEqual(["111"]);
-      expect(cfg.channels.telegram.accounts.default.groupAllowFrom).toEqual(["222"]);
+      expect(cfg.channels.telegram.accounts.default.groupAllowFrom).toEqual([
+        "222",
+      ]);
     } finally {
       vi.unstubAllGlobals();
     }
@@ -326,21 +345,33 @@ describe("doctor config flow", () => {
       expect(cfg.channels.discord.execApprovals.approvers).toEqual(["321"]);
       expect(cfg.channels.discord.guilds["100"].users).toEqual(["111"]);
       expect(cfg.channels.discord.guilds["100"].roles).toEqual(["222"]);
-      expect(cfg.channels.discord.guilds["100"].channels.general.users).toEqual(["333"]);
-      expect(cfg.channels.discord.guilds["100"].channels.general.roles).toEqual(["444"]);
+      expect(cfg.channels.discord.guilds["100"].channels.general.users).toEqual(
+        ["333"],
+      );
+      expect(cfg.channels.discord.guilds["100"].channels.general.roles).toEqual(
+        ["444"],
+      );
       expect(cfg.channels.discord.accounts.default.allowFrom).toEqual(["123"]);
       expect(cfg.channels.discord.accounts.work.allowFrom).toEqual(["555"]);
       expect(cfg.channels.discord.accounts.work.dm.allowFrom).toEqual(["666"]);
-      expect(cfg.channels.discord.accounts.work.dm.groupChannels).toEqual(["777"]);
-      expect(cfg.channels.discord.accounts.work.execApprovals.approvers).toEqual(["888"]);
-      expect(cfg.channels.discord.accounts.work.guilds["200"].users).toEqual(["999"]);
-      expect(cfg.channels.discord.accounts.work.guilds["200"].roles).toEqual(["1010"]);
-      expect(cfg.channels.discord.accounts.work.guilds["200"].channels.help.users).toEqual([
-        "1111",
+      expect(cfg.channels.discord.accounts.work.dm.groupChannels).toEqual([
+        "777",
       ]);
-      expect(cfg.channels.discord.accounts.work.guilds["200"].channels.help.roles).toEqual([
-        "1212",
+      expect(
+        cfg.channels.discord.accounts.work.execApprovals.approvers,
+      ).toEqual(["888"]);
+      expect(cfg.channels.discord.accounts.work.guilds["200"].users).toEqual([
+        "999",
       ]);
+      expect(cfg.channels.discord.accounts.work.guilds["200"].roles).toEqual([
+        "1010",
+      ]);
+      expect(
+        cfg.channels.discord.accounts.work.guilds["200"].channels.help.users,
+      ).toEqual(["1111"]);
+      expect(
+        cfg.channels.discord.accounts.work.guilds["200"].channels.help.roles,
+      ).toEqual(["1212"]);
     });
   });
 
@@ -434,7 +465,9 @@ describe("doctor config flow", () => {
     });
 
     const cfg = result.cfg as unknown as {
-      channels: { discord: { dm: { allowFrom: string[] }; allowFrom?: string[] } };
+      channels: {
+        discord: { dm: { allowFrom: string[] }; allowFrom?: string[] };
+      };
     };
     // When dmPolicy is set at top level but allowFrom only exists nested in dm,
     // the repair adds "*" to dm.allowFrom
@@ -489,7 +522,9 @@ describe("doctor config flow", () => {
 
     const cfg = result.cfg as unknown as {
       channels: {
-        discord: { accounts: { work: { allowFrom: string[]; dmPolicy: string } } };
+        discord: {
+          accounts: { work: { allowFrom: string[]; dmPolicy: string } };
+        };
       };
     };
     expect(cfg.channels.discord.accounts.work.allowFrom).toEqual(["*"]);
@@ -567,13 +602,17 @@ describe("doctor config flow", () => {
         whatsapp: {
           groups: {
             "123@g.us": {
-              toolsBySender: Record<string, { allow?: string[]; deny?: string[] }>;
+              toolsBySender: Record<
+                string,
+                { allow?: string[]; deny?: string[] }
+              >;
             };
           };
         };
       };
     };
-    const toolsBySender = cfg.channels.whatsapp.groups["123@g.us"].toolsBySender;
+    const toolsBySender =
+      cfg.channels.whatsapp.groups["123@g.us"].toolsBySender;
     expect(toolsBySender.owner).toBeUndefined();
     expect(toolsBySender.alice).toBeUndefined();
     expect(toolsBySender["id:owner"]).toEqual({ deny: ["exec"] });

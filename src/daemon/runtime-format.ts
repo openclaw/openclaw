@@ -12,7 +12,9 @@ export type ServiceRuntimeLike = {
   detail?: string;
 };
 
-export function formatRuntimeStatus(runtime: ServiceRuntimeLike | undefined): string | null {
+export function formatRuntimeStatus(
+  runtime: ServiceRuntimeLike | undefined,
+): string | null {
   if (!runtime) {
     return null;
   }

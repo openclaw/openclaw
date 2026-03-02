@@ -15,24 +15,33 @@ const hoisted = vi.hoisted(() => {
 });
 
 vi.mock("../../../discord/send.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../discord/send.js")>();
+  const actual =
+    await importOriginal<typeof import("../../../discord/send.js")>();
   return {
     ...actual,
-    sendMessageDiscord: (...args: unknown[]) => hoisted.sendMessageDiscordMock(...args),
-    sendPollDiscord: (...args: unknown[]) => hoisted.sendPollDiscordMock(...args),
+    sendMessageDiscord: (...args: unknown[]) =>
+      hoisted.sendMessageDiscordMock(...args),
+    sendPollDiscord: (...args: unknown[]) =>
+      hoisted.sendPollDiscordMock(...args),
     sendWebhookMessageDiscord: (...args: unknown[]) =>
       hoisted.sendWebhookMessageDiscordMock(...args),
   };
 });
 
-vi.mock("../../../discord/monitor/thread-bindings.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../../discord/monitor/thread-bindings.js")>();
-  return {
-    ...actual,
-    getThreadBindingManager: (...args: unknown[]) => hoisted.getThreadBindingManagerMock(...args),
-  };
-});
+vi.mock(
+  "../../../discord/monitor/thread-bindings.js",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("../../../discord/monitor/thread-bindings.js")
+      >();
+    return {
+      ...actual,
+      getThreadBindingManager: (...args: unknown[]) =>
+        hoisted.getThreadBindingManagerMock(...args),
+    };
+  },
+);
 
 const { discordOutbound } = await import("./discord.js");
 
@@ -85,15 +94,24 @@ describe("normalizeDiscordOutboundTarget", () => {
   });
 
   it("passes through channel: prefixed targets", () => {
-    expect(normalizeDiscordOutboundTarget("channel:123")).toEqual({ ok: true, to: "channel:123" });
+    expect(normalizeDiscordOutboundTarget("channel:123")).toEqual({
+      ok: true,
+      to: "channel:123",
+    });
   });
 
   it("passes through user: prefixed targets", () => {
-    expect(normalizeDiscordOutboundTarget("user:123")).toEqual({ ok: true, to: "user:123" });
+    expect(normalizeDiscordOutboundTarget("user:123")).toEqual({
+      ok: true,
+      to: "user:123",
+    });
   });
 
   it("passes through channel name strings", () => {
-    expect(normalizeDiscordOutboundTarget("general")).toEqual({ ok: true, to: "general" });
+    expect(normalizeDiscordOutboundTarget("general")).toEqual({
+      ok: true,
+      to: "general",
+    });
   });
 
   it("returns error for empty target", () => {
@@ -105,7 +123,10 @@ describe("normalizeDiscordOutboundTarget", () => {
   });
 
   it("trims whitespace", () => {
-    expect(normalizeDiscordOutboundTarget("  123  ")).toEqual({ ok: true, to: "channel:123" });
+    expect(normalizeDiscordOutboundTarget("  123  ")).toEqual({
+      ok: true,
+      to: "channel:123",
+    });
   });
 });
 
@@ -199,7 +220,9 @@ describe("discordOutbound", () => {
 
   it("falls back to bot send when webhook send fails", async () => {
     mockBoundThreadManager();
-    hoisted.sendWebhookMessageDiscordMock.mockRejectedValueOnce(new Error("rate limited"));
+    hoisted.sendWebhookMessageDiscordMock.mockRejectedValueOnce(
+      new Error("rate limited"),
+    );
 
     const result = await discordOutbound.sendText?.({
       cfg: {},

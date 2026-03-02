@@ -82,7 +82,10 @@ type ClaudeCliFileOptions = {
 type ClaudeCliWriteOptions = ClaudeCliFileOptions & {
   platform?: NodeJS.Platform;
   writeKeychain?: (credentials: OAuthCredentials) => boolean;
-  writeFile?: (credentials: OAuthCredentials, options?: ClaudeCliFileOptions) => boolean;
+  writeFile?: (
+    credentials: OAuthCredentials,
+    options?: ClaudeCliFileOptions,
+  ) => boolean;
 };
 
 type ExecSyncFn = typeof execSync;
@@ -93,7 +96,9 @@ function resolveClaudeCliCredentialsPath(homeDir?: string) {
   return path.join(baseDir, CLAUDE_CLI_CREDENTIALS_RELATIVE_PATH);
 }
 
-function parseClaudeCliOauthCredential(claudeOauth: unknown): ClaudeCliCredential | null {
+function parseClaudeCliOauthCredential(
+  claudeOauth: unknown,
+): ClaudeCliCredential | null {
   if (!claudeOauth || typeof claudeOauth !== "object") {
     return null;
   }
@@ -104,7 +109,11 @@ function parseClaudeCliOauthCredential(claudeOauth: unknown): ClaudeCliCredentia
   if (typeof accessToken !== "string" || !accessToken) {
     return null;
   }
-  if (typeof expiresAt !== "number" || !Number.isFinite(expiresAt) || expiresAt <= 0) {
+  if (
+    typeof expiresAt !== "number" ||
+    !Number.isFinite(expiresAt) ||
+    expiresAt <= 0
+  ) {
     return null;
   }
   if (typeof refreshToken === "string" && refreshToken) {
@@ -130,7 +139,9 @@ function resolveCodexCliAuthPath() {
 
 function resolveCodexHomePath() {
   const configured = process.env.CODEX_HOME;
-  const home = configured ? resolveUserPath(configured) : resolveUserPath("~/.codex");
+  const home = configured
+    ? resolveUserPath(configured)
+    : resolveUserPath("~/.codex");
   try {
     return fs.realpathSync.native(home);
   } catch {
@@ -196,7 +207,8 @@ function readCodexKeychainCredentials(options?: {
     const expires = Number.isFinite(lastRefresh)
       ? lastRefresh + 60 * 60 * 1000
       : Date.now() + 60 * 60 * 1000;
-    const accountId = typeof tokens?.account_id === "string" ? tokens.account_id : undefined;
+    const accountId =
+      typeof tokens?.account_id === "string" ? tokens.account_id : undefined;
 
     log.info("read codex credentials from keychain", {
       source: "keychain",
@@ -216,7 +228,9 @@ function readCodexKeychainCredentials(options?: {
   }
 }
 
-function readQwenCliCredentials(options?: { homeDir?: string }): QwenCliCredential | null {
+function readQwenCliCredentials(options?: {
+  homeDir?: string;
+}): QwenCliCredential | null {
   const credPath = resolveQwenCliCredentialsPath(options?.homeDir);
   return readPortalCliOauthCredentials(credPath, "qwen-portal");
 }
@@ -224,7 +238,13 @@ function readQwenCliCredentials(options?: { homeDir?: string }): QwenCliCredenti
 function readPortalCliOauthCredentials<TProvider extends string>(
   credPath: string,
   provider: TProvider,
-): { type: "oauth"; provider: TProvider; access: string; refresh: string; expires: number } | null {
+): {
+  type: "oauth";
+  provider: TProvider;
+  access: string;
+  refresh: string;
+  expires: number;
+} | null {
   const raw = loadJsonFile(credPath);
   if (!raw || typeof raw !== "object") {
     return null;
@@ -253,7 +273,9 @@ function readPortalCliOauthCredentials<TProvider extends string>(
   };
 }
 
-function readMiniMaxCliCredentials(options?: { homeDir?: string }): MiniMaxCliCredential | null {
+function readMiniMaxCliCredentials(options?: {
+  homeDir?: string;
+}): MiniMaxCliCredential | null {
   const credPath = resolveMiniMaxCliCredentialsPath(options?.homeDir);
   return readPortalCliOauthCredentials(credPath, "minimax-portal");
 }
@@ -404,7 +426,9 @@ export function writeClaudeCliFileCredentials(
     }
 
     const data = raw as Record<string, unknown>;
-    const existingOauth = data.claudeAiOauth as Record<string, unknown> | undefined;
+    const existingOauth = data.claudeAiOauth as
+      | Record<string, unknown>
+      | undefined;
     if (!existingOauth || typeof existingOauth !== "object") {
       return false;
     }
@@ -434,10 +458,12 @@ export function writeClaudeCliCredentials(
   options?: ClaudeCliWriteOptions,
 ): boolean {
   const platform = options?.platform ?? process.platform;
-  const writeKeychain = options?.writeKeychain ?? writeClaudeCliKeychainCredentials;
+  const writeKeychain =
+    options?.writeKeychain ?? writeClaudeCliKeychainCredentials;
   const writeFile =
     options?.writeFile ??
-    ((credentials, fileOptions) => writeClaudeCliFileCredentials(credentials, fileOptions));
+    ((credentials, fileOptions) =>
+      writeClaudeCliFileCredentials(credentials, fileOptions));
 
   if (platform === "darwin") {
     const didWriteKeychain = writeKeychain(newCredentials);
@@ -497,7 +523,8 @@ export function readCodexCliCredentials(options?: {
     access: accessToken,
     refresh: refreshToken,
     expires,
-    accountId: typeof tokens.account_id === "string" ? tokens.account_id : undefined,
+    accountId:
+      typeof tokens.account_id === "string" ? tokens.account_id : undefined,
   };
 }
 

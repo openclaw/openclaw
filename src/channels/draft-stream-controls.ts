@@ -111,11 +111,15 @@ export async function clearFinalizableDraftMessage<T>(
     await params.deleteMessage(messageId);
     params.onDeleteSuccess?.(messageId);
   } catch (err) {
-    params.warn?.(`${params.warnPrefix}: ${err instanceof Error ? err.message : String(err)}`);
+    params.warn?.(
+      `${params.warnPrefix}: ${err instanceof Error ? err.message : String(err)}`,
+    );
   }
 }
 
-export function createFinalizableDraftLifecycle<T>(params: FinalizableDraftLifecycleParams<T>) {
+export function createFinalizableDraftLifecycle<T>(
+  params: FinalizableDraftLifecycleParams<T>,
+) {
   const controls = createFinalizableDraftStreamControlsForState({
     throttleMs: params.throttleMs,
     state: params.state,

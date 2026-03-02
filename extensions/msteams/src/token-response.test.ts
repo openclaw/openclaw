@@ -7,7 +7,9 @@ describe("readAccessToken", () => {
   });
 
   it("returns accessToken from object value", () => {
-    expect(readAccessToken({ accessToken: "access-token" })).toBe("access-token");
+    expect(readAccessToken({ accessToken: "access-token" })).toBe(
+      "access-token",
+    );
   });
 
   it("returns token fallback from object value", () => {

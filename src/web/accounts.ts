@@ -3,9 +3,16 @@ import path from "node:path";
 import { createAccountListHelpers } from "../channels/plugins/account-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveOAuthDir } from "../config/paths.js";
-import type { DmPolicy, GroupPolicy, WhatsAppAccountConfig } from "../config/types.js";
+import type {
+  DmPolicy,
+  GroupPolicy,
+  WhatsAppAccountConfig,
+} from "../config/types.js";
 import { resolveAccountEntry } from "../routing/account-lookup.js";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
+import {
+  DEFAULT_ACCOUNT_ID,
+  normalizeAccountId,
+} from "../routing/session-key.js";
 import { resolveUserPath } from "../utils.js";
 import { hasWebCredsSync } from "./auth-store.js";
 
@@ -39,7 +46,10 @@ export const resolveDefaultWhatsAppAccountId = resolveDefaultAccountId;
 export function listWhatsAppAuthDirs(cfg: OpenClawConfig): string[] {
   const oauthDir = resolveOAuthDir();
   const whatsappDir = path.join(oauthDir, "whatsapp");
-  const authDirs = new Set<string>([oauthDir, path.join(whatsappDir, DEFAULT_ACCOUNT_ID)]);
+  const authDirs = new Set<string>([
+    oauthDir,
+    path.join(whatsappDir, DEFAULT_ACCOUNT_ID),
+  ]);
 
   const accountIds = listConfiguredAccountIds(cfg);
   for (const accountId of accountIds) {
@@ -73,7 +83,11 @@ function resolveAccountConfig(
 }
 
 function resolveDefaultAuthDir(accountId: string): string {
-  return path.join(resolveOAuthDir(), "whatsapp", normalizeAccountId(accountId));
+  return path.join(
+    resolveOAuthDir(),
+    "whatsapp",
+    normalizeAccountId(accountId),
+  );
 }
 
 function resolveLegacyAuthDir(): string {
@@ -89,7 +103,10 @@ function legacyAuthExists(authDir: string): boolean {
   }
 }
 
-export function resolveWhatsAppAuthDir(params: { cfg: OpenClawConfig; accountId: string }): {
+export function resolveWhatsAppAuthDir(params: {
+  cfg: OpenClawConfig;
+  accountId: string;
+}): {
   authDir: string;
   isLegacy: boolean;
 } {
@@ -116,7 +133,8 @@ export function resolveWhatsAppAccount(params: {
   accountId?: string | null;
 }): ResolvedWhatsAppAccount {
   const rootCfg = params.cfg.channels?.whatsapp;
-  const accountId = params.accountId?.trim() || resolveDefaultWhatsAppAccountId(params.cfg);
+  const accountId =
+    params.accountId?.trim() || resolveDefaultWhatsAppAccountId(params.cfg);
   const accountCfg = resolveAccountConfig(params.cfg, accountId);
   const enabled = accountCfg?.enabled !== false;
   const { authDir, isLegacy } = resolveWhatsAppAuthDir({
@@ -127,9 +145,12 @@ export function resolveWhatsAppAccount(params: {
     accountId,
     name: accountCfg?.name?.trim() || undefined,
     enabled,
-    sendReadReceipts: accountCfg?.sendReadReceipts ?? rootCfg?.sendReadReceipts ?? true,
+    sendReadReceipts:
+      accountCfg?.sendReadReceipts ?? rootCfg?.sendReadReceipts ?? true,
     messagePrefix:
-      accountCfg?.messagePrefix ?? rootCfg?.messagePrefix ?? params.cfg.messages?.messagePrefix,
+      accountCfg?.messagePrefix ??
+      rootCfg?.messagePrefix ??
+      params.cfg.messages?.messagePrefix,
     authDir,
     isLegacyAuthDir: isLegacy,
     selfChatMode: accountCfg?.selfChatMode ?? rootCfg?.selfChatMode,
@@ -147,7 +168,9 @@ export function resolveWhatsAppAccount(params: {
   };
 }
 
-export function listEnabledWhatsAppAccounts(cfg: OpenClawConfig): ResolvedWhatsAppAccount[] {
+export function listEnabledWhatsAppAccounts(
+  cfg: OpenClawConfig,
+): ResolvedWhatsAppAccount[] {
   return listWhatsAppAccountIds(cfg)
     .map((accountId) => resolveWhatsAppAccount({ cfg, accountId }))
     .filter((account) => account.enabled);

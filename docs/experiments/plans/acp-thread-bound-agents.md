@@ -178,7 +178,11 @@ export interface AcpRuntime {
     idempotencyKey: string;
   }): Promise<void>;
 
-  close(input: { handle: AcpRuntimeHandle; reason: string; idempotencyKey: string }): Promise<void>;
+  close(input: {
+    handle: AcpRuntimeHandle;
+    reason: string;
+    idempotencyKey: string;
+  }): Promise<void>;
 
   health?(): Promise<{ ok: boolean; details?: string }>;
 }

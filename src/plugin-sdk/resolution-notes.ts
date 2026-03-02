@@ -6,7 +6,9 @@ export function formatResolvedUnresolvedNote(params: {
     return undefined;
   }
   return [
-    params.resolved.length > 0 ? `Resolved: ${params.resolved.join(", ")}` : undefined,
+    params.resolved.length > 0
+      ? `Resolved: ${params.resolved.join(", ")}`
+      : undefined,
     params.unresolved.length > 0
       ? `Unresolved (kept as typed): ${params.unresolved.join(", ")}`
       : undefined,

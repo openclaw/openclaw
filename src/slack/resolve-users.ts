@@ -40,7 +40,11 @@ type SlackListUsersResponse = {
   response_metadata?: { next_cursor?: string };
 };
 
-function parseSlackUserInput(raw: string): { id?: string; name?: string; email?: string } {
+function parseSlackUserInput(raw: string): {
+  id?: string;
+  name?: string;
+  email?: string;
+} {
   const trimmed = raw.trim();
   if (!trimmed) {
     return {};
@@ -79,7 +83,8 @@ async function listSlackUsers(client: WebClient): Promise<SlackUserLookup[]> {
         id,
         name,
         displayName: profile.display_name?.trim() || undefined,
-        realName: profile.real_name?.trim() || member.real_name?.trim() || undefined,
+        realName:
+          profile.real_name?.trim() || member.real_name?.trim() || undefined,
         email: profile.email?.trim()?.toLowerCase() || undefined,
         deleted: Boolean(member.deleted),
         isBot: Boolean(member.is_bot),
@@ -92,7 +97,10 @@ async function listSlackUsers(client: WebClient): Promise<SlackUserLookup[]> {
   return users;
 }
 
-function scoreSlackUser(user: SlackUserLookup, match: { name?: string; email?: string }): number {
+function scoreSlackUser(
+  user: SlackUserLookup,
+  match: { name?: string; email?: string },
+): number {
   let score = 0;
   if (!user.deleted) {
     score += 3;

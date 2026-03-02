@@ -5,7 +5,10 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { withEnvAsync } from "../test-utils/env.js";
 import { resolveApiKeyForProvider } from "./model-auth.js";
-import { buildNvidiaProvider, resolveImplicitProviders } from "./models-config.providers.js";
+import {
+  buildNvidiaProvider,
+  resolveImplicitProviders,
+} from "./models-config.providers.js";
 
 describe("NVIDIA provider", () => {
   it("should include nvidia when NVIDIA_API_KEY is configured", async () => {
@@ -56,7 +59,9 @@ describe("MiniMax implicit provider (#15275)", () => {
       expect(providers?.minimax).toBeDefined();
       expect(providers?.minimax?.api).toBe("anthropic-messages");
       expect(providers?.minimax?.authHeader).toBe(true);
-      expect(providers?.minimax?.baseUrl).toBe("https://api.minimax.io/anthropic");
+      expect(providers?.minimax?.baseUrl).toBe(
+        "https://api.minimax.io/anthropic",
+      );
     });
   });
 

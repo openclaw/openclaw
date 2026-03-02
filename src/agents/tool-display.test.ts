@@ -138,7 +138,9 @@ describe("tool display details", () => {
       }),
     );
 
-    expect(detail).toBe("check git status (in /tmp)\n\n`pushd /tmp && git status`");
+    expect(detail).toBe(
+      "check git status (in /tmp)\n\n`pushd /tmp && git status`",
+    );
   });
 
   it("clears inferred cwd when popd is stripped from preamble", () => {
@@ -149,7 +151,9 @@ describe("tool display details", () => {
       }),
     );
 
-    expect(detail).toBe("install dependencies\n\n`pushd /tmp && popd && npm install`");
+    expect(detail).toBe(
+      "install dependencies\n\n`pushd /tmp && popd && npm install`",
+    );
   });
 
   it("moves cd path to context suffix with || separator", () => {
@@ -173,7 +177,9 @@ describe("tool display details", () => {
       }),
     );
 
-    expect(detail).toBe("install dependencies (in /app)\n\n`cd /tmp && npm install`");
+    expect(detail).toBe(
+      "install dependencies (in /app)\n\n`cd /tmp && npm install`",
+    );
   });
 
   it("summarizes all stages and appends raw command", () => {

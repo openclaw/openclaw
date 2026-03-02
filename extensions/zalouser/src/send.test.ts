@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { sendImageZalouser, sendLinkZalouser, sendMessageZalouser } from "./send.js";
+import {
+  sendImageZalouser,
+  sendLinkZalouser,
+  sendMessageZalouser,
+} from "./send.js";
 import { sendZaloLink, sendZaloTextMessage } from "./zalo-js.js";
 
 vi.mock("./zalo-js.js", () => ({
@@ -56,10 +60,14 @@ describe("zalouser send helpers", () => {
       isGroup: true,
     });
 
-    expect(mockSendLink).toHaveBeenCalledWith("thread-3", "https://openclaw.ai", {
-      profile: "p3",
-      isGroup: true,
-    });
+    expect(mockSendLink).toHaveBeenCalledWith(
+      "thread-3",
+      "https://openclaw.ai",
+      {
+        profile: "p3",
+        isGroup: true,
+      },
+    );
     expect(result).toEqual({ ok: false, error: "boom" });
   });
 });

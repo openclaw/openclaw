@@ -25,7 +25,9 @@ async function createCaseDir(prefix: string): Promise<string> {
 }
 
 beforeAll(async () => {
-  fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skills-sync-suite-"));
+  fixtureRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-skills-sync-suite-"),
+  );
 });
 
 afterAll(async () => {
@@ -37,7 +39,9 @@ describe("buildWorkspaceSkillsPrompt", () => {
     workspaceDir: string,
     opts?: Parameters<typeof buildWorkspaceSkillsPrompt>[1],
   ) =>
-    withEnv({ HOME: workspaceDir, PATH: "" }, () => buildWorkspaceSkillsPrompt(workspaceDir, opts));
+    withEnv({ HOME: workspaceDir, PATH: "" }, () =>
+      buildWorkspaceSkillsPrompt(workspaceDir, opts),
+    );
 
   it("syncs merged skills into a target workspace", async () => {
     const sourceWorkspace = await createCaseDir("source");
@@ -101,9 +105,11 @@ describe("buildWorkspaceSkillsPrompt", () => {
       description: "Traversal skill",
     });
 
-    expect(path.relative(path.join(targetWorkspace, "skills"), escapedDest).startsWith("..")).toBe(
-      true,
-    );
+    expect(
+      path
+        .relative(path.join(targetWorkspace, "skills"), escapedDest)
+        .startsWith(".."),
+    ).toBe(true);
     expect(await pathExists(escapedDest)).toBe(false);
 
     await withEnv({ HOME: sourceWorkspace, PATH: "" }, () =>
@@ -116,7 +122,14 @@ describe("buildWorkspaceSkillsPrompt", () => {
     );
 
     expect(
-      await pathExists(path.join(targetWorkspace, "skills", "safe-traversal-skill", "SKILL.md")),
+      await pathExists(
+        path.join(
+          targetWorkspace,
+          "skills",
+          "safe-traversal-skill",
+          "SKILL.md",
+        ),
+      ),
     ).toBe(true);
     expect(await pathExists(escapedDest)).toBe(false);
   });
@@ -124,7 +137,10 @@ describe("buildWorkspaceSkillsPrompt", () => {
     const sourceWorkspace = await createCaseDir("source");
     const targetWorkspace = await createCaseDir("target");
     const escapeId = fixtureCount;
-    const absoluteDest = path.join(os.tmpdir(), `skill-sync-abs-escape-${escapeId}`);
+    const absoluteDest = path.join(
+      os.tmpdir(),
+      `skill-sync-abs-escape-${escapeId}`,
+    );
 
     await fs.rm(absoluteDest, { recursive: true, force: true });
     await writeSkill({
@@ -145,7 +161,9 @@ describe("buildWorkspaceSkillsPrompt", () => {
     );
 
     expect(
-      await pathExists(path.join(targetWorkspace, "skills", "safe-absolute-skill", "SKILL.md")),
+      await pathExists(
+        path.join(targetWorkspace, "skills", "safe-absolute-skill", "SKILL.md"),
+      ),
     ).toBe(true);
     expect(await pathExists(absoluteDest)).toBe(false);
   });

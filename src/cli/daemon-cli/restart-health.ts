@@ -26,7 +26,10 @@ function listenerOwnedByRuntimePid(params: {
   listener: PortUsage["listeners"][number];
   runtimePid: number;
 }): boolean {
-  return params.listener.pid === params.runtimePid || params.listener.ppid === params.runtimePid;
+  return (
+    params.listener.pid === params.runtimePid ||
+    params.listener.ppid === params.runtimePid
+  );
 }
 
 export async function inspectGatewayRestart(params: {
@@ -59,7 +62,8 @@ export async function inspectGatewayRestart(params: {
   const gatewayListeners =
     portUsage.status === "busy"
       ? portUsage.listeners.filter(
-          (listener) => classifyPortListener(listener, params.port) === "gateway",
+          (listener) =>
+            classifyPortListener(listener, params.port) === "gateway",
         )
       : [];
   const fallbackListenerPids =
@@ -68,7 +72,10 @@ export async function inspectGatewayRestart(params: {
     runtime.status !== "running" &&
     portUsage.status === "busy"
       ? portUsage.listeners
-          .filter((listener) => classifyPortListener(listener, params.port) === "unknown")
+          .filter(
+            (listener) =>
+              classifyPortListener(listener, params.port) === "unknown",
+          )
           .map((listener) => listener.pid)
           .filter((pid): pid is number => Number.isFinite(pid))
       : [];
@@ -76,7 +83,9 @@ export async function inspectGatewayRestart(params: {
   const runtimePid = runtime.pid;
   const ownsPort =
     runtimePid != null
-      ? portUsage.listeners.some((listener) => listenerOwnedByRuntimePid({ listener, runtimePid }))
+      ? portUsage.listeners.some((listener) =>
+          listenerOwnedByRuntimePid({ listener, runtimePid }),
+        )
       : gatewayListeners.length > 0 ||
         (portUsage.status === "busy" && portUsage.listeners.length === 0);
   const healthy = running && ownsPort;
@@ -130,7 +139,10 @@ export async function waitForGatewayHealthyRestart(params: {
     if (snapshot.healthy) {
       return snapshot;
     }
-    if (snapshot.staleGatewayPids.length > 0 && snapshot.runtime.status !== "running") {
+    if (
+      snapshot.staleGatewayPids.length > 0 &&
+      snapshot.runtime.status !== "running"
+    ) {
       return snapshot;
     }
     await sleep(delayMs);
@@ -145,13 +157,17 @@ export async function waitForGatewayHealthyRestart(params: {
   return snapshot;
 }
 
-export function renderRestartDiagnostics(snapshot: GatewayRestartSnapshot): string[] {
+export function renderRestartDiagnostics(
+  snapshot: GatewayRestartSnapshot,
+): string[] {
   const lines: string[] = [];
   const runtimeSummary = [
     snapshot.runtime.status ? `status=${snapshot.runtime.status}` : null,
     snapshot.runtime.state ? `state=${snapshot.runtime.state}` : null,
     snapshot.runtime.pid != null ? `pid=${snapshot.runtime.pid}` : null,
-    snapshot.runtime.lastExitStatus != null ? `lastExit=${snapshot.runtime.lastExitStatus}` : null,
+    snapshot.runtime.lastExitStatus != null
+      ? `lastExit=${snapshot.runtime.lastExitStatus}`
+      : null,
   ]
     .filter(Boolean)
     .join(", ");
@@ -163,19 +179,27 @@ export function renderRestartDiagnostics(snapshot: GatewayRestartSnapshot): stri
   if (snapshot.portUsage.status === "busy") {
     lines.push(...formatPortDiagnostics(snapshot.portUsage));
   } else {
-    lines.push(`Gateway port ${snapshot.portUsage.port} status: ${snapshot.portUsage.status}.`);
+    lines.push(
+      `Gateway port ${snapshot.portUsage.port} status: ${snapshot.portUsage.status}.`,
+    );
   }
 
   if (snapshot.portUsage.errors?.length) {
-    lines.push(`Port diagnostics errors: ${snapshot.portUsage.errors.join("; ")}`);
+    lines.push(
+      `Port diagnostics errors: ${snapshot.portUsage.errors.join("; ")}`,
+    );
   }
 
   return lines;
 }
 
-export async function terminateStaleGatewayPids(pids: number[]): Promise<number[]> {
+export async function terminateStaleGatewayPids(
+  pids: number[],
+): Promise<number[]> {
   const targets = Array.from(
-    new Set(pids.filter((pid): pid is number => Number.isFinite(pid) && pid > 0)),
+    new Set(
+      pids.filter((pid): pid is number => Number.isFinite(pid) && pid > 0),
+    ),
   );
   for (const pid of targets) {
     killProcessTree(pid, { graceMs: 300 });

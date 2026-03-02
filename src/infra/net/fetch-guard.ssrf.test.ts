@@ -14,7 +14,9 @@ function okResponse(body = "ok"): Response {
 }
 
 describe("fetchWithSsrFGuard hardening", () => {
-  type LookupFn = NonNullable<Parameters<typeof fetchWithSsrFGuard>[0]["lookupFn"]>;
+  type LookupFn = NonNullable<
+    Parameters<typeof fetchWithSsrFGuard>[0]["lookupFn"]
+  >;
   afterEach(() => {
     vi.unstubAllEnvs();
   });
@@ -50,7 +52,9 @@ describe("fetchWithSsrFGuard hardening", () => {
   });
 
   it("allows RFC2544 benchmark range IPv4 literal URLs when explicitly opted in", async () => {
-    const fetchImpl = vi.fn().mockResolvedValueOnce(new Response("ok", { status: 200 }));
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("ok", { status: 200 }));
     const result = await fetchWithSsrFGuard({
       url: "http://198.18.0.153/file",
       fetchImpl,
@@ -63,7 +67,9 @@ describe("fetchWithSsrFGuard hardening", () => {
     const lookupFn = vi.fn(async () => [
       { address: "93.184.216.34", family: 4 },
     ]) as unknown as LookupFn;
-    const fetchImpl = vi.fn().mockResolvedValueOnce(redirectResponse("http://127.0.0.1:6379/"));
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(redirectResponse("http://127.0.0.1:6379/"));
 
     await expect(
       fetchWithSsrFGuard({
@@ -81,7 +87,9 @@ describe("fetchWithSsrFGuard hardening", () => {
       fetchWithSsrFGuard({
         url: "https://evil.example.org/file.txt",
         fetchImpl,
-        policy: { hostnameAllowlist: ["cdn.example.com", "*.assets.example.com"] },
+        policy: {
+          hostnameAllowlist: ["cdn.example.com", "*.assets.example.com"],
+        },
       }),
     ).rejects.toThrow(/allowlist/i);
     expect(fetchImpl).not.toHaveBeenCalled();
@@ -169,12 +177,14 @@ describe("fetchWithSsrFGuard hardening", () => {
     const lookupFn = vi.fn(async () => [
       { address: "93.184.216.34", family: 4 },
     ]) as unknown as LookupFn;
-    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      const requestInit = init as RequestInit & { dispatcher?: unknown };
-      expect(requestInit.dispatcher).toBeDefined();
-      expect(requestInit.dispatcher).not.toBeInstanceOf(EnvHttpProxyAgent);
-      return okResponse();
-    });
+    const fetchImpl = vi.fn(
+      async (_input: RequestInfo | URL, init?: RequestInit) => {
+        const requestInit = init as RequestInit & { dispatcher?: unknown };
+        expect(requestInit.dispatcher).toBeDefined();
+        expect(requestInit.dispatcher).not.toBeInstanceOf(EnvHttpProxyAgent);
+        return okResponse();
+      },
+    );
 
     const result = await fetchWithSsrFGuard({
       url: "https://public.example/resource",
@@ -192,11 +202,13 @@ describe("fetchWithSsrFGuard hardening", () => {
     const lookupFn = vi.fn(async () => [
       { address: "93.184.216.34", family: 4 },
     ]) as unknown as LookupFn;
-    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      const requestInit = init as RequestInit & { dispatcher?: unknown };
-      expect(requestInit.dispatcher).toBeInstanceOf(EnvHttpProxyAgent);
-      return okResponse();
-    });
+    const fetchImpl = vi.fn(
+      async (_input: RequestInfo | URL, init?: RequestInit) => {
+        const requestInit = init as RequestInit & { dispatcher?: unknown };
+        expect(requestInit.dispatcher).toBeInstanceOf(EnvHttpProxyAgent);
+        return okResponse();
+      },
+    );
 
     const result = await fetchWithSsrFGuard({
       url: "https://public.example/resource",

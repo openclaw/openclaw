@@ -69,20 +69,60 @@ describe("browser server-context ensureTabAvailable", () => {
     // 2nd call (act): reversed ordering B then A (twice)
     const responses = [
       [
-        { id: "A", type: "page", url: "https://a.example", webSocketDebuggerUrl: "ws://x/a" },
-        { id: "B", type: "page", url: "https://b.example", webSocketDebuggerUrl: "ws://x/b" },
+        {
+          id: "A",
+          type: "page",
+          url: "https://a.example",
+          webSocketDebuggerUrl: "ws://x/a",
+        },
+        {
+          id: "B",
+          type: "page",
+          url: "https://b.example",
+          webSocketDebuggerUrl: "ws://x/b",
+        },
       ],
       [
-        { id: "A", type: "page", url: "https://a.example", webSocketDebuggerUrl: "ws://x/a" },
-        { id: "B", type: "page", url: "https://b.example", webSocketDebuggerUrl: "ws://x/b" },
+        {
+          id: "A",
+          type: "page",
+          url: "https://a.example",
+          webSocketDebuggerUrl: "ws://x/a",
+        },
+        {
+          id: "B",
+          type: "page",
+          url: "https://b.example",
+          webSocketDebuggerUrl: "ws://x/b",
+        },
       ],
       [
-        { id: "B", type: "page", url: "https://b.example", webSocketDebuggerUrl: "ws://x/b" },
-        { id: "A", type: "page", url: "https://a.example", webSocketDebuggerUrl: "ws://x/a" },
+        {
+          id: "B",
+          type: "page",
+          url: "https://b.example",
+          webSocketDebuggerUrl: "ws://x/b",
+        },
+        {
+          id: "A",
+          type: "page",
+          url: "https://a.example",
+          webSocketDebuggerUrl: "ws://x/a",
+        },
       ],
       [
-        { id: "B", type: "page", url: "https://b.example", webSocketDebuggerUrl: "ws://x/b" },
-        { id: "A", type: "page", url: "https://a.example", webSocketDebuggerUrl: "ws://x/a" },
+        {
+          id: "B",
+          type: "page",
+          url: "https://b.example",
+          webSocketDebuggerUrl: "ws://x/b",
+        },
+        {
+          id: "A",
+          type: "page",
+          url: "https://a.example",
+          webSocketDebuggerUrl: "ws://x/a",
+        },
       ],
     ];
     stubChromeJsonList(responses);
@@ -101,8 +141,22 @@ describe("browser server-context ensureTabAvailable", () => {
 
   it("falls back to the only attached tab when an invalid targetId is provided (extension)", async () => {
     const responses = [
-      [{ id: "A", type: "page", url: "https://a.example", webSocketDebuggerUrl: "ws://x/a" }],
-      [{ id: "A", type: "page", url: "https://a.example", webSocketDebuggerUrl: "ws://x/a" }],
+      [
+        {
+          id: "A",
+          type: "page",
+          url: "https://a.example",
+          webSocketDebuggerUrl: "ws://x/a",
+        },
+      ],
+      [
+        {
+          id: "A",
+          type: "page",
+          url: "https://a.example",
+          webSocketDebuggerUrl: "ws://x/a",
+        },
+      ],
     ];
     stubChromeJsonList(responses);
     const state = makeBrowserState();
@@ -120,6 +174,8 @@ describe("browser server-context ensureTabAvailable", () => {
 
     const ctx = createBrowserRouteContext({ getState: () => state });
     const chrome = ctx.forProfile("chrome");
-    await expect(chrome.ensureTabAvailable()).rejects.toThrow(/no attached Chrome tabs/i);
+    await expect(chrome.ensureTabAvailable()).rejects.toThrow(
+      /no attached Chrome tabs/i,
+    );
   });
 });

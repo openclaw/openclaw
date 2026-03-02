@@ -22,7 +22,9 @@ describe("splitTrailingAuthProfile", () => {
   });
 
   it("supports trailing profile override after @-prefixed path segments", () => {
-    expect(splitTrailingAuthProfile("openai/@cf/openai/gpt-oss-20b@cf:default")).toEqual({
+    expect(
+      splitTrailingAuthProfile("openai/@cf/openai/gpt-oss-20b@cf:default"),
+    ).toEqual({
       model: "openai/@cf/openai/gpt-oss-20b",
       profile: "cf:default",
     });
@@ -35,7 +37,9 @@ describe("splitTrailingAuthProfile", () => {
   });
 
   it("supports openrouter preset profile overrides", () => {
-    expect(splitTrailingAuthProfile("openrouter/@preset/kimi-2-5@work")).toEqual({
+    expect(
+      splitTrailingAuthProfile("openrouter/@preset/kimi-2-5@work"),
+    ).toEqual({
       model: "openrouter/@preset/kimi-2-5",
       profile: "work",
     });
@@ -48,7 +52,9 @@ describe("splitTrailingAuthProfile", () => {
   });
 
   it("uses first @ after last slash for email-based auth profiles", () => {
-    expect(splitTrailingAuthProfile("flash@google-gemini-cli:test@gmail.com")).toEqual({
+    expect(
+      splitTrailingAuthProfile("flash@google-gemini-cli:test@gmail.com"),
+    ).toEqual({
       model: "flash",
       profile: "google-gemini-cli:test@gmail.com",
     });

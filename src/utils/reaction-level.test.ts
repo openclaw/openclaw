@@ -19,8 +19,16 @@ describe("resolveReactionLevel", () => {
     },
     {
       name: "supports ack",
-      input: { value: "ack", defaultLevel: "minimal" as const, invalidFallback: "ack" as const },
-      expected: { level: "ack", ackEnabled: true, agentReactionsEnabled: false },
+      input: {
+        value: "ack",
+        defaultLevel: "minimal" as const,
+        invalidFallback: "ack" as const,
+      },
+      expected: {
+        level: "ack",
+        ackEnabled: true,
+        agentReactionsEnabled: false,
+      },
     },
     {
       name: "supports extensive",
@@ -38,8 +46,16 @@ describe("resolveReactionLevel", () => {
     },
     {
       name: "uses invalid fallback ack",
-      input: { value: "bogus", defaultLevel: "minimal" as const, invalidFallback: "ack" as const },
-      expected: { level: "ack", ackEnabled: true, agentReactionsEnabled: false },
+      input: {
+        value: "bogus",
+        defaultLevel: "minimal" as const,
+        invalidFallback: "ack" as const,
+      },
+      expected: {
+        level: "ack",
+        ackEnabled: true,
+        agentReactionsEnabled: false,
+      },
     },
     {
       name: "uses invalid fallback minimal",

@@ -42,7 +42,9 @@ function resolveChannelGroupConfig(
     return undefined;
   }
   const target = groupId.toLowerCase();
-  const matchedKey = Object.keys(groups).find((key) => key !== "*" && key.toLowerCase() === target);
+  const matchedKey = Object.keys(groups).find(
+    (key) => key !== "*" && key.toLowerCase() === target,
+  );
   if (!matchedKey) {
     return undefined;
   }
@@ -72,7 +74,10 @@ type ParsedSenderPolicyKey =
   | { kind: "wildcard" }
   | { kind: "typed"; type: SenderKeyType; key: string };
 
-type SenderPolicyBuckets = Record<ToolsBySenderKeyType, Map<string, GroupToolPolicyConfig>>;
+type SenderPolicyBuckets = Record<
+  ToolsBySenderKeyType,
+  Map<string, GroupToolPolicyConfig>
+>;
 
 function normalizeSenderKey(
   value: string,
@@ -84,7 +89,10 @@ function normalizeSenderKey(
   if (!trimmed) {
     return "";
   }
-  const withoutAt = options.stripLeadingAt && trimmed.startsWith("@") ? trimmed.slice(1) : trimmed;
+  const withoutAt =
+    options.stripLeadingAt && trimmed.startsWith("@")
+      ? trimmed.slice(1)
+      : trimmed;
   return withoutAt.toLowerCase();
 }
 
@@ -115,7 +123,9 @@ function warnLegacyToolsBySenderKey(rawKey: string) {
   );
 }
 
-function parseSenderPolicyKey(rawKey: string): ParsedSenderPolicyKey | undefined {
+function parseSenderPolicyKey(
+  rawKey: string,
+): ParsedSenderPolicyKey | undefined {
   const trimmed = rawKey.trim();
   if (!trimmed) {
     return undefined;
@@ -205,7 +215,10 @@ function resolveCompiledToolsBySenderPolicy(
   return compiled;
 }
 
-function normalizeCandidate(value: string | null | undefined, type: SenderKeyType): string {
+function normalizeCandidate(
+  value: string | null | undefined,
+  type: SenderKeyType,
+): string {
   const trimmed = value?.trim();
   if (!trimmed) {
     return "";
@@ -213,7 +226,9 @@ function normalizeCandidate(value: string | null | undefined, type: SenderKeyTyp
   return normalizeTypedSenderKey(trimmed, type);
 }
 
-function normalizeSenderIdCandidates(value: string | null | undefined): string[] {
+function normalizeSenderIdCandidates(
+  value: string | null | undefined,
+): string[] {
   const trimmed = value?.trim();
   if (!trimmed) {
     return [];
@@ -233,7 +248,9 @@ function matchToolsBySenderPolicy(
   compiled: CompiledSenderPolicy,
   params: GroupToolPolicySender,
 ): GroupToolPolicyConfig | undefined {
-  for (const senderIdCandidate of normalizeSenderIdCandidates(params.senderId)) {
+  for (const senderIdCandidate of normalizeSenderIdCandidates(
+    params.senderId,
+  )) {
     const match = compiled.buckets.id.get(senderIdCandidate);
     if (match) {
       return match;
@@ -294,7 +311,10 @@ function resolveChannelGroups(
   if (!channelConfig) {
     return undefined;
   }
-  const accountGroups = resolveAccountEntry(channelConfig.accounts, normalizedAccountId)?.groups;
+  const accountGroups = resolveAccountEntry(
+    channelConfig.accounts,
+    normalizedAccountId,
+  )?.groups;
   return accountGroups ?? channelConfig.groups;
 }
 
@@ -333,23 +353,37 @@ export function resolveChannelGroupPolicy(params: {
 }): ChannelGroupPolicy {
   const { cfg, channel } = params;
   const groups = resolveChannelGroups(cfg, channel, params.accountId);
-  const groupPolicy = resolveChannelGroupPolicyMode(cfg, channel, params.accountId);
+  const groupPolicy = resolveChannelGroupPolicyMode(
+    cfg,
+    channel,
+    params.accountId,
+  );
   const hasGroups = Boolean(groups && Object.keys(groups).length > 0);
   const allowlistEnabled = groupPolicy === "allowlist" || hasGroups;
   const normalizedId = params.groupId?.trim();
   const groupConfig = normalizedId
-    ? resolveChannelGroupConfig(groups, normalizedId, params.groupIdCaseInsensitive)
+    ? resolveChannelGroupConfig(
+        groups,
+        normalizedId,
+        params.groupIdCaseInsensitive,
+      )
     : undefined;
   const defaultConfig = groups?.["*"];
-  const allowAll = allowlistEnabled && Boolean(groups && Object.hasOwn(groups, "*"));
+  const allowAll =
+    allowlistEnabled && Boolean(groups && Object.hasOwn(groups, "*"));
   // When groupPolicy is "allowlist" with groupAllowFrom but no explicit groups,
   // allow the group through — sender-level filtering handles access control.
   const senderFilterBypass =
-    groupPolicy === "allowlist" && !hasGroups && Boolean(params.hasGroupAllowFrom);
+    groupPolicy === "allowlist" &&
+    !hasGroups &&
+    Boolean(params.hasGroupAllowFrom);
   const allowed =
     groupPolicy === "disabled"
       ? false
-      : !allowlistEnabled || allowAll || Boolean(groupConfig) || senderFilterBypass;
+      : !allowlistEnabled ||
+        allowAll ||
+        Boolean(groupConfig) ||
+        senderFilterBypass;
   return {
     allowlistEnabled,
     allowed,
@@ -376,13 +410,19 @@ export function resolveChannelGroupRequireMention(params: {
         ? defaultConfig.requireMention
         : undefined;
 
-  if (overrideOrder === "before-config" && typeof requireMentionOverride === "boolean") {
+  if (
+    overrideOrder === "before-config" &&
+    typeof requireMentionOverride === "boolean"
+  ) {
     return requireMentionOverride;
   }
   if (typeof configMention === "boolean") {
     return configMention;
   }
-  if (overrideOrder !== "before-config" && typeof requireMentionOverride === "boolean") {
+  if (
+    overrideOrder !== "before-config" &&
+    typeof requireMentionOverride === "boolean"
+  ) {
     return requireMentionOverride;
   }
   return true;

@@ -60,7 +60,9 @@ type AllowFromResolver = (params: {
   entries: string[];
 }) => Promise<Array<{ input: string; resolved: boolean; id?: string | null }>>;
 
-function asAllowFromResolver(resolveEntries: ReturnType<typeof vi.fn>): AllowFromResolver {
+function asAllowFromResolver(
+  resolveEntries: ReturnType<typeof vi.fn>,
+): AllowFromResolver {
   return resolveEntries as AllowFromResolver;
 }
 
@@ -171,7 +173,10 @@ describe("promptResolvedAllowFrom", () => {
     });
 
     expect(result).toEqual(["U123"]);
-    expect(prompter.note).toHaveBeenCalledWith("Could not resolve: alice", "allowlist");
+    expect(prompter.note).toHaveBeenCalledWith(
+      "Could not resolve: alice",
+      "allowlist",
+    );
     expect(resolveEntries).toHaveBeenCalledTimes(2);
   });
 
@@ -214,13 +219,18 @@ describe("promptLegacyChannelAllowFrom", () => {
     });
 
     expect(next.channels?.discord?.allowFrom).toEqual(["999", "123"]);
-    expect(prompter.note).toHaveBeenCalledWith("line1\nline2", "Discord allowlist");
+    expect(prompter.note).toHaveBeenCalledWith(
+      "line1\nline2",
+      "Discord allowlist",
+    );
     expect(resolveEntries).not.toHaveBeenCalled();
   });
 
   it("uses resolver when token is present", async () => {
     const prompter = createPrompter(["alice"]);
-    const resolveEntries = vi.fn(async () => [{ input: "alice", resolved: true, id: "U1" }]);
+    const resolveEntries = vi.fn(async () => [
+      { input: "alice", resolved: true, id: "U1" },
+    ]);
 
     const next = await runPromptLegacyAllowFrom({
       cfg: {} as OpenClawConfig,
@@ -235,7 +245,10 @@ describe("promptLegacyChannelAllowFrom", () => {
     });
 
     expect(next.channels?.slack?.allowFrom).toEqual(["U1"]);
-    expect(resolveEntries).toHaveBeenCalledWith({ token: "xoxb-token", entries: ["alice"] });
+    expect(resolveEntries).toHaveBeenCalledWith({
+      token: "xoxb-token",
+      entries: ["alice"],
+    });
   });
 });
 
@@ -337,12 +350,18 @@ describe("promptParsedAllowFromForScopedChannel", () => {
       message: "msg",
       placeholder: "placeholder",
       parseEntries: (raw) =>
-        parseOnboardingEntriesWithParser(raw, (entry) => ({ value: entry.toLowerCase() })),
-      getExistingAllowFrom: ({ cfg }) => cfg.channels?.imessage?.allowFrom ?? [],
+        parseOnboardingEntriesWithParser(raw, (entry) => ({
+          value: entry.toLowerCase(),
+        })),
+      getExistingAllowFrom: ({ cfg }) =>
+        cfg.channels?.imessage?.allowFrom ?? [],
     });
 
     expect(next.channels?.imessage?.allowFrom).toEqual(["alice"]);
-    expect(prompter.note).toHaveBeenCalledWith("line1\nline2", "iMessage allowlist");
+    expect(prompter.note).toHaveBeenCalledWith(
+      "line1\nline2",
+      "iMessage allowlist",
+    );
   });
 
   it("writes parsed values to non-default account allowFrom", async () => {
@@ -374,19 +393,25 @@ describe("promptParsedAllowFromForScopedChannel", () => {
         cfg.channels?.signal?.accounts?.[accountId]?.allowFrom ?? [],
     });
 
-    expect(next.channels?.signal?.accounts?.alt?.allowFrom).toEqual(["+15555550124"]);
+    expect(next.channels?.signal?.accounts?.alt?.allowFrom).toEqual([
+      "+15555550124",
+    ]);
     expect(next.channels?.signal?.allowFrom).toBeUndefined();
   });
 
   it("uses parser validation from the prompt validate callback", async () => {
     const prompter = {
       note: vi.fn(async () => undefined),
-      text: vi.fn(async (params: { validate?: (value: string) => string | undefined }) => {
-        expect(params.validate?.("")).toBe("Required");
-        expect(params.validate?.("bad")).toBe("bad entry");
-        expect(params.validate?.("ok")).toBeUndefined();
-        return "ok";
-      }),
+      text: vi.fn(
+        async (params: {
+          validate?: (value: string) => string | undefined;
+        }) => {
+          expect(params.validate?.("")).toBe("Required");
+          expect(params.validate?.("bad")).toBe("bad entry");
+          expect(params.validate?.("ok")).toBeUndefined();
+          return "ok";
+        },
+      ),
     };
 
     const next = await promptParsedAllowFromForScopedChannel({
@@ -474,7 +499,9 @@ describe("setAccountAllowFromForChannel", () => {
     });
 
     expect(next.channels?.imessage?.allowFrom).toEqual(["new-default"]);
-    expect(next.channels?.imessage?.accounts?.work?.allowFrom).toEqual(["work-old"]);
+    expect(next.channels?.imessage?.accounts?.work?.allowFrom).toEqual([
+      "work-old",
+    ]);
   });
 
   it("writes allowFrom on nested non-default account config", () => {
@@ -484,7 +511,11 @@ describe("setAccountAllowFromForChannel", () => {
           enabled: true,
           allowFrom: ["default-old"],
           accounts: {
-            alt: { enabled: true, account: "+15555550123", allowFrom: ["alt-old"] },
+            alt: {
+              enabled: true,
+              account: "+15555550123",
+              allowFrom: ["alt-old"],
+            },
           },
         },
       },
@@ -498,7 +529,9 @@ describe("setAccountAllowFromForChannel", () => {
     });
 
     expect(next.channels?.signal?.allowFrom).toEqual(["default-old"]);
-    expect(next.channels?.signal?.accounts?.alt?.allowFrom).toEqual(["alt-new"]);
+    expect(next.channels?.signal?.accounts?.alt?.allowFrom).toEqual([
+      "alt-new",
+    ]);
     expect(next.channels?.signal?.accounts?.alt?.account).toBe("+15555550123");
   });
 });
@@ -584,7 +617,9 @@ describe("patchChannelConfigForAccount", () => {
     expect(next.channels?.telegram?.allowFrom).toBeUndefined();
     expect(next.channels?.telegram?.groupPolicy).toBeUndefined();
     expect(next.channels?.telegram?.streaming).toBeUndefined();
-    expect(next.channels?.telegram?.accounts?.work?.botToken).toBe("work-token");
+    expect(next.channels?.telegram?.accounts?.work?.botToken).toBe(
+      "work-token",
+    );
   });
 
   it("supports imessage/signal account-scoped channel patches", () => {
@@ -608,7 +643,9 @@ describe("patchChannelConfigForAccount", () => {
     });
     expect(signalNext.channels?.signal?.enabled).toBe(true);
     expect(signalNext.channels?.signal?.accounts?.work?.enabled).toBe(true);
-    expect(signalNext.channels?.signal?.accounts?.work?.account).toBe("+15555550123");
+    expect(signalNext.channels?.signal?.accounts?.work?.account).toBe(
+      "+15555550123",
+    );
 
     const imessageNext = patchChannelConfigForAccount({
       cfg: signalNext,
@@ -824,7 +861,11 @@ describe("setChannelDmPolicyWithAllowFrom", () => {
 
 describe("splitOnboardingEntries", () => {
   it("splits comma/newline/semicolon input and trims blanks", () => {
-    expect(splitOnboardingEntries(" alice, bob \ncarol;  ;\n")).toEqual(["alice", "bob", "carol"]);
+    expect(splitOnboardingEntries(" alice, bob \ncarol;  ;\n")).toEqual([
+      "alice",
+      "bob",
+      "carol",
+    ]);
   });
 });
 
@@ -924,14 +965,18 @@ describe("parseMentionOrPrefixedId", () => {
 describe("normalizeAllowFromEntries", () => {
   it("normalizes values, preserves wildcard, and removes duplicates", () => {
     expect(
-      normalizeAllowFromEntries([" +15555550123 ", "*", "+15555550123", "bad"], (value) =>
-        value.startsWith("+1") ? value : null,
+      normalizeAllowFromEntries(
+        [" +15555550123 ", "*", "+15555550123", "bad"],
+        (value) => (value.startsWith("+1") ? value : null),
       ),
     ).toEqual(["+15555550123", "*"]);
   });
 
   it("trims and de-duplicates without a normalizer", () => {
-    expect(normalizeAllowFromEntries([" alice ", "bob", "alice"])).toEqual(["alice", "bob"]);
+    expect(normalizeAllowFromEntries([" alice ", "bob", "alice"])).toEqual([
+      "alice",
+      "bob",
+    ]);
   });
 });
 

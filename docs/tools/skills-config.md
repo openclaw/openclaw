@@ -15,7 +15,10 @@ All skills-related configuration lives under `skills` in `~/.openclaw/openclaw.j
   skills: {
     allowBundled: ["gemini", "peekaboo"],
     load: {
-      extraDirs: ["~/Projects/agent-scripts/skills", "~/Projects/oss/some-skill-pack/skills"],
+      extraDirs: [
+        "~/Projects/agent-scripts/skills",
+        "~/Projects/oss/some-skill-pack/skills",
+      ],
       watch: true,
       watchDebounceMs: 250,
     },

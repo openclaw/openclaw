@@ -34,7 +34,9 @@ export function createProfileResetOps({
 }: ResetDeps): ResetOps {
   const resetProfile = async () => {
     if (profile.driver === "extension") {
-      await stopChromeExtensionRelayServer({ cdpUrl: profile.cdpUrl }).catch(() => {});
+      await stopChromeExtensionRelayServer({ cdpUrl: profile.cdpUrl }).catch(
+        () => {},
+      );
       return { moved: false, from: profile.cdpUrl };
     }
     if (!profile.cdpIsLoopback) {

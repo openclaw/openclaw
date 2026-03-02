@@ -53,13 +53,18 @@ export type AgentCliOpts = {
   local?: boolean;
 };
 
-function parseTimeoutSeconds(opts: { cfg: ReturnType<typeof loadConfig>; timeout?: string }) {
+function parseTimeoutSeconds(opts: {
+  cfg: ReturnType<typeof loadConfig>;
+  timeout?: string;
+}) {
   const raw =
     opts.timeout !== undefined
       ? Number.parseInt(String(opts.timeout), 10)
       : (opts.cfg.agents?.defaults?.timeoutSeconds ?? 600);
   if (Number.isNaN(raw) || raw < 0) {
-    throw new Error("--timeout must be a non-negative integer (seconds; 0 means no timeout)");
+    throw new Error(
+      "--timeout must be a non-negative integer (seconds; 0 means no timeout)",
+    );
   }
   return raw;
 }
@@ -84,13 +89,18 @@ function formatPayloadForLog(payload: {
   return lines.join("\n").trimEnd();
 }
 
-export async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: RuntimeEnv) {
+export async function agentViaGatewayCommand(
+  opts: AgentCliOpts,
+  runtime: RuntimeEnv,
+) {
   const body = (opts.message ?? "").trim();
   if (!body) {
     throw new Error("Message (--message) is required");
   }
   if (!opts.to && !opts.sessionId && !opts.agent) {
-    throw new Error("Pass --to <E.164>, --session-id, or --agent to choose a session");
+    throw new Error(
+      "Pass --to <E.164>, --session-id, or --agent to choose a session",
+    );
   }
 
   const cfg = loadConfig();
@@ -163,7 +173,9 @@ export async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: Runtim
   const payloads = result?.payloads ?? [];
 
   if (payloads.length === 0) {
-    runtime.log(response?.summary ? String(response.summary) : "No reply from agent.");
+    runtime.log(
+      response?.summary ? String(response.summary) : "No reply from agent.",
+    );
     return response;
   }
 
@@ -177,7 +189,11 @@ export async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: Runtim
   return response;
 }
 
-export async function agentCliCommand(opts: AgentCliOpts, runtime: RuntimeEnv, deps?: CliDeps) {
+export async function agentCliCommand(
+  opts: AgentCliOpts,
+  runtime: RuntimeEnv,
+  deps?: CliDeps,
+) {
   const localOpts = {
     ...opts,
     agentId: opts.agent,
@@ -190,7 +206,9 @@ export async function agentCliCommand(opts: AgentCliOpts, runtime: RuntimeEnv, d
   try {
     return await agentViaGatewayCommand(opts, runtime);
   } catch (err) {
-    runtime.error?.(`Gateway agent failed; falling back to embedded: ${String(err)}`);
+    runtime.error?.(
+      `Gateway agent failed; falling back to embedded: ${String(err)}`,
+    );
     return await agentCommand(localOpts, runtime, deps);
   }
 }

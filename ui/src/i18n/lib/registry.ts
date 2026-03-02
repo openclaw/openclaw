@@ -31,10 +31,19 @@ const LAZY_LOCALE_REGISTRY: Record<LazyLocale, LazyLocaleRegistration> = {
   },
 };
 
-export const SUPPORTED_LOCALES: ReadonlyArray<Locale> = [DEFAULT_LOCALE, ...LAZY_LOCALES];
+export const SUPPORTED_LOCALES: ReadonlyArray<Locale> = [
+  DEFAULT_LOCALE,
+  ...LAZY_LOCALES,
+];
 
-export function isSupportedLocale(value: string | null | undefined): value is Locale {
-  return value !== null && value !== undefined && SUPPORTED_LOCALES.includes(value as Locale);
+export function isSupportedLocale(
+  value: string | null | undefined,
+): value is Locale {
+  return (
+    value !== null &&
+    value !== undefined &&
+    SUPPORTED_LOCALES.includes(value as Locale)
+  );
 }
 
 function isLazyLocale(locale: Locale): locale is LazyLocale {
@@ -54,7 +63,9 @@ export function resolveNavigatorLocale(navLang: string): Locale {
   return DEFAULT_LOCALE;
 }
 
-export async function loadLazyLocaleTranslation(locale: Locale): Promise<TranslationMap | null> {
+export async function loadLazyLocaleTranslation(
+  locale: Locale,
+): Promise<TranslationMap | null> {
   if (!isLazyLocale(locale)) {
     return null;
   }

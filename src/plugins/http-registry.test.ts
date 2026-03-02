@@ -37,7 +37,9 @@ describe("registerPluginHttpRoute", () => {
     });
 
     expect(registry.httpRoutes).toHaveLength(0);
-    expect(logs).toEqual(['plugin: webhook path missing for account "default"']);
+    expect(logs).toEqual([
+      'plugin: webhook path missing for account "default"',
+    ]);
     expect(() => unregister()).not.toThrow();
   });
 

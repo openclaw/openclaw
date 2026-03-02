@@ -24,22 +24,34 @@ import {
 import { normalizeMattermostBaseUrl } from "./mattermost/client.js";
 import { monitorMattermostProvider } from "./mattermost/monitor.js";
 import { probeMattermost } from "./mattermost/probe.js";
-import { addMattermostReaction, removeMattermostReaction } from "./mattermost/reactions.js";
+import {
+  addMattermostReaction,
+  removeMattermostReaction,
+} from "./mattermost/reactions.js";
 import { sendMessageMattermost } from "./mattermost/send.js";
-import { looksLikeMattermostTargetId, normalizeMattermostMessagingTarget } from "./normalize.js";
+import {
+  looksLikeMattermostTargetId,
+  normalizeMattermostMessagingTarget,
+} from "./normalize.js";
 import { mattermostOnboardingAdapter } from "./onboarding.js";
 import { getMattermostRuntime } from "./runtime.js";
 
 const mattermostMessageActions: ChannelMessageActionAdapter = {
   listActions: ({ cfg }) => {
-    const actionsConfig = cfg.channels?.mattermost?.actions as { reactions?: boolean } | undefined;
+    const actionsConfig = cfg.channels?.mattermost?.actions as
+      | { reactions?: boolean }
+      | undefined;
     const baseReactions = actionsConfig?.reactions;
     const hasReactionCapableAccount = listMattermostAccountIds(cfg)
       .map((accountId) => resolveMattermostAccount({ cfg, accountId }))
       .filter((account) => account.enabled)
-      .filter((account) => Boolean(account.botToken?.trim() && account.baseUrl?.trim()))
+      .filter((account) =>
+        Boolean(account.botToken?.trim() && account.baseUrl?.trim()),
+      )
       .some((account) => {
-        const accountActions = account.config.actions as { reactions?: boolean } | undefined;
+        const accountActions = account.config.actions as
+          | { reactions?: boolean }
+          | undefined;
         return (accountActions?.reactions ?? baseReactions ?? true) !== false;
       });
 
@@ -57,13 +69,21 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
       throw new Error(`Mattermost action ${action} not supported`);
     }
     // Check reactions gate: per-account config takes precedence over base config
-    const mmBase = cfg?.channels?.mattermost as Record<string, unknown> | undefined;
-    const accounts = mmBase?.accounts as Record<string, Record<string, unknown>> | undefined;
-    const resolvedAccountId = accountId ?? resolveDefaultMattermostAccountId(cfg);
+    const mmBase = cfg?.channels?.mattermost as
+      | Record<string, unknown>
+      | undefined;
+    const accounts = mmBase?.accounts as
+      | Record<string, Record<string, unknown>>
+      | undefined;
+    const resolvedAccountId =
+      accountId ?? resolveDefaultMattermostAccountId(cfg);
     const acctConfig = accounts?.[resolvedAccountId];
-    const acctActions = acctConfig?.actions as { reactions?: boolean } | undefined;
+    const acctActions = acctConfig?.actions as
+      | { reactions?: boolean }
+      | undefined;
     const baseActions = mmBase?.actions as { reactions?: boolean } | undefined;
-    const reactionsEnabled = acctActions?.reactions ?? baseActions?.reactions ?? true;
+    const reactionsEnabled =
+      acctActions?.reactions ?? baseActions?.reactions ?? true;
     if (!reactionsEnabled) {
       throw new Error("Mattermost reactions are disabled in config");
     }
@@ -79,7 +99,8 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
       throw new Error("Mattermost react requires messageId (post id)");
     }
 
-    const emojiRaw = typeof (params as any)?.emoji === "string" ? (params as any).emoji : "";
+    const emojiRaw =
+      typeof (params as any)?.emoji === "string" ? (params as any).emoji : "";
     const emojiName = emojiRaw.trim().replace(/^:+|:+$/g, "");
     if (!emojiName) {
       throw new Error("Mattermost react requires emoji");
@@ -98,7 +119,10 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
       }
       return {
         content: [
-          { type: "text" as const, text: `Removed reaction :${emojiName}: from ${postId}` },
+          {
+            type: "text" as const,
+            text: `Removed reaction :${emojiName}: from ${postId}`,
+          },
         ],
         details: {},
       };
@@ -115,7 +139,12 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
     }
 
     return {
-      content: [{ type: "text" as const, text: `Reacted with :${emojiName}: on ${postId}` }],
+      content: [
+        {
+          type: "text" as const,
+          text: `Reacted with :${emojiName}: on ${postId}`,
+        },
+      ],
       details: {},
     };
   },
@@ -180,7 +209,8 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
   configSchema: buildChannelConfigSchema(MattermostConfigSchema),
   config: {
     listAccountIds: (cfg) => listMattermostAccountIds(cfg),
-    resolveAccount: (cfg, accountId) => resolveMattermostAccount({ cfg, accountId }),
+    resolveAccount: (cfg, accountId) =>
+      resolveMattermostAccount({ cfg, accountId }),
     defaultAccountId: (cfg) => resolveDefaultMattermostAccountId(cfg),
     setAccountEnabled: ({ cfg, accountId, enabled }) =>
       setAccountEnabledInConfigSection({
@@ -207,16 +237,19 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
       baseUrl: account.baseUrl,
     }),
     resolveAllowFrom: ({ cfg, accountId }) =>
-      (resolveMattermostAccount({ cfg, accountId }).config.allowFrom ?? []).map((entry) =>
-        String(entry),
+      (resolveMattermostAccount({ cfg, accountId }).config.allowFrom ?? []).map(
+        (entry) => String(entry),
       ),
     formatAllowFrom: ({ allowFrom }) =>
       allowFrom.map((entry) => formatAllowEntry(String(entry))).filter(Boolean),
   },
   security: {
     resolveDmPolicy: ({ cfg, accountId, account }) => {
-      const resolvedAccountId = accountId ?? account.accountId ?? DEFAULT_ACCOUNT_ID;
-      const useAccountPath = Boolean(cfg.channels?.mattermost?.accounts?.[resolvedAccountId]);
+      const resolvedAccountId =
+        accountId ?? account.accountId ?? DEFAULT_ACCOUNT_ID;
+      const useAccountPath = Boolean(
+        cfg.channels?.mattermost?.accounts?.[resolvedAccountId],
+      );
       const basePath = useAccountPath
         ? `channels.mattermost.accounts.${resolvedAccountId}.`
         : "channels.mattermost.";
@@ -257,7 +290,8 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
   },
   outbound: {
     deliveryMode: "direct",
-    chunker: (text, limit) => getMattermostRuntime().channel.text.chunkMarkdownText(text, limit),
+    chunker: (text, limit) =>
+      getMattermostRuntime().channel.text.chunkMarkdownText(text, limit),
     chunkerMode: "markdown",
     textChunkLimit: 4000,
     resolveTarget: ({ to }) => {
@@ -279,7 +313,14 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
       });
       return { channel: "mattermost", ...result };
     },
-    sendMedia: async ({ to, text, mediaUrl, mediaLocalRoots, accountId, replyToId }) => {
+    sendMedia: async ({
+      to,
+      text,
+      mediaUrl,
+      mediaLocalRoots,
+      accountId,
+      replyToId,
+    }) => {
       const result = await sendMessageMattermost(to, text, {
         accountId: accountId ?? undefined,
         mediaUrl,
@@ -433,7 +474,8 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
         config: ctx.cfg,
         runtime: ctx.runtime,
         abortSignal: ctx.abortSignal,
-        statusSink: (patch) => ctx.setStatus({ accountId: ctx.accountId, ...patch }),
+        statusSink: (patch) =>
+          ctx.setStatus({ accountId: ctx.accountId, ...patch }),
       });
     },
   },

@@ -6,10 +6,14 @@ import { probeFeishuMock } from "./monitor.test-mocks.js";
 
 vi.mock("@larksuiteoapi/node-sdk", () => ({
   adaptDefault: vi.fn(
-    () => (_req: unknown, res: { statusCode?: number; end: (s: string) => void }) => {
-      res.statusCode = 200;
-      res.end("ok");
-    },
+    () =>
+      (
+        _req: unknown,
+        res: { statusCode?: number; end: (s: string) => void },
+      ) => {
+        res.statusCode = 200;
+        res.end("ok");
+      },
   ),
 }));
 
@@ -23,7 +27,9 @@ import {
 
 async function getFreePort(): Promise<number> {
   const server = createServer();
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+  await new Promise<void>((resolve) =>
+    server.listen(0, "127.0.0.1", () => resolve()),
+  );
   const address = server.address() as AddressInfo | null;
   if (!address) {
     throw new Error("missing server address");
@@ -183,7 +189,9 @@ describe("Feishu webhook security hardening", () => {
     for (let i = 0; i < 4_500; i += 1) {
       isWebhookRateLimitedForTest(`/feishu-rate-limit:key-${i}`, now);
     }
-    expect(getFeishuWebhookRateLimitStateSizeForTest()).toBeLessThanOrEqual(4_096);
+    expect(getFeishuWebhookRateLimitStateSizeForTest()).toBeLessThanOrEqual(
+      4_096,
+    );
   });
 
   it("prunes stale webhook rate-limit state after window elapses", () => {

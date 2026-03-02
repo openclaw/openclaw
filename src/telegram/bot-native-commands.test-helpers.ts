@@ -3,7 +3,9 @@ import type { TelegramAccountConfig } from "../config/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { registerTelegramNativeCommands } from "./bot-native-commands.js";
 
-type RegisterTelegramNativeCommandParams = Parameters<typeof registerTelegramNativeCommands>[0];
+type RegisterTelegramNativeCommandParams = Parameters<
+  typeof registerTelegramNativeCommands
+>[0];
 
 export function createNativeCommandTestParams(params: {
   bot: RegisterTelegramNativeCommandParams["bot"];

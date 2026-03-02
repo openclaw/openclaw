@@ -62,7 +62,9 @@ describe("waitForTransportReady", () => {
       runtime,
       check: async () => ({ ok: false, error: "still down" }),
     });
-    const asserted = expect(waitPromise).rejects.toThrow("test transport not ready");
+    const asserted = expect(waitPromise).rejects.toThrow(
+      "test transport not ready",
+    );
     await vi.advanceTimersByTimeAsync(200);
     await asserted;
     expect(runtime.error).toHaveBeenCalled();

@@ -121,7 +121,8 @@ describe("preflightDiscordMessage", () => {
       channel: "discord",
       accountId: "default",
       listBySession: () => [],
-      resolveByConversation: (ref) => (ref.conversationId === threadId ? threadBinding : null),
+      resolveByConversation: (ref) =>
+        ref.conversationId === threadId ? threadBinding : null,
     });
 
     const result = await preflightDiscordMessage({
@@ -133,7 +134,9 @@ describe("preflightDiscordMessage", () => {
       } as import("../../config/config.js").OpenClawConfig,
       discordConfig: {
         allowBots: true,
-      } as NonNullable<import("../../config/config.js").OpenClawConfig["channels"]>["discord"],
+      } as NonNullable<
+        import("../../config/config.js").OpenClawConfig["channels"]
+      >["discord"],
       accountId: "default",
       token: "token",
       runtime: {} as import("../../runtime.js").RuntimeEnv,

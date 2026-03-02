@@ -23,7 +23,9 @@ export const usageProviders: UsageProviderId[] = [
   "zai",
 ];
 
-export function resolveUsageProviderId(provider?: string | null): UsageProviderId | undefined {
+export function resolveUsageProviderId(
+  provider?: string | null,
+): UsageProviderId | undefined {
   if (!provider) {
     return undefined;
   }
@@ -44,7 +46,11 @@ export const ignoredErrors = new Set([
 export const clampPercent = (value: number) =>
   Math.max(0, Math.min(100, Number.isFinite(value) ? value : 0));
 
-export const withTimeout = async <T>(work: Promise<T>, ms: number, fallback: T): Promise<T> => {
+export const withTimeout = async <T>(
+  work: Promise<T>,
+  ms: number,
+  fallback: T,
+): Promise<T> => {
   let timeout: NodeJS.Timeout | undefined;
   try {
     return await Promise.race([

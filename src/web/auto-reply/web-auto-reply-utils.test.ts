@@ -156,9 +156,14 @@ describe("getSessionSnapshot", () => {
           },
         } as Parameters<typeof getSessionSnapshot>[0];
 
-        const snapshot = getSessionSnapshot(cfg, "whatsapp:+15550001111", true, {
-          sessionKey,
-        });
+        const snapshot = getSessionSnapshot(
+          cfg,
+          "whatsapp:+15550001111",
+          true,
+          {
+            sessionKey,
+          },
+        );
 
         expect(snapshot.resetPolicy.mode).toBe("idle");
         expect(snapshot.resetPolicy.idleMinutes).toBe(360);
@@ -196,7 +201,9 @@ describe("web auto-reply util", () => {
           null,
         ),
       ).toEqual(["+15550001111"]);
-      expect(resolveOwnerList({ mentionRegexes: [] }, "+1 555 000 2222")).toEqual(["+15550002222"]);
+      expect(
+        resolveOwnerList({ mentionRegexes: [] }, "+1 555 000 2222"),
+      ).toEqual(["+15550002222"]);
     });
   });
 
@@ -228,8 +235,16 @@ describe("web auto-reply util", () => {
     });
 
     const cases: Array<{ name: string; value: unknown; expected: boolean }> = [
-      { name: "returns false for non-matching Error", value: new Error("boom"), expected: false },
-      { name: "returns false for non-matching string", value: "boom", expected: false },
+      {
+        name: "returns false for non-matching Error",
+        value: new Error("boom"),
+        expected: false,
+      },
+      {
+        name: "returns false for non-matching string",
+        value: "boom",
+        expected: false,
+      },
       {
         name: "returns false for bad-mac object without whatsapp/baileys markers",
         value: { message: "bad mac" },
@@ -237,7 +252,8 @@ describe("web auto-reply util", () => {
       },
       {
         name: "matches known Baileys crypto auth errors (string, unsupported state)",
-        value: "baileys: unsupported state or unable to authenticate data (noise-handler)",
+        value:
+          "baileys: unsupported state or unable to authenticate data (noise-handler)",
         expected: true,
       },
       {
@@ -245,11 +261,31 @@ describe("web auto-reply util", () => {
         value: "bad mac in aesDecryptGCM (baileys)",
         expected: true,
       },
-      { name: "handles null reason without throwing", value: null, expected: false },
-      { name: "handles number reason without throwing", value: 123, expected: false },
-      { name: "handles boolean reason without throwing", value: true, expected: false },
-      { name: "handles bigint reason without throwing", value: 123n, expected: false },
-      { name: "handles symbol reason without throwing", value: Symbol("bad mac"), expected: false },
+      {
+        name: "handles null reason without throwing",
+        value: null,
+        expected: false,
+      },
+      {
+        name: "handles number reason without throwing",
+        value: 123,
+        expected: false,
+      },
+      {
+        name: "handles boolean reason without throwing",
+        value: true,
+        expected: false,
+      },
+      {
+        name: "handles bigint reason without throwing",
+        value: 123n,
+        expected: false,
+      },
+      {
+        name: "handles symbol reason without throwing",
+        value: Symbol("bad mac"),
+        expected: false,
+      },
       {
         name: "handles function reason without throwing",
         value: function namedFn() {},
@@ -259,7 +295,9 @@ describe("web auto-reply util", () => {
 
     for (const testCase of cases) {
       it(testCase.name, () => {
-        expect(isLikelyWhatsAppCryptoError(testCase.value)).toBe(testCase.expected);
+        expect(isLikelyWhatsAppCryptoError(testCase.value)).toBe(
+          testCase.expected,
+        );
       });
     }
   });

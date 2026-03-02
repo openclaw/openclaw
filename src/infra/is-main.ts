@@ -12,7 +12,10 @@ type IsMainModuleOptions = {
   }>;
 };
 
-function normalizePathCandidate(candidate: string | undefined, cwd: string): string | undefined {
+function normalizePathCandidate(
+  candidate: string | undefined,
+  cwd: string,
+): string | undefined {
   if (!candidate) {
     return undefined;
   }
@@ -35,14 +38,22 @@ export function isMainModule({
   const normalizedCurrent = normalizePathCandidate(currentFile, cwd);
   const normalizedArgv1 = normalizePathCandidate(argv[1], cwd);
 
-  if (normalizedCurrent && normalizedArgv1 && normalizedCurrent === normalizedArgv1) {
+  if (
+    normalizedCurrent &&
+    normalizedArgv1 &&
+    normalizedCurrent === normalizedArgv1
+  ) {
     return true;
   }
 
   // PM2 runs the script via an internal wrapper; `argv[1]` points at the wrapper.
   // PM2 exposes the actual script path in `pm_exec_path`.
   const normalizedPmExecPath = normalizePathCandidate(env.pm_exec_path, cwd);
-  if (normalizedCurrent && normalizedPmExecPath && normalizedCurrent === normalizedPmExecPath) {
+  if (
+    normalizedCurrent &&
+    normalizedPmExecPath &&
+    normalizedCurrent === normalizedPmExecPath
+  ) {
     return true;
   }
 

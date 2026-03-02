@@ -16,8 +16,10 @@ vi.mock("./http-common.js", () => {
   };
 });
 
-const { authorizeGatewayBearerRequestOrReply } = await import("./http-auth-helpers.js");
-const { readJsonBodyOrError, sendMethodNotAllowed } = await import("./http-common.js");
+const { authorizeGatewayBearerRequestOrReply } =
+  await import("./http-auth-helpers.js");
+const { readJsonBodyOrError, sendMethodNotAllowed } =
+  await import("./http-common.js");
 
 describe("handleGatewayPostJsonEndpoint", () => {
   it("returns false when path does not match", async () => {
@@ -28,7 +30,11 @@ describe("handleGatewayPostJsonEndpoint", () => {
         headers: { host: "localhost" },
       } as unknown as IncomingMessage,
       {} as unknown as ServerResponse,
-      { pathname: "/v1/ok", auth: {} as unknown as ResolvedGatewayAuth, maxBodyBytes: 1 },
+      {
+        pathname: "/v1/ok",
+        auth: {} as unknown as ResolvedGatewayAuth,
+        maxBodyBytes: 1,
+      },
     );
     expect(result).toBe(false);
   });
@@ -43,7 +49,11 @@ describe("handleGatewayPostJsonEndpoint", () => {
         headers: { host: "localhost" },
       } as unknown as IncomingMessage,
       {} as unknown as ServerResponse,
-      { pathname: "/v1/ok", auth: {} as unknown as ResolvedGatewayAuth, maxBodyBytes: 1 },
+      {
+        pathname: "/v1/ok",
+        auth: {} as unknown as ResolvedGatewayAuth,
+        maxBodyBytes: 1,
+      },
     );
     expect(result).toBeUndefined();
     expect(mockedSendMethodNotAllowed).toHaveBeenCalledTimes(1);
@@ -58,7 +68,11 @@ describe("handleGatewayPostJsonEndpoint", () => {
         headers: { host: "localhost" },
       } as unknown as IncomingMessage,
       {} as unknown as ServerResponse,
-      { pathname: "/v1/ok", auth: {} as unknown as ResolvedGatewayAuth, maxBodyBytes: 1 },
+      {
+        pathname: "/v1/ok",
+        auth: {} as unknown as ResolvedGatewayAuth,
+        maxBodyBytes: 1,
+      },
     );
     expect(result).toBeUndefined();
   });
@@ -73,7 +87,11 @@ describe("handleGatewayPostJsonEndpoint", () => {
         headers: { host: "localhost" },
       } as unknown as IncomingMessage,
       {} as unknown as ServerResponse,
-      { pathname: "/v1/ok", auth: {} as unknown as ResolvedGatewayAuth, maxBodyBytes: 123 },
+      {
+        pathname: "/v1/ok",
+        auth: {} as unknown as ResolvedGatewayAuth,
+        maxBodyBytes: 123,
+      },
     );
     expect(result).toEqual({ body: { hello: "world" } });
   });

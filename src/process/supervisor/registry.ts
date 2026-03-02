@@ -21,7 +21,9 @@ export type RunRegistry = {
   updateState: (
     runId: string,
     state: RunState,
-    patch?: Partial<Pick<RunRecord, "pid" | "terminationReason" | "exitCode" | "exitSignal">>,
+    patch?: Partial<
+      Pick<RunRecord, "pid" | "terminationReason" | "exitCode" | "exitSignal">
+    >,
   ) => RunRecord | undefined;
   touchOutput: (runId: string) => void;
   finalize: (
@@ -35,7 +37,9 @@ export type RunRegistry = {
   delete: (runId: string) => void;
 };
 
-export function createRunRegistry(options?: { maxExitedRecords?: number }): RunRegistry {
+export function createRunRegistry(options?: {
+  maxExitedRecords?: number;
+}): RunRegistry {
   const records = new Map<string, RunRecord>();
   const maxExitedRecords = resolveMaxExitedRecords(options?.maxExitedRecords);
 
@@ -128,8 +132,10 @@ export function createRunRegistry(options?: { maxExitedRecords?: number }): RunR
       ...current,
       state: "exited",
       terminationReason: current.terminationReason ?? exit.reason,
-      exitCode: current.exitCode !== undefined ? current.exitCode : exit.exitCode,
-      exitSignal: current.exitSignal !== undefined ? current.exitSignal : exit.exitSignal,
+      exitCode:
+        current.exitCode !== undefined ? current.exitCode : exit.exitCode,
+      exitSignal:
+        current.exitSignal !== undefined ? current.exitSignal : exit.exitSignal,
       updatedAtMs: ts,
     };
     records.set(runId, next);

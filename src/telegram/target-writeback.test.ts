@@ -26,7 +26,8 @@ vi.mock("../cron/store.js", async (importOriginal) => {
   };
 });
 
-const { maybePersistResolvedTelegramTarget } = await import("./target-writeback.js");
+const { maybePersistResolvedTelegramTarget } =
+  await import("./target-writeback.js");
 
 describe("maybePersistResolvedTelegramTarget", () => {
   beforeEach(() => {
@@ -70,7 +71,10 @@ describe("maybePersistResolvedTelegramTarget", () => {
     loadCronStore.mockResolvedValue({
       version: 1,
       jobs: [
-        { id: "a", delivery: { channel: "telegram", to: "https://t.me/mychannel" } },
+        {
+          id: "a",
+          delivery: { channel: "telegram", to: "https://t.me/mychannel" },
+        },
         { id: "b", delivery: { channel: "slack", to: "C123" } },
       ],
     });
@@ -159,7 +163,12 @@ describe("maybePersistResolvedTelegramTarget", () => {
     });
     loadCronStore.mockResolvedValue({
       version: 1,
-      jobs: [{ id: "a", delivery: { channel: "telegram", to: "https://t.me/mychannel" } }],
+      jobs: [
+        {
+          id: "a",
+          delivery: { channel: "telegram", to: "https://t.me/mychannel" },
+        },
+      ],
     });
 
     await maybePersistResolvedTelegramTarget({

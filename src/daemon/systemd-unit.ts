@@ -17,7 +17,9 @@ function systemdEscapeArg(value: string): string {
   return `"${value.replace(/\\\\/g, "\\\\\\\\").replace(/"/g, '\\\\"')}"`;
 }
 
-function renderEnvLines(env: Record<string, string | undefined> | undefined): string[] {
+function renderEnvLines(
+  env: Record<string, string | undefined> | undefined,
+): string[] {
   if (!env) {
     return [];
   }
@@ -78,7 +80,9 @@ export function parseSystemdExecStart(value: string): string[] {
   return splitArgsPreservingQuotes(value, { escapeMode: "backslash" });
 }
 
-export function parseSystemdEnvAssignment(raw: string): { key: string; value: string } | null {
+export function parseSystemdEnvAssignment(
+  raw: string,
+): { key: string; value: string } | null {
   const trimmed = raw.trim();
   if (!trimmed) {
     return null;

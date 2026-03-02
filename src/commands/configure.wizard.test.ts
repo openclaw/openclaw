@@ -108,7 +108,9 @@ describe("runConfigureWizard", () => {
     });
     mocks.resolveGatewayPort.mockReturnValue(18789);
     mocks.probeGatewayReachable.mockResolvedValue({ ok: false });
-    mocks.resolveControlUiLinks.mockReturnValue({ wsUrl: "ws://127.0.0.1:18789" });
+    mocks.resolveControlUiLinks.mockReturnValue({
+      wsUrl: "ws://127.0.0.1:18789",
+    });
     mocks.summarizeExistingConfig.mockReturnValue("");
     mocks.createClackPrompter.mockReturnValue({});
 
@@ -149,7 +151,9 @@ describe("runConfigureWizard", () => {
       issues: [],
     });
     mocks.probeGatewayReachable.mockResolvedValue({ ok: false });
-    mocks.resolveControlUiLinks.mockReturnValue({ wsUrl: "ws://127.0.0.1:18789" });
+    mocks.resolveControlUiLinks.mockReturnValue({
+      wsUrl: "ws://127.0.0.1:18789",
+    });
     mocks.summarizeExistingConfig.mockReturnValue("");
     mocks.createClackPrompter.mockReturnValue({});
     mocks.clackSelect.mockRejectedValueOnce(new WizardCancelledError());

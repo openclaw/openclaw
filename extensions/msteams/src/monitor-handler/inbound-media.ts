@@ -23,7 +23,10 @@ export async function resolveMSTeamsInboundMedia(params: {
   conversationType: string;
   conversationId: string;
   conversationMessageId?: string;
-  activity: Pick<MSTeamsTurnContext["activity"], "id" | "replyToId" | "channelData">;
+  activity: Pick<
+    MSTeamsTurnContext["activity"],
+    "id" | "replyToId" | "channelData"
+  >;
   log: MSTeamsLogger;
   /** When true, embeds original filename in stored path for later extraction. */
   preserveFilenames?: boolean;
@@ -54,7 +57,9 @@ export async function resolveMSTeamsInboundMedia(params: {
   if (mediaList.length === 0) {
     const onlyHtmlAttachments =
       attachments.length > 0 &&
-      attachments.every((att) => String(att.contentType ?? "").startsWith("text/html"));
+      attachments.every((att) =>
+        String(att.contentType ?? "").startsWith("text/html"),
+      );
 
     if (onlyHtmlAttachments) {
       const messageUrls = buildMSTeamsGraphMessageUrls({

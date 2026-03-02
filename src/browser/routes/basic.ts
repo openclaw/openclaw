@@ -2,7 +2,11 @@ import { resolveBrowserExecutableForPlatform } from "../chrome.executables.js";
 import { createBrowserProfilesService } from "../profiles-service.js";
 import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
 import { resolveProfileContext } from "./agent.shared.js";
-import type { BrowserRequest, BrowserResponse, BrowserRouteRegistrar } from "./types.js";
+import type {
+  BrowserRequest,
+  BrowserResponse,
+  BrowserRouteRegistrar,
+} from "./types.js";
 import { getProfileContext, jsonError, toStringOrEmpty } from "./utils.js";
 
 async function withBasicProfileRoute(params: {
@@ -22,7 +26,10 @@ async function withBasicProfileRoute(params: {
   }
 }
 
-export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: BrowserRouteContext) {
+export function registerBrowserBasicRoutes(
+  app: BrowserRouteRegistrar,
+  ctx: BrowserRouteContext,
+) {
   // List all profiles with their status
   app.get("/profiles", async (_req, res) => {
     try {
@@ -59,7 +66,10 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
     let detectError: string | null = null;
 
     try {
-      const detected = resolveBrowserExecutableForPlatform(current.resolved, process.platform);
+      const detected = resolveBrowserExecutableForPlatform(
+        current.resolved,
+        process.platform,
+      );
       if (detected) {
         detectedBrowser = detected.kind;
         detectedExecutablePath = detected.path;
@@ -138,10 +148,9 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
     const name = toStringOrEmpty((req.body as { name?: unknown })?.name);
     const color = toStringOrEmpty((req.body as { color?: unknown })?.color);
     const cdpUrl = toStringOrEmpty((req.body as { cdpUrl?: unknown })?.cdpUrl);
-    const driver = toStringOrEmpty((req.body as { driver?: unknown })?.driver) as
-      | "openclaw"
-      | "extension"
-      | "";
+    const driver = toStringOrEmpty(
+      (req.body as { driver?: unknown })?.driver,
+    ) as "openclaw" | "extension" | "";
 
     if (!name) {
       return jsonError(res, 400, "name is required");

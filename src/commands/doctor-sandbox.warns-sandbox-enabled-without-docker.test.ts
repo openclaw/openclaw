@@ -60,9 +60,13 @@ describe("maybeRepairSandboxImages", () => {
     const message = noteCall[0] as string;
 
     // The message should warn that sandbox mode won't function, not just "skipping checks"
-    expect(message).toMatch(/sandbox.*mode.*enabled|sandbox.*won.*work|docker.*required/i);
+    expect(message).toMatch(
+      /sandbox.*mode.*enabled|sandbox.*won.*work|docker.*required/i,
+    );
     // Should NOT just say "skipping sandbox image checks" - that's too mild
-    expect(message).not.toBe("Docker not available; skipping sandbox image checks.");
+    expect(message).not.toBe(
+      "Docker not available; skipping sandbox image checks.",
+    );
   });
 
   it("warns when sandbox mode is 'all' but Docker is not available", async () => {
@@ -129,7 +133,8 @@ describe("maybeRepairSandboxImages", () => {
     // May have other notes about images, but not the Docker unavailable warning
     const dockerUnavailableWarning = note.mock.calls.find(
       (call) =>
-        typeof call[0] === "string" && call[0].toLowerCase().includes("docker not available"),
+        typeof call[0] === "string" &&
+        call[0].toLowerCase().includes("docker not available"),
     );
     expect(dockerUnavailableWarning).toBeUndefined();
   });

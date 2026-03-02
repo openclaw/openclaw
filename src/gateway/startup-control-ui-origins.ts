@@ -15,7 +15,9 @@ export async function maybeSeedControlUiAllowedOriginsAtStartup(params: {
   }
   try {
     await params.writeConfig(seeded.config);
-    params.log.info(buildSeededOriginsInfoLog(seeded.seededOrigins, seeded.bind));
+    params.log.info(
+      buildSeededOriginsInfoLog(seeded.seededOrigins, seeded.bind),
+    );
   } catch (err) {
     params.log.warn(
       `gateway: failed to persist gateway.controlUi.allowedOrigins seed: ${String(err)}. The gateway will start with the in-memory value but config was not saved.`,
@@ -24,7 +26,10 @@ export async function maybeSeedControlUiAllowedOriginsAtStartup(params: {
   return seeded.config;
 }
 
-function buildSeededOriginsInfoLog(origins: string[], bind: GatewayNonLoopbackBindMode): string {
+function buildSeededOriginsInfoLog(
+  origins: string[],
+  bind: GatewayNonLoopbackBindMode,
+): string {
   return (
     `gateway: seeded gateway.controlUi.allowedOrigins ${JSON.stringify(origins)} ` +
     `for bind=${bind} (required since v2026.2.26; see issue #29385). ` +

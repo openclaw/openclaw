@@ -19,9 +19,13 @@ export async function handleSubagentsLogAction(
     return stopWithText("📜 Usage: /subagents log <id|#> [limit]");
   }
 
-  const includeTools = restTokens.some((token) => token.toLowerCase() === "tools");
+  const includeTools = restTokens.some(
+    (token) => token.toLowerCase() === "tools",
+  );
   const limitToken = restTokens.find((token) => /^\d+$/.test(token));
-  const limit = limitToken ? Math.min(200, Math.max(1, Number.parseInt(limitToken, 10))) : 20;
+  const limit = limitToken
+    ? Math.min(200, Math.max(1, Number.parseInt(limitToken, 10)))
+    : 20;
 
   const targetResolution = resolveSubagentEntryForToken(runs, target);
   if ("reply" in targetResolution) {

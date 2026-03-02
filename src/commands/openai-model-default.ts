@@ -35,7 +35,8 @@ export function applyOpenAIConfig(cfg: OpenClawConfig): OpenClawConfig {
       defaults: {
         ...next.agents?.defaults,
         model:
-          next.agents?.defaults?.model && typeof next.agents.defaults.model === "object"
+          next.agents?.defaults?.model &&
+          typeof next.agents.defaults.model === "object"
             ? {
                 ...next.agents.defaults.model,
                 primary: OPENAI_DEFAULT_MODEL,

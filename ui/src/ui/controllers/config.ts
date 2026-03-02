@@ -1,5 +1,9 @@
 import type { GatewayBrowserClient } from "../gateway.ts";
-import type { ConfigSchemaResponse, ConfigSnapshot, ConfigUiHints } from "../types.ts";
+import type {
+  ConfigSchemaResponse,
+  ConfigSnapshot,
+  ConfigUiHints,
+} from "../types.ts";
 import type { JsonSchema } from "../views/config-form.shared.ts";
 import { coerceFormValues } from "./config/form-coerce.ts";
 import {
@@ -61,7 +65,10 @@ export async function loadConfigSchema(state: ConfigState) {
   }
   state.configSchemaLoading = true;
   try {
-    const res = await state.client.request<ConfigSchemaResponse>("config.schema", {});
+    const res = await state.client.request<ConfigSchemaResponse>(
+      "config.schema",
+      {},
+    );
     applyConfigSchema(state, res);
   } catch (err) {
     state.lastError = String(err);
@@ -70,13 +77,19 @@ export async function loadConfigSchema(state: ConfigState) {
   }
 }
 
-export function applyConfigSchema(state: ConfigState, res: ConfigSchemaResponse) {
+export function applyConfigSchema(
+  state: ConfigState,
+  res: ConfigSchemaResponse,
+) {
   state.configSchema = res.schema ?? null;
   state.configUiHints = res.uiHints ?? {};
   state.configSchemaVersion = res.version ?? null;
 }
 
-export function applyConfigSnapshot(state: ConfigState, snapshot: ConfigSnapshot) {
+export function applyConfigSnapshot(
+  state: ConfigState,
+  snapshot: ConfigSnapshot,
+) {
   state.configSnapshot = snapshot;
   const rawFromSnapshot =
     typeof snapshot.raw === "string"
@@ -91,7 +104,8 @@ export function applyConfigSnapshot(state: ConfigState, snapshot: ConfigSnapshot
   } else {
     state.configRaw = rawFromSnapshot;
   }
-  state.configValid = typeof snapshot.valid === "boolean" ? snapshot.valid : null;
+  state.configValid =
+    typeof snapshot.valid === "boolean" ? snapshot.valid : null;
   state.configIssues = Array.isArray(snapshot.issues) ? snapshot.issues : [];
 
   if (!state.configFormDirty) {
@@ -199,7 +213,9 @@ export function updateConfigFormValue(
   path: Array<string | number>,
   value: unknown,
 ) {
-  const base = cloneConfigObject(state.configForm ?? state.configSnapshot?.config ?? {});
+  const base = cloneConfigObject(
+    state.configForm ?? state.configSnapshot?.config ?? {},
+  );
   setPathValue(base, path, value);
   state.configForm = base;
   state.configFormDirty = true;
@@ -208,8 +224,13 @@ export function updateConfigFormValue(
   }
 }
 
-export function removeConfigFormValue(state: ConfigState, path: Array<string | number>) {
-  const base = cloneConfigObject(state.configForm ?? state.configSnapshot?.config ?? {});
+export function removeConfigFormValue(
+  state: ConfigState,
+  path: Array<string | number>,
+) {
+  const base = cloneConfigObject(
+    state.configForm ?? state.configSnapshot?.config ?? {},
+  );
   removePathValue(base, path);
   state.configForm = base;
   state.configFormDirty = true;

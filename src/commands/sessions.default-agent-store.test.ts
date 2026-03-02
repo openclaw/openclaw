@@ -74,10 +74,18 @@ describe("sessionsCommand default store agent selection", () => {
     loadSessionStoreMock.mockReset();
     loadSessionStoreMock
       .mockReturnValueOnce({
-        main_row: { sessionId: "s1", updatedAt: Date.now() - 60_000, model: "pi:opus" },
+        main_row: {
+          sessionId: "s1",
+          updatedAt: Date.now() - 60_000,
+          model: "pi:opus",
+        },
       })
       .mockReturnValueOnce({
-        voice_row: { sessionId: "s2", updatedAt: Date.now() - 120_000, model: "pi:opus" },
+        voice_row: {
+          sessionId: "s2",
+          updatedAt: Date.now() - 120_000,
+          model: "pi:opus",
+        },
       });
     const { runtime, logs } = createRuntime();
 
@@ -88,8 +96,12 @@ describe("sessionsCommand default store agent selection", () => {
       sessions?: Array<{ key: string; agentId?: string }>;
     };
     expect(payload.allAgents).toBe(true);
-    expect(payload.sessions?.map((session) => session.agentId)).toContain("main");
-    expect(payload.sessions?.map((session) => session.agentId)).toContain("voice");
+    expect(payload.sessions?.map((session) => session.agentId)).toContain(
+      "main",
+    );
+    expect(payload.sessions?.map((session) => session.agentId)).toContain(
+      "voice",
+    );
   });
 
   it("avoids duplicate rows when --all-agents resolves to a shared store path", async () => {
@@ -97,8 +109,16 @@ describe("sessionsCommand default store agent selection", () => {
     resolveStorePathMock.mockReturnValue("/tmp/shared-sessions.json");
     loadSessionStoreMock.mockReset();
     loadSessionStoreMock.mockReturnValue({
-      "agent:main:room": { sessionId: "s1", updatedAt: Date.now() - 60_000, model: "pi:opus" },
-      "agent:voice:room": { sessionId: "s2", updatedAt: Date.now() - 30_000, model: "pi:opus" },
+      "agent:main:room": {
+        sessionId: "s1",
+        updatedAt: Date.now() - 60_000,
+        model: "pi:opus",
+      },
+      "agent:voice:room": {
+        sessionId: "s2",
+        updatedAt: Date.now() - 30_000,
+        model: "pi:opus",
+      },
     });
     const { runtime, logs } = createRuntime();
 
@@ -112,11 +132,12 @@ describe("sessionsCommand default store agent selection", () => {
     };
     expect(payload.count).toBe(2);
     expect(payload.allAgents).toBe(true);
-    expect(payload.stores).toEqual([{ agentId: "main", path: "/tmp/shared-sessions.json" }]);
-    expect(payload.sessions?.map((session) => session.agentId).toSorted()).toEqual([
-      "main",
-      "voice",
+    expect(payload.stores).toEqual([
+      { agentId: "main", path: "/tmp/shared-sessions.json" },
     ]);
+    expect(
+      payload.sessions?.map((session) => session.agentId).toSorted(),
+    ).toEqual(["main", "voice"]);
     expect(loadSessionStoreMock).toHaveBeenCalledTimes(1);
   });
 
@@ -126,9 +147,12 @@ describe("sessionsCommand default store agent selection", () => {
 
     await sessionsCommand({}, runtime);
 
-    expect(resolveStorePathMock).toHaveBeenCalledWith("/tmp/sessions-{agentId}.json", {
-      agentId: "voice",
-    });
+    expect(resolveStorePathMock).toHaveBeenCalledWith(
+      "/tmp/sessions-{agentId}.json",
+      {
+        agentId: "voice",
+      },
+    );
     expect(logs[0]).toContain("Session store: /tmp/sessions-voice.json");
   });
 
@@ -137,19 +161,29 @@ describe("sessionsCommand default store agent selection", () => {
     loadSessionStoreMock.mockReset();
     loadSessionStoreMock
       .mockReturnValueOnce({
-        main_row: { sessionId: "s1", updatedAt: Date.now() - 60_000, model: "pi:opus" },
+        main_row: {
+          sessionId: "s1",
+          updatedAt: Date.now() - 60_000,
+          model: "pi:opus",
+        },
       })
       .mockReturnValueOnce({});
     const { runtime, logs } = createRuntime();
 
     await sessionsCommand({ allAgents: true }, runtime);
 
-    expect(resolveStorePathMock).toHaveBeenCalledWith("/tmp/sessions-{agentId}.json", {
-      agentId: "main",
-    });
-    expect(resolveStorePathMock).toHaveBeenCalledWith("/tmp/sessions-{agentId}.json", {
-      agentId: "voice",
-    });
+    expect(resolveStorePathMock).toHaveBeenCalledWith(
+      "/tmp/sessions-{agentId}.json",
+      {
+        agentId: "main",
+      },
+    );
+    expect(resolveStorePathMock).toHaveBeenCalledWith(
+      "/tmp/sessions-{agentId}.json",
+      {
+        agentId: "voice",
+      },
+    );
     expect(logs[0]).toContain("Session stores: 2 (main, voice)");
     expect(logs[2]).toContain("Agent");
   });

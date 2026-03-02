@@ -2,7 +2,11 @@ import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { loadSessionStore, saveSessionStore, type SessionEntry } from "../../config/sessions.js";
+import {
+  loadSessionStore,
+  saveSessionStore,
+  type SessionEntry,
+} from "../../config/sessions.js";
 import type { FollowupRun } from "./queue.js";
 import { createMockTypingController } from "./test-helpers.js";
 
@@ -80,7 +84,9 @@ const baseQueuedRun = (messageProvider = "whatsapp"): FollowupRun =>
   }) as FollowupRun;
 
 function createQueuedRun(
-  overrides: Partial<Omit<FollowupRun, "run">> & { run?: Partial<FollowupRun["run"]> } = {},
+  overrides: Partial<Omit<FollowupRun, "run">> & {
+    run?: Partial<FollowupRun["run"]>;
+  } = {},
 ): FollowupRun {
   const base = baseQueuedRun();
   return {
@@ -102,7 +108,10 @@ function mockCompactionRun(params: {
 }) {
   runEmbeddedPiAgentMock.mockImplementationOnce(
     async (args: {
-      onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => void;
+      onAgentEvent?: (evt: {
+        stream: string;
+        data: Record<string, unknown>;
+      }) => void;
     }) => {
       args.onAgentEvent?.({
         stream: "compaction",
@@ -157,7 +166,9 @@ describe("createFollowupRunner compaction", () => {
     await runner(queued);
 
     expect(onBlockReply).toHaveBeenCalled();
-    const firstCall = (onBlockReply.mock.calls as unknown as Array<Array<{ text?: string }>>)[0];
+    const firstCall = (
+      onBlockReply.mock.calls as unknown as Array<Array<{ text?: string }>>
+    )[0];
     expect(firstCall?.[0]?.text).toContain("Auto-compaction complete");
     expect(sessionStore.main.compactionCount).toBe(1);
   });
@@ -200,7 +211,10 @@ describe("createFollowupRunner messaging tool dedupe", () => {
       meta: {},
       ...params.agentResult,
     });
-    const runner = createMessagingDedupeRunner(onBlockReply, params.runnerOverrides);
+    const runner = createMessagingDedupeRunner(
+      onBlockReply,
+      params.runnerOverrides,
+    );
     await runner(params.queued ?? baseQueuedRun());
     return { onBlockReply };
   }
@@ -236,7 +250,9 @@ describe("createFollowupRunner messaging tool dedupe", () => {
     const { onBlockReply } = await runMessagingCase({
       agentResult: {
         ...makeTextReplyDedupeResult(),
-        messagingToolSentTargets: [{ tool: "slack", provider: "slack", to: "channel:C1" }],
+        messagingToolSentTargets: [
+          { tool: "slack", provider: "slack", to: "channel:C1" },
+        ],
       },
       queued: baseQueuedRun("slack"),
     });
@@ -248,7 +264,9 @@ describe("createFollowupRunner messaging tool dedupe", () => {
     const { onBlockReply } = await runMessagingCase({
       agentResult: {
         ...makeTextReplyDedupeResult(),
-        messagingToolSentTargets: [{ tool: "telegram", provider: "telegram", to: "268300329" }],
+        messagingToolSentTargets: [
+          { tool: "telegram", provider: "telegram", to: "268300329" },
+        ],
       },
       queued: {
         ...baseQueuedRun("heartbeat"),
@@ -265,7 +283,12 @@ describe("createFollowupRunner messaging tool dedupe", () => {
       agentResult: {
         ...makeTextReplyDedupeResult(),
         messagingToolSentTargets: [
-          { tool: "telegram", provider: "telegram", to: "268300329", accountId: "work" },
+          {
+            tool: "telegram",
+            provider: "telegram",
+            to: "268300329",
+            accountId: "work",
+          },
         ],
       },
       queued: {
@@ -315,14 +338,21 @@ describe("createFollowupRunner messaging tool dedupe", () => {
       "sessions.json",
     );
     const sessionKey = "main";
-    const sessionEntry: SessionEntry = { sessionId: "session", updatedAt: Date.now() };
-    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+    };
+    const sessionStore: Record<string, SessionEntry> = {
+      [sessionKey]: sessionEntry,
+    };
     await saveSessionStore(storePath, sessionStore);
 
     const { onBlockReply } = await runMessagingCase({
       agentResult: {
         ...makeTextReplyDedupeResult(),
-        messagingToolSentTargets: [{ tool: "slack", provider: "slack", to: "channel:C1" }],
+        messagingToolSentTargets: [
+          { tool: "slack", provider: "slack", to: "channel:C1" },
+        ],
         meta: {
           agentMeta: {
             usage: { input: 1_000, output: 50 },
@@ -385,7 +415,9 @@ describe("createFollowupRunner messaging tool dedupe", () => {
 
     expect(routeReplyMock).toHaveBeenCalled();
     expect(onBlockReply).toHaveBeenCalledTimes(1);
-    expect(onBlockReply).toHaveBeenCalledWith(expect.objectContaining({ text: "hello world!" }));
+    expect(onBlockReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "hello world!" }),
+    );
   });
 
   it("routes followups with originating account/thread metadata", async () => {
@@ -431,7 +463,9 @@ describe("createFollowupRunner typing cleanup", () => {
     return typing;
   }
 
-  function expectTypingCleanup(typing: ReturnType<typeof createMockTypingController>) {
+  function expectTypingCleanup(
+    typing: ReturnType<typeof createMockTypingController>,
+  ) {
     expect(typing.markRunComplete).toHaveBeenCalled();
     expect(typing.markDispatchIdle).toHaveBeenCalled();
   }
@@ -510,7 +544,9 @@ describe("createFollowupRunner agentDir forwarding", () => {
     });
 
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
-    const call = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as { agentDir?: string };
+    const call = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as {
+      agentDir?: string;
+    };
     expect(call?.agentDir).toBe(agentDir);
   });
 });

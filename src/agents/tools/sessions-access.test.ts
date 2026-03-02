@@ -11,7 +11,9 @@ import {
 
 describe("resolveSessionToolsVisibility", () => {
   it("defaults to tree when unset or invalid", () => {
-    expect(resolveSessionToolsVisibility({} as unknown as OpenClawConfig)).toBe("tree");
+    expect(resolveSessionToolsVisibility({} as unknown as OpenClawConfig)).toBe(
+      "tree",
+    );
     expect(
       resolveSessionToolsVisibility({
         tools: { sessions: { visibility: "invalid" } },
@@ -34,7 +36,9 @@ describe("resolveEffectiveSessionToolsVisibility", () => {
       tools: { sessions: { visibility: "all" } },
       agents: { defaults: { sandbox: { sessionToolsVisibility: "spawned" } } },
     } as unknown as OpenClawConfig;
-    expect(resolveEffectiveSessionToolsVisibility({ cfg, sandboxed: true })).toBe("tree");
+    expect(
+      resolveEffectiveSessionToolsVisibility({ cfg, sandboxed: true }),
+    ).toBe("tree");
   });
 
   it("preserves visibility when sandbox clamp is all", () => {
@@ -42,13 +46,17 @@ describe("resolveEffectiveSessionToolsVisibility", () => {
       tools: { sessions: { visibility: "all" } },
       agents: { defaults: { sandbox: { sessionToolsVisibility: "all" } } },
     } as unknown as OpenClawConfig;
-    expect(resolveEffectiveSessionToolsVisibility({ cfg, sandboxed: true })).toBe("all");
+    expect(
+      resolveEffectiveSessionToolsVisibility({ cfg, sandboxed: true }),
+    ).toBe("all");
   });
 });
 
 describe("sandbox session-tools context", () => {
   it("defaults sandbox visibility clamp to spawned", () => {
-    expect(resolveSandboxSessionToolsVisibility({} as unknown as OpenClawConfig)).toBe("spawned");
+    expect(
+      resolveSandboxSessionToolsVisibility({} as unknown as OpenClawConfig),
+    ).toBe("spawned");
   });
 
   it("restricts non-subagent sandboxed sessions to spawned visibility", () => {

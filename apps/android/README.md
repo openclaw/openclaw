@@ -92,15 +92,15 @@ Hotspot script behavior:
 
 ## Run on a Real Android Phone (USB)
 
-1) On phone, enable **Developer options** + **USB debugging**.
-2) Connect by USB and accept the debugging trust prompt on phone.
-3) Verify ADB can see the device:
+1. On phone, enable **Developer options** + **USB debugging**.
+2. Connect by USB and accept the debugging trust prompt on phone.
+3. Verify ADB can see the device:
 
 ```bash
 adb devices -l
 ```
 
-4) Install + launch debug build:
+4. Install + launch debug build:
 
 ```bash
 pnpm android:install
@@ -142,18 +142,18 @@ This app is native Kotlin + Jetpack Compose.
 
 ## Connect / Pair
 
-1) Start the gateway (on your main machine):
+1. Start the gateway (on your main machine):
 
 ```bash
 pnpm openclaw gateway --port 18789 --verbose
 ```
 
-2) In the Android app:
+2. In the Android app:
 
 - Open the **Connect** tab.
 - Use **Setup Code** or **Manual** mode to connect.
 
-3) Approve pairing (on the gateway machine):
+3. Approve pairing (on the gateway machine):
 
 ```bash
 openclaw devices list
@@ -178,15 +178,15 @@ This suite assumes setup is already done manually. It does **not** install/run/p
 
 Pre-req checklist:
 
-1) Gateway is running and reachable from the Android app.
-2) Android app is connected to that gateway and `openclaw nodes status` shows it as paired + connected.
-3) App stays unlocked and in foreground for the whole run.
-4) Open the app **Screen** tab and keep it active during the run (canvas/A2UI commands require the canvas WebView attached there).
-5) Grant runtime permissions for capabilities you expect to pass (camera/mic/location/notification listener/location, etc.).
-6) No interactive system dialogs should be pending before test start.
-7) Canvas host is enabled and reachable from the device (do not run gateway with `OPENCLAW_SKIP_CANVAS_HOST=1`; startup logs should include `canvas host mounted at .../__openclaw__/`).
-8) Local operator test client pairing is approved. If first run fails with `pairing required`, approve latest pending device pairing request, then rerun:
-9) For A2UI checks, keep the app on **Screen** tab; the node now auto-refreshes canvas capability once on first A2UI reachability failure (TTL-safe retry).
+1. Gateway is running and reachable from the Android app.
+2. Android app is connected to that gateway and `openclaw nodes status` shows it as paired + connected.
+3. App stays unlocked and in foreground for the whole run.
+4. Open the app **Screen** tab and keep it active during the run (canvas/A2UI commands require the canvas WebView attached there).
+5. Grant runtime permissions for capabilities you expect to pass (camera/mic/location/notification listener/location, etc.).
+6. No interactive system dialogs should be pending before test start.
+7. Canvas host is enabled and reachable from the device (do not run gateway with `OPENCLAW_SKIP_CANVAS_HOST=1`; startup logs should include `canvas host mounted at .../__openclaw__/`).
+8. Local operator test client pairing is approved. If first run fails with `pairing required`, approve latest pending device pairing request, then rerun:
+9. For A2UI checks, keep the app on **Screen** tab; the node now auto-refreshes canvas capability once on first A2UI reachability failure (TTL-safe retry).
 
 ```bash
 openclaw devices list

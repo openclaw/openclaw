@@ -8,14 +8,24 @@ import type { RuntimeEnv } from "../runtime.js";
 import { runOnboardingWizard } from "./onboarding.js";
 import type { WizardPrompter, WizardSelectParams } from "./prompts.js";
 
-const ensureAuthProfileStore = vi.hoisted(() => vi.fn(() => ({ profiles: {} })));
+const ensureAuthProfileStore = vi.hoisted(() =>
+  vi.fn(() => ({ profiles: {} })),
+);
 const promptAuthChoiceGrouped = vi.hoisted(() => vi.fn(async () => "skip"));
-const applyAuthChoice = vi.hoisted(() => vi.fn(async (args) => ({ config: args.config })));
-const resolvePreferredProviderForAuthChoice = vi.hoisted(() => vi.fn(() => "openai"));
+const applyAuthChoice = vi.hoisted(() =>
+  vi.fn(async (args) => ({ config: args.config })),
+);
+const resolvePreferredProviderForAuthChoice = vi.hoisted(() =>
+  vi.fn(() => "openai"),
+);
 const warnIfModelConfigLooksOff = vi.hoisted(() => vi.fn(async () => {}));
 const applyPrimaryModel = vi.hoisted(() => vi.fn((cfg) => cfg));
-const promptDefaultModel = vi.hoisted(() => vi.fn(async () => ({ config: null, model: null })));
-const promptCustomApiConfig = vi.hoisted(() => vi.fn(async (args) => ({ config: args.config })));
+const promptDefaultModel = vi.hoisted(() =>
+  vi.fn(async () => ({ config: null, model: null })),
+);
+const promptCustomApiConfig = vi.hoisted(() =>
+  vi.fn(async (args) => ({ config: args.config })),
+);
 const configureGatewayForOnboarding = vi.hoisted(() =>
   vi.fn(async (args) => ({
     nextConfig: args.nextConfig,
@@ -49,7 +59,9 @@ const finalizeOnboardingWizard = vi.hoisted(() =>
 
     let message: string | undefined;
     try {
-      await fs.stat(path.join(options.workspaceDir, DEFAULT_BOOTSTRAP_FILENAME));
+      await fs.stat(
+        path.join(options.workspaceDir, DEFAULT_BOOTSTRAP_FILENAME),
+      );
       message = "Wake up, my friend!";
     } catch {
       message = undefined;
@@ -82,9 +94,13 @@ const readConfigFileSnapshot = vi.hoisted(() =>
     legacyIssues: [] as Array<{ path: string; message: string }>,
   })),
 );
-const ensureSystemdUserLingerInteractive = vi.hoisted(() => vi.fn(async () => {}));
+const ensureSystemdUserLingerInteractive = vi.hoisted(() =>
+  vi.fn(async () => {}),
+);
 const isSystemdUserServiceAvailable = vi.hoisted(() => vi.fn(async () => true));
-const ensureControlUiAssetsBuilt = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
+const ensureControlUiAssetsBuilt = vi.hoisted(() =>
+  vi.fn(async () => ({ ok: true })),
+);
 const runTui = vi.hoisted(() => vi.fn(async (_options: unknown) => {}));
 const setupOnboardingShellCompletion = vi.hoisted(() => vi.fn(async () => {}));
 
@@ -218,7 +234,9 @@ describe("runOnboardingWizard", () => {
   let suiteCase = 0;
 
   beforeAll(async () => {
-    suiteRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-onboard-suite-"));
+    suiteRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-onboard-suite-"),
+    );
   });
 
   afterAll(async () => {
@@ -312,7 +330,10 @@ describe("runOnboardingWizard", () => {
 
     const workspaceDir = await makeCaseDir("workspace-");
     if (params.writeBootstrapFile) {
-      await fs.writeFile(path.join(workspaceDir, DEFAULT_BOOTSTRAP_FILENAME), "{}");
+      await fs.writeFile(
+        path.join(workspaceDir, DEFAULT_BOOTSTRAP_FILENAME),
+        "{}",
+      );
     }
 
     const select = vi.fn(async (opts: WizardSelectParams<unknown>) => {
@@ -350,11 +371,17 @@ describe("runOnboardingWizard", () => {
   }
 
   it("launches TUI without auto-delivery when hatching", async () => {
-    await runTuiHatchTest({ writeBootstrapFile: true, expectedMessage: "Wake up, my friend!" });
+    await runTuiHatchTest({
+      writeBootstrapFile: true,
+      expectedMessage: "Wake up, my friend!",
+    });
   });
 
   it("offers TUI hatch even without BOOTSTRAP.md", async () => {
-    await runTuiHatchTest({ writeBootstrapFile: false, expectedMessage: undefined });
+    await runTuiHatchTest({
+      writeBootstrapFile: false,
+      expectedMessage: undefined,
+    });
   });
 
   it("shows the web search hint at the end of onboarding", async () => {
@@ -381,9 +408,12 @@ describe("runOnboardingWizard", () => {
         prompter,
       );
 
-      const calls = (note as unknown as { mock: { calls: unknown[][] } }).mock.calls;
+      const calls = (note as unknown as { mock: { calls: unknown[][] } }).mock
+        .calls;
       expect(calls.length).toBeGreaterThan(0);
-      expect(calls.some((call) => call?.[1] === "Web search (optional)")).toBe(true);
+      expect(calls.some((call) => call?.[1] === "Web search (optional)")).toBe(
+        true,
+      );
     } finally {
       if (prevBraveKey === undefined) {
         delete process.env.BRAVE_API_KEY;

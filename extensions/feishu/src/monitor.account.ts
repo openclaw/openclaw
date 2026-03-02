@@ -1,10 +1,21 @@
 import * as crypto from "crypto";
 import * as Lark from "@larksuiteoapi/node-sdk";
-import type { ClawdbotConfig, RuntimeEnv, HistoryEntry } from "openclaw/plugin-sdk";
+import type {
+  ClawdbotConfig,
+  RuntimeEnv,
+  HistoryEntry,
+} from "openclaw/plugin-sdk";
 import { resolveFeishuAccount } from "./accounts.js";
 import { raceWithTimeoutAndAbort } from "./async.js";
-import { handleFeishuMessage, type FeishuMessageEvent, type FeishuBotAddedEvent } from "./bot.js";
-import { handleFeishuCardAction, type FeishuCardActionEvent } from "./card-action.js";
+import {
+  handleFeishuMessage,
+  type FeishuMessageEvent,
+  type FeishuBotAddedEvent,
+} from "./bot.js";
+import {
+  handleFeishuCardAction,
+  type FeishuCardActionEvent,
+} from "./card-action.js";
 import { createEventDispatcher } from "./client.js";
 import { fetchBotOpenIdForMonitor } from "./monitor.startup.js";
 import { botOpenIds } from "./monitor.state.js";
@@ -77,12 +88,16 @@ export async function resolveReactionSyntheticEvent(
     return null;
   }
 
-  const reactedMsg = await raceWithTimeoutAndAbort(fetchMessage({ cfg, messageId, accountId }), {
-    timeoutMs: verificationTimeoutMs,
-  })
+  const reactedMsg = await raceWithTimeoutAndAbort(
+    fetchMessage({ cfg, messageId, accountId }),
+    {
+      timeoutMs: verificationTimeoutMs,
+    },
+  )
     .then((result) => (result.status === "resolved" ? result.value : null))
     .catch(() => null);
-  const isBotMessage = reactedMsg?.senderType === "app" || reactedMsg?.senderOpenId === botOpenId;
+  const isBotMessage =
+    reactedMsg?.senderType === "app" || reactedMsg?.senderOpenId === botOpenId;
   if (!reactedMsg || (reactionNotifications === "own" && !isBotMessage)) {
     logger?.(
       `feishu[${accountId}]: ignoring reaction on non-bot/unverified message ${messageId} ` +
@@ -92,7 +107,9 @@ export async function resolveReactionSyntheticEvent(
   }
 
   const syntheticChatIdRaw = event.chat_id ?? reactedMsg.chatId;
-  const syntheticChatId = syntheticChatIdRaw?.trim() ? syntheticChatIdRaw : `p2p:${senderId}`;
+  const syntheticChatId = syntheticChatIdRaw?.trim()
+    ? syntheticChatIdRaw
+    : `p2p:${senderId}`;
   const syntheticChatType: "p2p" | "group" = event.chat_type ?? "p2p";
   return {
     sender: {
@@ -141,7 +158,9 @@ function registerEventHandlers(
         });
         if (fireAndForget) {
           promise.catch((err) => {
-            error(`feishu[${accountId}]: error handling message: ${String(err)}`);
+            error(
+              `feishu[${accountId}]: error handling message: ${String(err)}`,
+            );
           });
         } else {
           await promise;
@@ -158,7 +177,9 @@ function registerEventHandlers(
         const event = data as unknown as FeishuBotAddedEvent;
         log(`feishu[${accountId}]: bot added to chat ${event.chat_id}`);
       } catch (err) {
-        error(`feishu[${accountId}]: error handling bot added event: ${String(err)}`);
+        error(
+          `feishu[${accountId}]: error handling bot added event: ${String(err)}`,
+        );
       }
     },
     "im.chat.member.bot.deleted_v1": async (data) => {
@@ -166,7 +187,9 @@ function registerEventHandlers(
         const event = data as unknown as { chat_id: string };
         log(`feishu[${accountId}]: bot removed from chat ${event.chat_id}`);
       } catch (err) {
-        error(`feishu[${accountId}]: error handling bot removed event: ${String(err)}`);
+        error(
+          `feishu[${accountId}]: error handling bot removed event: ${String(err)}`,
+        );
       }
     },
     "im.message.reaction.created_v1": async (data) => {
@@ -193,7 +216,9 @@ function registerEventHandlers(
         });
         if (fireAndForget) {
           promise.catch((err) => {
-            error(`feishu[${accountId}]: error handling reaction: ${String(err)}`);
+            error(
+              `feishu[${accountId}]: error handling reaction: ${String(err)}`,
+            );
           });
           return;
         }
@@ -202,7 +227,9 @@ function registerEventHandlers(
 
       if (fireAndForget) {
         void processReaction().catch((err) => {
-          error(`feishu[${accountId}]: error handling reaction event: ${String(err)}`);
+          error(
+            `feishu[${accountId}]: error handling reaction event: ${String(err)}`,
+          );
         });
         return;
       }
@@ -210,7 +237,9 @@ function registerEventHandlers(
       try {
         await processReaction();
       } catch (err) {
-        error(`feishu[${accountId}]: error handling reaction event: ${String(err)}`);
+        error(
+          `feishu[${accountId}]: error handling reaction event: ${String(err)}`,
+        );
       }
     },
     "im.message.reaction.deleted_v1": async () => {
@@ -228,19 +257,25 @@ function registerEventHandlers(
         });
         if (fireAndForget) {
           promise.catch((err) => {
-            error(`feishu[${accountId}]: error handling card action: ${String(err)}`);
+            error(
+              `feishu[${accountId}]: error handling card action: ${String(err)}`,
+            );
           });
         } else {
           await promise;
         }
       } catch (err) {
-        error(`feishu[${accountId}]: error handling card action: ${String(err)}`);
+        error(
+          `feishu[${accountId}]: error handling card action: ${String(err)}`,
+        );
       }
     },
   });
 }
 
-export type BotOpenIdSource = { kind: "prefetched"; botOpenId?: string } | { kind: "fetch" };
+export type BotOpenIdSource =
+  | { kind: "prefetched"; botOpenId?: string }
+  | { kind: "fetch" };
 
 export type MonitorSingleAccountParams = {
   cfg: ClawdbotConfig;
@@ -250,7 +285,9 @@ export type MonitorSingleAccountParams = {
   botOpenIdSource?: BotOpenIdSource;
 };
 
-export async function monitorSingleAccount(params: MonitorSingleAccountParams): Promise<void> {
+export async function monitorSingleAccount(
+  params: MonitorSingleAccountParams,
+): Promise<void> {
   const { cfg, account, runtime, abortSignal } = params;
   const { accountId } = account;
   const log = runtime?.log ?? console.log;
@@ -265,7 +302,9 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
 
   const connectionMode = account.config.connectionMode ?? "websocket";
   if (connectionMode === "webhook" && !account.verificationToken?.trim()) {
-    throw new Error(`Feishu account "${accountId}" webhook mode requires verificationToken`);
+    throw new Error(
+      `Feishu account "${accountId}" webhook mode requires verificationToken`,
+    );
   }
 
   const eventDispatcher = createEventDispatcher(account);
@@ -280,7 +319,19 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
   });
 
   if (connectionMode === "webhook") {
-    return monitorWebhook({ account, accountId, runtime, abortSignal, eventDispatcher });
+    return monitorWebhook({
+      account,
+      accountId,
+      runtime,
+      abortSignal,
+      eventDispatcher,
+    });
   }
-  return monitorWebSocket({ account, accountId, runtime, abortSignal, eventDispatcher });
+  return monitorWebSocket({
+    account,
+    accountId,
+    runtime,
+    abortSignal,
+    eventDispatcher,
+  });
 }

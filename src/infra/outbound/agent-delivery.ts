@@ -48,8 +48,12 @@ export function resolveAgentDeliveryPlan(params: {
   turnSourceThreadId?: string | number;
 }): AgentDeliveryPlan {
   const requestedRaw =
-    typeof params.requestedChannel === "string" ? params.requestedChannel.trim() : "";
-  const normalizedRequested = requestedRaw ? normalizeMessageChannel(requestedRaw) : undefined;
+    typeof params.requestedChannel === "string"
+      ? params.requestedChannel.trim()
+      : "";
+  const normalizedRequested = requestedRaw
+    ? normalizeMessageChannel(requestedRaw)
+    : undefined;
   const requestedChannel = normalizedRequested || "last";
 
   const explicitTo =
@@ -77,7 +81,8 @@ export function resolveAgentDeliveryPlan(params: {
 
   const baseDelivery = resolveSessionDeliveryTarget({
     entry: params.sessionEntry,
-    requestedChannel: requestedChannel === INTERNAL_MESSAGE_CHANNEL ? "last" : requestedChannel,
+    requestedChannel:
+      requestedChannel === INTERNAL_MESSAGE_CHANNEL ? "last" : requestedChannel,
     explicitTo,
     explicitThreadId: params.explicitThreadId,
     turnSourceChannel,
@@ -91,7 +96,10 @@ export function resolveAgentDeliveryPlan(params: {
       return INTERNAL_MESSAGE_CHANNEL;
     }
     if (requestedChannel === "last") {
-      if (baseDelivery.channel && baseDelivery.channel !== INTERNAL_MESSAGE_CHANNEL) {
+      if (
+        baseDelivery.channel &&
+        baseDelivery.channel !== INTERNAL_MESSAGE_CHANNEL
+      ) {
         return baseDelivery.channel;
       }
       return INTERNAL_MESSAGE_CHANNEL;
@@ -101,7 +109,10 @@ export function resolveAgentDeliveryPlan(params: {
       return requestedChannel;
     }
 
-    if (baseDelivery.channel && baseDelivery.channel !== INTERNAL_MESSAGE_CHANNEL) {
+    if (
+      baseDelivery.channel &&
+      baseDelivery.channel !== INTERNAL_MESSAGE_CHANNEL
+    ) {
       return baseDelivery.channel;
     }
     return INTERNAL_MESSAGE_CHANNEL;

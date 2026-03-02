@@ -29,10 +29,12 @@ describe("createOpenClawCodingTools", () => {
         file_path: filePath,
       });
 
-      const textBlocks = result?.content?.filter((block) => block.type === "text") as
-        | Array<{ text?: string }>
-        | undefined;
-      const combinedText = textBlocks?.map((block) => block.text ?? "").join("\n");
+      const textBlocks = result?.content?.filter(
+        (block) => block.type === "text",
+      ) as Array<{ text?: string }> | undefined;
+      const combinedText = textBlocks
+        ?.map((block) => block.text ?? "")
+        .join("\n");
       expect(combinedText).toContain("hello universe");
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
@@ -40,7 +42,9 @@ describe("createOpenClawCodingTools", () => {
   });
 
   it("coerces structured content blocks for write", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-structured-write-"));
+    const tmpDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-structured-write-"),
+    );
     try {
       const tools = createOpenClawCodingTools({ workspaceDir: tmpDir });
       const writeTool = tools.find((tool) => tool.name === "write");
@@ -50,11 +54,17 @@ describe("createOpenClawCodingTools", () => {
         path: "structured-write.js",
         content: [
           { type: "text", text: "const path = require('path');\n" },
-          { type: "input_text", text: "const root = path.join(process.env.HOME, 'clawd');\n" },
+          {
+            type: "input_text",
+            text: "const root = path.join(process.env.HOME, 'clawd');\n",
+          },
         ],
       });
 
-      const written = await fs.readFile(path.join(tmpDir, "structured-write.js"), "utf8");
+      const written = await fs.readFile(
+        path.join(tmpDir, "structured-write.js"),
+        "utf8",
+      );
       expect(written).toBe(
         "const path = require('path');\nconst root = path.join(process.env.HOME, 'clawd');\n",
       );
@@ -64,7 +74,9 @@ describe("createOpenClawCodingTools", () => {
   });
 
   it("coerces structured old/new text blocks for edit", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-structured-edit-"));
+    const tmpDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-structured-edit-"),
+    );
     try {
       const filePath = path.join(tmpDir, "structured-edit.js");
       await fs.writeFile(filePath, "const value = 'old';\n", "utf8");

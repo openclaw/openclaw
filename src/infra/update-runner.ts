@@ -138,9 +138,12 @@ async function readBranchName(
   root: string,
   timeoutMs: number,
 ): Promise<string | null> {
-  const res = await runCommand(["git", "-C", root, "rev-parse", "--abbrev-ref", "HEAD"], {
-    timeoutMs,
-  }).catch(() => null);
+  const res = await runCommand(
+    ["git", "-C", root, "rev-parse", "--abbrev-ref", "HEAD"],
+    {
+      timeoutMs,
+    },
+  ).catch(() => null);
   if (!res || res.code !== 0) {
     return null;
   }
@@ -154,9 +157,12 @@ async function listGitTags(
   timeoutMs: number,
   pattern = "v*",
 ): Promise<string[]> {
-  const res = await runCommand(["git", "-C", root, "tag", "--list", pattern, "--sort=-v:refname"], {
-    timeoutMs,
-  }).catch(() => null);
+  const res = await runCommand(
+    ["git", "-C", root, "tag", "--list", pattern, "--sort=-v:refname"],
+    {
+      timeoutMs,
+    },
+  ).catch(() => null);
   if (!res || res.code !== 0) {
     return [];
   }
@@ -197,9 +203,12 @@ async function resolveGitRoot(
   timeoutMs: number,
 ): Promise<string | null> {
   for (const dir of candidates) {
-    const res = await runCommand(["git", "-C", dir, "rev-parse", "--show-toplevel"], {
-      timeoutMs,
-    });
+    const res = await runCommand(
+      ["git", "-C", dir, "rev-parse", "--show-toplevel"],
+      {
+        timeoutMs,
+      },
+    );
     if (res.code === 0) {
       const root = res.stdout.trim();
       if (root) {
@@ -252,7 +261,17 @@ type RunStepOptions = {
 };
 
 async function runStep(opts: RunStepOptions): Promise<UpdateStepResult> {
-  const { runCommand, name, argv, cwd, timeoutMs, env, progress, stepIndex, totalSteps } = opts;
+  const {
+    runCommand,
+    name,
+    argv,
+    cwd,
+    timeoutMs,
+    env,
+    progress,
+    stepIndex,
+    totalSteps,
+  } = opts;
   const command = argv.join(" ");
 
   const stepInfo: UpdateStepInfo = {
@@ -288,7 +307,11 @@ async function runStep(opts: RunStepOptions): Promise<UpdateStepResult> {
   };
 }
 
-function managerScriptArgs(manager: "pnpm" | "bun" | "npm", script: string, args: string[] = []) {
+function managerScriptArgs(
+  manager: "pnpm" | "bun" | "npm",
+  script: string,
+  args: string[] = [],
+) {
   if (manager === "pnpm") {
     return ["pnpm", script, ...args];
   }
@@ -325,7 +348,9 @@ function normalizeTag(tag?: string) {
   return trimmed;
 }
 
-export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<UpdateRunResult> {
+export async function runGatewayUpdate(
+  opts: UpdateRunnerOptions = {},
+): Promise<UpdateRunResult> {
   const startedAt = Date.now();
   const runCommand =
     opts.runCommand ??
@@ -382,14 +407,20 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
 
   if (gitRoot && pkgRoot && path.resolve(gitRoot) === path.resolve(pkgRoot)) {
     // Get current SHA (not a visible step, no progress)
-    const beforeShaResult = await runCommand(["git", "-C", gitRoot, "rev-parse", "HEAD"], {
-      cwd: gitRoot,
-      timeoutMs,
-    });
+    const beforeShaResult = await runCommand(
+      ["git", "-C", gitRoot, "rev-parse", "HEAD"],
+      {
+        cwd: gitRoot,
+        timeoutMs,
+      },
+    );
     const beforeSha = beforeShaResult.stdout.trim() || null;
     const beforeVersion = await readPackageVersion(gitRoot);
     const channel: UpdateChannel = opts.channel ?? "dev";
-    const branch = channel === "dev" ? await readBranchName(runCommand, gitRoot, timeoutMs) : null;
+    const branch =
+      channel === "dev"
+        ? await readBranchName(runCommand, gitRoot, timeoutMs)
+        : null;
     const needsCheckoutMain = channel === "dev" && branch !== DEV_BRANCH;
     gitTotalSteps = channel === "dev" ? (needsCheckoutMain ? 11 : 10) : 9;
     const buildGitErrorResult = (reason: string): UpdateRunResult => ({
@@ -413,7 +444,15 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
     const statusCheck = await runStep(
       step(
         "clean check",
-        ["git", "-C", gitRoot, "status", "--porcelain", "--", ":!dist/control-ui/"],
+        [
+          "git",
+          "-C",
+          gitRoot,
+          "status",
+          "--porcelain",
+          "--",
+          ":!dist/control-ui/",
+        ],
         gitRoot,
       ),
     );
@@ -434,13 +473,10 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
 
     if (channel === "dev") {
       if (needsCheckoutMain) {
-        const failure = await runGitCheckoutOrFail(`git checkout ${DEV_BRANCH}`, [
-          "git",
-          "-C",
-          gitRoot,
-          "checkout",
-          DEV_BRANCH,
-        ]);
+        const failure = await runGitCheckoutOrFail(
+          `git checkout ${DEV_BRANCH}`,
+          ["git", "-C", gitRoot, "checkout", DEV_BRANCH],
+        );
         if (failure) {
           return failure;
         }
@@ -475,7 +511,11 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       }
 
       const fetchStep = await runStep(
-        step("git fetch", ["git", "-C", gitRoot, "fetch", "--all", "--prune", "--tags"], gitRoot),
+        step(
+          "git fetch",
+          ["git", "-C", gitRoot, "fetch", "--all", "--prune", "--tags"],
+          gitRoot,
+        ),
       );
       steps.push(fetchStep);
 
@@ -503,7 +543,14 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       const revListStep = await runStep(
         step(
           "git rev-list",
-          ["git", "-C", gitRoot, "rev-list", `--max-count=${PREFLIGHT_MAX_COMMITS}`, upstreamSha],
+          [
+            "git",
+            "-C",
+            gitRoot,
+            "rev-list",
+            `--max-count=${PREFLIGHT_MAX_COMMITS}`,
+            upstreamSha,
+          ],
           gitRoot,
         ),
       );
@@ -537,18 +584,31 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       }
 
       const manager = await detectPackageManager(gitRoot);
-      const preflightRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-preflight-"));
+      const preflightRoot = await fs.mkdtemp(
+        path.join(os.tmpdir(), "openclaw-update-preflight-"),
+      );
       const worktreeDir = path.join(preflightRoot, "worktree");
       const worktreeStep = await runStep(
         step(
           "preflight worktree",
-          ["git", "-C", gitRoot, "worktree", "add", "--detach", worktreeDir, upstreamSha],
+          [
+            "git",
+            "-C",
+            gitRoot,
+            "worktree",
+            "add",
+            "--detach",
+            worktreeDir,
+            upstreamSha,
+          ],
           gitRoot,
         ),
       );
       steps.push(worktreeStep);
       if (worktreeStep.exitCode !== 0) {
-        await fs.rm(preflightRoot, { recursive: true, force: true }).catch(() => {});
+        await fs
+          .rm(preflightRoot, { recursive: true, force: true })
+          .catch(() => {});
         return {
           status: "error",
           mode: "git",
@@ -577,7 +637,11 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
           }
 
           const depsStep = await runStep(
-            step(`preflight deps install (${shortSha})`, managerInstallArgs(manager), worktreeDir),
+            step(
+              `preflight deps install (${shortSha})`,
+              managerInstallArgs(manager),
+              worktreeDir,
+            ),
           );
           steps.push(depsStep);
           if (depsStep.exitCode !== 0) {
@@ -585,7 +649,11 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
           }
 
           const buildStep = await runStep(
-            step(`preflight build (${shortSha})`, managerScriptArgs(manager, "build"), worktreeDir),
+            step(
+              `preflight build (${shortSha})`,
+              managerScriptArgs(manager, "build"),
+              worktreeDir,
+            ),
           );
           steps.push(buildStep);
           if (buildStep.exitCode !== 0) {
@@ -593,7 +661,11 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
           }
 
           const lintStep = await runStep(
-            step(`preflight lint (${shortSha})`, managerScriptArgs(manager, "lint"), worktreeDir),
+            step(
+              `preflight lint (${shortSha})`,
+              managerScriptArgs(manager, "lint"),
+              worktreeDir,
+            ),
           );
           steps.push(lintStep);
           if (lintStep.exitCode !== 0) {
@@ -607,7 +679,15 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
         const removeStep = await runStep(
           step(
             "preflight cleanup",
-            ["git", "-C", gitRoot, "worktree", "remove", "--force", worktreeDir],
+            [
+              "git",
+              "-C",
+              gitRoot,
+              "worktree",
+              "remove",
+              "--force",
+              worktreeDir,
+            ],
             gitRoot,
           ),
         );
@@ -616,7 +696,9 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
           cwd: gitRoot,
           timeoutMs,
         }).catch(() => null);
-        await fs.rm(preflightRoot, { recursive: true, force: true }).catch(() => {});
+        await fs
+          .rm(preflightRoot, { recursive: true, force: true })
+          .catch(() => {});
       }
 
       if (!selectedSha) {
@@ -632,14 +714,21 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       }
 
       const rebaseStep = await runStep(
-        step("git rebase", ["git", "-C", gitRoot, "rebase", selectedSha], gitRoot),
+        step(
+          "git rebase",
+          ["git", "-C", gitRoot, "rebase", selectedSha],
+          gitRoot,
+        ),
       );
       steps.push(rebaseStep);
       if (rebaseStep.exitCode !== 0) {
-        const abortResult = await runCommand(["git", "-C", gitRoot, "rebase", "--abort"], {
-          cwd: gitRoot,
-          timeoutMs,
-        });
+        const abortResult = await runCommand(
+          ["git", "-C", gitRoot, "rebase", "--abort"],
+          {
+            cwd: gitRoot,
+            timeoutMs,
+          },
+        );
         steps.push({
           name: "git rebase --abort",
           command: "git rebase --abort",
@@ -661,7 +750,11 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       }
     } else {
       const fetchStep = await runStep(
-        step("git fetch", ["git", "-C", gitRoot, "fetch", "--all", "--prune", "--tags"], gitRoot),
+        step(
+          "git fetch",
+          ["git", "-C", gitRoot, "fetch", "--all", "--prune", "--tags"],
+          gitRoot,
+        ),
       );
       steps.push(fetchStep);
       if (fetchStep.exitCode !== 0) {
@@ -676,7 +769,12 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
         };
       }
 
-      const tag = await resolveChannelTag(runCommand, gitRoot, timeoutMs, channel);
+      const tag = await resolveChannelTag(
+        runCommand,
+        gitRoot,
+        timeoutMs,
+        channel,
+      );
       if (!tag) {
         return {
           status: "error",
@@ -704,7 +802,9 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
 
     const manager = await detectPackageManager(gitRoot);
 
-    const depsStep = await runStep(step("deps install", managerInstallArgs(manager), gitRoot));
+    const depsStep = await runStep(
+      step("deps install", managerInstallArgs(manager), gitRoot),
+    );
     steps.push(depsStep);
     if (depsStep.exitCode !== 0) {
       return {
@@ -718,7 +818,9 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       };
     }
 
-    const buildStep = await runStep(step("build", managerScriptArgs(manager, "build"), gitRoot));
+    const buildStep = await runStep(
+      step("build", managerScriptArgs(manager, "build"), gitRoot),
+    );
     steps.push(buildStep);
     if (buildStep.exitCode !== 0) {
       return {
@@ -775,17 +877,30 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
 
     // Use --fix so that doctor auto-strips unknown config keys introduced by
     // schema changes between versions, preventing a startup validation crash.
-    const doctorArgv = [process.execPath, doctorEntry, "doctor", "--non-interactive", "--fix"];
+    const doctorArgv = [
+      process.execPath,
+      doctorEntry,
+      "doctor",
+      "--non-interactive",
+      "--fix",
+    ];
     const doctorStep = await runStep(
-      step("openclaw doctor", doctorArgv, gitRoot, { OPENCLAW_UPDATE_IN_PROGRESS: "1" }),
+      step("openclaw doctor", doctorArgv, gitRoot, {
+        OPENCLAW_UPDATE_IN_PROGRESS: "1",
+      }),
     );
     steps.push(doctorStep);
 
-    const uiIndexHealth = await resolveControlUiDistIndexHealth({ root: gitRoot });
+    const uiIndexHealth = await resolveControlUiDistIndexHealth({
+      root: gitRoot,
+    });
     if (!uiIndexHealth.exists) {
       const repairArgv = managerScriptArgs(manager, "ui:build");
       const started = Date.now();
-      const repairResult = await runCommand(repairArgv, { cwd: gitRoot, timeoutMs });
+      const repairResult = await runCommand(repairArgv, {
+        cwd: gitRoot,
+        timeoutMs,
+      });
       const repairStep: UpdateStepResult = {
         name: "ui:build (post-doctor repair)",
         command: repairArgv.join(" "),
@@ -809,10 +924,13 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
         };
       }
 
-      const repairedUiIndexHealth = await resolveControlUiDistIndexHealth({ root: gitRoot });
+      const repairedUiIndexHealth = await resolveControlUiDistIndexHealth({
+        root: gitRoot,
+      });
       if (!repairedUiIndexHealth.exists) {
         const uiIndexPath =
-          repairedUiIndexHealth.indexPath ?? resolveControlUiDistIndexPathForRoot(gitRoot);
+          repairedUiIndexHealth.indexPath ??
+          resolveControlUiDistIndexPathForRoot(gitRoot);
         steps.push({
           name: "ui assets verify",
           command: `verify ${uiIndexPath}`,
@@ -835,7 +953,11 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
 
     const failedStep = steps.find((s) => s.exitCode !== 0);
     const afterShaStep = await runStep(
-      step("git rev-parse HEAD (after)", ["git", "-C", gitRoot, "rev-parse", "HEAD"], gitRoot),
+      step(
+        "git rev-parse HEAD (after)",
+        ["git", "-C", gitRoot, "rev-parse", "HEAD"],
+        gitRoot,
+      ),
     );
     steps.push(afterShaStep);
     const afterVersion = await readPackageVersion(gitRoot);
@@ -866,9 +988,14 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
   }
 
   const beforeVersion = await readPackageVersion(pkgRoot);
-  const globalManager = await detectGlobalInstallManagerForRoot(runCommand, pkgRoot, timeoutMs);
+  const globalManager = await detectGlobalInstallManagerForRoot(
+    runCommand,
+    pkgRoot,
+    timeoutMs,
+  );
   if (globalManager) {
-    const packageName = (await readPackageName(pkgRoot)) ?? DEFAULT_PACKAGE_NAME;
+    const packageName =
+      (await readPackageName(pkgRoot)) ?? DEFAULT_PACKAGE_NAME;
     await cleanupGlobalRenameDirs({
       globalRoot: path.dirname(pkgRoot),
       packageName,

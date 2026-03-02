@@ -12,7 +12,8 @@ export function setBridgeAuthForPort(port: number, auth: BridgeAuth): void {
     return;
   }
   const token = typeof auth.token === "string" ? auth.token.trim() : "";
-  const password = typeof auth.password === "string" ? auth.password.trim() : "";
+  const password =
+    typeof auth.password === "string" ? auth.password.trim() : "";
   authByPort.set(port, {
     token: token || undefined,
     password: password || undefined,

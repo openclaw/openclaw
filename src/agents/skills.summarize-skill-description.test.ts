@@ -5,7 +5,12 @@ import { parseFrontmatter } from "./skills/frontmatter.js";
 
 describe("skills/summarize frontmatter", () => {
   it("mentions podcasts, local files, and transcription use cases", () => {
-    const skillPath = path.join(process.cwd(), "skills", "summarize", "SKILL.md");
+    const skillPath = path.join(
+      process.cwd(),
+      "skills",
+      "summarize",
+      "SKILL.md",
+    );
     const raw = fs.readFileSync(skillPath, "utf-8");
     const frontmatter = parseFrontmatter(raw);
     const description = frontmatter.description ?? "";

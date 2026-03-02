@@ -19,7 +19,9 @@ function isEnvVarPlaceholder(value: string): boolean {
 
 function isWholeObjectSensitivePath(path: string): boolean {
   const lowered = path.toLowerCase();
-  return lowered.endsWith("serviceaccount") || lowered.endsWith("serviceaccountref");
+  return (
+    lowered.endsWith("serviceaccount") || lowered.endsWith("serviceaccountref")
+  );
 }
 
 function collectSensitiveStrings(value: unknown, values: string[]): void {
@@ -42,7 +44,10 @@ function collectSensitiveStrings(value: unknown, values: string[]): void {
   }
 }
 
-function isExplicitlyNonSensitivePath(hints: ConfigUiHints | undefined, paths: string[]): boolean {
+function isExplicitlyNonSensitivePath(
+  hints: ConfigUiHints | undefined,
+  paths: string[],
+): boolean {
   if (!hints) {
     return false;
   }
@@ -178,7 +183,13 @@ function redactObjectWithLookup(
               collectSensitiveStrings(value, values);
               result[key] = REDACTED_SENTINEL;
             } else {
-              result[key] = redactObjectWithLookup(value, lookup, candidate, values, hints);
+              result[key] = redactObjectWithLookup(
+                value,
+                lookup,
+                candidate,
+                values,
+                hints,
+              );
             }
           } else if (
             hints[candidate]?.sensitive === true &&
@@ -195,7 +206,10 @@ function redactObjectWithLookup(
         // Fall back to pattern-based guessing for paths not covered by schema
         // hints. This catches dynamic keys inside catchall objects (for example
         // env.GROQ_API_KEY) and extension/plugin config alike.
-        const markedNonSensitive = isExplicitlyNonSensitivePath(hints, [path, wildcardPath]);
+        const markedNonSensitive = isExplicitlyNonSensitivePath(hints, [
+          path,
+          wildcardPath,
+        ]);
         if (
           typeof value === "string" &&
           !markedNonSensitive &&
@@ -284,7 +298,11 @@ function redactObjectGuessing(
  * Replace known sensitive values in a raw JSON5 string with the sentinel.
  * Values are replaced longest-first to avoid partial matches.
  */
-function redactRawText(raw: string, config: unknown, hints?: ConfigUiHints): string {
+function redactRawText(
+  raw: string,
+  config: unknown,
+  hints?: ConfigUiHints,
+): string {
   const sensitiveValues = collectSensitiveValues(config, hints);
   sensitiveValues.sort((a, b) => b.length - a.length);
   let result = raw;
@@ -337,9 +355,16 @@ export function redactConfigSnapshot(
   // else: snapshot.config must be valid and populated, as that is what
   // readConfigFileSnapshot() does when it creates the snapshot.
 
-  const redactedConfig = redactObject(snapshot.config, uiHints) as ConfigFileSnapshot["config"];
-  const redactedRaw = snapshot.raw ? redactRawText(snapshot.raw, snapshot.config, uiHints) : null;
-  const redactedParsed = snapshot.parsed ? redactObject(snapshot.parsed, uiHints) : snapshot.parsed;
+  const redactedConfig = redactObject(
+    snapshot.config,
+    uiHints,
+  ) as ConfigFileSnapshot["config"];
+  const redactedRaw = snapshot.raw
+    ? redactRawText(snapshot.raw, snapshot.config, uiHints)
+    : null;
+  const redactedParsed = snapshot.parsed
+    ? redactObject(snapshot.parsed, uiHints)
+    : snapshot.parsed;
   // Also redact the resolved config (contains values after ${ENV} substitution)
   const redactedResolved = redactConfigObject(snapshot.resolved, uiHints);
 
@@ -383,13 +408,25 @@ export function restoreRedactedValues(
       if (lookup.has("")) {
         return {
           ok: true,
-          result: restoreRedactedValuesWithLookup(incoming, original, lookup, "", hints),
+          result: restoreRedactedValuesWithLookup(
+            incoming,
+            original,
+            lookup,
+            "",
+            hints,
+          ),
         };
       } else {
-        return { ok: true, result: restoreRedactedValuesGuessing(incoming, original, "", hints) };
+        return {
+          ok: true,
+          result: restoreRedactedValuesGuessing(incoming, original, "", hints),
+        };
       }
     } else {
-      return { ok: true, result: restoreRedactedValuesGuessing(incoming, original, "") };
+      return {
+        ok: true,
+        result: restoreRedactedValuesGuessing(incoming, original, ""),
+      };
     }
   } catch (err) {
     if (err instanceof RedactionError) {
@@ -420,7 +457,9 @@ function restoreOriginalValueOrThrow(params: {
   if (params.key in params.original) {
     return params.original[params.key];
   }
-  log.warn(`Cannot un-redact config key ${params.path} as it doesn't have any value`);
+  log.warn(
+    `Cannot un-redact config key ${params.path} as it doesn't have any value`,
+  );
   throw new RedactionError(params.path);
 }
 
@@ -434,7 +473,9 @@ function mapRedactedArray(params: {
   if (params.incoming.length < originalArray.length) {
     log.warn(`Redacted config array key ${params.path} has been truncated`);
   }
-  return params.incoming.map((item, index) => params.mapItem(item, index, originalArray));
+  return params.incoming.map((item, index) =>
+    params.mapItem(item, index, originalArray),
+  );
 }
 
 function toObjectRecord(value: unknown): Record<string, unknown> {
@@ -445,7 +486,9 @@ function toObjectRecord(value: unknown): Record<string, unknown> {
 }
 
 function shouldPassThroughRestoreValue(incoming: unknown): boolean {
-  return incoming === null || incoming === undefined || typeof incoming !== "object";
+  return (
+    incoming === null || incoming === undefined || typeof incoming !== "object"
+  );
 }
 
 function toRestoreArrayContext(
@@ -546,7 +589,12 @@ function restoreRedactedValuesWithLookup(
     if (!lookup.has(path)) {
       // Keep behavior symmetric with object fallback: if hints miss the path,
       // still run pattern-based guessing for non-extension arrays.
-      return restoreRedactedValuesGuessing(incomingArray, original, prefix, hints);
+      return restoreRedactedValuesGuessing(
+        incomingArray,
+        original,
+        prefix,
+        hints,
+      );
     }
     return mapRedactedArray({
       incoming: incomingArray,
@@ -565,7 +613,9 @@ function restoreRedactedValuesWithLookup(
   }
   const orig = toObjectRecord(original);
   const result: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(incoming as Record<string, unknown>)) {
+  for (const [key, value] of Object.entries(
+    incoming as Record<string, unknown>,
+  )) {
     result[key] = value;
     const path = prefix ? `${prefix}.${key}` : key;
     const wildcardPath = prefix ? `${prefix}.*` : "*";
@@ -574,19 +624,45 @@ function restoreRedactedValuesWithLookup(
       if (lookup.has(candidate)) {
         matched = true;
         if (value === REDACTED_SENTINEL) {
-          result[key] = restoreOriginalValueOrThrow({ key, path: candidate, original: orig });
+          result[key] = restoreOriginalValueOrThrow({
+            key,
+            path: candidate,
+            original: orig,
+          });
         } else if (typeof value === "object" && value !== null) {
-          result[key] = restoreRedactedValuesWithLookup(value, orig[key], lookup, candidate, hints);
+          result[key] = restoreRedactedValuesWithLookup(
+            value,
+            orig[key],
+            lookup,
+            candidate,
+            hints,
+          );
         }
         break;
       }
     }
     if (!matched) {
-      const markedNonSensitive = isExplicitlyNonSensitivePath(hints, [path, wildcardPath]);
-      if (!markedNonSensitive && isSensitivePath(path) && value === REDACTED_SENTINEL) {
-        result[key] = restoreOriginalValueOrThrow({ key, path, original: orig });
+      const markedNonSensitive = isExplicitlyNonSensitivePath(hints, [
+        path,
+        wildcardPath,
+      ]);
+      if (
+        !markedNonSensitive &&
+        isSensitivePath(path) &&
+        value === REDACTED_SENTINEL
+      ) {
+        result[key] = restoreOriginalValueOrThrow({
+          key,
+          path,
+          original: orig,
+        });
       } else if (typeof value === "object" && value !== null) {
-        result[key] = restoreRedactedValuesGuessing(value, orig[key], path, hints);
+        result[key] = restoreRedactedValuesGuessing(
+          value,
+          orig[key],
+          path,
+          hints,
+        );
       }
     }
   }
@@ -618,7 +694,9 @@ function restoreRedactedValuesGuessing(
   }
   const orig = toObjectRecord(original);
   const result: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(incoming as Record<string, unknown>)) {
+  for (const [key, value] of Object.entries(
+    incoming as Record<string, unknown>,
+  )) {
     const path = prefix ? `${prefix}.${key}` : key;
     const wildcardPath = prefix ? `${prefix}.*` : "*";
     if (
@@ -628,7 +706,12 @@ function restoreRedactedValuesGuessing(
     ) {
       result[key] = restoreOriginalValueOrThrow({ key, path, original: orig });
     } else if (typeof value === "object" && value !== null) {
-      result[key] = restoreRedactedValuesGuessing(value, orig[key], path, hints);
+      result[key] = restoreRedactedValuesGuessing(
+        value,
+        orig[key],
+        path,
+        hints,
+      );
     } else {
       result[key] = value;
     }

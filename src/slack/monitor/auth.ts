@@ -6,7 +6,10 @@ import {
   resolveSlackUserAllowed,
 } from "./allow-list.js";
 import { resolveSlackChannelConfig } from "./channel-config.js";
-import { normalizeSlackChannelType, type SlackMonitorContext } from "./context.js";
+import {
+  normalizeSlackChannelType,
+  type SlackMonitorContext,
+} from "./context.js";
 
 export async function resolveSlackEffectiveAllowFrom(
   ctx: SlackMonitorContext,
@@ -88,7 +91,10 @@ export async function authorizeSlackSystemEventSender(params: {
       type?: "im" | "mpim" | "channel" | "group";
     } = await params.ctx.resolveChannelName(channelId).catch(() => ({}));
     channelName = info.name;
-    channelType = normalizeSlackChannelType(params.channelType ?? info.type, channelId);
+    channelType = normalizeSlackChannelType(
+      params.channelType ?? info.type,
+      channelId,
+    );
     if (
       !params.ctx.isChannelAllowed({
         channelId,
@@ -111,11 +117,17 @@ export async function authorizeSlackSystemEventSender(params: {
   const senderName = senderInfo.name;
 
   const resolveAllowFromLower = async (includePairingStore = false) =>
-    (await resolveSlackEffectiveAllowFrom(params.ctx, { includePairingStore })).allowFromLower;
+    (await resolveSlackEffectiveAllowFrom(params.ctx, { includePairingStore }))
+      .allowFromLower;
 
   if (channelType === "im") {
     if (!params.ctx.dmEnabled || params.ctx.dmPolicy === "disabled") {
-      return { allowed: false, reason: "dm-disabled", channelType, channelName };
+      return {
+        allowed: false,
+        reason: "dm-disabled",
+        channelType,
+        channelName,
+      };
     }
     if (params.ctx.dmPolicy !== "open") {
       const allowFromLower = await resolveAllowFromLower(true);

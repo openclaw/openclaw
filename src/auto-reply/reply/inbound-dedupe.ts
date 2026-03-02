@@ -10,13 +10,16 @@ const inboundDedupeCache = createDedupeCache({
   maxSize: DEFAULT_INBOUND_DEDUPE_MAX,
 });
 
-const normalizeProvider = (value?: string | null) => value?.trim().toLowerCase() || "";
+const normalizeProvider = (value?: string | null) =>
+  value?.trim().toLowerCase() || "";
 
 const resolveInboundPeerId = (ctx: MsgContext) =>
   ctx.OriginatingTo ?? ctx.To ?? ctx.From ?? ctx.SessionKey;
 
 export function buildInboundDedupeKey(ctx: MsgContext): string | null {
-  const provider = normalizeProvider(ctx.OriginatingChannel ?? ctx.Provider ?? ctx.Surface);
+  const provider = normalizeProvider(
+    ctx.OriginatingChannel ?? ctx.Provider ?? ctx.Surface,
+  );
   const messageId = ctx.MessageSid?.trim();
   if (!provider || !messageId) {
     return null;
@@ -31,7 +34,9 @@ export function buildInboundDedupeKey(ctx: MsgContext): string | null {
     ctx.MessageThreadId !== undefined && ctx.MessageThreadId !== null
       ? String(ctx.MessageThreadId)
       : "";
-  return [provider, accountId, sessionKey, peerId, threadId, messageId].filter(Boolean).join("|");
+  return [provider, accountId, sessionKey, peerId, threadId, messageId]
+    .filter(Boolean)
+    .join("|");
 }
 
 export function shouldSkipDuplicateInbound(

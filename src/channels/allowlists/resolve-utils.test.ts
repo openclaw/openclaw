@@ -41,7 +41,9 @@ describe("buildAllowlistResolutionSummary", () => {
 describe("addAllowlistUserEntriesFromConfigEntry", () => {
   it("adds trimmed users and skips '*' and blanks", () => {
     const target = new Set<string>();
-    addAllowlistUserEntriesFromConfigEntry(target, { users: ["  a  ", "*", "", "b"] });
+    addAllowlistUserEntriesFromConfigEntry(target, {
+      users: ["  a  ", "*", "", "b"],
+    });
     expect(Array.from(target).toSorted()).toEqual(["a", "b"]);
   });
 
@@ -66,7 +68,9 @@ describe("canonicalizeAllowlistWithResolvedIds", () => {
   });
 
   it("deduplicates ids after canonicalization", () => {
-    const resolvedMap = new Map([["alice", { input: "alice", resolved: true, id: "111" }]]);
+    const resolvedMap = new Map([
+      ["alice", { input: "alice", resolved: true, id: "111" }],
+    ]);
     const result = canonicalizeAllowlistWithResolvedIds({
       existing: ["alice", "111", "alice"],
       resolvedMap,
@@ -90,7 +94,10 @@ describe("patchAllowlistUsersInConfigEntries", () => {
       resolvedMap,
       strategy: "canonicalize",
     });
-    expect((patched.alpha as { users: string[] }).users).toEqual(["111", "Bob"]);
+    expect((patched.alpha as { users: string[] }).users).toEqual([
+      "111",
+      "Bob",
+    ]);
     expect((patched.beta as { users: string[] }).users).toEqual(["*"]);
   });
 });

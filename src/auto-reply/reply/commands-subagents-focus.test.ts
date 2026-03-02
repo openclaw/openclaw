@@ -57,15 +57,20 @@ vi.mock("../../gateway/call.js", () => ({
 }));
 
 vi.mock("../../acp/runtime/session-meta.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../acp/runtime/session-meta.js")>();
+  const actual =
+    await importOriginal<typeof import("../../acp/runtime/session-meta.js")>();
   return {
     ...actual,
-    readAcpSessionEntry: (params: unknown) => hoisted.readAcpSessionEntryMock(params),
+    readAcpSessionEntry: (params: unknown) =>
+      hoisted.readAcpSessionEntryMock(params),
   };
 });
 
 vi.mock("../../discord/monitor/thread-bindings.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../discord/monitor/thread-bindings.js")>();
+  const actual =
+    await importOriginal<
+      typeof import("../../discord/monitor/thread-bindings.js")
+    >();
   return {
     ...actual,
     getThreadBindingManager: hoisted.getThreadBindingManagerMock,
@@ -73,19 +78,25 @@ vi.mock("../../discord/monitor/thread-bindings.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../../infra/outbound/session-binding-service.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../infra/outbound/session-binding-service.js")>();
-  return {
-    ...actual,
-    getSessionBindingService: () => buildFocusSessionBindingService(),
-  };
-});
+vi.mock(
+  "../../infra/outbound/session-binding-service.js",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("../../infra/outbound/session-binding-service.js")
+      >();
+    return {
+      ...actual,
+      getSessionBindingService: () => buildFocusSessionBindingService(),
+    };
+  },
+);
 
 installSubagentsCommandCoreMocks();
 
 const { handleSubagentsCommand } = await import("./commands-subagents.js");
-const { buildCommandTestParams } = await import("./commands-spawn.test-harness.js");
+const { buildCommandTestParams } =
+  await import("./commands-spawn.test-harness.js");
 
 type FakeBinding = {
   accountId: string;
@@ -102,7 +113,10 @@ type FakeBinding = {
 };
 
 function createFakeBinding(
-  overrides: Pick<FakeBinding, "threadId" | "targetKind" | "targetSessionKey" | "agentId"> &
+  overrides: Pick<
+    FakeBinding,
+    "threadId" | "targetKind" | "targetSessionKey" | "agentId"
+  > &
     Partial<FakeBinding>,
 ): FakeBinding {
   return {
@@ -114,7 +128,11 @@ function createFakeBinding(
   };
 }
 
-function expectAgentListContainsThreadBinding(text: string, label: string, threadId: string): void {
+function expectAgentListContainsThreadBinding(
+  text: string,
+  label: string,
+  threadId: string,
+): void {
   expect(text).toContain("agents:");
   expect(text).toContain(label);
   expect(text).toContain(`thread:${threadId}`);
@@ -130,7 +148,9 @@ function createFakeThreadBindingManager(initialBindings: FakeBinding[] = []) {
     getMaxAgeMs: vi.fn(() => 0),
     getByThreadId: vi.fn((threadId: string) => byThread.get(threadId)),
     listBySessionKey: vi.fn((targetSessionKey: string) =>
-      [...byThread.values()].filter((binding) => binding.targetSessionKey === targetSessionKey),
+      [...byThread.values()].filter(
+        (binding) => binding.targetSessionKey === targetSessionKey,
+      ),
     ),
     listBindings: vi.fn(() => [...byThread.values()]),
     bindTarget: vi.fn(async (params: Record<string, unknown>) => {
@@ -139,7 +159,9 @@ function createFakeThreadBindingManager(initialBindings: FakeBinding[] = []) {
           ? params.threadId.trim()
           : "thread-created";
       const targetSessionKey =
-        typeof params.targetSessionKey === "string" ? params.targetSessionKey.trim() : "";
+        typeof params.targetSessionKey === "string"
+          ? params.targetSessionKey.trim()
+          : "";
       const agentId =
         typeof params.agentId === "string" && params.agentId.trim()
           ? params.agentId.trim()
@@ -256,9 +278,15 @@ async function runUnfocusAndExpectManualUnbind(initialBindings: FakeBinding[]) {
   );
 }
 
-async function focusCodexAcpInThread(options?: { existingBinding?: SessionBindingRecord | null }) {
-  hoisted.sessionBindingCapabilitiesMock.mockReturnValue(createSessionBindingCapabilities());
-  hoisted.sessionBindingResolveByConversationMock.mockReturnValue(options?.existingBinding ?? null);
+async function focusCodexAcpInThread(options?: {
+  existingBinding?: SessionBindingRecord | null;
+}) {
+  hoisted.sessionBindingCapabilitiesMock.mockReturnValue(
+    createSessionBindingCapabilities(),
+  );
+  hoisted.sessionBindingResolveByConversationMock.mockReturnValue(
+    options?.existingBinding ?? null,
+  );
   hoisted.sessionBindingBindMock.mockImplementation(
     async (input: {
       targetSessionKey: string;
@@ -274,7 +302,10 @@ async function focusCodexAcpInThread(options?: { existingBinding?: SessionBindin
           parentConversationId: "parent-1",
         },
         metadata: {
-          boundBy: typeof input.metadata?.boundBy === "string" ? input.metadata.boundBy : "user-1",
+          boundBy:
+            typeof input.metadata?.boundBy === "string"
+              ? input.metadata.boundBy
+              : "user-1",
         },
       }),
   );
@@ -301,12 +332,16 @@ describe("/focus, /unfocus, /agents", () => {
     resetSubagentRegistryForTests();
     hoisted.callGatewayMock.mockClear();
     hoisted.getThreadBindingManagerMock.mockClear().mockReturnValue(null);
-    hoisted.resolveThreadBindingThreadNameMock.mockClear().mockReturnValue("🤖 codex");
+    hoisted.resolveThreadBindingThreadNameMock
+      .mockClear()
+      .mockReturnValue("🤖 codex");
     hoisted.readAcpSessionEntryMock.mockReset().mockReturnValue(null);
     hoisted.sessionBindingCapabilitiesMock
       .mockReset()
       .mockReturnValue(createSessionBindingCapabilities());
-    hoisted.sessionBindingResolveByConversationMock.mockReset().mockReturnValue(null);
+    hoisted.sessionBindingResolveByConversationMock
+      .mockReset()
+      .mockReturnValue(null);
     hoisted.sessionBindingListBySessionMock.mockReset().mockReturnValue([]);
     hoisted.sessionBindingUnbindMock.mockReset().mockResolvedValue([]);
     hoisted.sessionBindingBindMock.mockReset();
@@ -400,7 +435,9 @@ describe("/focus, /unfocus, /agents", () => {
       }),
     });
 
-    expect(result?.reply?.text).toContain("Only user-2 can refocus this thread.");
+    expect(result?.reply?.text).toContain(
+      "Only user-2 can refocus this thread.",
+    );
     expect(hoisted.sessionBindingBindMock).not.toHaveBeenCalled();
   });
 
@@ -477,7 +514,11 @@ describe("/focus, /unfocus, /agents", () => {
 
     const text = await runAgentsCommandAndText();
 
-    expectAgentListContainsThreadBinding(text, "persistent-1", "thread-persistent-1");
+    expectAgentListContainsThreadBinding(
+      text,
+      "persistent-1",
+      "thread-persistent-1",
+    );
   });
 
   it("/focus is discord-only", async () => {

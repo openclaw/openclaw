@@ -3,7 +3,10 @@ import { appendCdpPath } from "./cdp.js";
 import type { ResolvedBrowserProfile } from "./config.js";
 import type { PwAiModule } from "./pw-ai-module.js";
 import { getPwAiModule } from "./pw-ai-module.js";
-import type { BrowserTab, ProfileRuntimeState } from "./server-context.types.js";
+import type {
+  BrowserTab,
+  ProfileRuntimeState,
+} from "./server-context.types.js";
 import { resolveTargetIdFromTabs } from "./target-id.js";
 
 type SelectionDeps = {
@@ -109,8 +112,9 @@ export function createProfileSelectionOps({
 
     if (!profile.cdpIsLoopback) {
       const mod = await getPwAiModule({ mode: "strict" });
-      const focusPageByTargetIdViaPlaywright = (mod as Partial<PwAiModule> | null)
-        ?.focusPageByTargetIdViaPlaywright;
+      const focusPageByTargetIdViaPlaywright = (
+        mod as Partial<PwAiModule> | null
+      )?.focusPageByTargetIdViaPlaywright;
       if (typeof focusPageByTargetIdViaPlaywright === "function") {
         await focusPageByTargetIdViaPlaywright({
           cdpUrl: profile.cdpUrl,
@@ -122,7 +126,9 @@ export function createProfileSelectionOps({
       }
     }
 
-    await fetchOk(appendCdpPath(profile.cdpUrl, `/json/activate/${resolvedTargetId}`));
+    await fetchOk(
+      appendCdpPath(profile.cdpUrl, `/json/activate/${resolvedTargetId}`),
+    );
     const profileState = getProfileState();
     profileState.lastTargetId = resolvedTargetId;
   };
@@ -133,8 +139,9 @@ export function createProfileSelectionOps({
     // For remote profiles, use Playwright's persistent connection to close tabs
     if (!profile.cdpIsLoopback) {
       const mod = await getPwAiModule({ mode: "strict" });
-      const closePageByTargetIdViaPlaywright = (mod as Partial<PwAiModule> | null)
-        ?.closePageByTargetIdViaPlaywright;
+      const closePageByTargetIdViaPlaywright = (
+        mod as Partial<PwAiModule> | null
+      )?.closePageByTargetIdViaPlaywright;
       if (typeof closePageByTargetIdViaPlaywright === "function") {
         await closePageByTargetIdViaPlaywright({
           cdpUrl: profile.cdpUrl,
@@ -144,7 +151,9 @@ export function createProfileSelectionOps({
       }
     }
 
-    await fetchOk(appendCdpPath(profile.cdpUrl, `/json/close/${resolvedTargetId}`));
+    await fetchOk(
+      appendCdpPath(profile.cdpUrl, `/json/close/${resolvedTargetId}`),
+    );
   };
 
   return {

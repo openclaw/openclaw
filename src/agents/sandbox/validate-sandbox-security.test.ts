@@ -11,13 +11,19 @@ import {
   validateSandboxSecurity,
 } from "./validate-sandbox-security.js";
 
-function expectBindMountsToThrow(binds: string[], expected: RegExp, label: string) {
+function expectBindMountsToThrow(
+  binds: string[],
+  expected: RegExp,
+  label: string,
+) {
   expect(() => validateBindMounts(binds), label).toThrow(expected);
 }
 
 describe("getBlockedBindReason", () => {
   it("blocks common Docker socket directories", () => {
-    expect(getBlockedBindReason("/run:/run")).toEqual(expect.objectContaining({ kind: "targets" }));
+    expect(getBlockedBindReason("/run:/run")).toEqual(
+      expect.objectContaining({ kind: "targets" }),
+    );
     expect(getBlockedBindReason("/var/run:/var/run:ro")).toEqual(
       expect.objectContaining({ kind: "targets" }),
     );
@@ -94,7 +100,11 @@ describe("validateBindMounts", () => {
       },
     ] as const;
     for (const testCase of cases) {
-      expectBindMountsToThrow([...testCase.binds], testCase.expected, testCase.name);
+      expectBindMountsToThrow(
+        [...testCase.binds],
+        testCase.expected,
+        testCase.name,
+      );
     }
   });
 
@@ -161,7 +171,11 @@ describe("validateBindMounts", () => {
   });
 
   it("rejects non-absolute source paths (relative or named volumes)", () => {
-    const cases = ["../etc/passwd:/mnt/passwd", "etc/passwd:/mnt/passwd", "myvol:/mnt"] as const;
+    const cases = [
+      "../etc/passwd:/mnt/passwd",
+      "etc/passwd:/mnt/passwd",
+      "myvol:/mnt",
+    ] as const;
     for (const source of cases) {
       expectBindMountsToThrow([source], /non-absolute/, source);
     }
@@ -224,7 +238,9 @@ describe("validateNetworkMode", () => {
       { mode: "HOST", expected: /network mode "HOST" is blocked/ },
     ] as const;
     for (const testCase of cases) {
-      expect(() => validateNetworkMode(testCase.mode), testCase.mode).toThrow(testCase.expected);
+      expect(() => validateNetworkMode(testCase.mode), testCase.mode).toThrow(
+        testCase.expected,
+      );
     }
   });
 
@@ -240,7 +256,9 @@ describe("validateNetworkMode", () => {
       },
     ] as const;
     for (const testCase of cases) {
-      expect(() => validateNetworkMode(testCase.mode), testCase.mode).toThrow(testCase.expected);
+      expect(() => validateNetworkMode(testCase.mode), testCase.mode).toThrow(
+        testCase.expected,
+      );
     }
   });
 
@@ -279,10 +297,13 @@ describe("profile hardening", () => {
       run: (value: string) => validateApparmorProfile(value),
       expected: /apparmor profile ".+" is blocked/,
     },
-  ])("blocks unconfined profiles (case-insensitive): $name", ({ run, expected }) => {
-    expect(() => run("unconfined")).toThrow(expected);
-    expect(() => run("Unconfined")).toThrow(expected);
-  });
+  ])(
+    "blocks unconfined profiles (case-insensitive): $name",
+    ({ run, expected }) => {
+      expect(() => run("unconfined")).toThrow(expected);
+      expect(() => run("Unconfined")).toThrow(expected);
+    },
+  );
 });
 
 describe("validateSandboxSecurity", () => {

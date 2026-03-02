@@ -4,7 +4,10 @@ import type {
   ChannelResolveResult,
   RuntimeEnv,
 } from "openclaw/plugin-sdk";
-import { listMatrixDirectoryGroupsLive, listMatrixDirectoryPeersLive } from "./directory-live.js";
+import {
+  listMatrixDirectoryGroupsLive,
+  listMatrixDirectoryPeersLive,
+} from "./directory-live.js";
 
 function findExactDirectoryMatches(
   matches: ChannelDirectoryEntry[],
@@ -47,7 +50,10 @@ function pickBestUserMatch(
   return undefined;
 }
 
-function describeUserMatchFailure(matches: ChannelDirectoryEntry[], query: string): string {
+function describeUserMatchFailure(
+  matches: ChannelDirectoryEntry[],
+  query: string,
+): string {
   if (matches.length === 0) {
     return "no matches";
   }

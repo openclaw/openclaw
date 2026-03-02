@@ -19,13 +19,27 @@ vi.mock("./store.js", async (importOriginal) => {
   };
 });
 
-function makeStore(usageStats: AuthProfileStore["usageStats"]): AuthProfileStore {
+function makeStore(
+  usageStats: AuthProfileStore["usageStats"],
+): AuthProfileStore {
   return {
     version: 1,
     profiles: {
-      "anthropic:default": { type: "api_key", provider: "anthropic", key: "sk-test" },
-      "openai:default": { type: "api_key", provider: "openai", key: "sk-test-2" },
-      "openrouter:default": { type: "api_key", provider: "openrouter", key: "sk-or-test" },
+      "anthropic:default": {
+        type: "api_key",
+        provider: "anthropic",
+        key: "sk-test",
+      },
+      "openai:default": {
+        type: "api_key",
+        provider: "openai",
+        key: "sk-test-2",
+      },
+      "openrouter:default": {
+        type: "api_key",
+        provider: "openrouter",
+        key: "sk-or-test",
+      },
     },
     usageStats,
   };
@@ -44,11 +58,18 @@ function expectProfileErrorStateCleared(
 describe("resolveProfileUnusableUntil", () => {
   it("returns null when both values are missing or invalid", () => {
     expect(resolveProfileUnusableUntil({})).toBeNull();
-    expect(resolveProfileUnusableUntil({ cooldownUntil: 0, disabledUntil: Number.NaN })).toBeNull();
+    expect(
+      resolveProfileUnusableUntil({
+        cooldownUntil: 0,
+        disabledUntil: Number.NaN,
+      }),
+    ).toBeNull();
   });
 
   it("returns the latest active timestamp", () => {
-    expect(resolveProfileUnusableUntil({ cooldownUntil: 100, disabledUntil: 200 })).toBe(200);
+    expect(
+      resolveProfileUnusableUntil({ cooldownUntil: 100, disabledUntil: 200 }),
+    ).toBe(200);
     expect(resolveProfileUnusableUntil({ cooldownUntil: 300 })).toBe(300);
   });
 });
@@ -61,7 +82,9 @@ describe("resolveProfileUnusableUntilForDisplay", () => {
       },
     });
 
-    expect(resolveProfileUnusableUntilForDisplay(store, "openrouter:default")).toBeNull();
+    expect(
+      resolveProfileUnusableUntilForDisplay(store, "openrouter:default"),
+    ).toBeNull();
   });
 
   it("keeps cooldown markers visible for other providers", () => {
@@ -72,7 +95,9 @@ describe("resolveProfileUnusableUntilForDisplay", () => {
       },
     });
 
-    expect(resolveProfileUnusableUntilForDisplay(store, "anthropic:default")).toBe(until);
+    expect(
+      resolveProfileUnusableUntilForDisplay(store, "anthropic:default"),
+    ).toBe(until);
   });
 });
 
@@ -380,11 +405,15 @@ describe("clearExpiredCooldowns", () => {
     expect(clearExpiredCooldowns(store)).toBe(true);
 
     // Anthropic: expired → cleared
-    expect(store.usageStats?.["anthropic:default"]?.cooldownUntil).toBeUndefined();
+    expect(
+      store.usageStats?.["anthropic:default"]?.cooldownUntil,
+    ).toBeUndefined();
     expect(store.usageStats?.["anthropic:default"]?.errorCount).toBe(0);
 
     // OpenAI: still active → untouched
-    expect(store.usageStats?.["openai:default"]?.cooldownUntil).toBeGreaterThan(Date.now());
+    expect(store.usageStats?.["openai:default"]?.cooldownUntil).toBeGreaterThan(
+      Date.now(),
+    );
     expect(store.usageStats?.["openai:default"]?.errorCount).toBe(2);
   });
 
@@ -398,7 +427,9 @@ describe("clearExpiredCooldowns", () => {
     });
 
     expect(clearExpiredCooldowns(store, fixedNow)).toBe(true);
-    expect(store.usageStats?.["anthropic:default"]?.cooldownUntil).toBeUndefined();
+    expect(
+      store.usageStats?.["anthropic:default"]?.cooldownUntil,
+    ).toBeUndefined();
     expect(store.usageStats?.["anthropic:default"]?.errorCount).toBe(0);
   });
 
@@ -414,7 +445,9 @@ describe("clearExpiredCooldowns", () => {
     // ts >= cooldownUntil → should clear (cooldown "until" means the instant
     // at cooldownUntil the profile becomes available again).
     expect(clearExpiredCooldowns(store, fixedNow)).toBe(true);
-    expect(store.usageStats?.["anthropic:default"]?.cooldownUntil).toBeUndefined();
+    expect(
+      store.usageStats?.["anthropic:default"]?.cooldownUntil,
+    ).toBeUndefined();
     expect(store.usageStats?.["anthropic:default"]?.errorCount).toBe(0);
   });
 

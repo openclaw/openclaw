@@ -29,7 +29,8 @@ function isLikelyLocalPath(candidate: string): boolean {
     candidate.startsWith("~") ||
     WINDOWS_DRIVE_RE.test(candidate) ||
     candidate.startsWith("\\\\") ||
-    (!SCHEME_RE.test(candidate) && (candidate.includes("/") || candidate.includes("\\")))
+    (!SCHEME_RE.test(candidate) &&
+      (candidate.includes("/") || candidate.includes("\\")))
   );
 }
 
@@ -56,7 +57,11 @@ function isValidMedia(
 
   // Accept bare filenames (e.g. "image.png") only when the caller opts in.
   // This avoids treating space-split path fragments as separate media items.
-  if (opts?.allowBareFilename && !SCHEME_RE.test(candidate) && HAS_FILE_EXT.test(candidate)) {
+  if (
+    opts?.allowBareFilename &&
+    !SCHEME_RE.test(candidate) &&
+    HAS_FILE_EXT.test(candidate)
+  ) {
     return true;
   }
 
@@ -80,7 +85,10 @@ function unwrapQuoted(value: string): string | undefined {
 }
 
 // Check if a character offset is inside any fenced code block
-function isInsideFence(fenceSpans: Array<{ start: number; end: number }>, offset: number): boolean {
+function isInsideFence(
+  fenceSpans: Array<{ start: number; end: number }>,
+  offset: number,
+): boolean {
   return fenceSpans.some((span) => offset >= span.start && offset < span.end);
 }
 
@@ -140,14 +148,18 @@ export function splitMediaFromOutput(raw: string): {
       const payload = match[1];
       const unwrapped = unwrapQuoted(payload);
       const payloadValue = unwrapped ?? payload;
-      const parts = unwrapped ? [unwrapped] : payload.split(/\s+/).filter(Boolean);
+      const parts = unwrapped
+        ? [unwrapped]
+        : payload.split(/\s+/).filter(Boolean);
       const mediaStartIndex = media.length;
       let validCount = 0;
       const invalidParts: string[] = [];
       let hasValidMedia = false;
       for (const part of parts) {
         const candidate = normalizeMediaSource(cleanCandidate(part));
-        if (isValidMedia(candidate, unwrapped ? { allowSpaces: true } : undefined)) {
+        if (
+          isValidMedia(candidate, unwrapped ? { allowSpaces: true } : undefined)
+        ) {
           media.push(candidate);
           hasValidMedia = true;
           foundMediaToken = true;
@@ -159,7 +171,8 @@ export function splitMediaFromOutput(raw: string): {
 
       const trimmedPayload = payloadValue.trim();
       const looksLikeLocalPath =
-        isLikelyLocalPath(trimmedPayload) || trimmedPayload.startsWith("file://");
+        isLikelyLocalPath(trimmedPayload) ||
+        trimmedPayload.startsWith("file://");
       if (
         !unwrapped &&
         validCount === 1 &&
@@ -169,7 +182,11 @@ export function splitMediaFromOutput(raw: string): {
       ) {
         const fallback = normalizeMediaSource(cleanCandidate(payloadValue));
         if (isValidMedia(fallback, { allowSpaces: true })) {
-          media.splice(mediaStartIndex, media.length - mediaStartIndex, fallback);
+          media.splice(
+            mediaStartIndex,
+            media.length - mediaStartIndex,
+            fallback,
+          );
           hasValidMedia = true;
           foundMediaToken = true;
           validCount = 1;
@@ -179,7 +196,9 @@ export function splitMediaFromOutput(raw: string): {
 
       if (!hasValidMedia) {
         const fallback = normalizeMediaSource(cleanCandidate(payloadValue));
-        if (isValidMedia(fallback, { allowSpaces: true, allowBareFilename: true })) {
+        if (
+          isValidMedia(fallback, { allowSpaces: true, allowBareFilename: true })
+        ) {
           media.push(fallback);
           hasValidMedia = true;
           foundMediaToken = true;

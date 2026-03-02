@@ -1,12 +1,25 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import { withEnvAsync } from "../test-utils/env.js";
 import { pathExists } from "../utils.js";
 import { runGatewayUpdate } from "./update-runner.js";
 
-type CommandResponse = { stdout?: string; stderr?: string; code?: number | null };
+type CommandResponse = {
+  stdout?: string;
+  stderr?: string;
+  code?: number | null;
+};
 type CommandResult = { stdout: string; stderr: string; code: number | null };
 
 function createRunner(responses: Record<string, CommandResponse>) {
@@ -42,7 +55,11 @@ describe("runGatewayUpdate", () => {
   beforeEach(async () => {
     tempDir = path.join(fixtureRoot, `case-${caseId++}`);
     await fs.mkdir(tempDir, { recursive: true });
-    await fs.writeFile(path.join(tempDir, "openclaw.mjs"), "export {};\n", "utf-8");
+    await fs.writeFile(
+      path.join(tempDir, "openclaw.mjs"),
+      "export {};\n",
+      "utf-8",
+    );
   });
 
   afterEach(async () => {
@@ -69,7 +86,9 @@ describe("runGatewayUpdate", () => {
       if (key === `git -C ${tempDir} rev-parse HEAD`) {
         return { stdout: "abc123", stderr: "", code: 0 };
       }
-      if (key === `git -C ${tempDir} status --porcelain -- :!dist/control-ui/`) {
+      if (
+        key === `git -C ${tempDir} status --porcelain -- :!dist/control-ui/`
+      ) {
         return { stdout: "", stderr: "", code: 0 };
       }
       if (key === `git -C ${tempDir} fetch --all --prune --tags`) {
@@ -113,7 +132,11 @@ describe("runGatewayUpdate", () => {
     if (options?.packageManager) {
       pkg.packageManager = options.packageManager;
     }
-    await fs.writeFile(path.join(tempDir, "package.json"), JSON.stringify(pkg), "utf-8");
+    await fs.writeFile(
+      path.join(tempDir, "package.json"),
+      JSON.stringify(pkg),
+      "utf-8",
+    );
   }
 
   async function setupUiIndex() {
@@ -127,22 +150,33 @@ describe("runGatewayUpdate", () => {
     stableTag: string,
     options?: { additionalTags?: string[] },
   ): Record<string, CommandResponse> {
-    const tagOutput = [stableTag, ...(options?.additionalTags ?? [])].join("\n");
+    const tagOutput = [stableTag, ...(options?.additionalTags ?? [])].join(
+      "\n",
+    );
     return {
       [`git -C ${tempDir} rev-parse --show-toplevel`]: { stdout: tempDir },
       [`git -C ${tempDir} rev-parse HEAD`]: { stdout: "abc123" },
-      [`git -C ${tempDir} status --porcelain -- :!dist/control-ui/`]: { stdout: "" },
+      [`git -C ${tempDir} status --porcelain -- :!dist/control-ui/`]: {
+        stdout: "",
+      },
       [`git -C ${tempDir} fetch --all --prune --tags`]: { stdout: "" },
-      [`git -C ${tempDir} tag --list v* --sort=-v:refname`]: { stdout: `${tagOutput}\n` },
+      [`git -C ${tempDir} tag --list v* --sort=-v:refname`]: {
+        stdout: `${tagOutput}\n`,
+      },
       [`git -C ${tempDir} checkout --detach ${stableTag}`]: { stdout: "" },
     };
   }
 
-  function buildGitWorktreeProbeResponses(options?: { status?: string; branch?: string }) {
+  function buildGitWorktreeProbeResponses(options?: {
+    status?: string;
+    branch?: string;
+  }) {
     return {
       [`git -C ${tempDir} rev-parse --show-toplevel`]: { stdout: tempDir },
       [`git -C ${tempDir} rev-parse HEAD`]: { stdout: "abc123" },
-      [`git -C ${tempDir} rev-parse --abbrev-ref HEAD`]: { stdout: options?.branch ?? "main" },
+      [`git -C ${tempDir} rev-parse --abbrev-ref HEAD`]: {
+        stdout: options?.branch ?? "main",
+      },
       [`git -C ${tempDir} status --porcelain -- :!dist/control-ui/`]: {
         stdout: options?.status ?? "",
       },
@@ -150,7 +184,10 @@ describe("runGatewayUpdate", () => {
   }
 
   async function removeControlUiAssets() {
-    await fs.rm(path.join(tempDir, "dist", "control-ui"), { recursive: true, force: true });
+    await fs.rm(path.join(tempDir, "dist", "control-ui"), {
+      recursive: true,
+      force: true,
+    });
   }
 
   async function runWithCommand(
@@ -188,7 +225,8 @@ describe("runGatewayUpdate", () => {
     onBaseInstall?: () => Promise<CommandResult>;
     onOmitOptionalInstall?: () => Promise<CommandResult>;
   }) {
-    const baseInstallKey = "npm i -g openclaw@latest --no-fund --no-audit --loglevel=error";
+    const baseInstallKey =
+      "npm i -g openclaw@latest --no-fund --no-audit --loglevel=error";
     const omitOptionalInstallKey =
       "npm i -g openclaw@latest --omit=optional --no-fund --no-audit --loglevel=error";
 
@@ -204,11 +242,21 @@ describe("runGatewayUpdate", () => {
         return { stdout: "", stderr: "", code: 1 };
       }
       if (key === baseInstallKey) {
-        return (await params.onBaseInstall?.()) ?? { stdout: "ok", stderr: "", code: 0 };
+        return (
+          (await params.onBaseInstall?.()) ?? {
+            stdout: "ok",
+            stderr: "",
+            code: 0,
+          }
+        );
       }
       if (key === omitOptionalInstallKey) {
         return (
-          (await params.onOmitOptionalInstall?.()) ?? { stdout: "", stderr: "not found", code: 1 }
+          (await params.onOmitOptionalInstall?.()) ?? {
+            stdout: "",
+            stderr: "not found",
+            code: 1,
+          }
         );
       }
       return { stdout: "", stderr: "", code: 0 };
@@ -232,12 +280,15 @@ describe("runGatewayUpdate", () => {
     await setupGitCheckout();
     const { runner, calls } = createRunner({
       ...buildGitWorktreeProbeResponses(),
-      [`git -C ${tempDir} rev-parse --abbrev-ref --symbolic-full-name @{upstream}`]: {
-        stdout: "origin/main",
-      },
+      [`git -C ${tempDir} rev-parse --abbrev-ref --symbolic-full-name @{upstream}`]:
+        {
+          stdout: "origin/main",
+        },
       [`git -C ${tempDir} fetch --all --prune --tags`]: { stdout: "" },
       [`git -C ${tempDir} rev-parse @{upstream}`]: { stdout: "upstream123" },
-      [`git -C ${tempDir} rev-list --max-count=10 upstream123`]: { stdout: "upstream123\n" },
+      [`git -C ${tempDir} rev-list --max-count=10 upstream123`]: {
+        stdout: "upstream123\n",
+      },
       [`git -C ${tempDir} rebase upstream123`]: { code: 1, stderr: "conflict" },
       [`git -C ${tempDir} rebase --abort`]: { stdout: "" },
     });
@@ -302,7 +353,9 @@ describe("runGatewayUpdate", () => {
 
     expect(result.status).toBe("ok");
     expect(calls).toContain(`git -C ${tempDir} checkout --detach ${stableTag}`);
-    expect(calls).not.toContain(`git -C ${tempDir} checkout --detach ${betaTag}`);
+    expect(calls).not.toContain(
+      `git -C ${tempDir} checkout --detach ${betaTag}`,
+    );
   });
 
   it("skips update when no git root", async () => {
@@ -330,7 +383,10 @@ describe("runGatewayUpdate", () => {
     expectedInstallCommand: string;
     channel?: "stable" | "beta";
     tag?: string;
-  }): Promise<{ calls: string[]; result: Awaited<ReturnType<typeof runGatewayUpdate>> }> {
+  }): Promise<{
+    calls: string[];
+    result: Awaited<ReturnType<typeof runGatewayUpdate>>;
+  }> {
     const nodeModules = path.join(tempDir, "node_modules");
     const pkgRoot = path.join(nodeModules, "openclaw");
     await seedGlobalPackageRoot(pkgRoot);
@@ -391,16 +447,19 @@ describe("runGatewayUpdate", () => {
   it.each([
     {
       title: "updates global npm installs when detected",
-      expectedInstallCommand: "npm i -g openclaw@latest --no-fund --no-audit --loglevel=error",
+      expectedInstallCommand:
+        "npm i -g openclaw@latest --no-fund --no-audit --loglevel=error",
     },
     {
       title: "uses update channel for global npm installs when tag is omitted",
-      expectedInstallCommand: "npm i -g openclaw@beta --no-fund --no-audit --loglevel=error",
+      expectedInstallCommand:
+        "npm i -g openclaw@beta --no-fund --no-audit --loglevel=error",
       channel: "beta" as const,
     },
     {
       title: "updates global npm installs with tag override",
-      expectedInstallCommand: "npm i -g openclaw@beta --no-fund --no-audit --loglevel=error",
+      expectedInstallCommand:
+        "npm i -g openclaw@beta --no-fund --no-audit --loglevel=error",
       tag: "beta",
     },
   ])("$title", async ({ expectedInstallCommand, channel, tag }) => {
@@ -478,7 +537,12 @@ describe("runGatewayUpdate", () => {
   it("updates global bun installs when detected", async () => {
     const bunInstall = path.join(tempDir, "bun-install");
     await withEnvAsync({ BUN_INSTALL: bunInstall }, async () => {
-      const bunGlobalRoot = path.join(bunInstall, "install", "global", "node_modules");
+      const bunGlobalRoot = path.join(
+        bunInstall,
+        "install",
+        "global",
+        "node_modules",
+      );
       const pkgRoot = path.join(bunGlobalRoot, "openclaw");
       await seedGlobalPackageRoot(pkgRoot);
 
@@ -500,7 +564,9 @@ describe("runGatewayUpdate", () => {
       expect(result.mode).toBe("bun");
       expect(result.before?.version).toBe("1.0.0");
       expect(result.after?.version).toBe("2.0.0");
-      expect(calls.some((call) => call === "bun add -g openclaw@latest")).toBe(true);
+      expect(calls.some((call) => call === "bun add -g openclaw@latest")).toBe(
+        true,
+      );
     });
   });
 
@@ -517,7 +583,9 @@ describe("runGatewayUpdate", () => {
 
     expect(result.status).toBe("error");
     expect(result.reason).toBe("not-openclaw-root");
-    expect(calls.some((call) => call.includes("status --porcelain"))).toBe(false);
+    expect(calls.some((call) => call.includes("status --porcelain"))).toBe(
+      false,
+    );
   });
 
   it("fails with a clear reason when openclaw.mjs is missing", async () => {
@@ -544,15 +612,16 @@ describe("runGatewayUpdate", () => {
     const uiIndexPath = await setupUiIndex();
 
     const stableTag = "v1.0.1-1";
-    const { runCommand, calls, doctorKey, getUiBuildCount } = createStableTagRunner({
-      stableTag,
-      uiIndexPath,
-      onUiBuild: async (count) => {
-        await fs.mkdir(path.dirname(uiIndexPath), { recursive: true });
-        await fs.writeFile(uiIndexPath, `<html>${count}</html>`, "utf-8");
-      },
-      onDoctor: removeControlUiAssets,
-    });
+    const { runCommand, calls, doctorKey, getUiBuildCount } =
+      createStableTagRunner({
+        stableTag,
+        uiIndexPath,
+        onUiBuild: async (count) => {
+          await fs.mkdir(path.dirname(uiIndexPath), { recursive: true });
+          await fs.writeFile(uiIndexPath, `<html>${count}</html>`, "utf-8");
+        },
+        onDoctor: removeControlUiAssets,
+      });
 
     const result = await runWithCommand(runCommand, { channel: "stable" });
 

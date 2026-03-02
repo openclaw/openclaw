@@ -141,7 +141,9 @@ describe("resolveWebhookTargets", () => {
     const targets = new Map<string, Array<{ id: string }>>();
     targets.set("/hook", [{ id: "A" }]);
 
-    expect(resolveWebhookTargets(createRequest("POST", "/hook/"), targets)).toEqual({
+    expect(
+      resolveWebhookTargets(createRequest("POST", "/hook/"), targets),
+    ).toEqual({
       path: "/hook",
       targets: [{ id: "A" }],
     });
@@ -149,7 +151,9 @@ describe("resolveWebhookTargets", () => {
 
   it("returns null when path has no targets", () => {
     const targets = new Map<string, Array<{ id: string }>>();
-    expect(resolveWebhookTargets(createRequest("POST", "/missing"), targets)).toBeNull();
+    expect(
+      resolveWebhookTargets(createRequest("POST", "/missing"), targets),
+    ).toBeNull();
   });
 });
 
@@ -163,7 +167,10 @@ describe("rejectNonPostWebhookRequest", () => {
       end: endMock,
     } as unknown as ServerResponse;
 
-    const rejected = rejectNonPostWebhookRequest(createRequest("GET", "/hook"), res);
+    const rejected = rejectNonPostWebhookRequest(
+      createRequest("GET", "/hook"),
+      res,
+    );
 
     expect(rejected).toBe(true);
     expect(res.statusCode).toBe(405);
@@ -178,7 +185,11 @@ describe("resolveSingleWebhookTarget", () => {
     run: (
       targets: readonly string[],
       isMatch: (value: string) => boolean | Promise<boolean>,
-    ) => Promise<{ kind: "none" } | { kind: "single"; target: string } | { kind: "ambiguous" }>;
+    ) => Promise<
+      | { kind: "none" }
+      | { kind: "single"; target: string }
+      | { kind: "ambiguous" }
+    >;
   }> = [
     {
       name: "sync",
@@ -188,27 +199,35 @@ describe("resolveSingleWebhookTarget", () => {
     {
       name: "async",
       run: (targets, isMatch) =>
-        resolveSingleWebhookTargetAsync(targets, async (value) => Boolean(await isMatch(value))),
+        resolveSingleWebhookTargetAsync(targets, async (value) =>
+          Boolean(await isMatch(value)),
+        ),
     },
   ];
 
-  it.each(resolvers)("returns none when no target matches ($name)", async ({ run }) => {
-    const result = await run(["a", "b"], (value) => value === "c");
-    expect(result).toEqual({ kind: "none" });
-  });
+  it.each(resolvers)(
+    "returns none when no target matches ($name)",
+    async ({ run }) => {
+      const result = await run(["a", "b"], (value) => value === "c");
+      expect(result).toEqual({ kind: "none" });
+    },
+  );
 
   it.each(resolvers)("returns the single match ($name)", async ({ run }) => {
     const result = await run(["a", "b"], (value) => value === "b");
     expect(result).toEqual({ kind: "single", target: "b" });
   });
 
-  it.each(resolvers)("returns ambiguous after second match ($name)", async ({ run }) => {
-    const calls: string[] = [];
-    const result = await run(["a", "b", "c"], (value) => {
-      calls.push(value);
-      return value === "a" || value === "b";
-    });
-    expect(result).toEqual({ kind: "ambiguous" });
-    expect(calls).toEqual(["a", "b"]);
-  });
+  it.each(resolvers)(
+    "returns ambiguous after second match ($name)",
+    async ({ run }) => {
+      const calls: string[] = [];
+      const result = await run(["a", "b", "c"], (value) => {
+        calls.push(value);
+        return value === "a" || value === "b";
+      });
+      expect(result).toEqual({ kind: "ambiguous" });
+      expect(calls).toEqual(["a", "b"]);
+    },
+  );
 });

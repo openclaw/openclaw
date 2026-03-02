@@ -12,7 +12,8 @@ const ttsMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../tts/tts.js", () => ({
-  maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
+  maybeApplyTtsToPayload: (params: unknown) =>
+    ttsMocks.maybeApplyTtsToPayload(params),
 }));
 
 function createDispatcher(): ReplyDispatcher {
@@ -26,7 +27,9 @@ function createDispatcher(): ReplyDispatcher {
   };
 }
 
-function createCoordinator(onReplyStart?: (...args: unknown[]) => Promise<void>) {
+function createCoordinator(
+  onReplyStart?: (...args: unknown[]) => Promise<void>,
+) {
   return createAcpDispatchDeliveryCoordinator({
     cfg: createAcpTestConfig(),
     ctx: buildTestCtx({

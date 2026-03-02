@@ -4,7 +4,11 @@ import {
   mergeUsageDailyLatency,
   mergeUsageLatency,
 } from "../../../../src/shared/usage-aggregates.js";
-import { UsageSessionEntry, UsageTotals, UsageAggregates } from "./usageTypes.ts";
+import {
+  UsageSessionEntry,
+  UsageTotals,
+  UsageAggregates,
+} from "./usageTypes.ts";
 
 const CHARS_PER_TOKEN = 4;
 
@@ -28,7 +32,10 @@ function formatHourLabel(hour: number): string {
   return date.toLocaleTimeString(undefined, { hour: "numeric" });
 }
 
-function buildPeakErrorHours(sessions: UsageSessionEntry[], timeZone: "local" | "utc") {
+function buildPeakErrorHours(
+  sessions: UsageSessionEntry[],
+  timeZone: "local" | "utc",
+) {
   const hourErrors = Array.from({ length: 24 }, () => 0);
   const hourMsgs = Array.from({ length: 24 }, () => 0);
 
@@ -178,11 +185,15 @@ function renderUsageMosaic(
         <div class="usage-mosaic-header">
           <div>
             <div class="usage-mosaic-title">Activity by Time</div>
-            <div class="usage-mosaic-sub">Estimates require session timestamps.</div>
+            <div class="usage-mosaic-sub">
+              Estimates require session timestamps.
+            </div>
           </div>
           <div class="usage-mosaic-total">${formatTokens(0)} tokens</div>
         </div>
-        <div class="muted" style="padding: 12px; text-align: center;">No timeline data yet.</div>
+        <div class="muted" style="padding: 12px; text-align: center;">
+          No timeline data yet.
+        </div>
       </div>
     `;
   }
@@ -196,10 +207,13 @@ function renderUsageMosaic(
         <div>
           <div class="usage-mosaic-title">Activity by Time</div>
           <div class="usage-mosaic-sub">
-            Estimated from session spans (first/last activity). Time zone: ${timeZone === "utc" ? "UTC" : "Local"}.
+            Estimated from session spans (first/last activity). Time zone:
+            ${timeZone === "utc" ? "UTC" : "Local"}.
           </div>
         </div>
-        <div class="usage-mosaic-total">${formatTokens(stats.totalTokens)} tokens</div>
+        <div class="usage-mosaic-total">
+          ${formatTokens(stats.totalTokens)} tokens
+        </div>
       </div>
       <div class="usage-mosaic-grid">
         <div class="usage-mosaic-section">
@@ -208,11 +222,15 @@ function renderUsageMosaic(
             ${stats.weekdayTotals.map((part) => {
               const intensity = Math.min(part.tokens / maxWeekday, 1);
               const bg =
-                part.tokens > 0 ? `rgba(255, 77, 77, ${0.12 + intensity * 0.6})` : "transparent";
+                part.tokens > 0
+                  ? `rgba(255, 77, 77, ${0.12 + intensity * 0.6})`
+                  : "transparent";
               return html`
                 <div class="usage-daypart-cell" style="background: ${bg};">
                   <div class="usage-daypart-label">${part.label}</div>
-                  <div class="usage-daypart-value">${formatTokens(part.tokens)}</div>
+                  <div class="usage-daypart-value">
+                    ${formatTokens(part.tokens)}
+                  </div>
                 </div>
               `;
             })}
@@ -226,9 +244,15 @@ function renderUsageMosaic(
           <div class="usage-hour-grid">
             ${stats.hourTotals.map((value, hour) => {
               const intensity = Math.min(value / maxHour, 1);
-              const bg = value > 0 ? `rgba(255, 77, 77, ${0.08 + intensity * 0.7})` : "transparent";
+              const bg =
+                value > 0
+                  ? `rgba(255, 77, 77, ${0.08 + intensity * 0.7})`
+                  : "transparent";
               const title = `${hour}:00 · ${formatTokens(value)} tokens`;
-              const border = intensity > 0.7 ? "rgba(255, 77, 77, 0.6)" : "rgba(255, 77, 77, 0.2)";
+              const border =
+                intensity > 0.7
+                  ? "rgba(255, 77, 77, 0.6)"
+                  : "rgba(255, 77, 77, 0.2)";
               const selected = selectedHours.includes(hour);
               return html`
                 <div
@@ -289,7 +313,11 @@ function formatFullDate(dateStr: string): string {
   if (!date) {
     return dateStr;
   }
-  return date.toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" });
+  return date.toLocaleDateString(undefined, {
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+  });
 }
 
 const emptyUsageTotals = (): UsageTotals => ({
@@ -306,7 +334,10 @@ const emptyUsageTotals = (): UsageTotals => ({
   missingCostEntries: 0,
 });
 
-const mergeUsageTotals = (target: UsageTotals, source: Partial<UsageTotals>) => {
+const mergeUsageTotals = (
+  target: UsageTotals,
+  source: Partial<UsageTotals>,
+) => {
   target.input += source.input ?? 0;
   target.output += source.output ?? 0;
   target.cacheRead += source.cacheRead ?? 0;
@@ -327,7 +358,14 @@ const buildAggregatesFromSessions = (
   if (sessions.length === 0) {
     return (
       fallback ?? {
-        messages: { total: 0, user: 0, assistant: 0, toolCalls: 0, toolResults: 0, errors: 0 },
+        messages: {
+          total: 0,
+          user: 0,
+          assistant: 0,
+          toolCalls: 0,
+          toolResults: 0,
+          errors: 0,
+        },
         tools: { totalCalls: 0, uniqueTools: 0, tools: [] },
         byModel: [],
         byProvider: [],
@@ -338,7 +376,14 @@ const buildAggregatesFromSessions = (
     );
   }
 
-  const messages = { total: 0, user: 0, assistant: 0, toolCalls: 0, toolResults: 0, errors: 0 };
+  const messages = {
+    total: 0,
+    user: 0,
+    assistant: 0,
+    toolCalls: 0,
+    toolResults: 0,
+    errors: 0,
+  };
   const toolMap = new Map<string, number>();
   const modelMap = new Map<
     string,
@@ -363,13 +408,33 @@ const buildAggregatesFromSessions = (
   >();
   const dailyLatencyMap = new Map<
     string,
-    { date: string; count: number; sum: number; min: number; max: number; p95Max: number }
+    {
+      date: string;
+      count: number;
+      sum: number;
+      min: number;
+      max: number;
+      p95Max: number;
+    }
   >();
   const modelDailyMap = new Map<
     string,
-    { date: string; provider?: string; model?: string; tokens: number; cost: number; count: number }
+    {
+      date: string;
+      provider?: string;
+      model?: string;
+      tokens: number;
+      cost: number;
+      count: number;
+    }
   >();
-  const latencyTotals = { count: 0, sum: 0, min: Number.POSITIVE_INFINITY, max: 0, p95Max: 0 };
+  const latencyTotals = {
+    count: 0,
+    sum: 0,
+    min: Number.POSITIVE_INFINITY,
+    max: 0,
+    p95Max: 0,
+  };
 
   for (const session of sessions) {
     const usage = session.usage;
@@ -486,7 +551,10 @@ const buildAggregatesFromSessions = (
   return {
     messages,
     tools: {
-      totalCalls: Array.from(toolMap.values()).reduce((sum, count) => sum + count, 0),
+      totalCalls: Array.from(toolMap.values()).reduce(
+        (sum, count) => sum + count,
+        0,
+      ),
       uniqueTools: toolMap.size,
       tools: Array.from(toolMap.entries())
         .map(([name, count]) => ({ name, count }))
@@ -512,7 +580,12 @@ type UsageInsightStats = {
   throughputTokensPerMin?: number;
   throughputCostPerMin?: number;
   errorRate: number;
-  peakErrorDay?: { date: string; errors: number; messages: number; rate: number };
+  peakErrorDay?: {
+    date: string;
+    errors: number;
+    messages: number;
+    rate: number;
+  };
 };
 
 const buildUsageInsightStats = (
@@ -532,9 +605,13 @@ const buildUsageInsightStats = (
 
   const avgDurationMs = durationCount ? durationSumMs / durationCount : 0;
   const throughputTokensPerMin =
-    totals && durationSumMs > 0 ? totals.totalTokens / (durationSumMs / 60000) : undefined;
+    totals && durationSumMs > 0
+      ? totals.totalTokens / (durationSumMs / 60000)
+      : undefined;
   const throughputCostPerMin =
-    totals && durationSumMs > 0 ? totals.totalCost / (durationSumMs / 60000) : undefined;
+    totals && durationSumMs > 0
+      ? totals.totalCost / (durationSumMs / 60000)
+      : undefined;
 
   const errorRate = aggregates.messages.total
     ? aggregates.messages.errors / aggregates.messages.total

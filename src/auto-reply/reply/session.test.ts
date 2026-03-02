@@ -1,13 +1,25 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import { buildModelAliasIndex } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { saveSessionStore } from "../../config/sessions.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.ts";
-import { enqueueSystemEvent, resetSystemEventsForTest } from "../../infra/system-events.js";
+import {
+  enqueueSystemEvent,
+  resetSystemEventsForTest,
+} from "../../infra/system-events.js";
 import { applyResetModelOverride } from "./session-reset-model.js";
 import { buildQueuedSystemPrompt } from "./session-updates.js";
 import { persistSessionUsageUpdate } from "./session-usage.js";
@@ -29,7 +41,9 @@ let suiteRoot = "";
 let suiteCase = 0;
 
 beforeAll(async () => {
-  suiteRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-suite-"));
+  suiteRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-session-suite-"),
+  );
 });
 
 afterAll(async () => {
@@ -289,7 +303,9 @@ describe("initSessionState thread forking", () => {
   });
 
   it("respects session.parentForkMaxTokens override", async () => {
-    const root = await makeCaseDir("openclaw-thread-session-overflow-override-");
+    const root = await makeCaseDir(
+      "openclaw-thread-session-overflow-override-",
+    );
     const sessionsDir = path.join(root, "sessions");
     await fs.mkdir(sessionsDir);
 
@@ -353,8 +369,13 @@ describe("initSessionState thread forking", () => {
 
     expect(result.sessionEntry.forkedFromParent).toBe(true);
     expect(result.sessionEntry.sessionFile).toBeTruthy();
-    const forkedContent = await fs.readFile(result.sessionEntry.sessionFile ?? "", "utf-8");
-    const [headerLine] = forkedContent.split(/\r?\n/).filter((line) => line.trim().length > 0);
+    const forkedContent = await fs.readFile(
+      result.sessionEntry.sessionFile ?? "",
+      "utf-8",
+    );
+    const [headerLine] = forkedContent
+      .split(/\r?\n/)
+      .filter((line) => line.trim().length > 0);
     const parsedHeader = JSON.parse(headerLine) as { parentSession?: string };
     const expectedParentSession = await fs.realpath(parentSessionFile);
     const actualParentSession = parsedHeader.parentSession
@@ -455,8 +476,20 @@ describe("initSessionState RawBody", () => {
     const agentId = "worker1";
     const sessionKey = `agent:${agentId}:telegram:12345`;
     const sessionId = "sess-worker-1";
-    const sessionFile = path.join(stateDir, "agents", agentId, "sessions", `${sessionId}.jsonl`);
-    const storePath = path.join(stateDir, "agents", agentId, "sessions", "sessions.json");
+    const sessionFile = path.join(
+      stateDir,
+      "agents",
+      agentId,
+      "sessions",
+      `${sessionId}.jsonl`,
+    );
+    const storePath = path.join(
+      stateDir,
+      "agents",
+      agentId,
+      "sessions",
+      "sessions.json",
+    );
 
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     try {
@@ -602,7 +635,11 @@ describe("initSessionState reset policy", () => {
       },
     } as OpenClawConfig;
     const result = await initSessionState({
-      ctx: { Body: "reply", SessionKey: sessionKey, ThreadLabel: "Slack thread" },
+      ctx: {
+        Body: "reply",
+        SessionKey: sessionKey,
+        ThreadLabel: "Slack thread",
+      },
       cfg,
       commandAuthorized: true,
     });
@@ -632,7 +669,11 @@ describe("initSessionState reset policy", () => {
       },
     } as OpenClawConfig;
     const result = await initSessionState({
-      ctx: { Body: "reply", SessionKey: sessionKey, ThreadLabel: "Discord thread" },
+      ctx: {
+        Body: "reply",
+        SessionKey: sessionKey,
+        ThreadLabel: "Discord thread",
+      },
       cfg,
       commandAuthorized: true,
     });
@@ -755,7 +796,10 @@ describe("initSessionState reset triggers in WhatsApp groups", () => {
     });
   }
 
-  function makeCfg(params: { storePath: string; allowFrom: string[] }): OpenClawConfig {
+  function makeCfg(params: {
+    storePath: string;
+    allowFrom: string[];
+  }): OpenClawConfig {
     return {
       session: { store: params.storePath, idleMinutes: 999 },
       channels: {
@@ -823,7 +867,9 @@ describe("initSessionState reset triggers in WhatsApp groups", () => {
       });
 
       expect(result.triggerBodyNormalized, testCase.name).toBe("/new");
-      expect(result.isNewSession, testCase.name).toBe(testCase.expectedIsNewSession);
+      expect(result.isNewSession, testCase.name).toBe(
+        testCase.expectedIsNewSession,
+      );
       if (testCase.expectedIsNewSession) {
         expect(result.sessionId, testCase.name).not.toBe(existingSessionId);
         expect(result.bodyStripped, testCase.name).toBe("");
@@ -895,7 +941,9 @@ describe("applyResetModelOverride", () => {
       sessionId: "s1",
       updatedAt: Date.now(),
     };
-    const sessionStore: Record<string, SessionEntry> = { "agent:main:dm:1": sessionEntry };
+    const sessionStore: Record<string, SessionEntry> = {
+      "agent:main:dm:1": sessionEntry,
+    };
     const sessionCtx = { BodyStripped: "minimax summarize" };
     const ctx = { ChatType: "direct" };
 
@@ -928,7 +976,9 @@ describe("applyResetModelOverride", () => {
       authProfileOverrideSource: "user",
       authProfileOverrideCompactionCount: 2,
     };
-    const sessionStore: Record<string, SessionEntry> = { "agent:main:dm:1": sessionEntry };
+    const sessionStore: Record<string, SessionEntry> = {
+      "agent:main:dm:1": sessionEntry,
+    };
     const sessionCtx = { BodyStripped: "minimax summarize" };
     const ctx = { ChatType: "direct" };
 
@@ -958,7 +1008,9 @@ describe("applyResetModelOverride", () => {
       sessionId: "s1",
       updatedAt: Date.now(),
     };
-    const sessionStore: Record<string, SessionEntry> = { "agent:main:dm:1": sessionEntry };
+    const sessionStore: Record<string, SessionEntry> = {
+      "agent:main:dm:1": sessionEntry,
+    };
     const sessionCtx = { BodyStripped: "minimax summarize" };
     const ctx = { ChatType: "direct" };
 
@@ -1135,7 +1187,9 @@ describe("buildQueuedSystemPrompt", () => {
     vi.useFakeTimers();
     try {
       const timestamp = new Date("2026-01-12T20:19:17Z");
-      const expectedTimestamp = formatZonedTimestamp(timestamp, { displaySeconds: true });
+      const expectedTimestamp = formatZonedTimestamp(timestamp, {
+        displaySeconds: true,
+      });
       vi.setSystemTime(timestamp);
 
       enqueueSystemEvent("Model switched.", { sessionKey: "agent:main:main" });
@@ -1421,17 +1475,16 @@ describe("initSessionState dmScope delivery migration", () => {
     });
 
     expect(result.sessionKey).toBe("agent:main:telegram:direct:6101296751");
-    const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-      string,
-      SessionEntry
-    >;
+    const persisted = JSON.parse(
+      await fs.readFile(storePath, "utf-8"),
+    ) as Record<string, SessionEntry>;
     expect(persisted["agent:main:main"]?.sessionId).toBe("legacy-main");
     expect(persisted["agent:main:main"]?.deliveryContext).toBeUndefined();
     expect(persisted["agent:main:main"]?.lastChannel).toBeUndefined();
     expect(persisted["agent:main:main"]?.lastTo).toBeUndefined();
-    expect(persisted["agent:main:telegram:direct:6101296751"]?.deliveryContext?.to).toBe(
-      "6101296751",
-    );
+    expect(
+      persisted["agent:main:telegram:direct:6101296751"]?.deliveryContext?.to,
+    ).toBe("6101296751");
   });
 
   it("keeps legacy main-session delivery route when current DM target does not match", async () => {
@@ -1466,10 +1519,9 @@ describe("initSessionState dmScope delivery migration", () => {
       commandAuthorized: true,
     });
 
-    const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-      string,
-      SessionEntry
-    >;
+    const persisted = JSON.parse(
+      await fs.readFile(storePath, "utf-8"),
+    ) as Record<string, SessionEntry>;
     expect(persisted["agent:main:main"]?.deliveryContext).toEqual({
       channel: "telegram",
       to: "1111",

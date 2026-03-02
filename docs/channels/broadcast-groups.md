@@ -143,7 +143,11 @@ Agents process in order (one waits for previous to finish):
   },
   "broadcast": {
     "strategy": "parallel",
-    "120363403215116621@g.us": ["code-reviewer", "security-auditor", "docs-generator"],
+    "120363403215116621@g.us": [
+      "code-reviewer",
+      "security-auditor",
+      "docs-generator"
+    ],
     "120363424282127706@g.us": ["support-en", "support-de"],
     "+15555550123": ["assistant", "logger"]
   }
@@ -289,7 +293,10 @@ Broadcast groups work alongside existing routing:
 {
   "bindings": [
     {
-      "match": { "channel": "whatsapp", "peer": { "kind": "group", "id": "GROUP_A" } },
+      "match": {
+        "channel": "whatsapp",
+        "peer": { "kind": "group", "id": "GROUP_A" }
+      },
       "agentId": "alfred"
     }
   ],
@@ -366,7 +373,11 @@ tail -f ~/.openclaw/logs/gateway.log | grep broadcast
         "workspace": "~/agents/testing",
         "tools": { "allow": ["read", "exec"] }
       },
-      { "id": "docs-checker", "workspace": "~/agents/docs", "tools": { "allow": ["read"] } }
+      {
+        "id": "docs-checker",
+        "workspace": "~/agents/docs",
+        "tools": { "allow": ["read"] }
+      }
     ]
   }
 }

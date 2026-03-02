@@ -1,7 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { validateProviderConfig, resolveVoiceCallConfig, type VoiceCallConfig } from "./config.js";
+import {
+  validateProviderConfig,
+  resolveVoiceCallConfig,
+  type VoiceCallConfig,
+} from "./config.js";
 
-function createBaseConfig(provider: "telnyx" | "twilio" | "plivo" | "mock"): VoiceCallConfig {
+function createBaseConfig(
+  provider: "telnyx" | "twilio" | "plivo" | "mock",
+): VoiceCallConfig {
   return {
     enabled: true,
     provider,
@@ -83,7 +89,10 @@ describe("validateProviderConfig", () => {
         } else {
           fromConfig.plivo = { authId: "MA123", authToken: "secret" };
         }
-        expect(validateProviderConfig(fromConfig)).toMatchObject({ valid: true, errors: [] });
+        expect(validateProviderConfig(fromConfig)).toMatchObject({
+          valid: true,
+          errors: [],
+        });
 
         clearProviderEnv();
         if (provider === "twilio") {
@@ -98,7 +107,10 @@ describe("validateProviderConfig", () => {
           process.env.PLIVO_AUTH_TOKEN = "secret";
         }
         const fromEnv = resolveVoiceCallConfig(createBaseConfig(provider));
-        expect(validateProviderConfig(fromEnv)).toMatchObject({ valid: true, errors: [] });
+        expect(validateProviderConfig(fromEnv)).toMatchObject({
+          valid: true,
+          errors: [],
+        });
       }
     });
   });
@@ -118,7 +130,9 @@ describe("validateProviderConfig", () => {
 
     it("fails validation when required twilio credentials are missing", () => {
       process.env.TWILIO_AUTH_TOKEN = "secret";
-      const missingSid = validateProviderConfig(resolveVoiceCallConfig(createBaseConfig("twilio")));
+      const missingSid = validateProviderConfig(
+        resolveVoiceCallConfig(createBaseConfig("twilio")),
+      );
       expect(missingSid.valid).toBe(false);
       expect(missingSid.errors).toContain(
         "plugins.entries.voice-call.config.twilio.accountSid is required (or set TWILIO_ACCOUNT_SID env)",
@@ -167,11 +181,17 @@ describe("validateProviderConfig", () => {
         connectionId: "CONN456",
         publicKey: "public-key",
       };
-      expect(validateProviderConfig(withPublicKey)).toMatchObject({ valid: true, errors: [] });
+      expect(validateProviderConfig(withPublicKey)).toMatchObject({
+        valid: true,
+        errors: [],
+      });
 
       const skippedVerification = createBaseConfig("telnyx");
       skippedVerification.skipSignatureVerification = true;
-      skippedVerification.telnyx = { apiKey: "KEY123", connectionId: "CONN456" };
+      skippedVerification.telnyx = {
+        apiKey: "KEY123",
+        connectionId: "CONN456",
+      };
       expect(validateProviderConfig(skippedVerification)).toMatchObject({
         valid: true,
         errors: [],

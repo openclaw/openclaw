@@ -5,10 +5,13 @@ import type { MatrixAuth } from "../client.js";
 import { registerMatrixMonitorEvents } from "./events.js";
 import type { MatrixRawEvent } from "./types.js";
 
-const sendReadReceiptMatrixMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+const sendReadReceiptMatrixMock = vi.hoisted(() =>
+  vi.fn().mockResolvedValue(undefined),
+);
 
 vi.mock("../send.js", () => ({
-  sendReadReceiptMatrix: (...args: unknown[]) => sendReadReceiptMatrixMock(...args),
+  sendReadReceiptMatrix: (...args: unknown[]) =>
+    sendReadReceiptMatrixMock(...args),
 }));
 
 describe("registerMatrixMonitorEvents", () => {
@@ -18,7 +21,8 @@ describe("registerMatrixMonitorEvents", () => {
 
   function createHarness(options?: { getUserId?: ReturnType<typeof vi.fn> }) {
     const handlers = new Map<string, (...args: unknown[]) => void>();
-    const getUserId = options?.getUserId ?? vi.fn().mockResolvedValue("@bot:example.org");
+    const getUserId =
+      options?.getUserId ?? vi.fn().mockResolvedValue("@bot:example.org");
     const client = {
       on: vi.fn((event: string, handler: (...args: unknown[]) => void) => {
         handlers.set(event, handler);
@@ -50,7 +54,13 @@ describe("registerMatrixMonitorEvents", () => {
       throw new Error("missing room.message handler");
     }
 
-    return { client, getUserId, onRoomMessage, roomMessageHandler, logVerboseMessage };
+    return {
+      client,
+      getUserId,
+      onRoomMessage,
+      roomMessageHandler,
+      logVerboseMessage,
+    };
   }
 
   it("sends read receipt immediately for non-self messages", async () => {
@@ -64,7 +74,11 @@ describe("registerMatrixMonitorEvents", () => {
 
     expect(onRoomMessage).toHaveBeenCalledWith("!room:example.org", event);
     await vi.waitFor(() => {
-      expect(sendReadReceiptMatrixMock).toHaveBeenCalledWith("!room:example.org", "$e1", client);
+      expect(sendReadReceiptMatrixMock).toHaveBeenCalledWith(
+        "!room:example.org",
+        "$e1",
+        client,
+      );
     });
   });
 
@@ -97,8 +111,14 @@ describe("registerMatrixMonitorEvents", () => {
 
   it("caches self user id across messages", async () => {
     const { getUserId, roomMessageHandler } = createHarness();
-    const first = { event_id: "$e3", sender: "@alice:example.org" } as MatrixRawEvent;
-    const second = { event_id: "$e4", sender: "@bob:example.org" } as MatrixRawEvent;
+    const first = {
+      event_id: "$e3",
+      sender: "@alice:example.org",
+    } as MatrixRawEvent;
+    const second = {
+      event_id: "$e4",
+      sender: "@bob:example.org",
+    } as MatrixRawEvent;
 
     roomMessageHandler("!room:example.org", first);
     roomMessageHandler("!room:example.org", second);
@@ -111,8 +131,12 @@ describe("registerMatrixMonitorEvents", () => {
 
   it("logs and continues when sending read receipt fails", async () => {
     sendReadReceiptMatrixMock.mockRejectedValueOnce(new Error("network boom"));
-    const { roomMessageHandler, onRoomMessage, logVerboseMessage } = createHarness();
-    const event = { event_id: "$e5", sender: "@alice:example.org" } as MatrixRawEvent;
+    const { roomMessageHandler, onRoomMessage, logVerboseMessage } =
+      createHarness();
+    const event = {
+      event_id: "$e5",
+      sender: "@alice:example.org",
+    } as MatrixRawEvent;
 
     roomMessageHandler("!room:example.org", event);
 
@@ -128,7 +152,10 @@ describe("registerMatrixMonitorEvents", () => {
     const { roomMessageHandler, onRoomMessage, getUserId } = createHarness({
       getUserId: vi.fn().mockRejectedValue(new Error("cannot resolve self")),
     });
-    const event = { event_id: "$e6", sender: "@alice:example.org" } as MatrixRawEvent;
+    const event = {
+      event_id: "$e6",
+      sender: "@alice:example.org",
+    } as MatrixRawEvent;
 
     roomMessageHandler("!room:example.org", event);
 
@@ -141,9 +168,11 @@ describe("registerMatrixMonitorEvents", () => {
 
   it("skips duplicate listener registration for the same client", () => {
     const handlers = new Map<string, (...args: unknown[]) => void>();
-    const onMock = vi.fn((event: string, handler: (...args: unknown[]) => void) => {
-      handlers.set(event, handler);
-    });
+    const onMock = vi.fn(
+      (event: string, handler: (...args: unknown[]) => void) => {
+        handlers.set(event, handler);
+      },
+    );
     const client = {
       on: onMock,
       getUserId: vi.fn().mockResolvedValue("@bot:example.org"),

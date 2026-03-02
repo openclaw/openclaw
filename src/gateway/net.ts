@@ -1,6 +1,9 @@
 import net from "node:net";
 import os from "node:os";
-import { pickPrimaryTailnetIPv4, pickPrimaryTailnetIPv6 } from "../infra/tailnet.js";
+import {
+  pickPrimaryTailnetIPv4,
+  pickPrimaryTailnetIPv6,
+} from "../infra/tailnet.js";
 import {
   isCanonicalDottedDecimalIPv4,
   isIpInCidr,
@@ -138,7 +141,10 @@ function resolveForwardedClientIp(params: {
   return undefined;
 }
 
-export function isTrustedProxyAddress(ip: string | undefined, trustedProxies?: string[]): boolean {
+export function isTrustedProxyAddress(
+  ip: string | undefined,
+  trustedProxies?: string[],
+): boolean {
   const normalized = normalizeIp(ip);
   if (!normalized || !trustedProxies || trustedProxies.length === 0) {
     return false;

@@ -3,7 +3,9 @@ import { parseIMessageAllowFromEntries } from "./imessage.js";
 
 describe("parseIMessageAllowFromEntries", () => {
   it("parses handles and chat targets", () => {
-    expect(parseIMessageAllowFromEntries("+15555550123, chat_id:123, chat_guid:abc")).toEqual({
+    expect(
+      parseIMessageAllowFromEntries("+15555550123, chat_id:123, chat_guid:abc"),
+    ).toEqual({
       entries: ["+15555550123", "chat_id:123", "chat_guid:abc"],
     });
   });

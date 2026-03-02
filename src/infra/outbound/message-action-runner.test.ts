@@ -1,7 +1,15 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import { slackPlugin } from "../../../extensions/slack/src/channel.js";
 import { telegramPlugin } from "../../../extensions/telegram/src/channel.js";
 import { whatsappPlugin } from "../../../extensions/whatsapp/src/channel.js";
@@ -9,14 +17,20 @@ import { jsonResult } from "../../agents/tools/common.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
+import {
+  createOutboundTestPlugin,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 import { createIMessageTestPlugin } from "../../test-utils/imessage-test-plugin.js";
 import { loadWebMedia } from "../../web/media.js";
 import { resolvePreferredOpenClawTmpDir } from "../tmp-openclaw-dir.js";
 import { runMessageAction } from "./message-action-runner.js";
 
 vi.mock("../../web/media.js", async () => {
-  const actual = await vi.importActual<typeof import("../../web/media.js")>("../../web/media.js");
+  const actual =
+    await vi.importActual<typeof import("../../web/media.js")>(
+      "../../web/media.js",
+    );
   return {
     ...actual,
     loadWebMedia: vi.fn(actual.loadWebMedia),
@@ -105,7 +119,9 @@ async function expectSandboxMediaRewrite(params: {
   );
 }
 
-function createAlwaysConfiguredPluginConfig(account: Record<string, unknown> = { enabled: true }) {
+function createAlwaysConfiguredPluginConfig(
+  account: Record<string, unknown> = { enabled: true },
+) {
   return {
     listAccountIds: () => ["default"],
     resolveAccount: () => account,
@@ -118,7 +134,10 @@ let setSlackRuntime: typeof import("../../../extensions/slack/src/runtime.js").s
 let setTelegramRuntime: typeof import("../../../extensions/telegram/src/runtime.js").setTelegramRuntime;
 let setWhatsAppRuntime: typeof import("../../../extensions/whatsapp/src/runtime.js").setWhatsAppRuntime;
 
-function installChannelRuntimes(params?: { includeTelegram?: boolean; includeWhatsApp?: boolean }) {
+function installChannelRuntimes(params?: {
+  includeTelegram?: boolean;
+  includeWhatsApp?: boolean;
+}) {
   const runtime = createPluginRuntime();
   setSlackRuntime(runtime);
   if (params?.includeTelegram !== false) {
@@ -132,9 +151,12 @@ function installChannelRuntimes(params?: { includeTelegram?: boolean; includeWha
 describe("runMessageAction context isolation", () => {
   beforeAll(async () => {
     ({ createPluginRuntime } = await import("../../plugins/runtime/index.js"));
-    ({ setSlackRuntime } = await import("../../../extensions/slack/src/runtime.js"));
-    ({ setTelegramRuntime } = await import("../../../extensions/telegram/src/runtime.js"));
-    ({ setWhatsAppRuntime } = await import("../../../extensions/whatsapp/src/runtime.js"));
+    ({ setSlackRuntime } =
+      await import("../../../extensions/slack/src/runtime.js"));
+    ({ setTelegramRuntime } =
+      await import("../../../extensions/telegram/src/runtime.js"));
+    ({ setWhatsAppRuntime } =
+      await import("../../../extensions/whatsapp/src/runtime.js"));
   });
 
   beforeEach(() => {
@@ -244,7 +266,10 @@ describe("runMessageAction context isolation", () => {
         target: "channel:C99999999",
         message: "hi",
       },
-      toolContext: { currentChannelId: "C12345678", currentChannelProvider: "slack" },
+      toolContext: {
+        currentChannelId: "C12345678",
+        currentChannelProvider: "slack",
+      },
     });
 
     expect(result.kind).toBe("send");
@@ -259,7 +284,10 @@ describe("runMessageAction context isolation", () => {
         target: "C99999999",
         message: "hi",
       },
-      toolContext: { currentChannelId: "C12345678", currentChannelProvider: "slack" },
+      toolContext: {
+        currentChannelId: "C12345678",
+        currentChannelProvider: "slack",
+      },
     });
 
     expect(result.kind).toBe("action");
@@ -278,19 +306,22 @@ describe("runMessageAction context isolation", () => {
       target: "imessage:+15551234567",
       currentChannelId: "imessage:+15551234567",
     },
-  ] as const)("allows $name send when target matches current context", async (testCase) => {
-    const result = await runDrySend({
-      cfg: whatsappConfig,
-      actionParams: {
-        channel: testCase.channel,
-        target: testCase.target,
-        message: "hi",
-      },
-      toolContext: { currentChannelId: testCase.currentChannelId },
-    });
+  ] as const)(
+    "allows $name send when target matches current context",
+    async (testCase) => {
+      const result = await runDrySend({
+        cfg: whatsappConfig,
+        actionParams: {
+          channel: testCase.channel,
+          target: testCase.target,
+          message: "hi",
+        },
+        toolContext: { currentChannelId: testCase.currentChannelId },
+      });
 
-    expect(result.kind).toBe("send");
-  });
+      expect(result.kind).toBe("send");
+    },
+  );
 
   it.each([
     {
@@ -307,22 +338,25 @@ describe("runMessageAction context isolation", () => {
       currentChannelId: "imessage:+15551234567",
       currentChannelProvider: "imessage",
     },
-  ] as const)("blocks $name send when target differs from current context", async (testCase) => {
-    const result = await runDrySend({
-      cfg: whatsappConfig,
-      actionParams: {
-        channel: testCase.channel,
-        target: testCase.target,
-        message: "hi",
-      },
-      toolContext: {
-        currentChannelId: testCase.currentChannelId,
-        currentChannelProvider: testCase.currentChannelProvider,
-      },
-    });
+  ] as const)(
+    "blocks $name send when target differs from current context",
+    async (testCase) => {
+      const result = await runDrySend({
+        cfg: whatsappConfig,
+        actionParams: {
+          channel: testCase.channel,
+          target: testCase.target,
+          message: "hi",
+        },
+        toolContext: {
+          currentChannelId: testCase.currentChannelId,
+          currentChannelProvider: testCase.currentChannelProvider,
+        },
+      });
 
-    expect(result.kind).toBe("send");
-  });
+      expect(result.kind).toBe("send");
+    },
+  );
 
   it("infers channel + target from tool context when missing", async () => {
     const multiConfig = {
@@ -342,7 +376,10 @@ describe("runMessageAction context isolation", () => {
       actionParams: {
         message: "hi",
       },
-      toolContext: { currentChannelId: "C12345678", currentChannelProvider: "slack" },
+      toolContext: {
+        currentChannelId: "C12345678",
+        currentChannelProvider: "slack",
+      },
     });
 
     expect(result.kind).toBe("send");
@@ -358,7 +395,10 @@ describe("runMessageAction context isolation", () => {
           target: "@opsbot",
           message: "hi",
         },
-        toolContext: { currentChannelId: "C12345678", currentChannelProvider: "slack" },
+        toolContext: {
+          currentChannelId: "C12345678",
+          currentChannelProvider: "slack",
+        },
       }),
     ).rejects.toThrow(/Cross-context messaging denied/);
   });
@@ -383,7 +423,10 @@ describe("runMessageAction context isolation", () => {
           target: "channel:C99999999",
           message: "hi",
         },
-        toolContext: { currentChannelId: "C12345678", currentChannelProvider: "slack" },
+        toolContext: {
+          currentChannelId: "C12345678",
+          currentChannelProvider: "slack",
+        },
       }),
     ).rejects.toThrow(/Cross-context messaging denied/);
   });
@@ -419,7 +462,9 @@ describe("runMessageAction context isolation", () => {
   ])("aborts $name when abortSignal is already aborted", async ({ run }) => {
     const controller = new AbortController();
     controller.abort();
-    await expect(run(controller.signal)).rejects.toMatchObject({ name: "AbortError" });
+    await expect(run(controller.signal)).rejects.toMatchObject({
+      name: "AbortError",
+    });
   });
 });
 
@@ -450,7 +495,8 @@ describe("runMessageAction sendAttachment hydration", () => {
     },
     actions: {
       listActions: () => ["sendAttachment", "setGroupIcon"],
-      supportsAction: ({ action }) => action === "sendAttachment" || action === "setGroupIcon",
+      supportsAction: ({ action }) =>
+        action === "sendAttachment" || action === "setGroupIcon",
       handleAction: async ({ params }) =>
         jsonResult({
           ok: true,
@@ -486,7 +532,10 @@ describe("runMessageAction sendAttachment hydration", () => {
   });
 
   async function restoreRealMediaLoader() {
-    const actual = await vi.importActual<typeof import("../../web/media.js")>("../../web/media.js");
+    const actual =
+      await vi.importActual<typeof import("../../web/media.js")>(
+        "../../web/media.js",
+      );
     vi.mocked(loadWebMedia).mockImplementation(actual.loadWebMedia);
   }
 
@@ -552,9 +601,10 @@ describe("runMessageAction sendAttachment hydration", () => {
         localRoots: expect.any(Array),
       }),
     );
-    expect((call?.[1] as { sandboxValidated?: boolean } | undefined)?.sandboxValidated).not.toBe(
-      true,
-    );
+    expect(
+      (call?.[1] as { sandboxValidated?: boolean } | undefined)
+        ?.sandboxValidated,
+    ).not.toBe(true);
   });
 
   it("rewrites sandboxed media paths for sendAttachment", async () => {
@@ -708,7 +758,11 @@ describe("runMessageAction sandboxed media validation", () => {
       }
       // runMessageAction normalizes media paths through platform resolution.
       expect(result.sendResult?.mediaUrl).toBe(path.resolve(tmpFile));
-      const hostTmpOutsideOpenClaw = path.join(os.tmpdir(), "outside-openclaw", "test-media.png");
+      const hostTmpOutsideOpenClaw = path.join(
+        os.tmpdir(),
+        "outside-openclaw",
+        "test-media.png",
+      );
       await expect(
         runMessageAction({
           cfg: slackConfig,
@@ -791,12 +845,13 @@ describe("runMessageAction media caption behavior", () => {
 });
 
 describe("runMessageAction card-only send behavior", () => {
-  const handleAction = vi.fn(async ({ params }: { params: Record<string, unknown> }) =>
-    jsonResult({
-      ok: true,
-      card: params.card ?? null,
-      message: params.message ?? null,
-    }),
+  const handleAction = vi.fn(
+    async ({ params }: { params: Record<string, unknown> }) =>
+      jsonResult({
+        ok: true,
+        card: params.card ?? null,
+        message: params.message ?? null,
+      }),
   );
 
   const cardPlugin: ChannelPlugin = {
@@ -872,11 +927,12 @@ describe("runMessageAction card-only send behavior", () => {
 });
 
 describe("runMessageAction components parsing", () => {
-  const handleAction = vi.fn(async ({ params }: { params: Record<string, unknown> }) =>
-    jsonResult({
-      ok: true,
-      components: params.components ?? null,
-    }),
+  const handleAction = vi.fn(
+    async ({ params }: { params: Record<string, unknown> }) =>
+      jsonResult({
+        ok: true,
+        components: params.components ?? null,
+      }),
   );
 
   const componentsPlugin: ChannelPlugin = {
@@ -1009,7 +1065,9 @@ describe("runMessageAction accountId defaults", () => {
     });
 
     expect(handleAction).toHaveBeenCalled();
-    const ctx = (handleAction.mock.calls as unknown as Array<[unknown]>)[0]?.[0] as
+    const ctx = (
+      handleAction.mock.calls as unknown as Array<[unknown]>
+    )[0]?.[0] as
       | {
           accountId?: string | null;
           params: Record<string, unknown>;
@@ -1025,7 +1083,12 @@ describe("runMessageAction accountId defaults", () => {
   it("falls back to the agent's bound account when accountId is omitted", async () => {
     await runMessageAction({
       cfg: {
-        bindings: [{ agentId: "agent-b", match: { channel: "discord", accountId: "account-b" } }],
+        bindings: [
+          {
+            agentId: "agent-b",
+            match: { channel: "discord", accountId: "account-b" },
+          },
+        ],
       } as OpenClawConfig,
       action: "send",
       params: {
@@ -1037,7 +1100,9 @@ describe("runMessageAction accountId defaults", () => {
     });
 
     expect(handleAction).toHaveBeenCalled();
-    const ctx = (handleAction.mock.calls as unknown as Array<[unknown]>)[0]?.[0] as
+    const ctx = (
+      handleAction.mock.calls as unknown as Array<[unknown]>
+    )[0]?.[0] as
       | {
           accountId?: string | null;
           params: Record<string, unknown>;

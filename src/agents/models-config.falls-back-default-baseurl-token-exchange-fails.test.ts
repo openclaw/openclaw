@@ -32,8 +32,12 @@ describe("models-config", () => {
         });
         globalThis.fetch = fetchMock as unknown as typeof fetch;
 
-        const { agentDir } = await ensureOpenClawModelsJson({ models: { providers: {} } });
-        expect(await readCopilotBaseUrl(agentDir)).toBe(DEFAULT_COPILOT_API_BASE_URL);
+        const { agentDir } = await ensureOpenClawModelsJson({
+          models: { providers: {} },
+        });
+        expect(await readCopilotBaseUrl(agentDir)).toBe(
+          DEFAULT_COPILOT_API_BASE_URL,
+        );
       });
     });
   });
@@ -64,7 +68,9 @@ describe("models-config", () => {
 
         await ensureOpenClawModelsJson({ models: { providers: {} } }, agentDir);
 
-        expect(await readCopilotBaseUrl(agentDir)).toBe("https://api.copilot.example");
+        expect(await readCopilotBaseUrl(agentDir)).toBe(
+          "https://api.copilot.example",
+        );
       });
     });
   });

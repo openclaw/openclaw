@@ -30,7 +30,11 @@ describe("evaluateSenderGroupAccess", () => {
       isSenderAllowed: () => true,
     });
 
-    expect(decision).toMatchObject({ allowed: false, reason: "disabled", groupPolicy: "disabled" });
+    expect(decision).toMatchObject({
+      allowed: false,
+      reason: "disabled",
+      groupPolicy: "disabled",
+    });
   });
 
   it("blocks allowlist with empty list", () => {

@@ -13,12 +13,20 @@ const targets = urls.length > 0 ? urls : DEFAULT_URLS;
 
 async function runFetch(url: string, readability: boolean) {
   if (!readability) {
-    throw new Error("Basic extraction removed. Set readability=true or enable Firecrawl.");
+    throw new Error(
+      "Basic extraction removed. Set readability=true or enable Firecrawl.",
+    );
   }
   const tool = createWebFetchTool({
     config: {
       tools: {
-        web: { fetch: { readability, cacheTtlMinutes: 0, firecrawl: { enabled: false } } },
+        web: {
+          fetch: {
+            readability,
+            cacheTtlMinutes: 0,
+            firecrawl: { enabled: false },
+          },
+        },
       },
     },
     sandboxed: false,

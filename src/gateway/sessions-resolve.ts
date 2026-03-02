@@ -14,7 +14,9 @@ import {
   resolveGatewaySessionStoreTarget,
 } from "./session-utils.js";
 
-export type SessionsResolveResult = { ok: true; key: string } | { ok: false; error: ErrorShape };
+export type SessionsResolveResult =
+  | { ok: true; key: string }
+  | { ok: false; error: ErrorShape };
 
 export async function resolveSessionKeyFromResolveParams(params: {
   cfg: OpenClawConfig;
@@ -27,7 +29,9 @@ export async function resolveSessionKeyFromResolveParams(params: {
   const sessionId = typeof p.sessionId === "string" ? p.sessionId.trim() : "";
   const hasSessionId = sessionId.length > 0;
   const hasLabel = typeof p.label === "string" && p.label.trim().length > 0;
-  const selectionCount = [hasKey, hasSessionId, hasLabel].filter(Boolean).length;
+  const selectionCount = [hasKey, hasSessionId, hasLabel].filter(
+    Boolean,
+  ).length;
   if (selectionCount > 1) {
     return {
       ok: false,
@@ -40,7 +44,10 @@ export async function resolveSessionKeyFromResolveParams(params: {
   if (selectionCount === 0) {
     return {
       ok: false,
-      error: errorShape(ErrorCodes.INVALID_REQUEST, "Either key, sessionId, or label is required"),
+      error: errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        "Either key, sessionId, or label is required",
+      ),
     };
   }
 
@@ -54,17 +61,28 @@ export async function resolveSessionKeyFromResolveParams(params: {
     if (!legacyKey) {
       return {
         ok: false,
-        error: errorShape(ErrorCodes.INVALID_REQUEST, `No session found: ${key}`),
+        error: errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `No session found: ${key}`,
+        ),
       };
     }
     await updateSessionStore(target.storePath, (s) => {
-      const liveTarget = resolveGatewaySessionStoreTarget({ cfg, key, store: s });
+      const liveTarget = resolveGatewaySessionStoreTarget({
+        cfg,
+        key,
+        store: s,
+      });
       const canonicalKey = liveTarget.canonicalKey;
       // Migrate the first legacy entry to the canonical key.
       if (!s[canonicalKey] && s[legacyKey]) {
         s[canonicalKey] = s[legacyKey];
       }
-      pruneLegacyStoreKeys({ store: s, canonicalKey, candidates: liveTarget.storeKeys });
+      pruneLegacyStoreKeys({
+        store: s,
+        canonicalKey,
+        candidates: liveTarget.storeKeys,
+      });
     });
     return { ok: true, key: target.canonicalKey };
   }
@@ -90,7 +108,10 @@ export async function resolveSessionKeyFromResolveParams(params: {
     if (matches.length === 0) {
       return {
         ok: false,
-        error: errorShape(ErrorCodes.INVALID_REQUEST, `No session found: ${sessionId}`),
+        error: errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `No session found: ${sessionId}`,
+        ),
       };
     }
     if (matches.length > 1) {

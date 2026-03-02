@@ -33,7 +33,9 @@ describe("dispatchChannelMessageAction trusted sender guard", () => {
   beforeEach(() => {
     handleAction.mockClear();
     setActivePluginRegistry(
-      createTestRegistry([{ pluginId: "discord", source: "test", plugin: discordPlugin }]),
+      createTestRegistry([
+        { pluginId: "discord", source: "test", plugin: discordPlugin },
+      ]),
     );
   });
 

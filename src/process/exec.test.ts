@@ -3,7 +3,11 @@ import { EventEmitter } from "node:events";
 import process from "node:process";
 import { describe, expect, it, vi } from "vitest";
 import { attachChildProcessBridge } from "./child-process-bridge.js";
-import { resolveCommandEnv, runCommandWithTimeout, shouldSpawnWithShell } from "./exec.js";
+import {
+  resolveCommandEnv,
+  runCommandWithTimeout,
+  shouldSpawnWithShell,
+} from "./exec.js";
 
 describe("runCommandWithTimeout", () => {
   it("never enables shell execution (Windows cmd.exe injection hardening)", () => {
@@ -102,7 +106,9 @@ describe("runCommandWithTimeout", () => {
   it.runIf(process.platform === "win32")(
     "on Windows spawns node + npm-cli.js for npm argv to avoid spawn EINVAL",
     async () => {
-      const result = await runCommandWithTimeout(["npm", "--version"], { timeoutMs: 10_000 });
+      const result = await runCommandWithTimeout(["npm", "--version"], {
+        timeoutMs: 10_000,
+      });
       expect(result.code).toBe(0);
       expect(result.stdout.trim()).toMatch(/^\d+\.\d+\.\d+$/);
     },
@@ -128,7 +134,9 @@ describe("attachChildProcessBridge", () => {
     });
 
     const afterSigterm = process.listeners("SIGTERM");
-    const addedSigterm = afterSigterm.find((listener) => !beforeSigterm.has(listener));
+    const addedSigterm = afterSigterm.find(
+      (listener) => !beforeSigterm.has(listener),
+    );
 
     if (!addedSigterm) {
       throw new Error("expected SIGTERM listener");

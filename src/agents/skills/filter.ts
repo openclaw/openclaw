@@ -1,4 +1,6 @@
-export function normalizeSkillFilter(skillFilter?: ReadonlyArray<unknown>): string[] | undefined {
+export function normalizeSkillFilter(
+  skillFilter?: ReadonlyArray<unknown>,
+): string[] | undefined {
   if (skillFilter === undefined) {
     return undefined;
   }
@@ -27,5 +29,7 @@ export function matchesSkillFilter(
   if (cachedNormalized.length !== nextNormalized.length) {
     return false;
   }
-  return cachedNormalized.every((entry, index) => entry === nextNormalized[index]);
+  return cachedNormalized.every(
+    (entry, index) => entry === nextNormalized[index],
+  );
 }

@@ -16,9 +16,11 @@ export async function rotateConfigBackups(
     // best-effort
   });
   for (let index = maxIndex - 1; index >= 1; index -= 1) {
-    await ioFs.rename(`${backupBase}.${index}`, `${backupBase}.${index + 1}`).catch(() => {
-      // best-effort
-    });
+    await ioFs
+      .rename(`${backupBase}.${index}`, `${backupBase}.${index + 1}`)
+      .catch(() => {
+        // best-effort
+      });
   }
   await ioFs.rename(backupBase, `${backupBase}.1`).catch(() => {
     // best-effort

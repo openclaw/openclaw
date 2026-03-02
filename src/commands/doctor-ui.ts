@@ -29,7 +29,8 @@ export async function maybeRepairUiProtocolFreshness(
     root,
     argv1: process.argv[1],
   });
-  const uiIndexPath = uiHealth.indexPath ?? resolveControlUiDistIndexPathForRoot(root);
+  const uiIndexPath =
+    uiHealth.indexPath ?? resolveControlUiDistIndexPathForRoot(root);
 
   try {
     const [schemaStats, uiStats] = await Promise.all([
@@ -38,7 +39,10 @@ export async function maybeRepairUiProtocolFreshness(
     ]);
 
     if (schemaStats && !uiStats) {
-      note(["- Control UI assets are missing.", "- Run: pnpm ui:build"].join("\n"), "UI");
+      note(
+        ["- Control UI assets are missing.", "- Run: pnpm ui:build"].join("\n"),
+        "UI",
+      );
 
       // In slim/docker environments we may not have the UI source tree. Trying
       // to build would fail (and spam logs), so skip the interactive repair.
@@ -57,11 +61,14 @@ export async function maybeRepairUiProtocolFreshness(
       if (shouldRepair) {
         note("Building Control UI assets... (this may take a moment)", "UI");
         const uiScriptPath = path.join(root, "scripts/ui.js");
-        const buildResult = await runCommandWithTimeout([process.execPath, uiScriptPath, "build"], {
-          cwd: root,
-          timeoutMs: 120_000,
-          env: { ...process.env, FORCE_COLOR: "1" },
-        });
+        const buildResult = await runCommandWithTimeout(
+          [process.execPath, uiScriptPath, "build"],
+          {
+            cwd: root,
+            timeoutMs: 120_000,
+            env: { ...process.env, FORCE_COLOR: "1" },
+          },
+        );
         if (buildResult.code === 0) {
           note("UI build complete.", "UI");
         } else {
@@ -108,7 +115,8 @@ export async function maybeRepairUiProtocolFreshness(
         );
 
         const shouldRepair = await prompter.confirmAggressive({
-          message: "Rebuild UI now? (Detected protocol mismatch requiring update)",
+          message:
+            "Rebuild UI now? (Detected protocol mismatch requiring update)",
           initialValue: true,
         });
 

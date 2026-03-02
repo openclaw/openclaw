@@ -148,11 +148,17 @@ Example:
   bindings: [
     {
       agentId: "alex",
-      match: { channel: "whatsapp", peer: { kind: "direct", id: "+15551230001" } },
+      match: {
+        channel: "whatsapp",
+        peer: { kind: "direct", id: "+15551230001" },
+      },
     },
     {
       agentId: "mia",
-      match: { channel: "whatsapp", peer: { kind: "direct", id: "+15551230002" } },
+      match: {
+        channel: "whatsapp",
+        peer: { kind: "direct", id: "+15551230002" },
+      },
     },
   ],
   channels: {
@@ -435,7 +441,10 @@ Keep WhatsApp on the fast agent, but route one DM to Opus:
   bindings: [
     {
       agentId: "opus",
-      match: { channel: "whatsapp", peer: { kind: "direct", id: "+15551234567" } },
+      match: {
+        channel: "whatsapp",
+        peer: { kind: "direct", id: "+15551234567" },
+      },
     },
     { agentId: "chat", match: { channel: "whatsapp" } },
   ],
@@ -475,7 +484,15 @@ and a tighter tool policy:
             "sessions_spawn",
             "session_status",
           ],
-          deny: ["write", "edit", "apply_patch", "browser", "canvas", "nodes", "cron"],
+          deny: [
+            "write",
+            "edit",
+            "apply_patch",
+            "browser",
+            "canvas",
+            "nodes",
+            "cron",
+          ],
         },
       },
     ],

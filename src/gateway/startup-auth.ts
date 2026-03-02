@@ -109,7 +109,10 @@ export async function ensureGatewayStartupAuth(params: {
     tailscaleOverride: params.tailscaleOverride,
   });
   if (resolved.mode !== "token" || (resolved.token?.trim().length ?? 0) > 0) {
-    assertHooksTokenSeparateFromGatewayAuth({ cfg: params.cfg, auth: resolved });
+    assertHooksTokenSeparateFromGatewayAuth({
+      cfg: params.cfg,
+      auth: resolved,
+    });
     return { cfg: params.cfg, auth: resolved, persistedGeneratedToken: false };
   }
 
@@ -156,7 +159,9 @@ export function assertHooksTokenSeparateFromGatewayAuth(params: {
     return;
   }
   const hooksToken =
-    typeof params.cfg.hooks.token === "string" ? params.cfg.hooks.token.trim() : "";
+    typeof params.cfg.hooks.token === "string"
+      ? params.cfg.hooks.token.trim()
+      : "";
   if (!hooksToken) {
     return;
   }

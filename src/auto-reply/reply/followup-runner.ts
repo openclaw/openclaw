@@ -28,7 +28,10 @@ import {
 } from "./reply-payloads.js";
 import { resolveReplyToMode } from "./reply-threading.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
-import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
+import {
+  incrementRunCompactionCount,
+  persistRunSessionUsage,
+} from "./session-run-accounting.js";
 import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
 
@@ -68,10 +71,14 @@ export function createFollowupRunner(params: {
    * session's current dispatcher. This ensures replies go back to
    * where the message originated.
    */
-  const sendFollowupPayloads = async (payloads: ReplyPayload[], queued: FollowupRun) => {
+  const sendFollowupPayloads = async (
+    payloads: ReplyPayload[],
+    queued: FollowupRun,
+  ) => {
     // Check if we should route to originating channel.
     const { originatingChannel, originatingTo } = queued;
-    const shouldRouteToOriginating = isRoutableChannel(originatingChannel) && originatingTo;
+    const shouldRouteToOriginating =
+      isRoutableChannel(originatingChannel) && originatingTo;
 
     if (!shouldRouteToOriginating && !opts?.onBlockReply) {
       logVerbose("followup queue: no onBlockReply handler; dropping payloads");
@@ -194,7 +201,8 @@ export function createFollowupRunner(params: {
                 if (evt.stream !== "compaction") {
                   return;
                 }
-                const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
+                const phase =
+                  typeof evt.data.phase === "string" ? evt.data.phase : "";
                 if (phase === "end") {
                   autoCompactionCompleted = true;
                 }
@@ -207,13 +215,16 @@ export function createFollowupRunner(params: {
         fallbackModel = fallbackResult.model;
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        defaultRuntime.error?.(`Followup agent failed before reply: ${message}`);
+        defaultRuntime.error?.(
+          `Followup agent failed before reply: ${message}`,
+        );
         return;
       }
 
       const usage = runResult.meta?.agentMeta?.usage;
       const promptTokens = runResult.meta?.agentMeta?.promptTokens;
-      const modelUsed = runResult.meta?.agentMeta?.model ?? fallbackModel ?? defaultModel;
+      const modelUsed =
+        runResult.meta?.agentMeta?.model ?? fallbackModel ?? defaultModel;
       const contextTokensUsed =
         agentCfgContextTokens ??
         lookupContextTokens(modelUsed) ??
@@ -244,7 +255,8 @@ export function createFollowupRunner(params: {
           return [payload];
         }
         const stripped = stripHeartbeatToken(text, { mode: "message" });
-        const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
+        const hasMedia =
+          Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
         if (stripped.shouldSkip && !hasMedia) {
           return [];
         }
@@ -289,7 +301,9 @@ export function createFollowupRunner(params: {
           accountId: queued.run.agentAccountId,
         }),
       });
-      const finalPayloads = suppressMessagingToolReplies ? [] : mediaFilteredPayloads;
+      const finalPayloads = suppressMessagingToolReplies
+        ? []
+        : mediaFilteredPayloads;
 
       if (finalPayloads.length === 0) {
         return;

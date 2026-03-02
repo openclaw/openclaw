@@ -60,16 +60,23 @@ export function resolveExecutablePath(
   rawExecutable: string,
   options?: { cwd?: string; env?: NodeJS.ProcessEnv },
 ): string | undefined {
-  const expanded = rawExecutable.startsWith("~") ? expandHomePrefix(rawExecutable) : rawExecutable;
+  const expanded = rawExecutable.startsWith("~")
+    ? expandHomePrefix(rawExecutable)
+    : rawExecutable;
   if (expanded.includes("/") || expanded.includes("\\")) {
     if (path.isAbsolute(expanded)) {
       return isExecutableFile(expanded) ? expanded : undefined;
     }
-    const base = options?.cwd && options.cwd.trim() ? options.cwd.trim() : process.cwd();
+    const base =
+      options?.cwd && options.cwd.trim() ? options.cwd.trim() : process.cwd();
     const candidate = path.resolve(base, expanded);
     return isExecutableFile(candidate) ? candidate : undefined;
   }
   const envPath =
-    options?.env?.PATH ?? options?.env?.Path ?? process.env.PATH ?? process.env.Path ?? "";
+    options?.env?.PATH ??
+    options?.env?.Path ??
+    process.env.PATH ??
+    process.env.Path ??
+    "";
   return resolveExecutableFromPathEnv(expanded, envPath, options?.env);
 }

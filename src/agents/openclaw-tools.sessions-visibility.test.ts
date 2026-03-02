@@ -33,7 +33,10 @@ function getSessionsHistoryTool(options?: { sandboxed?: boolean }) {
 }
 
 function mockGatewayWithHistory(
-  extra?: (req: { method?: string; params?: Record<string, unknown> }) => unknown,
+  extra?: (req: {
+    method?: string;
+    params?: Record<string, unknown>;
+  }) => unknown,
 ) {
   callGatewayMock.mockClear();
   callGatewayMock.mockImplementation(async (opts: unknown) => {
@@ -43,7 +46,11 @@ function mockGatewayWithHistory(
       return handled;
     }
     if (req.method === "chat.history") {
-      return { messages: [{ role: "assistant", content: [{ type: "text", text: "ok" }] }] };
+      return {
+        messages: [
+          { role: "assistant", content: [{ type: "text", text: "ok" }] },
+        ],
+      };
     }
     return {};
   });
@@ -60,7 +67,8 @@ describe("sessions tools visibility", () => {
         return { sessions: [{ key: "subagent:child-1" }] };
       }
       if (req.method === "sessions.resolve") {
-        const key = typeof req.params?.key === "string" ? String(req.params?.key) : "";
+        const key =
+          typeof req.params?.key === "string" ? String(req.params?.key) : "";
         return { key };
       }
       return undefined;
@@ -73,7 +81,9 @@ describe("sessions tools visibility", () => {
     });
     expect(denied.details).toMatchObject({ status: "forbidden" });
 
-    const allowed = await tool.execute("call2", { sessionKey: "subagent:child-1" });
+    const allowed = await tool.execute("call2", {
+      sessionKey: "subagent:child-1",
+    });
     expect(allowed.details).toMatchObject({
       sessionKey: "subagent:child-1",
     });
@@ -82,7 +92,10 @@ describe("sessions tools visibility", () => {
   it("allows broader access when tools.sessions.visibility=all", async () => {
     mockConfig = {
       session: { mainKey: "main", scope: "per-sender" },
-      tools: { sessions: { visibility: "all" }, agentToAgent: { enabled: false } },
+      tools: {
+        sessions: { visibility: "all" },
+        agentToAgent: { enabled: false },
+      },
     };
     mockGatewayWithHistory();
     const tool = getSessionsHistoryTool();
@@ -98,7 +111,10 @@ describe("sessions tools visibility", () => {
   it("clamps sandboxed sessions to tree when agents.defaults.sandbox.sessionToolsVisibility=spawned", async () => {
     mockConfig = {
       session: { mainKey: "main", scope: "per-sender" },
-      tools: { sessions: { visibility: "all" }, agentToAgent: { enabled: true, allow: ["*"] } },
+      tools: {
+        sessions: { visibility: "all" },
+        agentToAgent: { enabled: true, allow: ["*"] },
+      },
       agents: { defaults: { sandbox: { sessionToolsVisibility: "spawned" } } },
     };
     mockGatewayWithHistory((req) => {

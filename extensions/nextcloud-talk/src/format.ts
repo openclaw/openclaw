@@ -31,7 +31,10 @@ export function formatNextcloudTalkMention(userId: string): string {
 /**
  * Format a code block for Nextcloud Talk.
  */
-export function formatNextcloudTalkCodeBlock(code: string, language?: string): string {
+export function formatNextcloudTalkCodeBlock(
+  code: string,
+  language?: string,
+): string {
   const lang = language ?? "";
   return `\`\`\`${lang}\n${code}\n\`\`\``;
 }
@@ -66,7 +69,11 @@ export function stripNextcloudTalkFormatting(text: string): string {
 /**
  * Truncate text to a maximum length, preserving word boundaries.
  */
-export function truncateNextcloudTalkText(text: string, maxLength: number, suffix = "..."): string {
+export function truncateNextcloudTalkText(
+  text: string,
+  maxLength: number,
+  suffix = "...",
+): string {
   if (text.length <= maxLength) {
     return text;
   }

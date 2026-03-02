@@ -1,4 +1,12 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 vi.mock("./config.js", () => ({
   readLoggingConfig: () => undefined,
@@ -46,7 +54,10 @@ beforeEach(() => {
     trace: console.trace,
   };
   originalIsTty = process.stdout.isTTY;
-  Object.defineProperty(process.stdout, "isTTY", { value: false, configurable: true });
+  Object.defineProperty(process.stdout, "isTTY", {
+    value: false,
+    configurable: true,
+  });
 });
 
 afterEach(() => {
@@ -56,7 +67,10 @@ afterEach(() => {
   console.error = snapshot.error;
   console.debug = snapshot.debug;
   console.trace = snapshot.trace;
-  Object.defineProperty(process.stdout, "isTTY", { value: originalIsTty, configurable: true });
+  Object.defineProperty(process.stdout, "isTTY", {
+    value: originalIsTty,
+    configurable: true,
+  });
   logging.setConsoleConfigLoaderForTests();
   vi.restoreAllMocks();
 });

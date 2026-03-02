@@ -7,7 +7,10 @@ import {
 import { resetDiagnosticSessionStateForTest } from "../logging/diagnostic-session-state.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { wrapToolWithBeforeToolCallHook } from "./pi-tools.before-tool-call.js";
-import { CRITICAL_THRESHOLD, GLOBAL_CIRCUIT_BREAKER_THRESHOLD } from "./tool-loop-detection.js";
+import {
+  CRITICAL_THRESHOLD,
+  GLOBAL_CIRCUIT_BREAKER_THRESHOLD,
+} from "./tool-loop-detection.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 vi.mock("../plugins/hook-runner-global.js");
@@ -103,9 +106,19 @@ describe("before_tool_call loop detection behavior", () => {
   ) {
     for (let i = 0; i < count; i += 1) {
       if (i % 2 === 0) {
-        await readTool.execute(`read-${i}`, { path: "/a.txt" }, undefined, undefined);
+        await readTool.execute(
+          `read-${i}`,
+          { path: "/a.txt" },
+          undefined,
+          undefined,
+        );
       } else {
-        await listTool.execute(`list-${i}`, { dir: "/workspace" }, undefined, undefined);
+        await listTool.execute(
+          `list-${i}`,
+          { dir: "/workspace" },
+          undefined,
+          undefined,
+        );
       }
     }
   }
@@ -123,7 +136,9 @@ describe("before_tool_call loop detection behavior", () => {
 
   function createNoProgressProcessFixture(sessionId: string) {
     const execute = vi.fn().mockResolvedValue({
-      content: [{ type: "text", text: "(no new output)\n\nProcess still running." }],
+      content: [
+        { type: "text", text: "(no new output)\n\nProcess still running." },
+      ],
       details: { status: "running", aggregated: "steady" },
     });
     return {
@@ -152,7 +167,9 @@ describe("before_tool_call loop detection behavior", () => {
     const { tool, params } = createNoProgressProcessFixture("sess-1");
 
     for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
-      await expect(tool.execute(`poll-${i}`, params, undefined, undefined)).resolves.toBeDefined();
+      await expect(
+        tool.execute(`poll-${i}`, params, undefined, undefined),
+      ).resolves.toBeDefined();
     }
 
     await expect(
@@ -162,17 +179,24 @@ describe("before_tool_call loop detection behavior", () => {
 
   it("does nothing when loopDetection.enabled is false", async () => {
     const execute = vi.fn().mockResolvedValue({
-      content: [{ type: "text", text: "(no new output)\n\nProcess still running." }],
+      content: [
+        { type: "text", text: "(no new output)\n\nProcess still running." },
+      ],
       details: { status: "running", aggregated: "steady" },
     });
     // oxlint-disable-next-line typescript/no-explicit-any
-    const tool = wrapToolWithBeforeToolCallHook({ name: "process", execute } as any, {
-      ...disabledLoopDetectionContext,
-    });
+    const tool = wrapToolWithBeforeToolCallHook(
+      { name: "process", execute } as any,
+      {
+        ...disabledLoopDetectionContext,
+      },
+    );
     const params = { action: "poll", sessionId: "sess-off" };
 
     for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
-      await expect(tool.execute(`poll-${i}`, params, undefined, undefined)).resolves.toBeDefined();
+      await expect(
+        tool.execute(`poll-${i}`, params, undefined, undefined),
+      ).resolves.toBeDefined();
     }
   });
 
@@ -197,7 +221,9 @@ describe("before_tool_call loop detection behavior", () => {
     const { tool, params } = createGenericReadRepeatFixture();
 
     for (let i = 0; i < CRITICAL_THRESHOLD + 5; i += 1) {
-      await expect(tool.execute(`read-${i}`, params, undefined, undefined)).resolves.toBeDefined();
+      await expect(
+        tool.execute(`read-${i}`, params, undefined, undefined),
+      ).resolves.toBeDefined();
     }
   });
 
@@ -205,11 +231,18 @@ describe("before_tool_call loop detection behavior", () => {
     const { tool, params } = createGenericReadRepeatFixture();
 
     for (let i = 0; i < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; i += 1) {
-      await expect(tool.execute(`read-${i}`, params, undefined, undefined)).resolves.toBeDefined();
+      await expect(
+        tool.execute(`read-${i}`, params, undefined, undefined),
+      ).resolves.toBeDefined();
     }
 
     await expect(
-      tool.execute(`read-${GLOBAL_CIRCUIT_BREAKER_THRESHOLD}`, params, undefined, undefined),
+      tool.execute(
+        `read-${GLOBAL_CIRCUIT_BREAKER_THRESHOLD}`,
+        params,
+        undefined,
+        undefined,
+      ),
     ).rejects.toThrow("global circuit breaker");
   });
 
@@ -222,7 +255,9 @@ describe("before_tool_call loop detection behavior", () => {
           await tool.execute(`read-bucket-${i}`, params, undefined, undefined);
         }
 
-        const genericWarns = emitted.filter((evt) => evt.detector === "generic_repeat");
+        const genericWarns = emitted.filter(
+          (evt) => evt.detector === "generic_repeat",
+        );
         expect(genericWarns.map((evt) => evt.count)).toEqual([10, 20]);
       },
       (evt) => evt.level === "warning",
@@ -234,9 +269,24 @@ describe("before_tool_call loop detection behavior", () => {
       const { readTool, listTool } = createPingPongTools();
       await runPingPongSequence(readTool, listTool, 9);
 
-      await listTool.execute("list-9", { dir: "/workspace" }, undefined, undefined);
-      await readTool.execute("read-10", { path: "/a.txt" }, undefined, undefined);
-      await listTool.execute("list-11", { dir: "/workspace" }, undefined, undefined);
+      await listTool.execute(
+        "list-9",
+        { dir: "/workspace" },
+        undefined,
+        undefined,
+      );
+      await readTool.execute(
+        "read-10",
+        { path: "/a.txt" },
+        undefined,
+        undefined,
+      );
+      await listTool.execute(
+        "list-11",
+        { dir: "/workspace" },
+        undefined,
+        undefined,
+      );
 
       const pingPongWarns = emitted.filter(
         (evt) => evt.level === "warning" && evt.detector === "ping_pong",
@@ -276,7 +326,9 @@ describe("before_tool_call loop detection behavior", () => {
 
   it("does not block ping-pong at critical threshold when outcomes are progressing", async () => {
     await withToolLoopEvents(async (emitted) => {
-      const { readTool, listTool } = createPingPongTools({ withProgress: true });
+      const { readTool, listTool } = createPingPongTools({
+        withProgress: true,
+      });
       await runPingPongSequence(readTool, listTool, CRITICAL_THRESHOLD - 1);
 
       await expect(
@@ -308,7 +360,12 @@ describe("before_tool_call loop detection behavior", () => {
       }
 
       await expect(
-        tool.execute(`poll-${CRITICAL_THRESHOLD}`, params, undefined, undefined),
+        tool.execute(
+          `poll-${CRITICAL_THRESHOLD}`,
+          params,
+          undefined,
+          undefined,
+        ),
       ).rejects.toThrow("CRITICAL");
 
       const loopEvent = emitted.at(-1);

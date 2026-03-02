@@ -17,7 +17,11 @@ export function setAccountEnabledInConfigSection(params: {
   const channels = params.cfg.channels as Record<string, unknown> | undefined;
   const base = channels?.[params.sectionKey] as ChannelSection | undefined;
   const hasAccounts = Boolean(base?.accounts);
-  if (params.allowTopLevel && accountKey === DEFAULT_ACCOUNT_ID && !hasAccounts) {
+  if (
+    params.allowTopLevel &&
+    accountKey === DEFAULT_ACCOUNT_ID &&
+    !hasAccounts
+  ) {
     return {
       ...params.cfg,
       channels: {
@@ -64,7 +68,9 @@ export function deleteAccountFromConfigSection(params: {
   }
 
   const baseAccounts =
-    base.accounts && typeof base.accounts === "object" ? { ...base.accounts } : undefined;
+    base.accounts && typeof base.accounts === "object"
+      ? { ...base.accounts }
+      : undefined;
 
   if (accountKey !== DEFAULT_ACCOUNT_ID) {
     const accounts = baseAccounts ? { ...baseAccounts } : {};

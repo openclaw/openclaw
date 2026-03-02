@@ -15,7 +15,11 @@ export function resolveSlackStreamMode(raw: unknown): SlackStreamMode {
     return DEFAULT_STREAM_MODE;
   }
   const normalized = raw.trim().toLowerCase();
-  if (normalized === "replace" || normalized === "status_final" || normalized === "append") {
+  if (
+    normalized === "replace" ||
+    normalized === "status_final" ||
+    normalized === "append"
+  ) {
     return normalized;
   }
   return DEFAULT_STREAM_MODE;
@@ -25,7 +29,11 @@ export function resolveSlackStreamingConfig(params: {
   streaming?: unknown;
   streamMode?: unknown;
   nativeStreaming?: unknown;
-}): { mode: SlackStreamingMode; nativeStreaming: boolean; draftMode: SlackStreamMode } {
+}): {
+  mode: SlackStreamingMode;
+  nativeStreaming: boolean;
+  draftMode: SlackStreamMode;
+} {
   const mode = resolveSlackStreamingMode(params);
   const nativeStreaming = resolveSlackNativeStreaming(params);
   return {
@@ -52,8 +60,15 @@ export function applyAppendOnlyStreamUpdate(params: {
   }
 
   // Typical model partials are cumulative prefixes.
-  if (incoming.startsWith(params.source) || incoming.startsWith(params.rendered)) {
-    return { rendered: incoming, source: incoming, changed: incoming !== params.rendered };
+  if (
+    incoming.startsWith(params.source) ||
+    incoming.startsWith(params.rendered)
+  ) {
+    return {
+      rendered: incoming,
+      source: incoming,
+      changed: incoming !== params.rendered,
+    };
   }
 
   // Ignore regressive shorter variants of the same stream.

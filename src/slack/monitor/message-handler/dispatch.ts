@@ -19,9 +19,17 @@ import {
   resolveSlackStreamingConfig,
 } from "../../stream-mode.js";
 import type { SlackStreamSession } from "../../streaming.js";
-import { appendSlackStream, startSlackStream, stopSlackStream } from "../../streaming.js";
+import {
+  appendSlackStream,
+  startSlackStream,
+  stopSlackStream,
+} from "../../streaming.js";
 import { resolveSlackThreadTargets } from "../../threading.js";
-import { createSlackReplyDeliveryPlan, deliverReplies, resolveSlackThreadTs } from "../replies.js";
+import {
+  createSlackReplyDeliveryPlan,
+  deliverReplies,
+  resolveSlackThreadTs,
+} from "../replies.js";
 import type { PreparedSlackMessage } from "./types.js";
 
 function hasMedia(payload: ReplyPayload): boolean {
@@ -61,13 +69,17 @@ function shouldUseStreaming(params: {
     return false;
   }
   if (!params.threadTs) {
-    logVerbose("slack-stream: streaming disabled — no reply thread target available");
+    logVerbose(
+      "slack-stream: streaming disabled — no reply thread target available",
+    );
     return false;
   }
   return true;
 }
 
-export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessage) {
+export async function dispatchPreparedSlackMessage(
+  prepared: PreparedSlackMessage,
+) {
   const { ctx, account, message, route } = prepared;
   const cfg = ctx.cfg;
   const runtime = ctx.runtime;
@@ -120,7 +132,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     isThreadReply,
   });
 
-  const typingTarget = statusThreadTs ? `${message.channel}/${statusThreadTs}` : message.channel;
+  const typingTarget = statusThreadTs
+    ? `${message.channel}/${statusThreadTs}`
+    : message.channel;
   const typingCallbacks = createTypingCallbacks({
     start: async () => {
       didSetStatus = true;
@@ -192,7 +206,10 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   let streamFailed = false;
   let usedReplyThreadTs: string | undefined;
 
-  const deliverNormally = async (payload: ReplyPayload, forcedThreadTs?: string): Promise<void> => {
+  const deliverNormally = async (
+    payload: ReplyPayload,
+    forcedThreadTs?: string,
+  ): Promise<void> => {
     const replyThreadTs = forcedThreadTs ?? replyPlan.nextThreadTs();
     await deliverReplies({
       replies: [payload],
@@ -252,79 +269,94 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       });
     } catch (err) {
       runtime.error?.(
-        danger(`slack-stream: streaming API call failed: ${String(err)}, falling back`),
+        danger(
+          `slack-stream: streaming API call failed: ${String(err)}, falling back`,
+        ),
       );
       streamFailed = true;
-      await deliverNormally(payload, streamSession?.threadTs ?? plannedThreadTs);
+      await deliverNormally(
+        payload,
+        streamSession?.threadTs ?? plannedThreadTs,
+      );
     }
   };
 
-  const { dispatcher, replyOptions, markDispatchIdle } = createReplyDispatcherWithTyping({
-    ...prefixOptions,
-    humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
-    typingCallbacks,
-    deliver: async (payload) => {
-      if (useStreaming) {
-        await deliverWithStreaming(payload);
-        return;
-      }
-
-      const mediaCount = payload.mediaUrls?.length ?? (payload.mediaUrl ? 1 : 0);
-      const draftMessageId = draftStream?.messageId();
-      const draftChannelId = draftStream?.channelId();
-      const finalText = payload.text;
-      const canFinalizeViaPreviewEdit =
-        previewStreamingEnabled &&
-        streamMode !== "status_final" &&
-        mediaCount === 0 &&
-        !payload.isError &&
-        typeof finalText === "string" &&
-        finalText.trim().length > 0 &&
-        typeof draftMessageId === "string" &&
-        typeof draftChannelId === "string";
-
-      if (canFinalizeViaPreviewEdit) {
-        draftStream?.stop();
-        try {
-          await ctx.app.client.chat.update({
-            token: ctx.botToken,
-            channel: draftChannelId,
-            ts: draftMessageId,
-            text: finalText.trim(),
-          });
+  const { dispatcher, replyOptions, markDispatchIdle } =
+    createReplyDispatcherWithTyping({
+      ...prefixOptions,
+      humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
+      typingCallbacks,
+      deliver: async (payload) => {
+        if (useStreaming) {
+          await deliverWithStreaming(payload);
           return;
-        } catch (err) {
-          logVerbose(
-            `slack: preview final edit failed; falling back to standard send (${String(err)})`,
-          );
         }
-      } else if (previewStreamingEnabled && streamMode === "status_final" && hasStreamedMessage) {
-        try {
-          const statusChannelId = draftStream?.channelId();
-          const statusMessageId = draftStream?.messageId();
-          if (statusChannelId && statusMessageId) {
+
+        const mediaCount =
+          payload.mediaUrls?.length ?? (payload.mediaUrl ? 1 : 0);
+        const draftMessageId = draftStream?.messageId();
+        const draftChannelId = draftStream?.channelId();
+        const finalText = payload.text;
+        const canFinalizeViaPreviewEdit =
+          previewStreamingEnabled &&
+          streamMode !== "status_final" &&
+          mediaCount === 0 &&
+          !payload.isError &&
+          typeof finalText === "string" &&
+          finalText.trim().length > 0 &&
+          typeof draftMessageId === "string" &&
+          typeof draftChannelId === "string";
+
+        if (canFinalizeViaPreviewEdit) {
+          draftStream?.stop();
+          try {
             await ctx.app.client.chat.update({
               token: ctx.botToken,
-              channel: statusChannelId,
-              ts: statusMessageId,
-              text: "Status: complete. Final answer posted below.",
+              channel: draftChannelId,
+              ts: draftMessageId,
+              text: finalText.trim(),
             });
+            return;
+          } catch (err) {
+            logVerbose(
+              `slack: preview final edit failed; falling back to standard send (${String(err)})`,
+            );
           }
-        } catch (err) {
-          logVerbose(`slack: status_final completion update failed (${String(err)})`);
+        } else if (
+          previewStreamingEnabled &&
+          streamMode === "status_final" &&
+          hasStreamedMessage
+        ) {
+          try {
+            const statusChannelId = draftStream?.channelId();
+            const statusMessageId = draftStream?.messageId();
+            if (statusChannelId && statusMessageId) {
+              await ctx.app.client.chat.update({
+                token: ctx.botToken,
+                channel: statusChannelId,
+                ts: statusMessageId,
+                text: "Status: complete. Final answer posted below.",
+              });
+            }
+          } catch (err) {
+            logVerbose(
+              `slack: status_final completion update failed (${String(err)})`,
+            );
+          }
+        } else if (mediaCount > 0) {
+          await draftStream?.clear();
+          hasStreamedMessage = false;
         }
-      } else if (mediaCount > 0) {
-        await draftStream?.clear();
-        hasStreamedMessage = false;
-      }
 
-      await deliverNormally(payload);
-    },
-    onError: (err, info) => {
-      runtime.error?.(danger(`slack ${info.kind} reply failed: ${String(err)}`));
-      typingCallbacks.onIdle?.();
-    },
-  });
+        await deliverNormally(payload);
+      },
+      onError: (err, info) => {
+        runtime.error?.(
+          danger(`slack ${info.kind} reply failed: ${String(err)}`),
+        );
+        typingCallbacks.onIdle?.();
+      },
+    });
 
   const draftStream = createSlackDraftStream({
     target: prepared.replyTarget,
@@ -432,18 +464,25 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     try {
       await stopSlackStream({ session: finalStream });
     } catch (err) {
-      runtime.error?.(danger(`slack-stream: failed to stop stream: ${String(err)}`));
+      runtime.error?.(
+        danger(`slack-stream: failed to stop stream: ${String(err)}`),
+      );
     }
   }
 
-  const anyReplyDelivered = queuedFinal || (counts.block ?? 0) > 0 || (counts.final ?? 0) > 0;
+  const anyReplyDelivered =
+    queuedFinal || (counts.block ?? 0) > 0 || (counts.final ?? 0) > 0;
 
   // Record thread participation only when we actually delivered a reply and
   // know the thread ts that was used (set by deliverNormally, streaming start,
   // or draft stream). Falls back to statusThreadTs for edge cases.
   const participationThreadTs = usedReplyThreadTs ?? statusThreadTs;
   if (anyReplyDelivered && participationThreadTs) {
-    recordSlackThreadParticipation(account.accountId, message.channel, participationThreadTs);
+    recordSlackThreadParticipation(
+      account.accountId,
+      message.channel,
+      participationThreadTs,
+    );
   }
 
   if (!anyReplyDelivered) {

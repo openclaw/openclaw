@@ -1,8 +1,16 @@
 import { getChannelPlugin } from "../../../channels/plugins/index.js";
 import type { InboundDebounceByProvider } from "../../../config/types.messages.js";
 import { normalizeQueueDropPolicy, normalizeQueueMode } from "./normalize.js";
-import { DEFAULT_QUEUE_CAP, DEFAULT_QUEUE_DEBOUNCE_MS, DEFAULT_QUEUE_DROP } from "./state.js";
-import type { QueueMode, QueueSettings, ResolveQueueSettingsParams } from "./types.js";
+import {
+  DEFAULT_QUEUE_CAP,
+  DEFAULT_QUEUE_DEBOUNCE_MS,
+  DEFAULT_QUEUE_DROP,
+} from "./state.js";
+import type {
+  QueueMode,
+  QueueSettings,
+  ResolveQueueSettingsParams,
+} from "./types.js";
 
 function defaultQueueModeForChannel(_channel?: string): QueueMode {
   return "collect";
@@ -17,19 +25,27 @@ function resolveChannelDebounce(
     return undefined;
   }
   const value = byChannel[channelKey];
-  return typeof value === "number" && Number.isFinite(value) ? Math.max(0, value) : undefined;
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.max(0, value)
+    : undefined;
 }
 
-function resolvePluginDebounce(channelKey: string | undefined): number | undefined {
+function resolvePluginDebounce(
+  channelKey: string | undefined,
+): number | undefined {
   if (!channelKey) {
     return undefined;
   }
   const plugin = getChannelPlugin(channelKey);
   const value = plugin?.defaults?.queue?.debounceMs;
-  return typeof value === "number" && Number.isFinite(value) ? Math.max(0, value) : undefined;
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.max(0, value)
+    : undefined;
 }
 
-export function resolveQueueSettings(params: ResolveQueueSettingsParams): QueueSettings {
+export function resolveQueueSettings(
+  params: ResolveQueueSettingsParams,
+): QueueSettings {
   const channelKey = params.channel?.trim().toLowerCase();
   const queueCfg = params.cfg.messages?.queue;
   const providerModeRaw =
@@ -61,8 +77,10 @@ export function resolveQueueSettings(params: ResolveQueueSettingsParams): QueueS
     DEFAULT_QUEUE_DROP;
   return {
     mode: resolvedMode,
-    debounceMs: typeof debounceRaw === "number" ? Math.max(0, debounceRaw) : undefined,
-    cap: typeof capRaw === "number" ? Math.max(1, Math.floor(capRaw)) : undefined,
+    debounceMs:
+      typeof debounceRaw === "number" ? Math.max(0, debounceRaw) : undefined,
+    cap:
+      typeof capRaw === "number" ? Math.max(1, Math.floor(capRaw)) : undefined,
     dropPolicy: dropRaw,
   };
 }

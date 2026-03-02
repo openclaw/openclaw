@@ -9,15 +9,20 @@ import {
 } from "./skills-install.test-mocks.js";
 
 vi.mock("../process/exec.js", () => ({
-  runCommandWithTimeout: (...args: unknown[]) => runCommandWithTimeoutMock(...args),
+  runCommandWithTimeout: (...args: unknown[]) =>
+    runCommandWithTimeoutMock(...args),
 }));
 
 vi.mock("../security/skill-scanner.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../security/skill-scanner.js")>()),
-  scanDirectoryWithSummary: (...args: unknown[]) => scanDirectoryWithSummaryMock(...args),
+  scanDirectoryWithSummary: (...args: unknown[]) =>
+    scanDirectoryWithSummaryMock(...args),
 }));
 
-async function writeInstallableSkill(workspaceDir: string, name: string): Promise<string> {
+async function writeInstallableSkill(
+  workspaceDir: string,
+  name: string,
+): Promise<string> {
   const skillDir = path.join(workspaceDir, "skills", name);
   await fs.mkdir(skillDir, { recursive: true });
   await fs.writeFile(
@@ -51,7 +56,10 @@ describe("installSkill code safety scanning", () => {
 
   it("adds detailed warnings for critical findings and continues install", async () => {
     await withTempWorkspace(async ({ workspaceDir }) => {
-      const skillDir = await writeInstallableSkill(workspaceDir, "danger-skill");
+      const skillDir = await writeInstallableSkill(
+        workspaceDir,
+        "danger-skill",
+      );
       scanDirectoryWithSummaryMock.mockResolvedValue({
         scannedFiles: 1,
         critical: 1,
@@ -76,17 +84,23 @@ describe("installSkill code safety scanning", () => {
       });
 
       expect(result.ok).toBe(true);
-      expect(result.warnings?.some((warning) => warning.includes("dangerous code patterns"))).toBe(
-        true,
-      );
-      expect(result.warnings?.some((warning) => warning.includes("runner.js:1"))).toBe(true);
+      expect(
+        result.warnings?.some((warning) =>
+          warning.includes("dangerous code patterns"),
+        ),
+      ).toBe(true);
+      expect(
+        result.warnings?.some((warning) => warning.includes("runner.js:1")),
+      ).toBe(true);
     });
   });
 
   it("warns and continues when skill scan fails", async () => {
     await withTempWorkspace(async ({ workspaceDir }) => {
       await writeInstallableSkill(workspaceDir, "scanfail-skill");
-      scanDirectoryWithSummaryMock.mockRejectedValue(new Error("scanner exploded"));
+      scanDirectoryWithSummaryMock.mockRejectedValue(
+        new Error("scanner exploded"),
+      );
 
       const result = await installSkill({
         workspaceDir,
@@ -95,12 +109,16 @@ describe("installSkill code safety scanning", () => {
       });
 
       expect(result.ok).toBe(true);
-      expect(result.warnings?.some((warning) => warning.includes("code safety scan failed"))).toBe(
-        true,
-      );
-      expect(result.warnings?.some((warning) => warning.includes("Installation continues"))).toBe(
-        true,
-      );
+      expect(
+        result.warnings?.some((warning) =>
+          warning.includes("code safety scan failed"),
+        ),
+      ).toBe(true);
+      expect(
+        result.warnings?.some((warning) =>
+          warning.includes("Installation continues"),
+        ),
+      ).toBe(true);
     });
   });
 });

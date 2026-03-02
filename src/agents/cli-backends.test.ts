@@ -26,11 +26,17 @@ describe("resolveCliBackendConfig reliability merge", () => {
     const resolved = resolveCliBackendConfig("codex-cli", cfg);
 
     expect(resolved).not.toBeNull();
-    expect(resolved?.config.reliability?.watchdog?.resume?.noOutputTimeoutMs).toBe(42_000);
+    expect(
+      resolved?.config.reliability?.watchdog?.resume?.noOutputTimeoutMs,
+    ).toBe(42_000);
     // Ensure defaults are retained when only one field is overridden.
-    expect(resolved?.config.reliability?.watchdog?.resume?.noOutputTimeoutRatio).toBe(0.3);
+    expect(
+      resolved?.config.reliability?.watchdog?.resume?.noOutputTimeoutRatio,
+    ).toBe(0.3);
     expect(resolved?.config.reliability?.watchdog?.resume?.minMs).toBe(60_000);
     expect(resolved?.config.reliability?.watchdog?.resume?.maxMs).toBe(180_000);
-    expect(resolved?.config.reliability?.watchdog?.fresh?.noOutputTimeoutRatio).toBe(0.8);
+    expect(
+      resolved?.config.reliability?.watchdog?.fresh?.noOutputTimeoutRatio,
+    ).toBe(0.8);
   });
 });

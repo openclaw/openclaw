@@ -23,8 +23,13 @@ export function createSlackMessageHandler(params: {
   trackEvent?: () => void;
 }): SlackMessageHandler {
   const { ctx, account, trackEvent } = params;
-  const debounceMs = resolveInboundDebounceMs({ cfg: ctx.cfg, channel: "slack" });
-  const threadTsResolver = createSlackThreadTsResolver({ client: ctx.app.client });
+  const debounceMs = resolveInboundDebounceMs({
+    cfg: ctx.cfg,
+    channel: "slack",
+  });
+  const threadTsResolver = createSlackThreadTsResolver({
+    client: ctx.app.client,
+  });
 
   const debouncer = createInboundDebouncer<{
     message: SlackMessageEvent;
@@ -53,7 +58,8 @@ export function createSlackMessageHandler(params: {
       if (entry.message.files && entry.message.files.length > 0) {
         return false;
       }
-      const textForCommandDetection = stripSlackMentionsForCommandDetection(text);
+      const textForCommandDetection =
+        stripSlackMentionsForCommandDetection(text);
       return !hasControlCommand(textForCommandDetection, ctx.cfg);
     },
     onFlush: async (entries) => {
@@ -68,7 +74,9 @@ export function createSlackMessageHandler(params: {
               .map((entry) => entry.message.text ?? "")
               .filter(Boolean)
               .join("\n");
-      const combinedMentioned = entries.some((entry) => Boolean(entry.opts.wasMentioned));
+      const combinedMentioned = entries.some((entry) =>
+        Boolean(entry.opts.wasMentioned),
+      );
       const syntheticMessage: SlackMessageEvent = {
         ...last.message,
         text: combinedText,
@@ -86,7 +94,9 @@ export function createSlackMessageHandler(params: {
         return;
       }
       if (entries.length > 1) {
-        const ids = entries.map((entry) => entry.message.ts).filter(Boolean) as string[];
+        const ids = entries
+          .map((entry) => entry.message.ts)
+          .filter(Boolean) as string[];
         if (ids.length > 0) {
           prepared.ctxPayload.MessageSids = ids;
           prepared.ctxPayload.MessageSidFirst = ids[0];
@@ -96,7 +106,9 @@ export function createSlackMessageHandler(params: {
       await dispatchPreparedSlackMessage(prepared);
     },
     onError: (err) => {
-      ctx.runtime.error?.(`slack inbound debounce flush failed: ${String(err)}`);
+      ctx.runtime.error?.(
+        `slack inbound debounce flush failed: ${String(err)}`,
+      );
     },
   });
 
@@ -116,7 +128,10 @@ export function createSlackMessageHandler(params: {
       return;
     }
     trackEvent?.();
-    const resolvedMessage = await threadTsResolver.resolve({ message, source: opts.source });
+    const resolvedMessage = await threadTsResolver.resolve({
+      message,
+      source: opts.source,
+    });
     await debouncer.enqueue({ message: resolvedMessage, opts });
   };
 }

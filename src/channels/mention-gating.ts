@@ -27,11 +27,14 @@ export type MentionGateWithBypassResult = MentionGateResult & {
   shouldBypassMention: boolean;
 };
 
-export function resolveMentionGating(params: MentionGateParams): MentionGateResult {
+export function resolveMentionGating(
+  params: MentionGateParams,
+): MentionGateResult {
   const implicit = params.implicitMention === true;
   const bypass = params.shouldBypassMention === true;
   const effectiveWasMentioned = params.wasMentioned || implicit || bypass;
-  const shouldSkip = params.requireMention && params.canDetectMention && !effectiveWasMentioned;
+  const shouldSkip =
+    params.requireMention && params.canDetectMention && !effectiveWasMentioned;
   return { effectiveWasMentioned, shouldSkip };
 }
 

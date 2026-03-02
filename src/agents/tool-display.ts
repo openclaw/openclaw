@@ -31,11 +31,16 @@ export type ToolDisplay = {
   detail?: string;
 };
 
-const SHARED_TOOL_DISPLAY_CONFIG = SHARED_TOOL_DISPLAY_JSON as ToolDisplayConfig;
+const SHARED_TOOL_DISPLAY_CONFIG =
+  SHARED_TOOL_DISPLAY_JSON as ToolDisplayConfig;
 const TOOL_DISPLAY_OVERRIDES = TOOL_DISPLAY_OVERRIDES_JSON as ToolDisplayConfig;
 const FALLBACK = TOOL_DISPLAY_OVERRIDES.fallback ??
   SHARED_TOOL_DISPLAY_CONFIG.fallback ?? { emoji: "🧩" };
-const TOOL_MAP = Object.assign({}, SHARED_TOOL_DISPLAY_CONFIG.tools, TOOL_DISPLAY_OVERRIDES.tools);
+const TOOL_MAP = Object.assign(
+  {},
+  SHARED_TOOL_DISPLAY_CONFIG.tools,
+  TOOL_DISPLAY_OVERRIDES.tools,
+);
 const DETAIL_LABEL_OVERRIDES: Record<string, string> = {
   agentId: "agent",
   sessionKey: "session",
@@ -95,7 +100,9 @@ export function resolveToolDisplay(params: {
 }
 
 export function formatToolDetail(display: ToolDisplay): string | undefined {
-  const detailRaw = display.detail ? redactToolDetail(display.detail) : undefined;
+  const detailRaw = display.detail
+    ? redactToolDetail(display.detail)
+    : undefined;
   return formatToolDetailText(detailRaw, { prefixWithWith: true });
 }
 

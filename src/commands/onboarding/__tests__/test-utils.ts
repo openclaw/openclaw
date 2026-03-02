@@ -2,7 +2,9 @@ import { vi } from "vitest";
 import type { RuntimeEnv } from "../../../runtime.js";
 import type { WizardPrompter } from "../../../wizard/prompts.js";
 
-export const makeRuntime = (overrides: Partial<RuntimeEnv> = {}): RuntimeEnv => ({
+export const makeRuntime = (
+  overrides: Partial<RuntimeEnv> = {},
+): RuntimeEnv => ({
   log: vi.fn(),
   error: vi.fn(),
   exit: vi.fn((code: number) => {
@@ -11,7 +13,9 @@ export const makeRuntime = (overrides: Partial<RuntimeEnv> = {}): RuntimeEnv => 
   ...overrides,
 });
 
-export const makePrompter = (overrides: Partial<WizardPrompter> = {}): WizardPrompter => ({
+export const makePrompter = (
+  overrides: Partial<WizardPrompter> = {},
+): WizardPrompter => ({
   intro: vi.fn(async () => {}),
   outro: vi.fn(async () => {}),
   note: vi.fn(async () => {}),

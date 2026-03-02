@@ -1,5 +1,8 @@
 import { formatCliCommand } from "../../cli/command-format.js";
-import { SYSTEM_MARK, prefixSystemMessage } from "../../infra/system-message.js";
+import {
+  SYSTEM_MARK,
+  prefixSystemMessage,
+} from "../../infra/system-message.js";
 import type { ElevatedLevel, ReasoningLevel } from "./directives.js";
 
 export const formatDirectiveAck = (text: string): string => {
@@ -34,21 +37,29 @@ export const formatReasoningEvent = (level: ReasoningLevel) => {
 };
 
 export function enqueueModeSwitchEvents(params: {
-  enqueueSystemEvent: (text: string, meta: { sessionKey: string; contextKey: string }) => void;
-  sessionEntry: { elevatedLevel?: string | null; reasoningLevel?: string | null };
+  enqueueSystemEvent: (
+    text: string,
+    meta: { sessionKey: string; contextKey: string },
+  ) => void;
+  sessionEntry: {
+    elevatedLevel?: string | null;
+    reasoningLevel?: string | null;
+  };
   sessionKey: string;
   elevatedChanged?: boolean;
   reasoningChanged?: boolean;
 }): void {
   if (params.elevatedChanged) {
-    const nextElevated = (params.sessionEntry.elevatedLevel ?? "off") as ElevatedLevel;
+    const nextElevated = (params.sessionEntry.elevatedLevel ??
+      "off") as ElevatedLevel;
     params.enqueueSystemEvent(formatElevatedEvent(nextElevated), {
       sessionKey: params.sessionKey,
       contextKey: "mode:elevated",
     });
   }
   if (params.reasoningChanged) {
-    const nextReasoning = (params.sessionEntry.reasoningLevel ?? "off") as ReasoningLevel;
+    const nextReasoning = (params.sessionEntry.reasoningLevel ??
+      "off") as ReasoningLevel;
     params.enqueueSystemEvent(formatReasoningEvent(nextReasoning), {
       sessionKey: params.sessionKey,
       contextKey: "mode:reasoning",
@@ -67,7 +78,9 @@ export function formatElevatedUnavailableText(params: {
   );
   const failures = params.failures ?? [];
   if (failures.length > 0) {
-    lines.push(`Failing gates: ${failures.map((f) => `${f.gate} (${f.key})`).join(", ")}`);
+    lines.push(
+      `Failing gates: ${failures.map((f) => `${f.gate} (${f.key})`).join(", ")}`,
+    );
   } else {
     lines.push(
       "Fix-it keys: tools.elevated.enabled, tools.elevated.allowFrom.<provider>, agents.list[].tools.elevated.*",

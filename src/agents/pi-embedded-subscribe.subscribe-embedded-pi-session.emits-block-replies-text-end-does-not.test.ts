@@ -9,7 +9,9 @@ import {
 describe("subscribeEmbeddedPiSession", () => {
   it("emits block replies on text_end and does not duplicate on message_end", () => {
     const onBlockReply = vi.fn();
-    const { emit, subscription } = createTextEndBlockReplyHarness({ onBlockReply });
+    const { emit, subscription } = createTextEndBlockReplyHarness({
+      onBlockReply,
+    });
 
     emitAssistantTextDelta({ emit, delta: "Hello block" });
     emitAssistantTextEnd({ emit });
@@ -31,7 +33,9 @@ describe("subscribeEmbeddedPiSession", () => {
   });
   it("does not duplicate when message_end flushes and a late text_end arrives", () => {
     const onBlockReply = vi.fn();
-    const { emit, subscription } = createTextEndBlockReplyHarness({ onBlockReply });
+    const { emit, subscription } = createTextEndBlockReplyHarness({
+      onBlockReply,
+    });
 
     emit({ type: "message_start", message: { role: "assistant" } });
 

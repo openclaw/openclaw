@@ -2,7 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
-import { seedMainSessionStore, withTempHeartbeatSandbox } from "./heartbeat-runner.test-utils.js";
+import {
+  seedMainSessionStore,
+  withTempHeartbeatSandbox,
+} from "./heartbeat-runner.test-utils.js";
 
 // Avoid pulling optional runtime deps during isolated runs.
 vi.mock("jiti", () => ({ createJiti: () => () => ({}) }));
@@ -33,11 +36,13 @@ describe("runHeartbeatOnce", () => {
           lastTo: "1644620762",
         });
 
-        replySpy.mockImplementation(async (ctx: { To?: string; From?: string }) => {
-          expect(ctx.To).toBe("C0A9P2N8QHY");
-          expect(ctx.From).toBe("C0A9P2N8QHY");
-          return { text: "ok" };
-        });
+        replySpy.mockImplementation(
+          async (ctx: { To?: string; From?: string }) => {
+            expect(ctx.To).toBe("C0A9P2N8QHY");
+            expect(ctx.From).toBe("C0A9P2N8QHY");
+            return { text: "ok" };
+          },
+        );
 
         const sendSlack = vi.fn().mockResolvedValue({
           messageId: "m1",

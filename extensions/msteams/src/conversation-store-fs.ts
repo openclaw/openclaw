@@ -8,7 +8,10 @@ import { readJsonFile, withFileLock, writeJsonFile } from "./store-fs.js";
 
 type ConversationStoreData = {
   version: 1;
-  conversations: Record<string, StoredConversationReference & { lastSeenAt?: string }>;
+  conversations: Record<
+    string,
+    StoredConversationReference & { lastSeenAt?: string }
+  >;
 };
 
 const STORE_FILENAME = "msteams-conversations.json";
@@ -27,7 +30,10 @@ function parseTimestamp(value: string | undefined): number | null {
 }
 
 function pruneToLimit(
-  conversations: Record<string, StoredConversationReference & { lastSeenAt?: string }>,
+  conversations: Record<
+    string,
+    StoredConversationReference & { lastSeenAt?: string }
+  >,
 ) {
   const entries = Object.entries(conversations);
   if (entries.length <= MAX_CONVERSATIONS) {
@@ -45,7 +51,10 @@ function pruneToLimit(
 }
 
 function pruneExpired(
-  conversations: Record<string, StoredConversationReference & { lastSeenAt?: string }>,
+  conversations: Record<
+    string,
+    StoredConversationReference & { lastSeenAt?: string }
+  >,
   nowMs: number,
   ttlMs: number,
 ) {
@@ -86,7 +95,10 @@ export function createMSTeamsConversationStoreFs(params?: {
   const empty: ConversationStoreData = { version: 1, conversations: {} };
 
   const readStore = async (): Promise<ConversationStoreData> => {
-    const { value } = await readJsonFile<ConversationStoreData>(filePath, empty);
+    const { value } = await readJsonFile<ConversationStoreData>(
+      filePath,
+      empty,
+    );
     if (
       value.version !== 1 ||
       !value.conversations ||
@@ -96,24 +108,34 @@ export function createMSTeamsConversationStoreFs(params?: {
       return empty;
     }
     const nowMs = Date.now();
-    const pruned = pruneExpired(value.conversations, nowMs, ttlMs).conversations;
+    const pruned = pruneExpired(
+      value.conversations,
+      nowMs,
+      ttlMs,
+    ).conversations;
     return { version: 1, conversations: pruneToLimit(pruned) };
   };
 
   const list = async (): Promise<MSTeamsConversationStoreEntry[]> => {
     const store = await readStore();
-    return Object.entries(store.conversations).map(([conversationId, reference]) => ({
-      conversationId,
-      reference,
-    }));
+    return Object.entries(store.conversations).map(
+      ([conversationId, reference]) => ({
+        conversationId,
+        reference,
+      }),
+    );
   };
 
-  const get = async (conversationId: string): Promise<StoredConversationReference | null> => {
+  const get = async (
+    conversationId: string,
+  ): Promise<StoredConversationReference | null> => {
     const store = await readStore();
     return store.conversations[normalizeConversationId(conversationId)] ?? null;
   };
 
-  const findByUserId = async (id: string): Promise<MSTeamsConversationStoreEntry | null> => {
+  const findByUserId = async (
+    id: string,
+  ): Promise<MSTeamsConversationStoreEntry | null> => {
     const target = id.trim();
     if (!target) {
       return null;
@@ -142,7 +164,11 @@ export function createMSTeamsConversationStoreFs(params?: {
         lastSeenAt: new Date().toISOString(),
       };
       const nowMs = Date.now();
-      store.conversations = pruneExpired(store.conversations, nowMs, ttlMs).conversations;
+      store.conversations = pruneExpired(
+        store.conversations,
+        nowMs,
+        ttlMs,
+      ).conversations;
       store.conversations = pruneToLimit(store.conversations);
       await writeJsonFile(filePath, store);
     });

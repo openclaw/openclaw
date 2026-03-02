@@ -11,18 +11,36 @@ import {
   setThreadBindingMaxAgeBySessionKey,
 } from "../../discord/monitor/thread-bindings.js";
 import { logVerbose } from "../../globals.js";
-import { scheduleGatewaySigusr1Restart, triggerOpenClawRestart } from "../../infra/restart.js";
-import { loadCostUsageSummary, loadSessionCostSummary } from "../../infra/session-cost-usage.js";
+import {
+  scheduleGatewaySigusr1Restart,
+  triggerOpenClawRestart,
+} from "../../infra/restart.js";
+import {
+  loadCostUsageSummary,
+  loadSessionCostSummary,
+} from "../../infra/session-cost-usage.js";
 import { formatTokenCount, formatUsd } from "../../utils/usage-format.js";
 import { parseActivationCommand } from "../group-activation.js";
 import { parseSendPolicyCommand } from "../send-policy.js";
-import { normalizeUsageDisplay, resolveResponseUsageMode } from "../thinking.js";
-import { handleAbortTrigger, handleStopCommand } from "./commands-session-abort.js";
+import {
+  normalizeUsageDisplay,
+  resolveResponseUsageMode,
+} from "../thinking.js";
+import {
+  handleAbortTrigger,
+  handleStopCommand,
+} from "./commands-session-abort.js";
 import { persistSessionEntry } from "./commands-session-store.js";
 import type { CommandHandler } from "./commands-types.js";
 
 const SESSION_COMMAND_PREFIX = "/session";
-const SESSION_DURATION_OFF_VALUES = new Set(["off", "disable", "disabled", "none", "0"]);
+const SESSION_DURATION_OFF_VALUES = new Set([
+  "off",
+  "disable",
+  "disabled",
+  "none",
+  "0",
+]);
 const SESSION_ACTION_IDLE = "idle";
 const SESSION_ACTION_MAX_AGE = "max-age";
 
@@ -39,8 +57,11 @@ function isDiscordSurface(params: Parameters<CommandHandler>[0]): boolean {
   );
 }
 
-function resolveDiscordAccountId(params: Parameters<CommandHandler>[0]): string {
-  const accountId = typeof params.ctx.AccountId === "string" ? params.ctx.AccountId.trim() : "";
+function resolveDiscordAccountId(
+  params: Parameters<CommandHandler>[0],
+): string {
+  const accountId =
+    typeof params.ctx.AccountId === "string" ? params.ctx.AccountId.trim() : "";
   return accountId || "default";
 }
 
@@ -70,11 +91,16 @@ function formatSessionExpiry(expiresAt: number) {
   return new Date(expiresAt).toISOString();
 }
 
-export const handleActivationCommand: CommandHandler = async (params, allowTextCommands) => {
+export const handleActivationCommand: CommandHandler = async (
+  params,
+  allowTextCommands,
+) => {
   if (!allowTextCommands) {
     return null;
   }
-  const activationCommand = parseActivationCommand(params.command.commandBodyNormalized);
+  const activationCommand = parseActivationCommand(
+    params.command.commandBodyNormalized,
+  );
   if (!activationCommand.hasCommand) {
     return null;
   }
@@ -109,11 +135,16 @@ export const handleActivationCommand: CommandHandler = async (params, allowTextC
   };
 };
 
-export const handleSendPolicyCommand: CommandHandler = async (params, allowTextCommands) => {
+export const handleSendPolicyCommand: CommandHandler = async (
+  params,
+  allowTextCommands,
+) => {
   if (!allowTextCommands) {
     return null;
   }
-  const sendPolicyCommand = parseSendPolicyCommand(params.command.commandBodyNormalized);
+  const sendPolicyCommand = parseSendPolicyCommand(
+    params.command.commandBodyNormalized,
+  );
   if (!sendPolicyCommand.hasCommand) {
     return null;
   }
@@ -149,7 +180,10 @@ export const handleSendPolicyCommand: CommandHandler = async (params, allowTextC
   };
 };
 
-export const handleUsageCommand: CommandHandler = async (params, allowTextCommands) => {
+export const handleUsageCommand: CommandHandler = async (
+  params,
+  allowTextCommands,
+) => {
   if (!allowTextCommands) {
     return null;
   }
@@ -164,7 +198,8 @@ export const handleUsageCommand: CommandHandler = async (params, allowTextComman
     return { shouldContinue: false };
   }
 
-  const rawArgs = normalized === "/usage" ? "" : normalized.slice("/usage".length).trim();
+  const rawArgs =
+    normalized === "/usage" ? "" : normalized.slice("/usage".length).trim();
   const requested = rawArgs ? normalizeUsageDisplay(rawArgs) : undefined;
   if (rawArgs.toLowerCase().startsWith("cost")) {
     const sessionSummary = await loadSessionCostSummary({
@@ -174,7 +209,10 @@ export const handleUsageCommand: CommandHandler = async (params, allowTextComman
       config: params.cfg,
       agentId: params.agentId,
     });
-    const summary = await loadCostUsageSummary({ days: 30, config: params.cfg });
+    const summary = await loadCostUsageSummary({
+      days: 30,
+      config: params.cfg,
+    });
 
     const sessionCost = formatUsd(sessionSummary?.totalCost);
     const sessionTokens = sessionSummary?.totalTokens
@@ -201,7 +239,9 @@ export const handleUsageCommand: CommandHandler = async (params, allowTextComman
 
     return {
       shouldContinue: false,
-      reply: { text: `💸 Usage cost\n${sessionLine}\n${todayLine}\n${last30Line}` },
+      reply: {
+        text: `💸 Usage cost\n${sessionLine}\n${todayLine}\n${last30Line}`,
+      },
     };
   }
 
@@ -214,9 +254,13 @@ export const handleUsageCommand: CommandHandler = async (params, allowTextComman
 
   const currentRaw =
     params.sessionEntry?.responseUsage ??
-    (params.sessionKey ? params.sessionStore?.[params.sessionKey]?.responseUsage : undefined);
+    (params.sessionKey
+      ? params.sessionStore?.[params.sessionKey]?.responseUsage
+      : undefined);
   const current = resolveResponseUsageMode(currentRaw);
-  const next = requested ?? (current === "off" ? "tokens" : current === "tokens" ? "full" : "off");
+  const next =
+    requested ??
+    (current === "off" ? "tokens" : current === "tokens" ? "full" : "off");
 
   if (params.sessionEntry && params.sessionStore && params.sessionKey) {
     if (next === "off") {
@@ -235,7 +279,10 @@ export const handleUsageCommand: CommandHandler = async (params, allowTextComman
   };
 };
 
-export const handleSessionCommand: CommandHandler = async (params, allowTextCommands) => {
+export const handleSessionCommand: CommandHandler = async (
+  params,
+  allowTextCommands,
+) => {
   if (!allowTextCommands) {
     return null;
   }
@@ -270,7 +317,9 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
   }
 
   const threadId =
-    params.ctx.MessageThreadId != null ? String(params.ctx.MessageThreadId).trim() : "";
+    params.ctx.MessageThreadId != null
+      ? String(params.ctx.MessageThreadId).trim()
+      : "";
   if (!threadId) {
     return {
       shouldContinue: false,
@@ -285,7 +334,9 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
   if (!threadBindings) {
     return {
       shouldContinue: false,
-      reply: { text: "⚠️ Discord thread bindings are unavailable for this account." },
+      reply: {
+        text: "⚠️ Discord thread bindings are unavailable for this account.",
+      },
     };
   }
 
@@ -331,7 +382,9 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
       }
       return {
         shouldContinue: false,
-        reply: { text: "ℹ️ Idle timeout is currently disabled for this focused session." },
+        reply: {
+          text: "ℹ️ Idle timeout is currently disabled for this focused session.",
+        },
       };
     }
 
@@ -349,12 +402,19 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
     }
     return {
       shouldContinue: false,
-      reply: { text: "ℹ️ Max age is currently disabled for this focused session." },
+      reply: {
+        text: "ℹ️ Max age is currently disabled for this focused session.",
+      },
     };
   }
 
   const senderId = params.command.senderId?.trim() || "";
-  if (binding.boundBy && binding.boundBy !== "system" && senderId && senderId !== binding.boundBy) {
+  if (
+    binding.boundBy &&
+    binding.boundBy !== "system" &&
+    senderId &&
+    senderId !== binding.boundBy
+  ) {
     return {
       shouldContinue: false,
       reply: {
@@ -435,7 +495,10 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
     },
   };
 };
-export const handleRestartCommand: CommandHandler = async (params, allowTextCommands) => {
+export const handleRestartCommand: CommandHandler = async (
+  params,
+  allowTextCommands,
+) => {
   if (!allowTextCommands) {
     return null;
   }
@@ -468,7 +531,9 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
   }
   const restartMethod = triggerOpenClawRestart();
   if (!restartMethod.ok) {
-    const detail = restartMethod.detail ? ` Details: ${restartMethod.detail}` : "";
+    const detail = restartMethod.detail
+      ? ` Details: ${restartMethod.detail}`
+      : "";
     return {
       shouldContinue: false,
       reply: {

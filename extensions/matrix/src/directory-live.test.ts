@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { listMatrixDirectoryGroupsLive, listMatrixDirectoryPeersLive } from "./directory-live.js";
+import {
+  listMatrixDirectoryGroupsLive,
+  listMatrixDirectoryPeersLive,
+} from "./directory-live.js";
 import { resolveMatrixAuth } from "./matrix/client.js";
 
 vi.mock("./matrix/client.js", () => ({
@@ -38,7 +41,10 @@ describe("matrix directory live", () => {
       limit: 10,
     });
 
-    expect(resolveMatrixAuth).toHaveBeenCalledWith({ cfg, accountId: "assistant" });
+    expect(resolveMatrixAuth).toHaveBeenCalledWith({
+      cfg,
+      accountId: "assistant",
+    });
   });
 
   it("passes accountId to group directory auth resolution", async () => {
@@ -49,7 +55,10 @@ describe("matrix directory live", () => {
       limit: 10,
     });
 
-    expect(resolveMatrixAuth).toHaveBeenCalledWith({ cfg, accountId: "assistant" });
+    expect(resolveMatrixAuth).toHaveBeenCalledWith({
+      cfg,
+      accountId: "assistant",
+    });
   });
 
   it("returns no peer results for empty query without resolving auth", async () => {

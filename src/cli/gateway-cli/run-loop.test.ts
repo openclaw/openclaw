@@ -10,10 +10,16 @@ const isGatewaySigusr1RestartExternallyAllowed = vi.fn(() => false);
 const markGatewaySigusr1RestartHandled = vi.fn();
 const getActiveTaskCount = vi.fn(() => 0);
 const markGatewayDraining = vi.fn();
-const waitForActiveTasks = vi.fn(async (_timeoutMs: number) => ({ drained: true }));
+const waitForActiveTasks = vi.fn(async (_timeoutMs: number) => ({
+  drained: true,
+}));
 const resetAllLanes = vi.fn();
 const restartGatewayProcessWithFreshPid = vi.fn<
-  () => { mode: "spawned" | "supervised" | "disabled" | "failed"; pid?: number; detail?: string }
+  () => {
+    mode: "spawned" | "supervised" | "disabled" | "failed";
+    pid?: number;
+    detail?: string;
+  }
 >(() => ({ mode: "disabled" }));
 const DRAIN_TIMEOUT_LOG = "drain timeout reached; proceeding with restart";
 const gatewayLog = {
@@ -27,8 +33,10 @@ vi.mock("../../infra/gateway-lock.js", () => ({
 }));
 
 vi.mock("../../infra/restart.js", () => ({
-  consumeGatewaySigusr1RestartAuthorization: () => consumeGatewaySigusr1RestartAuthorization(),
-  isGatewaySigusr1RestartExternallyAllowed: () => isGatewaySigusr1RestartExternallyAllowed(),
+  consumeGatewaySigusr1RestartAuthorization: () =>
+    consumeGatewaySigusr1RestartAuthorization(),
+  isGatewaySigusr1RestartExternallyAllowed: () =>
+    isGatewaySigusr1RestartExternallyAllowed(),
   markGatewaySigusr1RestartHandled: () => markGatewaySigusr1RestartHandled(),
 }));
 
@@ -63,7 +71,9 @@ async function withIsolatedSignals(run: () => Promise<void>) {
   const beforeSigterm = new Set(
     process.listeners("SIGTERM") as Array<(...args: unknown[]) => void>,
   );
-  const beforeSigint = new Set(process.listeners("SIGINT") as Array<(...args: unknown[]) => void>);
+  const beforeSigint = new Set(
+    process.listeners("SIGINT") as Array<(...args: unknown[]) => void>,
+  );
   const beforeSigusr1 = new Set(
     process.listeners("SIGUSR1") as Array<(...args: unknown[]) => void>,
   );
@@ -119,7 +129,9 @@ async function runLoopWithStart(params: {
   vi.resetModules();
   const { runGatewayLoop } = await import("./run-loop.js");
   const loopPromise = runGatewayLoop({
-    start: params.start as unknown as Parameters<typeof runGatewayLoop>[0]["start"],
+    start: params.start as unknown as Parameters<
+      typeof runGatewayLoop
+    >[0]["start"],
     runtime: params.runtime,
     lockPort: params.lockPort,
   });
@@ -166,7 +178,10 @@ describe("runGatewayLoop", () => {
       waitForActiveTasks.mockResolvedValueOnce({ drained: false });
 
       type StartServer = () => Promise<{
-        close: (opts: { reason: string; restartExpectedMs: number | null }) => Promise<void>;
+        close: (opts: {
+          reason: string;
+          restartExpectedMs: number | null;
+        }) => Promise<void>;
       }>;
 
       const closeFirst = vi.fn(async () => {});
@@ -200,8 +215,12 @@ describe("runGatewayLoop", () => {
         exit: vi.fn(),
       };
       const loopPromise = runGatewayLoop({
-        start: start as unknown as Parameters<typeof runGatewayLoop>[0]["start"],
-        runtime: runtime as unknown as Parameters<typeof runGatewayLoop>[0]["runtime"],
+        start: start as unknown as Parameters<
+          typeof runGatewayLoop
+        >[0]["start"],
+        runtime: runtime as unknown as Parameters<
+          typeof runGatewayLoop
+        >[0]["runtime"],
       });
 
       await startedFirst;
@@ -254,7 +273,8 @@ describe("runGatewayLoop", () => {
       });
 
       const exitCallOrder: string[] = [];
-      const { runtime, exited } = await createSignaledLoopHarness(exitCallOrder);
+      const { runtime, exited } =
+        await createSignaledLoopHarness(exitCallOrder);
       lockRelease.mockImplementation(async () => {
         exitCallOrder.push("lockRelease");
       });
@@ -274,7 +294,9 @@ describe("runGatewayLoop", () => {
     await withIsolatedSignals(async () => {
       const closeFirst = vi.fn(async () => {});
       const closeSecond = vi.fn(async () => {});
-      restartGatewayProcessWithFreshPid.mockReturnValueOnce({ mode: "disabled" });
+      restartGatewayProcessWithFreshPid.mockReturnValueOnce({
+        mode: "disabled",
+      });
 
       const start = vi
         .fn()
@@ -284,8 +306,12 @@ describe("runGatewayLoop", () => {
       const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
       const { runGatewayLoop } = await import("./run-loop.js");
       const loopPromise = runGatewayLoop({
-        start: start as unknown as Parameters<typeof runGatewayLoop>[0]["start"],
-        runtime: runtime as unknown as Parameters<typeof runGatewayLoop>[0]["runtime"],
+        start: start as unknown as Parameters<
+          typeof runGatewayLoop
+        >[0]["start"],
+        runtime: runtime as unknown as Parameters<
+          typeof runGatewayLoop
+        >[0]["runtime"],
         lockPort: 18789,
       });
 
@@ -323,7 +349,9 @@ describe("runGatewayLoop", () => {
       expect(acquireGatewayLock).toHaveBeenCalledTimes(2);
       expect(start).toHaveBeenCalledTimes(1);
       expect(gatewayLog.error).toHaveBeenCalledWith(
-        expect.stringContaining("failed to reacquire gateway lock for in-process restart"),
+        expect.stringContaining(
+          "failed to reacquire gateway lock for in-process restart",
+        ),
       );
     });
   });

@@ -1,6 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
-import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
+import {
+  CURRENT_SESSION_VERSION,
+  SessionManager,
+} from "@mariozechner/pi-coding-agent";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { resolveDefaultSessionStorePath } from "./paths.js";
 import { resolveAndPersistSessionFile } from "./session-file.js";
@@ -65,7 +68,9 @@ async function ensureSessionHeader(params: {
   if (fs.existsSync(params.sessionFile)) {
     return;
   }
-  await fs.promises.mkdir(path.dirname(params.sessionFile), { recursive: true });
+  await fs.promises.mkdir(path.dirname(params.sessionFile), {
+    recursive: true,
+  });
   const header = {
     type: "session",
     version: CURRENT_SESSION_VERSION,
@@ -73,10 +78,14 @@ async function ensureSessionHeader(params: {
     timestamp: new Date().toISOString(),
     cwd: process.cwd(),
   };
-  await fs.promises.writeFile(params.sessionFile, `${JSON.stringify(header)}\n`, {
-    encoding: "utf-8",
-    mode: 0o600,
-  });
+  await fs.promises.writeFile(
+    params.sessionFile,
+    `${JSON.stringify(header)}\n`,
+    {
+      encoding: "utf-8",
+      mode: 0o600,
+    },
+  );
 }
 
 export async function appendAssistantMessageToSessionTranscript(params: {
@@ -100,7 +109,8 @@ export async function appendAssistantMessageToSessionTranscript(params: {
     return { ok: false, reason: "empty text" };
   }
 
-  const storePath = params.storePath ?? resolveDefaultSessionStorePath(params.agentId);
+  const storePath =
+    params.storePath ?? resolveDefaultSessionStorePath(params.agentId);
   const store = loadSessionStore(storePath, { skipCache: true });
   const entry = store[sessionKey] as SessionEntry | undefined;
   if (!entry?.sessionId) {

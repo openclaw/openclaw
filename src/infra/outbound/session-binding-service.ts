@@ -63,13 +63,18 @@ export class SessionBindingError extends Error {
   }
 }
 
-export function isSessionBindingError(error: unknown): error is SessionBindingError {
+export function isSessionBindingError(
+  error: unknown,
+): error is SessionBindingError {
   return error instanceof SessionBindingError;
 }
 
 export type SessionBindingService = {
   bind: (input: SessionBindingBindInput) => Promise<SessionBindingRecord>;
-  getCapabilities: (params: { channel: string; accountId: string }) => SessionBindingCapabilities;
+  getCapabilities: (params: {
+    channel: string;
+    accountId: string;
+  }) => SessionBindingCapabilities;
   listBySession: (targetSessionKey: string) => SessionBindingRecord[];
   resolveByConversation: (ref: ConversationRef) => SessionBindingRecord | null;
   touch: (bindingId: string, at?: number) => void;
@@ -86,11 +91,15 @@ export type SessionBindingAdapter = {
   channel: string;
   accountId: string;
   capabilities?: SessionBindingAdapterCapabilities;
-  bind?: (input: SessionBindingBindInput) => Promise<SessionBindingRecord | null>;
+  bind?: (
+    input: SessionBindingBindInput,
+  ) => Promise<SessionBindingRecord | null>;
   listBySession: (targetSessionKey: string) => SessionBindingRecord[];
   resolveByConversation: (ref: ConversationRef) => SessionBindingRecord | null;
   touch?: (bindingId: string, at?: number) => void;
-  unbind?: (input: SessionBindingUnbindInput) => Promise<SessionBindingRecord[]>;
+  unbind?: (
+    input: SessionBindingUnbindInput,
+  ) => Promise<SessionBindingRecord[]>;
 };
 
 function normalizeConversationRef(ref: ConversationRef): ConversationRef {
@@ -114,10 +123,14 @@ function inferDefaultPlacement(ref: ConversationRef): SessionBindingPlacement {
   return ref.conversationId ? "current" : "child";
 }
 
-function resolveAdapterPlacements(adapter: SessionBindingAdapter): SessionBindingPlacement[] {
-  const configured = adapter.capabilities?.placements?.map((value) => normalizePlacement(value));
-  const placements = configured?.filter((value): value is SessionBindingPlacement =>
-    Boolean(value),
+function resolveAdapterPlacements(
+  adapter: SessionBindingAdapter,
+): SessionBindingPlacement[] {
+  const configured = adapter.capabilities?.placements?.map((value) =>
+    normalizePlacement(value),
+  );
+  const placements = configured?.filter(
+    (value): value is SessionBindingPlacement => Boolean(value),
   );
   if (placements && placements.length > 0) {
     return [...new Set(placements)];
@@ -136,18 +149,22 @@ function resolveAdapterCapabilities(
       placements: [],
     };
   }
-  const bindSupported = adapter.capabilities?.bindSupported ?? Boolean(adapter.bind);
+  const bindSupported =
+    adapter.capabilities?.bindSupported ?? Boolean(adapter.bind);
   return {
     adapterAvailable: true,
     bindSupported,
-    unbindSupported: adapter.capabilities?.unbindSupported ?? Boolean(adapter.unbind),
+    unbindSupported:
+      adapter.capabilities?.unbindSupported ?? Boolean(adapter.unbind),
     placements: bindSupported ? resolveAdapterPlacements(adapter) : [],
   };
 }
 
 const ADAPTERS_BY_CHANNEL_ACCOUNT = new Map<string, SessionBindingAdapter>();
 
-export function registerSessionBindingAdapter(adapter: SessionBindingAdapter): void {
+export function registerSessionBindingAdapter(
+  adapter: SessionBindingAdapter,
+): void {
   const key = toAdapterKey({
     channel: adapter.channel,
     accountId: adapter.accountId,
@@ -166,7 +183,9 @@ export function unregisterSessionBindingAdapter(params: {
   ADAPTERS_BY_CHANNEL_ACCOUNT.delete(toAdapterKey(params));
 }
 
-function resolveAdapterForConversation(ref: ConversationRef): SessionBindingAdapter | null {
+function resolveAdapterForConversation(
+  ref: ConversationRef,
+): SessionBindingAdapter | null {
   return resolveAdapterForChannelAccount({
     channel: ref.channel,
     accountId: ref.accountId,
@@ -184,7 +203,9 @@ function resolveAdapterForChannelAccount(params: {
   return ADAPTERS_BY_CHANNEL_ACCOUNT.get(key) ?? null;
 }
 
-function dedupeBindings(records: SessionBindingRecord[]): SessionBindingRecord[] {
+function dedupeBindings(
+  records: SessionBindingRecord[],
+): SessionBindingRecord[] {
   const byId = new Map<string, SessionBindingRecord>();
   for (const record of records) {
     if (!record?.bindingId) {
@@ -198,7 +219,9 @@ function dedupeBindings(records: SessionBindingRecord[]): SessionBindingRecord[]
 function createDefaultSessionBindingService(): SessionBindingService {
   return {
     bind: async (input) => {
-      const normalizedConversation = normalizeConversationRef(input.conversation);
+      const normalizedConversation = normalizeConversationRef(
+        input.conversation,
+      );
       const adapter = resolveAdapterForConversation(normalizedConversation);
       if (!adapter) {
         throw new SessionBindingError(
@@ -221,7 +244,8 @@ function createDefaultSessionBindingService(): SessionBindingService {
         );
       }
       const placement =
-        normalizePlacement(input.placement) ?? inferDefaultPlacement(normalizedConversation);
+        normalizePlacement(input.placement) ??
+        inferDefaultPlacement(normalizedConversation);
       const supportedPlacements = resolveAdapterPlacements(adapter);
       if (!supportedPlacements.includes(placement)) {
         throw new SessionBindingError(

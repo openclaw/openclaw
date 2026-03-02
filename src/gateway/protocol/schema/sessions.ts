@@ -71,12 +71,18 @@ export const SessionsPatchParamsSchema = Type.Object(
     execNode: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     model: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     spawnedBy: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
-    spawnDepth: Type.Optional(Type.Union([Type.Integer({ minimum: 0 }), Type.Null()])),
+    spawnDepth: Type.Optional(
+      Type.Union([Type.Integer({ minimum: 0 }), Type.Null()]),
+    ),
     sendPolicy: Type.Optional(
       Type.Union([Type.Literal("allow"), Type.Literal("deny"), Type.Null()]),
     ),
     groupActivation: Type.Optional(
-      Type.Union([Type.Literal("mention"), Type.Literal("always"), Type.Null()]),
+      Type.Union([
+        Type.Literal("mention"),
+        Type.Literal("always"),
+        Type.Null(),
+      ]),
     ),
   },
   { additionalProperties: false },
@@ -85,7 +91,9 @@ export const SessionsPatchParamsSchema = Type.Object(
 export const SessionsResetParamsSchema = Type.Object(
   {
     key: NonEmptyString,
-    reason: Type.Optional(Type.Union([Type.Literal("new"), Type.Literal("reset")])),
+    reason: Type.Optional(
+      Type.Union([Type.Literal("new"), Type.Literal("reset")]),
+    ),
   },
   { additionalProperties: false },
 );
@@ -113,15 +121,23 @@ export const SessionsUsageParamsSchema = Type.Object(
     /** Specific session key to analyze; if omitted returns all sessions. */
     key: Type.Optional(NonEmptyString),
     /** Start date for range filter (YYYY-MM-DD). */
-    startDate: Type.Optional(Type.String({ pattern: "^\\d{4}-\\d{2}-\\d{2}$" })),
+    startDate: Type.Optional(
+      Type.String({ pattern: "^\\d{4}-\\d{2}-\\d{2}$" }),
+    ),
     /** End date for range filter (YYYY-MM-DD). */
     endDate: Type.Optional(Type.String({ pattern: "^\\d{4}-\\d{2}-\\d{2}$" })),
     /** How start/end dates should be interpreted. Defaults to UTC when omitted. */
     mode: Type.Optional(
-      Type.Union([Type.Literal("utc"), Type.Literal("gateway"), Type.Literal("specific")]),
+      Type.Union([
+        Type.Literal("utc"),
+        Type.Literal("gateway"),
+        Type.Literal("specific"),
+      ]),
     ),
     /** UTC offset to use when mode is `specific` (for example, UTC-4 or UTC+5:30). */
-    utcOffset: Type.Optional(Type.String({ pattern: "^UTC[+-]\\d{1,2}(?::[0-5]\\d)?$" })),
+    utcOffset: Type.Optional(
+      Type.String({ pattern: "^UTC[+-]\\d{1,2}(?::[0-5]\\d)?$" }),
+    ),
     /** Maximum sessions to return (default 50). */
     limit: Type.Optional(Type.Integer({ minimum: 1 })),
     /** Include context weight breakdown (systemPromptReport). */

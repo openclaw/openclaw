@@ -30,11 +30,16 @@ export function isMessagingToolDuplicateNormalized(
     if (!normalizedSent || normalizedSent.length < MIN_DUPLICATE_TEXT_LENGTH) {
       return false;
     }
-    return normalized.includes(normalizedSent) || normalizedSent.includes(normalized);
+    return (
+      normalized.includes(normalizedSent) || normalizedSent.includes(normalized)
+    );
   });
 }
 
-export function isMessagingToolDuplicate(text: string, sentTexts: string[]): boolean {
+export function isMessagingToolDuplicate(
+  text: string,
+  sentTexts: string[],
+): boolean {
   if (sentTexts.length === 0) {
     return false;
   }
@@ -42,5 +47,8 @@ export function isMessagingToolDuplicate(text: string, sentTexts: string[]): boo
   if (!normalized || normalized.length < MIN_DUPLICATE_TEXT_LENGTH) {
     return false;
   }
-  return isMessagingToolDuplicateNormalized(normalized, sentTexts.map(normalizeTextForComparison));
+  return isMessagingToolDuplicateNormalized(
+    normalized,
+    sentTexts.map(normalizeTextForComparison),
+  );
 }

@@ -13,8 +13,14 @@ const mod = await import("./pw-tools-core.js");
 
 describe("pw-tools-core", () => {
   it("last file-chooser arm wins", async () => {
-    const firstPath = path.join(DEFAULT_UPLOAD_DIR, `vitest-arm-1-${crypto.randomUUID()}.txt`);
-    const secondPath = path.join(DEFAULT_UPLOAD_DIR, `vitest-arm-2-${crypto.randomUUID()}.txt`);
+    const firstPath = path.join(
+      DEFAULT_UPLOAD_DIR,
+      `vitest-arm-1-${crypto.randomUUID()}.txt`,
+    );
+    const secondPath = path.join(
+      DEFAULT_UPLOAD_DIR,
+      `vitest-arm-2-${crypto.randomUUID()}.txt`,
+    );
     await fs.mkdir(DEFAULT_UPLOAD_DIR, { recursive: true });
     await Promise.all([
       fs.writeFile(firstPath, "1", "utf8"),
@@ -70,7 +76,10 @@ describe("pw-tools-core", () => {
         expect(fc2.setFiles).toHaveBeenCalledWith([secondCanonicalPath]);
       });
     } finally {
-      await Promise.all([fs.rm(firstPath, { force: true }), fs.rm(secondPath, { force: true })]);
+      await Promise.all([
+        fs.rm(firstPath, { force: true }),
+        fs.rm(secondPath, { force: true }),
+      ]);
     }
   });
   it("arms the next dialog and accepts/dismisses (default timeout)", async () => {
@@ -137,7 +146,9 @@ describe("pw-tools-core", () => {
     });
 
     expect(waitForTimeout).toHaveBeenCalledWith(50);
-    expect(page.locator as ReturnType<typeof vi.fn>).toHaveBeenCalledWith("#main");
+    expect(page.locator as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(
+      "#main",
+    );
     expect(waitForSelector).toHaveBeenCalledWith({
       state: "visible",
       timeout: 1234,

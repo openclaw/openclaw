@@ -32,7 +32,9 @@ describe("createSafeStreamWriter", () => {
         throw err;
       },
     });
-    const stream = { write: vi.fn(() => true) } as unknown as NodeJS.WriteStream;
+    const stream = {
+      write: vi.fn(() => true),
+    } as unknown as NodeJS.WriteStream;
 
     expect(writer.write(stream, "hi")).toBe(false);
     expect(writer.isClosed()).toBe(true);

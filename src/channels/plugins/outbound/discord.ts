@@ -30,8 +30,10 @@ function resolveDiscordWebhookIdentity(params: {
   binding: ThreadBindingRecord;
 }): { username?: string; avatarUrl?: string } {
   const usernameRaw = params.identity?.name?.trim();
-  const fallbackUsername = params.binding.label?.trim() || params.binding.agentId;
-  const username = (usernameRaw || fallbackUsername || "").slice(0, 80) || undefined;
+  const fallbackUsername =
+    params.binding.label?.trim() || params.binding.agentId;
+  const username =
+    (usernameRaw || fallbackUsername || "").slice(0, 80) || undefined;
   const avatarUrl = params.identity?.avatarUrl?.trim() || undefined;
   return { username, avatarUrl };
 }
@@ -106,14 +108,28 @@ export const discordOutbound: ChannelOutboundAdapter = {
       return lastResult;
     }
     const limit = discordOutbound.textChunkLimit;
-    const chunks = limit && discordOutbound.chunker ? discordOutbound.chunker(text, limit) : [text];
-    let lastResult: Awaited<ReturnType<NonNullable<typeof discordOutbound.sendText>>>;
+    const chunks =
+      limit && discordOutbound.chunker
+        ? discordOutbound.chunker(text, limit)
+        : [text];
+    let lastResult: Awaited<
+      ReturnType<NonNullable<typeof discordOutbound.sendText>>
+    >;
     for (const chunk of chunks) {
       lastResult = await discordOutbound.sendText!({ ...ctx, text: chunk });
     }
     return lastResult!;
   },
-  sendText: async ({ to, text, accountId, deps, replyToId, threadId, identity, silent }) => {
+  sendText: async ({
+    to,
+    text,
+    accountId,
+    deps,
+    replyToId,
+    threadId,
+    identity,
+    silent,
+  }) => {
     if (!silent) {
       const webhookResult = await maybeSendDiscordWebhookText({
         text,

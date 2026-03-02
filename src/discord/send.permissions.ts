@@ -1,13 +1,28 @@
 import type { RequestClient } from "@buape/carbon";
-import type { APIChannel, APIGuild, APIGuildMember, APIRole } from "discord-api-types/v10";
-import { ChannelType, PermissionFlagsBits, Routes } from "discord-api-types/v10";
+import type {
+  APIChannel,
+  APIGuild,
+  APIGuildMember,
+  APIRole,
+} from "discord-api-types/v10";
+import {
+  ChannelType,
+  PermissionFlagsBits,
+  Routes,
+} from "discord-api-types/v10";
 import { resolveDiscordRest } from "./client.js";
-import type { DiscordPermissionsSummary, DiscordReactOpts } from "./send.types.js";
+import type {
+  DiscordPermissionsSummary,
+  DiscordReactOpts,
+} from "./send.types.js";
 
 const PERMISSION_ENTRIES = Object.entries(PermissionFlagsBits).filter(
   ([, value]) => typeof value === "bigint",
 );
-const ALL_PERMISSIONS = PERMISSION_ENTRIES.reduce((acc, [, value]) => acc | value, 0n);
+const ALL_PERMISSIONS = PERMISSION_ENTRIES.reduce(
+  (acc, [, value]) => acc | value,
+  0n,
+);
 const ADMINISTRATOR_BIT = PermissionFlagsBits.Administrator;
 
 function addPermissionBits(base: bigint, add?: string) {
@@ -68,7 +83,9 @@ export async function fetchMemberGuildPermissionsDiscord(
       rest.get(Routes.guild(guildId)) as Promise<APIGuild>,
       rest.get(Routes.guildMember(guildId, userId)) as Promise<APIGuildMember>,
     ]);
-    const rolesById = new Map<string, APIRole>((guild.roles ?? []).map((role) => [role.id, role]));
+    const rolesById = new Map<string, APIRole>(
+      (guild.roles ?? []).map((role) => [role.id, role]),
+    );
     const everyoneRole = rolesById.get(guildId);
     let permissions = 0n;
     if (everyoneRole?.permissions) {
@@ -98,7 +115,11 @@ async function hasGuildPermissionsDiscord(
   check: (permissions: bigint, requiredPermissions: bigint[]) => boolean,
   opts: DiscordReactOpts = {},
 ): Promise<boolean> {
-  const permissions = await fetchMemberGuildPermissionsDiscord(guildId, userId, opts);
+  const permissions = await fetchMemberGuildPermissionsDiscord(
+    guildId,
+    userId,
+    opts,
+  );
   if (permissions === null) {
     return false;
   }
@@ -175,7 +196,9 @@ export async function fetchChannelPermissionsDiscord(
     rest.get(Routes.guildMember(guildId, botId)) as Promise<APIGuildMember>,
   ]);
 
-  const rolesById = new Map<string, APIRole>((guild.roles ?? []).map((role) => [role.id, role]));
+  const rolesById = new Map<string, APIRole>(
+    (guild.roles ?? []).map((role) => [role.id, role]),
+  );
   const everyoneRole = rolesById.get(guildId);
   let base = 0n;
   if (everyoneRole?.permissions) {
@@ -201,7 +224,9 @@ export async function fetchChannelPermissionsDiscord(
 
   let permissions = base;
   const overwrites =
-    "permission_overwrites" in channel ? (channel.permission_overwrites ?? []) : [];
+    "permission_overwrites" in channel
+      ? (channel.permission_overwrites ?? [])
+      : [];
   for (const overwrite of overwrites) {
     if (overwrite.id === guildId) {
       permissions = removePermissionBits(permissions, overwrite.deny ?? "0");

@@ -16,7 +16,10 @@ export function resolveDiscordSystemLocation(params: {
   return guild?.name ? `${guild.name} #${channelName}` : `#${channelName}`;
 }
 
-export function formatDiscordReactionEmoji(emoji: { id?: string | null; name?: string | null }) {
+export function formatDiscordReactionEmoji(emoji: {
+  id?: string | null;
+  name?: string | null;
+}) {
   if (emoji.id && emoji.name) {
     // Custom guild emoji in Discord-renderable form.
     return `<:${emoji.name}:${emoji.id}>`;

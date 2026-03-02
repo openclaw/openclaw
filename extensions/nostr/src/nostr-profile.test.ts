@@ -11,8 +11,11 @@ import {
 } from "./nostr-profile.js";
 
 // Test private key (DO NOT use in production - this is a known test key)
-const TEST_HEX_KEY = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-const TEST_SK = new Uint8Array(TEST_HEX_KEY.match(/.{2}/g)!.map((byte) => parseInt(byte, 16)));
+const TEST_HEX_KEY =
+  "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+const TEST_SK = new Uint8Array(
+  TEST_HEX_KEY.match(/.{2}/g)!.map((byte) => parseInt(byte, 16)),
+);
 const TEST_PUBKEY = getPublicKey(TEST_SK);
 
 // ============================================================================
@@ -87,7 +90,9 @@ describe("contentToProfile", () => {
     const content: ProfileContent = {};
     const profile = contentToProfile(content);
     expect(
-      Object.keys(profile).filter((k) => profile[k as keyof NostrProfile] !== undefined),
+      Object.keys(profile).filter(
+        (k) => profile[k as keyof NostrProfile] !== undefined,
+      ),
     ).toHaveLength(0);
   });
 
@@ -289,7 +294,9 @@ describe("sanitizeProfileForDisplay", () => {
 
     const sanitized = sanitizeProfileForDisplay(profile);
 
-    expect(sanitized.name).toBe("&lt;script&gt;alert(&#039;xss&#039;)&lt;/script&gt;");
+    expect(sanitized.name).toBe(
+      "&lt;script&gt;alert(&#039;xss&#039;)&lt;/script&gt;",
+    );
   });
 
   it("escapes HTML in about field", () => {

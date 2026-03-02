@@ -1,9 +1,14 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 
-type AssistantContentBlock = Extract<AgentMessage, { role: "assistant" }>["content"][number];
+type AssistantContentBlock = Extract<
+  AgentMessage,
+  { role: "assistant" }
+>["content"][number];
 type AssistantMessage = Extract<AgentMessage, { role: "assistant" }>;
 
-export function isAssistantMessageWithContent(message: AgentMessage): message is AssistantMessage {
+export function isAssistantMessageWithContent(
+  message: AgentMessage,
+): message is AssistantMessage {
   return (
     !!message &&
     typeof message === "object" &&
@@ -33,7 +38,11 @@ export function dropThinkingBlocks(messages: AgentMessage[]): AgentMessage[] {
     const nextContent: AssistantContentBlock[] = [];
     let changed = false;
     for (const block of msg.content) {
-      if (block && typeof block === "object" && (block as { type?: unknown }).type === "thinking") {
+      if (
+        block &&
+        typeof block === "object" &&
+        (block as { type?: unknown }).type === "thinking"
+      ) {
         touched = true;
         changed = true;
         continue;
@@ -46,7 +55,9 @@ export function dropThinkingBlocks(messages: AgentMessage[]): AgentMessage[] {
     }
     // Preserve the assistant turn even if all blocks were thinking-only.
     const content =
-      nextContent.length > 0 ? nextContent : [{ type: "text", text: "" } as AssistantContentBlock];
+      nextContent.length > 0
+        ? nextContent
+        : [{ type: "text", text: "" } as AssistantContentBlock];
     out.push({ ...msg, content });
   }
   return touched ? out : messages;

@@ -10,7 +10,9 @@ export async function withTempConfig(params: {
   const prevConfigPath = process.env.OPENCLAW_CONFIG_PATH;
   const prevDisableCache = process.env.OPENCLAW_DISABLE_CONFIG_CACHE;
 
-  const dir = await mkdtemp(path.join(os.tmpdir(), params.prefix ?? "openclaw-test-config-"));
+  const dir = await mkdtemp(
+    path.join(os.tmpdir(), params.prefix ?? "openclaw-test-config-"),
+  );
   const configPath = path.join(dir, "openclaw.json");
 
   process.env.OPENCLAW_CONFIG_PATH = configPath;

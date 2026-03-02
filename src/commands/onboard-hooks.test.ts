@@ -86,7 +86,8 @@ describe("onboard-hooks", () => {
       createMockHook(
         {
           name: "session-memory",
-          description: "Save session context to memory when /new or /reset command is issued",
+          description:
+            "Save session context to memory when /new or /reset command is issued",
           filePath: "/mock/workspace/hooks/session-memory/HOOK.md",
           baseDir: "/mock/workspace/hooks/session-memory",
           handlerPath: "/mock/workspace/hooks/session-memory/handler.js",
@@ -117,7 +118,8 @@ describe("onboard-hooks", () => {
     cfg?: OpenClawConfig;
     eligible?: boolean;
   }) {
-    const { buildWorkspaceHookStatus } = await import("../hooks/hooks-status.js");
+    const { buildWorkspaceHookStatus } =
+      await import("../hooks/hooks-status.js");
     vi.mocked(buildWorkspaceHookStatus).mockReturnValue(
       createMockHookReport(params.eligible ?? true),
     );
@@ -230,7 +232,9 @@ describe("onboard-hooks", () => {
 
       // Second note should confirm configuration
       expect(noteCalls[1][0]).toContain("Enabled 1 hook: session-memory");
-      expect(noteCalls[1][0]).toMatch(/(?:openclaw|openclaw)( --profile isolated)? hooks list/);
+      expect(noteCalls[1][0]).toMatch(
+        /(?:openclaw|openclaw)( --profile isolated)? hooks list/,
+      );
     });
   });
 });

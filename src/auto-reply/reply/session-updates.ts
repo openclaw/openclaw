@@ -1,9 +1,15 @@
 import crypto from "node:crypto";
 import { resolveUserTimezone } from "../../agents/date-time.js";
 import { buildWorkspaceSkillSnapshot } from "../../agents/skills.js";
-import { ensureSkillsWatcher, getSkillsSnapshotVersion } from "../../agents/skills/refresh.js";
+import {
+  ensureSkillsWatcher,
+  getSkillsSnapshotVersion,
+} from "../../agents/skills/refresh.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { type SessionEntry, updateSessionStore } from "../../config/sessions.js";
+import {
+  type SessionEntry,
+  updateSessionStore,
+} from "../../config/sessions.js";
 import { buildChannelSummary } from "../../infra/channel-summary.js";
 import {
   resolveTimezone,
@@ -62,7 +68,9 @@ export async function buildQueuedSystemPrompt(params: {
       };
     }
     const explicit = resolveTimezone(raw);
-    return explicit ? { mode: "iana" as const, timeZone: explicit } : { mode: "local" as const };
+    return explicit
+      ? { mode: "iana" as const, timeZone: explicit }
+      : { mode: "local" as const };
   };
 
   const formatSystemEventTimestamp = (ts: number, cfg: OpenClawConfig) => {
@@ -75,11 +83,15 @@ export async function buildQueuedSystemPrompt(params: {
       return formatUtcTimestamp(date, { displaySeconds: true });
     }
     if (zone.mode === "local") {
-      return formatZonedTimestamp(date, { displaySeconds: true }) ?? "unknown-time";
+      return (
+        formatZonedTimestamp(date, { displaySeconds: true }) ?? "unknown-time"
+      );
     }
     return (
-      formatZonedTimestamp(date, { timeZone: zone.timeZone, displaySeconds: true }) ??
-      "unknown-time"
+      formatZonedTimestamp(date, {
+        timeZone: zone.timeZone,
+        displaySeconds: true,
+      }) ?? "unknown-time"
     );
   };
 
@@ -158,7 +170,8 @@ export async function ensureSkillSnapshot(params: {
   const snapshotVersion = getSkillsSnapshotVersion(workspaceDir);
   ensureSkillsWatcher({ workspaceDir, config: cfg });
   const shouldRefreshSnapshot =
-    snapshotVersion > 0 && (nextEntry?.skillsSnapshot?.version ?? 0) < snapshotVersion;
+    snapshotVersion > 0 &&
+    (nextEntry?.skillsSnapshot?.version ?? 0) < snapshotVersion;
 
   if (isFirstTurnInSession && sessionStore && sessionKey) {
     const current = nextEntry ??

@@ -30,21 +30,31 @@ function createPrompter(params?: {
   text?: WizardPrompter["text"];
 }): WizardPrompter {
   return {
-    confirm: params?.confirm ?? (vi.fn(async () => true) as WizardPrompter["confirm"]),
-    note: params?.note ?? (vi.fn(async () => undefined) as WizardPrompter["note"]),
+    confirm:
+      params?.confirm ?? (vi.fn(async () => true) as WizardPrompter["confirm"]),
+    note:
+      params?.note ?? (vi.fn(async () => undefined) as WizardPrompter["note"]),
     ...(params?.select ? { select: params.select } : {}),
-    text: params?.text ?? (vi.fn(async () => "prompt-key") as WizardPrompter["text"]),
+    text:
+      params?.text ??
+      (vi.fn(async () => "prompt-key") as WizardPrompter["text"]),
   } as unknown as WizardPrompter;
 }
 
-function createPromptSpies(params?: { confirmResult?: boolean; textResult?: string }) {
+function createPromptSpies(params?: {
+  confirmResult?: boolean;
+  textResult?: string;
+}) {
   const confirm = vi.fn(async () => params?.confirmResult ?? true);
   const note = vi.fn(async () => undefined);
   const text = vi.fn(async () => params?.textResult ?? "prompt-key");
   return { confirm, note, text };
 }
 
-async function runEnsureMinimaxApiKeyFlow(params: { confirmResult: boolean; textResult: string }) {
+async function runEnsureMinimaxApiKeyFlow(params: {
+  confirmResult: boolean;
+  textResult: string;
+}) {
   process.env.MINIMAX_API_KEY = "env-key";
   delete process.env.MINIMAX_OAUTH_TOKEN;
 
@@ -216,8 +226,14 @@ describe("ensureApiKeyFromEnvOrPrompt", () => {
     process.env.MINIMAX_API_KEY = "env-key";
     delete process.env.MINIMAX_OAUTH_TOKEN;
 
-    const selectValues: Array<"provider" | "env" | "filemain"> = ["provider", "filemain", "env"];
-    const select = vi.fn(async () => selectValues.shift() ?? "env") as WizardPrompter["select"];
+    const selectValues: Array<"provider" | "env" | "filemain"> = [
+      "provider",
+      "filemain",
+      "env",
+    ];
+    const select = vi.fn(
+      async () => selectValues.shift() ?? "env",
+    ) as WizardPrompter["select"];
     const text = vi
       .fn<WizardPrompter["text"]>()
       .mockResolvedValueOnce("/providers/minimax/apiKey")
@@ -263,7 +279,9 @@ describe("ensureApiKeyFromEnvOrPrompt", () => {
     delete process.env.MINIMAX_OAUTH_TOKEN;
 
     const select = vi.fn(async () => "env") as WizardPrompter["select"];
-    const text = vi.fn<WizardPrompter["text"]>().mockResolvedValue("MINIMAX_API_KEY");
+    const text = vi
+      .fn<WizardPrompter["text"]>()
+      .mockResolvedValue("MINIMAX_API_KEY");
     const note = vi.fn(async () => undefined);
     const setCredential = vi.fn(async () => undefined);
 
@@ -280,8 +298,12 @@ describe("ensureApiKeyFromEnvOrPrompt", () => {
     });
 
     expect(result).toBe("sk-minimax-redacted-value");
-    const noteMessages = note.mock.calls.map((call) => String(call.at(0) ?? "")).join("\n");
-    expect(noteMessages).toContain("Validated environment variable MINIMAX_API_KEY.");
+    const noteMessages = note.mock.calls
+      .map((call) => String(call.at(0) ?? ""))
+      .join("\n");
+    expect(noteMessages).toContain(
+      "Validated environment variable MINIMAX_API_KEY.",
+    );
     expect(noteMessages).not.toContain("sk-minimax-redacted-value");
   });
 });

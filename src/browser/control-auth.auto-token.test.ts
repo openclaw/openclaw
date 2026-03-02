@@ -29,7 +29,10 @@ describe("ensureBrowserControlAuth", () => {
       },
     };
 
-    const result = await ensureBrowserControlAuth({ cfg, env: {} as NodeJS.ProcessEnv });
+    const result = await ensureBrowserControlAuth({
+      cfg,
+      env: {} as NodeJS.ProcessEnv,
+    });
     expect(result).toEqual({ auth: {} });
     expect(mocks.loadConfig).not.toHaveBeenCalled();
     expect(mocks.writeConfigFile).not.toHaveBeenCalled();
@@ -62,7 +65,10 @@ describe("ensureBrowserControlAuth", () => {
       },
     };
 
-    const result = await ensureBrowserControlAuth({ cfg, env: {} as NodeJS.ProcessEnv });
+    const result = await ensureBrowserControlAuth({
+      cfg,
+      env: {} as NodeJS.ProcessEnv,
+    });
 
     expect(result).toEqual({ auth: { token: "already-set" } });
     expect(mocks.loadConfig).not.toHaveBeenCalled();
@@ -81,7 +87,10 @@ describe("ensureBrowserControlAuth", () => {
       },
     });
 
-    const result = await ensureBrowserControlAuth({ cfg, env: {} as NodeJS.ProcessEnv });
+    const result = await ensureBrowserControlAuth({
+      cfg,
+      env: {} as NodeJS.ProcessEnv,
+    });
     expectGeneratedTokenPersisted(result);
   });
 
@@ -127,7 +136,10 @@ describe("ensureBrowserControlAuth", () => {
       },
     });
 
-    const result = await ensureBrowserControlAuth({ cfg, env: {} as NodeJS.ProcessEnv });
+    const result = await ensureBrowserControlAuth({
+      cfg,
+      env: {} as NodeJS.ProcessEnv,
+    });
 
     expect(result).toEqual({ auth: { token: "latest-token" } });
     expect(mocks.writeConfigFile).not.toHaveBeenCalled();

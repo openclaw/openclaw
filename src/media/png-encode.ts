@@ -61,7 +61,11 @@ export function fillPixel(
 }
 
 /** Encode an RGBA buffer as a PNG image. */
-export function encodePngRgba(buffer: Buffer, width: number, height: number): Buffer {
+export function encodePngRgba(
+  buffer: Buffer,
+  width: number,
+  height: number,
+): Buffer {
   const stride = width * 4;
   const raw = Buffer.alloc((stride + 1) * height);
   for (let row = 0; row < height; row += 1) {
@@ -71,7 +75,9 @@ export function encodePngRgba(buffer: Buffer, width: number, height: number): Bu
   }
   const compressed = deflateSync(raw);
 
-  const signature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const signature = Buffer.from([
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+  ]);
   const ihdr = Buffer.alloc(13);
   ihdr.writeUInt32BE(width, 0);
   ihdr.writeUInt32BE(height, 4);

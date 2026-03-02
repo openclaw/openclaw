@@ -1,9 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelOutboundAdapter, ChannelPlugin } from "../../channels/plugins/types.js";
+import type {
+  ChannelOutboundAdapter,
+  ChannelPlugin,
+} from "../../channels/plugins/types.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import { createMSTeamsTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
+import {
+  createMSTeamsTestPlugin,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 import { createIMessageTestPlugin } from "../../test-utils/imessage-test-plugin.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../../utils/message-channel.js";
 import { sendMessage, sendPoll } from "./message.js";
 
 const setRegistry = (registry: ReturnType<typeof createTestRegistry>) => {
@@ -52,7 +61,10 @@ describe("sendMessage channel normalization", () => {
       deps: { sendMSTeams },
     });
 
-    expect(sendMSTeams).toHaveBeenCalledWith("conversation:19:abc@thread.tacv2", "hi");
+    expect(sendMSTeams).toHaveBeenCalledWith(
+      "conversation:19:abc@thread.tacv2",
+      "hi",
+    );
     expect(result.channel).toBe("msteams");
   });
 
@@ -75,7 +87,11 @@ describe("sendMessage channel normalization", () => {
       deps: { sendIMessage },
     });
 
-    expect(sendIMessage).toHaveBeenCalledWith("someone@example.com", "hi", expect.any(Object));
+    expect(sendIMessage).toHaveBeenCalledWith(
+      "someone@example.com",
+      "hi",
+      expect.any(Object),
+    );
     expect(result.channel).toBe("imessage");
   });
 });
@@ -88,7 +104,9 @@ describe("sendMessage replyToId threading", () => {
         capturedCtx.push(ctx);
       },
     });
-    setRegistry(createTestRegistry([{ pluginId: "mattermost", source: "test", plugin }]));
+    setRegistry(
+      createTestRegistry([{ pluginId: "mattermost", source: "test", plugin }]),
+    );
     return capturedCtx;
   };
 
@@ -227,7 +245,9 @@ describe("gateway url override hardening", () => {
 
 const emptyRegistry = createTestRegistry([]);
 
-const createMSTeamsOutbound = (opts?: { includePoll?: boolean }): ChannelOutboundAdapter => ({
+const createMSTeamsOutbound = (opts?: {
+  includePoll?: boolean;
+}): ChannelOutboundAdapter => ({
   deliveryMode: "direct",
   sendText: async ({ deps, to, text }) => {
     const send = deps?.sendMSTeams;

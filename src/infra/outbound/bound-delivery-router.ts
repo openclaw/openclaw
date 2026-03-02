@@ -19,7 +19,9 @@ export type BoundDeliveryRouterResult = {
 };
 
 export type BoundDeliveryRouter = {
-  resolveDestination: (input: BoundDeliveryRouterInput) => BoundDeliveryRouterResult;
+  resolveDestination: (
+    input: BoundDeliveryRouterInput,
+  ) => BoundDeliveryRouterResult;
 };
 
 function isActiveBinding(record: SessionBindingRecord): boolean {
@@ -66,7 +68,9 @@ export function createBoundDeliveryRouter(
         };
       }
 
-      const activeBindings = service.listBySession(targetSessionKey).filter(isActiveBinding);
+      const activeBindings = service
+        .listBySession(targetSessionKey)
+        .filter(isActiveBinding);
       if (activeBindings.length === 0) {
         return {
           binding: null,
@@ -94,7 +98,8 @@ export function createBoundDeliveryRouter(
         channel: input.requester.channel.trim().toLowerCase(),
         accountId: input.requester.accountId.trim(),
         conversationId: input.requester.conversationId.trim(),
-        parentConversationId: input.requester.parentConversationId?.trim() || undefined,
+        parentConversationId:
+          input.requester.parentConversationId?.trim() || undefined,
       };
       if (!requester.channel || !requester.conversationId) {
         return {
@@ -104,7 +109,10 @@ export function createBoundDeliveryRouter(
         };
       }
 
-      const fromRequester = resolveBindingForRequester(requester, activeBindings);
+      const fromRequester = resolveBindingForRequester(
+        requester,
+        activeBindings,
+      );
       if (fromRequester) {
         return {
           binding: fromRequester,

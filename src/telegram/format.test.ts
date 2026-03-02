@@ -16,9 +16,17 @@ describe("markdownToTelegramHtml", () => {
       ],
       ["escapes raw HTML", "<b>nope</b>", "&lt;b&gt;nope&lt;/b&gt;"],
       ["escapes unsafe characters", "a & b < c", "a &amp; b &lt; c"],
-      ["renders paragraphs with blank lines", "first\n\nsecond", "first\n\nsecond"],
+      [
+        "renders paragraphs with blank lines",
+        "first\n\nsecond",
+        "first\n\nsecond",
+      ],
       ["renders lists without block HTML", "- one\n- two", "• one\n• two"],
-      ["renders ordered lists with numbering", "2. two\n3. three", "2. two\n3. three"],
+      [
+        "renders ordered lists with numbering",
+        "2. two\n3. three",
+        "2. two\n3. three",
+      ],
       ["flattens headings", "# Title", "Title"],
     ] as const;
     for (const [name, input, expected] of cases) {
@@ -65,7 +73,9 @@ describe("markdownToTelegramHtml", () => {
   });
 
   it("properly nests link inside bold", () => {
-    const res = markdownToTelegramHtml("**bold [link](https://example.com) text**");
+    const res = markdownToTelegramHtml(
+      "**bold [link](https://example.com) text**",
+    );
     expect(res).toBe('<b>bold <a href="https://example.com">link</a> text</b>');
   });
 

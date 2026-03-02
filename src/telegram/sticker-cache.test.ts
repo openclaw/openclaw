@@ -155,7 +155,9 @@ describe("sticker-cache", () => {
     it("finds stickers by description substring", () => {
       const results = searchStickers("fox");
       expect(results).toHaveLength(2);
-      expect(results.every((s) => s.description.toLowerCase().includes("fox"))).toBe(true);
+      expect(
+        results.every((s) => s.description.toLowerCase().includes("fox")),
+      ).toBe(true);
     });
 
     it("finds stickers by emoji", () => {

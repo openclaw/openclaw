@@ -32,7 +32,9 @@ describe("formatGroupMembers", () => {
       roster,
     });
 
-    expect(formatted).toBe("+15550000000, Bob (+16660000000), Carol (+17770000000)");
+    expect(formatted).toBe(
+      "+15550000000, Bob (+16660000000), Carol (+17770000000)",
+    );
   });
 
   it("falls back to sender when no participants or roster are available", () => {

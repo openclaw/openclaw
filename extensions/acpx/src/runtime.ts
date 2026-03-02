@@ -47,11 +47,15 @@ const ACPX_CAPABILITIES: AcpRuntimeCapabilities = {
 };
 
 export function encodeAcpxRuntimeHandleState(state: AcpxHandleState): string {
-  const payload = Buffer.from(JSON.stringify(state), "utf8").toString("base64url");
+  const payload = Buffer.from(JSON.stringify(state), "utf8").toString(
+    "base64url",
+  );
   return `${ACPX_RUNTIME_HANDLE_PREFIX}${payload}`;
 }
 
-export function decodeAcpxRuntimeHandleState(runtimeSessionName: string): AcpxHandleState | null {
+export function decodeAcpxRuntimeHandleState(
+  runtimeSessionName: string,
+): AcpxHandleState | null {
   const trimmed = runtimeSessionName.trim();
   if (!trimmed.startsWith(ACPX_RUNTIME_HANDLE_PREFIX)) {
     return null;
@@ -170,11 +174,17 @@ export class AcpxRuntime implements AcpRuntime {
   async ensureSession(input: AcpRuntimeEnsureInput): Promise<AcpRuntimeHandle> {
     const sessionName = asTrimmedString(input.sessionKey);
     if (!sessionName) {
-      throw new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "ACP session key is required.");
+      throw new AcpRuntimeError(
+        "ACP_SESSION_INIT_FAILED",
+        "ACP session key is required.",
+      );
     }
     const agent = asTrimmedString(input.agent);
     if (!agent) {
-      throw new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "ACP agent id is required.");
+      throw new AcpRuntimeError(
+        "ACP_SESSION_INIT_FAILED",
+        "ACP agent id is required.",
+      );
     }
     const cwd = asTrimmedString(input.cwd) || this.config.cwd;
     const mode = input.mode;
@@ -193,8 +203,12 @@ export class AcpxRuntime implements AcpRuntime {
         asOptionalString(event.acpxSessionId) ||
         asOptionalString(event.acpxRecordId),
     );
-    const acpxRecordId = ensuredEvent ? asOptionalString(ensuredEvent.acpxRecordId) : undefined;
-    const agentSessionId = ensuredEvent ? asOptionalString(ensuredEvent.agentSessionId) : undefined;
+    const acpxRecordId = ensuredEvent
+      ? asOptionalString(ensuredEvent.acpxRecordId)
+      : undefined;
+    const agentSessionId = ensuredEvent
+      ? asOptionalString(ensuredEvent.agentSessionId)
+      : undefined;
     const backendSessionId = ensuredEvent
       ? asOptionalString(ensuredEvent.acpxSessionId)
       : undefined;
@@ -303,13 +317,16 @@ export class AcpxRuntime implements AcpRuntime {
             { cause: exit.error },
           );
         }
-        throw new AcpRuntimeError("ACP_TURN_FAILED", exit.error.message, { cause: exit.error });
+        throw new AcpRuntimeError("ACP_TURN_FAILED", exit.error.message, {
+          cause: exit.error,
+        });
       }
 
       if ((exit.code ?? 0) !== 0 && !sawError) {
         yield {
           type: "error",
-          message: stderr.trim() || `acpx exited with code ${exit.code ?? "unknown"}`,
+          message:
+            stderr.trim() || `acpx exited with code ${exit.code ?? "unknown"}`,
         };
         return;
       }
@@ -329,7 +346,9 @@ export class AcpxRuntime implements AcpRuntime {
     return ACPX_CAPABILITIES;
   }
 
-  async getStatus(input: { handle: AcpRuntimeHandle }): Promise<AcpRuntimeStatus> {
+  async getStatus(input: {
+    handle: AcpRuntimeHandle;
+  }): Promise<AcpRuntimeStatus> {
     const state = this.resolveHandleState(input.handle);
     const events = await this.runControlCommand({
       args: this.buildControlArgs({
@@ -340,7 +359,8 @@ export class AcpxRuntime implements AcpRuntime {
       fallbackCode: "ACP_TURN_FAILED",
       ignoreNoSession: true,
     });
-    const detail = events.find((event) => !toAcpxErrorEvent(event)) ?? events[0];
+    const detail =
+      events.find((event) => !toAcpxErrorEvent(event)) ?? events[0];
     if (!detail) {
       return {
         summary: "acpx status unavailable",
@@ -350,7 +370,10 @@ export class AcpxRuntime implements AcpRuntime {
     const acpxRecordId = asOptionalString(detail.acpxRecordId);
     const acpxSessionId = asOptionalString(detail.acpxSessionId);
     const agentSessionId = asOptionalString(detail.agentSessionId);
-    const pid = typeof detail.pid === "number" && Number.isFinite(detail.pid) ? detail.pid : null;
+    const pid =
+      typeof detail.pid === "number" && Number.isFinite(detail.pid)
+        ? detail.pid
+        : null;
     const summary = [
       `status=${status}`,
       acpxRecordId ? `acpxRecordId=${acpxRecordId}` : null,
@@ -368,11 +391,17 @@ export class AcpxRuntime implements AcpRuntime {
     };
   }
 
-  async setMode(input: { handle: AcpRuntimeHandle; mode: string }): Promise<void> {
+  async setMode(input: {
+    handle: AcpRuntimeHandle;
+    mode: string;
+  }): Promise<void> {
     const state = this.resolveHandleState(input.handle);
     const mode = asTrimmedString(input.mode);
     if (!mode) {
-      throw new AcpRuntimeError("ACP_TURN_FAILED", "ACP runtime mode is required.");
+      throw new AcpRuntimeError(
+        "ACP_TURN_FAILED",
+        "ACP runtime mode is required.",
+      );
     }
     await this.runControlCommand({
       args: this.buildControlArgs({
@@ -393,7 +422,10 @@ export class AcpxRuntime implements AcpRuntime {
     const key = asTrimmedString(input.key);
     const value = asTrimmedString(input.value);
     if (!key || !value) {
-      throw new AcpRuntimeError("ACP_TURN_FAILED", "ACP config option key/value are required.");
+      throw new AcpRuntimeError(
+        "ACP_TURN_FAILED",
+        "ACP config option key/value are required.",
+      );
     }
     await this.runControlCommand({
       args: this.buildControlArgs({
@@ -415,8 +447,12 @@ export class AcpxRuntime implements AcpRuntime {
     if (!versionCheck.ok) {
       this.healthy = false;
       const details = [
-        versionCheck.expectedVersion ? `expected=${versionCheck.expectedVersion}` : null,
-        versionCheck.installedVersion ? `installed=${versionCheck.installedVersion}` : null,
+        versionCheck.expectedVersion
+          ? `expected=${versionCheck.expectedVersion}`
+          : null,
+        versionCheck.installedVersion
+          ? `installed=${versionCheck.installedVersion}`
+          : null,
       ].filter((detail): detail is string => Boolean(detail));
       return {
         ok: false,
@@ -468,7 +504,9 @@ export class AcpxRuntime implements AcpRuntime {
         return {
           ok: false,
           code: "ACP_BACKEND_UNAVAILABLE",
-          message: result.stderr.trim() || `acpx exited with code ${result.code ?? "unknown"}`,
+          message:
+            result.stderr.trim() ||
+            `acpx exited with code ${result.code ?? "unknown"}`,
         };
       }
       this.healthy = true;
@@ -486,7 +524,10 @@ export class AcpxRuntime implements AcpRuntime {
     }
   }
 
-  async cancel(input: { handle: AcpRuntimeHandle; reason?: string }): Promise<void> {
+  async cancel(input: {
+    handle: AcpRuntimeHandle;
+    reason?: string;
+  }): Promise<void> {
     const state = this.resolveHandleState(input.handle);
     await this.runControlCommand({
       args: this.buildControlArgs({
@@ -499,7 +540,10 @@ export class AcpxRuntime implements AcpRuntime {
     });
   }
 
-  async close(input: { handle: AcpRuntimeHandle; reason: string }): Promise<void> {
+  async close(input: {
+    handle: AcpRuntimeHandle;
+    reason: string;
+  }): Promise<void> {
     const state = this.resolveHandleState(input.handle);
     await this.runControlCommand({
       args: this.buildControlArgs({
@@ -528,17 +572,34 @@ export class AcpxRuntime implements AcpRuntime {
 
     return {
       name: legacyName,
-      agent: deriveAgentFromSessionKey(handle.sessionKey, DEFAULT_AGENT_FALLBACK),
+      agent: deriveAgentFromSessionKey(
+        handle.sessionKey,
+        DEFAULT_AGENT_FALLBACK,
+      ),
       cwd: this.config.cwd,
       mode: "persistent",
     };
   }
 
-  private buildControlArgs(params: { cwd: string; command: string[] }): string[] {
-    return ["--format", "json", "--json-strict", "--cwd", params.cwd, ...params.command];
+  private buildControlArgs(params: {
+    cwd: string;
+    command: string[];
+  }): string[] {
+    return [
+      "--format",
+      "json",
+      "--json-strict",
+      "--cwd",
+      params.cwd,
+      ...params.command,
+    ];
   }
 
-  private buildPromptArgs(params: { agent: string; sessionName: string; cwd: string }): string[] {
+  private buildPromptArgs(params: {
+    agent: string;
+    sessionName: string;
+    cwd: string;
+  }): string[] {
     const args = [
       "--format",
       "json",
@@ -553,7 +614,14 @@ export class AcpxRuntime implements AcpRuntime {
       args.push("--timeout", String(this.config.timeoutSeconds));
     }
     args.push("--ttl", String(this.queueOwnerTtlSeconds));
-    args.push(params.agent, "prompt", "--session", params.sessionName, "--file", "-");
+    args.push(
+      params.agent,
+      "prompt",
+      "--session",
+      params.sessionName,
+      "--file",
+      "-",
+    );
     return args;
   }
 
@@ -589,25 +657,31 @@ export class AcpxRuntime implements AcpRuntime {
           { cause: result.error },
         );
       }
-      throw new AcpRuntimeError(params.fallbackCode, result.error.message, { cause: result.error });
+      throw new AcpRuntimeError(params.fallbackCode, result.error.message, {
+        cause: result.error,
+      });
     }
 
     const events = parseJsonLines(result.stdout);
-    const errorEvent = events.map((event) => toAcpxErrorEvent(event)).find(Boolean) ?? null;
+    const errorEvent =
+      events.map((event) => toAcpxErrorEvent(event)).find(Boolean) ?? null;
     if (errorEvent) {
       if (params.ignoreNoSession && errorEvent.code === "NO_SESSION") {
         return events;
       }
       throw new AcpRuntimeError(
         params.fallbackCode,
-        errorEvent.code ? `${errorEvent.code}: ${errorEvent.message}` : errorEvent.message,
+        errorEvent.code
+          ? `${errorEvent.code}: ${errorEvent.message}`
+          : errorEvent.message,
       );
     }
 
     if ((result.code ?? 0) !== 0) {
       throw new AcpRuntimeError(
         params.fallbackCode,
-        result.stderr.trim() || `acpx exited with code ${result.code ?? "unknown"}`,
+        result.stderr.trim() ||
+          `acpx exited with code ${result.code ?? "unknown"}`,
       );
     }
     return events;

@@ -1,7 +1,10 @@
 export type GatewayBindUrlResult =
   | {
       url: string;
-      source: "gateway.bind=custom" | "gateway.bind=tailnet" | "gateway.bind=lan";
+      source:
+        | "gateway.bind=custom"
+        | "gateway.bind=tailnet"
+        | "gateway.bind=lan";
     }
   | {
       error: string;
@@ -20,7 +23,10 @@ export function resolveGatewayBindUrl(params: {
   if (bind === "custom") {
     const host = params.customBindHost?.trim();
     if (host) {
-      return { url: `${params.scheme}://${host}:${params.port}`, source: "gateway.bind=custom" };
+      return {
+        url: `${params.scheme}://${host}:${params.port}`,
+        source: "gateway.bind=custom",
+      };
     }
     return { error: "gateway.bind=custom requires gateway.customBindHost." };
   }
@@ -28,7 +34,10 @@ export function resolveGatewayBindUrl(params: {
   if (bind === "tailnet") {
     const host = params.pickTailnetHost();
     if (host) {
-      return { url: `${params.scheme}://${host}:${params.port}`, source: "gateway.bind=tailnet" };
+      return {
+        url: `${params.scheme}://${host}:${params.port}`,
+        source: "gateway.bind=tailnet",
+      };
     }
     return { error: "gateway.bind=tailnet set, but no tailnet IP was found." };
   }
@@ -36,7 +45,10 @@ export function resolveGatewayBindUrl(params: {
   if (bind === "lan") {
     const host = params.pickLanHost();
     if (host) {
-      return { url: `${params.scheme}://${host}:${params.port}`, source: "gateway.bind=lan" };
+      return {
+        url: `${params.scheme}://${host}:${params.port}`,
+        source: "gateway.bind=lan",
+      };
     }
     return { error: "gateway.bind=lan set, but no private LAN IP was found." };
   }

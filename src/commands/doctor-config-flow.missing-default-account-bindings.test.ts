@@ -31,7 +31,9 @@ describe("collectMissingDefaultAccountBindingWarnings", () => {
           },
         },
       },
-      bindings: [{ agentId: "ops", match: { channel: "telegram", accountId: "alerts" } }],
+      bindings: [
+        { agentId: "ops", match: { channel: "telegram", accountId: "alerts" } },
+      ],
     };
 
     expect(collectMissingDefaultAccountBindingWarnings(cfg)).toEqual([]);
@@ -47,7 +49,9 @@ describe("collectMissingDefaultAccountBindingWarnings", () => {
           },
         },
       },
-      bindings: [{ agentId: "ops", match: { channel: "telegram", accountId: "alerts" } }],
+      bindings: [
+        { agentId: "ops", match: { channel: "telegram", accountId: "alerts" } },
+      ],
     };
 
     const warnings = collectMissingDefaultAccountBindingWarnings(cfg);
@@ -65,7 +69,9 @@ describe("collectMissingDefaultAccountBindingWarnings", () => {
           },
         },
       },
-      bindings: [{ agentId: "ops", match: { channel: "telegram", accountId: "*" } }],
+      bindings: [
+        { agentId: "ops", match: { channel: "telegram", accountId: "*" } },
+      ],
     };
 
     expect(collectMissingDefaultAccountBindingWarnings(cfg)).toEqual([]);

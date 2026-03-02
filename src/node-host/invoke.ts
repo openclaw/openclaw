@@ -20,7 +20,10 @@ import {
 } from "../infra/exec-host.js";
 import { sanitizeHostExecEnv } from "../infra/host-env-security.js";
 import { runBrowserProxyCommand } from "./invoke-browser.js";
-import { buildSystemRunApprovalPlan, handleSystemRunInvoke } from "./invoke-system-run.js";
+import {
+  buildSystemRunApprovalPlan,
+  handleSystemRunInvoke,
+} from "./invoke-system-run.js";
 import type {
   ExecEventPayload,
   RunResult,
@@ -30,7 +33,8 @@ import type {
 
 const OUTPUT_CAP = 200_000;
 const OUTPUT_EVENT_TAIL = 20_000;
-const DEFAULT_NODE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+const DEFAULT_NODE_PATH =
+  "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 const WINDOWS_CODEPAGE_ENCODING_MAP: Record<number, string> = {
   65001: "utf-8",
   54936: "gb18030",
@@ -42,7 +46,8 @@ const WINDOWS_CODEPAGE_ENCODING_MAP: Record<number, string> = {
 };
 let cachedWindowsConsoleEncoding: string | null | undefined;
 
-const execHostEnforced = process.env.OPENCLAW_NODE_EXEC_HOST?.trim().toLowerCase() === "app";
+const execHostEnforced =
+  process.env.OPENCLAW_NODE_EXEC_HOST?.trim().toLowerCase() === "app";
 const execHostFallbackAllowed =
   process.env.OPENCLAW_NODE_EXEC_FALLBACK?.trim().toLowerCase() !== "0";
 const preferMacAppExecHost = process.platform === "darwin" && execHostEnforced;
@@ -75,7 +80,9 @@ export type NodeInvokeRequestPayload = {
 export type { SkillBinsProvider } from "./invoke-types.js";
 
 function resolveExecSecurity(value?: string): ExecSecurity {
-  return value === "deny" || value === "allowlist" || value === "full" ? value : "allowlist";
+  return value === "deny" || value === "allowlist" || value === "full"
+    ? value
+    : "allowlist";
 }
 
 function isCmdExeInvocation(argv: string[]): boolean {
@@ -88,18 +95,28 @@ function isCmdExeInvocation(argv: string[]): boolean {
 }
 
 function resolveExecAsk(value?: string): ExecAsk {
-  return value === "off" || value === "on-miss" || value === "always" ? value : "on-miss";
+  return value === "off" || value === "on-miss" || value === "always"
+    ? value
+    : "on-miss";
 }
 
-export function sanitizeEnv(overrides?: Record<string, string> | null): Record<string, string> {
+export function sanitizeEnv(
+  overrides?: Record<string, string> | null,
+): Record<string, string> {
   return sanitizeHostExecEnv({ overrides, blockPathOverrides: true });
 }
 
-function truncateOutput(raw: string, maxChars: number): { text: string; truncated: boolean } {
+function truncateOutput(
+  raw: string,
+  maxChars: number,
+): { text: string; truncated: boolean } {
   if (raw.length <= maxChars) {
     return { text: raw, truncated: false };
   }
-  return { text: `... (truncated) ${raw.slice(raw.length - maxChars)}`, truncated: true };
+  return {
+    text: `... (truncated) ${raw.slice(raw.length - maxChars)}`,
+    truncated: true,
+  };
 }
 
 export function parseWindowsCodePage(raw: string): number | null {
@@ -133,7 +150,9 @@ function resolveWindowsConsoleEncoding(): string | null {
     const raw = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
     const codePage = parseWindowsCodePage(raw);
     cachedWindowsConsoleEncoding =
-      codePage !== null ? (WINDOWS_CODEPAGE_ENCODING_MAP[codePage] ?? null) : null;
+      codePage !== null
+        ? (WINDOWS_CODEPAGE_ENCODING_MAP[codePage] ?? null)
+        : null;
   } catch {
     cachedWindowsConsoleEncoding = null;
   }
@@ -177,14 +196,21 @@ function requireExecApprovalsBaseHash(
     return;
   }
   if (!snapshot.hash) {
-    throw new Error("INVALID_REQUEST: exec approvals base hash unavailable; reload and retry");
+    throw new Error(
+      "INVALID_REQUEST: exec approvals base hash unavailable; reload and retry",
+    );
   }
-  const baseHash = typeof params.baseHash === "string" ? params.baseHash.trim() : "";
+  const baseHash =
+    typeof params.baseHash === "string" ? params.baseHash.trim() : "";
   if (!baseHash) {
-    throw new Error("INVALID_REQUEST: exec approvals base hash required; reload and retry");
+    throw new Error(
+      "INVALID_REQUEST: exec approvals base hash required; reload and retry",
+    );
   }
   if (baseHash !== snapshot.hash) {
-    throw new Error("INVALID_REQUEST: exec approvals changed; reload and retry");
+    throw new Error(
+      "INVALID_REQUEST: exec approvals changed; reload and retry",
+    );
   }
 }
 
@@ -216,7 +242,8 @@ async function runCommand(
         return;
       }
       const remaining = OUTPUT_CAP - outputLen;
-      const slice = chunk.length > remaining ? chunk.subarray(0, remaining) : chunk;
+      const slice =
+        chunk.length > remaining ? chunk.subarray(0, remaining) : chunk;
       outputLen += slice.length;
       if (target === "stdout") {
         stdoutChunks.push(slice);
@@ -310,7 +337,10 @@ function resolveExecutable(bin: string, env?: Record<string, string>) {
   return null;
 }
 
-async function handleSystemWhich(params: SystemWhichParams, env?: Record<string, string>) {
+async function handleSystemWhich(
+  params: SystemWhichParams,
+  env?: Record<string, string>,
+) {
   const bins = params.bins.map((bin) => bin.trim()).filter(Boolean);
   const found: Record<string, string> = {};
   for (const bin of bins) {
@@ -348,7 +378,11 @@ async function sendExecFinishedEvent(params: {
     success?: boolean;
   };
 }) {
-  const combined = [params.result.stdout, params.result.stderr, params.result.error]
+  const combined = [
+    params.result.stdout,
+    params.result.stderr,
+    params.result.error,
+  ]
     .filter(Boolean)
     .join("\n");
   await sendNodeEvent(
@@ -440,7 +474,9 @@ export async function handleInvoke(
       await sendJsonPayloadResult(client, frame, payload);
     } catch (err) {
       const message = String(err);
-      const code = message.toLowerCase().includes("timed out") ? "TIMEOUT" : "INVALID_REQUEST";
+      const code = message.toLowerCase().includes("timed out")
+        ? "TIMEOUT"
+        : "INVALID_REQUEST";
       await sendErrorResult(client, frame, code, message);
     }
     return;
@@ -448,7 +484,9 @@ export async function handleInvoke(
 
   if (command === "system.execApprovals.set") {
     try {
-      const params = decodeParams<SystemExecApprovalsSetParams>(frame.paramsJSON);
+      const params = decodeParams<SystemExecApprovalsSetParams>(
+        frame.paramsJSON,
+      );
       if (!params.file || typeof params.file !== "object") {
         throw new Error("INVALID_REQUEST: exec approvals file required");
       }
@@ -456,7 +494,10 @@ export async function handleInvoke(
       const snapshot = readExecApprovalsSnapshot();
       requireExecApprovalsBaseHash(params, snapshot);
       const normalized = normalizeExecApprovals(params.file);
-      const next = mergeExecApprovalsSocketDefaults({ normalized, current: snapshot.file });
+      const next = mergeExecApprovalsSocketDefaults({
+        normalized,
+        current: snapshot.file,
+      });
       saveExecApprovals(next);
       const nextSnapshot = readExecApprovalsSnapshot();
       const payload: ExecApprovalsSnapshot = {
@@ -508,7 +549,12 @@ export async function handleInvoke(
       }>(frame.paramsJSON);
       const prepared = buildSystemRunApprovalPlan(params);
       if (!prepared.ok) {
-        await sendErrorResult(client, frame, "INVALID_REQUEST", prepared.message);
+        await sendErrorResult(
+          client,
+          frame,
+          "INVALID_REQUEST",
+          prepared.message,
+        );
         return;
       }
       await sendJsonPayloadResult(client, frame, {
@@ -522,7 +568,12 @@ export async function handleInvoke(
   }
 
   if (command !== "system.run") {
-    await sendErrorResult(client, frame, "UNAVAILABLE", "command not supported");
+    await sendErrorResult(
+      client,
+      frame,
+      "UNAVAILABLE",
+      "command not supported",
+    );
     return;
   }
 
@@ -557,7 +608,13 @@ export async function handleInvoke(
       await sendInvokeResult(client, frame, result);
     },
     sendExecFinishedEvent: async ({ sessionKey, runId, cmdText, result }) => {
-      await sendExecFinishedEvent({ client, sessionKey, runId, cmdText, result });
+      await sendExecFinishedEvent({
+        client,
+        sessionKey,
+        runId,
+        cmdText,
+        result,
+      });
     },
     preferMacAppExecHost,
   });
@@ -570,7 +627,9 @@ function decodeParams<T>(raw?: string | null): T {
   return JSON.parse(raw) as T;
 }
 
-export function coerceNodeInvokePayload(payload: unknown): NodeInvokeRequestPayload | null {
+export function coerceNodeInvokePayload(
+  payload: unknown,
+): NodeInvokeRequestPayload | null {
   if (!payload || typeof payload !== "object") {
     return null;
   }
@@ -588,7 +647,8 @@ export function coerceNodeInvokePayload(payload: unknown): NodeInvokeRequestPayl
         ? JSON.stringify(obj.params)
         : null;
   const timeoutMs = typeof obj.timeoutMs === "number" ? obj.timeoutMs : null;
-  const idempotencyKey = typeof obj.idempotencyKey === "string" ? obj.idempotencyKey : null;
+  const idempotencyKey =
+    typeof obj.idempotencyKey === "string" ? obj.idempotencyKey : null;
   return {
     id,
     nodeId,
@@ -610,7 +670,10 @@ async function sendInvokeResult(
   },
 ) {
   try {
-    await client.request("node.invoke.result", buildNodeInvokeResultParams(frame, result));
+    await client.request(
+      "node.invoke.result",
+      buildNodeInvokeResultParams(frame, result),
+    );
   } catch {
     // ignore: node invoke responses are best-effort
   }
@@ -656,7 +719,11 @@ export function buildNodeInvokeResultParams(
   return params;
 }
 
-async function sendNodeEvent(client: GatewayClient, event: string, payload: unknown) {
+async function sendNodeEvent(
+  client: GatewayClient,
+  event: string,
+  payload: unknown,
+) {
   try {
     await client.request("node.event", {
       event,

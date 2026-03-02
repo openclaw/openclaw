@@ -10,7 +10,9 @@ installPinnedHostnameTestHooks();
 
 describe("transcribeOpenAiCompatibleAudio", () => {
   it("respects lowercase authorization header overrides", async () => {
-    const { fetchFn, getAuthHeader } = createAuthCaptureJsonFetch({ text: "ok" });
+    const { fetchFn, getAuthHeader } = createAuthCaptureJsonFetch({
+      text: "ok",
+    });
 
     const result = await transcribeOpenAiCompatibleAudio({
       buffer: Buffer.from("audio"),
@@ -26,7 +28,9 @@ describe("transcribeOpenAiCompatibleAudio", () => {
   });
 
   it("builds the expected request payload", async () => {
-    const { fetchFn, getRequest } = createRequestCaptureJsonFetch({ text: "hello" });
+    const { fetchFn, getRequest } = createRequestCaptureJsonFetch({
+      text: "hello",
+    });
 
     const result = await transcribeOpenAiCompatibleAudio({
       buffer: Buffer.from("audio-bytes"),
@@ -58,7 +62,10 @@ describe("transcribeOpenAiCompatibleAudio", () => {
     expect(form.get("model")).toBe("gpt-4o-mini-transcribe");
     expect(form.get("language")).toBe("en");
     expect(form.get("prompt")).toBe("hello");
-    const file = form.get("file") as Blob | { type?: string; name?: string } | null;
+    const file = form.get("file") as
+      | Blob
+      | { type?: string; name?: string }
+      | null;
     expect(file).not.toBeNull();
     if (file) {
       expect(file.type).toBe("audio/wav");

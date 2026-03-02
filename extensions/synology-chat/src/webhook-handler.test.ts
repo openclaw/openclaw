@@ -198,7 +198,9 @@ describe("createWebhookHandler", () => {
 
     expect(res._status).toBe(200);
     // deliver should have been called with the stripped text
-    expect(deliver).toHaveBeenCalledWith(expect.objectContaining({ body: "Hello there" }));
+    expect(deliver).toHaveBeenCalledWith(
+      expect.objectContaining({ body: "Hello there" }),
+    );
   });
 
   it("responds 200 immediately and delivers async", async () => {

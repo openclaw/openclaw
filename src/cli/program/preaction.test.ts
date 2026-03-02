@@ -1,5 +1,13 @@
 import { Command } from "commander";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 const setVerboseMock = vi.fn();
 const emitCliBannerMock = vi.fn();
@@ -110,7 +118,9 @@ describe("registerPreActionHooks", () => {
   function resolveActionCommand(parseArgv: string[]): Command {
     let current = program;
     for (const segment of parseArgv) {
-      const next = current.commands.find((command) => command.name() === segment);
+      const next = current.commands.find(
+        (command) => command.name() === segment,
+      );
       if (!next) {
         break;
       }
@@ -119,7 +129,10 @@ describe("registerPreActionHooks", () => {
     return current;
   }
 
-  async function runPreAction(params: { parseArgv: string[]; processArgv?: string[] }) {
+  async function runPreAction(params: {
+    parseArgv: string[];
+    processArgv?: string[];
+  }) {
     process.argv = params.processArgv ?? [...params.parseArgv];
     const actionCommand = resolveActionCommand(params.parseArgv);
     if (!preActionHook) {
@@ -195,7 +208,15 @@ describe("registerPreActionHooks", () => {
     vi.clearAllMocks();
     await runPreAction({
       parseArgv: ["config", "set", "gateway.auth.mode", "{bad", "--json"],
-      processArgv: ["node", "openclaw", "config", "set", "gateway.auth.mode", "{bad", "--json"],
+      processArgv: [
+        "node",
+        "openclaw",
+        "config",
+        "set",
+        "gateway.auth.mode",
+        "{bad",
+        "--json",
+      ],
     });
 
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
@@ -209,7 +230,12 @@ describe("registerPreActionHooks", () => {
     const hooks = (
       program as unknown as {
         _lifeCycleHooks?: {
-          preAction?: Array<(thisCommand: Command, actionCommand: Command) => Promise<void> | void>;
+          preAction?: Array<
+            (
+              thisCommand: Command,
+              actionCommand: Command,
+            ) => Promise<void> | void
+          >;
         };
       }
     )._lifeCycleHooks?.preAction;

@@ -75,7 +75,11 @@ export async function runWithReconnect(
   }
 }
 
-function withJitter(baseMs: number, jitterRatio: number, random: () => number): number {
+function withJitter(
+  baseMs: number,
+  jitterRatio: number,
+  random: () => number,
+): number {
   if (jitterRatio <= 0) {
     return baseMs;
   }

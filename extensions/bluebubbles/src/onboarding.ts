@@ -23,9 +23,14 @@ import { normalizeBlueBubblesServerUrl } from "./types.js";
 
 const channel = "bluebubbles" as const;
 
-function setBlueBubblesDmPolicy(cfg: OpenClawConfig, dmPolicy: DmPolicy): OpenClawConfig {
+function setBlueBubblesDmPolicy(
+  cfg: OpenClawConfig,
+  dmPolicy: DmPolicy,
+): OpenClawConfig {
   const allowFrom =
-    dmPolicy === "open" ? addWildcardAllowFrom(cfg.channels?.bluebubbles?.allowFrom) : undefined;
+    dmPolicy === "open"
+      ? addWildcardAllowFrom(cfg.channels?.bluebubbles?.allowFrom)
+      : undefined;
   return {
     ...cfg,
     channels: {
@@ -152,12 +157,19 @@ export const blueBubblesOnboardingAdapter: ChannelOnboardingAdapter = {
     return {
       channel,
       configured,
-      statusLines: [`BlueBubbles: ${configured ? "configured" : "needs setup"}`],
+      statusLines: [
+        `BlueBubbles: ${configured ? "configured" : "needs setup"}`,
+      ],
       selectionHint: configured ? "configured" : "iMessage via BlueBubbles app",
       quickstartScore: configured ? 1 : 0,
     };
   },
-  configure: async ({ cfg, prompter, accountOverrides, shouldPromptAccountIds }) => {
+  configure: async ({
+    cfg,
+    prompter,
+    accountOverrides,
+    shouldPromptAccountIds,
+  }) => {
     const blueBubblesOverride = accountOverrides.bluebubbles?.trim();
     const defaultAccountId = resolveDefaultBlueBubblesAccountId(cfg);
     let accountId = blueBubblesOverride
@@ -233,7 +245,8 @@ export const blueBubblesOnboardingAdapter: ChannelOnboardingAdapter = {
       );
       const entered = await prompter.text({
         message: "BlueBubbles password",
-        validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
+        validate: (value) =>
+          String(value ?? "").trim() ? undefined : "Required",
       });
       password = String(entered).trim();
     } else {
@@ -244,7 +257,8 @@ export const blueBubblesOnboardingAdapter: ChannelOnboardingAdapter = {
       if (!keepPassword) {
         const entered = await prompter.text({
           message: "BlueBubbles password",
-          validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
+          validate: (value) =>
+            String(value ?? "").trim() ? undefined : "Required",
         });
         password = String(entered).trim();
       }
@@ -253,8 +267,11 @@ export const blueBubblesOnboardingAdapter: ChannelOnboardingAdapter = {
     // Prompt for webhook path (optional)
     const existingWebhookPath = resolvedAccount.config.webhookPath?.trim();
     const wantsWebhook = await prompter.confirm({
-      message: "Configure a custom webhook path? (default: /bluebubbles-webhook)",
-      initialValue: Boolean(existingWebhookPath && existingWebhookPath !== "/bluebubbles-webhook"),
+      message:
+        "Configure a custom webhook path? (default: /bluebubbles-webhook)",
+      initialValue: Boolean(
+        existingWebhookPath && existingWebhookPath !== "/bluebubbles-webhook",
+      ),
     });
     let webhookPath = "/bluebubbles-webhook";
     if (wantsWebhook) {
@@ -303,7 +320,9 @@ export const blueBubblesOnboardingAdapter: ChannelOnboardingAdapter = {
               ...next.channels?.bluebubbles?.accounts,
               [accountId]: {
                 ...next.channels?.bluebubbles?.accounts?.[accountId],
-                enabled: next.channels?.bluebubbles?.accounts?.[accountId]?.enabled ?? true,
+                enabled:
+                  next.channels?.bluebubbles?.accounts?.[accountId]?.enabled ??
+                  true,
                 serverUrl,
                 password,
                 webhookPath,

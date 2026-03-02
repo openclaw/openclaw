@@ -45,7 +45,11 @@ describe("tool-images log context", () => {
     const png = await createLargePng();
     const blocks = [
       { type: "text" as const, text: "MEDIA:/tmp/snapshots/camera-front.png" },
-      { type: "image" as const, data: png.toString("base64"), mimeType: "image/png" },
+      {
+        type: "image" as const,
+        data: png.toString("base64"),
+        mimeType: "image/png",
+      },
     ];
     await sanitizeContentBlocksImages(blocks, "nodes:camera_snap");
     const message = infoMock.mock.calls[0]?.[0];
@@ -56,9 +60,16 @@ describe("tool-images log context", () => {
   it("includes filename from read label", async () => {
     const png = await createLargePng();
     const blocks = [
-      { type: "image" as const, data: png.toString("base64"), mimeType: "image/png" },
+      {
+        type: "image" as const,
+        data: png.toString("base64"),
+        mimeType: "image/png",
+      },
     ];
-    await sanitizeContentBlocksImages(blocks, "read:/tmp/images/sample-diagram.png");
+    await sanitizeContentBlocksImages(
+      blocks,
+      "read:/tmp/images/sample-diagram.png",
+    );
     const message = infoMock.mock.calls[0]?.[0];
     expect(typeof message).toBe("string");
     expect(String(message)).toContain("sample-diagram.png");

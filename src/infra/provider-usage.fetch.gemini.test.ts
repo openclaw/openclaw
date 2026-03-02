@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { createProviderUsageFetch, makeResponse } from "../test-utils/provider-usage-fetch.js";
+import {
+  createProviderUsageFetch,
+  makeResponse,
+} from "../test-utils/provider-usage-fetch.js";
 import { fetchGeminiUsage } from "./provider-usage.fetch.gemini.js";
 
 describe("fetchGeminiUsage", () => {
@@ -7,7 +10,12 @@ describe("fetchGeminiUsage", () => {
     const mockFetch = createProviderUsageFetch(async () =>
       makeResponse(429, { error: "rate_limited" }),
     );
-    const result = await fetchGeminiUsage("token", 5000, mockFetch, "google-gemini-cli");
+    const result = await fetchGeminiUsage(
+      "token",
+      5000,
+      mockFetch,
+      "google-gemini-cli",
+    );
 
     expect(result.error).toBe("HTTP 429");
     expect(result.windows).toHaveLength(0);
@@ -15,7 +23,8 @@ describe("fetchGeminiUsage", () => {
 
   it("selects the lowest remaining fraction per model family", async () => {
     const mockFetch = createProviderUsageFetch(async (_url, init) => {
-      const headers = (init?.headers as Record<string, string> | undefined) ?? {};
+      const headers =
+        (init?.headers as Record<string, string> | undefined) ?? {};
       expect(headers.Authorization).toBe("Bearer token");
 
       return makeResponse(200, {
@@ -29,7 +38,12 @@ describe("fetchGeminiUsage", () => {
       });
     });
 
-    const result = await fetchGeminiUsage("token", 5000, mockFetch, "google-gemini-cli");
+    const result = await fetchGeminiUsage(
+      "token",
+      5000,
+      mockFetch,
+      "google-gemini-cli",
+    );
 
     expect(result.windows).toHaveLength(2);
     expect(result.windows[0]).toEqual({ label: "Pro", usedPercent: 70 });

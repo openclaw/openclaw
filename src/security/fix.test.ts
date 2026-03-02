@@ -30,11 +30,21 @@ describe("security fix", () => {
     OPENCLAW_CONFIG_PATH: configPath,
   });
 
-  const writeJsonConfig = async (configPath: string, config: Record<string, unknown>) => {
-    await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf-8");
+  const writeJsonConfig = async (
+    configPath: string,
+    config: Record<string, unknown>,
+  ) => {
+    await fs.writeFile(
+      configPath,
+      `${JSON.stringify(config, null, 2)}\n`,
+      "utf-8",
+    );
   };
 
-  const writeWhatsAppConfig = async (configPath: string, whatsapp: Record<string, unknown>) => {
+  const writeWhatsAppConfig = async (
+    configPath: string,
+    whatsapp: Record<string, unknown>,
+  ) => {
     await writeJsonConfig(configPath, {
       channels: {
         whatsapp,
@@ -43,9 +53,15 @@ describe("security fix", () => {
   };
 
   const readParsedConfig = async (configPath: string) =>
-    JSON.parse(await fs.readFile(configPath, "utf-8")) as Record<string, unknown>;
+    JSON.parse(await fs.readFile(configPath, "utf-8")) as Record<
+      string,
+      unknown
+    >;
 
-  const runFixAndReadChannels = async (stateDir: string, configPath: string) => {
+  const runFixAndReadChannels = async (
+    stateDir: string,
+    configPath: string,
+  ) => {
     const env = createFixEnv(stateDir, configPath);
     const res = await fixSecurityFootguns({ env, stateDir, configPath });
     const parsed = await readParsedConfig(configPath);
@@ -55,7 +71,10 @@ describe("security fix", () => {
     };
   };
 
-  const writeWhatsAppAllowFromStore = async (stateDir: string, allowFrom: string[]) => {
+  const writeWhatsAppAllowFromStore = async (
+    stateDir: string,
+    allowFrom: string[],
+  ) => {
     const credsDir = path.join(stateDir, "credentials");
     await fs.mkdir(credsDir, { recursive: true });
     await fs.writeFile(
@@ -66,7 +85,9 @@ describe("security fix", () => {
   };
 
   beforeAll(async () => {
-    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-security-fix-suite-"));
+    fixtureRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-security-fix-suite-"),
+    );
   });
 
   afterAll(async () => {
@@ -141,7 +162,10 @@ describe("security fix", () => {
     expect(res.ok).toBe(true);
 
     const whatsapp = channels.whatsapp;
-    const accounts = whatsapp.accounts as Record<string, Record<string, unknown>>;
+    const accounts = whatsapp.accounts as Record<
+      string,
+      Record<string, unknown>
+    >;
 
     expect(accounts.a1.groupPolicy).toBe("allowlist");
     expect(accounts.a1.groupAllowFrom).toEqual(["+15550001111"]);
@@ -190,7 +214,11 @@ describe("security fix", () => {
     const includesDir = path.join(stateDir, "includes");
     await fs.mkdir(includesDir, { recursive: true });
     const includePath = path.join(includesDir, "extra.json5");
-    await fs.writeFile(includePath, "{ logging: { redactSensitive: 'off' } }\n", "utf-8");
+    await fs.writeFile(
+      includePath,
+      "{ logging: { redactSensitive: 'off' } }\n",
+      "utf-8",
+    );
     await fs.chmod(includePath, 0o644);
 
     const configPath = path.join(stateDir, "openclaw.json");

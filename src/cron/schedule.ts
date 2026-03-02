@@ -10,14 +10,19 @@ function resolveCronTimezone(tz?: string) {
   return Intl.DateTimeFormat().resolvedOptions().timeZone;
 }
 
-export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): number | undefined {
+export function computeNextRunAtMs(
+  schedule: CronSchedule,
+  nowMs: number,
+): number | undefined {
   if (schedule.kind === "at") {
     // Handle both canonical `at` (string) and legacy `atMs` (number) fields.
     // The store migration should convert atMs→at, but be defensive in case
     // the migration hasn't run yet or was bypassed.
     const sched = schedule as { at?: string; atMs?: number | string };
     const atMs =
-      typeof sched.atMs === "number" && Number.isFinite(sched.atMs) && sched.atMs > 0
+      typeof sched.atMs === "number" &&
+      Number.isFinite(sched.atMs) &&
+      sched.atMs > 0
         ? sched.atMs
         : typeof sched.atMs === "string"
           ? parseAbsoluteTimeMs(sched.atMs)
@@ -42,7 +47,10 @@ export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): numbe
   }
 
   const cronSchedule = schedule as { expr?: unknown; cron?: unknown };
-  const exprSource = typeof cronSchedule.expr === "string" ? cronSchedule.expr : cronSchedule.cron;
+  const exprSource =
+    typeof cronSchedule.expr === "string"
+      ? cronSchedule.expr
+      : cronSchedule.cron;
   if (typeof exprSource !== "string") {
     throw new Error("invalid cron schedule: expr is required");
   }

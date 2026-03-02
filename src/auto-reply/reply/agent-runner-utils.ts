@@ -1,14 +1,27 @@
 import { resolveRunModelFallbacksOverride } from "../../agents/agent-scope.js";
 import type { NormalizedUsage } from "../../agents/usage.js";
 import { getChannelDock } from "../../channels/dock.js";
-import type { ChannelId, ChannelThreadingToolContext } from "../../channels/plugins/types.js";
-import { normalizeAnyChannelId, normalizeChannelId } from "../../channels/registry.js";
+import type {
+  ChannelId,
+  ChannelThreadingToolContext,
+} from "../../channels/plugins/types.js";
+import {
+  normalizeAnyChannelId,
+  normalizeChannelId,
+} from "../../channels/registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
-import { estimateUsageCost, formatTokenCount, formatUsd } from "../../utils/usage-format.js";
+import {
+  estimateUsageCost,
+  formatTokenCount,
+  formatUsd,
+} from "../../utils/usage-format.js";
 import type { TemplateContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
-import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-routing.js";
+import {
+  resolveOriginMessageProvider,
+  resolveOriginMessageTo,
+} from "./origin-routing.js";
 import type { FollowupRun } from "./queue.js";
 
 const BUN_FETCH_SOCKET_ERROR_RE = /socket connection was closed unexpectedly/i;
@@ -34,7 +47,8 @@ export function buildThreadingToolContext(params: {
       currentMessageId,
     };
   }
-  const provider = normalizeChannelId(rawProvider) ?? normalizeAnyChannelId(rawProvider);
+  const provider =
+    normalizeChannelId(rawProvider) ?? normalizeAnyChannelId(rawProvider);
   // Fallback for unrecognized/plugin channels (e.g., BlueBubbles before plugin registry init)
   const dock = provider ? getChannelDock(provider) : undefined;
   if (!dock?.threading?.buildToolContext) {
@@ -101,7 +115,8 @@ export const formatResponseUsageLine = (params: {
     return null;
   }
   const inputLabel = typeof input === "number" ? formatTokenCount(input) : "?";
-  const outputLabel = typeof output === "number" ? formatTokenCount(output) : "?";
+  const outputLabel =
+    typeof output === "number" ? formatTokenCount(output) : "?";
   const cost =
     params.showCost && typeof input === "number" && typeof output === "number"
       ? estimateUsageCost({
@@ -119,7 +134,10 @@ export const formatResponseUsageLine = (params: {
   return `Usage: ${inputLabel} in / ${outputLabel} out${suffix}`;
 };
 
-export const appendUsageLine = (payloads: ReplyPayload[], line: string): ReplyPayload[] => {
+export const appendUsageLine = (
+  payloads: ReplyPayload[],
+  line: string,
+): ReplyPayload[] => {
   let index = -1;
   for (let i = payloads.length - 1; i >= 0; i -= 1) {
     if (payloads[i]?.text) {
@@ -142,8 +160,10 @@ export const appendUsageLine = (payloads: ReplyPayload[], line: string): ReplyPa
   return updated;
 };
 
-export const resolveEnforceFinalTag = (run: FollowupRun["run"], provider: string) =>
-  Boolean(run.enforceFinalTag || isReasoningTagProvider(provider));
+export const resolveEnforceFinalTag = (
+  run: FollowupRun["run"],
+  provider: string,
+) => Boolean(run.enforceFinalTag || isReasoningTagProvider(provider));
 
 export function resolveModelFallbackOptions(run: FollowupRun["run"]) {
   return {
@@ -225,7 +245,10 @@ export function buildTemplateSenderContext(sessionCtx: TemplateContext) {
   };
 }
 
-export function resolveRunAuthProfile(run: FollowupRun["run"], provider: string) {
+export function resolveRunAuthProfile(
+  run: FollowupRun["run"],
+  provider: string,
+) {
   return resolveProviderScopedAuthProfile({
     provider,
     primaryProvider: run.provider,
@@ -258,7 +281,9 @@ export function resolveProviderScopedAuthProfile(params: {
   authProfileIdSource?: "auto" | "user";
 }): { authProfileId?: string; authProfileIdSource?: "auto" | "user" } {
   const authProfileId =
-    params.provider === params.primaryProvider ? params.authProfileId : undefined;
+    params.provider === params.primaryProvider
+      ? params.authProfileId
+      : undefined;
   return {
     authProfileId,
     authProfileIdSource: authProfileId ? params.authProfileIdSource : undefined,

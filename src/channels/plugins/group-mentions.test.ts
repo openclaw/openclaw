@@ -35,8 +35,12 @@ const cfg = {
 
 describe("group mentions (slack)", () => {
   it("uses matched channel requireMention and wildcard fallback", () => {
-    expect(resolveSlackGroupRequireMention({ cfg, groupChannel: "#alerts" })).toBe(false);
-    expect(resolveSlackGroupRequireMention({ cfg, groupChannel: "#missing" })).toBe(true);
+    expect(
+      resolveSlackGroupRequireMention({ cfg, groupChannel: "#alerts" }),
+    ).toBe(false);
+    expect(
+      resolveSlackGroupRequireMention({ cfg, groupChannel: "#missing" }),
+    ).toBe(true);
   });
 
   it("resolves sender override, then channel tools, then wildcard tools", () => {
@@ -88,13 +92,19 @@ describe("group mentions (telegram)", () => {
       // oxlint-disable-next-line typescript/no-explicit-any
     } as any;
     expect(
-      resolveTelegramGroupRequireMention({ cfg: telegramCfg, groupId: "-1001:topic:77" }),
+      resolveTelegramGroupRequireMention({
+        cfg: telegramCfg,
+        groupId: "-1001:topic:77",
+      }),
     ).toBe(false);
-    expect(resolveTelegramGroupToolPolicy({ cfg: telegramCfg, groupId: "-1001:topic:77" })).toEqual(
-      {
-        allow: ["message.send"],
-      },
-    );
+    expect(
+      resolveTelegramGroupToolPolicy({
+        cfg: telegramCfg,
+        groupId: "-1001:topic:77",
+      }),
+    ).toEqual({
+      allow: ["message.send"],
+    });
   });
 });
 
@@ -128,7 +138,11 @@ describe("group mentions (discord)", () => {
     } as any;
 
     expect(
-      resolveDiscordGroupRequireMention({ cfg: discordCfg, groupSpace: "guild1", groupId: "123" }),
+      resolveDiscordGroupRequireMention({
+        cfg: discordCfg,
+        groupSpace: "guild1",
+        groupId: "123",
+      }),
     ).toBe(true);
     expect(
       resolveDiscordGroupRequireMention({
@@ -193,16 +207,28 @@ describe("group mentions (bluebubbles)", () => {
     } as any;
 
     expect(
-      resolveBlueBubblesGroupRequireMention({ cfg: blueBubblesCfg, groupId: "chat:primary" }),
+      resolveBlueBubblesGroupRequireMention({
+        cfg: blueBubblesCfg,
+        groupId: "chat:primary",
+      }),
     ).toBe(false);
     expect(
-      resolveBlueBubblesGroupRequireMention({ cfg: blueBubblesCfg, groupId: "chat:other" }),
+      resolveBlueBubblesGroupRequireMention({
+        cfg: blueBubblesCfg,
+        groupId: "chat:other",
+      }),
     ).toBe(true);
     expect(
-      resolveBlueBubblesGroupToolPolicy({ cfg: blueBubblesCfg, groupId: "chat:primary" }),
+      resolveBlueBubblesGroupToolPolicy({
+        cfg: blueBubblesCfg,
+        groupId: "chat:primary",
+      }),
     ).toEqual({ deny: ["exec"] });
     expect(
-      resolveBlueBubblesGroupToolPolicy({ cfg: blueBubblesCfg, groupId: "chat:other" }),
+      resolveBlueBubblesGroupToolPolicy({
+        cfg: blueBubblesCfg,
+        groupId: "chat:other",
+      }),
     ).toEqual({
       allow: ["message.send"],
     });

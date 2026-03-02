@@ -24,7 +24,10 @@ type MockChild = EventEmitter & {
   killed?: boolean;
 };
 
-function createMockChild(params?: { code?: number; signal?: NodeJS.Signals | null }): MockChild {
+function createMockChild(params?: {
+  code?: number;
+  signal?: NodeJS.Signals | null;
+}): MockChild {
   const child = new EventEmitter() as MockChild;
   child.stdout = new EventEmitter();
   child.stderr = new EventEmitter();
@@ -49,15 +52,20 @@ describe("windows command wrapper behavior", () => {
   });
 
   it("wraps .cmd commands via cmd.exe in runCommandWithTimeout", async () => {
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const platformSpy = vi
+      .spyOn(process, "platform", "get")
+      .mockReturnValue("win32");
     const expectedComSpec = process.env.ComSpec ?? "cmd.exe";
 
     spawnMock.mockImplementation(
-      (_command: string, _args: string[], _options: Record<string, unknown>) => createMockChild(),
+      (_command: string, _args: string[], _options: Record<string, unknown>) =>
+        createMockChild(),
     );
 
     try {
-      const result = await runCommandWithTimeout(["pnpm", "--version"], { timeoutMs: 1000 });
+      const result = await runCommandWithTimeout(["pnpm", "--version"], {
+        timeoutMs: 1000,
+      });
       expect(result.code).toBe(0);
       const captured = spawnMock.mock.calls[0] as
         | [string, string[], Record<string, unknown>]
@@ -75,7 +83,9 @@ describe("windows command wrapper behavior", () => {
   });
 
   it("uses cmd.exe wrapper with windowsVerbatimArguments in runExec for .cmd shims", async () => {
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const platformSpy = vi
+      .spyOn(process, "platform", "get")
+      .mockReturnValue("win32");
     const expectedComSpec = process.env.ComSpec ?? "cmd.exe";
 
     execFileMock.mockImplementation(

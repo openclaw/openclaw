@@ -11,9 +11,15 @@ import {
   buildFishOptionCompletionLine,
   buildFishSubcommandCompletionLine,
 } from "./completion-fish.js";
-import { getCoreCliCommandNames, registerCoreCliByName } from "./program/command-registry.js";
+import {
+  getCoreCliCommandNames,
+  registerCoreCliByName,
+} from "./program/command-registry.js";
 import { getProgramContext } from "./program/program-context.js";
-import { getSubCliEntries, registerSubCliByName } from "./program/register.subclis.js";
+import {
+  getSubCliEntries,
+  registerSubCliByName,
+} from "./program/register.subclis.js";
 
 const COMPLETION_SHELLS = ["zsh", "bash", "powershell", "fish"] as const;
 type CompletionShell = (typeof COMPLETION_SHELLS)[number];
@@ -22,7 +28,9 @@ function isCompletionShell(value: string): value is CompletionShell {
   return COMPLETION_SHELLS.includes(value as CompletionShell);
 }
 
-export function resolveShellFromEnv(env: NodeJS.ProcessEnv = process.env): CompletionShell {
+export function resolveShellFromEnv(
+  env: NodeJS.ProcessEnv = process.env,
+): CompletionShell {
   const shellPath = env.SHELL?.trim() ?? "";
   const shellName = shellPath ? path.basename(shellPath).toLowerCase() : "";
   if (shellName === "zsh") {
@@ -48,15 +56,26 @@ function sanitizeCompletionBasename(value: string): string {
   return trimmed.replace(/[^a-zA-Z0-9._-]/g, "-");
 }
 
-function resolveCompletionCacheDir(env: NodeJS.ProcessEnv = process.env): string {
+function resolveCompletionCacheDir(
+  env: NodeJS.ProcessEnv = process.env,
+): string {
   const stateDir = resolveStateDir(env, os.homedir);
   return path.join(stateDir, "completions");
 }
 
-export function resolveCompletionCachePath(shell: CompletionShell, binName: string): string {
+export function resolveCompletionCachePath(
+  shell: CompletionShell,
+  binName: string,
+): string {
   const basename = sanitizeCompletionBasename(binName);
   const extension =
-    shell === "powershell" ? "ps1" : shell === "fish" ? "fish" : shell === "bash" ? "bash" : "zsh";
+    shell === "powershell"
+      ? "ps1"
+      : shell === "fish"
+        ? "fish"
+        : shell === "bash"
+          ? "bash"
+          : "zsh";
   return path.join(resolveCompletionCacheDir(), `${basename}.${extension}`);
 }
 
@@ -111,7 +130,11 @@ function isCompletionProfileHeader(line: string): boolean {
   return line.trim() === "# OpenClaw Completion";
 }
 
-function isCompletionProfileLine(line: string, binName: string, cachePath: string | null): boolean {
+function isCompletionProfileLine(
+  line: string,
+  binName: string,
+  cachePath: string | null,
+): boolean {
   if (line.includes(`${binName} completion`)) {
     return true;
   }
@@ -180,7 +203,12 @@ function getShellProfilePath(shell: CompletionShell): string {
       "Microsoft.PowerShell_profile.ps1",
     );
   }
-  return path.join(home, ".config", "powershell", "Microsoft.PowerShell_profile.ps1");
+  return path.join(
+    home,
+    ".config",
+    "powershell",
+    "Microsoft.PowerShell_profile.ps1",
+  );
 }
 
 export async function isCompletionInstalled(
@@ -193,11 +221,15 @@ export async function isCompletionInstalled(
     return false;
   }
   const cachePathCandidate = resolveCompletionCachePath(shell, binName);
-  const cachedPath = (await pathExists(cachePathCandidate)) ? cachePathCandidate : null;
+  const cachedPath = (await pathExists(cachePathCandidate))
+    ? cachePathCandidate
+    : null;
   const content = await fs.readFile(profilePath, "utf-8");
   const lines = content.split("\n");
   return lines.some(
-    (line) => isCompletionProfileHeader(line) || isCompletionProfileLine(line, binName, cachedPath),
+    (line) =>
+      isCompletionProfileHeader(line) ||
+      isCompletionProfileLine(line, binName, cachedPath),
   );
 }
 
@@ -221,7 +253,10 @@ export async function usesSlowDynamicCompletion(
 
   // Check if any line has dynamic completion but NOT the cached path
   for (const line of lines) {
-    if (isSlowDynamicCompletionLine(line, binName) && !line.includes(cachePath)) {
+    if (
+      isSlowDynamicCompletionLine(line, binName) &&
+      !line.includes(cachePath)
+    ) {
       return true;
     }
   }
@@ -238,9 +273,10 @@ export function registerCompletionCli(program: Command) {
         `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/completion", "docs.openclaw.ai/cli/completion")}\n`,
     )
     .addOption(
-      new Option("-s, --shell <shell>", "Shell to generate completion for (default: zsh)").choices(
-        COMPLETION_SHELLS,
-      ),
+      new Option(
+        "-s, --shell <shell>",
+        "Shell to generate completion for (default: zsh)",
+      ).choices(COMPLETION_SHELLS),
     )
     .option("-i, --install", "Install completion script to shell profile")
     .option(
@@ -284,7 +320,11 @@ export function registerCompletionCli(program: Command) {
 
       if (options.install) {
         const targetShell = options.shell ?? resolveShellFromEnv();
-        await installCompletion(targetShell, Boolean(options.yes), program.name());
+        await installCompletion(
+          targetShell,
+          Boolean(options.yes),
+          program.name(),
+        );
         return;
       }
 
@@ -300,7 +340,11 @@ export function registerCompletionCli(program: Command) {
     });
 }
 
-export async function installCompletion(shell: string, yes: boolean, binName = "openclaw") {
+export async function installCompletion(
+  shell: string,
+  yes: boolean,
+  binName = "openclaw",
+) {
   const home = process.env.HOME || os.homedir();
   let profilePath = "";
   let sourceLine = "";
@@ -354,7 +398,12 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
     }
 
     const content = await fs.readFile(profilePath, "utf-8");
-    const update = updateCompletionProfile(content, binName, cachePath, sourceLine);
+    const update = updateCompletionProfile(
+      content,
+      binName,
+      cachePath,
+      sourceLine,
+    );
     if (!update.changed) {
       if (!yes) {
         console.log(`Completion already installed in ${profilePath}`);
@@ -369,7 +418,9 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
 
     await fs.writeFile(profilePath, update.next, "utf-8");
     if (!yes) {
-      console.log(`Completion installed. Restart your shell or run: source ${profilePath}`);
+      console.log(
+        `Completion installed. Restart your shell or run: source ${profilePath}`,
+      );
     }
   } catch (err) {
     console.error(`Failed to install completion: ${err as string}`);
@@ -448,7 +499,10 @@ function generateZshSubcommands(program: Command, prefix: string): string {
     const funcName = `_${prefix}_${cmdName.replace(/-/g, "_")}`;
 
     // Recurse first
-    script += generateZshSubcommands(cmd, `${prefix}_${cmdName.replace(/-/g, "_")}`);
+    script += generateZshSubcommands(
+      cmd,
+      `${prefix}_${cmdName.replace(/-/g, "_")}`,
+    );
 
     const subCommands = cmd.commands;
     if (subCommands.length > 0) {
@@ -538,7 +592,9 @@ function generatePowerShellCompletion(program: Command): string {
     // Command completion for this level
     const subCommands = cmd.commands.map((c) => c.name());
     const options = cmd.options.map((o) => o.flags.split(/[ ,|]+/)[0]); // Take first flag
-    const allCompletions = [...subCommands, ...options].map((s) => `'${s}'`).join(",");
+    const allCompletions = [...subCommands, ...options]
+      .map((s) => `'${s}'`)
+      .join(",");
 
     if (allCompletions.length > 0) {
       script += `

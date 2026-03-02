@@ -89,7 +89,8 @@ describe("tui-event-handlers: handleAgentEvent", () => {
   }) => {
     const state = makeState(params?.state);
     const context = makeContext(state);
-    const chatLog = (params?.chatLog ?? context.chatLog) as MockChatLog & HandlerChatLog;
+    const chatLog = (params?.chatLog ?? context.chatLog) as MockChatLog &
+      HandlerChatLog;
     const handlers = createEventHandlers({
       chatLog,
       tui: context.tui,
@@ -125,7 +126,9 @@ describe("tui-event-handlers: handleAgentEvent", () => {
 
     handleAgentEvent(evt);
 
-    expect(chatLog.startTool).toHaveBeenCalledWith("tc1", "exec", { command: "echo hi" });
+    expect(chatLog.startTool).toHaveBeenCalledWith("tc1", "exec", {
+      command: "echo hi",
+    });
     expect(tui.requestRender).toHaveBeenCalledTimes(1);
   });
 
@@ -167,9 +170,10 @@ describe("tui-event-handlers: handleAgentEvent", () => {
   });
 
   it("captures runId from chat events when activeChatRunId is unset", () => {
-    const { state, chatLog, handleChatEvent, handleAgentEvent } = createHandlersHarness({
-      state: { activeChatRunId: null },
-    });
+    const { state, chatLog, handleChatEvent, handleAgentEvent } =
+      createHandlersHarness({
+        state: { activeChatRunId: null },
+      });
 
     const chatEvt: ChatEvent = {
       runId: "run-42",
@@ -194,9 +198,10 @@ describe("tui-event-handlers: handleAgentEvent", () => {
   });
 
   it("clears run mapping when the session changes", () => {
-    const { state, chatLog, tui, handleChatEvent, handleAgentEvent } = createHandlersHarness({
-      state: { activeChatRunId: null },
-    });
+    const { state, chatLog, tui, handleChatEvent, handleAgentEvent } =
+      createHandlersHarness({
+        state: { activeChatRunId: null },
+      });
 
     handleChatEvent({
       runId: "run-old",
@@ -220,9 +225,10 @@ describe("tui-event-handlers: handleAgentEvent", () => {
   });
 
   it("accepts tool events after chat final for the same run", () => {
-    const { state, chatLog, tui, handleChatEvent, handleAgentEvent } = createHandlersHarness({
-      state: { activeChatRunId: null },
-    });
+    const { state, chatLog, tui, handleChatEvent, handleAgentEvent } =
+      createHandlersHarness({
+        state: { activeChatRunId: null },
+      });
 
     handleChatEvent({
       runId: "run-final",
@@ -237,7 +243,11 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       data: { phase: "start", toolCallId: "tc-final", name: "session_status" },
     });
 
-    expect(chatLog.startTool).toHaveBeenCalledWith("tc-final", "session_status", undefined);
+    expect(chatLog.startTool).toHaveBeenCalledWith(
+      "tc-final",
+      "session_status",
+      undefined,
+    );
     expect(tui.requestRender).toHaveBeenCalled();
   });
 
@@ -379,7 +389,10 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       message: { content: "continued" },
     });
 
-    expect(chatLog.updateAssistant).toHaveBeenLastCalledWith("continued", "run-active");
+    expect(chatLog.updateAssistant).toHaveBeenLastCalledWith(
+      "continued",
+      "run-active",
+    );
   });
 
   it("suppresses non-local empty final placeholders during concurrent runs", () => {
@@ -397,7 +410,10 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       message: { content: [] },
     });
 
-    expect(chatLog.finalizeAssistant).not.toHaveBeenCalledWith("(no output)", "run-other");
+    expect(chatLog.finalizeAssistant).not.toHaveBeenCalledWith(
+      "(no output)",
+      "run-other",
+    );
     expect(chatLog.dropAssistant).toHaveBeenCalledWith("run-other");
     expect(loadHistory).not.toHaveBeenCalled();
     expect(state.activeChatRunId).toBe("run-active");

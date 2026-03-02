@@ -31,10 +31,11 @@ export interface ResolvedNostrAccount {
   config: NostrAccountConfig;
 }
 
-function resolveConfiguredDefaultNostrAccountId(cfg: OpenClawConfig): string | undefined {
-  const nostrCfg = (cfg.channels as Record<string, unknown> | undefined)?.nostr as
-    | NostrAccountConfig
-    | undefined;
+function resolveConfiguredDefaultNostrAccountId(
+  cfg: OpenClawConfig,
+): string | undefined {
+  const nostrCfg = (cfg.channels as Record<string, unknown> | undefined)
+    ?.nostr as NostrAccountConfig | undefined;
   return normalizeOptionalAccountId(nostrCfg?.defaultAccount);
 }
 
@@ -42,9 +43,8 @@ function resolveConfiguredDefaultNostrAccountId(cfg: OpenClawConfig): string | u
  * List all configured Nostr account IDs
  */
 export function listNostrAccountIds(cfg: OpenClawConfig): string[] {
-  const nostrCfg = (cfg.channels as Record<string, unknown> | undefined)?.nostr as
-    | NostrAccountConfig
-    | undefined;
+  const nostrCfg = (cfg.channels as Record<string, unknown> | undefined)
+    ?.nostr as NostrAccountConfig | undefined;
 
   // If privateKey is configured at top level, we have a default account
   if (nostrCfg?.privateKey) {
@@ -76,10 +76,11 @@ export function resolveNostrAccount(opts: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): ResolvedNostrAccount {
-  const accountId = normalizeAccountId(opts.accountId ?? resolveDefaultNostrAccountId(opts.cfg));
-  const nostrCfg = (opts.cfg.channels as Record<string, unknown> | undefined)?.nostr as
-    | NostrAccountConfig
-    | undefined;
+  const accountId = normalizeAccountId(
+    opts.accountId ?? resolveDefaultNostrAccountId(opts.cfg),
+  );
+  const nostrCfg = (opts.cfg.channels as Record<string, unknown> | undefined)
+    ?.nostr as NostrAccountConfig | undefined;
 
   const baseEnabled = nostrCfg?.enabled !== false;
   const privateKey = nostrCfg?.privateKey ?? "";

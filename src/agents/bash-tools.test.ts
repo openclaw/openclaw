@@ -1,16 +1,25 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { applyPathPrepend, findPathKey } from "../infra/path-prepend.js";
-import { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-events.js";
+import {
+  peekSystemEvents,
+  resetSystemEventsForTest,
+} from "../infra/system-events.js";
 import { captureEnv } from "../test-utils/env.js";
-import { getFinishedSession, resetProcessRegistryForTests } from "./bash-process-registry.js";
+import {
+  getFinishedSession,
+  resetProcessRegistryForTests,
+} from "./bash-process-registry.js";
 import { createExecTool, createProcessTool } from "./bash-tools.js";
 import { resolveShellFromPath, sanitizeBinaryOutput } from "./shell-utils.js";
 
 const isWin = process.platform === "win32";
 const defaultShell = isWin
   ? undefined
-  : process.env.OPENCLAW_TEST_SHELL || resolveShellFromPath("bash") || process.env.SHELL || "sh";
+  : process.env.OPENCLAW_TEST_SHELL ||
+    resolveShellFromPath("bash") ||
+    process.env.SHELL ||
+    "sh";
 // PowerShell: Start-Sleep for delays, ; for command separation, $null for null device
 const shortDelayCmd = isWin ? "Start-Sleep -Milliseconds 4" : "sleep 0.004";
 const yieldDelayCmd = isWin ? "Start-Sleep -Milliseconds 16" : "sleep 0.016";
@@ -35,7 +44,8 @@ const OUTPUT_DONE = "done";
 const OUTPUT_NOPE = "nope";
 const OUTPUT_EXEC_COMPLETED = "Exec completed";
 const OUTPUT_EXIT_CODE_1 = "Command exited with code 1";
-const shellEcho = (message: string) => (isWin ? `Write-Output ${message}` : `echo ${message}`);
+const shellEcho = (message: string) =>
+  isWin ? `Write-Output ${message}` : `echo ${message}`;
 const COMMAND_ECHO_HELLO = shellEcho("hello");
 const COMMAND_PRINT_PATH = isWin ? "Write-Output $env:PATH" : "echo $PATH";
 const COMMAND_EXIT_WITH_ERROR = "exit 1";
@@ -55,7 +65,8 @@ type ExecToolRunOptions = Omit<ExecToolArgs, "command">;
 type LabeledCase = { label: string };
 const createTestExecTool = (
   defaults?: Parameters<typeof createExecTool>[0],
-): ReturnType<typeof createExecTool> => createExecTool({ ...TEST_EXEC_DEFAULTS, ...defaults });
+): ReturnType<typeof createExecTool> =>
+  createExecTool({ ...TEST_EXEC_DEFAULTS, ...defaults });
 const createDisallowedElevatedExecTool = (
   defaultLevel: "off" | "on",
   overrides: Partial<ExecToolConfig> = {},
@@ -78,14 +89,19 @@ const createScopedToolSet = (scopeKey: string) => ({
 });
 const execTool = createTestExecTool();
 const processTool = createProcessTool();
-const withLabel = <T extends object>(label: string, fields: T): T & LabeledCase => ({
+const withLabel = <T extends object>(
+  label: string,
+  fields: T,
+): T & LabeledCase => ({
   label,
   ...fields,
 });
 // Both PowerShell and bash use ; for command separation
 const joinCommands = (commands: string[]) => commands.join("; ");
-const echoAfterDelay = (message: string) => joinCommands([shortDelayCmd, shellEcho(message)]);
-const echoLines = (lines: string[]) => joinCommands(lines.map((line) => shellEcho(line)));
+const echoAfterDelay = (message: string) =>
+  joinCommands([shortDelayCmd, shellEcho(message)]);
+const echoLines = (lines: string[]) =>
+  joinCommands(lines.map((line) => shellEcho(line)));
 const normalizeText = (value?: string) =>
   sanitizeBinaryOutput(value ?? "")
     .replace(/\r\n/g, "\n")
@@ -101,8 +117,10 @@ const readNormalizedTextContent = (content: ToolTextContent) =>
   normalizeText(readTextContent(content));
 const readTrimmedLines = (content: ToolTextContent) =>
   (readTextContent(content) ?? "").split("\n").map((line) => line.trim());
-const readTotalLines = (details: unknown) => (details as { totalLines?: number }).totalLines;
-const readProcessStatus = (details: unknown) => (details as { status?: string }).status;
+const readTotalLines = (details: unknown) =>
+  (details as { totalLines?: number }).totalLines;
+const readProcessStatus = (details: unknown) =>
+  (details as { status?: string }).status;
 const readProcessStatusOrRunning = (details: unknown) =>
   readProcessStatus(details) ?? PROCESS_STATUS_RUNNING;
 const expectTextContainsValues = (
@@ -131,8 +149,10 @@ const executeExecCommand = (
   command: string,
   options: ExecToolRunOptions = {},
 ) => executeExecTool(tool, { command, ...options });
-const executeProcessTool = (tool: ProcessToolInstance, params: ProcessToolArgs) =>
-  tool.execute(nextCallId(), params);
+const executeProcessTool = (
+  tool: ProcessToolInstance,
+  params: ProcessToolArgs,
+) => tool.execute(nextCallId(), params);
 type ProcessPollResult = { status: string; output?: string };
 async function listProcessSessions(tool: ProcessToolInstance) {
   const list = await executeProcessTool(tool, { action: "list" });
@@ -174,7 +194,8 @@ async function waitForCompletion(sessionId: string) {
   let status = PROCESS_STATUS_RUNNING;
   await expect
     .poll(async () => {
-      status = (await pollProcessSession({ tool: processTool, sessionId })).status;
+      status = (await pollProcessSession({ tool: processTool, sessionId }))
+        .status;
       return status;
     }, BACKGROUND_POLL_OPTIONS)
     .not.toBe(PROCESS_STATUS_RUNNING);
@@ -193,7 +214,9 @@ const requireRunningSessionId = (result: { details: unknown }) => {
 };
 
 function hasNotifyEventForPrefix(prefix: string): boolean {
-  return peekSystemEvents(DEFAULT_NOTIFY_SESSION_KEY).some((event) => event.includes(prefix));
+  return peekSystemEvents(DEFAULT_NOTIFY_SESSION_KEY).some((event) =>
+    event.includes(prefix),
+  );
 }
 
 async function waitForNotifyEvent(sessionId: string) {
@@ -217,14 +240,20 @@ async function startBackgroundCommand(tool: ExecToolInstance, command: string) {
   const result = await executeExecCommand(tool, command, { background: true });
   return requireRunningSessionId(result);
 }
-async function runBackgroundCommandToCompletion(tool: ExecToolInstance, command: string) {
+async function runBackgroundCommandToCompletion(
+  tool: ExecToolInstance,
+  command: string,
+) {
   const sessionId = await startBackgroundCommand(tool, command);
   const status = await waitForCompletion(sessionId);
   return { sessionId, status };
 }
 
 type ProcessLogWindow = { offset?: number; limit?: number };
-async function readProcessLog(sessionId: string, options: ProcessLogWindow = {}) {
+async function readProcessLog(
+  sessionId: string,
+  options: ProcessLogWindow = {},
+) {
   return executeProcessTool(processTool, {
     action: "log",
     sessionId,
@@ -264,7 +293,9 @@ type NotifyNoopCase = LabeledCase & {
   notifyOnExitEmptySuccess: boolean;
 };
 const NOOP_NOTIFY_CASES: NotifyNoopCase[] = [
-  withLabel("default behavior skips no-op completion events", { notifyOnExitEmptySuccess: false }),
+  withLabel("default behavior skips no-op completion events", {
+    notifyOnExitEmptySuccess: false,
+  }),
   withLabel("explicitly enabling no-op completion emits completion events", {
     notifyOnExitEmptySuccess: true,
   }),
@@ -303,10 +334,13 @@ const SHORT_LOG_EXPECTATION_CASES: ShortLogExpectationCase[] = [
   }),
 ];
 const LONG_LOG_EXPECTATION_CASES: LongLogExpectationCase[] = [
-  withLabel("applies default tail only when no explicit log window is provided", {
-    firstLine: "line-2",
-    mustContain: ["showing last 200 of 201 lines", "line-2", "line-201"],
-  }),
+  withLabel(
+    "applies default tail only when no explicit log window is provided",
+    {
+      firstLine: "line-2",
+      mustContain: ["showing last 200 of 201 lines", "line-2", "line-201"],
+    },
+  ),
   withLabel("keeps offset-only log requests unbounded by default tail mode", {
     options: { offset: 30 },
     firstLine: "line-31",
@@ -339,7 +373,9 @@ const runDisallowedElevationCase = async ({
   const customBash = createDisallowedElevatedExecTool(defaultLevel, overrides);
   if (expectedError) {
     await expect(
-      executeExecCommand(customBash, ECHO_HI_COMMAND, { elevated: requestElevated }),
+      executeExecCommand(customBash, ECHO_HI_COMMAND, {
+        elevated: requestElevated,
+      }),
     ).rejects.toThrow(expectedError);
     return;
   }
@@ -348,7 +384,9 @@ const runDisallowedElevationCase = async ({
   if (expectedOutputIncludes === undefined) {
     throw new Error("expected text assertion value");
   }
-  expect(readTextContent(result.content) ?? "").toContain(expectedOutputIncludes);
+  expect(readTextContent(result.content) ?? "").toContain(
+    expectedOutputIncludes,
+  );
 };
 const runShortLogExpectationCase = async ({
   lines,
@@ -364,7 +402,10 @@ const readBackgroundLogSnapshot = async (
   lines: string[],
   options: ProcessLogWindow = {},
 ): Promise<ProcessLogSnapshot> => {
-  const { sessionId } = await runBackgroundCommandToCompletion(execTool, echoLines(lines));
+  const { sessionId } = await runBackgroundCommandToCompletion(
+    execTool,
+    echoLines(lines),
+  );
   const log = await readProcessLog(sessionId, options);
   return {
     text: readTextContent(log.content) ?? "",
@@ -381,7 +422,10 @@ const runLongLogExpectationCase = async ({
   mustNotContain,
 }: LongLogExpectationCase) => {
   const snapshot = await readBackgroundLogSnapshot(
-    Array.from({ length: LONG_LOG_LINE_COUNT }, (_value, index) => `line-${index + 1}`),
+    Array.from(
+      { length: LONG_LOG_LINE_COUNT },
+      (_value, index) => `line-${index + 1}`,
+    ),
     options,
   );
   expect(snapshot.lines[0]).toBe(firstLine);
@@ -392,12 +436,18 @@ const runLongLogExpectationCase = async ({
   expectTextContainsValues(snapshot.text, mustContain, true);
   expectTextContainsValues(snapshot.text, mustNotContain, false);
 };
-const runNotifyNoopCase = async ({ label, notifyOnExitEmptySuccess }: NotifyNoopCase) => {
+const runNotifyNoopCase = async ({
+  label,
+  notifyOnExitEmptySuccess,
+}: NotifyNoopCase) => {
   const tool = createNotifyOnExitExecTool(
     notifyOnExitEmptySuccess ? { notifyOnExitEmptySuccess: true } : {},
   );
 
-  const { status } = await runBackgroundCommandToCompletion(tool, shortDelayCmd);
+  const { status } = await runBackgroundCommandToCompletion(
+    tool,
+    shortDelayCmd,
+  );
   expect(status).toBe(PROCESS_STATUS_COMPLETED);
   const events = peekSystemEvents(DEFAULT_NOTIFY_SESSION_KEY);
   expectNotifyNoopEvents(events, notifyOnExitEmptySuccess, label);
@@ -432,7 +482,10 @@ describe("exec tool backgrounding", () => {
       let output = "";
       await expect
         .poll(async () => {
-          const pollResult = await pollProcessSession({ tool: processTool, sessionId });
+          const pollResult = await pollProcessSession({
+            tool: processTool,
+            sessionId,
+          });
           output = pollResult.output ?? "";
           return pollResult.status;
         }, BACKGROUND_POLL_OPTIONS)
@@ -444,11 +497,16 @@ describe("exec tool backgrounding", () => {
   );
 
   it("supports explicit background and derives session name from the command", async () => {
-    const sessionId = await startBackgroundCommand(execTool, COMMAND_ECHO_HELLO);
+    const sessionId = await startBackgroundCommand(
+      execTool,
+      COMMAND_ECHO_HELLO,
+    );
 
     const sessions = await listProcessSessions(processTool);
     expect(hasSession(sessions, sessionId)).toBe(true);
-    expect(sessions.find((s) => s.sessionId === sessionId)?.name).toBe(COMMAND_ECHO_HELLO);
+    expect(sessions.find((s) => s.sessionId === sessionId)?.name).toBe(
+      COMMAND_ECHO_HELLO,
+    );
   });
 
   it("uses default timeout when timeout is omitted", async () => {
@@ -457,7 +515,9 @@ describe("exec tool backgrounding", () => {
       backgroundMs: 10,
       allowBackground: false,
     });
-    await expect(executeExecCommand(customBash, longDelayCmd)).rejects.toThrow(/timed out/i);
+    await expect(executeExecCommand(customBash, longDelayCmd)).rejects.toThrow(
+      /timed out/i,
+    );
   });
 
   it.each<DisallowedElevationCase>(DISALLOWED_ELEVATION_CASES)(
@@ -470,13 +530,22 @@ describe("exec tool backgrounding", () => {
     runShortLogExpectationCase,
   );
 
-  it.each<LongLogExpectationCase>(LONG_LOG_EXPECTATION_CASES)("$label", runLongLogExpectationCase);
+  it.each<LongLogExpectationCase>(LONG_LOG_EXPECTATION_CASES)(
+    "$label",
+    runLongLogExpectationCase,
+  );
   it("scopes process sessions by scopeKey", async () => {
     const alphaTools = createScopedToolSet(SCOPE_KEY_ALPHA);
     const betaTools = createScopedToolSet(SCOPE_KEY_BETA);
 
-    const sessionA = await startBackgroundCommand(alphaTools.exec, shortDelayCmd);
-    const sessionB = await startBackgroundCommand(betaTools.exec, shortDelayCmd);
+    const sessionA = await startBackgroundCommand(
+      alphaTools.exec,
+      shortDelayCmd,
+    );
+    const sessionB = await startBackgroundCommand(
+      betaTools.exec,
+      shortDelayCmd,
+    );
 
     const sessionsA = await listProcessSessions(alphaTools.process);
     expect(hasSession(sessionsA, sessionA)).toBe(true);
@@ -494,9 +563,15 @@ describe("exec exit codes", () => {
   useCapturedEnv([...SHELL_ENV_KEYS], applyDefaultShellEnv);
 
   it("treats non-zero exits as completed and appends exit code", async () => {
-    const command = joinCommands([shellEcho(OUTPUT_NOPE), COMMAND_EXIT_WITH_ERROR]);
+    const command = joinCommands([
+      shellEcho(OUTPUT_NOPE),
+      COMMAND_EXIT_WITH_ERROR,
+    ]);
     const result = await executeExecCommand(execTool, command);
-    const resultDetails = result.details as { status?: string; exitCode?: number | null };
+    const resultDetails = result.details as {
+      status?: string;
+      exitCode?: number | null;
+    };
     expect(readProcessStatus(resultDetails)).toBe(PROCESS_STATUS_COMPLETED);
     expect(resultDetails.exitCode).toBe(1);
 
@@ -510,7 +585,10 @@ describe("exec notifyOnExit", () => {
   it("enqueues a system event when a backgrounded exec exits", async () => {
     const tool = createNotifyOnExitExecTool();
 
-    const sessionId = await startBackgroundCommand(tool, echoAfterDelay("notify"));
+    const sessionId = await startBackgroundCommand(
+      tool,
+      echoAfterDelay("notify"),
+    );
 
     const { finished, hasEvent } = await waitForNotifyEvent(sessionId);
 
@@ -526,7 +604,9 @@ describe("exec PATH handling", () => {
 
   it("prepends configured path entries", async () => {
     const basePath = isWin ? "C:\\Windows\\System32" : "/usr/bin";
-    const prepend = isWin ? ["C:\\custom\\bin", "C:\\oss\\bin"] : ["/custom/bin", "/opt/oss/bin"];
+    const prepend = isWin
+      ? ["C:\\custom\\bin", "C:\\oss\\bin"]
+      : ["/custom/bin", "/opt/oss/bin"];
     process.env.PATH = basePath;
 
     const tool = createTestExecTool({ pathPrepend: prepend });

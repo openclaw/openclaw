@@ -34,7 +34,9 @@ import {
 } from "./zod-schema.core.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
-const ToolPolicyBySenderSchema = z.record(z.string(), ToolPolicySchema).optional();
+const ToolPolicyBySenderSchema = z
+  .record(z.string(), ToolPolicySchema)
+  .optional();
 
 const DiscordIdSchema = z
   .union([z.string(), z.number()])
@@ -43,7 +45,13 @@ const DiscordIdSchema = z
   });
 const DiscordIdListSchema = z.array(DiscordIdSchema);
 
-const TelegramInlineButtonsScopeSchema = z.enum(["off", "dm", "group", "all", "allowlist"]);
+const TelegramInlineButtonsScopeSchema = z.enum([
+  "off",
+  "dm",
+  "group",
+  "all",
+  "allowlist",
+]);
 
 const TelegramCapabilitiesSchema = z.union([
   z.array(z.string()),
@@ -121,12 +129,18 @@ const validateTelegramCustomCommands = (
   }
 };
 
-function normalizeTelegramStreamingConfig(value: { streaming?: unknown; streamMode?: unknown }) {
+function normalizeTelegramStreamingConfig(value: {
+  streaming?: unknown;
+  streamMode?: unknown;
+}) {
   value.streaming = resolveTelegramPreviewStreamMode(value);
   delete value.streamMode;
 }
 
-function normalizeDiscordStreamingConfig(value: { streaming?: unknown; streamMode?: unknown }) {
+function normalizeDiscordStreamingConfig(value: {
+  streaming?: unknown;
+  streamMode?: unknown;
+}) {
   value.streaming = resolveDiscordPreviewStreamMode(value);
   delete value.streamMode;
 }
@@ -165,7 +179,9 @@ export const TelegramAccountSchemaBase = z
     direct: z.record(z.string(), TelegramDirectSchema.optional()).optional(),
     textChunkLimit: z.number().int().positive().optional(),
     chunkMode: z.enum(["length", "newline"]).optional(),
-    streaming: z.union([z.boolean(), z.enum(["off", "partial", "block", "progress"])]).optional(),
+    streaming: z
+      .union([z.boolean(), z.enum(["off", "partial", "block", "progress"])])
+      .optional(),
     blockStreaming: z.boolean().optional(),
     draftChunk: BlockStreamingChunkSchema.optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
@@ -233,14 +249,16 @@ export const TelegramAccountSchemaBase = z
   })
   .strict();
 
-export const TelegramAccountSchema = TelegramAccountSchemaBase.superRefine((value, ctx) => {
-  normalizeTelegramStreamingConfig(value);
-  // Account-level schemas skip allowFrom validation because accounts inherit
-  // allowFrom from the parent channel config at runtime (resolveTelegramAccount
-  // shallow-merges top-level and account values in src/telegram/accounts.ts).
-  // Validation is enforced at the top-level TelegramConfigSchema instead.
-  validateTelegramCustomCommands(value, ctx);
-});
+export const TelegramAccountSchema = TelegramAccountSchemaBase.superRefine(
+  (value, ctx) => {
+    normalizeTelegramStreamingConfig(value);
+    // Account-level schemas skip allowFrom validation because accounts inherit
+    // allowFrom from the parent channel config at runtime (resolveTelegramAccount
+    // shallow-merges top-level and account values in src/telegram/accounts.ts).
+    // Validation is enforced at the top-level TelegramConfigSchema instead.
+    validateTelegramCustomCommands(value, ctx);
+  },
+);
 
 export const TelegramConfigSchema = TelegramAccountSchemaBase.extend({
   accounts: z.record(z.string(), TelegramAccountSchema.optional()).optional(),
@@ -291,13 +309,15 @@ export const TelegramConfigSchema = TelegramAccountSchemaBase.extend({
     }
   }
 
-  const baseWebhookUrl = typeof value.webhookUrl === "string" ? value.webhookUrl.trim() : "";
+  const baseWebhookUrl =
+    typeof value.webhookUrl === "string" ? value.webhookUrl.trim() : "";
   const baseWebhookSecret =
     typeof value.webhookSecret === "string" ? value.webhookSecret.trim() : "";
   if (baseWebhookUrl && !baseWebhookSecret) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
-      message: "channels.telegram.webhookUrl requires channels.telegram.webhookSecret",
+      message:
+        "channels.telegram.webhookUrl requires channels.telegram.webhookSecret",
       path: ["webhookSecret"],
     });
   }
@@ -338,7 +358,9 @@ export const TelegramConfigSchema = TelegramAccountSchemaBase.extend({
       continue;
     }
     const accountSecret =
-      typeof account.webhookSecret === "string" ? account.webhookSecret.trim() : "";
+      typeof account.webhookSecret === "string"
+        ? account.webhookSecret.trim()
+        : "";
     if (!accountSecret && !baseWebhookSecret) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -382,10 +404,14 @@ export const DiscordGuildSchema = z
     requireMention: z.boolean().optional(),
     tools: ToolPolicySchema,
     toolsBySender: ToolPolicyBySenderSchema,
-    reactionNotifications: z.enum(["off", "own", "all", "allowlist"]).optional(),
+    reactionNotifications: z
+      .enum(["off", "own", "all", "allowlist"])
+      .optional(),
     users: DiscordIdListSchema.optional(),
     roles: DiscordIdListSchema.optional(),
-    channels: z.record(z.string(), DiscordGuildChannelSchema.optional()).optional(),
+    channels: z
+      .record(z.string(), DiscordGuildChannelSchema.optional())
+      .optional(),
   })
   .strict();
 
@@ -440,7 +466,9 @@ export const DiscordAccountSchema = z
     blockStreaming: z.boolean().optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
     // Canonical streaming mode. Legacy aliases (`streamMode`, boolean `streaming`) are auto-mapped.
-    streaming: z.union([z.boolean(), z.enum(["off", "partial", "block", "progress"])]).optional(),
+    streaming: z
+      .union([z.boolean(), z.enum(["off", "partial", "block", "progress"])])
+      .optional(),
     streamMode: z.enum(["partial", "block", "off"]).optional(),
     draftChunk: BlockStreamingChunkSchema.optional(),
     maxLinesPerMessage: z.number().int().positive().optional(),
@@ -530,7 +558,14 @@ export const DiscordAccountSchema = z
     activity: z.string().optional(),
     status: z.enum(["online", "dnd", "idle", "invisible"]).optional(),
     activityType: z
-      .union([z.literal(0), z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5)])
+      .union([
+        z.literal(0),
+        z.literal(1),
+        z.literal(2),
+        z.literal(3),
+        z.literal(4),
+        z.literal(5),
+      ])
       .optional(),
     activityUrl: z.string().url().optional(),
     eventQueue: z
@@ -546,16 +581,19 @@ export const DiscordAccountSchema = z
   .superRefine((value, ctx) => {
     normalizeDiscordStreamingConfig(value);
 
-    const activityText = typeof value.activity === "string" ? value.activity.trim() : "";
+    const activityText =
+      typeof value.activity === "string" ? value.activity.trim() : "";
     const hasActivity = Boolean(activityText);
     const hasActivityType = value.activityType !== undefined;
-    const activityUrl = typeof value.activityUrl === "string" ? value.activityUrl.trim() : "";
+    const activityUrl =
+      typeof value.activityUrl === "string" ? value.activityUrl.trim() : "";
     const hasActivityUrl = Boolean(activityUrl);
 
     if ((hasActivityType || hasActivityUrl) && !hasActivity) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: "channels.discord.activity is required when activityType or activityUrl is set",
+        message:
+          "channels.discord.activity is required when activityType or activityUrl is set",
         path: ["activity"],
       });
     }
@@ -563,7 +601,8 @@ export const DiscordAccountSchema = z
     if (value.activityType === 1 && !hasActivityUrl) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: "channels.discord.activityUrl is required when activityType is 1 (Streaming)",
+        message:
+          "channels.discord.activityUrl is required when activityType is 1 (Streaming)",
         path: ["activityUrl"],
       });
     }
@@ -571,7 +610,8 @@ export const DiscordAccountSchema = z
     if (hasActivityUrl && value.activityType !== 1) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: "channels.discord.activityType must be 1 (Streaming) when activityUrl is set",
+        message:
+          "channels.discord.activityType must be 1 (Streaming) when activityUrl is set",
         path: ["activityType"],
       });
     }
@@ -587,7 +627,9 @@ export const DiscordConfigSchema = DiscordAccountSchema.extend({
   const dmPolicy = value.dmPolicy ?? value.dm?.policy ?? "pairing";
   const allowFrom = value.allowFrom ?? value.dm?.allowFrom;
   const allowFromPath =
-    value.allowFrom !== undefined ? (["allowFrom"] as const) : (["dm", "allowFrom"] as const);
+    value.allowFrom !== undefined
+      ? (["allowFrom"] as const)
+      : (["dm", "allowFrom"] as const);
   requireOpenAllowFrom({
     policy: dmPolicy,
     allowFrom,
@@ -613,9 +655,16 @@ export const DiscordConfigSchema = DiscordAccountSchema.extend({
       continue;
     }
     const effectivePolicy =
-      account.dmPolicy ?? account.dm?.policy ?? value.dmPolicy ?? value.dm?.policy ?? "pairing";
+      account.dmPolicy ??
+      account.dm?.policy ??
+      value.dmPolicy ??
+      value.dm?.policy ??
+      "pairing";
     const effectiveAllowFrom =
-      account.allowFrom ?? account.dm?.allowFrom ?? value.allowFrom ?? value.dm?.allowFrom;
+      account.allowFrom ??
+      account.dm?.allowFrom ??
+      value.allowFrom ??
+      value.dm?.allowFrom;
     requireOpenAllowFrom({
       policy: effectivePolicy,
       allowFrom: effectiveAllowFrom,
@@ -702,7 +751,10 @@ export const GoogleChatAccountSchema = z
     chunkMode: z.enum(["length", "newline"]).optional(),
     blockStreaming: z.boolean().optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
-    streamMode: z.enum(["replace", "status_final", "append"]).optional().default("replace"),
+    streamMode: z
+      .enum(["replace", "status_final", "append"])
+      .optional()
+      .default("replace"),
     mediaMaxMb: z.number().positive().optional(),
     replyToMode: ReplyToModeSchema.optional(),
     actions: z
@@ -789,11 +841,15 @@ export const SlackAccountSchema = z
     chunkMode: z.enum(["length", "newline"]).optional(),
     blockStreaming: z.boolean().optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
-    streaming: z.union([z.boolean(), z.enum(["off", "partial", "block", "progress"])]).optional(),
+    streaming: z
+      .union([z.boolean(), z.enum(["off", "partial", "block", "progress"])])
+      .optional(),
     nativeStreaming: z.boolean().optional(),
     streamMode: z.enum(["replace", "status_final", "append"]).optional(),
     mediaMaxMb: z.number().positive().optional(),
-    reactionNotifications: z.enum(["off", "own", "all", "allowlist"]).optional(),
+    reactionNotifications: z
+      .enum(["off", "own", "all", "allowlist"])
+      .optional(),
     reactionAllowlist: z.array(z.union([z.string(), z.number()])).optional(),
     replyToMode: ReplyToModeSchema.optional(),
     replyToModeByChatType: SlackReplyToModeByChatTypeSchema.optional(),
@@ -850,7 +906,9 @@ export const SlackConfigSchema = SlackAccountSchema.safeExtend({
   const dmPolicy = value.dmPolicy ?? value.dm?.policy ?? "pairing";
   const allowFrom = value.allowFrom ?? value.dm?.allowFrom;
   const allowFromPath =
-    value.allowFrom !== undefined ? (["allowFrom"] as const) : (["dm", "allowFrom"] as const);
+    value.allowFrom !== undefined
+      ? (["allowFrom"] as const)
+      : (["dm", "allowFrom"] as const);
   requireOpenAllowFrom({
     policy: dmPolicy,
     allowFrom,
@@ -872,7 +930,8 @@ export const SlackConfigSchema = SlackAccountSchema.safeExtend({
   if (baseMode === "http" && !value.signingSecret) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
-      message: 'channels.slack.mode="http" requires channels.slack.signingSecret',
+      message:
+        'channels.slack.mode="http" requires channels.slack.signingSecret',
       path: ["signingSecret"],
     });
   }
@@ -888,9 +947,16 @@ export const SlackConfigSchema = SlackAccountSchema.safeExtend({
     }
     const accountMode = account.mode ?? baseMode;
     const effectivePolicy =
-      account.dmPolicy ?? account.dm?.policy ?? value.dmPolicy ?? value.dm?.policy ?? "pairing";
+      account.dmPolicy ??
+      account.dm?.policy ??
+      value.dmPolicy ??
+      value.dm?.policy ??
+      "pairing";
     const effectiveAllowFrom =
-      account.allowFrom ?? account.dm?.allowFrom ?? value.allowFrom ?? value.dm?.allowFrom;
+      account.allowFrom ??
+      account.dm?.allowFrom ??
+      value.allowFrom ??
+      value.dm?.allowFrom;
     requireOpenAllowFrom({
       policy: effectivePolicy,
       allowFrom: effectiveAllowFrom,
@@ -936,7 +1002,9 @@ export const SignalAccountSchemaBase = z
     cliPath: ExecutableTokenSchema.optional(),
     autoStart: z.boolean().optional(),
     startupTimeoutMs: z.number().int().min(1000).max(120000).optional(),
-    receiveMode: z.union([z.literal("on-start"), z.literal("manual")]).optional(),
+    receiveMode: z
+      .union([z.literal("on-start"), z.literal("manual")])
+      .optional(),
     ignoreAttachments: z.boolean().optional(),
     ignoreStories: z.boolean().optional(),
     sendReadReceipts: z.boolean().optional(),
@@ -953,7 +1021,9 @@ export const SignalAccountSchemaBase = z
     blockStreaming: z.boolean().optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
     mediaMaxMb: z.number().int().positive().optional(),
-    reactionNotifications: z.enum(["off", "own", "all", "allowlist"]).optional(),
+    reactionNotifications: z
+      .enum(["off", "own", "all", "allowlist"])
+      .optional(),
     reactionAllowlist: z.array(z.union([z.string(), z.number()])).optional(),
     actions: z
       .object({
@@ -981,7 +1051,8 @@ export const SignalConfigSchema = SignalAccountSchemaBase.extend({
     allowFrom: value.allowFrom,
     ctx,
     path: ["allowFrom"],
-    message: 'channels.signal.dmPolicy="open" requires channels.signal.allowFrom to include "*"',
+    message:
+      'channels.signal.dmPolicy="open" requires channels.signal.allowFrom to include "*"',
   });
   requireAllowlistAllowFrom({
     policy: value.dmPolicy,
@@ -1082,13 +1153,17 @@ export const IrcAccountSchemaBase = z
 
 type IrcBaseConfig = z.infer<typeof IrcAccountSchemaBase>;
 
-function refineIrcAllowFromAndNickserv(value: IrcBaseConfig, ctx: z.RefinementCtx): void {
+function refineIrcAllowFromAndNickserv(
+  value: IrcBaseConfig,
+  ctx: z.RefinementCtx,
+): void {
   requireOpenAllowFrom({
     policy: value.dmPolicy,
     allowFrom: value.allowFrom,
     ctx,
     path: ["allowFrom"],
-    message: 'channels.irc.dmPolicy="open" requires channels.irc.allowFrom to include "*"',
+    message:
+      'channels.irc.dmPolicy="open" requires channels.irc.allowFrom to include "*"',
   });
   requireAllowlistAllowFrom({
     policy: value.dmPolicy,
@@ -1102,7 +1177,8 @@ function refineIrcAllowFromAndNickserv(value: IrcBaseConfig, ctx: z.RefinementCt
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ["nickserv", "registerEmail"],
-      message: "channels.irc.nickserv.register=true requires channels.irc.nickserv.registerEmail",
+      message:
+        "channels.irc.nickserv.register=true requires channels.irc.nickserv.registerEmail",
     });
   }
 }
@@ -1110,16 +1186,19 @@ function refineIrcAllowFromAndNickserv(value: IrcBaseConfig, ctx: z.RefinementCt
 // Account-level schemas skip allowFrom validation because accounts inherit
 // allowFrom from the parent channel config at runtime.
 // Validation is enforced at the top-level IrcConfigSchema instead.
-export const IrcAccountSchema = IrcAccountSchemaBase.superRefine((value, ctx) => {
-  // Only validate nickserv at account level, not allowFrom (inherited from parent).
-  if (value.nickserv?.register && !value.nickserv.registerEmail?.trim()) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ["nickserv", "registerEmail"],
-      message: "channels.irc.nickserv.register=true requires channels.irc.nickserv.registerEmail",
-    });
-  }
-});
+export const IrcAccountSchema = IrcAccountSchemaBase.superRefine(
+  (value, ctx) => {
+    // Only validate nickserv at account level, not allowFrom (inherited from parent).
+    if (value.nickserv?.register && !value.nickserv.registerEmail?.trim()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["nickserv", "registerEmail"],
+        message:
+          "channels.irc.nickserv.register=true requires channels.irc.nickserv.registerEmail",
+      });
+    }
+  },
+);
 
 export const IrcConfigSchema = IrcAccountSchemaBase.extend({
   accounts: z.record(z.string(), IrcAccountSchema.optional()).optional(),
@@ -1165,9 +1244,14 @@ export const IMessageAccountSchemaBase = z
     dbPath: z.string().optional(),
     remoteHost: z
       .string()
-      .refine(isSafeScpRemoteHost, "expected SSH host or user@host (no spaces/options)")
+      .refine(
+        isSafeScpRemoteHost,
+        "expected SSH host or user@host (no spaces/options)",
+      )
       .optional(),
-    service: z.union([z.literal("imessage"), z.literal("sms"), z.literal("auto")]).optional(),
+    service: z
+      .union([z.literal("imessage"), z.literal("sms"), z.literal("auto")])
+      .optional(),
     region: z.string().optional(),
     dmPolicy: DmPolicySchema.optional().default("pairing"),
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
@@ -1179,10 +1263,18 @@ export const IMessageAccountSchemaBase = z
     dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
     includeAttachments: z.boolean().optional(),
     attachmentRoots: z
-      .array(z.string().refine(isValidInboundPathRootPattern, "expected absolute path root"))
+      .array(
+        z
+          .string()
+          .refine(isValidInboundPathRootPattern, "expected absolute path root"),
+      )
       .optional(),
     remoteAttachmentRoots: z
-      .array(z.string().refine(isValidInboundPathRootPattern, "expected absolute path root"))
+      .array(
+        z
+          .string()
+          .refine(isValidInboundPathRootPattern, "expected absolute path root"),
+      )
       .optional(),
     mediaMaxMb: z.number().int().positive().optional(),
     textChunkLimit: z.number().int().positive().optional(),
@@ -1312,7 +1404,9 @@ export const BlueBubblesAccountSchemaBase = z
     sendReadReceipts: z.boolean().optional(),
     blockStreaming: z.boolean().optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
-    groups: z.record(z.string(), BlueBubblesGroupConfigSchema.optional()).optional(),
+    groups: z
+      .record(z.string(), BlueBubblesGroupConfigSchema.optional())
+      .optional(),
     heartbeat: ChannelHeartbeatVisibilitySchema,
     responsePrefix: z.string().optional(),
   })
@@ -1324,7 +1418,9 @@ export const BlueBubblesAccountSchemaBase = z
 export const BlueBubblesAccountSchema = BlueBubblesAccountSchemaBase;
 
 export const BlueBubblesConfigSchema = BlueBubblesAccountSchemaBase.extend({
-  accounts: z.record(z.string(), BlueBubblesAccountSchema.optional()).optional(),
+  accounts: z
+    .record(z.string(), BlueBubblesAccountSchema.optional())
+    .optional(),
   defaultAccount: z.string().optional(),
   actions: BlueBubblesActionSchema,
 }).superRefine((value, ctx) => {

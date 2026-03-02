@@ -15,7 +15,11 @@ type SecurityAuditOptions = {
   fix?: boolean;
 };
 
-function formatSummary(summary: { critical: number; warn: number; info: number }): string {
+function formatSummary(summary: {
+  critical: number;
+  warn: number;
+  info: number;
+}): string {
   const rich = isRich();
   const c = summary.critical;
   const w = summary.warn;
@@ -36,8 +40,14 @@ export function registerSecurityCli(program: Command) {
       () =>
         `\n${theme.heading("Examples:")}\n${formatHelpExamples([
           ["openclaw security audit", "Run a local security audit."],
-          ["openclaw security audit --deep", "Include best-effort live Gateway probe checks."],
-          ["openclaw security audit --fix", "Apply safe remediations and file-permission fixes."],
+          [
+            "openclaw security audit --deep",
+            "Include best-effort live Gateway probe checks.",
+          ],
+          [
+            "openclaw security audit --fix",
+            "Apply safe remediations and file-permission fixes.",
+          ],
           ["openclaw security audit --json", "Output machine-readable JSON."],
         ])}\n\n${theme.muted("Docs:")} ${formatDocsLink("/cli/security", "docs.openclaw.ai/cli/security")}\n`,
     );
@@ -46,10 +56,16 @@ export function registerSecurityCli(program: Command) {
     .command("audit")
     .description("Audit config + local state for common security foot-guns")
     .option("--deep", "Attempt live Gateway probe (best-effort)", false)
-    .option("--fix", "Apply safe fixes (tighten defaults + chmod state/config)", false)
+    .option(
+      "--fix",
+      "Apply safe fixes (tighten defaults + chmod state/config)",
+      false,
+    )
     .option("--json", "Print JSON", false)
     .action(async (opts: SecurityAuditOptions) => {
-      const fixResult = opts.fix ? await fixSecurityFootguns().catch((_err) => null) : null;
+      const fixResult = opts.fix
+        ? await fixSecurityFootguns().catch((_err) => null)
+        : null;
 
       const cfg = loadConfig();
       const report = await runSecurityAudit({
@@ -61,7 +77,11 @@ export function registerSecurityCli(program: Command) {
 
       if (opts.json) {
         defaultRuntime.log(
-          JSON.stringify(fixResult ? { fix: fixResult, report } : report, null, 2),
+          JSON.stringify(
+            fixResult ? { fix: fixResult, report } : report,
+            null,
+            2,
+          ),
         );
         return;
       }
@@ -73,10 +93,16 @@ export function registerSecurityCli(program: Command) {
       const lines: string[] = [];
       lines.push(heading("OpenClaw security audit"));
       lines.push(muted(`Summary: ${formatSummary(report.summary)}`));
-      lines.push(muted(`Run deeper: ${formatCliCommand("openclaw security audit --deep")}`));
+      lines.push(
+        muted(
+          `Run deeper: ${formatCliCommand("openclaw security audit --deep")}`,
+        ),
+      );
 
       if (opts.fix) {
-        lines.push(muted(`Fix: ${formatCliCommand("openclaw security audit --fix")}`));
+        lines.push(
+          muted(`Fix: ${formatCliCommand("openclaw security audit --fix")}`),
+        );
         if (!fixResult) {
           lines.push(muted("Fixes: failed to apply (unexpected error)"));
         } else if (
@@ -95,14 +121,20 @@ export function registerSecurityCli(program: Command) {
             if (action.kind === "chmod") {
               const mode = action.mode.toString(8).padStart(3, "0");
               if (action.ok) {
-                lines.push(muted(`  chmod ${mode} ${shortenHomePath(action.path)}`));
+                lines.push(
+                  muted(`  chmod ${mode} ${shortenHomePath(action.path)}`),
+                );
               } else if (action.skipped) {
                 lines.push(
-                  muted(`  skip chmod ${mode} ${shortenHomePath(action.path)} (${action.skipped})`),
+                  muted(
+                    `  skip chmod ${mode} ${shortenHomePath(action.path)} (${action.skipped})`,
+                  ),
                 );
               } else if (action.error) {
                 lines.push(
-                  muted(`  chmod ${mode} ${shortenHomePath(action.path)} failed: ${action.error}`),
+                  muted(
+                    `  chmod ${mode} ${shortenHomePath(action.path)} failed: ${action.error}`,
+                  ),
                 );
               }
               continue;

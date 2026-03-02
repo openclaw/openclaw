@@ -9,7 +9,9 @@ export type MSTeamsStorePathOptions = {
   filename: string;
 };
 
-export function resolveMSTeamsStorePath(params: MSTeamsStorePathOptions): string {
+export function resolveMSTeamsStorePath(
+  params: MSTeamsStorePathOptions,
+): string {
   if (params.storePath) {
     return params.storePath;
   }

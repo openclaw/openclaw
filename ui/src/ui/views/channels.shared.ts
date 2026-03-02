@@ -9,9 +9,12 @@ export function channelEnabled(key: ChannelKey, props: ChannelsProps) {
     return false;
   }
   const channelStatus = channels[key] as Record<string, unknown> | undefined;
-  const configured = typeof channelStatus?.configured === "boolean" && channelStatus.configured;
-  const running = typeof channelStatus?.running === "boolean" && channelStatus.running;
-  const connected = typeof channelStatus?.connected === "boolean" && channelStatus.connected;
+  const configured =
+    typeof channelStatus?.configured === "boolean" && channelStatus.configured;
+  const running =
+    typeof channelStatus?.running === "boolean" && channelStatus.running;
+  const connected =
+    typeof channelStatus?.connected === "boolean" && channelStatus.connected;
   const accounts = snapshot.channelAccounts?.[key] ?? [];
   const accountActive = accounts.some(
     (account) => account.configured || account.running || account.connected,

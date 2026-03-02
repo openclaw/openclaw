@@ -12,8 +12,13 @@ export const MEMORY_SYSTEM_PROMPT = [
   "https://github.com/openclaw/openclaw/commit/7d1fee70e76f2f634f1b41fca927ee663914183a",
 ].join("\n");
 
-export async function shouldSuggestMemorySystem(workspaceDir: string): Promise<boolean> {
-  const memoryPaths = [path.join(workspaceDir, "MEMORY.md"), path.join(workspaceDir, "memory.md")];
+export async function shouldSuggestMemorySystem(
+  workspaceDir: string,
+): Promise<boolean> {
+  const memoryPaths = [
+    path.join(workspaceDir, "MEMORY.md"),
+    path.join(workspaceDir, "memory.md"),
+  ];
 
   for (const memoryPath of memoryPaths) {
     try {
@@ -50,7 +55,9 @@ export function detectLegacyWorkspaceDirs(params: {
   return { activeWorkspace, legacyDirs };
 }
 
-export function formatLegacyWorkspaceWarning(detection: LegacyWorkspaceDetection): string {
+export function formatLegacyWorkspaceWarning(
+  detection: LegacyWorkspaceDetection,
+): string {
   return [
     "Extra workspace directories detected (may contain old agent files):",
     ...detection.legacyDirs.map((dir) => `- ${shortenHomePath(dir)}`),

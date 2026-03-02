@@ -14,7 +14,9 @@ const slackChannelPlugin = slackPlugin as unknown as ChannelPlugin;
 const telegramChannelPlugin = telegramPlugin as unknown as ChannelPlugin;
 const whatsappChannelPlugin = whatsappPlugin as unknown as ChannelPlugin;
 
-export function installHeartbeatRunnerTestRuntime(params?: { includeSlack?: boolean }): void {
+export function installHeartbeatRunnerTestRuntime(params?: {
+  includeSlack?: boolean;
+}): void {
   beforeEach(() => {
     const runtime = createPluginRuntime();
     setTelegramRuntime(runtime);
@@ -24,8 +26,16 @@ export function installHeartbeatRunnerTestRuntime(params?: { includeSlack?: bool
       setActivePluginRegistry(
         createTestRegistry([
           { pluginId: "slack", plugin: slackChannelPlugin, source: "test" },
-          { pluginId: "whatsapp", plugin: whatsappChannelPlugin, source: "test" },
-          { pluginId: "telegram", plugin: telegramChannelPlugin, source: "test" },
+          {
+            pluginId: "whatsapp",
+            plugin: whatsappChannelPlugin,
+            source: "test",
+          },
+          {
+            pluginId: "telegram",
+            plugin: telegramChannelPlugin,
+            source: "test",
+          },
         ]),
       );
       return;

@@ -14,12 +14,16 @@ function makeMissingScopeResponse() {
   });
 }
 
-function expectMissingScopeError(result: Awaited<ReturnType<typeof fetchClaudeUsage>>) {
+function expectMissingScopeError(
+  result: Awaited<ReturnType<typeof fetchClaudeUsage>>,
+) {
   expect(result.error).toBe(`HTTP 403: ${MISSING_SCOPE_MESSAGE}`);
   expect(result.windows).toHaveLength(0);
 }
 
-function createScopeFallbackFetch(handler: (url: string) => Promise<Response> | Response) {
+function createScopeFallbackFetch(
+  handler: (url: string) => Promise<Response> | Response,
+) {
   return createProviderUsageFetch(async (url) => {
     if (url.includes("/api/oauth/usage")) {
       return makeMissingScopeResponse();
@@ -30,7 +34,9 @@ function createScopeFallbackFetch(handler: (url: string) => Promise<Response> | 
 
 type ScopeFallbackFetch = ReturnType<typeof createScopeFallbackFetch>;
 
-async function expectMissingScopeWithoutFallback(mockFetch: ScopeFallbackFetch) {
+async function expectMissingScopeWithoutFallback(
+  mockFetch: ScopeFallbackFetch,
+) {
   // Use explicit non-session values so this stays deterministic even when worker env contains
   // real Claude session variables from other suites.
   vi.stubEnv("CLAUDE_AI_SESSION_KEY", "missing-session-key");
@@ -41,7 +47,9 @@ async function expectMissingScopeWithoutFallback(mockFetch: ScopeFallbackFetch) 
   expectMissingScopeError(result);
   const calledUrls = mockFetch.mock.calls.map(([input]) => toRequestUrl(input));
   expect(calledUrls.length).toBeGreaterThan(0);
-  expect(calledUrls.every((url) => url.includes("/api/oauth/usage"))).toBe(true);
+  expect(calledUrls.every((url) => url.includes("/api/oauth/usage"))).toBe(
+    true,
+  );
 }
 
 function makeOrgAResponse() {
@@ -57,7 +65,8 @@ describe("fetchClaudeUsage", () => {
     const fiveHourReset = "2026-01-08T00:00:00Z";
     const weekReset = "2026-01-12T00:00:00Z";
     const mockFetch = createProviderUsageFetch(async (_url, init) => {
-      const headers = (init?.headers as Record<string, string> | undefined) ?? {};
+      const headers =
+        (init?.headers as Record<string, string> | undefined) ?? {};
       expect(headers.Authorization).toBe("Bearer token");
       expect(headers["anthropic-beta"]).toBe("oauth-2025-04-20");
 
@@ -71,8 +80,16 @@ describe("fetchClaudeUsage", () => {
     const result = await fetchClaudeUsage("token", 5000, mockFetch);
 
     expect(result.windows).toEqual([
-      { label: "5h", usedPercent: 18, resetAt: new Date(fiveHourReset).getTime() },
-      { label: "Week", usedPercent: 54, resetAt: new Date(weekReset).getTime() },
+      {
+        label: "5h",
+        usedPercent: 18,
+        resetAt: new Date(fiveHourReset).getTime(),
+      },
+      {
+        label: "Week",
+        usedPercent: 54,
+        resetAt: new Date(weekReset).getTime(),
+      },
       { label: "Sonnet", usedPercent: 67 },
     ]);
   });
@@ -97,7 +114,8 @@ describe("fetchClaudeUsage", () => {
         return makeMissingScopeResponse();
       }
 
-      const headers = (init?.headers as Record<string, string> | undefined) ?? {};
+      const headers =
+        (init?.headers as Record<string, string> | undefined) ?? {};
       expect(headers.Cookie).toBe("sessionKey=sk-ant-session-key");
 
       if (url.endsWith("/api/organizations")) {
@@ -116,7 +134,9 @@ describe("fetchClaudeUsage", () => {
     const result = await fetchClaudeUsage("token", 5000, mockFetch);
 
     expect(result.error).toBeUndefined();
-    expect(result.windows).toEqual([{ label: "5h", usedPercent: 12, resetAt: undefined }]);
+    expect(result.windows).toEqual([
+      { label: "5h", usedPercent: 12, resetAt: undefined },
+    ]);
   });
 
   it("parses sessionKey from CLAUDE_WEB_COOKIE for web fallback", async () => {

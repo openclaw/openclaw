@@ -50,7 +50,10 @@ function coercePositiveInt(value: unknown, fallback: number): number {
 export function resolveFeishuWebhookRateLimitDefaultsForTest(
   defaults: unknown,
 ): WebhookRateLimitDefaults {
-  const resolved = defaults as Partial<WebhookRateLimitDefaults> | null | undefined;
+  const resolved = defaults as
+    | Partial<WebhookRateLimitDefaults>
+    | null
+    | undefined;
   return {
     windowMs: coercePositiveInt(
       resolved?.windowMs,
@@ -70,13 +73,19 @@ export function resolveFeishuWebhookRateLimitDefaultsForTest(
 export function resolveFeishuWebhookAnomalyDefaultsForTest(
   defaults: unknown,
 ): WebhookAnomalyDefaults {
-  const resolved = defaults as Partial<WebhookAnomalyDefaults> | null | undefined;
+  const resolved = defaults as
+    | Partial<WebhookAnomalyDefaults>
+    | null
+    | undefined;
   return {
     maxTrackedKeys: coercePositiveInt(
       resolved?.maxTrackedKeys,
       FEISHU_WEBHOOK_ANOMALY_FALLBACK_DEFAULTS.maxTrackedKeys,
     ),
-    ttlMs: coercePositiveInt(resolved?.ttlMs, FEISHU_WEBHOOK_ANOMALY_FALLBACK_DEFAULTS.ttlMs),
+    ttlMs: coercePositiveInt(
+      resolved?.ttlMs,
+      FEISHU_WEBHOOK_ANOMALY_FALLBACK_DEFAULTS.ttlMs,
+    ),
     logEvery: coercePositiveInt(
       resolved?.logEvery,
       FEISHU_WEBHOOK_ANOMALY_FALLBACK_DEFAULTS.logEvery,
@@ -84,9 +93,10 @@ export function resolveFeishuWebhookAnomalyDefaultsForTest(
   };
 }
 
-const feishuWebhookRateLimitDefaults = resolveFeishuWebhookRateLimitDefaultsForTest(
-  WEBHOOK_RATE_LIMIT_DEFAULTS_FROM_SDK,
-);
+const feishuWebhookRateLimitDefaults =
+  resolveFeishuWebhookRateLimitDefaultsForTest(
+    WEBHOOK_RATE_LIMIT_DEFAULTS_FROM_SDK,
+  );
 const feishuWebhookAnomalyDefaults = resolveFeishuWebhookAnomalyDefaultsForTest(
   WEBHOOK_ANOMALY_COUNTER_DEFAULTS_FROM_SDK,
 );
@@ -112,7 +122,10 @@ export function getFeishuWebhookRateLimitStateSizeForTest(): number {
   return feishuWebhookRateLimiter.size();
 }
 
-export function isWebhookRateLimitedForTest(key: string, nowMs: number): boolean {
+export function isWebhookRateLimitedForTest(
+  key: string,
+  nowMs: number,
+): boolean {
   return feishuWebhookRateLimiter.isRateLimited(key, nowMs);
 }
 

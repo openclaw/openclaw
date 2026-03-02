@@ -1,6 +1,13 @@
-import { cancel, multiselect as clackMultiselect, isCancel } from "@clack/prompts";
+import {
+  cancel,
+  multiselect as clackMultiselect,
+  isCancel,
+} from "@clack/prompts";
 import { resolveApiKeyForProvider } from "../../agents/model-auth.js";
-import { type ModelScanResult, scanOpenRouterModels } from "../../agents/model-scan.js";
+import {
+  type ModelScanResult,
+  scanOpenRouterModels,
+} from "../../agents/model-scan.js";
 import { withProgressTotals } from "../../cli/progress.js";
 import { loadConfig } from "../../config/config.js";
 import { logConfigUpdated } from "../../config/logging.js";
@@ -22,13 +29,17 @@ const multiselect = <T>(params: Parameters<typeof clackMultiselect<T>>[0]) =>
     ...params,
     message: stylePromptMessage(params.message),
     options: params.options.map((opt) =>
-      opt.hint === undefined ? opt : { ...opt, hint: stylePromptHint(opt.hint) },
+      opt.hint === undefined
+        ? opt
+        : { ...opt, hint: stylePromptHint(opt.hint) },
     ),
   });
 
 function guardPromptCancel<T>(value: T | symbol, runtime: RuntimeEnv): T {
   if (isCancel(value)) {
-    cancel(stylePromptTitle("Model scan cancelled.") ?? "Model scan cancelled.");
+    cancel(
+      stylePromptTitle("Model scan cancelled.") ?? "Model scan cancelled.",
+    );
     runtime.exit(0);
     throw new Error("unreachable");
   }
@@ -82,15 +93,21 @@ function compareScanMetadata(a: ModelScanResult, b: ModelScanResult): number {
 }
 
 function buildScanHint(result: ModelScanResult): string {
-  const toolLabel = result.tool.ok ? `tool ${formatMs(result.tool.latencyMs)}` : "tool fail";
+  const toolLabel = result.tool.ok
+    ? `tool ${formatMs(result.tool.latencyMs)}`
+    : "tool fail";
   const imageLabel = result.image.skipped
     ? "img skip"
     : result.image.ok
       ? `img ${formatMs(result.image.latencyMs)}`
       : "img fail";
-  const ctxLabel = result.contextLength ? `ctx ${formatTokenK(result.contextLength)}` : "ctx ?";
+  const ctxLabel = result.contextLength
+    ? `ctx ${formatTokenK(result.contextLength)}`
+    : "ctx ?";
   const paramLabel = result.inferredParamB ? `${result.inferredParamB}b` : null;
-  return [toolLabel, imageLabel, ctxLabel, paramLabel].filter(Boolean).join(" | ");
+  return [toolLabel, imageLabel, ctxLabel, paramLabel]
+    .filter(Boolean)
+    .join(" | ");
 }
 
 function printScanSummary(results: ModelScanResult[], runtime: RuntimeEnv) {
@@ -116,16 +133,30 @@ function printScanTable(results: ModelScanResult[], runtime: RuntimeEnv) {
 
   for (const entry of results) {
     const modelLabel = pad(truncate(entry.modelRef, MODEL_PAD), MODEL_PAD);
-    const toolLabel = pad(entry.tool.ok ? formatMs(entry.tool.latencyMs) : "fail", 10);
+    const toolLabel = pad(
+      entry.tool.ok ? formatMs(entry.tool.latencyMs) : "fail",
+      10,
+    );
     const imageLabel = pad(
-      entry.image.ok ? formatMs(entry.image.latencyMs) : entry.image.skipped ? "skip" : "fail",
+      entry.image.ok
+        ? formatMs(entry.image.latencyMs)
+        : entry.image.skipped
+          ? "skip"
+          : "fail",
       10,
     );
     const ctxLabel = pad(formatTokenK(entry.contextLength), CTX_PAD);
-    const paramsLabel = pad(entry.inferredParamB ? `${entry.inferredParamB}b` : "-", 8);
+    const paramsLabel = pad(
+      entry.inferredParamB ? `${entry.inferredParamB}b` : "-",
+      8,
+    );
     const notes = entry.modality ? `modality:${entry.modality}` : "";
 
-    runtime.log([modelLabel, toolLabel, imageLabel, ctxLabel, paramsLabel, notes].join(" "));
+    runtime.log(
+      [modelLabel, toolLabel, imageLabel, ctxLabel, paramsLabel, notes].join(
+        " ",
+      ),
+    );
   }
 }
 
@@ -147,11 +178,17 @@ export async function modelsScanCommand(
   runtime: RuntimeEnv,
 ) {
   const minParams = opts.minParams ? Number(opts.minParams) : undefined;
-  if (minParams !== undefined && (!Number.isFinite(minParams) || minParams < 0)) {
+  if (
+    minParams !== undefined &&
+    (!Number.isFinite(minParams) || minParams < 0)
+  ) {
     throw new Error("--min-params must be >= 0");
   }
   const maxAgeDays = opts.maxAgeDays ? Number(opts.maxAgeDays) : undefined;
-  if (maxAgeDays !== undefined && (!Number.isFinite(maxAgeDays) || maxAgeDays < 0)) {
+  if (
+    maxAgeDays !== undefined &&
+    (!Number.isFinite(maxAgeDays) || maxAgeDays < 0)
+  ) {
     throw new Error("--max-age-days must be >= 0");
   }
   const maxCandidates = opts.maxCandidates ? Number(opts.maxCandidates) : 6;
@@ -163,7 +200,10 @@ export async function modelsScanCommand(
     throw new Error("--timeout must be > 0");
   }
   const concurrency = opts.concurrency ? Number(opts.concurrency) : undefined;
-  if (concurrency !== undefined && (!Number.isFinite(concurrency) || concurrency <= 0)) {
+  if (
+    concurrency !== undefined &&
+    (!Number.isFinite(concurrency) || concurrency <= 0)
+  ) {
     throw new Error("--concurrency must be > 0");
   }
 
@@ -298,11 +338,15 @@ export async function modelsScanCommand(
         nextModels[entry] = {};
       }
     }
-    const existingImageModel = toAgentModelListLike(cfg.agents?.defaults?.imageModel);
+    const existingImageModel = toAgentModelListLike(
+      cfg.agents?.defaults?.imageModel,
+    );
     const nextImageModel =
       selectedImages.length > 0
         ? {
-            ...(existingImageModel?.primary ? { primary: existingImageModel.primary } : undefined),
+            ...(existingImageModel?.primary
+              ? { primary: existingImageModel.primary }
+              : undefined),
             fallbacks: selectedImages,
             ...(opts.setImage ? { primary: selectedImages[0] } : {}),
           }
@@ -311,7 +355,9 @@ export async function modelsScanCommand(
     const defaults = {
       ...cfg.agents?.defaults,
       model: {
-        ...(existingModel?.primary ? { primary: existingModel.primary } : undefined),
+        ...(existingModel?.primary
+          ? { primary: existingModel.primary }
+          : undefined),
         fallbacks: selected,
         ...(opts.setDefault ? { primary: selected[0] } : {}),
       },

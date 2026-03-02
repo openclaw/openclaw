@@ -7,7 +7,10 @@ export type WindowsSpawnResolution =
   | "exe-entrypoint"
   | "shell-fallback";
 
-export type WindowsSpawnCandidateResolution = Exclude<WindowsSpawnResolution, "shell-fallback">;
+export type WindowsSpawnCandidateResolution = Exclude<
+  WindowsSpawnResolution,
+  "shell-fallback"
+>;
 export type WindowsSpawnProgramCandidate = {
   command: string;
   leadingArgv: string[];
@@ -52,12 +55,20 @@ function isFilePath(candidate: string): boolean {
   }
 }
 
-export function resolveWindowsExecutablePath(command: string, env: NodeJS.ProcessEnv): string {
-  if (command.includes("/") || command.includes("\\") || path.isAbsolute(command)) {
+export function resolveWindowsExecutablePath(
+  command: string,
+  env: NodeJS.ProcessEnv,
+): string {
+  if (
+    command.includes("/") ||
+    command.includes("\\") ||
+    path.isAbsolute(command)
+  ) {
     return command;
   }
 
-  const pathValue = env.PATH ?? env.Path ?? process.env.PATH ?? process.env.Path ?? "";
+  const pathValue =
+    env.PATH ?? env.Path ?? process.env.PATH ?? process.env.Path ?? "";
   const pathEntries = pathValue
     .split(";")
     .map((entry) => entry.trim())
@@ -106,8 +117,13 @@ function resolveEntrypointFromCmdShim(wrapperPath: string): string | null {
       if (!relative) {
         continue;
       }
-      const normalizedRelative = relative.replace(/[\\/]+/g, path.sep).replace(/^[\\/]+/, "");
-      const candidate = path.resolve(path.dirname(wrapperPath), normalizedRelative);
+      const normalizedRelative = relative
+        .replace(/[\\/]+/g, path.sep)
+        .replace(/^[\\/]+/, "");
+      const candidate = path.resolve(
+        path.dirname(wrapperPath),
+        normalizedRelative,
+      );
       if (isFilePath(candidate)) {
         candidates.push(candidate);
       }

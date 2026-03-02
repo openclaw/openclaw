@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { openExternalUrlSafe, resolveSafeExternalUrl } from "./open-external-url.ts";
+import {
+  openExternalUrlSafe,
+  resolveSafeExternalUrl,
+} from "./open-external-url.ts";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -10,9 +13,9 @@ describe("resolveSafeExternalUrl", () => {
   const baseHref = "https://openclaw.ai/chat";
 
   it("allows absolute https URLs", () => {
-    expect(resolveSafeExternalUrl("https://example.com/a.png?x=1#y", baseHref)).toBe(
-      "https://example.com/a.png?x=1#y",
-    );
+    expect(
+      resolveSafeExternalUrl("https://example.com/a.png?x=1#y", baseHref),
+    ).toBe("https://example.com/a.png?x=1#y");
   });
 
   it("allows relative URLs resolved against the current origin", () => {
@@ -22,9 +25,9 @@ describe("resolveSafeExternalUrl", () => {
   });
 
   it("allows blob URLs", () => {
-    expect(resolveSafeExternalUrl("blob:https://openclaw.ai/abc-123", baseHref)).toBe(
-      "blob:https://openclaw.ai/abc-123",
-    );
+    expect(
+      resolveSafeExternalUrl("blob:https://openclaw.ai/abc-123", baseHref),
+    ).toBe("blob:https://openclaw.ai/abc-123");
   });
 
   it("allows data image URLs when enabled", () => {
@@ -37,9 +40,13 @@ describe("resolveSafeExternalUrl", () => {
 
   it("rejects non-image data URLs", () => {
     expect(
-      resolveSafeExternalUrl("data:text/html,<script>alert(1)</script>", baseHref, {
-        allowDataImage: true,
-      }),
+      resolveSafeExternalUrl(
+        "data:text/html,<script>alert(1)</script>",
+        baseHref,
+        {
+          allowDataImage: true,
+        },
+      ),
     ).toBeNull();
   });
 
@@ -68,7 +75,9 @@ describe("resolveSafeExternalUrl", () => {
   });
 
   it("rejects data image URLs unless explicitly enabled", () => {
-    expect(resolveSafeExternalUrl("data:image/png;base64,iVBORw0KGgo=", baseHref)).toBeNull();
+    expect(
+      resolveSafeExternalUrl("data:image/png;base64,iVBORw0KGgo=", baseHref),
+    ).toBeNull();
   });
 
   it("rejects javascript URLs", () => {

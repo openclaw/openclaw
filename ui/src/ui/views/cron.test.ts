@@ -112,7 +112,9 @@ describe("cron view", () => {
     statusOk.checked = true;
     statusOk.dispatchEvent(new Event("change", { bubbles: true }));
 
-    expect(onRunsFiltersChange).toHaveBeenCalledWith({ cronRunsStatuses: ["ok"] });
+    expect(onRunsFiltersChange).toHaveBeenCalledWith({
+      cronRunsStatuses: ["ok"],
+    });
   });
 
   it("loads run history when clicking a job row", () => {
@@ -215,7 +217,9 @@ describe("cron view", () => {
 
     const cards = Array.from(container.querySelectorAll(".card"));
     const runHistoryCard = cards.find(
-      (card) => card.querySelector(".card-title")?.textContent?.trim() === "Run history",
+      (card) =>
+        card.querySelector(".card-title")?.textContent?.trim() ===
+        "Run history",
     );
     expect(runHistoryCard).not.toBeUndefined();
 
@@ -255,7 +259,9 @@ describe("cron view", () => {
     const onJobsFiltersChange = vi.fn();
     render(renderCron(createProps({ onJobsFiltersChange })), container);
 
-    const select = container.querySelector('select[data-test-id="cron-jobs-schedule-filter"]');
+    const select = container.querySelector(
+      'select[data-test-id="cron-jobs-schedule-filter"]',
+    );
     expect(select).not.toBeNull();
     if (!(select instanceof HTMLSelectElement)) {
       return;
@@ -263,7 +269,9 @@ describe("cron view", () => {
     select.value = "cron";
     select.dispatchEvent(new Event("change", { bubbles: true }));
 
-    expect(onJobsFiltersChange).toHaveBeenCalledWith({ cronJobsScheduleKindFilter: "cron" });
+    expect(onJobsFiltersChange).toHaveBeenCalledWith({
+      cronJobsScheduleKindFilter: "cron",
+    });
   });
 
   it("calls onJobsFiltersChange when last-run filter changes", () => {
@@ -271,7 +279,9 @@ describe("cron view", () => {
     const onJobsFiltersChange = vi.fn();
     render(renderCron(createProps({ onJobsFiltersChange })), container);
 
-    const select = container.querySelector('select[data-test-id="cron-jobs-last-status-filter"]');
+    const select = container.querySelector(
+      'select[data-test-id="cron-jobs-last-status-filter"]',
+    );
     expect(select).not.toBeNull();
     if (!(select instanceof HTMLSelectElement)) {
       return;
@@ -279,7 +289,9 @@ describe("cron view", () => {
     select.value = "error";
     select.dispatchEvent(new Event("change", { bubbles: true }));
 
-    expect(onJobsFiltersChange).toHaveBeenCalledWith({ cronJobsLastStatusFilter: "error" });
+    expect(onJobsFiltersChange).toHaveBeenCalledWith({
+      cronJobsLastStatusFilter: "error",
+    });
   });
 
   it("calls onJobsFiltersReset when reset button is clicked", () => {
@@ -295,7 +307,9 @@ describe("cron view", () => {
       container,
     );
 
-    const reset = container.querySelector('button[data-test-id="cron-jobs-filters-reset"]');
+    const reset = container.querySelector(
+      'button[data-test-id="cron-jobs-filters-reset"]',
+    );
     expect(reset).not.toBeNull();
     reset?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
@@ -313,8 +327,8 @@ describe("cron view", () => {
       container,
     );
 
-    const options = Array.from(container.querySelectorAll("option")).map((opt) =>
-      (opt.textContent ?? "").trim(),
+    const options = Array.from(container.querySelectorAll("option")).map(
+      (opt) => (opt.textContent ?? "").trim(),
     );
     expect(options).toContain("Webhook POST");
   });
@@ -335,13 +349,15 @@ describe("cron view", () => {
       container,
     );
 
-    const options = Array.from(container.querySelectorAll("option")).map((opt) =>
-      (opt.textContent ?? "").trim(),
+    const options = Array.from(container.querySelectorAll("option")).map(
+      (opt) => (opt.textContent ?? "").trim(),
     );
     expect(options).not.toContain("Announce summary (default)");
     expect(options).toContain("Webhook POST");
     expect(options).toContain("None (internal)");
-    expect(container.querySelector('input[placeholder="https://example.com/cron"]')).toBeNull();
+    expect(
+      container.querySelector('input[placeholder="https://example.com/cron"]'),
+    ).toBeNull();
   });
 
   it("shows webhook delivery details for jobs", () => {
@@ -350,7 +366,10 @@ describe("cron view", () => {
       ...createJob("job-2"),
       sessionTarget: "isolated" as const,
       payload: { kind: "agentTurn" as const, message: "do it" },
-      delivery: { mode: "webhook" as const, to: "https://example.invalid/cron" },
+      delivery: {
+        mode: "webhook" as const,
+        to: "https://example.invalid/cron",
+      },
     };
     render(
       renderCron(
@@ -486,10 +505,14 @@ describe("cron view", () => {
       container,
     );
 
-    const agentInput = container.querySelector('input[placeholder="main or ops"]');
+    const agentInput = container.querySelector(
+      'input[placeholder="main or ops"]',
+    );
     expect(agentInput).not.toBeNull();
     expect(agentInput instanceof HTMLInputElement).toBe(true);
-    expect(agentInput instanceof HTMLInputElement ? agentInput.disabled : false).toBe(true);
+    expect(
+      agentInput instanceof HTMLInputElement ? agentInput.disabled : false,
+    ).toBe(true);
   });
 
   it("renders sectioned cron form layout", () => {
@@ -564,8 +587,9 @@ describe("cron view", () => {
     expect(container.textContent).toContain("Can't add job yet");
     expect(container.textContent).toContain("Fix 3 fields to continue.");
 
-    const saveButton = Array.from(container.querySelectorAll("button")).find((btn) =>
-      ["Add job", "Save changes"].includes(btn.textContent?.trim() ?? ""),
+    const saveButton = Array.from(container.querySelectorAll("button")).find(
+      (btn) =>
+        ["Add job", "Save changes"].includes(btn.textContent?.trim() ?? ""),
     );
     expect(saveButton).not.toBeUndefined();
     expect(saveButton?.disabled).toBe(true);
@@ -599,14 +623,18 @@ describe("cron view", () => {
     const nameInput = container.querySelector("#cron-name");
     expect(nameInput?.getAttribute("aria-invalid")).toBe("true");
     expect(nameInput?.getAttribute("aria-describedby")).toBe("cron-error-name");
-    expect(container.querySelector("#cron-error-name")?.textContent).toContain("Name is required.");
+    expect(container.querySelector("#cron-error-name")?.textContent).toContain(
+      "Name is required.",
+    );
 
     const everyInput = container.querySelector("#cron-every-amount");
     expect(everyInput?.getAttribute("aria-invalid")).toBe("true");
-    expect(everyInput?.getAttribute("aria-describedby")).toBe("cron-error-everyAmount");
-    expect(container.querySelector("#cron-error-everyAmount")?.textContent).toContain(
-      "Interval must be greater than 0.",
+    expect(everyInput?.getAttribute("aria-describedby")).toBe(
+      "cron-error-everyAmount",
     );
+    expect(
+      container.querySelector("#cron-error-everyAmount")?.textContent,
+    ).toContain("Interval must be greater than 0.");
   });
 
   it("wires the Clone action from job rows", () => {
@@ -711,7 +739,11 @@ describe("cron view", () => {
     render(
       renderCron(
         createProps({
-          form: { ...DEFAULT_CRON_FORM, scheduleKind: "cron", payloadKind: "agentTurn" },
+          form: {
+            ...DEFAULT_CRON_FORM,
+            scheduleKind: "cron",
+            payloadKind: "agentTurn",
+          },
           agentSuggestions: ["main"],
           modelSuggestions: ["openai/gpt-5.2"],
           thinkingSuggestions: ["low"],
@@ -723,19 +755,43 @@ describe("cron view", () => {
       container,
     );
 
-    expect(container.querySelector("datalist#cron-agent-suggestions")).not.toBeNull();
-    expect(container.querySelector("datalist#cron-model-suggestions")).not.toBeNull();
-    expect(container.querySelector("datalist#cron-thinking-suggestions")).not.toBeNull();
-    expect(container.querySelector("datalist#cron-tz-suggestions")).not.toBeNull();
-    expect(container.querySelector("datalist#cron-delivery-to-suggestions")).not.toBeNull();
-    expect(container.querySelector("datalist#cron-delivery-account-suggestions")).not.toBeNull();
-    expect(container.querySelector('input[list="cron-agent-suggestions"]')).not.toBeNull();
-    expect(container.querySelector('input[list="cron-model-suggestions"]')).not.toBeNull();
-    expect(container.querySelector('input[list="cron-thinking-suggestions"]')).not.toBeNull();
-    expect(container.querySelector('input[list="cron-tz-suggestions"]')).not.toBeNull();
-    expect(container.querySelector('input[list="cron-delivery-to-suggestions"]')).not.toBeNull();
     expect(
-      container.querySelector('input[list="cron-delivery-account-suggestions"]'),
+      container.querySelector("datalist#cron-agent-suggestions"),
+    ).not.toBeNull();
+    expect(
+      container.querySelector("datalist#cron-model-suggestions"),
+    ).not.toBeNull();
+    expect(
+      container.querySelector("datalist#cron-thinking-suggestions"),
+    ).not.toBeNull();
+    expect(
+      container.querySelector("datalist#cron-tz-suggestions"),
+    ).not.toBeNull();
+    expect(
+      container.querySelector("datalist#cron-delivery-to-suggestions"),
+    ).not.toBeNull();
+    expect(
+      container.querySelector("datalist#cron-delivery-account-suggestions"),
+    ).not.toBeNull();
+    expect(
+      container.querySelector('input[list="cron-agent-suggestions"]'),
+    ).not.toBeNull();
+    expect(
+      container.querySelector('input[list="cron-model-suggestions"]'),
+    ).not.toBeNull();
+    expect(
+      container.querySelector('input[list="cron-thinking-suggestions"]'),
+    ).not.toBeNull();
+    expect(
+      container.querySelector('input[list="cron-tz-suggestions"]'),
+    ).not.toBeNull();
+    expect(
+      container.querySelector('input[list="cron-delivery-to-suggestions"]'),
+    ).not.toBeNull();
+    expect(
+      container.querySelector(
+        'input[list="cron-delivery-account-suggestions"]',
+      ),
     ).not.toBeNull();
   });
 });

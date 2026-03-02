@@ -47,7 +47,11 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
     return () => childSessionKey;
   }
 
-  async function executeSpawn(callId: string, agentId: string, sandbox?: "inherit" | "require") {
+  async function executeSpawn(
+    callId: string,
+    agentId: string,
+    sandbox?: "inherit" | "require",
+  ) {
     const tool = await getSessionsSpawnTool({
       agentSessionKey: "main",
       agentChannel: "whatsapp",
@@ -70,7 +74,9 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
       status: "accepted",
       runId: "run-1",
     });
-    expect(getChildSessionKey()?.startsWith(`agent:${params.agentId}:subagent:`)).toBe(true);
+    expect(
+      getChildSessionKey()?.startsWith(`agent:${params.agentId}:subagent:`),
+    ).toBe(true);
   }
 
   beforeEach(() => {
@@ -188,7 +194,9 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
     const details = result.details as { status?: string; error?: string };
 
     expect(details.status).toBe("forbidden");
-    expect(details.error).toContain("Sandboxed sessions cannot spawn unsandboxed subagents.");
+    expect(details.error).toContain(
+      "Sandboxed sessions cannot spawn unsandboxed subagents.",
+    );
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
@@ -231,7 +239,10 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
     setSessionsSpawnConfigOverride({
       session: { mainKey: "main", scope: "per-sender" },
       agents: {
-        list: [{ id: "main", subagents: { allowAgents: ["*"] } }, { id: "research" }],
+        list: [
+          { id: "main", subagents: { allowAgents: ["*"] } },
+          { id: "research" },
+        ],
       },
     });
     const tool = await getSessionsSpawnTool({
@@ -295,7 +306,10 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
     setSessionsSpawnConfigOverride({
       session: { mainKey: "main", scope: "per-sender" },
       agents: {
-        list: [{ id: "main", subagents: { allowAgents: ["*"] } }, { id: "my-research_agent01" }],
+        list: [
+          { id: "main", subagents: { allowAgents: ["*"] } },
+          { id: "my-research_agent01" },
+        ],
       },
     });
     callGatewayMock.mockImplementation(async () => ({

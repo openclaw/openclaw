@@ -37,7 +37,12 @@ describe("resolveDiscordChannelAllowlist", () => {
         return jsonResponse([{ id: "g1", name: "Guild One" }]);
       }
       if (url.endsWith("/channels/123")) {
-        return jsonResponse({ id: "123", name: "general", guild_id: "g1", type: 0 });
+        return jsonResponse({
+          id: "123",
+          name: "general",
+          guild_id: "g1",
+          type: 0,
+        });
       }
       return new Response("not found", { status: 404 });
     });
@@ -60,7 +65,12 @@ describe("resolveDiscordChannelAllowlist", () => {
         return jsonResponse([{ id: "111", name: "Guild One" }]);
       }
       if (url.endsWith("/channels/222")) {
-        return jsonResponse({ id: "222", name: "general", guild_id: "111", type: 0 });
+        return jsonResponse({
+          id: "222",
+          name: "general",
+          guild_id: "111",
+          type: 0,
+        });
       }
       return new Response("not found", { status: 404 });
     });
@@ -91,7 +101,12 @@ describe("resolveDiscordChannelAllowlist", () => {
         ]);
       }
       if (url.endsWith("/channels/222")) {
-        return jsonResponse({ id: "222", name: "general", guild_id: "333", type: 0 });
+        return jsonResponse({
+          id: "222",
+          name: "general",
+          guild_id: "333",
+          type: 0,
+        });
       }
       return new Response("not found", { status: 404 });
     });
@@ -148,7 +163,9 @@ describe("resolveDiscordChannelAllowlist", () => {
       }
       // Guild ID hitting /channels/ returns 404 — just like real Discord
       if (url.includes("/channels/")) {
-        return new Response(JSON.stringify({ message: "Unknown Channel" }), { status: 404 });
+        return new Response(JSON.stringify({ message: "Unknown Channel" }), {
+          status: 404,
+        });
       }
       return new Response("not found", { status: 404 });
     });

@@ -4,7 +4,9 @@ import {
   normalizeMSTeamsPollSelections,
 } from "./polls.js";
 
-export function createMSTeamsPollStoreMemory(initial: MSTeamsPoll[] = []): MSTeamsPollStore {
+export function createMSTeamsPollStoreMemory(
+  initial: MSTeamsPoll[] = [],
+): MSTeamsPollStore {
   const polls = new Map<string, MSTeamsPoll>();
   for (const poll of initial) {
     polls.set(poll.id, { ...poll });
@@ -16,7 +18,11 @@ export function createMSTeamsPollStoreMemory(initial: MSTeamsPoll[] = []): MSTea
 
   const getPoll = async (pollId: string) => polls.get(pollId) ?? null;
 
-  const recordVote = async (params: { pollId: string; voterId: string; selections: string[] }) => {
+  const recordVote = async (params: {
+    pollId: string;
+    voterId: string;
+    selections: string[];
+  }) => {
     const poll = polls.get(params.pollId);
     if (!poll) {
       return null;

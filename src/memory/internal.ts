@@ -32,7 +32,10 @@ export function normalizeRelPath(value: string): string {
   return trimmed.replace(/\\/g, "/");
 }
 
-export function normalizeExtraMemoryPaths(workspaceDir: string, extraPaths?: string[]): string[] {
+export function normalizeExtraMemoryPaths(
+  workspaceDir: string,
+  extraPaths?: string[],
+): string[] {
   if (!extraPaths?.length) {
     return [];
   }
@@ -40,7 +43,9 @@ export function normalizeExtraMemoryPaths(workspaceDir: string, extraPaths?: str
     .map((value) => value.trim())
     .filter(Boolean)
     .map((value) =>
-      path.isAbsolute(value) ? path.resolve(value) : path.resolve(workspaceDir, value),
+      path.isAbsolute(value)
+        ? path.resolve(value)
+        : path.resolve(workspaceDir, value),
     );
   return Array.from(new Set(resolved));
 }
@@ -108,7 +113,10 @@ export async function listMemoryFiles(
     }
   } catch {}
 
-  const normalizedExtraPaths = normalizeExtraMemoryPaths(workspaceDir, extraPaths);
+  const normalizedExtraPaths = normalizeExtraMemoryPaths(
+    workspaceDir,
+    extraPaths,
+  );
   if (normalizedExtraPaths.length > 0) {
     for (const inputPath of normalizedExtraPaths) {
       try {
@@ -274,7 +282,10 @@ export function chunkMarkdown(
  * stored line numbers would reference positions in the flattened text rather
  * than the original JSONL file.
  */
-export function remapChunkLines(chunks: MemoryChunk[], lineMap: number[] | undefined): void {
+export function remapChunkLines(
+  chunks: MemoryChunk[],
+  lineMap: number[] | undefined,
+): void {
   if (!lineMap || lineMap.length === 0) {
     return;
   }

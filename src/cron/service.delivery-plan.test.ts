@@ -8,7 +8,9 @@ import {
 } from "./service.test-harness.js";
 
 const noopLogger = createNoopLogger();
-const { makeStorePath } = createCronStoreHarness({ prefix: "openclaw-cron-delivery-" });
+const { makeStorePath } = createCronStoreHarness({
+  prefix: "openclaw-cron-delivery-",
+});
 
 type DeliveryMode = "none" | "announce";
 

@@ -13,14 +13,27 @@ vi.mock("../../agents/agent-scope.js", () => ({
   resolveAgentDir: vi.fn(() => "/tmp/agents/main/agent"),
 }));
 
-const pluginToolMetaState = new Map<string, { pluginId: string; optional: boolean }>();
+const pluginToolMetaState = new Map<
+  string,
+  { pluginId: string; optional: boolean }
+>();
 
 vi.mock("../../plugins/tools.js", () => ({
   resolvePluginTools: vi.fn(() => [
-    { name: "voice_call", label: "voice_call", description: "Plugin calling tool" },
-    { name: "matrix_room", label: "matrix_room", description: "Matrix room helper" },
+    {
+      name: "voice_call",
+      label: "voice_call",
+      description: "Plugin calling tool",
+    },
+    {
+      name: "matrix_room",
+      label: "matrix_room",
+      description: "Matrix room helper",
+    },
   ]),
-  getPluginToolMeta: vi.fn((tool: { name: string }) => pluginToolMetaState.get(tool.name)),
+  getPluginToolMeta: vi.fn((tool: { name: string }) =>
+    pluginToolMetaState.get(tool.name),
+  ),
 }));
 
 type RespondCall = [boolean, unknown?, { code: number; message: string }?];
@@ -44,8 +57,14 @@ function createInvokeParams(params: Record<string, unknown>) {
 describe("tools.catalog handler", () => {
   beforeEach(() => {
     pluginToolMetaState.clear();
-    pluginToolMetaState.set("voice_call", { pluginId: "voice-call", optional: true });
-    pluginToolMetaState.set("matrix_room", { pluginId: "matrix", optional: false });
+    pluginToolMetaState.set("voice_call", {
+      pluginId: "voice-call",
+      optional: true,
+    });
+    pluginToolMetaState.set("matrix_room", {
+      pluginId: "matrix",
+      optional: false,
+    });
   });
 
   it("rejects invalid params", async () => {
@@ -58,7 +77,9 @@ describe("tools.catalog handler", () => {
   });
 
   it("rejects unknown agent ids", async () => {
-    const { respond, invoke } = createInvokeParams({ agentId: "unknown-agent" });
+    const { respond, invoke } = createInvokeParams({
+      agentId: "unknown-agent",
+    });
     await invoke();
     const call = respond.mock.calls[0] as RespondCall | undefined;
     expect(call?.[0]).toBe(false);
@@ -82,9 +103,13 @@ describe("tools.catalog handler", () => {
         }
       | undefined;
     expect(payload?.agentId).toBe("main");
-    expect(payload?.groups.some((group) => group.source === "plugin")).toBe(false);
+    expect(payload?.groups.some((group) => group.source === "plugin")).toBe(
+      false,
+    );
     const media = payload?.groups.find((group) => group.id === "media");
-    expect(media?.tools.some((tool) => tool.id === "tts" && tool.source === "core")).toBe(true);
+    expect(
+      media?.tools.some((tool) => tool.id === "tts" && tool.source === "core"),
+    ).toBe(true);
   });
 
   it("includes plugin groups with plugin metadata", async () => {
@@ -106,7 +131,9 @@ describe("tools.catalog handler", () => {
           }>;
         }
       | undefined;
-    const pluginGroups = (payload?.groups ?? []).filter((group) => group.source === "plugin");
+    const pluginGroups = (payload?.groups ?? []).filter(
+      (group) => group.source === "plugin",
+    );
     expect(pluginGroups.length).toBeGreaterThan(0);
     const voiceCall = pluginGroups
       .flatMap((group) => group.tools)

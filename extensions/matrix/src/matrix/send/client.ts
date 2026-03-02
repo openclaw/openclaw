@@ -1,10 +1,20 @@
 import type { MatrixClient } from "@vector-im/matrix-bot-sdk";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import {
+  DEFAULT_ACCOUNT_ID,
+  normalizeAccountId,
+} from "openclaw/plugin-sdk/account-id";
 import { getMatrixRuntime } from "../../runtime.js";
 import type { CoreConfig } from "../../types.js";
-import { getActiveMatrixClient, getAnyActiveMatrixClient } from "../active-client.js";
+import {
+  getActiveMatrixClient,
+  getAnyActiveMatrixClient,
+} from "../active-client.js";
 import { createPreparedMatrixClient } from "../client-bootstrap.js";
-import { isBunRuntime, resolveMatrixAuth, resolveSharedMatrixClient } from "../client.js";
+import {
+  isBunRuntime,
+  resolveMatrixAuth,
+  resolveSharedMatrixClient,
+} from "../client.js";
 
 const getCore = () => getMatrixRuntime();
 
@@ -22,7 +32,8 @@ function findAccountConfig(
   if (!accounts) return undefined;
   const normalized = normalizeAccountId(accountId);
   // Direct lookup first
-  if (accounts[normalized]) return accounts[normalized] as Record<string, unknown>;
+  if (accounts[normalized])
+    return accounts[normalized] as Record<string, unknown>;
   // Case-insensitive fallback
   for (const key of Object.keys(accounts)) {
     if (normalizeAccountId(key) === normalized) {

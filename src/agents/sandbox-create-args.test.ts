@@ -166,7 +166,9 @@ describe("buildSandboxCreateArgs", () => {
     {
       name: "dangerous Docker socket bind mounts",
       containerName: "openclaw-sbx-dangerous",
-      cfg: createSandboxConfig({}, ["/var/run/docker.sock:/var/run/docker.sock"]),
+      cfg: createSandboxConfig({}, [
+        "/var/run/docker.sock:/var/run/docker.sock",
+      ]),
       expected: /blocked path/,
     },
     {
@@ -258,12 +260,18 @@ describe("buildSandboxCreateArgs", () => {
       bindSourceRoots: ["/tmp/workspace", "/tmp/agent"],
       allowSourcesOutsideAllowedRoots: true,
     });
-    expect(args).toEqual(expect.arrayContaining(["-v", "/opt/external:/data:rw"]));
+    expect(args).toEqual(
+      expect.arrayContaining(["-v", "/opt/external:/data:rw"]),
+    );
   });
 
   it("blocks reserved /workspace target bind mounts by default", () => {
     const cfg = createSandboxConfig({}, ["/tmp/override:/workspace:rw"]);
-    expectBuildToThrow("openclaw-sbx-reserved-target", cfg, /reserved container path/);
+    expectBuildToThrow(
+      "openclaw-sbx-reserved-target",
+      cfg,
+      /reserved container path/,
+    );
   });
 
   it("allows reserved /workspace target bind mounts with explicit dangerous override", () => {
@@ -275,7 +283,9 @@ describe("buildSandboxCreateArgs", () => {
       createdAtMs: 1700000000000,
       allowReservedContainerTargets: true,
     });
-    expect(args).toEqual(expect.arrayContaining(["-v", "/tmp/override:/workspace:rw"]));
+    expect(args).toEqual(
+      expect.arrayContaining(["-v", "/tmp/override:/workspace:rw"]),
+    );
   });
 
   it("allows container namespace join with explicit dangerous override", () => {
@@ -289,6 +299,8 @@ describe("buildSandboxCreateArgs", () => {
       scopeKey: "main",
       createdAtMs: 1700000000000,
     });
-    expect(args).toEqual(expect.arrayContaining(["--network", "container:peer"]));
+    expect(args).toEqual(
+      expect.arrayContaining(["--network", "container:peer"]),
+    );
   });
 });

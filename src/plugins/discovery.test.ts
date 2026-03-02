@@ -41,10 +41,14 @@ function writePluginPackageManifest(params: {
   );
 }
 
-function expectEscapesPackageDiagnostic(diagnostics: Array<{ message: string }>) {
-  expect(diagnostics.some((entry) => entry.message.includes("escapes package directory"))).toBe(
-    true,
-  );
+function expectEscapesPackageDiagnostic(
+  diagnostics: Array<{ message: string }>,
+) {
+  expect(
+    diagnostics.some((entry) =>
+      entry.message.includes("escapes package directory"),
+    ),
+  ).toBe(true);
 }
 
 afterEach(() => {
@@ -64,11 +68,19 @@ describe("discoverOpenClawPlugins", () => {
 
     const globalExt = path.join(stateDir, "extensions");
     fs.mkdirSync(globalExt, { recursive: true });
-    fs.writeFileSync(path.join(globalExt, "alpha.ts"), "export default function () {}", "utf-8");
+    fs.writeFileSync(
+      path.join(globalExt, "alpha.ts"),
+      "export default function () {}",
+      "utf-8",
+    );
 
     const workspaceExt = path.join(workspaceDir, ".openclaw", "extensions");
     fs.mkdirSync(workspaceExt, { recursive: true });
-    fs.writeFileSync(path.join(workspaceExt, "beta.ts"), "export default function () {}", "utf-8");
+    fs.writeFileSync(
+      path.join(workspaceExt, "beta.ts"),
+      "export default function () {}",
+      "utf-8",
+    );
 
     const { candidates } = await withStateDir(stateDir, async () => {
       return discoverOpenClawPlugins({ workspaceDir });
@@ -86,19 +98,35 @@ describe("discoverOpenClawPlugins", () => {
 
     const backupDir = path.join(globalExt, "feishu.backup-20260222");
     fs.mkdirSync(backupDir, { recursive: true });
-    fs.writeFileSync(path.join(backupDir, "index.ts"), "export default function () {}", "utf-8");
+    fs.writeFileSync(
+      path.join(backupDir, "index.ts"),
+      "export default function () {}",
+      "utf-8",
+    );
 
     const disabledDir = path.join(globalExt, "telegram.disabled.20260222");
     fs.mkdirSync(disabledDir, { recursive: true });
-    fs.writeFileSync(path.join(disabledDir, "index.ts"), "export default function () {}", "utf-8");
+    fs.writeFileSync(
+      path.join(disabledDir, "index.ts"),
+      "export default function () {}",
+      "utf-8",
+    );
 
     const bakDir = path.join(globalExt, "discord.bak");
     fs.mkdirSync(bakDir, { recursive: true });
-    fs.writeFileSync(path.join(bakDir, "index.ts"), "export default function () {}", "utf-8");
+    fs.writeFileSync(
+      path.join(bakDir, "index.ts"),
+      "export default function () {}",
+      "utf-8",
+    );
 
     const liveDir = path.join(globalExt, "live");
     fs.mkdirSync(liveDir, { recursive: true });
-    fs.writeFileSync(path.join(liveDir, "index.ts"), "export default function () {}", "utf-8");
+    fs.writeFileSync(
+      path.join(liveDir, "index.ts"),
+      "export default function () {}",
+      "utf-8",
+    );
 
     const { candidates } = await withStateDir(stateDir, async () => {
       return discoverOpenClawPlugins({});
@@ -175,7 +203,11 @@ describe("discoverOpenClawPlugins", () => {
       packageName: "@openclaw/demo-plugin-dir",
       extensions: ["./index.js"],
     });
-    fs.writeFileSync(path.join(packDir, "index.js"), "module.exports = {}", "utf-8");
+    fs.writeFileSync(
+      path.join(packDir, "index.js"),
+      "module.exports = {}",
+      "utf-8",
+    );
 
     const { candidates } = await withStateDir(stateDir, async () => {
       return discoverOpenClawPlugins({ extraPaths: [packDir] });
@@ -212,9 +244,17 @@ describe("discoverOpenClawPlugins", () => {
     const linkedDir = path.join(globalExt, "linked");
     fs.mkdirSync(globalExt, { recursive: true });
     fs.mkdirSync(outsideDir, { recursive: true });
-    fs.writeFileSync(path.join(outsideDir, "escape.ts"), "export default {}", "utf-8");
+    fs.writeFileSync(
+      path.join(outsideDir, "escape.ts"),
+      "export default {}",
+      "utf-8",
+    );
     try {
-      fs.symlinkSync(outsideDir, linkedDir, process.platform === "win32" ? "junction" : "dir");
+      fs.symlinkSync(
+        outsideDir,
+        linkedDir,
+        process.platform === "win32" ? "junction" : "dir",
+      );
     } catch {
       return;
     }
@@ -225,11 +265,16 @@ describe("discoverOpenClawPlugins", () => {
       extensions: ["./linked/escape.ts"],
     });
 
-    const { candidates, diagnostics } = await withStateDir(stateDir, async () => {
-      return discoverOpenClawPlugins({});
-    });
+    const { candidates, diagnostics } = await withStateDir(
+      stateDir,
+      async () => {
+        return discoverOpenClawPlugins({});
+      },
+    );
 
-    expect(candidates.some((candidate) => candidate.idHint === "pack")).toBe(false);
+    expect(candidates.some((candidate) => candidate.idHint === "pack")).toBe(
+      false,
+    );
     expectEscapesPackageDiagnostic(diagnostics);
   });
 
@@ -260,11 +305,16 @@ describe("discoverOpenClawPlugins", () => {
       extensions: ["./escape.ts"],
     });
 
-    const { candidates, diagnostics } = await withStateDir(stateDir, async () => {
-      return discoverOpenClawPlugins({});
-    });
+    const { candidates, diagnostics } = await withStateDir(
+      stateDir,
+      async () => {
+        return discoverOpenClawPlugins({});
+      },
+    );
 
-    expect(candidates.some((candidate) => candidate.idHint === "pack")).toBe(false);
+    expect(candidates.some((candidate) => candidate.idHint === "pack")).toBe(
+      false,
+    );
     expectEscapesPackageDiagnostic(diagnostics);
   });
 
@@ -279,7 +329,11 @@ describe("discoverOpenClawPlugins", () => {
     const linkedManifest = path.join(globalExt, "package.json");
     fs.mkdirSync(globalExt, { recursive: true });
     fs.mkdirSync(outsideDir, { recursive: true });
-    fs.writeFileSync(path.join(globalExt, "entry.ts"), "export default {}", "utf-8");
+    fs.writeFileSync(
+      path.join(globalExt, "entry.ts"),
+      "export default {}",
+      "utf-8",
+    );
     fs.writeFileSync(
       outsideManifest,
       JSON.stringify({
@@ -301,47 +355,57 @@ describe("discoverOpenClawPlugins", () => {
       return discoverOpenClawPlugins({});
     });
 
-    expect(candidates.some((candidate) => candidate.idHint === "pack")).toBe(false);
-  });
-
-  it.runIf(process.platform !== "win32")("blocks world-writable plugin paths", async () => {
-    const stateDir = makeTempDir();
-    const globalExt = path.join(stateDir, "extensions");
-    fs.mkdirSync(globalExt, { recursive: true });
-    const pluginPath = path.join(globalExt, "world-open.ts");
-    fs.writeFileSync(pluginPath, "export default function () {}", "utf-8");
-    fs.chmodSync(pluginPath, 0o777);
-
-    const result = await withStateDir(stateDir, async () => {
-      return discoverOpenClawPlugins({});
-    });
-
-    expect(result.candidates).toHaveLength(0);
-    expect(result.diagnostics.some((diag) => diag.message.includes("world-writable path"))).toBe(
-      true,
+    expect(candidates.some((candidate) => candidate.idHint === "pack")).toBe(
+      false,
     );
   });
 
-  it.runIf(process.platform !== "win32" && typeof process.getuid === "function")(
-    "blocks suspicious ownership when uid mismatch is detected",
+  it.runIf(process.platform !== "win32")(
+    "blocks world-writable plugin paths",
     async () => {
       const stateDir = makeTempDir();
       const globalExt = path.join(stateDir, "extensions");
       fs.mkdirSync(globalExt, { recursive: true });
-      fs.writeFileSync(
-        path.join(globalExt, "owner-mismatch.ts"),
-        "export default function () {}",
-        "utf-8",
-      );
+      const pluginPath = path.join(globalExt, "world-open.ts");
+      fs.writeFileSync(pluginPath, "export default function () {}", "utf-8");
+      fs.chmodSync(pluginPath, 0o777);
 
-      const actualUid = (process as NodeJS.Process & { getuid: () => number }).getuid();
       const result = await withStateDir(stateDir, async () => {
-        return discoverOpenClawPlugins({ ownershipUid: actualUid + 1 });
+        return discoverOpenClawPlugins({});
       });
+
       expect(result.candidates).toHaveLength(0);
-      expect(result.diagnostics.some((diag) => diag.message.includes("suspicious ownership"))).toBe(
-        true,
-      );
+      expect(
+        result.diagnostics.some((diag) =>
+          diag.message.includes("world-writable path"),
+        ),
+      ).toBe(true);
     },
   );
+
+  it.runIf(
+    process.platform !== "win32" && typeof process.getuid === "function",
+  )("blocks suspicious ownership when uid mismatch is detected", async () => {
+    const stateDir = makeTempDir();
+    const globalExt = path.join(stateDir, "extensions");
+    fs.mkdirSync(globalExt, { recursive: true });
+    fs.writeFileSync(
+      path.join(globalExt, "owner-mismatch.ts"),
+      "export default function () {}",
+      "utf-8",
+    );
+
+    const actualUid = (
+      process as NodeJS.Process & { getuid: () => number }
+    ).getuid();
+    const result = await withStateDir(stateDir, async () => {
+      return discoverOpenClawPlugins({ ownershipUid: actualUid + 1 });
+    });
+    expect(result.candidates).toHaveLength(0);
+    expect(
+      result.diagnostics.some((diag) =>
+        diag.message.includes("suspicious ownership"),
+      ),
+    ).toBe(true);
+  });
 });

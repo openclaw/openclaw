@@ -1,4 +1,6 @@
-export function normalizeSignalMessagingTarget(raw: string): string | undefined {
+export function normalizeSignalMessagingTarget(
+  raw: string,
+): string | undefined {
   const trimmed = raw.trim();
   if (!trimmed) {
     return undefined;
@@ -32,11 +34,17 @@ export function normalizeSignalMessagingTarget(raw: string): string | undefined 
 }
 
 // UUID pattern for signal-cli recipient IDs
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const UUID_COMPACT_PATTERN = /^[0-9a-f]{32}$/i;
 
-export function looksLikeSignalTargetId(raw: string, normalized?: string): boolean {
-  const candidates = [raw, normalized ?? ""].map((value) => value.trim()).filter(Boolean);
+export function looksLikeSignalTargetId(
+  raw: string,
+  normalized?: string,
+): boolean {
+  const candidates = [raw, normalized ?? ""]
+    .map((value) => value.trim())
+    .filter(Boolean);
 
   for (const candidate of candidates) {
     if (/^(signal:)?(group:|username:|u:)/i.test(candidate)) {
@@ -58,7 +66,10 @@ export function looksLikeSignalTargetId(raw: string, normalized?: string): boole
 
     const withoutSignalPrefix = candidate.replace(/^signal:/i, "").trim();
     // Accept UUIDs (used by signal-cli for reactions)
-    if (UUID_PATTERN.test(withoutSignalPrefix) || UUID_COMPACT_PATTERN.test(withoutSignalPrefix)) {
+    if (
+      UUID_PATTERN.test(withoutSignalPrefix) ||
+      UUID_COMPACT_PATTERN.test(withoutSignalPrefix)
+    ) {
       return true;
     }
     if (/^\+?\d{3,}$/.test(withoutSignalPrefix)) {

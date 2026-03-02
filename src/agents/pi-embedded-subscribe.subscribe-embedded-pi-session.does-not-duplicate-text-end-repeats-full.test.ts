@@ -8,7 +8,9 @@ import {
 describe("subscribeEmbeddedPiSession", () => {
   it("does not duplicate when text_end repeats full content", () => {
     const onBlockReply = vi.fn();
-    const { emit, subscription } = createTextEndBlockReplyHarness({ onBlockReply });
+    const { emit, subscription } = createTextEndBlockReplyHarness({
+      onBlockReply,
+    });
 
     emitAssistantTextDelta({ emit, delta: "Good morning!" });
     emitAssistantTextEnd({ emit, content: "Good morning!" });

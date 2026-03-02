@@ -91,15 +91,23 @@ export function handleMessageUpdate(
     assistantEvent && typeof assistantEvent === "object"
       ? (assistantEvent as Record<string, unknown>)
       : undefined;
-  const evtType = typeof assistantRecord?.type === "string" ? assistantRecord.type : "";
+  const evtType =
+    typeof assistantRecord?.type === "string" ? assistantRecord.type : "";
 
-  if (evtType === "thinking_start" || evtType === "thinking_delta" || evtType === "thinking_end") {
+  if (
+    evtType === "thinking_start" ||
+    evtType === "thinking_delta" ||
+    evtType === "thinking_end"
+  ) {
     if (evtType === "thinking_start" || evtType === "thinking_delta") {
       ctx.state.reasoningStreamOpen = true;
     }
-    const thinkingDelta = typeof assistantRecord?.delta === "string" ? assistantRecord.delta : "";
+    const thinkingDelta =
+      typeof assistantRecord?.delta === "string" ? assistantRecord.delta : "";
     const thinkingContent =
-      typeof assistantRecord?.content === "string" ? assistantRecord.content : "";
+      typeof assistantRecord?.content === "string"
+        ? assistantRecord.content
+        : "";
     appendRawStream({
       ts: Date.now(),
       event: "assistant_thinking_stream",
@@ -112,7 +120,9 @@ export function handleMessageUpdate(
     if (ctx.state.streamReasoning) {
       // Prefer full partial-message thinking when available; fall back to event payloads.
       const partialThinking = extractAssistantThinking(msg);
-      ctx.emitReasoningStream(partialThinking || thinkingContent || thinkingDelta);
+      ctx.emitReasoningStream(
+        partialThinking || thinkingContent || thinkingDelta,
+      );
     }
     if (evtType === "thinking_end") {
       if (!ctx.state.reasoningStreamOpen) {
@@ -123,12 +133,18 @@ export function handleMessageUpdate(
     return;
   }
 
-  if (evtType !== "text_delta" && evtType !== "text_start" && evtType !== "text_end") {
+  if (
+    evtType !== "text_delta" &&
+    evtType !== "text_start" &&
+    evtType !== "text_end"
+  ) {
     return;
   }
 
-  const delta = typeof assistantRecord?.delta === "string" ? assistantRecord.delta : "";
-  const content = typeof assistantRecord?.content === "string" ? assistantRecord.content : "";
+  const delta =
+    typeof assistantRecord?.delta === "string" ? assistantRecord.delta : "";
+  const content =
+    typeof assistantRecord?.content === "string" ? assistantRecord.content : "";
 
   appendRawStream({
     ts: Date.now(),
@@ -170,7 +186,9 @@ export function handleMessageUpdate(
 
   if (ctx.state.streamReasoning) {
     // Handle partial <think> tags: stream whatever reasoning is visible so far.
-    ctx.emitReasoningStream(extractThinkingFromTaggedStream(ctx.state.deltaBuffer));
+    ctx.emitReasoningStream(
+      extractThinkingFromTaggedStream(ctx.state.deltaBuffer),
+    );
   }
 
   const next = ctx
@@ -182,7 +200,9 @@ export function handleMessageUpdate(
     .trim();
   if (next) {
     const wasThinking = ctx.state.partialBlockState.thinking;
-    const visibleDelta = chunk ? ctx.stripBlockTags(chunk, ctx.state.partialBlockState) : "";
+    const visibleDelta = chunk
+      ? ctx.stripBlockTags(chunk, ctx.state.partialBlockState)
+      : "";
     if (!wasThinking && ctx.state.partialBlockState.thinking) {
       ctx.state.reasoningStreamOpen = true;
     }
@@ -190,7 +210,9 @@ export function handleMessageUpdate(
     if (wasThinking && !ctx.state.partialBlockState.thinking) {
       emitReasoningEnd(ctx);
     }
-    const parsedDelta = visibleDelta ? ctx.consumePartialReplyDirectives(visibleDelta) : null;
+    const parsedDelta = visibleDelta
+      ? ctx.consumePartialReplyDirectives(visibleDelta)
+      : null;
     const parsedFull = parseReplyDirectives(stripTrailingDirective(next));
     const cleanedText = parsedFull.text;
     const mediaUrls = parsedDelta?.mediaUrls;
@@ -240,7 +262,11 @@ export function handleMessageUpdate(
     }
   }
 
-  if (ctx.params.onBlockReply && ctx.blockChunking && ctx.state.blockReplyBreak === "text_end") {
+  if (
+    ctx.params.onBlockReply &&
+    ctx.blockChunking &&
+    ctx.state.blockReplyBreak === "text_end"
+  ) {
     ctx.blockChunker?.drain({ force: false, emit: ctx.emitBlockChunk });
   }
 
@@ -279,21 +305,30 @@ export function handleMessageEnd(
   });
   const rawThinking =
     ctx.state.includeReasoning || ctx.state.streamReasoning
-      ? extractAssistantThinking(assistantMessage) || extractThinkingFromTaggedText(rawText)
+      ? extractAssistantThinking(assistantMessage) ||
+        extractThinkingFromTaggedText(rawText)
       : "";
-  const formattedReasoning = rawThinking ? formatReasoningMessage(rawThinking) : "";
+  const formattedReasoning = rawThinking
+    ? formatReasoningMessage(rawThinking)
+    : "";
   const trimmedText = text.trim();
-  const parsedText = trimmedText ? parseReplyDirectives(stripTrailingDirective(trimmedText)) : null;
+  const parsedText = trimmedText
+    ? parseReplyDirectives(stripTrailingDirective(trimmedText))
+    : null;
   let cleanedText = parsedText?.text ?? "";
   let mediaUrls = parsedText?.mediaUrls;
   let hasMedia = Boolean(mediaUrls && mediaUrls.length > 0);
 
   if (!cleanedText && !hasMedia) {
     const rawTrimmed = rawText.trim();
-    const rawStrippedFinal = rawTrimmed.replace(/<\s*\/?\s*final\s*>/gi, "").trim();
+    const rawStrippedFinal = rawTrimmed
+      .replace(/<\s*\/?\s*final\s*>/gi, "")
+      .trim();
     const rawCandidate = rawStrippedFinal || rawTrimmed;
     if (rawCandidate) {
-      const parsedFallback = parseReplyDirectives(stripTrailingDirective(rawCandidate));
+      const parsedFallback = parseReplyDirectives(
+        stripTrailingDirective(rawCandidate),
+      );
       cleanedText = parsedFallback.text ?? rawCandidate;
       mediaUrls = parsedFallback.mediaUrls;
       hasMedia = Boolean(mediaUrls && mediaUrls.length > 0);
@@ -321,7 +356,8 @@ export function handleMessageEnd(
     ctx.state.emittedAssistantUpdate = true;
   }
 
-  const addedDuringMessage = ctx.state.assistantTexts.length > ctx.state.assistantTextBaseline;
+  const addedDuringMessage =
+    ctx.state.assistantTexts.length > ctx.state.assistantTextBaseline;
   const chunkerHasBuffered = ctx.blockChunker?.hasBuffered() ?? false;
   ctx.finalizeAssistantTexts({ text, addedDuringMessage, chunkerHasBuffered });
 
@@ -333,7 +369,9 @@ export function handleMessageEnd(
     formattedReasoning !== ctx.state.lastReasoningSent,
   );
   const shouldEmitReasoningBeforeAnswer =
-    shouldEmitReasoning && ctx.state.blockReplyBreak === "message_end" && !addedDuringMessage;
+    shouldEmitReasoning &&
+    ctx.state.blockReplyBreak === "message_end" &&
+    !addedDuringMessage;
   const maybeEmitReasoning = () => {
     if (!shouldEmitReasoning || !formattedReasoning) {
       return;
@@ -348,7 +386,9 @@ export function handleMessageEnd(
 
   if (
     (ctx.state.blockReplyBreak === "message_end" ||
-      (ctx.blockChunker ? ctx.blockChunker.hasBuffered() : ctx.state.blockBuffer.length > 0)) &&
+      (ctx.blockChunker
+        ? ctx.blockChunker.hasBuffered()
+        : ctx.state.blockBuffer.length > 0)) &&
     text &&
     onBlockReply
   ) {
@@ -380,7 +420,11 @@ export function handleMessageEnd(
             replyToCurrent,
           } = splitResult;
           // Emit if there's content OR audioAsVoice flag (to propagate the flag).
-          if (cleanedText || (mediaUrls && mediaUrls.length > 0) || audioAsVoice) {
+          if (
+            cleanedText ||
+            (mediaUrls && mediaUrls.length > 0) ||
+            audioAsVoice
+          ) {
             void onBlockReply({
               text: cleanedText,
               mediaUrls: mediaUrls?.length ? mediaUrls : undefined,

@@ -24,7 +24,10 @@ export type MattermostEventPayload = {
 
 export type MattermostWebSocketLike = {
   on(event: "open", listener: () => void): void;
-  on(event: "message", listener: (data: WebSocket.RawData) => void | Promise<void>): void;
+  on(
+    event: "message",
+    listener: (data: WebSocket.RawData) => void | Promise<void>,
+  ): void;
   on(event: "close", listener: (code: number, reason: Buffer) => void): void;
   on(event: "error", listener: (err: unknown) => void): void;
   send(data: string): void;
@@ -32,7 +35,9 @@ export type MattermostWebSocketLike = {
   terminate(): void;
 };
 
-export type MattermostWebSocketFactory = (url: string) => MattermostWebSocketLike;
+export type MattermostWebSocketFactory = (
+  url: string,
+) => MattermostWebSocketLike;
 
 export class WebSocketClosedBeforeOpenError extends Error {
   constructor(
@@ -51,13 +56,17 @@ type CreateMattermostConnectOnceOpts = {
   statusSink?: (patch: Partial<ChannelAccountSnapshot>) => void;
   runtime: RuntimeEnv;
   nextSeq: () => number;
-  onPosted: (post: MattermostPost, payload: MattermostEventPayload) => Promise<void>;
+  onPosted: (
+    post: MattermostPost,
+    payload: MattermostEventPayload,
+  ) => Promise<void>;
   onReaction?: (payload: MattermostEventPayload) => Promise<void>;
   webSocketFactory?: MattermostWebSocketFactory;
 };
 
-export const defaultMattermostWebSocketFactory: MattermostWebSocketFactory = (url) =>
-  new WebSocket(url) as MattermostWebSocketLike;
+export const defaultMattermostWebSocketFactory: MattermostWebSocketFactory = (
+  url,
+) => new WebSocket(url) as MattermostWebSocketLike;
 
 export function parsePostedPayload(
   payload: MattermostEventPayload,
@@ -101,7 +110,8 @@ export function parsePostedEvent(
 export function createMattermostConnectOnce(
   opts: CreateMattermostConnectOnceOpts,
 ): () => Promise<void> {
-  const webSocketFactory = opts.webSocketFactory ?? defaultMattermostWebSocketFactory;
+  const webSocketFactory =
+    opts.webSocketFactory ?? defaultMattermostWebSocketFactory;
   return async () => {
     const ws = webSocketFactory(opts.wsUrl);
     const onAbort = () => ws.terminate();
@@ -151,14 +161,19 @@ export function createMattermostConnectOnce(
             return;
           }
 
-          if (payload.event === "reaction_added" || payload.event === "reaction_removed") {
+          if (
+            payload.event === "reaction_added" ||
+            payload.event === "reaction_removed"
+          ) {
             if (!opts.onReaction) {
               return;
             }
             try {
               await opts.onReaction(payload);
             } catch (err) {
-              opts.runtime.error?.(`mattermost reaction handler failed: ${String(err)}`);
+              opts.runtime.error?.(
+                `mattermost reaction handler failed: ${String(err)}`,
+              );
             }
             return;
           }
@@ -191,7 +206,9 @@ export function createMattermostConnectOnce(
             resolveOnce();
             return;
           }
-          rejectOnce(new WebSocketClosedBeforeOpenError(code, message || undefined));
+          rejectOnce(
+            new WebSocketClosedBeforeOpenError(code, message || undefined),
+          );
         });
 
         ws.on("error", (err) => {

@@ -4,7 +4,10 @@ import {
   cleanupFailedAcpSpawn,
   type AcpSpawnRuntimeCloseHandle,
 } from "../acp/control-plane/spawn.js";
-import { isAcpEnabledByPolicy, resolveAcpAgentPolicyError } from "../acp/policy.js";
+import {
+  isAcpEnabledByPolicy,
+  resolveAcpAgentPolicyError,
+} from "../acp/policy.js";
 import {
   resolveAcpSessionCwd,
   resolveAcpThreadSessionDetailLines,
@@ -97,7 +100,9 @@ function resolveTargetAcpAgentId(params: {
     return { ok: true, agentId: requested };
   }
 
-  const configuredDefault = normalizeOptionalAgentId(params.cfg.acp?.defaultAgent);
+  const configuredDefault = normalizeOptionalAgentId(
+    params.cfg.acp?.defaultAgent,
+  );
   if (configuredDefault) {
     return { ok: true, agentId: configuredDefault };
   }
@@ -109,7 +114,9 @@ function resolveTargetAcpAgentId(params: {
   };
 }
 
-function normalizeOptionalAgentId(value: string | undefined | null): string | undefined {
+function normalizeOptionalAgentId(
+  value: string | undefined | null,
+): string | undefined {
   const trimmed = (value ?? "").trim();
   if (!trimmed) {
     return undefined;
@@ -143,7 +150,9 @@ function prepareAcpThreadBinding(params: {
   accountId?: string;
   to?: string;
   threadId?: string | number;
-}): { ok: true; binding: PreparedAcpThreadBinding } | { ok: false; error: string } {
+}):
+  | { ok: true; binding: PreparedAcpThreadBinding }
+  | { ok: false; error: string } {
   const channel = params.channel?.trim().toLowerCase();
   if (!channel) {
     return {
@@ -190,7 +199,10 @@ function prepareAcpThreadBinding(params: {
       error: `Thread bindings are unavailable for ${policy.channel}.`,
     };
   }
-  if (!capabilities.bindSupported || !capabilities.placements.includes("child")) {
+  if (
+    !capabilities.bindSupported ||
+    !capabilities.placements.includes("child")
+  ) {
     return {
       ok: false,
       error: `Thread bindings do not support ACP thread spawn for ${policy.channel}.`,
@@ -237,7 +249,8 @@ export async function spawnAcpDirect(
   if (spawnMode === "session" && !requestThreadBinding) {
     return {
       status: "error",
-      error: 'mode="session" requires thread=true so the ACP session can stay bound to a thread.',
+      error:
+        'mode="session" requires thread=true so the ACP session can stay bound to a thread.',
     };
   }
 
@@ -376,15 +389,22 @@ export async function spawnAcpDirect(
   });
   // For thread-bound ACP spawns, force bootstrap delivery to the new child thread.
   const boundThreadIdRaw = binding?.conversation.conversationId;
-  const boundThreadId = boundThreadIdRaw ? String(boundThreadIdRaw).trim() || undefined : undefined;
+  const boundThreadId = boundThreadIdRaw
+    ? String(boundThreadIdRaw).trim() || undefined
+    : undefined;
   const fallbackThreadIdRaw = requesterOrigin?.threadId;
   const fallbackThreadId =
-    fallbackThreadIdRaw != null ? String(fallbackThreadIdRaw).trim() || undefined : undefined;
+    fallbackThreadIdRaw != null
+      ? String(fallbackThreadIdRaw).trim() || undefined
+      : undefined;
   const deliveryThreadId = boundThreadId ?? fallbackThreadId;
   const inferredDeliveryTo = boundThreadId
     ? `channel:${boundThreadId}`
-    : requesterOrigin?.to?.trim() || (deliveryThreadId ? `channel:${deliveryThreadId}` : undefined);
-  const hasDeliveryTarget = Boolean(requesterOrigin?.channel && inferredDeliveryTo);
+    : requesterOrigin?.to?.trim() ||
+      (deliveryThreadId ? `channel:${deliveryThreadId}` : undefined);
+  const hasDeliveryTarget = Boolean(
+    requesterOrigin?.channel && inferredDeliveryTo,
+  );
   const childIdem = crypto.randomUUID();
   let childRunId: string = childIdem;
   try {
@@ -395,7 +415,9 @@ export async function spawnAcpDirect(
         sessionKey,
         channel: hasDeliveryTarget ? requesterOrigin?.channel : undefined,
         to: hasDeliveryTarget ? inferredDeliveryTo : undefined,
-        accountId: hasDeliveryTarget ? (requesterOrigin?.accountId ?? undefined) : undefined,
+        accountId: hasDeliveryTarget
+          ? (requesterOrigin?.accountId ?? undefined)
+          : undefined,
         threadId: hasDeliveryTarget ? deliveryThreadId : undefined,
         idempotencyKey: childIdem,
         deliver: hasDeliveryTarget,
@@ -425,6 +447,9 @@ export async function spawnAcpDirect(
     childSessionKey: sessionKey,
     runId: childRunId,
     mode: spawnMode,
-    note: spawnMode === "session" ? ACP_SPAWN_SESSION_ACCEPTED_NOTE : ACP_SPAWN_ACCEPTED_NOTE,
+    note:
+      spawnMode === "session"
+        ? ACP_SPAWN_SESSION_ACCEPTED_NOTE
+        : ACP_SPAWN_ACCEPTED_NOTE,
   };
 }

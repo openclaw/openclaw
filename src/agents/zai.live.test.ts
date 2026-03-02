@@ -3,11 +3,15 @@ import { describe, expect, it } from "vitest";
 import { isTruthyEnvValue } from "../infra/env.js";
 
 const ZAI_KEY = process.env.ZAI_API_KEY ?? process.env.Z_AI_API_KEY ?? "";
-const LIVE = isTruthyEnvValue(process.env.ZAI_LIVE_TEST) || isTruthyEnvValue(process.env.LIVE);
+const LIVE =
+  isTruthyEnvValue(process.env.ZAI_LIVE_TEST) ||
+  isTruthyEnvValue(process.env.LIVE);
 
 const describeLive = LIVE && ZAI_KEY ? describe : describe.skip;
 
-async function expectModelReturnsAssistantText(modelId: "glm-4.7" | "glm-4.7-flashx") {
+async function expectModelReturnsAssistantText(
+  modelId: "glm-4.7" | "glm-4.7-flashx",
+) {
   const model = getModel("zai", modelId as "glm-4.7");
   const res = await completeSimple(
     model,

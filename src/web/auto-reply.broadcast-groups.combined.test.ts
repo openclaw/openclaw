@@ -30,7 +30,8 @@ describe("broadcast groups", () => {
       },
     } satisfies OpenClawConfig);
 
-    const { seen, resolver } = await sendWebDirectInboundAndCollectSessionKeys();
+    const { seen, resolver } =
+      await sendWebDirectInboundAndCollectSessionKeys();
 
     expect(resolver).toHaveBeenCalledTimes(1);
     expect(seen[0]).toContain("agent:alfred:");
@@ -50,7 +51,8 @@ describe("broadcast groups", () => {
       },
     } satisfies OpenClawConfig);
 
-    const { seen, resolver } = await sendWebDirectInboundAndCollectSessionKeys();
+    const { seen, resolver } =
+      await sendWebDirectInboundAndCollectSessionKeys();
 
     expect(resolver).toHaveBeenCalledTimes(2);
     expect(seen[0]).toContain("agent:alfred:");
@@ -171,7 +173,8 @@ describe("broadcast groups", () => {
       return { text: "ok" };
     });
 
-    const { onMessage: capturedOnMessage } = await monitorWebChannelWithCapture(resolver);
+    const { onMessage: capturedOnMessage } =
+      await monitorWebChannelWithCapture(resolver);
 
     await capturedOnMessage({
       id: "m1",

@@ -5,7 +5,8 @@ class FakeEmitter {
   private listeners = new Map<string, Set<(...args: unknown[]) => void>>();
 
   on(event: string, listener: (...args: unknown[]) => void) {
-    const bucket = this.listeners.get(event) ?? new Set<(...args: unknown[]) => void>();
+    const bucket =
+      this.listeners.get(event) ?? new Set<(...args: unknown[]) => void>();
     bucket.add(listener);
     this.listeners.set(event, bucket);
   }

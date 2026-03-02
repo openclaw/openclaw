@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { createSlackSendTestClient, installSlackBlockTestMocks } from "./blocks.test-helpers.js";
+import {
+  createSlackSendTestClient,
+  installSlackBlockTestMocks,
+} from "./blocks.test-helpers.js";
 
 installSlackBlockTestMocks();
 const { sendMessageSlack } = await import("./send.js");
@@ -75,7 +78,13 @@ describe("sendMessageSlack blocks", () => {
     await sendMessageSlack("channel:C123", "", {
       token: "xoxb-test",
       client,
-      blocks: [{ type: "image", image_url: "https://example.com/a.png", alt_text: "Build chart" }],
+      blocks: [
+        {
+          type: "image",
+          image_url: "https://example.com/a.png",
+          alt_text: "Build chart",
+        },
+      ],
     });
 
     expect(client.chat.postMessage).toHaveBeenCalledWith(

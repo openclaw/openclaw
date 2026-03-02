@@ -13,7 +13,8 @@ const itUnix = process.platform === "win32" ? it.skip : it;
 const runCommandWithTimeoutMock = vi.fn();
 
 vi.mock("../process/exec.js", () => ({
-  runCommandWithTimeout: (...args: unknown[]) => runCommandWithTimeoutMock(...args),
+  runCommandWithTimeout: (...args: unknown[]) =>
+    runCommandWithTimeoutMock(...args),
 }));
 
 beforeEach(() => {
@@ -37,24 +38,27 @@ describe("resolvePythonExecutablePath", () => {
         await fs.writeFile(shim, "#!/bin/sh\nexit 0\n", "utf-8");
         await fs.chmod(shim, 0o755);
 
-        await withEnvAsync({ PATH: `${shimDir}${path.delimiter}/usr/bin` }, async () => {
-          runCommandWithTimeoutMock.mockResolvedValue({
-            stdout: `${realPython}\n`,
-            stderr: "",
-            code: 0,
-            signal: null,
-            killed: false,
-          });
+        await withEnvAsync(
+          { PATH: `${shimDir}${path.delimiter}/usr/bin` },
+          async () => {
+            runCommandWithTimeoutMock.mockResolvedValue({
+              stdout: `${realPython}\n`,
+              stderr: "",
+              code: 0,
+              signal: null,
+              killed: false,
+            });
 
-          const resolved = await resolvePythonExecutablePath();
-          expect(resolved).toBe(realPython);
+            const resolved = await resolvePythonExecutablePath();
+            expect(resolved).toBe(realPython);
 
-          await withEnvAsync({ PATH: "/bin" }, async () => {
-            const cached = await resolvePythonExecutablePath();
-            expect(cached).toBe(realPython);
-          });
-          expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(1);
-        });
+            await withEnvAsync({ PATH: "/bin" }, async () => {
+              const cached = await resolvePythonExecutablePath();
+              expect(cached).toBe(realPython);
+            });
+            expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(1);
+          },
+        );
       } finally {
         await fs.rm(tmp, { recursive: true, force: true });
       }

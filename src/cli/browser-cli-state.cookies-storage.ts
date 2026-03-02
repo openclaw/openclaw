@@ -1,10 +1,16 @@
 import type { Command } from "commander";
 import { danger } from "../globals.js";
 import { defaultRuntime } from "../runtime.js";
-import { callBrowserRequest, type BrowserParentOpts } from "./browser-cli-shared.js";
+import {
+  callBrowserRequest,
+  type BrowserParentOpts,
+} from "./browser-cli-shared.js";
 import { inheritOptionFromParent } from "./command-options.js";
 
-function resolveUrl(opts: { url?: string }, command: Command): string | undefined {
+function resolveUrl(
+  opts: { url?: string },
+  command: Command,
+): string | undefined {
   if (typeof opts.url === "string" && opts.url.trim()) {
     return opts.url.trim();
   }
@@ -15,7 +21,10 @@ function resolveUrl(opts: { url?: string }, command: Command): string | undefine
   return undefined;
 }
 
-function resolveTargetId(rawTargetId: unknown, command: Command): string | undefined {
+function resolveTargetId(
+  rawTargetId: unknown,
+  command: Command,
+): string | undefined {
   const local = typeof rawTargetId === "string" ? rawTargetId.trim() : "";
   if (local) {
     return local;
@@ -77,7 +86,9 @@ export function registerBrowserCookiesAndStorageCommands(
       const targetId = resolveTargetId(opts.targetId, cmd);
       const url = resolveUrl(opts, cmd);
       if (!url) {
-        defaultRuntime.error(danger("Missing required --url option for cookies set"));
+        defaultRuntime.error(
+          danger("Missing required --url option for cookies set"),
+        );
         defaultRuntime.exit(1);
         return;
       }
@@ -138,7 +149,9 @@ export function registerBrowserCookiesAndStorageCommands(
       }
     });
 
-  const storage = browser.command("storage").description("Read/write localStorage/sessionStorage");
+  const storage = browser
+    .command("storage")
+    .description("Read/write localStorage/sessionStorage");
 
   function registerStorageKind(kind: "local" | "session") {
     const cmd = storage.command(kind).description(`${kind}Storage commands`);
@@ -153,7 +166,9 @@ export function registerBrowserCookiesAndStorageCommands(
         const profile = parent?.browserProfile;
         const targetId = resolveTargetId(opts.targetId, cmd2);
         try {
-          const result = await callBrowserRequest<{ values?: Record<string, string> }>(
+          const result = await callBrowserRequest<{
+            values?: Record<string, string>;
+          }>(
             parent,
             {
               method: "GET",

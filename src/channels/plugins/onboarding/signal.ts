@@ -10,7 +10,10 @@ import {
 import { formatDocsLink } from "../../../terminal/links.js";
 import { normalizeE164 } from "../../../utils.js";
 import type { WizardPrompter } from "../../../wizard/prompts.js";
-import type { ChannelOnboardingAdapter, ChannelOnboardingDmPolicy } from "../onboarding-types.js";
+import type {
+  ChannelOnboardingAdapter,
+  ChannelOnboardingDmPolicy,
+} from "../onboarding-types.js";
 import * as onboardingHelpers from "./helpers.js";
 
 const channel = "signal" as const;
@@ -20,7 +23,9 @@ const DIGITS_ONLY = /^\d+$/;
 const INVALID_SIGNAL_ACCOUNT_ERROR =
   "Invalid E.164 phone number (must start with + and country code, e.g. +15555550123)";
 
-export function normalizeSignalAccountInput(value: string | null | undefined): string | null {
+export function normalizeSignalAccountInput(
+  value: string | null | undefined,
+): string | null {
   const trimmed = value?.trim();
   if (!trimmed) {
     return null;
@@ -37,27 +42,35 @@ export function normalizeSignalAccountInput(value: string | null | undefined): s
 }
 
 function isUuidLike(value: string): boolean {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+    value,
+  );
 }
 
-export function parseSignalAllowFromEntries(raw: string): { entries: string[]; error?: string } {
-  return onboardingHelpers.parseOnboardingEntriesAllowingWildcard(raw, (entry) => {
-    if (entry.toLowerCase().startsWith("uuid:")) {
-      const id = entry.slice("uuid:".length).trim();
-      if (!id) {
-        return { error: "Invalid uuid entry" };
+export function parseSignalAllowFromEntries(raw: string): {
+  entries: string[];
+  error?: string;
+} {
+  return onboardingHelpers.parseOnboardingEntriesAllowingWildcard(
+    raw,
+    (entry) => {
+      if (entry.toLowerCase().startsWith("uuid:")) {
+        const id = entry.slice("uuid:".length).trim();
+        if (!id) {
+          return { error: "Invalid uuid entry" };
+        }
+        return { value: `uuid:${id}` };
       }
-      return { value: `uuid:${id}` };
-    }
-    if (isUuidLike(entry)) {
-      return { value: `uuid:${entry}` };
-    }
-    const normalized = normalizeSignalAccountInput(entry);
-    if (!normalized) {
-      return { error: `Invalid entry: ${entry}` };
-    }
-    return { value: normalized };
-  });
+      if (isUuidLike(entry)) {
+        return { value: `uuid:${entry}` };
+      }
+      const normalized = normalizeSignalAccountInput(entry);
+      if (!normalized) {
+        return { error: `Invalid entry: ${entry}` };
+      }
+      return { value: normalized };
+    },
+  );
 }
 
 async function promptSignalAllowFrom(params: {
@@ -120,7 +133,9 @@ export const signalOnboardingAdapter: ChannelOnboardingAdapter = {
         `Signal: ${configured ? "configured" : "needs setup"}`,
         `signal-cli: ${signalCliDetected ? "found" : "missing"} (${signalCliPath})`,
       ],
-      selectionHint: signalCliDetected ? "signal-cli found" : "signal-cli missing",
+      selectionHint: signalCliDetected
+        ? "signal-cli found"
+        : "signal-cli missing",
       quickstartScore: signalCliDetected ? 1 : 0,
     };
   },
@@ -133,15 +148,16 @@ export const signalOnboardingAdapter: ChannelOnboardingAdapter = {
     options,
   }) => {
     const defaultSignalAccountId = resolveDefaultSignalAccountId(cfg);
-    const signalAccountId = await onboardingHelpers.resolveAccountIdForConfigure({
-      cfg,
-      prompter,
-      label: "Signal",
-      accountOverride: accountOverrides.signal,
-      shouldPromptAccountIds,
-      listAccountIds: listSignalAccountIds,
-      defaultAccountId: defaultSignalAccountId,
-    });
+    const signalAccountId =
+      await onboardingHelpers.resolveAccountIdForConfigure({
+        cfg,
+        prompter,
+        label: "Signal",
+        accountOverride: accountOverrides.signal,
+        shouldPromptAccountIds,
+        listAccountIds: listSignalAccountIds,
+        defaultAccountId: defaultSignalAccountId,
+      });
 
     let next = cfg;
     const resolvedAccount = resolveSignalAccount({
@@ -164,12 +180,21 @@ export const signalOnboardingAdapter: ChannelOnboardingAdapter = {
           if (result.ok && result.cliPath) {
             cliDetected = true;
             resolvedCliPath = result.cliPath;
-            await prompter.note(`Installed signal-cli at ${result.cliPath}`, "Signal");
+            await prompter.note(
+              `Installed signal-cli at ${result.cliPath}`,
+              "Signal",
+            );
           } else if (!result.ok) {
-            await prompter.note(result.error ?? "signal-cli install failed.", "Signal");
+            await prompter.note(
+              result.error ?? "signal-cli install failed.",
+              "Signal",
+            );
           }
         } catch (err) {
-          await prompter.note(`signal-cli install failed: ${String(err)}`, "Signal");
+          await prompter.note(
+            `signal-cli install failed: ${String(err)}`,
+            "Signal",
+          );
         }
       }
     }
@@ -240,5 +265,6 @@ export const signalOnboardingAdapter: ChannelOnboardingAdapter = {
     return { cfg: next, accountId: signalAccountId };
   },
   dmPolicy,
-  disable: (cfg) => onboardingHelpers.setOnboardingChannelEnabled(cfg, channel, false),
+  disable: (cfg) =>
+    onboardingHelpers.setOnboardingChannelEnabled(cfg, channel, false),
 };

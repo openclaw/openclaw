@@ -42,7 +42,11 @@ export function buildDefaultToolPolicyPipelineSteps(params: {
         : "tools.byProvider.profile",
       stripPluginOnlyAllowlist: true,
     },
-    { policy: params.globalPolicy, label: "tools.allow", stripPluginOnlyAllowlist: true },
+    {
+      policy: params.globalPolicy,
+      label: "tools.allow",
+      stripPluginOnlyAllowlist: true,
+    },
     {
       policy: params.globalProviderPolicy,
       label: "tools.byProvider.allow",
@@ -55,10 +59,16 @@ export function buildDefaultToolPolicyPipelineSteps(params: {
     },
     {
       policy: params.agentProviderPolicy,
-      label: agentId ? `agents.${agentId}.tools.byProvider.allow` : "agent tools.byProvider.allow",
+      label: agentId
+        ? `agents.${agentId}.tools.byProvider.allow`
+        : "agent tools.byProvider.allow",
       stripPluginOnlyAllowlist: true,
     },
-    { policy: params.groupPolicy, label: "group tools.allow", stripPluginOnlyAllowlist: true },
+    {
+      policy: params.groupPolicy,
+      label: "group tools.allow",
+      stripPluginOnlyAllowlist: true,
+    },
   ];
 }
 
@@ -88,7 +98,11 @@ export function applyToolPolicyPipeline(params: {
 
     let policy: ToolPolicyLike | undefined = step.policy;
     if (step.stripPluginOnlyAllowlist) {
-      const resolved = stripPluginOnlyAllowlist(policy, pluginGroups, coreToolNames);
+      const resolved = stripPluginOnlyAllowlist(
+        policy,
+        pluginGroups,
+        coreToolNames,
+      );
       if (resolved.unknownAllowlist.length > 0) {
         const entries = resolved.unknownAllowlist.join(", ");
         const suffix = resolved.strippedAllowlist

@@ -36,7 +36,12 @@ export function parsePageRange(range: string, maxPages: number): number[] {
     if (dashMatch) {
       const start = Number(dashMatch[1]);
       const end = Number(dashMatch[2]);
-      if (!Number.isFinite(start) || !Number.isFinite(end) || start < 1 || end < start) {
+      if (
+        !Number.isFinite(start) ||
+        !Number.isFinite(end) ||
+        start < 1 ||
+        end < start
+      ) {
         throw new Error(`Invalid page range: "${part}"`);
       }
       for (let i = start; i <= Math.min(end, maxPages); i++) {
@@ -70,18 +75,26 @@ export function coercePdfAssistantText(params: {
     );
   }
   if (errorMessage) {
-    throw new Error(`PDF model failed (${params.provider}/${params.model}): ${errorMessage}`);
+    throw new Error(
+      `PDF model failed (${params.provider}/${params.model}): ${errorMessage}`,
+    );
   }
   const text = extractAssistantText(params.message);
   if (text.trim()) {
     return text.trim();
   }
-  throw new Error(`PDF model returned no text (${params.provider}/${params.model}).`);
+  throw new Error(
+    `PDF model returned no text (${params.provider}/${params.model}).`,
+  );
 }
 
 export function coercePdfModelConfig(cfg?: OpenClawConfig): PdfModelConfig {
-  const primary = resolveAgentModelPrimaryValue(cfg?.agents?.defaults?.pdfModel);
-  const fallbacks = resolveAgentModelFallbackValues(cfg?.agents?.defaults?.pdfModel);
+  const primary = resolveAgentModelPrimaryValue(
+    cfg?.agents?.defaults?.pdfModel,
+  );
+  const fallbacks = resolveAgentModelFallbackValues(
+    cfg?.agents?.defaults?.pdfModel,
+  );
   return {
     ...(primary?.trim() ? { primary: primary.trim() } : {}),
     ...(fallbacks.length > 0 ? { fallbacks } : {}),

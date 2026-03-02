@@ -25,13 +25,19 @@ export type FindExtraGatewayServicesOptions = {
 const EXTRA_MARKERS = ["openclaw", "clawdbot", "moltbot"] as const;
 
 export function renderGatewayServiceCleanupHints(
-  env: Record<string, string | undefined> = process.env as Record<string, string | undefined>,
+  env: Record<string, string | undefined> = process.env as Record<
+    string,
+    string | undefined
+  >,
 ): string[] {
   const profile = env.OPENCLAW_PROFILE;
   switch (process.platform) {
     case "darwin": {
       const label = resolveGatewayLaunchAgentLabel(profile);
-      return [`launchctl bootout gui/$UID/${label}`, `rm ~/Library/LaunchAgents/${label}.plist`];
+      return [
+        `launchctl bootout gui/$UID/${label}`,
+        `rm ~/Library/LaunchAgents/${label}.plist`,
+      ];
     }
     case "linux": {
       const unit = resolveGatewaySystemdServiceName(profile);
@@ -85,7 +91,10 @@ function hasGatewayServiceMarker(content: string): boolean {
   );
 }
 
-function isOpenClawGatewayLaunchdService(label: string, contents: string): boolean {
+function isOpenClawGatewayLaunchdService(
+  label: string,
+  contents: string,
+): boolean {
   if (hasGatewayServiceMarker(contents)) {
     return true;
   }
@@ -96,7 +105,10 @@ function isOpenClawGatewayLaunchdService(label: string, contents: string): boole
   return label.startsWith("ai.openclaw.");
 }
 
-function isOpenClawGatewaySystemdService(name: string, contents: string): boolean {
+function isOpenClawGatewaySystemdService(
+  name: string,
+  contents: string,
+): boolean {
   if (hasGatewayServiceMarker(contents)) {
     return true;
   }
@@ -112,11 +124,15 @@ function isOpenClawGatewayTaskName(name: string): boolean {
     return false;
   }
   const defaultName = resolveGatewayWindowsTaskName().toLowerCase();
-  return normalized === defaultName || normalized.startsWith("openclaw gateway");
+  return (
+    normalized === defaultName || normalized.startsWith("openclaw gateway")
+  );
 }
 
 function tryExtractPlistLabel(contents: string): string | null {
-  const match = contents.match(/<key>Label<\/key>\s*<string>([\s\S]*?)<\/string>/i);
+  const match = contents.match(
+    /<key>Label<\/key>\s*<string>([\s\S]*?)<\/string>/i,
+  );
   if (!match) {
     return null;
   }
@@ -216,7 +232,10 @@ async function scanLaunchdDir(params: {
     if (isIgnoredLaunchdLabel(label)) {
       continue;
     }
-    if (marker === "openclaw" && isOpenClawGatewayLaunchdService(label, contents)) {
+    if (
+      marker === "openclaw" &&
+      isOpenClawGatewayLaunchdService(label, contents)
+    ) {
       continue;
     }
     results.push({
@@ -248,7 +267,10 @@ async function scanSystemdDir(params: {
     if (!marker) {
       continue;
     }
-    if (marker === "openclaw" && isOpenClawGatewaySystemdService(name, contents)) {
+    if (
+      marker === "openclaw" &&
+      isOpenClawGatewaySystemdService(name, contents)
+    ) {
       continue;
     }
     results.push({

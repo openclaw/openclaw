@@ -99,7 +99,9 @@ vi.mock("@opentelemetry/semantic-conventions", () => ({
 }));
 
 vi.mock("openclaw/plugin-sdk", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk")>("openclaw/plugin-sdk");
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk")>(
+    "openclaw/plugin-sdk",
+  );
   return {
     ...actual,
     registerLogTransport: registerLogTransportMock,
@@ -151,7 +153,9 @@ function createOtelContext(
   };
 }
 
-function createTraceOnlyContext(endpoint: string): OpenClawPluginServiceContext {
+function createTraceOnlyContext(
+  endpoint: string,
+): OpenClawPluginServiceContext {
   return createOtelContext(endpoint, { traces: true });
 }
 
@@ -198,7 +202,11 @@ describe("diagnostics-otel service", () => {
     const { registeredTransports } = setupRegisteredTransports();
 
     const service = createDiagnosticsOtelService();
-    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true, metrics: true, logs: true });
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, {
+      traces: true,
+      metrics: true,
+      logs: true,
+    });
     await service.start(ctx);
 
     emitDiagnosticEvent({
@@ -241,23 +249,37 @@ describe("diagnostics-otel service", () => {
       attempt: 2,
     });
 
-    expect(telemetryState.counters.get("openclaw.webhook.received")?.add).toHaveBeenCalled();
+    expect(
+      telemetryState.counters.get("openclaw.webhook.received")?.add,
+    ).toHaveBeenCalled();
     expect(
       telemetryState.histograms.get("openclaw.webhook.duration_ms")?.record,
     ).toHaveBeenCalled();
-    expect(telemetryState.counters.get("openclaw.message.queued")?.add).toHaveBeenCalled();
-    expect(telemetryState.counters.get("openclaw.message.processed")?.add).toHaveBeenCalled();
+    expect(
+      telemetryState.counters.get("openclaw.message.queued")?.add,
+    ).toHaveBeenCalled();
+    expect(
+      telemetryState.counters.get("openclaw.message.processed")?.add,
+    ).toHaveBeenCalled();
     expect(
       telemetryState.histograms.get("openclaw.message.duration_ms")?.record,
     ).toHaveBeenCalled();
-    expect(telemetryState.histograms.get("openclaw.queue.wait_ms")?.record).toHaveBeenCalled();
-    expect(telemetryState.counters.get("openclaw.session.stuck")?.add).toHaveBeenCalled();
+    expect(
+      telemetryState.histograms.get("openclaw.queue.wait_ms")?.record,
+    ).toHaveBeenCalled();
+    expect(
+      telemetryState.counters.get("openclaw.session.stuck")?.add,
+    ).toHaveBeenCalled();
     expect(
       telemetryState.histograms.get("openclaw.session.stuck_age_ms")?.record,
     ).toHaveBeenCalled();
-    expect(telemetryState.counters.get("openclaw.run.attempt")?.add).toHaveBeenCalled();
+    expect(
+      telemetryState.counters.get("openclaw.run.attempt")?.add,
+    ).toHaveBeenCalled();
 
-    const spanNames = telemetryState.tracer.startSpan.mock.calls.map((call) => call[0]);
+    const spanNames = telemetryState.tracer.startSpan.mock.calls.map(
+      (call) => call[0],
+    );
     expect(spanNames).toContain("openclaw.webhook.processed");
     expect(spanNames).toContain("openclaw.message.processed");
     expect(spanNames).toContain("openclaw.session.stuck");
@@ -276,40 +298,60 @@ describe("diagnostics-otel service", () => {
 
   test("appends signal path when endpoint contains non-signal /v1 segment", async () => {
     const service = createDiagnosticsOtelService();
-    const ctx = createTraceOnlyContext("https://www.comet.com/opik/api/v1/private/otel");
+    const ctx = createTraceOnlyContext(
+      "https://www.comet.com/opik/api/v1/private/otel",
+    );
     await service.start(ctx);
 
-    const options = traceExporterCtor.mock.calls[0]?.[0] as { url?: string } | undefined;
-    expect(options?.url).toBe("https://www.comet.com/opik/api/v1/private/otel/v1/traces");
+    const options = traceExporterCtor.mock.calls[0]?.[0] as
+      | { url?: string }
+      | undefined;
+    expect(options?.url).toBe(
+      "https://www.comet.com/opik/api/v1/private/otel/v1/traces",
+    );
     await service.stop?.(ctx);
   });
 
   test("keeps already signal-qualified endpoint unchanged", async () => {
     const service = createDiagnosticsOtelService();
-    const ctx = createTraceOnlyContext("https://collector.example.com/v1/traces");
+    const ctx = createTraceOnlyContext(
+      "https://collector.example.com/v1/traces",
+    );
     await service.start(ctx);
 
-    const options = traceExporterCtor.mock.calls[0]?.[0] as { url?: string } | undefined;
+    const options = traceExporterCtor.mock.calls[0]?.[0] as
+      | { url?: string }
+      | undefined;
     expect(options?.url).toBe("https://collector.example.com/v1/traces");
     await service.stop?.(ctx);
   });
 
   test("keeps signal-qualified endpoint unchanged when it has query params", async () => {
     const service = createDiagnosticsOtelService();
-    const ctx = createTraceOnlyContext("https://collector.example.com/v1/traces?timeout=30s");
+    const ctx = createTraceOnlyContext(
+      "https://collector.example.com/v1/traces?timeout=30s",
+    );
     await service.start(ctx);
 
-    const options = traceExporterCtor.mock.calls[0]?.[0] as { url?: string } | undefined;
-    expect(options?.url).toBe("https://collector.example.com/v1/traces?timeout=30s");
+    const options = traceExporterCtor.mock.calls[0]?.[0] as
+      | { url?: string }
+      | undefined;
+    expect(options?.url).toBe(
+      "https://collector.example.com/v1/traces?timeout=30s",
+    );
     await service.stop?.(ctx);
   });
 
   test("keeps signal-qualified endpoint unchanged when signal path casing differs", async () => {
     const service = createDiagnosticsOtelService();
-    const ctx = createTraceOnlyContext("https://collector.example.com/v1/Traces");
+    const ctx = createTraceOnlyContext(
+      "https://collector.example.com/v1/Traces",
+    );
     await service.start(ctx);
 
-    const options = traceExporterCtor.mock.calls[0]?.[0] as { url?: string } | undefined;
+    const options = traceExporterCtor.mock.calls[0]?.[0] as
+      | { url?: string }
+      | undefined;
     expect(options?.url).toBe("https://collector.example.com/v1/Traces");
     await service.stop?.(ctx);
   });
@@ -350,14 +392,18 @@ describe("diagnostics-otel service", () => {
       reason: "token=ghp_abcdefghijklmnopqrstuvwxyz123456",
     });
 
-    const sessionCounter = telemetryState.counters.get("openclaw.session.state");
+    const sessionCounter = telemetryState.counters.get(
+      "openclaw.session.state",
+    );
     expect(sessionCounter?.add).toHaveBeenCalledWith(
       1,
       expect.objectContaining({
         "openclaw.reason": expect.stringContaining("…"),
       }),
     );
-    const attrs = sessionCounter?.add.mock.calls[0]?.[1] as Record<string, unknown> | undefined;
+    const attrs = sessionCounter?.add.mock.calls[0]?.[1] as
+      | Record<string, unknown>
+      | undefined;
     expect(typeof attrs?.["openclaw.reason"]).toBe("string");
     expect(String(attrs?.["openclaw.reason"])).not.toContain(
       "ghp_abcdefghijklmnopqrstuvwxyz123456",

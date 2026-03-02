@@ -32,7 +32,8 @@ export type MentionInfo = {
  * documentation placeholders like `@[表示名](ユーザーID)`.
  */
 const TEAMS_BOT_ID_PATTERN = /^\d+:[a-z0-9._=-]+(?::[a-z0-9._=-]+)*$/i;
-const AAD_OBJECT_ID_PATTERN = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
+const AAD_OBJECT_ID_PATTERN =
+  /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 
 function isValidTeamsId(id: string): boolean {
   return TEAMS_BOT_ID_PATTERN.test(id) || AAD_OBJECT_ID_PATTERN.test(id);
@@ -102,7 +103,10 @@ export function buildMentionEntities(mentions: MentionInfo[]): MentionEntity[] {
  * Format text with mentions using <at> tags.
  * This is a convenience function when you want to manually format mentions.
  */
-export function formatMentionText(text: string, mentions: MentionInfo[]): string {
+export function formatMentionText(
+  text: string,
+  mentions: MentionInfo[],
+): string {
   let formatted = text;
   for (const mention of mentions) {
     // Replace @Name or @name with <at>Name</at>

@@ -1,6 +1,10 @@
 import { Command } from "commander";
 import { describe, expect, it } from "vitest";
-import { collectOption, parsePositiveIntOrUndefined, resolveActionArgs } from "./helpers.js";
+import {
+  collectOption,
+  parsePositiveIntOrUndefined,
+  resolveActionArgs,
+} from "./helpers.js";
 
 describe("program helpers", () => {
   it("collectOption appends values in order", () => {

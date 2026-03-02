@@ -30,7 +30,9 @@ import {
   readStringParam,
 } from "./common.js";
 
-function readParentIdParam(params: Record<string, unknown>): string | null | undefined {
+function readParentIdParam(
+  params: Record<string, unknown>,
+): string | null | undefined {
   if (params.clearParent === true) {
     return null;
   }
@@ -63,7 +65,10 @@ async function runRoleMutation(params: {
   const userId = readStringParam(params.values, "userId", { required: true });
   const roleId = readStringParam(params.values, "roleId", { required: true });
   if (params.accountId) {
-    await params.mutate({ guildId, userId, roleId }, { accountId: params.accountId });
+    await params.mutate(
+      { guildId, userId, roleId },
+      { accountId: params.accountId },
+    );
     return;
   }
   await params.mutate({ guildId, userId, roleId });
@@ -92,7 +97,11 @@ export async function handleDiscordGuildAction(
       const presence = getPresence(accountId, userId);
       const activities = presence?.activities ?? undefined;
       const status = presence?.status ?? undefined;
-      return jsonResult({ ok: true, member, ...(presence ? { status, activities } : {}) });
+      return jsonResult({
+        ok: true,
+        member,
+        ...(presence ? { status, activities } : {}),
+      });
     }
     case "roleInfo": {
       if (!isActionEnabled("roleInfo")) {
@@ -187,14 +196,22 @@ export async function handleDiscordGuildAction(
       if (!isActionEnabled("roles", false)) {
         throw new Error("Discord role changes are disabled.");
       }
-      await runRoleMutation({ accountId, values: params, mutate: addRoleDiscord });
+      await runRoleMutation({
+        accountId,
+        values: params,
+        mutate: addRoleDiscord,
+      });
       return jsonResult({ ok: true });
     }
     case "roleRemove": {
       if (!isActionEnabled("roles", false)) {
         throw new Error("Discord role changes are disabled.");
       }
-      await runRoleMutation({ accountId, values: params, mutate: removeRoleDiscord });
+      await runRoleMutation({
+        accountId,
+        values: params,
+        mutate: removeRoleDiscord,
+      });
       return jsonResult({ ok: true });
     }
     case "channelInfo": {
@@ -264,7 +281,8 @@ export async function handleDiscordGuildAction(
       const channelId = readStringParam(params, "channelId");
       const location = readStringParam(params, "location");
       const entityTypeRaw = readStringParam(params, "entityType");
-      const entityType = entityTypeRaw === "stage" ? 1 : entityTypeRaw === "external" ? 3 : 2;
+      const entityType =
+        entityTypeRaw === "stage" ? 1 : entityTypeRaw === "external" ? 3 : 2;
       const payload = {
         name,
         description,
@@ -272,7 +290,8 @@ export async function handleDiscordGuildAction(
         scheduled_end_time: endTime,
         entity_type: entityType,
         channel_id: channelId,
-        entity_metadata: entityType === 3 && location ? { location } : undefined,
+        entity_metadata:
+          entityType === 3 && location ? { location } : undefined,
         privacy_level: 2,
       };
       const event = accountId
@@ -330,11 +349,17 @@ export async function handleDiscordGuildAction(
       const rateLimitPerUser = readNumberParam(params, "rateLimitPerUser", {
         integer: true,
       });
-      const archived = typeof params.archived === "boolean" ? params.archived : undefined;
-      const locked = typeof params.locked === "boolean" ? params.locked : undefined;
-      const autoArchiveDuration = readNumberParam(params, "autoArchiveDuration", {
-        integer: true,
-      });
+      const archived =
+        typeof params.archived === "boolean" ? params.archived : undefined;
+      const locked =
+        typeof params.locked === "boolean" ? params.locked : undefined;
+      const autoArchiveDuration = readNumberParam(
+        params,
+        "autoArchiveDuration",
+        {
+          integer: true,
+        },
+      );
       const availableTags = parseAvailableTags(params.availableTags);
       const channel = accountId
         ? await editChannelDiscord(
@@ -517,7 +542,9 @@ export async function handleDiscordGuildAction(
       });
       const targetId = readStringParam(params, "targetId", { required: true });
       if (accountId) {
-        await removeChannelPermissionDiscord(channelId, targetId, { accountId });
+        await removeChannelPermissionDiscord(channelId, targetId, {
+          accountId,
+        });
       } else {
         await removeChannelPermissionDiscord(channelId, targetId);
       }

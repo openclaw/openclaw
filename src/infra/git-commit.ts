@@ -52,7 +52,9 @@ const readCommitFromBuildInfo = () => {
   }
 };
 
-export const resolveCommitHash = (options: { cwd?: string; env?: NodeJS.ProcessEnv } = {}) => {
+export const resolveCommitHash = (
+  options: { cwd?: string; env?: NodeJS.ProcessEnv } = {},
+) => {
   if (cachedCommit !== undefined) {
     return cachedCommit;
   }

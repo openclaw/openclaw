@@ -36,7 +36,9 @@ export function validateSlackBlocksArray(raw: unknown): (Block | KnownBlock)[] {
   return raw as (Block | KnownBlock)[];
 }
 
-export function parseSlackBlocksInput(raw: unknown): (Block | KnownBlock)[] | undefined {
+export function parseSlackBlocksInput(
+  raw: unknown,
+): (Block | KnownBlock)[] | undefined {
   if (raw == null) {
     return undefined;
   }

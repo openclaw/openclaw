@@ -39,8 +39,12 @@ export const whatsappOutbound: ChannelOutboundAdapter = {
     }
     const limit = whatsappOutbound.textChunkLimit;
     const chunks =
-      limit && whatsappOutbound.chunker ? whatsappOutbound.chunker(text, limit) : [text];
-    let lastResult: Awaited<ReturnType<NonNullable<typeof whatsappOutbound.sendText>>>;
+      limit && whatsappOutbound.chunker
+        ? whatsappOutbound.chunker(text, limit)
+        : [text];
+    let lastResult: Awaited<
+      ReturnType<NonNullable<typeof whatsappOutbound.sendText>>
+    >;
     for (const chunk of chunks) {
       lastResult = await whatsappOutbound.sendText!({ ...ctx, text: chunk });
     }
@@ -48,7 +52,8 @@ export const whatsappOutbound: ChannelOutboundAdapter = {
   },
   sendText: async ({ to, text, accountId, deps, gifPlayback }) => {
     const send =
-      deps?.sendWhatsApp ?? (await import("../../../web/outbound.js")).sendMessageWhatsApp;
+      deps?.sendWhatsApp ??
+      (await import("../../../web/outbound.js")).sendMessageWhatsApp;
     const result = await send(to, text, {
       verbose: false,
       accountId: accountId ?? undefined,
@@ -56,9 +61,18 @@ export const whatsappOutbound: ChannelOutboundAdapter = {
     });
     return { channel: "whatsapp", ...result };
   },
-  sendMedia: async ({ to, text, mediaUrl, mediaLocalRoots, accountId, deps, gifPlayback }) => {
+  sendMedia: async ({
+    to,
+    text,
+    mediaUrl,
+    mediaLocalRoots,
+    accountId,
+    deps,
+    gifPlayback,
+  }) => {
     const send =
-      deps?.sendWhatsApp ?? (await import("../../../web/outbound.js")).sendMessageWhatsApp;
+      deps?.sendWhatsApp ??
+      (await import("../../../web/outbound.js")).sendMessageWhatsApp;
     const result = await send(to, text, {
       verbose: false,
       mediaUrl,

@@ -1,7 +1,10 @@
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveConversationLabel } from "../../channels/conversation-label.js";
 import type { FinalizedMsgContext, MsgContext } from "../templating.js";
-import { normalizeInboundTextNewlines, sanitizeInboundSystemTags } from "./inbound-text.js";
+import {
+  normalizeInboundTextNewlines,
+  sanitizeInboundSystemTags,
+} from "./inbound-text.js";
 
 export type FinalizeInboundContextOptions = {
   forceBodyForAgent?: boolean;
@@ -41,13 +44,19 @@ export function finalizeInboundContext<T extends Record<string, unknown>>(
   const normalized = ctx as T & MsgContext;
 
   normalized.Body = sanitizeInboundSystemTags(
-    normalizeInboundTextNewlines(typeof normalized.Body === "string" ? normalized.Body : ""),
+    normalizeInboundTextNewlines(
+      typeof normalized.Body === "string" ? normalized.Body : "",
+    ),
   );
   normalized.RawBody = normalizeTextField(normalized.RawBody);
   normalized.CommandBody = normalizeTextField(normalized.CommandBody);
   normalized.Transcript = normalizeTextField(normalized.Transcript);
-  normalized.ThreadStarterBody = normalizeTextField(normalized.ThreadStarterBody);
-  normalized.ThreadHistoryBody = normalizeTextField(normalized.ThreadHistoryBody);
+  normalized.ThreadStarterBody = normalizeTextField(
+    normalized.ThreadStarterBody,
+  );
+  normalized.ThreadHistoryBody = normalizeTextField(
+    normalized.ThreadHistoryBody,
+  );
   if (Array.isArray(normalized.UntrustedContext)) {
     const normalizedUntrusted = normalized.UntrustedContext.map((entry) =>
       sanitizeInboundSystemTags(normalizeInboundTextNewlines(entry)),
@@ -101,8 +110,12 @@ export function finalizeInboundContext<T extends Record<string, unknown>>(
   const mediaCount = countMediaEntries(normalized);
   if (mediaCount > 0) {
     const mediaType = normalizeMediaType(normalized.MediaType);
-    const rawMediaTypes = Array.isArray(normalized.MediaTypes) ? normalized.MediaTypes : undefined;
-    const normalizedMediaTypes = rawMediaTypes?.map((entry) => normalizeMediaType(entry));
+    const rawMediaTypes = Array.isArray(normalized.MediaTypes)
+      ? normalized.MediaTypes
+      : undefined;
+    const normalizedMediaTypes = rawMediaTypes?.map((entry) =>
+      normalizeMediaType(entry),
+    );
 
     let mediaTypesFinal: string[] | undefined;
     if (normalizedMediaTypes && normalizedMediaTypes.length > 0) {
@@ -117,11 +130,15 @@ export function finalizeInboundContext<T extends Record<string, unknown>>(
         mediaTypesFinal.push(DEFAULT_MEDIA_TYPE);
       }
     } else {
-      mediaTypesFinal = Array.from({ length: mediaCount }, () => DEFAULT_MEDIA_TYPE);
+      mediaTypesFinal = Array.from(
+        { length: mediaCount },
+        () => DEFAULT_MEDIA_TYPE,
+      );
     }
 
     normalized.MediaTypes = mediaTypesFinal;
-    normalized.MediaType = mediaType ?? mediaTypesFinal[0] ?? DEFAULT_MEDIA_TYPE;
+    normalized.MediaType =
+      mediaType ?? mediaTypesFinal[0] ?? DEFAULT_MEDIA_TYPE;
   }
 
   return normalized as T & FinalizedMsgContext;

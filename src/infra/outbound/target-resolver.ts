@@ -41,9 +41,14 @@ export async function resolveChannelTarget(params: {
 }
 
 const CACHE_TTL_MS = 30 * 60 * 1000;
-const directoryCache = new DirectoryCache<ChannelDirectoryEntry[]>(CACHE_TTL_MS);
+const directoryCache = new DirectoryCache<ChannelDirectoryEntry[]>(
+  CACHE_TTL_MS,
+);
 
-export function resetDirectoryCache(params?: { channel?: ChannelId; accountId?: string | null }) {
+export function resetDirectoryCache(params?: {
+  channel?: ChannelId;
+  accountId?: string | null;
+}) {
   if (!params?.channel) {
     directoryCache.clear();
     return;
@@ -92,7 +97,11 @@ export function formatTargetDisplay(params: {
   const display = params.display?.trim();
   const kind =
     params.kind ??
-    (lowered.startsWith("user:") ? "user" : lowered.startsWith("channel:") ? "group" : undefined);
+    (lowered.startsWith("user:")
+      ? "user"
+      : lowered.startsWith("channel:")
+        ? "group"
+        : undefined);
 
   if (display) {
     if (display.startsWith("#") || display.startsWith("@")) {
@@ -129,7 +138,11 @@ export function formatTargetDisplay(params: {
   return withoutPrefix;
 }
 
-function preserveTargetCase(channel: ChannelId, raw: string, normalized: string): string {
+function preserveTargetCase(
+  channel: ChannelId,
+  raw: string,
+  normalized: string,
+): string {
   if (channel !== "slack") {
     return normalized;
   }
@@ -159,7 +172,11 @@ function detectTargetKind(
     return "group";
   }
 
-  if (trimmed.startsWith("@") || /^<@!?/.test(trimmed) || /^user:/i.test(trimmed)) {
+  if (
+    trimmed.startsWith("@") ||
+    /^<@!?/.test(trimmed) ||
+    /^user:/i.test(trimmed)
+  ) {
     return "user";
   }
   if (trimmed.startsWith("#") || /^channel:/i.test(trimmed)) {
@@ -167,14 +184,20 @@ function detectTargetKind(
   }
 
   // For some channels (e.g., BlueBubbles/iMessage), bare phone numbers are almost always DM targets.
-  if ((channel === "bluebubbles" || channel === "imessage") && /^\+?\d{6,}$/.test(trimmed)) {
+  if (
+    (channel === "bluebubbles" || channel === "imessage") &&
+    /^\+?\d{6,}$/.test(trimmed)
+  ) {
     return "user";
   }
 
   return "group";
 }
 
-function normalizeDirectoryEntryId(channel: ChannelId, entry: ChannelDirectoryEntry): string {
+function normalizeDirectoryEntryId(
+  channel: ChannelId,
+  entry: ChannelDirectoryEntry,
+): string {
   const normalized = normalizeTargetForProvider(channel, entry.id);
   return normalized ?? entry.id.trim();
 }
@@ -188,10 +211,16 @@ function matchesDirectoryEntry(params: {
   if (!query) {
     return false;
   }
-  const id = stripTargetPrefixes(normalizeDirectoryEntryId(params.channel, params.entry));
+  const id = stripTargetPrefixes(
+    normalizeDirectoryEntryId(params.channel, params.entry),
+  );
   const name = params.entry.name ? stripTargetPrefixes(params.entry.name) : "";
-  const handle = params.entry.handle ? stripTargetPrefixes(params.entry.handle) : "";
-  const candidates = [id, name, handle].map((value) => normalizeQuery(value)).filter(Boolean);
+  const handle = params.entry.handle
+    ? stripTargetPrefixes(params.entry.handle)
+    : "";
+  const candidates = [id, name, handle]
+    .map((value) => normalizeQuery(value))
+    .filter(Boolean);
   return candidates.some((value) => value === query || value.includes(query));
 }
 
@@ -201,7 +230,11 @@ function resolveMatch(params: {
   query: string;
 }) {
   const matches = params.entries.filter((entry) =>
-    matchesDirectoryEntry({ channel: params.channel, entry, query: params.query }),
+    matchesDirectoryEntry({
+      channel: params.channel,
+      entry,
+      query: params.query,
+    }),
   );
   if (matches.length === 0) {
     return { kind: "none" as const };
@@ -459,7 +492,9 @@ export async function lookupDirectoryDisplay(params: {
   accountId?: string | null;
   runtime?: RuntimeEnv;
 }): Promise<string | undefined> {
-  const normalized = normalizeTargetForProvider(params.channel, params.targetId) ?? params.targetId;
+  const normalized =
+    normalizeTargetForProvider(params.channel, params.targetId) ??
+    params.targetId;
 
   // Targets can resolve to either peers (DMs) or groups. Try both.
   const [groups, users] = await Promise.all([
@@ -483,7 +518,8 @@ export async function lookupDirectoryDisplay(params: {
 
   const findMatch = (candidates: ChannelDirectoryEntry[]) =>
     candidates.find(
-      (candidate) => normalizeDirectoryEntryId(params.channel, candidate) === normalized,
+      (candidate) =>
+        normalizeDirectoryEntryId(params.channel, candidate) === normalized,
     );
 
   const entry = findMatch(groups) ?? findMatch(users);

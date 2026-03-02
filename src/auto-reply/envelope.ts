@@ -1,6 +1,9 @@
 import { resolveUserTimezone } from "../agents/date-time.js";
 import { normalizeChatType } from "../channels/chat-type.js";
-import { resolveSenderLabel, type SenderLabelParams } from "../channels/sender-label.js";
+import {
+  resolveSenderLabel,
+  type SenderLabelParams,
+} from "../channels/sender-label.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveTimezone,
@@ -62,7 +65,9 @@ function sanitizeEnvelopeHeaderPart(value: string): string {
     .trim();
 }
 
-export function resolveEnvelopeFormatOptions(cfg?: OpenClawConfig): EnvelopeFormatOptions {
+export function resolveEnvelopeFormatOptions(
+  cfg?: OpenClawConfig,
+): EnvelopeFormatOptions {
   const defaults = cfg?.agents?.defaults;
   return {
     timezone: defaults?.envelopeTimezone,
@@ -72,7 +77,9 @@ export function resolveEnvelopeFormatOptions(cfg?: OpenClawConfig): EnvelopeForm
   };
 }
 
-function normalizeEnvelopeOptions(options?: EnvelopeFormatOptions): NormalizedEnvelopeOptions {
+function normalizeEnvelopeOptions(
+  options?: EnvelopeFormatOptions,
+): NormalizedEnvelopeOptions {
   const includeTimestamp = options?.includeTimestamp !== false;
   const includeElapsed = options?.includeElapsed !== false;
   return {
@@ -83,7 +90,9 @@ function normalizeEnvelopeOptions(options?: EnvelopeFormatOptions): NormalizedEn
   };
 }
 
-function resolveEnvelopeTimezone(options: NormalizedEnvelopeOptions): ResolvedEnvelopeTimezone {
+function resolveEnvelopeTimezone(
+  options: NormalizedEnvelopeOptions,
+): ResolvedEnvelopeTimezone {
   const trimmed = options.timezone?.trim();
   if (!trimmed) {
     return { mode: "local" };
@@ -96,7 +105,10 @@ function resolveEnvelopeTimezone(options: NormalizedEnvelopeOptions): ResolvedEn
     return { mode: "local" };
   }
   if (lowered === "user") {
-    return { mode: "iana", timeZone: resolveUserTimezone(options.userTimezone) };
+    return {
+      mode: "iana",
+      timeZone: resolveUserTimezone(options.userTimezone),
+    };
   }
   const explicit = resolveTimezone(trimmed);
   return explicit ? { mode: "iana", timeZone: explicit } : { mode: "utc" };
@@ -123,14 +135,20 @@ function formatTimestamp(
   const weekday = (() => {
     try {
       if (zone.mode === "utc") {
-        return new Intl.DateTimeFormat("en-US", { timeZone: "UTC", weekday: "short" }).format(date);
+        return new Intl.DateTimeFormat("en-US", {
+          timeZone: "UTC",
+          weekday: "short",
+        }).format(date);
       }
       if (zone.mode === "local") {
-        return new Intl.DateTimeFormat("en-US", { weekday: "short" }).format(date);
+        return new Intl.DateTimeFormat("en-US", { weekday: "short" }).format(
+          date,
+        );
       }
-      return new Intl.DateTimeFormat("en-US", { timeZone: zone.timeZone, weekday: "short" }).format(
-        date,
-      );
+      return new Intl.DateTimeFormat("en-US", {
+        timeZone: zone.timeZone,
+        weekday: "short",
+      }).format(date);
     } catch {
       return undefined;
     }
@@ -150,13 +168,17 @@ function formatTimestamp(
 }
 
 export function formatAgentEnvelope(params: AgentEnvelopeParams): string {
-  const channel = sanitizeEnvelopeHeaderPart(params.channel?.trim() || "Channel");
+  const channel = sanitizeEnvelopeHeaderPart(
+    params.channel?.trim() || "Channel",
+  );
   const parts: string[] = [channel];
   const resolved = normalizeEnvelopeOptions(params.envelope);
   let elapsed: string | undefined;
   if (resolved.includeElapsed && params.timestamp && params.previousTimestamp) {
     const currentMs =
-      params.timestamp instanceof Date ? params.timestamp.getTime() : params.timestamp;
+      params.timestamp instanceof Date
+        ? params.timestamp.getTime()
+        : params.timestamp;
     const previousMs =
       params.previousTimestamp instanceof Date
         ? params.previousTimestamp.getTime()
@@ -200,9 +222,15 @@ export function formatInboundEnvelope(params: {
 }): string {
   const chatType = normalizeChatType(params.chatType);
   const isDirect = !chatType || chatType === "direct";
-  const resolvedSenderRaw = params.senderLabel?.trim() || resolveSenderLabel(params.sender ?? {});
-  const resolvedSender = resolvedSenderRaw ? sanitizeEnvelopeHeaderPart(resolvedSenderRaw) : "";
-  const body = !isDirect && resolvedSender ? `${resolvedSender}: ${params.body}` : params.body;
+  const resolvedSenderRaw =
+    params.senderLabel?.trim() || resolveSenderLabel(params.sender ?? {});
+  const resolvedSender = resolvedSenderRaw
+    ? sanitizeEnvelopeHeaderPart(resolvedSenderRaw)
+    : "";
+  const body =
+    !isDirect && resolvedSender
+      ? `${resolvedSender}: ${params.body}`
+      : params.body;
   return formatAgentEnvelope({
     channel: params.channel,
     from: params.from,

@@ -68,7 +68,10 @@ function ttsUsage(): ReplyPayload {
   };
 }
 
-export const handleTtsCommands: CommandHandler = async (params, allowTextCommands) => {
+export const handleTtsCommands: CommandHandler = async (
+  params,
+  allowTextCommands,
+) => {
   if (!allowTextCommands) {
     return null;
   }
@@ -152,7 +155,9 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
     });
     return {
       shouldContinue: false,
-      reply: { text: `❌ Error generating audio: ${result.error ?? "unknown error"}` },
+      reply: {
+        text: `❌ Error generating audio: ${result.error ?? "unknown error"}`,
+      },
     };
   }
 
@@ -177,7 +182,11 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
     }
 
     const requested = args.trim().toLowerCase();
-    if (requested !== "openai" && requested !== "elevenlabs" && requested !== "edge") {
+    if (
+      requested !== "openai" &&
+      requested !== "elevenlabs" &&
+      requested !== "edge"
+    ) {
       return { shouldContinue: false, reply: ttsUsage() };
     }
 
@@ -241,7 +250,10 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
     return {
       shouldContinue: false,
       reply: {
-        text: requested === "on" ? "✅ TTS auto-summary enabled." : "❌ TTS auto-summary disabled.",
+        text:
+          requested === "on"
+            ? "✅ TTS auto-summary enabled."
+            : "❌ TTS auto-summary disabled.",
       },
     };
   }
@@ -263,8 +275,12 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
     if (last) {
       const timeAgo = Math.round((Date.now() - last.timestamp) / 1000);
       lines.push("");
-      lines.push(`Last attempt (${timeAgo}s ago): ${last.success ? "✅" : "❌"}`);
-      lines.push(`Text: ${last.textLength} chars${last.summarized ? " (summarized)" : ""}`);
+      lines.push(
+        `Last attempt (${timeAgo}s ago): ${last.success ? "✅" : "❌"}`,
+      );
+      lines.push(
+        `Text: ${last.textLength} chars${last.summarized ? " (summarized)" : ""}`,
+      );
       if (last.success) {
         lines.push(`Provider: ${last.provider ?? "unknown"}`);
         lines.push(`Latency: ${last.latencyMs ?? 0}ms`);

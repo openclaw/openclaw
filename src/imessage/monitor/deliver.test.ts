@@ -6,7 +6,9 @@ const sendMessageIMessageMock = vi.hoisted(() =>
 );
 const chunkTextWithModeMock = vi.hoisted(() => vi.fn((text: string) => [text]));
 const resolveChunkModeMock = vi.hoisted(() => vi.fn(() => "length"));
-const convertMarkdownTablesMock = vi.hoisted(() => vi.fn((text: string) => text));
+const convertMarkdownTablesMock = vi.hoisted(() =>
+  vi.fn((text: string) => text),
+);
 const resolveMarkdownTableModeMock = vi.hoisted(() => vi.fn(() => "code"));
 
 vi.mock("../send.js", () => ({
@@ -35,7 +37,9 @@ import { deliverReplies } from "./deliver.js";
 
 describe("deliverReplies", () => {
   const runtime = { log: vi.fn(), error: vi.fn() } as unknown as RuntimeEnv;
-  const client = {} as Awaited<ReturnType<typeof import("../client.js").createIMessageRpcClient>>;
+  const client = {} as Awaited<
+    ReturnType<typeof import("../client.js").createIMessageRpcClient>
+  >;
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -139,7 +143,9 @@ describe("deliverReplies", () => {
       sentMessageCache: { remember },
     });
 
-    expect(remember).toHaveBeenCalledWith("acct-3:chat_id:30", { text: "first|second" });
+    expect(remember).toHaveBeenCalledWith("acct-3:chat_id:30", {
+      text: "first|second",
+    });
     expect(remember).toHaveBeenCalledWith("acct-3:chat_id:30", {
       text: "first",
       messageId: "imsg-1",

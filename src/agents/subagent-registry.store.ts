@@ -17,7 +17,9 @@ type PersistedSubagentRegistryV2 = {
   runs: Record<string, PersistedSubagentRunRecord>;
 };
 
-type PersistedSubagentRegistry = PersistedSubagentRegistryV1 | PersistedSubagentRegistryV2;
+type PersistedSubagentRegistry =
+  | PersistedSubagentRegistryV1
+  | PersistedSubagentRegistryV2;
 
 const REGISTRY_VERSION = 2 as const;
 
@@ -42,7 +44,11 @@ function resolveSubagentStateDir(env: NodeJS.ProcessEnv = process.env): string {
 }
 
 export function resolveSubagentRegistryPath(): string {
-  return path.join(resolveSubagentStateDir(process.env), "subagents", "runs.json");
+  return path.join(
+    resolveSubagentStateDir(process.env),
+    "subagents",
+    "runs.json",
+  );
 }
 
 export function loadSubagentRegistryFromDisk(): Map<string, SubagentRunRecord> {
@@ -75,7 +81,9 @@ export function loadSubagentRegistryFromDisk(): Map<string, SubagentRunRecord> {
         ? typed.announceCompletedAt
         : undefined;
     const cleanupCompletedAt =
-      typeof typed.cleanupCompletedAt === "number" ? typed.cleanupCompletedAt : legacyCompletedAt;
+      typeof typed.cleanupCompletedAt === "number"
+        ? typed.cleanupCompletedAt
+        : legacyCompletedAt;
     const cleanupHandled =
       typeof typed.cleanupHandled === "boolean"
         ? typed.cleanupHandled
@@ -84,9 +92,14 @@ export function loadSubagentRegistryFromDisk(): Map<string, SubagentRunRecord> {
           : undefined;
     const requesterOrigin = normalizeDeliveryContext(
       typed.requesterOrigin ?? {
-        channel: typeof typed.requesterChannel === "string" ? typed.requesterChannel : undefined,
+        channel:
+          typeof typed.requesterChannel === "string"
+            ? typed.requesterChannel
+            : undefined,
         accountId:
-          typeof typed.requesterAccountId === "string" ? typed.requesterAccountId : undefined,
+          typeof typed.requesterAccountId === "string"
+            ? typed.requesterAccountId
+            : undefined,
       },
     );
     const {
@@ -117,7 +130,9 @@ export function loadSubagentRegistryFromDisk(): Map<string, SubagentRunRecord> {
   return out;
 }
 
-export function saveSubagentRegistryToDisk(runs: Map<string, SubagentRunRecord>) {
+export function saveSubagentRegistryToDisk(
+  runs: Map<string, SubagentRunRecord>,
+) {
   const pathname = resolveSubagentRegistryPath();
   const serialized: Record<string, PersistedSubagentRunRecord> = {};
   for (const [runId, entry] of runs.entries()) {

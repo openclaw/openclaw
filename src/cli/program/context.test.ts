@@ -14,7 +14,9 @@ const { createProgramContext } = await import("./context.js");
 
 describe("createProgramContext", () => {
   it("builds program context from version and resolved channel options", () => {
-    resolveCliChannelOptionsMock.mockClear().mockReturnValue(["telegram", "whatsapp"]);
+    resolveCliChannelOptionsMock
+      .mockClear()
+      .mockReturnValue(["telegram", "whatsapp"]);
     const ctx = createProgramContext();
     expect(ctx).toEqual({
       programVersion: "9.9.9-test",

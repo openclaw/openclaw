@@ -12,7 +12,9 @@ const ExecApprovalForwardTargetSchema = z
 const ExecApprovalForwardingSchema = z
   .object({
     enabled: z.boolean().optional(),
-    mode: z.union([z.literal("session"), z.literal("targets"), z.literal("both")]).optional(),
+    mode: z
+      .union([z.literal("session"), z.literal("targets"), z.literal("both")])
+      .optional(),
     agentFilter: z.array(z.string()).optional(),
     sessionFilter: z.array(z.string()).optional(),
     targets: z.array(ExecApprovalForwardTargetSchema).optional(),

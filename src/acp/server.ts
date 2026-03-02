@@ -7,12 +7,17 @@ import { buildGatewayConnectionDetails } from "../gateway/call.js";
 import { GatewayClient } from "../gateway/client.js";
 import { resolveGatewayCredentialsFromConfig } from "../gateway/credentials.js";
 import { isMainModule } from "../infra/is-main.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../utils/message-channel.js";
 import { readSecretFromFile } from "./secret-file.js";
 import { AcpGatewayAgent } from "./translator.js";
 import type { AcpServerOptions } from "./types.js";
 
-export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void> {
+export async function serveAcpGateway(
+  opts: AcpServerOptions = {},
+): Promise<void> {
   const cfg = loadConfig();
   const connection = buildGatewayConnectionDetails({
     config: cfg,
@@ -75,7 +80,9 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
     },
     onClose: (code, reason) => {
       if (!stopped) {
-        rejectGatewayReady(new Error(`gateway closed before ready (${code}): ${reason}`));
+        rejectGatewayReady(
+          new Error(`gateway closed before ready (${code}): ${reason}`),
+        );
       }
       agent?.handleGatewayDisconnect(`${code}: ${reason}`);
       // Resolve only on intentional shutdown (gateway.stop() sets closed
@@ -113,7 +120,9 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
   }
 
   const input = Writable.toWeb(process.stdout);
-  const output = Readable.toWeb(process.stdin) as unknown as ReadableStream<Uint8Array>;
+  const output = Readable.toWeb(
+    process.stdin,
+  ) as unknown as ReadableStream<Uint8Array>;
   const stream = ndJsonStream(input, output);
 
   new AgentSideConnection((conn: AgentSideConnection) => {

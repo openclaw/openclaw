@@ -48,7 +48,9 @@ describe("Slack token config fields", () => {
     });
     expect(res.ok).toBe(false);
     if (!res.ok) {
-      expect(res.issues.some((iss) => iss.path.includes("userTokenReadOnly"))).toBe(true);
+      expect(
+        res.issues.some((iss) => iss.path.includes("userTokenReadOnly")),
+      ).toBe(true);
     }
   });
 
@@ -65,7 +67,9 @@ describe("Slack token config fields", () => {
     });
     expect(res.ok).toBe(false);
     if (!res.ok) {
-      expect(res.issues.some((iss) => iss.path.includes("userToken"))).toBe(true);
+      expect(res.issues.some((iss) => iss.path.includes("userToken"))).toBe(
+        true,
+      );
     }
   });
 });

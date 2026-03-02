@@ -58,7 +58,9 @@ describe("Telegram webhook config", () => {
     });
     expect(res.ok).toBe(false);
     if (!res.ok) {
-      expect(res.issues[0]?.path).toBe("channels.telegram.accounts.ops.webhookSecret");
+      expect(res.issues[0]?.path).toBe(
+        "channels.telegram.accounts.ops.webhookSecret",
+      );
     }
   });
 });

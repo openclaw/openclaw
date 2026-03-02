@@ -2,7 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
-import { makeTempWorkspace, writeWorkspaceFile } from "../../../test-helpers/workspace.js";
+import {
+  makeTempWorkspace,
+  writeWorkspaceFile,
+} from "../../../test-helpers/workspace.js";
 import type { AgentBootstrapHookContext } from "../../hooks.js";
 import { createHookEvent } from "../../hooks.js";
 import handler from "./handler.js";
@@ -53,7 +56,11 @@ describe("bootstrap-extra-files hook", () => {
     const tempDir = await makeTempWorkspace("openclaw-bootstrap-extra-");
     const extraDir = path.join(tempDir, "packages", "core");
     await fs.mkdir(extraDir, { recursive: true });
-    await fs.writeFile(path.join(extraDir, "AGENTS.md"), "extra agents", "utf-8");
+    await fs.writeFile(
+      path.join(extraDir, "AGENTS.md"),
+      "extra agents",
+      "utf-8",
+    );
 
     const cfg = createBootstrapExtraConfig(["packages/*/AGENTS.md"]);
     const context = await createBootstrapContext({
@@ -63,18 +70,29 @@ describe("bootstrap-extra-files hook", () => {
       rootFiles: [{ name: "AGENTS.md", content: "root agents" }],
     });
 
-    const event = createHookEvent("agent", "bootstrap", "agent:main:main", context);
+    const event = createHookEvent(
+      "agent",
+      "bootstrap",
+      "agent:main:main",
+      context,
+    );
     await handler(event);
 
-    const injected = context.bootstrapFiles.filter((f) => f.name === "AGENTS.md");
-    expect(injected).toHaveLength(2);
-    expect(injected.some((f) => f.path.endsWith(path.join("packages", "core", "AGENTS.md")))).toBe(
-      true,
+    const injected = context.bootstrapFiles.filter(
+      (f) => f.name === "AGENTS.md",
     );
+    expect(injected).toHaveLength(2);
+    expect(
+      injected.some((f) =>
+        f.path.endsWith(path.join("packages", "core", "AGENTS.md")),
+      ),
+    ).toBe(true);
   });
 
   it("re-applies subagent bootstrap allowlist after extras are added", async () => {
-    const tempDir = await makeTempWorkspace("openclaw-bootstrap-extra-subagent-");
+    const tempDir = await makeTempWorkspace(
+      "openclaw-bootstrap-extra-subagent-",
+    );
     const extraDir = path.join(tempDir, "packages", "persona");
     await fs.mkdir(extraDir, { recursive: true });
     await fs.writeFile(path.join(extraDir, "SOUL.md"), "evil", "utf-8");
@@ -90,7 +108,12 @@ describe("bootstrap-extra-files hook", () => {
       ],
     });
 
-    const event = createHookEvent("agent", "bootstrap", "agent:main:subagent:abc", context);
+    const event = createHookEvent(
+      "agent",
+      "bootstrap",
+      "agent:main:subagent:abc",
+      context,
+    );
     await handler(event);
     expect(context.bootstrapFiles.map((f) => f.name).toSorted()).toEqual([
       "AGENTS.md",

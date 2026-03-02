@@ -22,7 +22,8 @@ function buildMediaLocalRoots(
   options: BuildMediaLocalRootsOptions = {},
 ): string[] {
   const resolvedStateDir = path.resolve(stateDir);
-  const preferredTmpDir = options.preferredTmpDir ?? resolveCachedPreferredTmpDir();
+  const preferredTmpDir =
+    options.preferredTmpDir ?? resolveCachedPreferredTmpDir();
   return [
     preferredTmpDir,
     path.join(resolvedStateDir, "media"),

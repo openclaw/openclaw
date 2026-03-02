@@ -3,14 +3,21 @@ import { buildChannelAccountSnapshot } from "../../channels/plugins/status.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { withProgress } from "../../cli/progress.js";
-import { type OpenClawConfig, readConfigFileSnapshot } from "../../config/config.js";
+import {
+  type OpenClawConfig,
+  readConfigFileSnapshot,
+} from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
 import { collectChannelStatusIssues } from "../../infra/channels-status-issues.js";
 import { formatTimeAgo } from "../../infra/format-time/format-relative.ts";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { formatDocsLink } from "../../terminal/links.js";
 import { theme } from "../../terminal/theme.js";
-import { type ChatChannel, formatChannelAccountLabel, requireValidConfig } from "./shared.js";
+import {
+  type ChatChannel,
+  formatChannelAccountLabel,
+  requireValidConfig,
+} from "./shared.js";
 
 export type ChannelsStatusOptions = {
   json?: boolean;
@@ -18,7 +25,10 @@ export type ChannelsStatusOptions = {
   timeout?: string;
 };
 
-function appendEnabledConfiguredLinkedBits(bits: string[], account: Record<string, unknown>) {
+function appendEnabledConfiguredLinkedBits(
+  bits: string[],
+  account: Record<string, unknown>,
+) {
   if (typeof account.enabled === "boolean") {
     bits.push(account.enabled ? "enabled" : "disabled");
   }
@@ -36,7 +46,10 @@ function appendModeBit(bits: string[], account: Record<string, unknown>) {
   }
 }
 
-function appendTokenSourceBits(bits: string[], account: Record<string, unknown>) {
+function appendTokenSourceBits(
+  bits: string[],
+  account: Record<string, unknown>,
+) {
   if (typeof account.tokenSource === "string" && account.tokenSource) {
     bits.push(`token:${account.tokenSource}`);
   }
@@ -59,7 +72,8 @@ function buildChannelAccountLine(
   account: Record<string, unknown>,
   bits: string[],
 ): string {
-  const accountId = typeof account.accountId === "string" ? account.accountId : "default";
+  const accountId =
+    typeof account.accountId === "string" ? account.accountId : "default";
   const name = typeof account.name === "string" ? account.name.trim() : "";
   const labelText = formatChannelAccountLabel({
     channel: provider,
@@ -69,10 +83,15 @@ function buildChannelAccountLine(
   return `- ${labelText}: ${bits.join(", ")}`;
 }
 
-export function formatGatewayChannelsStatusLines(payload: Record<string, unknown>): string[] {
+export function formatGatewayChannelsStatusLines(
+  payload: Record<string, unknown>,
+): string[] {
   const lines: string[] = [];
   lines.push(theme.success("Gateway reachable."));
-  const accountLines = (provider: ChatChannel, accounts: Array<Record<string, unknown>>) =>
+  const accountLines = (
+    provider: ChatChannel,
+    accounts: Array<Record<string, unknown>>,
+  ) =>
     accounts.map((account) => {
       const bits: string[] = [];
       appendEnabledConfiguredLinkedBits(bits, account);
@@ -83,11 +102,13 @@ export function formatGatewayChannelsStatusLines(payload: Record<string, unknown
         bits.push(account.connected ? "connected" : "disconnected");
       }
       const inboundAt =
-        typeof account.lastInboundAt === "number" && Number.isFinite(account.lastInboundAt)
+        typeof account.lastInboundAt === "number" &&
+        Number.isFinite(account.lastInboundAt)
           ? account.lastInboundAt
           : null;
       const outboundAt =
-        typeof account.lastOutboundAt === "number" && Number.isFinite(account.lastOutboundAt)
+        typeof account.lastOutboundAt === "number" &&
+        Number.isFinite(account.lastOutboundAt)
           ? account.lastOutboundAt
           : null;
       if (inboundAt) {
@@ -99,7 +120,9 @@ export function formatGatewayChannelsStatusLines(payload: Record<string, unknown
       appendModeBit(bits, account);
       const botUsername = (() => {
         const bot = account.bot as { username?: string | null } | undefined;
-        const probeBot = (account.probe as { bot?: { username?: string | null } } | undefined)?.bot;
+        const probeBot = (
+          account.probe as { bot?: { username?: string | null } } | undefined
+        )?.bot;
         const raw = bot?.username ?? probeBot?.username ?? "";
         if (typeof raw !== "string") {
           return "";
@@ -150,8 +173,12 @@ export function formatGatewayChannelsStatusLines(payload: Record<string, unknown
     });
 
   const plugins = listChannelPlugins();
-  const accountsByChannel = payload.channelAccounts as Record<string, unknown> | undefined;
-  const accountPayloads: Partial<Record<string, Array<Record<string, unknown>>>> = {};
+  const accountsByChannel = payload.channelAccounts as
+    | Record<string, unknown>
+    | undefined;
+  const accountPayloads: Partial<
+    Record<string, Array<Record<string, unknown>>>
+  > = {};
   for (const plugin of plugins) {
     const raw = accountsByChannel?.[plugin.id];
     if (Array.isArray(raw)) {
@@ -200,7 +227,10 @@ async function formatConfigChannelsStatusLines(
     lines.push("");
   }
 
-  const accountLines = (provider: ChatChannel, accounts: Array<Record<string, unknown>>) =>
+  const accountLines = (
+    provider: ChatChannel,
+    accounts: Array<Record<string, unknown>>,
+  ) =>
     accounts.map((account) => {
       const bits: string[] = [];
       appendEnabledConfiguredLinkedBits(bits, account);
@@ -242,7 +272,9 @@ export async function channelsStatusCommand(
   runtime: RuntimeEnv = defaultRuntime,
 ) {
   const timeoutMs = Number(opts.timeout ?? 10_000);
-  const statusLabel = opts.probe ? "Checking channel status (probe)…" : "Checking channel status…";
+  const statusLabel = opts.probe
+    ? "Checking channel status (probe)…"
+    : "Checking channel status…";
   const shouldLogStatus = opts.json !== true && !process.stderr.isTTY;
   if (shouldLogStatus) {
     runtime.log(statusLabel);

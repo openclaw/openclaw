@@ -2,8 +2,21 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { clearSessionStoreCacheForTest, loadSessionStore, saveSessionStore } from "./store.js";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
+import {
+  clearSessionStoreCacheForTest,
+  loadSessionStore,
+  saveSessionStore,
+} from "./store.js";
 import type { SessionEntry } from "./types.js";
 
 // Keep integration tests deterministic: never read a real openclaw.json.
@@ -15,7 +28,8 @@ const mockLoadConfig = vi.mocked(loadConfig) as ReturnType<typeof vi.fn>;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-const archiveTimestamp = (ms: number) => new Date(ms).toISOString().replaceAll(":", "-");
+const archiveTimestamp = (ms: number) =>
+  new Date(ms).toISOString().replaceAll(":", "-");
 
 let fixtureRoot = "";
 let fixtureCount = 0;
@@ -24,7 +38,9 @@ function makeEntry(updatedAt: number): SessionEntry {
   return { sessionId: crypto.randomUUID(), updatedAt };
 }
 
-function applyEnforcedMaintenanceConfig(mockLoadConfig: ReturnType<typeof vi.fn>) {
+function applyEnforcedMaintenanceConfig(
+  mockLoadConfig: ReturnType<typeof vi.fn>,
+) {
   mockLoadConfig.mockReturnValue({
     session: {
       maintenance: {
@@ -43,7 +59,9 @@ async function createCaseDir(prefix: string): Promise<string> {
   return dir;
 }
 
-function createStaleAndFreshStore(now = Date.now()): Record<string, SessionEntry> {
+function createStaleAndFreshStore(
+  now = Date.now(),
+): Record<string, SessionEntry> {
   return {
     stale: makeEntry(now - 30 * DAY_MS),
     fresh: makeEntry(now),
@@ -56,7 +74,9 @@ describe("Integration: saveSessionStore with pruning", () => {
   let savedCacheTtl: string | undefined;
 
   beforeAll(async () => {
-    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pruning-integ-"));
+    fixtureRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-pruning-integ-"),
+    );
   });
 
   afterAll(async () => {
@@ -247,7 +267,11 @@ describe("Integration: saveSessionStore with pruning", () => {
     await expect(fs.stat(oldestTranscript)).rejects.toThrow();
     await expect(fs.stat(newestTranscript)).resolves.toBeDefined();
     const files = await fs.readdir(testDir);
-    expect(files.some((name) => name.startsWith(`${oldestSessionId}.jsonl.deleted.`))).toBe(true);
+    expect(
+      files.some((name) =>
+        name.startsWith(`${oldestSessionId}.jsonl.deleted.`),
+      ),
+    ).toBe(true);
   });
 
   it("does not archive external transcript paths when capping entries", async () => {
@@ -263,7 +287,9 @@ describe("Integration: saveSessionStore with pruning", () => {
     });
 
     const now = Date.now();
-    const externalDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-external-cap-"));
+    const externalDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-external-cap-"),
+    );
     const externalTranscript = path.join(externalDir, "outside.jsonl");
     await fs.writeFile(externalTranscript, "external", "utf-8");
     const store: Record<string, SessionEntry> = {
@@ -274,7 +300,11 @@ describe("Integration: saveSessionStore with pruning", () => {
       },
       newest: { sessionId: "inside", updatedAt: now },
     };
-    await fs.writeFile(path.join(testDir, "inside.jsonl"), '{"type":"session"}\n', "utf-8");
+    await fs.writeFile(
+      path.join(testDir, "inside.jsonl"),
+      '{"type":"session"}\n',
+      "utf-8",
+    );
 
     try {
       await saveSessionStore(storePath, store);
@@ -308,16 +338,28 @@ describe("Integration: saveSessionStore with pruning", () => {
       old: { sessionId: oldSessionId, updatedAt: now - DAY_MS },
       recent: { sessionId: newSessionId, updatedAt: now },
     };
-    await fs.writeFile(path.join(testDir, `${oldSessionId}.jsonl`), "x".repeat(500), "utf-8");
-    await fs.writeFile(path.join(testDir, `${newSessionId}.jsonl`), "y".repeat(500), "utf-8");
+    await fs.writeFile(
+      path.join(testDir, `${oldSessionId}.jsonl`),
+      "x".repeat(500),
+      "utf-8",
+    );
+    await fs.writeFile(
+      path.join(testDir, `${newSessionId}.jsonl`),
+      "y".repeat(500),
+      "utf-8",
+    );
 
     await saveSessionStore(storePath, store);
 
     const loaded = loadSessionStore(storePath);
     expect(Object.keys(loaded).length).toBe(1);
     expect(loaded.recent).toBeDefined();
-    await expect(fs.stat(path.join(testDir, `${oldSessionId}.jsonl`))).rejects.toThrow();
-    await expect(fs.stat(path.join(testDir, `${newSessionId}.jsonl`))).resolves.toBeDefined();
+    await expect(
+      fs.stat(path.join(testDir, `${oldSessionId}.jsonl`)),
+    ).rejects.toThrow();
+    await expect(
+      fs.stat(path.join(testDir, `${newSessionId}.jsonl`)),
+    ).resolves.toBeDefined();
   });
 
   it("uses projected sessions.json size to avoid over-eviction", async () => {
@@ -335,15 +377,27 @@ describe("Integration: saveSessionStore with pruning", () => {
     });
 
     // Simulate a stale oversized on-disk sessions.json from a previous write.
-    await fs.writeFile(storePath, JSON.stringify({ noisy: "x".repeat(10_000) }), "utf-8");
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({ noisy: "x".repeat(10_000) }),
+      "utf-8",
+    );
 
     const now = Date.now();
     const store: Record<string, SessionEntry> = {
       older: { sessionId: "older", updatedAt: now - DAY_MS },
       newer: { sessionId: "newer", updatedAt: now },
     };
-    await fs.writeFile(path.join(testDir, "older.jsonl"), "x".repeat(80), "utf-8");
-    await fs.writeFile(path.join(testDir, "newer.jsonl"), "y".repeat(80), "utf-8");
+    await fs.writeFile(
+      path.join(testDir, "older.jsonl"),
+      "x".repeat(80),
+      "utf-8",
+    );
+    await fs.writeFile(
+      path.join(testDir, "newer.jsonl"),
+      "y".repeat(80),
+      "utf-8",
+    );
 
     await saveSessionStore(storePath, store);
 
@@ -367,7 +421,9 @@ describe("Integration: saveSessionStore with pruning", () => {
     });
 
     const now = Date.now();
-    const externalDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-external-session-"));
+    const externalDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-external-session-"),
+    );
     const externalTranscript = path.join(externalDir, "outside.jsonl");
     await fs.writeFile(externalTranscript, "z".repeat(400), "utf-8");
 
@@ -382,7 +438,11 @@ describe("Integration: saveSessionStore with pruning", () => {
         updatedAt: now,
       },
     };
-    await fs.writeFile(path.join(testDir, "inside.jsonl"), "i".repeat(400), "utf-8");
+    await fs.writeFile(
+      path.join(testDir, "inside.jsonl"),
+      "i".repeat(400),
+      "utf-8",
+    );
 
     try {
       await saveSessionStore(storePath, store);

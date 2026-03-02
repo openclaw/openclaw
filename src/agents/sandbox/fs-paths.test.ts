@@ -27,7 +27,9 @@ describe("parseSandboxBindMount", () => {
   });
 
   it("parses Windows drive-letter host paths", () => {
-    expect(parseSandboxBindMount("C:\\Users\\kai\\workspace:/workspace:ro")).toEqual({
+    expect(
+      parseSandboxBindMount("C:\\Users\\kai\\workspace:/workspace:ro"),
+    ).toEqual({
       hostRoot: path.resolve("C:\\Users\\kai\\workspace"),
       containerRoot: "/workspace",
       writable: false,
@@ -83,7 +85,9 @@ describe("resolveSandboxFsPathWithMounts", () => {
       defaultContainerRoot: sandbox.containerWorkdir,
       mounts,
     });
-    expect(resolved.hostPath).toBe(path.join(path.resolve("/tmp/workspace"), "src", "index.ts"));
+    expect(resolved.hostPath).toBe(
+      path.join(path.resolve("/tmp/workspace"), "src", "index.ts"),
+    );
     expect(resolved.containerPath).toBe("/workspace/src/index.ts");
     expect(resolved.relativePath).toBe("src/index.ts");
     expect(resolved.writable).toBe(true);
@@ -119,7 +123,9 @@ describe("resolveSandboxFsPathWithMounts", () => {
       mounts,
     });
 
-    expect(resolved.hostPath).toBe(path.join(path.resolve("/tmp/override"), "docs", "AGENTS.md"));
+    expect(resolved.hostPath).toBe(
+      path.join(path.resolve("/tmp/override"), "docs", "AGENTS.md"),
+    );
     expect(resolved.writable).toBe(false);
   });
 });

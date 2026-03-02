@@ -7,7 +7,9 @@ describe("getDmHistoryLimitFromSessionKey", () => {
     expect(getDmHistoryLimitFromSessionKey(undefined, {})).toBeUndefined();
   });
   it("returns undefined when config is undefined", () => {
-    expect(getDmHistoryLimitFromSessionKey("telegram:dm:123", undefined)).toBeUndefined();
+    expect(
+      getDmHistoryLimitFromSessionKey("telegram:dm:123", undefined),
+    ).toBeUndefined();
   });
   it("returns dmHistoryLimit for telegram provider", () => {
     const config = {
@@ -25,17 +27,31 @@ describe("getDmHistoryLimitFromSessionKey", () => {
     const config = {
       channels: { telegram: { dmHistoryLimit: 10 } },
     } as OpenClawConfig;
-    expect(getDmHistoryLimitFromSessionKey("agent:main:telegram:dm:123", config)).toBe(10);
+    expect(
+      getDmHistoryLimitFromSessionKey("agent:main:telegram:dm:123", config),
+    ).toBe(10);
   });
   it("strips thread suffix from dm session keys", () => {
     const config = {
-      channels: { telegram: { dmHistoryLimit: 10, dms: { "123": { historyLimit: 7 } } } },
+      channels: {
+        telegram: { dmHistoryLimit: 10, dms: { "123": { historyLimit: 7 } } },
+      },
     } as OpenClawConfig;
-    expect(getDmHistoryLimitFromSessionKey("agent:main:telegram:dm:123:thread:999", config)).toBe(
-      7,
-    );
-    expect(getDmHistoryLimitFromSessionKey("agent:main:telegram:dm:123:topic:555", config)).toBe(7);
-    expect(getDmHistoryLimitFromSessionKey("telegram:dm:123:thread:999", config)).toBe(7);
+    expect(
+      getDmHistoryLimitFromSessionKey(
+        "agent:main:telegram:dm:123:thread:999",
+        config,
+      ),
+    ).toBe(7);
+    expect(
+      getDmHistoryLimitFromSessionKey(
+        "agent:main:telegram:dm:123:topic:555",
+        config,
+      ),
+    ).toBe(7);
+    expect(
+      getDmHistoryLimitFromSessionKey("telegram:dm:123:thread:999", config),
+    ).toBe(7);
   });
   it("keeps non-numeric thread markers in dm ids", () => {
     const config = {
@@ -43,9 +59,12 @@ describe("getDmHistoryLimitFromSessionKey", () => {
         telegram: { dms: { "user:thread:abc": { historyLimit: 9 } } },
       },
     } as OpenClawConfig;
-    expect(getDmHistoryLimitFromSessionKey("agent:main:telegram:dm:user:thread:abc", config)).toBe(
-      9,
-    );
+    expect(
+      getDmHistoryLimitFromSessionKey(
+        "agent:main:telegram:dm:user:thread:abc",
+        config,
+      ),
+    ).toBe(9);
   });
   it("returns historyLimit for channel session kinds when configured", () => {
     const config = {
@@ -54,8 +73,12 @@ describe("getDmHistoryLimitFromSessionKey", () => {
         discord: { historyLimit: 8 },
       },
     } as OpenClawConfig;
-    expect(getDmHistoryLimitFromSessionKey("agent:beta:slack:channel:c1", config)).toBe(10);
-    expect(getDmHistoryLimitFromSessionKey("discord:channel:123456", config)).toBe(8);
+    expect(
+      getDmHistoryLimitFromSessionKey("agent:beta:slack:channel:c1", config),
+    ).toBe(10);
+    expect(
+      getDmHistoryLimitFromSessionKey("discord:channel:123456", config),
+    ).toBe(8);
   });
   it("returns undefined for non-dm/channel/group session kinds", () => {
     const config = {
@@ -64,17 +87,23 @@ describe("getDmHistoryLimitFromSessionKey", () => {
       },
     } as OpenClawConfig;
     // "slash" is not dm, channel, or group
-    expect(getDmHistoryLimitFromSessionKey("telegram:slash:123", config)).toBeUndefined();
+    expect(
+      getDmHistoryLimitFromSessionKey("telegram:slash:123", config),
+    ).toBeUndefined();
   });
   it("returns undefined for unknown provider", () => {
     const config = {
       channels: { telegram: { dmHistoryLimit: 15 } },
     } as OpenClawConfig;
-    expect(getDmHistoryLimitFromSessionKey("unknown:dm:123", config)).toBeUndefined();
+    expect(
+      getDmHistoryLimitFromSessionKey("unknown:dm:123", config),
+    ).toBeUndefined();
   });
   it("returns undefined when provider config has no dmHistoryLimit", () => {
     const config = { channels: { telegram: {} } } as OpenClawConfig;
-    expect(getDmHistoryLimitFromSessionKey("telegram:dm:123", config)).toBeUndefined();
+    expect(
+      getDmHistoryLimitFromSessionKey("telegram:dm:123", config),
+    ).toBeUndefined();
   });
   it("handles all supported providers", () => {
     const providers = [
@@ -92,7 +121,9 @@ describe("getDmHistoryLimitFromSessionKey", () => {
       const config = {
         channels: { [provider]: { dmHistoryLimit: 5 } },
       } as OpenClawConfig;
-      expect(getDmHistoryLimitFromSessionKey(`${provider}:dm:123`, config)).toBe(5);
+      expect(
+        getDmHistoryLimitFromSessionKey(`${provider}:dm:123`, config),
+      ).toBe(5);
     }
   });
   it("handles per-DM overrides for all supported providers", () => {
@@ -117,16 +148,27 @@ describe("getDmHistoryLimitFromSessionKey", () => {
           },
         },
       } as OpenClawConfig;
-      expect(getDmHistoryLimitFromSessionKey(`${provider}:dm:user123`, configWithOverride)).toBe(7);
+      expect(
+        getDmHistoryLimitFromSessionKey(
+          `${provider}:dm:user123`,
+          configWithOverride,
+        ),
+      ).toBe(7);
 
       // Test fallback to provider default when user not in dms
-      expect(getDmHistoryLimitFromSessionKey(`${provider}:dm:otheruser`, configWithOverride)).toBe(
-        20,
-      );
+      expect(
+        getDmHistoryLimitFromSessionKey(
+          `${provider}:dm:otheruser`,
+          configWithOverride,
+        ),
+      ).toBe(20);
 
       // Test with agent-prefixed key
       expect(
-        getDmHistoryLimitFromSessionKey(`agent:main:${provider}:dm:user123`, configWithOverride),
+        getDmHistoryLimitFromSessionKey(
+          `agent:main:${provider}:dm:user123`,
+          configWithOverride,
+        ),
       ).toBe(7);
     }
   });
@@ -157,10 +199,15 @@ describe("getDmHistoryLimitFromSessionKey", () => {
       const config = {
         channels: { [provider]: { historyLimit: 12 } },
       } as OpenClawConfig;
-      expect(getDmHistoryLimitFromSessionKey(`${provider}:channel:123`, config)).toBe(12);
-      expect(getDmHistoryLimitFromSessionKey(`agent:main:${provider}:channel:456`, config)).toBe(
-        12,
-      );
+      expect(
+        getDmHistoryLimitFromSessionKey(`${provider}:channel:123`, config),
+      ).toBe(12);
+      expect(
+        getDmHistoryLimitFromSessionKey(
+          `agent:main:${provider}:channel:456`,
+          config,
+        ),
+      ).toBe(12);
     }
   });
   it("returns historyLimit for group sessions", () => {
@@ -170,8 +217,12 @@ describe("getDmHistoryLimitFromSessionKey", () => {
         slack: { historyLimit: 10 },
       },
     } as OpenClawConfig;
-    expect(getDmHistoryLimitFromSessionKey("discord:group:123", config)).toBe(15);
-    expect(getDmHistoryLimitFromSessionKey("agent:main:slack:group:abc", config)).toBe(10);
+    expect(getDmHistoryLimitFromSessionKey("discord:group:123", config)).toBe(
+      15,
+    );
+    expect(
+      getDmHistoryLimitFromSessionKey("agent:main:slack:group:abc", config),
+    ).toBe(10);
   });
   it("returns undefined for channel sessions when historyLimit is not configured", () => {
     const config = {
@@ -179,7 +230,9 @@ describe("getDmHistoryLimitFromSessionKey", () => {
         discord: { dmHistoryLimit: 10 }, // only dmHistoryLimit, no historyLimit
       },
     } as OpenClawConfig;
-    expect(getDmHistoryLimitFromSessionKey("discord:channel:123", config)).toBeUndefined();
+    expect(
+      getDmHistoryLimitFromSessionKey("discord:channel:123", config),
+    ).toBeUndefined();
   });
 
   describe("backward compatibility", () => {
@@ -188,11 +241,22 @@ describe("getDmHistoryLimitFromSessionKey", () => {
         channels: { telegram: { dmHistoryLimit: 10 } },
       } as OpenClawConfig;
       // Legacy format with :dm:
-      expect(getDmHistoryLimitFromSessionKey("telegram:dm:123", config)).toBe(10);
-      expect(getDmHistoryLimitFromSessionKey("agent:main:telegram:dm:123", config)).toBe(10);
+      expect(getDmHistoryLimitFromSessionKey("telegram:dm:123", config)).toBe(
+        10,
+      );
+      expect(
+        getDmHistoryLimitFromSessionKey("agent:main:telegram:dm:123", config),
+      ).toBe(10);
       // New format with :direct:
-      expect(getDmHistoryLimitFromSessionKey("telegram:direct:123", config)).toBe(10);
-      expect(getDmHistoryLimitFromSessionKey("agent:main:telegram:direct:123", config)).toBe(10);
+      expect(
+        getDmHistoryLimitFromSessionKey("telegram:direct:123", config),
+      ).toBe(10);
+      expect(
+        getDmHistoryLimitFromSessionKey(
+          "agent:main:telegram:direct:123",
+          config,
+        ),
+      ).toBe(10);
     });
   });
 });

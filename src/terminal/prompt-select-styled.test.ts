@@ -1,10 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { selectMock, stylePromptMessageMock, stylePromptHintMock } = vi.hoisted(() => ({
-  selectMock: vi.fn(),
-  stylePromptMessageMock: vi.fn((value: string) => `msg:${value}`),
-  stylePromptHintMock: vi.fn((value: string) => `hint:${value}`),
-}));
+const { selectMock, stylePromptMessageMock, stylePromptHintMock } = vi.hoisted(
+  () => ({
+    selectMock: vi.fn(),
+    stylePromptMessageMock: vi.fn((value: string) => `msg:${value}`),
+    stylePromptHintMock: vi.fn((value: string) => `hint:${value}`),
+  }),
+);
 
 vi.mock("@clack/prompts", () => ({
   select: selectMock,

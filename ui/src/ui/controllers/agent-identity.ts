@@ -9,7 +9,10 @@ export type AgentIdentityState = {
   agentIdentityById: Record<string, AgentIdentityResult>;
 };
 
-export async function loadAgentIdentity(state: AgentIdentityState, agentId: string) {
+export async function loadAgentIdentity(
+  state: AgentIdentityState,
+  agentId: string,
+) {
   if (!state.client || !state.connected || state.agentIdentityLoading) {
     return;
   }
@@ -19,9 +22,12 @@ export async function loadAgentIdentity(state: AgentIdentityState, agentId: stri
   state.agentIdentityLoading = true;
   state.agentIdentityError = null;
   try {
-    const res = await state.client.request<AgentIdentityResult | null>("agent.identity.get", {
-      agentId,
-    });
+    const res = await state.client.request<AgentIdentityResult | null>(
+      "agent.identity.get",
+      {
+        agentId,
+      },
+    );
     if (res) {
       state.agentIdentityById = { ...state.agentIdentityById, [agentId]: res };
     }
@@ -32,7 +38,10 @@ export async function loadAgentIdentity(state: AgentIdentityState, agentId: stri
   }
 }
 
-export async function loadAgentIdentities(state: AgentIdentityState, agentIds: string[]) {
+export async function loadAgentIdentities(
+  state: AgentIdentityState,
+  agentIds: string[],
+) {
   if (!state.client || !state.connected || state.agentIdentityLoading) {
     return;
   }
@@ -44,11 +53,17 @@ export async function loadAgentIdentities(state: AgentIdentityState, agentIds: s
   state.agentIdentityError = null;
   try {
     for (const agentId of missing) {
-      const res = await state.client.request<AgentIdentityResult | null>("agent.identity.get", {
-        agentId,
-      });
+      const res = await state.client.request<AgentIdentityResult | null>(
+        "agent.identity.get",
+        {
+          agentId,
+        },
+      );
       if (res) {
-        state.agentIdentityById = { ...state.agentIdentityById, [agentId]: res };
+        state.agentIdentityById = {
+          ...state.agentIdentityById,
+          [agentId]: res,
+        };
       }
     }
   } catch (err) {

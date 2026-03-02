@@ -32,7 +32,10 @@ function resolveSidebarChatSessionKey(state: AppViewState): string {
   return "main";
 }
 
-function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string) {
+function resetChatStateForSessionSwitch(
+  state: AppViewState,
+  sessionKey: string,
+) {
   state.sessionKey = sessionKey;
   state.chatMessage = "";
   state.chatStream = null;
@@ -76,7 +79,9 @@ export function renderTab(state: AppViewState, tab: Tab) {
       }}
       title=${titleForTab(tab)}
     >
-      <span class="nav-item__icon" aria-hidden="true">${icons[iconForTab(tab)]}</span>
+      <span class="nav-item__icon" aria-hidden="true"
+        >${icons[iconForTab(tab)]}</span
+      >
       <span class="nav-item__text">${titleForTab(tab)}</span>
     </a>
   `;
@@ -84,7 +89,9 @@ export function renderTab(state: AppViewState, tab: Tab) {
 
 function renderCronFilterIcon(hiddenCount: number) {
   return html`
-    <span style="position: relative; display: inline-flex; align-items: center;">
+    <span
+      style="position: relative; display: inline-flex; align-items: center;"
+    >
       <svg
         width="16"
         height="16"
@@ -99,9 +106,8 @@ function renderCronFilterIcon(hiddenCount: number) {
         <circle cx="12" cy="12" r="10"></circle>
         <polyline points="12 6 12 12 16 14"></polyline>
       </svg>
-      ${
-        hiddenCount > 0
-          ? html`<span
+      ${hiddenCount > 0
+        ? html`<span
             style="
               position: absolute;
               top: -5px;
@@ -114,16 +120,18 @@ function renderCronFilterIcon(hiddenCount: number) {
               padding: 1px 3px;
               pointer-events: none;
             "
-          >${hiddenCount}</span
+            >${hiddenCount}</span
           >`
-          : ""
-      }
+        : ""}
     </span>
   `;
 }
 
 export function renderChatControls(state: AppViewState) {
-  const mainSessionKey = resolveMainSessionKey(state.hello, state.sessionsResult);
+  const mainSessionKey = resolveMainSessionKey(
+    state.hello,
+    state.sessionsResult,
+  );
   const hideCron = state.sessionsHideCron ?? true;
   const hiddenCronCount = hideCron
     ? countHiddenCronSessions(state.sessionKey, state.sessionsResult)
@@ -136,7 +144,9 @@ export function renderChatControls(state: AppViewState) {
   );
   const disableThinkingToggle = state.onboarding;
   const disableFocusToggle = state.onboarding;
-  const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
+  const showThinking = state.onboarding
+    ? false
+    : state.settings.chatShowThinking;
   const focusActive = state.onboarding ? true : state.settings.chatFocusMode;
   // Refresh icon
   const refreshIcon = html`
@@ -221,9 +231,12 @@ export function renderChatControls(state: AppViewState) {
           await app.updateComplete;
           app.resetToolStream();
           try {
-            await refreshChat(state as unknown as Parameters<typeof refreshChat>[0], {
-              scheduleScroll: false,
-            });
+            await refreshChat(
+              state as unknown as Parameters<typeof refreshChat>[0],
+              {
+                scheduleScroll: false,
+              },
+            );
             app.scrollToBottom({ smooth: true });
           } finally {
             requestAnimationFrame(() => {
@@ -250,7 +263,9 @@ export function renderChatControls(state: AppViewState) {
           });
         }}
         aria-pressed=${showThinking}
-        title=${disableThinkingToggle ? t("chat.onboardingDisabled") : t("chat.thinkingToggle")}
+        title=${disableThinkingToggle
+          ? t("chat.onboardingDisabled")
+          : t("chat.thinkingToggle")}
       >
         ${icons.brain}
       </button>
@@ -267,7 +282,9 @@ export function renderChatControls(state: AppViewState) {
           });
         }}
         aria-pressed=${focusActive}
-        title=${disableFocusToggle ? t("chat.onboardingDisabled") : t("chat.focusToggle")}
+        title=${disableFocusToggle
+          ? t("chat.onboardingDisabled")
+          : t("chat.focusToggle")}
       >
         ${focusIcon}
       </button>
@@ -277,13 +294,13 @@ export function renderChatControls(state: AppViewState) {
           state.sessionsHideCron = !hideCron;
         }}
         aria-pressed=${hideCron}
-        title=${
-          hideCron
-            ? hiddenCronCount > 0
-              ? t("chat.showCronSessionsHidden", { count: String(hiddenCronCount) })
-              : t("chat.showCronSessions")
-            : t("chat.hideCronSessions")
-        }
+        title=${hideCron
+          ? hiddenCronCount > 0
+            ? t("chat.showCronSessionsHidden", {
+                count: String(hiddenCronCount),
+              })
+            : t("chat.showCronSessions")
+          : t("chat.hideCronSessions")}
       >
         ${renderCronFilterIcon(hiddenCronCount)}
       </button>
@@ -295,7 +312,9 @@ function resolveMainSessionKey(
   hello: AppViewState["hello"],
   sessions: SessionsListResult | null,
 ): string | null {
-  const snapshot = hello?.snapshot as { sessionDefaults?: SessionDefaultsSnapshot } | undefined;
+  const snapshot = hello?.snapshot as
+    | { sessionDefaults?: SessionDefaultsSnapshot }
+    | undefined;
   const mainSessionKey = snapshot?.sessionDefaults?.mainSessionKey?.trim();
   if (mainSessionKey) {
     return mainSessionKey;
@@ -399,7 +418,10 @@ export function resolveSessionDisplayName(
     if (!prefix) {
       return name;
     }
-    const prefixPattern = new RegExp(`^${prefix.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}\\s*`, "i");
+    const prefixPattern = new RegExp(
+      `^${prefix.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}\\s*`,
+      "i",
+    );
     return prefixPattern.test(name) ? name : `${prefix} ${name}`;
   };
 
@@ -440,7 +462,8 @@ function resolveSessionOptions(
   const seen = new Set<string>();
   const options: Array<{ key: string; displayName?: string }> = [];
 
-  const resolvedMain = mainSessionKey && sessions?.sessions?.find((s) => s.key === mainSessionKey);
+  const resolvedMain =
+    mainSessionKey && sessions?.sessions?.find((s) => s.key === mainSessionKey);
   const resolvedCurrent = sessions?.sessions?.find((s) => s.key === sessionKey);
 
   // Add main session key first
@@ -448,7 +471,10 @@ function resolveSessionOptions(
     seen.add(mainSessionKey);
     options.push({
       key: mainSessionKey,
-      displayName: resolveSessionDisplayName(mainSessionKey, resolvedMain || undefined),
+      displayName: resolveSessionDisplayName(
+        mainSessionKey,
+        resolvedMain || undefined,
+      ),
     });
   }
 
@@ -479,12 +505,17 @@ function resolveSessionOptions(
 }
 
 /** Count sessions with a cron: key that would be hidden when hideCron=true. */
-function countHiddenCronSessions(sessionKey: string, sessions: SessionsListResult | null): number {
+function countHiddenCronSessions(
+  sessionKey: string,
+  sessions: SessionsListResult | null,
+): number {
   if (!sessions?.sessions) {
     return 0;
   }
   // Don't count the currently active session even if it's a cron.
-  return sessions.sessions.filter((s) => isCronSessionKey(s.key) && s.key !== sessionKey).length;
+  return sessions.sessions.filter(
+    (s) => isCronSessionKey(s.key) && s.key !== sessionKey,
+  ).length;
 }
 
 const THEME_ORDER: ThemeMode[] = ["system", "light", "dark"];
@@ -506,7 +537,9 @@ export function renderThemeToggle(state: AppViewState) {
       <div class="theme-toggle__track" role="group" aria-label="Theme">
         <span class="theme-toggle__indicator"></span>
         <button
-          class="theme-toggle__button ${state.theme === "system" ? "active" : ""}"
+          class="theme-toggle__button ${state.theme === "system"
+            ? "active"
+            : ""}"
           @click=${applyTheme("system")}
           aria-pressed=${state.theme === "system"}
           aria-label="System theme"
@@ -515,7 +548,9 @@ export function renderThemeToggle(state: AppViewState) {
           ${renderMonitorIcon()}
         </button>
         <button
-          class="theme-toggle__button ${state.theme === "light" ? "active" : ""}"
+          class="theme-toggle__button ${state.theme === "light"
+            ? "active"
+            : ""}"
           @click=${applyTheme("light")}
           aria-pressed=${state.theme === "light"}
           aria-label="Light theme"

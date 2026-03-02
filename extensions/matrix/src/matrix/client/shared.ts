@@ -17,10 +17,16 @@ type SharedMatrixClientState = {
 
 // Support multiple accounts with separate clients
 const sharedClientStates = new Map<string, SharedMatrixClientState>();
-const sharedClientPromises = new Map<string, Promise<SharedMatrixClientState>>();
+const sharedClientPromises = new Map<
+  string,
+  Promise<SharedMatrixClientState>
+>();
 const sharedClientStartPromises = new Map<string, Promise<void>>();
 
-function buildSharedClientKey(auth: MatrixAuth, accountId?: string | null): string {
+function buildSharedClientKey(
+  auth: MatrixAuth,
+  accountId?: string | null,
+): string {
   const normalizedAccountId = normalizeAccountId(accountId);
   return [
     auth.homeserver,
@@ -75,9 +81,9 @@ async function ensureSharedClientStarted(params: {
       try {
         const joinedRooms = await client.getJoinedRooms();
         if (client.crypto) {
-          await (client.crypto as { prepare: (rooms?: string[]) => Promise<void> }).prepare(
-            joinedRooms,
-          );
+          await (
+            client.crypto as { prepare: (rooms?: string[]) => Promise<void> }
+          ).prepare(joinedRooms);
           params.state.cryptoReady = true;
         }
       } catch (err) {
@@ -114,7 +120,8 @@ export async function resolveSharedMatrixClient(
 ): Promise<MatrixClient> {
   const accountId = normalizeAccountId(params.accountId);
   const auth =
-    params.auth ?? (await resolveMatrixAuth({ cfg: params.cfg, env: params.env, accountId }));
+    params.auth ??
+    (await resolveMatrixAuth({ cfg: params.cfg, env: params.env, accountId }));
   const key = buildSharedClientKey(auth, accountId);
   const shouldStart = params.startClient !== false;
 
@@ -202,7 +209,10 @@ export function stopSharedClient(key?: string): void {
  * Use this instead of stopSharedClient() when shutting down a single account
  * to avoid stopping all accounts.
  */
-export function stopSharedClientForAccount(auth: MatrixAuth, accountId?: string | null): void {
+export function stopSharedClientForAccount(
+  auth: MatrixAuth,
+  accountId?: string | null,
+): void {
   const key = buildSharedClientKey(auth, normalizeAccountId(accountId));
   stopSharedClient(key);
 }

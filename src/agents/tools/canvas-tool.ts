@@ -3,7 +3,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { Type } from "@sinclair/typebox";
 import { writeBase64ToFile } from "../../cli/nodes-camera.js";
-import { canvasSnapshotTempPath, parseCanvasSnapshotPayload } from "../../cli/nodes-canvas.js";
+import {
+  canvasSnapshotTempPath,
+  parseCanvasSnapshotPayload,
+} from "../../cli/nodes-canvas.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { logVerbose, shouldLogVerbose } from "../../globals.js";
 import { isInboundPathAllowed } from "../../media/inbound-path-policy.js";
@@ -11,7 +14,12 @@ import { getDefaultMediaLocalRoots } from "../../media/local-roots.js";
 import { imageMimeFromFormat } from "../../media/mime.js";
 import { resolveImageSanitizationLimits } from "../image-sanitization.js";
 import { optionalStringEnum, stringEnum } from "../schema/typebox.js";
-import { type AnyAgentTool, imageResult, jsonResult, readStringParam } from "./common.js";
+import {
+  type AnyAgentTool,
+  imageResult,
+  jsonResult,
+  readStringParam,
+} from "./common.js";
 import { callGatewayTool, readGatewayCallOptions } from "./gateway.js";
 import { resolveNodeId } from "./nodes-utils.js";
 
@@ -43,7 +51,9 @@ async function readJsonlFromPath(jsonlPath: string): Promise<string> {
   const canonical = await fs.realpath(resolved).catch(() => resolved);
   if (!isInboundPathAllowed({ filePath: canonical, roots })) {
     if (shouldLogVerbose()) {
-      logVerbose(`Blocked canvas jsonlPath outside allowed roots: ${canonical}`);
+      logVerbose(
+        `Blocked canvas jsonlPath outside allowed roots: ${canonical}`,
+      );
     }
     throw new Error("jsonlPath outside allowed roots");
   }
@@ -77,7 +87,9 @@ const CanvasToolSchema = Type.Object({
   jsonlPath: Type.Optional(Type.String()),
 });
 
-export function createCanvasTool(options?: { config?: OpenClawConfig }): AnyAgentTool {
+export function createCanvasTool(options?: {
+  config?: OpenClawConfig;
+}): AnyAgentTool {
   const imageSanitization = resolveImageSanitizationLimits(options?.config);
   return {
     label: "Canvas",
@@ -96,7 +108,10 @@ export function createCanvasTool(options?: { config?: OpenClawConfig }): AnyAgen
         true,
       );
 
-      const invoke = async (command: string, invokeParams?: Record<string, unknown>) =>
+      const invoke = async (
+        command: string,
+        invokeParams?: Record<string, unknown>,
+      ) =>
         await callGatewayTool("node.invoke", gatewayOpts, {
           nodeId,
           command,
@@ -110,7 +125,8 @@ export function createCanvasTool(options?: { config?: OpenClawConfig }): AnyAgen
             x: typeof params.x === "number" ? params.x : undefined,
             y: typeof params.y === "number" ? params.y : undefined,
             width: typeof params.width === "number" ? params.width : undefined,
-            height: typeof params.height === "number" ? params.height : undefined,
+            height:
+              typeof params.height === "number" ? params.height : undefined,
           };
           const invokeParams: Record<string, unknown> = {};
           // Accept both `target` and `url` for present to match common caller expectations.
@@ -139,7 +155,11 @@ export function createCanvasTool(options?: { config?: OpenClawConfig }): AnyAgen
           // Support `target` as an alias so callers can reuse the same field across present/navigate.
           const url =
             readStringParam(params, "url", { trim: true }) ??
-            readStringParam(params, "target", { required: true, trim: true, label: "url" });
+            readStringParam(params, "target", {
+              required: true,
+              trim: true,
+              label: "url",
+            });
           await invoke("canvas.navigate", { url });
           return jsonResult({ ok: true });
         }
@@ -161,14 +181,19 @@ export function createCanvasTool(options?: { config?: OpenClawConfig }): AnyAgen
         }
         case "snapshot": {
           const formatRaw =
-            typeof params.outputFormat === "string" ? params.outputFormat.toLowerCase() : "png";
-          const format = formatRaw === "jpg" || formatRaw === "jpeg" ? "jpeg" : "png";
+            typeof params.outputFormat === "string"
+              ? params.outputFormat.toLowerCase()
+              : "png";
+          const format =
+            formatRaw === "jpg" || formatRaw === "jpeg" ? "jpeg" : "png";
           const maxWidth =
-            typeof params.maxWidth === "number" && Number.isFinite(params.maxWidth)
+            typeof params.maxWidth === "number" &&
+            Number.isFinite(params.maxWidth)
               ? params.maxWidth
               : undefined;
           const quality =
-            typeof params.quality === "number" && Number.isFinite(params.quality)
+            typeof params.quality === "number" &&
+            Number.isFinite(params.quality)
               ? params.quality
               : undefined;
           const raw = (await invoke("canvas.snapshot", {

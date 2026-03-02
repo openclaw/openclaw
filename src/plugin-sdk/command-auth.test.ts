@@ -19,8 +19,12 @@ describe("plugin-sdk/command-auth", () => {
       isSenderAllowed: (senderId, allowFrom) => allowFrom.includes(senderId),
       readAllowFromStore: async () => ["paired-user"],
       shouldComputeCommandAuthorized: () => true,
-      resolveCommandAuthorizedFromAuthorizers: ({ useAccessGroups, authorizers }) =>
-        useAccessGroups && authorizers.some((entry) => entry.configured && entry.allowed),
+      resolveCommandAuthorizedFromAuthorizers: ({
+        useAccessGroups,
+        authorizers,
+      }) =>
+        useAccessGroups &&
+        authorizers.some((entry) => entry.configured && entry.allowed),
     });
     expect(result.commandAuthorized).toBe(true);
     expect(result.senderAllowedForCommands).toBe(true);
@@ -40,8 +44,12 @@ describe("plugin-sdk/command-auth", () => {
       isSenderAllowed: (senderId, allowFrom) => allowFrom.includes(senderId),
       readAllowFromStore: async () => ["paired-user"],
       shouldComputeCommandAuthorized: () => true,
-      resolveCommandAuthorizedFromAuthorizers: ({ useAccessGroups, authorizers }) =>
-        useAccessGroups && authorizers.some((entry) => entry.configured && entry.allowed),
+      resolveCommandAuthorizedFromAuthorizers: ({
+        useAccessGroups,
+        authorizers,
+      }) =>
+        useAccessGroups &&
+        authorizers.some((entry) => entry.configured && entry.allowed),
     });
     expect(result.commandAuthorized).toBe(false);
     expect(result.senderAllowedForCommands).toBe(false);

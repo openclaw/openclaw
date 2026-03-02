@@ -43,14 +43,20 @@ type DiscordThreadStarterCacheEntry = {
 const DISCORD_THREAD_STARTER_CACHE_TTL_MS = 5 * 60 * 1000;
 const DISCORD_THREAD_STARTER_CACHE_MAX = 500;
 
-const DISCORD_THREAD_STARTER_CACHE = new Map<string, DiscordThreadStarterCacheEntry>();
+const DISCORD_THREAD_STARTER_CACHE = new Map<
+  string,
+  DiscordThreadStarterCacheEntry
+>();
 
 export function __resetDiscordThreadStarterCacheForTest() {
   DISCORD_THREAD_STARTER_CACHE.clear();
 }
 
 // Get cached entry with TTL check, refresh LRU position on hit
-function getCachedThreadStarter(key: string, now: number): DiscordThreadStarter | undefined {
+function getCachedThreadStarter(
+  key: string,
+  now: number,
+): DiscordThreadStarter | undefined {
   const entry = DISCORD_THREAD_STARTER_CACHE.get(key);
   if (!entry) {
     return undefined;
@@ -67,7 +73,11 @@ function getCachedThreadStarter(key: string, now: number): DiscordThreadStarter 
 }
 
 // Set cached entry with LRU eviction when max size exceeded
-function setCachedThreadStarter(key: string, value: DiscordThreadStarter, now: number): void {
+function setCachedThreadStarter(
+  key: string,
+  value: DiscordThreadStarter,
+  now: number,
+): void {
   // Remove existing entry first (to update LRU position)
   DISCORD_THREAD_STARTER_CACHE.delete(key);
   DISCORD_THREAD_STARTER_CACHE.set(key, { value, updatedAt: now });
@@ -99,7 +109,10 @@ export function resolveDiscordThreadChannel(params: {
     return null;
   }
   const { message, channelInfo } = params;
-  const channel = "channel" in message ? (message as { channel?: unknown }).channel : undefined;
+  const channel =
+    "channel" in message
+      ? (message as { channel?: unknown }).channel
+      : undefined;
   const isThreadChannel =
     channel &&
     typeof channel === "object" &&
@@ -136,9 +149,15 @@ export async function resolveDiscordThreadParentInfo(params: {
 }): Promise<DiscordThreadParentInfo> {
   const { threadChannel, channelInfo, client } = params;
   let parentId =
-    threadChannel.parentId ?? threadChannel.parent?.id ?? channelInfo?.parentId ?? undefined;
+    threadChannel.parentId ??
+    threadChannel.parent?.id ??
+    channelInfo?.parentId ??
+    undefined;
   if (!parentId && threadChannel.id) {
-    const threadInfo = await resolveDiscordChannelInfo(client, threadChannel.id);
+    const threadInfo = await resolveDiscordChannelInfo(
+      client,
+      threadChannel.id,
+    );
     parentId = threadInfo?.parentId ?? undefined;
   }
   if (!parentId) {
@@ -167,8 +186,11 @@ export async function resolveDiscordThreadStarter(params: {
   try {
     const parentType = params.parentType;
     const isForumParent =
-      parentType === ChannelType.GuildForum || parentType === ChannelType.GuildMedia;
-    const messageChannelId = isForumParent ? params.channel.id : params.parentId;
+      parentType === ChannelType.GuildForum ||
+      parentType === ChannelType.GuildMedia;
+    const messageChannelId = isForumParent
+      ? params.channel.id
+      : params.parentId;
     if (!messageChannelId) {
       return null;
     }
@@ -233,7 +255,10 @@ export function resolveDiscordReplyTarget(opts: {
   return opts.hasReplied ? undefined : replyToId;
 }
 
-export function sanitizeDiscordThreadName(rawName: string, fallbackId: string): string {
+export function sanitizeDiscordThreadName(
+  rawName: string,
+  fallbackId: string,
+): string {
   const cleanedName = rawName
     .replace(/<@!?\d+>/g, "") // user mentions
     .replace(/<@&\d+>/g, "") // role mentions
@@ -322,7 +347,8 @@ export async function resolveDiscordAutoThreadReplyPlan(params: {
     })
   ).trim();
   // Prefer the resolved thread channel ID when available so replies stay in-thread.
-  const targetChannelId = params.threadChannel?.id ?? (messageChannelId || "unknown");
+  const targetChannelId =
+    params.threadChannel?.id ?? (messageChannelId || "unknown");
   const originalReplyTarget = `channel:${targetChannelId}`;
   const createdThreadId = await maybeCreateDiscordAutoThread({
     client: params.client,

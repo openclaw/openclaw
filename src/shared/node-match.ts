@@ -48,7 +48,10 @@ export function resolveNodeMatches(
   });
 }
 
-export function resolveNodeIdFromCandidates(nodes: NodeMatchCandidate[], query: string): string {
+export function resolveNodeIdFromCandidates(
+  nodes: NodeMatchCandidate[],
+  query: string,
+): string {
   const q = query.trim();
   if (!q) {
     throw new Error("node required");
@@ -65,7 +68,9 @@ export function resolveNodeIdFromCandidates(nodes: NodeMatchCandidate[], query: 
 
   // Re-pair/reinstall flows can leave multiple nodes with the same display name.
   // Prefer a unique connected match when available.
-  const connectedMatches = rawMatches.filter((match) => match.connected === true);
+  const connectedMatches = rawMatches.filter(
+    (match) => match.connected === true,
+  );
   const matches = connectedMatches.length > 0 ? connectedMatches : rawMatches;
   if (matches.length === 1) {
     return matches[0]?.nodeId ?? "";

@@ -96,7 +96,11 @@ describe("normalizeReplyPayload", () => {
 
   it("records skip reasons for silent/empty payloads", () => {
     const cases = [
-      { name: "silent", payload: { text: SILENT_REPLY_TOKEN }, reason: "silent" },
+      {
+        name: "silent",
+        payload: { text: SILENT_REPLY_TOKEN },
+        reason: "silent",
+      },
       { name: "empty", payload: { text: "   " }, reason: "empty" },
     ] as const;
     for (const testCase of cases) {
@@ -184,7 +188,9 @@ describe("typing controller", () => {
         typing.markDispatchIdle();
       }
       await vi.advanceTimersByTimeAsync(2_000);
-      expect(onReplyStart, testCase.name).toHaveBeenCalledTimes(testCase.first === "run" ? 3 : 5);
+      expect(onReplyStart, testCase.name).toHaveBeenCalledTimes(
+        testCase.first === "run" ? 3 : 5,
+      );
 
       if (testCase.second === "run") {
         typing.markRunComplete();
@@ -192,7 +198,9 @@ describe("typing controller", () => {
         typing.markDispatchIdle();
       }
       await vi.advanceTimersByTimeAsync(2_000);
-      expect(onReplyStart, testCase.name).toHaveBeenCalledTimes(testCase.first === "run" ? 3 : 5);
+      expect(onReplyStart, testCase.name).toHaveBeenCalledTimes(
+        testCase.first === "run" ? 3 : 5,
+      );
     }
   });
 
@@ -324,7 +332,9 @@ describe("resolveTypingMode", () => {
     ] as const;
 
     for (const testCase of cases) {
-      expect(resolveTypingMode(testCase.input), testCase.name).toBe(testCase.expected);
+      expect(resolveTypingMode(testCase.input), testCase.name).toBe(
+        testCase.expected,
+      );
     }
   });
 });
@@ -350,7 +360,9 @@ describe("parseAudioTag", () => {
     ] as const;
     for (const testCase of cases) {
       const result = parseAudioTag(testCase.input);
-      expect(result.audioAsVoice, testCase.name).toBe(testCase.expected.audioAsVoice);
+      expect(result.audioAsVoice, testCase.name).toBe(
+        testCase.expected.audioAsVoice,
+      );
       expect(result.hadTag, testCase.name).toBe(testCase.expected.hadTag);
       expect(result.text, testCase.name).toBe(testCase.expected.text);
     }
@@ -410,7 +422,8 @@ describe("resolveResponsePrefixTemplate", () => {
       },
       {
         name: "all variables",
-        template: "[{identity.name}] {provider}/{model} (think:{thinkingLevel})",
+        template:
+          "[{identity.name}] {provider}/{model} (think:{thinkingLevel})",
         values: {
           identityName: "OpenClaw",
           provider: "anthropic",
@@ -421,16 +434,27 @@ describe("resolveResponsePrefixTemplate", () => {
       },
     ] as const;
     for (const testCase of cases) {
-      expect(resolveResponsePrefixTemplate(testCase.template, testCase.values), testCase.name).toBe(
-        testCase.expected,
-      );
+      expect(
+        resolveResponsePrefixTemplate(testCase.template, testCase.values),
+        testCase.name,
+      ).toBe(testCase.expected);
     }
   });
 
   it("preserves unresolved/unknown placeholders and handles static inputs", () => {
     const cases = [
-      { name: "undefined template", template: undefined, values: {}, expected: undefined },
-      { name: "no variables", template: "[Claude]", values: {}, expected: "[Claude]" },
+      {
+        name: "undefined template",
+        template: undefined,
+        values: {},
+        expected: undefined,
+      },
+      {
+        name: "no variables",
+        template: "[Claude]",
+        values: {},
+        expected: "[Claude]",
+      },
       {
         name: "unresolved known variable",
         template: "[{model}]",
@@ -451,9 +475,10 @@ describe("resolveResponsePrefixTemplate", () => {
       },
     ] as const;
     for (const testCase of cases) {
-      expect(resolveResponsePrefixTemplate(testCase.template, testCase.values), testCase.name).toBe(
-        testCase.expected,
-      );
+      expect(
+        resolveResponsePrefixTemplate(testCase.template, testCase.values),
+        testCase.name,
+      ).toBe(testCase.expected);
     }
   });
 });
@@ -618,12 +643,24 @@ describe("block reply coalescer", () => {
   it("flushes immediately per enqueue when flushOnEnqueue is set", async () => {
     const cases = [
       {
-        config: { minChars: 10, maxChars: 200, idleMs: 50, joiner: "\n\n", flushOnEnqueue: true },
+        config: {
+          minChars: 10,
+          maxChars: 200,
+          idleMs: 50,
+          joiner: "\n\n",
+          flushOnEnqueue: true,
+        },
         inputs: ["Hi"],
         expected: ["Hi"],
       },
       {
-        config: { minChars: 1, maxChars: 30, idleMs: 100, joiner: "\n\n", flushOnEnqueue: true },
+        config: {
+          minChars: 1,
+          maxChars: 30,
+          idleMs: 100,
+          joiner: "\n\n",
+          flushOnEnqueue: true,
+        },
         inputs: ["12345678901234567890", "abcdefghijklmnopqrst"],
         expected: ["12345678901234567890", "abcdefghijklmnopqrst"],
       },

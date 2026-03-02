@@ -53,7 +53,10 @@ vi.mock("../../config/sessions.js", () => ({
   loadSessionStore: () => state.store,
   resolveSessionKey: () => "k",
   resolveStorePath: () => "/tmp/store.json",
-  updateSessionStore: async (_path: string, updater: (store: typeof state.store) => void) => {
+  updateSessionStore: async (
+    _path: string,
+    updater: (store: typeof state.store) => void,
+  ) => {
     updater(state.store);
   },
 }));
@@ -133,7 +136,9 @@ describe("runWebHeartbeatOnce", () => {
 
   it("supports manual override body dry-run without sending", async () => {
     const { runWebHeartbeatOnce } = await getModules();
-    await runWebHeartbeatOnce(buildRunArgs({ overrideBody: "hello", dryRun: true }));
+    await runWebHeartbeatOnce(
+      buildRunArgs({ overrideBody: "hello", dryRun: true }),
+    );
     expect(senderMock).not.toHaveBeenCalled();
     expect(state.events).toHaveLength(0);
   });
@@ -141,9 +146,13 @@ describe("runWebHeartbeatOnce", () => {
   it("sends HEARTBEAT_OK when reply is empty and showOk is enabled", async () => {
     const { runWebHeartbeatOnce } = await getModules();
     await runWebHeartbeatOnce(buildRunArgs());
-    expect(senderMock).toHaveBeenCalledWith("+123", HEARTBEAT_TOKEN, { verbose: false });
+    expect(senderMock).toHaveBeenCalledWith("+123", HEARTBEAT_TOKEN, {
+      verbose: false,
+    });
     expect(state.events).toEqual(
-      expect.arrayContaining([expect.objectContaining({ status: "ok-empty", silent: false })]),
+      expect.arrayContaining([
+        expect.objectContaining({ status: "ok-empty", silent: false }),
+      ]),
     );
   });
 
@@ -151,7 +160,10 @@ describe("runWebHeartbeatOnce", () => {
     const { runWebHeartbeatOnce } = await getModules();
     await runWebHeartbeatOnce(
       buildRunArgs({
-        cfg: { agents: { defaults: { heartbeat: { prompt: "Ops check" } } }, session: {} } as never,
+        cfg: {
+          agents: { defaults: { heartbeat: { prompt: "Ops check" } } },
+          session: {},
+        } as never,
         dryRun: true,
       }),
     );
@@ -166,9 +178,13 @@ describe("runWebHeartbeatOnce", () => {
     const { runWebHeartbeatOnce } = await getModules();
     await runWebHeartbeatOnce(buildRunArgs());
     expect(state.store.k?.updatedAt).toBe(123);
-    expect(senderMock).toHaveBeenCalledWith("+123", HEARTBEAT_TOKEN, { verbose: false });
+    expect(senderMock).toHaveBeenCalledWith("+123", HEARTBEAT_TOKEN, {
+      verbose: false,
+    });
     expect(state.events).toEqual(
-      expect.arrayContaining([expect.objectContaining({ status: "ok-token", silent: false })]),
+      expect.arrayContaining([
+        expect.objectContaining({ status: "ok-token", silent: false }),
+      ]),
     );
   });
 
@@ -180,7 +196,11 @@ describe("runWebHeartbeatOnce", () => {
     expect(senderMock).not.toHaveBeenCalled();
     expect(state.events).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ status: "skipped", reason: "alerts-disabled", preview: "ALERT" }),
+        expect.objectContaining({
+          status: "skipped",
+          reason: "alerts-disabled",
+          preview: "ALERT",
+        }),
       ]),
     );
   });
@@ -192,7 +212,10 @@ describe("runWebHeartbeatOnce", () => {
     await expect(runWebHeartbeatOnce(buildRunArgs())).rejects.toThrow("nope");
     expect(state.events).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ status: "failed", reason: "ERR:Error: nope" }),
+        expect.objectContaining({
+          status: "failed",
+          reason: "ERR:Error: nope",
+        }),
       ]),
     );
   });
@@ -204,7 +227,9 @@ describe("runWebHeartbeatOnce", () => {
 
     const expected = redactIdentifier("+123");
     const heartbeatLogs = state.heartbeatInfoLogs.join("\n");
-    const childLoggerLogs = state.loggerInfoCalls.map((entry) => JSON.stringify(entry)).join("\n");
+    const childLoggerLogs = state.loggerInfoCalls
+      .map((entry) => JSON.stringify(entry))
+      .join("\n");
 
     expect(heartbeatLogs).toContain(expected);
     expect(heartbeatLogs).not.toContain("+123");

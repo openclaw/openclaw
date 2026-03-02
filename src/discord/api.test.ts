@@ -34,7 +34,9 @@ describe("fetchDiscord", () => {
   });
 
   it("preserves non-JSON error text", async () => {
-    const fetcher = withFetchPreconnect(async () => new Response("Not Found", { status: 404 }));
+    const fetcher = withFetchPreconnect(
+      async () => new Response("Not Found", { status: 404 }),
+    );
     await expect(
       fetchDiscord("/users/@me/guilds", "test", fetcher, {
         retry: { attempts: 1 },

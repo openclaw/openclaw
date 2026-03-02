@@ -1,9 +1,15 @@
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
-import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
+import {
+  getChannelPlugin,
+  normalizeChannelId,
+} from "../channels/plugins/index.js";
 import type { ChannelId } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { AgentBinding } from "../config/types.js";
-import { DEFAULT_ACCOUNT_ID, normalizeAgentId } from "../routing/session-key.js";
+import {
+  DEFAULT_ACCOUNT_ID,
+  normalizeAgentId,
+} from "../routing/session-key.js";
 import type { ChannelChoice } from "./onboard-types.js";
 
 function bindingMatchKey(match: AgentBinding["match"]) {
@@ -44,7 +50,10 @@ function canUpgradeBindingAccountScope(params: {
   if (params.existing.match.accountId?.trim()) {
     return false;
   }
-  if (normalizeAgentId(params.existing.agentId) !== params.normalizedIncomingAgentId) {
+  if (
+    normalizeAgentId(params.existing.agentId) !==
+    params.normalizedIncomingAgentId
+  ) {
     return false;
   }
   return (
@@ -93,7 +102,8 @@ export function applyAgentBindings(
   const added: AgentBinding[] = [];
   const updated: AgentBinding[] = [];
   const skipped: AgentBinding[] = [];
-  const conflicts: Array<{ binding: AgentBinding; existingAgentId: string }> = [];
+  const conflicts: Array<{ binding: AgentBinding; existingAgentId: string }> =
+    [];
 
   for (const binding of bindings) {
     const agentId = normalizeAgentId(binding.agentId);
@@ -169,7 +179,8 @@ export function removeAgentBindings(
   const removeIndexes = new Set<number>();
   const removed: AgentBinding[] = [];
   const missing: AgentBinding[] = [];
-  const conflicts: Array<{ binding: AgentBinding; existingAgentId: string }> = [];
+  const conflicts: Array<{ binding: AgentBinding; existingAgentId: string }> =
+    [];
 
   for (const binding of bindings) {
     const desiredAgentId = normalizeAgentId(binding.agentId);
@@ -222,7 +233,10 @@ export function removeAgentBindings(
   };
 }
 
-function resolveDefaultAccountId(cfg: OpenClawConfig, provider: ChannelId): string {
+function resolveDefaultAccountId(
+  cfg: OpenClawConfig,
+  provider: ChannelId,
+): string {
   const plugin = getChannelPlugin(provider);
   if (!plugin) {
     return DEFAULT_ACCOUNT_ID;

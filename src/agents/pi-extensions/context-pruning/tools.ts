@@ -1,4 +1,7 @@
-import { compileGlobPatterns, matchesAnyGlobPattern } from "../../glob-pattern.js";
+import {
+  compileGlobPatterns,
+  matchesAnyGlobPattern,
+} from "../../glob-pattern.js";
 import type { ContextPruningToolMatch } from "./settings.js";
 
 function normalizeGlob(value: string) {
@@ -10,8 +13,14 @@ function normalizeGlob(value: string) {
 export function makeToolPrunablePredicate(
   match: ContextPruningToolMatch,
 ): (toolName: string) => boolean {
-  const deny = compileGlobPatterns({ raw: match.deny, normalize: normalizeGlob });
-  const allow = compileGlobPatterns({ raw: match.allow, normalize: normalizeGlob });
+  const deny = compileGlobPatterns({
+    raw: match.deny,
+    normalize: normalizeGlob,
+  });
+  const allow = compileGlobPatterns({
+    raw: match.allow,
+    normalize: normalizeGlob,
+  });
 
   return (toolName: string) => {
     const normalized = normalizeGlob(toolName);

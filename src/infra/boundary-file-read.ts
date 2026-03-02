@@ -23,7 +23,9 @@ type BoundaryReadFs = Pick<
   | "realpathSync"
 >;
 
-export type BoundaryFileOpenFailureReason = SafeOpenSyncFailureReason | "validation";
+export type BoundaryFileOpenFailureReason =
+  | SafeOpenSyncFailureReason
+  | "validation";
 
 export type BoundaryFileOpenResult =
   | { ok: true; path: string; fd: number; stat: fs.Stats; rootRealPath: string }
@@ -64,7 +66,9 @@ export function canUseBoundaryFileOpen(ioFs: typeof fs): boolean {
   );
 }
 
-export function openBoundaryFileSync(params: OpenBoundaryFileSyncParams): BoundaryFileOpenResult {
+export function openBoundaryFileSync(
+  params: OpenBoundaryFileSyncParams,
+): BoundaryFileOpenResult {
   const ioFs = params.ioFs ?? fs;
   const resolved = resolveBoundaryFilePathGeneric({
     absolutePath: params.absolutePath,
@@ -78,7 +82,9 @@ export function openBoundaryFileSync(params: OpenBoundaryFileSyncParams): Bounda
       }),
   });
   if (resolved instanceof Promise) {
-    return toBoundaryValidationError(new Error("Unexpected async boundary resolution"));
+    return toBoundaryValidationError(
+      new Error("Unexpected async boundary resolution"),
+    );
   }
   if ("ok" in resolved) {
     return resolved;
@@ -139,7 +145,8 @@ export async function openBoundaryFile(
         skipLexicalRootCheck: params.skipLexicalRootCheck,
       }),
   });
-  const resolved = maybeResolved instanceof Promise ? await maybeResolved : maybeResolved;
+  const resolved =
+    maybeResolved instanceof Promise ? await maybeResolved : maybeResolved;
   if ("ok" in resolved) {
     return resolved;
   }
@@ -171,7 +178,9 @@ function mapResolvedBoundaryPath(
 
 function resolveBoundaryFilePathGeneric(params: {
   absolutePath: string;
-  resolve: (absolutePath: string) => ResolvedBoundaryPath | Promise<ResolvedBoundaryPath>;
+  resolve: (
+    absolutePath: string,
+  ) => ResolvedBoundaryPath | Promise<ResolvedBoundaryPath>;
 }):
   | ResolvedBoundaryFilePath
   | BoundaryFileOpenResult

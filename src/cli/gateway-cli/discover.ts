@@ -6,7 +6,10 @@ export type GatewayDiscoverOpts = {
   json?: boolean;
 };
 
-export function parseDiscoverTimeoutMs(raw: unknown, fallbackMs: number): number {
+export function parseDiscoverTimeoutMs(
+  raw: unknown,
+  fallbackMs: number,
+): number {
   if (raw === undefined || raw === null) {
     return fallbackMs;
   }
@@ -42,7 +45,9 @@ export function pickGatewayPort(beacon: GatewayBonjourBeacon): number {
   return port > 0 ? port : 18789;
 }
 
-export function dedupeBeacons(beacons: GatewayBonjourBeacon[]): GatewayBonjourBeacon[] {
+export function dedupeBeacons(
+  beacons: GatewayBonjourBeacon[],
+): GatewayBonjourBeacon[] {
   const out: GatewayBonjourBeacon[] = [];
   const seen = new Set<string>();
   for (const b of beacons) {
@@ -64,8 +69,15 @@ export function dedupeBeacons(beacons: GatewayBonjourBeacon[]): GatewayBonjourBe
   return out;
 }
 
-export function renderBeaconLines(beacon: GatewayBonjourBeacon, rich: boolean): string[] {
-  const nameRaw = (beacon.displayName || beacon.instanceName || "Gateway").trim();
+export function renderBeaconLines(
+  beacon: GatewayBonjourBeacon,
+  rich: boolean,
+): string[] {
+  const nameRaw = (
+    beacon.displayName ||
+    beacon.instanceName ||
+    "Gateway"
+  ).trim();
   const domainRaw = (beacon.domain || "local.").trim();
 
   const title = colorize(rich, theme.accentBright, nameRaw);
@@ -79,7 +91,9 @@ export function renderBeaconLines(beacon: GatewayBonjourBeacon, rich: boolean): 
   const lines = [`- ${title} ${domain}`];
 
   if (beacon.tailnetDns) {
-    lines.push(`  ${colorize(rich, theme.info, "tailnet")}: ${beacon.tailnetDns}`);
+    lines.push(
+      `  ${colorize(rich, theme.info, "tailnet")}: ${beacon.tailnetDns}`,
+    );
   }
   if (beacon.lanHost) {
     lines.push(`  ${colorize(rich, theme.info, "lan")}: ${beacon.lanHost}`);
@@ -89,13 +103,17 @@ export function renderBeaconLines(beacon: GatewayBonjourBeacon, rich: boolean): 
   }
 
   if (wsUrl) {
-    lines.push(`  ${colorize(rich, theme.muted, "ws")}: ${colorize(rich, theme.command, wsUrl)}`);
+    lines.push(
+      `  ${colorize(rich, theme.muted, "ws")}: ${colorize(rich, theme.command, wsUrl)}`,
+    );
   }
   if (beacon.role) {
     lines.push(`  ${colorize(rich, theme.muted, "role")}: ${beacon.role}`);
   }
   if (beacon.transport) {
-    lines.push(`  ${colorize(rich, theme.muted, "transport")}: ${beacon.transport}`);
+    lines.push(
+      `  ${colorize(rich, theme.muted, "transport")}: ${beacon.transport}`,
+    );
   }
   if (beacon.gatewayTls) {
     const fingerprint = beacon.gatewayTlsFingerprintSha256
@@ -105,7 +123,9 @@ export function renderBeaconLines(beacon: GatewayBonjourBeacon, rich: boolean): 
   }
   if (typeof beacon.sshPort === "number" && beacon.sshPort > 0 && host) {
     const ssh = `ssh -N -L 18789:127.0.0.1:18789 <user>@${host} -p ${beacon.sshPort}`;
-    lines.push(`  ${colorize(rich, theme.muted, "ssh")}: ${colorize(rich, theme.command, ssh)}`);
+    lines.push(
+      `  ${colorize(rich, theme.muted, "ssh")}: ${colorize(rich, theme.command, ssh)}`,
+    );
   }
   return lines;
 }

@@ -28,7 +28,12 @@ const rootSchema = {
       type: "boolean",
     },
     bind: {
-      anyOf: [{ const: "auto" }, { const: "lan" }, { const: "tailnet" }, { const: "loopback" }],
+      anyOf: [
+        { const: "auto" },
+        { const: "lan" },
+        { const: "tailnet" },
+        { const: "loopback" },
+      ],
     },
   },
 };
@@ -51,14 +56,19 @@ describe("config form renderer", () => {
       container,
     );
 
-    const tokenInput: HTMLInputElement | null = container.querySelector("input[type='password']");
+    const tokenInput: HTMLInputElement | null = container.querySelector(
+      "input[type='password']",
+    );
     expect(tokenInput).not.toBeNull();
     if (!tokenInput) {
       return;
     }
     tokenInput.value = "abc123";
     tokenInput.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(onPatch).toHaveBeenCalledWith(["gateway", "auth", "token"], "abc123");
+    expect(onPatch).toHaveBeenCalledWith(
+      ["gateway", "auth", "token"],
+      "abc123",
+    );
 
     const tokenButton = Array.from(
       container.querySelectorAll<HTMLButtonElement>(".cfg-segmented__btn"),
@@ -67,7 +77,9 @@ describe("config form renderer", () => {
     tokenButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onPatch).toHaveBeenCalledWith(["mode"], "token");
 
-    const checkbox: HTMLInputElement | null = container.querySelector("input[type='checkbox']");
+    const checkbox: HTMLInputElement | null = container.querySelector(
+      "input[type='checkbox']",
+    );
     expect(checkbox).not.toBeNull();
     if (!checkbox) {
       return;
@@ -214,8 +226,8 @@ describe("config form renderer", () => {
       container,
     );
 
-    const tags = Array.from(container.querySelectorAll(".cfg-tag")).map((node) =>
-      node.textContent?.trim(),
+    const tags = Array.from(container.querySelectorAll(".cfg-tag")).map(
+      (node) => node.textContent?.trim(),
     );
     expect(tags).toContain("security");
     expect(tags).toContain("secret");
@@ -285,7 +297,9 @@ describe("config form renderer", () => {
     );
 
     expect(container.textContent).toContain("Token");
-    expect(container.textContent).not.toContain('No settings match "token tag:security"');
+    expect(container.textContent).not.toContain(
+      'No settings match "token tag:security"',
+    );
 
     const noMatchContainer = document.createElement("div");
     render(
@@ -301,7 +315,9 @@ describe("config form renderer", () => {
       }),
       noMatchContainer,
     );
-    expect(noMatchContainer.textContent).toContain('No settings match "mode tag:security"');
+    expect(noMatchContainer.textContent).toContain(
+      'No settings match "mode tag:security"',
+    );
   });
 
   it("flags unsupported unions", () => {

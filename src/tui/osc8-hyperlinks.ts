@@ -19,7 +19,8 @@ export function extractUrls(markdown: string): string[] {
   const urls = new Set<string>();
 
   // Markdown link hrefs: [text](url), with optional <...> and optional title.
-  const mdLinkRe = /\[(?:[^\]]*)\]\(\s*<?(https?:\/\/[^)\s>]+)>?(?:\s+["'][^"']*["'])?\s*\)/g;
+  const mdLinkRe =
+    /\[(?:[^\]]*)\]\(\s*<?(https?:\/\/[^)\s>]+)>?(?:\s+["'][^"']*["'])?\s*\)/g;
   let m: RegExpExecArray | null;
   while ((m = mdLinkRe.exec(markdown)) !== null) {
     urls.add(m[1]);
@@ -85,7 +86,10 @@ function findUrlRanges(
       searchFrom = leadingSpaces + matchLen;
 
       if (pending.consumed + matchLen < pending.url.length) {
-        newPending = { url: pending.url, consumed: pending.consumed + matchLen };
+        newPending = {
+          url: pending.url,
+          consumed: pending.consumed + matchLen,
+        };
       }
     }
   }
@@ -133,7 +137,10 @@ function findUrlRanges(
     ranges.push({ start, end: start + fragment.length, url: resolvedUrl });
 
     // If fragment is a strict prefix of the resolved URL, it may be split
-    if (resolvedUrl.length > fragment.length && resolvedUrl.startsWith(fragment)) {
+    if (
+      resolvedUrl.length > fragment.length &&
+      resolvedUrl.startsWith(fragment)
+    ) {
       newPending = { url: resolvedUrl, consumed: fragment.length };
     }
   }

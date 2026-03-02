@@ -197,8 +197,12 @@ describe("cron schedule error isolation", () => {
 
     recomputeNextRuns(state);
 
-    expect(badJob.state.lastError).toContain("invalid cron schedule: expr is required");
-    expect(badJob.state.lastError).not.toContain("Cannot read properties of undefined");
+    expect(badJob.state.lastError).toContain(
+      "invalid cron schedule: expr is required",
+    );
+    expect(badJob.state.lastError).not.toContain(
+      "Cannot read properties of undefined",
+    );
     expect(badJob.state.scheduleErrorCount).toBe(1);
   });
 });

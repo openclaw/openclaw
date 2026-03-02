@@ -51,7 +51,10 @@ function safeParseState(raw: string): TelegramUpdateOffsetState | null {
     if (parsed?.version !== STORE_VERSION && parsed?.version !== 1) {
       return null;
     }
-    if (parsed.lastUpdateId !== null && typeof parsed.lastUpdateId !== "number") {
+    if (
+      parsed.lastUpdateId !== null &&
+      typeof parsed.lastUpdateId !== "number"
+    ) {
       return null;
     }
     if (
@@ -76,7 +79,10 @@ export async function readTelegramUpdateOffset(params: {
   botToken?: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<number | null> {
-  const filePath = resolveTelegramUpdateOffsetPath(params.accountId, params.env);
+  const filePath = resolveTelegramUpdateOffsetPath(
+    params.accountId,
+    params.env,
+  );
   try {
     const raw = await fs.readFile(filePath, "utf-8");
     const parsed = safeParseState(raw);
@@ -103,7 +109,10 @@ export async function writeTelegramUpdateOffset(params: {
   botToken?: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<void> {
-  const filePath = resolveTelegramUpdateOffsetPath(params.accountId, params.env);
+  const filePath = resolveTelegramUpdateOffsetPath(
+    params.accountId,
+    params.env,
+  );
   const payload: TelegramUpdateOffsetState = {
     version: STORE_VERSION,
     lastUpdateId: params.updateId,
@@ -120,7 +129,10 @@ export async function deleteTelegramUpdateOffset(params: {
   accountId?: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<void> {
-  const filePath = resolveTelegramUpdateOffsetPath(params.accountId, params.env);
+  const filePath = resolveTelegramUpdateOffsetPath(
+    params.accountId,
+    params.env,
+  );
   try {
     await fs.unlink(filePath);
   } catch (err) {

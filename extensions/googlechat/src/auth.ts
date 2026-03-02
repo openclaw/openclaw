@@ -4,7 +4,8 @@ import type { ResolvedGoogleChatAccount } from "./accounts.js";
 const CHAT_SCOPE = "https://www.googleapis.com/auth/chat.bot";
 const CHAT_ISSUER = "chat@system.gserviceaccount.com";
 // Google Workspace Add-ons use a different service account pattern
-const ADDON_ISSUER_PATTERN = /^service-\d+@gcp-sa-gsuiteaddons\.iam\.gserviceaccount\.com$/;
+const ADDON_ISSUER_PATTERN =
+  /^service-\d+@gcp-sa-gsuiteaddons\.iam\.gserviceaccount\.com$/;
 const CHAT_CERTS_URL =
   "https://www.googleapis.com/service_accounts/v1/metadata/x509/chat@system.gserviceaccount.com";
 
@@ -13,7 +14,8 @@ const MAX_AUTH_CACHE_SIZE = 32;
 const authCache = new Map<string, { key: string; auth: GoogleAuth }>();
 const verifyClient = new OAuth2Client();
 
-let cachedCerts: { fetchedAt: number; certs: Record<string, string> } | null = null;
+let cachedCerts: { fetchedAt: number; certs: Record<string, string> } | null =
+  null;
 
 function buildAuthKey(account: ResolvedGoogleChatAccount): string {
   if (account.credentialsFile) {
@@ -42,14 +44,20 @@ function getAuthInstance(account: ResolvedGoogleChatAccount): GoogleAuth {
   };
 
   if (account.credentialsFile) {
-    const auth = new GoogleAuth({ keyFile: account.credentialsFile, scopes: [CHAT_SCOPE] });
+    const auth = new GoogleAuth({
+      keyFile: account.credentialsFile,
+      scopes: [CHAT_SCOPE],
+    });
     authCache.set(account.accountId, { key, auth });
     evictOldest();
     return auth;
   }
 
   if (account.credentials) {
-    const auth = new GoogleAuth({ credentials: account.credentials, scopes: [CHAT_SCOPE] });
+    const auth = new GoogleAuth({
+      credentials: account.credentials,
+      scopes: [CHAT_SCOPE],
+    });
     authCache.set(account.accountId, { key, auth });
     evictOldest();
     return auth;
@@ -114,20 +122,34 @@ export async function verifyGoogleChatRequest(params: {
       const payload = ticket.getPayload();
       const email = payload?.email ?? "";
       const ok =
-        payload?.email_verified && (email === CHAT_ISSUER || ADDON_ISSUER_PATTERN.test(email));
-      return ok ? { ok: true } : { ok: false, reason: `invalid issuer: ${email}` };
+        payload?.email_verified &&
+        (email === CHAT_ISSUER || ADDON_ISSUER_PATTERN.test(email));
+      return ok
+        ? { ok: true }
+        : { ok: false, reason: `invalid issuer: ${email}` };
     } catch (err) {
-      return { ok: false, reason: err instanceof Error ? err.message : "invalid token" };
+      return {
+        ok: false,
+        reason: err instanceof Error ? err.message : "invalid token",
+      };
     }
   }
 
   if (audienceType === "project-number") {
     try {
       const certs = await fetchChatCerts();
-      await verifyClient.verifySignedJwtWithCertsAsync(bearer, certs, audience, [CHAT_ISSUER]);
+      await verifyClient.verifySignedJwtWithCertsAsync(
+        bearer,
+        certs,
+        audience,
+        [CHAT_ISSUER],
+      );
       return { ok: true };
     } catch (err) {
-      return { ok: false, reason: err instanceof Error ? err.message : "invalid token" };
+      return {
+        ok: false,
+        reason: err instanceof Error ? err.message : "invalid token",
+      };
     }
   }
 

@@ -8,7 +8,9 @@ describe('dmPolicy="allowlist" requires non-empty effective allowFrom', () => {
     });
     expect(res.ok).toBe(false);
     if (!res.ok) {
-      expect(res.issues.some((i) => i.path.includes("channels.telegram.allowFrom"))).toBe(true);
+      expect(
+        res.issues.some((i) => i.path.includes("channels.telegram.allowFrom")),
+      ).toBe(true);
     }
   });
 
@@ -18,7 +20,9 @@ describe('dmPolicy="allowlist" requires non-empty effective allowFrom', () => {
     });
     expect(res.ok).toBe(false);
     if (!res.ok) {
-      expect(res.issues.some((i) => i.path.includes("channels.signal.allowFrom"))).toBe(true);
+      expect(
+        res.issues.some((i) => i.path.includes("channels.signal.allowFrom")),
+      ).toBe(true);
     }
   });
 
@@ -29,7 +33,10 @@ describe('dmPolicy="allowlist" requires non-empty effective allowFrom', () => {
     expect(res.ok).toBe(false);
     if (!res.ok) {
       expect(
-        res.issues.some((i) => i.path.includes("channels.discord") && i.path.includes("allowFrom")),
+        res.issues.some(
+          (i) =>
+            i.path.includes("channels.discord") && i.path.includes("allowFrom"),
+        ),
       ).toBe(true);
     }
   });
@@ -40,7 +47,9 @@ describe('dmPolicy="allowlist" requires non-empty effective allowFrom', () => {
     });
     expect(res.ok).toBe(false);
     if (!res.ok) {
-      expect(res.issues.some((i) => i.path.includes("channels.whatsapp.allowFrom"))).toBe(true);
+      expect(
+        res.issues.some((i) => i.path.includes("channels.whatsapp.allowFrom")),
+      ).toBe(true);
     }
   });
 
@@ -67,12 +76,18 @@ describe('account dmPolicy="allowlist" uses inherited allowFrom', () => {
 
   it("rejects telegram account allowlist when neither account nor parent has allowFrom", () => {
     const res = validateConfigObject({
-      channels: { telegram: { accounts: { bot1: { dmPolicy: "allowlist", botToken: "fake" } } } },
+      channels: {
+        telegram: {
+          accounts: { bot1: { dmPolicy: "allowlist", botToken: "fake" } },
+        },
+      },
     });
     expect(res.ok).toBe(false);
     if (!res.ok) {
       expect(
-        res.issues.some((i) => i.path.includes("channels.telegram.accounts.bot1.allowFrom")),
+        res.issues.some((i) =>
+          i.path.includes("channels.telegram.accounts.bot1.allowFrom"),
+        ),
       ).toBe(true);
     }
   });
@@ -80,7 +95,10 @@ describe('account dmPolicy="allowlist" uses inherited allowFrom', () => {
   it("accepts signal account allowlist when parent allowFrom exists", () => {
     const res = validateConfigObject({
       channels: {
-        signal: { allowFrom: ["+15550001111"], accounts: { work: { dmPolicy: "allowlist" } } },
+        signal: {
+          allowFrom: ["+15550001111"],
+          accounts: { work: { dmPolicy: "allowlist" } },
+        },
       },
     });
     expect(res.ok).toBe(true);
@@ -89,7 +107,10 @@ describe('account dmPolicy="allowlist" uses inherited allowFrom', () => {
   it("accepts discord account allowlist when parent allowFrom exists", () => {
     const res = validateConfigObject({
       channels: {
-        discord: { allowFrom: ["123456789"], accounts: { work: { dmPolicy: "allowlist" } } },
+        discord: {
+          allowFrom: ["123456789"],
+          accounts: { work: { dmPolicy: "allowlist" } },
+        },
       },
     });
     expect(res.ok).toBe(true);
@@ -103,7 +124,11 @@ describe('account dmPolicy="allowlist" uses inherited allowFrom', () => {
           botToken: "xoxb-top",
           appToken: "xapp-top",
           accounts: {
-            work: { dmPolicy: "allowlist", botToken: "xoxb-work", appToken: "xapp-work" },
+            work: {
+              dmPolicy: "allowlist",
+              botToken: "xoxb-work",
+              appToken: "xapp-work",
+            },
           },
         },
       },
@@ -114,7 +139,10 @@ describe('account dmPolicy="allowlist" uses inherited allowFrom', () => {
   it("accepts whatsapp account allowlist when parent allowFrom exists", () => {
     const res = validateConfigObject({
       channels: {
-        whatsapp: { allowFrom: ["+15550001111"], accounts: { work: { dmPolicy: "allowlist" } } },
+        whatsapp: {
+          allowFrom: ["+15550001111"],
+          accounts: { work: { dmPolicy: "allowlist" } },
+        },
       },
     });
     expect(res.ok).toBe(true);
@@ -123,7 +151,10 @@ describe('account dmPolicy="allowlist" uses inherited allowFrom', () => {
   it("accepts imessage account allowlist when parent allowFrom exists", () => {
     const res = validateConfigObject({
       channels: {
-        imessage: { allowFrom: ["alice"], accounts: { work: { dmPolicy: "allowlist" } } },
+        imessage: {
+          allowFrom: ["alice"],
+          accounts: { work: { dmPolicy: "allowlist" } },
+        },
       },
     });
     expect(res.ok).toBe(true);
@@ -131,7 +162,12 @@ describe('account dmPolicy="allowlist" uses inherited allowFrom', () => {
 
   it("accepts irc account allowlist when parent allowFrom exists", () => {
     const res = validateConfigObject({
-      channels: { irc: { allowFrom: ["nick"], accounts: { work: { dmPolicy: "allowlist" } } } },
+      channels: {
+        irc: {
+          allowFrom: ["nick"],
+          accounts: { work: { dmPolicy: "allowlist" } },
+        },
+      },
     });
     expect(res.ok).toBe(true);
   });
@@ -139,7 +175,10 @@ describe('account dmPolicy="allowlist" uses inherited allowFrom', () => {
   it("accepts bluebubbles account allowlist when parent allowFrom exists", () => {
     const res = validateConfigObject({
       channels: {
-        bluebubbles: { allowFrom: ["sender"], accounts: { work: { dmPolicy: "allowlist" } } },
+        bluebubbles: {
+          allowFrom: ["sender"],
+          accounts: { work: { dmPolicy: "allowlist" } },
+        },
       },
     });
     expect(res.ok).toBe(true);

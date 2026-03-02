@@ -1,5 +1,8 @@
 import { describe, expect, it, beforeEach } from "vitest";
-import { makeTempWorkspace, writeWorkspaceFile } from "../test-helpers/workspace.js";
+import {
+  makeTempWorkspace,
+  writeWorkspaceFile,
+} from "../test-helpers/workspace.js";
 import {
   loadWorkspaceBootstrapFiles,
   DEFAULT_AGENTS_FILENAME,
@@ -57,7 +60,9 @@ describe("system prompt stability for cache hits", () => {
     const toolsFiles = results.map((result) =>
       result.find((f) => f.name === DEFAULT_TOOLS_FILENAME),
     );
-    const soulFiles = results.map((result) => result.find((f) => f.name === DEFAULT_SOUL_FILENAME));
+    const soulFiles = results.map((result) =>
+      result.find((f) => f.name === DEFAULT_SOUL_FILENAME),
+    );
 
     // All instances should have identical content
     for (let i = 1; i < agentsFiles.length; i++) {
@@ -81,7 +86,11 @@ describe("system prompt stability for cache hits", () => {
 
     // Write all test files
     for (const file of testFiles) {
-      await writeWorkspaceFile({ dir: workspaceDir, name: file.name, content: file.content });
+      await writeWorkspaceFile({
+        dir: workspaceDir,
+        name: file.name,
+        content: file.content,
+      });
     }
 
     // Load multiple times
@@ -133,10 +142,16 @@ describe("system prompt stability for cache hits", () => {
 
   it("maintains consistency across concurrent loads", async () => {
     const content = "# Concurrent load test";
-    await writeWorkspaceFile({ dir: workspaceDir, name: DEFAULT_AGENTS_FILENAME, content });
+    await writeWorkspaceFile({
+      dir: workspaceDir,
+      name: DEFAULT_AGENTS_FILENAME,
+      content,
+    });
 
     // Start multiple concurrent loads
-    const promises = Array.from({ length: 20 }, () => loadWorkspaceBootstrapFiles(workspaceDir));
+    const promises = Array.from({ length: 20 }, () =>
+      loadWorkspaceBootstrapFiles(workspaceDir),
+    );
 
     const results = await Promise.all(promises);
 

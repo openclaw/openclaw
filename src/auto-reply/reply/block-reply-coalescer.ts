@@ -75,7 +75,8 @@ export function createBlockReplyCoalescer(params: {
     if (shouldAbort()) {
       return;
     }
-    const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
+    const hasMedia =
+      Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
     const text = payload.text ?? "";
     const hasText = text.trim().length > 0;
     if (hasMedia) {
@@ -105,7 +106,10 @@ export function createBlockReplyCoalescer(params: {
       payload.replyToId &&
       (!bufferReplyToId || bufferReplyToId !== payload.replyToId),
     );
-    if (bufferText && (replyToConflict || bufferAudioAsVoice !== payload.audioAsVoice)) {
+    if (
+      bufferText &&
+      (replyToConflict || bufferAudioAsVoice !== payload.audioAsVoice)
+    ) {
       void flush({ force: true });
     }
 

@@ -14,14 +14,17 @@ async function makeTmpRoot(): Promise<string> {
 
 afterEach(async () => {
   await Promise.all(
-    tmpRoots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })),
+    tmpRoots
+      .splice(0)
+      .map((root) => fs.rm(root, { recursive: true, force: true })),
   );
 });
 
 describe("createPersistentDedupe", () => {
   it("deduplicates keys and persists across instances", async () => {
     const root = await makeTmpRoot();
-    const resolveFilePath = (namespace: string) => path.join(root, `${namespace}.json`);
+    const resolveFilePath = (namespace: string) =>
+      path.join(root, `${namespace}.json`);
 
     const first = createPersistentDedupe({
       ttlMs: 24 * 60 * 60 * 1000,
@@ -67,7 +70,11 @@ describe("createPersistentDedupe", () => {
       resolveFilePath: () => path.join("/dev/null", "dedupe.json"),
     });
 
-    expect(await dedupe.checkAndRecord("memory-only", { namespace: "x" })).toBe(true);
-    expect(await dedupe.checkAndRecord("memory-only", { namespace: "x" })).toBe(false);
+    expect(await dedupe.checkAndRecord("memory-only", { namespace: "x" })).toBe(
+      true,
+    );
+    expect(await dedupe.checkAndRecord("memory-only", { namespace: "x" })).toBe(
+      false,
+    );
   });
 });

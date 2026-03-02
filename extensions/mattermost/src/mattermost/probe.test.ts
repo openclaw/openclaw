@@ -29,7 +29,10 @@ describe("probeMattermost", () => {
       }),
     );
 
-    const result = await probeMattermost("https://mm.example.com/api/v4/", "bot-token");
+    const result = await probeMattermost(
+      "https://mm.example.com/api/v4/",
+      "bot-token",
+    );
 
     expect(mockFetch).toHaveBeenCalledWith(
       "https://mm.example.com/api/v4/users/me",
@@ -56,7 +59,9 @@ describe("probeMattermost", () => {
       }),
     );
 
-    await expect(probeMattermost("https://mm.example.com", "bad-token")).resolves.toEqual(
+    await expect(
+      probeMattermost("https://mm.example.com", "bad-token"),
+    ).resolves.toEqual(
       expect.objectContaining({
         ok: false,
         status: 401,
@@ -74,7 +79,9 @@ describe("probeMattermost", () => {
       }),
     );
 
-    await expect(probeMattermost("https://mm.example.com", "token")).resolves.toEqual(
+    await expect(
+      probeMattermost("https://mm.example.com", "token"),
+    ).resolves.toEqual(
       expect.objectContaining({
         ok: false,
         status: 403,
@@ -86,7 +93,9 @@ describe("probeMattermost", () => {
   it("returns fetch error when request throws", async () => {
     mockFetch.mockRejectedValueOnce(new Error("network down"));
 
-    await expect(probeMattermost("https://mm.example.com", "token")).resolves.toEqual(
+    await expect(
+      probeMattermost("https://mm.example.com", "token"),
+    ).resolves.toEqual(
       expect.objectContaining({
         ok: false,
         status: null,

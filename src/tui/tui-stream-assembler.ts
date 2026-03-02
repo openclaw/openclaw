@@ -62,7 +62,10 @@ function isDroppedBoundaryTextBlockSubset(params: {
   finalTextBlocks: string[];
 }): boolean {
   const { streamedTextBlocks, finalTextBlocks } = params;
-  if (finalTextBlocks.length === 0 || finalTextBlocks.length >= streamedTextBlocks.length) {
+  if (
+    finalTextBlocks.length === 0 ||
+    finalTextBlocks.length >= streamedTextBlocks.length
+  ) {
     return false;
   }
 
@@ -74,7 +77,9 @@ function isDroppedBoundaryTextBlockSubset(params: {
   }
 
   const suffixStart = streamedTextBlocks.length - finalTextBlocks.length;
-  return finalTextBlocks.every((block, index) => streamedTextBlocks[suffixStart + index] === block);
+  return finalTextBlocks.every(
+    (block, index) => streamedTextBlocks[suffixStart + index] === block,
+  );
 }
 
 function shouldPreserveBoundaryDroppedText(params: {
@@ -89,7 +94,8 @@ function shouldPreserveBoundaryDroppedText(params: {
   }
   const sawEligibleNonTextContent =
     params.boundaryDropMode === "streamed-or-incoming"
-      ? params.streamedSawNonTextContentBlocks || params.incomingSawNonTextContentBlocks
+      ? params.streamedSawNonTextContentBlocks ||
+        params.incomingSawNonTextContentBlocks
       : params.streamedSawNonTextContentBlocks;
   if (!sawEligibleNonTextContent) {
     return false;
@@ -126,13 +132,15 @@ export class TuiStreamAssembler {
   ) {
     const thinkingText = extractThinkingFromMessage(message);
     const contentText = extractContentFromMessage(message);
-    const { textBlocks, sawNonTextContentBlocks } = extractTextBlocksAndSignals(message);
+    const { textBlocks, sawNonTextContentBlocks } =
+      extractTextBlocksAndSignals(message);
 
     if (thinkingText) {
       state.thinkingText = thinkingText;
     }
     if (contentText) {
-      const nextContentBlocks = textBlocks.length > 0 ? textBlocks : [contentText];
+      const nextContentBlocks =
+        textBlocks.length > 0 ? textBlocks : [contentText];
       const boundaryDropMode = opts?.boundaryDropMode ?? "off";
       const shouldKeepStreamedBoundaryText = shouldPreserveBoundaryDroppedText({
         boundaryDropMode,
@@ -160,7 +168,11 @@ export class TuiStreamAssembler {
     state.displayText = displayText;
   }
 
-  ingestDelta(runId: string, message: unknown, showThinking: boolean): string | null {
+  ingestDelta(
+    runId: string,
+    message: unknown,
+    showThinking: boolean,
+  ): string | null {
     const state = this.getOrCreateRun(runId);
     const previousDisplayText = state.displayText;
     this.updateRunState(state, message, showThinking, {

@@ -5,7 +5,10 @@ import {
   resolveBrowserProfileWithHotReload,
 } from "./resolved-config-refresh.js";
 
-let cfgProfiles: Record<string, { cdpPort?: number; cdpUrl?: string; color?: string }> = {};
+let cfgProfiles: Record<
+  string,
+  { cdpPort?: number; cdpUrl?: string; color?: string }
+> = {};
 
 // Simulate module-level cache behavior
 let cachedConfig: ReturnType<typeof buildConfig> | null = null;

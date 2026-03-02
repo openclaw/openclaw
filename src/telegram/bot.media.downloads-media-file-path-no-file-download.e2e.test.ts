@@ -10,7 +10,8 @@ import {
 
 describe("telegram inbound media", () => {
   // Parallel vitest shards can make this suite slower than the standalone run.
-  const INBOUND_MEDIA_TEST_TIMEOUT_MS = process.platform === "win32" ? 120_000 : 90_000;
+  const INBOUND_MEDIA_TEST_TIMEOUT_MS =
+    process.platform === "win32" ? 120_000 : 90_000;
 
   it(
     "handles file_path media downloads and missing file_path safely",
@@ -89,12 +90,15 @@ describe("telegram inbound media", () => {
     "keeps Telegram inbound media paths with triple-dash ids",
     async () => {
       const runtimeError = vi.fn();
-      const { handler, replySpy } = await createBotHandlerWithOptions({ runtimeError });
+      const { handler, replySpy } = await createBotHandlerWithOptions({
+        runtimeError,
+      });
       const fetchSpy = mockTelegramFileDownload({
         contentType: "image/jpeg",
         bytes: new Uint8Array([0xff, 0xd8, 0xff, 0x00]),
       });
-      const inboundPath = "/tmp/media/inbound/file_1095---f00a04a2-99a0-4d98-99b0-dfe61c5a4198.jpg";
+      const inboundPath =
+        "/tmp/media/inbound/file_1095---f00a04a2-99a0-4d98-99b0-dfe61c5a4198.jpg";
       setNextSavedMediaPath({
         path: inboundPath,
         size: 4,
@@ -115,7 +119,10 @@ describe("telegram inbound media", () => {
 
         expect(runtimeError).not.toHaveBeenCalled();
         expect(replySpy).toHaveBeenCalledTimes(1);
-        const payload = replySpy.mock.calls[0]?.[0] as { Body?: string; MediaPaths?: string[] };
+        const payload = replySpy.mock.calls[0]?.[0] as {
+          Body?: string;
+          MediaPaths?: string[];
+        };
         expect(payload.Body).toContain("<media:image>");
         expect(payload.MediaPaths).toContain(inboundPath);
       } finally {
@@ -128,9 +135,11 @@ describe("telegram inbound media", () => {
   it("prefers proxyFetch over global fetch", async () => {
     const runtimeLog = vi.fn();
     const runtimeError = vi.fn();
-    const globalFetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
-      throw new Error("global fetch should not be called");
-    });
+    const globalFetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async () => {
+        throw new Error("global fetch should not be called");
+      });
     const proxyFetch = vi.fn().mockResolvedValueOnce({
       ok: true,
       status: 200,
@@ -229,14 +238,17 @@ describe("telegram media groups", () => {
     vi.clearAllTimers();
   });
 
-  const MEDIA_GROUP_TEST_TIMEOUT_MS = process.platform === "win32" ? 45_000 : 20_000;
+  const MEDIA_GROUP_TEST_TIMEOUT_MS =
+    process.platform === "win32" ? 45_000 : 20_000;
   const MEDIA_GROUP_FLUSH_MS = TELEGRAM_TEST_TIMINGS.mediaGroupFlushMs + 40;
 
   it(
     "handles same-group buffering and separate-group independence",
     async () => {
       const runtimeError = vi.fn();
-      const { handler, replySpy } = await createBotHandlerWithOptions({ runtimeError });
+      const { handler, replySpy } = await createBotHandlerWithOptions({
+        runtimeError,
+      });
       const fetchSpy = mockTelegramPngDownload();
 
       try {
@@ -309,7 +321,9 @@ describe("telegram media groups", () => {
           expect(replySpy).not.toHaveBeenCalled();
           await vi.waitFor(
             () => {
-              expect(replySpy).toHaveBeenCalledTimes(scenario.expectedReplyCount);
+              expect(replySpy).toHaveBeenCalledTimes(
+                scenario.expectedReplyCount,
+              );
             },
             { timeout: MEDIA_GROUP_FLUSH_MS * 4, interval: 2 },
           );
@@ -331,13 +345,16 @@ describe("telegram forwarded bursts", () => {
     vi.useRealTimers();
   });
 
-  const FORWARD_BURST_TEST_TIMEOUT_MS = process.platform === "win32" ? 45_000 : 20_000;
+  const FORWARD_BURST_TEST_TIMEOUT_MS =
+    process.platform === "win32" ? 45_000 : 20_000;
 
   it(
     "coalesces forwarded text + forwarded attachment into a single processing turn with default debounce config",
     async () => {
       const runtimeError = vi.fn();
-      const { handler, replySpy } = await createBotHandlerWithOptions({ runtimeError });
+      const { handler, replySpy } = await createBotHandlerWithOptions({
+        runtimeError,
+      });
       const fetchSpy = mockTelegramPngDownload();
       vi.useFakeTimers();
 
@@ -349,7 +366,11 @@ describe("telegram forwarded bursts", () => {
             message_id: 21,
             text: "Look at this",
             date: 1736380800,
-            forward_origin: { type: "hidden_user", date: 1736380700, sender_user_name: "A" },
+            forward_origin: {
+              type: "hidden_user",
+              date: 1736380700,
+              sender_user_name: "A",
+            },
           },
           me: { username: "openclaw_bot" },
           getFile: async () => ({}),
@@ -362,7 +383,11 @@ describe("telegram forwarded bursts", () => {
             message_id: 22,
             date: 1736380801,
             photo: [{ file_id: "fwd_photo_1" }],
-            forward_origin: { type: "hidden_user", date: 1736380701, sender_user_name: "A" },
+            forward_origin: {
+              type: "hidden_user",
+              date: 1736380701,
+              sender_user_name: "A",
+            },
           },
           me: { username: "openclaw_bot" },
           getFile: async () => ({ file_path: "photos/fwd1.jpg" }),

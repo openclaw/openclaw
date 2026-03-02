@@ -4,7 +4,10 @@ import path from "node:path";
 import type { MessageEvent, PostbackEvent } from "@line/bot-sdk";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { buildLineMessageContext, buildLinePostbackContext } from "./bot-message-context.js";
+import {
+  buildLineMessageContext,
+  buildLinePostbackContext,
+} from "./bot-message-context.js";
 import type { ResolvedLineAccount } from "./types.js";
 
 describe("buildLineMessageContext", () => {
@@ -68,7 +71,11 @@ describe("buildLineMessageContext", () => {
   });
 
   it("routes group message replies to the group id", async () => {
-    const event = createMessageEvent({ type: "group", groupId: "group-1", userId: "user-1" });
+    const event = createMessageEvent({
+      type: "group",
+      groupId: "group-1",
+      userId: "user-1",
+    });
 
     const context = await buildLineMessageContext({
       event,
@@ -86,7 +93,11 @@ describe("buildLineMessageContext", () => {
   });
 
   it("routes group postback replies to the group id", async () => {
-    const event = createPostbackEvent({ type: "group", groupId: "group-2", userId: "user-2" });
+    const event = createPostbackEvent({
+      type: "group",
+      groupId: "group-2",
+      userId: "user-2",
+    });
 
     const context = await buildLinePostbackContext({
       event,
@@ -99,7 +110,11 @@ describe("buildLineMessageContext", () => {
   });
 
   it("routes room postback replies to the room id", async () => {
-    const event = createPostbackEvent({ type: "room", roomId: "room-1", userId: "user-3" });
+    const event = createPostbackEvent({
+      type: "room",
+      roomId: "room-1",
+      userId: "user-3",
+    });
 
     const context = await buildLinePostbackContext({
       event,

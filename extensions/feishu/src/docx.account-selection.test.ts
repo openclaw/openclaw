@@ -3,13 +3,16 @@ import { describe, expect, test, vi } from "vitest";
 import { registerFeishuDocTools } from "./docx.js";
 import { createToolFactoryHarness } from "./tool-factory-test-harness.js";
 
-const createFeishuClientMock = vi.fn((creds: { appId?: string } | undefined) => ({
-  __appId: creds?.appId,
-}));
+const createFeishuClientMock = vi.fn(
+  (creds: { appId?: string } | undefined) => ({
+    __appId: creds?.appId,
+  }),
+);
 
 vi.mock("./client.js", () => {
   return {
-    createFeishuClient: (creds: { appId?: string } | undefined) => createFeishuClientMock(creds),
+    createFeishuClient: (creds: { appId?: string } | undefined) =>
+      createFeishuClientMock(creds),
   };
 });
 

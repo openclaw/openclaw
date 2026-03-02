@@ -1,14 +1,18 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { setDefaultChannelPluginRegistryForTests } from "./channel-test-helpers.js";
 import { configMocks, offsetMocks } from "./channels.mock-harness.js";
-import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
+import {
+  baseConfigSnapshot,
+  createTestRuntime,
+} from "./test-runtime-config-helpers.js";
 
 const authMocks = vi.hoisted(() => ({
   loadAuthProfileStore: vi.fn(),
 }));
 
 vi.mock("../agents/auth-profiles.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../agents/auth-profiles.js")>();
+  const actual =
+    await importOriginal<typeof import("../agents/auth-profiles.js")>();
   return {
     ...actual,
     loadAuthProfileStore: authMocks.loadAuthProfileStore,
@@ -68,7 +72,10 @@ describe("channels command", () => {
     }
   }
 
-  async function addTelegramAccount(account: string, token: string): Promise<void> {
+  async function addTelegramAccount(
+    account: string,
+    token: string,
+  ): Promise<void> {
     await channelsAddCommand({ channel: "telegram", account, token }, runtime, {
       hasFlags: true,
     });
@@ -94,7 +101,9 @@ describe("channels command", () => {
   }
 
   it("adds a non-default telegram account", async () => {
-    configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
+    configMocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseConfigSnapshot,
+    });
     const next = await addAlertsTelegramAccount("123:abc");
     expect(next.channels?.telegram?.enabled).toBe(true);
     expect(next.channels?.telegram?.accounts?.alerts?.botToken).toBe("123:abc");
@@ -152,7 +161,9 @@ describe("channels command", () => {
     expect(next.channels?.telegram?.allowFrom).toBeUndefined();
     expect(next.channels?.telegram?.groupPolicy).toBeUndefined();
     expect(next.channels?.telegram?.streaming).toBeUndefined();
-    expect(next.channels?.telegram?.accounts?.alerts?.botToken).toBe("alerts-token");
+    expect(next.channels?.telegram?.accounts?.alerts?.botToken).toBe(
+      "alerts-token",
+    );
   });
 
   it("seeds accounts.default for env-only single-account telegram config when adding non-default", async () => {
@@ -170,11 +181,15 @@ describe("channels command", () => {
     const next = await addAlertsTelegramAccount("alerts-token");
     expect(next.channels?.telegram?.enabled).toBe(true);
     expect(next.channels?.telegram?.accounts?.default).toEqual({});
-    expect(next.channels?.telegram?.accounts?.alerts?.botToken).toBe("alerts-token");
+    expect(next.channels?.telegram?.accounts?.alerts?.botToken).toBe(
+      "alerts-token",
+    );
   });
 
   it("adds a default slack account with tokens", async () => {
-    configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
+    configMocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseConfigSnapshot,
+    });
     await channelsAddCommand(
       {
         channel: "slack",
@@ -211,9 +226,13 @@ describe("channels command", () => {
       },
     });
 
-    await channelsRemoveCommand({ channel: "discord", account: "work", delete: true }, runtime, {
-      hasFlags: true,
-    });
+    await channelsRemoveCommand(
+      { channel: "discord", account: "work", delete: true },
+      runtime,
+      {
+        hasFlags: true,
+      },
+    );
 
     const next = getWrittenConfig<{
       channels?: {
@@ -225,7 +244,9 @@ describe("channels command", () => {
   });
 
   it("adds a named WhatsApp account", async () => {
-    configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
+    configMocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseConfigSnapshot,
+    });
     await channelsAddCommand(
       { channel: "whatsapp", account: "family", name: "Family Phone" },
       runtime,
@@ -237,7 +258,9 @@ describe("channels command", () => {
         whatsapp?: { accounts?: Record<string, { name?: string }> };
       };
     }>();
-    expect(next.channels?.whatsapp?.accounts?.family?.name).toBe("Family Phone");
+    expect(next.channels?.whatsapp?.accounts?.family?.name).toBe(
+      "Family Phone",
+    );
   });
 
   it("adds a second signal account with a distinct name", async () => {
@@ -364,7 +387,9 @@ describe("channels command", () => {
       };
     }>();
     expect(next.channels?.telegram?.name).toBeUndefined();
-    expect(next.channels?.telegram?.accounts?.default?.name).toBe("Primary Bot");
+    expect(next.channels?.telegram?.accounts?.default?.name).toBe(
+      "Primary Bot",
+    );
   });
 
   it("migrates base names when adding non-default accounts", async () => {
@@ -380,9 +405,13 @@ describe("channels command", () => {
       },
     });
 
-    await channelsAddCommand({ channel: "discord", account: "work", token: "d1" }, runtime, {
-      hasFlags: true,
-    });
+    await channelsAddCommand(
+      { channel: "discord", account: "work", token: "d1" },
+      runtime,
+      {
+        hasFlags: true,
+      },
+    );
 
     const next = getWrittenConfig<{
       channels?: {
@@ -405,8 +434,12 @@ describe("channels command", () => {
       },
     });
 
-    const telegramIndex = lines.findIndex((line) => line.includes("Telegram default"));
-    const whatsappIndex = lines.findIndex((line) => line.includes("WhatsApp default"));
+    const telegramIndex = lines.findIndex((line) =>
+      line.includes("Telegram default"),
+    );
+    const whatsappIndex = lines.findIndex((line) =>
+      line.includes("WhatsApp default"),
+    );
     expect(telegramIndex).toBeGreaterThan(-1);
     expect(whatsappIndex).toBeGreaterThan(-1);
     expect(telegramIndex).toBeLessThan(whatsappIndex);
@@ -561,7 +594,9 @@ describe("channels command", () => {
       },
     );
 
-    expect(offsetMocks.deleteTelegramUpdateOffset).toHaveBeenCalledWith({ accountId: "default" });
+    expect(offsetMocks.deleteTelegramUpdateOffset).toHaveBeenCalledWith({
+      accountId: "default",
+    });
   });
 
   it("does not clean up offset when deleting a non-telegram channel", async () => {
@@ -578,9 +613,13 @@ describe("channels command", () => {
       },
     });
 
-    await channelsRemoveCommand({ channel: "discord", account: "default", delete: true }, runtime, {
-      hasFlags: true,
-    });
+    await channelsRemoveCommand(
+      { channel: "discord", account: "default", delete: true },
+      runtime,
+      {
+        hasFlags: true,
+      },
+    );
 
     expect(offsetMocks.deleteTelegramUpdateOffset).not.toHaveBeenCalled();
   });

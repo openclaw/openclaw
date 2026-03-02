@@ -41,7 +41,9 @@ export function loadShellParserParityFixtureCases(): ShellParserParityFixtureCas
     "fixtures",
     "exec-allowlist-shell-parser-parity.json",
   );
-  const fixture = JSON.parse(fs.readFileSync(fixturePath, "utf8")) as ShellParserParityFixture;
+  const fixture = JSON.parse(
+    fs.readFileSync(fixturePath, "utf8"),
+  ) as ShellParserParityFixture;
   return fixture.cases;
 }
 

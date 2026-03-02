@@ -83,12 +83,18 @@ function setupTransientGetFileRetry() {
 }
 
 function createFileTooBigError(): Error {
-  return new Error("GrammyError: Call to 'getFile' failed! (400: Bad Request: file is too big)");
+  return new Error(
+    "GrammyError: Call to 'getFile' failed! (400: Bad Request: file is too big)",
+  );
 }
 
 async function expectTransientGetFileRetrySuccess() {
   const getFile = setupTransientGetFileRetry();
-  const promise = resolveMedia(makeCtx("voice", getFile), MAX_MEDIA_BYTES, BOT_TOKEN);
+  const promise = resolveMedia(
+    makeCtx("voice", getFile),
+    MAX_MEDIA_BYTES,
+    BOT_TOKEN,
+  );
   await flushRetryTimers();
   const result = await promise;
   expect(getFile).toHaveBeenCalledTimes(2);
@@ -122,16 +128,25 @@ describe("resolveMedia getFile retry", () => {
   it("retries getFile on transient failure and succeeds on second attempt", async () => {
     const result = await expectTransientGetFileRetrySuccess();
     expect(result).toEqual(
-      expect.objectContaining({ path: "/tmp/file_0.oga", placeholder: "<media:audio>" }),
+      expect.objectContaining({
+        path: "/tmp/file_0.oga",
+        placeholder: "<media:audio>",
+      }),
     );
   });
 
   it.each(["voice", "photo", "video"] as const)(
     "returns null for %s when getFile exhausts retries so message is not dropped",
     async (mediaField) => {
-      const getFile = vi.fn().mockRejectedValue(new Error("Network request for 'getFile' failed!"));
+      const getFile = vi
+        .fn()
+        .mockRejectedValue(new Error("Network request for 'getFile' failed!"));
 
-      const promise = resolveMedia(makeCtx(mediaField, getFile), MAX_MEDIA_BYTES, BOT_TOKEN);
+      const promise = resolveMedia(
+        makeCtx(mediaField, getFile),
+        MAX_MEDIA_BYTES,
+        BOT_TOKEN,
+      );
       await flushRetryTimers();
       const result = await promise;
 
@@ -141,7 +156,9 @@ describe("resolveMedia getFile retry", () => {
   );
 
   it("does not catch errors from fetchRemoteMedia (only getFile is retried)", async () => {
-    const getFile = vi.fn().mockResolvedValue({ file_path: "voice/file_0.oga" });
+    const getFile = vi
+      .fn()
+      .mockResolvedValue({ file_path: "voice/file_0.oga" });
     fetchRemoteMedia.mockRejectedValueOnce(new Error("download failed"));
 
     await expect(
@@ -156,7 +173,11 @@ describe("resolveMedia getFile retry", () => {
     const fileTooBigError = createFileTooBigError();
     const getFile = vi.fn().mockRejectedValue(fileTooBigError);
 
-    const result = await resolveMedia(makeCtx("video", getFile), MAX_MEDIA_BYTES, BOT_TOKEN);
+    const result = await resolveMedia(
+      makeCtx("video", getFile),
+      MAX_MEDIA_BYTES,
+      BOT_TOKEN,
+    );
 
     // Should NOT retry - "file is too big" is a permanent error, not transient.
     expect(getFile).toHaveBeenCalledTimes(1);
@@ -166,13 +187,21 @@ describe("resolveMedia getFile retry", () => {
   it("does not retry 'file is too big' GrammyError instances and returns null", async () => {
     const fileTooBigError = new GrammyError(
       "Call to 'getFile' failed!",
-      { ok: false, error_code: 400, description: "Bad Request: file is too big" },
+      {
+        ok: false,
+        error_code: 400,
+        description: "Bad Request: file is too big",
+      },
       "getFile",
       {},
     );
     const getFile = vi.fn().mockRejectedValue(fileTooBigError);
 
-    const result = await resolveMedia(makeCtx("video", getFile), MAX_MEDIA_BYTES, BOT_TOKEN);
+    const result = await resolveMedia(
+      makeCtx("video", getFile),
+      MAX_MEDIA_BYTES,
+      BOT_TOKEN,
+    );
 
     expect(getFile).toHaveBeenCalledTimes(1);
     expect(result).toBeNull();
@@ -183,7 +212,11 @@ describe("resolveMedia getFile retry", () => {
     async (mediaField) => {
       const getFile = vi.fn().mockRejectedValue(createFileTooBigError());
 
-      const result = await resolveMedia(makeCtx(mediaField, getFile), MAX_MEDIA_BYTES, BOT_TOKEN);
+      const result = await resolveMedia(
+        makeCtx(mediaField, getFile),
+        MAX_MEDIA_BYTES,
+        BOT_TOKEN,
+      );
 
       expect(getFile).toHaveBeenCalledTimes(1);
       expect(result).toBeNull();

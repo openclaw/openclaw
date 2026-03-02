@@ -12,7 +12,12 @@ import {
   mergeInboundPathRoots,
 } from "../media/inbound-path-policy.js";
 import { getDefaultMediaLocalRoots } from "../media/local-roots.js";
-import { detectMime, getFileExtension, isAudioFileName, kindFromMime } from "../media/mime.js";
+import {
+  detectMime,
+  getFileExtension,
+  isAudioFileName,
+  kindFromMime,
+} from "../media/mime.js";
 import { buildRandomTempFilePath } from "../plugin-sdk/temp-path.js";
 import { MediaUnderstandingSkipError } from "./errors.js";
 import { fetchWithTimeout } from "./providers/shared.js";
@@ -67,9 +72,15 @@ function normalizeAttachmentPath(raw?: string | null): string | undefined {
 }
 
 export function normalizeAttachments(ctx: MsgContext): MediaAttachment[] {
-  const pathsFromArray = Array.isArray(ctx.MediaPaths) ? ctx.MediaPaths : undefined;
-  const urlsFromArray = Array.isArray(ctx.MediaUrls) ? ctx.MediaUrls : undefined;
-  const typesFromArray = Array.isArray(ctx.MediaTypes) ? ctx.MediaTypes : undefined;
+  const pathsFromArray = Array.isArray(ctx.MediaPaths)
+    ? ctx.MediaPaths
+    : undefined;
+  const urlsFromArray = Array.isArray(ctx.MediaUrls)
+    ? ctx.MediaUrls
+    : undefined;
+  const typesFromArray = Array.isArray(ctx.MediaTypes)
+    ? ctx.MediaTypes
+    : undefined;
   const resolveMime = (count: number, index: number) => {
     const typeHint = typesFromArray?.[index];
     const trimmed = typeof typeHint === "string" ? typeHint.trim() : "";
@@ -81,7 +92,8 @@ export function normalizeAttachments(ctx: MsgContext): MediaAttachment[] {
 
   if (pathsFromArray && pathsFromArray.length > 0) {
     const count = pathsFromArray.length;
-    const urls = urlsFromArray && urlsFromArray.length > 0 ? urlsFromArray : undefined;
+    const urls =
+      urlsFromArray && urlsFromArray.length > 0 ? urlsFromArray : undefined;
     return pathsFromArray
       .map((value, index) => ({
         path: value?.trim() || undefined,
@@ -137,7 +149,18 @@ export function resolveAttachmentKind(
   if (isAudioFileName(attachment.path ?? attachment.url)) {
     return "audio";
   }
-  if ([".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tiff", ".tif"].includes(ext)) {
+  if (
+    [
+      ".png",
+      ".jpg",
+      ".jpeg",
+      ".webp",
+      ".gif",
+      ".bmp",
+      ".tiff",
+      ".tif",
+    ].includes(ext)
+  ) {
     return "image";
   }
   return "unknown";
@@ -226,9 +249,15 @@ export class MediaAttachmentCache {
   private readonly localPathRoots: readonly string[];
   private canonicalLocalPathRoots?: Promise<readonly string[]>;
 
-  constructor(attachments: MediaAttachment[], options?: MediaAttachmentCacheOptions) {
+  constructor(
+    attachments: MediaAttachment[],
+    options?: MediaAttachmentCacheOptions,
+  ) {
     this.attachments = attachments;
-    this.localPathRoots = mergeInboundPathRoots(options?.localPathRoots, DEFAULT_LOCAL_PATH_ROOTS);
+    this.localPathRoots = mergeInboundPathRoots(
+      options?.localPathRoots,
+      DEFAULT_LOCAL_PATH_ROOTS,
+    );
     for (const attachment of attachments) {
       this.entries.set(attachment.index, { attachment });
     }
@@ -274,7 +303,8 @@ export class MediaAttachmentCache {
             filePath: entry.resolvedPath,
           }));
         entry.bufferFileName =
-          path.basename(entry.resolvedPath) || `media-${params.attachmentIndex + 1}`;
+          path.basename(entry.resolvedPath) ||
+          `media-${params.attachmentIndex + 1}`;
         return {
           buffer,
           mime: entry.bufferMime,
@@ -294,8 +324,17 @@ export class MediaAttachmentCache {
 
     try {
       const fetchImpl = (input: RequestInfo | URL, init?: RequestInit) =>
-        fetchWithTimeout(resolveRequestUrl(input), init ?? {}, params.timeoutMs, fetch);
-      const fetched = await fetchRemoteMedia({ url, fetchImpl, maxBytes: params.maxBytes });
+        fetchWithTimeout(
+          resolveRequestUrl(input),
+          init ?? {},
+          params.timeoutMs,
+          fetch,
+        );
+      const fetched = await fetchRemoteMedia({
+        url,
+        fetchImpl,
+        maxBytes: params.maxBytes,
+      });
       entry.buffer = fetched.buffer;
       entry.bufferMime =
         entry.attachment.mime ??
@@ -304,7 +343,8 @@ export class MediaAttachmentCache {
           buffer: fetched.buffer,
           filePath: fetched.fileName ?? url,
         }));
-      entry.bufferFileName = fetched.fileName ?? `media-${params.attachmentIndex + 1}`;
+      entry.bufferFileName =
+        fetched.fileName ?? `media-${params.attachmentIndex + 1}`;
       return {
         buffer: fetched.buffer,
         mime: entry.bufferMime,
@@ -352,7 +392,11 @@ export class MediaAttachmentCache {
     }
 
     if (entry.tempPath) {
-      if (params.maxBytes && entry.buffer && entry.buffer.length > params.maxBytes) {
+      if (
+        params.maxBytes &&
+        entry.buffer &&
+        entry.buffer.length > params.maxBytes
+      ) {
         throw new MediaUnderstandingSkipError(
           "maxBytes",
           `Attachment ${params.attachmentIndex + 1} exceeds maxBytes ${params.maxBytes}`,
@@ -391,7 +435,9 @@ export class MediaAttachmentCache {
     await Promise.all(cleanups);
   }
 
-  private async ensureEntry(attachmentIndex: number): Promise<AttachmentCacheEntry> {
+  private async ensureEntry(
+    attachmentIndex: number,
+  ): Promise<AttachmentCacheEntry> {
     const existing = this.entries.get(attachmentIndex);
     if (existing) {
       if (!existing.resolvedPath) {
@@ -399,7 +445,9 @@ export class MediaAttachmentCache {
       }
       return existing;
     }
-    const attachment = this.attachments.find((item) => item.index === attachmentIndex) ?? {
+    const attachment = this.attachments.find(
+      (item) => item.index === attachmentIndex,
+    ) ?? {
       index: attachmentIndex,
     };
     const entry: AttachmentCacheEntry = {
@@ -418,11 +466,18 @@ export class MediaAttachmentCache {
     return path.isAbsolute(rawPath) ? rawPath : path.resolve(rawPath);
   }
 
-  private async ensureLocalStat(entry: AttachmentCacheEntry): Promise<number | undefined> {
+  private async ensureLocalStat(
+    entry: AttachmentCacheEntry,
+  ): Promise<number | undefined> {
     if (!entry.resolvedPath) {
       return undefined;
     }
-    if (!isInboundPathAllowed({ filePath: entry.resolvedPath, roots: this.localPathRoots })) {
+    if (
+      !isInboundPathAllowed({
+        filePath: entry.resolvedPath,
+        roots: this.localPathRoots,
+      })
+    ) {
       entry.resolvedPath = undefined;
       if (shouldLogVerbose()) {
         logVerbose(
@@ -441,9 +496,16 @@ export class MediaAttachmentCache {
         entry.resolvedPath = undefined;
         return undefined;
       }
-      const canonicalPath = await fs.realpath(currentPath).catch(() => currentPath);
+      const canonicalPath = await fs
+        .realpath(currentPath)
+        .catch(() => currentPath);
       const canonicalRoots = await this.getCanonicalLocalPathRoots();
-      if (!isInboundPathAllowed({ filePath: canonicalPath, roots: canonicalRoots })) {
+      if (
+        !isInboundPathAllowed({
+          filePath: canonicalPath,
+          roots: canonicalRoots,
+        })
+      ) {
         entry.resolvedPath = undefined;
         if (shouldLogVerbose()) {
           logVerbose(
@@ -458,7 +520,9 @@ export class MediaAttachmentCache {
     } catch (err) {
       entry.resolvedPath = undefined;
       if (shouldLogVerbose()) {
-        logVerbose(`Failed to read attachment ${entry.attachment.index + 1}: ${String(err)}`);
+        logVerbose(
+          `Failed to read attachment ${entry.attachment.index + 1}: ${String(err)}`,
+        );
       }
       return undefined;
     }

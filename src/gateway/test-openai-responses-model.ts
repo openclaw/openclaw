@@ -11,7 +11,10 @@ export function buildOpenAiResponsesTestModel(id = "gpt-5.2") {
   } as const;
 }
 
-export function buildOpenAiResponsesProviderConfig(baseUrl: string, modelId = "gpt-5.2") {
+export function buildOpenAiResponsesProviderConfig(
+  baseUrl: string,
+  modelId = "gpt-5.2",
+) {
   return {
     baseUrl,
     apiKey: "test",

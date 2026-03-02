@@ -18,7 +18,9 @@ export type WaitForTransportReadyParams = {
   check: () => Promise<TransportReadyResult>;
 };
 
-export async function waitForTransportReady(params: WaitForTransportReadyParams): Promise<void> {
+export async function waitForTransportReady(
+  params: WaitForTransportReadyParams,
+): Promise<void> {
   const started = Date.now();
   const timeoutMs = Math.max(0, params.timeoutMs);
   const deadline = started + timeoutMs;
@@ -45,7 +47,9 @@ export async function waitForTransportReady(params: WaitForTransportReadyParams)
     if (now >= nextLogAt) {
       const elapsedMs = now - started;
       params.runtime.error?.(
-        danger(`${params.label} not ready after ${elapsedMs}ms (${lastError ?? "unknown error"})`),
+        danger(
+          `${params.label} not ready after ${elapsedMs}ms (${lastError ?? "unknown error"})`,
+        ),
       );
       nextLogAt = now + logIntervalMs;
     }
@@ -61,7 +65,11 @@ export async function waitForTransportReady(params: WaitForTransportReadyParams)
   }
 
   params.runtime.error?.(
-    danger(`${params.label} not ready after ${timeoutMs}ms (${lastError ?? "unknown error"})`),
+    danger(
+      `${params.label} not ready after ${timeoutMs}ms (${lastError ?? "unknown error"})`,
+    ),
   );
-  throw new Error(`${params.label} not ready (${lastError ?? "unknown error"})`);
+  throw new Error(
+    `${params.label} not ready (${lastError ?? "unknown error"})`,
+  );
 }

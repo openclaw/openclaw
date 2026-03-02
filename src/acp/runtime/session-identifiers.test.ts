@@ -68,7 +68,9 @@ describe("session identifier helpers", () => {
       },
     });
 
-    expect(lines).toEqual(["session ids: pending (available after the first reply)"]);
+    expect(lines).toEqual([
+      "session ids: pending (available after the first reply)",
+    ]);
   });
 
   it("prefers runtimeOptions.cwd over legacy meta.cwd", () => {

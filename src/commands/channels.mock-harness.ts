@@ -12,7 +12,9 @@ export const configMocks: {
 export const offsetMocks: {
   deleteTelegramUpdateOffset: MockFn;
 } = {
-  deleteTelegramUpdateOffset: vi.fn().mockResolvedValue(undefined) as unknown as MockFn,
+  deleteTelegramUpdateOffset: vi
+    .fn()
+    .mockResolvedValue(undefined) as unknown as MockFn,
 };
 
 vi.mock("../config/config.js", async (importOriginal) => {
@@ -25,7 +27,8 @@ vi.mock("../config/config.js", async (importOriginal) => {
 });
 
 vi.mock("../telegram/update-offset-store.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../telegram/update-offset-store.js")>();
+  const actual =
+    await importOriginal<typeof import("../telegram/update-offset-store.js")>();
   return {
     ...actual,
     deleteTelegramUpdateOffset: offsetMocks.deleteTelegramUpdateOffset,

@@ -21,7 +21,9 @@ describe("resolveHostName", () => {
       { input: "::1", expected: "::1" },
     ] as const;
     for (const testCase of cases) {
-      expect(resolveHostName(testCase.input), testCase.input).toBe(testCase.expected);
+      expect(resolveHostName(testCase.input), testCase.input).toBe(
+        testCase.expected,
+      );
     }
   });
 });
@@ -59,9 +61,13 @@ describe("isTrustedProxyAddress", () => {
     });
 
     it("returns true when IP matches one of multiple proxies", () => {
-      expect(isTrustedProxyAddress("10.0.0.5", ["192.168.1.1", "10.0.0.5", "172.16.0.1"])).toBe(
-        true,
-      );
+      expect(
+        isTrustedProxyAddress("10.0.0.5", [
+          "192.168.1.1",
+          "10.0.0.5",
+          "172.16.0.1",
+        ]),
+      ).toBe(true);
     });
 
     it("ignores surrounding whitespace in exact IP entries", () => {
@@ -82,12 +88,18 @@ describe("isTrustedProxyAddress", () => {
     });
 
     it("returns true when IP is within /16 subnet", () => {
-      expect(isTrustedProxyAddress("172.19.5.100", ["172.19.0.0/16"])).toBe(true);
-      expect(isTrustedProxyAddress("172.19.255.255", ["172.19.0.0/16"])).toBe(true);
+      expect(isTrustedProxyAddress("172.19.5.100", ["172.19.0.0/16"])).toBe(
+        true,
+      );
+      expect(isTrustedProxyAddress("172.19.255.255", ["172.19.0.0/16"])).toBe(
+        true,
+      );
     });
 
     it("returns false when IP is outside /16 subnet", () => {
-      expect(isTrustedProxyAddress("172.20.0.1", ["172.19.0.0/16"])).toBe(false);
+      expect(isTrustedProxyAddress("172.20.0.1", ["172.19.0.0/16"])).toBe(
+        false,
+      );
     });
 
     it("returns true when IP is within /32 subnet (single IP)", () => {
@@ -107,8 +119,12 @@ describe("isTrustedProxyAddress", () => {
     });
 
     it("supports IPv6 CIDR notation", () => {
-      expect(isTrustedProxyAddress("2001:db8::1234", ["2001:db8::/32"])).toBe(true);
-      expect(isTrustedProxyAddress("2001:db9::1234", ["2001:db8::/32"])).toBe(false);
+      expect(isTrustedProxyAddress("2001:db8::1234", ["2001:db8::/32"])).toBe(
+        true,
+      );
+      expect(isTrustedProxyAddress("2001:db9::1234", ["2001:db8::/32"])).toBe(
+        false,
+      );
     });
   });
 
@@ -117,7 +133,9 @@ describe("isTrustedProxyAddress", () => {
       // Old configs with exact IPs should work exactly as before
       expect(isTrustedProxyAddress("192.168.1.1", ["192.168.1.1"])).toBe(true);
       expect(isTrustedProxyAddress("192.168.1.2", ["192.168.1.1"])).toBe(false);
-      expect(isTrustedProxyAddress("10.0.0.5", ["192.168.1.1", "10.0.0.5"])).toBe(true);
+      expect(
+        isTrustedProxyAddress("10.0.0.5", ["192.168.1.1", "10.0.0.5"]),
+      ).toBe(true);
     });
 
     it("does NOT treat plain IPs as /32 CIDR (exact match only)", () => {
@@ -129,7 +147,9 @@ describe("isTrustedProxyAddress", () => {
 
     it("handles IPv4-mapped IPv6 addresses (existing normalizeIp behavior)", () => {
       // Existing normalizeIp() behavior should be preserved
-      expect(isTrustedProxyAddress("::ffff:192.168.1.1", ["192.168.1.1"])).toBe(true);
+      expect(isTrustedProxyAddress("::ffff:192.168.1.1", ["192.168.1.1"])).toBe(
+        true,
+      );
     });
   });
 
@@ -153,12 +173,16 @@ describe("isTrustedProxyAddress", () => {
     });
 
     it("ignores surrounding whitespace in CIDR entries", () => {
-      expect(isTrustedProxyAddress("10.42.0.59", [" 10.42.0.0/24 "])).toBe(true);
+      expect(isTrustedProxyAddress("10.42.0.59", [" 10.42.0.0/24 "])).toBe(
+        true,
+      );
     });
 
     it("ignores blank trusted proxy entries", () => {
       expect(isTrustedProxyAddress("10.0.0.5", [" ", "\t"])).toBe(false);
-      expect(isTrustedProxyAddress("10.0.0.5", [" ", "10.0.0.5", ""])).toBe(true);
+      expect(isTrustedProxyAddress("10.0.0.5", [" ", "10.0.0.5", ""])).toBe(
+        true,
+      );
     });
   });
 });
@@ -278,31 +302,80 @@ describe("pickPrimaryLanIPv4", () => {
       {
         name: "prefers en0",
         interfaces: {
-          lo0: [{ address: "127.0.0.1", family: "IPv4", internal: true, netmask: "" }],
-          en0: [{ address: "192.168.1.42", family: "IPv4", internal: false, netmask: "" }],
+          lo0: [
+            {
+              address: "127.0.0.1",
+              family: "IPv4",
+              internal: true,
+              netmask: "",
+            },
+          ],
+          en0: [
+            {
+              address: "192.168.1.42",
+              family: "IPv4",
+              internal: false,
+              netmask: "",
+            },
+          ],
         },
         expected: "192.168.1.42",
       },
       {
         name: "falls back to eth0",
         interfaces: {
-          lo: [{ address: "127.0.0.1", family: "IPv4", internal: true, netmask: "" }],
-          eth0: [{ address: "10.0.0.5", family: "IPv4", internal: false, netmask: "" }],
+          lo: [
+            {
+              address: "127.0.0.1",
+              family: "IPv4",
+              internal: true,
+              netmask: "",
+            },
+          ],
+          eth0: [
+            {
+              address: "10.0.0.5",
+              family: "IPv4",
+              internal: false,
+              netmask: "",
+            },
+          ],
         },
         expected: "10.0.0.5",
       },
       {
         name: "falls back to any non-internal interface",
         interfaces: {
-          lo: [{ address: "127.0.0.1", family: "IPv4", internal: true, netmask: "" }],
-          wlan0: [{ address: "172.16.0.99", family: "IPv4", internal: false, netmask: "" }],
+          lo: [
+            {
+              address: "127.0.0.1",
+              family: "IPv4",
+              internal: true,
+              netmask: "",
+            },
+          ],
+          wlan0: [
+            {
+              address: "172.16.0.99",
+              family: "IPv4",
+              internal: false,
+              netmask: "",
+            },
+          ],
         },
         expected: "172.16.0.99",
       },
       {
         name: "no non-internal interface",
         interfaces: {
-          lo: [{ address: "127.0.0.1", family: "IPv4", internal: true, netmask: "" }],
+          lo: [
+            {
+              address: "127.0.0.1",
+              family: "IPv4",
+              internal: true,
+              netmask: "",
+            },
+          ],
         },
         expected: undefined,
       },
@@ -310,7 +383,9 @@ describe("pickPrimaryLanIPv4", () => {
 
     for (const testCase of cases) {
       vi.spyOn(os, "networkInterfaces").mockReturnValue(
-        testCase.interfaces as unknown as ReturnType<typeof os.networkInterfaces>,
+        testCase.interfaces as unknown as ReturnType<
+          typeof os.networkInterfaces
+        >,
       );
       expect(pickPrimaryLanIPv4(), testCase.name).toBe(testCase.expected);
       vi.restoreAllMocks();
@@ -343,7 +418,13 @@ describe("isPrivateOrLoopbackAddress", () => {
   });
 
   it("rejects public addresses", () => {
-    const rejected = ["1.1.1.1", "8.8.8.8", "172.32.0.1", "203.0.113.10", "2001:4860:4860::8888"];
+    const rejected = [
+      "1.1.1.1",
+      "8.8.8.8",
+      "172.32.0.1",
+      "203.0.113.10",
+      "2001:4860:4860::8888",
+    ];
     for (const ip of rejected) {
       expect(isPrivateOrLoopbackAddress(ip)).toBe(false);
     }
@@ -385,7 +466,9 @@ describe("isPrivateOrLoopbackHost", () => {
     expect(isPrivateOrLoopbackHost("::")).toBe(false);
     expect(isPrivateOrLoopbackHost("0:0::0")).toBe(false);
     expect(isPrivateOrLoopbackHost("[0:0::0]")).toBe(false);
-    expect(isPrivateOrLoopbackHost("[0000:0000:0000:0000:0000:0000:0000:0000]")).toBe(false);
+    expect(
+      isPrivateOrLoopbackHost("[0000:0000:0000:0000:0000:0000:0000:0000]"),
+    ).toBe(false);
   });
 
   it("rejects multicast IPv6 addresses (ff00::/8)", () => {
@@ -444,7 +527,9 @@ describe("isSecureWebSocketUrl", () => {
     ] as const;
 
     for (const testCase of cases) {
-      expect(isSecureWebSocketUrl(testCase.input), testCase.input).toBe(testCase.expected);
+      expect(isSecureWebSocketUrl(testCase.input), testCase.input).toBe(
+        testCase.expected,
+      );
     }
   });
 
@@ -460,7 +545,9 @@ describe("isSecureWebSocketUrl", () => {
     ];
 
     for (const input of allowedWhenOptedIn) {
-      expect(isSecureWebSocketUrl(input, { allowPrivateWs: true }), input).toBe(true);
+      expect(isSecureWebSocketUrl(input, { allowPrivateWs: true }), input).toBe(
+        true,
+      );
     }
   });
 
@@ -472,7 +559,9 @@ describe("isSecureWebSocketUrl", () => {
     ];
 
     for (const input of disallowedWhenOptedIn) {
-      expect(isSecureWebSocketUrl(input, { allowPrivateWs: true }), input).toBe(false);
+      expect(isSecureWebSocketUrl(input, { allowPrivateWs: true }), input).toBe(
+        false,
+      );
     }
   });
 });

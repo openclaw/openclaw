@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { buildDiscordComponentCustomId, buildDiscordModalCustomId } from "../components.js";
+import {
+  buildDiscordComponentCustomId,
+  buildDiscordModalCustomId,
+} from "../components.js";
 import {
   createDiscordComponentButton,
   createDiscordComponentChannelSelect,
@@ -43,7 +46,9 @@ describe("discord wildcard component registration ids", () => {
 
   it("still resolves sentinel ids and runtime ids through wildcard parser key", () => {
     const components = createWildcardComponents();
-    const interactionCustomId = buildDiscordComponentCustomId({ componentId: "sel_test" });
+    const interactionCustomId = buildDiscordComponentCustomId({
+      componentId: "sel_test",
+    });
     const interactionModalId = buildDiscordModalCustomId("mdl_test");
 
     for (const component of components) {

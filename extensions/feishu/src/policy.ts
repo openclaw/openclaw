@@ -17,7 +17,8 @@ function normalizeFeishuAllowEntry(raw: string): string {
     return "*";
   }
   const withoutProviderPrefix = trimmed.replace(/^feishu:/i, "");
-  const normalized = normalizeFeishuTarget(withoutProviderPrefix) ?? withoutProviderPrefix;
+  const normalized =
+    normalizeFeishuTarget(withoutProviderPrefix) ?? withoutProviderPrefix;
   return normalized.trim().toLowerCase();
 }
 
@@ -68,7 +69,9 @@ export function resolveFeishuGroupConfig(params: {
   }
 
   const lowered = groupId.toLowerCase();
-  const matchKey = Object.keys(groups).find((key) => key.toLowerCase() === lowered);
+  const matchKey = Object.keys(groups).find(
+    (key) => key.toLowerCase() === lowered,
+  );
   if (matchKey) {
     return groups[matchKey];
   }
@@ -118,7 +121,9 @@ export function resolveFeishuReplyPolicy(params: {
   }
 
   const requireMention =
-    params.groupConfig?.requireMention ?? params.globalConfig?.requireMention ?? true;
+    params.groupConfig?.requireMention ??
+    params.globalConfig?.requireMention ??
+    true;
 
   return { requireMention };
 }

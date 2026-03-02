@@ -1,6 +1,9 @@
 import { Type } from "@sinclair/typebox";
 import { loadConfig } from "../../config/config.js";
-import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
+import {
+  normalizeCronJobCreate,
+  normalizeCronJobPatch,
+} from "../../cron/normalize.js";
 import type { CronDelivery, CronMessageChannel } from "../../cron/types.js";
 import { normalizeHttpWebhookUrl } from "../../cron/webhook-url.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
@@ -9,15 +12,31 @@ import { isRecord, truncateUtf16Safe } from "../../utils.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { optionalStringEnum, stringEnum } from "../schema/typebox.js";
 import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
-import { callGatewayTool, readGatewayCallOptions, type GatewayCallOptions } from "./gateway.js";
-import { resolveInternalSessionKey, resolveMainSessionAlias } from "./sessions-helpers.js";
+import {
+  callGatewayTool,
+  readGatewayCallOptions,
+  type GatewayCallOptions,
+} from "./gateway.js";
+import {
+  resolveInternalSessionKey,
+  resolveMainSessionAlias,
+} from "./sessions-helpers.js";
 
 // NOTE: We use Type.Object({}, { additionalProperties: true }) for job/patch
 // instead of CronAddParamsSchema/CronJobPatchSchema because the gateway schemas
 // contain nested unions. Tool schemas need to stay provider-friendly, so we
 // accept "any object" here and validate at runtime.
 
-const CRON_ACTIONS = ["status", "list", "add", "update", "remove", "run", "runs", "wake"] as const;
+const CRON_ACTIONS = [
+  "status",
+  "list",
+  "add",
+  "update",
+  "remove",
+  "run",
+  "runs",
+  "wake",
+] as const;
 
 const CRON_WAKE_MODES = ["now", "next-heartbeat"] as const;
 const CRON_RUN_MODES = ["due", "force"] as const;
@@ -80,7 +99,9 @@ function truncateText(input: string, maxLen: number) {
   return `${truncated}...`;
 }
 
-function extractMessageText(message: ChatMessage): { role: string; text: string } | null {
+function extractMessageText(
+  message: ChatMessage,
+): { role: string; text: string } | null {
   const role = typeof message.role === "string" ? message.role : "";
   if (role !== "user" && role !== "assistant") {
     return null;
@@ -108,7 +129,11 @@ async function buildReminderContextLines(params: {
   }
   const cfg = loadConfig();
   const { mainKey, alias } = resolveMainSessionAlias(cfg);
-  const resolvedKey = resolveInternalSessionKey({ key: sessionKey, alias, mainKey });
+  const resolvedKey = resolveInternalSessionKey({
+    key: sessionKey,
+    alias,
+    mainKey,
+  });
   try {
     const res = await params.callGatewayTool<{ messages: Array<unknown> }>(
       "chat.history",
@@ -154,12 +179,16 @@ function stripThreadSuffixFromSessionKey(sessionKey: string): string {
   return parent ? parent : sessionKey;
 }
 
-function inferDeliveryFromSessionKey(agentSessionKey?: string): CronDelivery | null {
+function inferDeliveryFromSessionKey(
+  agentSessionKey?: string,
+): CronDelivery | null {
   const rawSessionKey = agentSessionKey?.trim();
   if (!rawSessionKey) {
     return null;
   }
-  const parsed = parseAgentSessionKey(stripThreadSuffixFromSessionKey(rawSessionKey));
+  const parsed = parseAgentSessionKey(
+    stripThreadSuffixFromSessionKey(rawSessionKey),
+  );
   if (!parsed || !parsed.rest) {
     return null;
   }
@@ -182,7 +211,11 @@ function inferDeliveryFromSessionKey(agentSessionKey?: string): CronDelivery | n
   // Threaded sessions append :thread:<id>, which we strip so delivery targets the parent peer.
   // NOTE: Telegram forum topics encode as <chatId>:topic:<topicId> and should be preserved.
   const markerIndex = parts.findIndex(
-    (part) => part === "direct" || part === "dm" || part === "group" || part === "channel",
+    (part) =>
+      part === "direct" ||
+      part === "dm" ||
+      part === "group" ||
+      part === "channel",
   );
   if (markerIndex === -1) {
     return null;
@@ -207,7 +240,10 @@ function inferDeliveryFromSessionKey(agentSessionKey?: string): CronDelivery | n
   return delivery;
 }
 
-export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): AnyAgentTool {
+export function createCronTool(
+  opts?: CronToolOptions,
+  deps?: CronToolDeps,
+): AnyAgentTool {
   const callGateway = deps?.callGatewayTool ?? callGatewayTool;
   return {
     label: "Cron",
@@ -276,7 +312,8 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
       const gatewayOpts: GatewayCallOptions = {
         ...readGatewayCallOptions(params),
         timeoutMs:
-          typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
+          typeof params.timeoutMs === "number" &&
+          Number.isFinite(params.timeoutMs)
             ? params.timeoutMs
             : 60_000,
       };
@@ -351,11 +388,18 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
             const cfg = loadConfig();
             const { mainKey, alias } = resolveMainSessionAlias(cfg);
             const resolvedSessionKey = opts?.agentSessionKey
-              ? resolveInternalSessionKey({ key: opts.agentSessionKey, alias, mainKey })
+              ? resolveInternalSessionKey({
+                  key: opts.agentSessionKey,
+                  alias,
+                  mainKey,
+                })
               : undefined;
             if (!("agentId" in job)) {
               const agentId = opts?.agentSessionKey
-                ? resolveSessionAgentId({ sessionKey: opts.agentSessionKey, config: cfg })
+                ? resolveSessionAgentId({
+                    sessionKey: opts.agentSessionKey,
+                    config: cfg,
+                  })
                 : undefined;
               if (agentId) {
                 (job as { agentId?: string }).agentId = agentId;
@@ -371,11 +415,15 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
             job &&
             typeof job === "object" &&
             "payload" in job &&
-            (job as { payload?: { kind?: string } }).payload?.kind === "agentTurn"
+            (job as { payload?: { kind?: string } }).payload?.kind ===
+              "agentTurn"
           ) {
             const deliveryValue = (job as { delivery?: unknown }).delivery;
-            const delivery = isRecord(deliveryValue) ? deliveryValue : undefined;
-            const modeRaw = typeof delivery?.mode === "string" ? delivery.mode : "";
+            const delivery = isRecord(deliveryValue)
+              ? deliveryValue
+              : undefined;
+            const modeRaw =
+              typeof delivery?.mode === "string" ? delivery.mode : "";
             const mode = modeRaw.trim().toLowerCase();
             if (mode === "webhook") {
               const webhookUrl = normalizeHttpWebhookUrl(delivery?.to);
@@ -390,14 +438,17 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
             }
 
             const hasTarget =
-              (typeof delivery?.channel === "string" && delivery.channel.trim()) ||
+              (typeof delivery?.channel === "string" &&
+                delivery.channel.trim()) ||
               (typeof delivery?.to === "string" && delivery.to.trim());
             const shouldInfer =
               (deliveryValue == null || delivery) &&
               (mode === "" || mode === "announce") &&
               !hasTarget;
             if (shouldInfer) {
-              const inferred = inferDeliveryFromSessionKey(opts.agentSessionKey);
+              const inferred = inferDeliveryFromSessionKey(
+                opts.agentSessionKey,
+              );
               if (inferred) {
                 (job as { delivery?: unknown }).delivery = {
                   ...delivery,
@@ -408,16 +459,19 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
           }
 
           const contextMessages =
-            typeof params.contextMessages === "number" && Number.isFinite(params.contextMessages)
+            typeof params.contextMessages === "number" &&
+            Number.isFinite(params.contextMessages)
               ? params.contextMessages
               : 0;
           if (
             job &&
             typeof job === "object" &&
             "payload" in job &&
-            (job as { payload?: { kind?: string; text?: string } }).payload?.kind === "systemEvent"
+            (job as { payload?: { kind?: string; text?: string } }).payload
+              ?.kind === "systemEvent"
           ) {
-            const payload = (job as { payload: { kind: string; text: string } }).payload;
+            const payload = (job as { payload: { kind: string; text: string } })
+              .payload;
             if (typeof payload.text === "string" && payload.text.trim()) {
               const contextLines = await buildReminderContextLines({
                 agentSessionKey: opts?.agentSessionKey,
@@ -434,9 +488,12 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
           return jsonResult(await callGateway("cron.add", gatewayOpts, job));
         }
         case "update": {
-          const id = readStringParam(params, "jobId") ?? readStringParam(params, "id");
+          const id =
+            readStringParam(params, "jobId") ?? readStringParam(params, "id");
           if (!id) {
-            throw new Error("jobId required (id accepted for backward compatibility)");
+            throw new Error(
+              "jobId required (id accepted for backward compatibility)",
+            );
           }
 
           // Flat-params recovery for patch
@@ -486,27 +543,44 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
           );
         }
         case "remove": {
-          const id = readStringParam(params, "jobId") ?? readStringParam(params, "id");
+          const id =
+            readStringParam(params, "jobId") ?? readStringParam(params, "id");
           if (!id) {
-            throw new Error("jobId required (id accepted for backward compatibility)");
+            throw new Error(
+              "jobId required (id accepted for backward compatibility)",
+            );
           }
-          return jsonResult(await callGateway("cron.remove", gatewayOpts, { id }));
+          return jsonResult(
+            await callGateway("cron.remove", gatewayOpts, { id }),
+          );
         }
         case "run": {
-          const id = readStringParam(params, "jobId") ?? readStringParam(params, "id");
+          const id =
+            readStringParam(params, "jobId") ?? readStringParam(params, "id");
           if (!id) {
-            throw new Error("jobId required (id accepted for backward compatibility)");
+            throw new Error(
+              "jobId required (id accepted for backward compatibility)",
+            );
           }
           const runMode =
-            params.runMode === "due" || params.runMode === "force" ? params.runMode : "force";
-          return jsonResult(await callGateway("cron.run", gatewayOpts, { id, mode: runMode }));
+            params.runMode === "due" || params.runMode === "force"
+              ? params.runMode
+              : "force";
+          return jsonResult(
+            await callGateway("cron.run", gatewayOpts, { id, mode: runMode }),
+          );
         }
         case "runs": {
-          const id = readStringParam(params, "jobId") ?? readStringParam(params, "id");
+          const id =
+            readStringParam(params, "jobId") ?? readStringParam(params, "id");
           if (!id) {
-            throw new Error("jobId required (id accepted for backward compatibility)");
+            throw new Error(
+              "jobId required (id accepted for backward compatibility)",
+            );
           }
-          return jsonResult(await callGateway("cron.runs", gatewayOpts, { id }));
+          return jsonResult(
+            await callGateway("cron.runs", gatewayOpts, { id }),
+          );
         }
         case "wake": {
           const text = readStringParam(params, "text", { required: true });
@@ -515,7 +589,12 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
               ? params.mode
               : "next-heartbeat";
           return jsonResult(
-            await callGateway("wake", gatewayOpts, { mode, text }, { expectFinal: false }),
+            await callGateway(
+              "wake",
+              gatewayOpts,
+              { mode, text },
+              { expectFinal: false },
+            ),
           );
         }
         default:

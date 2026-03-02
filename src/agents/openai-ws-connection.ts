@@ -182,7 +182,9 @@ export type ContentPart =
   | { type: "output_text"; text: string }
   | {
       type: "input_image";
-      source: { type: "url"; url: string } | { type: "base64"; media_type: string; data: string };
+      source:
+        | { type: "url"; url: string }
+        | { type: "base64"; media_type: string; data: string };
     };
 
 export type InputItem =
@@ -191,9 +193,20 @@ export type InputItem =
       role: "system" | "developer" | "user" | "assistant";
       content: string | ContentPart[];
     }
-  | { type: "function_call"; id?: string; call_id?: string; name: string; arguments: string }
+  | {
+      type: "function_call";
+      id?: string;
+      call_id?: string;
+      name: string;
+      arguments: string;
+    }
   | { type: "function_call_output"; call_id: string; output: string }
-  | { type: "reasoning"; content?: string; encrypted_content?: string; summary?: string }
+  | {
+      type: "reasoning";
+      content?: string;
+      encrypted_content?: string;
+      summary?: string;
+    }
   | { type: "item_reference"; id: string };
 
 export type ToolChoice =
@@ -227,7 +240,10 @@ export interface ResponseCreateEvent {
   temperature?: number;
   top_p?: number;
   metadata?: Record<string, string>;
-  reasoning?: { effort?: "low" | "medium" | "high"; summary?: "auto" | "concise" | "detailed" };
+  reasoning?: {
+    effort?: "low" | "medium" | "high";
+    summary?: "auto" | "concise" | "detailed";
+  };
   truncation?: "auto" | "disabled";
   [key: string]: unknown;
 }
@@ -363,7 +379,10 @@ export class OpenAIWebSocketManager extends EventEmitter<InternalEvents> {
     this._cancelRetryTimer();
     if (this.ws) {
       this.ws.removeAllListeners();
-      if (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING) {
+      if (
+        this.ws.readyState === WebSocket.OPEN ||
+        this.ws.readyState === WebSocket.CONNECTING
+      ) {
         this.ws.close(1000, "Client closed");
       }
       this.ws = null;
@@ -375,7 +394,11 @@ export class OpenAIWebSocketManager extends EventEmitter<InternalEvents> {
   private _openConnection(): Promise<void> {
     return new Promise<void>((resolve, reject) => {
       if (!this.apiKey) {
-        reject(new Error("OpenAIWebSocketManager: apiKey is required before connecting."));
+        reject(
+          new Error(
+            "OpenAIWebSocketManager: apiKey is required before connecting.",
+          ),
+        );
         return;
       }
 
@@ -433,13 +456,17 @@ export class OpenAIWebSocketManager extends EventEmitter<InternalEvents> {
     }
     if (this.retryCount >= this.maxRetries) {
       this._safeEmitError(
-        new Error(`OpenAIWebSocketManager: max reconnect retries (${this.maxRetries}) exceeded.`),
+        new Error(
+          `OpenAIWebSocketManager: max reconnect retries (${this.maxRetries}) exceeded.`,
+        ),
       );
       return;
     }
 
     const delayMs =
-      this.backoffDelaysMs[Math.min(this.retryCount, this.backoffDelaysMs.length - 1)] ?? 1000;
+      this.backoffDelaysMs[
+        Math.min(this.retryCount, this.backoffDelaysMs.length - 1)
+      ] ?? 1000;
     this.retryCount++;
 
     this.retryTimer = setTimeout(() => {
@@ -487,7 +514,9 @@ export class OpenAIWebSocketManager extends EventEmitter<InternalEvents> {
       parsed = JSON.parse(text);
     } catch {
       this._safeEmitError(
-        new Error(`OpenAIWebSocketManager: failed to parse message: ${text.slice(0, 200)}`),
+        new Error(
+          `OpenAIWebSocketManager: failed to parse message: ${text.slice(0, 200)}`,
+        ),
       );
       return;
     }
@@ -515,7 +544,11 @@ export class OpenAIWebSocketManager extends EventEmitter<InternalEvents> {
    * Sends a warm-up event to pre-load the connection and model without generating output.
    * Pass tools/instructions to prime the connection for the upcoming session.
    */
-  warmUp(params: { model: string; tools?: FunctionToolDefinition[]; instructions?: string }): void {
+  warmUp(params: {
+    model: string;
+    tools?: FunctionToolDefinition[];
+    instructions?: string;
+  }): void {
     const event: WarmUpEvent = {
       type: "response.create",
       generate: false,

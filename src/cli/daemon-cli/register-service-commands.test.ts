@@ -41,9 +41,12 @@ describe("addGatewayServiceCommands", () => {
 
   it("forwards install option collisions from parent gateway command", async () => {
     const gateway = createGatewayParentLikeCommand();
-    await gateway.parseAsync(["install", "--force", "--port", "19000", "--token", "tok_test"], {
-      from: "user",
-    });
+    await gateway.parseAsync(
+      ["install", "--force", "--port", "19000", "--token", "tok_test"],
+      {
+        from: "user",
+      },
+    );
 
     expect(runDaemonInstall).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -56,9 +59,12 @@ describe("addGatewayServiceCommands", () => {
 
   it("forwards status auth collisions from parent gateway command", async () => {
     const gateway = createGatewayParentLikeCommand();
-    await gateway.parseAsync(["status", "--token", "tok_status", "--password", "pw_status"], {
-      from: "user",
-    });
+    await gateway.parseAsync(
+      ["status", "--token", "tok_status", "--password", "pw_status"],
+      {
+        from: "user",
+      },
+    );
 
     expect(runDaemonStatus).toHaveBeenCalledWith(
       expect.objectContaining({

@@ -3,7 +3,10 @@ import { emitAgentEvent } from "../infra/agent-events.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
 import { normalizeTextForComparison } from "./pi-embedded-helpers.js";
-import { isMessagingTool, isMessagingToolSendAction } from "./pi-embedded-messaging.js";
+import {
+  isMessagingTool,
+  isMessagingToolSendAction,
+} from "./pi-embedded-messaging.js";
 import type {
   ToolCallSummary,
   ToolHandlerContext,
@@ -18,7 +21,10 @@ import {
   sanitizeToolResult,
 } from "./pi-embedded-subscribe.tools.js";
 import { inferToolMetaFromArgs } from "./pi-embedded-utils.js";
-import { buildToolMutationState, isSameToolMutationAction } from "./tool-mutation.js";
+import {
+  buildToolMutationState,
+  isSameToolMutationAction,
+} from "./tool-mutation.js";
 import { normalizeToolName } from "./tool-policy.js";
 
 /** Track tool execution start times and args for after_tool_call hook */
@@ -32,7 +38,11 @@ function isCronAddAction(args: unknown): boolean {
   return typeof action === "string" && action.trim().toLowerCase() === "add";
 }
 
-function buildToolCallSummary(toolName: string, args: unknown, meta?: string): ToolCallSummary {
+function buildToolCallSummary(
+  toolName: string,
+  args: unknown,
+  meta?: string,
+): ToolCallSummary {
   const mutation = buildToolMutationState(toolName, args, meta);
   return {
     meta,
@@ -41,7 +51,11 @@ function buildToolCallSummary(toolName: string, args: unknown, meta?: string): T
   };
 }
 
-function extendExecMeta(toolName: string, args: unknown, meta?: string): string | undefined {
+function extendExecMeta(
+  toolName: string,
+  args: unknown,
+  meta?: string,
+): string | undefined {
   const normalized = toolName.trim().toLowerCase();
   if (normalized !== "exec" && normalized !== "bash") {
     return meta;
@@ -64,7 +78,11 @@ function extendExecMeta(toolName: string, args: unknown, meta?: string): string 
   return meta ? `${meta} · ${suffix}` : suffix;
 }
 
-function pushUniqueMediaUrl(urls: string[], seen: Set<string>, value: unknown): void {
+function pushUniqueMediaUrl(
+  urls: string[],
+  seen: Set<string>,
+  value: unknown,
+): void {
   if (typeof value !== "string") {
     return;
   }
@@ -76,7 +94,9 @@ function pushUniqueMediaUrl(urls: string[], seen: Set<string>, value: unknown): 
   urls.push(normalized);
 }
 
-function collectMessagingMediaUrlsFromRecord(record: Record<string, unknown>): string[] {
+function collectMessagingMediaUrlsFromRecord(
+  record: Record<string, unknown>,
+): string[] {
   const urls: string[] = [];
   const seen = new Set<string>();
 
@@ -102,7 +122,9 @@ function collectMessagingMediaUrlsFromToolResult(result: unknown): string[] {
     if (!value || typeof value !== "object") {
       return;
     }
-    const extracted = collectMessagingMediaUrlsFromRecord(value as Record<string, unknown>);
+    const extracted = collectMessagingMediaUrlsFromRecord(
+      value as Record<string, unknown>,
+    );
     for (const url of extracted) {
       if (seen.has(url)) {
         continue;
@@ -156,7 +178,10 @@ function emitToolResultOutput(params: {
 
   // emitToolOutput() already handles MEDIA: directives when enabled; this path
   // only sends raw media URLs for non-verbose delivery mode.
-  const mediaPaths = filterToolResultMediaUrls(toolName, extractToolResultMediaPaths(result));
+  const mediaPaths = filterToolResultMediaUrls(
+    toolName,
+    extractToolResultMediaPaths(result),
+  );
   if (mediaPaths.length === 0) {
     return;
   }
@@ -186,7 +211,8 @@ export async function handleToolExecutionStart(
   toolStartData.set(toolCallId, { startTime: Date.now(), args });
 
   if (toolName === "read") {
-    const record = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
+    const record =
+      args && typeof args === "object" ? (args as Record<string, unknown>) : {};
     const filePathValue =
       typeof record.path === "string"
         ? record.path
@@ -195,15 +221,23 @@ export async function handleToolExecutionStart(
           : "";
     const filePath = filePathValue.trim();
     if (!filePath) {
-      const argsPreview = typeof args === "string" ? args.slice(0, 200) : undefined;
+      const argsPreview =
+        typeof args === "string" ? args.slice(0, 200) : undefined;
       ctx.log.warn(
         `read tool called without path: toolCallId=${toolCallId} argsType=${typeof args}${argsPreview ? ` argsPreview=${argsPreview}` : ""}`,
       );
     }
   }
 
-  const meta = extendExecMeta(toolName, args, inferToolMetaFromArgs(toolName, args));
-  ctx.state.toolMetaById.set(toolCallId, buildToolCallSummary(toolName, args, meta));
+  const meta = extendExecMeta(
+    toolName,
+    args,
+    inferToolMetaFromArgs(toolName, args),
+  );
+  ctx.state.toolMetaById.set(
+    toolCallId,
+    buildToolCallSummary(toolName, args, meta),
+  );
   ctx.log.debug(
     `embedded run tool start: runId=${ctx.params.runId} tool=${toolName} toolCallId=${toolCallId}`,
   );
@@ -236,7 +270,8 @@ export async function handleToolExecutionStart(
 
   // Track messaging tool sends (pending until confirmed in tool_execution_end).
   if (isMessagingTool(toolName)) {
-    const argsRecord = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
+    const argsRecord =
+      args && typeof args === "object" ? (args as Record<string, unknown>) : {};
     const isMessagingSend = isMessagingToolSendAction(toolName, argsRecord);
     if (isMessagingSend) {
       const sendTarget = extractMessagingToolSend(toolName, argsRecord);
@@ -244,10 +279,13 @@ export async function handleToolExecutionStart(
         ctx.state.pendingMessagingTargets.set(toolCallId, sendTarget);
       }
       // Field names vary by tool: Discord/Slack use "content", sessions_send uses "message"
-      const text = (argsRecord.content as string) ?? (argsRecord.message as string);
+      const text =
+        (argsRecord.content as string) ?? (argsRecord.message as string);
       if (text && typeof text === "string") {
         ctx.state.pendingMessagingTexts.set(toolCallId, text);
-        ctx.log.debug(`Tracking pending messaging text: tool=${toolName} len=${text.length}`);
+        ctx.log.debug(
+          `Tracking pending messaging text: tool=${toolName} len=${text.length}`,
+        );
       }
       // Track media URLs from messaging tool args (pending until tool_execution_end).
       const mediaUrls = collectMessagingMediaUrlsFromRecord(argsRecord);
@@ -345,8 +383,12 @@ export async function handleToolExecutionEnd(
     ctx.state.pendingMessagingTexts.delete(toolCallId);
     if (!isToolError) {
       ctx.state.messagingToolSentTexts.push(pendingText);
-      ctx.state.messagingToolSentTextsNormalized.push(normalizeTextForComparison(pendingText));
-      ctx.log.debug(`Committed messaging text: tool=${toolName} len=${pendingText.length}`);
+      ctx.state.messagingToolSentTextsNormalized.push(
+        normalizeTextForComparison(pendingText),
+      );
+      ctx.log.debug(
+        `Committed messaging text: tool=${toolName} len=${pendingText.length}`,
+      );
       ctx.trimMessagingToolSent();
     }
   }
@@ -357,7 +399,8 @@ export async function handleToolExecutionEnd(
       ctx.trimMessagingToolSent();
     }
   }
-  const pendingMediaUrls = ctx.state.pendingMessagingMediaUrls.get(toolCallId) ?? [];
+  const pendingMediaUrls =
+    ctx.state.pendingMessagingMediaUrls.get(toolCallId) ?? [];
   ctx.state.pendingMessagingMediaUrls.delete(toolCallId);
   const startArgs =
     startData?.args && typeof startData.args === "object"
@@ -365,7 +408,8 @@ export async function handleToolExecutionEnd(
       : {};
   const isMessagingSend =
     pendingMediaUrls.length > 0 ||
-    (isMessagingTool(toolName) && isMessagingToolSendAction(toolName, startArgs));
+    (isMessagingTool(toolName) &&
+      isMessagingToolSendAction(toolName, startArgs));
   if (!isToolError && isMessagingSend) {
     const committedMediaUrls = [
       ...pendingMediaUrls,
@@ -409,16 +453,28 @@ export async function handleToolExecutionEnd(
     `embedded run tool end: runId=${ctx.params.runId} tool=${toolName} toolCallId=${toolCallId}`,
   );
 
-  emitToolResultOutput({ ctx, toolName, meta, isToolError, result, sanitizedResult });
+  emitToolResultOutput({
+    ctx,
+    toolName,
+    meta,
+    isToolError,
+    result,
+    sanitizedResult,
+  });
 
   // Run after_tool_call plugin hook (fire-and-forget)
   const hookRunnerAfter = ctx.hookRunner ?? getGlobalHookRunner();
   if (hookRunnerAfter?.hasHooks("after_tool_call")) {
-    const durationMs = startData?.startTime != null ? Date.now() - startData.startTime : undefined;
+    const durationMs =
+      startData?.startTime != null
+        ? Date.now() - startData.startTime
+        : undefined;
     const toolArgs = startData?.args;
     const hookEvent: PluginHookAfterToolCallEvent = {
       toolName,
-      params: (toolArgs && typeof toolArgs === "object" ? toolArgs : {}) as Record<string, unknown>,
+      params: (toolArgs && typeof toolArgs === "object"
+        ? toolArgs
+        : {}) as Record<string, unknown>,
       result: sanitizedResult,
       error: isToolError ? extractToolErrorMessage(sanitizedResult) : undefined,
       durationMs,
@@ -430,7 +486,9 @@ export async function handleToolExecutionEnd(
         sessionKey: undefined,
       })
       .catch((err) => {
-        ctx.log.warn(`after_tool_call hook failed: tool=${toolName} error=${String(err)}`);
+        ctx.log.warn(
+          `after_tool_call hook failed: tool=${toolName} error=${String(err)}`,
+        );
       });
   }
 }

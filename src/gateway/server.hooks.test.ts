@@ -55,7 +55,9 @@ describe("gateway server hooks", () => {
       });
       expect(resAgent.status).toBe(202);
       const agentEvents = await waitForSystemEvent();
-      expect(agentEvents.some((e) => e.includes("Hook Email: done"))).toBe(true);
+      expect(agentEvents.some((e) => e.includes("Hook Email: done"))).toBe(
+        true,
+      );
       drainSystemEvents(resolveMainKey());
 
       cronIsolatedRun.mockClear();
@@ -63,21 +65,26 @@ describe("gateway server hooks", () => {
         status: "ok",
         summary: "done",
       });
-      const resAgentModel = await fetch(`http://127.0.0.1:${port}/hooks/agent`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: "Bearer hook-secret",
+      const resAgentModel = await fetch(
+        `http://127.0.0.1:${port}/hooks/agent`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: "Bearer hook-secret",
+          },
+          body: JSON.stringify({
+            message: "Do it",
+            name: "Email",
+            model: "openai/gpt-4.1-mini",
+          }),
         },
-        body: JSON.stringify({
-          message: "Do it",
-          name: "Email",
-          model: "openai/gpt-4.1-mini",
-        }),
-      });
+      );
       expect(resAgentModel.status).toBe(202);
       await waitForSystemEvent();
-      const call = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as {
+      const call = (
+        cronIsolatedRun.mock.calls[0] as unknown[] | undefined
+      )?.[0] as {
         job?: { payload?: { model?: string } };
       };
       expect(call?.job?.payload?.model).toBe("openai/gpt-4.1-mini");
@@ -88,17 +95,26 @@ describe("gateway server hooks", () => {
         status: "ok",
         summary: "done",
       });
-      const resAgentWithId = await fetch(`http://127.0.0.1:${port}/hooks/agent`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: "Bearer hook-secret",
+      const resAgentWithId = await fetch(
+        `http://127.0.0.1:${port}/hooks/agent`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: "Bearer hook-secret",
+          },
+          body: JSON.stringify({
+            message: "Do it",
+            name: "Email",
+            agentId: "hooks",
+          }),
         },
-        body: JSON.stringify({ message: "Do it", name: "Email", agentId: "hooks" }),
-      });
+      );
       expect(resAgentWithId.status).toBe(202);
       await waitForSystemEvent();
-      const routedCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as {
+      const routedCall = (
+        cronIsolatedRun.mock.calls[0] as unknown[] | undefined
+      )?.[0] as {
         job?: { agentId?: string };
       };
       expect(routedCall?.job?.agentId).toBe("hooks");
@@ -109,37 +125,52 @@ describe("gateway server hooks", () => {
         status: "ok",
         summary: "done",
       });
-      const resAgentUnknown = await fetch(`http://127.0.0.1:${port}/hooks/agent`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: "Bearer hook-secret",
+      const resAgentUnknown = await fetch(
+        `http://127.0.0.1:${port}/hooks/agent`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: "Bearer hook-secret",
+          },
+          body: JSON.stringify({
+            message: "Do it",
+            name: "Email",
+            agentId: "missing-agent",
+          }),
         },
-        body: JSON.stringify({ message: "Do it", name: "Email", agentId: "missing-agent" }),
-      });
+      );
       expect(resAgentUnknown.status).toBe(202);
       await waitForSystemEvent();
-      const fallbackCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as {
+      const fallbackCall = (
+        cronIsolatedRun.mock.calls[0] as unknown[] | undefined
+      )?.[0] as {
         job?: { agentId?: string };
       };
       expect(fallbackCall?.job?.agentId).toBe("main");
       drainSystemEvents(resolveMainKey());
 
-      const resQuery = await fetch(`http://127.0.0.1:${port}/hooks/wake?token=hook-secret`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: "Query auth" }),
-      });
+      const resQuery = await fetch(
+        `http://127.0.0.1:${port}/hooks/wake?token=hook-secret`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: "Query auth" }),
+        },
+      );
       expect(resQuery.status).toBe(400);
 
-      const resBadChannel = await fetch(`http://127.0.0.1:${port}/hooks/agent`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: "Bearer hook-secret",
+      const resBadChannel = await fetch(
+        `http://127.0.0.1:${port}/hooks/agent`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: "Bearer hook-secret",
+          },
+          body: JSON.stringify({ message: "Nope", channel: "sms" }),
         },
-        body: JSON.stringify({ message: "Nope", channel: "sms" }),
-      });
+      );
       expect(resBadChannel.status).toBe(400);
       expect(peekSystemEvents(resolveMainKey()).length).toBe(0);
 
@@ -172,14 +203,17 @@ describe("gateway server hooks", () => {
       });
       expect(resBlankText.status).toBe(400);
 
-      const resBlankMessage = await fetch(`http://127.0.0.1:${port}/hooks/agent`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: "Bearer hook-secret",
+      const resBlankMessage = await fetch(
+        `http://127.0.0.1:${port}/hooks/agent`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: "Bearer hook-secret",
+          },
+          body: JSON.stringify({ message: " " }),
         },
-        body: JSON.stringify({ message: " " }),
-      });
+      );
       expect(resBlankMessage.status).toBe(400);
 
       const resBadJson = await fetch(`http://127.0.0.1:${port}/hooks/wake`, {
@@ -250,9 +284,9 @@ describe("gateway server hooks", () => {
       });
       expect(defaultRoute.status).toBe(202);
       await waitForSystemEvent();
-      const defaultCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as
-        | { sessionKey?: string }
-        | undefined;
+      const defaultCall = (
+        cronIsolatedRun.mock.calls[0] as unknown[] | undefined
+      )?.[0] as { sessionKey?: string } | undefined;
       expect(defaultCall?.sessionKey).toBe("hook:ingress");
       drainSystemEvents(resolveMainKey());
 
@@ -268,33 +302,39 @@ describe("gateway server hooks", () => {
       });
       expect(mappedOk.status).toBe(202);
       await waitForSystemEvent();
-      const mappedCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as
-        | { sessionKey?: string }
-        | undefined;
+      const mappedCall = (
+        cronIsolatedRun.mock.calls[0] as unknown[] | undefined
+      )?.[0] as { sessionKey?: string } | undefined;
       expect(mappedCall?.sessionKey).toBe("hook:mapped:42");
       drainSystemEvents(resolveMainKey());
 
-      const requestBadPrefix = await fetch(`http://127.0.0.1:${port}/hooks/agent`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: "Bearer hook-secret",
+      const requestBadPrefix = await fetch(
+        `http://127.0.0.1:${port}/hooks/agent`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: "Bearer hook-secret",
+          },
+          body: JSON.stringify({
+            message: "Bad key",
+            sessionKey: "agent:main:main",
+          }),
         },
-        body: JSON.stringify({
-          message: "Bad key",
-          sessionKey: "agent:main:main",
-        }),
-      });
+      );
       expect(requestBadPrefix.status).toBe(400);
 
-      const mappedBadPrefix = await fetch(`http://127.0.0.1:${port}/hooks/mapped-bad`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: "Bearer hook-secret",
+      const mappedBadPrefix = await fetch(
+        `http://127.0.0.1:${port}/hooks/mapped-bad`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: "Bearer hook-secret",
+          },
+          body: JSON.stringify({ subject: "hello" }),
         },
-        body: JSON.stringify({ subject: "hello" }),
-      });
+      );
       expect(mappedBadPrefix.status).toBe(400);
     });
   });
@@ -332,9 +372,9 @@ describe("gateway server hooks", () => {
       expect(resAgent.status).toBe(202);
       await waitForSystemEvent();
 
-      const routedCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as
-        | { sessionKey?: string; job?: { agentId?: string } }
-        | undefined;
+      const routedCall = (
+        cronIsolatedRun.mock.calls[0] as unknown[] | undefined
+      )?.[0] as { sessionKey?: string; job?: { agentId?: string } } | undefined;
       expect(routedCall?.job?.agentId).toBe("hooks");
       expect(routedCall?.sessionKey).toBe("slack:channel:c123");
       drainSystemEvents(resolveMainKey());
@@ -374,7 +414,9 @@ describe("gateway server hooks", () => {
       });
       expect(resNoAgent.status).toBe(202);
       await waitForSystemEvent();
-      const noAgentCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as {
+      const noAgentCall = (
+        cronIsolatedRun.mock.calls[0] as unknown[] | undefined
+      )?.[0] as {
         job?: { agentId?: string };
       };
       expect(noAgentCall?.job?.agentId).toBeUndefined();
@@ -395,7 +437,9 @@ describe("gateway server hooks", () => {
       });
       expect(resAllowed.status).toBe(202);
       await waitForSystemEvent();
-      const allowedCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as {
+      const allowedCall = (
+        cronIsolatedRun.mock.calls[0] as unknown[] | undefined
+      )?.[0] as {
         job?: { agentId?: string };
       };
       expect(allowedCall?.job?.agentId).toBe("hooks");
@@ -413,16 +457,21 @@ describe("gateway server hooks", () => {
       const deniedBody = (await resDenied.json()) as { error?: string };
       expect(deniedBody.error).toContain("hooks.allowedAgentIds");
 
-      const resMappedDenied = await fetch(`http://127.0.0.1:${port}/hooks/mapped`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: "Bearer hook-secret",
+      const resMappedDenied = await fetch(
+        `http://127.0.0.1:${port}/hooks/mapped`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: "Bearer hook-secret",
+          },
+          body: JSON.stringify({ subject: "hello" }),
         },
-        body: JSON.stringify({ subject: "hello" }),
-      });
+      );
       expect(resMappedDenied.status).toBe(400);
-      const mappedDeniedBody = (await resMappedDenied.json()) as { error?: string };
+      const mappedDeniedBody = (await resMappedDenied.json()) as {
+        error?: string;
+      };
       expect(mappedDeniedBody.error).toContain("hooks.allowedAgentIds");
       expect(peekSystemEvents(resolveMainKey()).length).toBe(0);
     });
@@ -492,14 +541,17 @@ describe("gateway server hooks", () => {
       await waitForSystemEvent();
       drainSystemEvents(resolveMainKey());
 
-      const failAfterSuccess = await fetch(`http://127.0.0.1:${port}/hooks/wake`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: "Bearer wrong",
+      const failAfterSuccess = await fetch(
+        `http://127.0.0.1:${port}/hooks/wake`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: "Bearer wrong",
+          },
+          body: JSON.stringify({ text: "blocked" }),
         },
-        body: JSON.stringify({ text: "blocked" }),
-      });
+      );
       expect(failAfterSuccess.status).toBe(401);
     });
   });

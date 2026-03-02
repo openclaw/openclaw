@@ -9,7 +9,9 @@ describe("FS tools with workspaceOnly=false", () => {
   let workspaceDir: string;
   let outsideFile: string;
 
-  const hasToolError = (result: { content: Array<{ type: string; text?: string }> }) =>
+  const hasToolError = (result: {
+    content: Array<{ type: string; text?: string }>;
+  }) =>
     result.content.some((content) => {
       if (content.type !== "text") {
         return false;
@@ -38,7 +40,9 @@ describe("FS tools with workspaceOnly=false", () => {
     input: Record<string, unknown>,
     workspaceOnly: boolean | undefined,
   ) => {
-    const tool = toolsFor(workspaceOnly).find((candidate) => candidate.name === toolName);
+    const tool = toolsFor(workspaceOnly).find(
+      (candidate) => candidate.name === toolName,
+    );
     expect(tool).toBeDefined();
     const result = await tool!.execute(callId, input);
     expect(hasToolError(result)).toBe(false);

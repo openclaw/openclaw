@@ -25,7 +25,9 @@ export async function deriveRelayToken(gatewayToken, port) {
     key,
     enc.encode(`openclaw-extension-relay-v1:${port}`),
   );
-  return [...new Uint8Array(sig)].map((b) => b.toString(16).padStart(2, "0")).join("");
+  return [...new Uint8Array(sig)]
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
 }
 
 export async function buildRelayWsUrl(port, gatewayToken) {

@@ -47,22 +47,31 @@ function getRequiredFetch(): typeof fetch {
   return fetchImpl;
 }
 
-function parseSignalRpcResponse<T>(text: string, status: number): SignalRpcResponse<T> {
+function parseSignalRpcResponse<T>(
+  text: string,
+  status: number,
+): SignalRpcResponse<T> {
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
   } catch (err) {
-    throw new Error(`Signal RPC returned malformed JSON (status ${status})`, { cause: err });
+    throw new Error(`Signal RPC returned malformed JSON (status ${status})`, {
+      cause: err,
+    });
   }
 
   if (!parsed || typeof parsed !== "object") {
-    throw new Error(`Signal RPC returned invalid response envelope (status ${status})`);
+    throw new Error(
+      `Signal RPC returned invalid response envelope (status ${status})`,
+    );
   }
 
   const rpc = parsed as SignalRpcResponse<T>;
   const hasResult = Object.hasOwn(rpc, "result");
   if (!rpc.error && !hasResult) {
-    throw new Error(`Signal RPC returned invalid response envelope (status ${status})`);
+    throw new Error(
+      `Signal RPC returned invalid response envelope (status ${status})`,
+    );
   }
   return rpc;
 }
@@ -153,7 +162,9 @@ export async function streamSignalEvents(params: {
     signal: params.abortSignal,
   });
   if (!res.ok || !res.body) {
-    throw new Error(`Signal SSE failed (${res.status} ${res.statusText || "error"})`);
+    throw new Error(
+      `Signal SSE failed (${res.status} ${res.statusText || "error"})`,
+    );
   }
 
   const reader = res.body.getReader();
@@ -203,7 +214,9 @@ export async function streamSignalEvents(params: {
       if (field === "event") {
         currentEvent.event = value;
       } else if (field === "data") {
-        currentEvent.data = currentEvent.data ? `${currentEvent.data}\n${value}` : value;
+        currentEvent.data = currentEvent.data
+          ? `${currentEvent.data}\n${value}`
+          : value;
       } else if (field === "id") {
         currentEvent.id = value;
       }

@@ -2,7 +2,9 @@ import { describe, expect, it, vi } from "vitest";
 import type { DiscordDmCommandAccess } from "./dm-command-auth.js";
 import { handleDiscordDmCommandDecision } from "./dm-command-decision.js";
 
-function buildDmAccess(overrides: Partial<DiscordDmCommandAccess>): DiscordDmCommandAccess {
+function buildDmAccess(
+  overrides: Partial<DiscordDmCommandAccess>,
+): DiscordDmCommandAccess {
   return {
     decision: "allow",
     reason: "ok",
@@ -16,7 +18,10 @@ describe("handleDiscordDmCommandDecision", () => {
   it("returns true for allowed DM access", async () => {
     const onPairingCreated = vi.fn(async () => {});
     const onUnauthorized = vi.fn(async () => {});
-    const upsertPairingRequest = vi.fn(async () => ({ code: "PAIR-1", created: true }));
+    const upsertPairingRequest = vi.fn(async () => ({
+      code: "PAIR-1",
+      created: true,
+    }));
 
     const allowed = await handleDiscordDmCommandDecision({
       dmAccess: buildDmAccess({ decision: "allow" }),
@@ -36,7 +41,10 @@ describe("handleDiscordDmCommandDecision", () => {
   it("creates pairing reply for new pairing requests", async () => {
     const onPairingCreated = vi.fn(async () => {});
     const onUnauthorized = vi.fn(async () => {});
-    const upsertPairingRequest = vi.fn(async () => ({ code: "PAIR-1", created: true }));
+    const upsertPairingRequest = vi.fn(async () => ({
+      code: "PAIR-1",
+      created: true,
+    }));
 
     const allowed = await handleDiscordDmCommandDecision({
       dmAccess: buildDmAccess({
@@ -68,7 +76,10 @@ describe("handleDiscordDmCommandDecision", () => {
   it("skips pairing reply when pairing request already exists", async () => {
     const onPairingCreated = vi.fn(async () => {});
     const onUnauthorized = vi.fn(async () => {});
-    const upsertPairingRequest = vi.fn(async () => ({ code: "PAIR-1", created: false }));
+    const upsertPairingRequest = vi.fn(async () => ({
+      code: "PAIR-1",
+      created: false,
+    }));
 
     const allowed = await handleDiscordDmCommandDecision({
       dmAccess: buildDmAccess({
@@ -91,7 +102,10 @@ describe("handleDiscordDmCommandDecision", () => {
   it("runs unauthorized handler for blocked DM access", async () => {
     const onPairingCreated = vi.fn(async () => {});
     const onUnauthorized = vi.fn(async () => {});
-    const upsertPairingRequest = vi.fn(async () => ({ code: "PAIR-1", created: true }));
+    const upsertPairingRequest = vi.fn(async () => ({
+      code: "PAIR-1",
+      created: true,
+    }));
 
     const allowed = await handleDiscordDmCommandDecision({
       dmAccess: buildDmAccess({

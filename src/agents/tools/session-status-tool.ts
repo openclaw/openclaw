@@ -1,6 +1,9 @@
 import { Type } from "@sinclair/typebox";
 import { normalizeGroupActivation } from "../../auto-reply/group-activation.js";
-import { getFollowupQueueDepth, resolveQueueSettings } from "../../auto-reply/reply/queue.js";
+import {
+  getFollowupQueueDepth,
+  resolveQueueSettings,
+} from "../../auto-reply/reply/queue.js";
 import { buildStatusMessage } from "../../auto-reply/status.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
@@ -23,7 +26,11 @@ import {
 } from "../../routing/session-key.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
 import { resolveAgentDir } from "../agent-scope.js";
-import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../date-time.js";
+import {
+  formatUserTime,
+  resolveUserTimeFormat,
+  resolveUserTimezone,
+} from "../date-time.js";
 import { resolveModelAuthLabel } from "../model-auth-label.js";
 import { loadModelCatalog } from "../model-catalog.js";
 import {
@@ -135,8 +142,10 @@ async function resolveModelOverride(params: {
     cfg: params.cfg,
     agentId: params.agentId,
   });
-  const currentProvider = params.sessionEntry?.providerOverride?.trim() || configDefault.provider;
-  const currentModel = params.sessionEntry?.modelOverride?.trim() || configDefault.model;
+  const currentProvider =
+    params.sessionEntry?.providerOverride?.trim() || configDefault.provider;
+  const currentModel =
+    params.sessionEntry?.modelOverride?.trim() || configDefault.model;
 
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg,
@@ -163,7 +172,8 @@ async function resolveModelOverride(params: {
     throw new Error(`Model "${key}" is not allowed.`);
   }
   const isDefault =
-    resolved.ref.provider === configDefault.provider && resolved.ref.model === configDefault.model;
+    resolved.ref.provider === configDefault.provider &&
+    resolved.ref.model === configDefault.model;
   return {
     kind: "set",
     provider: resolved.ref.provider,
@@ -208,7 +218,9 @@ export function createSessionStatusTool(opts?: {
           );
         }
         if (!a2aPolicy.isAllowed(requesterAgentId, targetAgentId)) {
-          throw new Error("Agent-to-agent session status denied by tools.agentToAgent.allow.");
+          throw new Error(
+            "Agent-to-agent session status denied by tools.agentToAgent.allow.",
+          );
         }
       };
 
@@ -254,7 +266,9 @@ export function createSessionStatusTool(opts?: {
       }
 
       if (!resolved) {
-        const kind = shouldResolveSessionIdInput(requestedKeyRaw) ? "sessionId" : "sessionKey";
+        const kind = shouldResolveSessionIdInput(requestedKeyRaw)
+          ? "sessionId"
+          : "sessionKey";
         throw new Error(`Unknown ${kind}: ${requestedKeyRaw}`);
       }
 
@@ -295,7 +309,8 @@ export function createSessionStatusTool(opts?: {
       }
 
       const agentDir = resolveAgentDir(cfg, agentId);
-      const providerForCard = resolved.entry.providerOverride?.trim() || configured.provider;
+      const providerForCard =
+        resolved.entry.providerOverride?.trim() || configured.provider;
       const usageProvider = resolveUsageProviderId(providerForCard);
       let usageLine: string | undefined;
       if (usageProvider) {
@@ -305,7 +320,9 @@ export function createSessionStatusTool(opts?: {
             providers: [usageProvider],
             agentDir,
           });
-          const snapshot = usageSummary.providers.find((entry) => entry.provider === usageProvider);
+          const snapshot = usageSummary.providers.find(
+            (entry) => entry.provider === usageProvider,
+          );
           if (snapshot) {
             const formatted = formatUsageWindowSummary(snapshot, {
               now: Date.now(),
@@ -327,22 +344,30 @@ export function createSessionStatusTool(opts?: {
         resolved.key.includes(":group:") ||
         resolved.key.includes(":channel:");
       const groupActivation = isGroup
-        ? (normalizeGroupActivation(resolved.entry.groupActivation) ?? "mention")
+        ? (normalizeGroupActivation(resolved.entry.groupActivation) ??
+          "mention")
         : undefined;
 
       const queueSettings = resolveQueueSettings({
         cfg,
-        channel: resolved.entry.channel ?? resolved.entry.lastChannel ?? "unknown",
+        channel:
+          resolved.entry.channel ?? resolved.entry.lastChannel ?? "unknown",
         sessionEntry: resolved.entry,
       });
       const queueKey = resolved.key ?? resolved.entry.sessionId;
       const queueDepth = queueKey ? getFollowupQueueDepth(queueKey) : 0;
       const queueOverrides = Boolean(
-        resolved.entry.queueDebounceMs ?? resolved.entry.queueCap ?? resolved.entry.queueDrop,
+        resolved.entry.queueDebounceMs ??
+        resolved.entry.queueCap ??
+        resolved.entry.queueDrop,
       );
 
-      const userTimezone = resolveUserTimezone(cfg.agents?.defaults?.userTimezone);
-      const userTimeFormat = resolveUserTimeFormat(cfg.agents?.defaults?.timeFormat);
+      const userTimezone = resolveUserTimezone(
+        cfg.agents?.defaults?.userTimezone,
+      );
+      const userTimeFormat = resolveUserTimeFormat(
+        cfg.agents?.defaults?.timeFormat,
+      );
       const userTime = formatUserTime(new Date(), userTimezone, userTimeFormat);
       const timeLine = userTime
         ? `🕒 Time: ${userTime} (${userTimezone})`

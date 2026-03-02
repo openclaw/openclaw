@@ -2,11 +2,12 @@ import type { ClawdbotConfig } from "openclaw/plugin-sdk";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getMessageFeishu } from "./send.js";
 
-const { mockClientGet, mockCreateFeishuClient, mockResolveFeishuAccount } = vi.hoisted(() => ({
-  mockClientGet: vi.fn(),
-  mockCreateFeishuClient: vi.fn(),
-  mockResolveFeishuAccount: vi.fn(),
-}));
+const { mockClientGet, mockCreateFeishuClient, mockResolveFeishuAccount } =
+  vi.hoisted(() => ({
+    mockClientGet: vi.fn(),
+    mockCreateFeishuClient: vi.fn(),
+    mockResolveFeishuAccount: vi.fn(),
+  }));
 
 vi.mock("./client.js", () => ({
   createFeishuClient: mockCreateFeishuClient,

@@ -33,12 +33,19 @@ describe("PlivoProvider", () => {
 
     const result = provider.parseWebhookEvent(
       {
-        headers: { host: "example.com", "x-plivo-signature-v3-nonce": "nonce-1" },
+        headers: {
+          host: "example.com",
+          "x-plivo-signature-v3-nonce": "nonce-1",
+        },
         rawBody:
           "CallUUID=call-uuid&CallStatus=in-progress&Direction=outbound&From=%2B15550000000&To=%2B15550000001&Event=StartApp",
         url: "https://example.com/voice/webhook?provider=plivo&flow=answer&callId=internal-call-id",
         method: "POST",
-        query: { provider: "plivo", flow: "answer", callId: "internal-call-id" },
+        query: {
+          provider: "plivo",
+          flow: "answer",
+          callId: "internal-call-id",
+        },
       },
       { verifiedRequestKey: "plivo:v3:verified" },
     );

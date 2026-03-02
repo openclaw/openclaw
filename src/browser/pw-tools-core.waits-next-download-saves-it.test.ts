@@ -25,8 +25,12 @@ describe("pw-tools-core", () => {
     tmpDirMocks.resolvePreferredOpenClawTmpDir.mockReturnValue("/tmp/openclaw");
   });
 
-  async function withTempDir<T>(run: (tempDir: string) => Promise<T>): Promise<T> {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-browser-download-test-"));
+  async function withTempDir<T>(
+    run: (tempDir: string) => Promise<T>,
+  ): Promise<T> {
+    const tempDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-browser-download-test-"),
+    );
     try {
       return await run(tempDir);
     } finally {
@@ -55,7 +59,9 @@ describe("pw-tools-core", () => {
     });
 
     const res = await p;
-    const outPath = (vi.mocked(saveAs).mock.calls as unknown as Array<[string]>)[0]?.[0];
+    const outPath = (
+      vi.mocked(saveAs).mock.calls as unknown as Array<[string]>
+    )[0]?.[0];
     return { res, outPath };
   }
 
@@ -119,7 +125,12 @@ describe("pw-tools-core", () => {
       harness.trigger(download);
 
       const res = await p;
-      await expectAtomicDownloadSave({ saveAs, targetPath, tempDir, content: "file-content" });
+      await expectAtomicDownloadSave({
+        saveAs,
+        targetPath,
+        tempDir,
+        content: "file-content",
+      });
       expect(res.path).toBe(targetPath);
     });
   });
@@ -155,7 +166,12 @@ describe("pw-tools-core", () => {
       harness.trigger(download);
 
       const res = await p;
-      await expectAtomicDownloadSave({ saveAs, targetPath, tempDir, content: "report-content" });
+      await expectAtomicDownloadSave({
+        saveAs,
+        targetPath,
+        tempDir,
+        content: "report-content",
+      });
       expect(res.path).toBe(targetPath);
     });
   });
@@ -197,7 +213,9 @@ describe("pw-tools-core", () => {
   );
 
   it("uses preferred tmp dir when waiting for download without explicit path", async () => {
-    tmpDirMocks.resolvePreferredOpenClawTmpDir.mockReturnValue("/tmp/openclaw-preferred");
+    tmpDirMocks.resolvePreferredOpenClawTmpDir.mockReturnValue(
+      "/tmp/openclaw-preferred",
+    );
     const { res, outPath } = await waitForImplicitDownloadOutput({
       downloadUrl: "https://example.com/file.bin",
       suggestedFilename: "file.bin",
@@ -209,23 +227,31 @@ describe("pw-tools-core", () => {
     const expectedDownloadsTail = `${path.join("tmp", "openclaw-preferred", "downloads")}${path.sep}`;
     expect(path.dirname(String(outPath))).toBe(expectedRootedDownloadsDir);
     expect(path.basename(String(outPath))).toMatch(/-file\.bin$/);
-    expect(path.normalize(res.path)).toContain(path.normalize(expectedDownloadsTail));
+    expect(path.normalize(res.path)).toContain(
+      path.normalize(expectedDownloadsTail),
+    );
     expect(tmpDirMocks.resolvePreferredOpenClawTmpDir).toHaveBeenCalled();
   });
 
   it("sanitizes suggested download filenames to prevent traversal escapes", async () => {
-    tmpDirMocks.resolvePreferredOpenClawTmpDir.mockReturnValue("/tmp/openclaw-preferred");
+    tmpDirMocks.resolvePreferredOpenClawTmpDir.mockReturnValue(
+      "/tmp/openclaw-preferred",
+    );
     const { res, outPath } = await waitForImplicitDownloadOutput({
       downloadUrl: "https://example.com/evil",
       suggestedFilename: "../../../../etc/passwd",
     });
     expect(typeof outPath).toBe("string");
     expect(path.dirname(String(outPath))).toBe(
-      path.resolve(path.join(path.sep, "tmp", "openclaw-preferred", "downloads")),
+      path.resolve(
+        path.join(path.sep, "tmp", "openclaw-preferred", "downloads"),
+      ),
     );
     expect(path.basename(String(outPath))).toMatch(/-passwd$/);
     expect(path.normalize(res.path)).toContain(
-      path.normalize(`${path.join("tmp", "openclaw-preferred", "downloads")}${path.sep}`),
+      path.normalize(
+        `${path.join("tmp", "openclaw-preferred", "downloads")}${path.sep}`,
+      ),
     );
   });
   it("waits for a matching response and returns its body", async () => {
@@ -279,7 +305,9 @@ describe("pw-tools-core", () => {
     expect(scrollIntoViewIfNeeded).toHaveBeenCalledWith({ timeout: 20_000 });
   });
   it("requires a ref for scrollIntoView", async () => {
-    setPwToolsCoreCurrentRefLocator({ scrollIntoViewIfNeeded: vi.fn(async () => {}) });
+    setPwToolsCoreCurrentRefLocator({
+      scrollIntoViewIfNeeded: vi.fn(async () => {}),
+    });
     setPwToolsCoreCurrentPage({});
 
     await expect(

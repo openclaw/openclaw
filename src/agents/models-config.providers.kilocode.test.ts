@@ -3,7 +3,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
-import { buildKilocodeProvider, resolveImplicitProviders } from "./models-config.providers.js";
+import {
+  buildKilocodeProvider,
+  resolveImplicitProviders,
+} from "./models-config.providers.js";
 
 const KILOCODE_MODEL_IDS = [
   "anthropic/claude-opus-4.6",

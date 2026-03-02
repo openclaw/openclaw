@@ -2,7 +2,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
-import { buildMSTeamsPollCard, createMSTeamsPollStoreFs, extractMSTeamsPollVote } from "./polls.js";
+import {
+  buildMSTeamsPollCard,
+  createMSTeamsPollStoreFs,
+  extractMSTeamsPollVote,
+} from "./polls.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 import { msteamsRuntimeStub } from "./test-runtime.js";
 
@@ -38,7 +42,9 @@ describe("msteams polls", () => {
   });
 
   it("stores and records poll votes", async () => {
-    const home = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-msteams-polls-"));
+    const home = await fs.promises.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-msteams-polls-"),
+    );
     const store = createMSTeamsPollStoreFs({ homedir: () => home });
     await store.createPoll({
       id: "poll-2",

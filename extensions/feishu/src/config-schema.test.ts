@@ -34,7 +34,9 @@ describe("FeishuConfigSchema webhook validation", () => {
     expect(result.success).toBe(false);
     if (!result.success) {
       expect(
-        result.error.issues.some((issue) => issue.path.join(".") === "verificationToken"),
+        result.error.issues.some(
+          (issue) => issue.path.join(".") === "verificationToken",
+        ),
       ).toBe(true);
     }
   });
@@ -161,9 +163,11 @@ describe("FeishuConfigSchema defaultAccount", () => {
 
     expect(result.success).toBe(false);
     if (!result.success) {
-      expect(result.error.issues.some((issue) => issue.path.join(".") === "defaultAccount")).toBe(
-        true,
-      );
+      expect(
+        result.error.issues.some(
+          (issue) => issue.path.join(".") === "defaultAccount",
+        ),
+      ).toBe(true);
     }
   });
 });

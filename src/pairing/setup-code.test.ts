@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { encodePairingSetupCode, resolvePairingSetupFromConfig } from "./setup-code.js";
+import {
+  encodePairingSetupCode,
+  resolvePairingSetupFromConfig,
+} from "./setup-code.js";
 
 describe("pairing setup code", () => {
   beforeEach(() => {
@@ -19,7 +22,9 @@ describe("pairing setup code", () => {
       token: "abc",
     });
 
-    expect(code).toBe("eyJ1cmwiOiJ3c3M6Ly9nYXRld2F5LmV4YW1wbGUuY29tOjQ0MyIsInRva2VuIjoiYWJjIn0");
+    expect(code).toBe(
+      "eyJ1cmwiOiJ3c3M6Ly9nYXRld2F5LmV4YW1wbGUuY29tOjQ0MyIsInRva2VuIjoiYWJjIn0",
+    );
   });
 
   it("resolves custom bind + token auth", async () => {

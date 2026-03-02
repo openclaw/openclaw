@@ -23,7 +23,9 @@ beforeEach(() => {
     return { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } };
   });
   readAllowFromStoreMock.mockClear().mockResolvedValue([]);
-  upsertPairingRequestMock.mockClear().mockResolvedValue({ code: "PAIRCODE", created: true });
+  upsertPairingRequestMock
+    .mockClear()
+    .mockResolvedValue({ code: "PAIRCODE", created: true });
 });
 
 const BASE_CFG: Config = {
@@ -79,8 +81,13 @@ function createHandlerBaseConfig(
   };
 }
 
-async function createDmHandler(opts: { cfg: Config; runtimeError?: (err: unknown) => void }) {
-  return createDiscordMessageHandler(createHandlerBaseConfig(opts.cfg, opts.runtimeError));
+async function createDmHandler(opts: {
+  cfg: Config;
+  runtimeError?: (err: unknown) => void;
+}) {
+  return createDiscordMessageHandler(
+    createHandlerBaseConfig(opts.cfg, opts.runtimeError),
+  );
 }
 
 function createDmClient() {
@@ -176,7 +183,12 @@ describe("discord tool result dispatch", () => {
       createCategoryGuildEvent({
         messageId: "m-prefix",
         timestamp: new Date("2026-01-17T00:00:00Z").toISOString(),
-        author: { id: "u1", bot: false, username: "Ada", discriminator: "1234" },
+        author: {
+          id: "u1",
+          bot: false,
+          username: "Ada",
+          discriminator: "1234",
+        },
       }),
       client,
     );
@@ -219,7 +231,11 @@ describe("discord tool result dispatch", () => {
     expect(dispatchMock).not.toHaveBeenCalled();
     expect(upsertPairingRequestMock).toHaveBeenCalled();
     expect(sendMock).toHaveBeenCalledTimes(1);
-    expect(String(sendMock.mock.calls[0]?.[1] ?? "")).toContain("Your Discord user id: u2");
-    expect(String(sendMock.mock.calls[0]?.[1] ?? "")).toContain("Pairing code: PAIRCODE");
+    expect(String(sendMock.mock.calls[0]?.[1] ?? "")).toContain(
+      "Your Discord user id: u2",
+    );
+    expect(String(sendMock.mock.calls[0]?.[1] ?? "")).toContain(
+      "Pairing code: PAIRCODE",
+    );
   }, 10000);
 });

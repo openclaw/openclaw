@@ -130,7 +130,11 @@ describe("acp session manager", () => {
         sessionKey: "acp:only",
         cwd: "/tmp",
       });
-      boundedStore.setActiveRun(only.sessionId, "run-only", new AbortController());
+      boundedStore.setActiveRun(
+        only.sessionId,
+        "run-only",
+        new AbortController(),
+      );
 
       expect(() =>
         boundedStore.createSession({

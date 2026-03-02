@@ -23,12 +23,17 @@ export async function raceWithTimeoutAndAbort<T>(
 
   let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
   let abortHandler: (() => void) | undefined;
-  const contenders: Array<Promise<T | typeof RACE_TIMEOUT | typeof RACE_ABORT>> = [promise];
+  const contenders: Array<
+    Promise<T | typeof RACE_TIMEOUT | typeof RACE_ABORT>
+  > = [promise];
 
   if (options.timeoutMs !== undefined) {
     contenders.push(
       new Promise((resolve) => {
-        timeoutHandle = setTimeout(() => resolve(RACE_TIMEOUT), options.timeoutMs);
+        timeoutHandle = setTimeout(
+          () => resolve(RACE_TIMEOUT),
+          options.timeoutMs,
+        );
       }),
     );
   }
@@ -37,7 +42,9 @@ export async function raceWithTimeoutAndAbort<T>(
     contenders.push(
       new Promise((resolve) => {
         abortHandler = () => resolve(RACE_ABORT);
-        options.abortSignal?.addEventListener("abort", abortHandler, { once: true });
+        options.abortSignal?.addEventListener("abort", abortHandler, {
+          once: true,
+        });
       }),
     );
   }

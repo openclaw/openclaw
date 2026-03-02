@@ -15,7 +15,10 @@ import { validateSenderIdentity } from "./sender-identity.js";
 
 describe("buildChannelKeyCandidates", () => {
   it("dedupes and trims keys", () => {
-    expect(buildChannelKeyCandidates(" a ", "a", "", "b", "b")).toEqual(["a", "b"]);
+    expect(buildChannelKeyCandidates(" a ", "a", "", "b", "b")).toEqual([
+      "a",
+      "b",
+    ]);
   });
 });
 
@@ -57,7 +60,11 @@ describe("resolveChannelEntryMatchWithFallback", () => {
   }>([
     {
       name: "prefers direct matches over parent and wildcard",
-      entries: { a: { allow: true }, parent: { allow: false }, "*": { allow: false } },
+      entries: {
+        a: { allow: true },
+        parent: { allow: false },
+        "*": { allow: false },
+      },
       args: { keys: ["a"], parentKeys: ["parent"], wildcardKey: "*" },
       expectedEntryKey: "a",
       expectedSource: "direct",
@@ -74,7 +81,11 @@ describe("resolveChannelEntryMatchWithFallback", () => {
     {
       name: "falls back to wildcard when no direct or parent match",
       entries: { "*": { allow: true } },
-      args: { keys: ["missing"], parentKeys: ["still-missing"], wildcardKey: "*" },
+      args: {
+        keys: ["missing"],
+        parentKeys: ["still-missing"],
+        wildcardKey: "*",
+      },
       expectedEntryKey: "*",
       expectedSource: "wildcard",
       expectedMatchKey: "*",
@@ -109,7 +120,10 @@ describe("resolveChannelEntryMatchWithFallback", () => {
 describe("applyChannelMatchMeta", () => {
   it("copies match metadata onto resolved configs", () => {
     const base: { matchKey?: string; matchSource?: ChannelMatchSource } = {};
-    const resolved = applyChannelMatchMeta(base, { matchKey: "general", matchSource: "direct" });
+    const resolved = applyChannelMatchMeta(base, {
+      matchKey: "general",
+      matchSource: "direct",
+    });
     expect(resolved.matchKey).toBe("general");
     expect(resolved.matchSource).toBe("direct");
   });
@@ -210,7 +224,9 @@ describe("resolveNestedAllowlistDecision", () => {
 
   for (const testCase of cases) {
     it(testCase.name, () => {
-      expect(resolveNestedAllowlistDecision(testCase.value)).toBe(testCase.expected);
+      expect(resolveNestedAllowlistDecision(testCase.value)).toBe(
+        testCase.expected,
+      );
     });
   }
 });

@@ -1,5 +1,8 @@
 import type { OpenClawConfig } from "../../config/config.js";
-import { isSubagentSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import {
+  isSubagentSessionKey,
+  resolveAgentIdFromSessionKey,
+} from "../../routing/session-key.js";
 import {
   listSpawnedSessionKeys,
   resolveInternalSessionKey,
@@ -20,11 +23,18 @@ export type SessionAccessResult =
   | { allowed: true }
   | { allowed: false; error: string; status: "forbidden" };
 
-export function resolveSessionToolsVisibility(cfg: OpenClawConfig): SessionToolsVisibility {
-  const raw = (cfg.tools as { sessions?: { visibility?: unknown } } | undefined)?.sessions
-    ?.visibility;
+export function resolveSessionToolsVisibility(
+  cfg: OpenClawConfig,
+): SessionToolsVisibility {
+  const raw = (cfg.tools as { sessions?: { visibility?: unknown } } | undefined)
+    ?.sessions?.visibility;
   const value = typeof raw === "string" ? raw.trim().toLowerCase() : "";
-  if (value === "self" || value === "tree" || value === "agent" || value === "all") {
+  if (
+    value === "self" ||
+    value === "tree" ||
+    value === "agent" ||
+    value === "all"
+  ) {
     return value;
   }
   return "tree";
@@ -38,14 +48,17 @@ export function resolveEffectiveSessionToolsVisibility(params: {
   if (!params.sandboxed) {
     return visibility;
   }
-  const sandboxClamp = params.cfg.agents?.defaults?.sandbox?.sessionToolsVisibility ?? "spawned";
+  const sandboxClamp =
+    params.cfg.agents?.defaults?.sandbox?.sessionToolsVisibility ?? "spawned";
   if (sandboxClamp === "spawned" && visibility !== "tree") {
     return "tree";
   }
   return visibility;
 }
 
-export function resolveSandboxSessionToolsVisibility(cfg: OpenClawConfig): "spawned" | "all" {
+export function resolveSandboxSessionToolsVisibility(
+  cfg: OpenClawConfig,
+): "spawned" | "all" {
   return cfg.agents?.defaults?.sandbox?.sessionToolsVisibility ?? "spawned";
 }
 
@@ -87,10 +100,14 @@ export function resolveSandboxedSessionToolContext(params: {
   };
 }
 
-export function createAgentToAgentPolicy(cfg: OpenClawConfig): AgentToAgentPolicy {
+export function createAgentToAgentPolicy(
+  cfg: OpenClawConfig,
+): AgentToAgentPolicy {
   const routingA2A = cfg.tools?.agentToAgent;
   const enabled = routingA2A?.enabled === true;
-  const allowPatterns = Array.isArray(routingA2A?.allow) ? routingA2A.allow : [];
+  const allowPatterns = Array.isArray(routingA2A?.allow)
+    ? routingA2A.allow
+    : [];
   const matchesAllow = (agentId: string) => {
     if (allowPatterns.length === 0) {
       return true;
@@ -179,10 +196,14 @@ export async function createSessionVisibilityGuard(params: {
 }): Promise<{
   check: (targetSessionKey: string) => SessionAccessResult;
 }> {
-  const requesterAgentId = resolveAgentIdFromSessionKey(params.requesterSessionKey);
+  const requesterAgentId = resolveAgentIdFromSessionKey(
+    params.requesterSessionKey,
+  );
   const spawnedKeys =
     params.visibility === "tree"
-      ? await listSpawnedSessionKeys({ requesterSessionKey: params.requesterSessionKey })
+      ? await listSpawnedSessionKeys({
+          requesterSessionKey: params.requesterSessionKey,
+        })
       : null;
 
   const check = (targetSessionKey: string): SessionAccessResult => {
@@ -213,7 +234,10 @@ export async function createSessionVisibilityGuard(params: {
       return { allowed: true };
     }
 
-    if (params.visibility === "self" && targetSessionKey !== params.requesterSessionKey) {
+    if (
+      params.visibility === "self" &&
+      targetSessionKey !== params.requesterSessionKey
+    ) {
       return {
         allowed: false,
         status: "forbidden",

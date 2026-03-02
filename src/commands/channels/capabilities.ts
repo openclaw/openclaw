@@ -1,12 +1,21 @@
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
-import { getChannelPlugin, listChannelPlugins } from "../../channels/plugins/index.js";
-import type { ChannelCapabilities, ChannelPlugin } from "../../channels/plugins/types.js";
+import {
+  getChannelPlugin,
+  listChannelPlugins,
+} from "../../channels/plugins/index.js";
+import type {
+  ChannelCapabilities,
+  ChannelPlugin,
+} from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { fetchChannelPermissionsDiscord } from "../../discord/send.js";
 import { parseDiscordTarget } from "../../discord/targets.js";
 import { danger } from "../../globals.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
-import { fetchSlackScopes, type SlackScopesResult } from "../../slack/scopes.js";
+import {
+  fetchSlackScopes,
+  type SlackScopesResult,
+} from "../../slack/scopes.js";
 import { theme } from "../../terminal/theme.js";
 import { formatChannelAccountLabel, requireValidConfig } from "./shared.js";
 
@@ -117,7 +126,9 @@ function formatSupport(capabilities?: ChannelCapabilities) {
   return bits.length ? bits.join(" ") : "none";
 }
 
-function summarizeDiscordTarget(raw?: string): DiscordTargetSummary | undefined {
+function summarizeDiscordTarget(
+  raw?: string,
+): DiscordTargetSummary | undefined {
   if (!raw) {
     return undefined;
   }
@@ -166,25 +177,32 @@ function formatProbeLines(channelId: string, probe: unknown): string[] {
   const probeObj = probe as Record<string, unknown>;
 
   if (channelId === "discord") {
-    const bot = probeObj.bot as { id?: string | null; username?: string | null } | undefined;
+    const bot = probeObj.bot as
+      | { id?: string | null; username?: string | null }
+      | undefined;
     if (bot?.username) {
       const botId = bot.id ? ` (${bot.id})` : "";
       lines.push(`Bot: ${theme.accent(`@${bot.username}`)}${botId}`);
     }
-    const app = probeObj.application as { intents?: Record<string, unknown> } | undefined;
+    const app = probeObj.application as
+      | { intents?: Record<string, unknown> }
+      | undefined;
     if (app?.intents) {
       lines.push(`Intents: ${formatDiscordIntents(app.intents)}`);
     }
   }
 
   if (channelId === "telegram") {
-    const bot = probeObj.bot as { username?: string | null; id?: number | null } | undefined;
+    const bot = probeObj.bot as
+      | { username?: string | null; id?: number | null }
+      | undefined;
     if (bot?.username) {
       const botId = bot.id ? ` (${bot.id})` : "";
       lines.push(`Bot: ${theme.accent(`@${bot.username}`)}${botId}`);
     }
     const flags: string[] = [];
-    const canJoinGroups = (bot as { canJoinGroups?: boolean | null })?.canJoinGroups;
+    const canJoinGroups = (bot as { canJoinGroups?: boolean | null })
+      ?.canJoinGroups;
     const canReadAll = (bot as { canReadAllGroupMessages?: boolean | null })
       ?.canReadAllGroupMessages;
     const inlineQueries = (bot as { supportsInlineQueries?: boolean | null })
@@ -227,7 +245,8 @@ function formatProbeLines(channelId: string, probe: unknown): string[] {
   }
 
   if (channelId === "msteams") {
-    const appId = typeof probeObj.appId === "string" ? probeObj.appId.trim() : "";
+    const appId =
+      typeof probeObj.appId === "string" ? probeObj.appId.trim() : "";
     if (appId) {
       lines.push(`App: ${theme.accent(appId)}`);
     }
@@ -258,7 +277,9 @@ function formatProbeLines(channelId: string, probe: unknown): string[] {
           lines.push(`Graph roles: ${roles.map(formatPermission).join(", ")}`);
         }
         if (scopes.length > 0) {
-          lines.push(`Graph scopes: ${scopes.map(formatPermission).join(", ")}`);
+          lines.push(
+            `Graph scopes: ${scopes.map(formatPermission).join(", ")}`,
+          );
         }
       } else if (graph.ok === true) {
         lines.push("Graph: ok");
@@ -272,7 +293,9 @@ function formatProbeLines(channelId: string, probe: unknown): string[] {
   }
   if (ok === false) {
     const error =
-      typeof probeObj.error === "string" && probeObj.error ? ` (${probeObj.error})` : "";
+      typeof probeObj.error === "string" && probeObj.error
+        ? ` (${probeObj.error})`
+        : "";
     lines.push(`Probe: ${theme.error(`failed${error}`)}`);
   }
   return lines;
@@ -281,7 +304,10 @@ function formatProbeLines(channelId: string, probe: unknown): string[] {
 async function buildDiscordPermissions(params: {
   account: { token?: string; accountId?: string };
   target?: string;
-}): Promise<{ target?: DiscordTargetSummary; report?: DiscordPermissionsReport }> {
+}): Promise<{
+  target?: DiscordTargetSummary;
+  report?: DiscordPermissionsReport;
+}> {
   const target = summarizeDiscordTarget(params.target?.trim());
   if (!target) {
     return {};
@@ -290,7 +316,8 @@ async function buildDiscordPermissions(params: {
     return {
       target,
       report: {
-        error: "Target looks like a DM user; pass channel:<id> to audit channel permissions.",
+        error:
+          "Target looks like a DM user; pass channel:<id> to audit channel permissions.",
       },
     };
   }
@@ -354,7 +381,11 @@ async function resolveChannelReports(params: {
   const reports: ChannelCapabilitiesReport[] = [];
   const listedActions = plugin.actions?.listActions?.({ cfg }) ?? [];
   const actions = Array.from(
-    new Set<string>(["send", "broadcast", ...listedActions.map((action) => String(action))]),
+    new Set<string>([
+      "send",
+      "broadcast",
+      ...listedActions.map((action) => String(action)),
+    ]),
   );
 
   for (const accountId of accountIds) {
@@ -374,15 +405,24 @@ async function resolveChannelReports(params: {
           cfg,
         });
       } catch (err) {
-        probe = { ok: false, error: err instanceof Error ? err.message : String(err) };
+        probe = {
+          ok: false,
+          error: err instanceof Error ? err.message : String(err),
+        };
       }
     }
 
     let slackScopes: ChannelCapabilitiesReport["slackScopes"];
     if (plugin.id === "slack" && configured && enabled) {
-      const botToken = (resolvedAccount as { botToken?: string }).botToken?.trim();
-      const userToken = (resolvedAccount as { userToken?: string }).userToken?.trim();
-      const scopeReports: NonNullable<ChannelCapabilitiesReport["slackScopes"]> = [];
+      const botToken = (
+        resolvedAccount as { botToken?: string }
+      ).botToken?.trim();
+      const userToken = (
+        resolvedAccount as { userToken?: string }
+      ).userToken?.trim();
+      const scopeReports: NonNullable<
+        ChannelCapabilitiesReport["slackScopes"]
+      > = [];
       if (botToken) {
         scopeReports.push({
           tokenType: "bot",
@@ -443,7 +483,8 @@ export async function channelsCapabilitiesCommand(
     return;
   }
   const timeoutMs = normalizeTimeout(opts.timeout, 10_000);
-  const rawChannel = typeof opts.channel === "string" ? opts.channel.trim().toLowerCase() : "";
+  const rawChannel =
+    typeof opts.channel === "string" ? opts.channel.trim().toLowerCase() : "";
   const rawTarget = typeof opts.target === "string" ? opts.target.trim() : "";
 
   if (opts.account && (!rawChannel || rawChannel === "all")) {
@@ -509,7 +550,8 @@ export async function channelsCapabilitiesCommand(
       lines.push(`Actions: ${report.actions.join(", ")}`);
     }
     if (report.configured === false || report.enabled === false) {
-      const configuredLabel = report.configured === false ? "not configured" : "configured";
+      const configuredLabel =
+        report.configured === false ? "not configured" : "configured";
       const enabledLabel = report.enabled === false ? "disabled" : "enabled";
       lines.push(`Status: ${configuredLabel}, ${enabledLabel}`);
     }
@@ -535,16 +577,24 @@ export async function channelsCapabilitiesCommand(
       if (perms.error) {
         lines.push(`Permissions: ${theme.error(perms.error)}`);
       } else {
-        const list = perms.permissions?.length ? perms.permissions.join(", ") : "none";
+        const list = perms.permissions?.length
+          ? perms.permissions.join(", ")
+          : "none";
         const label = perms.channelId ? ` (${perms.channelId})` : "";
         lines.push(`Permissions${label}: ${list}`);
         if (perms.missingRequired && perms.missingRequired.length > 0) {
-          lines.push(`${theme.warn("Missing required:")} ${perms.missingRequired.join(", ")}`);
+          lines.push(
+            `${theme.warn("Missing required:")} ${perms.missingRequired.join(", ")}`,
+          );
         } else {
           lines.push(theme.success("Missing required: none"));
         }
       }
-    } else if (report.channel === "discord" && rawTarget && !report.channelPermissions) {
+    } else if (
+      report.channel === "discord" &&
+      rawTarget &&
+      !report.channelPermissions
+    ) {
       lines.push(theme.muted("Permissions: skipped (no target)."));
     }
     lines.push("");

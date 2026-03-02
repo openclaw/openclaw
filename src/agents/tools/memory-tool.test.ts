@@ -28,7 +28,8 @@ describe("memory_search unavailable payloads", () => {
       disabled: true,
       unavailable: true,
       error: "openai embeddings failed: 429 insufficient_quota",
-      warning: "Memory search is unavailable because the embedding provider quota is exhausted.",
+      warning:
+        "Memory search is unavailable because the embedding provider quota is exhausted.",
       action: "Top up or switch embedding provider, then retry memory_search.",
     });
   });
@@ -51,7 +52,8 @@ describe("memory_search unavailable payloads", () => {
       disabled: true,
       unavailable: true,
       error: "embedding provider timeout",
-      warning: "Memory search is unavailable due to an embedding/provider error.",
+      warning:
+        "Memory search is unavailable due to an embedding/provider error.",
       action: "Check embedding provider configuration and retry memory_search.",
     });
   });

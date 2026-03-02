@@ -51,9 +51,11 @@ const {
   return {
     createConnectionMock,
     joinVoiceChannelMock: vi.fn(() => createConnectionMock()),
-    entersStateMock: vi.fn(async (_target?: unknown, _state?: string, _timeoutMs?: number) => {
-      return undefined;
-    }),
+    entersStateMock: vi.fn(
+      async (_target?: unknown, _state?: string, _timeoutMs?: number) => {
+        return undefined;
+      },
+    ),
     createAudioPlayerMock: vi.fn(() => ({
       on: vi.fn(),
       off: vi.fn(),
@@ -61,7 +63,10 @@ const {
       play: vi.fn(),
       state: { status: "idle" },
     })),
-    resolveAgentRouteMock: vi.fn(() => ({ agentId: "agent-1", sessionKey: "discord:g1:c1" })),
+    resolveAgentRouteMock: vi.fn(() => ({
+      agentId: "agent-1",
+      sessionKey: "discord:g1:c1",
+    })),
   };
 });
 
@@ -127,13 +132,20 @@ describe("DiscordVoiceManager", () => {
   it("keeps the new session when an old disconnected handler fires", async () => {
     const oldConnection = createConnectionMock();
     const newConnection = createConnectionMock();
-    joinVoiceChannelMock.mockReturnValueOnce(oldConnection).mockReturnValueOnce(newConnection);
-    entersStateMock.mockImplementation(async (target: unknown, status?: string) => {
-      if (target === oldConnection && (status === "signalling" || status === "connecting")) {
-        throw new Error("old disconnected");
-      }
-      return undefined;
-    });
+    joinVoiceChannelMock
+      .mockReturnValueOnce(oldConnection)
+      .mockReturnValueOnce(newConnection);
+    entersStateMock.mockImplementation(
+      async (target: unknown, status?: string) => {
+        if (
+          target === oldConnection &&
+          (status === "signalling" || status === "connecting")
+        ) {
+          throw new Error("old disconnected");
+        }
+        return undefined;
+      },
+    );
 
     const manager = new managerModule.DiscordVoiceManager({
       client: createClient() as never,
@@ -163,7 +175,9 @@ describe("DiscordVoiceManager", () => {
   it("keeps the new session when an old destroyed handler fires", async () => {
     const oldConnection = createConnectionMock();
     const newConnection = createConnectionMock();
-    joinVoiceChannelMock.mockReturnValueOnce(oldConnection).mockReturnValueOnce(newConnection);
+    joinVoiceChannelMock
+      .mockReturnValueOnce(oldConnection)
+      .mockReturnValueOnce(newConnection);
 
     const manager = new managerModule.DiscordVoiceManager({
       client: createClient() as never,
@@ -205,9 +219,18 @@ describe("DiscordVoiceManager", () => {
     await manager.leave({ guildId: "g1" });
 
     const player = createAudioPlayerMock.mock.results[0]?.value;
-    expect(connection.receiver.speaking.off).toHaveBeenCalledWith("start", expect.any(Function));
-    expect(connection.off).toHaveBeenCalledWith("disconnected", expect.any(Function));
-    expect(connection.off).toHaveBeenCalledWith("destroyed", expect.any(Function));
+    expect(connection.receiver.speaking.off).toHaveBeenCalledWith(
+      "start",
+      expect.any(Function),
+    );
+    expect(connection.off).toHaveBeenCalledWith(
+      "disconnected",
+      expect.any(Function),
+    );
+    expect(connection.off).toHaveBeenCalledWith(
+      "destroyed",
+      expect.any(Function),
+    );
     expect(player.off).toHaveBeenCalledWith("error", expect.any(Function));
   });
 
@@ -246,25 +269,39 @@ describe("DiscordVoiceManager", () => {
 
     await manager.join({ guildId: "g1", channelId: "c1" });
 
-    const entry = (manager as unknown as { sessions: Map<string, unknown> }).sessions.get("g1");
+    const entry = (
+      manager as unknown as { sessions: Map<string, unknown> }
+    ).sessions.get("g1");
     expect(entry).toBeDefined();
     (
-      manager as unknown as { handleReceiveError: (e: unknown, err: unknown) => void }
+      manager as unknown as {
+        handleReceiveError: (e: unknown, err: unknown) => void;
+      }
     ).handleReceiveError(
       entry,
-      new Error("Failed to decrypt: DecryptionFailed(UnencryptedWhenPassthroughDisabled)"),
+      new Error(
+        "Failed to decrypt: DecryptionFailed(UnencryptedWhenPassthroughDisabled)",
+      ),
     );
     (
-      manager as unknown as { handleReceiveError: (e: unknown, err: unknown) => void }
+      manager as unknown as {
+        handleReceiveError: (e: unknown, err: unknown) => void;
+      }
     ).handleReceiveError(
       entry,
-      new Error("Failed to decrypt: DecryptionFailed(UnencryptedWhenPassthroughDisabled)"),
+      new Error(
+        "Failed to decrypt: DecryptionFailed(UnencryptedWhenPassthroughDisabled)",
+      ),
     );
     (
-      manager as unknown as { handleReceiveError: (e: unknown, err: unknown) => void }
+      manager as unknown as {
+        handleReceiveError: (e: unknown, err: unknown) => void;
+      }
     ).handleReceiveError(
       entry,
-      new Error("Failed to decrypt: DecryptionFailed(UnencryptedWhenPassthroughDisabled)"),
+      new Error(
+        "Failed to decrypt: DecryptionFailed(UnencryptedWhenPassthroughDisabled)",
+      ),
     );
     await new Promise((resolve) => setTimeout(resolve, 0));
     await new Promise((resolve) => setTimeout(resolve, 0));

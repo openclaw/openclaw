@@ -3,7 +3,10 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { resolveBrowserConfig } from "./config.js";
 import { createBrowserProfilesService } from "./profiles-service.js";
-import type { BrowserRouteContext, BrowserServerState } from "./server-context.js";
+import type {
+  BrowserRouteContext,
+  BrowserServerState,
+} from "./server-context.js";
 
 vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/config.js")>();
@@ -19,7 +22,9 @@ vi.mock("./trash.js", () => ({
 }));
 
 vi.mock("./chrome.js", () => ({
-  resolveOpenClawUserDataDir: vi.fn(() => "/tmp/openclaw-test/openclaw/user-data"),
+  resolveOpenClawUserDataDir: vi.fn(
+    () => "/tmp/openclaw-test/openclaw/user-data",
+  ),
 }));
 
 import { loadConfig, writeConfigFile } from "../config/config.js";
@@ -90,7 +95,9 @@ describe("BrowserProfilesService", () => {
     const resolved = resolveBrowserConfig({ cdpPortRangeStart: 19000 });
     const { ctx, state } = createCtx(resolved);
 
-    vi.mocked(loadConfig).mockReturnValue({ browser: { cdpPortRangeStart: 19000, profiles: {} } });
+    vi.mocked(loadConfig).mockReturnValue({
+      browser: { cdpPortRangeStart: 19000, profiles: {} },
+    });
 
     const service = createBrowserProfilesService(ctx);
     const result = await service.createProfile({ name: "work" });

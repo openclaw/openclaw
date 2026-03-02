@@ -1,6 +1,9 @@
 import fs from "node:fs";
 import { intro as clackIntro, outro as clackOutro } from "@clack/prompts";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import {
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "../agents/agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import {
@@ -10,7 +13,11 @@ import {
 } from "../agents/model-selection.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { CONFIG_PATH, readConfigFileSnapshot, writeConfigFile } from "../config/config.js";
+import {
+  CONFIG_PATH,
+  readConfigFileSnapshot,
+  writeConfigFile,
+} from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
@@ -29,7 +36,10 @@ import {
 import { doctorShellCompletion } from "./doctor-completion.js";
 import { loadAndMaybeMigrateDoctorConfig } from "./doctor-config-flow.js";
 import { maybeRepairGatewayDaemon } from "./doctor-gateway-daemon-flow.js";
-import { checkGatewayHealth, probeGatewayMemoryStatus } from "./doctor-gateway-health.js";
+import {
+  checkGatewayHealth,
+  probeGatewayMemoryStatus,
+} from "./doctor-gateway-health.js";
 import {
   maybeRepairGatewayServiceConfig,
   maybeScanExtraGatewayServices,
@@ -43,10 +53,16 @@ import {
   noteStartupOptimizationHints,
 } from "./doctor-platform-notes.js";
 import { createDoctorPrompter, type DoctorOptions } from "./doctor-prompter.js";
-import { maybeRepairSandboxImages, noteSandboxScopeWarnings } from "./doctor-sandbox.js";
+import {
+  maybeRepairSandboxImages,
+  noteSandboxScopeWarnings,
+} from "./doctor-sandbox.js";
 import { noteSecurityWarnings } from "./doctor-security.js";
 import { noteSessionLockHealth } from "./doctor-session-locks.js";
-import { noteStateIntegrity, noteWorkspaceBackupTip } from "./doctor-state-integrity.js";
+import {
+  noteStateIntegrity,
+  noteWorkspaceBackupTip,
+} from "./doctor-state-integrity.js";
 import {
   detectLegacyStateMigrations,
   runLegacyStateMigrations,
@@ -54,12 +70,21 @@ import {
 import { maybeRepairUiProtocolFreshness } from "./doctor-ui.js";
 import { maybeOfferUpdateBeforeDoctor } from "./doctor-update.js";
 import { noteWorkspaceStatus } from "./doctor-workspace-status.js";
-import { MEMORY_SYSTEM_PROMPT, shouldSuggestMemorySystem } from "./doctor-workspace.js";
-import { applyWizardMetadata, printWizardHeader, randomToken } from "./onboard-helpers.js";
+import {
+  MEMORY_SYSTEM_PROMPT,
+  shouldSuggestMemorySystem,
+} from "./doctor-workspace.js";
+import {
+  applyWizardMetadata,
+  printWizardHeader,
+  randomToken,
+} from "./onboard-helpers.js";
 import { ensureSystemdUserLingerInteractive } from "./systemd-linger.js";
 
-const intro = (message: string) => clackIntro(stylePromptTitle(message) ?? message);
-const outro = (message: string) => clackOutro(stylePromptTitle(message) ?? message);
+const intro = (message: string) =>
+  clackIntro(stylePromptTitle(message) ?? message);
+const outro = (message: string) =>
+  clackOutro(stylePromptTitle(message) ?? message);
 
 function resolveMode(cfg: OpenClawConfig): "local" | "remote" {
   return cfg.gateway?.mode === "remote" ? "remote" : "local";
@@ -111,7 +136,9 @@ export async function doctorCommand(
       `Or set directly: ${formatCliCommand("openclaw config set gateway.mode local")}`,
     ];
     if (!fs.existsSync(configPath)) {
-      lines.push(`Missing config: run ${formatCliCommand("openclaw setup")} first.`);
+      lines.push(
+        `Missing config: run ${formatCliCommand("openclaw setup")} first.`,
+      );
     }
     note(lines.join("\n"), "Gateway");
   }
@@ -121,7 +148,8 @@ export async function doctorCommand(
   await noteAuthProfileHealth({
     cfg,
     prompter,
-    allowKeychainPrompt: options.nonInteractive !== true && Boolean(process.stdin.isTTY),
+    allowKeychainPrompt:
+      options.nonInteractive !== true && Boolean(process.stdin.isTTY),
   });
   const gatewayDetails = buildGatewayConnectionDetails({ config: cfg });
   if (gatewayDetails.remoteFallbackNote) {
@@ -132,7 +160,8 @@ export async function doctorCommand(
       authConfig: cfg.gateway?.auth,
       tailscaleMode: cfg.gateway?.tailscale?.mode ?? "off",
     });
-    const needsToken = auth.mode !== "password" && (auth.mode !== "token" || !auth.token);
+    const needsToken =
+      auth.mode !== "password" && (auth.mode !== "token" || !auth.token);
     if (needsToken) {
       note(
         "Gateway auth is off or missing a token. Token auth is now the recommended default (including loopback).",
@@ -195,7 +224,12 @@ export async function doctorCommand(
   noteSandboxScopeWarnings(cfg);
 
   await maybeScanExtraGatewayServices(options, runtime, prompter);
-  await maybeRepairGatewayServiceConfig(cfg, resolveMode(cfg), runtime, prompter);
+  await maybeRepairGatewayServiceConfig(
+    cfg,
+    resolveMode(cfg),
+    runtime,
+    prompter,
+  );
   await noteMacLaunchAgentOverrides();
   await noteMacLaunchctlGatewayEnvOverrides(cfg);
 
@@ -207,13 +241,17 @@ export async function doctorCommand(
       defaultProvider: DEFAULT_PROVIDER,
     });
     if (!hooksModelRef) {
-      note(`- hooks.gmail.model "${cfg.hooks.gmail.model}" could not be resolved`, "Hooks");
+      note(
+        `- hooks.gmail.model "${cfg.hooks.gmail.model}" could not be resolved`,
+        "Hooks",
+      );
     } else {
-      const { provider: defaultProvider, model: defaultModel } = resolveConfiguredModelRef({
-        cfg,
-        defaultProvider: DEFAULT_PROVIDER,
-        defaultModel: DEFAULT_MODEL,
-      });
+      const { provider: defaultProvider, model: defaultModel } =
+        resolveConfiguredModelRef({
+          cfg,
+          defaultProvider: DEFAULT_PROVIDER,
+          defaultModel: DEFAULT_MODEL,
+        });
       const catalog = await loadModelCatalog({ config: cfg });
       const status = getModelRefStatus({
         cfg,
@@ -294,9 +332,13 @@ export async function doctorCommand(
   });
 
   const shouldWriteConfig =
-    configResult.shouldWriteConfig || JSON.stringify(cfg) !== JSON.stringify(cfgForPersistence);
+    configResult.shouldWriteConfig ||
+    JSON.stringify(cfg) !== JSON.stringify(cfgForPersistence);
   if (shouldWriteConfig) {
-    cfg = applyWizardMetadata(cfg, { command: "doctor", mode: resolveMode(cfg) });
+    cfg = applyWizardMetadata(cfg, {
+      command: "doctor",
+      mode: resolveMode(cfg),
+    });
     await writeConfigFile(cfg);
     logConfigUpdated(runtime);
     const backupPath = `${CONFIG_PATH}.bak`;
@@ -304,11 +346,16 @@ export async function doctorCommand(
       runtime.log(`Backup: ${shortenHomePath(backupPath)}`);
     }
   } else if (!prompter.shouldRepair) {
-    runtime.log(`Run "${formatCliCommand("openclaw doctor --fix")}" to apply changes.`);
+    runtime.log(
+      `Run "${formatCliCommand("openclaw doctor --fix")}" to apply changes.`,
+    );
   }
 
   if (options.workspaceSuggestions !== false) {
-    const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
+    const workspaceDir = resolveAgentWorkspaceDir(
+      cfg,
+      resolveDefaultAgentId(cfg),
+    );
     noteWorkspaceBackupTip(workspaceDir);
     if (await shouldSuggestMemorySystem(workspaceDir)) {
       note(MEMORY_SYSTEM_PROMPT, "Workspace");

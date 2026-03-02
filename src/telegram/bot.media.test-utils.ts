@@ -1,4 +1,11 @@
-import { afterEach, beforeAll, beforeEach, expect, vi, type Mock } from "vitest";
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  expect,
+  vi,
+  type Mock,
+} from "vitest";
 import * as ssrf from "../infra/net/ssrf.js";
 import { onSpy, sendChatActionSpy } from "./bot.media.e2e-harness.js";
 
@@ -17,7 +24,8 @@ export const TELEGRAM_TEST_TIMINGS = {
   textFragmentGapMs: 30,
 } as const;
 
-const TELEGRAM_BOT_IMPORT_TIMEOUT_MS = process.platform === "win32" ? 180_000 : 150_000;
+const TELEGRAM_BOT_IMPORT_TIMEOUT_MS =
+  process.platform === "win32" ? 180_000 : 150_000;
 
 let createTelegramBotRef: typeof import("./bot.js").createTelegramBot;
 let replySpyRef: ReturnType<typeof vi.fn>;
@@ -57,9 +65,9 @@ export async function createBotHandlerWithOptions(options: {
       },
     },
   });
-  const handler = onSpy.mock.calls.find((call) => call[0] === "message")?.[1] as (
-    ctx: Record<string, unknown>,
-  ) => Promise<void>;
+  const handler = onSpy.mock.calls.find(
+    (call) => call[0] === "message",
+  )?.[1] as (ctx: Record<string, unknown>) => Promise<void>;
   expect(handler).toBeDefined();
   return { handler, replySpy: replySpyRef, runtimeError };
 }
@@ -92,7 +100,9 @@ beforeEach(() => {
   lookupMock.mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
   resolvePinnedHostnameSpy = vi
     .spyOn(ssrf, "resolvePinnedHostname")
-    .mockImplementation((hostname) => resolvePinnedHostname(hostname, lookupMock));
+    .mockImplementation((hostname) =>
+      resolvePinnedHostname(hostname, lookupMock),
+    );
 });
 
 afterEach(() => {
@@ -104,11 +114,14 @@ afterEach(() => {
 beforeAll(async () => {
   ({ createTelegramBot: createTelegramBotRef } = await import("./bot.js"));
   const replyModule = await import("../auto-reply/reply.js");
-  replySpyRef = (replyModule as unknown as { __replySpy: ReturnType<typeof vi.fn> }).__replySpy;
+  replySpyRef = (
+    replyModule as unknown as { __replySpy: ReturnType<typeof vi.fn> }
+  ).__replySpy;
 }, TELEGRAM_BOT_IMPORT_TIMEOUT_MS);
 
 vi.mock("./sticker-cache.js", () => ({
   cacheSticker: (...args: unknown[]) => cacheStickerSpy(...args),
   getCachedSticker: (...args: unknown[]) => getCachedStickerSpy(...args),
-  describeStickerImage: (...args: unknown[]) => describeStickerImageSpy(...args),
+  describeStickerImage: (...args: unknown[]) =>
+    describeStickerImageSpy(...args),
 }));

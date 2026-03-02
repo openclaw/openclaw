@@ -13,13 +13,18 @@ type MockResponse = {
   json?: () => Promise<unknown>;
 };
 
-function makeHeaders(map: Record<string, string>): { get: (key: string) => string | null } {
+function makeHeaders(map: Record<string, string>): {
+  get: (key: string) => string | null;
+} {
   return {
     get: (key) => map[key.toLowerCase()] ?? null,
   };
 }
 
-function htmlResponse(html: string, url = "https://example.com/"): MockResponse {
+function htmlResponse(
+  html: string,
+  url = "https://example.com/",
+): MockResponse {
   return {
     ok: true,
     status: 200,
@@ -29,7 +34,10 @@ function htmlResponse(html: string, url = "https://example.com/"): MockResponse 
   };
 }
 
-function firecrawlResponse(markdown: string, url = "https://example.com/"): MockResponse {
+function firecrawlResponse(
+  markdown: string,
+  url = "https://example.com/",
+): MockResponse {
   return {
     ok: true,
     status: 200,
@@ -75,7 +83,9 @@ function errorHtmlResponse(
     ok: false,
     status,
     url,
-    headers: contentType ? makeHeaders({ "content-type": contentType }) : makeHeaders({}),
+    headers: contentType
+      ? makeHeaders({ "content-type": contentType })
+      : makeHeaders({}),
     text: async () => html,
   };
 }
@@ -96,7 +106,8 @@ function installMockFetch(
   impl: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>,
 ) {
   const mockFetch = vi.fn(
-    async (input: RequestInfo | URL, init?: RequestInit) => await impl(input, init),
+    async (input: RequestInfo | URL, init?: RequestInit) =>
+      await impl(input, init),
   );
   global.fetch = withFetchPreconnect(mockFetch);
   return mockFetch;
@@ -134,15 +145,17 @@ describe("web_fetch extraction fallbacks", () => {
   const priorFetch = global.fetch;
 
   beforeEach(() => {
-    vi.spyOn(ssrf, "resolvePinnedHostname").mockImplementation(async (hostname) => {
-      const normalized = hostname.trim().toLowerCase().replace(/\.$/, "");
-      const addresses = ["93.184.216.34", "93.184.216.35"];
-      return {
-        hostname: normalized,
-        addresses,
-        lookup: ssrf.createPinnedLookup({ hostname: normalized, addresses }),
-      };
-    });
+    vi.spyOn(ssrf, "resolvePinnedHostname").mockImplementation(
+      async (hostname) => {
+        const normalized = hostname.trim().toLowerCase().replace(/\.$/, "");
+        const addresses = ["93.184.216.34", "93.184.216.35"];
+        return {
+          hostname: normalized,
+          addresses,
+          lookup: ssrf.createPinnedLookup({ hostname: normalized, addresses }),
+        };
+      },
+    );
   });
 
   afterEach(() => {
@@ -164,17 +177,25 @@ describe("web_fetch extraction fallbacks", () => {
 
     const tool = createFetchTool({ firecrawl: { enabled: false } });
 
-    const result = await tool?.execute?.("call", { url: "https://example.com/plain" });
+    const result = await tool?.execute?.("call", {
+      url: "https://example.com/plain",
+    });
     const details = result?.details as {
       text?: string;
       contentType?: string;
       length?: number;
       rawLength?: number;
       wrappedLength?: number;
-      externalContent?: { untrusted?: boolean; source?: string; wrapped?: boolean };
+      externalContent?: {
+        untrusted?: boolean;
+        source?: string;
+        wrapped?: boolean;
+      };
     };
 
-    expect(details.text).toMatch(/<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/);
+    expect(details.text).toMatch(
+      /<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/,
+    );
     expect(details.text).toContain("Ignore previous instructions");
     expect(details.externalContent).toMatchObject({
       untrusted: true,
@@ -205,7 +226,9 @@ describe("web_fetch extraction fallbacks", () => {
       maxChars: 2000,
     });
 
-    const result = await tool?.execute?.("call", { url: "https://example.com/long" });
+    const result = await tool?.execute?.("call", {
+      url: "https://example.com/long",
+    });
     const details = result?.details as { text?: string; truncated?: boolean };
 
     expect(details.text?.length).toBeLessThanOrEqual(2000);
@@ -228,7 +251,9 @@ describe("web_fetch extraction fallbacks", () => {
       maxChars: 100,
     });
 
-    const result = await tool?.execute?.("call", { url: "https://example.com/short" });
+    const result = await tool?.execute?.("call", {
+      url: "https://example.com/short",
+    });
     const details = result?.details as { text?: string; truncated?: boolean };
 
     expect(details.text?.length).toBeLessThanOrEqual(100);
@@ -236,7 +261,9 @@ describe("web_fetch extraction fallbacks", () => {
   });
 
   it("caps response bytes and does not hang on endless streams", async () => {
-    const chunk = new TextEncoder().encode("<html><body><div>hi</div></body></html>");
+    const chunk = new TextEncoder().encode(
+      "<html><body><div>hi</div></body></html>",
+    );
     const stream = new ReadableStream<Uint8Array>({
       pull(controller) {
         controller.enqueue(chunk);
@@ -253,7 +280,9 @@ describe("web_fetch extraction fallbacks", () => {
       maxResponseBytes: 128,
       firecrawl: { enabled: false },
     });
-    const result = await tool?.execute?.("call", { url: "https://example.com/stream" });
+    const result = await tool?.execute?.("call", {
+      url: "https://example.com/stream",
+    });
     const details = result?.details as { warning?: string } | undefined;
     expect(details?.warning).toContain("Response body truncated");
   });
@@ -287,10 +316,15 @@ describe("web_fetch extraction fallbacks", () => {
     installMockFetch((input: RequestInfo | URL) => {
       const url = requestUrl(input);
       if (url.includes("api.firecrawl.dev")) {
-        return Promise.resolve(firecrawlResponse("firecrawl content")) as Promise<Response>;
+        return Promise.resolve(
+          firecrawlResponse("firecrawl content"),
+        ) as Promise<Response>;
       }
       return Promise.resolve(
-        htmlResponse("<!doctype html><html><head></head><body></body></html>", url),
+        htmlResponse(
+          "<!doctype html><html><head></head><body></body></html>",
+          url,
+        ),
       ) as Promise<Response>;
     });
 
@@ -298,7 +332,9 @@ describe("web_fetch extraction fallbacks", () => {
       firecrawl: { apiKey: "firecrawl-test" },
     });
 
-    const result = await tool?.execute?.("call", { url: "https://example.com/empty" });
+    const result = await tool?.execute?.("call", {
+      url: "https://example.com/empty",
+    });
     const details = result?.details as { extractor?: string; text?: string };
     expect(details.extractor).toBe("firecrawl");
     expect(details.text).toContain("firecrawl content");
@@ -308,10 +344,15 @@ describe("web_fetch extraction fallbacks", () => {
     const fetchSpy = installMockFetch((input: RequestInfo | URL) => {
       const url = requestUrl(input);
       if (url.includes("api.firecrawl.dev/v2/scrape")) {
-        return Promise.resolve(firecrawlResponse("firecrawl normalized")) as Promise<Response>;
+        return Promise.resolve(
+          firecrawlResponse("firecrawl normalized"),
+        ) as Promise<Response>;
       }
       return Promise.resolve(
-        htmlResponse("<!doctype html><html><head></head><body></body></html>", url),
+        htmlResponse(
+          "<!doctype html><html><head></head><body></body></html>",
+          url,
+        ),
       ) as Promise<Response>;
     });
 
@@ -359,7 +400,10 @@ describe("web_fetch extraction fallbacks", () => {
         return Promise.resolve(firecrawlError()) as Promise<Response>;
       }
       return Promise.resolve(
-        htmlResponse("<!doctype html><html><head></head><body></body></html>", url),
+        htmlResponse(
+          "<!doctype html><html><head></head><body></body></html>",
+          url,
+        ),
       ) as Promise<Response>;
     });
 
@@ -376,7 +420,9 @@ describe("web_fetch extraction fallbacks", () => {
     installMockFetch((input: RequestInfo | URL) => {
       const url = requestUrl(input);
       if (url.includes("api.firecrawl.dev")) {
-        return Promise.resolve(firecrawlResponse("firecrawl fallback", url)) as Promise<Response>;
+        return Promise.resolve(
+          firecrawlResponse("firecrawl fallback", url),
+        ) as Promise<Response>;
       }
       return Promise.resolve({
         ok: false,
@@ -390,7 +436,9 @@ describe("web_fetch extraction fallbacks", () => {
       firecrawl: { apiKey: "firecrawl-test" },
     });
 
-    const result = await tool?.execute?.("call", { url: "https://example.com/blocked" });
+    const result = await tool?.execute?.("call", {
+      url: "https://example.com/blocked",
+    });
     const details = result?.details as { extractor?: string; text?: string };
     expect(details.extractor).toBe("firecrawl");
     expect(details.text).toContain("firecrawl fallback");
@@ -400,7 +448,9 @@ describe("web_fetch extraction fallbacks", () => {
     const large = "a".repeat(80_000);
     installMockFetch(
       (input: RequestInfo | URL) =>
-        Promise.resolve(textResponse(large, requestUrl(input))) as Promise<Response>,
+        Promise.resolve(
+          textResponse(large, requestUrl(input)),
+        ) as Promise<Response>,
     );
 
     const tool = createFetchTool({
@@ -412,8 +462,14 @@ describe("web_fetch extraction fallbacks", () => {
       url: "https://example.com/large",
       maxChars: 200_000,
     });
-    const details = result?.details as { text?: string; length?: number; truncated?: boolean };
-    expect(details.text).toMatch(/<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/);
+    const details = result?.details as {
+      text?: string;
+      length?: number;
+      truncated?: boolean;
+    };
+    expect(details.text).toMatch(
+      /<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/,
+    );
     expect(details.text).toContain("Source: Web Fetch");
     expect(details.length).toBeLessThanOrEqual(10_000);
     expect(details.truncated).toBe(true);
@@ -428,7 +484,12 @@ describe("web_fetch extraction fallbacks", () => {
     installMockFetch(
       (input: RequestInfo | URL) =>
         Promise.resolve(
-          errorHtmlResponse(html, 404, requestUrl(input), "Text/HTML; charset=utf-8"),
+          errorHtmlResponse(
+            html,
+            404,
+            requestUrl(input),
+            "Text/HTML; charset=utf-8",
+          ),
         ) as Promise<Response>,
     );
 
@@ -439,7 +500,9 @@ describe("web_fetch extraction fallbacks", () => {
     });
 
     expect(message).toContain("Web fetch failed (404):");
-    expect(message).toMatch(/<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/);
+    expect(message).toMatch(
+      /<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/,
+    );
     expect(message).toContain("SECURITY NOTICE");
     expect(message).toContain("Not Found");
     expect(message).not.toContain("<html");
@@ -451,7 +514,9 @@ describe("web_fetch extraction fallbacks", () => {
       "<!DOCTYPE HTML><html><head><title>Oops</title></head><body><h1>Oops</h1></body></html>";
     installMockFetch(
       (input: RequestInfo | URL) =>
-        Promise.resolve(errorHtmlResponse(html, 500, requestUrl(input), null)) as Promise<Response>,
+        Promise.resolve(
+          errorHtmlResponse(html, 500, requestUrl(input), null),
+        ) as Promise<Response>,
     );
 
     const tool = createFetchTool({ firecrawl: { enabled: false } });
@@ -461,7 +526,9 @@ describe("web_fetch extraction fallbacks", () => {
     });
 
     expect(message).toContain("Web fetch failed (500):");
-    expect(message).toMatch(/<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/);
+    expect(message).toMatch(
+      /<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/,
+    );
     expect(message).toContain("Oops");
   });
 
@@ -488,7 +555,9 @@ describe("web_fetch extraction fallbacks", () => {
     });
 
     expect(message).toContain("Firecrawl fetch failed (403):");
-    expect(message).toMatch(/<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/);
+    expect(message).toMatch(
+      /<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/,
+    );
     expect(message).toContain("blocked");
   });
 });

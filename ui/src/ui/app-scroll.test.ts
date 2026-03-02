@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { handleChatScroll, scheduleChatScroll, resetChatScroll } from "./app-scroll.ts";
+import {
+  handleChatScroll,
+  scheduleChatScroll,
+  resetChatScroll,
+} from "./app-scroll.ts";
 
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                            */
@@ -50,7 +54,11 @@ function createScrollHost(
   return { host, container };
 }
 
-function createScrollEvent(scrollHeight: number, scrollTop: number, clientHeight: number) {
+function createScrollEvent(
+  scrollHeight: number,
+  scrollTop: number,
+  clientHeight: number,
+) {
   return {
     currentTarget: { scrollHeight, scrollTop, clientHeight },
   } as unknown as Event;

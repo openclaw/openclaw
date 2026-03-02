@@ -36,24 +36,29 @@ const { initSpy, runSpy, loadConfig } = vi.hoisted(() => ({
   })),
 }));
 
-const { registerUnhandledRejectionHandlerMock, emitUnhandledRejection, resetUnhandledRejection } =
-  vi.hoisted(() => {
-    let handler: ((reason: unknown) => boolean) | undefined;
-    return {
-      registerUnhandledRejectionHandlerMock: vi.fn((next: (reason: unknown) => boolean) => {
+const {
+  registerUnhandledRejectionHandlerMock,
+  emitUnhandledRejection,
+  resetUnhandledRejection,
+} = vi.hoisted(() => {
+  let handler: ((reason: unknown) => boolean) | undefined;
+  return {
+    registerUnhandledRejectionHandlerMock: vi.fn(
+      (next: (reason: unknown) => boolean) => {
         handler = next;
         return () => {
           if (handler === next) {
             handler = undefined;
           }
         };
-      }),
-      emitUnhandledRejection: (reason: unknown) => handler?.(reason) ?? false,
-      resetUnhandledRejection: () => {
-        handler = undefined;
       },
-    };
-  });
+    ),
+    emitUnhandledRejection: (reason: unknown) => handler?.(reason) ?? false,
+    resetUnhandledRejection: () => {
+      handler = undefined;
+    },
+  };
+});
 
 const { createTelegramBotErrors } = vi.hoisted(() => ({
   createTelegramBotErrors: [] as unknown[],
@@ -68,7 +73,10 @@ const { computeBackoff, sleepWithAbort } = vi.hoisted(() => ({
   sleepWithAbort: vi.fn(async () => undefined),
 }));
 const { startTelegramWebhookSpy } = vi.hoisted(() => ({
-  startTelegramWebhookSpy: vi.fn(async () => ({ server: { close: vi.fn() }, stop: vi.fn() })),
+  startTelegramWebhookSpy: vi.fn(async () => ({
+    server: { close: vi.fn() },
+    stop: vi.fn(),
+  })),
 }));
 
 type RunnerStub = {
@@ -176,7 +184,8 @@ describe("monitorTelegramProvider (grammY)", () => {
     initSpy.mockClear();
     runSpy.mockReset().mockImplementation(() =>
       makeRunnerStub({
-        task: () => Promise.reject(new Error("runSpy called without explicit test stub")),
+        task: () =>
+          Promise.reject(new Error("runSpy called without explicit test stub")),
       }),
     );
     computeBackoff.mockClear();
@@ -299,7 +308,9 @@ describe("monitorTelegramProvider (grammY)", () => {
 
     await monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
 
-    expect(api.deleteWebhook).toHaveBeenCalledWith({ drop_pending_updates: false });
+    expect(api.deleteWebhook).toHaveBeenCalledWith({
+      drop_pending_updates: false,
+    });
     expect(order).toEqual(["deleteWebhook", "run"]);
   });
 
@@ -311,7 +322,9 @@ describe("monitorTelegramProvider (grammY)", () => {
       }),
     });
     api.deleteWebhook.mockReset();
-    api.deleteWebhook.mockRejectedValueOnce(cleanupError).mockResolvedValueOnce(true);
+    api.deleteWebhook
+      .mockRejectedValueOnce(cleanupError)
+      .mockResolvedValueOnce(true);
     runSpy.mockImplementationOnce(() =>
       makeRunnerStub({
         task: async () => {
@@ -412,7 +425,9 @@ describe("monitorTelegramProvider (grammY)", () => {
       }),
     );
 
-    await expect(monitorTelegramProvider({ token: "tok" })).rejects.toThrow("bad token");
+    await expect(monitorTelegramProvider({ token: "tok" })).rejects.toThrow(
+      "bad token",
+    );
   });
 
   it("force-restarts polling when unhandled network rejection stalls runner", async () => {
@@ -443,7 +458,10 @@ describe("monitorTelegramProvider (grammY)", () => {
         }),
       );
 
-    const monitor = monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
+    const monitor = monitorTelegramProvider({
+      token: "tok",
+      abortSignal: abort.signal,
+    });
     await vi.waitFor(() => expect(runSpy).toHaveBeenCalledTimes(1));
 
     expect(emitUnhandledRejection(new TypeError("fetch failed"))).toBe(true);

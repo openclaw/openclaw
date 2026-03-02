@@ -6,12 +6,18 @@ import type {
   ModelRegistry as PiModelRegistry,
 } from "@mariozechner/pi-coding-agent";
 import { ensureAuthProfileStore } from "./auth-profiles.js";
-import { resolvePiCredentialMapFromStore, type PiCredentialMap } from "./pi-auth-credentials.js";
+import {
+  resolvePiCredentialMapFromStore,
+  type PiCredentialMap,
+} from "./pi-auth-credentials.js";
 
 const PiAuthStorageClass = PiCodingAgent.AuthStorage;
 const PiModelRegistryClass = PiCodingAgent.ModelRegistry;
 
-export { PiAuthStorageClass as AuthStorage, PiModelRegistryClass as ModelRegistry };
+export {
+  PiAuthStorageClass as AuthStorage,
+  PiModelRegistryClass as ModelRegistry,
+};
 
 type InMemoryAuthStorageBackendLike = {
   withLock<T>(
@@ -89,8 +95,14 @@ function scrubLegacyStaticAuthJsonEntries(pathname: string): void {
   fs.chmodSync(pathname, 0o600);
 }
 
-function createAuthStorage(AuthStorageLike: unknown, path: string, creds: PiCredentialMap) {
-  const withInMemory = AuthStorageLike as { inMemory?: (data?: unknown) => unknown };
+function createAuthStorage(
+  AuthStorageLike: unknown,
+  path: string,
+  creds: PiCredentialMap,
+) {
+  const withInMemory = AuthStorageLike as {
+    inMemory?: (data?: unknown) => unknown;
+  };
   if (typeof withInMemory.inMemory === "function") {
     return withInMemory.inMemory(creds) as PiAuthStorage;
   }
@@ -100,7 +112,9 @@ function createAuthStorage(AuthStorageLike: unknown, path: string, creds: PiCred
   };
   if (typeof withFromStorage.fromStorage === "function") {
     const backendCtor = (
-      PiCodingAgent as { InMemoryAuthStorageBackend?: new () => InMemoryAuthStorageBackendLike }
+      PiCodingAgent as {
+        InMemoryAuthStorageBackend?: new () => InMemoryAuthStorageBackendLike;
+      }
     ).InMemoryAuthStorageBackend;
     const backend =
       typeof backendCtor === "function"
@@ -134,7 +148,9 @@ function createAuthStorage(AuthStorageLike: unknown, path: string, creds: PiCred
 }
 
 function resolvePiCredentials(agentDir: string): PiCredentialMap {
-  const store = ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false });
+  const store = ensureAuthProfileStore(agentDir, {
+    allowKeychainPrompt: false,
+  });
   return resolvePiCredentialMapFromStore(store);
 }
 
@@ -146,6 +162,12 @@ export function discoverAuthStorage(agentDir: string): PiAuthStorage {
   return createAuthStorage(PiAuthStorageClass, authPath, credentials);
 }
 
-export function discoverModels(authStorage: PiAuthStorage, agentDir: string): PiModelRegistry {
-  return new PiModelRegistryClass(authStorage, path.join(agentDir, "models.json"));
+export function discoverModels(
+  authStorage: PiAuthStorage,
+  agentDir: string,
+): PiModelRegistry {
+  return new PiModelRegistryClass(
+    authStorage,
+    path.join(agentDir, "models.json"),
+  );
 }

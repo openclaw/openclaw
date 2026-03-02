@@ -105,7 +105,10 @@ function randomChoice(values: string[], fallback: string) {
 }
 
 function createSlugBase(words = 2) {
-  const parts = [randomChoice(SLUG_ADJECTIVES, "steady"), randomChoice(SLUG_NOUNS, "harbor")];
+  const parts = [
+    randomChoice(SLUG_ADJECTIVES, "steady"),
+    randomChoice(SLUG_NOUNS, "harbor"),
+  ];
   if (words > 2) {
     parts.push(randomChoice(SLUG_NOUNS, "reef"));
   }
@@ -139,5 +142,7 @@ export function createSessionSlug(isTaken?: (id: string) => boolean): string {
     }
   }
   const fallback = `${createSlugBase(3)}-${Math.random().toString(36).slice(2, 5)}`;
-  return isIdTaken(fallback) ? `${fallback}-${Date.now().toString(36)}` : fallback;
+  return isIdTaken(fallback)
+    ? `${fallback}-${Date.now().toString(36)}`
+    : fallback;
 }

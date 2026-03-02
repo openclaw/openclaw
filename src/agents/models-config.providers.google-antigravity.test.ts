@@ -64,7 +64,9 @@ describe("google-antigravity provider normalization", () => {
     const normalized = normalizeProviders({ providers, agentDir });
 
     expect(normalized).not.toBe(providers);
-    expect(normalized?.["google-antigravity"]?.models.map((model) => model.id)).toEqual([
+    expect(
+      normalized?.["google-antigravity"]?.models.map((model) => model.id),
+    ).toEqual([
       "gemini-3-pro-low",
       "gemini-3.1-pro-low",
       "gemini-3-1-pro-low",
@@ -77,7 +79,10 @@ describe("google-antigravity provider normalization", () => {
   it("returns original providers object when no antigravity IDs need normalization", () => {
     const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
     const providers = {
-      "google-antigravity": buildProvider(["gemini-3-pro-low", "claude-opus-4-6-thinking"]),
+      "google-antigravity": buildProvider([
+        "gemini-3-pro-low",
+        "claude-opus-4-6-thinking",
+      ]),
     };
 
     const normalized = normalizeProviders({ providers, agentDir });

@@ -13,7 +13,8 @@ import {
 
 installGatewayTestHooks({ scope: "suite" });
 
-let startedServer: Awaited<ReturnType<typeof startServerWithClient>> | null = null;
+let startedServer: Awaited<ReturnType<typeof startServerWithClient>> | null =
+  null;
 let sharedTempRoot: string;
 
 function requireWs(): Awaited<ReturnType<typeof startServerWithClient>>["ws"] {
@@ -24,8 +25,12 @@ function requireWs(): Awaited<ReturnType<typeof startServerWithClient>>["ws"] {
 }
 
 beforeAll(async () => {
-  sharedTempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-config-"));
-  startedServer = await startServerWithClient(undefined, { controlUiEnabled: true });
+  sharedTempRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-sessions-config-"),
+  );
+  startedServer = await startServerWithClient(undefined, {
+    controlUiEnabled: true,
+  });
   await connectOk(requireWs());
 });
 
@@ -69,8 +74,11 @@ describe("gateway config methods", () => {
     });
     expect(res.ok).toBe(false);
     expect(res.error?.message ?? "").toContain("invalid config");
-    const issues = (res.error as { details?: { issues?: Array<{ path?: string }> } } | undefined)
-      ?.details?.issues;
+    const issues = (
+      res.error as
+        | { details?: { issues?: Array<{ path?: string }> } }
+        | undefined
+    )?.details?.issues;
     expect(issues?.some((issue) => issue.path === "gateway.bind")).toBe(true);
   });
 });
@@ -121,10 +129,9 @@ describe("gateway server sessions", () => {
       agentId: "home",
     });
     expect(homeSessions.ok).toBe(true);
-    expect(homeSessions.payload?.sessions.map((s) => s.key).toSorted()).toEqual([
-      "agent:home:discord:group:dev",
-      "agent:home:main",
-    ]);
+    expect(homeSessions.payload?.sessions.map((s) => s.key).toSorted()).toEqual(
+      ["agent:home:discord:group:dev", "agent:home:main"],
+    );
 
     const workSessions = await rpcReq<{
       sessions: Array<{ key: string }>;
@@ -134,7 +141,9 @@ describe("gateway server sessions", () => {
       agentId: "work",
     });
     expect(workSessions.ok).toBe(true);
-    expect(workSessions.payload?.sessions.map((s) => s.key)).toEqual(["agent:work:main"]);
+    expect(workSessions.payload?.sessions.map((s) => s.key)).toEqual([
+      "agent:work:main",
+    ]);
   });
 
   it("resolves and patches main alias to default agent main key", async () => {
@@ -156,16 +165,24 @@ describe("gateway server sessions", () => {
       },
     });
 
-    const resolved = await rpcReq<{ ok: true; key: string }>(requireWs(), "sessions.resolve", {
-      key: "main",
-    });
+    const resolved = await rpcReq<{ ok: true; key: string }>(
+      requireWs(),
+      "sessions.resolve",
+      {
+        key: "main",
+      },
+    );
     expect(resolved.ok).toBe(true);
     expect(resolved.payload?.key).toBe("agent:ops:work");
 
-    const patched = await rpcReq<{ ok: true; key: string }>(requireWs(), "sessions.patch", {
-      key: "main",
-      thinkingLevel: "medium",
-    });
+    const patched = await rpcReq<{ ok: true; key: string }>(
+      requireWs(),
+      "sessions.patch",
+      {
+        key: "main",
+        thinkingLevel: "medium",
+      },
+    );
     expect(patched.ok).toBe(true);
     expect(patched.payload?.key).toBe("agent:ops:work");
 

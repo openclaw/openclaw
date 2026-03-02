@@ -1,4 +1,7 @@
-import { normalizeIrcAllowlist, resolveIrcAllowlistMatch } from "./normalize.js";
+import {
+  normalizeIrcAllowlist,
+  resolveIrcAllowlistMatch,
+} from "./normalize.js";
 import type { IrcAccountConfig, IrcChannelConfig } from "./types.js";
 import type { IrcInboundMessage } from "./types.js";
 
@@ -37,7 +40,9 @@ export function resolveIrcGroupMatch(params: {
   }
 
   const targetLower = params.target.toLowerCase();
-  const directKey = Object.keys(groups).find((key) => key.toLowerCase() === targetLower);
+  const directKey = Object.keys(groups).find(
+    (key) => key.toLowerCase() === targetLower,
+  );
   if (directKey) {
     const matched = groups[directKey];
     if (matched) {
@@ -131,7 +136,11 @@ export function resolveIrcMentionGate(params: {
   if (params.wasMentioned) {
     return { shouldSkip: false, reason: "mentioned" };
   }
-  if (params.hasControlCommand && params.allowTextCommands && params.commandAuthorized) {
+  if (
+    params.hasControlCommand &&
+    params.allowTextCommands &&
+    params.commandAuthorized
+  ) {
     return { shouldSkip: false, reason: "authorized-command" };
   }
   return { shouldSkip: true, reason: "missing-mention" };

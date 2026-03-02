@@ -7,8 +7,16 @@ import {
 } from "./pi-embedded-utils.js";
 
 function makeAssistantMessage(
-  message: Omit<AssistantMessage, "api" | "provider" | "model" | "usage" | "stopReason"> &
-    Partial<Pick<AssistantMessage, "api" | "provider" | "model" | "usage" | "stopReason">>,
+  message: Omit<
+    AssistantMessage,
+    "api" | "provider" | "model" | "usage" | "stopReason"
+  > &
+    Partial<
+      Pick<
+        AssistantMessage,
+        "api" | "provider" | "model" | "usage" | "stopReason"
+      >
+    >,
 ): AssistantMessage {
   return {
     api: "responses",
@@ -498,7 +506,9 @@ describe("formatReasoningMessage", () => {
   });
 
   it("handles mixed empty and non-empty lines", () => {
-    expect(formatReasoningMessage("A\n\nB\nC")).toBe("Reasoning:\n_A_\n\n_B_\n_C_");
+    expect(formatReasoningMessage("A\n\nB\nC")).toBe(
+      "Reasoning:\n_A_\n\n_B_\n_C_",
+    );
   });
 
   it("trims leading/trailing whitespace", () => {
@@ -544,7 +554,9 @@ describe("stripDowngradedToolCallText", () => {
     ] as const;
 
     for (const testCase of cases) {
-      expect(stripDowngradedToolCallText(testCase.text), testCase.name).toBe(testCase.expected);
+      expect(stripDowngradedToolCallText(testCase.text), testCase.name).toBe(
+        testCase.expected,
+      );
     }
   });
 });

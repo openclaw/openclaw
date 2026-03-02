@@ -15,7 +15,9 @@ function pickWatchdogProfile(
   minMs: number;
   maxMs: number;
 } {
-  const defaults = useResume ? CLI_RESUME_WATCHDOG_DEFAULTS : CLI_FRESH_WATCHDOG_DEFAULTS;
+  const defaults = useResume
+    ? CLI_RESUME_WATCHDOG_DEFAULTS
+    : CLI_FRESH_WATCHDOG_DEFAULTS;
   const configured = useResume
     ? backend.reliability?.watchdog?.resume
     : backend.reliability?.watchdog?.fresh;
@@ -46,7 +48,10 @@ function pickWatchdogProfile(
     noOutputTimeoutMs:
       typeof configured?.noOutputTimeoutMs === "number" &&
       Number.isFinite(configured.noOutputTimeoutMs)
-        ? Math.max(CLI_WATCHDOG_MIN_TIMEOUT_MS, Math.floor(configured.noOutputTimeoutMs))
+        ? Math.max(
+            CLI_WATCHDOG_MIN_TIMEOUT_MS,
+            Math.floor(configured.noOutputTimeoutMs),
+          )
         : undefined,
     noOutputTimeoutRatio: ratio,
     minMs: Math.min(minMs, maxMs),

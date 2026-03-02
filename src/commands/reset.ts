@@ -4,7 +4,10 @@ import { isNixMode } from "../config/config.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { selectStyled } from "../terminal/prompt-select-styled.js";
-import { stylePromptMessage, stylePromptTitle } from "../terminal/prompt-style.js";
+import {
+  stylePromptMessage,
+  stylePromptTitle,
+} from "../terminal/prompt-style.js";
 import { resolveCleanupPlanFromDisk } from "./cleanup-plan.js";
 import {
   listAgentSessionDirs,
@@ -89,7 +92,9 @@ export async function resetCommand(runtime: RuntimeEnv, opts: ResetOptions) {
   }
 
   if (!["config", "config+creds+sessions", "full"].includes(scope)) {
-    runtime.error('Invalid --scope. Expected "config", "config+creds+sessions", or "full".');
+    runtime.error(
+      'Invalid --scope. Expected "config", "config+creds+sessions", or "full".',
+    );
     runtime.exit(1);
     return;
   }
@@ -106,8 +111,14 @@ export async function resetCommand(runtime: RuntimeEnv, opts: ResetOptions) {
   }
 
   const dryRun = Boolean(opts.dryRun);
-  const { stateDir, configPath, oauthDir, configInsideState, oauthInsideState, workspaceDirs } =
-    resolveCleanupPlanFromDisk();
+  const {
+    stateDir,
+    configPath,
+    oauthDir,
+    configInsideState,
+    oauthInsideState,
+    workspaceDirs,
+  } = resolveCleanupPlanFromDisk();
 
   if (scope !== "config") {
     if (dryRun) {
@@ -129,7 +140,9 @@ export async function resetCommand(runtime: RuntimeEnv, opts: ResetOptions) {
     for (const dir of sessionDirs) {
       await removePath(dir, runtime, { dryRun, label: dir });
     }
-    runtime.log(`Next: ${formatCliCommand("openclaw onboard --install-daemon")}`);
+    runtime.log(
+      `Next: ${formatCliCommand("openclaw onboard --install-daemon")}`,
+    );
     return;
   }
 
@@ -140,7 +153,9 @@ export async function resetCommand(runtime: RuntimeEnv, opts: ResetOptions) {
       { dryRun },
     );
     await removeWorkspaceDirs(workspaceDirs, runtime, { dryRun });
-    runtime.log(`Next: ${formatCliCommand("openclaw onboard --install-daemon")}`);
+    runtime.log(
+      `Next: ${formatCliCommand("openclaw onboard --install-daemon")}`,
+    );
     return;
   }
 }

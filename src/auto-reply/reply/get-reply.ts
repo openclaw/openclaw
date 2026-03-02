@@ -6,7 +6,10 @@ import {
 } from "../../agents/agent-scope.js";
 import { resolveModelRefFromString } from "../../agents/model-selection.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
-import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/workspace.js";
+import {
+  DEFAULT_AGENT_WORKSPACE_DIR,
+  ensureAgentWorkspace,
+} from "../../agents/workspace.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { type OpenClawConfig, loadConfig } from "../../config/config.js";
 import { applyLinkUnderstanding } from "../../link-understanding/apply.js";
@@ -16,7 +19,10 @@ import { resolveCommandAuthorization } from "../command-auth.js";
 import type { MsgContext } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
-import { emitResetCommandHooks, type ResetCommandAction } from "./commands-core.js";
+import {
+  emitResetCommandHooks,
+  type ResetCommandAction,
+} from "./commands-core.js";
 import { resolveDefaultModel } from "./directive-handling.js";
 import { resolveReplyDirectives } from "./get-reply-directives.js";
 import { handleInlineActions } from "./get-reply-inline-actions.js";
@@ -27,7 +33,10 @@ import { initSessionState } from "./session.js";
 import { stageSandboxMedia } from "./stage-sandbox-media.js";
 import { createTypingController } from "./typing.js";
 
-function mergeSkillFilters(channelFilter?: string[], agentFilter?: string[]): string[] | undefined {
+function mergeSkillFilters(
+  channelFilter?: string[],
+  agentFilter?: string[],
+): string[] | undefined {
   const normalize = (list?: string[]) => {
     if (!Array.isArray(list)) {
       return undefined;
@@ -60,7 +69,9 @@ export async function getReplyFromConfig(
   const isFastTestEnv = process.env.OPENCLAW_TEST_FAST === "1";
   const cfg = configOverride ?? loadConfig();
   const targetSessionKey =
-    ctx.CommandSource === "native" ? ctx.CommandTargetSessionKey?.trim() : undefined;
+    ctx.CommandSource === "native"
+      ? ctx.CommandTargetSessionKey?.trim()
+      : undefined;
   const agentSessionKey = targetSessionKey || ctx.SessionKey;
   const agentId = resolveSessionAgentId({
     sessionKey: agentSessionKey,
@@ -71,7 +82,9 @@ export async function getReplyFromConfig(
     resolveAgentSkillsFilter(cfg, agentId),
   );
   const resolvedOpts =
-    mergedSkillFilter !== undefined ? { ...opts, skillFilter: mergedSkillFilter } : opts;
+    mergedSkillFilter !== undefined
+      ? { ...opts, skillFilter: mergedSkillFilter }
+      : opts;
   const agentCfg = cfg.agents?.defaults;
   const sessionCfg = cfg.session;
   const { defaultProvider, defaultModel, aliasIndex } = resolveDefaultModel({
@@ -85,7 +98,9 @@ export async function getReplyFromConfig(
     // Prefer the resolved per-agent heartbeat model passed from the heartbeat runner,
     // fall back to the global defaults heartbeat model for backward compatibility.
     const heartbeatRaw =
-      opts.heartbeatModelOverride?.trim() ?? agentCfg?.heartbeat?.model?.trim() ?? "";
+      opts.heartbeatModelOverride?.trim() ??
+      agentCfg?.heartbeat?.model?.trim() ??
+      "";
     const heartbeatRef = heartbeatRaw
       ? resolveModelRefFromString({
           raw: heartbeatRaw,
@@ -100,14 +115,18 @@ export async function getReplyFromConfig(
     }
   }
 
-  const workspaceDirRaw = resolveAgentWorkspaceDir(cfg, agentId) ?? DEFAULT_AGENT_WORKSPACE_DIR;
+  const workspaceDirRaw =
+    resolveAgentWorkspaceDir(cfg, agentId) ?? DEFAULT_AGENT_WORKSPACE_DIR;
   const workspace = await ensureAgentWorkspace({
     dir: workspaceDirRaw,
     ensureBootstrapFiles: !agentCfg?.skipBootstrap && !isFastTestEnv,
   });
   const workspaceDir = workspace.dir;
   const agentDir = resolveAgentDir(cfg, agentId);
-  const timeoutMs = resolveAgentTimeoutMs({ cfg, overrideSeconds: opts?.timeoutOverrideSeconds });
+  const timeoutMs = resolveAgentTimeoutMs({
+    cfg,
+    overrideSeconds: opts?.timeoutOverrideSeconds,
+  });
   const configuredTypingSeconds =
     agentCfg?.typingIntervalSeconds ?? sessionCfg?.typingIntervalSeconds;
   const typingIntervalSeconds =
@@ -192,14 +211,22 @@ export async function getReplyFromConfig(
         : undefined) ??
       finalized.Provider,
     groupId: groupResolution?.id ?? sessionEntry.groupId,
-    groupChannel: sessionEntry.groupChannel ?? sessionCtx.GroupChannel ?? finalized.GroupChannel,
-    groupSubject: sessionEntry.subject ?? sessionCtx.GroupSubject ?? finalized.GroupSubject,
+    groupChannel:
+      sessionEntry.groupChannel ??
+      sessionCtx.GroupChannel ??
+      finalized.GroupChannel,
+    groupSubject:
+      sessionEntry.subject ?? sessionCtx.GroupSubject ?? finalized.GroupSubject,
     parentSessionKey: sessionCtx.ParentSessionKey,
   });
   const hasSessionModelOverride = Boolean(
     sessionEntry.modelOverride?.trim() || sessionEntry.providerOverride?.trim(),
   );
-  if (!hasResolvedHeartbeatModelOverride && !hasSessionModelOverride && channelModelOverride) {
+  if (
+    !hasResolvedHeartbeatModelOverride &&
+    !hasSessionModelOverride &&
+    channelModelOverride
+  ) {
     const resolved = resolveModelRefFromString({
       raw: channelModelOverride.model,
       defaultProvider,
@@ -274,14 +301,21 @@ export async function getReplyFromConfig(
   model = resolvedModel;
 
   const maybeEmitMissingResetHooks = async () => {
-    if (!resetTriggered || !command.isAuthorizedSender || command.resetHookTriggered) {
+    if (
+      !resetTriggered ||
+      !command.isAuthorizedSender ||
+      command.resetHookTriggered
+    ) {
       return;
     }
-    const resetMatch = command.commandBodyNormalized.match(/^\/(new|reset)(?:\s|$)/);
+    const resetMatch = command.commandBodyNormalized.match(
+      /^\/(new|reset)(?:\s|$)/,
+    );
     if (!resetMatch) {
       return;
     }
-    const action: ResetCommandAction = resetMatch[1] === "reset" ? "reset" : "new";
+    const action: ResetCommandAction =
+      resetMatch[1] === "reset" ? "reset" : "new";
     await emitResetCommandHooks({
       action,
       ctx,

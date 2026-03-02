@@ -15,7 +15,8 @@ export type CompactionSafeguardRuntimeValue = {
   model?: Model<Api>;
 };
 
-const registry = createSessionManagerRuntimeRegistry<CompactionSafeguardRuntimeValue>();
+const registry =
+  createSessionManagerRuntimeRegistry<CompactionSafeguardRuntimeValue>();
 
 export const setCompactionSafeguardRuntime = registry.set;
 

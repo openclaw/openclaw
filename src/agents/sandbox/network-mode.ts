@@ -1,6 +1,8 @@
 export type NetworkModeBlockReason = "host" | "container_namespace_join";
 
-export function normalizeNetworkMode(network: string | undefined): string | undefined {
+export function normalizeNetworkMode(
+  network: string | undefined,
+): string | undefined {
   const normalized = network?.trim().toLowerCase();
   return normalized || undefined;
 }
@@ -16,7 +18,10 @@ export function getBlockedNetworkModeReason(params: {
   if (normalized === "host") {
     return "host";
   }
-  if (normalized.startsWith("container:") && params.allowContainerNamespaceJoin !== true) {
+  if (
+    normalized.startsWith("container:") &&
+    params.allowContainerNamespaceJoin !== true
+  ) {
     return "container_namespace_join";
   }
   return null;

@@ -10,7 +10,9 @@ type GetReplyFromConfig = typeof import("./reply.js").getReplyFromConfig;
 type InboundMessage = Parameters<GetReplyFromConfig>[0];
 
 function getLastExtraSystemPrompt() {
-  return getRunEmbeddedPiAgentMock().mock.calls.at(-1)?.[0]?.extraSystemPrompt ?? "";
+  return (
+    getRunEmbeddedPiAgentMock().mock.calls.at(-1)?.[0]?.extraSystemPrompt ?? ""
+  );
 }
 
 export function registerGroupIntroPromptCases(params: {
@@ -116,12 +118,16 @@ export function registerGroupIntroPromptCases(params: {
           testCase.setup?.(cfg);
           await params.getReplyFromConfig()(testCase.message, {}, cfg);
 
-          expect(getRunEmbeddedPiAgentMock(), testCase.name).toHaveBeenCalledOnce();
+          expect(
+            getRunEmbeddedPiAgentMock(),
+            testCase.name,
+          ).toHaveBeenCalledOnce();
           const extraSystemPrompt = getLastExtraSystemPrompt();
           for (const expectedFragment of testCase.expected) {
-            expect(extraSystemPrompt, `${testCase.name}:${expectedFragment}`).toContain(
-              expectedFragment,
-            );
+            expect(
+              extraSystemPrompt,
+              `${testCase.name}:${expectedFragment}`,
+            ).toContain(expectedFragment);
           }
           getRunEmbeddedPiAgentMock().mockClear();
         }

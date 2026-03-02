@@ -56,7 +56,9 @@ export async function maybeCreateDynamicAgent(params: {
   const existingAgent = (cfg.agents?.list ?? []).find((a) => a.id === agentId);
   if (existingAgent) {
     // Agent exists but binding doesn't - just add the binding
-    log(`feishu: agent "${agentId}" exists, adding missing binding for ${senderOpenId}`);
+    log(
+      `feishu: agent "${agentId}" exists, adding missing binding for ${senderOpenId}`,
+    );
 
     const updatedCfg: OpenClawConfig = {
       ...cfg,
@@ -77,14 +79,20 @@ export async function maybeCreateDynamicAgent(params: {
   }
 
   // Resolve path templates with substitutions
-  const workspaceTemplate = dynamicCfg.workspaceTemplate ?? "~/.openclaw/workspace-{agentId}";
-  const agentDirTemplate = dynamicCfg.agentDirTemplate ?? "~/.openclaw/agents/{agentId}/agent";
+  const workspaceTemplate =
+    dynamicCfg.workspaceTemplate ?? "~/.openclaw/workspace-{agentId}";
+  const agentDirTemplate =
+    dynamicCfg.agentDirTemplate ?? "~/.openclaw/agents/{agentId}/agent";
 
   const workspace = resolveUserPath(
-    workspaceTemplate.replace("{userId}", senderOpenId).replace("{agentId}", agentId),
+    workspaceTemplate
+      .replace("{userId}", senderOpenId)
+      .replace("{agentId}", agentId),
   );
   const agentDir = resolveUserPath(
-    agentDirTemplate.replace("{userId}", senderOpenId).replace("{agentId}", agentId),
+    agentDirTemplate
+      .replace("{userId}", senderOpenId)
+      .replace("{agentId}", agentId),
   );
 
   log(`feishu: creating dynamic agent "${agentId}" for user ${senderOpenId}`);

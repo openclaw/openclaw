@@ -12,7 +12,10 @@ import {
   resolveThinkingDefault,
 } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { type SessionEntry, updateSessionStore } from "../../config/sessions.js";
+import {
+  type SessionEntry,
+  updateSessionStore,
+} from "../../config/sessions.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
 import { resolveThreadParentSessionKey } from "../../sessions/session-key-utils.js";
 import type { ThinkLevel } from "./directives.js";
@@ -50,7 +53,11 @@ const FUZZY_VARIANT_TOKENS = [
   "nano",
 ];
 
-function boundedLevenshteinDistance(a: string, b: string, maxDistance: number): number | null {
+function boundedLevenshteinDistance(
+  a: string,
+  b: string,
+  maxDistance: number,
+): number | null {
   if (a === b) {
     return 0;
   }
@@ -230,9 +237,15 @@ function scoreFuzzyMatch(params: {
     score += 30;
   }
 
-  const fragmentVariants = FUZZY_VARIANT_TOKENS.filter((token) => fragment.includes(token));
-  const modelVariants = FUZZY_VARIANT_TOKENS.filter((token) => modelLower.includes(token));
-  const variantMatchCount = fragmentVariants.filter((token) => modelLower.includes(token)).length;
+  const fragmentVariants = FUZZY_VARIANT_TOKENS.filter((token) =>
+    fragment.includes(token),
+  );
+  const modelVariants = FUZZY_VARIANT_TOKENS.filter((token) =>
+    modelLower.includes(token),
+  );
+  const variantMatchCount = fragmentVariants.filter((token) =>
+    modelLower.includes(token),
+  ).length;
   const variantCount = modelVariants.length;
   if (fragmentVariants.length === 0 && variantCount > 0) {
     score -= variantCount * 30;
@@ -246,7 +259,8 @@ function scoreFuzzyMatch(params: {
   }
 
   const defaultProvider = normalizeProviderId(params.defaultProvider);
-  const isDefault = provider === defaultProvider && model === params.defaultModel;
+  const isDefault =
+    provider === defaultProvider && model === params.defaultModel;
   if (isDefault) {
     score += 20;
   }
@@ -263,7 +277,9 @@ function scoreFuzzyMatch(params: {
 
 export async function createModelSelectionState(params: {
   cfg: OpenClawConfig;
-  agentCfg: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]> | undefined;
+  agentCfg:
+    | NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>
+    | undefined;
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
@@ -293,7 +309,8 @@ export async function createModelSelectionState(params: {
   let provider = params.provider;
   let model = params.model;
 
-  const hasAllowlist = agentCfg?.models && Object.keys(agentCfg.models).length > 0;
+  const hasAllowlist =
+    agentCfg?.models && Object.keys(agentCfg.models).length > 0;
   const initialStoredOverride = resolveStoredModelOverride({
     sessionEntry,
     sessionStore,
@@ -301,7 +318,8 @@ export async function createModelSelectionState(params: {
     parentSessionKey,
   });
   const hasStoredOverride = Boolean(initialStoredOverride);
-  const needsModelCatalog = params.hasModelDirective || hasAllowlist || hasStoredOverride;
+  const needsModelCatalog =
+    params.hasModelDirective || hasAllowlist || hasStoredOverride;
 
   let allowedModelKeys = new Set<string>();
   let allowedModelCatalog: ModelCatalog = [];
@@ -321,14 +339,19 @@ export async function createModelSelectionState(params: {
   }
 
   if (sessionEntry && sessionStore && sessionKey && hasStoredOverride) {
-    const overrideProvider = sessionEntry.providerOverride?.trim() || defaultProvider;
+    const overrideProvider =
+      sessionEntry.providerOverride?.trim() || defaultProvider;
     const overrideModel = sessionEntry.modelOverride?.trim();
     if (overrideModel) {
       const key = modelKey(overrideProvider, overrideModel);
       if (allowedModelKeys.size > 0 && !allowedModelKeys.has(key)) {
         const { updated } = applyModelOverrideToSessionEntry({
           entry: sessionEntry,
-          selection: { provider: defaultProvider, model: defaultModel, isDefault: true },
+          selection: {
+            provider: defaultProvider,
+            model: defaultModel,
+            isDefault: true,
+          },
         });
         if (updated) {
           sessionStore[sessionKey] = sessionEntry;
@@ -362,8 +385,14 @@ export async function createModelSelectionState(params: {
     }
   }
 
-  if (sessionEntry && sessionStore && sessionKey && sessionEntry.authProfileOverride) {
-    const { ensureAuthProfileStore } = await import("../../agents/auth-profiles.js");
+  if (
+    sessionEntry &&
+    sessionStore &&
+    sessionKey &&
+    sessionEntry.authProfileOverride
+  ) {
+    const { ensureAuthProfileStore } =
+      await import("../../agents/auth-profiles.js");
     const store = ensureAuthProfileStore(undefined, {
       allowKeychainPrompt: false,
     });
@@ -396,7 +425,9 @@ export async function createModelSelectionState(params: {
       catalog: catalogForThinking,
     });
     defaultThinkingLevel =
-      resolved ?? (agentCfg?.thinkingDefault as ThinkLevel | undefined) ?? "off";
+      resolved ??
+      (agentCfg?.thinkingDefault as ThinkLevel | undefined) ??
+      "off";
     return defaultThinkingLevel;
   };
 
@@ -432,15 +463,21 @@ export function resolveModelDirectiveSelection(params: {
   aliasIndex: ModelAliasIndex;
   allowedModelKeys: Set<string>;
 }): { selection?: ModelDirectiveSelection; error?: string } {
-  const { raw, defaultProvider, defaultModel, aliasIndex, allowedModelKeys } = params;
+  const { raw, defaultProvider, defaultModel, aliasIndex, allowedModelKeys } =
+    params;
 
   const rawTrimmed = raw.trim();
   const rawLower = rawTrimmed.toLowerCase();
 
-  const pickAliasForKey = (provider: string, model: string): string | undefined =>
-    aliasIndex.byKey.get(modelKey(provider, model))?.[0];
+  const pickAliasForKey = (
+    provider: string,
+    model: string,
+  ): string | undefined => aliasIndex.byKey.get(modelKey(provider, model))?.[0];
 
-  const buildSelection = (provider: string, model: string): ModelDirectiveSelection => {
+  const buildSelection = (
+    provider: string,
+    model: string,
+  ): ModelDirectiveSelection => {
     const alias = pickAliasForKey(provider, model);
     return {
       provider,
@@ -459,7 +496,9 @@ export function resolveModelDirectiveSelection(params: {
       return {};
     }
 
-    const providerFilter = params.provider ? normalizeProviderId(params.provider) : undefined;
+    const providerFilter = params.provider
+      ? normalizeProviderId(params.provider)
+      : undefined;
 
     const candidates: Array<{ provider: string; model: string }> = [];
     for (const key of allowedModelKeys) {
@@ -492,7 +531,11 @@ export function resolveModelDirectiveSelection(params: {
         if (!allowedModelKeys.has(key)) {
           continue;
         }
-        if (!candidates.some((c) => c.provider === match.provider && c.model === match.model)) {
+        if (
+          !candidates.some(
+            (c) => c.provider === match.provider && c.model === match.model,
+          )
+        ) {
           candidates.push(match);
         }
       }
@@ -569,7 +612,9 @@ export function resolveModelDirectiveSelection(params: {
       selection: {
         provider: resolved.ref.provider,
         model: resolved.ref.model,
-        isDefault: resolved.ref.provider === defaultProvider && resolved.ref.model === defaultModel,
+        isDefault:
+          resolved.ref.provider === defaultProvider &&
+          resolved.ref.model === defaultModel,
         alias: resolved.alias,
       },
     };
@@ -599,10 +644,14 @@ export function resolveModelDirectiveSelection(params: {
 }
 
 export function resolveContextTokens(params: {
-  agentCfg: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]> | undefined;
+  agentCfg:
+    | NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>
+    | undefined;
   model: string;
 }): number {
   return (
-    params.agentCfg?.contextTokens ?? lookupContextTokens(params.model) ?? DEFAULT_CONTEXT_TOKENS
+    params.agentCfg?.contextTokens ??
+    lookupContextTokens(params.model) ??
+    DEFAULT_CONTEXT_TOKENS
   );
 }

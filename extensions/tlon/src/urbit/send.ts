@@ -1,7 +1,11 @@
 import { scot, da } from "@urbit/aura";
 
 export type TlonPokeApi = {
-  poke: (params: { app: string; mark: string; json: unknown }) => Promise<unknown>;
+  poke: (params: {
+    app: string;
+    mark: string;
+    json: unknown;
+  }) => Promise<unknown>;
 };
 
 type SendTextParams = {
@@ -118,7 +122,10 @@ export async function sendGroupMessage({
   return { channel: "tlon", messageId: `${fromShip}/${sentAt}` };
 }
 
-export function buildMediaText(text: string | undefined, mediaUrl: string | undefined): string {
+export function buildMediaText(
+  text: string | undefined,
+  mediaUrl: string | undefined,
+): string {
   const cleanText = text?.trim() ?? "";
   const cleanUrl = mediaUrl?.trim() ?? "";
   if (cleanText && cleanUrl) {

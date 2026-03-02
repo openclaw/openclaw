@@ -2,7 +2,14 @@ import path from "node:path";
 
 export const AVATAR_MAX_BYTES = 2 * 1024 * 1024;
 
-const LOCAL_AVATAR_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"]);
+const LOCAL_AVATAR_EXTENSIONS = new Set([
+  ".png",
+  ".jpg",
+  ".jpeg",
+  ".gif",
+  ".webp",
+  ".svg",
+]);
 
 const AVATAR_MIME_BY_EXT: Record<string, string> = {
   ".png": "image/png",

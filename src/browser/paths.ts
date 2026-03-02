@@ -6,7 +6,10 @@ import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 
 export const DEFAULT_BROWSER_TMP_DIR = resolvePreferredOpenClawTmpDir();
 export const DEFAULT_TRACE_DIR = DEFAULT_BROWSER_TMP_DIR;
-export const DEFAULT_DOWNLOAD_DIR = path.join(DEFAULT_BROWSER_TMP_DIR, "downloads");
+export const DEFAULT_DOWNLOAD_DIR = path.join(
+  DEFAULT_BROWSER_TMP_DIR,
+  "downloads",
+);
 export const DEFAULT_UPLOAD_DIR = path.join(DEFAULT_BROWSER_TMP_DIR, "uploads");
 
 type InvalidPathResult = { ok: false; error: string };
@@ -18,7 +21,9 @@ function invalidPath(scopeLabel: string): InvalidPathResult {
   };
 }
 
-async function resolveRealPathIfExists(targetPath: string): Promise<string | undefined> {
+async function resolveRealPathIfExists(
+  targetPath: string,
+): Promise<string | undefined> {
   try {
     return await fs.realpath(targetPath);
   } catch {
@@ -26,7 +31,9 @@ async function resolveRealPathIfExists(targetPath: string): Promise<string | und
   }
 }
 
-async function resolveTrustedRootRealPath(rootDir: string): Promise<string | undefined> {
+async function resolveTrustedRootRealPath(
+  rootDir: string,
+): Promise<string | undefined> {
   try {
     const rootLstat = await fs.lstat(rootDir);
     if (!rootLstat.isDirectory() || rootLstat.isSymbolicLink()) {
@@ -58,7 +65,9 @@ async function validateCanonicalPathWithinRoot(params: {
       return "invalid";
     }
     const candidateRealPath = await fs.realpath(params.candidatePath);
-    return isPathInside(params.rootRealPath, candidateRealPath) ? "ok" : "invalid";
+    return isPathInside(params.rootRealPath, candidateRealPath)
+      ? "ok"
+      : "invalid";
   } catch (err) {
     return isNotFoundPathError(err) ? "not-found" : "invalid";
   }
@@ -81,7 +90,10 @@ export function resolvePathWithinRoot(params: {
   const resolved = path.resolve(root, raw);
   const rel = path.relative(root, resolved);
   if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) {
-    return { ok: false, error: `Invalid path: must stay within ${params.scopeLabel}` };
+    return {
+      ok: false,
+      error: `Invalid path: must stay within ${params.scopeLabel}`,
+    };
   }
   return { ok: true, path: resolved };
 }
@@ -179,12 +191,15 @@ async function resolveCheckedPathsWithinRoot(params: {
   const rootRealPath = await resolveRealPathIfExists(rootDir);
 
   const isInRoot = (relativePath: string) =>
-    Boolean(relativePath) && !relativePath.startsWith("..") && !path.isAbsolute(relativePath);
+    Boolean(relativePath) &&
+    !relativePath.startsWith("..") &&
+    !path.isAbsolute(relativePath);
 
   const resolveExistingRelativePath = async (
     requestedPath: string,
   ): Promise<
-    { ok: true; relativePath: string; fallbackPath: string } | { ok: false; error: string }
+    | { ok: true; relativePath: string; fallbackPath: string }
+    | { ok: false; error: string }
   > => {
     const raw = requestedPath.trim();
     const lexicalPathResult = resolvePathWithinRoot({
@@ -233,7 +248,11 @@ async function resolveCheckedPathsWithinRoot(params: {
       });
       resolvedPaths.push(opened.realPath);
     } catch (err) {
-      if (params.allowMissingFallback && err instanceof SafeOpenError && err.code === "not-found") {
+      if (
+        params.allowMissingFallback &&
+        err instanceof SafeOpenError &&
+        err.code === "not-found"
+      ) {
         // Preserve historical behavior for paths that do not exist yet.
         resolvedPaths.push(pathResult.fallbackPath);
         continue;

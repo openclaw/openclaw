@@ -34,7 +34,8 @@ export function createNodeSubscriptionManager(): NodeSubscriptionManager {
   const nodeSubscriptions = new Map<string, Set<string>>();
   const sessionSubscribers = new Map<string, Set<string>>();
 
-  const toPayloadJSON = (payload: unknown) => (payload ? JSON.stringify(payload) : null);
+  const toPayloadJSON = (payload: unknown) =>
+    payload ? JSON.stringify(payload) : null;
 
   const subscribe = (nodeId: string, sessionKey: string) => {
     const normalizedNodeId = nodeId.trim();

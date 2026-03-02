@@ -1,4 +1,8 @@
-import type { OpenClawConfig, HumanDelayConfig, IdentityConfig } from "../config/config.js";
+import type {
+  OpenClawConfig,
+  HumanDelayConfig,
+  IdentityConfig,
+} from "../config/config.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 
 const DEFAULT_ACK_REACTION = "👀";
@@ -18,8 +22,12 @@ export function resolveAckReaction(
   // L1: Channel account level
   if (opts?.channel && opts?.accountId) {
     const channelCfg = getChannelConfig(cfg, opts.channel);
-    const accounts = channelCfg?.accounts as Record<string, Record<string, unknown>> | undefined;
-    const accountReaction = accounts?.[opts.accountId]?.ackReaction as string | undefined;
+    const accounts = channelCfg?.accounts as
+      | Record<string, Record<string, unknown>>
+      | undefined;
+    const accountReaction = accounts?.[opts.accountId]?.ackReaction as
+      | string
+      | undefined;
     if (accountReaction !== undefined) {
       return accountReaction.trim();
     }
@@ -57,7 +65,10 @@ export function resolveIdentityNamePrefix(
 }
 
 /** Returns just the identity name (without brackets) for template context. */
-export function resolveIdentityName(cfg: OpenClawConfig, agentId: string): string | undefined {
+export function resolveIdentityName(
+  cfg: OpenClawConfig,
+  agentId: string,
+): string | undefined {
   return resolveAgentIdentity(cfg, agentId)?.name?.trim() || undefined;
 }
 
@@ -76,7 +87,9 @@ export function resolveMessagePrefix(
     return "";
   }
 
-  return resolveIdentityNamePrefix(cfg, agentId) ?? opts?.fallback ?? "[openclaw]";
+  return (
+    resolveIdentityNamePrefix(cfg, agentId) ?? opts?.fallback ?? "[openclaw]"
+  );
 }
 
 /** Helper to extract a channel config value by dynamic key. */
@@ -99,8 +112,12 @@ export function resolveResponsePrefix(
   // L1: Channel account level
   if (opts?.channel && opts?.accountId) {
     const channelCfg = getChannelConfig(cfg, opts.channel);
-    const accounts = channelCfg?.accounts as Record<string, Record<string, unknown>> | undefined;
-    const accountPrefix = accounts?.[opts.accountId]?.responsePrefix as string | undefined;
+    const accounts = channelCfg?.accounts as
+      | Record<string, Record<string, unknown>>
+      | undefined;
+    const accountPrefix = accounts?.[opts.accountId]?.responsePrefix as
+      | string
+      | undefined;
     if (accountPrefix !== undefined) {
       if (accountPrefix === "auto") {
         return resolveIdentityNamePrefix(cfg, agentId);

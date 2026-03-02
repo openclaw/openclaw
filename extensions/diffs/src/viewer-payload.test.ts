@@ -50,6 +50,8 @@ describe("parseViewerPayloadJson", () => {
   });
 
   it("rejects invalid JSON", () => {
-    expect(() => parseViewerPayloadJson("{not-json")).toThrow("Diff payload is not valid JSON.");
+    expect(() => parseViewerPayloadJson("{not-json")).toThrow(
+      "Diff payload is not valid JSON.",
+    );
   });
 });

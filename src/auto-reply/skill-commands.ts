@@ -1,11 +1,19 @@
 import fs from "node:fs";
-import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
-import { buildWorkspaceSkillCommandSpecs, type SkillCommandSpec } from "../agents/skills.js";
+import {
+  listAgentIds,
+  resolveAgentWorkspaceDir,
+} from "../agents/agent-scope.js";
+import {
+  buildWorkspaceSkillCommandSpecs,
+  type SkillCommandSpec,
+} from "../agents/skills.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { getRemoteSkillEligibility } from "../infra/skills-remote.js";
 import { listChatCommands } from "./commands-registry.js";
 
-export function listReservedChatSlashCommandNames(extraNames: string[] = []): Set<string> {
+export function listReservedChatSlashCommandNames(
+  extraNames: string[] = [],
+): Set<string> {
   const reserved = new Set<string>();
   for (const command of listChatCommands()) {
     if (command.nativeName) {
@@ -131,14 +139,19 @@ export function resolveSkillCommandInvocation(params: {
     if (!skillMatch) {
       return null;
     }
-    const skillCommand = findSkillCommand(params.skillCommands, skillMatch[1] ?? "");
+    const skillCommand = findSkillCommand(
+      params.skillCommands,
+      skillMatch[1] ?? "",
+    );
     if (!skillCommand) {
       return null;
     }
     const args = skillMatch[2]?.trim();
     return { command: skillCommand, args: args || undefined };
   }
-  const command = params.skillCommands.find((entry) => entry.name.toLowerCase() === commandName);
+  const command = params.skillCommands.find(
+    (entry) => entry.name.toLowerCase() === commandName,
+  );
   if (!command) {
     return null;
   }

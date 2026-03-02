@@ -11,8 +11,12 @@ import {
 
 describe("inbound-path-policy", () => {
   it("validates absolute root patterns", () => {
-    expect(isValidInboundPathRootPattern("/Users/*/Library/Messages/Attachments")).toBe(true);
-    expect(isValidInboundPathRootPattern("/Volumes/relay/attachments")).toBe(true);
+    expect(
+      isValidInboundPathRootPattern("/Users/*/Library/Messages/Attachments"),
+    ).toBe(true);
+    expect(isValidInboundPathRootPattern("/Volumes/relay/attachments")).toBe(
+      true,
+    );
     expect(isValidInboundPathRootPattern("./attachments")).toBe(false);
     expect(isValidInboundPathRootPattern("/Users/**/Attachments")).toBe(false);
   });
@@ -21,7 +25,8 @@ describe("inbound-path-policy", () => {
     const roots = ["/Users/*/Library/Messages/Attachments"];
     expect(
       isInboundPathAllowed({
-        filePath: "/Users/alice/Library/Messages/Attachments/12/34/ABCDEF/IMG_0001.jpeg",
+        filePath:
+          "/Users/alice/Library/Messages/Attachments/12/34/ABCDEF/IMG_0001.jpeg",
         roots,
       }),
     ).toBe(true);
@@ -35,10 +40,16 @@ describe("inbound-path-policy", () => {
 
   it("normalizes and de-duplicates merged roots", () => {
     const roots = mergeInboundPathRoots(
-      ["/Users/*/Library/Messages/Attachments/", "/Users/*/Library/Messages/Attachments"],
+      [
+        "/Users/*/Library/Messages/Attachments/",
+        "/Users/*/Library/Messages/Attachments",
+      ],
       ["/Volumes/relay/attachments"],
     );
-    expect(roots).toEqual(["/Users/*/Library/Messages/Attachments", "/Volumes/relay/attachments"]);
+    expect(roots).toEqual([
+      "/Users/*/Library/Messages/Attachments",
+      "/Volumes/relay/attachments",
+    ]);
   });
 
   it("resolves configured roots with account overrides", () => {
@@ -60,7 +71,9 @@ describe("inbound-path-policy", () => {
       "/Users/work/Library/Messages/Attachments",
       "/Users/*/Library/Messages/Attachments",
     ]);
-    expect(resolveIMessageRemoteAttachmentRoots({ cfg, accountId: "work" })).toEqual([
+    expect(
+      resolveIMessageRemoteAttachmentRoots({ cfg, accountId: "work" }),
+    ).toEqual([
       "/srv/work/attachments",
       "/Volumes/shared/imessage",
       "/Users/work/Library/Messages/Attachments",
@@ -70,7 +83,9 @@ describe("inbound-path-policy", () => {
 
   it("falls back to default iMessage roots", () => {
     const cfg = {} as OpenClawConfig;
-    expect(resolveIMessageAttachmentRoots({ cfg })).toEqual([...DEFAULT_IMESSAGE_ATTACHMENT_ROOTS]);
+    expect(resolveIMessageAttachmentRoots({ cfg })).toEqual([
+      ...DEFAULT_IMESSAGE_ATTACHMENT_ROOTS,
+    ]);
     expect(resolveIMessageRemoteAttachmentRoots({ cfg })).toEqual([
       ...DEFAULT_IMESSAGE_ATTACHMENT_ROOTS,
     ]);

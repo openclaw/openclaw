@@ -13,8 +13,10 @@ import {
 } from "./session-cost-usage.js";
 
 describe("session cost usage", () => {
-  const withStateDir = async <T>(stateDir: string, fn: () => Promise<T>): Promise<T> =>
-    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, fn);
+  const withStateDir = async <T>(
+    stateDir: string,
+    fn: () => Promise<T>,
+  ): Promise<T> => await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, fn);
 
   it("aggregates daily totals with log cost and pricing fallback", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cost-"));
@@ -111,7 +113,9 @@ describe("session cost usage", () => {
   });
 
   it("summarizes a single session file", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cost-session-"));
+    const root = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-cost-session-"),
+    );
     const sessionFile = path.join(root, "session.jsonl");
     const now = new Date();
 
@@ -144,7 +148,9 @@ describe("session cost usage", () => {
   });
 
   it("captures message counts, tool usage, and model usage", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cost-session-meta-"));
+    const root = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-cost-session-meta-"),
+    );
     const sessionFile = path.join(root, "session.jsonl");
     const start = new Date("2026-02-01T10:00:00.000Z");
     const end = new Date("2026-02-01T10:05:00.000Z");
@@ -232,10 +238,15 @@ describe("session cost usage", () => {
   });
 
   it("resolves non-main absolute sessionFile using explicit agentId for cost summary", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cost-agent-"));
+    const root = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-cost-agent-"),
+    );
     const workerSessionsDir = path.join(root, "agents", "worker1", "sessions");
     await fs.mkdir(workerSessionsDir, { recursive: true });
-    const workerSessionFile = path.join(workerSessionsDir, "sess-worker-1.jsonl");
+    const workerSessionFile = path.join(
+      workerSessionsDir,
+      "sess-worker-1.jsonl",
+    );
     const now = new Date("2026-02-12T10:00:00.000Z");
 
     await fs.writeFile(
@@ -274,10 +285,15 @@ describe("session cost usage", () => {
   });
 
   it("resolves non-main absolute sessionFile using explicit agentId for timeseries", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-timeseries-agent-"));
+    const root = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-timeseries-agent-"),
+    );
     const workerSessionsDir = path.join(root, "agents", "worker2", "sessions");
     await fs.mkdir(workerSessionsDir, { recursive: true });
-    const workerSessionFile = path.join(workerSessionsDir, "sess-worker-2.jsonl");
+    const workerSessionFile = path.join(
+      workerSessionsDir,
+      "sess-worker-2.jsonl",
+    );
 
     await fs.writeFile(
       workerSessionFile,
@@ -289,7 +305,12 @@ describe("session cost usage", () => {
             role: "assistant",
             provider: "openai",
             model: "gpt-5.2",
-            usage: { input: 5, output: 3, totalTokens: 8, cost: { total: 0.001 } },
+            usage: {
+              input: 5,
+              output: 3,
+              totalTokens: 8,
+              cost: { total: 0.001 },
+            },
           },
         }),
       ].join("\n"),
@@ -312,10 +333,15 @@ describe("session cost usage", () => {
   });
 
   it("resolves non-main absolute sessionFile using explicit agentId for logs", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-logs-agent-"));
+    const root = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-logs-agent-"),
+    );
     const workerSessionsDir = path.join(root, "agents", "worker3", "sessions");
     await fs.mkdir(workerSessionsDir, { recursive: true });
-    const workerSessionFile = path.join(workerSessionsDir, "sess-worker-3.jsonl");
+    const workerSessionFile = path.join(
+      workerSessionsDir,
+      "sess-worker-3.jsonl",
+    );
 
     await fs.writeFile(
       workerSessionFile,
@@ -349,7 +375,9 @@ describe("session cost usage", () => {
   });
 
   it("strips inbound and untrusted metadata blocks from session usage logs", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-logs-sanitize-"));
+    const root = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-logs-sanitize-"),
+    );
     const sessionsDir = path.join(root, "agents", "main", "sessions");
     await fs.mkdir(sessionsDir, { recursive: true });
     const sessionFile = path.join(sessionsDir, "sess-sanitize.jsonl");
@@ -391,7 +419,9 @@ example
   });
 
   it("preserves totals and cumulative values when downsampling timeseries", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-timeseries-downsample-"));
+    const root = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-timeseries-downsample-"),
+    );
     const sessionsDir = path.join(root, "agents", "main", "sessions");
     await fs.mkdir(sessionsDir, { recursive: true });
     const sessionFile = path.join(sessionsDir, "sess-downsample.jsonl");
@@ -432,7 +462,10 @@ example
     expect(timeseries?.points.length).toBe(3);
 
     const points = timeseries?.points ?? [];
-    const totalTokens = points.reduce((sum, point) => sum + point.totalTokens, 0);
+    const totalTokens = points.reduce(
+      (sum, point) => sum + point.totalTokens,
+      0,
+    );
     const totalCost = points.reduce((sum, point) => sum + point.cost, 0);
     const lastPoint = points[points.length - 1];
 

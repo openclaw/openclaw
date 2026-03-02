@@ -7,7 +7,9 @@ import { loadHookEntriesFromDir } from "./workspace.js";
 
 describe("hooks workspace", () => {
   it("ignores package.json hook paths that traverse outside package directory", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-hooks-workspace-"));
+    const root = fs.mkdtempSync(
+      path.join(os.tmpdir(), "openclaw-hooks-workspace-"),
+    );
     const hooksRoot = path.join(root, "hooks");
     fs.mkdirSync(hooksRoot, { recursive: true });
 
@@ -16,8 +18,14 @@ describe("hooks workspace", () => {
 
     const outsideHookDir = path.join(root, "outside");
     fs.mkdirSync(outsideHookDir, { recursive: true });
-    fs.writeFileSync(path.join(outsideHookDir, "HOOK.md"), "---\nname: outside\n---\n");
-    fs.writeFileSync(path.join(outsideHookDir, "handler.js"), "export default async () => {};\n");
+    fs.writeFileSync(
+      path.join(outsideHookDir, "HOOK.md"),
+      "---\nname: outside\n---\n",
+    );
+    fs.writeFileSync(
+      path.join(outsideHookDir, "handler.js"),
+      "export default async () => {};\n",
+    );
 
     fs.writeFileSync(
       path.join(pkgDir, "package.json"),
@@ -33,12 +41,17 @@ describe("hooks workspace", () => {
       ),
     );
 
-    const entries = loadHookEntriesFromDir({ dir: hooksRoot, source: "openclaw-workspace" });
+    const entries = loadHookEntriesFromDir({
+      dir: hooksRoot,
+      source: "openclaw-workspace",
+    });
     expect(entries.some((e) => e.hook.name === "outside")).toBe(false);
   });
 
   it("accepts package.json hook paths within package directory", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-hooks-workspace-ok-"));
+    const root = fs.mkdtempSync(
+      path.join(os.tmpdir(), "openclaw-hooks-workspace-ok-"),
+    );
     const hooksRoot = path.join(root, "hooks");
     fs.mkdirSync(hooksRoot, { recursive: true });
 
@@ -47,7 +60,10 @@ describe("hooks workspace", () => {
     fs.mkdirSync(nested, { recursive: true });
 
     fs.writeFileSync(path.join(nested, "HOOK.md"), "---\nname: nested\n---\n");
-    fs.writeFileSync(path.join(nested, "handler.js"), "export default async () => {};\n");
+    fs.writeFileSync(
+      path.join(nested, "handler.js"),
+      "export default async () => {};\n",
+    );
 
     fs.writeFileSync(
       path.join(pkgDir, "package.json"),
@@ -63,12 +79,17 @@ describe("hooks workspace", () => {
       ),
     );
 
-    const entries = loadHookEntriesFromDir({ dir: hooksRoot, source: "openclaw-workspace" });
+    const entries = loadHookEntriesFromDir({
+      dir: hooksRoot,
+      source: "openclaw-workspace",
+    });
     expect(entries.some((e) => e.hook.name === "nested")).toBe(true);
   });
 
   it("ignores package.json hook paths that escape via symlink", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-hooks-workspace-link-"));
+    const root = fs.mkdtempSync(
+      path.join(os.tmpdir(), "openclaw-hooks-workspace-link-"),
+    );
     const hooksRoot = path.join(root, "hooks");
     fs.mkdirSync(hooksRoot, { recursive: true });
 
@@ -77,10 +98,20 @@ describe("hooks workspace", () => {
     const linkedDir = path.join(pkgDir, "linked");
     fs.mkdirSync(pkgDir, { recursive: true });
     fs.mkdirSync(outsideDir, { recursive: true });
-    fs.writeFileSync(path.join(outsideDir, "HOOK.md"), "---\nname: outside\n---\n");
-    fs.writeFileSync(path.join(outsideDir, "handler.js"), "export default async () => {};\n");
+    fs.writeFileSync(
+      path.join(outsideDir, "HOOK.md"),
+      "---\nname: outside\n---\n",
+    );
+    fs.writeFileSync(
+      path.join(outsideDir, "handler.js"),
+      "export default async () => {};\n",
+    );
     try {
-      fs.symlinkSync(outsideDir, linkedDir, process.platform === "win32" ? "junction" : "dir");
+      fs.symlinkSync(
+        outsideDir,
+        linkedDir,
+        process.platform === "win32" ? "junction" : "dir",
+      );
     } catch {
       return;
     }
@@ -99,7 +130,10 @@ describe("hooks workspace", () => {
       ),
     );
 
-    const entries = loadHookEntriesFromDir({ dir: hooksRoot, source: "openclaw-workspace" });
+    const entries = loadHookEntriesFromDir({
+      dir: hooksRoot,
+      source: "openclaw-workspace",
+    });
     expect(entries.some((e) => e.hook.name === "outside")).toBe(false);
   });
 
@@ -108,7 +142,9 @@ describe("hooks workspace", () => {
       return;
     }
 
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-hooks-workspace-hardlink-"));
+    const root = fs.mkdtempSync(
+      path.join(os.tmpdir(), "openclaw-hooks-workspace-hardlink-"),
+    );
     const hooksRoot = path.join(root, "hooks");
     fs.mkdirSync(hooksRoot, { recursive: true });
 
@@ -116,7 +152,10 @@ describe("hooks workspace", () => {
     const outsideDir = path.join(root, "outside");
     fs.mkdirSync(hookDir, { recursive: true });
     fs.mkdirSync(outsideDir, { recursive: true });
-    fs.writeFileSync(path.join(hookDir, "handler.js"), "export default async () => {};\n");
+    fs.writeFileSync(
+      path.join(hookDir, "handler.js"),
+      "export default async () => {};\n",
+    );
     const outsideHookMd = path.join(outsideDir, "HOOK.md");
     const linkedHookMd = path.join(hookDir, "HOOK.md");
     fs.writeFileSync(linkedHookMd, "---\nname: hardlink-hook\n---\n");
@@ -131,7 +170,10 @@ describe("hooks workspace", () => {
       throw err;
     }
 
-    const entries = loadHookEntriesFromDir({ dir: hooksRoot, source: "openclaw-workspace" });
+    const entries = loadHookEntriesFromDir({
+      dir: hooksRoot,
+      source: "openclaw-workspace",
+    });
     expect(entries.some((e) => e.hook.name === "hardlink-hook")).toBe(false);
     expect(entries.some((e) => e.hook.name === "outside")).toBe(false);
   });
@@ -141,7 +183,9 @@ describe("hooks workspace", () => {
       return;
     }
 
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-hooks-workspace-hardlink-"));
+    const root = fs.mkdtempSync(
+      path.join(os.tmpdir(), "openclaw-hooks-workspace-hardlink-"),
+    );
     const hooksRoot = path.join(root, "hooks");
     fs.mkdirSync(hooksRoot, { recursive: true });
 
@@ -149,7 +193,10 @@ describe("hooks workspace", () => {
     const outsideDir = path.join(root, "outside");
     fs.mkdirSync(hookDir, { recursive: true });
     fs.mkdirSync(outsideDir, { recursive: true });
-    fs.writeFileSync(path.join(hookDir, "HOOK.md"), "---\nname: hardlink-handler-hook\n---\n");
+    fs.writeFileSync(
+      path.join(hookDir, "HOOK.md"),
+      "---\nname: hardlink-handler-hook\n---\n",
+    );
     const outsideHandler = path.join(outsideDir, "handler.js");
     const linkedHandler = path.join(hookDir, "handler.js");
     fs.writeFileSync(outsideHandler, "export default async () => {};\n");
@@ -162,7 +209,12 @@ describe("hooks workspace", () => {
       throw err;
     }
 
-    const entries = loadHookEntriesFromDir({ dir: hooksRoot, source: "openclaw-workspace" });
-    expect(entries.some((e) => e.hook.name === "hardlink-handler-hook")).toBe(false);
+    const entries = loadHookEntriesFromDir({
+      dir: hooksRoot,
+      source: "openclaw-workspace",
+    });
+    expect(entries.some((e) => e.hook.name === "hardlink-handler-hook")).toBe(
+      false,
+    );
   });
 });

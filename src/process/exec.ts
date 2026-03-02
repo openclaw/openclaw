@@ -34,8 +34,13 @@ function escapeForCmdExe(arg: string): string {
   return `"${arg.replace(/"/g, '""')}"`;
 }
 
-function buildCmdExeCommandLine(resolvedCommand: string, args: string[]): string {
-  return [escapeForCmdExe(resolvedCommand), ...args.map(escapeForCmdExe)].join(" ");
+function buildCmdExeCommandLine(
+  resolvedCommand: string,
+  args: string[],
+): string {
+  return [escapeForCmdExe(resolvedCommand), ...args.map(escapeForCmdExe)].join(
+    " ",
+  );
 }
 
 /**
@@ -51,7 +56,12 @@ function resolveNpmArgvForWindows(argv: string[]): string[] | null {
     .basename(argv[0])
     .toLowerCase()
     .replace(/\.(cmd|exe|bat)$/, "");
-  const cliName = basename === "npx" ? "npx-cli.js" : basename === "npm" ? "npm-cli.js" : null;
+  const cliName =
+    basename === "npx"
+      ? "npx-cli.js"
+      : basename === "npm"
+        ? "npm-cli.js"
+        : null;
   if (!cliName) {
     return null;
   }
@@ -101,7 +111,9 @@ export function shouldSpawnWithShell(params: {
 export async function runExec(
   command: string,
   args: string[],
-  opts: number | { timeoutMs?: number; maxBuffer?: number; cwd?: string } = 10_000,
+  opts:
+    | number
+    | { timeoutMs?: number; maxBuffer?: number; cwd?: string } = 10_000,
 ): Promise<{ stdout: string; stderr: string }> {
   const options =
     typeof opts === "number"
@@ -215,20 +227,31 @@ export async function runCommandWithTimeout(
   optionsOrTimeout: number | CommandOptions,
 ): Promise<SpawnResult> {
   const options: CommandOptions =
-    typeof optionsOrTimeout === "number" ? { timeoutMs: optionsOrTimeout } : optionsOrTimeout;
+    typeof optionsOrTimeout === "number"
+      ? { timeoutMs: optionsOrTimeout }
+      : optionsOrTimeout;
   const { timeoutMs, cwd, input, env, noOutputTimeoutMs } = options;
   const { windowsVerbatimArguments } = options;
   const hasInput = input !== undefined;
   const resolvedEnv = resolveCommandEnv({ argv, env });
 
   const stdio = resolveCommandStdio({ hasInput, preferInherit: true });
-  const finalArgv = process.platform === "win32" ? (resolveNpmArgvForWindows(argv) ?? argv) : argv;
-  const resolvedCommand = finalArgv !== argv ? (finalArgv[0] ?? "") : resolveCommand(argv[0] ?? "");
+  const finalArgv =
+    process.platform === "win32"
+      ? (resolveNpmArgvForWindows(argv) ?? argv)
+      : argv;
+  const resolvedCommand =
+    finalArgv !== argv ? (finalArgv[0] ?? "") : resolveCommand(argv[0] ?? "");
   const useCmdWrapper = isWindowsBatchCommand(resolvedCommand);
   const child = spawn(
     useCmdWrapper ? (process.env.ComSpec ?? "cmd.exe") : resolvedCommand,
     useCmdWrapper
-      ? ["/d", "/s", "/c", buildCmdExeCommandLine(resolvedCommand, finalArgv.slice(1))]
+      ? [
+          "/d",
+          "/s",
+          "/c",
+          buildCmdExeCommandLine(resolvedCommand, finalArgv.slice(1)),
+        ]
       : finalArgv.slice(1),
     {
       stdio,

@@ -3,7 +3,9 @@ import { Mock, vi } from "vitest";
 export const messageCommand: Mock<(...args: unknown[]) => unknown> = vi.fn();
 export const statusCommand: Mock<(...args: unknown[]) => unknown> = vi.fn();
 export const configureCommand: Mock<(...args: unknown[]) => unknown> = vi.fn();
-export const configureCommandWithSections: Mock<(...args: unknown[]) => unknown> = vi.fn();
+export const configureCommandWithSections: Mock<
+  (...args: unknown[]) => unknown
+> = vi.fn();
 export const setupCommand: Mock<(...args: unknown[]) => unknown> = vi.fn();
 export const onboardCommand: Mock<(...args: unknown[]) => unknown> = vi.fn();
 export const callGateway: Mock<(...args: unknown[]) => unknown> = vi.fn();
@@ -11,9 +13,12 @@ export const runChannelLogin: Mock<(...args: unknown[]) => unknown> = vi.fn();
 export const runChannelLogout: Mock<(...args: unknown[]) => unknown> = vi.fn();
 export const runTui: Mock<(...args: unknown[]) => unknown> = vi.fn();
 
-export const loadAndMaybeMigrateDoctorConfig: Mock<(...args: unknown[]) => unknown> = vi.fn();
+export const loadAndMaybeMigrateDoctorConfig: Mock<
+  (...args: unknown[]) => unknown
+> = vi.fn();
 export const ensureConfigReady: Mock<(...args: unknown[]) => unknown> = vi.fn();
-export const ensurePluginRegistryLoaded: Mock<(...args: unknown[]) => unknown> = vi.fn();
+export const ensurePluginRegistryLoaded: Mock<(...args: unknown[]) => unknown> =
+  vi.fn();
 
 export const runtime: {
   log: Mock<(...args: unknown[]) => void>;

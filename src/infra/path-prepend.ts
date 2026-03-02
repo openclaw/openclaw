@@ -37,7 +37,10 @@ export function normalizePathPrepend(entries?: string[]) {
   return normalized;
 }
 
-export function mergePathPrepend(existing: string | undefined, prepend: string[]) {
+export function mergePathPrepend(
+  existing: string | undefined,
+  prepend: string[],
+) {
   if (prepend.length === 0) {
     return existing;
   }

@@ -45,18 +45,26 @@ export function coerceImageAssistantText(params: {
     );
   }
   if (errorMessage) {
-    throw new Error(`Image model failed (${params.provider}/${params.model}): ${errorMessage}`);
+    throw new Error(
+      `Image model failed (${params.provider}/${params.model}): ${errorMessage}`,
+    );
   }
   const text = extractAssistantText(params.message);
   if (text.trim()) {
     return text.trim();
   }
-  throw new Error(`Image model returned no text (${params.provider}/${params.model}).`);
+  throw new Error(
+    `Image model returned no text (${params.provider}/${params.model}).`,
+  );
 }
 
 export function coerceImageModelConfig(cfg?: OpenClawConfig): ImageModelConfig {
-  const primary = resolveAgentModelPrimaryValue(cfg?.agents?.defaults?.imageModel);
-  const fallbacks = resolveAgentModelFallbackValues(cfg?.agents?.defaults?.imageModel);
+  const primary = resolveAgentModelPrimaryValue(
+    cfg?.agents?.defaults?.imageModel,
+  );
+  const fallbacks = resolveAgentModelFallbackValues(
+    cfg?.agents?.defaults?.imageModel,
+  );
   return {
     ...(primary?.trim() ? { primary: primary.trim() } : {}),
     ...(fallbacks.length > 0 ? { fallbacks } : {}),
@@ -67,7 +75,9 @@ export function resolveProviderVisionModelFromConfig(params: {
   cfg?: OpenClawConfig;
   provider: string;
 }): string | null {
-  const providerCfg = params.cfg?.models?.providers?.[params.provider] as unknown as
+  const providerCfg = params.cfg?.models?.providers?.[
+    params.provider
+  ] as unknown as
     | { models?: Array<{ id?: string; input?: string[] }> }
     | undefined;
   const models = providerCfg?.models ?? [];
@@ -82,7 +92,9 @@ export function resolveProviderVisionModelFromConfig(params: {
       : null;
   const picked =
     preferMinimaxVl ??
-    models.find((m) => Boolean((m?.id ?? "").trim()) && m.input?.includes("image"));
+    models.find(
+      (m) => Boolean((m?.id ?? "").trim()) && m.input?.includes("image"),
+    );
   const id = (picked?.id ?? "").trim();
   return id ? `${params.provider}/${id}` : null;
 }

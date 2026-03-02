@@ -20,7 +20,10 @@ describe("polls", () => {
 
   it("enforces max option count when configured", () => {
     expect(() =>
-      normalizePollInput({ question: "Q", options: ["A", "B", "C"] }, { maxOptions: 2 }),
+      normalizePollInput(
+        { question: "Q", options: ["A", "B", "C"] },
+        { maxOptions: 2 },
+      ),
     ).toThrow(/at most 2/);
   });
 
@@ -28,11 +31,17 @@ describe("polls", () => {
     { durationHours: undefined, expected: 24 },
     { durationHours: 999, expected: 48 },
     { durationHours: 1, expected: 1 },
-  ])("clamps poll duration for $durationHours hours", ({ durationHours, expected }) => {
-    expect(normalizePollDurationHours(durationHours, { defaultHours: 24, maxHours: 48 })).toBe(
-      expected,
-    );
-  });
+  ])(
+    "clamps poll duration for $durationHours hours",
+    ({ durationHours, expected }) => {
+      expect(
+        normalizePollDurationHours(durationHours, {
+          defaultHours: 24,
+          maxHours: 48,
+        }),
+      ).toBe(expected);
+    },
+  );
 
   it("rejects both durationSeconds and durationHours", () => {
     expect(() =>

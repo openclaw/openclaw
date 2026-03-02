@@ -1,4 +1,8 @@
-import type { LineChannelData, OpenClawPluginApi, ReplyPayload } from "openclaw/plugin-sdk";
+import type {
+  LineChannelData,
+  OpenClawPluginApi,
+  ReplyPayload,
+} from "openclaw/plugin-sdk";
 import {
   createActionCard,
   createImageCard,
@@ -73,7 +77,11 @@ function parseActions(actionsStr: string | undefined): CardAction[] {
     } else {
       results.push({
         label,
-        action: { type: "message", label: label.slice(0, 20), text: actionData },
+        action: {
+          type: "message",
+          label: label.slice(0, 20),
+          text: actionData,
+        },
       });
     }
   }
@@ -100,7 +108,9 @@ function parseListItems(itemsStr: string): ListItem[] {
 /**
  * Parse receipt items format: "Item1:$10,Item2:$20"
  */
-function parseReceiptItems(itemsStr: string): Array<{ name: string; value: string }> {
+function parseReceiptItems(
+  itemsStr: string,
+): Array<{ name: string; value: string }> {
   return itemsStr
     .split(",")
     .map((part) => {
@@ -125,7 +135,11 @@ function parseCardArgs(argsStr: string): {
   args: string[];
   flags: Record<string, string>;
 } {
-  const result: { type: string; args: string[]; flags: Record<string, string> } = {
+  const result: {
+    type: string;
+    args: string[];
+    flags: Record<string, string>;
+  } = {
     type: "",
     args: [],
     flags: {},
@@ -211,7 +225,9 @@ export function registerLineCardCommand(api: OpenClawPluginApi): void {
             const [title = "Actions", body = ""] = args;
             const actions = parseActions(flags.actions);
             if (actions.length === 0) {
-              return { text: 'Error: Action card requires --actions "Label1|data1,Label2|data2"' };
+              return {
+                text: 'Error: Action card requires --actions "Label1|data1,Label2|data2"',
+              };
             }
             const bubble = createActionCard(title, body, actions, {
               imageUrl: flags.url || flags.image,
@@ -235,7 +251,11 @@ export function registerLineCardCommand(api: OpenClawPluginApi): void {
             const bubble = createListCard(title, items);
             return buildLineReply({
               flexMessage: {
-                altText: `${title}: ${items.map((i) => i.title).join(", ")}`.slice(0, 400),
+                altText:
+                  `${title}: ${items.map((i) => i.title).join(", ")}`.slice(
+                    0,
+                    400,
+                  ),
                 contents: bubble,
               },
             });
@@ -244,7 +264,9 @@ export function registerLineCardCommand(api: OpenClawPluginApi): void {
           case "receipt": {
             const [title = "Receipt", itemsStr = ""] = args;
             const items = parseReceiptItems(itemsStr || flags.items || "");
-            const total = flags.total ? { label: "Total", value: flags.total } : undefined;
+            const total = flags.total
+              ? { label: "Total", value: flags.total }
+              : undefined;
             const footer = flags.footer;
 
             if (items.length === 0) {
@@ -256,10 +278,11 @@ export function registerLineCardCommand(api: OpenClawPluginApi): void {
             const bubble = createReceiptCard({ title, items, total, footer });
             return buildLineReply({
               flexMessage: {
-                altText: `${title}: ${items.map((i) => `${i.name} ${i.value}`).join(", ")}`.slice(
-                  0,
-                  400,
-                ),
+                altText:
+                  `${title}: ${items.map((i) => `${i.name} ${i.value}`).join(", ")}`.slice(
+                    0,
+                    400,
+                  ),
                 contents: bubble,
               },
             });
@@ -292,7 +315,9 @@ export function registerLineCardCommand(api: OpenClawPluginApi): void {
             const actionParts = parseActions(actionsStr);
 
             if (actionParts.length === 0) {
-              return { text: 'Error: Buttons card requires --actions "Label1|data1,Label2|data2"' };
+              return {
+                text: 'Error: Buttons card requires --actions "Label1|data1,Label2|data2"',
+              };
             }
 
             const templateActions: Array<{
@@ -304,7 +329,11 @@ export function registerLineCardCommand(api: OpenClawPluginApi): void {
               const action = a.action;
               const label = action.label ?? a.label;
               if (action.type === "uri") {
-                return { type: "uri" as const, label, uri: (action as { uri: string }).uri };
+                return {
+                  type: "uri" as const,
+                  label,
+                  uri: (action as { uri: string }).uri,
+                };
               }
               if (action.type === "postback") {
                 return {

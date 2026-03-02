@@ -2,7 +2,10 @@ import "./test-helpers.js";
 import fs from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { installWebAutoReplyUnitTestHooks, makeSessionStore } from "./auto-reply.test-harness.js";
+import {
+  installWebAutoReplyUnitTestHooks,
+  makeSessionStore,
+} from "./auto-reply.test-harness.js";
 import { buildMentionConfig } from "./auto-reply/mentions.js";
 import { createEchoTracker } from "./auto-reply/monitor/echo.js";
 import { awaitBackgroundTasks } from "./auto-reply/monitor/last-route.js";
@@ -21,10 +24,15 @@ function makeReplyLogger() {
     info: vi.fn(),
     debug: vi.fn(),
     error: vi.fn(),
-  } as unknown as Parameters<typeof createWebOnMessageHandler>[0]["replyLogger"];
+  } as unknown as Parameters<
+    typeof createWebOnMessageHandler
+  >[0]["replyLogger"];
 }
 
-function createHandlerForTest(opts: { cfg: OpenClawConfig; replyResolver: unknown }) {
+function createHandlerForTest(opts: {
+  cfg: OpenClawConfig;
+  replyResolver: unknown;
+}) {
   const backgroundTasks = new Set<Promise<unknown>>();
   const handler = createWebOnMessageHandler({
     cfg: opts.cfg,
@@ -103,7 +111,9 @@ describe("web auto-reply last-route", () => {
       [mainSessionKey]: { sessionId: "sid", updatedAt: now - 1 },
     });
 
-    const { handler, backgroundTasks } = createLastRouteHarness(store.storePath);
+    const { handler, backgroundTasks } = createLastRouteHarness(
+      store.storePath,
+    );
 
     await handler(
       buildInboundMessage({
@@ -132,7 +142,9 @@ describe("web auto-reply last-route", () => {
       [groupSessionKey]: { sessionId: "sid", updatedAt: now - 1 },
     });
 
-    const { handler, backgroundTasks } = createLastRouteHarness(store.storePath);
+    const { handler, backgroundTasks } = createLastRouteHarness(
+      store.storePath,
+    );
 
     await handler(
       buildInboundMessage({

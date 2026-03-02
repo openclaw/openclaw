@@ -20,7 +20,9 @@ function extractBetween(
   return { text: input.slice(start, end), found: true };
 }
 
-function parseSkillBlocks(skillsPrompt: string): Array<{ name: string; blockChars: number }> {
+function parseSkillBlocks(
+  skillsPrompt: string,
+): Array<{ name: string; blockChars: number }> {
   const prompt = skillsPrompt.trim();
   if (!prompt) {
     return [];
@@ -30,7 +32,9 @@ function parseSkillBlocks(skillsPrompt: string): Array<{ name: string; blockChar
   );
   return blocks
     .map((block) => {
-      const name = block.match(/<name>\s*([^<]+?)\s*<\/name>/i)?.[1]?.trim() || "(unknown)";
+      const name =
+        block.match(/<name>\s*([^<]+?)\s*<\/name>/i)?.[1]?.trim() ||
+        "(unknown)";
       return { name, blockChars: block.length };
     })
     .filter((b) => b.blockChars > 0);
@@ -76,7 +80,9 @@ function buildInjectedWorkspaceFiles(params: {
   });
 }
 
-function buildToolsEntries(tools: AgentTool[]): SessionSystemPromptReport["tools"]["entries"] {
+function buildToolsEntries(
+  tools: AgentTool[],
+): SessionSystemPromptReport["tools"]["entries"] {
   return tools.map((tool) => {
     const name = tool.name;
     const summary = tool.description?.trim() || tool.label?.trim() || "";
@@ -96,7 +102,10 @@ function buildToolsEntries(tools: AgentTool[]): SessionSystemPromptReport["tools
         tool.parameters && typeof tool.parameters === "object"
           ? (tool.parameters as Record<string, unknown>)
           : null;
-      const props = schema && typeof schema.properties === "object" ? schema.properties : null;
+      const props =
+        schema && typeof schema.properties === "object"
+          ? schema.properties
+          : null;
       if (!props || typeof props !== "object") {
         return null;
       }
@@ -107,7 +116,8 @@ function buildToolsEntries(tools: AgentTool[]): SessionSystemPromptReport["tools
 }
 
 function extractToolListText(systemPrompt: string): string {
-  const markerA = "Tool names are case-sensitive. Call tools exactly as listed.\n";
+  const markerA =
+    "Tool names are case-sensitive. Call tools exactly as listed.\n";
   const markerB =
     "\nTOOLS.md does not control tool availability; it is user guidance for how to use external tools.";
   const extracted = extractBetween(systemPrompt, markerA, markerB);
@@ -144,7 +154,10 @@ export function buildSystemPromptReport(params: {
   const toolListText = extractToolListText(systemPrompt);
   const toolListChars = toolListText.length;
   const toolsEntries = buildToolsEntries(params.tools);
-  const toolsSchemaChars = toolsEntries.reduce((sum, t) => sum + (t.schemaChars ?? 0), 0);
+  const toolsSchemaChars = toolsEntries.reduce(
+    (sum, t) => sum + (t.schemaChars ?? 0),
+    0,
+  );
   const skillsEntries = parseSkillBlocks(params.skillsPrompt);
 
   return {
@@ -161,7 +174,10 @@ export function buildSystemPromptReport(params: {
     systemPrompt: {
       chars: systemPrompt.length,
       projectContextChars,
-      nonProjectContextChars: Math.max(0, systemPrompt.length - projectContextChars),
+      nonProjectContextChars: Math.max(
+        0,
+        systemPrompt.length - projectContextChars,
+      ),
     },
     injectedWorkspaceFiles: buildInjectedWorkspaceFiles({
       bootstrapFiles: params.bootstrapFiles,

@@ -49,7 +49,8 @@ export function parseDiscordTarget(
     const id = ensureTargetId({
       candidate,
       pattern: /^\d+$/,
-      errorMessage: "Discord DMs require a user id (use user:<id> or a <@id> mention)",
+      errorMessage:
+        "Discord DMs require a user id (use user:<id> or a <@id> mention)",
     });
     return buildMessagingTarget("user", id, trimmed);
   }
@@ -90,7 +91,8 @@ export async function resolveDiscordTarget(
   }
 
   const likelyUsername = isLikelyUsername(trimmed);
-  const shouldLookup = isExplicitUserLookup(trimmed, parseOptions) || likelyUsername;
+  const shouldLookup =
+    isExplicitUserLookup(trimmed, parseOptions) || likelyUsername;
 
   // Parse directly if it's already a known format. Use a safe parse so ambiguous
   // numeric targets don't throw when we still want to attempt username lookup.
@@ -137,7 +139,10 @@ function safeParseDiscordTarget(
   }
 }
 
-function isExplicitUserLookup(input: string, options: DiscordTargetParseOptions): boolean {
+function isExplicitUserLookup(
+  input: string,
+  options: DiscordTargetParseOptions,
+): boolean {
   if (/^<@!?(\d+)>$/.test(input)) {
     return true;
   }

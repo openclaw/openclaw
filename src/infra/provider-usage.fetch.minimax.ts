@@ -5,7 +5,10 @@ import {
   parseFiniteNumber,
 } from "./provider-usage.fetch.shared.js";
 import { clampPercent, PROVIDER_LABELS } from "./provider-usage.shared.js";
-import type { ProviderUsageSnapshot, UsageWindow } from "./provider-usage.types.js";
+import type {
+  ProviderUsageSnapshot,
+  UsageWindow,
+} from "./provider-usage.types.js";
 
 type MinimaxBaseResp = {
   status_code?: number;
@@ -153,7 +156,10 @@ const WINDOW_MINUTE_KEYS = [
   "minutes",
 ] as const;
 
-function pickNumber(record: Record<string, unknown>, keys: readonly string[]): number | undefined {
+function pickNumber(
+  record: Record<string, unknown>,
+  keys: readonly string[],
+): number | undefined {
   for (const key of keys) {
     const parsed = parseFiniteNumber(record[key]);
     if (parsed !== undefined) {
@@ -163,7 +169,10 @@ function pickNumber(record: Record<string, unknown>, keys: readonly string[]): n
   return undefined;
 }
 
-function pickString(record: Record<string, unknown>, keys: readonly string[]): string | undefined {
+function pickString(
+  record: Record<string, unknown>,
+  keys: readonly string[],
+): string | undefined {
   for (const key of keys) {
     const value = record[key];
     if (typeof value === "string" && value.trim()) {
@@ -189,7 +198,10 @@ function parseEpoch(value: unknown): number | undefined {
   return undefined;
 }
 
-function hasAny(record: Record<string, unknown>, keys: readonly string[]): boolean {
+function hasAny(
+  record: Record<string, unknown>,
+  keys: readonly string[],
+): boolean {
   return keys.some((key) => key in record);
 }
 
@@ -213,12 +225,20 @@ function scoreUsageRecord(record: Record<string, unknown>): number {
   return score;
 }
 
-function collectUsageCandidates(root: Record<string, unknown>): Record<string, unknown>[] {
+function collectUsageCandidates(
+  root: Record<string, unknown>,
+): Record<string, unknown>[] {
   const MAX_SCAN_DEPTH = 4;
   const MAX_SCAN_NODES = 60;
-  const queue: Array<{ value: unknown; depth: number }> = [{ value: root, depth: 0 }];
+  const queue: Array<{ value: unknown; depth: number }> = [
+    { value: root, depth: 0 },
+  ];
   const seen = new Set<object>();
-  const candidates: Array<{ record: Record<string, unknown>; score: number; depth: number }> = [];
+  const candidates: Array<{
+    record: Record<string, unknown>;
+    score: number;
+    depth: number;
+  }> = [];
   let scanned = 0;
 
   while (queue.length && scanned < MAX_SCAN_NODES) {
@@ -285,7 +305,9 @@ function deriveUsedPercent(payload: Record<string, unknown>): number | null {
 
   const percentRaw = pickNumber(payload, PERCENT_KEYS);
   if (percentRaw !== undefined) {
-    const normalized = clampPercent(percentRaw <= 1 ? percentRaw * 100 : percentRaw);
+    const normalized = clampPercent(
+      percentRaw <= 1 ? percentRaw * 100 : percentRaw,
+    );
     if (fromCounts !== null) {
       // Count-derived usage is more stable across provider percent field variations.
       return fromCounts;
@@ -333,7 +355,11 @@ export async function fetchMinimaxUsage(
   }
 
   const baseResp = isRecord(data.base_resp) ? data.base_resp : undefined;
-  if (baseResp && typeof baseResp.status_code === "number" && baseResp.status_code !== 0) {
+  if (
+    baseResp &&
+    typeof baseResp.status_code === "number" &&
+    baseResp.status_code !== 0
+  ) {
     return {
       provider: "minimax",
       displayName: PROVIDER_LABELS.minimax,

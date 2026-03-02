@@ -1,7 +1,10 @@
 import { Type } from "@sinclair/typebox";
 import { NonEmptyString } from "./primitives.js";
 
-export const ConfigGetParamsSchema = Type.Object({}, { additionalProperties: false });
+export const ConfigGetParamsSchema = Type.Object(
+  {},
+  { additionalProperties: false },
+);
 
 export const ConfigSetParamsSchema = Type.Object(
   {
@@ -25,7 +28,10 @@ const ConfigApplyLikeParamsSchema = Type.Object(
 export const ConfigApplyParamsSchema = ConfigApplyLikeParamsSchema;
 export const ConfigPatchParamsSchema = ConfigApplyLikeParamsSchema;
 
-export const ConfigSchemaParamsSchema = Type.Object({}, { additionalProperties: false });
+export const ConfigSchemaParamsSchema = Type.Object(
+  {},
+  { additionalProperties: false },
+);
 
 export const UpdateRunParamsSchema = Type.Object(
   {

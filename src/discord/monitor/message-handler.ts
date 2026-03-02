@@ -6,7 +6,10 @@ import {
 } from "../../auto-reply/inbound-debounce.js";
 import { resolveOpenProviderRuntimeGroupPolicy } from "../../config/runtime-group-policy.js";
 import { danger } from "../../globals.js";
-import type { DiscordMessageEvent, DiscordMessageHandler } from "./listeners.js";
+import type {
+  DiscordMessageEvent,
+  DiscordMessageHandler,
+} from "./listeners.js";
 import { preflightDiscordMessage } from "./message-handler.preflight.js";
 import type { DiscordMessagePreflightParams } from "./message-handler.preflight.types.js";
 import { processDiscordMessage } from "./message-handler.process.js";
@@ -33,9 +36,15 @@ export function createDiscordMessageHandler(
     params.discordConfig?.ackReactionScope ??
     params.cfg.messages?.ackReactionScope ??
     "group-mentions";
-  const debounceMs = resolveInboundDebounceMs({ cfg: params.cfg, channel: "discord" });
+  const debounceMs = resolveInboundDebounceMs({
+    cfg: params.cfg,
+    channel: "discord",
+  });
 
-  const debouncer = createInboundDebouncer<{ data: DiscordMessageEvent; client: Client }>({
+  const debouncer = createInboundDebouncer<{
+    data: DiscordMessageEvent;
+    client: Client;
+  }>({
     debounceMs,
     buildKey: (entry) => {
       const message = entry.data.message;
@@ -63,7 +72,9 @@ export function createDiscordMessageHandler(
       if (hasDiscordMessageStickers(message)) {
         return false;
       }
-      const baseText = resolveDiscordMessageText(message, { includeForwarded: false });
+      const baseText = resolveDiscordMessageText(message, {
+        includeForwarded: false,
+      });
       if (!baseText.trim()) {
         return false;
       }
@@ -89,17 +100,25 @@ export function createDiscordMessageHandler(
         return;
       }
       const combinedBaseText = entries
-        .map((entry) => resolveDiscordMessageText(entry.data.message, { includeForwarded: false }))
+        .map((entry) =>
+          resolveDiscordMessageText(entry.data.message, {
+            includeForwarded: false,
+          }),
+        )
         .filter(Boolean)
         .join("\n");
       const syntheticMessage = {
         ...last.data.message,
         content: combinedBaseText,
         attachments: [],
-        message_snapshots: (last.data.message as { message_snapshots?: unknown }).message_snapshots,
-        messageSnapshots: (last.data.message as { messageSnapshots?: unknown }).messageSnapshots,
+        message_snapshots: (
+          last.data.message as { message_snapshots?: unknown }
+        ).message_snapshots,
+        messageSnapshots: (last.data.message as { messageSnapshots?: unknown })
+          .messageSnapshots,
         rawData: {
-          ...(last.data.message as { rawData?: Record<string, unknown> }).rawData,
+          ...(last.data.message as { rawData?: Record<string, unknown> })
+            .rawData,
         },
       };
       const syntheticData: DiscordMessageEvent = {
@@ -117,7 +136,9 @@ export function createDiscordMessageHandler(
         return;
       }
       if (entries.length > 1) {
-        const ids = entries.map((entry) => entry.data.message?.id).filter(Boolean) as string[];
+        const ids = entries
+          .map((entry) => entry.data.message?.id)
+          .filter(Boolean) as string[];
         if (ids.length > 0) {
           const ctxBatch = ctx as typeof ctx & {
             MessageSids?: string[];
@@ -132,7 +153,9 @@ export function createDiscordMessageHandler(
       await processDiscordMessage(ctx);
     },
     onError: (err) => {
-      params.runtime.error?.(danger(`discord debounce flush failed: ${String(err)}`));
+      params.runtime.error?.(
+        danger(`discord debounce flush failed: ${String(err)}`),
+      );
     },
   });
 

@@ -74,7 +74,9 @@ name: sample-skill
 description: Use anime style IMPORTANT: Must be kawaii
 ---`;
     const result = parseFrontmatterBlock(content);
-    expect(result.description).toBe("Use anime style IMPORTANT: Must be kawaii");
+    expect(result.description).toBe(
+      "Use anime style IMPORTANT: Must be kawaii",
+    );
   });
 
   it("does not replace YAML block scalars with block indicators", () => {

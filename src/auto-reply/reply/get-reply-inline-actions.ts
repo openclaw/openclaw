@@ -14,7 +14,12 @@ import {
   resolveSkillCommandInvocation,
 } from "../skill-commands.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
-import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../thinking.js";
+import type {
+  ElevatedLevel,
+  ReasoningLevel,
+  ThinkLevel,
+  VerboseLevel,
+} from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
   clearAbortCutoffInSession,
@@ -102,7 +107,9 @@ export async function handleInlineActions(params: {
   elevatedEnabled: boolean;
   elevatedAllowed: boolean;
   elevatedFailures: Array<{ gate: string; key: string }>;
-  defaultActivation: Parameters<typeof buildStatusReply>[0]["defaultGroupActivation"];
+  defaultActivation: Parameters<
+    typeof buildStatusReply
+  >[0]["defaultGroupActivation"];
   resolvedThinkLevel: ThinkLevel | undefined;
   resolvedVerboseLevel: VerboseLevel | undefined;
   resolvedReasoningLevel: ReasoningLevel;
@@ -158,12 +165,15 @@ export async function handleInlineActions(params: {
   let directives = initialDirectives;
   let cleanedBody = initialCleanedBody;
 
-  const slashCommandName = resolveSlashCommandName(command.commandBodyNormalized);
+  const slashCommandName = resolveSlashCommandName(
+    command.commandBodyNormalized,
+  );
   const shouldLoadSkillCommands =
     allowTextCommands &&
     slashCommandName !== null &&
     // `/skill …` needs the full skill command list.
-    (slashCommandName === "skill" || !builtinSlashCommands.has(slashCommandName));
+    (slashCommandName === "skill" ||
+      !builtinSlashCommands.has(slashCommandName));
   const skillCommands =
     shouldLoadSkillCommands && params.skillCommands
       ? params.skillCommands
@@ -209,12 +219,20 @@ export async function handleInlineActions(params: {
         workspaceDir,
         config: cfg,
       });
-      const authorizedTools = applyOwnerOnlyToolPolicy(tools, command.senderIsOwner);
+      const authorizedTools = applyOwnerOnlyToolPolicy(
+        tools,
+        command.senderIsOwner,
+      );
 
-      const tool = authorizedTools.find((candidate) => candidate.name === dispatch.toolName);
+      const tool = authorizedTools.find(
+        (candidate) => candidate.name === dispatch.toolName,
+      );
       if (!tool) {
         typing.cleanup();
-        return { kind: "reply", reply: { text: `❌ Tool not available: ${dispatch.toolName}` } };
+        return {
+          kind: "reply",
+          reply: { text: `❌ Tool not available: ${dispatch.toolName}` },
+        };
       }
 
       const toolCallId = `cmd_${generateSecureToken(8)}`;

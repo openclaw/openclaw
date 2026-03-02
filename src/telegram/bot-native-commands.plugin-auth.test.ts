@@ -44,7 +44,9 @@ describe("registerTelegramNativeCommands (plugin auth)", () => {
     } as const;
 
     registerTelegramNativeCommands({
-      bot: bot as unknown as Parameters<typeof registerTelegramNativeCommands>[0]["bot"],
+      bot: bot as unknown as Parameters<
+        typeof registerTelegramNativeCommands
+      >[0]["bot"],
       cfg: {} as OpenClawConfig,
       runtime: { log } as unknown as RuntimeEnv,
       accountId: "default",
@@ -71,7 +73,9 @@ describe("registerTelegramNativeCommands (plugin auth)", () => {
     });
 
     expect(setMyCommands).not.toHaveBeenCalled();
-    expect(log).not.toHaveBeenCalledWith(expect.stringContaining("registering first 100"));
+    expect(log).not.toHaveBeenCalledWith(
+      expect.stringContaining("registering first 100"),
+    );
     expect(Object.keys(handlers)).toHaveLength(101);
   });
 
@@ -83,7 +87,9 @@ describe("registerTelegramNativeCommands (plugin auth)", () => {
       handler: vi.fn(),
     } as const;
 
-    getPluginCommandSpecs.mockReturnValue([{ name: "plugin", description: "Plugin command" }]);
+    getPluginCommandSpecs.mockReturnValue([
+      { name: "plugin", description: "Plugin command" },
+    ]);
     matchPluginCommand.mockReturnValue({ command, args: undefined });
     executePluginCommand.mockResolvedValue({ text: "ok" });
 
@@ -107,7 +113,9 @@ describe("registerTelegramNativeCommands (plugin auth)", () => {
       }) as ChannelGroupPolicy;
 
     registerTelegramNativeCommands({
-      bot: bot as unknown as Parameters<typeof registerTelegramNativeCommands>[0]["bot"],
+      bot: bot as unknown as Parameters<
+        typeof registerTelegramNativeCommands
+      >[0]["bot"],
       cfg,
       runtime: {} as unknown as RuntimeEnv,
       accountId: "default",

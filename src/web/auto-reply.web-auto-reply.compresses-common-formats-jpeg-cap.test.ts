@@ -28,7 +28,9 @@ describe("web auto-reply", () => {
     const sendComposing = vi.fn(async () => undefined);
     const resolver = vi.fn().mockResolvedValue(params.resolverValue);
 
-    let capturedOnMessage: ((msg: WebInboundMessage) => Promise<void>) | undefined;
+    let capturedOnMessage:
+      | ((msg: WebInboundMessage) => Promise<void>)
+      | undefined;
     const listenerFactory: ListenerFactory = async ({ onMessage }) => {
       capturedOnMessage = onMessage;
       return createMockWebListener();
@@ -42,7 +44,10 @@ describe("web auto-reply", () => {
       dispatch: async (
         id = "msg1",
         overrides?: Partial<
-          Pick<WebInboundMessage, "from" | "conversationId" | "to" | "accountId" | "chatId">
+          Pick<
+            WebInboundMessage,
+            "from" | "conversationId" | "to" | "accountId" | "chatId"
+          >
         >,
       ) => {
         await capturedOnMessage?.({
@@ -72,7 +77,10 @@ describe("web auto-reply", () => {
     };
   }
 
-  async function withMediaCap<T>(mediaMaxMb: number, run: () => Promise<T>): Promise<T> {
+  async function withMediaCap<T>(
+    mediaMaxMb: number,
+    run: () => Promise<T>,
+  ): Promise<T> {
     setLoadConfigMock(() => ({ agents: { defaults: { mediaMaxMb } } }));
     try {
       return await run();
@@ -86,7 +94,10 @@ describe("web auto-reply", () => {
       ok: true,
       body: true,
       arrayBuffer: async () =>
-        buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength),
+        buffer.buffer.slice(
+          buffer.byteOffset,
+          buffer.byteOffset + buffer.byteLength,
+        ),
       headers: { get: () => mime },
       status: 200,
     } as unknown as Response);
@@ -110,7 +121,9 @@ describe("web auto-reply", () => {
       await dispatch(params.messageId);
 
       const payload = getSingleImagePayload(sendMedia);
-      expect(payload.image.length).toBeLessThanOrEqual((params.mediaMaxMb ?? 1) * 1024 * 1024);
+      expect(payload.image.length).toBeLessThanOrEqual(
+        (params.mediaMaxMb ?? 1) * 1024 * 1024,
+      );
       expect(payload.mimetype).toBe("image/jpeg");
       expect(reply).not.toHaveBeenCalled();
       fetchMock.mockRestore();
@@ -174,20 +187,26 @@ describe("web auto-reply", () => {
       });
       let fetchIndex = 0;
 
-      const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
-        const matched =
-          renderedFormats[Math.min(fetchIndex, renderedFormats.length - 1)] ?? renderedFormats[0];
-        fetchIndex += 1;
-        const { image, mime } = matched;
-        return {
-          ok: true,
-          body: true,
-          arrayBuffer: async () =>
-            image.buffer.slice(image.byteOffset, image.byteOffset + image.byteLength),
-          headers: { get: () => mime },
-          status: 200,
-        } as unknown as Response;
-      });
+      const fetchMock = vi
+        .spyOn(globalThis, "fetch")
+        .mockImplementation(async () => {
+          const matched =
+            renderedFormats[Math.min(fetchIndex, renderedFormats.length - 1)] ??
+            renderedFormats[0];
+          fetchIndex += 1;
+          const { image, mime } = matched;
+          return {
+            ok: true,
+            body: true,
+            arrayBuffer: async () =>
+              image.buffer.slice(
+                image.byteOffset,
+                image.byteOffset + image.byteLength,
+              ),
+            headers: { get: () => mime },
+            status: 200,
+          } as unknown as Response;
+        });
 
       try {
         for (const [index, fmt] of renderedFormats.entries()) {
@@ -204,7 +223,9 @@ describe("web auto-reply", () => {
             caption?: string;
             mimetype?: string;
           };
-          expect(payload.image.length).toBeLessThanOrEqual(SMALL_MEDIA_CAP_BYTES);
+          expect(payload.image.length).toBeLessThanOrEqual(
+            SMALL_MEDIA_CAP_BYTES,
+          );
           expect(payload.mimetype).toBe("image/jpeg");
         }
         expect(sendMedia).toHaveBeenCalledTimes(renderedFormats.length);
@@ -290,7 +311,10 @@ describe("web auto-reply", () => {
       ok: true,
       body: true,
       arrayBuffer: async () =>
-        smallPng.buffer.slice(smallPng.byteOffset, smallPng.byteOffset + smallPng.byteLength),
+        smallPng.buffer.slice(
+          smallPng.byteOffset,
+          smallPng.byteOffset + smallPng.byteLength,
+        ),
       headers: { get: () => "image/png" },
       status: 200,
     } as unknown as Response);
@@ -355,7 +379,8 @@ describe("web auto-reply", () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
       ok: true,
       body: true,
-      arrayBuffer: async () => png.buffer.slice(png.byteOffset, png.byteOffset + png.byteLength),
+      arrayBuffer: async () =>
+        png.buffer.slice(png.byteOffset, png.byteOffset + png.byteLength),
       headers: { get: () => "image/png" },
       status: 200,
     } as unknown as Response);

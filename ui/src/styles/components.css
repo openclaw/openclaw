@@ -266,7 +266,9 @@
   height: var(--theme-item);
   border-radius: var(--radius-full);
   transform: translateY(-50%)
-    translateX(calc(var(--theme-index, 0) * (var(--theme-item) + var(--theme-gap))));
+    translateX(
+      calc(var(--theme-index, 0) * (var(--theme-item) + var(--theme-gap)))
+    );
   background: var(--accent);
   transition: transform var(--duration-normal) var(--ease-out);
   z-index: 0;
@@ -820,7 +822,10 @@
 }
 
 .cron-run-filters__row--primary {
-  grid-template-columns: minmax(160px, 220px) minmax(240px, 1fr) minmax(160px, 220px);
+  grid-template-columns: minmax(160px, 220px) minmax(240px, 1fr) minmax(
+      160px,
+      220px
+    );
 }
 
 .cron-run-filters__row--secondary {
@@ -1024,19 +1029,31 @@
 
 .callout.danger {
   border-color: rgba(239, 68, 68, 0.25);
-  background: linear-gradient(135deg, rgba(239, 68, 68, 0.08) 0%, rgba(239, 68, 68, 0.04) 100%);
+  background: linear-gradient(
+    135deg,
+    rgba(239, 68, 68, 0.08) 0%,
+    rgba(239, 68, 68, 0.04) 100%
+  );
   color: var(--danger);
 }
 
 .callout.info {
   border-color: rgba(59, 130, 246, 0.25);
-  background: linear-gradient(135deg, rgba(59, 130, 246, 0.08) 0%, rgba(59, 130, 246, 0.04) 100%);
+  background: linear-gradient(
+    135deg,
+    rgba(59, 130, 246, 0.08) 0%,
+    rgba(59, 130, 246, 0.04) 100%
+  );
   color: var(--info);
 }
 
 .callout.success {
   border-color: rgba(34, 197, 94, 0.25);
-  background: linear-gradient(135deg, rgba(34, 197, 94, 0.08) 0%, rgba(34, 197, 94, 0.04) 100%);
+  background: linear-gradient(
+    135deg,
+    rgba(34, 197, 94, 0.08) 0%,
+    rgba(34, 197, 94, 0.04) 100%
+  );
   color: var(--ok);
 }
 

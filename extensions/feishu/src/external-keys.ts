@@ -12,7 +12,11 @@ export function normalizeFeishuExternalKey(value: unknown): string | undefined {
   if (CONTROL_CHARS_RE.test(normalized)) {
     return undefined;
   }
-  if (normalized.includes("/") || normalized.includes("\\") || normalized.includes("..")) {
+  if (
+    normalized.includes("/") ||
+    normalized.includes("\\") ||
+    normalized.includes("..")
+  ) {
     return undefined;
   }
   return normalized;

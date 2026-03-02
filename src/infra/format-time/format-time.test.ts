@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { formatUtcTimestamp, formatZonedTimestamp, resolveTimezone } from "./format-datetime.js";
+import {
+  formatUtcTimestamp,
+  formatZonedTimestamp,
+  resolveTimezone,
+} from "./format-datetime.js";
 import {
   formatDurationCompact,
   formatDurationHuman,
@@ -104,7 +108,9 @@ describe("format-duration", () => {
     });
 
     it("supports seconds unit", () => {
-      expect(formatDurationSeconds(2000, { unit: "seconds" })).toBe("2 seconds");
+      expect(formatDurationSeconds(2000, { unit: "seconds" })).toBe(
+        "2 seconds",
+      );
     });
   });
 });
@@ -127,13 +133,16 @@ describe("format-datetime", () => {
     it.each([
       { displaySeconds: false, expected: "2024-01-15T14:30Z" },
       { displaySeconds: true, expected: "2024-01-15T14:30:45Z" },
-    ])("formats UTC timestamp (displaySeconds=$displaySeconds)", ({ displaySeconds, expected }) => {
-      const date = new Date("2024-01-15T14:30:45.000Z");
-      const result = displaySeconds
-        ? formatUtcTimestamp(date, { displaySeconds: true })
-        : formatUtcTimestamp(date);
-      expect(result).toBe(expected);
-    });
+    ])(
+      "formats UTC timestamp (displaySeconds=$displaySeconds)",
+      ({ displaySeconds, expected }) => {
+        const date = new Date("2024-01-15T14:30:45.000Z");
+        const result = displaySeconds
+          ? formatUtcTimestamp(date, { displaySeconds: true })
+          : formatUtcTimestamp(date);
+        expect(result).toBe(expected);
+      },
+    );
   });
 
   describe("formatZonedTimestamp", () => {
@@ -192,7 +201,9 @@ describe("format-relative", () => {
       for (const value of [null, undefined]) {
         expect(formatRelativeTimestamp(value)).toBe("n/a");
       }
-      expect(formatRelativeTimestamp(null, { fallback: "unknown" })).toBe("unknown");
+      expect(formatRelativeTimestamp(null, { fallback: "unknown" })).toBe(
+        "unknown",
+      );
     });
 
     it.each([
@@ -202,10 +213,13 @@ describe("format-relative", () => {
       { offsetMs: 30000, expected: "in <1m" },
       { offsetMs: 300000, expected: "in 5m" },
       { offsetMs: 7200000, expected: "in 2h" },
-    ])("formats relative timestamp for offset $offsetMs", ({ offsetMs, expected }) => {
-      const now = Date.now();
-      expect(formatRelativeTimestamp(now + offsetMs)).toBe(expected);
-    });
+    ])(
+      "formats relative timestamp for offset $offsetMs",
+      ({ offsetMs, expected }) => {
+        const now = Date.now();
+        expect(formatRelativeTimestamp(now + offsetMs)).toBe(expected);
+      },
+    );
 
     it("falls back to date for old timestamps when enabled", () => {
       const oldDate = Date.now() - 30 * 24 * 3600000; // 30 days ago

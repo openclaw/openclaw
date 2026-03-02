@@ -7,9 +7,13 @@ type ChromeUserDataDirRef = {
   dir: string;
 };
 
-export function installChromeUserDataDirHooks(chromeUserDataDir: ChromeUserDataDirRef): void {
+export function installChromeUserDataDirHooks(
+  chromeUserDataDir: ChromeUserDataDirRef,
+): void {
   beforeAll(async () => {
-    chromeUserDataDir.dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-chrome-user-data-"));
+    chromeUserDataDir.dir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-chrome-user-data-"),
+    );
   });
 
   afterAll(async () => {

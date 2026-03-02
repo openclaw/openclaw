@@ -10,11 +10,17 @@ const OPENROUTER_APP_HEADERS: Record<string, string> = {
   "X-Title": "OpenClaw",
 };
 const ANTHROPIC_CONTEXT_1M_BETA = "context-1m-2025-08-07";
-const ANTHROPIC_1M_MODEL_PREFIXES = ["claude-opus-4", "claude-sonnet-4"] as const;
+const ANTHROPIC_1M_MODEL_PREFIXES = [
+  "claude-opus-4",
+  "claude-sonnet-4",
+] as const;
 // NOTE: We only force `store=true` for *direct* OpenAI Responses.
 // Codex responses (chatgpt.com/backend-api/codex/responses) require `store=false`.
 const OPENAI_RESPONSES_APIS = new Set(["openai-responses"]);
-const OPENAI_RESPONSES_PROVIDERS = new Set(["openai", "azure-openai-responses"]);
+const OPENAI_RESPONSES_PROVIDERS = new Set([
+  "openai",
+  "azure-openai-responses",
+]);
 
 /**
  * Resolve provider-specific extra params from model config.
@@ -30,10 +36,13 @@ export function resolveExtraParams(params: {
 }): Record<string, unknown> | undefined {
   const modelKey = `${params.provider}/${params.modelId}`;
   const modelConfig = params.cfg?.agents?.defaults?.models?.[modelKey];
-  const globalParams = modelConfig?.params ? { ...modelConfig.params } : undefined;
+  const globalParams = modelConfig?.params
+    ? { ...modelConfig.params }
+    : undefined;
   const agentParams =
     params.agentId && params.cfg?.agents?.list
-      ? params.cfg.agents.list.find((agent) => agent.id === params.agentId)?.params
+      ? params.cfg.agents.list.find((agent) => agent.id === params.agentId)
+          ?.params
       : undefined;
 
   if (!globalParams && !agentParams) {
@@ -70,8 +79,10 @@ function resolveCacheRetention(
 ): CacheRetention | undefined {
   const isAnthropicDirect = provider === "anthropic";
   const hasBedrockOverride =
-    extraParams?.cacheRetention !== undefined || extraParams?.cacheControlTtl !== undefined;
-  const isAnthropicBedrock = provider === "amazon-bedrock" && hasBedrockOverride;
+    extraParams?.cacheRetention !== undefined ||
+    extraParams?.cacheControlTtl !== undefined;
+  const isAnthropicBedrock =
+    provider === "amazon-bedrock" && hasBedrockOverride;
 
   if (!isAnthropicDirect && !isAnthropicBedrock) {
     return undefined;
@@ -119,10 +130,15 @@ function createStreamFnWithExtraParams(
     streamParams.maxTokens = extraParams.maxTokens;
   }
   const transport = extraParams.transport;
-  if (transport === "sse" || transport === "websocket" || transport === "auto") {
+  if (
+    transport === "sse" ||
+    transport === "websocket" ||
+    transport === "auto"
+  ) {
     streamParams.transport = transport;
   } else if (transport != null) {
-    const transportSummary = typeof transport === "string" ? transport : typeof transport;
+    const transportSummary =
+      typeof transport === "string" ? transport : typeof transport;
     log.warn(`ignoring invalid transport param: ${transportSummary}`);
   }
   if (typeof extraParams.openaiWsWarmup === "boolean") {
@@ -150,9 +166,13 @@ function createStreamFnWithExtraParams(
     return undefined;
   }
 
-  log.debug(`creating streamFn wrapper with params: ${JSON.stringify(streamParams)}`);
+  log.debug(
+    `creating streamFn wrapper with params: ${JSON.stringify(streamParams)}`,
+  );
   if (providerRouting) {
-    log.debug(`OpenRouter provider routing: ${JSON.stringify(providerRouting)}`);
+    log.debug(
+      `OpenRouter provider routing: ${JSON.stringify(providerRouting)}`,
+    );
   }
 
   const underlying = baseStreamFn ?? streamSimple;
@@ -176,10 +196,15 @@ function createStreamFnWithExtraParams(
 
 function isAnthropicBedrockModel(modelId: string): boolean {
   const normalized = modelId.toLowerCase();
-  return normalized.includes("anthropic.claude") || normalized.includes("anthropic/claude");
+  return (
+    normalized.includes("anthropic.claude") ||
+    normalized.includes("anthropic/claude")
+  );
 }
 
-function createBedrockNoCacheWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+function createBedrockNoCacheWrapper(
+  baseStreamFn: StreamFn | undefined,
+): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) =>
     underlying(model, context, {
@@ -196,7 +221,9 @@ function isDirectOpenAIBaseUrl(baseUrl: unknown): boolean {
   try {
     const host = new URL(baseUrl).hostname.toLowerCase();
     return (
-      host === "api.openai.com" || host === "chatgpt.com" || host.endsWith(".openai.azure.com")
+      host === "api.openai.com" ||
+      host === "chatgpt.com" ||
+      host.endsWith(".openai.azure.com")
     );
   } catch {
     const normalized = baseUrl.toLowerCase();
@@ -244,7 +271,9 @@ function parsePositiveInteger(value: unknown): number | undefined {
   return undefined;
 }
 
-function resolveOpenAIResponsesCompactThreshold(model: { contextWindow?: unknown }): number {
+function resolveOpenAIResponsesCompactThreshold(model: {
+  contextWindow?: unknown;
+}): number {
   const contextWindow = parsePositiveInteger(model.contextWindow);
   if (contextWindow) {
     return Math.max(1_000, Math.floor(contextWindow * 0.7));
@@ -282,7 +311,10 @@ function createOpenAIResponsesContextManagementWrapper(
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
     const forceStore = shouldForceResponsesStore(model);
-    const useServerCompaction = shouldEnableOpenAIResponsesServerCompaction(model, extraParams);
+    const useServerCompaction = shouldEnableOpenAIResponsesServerCompaction(
+      model,
+      extraParams,
+    );
     if (!forceStore && !useServerCompaction) {
       return underlying(model, context, options);
     }
@@ -299,7 +331,10 @@ function createOpenAIResponsesContextManagementWrapper(
           if (forceStore) {
             payloadObj.store = true;
           }
-          if (useServerCompaction && payloadObj.context_management === undefined) {
+          if (
+            useServerCompaction &&
+            payloadObj.context_management === undefined
+          ) {
             payloadObj.context_management = [
               {
                 type: "compaction",
@@ -314,7 +349,9 @@ function createOpenAIResponsesContextManagementWrapper(
   };
 }
 
-function createCodexDefaultTransportWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+function createCodexDefaultTransportWrapper(
+  baseStreamFn: StreamFn | undefined,
+): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) =>
     underlying(model, context, {
@@ -323,7 +360,9 @@ function createCodexDefaultTransportWrapper(baseStreamFn: StreamFn | undefined):
     });
 }
 
-function createOpenAIDefaultTransportWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+function createOpenAIDefaultTransportWrapper(
+  baseStreamFn: StreamFn | undefined,
+): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
     const typedOptions = options as
@@ -343,7 +382,9 @@ function createOpenAIDefaultTransportWrapper(baseStreamFn: StreamFn | undefined)
 
 function isAnthropic1MModel(modelId: string): boolean {
   const normalized = modelId.trim().toLowerCase();
-  return ANTHROPIC_1M_MODEL_PREFIXES.some((prefix) => normalized.startsWith(prefix));
+  return ANTHROPIC_1M_MODEL_PREFIXES.some((prefix) =>
+    normalized.startsWith(prefix),
+  );
 }
 
 function parseHeaderList(value: unknown): string[] {
@@ -381,7 +422,9 @@ function resolveAnthropicBetas(
     if (isAnthropic1MModel(modelId)) {
       betas.add(ANTHROPIC_CONTEXT_1M_BETA);
     } else {
-      log.warn(`ignoring context1m for non-opus/sonnet model: ${provider}/${modelId}`);
+      log.warn(
+        `ignoring context1m for non-opus/sonnet model: ${provider}/${modelId}`,
+      );
     }
   }
 
@@ -393,7 +436,9 @@ function mergeAnthropicBetaHeader(
   betas: string[],
 ): Record<string, string> {
   const merged = { ...headers };
-  const existingKey = Object.keys(merged).find((key) => key.toLowerCase() === "anthropic-beta");
+  const existingKey = Object.keys(merged).find(
+    (key) => key.toLowerCase() === "anthropic-beta",
+  );
   const existing = existingKey ? parseHeaderList(merged[existingKey]) : [];
   const values = Array.from(new Set([...existing, ...betas]));
   const key = existingKey ?? "anthropic-beta";
@@ -455,8 +500,14 @@ function createAnthropicBetaHeadersWrapper(
   };
 }
 
-function isOpenRouterAnthropicModel(provider: string, modelId: string): boolean {
-  return provider.toLowerCase() === "openrouter" && modelId.toLowerCase().startsWith("anthropic/");
+function isOpenRouterAnthropicModel(
+  provider: string,
+  modelId: string,
+): boolean {
+  return (
+    provider.toLowerCase() === "openrouter" &&
+    modelId.toLowerCase().startsWith("anthropic/")
+  );
 }
 
 type PayloadMessage = {
@@ -469,7 +520,9 @@ type PayloadMessage = {
  * OpenRouter passes through Anthropic's cache_control field — caching the system
  * prompt avoids re-processing it on every request.
  */
-function createOpenRouterSystemCacheWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+function createOpenRouterSystemCacheWrapper(
+  baseStreamFn: StreamFn | undefined,
+): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
     if (
@@ -492,12 +545,18 @@ function createOpenRouterSystemCacheWrapper(baseStreamFn: StreamFn | undefined):
             }
             if (typeof msg.content === "string") {
               msg.content = [
-                { type: "text", text: msg.content, cache_control: { type: "ephemeral" } },
+                {
+                  type: "text",
+                  text: msg.content,
+                  cache_control: { type: "ephemeral" },
+                },
               ];
             } else if (Array.isArray(msg.content) && msg.content.length > 0) {
               const last = msg.content[msg.content.length - 1];
               if (last && typeof last === "object") {
-                (last as Record<string, unknown>).cache_control = { type: "ephemeral" };
+                (last as Record<string, unknown>).cache_control = {
+                  type: "ephemeral",
+                };
               }
             }
           }
@@ -541,7 +600,9 @@ function shouldApplySiliconFlowThinkingOffCompat(params: {
  * with HTTP 400 invalid-parameter errors. Normalize to `thinking: null` to
  * preserve "thinking disabled" intent without sending an invalid enum value.
  */
-function createSiliconFlowThinkingWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+function createSiliconFlowThinkingWrapper(
+  baseStreamFn: StreamFn | undefined,
+): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
     const originalOnPayload = options?.onPayload;
@@ -604,12 +665,17 @@ function createOpenRouterWrapper(
               !Array.isArray(existingReasoning)
             ) {
               const reasoningObj = existingReasoning as Record<string, unknown>;
-              if (!("max_tokens" in reasoningObj) && !("effort" in reasoningObj)) {
-                reasoningObj.effort = mapThinkingLevelToOpenRouterReasoningEffort(thinkingLevel);
+              if (
+                !("max_tokens" in reasoningObj) &&
+                !("effort" in reasoningObj)
+              ) {
+                reasoningObj.effort =
+                  mapThinkingLevelToOpenRouterReasoningEffort(thinkingLevel);
               }
             } else if (!existingReasoning) {
               payloadObj.reasoning = {
-                effort: mapThinkingLevelToOpenRouterReasoningEffort(thinkingLevel),
+                effort:
+                  mapThinkingLevelToOpenRouterReasoningEffort(thinkingLevel),
               };
             }
           }
@@ -622,7 +688,10 @@ function createOpenRouterWrapper(
 
 function isGemini31Model(modelId: string): boolean {
   const normalized = modelId.toLowerCase();
-  return normalized.includes("gemini-3.1-pro") || normalized.includes("gemini-3.1-flash");
+  return (
+    normalized.includes("gemini-3.1-pro") ||
+    normalized.includes("gemini-3.1-flash")
+  );
 }
 
 function mapThinkLevelToGoogleThinkingLevel(
@@ -679,7 +748,9 @@ function sanitizeGoogleThinkingPayload(params: {
     params.thinkingLevel !== "off" &&
     thinkingConfigObj.thinkingLevel === undefined
   ) {
-    const mappedLevel = mapThinkLevelToGoogleThinkingLevel(params.thinkingLevel);
+    const mappedLevel = mapThinkLevelToGoogleThinkingLevel(
+      params.thinkingLevel,
+    );
     if (mappedLevel) {
       thinkingConfigObj.thinkingLevel = mappedLevel;
     }
@@ -773,14 +844,22 @@ export function applyExtraParamsToAgent(
   const override =
     extraParamsOverride && Object.keys(extraParamsOverride).length > 0
       ? Object.fromEntries(
-          Object.entries(extraParamsOverride).filter(([, value]) => value !== undefined),
+          Object.entries(extraParamsOverride).filter(
+            ([, value]) => value !== undefined,
+          ),
         )
       : undefined;
   const merged = Object.assign({}, extraParams, override);
-  const wrappedStreamFn = createStreamFnWithExtraParams(agent.streamFn, merged, provider);
+  const wrappedStreamFn = createStreamFnWithExtraParams(
+    agent.streamFn,
+    merged,
+    provider,
+  );
 
   if (wrappedStreamFn) {
-    log.debug(`applying extraParams to agent streamFn for ${provider}/${modelId}`);
+    log.debug(
+      `applying extraParams to agent streamFn for ${provider}/${modelId}`,
+    );
     agent.streamFn = wrappedStreamFn;
   }
 
@@ -789,10 +868,19 @@ export function applyExtraParamsToAgent(
     log.debug(
       `applying Anthropic beta header for ${provider}/${modelId}: ${anthropicBetas.join(",")}`,
     );
-    agent.streamFn = createAnthropicBetaHeadersWrapper(agent.streamFn, anthropicBetas);
+    agent.streamFn = createAnthropicBetaHeadersWrapper(
+      agent.streamFn,
+      anthropicBetas,
+    );
   }
 
-  if (shouldApplySiliconFlowThinkingOffCompat({ provider, modelId, thinkingLevel })) {
+  if (
+    shouldApplySiliconFlowThinkingOffCompat({
+      provider,
+      modelId,
+      thinkingLevel,
+    })
+  ) {
     log.debug(
       `normalizing thinking=off to thinking=null for SiliconFlow compatibility (${provider}/${modelId})`,
     );
@@ -800,20 +888,28 @@ export function applyExtraParamsToAgent(
   }
 
   if (provider === "openrouter") {
-    log.debug(`applying OpenRouter app attribution headers for ${provider}/${modelId}`);
+    log.debug(
+      `applying OpenRouter app attribution headers for ${provider}/${modelId}`,
+    );
     // "auto" is a dynamic routing model — we don't know which underlying model
     // OpenRouter will select, and it may be a reasoning-required endpoint.
     // Omit the thinkingLevel so we never inject `reasoning.effort: "none"`,
     // which would cause a 400 on models where reasoning is mandatory.
     // Users who need reasoning control should target a specific model ID.
     // See: openclaw/openclaw#24851
-    const openRouterThinkingLevel = modelId === "auto" ? undefined : thinkingLevel;
-    agent.streamFn = createOpenRouterWrapper(agent.streamFn, openRouterThinkingLevel);
+    const openRouterThinkingLevel =
+      modelId === "auto" ? undefined : thinkingLevel;
+    agent.streamFn = createOpenRouterWrapper(
+      agent.streamFn,
+      openRouterThinkingLevel,
+    );
     agent.streamFn = createOpenRouterSystemCacheWrapper(agent.streamFn);
   }
 
   if (provider === "amazon-bedrock" && !isAnthropicBedrockModel(modelId)) {
-    log.debug(`disabling prompt caching for non-Anthropic Bedrock model ${provider}/${modelId}`);
+    log.debug(
+      `disabling prompt caching for non-Anthropic Bedrock model ${provider}/${modelId}`,
+    );
     agent.streamFn = createBedrockNoCacheWrapper(agent.streamFn);
   }
 
@@ -829,10 +925,16 @@ export function applyExtraParamsToAgent(
 
   // Guard Google payloads against invalid negative thinking budgets emitted by
   // upstream model-ID heuristics for Gemini 3.1 variants.
-  agent.streamFn = createGoogleThinkingPayloadWrapper(agent.streamFn, thinkingLevel);
+  agent.streamFn = createGoogleThinkingPayloadWrapper(
+    agent.streamFn,
+    thinkingLevel,
+  );
 
   // Work around upstream pi-ai hardcoding `store: false` for Responses API.
   // Force `store=true` for direct OpenAI Responses models and auto-enable
   // server-side compaction for compatible OpenAI Responses payloads.
-  agent.streamFn = createOpenAIResponsesContextManagementWrapper(agent.streamFn, merged);
+  agent.streamFn = createOpenAIResponsesContextManagementWrapper(
+    agent.streamFn,
+    merged,
+  );
 }

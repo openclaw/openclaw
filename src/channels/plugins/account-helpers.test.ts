@@ -5,7 +5,10 @@ import { createAccountListHelpers } from "./account-helpers.js";
 const { listConfiguredAccountIds, listAccountIds, resolveDefaultAccountId } =
   createAccountListHelpers("testchannel");
 
-function cfg(accounts?: Record<string, unknown> | null, defaultAccount?: string): OpenClawConfig {
+function cfg(
+  accounts?: Record<string, unknown> | null,
+  defaultAccount?: string,
+): OpenClawConfig {
   if (accounts === null) {
     return {
       channels: {
@@ -45,10 +48,9 @@ describe("createAccountListHelpers", () => {
     });
 
     it("returns account keys", () => {
-      expect(listConfiguredAccountIds(cfg({ work: {}, personal: {} }))).toEqual([
-        "work",
-        "personal",
-      ]);
+      expect(listConfiguredAccountIds(cfg({ work: {}, personal: {} }))).toEqual(
+        ["work", "personal"],
+      );
     });
   });
 
@@ -62,29 +64,43 @@ describe("createAccountListHelpers", () => {
     });
 
     it("returns sorted ids", () => {
-      expect(listAccountIds(cfg({ z: {}, a: {}, m: {} }))).toEqual(["a", "m", "z"]);
+      expect(listAccountIds(cfg({ z: {}, a: {}, m: {} }))).toEqual([
+        "a",
+        "m",
+        "z",
+      ]);
     });
   });
 
   describe("resolveDefaultAccountId", () => {
     it("prefers configured defaultAccount when it matches a configured account id", () => {
-      expect(resolveDefaultAccountId(cfg({ alpha: {}, beta: {} }, "beta"))).toBe("beta");
+      expect(
+        resolveDefaultAccountId(cfg({ alpha: {}, beta: {} }, "beta")),
+      ).toBe("beta");
     });
 
     it("normalizes configured defaultAccount before matching", () => {
-      expect(resolveDefaultAccountId(cfg({ "router-d": {} }, "Router D"))).toBe("router-d");
+      expect(resolveDefaultAccountId(cfg({ "router-d": {} }, "Router D"))).toBe(
+        "router-d",
+      );
     });
 
     it("falls back when configured defaultAccount is missing", () => {
-      expect(resolveDefaultAccountId(cfg({ beta: {}, alpha: {} }, "missing"))).toBe("alpha");
+      expect(
+        resolveDefaultAccountId(cfg({ beta: {}, alpha: {} }, "missing")),
+      ).toBe("alpha");
     });
 
     it('returns "default" when present', () => {
-      expect(resolveDefaultAccountId(cfg({ default: {}, other: {} }))).toBe("default");
+      expect(resolveDefaultAccountId(cfg({ default: {}, other: {} }))).toBe(
+        "default",
+      );
     });
 
     it("returns first sorted id when no default", () => {
-      expect(resolveDefaultAccountId(cfg({ beta: {}, alpha: {} }))).toBe("alpha");
+      expect(resolveDefaultAccountId(cfg({ beta: {}, alpha: {} }))).toBe(
+        "alpha",
+      );
     });
 
     it('returns "default" for empty config', () => {

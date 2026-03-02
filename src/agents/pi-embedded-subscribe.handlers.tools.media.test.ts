@@ -109,7 +109,10 @@ describe("handleToolExecutionEnd media emission", () => {
 
   it("emits media when verbose is off and tool result has MEDIA: path", async () => {
     const onToolResult = vi.fn();
-    const ctx = createMockContext({ shouldEmitToolOutput: false, onToolResult });
+    const ctx = createMockContext({
+      shouldEmitToolOutput: false,
+      onToolResult,
+    });
 
     await emitPngMediaToolResult(ctx);
 
@@ -120,7 +123,10 @@ describe("handleToolExecutionEnd media emission", () => {
 
   it("does NOT emit local media for untrusted tools", async () => {
     const onToolResult = vi.fn();
-    const ctx = createMockContext({ shouldEmitToolOutput: false, onToolResult });
+    const ctx = createMockContext({
+      shouldEmitToolOutput: false,
+      onToolResult,
+    });
 
     await emitUntrustedToolMediaResult(ctx, "/tmp/secret.png");
 
@@ -129,7 +135,10 @@ describe("handleToolExecutionEnd media emission", () => {
 
   it("emits remote media for untrusted tools", async () => {
     const onToolResult = vi.fn();
-    const ctx = createMockContext({ shouldEmitToolOutput: false, onToolResult });
+    const ctx = createMockContext({
+      shouldEmitToolOutput: false,
+      onToolResult,
+    });
 
     await emitUntrustedToolMediaResult(ctx, "https://example.com/file.png");
 
@@ -161,7 +170,10 @@ describe("handleToolExecutionEnd media emission", () => {
 
   it("does NOT emit media for error results", async () => {
     const onToolResult = vi.fn();
-    const ctx = createMockContext({ shouldEmitToolOutput: false, onToolResult });
+    const ctx = createMockContext({
+      shouldEmitToolOutput: false,
+      onToolResult,
+    });
 
     await emitPngMediaToolResult(ctx, { isError: true });
 
@@ -170,7 +182,10 @@ describe("handleToolExecutionEnd media emission", () => {
 
   it("does NOT emit when tool result has no media", async () => {
     const onToolResult = vi.fn();
-    const ctx = createMockContext({ shouldEmitToolOutput: false, onToolResult });
+    const ctx = createMockContext({
+      shouldEmitToolOutput: false,
+      onToolResult,
+    });
 
     await handleToolExecutionEnd(ctx, {
       type: "tool_execution_end",
@@ -187,7 +202,10 @@ describe("handleToolExecutionEnd media emission", () => {
 
   it("does NOT emit media for <media:audio> placeholder text", async () => {
     const onToolResult = vi.fn();
-    const ctx = createMockContext({ shouldEmitToolOutput: false, onToolResult });
+    const ctx = createMockContext({
+      shouldEmitToolOutput: false,
+      onToolResult,
+    });
 
     await handleToolExecutionEnd(ctx, {
       type: "tool_execution_end",
@@ -209,7 +227,10 @@ describe("handleToolExecutionEnd media emission", () => {
 
   it("does NOT emit media for malformed MEDIA:-prefixed prose", async () => {
     const onToolResult = vi.fn();
-    const ctx = createMockContext({ shouldEmitToolOutput: false, onToolResult });
+    const ctx = createMockContext({
+      shouldEmitToolOutput: false,
+      onToolResult,
+    });
 
     await handleToolExecutionEnd(ctx, {
       type: "tool_execution_end",
@@ -231,7 +252,10 @@ describe("handleToolExecutionEnd media emission", () => {
 
   it("emits media from details.path fallback when no MEDIA: text", async () => {
     const onToolResult = vi.fn();
-    const ctx = createMockContext({ shouldEmitToolOutput: false, onToolResult });
+    const ctx = createMockContext({
+      shouldEmitToolOutput: false,
+      onToolResult,
+    });
 
     await handleToolExecutionEnd(ctx, {
       type: "tool_execution_end",

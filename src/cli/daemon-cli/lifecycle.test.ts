@@ -4,7 +4,13 @@ type RestartHealthSnapshot = {
   healthy: boolean;
   staleGatewayPids: number[];
   runtime: { status?: string };
-  portUsage: { port: number; status: string; listeners: []; hints: []; errors?: string[] };
+  portUsage: {
+    port: number;
+    status: string;
+    listeners: [];
+    hints: [];
+    errors?: string[];
+  };
 };
 
 type RestartPostCheckContext = {
@@ -106,7 +112,9 @@ describe("runDaemonRestart health checks", () => {
       runtime: { status: "running" },
       portUsage: { port: 18789, status: "busy", listeners: [], hints: [] },
     };
-    waitForGatewayHealthyRestart.mockResolvedValueOnce(unhealthy).mockResolvedValueOnce(healthy);
+    waitForGatewayHealthyRestart
+      .mockResolvedValueOnce(unhealthy)
+      .mockResolvedValueOnce(healthy);
     terminateStaleGatewayPids.mockResolvedValue([1993]);
 
     const result = await runDaemonRestart({ json: true });

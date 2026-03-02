@@ -1,7 +1,10 @@
 import type { ChunkMode } from "../../auto-reply/chunk.js";
 import { chunkMarkdownTextWithMode } from "../../auto-reply/chunk.js";
 import { createReplyReferencePlanner } from "../../auto-reply/reply/reply-reference.js";
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
+import {
+  isSilentReplyText,
+  SILENT_REPLY_TOKEN,
+} from "../../auto-reply/tokens.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { MarkdownTableMode } from "../../config/types.base.js";
 import type { RuntimeEnv } from "../../runtime.js";
@@ -22,9 +25,11 @@ export async function deliverReplies(params: {
   for (const payload of params.replies) {
     // Keep reply tags opt-in: when replyToMode is off, explicit reply tags
     // must not force threading.
-    const inlineReplyToId = params.replyToMode === "off" ? undefined : payload.replyToId;
+    const inlineReplyToId =
+      params.replyToMode === "off" ? undefined : payload.replyToId;
     const threadTs = inlineReplyToId ?? params.replyThreadTs;
-    const mediaList = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
+    const mediaList =
+      payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
     const text = payload.text ?? "";
     if (!text && mediaList.length === 0) {
       continue;
@@ -103,7 +108,8 @@ function createSlackReplyReferencePlanner(params: {
   // does not provide explicit classification, stay in thread. Callers that can
   // distinguish Slack's auto-populated top-level thread_ts should pass
   // `isThreadReply: false` to preserve replyToMode behavior.
-  const effectiveIsThreadReply = params.isThreadReply ?? Boolean(params.incomingThreadTs);
+  const effectiveIsThreadReply =
+    params.isThreadReply ?? Boolean(params.incomingThreadTs);
   const effectiveMode = effectiveIsThreadReply ? "all" : params.replyToMode;
   return createReplyReferencePlanner({
     replyToMode: effectiveMode,
@@ -148,9 +154,16 @@ export async function deliverSlackSlashReplies(params: {
   const chunkLimit = Math.min(params.textLimit, 4000);
   for (const payload of params.replies) {
     const textRaw = payload.text?.trim() ?? "";
-    const text = textRaw && !isSilentReplyText(textRaw, SILENT_REPLY_TOKEN) ? textRaw : undefined;
-    const mediaList = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
-    const combined = [text ?? "", ...mediaList.map((url) => url.trim()).filter(Boolean)]
+    const text =
+      textRaw && !isSilentReplyText(textRaw, SILENT_REPLY_TOKEN)
+        ? textRaw
+        : undefined;
+    const mediaList =
+      payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
+    const combined = [
+      text ?? "",
+      ...mediaList.map((url) => url.trim()).filter(Boolean),
+    ]
       .filter(Boolean)
       .join("\n");
     if (!combined) {
@@ -162,7 +175,9 @@ export async function deliverSlackSlashReplies(params: {
         ? chunkMarkdownTextWithMode(combined, chunkLimit, chunkMode)
         : [combined];
     const chunks = markdownChunks.flatMap((markdown) =>
-      markdownToSlackMrkdwnChunks(markdown, chunkLimit, { tableMode: params.tableMode }),
+      markdownToSlackMrkdwnChunks(markdown, chunkLimit, {
+        tableMode: params.tableMode,
+      }),
     );
     if (!chunks.length && combined) {
       chunks.push(combined);

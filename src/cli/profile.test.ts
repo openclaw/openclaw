@@ -16,7 +16,13 @@ describe("parseCliProfileArgs", () => {
       throw new Error(res.error);
     }
     expect(res.profile).toBeNull();
-    expect(res.argv).toEqual(["node", "openclaw", "gateway", "--dev", "--allow-unconfigured"]);
+    expect(res.argv).toEqual([
+      "node",
+      "openclaw",
+      "gateway",
+      "--dev",
+      "--allow-unconfigured",
+    ]);
   });
 
   it("still accepts global --dev before subcommand", () => {
@@ -29,7 +35,13 @@ describe("parseCliProfileArgs", () => {
   });
 
   it("parses --profile value and strips it", () => {
-    const res = parseCliProfileArgs(["node", "openclaw", "--profile", "work", "status"]);
+    const res = parseCliProfileArgs([
+      "node",
+      "openclaw",
+      "--profile",
+      "work",
+      "status",
+    ]);
     if (!res.ok) {
       throw new Error(res.error);
     }
@@ -43,8 +55,14 @@ describe("parseCliProfileArgs", () => {
   });
 
   it.each([
-    ["--dev first", ["node", "openclaw", "--dev", "--profile", "work", "status"]],
-    ["--profile first", ["node", "openclaw", "--profile", "work", "--dev", "status"]],
+    [
+      "--dev first",
+      ["node", "openclaw", "--dev", "--profile", "work", "status"],
+    ],
+    [
+      "--profile first",
+      ["node", "openclaw", "--profile", "work", "--dev", "status"],
+    ],
   ])("rejects combining --dev with --profile (%s)", (_name, argv) => {
     const res = parseCliProfileArgs(argv);
     expect(res.ok).toBe(false);
@@ -59,10 +77,15 @@ describe("applyCliProfileEnv", () => {
       env,
       homedir: () => "/home/peter",
     });
-    const expectedStateDir = path.join(path.resolve("/home/peter"), ".openclaw-dev");
+    const expectedStateDir = path.join(
+      path.resolve("/home/peter"),
+      ".openclaw-dev",
+    );
     expect(env.OPENCLAW_PROFILE).toBe("dev");
     expect(env.OPENCLAW_STATE_DIR).toBe(expectedStateDir);
-    expect(env.OPENCLAW_CONFIG_PATH).toBe(path.join(expectedStateDir, "openclaw.json"));
+    expect(env.OPENCLAW_CONFIG_PATH).toBe(
+      path.join(expectedStateDir, "openclaw.json"),
+    );
     expect(env.OPENCLAW_GATEWAY_PORT).toBe("19001");
   });
 
@@ -78,7 +101,9 @@ describe("applyCliProfileEnv", () => {
     });
     expect(env.OPENCLAW_STATE_DIR).toBe("/custom");
     expect(env.OPENCLAW_GATEWAY_PORT).toBe("19099");
-    expect(env.OPENCLAW_CONFIG_PATH).toBe(path.join("/custom", "openclaw.json"));
+    expect(env.OPENCLAW_CONFIG_PATH).toBe(
+      path.join("/custom", "openclaw.json"),
+    );
   });
 
   it("uses OPENCLAW_HOME when deriving profile state dir", () => {
@@ -93,7 +118,9 @@ describe("applyCliProfileEnv", () => {
     });
 
     const resolvedHome = path.resolve("/srv/openclaw-home");
-    expect(env.OPENCLAW_STATE_DIR).toBe(path.join(resolvedHome, ".openclaw-work"));
+    expect(env.OPENCLAW_STATE_DIR).toBe(
+      path.join(resolvedHome, ".openclaw-work"),
+    );
     expect(env.OPENCLAW_CONFIG_PATH).toBe(
       path.join(resolvedHome, ".openclaw-work", "openclaw.json"),
     );
@@ -143,15 +170,17 @@ describe("formatCliCommand", () => {
   });
 
   it("inserts --profile flag when profile is set", () => {
-    expect(formatCliCommand("openclaw doctor --fix", { OPENCLAW_PROFILE: "work" })).toBe(
-      "openclaw --profile work doctor --fix",
-    );
+    expect(
+      formatCliCommand("openclaw doctor --fix", { OPENCLAW_PROFILE: "work" }),
+    ).toBe("openclaw --profile work doctor --fix");
   });
 
   it("trims whitespace from profile", () => {
-    expect(formatCliCommand("openclaw doctor --fix", { OPENCLAW_PROFILE: "  jbopenclaw  " })).toBe(
-      "openclaw --profile jbopenclaw doctor --fix",
-    );
+    expect(
+      formatCliCommand("openclaw doctor --fix", {
+        OPENCLAW_PROFILE: "  jbopenclaw  ",
+      }),
+    ).toBe("openclaw --profile jbopenclaw doctor --fix");
   });
 
   it("handles command with no args after openclaw", () => {
@@ -161,8 +190,8 @@ describe("formatCliCommand", () => {
   });
 
   it("handles pnpm wrapper", () => {
-    expect(formatCliCommand("pnpm openclaw doctor", { OPENCLAW_PROFILE: "work" })).toBe(
-      "pnpm openclaw --profile work doctor",
-    );
+    expect(
+      formatCliCommand("pnpm openclaw doctor", { OPENCLAW_PROFILE: "work" }),
+    ).toBe("pnpm openclaw --profile work doctor");
   });
 });

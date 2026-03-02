@@ -12,10 +12,12 @@ type DiscordPresenceConfig = Pick<
 export function resolveDiscordPresenceUpdate(
   config: DiscordPresenceConfig,
 ): UpdatePresenceData | null {
-  const activityText = typeof config.activity === "string" ? config.activity.trim() : "";
+  const activityText =
+    typeof config.activity === "string" ? config.activity.trim() : "";
   const status = typeof config.status === "string" ? config.status.trim() : "";
   const activityType = config.activityType;
-  const activityUrl = typeof config.activityUrl === "string" ? config.activityUrl.trim() : "";
+  const activityUrl =
+    typeof config.activityUrl === "string" ? config.activityUrl.trim() : "";
 
   const hasActivity = Boolean(activityText);
   const hasStatus = Boolean(status);

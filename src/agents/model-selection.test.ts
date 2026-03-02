@@ -73,10 +73,12 @@ describe("model-selection", () => {
     });
 
     it("preserves nested model ids after provider prefix", () => {
-      expect(parseModelRef("nvidia/moonshotai/kimi-k2.5", "anthropic")).toEqual({
-        provider: "nvidia",
-        model: "moonshotai/kimi-k2.5",
-      });
+      expect(parseModelRef("nvidia/moonshotai/kimi-k2.5", "anthropic")).toEqual(
+        {
+          provider: "nvidia",
+          model: "moonshotai/kimi-k2.5",
+        },
+      );
     });
 
     it("normalizes anthropic alias refs to canonical model ids", () => {
@@ -133,14 +135,18 @@ describe("model-selection", () => {
     });
 
     it("should pass through openrouter external provider models as-is", () => {
-      expect(parseModelRef("openrouter/anthropic/claude-sonnet-4-5", "openai")).toEqual({
+      expect(
+        parseModelRef("openrouter/anthropic/claude-sonnet-4-5", "openai"),
+      ).toEqual({
         provider: "openrouter",
         model: "anthropic/claude-sonnet-4-5",
       });
     });
 
     it("normalizes Vercel Claude shorthand to anthropic-prefixed model ids", () => {
-      expect(parseModelRef("vercel-ai-gateway/claude-opus-4.6", "openai")).toEqual({
+      expect(
+        parseModelRef("vercel-ai-gateway/claude-opus-4.6", "openai"),
+      ).toEqual({
         provider: "vercel-ai-gateway",
         model: "anthropic/claude-opus-4.6",
       });
@@ -151,14 +157,18 @@ describe("model-selection", () => {
     });
 
     it("keeps already-prefixed Vercel Anthropic models unchanged", () => {
-      expect(parseModelRef("vercel-ai-gateway/anthropic/claude-opus-4.6", "openai")).toEqual({
+      expect(
+        parseModelRef("vercel-ai-gateway/anthropic/claude-opus-4.6", "openai"),
+      ).toEqual({
         provider: "vercel-ai-gateway",
         model: "anthropic/claude-opus-4.6",
       });
     });
 
     it("passes through non-Claude Vercel model ids unchanged", () => {
-      expect(parseModelRef("vercel-ai-gateway/openai/gpt-5.2", "openai")).toEqual({
+      expect(
+        parseModelRef("vercel-ai-gateway/openai/gpt-5.2", "openai"),
+      ).toEqual({
         provider: "vercel-ai-gateway",
         model: "openai/gpt-5.2",
       });
@@ -272,8 +282,13 @@ describe("model-selection", () => {
         provider: "anthropic",
         model: "claude-3-5-sonnet",
       });
-      expect(index.byAlias.get("smart")?.ref).toEqual({ provider: "openai", model: "gpt-4o" });
-      expect(index.byKey.get(modelKey("anthropic", "claude-3-5-sonnet"))).toEqual(["fast"]);
+      expect(index.byAlias.get("smart")?.ref).toEqual({
+        provider: "openai",
+        model: "gpt-4o",
+      });
+      expect(
+        index.byKey.get(modelKey("anthropic", "claude-3-5-sonnet")),
+      ).toEqual(["fast"]);
     });
   });
 
@@ -288,7 +303,11 @@ describe("model-selection", () => {
       expect(result.allowAny).toBe(false);
       expect(result.allowedKeys.has("anthropic/claude-sonnet-4-6")).toBe(true);
       expect(result.allowedCatalog).toEqual([
-        { provider: "anthropic", id: "claude-sonnet-4-6", name: "claude-sonnet-4-6" },
+        {
+          provider: "anthropic",
+          id: "claude-sonnet-4-6",
+          name: "claude-sonnet-4-6",
+        },
       ]);
     });
   });
@@ -338,7 +357,10 @@ describe("model-selection", () => {
     it("should resolve from string with alias", () => {
       const index = {
         byAlias: new Map([
-          ["fast", { alias: "fast", ref: { provider: "anthropic", model: "sonnet" } }],
+          [
+            "fast",
+            { alias: "fast", ref: { provider: "anthropic", model: "sonnet" } },
+          ],
         ]),
         byKey: new Map(),
       };
@@ -416,7 +438,13 @@ describe("model-selection", () => {
     it("strips profile suffix before alias resolution", () => {
       const index = {
         byAlias: new Map([
-          ["kimi", { alias: "kimi", ref: { provider: "nvidia", model: "moonshotai/kimi-k2.5" } }],
+          [
+            "kimi",
+            {
+              alias: "kimi",
+              ref: { provider: "nvidia", model: "moonshotai/kimi-k2.5" },
+            },
+          ],
         ]),
         byKey: new Map(),
       };
@@ -453,9 +481,14 @@ describe("model-selection", () => {
           defaultModel: "gemini-pro",
         });
 
-        expect(result).toEqual({ provider: "anthropic", model: "claude-3-5-sonnet" });
+        expect(result).toEqual({
+          provider: "anthropic",
+          model: "claude-3-5-sonnet",
+        });
         expect(warnSpy).toHaveBeenCalledWith(
-          expect.stringContaining('Falling back to "anthropic/claude-3-5-sonnet"'),
+          expect.stringContaining(
+            'Falling back to "anthropic/claude-3-5-sonnet"',
+          ),
         );
       } finally {
         setLoggerOverride(null);
@@ -534,7 +567,9 @@ describe("model-selection", () => {
 
 describe("normalizeModelSelection", () => {
   it("returns trimmed string for string input", () => {
-    expect(normalizeModelSelection("ollama/llama3.2:3b")).toBe("ollama/llama3.2:3b");
+    expect(normalizeModelSelection("ollama/llama3.2:3b")).toBe(
+      "ollama/llama3.2:3b",
+    );
   });
 
   it("returns undefined for empty/whitespace string", () => {
@@ -543,9 +578,9 @@ describe("normalizeModelSelection", () => {
   });
 
   it("extracts primary from object", () => {
-    expect(normalizeModelSelection({ primary: "google/gemini-2.5-flash" })).toBe(
-      "google/gemini-2.5-flash",
-    );
+    expect(
+      normalizeModelSelection({ primary: "google/gemini-2.5-flash" }),
+    ).toBe("google/gemini-2.5-flash");
   });
 
   it("returns undefined for object without primary", () => {

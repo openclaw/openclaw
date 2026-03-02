@@ -8,7 +8,11 @@ import {
   normalizeToolName,
   resolveToolProfilePolicy,
 } from "../../../../src/agents/tool-policy-shared.js";
-import type { AgentIdentityResult, AgentsFilesListResult, AgentsListResult } from "../types.ts";
+import type {
+  AgentIdentityResult,
+  AgentsFilesListResult,
+  AgentsListResult,
+} from "../types.ts";
 
 export const TOOL_SECTIONS = listCoreToolSections();
 
@@ -36,7 +40,11 @@ type AgentConfigEntry = {
 
 type ConfigSnapshot = {
   agents?: {
-    defaults?: { workspace?: string; model?: unknown; models?: Record<string, { alias?: string }> };
+    defaults?: {
+      workspace?: string;
+      model?: unknown;
+      models?: Record<string, { alias?: string }>;
+    };
     list?: AgentConfigEntry[];
   };
   tools?: {
@@ -73,7 +81,11 @@ function isLikelyEmoji(value: string) {
   if (!hasNonAscii) {
     return false;
   }
-  if (trimmed.includes("://") || trimmed.includes("/") || trimmed.includes(".")) {
+  if (
+    trimmed.includes("://") ||
+    trimmed.includes("/") ||
+    trimmed.includes(".")
+  ) {
     return false;
   }
   return true;
@@ -123,7 +135,10 @@ export function formatBytes(bytes?: number) {
   return `${size.toFixed(size < 10 ? 1 : 0)} ${units[unitIndex]}`;
 }
 
-export function resolveAgentConfig(config: Record<string, unknown> | null, agentId: string) {
+export function resolveAgentConfig(
+  config: Record<string, unknown> | null,
+  agentId: string,
+) {
   const cfg = config as ConfigSnapshot | null;
   const list = cfg?.agents?.list ?? [];
   const entry = list.find((agent) => agent?.id === agentId);
@@ -152,9 +167,14 @@ export function buildAgentContext(
 ): AgentContext {
   const config = resolveAgentConfig(configForm, agent.id);
   const workspaceFromFiles =
-    agentFilesList && agentFilesList.agentId === agent.id ? agentFilesList.workspace : null;
+    agentFilesList && agentFilesList.agentId === agent.id
+      ? agentFilesList.workspace
+      : null;
   const workspace =
-    workspaceFromFiles || config.entry?.workspace || config.defaults?.workspace || "default";
+    workspaceFromFiles ||
+    config.entry?.workspace ||
+    config.defaults?.workspace ||
+    "default";
   const modelLabel = config.entry?.model
     ? resolveModelLabel(config.entry?.model)
     : resolveModelLabel(config.defaults?.model);
@@ -165,7 +185,9 @@ export function buildAgentContext(
     config.entry?.name ||
     agent.id;
   const identityEmoji = resolveAgentEmoji(agent, agentIdentity) || "-";
-  const skillFilter = Array.isArray(config.entry?.skills) ? config.entry?.skills : null;
+  const skillFilter = Array.isArray(config.entry?.skills)
+    ? config.entry?.skills
+    : null;
   const skillCount = skillFilter?.length ?? null;
   return {
     workspace,
@@ -188,8 +210,12 @@ export function resolveModelLabel(model?: unknown): string {
     const record = model as { primary?: string; fallbacks?: string[] };
     const primary = record.primary?.trim();
     if (primary) {
-      const fallbackCount = Array.isArray(record.fallbacks) ? record.fallbacks.length : 0;
-      return fallbackCount > 0 ? `${primary} (+${fallbackCount} fallback)` : primary;
+      const fallbackCount = Array.isArray(record.fallbacks)
+        ? record.fallbacks.length
+        : 0;
+      return fallbackCount > 0
+        ? `${primary} (+${fallbackCount} fallback)`
+        : primary;
     }
   }
   return "-";
@@ -248,7 +274,9 @@ export function resolveEffectiveModelFallbacks(
   entryModel?: unknown,
   defaultModel?: unknown,
 ): string[] | null {
-  return resolveModelFallbacks(entryModel) ?? resolveModelFallbacks(defaultModel);
+  return (
+    resolveModelFallbacks(entryModel) ?? resolveModelFallbacks(defaultModel)
+  );
 }
 
 function addModelId(target: Set<string>, value: unknown) {
@@ -305,7 +333,9 @@ export function resolveConfiguredCronModelSuggestions(
     addModelConfigIds(out, defaultsRecord.model);
     const defaultsModels = defaultsRecord.models;
     if (defaultsModels && typeof defaultsModels === "object") {
-      for (const modelId of Object.keys(defaultsModels as Record<string, unknown>)) {
+      for (const modelId of Object.keys(
+        defaultsModels as Record<string, unknown>,
+      )) {
         addModelId(out, modelId);
       }
     }
@@ -354,7 +384,8 @@ function resolveConfiguredModels(
           ? (modelRaw as { alias?: string }).alias?.trim()
           : undefined
         : undefined;
-    const label = alias && alias !== trimmed ? `${alias} (${trimmed})` : trimmed;
+    const label =
+      alias && alias !== trimmed ? `${alias} (${trimmed})` : trimmed;
     options.push({ value: trimmed, label });
   }
   return options;
@@ -365,16 +396,18 @@ export function buildModelOptions(
   current?: string | null,
 ) {
   const options = resolveConfiguredModels(configForm);
-  const hasCurrent = current ? options.some((option) => option.value === current) : false;
+  const hasCurrent = current
+    ? options.some((option) => option.value === current)
+    : false;
   if (current && !hasCurrent) {
     options.unshift({ value: current, label: `Current (${current})` });
   }
   if (options.length === 0) {
-    return html`
-      <option value="" disabled>No configured models</option>
-    `;
+    return html` <option value="" disabled>No configured models</option> `;
   }
-  return options.map((option) => html`<option value=${option.value}>${option.label}</option>`);
+  return options.map(
+    (option) => html`<option value=${option.value}>${option.label}</option>`,
+  );
 }
 
 type CompiledPattern =
@@ -394,7 +427,10 @@ function compilePattern(pattern: string): CompiledPattern {
     return { kind: "exact", value: normalized };
   }
   const escaped = normalized.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&");
-  return { kind: "regex", value: new RegExp(`^${escaped.replaceAll("\\*", ".*")}$`) };
+  return {
+    kind: "regex",
+    value: new RegExp(`^${escaped.replaceAll("\\*", ".*")}$`),
+  };
 }
 
 function compilePatterns(patterns?: string[]): CompiledPattern[] {

@@ -4,18 +4,29 @@ import { assertSupportedRuntime } from "../infra/runtime-guard.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
-import { isDeprecatedAuthChoice, normalizeLegacyOnboardAuthChoice } from "./auth-choice-legacy.js";
+import {
+  isDeprecatedAuthChoice,
+  normalizeLegacyOnboardAuthChoice,
+} from "./auth-choice-legacy.js";
 import { DEFAULT_WORKSPACE, handleReset } from "./onboard-helpers.js";
 import { runInteractiveOnboarding } from "./onboard-interactive.js";
 import { runNonInteractiveOnboarding } from "./onboard-non-interactive.js";
 import type { OnboardOptions, ResetScope } from "./onboard-types.js";
 
-const VALID_RESET_SCOPES = new Set<ResetScope>(["config", "config+creds+sessions", "full"]);
+const VALID_RESET_SCOPES = new Set<ResetScope>([
+  "config",
+  "config+creds+sessions",
+  "full",
+]);
 
-export async function onboardCommand(opts: OnboardOptions, runtime: RuntimeEnv = defaultRuntime) {
+export async function onboardCommand(
+  opts: OnboardOptions,
+  runtime: RuntimeEnv = defaultRuntime,
+) {
   assertSupportedRuntime(runtime);
   const originalAuthChoice = opts.authChoice;
-  const normalizedAuthChoice = normalizeLegacyOnboardAuthChoice(originalAuthChoice);
+  const normalizedAuthChoice =
+    normalizeLegacyOnboardAuthChoice(originalAuthChoice);
   if (opts.nonInteractive && isDeprecatedAuthChoice(originalAuthChoice)) {
     runtime.error(
       [
@@ -27,10 +38,14 @@ export async function onboardCommand(opts: OnboardOptions, runtime: RuntimeEnv =
     return;
   }
   if (originalAuthChoice === "claude-cli") {
-    runtime.log('Auth choice "claude-cli" is deprecated; using setup-token flow instead.');
+    runtime.log(
+      'Auth choice "claude-cli" is deprecated; using setup-token flow instead.',
+    );
   }
   if (originalAuthChoice === "codex-cli") {
-    runtime.log('Auth choice "codex-cli" is deprecated; using OpenAI Codex OAuth instead.');
+    runtime.log(
+      'Auth choice "codex-cli" is deprecated; using OpenAI Codex OAuth instead.',
+    );
   }
   const flow = opts.flow === "manual" ? ("advanced" as const) : opts.flow;
   const normalizedOpts =
@@ -47,8 +62,13 @@ export async function onboardCommand(opts: OnboardOptions, runtime: RuntimeEnv =
     return;
   }
 
-  if (normalizedOpts.resetScope && !VALID_RESET_SCOPES.has(normalizedOpts.resetScope)) {
-    runtime.error('Invalid --reset-scope. Use "config", "config+creds+sessions", or "full".');
+  if (
+    normalizedOpts.resetScope &&
+    !VALID_RESET_SCOPES.has(normalizedOpts.resetScope)
+  ) {
+    runtime.error(
+      'Invalid --reset-scope. Use "config", "config+creds+sessions", or "full".',
+    );
     runtime.exit(1);
     return;
   }
@@ -69,8 +89,11 @@ export async function onboardCommand(opts: OnboardOptions, runtime: RuntimeEnv =
     const snapshot = await readConfigFileSnapshot();
     const baseConfig = snapshot.valid ? snapshot.config : {};
     const workspaceDefault =
-      normalizedOpts.workspace ?? baseConfig.agents?.defaults?.workspace ?? DEFAULT_WORKSPACE;
-    const resetScope: ResetScope = normalizedOpts.resetScope ?? "config+creds+sessions";
+      normalizedOpts.workspace ??
+      baseConfig.agents?.defaults?.workspace ??
+      DEFAULT_WORKSPACE;
+    const resetScope: ResetScope =
+      normalizedOpts.resetScope ?? "config+creds+sessions";
     await handleReset(resetScope, resolveUserPath(workspaceDefault), runtime);
   }
 

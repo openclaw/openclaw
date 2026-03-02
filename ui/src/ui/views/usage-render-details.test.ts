@@ -48,7 +48,10 @@ const baseUsage = {
 
 describe("computeFilteredUsage", () => {
   it("returns undefined when no points match the range", () => {
-    const points = [makePoint({ timestamp: 1000 }), makePoint({ timestamp: 2000 })];
+    const points = [
+      makePoint({ timestamp: 1000 }),
+      makePoint({ timestamp: 2000 }),
+    ];
     const result = computeFilteredUsage(baseUsage, points, 3000, 4000);
     expect(result).toBeUndefined();
   });
@@ -88,7 +91,10 @@ describe("computeFilteredUsage", () => {
   });
 
   it("computes duration from first to last filtered point", () => {
-    const points = [makePoint({ timestamp: 1000 }), makePoint({ timestamp: 5000 })];
+    const points = [
+      makePoint({ timestamp: 1000 }),
+      makePoint({ timestamp: 5000 }),
+    ];
     const result = computeFilteredUsage(baseUsage, points, 1000, 5000);
     expect(result!.durationMs).toBe(4000);
     expect(result!.firstActivity).toBe(1000);
@@ -97,8 +103,20 @@ describe("computeFilteredUsage", () => {
 
   it("aggregates token types (input, output, cacheRead, cacheWrite)", () => {
     const points = [
-      makePoint({ timestamp: 1000, input: 10, output: 20, cacheRead: 30, cacheWrite: 40 }),
-      makePoint({ timestamp: 2000, input: 5, output: 15, cacheRead: 25, cacheWrite: 35 }),
+      makePoint({
+        timestamp: 1000,
+        input: 10,
+        output: 20,
+        cacheRead: 30,
+        cacheWrite: 40,
+      }),
+      makePoint({
+        timestamp: 2000,
+        input: 5,
+        output: 15,
+        cacheRead: 25,
+        cacheWrite: 35,
+      }),
     ];
     const result = computeFilteredUsage(baseUsage, points, 1000, 2000);
     expect(result!.input).toBe(15);

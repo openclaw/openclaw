@@ -36,7 +36,9 @@ describe("discord audit", () => {
     expect(collected.channelIds).toEqual(["111"]);
     expect(collected.unresolvedChannels).toBe(1);
 
-    (fetchChannelPermissionsDiscord as unknown as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+    (
+      fetchChannelPermissionsDiscord as unknown as ReturnType<typeof vi.fn>
+    ).mockResolvedValueOnce({
       channelId: "111",
       permissions: ["ViewChannel"],
       raw: "0",

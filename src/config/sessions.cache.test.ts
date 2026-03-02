@@ -1,7 +1,16 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import {
   clearSessionStoreCacheForTest,
   loadSessionStore,
@@ -9,7 +18,9 @@ import {
   saveSessionStore,
 } from "./sessions.js";
 
-function createSessionEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {
+function createSessionEntry(
+  overrides: Partial<SessionEntry> = {},
+): SessionEntry {
   return {
     sessionId: "id-1",
     updatedAt: Date.now(),
@@ -108,7 +119,9 @@ describe("Session Store Cache", () => {
 
     const loaded2 = loadSessionStore(storePath);
     expect(loaded2["session:1"].cliSessionIds?.openai).toBe("sess-1");
-    expect(loaded2["session:1"].skillsSnapshot?.skills?.[0]?.name).toBe("alpha");
+    expect(loaded2["session:1"].skillsSnapshot?.skills?.[0]?.name).toBe(
+      "alpha",
+    );
   });
 
   it("should refresh cache when store file changes on disk", async () => {

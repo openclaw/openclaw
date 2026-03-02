@@ -31,10 +31,18 @@ describe("sendReactionSignal", () => {
   });
 
   it("uses recipients array and targetAuthor for uuid dms", async () => {
-    await sendReactionSignal("uuid:123e4567-e89b-12d3-a456-426614174000", 123, "🔥");
+    await sendReactionSignal(
+      "uuid:123e4567-e89b-12d3-a456-426614174000",
+      123,
+      "🔥",
+    );
 
     const params = rpcMock.mock.calls[0]?.[1] as Record<string, unknown>;
-    expect(rpcMock).toHaveBeenCalledWith("sendReaction", expect.any(Object), expect.any(Object));
+    expect(rpcMock).toHaveBeenCalledWith(
+      "sendReaction",
+      expect.any(Object),
+      expect.any(Object),
+    );
     expect(params.recipients).toEqual(["123e4567-e89b-12d3-a456-426614174000"]);
     expect(params.groupIds).toBeUndefined();
     expect(params.targetAuthor).toBe("123e4567-e89b-12d3-a456-426614174000");

@@ -18,7 +18,9 @@ describe("oauth paths", () => {
       OPENCLAW_STATE_DIR: "/custom/state",
     } as NodeJS.ProcessEnv;
 
-    expect(resolveOAuthDir(env, "/custom/state")).toBe(path.resolve("/custom/oauth"));
+    expect(resolveOAuthDir(env, "/custom/state")).toBe(
+      path.resolve("/custom/oauth"),
+    );
     expect(resolveOAuthPath(env, "/custom/state")).toBe(
       path.join(path.resolve("/custom/oauth"), "oauth.json"),
     );
@@ -29,7 +31,9 @@ describe("oauth paths", () => {
       OPENCLAW_STATE_DIR: "/custom/state",
     } as NodeJS.ProcessEnv;
 
-    expect(resolveOAuthDir(env, "/custom/state")).toBe(path.join("/custom/state", "credentials"));
+    expect(resolveOAuthDir(env, "/custom/state")).toBe(
+      path.join("/custom/state", "credentials"),
+    );
     expect(resolveOAuthPath(env, "/custom/state")).toBe(
       path.join("/custom/state", "credentials", "oauth.json"),
     );
@@ -37,7 +41,10 @@ describe("oauth paths", () => {
 });
 
 describe("state + config path candidates", () => {
-  async function withTempRoot(prefix: string, run: (root: string) => Promise<void>): Promise<void> {
+  async function withTempRoot(
+    prefix: string,
+    run: (root: string) => Promise<void>,
+  ): Promise<void> {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
     try {
       await run(root);
@@ -55,7 +62,9 @@ describe("state + config path candidates", () => {
     expect(resolveStateDir(env)).toBe(path.join(resolvedHome, ".openclaw"));
 
     const candidates = resolveDefaultConfigCandidates(env);
-    expect(candidates[0]).toBe(path.join(resolvedHome, ".openclaw", "openclaw.json"));
+    expect(candidates[0]).toBe(
+      path.join(resolvedHome, ".openclaw", "openclaw.json"),
+    );
   }
 
   it("uses OPENCLAW_STATE_DIR when set", () => {
@@ -63,7 +72,9 @@ describe("state + config path candidates", () => {
       OPENCLAW_STATE_DIR: "/new/state",
     } as NodeJS.ProcessEnv;
 
-    expect(resolveStateDir(env, () => "/home/test")).toBe(path.resolve("/new/state"));
+    expect(resolveStateDir(env, () => "/home/test")).toBe(
+      path.resolve("/new/state"),
+    );
   });
 
   it("uses OPENCLAW_HOME for default state/config locations", () => {
@@ -84,7 +95,10 @@ describe("state + config path candidates", () => {
   it("orders default config candidates in a stable order", () => {
     const home = "/home/test";
     const resolvedHome = path.resolve(home);
-    const candidates = resolveDefaultConfigCandidates({} as NodeJS.ProcessEnv, () => home);
+    const candidates = resolveDefaultConfigCandidates(
+      {} as NodeJS.ProcessEnv,
+      () => home,
+    );
     const expected = [
       path.join(resolvedHome, ".openclaw", "openclaw.json"),
       path.join(resolvedHome, ".openclaw", "clawdbot.json"),
@@ -131,7 +145,10 @@ describe("state + config path candidates", () => {
       const legacyPath = path.join(legacyDir, "openclaw.json");
       await fs.writeFile(legacyPath, "{}", "utf-8");
 
-      const resolved = resolveConfigPathCandidate({} as NodeJS.ProcessEnv, () => root);
+      const resolved = resolveConfigPathCandidate(
+        {} as NodeJS.ProcessEnv,
+        () => root,
+      );
       expect(resolved).toBe(legacyPath);
     });
   });

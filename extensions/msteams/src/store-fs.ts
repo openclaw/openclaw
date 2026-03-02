@@ -1,5 +1,8 @@
 import fs from "node:fs";
-import { readJsonFileWithFallback, writeJsonFileAtomically } from "openclaw/plugin-sdk";
+import {
+  readJsonFileWithFallback,
+  writeJsonFileAtomically,
+} from "openclaw/plugin-sdk";
 import { withFileLock as withPathLock } from "./file-lock.js";
 
 const STORE_LOCK_OPTIONS = {
@@ -20,7 +23,10 @@ export async function readJsonFile<T>(
   return await readJsonFileWithFallback(filePath, fallback);
 }
 
-export async function writeJsonFile(filePath: string, value: unknown): Promise<void> {
+export async function writeJsonFile(
+  filePath: string,
+  value: unknown,
+): Promise<void> {
   await writeJsonFileAtomically(filePath, value);
 }
 

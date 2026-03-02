@@ -1,6 +1,13 @@
 import type { OpenClawConfig } from "../config/config.js";
-import { readConfigFileSnapshotForWrite, writeConfigFile } from "../config/config.js";
-import { loadCronStore, resolveCronStorePath, saveCronStore } from "../cron/store.js";
+import {
+  readConfigFileSnapshotForWrite,
+  writeConfigFile,
+} from "../config/config.js";
+import {
+  loadCronStore,
+  resolveCronStorePath,
+  saveCronStore,
+} from "../cron/store.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   normalizeTelegramChatId,
@@ -17,7 +24,9 @@ function asObjectRecord(value: unknown): Record<string, unknown> | null {
   return value as Record<string, unknown>;
 }
 
-function normalizeTelegramLookupTargetForMatch(raw: string): string | undefined {
+function normalizeTelegramLookupTargetForMatch(
+  raw: string,
+): string | undefined {
   const normalized = normalizeTelegramLookupTarget(raw);
   if (!normalized) {
     return undefined;
@@ -31,7 +40,8 @@ function normalizeTelegramTargetForMatch(raw: string): string | undefined {
   if (!normalized) {
     return undefined;
   }
-  const threadKey = parsed.messageThreadId == null ? "" : String(parsed.messageThreadId);
+  const threadKey =
+    parsed.messageThreadId == null ? "" : String(parsed.messageThreadId);
   return `${normalized}|${threadKey}`;
 }
 
@@ -61,7 +71,8 @@ function resolveLegacyRewrite(params: {
   if (!normalized) {
     return null;
   }
-  const threadKey = parsed.messageThreadId == null ? "" : String(parsed.messageThreadId);
+  const threadKey =
+    parsed.messageThreadId == null ? "" : String(parsed.messageThreadId);
   return {
     matchKey: `${normalized}|${threadKey}`,
     resolvedTarget: buildResolvedTelegramTarget({
@@ -77,7 +88,10 @@ function rewriteTargetIfMatch(params: {
   matchKey: string;
   resolvedTarget: string;
 }): string | null {
-  if (typeof params.rawValue !== "string" && typeof params.rawValue !== "number") {
+  if (
+    typeof params.rawValue !== "string" &&
+    typeof params.rawValue !== "number"
+  ) {
     return null;
   }
   const value = String(params.rawValue).trim();
@@ -159,12 +173,16 @@ export async function maybePersistResolvedTelegramTarget(params: {
     if (configChanged) {
       await writeConfigFile(nextConfig, writeOptions);
       if (params.verbose) {
-        writebackLogger.warn(`resolved Telegram defaultTo target ${raw} -> ${resolvedTarget}`);
+        writebackLogger.warn(
+          `resolved Telegram defaultTo target ${raw} -> ${resolvedTarget}`,
+        );
       }
     }
   } catch (err) {
     if (params.verbose) {
-      writebackLogger.warn(`failed to persist Telegram defaultTo target ${raw}: ${String(err)}`);
+      writebackLogger.warn(
+        `failed to persist Telegram defaultTo target ${raw}: ${String(err)}`,
+      );
     }
   }
 
@@ -190,12 +208,16 @@ export async function maybePersistResolvedTelegramTarget(params: {
     if (cronChanged) {
       await saveCronStore(storePath, store);
       if (params.verbose) {
-        writebackLogger.warn(`resolved Telegram cron delivery target ${raw} -> ${resolvedTarget}`);
+        writebackLogger.warn(
+          `resolved Telegram cron delivery target ${raw} -> ${resolvedTarget}`,
+        );
       }
     }
   } catch (err) {
     if (params.verbose) {
-      writebackLogger.warn(`failed to persist Telegram cron target ${raw}: ${String(err)}`);
+      writebackLogger.warn(
+        `failed to persist Telegram cron target ${raw}: ${String(err)}`,
+      );
     }
   }
 }

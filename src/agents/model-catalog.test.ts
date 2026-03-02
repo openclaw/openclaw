@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
-import { __setModelCatalogImportForTest, loadModelCatalog } from "./model-catalog.js";
+import {
+  __setModelCatalogImportForTest,
+  loadModelCatalog,
+} from "./model-catalog.js";
 import {
   installModelCatalogTestHooks,
   mockCatalogImportFailThenRecover,
@@ -24,7 +27,9 @@ function mockPiDiscoveryModels(models: unknown[]) {
 }
 
 function mockSingleOpenAiCatalogModel() {
-  mockPiDiscoveryModels([{ id: "gpt-4.1", provider: "openai", name: "GPT-4.1" }]);
+  mockPiDiscoveryModels([
+    { id: "gpt-4.1", provider: "openai", name: "GPT-4.1" },
+  ]);
 }
 
 describe("loadModelCatalog", () => {
@@ -41,7 +46,9 @@ describe("loadModelCatalog", () => {
       expect(first).toEqual([]);
 
       const second = await loadModelCatalog({ config: cfg });
-      expect(second).toEqual([{ id: "gpt-4.1", name: "GPT-4.1", provider: "openai" }]);
+      expect(second).toEqual([
+        { id: "gpt-4.1", name: "GPT-4.1", provider: "openai" },
+      ]);
       expect(getCallCount()).toBe(2);
       expect(warnSpy).toHaveBeenCalledTimes(1);
     } finally {
@@ -77,7 +84,9 @@ describe("loadModelCatalog", () => {
       );
 
       const result = await loadModelCatalog({ config: {} as OpenClawConfig });
-      expect(result).toEqual([{ id: "gpt-4.1", name: "GPT-4.1", provider: "openai" }]);
+      expect(result).toEqual([
+        { id: "gpt-4.1", name: "GPT-4.1", provider: "openai" },
+      ]);
       expect(warnSpy).toHaveBeenCalledTimes(1);
     } finally {
       setLoggerOverride(null);
@@ -178,7 +187,9 @@ describe("loadModelCatalog", () => {
     });
 
     expect(
-      result.some((entry) => entry.provider === "qianfan" && entry.id === "deepseek-v3.2"),
+      result.some(
+        (entry) => entry.provider === "qianfan" && entry.id === "deepseek-v3.2",
+      ),
     ).toBe(false);
   });
 
@@ -216,7 +227,9 @@ describe("loadModelCatalog", () => {
     });
 
     const matches = result.filter(
-      (entry) => entry.provider === "kilocode" && entry.id === "anthropic/claude-opus-4.6",
+      (entry) =>
+        entry.provider === "kilocode" &&
+        entry.id === "anthropic/claude-opus-4.6",
     );
     expect(matches).toHaveLength(1);
     expect(matches[0]?.name).toBe("Claude Opus 4.6");

@@ -4,7 +4,10 @@ import { createServer } from "node:http";
 import { delimiter, dirname, join } from "node:path";
 import { fetchWithSsrFGuard, isWSL2Sync } from "openclaw/plugin-sdk";
 
-const CLIENT_ID_KEYS = ["OPENCLAW_GEMINI_OAUTH_CLIENT_ID", "GEMINI_CLI_OAUTH_CLIENT_ID"];
+const CLIENT_ID_KEYS = [
+  "OPENCLAW_GEMINI_OAUTH_CLIENT_ID",
+  "GEMINI_CLI_OAUTH_CLIENT_ID",
+];
 const CLIENT_SECRET_KEYS = [
   "OPENCLAW_GEMINI_OAUTH_CLIENT_SECRET",
   "GEMINI_CLI_OAUTH_CLIENT_SECRET",
@@ -14,8 +17,10 @@ const AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const USERINFO_URL = "https://www.googleapis.com/oauth2/v1/userinfo?alt=json";
 const CODE_ASSIST_ENDPOINT_PROD = "https://cloudcode-pa.googleapis.com";
-const CODE_ASSIST_ENDPOINT_DAILY = "https://daily-cloudcode-pa.sandbox.googleapis.com";
-const CODE_ASSIST_ENDPOINT_AUTOPUSH = "https://autopush-cloudcode-pa.sandbox.googleapis.com";
+const CODE_ASSIST_ENDPOINT_DAILY =
+  "https://daily-cloudcode-pa.sandbox.googleapis.com";
+const CODE_ASSIST_ENDPOINT_AUTOPUSH =
+  "https://autopush-cloudcode-pa.sandbox.googleapis.com";
 const LOAD_CODE_ASSIST_ENDPOINTS = [
   CODE_ASSIST_ENDPOINT_PROD,
   CODE_ASSIST_ENDPOINT_DAILY,
@@ -59,7 +64,10 @@ function resolveEnv(keys: string[]): string | undefined {
   return undefined;
 }
 
-let cachedGeminiCliCredentials: { clientId: string; clientSecret: string } | null = null;
+let cachedGeminiCliCredentials: {
+  clientId: string;
+  clientSecret: string;
+} | null = null;
 
 /** @internal */
 export function clearCredentialsCache(): void {
@@ -67,7 +75,10 @@ export function clearCredentialsCache(): void {
 }
 
 /** Extracts OAuth credentials from the installed Gemini CLI's bundled oauth2.js. */
-export function extractGeminiCliCredentials(): { clientId: string; clientSecret: string } | null {
+export function extractGeminiCliCredentials(): {
+  clientId: string;
+  clientSecret: string;
+} | null {
   if (cachedGeminiCliCredentials) {
     return cachedGeminiCliCredentials;
   }
@@ -124,10 +135,15 @@ export function extractGeminiCliCredentials(): { clientId: string; clientSecret:
       return null;
     }
 
-    const idMatch = content.match(/(\d+-[a-z0-9]+\.apps\.googleusercontent\.com)/);
+    const idMatch = content.match(
+      /(\d+-[a-z0-9]+\.apps\.googleusercontent\.com)/,
+    );
     const secretMatch = content.match(/(GOCSPX-[A-Za-z0-9_-]+)/);
     if (idMatch && secretMatch) {
-      cachedGeminiCliCredentials = { clientId: idMatch[1], clientSecret: secretMatch[1] };
+      cachedGeminiCliCredentials = {
+        clientId: idMatch[1],
+        clientSecret: secretMatch[1],
+      };
       return cachedGeminiCliCredentials;
     }
   } catch {
@@ -136,7 +152,10 @@ export function extractGeminiCliCredentials(): { clientId: string; clientSecret:
   return null;
 }
 
-function resolveGeminiCliDirs(geminiPath: string, resolvedPath: string): string[] {
+function resolveGeminiCliDirs(
+  geminiPath: string,
+  resolvedPath: string,
+): string[] {
   const binDir = dirname(geminiPath);
   const candidates = [
     dirname(dirname(resolvedPath)),
@@ -150,7 +169,9 @@ function resolveGeminiCliDirs(geminiPath: string, resolvedPath: string): string[
   const seen = new Set<string>();
   for (const candidate of candidates) {
     const key =
-      process.platform === "win32" ? candidate.replace(/\\/g, "/").toLowerCase() : candidate;
+      process.platform === "win32"
+        ? candidate.replace(/\\/g, "/").toLowerCase()
+        : candidate;
     if (seen.has(key)) {
       continue;
     }
@@ -161,7 +182,8 @@ function resolveGeminiCliDirs(geminiPath: string, resolvedPath: string): string[
 }
 
 function findInPath(name: string): string | null {
-  const exts = process.platform === "win32" ? [".cmd", ".bat", ".exe", ""] : [""];
+  const exts =
+    process.platform === "win32" ? [".cmd", ".bat", ".exe", ""] : [""];
   for (const dir of (process.env.PATH ?? "").split(delimiter)) {
     for (const ext of exts) {
       const p = join(dir, name + ext);
@@ -194,7 +216,10 @@ function findFile(dir: string, name: string, depth: number): string | null {
   return null;
 }
 
-function resolveOAuthClientConfig(): { clientId: string; clientSecret?: string } {
+function resolveOAuthClientConfig(): {
+  clientId: string;
+  clientSecret?: string;
+} {
   // 1. Check env vars first (user override)
   const envClientId = resolveEnv(CLIENT_ID_KEYS);
   const envClientSecret = resolveEnv(CLIENT_SECRET_KEYS);
@@ -313,7 +338,10 @@ async function waitForLocalCallback(params: {
     let timeout: NodeJS.Timeout | null = null;
     const server = createServer((req, res) => {
       try {
-        const requestUrl = new URL(req.url ?? "/", `http://${hostname}:${port}`);
+        const requestUrl = new URL(
+          req.url ?? "/",
+          `http://${hostname}:${port}`,
+        );
         if (requestUrl.pathname !== expectedPath) {
           res.statusCode = 404;
           res.setHeader("Content-Type", "text/plain");
@@ -380,7 +408,9 @@ async function waitForLocalCallback(params: {
     };
 
     server.once("error", (err) => {
-      finish(err instanceof Error ? err : new Error("OAuth callback server error"));
+      finish(
+        err instanceof Error ? err : new Error("OAuth callback server error"),
+      );
     });
 
     server.listen(port, hostname, () => {
@@ -463,7 +493,8 @@ async function getUserEmail(accessToken: string): Promise<string | undefined> {
 }
 
 async function discoverProject(accessToken: string): Promise<string> {
-  const envProject = process.env.GOOGLE_CLOUD_PROJECT || process.env.GOOGLE_CLOUD_PROJECT_ID;
+  const envProject =
+    process.env.GOOGLE_CLOUD_PROJECT || process.env.GOOGLE_CLOUD_PROJECT_ID;
   const platform = resolvePlatform();
   const metadata = {
     ideType: "ANTIGRAVITY",
@@ -495,11 +526,14 @@ async function discoverProject(accessToken: string): Promise<string> {
   let loadError: Error | undefined;
   for (const endpoint of LOAD_CODE_ASSIST_ENDPOINTS) {
     try {
-      const response = await fetchWithTimeout(`${endpoint}/v1internal:loadCodeAssist`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify(loadBody),
-      });
+      const response = await fetchWithTimeout(
+        `${endpoint}/v1internal:loadCodeAssist`,
+        {
+          method: "POST",
+          headers,
+          body: JSON.stringify(loadBody),
+        },
+      );
 
       if (!response.ok) {
         const errorPayload = await response.json().catch(() => null);
@@ -509,7 +543,9 @@ async function discoverProject(accessToken: string): Promise<string> {
           loadError = undefined;
           break;
         }
-        loadError = new Error(`loadCodeAssist failed: ${response.status} ${response.statusText}`);
+        loadError = new Error(
+          `loadCodeAssist failed: ${response.status} ${response.statusText}`,
+        );
         continue;
       }
 
@@ -518,7 +554,10 @@ async function discoverProject(accessToken: string): Promise<string> {
       loadError = undefined;
       break;
     } catch (err) {
-      loadError = err instanceof Error ? err : new Error("loadCodeAssist failed", { cause: err });
+      loadError =
+        err instanceof Error
+          ? err
+          : new Error("loadCodeAssist failed", { cause: err });
     }
   }
 
@@ -568,14 +607,19 @@ async function discoverProject(accessToken: string): Promise<string> {
     (onboardBody.metadata as Record<string, unknown>).duetProject = envProject;
   }
 
-  const onboardResponse = await fetchWithTimeout(`${activeEndpoint}/v1internal:onboardUser`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(onboardBody),
-  });
+  const onboardResponse = await fetchWithTimeout(
+    `${activeEndpoint}/v1internal:onboardUser`,
+    {
+      method: "POST",
+      headers,
+      body: JSON.stringify(onboardBody),
+    },
+  );
 
   if (!onboardResponse.ok) {
-    throw new Error(`onboardUser failed: ${onboardResponse.status} ${onboardResponse.statusText}`);
+    throw new Error(
+      `onboardUser failed: ${onboardResponse.status} ${onboardResponse.statusText}`,
+    );
   }
 
   let lro = (await onboardResponse.json()) as {
@@ -634,12 +678,18 @@ async function pollOperation(
   endpoint: string,
   operationName: string,
   headers: Record<string, string>,
-): Promise<{ done?: boolean; response?: { cloudaicompanionProject?: { id?: string } } }> {
+): Promise<{
+  done?: boolean;
+  response?: { cloudaicompanionProject?: { id?: string } };
+}> {
   for (let attempt = 0; attempt < 24; attempt += 1) {
     await new Promise((resolve) => setTimeout(resolve, 5000));
-    const response = await fetchWithTimeout(`${endpoint}/v1internal/${operationName}`, {
-      headers,
-    });
+    const response = await fetchWithTimeout(
+      `${endpoint}/v1internal/${operationName}`,
+      {
+        headers,
+      },
+    );
     if (!response.ok) {
       continue;
     }
@@ -714,7 +764,9 @@ export async function loginGeminiCliOAuth(
         err.message.includes("port") ||
         err.message.includes("listen"))
     ) {
-      ctx.progress.update("Local callback server failed. Switching to manual mode...");
+      ctx.progress.update(
+        "Local callback server failed. Switching to manual mode...",
+      );
       ctx.log(`\nOpen this URL in your LOCAL browser:\n\n${authUrl}\n`);
       const callbackInput = await ctx.prompt("Paste the redirect URL here: ");
       const parsed = parseCallbackInput(callbackInput, verifier);
@@ -722,7 +774,9 @@ export async function loginGeminiCliOAuth(
         throw new Error(parsed.error, { cause: err });
       }
       if (parsed.state !== verifier) {
-        throw new Error("OAuth state mismatch - please try again", { cause: err });
+        throw new Error("OAuth state mismatch - please try again", {
+          cause: err,
+        });
       }
       ctx.progress.update("Exchanging authorization code for tokens...");
       return exchangeCodeForTokens(parsed.code, verifier);

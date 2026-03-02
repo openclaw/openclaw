@@ -9,8 +9,14 @@ describe("resolveDefaultMattermostAccountId", () => {
         mattermost: {
           defaultAccount: "alerts",
           accounts: {
-            default: { botToken: "tok-default", baseUrl: "https://chat.example.com" },
-            alerts: { botToken: "tok-alerts", baseUrl: "https://alerts.example.com" },
+            default: {
+              botToken: "tok-default",
+              baseUrl: "https://chat.example.com",
+            },
+            alerts: {
+              botToken: "tok-alerts",
+              baseUrl: "https://alerts.example.com",
+            },
           },
         },
       },
@@ -25,7 +31,10 @@ describe("resolveDefaultMattermostAccountId", () => {
         mattermost: {
           defaultAccount: "Ops Team",
           accounts: {
-            "ops-team": { botToken: "tok-ops", baseUrl: "https://chat.example.com" },
+            "ops-team": {
+              botToken: "tok-ops",
+              baseUrl: "https://chat.example.com",
+            },
           },
         },
       },
@@ -40,8 +49,14 @@ describe("resolveDefaultMattermostAccountId", () => {
         mattermost: {
           defaultAccount: "missing",
           accounts: {
-            default: { botToken: "tok-default", baseUrl: "https://chat.example.com" },
-            alerts: { botToken: "tok-alerts", baseUrl: "https://alerts.example.com" },
+            default: {
+              botToken: "tok-default",
+              baseUrl: "https://chat.example.com",
+            },
+            alerts: {
+              botToken: "tok-alerts",
+              baseUrl: "https://alerts.example.com",
+            },
           },
         },
       },

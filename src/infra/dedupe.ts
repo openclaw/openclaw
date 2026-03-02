@@ -38,7 +38,11 @@ export function createDedupeCache(options: DedupeCacheOptions): DedupeCache {
     pruneMapToMaxSize(cache, maxSize);
   };
 
-  const hasUnexpired = (key: string, now: number, touchOnRead: boolean): boolean => {
+  const hasUnexpired = (
+    key: string,
+    now: number,
+    touchOnRead: boolean,
+  ): boolean => {
     const existing = cache.get(key);
     if (existing === undefined) {
       return false;

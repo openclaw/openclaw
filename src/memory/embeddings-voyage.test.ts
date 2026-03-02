@@ -1,10 +1,17 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as authModule from "../agents/model-auth.js";
-import { type FetchMock, withFetchPreconnect } from "../test-utils/fetch-mock.js";
-import { createVoyageEmbeddingProvider, normalizeVoyageModel } from "./embeddings-voyage.js";
+import {
+  type FetchMock,
+  withFetchPreconnect,
+} from "../test-utils/fetch-mock.js";
+import {
+  createVoyageEmbeddingProvider,
+  normalizeVoyageModel,
+} from "./embeddings-voyage.js";
 
 vi.mock("../agents/model-auth.js", async () => {
-  const { createModelAuthMockModule } = await import("../test-utils/model-auth-mock.js");
+  const { createModelAuthMockModule } =
+    await import("../test-utils/model-auth-mock.js");
   return createModelAuthMockModule();
 });
 
@@ -49,7 +56,10 @@ describe("voyage embedding provider", () => {
 
   it("configures client with correct defaults and headers", async () => {
     const fetchMock = createFetchMock();
-    const result = await createDefaultVoyageProvider("voyage-4-large", fetchMock);
+    const result = await createDefaultVoyageProvider(
+      "voyage-4-large",
+      fetchMock,
+    );
 
     await result.provider.embedQuery("test query");
 
@@ -114,7 +124,10 @@ describe("voyage embedding provider", () => {
           ),
       ),
     );
-    const result = await createDefaultVoyageProvider("voyage-4-large", fetchMock);
+    const result = await createDefaultVoyageProvider(
+      "voyage-4-large",
+      fetchMock,
+    );
 
     await result.provider.embedBatch(["doc1", "doc2"]);
 
@@ -130,7 +143,9 @@ describe("voyage embedding provider", () => {
   });
 
   it("normalizes model names", async () => {
-    expect(normalizeVoyageModel("voyage/voyage-large-2")).toBe("voyage-large-2");
+    expect(normalizeVoyageModel("voyage/voyage-large-2")).toBe(
+      "voyage-large-2",
+    );
     expect(normalizeVoyageModel("voyage-4-large")).toBe("voyage-4-large");
     expect(normalizeVoyageModel("  voyage-lite  ")).toBe("voyage-lite");
     expect(normalizeVoyageModel("")).toBe("voyage-4-large"); // Default

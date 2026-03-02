@@ -2,12 +2,21 @@ import {
   collectProviderApiKeysForExecution,
   executeWithApiKeyRotation,
 } from "../agents/api-key-rotation.js";
-import { requireApiKey, resolveApiKeyForProvider } from "../agents/model-auth.js";
+import {
+  requireApiKey,
+  resolveApiKeyForProvider,
+} from "../agents/model-auth.js";
 import { parseGeminiAuth } from "../infra/gemini-auth.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { debugEmbeddingsLog } from "./embeddings-debug.js";
-import type { EmbeddingProvider, EmbeddingProviderOptions } from "./embeddings.js";
-import { buildRemoteBaseUrlPolicy, withRemoteHttpResponse } from "./remote-http.js";
+import type {
+  EmbeddingProvider,
+  EmbeddingProviderOptions,
+} from "./embeddings.js";
+import {
+  buildRemoteBaseUrlPolicy,
+  withRemoteHttpResponse,
+} from "./remote-http.js";
 
 export type GeminiEmbeddingClient = {
   baseUrl: string;
@@ -18,7 +27,8 @@ export type GeminiEmbeddingClient = {
   apiKeys: string[];
 };
 
-const DEFAULT_GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
+const DEFAULT_GEMINI_BASE_URL =
+  "https://generativelanguage.googleapis.com/v1beta";
 export const DEFAULT_GEMINI_EMBEDDING_MODEL = "gemini-embedding-001";
 const GEMINI_MAX_INPUT_TOKENS: Record<string, number> = {
   "text-embedding-004": 2048,
@@ -70,7 +80,11 @@ export async function createGeminiEmbeddingProvider(
   const embedUrl = `${baseUrl}/${client.modelPath}:embedContent`;
   const batchUrl = `${baseUrl}/${client.modelPath}:batchEmbedContents`;
 
-  const fetchWithGeminiAuth = async (apiKey: string, endpoint: string, body: unknown) => {
+  const fetchWithGeminiAuth = async (
+    apiKey: string,
+    endpoint: string,
+    body: unknown,
+  ) => {
     const authHeaders = parseGeminiAuth(apiKey);
     const headers = {
       ...authHeaders.headers,
@@ -131,7 +145,9 @@ export async function createGeminiEmbeddingProvider(
           requests,
         }),
     });
-    const embeddings = Array.isArray(payload.embeddings) ? payload.embeddings : [];
+    const embeddings = Array.isArray(payload.embeddings)
+      ? payload.embeddings
+      : [];
     return texts.map((_, index) => embeddings[index]?.values ?? []);
   };
 
@@ -166,10 +182,15 @@ export async function resolveGeminiEmbeddingClient(
       );
 
   const providerConfig = options.config.models?.providers?.google;
-  const rawBaseUrl = remoteBaseUrl || providerConfig?.baseUrl?.trim() || DEFAULT_GEMINI_BASE_URL;
+  const rawBaseUrl =
+    remoteBaseUrl || providerConfig?.baseUrl?.trim() || DEFAULT_GEMINI_BASE_URL;
   const baseUrl = normalizeGeminiBaseUrl(rawBaseUrl);
   const ssrfPolicy = buildRemoteBaseUrlPolicy(baseUrl);
-  const headerOverrides = Object.assign({}, providerConfig?.headers, remote?.headers);
+  const headerOverrides = Object.assign(
+    {},
+    providerConfig?.headers,
+    remote?.headers,
+  );
   const headers: Record<string, string> = {
     ...headerOverrides,
   };

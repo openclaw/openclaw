@@ -20,10 +20,15 @@ export async function checkGatewayHealth(params: {
 }) {
   const gatewayDetails = buildGatewayConnectionDetails({ config: params.cfg });
   const timeoutMs =
-    typeof params.timeoutMs === "number" && params.timeoutMs > 0 ? params.timeoutMs : 10_000;
+    typeof params.timeoutMs === "number" && params.timeoutMs > 0
+      ? params.timeoutMs
+      : 10_000;
   let healthOk = false;
   try {
-    await healthCommand({ json: false, timeoutMs, config: params.cfg }, params.runtime);
+    await healthCommand(
+      { json: false, timeoutMs, config: params.cfg },
+      params.runtime,
+    );
     healthOk = true;
   } catch (err) {
     const message = String(err);
@@ -69,7 +74,9 @@ export async function probeGatewayMemoryStatus(params: {
   timeoutMs?: number;
 }): Promise<GatewayMemoryProbe> {
   const timeoutMs =
-    typeof params.timeoutMs === "number" && params.timeoutMs > 0 ? params.timeoutMs : 8_000;
+    typeof params.timeoutMs === "number" && params.timeoutMs > 0
+      ? params.timeoutMs
+      : 8_000;
   try {
     const payload = await callGateway<DoctorMemoryStatusPayload>({
       method: "doctor.memory.status",

@@ -3,7 +3,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { resolveChannelMediaMaxBytes, type OpenClawConfig } from "openclaw/plugin-sdk";
+import {
+  resolveChannelMediaMaxBytes,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk";
 import { resolveBlueBubblesAccount } from "./accounts.js";
 import { sendBlueBubblesAttachment } from "./attachments.js";
 import { resolveBlueBubblesMessageId } from "./monitor.js";
@@ -59,7 +62,9 @@ function resolveConfiguredPath(input: string): string {
       throw new Error(`Invalid file:// URL in mediaLocalRoots: ${input}`);
     }
     if (!path.isAbsolute(parsed)) {
-      throw new Error(`mediaLocalRoots entries must be absolute paths: ${input}`);
+      throw new Error(
+        `mediaLocalRoots entries must be absolute paths: ${input}`,
+      );
     }
     return parsed;
   }
@@ -80,12 +85,21 @@ function isPathInsideRoot(candidate: string, root: string): boolean {
     const candidateLower = normalizedCandidate.toLowerCase();
     const rootLower = normalizedRoot.toLowerCase();
     const rootWithSepLower = rootWithSep.toLowerCase();
-    return candidateLower === rootLower || candidateLower.startsWith(rootWithSepLower);
+    return (
+      candidateLower === rootLower ||
+      candidateLower.startsWith(rootWithSepLower)
+    );
   }
-  return normalizedCandidate === normalizedRoot || normalizedCandidate.startsWith(rootWithSep);
+  return (
+    normalizedCandidate === normalizedRoot ||
+    normalizedCandidate.startsWith(rootWithSep)
+  );
 }
 
-function resolveMediaLocalRoots(params: { cfg: OpenClawConfig; accountId?: string }): string[] {
+function resolveMediaLocalRoots(params: {
+  cfg: OpenClawConfig;
+  accountId?: string;
+}): string[] {
   const account = resolveBlueBubblesAccount({
     cfg: params.cfg,
     accountId: params.accountId,
@@ -111,8 +125,10 @@ async function assertLocalMediaPathAllowed(params: {
   }
 
   const resolvedLocalPath = path.resolve(params.localPath);
-  const supportsNoFollow = process.platform !== "win32" && "O_NOFOLLOW" in fsConstants;
-  const openFlags = fsConstants.O_RDONLY | (supportsNoFollow ? fsConstants.O_NOFOLLOW : 0);
+  const supportsNoFollow =
+    process.platform !== "win32" && "O_NOFOLLOW" in fsConstants;
+  const openFlags =
+    fsConstants.O_RDONLY | (supportsNoFollow ? fsConstants.O_NOFOLLOW : 0);
 
   for (const rootEntry of params.localRoots) {
     const resolvedRootInput = resolveConfiguredPath(rootEntry);
@@ -239,7 +255,9 @@ export async function sendBlueBubblesMedia(params: {
     if (!resolvedContentType) {
       const hint = mediaPath ?? mediaUrl;
       const detected = await core.media.detectMime({
-        buffer: Buffer.isBuffer(mediaBuffer) ? mediaBuffer : Buffer.from(mediaBuffer),
+        buffer: Buffer.isBuffer(mediaBuffer)
+          ? mediaBuffer
+          : Buffer.from(mediaBuffer),
         filePath: hint,
       });
       resolvedContentType = detected ?? undefined;
@@ -250,15 +268,19 @@ export async function sendBlueBubblesMedia(params: {
   } else {
     const source = mediaPath ?? mediaUrl;
     if (!source) {
-      throw new Error("BlueBubbles media delivery requires mediaUrl, mediaPath, or mediaBuffer.");
+      throw new Error(
+        "BlueBubbles media delivery requires mediaUrl, mediaPath, or mediaBuffer.",
+      );
     }
     if (HTTP_URL_RE.test(source)) {
       const fetched = await core.channel.media.fetchRemoteMedia({
         url: source,
-        maxBytes: typeof maxBytes === "number" && maxBytes > 0 ? maxBytes : undefined,
+        maxBytes:
+          typeof maxBytes === "number" && maxBytes > 0 ? maxBytes : undefined,
       });
       buffer = fetched.buffer;
-      resolvedContentType = resolvedContentType ?? fetched.contentType ?? undefined;
+      resolvedContentType =
+        resolvedContentType ?? fetched.contentType ?? undefined;
       resolvedFilename = resolvedFilename ?? fetched.fileName;
     } else {
       const localPath = expandHomePath(resolveLocalMediaPath(source));
@@ -288,7 +310,9 @@ export async function sendBlueBubblesMedia(params: {
 
   // Resolve short ID (e.g., "5") to full UUID
   const replyToMessageGuid = replyToId?.trim()
-    ? resolveBlueBubblesMessageId(replyToId.trim(), { requireKnownShortId: true })
+    ? resolveBlueBubblesMessageId(replyToId.trim(), {
+        requireKnownShortId: true,
+      })
     : undefined;
 
   const attachmentResult = await sendBlueBubblesAttachment({

@@ -3,7 +3,9 @@ import type { OpenClawConfig } from "../config/config.js";
 import { applyExclusiveSlotSelection } from "./slots.js";
 
 describe("applyExclusiveSlotSelection", () => {
-  const createMemoryConfig = (plugins?: OpenClawConfig["plugins"]): OpenClawConfig => ({
+  const createMemoryConfig = (
+    plugins?: OpenClawConfig["plugins"],
+  ): OpenClawConfig => ({
     plugins: {
       ...plugins,
       entries: {
@@ -38,11 +40,15 @@ describe("applyExclusiveSlotSelection", () => {
 
     expect(result.changed).toBe(true);
     expect(result.config.plugins?.slots?.memory).toBe("memory");
-    expect(result.config.plugins?.entries?.["memory-core"]?.enabled).toBe(false);
+    expect(result.config.plugins?.entries?.["memory-core"]?.enabled).toBe(
+      false,
+    );
     expect(result.warnings).toContain(
       'Exclusive slot "memory" switched from "memory-core" to "memory".',
     );
-    expect(result.warnings).toContain('Disabled other "memory" slot plugins: memory-core.');
+    expect(result.warnings).toContain(
+      'Disabled other "memory" slot plugins: memory-core.',
+    );
   });
 
   it("does nothing when the slot already matches", () => {
@@ -85,11 +91,15 @@ describe("applyExclusiveSlotSelection", () => {
     const result = runMemorySelection(config);
 
     expect(result.changed).toBe(true);
-    expect(result.config.plugins?.entries?.["memory-core"]?.enabled).toBe(false);
+    expect(result.config.plugins?.entries?.["memory-core"]?.enabled).toBe(
+      false,
+    );
     expect(result.warnings).toContain(
       'Exclusive slot "memory" switched from "memory-core" to "memory".',
     );
-    expect(result.warnings).not.toContain('Disabled other "memory" slot plugins: memory-core.');
+    expect(result.warnings).not.toContain(
+      'Disabled other "memory" slot plugins: memory-core.',
+    );
   });
 
   it("skips changes when no exclusive slot applies", () => {

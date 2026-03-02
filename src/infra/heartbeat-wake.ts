@@ -101,13 +101,18 @@ function queuePendingWakeReason(params?: {
     pendingWakes.set(wakeTargetKey, next);
     return;
   }
-  if (next.priority === previous.priority && next.requestedAt >= previous.requestedAt) {
+  if (
+    next.priority === previous.priority &&
+    next.requestedAt >= previous.requestedAt
+  ) {
     pendingWakes.set(wakeTargetKey, next);
   }
 }
 
 function schedule(coalesceMs: number, kind: WakeTimerKind = "normal") {
-  const delay = Number.isFinite(coalesceMs) ? Math.max(0, coalesceMs) : DEFAULT_COALESCE_MS;
+  const delay = Number.isFinite(coalesceMs)
+    ? Math.max(0, coalesceMs)
+    : DEFAULT_COALESCE_MS;
   const dueAt = Date.now() + delay;
   if (timer) {
     // Keep retry cooldown as a hard minimum delay. This prevents the
@@ -150,7 +155,9 @@ function schedule(coalesceMs: number, kind: WakeTimerKind = "normal") {
         const wakeOpts = {
           reason: pendingWake.reason ?? undefined,
           ...(pendingWake.agentId ? { agentId: pendingWake.agentId } : {}),
-          ...(pendingWake.sessionKey ? { sessionKey: pendingWake.sessionKey } : {}),
+          ...(pendingWake.sessionKey
+            ? { sessionKey: pendingWake.sessionKey }
+            : {}),
         };
         const res = await active(wakeOpts);
         if (res.status === "skipped" && res.reason === "requests-in-flight") {
@@ -189,7 +196,9 @@ function schedule(coalesceMs: number, kind: WakeTimerKind = "normal") {
  * Stale disposers (from previous registrations) are no-ops, preventing
  * a race where an old runner's cleanup clears a newer runner's handler.
  */
-export function setHeartbeatWakeHandler(next: HeartbeatWakeHandler | null): () => void {
+export function setHeartbeatWakeHandler(
+  next: HeartbeatWakeHandler | null,
+): () => void {
   handlerGeneration += 1;
   const generation = handlerGeneration;
   handler = next;

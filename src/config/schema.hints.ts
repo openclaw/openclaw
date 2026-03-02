@@ -8,7 +8,10 @@ import { sensitive } from "./zod-schema.sensitive.js";
 
 const log = createSubsystemLogger("config/schema");
 
-export type { ConfigUiHint, ConfigUiHints } from "../shared/config-ui-hints-types.js";
+export type {
+  ConfigUiHint,
+  ConfigUiHints,
+} from "../shared/config-ui-hints-types.js";
 
 const GROUP_LABELS: Record<string, string> = {
   wizard: "Wizard",
@@ -94,9 +97,8 @@ const SENSITIVE_KEY_WHITELIST_SUFFIXES = [
   "tokenbudget",
   "passwordFile",
 ] as const;
-const NORMALIZED_SENSITIVE_KEY_WHITELIST_SUFFIXES = SENSITIVE_KEY_WHITELIST_SUFFIXES.map((suffix) =>
-  suffix.toLowerCase(),
-);
+const NORMALIZED_SENSITIVE_KEY_WHITELIST_SUFFIXES =
+  SENSITIVE_KEY_WHITELIST_SUFFIXES.map((suffix) => suffix.toLowerCase());
 
 const SENSITIVE_PATTERNS = [
   /token$/i,
@@ -108,7 +110,9 @@ const SENSITIVE_PATTERNS = [
 
 function isWhitelistedSensitivePath(path: string): boolean {
   const lowerPath = path.toLowerCase();
-  return NORMALIZED_SENSITIVE_KEY_WHITELIST_SUFFIXES.some((suffix) => lowerPath.endsWith(suffix));
+  return NORMALIZED_SENSITIVE_KEY_WHITELIST_SUFFIXES.some((suffix) =>
+    lowerPath.endsWith(suffix),
+  );
 }
 
 function matchesSensitivePattern(path: string): boolean {
@@ -211,10 +215,18 @@ export function mapSensitivePaths(
     }
   } else if (currentSchema instanceof z.ZodArray) {
     const nextPath = path ? `${path}[]` : "[]";
-    next = mapSensitivePaths(currentSchema.element as z.ZodType, nextPath, next);
+    next = mapSensitivePaths(
+      currentSchema.element as z.ZodType,
+      nextPath,
+      next,
+    );
   } else if (currentSchema instanceof z.ZodRecord) {
     const nextPath = path ? `${path}.*` : "*";
-    next = mapSensitivePaths(currentSchema._def.valueType as z.ZodType, nextPath, next);
+    next = mapSensitivePaths(
+      currentSchema._def.valueType as z.ZodType,
+      nextPath,
+      next,
+    );
   } else if (
     currentSchema instanceof z.ZodUnion ||
     currentSchema instanceof z.ZodDiscriminatedUnion

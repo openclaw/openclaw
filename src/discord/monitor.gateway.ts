@@ -13,7 +13,9 @@ export type WaitForDiscordGatewayStopParams = {
   registerForceStop?: (forceStop: (err: unknown) => void) => void;
 };
 
-export function getDiscordGatewayEmitter(gateway?: unknown): EventEmitter | undefined {
+export function getDiscordGatewayEmitter(
+  gateway?: unknown,
+): EventEmitter | undefined {
   return (gateway as { emitter?: EventEmitter } | undefined)?.emitter;
 }
 

@@ -19,7 +19,11 @@ type PruneableRegistryEntry = Pick<
   "containerName" | "createdAtMs" | "lastUsedAtMs"
 >;
 
-function shouldPruneSandboxEntry(cfg: SandboxConfig, now: number, entry: PruneableRegistryEntry) {
+function shouldPruneSandboxEntry(
+  cfg: SandboxConfig,
+  now: number,
+  entry: PruneableRegistryEntry,
+) {
   const idleHours = cfg.prune.idleHours;
   const maxAgeDays = cfg.prune.maxAgeDays;
   if (idleHours === 0 && maxAgeDays === 0) {
@@ -33,7 +37,9 @@ function shouldPruneSandboxEntry(cfg: SandboxConfig, now: number, entry: Pruneab
   );
 }
 
-async function pruneSandboxRegistryEntries<TEntry extends PruneableRegistryEntry>(params: {
+async function pruneSandboxRegistryEntries<
+  TEntry extends PruneableRegistryEntry,
+>(params: {
   cfg: SandboxConfig;
   read: () => Promise<{ entries: TEntry[] }>;
   remove: (containerName: string) => Promise<void>;
@@ -77,7 +83,9 @@ async function pruneSandboxBrowsers(cfg: SandboxConfig) {
     onRemoved: async (entry) => {
       const bridge = BROWSER_BRIDGES.get(entry.sessionKey);
       if (bridge?.containerName === entry.containerName) {
-        await stopBrowserBridgeServer(bridge.bridge.server).catch(() => undefined);
+        await stopBrowserBridgeServer(bridge.bridge.server).catch(
+          () => undefined,
+        );
         BROWSER_BRIDGES.delete(entry.sessionKey);
       }
     },
@@ -100,7 +108,9 @@ export async function maybePruneSandboxes(cfg: SandboxConfig) {
         : typeof error === "string"
           ? error
           : JSON.stringify(error);
-    defaultRuntime.error?.(`Sandbox prune failed: ${message ?? "unknown error"}`);
+    defaultRuntime.error?.(
+      `Sandbox prune failed: ${message ?? "unknown error"}`,
+    );
   }
 }
 

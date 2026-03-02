@@ -1,4 +1,7 @@
-import { mergeDmAllowFromSources, resolveGroupAllowFromSources } from "../channels/allow-from.js";
+import {
+  mergeDmAllowFromSources,
+  resolveGroupAllowFromSources,
+} from "../channels/allow-from.js";
 import { resolveControlCommandGate } from "../channels/command-gating.js";
 import type { ChannelId } from "../channels/plugins/types.js";
 import { readChannelAllowFromStore } from "../pairing/pairing-store.js";
@@ -14,9 +17,15 @@ export function resolveEffectiveAllowFromLists(params: {
   effectiveAllowFrom: string[];
   effectiveGroupAllowFrom: string[];
 } {
-  const allowFrom = Array.isArray(params.allowFrom) ? params.allowFrom : undefined;
-  const groupAllowFrom = Array.isArray(params.groupAllowFrom) ? params.groupAllowFrom : undefined;
-  const storeAllowFrom = Array.isArray(params.storeAllowFrom) ? params.storeAllowFrom : undefined;
+  const allowFrom = Array.isArray(params.allowFrom)
+    ? params.allowFrom
+    : undefined;
+  const groupAllowFrom = Array.isArray(params.groupAllowFrom)
+    ? params.groupAllowFrom
+    : undefined;
+  const storeAllowFrom = Array.isArray(params.storeAllowFrom)
+    ? params.storeAllowFrom
+    : undefined;
   const effectiveAllowFrom = normalizeStringEntries(
     mergeDmAllowFromSources({
       allowFrom,
@@ -29,7 +38,8 @@ export function resolveEffectiveAllowFromLists(params: {
     resolveGroupAllowFromSources({
       allowFrom,
       groupAllowFrom,
-      fallbackToAllowFrom: params.groupAllowFromFallbackToAllowFrom ?? undefined,
+      fallbackToAllowFrom:
+        params.groupAllowFromFallbackToAllowFrom ?? undefined,
     }),
   );
   return { effectiveAllowFrom, effectiveGroupAllowFrom };
@@ -93,7 +103,9 @@ export function resolveDmGroupAccessDecision(params: {
   const dmPolicy = params.dmPolicy ?? "pairing";
   const groupPolicy = params.groupPolicy ?? "allowlist";
   const effectiveAllowFrom = normalizeStringEntries(params.effectiveAllowFrom);
-  const effectiveGroupAllowFrom = normalizeStringEntries(params.effectiveGroupAllowFrom);
+  const effectiveGroupAllowFrom = normalizeStringEntries(
+    params.effectiveGroupAllowFrom,
+  );
 
   if (params.isGroup) {
     if (groupPolicy === "disabled") {
@@ -161,20 +173,24 @@ export function resolveDmGroupAccessDecision(params: {
   };
 }
 
-export function resolveDmGroupAccessWithLists(params: DmGroupAccessInputParams): {
+export function resolveDmGroupAccessWithLists(
+  params: DmGroupAccessInputParams,
+): {
   decision: DmGroupAccessDecision;
   reasonCode: DmGroupAccessReasonCode;
   reason: string;
   effectiveAllowFrom: string[];
   effectiveGroupAllowFrom: string[];
 } {
-  const { effectiveAllowFrom, effectiveGroupAllowFrom } = resolveEffectiveAllowFromLists({
-    allowFrom: params.allowFrom,
-    groupAllowFrom: params.groupAllowFrom,
-    storeAllowFrom: params.storeAllowFrom,
-    dmPolicy: params.dmPolicy,
-    groupAllowFromFallbackToAllowFrom: params.groupAllowFromFallbackToAllowFrom,
-  });
+  const { effectiveAllowFrom, effectiveGroupAllowFrom } =
+    resolveEffectiveAllowFromLists({
+      allowFrom: params.allowFrom,
+      groupAllowFrom: params.groupAllowFrom,
+      storeAllowFrom: params.storeAllowFrom,
+      dmPolicy: params.dmPolicy,
+      groupAllowFromFallbackToAllowFrom:
+        params.groupAllowFromFallbackToAllowFrom,
+    });
   const access = resolveDmGroupAccessDecision({
     isGroup: params.isGroup,
     dmPolicy: params.dmPolicy,
@@ -222,11 +238,14 @@ export function resolveDmGroupAccessWithCommandGate(
     resolveGroupAllowFromSources({
       allowFrom: configuredAllowFrom,
       groupAllowFrom: normalizeStringEntries(params.groupAllowFrom ?? []),
-      fallbackToAllowFrom: params.groupAllowFromFallbackToAllowFrom ?? undefined,
+      fallbackToAllowFrom:
+        params.groupAllowFromFallbackToAllowFrom ?? undefined,
     }),
   );
   // Group command authorization must not inherit DM pairing-store approvals.
-  const commandDmAllowFrom = params.isGroup ? configuredAllowFrom : access.effectiveAllowFrom;
+  const commandDmAllowFrom = params.isGroup
+    ? configuredAllowFrom
+    : access.effectiveAllowFrom;
   const commandGroupAllowFrom = params.isGroup
     ? configuredGroupAllowFrom
     : access.effectiveGroupAllowFrom;
@@ -288,7 +307,9 @@ export async function resolveDmAllowState(params: {
     .map((value) => normalizeEntry(value))
     .map((value) => value.trim())
     .filter(Boolean);
-  const allowCount = Array.from(new Set([...normalizedCfg, ...normalizedStore])).length;
+  const allowCount = Array.from(
+    new Set([...normalizedCfg, ...normalizedStore]),
+  ).length;
   return {
     configAllowFrom,
     hasWildcard,

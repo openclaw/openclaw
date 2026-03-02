@@ -4,7 +4,10 @@ import { setTimeout as delay } from "node:timers/promises";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { MINIMAX_API_BASE_URL, MINIMAX_CN_API_BASE_URL } from "./onboard-auth.js";
+import {
+  MINIMAX_API_BASE_URL,
+  MINIMAX_CN_API_BASE_URL,
+} from "./onboard-auth.js";
 import {
   createThrowingRuntime,
   readJsonFile,
@@ -27,7 +30,8 @@ vi.mock("./onboard-helpers.js", async (importOriginal) => {
   };
 });
 
-const { runNonInteractiveOnboarding } = await import("./onboard-non-interactive.js");
+const { runNonInteractiveOnboarding } =
+  await import("./onboard-non-interactive.js");
 
 const NON_INTERACTIVE_DEFAULT_OPTIONS = {
   nonInteractive: true,
@@ -62,7 +66,8 @@ async function removeDirWithRetry(dir: string): Promise<void> {
       return;
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
-      const isTransient = code === "ENOTEMPTY" || code === "EBUSY" || code === "EPERM";
+      const isTransient =
+        code === "ENOTEMPTY" || code === "EBUSY" || code === "EPERM";
       if (!isTransient || attempt === 4) {
         throw error;
       }
@@ -144,7 +149,9 @@ async function runCustomLocalNonInteractive(
   });
 }
 
-async function readCustomLocalProviderApiKey(configPath: string): Promise<string | undefined> {
+async function readCustomLocalProviderApiKey(
+  configPath: string,
+): Promise<string | undefined> {
   const cfg = await readJsonFile<ProviderAuthConfigSnapshot>(configPath);
   const apiKey = cfg.models?.providers?.[CUSTOM_LOCAL_PROVIDER_ID]?.apiKey;
   return typeof apiKey === "string" ? apiKey : undefined;
@@ -177,7 +184,8 @@ async function expectApiKeyProfile(params: {
 
 describe("onboard (non-interactive): provider auth", () => {
   beforeAll(async () => {
-    ({ ensureAuthProfileStore, upsertAuthProfile } = await import("../agents/auth-profiles.js"));
+    ({ ensureAuthProfileStore, upsertAuthProfile } =
+      await import("../agents/auth-profiles.js"));
   });
 
   it("stores MiniMax API key and uses global baseUrl by default", async () => {
@@ -189,7 +197,9 @@ describe("onboard (non-interactive): provider auth", () => {
 
       expect(cfg.auth?.profiles?.["minimax:default"]?.provider).toBe("minimax");
       expect(cfg.auth?.profiles?.["minimax:default"]?.mode).toBe("api_key");
-      expect(cfg.models?.providers?.minimax?.baseUrl).toBe(MINIMAX_API_BASE_URL);
+      expect(cfg.models?.providers?.minimax?.baseUrl).toBe(
+        MINIMAX_API_BASE_URL,
+      );
       expect(cfg.agents?.defaults?.model?.primary).toBe("minimax/MiniMax-M2.5");
       await expectApiKeyProfile({
         profileId: "minimax:default",
@@ -206,10 +216,16 @@ describe("onboard (non-interactive): provider auth", () => {
         minimaxApiKey: "sk-minimax-test",
       });
 
-      expect(cfg.auth?.profiles?.["minimax-cn:default"]?.provider).toBe("minimax-cn");
+      expect(cfg.auth?.profiles?.["minimax-cn:default"]?.provider).toBe(
+        "minimax-cn",
+      );
       expect(cfg.auth?.profiles?.["minimax-cn:default"]?.mode).toBe("api_key");
-      expect(cfg.models?.providers?.["minimax-cn"]?.baseUrl).toBe(MINIMAX_CN_API_BASE_URL);
-      expect(cfg.agents?.defaults?.model?.primary).toBe("minimax-cn/MiniMax-M2.5");
+      expect(cfg.models?.providers?.["minimax-cn"]?.baseUrl).toBe(
+        MINIMAX_CN_API_BASE_URL,
+      );
+      expect(cfg.agents?.defaults?.model?.primary).toBe(
+        "minimax-cn/MiniMax-M2.5",
+      );
       await expectApiKeyProfile({
         profileId: "minimax-cn:default",
         provider: "minimax-cn",
@@ -227,9 +243,15 @@ describe("onboard (non-interactive): provider auth", () => {
 
       expect(cfg.auth?.profiles?.["zai:default"]?.provider).toBe("zai");
       expect(cfg.auth?.profiles?.["zai:default"]?.mode).toBe("api_key");
-      expect(cfg.models?.providers?.zai?.baseUrl).toBe("https://api.z.ai/api/paas/v4");
+      expect(cfg.models?.providers?.zai?.baseUrl).toBe(
+        "https://api.z.ai/api/paas/v4",
+      );
       expect(cfg.agents?.defaults?.model?.primary).toBe("zai/glm-5");
-      await expectApiKeyProfile({ profileId: "zai:default", provider: "zai", key: "zai-test-key" });
+      await expectApiKeyProfile({
+        profileId: "zai:default",
+        provider: "zai",
+        key: "zai-test-key",
+      });
     });
   });
 
@@ -257,7 +279,11 @@ describe("onboard (non-interactive): provider auth", () => {
       expect(cfg.auth?.profiles?.["xai:default"]?.provider).toBe("xai");
       expect(cfg.auth?.profiles?.["xai:default"]?.mode).toBe("api_key");
       expect(cfg.agents?.defaults?.model?.primary).toBe("xai/grok-4");
-      await expectApiKeyProfile({ profileId: "xai:default", provider: "xai", key: "xai-test-key" });
+      await expectApiKeyProfile({
+        profileId: "xai:default",
+        provider: "xai",
+        key: "xai-test-key",
+      });
     });
   });
 
@@ -269,7 +295,9 @@ describe("onboard (non-interactive): provider auth", () => {
 
       expect(cfg.auth?.profiles?.["mistral:default"]?.provider).toBe("mistral");
       expect(cfg.auth?.profiles?.["mistral:default"]?.mode).toBe("api_key");
-      expect(cfg.agents?.defaults?.model?.primary).toBe("mistral/mistral-large-latest");
+      expect(cfg.agents?.defaults?.model?.primary).toBe(
+        "mistral/mistral-large-latest",
+      );
       await expectApiKeyProfile({
         profileId: "mistral:default",
         provider: "mistral",
@@ -285,7 +313,9 @@ describe("onboard (non-interactive): provider auth", () => {
         volcengineApiKey: "volcengine-test-key",
       });
 
-      expect(cfg.agents?.defaults?.model?.primary).toBe("volcengine-plan/ark-code-latest");
+      expect(cfg.agents?.defaults?.model?.primary).toBe(
+        "volcengine-plan/ark-code-latest",
+      );
     });
   });
 
@@ -295,7 +325,9 @@ describe("onboard (non-interactive): provider auth", () => {
         byteplusApiKey: "byteplus-test-key",
       });
 
-      expect(cfg.agents?.defaults?.model?.primary).toBe("byteplus-plan/ark-code-latest");
+      expect(cfg.agents?.defaults?.model?.primary).toBe(
+        "byteplus-plan/ark-code-latest",
+      );
     });
   });
 
@@ -306,8 +338,12 @@ describe("onboard (non-interactive): provider auth", () => {
         aiGatewayApiKey: "gateway-test-key",
       });
 
-      expect(cfg.auth?.profiles?.["vercel-ai-gateway:default"]?.provider).toBe("vercel-ai-gateway");
-      expect(cfg.auth?.profiles?.["vercel-ai-gateway:default"]?.mode).toBe("api_key");
+      expect(cfg.auth?.profiles?.["vercel-ai-gateway:default"]?.provider).toBe(
+        "vercel-ai-gateway",
+      );
+      expect(cfg.auth?.profiles?.["vercel-ai-gateway:default"]?.mode).toBe(
+        "api_key",
+      );
       expect(cfg.agents?.defaults?.model?.primary).toBe(
         "vercel-ai-gateway/anthropic/claude-opus-4.6",
       );
@@ -320,30 +356,35 @@ describe("onboard (non-interactive): provider auth", () => {
   });
 
   it("stores token auth profile", async () => {
-    await withOnboardEnv("openclaw-onboard-token-", async ({ configPath, runtime }) => {
-      const cleanToken = `sk-ant-oat01-${"a".repeat(80)}`;
-      const token = `${cleanToken.slice(0, 30)}\r${cleanToken.slice(30)}`;
+    await withOnboardEnv(
+      "openclaw-onboard-token-",
+      async ({ configPath, runtime }) => {
+        const cleanToken = `sk-ant-oat01-${"a".repeat(80)}`;
+        const token = `${cleanToken.slice(0, 30)}\r${cleanToken.slice(30)}`;
 
-      await runNonInteractiveOnboardingWithDefaults(runtime, {
-        authChoice: "token",
-        tokenProvider: "anthropic",
-        token,
-        tokenProfileId: "anthropic:default",
-      });
+        await runNonInteractiveOnboardingWithDefaults(runtime, {
+          authChoice: "token",
+          tokenProvider: "anthropic",
+          token,
+          tokenProfileId: "anthropic:default",
+        });
 
-      const cfg = await readJsonFile<ProviderAuthConfigSnapshot>(configPath);
+        const cfg = await readJsonFile<ProviderAuthConfigSnapshot>(configPath);
 
-      expect(cfg.auth?.profiles?.["anthropic:default"]?.provider).toBe("anthropic");
-      expect(cfg.auth?.profiles?.["anthropic:default"]?.mode).toBe("token");
+        expect(cfg.auth?.profiles?.["anthropic:default"]?.provider).toBe(
+          "anthropic",
+        );
+        expect(cfg.auth?.profiles?.["anthropic:default"]?.mode).toBe("token");
 
-      const store = ensureAuthProfileStore();
-      const profile = store.profiles["anthropic:default"];
-      expect(profile?.type).toBe("token");
-      if (profile?.type === "token") {
-        expect(profile.provider).toBe("anthropic");
-        expect(profile.token).toBe(cleanToken);
-      }
-    });
+        const store = ensureAuthProfileStore();
+        const profile = store.profiles["anthropic:default"];
+        expect(profile?.type).toBe("token");
+        if (profile?.type === "token") {
+          expect(profile.provider).toBe("anthropic");
+          expect(profile.token).toBe(cleanToken);
+        }
+      },
+    );
   });
 
   it("stores OpenAI API key and sets OpenAI default model", async () => {
@@ -443,44 +484,50 @@ describe("onboard (non-interactive): provider auth", () => {
   );
 
   it("stores the detected env alias as keyRef for opencode ref mode", async () => {
-    await withOnboardEnv("openclaw-onboard-ref-opencode-alias-", async ({ runtime }) => {
-      await withEnvAsync(
-        {
-          OPENCODE_API_KEY: undefined,
-          OPENCODE_ZEN_API_KEY: "opencode-zen-env-key",
-        },
-        async () => {
-          await runNonInteractiveOnboardingWithDefaults(runtime, {
-            authChoice: "opencode-zen",
-            secretInputMode: "ref",
-            skipSkills: true,
-          });
-
-          const store = ensureAuthProfileStore();
-          const profile = store.profiles["opencode:default"];
-          expect(profile?.type).toBe("api_key");
-          if (profile?.type === "api_key") {
-            expect(profile.key).toBeUndefined();
-            expect(profile.keyRef).toEqual({
-              source: "env",
-              provider: "default",
-              id: "OPENCODE_ZEN_API_KEY",
+    await withOnboardEnv(
+      "openclaw-onboard-ref-opencode-alias-",
+      async ({ runtime }) => {
+        await withEnvAsync(
+          {
+            OPENCODE_API_KEY: undefined,
+            OPENCODE_ZEN_API_KEY: "opencode-zen-env-key",
+          },
+          async () => {
+            await runNonInteractiveOnboardingWithDefaults(runtime, {
+              authChoice: "opencode-zen",
+              secretInputMode: "ref",
+              skipSkills: true,
             });
-          }
-        },
-      );
-    });
+
+            const store = ensureAuthProfileStore();
+            const profile = store.profiles["opencode:default"];
+            expect(profile?.type).toBe("api_key");
+            if (profile?.type === "api_key") {
+              expect(profile.key).toBeUndefined();
+              expect(profile.keyRef).toEqual({
+                source: "env",
+                provider: "default",
+                id: "OPENCODE_ZEN_API_KEY",
+              });
+            }
+          },
+        );
+      },
+    );
   });
 
   it("rejects vLLM auth choice in non-interactive mode", async () => {
-    await withOnboardEnv("openclaw-onboard-vllm-non-interactive-", async ({ runtime }) => {
-      await expect(
-        runNonInteractiveOnboardingWithDefaults(runtime, {
-          authChoice: "vllm",
-          skipSkills: true,
-        }),
-      ).rejects.toThrow('Auth choice "vllm" requires interactive mode.');
-    });
+    await withOnboardEnv(
+      "openclaw-onboard-vllm-non-interactive-",
+      async ({ runtime }) => {
+        await expect(
+          runNonInteractiveOnboardingWithDefaults(runtime, {
+            authChoice: "vllm",
+            skipSkills: true,
+          }),
+        ).rejects.toThrow('Auth choice "vllm" requires interactive mode.');
+      },
+    );
   });
 
   it("stores LiteLLM API key and sets default model", async () => {
@@ -492,7 +539,9 @@ describe("onboard (non-interactive): provider auth", () => {
 
       expect(cfg.auth?.profiles?.["litellm:default"]?.provider).toBe("litellm");
       expect(cfg.auth?.profiles?.["litellm:default"]?.mode).toBe("api_key");
-      expect(cfg.agents?.defaults?.model?.primary).toBe("litellm/claude-opus-4-6");
+      expect(cfg.agents?.defaults?.model?.primary).toBe(
+        "litellm/claude-opus-4-6",
+      );
       await expectApiKeyProfile({
         profileId: "litellm:default",
         provider: "litellm",
@@ -526,11 +575,15 @@ describe("onboard (non-interactive): provider auth", () => {
 
       const cfg = await readJsonFile<ProviderAuthConfigSnapshot>(configPath);
 
-      expect(cfg.auth?.profiles?.["cloudflare-ai-gateway:default"]?.provider).toBe(
-        "cloudflare-ai-gateway",
+      expect(
+        cfg.auth?.profiles?.["cloudflare-ai-gateway:default"]?.provider,
+      ).toBe("cloudflare-ai-gateway");
+      expect(cfg.auth?.profiles?.["cloudflare-ai-gateway:default"]?.mode).toBe(
+        "api_key",
       );
-      expect(cfg.auth?.profiles?.["cloudflare-ai-gateway:default"]?.mode).toBe("api_key");
-      expect(cfg.agents?.defaults?.model?.primary).toBe("cloudflare-ai-gateway/claude-sonnet-4-5");
+      expect(cfg.agents?.defaults?.model?.primary).toBe(
+        "cloudflare-ai-gateway/claude-sonnet-4-5",
+      );
       await expectApiKeyProfile({
         profileId: "cloudflare-ai-gateway:default",
         provider: "cloudflare-ai-gateway",
@@ -546,9 +599,13 @@ describe("onboard (non-interactive): provider auth", () => {
         togetherApiKey: "together-test-key",
       });
 
-      expect(cfg.auth?.profiles?.["together:default"]?.provider).toBe("together");
+      expect(cfg.auth?.profiles?.["together:default"]?.provider).toBe(
+        "together",
+      );
       expect(cfg.auth?.profiles?.["together:default"]?.mode).toBe("api_key");
-      expect(cfg.agents?.defaults?.model?.primary).toBe("together/moonshotai/Kimi-K2.5");
+      expect(cfg.agents?.defaults?.model?.primary).toBe(
+        "together/moonshotai/Kimi-K2.5",
+      );
       await expectApiKeyProfile({
         profileId: "together:default",
         provider: "together",
@@ -565,7 +622,9 @@ describe("onboard (non-interactive): provider auth", () => {
 
       expect(cfg.auth?.profiles?.["qianfan:default"]?.provider).toBe("qianfan");
       expect(cfg.auth?.profiles?.["qianfan:default"]?.mode).toBe("api_key");
-      expect(cfg.agents?.defaults?.model?.primary).toBe("qianfan/deepseek-v3.2");
+      expect(cfg.agents?.defaults?.model?.primary).toBe(
+        "qianfan/deepseek-v3.2",
+      );
       await expectApiKeyProfile({
         profileId: "qianfan:default",
         provider: "qianfan",
@@ -575,25 +634,32 @@ describe("onboard (non-interactive): provider auth", () => {
   });
 
   it("configures a custom provider from non-interactive flags", async () => {
-    await withOnboardEnv("openclaw-onboard-custom-provider-", async ({ configPath, runtime }) => {
-      await runNonInteractiveOnboardingWithDefaults(runtime, {
-        authChoice: "custom-api-key",
-        customBaseUrl: "https://llm.example.com/v1",
-        customApiKey: "custom-test-key",
-        customModelId: "foo-large",
-        customCompatibility: "anthropic",
-        skipSkills: true,
-      });
+    await withOnboardEnv(
+      "openclaw-onboard-custom-provider-",
+      async ({ configPath, runtime }) => {
+        await runNonInteractiveOnboardingWithDefaults(runtime, {
+          authChoice: "custom-api-key",
+          customBaseUrl: "https://llm.example.com/v1",
+          customApiKey: "custom-test-key",
+          customModelId: "foo-large",
+          customCompatibility: "anthropic",
+          skipSkills: true,
+        });
 
-      const cfg = await readJsonFile<ProviderAuthConfigSnapshot>(configPath);
+        const cfg = await readJsonFile<ProviderAuthConfigSnapshot>(configPath);
 
-      const provider = cfg.models?.providers?.["custom-llm-example-com"];
-      expect(provider?.baseUrl).toBe("https://llm.example.com/v1");
-      expect(provider?.api).toBe("anthropic-messages");
-      expect(provider?.apiKey).toBe("custom-test-key");
-      expect(provider?.models?.some((model) => model.id === "foo-large")).toBe(true);
-      expect(cfg.agents?.defaults?.model?.primary).toBe("custom-llm-example-com/foo-large");
-    });
+        const provider = cfg.models?.providers?.["custom-llm-example-com"];
+        expect(provider?.baseUrl).toBe("https://llm.example.com/v1");
+        expect(provider?.api).toBe("anthropic-messages");
+        expect(provider?.apiKey).toBe("custom-test-key");
+        expect(
+          provider?.models?.some((model) => model.id === "foo-large"),
+        ).toBe(true);
+        expect(cfg.agents?.defaults?.model?.primary).toBe(
+          "custom-llm-example-com/foo-large",
+        );
+      },
+    );
   });
 
   it("infers custom provider auth choice from custom flags", async () => {
@@ -609,13 +675,15 @@ describe("onboard (non-interactive): provider auth", () => {
 
         const cfg = await readJsonFile<ProviderAuthConfigSnapshot>(configPath);
 
-        expect(cfg.models?.providers?.["custom-models-custom-local"]?.baseUrl).toBe(
-          "https://models.custom.local/v1",
-        );
+        expect(
+          cfg.models?.providers?.["custom-models-custom-local"]?.baseUrl,
+        ).toBe("https://models.custom.local/v1");
         expect(cfg.models?.providers?.["custom-models-custom-local"]?.api).toBe(
           "openai-completions",
         );
-        expect(cfg.agents?.defaults?.model?.primary).toBe("custom-models-custom-local/local-large");
+        expect(cfg.agents?.defaults?.model?.primary).toBe(
+          "custom-models-custom-local/local-large",
+        );
       },
     );
   });
@@ -626,7 +694,9 @@ describe("onboard (non-interactive): provider auth", () => {
       async ({ configPath, runtime }) => {
         process.env.CUSTOM_API_KEY = "custom-env-key";
         await runCustomLocalNonInteractive(runtime);
-        expect(await readCustomLocalProviderApiKey(configPath)).toBe("custom-env-key");
+        expect(await readCustomLocalProviderApiKey(configPath)).toBe(
+          "custom-env-key",
+        );
       },
     );
   });
@@ -649,29 +719,32 @@ describe("onboard (non-interactive): provider auth", () => {
   });
 
   it("fails fast for custom provider ref mode when --custom-api-key is set but CUSTOM_API_KEY env is missing", async () => {
-    await withOnboardEnv("openclaw-onboard-custom-provider-ref-flag-", async ({ runtime }) => {
-      const providedSecret = "custom-inline-key-should-not-leak";
-      await withEnvAsync({ CUSTOM_API_KEY: undefined }, async () => {
-        let thrown: Error | undefined;
-        try {
-          await runCustomLocalNonInteractive(runtime, {
-            secretInputMode: "ref",
-            customApiKey: providedSecret,
-          });
-        } catch (error) {
-          thrown = error as Error;
-        }
-        expect(thrown).toBeDefined();
-        const message = String(thrown?.message ?? "");
-        expect(message).toContain(
-          "--custom-api-key cannot be used with --secret-input-mode ref unless CUSTOM_API_KEY is set in env.",
-        );
-        expect(message).toContain(
-          "Set CUSTOM_API_KEY in env and omit --custom-api-key, or use --secret-input-mode plaintext.",
-        );
-        expect(message).not.toContain(providedSecret);
-      });
-    });
+    await withOnboardEnv(
+      "openclaw-onboard-custom-provider-ref-flag-",
+      async ({ runtime }) => {
+        const providedSecret = "custom-inline-key-should-not-leak";
+        await withEnvAsync({ CUSTOM_API_KEY: undefined }, async () => {
+          let thrown: Error | undefined;
+          try {
+            await runCustomLocalNonInteractive(runtime, {
+              secretInputMode: "ref",
+              customApiKey: providedSecret,
+            });
+          } catch (error) {
+            thrown = error as Error;
+          }
+          expect(thrown).toBeDefined();
+          const message = String(thrown?.message ?? "");
+          expect(message).toContain(
+            "--custom-api-key cannot be used with --secret-input-mode ref unless CUSTOM_API_KEY is set in env.",
+          );
+          expect(message).toContain(
+            "Set CUSTOM_API_KEY in env and omit --custom-api-key, or use --secret-input-mode plaintext.",
+          );
+          expect(message).not.toContain(providedSecret);
+        });
+      },
+    );
   });
 
   it("uses matching profile fallback for non-interactive custom provider auth", async () => {
@@ -687,7 +760,9 @@ describe("onboard (non-interactive): provider auth", () => {
           },
         });
         await runCustomLocalNonInteractive(runtime);
-        expect(await readCustomLocalProviderApiKey(configPath)).toBe("custom-profile-key");
+        expect(await readCustomLocalProviderApiKey(configPath)).toBe(
+          "custom-profile-key",
+        );
       },
     );
   });
@@ -704,25 +779,30 @@ describe("onboard (non-interactive): provider auth", () => {
             customCompatibility: "xmlrpc",
             skipSkills: true,
           }),
-        ).rejects.toThrow('Invalid --custom-compatibility (use "openai" or "anthropic").');
+        ).rejects.toThrow(
+          'Invalid --custom-compatibility (use "openai" or "anthropic").',
+        );
       },
     );
   });
 
   it("fails custom provider auth when explicit provider id is invalid", async () => {
-    await withOnboardEnv("openclaw-onboard-custom-provider-invalid-id-", async ({ runtime }) => {
-      await expect(
-        runNonInteractiveOnboardingWithDefaults(runtime, {
-          authChoice: "custom-api-key",
-          customBaseUrl: "https://models.custom.local/v1",
-          customModelId: "local-large",
-          customProviderId: "!!!",
-          skipSkills: true,
-        }),
-      ).rejects.toThrow(
-        "Invalid custom provider config: Custom provider ID must include letters, numbers, or hyphens.",
-      );
-    });
+    await withOnboardEnv(
+      "openclaw-onboard-custom-provider-invalid-id-",
+      async ({ runtime }) => {
+        await expect(
+          runNonInteractiveOnboardingWithDefaults(runtime, {
+            authChoice: "custom-api-key",
+            customBaseUrl: "https://models.custom.local/v1",
+            customModelId: "local-large",
+            customProviderId: "!!!",
+            skipSkills: true,
+          }),
+        ).rejects.toThrow(
+          "Invalid custom provider config: Custom provider ID must include letters, numbers, or hyphens.",
+        );
+      },
+    );
   });
 
   it("fails inferred custom auth when required flags are incomplete", async () => {
@@ -734,7 +814,9 @@ describe("onboard (non-interactive): provider auth", () => {
             customApiKey: "custom-test-key",
             skipSkills: true,
           }),
-        ).rejects.toThrow('Auth choice "custom-api-key" requires a base URL and model ID.');
+        ).rejects.toThrow(
+          'Auth choice "custom-api-key" requires a base URL and model ID.',
+        );
       },
     );
   });

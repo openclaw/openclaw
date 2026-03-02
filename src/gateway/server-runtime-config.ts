@@ -49,7 +49,8 @@ export async function resolveGatewayRuntimeConfig(params: {
 }): Promise<GatewayRuntimeConfig> {
   const bindMode = params.bind ?? params.cfg.gateway?.bind ?? "loopback";
   const customBindHost = params.cfg.gateway?.customBindHost;
-  const bindHost = params.host ?? (await resolveGatewayBindHost(bindMode, customBindHost));
+  const bindHost =
+    params.host ?? (await resolveGatewayBindHost(bindMode, customBindHost));
   if (bindMode === "loopback" && !isLoopbackHost(bindHost)) {
     throw new Error(
       `gateway bind=loopback resolved to non-loopback host ${bindHost}; refusing fallback to a network bind`,
@@ -78,7 +79,8 @@ export async function resolveGatewayRuntimeConfig(params: {
     params.cfg.gateway?.http?.endpoints?.chatCompletions?.enabled ??
     false;
   const openResponsesConfig = params.cfg.gateway?.http?.endpoints?.responses;
-  const openResponsesEnabled = params.openResponsesEnabled ?? openResponsesConfig?.enabled ?? false;
+  const openResponsesEnabled =
+    params.openResponsesEnabled ?? openResponsesConfig?.enabled ?? false;
   const strictTransportSecurityConfig =
     params.cfg.gateway?.http?.securityHeaders?.strictTransportSecurity;
   const strictTransportSecurityHeader =
@@ -88,7 +90,9 @@ export async function resolveGatewayRuntimeConfig(params: {
           strictTransportSecurityConfig.trim().length > 0
         ? strictTransportSecurityConfig.trim()
         : undefined;
-  const controlUiBasePath = normalizeControlUiBasePath(params.cfg.gateway?.controlUi?.basePath);
+  const controlUiBasePath = normalizeControlUiBasePath(
+    params.cfg.gateway?.controlUi?.basePath,
+  );
   const controlUiRootRaw = params.cfg.gateway?.controlUi?.root;
   const controlUiRoot =
     typeof controlUiRootRaw === "string" && controlUiRootRaw.trim().length > 0
@@ -96,7 +100,10 @@ export async function resolveGatewayRuntimeConfig(params: {
       : undefined;
   const tailscaleBase = params.cfg.gateway?.tailscale ?? {};
   const tailscaleOverrides = params.tailscale ?? {};
-  const tailscaleConfig = mergeGatewayTailscaleConfig(tailscaleBase, tailscaleOverrides);
+  const tailscaleConfig = mergeGatewayTailscaleConfig(
+    tailscaleBase,
+    tailscaleOverrides,
+  );
   const tailscaleMode = tailscaleConfig.mode ?? "off";
   const resolvedAuth = resolveGatewayAuth({
     authConfig: params.cfg.gateway?.auth,
@@ -105,21 +112,29 @@ export async function resolveGatewayRuntimeConfig(params: {
     tailscaleMode,
   });
   const authMode: ResolvedGatewayAuth["mode"] = resolvedAuth.mode;
-  const hasToken = typeof resolvedAuth.token === "string" && resolvedAuth.token.trim().length > 0;
+  const hasToken =
+    typeof resolvedAuth.token === "string" &&
+    resolvedAuth.token.trim().length > 0;
   const hasPassword =
-    typeof resolvedAuth.password === "string" && resolvedAuth.password.trim().length > 0;
+    typeof resolvedAuth.password === "string" &&
+    resolvedAuth.password.trim().length > 0;
   const hasSharedSecret =
-    (authMode === "token" && hasToken) || (authMode === "password" && hasPassword);
+    (authMode === "token" && hasToken) ||
+    (authMode === "password" && hasPassword);
   const hooksConfig = resolveHooksConfig(params.cfg);
   const canvasHostEnabled =
-    process.env.OPENCLAW_SKIP_CANVAS_HOST !== "1" && params.cfg.canvasHost?.enabled !== false;
+    process.env.OPENCLAW_SKIP_CANVAS_HOST !== "1" &&
+    params.cfg.canvasHost?.enabled !== false;
 
   const trustedProxies = params.cfg.gateway?.trustedProxies ?? [];
-  const controlUiAllowedOrigins = (params.cfg.gateway?.controlUi?.allowedOrigins ?? [])
+  const controlUiAllowedOrigins = (
+    params.cfg.gateway?.controlUi?.allowedOrigins ?? []
+  )
     .map((value) => value.trim())
     .filter(Boolean);
   const dangerouslyAllowHostHeaderOriginFallback =
-    params.cfg.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true;
+    params.cfg.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback ===
+    true;
 
   assertGatewayAuthConfigured(resolvedAuth);
   if (tailscaleMode === "funnel" && authMode !== "password") {
@@ -128,9 +143,15 @@ export async function resolveGatewayRuntimeConfig(params: {
     );
   }
   if (tailscaleMode !== "off" && !isLoopbackHost(bindHost)) {
-    throw new Error("tailscale serve/funnel requires gateway bind=loopback (127.0.0.1)");
+    throw new Error(
+      "tailscale serve/funnel requires gateway bind=loopback (127.0.0.1)",
+    );
   }
-  if (!isLoopbackHost(bindHost) && !hasSharedSecret && authMode !== "trusted-proxy") {
+  if (
+    !isLoopbackHost(bindHost) &&
+    !hasSharedSecret &&
+    authMode !== "trusted-proxy"
+  ) {
     throw new Error(
       `refusing to bind gateway to ${bindHost}:${params.port} without auth (set gateway.auth.token/password, or set OPENCLAW_GATEWAY_TOKEN/OPENCLAW_GATEWAY_PASSWORD)`,
     );

@@ -13,7 +13,11 @@ export type CommandRunner = (
 const PRIMARY_PACKAGE_NAME = "openclaw";
 const ALL_PACKAGE_NAMES = [PRIMARY_PACKAGE_NAME] as const;
 const GLOBAL_RENAME_PREFIX = ".";
-const NPM_GLOBAL_INSTALL_QUIET_FLAGS = ["--no-fund", "--no-audit", "--loglevel=error"] as const;
+const NPM_GLOBAL_INSTALL_QUIET_FLAGS = [
+  "--no-fund",
+  "--no-audit",
+  "--loglevel=error",
+] as const;
 const NPM_GLOBAL_INSTALL_OMIT_OPTIONAL_FLAGS = [
   "--omit=optional",
   ...NPM_GLOBAL_INSTALL_QUIET_FLAGS,
@@ -28,7 +32,8 @@ async function tryRealpath(targetPath: string): Promise<string> {
 }
 
 function resolveBunGlobalRoot(): string {
-  const bunInstall = process.env.BUN_INSTALL?.trim() || path.join(os.homedir(), ".bun");
+  const bunInstall =
+    process.env.BUN_INSTALL?.trim() || path.join(os.homedir(), ".bun");
   return path.join(bunInstall, "install", "global", "node_modules");
 }
 
@@ -40,7 +45,8 @@ export async function resolveGlobalRoot(
   if (manager === "bun") {
     return resolveBunGlobalRoot();
   }
-  const argv = manager === "pnpm" ? ["pnpm", "root", "-g"] : ["npm", "root", "-g"];
+  const argv =
+    manager === "pnpm" ? ["pnpm", "root", "-g"] : ["npm", "root", "-g"];
   const res = await runCommand(argv, { timeoutMs }).catch(() => null);
   if (!res || res.code !== 0) {
     return null;
@@ -133,7 +139,10 @@ export async function detectGlobalInstallManagerByPresence(
   return null;
 }
 
-export function globalInstallArgs(manager: GlobalInstallManager, spec: string): string[] {
+export function globalInstallArgs(
+  manager: GlobalInstallManager,
+  spec: string,
+): string[] {
   if (manager === "pnpm") {
     return ["pnpm", "add", "-g", spec];
   }

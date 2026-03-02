@@ -1,6 +1,9 @@
 import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
 import { listAgentIds, resolveAgentDir } from "../agents/agent-scope.js";
-import type { AuthProfileCredential, AuthProfileStore } from "../agents/auth-profiles.js";
+import type {
+  AuthProfileCredential,
+  AuthProfileStore,
+} from "../agents/auth-profiles.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   loadAuthProfileStoreForSecretsRuntime,
@@ -14,7 +17,10 @@ import {
 import { coerceSecretRef, type SecretRef } from "../config/types.secrets.js";
 import { resolveUserPath } from "../utils.js";
 import { secretRefKey } from "./ref-contract.js";
-import { resolveSecretRefValues, type SecretRefResolveCache } from "./resolve.js";
+import {
+  resolveSecretRefValues,
+  type SecretRefResolveCache,
+} from "./resolve.js";
 import { isNonEmptyString, isRecord } from "./shared.js";
 
 type SecretResolverWarningCode = "SECRETS_REF_OVERRIDES_PLAINTEXT";
@@ -77,7 +83,9 @@ type SecretDefaults = NonNullable<OpenClawConfig["secrets"]>["defaults"];
 
 let activeSnapshot: PreparedSecretsRuntimeSnapshot | null = null;
 
-function cloneSnapshot(snapshot: PreparedSecretsRuntimeSnapshot): PreparedSecretsRuntimeSnapshot {
+function cloneSnapshot(
+  snapshot: PreparedSecretsRuntimeSnapshot,
+): PreparedSecretsRuntimeSnapshot {
   return {
     sourceConfig: structuredClone(snapshot.sourceConfig),
     config: structuredClone(snapshot.config),
@@ -89,7 +97,10 @@ function cloneSnapshot(snapshot: PreparedSecretsRuntimeSnapshot): PreparedSecret
   };
 }
 
-function pushAssignment(context: ResolverContext, assignment: SecretAssignment): void {
+function pushAssignment(
+  context: ResolverContext,
+  assignment: SecretAssignment,
+): void {
   context.assignments.push(assignment);
 }
 
@@ -141,8 +152,14 @@ function collectGoogleChatAccountAssignment(params: {
   defaults: SecretDefaults | undefined;
   context: ResolverContext;
 }): void {
-  const explicitRef = coerceSecretRef(params.target.serviceAccountRef, params.defaults);
-  const inlineRef = coerceSecretRef(params.target.serviceAccount, params.defaults);
+  const explicitRef = coerceSecretRef(
+    params.target.serviceAccountRef,
+    params.defaults,
+  );
+  const inlineRef = coerceSecretRef(
+    params.target.serviceAccount,
+    params.defaults,
+  );
   const ref = explicitRef ?? inlineRef;
   if (!ref) {
     return;
@@ -182,7 +199,9 @@ function collectGoogleChatAssignments(params: {
   if (!isRecord(params.googleChat.accounts)) {
     return;
   }
-  for (const [accountId, account] of Object.entries(params.googleChat.accounts)) {
+  for (const [accountId, account] of Object.entries(
+    params.googleChat.accounts,
+  )) {
     if (!isRecord(account)) {
       continue;
     }
@@ -200,7 +219,9 @@ function collectConfigAssignments(params: {
   context: ResolverContext;
 }): void {
   const defaults = params.context.sourceConfig.secrets?.defaults;
-  const providers = params.config.models?.providers as Record<string, ProviderLike> | undefined;
+  const providers = params.config.models?.providers as
+    | Record<string, ProviderLike>
+    | undefined;
   if (providers) {
     collectModelProviderAssignments({
       providers,
@@ -209,7 +230,9 @@ function collectConfigAssignments(params: {
     });
   }
 
-  const skillEntries = params.config.skills?.entries as Record<string, SkillEntryLike> | undefined;
+  const skillEntries = params.config.skills?.entries as
+    | Record<string, SkillEntryLike>
+    | undefined;
   if (skillEntries) {
     collectSkillAssignments({
       entries: skillEntries,
@@ -218,7 +241,9 @@ function collectConfigAssignments(params: {
     });
   }
 
-  const googleChat = params.config.channels?.googlechat as GoogleChatAccountLike | undefined;
+  const googleChat = params.config.channels?.googlechat as
+    | GoogleChatAccountLike
+    | undefined;
   if (googleChat) {
     collectGoogleChatAssignments({
       googleChat,
@@ -236,7 +261,9 @@ function collectApiKeyProfileAssignment(params: {
   context: ResolverContext;
 }): void {
   const keyRef = coerceSecretRef(params.profile.keyRef, params.defaults);
-  const inlineKeyRef = keyRef ? null : coerceSecretRef(params.profile.key, params.defaults);
+  const inlineKeyRef = keyRef
+    ? null
+    : coerceSecretRef(params.profile.key, params.defaults);
   const resolvedKeyRef = keyRef ?? inlineKeyRef;
   if (!resolvedKeyRef) {
     return;
@@ -270,7 +297,9 @@ function collectTokenProfileAssignment(params: {
   context: ResolverContext;
 }): void {
   const tokenRef = coerceSecretRef(params.profile.tokenRef, params.defaults);
-  const inlineTokenRef = tokenRef ? null : coerceSecretRef(params.profile.token, params.defaults);
+  const inlineTokenRef = tokenRef
+    ? null
+    : coerceSecretRef(params.profile.token, params.defaults);
   const resolvedTokenRef = tokenRef ?? inlineTokenRef;
   if (!resolvedTokenRef) {
     return;
@@ -337,13 +366,17 @@ function applyAssignments(params: {
     const value = params.resolved.get(key);
     if (assignment.expected === "string") {
       if (!isNonEmptyString(value)) {
-        throw new Error(`${assignment.path} resolved to a non-string or empty value.`);
+        throw new Error(
+          `${assignment.path} resolved to a non-string or empty value.`,
+        );
       }
       assignment.apply(value);
       continue;
     }
     if (!(isNonEmptyString(value) || isRecord(value))) {
-      throw new Error(`${assignment.path} resolved to an unsupported value type.`);
+      throw new Error(
+        `${assignment.path} resolved to an unsupported value type.`,
+      );
     }
     assignment.apply(value);
   }
@@ -379,7 +412,8 @@ export async function prepareSecretsRuntimeSnapshot(params: {
     context,
   });
 
-  const loadAuthStore = params.loadAuthStore ?? loadAuthProfileStoreForSecretsRuntime;
+  const loadAuthStore =
+    params.loadAuthStore ?? loadAuthProfileStoreForSecretsRuntime;
   const candidateDirs = params.agentDirs?.length
     ? [...new Set(params.agentDirs.map((entry) => resolveUserPath(entry)))]
     : collectCandidateAgentDirs(resolvedConfig);
@@ -416,7 +450,9 @@ export async function prepareSecretsRuntimeSnapshot(params: {
   };
 }
 
-export function activateSecretsRuntimeSnapshot(snapshot: PreparedSecretsRuntimeSnapshot): void {
+export function activateSecretsRuntimeSnapshot(
+  snapshot: PreparedSecretsRuntimeSnapshot,
+): void {
   const next = cloneSnapshot(snapshot);
   setRuntimeConfigSnapshot(next.config, next.sourceConfig);
   replaceRuntimeAuthProfileStoreSnapshots(next.authStores);

@@ -1,4 +1,7 @@
-import { QIANFAN_BASE_URL, QIANFAN_DEFAULT_MODEL_ID } from "../agents/models-config.providers.js";
+import {
+  QIANFAN_BASE_URL,
+  QIANFAN_DEFAULT_MODEL_ID,
+} from "../agents/models-config.providers.js";
 import type { ModelDefinitionConfig } from "../config/types.js";
 import {
   KILOCODE_DEFAULT_CONTEXT_WINDOW,
@@ -35,7 +38,8 @@ export { QIANFAN_BASE_URL, QIANFAN_DEFAULT_MODEL_ID };
 export const QIANFAN_DEFAULT_MODEL_REF = `qianfan/${QIANFAN_DEFAULT_MODEL_ID}`;
 
 export const ZAI_CODING_GLOBAL_BASE_URL = "https://api.z.ai/api/coding/paas/v4";
-export const ZAI_CODING_CN_BASE_URL = "https://open.bigmodel.cn/api/coding/paas/v4";
+export const ZAI_CODING_CN_BASE_URL =
+  "https://open.bigmodel.cn/api/coding/paas/v4";
 export const ZAI_GLOBAL_BASE_URL = "https://api.z.ai/api/paas/v4";
 export const ZAI_CN_BASE_URL = "https://open.bigmodel.cn/api/paas/v4";
 export const ZAI_DEFAULT_MODEL_ID = "glm-5";
@@ -129,7 +133,9 @@ export function buildMinimaxModelDefinition(params: {
   };
 }
 
-export function buildMinimaxApiModelDefinition(modelId: string): ModelDefinitionConfig {
+export function buildMinimaxApiModelDefinition(
+  modelId: string,
+): ModelDefinitionConfig {
   return buildMinimaxModelDefinition({
     id: modelId,
     cost: MINIMAX_API_COST,

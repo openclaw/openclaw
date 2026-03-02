@@ -15,15 +15,26 @@ import { registerNodesStatusCommands } from "./register.status.js";
 export function registerNodesCli(program: Command) {
   const nodes = program
     .command("nodes")
-    .description("Manage gateway-owned nodes (pairing, status, invoke, and media)")
+    .description(
+      "Manage gateway-owned nodes (pairing, status, invoke, and media)",
+    )
     .addHelpText(
       "after",
       () =>
         `\n${theme.heading("Examples:")}\n${formatHelpExamples([
           ["openclaw nodes status", "List known nodes with live status."],
-          ["openclaw nodes pairing pending", "Show pending node pairing requests."],
-          ['openclaw nodes run --node <id> --raw "uname -a"', "Run a shell command on a node."],
-          ["openclaw nodes camera snap --node <id>", "Capture a photo from a node camera."],
+          [
+            "openclaw nodes pairing pending",
+            "Show pending node pairing requests.",
+          ],
+          [
+            'openclaw nodes run --node <id> --raw "uname -a"',
+            "Run a shell command on a node.",
+          ],
+          [
+            "openclaw nodes camera snap --node <id>",
+            "Capture a photo from a node camera.",
+          ],
         ])}\n\n${theme.muted("Docs:")} ${formatDocsLink("/cli/nodes", "docs.openclaw.ai/cli/nodes")}\n`,
     );
 

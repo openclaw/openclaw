@@ -40,7 +40,10 @@ export function compileGlobPatterns(params: {
     .filter((pattern) => pattern.kind !== "exact" || pattern.value);
 }
 
-export function matchesAnyGlobPattern(value: string, patterns: CompiledGlobPattern[]): boolean {
+export function matchesAnyGlobPattern(
+  value: string,
+  patterns: CompiledGlobPattern[],
+): boolean {
   for (const pattern of patterns) {
     if (pattern.kind === "all") {
       return true;

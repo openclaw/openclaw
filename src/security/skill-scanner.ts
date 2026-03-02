@@ -111,7 +111,8 @@ const SOURCE_RULES: SourceRule[] = [
   {
     ruleId: "potential-exfiltration",
     severity: "warn",
-    message: "File read combined with network send — possible data exfiltration",
+    message:
+      "File read combined with network send — possible data exfiltration",
     pattern: /readFileSync|readFile/,
     requiresContext: /\bfetch\b|\bpost\b|http\.request/i,
   },
@@ -124,7 +125,8 @@ const SOURCE_RULES: SourceRule[] = [
   {
     ruleId: "obfuscated-code",
     severity: "warn",
-    message: "Large base64 payload with decode call detected (possible obfuscation)",
+    message:
+      "Large base64 payload with decode call detected (possible obfuscation)",
     pattern: /(?:atob|Buffer\.from)\s*\(\s*["'][A-Za-z0-9+/=]{200,}["']/,
   },
   {
@@ -148,7 +150,10 @@ function truncateEvidence(evidence: string, maxLen = 120): string {
   return `${evidence.slice(0, maxLen)}…`;
 }
 
-export function scanSource(source: string, filePath: string): SkillScanFinding[] {
+export function scanSource(
+  source: string,
+  filePath: string,
+): SkillScanFinding[] {
   const findings: SkillScanFinding[] = [];
   const lines = source.split("\n");
   const matchedLineRules = new Set<string>();
@@ -245,7 +250,9 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
 // Directory scanner
 // ---------------------------------------------------------------------------
 
-function normalizeScanOptions(opts?: SkillScanOptions): Required<SkillScanOptions> {
+function normalizeScanOptions(
+  opts?: SkillScanOptions,
+): Required<SkillScanOptions> {
   return {
     includeFiles: opts?.includeFiles ?? [],
     maxFiles: Math.max(1, opts?.maxFiles ?? DEFAULT_MAX_SCAN_FILES),
@@ -253,7 +260,10 @@ function normalizeScanOptions(opts?: SkillScanOptions): Required<SkillScanOption
   };
 }
 
-async function walkDirWithLimit(dirPath: string, maxFiles: number): Promise<string[]> {
+async function walkDirWithLimit(
+  dirPath: string,
+  maxFiles: number,
+): Promise<string[]> {
   const files: string[] = [];
   const stack: string[] = [dirPath];
 
@@ -328,7 +338,10 @@ async function resolveForcedFiles(params: {
   return out;
 }
 
-async function collectScannableFiles(dirPath: string, opts: Required<SkillScanOptions>) {
+async function collectScannableFiles(
+  dirPath: string,
+  opts: Required<SkillScanOptions>,
+) {
   const forcedFiles = await resolveForcedFiles({
     rootDir: dirPath,
     includeFiles: opts.includeFiles,
@@ -354,7 +367,10 @@ async function collectScannableFiles(dirPath: string, opts: Required<SkillScanOp
   return out;
 }
 
-async function readScannableSource(filePath: string, maxFileBytes: number): Promise<string | null> {
+async function readScannableSource(
+  filePath: string,
+  maxFileBytes: number,
+): Promise<string | null> {
   let st: Awaited<ReturnType<typeof fs.stat>> | null = null;
   try {
     st = await fs.stat(filePath);

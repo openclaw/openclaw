@@ -16,8 +16,14 @@ export type SubscribeEmbeddedPiSessionParams = {
   toolResultFormat?: ToolResultFormat;
   shouldEmitToolResult?: () => boolean;
   shouldEmitToolOutput?: () => boolean;
-  onToolResult?: (payload: { text?: string; mediaUrls?: string[] }) => void | Promise<void>;
-  onReasoningStream?: (payload: { text?: string; mediaUrls?: string[] }) => void | Promise<void>;
+  onToolResult?: (payload: {
+    text?: string;
+    mediaUrls?: string[];
+  }) => void | Promise<void>;
+  onReasoningStream?: (payload: {
+    text?: string;
+    mediaUrls?: string[];
+  }) => void | Promise<void>;
   /** Called when a thinking/reasoning block ends (</think> tag processed). */
   onReasoningEnd?: () => void | Promise<void>;
   onBlockReply?: (payload: BlockReplyPayload) => void | Promise<void>;
@@ -25,9 +31,15 @@ export type SubscribeEmbeddedPiSessionParams = {
   onBlockReplyFlush?: () => void | Promise<void>;
   blockReplyBreak?: "text_end" | "message_end";
   blockReplyChunking?: BlockReplyChunking;
-  onPartialReply?: (payload: { text?: string; mediaUrls?: string[] }) => void | Promise<void>;
+  onPartialReply?: (payload: {
+    text?: string;
+    mediaUrls?: string[];
+  }) => void | Promise<void>;
   onAssistantMessageStart?: () => void | Promise<void>;
-  onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => void | Promise<void>;
+  onAgentEvent?: (evt: {
+    stream: string;
+    data: Record<string, unknown>;
+  }) => void | Promise<void>;
   enforceFinalTag?: boolean;
   config?: OpenClawConfig;
   sessionKey?: string;

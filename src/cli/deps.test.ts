@@ -50,7 +50,9 @@ vi.mock("../imessage/send.js", () => {
 });
 
 describe("createDefaultDeps", () => {
-  function expectUnusedModulesNotLoaded(exclude: keyof typeof moduleLoads): void {
+  function expectUnusedModulesNotLoaded(
+    exclude: keyof typeof moduleLoads,
+  ): void {
     const keys = Object.keys(moduleLoads) as Array<keyof typeof moduleLoads>;
     for (const key of keys) {
       if (key === exclude) {

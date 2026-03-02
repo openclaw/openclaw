@@ -866,7 +866,11 @@
               },
               {
                 "group": "Maintenance",
-                "pages": ["install/updating", "install/migrating", "install/uninstall"]
+                "pages": [
+                  "install/updating",
+                  "install/migrating",
+                  "install/uninstall"
+                ]
               },
               {
                 "group": "Hosting and deployment",
@@ -1227,7 +1231,11 @@
               },
               {
                 "group": "Remote access",
-                "pages": ["gateway/remote", "gateway/remote-gateway-readme", "gateway/tailscale"]
+                "pages": [
+                  "gateway/remote",
+                  "gateway/remote-gateway-readme",
+                  "gateway/tailscale"
+                ]
               },
               {
                 "group": "Security",
@@ -1240,7 +1248,13 @@
               },
               {
                 "group": "Web interfaces",
-                "pages": ["web/index", "web/control-ui", "web/dashboard", "web/webchat", "web/tui"]
+                "pages": [
+                  "web/index",
+                  "web/control-ui",
+                  "web/dashboard",
+                  "web/webchat",
+                  "web/tui"
+                ]
               }
             ]
           },
@@ -1562,7 +1576,10 @@
               },
               {
                 "group": "多代理",
-                "pages": ["zh-CN/concepts/multi-agent", "zh-CN/concepts/presence"]
+                "pages": [
+                  "zh-CN/concepts/multi-agent",
+                  "zh-CN/concepts/presence"
+                ]
               },
               {
                 "group": "消息与投递",
@@ -1681,7 +1698,10 @@
               },
               {
                 "group": "配置",
-                "pages": ["zh-CN/concepts/model-providers", "zh-CN/concepts/model-failover"]
+                "pages": [
+                  "zh-CN/concepts/model-providers",
+                  "zh-CN/concepts/model-failover"
+                ]
               },
               {
                 "group": "提供商",
@@ -1884,7 +1904,10 @@
               },
               {
                 "group": "RPC 与 API",
-                "pages": ["zh-CN/reference/rpc", "zh-CN/reference/device-models"]
+                "pages": [
+                  "zh-CN/reference/rpc",
+                  "zh-CN/reference/device-models"
+                ]
               },
               {
                 "group": "模板",
@@ -1956,7 +1979,11 @@
             "groups": [
               {
                 "group": "帮助",
-                "pages": ["zh-CN/help/index", "zh-CN/help/troubleshooting", "zh-CN/help/faq"]
+                "pages": [
+                  "zh-CN/help/index",
+                  "zh-CN/help/troubleshooting",
+                  "zh-CN/help/faq"
+                ]
               },
               {
                 "group": "社区",
@@ -1987,7 +2014,11 @@
               },
               {
                 "group": "文档元信息",
-                "pages": ["zh-CN/start/hubs", "zh-CN/start/docs-directory", "zh-CN/AGENTS"]
+                "pages": [
+                  "zh-CN/start/hubs",
+                  "zh-CN/start/docs-directory",
+                  "zh-CN/AGENTS"
+                ]
               }
             ]
           }

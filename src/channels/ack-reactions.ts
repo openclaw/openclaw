@@ -1,4 +1,10 @@
-export type AckReactionScope = "all" | "direct" | "group-all" | "group-mentions" | "off" | "none";
+export type AckReactionScope =
+  | "all"
+  | "direct"
+  | "group-all"
+  | "group-mentions"
+  | "off"
+  | "none";
 
 export type WhatsAppAckReactionMode = "always" | "mentions" | "never";
 

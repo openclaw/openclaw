@@ -8,7 +8,10 @@ import {
   resolveAgentMainSessionKey,
 } from "../config/sessions.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
-import { resolveFailureDestination, sendFailureNotificationAnnounce } from "../cron/delivery.js";
+import {
+  resolveFailureDestination,
+  sendFailureNotificationAnnounce,
+} from "../cron/delivery.js";
 import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
 import { resolveDeliveryTarget } from "../cron/isolated-agent/delivery-target.js";
 import {
@@ -27,7 +30,10 @@ import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { getChildLogger } from "../logging.js";
-import { normalizeAgentId, toAgentStoreSessionKey } from "../routing/session-key.js";
+import {
+  normalizeAgentId,
+  toAgentStoreSessionKey,
+} from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 
 export type GatewayCronState = {
@@ -73,7 +79,9 @@ function resolveCronWebhookTarget(params: {
   return null;
 }
 
-function buildCronWebhookHeaders(webhookToken?: string): Record<string, string> {
+function buildCronWebhookHeaders(
+  webhookToken?: string,
+): Record<string, string> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
   };
@@ -136,24 +144,36 @@ async function postCronWebhook(params: {
 export function buildGatewayCronService(params: {
   cfg: ReturnType<typeof loadConfig>;
   deps: CliDeps;
-  broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
+  broadcast: (
+    event: string,
+    payload: unknown,
+    opts?: { dropIfSlow?: boolean },
+  ) => void;
 }): GatewayCronState {
   const cronLogger = getChildLogger({ module: "cron" });
   const storePath = resolveCronStorePath(params.cfg.cron?.store);
-  const cronEnabled = process.env.OPENCLAW_SKIP_CRON !== "1" && params.cfg.cron?.enabled !== false;
+  const cronEnabled =
+    process.env.OPENCLAW_SKIP_CRON !== "1" &&
+    params.cfg.cron?.enabled !== false;
 
   const resolveCronAgent = (requested?: string | null) => {
     const runtimeConfig = loadConfig();
     const normalized =
-      typeof requested === "string" && requested.trim() ? normalizeAgentId(requested) : undefined;
+      typeof requested === "string" && requested.trim()
+        ? normalizeAgentId(requested)
+        : undefined;
     const hasAgent =
       normalized !== undefined &&
       Array.isArray(runtimeConfig.agents?.list) &&
       runtimeConfig.agents.list.some(
         (entry) =>
-          entry && typeof entry.id === "string" && normalizeAgentId(entry.id) === normalized,
+          entry &&
+          typeof entry.id === "string" &&
+          normalizeAgentId(entry.id) === normalized,
       );
-    const agentId = hasAgent ? normalized : resolveDefaultAgentId(runtimeConfig);
+    const agentId = hasAgent
+      ? normalized
+      : resolveDefaultAgentId(runtimeConfig);
     return { agentId, cfg: runtimeConfig };
   };
 
@@ -181,7 +201,9 @@ export function buildGatewayCronService(params: {
     });
     if (canonical !== "global") {
       const sessionAgentId = resolveAgentIdFromSessionKey(canonical);
-      if (normalizeAgentId(sessionAgentId) !== normalizeAgentId(params.agentId)) {
+      if (
+        normalizeAgentId(sessionAgentId) !== normalizeAgentId(params.agentId)
+      ) {
         return resolveAgentMainSessionKey({
           cfg: params.runtimeConfig,
           agentId: params.agentId,
@@ -191,9 +213,14 @@ export function buildGatewayCronService(params: {
     return canonical;
   };
 
-  const resolveCronWakeTarget = (opts?: { agentId?: string; sessionKey?: string | null }) => {
+  const resolveCronWakeTarget = (opts?: {
+    agentId?: string;
+    sessionKey?: string | null;
+  }) => {
     const runtimeConfig = loadConfig();
-    const requestedAgentId = opts?.agentId ? resolveCronAgent(opts.agentId).agentId : undefined;
+    const requestedAgentId = opts?.agentId
+      ? resolveCronAgent(opts.agentId).agentId
+      : undefined;
     const derivedAgentId =
       requestedAgentId ??
       (opts?.sessionKey
@@ -245,7 +272,8 @@ export function buildGatewayCronService(params: {
       });
     },
     runHeartbeatOnce: async (opts) => {
-      const { runtimeConfig, agentId, sessionKey } = resolveCronWakeTarget(opts);
+      const { runtimeConfig, agentId, sessionKey } =
+        resolveCronWakeTarget(opts);
       // Merge cron-supplied heartbeat overrides (e.g. target: "last") with the
       // fully resolved agent heartbeat config so cron-triggered heartbeats
       // respect agent-specific overrides (agents.list[].heartbeat) before
@@ -254,10 +282,14 @@ export function buildGatewayCronService(params: {
         Array.isArray(runtimeConfig.agents?.list) &&
         runtimeConfig.agents.list.find(
           (entry) =>
-            entry && typeof entry.id === "string" && normalizeAgentId(entry.id) === agentId,
+            entry &&
+            typeof entry.id === "string" &&
+            normalizeAgentId(entry.id) === agentId,
         );
       const agentHeartbeat =
-        agentEntry && typeof agentEntry === "object" ? agentEntry.heartbeat : undefined;
+        agentEntry && typeof agentEntry === "object"
+          ? agentEntry.heartbeat
+          : undefined;
       const baseHeartbeat = {
         ...runtimeConfig.agents?.defaults?.heartbeat,
         ...agentHeartbeat,
@@ -287,7 +319,14 @@ export function buildGatewayCronService(params: {
         lane: "cron",
       });
     },
-    sendCronFailureAlert: async ({ job, text, channel, to, mode, accountId }) => {
+    sendCronFailureAlert: async ({
+      job,
+      text,
+      channel,
+      to,
+      mode,
+      accountId,
+    }) => {
       const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);
       const webhookToken = params.cfg.cron?.webhookToken?.trim();
 
@@ -353,7 +392,8 @@ export function buildGatewayCronService(params: {
         const webhookToken = params.cfg.cron?.webhookToken?.trim();
         const legacyWebhook = params.cfg.cron?.webhook?.trim();
         const job = cron.getJob(evt.jobId);
-        const legacyNotify = (job as { notify?: unknown } | undefined)?.notify === true;
+        const legacyNotify =
+          (job as { notify?: unknown } | undefined)?.notify === true;
         const webhookTarget = resolveCronWebhookTarget({
           delivery:
             job?.delivery && typeof job.delivery.mode === "string"
@@ -373,7 +413,10 @@ export function buildGatewayCronService(params: {
           );
         }
 
-        if (webhookTarget?.source === "legacy" && !warnedLegacyWebhookJobs.has(evt.jobId)) {
+        if (
+          webhookTarget?.source === "legacy" &&
+          !warnedLegacyWebhookJobs.has(evt.jobId)
+        ) {
           warnedLegacyWebhookJobs.add(evt.jobId);
           cronLogger.warn(
             {
@@ -399,11 +442,15 @@ export function buildGatewayCronService(params: {
         }
 
         if (evt.status === "error" && job) {
-          const failureDest = resolveFailureDestination(job, params.cfg.cron?.failureDestination);
+          const failureDest = resolveFailureDestination(
+            job,
+            params.cfg.cron?.failureDestination,
+          );
           if (failureDest) {
             const isBestEffort =
               job.delivery?.bestEffort === true ||
-              (job.payload.kind === "agentTurn" && job.payload.bestEffortDeliver === true);
+              (job.payload.kind === "agentTurn" &&
+                job.payload.bestEffortDeliver === true);
 
             if (!isBestEffort) {
               const failureMessage = `Cron job "${job.name}" failed: ${evt.error ?? "unknown error"}`;
@@ -427,7 +474,8 @@ export function buildGatewayCronService(params: {
                       webhookToken,
                       payload: failurePayload,
                       logContext: { jobId: evt.jobId },
-                      blockedLog: "cron: failure destination webhook blocked by SSRF guard",
+                      blockedLog:
+                        "cron: failure destination webhook blocked by SSRF guard",
                       failedLog: "cron: failure destination webhook failed",
                       logger: cronLogger,
                     });
@@ -442,7 +490,9 @@ export function buildGatewayCronService(params: {
                   );
                 }
               } else if (failureDest.mode === "announce") {
-                const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);
+                const { agentId, cfg: runtimeConfig } = resolveCronAgent(
+                  job.agentId,
+                );
                 void sendFailureNotificationAnnounce(
                   params.deps,
                   runtimeConfig,
@@ -487,7 +537,10 @@ export function buildGatewayCronService(params: {
           },
           runLogPrune,
         ).catch((err) => {
-          cronLogger.warn({ err: String(err), logPath }, "cron: run log append failed");
+          cronLogger.warn(
+            { err: String(err), logPath },
+            "cron: run log append failed",
+          );
         });
       }
     },

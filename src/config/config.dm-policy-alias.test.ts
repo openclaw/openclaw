@@ -34,7 +34,12 @@ describe("DM policy aliases (Slack/Discord)", () => {
 
   it('accepts discord legacy dm.policy="open" with top-level allowFrom alias', () => {
     const res = validateConfigObject({
-      channels: { discord: { dm: { policy: "open", allowFrom: ["123"] }, allowFrom: ["*"] } },
+      channels: {
+        discord: {
+          dm: { policy: "open", allowFrom: ["123"] },
+          allowFrom: ["*"],
+        },
+      },
     });
     expect(res.ok).toBe(true);
   });
@@ -51,7 +56,12 @@ describe("DM policy aliases (Slack/Discord)", () => {
 
   it('accepts slack legacy dm.policy="open" with top-level allowFrom alias', () => {
     const res = validateConfigObject({
-      channels: { slack: { dm: { policy: "open", allowFrom: ["U123"] }, allowFrom: ["*"] } },
+      channels: {
+        slack: {
+          dm: { policy: "open", allowFrom: ["U123"] },
+          allowFrom: ["*"],
+        },
+      },
     });
     expect(res.ok).toBe(true);
   });

@@ -70,7 +70,10 @@ function resolveResolutionLimits(config: OpenClawConfig): ResolutionLimits {
       resolution?.maxRefsPerProvider,
       DEFAULT_MAX_REFS_PER_PROVIDER,
     ),
-    maxBatchBytes: normalizePositiveInt(resolution?.maxBatchBytes, DEFAULT_MAX_BATCH_BYTES),
+    maxBatchBytes: normalizePositiveInt(
+      resolution?.maxBatchBytes,
+      DEFAULT_MAX_BATCH_BYTES,
+    ),
   };
 }
 
@@ -78,10 +81,16 @@ function toProviderKey(source: SecretRefSource, provider: string): string {
   return `${source}:${provider}`;
 }
 
-function resolveConfiguredProvider(ref: SecretRef, config: OpenClawConfig): SecretProviderConfig {
+function resolveConfiguredProvider(
+  ref: SecretRef,
+  config: OpenClawConfig,
+): SecretProviderConfig {
   const providerConfig = config.secrets?.providers?.[ref.provider];
   if (!providerConfig) {
-    if (ref.source === "env" && ref.provider === resolveDefaultSecretProviderAlias(config, "env")) {
+    if (
+      ref.source === "env" &&
+      ref.provider === resolveDefaultSecretProviderAlias(config, "env")
+    ) {
       return { source: "env" };
     }
     throw new Error(
@@ -118,15 +127,21 @@ async function assertSecurePath(params: {
   }
   if (stat.isSymlink) {
     if (!params.allowSymlinkPath) {
-      throw new Error(`${params.label} must not be a symlink: ${effectivePath}`);
+      throw new Error(
+        `${params.label} must not be a symlink: ${effectivePath}`,
+      );
     }
     try {
       effectivePath = await fs.realpath(effectivePath);
     } catch {
-      throw new Error(`${params.label} symlink target is not readable: ${params.targetPath}`);
+      throw new Error(
+        `${params.label} symlink target is not readable: ${params.targetPath}`,
+      );
     }
     if (!isAbsolutePathname(effectivePath)) {
-      throw new Error(`${params.label} resolved symlink target must be an absolute path.`);
+      throw new Error(
+        `${params.label} resolved symlink target must be an absolute path.`,
+      );
     }
     stat = await safeStat(effectivePath);
     if (!stat.ok) {
@@ -136,15 +151,21 @@ async function assertSecurePath(params: {
       throw new Error(`${params.label} must be a file: ${effectivePath}`);
     }
     if (stat.isSymlink) {
-      throw new Error(`${params.label} symlink target must not be a symlink: ${effectivePath}`);
+      throw new Error(
+        `${params.label} symlink target must not be a symlink: ${effectivePath}`,
+      );
     }
   }
 
   if (params.trustedDirs && params.trustedDirs.length > 0) {
     const trusted = params.trustedDirs.map((entry) => resolveUserPath(entry));
-    const inTrustedDir = trusted.some((dir) => isPathInside(dir, effectivePath));
+    const inTrustedDir = trusted.some((dir) =>
+      isPathInside(dir, effectivePath),
+    );
     if (!inTrustedDir) {
-      throw new Error(`${params.label} is outside trustedDirs: ${effectivePath}`);
+      throw new Error(
+        `${params.label} is outside trustedDirs: ${effectivePath}`,
+      );
     }
   }
   if (params.allowInsecurePath) {
@@ -153,12 +174,16 @@ async function assertSecurePath(params: {
 
   const perms = await inspectPathPermissions(effectivePath);
   if (!perms.ok) {
-    throw new Error(`${params.label} permissions could not be verified: ${effectivePath}`);
+    throw new Error(
+      `${params.label} permissions could not be verified: ${effectivePath}`,
+    );
   }
   const writableByOthers = perms.worldWritable || perms.groupWritable;
   const readableByOthers = perms.worldReadable || perms.groupReadable;
   if (writableByOthers || (!params.allowReadableByOthers && readableByOthers)) {
-    throw new Error(`${params.label} permissions are too open: ${effectivePath}`);
+    throw new Error(
+      `${params.label} permissions are too open: ${effectivePath}`,
+    );
   }
 
   if (process.platform === "win32" && perms.source === "unknown") {
@@ -167,7 +192,11 @@ async function assertSecurePath(params: {
     );
   }
 
-  if (process.platform !== "win32" && typeof process.getuid === "function" && stat.uid != null) {
+  if (
+    process.platform !== "win32" &&
+    typeof process.getuid === "function" &&
+    stat.uid != null
+  ) {
     const uid = process.getuid();
     if (stat.uid !== uid) {
       throw new Error(
@@ -186,7 +215,9 @@ async function readFileProviderPayload(params: {
   const cacheKey = params.providerName;
   const cache = params.cache;
   if (cache?.filePayloadByProvider?.has(cacheKey)) {
-    return await (cache.filePayloadByProvider.get(cacheKey) as Promise<unknown>);
+    return await (cache.filePayloadByProvider.get(
+      cacheKey,
+    ) as Promise<unknown>);
   }
 
   const filePath = resolveUserPath(params.providerConfig.path);
@@ -199,7 +230,10 @@ async function readFileProviderPayload(params: {
       params.providerConfig.timeoutMs,
       DEFAULT_FILE_TIMEOUT_MS,
     );
-    const maxBytes = normalizePositiveInt(params.providerConfig.maxBytes, DEFAULT_FILE_MAX_BYTES);
+    const maxBytes = normalizePositiveInt(
+      params.providerConfig.maxBytes,
+      DEFAULT_FILE_MAX_BYTES,
+    );
     const abortController = new AbortController();
     const timeoutErrorMessage = `File provider "${params.providerName}" timed out after ${timeoutMs}ms.`;
     let timeoutHandle: NodeJS.Timeout | null = null;
@@ -215,7 +249,9 @@ async function readFileProviderPayload(params: {
         timeoutPromise,
       ]);
       if (payload.byteLength > maxBytes) {
-        throw new Error(`File provider "${params.providerName}" exceeded maxBytes (${maxBytes}).`);
+        throw new Error(
+          `File provider "${params.providerName}" exceeded maxBytes (${maxBytes}).`,
+        );
       }
       const text = payload.toString("utf8");
       if (params.providerConfig.mode === "singleValue") {
@@ -223,7 +259,9 @@ async function readFileProviderPayload(params: {
       }
       const parsed = JSON.parse(text) as unknown;
       if (!isRecord(parsed)) {
-        throw new Error(`File provider "${params.providerName}" payload is not a JSON object.`);
+        throw new Error(
+          `File provider "${params.providerName}" payload is not a JSON object.`,
+        );
       }
       return parsed;
     } catch (error) {
@@ -295,7 +333,10 @@ async function resolveFileRefs(params: {
     return resolved;
   }
   for (const ref of params.refs) {
-    resolved.set(ref.id, readJsonPointer(payload, ref.id, { onMissing: "throw" }));
+    resolved.set(
+      ref.id,
+      readJsonPointer(payload, ref.id, { onMissing: "throw" }),
+    );
   }
   return resolved;
 }
@@ -374,7 +415,9 @@ async function runExecResolver(params: {
           settled = true;
           clearTimers();
           reject(
-            new Error(`Exec provider output exceeded maxOutputBytes (${params.maxOutputBytes}).`),
+            new Error(
+              `Exec provider output exceeded maxOutputBytes (${params.maxOutputBytes}).`,
+            ),
           );
         }
         return;
@@ -409,7 +452,11 @@ async function runExecResolver(params: {
         stderr,
         code,
         signal,
-        termination: noOutputTimedOut ? "no-output-timeout" : timedOut ? "timeout" : "exit",
+        termination: noOutputTimedOut
+          ? "no-output-timeout"
+          : timedOut
+            ? "timeout"
+            : "exit",
       });
     });
 
@@ -438,7 +485,9 @@ function parseExecValues(params: {
 }): Record<string, unknown> {
   const trimmed = params.stdout.trim();
   if (!trimmed) {
-    throw new Error(`Exec provider "${params.providerName}" returned empty stdout.`);
+    throw new Error(
+      `Exec provider "${params.providerName}" returned empty stdout.`,
+    );
   }
 
   let parsed: unknown;
@@ -452,37 +501,57 @@ function parseExecValues(params: {
     try {
       parsed = JSON.parse(trimmed) as unknown;
     } catch {
-      throw new Error(`Exec provider "${params.providerName}" returned invalid JSON.`);
+      throw new Error(
+        `Exec provider "${params.providerName}" returned invalid JSON.`,
+      );
     }
   }
 
   if (!isRecord(parsed)) {
-    if (!params.jsonOnly && params.ids.length === 1 && typeof parsed === "string") {
+    if (
+      !params.jsonOnly &&
+      params.ids.length === 1 &&
+      typeof parsed === "string"
+    ) {
       return { [params.ids[0]]: parsed };
     }
-    throw new Error(`Exec provider "${params.providerName}" response must be an object.`);
+    throw new Error(
+      `Exec provider "${params.providerName}" response must be an object.`,
+    );
   }
   if (parsed.protocolVersion !== 1) {
-    throw new Error(`Exec provider "${params.providerName}" protocolVersion must be 1.`);
+    throw new Error(
+      `Exec provider "${params.providerName}" protocolVersion must be 1.`,
+    );
   }
   const responseValues = parsed.values;
   if (!isRecord(responseValues)) {
-    throw new Error(`Exec provider "${params.providerName}" response missing "values".`);
+    throw new Error(
+      `Exec provider "${params.providerName}" response missing "values".`,
+    );
   }
   const responseErrors = isRecord(parsed.errors) ? parsed.errors : null;
   const out: Record<string, unknown> = {};
   for (const id of params.ids) {
     if (responseErrors && id in responseErrors) {
       const entry = responseErrors[id];
-      if (isRecord(entry) && typeof entry.message === "string" && entry.message.trim()) {
+      if (
+        isRecord(entry) &&
+        typeof entry.message === "string" &&
+        entry.message.trim()
+      ) {
         throw new Error(
           `Exec provider "${params.providerName}" failed for id "${id}" (${entry.message.trim()}).`,
         );
       }
-      throw new Error(`Exec provider "${params.providerName}" failed for id "${id}".`);
+      throw new Error(
+        `Exec provider "${params.providerName}" failed for id "${id}".`,
+      );
     }
     if (!(id in responseValues)) {
-      throw new Error(`Exec provider "${params.providerName}" response missing id "${id}".`);
+      throw new Error(
+        `Exec provider "${params.providerName}" response missing id "${id}".`,
+      );
     }
     out[id] = responseValues[id];
   }
@@ -536,7 +605,10 @@ async function resolveExecRefs(params: {
     childEnv[key] = value;
   }
 
-  const timeoutMs = normalizePositiveInt(params.providerConfig.timeoutMs, DEFAULT_EXEC_TIMEOUT_MS);
+  const timeoutMs = normalizePositiveInt(
+    params.providerConfig.timeoutMs,
+    DEFAULT_EXEC_TIMEOUT_MS,
+  );
   const noOutputTimeoutMs = normalizePositiveInt(
     params.providerConfig.noOutputTimeoutMs,
     DEFAULT_EXEC_NO_OUTPUT_TIMEOUT_MS,
@@ -558,7 +630,9 @@ async function resolveExecRefs(params: {
     maxOutputBytes,
   });
   if (result.termination === "timeout") {
-    throw new Error(`Exec provider "${params.providerName}" timed out after ${timeoutMs}ms.`);
+    throw new Error(
+      `Exec provider "${params.providerName}" timed out after ${timeoutMs}ms.`,
+    );
   }
   if (result.termination === "no-output-timeout") {
     throw new Error(
@@ -650,27 +724,38 @@ export async function resolveSecretRefValues(
       existing.refs.push(ref);
       continue;
     }
-    grouped.set(key, { source: ref.source, providerName: ref.provider, refs: [ref] });
+    grouped.set(key, {
+      source: ref.source,
+      providerName: ref.provider,
+      refs: [ref],
+    });
   }
 
   const tasks = [...grouped.values()].map(
-    (group) => async (): Promise<{ group: typeof group; values: ProviderResolutionOutput }> => {
-      if (group.refs.length > limits.maxRefsPerProvider) {
-        throw new Error(
-          `Secret provider "${group.providerName}" exceeded maxRefsPerProvider (${limits.maxRefsPerProvider}).`,
+    (group) =>
+      async (): Promise<{
+        group: typeof group;
+        values: ProviderResolutionOutput;
+      }> => {
+        if (group.refs.length > limits.maxRefsPerProvider) {
+          throw new Error(
+            `Secret provider "${group.providerName}" exceeded maxRefsPerProvider (${limits.maxRefsPerProvider}).`,
+          );
+        }
+        const providerConfig = resolveConfiguredProvider(
+          group.refs[0],
+          options.config,
         );
-      }
-      const providerConfig = resolveConfiguredProvider(group.refs[0], options.config);
-      const values = await resolveProviderRefs({
-        refs: group.refs,
-        source: group.source,
-        providerName: group.providerName,
-        providerConfig,
-        options,
-        limits,
-      });
-      return { group, values };
-    },
+        const values = await resolveProviderRefs({
+          refs: group.refs,
+          source: group.source,
+          providerName: group.providerName,
+          providerConfig,
+          options,
+          limits,
+        });
+        return { group, values };
+      },
   );
 
   const taskResults = await runTasksWithConcurrency({

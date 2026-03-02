@@ -6,7 +6,9 @@ describe("image sanitization config", () => {
   it("defaults when no config value exists", () => {
     expect(resolveImageSanitizationLimits(undefined)).toEqual({});
     expect(
-      resolveImageSanitizationLimits({ agents: { defaults: {} } } as unknown as OpenClawConfig),
+      resolveImageSanitizationLimits({
+        agents: { defaults: {} },
+      } as unknown as OpenClawConfig),
     ).toEqual({});
   });
 

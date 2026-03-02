@@ -10,7 +10,11 @@ import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import { createRestrictedAgentSandboxConfig } from "./test-helpers/sandbox-agent-config-fixtures.js";
 
 type ToolWithExecute = {
-  execute: (toolCallId: string, args: unknown, signal?: AbortSignal) => Promise<unknown>;
+  execute: (
+    toolCallId: string,
+    args: unknown,
+    signal?: AbortSignal,
+  ) => Promise<unknown>;
 };
 
 describe("Agent-specific tool filtering", () => {
@@ -36,7 +40,9 @@ describe("Agent-specific tool filtering", () => {
       patch: string;
     }) => Promise<void>,
   ) {
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pi-tools-"));
+    const workspaceDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-pi-tools-"),
+    );
     const escapedPath = path.join(
       path.dirname(workspaceDir),
       `escaped-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}.txt`,
@@ -97,7 +103,9 @@ describe("Agent-specific tool filtering", () => {
 
   function createMainAgentConfig(params: {
     tools: NonNullable<OpenClawConfig["tools"]>;
-    agentTools?: NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number]["tools"];
+    agentTools?: NonNullable<
+      NonNullable<OpenClawConfig["agents"]>["list"]
+    >[number]["tools"];
   }): OpenClawConfig {
     return {
       tools: params.tools,
@@ -204,12 +212,15 @@ describe("Agent-specific tool filtering", () => {
   });
 
   it("defaults apply_patch to workspace-only (blocks traversal)", async () => {
-    await withApplyPatchEscapeCase({}, async ({ applyPatchTool, escapedPath, patch }) => {
-      await expect(applyPatchTool.execute("tc1", { input: patch })).rejects.toThrow(
-        /Path escapes sandbox root/,
-      );
-      await expect(fs.readFile(escapedPath, "utf8")).rejects.toBeDefined();
-    });
+    await withApplyPatchEscapeCase(
+      {},
+      async ({ applyPatchTool, escapedPath, patch }) => {
+        await expect(
+          applyPatchTool.execute("tc1", { input: patch }),
+        ).rejects.toThrow(/Path escapes sandbox root/);
+        await expect(fs.readFile(escapedPath, "utf8")).rejects.toBeDefined();
+      },
+    );
   });
 
   it("allows disabling apply_patch workspace-only via config (dangerous)", async () => {
@@ -724,7 +735,9 @@ describe("Agent-specific tool filtering", () => {
   });
 
   it("applies explicit agentId exec defaults when sessionKey is opaque", async () => {
-    const cfg = createExecHostDefaultsConfig([{ id: "main", execHost: "gateway" }]);
+    const cfg = createExecHostDefaultsConfig([
+      { id: "main", execHost: "gateway" },
+    ]);
 
     const tools = createOpenClawCodingTools({
       config: cfg,

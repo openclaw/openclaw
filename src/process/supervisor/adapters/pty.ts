@@ -58,12 +58,20 @@ export async function createPtyAdapter(params: {
 
   let dataListener: PtyDisposable | null = null;
   let exitListener: PtyDisposable | null = null;
-  let waitResult: { code: number | null; signal: NodeJS.Signals | number | null } | null = null;
+  let waitResult: {
+    code: number | null;
+    signal: NodeJS.Signals | number | null;
+  } | null = null;
   let resolveWait:
-    | ((value: { code: number | null; signal: NodeJS.Signals | number | null }) => void)
+    | ((value: {
+        code: number | null;
+        signal: NodeJS.Signals | number | null;
+      }) => void)
     | null = null;
-  let waitPromise: Promise<{ code: number | null; signal: NodeJS.Signals | number | null }> | null =
-    null;
+  let waitPromise: Promise<{
+    code: number | null;
+    signal: NodeJS.Signals | number | null;
+  }> | null = null;
   let forceKillWaitFallbackTimer: NodeJS.Timeout | null = null;
 
   const clearForceKillWaitFallback = () => {
@@ -74,7 +82,10 @@ export async function createPtyAdapter(params: {
     forceKillWaitFallbackTimer = null;
   };
 
-  const settleWait = (value: { code: number | null; signal: NodeJS.Signals | number | null }) => {
+  const settleWait = (value: {
+    code: number | null;
+    signal: NodeJS.Signals | number | null;
+  }) => {
     if (waitResult) {
       return;
     }
@@ -139,16 +150,17 @@ export async function createPtyAdapter(params: {
       return waitResult;
     }
     if (!waitPromise) {
-      waitPromise = new Promise<{ code: number | null; signal: NodeJS.Signals | number | null }>(
-        (resolve) => {
-          resolveWait = resolve;
-          if (waitResult) {
-            const settled = waitResult;
-            resolveWait = null;
-            resolve(settled);
-          }
-        },
-      );
+      waitPromise = new Promise<{
+        code: number | null;
+        signal: NodeJS.Signals | number | null;
+      }>((resolve) => {
+        resolveWait = resolve;
+        if (waitResult) {
+          const settled = waitResult;
+          resolveWait = null;
+          resolve(settled);
+        }
+      });
     }
     return waitPromise;
   };

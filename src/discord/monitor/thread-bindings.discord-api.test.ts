@@ -18,7 +18,8 @@ vi.mock("../client.js", () => ({
   createDiscordRestClient: hoisted.createDiscordRestClient,
 }));
 
-const { resolveChannelIdForBinding } = await import("./thread-bindings.discord-api.js");
+const { resolveChannelIdForBinding } =
+  await import("./thread-bindings.discord-api.js");
 
 describe("resolveChannelIdForBinding", () => {
   beforeEach(() => {

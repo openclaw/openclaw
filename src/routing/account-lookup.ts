@@ -9,6 +9,8 @@ export function resolveAccountEntry<T>(
     return accounts[accountId];
   }
   const normalized = accountId.toLowerCase();
-  const matchKey = Object.keys(accounts).find((key) => key.toLowerCase() === normalized);
+  const matchKey = Object.keys(accounts).find(
+    (key) => key.toLowerCase() === normalized,
+  );
   return matchKey ? accounts[matchKey] : undefined;
 }

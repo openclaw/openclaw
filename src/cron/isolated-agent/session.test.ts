@@ -5,10 +5,15 @@ vi.mock("../../config/sessions.js", () => ({
   loadSessionStore: vi.fn(),
   resolveStorePath: vi.fn().mockReturnValue("/tmp/test-store.json"),
   evaluateSessionFreshness: vi.fn().mockReturnValue({ fresh: true }),
-  resolveSessionResetPolicy: vi.fn().mockReturnValue({ mode: "idle", idleMinutes: 60 }),
+  resolveSessionResetPolicy: vi
+    .fn()
+    .mockReturnValue({ mode: "idle", idleMinutes: 60 }),
 }));
 
-import { loadSessionStore, evaluateSessionFreshness } from "../../config/sessions.js";
+import {
+  loadSessionStore,
+  evaluateSessionFreshness,
+} from "../../config/sessions.js";
 import { resolveCronSession } from "./session.js";
 
 const NOW_MS = 1_737_600_000_000;
@@ -28,7 +33,9 @@ function resolveWithStoredEntry(params?: {
     ? ({ [sessionKey]: params.entry as SessionStoreEntry } as SessionStore)
     : {};
   vi.mocked(loadSessionStore).mockReturnValue(store);
-  vi.mocked(evaluateSessionFreshness).mockReturnValue({ fresh: params?.fresh ?? true });
+  vi.mocked(evaluateSessionFreshness).mockReturnValue({
+    fresh: params?.fresh ?? true,
+  });
 
   return resolveCronSession({
     cfg: {} as OpenClawConfig,

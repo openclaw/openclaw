@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { DiscordActionConfig, OpenClawConfig } from "../../config/config.js";
+import type {
+  DiscordActionConfig,
+  OpenClawConfig,
+} from "../../config/config.js";
 import { handleDiscordGuildAction } from "./discord-actions-guild.js";
 import { handleDiscordMessagingAction } from "./discord-actions-messaging.js";
 import { handleDiscordModerationAction } from "./discord-actions-moderation.js";
@@ -73,8 +76,10 @@ vi.mock("../../discord/send.js", () => ({
 const enableAllActions = () => true;
 
 const disabledActions = (key: keyof DiscordActionConfig) => key !== "reactions";
-const channelInfoEnabled = (key: keyof DiscordActionConfig) => key === "channelInfo";
-const moderationEnabled = (key: keyof DiscordActionConfig) => key === "moderation";
+const channelInfoEnabled = (key: keyof DiscordActionConfig) =>
+  key === "channelInfo";
+const moderationEnabled = (key: keyof DiscordActionConfig) =>
+  key === "moderation";
 
 describe("handleDiscordMessagingAction", () => {
   beforeEach(() => {
@@ -104,7 +109,12 @@ describe("handleDiscordMessagingAction", () => {
   ])("adds reactions $name", async ({ params, expectedOptions }) => {
     await handleDiscordMessagingAction("react", params, enableAllActions);
     if (expectedOptions) {
-      expect(reactMessageDiscord).toHaveBeenCalledWith("C1", "M1", "✅", expectedOptions);
+      expect(reactMessageDiscord).toHaveBeenCalledWith(
+        "C1",
+        "M1",
+        "✅",
+        expectedOptions,
+      );
       return;
     }
     expect(reactMessageDiscord).toHaveBeenCalledWith("C1", "M1", "✅");
@@ -182,7 +192,9 @@ describe("handleDiscordMessagingAction", () => {
 
     const expectedMs = Date.parse("2026-01-15T10:00:00.000Z");
     expect(payload.messages[0].timestampMs).toBe(expectedMs);
-    expect(payload.messages[0].timestampUtc).toBe(new Date(expectedMs).toISOString());
+    expect(payload.messages[0].timestampUtc).toBe(
+      new Date(expectedMs).toISOString(),
+    );
   });
 
   it("adds normalized timestamps to fetchMessage payloads", async () => {
@@ -196,15 +208,21 @@ describe("handleDiscordMessagingAction", () => {
       { guildId: "G1", channelId: "C1", messageId: "M1" },
       enableAllActions,
     );
-    const payload = result.details as { message?: { timestampMs?: number; timestampUtc?: string } };
+    const payload = result.details as {
+      message?: { timestampMs?: number; timestampUtc?: string };
+    };
 
     const expectedMs = Date.parse("2026-01-15T11:00:00.000Z");
     expect(payload.message?.timestampMs).toBe(expectedMs);
-    expect(payload.message?.timestampUtc).toBe(new Date(expectedMs).toISOString());
+    expect(payload.message?.timestampUtc).toBe(
+      new Date(expectedMs).toISOString(),
+    );
   });
 
   it("adds normalized timestamps to listPins payloads", async () => {
-    listPinsDiscord.mockResolvedValueOnce([{ id: "1", timestamp: "2026-01-15T12:00:00.000Z" }]);
+    listPinsDiscord.mockResolvedValueOnce([
+      { id: "1", timestamp: "2026-01-15T12:00:00.000Z" },
+    ]);
 
     const result = await handleDiscordMessagingAction(
       "listPins",
@@ -217,7 +235,9 @@ describe("handleDiscordMessagingAction", () => {
 
     const expectedMs = Date.parse("2026-01-15T12:00:00.000Z");
     expect(payload.pins[0].timestampMs).toBe(expectedMs);
-    expect(payload.pins[0].timestampUtc).toBe(new Date(expectedMs).toISOString());
+    expect(payload.pins[0].timestampUtc).toBe(
+      new Date(expectedMs).toISOString(),
+    );
   });
 
   it("adds normalized timestamps to searchMessages payloads", async () => {
@@ -232,7 +252,11 @@ describe("handleDiscordMessagingAction", () => {
       enableAllActions,
     );
     const payload = result.details as {
-      results?: { messages?: Array<Array<{ timestampMs?: number; timestampUtc?: string }>> };
+      results?: {
+        messages?: Array<
+          Array<{ timestampMs?: number; timestampUtc?: string }>
+        >;
+      };
     };
 
     const expectedMs = Date.parse("2026-01-15T13:00:00.000Z");
@@ -257,10 +281,14 @@ describe("handleDiscordMessagingAction", () => {
       enableAllActions,
     );
 
-    expect(sendVoiceMessageDiscord).toHaveBeenCalledWith("channel:123", "/tmp/voice.mp3", {
-      replyTo: undefined,
-      silent: true,
-    });
+    expect(sendVoiceMessageDiscord).toHaveBeenCalledWith(
+      "channel:123",
+      "/tmp/voice.mp3",
+      {
+        replyTo: undefined,
+        silent: true,
+      },
+    );
     expect(sendMessageDiscord).not.toHaveBeenCalled();
   });
 
@@ -354,7 +382,11 @@ describe("handleDiscordGuildAction - channel management", () => {
 
   it("respects channel gating for channelCreate", async () => {
     await expect(
-      handleDiscordGuildAction("channelCreate", { guildId: "G1", name: "test" }, channelsDisabled),
+      handleDiscordGuildAction(
+        "channelCreate",
+        { guildId: "G1", name: "test" },
+        channelsDisabled,
+      ),
     ).rejects.toThrow(/Discord channel management is disabled/);
   });
 
@@ -364,7 +396,9 @@ describe("handleDiscordGuildAction - channel management", () => {
       { guildId: "G1", accountId: "ops" },
       channelInfoEnabled,
     );
-    expect(listGuildChannelsDiscord).toHaveBeenCalledWith("G1", { accountId: "ops" });
+    expect(listGuildChannelsDiscord).toHaveBeenCalledWith("G1", {
+      accountId: "ops",
+    });
   });
 
   it("edits a channel", async () => {
@@ -443,7 +477,11 @@ describe("handleDiscordGuildAction - channel management", () => {
   });
 
   it("deletes a channel", async () => {
-    await handleDiscordGuildAction("channelDelete", { channelId: "C1" }, channelsEnabled);
+    await handleDiscordGuildAction(
+      "channelDelete",
+      { channelId: "C1" },
+      channelsEnabled,
+    );
     expect(deleteChannelDiscord).toHaveBeenCalledWith("C1");
   });
 
@@ -515,7 +553,11 @@ describe("handleDiscordGuildAction - channel management", () => {
   });
 
   it("deletes a category", async () => {
-    await handleDiscordGuildAction("categoryDelete", { categoryId: "CAT1" }, channelsEnabled);
+    await handleDiscordGuildAction(
+      "categoryDelete",
+      { categoryId: "CAT1" },
+      channelsEnabled,
+    );
     expect(deleteChannelDiscord).toHaveBeenCalledWith("CAT1");
   });
 
@@ -554,7 +596,11 @@ describe("handleDiscordGuildAction - channel management", () => {
       },
     },
   ])("sets channel permissions for $name", async ({ params, expected }) => {
-    await handleDiscordGuildAction("channelPermissionSet", params, channelsEnabled);
+    await handleDiscordGuildAction(
+      "channelPermissionSet",
+      params,
+      channelsEnabled,
+    );
     expect(setChannelPermissionDiscord).toHaveBeenCalledWith(expected);
   });
 
@@ -604,7 +650,13 @@ describe("handleDiscordAction per-account gating", () => {
     } as OpenClawConfig;
 
     await handleDiscordAction(
-      { action: "timeout", guildId: "G1", userId: "U1", durationMinutes: 5, accountId: "ops" },
+      {
+        action: "timeout",
+        guildId: "G1",
+        userId: "U1",
+        durationMinutes: 5,
+        accountId: "ops",
+      },
       cfg,
     );
     expect(timeoutMemberDiscord).toHaveBeenCalledWith(
@@ -626,7 +678,13 @@ describe("handleDiscordAction per-account gating", () => {
 
     await expect(
       handleDiscordAction(
-        { action: "timeout", guildId: "G1", userId: "U1", durationMinutes: 5, accountId: "chat" },
+        {
+          action: "timeout",
+          guildId: "G1",
+          userId: "U1",
+          durationMinutes: 5,
+          accountId: "chat",
+        },
         cfg,
       ),
     ).rejects.toThrow(/Discord moderation is disabled/);
@@ -666,7 +724,12 @@ describe("handleDiscordAction per-account gating", () => {
 
     await expect(
       handleDiscordAction(
-        { action: "channelCreate", guildId: "G1", name: "alerts", accountId: "ops" },
+        {
+          action: "channelCreate",
+          guildId: "G1",
+          name: "alerts",
+          accountId: "ops",
+        },
         cfg,
       ),
     ).rejects.toThrow(/channel management is disabled/i);
@@ -688,7 +751,12 @@ describe("handleDiscordAction per-account gating", () => {
     } as OpenClawConfig;
 
     await handleDiscordAction(
-      { action: "channelCreate", guildId: "G1", name: "alerts", accountId: "ops" },
+      {
+        action: "channelCreate",
+        guildId: "G1",
+        name: "alerts",
+        accountId: "ops",
+      },
       cfg,
     );
 

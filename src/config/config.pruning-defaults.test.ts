@@ -5,7 +5,10 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { loadConfig } from "./config.js";
 import { withTempHome } from "./test-helpers.js";
 
-async function writeConfigForTest(home: string, config: unknown): Promise<void> {
+async function writeConfigForTest(
+  home: string,
+  config: unknown,
+): Promise<void> {
   const configDir = path.join(home, ".openclaw");
   await fs.mkdir(configDir, { recursive: true });
   await fs.writeFile(
@@ -17,15 +20,18 @@ async function writeConfigForTest(home: string, config: unknown): Promise<void> 
 
 describe("config pruning defaults", () => {
   it("does not enable contextPruning by default", async () => {
-    await withEnvAsync({ ANTHROPIC_API_KEY: "", ANTHROPIC_OAUTH_TOKEN: "" }, async () => {
-      await withTempHome(async (home) => {
-        await writeConfigForTest(home, { agents: { defaults: {} } });
+    await withEnvAsync(
+      { ANTHROPIC_API_KEY: "", ANTHROPIC_OAUTH_TOKEN: "" },
+      async () => {
+        await withTempHome(async (home) => {
+          await writeConfigForTest(home, { agents: { defaults: {} } });
 
-        const cfg = loadConfig();
+          const cfg = loadConfig();
 
-        expect(cfg.agents?.defaults?.contextPruning?.mode).toBeUndefined();
-      });
-    });
+          expect(cfg.agents?.defaults?.contextPruning?.mode).toBeUndefined();
+        });
+      },
+    );
   });
 
   it("enables cache-ttl pruning + 1h heartbeat for Anthropic OAuth", async () => {
@@ -33,7 +39,11 @@ describe("config pruning defaults", () => {
       await writeConfigForTest(home, {
         auth: {
           profiles: {
-            "anthropic:me": { provider: "anthropic", mode: "oauth", email: "me@example.com" },
+            "anthropic:me": {
+              provider: "anthropic",
+              mode: "oauth",
+              email: "me@example.com",
+            },
           },
         },
         agents: { defaults: {} },
@@ -68,7 +78,8 @@ describe("config pruning defaults", () => {
       expect(cfg.agents?.defaults?.contextPruning?.ttl).toBe("1h");
       expect(cfg.agents?.defaults?.heartbeat?.every).toBe("30m");
       expect(
-        cfg.agents?.defaults?.models?.["anthropic/claude-opus-4-5"]?.params?.cacheRetention,
+        cfg.agents?.defaults?.models?.["anthropic/claude-opus-4-5"]?.params
+          ?.cacheRetention,
       ).toBe("short");
     });
   });
@@ -83,7 +94,9 @@ describe("config pruning defaults", () => {
         },
         agents: {
           defaults: {
-            model: { primary: "amazon-bedrock/us.anthropic.claude-opus-4-6-v1" },
+            model: {
+              primary: "amazon-bedrock/us.anthropic.claude-opus-4-6-v1",
+            },
           },
         },
       });
@@ -91,8 +104,9 @@ describe("config pruning defaults", () => {
       const cfg = loadConfig();
 
       expect(
-        cfg.agents?.defaults?.models?.["amazon-bedrock/us.anthropic.claude-opus-4-6-v1"]?.params
-          ?.cacheRetention,
+        cfg.agents?.defaults?.models?.[
+          "amazon-bedrock/us.anthropic.claude-opus-4-6-v1"
+        ]?.params?.cacheRetention,
       ).toBe("short");
     });
   });
@@ -115,15 +129,17 @@ describe("config pruning defaults", () => {
       const cfg = loadConfig();
 
       expect(
-        cfg.agents?.defaults?.models?.["amazon-bedrock/amazon.nova-micro-v1:0"]?.params
-          ?.cacheRetention,
+        cfg.agents?.defaults?.models?.["amazon-bedrock/amazon.nova-micro-v1:0"]
+          ?.params?.cacheRetention,
       ).toBeUndefined();
     });
   });
 
   it("does not override explicit contextPruning mode", async () => {
     await withTempHome(async (home) => {
-      await writeConfigForTest(home, { agents: { defaults: { contextPruning: { mode: "off" } } } });
+      await writeConfigForTest(home, {
+        agents: { defaults: { contextPruning: { mode: "off" } } },
+      });
 
       const cfg = loadConfig();
 

@@ -38,20 +38,29 @@ import { applySessionHints } from "./body.js";
 import type { buildCommandContext } from "./commands.js";
 import type { InlineDirectives } from "./directive-handling.js";
 import { buildGroupChatContext, buildGroupIntro } from "./groups.js";
-import { buildInboundMetaSystemPrompt, buildInboundUserContextPrefix } from "./inbound-meta.js";
+import {
+  buildInboundMetaSystemPrompt,
+  buildInboundUserContextPrefix,
+} from "./inbound-meta.js";
 import type { createModelSelectionState } from "./model-selection.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { resolveQueueSettings } from "./queue.js";
 import { routeReply } from "./route-reply.js";
 import { BARE_SESSION_RESET_PROMPT } from "./session-reset-prompt.js";
-import { buildQueuedSystemPrompt, ensureSkillSnapshot } from "./session-updates.js";
+import {
+  buildQueuedSystemPrompt,
+  ensureSkillSnapshot,
+} from "./session-updates.js";
 import { resolveTypingMode } from "./typing-mode.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
 import type { TypingController } from "./typing.js";
 import { appendUntrustedContext } from "./untrusted-context.js";
 
 type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
-type ExecOverrides = Pick<ExecToolDefaults, "host" | "security" | "ask" | "node">;
+type ExecOverrides = Pick<
+  ExecToolDefaults,
+  "host" | "security" | "ask" | "node"
+>;
 
 function buildResetSessionNoticeText(params: {
   provider: string;
@@ -79,7 +88,8 @@ function resolveResetSessionNoticeRoute(params: {
       ? (commandChannel as Parameters<typeof routeReply>[0]["channel"])
       : undefined;
   const channel = params.ctx.OriginatingChannel ?? fallbackChannel;
-  const to = params.ctx.OriginatingTo ?? params.command.from ?? params.command.to;
+  const to =
+    params.ctx.OriginatingTo ?? params.command.from ?? params.command.to;
   if (!channel || channel === "webchat" || !to) {
     return null;
   }
@@ -249,10 +259,13 @@ export async function runPreparedReply(
     suppressTyping,
   });
   const shouldInjectGroupIntro = Boolean(
-    isGroupChat && (isFirstTurnInSession || sessionEntry?.groupActivationNeedsSystemIntro),
+    isGroupChat &&
+    (isFirstTurnInSession || sessionEntry?.groupActivationNeedsSystemIntro),
   );
   // Always include persistent group chat context (name, participants, reply guidance)
-  const groupChatContext = isGroupChat ? buildGroupChatContext({ sessionCtx }) : "";
+  const groupChatContext = isGroupChat
+    ? buildGroupChatContext({ sessionCtx })
+    : "";
   // Behavioral intro (activation mode, lurking, etc.) only on first turn / activation needed
   const groupIntro = shouldInjectGroupIntro
     ? buildGroupIntro({
@@ -275,7 +288,12 @@ export async function runPreparedReply(
   ].filter(Boolean);
   const baseBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
   // Use CommandBody/RawBody for bare reset detection (clean message without structural context).
-  const rawBodyTrimmed = (ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "").trim();
+  const rawBodyTrimmed = (
+    ctx.CommandBody ??
+    ctx.RawBody ??
+    ctx.Body ??
+    ""
+  ).trim();
   const baseBodyTrimmedRaw = baseBody.trim();
   if (
     allowTextCommands &&
@@ -286,11 +304,15 @@ export async function runPreparedReply(
     typing.cleanup();
     return undefined;
   }
-  const isBareNewOrReset = rawBodyTrimmed === "/new" || rawBodyTrimmed === "/reset";
+  const isBareNewOrReset =
+    rawBodyTrimmed === "/new" || rawBodyTrimmed === "/reset";
   const isBareSessionReset =
     isNewSession &&
-    ((baseBodyTrimmedRaw.length === 0 && rawBodyTrimmed.length > 0) || isBareNewOrReset);
-  const baseBodyFinal = isBareSessionReset ? BARE_SESSION_RESET_PROMPT : baseBody;
+    ((baseBodyTrimmedRaw.length === 0 && rawBodyTrimmed.length > 0) ||
+      isBareNewOrReset);
+  const baseBodyFinal = isBareSessionReset
+    ? BARE_SESSION_RESET_PROMPT
+    : baseBody;
   const inboundUserContext = buildInboundUserContextPrefix(
     isNewSession
       ? {
@@ -306,7 +328,8 @@ export async function runPreparedReply(
     : [inboundUserContext, baseBodyFinal].filter(Boolean).join("\n\n");
   const baseBodyTrimmed = baseBodyForPrompt.trim();
   const hasMediaAttachment = Boolean(
-    sessionCtx.MediaPath || (sessionCtx.MediaPaths && sessionCtx.MediaPaths.length > 0),
+    sessionCtx.MediaPath ||
+    (sessionCtx.MediaPaths && sessionCtx.MediaPaths.length > 0),
   );
   if (!baseBodyTrimmed && !hasMediaAttachment) {
     await typing.onReplyStart();
@@ -330,8 +353,10 @@ export async function runPreparedReply(
     storePath,
     abortKey: command.abortKey,
   });
-  const isGroupSession = sessionEntry?.chatType === "group" || sessionEntry?.chatType === "channel";
-  const isMainSession = !isGroupSession && sessionKey === normalizeMainKey(sessionCfg?.mainKey);
+  const isGroupSession =
+    sessionEntry?.chatType === "group" || sessionEntry?.chatType === "channel";
+  const isMainSession =
+    !isGroupSession && sessionKey === normalizeMainKey(sessionCfg?.mainKey);
   const queuedSystemPrompt = await buildQueuedSystemPrompt({
     cfg,
     sessionKey,
@@ -341,7 +366,10 @@ export async function runPreparedReply(
   if (queuedSystemPrompt) {
     extraSystemPromptParts.push(queuedSystemPrompt);
   }
-  prefixedBodyBase = appendUntrustedContext(prefixedBodyBase, sessionCtx.UntrustedContext);
+  prefixedBodyBase = appendUntrustedContext(
+    prefixedBodyBase,
+    sessionCtx.UntrustedContext,
+  );
   const threadStarterBody = ctx.ThreadStarterBody?.trim();
   const threadHistoryBody = ctx.ThreadHistoryBody?.trim();
   const threadContextNote = threadHistoryBody
@@ -363,18 +391,26 @@ export async function runPreparedReply(
   sessionEntry = skillResult.sessionEntry ?? sessionEntry;
   currentSystemSent = skillResult.systemSent;
   const skillsSnapshot = skillResult.skillsSnapshot;
-  const prefixedBody = [threadContextNote, prefixedBodyBase].filter(Boolean).join("\n\n");
+  const prefixedBody = [threadContextNote, prefixedBodyBase]
+    .filter(Boolean)
+    .join("\n\n");
   const mediaNote = buildInboundMediaNote(ctx);
   const mediaReplyHint = mediaNote
     ? "To send an image back, prefer the message tool (media/path/filePath). If you must inline, use MEDIA:https://example.com/image.jpg (spaces ok, quote if needed) or a safe relative path like MEDIA:./image.jpg. Avoid absolute paths (MEDIA:/...) and ~ paths — they are blocked for security. Keep caption in the text body."
     : undefined;
   let prefixedCommandBody = mediaNote
-    ? [mediaNote, mediaReplyHint, prefixedBody ?? ""].filter(Boolean).join("\n").trim()
+    ? [mediaNote, mediaReplyHint, prefixedBody ?? ""]
+        .filter(Boolean)
+        .join("\n")
+        .trim()
     : prefixedBody;
   if (!resolvedThinkLevel && prefixedCommandBody) {
     const parts = prefixedCommandBody.split(/\s+/);
     const maybeLevel = normalizeThinkLevel(parts[0]);
-    if (maybeLevel && (maybeLevel !== "xhigh" || supportsXHighThinking(provider, model))) {
+    if (
+      maybeLevel &&
+      (maybeLevel !== "xhigh" || supportsXHighThinking(provider, model))
+    ) {
       resolvedThinkLevel = maybeLevel;
       prefixedCommandBody = parts.slice(1).join(" ").trim();
     }
@@ -382,8 +418,12 @@ export async function runPreparedReply(
   if (!resolvedThinkLevel) {
     resolvedThinkLevel = await modelState.resolveDefaultThinkingLevel();
   }
-  if (resolvedThinkLevel === "xhigh" && !supportsXHighThinking(provider, model)) {
-    const explicitThink = directives.hasThinkDirective && directives.thinkLevel !== undefined;
+  if (
+    resolvedThinkLevel === "xhigh" &&
+    !supportsXHighThinking(provider, model)
+  ) {
+    const explicitThink =
+      directives.hasThinkDirective && directives.thinkLevel !== undefined;
     if (explicitThink) {
       typing.cleanup();
       return {
@@ -391,7 +431,12 @@ export async function runPreparedReply(
       };
     }
     resolvedThinkLevel = "high";
-    if (sessionEntry && sessionStore && sessionKey && sessionEntry.thinkingLevel === "xhigh") {
+    if (
+      sessionEntry &&
+      sessionStore &&
+      sessionKey &&
+      sessionEntry.thinkingLevel === "xhigh"
+    ) {
       sessionEntry.thinkingLevel = "high";
       sessionEntry.updatedAt = Date.now();
       sessionStore[sessionKey] = sessionEntry;
@@ -422,9 +467,14 @@ export async function runPreparedReply(
     sessionEntry,
     resolveSessionFilePathOptions({ agentId, storePath }),
   );
-  const queueBodyBase = [threadContextNote, effectiveBaseBody].filter(Boolean).join("\n\n");
+  const queueBodyBase = [threadContextNote, effectiveBaseBody]
+    .filter(Boolean)
+    .join("\n\n");
   const queuedBody = mediaNote
-    ? [mediaNote, mediaReplyHint, queueBodyBase].filter(Boolean).join("\n").trim()
+    ? [mediaNote, mediaReplyHint, queueBodyBase]
+        .filter(Boolean)
+        .join("\n")
+        .trim()
     : queueBodyBase;
   const resolvedQueue = resolveQueueSettings({
     cfg,
@@ -433,17 +483,22 @@ export async function runPreparedReply(
     inlineMode: perMessageQueueMode,
     inlineOptions: perMessageQueueOptions,
   });
-  const sessionLaneKey = resolveEmbeddedSessionLane(sessionKey ?? sessionIdFinal);
+  const sessionLaneKey = resolveEmbeddedSessionLane(
+    sessionKey ?? sessionIdFinal,
+  );
   const laneSize = getQueueSize(sessionLaneKey);
   if (resolvedQueue.mode === "interrupt" && laneSize > 0) {
     const cleared = clearCommandLane(sessionLaneKey);
     const aborted = abortEmbeddedPiRun(sessionIdFinal);
-    logVerbose(`Interrupting ${sessionLaneKey} (cleared ${cleared}, aborted=${aborted})`);
+    logVerbose(
+      `Interrupting ${sessionLaneKey} (cleared ${cleared}, aborted=${aborted})`,
+    );
   }
   const queueKey = sessionKey ?? sessionIdFinal;
   const isActive = isEmbeddedPiRunActive(sessionIdFinal);
   const isStreaming = isEmbeddedPiRunStreaming(sessionIdFinal);
-  const shouldSteer = resolvedQueue.mode === "steer" || resolvedQueue.mode === "steer-backlog";
+  const shouldSteer =
+    resolvedQueue.mode === "steer" || resolvedQueue.mode === "steer-backlog";
   const shouldFollowup =
     resolvedQueue.mode === "followup" ||
     resolvedQueue.mode === "collect" ||
@@ -476,12 +531,14 @@ export async function runPreparedReply(
       sessionId: sessionIdFinal,
       sessionKey,
       messageProvider: resolveOriginMessageProvider({
-        originatingChannel: ctx.OriginatingChannel ?? sessionCtx.OriginatingChannel,
+        originatingChannel:
+          ctx.OriginatingChannel ?? sessionCtx.OriginatingChannel,
         provider: ctx.Surface ?? ctx.Provider ?? sessionCtx.Provider,
       }),
       agentAccountId: sessionCtx.AccountId,
       groupId: resolveGroupSessionKey(sessionCtx)?.id ?? undefined,
-      groupChannel: sessionCtx.GroupChannel?.trim() ?? sessionCtx.GroupSubject?.trim(),
+      groupChannel:
+        sessionCtx.GroupChannel?.trim() ?? sessionCtx.GroupSubject?.trim(),
       groupSpace: sessionCtx.GroupSpace?.trim() ?? undefined,
       senderId: sessionCtx.SenderId?.trim() || undefined,
       senderName: sessionCtx.SenderName?.trim() || undefined,
@@ -508,7 +565,8 @@ export async function runPreparedReply(
       },
       timeoutMs,
       blockReplyBreak: resolvedBlockStreamingBreak,
-      ownerNumbers: command.ownerList.length > 0 ? command.ownerList : undefined,
+      ownerNumbers:
+        command.ownerList.length > 0 ? command.ownerList : undefined,
       extraSystemPrompt: extraSystemPromptParts.join("\n\n") || undefined,
       ...(isReasoningTagProvider(provider) ? { enforceFinalTag: true } : {}),
     },

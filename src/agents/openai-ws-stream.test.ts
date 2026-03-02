@@ -26,7 +26,8 @@ import {
 // We mock the entire openai-ws-connection module so no real WebSocket is opened.
 const { MockManager } = vi.hoisted(() => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const { EventEmitter } = require("node:events") as typeof import("node:events");
+  const { EventEmitter } =
+    require("node:events") as typeof import("node:events");
   type AnyFn = (...args: unknown[]) => void;
 
   // Shared mutable flag so inner class can see it
@@ -70,10 +71,17 @@ const { MockManager } = vi.hoisted(() => {
         throw new Error("Mock send failure");
       }
       this.sentEvents.push(event);
-      const maybeEvent = event as { type?: string; generate?: boolean; model?: string } | null;
+      const maybeEvent = event as {
+        type?: string;
+        generate?: boolean;
+        model?: string;
+      } | null;
       // Auto-complete warm-up events so warm-up-enabled tests don't hang waiting
       // for the warm-up terminal event.
-      if (maybeEvent?.type === "response.create" && maybeEvent.generate === false) {
+      if (
+        maybeEvent?.type === "response.create" &&
+        maybeEvent.generate === false
+      ) {
         queueMicrotask(() => {
           this.simulateEvent({
             type: "response.completed",
@@ -83,7 +91,11 @@ const { MockManager } = vi.hoisted(() => {
       }
     }
 
-    warmUp(params: { model: string; tools?: unknown[]; instructions?: string }): void {
+    warmUp(params: {
+      model: string;
+      tools?: unknown[];
+      instructions?: string;
+    }): void {
       this.send({
         type: "response.create",
         generate: false,
@@ -169,7 +181,8 @@ const { MockManager } = vi.hoisted(() => {
 });
 
 vi.mock("./openai-ws-connection.js", async (importOriginal) => {
-  const original = await importOriginal<typeof import("./openai-ws-connection.js")>();
+  const original =
+    await importOriginal<typeof import("./openai-ws-connection.js")>();
   return {
     ...original,
     OpenAIWebSocketManager: MockManager,
@@ -246,14 +259,23 @@ function userMsg(text: string): FakeMessage {
 
 function assistantMsg(
   textBlocks: string[],
-  toolCalls: Array<{ id: string; name: string; args: Record<string, unknown> }> = [],
+  toolCalls: Array<{
+    id: string;
+    name: string;
+    args: Record<string, unknown>;
+  }> = [],
 ): FakeMessage {
   const content: unknown[] = [];
   for (const t of textBlocks) {
     content.push({ type: "text", text: t });
   }
   for (const tc of toolCalls) {
-    content.push({ type: "toolCall", id: tc.id, name: tc.name, arguments: tc.args });
+    content.push({
+      type: "toolCall",
+      id: tc.id,
+      name: tc.name,
+      arguments: tc.args,
+    });
   }
   return {
     role: "assistant",
@@ -353,7 +375,9 @@ describe("convertTools", () => {
         parameters: { type: "object", properties: { cmd: { type: "string" } } },
       },
     ];
-    const result = convertTools(tools as unknown as Parameters<typeof convertTools>[0]);
+    const result = convertTools(
+      tools as unknown as Parameters<typeof convertTools>[0],
+    );
     expect(result).toHaveLength(1);
     expect(result[0]).toMatchObject({
       type: "function",
@@ -380,15 +404,23 @@ describe("convertMessagesToInputItems", () => {
       typeof convertMessagesToInputItems
     >[0]);
     expect(items).toHaveLength(1);
-    expect(items[0]).toMatchObject({ type: "message", role: "user", content: "Hello!" });
+    expect(items[0]).toMatchObject({
+      type: "message",
+      role: "user",
+      content: "Hello!",
+    });
   });
 
   it("converts an assistant text-only message", () => {
-    const items = convertMessagesToInputItems([assistantMsg(["Hi there."])] as Parameters<
-      typeof convertMessagesToInputItems
-    >[0]);
+    const items = convertMessagesToInputItems([
+      assistantMsg(["Hi there."]),
+    ] as Parameters<typeof convertMessagesToInputItems>[0]);
     expect(items).toHaveLength(1);
-    expect(items[0]).toMatchObject({ type: "message", role: "assistant", content: "Hi there." });
+    expect(items[0]).toMatchObject({
+      type: "message",
+      role: "assistant",
+      content: "Hi there.",
+    });
   });
 
   it("converts an assistant message with a tool call", () => {
@@ -413,9 +445,9 @@ describe("convertMessagesToInputItems", () => {
   });
 
   it("converts a tool result message", () => {
-    const items = convertMessagesToInputItems([toolResultMsg("call_1", "file.txt")] as Parameters<
-      typeof convertMessagesToInputItems
-    >[0]);
+    const items = convertMessagesToInputItems([
+      toolResultMsg("call_1", "file.txt"),
+    ] as Parameters<typeof convertMessagesToInputItems>[0]);
     expect(items).toHaveLength(1);
     expect(items[0]).toMatchObject({
       type: "function_call_output",
@@ -446,7 +478,10 @@ describe("convertMessagesToInputItems", () => {
   });
 
   it("handles assistant messages with only tool calls (no text)", () => {
-    const msg = assistantMsg([], [{ id: "call_2", name: "read", args: { path: "/etc/hosts" } }]);
+    const msg = assistantMsg(
+      [],
+      [{ id: "call_2", name: "read", args: { path: "/etc/hosts" } }],
+    );
     const items = convertMessagesToInputItems([msg] as Parameters<
       typeof convertMessagesToInputItems
     >[0]);
@@ -472,7 +507,9 @@ describe("convertMessagesToInputItems", () => {
       typeof convertMessagesToInputItems
     >[0]);
     expect(items).toHaveLength(1);
-    expect((items[0] as { content?: unknown }).content).toBe("Here is my answer.");
+    expect((items[0] as { content?: unknown }).content).toBe(
+      "Here is my answer.",
+    );
   });
 
   it("returns empty array for empty messages", () => {
@@ -483,7 +520,11 @@ describe("convertMessagesToInputItems", () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("buildAssistantMessageFromResponse", () => {
-  const modelInfo = { api: "openai-responses", provider: "openai", id: "gpt-5.2" };
+  const modelInfo = {
+    api: "openai-responses",
+    provider: "openai",
+    id: "gpt-5.2",
+  };
 
   it("extracts text content from a message output item", () => {
     const response = makeResponseObject("resp_1", "Hello from assistant");
@@ -570,7 +611,11 @@ describe("createOpenAIWebSocketStreamFn", () => {
 
   const contextStub = {
     systemPrompt: "You are helpful.",
-    messages: [userMsg("Hello!") as Parameters<typeof convertMessagesToInputItems>[0][number]],
+    messages: [
+      userMsg("Hello!") as Parameters<
+        typeof convertMessagesToInputItems
+      >[0][number],
+    ],
     tools: [],
   };
 
@@ -642,7 +687,11 @@ describe("createOpenAIWebSocketStreamFn", () => {
 
     const manager = MockManager.lastInstance!;
     expect(manager.sentEvents).toHaveLength(1);
-    const sent = manager.sentEvents[0] as { type: string; model: string; input: unknown[] };
+    const sent = manager.sentEvents[0] as {
+      type: string;
+      model: string;
+      input: unknown[];
+    };
     expect(sent.type).toBe("response.create");
     expect(sent.model).toBe("gpt-5.2");
     expect(Array.isArray(sent.input)).toBe(true);
@@ -671,7 +720,9 @@ describe("createOpenAIWebSocketStreamFn", () => {
 
     await done;
 
-    const doneEvent = events.find((e) => (e as { type?: string }).type === "done") as
+    const doneEvent = events.find(
+      (e) => (e as { type?: string }).type === "done",
+    ) as
       | {
           type: string;
           reason: string;
@@ -688,7 +739,10 @@ describe("createOpenAIWebSocketStreamFn", () => {
     MockManager.globalConnectShouldFail = true;
 
     try {
-      const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-fallback");
+      const streamFn = createOpenAIWebSocketStreamFn(
+        "sk-test",
+        "sess-fallback",
+      );
       const stream = streamFn(
         modelStub as Parameters<typeof streamFn>[0],
         contextStub as Parameters<typeof streamFn>[1],
@@ -704,7 +758,9 @@ describe("createOpenAIWebSocketStreamFn", () => {
       expect(streamSimpleCalls.length).toBeGreaterThanOrEqual(1);
 
       // manager.close() must be called to cancel background reconnect attempts
-      expect(MockManager.lastInstance!.closeCallCount).toBeGreaterThanOrEqual(1);
+      expect(MockManager.lastInstance!.closeCallCount).toBeGreaterThanOrEqual(
+        1,
+      );
     } finally {
       MockManager.globalConnectShouldFail = false;
     }
@@ -717,7 +773,9 @@ describe("createOpenAIWebSocketStreamFn", () => {
     // ── Turn 1: full context ─────────────────────────────────────────────
     const ctx1 = {
       systemPrompt: "You are helpful.",
-      messages: [userMsg("Run ls")] as Parameters<typeof convertMessagesToInputItems>[0],
+      messages: [userMsg("Run ls")] as Parameters<
+        typeof convertMessagesToInputItems
+      >[0],
       tools: [],
     };
 
@@ -739,7 +797,10 @@ describe("createOpenAIWebSocketStreamFn", () => {
     // Server responds with a tool call
     const turn1Response = makeResponseObject("resp_turn1", undefined, "exec");
     manager.setPreviousResponseId("resp_turn1");
-    manager.simulateEvent({ type: "response.completed", response: turn1Response });
+    manager.simulateEvent({
+      type: "response.completed",
+      response: turn1Response,
+    });
     await done1;
 
     // ── Turn 2: incremental (tool results only) ───────────────────────────
@@ -789,7 +850,9 @@ describe("createOpenAIWebSocketStreamFn", () => {
     const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-tools");
     const ctx = {
       systemPrompt: "Be concise.",
-      messages: [userMsg("Hello")] as Parameters<typeof convertMessagesToInputItems>[0],
+      messages: [userMsg("Hello")] as Parameters<
+        typeof convertMessagesToInputItems
+      >[0],
       tools: [{ name: "exec", description: "run", parameters: {} }],
     };
 
@@ -890,7 +953,10 @@ describe("createOpenAIWebSocketStreamFn", () => {
         }
       });
     });
-    const sent = MockManager.lastInstance!.sentEvents[0] as Record<string, unknown>;
+    const sent = MockManager.lastInstance!.sentEvents[0] as Record<
+      string,
+      unknown
+    >;
     expect(sent.type).toBe("response.create");
     expect(sent.temperature).toBe(0.3);
     expect(sent.max_output_tokens).toBe(256);
@@ -921,7 +987,10 @@ describe("createOpenAIWebSocketStreamFn", () => {
         }
       });
     });
-    const sent = MockManager.lastInstance!.sentEvents[0] as Record<string, unknown>;
+    const sent = MockManager.lastInstance!.sentEvents[0] as Record<
+      string,
+      unknown
+    >;
     expect(sent.type).toBe("response.create");
     expect(sent.reasoning).toEqual({ effort: "high", summary: "auto" });
   });
@@ -951,7 +1020,10 @@ describe("createOpenAIWebSocketStreamFn", () => {
         }
       });
     });
-    const sent = MockManager.lastInstance!.sentEvents[0] as Record<string, unknown>;
+    const sent = MockManager.lastInstance!.sentEvents[0] as Record<
+      string,
+      unknown
+    >;
     expect(sent.type).toBe("response.create");
     expect(sent.top_p).toBe(0.9);
     expect(sent.tool_choice).toBe("auto");
@@ -977,7 +1049,10 @@ describe("createOpenAIWebSocketStreamFn", () => {
           }
           // Should have gotten an error event, not hung forever
           const hasError = events.some(
-            (e) => typeof e === "object" && e !== null && (e as { type: string }).type === "error",
+            (e) =>
+              typeof e === "object" &&
+              e !== null &&
+              (e as { type: string }).type === "error",
           );
           expect(hasError).toBe(true);
           resolve();
@@ -990,7 +1065,10 @@ describe("createOpenAIWebSocketStreamFn", () => {
   });
 
   it("sends warm-up event before first request when openaiWsWarmup=true", async () => {
-    const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-warmup-enabled");
+    const streamFn = createOpenAIWebSocketStreamFn(
+      "sk-test",
+      "sess-warmup-enabled",
+    );
     const stream = streamFn(
       modelStub as Parameters<typeof streamFn>[0],
       contextStub as Parameters<typeof streamFn>[1],
@@ -1013,7 +1091,9 @@ describe("createOpenAIWebSocketStreamFn", () => {
         }
       });
     });
-    const sent = MockManager.lastInstance!.sentEvents as Array<Record<string, unknown>>;
+    const sent = MockManager.lastInstance!.sentEvents as Array<
+      Record<string, unknown>
+    >;
     expect(sent).toHaveLength(2);
     expect(sent[0]?.type).toBe("response.create");
     expect(sent[0]?.generate).toBe(false);
@@ -1021,7 +1101,10 @@ describe("createOpenAIWebSocketStreamFn", () => {
   });
 
   it("skips warm-up when openaiWsWarmup=false", async () => {
-    const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-warmup-disabled");
+    const streamFn = createOpenAIWebSocketStreamFn(
+      "sk-test",
+      "sess-warmup-disabled",
+    );
     const stream = streamFn(
       modelStub as Parameters<typeof streamFn>[0],
       contextStub as Parameters<typeof streamFn>[1],
@@ -1044,7 +1127,9 @@ describe("createOpenAIWebSocketStreamFn", () => {
         }
       });
     });
-    const sent = MockManager.lastInstance!.sentEvents as Array<Record<string, unknown>>;
+    const sent = MockManager.lastInstance!.sentEvents as Array<
+      Record<string, unknown>
+    >;
     expect(sent).toHaveLength(1);
     expect(sent[0]?.type).toBe("response.create");
     expect(sent[0]?.generate).toBeUndefined();
@@ -1082,7 +1167,11 @@ describe("releaseWsSession / hasWsSession", () => {
       } as Parameters<typeof streamFn>[0],
       {
         systemPrompt: "test",
-        messages: [userMsg("Hi") as Parameters<typeof convertMessagesToInputItems>[0][number]],
+        messages: [
+          userMsg("Hi") as Parameters<
+            typeof convertMessagesToInputItems
+          >[0][number],
+        ],
         tools: [],
       } as Parameters<typeof streamFn>[1],
     );
@@ -1118,7 +1207,11 @@ describe("releaseWsSession / hasWsSession", () => {
       } as Parameters<typeof streamFn>[0],
       {
         systemPrompt: "test",
-        messages: [userMsg("Hi") as Parameters<typeof convertMessagesToInputItems>[0][number]],
+        messages: [
+          userMsg("Hi") as Parameters<
+            typeof convertMessagesToInputItems
+          >[0][number],
+        ],
         tools: [],
       } as Parameters<typeof streamFn>[1],
     );

@@ -34,7 +34,11 @@ export function formatErrorMessage(err: unknown): string {
     formatted = err.message || err.name || "Error";
   } else if (typeof err === "string") {
     formatted = err;
-  } else if (typeof err === "number" || typeof err === "boolean" || typeof err === "bigint") {
+  } else if (
+    typeof err === "number" ||
+    typeof err === "boolean" ||
+    typeof err === "bigint"
+  ) {
     formatted = String(err);
   } else {
     try {

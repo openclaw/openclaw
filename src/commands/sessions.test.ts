@@ -99,7 +99,9 @@ describe("sessionsCommand", () => {
       }>;
     }>(sessionsCommand, store);
     const main = payload.sessions?.find((row) => row.key === "main");
-    const group = payload.sessions?.find((row) => row.key === "discord:group:demo");
+    const group = payload.sessions?.find(
+      (row) => row.key === "discord:group:demo",
+    );
     expect(main?.totalTokens).toBe(2000);
     expect(main?.totalTokensFresh).toBe(true);
     expect(group?.totalTokens).toBeNull();
@@ -143,7 +145,9 @@ describe("sessionsCommand", () => {
     );
     const { runtime, errors } = makeRuntime();
 
-    await expect(sessionsCommand({ store, active: "0" }, runtime)).rejects.toThrow("exit 1");
+    await expect(
+      sessionsCommand({ store, active: "0" }, runtime),
+    ).rejects.toThrow("exit 1");
     expect(errors[0]).toContain("--active must be a positive integer");
 
     fs.rmSync(store);

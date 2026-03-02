@@ -47,9 +47,24 @@ const TAG_OVERRIDES: Record<string, ConfigTag[]> = {
     "network",
     "advanced",
   ],
-  "gateway.controlUi.dangerouslyDisableDeviceAuth": ["security", "access", "network", "advanced"],
-  "gateway.controlUi.allowInsecureAuth": ["security", "access", "network", "advanced"],
-  "tools.exec.applyPatch.workspaceOnly": ["tools", "security", "access", "advanced"],
+  "gateway.controlUi.dangerouslyDisableDeviceAuth": [
+    "security",
+    "access",
+    "network",
+    "advanced",
+  ],
+  "gateway.controlUi.allowInsecureAuth": [
+    "security",
+    "access",
+    "network",
+    "advanced",
+  ],
+  "tools.exec.applyPatch.workspaceOnly": [
+    "tools",
+    "security",
+    "access",
+    "advanced",
+  ],
 };
 
 const PREFIX_RULES: Array<{ prefix: string; tags: ConfigTag[] }> = [
@@ -69,20 +84,38 @@ const PREFIX_RULES: Array<{ prefix: string; tags: ConfigTag[] }> = [
 ];
 
 const KEYWORD_RULES: Array<{ pattern: RegExp; tags: ConfigTag[] }> = [
-  { pattern: /(token|password|secret|api[_.-]?key|tlsfingerprint)/i, tags: ["security", "auth"] },
+  {
+    pattern: /(token|password|secret|api[_.-]?key|tlsfingerprint)/i,
+    tags: ["security", "auth"],
+  },
   { pattern: /(allow|deny|owner|permission|policy|access)/i, tags: ["access"] },
-  { pattern: /(timeout|debounce|interval|concurrency|max|limit|cachettl)/i, tags: ["performance"] },
-  { pattern: /(retry|backoff|fallback|circuit|health|reload|probe)/i, tags: ["reliability"] },
+  {
+    pattern: /(timeout|debounce|interval|concurrency|max|limit|cachettl)/i,
+    tags: ["performance"],
+  },
+  {
+    pattern: /(retry|backoff|fallback|circuit|health|reload|probe)/i,
+    tags: ["reliability"],
+  },
   { pattern: /(path|dir|file|store|db|session|cache)/i, tags: ["storage"] },
-  { pattern: /(telemetry|trace|metrics|logs|diagnostic)/i, tags: ["observability"] },
-  { pattern: /(experimental|dangerously|insecure)/i, tags: ["advanced", "security"] },
+  {
+    pattern: /(telemetry|trace|metrics|logs|diagnostic)/i,
+    tags: ["observability"],
+  },
+  {
+    pattern: /(experimental|dangerously|insecure)/i,
+    tags: ["advanced", "security"],
+  },
   { pattern: /(privacy|redact|sanitize|anonym|pseudonym)/i, tags: ["privacy"] },
 ];
 
 const MODEL_PATH_PATTERN = /(^|\.)(model|models|modelid|imagemodel)(\.|$)/i;
-const MEDIA_PATH_PATTERN = /(tools\.media\.|^audio\.|^talk\.|image|video|stt|tts)/i;
-const AUTOMATION_PATH_PATTERN = /(cron|heartbeat|schedule|onstart|watchdebounce)/i;
-const AUTH_KEYWORD_PATTERN = /(token|password|secret|api[_.-]?key|credential|oauth)/i;
+const MEDIA_PATH_PATTERN =
+  /(tools\.media\.|^audio\.|^talk\.|image|video|stt|tts)/i;
+const AUTOMATION_PATH_PATTERN =
+  /(cron|heartbeat|schedule|onstart|watchdebounce)/i;
+const AUTH_KEYWORD_PATTERN =
+  /(token|password|secret|api[_.-]?key|credential|oauth)/i;
 
 function normalizeTag(tag: string): ConfigTag | null {
   const normalized = tag.trim().toLowerCase() as ConfigTag;
@@ -101,7 +134,9 @@ function normalizeTags(tags: ReadonlyArray<string>): ConfigTag[] {
 }
 
 function patternToRegExp(pattern: string): RegExp {
-  const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, "[^.]+");
+  const escaped = pattern
+    .replace(/[.+?^${}()|[\]\\]/g, "\\$&")
+    .replace(/\*/g, "[^.]+");
   return new RegExp(`^${escaped}$`, "i");
 }
 
@@ -127,7 +162,10 @@ function addTags(set: Set<ConfigTag>, tags: ReadonlyArray<ConfigTag>): void {
   }
 }
 
-export function deriveTagsForPath(path: string, hint?: ConfigUiHint): ConfigTag[] {
+export function deriveTagsForPath(
+  path: string,
+  hint?: ConfigUiHint,
+): ConfigTag[] {
   const lowerPath = path.toLowerCase();
   const override = resolveOverride(path);
   if (override) {

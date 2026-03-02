@@ -14,9 +14,16 @@ import {
   type SessionsPatchResult,
   type SessionsPatchParams,
 } from "../gateway/protocol/index.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../utils/message-channel.js";
 import { VERSION } from "../version.js";
-import type { ResponseUsageMode, SessionInfo, SessionScope } from "./tui-types.js";
+import type {
+  ResponseUsageMode,
+  SessionInfo,
+  SessionScope,
+} from "./tui-types.js";
 
 export type GatewayConnectionOptions = {
   url?: string;
@@ -184,10 +191,13 @@ export class GatewayChatClient {
   }
 
   async abortChat(opts: { sessionKey: string; runId: string }) {
-    return await this.client.request<{ ok: boolean; aborted: boolean }>("chat.abort", {
-      sessionKey: opts.sessionKey,
-      runId: opts.runId,
-    });
+    return await this.client.request<{ ok: boolean; aborted: boolean }>(
+      "chat.abort",
+      {
+        sessionKey: opts.sessionKey,
+        runId: opts.runId,
+      },
+    );
   }
 
   async loadHistory(opts: { sessionKey: string; limit?: number }) {
@@ -214,7 +224,10 @@ export class GatewayChatClient {
   }
 
   async patchSession(opts: SessionsPatchParams): Promise<SessionsPatchResult> {
-    return await this.client.request<SessionsPatchResult>("sessions.patch", opts);
+    return await this.client.request<SessionsPatchResult>(
+      "sessions.patch",
+      opts,
+    );
   }
 
   async resetSession(key: string, reason?: "new" | "reset") {
@@ -229,7 +242,9 @@ export class GatewayChatClient {
   }
 
   async listModels(): Promise<GatewayModelChoice[]> {
-    const res = await this.client.request<{ models?: GatewayModelChoice[] }>("models.list");
+    const res = await this.client.request<{ models?: GatewayModelChoice[] }>(
+      "models.list",
+    );
     return Array.isArray(res?.models) ? res.models : [];
   }
 }
@@ -241,8 +256,13 @@ export function resolveGatewayConnection(opts: GatewayConnectionOptions) {
   const authToken = config.gateway?.auth?.token;
 
   const urlOverride =
-    typeof opts.url === "string" && opts.url.trim().length > 0 ? opts.url.trim() : undefined;
-  const explicitAuth = resolveExplicitGatewayAuth({ token: opts.token, password: opts.password });
+    typeof opts.url === "string" && opts.url.trim().length > 0
+      ? opts.url.trim()
+      : undefined;
+  const explicitAuth = resolveExplicitGatewayAuth({
+    token: opts.token,
+    password: opts.password,
+  });
   ensureExplicitGatewayAuth({
     urlOverride,
     auth: explicitAuth,
@@ -270,7 +290,8 @@ export function resolveGatewayConnection(opts: GatewayConnectionOptions) {
     explicitAuth.password ||
     (!urlOverride
       ? process.env.OPENCLAW_GATEWAY_PASSWORD?.trim() ||
-        (typeof remote?.password === "string" && remote.password.trim().length > 0
+        (typeof remote?.password === "string" &&
+        remote.password.trim().length > 0
           ? remote.password.trim()
           : undefined)
       : undefined);

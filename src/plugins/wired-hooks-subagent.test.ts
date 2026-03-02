@@ -20,8 +20,13 @@ describe("subagent hook runner methods", () => {
   };
 
   it("runSubagentSpawning invokes registered subagent_spawning hooks", async () => {
-    const handler = vi.fn(async () => ({ status: "ok", threadBindingReady: true as const }));
-    const registry = createMockPluginRegistry([{ hookName: "subagent_spawning", handler }]);
+    const handler = vi.fn(async () => ({
+      status: "ok",
+      threadBindingReady: true as const,
+    }));
+    const registry = createMockPluginRegistry([
+      { hookName: "subagent_spawning", handler },
+    ]);
     const runner = createHookRunner(registry);
     const event = {
       childSessionKey: "agent:main:subagent:child",
@@ -44,7 +49,9 @@ describe("subagent hook runner methods", () => {
 
   it("runSubagentSpawned invokes registered subagent_spawned hooks", async () => {
     const handler = vi.fn();
-    const registry = createMockPluginRegistry([{ hookName: "subagent_spawned", handler }]);
+    const registry = createMockPluginRegistry([
+      { hookName: "subagent_spawned", handler },
+    ]);
     const runner = createHookRunner(registry);
     const event = {
       runId: "run-1",
@@ -70,7 +77,9 @@ describe("subagent hook runner methods", () => {
         threadId: "777",
       },
     }));
-    const registry = createMockPluginRegistry([{ hookName: "subagent_delivery_target", handler }]);
+    const registry = createMockPluginRegistry([
+      { hookName: "subagent_delivery_target", handler },
+    ]);
     const runner = createHookRunner(registry);
     const event = {
       childSessionKey: "agent:main:subagent:child",
@@ -81,7 +90,10 @@ describe("subagent hook runner methods", () => {
       expectsCompletionMessage: true,
     };
 
-    const result = await runner.runSubagentDeliveryTarget(event, baseSubagentCtx);
+    const result = await runner.runSubagentDeliveryTarget(
+      event,
+      baseSubagentCtx,
+    );
 
     expect(handler).toHaveBeenCalledWith(event, baseSubagentCtx);
     expect(result).toEqual({
@@ -113,7 +125,9 @@ describe("subagent hook runner methods", () => {
 
   it("runSubagentEnded invokes registered subagent_ended hooks", async () => {
     const handler = vi.fn();
-    const registry = createMockPluginRegistry([{ hookName: "subagent_ended", handler }]);
+    const registry = createMockPluginRegistry([
+      { hookName: "subagent_ended", handler },
+    ]);
     const runner = createHookRunner(registry);
     const event = {
       targetSessionKey: "agent:main:subagent:child",

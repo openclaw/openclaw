@@ -11,7 +11,10 @@ export function formatConfigPath(path: string = CONFIG_PATH): string {
   return displayPath(path);
 }
 
-export function logConfigUpdated(runtime: RuntimeEnv, opts: LogConfigUpdatedOptions = {}): void {
+export function logConfigUpdated(
+  runtime: RuntimeEnv,
+  opts: LogConfigUpdatedOptions = {},
+): void {
   const path = formatConfigPath(opts.path ?? CONFIG_PATH);
   const suffix = opts.suffix ? ` ${opts.suffix}` : "";
   runtime.log(`Updated ${path}${suffix}`);

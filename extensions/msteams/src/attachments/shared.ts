@@ -76,7 +76,12 @@ export function resolveRequestUrl(input: RequestInfo | URL): string {
   if (input instanceof URL) {
     return input.toString();
   }
-  if (typeof input === "object" && input && "url" in input && typeof input.url === "string") {
+  if (
+    typeof input === "object" &&
+    input &&
+    "url" in input &&
+    typeof input.url === "string"
+  ) {
     return input.url;
   }
   return String(input);
@@ -100,7 +105,9 @@ export function inferPlaceholder(params: {
   const fileType = params.fileType?.toLowerCase() ?? "";
 
   const looksLikeImage =
-    mime.startsWith("image/") || IMAGE_EXT_RE.test(name) || IMAGE_EXT_RE.test(`x.${fileType}`);
+    mime.startsWith("image/") ||
+    IMAGE_EXT_RE.test(name) ||
+    IMAGE_EXT_RE.test(`x.${fileType}`);
 
   return looksLikeImage ? "<media:image>" : "<media:document>";
 }
@@ -119,11 +126,13 @@ export function isLikelyImageAttachment(att: MSTeamsAttachmentLike): boolean {
     contentType === "application/vnd.microsoft.teams.file.download.info" &&
     isRecord(att.content)
   ) {
-    const fileType = typeof att.content.fileType === "string" ? att.content.fileType : "";
+    const fileType =
+      typeof att.content.fileType === "string" ? att.content.fileType : "";
     if (fileType && IMAGE_EXT_RE.test(`x.${fileType}`)) {
       return true;
     }
-    const fileName = typeof att.content.fileName === "string" ? att.content.fileName : "";
+    const fileName =
+      typeof att.content.fileName === "string" ? att.content.fileName : "";
     if (fileName && IMAGE_EXT_RE.test(fileName)) {
       return true;
     }
@@ -161,7 +170,9 @@ function isHtmlAttachment(att: MSTeamsAttachmentLike): boolean {
   return contentType.startsWith("text/html");
 }
 
-export function extractHtmlFromAttachment(att: MSTeamsAttachmentLike): string | undefined {
+export function extractHtmlFromAttachment(
+  att: MSTeamsAttachmentLike,
+): string | undefined {
   if (!isHtmlAttachment(att)) {
     return undefined;
   }
@@ -261,13 +272,18 @@ export function resolveAllowedHosts(input?: string[]): string[] {
 }
 
 export function resolveAuthAllowedHosts(input?: string[]): string[] {
-  return normalizeHostnameSuffixAllowlist(input, DEFAULT_MEDIA_AUTH_HOST_ALLOWLIST);
+  return normalizeHostnameSuffixAllowlist(
+    input,
+    DEFAULT_MEDIA_AUTH_HOST_ALLOWLIST,
+  );
 }
 
 export function isUrlAllowed(url: string, allowlist: string[]): boolean {
   return isHttpsUrlAllowedByHostnameSuffixAllowlist(url, allowlist);
 }
 
-export function resolveMediaSsrfPolicy(allowHosts: string[]): SsrFPolicy | undefined {
+export function resolveMediaSsrfPolicy(
+  allowHosts: string[],
+): SsrFPolicy | undefined {
   return buildHostnameAllowlistPolicyFromSuffixAllowlist(allowHosts);
 }

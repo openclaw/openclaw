@@ -21,7 +21,9 @@ async function expectLocalAvatarPath(
   expect(resolved.kind).toBe("local");
   if (resolved.kind === "local") {
     const resolvedReal = await fs.realpath(resolved.filePath);
-    expect(path.relative(workspaceReal, resolvedReal)).toBe(expectedRelativePath);
+    expect(path.relative(workspaceReal, resolvedReal)).toBe(
+      expectedRelativePath,
+    );
   }
 }
 
@@ -60,7 +62,11 @@ describe("resolveAgentAvatar", () => {
       },
     };
 
-    await expectLocalAvatarPath(cfg, workspace, path.join("avatars", "main.png"));
+    await expectLocalAvatarPath(
+      cfg,
+      workspace,
+      path.join("avatars", "main.png"),
+    );
   });
 
   it("rejects avatars outside the workspace", async () => {
@@ -107,7 +113,11 @@ describe("resolveAgentAvatar", () => {
       },
     };
 
-    await expectLocalAvatarPath(cfg, workspace, path.join("avatars", "fallback.png"));
+    await expectLocalAvatarPath(
+      cfg,
+      workspace,
+      path.join("avatars", "fallback.png"),
+    );
   });
 
   it("returns missing for non-existent local avatar files", async () => {
@@ -117,7 +127,13 @@ describe("resolveAgentAvatar", () => {
 
     const cfg: OpenClawConfig = {
       agents: {
-        list: [{ id: "main", workspace, identity: { avatar: "avatars/missing.png" } }],
+        list: [
+          {
+            id: "main",
+            workspace,
+            identity: { avatar: "avatars/missing.png" },
+          },
+        ],
       },
     };
 
@@ -137,7 +153,13 @@ describe("resolveAgentAvatar", () => {
 
     const cfg: OpenClawConfig = {
       agents: {
-        list: [{ id: "main", workspace, identity: { avatar: "avatars/too-big.png" } }],
+        list: [
+          {
+            id: "main",
+            workspace,
+            identity: { avatar: "avatars/too-big.png" },
+          },
+        ],
       },
     };
 
@@ -152,7 +174,10 @@ describe("resolveAgentAvatar", () => {
     const cfg: OpenClawConfig = {
       agents: {
         list: [
-          { id: "main", identity: { avatar: "https://example.com/avatar.png" } },
+          {
+            id: "main",
+            identity: { avatar: "https://example.com/avatar.png" },
+          },
           { id: "data", identity: { avatar: "data:image/png;base64,aaaa" } },
         ],
       },

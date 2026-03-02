@@ -1,6 +1,9 @@
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { WizardPrompter } from "../../../wizard/prompts.js";
-import { promptChannelAccessConfig, type ChannelAccessPolicy } from "./channel-access.js";
+import {
+  promptChannelAccessConfig,
+  type ChannelAccessPolicy,
+} from "./channel-access.js";
 
 export async function configureChannelAccessWithAllowlist<TResolved>(params: {
   cfg: OpenClawConfig;
@@ -10,9 +13,18 @@ export async function configureChannelAccessWithAllowlist<TResolved>(params: {
   currentEntries: string[];
   placeholder: string;
   updatePrompt: boolean;
-  setPolicy: (cfg: OpenClawConfig, policy: ChannelAccessPolicy) => OpenClawConfig;
-  resolveAllowlist: (params: { cfg: OpenClawConfig; entries: string[] }) => Promise<TResolved>;
-  applyAllowlist: (params: { cfg: OpenClawConfig; resolved: TResolved }) => OpenClawConfig;
+  setPolicy: (
+    cfg: OpenClawConfig,
+    policy: ChannelAccessPolicy,
+  ) => OpenClawConfig;
+  resolveAllowlist: (params: {
+    cfg: OpenClawConfig;
+    entries: string[];
+  }) => Promise<TResolved>;
+  applyAllowlist: (params: {
+    cfg: OpenClawConfig;
+    resolved: TResolved;
+  }) => OpenClawConfig;
 }): Promise<OpenClawConfig> {
   let next = params.cfg;
   const accessConfig = await promptChannelAccessConfig({

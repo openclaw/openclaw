@@ -10,7 +10,12 @@ describe("noteStartupOptimizationHints", () => {
         NODE_COMPILE_CACHE: "/var/tmp/openclaw-compile-cache",
         OPENCLAW_NO_RESPAWN: "1",
       },
-      { platform: "linux", arch: "arm64", totalMemBytes: 4 * 1024 ** 3, noteFn },
+      {
+        platform: "linux",
+        arch: "arm64",
+        totalMemBytes: 4 * 1024 ** 3,
+        noteFn,
+      },
     );
 
     expect(noteFn).not.toHaveBeenCalled();
@@ -23,7 +28,12 @@ describe("noteStartupOptimizationHints", () => {
       {
         NODE_COMPILE_CACHE: "/tmp/openclaw-compile-cache",
       },
-      { platform: "linux", arch: "arm64", totalMemBytes: 4 * 1024 ** 3, noteFn },
+      {
+        platform: "linux",
+        arch: "arm64",
+        totalMemBytes: 4 * 1024 ** 3,
+        noteFn,
+      },
     );
 
     expect(noteFn).toHaveBeenCalledTimes(1);
@@ -31,7 +41,9 @@ describe("noteStartupOptimizationHints", () => {
     expect(title).toBe("Startup optimization");
     expect(message).toContain("NODE_COMPILE_CACHE points to /tmp");
     expect(message).toContain("OPENCLAW_NO_RESPAWN is not set to 1");
-    expect(message).toContain("export NODE_COMPILE_CACHE=/var/tmp/openclaw-compile-cache");
+    expect(message).toContain(
+      "export NODE_COMPILE_CACHE=/var/tmp/openclaw-compile-cache",
+    );
     expect(message).toContain("export OPENCLAW_NO_RESPAWN=1");
   });
 
@@ -44,7 +56,12 @@ describe("noteStartupOptimizationHints", () => {
         OPENCLAW_NO_RESPAWN: "1",
         NODE_DISABLE_COMPILE_CACHE: "1",
       },
-      { platform: "linux", arch: "arm64", totalMemBytes: 4 * 1024 ** 3, noteFn },
+      {
+        platform: "linux",
+        arch: "arm64",
+        totalMemBytes: 4 * 1024 ** 3,
+        noteFn,
+      },
     );
 
     expect(noteFn).toHaveBeenCalledTimes(1);
@@ -60,7 +77,12 @@ describe("noteStartupOptimizationHints", () => {
       {
         NODE_COMPILE_CACHE: "/tmp/openclaw-compile-cache",
       },
-      { platform: "win32", arch: "arm64", totalMemBytes: 4 * 1024 ** 3, noteFn },
+      {
+        platform: "win32",
+        arch: "arm64",
+        totalMemBytes: 4 * 1024 ** 3,
+        noteFn,
+      },
     );
 
     expect(noteFn).not.toHaveBeenCalled();

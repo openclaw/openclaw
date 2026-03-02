@@ -4,7 +4,9 @@ import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.j
 import type { OpenClawConfig } from "../config/config.js";
 import type { CronJob } from "./types.js";
 
-export async function withTempCronHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
+export async function withTempCronHome<T>(
+  fn: (home: string) => Promise<T>,
+): Promise<T> {
   return withTempHomeBase(fn, { prefix: "openclaw-cron-" });
 }
 

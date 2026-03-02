@@ -1,6 +1,12 @@
 import { startGatewayBonjourAdvertiser } from "../infra/bonjour.js";
-import { pickPrimaryTailnetIPv4, pickPrimaryTailnetIPv6 } from "../infra/tailnet.js";
-import { resolveWideAreaDiscoveryDomain, writeWideAreaGatewayZone } from "../infra/widearea-dns.js";
+import {
+  pickPrimaryTailnetIPv4,
+  pickPrimaryTailnetIPv6,
+} from "../infra/tailnet.js";
+import {
+  resolveWideAreaDiscoveryDomain,
+  writeWideAreaGatewayZone,
+} from "../infra/widearea-dns.js";
 import {
   formatBonjourInstanceName,
   resolveBonjourCliPath,
@@ -33,9 +39,14 @@ export async function startGatewayDiscovery(params: {
   const tailnetDns = needsTailnetDns
     ? await resolveTailnetDnsHint({ enabled: tailscaleEnabled })
     : undefined;
-  const sshPortEnv = mdnsMinimal ? undefined : process.env.OPENCLAW_SSH_PORT?.trim();
+  const sshPortEnv = mdnsMinimal
+    ? undefined
+    : process.env.OPENCLAW_SSH_PORT?.trim();
   const sshPortParsed = sshPortEnv ? Number.parseInt(sshPortEnv, 10) : NaN;
-  const sshPort = Number.isFinite(sshPortParsed) && sshPortParsed > 0 ? sshPortParsed : undefined;
+  const sshPort =
+    Number.isFinite(sshPortParsed) && sshPortParsed > 0
+      ? sshPortParsed
+      : undefined;
   const cliPath = mdnsMinimal ? undefined : resolveBonjourCliPath();
 
   if (bonjourEnabled) {
@@ -91,7 +102,9 @@ export async function startGatewayDiscovery(params: {
           `wide-area DNS-SD ${result.changed ? "updated" : "unchanged"} (${wideAreaDomain} → ${result.zonePath})`,
         );
       } catch (err) {
-        params.logDiscovery.warn(`wide-area discovery update failed: ${String(err)}`);
+        params.logDiscovery.warn(
+          `wide-area discovery update failed: ${String(err)}`,
+        );
       }
     }
   }

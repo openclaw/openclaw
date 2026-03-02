@@ -28,11 +28,15 @@ async function generateCompletionCache(): Promise<boolean> {
   }
 
   const binPath = path.join(root, "openclaw.mjs");
-  const result = spawnSync(process.execPath, [binPath, "completion", "--write-state"], {
-    cwd: root,
-    env: process.env,
-    encoding: "utf-8",
-  });
+  const result = spawnSync(
+    process.execPath,
+    [binPath, "completion", "--write-state"],
+    {
+      cwd: root,
+      env: process.env,
+      encoding: "utf-8",
+    },
+  );
 
   return result.status === 0;
 }
@@ -119,7 +123,10 @@ export async function doctorShellCompletion(
     );
     const generated = await generateCompletionCache();
     if (generated) {
-      note(`Completion cache regenerated at ${status.cachePath}`, "Shell completion");
+      note(
+        `Completion cache regenerated at ${status.cachePath}`,
+        "Shell completion",
+      );
     } else {
       note(
         `Failed to regenerate completion cache. Run \`${cliName} completion --write-state\` manually.`,
@@ -167,7 +174,9 @@ export async function doctorShellCompletion(
  * cases where profile has completion but no cache.
  * This is a silent fix - no prompts.
  */
-export async function ensureCompletionCacheExists(binName = "openclaw"): Promise<boolean> {
+export async function ensureCompletionCacheExists(
+  binName = "openclaw",
+): Promise<boolean> {
   const shell = resolveShellFromEnv() as CompletionShell;
   const cacheExists = await completionCacheExists(shell, binName);
 

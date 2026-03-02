@@ -4,7 +4,12 @@ import { isPlainObject } from "../infra/plain-object.js";
 import type { CommandsConfig, NativeCommandsSetting } from "./types.js";
 
 export type CommandFlagKey = {
-  [K in keyof CommandsConfig]-?: Exclude<CommandsConfig[K], undefined> extends boolean ? K : never;
+  [K in keyof CommandsConfig]-?: Exclude<
+    CommandsConfig[K],
+    undefined
+  > extends boolean
+    ? K
+    : never;
 }[keyof CommandsConfig];
 
 function resolveAutoDefault(providerId?: ChannelId): boolean {
@@ -43,7 +48,8 @@ function resolveNativeCommandSetting(params: {
   globalSetting?: NativeCommandsSetting;
 }): boolean {
   const { providerId, providerSetting, globalSetting } = params;
-  const setting = providerSetting === undefined ? globalSetting : providerSetting;
+  const setting =
+    providerSetting === undefined ? globalSetting : providerSetting;
   if (setting === true) {
     return true;
   }

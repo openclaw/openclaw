@@ -13,7 +13,9 @@ describe("normalizeCompatibilityConfigValues preview streaming aliases", () => {
 
     expect(res.config.channels?.telegram?.streaming).toBe("off");
     expect(res.config.channels?.telegram?.streamMode).toBeUndefined();
-    expect(res.changes).toEqual(["Normalized channels.telegram.streaming boolean → enum (off)."]);
+    expect(res.changes).toEqual([
+      "Normalized channels.telegram.streaming boolean → enum (off).",
+    ]);
   });
 
   it("normalizes discord boolean streaming aliases to enum", () => {

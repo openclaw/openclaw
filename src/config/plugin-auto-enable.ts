@@ -83,7 +83,10 @@ type StructuredChannelConfigSpec = {
   accountStringKeys?: readonly string[];
 };
 
-const STRUCTURED_CHANNEL_CONFIG_SPECS: Record<string, StructuredChannelConfigSpec> = {
+const STRUCTURED_CHANNEL_CONFIG_SPECS: Record<
+  string,
+  StructuredChannelConfigSpec
+> = {
   telegram: {
     envAny: ["TELEGRAM_BOT_TOKEN"],
     stringKeys: ["botToken", "tokenFile"],
@@ -114,7 +117,10 @@ const STRUCTURED_CHANNEL_CONFIG_SPECS: Record<string, StructuredChannelConfigSpe
   },
 };
 
-function envHasAnyKeys(env: NodeJS.ProcessEnv, keys: readonly string[]): boolean {
+function envHasAnyKeys(
+  env: NodeJS.ProcessEnv,
+  keys: readonly string[],
+): boolean {
   for (const key of keys) {
     if (hasNonEmptyString(env[key])) {
       return true;
@@ -123,7 +129,10 @@ function envHasAnyKeys(env: NodeJS.ProcessEnv, keys: readonly string[]): boolean
   return false;
 }
 
-function envHasAllKeys(env: NodeJS.ProcessEnv, keys: readonly string[]): boolean {
+function envHasAllKeys(
+  env: NodeJS.ProcessEnv,
+  keys: readonly string[],
+): boolean {
   for (const key of keys) {
     if (!hasNonEmptyString(env[key])) {
       return false;
@@ -132,7 +141,10 @@ function envHasAllKeys(env: NodeJS.ProcessEnv, keys: readonly string[]): boolean
   return keys.length > 0;
 }
 
-function hasAnyNumberKeys(entry: Record<string, unknown>, keys: readonly string[]): boolean {
+function hasAnyNumberKeys(
+  entry: Record<string, unknown>,
+  keys: readonly string[],
+): boolean {
   for (const key of keys) {
     if (typeof entry[key] === "number") {
       return true;
@@ -157,13 +169,19 @@ function isStructuredChannelConfigured(
   if (!entry) {
     return false;
   }
-  if (spec.stringKeys && spec.stringKeys.some((key) => hasNonEmptyString(entry[key]))) {
+  if (
+    spec.stringKeys &&
+    spec.stringKeys.some((key) => hasNonEmptyString(entry[key]))
+  ) {
     return true;
   }
   if (spec.numberKeys && hasAnyNumberKeys(entry, spec.numberKeys)) {
     return true;
   }
-  if (spec.accountStringKeys && accountsHaveKeys(entry.accounts, spec.accountStringKeys)) {
+  if (
+    spec.accountStringKeys &&
+    accountsHaveKeys(entry.accounts, spec.accountStringKeys)
+  ) {
     return true;
   }
   return recordHasKeys(entry);
@@ -180,7 +198,10 @@ function isWhatsAppConfigured(cfg: OpenClawConfig): boolean {
   return recordHasKeys(entry);
 }
 
-function isGenericChannelConfigured(cfg: OpenClawConfig, channelId: string): boolean {
+function isGenericChannelConfigured(
+  cfg: OpenClawConfig,
+  channelId: string,
+): boolean {
   const entry = resolveChannelConfig(cfg, channelId);
   return recordHasKeys(entry);
 }
@@ -207,7 +228,9 @@ function collectModelRefs(cfg: OpenClawConfig): string[] {
       refs.push(value.trim());
     }
   };
-  const collectFromAgent = (agent: Record<string, unknown> | null | undefined) => {
+  const collectFromAgent = (
+    agent: Record<string, unknown> | null | undefined,
+  ) => {
     if (!agent) {
       return;
     }
@@ -254,7 +277,10 @@ function extractProviderFromModelRef(value: string): string | null {
   return normalizeProviderId(trimmed.slice(0, slash));
 }
 
-function isProviderConfigured(cfg: OpenClawConfig, providerId: string): boolean {
+function isProviderConfigured(
+  cfg: OpenClawConfig,
+  providerId: string,
+): boolean {
   const normalized = normalizeProviderId(providerId);
 
   const profiles = cfg.auth?.profiles;
@@ -290,7 +316,9 @@ function isProviderConfigured(cfg: OpenClawConfig, providerId: string): boolean 
   return false;
 }
 
-function buildChannelToPluginIdMap(registry: PluginManifestRegistry): Map<string, string> {
+function buildChannelToPluginIdMap(
+  registry: PluginManifestRegistry,
+): Map<string, string> {
   const map = new Map<string, string>();
   for (const record of registry.plugins) {
     for (const channelId of record.channels) {
@@ -317,7 +345,9 @@ function resolvePluginIdForChannel(
 
 function collectCandidateChannelIds(cfg: OpenClawConfig): string[] {
   const channelIds = new Set<string>(CHANNEL_PLUGIN_IDS);
-  const configuredChannels = cfg.channels as Record<string, unknown> | undefined;
+  const configuredChannels = cfg.channels as
+    | Record<string, unknown>
+    | undefined;
   if (!configuredChannels || typeof configuredChannels !== "object") {
     return Array.from(channelIds);
   }
@@ -355,9 +385,13 @@ function resolveConfiguredPlugins(
     }
   }
   const backendRaw =
-    typeof cfg.acp?.backend === "string" ? cfg.acp.backend.trim().toLowerCase() : "";
+    typeof cfg.acp?.backend === "string"
+      ? cfg.acp.backend.trim().toLowerCase()
+      : "";
   const acpConfigured =
-    cfg.acp?.enabled === true || cfg.acp?.dispatch?.enabled === true || backendRaw === "acpx";
+    cfg.acp?.enabled === true ||
+    cfg.acp?.dispatch?.enabled === true ||
+    backendRaw === "acpx";
   if (acpConfigured && (!backendRaw || backendRaw === "acpx")) {
     changes.push({
       pluginId: "acpx",
@@ -367,7 +401,10 @@ function resolveConfiguredPlugins(
   return changes;
 }
 
-function isPluginExplicitlyDisabled(cfg: OpenClawConfig, pluginId: string): boolean {
+function isPluginExplicitlyDisabled(
+  cfg: OpenClawConfig,
+  pluginId: string,
+): boolean {
   const builtInChannelId = normalizeChatChannelId(pluginId);
   if (builtInChannelId) {
     const channels = cfg.channels as Record<string, unknown> | undefined;
@@ -422,7 +459,10 @@ function shouldSkipPreferredPluginAutoEnable(
   return false;
 }
 
-function registerPluginEntry(cfg: OpenClawConfig, pluginId: string): OpenClawConfig {
+function registerPluginEntry(
+  cfg: OpenClawConfig,
+  pluginId: string,
+): OpenClawConfig {
   const builtInChannelId = normalizeChatChannelId(pluginId);
   if (builtInChannelId) {
     const channels = cfg.channels as Record<string, unknown> | undefined;
@@ -445,7 +485,9 @@ function registerPluginEntry(cfg: OpenClawConfig, pluginId: string): OpenClawCon
   const entries = {
     ...cfg.plugins?.entries,
     [pluginId]: {
-      ...(cfg.plugins?.entries?.[pluginId] as Record<string, unknown> | undefined),
+      ...(cfg.plugins?.entries?.[pluginId] as
+        | Record<string, unknown>
+        | undefined),
       enabled: true,
     },
   };
@@ -477,7 +519,9 @@ export function applyPluginAutoEnable(params: {
   manifestRegistry?: PluginManifestRegistry;
 }): PluginAutoEnableResult {
   const env = params.env ?? process.env;
-  const registry = params.manifestRegistry ?? loadPluginManifestRegistry({ config: params.config });
+  const registry =
+    params.manifestRegistry ??
+    loadPluginManifestRegistry({ config: params.config });
   const configured = resolveConfiguredPlugins(params.config, env, registry);
   if (configured.length === 0) {
     return { config: params.config, changes: [] };
@@ -502,11 +546,14 @@ export function applyPluginAutoEnable(params: {
       continue;
     }
     const allow = next.plugins?.allow;
-    const allowMissing = Array.isArray(allow) && !allow.includes(entry.pluginId);
+    const allowMissing =
+      Array.isArray(allow) && !allow.includes(entry.pluginId);
     const alreadyEnabled =
       builtInChannelId != null
         ? (() => {
-            const channels = next.channels as Record<string, unknown> | undefined;
+            const channels = next.channels as
+              | Record<string, unknown>
+              | undefined;
             const channelConfig = channels?.[builtInChannelId];
             if (
               !channelConfig ||

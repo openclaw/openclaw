@@ -32,9 +32,17 @@ const SESSION_STATE_MAX_ENTRIES = 2000;
 
 let lastSessionPruneAt = 0;
 
-export function pruneDiagnosticSessionStates(now = Date.now(), force = false): void {
-  const shouldPruneForSize = diagnosticSessionStates.size > SESSION_STATE_MAX_ENTRIES;
-  if (!force && !shouldPruneForSize && now - lastSessionPruneAt < SESSION_STATE_PRUNE_INTERVAL_MS) {
+export function pruneDiagnosticSessionStates(
+  now = Date.now(),
+  force = false,
+): void {
+  const shouldPruneForSize =
+    diagnosticSessionStates.size > SESSION_STATE_MAX_ENTRIES;
+  if (
+    !force &&
+    !shouldPruneForSize &&
+    now - lastSessionPruneAt < SESSION_STATE_PRUNE_INTERVAL_MS
+  ) {
     return;
   }
   lastSessionPruneAt = now;
@@ -80,7 +88,8 @@ export function getDiagnosticSessionState(ref: SessionRef): SessionState {
   pruneDiagnosticSessionStates();
   const key = resolveSessionKey(ref);
   const existing =
-    diagnosticSessionStates.get(key) ?? (ref.sessionId && findStateBySessionId(ref.sessionId));
+    diagnosticSessionStates.get(key) ??
+    (ref.sessionId && findStateBySessionId(ref.sessionId));
   if (existing) {
     if (ref.sessionId) {
       existing.sessionId = ref.sessionId;

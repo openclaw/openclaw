@@ -10,7 +10,10 @@ import { buildExportSessionReply } from "./commands-export-session.js";
 import { buildStatusReply } from "./commands-status.js";
 import type { CommandHandler } from "./commands-types.js";
 
-export const handleHelpCommand: CommandHandler = async (params, allowTextCommands) => {
+export const handleHelpCommand: CommandHandler = async (
+  params,
+  allowTextCommands,
+) => {
   if (!allowTextCommands) {
     return null;
   }
@@ -29,7 +32,10 @@ export const handleHelpCommand: CommandHandler = async (params, allowTextCommand
   };
 };
 
-export const handleCommandsListCommand: CommandHandler = async (params, allowTextCommands) => {
+export const handleCommandsListCommand: CommandHandler = async (
+  params,
+  allowTextCommands,
+) => {
   if (!allowTextCommands) {
     return null;
   }
@@ -82,7 +88,9 @@ export const handleCommandsListCommand: CommandHandler = async (params, allowTex
 
   return {
     shouldContinue: false,
-    reply: { text: buildCommandsMessage(params.cfg, skillCommands, { surface }) },
+    reply: {
+      text: buildCommandsMessage(params.cfg, skillCommands, { surface }),
+    },
   };
 };
 
@@ -116,12 +124,16 @@ export function buildCommandsPaginationKeyboard(
   return [buttons];
 }
 
-export const handleStatusCommand: CommandHandler = async (params, allowTextCommands) => {
+export const handleStatusCommand: CommandHandler = async (
+  params,
+  allowTextCommands,
+) => {
   if (!allowTextCommands) {
     return null;
   }
   const statusRequested =
-    params.directives.hasStatusDirective || params.command.commandBodyNormalized === "/status";
+    params.directives.hasStatusDirective ||
+    params.command.commandBodyNormalized === "/status";
   if (!statusRequested) {
     return null;
   }
@@ -153,7 +165,10 @@ export const handleStatusCommand: CommandHandler = async (params, allowTextComma
   return { shouldContinue: false, reply };
 };
 
-export const handleContextCommand: CommandHandler = async (params, allowTextCommands) => {
+export const handleContextCommand: CommandHandler = async (
+  params,
+  allowTextCommands,
+) => {
   if (!allowTextCommands) {
     return null;
   }
@@ -170,7 +185,10 @@ export const handleContextCommand: CommandHandler = async (params, allowTextComm
   return { shouldContinue: false, reply: await buildContextReply(params) };
 };
 
-export const handleExportSessionCommand: CommandHandler = async (params, allowTextCommands) => {
+export const handleExportSessionCommand: CommandHandler = async (
+  params,
+  allowTextCommands,
+) => {
   if (!allowTextCommands) {
     return null;
   }
@@ -189,10 +207,16 @@ export const handleExportSessionCommand: CommandHandler = async (params, allowTe
     );
     return { shouldContinue: false };
   }
-  return { shouldContinue: false, reply: await buildExportSessionReply(params) };
+  return {
+    shouldContinue: false,
+    reply: await buildExportSessionReply(params),
+  };
 };
 
-export const handleWhoamiCommand: CommandHandler = async (params, allowTextCommands) => {
+export const handleWhoamiCommand: CommandHandler = async (
+  params,
+  allowTextCommands,
+) => {
   if (!allowTextCommands) {
     return null;
   }
@@ -212,7 +236,9 @@ export const handleWhoamiCommand: CommandHandler = async (params, allowTextComma
     lines.push(`User id: ${senderId}`);
   }
   if (senderUsername) {
-    const handle = senderUsername.startsWith("@") ? senderUsername : `@${senderUsername}`;
+    const handle = senderUsername.startsWith("@")
+      ? senderUsername
+      : `@${senderUsername}`;
     lines.push(`Username: ${handle}`);
   }
   if (params.ctx.ChatType === "group" && params.ctx.From) {

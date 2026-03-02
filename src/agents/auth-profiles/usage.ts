@@ -1,7 +1,14 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import { normalizeProviderId } from "../model-selection.js";
-import { saveAuthProfileStore, updateAuthProfileStoreWithLock } from "./store.js";
-import type { AuthProfileFailureReason, AuthProfileStore, ProfileUsageStats } from "./types.js";
+import {
+  saveAuthProfileStore,
+  updateAuthProfileStoreWithLock,
+} from "./store.js";
+import type {
+  AuthProfileFailureReason,
+  AuthProfileStore,
+  ProfileUsageStats,
+} from "./types.js";
 
 const FAILURE_REASON_PRIORITY: AuthProfileFailureReason[] = [
   "auth_permanent",
@@ -13,12 +20,16 @@ const FAILURE_REASON_PRIORITY: AuthProfileFailureReason[] = [
   "rate_limit",
   "unknown",
 ];
-const FAILURE_REASON_SET = new Set<AuthProfileFailureReason>(FAILURE_REASON_PRIORITY);
+const FAILURE_REASON_SET = new Set<AuthProfileFailureReason>(
+  FAILURE_REASON_PRIORITY,
+);
 const FAILURE_REASON_ORDER = new Map<AuthProfileFailureReason, number>(
   FAILURE_REASON_PRIORITY.map((reason, index) => [reason, index]),
 );
 
-function isAuthCooldownBypassedForProvider(provider: string | undefined): boolean {
+function isAuthCooldownBypassedForProvider(
+  provider: string | undefined,
+): boolean {
   return normalizeProviderId(provider ?? "") === "openrouter";
 }
 
@@ -37,7 +48,10 @@ export function resolveProfileUnusableUntil(
 /**
  * Check if a profile is currently in cooldown (due to rate limiting or errors).
  */
-export function isProfileInCooldown(store: AuthProfileStore, profileId: string): boolean {
+export function isProfileInCooldown(
+  store: AuthProfileStore,
+  profileId: string,
+): boolean {
   if (isAuthCooldownBypassedForProvider(store.profiles[profileId]?.provider)) {
     return false;
   }
@@ -49,8 +63,16 @@ export function isProfileInCooldown(store: AuthProfileStore, profileId: string):
   return unusableUntil ? Date.now() < unusableUntil : false;
 }
 
-function isActiveUnusableWindow(until: number | undefined, now: number): boolean {
-  return typeof until === "number" && Number.isFinite(until) && until > 0 && now < until;
+function isActiveUnusableWindow(
+  until: number | undefined,
+  now: number,
+): boolean {
+  return (
+    typeof until === "number" &&
+    Number.isFinite(until) &&
+    until > 0 &&
+    now < until
+  );
 }
 
 /**
@@ -67,7 +89,11 @@ export function resolveProfilesUnavailableReason(params: {
   const now = params.now ?? Date.now();
   const scores = new Map<AuthProfileFailureReason, number>();
   const addScore = (reason: AuthProfileFailureReason, value: number) => {
-    if (!FAILURE_REASON_SET.has(reason) || value <= 0 || !Number.isFinite(value)) {
+    if (
+      !FAILURE_REASON_SET.has(reason) ||
+      value <= 0 ||
+      !Number.isFinite(value)
+    ) {
       return;
     }
     scores.set(reason, (scores.get(reason) ?? 0) + value);
@@ -80,7 +106,11 @@ export function resolveProfilesUnavailableReason(params: {
     }
 
     const disabledActive = isActiveUnusableWindow(stats.disabledUntil, now);
-    if (disabledActive && stats.disabledReason && FAILURE_REASON_SET.has(stats.disabledReason)) {
+    if (
+      disabledActive &&
+      stats.disabledReason &&
+      FAILURE_REASON_SET.has(stats.disabledReason)
+    ) {
       // Disabled reasons are explicit and high-signal; weight heavily.
       addScore(stats.disabledReason, 1_000);
       continue;
@@ -92,7 +122,9 @@ export function resolveProfilesUnavailableReason(params: {
     }
 
     let recordedReason = false;
-    for (const [rawReason, rawCount] of Object.entries(stats.failureCounts ?? {})) {
+    for (const [rawReason, rawCount] of Object.entries(
+      stats.failureCounts ?? {},
+    )) {
       const reason = rawReason as AuthProfileFailureReason;
       const count = typeof rawCount === "number" ? rawCount : 0;
       if (!FAILURE_REASON_SET.has(reason) || count <= 0) {
@@ -118,7 +150,8 @@ export function resolveProfilesUnavailableReason(params: {
     if (typeof score !== "number") {
       continue;
     }
-    const priority = FAILURE_REASON_ORDER.get(reason) ?? Number.MAX_SAFE_INTEGER;
+    const priority =
+      FAILURE_REASON_ORDER.get(reason) ?? Number.MAX_SAFE_INTEGER;
     if (score > bestScore || (score === bestScore && priority < bestPriority)) {
       best = reason;
       bestScore = score;
@@ -172,7 +205,10 @@ export function getSoonestCooldownExpiry(
  *
  * @returns `true` if any profile was modified.
  */
-export function clearExpiredCooldowns(store: AuthProfileStore, now?: number): boolean {
+export function clearExpiredCooldowns(
+  store: AuthProfileStore,
+  now?: number,
+): boolean {
   const usageStats = store.usageStats;
   if (!usageStats) {
     return false;
@@ -300,7 +336,9 @@ function resolveAuthCooldownConfig(params: {
   } as const;
 
   const resolveHours = (value: unknown, fallback: number) =>
-    typeof value === "number" && Number.isFinite(value) && value > 0 ? value : fallback;
+    typeof value === "number" && Number.isFinite(value) && value > 0
+      ? value
+      : fallback;
 
   const cooldowns = params.cfg?.auth?.cooldowns;
   const billingOverride = (() => {
@@ -320,7 +358,10 @@ function resolveAuthCooldownConfig(params: {
     billingOverride ?? cooldowns?.billingBackoffHours,
     defaults.billingBackoffHours,
   );
-  const billingMaxHours = resolveHours(cooldowns?.billingMaxHours, defaults.billingMaxHours);
+  const billingMaxHours = resolveHours(
+    cooldowns?.billingMaxHours,
+    defaults.billingMaxHours,
+  );
   const failureWindowHours = resolveHours(
     cooldowns?.failureWindowHours,
     defaults.failureWindowHours,
@@ -367,7 +408,9 @@ function keepActiveWindowOrRecompute(params: {
 }): number {
   const { existingUntil, now, recomputedUntil } = params;
   const hasActiveWindow =
-    typeof existingUntil === "number" && Number.isFinite(existingUntil) && existingUntil > now;
+    typeof existingUntil === "number" &&
+    Number.isFinite(existingUntil) &&
+    existingUntil > now;
   return hasActiveWindow ? existingUntil : recomputedUntil;
 }
 
@@ -385,7 +428,9 @@ function computeNextProfileUsageStats(params: {
 
   const baseErrorCount = windowExpired ? 0 : (params.existing.errorCount ?? 0);
   const nextErrorCount = baseErrorCount + 1;
-  const failureCounts = windowExpired ? {} : { ...params.existing.failureCounts };
+  const failureCounts = windowExpired
+    ? {}
+    : { ...params.existing.failureCounts };
   failureCounts[params.reason] = (failureCounts[params.reason] ?? 0) + 1;
 
   const updatedStats: ProfileUsageStats = {
@@ -478,7 +523,9 @@ export async function markAuthProfileFailure(params: {
   store.usageStats = store.usageStats ?? {};
   const existing = store.usageStats[profileId] ?? {};
   const now = Date.now();
-  const providerKey = normalizeProviderId(store.profiles[profileId]?.provider ?? "");
+  const providerKey = normalizeProviderId(
+    store.profiles[profileId]?.provider ?? "",
+  );
   const cfgResolved = resolveAuthCooldownConfig({
     cfg,
     providerId: providerKey,

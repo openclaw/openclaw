@@ -30,7 +30,8 @@ export async function resolveSignalAccessState(params: {
       allowFrom: params.allowFrom,
       groupAllowFrom: params.groupAllowFrom,
       storeAllowFrom,
-      isSenderAllowed: (allowEntries) => isSignalSenderAllowed(params.sender, allowEntries),
+      isSenderAllowed: (allowEntries) =>
+        isSignalSenderAllowed(params.sender, allowEntries),
     });
   const dmAccess = resolveAccessDecision(false);
   return {
@@ -57,7 +58,9 @@ export async function handleSignalDirectMessageAccess(params: {
   }
   if (params.dmAccessDecision === "block") {
     if (params.dmPolicy !== "disabled") {
-      params.log(`Blocked signal sender ${params.senderDisplay} (dmPolicy=${params.dmPolicy})`);
+      params.log(
+        `Blocked signal sender ${params.senderDisplay} (dmPolicy=${params.dmPolicy})`,
+      );
     }
     return false;
   }
@@ -79,7 +82,9 @@ export async function handleSignalDirectMessageAccess(params: {
         params.log(`signal pairing request sender=${params.senderId}`);
       },
       onReplyError: (err) => {
-        params.log(`signal pairing reply failed for ${params.senderId}: ${String(err)}`);
+        params.log(
+          `signal pairing reply failed for ${params.senderId}: ${String(err)}`,
+        );
       },
     });
   }

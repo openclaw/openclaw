@@ -3,7 +3,9 @@ import { normalizeFeishuExternalKey } from "./external-keys.js";
 
 describe("normalizeFeishuExternalKey", () => {
   it("accepts a normal feishu key and trims surrounding spaces", () => {
-    expect(normalizeFeishuExternalKey("  img_v3_01abcDEF123  ")).toBe("img_v3_01abcDEF123");
+    expect(normalizeFeishuExternalKey("  img_v3_01abcDEF123  ")).toBe(
+      "img_v3_01abcDEF123",
+    );
   });
 
   it("rejects traversal and path separator patterns", () => {

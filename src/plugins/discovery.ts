@@ -8,7 +8,12 @@ import {
   type OpenClawPackageManifest,
   type PackageManifest,
 } from "./manifest.js";
-import { formatPosixMode, isPathInside, safeRealpathSync, safeStatSync } from "./path-safety.js";
+import {
+  formatPosixMode,
+  isPathInside,
+  safeRealpathSync,
+  safeStatSync,
+} from "./path-safety.js";
 import type { PluginDiagnostic, PluginOrigin } from "./types.js";
 
 const EXTENSION_EXTS = new Set([".ts", ".js", ".mts", ".cts", ".mjs", ".cjs"]);
@@ -248,7 +253,9 @@ function resolvePackageExtensions(manifest: PackageManifest): string[] {
   if (!Array.isArray(raw)) {
     return [];
   }
-  return raw.map((entry) => (typeof entry === "string" ? entry.trim() : "")).filter(Boolean);
+  return raw
+    .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+    .filter(Boolean);
 }
 
 function deriveIdHint(params: {
@@ -291,7 +298,8 @@ function addCandidate(params: {
   if (params.seen.has(resolved)) {
     return;
   }
-  const resolvedRoot = safeRealpathSync(params.rootDir) ?? path.resolve(params.rootDir);
+  const resolvedRoot =
+    safeRealpathSync(params.rootDir) ?? path.resolve(params.rootDir);
   if (
     isUnsafePluginCandidate({
       source: resolved,
@@ -595,7 +603,9 @@ export function discoverOpenClawPlugins(params: {
   }
   if (workspaceDir) {
     const workspaceRoot = resolveUserPath(workspaceDir);
-    const workspaceExtDirs = [path.join(workspaceRoot, ".openclaw", "extensions")];
+    const workspaceExtDirs = [
+      path.join(workspaceRoot, ".openclaw", "extensions"),
+    ];
     for (const dir of workspaceExtDirs) {
       discoverInDirectory({
         dir,

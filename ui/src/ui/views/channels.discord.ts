@@ -28,37 +28,37 @@ export function renderDiscordCard(params: {
         </div>
         <div>
           <span class="label">Last start</span>
-          <span>${discord?.lastStartAt ? formatRelativeTimestamp(discord.lastStartAt) : "n/a"}</span>
+          <span
+            >${discord?.lastStartAt
+              ? formatRelativeTimestamp(discord.lastStartAt)
+              : "n/a"}</span
+          >
         </div>
         <div>
           <span class="label">Last probe</span>
-          <span>${discord?.lastProbeAt ? formatRelativeTimestamp(discord.lastProbeAt) : "n/a"}</span>
+          <span
+            >${discord?.lastProbeAt
+              ? formatRelativeTimestamp(discord.lastProbeAt)
+              : "n/a"}</span
+          >
         </div>
       </div>
 
-      ${
-        discord?.lastError
-          ? html`<div class="callout danger" style="margin-top: 12px;">
+      ${discord?.lastError
+        ? html`<div class="callout danger" style="margin-top: 12px;">
             ${discord.lastError}
           </div>`
-          : nothing
-      }
-
-      ${
-        discord?.probe
-          ? html`<div class="callout" style="margin-top: 12px;">
+        : nothing}
+      ${discord?.probe
+        ? html`<div class="callout" style="margin-top: 12px;">
             Probe ${discord.probe.ok ? "ok" : "failed"} ·
             ${discord.probe.status ?? ""} ${discord.probe.error ?? ""}
           </div>`
-          : nothing
-      }
-
+        : nothing}
       ${renderChannelConfigSection({ channelId: "discord", props })}
 
       <div class="row" style="margin-top: 12px;">
-        <button class="btn" @click=${() => props.onRefresh(true)}>
-          Probe
-        </button>
+        <button class="btn" @click=${() => props.onRefresh(true)}>Probe</button>
       </div>
     </div>
   `;

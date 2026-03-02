@@ -2,7 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
-import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
+import {
+  baseConfigSnapshot,
+  createTestRuntime,
+} from "./test-runtime-config-helpers.js";
 
 const configMocks = vi.hoisted(() => ({
   readConfigFileSnapshot: vi.fn(),
@@ -36,11 +39,15 @@ async function writeIdentityFile(workspace: string, lines: string[]) {
 }
 
 function getWrittenMainIdentity() {
-  const written = configMocks.writeConfigFile.mock.calls[0]?.[0] as ConfigWritePayload;
+  const written = configMocks.writeConfigFile.mock
+    .calls[0]?.[0] as ConfigWritePayload;
   return written.agents?.list?.find((entry) => entry.id === "main")?.identity;
 }
 
-async function runIdentityCommandFromWorkspace(workspace: string, fromIdentity = true) {
+async function runIdentityCommandFromWorkspace(
+  workspace: string,
+  fromIdentity = true,
+) {
   configMocks.readConfigFileSnapshot.mockResolvedValue({
     ...baseConfigSnapshot,
     config: { agents: { list: [{ id: "main", workspace }] } },
@@ -108,7 +115,9 @@ describe("agents set-identity command", () => {
 
     await agentsSetIdentityCommand({ workspace }, runtime);
 
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("Multiple agents match"));
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Multiple agents match"),
+    );
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
   });
@@ -162,7 +171,10 @@ describe("agents set-identity command", () => {
       config: { agents: { list: [{ id: "main" }] } },
     });
 
-    await agentsSetIdentityCommand({ agent: "main", identityFile: identityPath }, runtime);
+    await agentsSetIdentityCommand(
+      { agent: "main", identityFile: identityPath },
+      runtime,
+    );
 
     expect(getWrittenMainIdentity()).toEqual({
       name: "C-3PO",
@@ -204,7 +216,9 @@ describe("agents set-identity command", () => {
 
     await runIdentityCommandFromWorkspace(workspace);
 
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("No identity data found"));
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("No identity data found"),
+    );
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
   });

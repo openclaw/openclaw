@@ -32,7 +32,10 @@ describe("applyAuthChoiceOpenAI", () => {
 
     const confirm = vi.fn(async () => true);
     const text = vi.fn(async () => "unused");
-    const prompter = createWizardPrompter({ confirm, text }, { defaultSelect: "plaintext" });
+    const prompter = createWizardPrompter(
+      { confirm, text },
+      { defaultSelect: "plaintext" },
+    );
     const runtime = createExitThrowingRuntime();
 
     const result = await applyAuthChoiceOpenAI({
@@ -49,7 +52,8 @@ describe("applyAuthChoiceOpenAI", () => {
       mode: "api_key",
     });
     const defaultModel = result?.config.agents?.defaults?.model;
-    const primaryModel = typeof defaultModel === "string" ? defaultModel : defaultModel?.primary;
+    const primaryModel =
+      typeof defaultModel === "string" ? defaultModel : defaultModel?.primary;
     expect(primaryModel).toBe("openai/gpt-5.1-codex");
     expect(text).not.toHaveBeenCalled();
 
@@ -66,7 +70,10 @@ describe("applyAuthChoiceOpenAI", () => {
 
     const confirm = vi.fn(async () => true);
     const text = vi.fn(async () => "unused");
-    const prompter = createWizardPrompter({ confirm, text }, { defaultSelect: "ref" });
+    const prompter = createWizardPrompter(
+      { confirm, text },
+      { defaultSelect: "ref" },
+    );
     const runtime = createExitThrowingRuntime();
 
     const result = await applyAuthChoiceOpenAI({

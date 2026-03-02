@@ -1,13 +1,18 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createNoopLogger, createCronStoreHarness } from "./service.test-harness.js";
+import {
+  createNoopLogger,
+  createCronStoreHarness,
+} from "./service.test-harness.js";
 import { createCronServiceState } from "./service/state.js";
 import { armTimer, onTimer } from "./service/timer.js";
 import type { CronJob } from "./types.js";
 
 const noopLogger = createNoopLogger();
-const { makeStorePath } = createCronStoreHarness({ prefix: "openclaw-cron-tight-loop-" });
+const { makeStorePath } = createCronStoreHarness({
+  prefix: "openclaw-cron-tight-loop-",
+});
 
 /**
  * Create a cron job that is past-due AND has a stuck `runningAtMs` marker.
@@ -15,7 +20,11 @@ const { makeStorePath } = createCronStoreHarness({ prefix: "openclaw-cron-tight-
  * `runningAtMs`) while `nextWakeAtMs` still returns the past-due timestamp,
  * which before the fix resulted in a `setTimeout(0)` tight loop.
  */
-function createStuckPastDueJob(params: { id: string; nowMs: number; pastDueMs: number }): CronJob {
+function createStuckPastDueJob(params: {
+  id: string;
+  nowMs: number;
+  pastDueMs: number;
+}): CronJob {
   const pastDueAt = params.nowMs - params.pastDueMs;
   return {
     id: params.id,
@@ -143,7 +152,9 @@ describe("CronService - armTimer tight loop prevention", () => {
       JSON.stringify(
         {
           version: 1,
-          jobs: [createStuckPastDueJob({ id: "monitor", nowMs: now, pastDueMs })],
+          jobs: [
+            createStuckPastDueJob({ id: "monitor", nowMs: now, pastDueMs }),
+          ],
         },
         null,
         2,

@@ -69,6 +69,8 @@ export function maybeSendAckReaction(params: {
       },
       "failed to send ack reaction",
     );
-    logVerbose(`WhatsApp ack reaction failed for chat ${params.msg.chatId}: ${formatError(err)}`);
+    logVerbose(
+      `WhatsApp ack reaction failed for chat ${params.msg.chatId}: ${formatError(err)}`,
+    );
   });
 }

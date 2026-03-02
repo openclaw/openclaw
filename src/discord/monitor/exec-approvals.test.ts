@@ -70,7 +70,10 @@ vi.mock("../../logger.js", () => ({
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function createHandler(config: DiscordExecApprovalConfig, accountId = "default") {
+function createHandler(
+  config: DiscordExecApprovalConfig,
+  accountId = "default",
+) {
   return new DiscordExecApprovalHandler({
     token: "test-token",
     accountId,
@@ -82,14 +85,23 @@ function createHandler(config: DiscordExecApprovalConfig, accountId = "default")
 type ExecApprovalHandlerInternals = {
   pending: Map<
     string,
-    { discordMessageId: string; discordChannelId: string; timeoutId: NodeJS.Timeout }
+    {
+      discordMessageId: string;
+      discordChannelId: string;
+      timeoutId: NodeJS.Timeout;
+    }
   >;
   requestCache: Map<string, ExecApprovalRequest>;
   handleApprovalRequested: (request: ExecApprovalRequest) => Promise<void>;
-  handleApprovalTimeout: (approvalId: string, source?: "channel" | "dm") => Promise<void>;
+  handleApprovalTimeout: (
+    approvalId: string,
+    source?: "channel" | "dm",
+  ) => Promise<void>;
 };
 
-function getHandlerInternals(handler: DiscordExecApprovalHandler): ExecApprovalHandlerInternals {
+function getHandlerInternals(
+  handler: DiscordExecApprovalHandler,
+): ExecApprovalHandlerInternals {
   return handler as unknown as ExecApprovalHandlerInternals;
 }
 
@@ -137,7 +149,10 @@ describe("buildExecApprovalCustomId", () => {
 
 describe("parseExecApprovalData", () => {
   it("parses valid data", () => {
-    const result = parseExecApprovalData({ id: "abc-123", action: "allow-once" });
+    const result = parseExecApprovalData({
+      id: "abc-123",
+      action: "allow-once",
+    });
     expect(result).toEqual({ approvalId: "abc-123", action: "allow-once" });
   });
 
@@ -146,7 +161,10 @@ describe("parseExecApprovalData", () => {
       id: "abc%3D123%3Btest",
       action: "allow-always",
     });
-    expect(result).toEqual({ approvalId: "abc=123;test", action: "allow-always" });
+    expect(result).toEqual({
+      approvalId: "abc=123;test",
+      action: "allow-always",
+    });
   });
 
   it("rejects invalid action", () => {
@@ -172,9 +190,15 @@ describe("parseExecApprovalData", () => {
   });
 
   it("accepts all valid actions", () => {
-    expect(parseExecApprovalData({ id: "x", action: "allow-once" })?.action).toBe("allow-once");
-    expect(parseExecApprovalData({ id: "x", action: "allow-always" })?.action).toBe("allow-always");
-    expect(parseExecApprovalData({ id: "x", action: "deny" })?.action).toBe("deny");
+    expect(
+      parseExecApprovalData({ id: "x", action: "allow-once" })?.action,
+    ).toBe("allow-once");
+    expect(
+      parseExecApprovalData({ id: "x", action: "allow-always" })?.action,
+    ).toBe("allow-always");
+    expect(parseExecApprovalData({ id: "x", action: "deny" })?.action).toBe(
+      "deny",
+    );
   });
 });
 
@@ -246,7 +270,9 @@ describe("extractDiscordChannelId", () => {
     ];
 
     for (const testCase of cases) {
-      expect(extractDiscordChannelId(testCase.input), testCase.name).toBe(testCase.expected);
+      expect(extractDiscordChannelId(testCase.input), testCase.name).toBe(
+        testCase.expected,
+      );
     }
   });
 });
@@ -275,8 +301,12 @@ describe("DiscordExecApprovalHandler.shouldHandle", () => {
       approvers: ["123"],
       agentFilter: ["allowed-agent"],
     });
-    expect(handler.shouldHandle(createRequest({ agentId: "allowed-agent" }))).toBe(true);
-    expect(handler.shouldHandle(createRequest({ agentId: "other-agent" }))).toBe(false);
+    expect(
+      handler.shouldHandle(createRequest({ agentId: "allowed-agent" })),
+    ).toBe(true);
+    expect(
+      handler.shouldHandle(createRequest({ agentId: "other-agent" })),
+    ).toBe(false);
     expect(handler.shouldHandle(createRequest({ agentId: null }))).toBe(false);
   });
 
@@ -286,13 +316,19 @@ describe("DiscordExecApprovalHandler.shouldHandle", () => {
       approvers: ["123"],
       sessionFilter: ["discord"],
     });
-    expect(handler.shouldHandle(createRequest({ sessionKey: "agent:test:discord:123" }))).toBe(
-      true,
-    );
-    expect(handler.shouldHandle(createRequest({ sessionKey: "agent:test:telegram:123" }))).toBe(
+    expect(
+      handler.shouldHandle(
+        createRequest({ sessionKey: "agent:test:discord:123" }),
+      ),
+    ).toBe(true);
+    expect(
+      handler.shouldHandle(
+        createRequest({ sessionKey: "agent:test:telegram:123" }),
+      ),
+    ).toBe(false);
+    expect(handler.shouldHandle(createRequest({ sessionKey: null }))).toBe(
       false,
     );
-    expect(handler.shouldHandle(createRequest({ sessionKey: null }))).toBe(false);
   });
 
   it("filters by session key regex", () => {
@@ -301,12 +337,16 @@ describe("DiscordExecApprovalHandler.shouldHandle", () => {
       approvers: ["123"],
       sessionFilter: ["^agent:.*:discord:"],
     });
-    expect(handler.shouldHandle(createRequest({ sessionKey: "agent:test:discord:123" }))).toBe(
-      true,
-    );
-    expect(handler.shouldHandle(createRequest({ sessionKey: "other:test:discord:123" }))).toBe(
-      false,
-    );
+    expect(
+      handler.shouldHandle(
+        createRequest({ sessionKey: "agent:test:discord:123" }),
+      ),
+    ).toBe(true);
+    expect(
+      handler.shouldHandle(
+        createRequest({ sessionKey: "other:test:discord:123" }),
+      ),
+    ).toBe(false);
   });
 
   it("rejects unsafe nested-repetition regex in session filter", () => {
@@ -315,7 +355,9 @@ describe("DiscordExecApprovalHandler.shouldHandle", () => {
       approvers: ["123"],
       sessionFilter: ["(a+)+$"],
     });
-    expect(handler.shouldHandle(createRequest({ sessionKey: `${"a".repeat(28)}!` }))).toBe(false);
+    expect(
+      handler.shouldHandle(createRequest({ sessionKey: `${"a".repeat(28)}!` })),
+    ).toBe(false);
   });
 
   it("matches long session keys with tail-bounded regex checks", () => {
@@ -325,7 +367,9 @@ describe("DiscordExecApprovalHandler.shouldHandle", () => {
       sessionFilter: ["discord:tail$"],
     });
     expect(
-      handler.shouldHandle(createRequest({ sessionKey: `${"x".repeat(5000)}discord:tail` })),
+      handler.shouldHandle(
+        createRequest({ sessionKey: `${"x".repeat(5000)}discord:tail` }),
+      ),
     ).toBe(true);
   });
 
@@ -338,9 +382,15 @@ describe("DiscordExecApprovalHandler.shouldHandle", () => {
         lastAccountId: "secondary",
       },
     });
-    const handler = createHandler({ enabled: true, approvers: ["123"] }, "default");
+    const handler = createHandler(
+      { enabled: true, approvers: ["123"] },
+      "default",
+    );
     expect(handler.shouldHandle(createRequest())).toBe(false);
-    const matching = createHandler({ enabled: true, approvers: ["123"] }, "secondary");
+    const matching = createHandler(
+      { enabled: true, approvers: ["123"] },
+      "secondary",
+    );
     expect(matching.shouldHandle(createRequest())).toBe(true);
   });
 
@@ -385,7 +435,10 @@ describe("DiscordExecApprovalHandler.getApprovers", () => {
     const cases = [
       {
         name: "configured approvers",
-        config: { enabled: true, approvers: ["111", "222"] } as DiscordExecApprovalConfig,
+        config: {
+          enabled: true,
+          approvers: ["111", "222"],
+        } as DiscordExecApprovalConfig,
         expected: ["111", "222"],
       },
       {
@@ -468,7 +521,10 @@ describe("ExecApprovalButton", () => {
       components: [],
     });
     // oxlint-disable-next-line typescript/unbound-method -- vi.fn() mock
-    expect(handler.resolveApproval).toHaveBeenCalledWith("test-approval", "allow-once");
+    expect(handler.resolveApproval).toHaveBeenCalledWith(
+      "test-approval",
+      "allow-once",
+    );
   });
 
   it("shows correct label for allow-always", async () => {
@@ -563,7 +619,9 @@ describe("ExecApprovalButton", () => {
 
 describe("DiscordExecApprovalHandler target config", () => {
   beforeEach(() => {
-    mockRestPost.mockClear().mockResolvedValue({ id: "mock-message", channel_id: "mock-channel" });
+    mockRestPost
+      .mockClear()
+      .mockResolvedValue({ id: "mock-message", channel_id: "mock-channel" });
     mockRestPatch.mockClear().mockResolvedValue({});
     mockRestDelete.mockClear().mockResolvedValue({});
   });
@@ -572,7 +630,10 @@ describe("DiscordExecApprovalHandler target config", () => {
     const cases = [
       {
         name: "default target",
-        config: { enabled: true, approvers: ["123"] } as DiscordExecApprovalConfig,
+        config: {
+          enabled: true,
+          approvers: ["123"],
+        } as DiscordExecApprovalConfig,
         expectedTarget: undefined,
       },
       {
@@ -603,7 +664,9 @@ describe("DiscordExecApprovalHandler target config", () => {
 
     for (const testCase of cases) {
       if ("expectedTarget" in testCase) {
-        expect(testCase.config.target, testCase.name).toBe(testCase.expectedTarget);
+        expect(testCase.config.target, testCase.name).toBe(
+          testCase.expectedTarget,
+        );
       }
       const handler = createHandler(testCase.config);
       expect(handler.shouldHandle(createRequest()), testCase.name).toBe(true);
@@ -615,7 +678,9 @@ describe("DiscordExecApprovalHandler target config", () => {
 
 describe("DiscordExecApprovalHandler timeout cleanup", () => {
   beforeEach(() => {
-    mockRestPost.mockClear().mockResolvedValue({ id: "mock-message", channel_id: "mock-channel" });
+    mockRestPost
+      .mockClear()
+      .mockResolvedValue({ id: "mock-message", channel_id: "mock-channel" });
     mockRestPatch.mockClear().mockResolvedValue({});
     mockRestDelete.mockClear().mockResolvedValue({});
   });
@@ -659,7 +724,9 @@ describe("DiscordExecApprovalHandler timeout cleanup", () => {
 
 describe("DiscordExecApprovalHandler delivery routing", () => {
   beforeEach(() => {
-    mockRestPost.mockClear().mockResolvedValue({ id: "mock-message", channel_id: "mock-channel" });
+    mockRestPost
+      .mockClear()
+      .mockResolvedValue({ id: "mock-message", channel_id: "mock-channel" });
     mockRestPatch.mockClear().mockResolvedValue({});
     mockRestDelete.mockClear().mockResolvedValue({});
   });

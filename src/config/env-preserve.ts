@@ -33,7 +33,10 @@ function hasEnvVarRef(value: string): boolean {
  * - `${VAR}` → env value (returns null if missing)
  * - `$${VAR}` → literal `${VAR}` (escape sequence)
  */
-function tryResolveString(template: string, env: NodeJS.ProcessEnv): string | null {
+function tryResolveString(
+  template: string,
+  env: NodeJS.ProcessEnv,
+): string | null {
   const ENV_VAR_NAME = /^[A-Z_][A-Z0-9_]*$/;
   const chunks: string[] = [];
 

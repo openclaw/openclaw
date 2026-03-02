@@ -2,7 +2,10 @@ import type { Command } from "commander";
 import { danger } from "../globals.js";
 import { defaultRuntime } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
-import { callBrowserRequest, type BrowserParentOpts } from "./browser-cli-shared.js";
+import {
+  callBrowserRequest,
+  type BrowserParentOpts,
+} from "./browser-cli-shared.js";
 import { runCommandWithRuntime } from "./cli-utils.js";
 
 function runBrowserObserve(action: () => Promise<void>) {
@@ -82,15 +85,21 @@ export function registerBrowserActionObserveCommands(
       "How long to wait for the response (default: 20000)",
       (v: string) => Number(v),
     )
-    .option("--max-chars <n>", "Max body chars to return (default: 200000)", (v: string) =>
-      Number(v),
+    .option(
+      "--max-chars <n>",
+      "Max body chars to return (default: 200000)",
+      (v: string) => Number(v),
     )
     .action(async (url: string, opts, cmd) => {
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;
       await runBrowserObserve(async () => {
-        const timeoutMs = Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : undefined;
-        const maxChars = Number.isFinite(opts.maxChars) ? opts.maxChars : undefined;
+        const timeoutMs = Number.isFinite(opts.timeoutMs)
+          ? opts.timeoutMs
+          : undefined;
+        const maxChars = Number.isFinite(opts.maxChars)
+          ? opts.maxChars
+          : undefined;
         const result = await callBrowserRequest<{ response: { body: string } }>(
           parent,
           {

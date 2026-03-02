@@ -134,7 +134,9 @@ export async function monitorLineProvider(
   const secret = channelSecret.trim();
 
   if (!token) {
-    throw new Error("LINE webhook mode requires a non-empty channel access token.");
+    throw new Error(
+      "LINE webhook mode requires a non-empty channel access token.",
+    );
   }
   if (!secret) {
     throw new Error("LINE webhook mode requires a non-empty channel secret.");
@@ -182,11 +184,16 @@ export async function monitorLineProvider(
 
       // Show loading animation while processing (non-blocking, best-effort)
       const stopLoading = shouldShowLoading
-        ? startLineLoadingKeepalive({ userId: ctx.userId!, accountId: ctx.accountId })
+        ? startLineLoadingKeepalive({
+            userId: ctx.userId!,
+            accountId: ctx.accountId,
+          })
         : null;
 
       const displayName = await displayNamePromise;
-      logVerbose(`line: received message from ${displayName} (${ctxPayload.From})`);
+      logVerbose(
+        `line: received message from ${displayName} (${ctxPayload.From})`,
+      );
 
       // Dispatch to auto-reply system for AI response
       try {
@@ -205,42 +212,47 @@ export async function monitorLineProvider(
           dispatcherOptions: {
             ...prefixOptions,
             deliver: async (payload, _info) => {
-              const lineData = (payload.channelData?.line as LineChannelData | undefined) ?? {};
+              const lineData =
+                (payload.channelData?.line as LineChannelData | undefined) ??
+                {};
 
               // Show loading animation before each delivery (non-blocking)
               if (ctx.userId && !ctx.isGroup) {
-                void showLoadingAnimation(ctx.userId, { accountId: ctx.accountId }).catch(() => {});
+                void showLoadingAnimation(ctx.userId, {
+                  accountId: ctx.accountId,
+                }).catch(() => {});
               }
 
-              const { replyTokenUsed: nextReplyTokenUsed } = await deliverLineAutoReply({
-                payload,
-                lineData,
-                to: ctxPayload.From,
-                replyToken,
-                replyTokenUsed,
-                accountId: ctx.accountId,
-                textLimit,
-                deps: {
-                  buildTemplateMessageFromPayload,
-                  processLineMessage,
-                  chunkMarkdownText,
-                  sendLineReplyChunks,
-                  replyMessageLine,
-                  pushMessageLine,
-                  pushTextMessageWithQuickReplies,
-                  createQuickReplyItems,
-                  createTextMessageWithQuickReplies,
-                  pushMessagesLine,
-                  createFlexMessage,
-                  createImageMessage,
-                  createLocationMessage,
-                  onReplyError: (replyErr) => {
-                    logVerbose(
-                      `line: reply token failed, falling back to push: ${String(replyErr)}`,
-                    );
+              const { replyTokenUsed: nextReplyTokenUsed } =
+                await deliverLineAutoReply({
+                  payload,
+                  lineData,
+                  to: ctxPayload.From,
+                  replyToken,
+                  replyTokenUsed,
+                  accountId: ctx.accountId,
+                  textLimit,
+                  deps: {
+                    buildTemplateMessageFromPayload,
+                    processLineMessage,
+                    chunkMarkdownText,
+                    sendLineReplyChunks,
+                    replyMessageLine,
+                    pushMessageLine,
+                    pushTextMessageWithQuickReplies,
+                    createQuickReplyItems,
+                    createTextMessageWithQuickReplies,
+                    pushMessagesLine,
+                    createFlexMessage,
+                    createImageMessage,
+                    createLocationMessage,
+                    onReplyError: (replyErr) => {
+                      logVerbose(
+                        `line: reply token failed, falling back to push: ${String(replyErr)}`,
+                      );
+                    },
                   },
-                },
-              });
+                });
               replyTokenUsed = nextReplyTokenUsed;
 
               recordChannelRuntimeState({
@@ -252,7 +264,9 @@ export async function monitorLineProvider(
               });
             },
             onError: (err, info) => {
-              runtime.error?.(danger(`line ${info.kind} reply failed: ${String(err)}`));
+              runtime.error?.(
+                danger(`line ${info.kind} reply failed: ${String(err)}`),
+              );
             },
           },
           replyOptions: {
@@ -261,7 +275,9 @@ export async function monitorLineProvider(
         });
 
         if (!queuedFinal) {
-          logVerbose(`line: no response generated for message from ${ctxPayload.From}`);
+          logVerbose(
+            `line: no response generated for message from ${ctxPayload.From}`,
+          );
         }
       } catch (err) {
         runtime.error?.(danger(`line: auto-reply failed: ${String(err)}`));
@@ -271,11 +287,18 @@ export async function monitorLineProvider(
           try {
             await replyMessageLine(
               replyToken,
-              [{ type: "text", text: "Sorry, I encountered an error processing your message." }],
+              [
+                {
+                  type: "text",
+                  text: "Sorry, I encountered an error processing your message.",
+                },
+              ],
               { accountId: ctx.accountId },
             );
           } catch (replyErr) {
-            runtime.error?.(danger(`line: error reply failed: ${String(replyErr)}`));
+            runtime.error?.(
+              danger(`line: error reply failed: ${String(replyErr)}`),
+            );
           }
         }
       } finally {
@@ -285,7 +308,8 @@ export async function monitorLineProvider(
   });
 
   // Register HTTP webhook handler
-  const normalizedPath = normalizePluginHttpPath(webhookPath, "/line/webhook") ?? "/line/webhook";
+  const normalizedPath =
+    normalizePluginHttpPath(webhookPath, "/line/webhook") ?? "/line/webhook";
   const unregisterHttp = registerPluginHttpRoute({
     path: normalizedPath,
     auth: "plugin",
@@ -293,7 +317,11 @@ export async function monitorLineProvider(
     pluginId: "line",
     accountId: resolvedAccountId,
     log: (msg) => logVerbose(msg),
-    handler: createLineNodeWebhookHandler({ channelSecret: secret, bot, runtime }),
+    handler: createLineNodeWebhookHandler({
+      channelSecret: secret,
+      bot,
+      runtime,
+    }),
   });
 
   logVerbose(`line: registered webhook handler at ${normalizedPath}`);

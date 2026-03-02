@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { stripPluginOnlyAllowlist, type PluginToolGroups } from "./tool-policy.js";
+import {
+  stripPluginOnlyAllowlist,
+  type PluginToolGroups,
+} from "./tool-policy.js";
 
 const pluginGroups: PluginToolGroups = {
   all: ["lobster", "workflow_tool"],
@@ -9,19 +12,31 @@ const coreTools = new Set(["read", "write", "exec", "session_status"]);
 
 describe("stripPluginOnlyAllowlist", () => {
   it("strips allowlist when it only targets plugin tools", () => {
-    const policy = stripPluginOnlyAllowlist({ allow: ["lobster"] }, pluginGroups, coreTools);
+    const policy = stripPluginOnlyAllowlist(
+      { allow: ["lobster"] },
+      pluginGroups,
+      coreTools,
+    );
     expect(policy.policy?.allow).toBeUndefined();
     expect(policy.unknownAllowlist).toEqual([]);
   });
 
   it("strips allowlist when it only targets plugin groups", () => {
-    const policy = stripPluginOnlyAllowlist({ allow: ["group:plugins"] }, pluginGroups, coreTools);
+    const policy = stripPluginOnlyAllowlist(
+      { allow: ["group:plugins"] },
+      pluginGroups,
+      coreTools,
+    );
     expect(policy.policy?.allow).toBeUndefined();
     expect(policy.unknownAllowlist).toEqual([]);
   });
 
   it('keeps allowlist when it uses "*"', () => {
-    const policy = stripPluginOnlyAllowlist({ allow: ["*"] }, pluginGroups, coreTools);
+    const policy = stripPluginOnlyAllowlist(
+      { allow: ["*"] },
+      pluginGroups,
+      coreTools,
+    );
     expect(policy.policy?.allow).toEqual(["*"]);
     expect(policy.unknownAllowlist).toEqual([]);
   });
@@ -38,7 +53,11 @@ describe("stripPluginOnlyAllowlist", () => {
 
   it("strips allowlist with unknown entries when no core tools match", () => {
     const emptyPlugins: PluginToolGroups = { all: [], byPlugin: new Map() };
-    const policy = stripPluginOnlyAllowlist({ allow: ["lobster"] }, emptyPlugins, coreTools);
+    const policy = stripPluginOnlyAllowlist(
+      { allow: ["lobster"] },
+      emptyPlugins,
+      coreTools,
+    );
     expect(policy.policy?.allow).toBeUndefined();
     expect(policy.unknownAllowlist).toEqual(["lobster"]);
   });

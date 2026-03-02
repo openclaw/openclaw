@@ -14,7 +14,9 @@ export { SUPPORTED_LOCALES, isSupportedLocale };
 
 class I18nManager {
   private locale: Locale = DEFAULT_LOCALE;
-  private translations: Partial<Record<Locale, TranslationMap>> = { [DEFAULT_LOCALE]: en };
+  private translations: Partial<Record<Locale, TranslationMap>> = {
+    [DEFAULT_LOCALE]: en,
+  };
   private subscribers: Set<Subscriber> = new Set();
 
   constructor() {
@@ -45,7 +47,8 @@ class I18nManager {
   }
 
   public async setLocale(locale: Locale) {
-    const needsTranslationLoad = locale !== DEFAULT_LOCALE && !this.translations[locale];
+    const needsTranslationLoad =
+      locale !== DEFAULT_LOCALE && !this.translations[locale];
     if (this.locale === locale && !needsTranslationLoad) {
       return;
     }
@@ -83,7 +86,8 @@ class I18nManager {
 
   public t(key: string, params?: Record<string, string>): string {
     const keys = key.split(".");
-    let value: unknown = this.translations[this.locale] || this.translations[DEFAULT_LOCALE];
+    let value: unknown =
+      this.translations[this.locale] || this.translations[DEFAULT_LOCALE];
 
     for (const k of keys) {
       if (value && typeof value === "object") {
@@ -120,4 +124,5 @@ class I18nManager {
 }
 
 export const i18n = new I18nManager();
-export const t = (key: string, params?: Record<string, string>) => i18n.t(key, params);
+export const t = (key: string, params?: Record<string, string>) =>
+  i18n.t(key, params);

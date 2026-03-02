@@ -17,8 +17,10 @@ export const IRC_FIELD_HELP: Record<string, string> = {
   "channels.irc.nickserv.enabled":
     "Enable NickServ identify/register after connect (defaults to enabled when password is configured).",
   "channels.irc.nickserv.service": "NickServ service nick (default: NickServ).",
-  "channels.irc.nickserv.password": "NickServ password used for IDENTIFY/REGISTER (sensitive).",
-  "channels.irc.nickserv.passwordFile": "Optional file path containing NickServ password.",
+  "channels.irc.nickserv.password":
+    "NickServ password used for IDENTIFY/REGISTER (sensitive).",
+  "channels.irc.nickserv.passwordFile":
+    "Optional file path containing NickServ password.",
   "channels.irc.nickserv.register":
     "If true, send NickServ REGISTER on every connect. Use once for initial registration, then disable.",
   "channels.irc.nickserv.registerEmail":

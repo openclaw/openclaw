@@ -25,11 +25,16 @@ export function installPinnedHostnameTestHooks(): void {
     lookupMock.mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
     resolvePinnedHostnameSpy = vi
       .spyOn(ssrf, "resolvePinnedHostname")
-      .mockImplementation((hostname) => resolvePinnedHostname(hostname, lookupMock));
+      .mockImplementation((hostname) =>
+        resolvePinnedHostname(hostname, lookupMock),
+      );
     resolvePinnedHostnameWithPolicySpy = vi
       .spyOn(ssrf, "resolvePinnedHostnameWithPolicy")
       .mockImplementation((hostname, params) =>
-        resolvePinnedHostnameWithPolicy(hostname, { ...params, lookupFn: lookupMock }),
+        resolvePinnedHostnameWithPolicy(hostname, {
+          ...params,
+          lookupFn: lookupMock,
+        }),
       );
   });
 
@@ -44,14 +49,16 @@ export function installPinnedHostnameTestHooks(): void {
 
 export function createAuthCaptureJsonFetch(responseBody: unknown) {
   let seenAuth: string | null = null;
-  const fetchFn = withFetchPreconnect(async (_input: RequestInfo | URL, init?: RequestInit) => {
-    const headers = new Headers(init?.headers);
-    seenAuth = headers.get("authorization");
-    return new Response(JSON.stringify(responseBody), {
-      status: 200,
-      headers: { "content-type": "application/json" },
-    });
-  });
+  const fetchFn = withFetchPreconnect(
+    async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const headers = new Headers(init?.headers);
+      seenAuth = headers.get("authorization");
+      return new Response(JSON.stringify(responseBody), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    },
+  );
   return {
     fetchFn,
     getAuthHeader: () => seenAuth,
@@ -61,14 +68,16 @@ export function createAuthCaptureJsonFetch(responseBody: unknown) {
 export function createRequestCaptureJsonFetch(responseBody: unknown) {
   let seenUrl: string | null = null;
   let seenInit: RequestInit | undefined;
-  const fetchFn = withFetchPreconnect(async (input: RequestInfo | URL, init?: RequestInit) => {
-    seenUrl = resolveRequestUrl(input);
-    seenInit = init;
-    return new Response(JSON.stringify(responseBody), {
-      status: 200,
-      headers: { "content-type": "application/json" },
-    });
-  });
+  const fetchFn = withFetchPreconnect(
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      seenUrl = resolveRequestUrl(input);
+      seenInit = init;
+      return new Response(JSON.stringify(responseBody), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    },
+  );
   return {
     fetchFn,
     getRequest: () => ({ url: seenUrl, init: seenInit }),

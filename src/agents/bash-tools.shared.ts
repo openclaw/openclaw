@@ -63,7 +63,8 @@ export function buildDockerExecArgs(params: {
   for (const [key, value] of Object.entries(params.env)) {
     args.push("-e", `${key}=${value}`);
   }
-  const hasCustomPath = typeof params.env.PATH === "string" && params.env.PATH.length > 0;
+  const hasCustomPath =
+    typeof params.env.PATH === "string" && params.env.PATH.length > 0;
   if (hasCustomPath) {
     // Avoid interpolating PATH into the shell command; pass it via env instead.
     args.push("-e", `OPENCLAW_PREPEND_PATH=${params.env.PATH}`);
@@ -75,7 +76,12 @@ export function buildDockerExecArgs(params: {
   const pathExport = hasCustomPath
     ? 'export PATH="${OPENCLAW_PREPEND_PATH}:$PATH"; unset OPENCLAW_PREPEND_PATH; '
     : "";
-  args.push(params.containerName, "sh", "-lc", `${pathExport}${params.command}`);
+  args.push(
+    params.containerName,
+    "sh",
+    "-lc",
+    `${pathExport}${params.command}`,
+  );
   return args;
 }
 
@@ -124,7 +130,9 @@ export function resolveWorkdir(workdir: string, warnings: string[]) {
   } catch {
     // ignore, fallback below
   }
-  warnings.push(`Warning: workdir "${workdir}" is unavailable; using "${fallback}".`);
+  warnings.push(
+    `Warning: workdir "${workdir}" is unavailable; using "${fallback}".`,
+  );
   return fallback;
 }
 
@@ -193,7 +201,9 @@ export function sliceLogLines(
   const totalLines = lines.length;
   const totalChars = text.length;
   let start =
-    typeof offset === "number" && Number.isFinite(offset) ? Math.max(0, Math.floor(offset)) : 0;
+    typeof offset === "number" && Number.isFinite(offset)
+      ? Math.max(0, Math.floor(offset))
+      : 0;
   if (limit !== undefined && offset === undefined) {
     const tailCount = Math.max(0, Math.floor(limit));
     start = Math.max(totalLines - tailCount, 0);
@@ -223,7 +233,8 @@ export function deriveSessionName(command: string): string | undefined {
 }
 
 function tokenizeCommand(command: string): string[] {
-  const matches = command.match(/(?:[^\s"']+|"(?:\\.|[^"])*"|'(?:\\.|[^'])*')+/g) ?? [];
+  const matches =
+    command.match(/(?:[^\s"']+|"(?:\\.|[^"])*"|'(?:\\.|[^'])*')+/g) ?? [];
   return matches.map((token) => stripQuotes(token)).filter(Boolean);
 }
 

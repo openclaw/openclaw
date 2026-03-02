@@ -28,7 +28,8 @@ describe("createEditorSubmitHandler", () => {
   });
 
   it("routes slash commands to handleCommand", () => {
-    const { editor, handleCommand, sendMessage, onSubmit } = createSubmitHarness();
+    const { editor, handleCommand, sendMessage, onSubmit } =
+      createSubmitHarness();
 
     onSubmit("/models");
 
@@ -38,7 +39,8 @@ describe("createEditorSubmitHandler", () => {
   });
 
   it("routes normal messages to sendMessage", () => {
-    const { editor, handleCommand, sendMessage, onSubmit } = createSubmitHarness();
+    const { editor, handleCommand, sendMessage, onSubmit } =
+      createSubmitHarness();
 
     onSubmit("hello");
 

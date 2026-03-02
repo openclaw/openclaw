@@ -54,7 +54,10 @@ let storeSeq = 0;
 
 function createTestStorePath(): string {
   storeSeq += 1;
-  return path.join(os.tmpdir(), `openclaw-voice-call-test-${Date.now()}-${storeSeq}`);
+  return path.join(
+    os.tmpdir(),
+    `openclaw-voice-call-test-${Date.now()}-${storeSeq}`,
+  );
 }
 
 function createManagerHarness(
@@ -75,7 +78,11 @@ function createManagerHarness(
   return { manager, provider };
 }
 
-function markCallAnswered(manager: CallManager, callId: string, eventId: string): void {
+function markCallAnswered(
+  manager: CallManager,
+  callId: string,
+  eventId: string,
+): void {
   manager.processEvent({
     id: eventId,
     type: "call.answered",
@@ -89,13 +96,16 @@ describe("CallManager", () => {
   it("upgrades providerCallId mapping when provider ID changes", async () => {
     const { manager } = createManagerHarness();
 
-    const { callId, success, error } = await manager.initiateCall("+15550000001");
+    const { callId, success, error } =
+      await manager.initiateCall("+15550000001");
     expect(success).toBe(true);
     expect(error).toBeUndefined();
 
     // The provider returned a request UUID as the initial providerCallId.
     expect(manager.getCall(callId)?.providerCallId).toBe("request-uuid");
-    expect(manager.getCallByProviderCallId("request-uuid")?.callId).toBe(callId);
+    expect(manager.getCallByProviderCallId("request-uuid")?.callId).toBe(
+      callId,
+    );
 
     // Provider later reports the actual call UUID.
     manager.processEvent({
@@ -114,10 +124,14 @@ describe("CallManager", () => {
   it("speaks initial message on answered for notify mode (non-Twilio)", async () => {
     const { manager, provider } = createManagerHarness();
 
-    const { callId, success } = await manager.initiateCall("+15550000002", undefined, {
-      message: "Hello there",
-      mode: "notify",
-    });
+    const { callId, success } = await manager.initiateCall(
+      "+15550000002",
+      undefined,
+      {
+        message: "Hello there",
+        mode: "notify",
+      },
+    );
     expect(success).toBe(true);
 
     manager.processEvent({
@@ -355,7 +369,9 @@ describe("CallManager", () => {
 
     const pendingState = await Promise.race([
       turnPromise.then(() => "resolved"),
-      new Promise<"pending">((resolve) => setTimeout(() => resolve("pending"), 0)),
+      new Promise<"pending">((resolve) =>
+        setTimeout(() => resolve("pending"), 0),
+      ),
     ]);
     expect(pendingState).toBe("pending");
 
@@ -375,7 +391,10 @@ describe("CallManager", () => {
     expect(turnResult.transcript).toBe("final answer");
 
     const call = manager.getCall(started.callId);
-    expect(call?.transcript.map((entry) => entry.text)).toEqual(["Prompt", "final answer"]);
+    expect(call?.transcript.map((entry) => entry.text)).toEqual([
+      "Prompt",
+      "final answer",
+    ]);
   });
 
   it("tracks latency metadata across multiple closed-loop turns", async () => {

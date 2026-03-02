@@ -1,6 +1,10 @@
 import type { CommonChannelMessagingConfig } from "./types.channel-messaging-common.js";
 
-export type SignalReactionNotificationMode = "off" | "own" | "all" | "allowlist";
+export type SignalReactionNotificationMode =
+  | "off"
+  | "own"
+  | "all"
+  | "allowlist";
 export type SignalReactionLevel = "off" | "ack" | "minimal" | "extensive";
 
 export type SignalAccountConfig = CommonChannelMessagingConfig & {

@@ -22,11 +22,13 @@ type ResolvePinnedHostnameImpl = typeof resolvePinnedHostname;
 
 const defaultHttpRequestImpl: RequestImpl = httpRequest;
 const defaultHttpsRequestImpl: RequestImpl = httpsRequest;
-const defaultResolvePinnedHostnameImpl: ResolvePinnedHostnameImpl = resolvePinnedHostname;
+const defaultResolvePinnedHostnameImpl: ResolvePinnedHostnameImpl =
+  resolvePinnedHostname;
 
 let httpRequestImpl: RequestImpl = defaultHttpRequestImpl;
 let httpsRequestImpl: RequestImpl = defaultHttpsRequestImpl;
-let resolvePinnedHostnameImpl: ResolvePinnedHostnameImpl = defaultResolvePinnedHostnameImpl;
+let resolvePinnedHostnameImpl: ResolvePinnedHostnameImpl =
+  defaultResolvePinnedHostnameImpl;
 
 export function setMediaStoreNetworkDepsForTest(deps?: {
   httpRequest?: RequestImpl;
@@ -35,7 +37,8 @@ export function setMediaStoreNetworkDepsForTest(deps?: {
 }): void {
   httpRequestImpl = deps?.httpRequest ?? defaultHttpRequestImpl;
   httpsRequestImpl = deps?.httpsRequest ?? defaultHttpsRequestImpl;
-  resolvePinnedHostnameImpl = deps?.resolvePinnedHostname ?? defaultResolvePinnedHostnameImpl;
+  resolvePinnedHostnameImpl =
+    deps?.resolvePinnedHostname ?? defaultResolvePinnedHostnameImpl;
 }
 
 /**
@@ -148,55 +151,77 @@ async function downloadToFile(
       return;
     }
     if (!["http:", "https:"].includes(parsedUrl.protocol)) {
-      reject(new Error(`Invalid URL protocol: ${parsedUrl.protocol}. Only HTTP/HTTPS allowed.`));
+      reject(
+        new Error(
+          `Invalid URL protocol: ${parsedUrl.protocol}. Only HTTP/HTTPS allowed.`,
+        ),
+      );
       return;
     }
-    const requestImpl = parsedUrl.protocol === "https:" ? httpsRequestImpl : httpRequestImpl;
+    const requestImpl =
+      parsedUrl.protocol === "https:" ? httpsRequestImpl : httpRequestImpl;
     resolvePinnedHostnameImpl(parsedUrl.hostname)
       .then((pinned) => {
-        const req = requestImpl(parsedUrl, { headers, lookup: pinned.lookup }, (res) => {
-          // Follow redirects
-          if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400) {
-            const location = res.headers.location;
-            if (!location || maxRedirects <= 0) {
-              reject(new Error(`Redirect loop or missing Location header`));
+        const req = requestImpl(
+          parsedUrl,
+          { headers, lookup: pinned.lookup },
+          (res) => {
+            // Follow redirects
+            if (
+              res.statusCode &&
+              res.statusCode >= 300 &&
+              res.statusCode < 400
+            ) {
+              const location = res.headers.location;
+              if (!location || maxRedirects <= 0) {
+                reject(new Error(`Redirect loop or missing Location header`));
+                return;
+              }
+              const redirectUrl = new URL(location, url).href;
+              resolve(
+                downloadToFile(redirectUrl, dest, headers, maxRedirects - 1),
+              );
               return;
             }
-            const redirectUrl = new URL(location, url).href;
-            resolve(downloadToFile(redirectUrl, dest, headers, maxRedirects - 1));
-            return;
-          }
-          if (!res.statusCode || res.statusCode >= 400) {
-            reject(new Error(`HTTP ${res.statusCode ?? "?"} downloading media`));
-            return;
-          }
-          let total = 0;
-          const sniffChunks: Buffer[] = [];
-          let sniffLen = 0;
-          const out = createWriteStream(dest, { mode: MEDIA_FILE_MODE });
-          res.on("data", (chunk) => {
-            total += chunk.length;
-            if (sniffLen < 16384) {
-              sniffChunks.push(chunk);
-              sniffLen += chunk.length;
+            if (!res.statusCode || res.statusCode >= 400) {
+              reject(
+                new Error(`HTTP ${res.statusCode ?? "?"} downloading media`),
+              );
+              return;
             }
-            if (total > MAX_BYTES) {
-              req.destroy(new Error("Media exceeds 5MB limit"));
-            }
-          });
-          pipeline(res, out)
-            .then(() => {
-              const sniffBuffer = Buffer.concat(sniffChunks, Math.min(sniffLen, 16384));
-              const rawHeader = res.headers["content-type"];
-              const headerMime = Array.isArray(rawHeader) ? rawHeader[0] : rawHeader;
-              resolve({
-                headerMime,
-                sniffBuffer,
-                size: total,
-              });
-            })
-            .catch(reject);
-        });
+            let total = 0;
+            const sniffChunks: Buffer[] = [];
+            let sniffLen = 0;
+            const out = createWriteStream(dest, { mode: MEDIA_FILE_MODE });
+            res.on("data", (chunk) => {
+              total += chunk.length;
+              if (sniffLen < 16384) {
+                sniffChunks.push(chunk);
+                sniffLen += chunk.length;
+              }
+              if (total > MAX_BYTES) {
+                req.destroy(new Error("Media exceeds 5MB limit"));
+              }
+            });
+            pipeline(res, out)
+              .then(() => {
+                const sniffBuffer = Buffer.concat(
+                  sniffChunks,
+                  Math.min(sniffLen, 16384),
+                );
+                const rawHeader = res.headers["content-type"];
+                const headerMime = Array.isArray(rawHeader)
+                  ? rawHeader[0]
+                  : rawHeader;
+                resolve({
+                  headerMime,
+                  sniffBuffer,
+                  size: total,
+                });
+              })
+              .catch(reject);
+          },
+        );
         req.on("error", reject);
         req.end();
       })
@@ -221,7 +246,11 @@ export type SaveMediaSourceErrorCode =
 export class SaveMediaSourceError extends Error {
   code: SaveMediaSourceErrorCode;
 
-  constructor(code: SaveMediaSourceErrorCode, message: string, options?: ErrorOptions) {
+  constructor(
+    code: SaveMediaSourceErrorCode,
+    message: string,
+    options?: ErrorOptions,
+  ) {
     super(message, options);
     this.code = code;
     this.name = "SaveMediaSourceError";
@@ -231,28 +260,52 @@ export class SaveMediaSourceError extends Error {
 function toSaveMediaSourceError(err: SafeOpenError): SaveMediaSourceError {
   switch (err.code) {
     case "symlink":
-      return new SaveMediaSourceError("invalid-path", "Media path must not be a symlink", {
-        cause: err,
-      });
+      return new SaveMediaSourceError(
+        "invalid-path",
+        "Media path must not be a symlink",
+        {
+          cause: err,
+        },
+      );
     case "not-file":
-      return new SaveMediaSourceError("not-file", "Media path is not a file", { cause: err });
+      return new SaveMediaSourceError("not-file", "Media path is not a file", {
+        cause: err,
+      });
     case "path-mismatch":
-      return new SaveMediaSourceError("path-mismatch", "Media path changed during read", {
-        cause: err,
-      });
+      return new SaveMediaSourceError(
+        "path-mismatch",
+        "Media path changed during read",
+        {
+          cause: err,
+        },
+      );
     case "too-large":
-      return new SaveMediaSourceError("too-large", "Media exceeds 5MB limit", { cause: err });
-    case "not-found":
-      return new SaveMediaSourceError("not-found", "Media path does not exist", { cause: err });
-    case "outside-workspace":
-      return new SaveMediaSourceError("invalid-path", "Media path is outside workspace root", {
+      return new SaveMediaSourceError("too-large", "Media exceeds 5MB limit", {
         cause: err,
       });
+    case "not-found":
+      return new SaveMediaSourceError(
+        "not-found",
+        "Media path does not exist",
+        { cause: err },
+      );
+    case "outside-workspace":
+      return new SaveMediaSourceError(
+        "invalid-path",
+        "Media path is outside workspace root",
+        {
+          cause: err,
+        },
+      );
     case "invalid-path":
     default:
-      return new SaveMediaSourceError("invalid-path", "Media path is not safe to read", {
-        cause: err,
-      });
+      return new SaveMediaSourceError(
+        "invalid-path",
+        "Media path is not safe to read",
+        {
+          cause: err,
+        },
+      );
   }
 }
 
@@ -268,13 +321,18 @@ export async function saveMediaSource(
   const baseId = crypto.randomUUID();
   if (looksLikeUrl(source)) {
     const tempDest = path.join(dir, `${baseId}.tmp`);
-    const { headerMime, sniffBuffer, size } = await downloadToFile(source, tempDest, headers);
+    const { headerMime, sniffBuffer, size } = await downloadToFile(
+      source,
+      tempDest,
+      headers,
+    );
     const mime = await detectMime({
       buffer: sniffBuffer,
       headerMime,
       filePath: source,
     });
-    const ext = extensionForMime(mime) ?? path.extname(new URL(source).pathname);
+    const ext =
+      extensionForMime(mime) ?? path.extname(new URL(source).pathname);
     const id = ext ? `${baseId}${ext}` : baseId;
     const finalDest = path.join(dir, id);
     await fs.rename(tempDest, finalDest);
@@ -282,7 +340,10 @@ export async function saveMediaSource(
   }
   // local path
   try {
-    const { buffer, stat } = await readLocalFileSafely({ filePath: source, maxBytes: MAX_BYTES });
+    const { buffer, stat } = await readLocalFileSafely({
+      filePath: source,
+      maxBytes: MAX_BYTES,
+    });
     const mime = await detectMime({ buffer, filePath: source });
     const ext = extensionForMime(mime) ?? path.extname(source);
     const id = ext ? `${baseId}${ext}` : baseId;
@@ -305,12 +366,16 @@ export async function saveMediaBuffer(
   originalFilename?: string,
 ): Promise<SavedMedia> {
   if (buffer.byteLength > maxBytes) {
-    throw new Error(`Media exceeds ${(maxBytes / (1024 * 1024)).toFixed(0)}MB limit`);
+    throw new Error(
+      `Media exceeds ${(maxBytes / (1024 * 1024)).toFixed(0)}MB limit`,
+    );
   }
   const dir = path.join(resolveMediaDir(), subdir);
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
   const uuid = crypto.randomUUID();
-  const headerExt = extensionForMime(contentType?.split(";")[0]?.trim() ?? undefined);
+  const headerExt = extensionForMime(
+    contentType?.split(";")[0]?.trim() ?? undefined,
+  );
   const mime = await detectMime({ buffer, headerMime: contentType });
   const ext = headerExt ?? extensionForMime(mime) ?? "";
 

@@ -8,7 +8,9 @@ export type ClearSessionQueueResult = {
   keys: string[];
 };
 
-export function clearSessionQueues(keys: Array<string | undefined>): ClearSessionQueueResult {
+export function clearSessionQueues(
+  keys: Array<string | undefined>,
+): ClearSessionQueueResult {
   const seen = new Set<string>();
   let followupCleared = 0;
   let laneCleared = 0;

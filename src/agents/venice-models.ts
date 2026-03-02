@@ -294,7 +294,9 @@ export type VeniceCatalogEntry = (typeof VENICE_MODEL_CATALOG)[number];
  * as ModelDefinitionConfig doesn't support custom metadata fields. Privacy
  * mode is inherent to each model and documented in the catalog/docs.
  */
-export function buildVeniceModelDefinition(entry: VeniceCatalogEntry): ModelDefinitionConfig {
+export function buildVeniceModelDefinition(
+  entry: VeniceCatalogEntry,
+): ModelDefinitionConfig {
   return {
     id: entry.id,
     name: entry.name,
@@ -348,7 +350,9 @@ export async function discoverVeniceModels(): Promise<ModelDefinitionConfig[]> {
     });
 
     if (!response.ok) {
-      log.warn(`Failed to discover models: HTTP ${response.status}, using static catalog`);
+      log.warn(
+        `Failed to discover models: HTTP ${response.status}, using static catalog`,
+      );
       return VENICE_MODEL_CATALOG.map(buildVeniceModelDefinition);
     }
 
@@ -395,7 +399,9 @@ export async function discoverVeniceModels(): Promise<ModelDefinitionConfig[]> {
       }
     }
 
-    return models.length > 0 ? models : VENICE_MODEL_CATALOG.map(buildVeniceModelDefinition);
+    return models.length > 0
+      ? models
+      : VENICE_MODEL_CATALOG.map(buildVeniceModelDefinition);
   } catch (error) {
     log.warn(`Discovery failed: ${String(error)}, using static catalog`);
     return VENICE_MODEL_CATALOG.map(buildVeniceModelDefinition);

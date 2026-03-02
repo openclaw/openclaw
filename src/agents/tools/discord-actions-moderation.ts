@@ -30,7 +30,9 @@ async function verifySenderModerationPermission(params: {
     params.accountId ? { accountId: params.accountId } : undefined,
   );
   if (!hasPermission) {
-    throw new Error("Sender does not have required permissions for this moderation action.");
+    throw new Error(
+      "Sender does not have required permissions for this moderation action.",
+    );
   }
 }
 
@@ -51,7 +53,9 @@ export async function handleDiscordModerationAction(
   await verifySenderModerationPermission({
     guildId: command.guildId,
     senderUserId,
-    requiredPermission: requiredGuildPermissionForModerationAction(command.action),
+    requiredPermission: requiredGuildPermissionForModerationAction(
+      command.action,
+    ),
     accountId,
   });
   switch (command.action) {

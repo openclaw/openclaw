@@ -16,7 +16,9 @@ export type SafeBinProfileFixture = {
   deniedFlags?: readonly string[];
 };
 
-export type SafeBinProfileFixtures = Readonly<Record<string, SafeBinProfileFixture>>;
+export type SafeBinProfileFixtures = Readonly<
+  Record<string, SafeBinProfileFixture>
+>;
 
 const NO_FLAGS: ReadonlySet<string> = new Set();
 
@@ -87,134 +89,138 @@ function compileSafeBinProfiles(
   fixtures: Record<string, SafeBinProfileFixture>,
 ): Record<string, SafeBinProfile> {
   return Object.fromEntries(
-    Object.entries(fixtures).map(([name, fixture]) => [name, compileSafeBinProfile(fixture)]),
+    Object.entries(fixtures).map(([name, fixture]) => [
+      name,
+      compileSafeBinProfile(fixture),
+    ]),
   ) as Record<string, SafeBinProfile>;
 }
 
-export const SAFE_BIN_PROFILE_FIXTURES: Record<string, SafeBinProfileFixture> = {
-  jq: {
-    maxPositional: 1,
-    allowedValueFlags: ["--arg", "--argjson", "--argstr"],
-    deniedFlags: [
-      "--argfile",
-      "--rawfile",
-      "--slurpfile",
-      "--from-file",
-      "--library-path",
-      "-L",
-      "-f",
-    ],
-  },
-  grep: {
-    // Keep grep stdin-only: pattern must come from -e/--regexp.
-    // Allowing one positional is ambiguous because -e consumes the pattern and
-    // frees the positional slot for a filename.
-    maxPositional: 0,
-    allowedValueFlags: [
-      "--regexp",
-      "--max-count",
-      "--after-context",
-      "--before-context",
-      "--context",
-      "--devices",
-      "--binary-files",
-      "--exclude",
-      "--include",
-      "--label",
-      "-e",
-      "-m",
-      "-A",
-      "-B",
-      "-C",
-      "-D",
-    ],
-    deniedFlags: [
-      "--file",
-      "--exclude-from",
-      "--dereference-recursive",
-      "--directories",
-      "--recursive",
-      "-f",
-      "-d",
-      "-r",
-      "-R",
-    ],
-  },
-  cut: {
-    maxPositional: 0,
-    allowedValueFlags: [
-      "--bytes",
-      "--characters",
-      "--fields",
-      "--delimiter",
-      "--output-delimiter",
-      "-b",
-      "-c",
-      "-f",
-      "-d",
-    ],
-  },
-  sort: {
-    maxPositional: 0,
-    allowedValueFlags: [
-      "--key",
-      "--field-separator",
-      "--buffer-size",
-      "--parallel",
-      "--batch-size",
-      "-k",
-      "-t",
-      "-S",
-    ],
-    // --compress-program can invoke an external executable and breaks stdin-only guarantees.
-    // --random-source/--temporary-directory/-T are filesystem-dependent and not stdin-only.
-    deniedFlags: [
-      "--compress-program",
-      "--files0-from",
-      "--output",
-      "--random-source",
-      "--temporary-directory",
-      "-T",
-      "-o",
-    ],
-  },
-  uniq: {
-    maxPositional: 0,
-    allowedValueFlags: [
-      "--skip-fields",
-      "--skip-chars",
-      "--check-chars",
-      "--group",
-      "-f",
-      "-s",
-      "-w",
-    ],
-  },
-  head: {
-    maxPositional: 0,
-    allowedValueFlags: ["--lines", "--bytes", "-n", "-c"],
-  },
-  tail: {
-    maxPositional: 0,
-    allowedValueFlags: [
-      "--lines",
-      "--bytes",
-      "--sleep-interval",
-      "--max-unchanged-stats",
-      "--pid",
-      "-n",
-      "-c",
-    ],
-  },
-  tr: {
-    minPositional: 1,
-    maxPositional: 2,
-  },
-  wc: {
-    maxPositional: 0,
-    deniedFlags: ["--files0-from"],
-  },
-};
+export const SAFE_BIN_PROFILE_FIXTURES: Record<string, SafeBinProfileFixture> =
+  {
+    jq: {
+      maxPositional: 1,
+      allowedValueFlags: ["--arg", "--argjson", "--argstr"],
+      deniedFlags: [
+        "--argfile",
+        "--rawfile",
+        "--slurpfile",
+        "--from-file",
+        "--library-path",
+        "-L",
+        "-f",
+      ],
+    },
+    grep: {
+      // Keep grep stdin-only: pattern must come from -e/--regexp.
+      // Allowing one positional is ambiguous because -e consumes the pattern and
+      // frees the positional slot for a filename.
+      maxPositional: 0,
+      allowedValueFlags: [
+        "--regexp",
+        "--max-count",
+        "--after-context",
+        "--before-context",
+        "--context",
+        "--devices",
+        "--binary-files",
+        "--exclude",
+        "--include",
+        "--label",
+        "-e",
+        "-m",
+        "-A",
+        "-B",
+        "-C",
+        "-D",
+      ],
+      deniedFlags: [
+        "--file",
+        "--exclude-from",
+        "--dereference-recursive",
+        "--directories",
+        "--recursive",
+        "-f",
+        "-d",
+        "-r",
+        "-R",
+      ],
+    },
+    cut: {
+      maxPositional: 0,
+      allowedValueFlags: [
+        "--bytes",
+        "--characters",
+        "--fields",
+        "--delimiter",
+        "--output-delimiter",
+        "-b",
+        "-c",
+        "-f",
+        "-d",
+      ],
+    },
+    sort: {
+      maxPositional: 0,
+      allowedValueFlags: [
+        "--key",
+        "--field-separator",
+        "--buffer-size",
+        "--parallel",
+        "--batch-size",
+        "-k",
+        "-t",
+        "-S",
+      ],
+      // --compress-program can invoke an external executable and breaks stdin-only guarantees.
+      // --random-source/--temporary-directory/-T are filesystem-dependent and not stdin-only.
+      deniedFlags: [
+        "--compress-program",
+        "--files0-from",
+        "--output",
+        "--random-source",
+        "--temporary-directory",
+        "-T",
+        "-o",
+      ],
+    },
+    uniq: {
+      maxPositional: 0,
+      allowedValueFlags: [
+        "--skip-fields",
+        "--skip-chars",
+        "--check-chars",
+        "--group",
+        "-f",
+        "-s",
+        "-w",
+      ],
+    },
+    head: {
+      maxPositional: 0,
+      allowedValueFlags: ["--lines", "--bytes", "-n", "-c"],
+    },
+    tail: {
+      maxPositional: 0,
+      allowedValueFlags: [
+        "--lines",
+        "--bytes",
+        "--sleep-interval",
+        "--max-unchanged-stats",
+        "--pid",
+        "-n",
+        "-c",
+      ],
+    },
+    tr: {
+      minPositional: 1,
+      maxPositional: 2,
+    },
+    wc: {
+      maxPositional: 0,
+      deniedFlags: ["--files0-from"],
+    },
+  };
 
 export const SAFE_BIN_PROFILES: Record<string, SafeBinProfile> =
   compileSafeBinProfiles(SAFE_BIN_PROFILE_FIXTURES);
@@ -244,7 +250,9 @@ function normalizeFixtureFlags(
   return normalized.length > 0 ? normalized : undefined;
 }
 
-function normalizeSafeBinProfileFixture(fixture: SafeBinProfileFixture): SafeBinProfileFixture {
+function normalizeSafeBinProfileFixture(
+  fixture: SafeBinProfileFixture,
+): SafeBinProfileFixture {
   const minPositional = normalizeFixtureLimit(fixture.minPositional);
   const maxPositionalRaw = normalizeFixtureLimit(fixture.maxPositional);
   const maxPositional =
@@ -292,7 +300,9 @@ export function resolveSafeBinProfiles(
 }
 
 export function resolveSafeBinDeniedFlags(
-  fixtures: Readonly<Record<string, SafeBinProfileFixture>> = SAFE_BIN_PROFILE_FIXTURES,
+  fixtures: Readonly<
+    Record<string, SafeBinProfileFixture>
+  > = SAFE_BIN_PROFILE_FIXTURES,
 ): Record<string, string[]> {
   const out: Record<string, string[]> = {};
   for (const [name, fixture] of Object.entries(fixtures)) {
@@ -305,11 +315,16 @@ export function resolveSafeBinDeniedFlags(
 }
 
 export function renderSafeBinDeniedFlagsDocBullets(
-  fixtures: Readonly<Record<string, SafeBinProfileFixture>> = SAFE_BIN_PROFILE_FIXTURES,
+  fixtures: Readonly<
+    Record<string, SafeBinProfileFixture>
+  > = SAFE_BIN_PROFILE_FIXTURES,
 ): string {
   const deniedByBin = resolveSafeBinDeniedFlags(fixtures);
   const bins = Object.keys(deniedByBin).toSorted();
   return bins
-    .map((bin) => `- \`${bin}\`: ${deniedByBin[bin].map((flag) => `\`${flag}\``).join(", ")}`)
+    .map(
+      (bin) =>
+        `- \`${bin}\`: ${deniedByBin[bin].map((flag) => `\`${flag}\``).join(", ")}`,
+    )
     .join("\n");
 }

@@ -35,7 +35,8 @@ export function registerNodesPushCommand(nodes: Command) {
         await runNodesCommand("push", async () => {
           const nodeId = await resolveNodeId(opts, String(opts.node ?? ""));
           const title = String(opts.title ?? "").trim() || "OpenClaw";
-          const body = String(opts.body ?? "").trim() || `Push test for node ${nodeId}`;
+          const body =
+            String(opts.body ?? "").trim() || `Push test for node ${nodeId}`;
           const environment = normalizeEnvironment(opts.environment);
           if (opts.environment && !environment) {
             throw new Error("invalid --environment (use sandbox|production)");
@@ -72,12 +73,15 @@ export function registerNodesPushCommand(nodes: Command) {
               ? parsed.reason.trim()
               : undefined;
           const env =
-            typeof parsed.environment === "string" && parsed.environment.trim().length > 0
+            typeof parsed.environment === "string" &&
+            parsed.environment.trim().length > 0
               ? parsed.environment.trim()
               : "unknown";
           const { ok: okLabel, error: errorLabel } = getNodesTheme();
           const label = ok ? okLabel : errorLabel;
-          defaultRuntime.log(label(`push.test status=${status} ok=${ok} env=${env}`));
+          defaultRuntime.log(
+            label(`push.test status=${status} ok=${ok} env=${env}`),
+          );
           if (reason) {
             defaultRuntime.log(`reason: ${reason}`);
           }

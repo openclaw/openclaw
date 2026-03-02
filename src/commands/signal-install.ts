@@ -43,7 +43,9 @@ export async function extractSignalCliArchive(
 
 /** @internal Exported for testing. */
 export function looksLikeArchive(name: string): boolean {
-  return name.endsWith(".tar.gz") || name.endsWith(".tgz") || name.endsWith(".zip");
+  return (
+    name.endsWith(".tar.gz") || name.endsWith(".tgz") || name.endsWith(".zip")
+  );
 }
 
 /**
@@ -65,7 +67,9 @@ export function pickAsset(
   );
 
   // Archives only, excluding signature files (.asc)
-  const archives = withName.filter((a) => looksLikeArchive(a.name.toLowerCase()));
+  const archives = withName.filter((a) =>
+    looksLikeArchive(a.name.toLowerCase()),
+  );
 
   const byName = (pattern: RegExp) =>
     archives.find((asset) => pattern.test(asset.name.toLowerCase()));
@@ -92,7 +96,11 @@ export function pickAsset(
   return archives[0];
 }
 
-async function downloadToFile(url: string, dest: string, maxRedirects = 5): Promise<void> {
+async function downloadToFile(
+  url: string,
+  dest: string,
+  maxRedirects = 5,
+): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     const req = request(url, (res) => {
       if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400) {
@@ -123,7 +131,9 @@ async function findSignalCliBinary(root: string): Promise<string | null> {
     if (depth > 3) {
       return;
     }
-    const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
+    const entries = await fs
+      .readdir(dir, { withFileTypes: true })
+      .catch(() => []);
     for (const entry of entries) {
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) {
@@ -141,11 +151,16 @@ async function findSignalCliBinary(root: string): Promise<string | null> {
 // Brew-based install (used on architectures without an official native build)
 // ---------------------------------------------------------------------------
 
-async function resolveBrewSignalCliPath(brewExe: string): Promise<string | null> {
+async function resolveBrewSignalCliPath(
+  brewExe: string,
+): Promise<string | null> {
   try {
-    const result = await runCommandWithTimeout([brewExe, "--prefix", "signal-cli"], {
-      timeoutMs: 10_000,
-    });
+    const result = await runCommandWithTimeout(
+      [brewExe, "--prefix", "signal-cli"],
+      {
+        timeoutMs: 10_000,
+      },
+    );
     if (result.code === 0 && result.stdout.trim()) {
       const prefix = result.stdout.trim();
       // Homebrew installs the wrapper script at <prefix>/bin/signal-cli
@@ -164,7 +179,9 @@ async function resolveBrewSignalCliPath(brewExe: string): Promise<string | null>
   return null;
 }
 
-async function installSignalCliViaBrew(runtime: RuntimeEnv): Promise<SignalInstallResult> {
+async function installSignalCliViaBrew(
+  runtime: RuntimeEnv,
+): Promise<SignalInstallResult> {
   const brewExe = resolveBrewExecutable();
   if (!brewExe) {
     return {
@@ -176,9 +193,12 @@ async function installSignalCliViaBrew(runtime: RuntimeEnv): Promise<SignalInsta
   }
 
   runtime.log(`Installing signal-cli via Homebrew (${brewExe})…`);
-  const result = await runCommandWithTimeout([brewExe, "install", "signal-cli"], {
-    timeoutMs: 15 * 60_000, // brew builds from source; can take a while
-  });
+  const result = await runCommandWithTimeout(
+    [brewExe, "install", "signal-cli"],
+    {
+      timeoutMs: 15 * 60_000, // brew builds from source; can take a while
+    },
+  );
 
   if (result.code !== 0) {
     return {
@@ -214,8 +234,11 @@ async function installSignalCliViaBrew(runtime: RuntimeEnv): Promise<SignalInsta
 // Direct download install (used when an official native asset is available)
 // ---------------------------------------------------------------------------
 
-async function installSignalCliFromRelease(runtime: RuntimeEnv): Promise<SignalInstallResult> {
-  const apiUrl = "https://api.github.com/repos/AsamK/signal-cli/releases/latest";
+async function installSignalCliFromRelease(
+  runtime: RuntimeEnv,
+): Promise<SignalInstallResult> {
+  const apiUrl =
+    "https://api.github.com/repos/AsamK/signal-cli/releases/latest";
   const response = await fetch(apiUrl, {
     headers: {
       "User-Agent": "openclaw",
@@ -281,7 +304,9 @@ async function installSignalCliFromRelease(runtime: RuntimeEnv): Promise<SignalI
 // Public entry point
 // ---------------------------------------------------------------------------
 
-export async function installSignalCli(runtime: RuntimeEnv): Promise<SignalInstallResult> {
+export async function installSignalCli(
+  runtime: RuntimeEnv,
+): Promise<SignalInstallResult> {
   if (process.platform === "win32") {
     return {
       ok: false,
@@ -292,7 +317,8 @@ export async function installSignalCli(runtime: RuntimeEnv): Promise<SignalInsta
   // The official signal-cli GitHub releases only ship a native binary for
   // x86-64 Linux.  On other architectures (arm64, armv7, etc.) we delegate
   // to Homebrew which builds from source and bundles the JRE automatically.
-  const hasNativeRelease = process.platform !== "linux" || process.arch === "x64";
+  const hasNativeRelease =
+    process.platform !== "linux" || process.arch === "x64";
 
   if (hasNativeRelease) {
     return installSignalCliFromRelease(runtime);

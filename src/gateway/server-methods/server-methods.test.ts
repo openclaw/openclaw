@@ -3,7 +3,15 @@ import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.js";
 import { buildSystemRunApprovalBinding } from "../../infra/system-run-approval-binding.js";
@@ -86,12 +94,16 @@ describe("injectTimestamp", () => {
       timezone: "America/New_York",
     });
 
-    expect(result).toMatch(/^\[Wed 2026-01-28 20:30 EST\] Is it the weekend\?$/);
+    expect(result).toMatch(
+      /^\[Wed 2026-01-28 20:30 EST\] Is it the weekend\?$/,
+    );
   });
 
   it("uses channel envelope format with DOW prefix", () => {
     const now = new Date();
-    const expected = formatZonedTimestamp(now, { timeZone: "America/New_York" });
+    const expected = formatZonedTimestamp(now, {
+      timeZone: "America/New_York",
+    });
 
     const result = injectTimestamp("hello", { timezone: "America/New_York" });
 
@@ -132,7 +144,9 @@ describe("injectTimestamp", () => {
 
   it("does NOT double-stamp messages already injected by us", () => {
     const alreadyStamped = "[Wed 2026-01-28 20:30 EST] hello there";
-    const result = injectTimestamp(alreadyStamped, { timezone: "America/New_York" });
+    const result = injectTimestamp(alreadyStamped, {
+      timezone: "America/New_York",
+    });
 
     expect(result).toBe(alreadyStamped);
   });
@@ -140,7 +154,9 @@ describe("injectTimestamp", () => {
   it("does NOT double-stamp messages with cron-injected timestamps", () => {
     const cronMessage =
       "[cron:abc123 my-job] do the thing\nCurrent time: Wednesday, January 28th, 2026 — 8:30 PM (America/New_York)";
-    const result = injectTimestamp(cronMessage, { timezone: "America/New_York" });
+    const result = injectTimestamp(cronMessage, {
+      timezone: "America/New_York",
+    });
 
     expect(result).toBe(cronMessage);
   });
@@ -208,10 +224,20 @@ describe("timestampOptsFromConfig", () => {
 describe("normalizeRpcAttachmentsToChatAttachments", () => {
   it("passes through string content", () => {
     const res = normalizeRpcAttachmentsToChatAttachments([
-      { type: "file", mimeType: "image/png", fileName: "a.png", content: "Zm9v" },
+      {
+        type: "file",
+        mimeType: "image/png",
+        fileName: "a.png",
+        content: "Zm9v",
+      },
     ]);
     expect(res).toEqual([
-      { type: "file", mimeType: "image/png", fileName: "a.png", content: "Zm9v" },
+      {
+        type: "file",
+        mimeType: "image/png",
+        fileName: "a.png",
+        content: "Zm9v",
+      },
     ]);
   });
 
@@ -231,12 +257,17 @@ describe("sanitizeChatSendMessageInput", () => {
   });
 
   it("strips unsafe control characters while preserving tab/newline/carriage return", () => {
-    const result = sanitizeChatSendMessageInput("a\u0001b\tc\nd\re\u0007f\u007f");
+    const result = sanitizeChatSendMessageInput(
+      "a\u0001b\tc\nd\re\u0007f\u007f",
+    );
     expect(result).toEqual({ ok: true, message: "ab\tc\nd\ref" });
   });
 
   it("normalizes unicode to NFC", () => {
-    expect(sanitizeChatSendMessageInput("Cafe\u0301")).toEqual({ ok: true, message: "Café" });
+    expect(sanitizeChatSendMessageInput("Cafe\u0301")).toEqual({
+      ok: true,
+      message: "Café",
+    });
   });
 });
 
@@ -244,13 +275,17 @@ describe("gateway chat transcript writes (guardrail)", () => {
   it("routes transcript writes through helper and SessionManager parentId append", () => {
     const chatTs = fileURLToPath(new URL("./chat.ts", import.meta.url));
     const chatSrc = fs.readFileSync(chatTs, "utf-8");
-    const helperTs = fileURLToPath(new URL("./chat-transcript-inject.ts", import.meta.url));
+    const helperTs = fileURLToPath(
+      new URL("./chat-transcript-inject.ts", import.meta.url),
+    );
     const helperSrc = fs.readFileSync(helperTs, "utf-8");
 
     expect(chatSrc.includes("fs.appendFileSync(transcriptPath")).toBe(false);
     expect(chatSrc).toContain("appendInjectedAssistantMessageToTranscript(");
 
-    expect(helperSrc.includes("fs.appendFileSync(params.transcriptPath")).toBe(false);
+    expect(helperSrc.includes("fs.appendFileSync(params.transcriptPath")).toBe(
+      false,
+    );
     expect(helperSrc).toContain("SessionManager.open(params.transcriptPath)");
     expect(helperSrc).toContain("appendMessage(messageBody)");
   });
@@ -259,8 +294,12 @@ describe("gateway chat transcript writes (guardrail)", () => {
 describe("exec approval handlers", () => {
   const execApprovalNoop = () => false;
   type ExecApprovalHandlers = ReturnType<typeof createExecApprovalHandlers>;
-  type ExecApprovalRequestArgs = Parameters<ExecApprovalHandlers["exec.approval.request"]>[0];
-  type ExecApprovalResolveArgs = Parameters<ExecApprovalHandlers["exec.approval.resolve"]>[0];
+  type ExecApprovalRequestArgs = Parameters<
+    ExecApprovalHandlers["exec.approval.request"]
+  >[0];
+  type ExecApprovalResolveArgs = Parameters<
+    ExecApprovalHandlers["exec.approval.resolve"]
+  >[0];
 
   const defaultExecApprovalRequestParams = {
     command: "echo ok",
@@ -301,15 +340,16 @@ describe("exec approval handlers", () => {
       ...defaultExecApprovalRequestParams,
       ...params.params,
     } as unknown as ExecApprovalRequestArgs["params"];
-    const hasExplicitPlan = !!params.params && Object.hasOwn(params.params, "systemRunPlan");
+    const hasExplicitPlan =
+      !!params.params && Object.hasOwn(params.params, "systemRunPlan");
     if (
       !hasExplicitPlan &&
       (requestParams as { host?: string }).host === "node" &&
       Array.isArray((requestParams as { commandArgv?: unknown }).commandArgv)
     ) {
-      const commandArgv = (requestParams as { commandArgv: unknown[] }).commandArgv.map((entry) =>
-        String(entry),
-      );
+      const commandArgv = (
+        requestParams as { commandArgv: unknown[] }
+      ).commandArgv.map((entry) => String(entry));
       const cwdValue =
         typeof (requestParams as { cwd?: unknown }).cwd === "string"
           ? ((requestParams as { cwd: string }).cwd ?? null)
@@ -327,7 +367,8 @@ describe("exec approval handlers", () => {
             ? ((requestParams as { agentId: string }).agentId ?? null)
             : null,
         sessionKey:
-          typeof (requestParams as { sessionKey?: unknown }).sessionKey === "string"
+          typeof (requestParams as { sessionKey?: unknown }).sessionKey ===
+          "string"
             ? ((requestParams as { sessionKey: string }).sessionKey ?? null)
             : null,
       };
@@ -352,7 +393,10 @@ describe("exec approval handlers", () => {
     context: { broadcast: (event: string, payload: unknown) => void };
   }) {
     return params.handlers["exec.approval.resolve"]({
-      params: { id: params.id, decision: "allow-once" } as ExecApprovalResolveArgs["params"],
+      params: {
+        id: params.id,
+        decision: "allow-once",
+      } as ExecApprovalResolveArgs["params"],
       respond: params.respond as unknown as ExecApprovalResolveArgs["respond"],
       context: toExecApprovalResolveContext(params.context),
       client: null,
@@ -455,7 +499,8 @@ describe("exec approval handlers", () => {
   });
 
   it("broadcasts request + resolve", async () => {
-    const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+    const { handlers, broadcasts, respond, context } =
+      createExecApprovalFixture();
 
     const requestPromise = requestExecApproval({
       handlers,
@@ -464,7 +509,9 @@ describe("exec approval handlers", () => {
       params: { twoPhase: true },
     });
 
-    const requested = broadcasts.find((entry) => entry.event === "exec.approval.requested");
+    const requested = broadcasts.find(
+      (entry) => entry.event === "exec.approval.requested",
+    );
     expect(requested).toBeTruthy();
     const id = (requested?.payload as { id?: string })?.id ?? "";
     expect(id).not.toBe("");
@@ -491,11 +538,14 @@ describe("exec approval handlers", () => {
       expect.objectContaining({ id, decision: "allow-once" }),
       undefined,
     );
-    expect(broadcasts.some((entry) => entry.event === "exec.approval.resolved")).toBe(true);
+    expect(
+      broadcasts.some((entry) => entry.event === "exec.approval.resolved"),
+    ).toBe(true);
   });
 
   it("stores versioned system.run binding and sorted env keys on approval request", async () => {
-    const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+    const { handlers, broadcasts, respond, context } =
+      createExecApprovalFixture();
     await requestExecApproval({
       handlers,
       respond,
@@ -508,9 +558,13 @@ describe("exec approval handlers", () => {
         },
       },
     });
-    const requested = broadcasts.find((entry) => entry.event === "exec.approval.requested");
+    const requested = broadcasts.find(
+      (entry) => entry.event === "exec.approval.requested",
+    );
     expect(requested).toBeTruthy();
-    const request = (requested?.payload as { request?: Record<string, unknown> })?.request ?? {};
+    const request =
+      (requested?.payload as { request?: Record<string, unknown> })?.request ??
+      {};
     expect(request["envKeys"]).toEqual(["A_VAR", "Z_VAR"]);
     expect(request["systemRunBinding"]).toEqual(
       buildSystemRunApprovalBinding({
@@ -522,7 +576,8 @@ describe("exec approval handlers", () => {
   });
 
   it("prefers systemRunPlan canonical command/cwd when present", async () => {
-    const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+    const { handlers, broadcasts, respond, context } =
+      createExecApprovalFixture();
     await requestExecApproval({
       handlers,
       respond,
@@ -540,9 +595,13 @@ describe("exec approval handlers", () => {
         },
       },
     });
-    const requested = broadcasts.find((entry) => entry.event === "exec.approval.requested");
+    const requested = broadcasts.find(
+      (entry) => entry.event === "exec.approval.requested",
+    );
     expect(requested).toBeTruthy();
-    const request = (requested?.payload as { request?: Record<string, unknown> })?.request ?? {};
+    const request =
+      (requested?.payload as { request?: Record<string, unknown> })?.request ??
+      {};
     expect(request["command"]).toBe("/usr/bin/echo ok");
     expect(request["commandArgv"]).toEqual(["/usr/bin/echo", "ok"]);
     expect(request["cwd"]).toBe("/real/cwd");
@@ -597,7 +656,8 @@ describe("exec approval handlers", () => {
   });
 
   it("accepts explicit approval ids", async () => {
-    const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+    const { handlers, broadcasts, respond, context } =
+      createExecApprovalFixture();
 
     const requestPromise = requestExecApproval({
       handlers,
@@ -606,7 +666,9 @@ describe("exec approval handlers", () => {
       params: { id: "approval-123", host: "gateway" },
     });
 
-    const requested = broadcasts.find((entry) => entry.event === "exec.approval.requested");
+    const requested = broadcasts.find(
+      (entry) => entry.event === "exec.approval.requested",
+    );
     const id = (requested?.payload as { id?: string })?.id ?? "";
     expect(id).toBe("approval-123");
 
@@ -630,7 +692,8 @@ describe("exec approval handlers", () => {
   it("forwards turn-source metadata to exec approval forwarding", async () => {
     vi.useFakeTimers();
     try {
-      const { handlers, forwarder, respond, context } = createForwardingExecApprovalFixture();
+      const { handlers, forwarder, respond, context } =
+        createForwardingExecApprovalFixture();
 
       const requestPromise = requestExecApproval({
         handlers,
@@ -729,7 +792,9 @@ describe("gateway healthHandlers.status scope handling", () => {
     async ({ scopes, includeSensitive }) => {
       const respond = await runHealthStatus(scopes);
 
-      expect(vi.mocked(statusModule.getStatusSummary)).toHaveBeenCalledWith({ includeSensitive });
+      expect(vi.mocked(statusModule.getStatusSummary)).toHaveBeenCalledWith({
+        includeSensitive,
+      });
       expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
     },
   );
@@ -744,7 +809,9 @@ describe("logs.tail", () => {
   });
 
   it("falls back to latest rolling log file when today is missing", async () => {
-    const tempDir = await fsPromises.mkdtemp(path.join(os.tmpdir(), "openclaw-logs-"));
+    const tempDir = await fsPromises.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-logs-"),
+    );
     const older = path.join(tempDir, "openclaw-2026-01-20.log");
     const newer = path.join(tempDir, "openclaw-2026-01-21.log");
 
@@ -759,7 +826,9 @@ describe("logs.tail", () => {
     await logsHandlers["logs.tail"]({
       params: {},
       respond,
-      context: {} as unknown as Parameters<(typeof logsHandlers)["logs.tail"]>[0]["context"],
+      context: {} as unknown as Parameters<
+        (typeof logsHandlers)["logs.tail"]
+      >[0]["context"],
       client: null,
       req: { id: "req-1", type: "req", method: "logs.tail" },
       isWebchatConnect: logsNoop,

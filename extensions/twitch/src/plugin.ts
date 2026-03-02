@@ -10,7 +10,11 @@ import { buildChannelConfigSchema } from "openclaw/plugin-sdk";
 import { twitchMessageActions } from "./actions.js";
 import { removeClientManager } from "./client-manager-registry.js";
 import { TwitchConfigSchema } from "./config-schema.js";
-import { DEFAULT_ACCOUNT_ID, getAccountConfig, listAccountIds } from "./config.js";
+import {
+  DEFAULT_ACCOUNT_ID,
+  getAccountConfig,
+  listAccountIds,
+} from "./config.js";
 import { twitchOnboardingAdapter } from "./onboarding.js";
 import { twitchOutbound } from "./outbound.js";
 import { probeTwitch } from "./probe.js";
@@ -60,7 +64,9 @@ export const twitchPlugin: ChannelPlugin<TwitchAccountConfig> = {
     notifyApproval: async ({ id }) => {
       // Note: Twitch doesn't support DMs from bots, so pairing approval is limited
       // We'll log the approval instead
-      console.warn(`Pairing approved for user ${id} (notification sent via chat if possible)`);
+      console.warn(
+        `Pairing approved for user ${id} (notification sent via chat if possible)`,
+      );
     },
   },
 
@@ -78,7 +84,10 @@ export const twitchPlugin: ChannelPlugin<TwitchAccountConfig> = {
     listAccountIds: (cfg: OpenClawConfig): string[] => listAccountIds(cfg),
 
     /** Resolve an account config by ID */
-    resolveAccount: (cfg: OpenClawConfig, accountId?: string | null): TwitchAccountConfig => {
+    resolveAccount: (
+      cfg: OpenClawConfig,
+      accountId?: string | null,
+    ): TwitchAccountConfig => {
       const account = getAccountConfig(cfg, accountId ?? DEFAULT_ACCOUNT_ID);
       if (!account) {
         // Return a default/empty account if not configured
@@ -98,19 +107,26 @@ export const twitchPlugin: ChannelPlugin<TwitchAccountConfig> = {
     /** Check if an account is configured */
     isConfigured: (_account: unknown, cfg: OpenClawConfig): boolean => {
       const account = getAccountConfig(cfg, DEFAULT_ACCOUNT_ID);
-      const tokenResolution = resolveTwitchToken(cfg, { accountId: DEFAULT_ACCOUNT_ID });
-      return account ? isAccountConfigured(account, tokenResolution.token) : false;
+      const tokenResolution = resolveTwitchToken(cfg, {
+        accountId: DEFAULT_ACCOUNT_ID,
+      });
+      return account
+        ? isAccountConfigured(account, tokenResolution.token)
+        : false;
     },
 
     /** Check if an account is enabled */
-    isEnabled: (account: TwitchAccountConfig | undefined): boolean => account?.enabled !== false,
+    isEnabled: (account: TwitchAccountConfig | undefined): boolean =>
+      account?.enabled !== false,
 
     /** Describe account status */
     describeAccount: (account: TwitchAccountConfig | undefined) => {
       return {
         accountId: DEFAULT_ACCOUNT_ID,
         enabled: account?.enabled !== false,
-        configured: account ? isAccountConfigured(account, account?.accessToken) : false,
+        configured: account
+          ? isAccountConfigured(account, account?.accessToken)
+          : false,
       };
     },
   },
@@ -169,7 +185,11 @@ export const twitchPlugin: ChannelPlugin<TwitchAccountConfig> = {
     },
 
     /** Build channel summary from snapshot */
-    buildChannelSummary: ({ snapshot }: { snapshot: ChannelAccountSnapshot }) => ({
+    buildChannelSummary: ({
+      snapshot,
+    }: {
+      snapshot: ChannelAccountSnapshot;
+    }) => ({
       configured: snapshot.configured ?? false,
       running: snapshot.running ?? false,
       lastStartAt: snapshot.lastStartAt ?? null,
@@ -206,11 +226,15 @@ export const twitchPlugin: ChannelPlugin<TwitchAccountConfig> = {
         | Record<string, unknown>
         | undefined;
       const twitchCfg = twitch?.twitch as Record<string, unknown> | undefined;
-      const accountMap = (twitchCfg?.accounts as Record<string, unknown> | undefined) ?? {};
+      const accountMap =
+        (twitchCfg?.accounts as Record<string, unknown> | undefined) ?? {};
       const resolvedAccountId =
-        Object.entries(accountMap).find(([, value]) => value === account)?.[0] ??
-        DEFAULT_ACCOUNT_ID;
-      const tokenResolution = resolveTwitchToken(cfg, { accountId: resolvedAccountId });
+        Object.entries(accountMap).find(
+          ([, value]) => value === account,
+        )?.[0] ?? DEFAULT_ACCOUNT_ID;
+      const tokenResolution = resolveTwitchToken(cfg, {
+        accountId: resolvedAccountId,
+      });
       return {
         accountId: resolvedAccountId,
         enabled: account?.enabled !== false,

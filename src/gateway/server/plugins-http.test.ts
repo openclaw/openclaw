@@ -8,7 +8,9 @@ import {
   shouldEnforceGatewayAuthForPluginPath,
 } from "./plugins-http.js";
 
-type PluginHandlerLog = Parameters<typeof createGatewayPluginRequestHandler>[0]["log"];
+type PluginHandlerLog = Parameters<
+  typeof createGatewayPluginRequestHandler
+>[0]["log"];
 
 function createPluginLog(): PluginHandlerLog {
   return { warn: vi.fn() } as unknown as PluginHandlerLog;
@@ -19,7 +21,10 @@ function createRoute(params: {
   pluginId?: string;
   auth?: "gateway" | "plugin";
   match?: "exact" | "prefix";
-  handler?: (req: IncomingMessage, res: ServerResponse) => boolean | void | Promise<boolean | void>;
+  handler?: (
+    req: IncomingMessage,
+    res: ServerResponse,
+  ) => boolean | void | Promise<boolean | void>;
 }) {
   return {
     pluginId: params.pluginId ?? "route",
@@ -76,8 +81,16 @@ describe("createGatewayPluginRequestHandler", () => {
     const handler = createGatewayPluginRequestHandler({
       registry: createTestRegistry({
         httpRoutes: [
-          createRoute({ path: "/api", match: "prefix", handler: prefixHandler }),
-          createRoute({ path: "/api/demo", match: "exact", handler: exactHandler }),
+          createRoute({
+            path: "/api",
+            match: "prefix",
+            handler: prefixHandler,
+          }),
+          createRoute({
+            path: "/api/demo",
+            match: "exact",
+            handler: exactHandler,
+          }),
         ],
       }),
       log: createPluginLog(),
@@ -122,7 +135,10 @@ describe("createGatewayPluginRequestHandler", () => {
     });
 
     const { res } = makeMockHttpResponse();
-    const handled = await handler({ url: "/API//demo" } as IncomingMessage, res);
+    const handled = await handler(
+      { url: "/API//demo" } as IncomingMessage,
+      res,
+    );
     expect(handled).toBe(true);
     expect(routeHandler).toHaveBeenCalledTimes(1);
   });
@@ -148,7 +164,10 @@ describe("createGatewayPluginRequestHandler", () => {
     expect(handled).toBe(true);
     expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("boom"));
     expect(res.statusCode).toBe(500);
-    expect(setHeader).toHaveBeenCalledWith("Content-Type", "text/plain; charset=utf-8");
+    expect(setHeader).toHaveBeenCalledWith(
+      "Content-Type",
+      "text/plain; charset=utf-8",
+    );
     expect(end).toHaveBeenCalledWith("Internal Server Error");
   });
 });
@@ -172,7 +191,9 @@ describe("plugin HTTP route auth checks", () => {
     });
     expect(isRegisteredPluginHttpRoutePath(registry, "/api//demo")).toBe(true);
     expect(isRegisteredPluginHttpRoutePath(registry, "/API/demo")).toBe(true);
-    expect(isRegisteredPluginHttpRoutePath(registry, "/api/%2564emo")).toBe(true);
+    expect(isRegisteredPluginHttpRoutePath(registry, "/api/%2564emo")).toBe(
+      true,
+    );
   });
 
   it("enforces auth for protected and gateway-auth routes", () => {
@@ -182,11 +203,23 @@ describe("plugin HTTP route auth checks", () => {
         createRoute({ path: "/api/demo", auth: "gateway" }),
       ],
     });
-    expect(shouldEnforceGatewayAuthForPluginPath(registry, "/api//demo")).toBe(true);
-    expect(shouldEnforceGatewayAuthForPluginPath(registry, "/googlechat/public")).toBe(false);
-    expect(shouldEnforceGatewayAuthForPluginPath(registry, "/api/channels/status")).toBe(true);
-    expect(shouldEnforceGatewayAuthForPluginPath(registry, deeplyEncodedChannelPath)).toBe(true);
-    expect(shouldEnforceGatewayAuthForPluginPath(registry, decodeOverflowPublicPath)).toBe(true);
-    expect(shouldEnforceGatewayAuthForPluginPath(registry, "/not-plugin")).toBe(false);
+    expect(shouldEnforceGatewayAuthForPluginPath(registry, "/api//demo")).toBe(
+      true,
+    );
+    expect(
+      shouldEnforceGatewayAuthForPluginPath(registry, "/googlechat/public"),
+    ).toBe(false);
+    expect(
+      shouldEnforceGatewayAuthForPluginPath(registry, "/api/channels/status"),
+    ).toBe(true);
+    expect(
+      shouldEnforceGatewayAuthForPluginPath(registry, deeplyEncodedChannelPath),
+    ).toBe(true);
+    expect(
+      shouldEnforceGatewayAuthForPluginPath(registry, decodeOverflowPublicPath),
+    ).toBe(true);
+    expect(shouldEnforceGatewayAuthForPluginPath(registry, "/not-plugin")).toBe(
+      false,
+    );
   });
 });

@@ -204,9 +204,9 @@ describe("config view", () => {
     const container = document.createElement("div");
     render(renderConfig(baseProps()), container);
 
-    const options = Array.from(container.querySelectorAll(".config-search__tag-option")).map(
-      (option) => option.textContent?.trim(),
-    );
+    const options = Array.from(
+      container.querySelectorAll(".config-search__tag-option"),
+    ).map((option) => option.textContent?.trim());
     expect(options).toContain("tag:security");
     expect(options).toContain("tag:advanced");
     expect(options).toHaveLength(15);

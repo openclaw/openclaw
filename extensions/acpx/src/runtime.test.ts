@@ -26,7 +26,9 @@ describe("AcpxRuntime", () => {
         expect(events.some((event) => event.type === "done")).toBe(true);
       },
       assertErrorOutcome: ({ events, thrown }) => {
-        expect(events.some((event) => event.type === "error") || Boolean(thrown)).toBe(true);
+        expect(
+          events.some((event) => event.type === "error") || Boolean(thrown),
+        ).toBe(true);
       },
     });
 
@@ -40,7 +42,9 @@ describe("AcpxRuntime", () => {
   });
 
   it("ensures sessions and streams prompt events", async () => {
-    const { runtime, logPath } = await createMockRuntimeFixture({ queueOwnerTtlSeconds: 180 });
+    const { runtime, logPath } = await createMockRuntimeFixture({
+      queueOwnerTtlSeconds: 180,
+    });
 
     const handle = await runtime.ensureSession({
       sessionKey: "agent:codex:acp:123",
@@ -298,7 +302,10 @@ describe("AcpxRuntime", () => {
 
   it("does not mark backend unhealthy when a per-session cwd is missing", async () => {
     const { runtime } = await createMockRuntimeFixture();
-    const missingCwd = path.join(os.tmpdir(), "openclaw-acpx-runtime-test-missing-cwd");
+    const missingCwd = path.join(
+      os.tmpdir(),
+      "openclaw-acpx-runtime-test-missing-cwd",
+    );
 
     await runtime.probeAvailability();
     expect(runtime.isHealthy()).toBe(true);
@@ -362,7 +369,9 @@ describe("AcpxRuntime", () => {
 
     await runtime.probeAvailability();
 
-    const spawnLogs = debugLogs.filter((entry) => entry.startsWith("acpx spawn resolver:"));
+    const spawnLogs = debugLogs.filter((entry) =>
+      entry.startsWith("acpx spawn resolver:"),
+    );
     expect(spawnLogs.length).toBe(1);
     expect(spawnLogs[0]).toContain("mode=strict");
   });

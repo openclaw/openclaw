@@ -27,7 +27,11 @@ export function resolveCommandStdio(params: {
   hasInput: boolean;
   preferInherit: boolean;
 }): ["pipe" | "inherit" | "ignore", "pipe", "pipe"] {
-  const stdin = params.hasInput ? "pipe" : params.preferInherit ? "inherit" : "pipe";
+  const stdin = params.hasInput
+    ? "pipe"
+    : params.preferInherit
+      ? "inherit"
+      : "pipe";
   return [stdin, "pipe", "pipe"];
 }
 
@@ -55,7 +59,9 @@ export function formatSpawnError(err: unknown): string {
 
 function shouldRetry(err: unknown, codes: string[]): boolean {
   const code =
-    err && typeof err === "object" && "code" in err ? String((err as { code?: unknown }).code) : "";
+    err && typeof err === "object" && "code" in err
+      ? String((err as { code?: unknown }).code)
+      : "";
   return code.length > 0 && codes.includes(code);
 }
 
@@ -121,7 +127,11 @@ export async function spawnWithFallback(
   for (let index = 0; index < attempts.length; index += 1) {
     const attempt = attempts[index];
     try {
-      const child = await spawnAndWaitForSpawn(spawnImpl, params.argv, attempt.options);
+      const child = await spawnAndWaitForSpawn(
+        spawnImpl,
+        params.argv,
+        attempt.options,
+      );
       return {
         child,
         usedFallback: index > 0,

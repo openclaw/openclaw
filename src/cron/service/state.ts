@@ -52,7 +52,11 @@ export type CronServiceDeps = {
     text: string,
     opts?: { agentId?: string; sessionKey?: string; contextKey?: string },
   ) => void;
-  requestHeartbeatNow: (opts?: { reason?: string; agentId?: string; sessionKey?: string }) => void;
+  requestHeartbeatNow: (opts?: {
+    reason?: string;
+    agentId?: string;
+    sessionKey?: string;
+  }) => void;
   runHeartbeatOnce?: (opts?: {
     reason?: string;
     agentId?: string;
@@ -117,7 +121,9 @@ export type CronServiceState = {
   storeFileMtimeMs: number | null;
 };
 
-export function createCronServiceState(deps: CronServiceDeps): CronServiceState {
+export function createCronServiceState(
+  deps: CronServiceDeps,
+): CronServiceState {
   return {
     deps: { ...deps, nowMs: deps.nowMs ?? (() => Date.now()) },
     store: null,
@@ -146,7 +152,9 @@ export type CronRunResult =
   | { ok: true; ran: false; reason: "already-running" }
   | { ok: false };
 
-export type CronRemoveResult = { ok: true; removed: boolean } | { ok: false; removed: false };
+export type CronRemoveResult =
+  | { ok: true; removed: boolean }
+  | { ok: false; removed: false };
 
 export type CronAddResult = CronJob;
 export type CronUpdateResult = CronJob;

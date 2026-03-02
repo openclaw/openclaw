@@ -8,8 +8,14 @@ import { DISCORD_THREAD_BINDING_CHANNEL } from "../../../channels/thread-binding
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { AcpSessionRuntimeOptions } from "../../../config/sessions/types.js";
 import { normalizeAgentId } from "../../../routing/session-key.js";
-import type { CommandHandlerResult, HandleCommandsParams } from "../commands-types.js";
-import { resolveAcpCommandChannel, resolveAcpCommandThreadId } from "./context.js";
+import type {
+  CommandHandlerResult,
+  HandleCommandsParams,
+} from "../commands-types.js";
+import {
+  resolveAcpCommandChannel,
+  resolveAcpCommandThreadId,
+} from "./context.js";
 
 export const COMMAND = "/acp";
 export const ACP_SPAWN_USAGE =
@@ -18,8 +24,10 @@ export const ACP_STEER_USAGE =
   "Usage: /acp steer [--session <session-key|session-id|session-label>] <instruction>";
 export const ACP_SET_MODE_USAGE =
   "Usage: /acp set-mode <mode> [session-key|session-id|session-label]";
-export const ACP_SET_USAGE = "Usage: /acp set <key> <value> [session-key|session-id|session-label]";
-export const ACP_CWD_USAGE = "Usage: /acp cwd <path> [session-key|session-id|session-label]";
+export const ACP_SET_USAGE =
+  "Usage: /acp set <key> <value> [session-key|session-id|session-label]";
+export const ACP_CWD_USAGE =
+  "Usage: /acp cwd <path> [session-key|session-id|session-label]";
 export const ACP_PERMISSIONS_USAGE =
   "Usage: /acp permissions <profile> [session-key|session-id|session-label]";
 export const ACP_TIMEOUT_USAGE =
@@ -28,12 +36,14 @@ export const ACP_MODEL_USAGE =
   "Usage: /acp model <model-id> [session-key|session-id|session-label]";
 export const ACP_RESET_OPTIONS_USAGE =
   "Usage: /acp reset-options [session-key|session-id|session-label]";
-export const ACP_STATUS_USAGE = "Usage: /acp status [session-key|session-id|session-label]";
+export const ACP_STATUS_USAGE =
+  "Usage: /acp status [session-key|session-id|session-label]";
 export const ACP_INSTALL_USAGE = "Usage: /acp install";
 export const ACP_DOCTOR_USAGE = "Usage: /acp doctor";
 export const ACP_SESSIONS_USAGE = "Usage: /acp sessions";
 export const ACP_STEER_OUTPUT_LIMIT = 800;
-export const SESSION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export const SESSION_ID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export type AcpAction =
   | "spawn"
@@ -112,7 +122,11 @@ export function resolveAcpAction(tokens: string[]): AcpAction {
   return "help";
 }
 
-function readOptionValue(params: { tokens: string[]; index: number; flag: string }):
+function readOptionValue(params: {
+  tokens: string[];
+  index: number;
+  flag: string;
+}):
   | {
       matched: true;
       value?: string;
@@ -154,7 +168,9 @@ function readOptionValue(params: { tokens: string[]; index: number; flag: string
   return { matched: false };
 }
 
-function resolveDefaultSpawnThreadMode(params: HandleCommandsParams): AcpSpawnThreadMode {
+function resolveDefaultSpawnThreadMode(
+  params: HandleCommandsParams,
+): AcpSpawnThreadMode {
   if (resolveAcpCommandChannel(params) !== DISCORD_THREAD_BINDING_CHANNEL) {
     return "off";
   }
@@ -192,10 +208,17 @@ export function parseSpawnInput(
       continue;
     }
 
-    const threadOption = readOptionValue({ tokens, index: i, flag: "--thread" });
+    const threadOption = readOptionValue({
+      tokens,
+      index: i,
+      flag: "--thread",
+    });
     if (threadOption.matched) {
       if (threadOption.error) {
-        return { ok: false, error: `${threadOption.error}. ${ACP_SPAWN_USAGE}` };
+        return {
+          ok: false,
+          error: `${threadOption.error}. ${ACP_SPAWN_USAGE}`,
+        };
       }
       const raw = threadOption.value?.trim().toLowerCase();
       if (raw !== "auto" && raw !== "here" && raw !== "off") {
@@ -318,7 +341,9 @@ export function parseSteerInput(
 export function parseSingleValueCommandInput(
   tokens: string[],
   usage: string,
-): { ok: true; value: ParsedSingleValueCommandInput } | { ok: false; error: string } {
+):
+  | { ok: true; value: ParsedSingleValueCommandInput }
+  | { ok: false; error: string } {
   const value = tokens[0]?.trim() || "";
   if (!value) {
     return { ok: false, error: usage };
@@ -424,7 +449,9 @@ export function resolveAcpInstallCommandHint(cfg: OpenClawConfig): string {
   return `Install and enable the plugin that provides ACP backend "${backendId}".`;
 }
 
-export function formatRuntimeOptionsText(options: AcpSessionRuntimeOptions): string {
+export function formatRuntimeOptionsText(
+  options: AcpSessionRuntimeOptions,
+): string {
   const extras = options.backendExtras
     ? Object.entries(options.backendExtras)
         .toSorted(([a], [b]) => a.localeCompare(b))
@@ -435,8 +462,12 @@ export function formatRuntimeOptionsText(options: AcpSessionRuntimeOptions): str
     options.runtimeMode ? `runtimeMode=${options.runtimeMode}` : null,
     options.model ? `model=${options.model}` : null,
     options.cwd ? `cwd=${options.cwd}` : null,
-    options.permissionProfile ? `permissionProfile=${options.permissionProfile}` : null,
-    typeof options.timeoutSeconds === "number" ? `timeoutSeconds=${options.timeoutSeconds}` : null,
+    options.permissionProfile
+      ? `permissionProfile=${options.permissionProfile}`
+      : null,
+    typeof options.timeoutSeconds === "number"
+      ? `timeoutSeconds=${options.timeoutSeconds}`
+      : null,
     extras ? `extras={${extras}}` : null,
   ].filter(Boolean) as string[];
   if (parts.length === 0) {

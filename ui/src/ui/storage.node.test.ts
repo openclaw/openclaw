@@ -42,11 +42,14 @@ describe("loadSettings default gateway URL derivation", () => {
       host: "gateway.example:8443",
       pathname: "/ignored/path",
     } as Location);
-    vi.stubGlobal("window", { __OPENCLAW_CONTROL_UI_BASE_PATH__: " /openclaw/ " } as Window &
-      typeof globalThis);
+    vi.stubGlobal("window", {
+      __OPENCLAW_CONTROL_UI_BASE_PATH__: " /openclaw/ ",
+    } as Window & typeof globalThis);
 
     const { loadSettings } = await import("./storage.ts");
-    expect(loadSettings().gatewayUrl).toBe("wss://gateway.example:8443/openclaw");
+    expect(loadSettings().gatewayUrl).toBe(
+      "wss://gateway.example:8443/openclaw",
+    );
   });
 
   it("infers base path from nested pathname when configured base path is not set", async () => {
@@ -58,6 +61,8 @@ describe("loadSettings default gateway URL derivation", () => {
     vi.stubGlobal("window", {} as Window & typeof globalThis);
 
     const { loadSettings } = await import("./storage.ts");
-    expect(loadSettings().gatewayUrl).toBe("ws://gateway.example:18789/apps/openclaw");
+    expect(loadSettings().gatewayUrl).toBe(
+      "ws://gateway.example:18789/apps/openclaw",
+    );
   });
 });

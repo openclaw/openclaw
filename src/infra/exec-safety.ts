@@ -13,7 +13,9 @@ function isLikelyPath(value: string): boolean {
   return /^[A-Za-z]:[\\/]/.test(value);
 }
 
-export function isSafeExecutableValue(value: string | null | undefined): boolean {
+export function isSafeExecutableValue(
+  value: string | null | undefined,
+): boolean {
   if (!value) {
     return false;
   }

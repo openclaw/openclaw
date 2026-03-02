@@ -50,7 +50,9 @@ describe("WizardSession", () => {
   test("invalid answers throw", async () => {
     const session = noteRunner();
     const first = await session.next();
-    await expect(session.answer("bad-id", null)).rejects.toThrow(/wizard: no pending step/i);
+    await expect(session.answer("bad-id", null)).rejects.toThrow(
+      /wizard: no pending step/i,
+    );
     if (!first.step) {
       throw new Error("expected first step");
     }

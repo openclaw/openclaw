@@ -4,7 +4,10 @@ import type { SkillCommandSpec } from "../agents/skills.js";
 import { isCommandFlagEnabled } from "../config/commands.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { escapeRegExp } from "../utils.js";
-import { getChatCommands, getNativeCommandSurfaces } from "./commands-registry.data.js";
+import {
+  getChatCommands,
+  getNativeCommandSurfaces,
+} from "./commands-registry.data.js";
 import type {
   ChatCommandDefinition,
   CommandArgChoiceContext,
@@ -70,7 +73,9 @@ function getTextAliasMap(): Map<string, TextAliasSpec> {
   return map;
 }
 
-function buildSkillCommandDefinitions(skillCommands?: SkillCommandSpec[]): ChatCommandDefinition[] {
+function buildSkillCommandDefinitions(
+  skillCommands?: SkillCommandSpec[],
+): ChatCommandDefinition[] {
   if (!skillCommands || skillCommands.length === 0) {
     return [];
   }
@@ -95,7 +100,10 @@ export function listChatCommands(params?: {
   return [...commands, ...buildSkillCommandDefinitions(params.skillCommands)];
 }
 
-export function isCommandEnabled(cfg: OpenClawConfig, commandKey: string): boolean {
+export function isCommandEnabled(
+  cfg: OpenClawConfig,
+  commandKey: string,
+): boolean {
   if (commandKey === "config") {
     return isCommandFlagEnabled(cfg, "config");
   }
@@ -112,7 +120,9 @@ export function listChatCommandsForConfig(
   cfg: OpenClawConfig,
   params?: { skillCommands?: SkillCommandSpec[] },
 ): ChatCommandDefinition[] {
-  const base = getChatCommands().filter((command) => isCommandEnabled(cfg, command.key));
+  const base = getChatCommands().filter((command) =>
+    isCommandEnabled(cfg, command.key),
+  );
   if (!params?.skillCommands?.length) {
     return base;
   }
@@ -130,7 +140,10 @@ const NATIVE_NAME_OVERRIDES: Record<string, Record<string, string>> = {
   },
 };
 
-function resolveNativeName(command: ChatCommandDefinition, provider?: string): string | undefined {
+function resolveNativeName(
+  command: ChatCommandDefinition,
+  provider?: string,
+): string | undefined {
   if (!command.nativeName) {
     return undefined;
   }
@@ -143,7 +156,10 @@ function resolveNativeName(command: ChatCommandDefinition, provider?: string): s
   return command.nativeName;
 }
 
-function toNativeCommandSpec(command: ChatCommandDefinition, provider?: string): NativeCommandSpec {
+function toNativeCommandSpec(
+  command: ChatCommandDefinition,
+  provider?: string,
+): NativeCommandSpec {
   return {
     name: resolveNativeName(command, provider) ?? command.key,
     description: command.description,
@@ -175,7 +191,10 @@ export function listNativeCommandSpecsForConfig(
   cfg: OpenClawConfig,
   params?: { skillCommands?: SkillCommandSpec[]; provider?: string },
 ): NativeCommandSpec[] {
-  return listNativeSpecsFromCommands(listChatCommandsForConfig(cfg, params), params?.provider);
+  return listNativeSpecsFromCommands(
+    listChatCommandsForConfig(cfg, params),
+    params?.provider,
+  );
 }
 
 export function findCommandByNativeName(
@@ -195,7 +214,10 @@ export function buildCommandText(commandName: string, args?: string): string {
   return trimmedArgs ? `/${commandName} ${trimmedArgs}` : `/${commandName}`;
 }
 
-function parsePositionalArgs(definitions: CommandArgDefinition[], raw: string): CommandArgValues {
+function parsePositionalArgs(
+  definitions: CommandArgDefinition[],
+  raw: string,
+): CommandArgValues {
   const values: CommandArgValues = {};
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -341,7 +363,11 @@ export function resolveCommandArgMenu(params: {
   command: ChatCommandDefinition;
   args?: CommandArgs;
   cfg?: OpenClawConfig;
-}): { arg: CommandArgDefinition; choices: ResolvedCommandArgChoice[]; title?: string } | null {
+}): {
+  arg: CommandArgDefinition;
+  choices: ResolvedCommandArgChoice[];
+  title?: string;
+} | null {
   const { command, args, cfg } = params;
   if (!command.args || !command.argsMenu) {
     return null;
@@ -352,7 +378,9 @@ export function resolveCommandArgMenu(params: {
   const argSpec = command.argsMenu;
   const argName =
     argSpec === "auto"
-      ? command.args.find((arg) => resolveCommandArgChoices({ command, arg, cfg }).length > 0)?.name
+      ? command.args.find(
+          (arg) => resolveCommandArgChoices({ command, arg, cfg }).length > 0,
+        )?.name
       : argSpec.arg;
   if (!argName) {
     return null;
@@ -375,14 +403,18 @@ export function resolveCommandArgMenu(params: {
   return { arg, choices, title };
 }
 
-export function normalizeCommandBody(raw: string, options?: CommandNormalizeOptions): string {
+export function normalizeCommandBody(
+  raw: string,
+  options?: CommandNormalizeOptions,
+): string {
   const trimmed = raw.trim();
   if (!trimmed.startsWith("/")) {
     return trimmed;
   }
 
   const newline = trimmed.indexOf("\n");
-  const singleLine = newline === -1 ? trimmed : trimmed.slice(0, newline).trim();
+  const singleLine =
+    newline === -1 ? trimmed : trimmed.slice(0, newline).trim();
 
   const colonMatch = singleLine.match(/^\/([^\s:]+)\s*:(.*)$/);
   const normalized = colonMatch
@@ -423,7 +455,9 @@ export function normalizeCommandBody(raw: string, options?: CommandNormalizeOpti
     return commandBody;
   }
   const normalizedRest = rest?.trimStart();
-  return normalizedRest ? `${tokenSpec.canonical} ${normalizedRest}` : tokenSpec.canonical;
+  return normalizedRest
+    ? `${tokenSpec.canonical} ${normalizedRest}`
+    : tokenSpec.canonical;
 }
 
 export function isCommandMessage(raw: string): boolean {
@@ -458,7 +492,9 @@ export function getCommandDetection(_cfg?: OpenClawConfig): CommandDetection {
   }
   cachedDetection = {
     exact,
-    regex: patterns.length ? new RegExp(`^(?:${patterns.join("|")})$`, "i") : /$^/,
+    regex: patterns.length
+      ? new RegExp(`^(?:${patterns.join("|")})$`, "i")
+      : /$^/,
   };
   cachedDetectionCommands = commands;
   return cachedDetection;
@@ -519,7 +555,9 @@ export function isNativeCommandSurface(surface?: string): boolean {
   return getNativeCommandSurfaces().has(surface.toLowerCase());
 }
 
-export function shouldHandleTextCommands(params: ShouldHandleTextCommandsParams): boolean {
+export function shouldHandleTextCommands(
+  params: ShouldHandleTextCommandsParams,
+): boolean {
   if (params.commandSource === "native") {
     return true;
   }

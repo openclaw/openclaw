@@ -32,9 +32,9 @@ function expectToolCallAndResultIds(out: AgentMessage[], expectedId: string) {
   const assistant = out[0] as unknown as { role?: string; content?: unknown };
   expect(assistant.role).toBe("assistant");
   expect(Array.isArray(assistant.content)).toBe(true);
-  const toolCall = (assistant.content as Array<{ type?: string; id?: string }>).find(
-    (block) => block.type === "toolCall",
-  );
+  const toolCall = (
+    assistant.content as Array<{ type?: string; id?: string }>
+  ).find((block) => block.type === "toolCall");
   expect(toolCall?.id).toBe(expectedId);
 
   const toolResult = out[1] as unknown as {
@@ -150,7 +150,14 @@ describe("sanitizeSessionMessagesImages", () => {
     const input = [
       {
         role: "assistant",
-        content: [{ type: "toolCall", id: "call_123|fc_456", name: "read", arguments: {} }],
+        content: [
+          {
+            type: "toolCall",
+            id: "call_123|fc_456",
+            name: "read",
+            arguments: {},
+          },
+        ],
       },
       {
         role: "toolResult",
@@ -167,7 +174,9 @@ describe("sanitizeSessionMessagesImages", () => {
       toolCallIdMode: "strict",
     });
 
-    const assistant = out[0] as unknown as { content?: Array<{ type?: string; id?: string }> };
+    const assistant = out[0] as unknown as {
+      content?: Array<{ type?: string; id?: string }>;
+    };
     const toolCall = assistant.content?.find((b) => b.type === "toolCall");
     expect(toolCall?.id).toBe("call_123|fc_456");
 
@@ -254,8 +263,12 @@ describe("sanitizeSessionMessagesImages", () => {
       expect(out).toHaveLength(1);
       const content = (out[0] as { content?: unknown[] }).content;
       expect(content).toHaveLength(2);
-      expect("thought_signature" in ((content?.[0] ?? {}) as object)).toBe(false);
-      expect((content?.[1] as { thought_signature?: unknown })?.thought_signature).toBe("AQID");
+      expect("thought_signature" in ((content?.[0] ?? {}) as object)).toBe(
+        false,
+      );
+      expect(
+        (content?.[1] as { thought_signature?: unknown })?.thought_signature,
+      ).toBe("AQID");
     });
   });
 });
@@ -265,7 +278,9 @@ describe("sanitizeGoogleTurnOrdering", () => {
     const input = [
       {
         role: "assistant",
-        content: [{ type: "toolCall", id: "call_1", name: "exec", arguments: {} }],
+        content: [
+          { type: "toolCall", id: "call_1", name: "exec", arguments: {} },
+        ],
       },
     ] as unknown as AgentMessage[];
 
@@ -274,7 +289,9 @@ describe("sanitizeGoogleTurnOrdering", () => {
     expect(out[1]?.role).toBe("assistant");
   });
   it("is a no-op when history starts with user", () => {
-    const input = [{ role: "user", content: "hi" }] as unknown as AgentMessage[];
+    const input = [
+      { role: "user", content: "hi" },
+    ] as unknown as AgentMessage[];
     const out = sanitizeGoogleTurnOrdering(input);
     expect(out).toBe(input);
   });

@@ -30,7 +30,8 @@ async function resolveThreadTsFromHistory(params: {
       limit: 1,
     })) as { messages?: Array<{ ts?: string; thread_ts?: string }> };
     const message =
-      response.messages?.find((entry) => entry.ts === params.messageTs) ?? response.messages?.[0];
+      response.messages?.find((entry) => entry.ts === params.messageTs) ??
+      response.messages?.[0];
     return normalizeThreadTs(message?.thread_ts);
   } catch (err) {
     if (shouldLogVerbose()) {
@@ -47,7 +48,10 @@ export function createSlackThreadTsResolver(params: {
   cacheTtlMs?: number;
   maxSize?: number;
 }) {
-  const ttlMs = Math.max(0, params.cacheTtlMs ?? DEFAULT_THREAD_TS_CACHE_TTL_MS);
+  const ttlMs = Math.max(
+    0,
+    params.cacheTtlMs ?? DEFAULT_THREAD_TS_CACHE_TTL_MS,
+  );
   const maxSize = Math.max(0, params.maxSize ?? DEFAULT_THREAD_TS_CACHE_MAX);
   const cache = new Map<string, ThreadTsCacheEntry>();
   const inflight = new Map<string, Promise<string | undefined>>();

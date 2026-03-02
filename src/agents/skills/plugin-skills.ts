@@ -73,8 +73,14 @@ export function resolvePluginSkillDirs(params: {
         log.warn(`plugin skill path not found (${record.id}): ${candidate}`);
         continue;
       }
-      if (!isPathInsideWithRealpath(record.rootDir, candidate, { requireRealpath: true })) {
-        log.warn(`plugin skill path escapes plugin root (${record.id}): ${candidate}`);
+      if (
+        !isPathInsideWithRealpath(record.rootDir, candidate, {
+          requireRealpath: true,
+        })
+      ) {
+        log.warn(
+          `plugin skill path escapes plugin root (${record.id}): ${candidate}`,
+        );
         continue;
       }
       if (seen.has(candidate)) {

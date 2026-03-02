@@ -7,7 +7,11 @@ import {
 } from "../routing/session-key.js";
 import type { ChatLog } from "./components/chat-log.js";
 import type { GatewayAgentsList, GatewayChatClient } from "./gateway-chat.js";
-import { asString, extractTextFromMessage, isCommandMessage } from "./tui-formatters.js";
+import {
+  asString,
+  extractTextFromMessage,
+  isCommandMessage,
+} from "./tui-formatters.js";
 import type { SessionInfo, TuiOptions, TuiStateAccess } from "./tui-types.js";
 
 type SessionActionContext = {
@@ -77,18 +81,24 @@ export function createSessionActions(context: SessionActionContext) {
         if (state.agents.some((agent) => agent.id === initialSessionAgentId)) {
           state.currentAgentId = initialSessionAgentId;
         }
-      } else if (!state.agents.some((agent) => agent.id === state.currentAgentId)) {
+      } else if (
+        !state.agents.some((agent) => agent.id === state.currentAgentId)
+      ) {
         state.currentAgentId =
-          state.agents[0]?.id ?? normalizeAgentId(result.defaultId ?? state.currentAgentId);
+          state.agents[0]?.id ??
+          normalizeAgentId(result.defaultId ?? state.currentAgentId);
       }
       const nextSessionKey = resolveSessionKey(initialSessionInput);
       if (nextSessionKey !== state.currentSessionKey) {
         state.currentSessionKey = nextSessionKey;
       }
       state.initialSessionApplied = true;
-    } else if (!state.agents.some((agent) => agent.id === state.currentAgentId)) {
+    } else if (
+      !state.agents.some((agent) => agent.id === state.currentAgentId)
+    ) {
       state.currentAgentId =
-        state.agents[0]?.id ?? normalizeAgentId(result.defaultId ?? state.currentAgentId);
+        state.agents[0]?.id ??
+        normalizeAgentId(result.defaultId ?? state.currentAgentId);
     }
     updateHeader();
     updateFooter();
@@ -123,7 +133,8 @@ export function createSessionActions(context: SessionActionContext) {
     }
     const overrideModel = entry?.modelOverride?.trim();
     if (overrideModel) {
-      const overrideProvider = entry?.providerOverride?.trim() || state.sessionInfo.modelProvider;
+      const overrideProvider =
+        entry?.providerOverride?.trim() || state.sessionInfo.modelProvider;
       return { modelProvider: overrideProvider, model: overrideModel };
     }
     return {
@@ -188,9 +199,14 @@ export function createSessionActions(context: SessionActionContext) {
     if (entry?.totalTokens !== undefined) {
       next.totalTokens = entry.totalTokens;
     }
-    if (entry?.contextTokens !== undefined || defaults?.contextTokens !== undefined) {
+    if (
+      entry?.contextTokens !== undefined ||
+      defaults?.contextTokens !== undefined
+    ) {
       next.contextTokens =
-        entry?.contextTokens ?? defaults?.contextTokens ?? state.sessionInfo.contextTokens;
+        entry?.contextTokens ??
+        defaults?.contextTokens ??
+        state.sessionInfo.contextTokens;
     }
     if (entry?.displayName !== undefined) {
       next.displayName = entry.displayName;
@@ -216,11 +232,16 @@ export function createSessionActions(context: SessionActionContext) {
   const runRefreshSessionInfo = async () => {
     try {
       const resolveListAgentId = () => {
-        if (state.currentSessionKey === "global" || state.currentSessionKey === "unknown") {
+        if (
+          state.currentSessionKey === "global" ||
+          state.currentSessionKey === "unknown"
+        ) {
           return undefined;
         }
         const parsed = parseAgentSessionKey(state.currentSessionKey);
-        return parsed?.agentId ? normalizeAgentId(parsed.agentId) : state.currentAgentId;
+        return parsed?.agentId
+          ? normalizeAgentId(parsed.agentId)
+          : state.currentAgentId;
       };
       const listAgentId = resolveListAgentId();
       const result = await client.listSessions({
@@ -228,7 +249,8 @@ export function createSessionActions(context: SessionActionContext) {
         includeUnknown: false,
         agentId: listAgentId,
       });
-      const normalizeMatchKey = (key: string) => parseAgentSessionKey(key)?.rest ?? key;
+      const normalizeMatchKey = (key: string) =>
+        parseAgentSessionKey(key)?.rest ?? key;
       const currentMatchKey = normalizeMatchKey(state.currentSessionKey);
       const entry = result.sessions.find((row) => {
         // Exact match
@@ -293,9 +315,12 @@ export function createSessionActions(context: SessionActionContext) {
         thinkingLevel?: string;
         verboseLevel?: string;
       };
-      state.currentSessionId = typeof record.sessionId === "string" ? record.sessionId : null;
-      state.sessionInfo.thinkingLevel = record.thinkingLevel ?? state.sessionInfo.thinkingLevel;
-      state.sessionInfo.verboseLevel = record.verboseLevel ?? state.sessionInfo.verboseLevel;
+      state.currentSessionId =
+        typeof record.sessionId === "string" ? record.sessionId : null;
+      state.sessionInfo.thinkingLevel =
+        record.thinkingLevel ?? state.sessionInfo.thinkingLevel;
+      state.sessionInfo.verboseLevel =
+        record.verboseLevel ?? state.sessionInfo.verboseLevel;
       const showTools = (state.sessionInfo.verboseLevel ?? "off") !== "off";
       chatLog.clearAll();
       chatLog.addSystem(`session ${state.currentSessionKey}`);

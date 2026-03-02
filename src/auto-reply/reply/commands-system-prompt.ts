@@ -28,12 +28,13 @@ export async function resolveCommandsSystemPromptBundle(
   params: HandleCommandsParams,
 ): Promise<CommandsSystemPromptBundle> {
   const workspaceDir = params.workspaceDir;
-  const { bootstrapFiles, contextFiles: injectedFiles } = await resolveBootstrapContextForRun({
-    workspaceDir,
-    config: params.cfg,
-    sessionKey: params.sessionKey,
-    sessionId: params.sessionEntry?.sessionId,
-  });
+  const { bootstrapFiles, contextFiles: injectedFiles } =
+    await resolveBootstrapContextForRun({
+      workspaceDir,
+      config: params.cfg,
+      sessionKey: params.sessionKey,
+      sessionId: params.sessionEntry?.sessionId,
+    });
   const skillsSnapshot = (() => {
     try {
       return buildWorkspaceSkillSnapshot(workspaceDir, {
@@ -82,20 +83,21 @@ export async function resolveCommandsSystemPromptBundle(
     agentId: sessionAgentId,
   });
   const defaultModelLabel = `${defaultModelRef.provider}/${defaultModelRef.model}`;
-  const { runtimeInfo, userTimezone, userTime, userTimeFormat } = buildSystemPromptParams({
-    config: params.cfg,
-    agentId: sessionAgentId,
-    workspaceDir,
-    cwd: process.cwd(),
-    runtime: {
-      host: "unknown",
-      os: "unknown",
-      arch: "unknown",
-      node: process.version,
-      model: `${params.provider}/${params.model}`,
-      defaultModel: defaultModelLabel,
-    },
-  });
+  const { runtimeInfo, userTimezone, userTime, userTimeFormat } =
+    buildSystemPromptParams({
+      config: params.cfg,
+      agentId: sessionAgentId,
+      workspaceDir,
+      cwd: process.cwd(),
+      runtime: {
+        host: "unknown",
+        os: "unknown",
+        arch: "unknown",
+        node: process.version,
+        model: `${params.provider}/${params.model}`,
+        defaultModel: defaultModelLabel,
+      },
+    });
   const sandboxInfo = sandboxRuntime.sandboxed
     ? {
         enabled: true,
@@ -103,7 +105,11 @@ export async function resolveCommandsSystemPromptBundle(
         workspaceAccess: "rw" as const,
         elevated: {
           allowed: params.elevated.allowed,
-          defaultLevel: (params.resolvedElevatedLevel ?? "off") as "on" | "off" | "ask" | "full",
+          defaultLevel: (params.resolvedElevatedLevel ?? "off") as
+            | "on"
+            | "off"
+            | "ask"
+            | "full",
         },
       }
     : { enabled: false };
@@ -132,5 +138,12 @@ export async function resolveCommandsSystemPromptBundle(
     memoryCitationsMode: params.cfg?.memory?.citations,
   });
 
-  return { systemPrompt, tools, skillsPrompt, bootstrapFiles, injectedFiles, sandboxRuntime };
+  return {
+    systemPrompt,
+    tools,
+    skillsPrompt,
+    bootstrapFiles,
+    injectedFiles,
+    sandboxRuntime,
+  };
 }

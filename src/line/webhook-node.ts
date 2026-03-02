@@ -8,7 +8,10 @@ import {
 } from "../infra/http-body.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { validateLineSignature } from "./signature.js";
-import { isLineWebhookVerificationRequest, parseLineWebhookBody } from "./webhook-utils.js";
+import {
+  isLineWebhookVerificationRequest,
+  parseLineWebhookBody,
+} from "./webhook-utils.js";
 
 const LINE_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
 const LINE_WEBHOOK_UNSIGNED_MAX_BODY_BYTES = 4 * 1024;
@@ -62,7 +65,8 @@ export function createLineNodeWebhookHandler(params: {
           : Array.isArray(signatureHeader)
             ? signatureHeader[0]
             : undefined;
-      const hasSignature = typeof signature === "string" && signature.trim().length > 0;
+      const hasSignature =
+        typeof signature === "string" && signature.trim().length > 0;
       const bodyLimit = hasSignature
         ? maxBodyBytes
         : Math.min(maxBodyBytes, LINE_WEBHOOK_UNSIGNED_MAX_BODY_BYTES);
@@ -76,7 +80,9 @@ export function createLineNodeWebhookHandler(params: {
       // "Verify" button succeeds.
       if (!hasSignature) {
         if (isLineWebhookVerificationRequest(body)) {
-          logVerbose("line: webhook verification request (empty events, no signature) - 200 OK");
+          logVerbose(
+            "line: webhook verification request (empty events, no signature) - 200 OK",
+          );
           res.statusCode = 200;
           res.setHeader("Content-Type", "application/json");
           res.end(JSON.stringify({ status: "ok" }));
@@ -113,7 +119,9 @@ export function createLineNodeWebhookHandler(params: {
       if (body.events && body.events.length > 0) {
         logVerbose(`line: received ${body.events.length} webhook events`);
         await params.bot.handleWebhook(body).catch((err) => {
-          params.runtime.error?.(danger(`line webhook handler failed: ${String(err)}`));
+          params.runtime.error?.(
+            danger(`line webhook handler failed: ${String(err)}`),
+          );
         });
       }
     } catch (err) {
@@ -126,7 +134,11 @@ export function createLineNodeWebhookHandler(params: {
       if (isRequestBodyLimitError(err, "REQUEST_BODY_TIMEOUT")) {
         res.statusCode = 408;
         res.setHeader("Content-Type", "application/json");
-        res.end(JSON.stringify({ error: requestBodyErrorToText("REQUEST_BODY_TIMEOUT") }));
+        res.end(
+          JSON.stringify({
+            error: requestBodyErrorToText("REQUEST_BODY_TIMEOUT"),
+          }),
+        );
         return;
       }
       params.runtime.error?.(danger(`line webhook error: ${String(err)}`));

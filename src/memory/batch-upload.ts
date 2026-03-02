@@ -12,7 +12,9 @@ export async function uploadBatchJsonlFile(params: {
   errorPrefix: string;
 }): Promise<string> {
   const baseUrl = normalizeBatchBaseUrl(params.client);
-  const jsonl = params.requests.map((request) => JSON.stringify(request)).join("\n");
+  const jsonl = params.requests
+    .map((request) => JSON.stringify(request))
+    .join("\n");
   const form = new FormData();
   form.append("purpose", "batch");
   form.append(

@@ -25,8 +25,12 @@ export function evaluateSystemRunAllowlist(params: {
   approvals: ReturnType<typeof resolveExecApprovals>;
   security: ExecSecurity;
   safeBins: ReturnType<typeof resolveExecSafeBinRuntimePolicy>["safeBins"];
-  safeBinProfiles: ReturnType<typeof resolveExecSafeBinRuntimePolicy>["safeBinProfiles"];
-  trustedSafeBinDirs: ReturnType<typeof resolveExecSafeBinRuntimePolicy>["trustedSafeBinDirs"];
+  safeBinProfiles: ReturnType<
+    typeof resolveExecSafeBinRuntimePolicy
+  >["safeBinProfiles"];
+  trustedSafeBinDirs: ReturnType<
+    typeof resolveExecSafeBinRuntimePolicy
+  >["trustedSafeBinDirs"];
   cwd: string | undefined;
   env: Record<string, string> | undefined;
   skillBins: SkillBinTrustEntry[];
@@ -56,7 +60,11 @@ export function evaluateSystemRunAllowlist(params: {
     };
   }
 
-  const analysis = analyzeArgvCommand({ argv: params.argv, cwd: params.cwd, env: params.env });
+  const analysis = analyzeArgvCommand({
+    argv: params.argv,
+    cwd: params.cwd,
+    env: params.env,
+  });
   const allowlistEval = evaluateExecAllowlist({
     analysis,
     allowlist: params.approvals.allowlist,
@@ -71,7 +79,9 @@ export function evaluateSystemRunAllowlist(params: {
     analysisOk: analysis.ok,
     allowlistMatches: allowlistEval.allowlistMatches,
     allowlistSatisfied:
-      params.security === "allowlist" && analysis.ok ? allowlistEval.allowlistSatisfied : false,
+      params.security === "allowlist" && analysis.ok
+        ? allowlistEval.allowlistSatisfied
+        : false,
     segments: analysis.segments,
   };
 }
@@ -97,7 +107,9 @@ export function resolvePlannedAllowlistArgv(params: {
     return undefined;
   }
   const plannedAllowlistArgv = resolvePlannedSegmentArgv(params.segments[0]);
-  return plannedAllowlistArgv && plannedAllowlistArgv.length > 0 ? plannedAllowlistArgv : null;
+  return plannedAllowlistArgv && plannedAllowlistArgv.length > 0
+    ? plannedAllowlistArgv
+    : null;
 }
 
 export function resolveSystemRunExecArgv(params: {

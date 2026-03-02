@@ -34,7 +34,10 @@ describe("pickSummaryFromPayloads", () => {
 
 describe("pickLastNonEmptyTextFromPayloads", () => {
   it("picks real text over error payload", () => {
-    const payloads = [{ text: "Real output" }, { text: "Service error", isError: true }];
+    const payloads = [
+      { text: "Real output" },
+      { text: "Service error", isError: true },
+    ];
     expect(pickLastNonEmptyTextFromPayloads(payloads)).toBe("Real output");
   });
 

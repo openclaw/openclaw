@@ -5,7 +5,9 @@ type ZodSchemaWithToJsonSchema = ZodTypeAny & {
   toJSONSchema?: (params?: Record<string, unknown>) => unknown;
 };
 
-export function buildChannelConfigSchema(schema: ZodTypeAny): ChannelConfigSchema {
+export function buildChannelConfigSchema(
+  schema: ZodTypeAny,
+): ChannelConfigSchema {
   const schemaWithJson = schema as ZodSchemaWithToJsonSchema;
   if (typeof schemaWithJson.toJSONSchema === "function") {
     return {

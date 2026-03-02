@@ -22,8 +22,11 @@ const DEFAULT_MAX_TOKENS = 4096;
 const VERIFY_TIMEOUT_MS = 30_000;
 
 function normalizeContextWindowForCustomModel(value: unknown): number {
-  const parsed = typeof value === "number" && Number.isFinite(value) ? Math.floor(value) : 0;
-  return parsed >= CONTEXT_WINDOW_HARD_MIN_TOKENS ? parsed : CONTEXT_WINDOW_HARD_MIN_TOKENS;
+  const parsed =
+    typeof value === "number" && Number.isFinite(value) ? Math.floor(value) : 0;
+  return parsed >= CONTEXT_WINDOW_HARD_MIN_TOKENS
+    ? parsed
+    : CONTEXT_WINDOW_HARD_MIN_TOKENS;
 }
 
 /**
@@ -36,7 +39,10 @@ function isAzureUrl(baseUrl: string): boolean {
   try {
     const url = new URL(baseUrl);
     const host = url.hostname.toLowerCase();
-    return host.endsWith(".services.ai.azure.com") || host.endsWith(".openai.azure.com");
+    return (
+      host.endsWith(".services.ai.azure.com") ||
+      host.endsWith(".openai.azure.com")
+    );
   } catch {
     return false;
   }
@@ -266,7 +272,9 @@ type VerificationResult = {
   error?: unknown;
 };
 
-function normalizeOptionalProviderApiKey(value: unknown): SecretInput | undefined {
+function normalizeOptionalProviderApiKey(
+  value: unknown,
+): SecretInput | undefined {
   if (isSecretRef(value)) {
     return value;
   }
@@ -425,7 +433,9 @@ async function promptBaseUrlAndKey(params: {
 
 type CustomApiRetryChoice = "baseUrl" | "model" | "both";
 
-async function promptCustomApiRetryChoice(prompter: WizardPrompter): Promise<CustomApiRetryChoice> {
+async function promptCustomApiRetryChoice(
+  prompter: WizardPrompter,
+): Promise<CustomApiRetryChoice> {
   return await prompter.select({
     message: "What would you like to change?",
     options: [
@@ -436,7 +446,9 @@ async function promptCustomApiRetryChoice(prompter: WizardPrompter): Promise<Cus
   });
 }
 
-async function promptCustomApiModelId(prompter: WizardPrompter): Promise<string> {
+async function promptCustomApiModelId(
+  prompter: WizardPrompter,
+): Promise<string> {
   return (
     await prompter.text({
       message: "Model ID",
@@ -451,8 +463,18 @@ async function applyCustomApiRetryChoice(params: {
   config: OpenClawConfig;
   secretInputMode?: SecretInputMode;
   retryChoice: CustomApiRetryChoice;
-  current: { baseUrl: string; apiKey?: SecretInput; resolvedApiKey: string; modelId: string };
-}): Promise<{ baseUrl: string; apiKey?: SecretInput; resolvedApiKey: string; modelId: string }> {
+  current: {
+    baseUrl: string;
+    apiKey?: SecretInput;
+    resolvedApiKey: string;
+    modelId: string;
+  };
+}): Promise<{
+  baseUrl: string;
+  apiKey?: SecretInput;
+  resolvedApiKey: string;
+  modelId: string;
+}> {
   let { baseUrl, apiKey, resolvedApiKey, modelId } = params.current;
   if (params.retryChoice === "baseUrl" || params.retryChoice === "both") {
     const retryInput = await promptBaseUrlAndKey({
@@ -474,7 +496,9 @@ async function applyCustomApiRetryChoice(params: {
 function resolveProviderApi(
   compatibility: CustomApiCompatibility,
 ): "openai-completions" | "anthropic-messages" {
-  return compatibility === "anthropic" ? "anthropic-messages" : "openai-completions";
+  return compatibility === "anthropic"
+    ? "anthropic-messages"
+    : "openai-completions";
 }
 
 function parseCustomApiCompatibility(raw?: string): CustomApiCompatibility {
@@ -503,7 +527,8 @@ export function resolveCustomProviderId(
       "Custom provider ID must include letters, numbers, or hyphens.",
     );
   }
-  const requestedProviderId = explicitProviderId || buildEndpointIdFromUrl(baseUrl);
+  const requestedProviderId =
+    explicitProviderId || buildEndpointIdFromUrl(baseUrl);
   const providerIdResult = resolveUniqueEndpointId({
     requestedId: requestedProviderId,
     baseUrl,
@@ -514,7 +539,8 @@ export function resolveCustomProviderId(
     providerId: providerIdResult.providerId,
     ...(providerIdResult.renamed
       ? {
-          providerIdRenamedFrom: normalizeEndpointId(requestedProviderId) || "custom",
+          providerIdRenamedFrom:
+            normalizeEndpointId(requestedProviderId) || "custom",
         }
       : {}),
   };
@@ -552,15 +578,23 @@ export function parseNonInteractiveCustomApiFlags(
   };
 }
 
-export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): CustomApiResult {
+export function applyCustomApiConfig(
+  params: ApplyCustomApiConfigParams,
+): CustomApiResult {
   const baseUrl = params.baseUrl.trim();
   try {
     new URL(baseUrl);
   } catch {
-    throw new CustomApiError("invalid_base_url", "Custom provider base URL must be a valid URL.");
+    throw new CustomApiError(
+      "invalid_base_url",
+      "Custom provider base URL must be a valid URL.",
+    );
   }
 
-  if (params.compatibility !== "openai" && params.compatibility !== "anthropic") {
+  if (
+    params.compatibility !== "openai" &&
+    params.compatibility !== "anthropic"
+  ) {
     throw new CustomApiError(
       "invalid_compatibility",
       'Custom provider compatibility must be "openai" or "anthropic".',
@@ -569,11 +603,16 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
 
   const modelId = params.modelId.trim();
   if (!modelId) {
-    throw new CustomApiError("invalid_model_id", "Custom provider model ID is required.");
+    throw new CustomApiError(
+      "invalid_model_id",
+      "Custom provider model ID is required.",
+    );
   }
 
   // Transform Azure URLs to include the deployment path for API calls
-  const resolvedBaseUrl = isAzureUrl(baseUrl) ? transformAzureUrl(baseUrl, modelId) : baseUrl;
+  const resolvedBaseUrl = isAzureUrl(baseUrl)
+    ? transformAzureUrl(baseUrl, modelId)
+    : baseUrl;
 
   const providerIdResult = resolveCustomProviderId({
     config: params.config,
@@ -595,7 +634,9 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
   }
 
   const existingProvider = providers[providerId];
-  const existingModels = Array.isArray(existingProvider?.models) ? existingProvider.models : [];
+  const existingModels = Array.isArray(existingProvider?.models)
+    ? existingProvider.models
+    : [];
   const hasModel = existingModels.some((model) => model.id === modelId);
   const nextModel = {
     id: modelId,
@@ -611,12 +652,15 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
         model.id === modelId
           ? {
               ...model,
-              contextWindow: normalizeContextWindowForCustomModel(model.contextWindow),
+              contextWindow: normalizeContextWindowForCustomModel(
+                model.contextWindow,
+              ),
             }
           : model,
       )
     : [...existingModels, nextModel];
-  const { apiKey: existingApiKey, ...existingProviderRest } = existingProvider ?? {};
+  const { apiKey: existingApiKey, ...existingProviderRest } =
+    existingProvider ?? {};
   const normalizedApiKey =
     normalizeOptionalProviderApiKey(params.apiKey) ??
     normalizeOptionalProviderApiKey(existingApiKey);
@@ -730,13 +774,14 @@ export async function promptCustomApiConfig(params: {
             "Endpoint detection",
           );
           const retryChoice = await promptCustomApiRetryChoice(prompter);
-          ({ baseUrl, apiKey, resolvedApiKey, modelId } = await applyCustomApiRetryChoice({
-            prompter,
-            config,
-            secretInputMode: params.secretInputMode,
-            retryChoice,
-            current: { baseUrl, apiKey, resolvedApiKey, modelId },
-          }));
+          ({ baseUrl, apiKey, resolvedApiKey, modelId } =
+            await applyCustomApiRetryChoice({
+              prompter,
+              config,
+              secretInputMode: params.secretInputMode,
+              retryChoice,
+              current: { baseUrl, apiKey, resolvedApiKey, modelId },
+            }));
           continue;
         }
       }
@@ -749,8 +794,16 @@ export async function promptCustomApiConfig(params: {
     const verifySpinner = prompter.progress("Verifying...");
     const result =
       compatibility === "anthropic"
-        ? await requestAnthropicVerification({ baseUrl, apiKey: resolvedApiKey, modelId })
-        : await requestOpenAiVerification({ baseUrl, apiKey: resolvedApiKey, modelId });
+        ? await requestAnthropicVerification({
+            baseUrl,
+            apiKey: resolvedApiKey,
+            modelId,
+          })
+        : await requestOpenAiVerification({
+            baseUrl,
+            apiKey: resolvedApiKey,
+            modelId,
+          });
     if (result.ok) {
       verifySpinner.stop("Verification successful.");
       break;
@@ -758,16 +811,19 @@ export async function promptCustomApiConfig(params: {
     if (result.status !== undefined) {
       verifySpinner.stop(`Verification failed: status ${result.status}`);
     } else {
-      verifySpinner.stop(`Verification failed: ${formatVerificationError(result.error)}`);
+      verifySpinner.stop(
+        `Verification failed: ${formatVerificationError(result.error)}`,
+      );
     }
     const retryChoice = await promptCustomApiRetryChoice(prompter);
-    ({ baseUrl, apiKey, resolvedApiKey, modelId } = await applyCustomApiRetryChoice({
-      prompter,
-      config,
-      secretInputMode: params.secretInputMode,
-      retryChoice,
-      current: { baseUrl, apiKey, resolvedApiKey, modelId },
-    }));
+    ({ baseUrl, apiKey, resolvedApiKey, modelId } =
+      await applyCustomApiRetryChoice({
+        prompter,
+        config,
+        secretInputMode: params.secretInputMode,
+        retryChoice,
+        current: { baseUrl, apiKey, resolvedApiKey, modelId },
+      }));
     if (compatibilityChoice === "unknown") {
       compatibility = null;
     }
@@ -820,6 +876,8 @@ export async function promptCustomApiConfig(params: {
     );
   }
 
-  runtime.log(`Configured custom provider: ${result.providerId}/${result.modelId}`);
+  runtime.log(
+    `Configured custom provider: ${result.providerId}/${result.modelId}`,
+  );
   return result;
 }

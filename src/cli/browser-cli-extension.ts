@@ -45,7 +45,9 @@ export async function installChromeExtension(opts?: {
 }): Promise<{ path: string }> {
   const src = opts?.sourceDir ?? resolveBundledExtensionRootDir();
   if (!hasManifest(src)) {
-    throw new Error("Bundled Chrome extension is missing. Reinstall OpenClaw and try again.");
+    throw new Error(
+      "Bundled Chrome extension is missing. Reinstall OpenClaw and try again.",
+    );
   }
 
   const stateDir = opts?.stateDir ?? resolveStateDir();
@@ -61,7 +63,9 @@ export async function installChromeExtension(opts?: {
 
   await fs.promises.cp(src, dest, { recursive: true });
   if (!hasManifest(dest)) {
-    throw new Error("Chrome extension install failed (manifest.json missing). Try again.");
+    throw new Error(
+      "Chrome extension install failed (manifest.json missing). Try again.",
+    );
   }
 
   return { path: dest };
@@ -71,7 +75,9 @@ export function registerBrowserExtensionCommands(
   browser: Command,
   parentOpts: (cmd: Command) => { json?: boolean },
 ) {
-  const ext = browser.command("extension").description("Chrome extension helpers");
+  const ext = browser
+    .command("extension")
+    .description("Chrome extension helpers");
 
   ext
     .command("install")
@@ -88,7 +94,9 @@ export function registerBrowserExtensionCommands(
       }
 
       if (parent?.json) {
-        defaultRuntime.log(JSON.stringify({ ok: true, path: installed.path }, null, 2));
+        defaultRuntime.log(
+          JSON.stringify({ ok: true, path: installed.path }, null, 2),
+        );
         return;
       }
       const displayPath = shortenHomePath(installed.path);
@@ -111,7 +119,9 @@ export function registerBrowserExtensionCommands(
 
   ext
     .command("path")
-    .description("Print the path to the installed Chrome extension (load unpacked)")
+    .description(
+      "Print the path to the installed Chrome extension (load unpacked)",
+    )
     .action(async (_opts, cmd) => {
       const parent = parentOpts(cmd);
       const dir = installedExtensionRootDir();

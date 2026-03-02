@@ -12,10 +12,14 @@ export function resolveProviderMatch(
   }
   const normalized = normalizeProviderId(raw);
   return (
-    providers.find((provider) => normalizeProviderId(provider.id) === normalized) ??
+    providers.find(
+      (provider) => normalizeProviderId(provider.id) === normalized,
+    ) ??
     providers.find(
       (provider) =>
-        provider.aliases?.some((alias) => normalizeProviderId(alias) === normalized) ?? false,
+        provider.aliases?.some(
+          (alias) => normalizeProviderId(alias) === normalized,
+        ) ?? false,
     ) ??
     null
   );
@@ -58,7 +62,10 @@ export function mergeConfigPatch<T>(base: T, patch: unknown): T {
   return next as T;
 }
 
-export function applyDefaultModel(cfg: OpenClawConfig, model: string): OpenClawConfig {
+export function applyDefaultModel(
+  cfg: OpenClawConfig,
+  model: string,
+): OpenClawConfig {
   const models = { ...cfg.agents?.defaults?.models };
   models[model] = models[model] ?? {};
 
@@ -71,8 +78,13 @@ export function applyDefaultModel(cfg: OpenClawConfig, model: string): OpenClawC
         ...cfg.agents?.defaults,
         models,
         model: {
-          ...(existingModel && typeof existingModel === "object" && "fallbacks" in existingModel
-            ? { fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks }
+          ...(existingModel &&
+          typeof existingModel === "object" &&
+          "fallbacks" in existingModel
+            ? {
+                fallbacks: (existingModel as { fallbacks?: string[] })
+                  .fallbacks,
+              }
             : undefined),
           primary: model,
         },

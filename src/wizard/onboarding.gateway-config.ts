@@ -4,7 +4,11 @@ import {
   validateGatewayPasswordInput,
 } from "../commands/onboard-helpers.js";
 import type { GatewayAuthChoice } from "../commands/onboard-types.js";
-import type { GatewayBindMode, GatewayTailscaleMode, OpenClawConfig } from "../config/config.js";
+import type {
+  GatewayBindMode,
+  GatewayTailscaleMode,
+  OpenClawConfig,
+} from "../config/config.js";
 import { ensureControlUiAllowedOriginsForNonLoopbackBind } from "../config/gateway-control-ui-origins.js";
 import {
   maybeAddTailnetOriginToControlUiAllowedOrigins,
@@ -52,7 +56,8 @@ export async function configureGatewayForOnboarding(
             await prompter.text({
               message: "Gateway port",
               initialValue: String(localPort),
-              validate: (value) => (Number.isFinite(Number(value)) ? undefined : "Invalid port"),
+              validate: (value) =>
+                Number.isFinite(Number(value)) ? undefined : "Invalid port",
             }),
           ),
           10,
@@ -116,11 +121,15 @@ export async function configureGatewayForOnboarding(
   if (tailscaleMode !== "off") {
     tailscaleBin = await findTailscaleBinary();
     if (!tailscaleBin) {
-      await prompter.note(TAILSCALE_MISSING_BIN_NOTE_LINES.join("\n"), "Tailscale Warning");
+      await prompter.note(
+        TAILSCALE_MISSING_BIN_NOTE_LINES.join("\n"),
+        "Tailscale Warning",
+      );
     }
   }
 
-  let tailscaleResetOnExit = flow === "quickstart" ? quickstartGateway.tailscaleResetOnExit : false;
+  let tailscaleResetOnExit =
+    flow === "quickstart" ? quickstartGateway.tailscaleResetOnExit : false;
   if (tailscaleMode !== "off" && flow !== "quickstart") {
     await prompter.note(TAILSCALE_DOCS_LINES.join("\n"), "Tailscale");
     tailscaleResetOnExit = Boolean(
@@ -135,7 +144,10 @@ export async function configureGatewayForOnboarding(
   // - Tailscale wants bind=loopback so we never expose a non-loopback server + tailscale serve/funnel at once.
   // - Funnel requires password auth.
   if (tailscaleMode !== "off" && bind !== "loopback") {
-    await prompter.note("Tailscale requires bind=loopback. Adjusting bind to loopback.", "Note");
+    await prompter.note(
+      "Tailscale requires bind=loopback. Adjusting bind to loopback.",
+      "Note",
+    );
     bind = "loopback";
     customBindHost = undefined;
   }

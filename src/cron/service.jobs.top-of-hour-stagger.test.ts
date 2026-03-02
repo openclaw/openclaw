@@ -22,7 +22,12 @@ function createCronJob(params: {
     enabled: true,
     createdAtMs: Date.parse("2026-02-06T00:00:00.000Z"),
     updatedAtMs: Date.parse("2026-02-06T00:00:00.000Z"),
-    schedule: { kind: "cron", expr: params.expr, tz: params.tz, staggerMs: params.staggerMs },
+    schedule: {
+      kind: "cron",
+      expr: params.expr,
+      tz: params.tz,
+      staggerMs: params.staggerMs,
+    },
     sessionTarget: "main",
     wakeMode: "next-heartbeat",
     payload: { kind: "systemEvent", text: "tick" },
@@ -33,7 +38,11 @@ function createCronJob(params: {
 describe("computeJobNextRunAtMs top-of-hour staggering", () => {
   it("applies deterministic 0..5m stagger for recurring top-of-hour schedules", () => {
     const now = Date.parse("2026-02-06T10:05:00.000Z");
-    const job = createCronJob({ id: "hourly-job-a", expr: "0 * * * *", tz: "UTC" });
+    const job = createCronJob({
+      id: "hourly-job-a",
+      expr: "0 * * * *",
+      tz: "UTC",
+    });
     const offsetMs = stableOffsetMs(job.id, DEFAULT_TOP_OF_HOUR_STAGGER_MS);
 
     const next = computeJobNextRunAtMs(job, now);
@@ -47,10 +56,15 @@ describe("computeJobNextRunAtMs top-of-hour staggering", () => {
     const now = Date.parse("2026-02-06T10:02:00.000Z");
     const thisHour = Date.parse("2026-02-06T10:00:00.000Z");
     const nextHour = Date.parse("2026-02-06T11:00:00.000Z");
-    const job = createCronJob({ id: "hourly-job-b", expr: "0 * * * *", tz: "UTC" });
+    const job = createCronJob({
+      id: "hourly-job-b",
+      expr: "0 * * * *",
+      tz: "UTC",
+    });
     const offsetMs = stableOffsetMs(job.id, DEFAULT_TOP_OF_HOUR_STAGGER_MS);
 
-    const expected = thisHour + offsetMs > now ? thisHour + offsetMs : nextHour + offsetMs;
+    const expected =
+      thisHour + offsetMs > now ? thisHour + offsetMs : nextHour + offsetMs;
     const next = computeJobNextRunAtMs(job, now);
 
     expect(next).toBe(expected);
@@ -58,7 +72,11 @@ describe("computeJobNextRunAtMs top-of-hour staggering", () => {
 
   it("also applies to 6-field top-of-hour cron expressions", () => {
     const now = Date.parse("2026-02-06T10:05:00.000Z");
-    const job = createCronJob({ id: "hourly-job-seconds", expr: "0 0 * * * *", tz: "UTC" });
+    const job = createCronJob({
+      id: "hourly-job-seconds",
+      expr: "0 0 * * * *",
+      tz: "UTC",
+    });
     const offsetMs = stableOffsetMs(job.id, DEFAULT_TOP_OF_HOUR_STAGGER_MS);
 
     const next = computeJobNextRunAtMs(job, now);
@@ -84,7 +102,12 @@ describe("computeJobNextRunAtMs top-of-hour staggering", () => {
 
   it("keeps schedules exact when staggerMs is set to 0", () => {
     const now = Date.parse("2026-02-06T10:05:00.000Z");
-    const job = createCronJob({ id: "daily-job", expr: "0 7 * * *", tz: "UTC", staggerMs: 0 });
+    const job = createCronJob({
+      id: "daily-job",
+      expr: "0 7 * * *",
+      tz: "UTC",
+      staggerMs: 0,
+    });
 
     const next = computeJobNextRunAtMs(job, now);
 

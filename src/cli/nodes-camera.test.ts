@@ -10,9 +10,14 @@ import {
   writeBase64ToFile,
   writeUrlToFile,
 } from "./nodes-camera.js";
-import { parseScreenRecordPayload, screenRecordTempPath } from "./nodes-screen.js";
+import {
+  parseScreenRecordPayload,
+  screenRecordTempPath,
+} from "./nodes-screen.js";
 
-async function withCameraTempDir<T>(run: (dir: string) => Promise<T>): Promise<T> {
+async function withCameraTempDir<T>(
+  run: (dir: string) => Promise<T>,
+): Promise<T> {
   return await withTempDir("openclaw-test-", run);
 }
 
@@ -59,7 +64,11 @@ describe("nodes camera helpers", () => {
 
   it("rejects invalid camera.clip payload", () => {
     expect(() =>
-      parseCameraClipPayload({ format: "mp4", base64: "AAEC", durationMs: 1234 }),
+      parseCameraClipPayload({
+        format: "mp4",
+        base64: "AAEC",
+        durationMs: 1234,
+      }),
     ).toThrow(/invalid camera\.clip payload/i);
   });
 
@@ -156,7 +165,10 @@ describe("nodes camera helpers", () => {
       {
         name: "non-ok status",
         url: "https://example.com/down.bin",
-        response: new Response("down", { status: 503, statusText: "Service Unavailable" }),
+        response: new Response("down", {
+          status: 503,
+          statusText: "Service Unavailable",
+        }),
         expectedMessage: /503/i,
       },
       {
@@ -171,9 +183,10 @@ describe("nodes camera helpers", () => {
       if (testCase.response) {
         stubFetchResponse(testCase.response);
       }
-      await expect(writeUrlToFile("/tmp/ignored", testCase.url), testCase.name).rejects.toThrow(
-        testCase.expectedMessage,
-      );
+      await expect(
+        writeUrlToFile("/tmp/ignored", testCase.url),
+        testCase.name,
+      ).rejects.toThrow(testCase.expectedMessage);
     }
   });
 
@@ -188,9 +201,9 @@ describe("nodes camera helpers", () => {
 
     await withCameraTempDir(async (dir) => {
       const out = path.join(dir, "broken.bin");
-      await expect(writeUrlToFile(out, "https://example.com/broken.bin")).rejects.toThrow(
-        /stream exploded/i,
-      );
+      await expect(
+        writeUrlToFile(out, "https://example.com/broken.bin"),
+      ).rejects.toThrow(/stream exploded/i);
       await expect(fs.stat(out)).rejects.toThrow();
     });
   });

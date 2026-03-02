@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { isSilentReplyPrefixText, isSilentReplyText, stripSilentToken } from "./tokens.js";
+import {
+  isSilentReplyPrefixText,
+  isSilentReplyText,
+  stripSilentToken,
+} from "./tokens.js";
 
 describe("isSilentReplyText", () => {
   it("returns true for exact token", () => {
@@ -32,7 +36,9 @@ describe("isSilentReplyText", () => {
 
   it("works with custom token", () => {
     expect(isSilentReplyText("HEARTBEAT_OK", "HEARTBEAT_OK")).toBe(true);
-    expect(isSilentReplyText("Checked inbox. HEARTBEAT_OK", "HEARTBEAT_OK")).toBe(false);
+    expect(
+      isSilentReplyText("Checked inbox. HEARTBEAT_OK", "HEARTBEAT_OK"),
+    ).toBe(false);
   });
 });
 

@@ -27,7 +27,9 @@ describe("resolveEffectiveModelFallbacks", () => {
       fallbacks: ["google/gemini-2.0-flash"],
     };
 
-    expect(resolveEffectiveModelFallbacks(entryModel, defaultModel)).toEqual(["openai/gpt-5-nano"]);
+    expect(resolveEffectiveModelFallbacks(entryModel, defaultModel)).toEqual([
+      "openai/gpt-5-nano",
+    ]);
   });
 
   it("keeps explicit empty entry fallback lists", () => {
@@ -40,7 +42,9 @@ describe("resolveEffectiveModelFallbacks", () => {
       fallbacks: ["google/gemini-2.0-flash"],
     };
 
-    expect(resolveEffectiveModelFallbacks(entryModel, defaultModel)).toEqual([]);
+    expect(resolveEffectiveModelFallbacks(entryModel, defaultModel)).toEqual(
+      [],
+    );
   });
 });
 
@@ -60,7 +64,10 @@ describe("resolveConfiguredCronModelSuggestions", () => {
         },
         list: {
           writer: {
-            model: { primary: "xai/grok-4", fallbacks: ["openai/gpt-5.2-mini"] },
+            model: {
+              primary: "xai/grok-4",
+              fallbacks: ["openai/gpt-5.2-mini"],
+            },
           },
           planner: {
             model: "google/gemini-2.5-flash",
@@ -82,8 +89,10 @@ describe("resolveConfiguredCronModelSuggestions", () => {
   it("returns empty array for invalid or missing config shape", () => {
     expect(resolveConfiguredCronModelSuggestions(null)).toEqual([]);
     expect(resolveConfiguredCronModelSuggestions({})).toEqual([]);
-    expect(resolveConfiguredCronModelSuggestions({ agents: { defaults: { model: "" } } })).toEqual(
-      [],
-    );
+    expect(
+      resolveConfiguredCronModelSuggestions({
+        agents: { defaults: { model: "" } },
+      }),
+    ).toEqual([]);
   });
 });

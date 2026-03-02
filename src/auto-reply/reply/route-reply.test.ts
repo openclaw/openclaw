@@ -5,11 +5,17 @@ import { signalOutbound } from "../../channels/plugins/outbound/signal.js";
 import { slackOutbound } from "../../channels/plugins/outbound/slack.js";
 import { telegramOutbound } from "../../channels/plugins/outbound/telegram.js";
 import { whatsappOutbound } from "../../channels/plugins/outbound/whatsapp.js";
-import type { ChannelOutboundAdapter, ChannelPlugin } from "../../channels/plugins/types.js";
+import type {
+  ChannelOutboundAdapter,
+  ChannelPlugin,
+} from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { PluginRegistry } from "../../plugins/registry.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
+import {
+  createOutboundTestPlugin,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 import { createIMessageTestPlugin } from "../../test-utils/imessage-test-plugin.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 
@@ -47,21 +53,23 @@ vi.mock("../../web/outbound.js", () => ({
   sendPollWhatsApp: mocks.sendMessageWhatsApp,
 }));
 vi.mock("../../infra/outbound/deliver.js", async () => {
-  const actual = await vi.importActual<typeof import("../../infra/outbound/deliver.js")>(
-    "../../infra/outbound/deliver.js",
-  );
+  const actual = await vi.importActual<
+    typeof import("../../infra/outbound/deliver.js")
+  >("../../infra/outbound/deliver.js");
   return {
     ...actual,
     deliverOutboundPayloads: mocks.deliverOutboundPayloads,
   };
 });
-const actualDeliver = await vi.importActual<typeof import("../../infra/outbound/deliver.js")>(
-  "../../infra/outbound/deliver.js",
-);
+const actualDeliver = await vi.importActual<
+  typeof import("../../infra/outbound/deliver.js")
+>("../../infra/outbound/deliver.js");
 
 const { routeReply } = await import("./route-reply.js");
 
-const createRegistry = (channels: PluginRegistry["channels"]): PluginRegistry => ({
+const createRegistry = (
+  channels: PluginRegistry["channels"],
+): PluginRegistry => ({
   plugins: [],
   tools: [],
   hooks: [],
@@ -88,7 +96,9 @@ const createMSTeamsOutbound = (): ChannelOutboundAdapter => ({
   },
 });
 
-const createMSTeamsPlugin = (params: { outbound: ChannelOutboundAdapter }): ChannelPlugin => ({
+const createMSTeamsPlugin = (params: {
+  outbound: ChannelOutboundAdapter;
+}): ChannelPlugin => ({
   id: "msteams",
   meta: {
     id: "msteams",
@@ -108,7 +118,9 @@ const createMSTeamsPlugin = (params: { outbound: ChannelOutboundAdapter }): Chan
 describe("routeReply", () => {
   beforeEach(() => {
     setActivePluginRegistry(defaultRegistry);
-    mocks.deliverOutboundPayloads.mockImplementation(actualDeliver.deliverOutboundPayloads);
+    mocks.deliverOutboundPayloads.mockImplementation(
+      actualDeliver.deliverOutboundPayloads,
+    );
   });
 
   afterEach(() => {
@@ -221,7 +233,11 @@ describe("routeReply", () => {
       sessionKey: "agent:rich:main",
       cfg,
     });
-    expect(mocks.sendMessageSlack).toHaveBeenCalledWith("channel:C123", "hi", expect.any(Object));
+    expect(mocks.sendMessageSlack).toHaveBeenCalledWith(
+      "channel:C123",
+      "hi",
+      expect.any(Object),
+    );
   });
 
   it("uses threadId for Slack when replyToId is missing", async () => {
@@ -426,7 +442,11 @@ const defaultRegistry = createTestRegistry([
   },
   {
     pluginId: "slack",
-    plugin: createOutboundTestPlugin({ id: "slack", outbound: slackOutbound, label: "Slack" }),
+    plugin: createOutboundTestPlugin({
+      id: "slack",
+      outbound: slackOutbound,
+      label: "Slack",
+    }),
     source: "test",
   },
   {
@@ -449,7 +469,11 @@ const defaultRegistry = createTestRegistry([
   },
   {
     pluginId: "signal",
-    plugin: createOutboundTestPlugin({ id: "signal", outbound: signalOutbound, label: "Signal" }),
+    plugin: createOutboundTestPlugin({
+      id: "signal",
+      outbound: signalOutbound,
+      label: "Signal",
+    }),
     source: "test",
   },
   {

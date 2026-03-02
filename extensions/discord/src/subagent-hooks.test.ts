@@ -29,9 +29,13 @@ const hookMocks = vi.hoisted(() => ({
     }),
   ),
   autoBindSpawnedDiscordSubagent: vi.fn(
-    async (): Promise<{ threadId: string } | null> => ({ threadId: "thread-1" }),
+    async (): Promise<{ threadId: string } | null> => ({
+      threadId: "thread-1",
+    }),
   ),
-  listThreadBindingsBySessionKey: vi.fn((_params?: unknown): ThreadBindingRecord[] => []),
+  listThreadBindingsBySessionKey: vi.fn(
+    (_params?: unknown): ThreadBindingRecord[] => [],
+  ),
   unbindThreadBindingsBySessionKey: vi.fn(() => []),
 }));
 
@@ -56,7 +60,10 @@ function registerHandlersForTest(
   const handlers = new Map<string, (event: unknown, ctx: unknown) => unknown>();
   const api = {
     config,
-    on: (hookName: string, handler: (event: unknown, ctx: unknown) => unknown) => {
+    on: (
+      hookName: string,
+      handler: (event: unknown, ctx: unknown) => unknown,
+    ) => {
       handlers.set(hookName, handler);
     },
   } as unknown as OpenClawPluginApi;
@@ -156,14 +163,16 @@ async function expectSubagentSpawningError(params?: {
 describe("discord subagent hook handlers", () => {
   beforeEach(() => {
     hookMocks.resolveDiscordAccount.mockClear();
-    hookMocks.resolveDiscordAccount.mockImplementation((params?: { accountId?: string }) => ({
-      accountId: params?.accountId?.trim() || "default",
-      config: {
-        threadBindings: {
-          spawnSubagentSessions: true,
+    hookMocks.resolveDiscordAccount.mockImplementation(
+      (params?: { accountId?: string }) => ({
+        accountId: params?.accountId?.trim() || "default",
+        config: {
+          threadBindings: {
+            spawnSubagentSessions: true,
+          },
         },
-      },
-    }));
+      }),
+    );
     hookMocks.autoBindSpawnedDiscordSubagent.mockClear();
     hookMocks.listThreadBindingsBySessionKey.mockClear();
     hookMocks.unbindThreadBindingsBySessionKey.mockClear();

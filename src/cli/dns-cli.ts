@@ -3,8 +3,14 @@ import fs from "node:fs";
 import path from "node:path";
 import type { Command } from "commander";
 import { loadConfig } from "../config/config.js";
-import { pickPrimaryTailnetIPv4, pickPrimaryTailnetIPv6 } from "../infra/tailnet.js";
-import { getWideAreaZonePath, resolveWideAreaDiscoveryDomain } from "../infra/widearea-dns.js";
+import {
+  pickPrimaryTailnetIPv4,
+  pickPrimaryTailnetIPv6,
+} from "../infra/tailnet.js";
+import {
+  getWideAreaZonePath,
+  resolveWideAreaDiscoveryDomain,
+} from "../infra/widearea-dns.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { renderTable } from "../terminal/table.js";
@@ -50,7 +56,9 @@ function writeFileSudoIfNeeded(filePath: string, content: string): void {
     throw res.error;
   }
   if (res.status !== 0) {
-    throw new Error(`sudo tee ${filePath} failed: exit ${res.status ?? "unknown"}`);
+    throw new Error(
+      `sudo tee ${filePath} failed: exit ${res.status ?? "unknown"}`,
+    );
   }
 }
 
@@ -105,7 +113,8 @@ export function registerDnsCli(program: Command) {
     .description("DNS helpers for wide-area discovery (Tailscale + CoreDNS)")
     .addHelpText(
       "after",
-      () => `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/dns", "docs.openclaw.ai/cli/dns")}\n`,
+      () =>
+        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/dns", "docs.openclaw.ai/cli/dns")}\n`,
     );
 
   dns
@@ -113,7 +122,10 @@ export function registerDnsCli(program: Command) {
     .description(
       "Set up CoreDNS to serve your discovery domain for unicast DNS-SD (Wide-Area Bonjour)",
     )
-    .option("--domain <domain>", "Wide-area discovery domain (e.g. openclaw.internal)")
+    .option(
+      "--domain <domain>",
+      "Wide-area discovery domain (e.g. openclaw.internal)",
+    )
     .option(
       "--apply",
       "Install/update CoreDNS config and (re)start the service (requires sudo)",
@@ -124,7 +136,9 @@ export function registerDnsCli(program: Command) {
       const tailnetIPv4 = pickPrimaryTailnetIPv4();
       const tailnetIPv6 = pickPrimaryTailnetIPv6();
       const wideAreaDomain = resolveWideAreaDiscoveryDomain({
-        configDomain: (opts.domain as string | undefined) ?? cfg.discovery?.wideArea?.domain,
+        configDomain:
+          (opts.domain as string | undefined) ??
+          cfg.discovery?.wideArea?.domain,
       });
       if (!wideAreaDomain) {
         throw new Error(
@@ -153,7 +167,9 @@ export function registerDnsCli(program: Command) {
         }).trimEnd(),
       );
       defaultRuntime.log("");
-      defaultRuntime.log(theme.heading("Recommended ~/.openclaw/openclaw.json:"));
+      defaultRuntime.log(
+        theme.heading("Recommended ~/.openclaw/openclaw.json:"),
+      );
       defaultRuntime.log(
         JSON.stringify(
           {
@@ -167,15 +183,21 @@ export function registerDnsCli(program: Command) {
       defaultRuntime.log("");
       defaultRuntime.log(theme.heading("Tailscale admin (DNS → Nameservers):"));
       defaultRuntime.log(
-        theme.muted(`- Add nameserver: ${tailnetIPv4 ?? "<this machine's tailnet IPv4>"}`),
+        theme.muted(
+          `- Add nameserver: ${tailnetIPv4 ?? "<this machine's tailnet IPv4>"}`,
+        ),
       );
       defaultRuntime.log(
-        theme.muted(`- Restrict to domain (Split DNS): ${wideAreaDomain.replace(/\.$/, "")}`),
+        theme.muted(
+          `- Restrict to domain (Split DNS): ${wideAreaDomain.replace(/\.$/, "")}`,
+        ),
       );
 
       if (!opts.apply) {
         defaultRuntime.log("");
-        defaultRuntime.log(theme.muted("Run with --apply to install CoreDNS and configure it."));
+        defaultRuntime.log(
+          theme.muted("Run with --apply to install CoreDNS and configure it."),
+        );
         return;
       }
 
@@ -183,7 +205,9 @@ export function registerDnsCli(program: Command) {
         throw new Error("dns setup is currently supported on macOS only");
       }
       if (!tailnetIPv4 && !tailnetIPv6) {
-        throw new Error("no tailnet IP detected; ensure Tailscale is running on this machine");
+        throw new Error(
+          "no tailnet IP detected; ensure Tailscale is running on this machine",
+        );
       }
 
       const prefix = detectBrewPrefix();
@@ -191,7 +215,10 @@ export function registerDnsCli(program: Command) {
       const corefilePath = path.join(etcDir, "Corefile");
       const confDir = path.join(etcDir, "conf.d");
       const importGlob = path.join(confDir, "*.server");
-      const serverPath = path.join(confDir, `${wideAreaDomain.replace(/\.$/, "")}.server`);
+      const serverPath = path.join(
+        confDir,
+        `${wideAreaDomain.replace(/\.$/, "")}.server`,
+      );
 
       run("brew", ["list", "coredns"], { allowFailure: true });
       run("brew", ["install", "coredns"], {
@@ -207,7 +234,9 @@ export function registerDnsCli(program: Command) {
         ensureImportLine(corefilePath, importGlob);
       }
 
-      const bindArgs = [tailnetIPv4, tailnetIPv6].filter((v): v is string => Boolean(v?.trim()));
+      const bindArgs = [tailnetIPv4, tailnetIPv6].filter((v): v is string =>
+        Boolean(v?.trim()),
+      );
 
       const server = [
         `${wideAreaDomain.replace(/\.$/, "")}:53 {`,

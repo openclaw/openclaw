@@ -1,5 +1,9 @@
 import type { MatrixClient } from "@vector-im/matrix-bot-sdk";
-import type { PluginRuntime, RuntimeEnv, RuntimeLogger } from "openclaw/plugin-sdk";
+import type {
+  PluginRuntime,
+  RuntimeEnv,
+  RuntimeLogger,
+} from "openclaw/plugin-sdk";
 import { describe, expect, it, vi } from "vitest";
 import { createMatrixRoomMessageHandler } from "./handler.js";
 import { EventType, type MatrixRawEvent } from "./types.js";
@@ -9,7 +13,9 @@ describe("createMatrixRoomMessageHandler BodyForAgent sender label", () => {
     const recordInboundSession = vi.fn().mockResolvedValue(undefined);
     const formatInboundEnvelope = vi
       .fn()
-      .mockImplementation((params: { senderLabel?: string; body: string }) => params.body);
+      .mockImplementation(
+        (params: { senderLabel?: string; body: string }) => params.body,
+      );
     const finalizeInboundContext = vi
       .fn()
       .mockImplementation((ctx: Record<string, unknown>) => ctx);
@@ -28,7 +34,9 @@ describe("createMatrixRoomMessageHandler BodyForAgent sender label", () => {
           }),
         },
         session: {
-          resolveStorePath: vi.fn().mockReturnValue("/tmp/openclaw-test-session.json"),
+          resolveStorePath: vi
+            .fn()
+            .mockReturnValue("/tmp/openclaw-test-session.json"),
           readSessionUpdatedAt: vi.fn().mockReturnValue(123),
           recordInboundSession,
         },
@@ -47,7 +55,10 @@ describe("createMatrixRoomMessageHandler BodyForAgent sender label", () => {
           }),
           withReplyDispatcher: vi
             .fn()
-            .mockResolvedValue({ queuedFinal: false, counts: { final: 0, partial: 0, tool: 0 } }),
+            .mockResolvedValue({
+              queuedFinal: false,
+              counts: { final: 0, partial: 0, tool: 0 },
+            }),
         },
         commands: {
           shouldHandleTextCommands: vi.fn().mockReturnValue(true),

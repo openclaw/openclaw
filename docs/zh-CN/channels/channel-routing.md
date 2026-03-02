@@ -85,11 +85,20 @@ OpenClaw 将回复**路由回消息来源的渠道**。模型不会选择渠道�
 ```json5
 {
   agents: {
-    list: [{ id: "support", name: "Support", workspace: "~/.openclaw/workspace-support" }],
+    list: [
+      {
+        id: "support",
+        name: "Support",
+        workspace: "~/.openclaw/workspace-support",
+      },
+    ],
   },
   bindings: [
     { match: { channel: "slack", teamId: "T123" }, agentId: "support" },
-    { match: { channel: "telegram", peer: { kind: "group", id: "-100123" } }, agentId: "support" },
+    {
+      match: { channel: "telegram", peer: { kind: "group", id: "-100123" } },
+      agentId: "support",
+    },
   ],
 }
 ```

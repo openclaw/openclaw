@@ -30,12 +30,15 @@ function mockNodePathPresent(nodePath: string) {
 
 describe("resolvePreferredNodePath", () => {
   const darwinNode = "/opt/homebrew/bin/node";
-  const fnmNode = "/Users/test/.fnm/node-versions/v24.11.1/installation/bin/node";
+  const fnmNode =
+    "/Users/test/.fnm/node-versions/v24.11.1/installation/bin/node";
 
   it("prefers execPath (version manager node) over system node", async () => {
     mockNodePathPresent(darwinNode);
 
-    const execFile = vi.fn().mockResolvedValue({ stdout: "24.11.1\n", stderr: "" });
+    const execFile = vi
+      .fn()
+      .mockResolvedValue({ stdout: "24.11.1\n", stderr: "" });
 
     const result = await resolvePreferredNodePath({
       env: {},
@@ -72,7 +75,9 @@ describe("resolvePreferredNodePath", () => {
   it("ignores execPath when it is not node", async () => {
     mockNodePathPresent(darwinNode);
 
-    const execFile = vi.fn().mockResolvedValue({ stdout: "22.12.0\n", stderr: "" });
+    const execFile = vi
+      .fn()
+      .mockResolvedValue({ stdout: "22.12.0\n", stderr: "" });
 
     const result = await resolvePreferredNodePath({
       env: {},
@@ -84,16 +89,22 @@ describe("resolvePreferredNodePath", () => {
 
     expect(result).toBe(darwinNode);
     expect(execFile).toHaveBeenCalledTimes(1);
-    expect(execFile).toHaveBeenCalledWith(darwinNode, ["-p", "process.versions.node"], {
-      encoding: "utf8",
-    });
+    expect(execFile).toHaveBeenCalledWith(
+      darwinNode,
+      ["-p", "process.versions.node"],
+      {
+        encoding: "utf8",
+      },
+    );
   });
 
   it("uses system node when it meets the minimum version", async () => {
     mockNodePathPresent(darwinNode);
 
     // Node 22.12.0+ is the minimum required version
-    const execFile = vi.fn().mockResolvedValue({ stdout: "22.12.0\n", stderr: "" });
+    const execFile = vi
+      .fn()
+      .mockResolvedValue({ stdout: "22.12.0\n", stderr: "" });
 
     const result = await resolvePreferredNodePath({
       env: {},
@@ -111,7 +122,9 @@ describe("resolvePreferredNodePath", () => {
     mockNodePathPresent(darwinNode);
 
     // Node 22.11.x is below minimum 22.12.0
-    const execFile = vi.fn().mockResolvedValue({ stdout: "22.11.0\n", stderr: "" });
+    const execFile = vi
+      .fn()
+      .mockResolvedValue({ stdout: "22.11.0\n", stderr: "" });
 
     const result = await resolvePreferredNodePath({
       env: {},
@@ -149,7 +162,9 @@ describe("resolveSystemNodeInfo", () => {
     mockNodePathPresent(darwinNode);
 
     // Node 22.12.0+ is the minimum required version
-    const execFile = vi.fn().mockResolvedValue({ stdout: "22.12.0\n", stderr: "" });
+    const execFile = vi
+      .fn()
+      .mockResolvedValue({ stdout: "22.12.0\n", stderr: "" });
 
     const result = await resolveSystemNodeInfo({
       env: {},
@@ -167,7 +182,11 @@ describe("resolveSystemNodeInfo", () => {
   it("returns undefined when system node is missing", async () => {
     fsMocks.access.mockRejectedValue(new Error("missing"));
     const execFile = vi.fn();
-    const result = await resolveSystemNodeInfo({ env: {}, platform: "darwin", execFile });
+    const result = await resolveSystemNodeInfo({
+      env: {},
+      platform: "darwin",
+      execFile,
+    });
     expect(result).toBeNull();
   });
 

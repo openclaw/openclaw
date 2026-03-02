@@ -33,7 +33,10 @@ export async function runNonInteractiveOnboardingLocal(params: {
     defaultWorkspaceDir: DEFAULT_WORKSPACE,
   });
 
-  let nextConfig: OpenClawConfig = applyOnboardingLocalWorkspaceConfig(baseConfig, workspaceDir);
+  let nextConfig: OpenClawConfig = applyOnboardingLocalWorkspaceConfig(
+    baseConfig,
+    workspaceDir,
+  );
 
   const inferredAuthChoice = inferAuthChoiceFromFlags(opts);
   if (!opts.authChoice && inferredAuthChoice.matches.length > 1) {
@@ -49,7 +52,8 @@ export async function runNonInteractiveOnboardingLocal(params: {
   }
   const authChoice = opts.authChoice ?? inferredAuthChoice.choice ?? "skip";
   if (authChoice !== "skip") {
-    const { applyNonInteractiveAuthChoice } = await import("./local/auth-choice.js");
+    const { applyNonInteractiveAuthChoice } =
+      await import("./local/auth-choice.js");
     const nextConfigAfterAuth = await applyNonInteractiveAuthChoice({
       nextConfig,
       authChoice,
@@ -86,7 +90,8 @@ export async function runNonInteractiveOnboardingLocal(params: {
   });
 
   if (opts.installDaemon) {
-    const { installGatewayDaemonNonInteractive } = await import("./local/daemon-install.js");
+    const { installGatewayDaemonNonInteractive } =
+      await import("./local/daemon-install.js");
     await installGatewayDaemonNonInteractive({
       nextConfig,
       opts,
@@ -100,7 +105,12 @@ export async function runNonInteractiveOnboardingLocal(params: {
   if (!opts.skipHealth) {
     const { healthCommand } = await import("../health.js");
     const links = resolveControlUiLinks({
-      bind: gatewayResult.bind as "auto" | "lan" | "loopback" | "custom" | "tailnet",
+      bind: gatewayResult.bind as
+        | "auto"
+        | "lan"
+        | "loopback"
+        | "custom"
+        | "tailnet",
       port: gatewayResult.port,
       customBindHost: nextConfig.gateway?.customBindHost,
       basePath: undefined,

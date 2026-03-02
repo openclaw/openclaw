@@ -8,7 +8,10 @@ import type { AuthProfileStore } from "./auth-profiles.js";
 import { saveAuthProfileStore } from "./auth-profiles.js";
 import { AUTH_STORE_VERSION } from "./auth-profiles/constants.js";
 import { isAnthropicBillingError } from "./live-auth-keys.js";
-import { runWithImageModelFallback, runWithModelFallback } from "./model-fallback.js";
+import {
+  runWithImageModelFallback,
+  runWithModelFallback,
+} from "./model-fallback.js";
 import { makeModelFallbackCfg } from "./test-helpers/model-fallback-config-fixture.js";
 
 const makeCfg = makeModelFallbackCfg;
@@ -74,7 +77,10 @@ async function expectFallsBackToHaiku(params: {
   firstError: Error;
 }) {
   const cfg = makeCfg();
-  const run = vi.fn().mockRejectedValueOnce(params.firstError).mockResolvedValueOnce("ok");
+  const run = vi
+    .fn()
+    .mockRejectedValueOnce(params.firstError)
+    .mockResolvedValueOnce("ok");
 
   const result = await runWithModelFallback({
     cfg,
@@ -97,10 +103,16 @@ function createOverrideFailureRun(params: {
   firstError: Error;
 }) {
   return vi.fn().mockImplementation(async (provider, model) => {
-    if (provider === params.overrideProvider && model === params.overrideModel) {
+    if (
+      provider === params.overrideProvider &&
+      model === params.overrideModel
+    ) {
       throw params.firstError;
     }
-    if (provider === params.fallbackProvider && model === params.fallbackModel) {
+    if (
+      provider === params.fallbackProvider &&
+      model === params.fallbackModel
+    ) {
       return "ok";
     }
     throw new Error(`unexpected fallback candidate: ${provider}/${model}`);
@@ -192,7 +204,10 @@ describe("runWithModelFallback", () => {
 
   it("falls back on unrecognized errors when candidates remain", async () => {
     const cfg = makeCfg();
-    const run = vi.fn().mockRejectedValueOnce(new Error("bad request")).mockResolvedValueOnce("ok");
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("bad request"))
+      .mockResolvedValueOnce("ok");
 
     const result = await runWithModelFallback({
       cfg,
@@ -210,7 +225,10 @@ describe("runWithModelFallback", () => {
   it("passes original unknown errors to onError during fallback", async () => {
     const cfg = makeCfg();
     const unknownError = new Error("provider misbehaved");
-    const run = vi.fn().mockRejectedValueOnce(unknownError).mockResolvedValueOnce("ok");
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(unknownError)
+      .mockResolvedValueOnce("ok");
     const onError = vi.fn();
 
     await runWithModelFallback({
@@ -261,7 +279,10 @@ describe("runWithModelFallback", () => {
         defaults: {
           model: {
             primary: "openai/gpt-4.1-mini",
-            fallbacks: ["anthropic/claude-haiku-3-5", "openrouter/deepseek-chat"],
+            fallbacks: [
+              "anthropic/claude-haiku-3-5",
+              "openrouter/deepseek-chat",
+            ],
           },
         },
       },
@@ -297,21 +318,26 @@ describe("runWithModelFallback", () => {
         defaults: {
           model: {
             primary: "openai/gpt-4.1-mini",
-            fallbacks: ["anthropic/claude-haiku-3-5", "openrouter/deepseek-chat"],
+            fallbacks: [
+              "anthropic/claude-haiku-3-5",
+              "openrouter/deepseek-chat",
+            ],
           },
         },
       },
     });
 
-    const run = vi.fn().mockImplementation(async (provider: string, model: string) => {
-      if (provider === "anthropic" && model === "claude-haiku-3-5") {
-        throw Object.assign(new Error("rate-limited"), { status: 429 });
-      }
-      if (provider === "openrouter" && model === "openrouter/deepseek-chat") {
-        return "ok";
-      }
-      throw new Error(`unexpected fallback candidate: ${provider}/${model}`);
-    });
+    const run = vi
+      .fn()
+      .mockImplementation(async (provider: string, model: string) => {
+        if (provider === "anthropic" && model === "claude-haiku-3-5") {
+          throw Object.assign(new Error("rate-limited"), { status: 429 });
+        }
+        if (provider === "openrouter" && model === "openrouter/deepseek-chat") {
+          return "ok";
+        }
+        throw new Error(`unexpected fallback candidate: ${provider}/${model}`);
+      });
 
     const result = await runWithModelFallback({
       cfg,
@@ -395,7 +421,9 @@ describe("runWithModelFallback", () => {
       overrideModel: "claude-opus-4",
       fallbackProvider: "openai",
       fallbackModel: "gpt-4.1-mini",
-      firstError: new Error('No credentials found for profile "anthropic:default".'),
+      firstError: new Error(
+        'No credentials found for profile "anthropic:default".',
+      ),
     });
 
     const result = await runWithModelFallback({
@@ -416,7 +444,9 @@ describe("runWithModelFallback", () => {
     const cfg = makeCfg();
     const run = vi
       .fn()
-      .mockRejectedValueOnce(new Error("Unknown model: anthropic/claude-opus-4-6"))
+      .mockRejectedValueOnce(
+        new Error("Unknown model: anthropic/claude-opus-4-6"),
+      )
       .mockResolvedValueOnce("ok");
 
     const result = await runWithModelFallback({
@@ -567,7 +597,9 @@ describe("runWithModelFallback", () => {
     });
     const run = vi
       .fn()
-      .mockImplementation(() => Promise.reject(Object.assign(new Error("nope"), { status: 401 })));
+      .mockImplementation(() =>
+        Promise.reject(Object.assign(new Error("nope"), { status: 401 })),
+      );
 
     await expect(
       runWithModelFallback({
@@ -632,7 +664,9 @@ describe("runWithModelFallback", () => {
       }),
     ).rejects.toThrow("primary failed");
 
-    expect(calls).toEqual([{ provider: "anthropic", model: "claude-opus-4-5" }]);
+    expect(calls).toEqual([
+      { provider: "anthropic", model: "claude-opus-4-5" },
+    ]);
   });
 
   it("keeps explicit fallbacks reachable when models allowlist is present", async () => {
@@ -651,7 +685,9 @@ describe("runWithModelFallback", () => {
     });
     const run = vi
       .fn()
-      .mockRejectedValueOnce(Object.assign(new Error("rate limited"), { status: 429 }))
+      .mockRejectedValueOnce(
+        Object.assign(new Error("rate limited"), { status: 429 }),
+      )
       .mockResolvedValueOnce("ok");
 
     const result = await runWithModelFallback({
@@ -713,11 +749,16 @@ describe("runWithModelFallback", () => {
   });
 
   it("falls back on timeout abort errors", async () => {
-    const timeoutCause = Object.assign(new Error("request timed out"), { name: "TimeoutError" });
+    const timeoutCause = Object.assign(new Error("request timed out"), {
+      name: "TimeoutError",
+    });
     await expectFallsBackToHaiku({
       provider: "openai",
       model: "gpt-4.1-mini",
-      firstError: Object.assign(new Error("aborted"), { name: "AbortError", cause: timeoutCause }),
+      firstError: Object.assign(new Error("aborted"), {
+        name: "AbortError",
+        cause: timeoutCause,
+      }),
     });
   });
 
@@ -747,7 +788,9 @@ describe("runWithModelFallback", () => {
     await expectFallsBackToHaiku({
       provider: "openai",
       model: "gpt-4.1-mini",
-      firstError: Object.assign(new Error("request aborted"), { code: "ETIMEDOUT" }),
+      firstError: Object.assign(new Error("request aborted"), {
+        code: "ETIMEDOUT",
+      }),
     });
   });
 
@@ -755,9 +798,12 @@ describe("runWithModelFallback", () => {
     await expectFallsBackToHaiku({
       provider: "openai",
       model: "gpt-4.1-mini",
-      firstError: Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:11434"), {
-        code: "ECONNREFUSED",
-      }),
+      firstError: Object.assign(
+        new Error("connect ECONNREFUSED 127.0.0.1:11434"),
+        {
+          code: "ECONNREFUSED",
+        },
+      ),
     });
   });
 
@@ -765,7 +811,9 @@ describe("runWithModelFallback", () => {
     await expectFallsBackToHaiku({
       provider: "openai",
       model: "gpt-4.1-mini",
-      firstError: Object.assign(new Error("connect ENETUNREACH"), { code: "ENETUNREACH" }),
+      firstError: Object.assign(new Error("connect ENETUNREACH"), {
+        code: "ENETUNREACH",
+      }),
     });
   });
 
@@ -773,7 +821,9 @@ describe("runWithModelFallback", () => {
     await expectFallsBackToHaiku({
       provider: "openai",
       model: "gpt-4.1-mini",
-      firstError: Object.assign(new Error("connect EHOSTUNREACH"), { code: "EHOSTUNREACH" }),
+      firstError: Object.assign(new Error("connect EHOSTUNREACH"), {
+        code: "EHOSTUNREACH",
+      }),
     });
   });
 
@@ -781,9 +831,12 @@ describe("runWithModelFallback", () => {
     await expectFallsBackToHaiku({
       provider: "openai",
       model: "gpt-4.1-mini",
-      firstError: Object.assign(new Error("getaddrinfo EAI_AGAIN api.openai.com"), {
-        code: "EAI_AGAIN",
-      }),
+      firstError: Object.assign(
+        new Error("getaddrinfo EAI_AGAIN api.openai.com"),
+        {
+          code: "EAI_AGAIN",
+        },
+      ),
     });
   });
 
@@ -791,7 +844,9 @@ describe("runWithModelFallback", () => {
     await expectFallsBackToHaiku({
       provider: "openai",
       model: "gpt-4.1-mini",
-      firstError: Object.assign(new Error("connect ENETRESET"), { code: "ENETRESET" }),
+      firstError: Object.assign(new Error("connect ENETRESET"), {
+        code: "ENETRESET",
+      }),
     });
   });
 
@@ -799,7 +854,9 @@ describe("runWithModelFallback", () => {
     await expectFallsBackToHaiku({
       provider: "openai",
       model: "gpt-4.1-mini",
-      firstError: Object.assign(new Error("Request was aborted"), { name: "AbortError" }),
+      firstError: Object.assign(new Error("Request was aborted"), {
+        name: "AbortError",
+      }),
     });
   });
 
@@ -807,7 +864,9 @@ describe("runWithModelFallback", () => {
     const cfg = makeCfg();
     const run = vi
       .fn()
-      .mockRejectedValueOnce(Object.assign(new Error("aborted"), { name: "AbortError" }))
+      .mockRejectedValueOnce(
+        Object.assign(new Error("aborted"), { name: "AbortError" }),
+      )
       .mockResolvedValueOnce("ok");
 
     await expect(
@@ -835,7 +894,9 @@ describe("runWithModelFallback", () => {
     });
     const run = vi
       .fn()
-      .mockRejectedValueOnce(Object.assign(new Error("timeout"), { code: "ETIMEDOUT" }))
+      .mockRejectedValueOnce(
+        Object.assign(new Error("timeout"), { code: "ETIMEDOUT" }),
+      )
       .mockResolvedValueOnce("ok");
 
     const result = await runWithModelFallback({
@@ -859,7 +920,10 @@ describe("runWithModelFallback", () => {
           defaults: {
             model: {
               primary: "anthropic/claude-opus-4-6",
-              fallbacks: ["anthropic/claude-sonnet-4-5", "google/gemini-2.5-flash"],
+              fallbacks: [
+                "anthropic/claude-sonnet-4-5",
+                "google/gemini-2.5-flash",
+              ],
             },
           },
         },
@@ -879,7 +943,11 @@ describe("runWithModelFallback", () => {
 
       expect(result.result).toBe("fallback success");
       expect(run).toHaveBeenCalledTimes(2);
-      expect(run).toHaveBeenNthCalledWith(1, "anthropic", "claude-sonnet-4-20250514");
+      expect(run).toHaveBeenNthCalledWith(
+        1,
+        "anthropic",
+        "claude-sonnet-4-20250514",
+      );
       expect(run).toHaveBeenNthCalledWith(2, "anthropic", "claude-sonnet-4-5"); // Fallback tried
     });
 
@@ -926,7 +994,9 @@ describe("runWithModelFallback", () => {
 
       const run = vi
         .fn()
-        .mockRejectedValueOnce(new Error('No credentials found for profile "openai:default".'))
+        .mockRejectedValueOnce(
+          new Error('No credentials found for profile "openai:default".'),
+        )
         .mockResolvedValueOnce("config primary worked");
 
       const result = await runWithModelFallback({
@@ -984,7 +1054,11 @@ describe("runWithModelFallback", () => {
       const store: AuthProfileStore = {
         version: AUTH_STORE_VERSION,
         profiles: {
-          [`${provider}:default`]: { type: "api_key", provider, key: "test-key" },
+          [`${provider}:default`]: {
+            type: "api_key",
+            provider,
+            key: "test-key",
+          },
         },
         usageStats: {
           [`${provider}:default`]:
@@ -1007,13 +1081,19 @@ describe("runWithModelFallback", () => {
     }
 
     it("attempts same-provider fallbacks during rate limit cooldown", async () => {
-      const { dir } = await makeAuthStoreWithCooldown("anthropic", "rate_limit");
+      const { dir } = await makeAuthStoreWithCooldown(
+        "anthropic",
+        "rate_limit",
+      );
       const cfg = makeCfg({
         agents: {
           defaults: {
             model: {
               primary: "anthropic/claude-opus-4-6",
-              fallbacks: ["anthropic/claude-sonnet-4-5", "groq/llama-3.3-70b-versatile"],
+              fallbacks: [
+                "anthropic/claude-sonnet-4-5",
+                "groq/llama-3.3-70b-versatile",
+              ],
             },
           },
         },
@@ -1041,7 +1121,10 @@ describe("runWithModelFallback", () => {
           defaults: {
             model: {
               primary: "anthropic/claude-opus-4-6",
-              fallbacks: ["anthropic/claude-sonnet-4-5", "groq/llama-3.3-70b-versatile"],
+              fallbacks: [
+                "anthropic/claude-sonnet-4-5",
+                "groq/llama-3.3-70b-versatile",
+              ],
             },
           },
         },
@@ -1069,7 +1152,10 @@ describe("runWithModelFallback", () => {
           defaults: {
             model: {
               primary: "anthropic/claude-opus-4-6",
-              fallbacks: ["anthropic/claude-sonnet-4-5", "groq/llama-3.3-70b-versatile"],
+              fallbacks: [
+                "anthropic/claude-sonnet-4-5",
+                "groq/llama-3.3-70b-versatile",
+              ],
             },
           },
         },
@@ -1096,8 +1182,16 @@ describe("runWithModelFallback", () => {
       const store: AuthProfileStore = {
         version: AUTH_STORE_VERSION,
         profiles: {
-          "anthropic:default": { type: "api_key", provider: "anthropic", key: "test-key" },
-          "groq:default": { type: "api_key", provider: "groq", key: "test-key" },
+          "anthropic:default": {
+            type: "api_key",
+            provider: "anthropic",
+            key: "test-key",
+          },
+          "groq:default": {
+            type: "api_key",
+            provider: "groq",
+            key: "test-key",
+          },
         },
         usageStats: {
           "anthropic:default": {
@@ -1115,7 +1209,10 @@ describe("runWithModelFallback", () => {
           defaults: {
             model: {
               primary: "anthropic/claude-opus-4-6",
-              fallbacks: ["anthropic/claude-sonnet-4-5", "groq/llama-3.3-70b-versatile"],
+              fallbacks: [
+                "anthropic/claude-sonnet-4-5",
+                "groq/llama-3.3-70b-versatile",
+              ],
             },
           },
         },

@@ -1,4 +1,12 @@
-import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vitest";
+import {
+  describe,
+  it,
+  expect,
+  vi,
+  beforeEach,
+  afterEach,
+  type Mock,
+} from "vitest";
 import { createTypingController } from "./typing.js";
 
 describe("typing persistence bug fix", () => {

@@ -22,11 +22,15 @@ export function normalizeSlackWebhookPath(path?: string | null): string {
   return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
 }
 
-export function registerSlackHttpHandler(params: RegisterSlackHttpHandlerArgs): () => void {
+export function registerSlackHttpHandler(
+  params: RegisterSlackHttpHandlerArgs,
+): () => void {
   const normalizedPath = normalizeSlackWebhookPath(params.path);
   if (slackHttpRoutes.has(normalizedPath)) {
     const suffix = params.accountId ? ` for account "${params.accountId}"` : "";
-    params.log?.(`slack: webhook path ${normalizedPath} already registered${suffix}`);
+    params.log?.(
+      `slack: webhook path ${normalizedPath} already registered${suffix}`,
+    );
     return () => {};
   }
   slackHttpRoutes.set(normalizedPath, params.handler);

@@ -20,7 +20,9 @@ describe("formatAgentEnvelope", () => {
         body: "hello",
       });
 
-      expect(body).toBe("[WebChat user1 mac-mini 10.0.0.5 Thu 2025-01-02T03:04Z] hello");
+      expect(body).toBe(
+        "[WebChat user1 mac-mini 10.0.0.5 Thu 2025-01-02T03:04Z] hello",
+      );
     });
   });
 

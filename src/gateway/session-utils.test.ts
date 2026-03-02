@@ -24,7 +24,10 @@ function createSymlinkOrSkip(targetPath: string, linkPath: string): boolean {
     return true;
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
-    if (process.platform === "win32" && (code === "EPERM" || code === "EACCES")) {
+    if (
+      process.platform === "win32" &&
+      (code === "EPERM" || code === "EACCES")
+    ) {
       return false;
     }
     throw error;
@@ -35,7 +38,14 @@ function createSingleAgentAvatarConfig(workspace: string): OpenClawConfig {
   return {
     session: { mainKey: "main" },
     agents: {
-      list: [{ id: "main", default: true, workspace, identity: { avatar: "avatar-link.png" } }],
+      list: [
+        {
+          id: "main",
+          default: true,
+          workspace,
+          identity: { avatar: "avatar-link.png" },
+        },
+      ],
     },
   } as OpenClawConfig;
 }
@@ -107,12 +117,22 @@ describe("gateway session utils", () => {
       session: { mainKey: "work" },
       agents: { list: [{ id: "ops", default: true }] },
     } as OpenClawConfig;
-    expect(resolveSessionStoreKey({ cfg, sessionKey: "main" })).toBe("agent:ops:work");
-    expect(resolveSessionStoreKey({ cfg, sessionKey: "work" })).toBe("agent:ops:work");
-    expect(resolveSessionStoreKey({ cfg, sessionKey: "agent:ops:main" })).toBe("agent:ops:work");
+    expect(resolveSessionStoreKey({ cfg, sessionKey: "main" })).toBe(
+      "agent:ops:work",
+    );
+    expect(resolveSessionStoreKey({ cfg, sessionKey: "work" })).toBe(
+      "agent:ops:work",
+    );
+    expect(resolveSessionStoreKey({ cfg, sessionKey: "agent:ops:main" })).toBe(
+      "agent:ops:work",
+    );
     // Mixed-case main alias must also resolve to the configured mainKey (idempotent)
-    expect(resolveSessionStoreKey({ cfg, sessionKey: "agent:ops:MAIN" })).toBe("agent:ops:work");
-    expect(resolveSessionStoreKey({ cfg, sessionKey: "MAIN" })).toBe("agent:ops:work");
+    expect(resolveSessionStoreKey({ cfg, sessionKey: "agent:ops:MAIN" })).toBe(
+      "agent:ops:work",
+    );
+    expect(resolveSessionStoreKey({ cfg, sessionKey: "MAIN" })).toBe(
+      "agent:ops:work",
+    );
   });
 
   test("resolveSessionStoreKey canonicalizes bare keys to default agent", () => {
@@ -120,12 +140,12 @@ describe("gateway session utils", () => {
       session: { mainKey: "main" },
       agents: { list: [{ id: "ops", default: true }] },
     } as OpenClawConfig;
-    expect(resolveSessionStoreKey({ cfg, sessionKey: "discord:group:123" })).toBe(
-      "agent:ops:discord:group:123",
-    );
-    expect(resolveSessionStoreKey({ cfg, sessionKey: "agent:alpha:main" })).toBe(
-      "agent:alpha:main",
-    );
+    expect(
+      resolveSessionStoreKey({ cfg, sessionKey: "discord:group:123" }),
+    ).toBe("agent:ops:discord:group:123");
+    expect(
+      resolveSessionStoreKey({ cfg, sessionKey: "agent:alpha:main" }),
+    ).toBe("agent:alpha:main");
   });
 
   test("resolveSessionStoreKey falls back to first list entry when no agent is marked default", () => {
@@ -133,18 +153,24 @@ describe("gateway session utils", () => {
       session: { mainKey: "main" },
       agents: { list: [{ id: "ops" }, { id: "review" }] },
     } as OpenClawConfig;
-    expect(resolveSessionStoreKey({ cfg, sessionKey: "main" })).toBe("agent:ops:main");
-    expect(resolveSessionStoreKey({ cfg, sessionKey: "discord:group:123" })).toBe(
-      "agent:ops:discord:group:123",
+    expect(resolveSessionStoreKey({ cfg, sessionKey: "main" })).toBe(
+      "agent:ops:main",
     );
+    expect(
+      resolveSessionStoreKey({ cfg, sessionKey: "discord:group:123" }),
+    ).toBe("agent:ops:discord:group:123");
   });
 
   test("resolveSessionStoreKey falls back to main when agents.list is missing", () => {
     const cfg = {
       session: { mainKey: "work" },
     } as OpenClawConfig;
-    expect(resolveSessionStoreKey({ cfg, sessionKey: "main" })).toBe("agent:main:work");
-    expect(resolveSessionStoreKey({ cfg, sessionKey: "thread-1" })).toBe("agent:main:thread-1");
+    expect(resolveSessionStoreKey({ cfg, sessionKey: "main" })).toBe(
+      "agent:main:work",
+    );
+    expect(resolveSessionStoreKey({ cfg, sessionKey: "thread-1" })).toBe(
+      "agent:main:thread-1",
+    );
   });
 
   test("resolveSessionStoreKey normalizes session key casing", () => {
@@ -156,12 +182,16 @@ describe("gateway session utils", () => {
     expect(resolveSessionStoreKey({ cfg, sessionKey: "CoP" })).toBe(
       resolveSessionStoreKey({ cfg, sessionKey: "cop" }),
     );
-    expect(resolveSessionStoreKey({ cfg, sessionKey: "MySession" })).toBe("agent:ops:mysession");
-    // Prefixed agent keys with mixed-case rest must also normalize
-    expect(resolveSessionStoreKey({ cfg, sessionKey: "agent:ops:CoP" })).toBe("agent:ops:cop");
-    expect(resolveSessionStoreKey({ cfg, sessionKey: "agent:alpha:MySession" })).toBe(
-      "agent:alpha:mysession",
+    expect(resolveSessionStoreKey({ cfg, sessionKey: "MySession" })).toBe(
+      "agent:ops:mysession",
     );
+    // Prefixed agent keys with mixed-case rest must also normalize
+    expect(resolveSessionStoreKey({ cfg, sessionKey: "agent:ops:CoP" })).toBe(
+      "agent:ops:cop",
+    );
+    expect(
+      resolveSessionStoreKey({ cfg, sessionKey: "agent:alpha:MySession" }),
+    ).toBe("agent:alpha:mysession");
   });
 
   test("resolveSessionStoreKey honors global scope", () => {
@@ -188,8 +218,12 @@ describe("gateway session utils", () => {
     } as OpenClawConfig;
     const target = resolveGatewaySessionStoreTarget({ cfg, key: "main" });
     expect(target.canonicalKey).toBe("agent:ops:main");
-    expect(target.storeKeys).toEqual(expect.arrayContaining(["agent:ops:main", "main"]));
-    expect(target.storePath).toBe(path.resolve(storeTemplate.replace("{agentId}", "ops")));
+    expect(target.storeKeys).toEqual(
+      expect.arrayContaining(["agent:ops:main", "main"]),
+    );
+    expect(target.storePath).toBe(
+      path.resolve(storeTemplate.replace("{agentId}", "ops")),
+    );
   });
 
   test("resolveGatewaySessionStoreTarget includes legacy mixed-case store key", () => {
@@ -198,7 +232,9 @@ describe("gateway session utils", () => {
     // Simulate a legacy store with a mixed-case key
     fs.writeFileSync(
       storePath,
-      JSON.stringify({ "agent:ops:MySession": { sessionId: "s1", updatedAt: 1 } }),
+      JSON.stringify({
+        "agent:ops:MySession": { sessionId: "s1", updatedAt: 1 },
+      }),
       "utf8",
     );
     const cfg = {
@@ -206,7 +242,10 @@ describe("gateway session utils", () => {
       agents: { list: [{ id: "ops", default: true }] },
     } as OpenClawConfig;
     // Client passes the lowercased canonical key (as returned by sessions.list)
-    const target = resolveGatewaySessionStoreTarget({ cfg, key: "agent:ops:mysession" });
+    const target = resolveGatewaySessionStoreTarget({
+      cfg,
+      key: "agent:ops:mysession",
+    });
     expect(target.canonicalKey).toBe("agent:ops:mysession");
     // storeKeys must include the legacy mixed-case key from the on-disk store
     expect(target.storeKeys).toEqual(
@@ -234,7 +273,10 @@ describe("gateway session utils", () => {
       session: { mainKey: "main", store: storePath },
       agents: { list: [{ id: "ops", default: true }] },
     } as OpenClawConfig;
-    const target = resolveGatewaySessionStoreTarget({ cfg, key: "agent:ops:mysession" });
+    const target = resolveGatewaySessionStoreTarget({
+      cfg,
+      key: "agent:ops:mysession",
+    });
     // storeKeys must include BOTH variants so delete/reset/patch can clean up all duplicates
     expect(target.storeKeys).toEqual(
       expect.arrayContaining(["agent:ops:mysession", "agent:ops:MySession"]),
@@ -254,10 +296,15 @@ describe("gateway session utils", () => {
       session: { mainKey: "work", store: storePath },
       agents: { list: [{ id: "ops", default: true }] },
     } as OpenClawConfig;
-    const target = resolveGatewaySessionStoreTarget({ cfg, key: "agent:ops:main" });
+    const target = resolveGatewaySessionStoreTarget({
+      cfg,
+      key: "agent:ops:main",
+    });
     expect(target.canonicalKey).toBe("agent:ops:work");
     // storeKeys must include the legacy mixed-case alias key
-    expect(target.storeKeys).toEqual(expect.arrayContaining(["agent:ops:MAIN"]));
+    expect(target.storeKeys).toEqual(
+      expect.arrayContaining(["agent:ops:MAIN"]),
+    );
   });
 
   test("pruneLegacyStoreKeys removes alias and case-variant ghost keys", () => {
@@ -276,7 +323,9 @@ describe("gateway session utils", () => {
   });
 
   test("listAgentsForGateway rejects avatar symlink escapes outside workspace", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "session-utils-avatar-outside-"));
+    const root = fs.mkdtempSync(
+      path.join(os.tmpdir(), "session-utils-avatar-outside-"),
+    );
     const workspace = path.join(root, "workspace");
     fs.mkdirSync(workspace, { recursive: true });
     const outsideFile = path.join(root, "outside.txt");
@@ -293,7 +342,9 @@ describe("gateway session utils", () => {
   });
 
   test("listAgentsForGateway allows avatar symlinks that stay inside workspace", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "session-utils-avatar-inside-"));
+    const root = fs.mkdtempSync(
+      path.join(os.tmpdir(), "session-utils-avatar-inside-"),
+    );
     const workspace = path.join(root, "workspace");
     fs.mkdirSync(path.join(workspace, "avatars"), { recursive: true });
     const targetPath = path.join(workspace, "avatars", "actual.png");
@@ -327,7 +378,10 @@ describe("resolveSessionModelRef", () => {
       providerOverride: "anthropic",
     });
 
-    expect(resolved).toEqual({ provider: "openai-codex", model: "gpt-5.3-codex" });
+    expect(resolved).toEqual({
+      provider: "openai-codex",
+      model: "gpt-5.3-codex",
+    });
   });
 
   test("preserves openrouter provider when model contains vendor prefix", () => {
@@ -359,7 +413,10 @@ describe("resolveSessionModelRef", () => {
       modelOverride: "openai-codex/gpt-5.3-codex",
     });
 
-    expect(resolved).toEqual({ provider: "openai-codex", model: "gpt-5.3-codex" });
+    expect(resolved).toEqual({
+      provider: "openai-codex",
+      model: "gpt-5.3-codex",
+    });
   });
 
   test("falls back to resolved provider for unprefixed legacy runtime model", () => {
@@ -394,7 +451,10 @@ describe("resolveSessionModelRef", () => {
       modelProvider: undefined,
     });
 
-    expect(resolved).toEqual({ provider: "anthropic", model: "claude-sonnet-4-6" });
+    expect(resolved).toEqual({
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+    });
   });
 });
 
@@ -429,7 +489,10 @@ describe("resolveSessionModelIdentityRef", () => {
       modelProvider: undefined,
     });
 
-    expect(resolved).toEqual({ provider: "anthropic", model: "claude-sonnet-4-6" });
+    expect(resolved).toEqual({
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+    });
   });
 
   test("keeps provider unknown when configured models are ambiguous", () => {
@@ -463,7 +526,10 @@ describe("resolveSessionModelIdentityRef", () => {
       modelProvider: undefined,
     });
 
-    expect(resolved).toEqual({ provider: "anthropic", model: "claude-sonnet-4-6" });
+    expect(resolved).toEqual({
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+    });
   });
 
   test("infers wrapper provider for slash-prefixed runtime model when allowlist match is unique", () => {
@@ -517,7 +583,9 @@ describe("deriveSessionTitle", () => {
       sessionId: "abc123",
       updatedAt: Date.now(),
     } as SessionEntry;
-    expect(deriveSessionTitle(entry, "Hello, how are you?")).toBe("Hello, how are you?");
+    expect(deriveSessionTitle(entry, "Hello, how are you?")).toBe(
+      "Hello, how are you?",
+    );
   });
 
   test("truncates long first user message to 60 chars with ellipsis", () => {
@@ -538,7 +606,8 @@ describe("deriveSessionTitle", () => {
       sessionId: "abc123",
       updatedAt: Date.now(),
     } as SessionEntry;
-    const longMsg = "This message has many words and should be truncated at a word boundary nicely";
+    const longMsg =
+      "This message has many words and should be truncated at a word boundary nicely";
     const result = deriveSessionTitle(entry, longMsg);
     expect(result).toBeDefined();
     expect(result!.endsWith("…")).toBe(true);
@@ -673,7 +742,9 @@ describe("listSessionsFromStore search", () => {
       opts: {},
     });
 
-    expect(result.sessions.map((session) => session.key)).toEqual(["agent:main:cron:job-1"]);
+    expect(result.sessions.map((session) => session.key)).toEqual([
+      "agent:main:cron:job-1",
+    ]);
   });
 
   test.each([
@@ -741,7 +812,9 @@ describe("listSessionsFromStore search", () => {
 
     const fresh = result.sessions.find((row) => row.key === "agent:main:fresh");
     const stale = result.sessions.find((row) => row.key === "agent:main:stale");
-    const missing = result.sessions.find((row) => row.key === "agent:main:missing");
+    const missing = result.sessions.find(
+      (row) => row.key === "agent:main:missing",
+    );
     expect(fresh?.totalTokens).toBe(1200);
     expect(fresh?.totalTokensFresh).toBe(true);
     expect(stale?.totalTokens).toBeUndefined();

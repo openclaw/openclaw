@@ -7,13 +7,15 @@ describe("createNextcloudTalkWebhookServer replay handling", () => {
   it("acknowledges replayed requests and skips onMessage side effects", async () => {
     const seen = new Set<string>();
     const onMessage = vi.fn(async () => {});
-    const shouldProcessMessage = vi.fn(async (message: NextcloudTalkInboundMessage) => {
-      if (seen.has(message.messageId)) {
-        return false;
-      }
-      seen.add(message.messageId);
-      return true;
-    });
+    const shouldProcessMessage = vi.fn(
+      async (message: NextcloudTalkInboundMessage) => {
+        if (seen.has(message.messageId)) {
+          return false;
+        }
+        seen.add(message.messageId);
+        return true;
+      },
+    );
     const harness = await startWebhookServer({
       path: "/nextcloud-replay",
       shouldProcessMessage,

@@ -18,7 +18,8 @@
     "nav content";
   gap: 0;
   animation: dashboard-enter 0.4s var(--ease-out);
-  transition: grid-template-columns var(--shell-focus-duration) var(--shell-focus-ease);
+  transition: grid-template-columns var(--shell-focus-duration)
+    var(--shell-focus-ease);
   overflow: hidden;
 }
 

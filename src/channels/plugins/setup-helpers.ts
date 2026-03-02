@@ -1,5 +1,8 @@
 import type { OpenClawConfig } from "../../config/config.js";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
+import {
+  DEFAULT_ACCOUNT_ID,
+  normalizeAccountId,
+} from "../../routing/session-key.js";
 
 type ChannelSectionBase = {
   name?: string;
@@ -42,7 +45,9 @@ export function applyAccountNameToChannelSection(params: {
   const channels = params.cfg.channels as Record<string, unknown> | undefined;
   const baseConfig = channels?.[params.channelKey];
   const base =
-    typeof baseConfig === "object" && baseConfig ? (baseConfig as ChannelSectionBase) : undefined;
+    typeof baseConfig === "object" && baseConfig
+      ? (baseConfig as ChannelSectionBase)
+      : undefined;
   const useAccounts = shouldStoreNameInAccounts({
     cfg: params.cfg,
     channelKey: params.channelKey,
@@ -62,7 +67,10 @@ export function applyAccountNameToChannelSection(params: {
       },
     } as OpenClawConfig;
   }
-  const baseAccounts: Record<string, Record<string, unknown>> = base?.accounts ?? {};
+  const baseAccounts: Record<
+    string,
+    Record<string, unknown>
+  > = base?.accounts ?? {};
   const existingAccount = baseAccounts[accountId] ?? {};
   const baseWithoutName =
     accountId === DEFAULT_ACCOUNT_ID
@@ -157,7 +165,10 @@ const COMMON_SINGLE_ACCOUNT_KEYS_TO_MOVE = new Set([
   "defaultTo",
 ]);
 
-const SINGLE_ACCOUNT_KEYS_TO_MOVE_BY_CHANNEL: Record<string, ReadonlySet<string>> = {
+const SINGLE_ACCOUNT_KEYS_TO_MOVE_BY_CHANNEL: Record<
+  string,
+  ReadonlySet<string>
+> = {
   telegram: new Set(["streaming"]),
 };
 
@@ -168,7 +179,11 @@ export function shouldMoveSingleAccountChannelKey(params: {
   if (COMMON_SINGLE_ACCOUNT_KEYS_TO_MOVE.has(params.key)) {
     return true;
   }
-  return SINGLE_ACCOUNT_KEYS_TO_MOVE_BY_CHANNEL[params.channelKey]?.has(params.key) ?? false;
+  return (
+    SINGLE_ACCOUNT_KEYS_TO_MOVE_BY_CHANNEL[params.channelKey]?.has(
+      params.key,
+    ) ?? false
+  );
 }
 
 function cloneIfObject<T>(value: T): T {
@@ -188,7 +203,9 @@ export function moveSingleAccountChannelSectionToDefaultAccount(params: {
   const channels = params.cfg.channels as Record<string, unknown> | undefined;
   const baseConfig = channels?.[params.channelKey];
   const base =
-    typeof baseConfig === "object" && baseConfig ? (baseConfig as ChannelSectionRecord) : undefined;
+    typeof baseConfig === "object" && baseConfig
+      ? (baseConfig as ChannelSectionRecord)
+      : undefined;
   if (!base) {
     return params.cfg;
   }
@@ -204,7 +221,10 @@ export function moveSingleAccountChannelSectionToDefaultAccount(params: {
         key !== "accounts" &&
         key !== "enabled" &&
         value !== undefined &&
-        shouldMoveSingleAccountChannelKey({ channelKey: params.channelKey, key }),
+        shouldMoveSingleAccountChannelKey({
+          channelKey: params.channelKey,
+          key,
+        }),
     )
     .map(([key]) => key);
   const defaultAccount: Record<string, unknown> = {};

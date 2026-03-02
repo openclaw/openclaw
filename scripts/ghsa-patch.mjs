@@ -45,14 +45,20 @@ function parseArgs(argv) {
 function runGh(args) {
   const proc = spawnSync("gh", args, { encoding: "utf8" });
   if (proc.status !== 0) {
-    fail(proc.stderr.trim() || proc.stdout.trim() || `gh ${args.join(" ")} failed`);
+    fail(
+      proc.stderr.trim() || proc.stdout.trim() || `gh ${args.join(" ")} failed`,
+    );
   }
   return proc.stdout;
 }
 
 function deriveRepoFromOrigin() {
-  const remote = execFileSync("git", ["remote", "get-url", "origin"], { encoding: "utf8" }).trim();
-  const httpsMatch = remote.match(/github\.com[/:]([^/]+)\/([^/.]+)(?:\.git)?$/);
+  const remote = execFileSync("git", ["remote", "get-url", "origin"], {
+    encoding: "utf8",
+  }).trim();
+  const httpsMatch = remote.match(
+    /github\.com[/:]([^/]+)\/([^/.]+)(?:\.git)?$/,
+  );
   if (!httpsMatch) {
     fail(`Could not parse origin remote: ${remote}`);
   }
@@ -74,7 +80,12 @@ function writeTempJson(data) {
 }
 
 const args = parseArgs(process.argv.slice(2));
-if (!args.ghsa || !args.summary || !args.severity || !args["description-file"]) {
+if (
+  !args.ghsa ||
+  !args.summary ||
+  !args.severity ||
+  !args["description-file"]
+) {
   usage();
   process.exit(1);
 }
@@ -88,7 +99,9 @@ if (!fs.existsSync(descriptionPath)) {
   fail(`Description file does not exist: ${descriptionPath}`);
 }
 
-const current = JSON.parse(runGh(["api", "-H", "X-GitHub-Api-Version: 2022-11-28", advisoryPath]));
+const current = JSON.parse(
+  runGh(["api", "-H", "X-GitHub-Api-Version: 2022-11-28", advisoryPath]),
+);
 const restoredCvss = args.cvss || current?.cvss?.vector_string || null;
 
 const ecosystem = args.ecosystem || "npm";
@@ -103,7 +116,8 @@ if (patchedVersionsRaw === undefined) {
   fail("Missing --patched-versions");
 }
 
-const patchedVersions = patchedVersionsRaw === "null" ? null : patchedVersionsRaw;
+const patchedVersions =
+  patchedVersionsRaw === "null" ? null : patchedVersionsRaw;
 const description = fs.readFileSync(descriptionPath, "utf8");
 
 const payload = {

@@ -25,7 +25,9 @@ const fetchWithSsrFGuardMock = vi.hoisted(() =>
 vi.mock("../infra/net/fetch-guard.js", () => ({
   fetchWithSsrFGuard: (...args: unknown[]) =>
     (
-      fetchWithSsrFGuardMock as unknown as (...innerArgs: unknown[]) => Promise<{
+      fetchWithSsrFGuardMock as unknown as (
+        ...innerArgs: unknown[]
+      ) => Promise<{
         response: Response;
         finalUrl: string;
         release: () => Promise<void>;
@@ -48,7 +50,12 @@ async function rmTempDir(dir: string) {
       return;
     } catch (err) {
       const code = (err as { code?: unknown } | null)?.code;
-      if (code === "ENOTEMPTY" || code === "EBUSY" || code === "EPERM" || code === "EACCES") {
+      if (
+        code === "ENOTEMPTY" ||
+        code === "EBUSY" ||
+        code === "EPERM" ||
+        code === "EACCES"
+      ) {
         await yieldToEventLoop();
         continue;
       }
@@ -58,7 +65,10 @@ async function rmTempDir(dir: string) {
   await fs.rm(dir, { recursive: true, force: true });
 }
 
-async function waitForCondition(check: () => boolean | Promise<boolean>, timeoutMs = 2000) {
+async function waitForCondition(
+  check: () => boolean | Promise<boolean>,
+  timeoutMs = 2000,
+) {
   await vi.waitFor(
     async () => {
       const ok = await check();
@@ -118,278 +128,319 @@ describe("gateway server cron", () => {
     vi.useRealTimers();
   });
 
-  test("handles cron CRUD, normalization, and patch semantics", { timeout: 20_000 }, async () => {
-    const { prevSkipCron, dir } = await setupCronTestRun({
-      tempPrefix: "openclaw-gw-cron-",
-      sessionConfig: { mainKey: "primary" },
-      cronEnabled: false,
-    });
-
-    const { server, ws } = await startServerWithClient();
-    await connectOk(ws);
-
-    try {
-      const addRes = await rpcReq(ws, "cron.add", {
-        name: "daily",
-        enabled: true,
-        schedule: { kind: "every", everyMs: 60_000 },
-        sessionTarget: "main",
-        wakeMode: "next-heartbeat",
-        payload: { kind: "systemEvent", text: "hello" },
-        delivery: { mode: "webhook", to: "https://example.invalid/cron-finished" },
+  test(
+    "handles cron CRUD, normalization, and patch semantics",
+    { timeout: 20_000 },
+    async () => {
+      const { prevSkipCron, dir } = await setupCronTestRun({
+        tempPrefix: "openclaw-gw-cron-",
+        sessionConfig: { mainKey: "primary" },
+        cronEnabled: false,
       });
-      expect(addRes.ok).toBe(true);
-      expect(typeof (addRes.payload as { id?: unknown } | null)?.id).toBe("string");
 
-      const listRes = await rpcReq(ws, "cron.list", {
-        includeDisabled: true,
-      });
-      expect(listRes.ok).toBe(true);
-      const jobs = (listRes.payload as { jobs?: unknown } | null)?.jobs;
-      expect(Array.isArray(jobs)).toBe(true);
-      expect((jobs as unknown[]).length).toBe(1);
-      expect(((jobs as Array<{ name?: unknown }>)[0]?.name as string) ?? "").toBe("daily");
-      expect(
-        ((jobs as Array<{ delivery?: { mode?: unknown } }>)[0]?.delivery?.mode as string) ?? "",
-      ).toBe("webhook");
+      const { server, ws } = await startServerWithClient();
+      await connectOk(ws);
 
-      const routeAtMs = Date.now() - 1;
-      const routeRes = await rpcReq(ws, "cron.add", {
-        name: "route test",
-        enabled: true,
-        schedule: { kind: "at", at: new Date(routeAtMs).toISOString() },
-        sessionTarget: "main",
-        wakeMode: "next-heartbeat",
-        payload: { kind: "systemEvent", text: "cron route check" },
-      });
-      expect(routeRes.ok).toBe(true);
-      const routeJobIdValue = (routeRes.payload as { id?: unknown } | null)?.id;
-      const routeJobId = typeof routeJobIdValue === "string" ? routeJobIdValue : "";
-      expect(routeJobId.length > 0).toBe(true);
-
-      const runRes = await rpcReq(ws, "cron.run", { id: routeJobId, mode: "force" }, 20_000);
-      expect(runRes.ok).toBe(true);
-      const events = await waitForSystemEvent();
-      expect(events.some((event) => event.includes("cron route check"))).toBe(true);
-
-      const wrappedAtMs = Date.now() + 1000;
-      const wrappedRes = await rpcReq(ws, "cron.add", {
-        data: {
-          name: "wrapped",
-          schedule: { at: new Date(wrappedAtMs).toISOString() },
+      try {
+        const addRes = await rpcReq(ws, "cron.add", {
+          name: "daily",
+          enabled: true,
+          schedule: { kind: "every", everyMs: 60_000 },
+          sessionTarget: "main",
+          wakeMode: "next-heartbeat",
           payload: { kind: "systemEvent", text: "hello" },
-        },
-      });
-      expect(wrappedRes.ok).toBe(true);
-      const wrappedPayload = wrappedRes.payload as
-        | { schedule?: unknown; sessionTarget?: unknown; wakeMode?: unknown }
-        | undefined;
-      expect(wrappedPayload?.sessionTarget).toBe("main");
-      expect(wrappedPayload?.wakeMode).toBe("now");
-      expect((wrappedPayload?.schedule as { kind?: unknown } | undefined)?.kind).toBe("at");
-
-      const patchRes = await rpcReq(ws, "cron.add", {
-        name: "patch test",
-        enabled: true,
-        schedule: { kind: "every", everyMs: 60_000 },
-        sessionTarget: "main",
-        wakeMode: "next-heartbeat",
-        payload: { kind: "systemEvent", text: "hello" },
-      });
-      expect(patchRes.ok).toBe(true);
-      const patchJobIdValue = (patchRes.payload as { id?: unknown } | null)?.id;
-      const patchJobId = typeof patchJobIdValue === "string" ? patchJobIdValue : "";
-      expect(patchJobId.length > 0).toBe(true);
-
-      const atMs = Date.now() + 1_000;
-      const updateRes = await rpcReq(ws, "cron.update", {
-        id: patchJobId,
-        patch: {
-          schedule: { at: new Date(atMs).toISOString() },
-          payload: { kind: "systemEvent", text: "updated" },
-        },
-      });
-      expect(updateRes.ok).toBe(true);
-      const updated = updateRes.payload as
-        | { schedule?: { kind?: unknown }; payload?: { kind?: unknown } }
-        | undefined;
-      expect(updated?.schedule?.kind).toBe("at");
-      expect(updated?.payload?.kind).toBe("systemEvent");
-
-      const mergeRes = await rpcReq(ws, "cron.add", {
-        name: "patch merge",
-        enabled: true,
-        schedule: { kind: "every", everyMs: 60_000 },
-        sessionTarget: "isolated",
-        wakeMode: "next-heartbeat",
-        payload: { kind: "agentTurn", message: "hello", model: "opus" },
-      });
-      expect(mergeRes.ok).toBe(true);
-      const mergeJobIdValue = (mergeRes.payload as { id?: unknown } | null)?.id;
-      const mergeJobId = typeof mergeJobIdValue === "string" ? mergeJobIdValue : "";
-      expect(mergeJobId.length > 0).toBe(true);
-
-      const noTimeoutRes = await rpcReq(ws, "cron.add", {
-        name: "no-timeout payload",
-        enabled: true,
-        schedule: { kind: "every", everyMs: 60_000 },
-        sessionTarget: "isolated",
-        wakeMode: "next-heartbeat",
-        payload: { kind: "agentTurn", message: "hello", timeoutSeconds: 0 },
-      });
-      expect(noTimeoutRes.ok).toBe(true);
-      const noTimeoutPayload = noTimeoutRes.payload as
-        | {
-            payload?: {
-              kind?: unknown;
-              timeoutSeconds?: unknown;
-            };
-          }
-        | undefined;
-      expect(noTimeoutPayload?.payload?.kind).toBe("agentTurn");
-      expect(noTimeoutPayload?.payload?.timeoutSeconds).toBe(0);
-
-      const mergeUpdateRes = await rpcReq(ws, "cron.update", {
-        id: mergeJobId,
-        patch: {
-          delivery: { mode: "announce", channel: "telegram", to: "19098680" },
-        },
-      });
-      expect(mergeUpdateRes.ok).toBe(true);
-      const merged = mergeUpdateRes.payload as
-        | {
-            payload?: { kind?: unknown; message?: unknown; model?: unknown };
-            delivery?: { mode?: unknown; channel?: unknown; to?: unknown };
-          }
-        | undefined;
-      expect(merged?.payload?.kind).toBe("agentTurn");
-      expect(merged?.payload?.message).toBe("hello");
-      expect(merged?.payload?.model).toBe("opus");
-      expect(merged?.delivery?.mode).toBe("announce");
-      expect(merged?.delivery?.channel).toBe("telegram");
-      expect(merged?.delivery?.to).toBe("19098680");
-
-      const modelOnlyPatchRes = await rpcReq(ws, "cron.update", {
-        id: mergeJobId,
-        patch: {
-          payload: {
-            model: "anthropic/claude-sonnet-4-5",
+          delivery: {
+            mode: "webhook",
+            to: "https://example.invalid/cron-finished",
           },
-        },
-      });
-      expect(modelOnlyPatchRes.ok).toBe(true);
-      const modelOnlyPatched = modelOnlyPatchRes.payload as
-        | {
-            payload?: {
-              kind?: unknown;
-              message?: unknown;
-              model?: unknown;
-            };
-          }
-        | undefined;
-      expect(modelOnlyPatched?.payload?.kind).toBe("agentTurn");
-      expect(modelOnlyPatched?.payload?.message).toBe("hello");
-      expect(modelOnlyPatched?.payload?.model).toBe("anthropic/claude-sonnet-4-5");
+        });
+        expect(addRes.ok).toBe(true);
+        expect(typeof (addRes.payload as { id?: unknown } | null)?.id).toBe(
+          "string",
+        );
 
-      const legacyDeliveryPatchRes = await rpcReq(ws, "cron.update", {
-        id: mergeJobId,
-        patch: {
-          payload: {
-            kind: "agentTurn",
-            deliver: true,
-            channel: "signal",
-            to: "+15550001111",
-            bestEffortDeliver: true,
+        const listRes = await rpcReq(ws, "cron.list", {
+          includeDisabled: true,
+        });
+        expect(listRes.ok).toBe(true);
+        const jobs = (listRes.payload as { jobs?: unknown } | null)?.jobs;
+        expect(Array.isArray(jobs)).toBe(true);
+        expect((jobs as unknown[]).length).toBe(1);
+        expect(
+          ((jobs as Array<{ name?: unknown }>)[0]?.name as string) ?? "",
+        ).toBe("daily");
+        expect(
+          ((jobs as Array<{ delivery?: { mode?: unknown } }>)[0]?.delivery
+            ?.mode as string) ?? "",
+        ).toBe("webhook");
+
+        const routeAtMs = Date.now() - 1;
+        const routeRes = await rpcReq(ws, "cron.add", {
+          name: "route test",
+          enabled: true,
+          schedule: { kind: "at", at: new Date(routeAtMs).toISOString() },
+          sessionTarget: "main",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "systemEvent", text: "cron route check" },
+        });
+        expect(routeRes.ok).toBe(true);
+        const routeJobIdValue = (routeRes.payload as { id?: unknown } | null)
+          ?.id;
+        const routeJobId =
+          typeof routeJobIdValue === "string" ? routeJobIdValue : "";
+        expect(routeJobId.length > 0).toBe(true);
+
+        const runRes = await rpcReq(
+          ws,
+          "cron.run",
+          { id: routeJobId, mode: "force" },
+          20_000,
+        );
+        expect(runRes.ok).toBe(true);
+        const events = await waitForSystemEvent();
+        expect(events.some((event) => event.includes("cron route check"))).toBe(
+          true,
+        );
+
+        const wrappedAtMs = Date.now() + 1000;
+        const wrappedRes = await rpcReq(ws, "cron.add", {
+          data: {
+            name: "wrapped",
+            schedule: { at: new Date(wrappedAtMs).toISOString() },
+            payload: { kind: "systemEvent", text: "hello" },
           },
-        },
-      });
-      expect(legacyDeliveryPatchRes.ok).toBe(true);
-      const legacyDeliveryPatched = legacyDeliveryPatchRes.payload as
-        | {
-            payload?: { kind?: unknown; message?: unknown };
-            delivery?: { mode?: unknown; channel?: unknown; to?: unknown; bestEffort?: unknown };
-          }
-        | undefined;
-      expect(legacyDeliveryPatched?.payload?.kind).toBe("agentTurn");
-      expect(legacyDeliveryPatched?.payload?.message).toBe("hello");
-      expect(legacyDeliveryPatched?.delivery?.mode).toBe("announce");
-      expect(legacyDeliveryPatched?.delivery?.channel).toBe("signal");
-      expect(legacyDeliveryPatched?.delivery?.to).toBe("+15550001111");
-      expect(legacyDeliveryPatched?.delivery?.bestEffort).toBe(true);
+        });
+        expect(wrappedRes.ok).toBe(true);
+        const wrappedPayload = wrappedRes.payload as
+          | { schedule?: unknown; sessionTarget?: unknown; wakeMode?: unknown }
+          | undefined;
+        expect(wrappedPayload?.sessionTarget).toBe("main");
+        expect(wrappedPayload?.wakeMode).toBe("now");
+        expect(
+          (wrappedPayload?.schedule as { kind?: unknown } | undefined)?.kind,
+        ).toBe("at");
 
-      const rejectRes = await rpcReq(ws, "cron.add", {
-        name: "patch reject",
-        enabled: true,
-        schedule: { kind: "every", everyMs: 60_000 },
-        sessionTarget: "main",
-        wakeMode: "next-heartbeat",
-        payload: { kind: "systemEvent", text: "hello" },
-      });
-      expect(rejectRes.ok).toBe(true);
-      const rejectJobIdValue = (rejectRes.payload as { id?: unknown } | null)?.id;
-      const rejectJobId = typeof rejectJobIdValue === "string" ? rejectJobIdValue : "";
-      expect(rejectJobId.length > 0).toBe(true);
+        const patchRes = await rpcReq(ws, "cron.add", {
+          name: "patch test",
+          enabled: true,
+          schedule: { kind: "every", everyMs: 60_000 },
+          sessionTarget: "main",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "systemEvent", text: "hello" },
+        });
+        expect(patchRes.ok).toBe(true);
+        const patchJobIdValue = (patchRes.payload as { id?: unknown } | null)
+          ?.id;
+        const patchJobId =
+          typeof patchJobIdValue === "string" ? patchJobIdValue : "";
+        expect(patchJobId.length > 0).toBe(true);
 
-      const rejectUpdateRes = await rpcReq(ws, "cron.update", {
-        id: rejectJobId,
-        patch: {
-          payload: { kind: "agentTurn", message: "nope" },
-        },
-      });
-      expect(rejectUpdateRes.ok).toBe(false);
+        const atMs = Date.now() + 1_000;
+        const updateRes = await rpcReq(ws, "cron.update", {
+          id: patchJobId,
+          patch: {
+            schedule: { at: new Date(atMs).toISOString() },
+            payload: { kind: "systemEvent", text: "updated" },
+          },
+        });
+        expect(updateRes.ok).toBe(true);
+        const updated = updateRes.payload as
+          | { schedule?: { kind?: unknown }; payload?: { kind?: unknown } }
+          | undefined;
+        expect(updated?.schedule?.kind).toBe("at");
+        expect(updated?.payload?.kind).toBe("systemEvent");
 
-      const jobIdRes = await rpcReq(ws, "cron.add", {
-        name: "jobId test",
-        enabled: true,
-        schedule: { kind: "every", everyMs: 60_000 },
-        sessionTarget: "main",
-        wakeMode: "next-heartbeat",
-        payload: { kind: "systemEvent", text: "hello" },
-      });
-      expect(jobIdRes.ok).toBe(true);
-      const jobIdValue = (jobIdRes.payload as { id?: unknown } | null)?.id;
-      const jobId = typeof jobIdValue === "string" ? jobIdValue : "";
-      expect(jobId.length > 0).toBe(true);
+        const mergeRes = await rpcReq(ws, "cron.add", {
+          name: "patch merge",
+          enabled: true,
+          schedule: { kind: "every", everyMs: 60_000 },
+          sessionTarget: "isolated",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "agentTurn", message: "hello", model: "opus" },
+        });
+        expect(mergeRes.ok).toBe(true);
+        const mergeJobIdValue = (mergeRes.payload as { id?: unknown } | null)
+          ?.id;
+        const mergeJobId =
+          typeof mergeJobIdValue === "string" ? mergeJobIdValue : "";
+        expect(mergeJobId.length > 0).toBe(true);
 
-      const jobIdUpdateRes = await rpcReq(ws, "cron.update", {
-        jobId,
-        patch: {
-          schedule: { at: new Date(Date.now() + 2_000).toISOString() },
-          payload: { kind: "systemEvent", text: "updated" },
-        },
-      });
-      expect(jobIdUpdateRes.ok).toBe(true);
+        const noTimeoutRes = await rpcReq(ws, "cron.add", {
+          name: "no-timeout payload",
+          enabled: true,
+          schedule: { kind: "every", everyMs: 60_000 },
+          sessionTarget: "isolated",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "agentTurn", message: "hello", timeoutSeconds: 0 },
+        });
+        expect(noTimeoutRes.ok).toBe(true);
+        const noTimeoutPayload = noTimeoutRes.payload as
+          | {
+              payload?: {
+                kind?: unknown;
+                timeoutSeconds?: unknown;
+              };
+            }
+          | undefined;
+        expect(noTimeoutPayload?.payload?.kind).toBe("agentTurn");
+        expect(noTimeoutPayload?.payload?.timeoutSeconds).toBe(0);
 
-      const disableRes = await rpcReq(ws, "cron.add", {
-        name: "disable test",
-        enabled: true,
-        schedule: { kind: "every", everyMs: 60_000 },
-        sessionTarget: "main",
-        wakeMode: "next-heartbeat",
-        payload: { kind: "systemEvent", text: "hello" },
-      });
-      expect(disableRes.ok).toBe(true);
-      const disableJobIdValue = (disableRes.payload as { id?: unknown } | null)?.id;
-      const disableJobId = typeof disableJobIdValue === "string" ? disableJobIdValue : "";
-      expect(disableJobId.length > 0).toBe(true);
+        const mergeUpdateRes = await rpcReq(ws, "cron.update", {
+          id: mergeJobId,
+          patch: {
+            delivery: { mode: "announce", channel: "telegram", to: "19098680" },
+          },
+        });
+        expect(mergeUpdateRes.ok).toBe(true);
+        const merged = mergeUpdateRes.payload as
+          | {
+              payload?: { kind?: unknown; message?: unknown; model?: unknown };
+              delivery?: { mode?: unknown; channel?: unknown; to?: unknown };
+            }
+          | undefined;
+        expect(merged?.payload?.kind).toBe("agentTurn");
+        expect(merged?.payload?.message).toBe("hello");
+        expect(merged?.payload?.model).toBe("opus");
+        expect(merged?.delivery?.mode).toBe("announce");
+        expect(merged?.delivery?.channel).toBe("telegram");
+        expect(merged?.delivery?.to).toBe("19098680");
 
-      const disableUpdateRes = await rpcReq(ws, "cron.update", {
-        id: disableJobId,
-        patch: { enabled: false },
-      });
-      expect(disableUpdateRes.ok).toBe(true);
-      const disabled = disableUpdateRes.payload as { enabled?: unknown } | undefined;
-      expect(disabled?.enabled).toBe(false);
-    } finally {
-      await cleanupCronTestRun({
-        ws,
-        server,
-        dir,
-        prevSkipCron,
-        clearSessionConfig: true,
-      });
-    }
-  });
+        const modelOnlyPatchRes = await rpcReq(ws, "cron.update", {
+          id: mergeJobId,
+          patch: {
+            payload: {
+              model: "anthropic/claude-sonnet-4-5",
+            },
+          },
+        });
+        expect(modelOnlyPatchRes.ok).toBe(true);
+        const modelOnlyPatched = modelOnlyPatchRes.payload as
+          | {
+              payload?: {
+                kind?: unknown;
+                message?: unknown;
+                model?: unknown;
+              };
+            }
+          | undefined;
+        expect(modelOnlyPatched?.payload?.kind).toBe("agentTurn");
+        expect(modelOnlyPatched?.payload?.message).toBe("hello");
+        expect(modelOnlyPatched?.payload?.model).toBe(
+          "anthropic/claude-sonnet-4-5",
+        );
+
+        const legacyDeliveryPatchRes = await rpcReq(ws, "cron.update", {
+          id: mergeJobId,
+          patch: {
+            payload: {
+              kind: "agentTurn",
+              deliver: true,
+              channel: "signal",
+              to: "+15550001111",
+              bestEffortDeliver: true,
+            },
+          },
+        });
+        expect(legacyDeliveryPatchRes.ok).toBe(true);
+        const legacyDeliveryPatched = legacyDeliveryPatchRes.payload as
+          | {
+              payload?: { kind?: unknown; message?: unknown };
+              delivery?: {
+                mode?: unknown;
+                channel?: unknown;
+                to?: unknown;
+                bestEffort?: unknown;
+              };
+            }
+          | undefined;
+        expect(legacyDeliveryPatched?.payload?.kind).toBe("agentTurn");
+        expect(legacyDeliveryPatched?.payload?.message).toBe("hello");
+        expect(legacyDeliveryPatched?.delivery?.mode).toBe("announce");
+        expect(legacyDeliveryPatched?.delivery?.channel).toBe("signal");
+        expect(legacyDeliveryPatched?.delivery?.to).toBe("+15550001111");
+        expect(legacyDeliveryPatched?.delivery?.bestEffort).toBe(true);
+
+        const rejectRes = await rpcReq(ws, "cron.add", {
+          name: "patch reject",
+          enabled: true,
+          schedule: { kind: "every", everyMs: 60_000 },
+          sessionTarget: "main",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "systemEvent", text: "hello" },
+        });
+        expect(rejectRes.ok).toBe(true);
+        const rejectJobIdValue = (rejectRes.payload as { id?: unknown } | null)
+          ?.id;
+        const rejectJobId =
+          typeof rejectJobIdValue === "string" ? rejectJobIdValue : "";
+        expect(rejectJobId.length > 0).toBe(true);
+
+        const rejectUpdateRes = await rpcReq(ws, "cron.update", {
+          id: rejectJobId,
+          patch: {
+            payload: { kind: "agentTurn", message: "nope" },
+          },
+        });
+        expect(rejectUpdateRes.ok).toBe(false);
+
+        const jobIdRes = await rpcReq(ws, "cron.add", {
+          name: "jobId test",
+          enabled: true,
+          schedule: { kind: "every", everyMs: 60_000 },
+          sessionTarget: "main",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "systemEvent", text: "hello" },
+        });
+        expect(jobIdRes.ok).toBe(true);
+        const jobIdValue = (jobIdRes.payload as { id?: unknown } | null)?.id;
+        const jobId = typeof jobIdValue === "string" ? jobIdValue : "";
+        expect(jobId.length > 0).toBe(true);
+
+        const jobIdUpdateRes = await rpcReq(ws, "cron.update", {
+          jobId,
+          patch: {
+            schedule: { at: new Date(Date.now() + 2_000).toISOString() },
+            payload: { kind: "systemEvent", text: "updated" },
+          },
+        });
+        expect(jobIdUpdateRes.ok).toBe(true);
+
+        const disableRes = await rpcReq(ws, "cron.add", {
+          name: "disable test",
+          enabled: true,
+          schedule: { kind: "every", everyMs: 60_000 },
+          sessionTarget: "main",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "systemEvent", text: "hello" },
+        });
+        expect(disableRes.ok).toBe(true);
+        const disableJobIdValue = (
+          disableRes.payload as { id?: unknown } | null
+        )?.id;
+        const disableJobId =
+          typeof disableJobIdValue === "string" ? disableJobIdValue : "";
+        expect(disableJobId.length > 0).toBe(true);
+
+        const disableUpdateRes = await rpcReq(ws, "cron.update", {
+          id: disableJobId,
+          patch: { enabled: false },
+        });
+        expect(disableUpdateRes.ok).toBe(true);
+        const disabled = disableUpdateRes.payload as
+          | { enabled?: unknown }
+          | undefined;
+        expect(disabled?.enabled).toBe(false);
+      } finally {
+        await cleanupCronTestRun({
+          ws,
+          server,
+          dir,
+          prevSkipCron,
+          clearSessionConfig: true,
+        });
+      }
+    },
+  );
 
   test("writes cron run history and auto-runs due jobs", async () => {
     const { prevSkipCron, dir } = await setupCronTestRun({
@@ -414,7 +465,12 @@ describe("gateway server cron", () => {
       const jobId = typeof jobIdValue === "string" ? jobIdValue : "";
       expect(jobId.length > 0).toBe(true);
 
-      const runRes = await rpcReq(ws, "cron.run", { id: jobId, mode: "force" }, 20_000);
+      const runRes = await rpcReq(
+        ws,
+        "cron.run",
+        { id: jobId, mode: "force" },
+        20_000,
+      );
       expect(runRes.ok).toBe(true);
       const logPath = path.join(dir, "cron", "runs", `${jobId}.jsonl`);
       let raw = "";
@@ -442,23 +498,29 @@ describe("gateway server cron", () => {
 
       const runsRes = await rpcReq(ws, "cron.runs", { id: jobId, limit: 50 });
       expect(runsRes.ok).toBe(true);
-      const entries = (runsRes.payload as { entries?: unknown } | null)?.entries;
+      const entries = (runsRes.payload as { entries?: unknown } | null)
+        ?.entries;
       expect(Array.isArray(entries)).toBe(true);
       expect((entries as Array<{ jobId?: unknown }>).at(-1)?.jobId).toBe(jobId);
-      expect((entries as Array<{ summary?: unknown }>).at(-1)?.summary).toBe("hello");
-      expect((entries as Array<{ deliveryStatus?: unknown }>).at(-1)?.deliveryStatus).toBe(
-        "not-requested",
+      expect((entries as Array<{ summary?: unknown }>).at(-1)?.summary).toBe(
+        "hello",
       );
+      expect(
+        (entries as Array<{ deliveryStatus?: unknown }>).at(-1)?.deliveryStatus,
+      ).toBe("not-requested");
       const allRunsRes = await rpcReq(ws, "cron.runs", {
         scope: "all",
         limit: 50,
         statuses: ["ok"],
       });
       expect(allRunsRes.ok).toBe(true);
-      const allEntries = (allRunsRes.payload as { entries?: unknown } | null)?.entries;
+      const allEntries = (allRunsRes.payload as { entries?: unknown } | null)
+        ?.entries;
       expect(Array.isArray(allEntries)).toBe(true);
       expect(
-        (allEntries as Array<{ jobId?: unknown }>).some((entry) => entry.jobId === jobId),
+        (allEntries as Array<{ jobId?: unknown }>).some(
+          (entry) => entry.jobId === jobId,
+        ),
       ).toBe(true);
 
       const statusRes = await rpcReq(ws, "cron.status", {});
@@ -467,7 +529,10 @@ describe("gateway server cron", () => {
         | { enabled?: unknown; storePath?: unknown }
         | undefined;
       expect(statusPayload?.enabled).toBe(true);
-      const storePath = typeof statusPayload?.storePath === "string" ? statusPayload.storePath : "";
+      const storePath =
+        typeof statusPayload?.storePath === "string"
+          ? statusPayload.storePath
+          : "";
       expect(storePath).toContain("jobs.json");
 
       const autoRes = await rpcReq(ws, "cron.add", {
@@ -480,17 +545,25 @@ describe("gateway server cron", () => {
       });
       expect(autoRes.ok).toBe(true);
       const autoJobIdValue = (autoRes.payload as { id?: unknown } | null)?.id;
-      const autoJobId = typeof autoJobIdValue === "string" ? autoJobIdValue : "";
+      const autoJobId =
+        typeof autoJobIdValue === "string" ? autoJobIdValue : "";
       expect(autoJobId.length > 0).toBe(true);
 
       await waitForCondition(async () => {
-        const runsRes = await rpcReq(ws, "cron.runs", { id: autoJobId, limit: 10 });
-        const runsPayload = runsRes.payload as { entries?: unknown } | undefined;
-        return Array.isArray(runsPayload?.entries) && runsPayload.entries.length > 0;
+        const runsRes = await rpcReq(ws, "cron.runs", {
+          id: autoJobId,
+          limit: 10,
+        });
+        const runsPayload = runsRes.payload as
+          | { entries?: unknown }
+          | undefined;
+        return (
+          Array.isArray(runsPayload?.entries) && runsPayload.entries.length > 0
+        );
       }, CRON_WAIT_TIMEOUT_MS);
-      const autoEntries = (await rpcReq(ws, "cron.runs", { id: autoJobId, limit: 10 })).payload as
-        | { entries?: Array<{ jobId?: unknown }> }
-        | undefined;
+      const autoEntries = (
+        await rpcReq(ws, "cron.runs", { id: autoJobId, limit: 10 })
+      ).payload as { entries?: Array<{ jobId?: unknown }> } | undefined;
       expect(Array.isArray(autoEntries?.entries)).toBe(true);
       const runs = autoEntries?.entries ?? [];
       expect(runs.at(-1)?.jobId).toBe(autoJobId);
@@ -550,7 +623,10 @@ describe("gateway server cron", () => {
         sessionTarget: "main",
         wakeMode: "next-heartbeat",
         payload: { kind: "systemEvent", text: "invalid" },
-        delivery: { mode: "webhook", to: "ftp://example.invalid/cron-finished" },
+        delivery: {
+          mode: "webhook",
+          to: "ftp://example.invalid/cron-finished",
+        },
       });
       expect(invalidWebhookRes.ok).toBe(false);
 
@@ -561,14 +637,24 @@ describe("gateway server cron", () => {
         sessionTarget: "main",
         wakeMode: "next-heartbeat",
         payload: { kind: "systemEvent", text: "send webhook" },
-        delivery: { mode: "webhook", to: "https://example.invalid/cron-finished" },
+        delivery: {
+          mode: "webhook",
+          to: "https://example.invalid/cron-finished",
+        },
       });
       expect(notifyRes.ok).toBe(true);
-      const notifyJobIdValue = (notifyRes.payload as { id?: unknown } | null)?.id;
-      const notifyJobId = typeof notifyJobIdValue === "string" ? notifyJobIdValue : "";
+      const notifyJobIdValue = (notifyRes.payload as { id?: unknown } | null)
+        ?.id;
+      const notifyJobId =
+        typeof notifyJobIdValue === "string" ? notifyJobIdValue : "";
       expect(notifyJobId.length > 0).toBe(true);
 
-      const notifyRunRes = await rpcReq(ws, "cron.run", { id: notifyJobId, mode: "force" }, 20_000);
+      const notifyRunRes = await rpcReq(
+        ws,
+        "cron.run",
+        { id: notifyJobId, mode: "force" },
+        20_000,
+      );
       expect(notifyRunRes.ok).toBe(true);
 
       await waitForCondition(
@@ -589,7 +675,9 @@ describe("gateway server cron", () => {
       const notifyInit = notifyArgs.init ?? {};
       expect(notifyUrl).toBe("https://example.invalid/cron-finished");
       expect(notifyInit.method).toBe("POST");
-      expect(notifyInit.headers?.Authorization).toBe("Bearer cron-webhook-token");
+      expect(notifyInit.headers?.Authorization).toBe(
+        "Bearer cron-webhook-token",
+      );
       expect(notifyInit.headers?.["Content-Type"]).toBe("application/json");
       const notifyBody = JSON.parse(notifyInit.body ?? "{}");
       expect(notifyBody.action).toBe("finished");
@@ -620,7 +708,9 @@ describe("gateway server cron", () => {
       const legacyInit = legacyArgs.init ?? {};
       expect(legacyUrl).toBe("https://legacy.example.invalid/cron-finished");
       expect(legacyInit.method).toBe("POST");
-      expect(legacyInit.headers?.Authorization).toBe("Bearer cron-webhook-token");
+      expect(legacyInit.headers?.Authorization).toBe(
+        "Bearer cron-webhook-token",
+      );
       const legacyBody = JSON.parse(legacyInit.body ?? "{}");
       expect(legacyBody.action).toBe("finished");
       expect(legacyBody.jobId).toBe("legacy-notify-job");
@@ -634,18 +724,28 @@ describe("gateway server cron", () => {
         payload: { kind: "systemEvent", text: "do not send" },
       });
       expect(silentRes.ok).toBe(true);
-      const silentJobIdValue = (silentRes.payload as { id?: unknown } | null)?.id;
-      const silentJobId = typeof silentJobIdValue === "string" ? silentJobIdValue : "";
+      const silentJobIdValue = (silentRes.payload as { id?: unknown } | null)
+        ?.id;
+      const silentJobId =
+        typeof silentJobIdValue === "string" ? silentJobIdValue : "";
       expect(silentJobId.length > 0).toBe(true);
 
-      const silentRunRes = await rpcReq(ws, "cron.run", { id: silentJobId, mode: "force" }, 20_000);
+      const silentRunRes = await rpcReq(
+        ws,
+        "cron.run",
+        { id: silentJobId, mode: "force" },
+        20_000,
+      );
       expect(silentRunRes.ok).toBe(true);
       await yieldToEventLoop();
       await yieldToEventLoop();
       expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(2);
 
       fetchWithSsrFGuardMock.mockClear();
-      cronIsolatedRun.mockResolvedValueOnce({ status: "error", summary: "delivery failed" });
+      cronIsolatedRun.mockResolvedValueOnce({
+        status: "error",
+        summary: "delivery failed",
+      });
       const failureDestRes = await rpcReq(ws, "cron.add", {
         name: "failure destination webhook",
         enabled: true,
@@ -664,7 +764,9 @@ describe("gateway server cron", () => {
         },
       });
       expect(failureDestRes.ok).toBe(true);
-      const failureDestJobIdValue = (failureDestRes.payload as { id?: unknown } | null)?.id;
+      const failureDestJobIdValue = (
+        failureDestRes.payload as { id?: unknown } | null
+      )?.id;
       const failureDestJobId =
         typeof failureDestJobIdValue === "string" ? failureDestJobIdValue : "";
       expect(failureDestJobId.length > 0).toBe(true);
@@ -680,7 +782,8 @@ describe("gateway server cron", () => {
         () => fetchWithSsrFGuardMock.mock.calls.length === 1,
         CRON_WAIT_TIMEOUT_MS,
       );
-      const [failureDestArgs] = fetchWithSsrFGuardMock.mock.calls[0] as unknown as [
+      const [failureDestArgs] = fetchWithSsrFGuardMock.mock
+        .calls[0] as unknown as [
         {
           url?: string;
           init?: {
@@ -690,7 +793,9 @@ describe("gateway server cron", () => {
           };
         },
       ];
-      expect(failureDestArgs.url).toBe("https://example.invalid/failure-destination");
+      expect(failureDestArgs.url).toBe(
+        "https://example.invalid/failure-destination",
+      );
       const failureDestBody = JSON.parse(failureDestArgs.init?.body ?? "{}");
       expect(failureDestBody.message).toBe(
         'Cron job "failure destination webhook" failed: unknown error',
@@ -704,11 +809,17 @@ describe("gateway server cron", () => {
         sessionTarget: "isolated",
         wakeMode: "next-heartbeat",
         payload: { kind: "agentTurn", message: "test" },
-        delivery: { mode: "webhook", to: "https://example.invalid/cron-finished" },
+        delivery: {
+          mode: "webhook",
+          to: "https://example.invalid/cron-finished",
+        },
       });
       expect(noSummaryRes.ok).toBe(true);
-      const noSummaryJobIdValue = (noSummaryRes.payload as { id?: unknown } | null)?.id;
-      const noSummaryJobId = typeof noSummaryJobIdValue === "string" ? noSummaryJobIdValue : "";
+      const noSummaryJobIdValue = (
+        noSummaryRes.payload as { id?: unknown } | null
+      )?.id;
+      const noSummaryJobId =
+        typeof noSummaryJobIdValue === "string" ? noSummaryJobIdValue : "";
       expect(noSummaryJobId.length > 0).toBe(true);
 
       const noSummaryRunRes = await rpcReq(

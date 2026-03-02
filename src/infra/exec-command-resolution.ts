@@ -5,7 +5,15 @@ import { resolveDispatchWrapperExecutionPlan } from "./exec-wrapper-resolution.j
 import { resolveExecutablePath as resolveExecutableCandidatePath } from "./executable-path.js";
 import { expandHomePrefix } from "./home-dir.js";
 
-export const DEFAULT_SAFE_BINS = ["jq", "cut", "uniq", "head", "tail", "tr", "wc"];
+export const DEFAULT_SAFE_BINS = [
+  "jq",
+  "cut",
+  "uniq",
+  "head",
+  "tail",
+  "tr",
+  "wc",
+];
 
 export type CommandResolution = {
   rawExecutable: string;
@@ -55,9 +63,14 @@ export function resolveCommandResolution(
   if (!rawExecutable) {
     return null;
   }
-  const resolvedPath = resolveExecutableCandidatePath(rawExecutable, { cwd, env });
+  const resolvedPath = resolveExecutableCandidatePath(rawExecutable, {
+    cwd,
+    env,
+  });
   const resolvedRealPath = tryResolveRealpath(resolvedPath);
-  const executableName = resolvedPath ? path.basename(resolvedPath) : rawExecutable;
+  const executableName = resolvedPath
+    ? path.basename(resolvedPath)
+    : rawExecutable;
   return {
     rawExecutable,
     resolvedPath,
@@ -80,9 +93,14 @@ export function resolveCommandResolutionFromArgv(
   if (!rawExecutable) {
     return null;
   }
-  const resolvedPath = resolveExecutableCandidatePath(rawExecutable, { cwd, env });
+  const resolvedPath = resolveExecutableCandidatePath(rawExecutable, {
+    cwd,
+    env,
+  });
   const resolvedRealPath = tryResolveRealpath(resolvedPath);
-  const executableName = resolvedPath ? path.basename(resolvedPath) : rawExecutable;
+  const executableName = resolvedPath
+    ? path.basename(resolvedPath)
+    : rawExecutable;
   return {
     rawExecutable,
     resolvedPath,
@@ -144,7 +162,9 @@ function matchesPattern(pattern: string, target: string): boolean {
   if (!trimmed) {
     return false;
   }
-  const expanded = trimmed.startsWith("~") ? expandHomePrefix(trimmed) : trimmed;
+  const expanded = trimmed.startsWith("~")
+    ? expandHomePrefix(trimmed)
+    : trimmed;
   const hasWildcard = /[*?]/.test(expanded);
   let normalizedPattern = expanded;
   let normalizedTarget = target;
@@ -206,7 +226,8 @@ export function matchAllowlist(
     if (!pattern) {
       continue;
     }
-    const hasPath = pattern.includes("/") || pattern.includes("\\") || pattern.includes("~");
+    const hasPath =
+      pattern.includes("/") || pattern.includes("\\") || pattern.includes("~");
     if (!hasPath) {
       continue;
     }

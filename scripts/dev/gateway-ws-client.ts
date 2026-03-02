@@ -1,7 +1,12 @@
 import { randomUUID } from "node:crypto";
 import WebSocket from "ws";
 
-export type GatewayReqFrame = { type: "req"; id: string; method: string; params?: unknown };
+export type GatewayReqFrame = {
+  type: "req";
+  id: string;
+  method: string;
+  params?: unknown;
+};
 export type GatewayResFrame = {
   type: "res";
   id: string;
@@ -9,7 +14,12 @@ export type GatewayResFrame = {
   payload?: unknown;
   error?: unknown;
 };
-export type GatewayEventFrame = { type: "event"; event: string; seq?: number; payload?: unknown };
+export type GatewayEventFrame = {
+  type: "event";
+  event: string;
+  seq?: number;
+  payload?: unknown;
+};
 export type GatewayFrame =
   | GatewayReqFrame
   | GatewayResFrame
@@ -44,7 +54,9 @@ function toText(data: WebSocket.RawData): string {
     return Buffer.from(data).toString("utf8");
   }
   if (Array.isArray(data)) {
-    return Buffer.concat(data.map((chunk) => Buffer.from(chunk))).toString("utf8");
+    return Buffer.concat(data.map((chunk) => Buffer.from(chunk))).toString(
+      "utf8",
+    );
   }
   return Buffer.from(data as Buffer).toString("utf8");
 }
@@ -55,7 +67,9 @@ export function createGatewayWsClient(params: {
   openTimeoutMs?: number;
   onEvent?: (evt: GatewayEventFrame) => void;
 }) {
-  const ws = new WebSocket(params.url, { handshakeTimeout: params.handshakeTimeoutMs ?? 8000 });
+  const ws = new WebSocket(params.url, {
+    handshakeTimeout: params.handshakeTimeoutMs ?? 8000,
+  });
   const pending = new Map<
     string,
     {
@@ -68,7 +82,12 @@ export function createGatewayWsClient(params: {
   const request = (method: string, paramsObj?: unknown, timeoutMs = 12_000) =>
     new Promise<GatewayResFrame>((resolve, reject) => {
       const id = randomUUID();
-      const frame: GatewayReqFrame = { type: "req", id, method, params: paramsObj };
+      const frame: GatewayReqFrame = {
+        type: "req",
+        id,
+        method,
+        params: paramsObj,
+      };
       const timeout = setTimeout(() => {
         pending.delete(id);
         reject(new Error(`timeout waiting for ${method}`));

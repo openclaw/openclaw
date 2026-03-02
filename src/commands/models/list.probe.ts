@@ -1,7 +1,10 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import { resolveOpenClawAgentDir } from "../../agents/agent-paths.js";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import {
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "../../agents/agent-scope.js";
 import {
   ensureAuthProfileStore,
   listProfilesForProvider,
@@ -9,7 +12,10 @@ import {
   resolveAuthProfileOrder,
 } from "../../agents/auth-profiles.js";
 import { describeFailoverError } from "../../agents/failover-error.js";
-import { getCustomProviderApiKey, resolveEnvApiKey } from "../../agents/model-auth.js";
+import {
+  getCustomProviderApiKey,
+  resolveEnvApiKey,
+} from "../../agents/model-auth.js";
 import { loadModelCatalog } from "../../agents/model-catalog.js";
 import {
   findNormalizedProviderValue,
@@ -82,7 +88,9 @@ export type AuthProbeOptions = {
   maxTokens: number;
 };
 
-export function mapFailoverReasonToProbeStatus(reason?: string | null): AuthProbeStatus {
+export function mapFailoverReasonToProbeStatus(
+  reason?: string | null,
+): AuthProbeStatus {
   if (!reason) {
     return "unknown";
   }
@@ -148,8 +156,12 @@ function buildProbeTargets(params: {
   const { cfg, providers, modelCandidates, options } = params;
   const store = ensureAuthProfileStore();
   const providerFilter = options.provider?.trim();
-  const providerFilterKey = providerFilter ? normalizeProviderId(providerFilter) : null;
-  const profileFilter = new Set((options.profileIds ?? []).map((id) => id.trim()).filter(Boolean));
+  const providerFilterKey = providerFilter
+    ? normalizeProviderId(providerFilter)
+    : null;
+  const profileFilter = new Set(
+    (options.profileIds ?? []).map((id) => id.trim()).filter(Boolean),
+  );
 
   return loadModelCatalog({ config: cfg }).then((catalog) => {
     const candidates = buildCandidateMap(modelCandidates);
@@ -177,7 +189,9 @@ function buildProbeTargets(params: {
       })();
       const allowedProfiles =
         explicitOrder && explicitOrder.length > 0
-          ? new Set(resolveAuthProfileOrder({ cfg, store, provider: providerKey }))
+          ? new Set(
+              resolveAuthProfileOrder({ cfg, store, provider: providerKey }),
+            )
           : null;
       const filteredProfiles = profileFilter.size
         ? profileIds.filter((id) => profileFilter.has(id))
@@ -187,7 +201,11 @@ function buildProbeTargets(params: {
         for (const profileId of filteredProfiles) {
           const profile = store.profiles[profileId];
           const mode = profile?.type;
-          const label = resolveAuthProfileDisplayLabel({ cfg, store, profileId });
+          const label = resolveAuthProfileDisplayLabel({
+            cfg,
+            store,
+            profileId,
+          });
           if (explicitOrder && !explicitOrder.includes(profileId)) {
             results.push({
               provider: providerKey,
@@ -289,7 +307,16 @@ async function probeTarget(params: {
   timeoutMs: number;
   maxTokens: number;
 }): Promise<AuthProbeResult> {
-  const { cfg, agentId, agentDir, workspaceDir, sessionDir, target, timeoutMs, maxTokens } = params;
+  const {
+    cfg,
+    agentId,
+    agentDir,
+    workspaceDir,
+    sessionDir,
+    target,
+    timeoutMs,
+    maxTokens,
+  } = params;
   if (!target.model) {
     return {
       provider: target.provider,
@@ -361,20 +388,30 @@ async function runTargetsWithConcurrency(params: {
   timeoutMs: number;
   maxTokens: number;
   concurrency: number;
-  onProgress?: (update: { completed: number; total: number; label?: string }) => void;
+  onProgress?: (update: {
+    completed: number;
+    total: number;
+    label?: string;
+  }) => void;
 }): Promise<AuthProbeResult[]> {
   const { cfg, targets, timeoutMs, maxTokens, onProgress } = params;
-  const concurrency = Math.max(1, Math.min(targets.length || 1, params.concurrency));
+  const concurrency = Math.max(
+    1,
+    Math.min(targets.length || 1, params.concurrency),
+  );
 
   const agentId = resolveDefaultAgentId(cfg);
   const agentDir = resolveOpenClawAgentDir();
-  const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId) ?? resolveDefaultAgentWorkspaceDir();
+  const workspaceDir =
+    resolveAgentWorkspaceDir(cfg, agentId) ?? resolveDefaultAgentWorkspaceDir();
   const sessionDir = resolveSessionTranscriptsDirForAgent(agentId);
 
   await fs.mkdir(workspaceDir, { recursive: true });
 
   let completed = 0;
-  const results: Array<AuthProbeResult | undefined> = Array.from({ length: targets.length });
+  const results: Array<AuthProbeResult | undefined> = Array.from({
+    length: targets.length,
+  });
   let cursor = 0;
 
   const worker = async () => {
@@ -416,7 +453,11 @@ export async function runAuthProbes(params: {
   providers: string[];
   modelCandidates: string[];
   options: AuthProbeOptions;
-  onProgress?: (update: { completed: number; total: number; label?: string }) => void;
+  onProgress?: (update: {
+    completed: number;
+    total: number;
+    label?: string;
+  }) => void;
 }): Promise<AuthProbeSummary> {
   const startedAt = Date.now();
   const plan = await buildProbeTargets({
@@ -459,7 +500,9 @@ export function formatProbeLatency(latencyMs?: number | null) {
   return formatMs(latencyMs);
 }
 
-export function groupProbeResults(results: AuthProbeResult[]): Map<string, AuthProbeResult[]> {
+export function groupProbeResults(
+  results: AuthProbeResult[],
+): Map<string, AuthProbeResult[]> {
   const map = new Map<string, AuthProbeResult[]>();
   for (const result of results) {
     const list = map.get(result.provider) ?? [];
@@ -469,7 +512,9 @@ export function groupProbeResults(results: AuthProbeResult[]): Map<string, AuthP
   return map;
 }
 
-export function sortProbeResults(results: AuthProbeResult[]): AuthProbeResult[] {
+export function sortProbeResults(
+  results: AuthProbeResult[],
+): AuthProbeResult[] {
   return results.slice().toSorted((a, b) => {
     const provider = a.provider.localeCompare(b.provider);
     if (provider !== 0) {

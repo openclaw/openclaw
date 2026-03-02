@@ -19,12 +19,17 @@ import {
   resolveProfilesUnavailableReason,
   resolveAuthProfileOrder,
 } from "./auth-profiles.js";
-import { _probeThrottleInternals, runWithModelFallback } from "./model-fallback.js";
+import {
+  _probeThrottleInternals,
+  runWithModelFallback,
+} from "./model-fallback.js";
 
 const mockedEnsureAuthProfileStore = vi.mocked(ensureAuthProfileStore);
 const mockedGetSoonestCooldownExpiry = vi.mocked(getSoonestCooldownExpiry);
 const mockedIsProfileInCooldown = vi.mocked(isProfileInCooldown);
-const mockedResolveProfilesUnavailableReason = vi.mocked(resolveProfilesUnavailableReason);
+const mockedResolveProfilesUnavailableReason = vi.mocked(
+  resolveProfilesUnavailableReason,
+);
 const mockedResolveAuthProfileOrder = vi.mocked(resolveAuthProfileOrder);
 
 const makeCfg = makeModelFallbackCfg;
@@ -85,22 +90,26 @@ describe("runWithModelFallback – probe logic", () => {
     mockedEnsureAuthProfileStore.mockReturnValue(fakeStore);
 
     // Default: resolveAuthProfileOrder returns profiles only for "openai" provider
-    mockedResolveAuthProfileOrder.mockImplementation(({ provider }: { provider: string }) => {
-      if (provider === "openai") {
-        return ["openai-profile-1"];
-      }
-      if (provider === "anthropic") {
-        return ["anthropic-profile-1"];
-      }
-      if (provider === "google") {
-        return ["google-profile-1"];
-      }
-      return [];
-    });
+    mockedResolveAuthProfileOrder.mockImplementation(
+      ({ provider }: { provider: string }) => {
+        if (provider === "openai") {
+          return ["openai-profile-1"];
+        }
+        if (provider === "anthropic") {
+          return ["anthropic-profile-1"];
+        }
+        if (provider === "google") {
+          return ["google-profile-1"];
+        }
+        return [];
+      },
+    );
     // Default: only openai profiles are in cooldown; fallback providers are available
-    mockedIsProfileInCooldown.mockImplementation((_store, profileId: string) => {
-      return profileId.startsWith("openai");
-    });
+    mockedIsProfileInCooldown.mockImplementation(
+      (_store, profileId: string) => {
+        return profileId.startsWith("openai");
+      },
+    );
     mockedResolveProfilesUnavailableReason.mockReturnValue("rate_limit");
   });
 
@@ -185,7 +194,9 @@ describe("runWithModelFallback – probe logic", () => {
     // Primary probe fails with 429; fallback should still be attempted for rate_limit cooldowns.
     const run = vi
       .fn()
-      .mockRejectedValueOnce(Object.assign(new Error("rate limited"), { status: 429 }))
+      .mockRejectedValueOnce(
+        Object.assign(new Error("rate limited"), { status: 429 }),
+      )
       .mockResolvedValue("fallback-ok");
 
     const result = await runWithModelFallback({

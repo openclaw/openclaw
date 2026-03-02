@@ -8,7 +8,10 @@ import { upsertAuthProfile } from "../agents/auth-profiles.js";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
 import { resolvePluginProviders } from "../plugins/providers.js";
-import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
+import type {
+  ApplyAuthChoiceParams,
+  ApplyAuthChoiceResult,
+} from "./auth-choice.apply.js";
 import { isRemoteEnvironment } from "./oauth-env.js";
 import { createVpsAwareOAuthHandlers } from "./oauth-flow.js";
 import { applyAuthProfileConfig } from "./onboard-auth.js";
@@ -50,11 +53,17 @@ export async function applyAuthChoicePluginProvider(
   const defaultAgentId = resolveDefaultAgentId(nextConfig);
   const agentDir =
     params.agentDir ??
-    (agentId === defaultAgentId ? resolveOpenClawAgentDir() : resolveAgentDir(nextConfig, agentId));
+    (agentId === defaultAgentId
+      ? resolveOpenClawAgentDir()
+      : resolveAgentDir(nextConfig, agentId));
   const workspaceDir =
-    resolveAgentWorkspaceDir(nextConfig, agentId) ?? resolveDefaultAgentWorkspaceDir();
+    resolveAgentWorkspaceDir(nextConfig, agentId) ??
+    resolveDefaultAgentWorkspaceDir();
 
-  const providers = resolvePluginProviders({ config: nextConfig, workspaceDir });
+  const providers = resolvePluginProviders({
+    config: nextConfig,
+    workspaceDir,
+  });
   const provider = resolveProviderMatch(providers, options.providerId);
   if (!provider) {
     await params.prompter.note(
@@ -66,7 +75,10 @@ export async function applyAuthChoicePluginProvider(
 
   const method = pickAuthMethod(provider, options.methodId) ?? provider.auth[0];
   if (!method) {
-    await params.prompter.note(`${options.label} auth method missing.`, options.label);
+    await params.prompter.note(
+      `${options.label} auth method missing.`,
+      options.label,
+    );
     return { config: nextConfig };
   }
 
@@ -100,7 +112,8 @@ export async function applyAuthChoicePluginProvider(
     nextConfig = applyAuthProfileConfig(nextConfig, {
       profileId: profile.profileId,
       provider: profile.credential.provider,
-      mode: profile.credential.type === "token" ? "token" : profile.credential.type,
+      mode:
+        profile.credential.type === "token" ? "token" : profile.credential.type,
       ...("email" in profile.credential && profile.credential.email
         ? { email: profile.credential.email }
         : {}),
@@ -111,7 +124,10 @@ export async function applyAuthChoicePluginProvider(
   if (result.defaultModel) {
     if (params.setDefaultModel) {
       nextConfig = applyDefaultModel(nextConfig, result.defaultModel);
-      await params.prompter.note(`Default model set to ${result.defaultModel}`, "Model configured");
+      await params.prompter.note(
+        `Default model set to ${result.defaultModel}`,
+        "Model configured",
+      );
     } else if (params.agentId) {
       agentModelOverride = result.defaultModel;
       await params.prompter.note(

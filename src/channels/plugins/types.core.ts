@@ -3,7 +3,10 @@ import type { TSchema } from "@sinclair/typebox";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { PollInput } from "../../polls.js";
-import type { GatewayClientMode, GatewayClientName } from "../../utils/message-channel.js";
+import type {
+  GatewayClientMode,
+  GatewayClientName,
+} from "../../utils/message-channel.js";
 import type { ChatType } from "../chat-type.js";
 import type { ChatChannelId } from "../registry.js";
 import type { ChannelMessageActionName as ChannelMessageActionNameFromList } from "./message-action-names.js";
@@ -16,7 +19,9 @@ export type ChannelAgentTool = AgentTool<TSchema, unknown> & {
   ownerOnly?: boolean;
 };
 
-export type ChannelAgentToolFactory = (params: { cfg?: OpenClawConfig }) => ChannelAgentTool[];
+export type ChannelAgentToolFactory = (params: {
+  cfg?: OpenClawConfig;
+}) => ChannelAgentTool[];
 
 export type ChannelSetupInput = {
   name?: string;
@@ -285,7 +290,10 @@ export type ChannelMessagingAdapter = {
 };
 
 export type ChannelAgentPromptAdapter = {
-  messageToolHints?: (params: { cfg: OpenClawConfig; accountId?: string | null }) => string[];
+  messageToolHints?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+  }) => string[];
 };
 
 export type ChannelDirectoryEntryKind = "user" | "group" | "channel";
@@ -336,8 +344,12 @@ export type ChannelMessageActionAdapter = {
   supportsAction?: (params: { action: ChannelMessageActionName }) => boolean;
   supportsButtons?: (params: { cfg: OpenClawConfig }) => boolean;
   supportsCards?: (params: { cfg: OpenClawConfig }) => boolean;
-  extractToolSend?: (params: { args: Record<string, unknown> }) => ChannelToolSend | null;
-  handleAction?: (ctx: ChannelMessageActionContext) => Promise<AgentToolResult<unknown>>;
+  extractToolSend?: (params: {
+    args: Record<string, unknown>;
+  }) => ChannelToolSend | null;
+  handleAction?: (
+    ctx: ChannelMessageActionContext,
+  ) => Promise<AgentToolResult<unknown>>;
 };
 
 export type ChannelPollResult = {

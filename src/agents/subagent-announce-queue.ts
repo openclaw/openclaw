@@ -1,4 +1,7 @@
-import { type QueueDropPolicy, type QueueMode } from "../auto-reply/reply/queue.js";
+import {
+  type QueueDropPolicy,
+  type QueueMode,
+} from "../auto-reply/reply/queue.js";
 import { defaultRuntime } from "../runtime.js";
 import {
   type DeliveryContext,
@@ -87,8 +90,14 @@ function getAnnounceQueue(
     draining: false,
     lastEnqueuedAt: 0,
     mode: settings.mode,
-    debounceMs: typeof settings.debounceMs === "number" ? Math.max(0, settings.debounceMs) : 1000,
-    cap: typeof settings.cap === "number" && settings.cap > 0 ? Math.floor(settings.cap) : 20,
+    debounceMs:
+      typeof settings.debounceMs === "number"
+        ? Math.max(0, settings.debounceMs)
+        : 1000,
+    cap:
+      typeof settings.cap === "number" && settings.cap > 0
+        ? Math.floor(settings.cap)
+        : 20,
     dropPolicy: settings.dropPolicy ?? "summarize",
     droppedCount: 0,
     summaryLines: [],
@@ -142,14 +151,20 @@ function scheduleAnnounceDrain(key: string) {
             continue;
           }
           const items = queue.items.slice();
-          const summary = previewQueueSummaryPrompt({ state: queue, noun: "announce" });
+          const summary = previewQueueSummaryPrompt({
+            state: queue,
+            noun: "announce",
+          });
           const prompt = buildCollectPrompt({
             title: "[Queued announce messages while agent was busy]",
             items,
             summary,
-            renderItem: (item, idx) => `---\nQueued #${idx + 1}\n${item.prompt}`.trim(),
+            renderItem: (item, idx) =>
+              `---\nQueued #${idx + 1}\n${item.prompt}`.trim(),
           });
-          const internalEvents = items.flatMap((item) => item.internalEvents ?? []);
+          const internalEvents = items.flatMap(
+            (item) => item.internalEvents ?? [],
+          );
           const last = items.at(-1);
           if (!last) {
             break;
@@ -157,7 +172,8 @@ function scheduleAnnounceDrain(key: string) {
           await queue.send({
             ...last,
             prompt,
-            internalEvents: internalEvents.length > 0 ? internalEvents : last.internalEvents,
+            internalEvents:
+              internalEvents.length > 0 ? internalEvents : last.internalEvents,
           });
           queue.items.splice(0, items.length);
           if (summary) {
@@ -166,12 +182,16 @@ function scheduleAnnounceDrain(key: string) {
           continue;
         }
 
-        const summaryPrompt = previewQueueSummaryPrompt({ state: queue, noun: "announce" });
+        const summaryPrompt = previewQueueSummaryPrompt({
+          state: queue,
+          noun: "announce",
+        });
         if (summaryPrompt) {
           if (
             !(await drainNextQueueItem(
               queue.items,
-              async (item) => await queue.send({ ...item, prompt: summaryPrompt }),
+              async (item) =>
+                await queue.send({ ...item, prompt: summaryPrompt }),
             ))
           ) {
             break;
@@ -180,7 +200,12 @@ function scheduleAnnounceDrain(key: string) {
           continue;
         }
 
-        if (!(await drainNextQueueItem(queue.items, async (item) => await queue.send(item)))) {
+        if (
+          !(await drainNextQueueItem(
+            queue.items,
+            async (item) => await queue.send(item),
+          ))
+        ) {
           break;
         }
       }
@@ -189,7 +214,10 @@ function scheduleAnnounceDrain(key: string) {
     } catch (err) {
       queue.consecutiveFailures++;
       // Exponential backoff on consecutive failures: 2s, 4s, 8s, ... capped at 60s.
-      const errorBackoffMs = Math.min(1000 * Math.pow(2, queue.consecutiveFailures), 60_000);
+      const errorBackoffMs = Math.min(
+        1000 * Math.pow(2, queue.consecutiveFailures),
+        60_000,
+      );
       const retryDelayMs = Math.max(errorBackoffMs, queue.debounceMs);
       queue.lastEnqueuedAt = Date.now() + retryDelayMs - queue.debounceMs;
       defaultRuntime.error?.(

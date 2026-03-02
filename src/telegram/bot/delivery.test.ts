@@ -128,7 +128,9 @@ describe("deliverReplies", () => {
     mockMediaLoad("note.ogg", "audio/ogg", "voice");
 
     await deliverWith({
-      replies: [{ mediaUrl: "https://example.com/note.ogg", audioAsVoice: true }],
+      replies: [
+        { mediaUrl: "https://example.com/note.ogg", audioAsVoice: true },
+      ],
       runtime,
       bot,
       onVoiceRecording,
@@ -150,7 +152,9 @@ describe("deliverReplies", () => {
     mockMediaLoad("photo.jpg", "image/jpeg", "image");
 
     await deliverWith({
-      replies: [{ mediaUrl: "https://example.com/photo.jpg", text: "hi **boss**" }],
+      replies: [
+        { mediaUrl: "https://example.com/photo.jpg", text: "hi **boss**" },
+      ],
       runtime,
       bot,
     });
@@ -255,13 +259,17 @@ describe("deliverReplies", () => {
         message_thread_id: 42,
       }),
     );
-    expect(sendMessage.mock.calls[1]?.[2]).not.toHaveProperty("message_thread_id");
+    expect(sendMessage.mock.calls[1]?.[2]).not.toHaveProperty(
+      "message_thread_id",
+    );
     expect(runtime.error).not.toHaveBeenCalled();
   });
 
   it("does not retry forum sends without message_thread_id", async () => {
     const runtime = createRuntime();
-    const sendMessage = vi.fn().mockRejectedValue(createThreadNotFoundError("sendMessage"));
+    const sendMessage = vi
+      .fn()
+      .mockRejectedValue(createThreadNotFoundError("sendMessage"));
     const bot = createBot({ sendMessage });
 
     await expect(
@@ -303,7 +311,9 @@ describe("deliverReplies", () => {
         message_thread_id: 42,
       }),
     );
-    expect(sendPhoto.mock.calls[1]?.[2]).not.toHaveProperty("message_thread_id");
+    expect(sendPhoto.mock.calls[1]?.[2]).not.toHaveProperty(
+      "message_thread_id",
+    );
     expect(runtime.error).not.toHaveBeenCalled();
   });
 
@@ -424,7 +434,11 @@ describe("deliverReplies", () => {
 
     await deliverWith({
       replies: [
-        { mediaUrl: "https://example.com/note.ogg", text: "Hello there", audioAsVoice: true },
+        {
+          mediaUrl: "https://example.com/note.ogg",
+          text: "Hello there",
+          audioAsVoice: true,
+        },
       ],
       runtime,
       bot,
@@ -500,7 +514,13 @@ describe("deliverReplies", () => {
 
     await expect(
       deliverWith({
-        replies: [{ mediaUrl: "https://example.com/note.ogg", text: "Hello", audioAsVoice: true }],
+        replies: [
+          {
+            mediaUrl: "https://example.com/note.ogg",
+            text: "Hello",
+            audioAsVoice: true,
+          },
+        ],
         runtime,
         bot,
       }),
@@ -536,7 +556,9 @@ describe("deliverReplies", () => {
       expect.objectContaining({ reply_to_message_id: 700 }),
     );
     // Second chunk should NOT have reply_to_message_id
-    expect(sendMessage.mock.calls[1][2]).not.toHaveProperty("reply_to_message_id");
+    expect(sendMessage.mock.calls[1][2]).not.toHaveProperty(
+      "reply_to_message_id",
+    );
   });
 
   it("replyToMode 'all' applies reply-to to every text chunk", async () => {
@@ -560,7 +582,9 @@ describe("deliverReplies", () => {
     expect(sendMessage.mock.calls.length).toBeGreaterThanOrEqual(2);
     // Both chunks should have reply_to_message_id
     for (const call of sendMessage.mock.calls) {
-      expect(call[2]).toEqual(expect.objectContaining({ reply_to_message_id: 800 }));
+      expect(call[2]).toEqual(
+        expect.objectContaining({ reply_to_message_id: 800 }),
+      );
     }
   });
 
@@ -576,7 +600,9 @@ describe("deliverReplies", () => {
     mockMediaLoad("b.jpg", "image/jpeg", "img2");
 
     await deliverReplies({
-      replies: [{ mediaUrls: ["https://a.jpg", "https://b.jpg"], replyToId: "900" }],
+      replies: [
+        { mediaUrls: ["https://a.jpg", "https://b.jpg"], replyToId: "900" },
+      ],
       chatId: "123",
       token: "tok",
       runtime,
@@ -591,7 +617,9 @@ describe("deliverReplies", () => {
       expect.objectContaining({ reply_to_message_id: 900 }),
     );
     // Second media should NOT have reply_to_message_id
-    expect(sendPhoto.mock.calls[1][2]).not.toHaveProperty("reply_to_message_id");
+    expect(sendPhoto.mock.calls[1][2]).not.toHaveProperty(
+      "reply_to_message_id",
+    );
   });
 
   it("rethrows VOICE_MESSAGES_FORBIDDEN when no text fallback is available", async () => {
@@ -603,7 +631,9 @@ describe("deliverReplies", () => {
 
     await expect(
       deliverWith({
-        replies: [{ mediaUrl: "https://example.com/note.ogg", audioAsVoice: true }],
+        replies: [
+          { mediaUrl: "https://example.com/note.ogg", audioAsVoice: true },
+        ],
         runtime,
         bot,
       }),

@@ -83,7 +83,12 @@ To different location:
 ### Rename Node
 
 ```json
-{ "action": "rename", "space_id": "7xxx", "node_token": "wikcnXXX", "title": "New Title" }
+{
+  "action": "rename",
+  "space_id": "7xxx",
+  "node_token": "wikcnXXX",
+  "title": "New Title"
+}
 ```
 
 ## Wiki-Doc Workflow

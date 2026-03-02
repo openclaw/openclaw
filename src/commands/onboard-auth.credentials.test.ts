@@ -28,7 +28,11 @@ describe("onboard auth credentials secret refs", () => {
     await lifecycle.cleanup();
   });
 
-  type AuthProfileEntry = { key?: string; keyRef?: unknown; metadata?: unknown };
+  type AuthProfileEntry = {
+    key?: string;
+    keyRef?: unknown;
+    metadata?: unknown;
+  };
 
   async function withAuthEnv(
     prefix: string,
@@ -94,7 +98,9 @@ describe("onboard auth credentials secret refs", () => {
       envValue: "sk-moonshot-env",
       profileId: "moonshot:default",
       apply: async (agentDir) => {
-        await setMoonshotApiKey("sk-moonshot-env", agentDir, { secretInputMode: "ref" });
+        await setMoonshotApiKey("sk-moonshot-env", agentDir, {
+          secretInputMode: "ref",
+        });
       },
       expected: {
         keyRef: { source: "env", provider: "default", id: "MOONSHOT_API_KEY" },
@@ -134,22 +140,39 @@ describe("onboard auth credentials secret refs", () => {
   });
 
   it("preserves cloudflare metadata when storing keyRef", async () => {
-    const env = await setupAuthTestEnv("openclaw-onboard-auth-credentials-cloudflare-");
+    const env = await setupAuthTestEnv(
+      "openclaw-onboard-auth-credentials-cloudflare-",
+    );
     lifecycle.setStateDir(env.stateDir);
     process.env.CLOUDFLARE_AI_GATEWAY_API_KEY = "cf-secret";
 
-    await setCloudflareAiGatewayConfig("account-1", "gateway-1", "cf-secret", env.agentDir, {
-      secretInputMode: "ref",
-    });
+    await setCloudflareAiGatewayConfig(
+      "account-1",
+      "gateway-1",
+      "cf-secret",
+      env.agentDir,
+      {
+        secretInputMode: "ref",
+      },
+    );
 
     const parsed = await readAuthProfilesForAgent<{
-      profiles?: Record<string, { key?: string; keyRef?: unknown; metadata?: unknown }>;
+      profiles?: Record<
+        string,
+        { key?: string; keyRef?: unknown; metadata?: unknown }
+      >;
     }>(env.agentDir);
     expect(parsed.profiles?.["cloudflare-ai-gateway:default"]).toMatchObject({
-      keyRef: { source: "env", provider: "default", id: "CLOUDFLARE_AI_GATEWAY_API_KEY" },
+      keyRef: {
+        source: "env",
+        provider: "default",
+        id: "CLOUDFLARE_AI_GATEWAY_API_KEY",
+      },
       metadata: { accountId: "account-1", gatewayId: "gateway-1" },
     });
-    expect(parsed.profiles?.["cloudflare-ai-gateway:default"]?.key).toBeUndefined();
+    expect(
+      parsed.profiles?.["cloudflare-ai-gateway:default"]?.key,
+    ).toBeUndefined();
   });
 
   it("keeps env-backed openai key as plaintext by default", async () => {
@@ -175,7 +198,9 @@ describe("onboard auth credentials secret refs", () => {
       envValue: "sk-openai-env",
       profileId: "openai:default",
       apply: async (agentDir) => {
-        await setOpenaiApiKey("sk-openai-env", agentDir, { secretInputMode: "ref" });
+        await setOpenaiApiKey("sk-openai-env", agentDir, {
+          secretInputMode: "ref",
+        });
       },
       expected: {
         keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
@@ -185,20 +210,30 @@ describe("onboard auth credentials secret refs", () => {
   });
 
   it("stores env-backed volcengine and byteplus keys as keyRef in ref mode", async () => {
-    const env = await setupAuthTestEnv("openclaw-onboard-auth-credentials-volc-byte-");
+    const env = await setupAuthTestEnv(
+      "openclaw-onboard-auth-credentials-volc-byte-",
+    );
     lifecycle.setStateDir(env.stateDir);
     process.env.VOLCANO_ENGINE_API_KEY = "volcengine-secret";
     process.env.BYTEPLUS_API_KEY = "byteplus-secret";
 
-    await setVolcengineApiKey("volcengine-secret", env.agentDir, { secretInputMode: "ref" });
-    await setByteplusApiKey("byteplus-secret", env.agentDir, { secretInputMode: "ref" });
+    await setVolcengineApiKey("volcengine-secret", env.agentDir, {
+      secretInputMode: "ref",
+    });
+    await setByteplusApiKey("byteplus-secret", env.agentDir, {
+      secretInputMode: "ref",
+    });
 
     const parsed = await readAuthProfilesForAgent<{
       profiles?: Record<string, { key?: string; keyRef?: unknown }>;
     }>(env.agentDir);
 
     expect(parsed.profiles?.["volcengine:default"]).toMatchObject({
-      keyRef: { source: "env", provider: "default", id: "VOLCANO_ENGINE_API_KEY" },
+      keyRef: {
+        source: "env",
+        provider: "default",
+        id: "VOLCANO_ENGINE_API_KEY",
+      },
     });
     expect(parsed.profiles?.["volcengine:default"]?.key).toBeUndefined();
 

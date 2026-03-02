@@ -14,7 +14,10 @@ export async function movePathToTrash(targetPath: string): Promise<string> {
     const base = path.basename(targetPath);
     let dest = path.join(trashDir, `${base}-${Date.now()}`);
     if (fs.existsSync(dest)) {
-      dest = path.join(trashDir, `${base}-${Date.now()}-${generateSecureToken(6)}`);
+      dest = path.join(
+        trashDir,
+        `${base}-${Date.now()}-${generateSecureToken(6)}`,
+      );
     }
     fs.renameSync(targetPath, dest);
     return dest;

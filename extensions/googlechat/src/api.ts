@@ -35,7 +35,9 @@ async function fetchJson<T>(
   try {
     if (!res.ok) {
       const text = await res.text().catch(() => "");
-      throw new Error(`Google Chat API ${res.status}: ${text || res.statusText}`);
+      throw new Error(
+        `Google Chat API ${res.status}: ${text || res.statusText}`,
+      );
     }
     return (await res.json()) as T;
   } finally {
@@ -63,7 +65,9 @@ async function fetchOk(
   try {
     if (!res.ok) {
       const text = await res.text().catch(() => "");
-      throw new Error(`Google Chat API ${res.status}: ${text || res.statusText}`);
+      throw new Error(
+        `Google Chat API ${res.status}: ${text || res.statusText}`,
+      );
     }
   } finally {
     await release();
@@ -91,7 +95,9 @@ async function fetchBuffer(
   try {
     if (!res.ok) {
       const text = await res.text().catch(() => "");
-      throw new Error(`Google Chat API ${res.status}: ${text || res.statusText}`);
+      throw new Error(
+        `Google Chat API ${res.status}: ${text || res.statusText}`,
+      );
     }
     const maxBytes = options?.maxBytes;
     const lengthHeader = res.headers.get("content-length");
@@ -155,7 +161,10 @@ export async function sendGoogleChatMessage(params: {
   }
   const urlObj = new URL(`${CHAT_API_BASE}/${space}/messages`);
   if (thread) {
-    urlObj.searchParams.set("messageReplyOption", "REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD");
+    urlObj.searchParams.set(
+      "messageReplyOption",
+      "REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD",
+    );
   }
   const url = urlObj.toString();
   const result = await fetchJson<{ name?: string }>(account, url, {
@@ -225,7 +234,9 @@ export async function uploadGoogleChatAttachment(params: {
   try {
     if (!res.ok) {
       const text = await res.text().catch(() => "");
-      throw new Error(`Google Chat upload ${res.status}: ${text || res.statusText}`);
+      throw new Error(
+        `Google Chat upload ${res.status}: ${text || res.statusText}`,
+      );
     }
     const payload = (await res.json()) as {
       attachmentDataRef?: { attachmentUploadToken?: string };
@@ -271,9 +282,13 @@ export async function listGoogleChatReactions(params: {
   if (limit && limit > 0) {
     url.searchParams.set("pageSize", String(limit));
   }
-  const result = await fetchJson<{ reactions?: GoogleChatReaction[] }>(account, url.toString(), {
-    method: "GET",
-  });
+  const result = await fetchJson<{ reactions?: GoogleChatReaction[] }>(
+    account,
+    url.toString(),
+    {
+      method: "GET",
+    },
+  );
   return result.reactions ?? [];
 }
 
@@ -293,12 +308,18 @@ export async function findGoogleChatDirectMessage(params: {
   const { account, userName } = params;
   const url = new URL(`${CHAT_API_BASE}/spaces:findDirectMessage`);
   url.searchParams.set("name", userName);
-  return await fetchJson<{ name?: string; displayName?: string }>(account, url.toString(), {
-    method: "GET",
-  });
+  return await fetchJson<{ name?: string; displayName?: string }>(
+    account,
+    url.toString(),
+    {
+      method: "GET",
+    },
+  );
 }
 
-export async function probeGoogleChat(account: ResolvedGoogleChatAccount): Promise<{
+export async function probeGoogleChat(
+  account: ResolvedGoogleChatAccount,
+): Promise<{
   ok: boolean;
   status?: number;
   error?: string;

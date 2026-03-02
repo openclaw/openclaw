@@ -19,7 +19,10 @@ export type CodeSpanIndex = {
   isInside: (index: number) => boolean;
 };
 
-export function buildCodeSpanIndex(text: string, inlineState?: InlineCodeState): CodeSpanIndex {
+export function buildCodeSpanIndex(
+  text: string,
+  inlineState?: InlineCodeState,
+): CodeSpanIndex {
   const fenceSpans = parseFenceSpans(text);
   const startState = inlineState
     ? { open: inlineState.open, ticks: inlineState.ticks }
@@ -33,7 +36,8 @@ export function buildCodeSpanIndex(text: string, inlineState?: InlineCodeState):
   return {
     inlineState: nextInlineState,
     isInside: (index: number) =>
-      isInsideFenceSpan(index, fenceSpans) || isInsideInlineSpan(index, inlineSpans),
+      isInsideFenceSpan(index, fenceSpans) ||
+      isInsideInlineSpan(index, inlineSpans),
   };
 }
 
@@ -92,7 +96,10 @@ function parseInlineCodeSpans(
   };
 }
 
-function findFenceSpanAtInclusive(spans: FenceSpan[], index: number): FenceSpan | undefined {
+function findFenceSpanAtInclusive(
+  spans: FenceSpan[],
+  index: number,
+): FenceSpan | undefined {
   return spans.find((span) => index >= span.start && index < span.end);
 }
 
@@ -100,6 +107,9 @@ function isInsideFenceSpan(index: number, spans: FenceSpan[]): boolean {
   return spans.some((span) => index >= span.start && index < span.end);
 }
 
-function isInsideInlineSpan(index: number, spans: Array<[number, number]>): boolean {
+function isInsideInlineSpan(
+  index: number,
+  spans: Array<[number, number]>,
+): boolean {
   return spans.some(([start, end]) => index >= start && index < end);
 }

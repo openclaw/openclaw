@@ -1,5 +1,9 @@
 import type { ChannelAccountSnapshot, ChannelStatusIssue } from "../types.js";
-import { asString, collectIssuesForEnabledAccounts, isRecord } from "./shared.js";
+import {
+  asString,
+  collectIssuesForEnabledAccounts,
+  isRecord,
+} from "./shared.js";
 
 type BlueBubblesAccountStatus = {
   accountId?: unknown;
@@ -34,7 +38,9 @@ function readBlueBubblesAccountStatus(
   };
 }
 
-function readBlueBubblesProbeResult(value: unknown): BlueBubblesProbeResult | null {
+function readBlueBubblesProbeResult(
+  value: unknown,
+): BlueBubblesProbeResult | null {
   if (!isRecord(value)) {
     return null;
   }

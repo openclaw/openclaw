@@ -36,13 +36,18 @@ export function getQueueEmbeddedPiMessageMock(): AnyMock {
 }
 
 vi.mock("../agents/pi-embedded.js", () => ({
-  abortEmbeddedPiRun: (...args: unknown[]) => piEmbeddedMocks.abortEmbeddedPiRun(...args),
+  abortEmbeddedPiRun: (...args: unknown[]) =>
+    piEmbeddedMocks.abortEmbeddedPiRun(...args),
   compactEmbeddedPiSession: (...args: unknown[]) =>
     piEmbeddedMocks.compactEmbeddedPiSession(...args),
-  runEmbeddedPiAgent: (...args: unknown[]) => piEmbeddedMocks.runEmbeddedPiAgent(...args),
-  queueEmbeddedPiMessage: (...args: unknown[]) => piEmbeddedMocks.queueEmbeddedPiMessage(...args),
-  resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
-  isEmbeddedPiRunActive: (...args: unknown[]) => piEmbeddedMocks.isEmbeddedPiRunActive(...args),
+  runEmbeddedPiAgent: (...args: unknown[]) =>
+    piEmbeddedMocks.runEmbeddedPiAgent(...args),
+  queueEmbeddedPiMessage: (...args: unknown[]) =>
+    piEmbeddedMocks.queueEmbeddedPiMessage(...args),
+  resolveEmbeddedSessionLane: (key: string) =>
+    `session:${key.trim() || "main"}`,
+  isEmbeddedPiRunActive: (...args: unknown[]) =>
+    piEmbeddedMocks.isEmbeddedPiRunActive(...args),
   isEmbeddedPiRunStreaming: (...args: unknown[]) =>
     piEmbeddedMocks.isEmbeddedPiRunStreaming(...args),
 }));
@@ -163,22 +168,30 @@ function setTempHomeEnv(home: string): void {
 }
 
 beforeAll(async () => {
-  suiteTempHomeRoot = await fs.mkdtemp(join(os.tmpdir(), "openclaw-triggers-suite-"));
+  suiteTempHomeRoot = await fs.mkdtemp(
+    join(os.tmpdir(), "openclaw-triggers-suite-"),
+  );
 });
 
 afterAll(async () => {
   if (!suiteTempHomeRoot) {
     return;
   }
-  await fs.rm(suiteTempHomeRoot, { recursive: true, force: true }).catch(() => undefined);
+  await fs
+    .rm(suiteTempHomeRoot, { recursive: true, force: true })
+    .catch(() => undefined);
   suiteTempHomeRoot = "";
   suiteTempHomeId = 0;
 });
 
-export async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
+export async function withTempHome<T>(
+  fn: (home: string) => Promise<T>,
+): Promise<T> {
   const home = join(suiteTempHomeRoot, `case-${++suiteTempHomeId}`);
   const snapshot = snapshotTempHomeEnv();
-  await fs.mkdir(join(home, ".openclaw", "agents", "main", "sessions"), { recursive: true });
+  await fs.mkdir(join(home, ".openclaw", "agents", "main", "sessions"), {
+    recursive: true,
+  });
   setTempHomeEnv(home);
 
   try {
@@ -233,7 +246,9 @@ export function installTriggerHandlingReplyHarness(
   installTriggerHandlingE2eTestHooks();
 }
 
-export function requireSessionStorePath(cfg: { session?: { store?: string } }): string {
+export function requireSessionStorePath(cfg: {
+  session?: { store?: string };
+}): string {
   const storePath = cfg.session?.store;
   if (!storePath) {
     throw new Error("expected session store path");
@@ -259,7 +274,9 @@ export function makeWhatsAppElevatedCfg(
     allowFrom: ["+1000"],
   };
   if (opts?.requireMentionInGroups !== undefined) {
-    cfg.channels.whatsapp.groups = { "*": { requireMention: opts.requireMentionInGroups } };
+    cfg.channels.whatsapp.groups = {
+      "*": { requireMention: opts.requireMentionInGroups },
+    };
   }
 
   cfg.tools = {

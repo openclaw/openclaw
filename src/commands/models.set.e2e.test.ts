@@ -83,7 +83,9 @@ describe("models set + fallbacks", () => {
   });
 
   it("preserves primary when adding fallbacks to string defaults.model", async () => {
-    mockConfigSnapshot({ agents: { defaults: { model: "openai/gpt-4.1-mini" } } });
+    mockConfigSnapshot({
+      agents: { defaults: { model: "openai/gpt-4.1-mini" } },
+    });
     const runtime = makeRuntime();
 
     await modelsFallbacksAddCommand("anthropic/claude-opus-4-6", runtime);
@@ -111,7 +113,9 @@ describe("models set + fallbacks", () => {
   });
 
   it("rewrites string defaults.model to object form when setting primary", async () => {
-    mockConfigSnapshot({ agents: { defaults: { model: "openai/gpt-4.1-mini" } } });
+    mockConfigSnapshot({
+      agents: { defaults: { model: "openai/gpt-4.1-mini" } },
+    });
     const runtime = makeRuntime();
 
     await modelsSetCommand("anthropic/claude-opus-4-6", runtime);

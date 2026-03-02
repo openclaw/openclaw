@@ -12,7 +12,9 @@ export function buildAgentMediaPayload(
 ): AgentMediaPayload {
   const first = mediaList[0];
   const mediaPaths = mediaList.map((media) => media.path);
-  const mediaTypes = mediaList.map((media) => media.contentType).filter(Boolean) as string[];
+  const mediaTypes = mediaList
+    .map((media) => media.contentType)
+    .filter(Boolean) as string[];
   return {
     MediaPath: first?.path,
     MediaType: first?.contentType ?? undefined,

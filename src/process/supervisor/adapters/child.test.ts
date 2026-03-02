@@ -24,7 +24,11 @@ function createStubChild(pid = 1234) {
   child.stdout = new PassThrough() as ChildProcess["stdout"];
   child.stderr = new PassThrough() as ChildProcess["stderr"];
   Object.defineProperty(child, "pid", { value: pid, configurable: true });
-  Object.defineProperty(child, "killed", { value: false, configurable: true, writable: true });
+  Object.defineProperty(child, "killed", {
+    value: false,
+    configurable: true,
+    writable: true,
+  });
   const killMock = vi.fn(() => true);
   child.kill = killMock as ChildProcess["kill"];
   return { child, killMock };

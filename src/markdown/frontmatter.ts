@@ -23,7 +23,9 @@ function stripQuotes(value: string): string {
   return value;
 }
 
-function coerceYamlFrontmatterValue(value: unknown): ParsedYamlValue | undefined {
+function coerceYamlFrontmatterValue(
+  value: unknown,
+): ParsedYamlValue | undefined {
   if (value === null || value === undefined) {
     return undefined;
   }
@@ -52,14 +54,18 @@ function coerceYamlFrontmatterValue(value: unknown): ParsedYamlValue | undefined
   return undefined;
 }
 
-function parseYamlFrontmatter(block: string): Record<string, ParsedYamlValue> | null {
+function parseYamlFrontmatter(
+  block: string,
+): Record<string, ParsedYamlValue> | null {
   try {
     const parsed = YAML.parse(block, { schema: "core" }) as unknown;
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
       return null;
     }
     const result: Record<string, ParsedYamlValue> = {};
-    for (const [rawKey, value] of Object.entries(parsed as Record<string, unknown>)) {
+    for (const [rawKey, value] of Object.entries(
+      parsed as Record<string, unknown>,
+    )) {
       const key = rawKey.trim();
       if (!key) {
         continue;
@@ -99,7 +105,9 @@ function extractMultiLineValue(
   return { value: combined, linesConsumed: i - startIndex };
 }
 
-function parseLineFrontmatter(block: string): Record<string, ParsedFrontmatterLineEntry> {
+function parseLineFrontmatter(
+  block: string,
+): Record<string, ParsedFrontmatterLineEntry> {
   const result: Record<string, ParsedFrontmatterLineEntry> = {};
   const lines = block.split("\n");
   let i = 0;

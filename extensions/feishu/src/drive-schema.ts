@@ -15,7 +15,9 @@ export const FeishuDriveSchema = Type.Union([
   Type.Object({
     action: Type.Literal("list"),
     folder_token: Type.Optional(
-      Type.String({ description: "Folder token (optional, omit for root directory)" }),
+      Type.String({
+        description: "Folder token (optional, omit for root directory)",
+      }),
     ),
   }),
   Type.Object({
@@ -27,7 +29,9 @@ export const FeishuDriveSchema = Type.Union([
     action: Type.Literal("create_folder"),
     name: Type.String({ description: "Folder name" }),
     folder_token: Type.Optional(
-      Type.String({ description: "Parent folder token (optional, omit for root)" }),
+      Type.String({
+        description: "Parent folder token (optional, omit for root)",
+      }),
     ),
   }),
   Type.Object({

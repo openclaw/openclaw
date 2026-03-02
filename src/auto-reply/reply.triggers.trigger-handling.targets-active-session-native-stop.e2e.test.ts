@@ -17,7 +17,11 @@ import {
   runGreetingPromptForBareNewOrReset,
   withTempHome,
 } from "./reply.triggers.trigger-handling.test-harness.js";
-import { enqueueFollowupRun, getFollowupQueueDepth, type FollowupRun } from "./reply/queue.js";
+import {
+  enqueueFollowupRun,
+  getFollowupQueueDepth,
+  type FollowupRun,
+} from "./reply/queue.js";
 import { HEARTBEAT_TOKEN } from "./tokens.js";
 
 let getReplyFromConfig: typeof import("./reply.js").getReplyFromConfig;
@@ -51,7 +55,9 @@ function mockEmbeddedOkPayload() {
   return mockRunEmbeddedPiAgentOk("ok");
 }
 
-async function writeStoredModelOverride(cfg: ReturnType<typeof makeCfg>): Promise<void> {
+async function writeStoredModelOverride(
+  cfg: ReturnType<typeof makeCfg>,
+): Promise<void> {
   await fs.writeFile(
     requireSessionStorePath(cfg),
     JSON.stringify({
@@ -91,7 +97,9 @@ function makeUnauthorizedWhatsAppCfg(home: string) {
   };
 }
 
-async function expectResetBlockedForNonOwner(params: { home: string }): Promise<void> {
+async function expectResetBlockedForNonOwner(params: {
+  home: string;
+}): Promise<void> {
   const { home } = params;
   const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
   runEmbeddedPiAgentMock.mockClear();
@@ -123,7 +131,10 @@ function mockEmbeddedOk() {
   return mockRunEmbeddedPiAgentOk("ok");
 }
 
-async function runInlineUnauthorizedCommand(params: { home: string; command: "/status" }) {
+async function runInlineUnauthorizedCommand(params: {
+  home: string;
+  command: "/status";
+}) {
   const cfg = makeUnauthorizedWhatsAppCfg(params.home);
   const res = await getReplyFromConfig(
     {
@@ -165,8 +176,14 @@ describe("trigger handling", () => {
       for (const testCase of errorCases) {
         runEmbeddedPiAgentMock.mockClear();
         runEmbeddedPiAgentMock.mockRejectedValue(new Error(testCase.error));
-        const errorRes = await getReplyFromConfig(BASE_MESSAGE, {}, makeCfg(home));
-        expect(maybeReplyText(errorRes), testCase.error).toBe(testCase.expected);
+        const errorRes = await getReplyFromConfig(
+          BASE_MESSAGE,
+          {},
+          makeCfg(home),
+        );
+        expect(maybeReplyText(errorRes), testCase.error).toBe(
+          testCase.expected,
+        );
         expect(runEmbeddedPiAgentMock, testCase.error).toHaveBeenCalledOnce();
       }
 
@@ -220,13 +237,21 @@ describe("trigger handling", () => {
       runEmbeddedPiAgentMock.mockClear();
       for (const testCase of thinkCases) {
         mockRunEmbeddedPiAgentOk();
-        const res = await getReplyFromConfig(testCase.request, testCase.options, makeCfg(home));
+        const res = await getReplyFromConfig(
+          testCase.request,
+          testCase.options,
+          makeCfg(home),
+        );
         const text = maybeReplyText(res);
         expect(text, testCase.label).toBe("ok");
         expect(text, testCase.label).not.toMatch(/Thinking level set/i);
-        expect(getRunEmbeddedPiAgentMock(), testCase.label).toHaveBeenCalledOnce();
+        expect(
+          getRunEmbeddedPiAgentMock(),
+          testCase.label,
+        ).toHaveBeenCalledOnce();
         if (testCase.assertPrompt) {
-          const prompt = getRunEmbeddedPiAgentMock().mock.calls[0]?.[0]?.prompt ?? "";
+          const prompt =
+            getRunEmbeddedPiAgentMock().mock.calls[0]?.[0]?.prompt ?? "";
           expect(prompt).toContain("Give me the status");
           expect(prompt).not.toContain("/thinking high");
           expect(prompt).not.toContain("/think high");
@@ -246,7 +271,10 @@ describe("trigger handling", () => {
               },
             };
           },
-          expected: { provider: "anthropic", model: "claude-haiku-4-5-20251001" },
+          expected: {
+            provider: "anthropic",
+            model: "claude-haiku-4-5-20251001",
+          },
         },
         {
           label: "stored-override",
@@ -259,7 +287,10 @@ describe("trigger handling", () => {
         mockEmbeddedOkPayload();
         runEmbeddedPiAgentMock.mockClear();
         const cfg = makeCfg(home);
-        cfg.session = { ...cfg.session, store: join(home, `${testCase.label}.sessions.json`) };
+        cfg.session = {
+          ...cfg.session,
+          store: join(home, `${testCase.label}.sessions.json`),
+        };
         await writeStoredModelOverride(cfg);
         testCase.setup(cfg);
         await getReplyFromConfig(BASE_MESSAGE, { isHeartbeat: true }, cfg);
@@ -300,7 +331,10 @@ describe("trigger handling", () => {
         getCompactEmbeddedPiSessionMock().mockClear();
         mockSuccessfulCompaction();
         const cfg = makeCfg(home);
-        cfg.session = { ...cfg.session, store: join(home, "compact-worker.sessions.json") };
+        cfg.session = {
+          ...cfg.session,
+          store: join(home, "compact-worker.sessions.json"),
+        };
         const res = await getReplyFromConfig(
           {
             Body: "/compact",
@@ -316,14 +350,17 @@ describe("trigger handling", () => {
         const text = maybeReplyText(res);
         expect(text?.startsWith("⚙️ Compacted")).toBe(true);
         expect(getCompactEmbeddedPiSessionMock()).toHaveBeenCalledOnce();
-        expect(getCompactEmbeddedPiSessionMock().mock.calls[0]?.[0]?.sessionFile).toContain(
-          join("agents", "worker1", "sessions"),
-        );
+        expect(
+          getCompactEmbeddedPiSessionMock().mock.calls[0]?.[0]?.sessionFile,
+        ).toContain(join("agents", "worker1", "sessions"));
       }
 
       {
         const cfg = makeCfg(home);
-        cfg.session = { ...cfg.session, store: join(home, "native-stop.sessions.json") };
+        cfg.session = {
+          ...cfg.session,
+          store: join(home, "native-stop.sessions.json"),
+        };
         getAbortEmbeddedPiRunMock().mockClear();
         const storePath = cfg.session?.store;
         if (!storePath) {
@@ -386,7 +423,9 @@ describe("trigger handling", () => {
 
         const text = Array.isArray(res) ? res[0]?.text : res?.text;
         expect(text).toBe("⚙️ Agent was aborted.");
-        expect(getAbortEmbeddedPiRunMock()).toHaveBeenCalledWith(targetSessionId);
+        expect(getAbortEmbeddedPiRunMock()).toHaveBeenCalledWith(
+          targetSessionId,
+        );
         const store = loadSessionStore(storePath);
         expect(store[targetSessionKey]?.abortedLastRun).toBe(true);
         expect(getFollowupQueueDepth(targetSessionKey)).toBe(0);
@@ -394,7 +433,10 @@ describe("trigger handling", () => {
 
       {
         const cfg = makeCfg(home);
-        cfg.session = { ...cfg.session, store: join(home, "native-model.sessions.json") };
+        cfg.session = {
+          ...cfg.session,
+          store: join(home, "native-model.sessions.json"),
+        };
         getRunEmbeddedPiAgentMock().mockClear();
         const storePath = cfg.session?.store;
         if (!storePath) {
@@ -469,7 +511,11 @@ describe("trigger handling", () => {
         );
       }
 
-      await runGreetingPromptForBareNewOrReset({ home, body: "/new", getReplyFromConfig });
+      await runGreetingPromptForBareNewOrReset({
+        home,
+        body: "/new",
+        getReplyFromConfig,
+      });
       await expectResetBlockedForNonOwner({ home });
       await expectInlineCommandHandledAndStripped({
         home,
@@ -487,7 +533,8 @@ describe("trigger handling", () => {
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toBe("ok");
       expect(inlineRunEmbeddedPiAgentMock).toHaveBeenCalled();
-      const prompt = inlineRunEmbeddedPiAgentMock.mock.calls.at(-1)?.[0]?.prompt ?? "";
+      const prompt =
+        inlineRunEmbeddedPiAgentMock.mock.calls.at(-1)?.[0]?.prompt ?? "";
       expect(prompt).toContain("/status");
     });
   });

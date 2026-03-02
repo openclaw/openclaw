@@ -4,7 +4,10 @@ import {
   resolveGatewaySystemdServiceName,
 } from "../daemon/constants.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { cleanStaleGatewayProcessesSync, findGatewayPidsOnPortSync } from "./restart-stale-pids.js";
+import {
+  cleanStaleGatewayProcessesSync,
+  findGatewayPidsOnPortSync,
+} from "./restart-stale-pids.js";
 
 export type RestartAttempt = {
   ok: boolean;
@@ -55,7 +58,10 @@ export type RestartAuditInfo = {
   changedPaths?: string[];
 };
 
-function summarizeChangedPaths(paths: string[] | undefined, maxPaths = 6): string | null {
+function summarizeChangedPaths(
+  paths: string[] | undefined,
+  maxPaths = 6,
+): string | null {
   if (!Array.isArray(paths) || paths.length === 0) {
     return null;
   }
@@ -67,11 +73,18 @@ function summarizeChangedPaths(paths: string[] | undefined, maxPaths = 6): strin
 }
 
 function formatRestartAudit(audit: RestartAuditInfo | undefined): string {
-  const actor = typeof audit?.actor === "string" && audit.actor.trim() ? audit.actor.trim() : null;
+  const actor =
+    typeof audit?.actor === "string" && audit.actor.trim()
+      ? audit.actor.trim()
+      : null;
   const deviceId =
-    typeof audit?.deviceId === "string" && audit.deviceId.trim() ? audit.deviceId.trim() : null;
+    typeof audit?.deviceId === "string" && audit.deviceId.trim()
+      ? audit.deviceId.trim()
+      : null;
   const clientIp =
-    typeof audit?.clientIp === "string" && audit.clientIp.trim() ? audit.clientIp.trim() : null;
+    typeof audit?.clientIp === "string" && audit.clientIp.trim()
+      ? audit.clientIp.trim()
+      : null;
   const changed = summarizeChangedPaths(audit?.changedPaths);
   const fields = [];
   if (actor) {
@@ -138,7 +151,9 @@ function resetSigusr1AuthorizationIfExpired(now = Date.now()) {
   sigusr1AuthorizedUntil = 0;
 }
 
-export function setGatewaySigusr1RestartPolicy(opts?: { allowExternal?: boolean }) {
+export function setGatewaySigusr1RestartPolicy(opts?: {
+  allowExternal?: boolean;
+}) {
   sigusr1ExternalAllowed = opts?.allowExternal === true;
 }
 
@@ -248,7 +263,8 @@ function formatSpawnDetail(result: {
   stderr?: string | Buffer | null;
 }): string {
   const clean = (value: string | Buffer | null | undefined) => {
-    const text = typeof value === "string" ? value : value ? value.toString() : "";
+    const text =
+      typeof value === "string" ? value : value ? value.toString() : "";
     return text.replace(/\s+/g, " ").trim();
   };
   if (result.error) {
@@ -334,7 +350,8 @@ export function triggerOpenClawRestart(): RestartAttempt {
   const label =
     process.env.OPENCLAW_LAUNCHD_LABEL ||
     resolveGatewayLaunchAgentLabel(process.env.OPENCLAW_PROFILE);
-  const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
+  const uid =
+    typeof process.getuid === "function" ? process.getuid() : undefined;
   const target = uid !== undefined ? `gui/${uid}/${label}` : label;
   const args = ["kickstart", "-k", target];
   tried.push(`launchctl ${args.join(" ")}`);
@@ -380,7 +397,10 @@ export function scheduleGatewaySigusr1Restart(opts?: {
       : undefined;
   const mode = process.listenerCount("SIGUSR1") > 0 ? "emit" : "signal";
   const nowMs = Date.now();
-  const cooldownMsApplied = Math.max(0, lastRestartEmittedAt + RESTART_COOLDOWN_MS - nowMs);
+  const cooldownMsApplied = Math.max(
+    0,
+    lastRestartEmittedAt + RESTART_COOLDOWN_MS - nowMs,
+  );
   const requestedDueAt = nowMs + delayMs + cooldownMsApplied;
 
   if (hasUnconsumedRestartSignal()) {

@@ -44,7 +44,9 @@ describe("authorizeGatewayBearerRequestOrReply", () => {
       reason: "token_missing",
     });
 
-    const ok = await authorizeGatewayBearerRequestOrReply(makeAuthorizeParams());
+    const ok = await authorizeGatewayBearerRequestOrReply(
+      makeAuthorizeParams(),
+    );
 
     expect(ok).toBe(false);
     expect(vi.mocked(authorizeHttpGatewayConnect)).toHaveBeenCalledWith(
@@ -57,9 +59,14 @@ describe("authorizeGatewayBearerRequestOrReply", () => {
 
   it("forwards bearer token and returns true on successful auth", async () => {
     vi.mocked(getBearerToken).mockReturnValue("abc");
-    vi.mocked(authorizeHttpGatewayConnect).mockResolvedValue({ ok: true, method: "token" });
+    vi.mocked(authorizeHttpGatewayConnect).mockResolvedValue({
+      ok: true,
+      method: "token",
+    });
 
-    const ok = await authorizeGatewayBearerRequestOrReply(makeAuthorizeParams());
+    const ok = await authorizeGatewayBearerRequestOrReply(
+      makeAuthorizeParams(),
+    );
 
     expect(ok).toBe(true);
     expect(vi.mocked(authorizeHttpGatewayConnect)).toHaveBeenCalledWith(

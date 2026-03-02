@@ -37,7 +37,9 @@ export const FeishuPermSchema = Type.Union([
     token: Type.String({ description: "File token" }),
     type: TokenType,
     member_type: MemberType,
-    member_id: Type.String({ description: "Member ID (email, open_id, user_id, etc.)" }),
+    member_id: Type.String({
+      description: "Member ID (email, open_id, user_id, etc.)",
+    }),
     perm: Permission,
   }),
   Type.Object({

@@ -2,7 +2,11 @@ import { describe, expect, it } from "vitest";
 import type { ProviderPlugin } from "../plugins/types.js";
 import { resolveRequestedLoginProviderOrThrow } from "./models/auth.js";
 
-function makeProvider(params: { id: string; label?: string; aliases?: string[] }): ProviderPlugin {
+function makeProvider(params: {
+  id: string;
+  label?: string;
+  aliases?: string[];
+}): ProviderPlugin {
   return {
     id: params.id,
     label: params.label ?? params.id,
@@ -24,7 +28,10 @@ describe("resolveRequestedLoginProviderOrThrow", () => {
     ] as const;
 
     for (const scenario of scenarios) {
-      const result = resolveRequestedLoginProviderOrThrow(providers, scenario.requested);
+      const result = resolveRequestedLoginProviderOrThrow(
+        providers,
+        scenario.requested,
+      );
       expect(result?.id ?? null).toBe(scenario.expectedId);
     }
   });
@@ -36,7 +43,10 @@ describe("resolveRequestedLoginProviderOrThrow", () => {
     ];
 
     expect(() =>
-      resolveRequestedLoginProviderOrThrow(loadedProviders, "google-antigravity"),
+      resolveRequestedLoginProviderOrThrow(
+        loadedProviders,
+        "google-antigravity",
+      ),
     ).toThrowError(
       'Unknown provider "google-antigravity". Loaded providers: google-gemini-cli, qwen-portal. Verify plugins via `openclaw plugins list --json`.',
     );

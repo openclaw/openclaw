@@ -6,7 +6,9 @@ const SERVICE_PREFIXES = ["imessage:", "sms:", "auto:"] as const;
 const CHAT_TARGET_PREFIX_RE =
   /^(chat_id:|chatid:|chat:|chat_guid:|chatguid:|guid:|chat_identifier:|chatidentifier:|chatident:)/i;
 
-export function normalizeIMessageMessagingTarget(raw: string): string | undefined {
+export function normalizeIMessageMessagingTarget(
+  raw: string,
+): string | undefined {
   const trimmed = trimMessagingTarget(raw);
   if (!trimmed) {
     return undefined;

@@ -34,7 +34,10 @@ export const ensureRecord = (
   return next;
 };
 
-export const mergeMissing = (target: Record<string, unknown>, source: Record<string, unknown>) => {
+export const mergeMissing = (
+  target: Record<string, unknown>,
+  source: Record<string, unknown>,
+) => {
   for (const [key, value] of Object.entries(source)) {
     if (value === undefined || isBlockedObjectKey(key)) {
       continue;
@@ -50,9 +53,13 @@ export const mergeMissing = (target: Record<string, unknown>, source: Record<str
   }
 };
 
-export const mapLegacyAudioTranscription = (value: unknown): Record<string, unknown> | null => {
+export const mapLegacyAudioTranscription = (
+  value: unknown,
+): Record<string, unknown> | null => {
   const transcriber = getRecord(value);
-  const command = Array.isArray(transcriber?.command) ? transcriber?.command : null;
+  const command = Array.isArray(transcriber?.command)
+    ? transcriber?.command
+    : null;
   if (!command || command.length === 0) {
     return null;
   }
@@ -72,9 +79,14 @@ export const mapLegacyAudioTranscription = (value: unknown): Record<string, unkn
 
   const args = command.slice(1);
   const timeoutSeconds =
-    typeof transcriber?.timeoutSeconds === "number" ? transcriber?.timeoutSeconds : undefined;
+    typeof transcriber?.timeoutSeconds === "number"
+      ? transcriber?.timeoutSeconds
+      : undefined;
 
-  const result: Record<string, unknown> = { command: rawExecutable, type: "cli" };
+  const result: Record<string, unknown> = {
+    command: rawExecutable,
+    type: "cli",
+  };
   if (args.length > 0) {
     result.args = args;
   }
@@ -104,7 +116,9 @@ export const resolveDefaultAgentIdFromRaw = (raw: Record<string, unknown>) => {
   }
   const routing = getRecord(raw.routing);
   const routingDefault =
-    typeof routing?.defaultAgentId === "string" ? routing.defaultAgentId.trim() : "";
+    typeof routing?.defaultAgentId === "string"
+      ? routing.defaultAgentId.trim()
+      : "";
   if (routingDefault) {
     return routingDefault;
   }
@@ -118,11 +132,16 @@ export const resolveDefaultAgentIdFromRaw = (raw: Record<string, unknown>) => {
   return "main";
 };
 
-export const ensureAgentEntry = (list: unknown[], id: string): Record<string, unknown> => {
+export const ensureAgentEntry = (
+  list: unknown[],
+  id: string,
+): Record<string, unknown> => {
   const normalized = id.trim();
   const existing = list.find(
     (entry): entry is Record<string, unknown> =>
-      isRecord(entry) && typeof entry.id === "string" && entry.id.trim() === normalized,
+      isRecord(entry) &&
+      typeof entry.id === "string" &&
+      entry.id.trim() === normalized,
   );
   if (existing) {
     return existing;

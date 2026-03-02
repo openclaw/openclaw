@@ -12,7 +12,9 @@ import {
 describe("sanitizeUserFacingText", () => {
   it("strips final tags", () => {
     expect(sanitizeUserFacingText("<final>Hello</final>")).toBe("Hello");
-    expect(sanitizeUserFacingText("Hi <final>there</final>!")).toBe("Hi there!");
+    expect(sanitizeUserFacingText("Hi <final>there</final>!")).toBe(
+      "Hi there!",
+    );
   });
 
   it.each(["202 results found", "400 days left"])(
@@ -23,14 +25,18 @@ describe("sanitizeUserFacingText", () => {
   );
 
   it("sanitizes role ordering errors", () => {
-    const result = sanitizeUserFacingText("400 Incorrect role information", { errorContext: true });
+    const result = sanitizeUserFacingText("400 Incorrect role information", {
+      errorContext: true,
+    });
     expect(result).toContain("Message ordering conflict");
   });
 
   it("sanitizes HTTP status errors with error hints", () => {
-    expect(sanitizeUserFacingText("500 Internal Server Error", { errorContext: true })).toBe(
-      "HTTP 500: Internal Server Error",
-    );
+    expect(
+      sanitizeUserFacingText("500 Internal Server Error", {
+        errorContext: true,
+      }),
+    ).toBe("HTTP 500: Internal Server Error");
   });
 
   it.each([
@@ -64,20 +70,25 @@ describe("sanitizeUserFacingText", () => {
 
   it("rewrites billing error-shaped text with errorContext", () => {
     const text = "billing: please upgrade your plan";
-    expect(sanitizeUserFacingText(text, { errorContext: true })).toContain("billing error");
+    expect(sanitizeUserFacingText(text, { errorContext: true })).toContain(
+      "billing error",
+    );
   });
 
   it("sanitizes raw API error payloads", () => {
-    const raw = '{"type":"error","error":{"message":"Something exploded","type":"server_error"}}';
+    const raw =
+      '{"type":"error","error":{"message":"Something exploded","type":"server_error"}}';
     expect(sanitizeUserFacingText(raw, { errorContext: true })).toBe(
       "LLM error server_error: Something exploded",
     );
   });
 
   it("returns a friendly message for rate limit errors in Error: prefixed payloads", () => {
-    expect(sanitizeUserFacingText("Error: 429 Rate limit exceeded", { errorContext: true })).toBe(
-      "⚠️ API rate limit reached. Please try again later.",
-    );
+    expect(
+      sanitizeUserFacingText("Error: 429 Rate limit exceeded", {
+        errorContext: true,
+      }),
+    ).toBe("⚠️ API rate limit reached. Please try again later.");
   });
 
   it.each([
@@ -108,9 +119,12 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText("Line 1\nLine 2")).toBe("Line 1\nLine 2");
   });
 
-  it.each(["\n\n", "  \n  "])("returns empty for whitespace-only input: %j", (input) => {
-    expect(sanitizeUserFacingText(input)).toBe("");
-  });
+  it.each(["\n\n", "  \n  "])(
+    "returns empty for whitespace-only input: %j",
+    (input) => {
+      expect(sanitizeUserFacingText(input)).toBe("");
+    },
+  );
 });
 
 describe("stripThoughtSignatures", () => {
@@ -187,10 +201,12 @@ describe("sanitizeToolCallId", () => {
   describe("strict mode (alphanumeric only)", () => {
     it("strips all non-alphanumeric characters", () => {
       expect(sanitizeToolCallId("call_abc-123", "strict")).toBe("callabc123");
-      expect(sanitizeToolCallId("call_abc|item:456", "strict")).toBe("callabcitem456");
-      expect(sanitizeToolCallId("whatsapp_login_1768799841527_1", "strict")).toBe(
-        "whatsapplogin17687998415271",
+      expect(sanitizeToolCallId("call_abc|item:456", "strict")).toBe(
+        "callabcitem456",
       );
+      expect(
+        sanitizeToolCallId("whatsapp_login_1768799841527_1", "strict"),
+      ).toBe("whatsapplogin17687998415271");
     });
   });
 
@@ -231,7 +247,10 @@ describe("downgradeOpenAIReasoningBlocks", () => {
           {
             type: "thinking",
             thinking: "internal reasoning",
-            thinkingSignature: JSON.stringify({ id: "rs_123", type: "reasoning" }),
+            thinkingSignature: JSON.stringify({
+              id: "rs_123",
+              type: "reasoning",
+            }),
           },
           { type: "text", text: "answer" },
         ],
@@ -249,7 +268,10 @@ describe("downgradeOpenAIReasoningBlocks", () => {
         content: [
           {
             type: "thinking",
-            thinkingSignature: JSON.stringify({ id: "rs_abc", type: "reasoning" }),
+            thinkingSignature: JSON.stringify({
+              id: "rs_abc",
+              type: "reasoning",
+            }),
           },
         ],
       },
@@ -304,7 +326,10 @@ describe("downgradeOpenAIReasoningBlocks", () => {
         content: [
           {
             type: "thinking",
-            thinkingSignature: JSON.stringify({ id: "rs_orphan", type: "reasoning" }),
+            thinkingSignature: JSON.stringify({
+              id: "rs_orphan",
+              type: "reasoning",
+            }),
           },
         ],
       },
@@ -372,7 +397,9 @@ describe("downgradeOpenAIFunctionCallReasoningPairs", () => {
     ];
 
     // oxlint-disable-next-line typescript/no-explicit-any
-    expect(downgradeOpenAIFunctionCallReasoningPairs(input as any)).toEqual(input);
+    expect(downgradeOpenAIFunctionCallReasoningPairs(input as any)).toEqual(
+      input,
+    );
   });
 
   it("only rewrites tool results paired to the downgraded assistant turn", () => {
@@ -447,7 +474,10 @@ describe("isMessagingToolDuplicate", () => {
       sentTexts: ["Hello, this is a test message!"],
       expected: false,
     },
-  ])("returns $expected for duplicate check", ({ input, sentTexts, expected }) => {
-    expect(isMessagingToolDuplicate(input, sentTexts)).toBe(expected);
-  });
+  ])(
+    "returns $expected for duplicate check",
+    ({ input, sentTexts, expected }) => {
+      expect(isMessagingToolDuplicate(input, sentTexts)).toBe(expected);
+    },
+  );
 });

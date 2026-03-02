@@ -113,7 +113,9 @@ Add new functions:
 ```typescript
 export const KILOCODE_BASE_URL = "https://api.kilo.ai/api/gateway/";
 
-export function applyKilocodeProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+export function applyKilocodeProviderConfig(
+  cfg: OpenClawConfig,
+): OpenClawConfig {
   const models = { ...cfg.agents?.defaults?.models };
   models[KILOCODE_DEFAULT_MODEL_REF] = {
     ...models[KILOCODE_DEFAULT_MODEL_REF],
@@ -122,11 +124,10 @@ export function applyKilocodeProviderConfig(cfg: OpenClawConfig): OpenClawConfig
 
   const providers = { ...cfg.models?.providers };
   const existingProvider = providers.kilocode;
-  const { apiKey: existingApiKey, ...existingProviderRest } = (existingProvider ?? {}) as Record<
-    string,
-    unknown
-  > as { apiKey?: string };
-  const resolvedApiKey = typeof existingApiKey === "string" ? existingApiKey : undefined;
+  const { apiKey: existingApiKey, ...existingProviderRest } =
+    (existingProvider ?? {}) as Record<string, unknown> as { apiKey?: string };
+  const resolvedApiKey =
+    typeof existingApiKey === "string" ? existingApiKey : undefined;
   const normalizedApiKey = resolvedApiKey?.trim();
 
   providers.kilocode = {
@@ -162,9 +163,11 @@ export function applyKilocodeConfig(cfg: OpenClawConfig): OpenClawConfig {
       defaults: {
         ...next.agents?.defaults,
         model: {
-          ...(existingModel && "fallbacks" in (existingModel as Record<string, unknown>)
+          ...(existingModel &&
+          "fallbacks" in (existingModel as Record<string, unknown>)
             ? {
-                fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks,
+                fallbacks: (existingModel as { fallbacks?: string[] })
+                  .fallbacks,
               }
             : undefined),
           primary: KILOCODE_DEFAULT_MODEL_REF,
@@ -269,8 +272,12 @@ if (authChoice === "kilocode-api-key") {
     store,
     provider: "kilocode",
   });
-  const existingProfileId = profileOrder.find((profileId) => Boolean(store.profiles[profileId]));
-  const existingCred = existingProfileId ? store.profiles[existingProfileId] : undefined;
+  const existingProfileId = profileOrder.find((profileId) =>
+    Boolean(store.profiles[profileId]),
+  );
+  const existingCred = existingProfileId
+    ? store.profiles[existingProfileId]
+    : undefined;
   let profileId = "kilocode:default";
   let mode: "api_key" | "oauth" | "token" = "api_key";
   let hasCredential = false;
@@ -278,12 +285,23 @@ if (authChoice === "kilocode-api-key") {
   if (existingProfileId && existingCred?.type) {
     profileId = existingProfileId;
     mode =
-      existingCred.type === "oauth" ? "oauth" : existingCred.type === "token" ? "token" : "api_key";
+      existingCred.type === "oauth"
+        ? "oauth"
+        : existingCred.type === "token"
+          ? "token"
+          : "api_key";
     hasCredential = true;
   }
 
-  if (!hasCredential && params.opts?.token && params.opts?.tokenProvider === "kilocode") {
-    await setKilocodeApiKey(normalizeApiKeyInput(params.opts.token), params.agentDir);
+  if (
+    !hasCredential &&
+    params.opts?.token &&
+    params.opts?.tokenProvider === "kilocode"
+  ) {
+    await setKilocodeApiKey(
+      normalizeApiKeyInput(params.opts.token),
+      params.agentDir,
+    );
     hasCredential = true;
   }
 
@@ -421,13 +439,23 @@ export {
 Add Kilo Gateway support for Anthropic models:
 
 ```typescript
-export function isCacheTtlEligibleProvider(provider: string, modelId: string): boolean {
+export function isCacheTtlEligibleProvider(
+  provider: string,
+  modelId: string,
+): boolean {
   const normalizedProvider = provider.toLowerCase();
   const normalizedModelId = modelId.toLowerCase();
   if (normalizedProvider === "anthropic") return true;
-  if (normalizedProvider === "openrouter" && normalizedModelId.startsWith("anthropic/"))
+  if (
+    normalizedProvider === "openrouter" &&
+    normalizedModelId.startsWith("anthropic/")
+  )
     return true;
-  if (normalizedProvider === "kilocode" && normalizedModelId.startsWith("anthropic/")) return true;
+  if (
+    normalizedProvider === "kilocode" &&
+    normalizedModelId.startsWith("anthropic/")
+  )
+    return true;
   return false;
 }
 ```
@@ -437,11 +465,16 @@ export function isCacheTtlEligibleProvider(provider: string, modelId: string): b
 Add Kilo Gateway handling (similar to OpenRouter):
 
 ```typescript
-const isKilocodeGemini = provider === "kilocode" && modelId.toLowerCase().includes("gemini");
+const isKilocodeGemini =
+  provider === "kilocode" && modelId.toLowerCase().includes("gemini");
 
 // Include in needsNonImageSanitize check
 const needsNonImageSanitize =
-  isGoogle || isAnthropic || isMistral || isOpenRouterGemini || isKilocodeGemini;
+  isGoogle ||
+  isAnthropic ||
+  isMistral ||
+  isOpenRouterGemini ||
+  isKilocodeGemini;
 ```
 
 ## Configuration Structure

@@ -1,5 +1,8 @@
 import { describe, expect, test } from "vitest";
-import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "./protocol/client-info.js";
+import {
+  GATEWAY_CLIENT_IDS,
+  GATEWAY_CLIENT_MODES,
+} from "./protocol/client-info.js";
 import { validateConnectParams } from "./protocol/index.js";
 
 function makeConnectParams(clientId: string) {

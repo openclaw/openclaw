@@ -43,7 +43,9 @@ export function parseJsonLines(value: string): AcpxJsonObject[] {
 }
 
 function asOptionalFiniteNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  return typeof value === "number" && Number.isFinite(value)
+    ? value
+    : undefined;
 }
 
 function resolveStructuredPromptPayload(parsed: Record<string, unknown>): {
@@ -56,7 +58,9 @@ function resolveStructuredPromptPayload(parsed: Record<string, unknown>): {
     const params = parsed.params;
     if (isRecord(params) && isRecord(params.update)) {
       const update = params.update;
-      const tag = asOptionalString(update.sessionUpdate) as AcpSessionUpdateTag | undefined;
+      const tag = asOptionalString(update.sessionUpdate) as
+        | AcpSessionUpdateTag
+        | undefined;
       return {
         type: tag ?? "",
         payload: update,
@@ -65,7 +69,9 @@ function resolveStructuredPromptPayload(parsed: Record<string, unknown>): {
     }
   }
 
-  const sessionUpdate = asOptionalString(parsed.sessionUpdate) as AcpSessionUpdateTag | undefined;
+  const sessionUpdate = asOptionalString(parsed.sessionUpdate) as
+    | AcpSessionUpdateTag
+    | undefined;
   if (sessionUpdate) {
     return {
       type: sessionUpdate,
@@ -89,7 +95,9 @@ function resolveStatusTextForTag(params: {
 }): string | null {
   const { tag, payload } = params;
   if (tag === "available_commands_update") {
-    const commands = Array.isArray(payload.availableCommands) ? payload.availableCommands : [];
+    const commands = Array.isArray(payload.availableCommands)
+      ? payload.availableCommands
+      : [];
     return commands.length > 0
       ? `available commands updated (${commands.length})`
       : "available commands updated";
@@ -102,7 +110,8 @@ function resolveStatusTextForTag(params: {
     return mode ? `mode updated: ${mode}` : "mode updated";
   }
   if (tag === "config_option_update") {
-    const id = asTrimmedString(payload.id) || asTrimmedString(payload.configOptionId);
+    const id =
+      asTrimmedString(payload.id) || asTrimmedString(payload.configOptionId);
     const value =
       asTrimmedString(payload.currentValue) ||
       asTrimmedString(payload.value) ||
@@ -117,12 +126,16 @@ function resolveStatusTextForTag(params: {
   }
   if (tag === "session_info_update") {
     return (
-      asTrimmedString(payload.summary) || asTrimmedString(payload.message) || "session updated"
+      asTrimmedString(payload.summary) ||
+      asTrimmedString(payload.message) ||
+      "session updated"
     );
   }
   if (tag === "plan") {
     const entries = Array.isArray(payload.entries) ? payload.entries : [];
-    const first = entries.find((entry) => isRecord(entry)) as Record<string, unknown> | undefined;
+    const first = entries.find((entry) => isRecord(entry)) as
+      | Record<string, unknown>
+      | undefined;
     const content = asTrimmedString(first?.content);
     return content ? `plan: ${content}` : null;
   }
@@ -254,7 +267,9 @@ export function parsePromptEventLine(line: string): AcpRuntimeEvent | null {
       const used = asOptionalFiniteNumber(payload.used);
       const size = asOptionalFiniteNumber(payload.size);
       const text =
-        used != null && size != null ? `usage updated: ${used}/${size}` : "usage updated";
+        used != null && size != null
+          ? `usage updated: ${used}/${size}`
+          : "usage updated";
       return {
         type: "status",
         text,

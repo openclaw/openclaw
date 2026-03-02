@@ -10,7 +10,10 @@ export function buildChannelAccountSnapshot(params: {
   enabled: boolean;
   configured: boolean;
 }): ChannelAccountSnapshot {
-  const described = params.plugin.config.describeAccount?.(params.account, params.cfg);
+  const described = params.plugin.config.describeAccount?.(
+    params.account,
+    params.cfg,
+  );
   return {
     enabled: params.enabled,
     configured: params.configured,

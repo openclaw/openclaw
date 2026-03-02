@@ -35,13 +35,15 @@ function parseGoogleToken(apiKey: string): { token: string } | null {
 
 function resolveZaiApiKey(): string | undefined {
   const envDirect =
-    normalizeSecretInput(process.env.ZAI_API_KEY) || normalizeSecretInput(process.env.Z_AI_API_KEY);
+    normalizeSecretInput(process.env.ZAI_API_KEY) ||
+    normalizeSecretInput(process.env.Z_AI_API_KEY);
   if (envDirect) {
     return envDirect;
   }
 
   const cfg = loadConfig();
-  const key = getCustomProviderApiKey(cfg, "zai") || getCustomProviderApiKey(cfg, "z-ai");
+  const key =
+    getCustomProviderApiKey(cfg, "zai") || getCustomProviderApiKey(cfg, "z-ai");
   if (key) {
     return key;
   }
@@ -195,13 +197,17 @@ function resolveOAuthProviders(agentDir?: string): UsageProviderId[] {
     return cred?.type === "oauth" || cred?.type === "token";
   };
   return providers.filter((provider) => {
-    const profiles = listProfilesForProvider(store, provider).filter(isOAuthLikeCredential);
+    const profiles = listProfilesForProvider(store, provider).filter(
+      isOAuthLikeCredential,
+    );
     if (profiles.length > 0) {
       return true;
     }
     const normalized = normalizeProviderId(provider);
     const configuredProfiles = Object.entries(cfg.auth?.profiles ?? {})
-      .filter(([, profile]) => normalizeProviderId(profile.provider) === normalized)
+      .filter(
+        ([, profile]) => normalizeProviderId(profile.provider) === normalized,
+      )
       .map(([id]) => id)
       .filter(isOAuthLikeCredential);
     return configuredProfiles.length > 0;

@@ -1,4 +1,7 @@
-import type { AcpRuntime, OpenClawPluginServiceContext } from "openclaw/plugin-sdk";
+import type {
+  AcpRuntime,
+  OpenClawPluginServiceContext,
+} from "openclaw/plugin-sdk";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AcpRuntimeError } from "../../../src/acp/runtime/errors.js";
 import {
@@ -105,7 +108,9 @@ describe("createAcpxRuntimeService", () => {
 
     await service.start(context);
 
-    expect(() => requireAcpRuntimeBackend("acpx")).toThrowError(AcpRuntimeError);
+    expect(() => requireAcpRuntimeBackend("acpx")).toThrowError(
+      AcpRuntimeError,
+    );
     try {
       requireAcpRuntimeBackend("acpx");
       throw new Error("expected ACP backend lookup to fail");
@@ -166,7 +171,9 @@ describe("createAcpxRuntimeService", () => {
 
     const startResult = await Promise.race([
       Promise.resolve(service.start(context)).then(() => "started"),
-      new Promise<string>((resolve) => setTimeout(() => resolve("timed_out"), 100)),
+      new Promise<string>((resolve) =>
+        setTimeout(() => resolve("timed_out"), 100),
+      ),
     ]);
 
     expect(startResult).toBe("started");

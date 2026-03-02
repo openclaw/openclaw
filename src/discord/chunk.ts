@@ -1,4 +1,7 @@
-import { chunkMarkdownTextWithMode, type ChunkMode } from "../auto-reply/chunk.js";
+import {
+  chunkMarkdownTextWithMode,
+  type ChunkMode,
+} from "../auto-reply/chunk.js";
 
 export type ChunkDiscordTextOpts = {
   /** Max characters per Discord message. Default: 2000. */
@@ -105,7 +108,10 @@ function splitLongLine(
  * Chunks outbound Discord text by both character count and (soft) line count,
  * while keeping fenced code blocks balanced across chunks.
  */
-export function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}): string[] {
+export function chunkDiscordText(
+  text: string,
+  opts: ChunkDiscordTextOpts = {},
+): string[] {
   const maxChars = Math.max(1, Math.floor(opts.maxChars ?? DEFAULT_MAX_CHARS));
   const maxLines = Math.max(1, Math.floor(opts.maxLines ?? DEFAULT_MAX_LINES));
 
@@ -157,7 +163,9 @@ export function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}):
       }
     }
 
-    const reserveChars = nextOpenFence ? closeFenceLine(nextOpenFence).length + 1 : 0;
+    const reserveChars = nextOpenFence
+      ? closeFenceLine(nextOpenFence).length + 1
+      : 0;
     const reserveLines = nextOpenFence ? 1 : 0;
     const effectiveMaxChars = maxChars - reserveChars;
     const effectiveMaxLines = maxLines - reserveLines;
@@ -172,7 +180,11 @@ export function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}):
     for (let segIndex = 0; segIndex < segments.length; segIndex++) {
       const segment = segments[segIndex];
       const isLineContinuation = segIndex > 0;
-      const delimiter = isLineContinuation ? "" : current.length > 0 ? "\n" : "";
+      const delimiter = isLineContinuation
+        ? ""
+        : current.length > 0
+          ? "\n"
+          : "";
       const addition = `${delimiter}${segment}`;
       const nextLen = current.length + addition.length;
       const nextLines = currentLines + (isLineContinuation ? 0 : 1);

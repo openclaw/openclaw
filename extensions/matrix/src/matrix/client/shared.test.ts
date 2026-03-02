@@ -61,7 +61,10 @@ describe("resolveSharedMatrixClient startup behavior", () => {
       rejectFirstStart = reject;
     });
     const secondStart = new Promise<void>(() => {});
-    const startMock = vi.fn().mockReturnValueOnce(firstStart).mockReturnValueOnce(secondStart);
+    const startMock = vi
+      .fn()
+      .mockReturnValueOnce(firstStart)
+      .mockReturnValueOnce(secondStart);
     const client = createMockClient(startMock);
     createMatrixClientMock.mockResolvedValue(client);
 

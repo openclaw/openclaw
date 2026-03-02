@@ -7,7 +7,8 @@ const mockUnbind = vi.fn();
 
 // Event handler storage
 let connectHandler: (() => void) | null = null;
-let disconnectHandler: ((manually: boolean, reason?: Error) => void) | null = null;
+let disconnectHandler: ((manually: boolean, reason?: Error) => void) | null =
+  null;
 
 // Event listener mocks that store handlers and return unbind function
 const mockOnConnect = vi.fn((handler: () => void) => {
@@ -15,10 +16,12 @@ const mockOnConnect = vi.fn((handler: () => void) => {
   return { unbind: mockUnbind };
 });
 
-const mockOnDisconnect = vi.fn((handler: (manually: boolean, reason?: Error) => void) => {
-  disconnectHandler = handler;
-  return { unbind: mockUnbind };
-});
+const mockOnDisconnect = vi.fn(
+  (handler: (manually: boolean, reason?: Error) => void) => {
+    disconnectHandler = handler;
+    return { unbind: mockUnbind };
+  },
+);
 
 const mockOnAuthenticationFailure = vi.fn((_handler: () => void) => {
   return { unbind: mockUnbind };

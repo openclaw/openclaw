@@ -204,7 +204,9 @@ describe("createSynologyChatPlugin", () => {
         allowInsecureSsl: false,
       };
       const warnings = plugin.security.collectWarnings({ account });
-      expect(warnings.some((w: string) => w.includes("empty allowedUserIds"))).toBe(true);
+      expect(
+        warnings.some((w: string) => w.includes("empty allowedUserIds")),
+      ).toBe(true);
     });
 
     it("returns no warnings for fully configured account", () => {
@@ -238,8 +240,12 @@ describe("createSynologyChatPlugin", () => {
     it("targetResolver.looksLikeId matches numeric IDs", () => {
       const plugin = createSynologyChatPlugin();
       expect(plugin.messaging.targetResolver.looksLikeId("12345")).toBe(true);
-      expect(plugin.messaging.targetResolver.looksLikeId("synology-chat:99")).toBe(true);
-      expect(plugin.messaging.targetResolver.looksLikeId("notanumber")).toBe(false);
+      expect(
+        plugin.messaging.targetResolver.looksLikeId("synology-chat:99"),
+      ).toBe(true);
+      expect(plugin.messaging.targetResolver.looksLikeId("notanumber")).toBe(
+        false,
+      );
       expect(plugin.messaging.targetResolver.looksLikeId("")).toBe(false);
     });
   });
@@ -259,7 +265,9 @@ describe("createSynologyChatPlugin", () => {
       const hints = plugin.agentPrompt.messageToolHints();
       expect(Array.isArray(hints)).toBe(true);
       expect(hints.length).toBeGreaterThan(5);
-      expect(hints.some((h: string) => h.includes("<URL|display text>"))).toBe(true);
+      expect(hints.some((h: string) => h.includes("<URL|display text>"))).toBe(
+        true,
+      );
     });
   });
 
@@ -385,7 +393,9 @@ describe("createSynologyChatPlugin", () => {
 
       const result = await plugin.gateway.startAccount(ctx);
       expect(typeof result.stop).toBe("function");
-      expect(ctx.log.warn).toHaveBeenCalledWith(expect.stringContaining("empty allowedUserIds"));
+      expect(ctx.log.warn).toHaveBeenCalledWith(
+        expect.stringContaining("empty allowedUserIds"),
+      );
       expect(registerMock).not.toHaveBeenCalled();
     });
 
@@ -393,7 +403,9 @@ describe("createSynologyChatPlugin", () => {
       const unregisterFirst = vi.fn();
       const unregisterSecond = vi.fn();
       const registerMock = vi.mocked(registerPluginHttpRoute);
-      registerMock.mockReturnValueOnce(unregisterFirst).mockReturnValueOnce(unregisterSecond);
+      registerMock
+        .mockReturnValueOnce(unregisterFirst)
+        .mockReturnValueOnce(unregisterSecond);
 
       const plugin = createSynologyChatPlugin();
       const ctx = {

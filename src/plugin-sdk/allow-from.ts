@@ -5,7 +5,9 @@ export function formatAllowFromLowercase(params: {
   return params.allowFrom
     .map((entry) => String(entry).trim())
     .filter(Boolean)
-    .map((entry) => (params.stripPrefixRe ? entry.replace(params.stripPrefixRe, "") : entry))
+    .map((entry) =>
+      params.stripPrefixRe ? entry.replace(params.stripPrefixRe, "") : entry,
+    )
     .map((entry) => entry.toLowerCase());
 }
 
@@ -34,7 +36,9 @@ type ParsedChatAllowTarget =
   | { kind: "chat_identifier"; chatIdentifier: string }
   | { kind: "handle"; handle: string };
 
-export function isAllowedParsedChatSender<TParsed extends ParsedChatAllowTarget>(params: {
+export function isAllowedParsedChatSender<
+  TParsed extends ParsedChatAllowTarget,
+>(params: {
   allowFrom: Array<string | number>;
   sender: string;
   chatId?: number | null;

@@ -33,7 +33,10 @@ function getPersistedMessages(sm: SessionManager): AgentMessage[] {
     .map((e) => (e as { message: AgentMessage }).message);
 }
 
-function expectPersistedRoles(sm: SessionManager, expectedRoles: AgentMessage["role"][]) {
+function expectPersistedRoles(
+  sm: SessionManager,
+  expectedRoles: AgentMessage["role"][],
+) {
   const messages = getPersistedMessages(sm);
   expect(messages.map((message) => message.role)).toEqual(expectedRoles);
   return messages;
@@ -44,7 +47,9 @@ function getToolResultText(messages: AgentMessage[]): string {
     content: Array<{ type: string; text: string }>;
   };
   expect(toolResult).toBeDefined();
-  const textBlock = toolResult.content.find((b: { type: string }) => b.type === "text") as {
+  const textBlock = toolResult.content.find(
+    (b: { type: string }) => b.type === "text",
+  ) as {
     text: string;
   };
   return textBlock.text;
@@ -64,7 +69,11 @@ describe("installSessionToolResultGuard", () => {
       }),
     );
 
-    const messages = expectPersistedRoles(sm, ["assistant", "toolResult", "assistant"]);
+    const messages = expectPersistedRoles(sm, [
+      "assistant",
+      "toolResult",
+      "assistant",
+    ]);
     const synthetic = messages[1] as {
       toolCallId?: string;
       isError?: boolean;
@@ -117,7 +126,10 @@ describe("installSessionToolResultGuard", () => {
       }),
     );
 
-    const messages = expectPersistedRoles(sm, ["assistant", "toolResult"]) as Array<{
+    const messages = expectPersistedRoles(sm, [
+      "assistant",
+      "toolResult",
+    ]) as Array<{
       role: string;
       toolName?: string;
     }>;
@@ -243,7 +255,9 @@ describe("installSessionToolResultGuard", () => {
     sm.appendMessage(
       asAppendMessage({
         role: "assistant",
-        content: [{ type: "toolCall", id: "call_1", name: "write", arguments: {} }],
+        content: [
+          { type: "toolCall", id: "call_1", name: "write", arguments: {} },
+        ],
       }),
     );
 
@@ -257,7 +271,9 @@ describe("installSessionToolResultGuard", () => {
     sm.appendMessage(
       asAppendMessage({
         role: "assistant",
-        content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
+        content: [
+          { type: "toolCall", id: "call_1", name: "read", arguments: {} },
+        ],
       }),
     );
 
@@ -357,7 +373,10 @@ describe("installSessionToolResultGuard", () => {
         (message as { role?: string }).role === "user"
           ? ({
               ...(message as unknown as Record<string, unknown>),
-              provenance: { kind: "inter_session", sourceTool: "sessions_send" },
+              provenance: {
+                kind: "inter_session",
+                sourceTool: "sessions_send",
+              },
             } as unknown as AgentMessage)
           : message,
     });
@@ -391,7 +410,9 @@ describe("installSessionToolResultGuard", () => {
     sm.appendMessage(
       asAppendMessage({
         role: "assistant",
-        content: [{ type: "toolCall", id: "call_aborted", name: "read", arguments: {} }],
+        content: [
+          { type: "toolCall", id: "call_aborted", name: "read", arguments: {} },
+        ],
         stopReason: "aborted",
       }),
     );
@@ -420,7 +441,9 @@ describe("installSessionToolResultGuard", () => {
     sm.appendMessage(
       asAppendMessage({
         role: "assistant",
-        content: [{ type: "toolCall", id: "call_error", name: "exec", arguments: {} }],
+        content: [
+          { type: "toolCall", id: "call_error", name: "exec", arguments: {} },
+        ],
         stopReason: "error",
       }),
     );

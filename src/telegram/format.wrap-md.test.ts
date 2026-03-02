@@ -10,12 +10,18 @@ describe("wrapFileReferencesInHtml", () => {
   it("wraps supported file references and paths", () => {
     const cases = [
       ["Check README.md", "Check <code>README.md</code>"],
-      ["See HEARTBEAT.md for status", "See <code>HEARTBEAT.md</code> for status"],
+      [
+        "See HEARTBEAT.md for status",
+        "See <code>HEARTBEAT.md</code> for status",
+      ],
       ["Check main.go", "Check <code>main.go</code>"],
       ["Run script.py", "Run <code>script.py</code>"],
       ["Check backup.pl", "Check <code>backup.pl</code>"],
       ["Run backup.sh", "Run <code>backup.sh</code>"],
-      ["Look at squad/friday/HEARTBEAT.md", "Look at <code>squad/friday/HEARTBEAT.md</code>"],
+      [
+        "Look at squad/friday/HEARTBEAT.md",
+        "Look at <code>squad/friday/HEARTBEAT.md</code>",
+      ],
     ] as const;
     for (const [input, expected] of cases) {
       expect(wrapFileReferencesInHtml(input), input).toContain(expected);
@@ -37,7 +43,9 @@ describe("wrapFileReferencesInHtml", () => {
   });
 
   it("handles mixed content correctly", () => {
-    const result = wrapFileReferencesInHtml("Check README.md and CONTRIBUTING.md");
+    const result = wrapFileReferencesInHtml(
+      "Check README.md and CONTRIBUTING.md",
+    );
     expect(result).toContain("<code>README.md</code>");
     expect(result).toContain("<code>CONTRIBUTING.md</code>");
   });
@@ -70,7 +78,8 @@ describe("wrapFileReferencesInHtml", () => {
         expected: "<code>README.md</code>",
       },
       {
-        input: '<a href="http://squad/friday/HEARTBEAT.md">squad/friday/HEARTBEAT.md</a>',
+        input:
+          '<a href="http://squad/friday/HEARTBEAT.md">squad/friday/HEARTBEAT.md</a>',
         expected: "<code>squad/friday/HEARTBEAT.md</code>",
       },
     ] as const;
@@ -104,7 +113,9 @@ describe("renderTelegramHtmlText - file reference wrapping", () => {
 
   it("does not wrap in HTML mode (trusts caller markup)", () => {
     // textMode: "html" should pass through unchanged - caller owns the markup
-    const result = renderTelegramHtmlText("Check README.md", { textMode: "html" });
+    const result = renderTelegramHtmlText("Check README.md", {
+      textMode: "html",
+    });
     expect(result).toBe("Check README.md");
     expect(result).not.toContain("<code>");
   });
@@ -124,7 +135,9 @@ describe("markdownToTelegramHtml - file reference wrapping", () => {
   });
 
   it("can skip wrapping when requested", () => {
-    const result = markdownToTelegramHtml("Check README.md", { wrapFileRefs: false });
+    const result = markdownToTelegramHtml("Check README.md", {
+      wrapFileRefs: false,
+    });
     expect(result).not.toContain("<code>README.md</code>");
   });
 
@@ -145,7 +158,9 @@ describe("markdownToTelegramHtml - file reference wrapping", () => {
   });
 
   it("wraps file ref after real URL in same message", () => {
-    const result = markdownToTelegramHtml("Visit https://example.com and README.md");
+    const result = markdownToTelegramHtml(
+      "Visit https://example.com and README.md",
+    );
     expect(result).toContain('<a href="https://example.com">');
     expect(result).toContain("<code>README.md</code>");
   });
@@ -153,7 +168,10 @@ describe("markdownToTelegramHtml - file reference wrapping", () => {
 
 describe("markdownToTelegramChunks - file reference wrapping", () => {
   it("wraps file references in chunked output", () => {
-    const chunks = markdownToTelegramChunks("Check README.md and backup.sh", 4096);
+    const chunks = markdownToTelegramChunks(
+      "Check README.md and backup.sh",
+      4096,
+    );
     expect(chunks.length).toBeGreaterThan(0);
     expect(chunks[0].html).toContain("<code>README.md</code>");
     expect(chunks[0].html).toContain("<code>backup.sh</code>");
@@ -248,7 +266,11 @@ describe("edge cases", () => {
       {
         name: "non-target extensions stay plain text",
         input: "image.png and style.css and script.js",
-        notContains: ["<code>image.png</code>", "<code>style.css</code>", "<code>script.js</code>"],
+        notContains: [
+          "<code>image.png</code>",
+          "<code>style.css</code>",
+          "<code>script.js</code>",
+        ],
       },
     ] as const;
     for (const testCase of cases) {
@@ -329,7 +351,9 @@ describe("edge cases", () => {
     // Nested <code> inside <pre> - should not wrap inner content
     const input = "<pre><code>README.md</code></pre> then script.py";
     const result = wrapFileReferencesInHtml(input);
-    expect(result).toBe("<pre><code>README.md</code></pre> then <code>script.py</code>");
+    expect(result).toBe(
+      "<pre><code>README.md</code></pre> then <code>script.py</code>",
+    );
   });
 
   it("handles multiple anchor tags in sequence", () => {
@@ -405,7 +429,8 @@ describe("edge cases", () => {
   it("handles multiple orphaned TLDs with HTML tags (offset stability)", () => {
     // This tests the bug where offset is relative to pre-replacement string
     // but we were checking against the mutating result string
-    const input = '<a href="http://A.md">link</a> B.md <span title="C.sh">text</span> D.py';
+    const input =
+      '<a href="http://A.md">link</a> B.md <span title="C.sh">text</span> D.py';
     const result = wrapFileReferencesInHtml(input);
     // A.md in href should NOT be wrapped (inside attribute)
     // B.md outside tags SHOULD be wrapped

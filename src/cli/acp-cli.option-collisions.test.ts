@@ -62,7 +62,9 @@ describe("acp cli option collisions", () => {
 
   function expectCliError(pattern: RegExp) {
     expect(serveAcpGateway).not.toHaveBeenCalled();
-    expect(defaultRuntime.error).toHaveBeenCalledWith(expect.stringMatching(pattern));
+    expect(defaultRuntime.error).toHaveBeenCalledWith(
+      expect.stringMatching(pattern),
+    );
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
   }
 
@@ -91,14 +93,17 @@ describe("acp cli option collisions", () => {
   });
 
   it("loads gateway token/password from files", async () => {
-    await withSecretFiles({ token: "tok_file\n", password: "pw_file\n" }, async (files) => {
-      await parseAcp([
-        "--token-file",
-        files.tokenFile ?? "",
-        "--password-file",
-        files.passwordFile ?? "",
-      ]);
-    });
+    await withSecretFiles(
+      { token: "tok_file\n", password: "pw_file\n" },
+      async (files) => {
+        await parseAcp([
+          "--token-file",
+          files.tokenFile ?? "",
+          "--password-file",
+          files.passwordFile ?? "",
+        ]);
+      },
+    );
 
     expect(serveAcpGateway).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -110,7 +115,12 @@ describe("acp cli option collisions", () => {
 
   it("rejects mixed secret flags and file flags", async () => {
     await withSecretFiles({ token: "tok_file\n" }, async (files) => {
-      await parseAcp(["--token", "tok_inline", "--token-file", files.tokenFile ?? ""]);
+      await parseAcp([
+        "--token",
+        "tok_inline",
+        "--token-file",
+        files.tokenFile ?? "",
+      ]);
     });
 
     expectCliError(/Use either --token or --token-file/);
@@ -118,7 +128,12 @@ describe("acp cli option collisions", () => {
 
   it("rejects mixed password flags and file flags", async () => {
     await withSecretFiles({ password: "pw_file\n" }, async (files) => {
-      await parseAcp(["--password", "pw_inline", "--password-file", files.passwordFile ?? ""]);
+      await parseAcp([
+        "--password",
+        "pw_inline",
+        "--password-file",
+        files.passwordFile ?? "",
+      ]);
     });
 
     expectCliError(/Use either --password or --password-file/);

@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { normalizeIMessageMessagingTarget } from "./normalize/imessage.js";
-import { looksLikeSignalTargetId, normalizeSignalMessagingTarget } from "./normalize/signal.js";
+import {
+  looksLikeSignalTargetId,
+  normalizeSignalMessagingTarget,
+} from "./normalize/signal.js";
 import { normalizeSignalAccountInput } from "./onboarding/signal.js";
 import { telegramOutbound } from "./outbound/telegram.js";
 import { whatsappOutbound } from "./outbound/whatsapp.js";
@@ -15,44 +18,66 @@ function expectWhatsAppTargetResolutionError(result: unknown) {
 
 describe("imessage target normalization", () => {
   it("preserves service prefixes for handles", () => {
-    expect(normalizeIMessageMessagingTarget("sms:+1 (555) 222-3333")).toBe("sms:+15552223333");
+    expect(normalizeIMessageMessagingTarget("sms:+1 (555) 222-3333")).toBe(
+      "sms:+15552223333",
+    );
   });
 
   it("drops service prefixes for chat targets", () => {
-    expect(normalizeIMessageMessagingTarget("sms:chat_id:123")).toBe("chat_id:123");
-    expect(normalizeIMessageMessagingTarget("imessage:CHAT_GUID:abc")).toBe("chat_guid:abc");
-    expect(normalizeIMessageMessagingTarget("auto:ChatIdentifier:foo")).toBe("chat_identifier:foo");
+    expect(normalizeIMessageMessagingTarget("sms:chat_id:123")).toBe(
+      "chat_id:123",
+    );
+    expect(normalizeIMessageMessagingTarget("imessage:CHAT_GUID:abc")).toBe(
+      "chat_guid:abc",
+    );
+    expect(normalizeIMessageMessagingTarget("auto:ChatIdentifier:foo")).toBe(
+      "chat_identifier:foo",
+    );
   });
 });
 
 describe("signal target normalization", () => {
   it("normalizes uuid targets by stripping uuid:", () => {
-    expect(normalizeSignalMessagingTarget("uuid:123E4567-E89B-12D3-A456-426614174000")).toBe(
-      "123e4567-e89b-12d3-a456-426614174000",
-    );
+    expect(
+      normalizeSignalMessagingTarget(
+        "uuid:123E4567-E89B-12D3-A456-426614174000",
+      ),
+    ).toBe("123e4567-e89b-12d3-a456-426614174000");
   });
 
   it("normalizes signal:uuid targets", () => {
-    expect(normalizeSignalMessagingTarget("signal:uuid:123E4567-E89B-12D3-A456-426614174000")).toBe(
-      "123e4567-e89b-12d3-a456-426614174000",
-    );
+    expect(
+      normalizeSignalMessagingTarget(
+        "signal:uuid:123E4567-E89B-12D3-A456-426614174000",
+      ),
+    ).toBe("123e4567-e89b-12d3-a456-426614174000");
   });
 
   it("preserves case for group targets", () => {
     expect(
-      normalizeSignalMessagingTarget("signal:group:VWATOdKF2hc8zdOS76q9tb0+5BI522e03QLDAq/9yPg="),
+      normalizeSignalMessagingTarget(
+        "signal:group:VWATOdKF2hc8zdOS76q9tb0+5BI522e03QLDAq/9yPg=",
+      ),
     ).toBe("group:VWATOdKF2hc8zdOS76q9tb0+5BI522e03QLDAq/9yPg=");
   });
 
   it("preserves case for base64-like group IDs without signal prefix", () => {
     expect(
-      normalizeSignalMessagingTarget("group:AbCdEfGhIjKlMnOpQrStUvWxYz0123456789+/ABCD="),
+      normalizeSignalMessagingTarget(
+        "group:AbCdEfGhIjKlMnOpQrStUvWxYz0123456789+/ABCD=",
+      ),
     ).toBe("group:AbCdEfGhIjKlMnOpQrStUvWxYz0123456789+/ABCD=");
   });
 
   it("accepts uuid prefixes for target detection", () => {
-    expect(looksLikeSignalTargetId("uuid:123e4567-e89b-12d3-a456-426614174000")).toBe(true);
-    expect(looksLikeSignalTargetId("signal:uuid:123e4567-e89b-12d3-a456-426614174000")).toBe(true);
+    expect(
+      looksLikeSignalTargetId("uuid:123e4567-e89b-12d3-a456-426614174000"),
+    ).toBe(true);
+    expect(
+      looksLikeSignalTargetId(
+        "signal:uuid:123e4567-e89b-12d3-a456-426614174000",
+      ),
+    ).toBe(true);
   });
 
   it("accepts signal-prefixed E.164 targets for detection", () => {
@@ -61,8 +86,12 @@ describe("signal target normalization", () => {
   });
 
   it("accepts compact UUIDs for target detection", () => {
-    expect(looksLikeSignalTargetId("123e4567e89b12d3a456426614174000")).toBe(true);
-    expect(looksLikeSignalTargetId("uuid:123e4567e89b12d3a456426614174000")).toBe(true);
+    expect(looksLikeSignalTargetId("123e4567e89b12d3a456426614174000")).toBe(
+      true,
+    );
+    expect(
+      looksLikeSignalTargetId("uuid:123e4567e89b12d3a456426614174000"),
+    ).toBe(true);
   });
 
   it("rejects invalid uuid prefixes", () => {
@@ -99,7 +128,11 @@ describe("telegramOutbound.sendPayload", () => {
         textMode: "html",
       }),
     );
-    expect(result).toEqual({ channel: "telegram", messageId: "m1", chatId: "c1" });
+    expect(result).toEqual({
+      channel: "telegram",
+      messageId: "m1",
+      chatId: "c1",
+    });
   });
 
   it("sends media payloads and attaches buttons only to first", async () => {
@@ -134,7 +167,9 @@ describe("telegramOutbound.sendPayload", () => {
         buttons: [[{ text: "Go", callback_data: "/go" }]],
       }),
     );
-    const secondOpts = sendTelegram.mock.calls[1]?.[2] as { buttons?: unknown } | undefined;
+    const secondOpts = sendTelegram.mock.calls[1]?.[2] as
+      | { buttons?: unknown }
+      | undefined;
     expect(sendTelegram).toHaveBeenNthCalledWith(
       2,
       "telegram:123",
@@ -144,7 +179,11 @@ describe("telegramOutbound.sendPayload", () => {
       }),
     );
     expect(secondOpts?.buttons).toBeUndefined();
-    expect(result).toEqual({ channel: "telegram", messageId: "m2", chatId: "c1" });
+    expect(result).toEqual({
+      channel: "telegram",
+      messageId: "m2",
+      chatId: "c1",
+    });
   });
 });
 
@@ -189,7 +228,9 @@ describe("normalizeSignalAccountInput", () => {
   });
 
   it("normalizes formatted input", () => {
-    expect(normalizeSignalAccountInput("  +1 (555) 000-1234 ")).toBe("+15550001234");
+    expect(normalizeSignalAccountInput("  +1 (555) 000-1234 ")).toBe(
+      "+15550001234",
+    );
   });
 
   it("rejects empty input", () => {

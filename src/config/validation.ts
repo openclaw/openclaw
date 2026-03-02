@@ -1,5 +1,8 @@
 import path from "node:path";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import {
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "../agents/agent-scope.js";
 import { CHANNEL_IDS, normalizeChatChannelId } from "../channels/registry.js";
 import {
   normalizePluginsConfig,
@@ -15,10 +18,20 @@ import {
   isPathWithinRoot,
   isWindowsAbsolutePath,
 } from "../shared/avatar-policy.js";
-import { isCanonicalDottedDecimalIPv4, isLoopbackIpAddress } from "../shared/net/ip.js";
+import {
+  isCanonicalDottedDecimalIPv4,
+  isLoopbackIpAddress,
+} from "../shared/net/ip.js";
 import { isRecord } from "../utils.js";
-import { findDuplicateAgentDirs, formatDuplicateAgentDirError } from "./agent-dirs.js";
-import { applyAgentDefaults, applyModelDefaults, applySessionDefaults } from "./defaults.js";
+import {
+  findDuplicateAgentDirs,
+  formatDuplicateAgentDirError,
+} from "./agent-dirs.js";
+import {
+  applyAgentDefaults,
+  applyModelDefaults,
+  applySessionDefaults,
+} from "./defaults.js";
 import { findLegacyConfigIssues } from "./legacy.js";
 import type { OpenClawConfig, ConfigValidationIssue } from "./types.js";
 import { OpenClawSchema } from "./zod-schema.js";
@@ -31,7 +44,9 @@ function isWorkspaceAvatarPath(value: string, workspaceDir: string): boolean {
   return isPathWithinRoot(workspaceRoot, resolved);
 }
 
-function validateIdentityAvatar(config: OpenClawConfig): ConfigValidationIssue[] {
+function validateIdentityAvatar(
+  config: OpenClawConfig,
+): ConfigValidationIssue[] {
   const agents = config.agents?.list;
   if (!Array.isArray(agents) || agents.length === 0) {
     return [];
@@ -55,7 +70,8 @@ function validateIdentityAvatar(config: OpenClawConfig): ConfigValidationIssue[]
     if (avatar.startsWith("~")) {
       issues.push({
         path: `agents.list.${index}.identity.avatar`,
-        message: "identity.avatar must be a workspace-relative path, http(s) URL, or data URI.",
+        message:
+          "identity.avatar must be a workspace-relative path, http(s) URL, or data URI.",
       });
       continue;
     }
@@ -63,7 +79,8 @@ function validateIdentityAvatar(config: OpenClawConfig): ConfigValidationIssue[]
     if (hasScheme && !isWindowsAbsolutePath(avatar)) {
       issues.push({
         path: `agents.list.${index}.identity.avatar`,
-        message: "identity.avatar must be a workspace-relative path, http(s) URL, or data URI.",
+        message:
+          "identity.avatar must be a workspace-relative path, http(s) URL, or data URI.",
       });
       continue;
     }
@@ -81,7 +98,9 @@ function validateIdentityAvatar(config: OpenClawConfig): ConfigValidationIssue[]
   return issues;
 }
 
-function validateGatewayTailscaleBind(config: OpenClawConfig): ConfigValidationIssue[] {
+function validateGatewayTailscaleBind(
+  config: OpenClawConfig,
+): ConfigValidationIssue[] {
   const tailscaleMode = config.gateway?.tailscale?.mode ?? "off";
   if (tailscaleMode !== "serve" && tailscaleMode !== "funnel") {
     return [];
@@ -114,7 +133,9 @@ function validateGatewayTailscaleBind(config: OpenClawConfig): ConfigValidationI
  */
 export function validateConfigObjectRaw(
   raw: unknown,
-): { ok: true; config: OpenClawConfig } | { ok: false; issues: ConfigValidationIssue[] } {
+):
+  | { ok: true; config: OpenClawConfig }
+  | { ok: false; issues: ConfigValidationIssue[] } {
   const legacyIssues = findLegacyConfigIssues(raw);
   if (legacyIssues.length > 0) {
     return {
@@ -151,7 +172,9 @@ export function validateConfigObjectRaw(
   if (avatarIssues.length > 0) {
     return { ok: false, issues: avatarIssues };
   }
-  const gatewayTailscaleBindIssues = validateGatewayTailscaleBind(validated.data as OpenClawConfig);
+  const gatewayTailscaleBindIssues = validateGatewayTailscaleBind(
+    validated.data as OpenClawConfig,
+  );
   if (gatewayTailscaleBindIssues.length > 0) {
     return { ok: false, issues: gatewayTailscaleBindIssues };
   }
@@ -163,14 +186,18 @@ export function validateConfigObjectRaw(
 
 export function validateConfigObject(
   raw: unknown,
-): { ok: true; config: OpenClawConfig } | { ok: false; issues: ConfigValidationIssue[] } {
+):
+  | { ok: true; config: OpenClawConfig }
+  | { ok: false; issues: ConfigValidationIssue[] } {
   const result = validateConfigObjectRaw(raw);
   if (!result.ok) {
     return result;
   }
   return {
     ok: true,
-    config: applyModelDefaults(applyAgentDefaults(applySessionDefaults(result.config))),
+    config: applyModelDefaults(
+      applyAgentDefaults(applySessionDefaults(result.config)),
+    ),
   };
 }
 
@@ -216,7 +243,9 @@ function validateConfigObjectWithPluginsBase(
       issues: ConfigValidationIssue[];
       warnings: ConfigValidationIssue[];
     } {
-  const base = opts.applyDefaults ? validateConfigObject(raw) : validateConfigObjectRaw(raw);
+  const base = opts.applyDefaults
+    ? validateConfigObject(raw)
+    : validateConfigObjectRaw(raw);
   if (!base.ok) {
     return { ok: false, issues: base.issues, warnings: [] };
   }
@@ -240,7 +269,10 @@ function validateConfigObjectWithPluginsBase(
       return registryInfo;
     }
 
-    const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
+    const workspaceDir = resolveAgentWorkspaceDir(
+      config,
+      resolveDefaultAgentId(config),
+    );
     const registry = loadPluginManifestRegistry({
       config,
       workspaceDir: workspaceDir ?? undefined,
@@ -266,7 +298,11 @@ function validateConfigObjectWithPluginsBase(
     return registryInfo;
   };
 
-  const allowedChannels = new Set<string>(["defaults", "modelByChannel", ...CHANNEL_IDS]);
+  const allowedChannels = new Set<string>([
+    "defaults",
+    "modelByChannel",
+    ...CHANNEL_IDS,
+  ]);
 
   if (config.channels && isRecord(config.channels)) {
     for (const key of Object.keys(config.channels)) {
@@ -296,7 +332,10 @@ function validateConfigObjectWithPluginsBase(
     heartbeatChannelIds.add(channelId.toLowerCase());
   }
 
-  const validateHeartbeatTarget = (target: string | undefined, path: string) => {
+  const validateHeartbeatTarget = (
+    target: string | undefined,
+    path: string,
+  ) => {
     if (typeof target !== "string") {
       return;
     }
@@ -335,7 +374,10 @@ function validateConfigObjectWithPluginsBase(
   );
   if (Array.isArray(config.agents?.list)) {
     for (const [index, entry] of config.agents.list.entries()) {
-      validateHeartbeatTarget(entry?.heartbeat?.target, `agents.list.${index}.heartbeat.target`);
+      validateHeartbeatTarget(
+        entry?.heartbeat?.target,
+        `agents.list.${index}.heartbeat.target`,
+      );
     }
   }
 
@@ -379,7 +421,9 @@ function validateConfigObjectWithPluginsBase(
     for (const pluginId of Object.keys(entries)) {
       if (!knownIds.has(pluginId)) {
         // Keep gateway startup resilient when plugins are removed/renamed across upgrades.
-        pushMissingPluginIssue(`plugins.entries.${pluginId}`, pluginId, { warnOnly: true });
+        pushMissingPluginIssue(`plugins.entries.${pluginId}`, pluginId, {
+          warnOnly: true,
+        });
       }
     }
   }
@@ -405,7 +449,11 @@ function validateConfigObjectWithPluginsBase(
   }
 
   const memorySlot = normalizedPlugins.slots.memory;
-  if (typeof memorySlot === "string" && memorySlot.trim() && !knownIds.has(memorySlot)) {
+  if (
+    typeof memorySlot === "string" &&
+    memorySlot.trim() &&
+    !knownIds.has(memorySlot)
+  ) {
     pushMissingPluginIssue("plugins.slots.memory", memorySlot);
   }
 

@@ -30,22 +30,30 @@ vi.mock("../web/session.js", () => ({
   webAuthExists,
 }));
 
-const handleDiscordAction = vi.fn(async (..._args: unknown[]) => ({ details: { ok: true } }));
+const handleDiscordAction = vi.fn(async (..._args: unknown[]) => ({
+  details: { ok: true },
+}));
 vi.mock("../agents/tools/discord-actions.js", () => ({
   handleDiscordAction,
 }));
 
-const handleSlackAction = vi.fn(async (..._args: unknown[]) => ({ details: { ok: true } }));
+const handleSlackAction = vi.fn(async (..._args: unknown[]) => ({
+  details: { ok: true },
+}));
 vi.mock("../agents/tools/slack-actions.js", () => ({
   handleSlackAction,
 }));
 
-const handleTelegramAction = vi.fn(async (..._args: unknown[]) => ({ details: { ok: true } }));
+const handleTelegramAction = vi.fn(async (..._args: unknown[]) => ({
+  details: { ok: true },
+}));
 vi.mock("../agents/tools/telegram-actions.js", () => ({
   handleTelegramAction,
 }));
 
-const handleWhatsAppAction = vi.fn(async (..._args: unknown[]) => ({ details: { ok: true } }));
+const handleWhatsAppAction = vi.fn(async (..._args: unknown[]) => ({
+  details: { ok: true },
+}));
 vi.mock("../agents/tools/whatsapp-actions.js", () => ({
   handleWhatsAppAction,
 }));
@@ -129,7 +137,12 @@ const createDiscordPollPluginRegistration = () => ({
     label: "Discord",
     actions: {
       listActions: () => ["poll"],
-      handleAction: (async ({ action, params, cfg, accountId }: ChannelActionParams) => {
+      handleAction: (async ({
+        action,
+        params,
+        cfg,
+        accountId,
+      }: ChannelActionParams) => {
         return await handleDiscordAction(
           { action, to: params.to, accountId: accountId ?? undefined },
           cfg,
@@ -147,7 +160,12 @@ const createTelegramSendPluginRegistration = () => ({
     label: "Telegram",
     actions: {
       listActions: () => ["send"],
-      handleAction: (async ({ action, params, cfg, accountId }: ChannelActionParams) => {
+      handleAction: (async ({
+        action,
+        params,
+        cfg,
+        accountId,
+      }: ChannelActionParams) => {
         return await handleTelegramAction(
           { action, to: params.to, accountId: accountId ?? undefined },
           cfg,

@@ -13,7 +13,10 @@ import {
 } from "./monitor.js";
 import type { ResolvedZaloAccount } from "./types.js";
 
-async function withServer(handler: RequestListener, fn: (baseUrl: string) => Promise<void>) {
+async function withServer(
+  handler: RequestListener,
+  fn: (baseUrl: string) => Promise<void>,
+) {
   const server = createServer(handler);
   await new Promise<void>((resolve) => {
     server.listen(0, "127.0.0.1", () => resolve());
@@ -48,7 +51,10 @@ const webhookRequestHandler: RequestListener = async (req, res) => {
 function registerTarget(params: {
   path: string;
   secret?: string;
-  statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
+  statusSink?: (patch: {
+    lastInboundAt?: number;
+    lastOutboundAt?: number;
+  }) => void;
   account?: ResolvedZaloAccount;
   config?: OpenClawConfig;
   core?: PluginRuntime;
@@ -66,15 +72,23 @@ function registerTarget(params: {
   });
 }
 
-function createPairingAuthCore(params?: { storeAllowFrom?: string[]; pairingCreated?: boolean }): {
+function createPairingAuthCore(params?: {
+  storeAllowFrom?: string[];
+  pairingCreated?: boolean;
+}): {
   core: PluginRuntime;
   readAllowFromStore: ReturnType<typeof vi.fn>;
   upsertPairingRequest: ReturnType<typeof vi.fn>;
 } {
-  const readAllowFromStore = vi.fn().mockResolvedValue(params?.storeAllowFrom ?? []);
+  const readAllowFromStore = vi
+    .fn()
+    .mockResolvedValue(params?.storeAllowFrom ?? []);
   const upsertPairingRequest = vi
     .fn()
-    .mockResolvedValue({ code: "PAIRCODE", created: params?.pairingCreated ?? false });
+    .mockResolvedValue({
+      code: "PAIRCODE",
+      created: params?.pairingCreated ?? false,
+    });
   const core = {
     logging: {
       shouldLogVerbose: () => false,
@@ -193,7 +207,10 @@ describe("handleZaloWebhookRequest", () => {
 
   it("deduplicates webhook replay by event_name + message_id", async () => {
     const sink = vi.fn();
-    const unregister = registerTarget({ path: "/hook-replay", statusSink: sink });
+    const unregister = registerTarget({
+      path: "/hook-replay",
+      statusSink: sink,
+    });
 
     const payload = {
       event_name: "message.text.received",
@@ -267,14 +284,17 @@ describe("handleZaloWebhookRequest", () => {
     try {
       await withServer(webhookRequestHandler, async (baseUrl) => {
         for (let i = 0; i < 200; i += 1) {
-          const response = await fetch(`${baseUrl}/hook-query-status?nonce=${i}`, {
-            method: "POST",
-            headers: {
-              "x-bot-api-secret-token": "invalid-token",
-              "content-type": "application/json",
+          const response = await fetch(
+            `${baseUrl}/hook-query-status?nonce=${i}`,
+            {
+              method: "POST",
+              headers: {
+                "x-bot-api-secret-token": "invalid-token",
+                "content-type": "application/json",
+              },
+              body: "{}",
             },
-            body: "{}",
-          });
+          );
           expect(response.status).toBe(401);
         }
 
@@ -292,14 +312,17 @@ describe("handleZaloWebhookRequest", () => {
       await withServer(webhookRequestHandler, async (baseUrl) => {
         let saw429 = false;
         for (let i = 0; i < 130; i += 1) {
-          const response = await fetch(`${baseUrl}/hook-query-rate?nonce=${i}`, {
-            method: "POST",
-            headers: {
-              "x-bot-api-secret-token": "secret",
-              "content-type": "application/json",
+          const response = await fetch(
+            `${baseUrl}/hook-query-rate?nonce=${i}`,
+            {
+              method: "POST",
+              headers: {
+                "x-bot-api-secret-token": "secret",
+                "content-type": "application/json",
+              },
+              body: "{}",
             },
-            body: "{}",
-          });
+          );
           if (response.status === 429) {
             saw429 = true;
             break;
@@ -315,9 +338,10 @@ describe("handleZaloWebhookRequest", () => {
   });
 
   it("scopes DM pairing store reads and writes to accountId", async () => {
-    const { core, readAllowFromStore, upsertPairingRequest } = createPairingAuthCore({
-      pairingCreated: false,
-    });
+    const { core, readAllowFromStore, upsertPairingRequest } =
+      createPairingAuthCore({
+        pairingCreated: false,
+      });
     const account: ResolvedZaloAccount = {
       ...DEFAULT_ACCOUNT,
       accountId: "work",

@@ -132,7 +132,9 @@ export async function sandboxExplainCommand(
 ): Promise<void> {
   const cfg = loadConfig();
 
-  const defaultAgentId = resolveAgentIdFromSessionKey(resolveMainSessionKey(cfg));
+  const defaultAgentId = resolveAgentIdFromSessionKey(
+    resolveMainSessionKey(cfg),
+  );
   const resolvedAgentId = normalizeAgentId(
     opts.agent?.trim()
       ? opts.agent
@@ -173,7 +175,9 @@ export async function sandboxExplainCommand(
   const elevatedAgentEnabled = elevatedAgent?.enabled !== false;
   const elevatedEnabled = elevatedGlobalEnabled && elevatedAgentEnabled;
 
-  const globalAllow = channel ? elevatedGlobal?.allowFrom?.[channel] : undefined;
+  const globalAllow = channel
+    ? elevatedGlobal?.allowFrom?.[channel]
+    : undefined;
   const agentAllow = channel ? elevatedAgent?.allowFrom?.[channel] : undefined;
 
   const allowTokens = (values?: Array<string | number>) =>
@@ -254,7 +258,8 @@ export async function sandboxExplainCommand(
       alwaysAllowedByConfig: elevatedAlwaysAllowedByConfig,
       allowFrom: {
         global: channel ? globalAllowTokens : undefined,
-        agent: elevatedAgent?.allowFrom && channel ? agentAllowTokens : undefined,
+        agent:
+          elevatedAgent?.allowFrom && channel ? agentAllowTokens : undefined,
       },
       failures: elevatedFailures,
     },
@@ -308,8 +313,12 @@ export async function sandboxExplainCommand(
   lines.push("");
   lines.push(heading("Elevated:"));
   lines.push(`  ${key("enabled:")} ${bool(payload.elevated.enabled)}`);
-  lines.push(`  ${key("channel:")} ${value(payload.elevated.channel ?? "(unknown)")}`);
-  lines.push(`  ${key("allowedByConfig:")} ${bool(payload.elevated.allowedByConfig)}`);
+  lines.push(
+    `  ${key("channel:")} ${value(payload.elevated.channel ?? "(unknown)")}`,
+  );
+  lines.push(
+    `  ${key("allowedByConfig:")} ${bool(payload.elevated.allowedByConfig)}`,
+  );
   if (payload.elevated.failures.length > 0) {
     lines.push(
       `  ${key("failing gates:")} ${warn(
@@ -317,7 +326,10 @@ export async function sandboxExplainCommand(
       )}`,
     );
   }
-  if (payload.sandbox.mode === "non-main" && payload.sandbox.sessionIsSandboxed) {
+  if (
+    payload.sandbox.mode === "non-main" &&
+    payload.sandbox.sessionIsSandboxed
+  ) {
     lines.push("");
     lines.push(
       `${warn("Hint:")} sandbox mode is non-main; use main session key to run direct: ${value(
@@ -331,7 +343,9 @@ export async function sandboxExplainCommand(
     lines.push(`  - ${key}`);
   }
   lines.push("");
-  lines.push(`${key("Docs:")} ${formatDocsLink("/sandbox", "docs.openclaw.ai/sandbox")}`);
+  lines.push(
+    `${key("Docs:")} ${formatDocsLink("/sandbox", "docs.openclaw.ai/sandbox")}`,
+  );
 
   runtime.log(`${lines.join("\n")}\n`);
 }

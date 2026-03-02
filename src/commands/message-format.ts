@@ -1,7 +1,13 @@
 import { getChannelPlugin } from "../channels/plugins/index.js";
-import type { ChannelId, ChannelMessageActionName } from "../channels/plugins/types.js";
+import type {
+  ChannelId,
+  ChannelMessageActionName,
+} from "../channels/plugins/types.js";
 import type { OutboundDeliveryResult } from "../infra/outbound/deliver.js";
-import { formatGatewaySummary, formatOutboundDeliverySummary } from "../infra/outbound/format.js";
+import {
+  formatGatewaySummary,
+  formatOutboundDeliverySummary,
+} from "../infra/outbound/format.js";
 import type { MessageActionRunResult } from "../infra/outbound/message-action-runner.js";
 import { formatTargetDisplay } from "../infra/outbound/target-resolver.js";
 import { renderTable } from "../terminal/table.js";
@@ -37,7 +43,9 @@ export type MessageCliJsonEnvelope = {
   payload: unknown;
 };
 
-export function buildMessageCliJson(result: MessageActionRunResult): MessageCliJsonEnvelope {
+export function buildMessageCliJson(
+  result: MessageActionRunResult,
+): MessageCliJsonEnvelope {
   return {
     action: result.action,
     channel: result.channel,
@@ -99,7 +107,11 @@ function renderObjectSummary(payload: unknown, opts: FormatOpts): string[] {
   ];
 }
 
-function renderMessageList(messages: unknown[], opts: FormatOpts, emptyLabel: string): string[] {
+function renderMessageList(
+  messages: unknown[],
+  opts: FormatOpts,
+  emptyLabel: string,
+): string[] {
   const rows = messages.slice(0, 25).map((m) => {
     const msg = m as Record<string, unknown>;
     const id =
@@ -147,7 +159,10 @@ function renderMessageList(messages: unknown[], opts: FormatOpts, emptyLabel: st
   ];
 }
 
-function renderMessagesFromPayload(payload: unknown, opts: FormatOpts): string[] | null {
+function renderMessagesFromPayload(
+  payload: unknown,
+  opts: FormatOpts,
+): string[] | null {
   if (!payload || typeof payload !== "object") {
     return null;
   }
@@ -158,7 +173,10 @@ function renderMessagesFromPayload(payload: unknown, opts: FormatOpts): string[]
   return renderMessageList(messages, opts, "No messages.");
 }
 
-function renderPinsFromPayload(payload: unknown, opts: FormatOpts): string[] | null {
+function renderPinsFromPayload(
+  payload: unknown,
+  opts: FormatOpts,
+): string[] | null {
   if (!payload || typeof payload !== "object") {
     return null;
   }
@@ -169,7 +187,9 @@ function renderPinsFromPayload(payload: unknown, opts: FormatOpts): string[] | n
   return renderMessageList(pins, opts, "No pins.");
 }
 
-function extractDiscordSearchResultsMessages(results: unknown): unknown[] | null {
+function extractDiscordSearchResultsMessages(
+  results: unknown,
+): unknown[] | null {
   if (!results || typeof results !== "object") {
     return null;
   }
@@ -261,14 +281,19 @@ export function formatMessageCliText(result: MessageActionRunResult): string[] {
   const opts: FormatOpts = { width };
 
   if (result.handledBy === "dry-run") {
-    return [muted(`[dry-run] would run ${result.action} via ${result.channel}`)];
+    return [
+      muted(`[dry-run] would run ${result.action} via ${result.channel}`),
+    ];
   }
 
   if (result.kind === "broadcast") {
     const results = result.payload.results ?? [];
     const rows = results.map((entry) => ({
       Channel: resolveChannelLabel(entry.channel),
-      Target: shortenText(formatTargetDisplay({ channel: entry.channel, target: entry.to }), 36),
+      Target: shortenText(
+        formatTargetDisplay({ channel: entry.channel, target: entry.to }),
+        36,
+      ),
       Status: entry.ok ? "ok" : "error",
       Error: entry.ok ? "" : shortenText(entry.error ?? "unknown error", 48),
     }));
@@ -337,7 +362,9 @@ export function formatMessageCliText(result: MessageActionRunResult): string[] {
 
     const label = resolveChannelLabel(result.channel);
     const msgId = extractMessageId(result.payload);
-    return [ok(`✅ Poll sent via ${label}.${msgId ? ` Message ID: ${msgId}` : ""}`)];
+    return [
+      ok(`✅ Poll sent via ${label}.${msgId ? ` Message ID: ${msgId}` : ""}`),
+    ];
   }
 
   // channel actions (non-send/poll)
@@ -403,7 +430,9 @@ export function formatMessageCliText(result: MessageActionRunResult): string[] {
   }
 
   // Generic success + compact details table.
-  lines.push(ok(`✅ ${result.action} via ${resolveChannelLabel(result.channel)}.`));
+  lines.push(
+    ok(`✅ ${result.action} via ${resolveChannelLabel(result.channel)}.`),
+  );
   const summary = renderObjectSummary(payload, opts);
   if (summary.length) {
     lines.push("");

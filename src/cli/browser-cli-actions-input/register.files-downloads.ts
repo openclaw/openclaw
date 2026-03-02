@@ -1,9 +1,15 @@
 import type { Command } from "commander";
-import { DEFAULT_UPLOAD_DIR, resolveExistingPathsWithinRoot } from "../../browser/paths.js";
+import {
+  DEFAULT_UPLOAD_DIR,
+  resolveExistingPathsWithinRoot,
+} from "../../browser/paths.js";
 import { danger } from "../../globals.js";
 import { defaultRuntime } from "../../runtime.js";
 import { shortenHomePath } from "../../utils.js";
-import { callBrowserRequest, type BrowserParentOpts } from "../browser-cli-shared.js";
+import {
+  callBrowserRequest,
+  type BrowserParentOpts,
+} from "../browser-cli-shared.js";
 import { resolveBrowserActionContext } from "./shared.js";
 
 async function normalizeUploadPaths(paths: string[]): Promise<string[]> {
@@ -22,10 +28,17 @@ export function registerBrowserFilesAndDownloadsCommands(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,
 ) {
-  const resolveTimeoutAndTarget = (opts: { timeoutMs?: unknown; targetId?: unknown }) => {
-    const timeoutMs = Number.isFinite(opts.timeoutMs) ? Number(opts.timeoutMs) : undefined;
+  const resolveTimeoutAndTarget = (opts: {
+    timeoutMs?: unknown;
+    targetId?: unknown;
+  }) => {
+    const timeoutMs = Number.isFinite(opts.timeoutMs)
+      ? Number(opts.timeoutMs)
+      : undefined;
     const targetId =
-      typeof opts.targetId === "string" ? opts.targetId.trim() || undefined : undefined;
+      typeof opts.targetId === "string"
+        ? opts.targetId.trim() || undefined
+        : undefined;
     return { timeoutMs, targetId };
   };
 
@@ -55,7 +68,9 @@ export function registerBrowserFilesAndDownloadsCommands(
         defaultRuntime.log(JSON.stringify(result, null, 2));
         return;
       }
-      defaultRuntime.log(`downloaded: ${shortenHomePath(result.download.path)}`);
+      defaultRuntime.log(
+        `downloaded: ${shortenHomePath(result.download.path)}`,
+      );
     } catch (err) {
       defaultRuntime.error(danger(String(err)));
       defaultRuntime.exit(1);

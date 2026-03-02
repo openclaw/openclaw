@@ -7,8 +7,12 @@ import {
 
 describe("buildAuthHealthSummary", () => {
   const now = 1_700_000_000_000;
-  const profileStatuses = (summary: ReturnType<typeof buildAuthHealthSummary>) =>
-    Object.fromEntries(summary.profiles.map((profile) => [profile.profileId, profile.status]));
+  const profileStatuses = (
+    summary: ReturnType<typeof buildAuthHealthSummary>,
+  ) =>
+    Object.fromEntries(
+      summary.profiles.map((profile) => [profile.profileId, profile.status]),
+    );
 
   afterEach(() => {
     vi.restoreAllMocks();
@@ -61,7 +65,9 @@ describe("buildAuthHealthSummary", () => {
     expect(statuses["anthropic:expired"]).toBe("ok");
     expect(statuses["anthropic:api"]).toBe("static");
 
-    const provider = summary.providers.find((entry) => entry.provider === "anthropic");
+    const provider = summary.providers.find(
+      (entry) => entry.provider === "anthropic",
+    );
     expect(provider?.status).toBe("ok");
   });
 
@@ -94,6 +100,8 @@ describe("buildAuthHealthSummary", () => {
 describe("formatRemainingShort", () => {
   it("supports an explicit under-minute label override", () => {
     expect(formatRemainingShort(20_000)).toBe("1m");
-    expect(formatRemainingShort(20_000, { underMinuteLabel: "soon" })).toBe("soon");
+    expect(formatRemainingShort(20_000, { underMinuteLabel: "soon" })).toBe(
+      "soon",
+    );
   });
 });

@@ -18,13 +18,20 @@ type IsolatedRunResult = {
   error?: string;
 };
 
-async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  label: string,
+): Promise<T> {
   let timeout: NodeJS.Timeout | undefined;
   try {
     return await Promise.race([
       promise,
       new Promise<T>((_resolve, reject) => {
-        timeout = setTimeout(() => reject(new Error(`${label} timed out`)), timeoutMs);
+        timeout = setTimeout(
+          () => reject(new Error(`${label} timed out`)),
+          timeoutMs,
+        );
       }),
     ]);
   } finally {
@@ -128,7 +135,9 @@ describe("CronService read ops while job is running", () => {
       await isolatedRun.runStarted;
       expect(isolatedRun.runIsolatedAgentJob).toHaveBeenCalledTimes(1);
 
-      await expect(cron.list({ includeDisabled: true })).resolves.toBeTypeOf("object");
+      await expect(cron.list({ includeDisabled: true })).resolves.toBeTypeOf(
+        "object",
+      );
       await expect(cron.status()).resolves.toBeTypeOf("object");
 
       const running = await cron.list({ includeDisabled: true });
@@ -197,9 +206,15 @@ describe("CronService read ops while job is running", () => {
       await isolatedRun.runStarted;
 
       await expect(
-        withTimeout(cron.list({ includeDisabled: true }), 300, "cron.list during cron.run"),
+        withTimeout(
+          cron.list({ includeDisabled: true }),
+          300,
+          "cron.list during cron.run",
+        ),
       ).resolves.toBeTypeOf("object");
-      await expect(withTimeout(cron.status(), 300, "cron.status during cron.run")).resolves.toEqual(
+      await expect(
+        withTimeout(cron.status(), 300, "cron.status during cron.run"),
+      ).resolves.toEqual(
         expect.objectContaining({ enabled: true, storePath: store.storePath }),
       );
 
@@ -258,9 +273,15 @@ describe("CronService read ops while job is running", () => {
       expect(isolatedRun.runIsolatedAgentJob).toHaveBeenCalledTimes(1);
 
       await expect(
-        withTimeout(cron.list({ includeDisabled: true }), 300, "cron.list during startup"),
+        withTimeout(
+          cron.list({ includeDisabled: true }),
+          300,
+          "cron.list during startup",
+        ),
       ).resolves.toBeTypeOf("object");
-      await expect(withTimeout(cron.status(), 300, "cron.status during startup")).resolves.toEqual(
+      await expect(
+        withTimeout(cron.status(), 300, "cron.status during startup"),
+      ).resolves.toEqual(
         expect.objectContaining({ enabled: true, storePath: store.storePath }),
       );
 

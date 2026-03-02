@@ -14,14 +14,21 @@ export type SendLineReplyChunksParams = {
     messages: messagingApi.Message[],
     opts?: { accountId?: string },
   ) => Promise<unknown>;
-  pushMessageLine: (to: string, text: string, opts?: { accountId?: string }) => Promise<unknown>;
+  pushMessageLine: (
+    to: string,
+    text: string,
+    opts?: { accountId?: string },
+  ) => Promise<unknown>;
   pushTextMessageWithQuickReplies: (
     to: string,
     text: string,
     quickReplies: string[],
     opts?: { accountId?: string },
   ) => Promise<unknown>;
-  createTextMessageWithQuickReplies: (text: string, quickReplies: string[]) => LineReplyMessage;
+  createTextMessageWithQuickReplies: (
+    text: string,
+    quickReplies: string[],
+  ) => LineReplyMessage;
   onReplyError?: (err: unknown) => void;
 };
 
@@ -45,7 +52,11 @@ export async function sendLineReplyChunks(
         text: chunk,
       }));
 
-      if (hasQuickReplies && remaining.length === 0 && replyMessages.length > 0) {
+      if (
+        hasQuickReplies &&
+        remaining.length === 0 &&
+        replyMessages.length > 0
+      ) {
         const lastIndex = replyMessages.length - 1;
         replyMessages[lastIndex] = params.createTextMessageWithQuickReplies(
           replyBatch[lastIndex],

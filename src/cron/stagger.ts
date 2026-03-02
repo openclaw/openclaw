@@ -14,7 +14,9 @@ export function isRecurringTopOfHourCronExpr(expr: string) {
   }
   if (fields.length === 6) {
     const [secondField, minuteField, hourField] = fields;
-    return secondField === "0" && minuteField === "0" && hourField.includes("*");
+    return (
+      secondField === "0" && minuteField === "0" && hourField.includes("*")
+    );
   }
   return false;
 }
@@ -33,10 +35,14 @@ export function normalizeCronStaggerMs(raw: unknown): number | undefined {
 }
 
 export function resolveDefaultCronStaggerMs(expr: string): number | undefined {
-  return isRecurringTopOfHourCronExpr(expr) ? DEFAULT_TOP_OF_HOUR_STAGGER_MS : undefined;
+  return isRecurringTopOfHourCronExpr(expr)
+    ? DEFAULT_TOP_OF_HOUR_STAGGER_MS
+    : undefined;
 }
 
-export function resolveCronStaggerMs(schedule: Extract<CronSchedule, { kind: "cron" }>): number {
+export function resolveCronStaggerMs(
+  schedule: Extract<CronSchedule, { kind: "cron" }>,
+): number {
   const explicit = normalizeCronStaggerMs(schedule.staggerMs);
   if (explicit !== undefined) {
     return explicit;

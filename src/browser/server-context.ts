@@ -74,14 +74,18 @@ function createProfileContext(
     getProfileState,
   });
 
-  const { ensureBrowserAvailable, isHttpReachable, isReachable, stopRunningBrowser } =
-    createProfileAvailability({
-      opts,
-      profile,
-      state,
-      getProfileState,
-      setProfileRunning,
-    });
+  const {
+    ensureBrowserAvailable,
+    isHttpReachable,
+    isReachable,
+    stopRunningBrowser,
+  } = createProfileAvailability({
+    opts,
+    profile,
+    state,
+    getProfileState,
+    setProfileRunning,
+  });
 
   const { ensureTabAvailable, focusTab, closeTab } = createProfileSelectionOps({
     profile,
@@ -114,7 +118,9 @@ function createProfileContext(
   };
 }
 
-export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteContext {
+export function createBrowserRouteContext(
+  opts: ContextOptions,
+): BrowserRouteContext {
   const refreshConfigFromDisk = opts.refreshConfigFromDisk === true;
 
   const state = () => {
@@ -136,7 +142,9 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
 
     if (!profile) {
       const available = Object.keys(current.resolved.profiles).join(", ");
-      throw new Error(`Profile "${name}" not found. Available profiles: ${available || "(none)"}`);
+      throw new Error(
+        `Profile "${name}" not found. Available profiles: ${available || "(none)"}`,
+      );
     }
     return createProfileContext(opts, profile);
   };
@@ -228,8 +236,10 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
     listProfiles,
     // Legacy methods delegate to default profile
     ensureBrowserAvailable: () => getDefaultContext().ensureBrowserAvailable(),
-    ensureTabAvailable: (targetId) => getDefaultContext().ensureTabAvailable(targetId),
-    isHttpReachable: (timeoutMs) => getDefaultContext().isHttpReachable(timeoutMs),
+    ensureTabAvailable: (targetId) =>
+      getDefaultContext().ensureTabAvailable(targetId),
+    isHttpReachable: (timeoutMs) =>
+      getDefaultContext().isHttpReachable(timeoutMs),
     isReachable: (timeoutMs) => getDefaultContext().isReachable(timeoutMs),
     listTabs: () => getDefaultContext().listTabs(),
     openTab: (url) => getDefaultContext().openTab(url),

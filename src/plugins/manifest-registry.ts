@@ -1,11 +1,19 @@
 import fs from "node:fs";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveUserPath } from "../utils.js";
-import { normalizePluginsConfig, type NormalizedPluginsConfig } from "./config-state.js";
+import {
+  normalizePluginsConfig,
+  type NormalizedPluginsConfig,
+} from "./config-state.js";
 import { discoverOpenClawPlugins, type PluginCandidate } from "./discovery.js";
 import { loadPluginManifest, type PluginManifest } from "./manifest.js";
 import { safeRealpathSync } from "./path-safety.js";
-import type { PluginConfigUiHint, PluginDiagnostic, PluginKind, PluginOrigin } from "./types.js";
+import type {
+  PluginConfigUiHint,
+  PluginDiagnostic,
+  PluginKind,
+  PluginOrigin,
+} from "./types.js";
 
 type SeenIdEntry = {
   candidate: PluginCandidate;
@@ -44,7 +52,10 @@ export type PluginManifestRegistry = {
   diagnostics: PluginDiagnostic[];
 };
 
-const registryCache = new Map<string, { expiresAt: number; registry: PluginManifestRegistry }>();
+const registryCache = new Map<
+  string,
+  { expiresAt: number; registry: PluginManifestRegistry }
+>();
 
 const DEFAULT_MANIFEST_CACHE_MS = 200;
 
@@ -79,7 +90,9 @@ function buildCacheKey(params: {
   workspaceDir?: string;
   plugins: NormalizedPluginsConfig;
 }): string {
-  const workspaceKey = params.workspaceDir ? resolveUserPath(params.workspaceDir) : "";
+  const workspaceKey = params.workspaceDir
+    ? resolveUserPath(params.workspaceDir)
+    : "";
   // The manifest registry only depends on where plugins are discovered from (workspace + load paths).
   // It does not depend on allow/deny/entries enable-state, so exclude those for higher cache hit rates.
   const loadPaths = params.plugins.loadPaths
@@ -112,10 +125,15 @@ function buildRecord(params: {
 }): PluginManifestRecord {
   return {
     id: params.manifest.id,
-    name: normalizeManifestLabel(params.manifest.name) ?? params.candidate.packageName,
+    name:
+      normalizeManifestLabel(params.manifest.name) ??
+      params.candidate.packageName,
     description:
-      normalizeManifestLabel(params.manifest.description) ?? params.candidate.packageDescription,
-    version: normalizeManifestLabel(params.manifest.version) ?? params.candidate.packageVersion,
+      normalizeManifestLabel(params.manifest.description) ??
+      params.candidate.packageDescription,
+    version:
+      normalizeManifestLabel(params.manifest.version) ??
+      params.candidate.packageVersion,
     kind: params.manifest.kind,
     channels: params.manifest.channels ?? [],
     providers: params.manifest.providers ?? [],
@@ -141,7 +159,10 @@ export function loadPluginManifestRegistry(params: {
 }): PluginManifestRegistry {
   const config = params.config ?? {};
   const normalized = normalizePluginsConfig(config.plugins);
-  const cacheKey = buildCacheKey({ workspaceDir: params.workspaceDir, plugins: normalized });
+  const cacheKey = buildCacheKey({
+    workspaceDir: params.workspaceDir,
+    plugins: normalized,
+  });
   const env = params.env ?? process.env;
   const cacheEnabled = params.cache !== false && shouldUseManifestCache(env);
   if (cacheEnabled) {
@@ -198,13 +219,21 @@ export function loadPluginManifestRegistry(params: {
       // Check whether both candidates point to the same physical directory
       // (e.g. via symlinks or different path representations). If so, this
       // is a false-positive duplicate and can be silently skipped.
-      const existingReal = safeRealpathSync(existing.candidate.rootDir, realpathCache);
+      const existingReal = safeRealpathSync(
+        existing.candidate.rootDir,
+        realpathCache,
+      );
       const candidateReal = safeRealpathSync(candidate.rootDir, realpathCache);
-      const samePlugin = Boolean(existingReal && candidateReal && existingReal === candidateReal);
+      const samePlugin = Boolean(
+        existingReal && candidateReal && existingReal === candidateReal,
+      );
       if (samePlugin) {
         // Prefer higher-precedence origins even if candidates are passed in
         // an unexpected order (config > workspace > global > bundled).
-        if (PLUGIN_ORIGIN_RANK[candidate.origin] < PLUGIN_ORIGIN_RANK[existing.candidate.origin]) {
+        if (
+          PLUGIN_ORIGIN_RANK[candidate.origin] <
+          PLUGIN_ORIGIN_RANK[existing.candidate.origin]
+        ) {
           records[existing.recordIndex] = buildRecord({
             manifest,
             candidate,
@@ -212,7 +241,10 @@ export function loadPluginManifestRegistry(params: {
             schemaCacheKey,
             configSchema,
           });
-          seenIds.set(manifest.id, { candidate, recordIndex: existing.recordIndex });
+          seenIds.set(manifest.id, {
+            candidate,
+            recordIndex: existing.recordIndex,
+          });
         }
         continue;
       }

@@ -27,7 +27,9 @@ describe("pw-role-snapshot", () => {
   });
 
   it("uses nth only when duplicates exist", () => {
-    const aria = ['- button "OK"', '- button "OK"', '- button "Cancel"'].join("\n");
+    const aria = ['- button "OK"', '- button "OK"', '- button "Cancel"'].join(
+      "\n",
+    );
     const res = buildRoleSnapshotFromAriaSnapshot(aria);
     expect(res.snapshot).toContain("[ref=e1]");
     expect(res.snapshot).toContain("[ref=e2] [nth=1]");
@@ -36,7 +38,9 @@ describe("pw-role-snapshot", () => {
     expect(res.refs.e3?.nth).toBeUndefined();
   });
   it("respects maxDepth", () => {
-    const aria = ['- region "Main"', "  - group", '    - button "Deep"'].join("\n");
+    const aria = ['- region "Main"', "  - group", '    - button "Deep"'].join(
+      "\n",
+    );
     const res = buildRoleSnapshotFromAriaSnapshot(aria, { maxDepth: 1 });
     expect(res.snapshot).toContain('- region "Main"');
     expect(res.snapshot).toContain("  - group");

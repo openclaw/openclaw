@@ -33,7 +33,10 @@ function mockSendResult(overrides: { channel?: string; to?: string } = {}) {
 }
 
 function getToolProperties(tool: ReturnType<typeof createMessageTool>) {
-  return (tool.parameters as { properties?: Record<string, unknown> }).properties ?? {};
+  return (
+    (tool.parameters as { properties?: Record<string, unknown> }).properties ??
+    {}
+  );
 }
 
 function getActionEnum(properties: Record<string, unknown>) {
@@ -172,7 +175,13 @@ describe("message tool schema scoping", () => {
     },
   ])(
     "scopes schema fields for $provider",
-    ({ provider, expectComponents, expectButtons, expectButtonStyle, expectedActions }) => {
+    ({
+      provider,
+      expectComponents,
+      expectButtons,
+      expectButtonStyle,
+      expectedActions,
+    }) => {
       setActivePluginRegistry(
         createTestRegistry([
           { pluginId: "telegram", source: "test", plugin: telegramPlugin },
@@ -223,7 +232,13 @@ describe("message tool description", () => {
     label: "BlueBubbles",
     docsPath: "/channels/bluebubbles",
     blurb: "BlueBubbles test plugin.",
-    actions: ["react", "renameGroup", "addParticipant", "removeParticipant", "leaveGroup"],
+    actions: [
+      "react",
+      "renameGroup",
+      "addParticipant",
+      "removeParticipant",
+      "leaveGroup",
+    ],
     messaging: {
       normalizeTarget: (raw) => {
         const trimmed = raw.trim().replace(/^bluebubbles:/i, "");
@@ -243,7 +258,9 @@ describe("message tool description", () => {
 
   it("hides BlueBubbles group actions for DM targets", () => {
     setActivePluginRegistry(
-      createTestRegistry([{ pluginId: "bluebubbles", source: "test", plugin: bluebubblesPlugin }]),
+      createTestRegistry([
+        { pluginId: "bluebubbles", source: "test", plugin: bluebubblesPlugin },
+      ]),
     );
 
     const tool = createMessageTool({
@@ -288,15 +305,21 @@ describe("message tool description", () => {
     });
 
     // Current channel actions are listed
-    expect(tool.description).toContain("Current channel (signal) supports: react, send.");
+    expect(tool.description).toContain(
+      "Current channel (signal) supports: react, send.",
+    );
     // Other configured channels are also listed
     expect(tool.description).toContain("Other configured channels:");
-    expect(tool.description).toContain("telegram (delete, edit, react, send, topic-create)");
+    expect(tool.description).toContain(
+      "telegram (delete, edit, react, send, topic-create)",
+    );
   });
 
   it("does not include 'Other configured channels' when only one channel is configured", () => {
     setActivePluginRegistry(
-      createTestRegistry([{ pluginId: "bluebubbles", source: "test", plugin: bluebubblesPlugin }]),
+      createTestRegistry([
+        { pluginId: "bluebubbles", source: "test", plugin: bluebubblesPlugin },
+      ]),
     );
 
     const tool = createMessageTool({
@@ -304,7 +327,9 @@ describe("message tool description", () => {
       currentChannelProvider: "bluebubbles",
     });
 
-    expect(tool.description).toContain("Current channel (bluebubbles) supports:");
+    expect(tool.description).toContain(
+      "Current channel (bluebubbles) supports:",
+    );
     expect(tool.description).not.toContain("Other configured channels");
   });
 });

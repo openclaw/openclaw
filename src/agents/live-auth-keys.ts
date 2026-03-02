@@ -16,7 +16,10 @@ type ProviderApiKeyConfig = {
   fallbackVars: string[];
 };
 
-const PROVIDER_API_KEY_CONFIG: Record<string, Omit<ProviderApiKeyConfig, "fallbackVars">> = {
+const PROVIDER_API_KEY_CONFIG: Record<
+  string,
+  Omit<ProviderApiKeyConfig, "fallbackVars">
+> = {
   anthropic: {
     liveSingle: "OPENCLAW_LIVE_ANTHROPIC_KEY",
     listVar: "OPENCLAW_LIVE_ANTHROPIC_KEYS",
@@ -71,7 +74,9 @@ function collectEnvPrefixedKeys(prefix: string): string[] {
 function resolveProviderApiKeyConfig(provider: string): ProviderApiKeyConfig {
   const normalized = normalizeProviderId(provider);
   const custom = PROVIDER_API_KEY_CONFIG[normalized];
-  const base = PROVIDER_PREFIX_OVERRIDES[normalized] ?? normalized.toUpperCase().replace(/-/g, "_");
+  const base =
+    PROVIDER_PREFIX_OVERRIDES[normalized] ??
+    normalized.toUpperCase().replace(/-/g, "_");
 
   const liveSingle = custom?.liveSingle ?? `OPENCLAW_LIVE_${base}_KEY`;
   const listVar = custom?.listVar ?? `${base}_API_KEYS`;
@@ -100,14 +105,22 @@ function resolveProviderApiKeyConfig(provider: string): ProviderApiKeyConfig {
 export function collectProviderApiKeys(provider: string): string[] {
   const config = resolveProviderApiKeyConfig(provider);
 
-  const forcedSingle = config.liveSingle ? process.env[config.liveSingle]?.trim() : undefined;
+  const forcedSingle = config.liveSingle
+    ? process.env[config.liveSingle]?.trim()
+    : undefined;
   if (forcedSingle) {
     return [forcedSingle];
   }
 
-  const fromList = parseKeyList(config.listVar ? process.env[config.listVar] : undefined);
-  const primary = config.primaryVar ? process.env[config.primaryVar]?.trim() : undefined;
-  const fromPrefixed = config.prefixedVar ? collectEnvPrefixedKeys(config.prefixedVar) : [];
+  const fromList = parseKeyList(
+    config.listVar ? process.env[config.listVar] : undefined,
+  );
+  const primary = config.primaryVar
+    ? process.env[config.primaryVar]?.trim()
+    : undefined;
+  const fromPrefixed = config.prefixedVar
+    ? collectEnvPrefixedKeys(config.prefixedVar)
+    : [];
 
   const fallback = config.fallbackVars
     .map((envVar) => process.env[envVar]?.trim())
@@ -161,7 +174,10 @@ export function isApiKeyRateLimitError(message: string): boolean {
   if (lower.includes("quota exceeded") || lower.includes("quota_exceeded")) {
     return true;
   }
-  if (lower.includes("resource exhausted") || lower.includes("resource_exhausted")) {
+  if (
+    lower.includes("resource exhausted") ||
+    lower.includes("resource_exhausted")
+  ) {
     return true;
   }
   if (lower.includes("too many requests")) {

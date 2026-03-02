@@ -73,7 +73,11 @@ Gateway → Client:
   "type": "res",
   "id": "…",
   "ok": true,
-  "payload": { "type": "hello-ok", "protocol": 3, "policy": { "tickIntervalMs": 15000 } }
+  "payload": {
+    "type": "hello-ok",
+    "protocol": 3,
+    "policy": { "tickIntervalMs": 15000 }
+  }
 }
 ```
 
@@ -108,7 +112,12 @@ When a device token is issued, `hello-ok` also includes:
     "role": "node",
     "scopes": [],
     "caps": ["camera", "canvas", "screen", "location", "voice"],
-    "commands": ["camera.snap", "canvas.navigate", "screen.record", "location.get"],
+    "commands": [
+      "camera.snap",
+      "canvas.navigate",
+      "screen.record",
+      "location.get"
+    ],
     "permissions": { "camera.capture": true, "screen.record": false },
     "auth": { "token": "…" },
     "locale": "en-US",

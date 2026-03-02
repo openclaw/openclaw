@@ -1,8 +1,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
-import { fileExists, readJsonFile, resolveArchiveKind } from "../infra/archive.js";
-import { resolveExistingInstallPath, withExtractedArchiveRoot } from "../infra/install-flow.js";
+import {
+  fileExists,
+  readJsonFile,
+  resolveArchiveKind,
+} from "../infra/archive.js";
+import {
+  resolveExistingInstallPath,
+  withExtractedArchiveRoot,
+} from "../infra/install-flow.js";
 import {
   resolveInstallModeOptions,
   resolveTimedInstallModeOptions,
@@ -23,7 +30,10 @@ import {
   installFromNpmSpecArchiveWithInstaller,
 } from "../infra/npm-pack-install.js";
 import { validateRegistryNpmSpec } from "../infra/npm-registry-spec.js";
-import { extensionUsesSkippedScannerPath, isPathInside } from "../security/scan-paths.js";
+import {
+  extensionUsesSkippedScannerPath,
+  isPathInside,
+} from "../security/scan-paths.js";
 import * as skillScanner from "../security/skill-scanner.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import { loadPluginManifest } from "./manifest.js";
@@ -82,14 +92,19 @@ async function ensureOpenClawExtensions(manifest: PackageManifest) {
   if (!Array.isArray(extensions)) {
     throw new Error("package.json missing openclaw.extensions");
   }
-  const list = extensions.map((e) => (typeof e === "string" ? e.trim() : "")).filter(Boolean);
+  const list = extensions
+    .map((e) => (typeof e === "string" ? e.trim() : ""))
+    .filter(Boolean);
   if (list.length === 0) {
     throw new Error("package.json openclaw.extensions is empty");
   }
   return list;
 }
 
-function buildFileInstallResult(pluginId: string, targetFile: string): InstallPluginResult {
+function buildFileInstallResult(
+  pluginId: string,
+  targetFile: string,
+): InstallPluginResult {
   return {
     ok: true,
     pluginId,
@@ -100,7 +115,10 @@ function buildFileInstallResult(pluginId: string, targetFile: string): InstallPl
   };
 }
 
-export function resolvePluginInstallDir(pluginId: string, extensionsDir?: string): string {
+export function resolvePluginInstallDir(
+  pluginId: string,
+  extensionsDir?: string,
+): string {
   const extensionsBase = extensionsDir
     ? resolveUserPath(extensionsDir)
     : path.join(CONFIG_DIR, "extensions");
@@ -128,7 +146,10 @@ async function installPluginFromPackageDir(params: {
   dryRun?: boolean;
   expectedPluginId?: string;
 }): Promise<InstallPluginResult> {
-  const { logger, timeoutMs, mode, dryRun } = resolveTimedInstallModeOptions(params, defaultLogger);
+  const { logger, timeoutMs, mode, dryRun } = resolveTimedInstallModeOptions(
+    params,
+    defaultLogger,
+  );
 
   const manifestPath = path.join(params.packageDir, "package.json");
   if (!(await fileExists(manifestPath))) {
@@ -185,7 +206,9 @@ async function installPluginFromPackageDir(params: {
   for (const entry of extensions) {
     const resolvedEntry = path.resolve(packageDir, entry);
     if (!isPathInside(packageDir, resolvedEntry)) {
-      logger.warn?.(`extension entry escapes plugin directory and will not be scanned: ${entry}`);
+      logger.warn?.(
+        `extension entry escapes plugin directory and will not be scanned: ${entry}`,
+      );
       continue;
     }
     if (extensionUsesSkippedScannerPath(entry)) {
@@ -198,9 +221,12 @@ async function installPluginFromPackageDir(params: {
 
   // Scan plugin source for dangerous code patterns (warn-only; never blocks install)
   try {
-    const scanSummary = await skillScanner.scanDirectoryWithSummary(params.packageDir, {
-      includeFiles: forcedScanEntries,
-    });
+    const scanSummary = await skillScanner.scanDirectoryWithSummary(
+      params.packageDir,
+      {
+        includeFiles: forcedScanEntries,
+      },
+    );
     if (scanSummary.critical > 0) {
       const criticalDetails = scanSummary.findings
         .filter((f) => f.severity === "critical")
@@ -248,7 +274,8 @@ async function installPluginFromPackageDir(params: {
       pluginId,
       targetDir,
       manifestName: pkgName || undefined,
-      version: typeof manifest.version === "string" ? manifest.version : undefined,
+      version:
+        typeof manifest.version === "string" ? manifest.version : undefined,
       extensions,
     };
   }
@@ -286,7 +313,8 @@ async function installPluginFromPackageDir(params: {
     pluginId,
     targetDir,
     manifestName: pkgName || undefined,
-    version: typeof manifest.version === "string" ? manifest.version : undefined,
+    version:
+      typeof manifest.version === "string" ? manifest.version : undefined,
     extensions,
   };
 }
@@ -363,7 +391,10 @@ export async function installPluginFromFile(params: {
   mode?: "install" | "update";
   dryRun?: boolean;
 }): Promise<InstallPluginResult> {
-  const { logger, mode, dryRun } = resolveInstallModeOptions(params, defaultLogger);
+  const { logger, mode, dryRun } = resolveInstallModeOptions(
+    params,
+    defaultLogger,
+  );
 
   const filePath = resolveUserPath(params.filePath);
   if (!(await fileExists(filePath))) {
@@ -381,10 +412,16 @@ export async function installPluginFromFile(params: {
   if (pluginIdError) {
     return { ok: false, error: pluginIdError };
   }
-  const targetFile = path.join(extensionsDir, `${safeFileName(pluginId)}${path.extname(filePath)}`);
+  const targetFile = path.join(
+    extensionsDir,
+    `${safeFileName(pluginId)}${path.extname(filePath)}`,
+  );
 
   if (mode === "install" && (await fileExists(targetFile))) {
-    return { ok: false, error: `plugin already exists: ${targetFile} (delete it first)` };
+    return {
+      ok: false,
+      error: `plugin already exists: ${targetFile} (delete it first)`,
+    };
   }
 
   if (dryRun) {
@@ -406,9 +443,14 @@ export async function installPluginFromNpmSpec(params: {
   dryRun?: boolean;
   expectedPluginId?: string;
   expectedIntegrity?: string;
-  onIntegrityDrift?: (params: PluginNpmIntegrityDriftParams) => boolean | Promise<boolean>;
+  onIntegrityDrift?: (
+    params: PluginNpmIntegrityDriftParams,
+  ) => boolean | Promise<boolean>;
 }): Promise<InstallPluginResult> {
-  const { logger, timeoutMs, mode, dryRun } = resolveTimedInstallModeOptions(params, defaultLogger);
+  const { logger, timeoutMs, mode, dryRun } = resolveTimedInstallModeOptions(
+    params,
+    defaultLogger,
+  );
   const expectedPluginId = params.expectedPluginId;
   const spec = params.spec.trim();
   const specError = validateRegistryNpmSpec(spec);

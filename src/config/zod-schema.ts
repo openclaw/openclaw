@@ -2,7 +2,12 @@ import { z } from "zod";
 import { parseByteSize } from "../cli/parse-bytes.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import { ToolsSchema } from "./zod-schema.agent-runtime.js";
-import { AgentsSchema, AudioSchema, BindingsSchema, BroadcastSchema } from "./zod-schema.agents.js";
+import {
+  AgentsSchema,
+  AudioSchema,
+  BindingsSchema,
+  BroadcastSchema,
+} from "./zod-schema.agents.js";
 import { ApprovalsSchema } from "./zod-schema.approvals.js";
 import {
   HexColorSchema,
@@ -10,7 +15,11 @@ import {
   SecretInputSchema,
   SecretsConfigSchema,
 } from "./zod-schema.core.js";
-import { HookMappingSchema, HooksGmailSchema, InternalHooksSchema } from "./zod-schema.hooks.js";
+import {
+  HookMappingSchema,
+  HooksGmailSchema,
+  InternalHooksSchema,
+} from "./zod-schema.hooks.js";
 import { InstallRecordShape } from "./zod-schema.installs.js";
 import { ChannelsSchema } from "./zod-schema.providers.js";
 import { sensitive } from "./zod-schema.sensitive.js";
@@ -101,7 +110,9 @@ const MemoryQmdSchema = z
   .object({
     command: z.string().optional(),
     mcporter: MemoryQmdMcporterSchema.optional(),
-    searchMode: z.union([z.literal("query"), z.literal("search"), z.literal("vsearch")]).optional(),
+    searchMode: z
+      .union([z.literal("query"), z.literal("search"), z.literal("vsearch")])
+      .optional(),
     includeDefaultMemory: z.boolean().optional(),
     paths: z.array(MemoryQmdPathSchema).optional(),
     sessions: MemoryQmdSessionSchema.optional(),
@@ -114,7 +125,9 @@ const MemoryQmdSchema = z
 const MemorySchema = z
   .object({
     backend: z.union([z.literal("builtin"), z.literal("qmd")]).optional(),
-    citations: z.union([z.literal("auto"), z.literal("on"), z.literal("off")]).optional(),
+    citations: z
+      .union([z.literal("auto"), z.literal("on"), z.literal("off")])
+      .optional(),
     qmd: MemoryQmdSchema.optional(),
   })
   .strict()
@@ -142,7 +155,10 @@ export const OpenClawSchema = z
             z.number().transform((n, ctx) => {
               const d = new Date(n);
               if (Number.isNaN(d.getTime())) {
-                ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Invalid timestamp" });
+                ctx.addIssue({
+                  code: z.ZodIssueCode.custom,
+                  message: "Invalid timestamp",
+                });
                 return z.NEVER;
               }
               return d.toISOString();
@@ -171,7 +187,9 @@ export const OpenClawSchema = z
         lastRunVersion: z.string().optional(),
         lastRunCommit: z.string().optional(),
         lastRunCommand: z.string().optional(),
-        lastRunMode: z.union([z.literal("local"), z.literal("remote")]).optional(),
+        lastRunMode: z
+          .union([z.literal("local"), z.literal("remote")])
+          .optional(),
       })
       .strict()
       .optional(),
@@ -184,7 +202,9 @@ export const OpenClawSchema = z
           .object({
             enabled: z.boolean().optional(),
             endpoint: z.string().optional(),
-            protocol: z.union([z.literal("http/protobuf"), z.literal("grpc")]).optional(),
+            protocol: z
+              .union([z.literal("http/protobuf"), z.literal("grpc")])
+              .optional(),
             headers: z.record(z.string(), z.string()).optional(),
             serviceName: z.string().optional(),
             traces: z.boolean().optional(),
@@ -217,14 +237,18 @@ export const OpenClawSchema = z
         consoleStyle: z
           .union([z.literal("pretty"), z.literal("compact"), z.literal("json")])
           .optional(),
-        redactSensitive: z.union([z.literal("off"), z.literal("tools")]).optional(),
+        redactSensitive: z
+          .union([z.literal("off"), z.literal("tools")])
+          .optional(),
         redactPatterns: z.array(z.string()).optional(),
       })
       .strict()
       .optional(),
     update: z
       .object({
-        channel: z.union([z.literal("stable"), z.literal("beta"), z.literal("dev")]).optional(),
+        channel: z
+          .union([z.literal("stable"), z.literal("beta"), z.literal("dev")])
+          .optional(),
         checkOnStart: z.boolean().optional(),
         auto: z
           .object({
@@ -266,12 +290,17 @@ export const OpenClawSchema = z
           .record(
             z
               .string()
-              .regex(/^[a-z0-9-]+$/, "Profile names must be alphanumeric with hyphens only"),
+              .regex(
+                /^[a-z0-9-]+$/,
+                "Profile names must be alphanumeric with hyphens only",
+              ),
             z
               .object({
                 cdpPort: z.number().int().min(1).max(65535).optional(),
                 cdpUrl: z.string().optional(),
-                driver: z.union([z.literal("clawd"), z.literal("extension")]).optional(),
+                driver: z
+                  .union([z.literal("clawd"), z.literal("extension")])
+                  .optional(),
                 attachOnly: z.boolean().optional(),
                 color: HexColorSchema,
               })
@@ -307,7 +336,11 @@ export const OpenClawSchema = z
             z
               .object({
                 provider: z.string(),
-                mode: z.union([z.literal("api_key"), z.literal("oauth"), z.literal("token")]),
+                mode: z.union([
+                  z.literal("api_key"),
+                  z.literal("oauth"),
+                  z.literal("token"),
+                ]),
                 email: z.string().optional(),
               })
               .strict(),
@@ -317,7 +350,9 @@ export const OpenClawSchema = z
         cooldowns: z
           .object({
             billingBackoffHours: z.number().positive().optional(),
-            billingBackoffHoursByProvider: z.record(z.string(), z.number().positive()).optional(),
+            billingBackoffHoursByProvider: z
+              .record(z.string(), z.number().positive())
+              .optional(),
             billingMaxHours: z.number().positive().optional(),
             failureWindowHours: z.number().positive().optional(),
           })
@@ -344,7 +379,9 @@ export const OpenClawSchema = z
             coalesceIdleMs: z.number().int().nonnegative().optional(),
             maxChunkChars: z.number().int().positive().optional(),
             repeatSuppression: z.boolean().optional(),
-            deliveryMode: z.union([z.literal("live"), z.literal("final_only")]).optional(),
+            deliveryMode: z
+              .union([z.literal("live"), z.literal("final_only")])
+              .optional(),
             hiddenBoundarySeparator: z
               .union([
                 z.literal("none"),
@@ -394,9 +431,15 @@ export const OpenClawSchema = z
         retry: z
           .object({
             maxAttempts: z.number().int().min(0).max(10).optional(),
-            backoffMs: z.array(z.number().int().nonnegative()).min(1).max(10).optional(),
+            backoffMs: z
+              .array(z.number().int().nonnegative())
+              .min(1)
+              .max(10)
+              .optional(),
             retryOn: z
-              .array(z.enum(["rate_limit", "network", "timeout", "server_error"]))
+              .array(
+                z.enum(["rate_limit", "network", "timeout", "server_error"]),
+              )
               .min(1)
               .optional(),
           })
@@ -434,9 +477,14 @@ export const OpenClawSchema = z
       })
       .strict()
       .superRefine((val, ctx) => {
-        if (val.sessionRetention !== undefined && val.sessionRetention !== false) {
+        if (
+          val.sessionRetention !== undefined &&
+          val.sessionRetention !== false
+        ) {
           try {
-            parseDurationMs(String(val.sessionRetention).trim(), { defaultUnit: "h" });
+            parseDurationMs(String(val.sessionRetention).trim(), {
+              defaultUnit: "h",
+            });
           } catch {
             ctx.addIssue({
               code: z.ZodIssueCode.custom,
@@ -447,7 +495,9 @@ export const OpenClawSchema = z
         }
         if (val.runLog?.maxBytes !== undefined) {
           try {
-            parseByteSize(String(val.runLog.maxBytes).trim(), { defaultUnit: "b" });
+            parseByteSize(String(val.runLog.maxBytes).trim(), {
+              defaultUnit: "b",
+            });
           } catch {
             ctx.addIssue({
               code: z.ZodIssueCode.custom,
@@ -596,7 +646,9 @@ export const OpenClawSchema = z
               .optional(),
             trustedProxy: z
               .object({
-                userHeader: z.string().min(1, "userHeader is required for trusted-proxy mode"),
+                userHeader: z
+                  .string()
+                  .min(1, "userHeader is required for trusted-proxy mode"),
                 requiredHeaders: z.array(z.string()).optional(),
                 allowUsers: z.array(z.string()).optional(),
               })
@@ -617,7 +669,13 @@ export const OpenClawSchema = z
         channelHealthCheckMinutes: z.number().int().min(0).optional(),
         tailscale: z
           .object({
-            mode: z.union([z.literal("off"), z.literal("serve"), z.literal("funnel")]).optional(),
+            mode: z
+              .union([
+                z.literal("off"),
+                z.literal("serve"),
+                z.literal("funnel"),
+              ])
+              .optional(),
             resetOnExit: z.boolean().optional(),
           })
           .strict()
@@ -625,7 +683,9 @@ export const OpenClawSchema = z
         remote: z
           .object({
             url: z.string().optional(),
-            transport: z.union([z.literal("ssh"), z.literal("direct")]).optional(),
+            transport: z
+              .union([z.literal("ssh"), z.literal("direct")])
+              .optional(),
             token: z.string().optional().register(sensitive),
             password: z.string().optional().register(sensitive),
             tlsFingerprint: z.string().optional(),
@@ -685,7 +745,11 @@ export const OpenClawSchema = z
                           .object({
                             maxPages: z.number().int().positive().optional(),
                             maxPixels: z.number().int().positive().optional(),
-                            minTextChars: z.number().int().nonnegative().optional(),
+                            minTextChars: z
+                              .number()
+                              .int()
+                              .nonnegative()
+                              .optional(),
                           })
                           .strict()
                           .optional(),
@@ -711,7 +775,9 @@ export const OpenClawSchema = z
               .optional(),
             securityHeaders: z
               .object({
-                strictTransportSecurity: z.union([z.string(), z.literal(false)]).optional(),
+                strictTransportSecurity: z
+                  .union([z.string(), z.literal(false)])
+                  .optional(),
               })
               .strict()
               .optional(),
@@ -723,7 +789,11 @@ export const OpenClawSchema = z
             browser: z
               .object({
                 mode: z
-                  .union([z.literal("auto"), z.literal("manual"), z.literal("off")])
+                  .union([
+                    z.literal("auto"),
+                    z.literal("manual"),
+                    z.literal("off"),
+                  ])
                   .optional(),
                 node: z.string().optional(),
               })
@@ -753,7 +823,12 @@ export const OpenClawSchema = z
           .object({
             preferBrew: z.boolean().optional(),
             nodeManager: z
-              .union([z.literal("npm"), z.literal("pnpm"), z.literal("yarn"), z.literal("bun")])
+              .union([
+                z.literal("npm"),
+                z.literal("pnpm"),
+                z.literal("yarn"),
+                z.literal("bun"),
+              ])
               .optional(),
           })
           .strict()

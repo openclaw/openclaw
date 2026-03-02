@@ -11,7 +11,10 @@ export type ResolveSenderCommandAuthorizationParams = {
   senderId: string;
   isSenderAllowed: (senderId: string, allowFrom: string[]) => boolean;
   readAllowFromStore: () => Promise<string[]>;
-  shouldComputeCommandAuthorized: (rawBody: string, cfg: OpenClawConfig) => boolean;
+  shouldComputeCommandAuthorized: (
+    rawBody: string,
+    cfg: OpenClawConfig,
+  ) => boolean;
   resolveCommandAuthorizedFromAuthorizers: (params: {
     useAccessGroups: boolean;
     authorizers: Array<{ configured: boolean; allowed: boolean }>;
@@ -19,7 +22,10 @@ export type ResolveSenderCommandAuthorizationParams = {
 };
 
 export type CommandAuthorizationRuntime = {
-  shouldComputeCommandAuthorized: (rawBody: string, cfg: OpenClawConfig) => boolean;
+  shouldComputeCommandAuthorized: (
+    rawBody: string,
+    cfg: OpenClawConfig,
+  ) => boolean;
   resolveCommandAuthorizedFromAuthorizers: (params: {
     useAccessGroups: boolean;
     authorizers: Array<{ configured: boolean; allowed: boolean }>;
@@ -55,8 +61,10 @@ export async function resolveSenderCommandAuthorizationWithRuntime(
 ): ReturnType<typeof resolveSenderCommandAuthorization> {
   return resolveSenderCommandAuthorization({
     ...params,
-    shouldComputeCommandAuthorized: params.runtime.shouldComputeCommandAuthorized,
-    resolveCommandAuthorizedFromAuthorizers: params.runtime.resolveCommandAuthorizedFromAuthorizers,
+    shouldComputeCommandAuthorized:
+      params.runtime.shouldComputeCommandAuthorized,
+    resolveCommandAuthorizedFromAuthorizers:
+      params.runtime.resolveCommandAuthorizedFromAuthorizers,
   });
 }
 
@@ -69,7 +77,10 @@ export async function resolveSenderCommandAuthorization(
   senderAllowedForCommands: boolean;
   commandAuthorized: boolean | undefined;
 }> {
-  const shouldComputeAuth = params.shouldComputeCommandAuthorized(params.rawBody, params.cfg);
+  const shouldComputeAuth = params.shouldComputeCommandAuthorized(
+    params.rawBody,
+    params.cfg,
+  );
   const storeAllowFrom =
     !params.isGroup &&
     params.dmPolicy !== "allowlist" &&
@@ -83,7 +94,8 @@ export async function resolveSenderCommandAuthorization(
     allowFrom: params.configuredAllowFrom,
     groupAllowFrom: params.configuredGroupAllowFrom ?? [],
     storeAllowFrom,
-    isSenderAllowed: (allowFrom) => params.isSenderAllowed(params.senderId, allowFrom),
+    isSenderAllowed: (allowFrom) =>
+      params.isSenderAllowed(params.senderId, allowFrom),
   });
   const effectiveAllowFrom = access.effectiveAllowFrom;
   const effectiveGroupAllowFrom = access.effectiveGroupAllowFrom;
@@ -92,14 +104,26 @@ export async function resolveSenderCommandAuthorization(
     params.senderId,
     params.isGroup ? effectiveGroupAllowFrom : effectiveAllowFrom,
   );
-  const ownerAllowedForCommands = params.isSenderAllowed(params.senderId, effectiveAllowFrom);
-  const groupAllowedForCommands = params.isSenderAllowed(params.senderId, effectiveGroupAllowFrom);
+  const ownerAllowedForCommands = params.isSenderAllowed(
+    params.senderId,
+    effectiveAllowFrom,
+  );
+  const groupAllowedForCommands = params.isSenderAllowed(
+    params.senderId,
+    effectiveGroupAllowFrom,
+  );
   const commandAuthorized = shouldComputeAuth
     ? params.resolveCommandAuthorizedFromAuthorizers({
         useAccessGroups,
         authorizers: [
-          { configured: effectiveAllowFrom.length > 0, allowed: ownerAllowedForCommands },
-          { configured: effectiveGroupAllowFrom.length > 0, allowed: groupAllowedForCommands },
+          {
+            configured: effectiveAllowFrom.length > 0,
+            allowed: ownerAllowedForCommands,
+          },
+          {
+            configured: effectiveGroupAllowFrom.length > 0,
+            allowed: groupAllowedForCommands,
+          },
         ],
       })
     : undefined;

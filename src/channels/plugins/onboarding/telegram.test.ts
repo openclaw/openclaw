@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { normalizeTelegramAllowFromInput, parseTelegramAllowFromId } from "./telegram.js";
+import {
+  normalizeTelegramAllowFromInput,
+  parseTelegramAllowFromId,
+} from "./telegram.js";
 
 describe("normalizeTelegramAllowFromInput", () => {
   it("strips telegram/tg prefixes and trims whitespace", () => {

@@ -7,7 +7,9 @@ describe("enablePluginInConfig", () => {
     const cfg: OpenClawConfig = {};
     const result = enablePluginInConfig(cfg, "google-gemini-cli-auth");
     expect(result.enabled).toBe(true);
-    expect(result.config.plugins?.entries?.["google-gemini-cli-auth"]?.enabled).toBe(true);
+    expect(
+      result.config.plugins?.entries?.["google-gemini-cli-auth"]?.enabled,
+    ).toBe(true);
   });
 
   it("adds plugin to allowlist when allowlist is configured", () => {
@@ -18,7 +20,10 @@ describe("enablePluginInConfig", () => {
     };
     const result = enablePluginInConfig(cfg, "google-gemini-cli-auth");
     expect(result.enabled).toBe(true);
-    expect(result.config.plugins?.allow).toEqual(["memory-core", "google-gemini-cli-auth"]);
+    expect(result.config.plugins?.allow).toEqual([
+      "memory-core",
+      "google-gemini-cli-auth",
+    ]);
   });
 
   it("refuses enable when plugin is denylisted", () => {

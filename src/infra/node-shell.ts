@@ -1,4 +1,7 @@
-export function buildNodeShellCommand(command: string, platform?: string | null) {
+export function buildNodeShellCommand(
+  command: string,
+  platform?: string | null,
+) {
   const normalized = String(platform ?? "")
     .trim()
     .toLowerCase();

@@ -292,10 +292,13 @@ describe("withNoProxyForCdpUrl", () => {
     delete process.env.NO_PROXY;
     delete process.env.no_proxy;
     try {
-      await withNoProxyForCdpUrl("https://browserless.example/chrome?token=abc", async () => {
-        expect(process.env.NO_PROXY).toBeUndefined();
-        expect(process.env.no_proxy).toBeUndefined();
-      });
+      await withNoProxyForCdpUrl(
+        "https://browserless.example/chrome?token=abc",
+        async () => {
+          expect(process.env.NO_PROXY).toBeUndefined();
+          expect(process.env.no_proxy).toBeUndefined();
+        },
+      );
     } finally {
       delete process.env.HTTP_PROXY;
       delete process.env.NO_PROXY;

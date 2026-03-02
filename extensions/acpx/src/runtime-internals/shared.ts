@@ -39,13 +39,18 @@ export function asOptionalBoolean(value: unknown): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;
 }
 
-export function deriveAgentFromSessionKey(sessionKey: string, fallbackAgent: string): string {
+export function deriveAgentFromSessionKey(
+  sessionKey: string,
+  fallbackAgent: string,
+): string {
   const match = sessionKey.match(/^agent:([^:]+):/i);
   const candidate = match?.[1] ? asTrimmedString(match[1]) : "";
   return candidate || fallbackAgent;
 }
 
-export function buildPermissionArgs(mode: ResolvedAcpxPluginConfig["permissionMode"]): string[] {
+export function buildPermissionArgs(
+  mode: ResolvedAcpxPluginConfig["permissionMode"],
+): string[] {
   if (mode === "approve-all") {
     return ["--approve-all"];
   }

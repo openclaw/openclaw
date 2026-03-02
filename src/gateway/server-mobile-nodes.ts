@@ -5,7 +5,9 @@ const isMobilePlatform = (platform: unknown): boolean => {
   if (!p) {
     return false;
   }
-  return p.startsWith("ios") || p.startsWith("ipados") || p.startsWith("android");
+  return (
+    p.startsWith("ios") || p.startsWith("ipados") || p.startsWith("android")
+  );
 };
 
 export function hasConnectedMobileNode(registry: NodeRegistry): boolean {

@@ -61,9 +61,12 @@ export function resolveSessionKeyForRequest(opts: {
   });
   const sessionStore = loadSessionStore(storePath);
 
-  const ctx: MsgContext | undefined = opts.to?.trim() ? { From: opts.to } : undefined;
+  const ctx: MsgContext | undefined = opts.to?.trim()
+    ? { From: opts.to }
+    : undefined;
   let sessionKey: string | undefined =
-    explicitSessionKey ?? (ctx ? resolveSessionKey(scope, ctx, mainKey) : undefined);
+    explicitSessionKey ??
+    (ctx ? resolveSessionKey(scope, ctx, mainKey) : undefined);
 
   // If a session id was provided, prefer to re-use its entry (by id) even when no key was derived.
   if (
@@ -99,7 +102,11 @@ export function resolveSessionKeyForRequest(opts: {
         (key) => altStore[key]?.sessionId === opts.sessionId,
       );
       if (foundKey) {
-        return { sessionKey: foundKey, sessionStore: altStore, storePath: altStorePath };
+        return {
+          sessionKey: foundKey,
+          sessionStore: altStore,
+          storePath: altStorePath,
+        };
       }
     }
   }
@@ -137,11 +144,16 @@ export function resolveSession(opts: {
     resetOverride: channelReset,
   });
   const fresh = sessionEntry
-    ? evaluateSessionFreshness({ updatedAt: sessionEntry.updatedAt, now, policy: resetPolicy })
-        .fresh
+    ? evaluateSessionFreshness({
+        updatedAt: sessionEntry.updatedAt,
+        now,
+        policy: resetPolicy,
+      }).fresh
     : false;
   const sessionId =
-    opts.sessionId?.trim() || (fresh ? sessionEntry?.sessionId : undefined) || crypto.randomUUID();
+    opts.sessionId?.trim() ||
+    (fresh ? sessionEntry?.sessionId : undefined) ||
+    crypto.randomUUID();
   const isNewSession = !fresh && !opts.sessionId;
 
   const persistedThinking =

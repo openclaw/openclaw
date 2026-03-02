@@ -3,20 +3,39 @@ import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import { resolveOAuthPath } from "../../config/paths.js";
 import { withFileLock } from "../../infra/file-lock.js";
 import { loadJsonFile, saveJsonFile } from "../../infra/json-file.js";
-import { AUTH_STORE_LOCK_OPTIONS, AUTH_STORE_VERSION, log } from "./constants.js";
+import {
+  AUTH_STORE_LOCK_OPTIONS,
+  AUTH_STORE_VERSION,
+  log,
+} from "./constants.js";
 import { syncExternalCliCredentials } from "./external-cli-sync.js";
-import { ensureAuthStoreFile, resolveAuthStorePath, resolveLegacyAuthStorePath } from "./paths.js";
-import type { AuthProfileCredential, AuthProfileStore, ProfileUsageStats } from "./types.js";
+import {
+  ensureAuthStoreFile,
+  resolveAuthStorePath,
+  resolveLegacyAuthStorePath,
+} from "./paths.js";
+import type {
+  AuthProfileCredential,
+  AuthProfileStore,
+  ProfileUsageStats,
+} from "./types.js";
 
 type LegacyAuthStore = Record<string, AuthProfileCredential>;
-type CredentialRejectReason = "non_object" | "invalid_type" | "missing_provider";
+type CredentialRejectReason =
+  | "non_object"
+  | "invalid_type"
+  | "missing_provider";
 type RejectedCredentialEntry = { key: string; reason: CredentialRejectReason };
 type LoadAuthProfileStoreOptions = {
   allowKeychainPrompt?: boolean;
   readOnly?: boolean;
 };
 
-const AUTH_PROFILE_TYPES = new Set<AuthProfileCredential["type"]>(["api_key", "oauth", "token"]);
+const AUTH_PROFILE_TYPES = new Set<AuthProfileCredential["type"]>([
+  "api_key",
+  "oauth",
+  "token",
+]);
 
 const runtimeAuthStoreSnapshots = new Map<string, AuthProfileStore>();
 
@@ -28,7 +47,9 @@ function cloneAuthProfileStore(store: AuthProfileStore): AuthProfileStore {
   return structuredClone(store);
 }
 
-function resolveRuntimeAuthProfileStore(agentDir?: string): AuthProfileStore | null {
+function resolveRuntimeAuthProfileStore(
+  agentDir?: string,
+): AuthProfileStore | null {
   if (runtimeAuthStoreSnapshots.size === 0) {
     return null;
   }
@@ -107,7 +128,9 @@ export async function updateAuthProfileStoreWithLock(params: {
  * `type` and `apiKey` instead of `key`.  Accept both spellings so users don't
  * silently lose their credentials.
  */
-function normalizeRawCredentialEntry(raw: Record<string, unknown>): Partial<AuthProfileCredential> {
+function normalizeRawCredentialEntry(
+  raw: Record<string, unknown>,
+): Partial<AuthProfileCredential> {
   const entry = { ...raw } as Record<string, unknown>;
   // mode → type alias (openclaw.json uses "mode"; auth-profiles.json uses "type")
   if (!("type" in entry) && typeof entry["mode"] === "string") {
@@ -123,7 +146,9 @@ function normalizeRawCredentialEntry(raw: Record<string, unknown>): Partial<Auth
 function parseCredentialEntry(
   raw: unknown,
   fallbackProvider?: string,
-): { ok: true; credential: AuthProfileCredential } | { ok: false; reason: CredentialRejectReason } {
+):
+  | { ok: true; credential: AuthProfileCredential }
+  | { ok: false; reason: CredentialRejectReason } {
   if (!raw || typeof raw !== "object") {
     return { ok: false, reason: "non_object" };
   }
@@ -144,7 +169,10 @@ function parseCredentialEntry(
   };
 }
 
-function warnRejectedCredentialEntries(source: string, rejected: RejectedCredentialEntry[]): void {
+function warnRejectedCredentialEntries(
+  source: string,
+  rejected: RejectedCredentialEntry[],
+): void {
   if (rejected.length === 0) {
     return;
   }
@@ -302,7 +330,10 @@ function mergeOAuthFileIntoStore(store: AuthProfileStore): boolean {
   return mutated;
 }
 
-function applyLegacyStore(store: AuthProfileStore, legacy: LegacyAuthStore): void {
+function applyLegacyStore(
+  store: AuthProfileStore,
+  legacy: LegacyAuthStore,
+): void {
   for (const [provider, cred] of Object.entries(legacy)) {
     const profileId = `${provider}:default`;
     if (cred.type === "api_key") {
@@ -415,7 +446,10 @@ function loadAuthProfileStoreForAgent(
   // Keep external CLI credentials visible in runtime even during read-only loads.
   const syncedCli = syncExternalCliCredentials(store);
   const forceReadOnly = process.env.OPENCLAW_AUTH_STORE_READONLY === "1";
-  const shouldWrite = !readOnly && !forceReadOnly && (legacy !== null || mergedOAuth || syncedCli);
+  const shouldWrite =
+    !readOnly &&
+    !forceReadOnly &&
+    (legacy !== null || mergedOAuth || syncedCli);
   if (shouldWrite) {
     saveJsonFile(authPath, store);
   }
@@ -455,8 +489,13 @@ export function loadAuthProfileStoreForRuntime(
   return mergeAuthProfileStores(mainStore, store);
 }
 
-export function loadAuthProfileStoreForSecretsRuntime(agentDir?: string): AuthProfileStore {
-  return loadAuthProfileStoreForRuntime(agentDir, { readOnly: true, allowKeychainPrompt: false });
+export function loadAuthProfileStoreForSecretsRuntime(
+  agentDir?: string,
+): AuthProfileStore {
+  return loadAuthProfileStoreForRuntime(agentDir, {
+    readOnly: true,
+    allowKeychainPrompt: false,
+  });
 }
 
 export function ensureAuthProfileStore(
@@ -481,16 +520,27 @@ export function ensureAuthProfileStore(
   return merged;
 }
 
-export function saveAuthProfileStore(store: AuthProfileStore, agentDir?: string): void {
+export function saveAuthProfileStore(
+  store: AuthProfileStore,
+  agentDir?: string,
+): void {
   const authPath = resolveAuthStorePath(agentDir);
   const profiles = Object.fromEntries(
     Object.entries(store.profiles).map(([profileId, credential]) => {
-      if (credential.type === "api_key" && credential.keyRef && credential.key !== undefined) {
+      if (
+        credential.type === "api_key" &&
+        credential.keyRef &&
+        credential.key !== undefined
+      ) {
         const sanitized = { ...credential } as Record<string, unknown>;
         delete sanitized.key;
         return [profileId, sanitized];
       }
-      if (credential.type === "token" && credential.tokenRef && credential.token !== undefined) {
+      if (
+        credential.type === "token" &&
+        credential.tokenRef &&
+        credential.token !== undefined
+      ) {
         const sanitized = { ...credential } as Record<string, unknown>;
         delete sanitized.token;
         return [profileId, sanitized];

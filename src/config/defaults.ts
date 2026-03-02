@@ -1,6 +1,12 @@
 import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
-import { normalizeProviderId, parseModelRef } from "../agents/model-selection.js";
-import { DEFAULT_AGENT_MAX_CONCURRENT, DEFAULT_SUBAGENT_MAX_CONCURRENT } from "./agent-limits.js";
+import {
+  normalizeProviderId,
+  parseModelRef,
+} from "../agents/model-selection.js";
+import {
+  DEFAULT_AGENT_MAX_CONCURRENT,
+  DEFAULT_SUBAGENT_MAX_CONCURRENT,
+} from "./agent-limits.js";
 import { resolveAgentModelPrimaryValue } from "./model-input.js";
 import {
   DEFAULT_TALK_PROVIDER,
@@ -50,7 +56,9 @@ function resolveDefaultProviderApi(
   if (providerApi) {
     return providerApi;
   }
-  return normalizeProviderId(providerId) === "anthropic" ? "anthropic-messages" : undefined;
+  return normalizeProviderId(providerId) === "anthropic"
+    ? "anthropic-messages"
+    : undefined;
 }
 
 function isPositiveNumber(value: unknown): value is number {
@@ -61,15 +69,24 @@ function resolveModelCost(
   raw?: Partial<ModelDefinitionConfig["cost"]>,
 ): ModelDefinitionConfig["cost"] {
   return {
-    input: typeof raw?.input === "number" ? raw.input : DEFAULT_MODEL_COST.input,
-    output: typeof raw?.output === "number" ? raw.output : DEFAULT_MODEL_COST.output,
-    cacheRead: typeof raw?.cacheRead === "number" ? raw.cacheRead : DEFAULT_MODEL_COST.cacheRead,
+    input:
+      typeof raw?.input === "number" ? raw.input : DEFAULT_MODEL_COST.input,
+    output:
+      typeof raw?.output === "number" ? raw.output : DEFAULT_MODEL_COST.output,
+    cacheRead:
+      typeof raw?.cacheRead === "number"
+        ? raw.cacheRead
+        : DEFAULT_MODEL_COST.cacheRead,
     cacheWrite:
-      typeof raw?.cacheWrite === "number" ? raw.cacheWrite : DEFAULT_MODEL_COST.cacheWrite,
+      typeof raw?.cacheWrite === "number"
+        ? raw.cacheWrite
+        : DEFAULT_MODEL_COST.cacheWrite,
   };
 }
 
-function resolveAnthropicDefaultAuthMode(cfg: OpenClawConfig): AnthropicAuthDefaultsMode | null {
+function resolveAnthropicDefaultAuthMode(
+  cfg: OpenClawConfig,
+): AnthropicAuthDefaultsMode | null {
   const profiles = cfg.auth?.profiles ?? {};
   const anthropicProfiles = Object.entries(profiles).filter(
     ([, profile]) => profile?.provider === "anthropic",
@@ -89,7 +106,9 @@ function resolveAnthropicDefaultAuthMode(cfg: OpenClawConfig): AnthropicAuthDefa
     }
   }
 
-  const hasApiKey = anthropicProfiles.some(([, profile]) => profile?.mode === "api_key");
+  const hasApiKey = anthropicProfiles.some(
+    ([, profile]) => profile?.mode === "api_key",
+  );
   const hasOauth = anthropicProfiles.some(
     ([, profile]) => profile?.mode === "oauth" || profile?.mode === "token",
   );
@@ -181,8 +200,11 @@ export function applyTalkApiKey(config: OpenClawConfig): OpenClawConfig {
   }
 
   const existingProviderApiKey =
-    typeof active.config?.apiKey === "string" ? active.config.apiKey.trim() : "";
-  const existingLegacyApiKey = typeof talk?.apiKey === "string" ? talk.apiKey.trim() : "";
+    typeof active.config?.apiKey === "string"
+      ? active.config.apiKey.trim()
+      : "";
+  const existingLegacyApiKey =
+    typeof talk?.apiKey === "string" ? talk.apiKey.trim() : "";
   if (existingProviderApiKey || existingLegacyApiKey) {
     return normalized;
   }
@@ -206,7 +228,9 @@ export function applyTalkApiKey(config: OpenClawConfig): OpenClawConfig {
   };
 }
 
-export function applyTalkConfigNormalization(config: OpenClawConfig): OpenClawConfig {
+export function applyTalkConfigNormalization(
+  config: OpenClawConfig,
+): OpenClawConfig {
   return normalizeTalkConfig(config);
 }
 
@@ -233,7 +257,8 @@ export function applyModelDefaults(cfg: OpenClawConfig): OpenClawConfig {
         const raw = model as ModelDefinitionLike;
         let modelMutated = false;
 
-        const reasoning = typeof raw.reasoning === "boolean" ? raw.reasoning : false;
+        const reasoning =
+          typeof raw.reasoning === "boolean" ? raw.reasoning : false;
         if (raw.reasoning !== reasoning) {
           modelMutated = true;
         }
@@ -261,8 +286,13 @@ export function applyModelDefaults(cfg: OpenClawConfig): OpenClawConfig {
           modelMutated = true;
         }
 
-        const defaultMaxTokens = Math.min(DEFAULT_MODEL_MAX_TOKENS, contextWindow);
-        const rawMaxTokens = isPositiveNumber(raw.maxTokens) ? raw.maxTokens : defaultMaxTokens;
+        const defaultMaxTokens = Math.min(
+          DEFAULT_MODEL_MAX_TOKENS,
+          contextWindow,
+        );
+        const rawMaxTokens = isPositiveNumber(raw.maxTokens)
+          ? raw.maxTokens
+          : defaultMaxTokens;
         const maxTokens = Math.min(rawMaxTokens, contextWindow);
         if (raw.maxTokens !== maxTokens) {
           modelMutated = true;
@@ -350,7 +380,8 @@ export function applyAgentDefaults(cfg: OpenClawConfig): OpenClawConfig {
   const agents = cfg.agents;
   const defaults = agents?.defaults;
   const hasMax =
-    typeof defaults?.maxConcurrent === "number" && Number.isFinite(defaults.maxConcurrent);
+    typeof defaults?.maxConcurrent === "number" &&
+    Number.isFinite(defaults.maxConcurrent);
   const hasSubMax =
     typeof defaults?.subagents?.maxConcurrent === "number" &&
     Number.isFinite(defaults.subagents.maxConcurrent);
@@ -404,7 +435,9 @@ export function applyLoggingDefaults(cfg: OpenClawConfig): OpenClawConfig {
   };
 }
 
-export function applyContextPruningDefaults(cfg: OpenClawConfig): OpenClawConfig {
+export function applyContextPruningDefaults(
+  cfg: OpenClawConfig,
+): OpenClawConfig {
   const defaults = cfg.agents?.defaults;
   if (!defaults) {
     return cfg;
@@ -456,7 +489,8 @@ export function applyContextPruningDefaults(cfg: OpenClawConfig): OpenClawConfig
         continue;
       }
       const current = entry ?? {};
-      const params = (current as { params?: Record<string, unknown> }).params ?? {};
+      const params =
+        (current as { params?: Record<string, unknown> }).params ?? {};
       if (typeof params.cacheRetention === "string") {
         continue;
       }
@@ -476,7 +510,8 @@ export function applyContextPruningDefaults(cfg: OpenClawConfig): OpenClawConfig
         const key = `${parsedPrimary.provider}/${parsedPrimary.model}`;
         const entry = nextModels[key];
         const current = entry ?? {};
-        const params = (current as { params?: Record<string, unknown> }).params ?? {};
+        const params =
+          (current as { params?: Record<string, unknown> }).params ?? {};
         if (typeof params.cacheRetention !== "string") {
           nextModels[key] = {
             ...(current as Record<string, unknown>),

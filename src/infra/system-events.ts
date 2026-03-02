@@ -2,7 +2,11 @@
 // prefixed to the next prompt. We intentionally avoid persistence to keep
 // events ephemeral. Events are session-scoped and require an explicit key.
 
-export type SystemEvent = { text: string; ts: number; contextKey?: string | null };
+export type SystemEvent = {
+  text: string;
+  ts: number;
+  contextKey?: string | null;
+};
 
 const MAX_EVENTS = 20;
 

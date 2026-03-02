@@ -44,7 +44,9 @@ describe("runWithReconnect", () => {
 
     expect(connectFn).toHaveBeenCalledTimes(3);
     expect(onError).toHaveBeenCalledTimes(2);
-    expect(onError).toHaveBeenCalledWith(expect.objectContaining({ message: "fetch failed" }));
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "fetch failed" }),
+    );
   });
 
   it("uses exponential backoff on consecutive errors, capped at maxDelayMs", async () => {

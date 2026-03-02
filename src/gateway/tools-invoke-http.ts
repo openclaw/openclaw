@@ -24,7 +24,10 @@ import { isSubagentSessionKey } from "../routing/session-key.js";
 import { DEFAULT_GATEWAY_HTTP_TOOL_DENY } from "../security/dangerous-tools.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
-import { authorizeHttpGatewayConnect, type ResolvedGatewayAuth } from "./auth.js";
+import {
+  authorizeHttpGatewayConnect,
+  type ResolvedGatewayAuth,
+} from "./auth.js";
 import {
   readJsonBodyOrError,
   sendGatewayAuthFailure,
@@ -52,7 +55,9 @@ function resolveSessionKeyFromBody(body: ToolsInvokeBody): string | undefined {
   return undefined;
 }
 
-function resolveMemoryToolDisableReasons(cfg: ReturnType<typeof loadConfig>): string[] {
+function resolveMemoryToolDisableReasons(
+  cfg: ReturnType<typeof loadConfig>,
+): string[] {
   if (!process.env.VITEST) {
     return [];
   }
@@ -60,7 +65,8 @@ function resolveMemoryToolDisableReasons(cfg: ReturnType<typeof loadConfig>): st
   const plugins = cfg.plugins;
   const slotRaw = plugins?.slots?.memory;
   const slotDisabled =
-    slotRaw === null || (typeof slotRaw === "string" && slotRaw.trim().toLowerCase() === "none");
+    slotRaw === null ||
+    (typeof slotRaw === "string" && slotRaw.trim().toLowerCase() === "none");
   const pluginsDisabled = plugins?.enabled === false;
   const defaultDisabled = isTestDefaultMemorySlotDisabled(cfg);
 
@@ -68,7 +74,11 @@ function resolveMemoryToolDisableReasons(cfg: ReturnType<typeof loadConfig>): st
     reasons.push("plugins.enabled=false");
   }
   if (slotDisabled) {
-    reasons.push(slotRaw === null ? "plugins.slots.memory=null" : 'plugins.slots.memory="none"');
+    reasons.push(
+      slotRaw === null
+        ? "plugins.slots.memory=null"
+        : 'plugins.slots.memory="none"',
+    );
   }
   if (!pluginsDisabled && !slotDisabled && defaultDisabled) {
     reasons.push("memory plugin disabled by test default");
@@ -89,7 +99,9 @@ function mergeActionIntoArgsIfSupported(params: {
     return args;
   }
   // TypeBox schemas are plain objects; many tools define an `action` property.
-  const schemaObj = toolSchema as { properties?: Record<string, unknown> } | null;
+  const schemaObj = toolSchema as {
+    properties?: Record<string, unknown>;
+  } | null;
   const hasAction = Boolean(
     schemaObj &&
     typeof schemaObj === "object" &&
@@ -142,7 +154,10 @@ export async function handleToolsInvokeHttpRequest(
     rateLimiter?: AuthRateLimiter;
   },
 ): Promise<boolean> {
-  const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+  const url = new URL(
+    req.url ?? "/",
+    `http://${req.headers.host ?? "localhost"}`,
+  );
   if (url.pathname !== "/tools/invoke") {
     return false;
   }
@@ -159,7 +174,8 @@ export async function handleToolsInvokeHttpRequest(
     connectAuth: token ? { token, password: token } : null,
     req,
     trustedProxies: opts.trustedProxies ?? cfg.gateway?.trustedProxies,
-    allowRealIpFallback: opts.allowRealIpFallback ?? cfg.gateway?.allowRealIpFallback,
+    allowRealIpFallback:
+      opts.allowRealIpFallback ?? cfg.gateway?.allowRealIpFallback,
     rateLimiter: opts.rateLimiter,
   });
   if (!authResult.ok) {
@@ -167,7 +183,11 @@ export async function handleToolsInvokeHttpRequest(
     return true;
   }
 
-  const bodyUnknown = await readJsonBodyOrError(req, res, opts.maxBodyBytes ?? DEFAULT_BODY_BYTES);
+  const bodyUnknown = await readJsonBodyOrError(
+    req,
+    res,
+    opts.maxBodyBytes ?? DEFAULT_BODY_BYTES,
+  );
   if (bodyUnknown === undefined) {
     return true;
   }
@@ -196,7 +216,8 @@ export async function handleToolsInvokeHttpRequest(
     }
   }
 
-  const action = typeof body.action === "string" ? body.action.trim() : undefined;
+  const action =
+    typeof body.action === "string" ? body.action.trim() : undefined;
 
   const argsRaw = body.args;
   const args =
@@ -206,15 +227,19 @@ export async function handleToolsInvokeHttpRequest(
 
   const rawSessionKey = resolveSessionKeyFromBody(body);
   const sessionKey =
-    !rawSessionKey || rawSessionKey === "main" ? resolveMainSessionKey(cfg) : rawSessionKey;
+    !rawSessionKey || rawSessionKey === "main"
+      ? resolveMainSessionKey(cfg)
+      : rawSessionKey;
 
   // Resolve message channel/account hints (optional headers) for policy inheritance.
   const messageChannel = normalizeMessageChannel(
     getHeader(req, "x-openclaw-message-channel") ?? "",
   );
-  const accountId = getHeader(req, "x-openclaw-account-id")?.trim() || undefined;
+  const accountId =
+    getHeader(req, "x-openclaw-account-id")?.trim() || undefined;
   const agentTo = getHeader(req, "x-openclaw-message-to")?.trim() || undefined;
-  const agentThreadId = getHeader(req, "x-openclaw-thread-id")?.trim() || undefined;
+  const agentThreadId =
+    getHeader(req, "x-openclaw-thread-id")?.trim() || undefined;
 
   const {
     agentId,
@@ -230,7 +255,10 @@ export async function handleToolsInvokeHttpRequest(
   const profilePolicy = resolveToolProfilePolicy(profile);
   const providerProfilePolicy = resolveToolProfilePolicy(providerProfile);
 
-  const profilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(profilePolicy, profileAlsoAllow);
+  const profilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(
+    profilePolicy,
+    profileAlsoAllow,
+  );
   const providerProfilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(
     providerProfilePolicy,
     providerProfileAlsoAllow,
@@ -297,7 +325,9 @@ export async function handleToolsInvokeHttpRequest(
     Array.isArray(gatewayToolsCfg?.deny) ? gatewayToolsCfg.deny : [],
   );
   const gatewayDenySet = new Set(gatewayDenyNames);
-  const gatewayFiltered = subagentFiltered.filter((t) => !gatewayDenySet.has(t.name));
+  const gatewayFiltered = subagentFiltered.filter(
+    (t) => !gatewayDenySet.has(t.name),
+  );
 
   const tool = gatewayFiltered.find((t) => t.name === toolName);
   if (!tool) {
@@ -316,14 +346,20 @@ export async function handleToolsInvokeHttpRequest(
       args,
     });
     // oxlint-disable-next-line typescript/no-explicit-any
-    const result = await (tool as any).execute?.(`http-${Date.now()}`, toolArgs);
+    const result = await (tool as any).execute?.(
+      `http-${Date.now()}`,
+      toolArgs,
+    );
     sendJson(res, 200, { ok: true, result });
   } catch (err) {
     const inputStatus = resolveToolInputErrorStatus(err);
     if (inputStatus !== null) {
       sendJson(res, inputStatus, {
         ok: false,
-        error: { type: "tool_error", message: getErrorMessage(err) || "invalid tool arguments" },
+        error: {
+          type: "tool_error",
+          message: getErrorMessage(err) || "invalid tool arguments",
+        },
       });
       return true;
     }

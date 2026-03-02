@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_DIFFS_TOOL_DEFAULTS, resolveDiffImageRenderOptions } from "./config.js";
+import {
+  DEFAULT_DIFFS_TOOL_DEFAULTS,
+  resolveDiffImageRenderOptions,
+} from "./config.js";
 import { renderDiffDocument } from "./render.js";
 
 describe("renderDiffDocument", () => {
@@ -13,7 +16,9 @@ describe("renderDiffDocument", () => {
       },
       {
         presentation: DEFAULT_DIFFS_TOOL_DEFAULTS,
-        image: resolveDiffImageRenderOptions({ defaults: DEFAULT_DIFFS_TOOL_DEFAULTS }),
+        image: resolveDiffImageRenderOptions({
+          defaults: DEFAULT_DIFFS_TOOL_DEFAULTS,
+        }),
         expandUnchanged: false,
       },
     );
@@ -98,7 +103,9 @@ describe("renderDiffDocument", () => {
         },
         {
           presentation: DEFAULT_DIFFS_TOOL_DEFAULTS,
-          image: resolveDiffImageRenderOptions({ defaults: DEFAULT_DIFFS_TOOL_DEFAULTS }),
+          image: resolveDiffImageRenderOptions({
+            defaults: DEFAULT_DIFFS_TOOL_DEFAULTS,
+          }),
           expandUnchanged: false,
         },
       ),

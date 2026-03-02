@@ -22,7 +22,8 @@ vi.mock("../plugins/hook-runner-global.js", () => ({
 
 vi.mock("./pi-tools.before-tool-call.js", () => ({
   consumeAdjustedParamsForToolCall: hookMocks.consumeAdjustedParamsForToolCall,
-  isToolWrappedWithBeforeToolCallHook: hookMocks.isToolWrappedWithBeforeToolCallHook,
+  isToolWrappedWithBeforeToolCallHook:
+    hookMocks.isToolWrappedWithBeforeToolCallHook,
   runBeforeToolCallHook: hookMocks.runBeforeToolCallHook,
 }));
 
@@ -40,7 +41,9 @@ type ToolExecute = ReturnType<typeof toToolDefinitions>[number]["execute"];
 const extensionContext = {} as Parameters<ToolExecute>[4];
 
 function enableAfterToolCallHook() {
-  hookMocks.runner.hasHooks.mockImplementation((name: string) => name === "after_tool_call");
+  hookMocks.runner.hasHooks.mockImplementation(
+    (name: string) => name === "after_tool_call",
+  );
 }
 
 async function executeReadTool(callId: string) {
@@ -49,11 +52,20 @@ async function executeReadTool(callId: string) {
   if (!def) {
     throw new Error("missing tool definition");
   }
-  const execute = (...args: Parameters<(typeof defs)[0]["execute"]>) => def.execute(...args);
-  return await execute(callId, { path: "/tmp/file" }, undefined, undefined, extensionContext);
+  const execute = (...args: Parameters<(typeof defs)[0]["execute"]>) =>
+    def.execute(...args);
+  return await execute(
+    callId,
+    { path: "/tmp/file" },
+    undefined,
+    undefined,
+    extensionContext,
+  );
 }
 
-function expectReadAfterToolCallPayload(result: Awaited<ReturnType<typeof executeReadTool>>) {
+function expectReadAfterToolCallPayload(
+  result: Awaited<ReturnType<typeof executeReadTool>>,
+) {
   expect(hookMocks.runner.runAfterToolCall).toHaveBeenCalledWith(
     {
       toolName: "read",
@@ -96,7 +108,9 @@ describe("pi tool definition adapter after_tool_call", () => {
   it("uses wrapped-tool adjusted params for after_tool_call payload", async () => {
     enableAfterToolCallHook();
     hookMocks.isToolWrappedWithBeforeToolCallHook.mockReturnValue(true);
-    hookMocks.consumeAdjustedParamsForToolCall.mockReturnValue({ mode: "safe" } as unknown);
+    hookMocks.consumeAdjustedParamsForToolCall.mockReturnValue({
+      mode: "safe",
+    } as unknown);
     const result = await executeReadTool("call-ok-wrapped");
 
     expect(result.details).toMatchObject({ ok: true });
@@ -121,8 +135,15 @@ describe("pi tool definition adapter after_tool_call", () => {
     if (!def) {
       throw new Error("missing tool definition");
     }
-    const execute = (...args: Parameters<(typeof defs)[0]["execute"]>) => def.execute(...args);
-    const result = await execute("call-err", { cmd: "ls" }, undefined, undefined, extensionContext);
+    const execute = (...args: Parameters<(typeof defs)[0]["execute"]>) =>
+      def.execute(...args);
+    const result = await execute(
+      "call-err",
+      { cmd: "ls" },
+      undefined,
+      undefined,
+      extensionContext,
+    );
 
     expect(result.details).toMatchObject({
       status: "error",
@@ -142,7 +163,9 @@ describe("pi tool definition adapter after_tool_call", () => {
 
   it("does not break execution when after_tool_call hook throws", async () => {
     enableAfterToolCallHook();
-    hookMocks.runner.runAfterToolCall.mockRejectedValue(new Error("hook failed"));
+    hookMocks.runner.runAfterToolCall.mockRejectedValue(
+      new Error("hook failed"),
+    );
     const result = await executeReadTool("call-ok2");
 
     expect(result.details).toMatchObject({ ok: true });

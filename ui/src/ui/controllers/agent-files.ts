@@ -39,12 +39,18 @@ export async function loadAgentFiles(state: AgentFilesState, agentId: string) {
   state.agentFilesLoading = true;
   state.agentFilesError = null;
   try {
-    const res = await state.client.request<AgentsFilesListResult | null>("agents.files.list", {
-      agentId,
-    });
+    const res = await state.client.request<AgentsFilesListResult | null>(
+      "agents.files.list",
+      {
+        agentId,
+      },
+    );
     if (res) {
       state.agentFilesList = res;
-      if (state.agentFileActive && !res.files.some((file) => file.name === state.agentFileActive)) {
+      if (
+        state.agentFileActive &&
+        !res.files.some((file) => file.name === state.agentFileActive)
+      ) {
         state.agentFileActive = null;
       }
     }
@@ -70,10 +76,13 @@ export async function loadAgentFileContent(
   state.agentFilesLoading = true;
   state.agentFilesError = null;
   try {
-    const res = await state.client.request<AgentsFilesGetResult | null>("agents.files.get", {
-      agentId,
-      name,
-    });
+    const res = await state.client.request<AgentsFilesGetResult | null>(
+      "agents.files.get",
+      {
+        agentId,
+        name,
+      },
+    );
     if (res?.file) {
       const content = res.file.content ?? "";
       const previousBase = state.agentFileContents[name] ?? "";
@@ -108,11 +117,14 @@ export async function saveAgentFile(
   state.agentFileSaving = true;
   state.agentFilesError = null;
   try {
-    const res = await state.client.request<AgentsFilesSetResult | null>("agents.files.set", {
-      agentId,
-      name,
-      content,
-    });
+    const res = await state.client.request<AgentsFilesSetResult | null>(
+      "agents.files.set",
+      {
+        agentId,
+        name,
+        content,
+      },
+    );
     if (res?.file) {
       state.agentFilesList = mergeFileEntry(state.agentFilesList, res.file);
       state.agentFileContents = { ...state.agentFileContents, [name]: content };

@@ -27,7 +27,11 @@ export type SafeOpenErrorCode =
 export class SafeOpenError extends Error {
   code: SafeOpenErrorCode;
 
-  constructor(code: SafeOpenErrorCode, message: string, options?: ErrorOptions) {
+  constructor(
+    code: SafeOpenErrorCode,
+    message: string,
+    options?: ErrorOptions,
+  ) {
     super(message, options);
     this.code = code;
     this.name = "SafeOpenError";
@@ -46,8 +50,10 @@ export type SafeLocalReadResult = {
   stat: Stats;
 };
 
-const SUPPORTS_NOFOLLOW = process.platform !== "win32" && "O_NOFOLLOW" in fsConstants;
-const OPEN_READ_FLAGS = fsConstants.O_RDONLY | (SUPPORTS_NOFOLLOW ? fsConstants.O_NOFOLLOW : 0);
+const SUPPORTS_NOFOLLOW =
+  process.platform !== "win32" && "O_NOFOLLOW" in fsConstants;
+const OPEN_READ_FLAGS =
+  fsConstants.O_RDONLY | (SUPPORTS_NOFOLLOW ? fsConstants.O_NOFOLLOW : 0);
 const OPEN_WRITE_EXISTING_FLAGS =
   fsConstants.O_WRONLY | (SUPPORTS_NOFOLLOW ? fsConstants.O_NOFOLLOW : 0);
 const OPEN_WRITE_CREATE_FLAGS =
@@ -56,9 +62,12 @@ const OPEN_WRITE_CREATE_FLAGS =
   fsConstants.O_EXCL |
   (SUPPORTS_NOFOLLOW ? fsConstants.O_NOFOLLOW : 0);
 
-const ensureTrailingSep = (value: string) => (value.endsWith(path.sep) ? value : value + path.sep);
+const ensureTrailingSep = (value: string) =>
+  value.endsWith(path.sep) ? value : value + path.sep;
 
-async function expandRelativePathWithHome(relativePath: string): Promise<string> {
+async function expandRelativePathWithHome(
+  relativePath: string,
+): Promise<string> {
   let home = process.env.HOME || process.env.USERPROFILE || os.homedir();
   try {
     home = await fs.realpath(home);
@@ -96,7 +105,9 @@ async function openVerifiedLocalFile(
       throw new SafeOpenError("not-found", "file not found");
     }
     if (isSymlinkOpenError(err)) {
-      throw new SafeOpenError("symlink", "symlink open blocked", { cause: err });
+      throw new SafeOpenError("symlink", "symlink open blocked", {
+        cause: err,
+      });
     }
     // Defensive: if open still throws EISDIR (e.g. race), sanitize so it never leaks.
     if (hasNodeErrorCode(err, "EISDIR")) {
@@ -106,7 +117,10 @@ async function openVerifiedLocalFile(
   }
 
   try {
-    const [stat, lstat] = await Promise.all([handle.stat(), fs.lstat(filePath)]);
+    const [stat, lstat] = await Promise.all([
+      handle.stat(),
+      fs.lstat(filePath),
+    ]);
     if (lstat.isSymbolicLink()) {
       throw new SafeOpenError("symlink", "symlink not allowed");
     }
@@ -159,7 +173,10 @@ async function resolvePathWithinRoot(params: {
   const expanded = await expandRelativePathWithHome(params.relativePath);
   const resolved = path.resolve(rootWithSep, expanded);
   if (!isPathInside(rootWithSep, resolved)) {
-    throw new SafeOpenError("outside-workspace", "file is outside workspace root");
+    throw new SafeOpenError(
+      "outside-workspace",
+      "file is outside workspace root",
+    );
   }
   return { rootReal, rootWithSep, resolved };
 }
@@ -179,9 +196,13 @@ export async function openFileWithinRoot(params: {
       if (err.code === "not-found") {
         throw err;
       }
-      throw new SafeOpenError("invalid-path", "path is not a regular file under root", {
-        cause: err,
-      });
+      throw new SafeOpenError(
+        "invalid-path",
+        "path is not a regular file under root",
+        {
+          cause: err,
+        },
+      );
     }
     throw err;
   }
@@ -193,7 +214,10 @@ export async function openFileWithinRoot(params: {
 
   if (!isPathInside(rootWithSep, opened.realPath)) {
     await opened.handle.close().catch(() => {});
-    throw new SafeOpenError("outside-workspace", "file is outside workspace root");
+    throw new SafeOpenError(
+      "outside-workspace",
+      "file is outside workspace root",
+    );
   }
 
   return opened;
@@ -269,7 +293,10 @@ async function readOpenedFileSafely(params: {
   opened: SafeOpenResult;
   maxBytes?: number;
 }): Promise<SafeLocalReadResult> {
-  if (params.maxBytes !== undefined && params.opened.stat.size > params.maxBytes) {
+  if (
+    params.maxBytes !== undefined &&
+    params.opened.stat.size > params.maxBytes
+  ) {
     throw new SafeOpenError(
       "too-large",
       `file exceeds limit of ${params.maxBytes} bytes (got ${params.opened.stat.size})`,
@@ -292,7 +319,8 @@ async function openWritableFileWithinRoot(params: {
   createdForWrite: boolean;
   openedRealPath: string;
 }> {
-  const { rootReal, rootWithSep, resolved } = await resolvePathWithinRoot(params);
+  const { rootReal, rootWithSep, resolved } =
+    await resolvePathWithinRoot(params);
   try {
     await assertNoPathAliasEscape({
       absolutePath: resolved,
@@ -300,7 +328,9 @@ async function openWritableFileWithinRoot(params: {
       boundaryLabel: "root",
     });
   } catch (err) {
-    throw new SafeOpenError("invalid-path", "path alias escape blocked", { cause: err });
+    throw new SafeOpenError("invalid-path", "path alias escape blocked", {
+      cause: err,
+    });
   }
   if (params.mkdir !== false) {
     await fs.mkdir(path.dirname(resolved), { recursive: true });
@@ -310,7 +340,10 @@ async function openWritableFileWithinRoot(params: {
   try {
     const resolvedRealPath = await fs.realpath(resolved);
     if (!isPathInside(rootWithSep, resolvedRealPath)) {
-      throw new SafeOpenError("outside-workspace", "file is outside workspace root");
+      throw new SafeOpenError(
+        "outside-workspace",
+        "file is outside workspace root",
+      );
     }
     ioPath = resolvedRealPath;
   } catch (err) {
@@ -339,7 +372,9 @@ async function openWritableFileWithinRoot(params: {
       throw new SafeOpenError("not-found", "file not found");
     }
     if (isSymlinkOpenError(err)) {
-      throw new SafeOpenError("invalid-path", "symlink open blocked", { cause: err });
+      throw new SafeOpenError("invalid-path", "symlink open blocked", {
+        cause: err,
+      });
     }
     throw err;
   }
@@ -348,7 +383,10 @@ async function openWritableFileWithinRoot(params: {
   try {
     const [stat, lstat] = await Promise.all([handle.stat(), fs.lstat(ioPath)]);
     if (lstat.isSymbolicLink() || !stat.isFile()) {
-      throw new SafeOpenError("invalid-path", "path is not a regular file under root");
+      throw new SafeOpenError(
+        "invalid-path",
+        "path is not a regular file under root",
+      );
     }
     if (stat.nlink > 1) {
       throw new SafeOpenError("invalid-path", "hardlinked path not allowed");
@@ -367,7 +405,10 @@ async function openWritableFileWithinRoot(params: {
       throw new SafeOpenError("invalid-path", "hardlinked path not allowed");
     }
     if (!isPathInside(rootWithSep, realPath)) {
-      throw new SafeOpenError("outside-workspace", "file is outside workspace root");
+      throw new SafeOpenError(
+        "outside-workspace",
+        "file is outside workspace root",
+      );
     }
 
     // Truncate only after boundary and identity checks complete. This avoids

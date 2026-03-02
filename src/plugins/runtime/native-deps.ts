@@ -6,7 +6,9 @@ export type NativeDependencyHintParams = {
   downloadCommand?: string;
 };
 
-export function formatNativeDependencyHint(params: NativeDependencyHintParams): string {
+export function formatNativeDependencyHint(
+  params: NativeDependencyHintParams,
+): string {
   const manager = params.manager ?? "pnpm";
   const rebuildCommand =
     params.rebuildCommand ??
@@ -17,10 +19,14 @@ export function formatNativeDependencyHint(params: NativeDependencyHintParams): 
         : `pnpm rebuild ${params.packageName}`);
   const approveBuildsCommand =
     params.approveBuildsCommand ??
-    (manager === "pnpm" ? `pnpm approve-builds (select ${params.packageName})` : undefined);
-  const steps = [approveBuildsCommand, rebuildCommand, params.downloadCommand].filter(
-    (step): step is string => Boolean(step),
-  );
+    (manager === "pnpm"
+      ? `pnpm approve-builds (select ${params.packageName})`
+      : undefined);
+  const steps = [
+    approveBuildsCommand,
+    rebuildCommand,
+    params.downloadCommand,
+  ].filter((step): step is string => Boolean(step));
   if (steps.length === 0) {
     return `Install ${params.packageName} and rebuild its native module.`;
   }

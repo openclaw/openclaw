@@ -1,8 +1,14 @@
 import type { Component, TUI } from "@mariozechner/pi-tui";
 
-type OverlayHost = Pick<TUI, "showOverlay" | "hideOverlay" | "hasOverlay" | "setFocus">;
+type OverlayHost = Pick<
+  TUI,
+  "showOverlay" | "hideOverlay" | "hasOverlay" | "setFocus"
+>;
 
-export function createOverlayHandlers(host: OverlayHost, fallbackFocus: Component) {
+export function createOverlayHandlers(
+  host: OverlayHost,
+  fallbackFocus: Component,
+) {
   const openOverlay = (component: Component) => {
     host.showOverlay(component);
   };

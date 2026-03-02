@@ -44,7 +44,9 @@ function readContextText(block: SlackBlockWithFields): string | undefined {
   return textParts.length > 0 ? textParts.join(" ") : undefined;
 }
 
-export function buildSlackBlocksFallbackText(blocks: (Block | KnownBlock)[]): string {
+export function buildSlackBlocksFallbackText(
+  blocks: (Block | KnownBlock)[],
+): string {
   for (const raw of blocks) {
     const block = raw as SlackBlockWithFields;
     switch (block.type) {

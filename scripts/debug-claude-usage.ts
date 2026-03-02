@@ -49,18 +49,30 @@ const loadAuthProfiles = (agentId: string) => {
     process.env.OPENCLAW_STATE_DIR?.trim() ||
     process.env.CLAWDBOT_STATE_DIR?.trim() ||
     path.join(os.homedir(), ".openclaw");
-  const authPath = path.join(stateRoot, "agents", agentId, "agent", "auth-profiles.json");
+  const authPath = path.join(
+    stateRoot,
+    "agents",
+    agentId,
+    "agent",
+    "auth-profiles.json",
+  );
   if (!fs.existsSync(authPath)) {
     throw new Error(`Missing: ${authPath}`);
   }
   const store = JSON.parse(fs.readFileSync(authPath, "utf8")) as {
-    profiles?: Record<string, { provider?: string; type?: string; token?: string; key?: string }>;
+    profiles?: Record<
+      string,
+      { provider?: string; type?: string; token?: string; key?: string }
+    >;
   };
   return { authPath, store };
 };
 
 const pickAnthropicTokens = (store: {
-  profiles?: Record<string, { provider?: string; type?: string; token?: string; key?: string }>;
+  profiles?: Record<
+    string,
+    { provider?: string; type?: string; token?: string; key?: string }
+  >;
 }): Array<{ profileId: string; token: string }> => {
   const profiles = store.profiles ?? {};
   const found: Array<{ profileId: string; token: string }> = [];
@@ -87,7 +99,11 @@ const fetchAnthropicOAuthUsage = async (token: string) => {
     },
   });
   const text = await res.text();
-  return { status: res.status, contentType: res.headers.get("content-type"), text };
+  return {
+    status: res.status,
+    contentType: res.headers.get("content-type"),
+    text,
+  };
 };
 
 const readClaudeCliKeychain = (): {
@@ -113,7 +129,8 @@ const readClaudeCliKeychain = (): {
     if (typeof accessToken !== "string" || !accessToken.trim()) {
       return null;
     }
-    const expiresAt = typeof oauth.expiresAt === "number" ? oauth.expiresAt : undefined;
+    const expiresAt =
+      typeof oauth.expiresAt === "number" ? oauth.expiresAt : undefined;
     const scopes = Array.isArray(oauth.scopes)
       ? oauth.scopes.filter((v): v is string => typeof v === "string")
       : undefined;
@@ -141,11 +158,15 @@ const chromeServiceNameForPath = (cookiePath: string): string => {
 
 const readKeychainPassword = (service: string): string | null => {
   try {
-    const out = execFileSync("security", ["find-generic-password", "-w", "-s", service], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-      timeout: 5000,
-    });
+    const out = execFileSync(
+      "security",
+      ["find-generic-password", "-w", "-s", service],
+      {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+        timeout: 5000,
+      },
+    );
     const pw = out.trim();
     return pw ? pw : null;
   } catch {
@@ -153,7 +174,10 @@ const readKeychainPassword = (service: string): string | null => {
   }
 };
 
-const decryptChromeCookieValue = (encrypted: Buffer, service: string): string | null => {
+const decryptChromeCookieValue = (
+  encrypted: Buffer,
+  service: string,
+): string | null => {
   if (encrypted.length < 4) {
     return null;
   }
@@ -242,7 +266,10 @@ const queryFirefoxCookieDb = (cookieDb: string): string | null => {
   }
 };
 
-const findClaudeSessionKey = (): { sessionKey: string; source: string } | null => {
+const findClaudeSessionKey = (): {
+  sessionKey: string;
+  source: string;
+} | null => {
   if (process.platform !== "darwin") {
     return null;
   }
@@ -268,10 +295,22 @@ const findClaudeSessionKey = (): { sessionKey: string; source: string } | null =
   }
 
   const chromeCandidates = [
-    path.join(os.homedir(), "Library", "Application Support", "Google", "Chrome"),
+    path.join(
+      os.homedir(),
+      "Library",
+      "Application Support",
+      "Google",
+      "Chrome",
+    ),
     path.join(os.homedir(), "Library", "Application Support", "Chromium"),
     path.join(os.homedir(), "Library", "Application Support", "Arc"),
-    path.join(os.homedir(), "Library", "Application Support", "BraveSoftware", "Brave-Browser"),
+    path.join(
+      os.homedir(),
+      "Library",
+      "Application Support",
+      "BraveSoftware",
+      "Brave-Browser",
+    ),
     path.join(os.homedir(), "Library", "Application Support", "Microsoft Edge"),
   ];
 
@@ -304,22 +343,42 @@ const fetchClaudeWebUsage = async (sessionKey: string) => {
     "User-Agent":
       "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15",
   };
-  const orgRes = await fetch("https://claude.ai/api/organizations", { headers });
+  const orgRes = await fetch("https://claude.ai/api/organizations", {
+    headers,
+  });
   const orgText = await orgRes.text();
   if (!orgRes.ok) {
-    return { ok: false as const, step: "organizations", status: orgRes.status, body: orgText };
+    return {
+      ok: false as const,
+      step: "organizations",
+      status: orgRes.status,
+      body: orgText,
+    };
   }
   const orgs = JSON.parse(orgText) as Array<{ uuid?: string }>;
   const orgId = orgs?.[0]?.uuid;
   if (!orgId) {
-    return { ok: false as const, step: "organizations", status: 200, body: orgText };
+    return {
+      ok: false as const,
+      step: "organizations",
+      status: 200,
+      body: orgText,
+    };
   }
 
-  const usageRes = await fetch(`https://claude.ai/api/organizations/${orgId}/usage`, { headers });
+  const usageRes = await fetch(
+    `https://claude.ai/api/organizations/${orgId}/usage`,
+    { headers },
+  );
   const usageText = await usageRes.text();
   return usageRes.ok
     ? { ok: true as const, orgId, body: usageText }
-    : { ok: false as const, step: "usage", status: usageRes.status, body: usageText };
+    : {
+        ok: false as const,
+        step: "usage",
+        status: usageRes.status,
+        body: usageText,
+      };
 };
 
 const main = async () => {

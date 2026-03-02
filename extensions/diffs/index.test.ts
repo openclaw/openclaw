@@ -49,7 +49,12 @@ describe("diffs plugin registration", () => {
 
   it("applies plugin-config defaults through registered tool and viewer handler", async () => {
     let registeredTool:
-      | { execute?: (toolCallId: string, params: Record<string, unknown>) => Promise<unknown> }
+      | {
+          execute?: (
+            toolCallId: string,
+            params: Record<string, unknown>,
+          ) => Promise<unknown>;
+        }
       | undefined;
     let registeredHttpRouteHandler:
       | ((
@@ -90,7 +95,8 @@ describe("diffs plugin registration", () => {
       },
       registerHook() {},
       registerHttpRoute(params) {
-        registeredHttpRouteHandler = params.handler as typeof registeredHttpRouteHandler;
+        registeredHttpRouteHandler =
+          params.handler as typeof registeredHttpRouteHandler;
       },
       registerChannel() {},
       registerGatewayMethod() {},
@@ -109,7 +115,8 @@ describe("diffs plugin registration", () => {
       after: "two\n",
     });
     const viewerPath = String(
-      (result as { details?: Record<string, unknown> } | undefined)?.details?.viewerPath,
+      (result as { details?: Record<string, unknown> } | undefined)?.details
+        ?.viewerPath,
     );
     const res = createMockServerResponse();
     const handled = await registeredHttpRouteHandler?.(

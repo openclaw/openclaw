@@ -13,7 +13,13 @@ export function registerSlackMessageEvents(params: {
 }) {
   const { ctx, handleSlackMessage } = params;
 
-  const handleIncomingMessageEvent = async ({ event, body }: { event: unknown; body: unknown }) => {
+  const handleIncomingMessageEvent = async ({
+    event,
+    body,
+  }: {
+    event: unknown;
+    body: unknown;
+  }) => {
     try {
       if (ctx.shouldDropMismatchedSlackEvent(body)) {
         return;
@@ -23,20 +29,25 @@ export function registerSlackMessageEvents(params: {
       const subtypeHandler = resolveSlackMessageSubtypeHandler(message);
       if (subtypeHandler) {
         const channelId = subtypeHandler.resolveChannelId(message);
-        const ingressContext = await authorizeAndResolveSlackSystemEventContext({
-          ctx,
-          senderId: subtypeHandler.resolveSenderId(message),
-          channelId,
-          channelType: subtypeHandler.resolveChannelType(message),
-          eventKind: subtypeHandler.eventKind,
-        });
+        const ingressContext = await authorizeAndResolveSlackSystemEventContext(
+          {
+            ctx,
+            senderId: subtypeHandler.resolveSenderId(message),
+            channelId,
+            channelType: subtypeHandler.resolveChannelType(message),
+            eventKind: subtypeHandler.eventKind,
+          },
+        );
         if (!ingressContext) {
           return;
         }
-        enqueueSystemEvent(subtypeHandler.describe(ingressContext.channelLabel), {
-          sessionKey: ingressContext.sessionKey,
-          contextKey: subtypeHandler.contextKey(message),
-        });
+        enqueueSystemEvent(
+          subtypeHandler.describe(ingressContext.channelLabel),
+          {
+            sessionKey: ingressContext.sessionKey,
+            contextKey: subtypeHandler.contextKey(message),
+          },
+        );
         return;
       }
 
@@ -46,9 +57,12 @@ export function registerSlackMessageEvents(params: {
     }
   };
 
-  ctx.app.event("message", async ({ event, body }: SlackEventMiddlewareArgs<"message">) => {
-    await handleIncomingMessageEvent({ event, body });
-  });
+  ctx.app.event(
+    "message",
+    async ({ event, body }: SlackEventMiddlewareArgs<"message">) => {
+      await handleIncomingMessageEvent({ event, body });
+    },
+  );
   // Slack may dispatch channel/group message subscriptions under typed event
   // names. Register explicit handlers so both delivery styles are supported.
   ctx.app.event(
@@ -64,19 +78,24 @@ export function registerSlackMessageEvents(params: {
     },
   );
 
-  ctx.app.event("app_mention", async ({ event, body }: SlackEventMiddlewareArgs<"app_mention">) => {
-    try {
-      if (ctx.shouldDropMismatchedSlackEvent(body)) {
-        return;
-      }
+  ctx.app.event(
+    "app_mention",
+    async ({ event, body }: SlackEventMiddlewareArgs<"app_mention">) => {
+      try {
+        if (ctx.shouldDropMismatchedSlackEvent(body)) {
+          return;
+        }
 
-      const mention = event as SlackAppMentionEvent;
-      await handleSlackMessage(mention as unknown as SlackMessageEvent, {
-        source: "app_mention",
-        wasMentioned: true,
-      });
-    } catch (err) {
-      ctx.runtime.error?.(danger(`slack mention handler failed: ${String(err)}`));
-    }
-  });
+        const mention = event as SlackAppMentionEvent;
+        await handleSlackMessage(mention as unknown as SlackMessageEvent, {
+          source: "app_mention",
+          wasMentioned: true,
+        });
+      } catch (err) {
+        ctx.runtime.error?.(
+          danger(`slack mention handler failed: ${String(err)}`),
+        );
+      }
+    },
+  );
 }

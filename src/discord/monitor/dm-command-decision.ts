@@ -18,7 +18,8 @@ export async function handleDiscordDmCommandDecision(params: {
   }
 
   if (params.dmAccess.decision === "pairing") {
-    const upsertPairingRequest = params.upsertPairingRequest ?? upsertChannelPairingRequest;
+    const upsertPairingRequest =
+      params.upsertPairingRequest ?? upsertChannelPairingRequest;
     const { code, created } = await upsertPairingRequest({
       channel: "discord",
       id: params.sender.id,

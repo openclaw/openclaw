@@ -1,4 +1,7 @@
-import { loadSessionStore, resolveStorePath } from "../../../config/sessions.js";
+import {
+  loadSessionStore,
+  resolveStorePath,
+} from "../../../config/sessions.js";
 import type { CommandHandlerResult } from "../commands-types.js";
 import { sortSubagentRuns } from "../subagents-utils.js";
 import {
@@ -10,7 +13,9 @@ import {
   stopWithText,
 } from "./shared.js";
 
-export function handleSubagentsListAction(ctx: SubagentsCommandContext): CommandHandlerResult {
+export function handleSubagentsListAction(
+  ctx: SubagentsCommandContext,
+): CommandHandlerResult {
   const { params, runs } = ctx;
   const sorted = sortSubagentRuns(runs);
   const now = Date.now();
@@ -18,7 +23,10 @@ export function handleSubagentsListAction(ctx: SubagentsCommandContext): Command
   const storeCache: SessionStoreCache = new Map();
   let index = 1;
 
-  const mapRuns = (entries: typeof runs, runtimeMs: (entry: (typeof runs)[number]) => number) =>
+  const mapRuns = (
+    entries: typeof runs,
+    runtimeMs: (entry: (typeof runs)[number]) => number,
+  ) =>
     entries.map((entry) => {
       const { entry: sessionEntry } = loadSubagentSessionEntry(
         params,
@@ -40,7 +48,10 @@ export function handleSubagentsListAction(ctx: SubagentsCommandContext): Command
     });
 
   const activeEntries = sorted.filter((entry) => !entry.endedAt);
-  const activeLines = mapRuns(activeEntries, (entry) => now - (entry.startedAt ?? entry.createdAt));
+  const activeLines = mapRuns(
+    activeEntries,
+    (entry) => now - (entry.startedAt ?? entry.createdAt),
+  );
   const recentEntries = sorted.filter(
     (entry) => !!entry.endedAt && (entry.endedAt ?? 0) >= recentCutoff,
   );

@@ -139,7 +139,10 @@ function canonicalizeSessionKeyForAgent(params: {
   if (!raw.includes(":") && raw.toLowerCase().includes("@g.us")) {
     return `agent:${agentId}:whatsapp:group:${raw}`.toLowerCase();
   }
-  if (raw.toLowerCase().startsWith("whatsapp:") && raw.toLowerCase().includes("@g.us")) {
+  if (
+    raw.toLowerCase().startsWith("whatsapp:") &&
+    raw.toLowerCase().includes("@g.us")
+  ) {
     const remainder = raw.slice("whatsapp:".length).trim();
     const cleaned = remainder.replace(/^group:/i, "").trim();
     if (cleaned && !isSurfaceGroupKey(raw)) {
@@ -187,7 +190,8 @@ function pickLatestLegacyDirectEntry(
 }
 
 function normalizeSessionEntry(entry: SessionEntryLike): SessionEntry | null {
-  const sessionId = typeof entry.sessionId === "string" ? entry.sessionId : null;
+  const sessionId =
+    typeof entry.sessionId === "string" ? entry.sessionId : null;
   if (!sessionId) {
     return null;
   }
@@ -195,7 +199,11 @@ function normalizeSessionEntry(entry: SessionEntryLike): SessionEntry | null {
     typeof entry.updatedAt === "number" && Number.isFinite(entry.updatedAt)
       ? entry.updatedAt
       : Date.now();
-  const normalized = { ...(entry as unknown as SessionEntry), sessionId, updatedAt };
+  const normalized = {
+    ...(entry as unknown as SessionEntry),
+    sessionId,
+    updatedAt,
+  };
   const rec = normalized as unknown as Record<string, unknown>;
   if (typeof rec.groupChannel !== "string" && typeof rec.room === "string") {
     rec.groupChannel = rec.room;
@@ -256,13 +264,17 @@ function canonicalizeSessionStore(params: {
     const existing = canonical[canonicalKey];
     if (!existing) {
       canonical[canonicalKey] = entry;
-      meta.set(canonicalKey, { isCanonical, updatedAt: resolveUpdatedAt(entry) });
+      meta.set(canonicalKey, {
+        isCanonical,
+        updatedAt: resolveUpdatedAt(entry),
+      });
       continue;
     }
 
     const existingMeta = meta.get(canonicalKey);
     const incomingUpdated = resolveUpdatedAt(entry);
-    const existingUpdated = existingMeta?.updatedAt ?? resolveUpdatedAt(existing);
+    const existingUpdated =
+      existingMeta?.updatedAt ?? resolveUpdatedAt(existing);
     if (incomingUpdated > existingUpdated) {
       canonical[canonicalKey] = entry;
       meta.set(canonicalKey, { isCanonical, updatedAt: incomingUpdated });
@@ -366,7 +378,10 @@ function isDirPath(filePath: string): boolean {
   }
 }
 
-function isLegacyTreeSymlinkMirror(currentDir: string, realTargetDir: string): boolean {
+function isLegacyTreeSymlinkMirror(
+  currentDir: string,
+  realTargetDir: string,
+): boolean {
   let entries: fs.Dirent[];
   try {
     entries = fs.readdirSync(currentDir, { withFileTypes: true });
@@ -413,7 +428,10 @@ function isLegacyTreeSymlinkMirror(currentDir: string, realTargetDir: string): b
   return true;
 }
 
-function isLegacyDirSymlinkMirror(legacyDir: string, targetDir: string): boolean {
+function isLegacyDirSymlinkMirror(
+  legacyDir: string,
+  targetDir: string,
+): boolean {
   let realTargetDir: string;
   try {
     realTargetDir = fs.realpathSync(targetDir);
@@ -477,7 +495,9 @@ export async function autoMigrateLegacyStateDir(params: {
     if (path.resolve(legacyTarget) === path.resolve(targetDir)) {
       return { migrated: false, skipped: false, changes, warnings };
     }
-    if (legacyDirs.some((dir) => path.resolve(dir) === path.resolve(legacyTarget))) {
+    if (
+      legacyDirs.some((dir) => path.resolve(dir) === path.resolve(legacyTarget))
+    ) {
       legacyDir = legacyTarget;
       try {
         legacyStat = fs.lstatSync(legacyDir);
@@ -485,7 +505,9 @@ export async function autoMigrateLegacyStateDir(params: {
         legacyStat = null;
       }
       if (!legacyStat) {
-        warnings.push(`Legacy state dir missing after symlink resolution: ${legacyDir}`);
+        warnings.push(
+          `Legacy state dir missing after symlink resolution: ${legacyDir}`,
+        );
         return { migrated: false, skipped: false, changes, warnings };
       }
       if (!legacyStat.isDirectory() && !legacyStat.isSymbolicLink()) {
@@ -590,7 +612,12 @@ export async function detectLegacyStateMigrations(params: {
 
   const sessionsLegacyDir = path.join(stateDir, "sessions");
   const sessionsLegacyStorePath = path.join(sessionsLegacyDir, "sessions.json");
-  const sessionsTargetDir = path.join(stateDir, "agents", targetAgentId, "sessions");
+  const sessionsTargetDir = path.join(
+    stateDir,
+    "agents",
+    targetAgentId,
+    "sessions",
+  );
   const sessionsTargetStorePath = path.join(sessionsTargetDir, "sessions.json");
   const legacySessionEntries = safeReadDir(sessionsLegacyDir);
   const hasLegacySessions =
@@ -613,30 +640,42 @@ export async function detectLegacyStateMigrations(params: {
   const targetAgentDir = path.join(stateDir, "agents", targetAgentId, "agent");
   const hasLegacyAgentDir = existsDir(legacyAgentDir);
 
-  const targetWhatsAppAuthDir = path.join(oauthDir, "whatsapp", DEFAULT_ACCOUNT_ID);
+  const targetWhatsAppAuthDir = path.join(
+    oauthDir,
+    "whatsapp",
+    DEFAULT_ACCOUNT_ID,
+  );
   const hasLegacyWhatsAppAuth =
     fileExists(path.join(oauthDir, "creds.json")) &&
     !fileExists(path.join(targetWhatsAppAuthDir, "creds.json"));
-  const legacyTelegramAllowFromPath = path.join(oauthDir, "telegram-allowFrom.json");
+  const legacyTelegramAllowFromPath = path.join(
+    oauthDir,
+    "telegram-allowFrom.json",
+  );
   const targetTelegramAllowFromPath = path.join(
     oauthDir,
     `telegram-${DEFAULT_ACCOUNT_ID}-allowFrom.json`,
   );
   const hasLegacyTelegramAllowFrom =
-    fileExists(legacyTelegramAllowFromPath) && !fileExists(targetTelegramAllowFromPath);
+    fileExists(legacyTelegramAllowFromPath) &&
+    !fileExists(targetTelegramAllowFromPath);
 
   const preview: string[] = [];
   if (hasLegacySessions) {
     preview.push(`- Sessions: ${sessionsLegacyDir} → ${sessionsTargetDir}`);
   }
   if (legacyKeys.length > 0) {
-    preview.push(`- Sessions: canonicalize legacy keys in ${sessionsTargetStorePath}`);
+    preview.push(
+      `- Sessions: canonicalize legacy keys in ${sessionsTargetStorePath}`,
+    );
   }
   if (hasLegacyAgentDir) {
     preview.push(`- Agent dir: ${legacyAgentDir} → ${targetAgentDir}`);
   }
   if (hasLegacyWhatsAppAuth) {
-    preview.push(`- WhatsApp auth: ${oauthDir} → ${targetWhatsAppAuthDir} (keep oauth.json)`);
+    preview.push(
+      `- WhatsApp auth: ${oauthDir} → ${targetWhatsAppAuthDir} (keep oauth.json)`,
+    );
   }
   if (hasLegacyTelegramAllowFrom) {
     preview.push(
@@ -711,7 +750,9 @@ async function migrateLegacySessions(
     scope: detected.targetScope,
   });
 
-  const merged: Record<string, SessionEntryLike> = { ...canonicalizedTarget.store };
+  const merged: Record<string, SessionEntryLike> = {
+    ...canonicalizedTarget.store,
+  };
   for (const [key, entry] of Object.entries(canonicalizedLegacy.store)) {
     merged[key] = mergeSessionEntry({
       existing: merged[key],
@@ -753,9 +794,13 @@ async function migrateLegacySessions(
     await saveSessionStore(detected.sessions.targetStorePath, normalized, {
       skipMaintenance: true,
     });
-    changes.push(`Merged sessions store → ${detected.sessions.targetStorePath}`);
+    changes.push(
+      `Merged sessions store → ${detected.sessions.targetStorePath}`,
+    );
     if (canonicalizedTarget.legacyKeys.length > 0) {
-      changes.push(`Canonicalized ${canonicalizedTarget.legacyKeys.length} legacy session key(s)`);
+      changes.push(
+        `Canonicalized ${canonicalizedTarget.legacyKeys.length} legacy session key(s)`,
+      );
     }
   }
 
@@ -774,7 +819,9 @@ async function migrateLegacySessions(
     }
     try {
       fs.renameSync(from, to);
-      changes.push(`Moved ${entry.name} → agents/${detected.targetAgentId}/sessions`);
+      changes.push(
+        `Moved ${entry.name} → agents/${detected.targetAgentId}/sessions`,
+      );
     } catch (err) {
       warnings.push(`Failed moving ${from}: ${String(err)}`);
     }
@@ -791,7 +838,9 @@ async function migrateLegacySessions(
   }
 
   removeDirIfEmpty(detected.sessions.legacyDir);
-  const legacyLeft = safeReadDir(detected.sessions.legacyDir).filter((e) => e.isFile());
+  const legacyLeft = safeReadDir(detected.sessions.legacyDir).filter((e) =>
+    e.isFile(),
+  );
   if (legacyLeft.length > 0) {
     const backupDir = `${detected.sessions.legacyDir}.legacy-${now()}`;
     try {
@@ -826,7 +875,9 @@ export async function migrateLegacyAgentDir(
     }
     try {
       fs.renameSync(from, to);
-      changes.push(`Moved agent file ${entry.name} → agents/${detected.targetAgentId}/agent`);
+      changes.push(
+        `Moved agent file ${entry.name} → agents/${detected.targetAgentId}/agent`,
+      );
     } catch (err) {
       warnings.push(`Failed moving ${from}: ${String(err)}`);
     }
@@ -905,7 +956,9 @@ async function migrateLegacyTelegramPairingAllowFrom(
     fs.copyFileSync(legacyPath, targetPath);
     changes.push(`Copied Telegram pairing allowFrom → ${targetPath}`);
   } catch (err) {
-    warnings.push(`Failed migrating Telegram pairing allowFrom (${legacyPath}): ${String(err)}`);
+    warnings.push(
+      `Failed migrating Telegram pairing allowFrom (${legacyPath}): ${String(err)}`,
+    );
   }
 
   return { changes, warnings };
@@ -920,7 +973,8 @@ export async function runLegacyStateMigrations(params: {
   const sessions = await migrateLegacySessions(detected, now);
   const agentDir = await migrateLegacyAgentDir(detected, now);
   const whatsappAuth = await migrateLegacyWhatsAppAuth(detected);
-  const telegramPairingAllowFrom = await migrateLegacyTelegramPairingAllowFrom(detected);
+  const telegramPairingAllowFrom =
+    await migrateLegacyTelegramPairingAllowFrom(detected);
   return {
     changes: [
       ...sessions.changes,
@@ -1001,12 +1055,22 @@ export async function autoMigrateLegacyState(params: {
   const now = params.now ?? (() => Date.now());
   const sessions = await migrateLegacySessions(detected, now);
   const agentDir = await migrateLegacyAgentDir(detected, now);
-  const changes = [...stateDirResult.changes, ...sessions.changes, ...agentDir.changes];
-  const warnings = [...stateDirResult.warnings, ...sessions.warnings, ...agentDir.warnings];
+  const changes = [
+    ...stateDirResult.changes,
+    ...sessions.changes,
+    ...agentDir.changes,
+  ];
+  const warnings = [
+    ...stateDirResult.warnings,
+    ...sessions.warnings,
+    ...agentDir.warnings,
+  ];
 
   const logger = params.log ?? createSubsystemLogger("state-migrations");
   if (changes.length > 0) {
-    logger.info(`Auto-migrated legacy state:\n${changes.map((entry) => `- ${entry}`).join("\n")}`);
+    logger.info(
+      `Auto-migrated legacy state:\n${changes.map((entry) => `- ${entry}`).join("\n")}`,
+    );
   }
   if (warnings.length > 0) {
     logger.warn(

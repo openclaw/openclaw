@@ -10,7 +10,14 @@ describe("sanitizeSessionHistory toolResult details stripping", () => {
     const messages: AgentMessage[] = [
       {
         role: "assistant",
-        content: [{ type: "toolUse", id: "call_1", name: "web_fetch", input: { url: "x" } }],
+        content: [
+          {
+            type: "toolUse",
+            id: "call_1",
+            name: "web_fetch",
+            input: { url: "x" },
+          },
+        ],
         timestamp: 1,
       } as unknown as AgentMessage,
       {
@@ -41,7 +48,9 @@ describe("sanitizeSessionHistory toolResult details stripping", () => {
       sessionId: "test",
     });
 
-    const toolResult = sanitized.find((m) => m && typeof m === "object" && m.role === "toolResult");
+    const toolResult = sanitized.find(
+      (m) => m && typeof m === "object" && m.role === "toolResult",
+    );
     expect(toolResult).toBeTruthy();
     expect(toolResult).not.toHaveProperty("details");
 

@@ -21,11 +21,18 @@ const DEFAULT_GUARDRAIL_SKIP_PATTERNS = [
   /[\\/][^\\/]*test-harness(?:\.[^\\/]+)?\.ts$/,
 ];
 
-const runtimeSourceGuardrailCache = new Map<string, Promise<RuntimeSourceGuardrailFile[]>>();
+const runtimeSourceGuardrailCache = new Map<
+  string,
+  Promise<RuntimeSourceGuardrailFile[]>
+>();
 const FILE_READ_CONCURRENCY = 16;
 
-export function shouldSkipGuardrailRuntimeSource(relativePath: string): boolean {
-  return DEFAULT_GUARDRAIL_SKIP_PATTERNS.some((pattern) => pattern.test(relativePath));
+export function shouldSkipGuardrailRuntimeSource(
+  relativePath: string,
+): boolean {
+  return DEFAULT_GUARDRAIL_SKIP_PATTERNS.some((pattern) =>
+    pattern.test(relativePath),
+  );
 }
 
 async function readRuntimeSourceFiles(
@@ -57,23 +64,37 @@ async function readRuntimeSourceFiles(
   };
 
   const workers = Array.from(
-    { length: Math.min(FILE_READ_CONCURRENCY, Math.max(1, absolutePaths.length)) },
+    {
+      length: Math.min(
+        FILE_READ_CONCURRENCY,
+        Math.max(1, absolutePaths.length),
+      ),
+    },
     () => worker(),
   );
   await Promise.all(workers);
-  return output.filter((entry): entry is RuntimeSourceGuardrailFile => entry !== undefined);
+  return output.filter(
+    (entry): entry is RuntimeSourceGuardrailFile => entry !== undefined,
+  );
 }
 
 function tryListTrackedRuntimeSourceFiles(repoRoot: string): string[] | null {
   try {
-    const stdout = execFileSync("git", ["-C", repoRoot, "ls-files", "--", "src", "extensions"], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    });
+    const stdout = execFileSync(
+      "git",
+      ["-C", repoRoot, "ls-files", "--", "src", "extensions"],
+      {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      },
+    );
     return stdout
       .split(/\r?\n/u)
       .filter(Boolean)
-      .filter((relativePath) => relativePath.endsWith(".ts") || relativePath.endsWith(".tsx"))
+      .filter(
+        (relativePath) =>
+          relativePath.endsWith(".ts") || relativePath.endsWith(".tsx"),
+      )
       .filter((relativePath) => !shouldSkipGuardrailRuntimeSource(relativePath))
       .map((relativePath) => path.join(repoRoot, relativePath));
   } catch {

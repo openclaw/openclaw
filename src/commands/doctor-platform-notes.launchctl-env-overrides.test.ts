@@ -16,7 +16,11 @@ describe("noteMacLaunchctlGatewayEnvOverrides", () => {
       },
     } as OpenClawConfig;
 
-    await noteMacLaunchctlGatewayEnvOverrides(cfg, { platform: "darwin", getenv, noteFn });
+    await noteMacLaunchctlGatewayEnvOverrides(cfg, {
+      platform: "darwin",
+      getenv,
+      noteFn,
+    });
 
     expect(noteFn).toHaveBeenCalledTimes(1);
     expect(getenv).toHaveBeenCalledTimes(4);
@@ -34,7 +38,11 @@ describe("noteMacLaunchctlGatewayEnvOverrides", () => {
     const getenv = vi.fn(async () => "launchctl-token");
     const cfg = {} as OpenClawConfig;
 
-    await noteMacLaunchctlGatewayEnvOverrides(cfg, { platform: "darwin", getenv, noteFn });
+    await noteMacLaunchctlGatewayEnvOverrides(cfg, {
+      platform: "darwin",
+      getenv,
+      noteFn,
+    });
 
     expect(getenv).not.toHaveBeenCalled();
     expect(noteFn).not.toHaveBeenCalled();
@@ -51,7 +59,11 @@ describe("noteMacLaunchctlGatewayEnvOverrides", () => {
       },
     } as OpenClawConfig;
 
-    await noteMacLaunchctlGatewayEnvOverrides(cfg, { platform: "linux", getenv, noteFn });
+    await noteMacLaunchctlGatewayEnvOverrides(cfg, {
+      platform: "linux",
+      getenv,
+      noteFn,
+    });
 
     expect(getenv).not.toHaveBeenCalled();
     expect(noteFn).not.toHaveBeenCalled();

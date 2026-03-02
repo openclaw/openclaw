@@ -29,15 +29,30 @@ type SessionData = {
 };
 
 const exportHtmlDir = path.dirname(fileURLToPath(import.meta.url));
-const templateHtml = fs.readFileSync(path.join(exportHtmlDir, "template.html"), "utf8");
-const templateJs = fs.readFileSync(path.join(exportHtmlDir, "template.js"), "utf8");
-const markedJs = fs.readFileSync(path.join(exportHtmlDir, "vendor", "marked.min.js"), "utf8");
-const highlightJs = fs.readFileSync(path.join(exportHtmlDir, "vendor", "highlight.min.js"), "utf8");
+const templateHtml = fs.readFileSync(
+  path.join(exportHtmlDir, "template.html"),
+  "utf8",
+);
+const templateJs = fs.readFileSync(
+  path.join(exportHtmlDir, "template.js"),
+  "utf8",
+);
+const markedJs = fs.readFileSync(
+  path.join(exportHtmlDir, "vendor", "marked.min.js"),
+  "utf8",
+);
+const highlightJs = fs.readFileSync(
+  path.join(exportHtmlDir, "vendor", "highlight.min.js"),
+  "utf8",
+);
 
 function renderTemplate(sessionData: SessionData) {
   const html = templateHtml
     .replace("{{CSS}}", "")
-    .replace("{{SESSION_DATA}}", Buffer.from(JSON.stringify(sessionData), "utf8").toString("base64"))
+    .replace(
+      "{{SESSION_DATA}}",
+      Buffer.from(JSON.stringify(sessionData), "utf8").toString("base64"),
+    )
     .replace("{{MARKED_JS}}", "")
     .replace("{{HIGHLIGHT_JS}}", "")
     .replace("{{JS}}", "");
@@ -199,7 +214,9 @@ describe("export html security hardening", () => {
       tools: [],
     };
     const modelLeaf = renderTemplate(modelLeafSession).document;
-    expect(modelLeaf.getElementById("tree-container")?.querySelector("img[onerror]")).toBeNull();
+    expect(
+      modelLeaf.getElementById("tree-container")?.querySelector("img[onerror]"),
+    ).toBeNull();
     expect(modelLeaf.getElementById("tree-container")?.innerHTML).toContain(
       "&lt;img src=x onerror=alert(9)&gt;",
     );
@@ -212,7 +229,11 @@ describe("export html security hardening", () => {
       tools: [],
     };
     const thinkingLeaf = renderTemplate(thinkingLeafSession).document;
-    expect(thinkingLeaf.getElementById("tree-container")?.querySelector("img[onerror]")).toBeNull();
+    expect(
+      thinkingLeaf
+        .getElementById("tree-container")
+        ?.querySelector("img[onerror]"),
+    ).toBeNull();
     expect(thinkingLeaf.getElementById("tree-container")?.innerHTML).toContain(
       "&lt;img src=x onerror=alert(9)&gt;",
     );
@@ -248,6 +269,8 @@ describe("export html security hardening", () => {
     const img = document.querySelector("#messages .message-image");
     expect(img).toBeTruthy();
     expect(img?.getAttribute("onerror")).toBeNull();
-    expect(img?.getAttribute("src")).toBe("data:application/octet-stream;base64,AAAA");
+    expect(img?.getAttribute("src")).toBe(
+      "data:application/octet-stream;base64,AAAA",
+    );
   });
 });

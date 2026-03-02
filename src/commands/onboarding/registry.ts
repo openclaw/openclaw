@@ -19,8 +19,13 @@ const BUILTIN_ONBOARDING_ADAPTERS: ChannelOnboardingAdapter[] = [
 
 const CHANNEL_ONBOARDING_ADAPTERS = () => {
   const fromRegistry = listChannelPlugins()
-    .map((plugin) => (plugin.onboarding ? ([plugin.id, plugin.onboarding] as const) : null))
-    .filter((entry): entry is readonly [ChannelChoice, ChannelOnboardingAdapter] => Boolean(entry));
+    .map((plugin) =>
+      plugin.onboarding ? ([plugin.id, plugin.onboarding] as const) : null,
+    )
+    .filter(
+      (entry): entry is readonly [ChannelChoice, ChannelOnboardingAdapter] =>
+        Boolean(entry),
+    );
 
   // Fall back to built-in adapters to keep onboarding working even when the plugin registry
   // fails to populate (see #25545).
@@ -28,7 +33,10 @@ const CHANNEL_ONBOARDING_ADAPTERS = () => {
     (adapter) => [adapter.channel, adapter] as const,
   );
 
-  return new Map<ChannelChoice, ChannelOnboardingAdapter>([...fromBuiltins, ...fromRegistry]);
+  return new Map<ChannelChoice, ChannelOnboardingAdapter>([
+    ...fromBuiltins,
+    ...fromRegistry,
+  ]);
 };
 
 export function getChannelOnboardingAdapter(

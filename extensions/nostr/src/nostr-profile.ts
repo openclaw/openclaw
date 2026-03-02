@@ -134,7 +134,8 @@ export function createProfileEvent(
 
   // Ensure monotonic timestamp (new event > previous)
   const now = Math.floor(Date.now() / 1000);
-  const createdAt = lastPublishedAt !== undefined ? Math.max(now, lastPublishedAt + 1) : now;
+  const createdAt =
+    lastPublishedAt !== undefined ? Math.max(now, lastPublishedAt + 1) : now;
 
   const event = finalizeEvent(
     {
@@ -179,7 +180,10 @@ export async function publishProfileEvent(
   const publishPromises = relays.map(async (relay) => {
     try {
       const timeoutPromise = new Promise<never>((_, reject) => {
-        setTimeout(() => reject(new Error("timeout")), RELAY_PUBLISH_TIMEOUT_MS);
+        setTimeout(
+          () => reject(new Error("timeout")),
+          RELAY_PUBLISH_TIMEOUT_MS,
+        );
       });
 
       // oxlint-disable-next-line typescript/no-floating-promises

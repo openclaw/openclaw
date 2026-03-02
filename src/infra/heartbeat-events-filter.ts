@@ -37,7 +37,9 @@ export function buildCronEventPrompt(
   );
 }
 
-export function buildExecEventPrompt(opts?: { deliverToUser?: boolean }): string {
+export function buildExecEventPrompt(opts?: {
+  deliverToUser?: boolean;
+}): string {
   const deliverToUser = opts?.deliverToUser ?? true;
   if (!deliverToUser) {
     return (

@@ -1,4 +1,8 @@
-import type { AssistantMessage, Model, ToolResultMessage } from "@mariozechner/pi-ai";
+import type {
+  AssistantMessage,
+  Model,
+  ToolResultMessage,
+} from "@mariozechner/pi-ai";
 import { streamOpenAIResponses } from "@mariozechner/pi-ai";
 import { Type } from "@sinclair/typebox";
 import { describe, expect, it } from "vitest";
@@ -25,7 +29,9 @@ function extractInput(payload: Record<string, unknown> | undefined) {
 function extractInputTypes(input: unknown[]) {
   return input
     .map((item) =>
-      item && typeof item === "object" ? (item as Record<string, unknown>).type : undefined,
+      item && typeof item === "object"
+        ? (item as Record<string, unknown>).type
+        : undefined,
     )
     .filter((t): t is string => typeof t === "string");
 }
@@ -69,7 +75,9 @@ function buildAssistantMessage(params: {
 
 async function runAbortedOpenAIResponsesStream(params: {
   messages: Array<
-    AssistantMessage | ToolResultMessage | { role: "user"; content: string; timestamp: number }
+    | AssistantMessage
+    | ToolResultMessage
+    | { role: "user"; content: string; timestamp: number }
   >;
   tools?: Array<{
     name: string;
@@ -155,7 +163,9 @@ describe("openai-responses reasoning replay", () => {
 
     expect(types).toContain("reasoning");
     expect(types).toContain("function_call");
-    expect(types.indexOf("reasoning")).toBeLessThan(types.indexOf("function_call"));
+    expect(types.indexOf("reasoning")).toBeLessThan(
+      types.indexOf("function_call"),
+    );
 
     const functionCall = input.find(
       (item) =>
@@ -170,7 +180,10 @@ describe("openai-responses reasoning replay", () => {
   it("still replays reasoning when paired with an assistant message", async () => {
     const assistantWithText = buildAssistantMessage({
       stopReason: "stop",
-      content: [buildReasoningPart(), { type: "text", text: "hello", textSignature: "msg_test" }],
+      content: [
+        buildReasoningPart(),
+        { type: "text", text: "hello", textSignature: "msg_test" },
+      ],
     });
 
     const { types } = await runAbortedOpenAIResponsesStream({

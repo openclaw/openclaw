@@ -31,7 +31,11 @@ describe("sendMessageDiscord", () => {
   it("creates a thread", async () => {
     const { rest, getMock, postMock } = makeDiscordRest();
     postMock.mockResolvedValue({ id: "t1" });
-    await createThreadDiscord("chan1", { name: "thread", messageId: "m1" }, { rest, token: "t" });
+    await createThreadDiscord(
+      "chan1",
+      { name: "thread", messageId: "m1" },
+      { rest, token: "t" },
+    );
     expect(getMock).not.toHaveBeenCalled();
     expect(postMock).toHaveBeenCalledWith(
       Routes.threads("chan1", "m1"),
@@ -43,7 +47,11 @@ describe("sendMessageDiscord", () => {
     const { rest, getMock, postMock } = makeDiscordRest();
     getMock.mockResolvedValue({ type: ChannelType.GuildForum });
     postMock.mockResolvedValue({ id: "t1" });
-    await createThreadDiscord("chan1", { name: "thread" }, { rest, token: "t" });
+    await createThreadDiscord(
+      "chan1",
+      { name: "thread" },
+      { rest, token: "t" },
+    );
     expect(getMock).toHaveBeenCalledWith(Routes.channel("chan1"));
     expect(postMock).toHaveBeenCalledWith(
       Routes.threads("chan1"),
@@ -118,11 +126,18 @@ describe("sendMessageDiscord", () => {
     const { rest, getMock, postMock } = makeDiscordRest();
     getMock.mockRejectedValue(new Error("lookup failed"));
     postMock.mockResolvedValue({ id: "t1" });
-    await createThreadDiscord("chan1", { name: "thread" }, { rest, token: "t" });
+    await createThreadDiscord(
+      "chan1",
+      { name: "thread" },
+      { rest, token: "t" },
+    );
     expect(postMock).toHaveBeenCalledWith(
       Routes.threads("chan1"),
       expect.objectContaining({
-        body: expect.objectContaining({ name: "thread", type: ChannelType.PublicThread }),
+        body: expect.objectContaining({
+          name: "thread",
+          type: ChannelType.PublicThread,
+        }),
       }),
     );
   });
@@ -140,7 +155,10 @@ describe("sendMessageDiscord", () => {
     expect(postMock).toHaveBeenCalledWith(
       Routes.threads("chan1"),
       expect.objectContaining({
-        body: expect.objectContaining({ name: "thread", type: ChannelType.PrivateThread }),
+        body: expect.objectContaining({
+          name: "thread",
+          type: ChannelType.PrivateThread,
+        }),
       }),
     );
   });
@@ -160,7 +178,10 @@ describe("sendMessageDiscord", () => {
       1,
       Routes.threads("chan1"),
       expect.objectContaining({
-        body: expect.objectContaining({ name: "thread", type: ChannelType.PublicThread }),
+        body: expect.objectContaining({
+          name: "thread",
+          type: ChannelType.PublicThread,
+        }),
       }),
     );
     // Second call: send message to thread
@@ -228,10 +249,20 @@ describe("sendMessageDiscord", () => {
     const { rest, putMock, deleteMock } = makeDiscordRest();
     putMock.mockResolvedValue({});
     deleteMock.mockResolvedValue({});
-    await addRoleDiscord({ guildId: "g1", userId: "u1", roleId: "r1" }, { rest, token: "t" });
-    await removeRoleDiscord({ guildId: "g1", userId: "u1", roleId: "r1" }, { rest, token: "t" });
-    expect(putMock).toHaveBeenCalledWith(Routes.guildMemberRole("g1", "u1", "r1"));
-    expect(deleteMock).toHaveBeenCalledWith(Routes.guildMemberRole("g1", "u1", "r1"));
+    await addRoleDiscord(
+      { guildId: "g1", userId: "u1", roleId: "r1" },
+      { rest, token: "t" },
+    );
+    await removeRoleDiscord(
+      { guildId: "g1", userId: "u1", roleId: "r1" },
+      { rest, token: "t" },
+    );
+    expect(putMock).toHaveBeenCalledWith(
+      Routes.guildMemberRole("g1", "u1", "r1"),
+    );
+    expect(deleteMock).toHaveBeenCalledWith(
+      Routes.guildMemberRole("g1", "u1", "r1"),
+    );
   });
 
   it("bans a member", async () => {
@@ -380,7 +411,10 @@ describe("sendPollDiscord", () => {
         body: expect.objectContaining({
           poll: {
             question: { text: "Lunch?" },
-            answers: [{ poll_media: { text: "Pizza" } }, { poll_media: { text: "Sushi" } }],
+            answers: [
+              { poll_media: { text: "Pizza" } },
+              { poll_media: { text: "Sushi" } },
+            ],
             duration: 24,
             allow_multiselect: false,
             layout_type: 1,
@@ -475,9 +509,9 @@ describe("retry rate limits", () => {
     const { rest, postMock } = makeDiscordRest();
     postMock.mockRejectedValueOnce(new Error("network error"));
 
-    await expect(sendMessageDiscord("channel:789", "hello", { rest, token: "t" })).rejects.toThrow(
-      "network error",
-    );
+    await expect(
+      sendMessageDiscord("channel:789", "hello", { rest, token: "t" }),
+    ).rejects.toThrow("network error");
     expect(postMock).toHaveBeenCalledTimes(1);
   });
 
@@ -485,7 +519,9 @@ describe("retry rate limits", () => {
     const { rest, putMock } = makeDiscordRest();
     const rateLimitError = createMockRateLimitError(0);
 
-    putMock.mockRejectedValueOnce(rateLimitError).mockResolvedValueOnce(undefined);
+    putMock
+      .mockRejectedValueOnce(rateLimitError)
+      .mockResolvedValueOnce(undefined);
 
     const res = await reactMessageDiscord("chan1", "msg1", "ok", {
       rest,

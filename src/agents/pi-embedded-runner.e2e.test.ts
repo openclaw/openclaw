@@ -29,9 +29,15 @@ vi.mock("@mariozechner/pi-coding-agent", async () => {
 });
 
 vi.mock("@mariozechner/pi-ai", async () => {
-  const actual = await vi.importActual<typeof import("@mariozechner/pi-ai")>("@mariozechner/pi-ai");
+  const actual = await vi.importActual<typeof import("@mariozechner/pi-ai")>(
+    "@mariozechner/pi-ai",
+  );
 
-  const buildAssistantMessage = (model: { api: string; provider: string; id: string }) => ({
+  const buildAssistantMessage = (model: {
+    api: string;
+    provider: string;
+    id: string;
+  }) => ({
     role: "assistant" as const,
     content: [{ type: "text" as const, text: "ok" }],
     stopReason: "stop" as const,
@@ -42,7 +48,11 @@ vi.mock("@mariozechner/pi-ai", async () => {
     timestamp: Date.now(),
   });
 
-  const buildAssistantErrorMessage = (model: { api: string; provider: string; id: string }) => ({
+  const buildAssistantErrorMessage = (model: {
+    api: string;
+    provider: string;
+    id: string;
+  }) => ({
     role: "assistant" as const,
     content: [],
     stopReason: "error" as const,
@@ -62,7 +72,11 @@ vi.mock("@mariozechner/pi-ai", async () => {
       }
       return buildAssistantMessage(model);
     },
-    completeSimple: async (model: { api: string; provider: string; id: string }) => {
+    completeSimple: async (model: {
+      api: string;
+      provider: string;
+      id: string;
+    }) => {
       if (model.id === "mock-error") {
         return buildAssistantErrorMessage(model);
       }
@@ -98,7 +112,9 @@ beforeAll(async () => {
   vi.useRealTimers();
   ({ runEmbeddedPiAgent } = await import("./pi-embedded-runner/run.js"));
   ({ SessionManager } = await import("@mariozechner/pi-coding-agent"));
-  tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-embedded-agent-"));
+  tempRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-embedded-agent-"),
+  );
   agentDir = path.join(tempRoot, "agent");
   workspaceDir = path.join(tempRoot, "workspace");
   await fs.mkdir(agentDir, { recursive: true });
@@ -143,7 +159,10 @@ const nextRunId = (prefix = "run-embedded-test") => `${prefix}-${++runCounter}`;
 const nextSessionKey = () => `agent:test:embedded:${nextRunId("session-key")}`;
 const immediateEnqueue = async <T>(task: () => Promise<T>) => task();
 
-const runWithOrphanedSingleUserMessage = async (text: string, sessionKey: string) => {
+const runWithOrphanedSingleUserMessage = async (
+  text: string,
+  sessionKey: string,
+) => {
   const sessionFile = nextSessionFile();
   const sessionManager = SessionManager.open(sessionFile);
   sessionManager.appendMessage({
@@ -184,7 +203,14 @@ const readSessionEntries = async (sessionFile: string) => {
   return raw
     .split(/\r?\n/)
     .filter(Boolean)
-    .map((line) => JSON.parse(line) as { type?: string; customType?: string; data?: unknown });
+    .map(
+      (line) =>
+        JSON.parse(line) as {
+          type?: string;
+          customType?: string;
+          data?: unknown;
+        },
+    );
 };
 
 const readSessionMessages = async (sessionFile: string) => {
@@ -192,11 +218,16 @@ const readSessionMessages = async (sessionFile: string) => {
   return entries
     .filter((entry) => entry.type === "message")
     .map(
-      (entry) => (entry as { message?: { role?: string; content?: unknown } }).message,
+      (entry) =>
+        (entry as { message?: { role?: string; content?: unknown } }).message,
     ) as Array<{ role?: string; content?: unknown }>;
 };
 
-const runDefaultEmbeddedTurn = async (sessionFile: string, prompt: string, sessionKey: string) => {
+const runDefaultEmbeddedTurn = async (
+  sessionFile: string,
+  prompt: string,
+  sessionKey: string,
+) => {
   const cfg = makeOpenAiConfig(["mock-1"]);
   await runEmbeddedPiAgent({
     sessionId: "session:test",
@@ -237,7 +268,8 @@ describe("runEmbeddedPiAgent", () => {
 
     const messages = await readSessionMessages(sessionFile);
     const userIndex = messages.findIndex(
-      (message) => message?.role === "user" && textFromContent(message.content) === "boom",
+      (message) =>
+        message?.role === "user" && textFromContent(message.content) === "boom",
     );
     expect(userIndex).toBeGreaterThanOrEqual(0);
   });
@@ -270,17 +302,23 @@ describe("runEmbeddedPiAgent", () => {
 
       const messages = await readSessionMessages(sessionFile);
       const seedUserIndex = messages.findIndex(
-        (message) => message?.role === "user" && textFromContent(message.content) === "seed user",
+        (message) =>
+          message?.role === "user" &&
+          textFromContent(message.content) === "seed user",
       );
       const seedAssistantIndex = messages.findIndex(
         (message) =>
-          message?.role === "assistant" && textFromContent(message.content) === "seed assistant",
+          message?.role === "assistant" &&
+          textFromContent(message.content) === "seed assistant",
       );
       const newUserIndex = messages.findIndex(
-        (message) => message?.role === "user" && textFromContent(message.content) === "hello",
+        (message) =>
+          message?.role === "user" &&
+          textFromContent(message.content) === "hello",
       );
       const newAssistantIndex = messages.findIndex(
-        (message, index) => index > newUserIndex && message?.role === "assistant",
+        (message, index) =>
+          index > newUserIndex && message?.role === "assistant",
       );
       expect(seedUserIndex).toBeGreaterThanOrEqual(0);
       expect(seedAssistantIndex).toBeGreaterThan(seedUserIndex);
@@ -290,7 +328,10 @@ describe("runEmbeddedPiAgent", () => {
   );
 
   it("repairs orphaned user messages and continues", async () => {
-    const result = await runWithOrphanedSingleUserMessage("orphaned user", nextSessionKey());
+    const result = await runWithOrphanedSingleUserMessage(
+      "orphaned user",
+      nextSessionKey(),
+    );
 
     expect(result.meta.error).toBeUndefined();
     expect(result.payloads?.length ?? 0).toBeGreaterThan(0);

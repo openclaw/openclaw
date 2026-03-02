@@ -85,20 +85,26 @@ vi.mock("../gateway/call.js", () => ({
 vi.mock("../acp/control-plane/manager.js", () => {
   return {
     getAcpSessionManager: () => ({
-      initializeSession: (params: unknown) => hoisted.initializeSessionMock(params),
+      initializeSession: (params: unknown) =>
+        hoisted.initializeSessionMock(params),
       closeSession: (params: unknown) => hoisted.closeSessionMock(params),
     }),
   };
 });
 
-vi.mock("../infra/outbound/session-binding-service.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../infra/outbound/session-binding-service.js")>();
-  return {
-    ...actual,
-    getSessionBindingService: () => buildSessionBindingServiceMock(),
-  };
-});
+vi.mock(
+  "../infra/outbound/session-binding-service.js",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("../infra/outbound/session-binding-service.js")
+      >();
+    return {
+      ...actual,
+      getSessionBindingService: () => buildSessionBindingServiceMock(),
+    };
+  },
+);
 
 const { spawnAcpDirect } = await import("./acp-spawn.js");
 
@@ -111,7 +117,9 @@ function createSessionBindingCapabilities() {
   };
 }
 
-function createSessionBinding(overrides?: Partial<SessionBindingRecord>): SessionBindingRecord {
+function createSessionBinding(
+  overrides?: Partial<SessionBindingRecord>,
+): SessionBindingRecord {
   return {
     bindingId: "default:child-thread",
     targetSessionKey: "agent:codex:acp:s1",
@@ -135,76 +143,84 @@ function createSessionBinding(overrides?: Partial<SessionBindingRecord>): Sessio
 function expectResolvedIntroTextInBindMetadata(): void {
   const callWithMetadata = hoisted.sessionBindingBindMock.mock.calls.find(
     (call: unknown[]) =>
-      typeof (call[0] as { metadata?: { introText?: unknown } } | undefined)?.metadata
-        ?.introText === "string",
+      typeof (call[0] as { metadata?: { introText?: unknown } } | undefined)
+        ?.metadata?.introText === "string",
   );
   const introText =
-    (callWithMetadata?.[0] as { metadata?: { introText?: string } } | undefined)?.metadata
-      ?.introText ?? "";
-  expect(introText.includes("session ids: pending (available after the first reply)")).toBe(false);
+    (callWithMetadata?.[0] as { metadata?: { introText?: string } } | undefined)
+      ?.metadata?.introText ?? "";
+  expect(
+    introText.includes(
+      "session ids: pending (available after the first reply)",
+    ),
+  ).toBe(false);
 }
 
 describe("spawnAcpDirect", () => {
   beforeEach(() => {
     hoisted.state.cfg = createDefaultSpawnConfig();
 
-    hoisted.callGatewayMock.mockReset().mockImplementation(async (argsUnknown: unknown) => {
-      const args = argsUnknown as { method?: string };
-      if (args.method === "sessions.patch") {
-        return { ok: true };
-      }
-      if (args.method === "agent") {
-        return { runId: "run-1" };
-      }
-      if (args.method === "sessions.delete") {
-        return { ok: true };
-      }
-      return {};
-    });
+    hoisted.callGatewayMock
+      .mockReset()
+      .mockImplementation(async (argsUnknown: unknown) => {
+        const args = argsUnknown as { method?: string };
+        if (args.method === "sessions.patch") {
+          return { ok: true };
+        }
+        if (args.method === "agent") {
+          return { runId: "run-1" };
+        }
+        if (args.method === "sessions.delete") {
+          return { ok: true };
+        }
+        return {};
+      });
 
     hoisted.closeSessionMock.mockReset().mockResolvedValue({
       runtimeClosed: true,
       metaCleared: false,
     });
-    hoisted.initializeSessionMock.mockReset().mockImplementation(async (argsUnknown: unknown) => {
-      const args = argsUnknown as {
-        sessionKey: string;
-        agent: string;
-        mode: "persistent" | "oneshot";
-        cwd?: string;
-      };
-      const runtimeSessionName = `${args.sessionKey}:runtime`;
-      const cwd = typeof args.cwd === "string" ? args.cwd : undefined;
-      return {
-        runtime: {
-          close: vi.fn().mockResolvedValue(undefined),
-        },
-        handle: {
-          sessionKey: args.sessionKey,
-          backend: "acpx",
-          runtimeSessionName,
-          ...(cwd ? { cwd } : {}),
-          agentSessionId: "codex-inner-1",
-          backendSessionId: "acpx-1",
-        },
-        meta: {
-          backend: "acpx",
-          agent: args.agent,
-          runtimeSessionName,
-          ...(cwd ? { runtimeOptions: { cwd }, cwd } : {}),
-          identity: {
-            state: "pending",
-            source: "ensure",
-            acpxSessionId: "acpx-1",
-            agentSessionId: "codex-inner-1",
-            lastUpdatedAt: Date.now(),
+    hoisted.initializeSessionMock
+      .mockReset()
+      .mockImplementation(async (argsUnknown: unknown) => {
+        const args = argsUnknown as {
+          sessionKey: string;
+          agent: string;
+          mode: "persistent" | "oneshot";
+          cwd?: string;
+        };
+        const runtimeSessionName = `${args.sessionKey}:runtime`;
+        const cwd = typeof args.cwd === "string" ? args.cwd : undefined;
+        return {
+          runtime: {
+            close: vi.fn().mockResolvedValue(undefined),
           },
-          mode: args.mode,
-          state: "idle",
-          lastActivityAt: Date.now(),
-        },
-      };
-    });
+          handle: {
+            sessionKey: args.sessionKey,
+            backend: "acpx",
+            runtimeSessionName,
+            ...(cwd ? { cwd } : {}),
+            agentSessionId: "codex-inner-1",
+            backendSessionId: "acpx-1",
+          },
+          meta: {
+            backend: "acpx",
+            agent: args.agent,
+            runtimeSessionName,
+            ...(cwd ? { runtimeOptions: { cwd }, cwd } : {}),
+            identity: {
+              state: "pending",
+              source: "ensure",
+              acpxSessionId: "acpx-1",
+              agentSessionId: "codex-inner-1",
+              lastUpdatedAt: Date.now(),
+            },
+            mode: args.mode,
+            state: "idle",
+            lastActivityAt: Date.now(),
+          },
+        };
+      });
 
     hoisted.sessionBindingCapabilitiesMock
       .mockReset()
@@ -227,13 +243,17 @@ describe("spawnAcpDirect", () => {
             },
             metadata: {
               boundBy:
-                typeof input.metadata?.boundBy === "string" ? input.metadata.boundBy : "system",
+                typeof input.metadata?.boundBy === "string"
+                  ? input.metadata.boundBy
+                  : "system",
               agentId: "codex",
               webhookId: "wh-1",
             },
           }),
       );
-    hoisted.sessionBindingResolveByConversationMock.mockReset().mockReturnValue(null);
+    hoisted.sessionBindingResolveByConversationMock
+      .mockReset()
+      .mockReturnValue(null);
     hoisted.sessionBindingListBySessionMock.mockReset().mockReturnValue([]);
     hoisted.sessionBindingUnbindMock.mockReset().mockResolvedValue([]);
   });
@@ -268,7 +288,10 @@ describe("spawnAcpDirect", () => {
     expectResolvedIntroTextInBindMetadata();
 
     const agentCall = hoisted.callGatewayMock.mock.calls
-      .map((call: unknown[]) => call[0] as { method?: string; params?: Record<string, unknown> })
+      .map(
+        (call: unknown[]) =>
+          call[0] as { method?: string; params?: Record<string, unknown> },
+      )
       .find((request) => request.method === "agent");
     expect(agentCall?.params?.sessionKey).toMatch(/^agent:codex:acp:/);
     expect(agentCall?.params?.to).toBe("channel:child-thread");

@@ -33,7 +33,11 @@ export const modelsHandlers: GatewayRequestHandlers = {
       const models = allowedCatalog.length > 0 ? allowedCatalog : catalog;
       respond(true, { models }, undefined);
     } catch (err) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, String(err)),
+      );
     }
   },
 };

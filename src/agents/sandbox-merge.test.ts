@@ -11,7 +11,9 @@ describe("sandbox config merges", () => {
     expect(resolveSandboxScope({})).toBe("agent");
     expect(resolveSandboxScope({ perSession: true })).toBe("session");
     expect(resolveSandboxScope({ perSession: false })).toBe("shared");
-    expect(resolveSandboxScope({ perSession: true, scope: "agent" })).toBe("agent");
+    expect(resolveSandboxScope({ perSession: true, scope: "agent" })).toBe(
+      "agent",
+    );
   });
 
   it("merges sandbox docker env and ulimits (agent wins)", () => {
@@ -77,7 +79,9 @@ describe("sandbox config merges", () => {
           },
         },
         assert: (resolved: ReturnType<typeof resolveSandboxDockerConfig>) => {
-          expect(resolved.binds).toEqual(["/var/run/docker.sock:/var/run/docker.sock"]);
+          expect(resolved.binds).toEqual([
+            "/var/run/docker.sock:/var/run/docker.sock",
+          ]);
         },
       },
       {

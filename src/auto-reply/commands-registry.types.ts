@@ -23,7 +23,9 @@ export type CommandArgChoiceContext = {
 
 export type CommandArgChoice = string | { value: string; label: string };
 
-export type CommandArgChoicesProvider = (context: CommandArgChoiceContext) => CommandArgChoice[];
+export type CommandArgChoicesProvider = (
+  context: CommandArgChoiceContext,
+) => CommandArgChoice[];
 
 export type CommandArgDefinition = {
   name: string;

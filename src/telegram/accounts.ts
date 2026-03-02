@@ -1,7 +1,10 @@
 import util from "node:util";
 import { createAccountActionGate } from "../channels/plugins/account-action-gate.js";
 import type { OpenClawConfig } from "../config/config.js";
-import type { TelegramAccountConfig, TelegramActionConfig } from "../config/types.js";
+import type {
+  TelegramAccountConfig,
+  TelegramActionConfig,
+} from "../config/types.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
@@ -9,7 +12,10 @@ import {
   resolveAccountWithDefaultFallback,
 } from "../plugin-sdk/account-resolution.js";
 import { resolveAccountEntry } from "../routing/account-lookup.js";
-import { listBoundAccountIds, resolveDefaultAgentBoundAccountId } from "../routing/bindings.js";
+import {
+  listBoundAccountIds,
+  resolveDefaultAgentBoundAccountId,
+} from "../routing/bindings.js";
 import {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
@@ -26,7 +32,12 @@ function formatDebugArg(value: unknown): string {
   if (value instanceof Error) {
     return value.stack ?? value.message;
   }
-  return util.inspect(value, { colors: false, depth: null, compact: true, breakLength: Infinity });
+  return util.inspect(value, {
+    colors: false,
+    depth: null,
+    compact: true,
+    breakLength: Infinity,
+  });
 }
 
 const debugAccounts = (...args: unknown[]) => {
@@ -54,7 +65,10 @@ function listConfiguredAccountIds(cfg: OpenClawConfig): string[] {
 
 export function listTelegramAccountIds(cfg: OpenClawConfig): string[] {
   const ids = Array.from(
-    new Set([...listConfiguredAccountIds(cfg), ...listBoundAccountIds(cfg, "telegram")]),
+    new Set([
+      ...listConfiguredAccountIds(cfg),
+      ...listBoundAccountIds(cfg, "telegram"),
+    ]),
   );
   debugAccounts("listTelegramAccountIds", ids);
   if (ids.length === 0) {
@@ -68,10 +82,14 @@ export function resolveDefaultTelegramAccountId(cfg: OpenClawConfig): string {
   if (boundDefault) {
     return boundDefault;
   }
-  const preferred = normalizeOptionalAccountId(cfg.channels?.telegram?.defaultAccount);
+  const preferred = normalizeOptionalAccountId(
+    cfg.channels?.telegram?.defaultAccount,
+  );
   if (
     preferred &&
-    listTelegramAccountIds(cfg).some((accountId) => normalizeAccountId(accountId) === preferred)
+    listTelegramAccountIds(cfg).some(
+      (accountId) => normalizeAccountId(accountId) === preferred,
+    )
   ) {
     return preferred;
   }
@@ -90,7 +108,10 @@ function resolveAccountConfig(
   return resolveAccountEntry(cfg.channels?.telegram?.accounts, normalized);
 }
 
-function mergeTelegramAccountConfig(cfg: OpenClawConfig, accountId: string): TelegramAccountConfig {
+function mergeTelegramAccountConfig(
+  cfg: OpenClawConfig,
+  accountId: string,
+): TelegramAccountConfig {
   const {
     accounts: _ignored,
     defaultAccount: _ignoredDefaultAccount,
@@ -109,7 +130,9 @@ function mergeTelegramAccountConfig(cfg: OpenClawConfig, accountId: string): Tel
   // Single-account setups keep backward compat: channel-level groups still
   // applies when the account has no override.
   // See: https://github.com/openclaw/openclaw/issues/30673
-  const configuredAccountIds = Object.keys(cfg.channels?.telegram?.accounts ?? {});
+  const configuredAccountIds = Object.keys(
+    cfg.channels?.telegram?.accounts ?? {},
+  );
   const isMultiAccount = configuredAccountIds.length > 1;
   const groups = account.groups ?? (isMultiAccount ? undefined : channelGroups);
 
@@ -165,7 +188,9 @@ export function resolveTelegramAccount(params: {
   });
 }
 
-export function listEnabledTelegramAccounts(cfg: OpenClawConfig): ResolvedTelegramAccount[] {
+export function listEnabledTelegramAccounts(
+  cfg: OpenClawConfig,
+): ResolvedTelegramAccount[] {
   return listTelegramAccountIds(cfg)
     .map((accountId) => resolveTelegramAccount({ cfg, accountId }))
     .filter((account) => account.enabled);

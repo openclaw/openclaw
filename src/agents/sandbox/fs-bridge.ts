@@ -1,6 +1,9 @@
 import fs from "node:fs";
 import { openBoundaryFile } from "../../infra/boundary-file-read.js";
-import { PATH_ALIAS_POLICIES, type PathAliasPolicy } from "../../infra/path-alias-guards.js";
+import {
+  PATH_ALIAS_POLICIES,
+  type PathAliasPolicy,
+} from "../../infra/path-alias-guards.js";
 import type { SafeOpenSyncAllowedType } from "../../infra/safe-open-sync.js";
 import { execDockerRaw, type ExecDockerRawResult } from "./docker.js";
 import {
@@ -9,7 +12,10 @@ import {
   type SandboxResolvedFsPath,
   type SandboxFsMount,
 } from "./fs-paths.js";
-import { isPathInsideContainerRoot, normalizeContainerPath } from "./path-utils.js";
+import {
+  isPathInsideContainerRoot,
+  normalizeContainerPath,
+} from "./path-utils.js";
 import type { SandboxContext, SandboxWorkspaceAccess } from "./types.js";
 
 type RunCommandOptions = {
@@ -40,7 +46,11 @@ export type SandboxFsStat = {
 
 export type SandboxFsBridge = {
   resolvePath(params: { filePath: string; cwd?: string }): SandboxResolvedPath;
-  readFile(params: { filePath: string; cwd?: string; signal?: AbortSignal }): Promise<Buffer>;
+  readFile(params: {
+    filePath: string;
+    cwd?: string;
+    signal?: AbortSignal;
+  }): Promise<Buffer>;
   writeFile(params: {
     filePath: string;
     cwd?: string;
@@ -49,7 +59,11 @@ export type SandboxFsBridge = {
     mkdir?: boolean;
     signal?: AbortSignal;
   }): Promise<void>;
-  mkdirp(params: { filePath: string; cwd?: string; signal?: AbortSignal }): Promise<void>;
+  mkdirp(params: {
+    filePath: string;
+    cwd?: string;
+    signal?: AbortSignal;
+  }): Promise<void>;
   remove(params: {
     filePath: string;
     cwd?: string;
@@ -57,7 +71,12 @@ export type SandboxFsBridge = {
     force?: boolean;
     signal?: AbortSignal;
   }): Promise<void>;
-  rename(params: { from: string; to: string; cwd?: string; signal?: AbortSignal }): Promise<void>;
+  rename(params: {
+    from: string;
+    to: string;
+    cwd?: string;
+    signal?: AbortSignal;
+  }): Promise<void>;
   stat(params: {
     filePath: string;
     cwd?: string;
@@ -65,7 +84,9 @@ export type SandboxFsBridge = {
   }): Promise<SandboxFsStat | null>;
 };
 
-export function createSandboxFsBridge(params: { sandbox: SandboxContext }): SandboxFsBridge {
+export function createSandboxFsBridge(params: {
+  sandbox: SandboxContext;
+}): SandboxFsBridge {
   return new SandboxFsBridgeImpl(params.sandbox);
 }
 
@@ -115,7 +136,10 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
   }): Promise<void> {
     const target = this.resolveResolvedPath(params);
     this.ensureWriteAccess(target, "write files");
-    await this.assertPathSafety(target, { action: "write files", requireWritable: true });
+    await this.assertPathSafety(target, {
+      action: "write files",
+      requireWritable: true,
+    });
     const buffer = Buffer.isBuffer(params.data)
       ? params.data
       : Buffer.from(params.data, params.encoding ?? "utf8");
@@ -127,7 +151,10 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     });
 
     try {
-      await this.assertPathSafety(target, { action: "write files", requireWritable: true });
+      await this.assertPathSafety(target, {
+        action: "write files",
+        requireWritable: true,
+      });
       await this.runCommand('set -eu; mv -f -- "$1" "$2"', {
         args: [tempPath, target.containerPath],
         signal: params.signal,
@@ -138,7 +165,11 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     }
   }
 
-  async mkdirp(params: { filePath: string; cwd?: string; signal?: AbortSignal }): Promise<void> {
+  async mkdirp(params: {
+    filePath: string;
+    cwd?: string;
+    signal?: AbortSignal;
+  }): Promise<void> {
     const target = this.resolveResolvedPath(params);
     this.ensureWriteAccess(target, "create directories");
     await this.assertPathSafety(target, {
@@ -166,9 +197,10 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
       requireWritable: true,
       aliasPolicy: PATH_ALIAS_POLICIES.unlinkTarget,
     });
-    const flags = [params.force === false ? "" : "-f", params.recursive ? "-r" : ""].filter(
-      Boolean,
-    );
+    const flags = [
+      params.force === false ? "" : "-f",
+      params.recursive ? "-r" : "",
+    ].filter(Boolean);
     const rmCommand = flags.length > 0 ? `rm ${flags.join(" ")}` : "rm";
     await this.runCommand(`set -eu; ${rmCommand} -- "$1"`, {
       args: [target.containerPath],
@@ -182,8 +214,14 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     cwd?: string;
     signal?: AbortSignal;
   }): Promise<void> {
-    const from = this.resolveResolvedPath({ filePath: params.from, cwd: params.cwd });
-    const to = this.resolveResolvedPath({ filePath: params.to, cwd: params.cwd });
+    const from = this.resolveResolvedPath({
+      filePath: params.from,
+      cwd: params.cwd,
+    });
+    const to = this.resolveResolvedPath({
+      filePath: params.to,
+      cwd: params.cwd,
+    });
     this.ensureWriteAccess(from, "rename files");
     this.ensureWriteAccess(to, "rename files");
     await this.assertPathSafety(from, {
@@ -211,11 +249,14 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
   }): Promise<SandboxFsStat | null> {
     const target = this.resolveResolvedPath(params);
     await this.assertPathSafety(target, { action: "stat files" });
-    const result = await this.runCommand('set -eu; stat -c "%F|%s|%Y" -- "$1"', {
-      args: [target.containerPath],
-      signal: params.signal,
-      allowFailure: true,
-    });
+    const result = await this.runCommand(
+      'set -eu; stat -c "%F|%s|%Y" -- "$1"',
+      {
+        args: [target.containerPath],
+        signal: params.signal,
+        allowFailure: true,
+      },
+    );
     if (result.code !== 0) {
       const stderr = result.stderr.toString("utf8");
       if (stderr.includes("No such file or directory")) {
@@ -258,7 +299,10 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     });
   }
 
-  private async assertPathSafety(target: SandboxResolvedFsPath, options: PathSafetyOptions) {
+  private async assertPathSafety(
+    target: SandboxResolvedFsPath,
+    options: PathSafetyOptions,
+  ) {
     const lexicalMount = this.resolveMountByContainerPath(target.containerPath);
     if (!lexicalMount) {
       throw new Error(
@@ -279,7 +323,8 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
         // the path is a valid in-boundary directory. Allow mkdirp to proceed in that
         // narrow case by verifying the host path is an existing directory.
         const canFallbackToDirectoryStat =
-          options.allowedType === "directory" && this.pathIsExistingDirectory(target.hostPath);
+          options.allowedType === "directory" &&
+          this.pathIsExistingDirectory(target.hostPath);
         if (!canFallbackToDirectoryStat) {
           throw guarded.error instanceof Error
             ? guarded.error
@@ -294,9 +339,12 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
 
     const canonicalContainerPath = await this.resolveCanonicalContainerPath({
       containerPath: target.containerPath,
-      allowFinalSymlinkForUnlink: options.aliasPolicy?.allowFinalSymlinkForUnlink === true,
+      allowFinalSymlinkForUnlink:
+        options.aliasPolicy?.allowFinalSymlinkForUnlink === true,
     });
-    const canonicalMount = this.resolveMountByContainerPath(canonicalContainerPath);
+    const canonicalMount = this.resolveMountByContainerPath(
+      canonicalContainerPath,
+    );
     if (!canonicalMount) {
       throw new Error(
         `Sandbox path escapes allowed mounts; cannot ${options.action}: ${target.containerPath}`,
@@ -317,10 +365,17 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     }
   }
 
-  private resolveMountByContainerPath(containerPath: string): SandboxFsMount | null {
+  private resolveMountByContainerPath(
+    containerPath: string,
+  ): SandboxFsMount | null {
     const normalized = normalizeContainerPath(containerPath);
     for (const mount of this.mountsByContainer) {
-      if (isPathInsideContainerRoot(normalizeContainerPath(mount.containerRoot), normalized)) {
+      if (
+        isPathInsideContainerRoot(
+          normalizeContainerPath(mount.containerRoot),
+          normalized,
+        )
+      ) {
         return mount;
       }
     }
@@ -350,11 +405,16 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
       'printf "%s%s\\n" "$canonical" "$suffix"',
     ].join("\n");
     const result = await this.runCommand(script, {
-      args: [params.containerPath, params.allowFinalSymlinkForUnlink ? "1" : "0"],
+      args: [
+        params.containerPath,
+        params.allowFinalSymlinkForUnlink ? "1" : "0",
+      ],
     });
     const canonical = result.stdout.toString("utf8").trim();
     if (!canonical.startsWith("/")) {
-      throw new Error(`Failed to resolve canonical sandbox path: ${params.containerPath}`);
+      throw new Error(
+        `Failed to resolve canonical sandbox path: ${params.containerPath}`,
+      );
     }
     return normalizeContainerPath(canonical);
   }
@@ -390,7 +450,12 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
       stdin: params.data,
       signal: params.signal,
     });
-    const tempPath = result.stdout.toString("utf8").trim().split(/\r?\n/).at(-1)?.trim();
+    const tempPath = result.stdout
+      .toString("utf8")
+      .trim()
+      .split(/\r?\n/)
+      .at(-1)
+      ?.trim();
     if (!tempPath || !tempPath.startsWith("/")) {
       throw new Error(
         `Failed to create temporary sandbox write path for ${params.targetContainerPath}`,
@@ -399,7 +464,10 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     return normalizeContainerPath(tempPath);
   }
 
-  private async cleanupTempPath(tempPath: string, signal?: AbortSignal): Promise<void> {
+  private async cleanupTempPath(
+    tempPath: string,
+    signal?: AbortSignal,
+  ): Promise<void> {
     try {
       await this.runCommand('set -eu; rm -f -- "$1"', {
         args: [tempPath],
@@ -413,11 +481,16 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
 
   private ensureWriteAccess(target: SandboxResolvedFsPath, action: string) {
     if (!allowsWrites(this.sandbox.workspaceAccess) || !target.writable) {
-      throw new Error(`Sandbox path is read-only; cannot ${action}: ${target.containerPath}`);
+      throw new Error(
+        `Sandbox path is read-only; cannot ${action}: ${target.containerPath}`,
+      );
     }
   }
 
-  private resolveResolvedPath(params: { filePath: string; cwd?: string }): SandboxResolvedFsPath {
+  private resolveResolvedPath(params: {
+    filePath: string;
+    cwd?: string;
+  }): SandboxResolvedFsPath {
     return resolveSandboxFsPathWithMounts({
       filePath: params.filePath,
       cwd: params.cwd ?? this.sandbox.workspaceDir,

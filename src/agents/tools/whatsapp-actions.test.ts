@@ -5,7 +5,10 @@ import { handleWhatsAppAction } from "./whatsapp-actions.js";
 
 const { sendReactionWhatsApp, sendPollWhatsApp } = vi.hoisted(() => ({
   sendReactionWhatsApp: vi.fn(async () => undefined),
-  sendPollWhatsApp: vi.fn(async () => ({ messageId: "poll-1", toJid: "jid-1" })),
+  sendPollWhatsApp: vi.fn(async () => ({
+    messageId: "poll-1",
+    toJid: "jid-1",
+  })),
 }));
 
 vi.mock("../../web/outbound.js", () => ({
@@ -32,12 +35,17 @@ describe("handleWhatsAppAction", () => {
       },
       enabledConfig,
     );
-    expect(sendReactionWhatsApp).toHaveBeenLastCalledWith("+123", "msg1", "✅", {
-      verbose: false,
-      fromMe: undefined,
-      participant: undefined,
-      accountId: DEFAULT_ACCOUNT_ID,
-    });
+    expect(sendReactionWhatsApp).toHaveBeenLastCalledWith(
+      "+123",
+      "msg1",
+      "✅",
+      {
+        verbose: false,
+        fromMe: undefined,
+        participant: undefined,
+        accountId: DEFAULT_ACCOUNT_ID,
+      },
+    );
   });
 
   it("removes reactions on empty emoji", async () => {
@@ -90,12 +98,17 @@ describe("handleWhatsAppAction", () => {
       },
       enabledConfig,
     );
-    expect(sendReactionWhatsApp).toHaveBeenLastCalledWith("+123", "msg1", "🎉", {
-      verbose: false,
-      fromMe: true,
-      participant: "999@s.whatsapp.net",
-      accountId: "work",
-    });
+    expect(sendReactionWhatsApp).toHaveBeenLastCalledWith(
+      "+123",
+      "msg1",
+      "🎉",
+      {
+        verbose: false,
+        fromMe: true,
+        participant: "999@s.whatsapp.net",
+        accountId: "work",
+      },
+    );
   });
 
   it("respects reaction gating", async () => {
@@ -170,11 +183,16 @@ describe("handleWhatsAppAction", () => {
       cfg,
     );
 
-    expect(sendReactionWhatsApp).toHaveBeenLastCalledWith("+123", "msg1", "✅", {
-      verbose: false,
-      fromMe: undefined,
-      participant: undefined,
-      accountId: "work",
-    });
+    expect(sendReactionWhatsApp).toHaveBeenLastCalledWith(
+      "+123",
+      "msg1",
+      "✅",
+      {
+        verbose: false,
+        fromMe: undefined,
+        participant: undefined,
+        accountId: "work",
+      },
+    );
   });
 });

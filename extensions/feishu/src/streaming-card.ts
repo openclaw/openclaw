@@ -7,7 +7,12 @@ import { fetchWithSsrFGuard } from "openclaw/plugin-sdk";
 import type { FeishuDomain } from "./types.js";
 
 type Credentials = { appId: string; appSecret: string; domain?: FeishuDomain };
-type CardState = { cardId: string; messageId: string; sequence: number; currentText: string };
+type CardState = {
+  cardId: string;
+  messageId: string;
+  sequence: number;
+  currentText: string;
+};
 
 /** Optional header for streaming cards (title bar with color template) */
 export type StreamingCardHeader = {
@@ -55,7 +60,10 @@ async function getToken(creds: Credentials): Promise<string> {
     init: {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ app_id: creds.appId, app_secret: creds.appSecret }),
+      body: JSON.stringify({
+        app_id: creds.appId,
+        app_secret: creds.appSecret,
+      }),
     },
     policy: { allowedHostnames: resolveAllowedHostnames(creds.domain) },
     auditContext: "feishu.streaming-card.token",
@@ -105,7 +113,12 @@ export class FeishuStreamingSession {
 
   async start(
     receiveId: string,
-    receiveIdType: "open_id" | "user_id" | "union_id" | "email" | "chat_id" = "chat_id",
+    receiveIdType:
+      | "open_id"
+      | "user_id"
+      | "union_id"
+      | "email"
+      | "chat_id" = "chat_id",
     options?: {
       replyToMessageId?: string;
       replyInThread?: boolean;
@@ -123,10 +136,15 @@ export class FeishuStreamingSession {
       config: {
         streaming_mode: true,
         summary: { content: "[Generating...]" },
-        streaming_config: { print_frequency_ms: { default: 50 }, print_step: { default: 2 } },
+        streaming_config: {
+          print_frequency_ms: { default: 50 },
+          print_step: { default: 2 },
+        },
       },
       body: {
-        elements: [{ tag: "markdown", content: "⏳ Thinking...", element_id: "content" }],
+        elements: [
+          { tag: "markdown", content: "⏳ Thinking...", element_id: "content" },
+        ],
       },
     };
     if (options?.header) {
@@ -137,19 +155,25 @@ export class FeishuStreamingSession {
     }
 
     // Create card entity
-    const { response: createRes, release: releaseCreate } = await fetchWithSsrFGuard({
-      url: `${apiBase}/cardkit/v1/cards`,
-      init: {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${await getToken(this.creds)}`,
-          "Content-Type": "application/json",
+    const { response: createRes, release: releaseCreate } =
+      await fetchWithSsrFGuard({
+        url: `${apiBase}/cardkit/v1/cards`,
+        init: {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${await getToken(this.creds)}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            type: "card_json",
+            data: JSON.stringify(cardJson),
+          }),
         },
-        body: JSON.stringify({ type: "card_json", data: JSON.stringify(cardJson) }),
-      },
-      policy: { allowedHostnames: resolveAllowedHostnames(this.creds.domain) },
-      auditContext: "feishu.streaming-card.create",
-    });
+        policy: {
+          allowedHostnames: resolveAllowedHostnames(this.creds.domain),
+        },
+        auditContext: "feishu.streaming-card.create",
+      });
     const createData = (await createRes.json()) as {
       code: number;
       msg: string;
@@ -160,7 +184,10 @@ export class FeishuStreamingSession {
       throw new Error(`Create card failed: ${createData.msg}`);
     }
     const cardId = createData.data.card_id;
-    const cardContent = JSON.stringify({ type: "card", data: { card_id: cardId } });
+    const cardContent = JSON.stringify({
+      type: "card",
+      data: { card_id: cardId },
+    });
 
     // Topic-group replies require root_id routing. Prefer create+root_id when available.
     let sendRes;
@@ -198,11 +225,21 @@ export class FeishuStreamingSession {
       throw new Error(`Send card failed: ${sendRes.msg}`);
     }
 
-    this.state = { cardId, messageId: sendRes.data.message_id, sequence: 1, currentText: "" };
-    this.log?.(`Started streaming: cardId=${cardId}, messageId=${sendRes.data.message_id}`);
+    this.state = {
+      cardId,
+      messageId: sendRes.data.message_id,
+      sequence: 1,
+      currentText: "",
+    };
+    this.log?.(
+      `Started streaming: cardId=${cardId}, messageId=${sendRes.data.message_id}`,
+    );
   }
 
-  private async updateCardContent(text: string, onError?: (error: unknown) => void): Promise<void> {
+  private async updateCardContent(
+    text: string,
+    onError?: (error: unknown) => void,
+  ): Promise<void> {
     if (!this.state) {
       return;
     }
@@ -249,7 +286,9 @@ export class FeishuStreamingSession {
         return;
       }
       this.state.currentText = text;
-      await this.updateCardContent(text, (e) => this.log?.(`Update failed: ${String(e)}`));
+      await this.updateCardContent(text, (e) =>
+        this.log?.(`Update failed: ${String(e)}`),
+      );
     });
     await this.queue;
   }
@@ -283,7 +322,10 @@ export class FeishuStreamingSession {
         },
         body: JSON.stringify({
           settings: JSON.stringify({
-            config: { streaming_mode: false, summary: { content: truncateSummary(text) } },
+            config: {
+              streaming_mode: false,
+              summary: { content: truncateSummary(text) },
+            },
           }),
           sequence: this.state.sequence,
           uuid: `c_${this.state.cardId}_${this.state.sequence}`,

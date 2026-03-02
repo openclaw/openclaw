@@ -34,9 +34,14 @@ function hasGitMarker(repoRoot: string): boolean {
   }
 }
 
-export function findGitRoot(startDir: string, opts: { maxDepth?: number } = {}): string | null {
+export function findGitRoot(
+  startDir: string,
+  opts: { maxDepth?: number } = {},
+): string | null {
   // A `.git` file counts as a repo marker even if it is not a valid gitdir pointer.
-  return walkUpFrom(startDir, opts, (repoRoot) => (hasGitMarker(repoRoot) ? repoRoot : null));
+  return walkUpFrom(startDir, opts, (repoRoot) =>
+    hasGitMarker(repoRoot) ? repoRoot : null,
+  );
 }
 
 function resolveGitDirFromMarker(repoRoot: string): string | null {

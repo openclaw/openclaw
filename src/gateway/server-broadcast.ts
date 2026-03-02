@@ -47,14 +47,18 @@ function hasEventScope(client: GatewayWsClient, event: string): boolean {
   if (role !== "operator") {
     return false;
   }
-  const scopes = Array.isArray(client.connect.scopes) ? client.connect.scopes : [];
+  const scopes = Array.isArray(client.connect.scopes)
+    ? client.connect.scopes
+    : [];
   if (scopes.includes(ADMIN_SCOPE)) {
     return true;
   }
   return required.some((scope) => scopes.includes(scope));
 }
 
-export function createGatewayBroadcaster(params: { clients: Set<GatewayWsClient> }) {
+export function createGatewayBroadcaster(params: {
+  clients: Set<GatewayWsClient>;
+}) {
   let seq = 0;
 
   const broadcastInternal = (
@@ -120,7 +124,12 @@ export function createGatewayBroadcaster(params: { clients: Set<GatewayWsClient>
   const broadcast: GatewayBroadcastFn = (event, payload, opts) =>
     broadcastInternal(event, payload, opts);
 
-  const broadcastToConnIds: GatewayBroadcastToConnIdsFn = (event, payload, connIds, opts) => {
+  const broadcastToConnIds: GatewayBroadcastToConnIdsFn = (
+    event,
+    payload,
+    connIds,
+    opts,
+  ) => {
     if (connIds.size === 0) {
       return;
     }

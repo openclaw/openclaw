@@ -140,8 +140,9 @@ describe("createDiscordGatewayPlugin", () => {
 
     expect(Object.getPrototypeOf(plugin)).not.toBe(GatewayPlugin.prototype);
 
-    const createWebSocket = (plugin as unknown as { createWebSocket: (url: string) => unknown })
-      .createWebSocket;
+    const createWebSocket = (
+      plugin as unknown as { createWebSocket: (url: string) => unknown }
+    ).createWebSocket;
     createWebSocket("wss://gateway.discord.gg");
 
     expect(wsProxyAgentSpy).toHaveBeenCalledWith("http://proxy.test:8080");
@@ -178,7 +179,9 @@ describe("createDiscordGatewayPlugin", () => {
 
     await (
       plugin as unknown as {
-        registerClient: (client: { options: { token: string } }) => Promise<void>;
+        registerClient: (client: {
+          options: { token: string };
+        }) => Promise<void>;
       }
     ).registerClient({
       options: { token: "token-123" },
@@ -189,7 +192,9 @@ describe("createDiscordGatewayPlugin", () => {
       "https://discord.com/api/v10/gateway/bot",
       expect.objectContaining({
         headers: { Authorization: "Bot token-123" },
-        dispatcher: expect.objectContaining({ proxyUrl: "http://proxy.test:8080" }),
+        dispatcher: expect.objectContaining({
+          proxyUrl: "http://proxy.test:8080",
+        }),
       }),
     );
     expect(baseRegisterClientSpy).toHaveBeenCalledTimes(1);

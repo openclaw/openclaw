@@ -53,12 +53,17 @@ export type RestartSentinel = {
 const SENTINEL_FILENAME = "restart-sentinel.json";
 
 export function formatDoctorNonInteractiveHint(
-  env: Record<string, string | undefined> = process.env as Record<string, string | undefined>,
+  env: Record<string, string | undefined> = process.env as Record<
+    string,
+    string | undefined
+  >,
 ): string {
   return `Run: ${formatCliCommand("openclaw doctor --non-interactive", env)}`;
 }
 
-export function resolveRestartSentinelPath(env: NodeJS.ProcessEnv = process.env): string {
+export function resolveRestartSentinelPath(
+  env: NodeJS.ProcessEnv = process.env,
+): string {
   return path.join(resolveStateDir(env), SENTINEL_FILENAME);
 }
 
@@ -108,7 +113,9 @@ export async function consumeRestartSentinel(
   return parsed;
 }
 
-export function formatRestartSentinelMessage(payload: RestartSentinelPayload): string {
+export function formatRestartSentinelMessage(
+  payload: RestartSentinelPayload,
+): string {
   const message = payload.message?.trim();
   if (message && !payload.stats) {
     return message;
@@ -127,7 +134,9 @@ export function formatRestartSentinelMessage(payload: RestartSentinelPayload): s
   return lines.join("\n");
 }
 
-export function summarizeRestartSentinel(payload: RestartSentinelPayload): string {
+export function summarizeRestartSentinel(
+  payload: RestartSentinelPayload,
+): string {
   const kind = payload.kind;
   const status = payload.status;
   const mode = payload.stats?.mode ? ` (${payload.stats.mode})` : "";

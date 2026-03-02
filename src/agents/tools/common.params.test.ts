@@ -61,9 +61,9 @@ describe("readNumberParam", () => {
 
 describe("required parameter validation", () => {
   it("throws when required values are missing", () => {
-    expect(() => readStringOrNumberParam({}, "chatId", { required: true })).toThrow(
-      /chatId required/,
-    );
+    expect(() =>
+      readStringOrNumberParam({}, "chatId", { required: true }),
+    ).toThrow(/chatId required/);
     expect(() => readNumberParam({}, "messageId", { required: true })).toThrow(
       /messageId required/,
     );

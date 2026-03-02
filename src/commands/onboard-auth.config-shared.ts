@@ -6,7 +6,9 @@ import type {
   ModelProviderConfig,
 } from "../config/types.models.js";
 
-function extractAgentDefaultModelFallbacks(model: unknown): string[] | undefined {
+function extractAgentDefaultModelFallbacks(
+  model: unknown,
+): string[] | undefined {
   if (!model || typeof model !== "object") {
     return undefined;
   }
@@ -44,7 +46,9 @@ export function applyAgentDefaultModelPrimary(
   cfg: OpenClawConfig,
   primary: string,
 ): OpenClawConfig {
-  const existingFallbacks = extractAgentDefaultModelFallbacks(cfg.agents?.defaults?.model);
+  const existingFallbacks = extractAgentDefaultModelFallbacks(
+    cfg.agents?.defaults?.model,
+  );
   return {
     ...cfg,
     agents: {
@@ -133,7 +137,10 @@ export function applyProviderConfigWithModelCatalog(
       ? [
           ...providerState.existingModels,
           ...catalogModels.filter(
-            (model) => !providerState.existingModels.some((existing) => existing.id === model.id),
+            (model) =>
+              !providerState.existingModels.some(
+                (existing) => existing.id === model.id,
+              ),
           ),
         ]
       : catalogModels;
@@ -158,9 +165,16 @@ function resolveProviderModelMergeState(
   cfg: OpenClawConfig,
   providerId: string,
 ): ProviderModelMergeState {
-  const providers = { ...cfg.models?.providers } as Record<string, ModelProviderConfig>;
-  const existingProvider = providers[providerId] as ModelProviderConfig | undefined;
-  const existingModels: ModelDefinitionConfig[] = Array.isArray(existingProvider?.models)
+  const providers = { ...cfg.models?.providers } as Record<
+    string,
+    ModelProviderConfig
+  >;
+  const existingProvider = providers[providerId] as
+    | ModelProviderConfig
+    | undefined;
+  const existingModels: ModelDefinitionConfig[] = Array.isArray(
+    existingProvider?.models,
+  )
     ? existingProvider.models
     : [];
   return { providers, existingProvider, existingModels };
@@ -198,16 +212,21 @@ function buildProviderConfig(params: {
   mergedModels: ModelDefinitionConfig[];
   fallbackModels: ModelDefinitionConfig[];
 }): ModelProviderConfig {
-  const { apiKey: existingApiKey, ...existingProviderRest } = (params.existingProvider ?? {}) as {
-    apiKey?: string;
-  };
-  const normalizedApiKey = typeof existingApiKey === "string" ? existingApiKey.trim() : undefined;
+  const { apiKey: existingApiKey, ...existingProviderRest } =
+    (params.existingProvider ?? {}) as {
+      apiKey?: string;
+    };
+  const normalizedApiKey =
+    typeof existingApiKey === "string" ? existingApiKey.trim() : undefined;
 
   return {
     ...existingProviderRest,
     baseUrl: params.baseUrl,
     api: params.api,
     ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
-    models: params.mergedModels.length > 0 ? params.mergedModels : params.fallbackModels,
+    models:
+      params.mergedModels.length > 0
+        ? params.mergedModels
+        : params.fallbackModels,
   };
 }

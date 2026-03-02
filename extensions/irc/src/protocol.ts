@@ -40,7 +40,9 @@ export function parseIrcLine(line: string): ParsedIrcLine | null {
   }
 
   const firstSpace = cursor.indexOf(" ");
-  const command = (firstSpace === -1 ? cursor : cursor.slice(0, firstSpace)).trim();
+  const command = (
+    firstSpace === -1 ? cursor : cursor.slice(0, firstSpace)
+  ).trim();
   if (!command) {
     return null;
   }
@@ -113,8 +115,12 @@ function decodeLiteralEscapes(input: string): string {
     .replace(/\\n/g, "\n")
     .replace(/\\t/g, "\t")
     .replace(/\\0/g, "\0")
-    .replace(/\\x([0-9a-fA-F]{2})/g, (_, hex) => String.fromCharCode(Number.parseInt(hex, 16)))
-    .replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) => String.fromCharCode(Number.parseInt(hex, 16)));
+    .replace(/\\x([0-9a-fA-F]{2})/g, (_, hex) =>
+      String.fromCharCode(Number.parseInt(hex, 16)),
+    )
+    .replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) =>
+      String.fromCharCode(Number.parseInt(hex, 16)),
+    );
 }
 
 export function sanitizeIrcOutboundText(text: string): string {

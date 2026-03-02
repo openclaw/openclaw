@@ -6,7 +6,9 @@ export async function loadSqliteVecExtension(params: {
 }): Promise<{ ok: boolean; extensionPath?: string; error?: string }> {
   try {
     const sqliteVec = await import("sqlite-vec");
-    const resolvedPath = params.extensionPath?.trim() ? params.extensionPath.trim() : undefined;
+    const resolvedPath = params.extensionPath?.trim()
+      ? params.extensionPath.trim()
+      : undefined;
     const extensionPath = resolvedPath ?? sqliteVec.getLoadablePath();
 
     params.db.enableLoadExtension(true);

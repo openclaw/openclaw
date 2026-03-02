@@ -29,7 +29,9 @@ function getSessionsSendTool(): SessionSendTool {
   if (cachedSessionsSendTool) {
     return cachedSessionsSendTool;
   }
-  const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_send");
+  const tool = createOpenClawTools().find(
+    (candidate) => candidate.name === "sessions_send",
+  );
   if (!tool) {
     throw new Error("missing sessions_send tool");
   }
@@ -81,7 +83,8 @@ beforeAll(async () => {
   testState.gatewayAuth = { mode: "token", token: gatewayToken };
   process.env.OPENCLAW_GATEWAY_PORT = String(gatewayPort);
   process.env.OPENCLAW_GATEWAY_TOKEN = gatewayToken;
-  const { approveDevicePairing, requestDevicePairing } = await import("../infra/device-pairing.js");
+  const { approveDevicePairing, requestDevicePairing } =
+    await import("../infra/device-pairing.js");
   const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem } =
     await import("../infra/device-identity.js");
   const identity = loadOrCreateDeviceIdentity();
@@ -91,7 +94,12 @@ beforeAll(async () => {
     clientId: "openclaw-cli",
     clientMode: "cli",
     role: "operator",
-    scopes: ["operator.admin", "operator.read", "operator.write", "operator.approvals"],
+    scopes: [
+      "operator.admin",
+      "operator.read",
+      "operator.write",
+      "operator.approvals",
+    ],
     silent: false,
   });
   await approveDevicePairing(pending.request.requestId);
@@ -105,7 +113,9 @@ afterAll(async () => {
 
 describe("sessions_send gateway loopback", () => {
   it("returns reply when lifecycle ends before agent.wait", async () => {
-    const spy = agentCommand as unknown as Mock<(opts: unknown) => Promise<void>>;
+    const spy = agentCommand as unknown as Mock<
+      (opts: unknown) => Promise<void>
+    >;
     spy.mockImplementation(async (opts: unknown) =>
       emitLifecycleAssistantReply({
         opts,
@@ -140,7 +150,10 @@ describe("sessions_send gateway loopback", () => {
     expect(details.sessionKey).toBe("main");
 
     const firstCall = spy.mock.calls[0]?.[0] as
-      | { lane?: string; inputProvenance?: { kind?: string; sourceTool?: string } }
+      | {
+          lane?: string;
+          inputProvenance?: { kind?: string; sourceTool?: string };
+        }
       | undefined;
     expect(firstCall?.lane).toBe("nested");
     expect(firstCall?.inputProvenance).toMatchObject({
@@ -158,16 +171,24 @@ describe("sessions_send label lookup", () => {
       // This is an operator feature; enable broader session tool targeting for this test.
       const configPath = process.env.OPENCLAW_CONFIG_PATH;
       if (!configPath) {
-        throw new Error("OPENCLAW_CONFIG_PATH missing in gateway test environment");
+        throw new Error(
+          "OPENCLAW_CONFIG_PATH missing in gateway test environment",
+        );
       }
       await fs.mkdir(path.dirname(configPath), { recursive: true });
       await fs.writeFile(
         configPath,
-        JSON.stringify({ tools: { sessions: { visibility: "all" } } }, null, 2) + "\n",
+        JSON.stringify(
+          { tools: { sessions: { visibility: "all" } } },
+          null,
+          2,
+        ) + "\n",
         "utf-8",
       );
 
-      const spy = agentCommand as unknown as Mock<(opts: unknown) => Promise<void>>;
+      const spy = agentCommand as unknown as Mock<
+        (opts: unknown) => Promise<void>
+      >;
       spy.mockImplementation(async (opts: unknown) =>
         emitLifecycleAssistantReply({
           opts,

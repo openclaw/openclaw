@@ -1,12 +1,17 @@
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import { findGoogleChatDirectMessage } from "./api.js";
 
-export function normalizeGoogleChatTarget(raw?: string | null): string | undefined {
+export function normalizeGoogleChatTarget(
+  raw?: string | null,
+): string | undefined {
   const trimmed = raw?.trim();
   if (!trimmed) {
     return undefined;
   }
-  const withoutPrefix = trimmed.replace(/^(googlechat|google-chat|gchat):/i, "");
+  const withoutPrefix = trimmed.replace(
+    /^(googlechat|google-chat|gchat):/i,
+    "",
+  );
   const normalized = withoutPrefix
     .replace(/^user:(users\/)?/i, "users/")
     .replace(/^space:(spaces\/)?/i, "spaces/");

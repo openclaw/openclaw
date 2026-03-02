@@ -33,7 +33,11 @@ async function setupOperatorToken(scopes: string[]) {
   return { baseDir, token };
 }
 
-function verifyOperatorToken(params: { baseDir: string; token: string; scopes: string[] }) {
+function verifyOperatorToken(params: {
+  baseDir: string;
+  token: string;
+  scopes: string[];
+}) {
   return verifyDeviceToken({
     deviceId: "device-1",
     token: params.token,
@@ -174,7 +178,9 @@ describe("device pairing tokens", () => {
     expect(rotated).toBeNull();
 
     const after = await getPairedDevice("device-1", baseDir);
-    expect(after?.tokens?.operator?.token).toEqual(before?.tokens?.operator?.token);
+    expect(after?.tokens?.operator?.token).toEqual(
+      before?.tokens?.operator?.token,
+    );
     expect(after?.tokens?.operator?.scopes).toEqual(["operator.read"]);
     expect(after?.scopes).toEqual(["operator.read"]);
     expect(after?.approvedScopes).toEqual(["operator.read"]);
@@ -220,7 +226,9 @@ describe("device pairing tokens", () => {
   test("treats multibyte same-length token input as mismatch without throwing", async () => {
     const { baseDir, token } = await setupOperatorToken(["operator.read"]);
     const multibyteToken = "é".repeat(token.length);
-    expect(Buffer.from(multibyteToken).length).not.toBe(Buffer.from(token).length);
+    expect(Buffer.from(multibyteToken).length).not.toBe(
+      Buffer.from(token).length,
+    );
 
     await expect(
       verifyOperatorToken({

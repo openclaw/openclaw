@@ -16,7 +16,10 @@ import { toAgentModelListLike } from "../../config/model-input.js";
 import type { AgentModelConfig } from "../../config/types.agents-shared.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 
-export const ensureFlagCompatibility = (opts: { json?: boolean; plain?: boolean }) => {
+export const ensureFlagCompatibility = (opts: {
+  json?: boolean;
+  plain?: boolean;
+}) => {
   if (opts.json && opts.plain) {
     throw new Error("Choose either --json or --plain, not both.");
   }
@@ -64,7 +67,9 @@ export const isLocalBaseUrl = (baseUrl: string) => {
 export async function loadValidConfigOrThrow(): Promise<OpenClawConfig> {
   const snapshot = await readConfigFileSnapshot();
   if (!snapshot.valid) {
-    const issues = snapshot.issues.map((issue) => `- ${issue.path}: ${issue.message}`).join("\n");
+    const issues = snapshot.issues
+      .map((issue) => `- ${issue.path}: ${issue.message}`)
+      .join("\n");
     throw new Error(`Invalid config at ${snapshot.path}\n${issues}`);
   }
   return snapshot.config;
@@ -79,7 +84,10 @@ export async function updateConfig(
   return next;
 }
 
-export function resolveModelTarget(params: { raw: string; cfg: OpenClawConfig }): {
+export function resolveModelTarget(params: {
+  raw: string;
+  cfg: OpenClawConfig;
+}): {
   provider: string;
   model: string;
 } {
@@ -137,7 +145,9 @@ export function normalizeAlias(alias: string): string {
     throw new Error("Alias cannot be empty.");
   }
   if (!/^[A-Za-z0-9_.:-]+$/.test(trimmed)) {
-    throw new Error("Alias must use letters, numbers, dots, underscores, colons, or dashes.");
+    throw new Error(
+      "Alias must use letters, numbers, dots, underscores, colons, or dashes.",
+    );
   }
   return trimmed;
 }
@@ -182,7 +192,10 @@ export function applyDefaultModelPrimaryUpdate(params: {
   modelRaw: string;
   field: "model" | "imageModel";
 }): OpenClawConfig {
-  const resolved = resolveModelTarget({ raw: params.modelRaw, cfg: params.cfg });
+  const resolved = resolveModelTarget({
+    raw: params.modelRaw,
+    cfg: params.cfg,
+  });
   const key = `${resolved.provider}/${resolved.model}`;
 
   const nextModels = { ...params.cfg.agents?.defaults?.models };
@@ -192,7 +205,9 @@ export function applyDefaultModelPrimaryUpdate(params: {
 
   const defaults = params.cfg.agents?.defaults ?? {};
   const existing = toAgentModelListLike(
-    (defaults as Record<string, unknown>)[params.field] as AgentModelConfig | undefined,
+    (defaults as Record<string, unknown>)[params.field] as
+      | AgentModelConfig
+      | undefined,
   );
 
   return {

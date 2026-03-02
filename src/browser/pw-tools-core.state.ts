@@ -2,7 +2,10 @@ import type { CDPSession, Page } from "playwright-core";
 import { devices as playwrightDevices } from "playwright-core";
 import { ensurePageState, getPageForTargetId } from "./pw-session.js";
 
-async function withCdpSession<T>(page: Page, fn: (session: CDPSession) => Promise<T>): Promise<T> {
+async function withCdpSession<T>(
+  page: Page,
+  fn: (session: CDPSession) => Promise<T>,
+): Promise<T> {
   const session = await page.context().newCDPSession(page);
   try {
     return await fn(session);
@@ -116,7 +119,9 @@ export async function setLocaleViaPlaywright(opts: {
     try {
       await session.send("Emulation.setLocaleOverride", { locale });
     } catch (err) {
-      if (String(err).includes("Another locale override is already in effect")) {
+      if (
+        String(err).includes("Another locale override is already in effect")
+      ) {
         return;
       }
       throw err;

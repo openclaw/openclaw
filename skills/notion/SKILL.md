@@ -5,7 +5,11 @@ homepage: https://developers.notion.com
 metadata:
   {
     "openclaw":
-      { "emoji": "📝", "requires": { "env": ["NOTION_API_KEY"] }, "primaryEnv": "NOTION_API_KEY" },
+      {
+        "emoji": "📝",
+        "requires": { "env": ["NOTION_API_KEY"] },
+        "primaryEnv": "NOTION_API_KEY",
+      },
   }
 ---
 

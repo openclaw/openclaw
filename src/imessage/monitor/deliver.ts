@@ -18,8 +18,16 @@ export async function deliverReplies(params: {
   textLimit: number;
   sentMessageCache?: Pick<SentMessageCache, "remember">;
 }) {
-  const { replies, target, client, runtime, maxBytes, textLimit, accountId, sentMessageCache } =
-    params;
+  const {
+    replies,
+    target,
+    client,
+    runtime,
+    maxBytes,
+    textLimit,
+    accountId,
+    sentMessageCache,
+  } = params;
   const scope = `${accountId ?? ""}:${target}`;
   const cfg = loadConfig();
   const tableMode = resolveMarkdownTableMode({
@@ -29,7 +37,8 @@ export async function deliverReplies(params: {
   });
   const chunkMode = resolveChunkMode(cfg, "imessage", accountId);
   for (const payload of replies) {
-    const mediaList = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
+    const mediaList =
+      payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
     const rawText = payload.text ?? "";
     const text = convertMarkdownTables(rawText, tableMode);
     if (!text && mediaList.length === 0) {
@@ -44,7 +53,10 @@ export async function deliverReplies(params: {
           accountId,
           replyToId: payload.replyToId,
         });
-        sentMessageCache?.remember(scope, { text: chunk, messageId: sent.messageId });
+        sentMessageCache?.remember(scope, {
+          text: chunk,
+          messageId: sent.messageId,
+        });
       }
     } else {
       let first = true;

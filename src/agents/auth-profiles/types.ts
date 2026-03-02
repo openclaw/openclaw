@@ -33,7 +33,10 @@ export type OAuthCredential = OAuthCredentials & {
   email?: string;
 };
 
-export type AuthProfileCredential = ApiKeyCredential | TokenCredential | OAuthCredential;
+export type AuthProfileCredential =
+  | ApiKeyCredential
+  | TokenCredential
+  | OAuthCredential;
 
 export type AuthProfileFailureReason =
   | "auth"

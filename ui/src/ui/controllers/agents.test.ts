@@ -2,7 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import { loadToolsCatalog } from "./agents.ts";
 import type { AgentsState } from "./agents.ts";
 
-function createState(): { state: AgentsState; request: ReturnType<typeof vi.fn> } {
+function createState(): {
+  state: AgentsState;
+  request: ReturnType<typeof vi.fn>;
+} {
   const request = vi.fn();
   const state: AgentsState = {
     client: {
@@ -31,7 +34,14 @@ describe("loadToolsCatalog", () => {
           id: "media",
           label: "Media",
           source: "core",
-          tools: [{ id: "tts", label: "tts", description: "Text-to-speech", source: "core" }],
+          tools: [
+            {
+              id: "tts",
+              label: "tts",
+              description: "Text-to-speech",
+              source: "core",
+            },
+          ],
         },
       ],
     };

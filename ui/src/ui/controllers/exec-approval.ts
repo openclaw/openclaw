@@ -27,7 +27,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-export function parseExecApprovalRequested(payload: unknown): ExecApprovalRequest | null {
+export function parseExecApprovalRequested(
+  payload: unknown,
+): ExecApprovalRequest | null {
   if (!isRecord(payload)) {
     return null;
   }
@@ -36,12 +38,15 @@ export function parseExecApprovalRequested(payload: unknown): ExecApprovalReques
   if (!id || !isRecord(request)) {
     return null;
   }
-  const command = typeof request.command === "string" ? request.command.trim() : "";
+  const command =
+    typeof request.command === "string" ? request.command.trim() : "";
   if (!command) {
     return null;
   }
-  const createdAtMs = typeof payload.createdAtMs === "number" ? payload.createdAtMs : 0;
-  const expiresAtMs = typeof payload.expiresAtMs === "number" ? payload.expiresAtMs : 0;
+  const createdAtMs =
+    typeof payload.createdAtMs === "number" ? payload.createdAtMs : 0;
+  const expiresAtMs =
+    typeof payload.expiresAtMs === "number" ? payload.expiresAtMs : 0;
   if (!createdAtMs || !expiresAtMs) {
     return null;
   }
@@ -54,15 +59,19 @@ export function parseExecApprovalRequested(payload: unknown): ExecApprovalReques
       security: typeof request.security === "string" ? request.security : null,
       ask: typeof request.ask === "string" ? request.ask : null,
       agentId: typeof request.agentId === "string" ? request.agentId : null,
-      resolvedPath: typeof request.resolvedPath === "string" ? request.resolvedPath : null,
-      sessionKey: typeof request.sessionKey === "string" ? request.sessionKey : null,
+      resolvedPath:
+        typeof request.resolvedPath === "string" ? request.resolvedPath : null,
+      sessionKey:
+        typeof request.sessionKey === "string" ? request.sessionKey : null,
     },
     createdAtMs,
     expiresAtMs,
   };
 }
 
-export function parseExecApprovalResolved(payload: unknown): ExecApprovalResolved | null {
+export function parseExecApprovalResolved(
+  payload: unknown,
+): ExecApprovalResolved | null {
   if (!isRecord(payload)) {
     return null;
   }
@@ -73,12 +82,15 @@ export function parseExecApprovalResolved(payload: unknown): ExecApprovalResolve
   return {
     id,
     decision: typeof payload.decision === "string" ? payload.decision : null,
-    resolvedBy: typeof payload.resolvedBy === "string" ? payload.resolvedBy : null,
+    resolvedBy:
+      typeof payload.resolvedBy === "string" ? payload.resolvedBy : null,
     ts: typeof payload.ts === "number" ? payload.ts : null,
   };
 }
 
-export function pruneExecApprovalQueue(queue: ExecApprovalRequest[]): ExecApprovalRequest[] {
+export function pruneExecApprovalQueue(
+  queue: ExecApprovalRequest[],
+): ExecApprovalRequest[] {
   const now = Date.now();
   return queue.filter((entry) => entry.expiresAtMs > now);
 }
@@ -87,7 +99,9 @@ export function addExecApproval(
   queue: ExecApprovalRequest[],
   entry: ExecApprovalRequest,
 ): ExecApprovalRequest[] {
-  const next = pruneExecApprovalQueue(queue).filter((item) => item.id !== entry.id);
+  const next = pruneExecApprovalQueue(queue).filter(
+    (item) => item.id !== entry.id,
+  );
   next.push(entry);
   return next;
 }

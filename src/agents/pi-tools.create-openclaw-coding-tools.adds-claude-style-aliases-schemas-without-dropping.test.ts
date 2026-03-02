@@ -7,7 +7,10 @@ import { describe, expect, it, vi } from "vitest";
 import "./test-helpers/fast-coding-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import { __testing, createOpenClawCodingTools } from "./pi-tools.js";
-import { createOpenClawReadTool, createSandboxedReadTool } from "./pi-tools.read.js";
+import {
+  createOpenClawReadTool,
+  createSandboxedReadTool,
+} from "./pi-tools.read.js";
 import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
 import { createBrowserTool } from "./tools/browser-tool.js";
 
@@ -135,12 +138,12 @@ describe("createOpenClawCodingTools", () => {
       await expect(wrapped.execute("tool-2", { content: "x" })).rejects.toThrow(
         /Supply correct parameters before retrying\./,
       );
-      await expect(wrapped.execute("tool-3", { file_path: "   ", content: "x" })).rejects.toThrow(
-        /Missing required parameter/,
-      );
-      await expect(wrapped.execute("tool-3", { file_path: "   ", content: "x" })).rejects.toThrow(
-        /Supply correct parameters before retrying\./,
-      );
+      await expect(
+        wrapped.execute("tool-3", { file_path: "   ", content: "x" }),
+      ).rejects.toThrow(/Missing required parameter/);
+      await expect(
+        wrapped.execute("tool-3", { file_path: "   ", content: "x" }),
+      ).rejects.toThrow(/Supply correct parameters before retrying\./);
       await expect(wrapped.execute("tool-4", {})).rejects.toThrow(
         /Missing required parameters: path \(path or file_path\), content/,
       );
@@ -258,7 +261,9 @@ describe("createOpenClawCodingTools", () => {
       properties?: Record<string, unknown>;
     };
 
-    const tuples = cleaned.properties?.tuples as { items?: unknown } | undefined;
+    const tuples = cleaned.properties?.tuples as
+      | { items?: unknown }
+      | undefined;
     const items = Array.isArray(tuples?.items) ? tuples?.items : [];
     const first = items[0] as { format?: unknown } | undefined;
     const second = items[1] as { minimum?: unknown } | undefined;
@@ -309,7 +314,9 @@ describe("createOpenClawCodingTools", () => {
       "session_status",
       "image",
     ]);
-    expect(findUnionKeywordOffenders(tools, { onlyNames: coreTools })).toEqual([]);
+    expect(findUnionKeywordOffenders(tools, { onlyNames: coreTools })).toEqual(
+      [],
+    );
   });
   it("does not expose provider-specific message tools", () => {
     const tools = createOpenClawCodingTools({ messageProvider: "discord" });
@@ -338,7 +345,9 @@ describe("createOpenClawCodingTools", () => {
   });
 
   it("uses stored spawnDepth to apply leaf tool policy for flat depth-2 session keys", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-depth-policy-"));
+    const tmpDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-depth-policy-"),
+    );
     const storeTemplate = path.join(tmpDir, "sessions-{agentId}.json");
     const storePath = storeTemplate.replaceAll("{agentId}", "main");
     await fs.writeFile(
@@ -468,7 +477,10 @@ describe("createOpenClawCodingTools", () => {
       "maxProperties",
     ]);
 
-    const findUnsupportedKeywords = (schema: unknown, path: string): string[] => {
+    const findUnsupportedKeywords = (
+      schema: unknown,
+      path: string,
+    ): string[] => {
       const found: string[] = [];
       if (!schema || typeof schema !== "object") {
         return found;
@@ -489,7 +501,9 @@ describe("createOpenClawCodingTools", () => {
           : undefined;
       if (properties) {
         for (const [key, value] of Object.entries(properties)) {
-          found.push(...findUnsupportedKeywords(value, `${path}.properties.${key}`));
+          found.push(
+            ...findUnsupportedKeywords(value, `${path}.properties.${key}`),
+          );
         }
       }
 
@@ -512,7 +526,10 @@ describe("createOpenClawCodingTools", () => {
       senderIsOwner: true,
     });
     for (const tool of googleTools) {
-      const violations = findUnsupportedKeywords(tool.parameters, `${tool.name}.parameters`);
+      const violations = findUnsupportedKeywords(
+        tool.parameters,
+        `${tool.name}.parameters`,
+      );
       expect(violations).toEqual([]);
     }
   });
@@ -525,9 +542,9 @@ describe("createOpenClawCodingTools", () => {
         root: tmpDir,
         bridge: createHostSandboxFsBridge(tmpDir),
       });
-      await expect(readTool.execute("sandbox-1", { file_path: outsidePath })).rejects.toThrow(
-        /sandbox root/i,
-      );
+      await expect(
+        readTool.execute("sandbox-1", { file_path: outsidePath }),
+      ).rejects.toThrow(/sandbox root/i);
     } finally {
       await fs.rm(outsidePath, { force: true });
       await fs.rm(tmpDir, { recursive: true, force: true });
@@ -535,7 +552,9 @@ describe("createOpenClawCodingTools", () => {
   });
 
   it("auto-pages read output across chunks when context window budget allows", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-read-autopage-"));
+    const tmpDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-read-autopage-"),
+    );
     const filePath = path.join(tmpDir, "big.txt");
     const lines = Array.from(
       { length: 5000 },
@@ -548,7 +567,9 @@ describe("createOpenClawCodingTools", () => {
         bridge: createHostSandboxFsBridge(tmpDir),
         modelContextWindowTokens: 200_000,
       });
-      const result = await readTool.execute("read-autopage-1", { path: "big.txt" });
+      const result = await readTool.execute("read-autopage-1", {
+        path: "big.txt",
+      });
       const text = extractToolText(result);
       expect(text).toContain("line-0001");
       expect(text).toContain("line-5000");
@@ -560,11 +581,14 @@ describe("createOpenClawCodingTools", () => {
   });
 
   it("adds capped continuation guidance when aggregated read output reaches budget", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-read-cap-"));
+    const tmpDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-read-cap-"),
+    );
     const filePath = path.join(tmpDir, "huge.txt");
     const lines = Array.from(
       { length: 8000 },
-      (_unused, i) => `line-${String(i + 1).padStart(4, "0")}-abcdefghijklmnopqrstuvwxyz`,
+      (_unused, i) =>
+        `line-${String(i + 1).padStart(4, "0")}-abcdefghijklmnopqrstuvwxyz`,
     );
     await fs.writeFile(filePath, lines.join("\n"), "utf8");
     try {
@@ -575,7 +599,9 @@ describe("createOpenClawCodingTools", () => {
       const result = await readTool.execute("read-cap-1", { path: "huge.txt" });
       const text = extractToolText(result);
       expect(text).toContain("line-0001");
-      expect(text).toContain("[Read output capped at 50KB for this call. Use offset=");
+      expect(text).toContain(
+        "[Read output capped at 50KB for this call. Use offset=",
+      );
       expect(text).not.toContain("line-8000");
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
@@ -609,9 +635,14 @@ describe("createOpenClawCodingTools", () => {
     const wrapped = createOpenClawReadTool(
       baseRead as unknown as Parameters<typeof createOpenClawReadTool>[0],
     );
-    const result = await wrapped.execute("read-strip-1", { path: "demo.txt", limit: 1 });
+    const result = await wrapped.execute("read-strip-1", {
+      path: "demo.txt",
+      limit: 1,
+    });
 
-    const details = (result as { details?: { truncation?: Record<string, unknown> } }).details;
+    const details = (
+      result as { details?: { truncation?: Record<string, unknown> } }
+    ).details;
     expect(details?.truncation).toMatchObject({
       truncated: true,
       outputLines: 1,

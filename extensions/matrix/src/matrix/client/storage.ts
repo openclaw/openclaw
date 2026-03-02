@@ -30,7 +30,11 @@ function resolveHomeserverKey(homeserver: string): string {
 }
 
 function hashAccessToken(accessToken: string): string {
-  return crypto.createHash("sha256").update(accessToken).digest("hex").slice(0, 16);
+  return crypto
+    .createHash("sha256")
+    .update(accessToken)
+    .digest("hex")
+    .slice(0, 16);
 }
 
 function resolveLegacyStoragePaths(env: NodeJS.ProcessEnv = process.env): {
@@ -53,7 +57,9 @@ export function resolveMatrixStoragePaths(params: {
 }): MatrixStoragePaths {
   const env = params.env ?? process.env;
   const stateDir = getMatrixRuntime().state.resolveStateDir(env, os.homedir);
-  const accountKey = sanitizePathSegment(params.accountId ?? DEFAULT_ACCOUNT_KEY);
+  const accountKey = sanitizePathSegment(
+    params.accountId ?? DEFAULT_ACCOUNT_KEY,
+  );
   const userKey = sanitizePathSegment(params.userId);
   const serverKey = resolveHomeserverKey(params.homeserver);
   const tokenHash = hashAccessToken(params.accessToken);
@@ -83,7 +89,8 @@ export function maybeMigrateLegacyStorage(params: {
   const hasLegacyStorage = fs.existsSync(legacy.storagePath);
   const hasLegacyCrypto = fs.existsSync(legacy.cryptoPath);
   const hasNewStorage =
-    fs.existsSync(params.storagePaths.storagePath) || fs.existsSync(params.storagePaths.cryptoPath);
+    fs.existsSync(params.storagePaths.storagePath) ||
+    fs.existsSync(params.storagePaths.cryptoPath);
 
   if (!hasLegacyStorage && !hasLegacyCrypto) {
     return;
@@ -124,7 +131,11 @@ export function writeStorageMeta(params: {
       createdAt: new Date().toISOString(),
     };
     fs.mkdirSync(params.storagePaths.rootDir, { recursive: true });
-    fs.writeFileSync(params.storagePaths.metaPath, JSON.stringify(payload, null, 2), "utf-8");
+    fs.writeFileSync(
+      params.storagePaths.metaPath,
+      JSON.stringify(payload, null, 2),
+      "utf-8",
+    );
   } catch {
     // ignore meta write failures
   }

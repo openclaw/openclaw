@@ -13,7 +13,11 @@ describe("node.canvas.capability.refresh", () => {
     };
 
     await nodeHandlers["node.canvas.capability.refresh"]({
-      req: { type: "req", id: "req-1", method: "node.canvas.capability.refresh" },
+      req: {
+        type: "req",
+        id: "req-1",
+        method: "node.canvas.capability.refresh",
+      },
       params: {},
       respond,
       context: {} as never,
@@ -39,14 +43,20 @@ describe("node.canvas.capability.refresh", () => {
     expect(typeof payload.canvasCapabilityExpiresAtMs).toBe("number");
     expect(payload.canvasCapabilityExpiresAtMs).toBeGreaterThan(Date.now());
     expect(client.canvasCapability).toBe(payload.canvasCapability);
-    expect(client.canvasCapabilityExpiresAtMs).toBe(payload.canvasCapabilityExpiresAtMs);
+    expect(client.canvasCapabilityExpiresAtMs).toBe(
+      payload.canvasCapabilityExpiresAtMs,
+    );
   });
 
   it("returns unavailable when the caller session has no base canvas URL", async () => {
     const respond = vi.fn();
 
     await nodeHandlers["node.canvas.capability.refresh"]({
-      req: { type: "req", id: "req-2", method: "node.canvas.capability.refresh" },
+      req: {
+        type: "req",
+        id: "req-2",
+        method: "node.canvas.capability.refresh",
+      },
       params: {},
       respond,
       context: {} as never,

@@ -15,12 +15,12 @@ describe("github-copilot token", () => {
   });
 
   it("derives baseUrl from token", async () => {
-    expect(deriveCopilotApiBaseUrlFromToken("token;proxy-ep=proxy.example.com;")).toBe(
-      "https://api.example.com",
-    );
-    expect(deriveCopilotApiBaseUrlFromToken("token;proxy-ep=https://proxy.foo.bar;")).toBe(
-      "https://api.foo.bar",
-    );
+    expect(
+      deriveCopilotApiBaseUrlFromToken("token;proxy-ep=proxy.example.com;"),
+    ).toBe("https://api.example.com");
+    expect(
+      deriveCopilotApiBaseUrlFromToken("token;proxy-ep=https://proxy.foo.bar;"),
+    ).toBe("https://api.foo.bar");
   });
 
   it("uses cache when token is still valid", async () => {
@@ -58,7 +58,8 @@ describe("github-copilot token", () => {
       }),
     });
 
-    const { resolveCopilotApiToken } = await import("./github-copilot-token.js");
+    const { resolveCopilotApiToken } =
+      await import("./github-copilot-token.js");
 
     const res = await resolveCopilotApiToken({
       githubToken: "gh",

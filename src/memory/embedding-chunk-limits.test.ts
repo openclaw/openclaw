@@ -38,11 +38,17 @@ describe("embedding chunk limits", () => {
     const out = enforceEmbeddingMaxInputTokens(provider, [input]);
     expect(out.length).toBeGreaterThan(1);
     expect(out.map((chunk) => chunk.text).join("")).toBe(input.text);
-    expect(out.every((chunk) => estimateUtf8Bytes(chunk.text) <= 8192)).toBe(true);
-    expect(out.every((chunk) => chunk.startLine === 1 && chunk.endLine === 1)).toBe(true);
-    expect(out.every((chunk) => typeof chunk.hash === "string" && chunk.hash.length > 0)).toBe(
+    expect(out.every((chunk) => estimateUtf8Bytes(chunk.text) <= 8192)).toBe(
       true,
     );
+    expect(
+      out.every((chunk) => chunk.startLine === 1 && chunk.endLine === 1),
+    ).toBe(true);
+    expect(
+      out.every(
+        (chunk) => typeof chunk.hash === "string" && chunk.hash.length > 0,
+      ),
+    ).toBe(true);
   });
 
   it("does not split inside surrogate pairs (emoji)", () => {
@@ -56,7 +62,9 @@ describe("embedding chunk limits", () => {
 
     expect(out.length).toBeGreaterThan(1);
     expect(out.map((chunk) => chunk.text).join("")).toBe(inputText);
-    expect(out.every((chunk) => estimateUtf8Bytes(chunk.text) <= 8192)).toBe(true);
+    expect(out.every((chunk) => estimateUtf8Bytes(chunk.text) <= 8192)).toBe(
+      true,
+    );
 
     // If we split inside surrogate pairs we'd likely end up with replacement chars.
     expect(out.map((chunk) => chunk.text).join("")).not.toContain("\uFFFD");
@@ -78,7 +86,9 @@ describe("embedding chunk limits", () => {
     ]);
 
     expect(out.length).toBeGreaterThan(1);
-    expect(out.every((chunk) => estimateUtf8Bytes(chunk.text) <= 2048)).toBe(true);
+    expect(out.every((chunk) => estimateUtf8Bytes(chunk.text) <= 2048)).toBe(
+      true,
+    );
   });
 
   it("honors hard safety caps lower than provider maxInputTokens", () => {
@@ -97,6 +107,8 @@ describe("embedding chunk limits", () => {
     );
 
     expect(out.length).toBeGreaterThan(1);
-    expect(out.every((chunk) => estimateUtf8Bytes(chunk.text) <= 8000)).toBe(true);
+    expect(out.every((chunk) => estimateUtf8Bytes(chunk.text) <= 8000)).toBe(
+      true,
+    );
   });
 });

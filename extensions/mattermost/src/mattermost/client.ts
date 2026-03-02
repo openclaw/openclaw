@@ -40,7 +40,9 @@ export type MattermostFileInfo = {
   size?: number | null;
 };
 
-export function normalizeMattermostBaseUrl(raw?: string | null): string | undefined {
+export function normalizeMattermostBaseUrl(
+  raw?: string | null,
+): string | undefined {
   const trimmed = raw?.trim();
   if (!trimmed) {
     return undefined;
@@ -113,7 +115,9 @@ export function createMattermostClient(params: {
   return { baseUrl, apiBaseUrl, token, request };
 }
 
-export async function fetchMattermostMe(client: MattermostClient): Promise<MattermostUser> {
+export async function fetchMattermostMe(
+  client: MattermostClient,
+): Promise<MattermostUser> {
   return await client.request<MattermostUser>("/users/me");
 }
 
@@ -128,7 +132,9 @@ export async function fetchMattermostUserByUsername(
   client: MattermostClient,
   username: string,
 ): Promise<MattermostUser> {
-  return await client.request<MattermostUser>(`/users/username/${encodeURIComponent(username)}`);
+  return await client.request<MattermostUser>(
+    `/users/username/${encodeURIComponent(username)}`,
+  );
 }
 
 export async function fetchMattermostChannel(
@@ -218,7 +224,9 @@ export async function uploadMattermostFile(
 
   if (!res.ok) {
     const detail = await readMattermostError(res);
-    throw new Error(`Mattermost API ${res.status} ${res.statusText}: ${detail || "unknown error"}`);
+    throw new Error(
+      `Mattermost API ${res.status} ${res.statusText}: ${detail || "unknown error"}`,
+    );
   }
 
   const data = (await res.json()) as { file_infos?: MattermostFileInfo[] };

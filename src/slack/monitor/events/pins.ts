@@ -14,7 +14,8 @@ async function handleSlackPinEvent(params: {
   contextKeySuffix: "added" | "removed";
   errorLabel: string;
 }): Promise<void> {
-  const { ctx, trackEvent, body, event, action, contextKeySuffix, errorLabel } = params;
+  const { ctx, trackEvent, body, event, action, contextKeySuffix, errorLabel } =
+    params;
 
   try {
     if (ctx.shouldDropMismatchedSlackEvent(body)) {
@@ -33,7 +34,9 @@ async function handleSlackPinEvent(params: {
     if (!ingressContext) {
       return;
     }
-    const userInfo = payload.user ? await ctx.resolveUserName(payload.user) : {};
+    const userInfo = payload.user
+      ? await ctx.resolveUserName(payload.user)
+      : {};
     const userLabel = userInfo?.name ?? payload.user ?? "someone";
     const itemType = payload.item?.type ?? "item";
     const messageId = payload.item?.message?.ts ?? payload.event_ts;
@@ -45,7 +48,9 @@ async function handleSlackPinEvent(params: {
       },
     );
   } catch (err) {
-    ctx.runtime.error?.(danger(`slack ${errorLabel} handler failed: ${String(err)}`));
+    ctx.runtime.error?.(
+      danger(`slack ${errorLabel} handler failed: ${String(err)}`),
+    );
   }
 }
 
@@ -55,27 +60,33 @@ export function registerSlackPinEvents(params: {
 }) {
   const { ctx, trackEvent } = params;
 
-  ctx.app.event("pin_added", async ({ event, body }: SlackEventMiddlewareArgs<"pin_added">) => {
-    await handleSlackPinEvent({
-      ctx,
-      trackEvent,
-      body,
-      event,
-      action: "pinned",
-      contextKeySuffix: "added",
-      errorLabel: "pin added",
-    });
-  });
+  ctx.app.event(
+    "pin_added",
+    async ({ event, body }: SlackEventMiddlewareArgs<"pin_added">) => {
+      await handleSlackPinEvent({
+        ctx,
+        trackEvent,
+        body,
+        event,
+        action: "pinned",
+        contextKeySuffix: "added",
+        errorLabel: "pin added",
+      });
+    },
+  );
 
-  ctx.app.event("pin_removed", async ({ event, body }: SlackEventMiddlewareArgs<"pin_removed">) => {
-    await handleSlackPinEvent({
-      ctx,
-      trackEvent,
-      body,
-      event,
-      action: "unpinned",
-      contextKeySuffix: "removed",
-      errorLabel: "pin removed",
-    });
-  });
+  ctx.app.event(
+    "pin_removed",
+    async ({ event, body }: SlackEventMiddlewareArgs<"pin_removed">) => {
+      await handleSlackPinEvent({
+        ctx,
+        trackEvent,
+        body,
+        event,
+        action: "unpinned",
+        contextKeySuffix: "removed",
+        errorLabel: "pin removed",
+      });
+    },
+  );
 }

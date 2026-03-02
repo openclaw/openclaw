@@ -43,7 +43,11 @@ function isImageMime(mime?: string): boolean {
 
 function isValidBase64(value: string): boolean {
   // Minimal validation; avoid full decode allocations for large payloads.
-  return value.length > 0 && value.length % 4 === 0 && /^[A-Za-z0-9+/]+={0,2}$/.test(value);
+  return (
+    value.length > 0 &&
+    value.length % 4 === 0 &&
+    /^[A-Za-z0-9+/]+={0,2}$/.test(value)
+  );
 }
 
 function normalizeAttachment(
@@ -121,11 +125,15 @@ export async function parseMessageWithAttachments(
     const providedMime = normalizeMime(mime);
     const sniffedMime = normalizeMime(await sniffMimeFromBase64(b64));
     if (sniffedMime && !isImageMime(sniffedMime)) {
-      log?.warn(`attachment ${label}: detected non-image (${sniffedMime}), dropping`);
+      log?.warn(
+        `attachment ${label}: detected non-image (${sniffedMime}), dropping`,
+      );
       continue;
     }
     if (!sniffedMime && !isImageMime(providedMime)) {
-      log?.warn(`attachment ${label}: unable to detect image mime type, dropping`);
+      log?.warn(
+        `attachment ${label}: unable to detect image mime type, dropping`,
+      );
       continue;
     }
     if (sniffedMime && providedMime && sniffedMime !== providedMime) {

@@ -71,7 +71,8 @@ export const zh_CN: TranslationMap = {
       uptime: "运行时间",
       tickInterval: "刻度间隔",
       lastChannelsRefresh: "最后频道刷新",
-      channelsHint: "使用频道链接 WhatsApp、Telegram、Discord、Signal 或 iMessage。",
+      channelsHint:
+        "使用频道链接 WhatsApp、Telegram、Discord、Signal 或 iMessage。",
     },
     stats: {
       instances: "实例",
@@ -85,7 +86,8 @@ export const zh_CN: TranslationMap = {
       title: "备注",
       subtitle: "远程控制设置的快速提醒。",
       tailscaleTitle: "Tailscale serve",
-      tailscaleText: "首选 serve 模式以通过 tailnet 身份验证将网关保持在回环地址。",
+      tailscaleText:
+        "首选 serve 模式以通过 tailnet 身份验证将网关保持在回环地址。",
       sessionTitle: "会话清理",
       sessionText: "使用 /new 或 sessions.patch 重置上下文。",
       cronTitle: "定时任务提醒",
@@ -93,7 +95,8 @@ export const zh_CN: TranslationMap = {
     },
     auth: {
       required: "此网关需要身份验证。添加令牌或密码，然后点击连接。",
-      failed: "身份验证失败。请使用 {command} 重新复制令牌化 URL，或更新令牌，然后点击连接。",
+      failed:
+        "身份验证失败。请使用 {command} 重新复制令牌化 URL，或更新令牌，然后点击连接。",
     },
     pairing: {
       hint: "此设备需要网关主机的配对批准。",

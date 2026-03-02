@@ -7,8 +7,14 @@ import {
   isBlueBubblesPrivateApiStatusEnabled,
 } from "./probe.js";
 import { warnBlueBubbles } from "./runtime.js";
-import { extractBlueBubblesMessageId, resolveBlueBubblesSendTarget } from "./send-helpers.js";
-import { extractHandleFromChatGuid, normalizeBlueBubblesHandle } from "./targets.js";
+import {
+  extractBlueBubblesMessageId,
+  resolveBlueBubblesSendTarget,
+} from "./send-helpers.js";
+import {
+  extractHandleFromChatGuid,
+  normalizeBlueBubblesHandle,
+} from "./targets.js";
 import {
   blueBubblesFetchWithTimeout,
   buildBlueBubblesApiUrl,
@@ -202,8 +208,14 @@ async function queryChats(params: {
   if (!res.ok) {
     return [];
   }
-  const payload = (await res.json().catch(() => null)) as Record<string, unknown> | null;
-  const data = payload && typeof payload.data !== "undefined" ? (payload.data as unknown) : null;
+  const payload = (await res.json().catch(() => null)) as Record<
+    string,
+    unknown
+  > | null;
+  const data =
+    payload && typeof payload.data !== "undefined"
+      ? (payload.data as unknown)
+      : null;
   return Array.isArray(data) ? (data as BlueBubblesChatRecord[]) : [];
 }
 
@@ -218,10 +230,15 @@ export async function resolveChatGuidForTarget(params: {
   }
 
   const normalizedHandle =
-    params.target.kind === "handle" ? normalizeBlueBubblesHandle(params.target.address) : "";
-  const targetChatId = params.target.kind === "chat_id" ? params.target.chatId : null;
+    params.target.kind === "handle"
+      ? normalizeBlueBubblesHandle(params.target.address)
+      : "";
+  const targetChatId =
+    params.target.kind === "chat_id" ? params.target.chatId : null;
   const targetChatIdentifier =
-    params.target.kind === "chat_identifier" ? params.target.chatIdentifier : null;
+    params.target.kind === "chat_identifier"
+      ? params.target.chatIdentifier
+      : null;
 
   const limit = 500;
   let participantMatch: string | null = null;
@@ -283,8 +300,8 @@ export async function resolveChatGuidForTarget(params: {
           // This prevents routing "send to +1234567890" to a group chat that contains that number.
           const isDmChat = guid.includes(";-;");
           if (isDmChat) {
-            const participants = extractParticipantAddresses(chat).map((entry) =>
-              normalizeBlueBubblesHandle(entry),
+            const participants = extractParticipantAddresses(chat).map(
+              (entry) => normalizeBlueBubblesHandle(entry),
             );
             if (participants.includes(normalizedHandle)) {
               participantMatch = guid;
@@ -339,7 +356,9 @@ async function createNewChatWithMessage(params: {
         `BlueBubbles send failed: Cannot create new chat - Private API must be enabled. Original error: ${errorText || res.status}`,
       );
     }
-    throw new Error(`BlueBubbles create chat failed (${res.status}): ${errorText || "unknown"}`);
+    throw new Error(
+      `BlueBubbles create chat failed (${res.status}): ${errorText || "unknown"}`,
+    );
   }
   const body = await res.text();
   if (!body) {
@@ -365,7 +384,9 @@ export async function sendMessageBlueBubbles(
   // Strip markdown early and validate - ensures messages like "***" or "---" don't become empty
   const strippedText = stripMarkdown(trimmedText);
   if (!strippedText.trim()) {
-    throw new Error("BlueBubbles send requires text (message was empty after markdown removal)");
+    throw new Error(
+      "BlueBubbles send requires text (message was empty after markdown removal)",
+    );
   }
 
   const account = resolveBlueBubblesAccount({
@@ -380,7 +401,9 @@ export async function sendMessageBlueBubbles(
   if (!password) {
     throw new Error("BlueBubbles password is required");
   }
-  const privateApiStatus = getCachedBlueBubblesPrivateApiStatus(account.accountId);
+  const privateApiStatus = getCachedBlueBubblesPrivateApiStatus(
+    account.accountId,
+  );
 
   const target = resolveBlueBubblesSendTarget(to);
   const chatGuid = await resolveChatGuidForTarget({
@@ -433,7 +456,8 @@ export async function sendMessageBlueBubbles(
   // Add reply threading support
   if (wantsReplyThread && privateApiDecision.canUsePrivateApi) {
     payload.selectedMessageGuid = opts.replyToMessageGuid;
-    payload.partIndex = typeof opts.replyToPartIndex === "number" ? opts.replyToPartIndex : 0;
+    payload.partIndex =
+      typeof opts.replyToPartIndex === "number" ? opts.replyToPartIndex : 0;
   }
 
   // Add message effects support
@@ -457,7 +481,9 @@ export async function sendMessageBlueBubbles(
   );
   if (!res.ok) {
     const errorText = await res.text();
-    throw new Error(`BlueBubbles send failed (${res.status}): ${errorText || "unknown"}`);
+    throw new Error(
+      `BlueBubbles send failed (${res.status}): ${errorText || "unknown"}`,
+    );
   }
   const body = await res.text();
   if (!body) {

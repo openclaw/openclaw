@@ -1,16 +1,29 @@
 import { describe, expect, it } from "vitest";
-import { isSlackStreamingEnabled, resolveSlackStreamingThreadHint } from "./dispatch.js";
+import {
+  isSlackStreamingEnabled,
+  resolveSlackStreamingThreadHint,
+} from "./dispatch.js";
 
 describe("slack native streaming defaults", () => {
   it("is enabled for partial mode when native streaming is on", () => {
-    expect(isSlackStreamingEnabled({ mode: "partial", nativeStreaming: true })).toBe(true);
+    expect(
+      isSlackStreamingEnabled({ mode: "partial", nativeStreaming: true }),
+    ).toBe(true);
   });
 
   it("is disabled outside partial mode or when native streaming is off", () => {
-    expect(isSlackStreamingEnabled({ mode: "partial", nativeStreaming: false })).toBe(false);
-    expect(isSlackStreamingEnabled({ mode: "block", nativeStreaming: true })).toBe(false);
-    expect(isSlackStreamingEnabled({ mode: "progress", nativeStreaming: true })).toBe(false);
-    expect(isSlackStreamingEnabled({ mode: "off", nativeStreaming: true })).toBe(false);
+    expect(
+      isSlackStreamingEnabled({ mode: "partial", nativeStreaming: false }),
+    ).toBe(false);
+    expect(
+      isSlackStreamingEnabled({ mode: "block", nativeStreaming: true }),
+    ).toBe(false);
+    expect(
+      isSlackStreamingEnabled({ mode: "progress", nativeStreaming: true }),
+    ).toBe(false);
+    expect(
+      isSlackStreamingEnabled({ mode: "off", nativeStreaming: true }),
+    ).toBe(false);
   });
 });
 

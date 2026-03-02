@@ -127,7 +127,11 @@ Lark（国际版）请使用 https://open.larksuite.com/app，并在配置中设
       "sheets:spreadsheet",
       "wiki:wiki:readonly"
     ],
-    "user": ["aily:file:read", "aily:file:write", "im:chat.access_event.bot_p2p_chat:read"]
+    "user": [
+      "aily:file:read",
+      "aily:file:write",
+      "im:chat.access_event.bot_p2p_chat:read"
+    ]
   }
 }
 ```

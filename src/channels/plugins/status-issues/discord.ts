@@ -34,7 +34,9 @@ type DiscordPermissionsAuditSummary = {
   }>;
 };
 
-function readDiscordAccountStatus(value: ChannelAccountSnapshot): DiscordAccountStatus | null {
+function readDiscordAccountStatus(
+  value: ChannelAccountSnapshot,
+): DiscordAccountStatus | null {
   if (!isRecord(value)) {
     return null;
   }
@@ -47,7 +49,9 @@ function readDiscordAccountStatus(value: ChannelAccountSnapshot): DiscordAccount
   };
 }
 
-function readDiscordApplicationSummary(value: unknown): DiscordApplicationSummary {
+function readDiscordApplicationSummary(
+  value: unknown,
+): DiscordApplicationSummary {
   if (!isRecord(value)) {
     return {};
   }
@@ -67,12 +71,15 @@ function readDiscordApplicationSummary(value: unknown): DiscordApplicationSummar
   };
 }
 
-function readDiscordPermissionsAuditSummary(value: unknown): DiscordPermissionsAuditSummary {
+function readDiscordPermissionsAuditSummary(
+  value: unknown,
+): DiscordPermissionsAuditSummary {
   if (!isRecord(value)) {
     return {};
   }
   const unresolvedChannels =
-    typeof value.unresolvedChannels === "number" && Number.isFinite(value.unresolvedChannels)
+    typeof value.unresolvedChannels === "number" &&
+    Number.isFinite(value.unresolvedChannels)
       ? value.unresolvedChannels
       : undefined;
   const channelsRaw = value.channels;
@@ -128,7 +135,8 @@ export function collectDiscordStatusIssues(
         channel: "discord",
         accountId,
         kind: "intent",
-        message: "Message Content Intent is disabled. Bot may not see normal channel messages.",
+        message:
+          "Message Content Intent is disabled. Bot may not see normal channel messages.",
         fix: "Enable Message Content Intent in Discord Dev Portal → Bot → Privileged Gateway Intents, or require mention-only operation.",
       });
     }
@@ -147,7 +155,9 @@ export function collectDiscordStatusIssues(
       if (channel.ok === true) {
         continue;
       }
-      const missing = channel.missing?.length ? ` missing ${channel.missing.join(", ")}` : "";
+      const missing = channel.missing?.length
+        ? ` missing ${channel.missing.join(", ")}`
+        : "";
       const error = channel.error ? `: ${channel.error}` : "";
       const baseMessage = `Channel ${channel.channelId} permission check failed.${missing}${error}`;
       issues.push({

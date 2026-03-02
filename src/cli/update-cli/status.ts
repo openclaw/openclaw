@@ -12,7 +12,11 @@ import { checkUpdateStatus } from "../../infra/update-check.js";
 import { defaultRuntime } from "../../runtime.js";
 import { renderTable } from "../../terminal/table.js";
 import { theme } from "../../terminal/theme.js";
-import { parseTimeoutMsOrExit, resolveUpdateRoot, type UpdateStatusOptions } from "./shared.js";
+import {
+  parseTimeoutMsOrExit,
+  resolveUpdateRoot,
+  type UpdateStatusOptions,
+} from "./shared.js";
 
 function formatGitStatusLine(params: {
   branch: string | null;
@@ -20,7 +24,8 @@ function formatGitStatusLine(params: {
   sha: string | null;
 }): string {
   const shortSha = params.sha ? params.sha.slice(0, 8) : null;
-  const branch = params.branch && params.branch !== "HEAD" ? params.branch : null;
+  const branch =
+    params.branch && params.branch !== "HEAD" ? params.branch : null;
   const tag = params.tag;
   const parts = [
     branch ?? (tag ? "detached" : "git"),
@@ -30,7 +35,9 @@ function formatGitStatusLine(params: {
   return parts.join(" · ");
 }
 
-export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<void> {
+export async function updateStatusCommand(
+  opts: UpdateStatusOptions,
+): Promise<void> {
   const timeoutMs = parseTimeoutMsOrExit(opts.timeout);
   if (timeoutMs === null) {
     return;
@@ -103,7 +110,9 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
     ...(gitLabel ? [{ Item: "Git", Value: gitLabel }] : []),
     {
       Item: "Update",
-      Value: updateAvailability.available ? theme.warn(`available · ${updateLine}`) : updateLine,
+      Value: updateAvailability.available
+        ? theme.warn(`available · ${updateLine}`)
+        : updateLine,
     },
   ];
 

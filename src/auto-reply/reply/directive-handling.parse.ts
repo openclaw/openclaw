@@ -1,8 +1,17 @@
 import type { OpenClawConfig } from "../../config/config.js";
-import type { ExecAsk, ExecHost, ExecSecurity } from "../../infra/exec-approvals.js";
+import type {
+  ExecAsk,
+  ExecHost,
+  ExecSecurity,
+} from "../../infra/exec-approvals.js";
 import { extractModelDirective } from "../model.js";
 import type { MsgContext } from "../templating.js";
-import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "./directives.js";
+import type {
+  ElevatedLevel,
+  ReasoningLevel,
+  ThinkLevel,
+  VerboseLevel,
+} from "./directives.js";
 import {
   extractElevatedDirective,
   extractExecDirective,
@@ -117,9 +126,10 @@ export function parseInlineDirectives(
     hasDirective: hasExecDirective,
   } = extractExecDirective(elevatedCleaned);
   const allowStatusDirective = options?.allowStatusDirective !== false;
-  const { cleaned: statusCleaned, hasDirective: hasStatusDirective } = allowStatusDirective
-    ? extractStatusDirective(execCleaned)
-    : { cleaned: execCleaned, hasDirective: false };
+  const { cleaned: statusCleaned, hasDirective: hasStatusDirective } =
+    allowStatusDirective
+      ? extractStatusDirective(execCleaned)
+      : { cleaned: execCleaned, hasDirective: false };
   const {
     cleaned: modelCleaned,
     rawModel,
@@ -210,6 +220,8 @@ export function isDirectiveOnly(params: {
     return false;
   }
   const stripped = stripStructuralPrefixes(cleanedBody ?? "");
-  const noMentions = isGroup ? stripMentions(stripped, ctx, cfg, agentId) : stripped;
+  const noMentions = isGroup
+    ? stripMentions(stripped, ctx, cfg, agentId)
+    : stripped;
   return noMentions.length === 0;
 }

@@ -71,8 +71,14 @@ describe("channels dock", () => {
       },
     } as OpenClawConfig;
 
-    const accountDefault = ircDock?.config?.resolveDefaultTo?.({ cfg, accountId: "work" });
-    const rootDefault = ircDock?.config?.resolveDefaultTo?.({ cfg, accountId: "missing" });
+    const accountDefault = ircDock?.config?.resolveDefaultTo?.({
+      cfg,
+      accountId: "work",
+    });
+    const rootDefault = ircDock?.config?.resolveDefaultTo?.({
+      cfg,
+      accountId: "missing",
+    });
 
     expect(accountDefault).toBe("#work");
     expect(rootDefault).toBe("#root");

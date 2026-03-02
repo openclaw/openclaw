@@ -4,7 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { resolveStateDir } from "../../config/paths.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
-import { readPackageName, readPackageVersion } from "../../infra/package-json.js";
+import {
+  readPackageName,
+  readPackageVersion,
+} from "../../infra/package-json.js";
 import { trimLogTail } from "../../infra/restart-sentinel.js";
 import { parseSemver } from "../../infra/runtime-guard.js";
 import { fetchNpmTagVersion } from "../../infra/update-check.js";
@@ -14,7 +17,10 @@ import {
   type CommandRunner,
   type GlobalInstallManager,
 } from "../../infra/update-global.js";
-import type { UpdateStepProgress, UpdateStepResult } from "../../infra/update-runner.js";
+import type {
+  UpdateStepProgress,
+  UpdateStepResult,
+} from "../../infra/update-runner.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { theme } from "../../terminal/theme.js";
@@ -41,7 +47,9 @@ export type UpdateWizardOptions = {
 
 const INVALID_TIMEOUT_ERROR = "--timeout must be a positive integer (seconds)";
 
-export function parseTimeoutMsOrExit(timeout?: string): number | undefined | null {
+export function parseTimeoutMsOrExit(
+  timeout?: string,
+): number | undefined | null {
   const timeoutMs = timeout ? Number.parseInt(timeout, 10) * 1000 : undefined;
   if (timeoutMs !== undefined && (Number.isNaN(timeoutMs) || timeoutMs <= 0)) {
     defaultRuntime.error(INVALID_TIMEOUT_ERROR);
@@ -227,7 +235,9 @@ export async function ensureGitCheckout(params: {
   }
 
   if (!(await isCorePackage(params.dir))) {
-    throw new Error(`OPENCLAW_GIT_DIR does not look like a core checkout: ${params.dir}.`);
+    throw new Error(
+      `OPENCLAW_GIT_DIR does not look like a core checkout: ${params.dir}.`,
+    );
   }
 
   return null;
@@ -251,25 +261,37 @@ export async function resolveGlobalManager(params: {
     }
   }
 
-  const byPresence = await detectGlobalInstallManagerByPresence(runCommand, params.timeoutMs);
+  const byPresence = await detectGlobalInstallManagerByPresence(
+    runCommand,
+    params.timeoutMs,
+  );
   return byPresence ?? "npm";
 }
 
-export async function tryWriteCompletionCache(root: string, jsonMode: boolean): Promise<void> {
+export async function tryWriteCompletionCache(
+  root: string,
+  jsonMode: boolean,
+): Promise<void> {
   const binPath = path.join(root, "openclaw.mjs");
   if (!(await pathExists(binPath))) {
     return;
   }
 
-  const result = spawnSync(resolveNodeRunner(), [binPath, "completion", "--write-state"], {
-    cwd: root,
-    env: process.env,
-    encoding: "utf-8",
-  });
+  const result = spawnSync(
+    resolveNodeRunner(),
+    [binPath, "completion", "--write-state"],
+    {
+      cwd: root,
+      env: process.env,
+      encoding: "utf-8",
+    },
+  );
 
   if (result.error) {
     if (!jsonMode) {
-      defaultRuntime.log(theme.warn(`Completion cache update failed: ${String(result.error)}`));
+      defaultRuntime.log(
+        theme.warn(`Completion cache update failed: ${String(result.error)}`),
+      );
     }
     return;
   }

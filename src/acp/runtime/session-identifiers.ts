@@ -1,28 +1,36 @@
-import type { SessionAcpIdentity, SessionAcpMeta } from "../../config/sessions/types.js";
-import { isSessionIdentityPending, resolveSessionIdentityFromMeta } from "./session-identity.js";
+import type {
+  SessionAcpIdentity,
+  SessionAcpMeta,
+} from "../../config/sessions/types.js";
+import {
+  isSessionIdentityPending,
+  resolveSessionIdentityFromMeta,
+} from "./session-identity.js";
 
 export const ACP_SESSION_IDENTITY_RENDERER_VERSION = "v1";
 export type AcpSessionIdentifierRenderMode = "status" | "thread";
 
 type SessionResumeHintResolver = (params: { agentSessionId: string }) => string;
 
-const ACP_AGENT_RESUME_HINT_BY_KEY = new Map<string, SessionResumeHintResolver>([
+const ACP_AGENT_RESUME_HINT_BY_KEY = new Map<string, SessionResumeHintResolver>(
   [
-    "codex",
-    ({ agentSessionId }) =>
-      `resume in Codex CLI: \`codex resume ${agentSessionId}\` (continues this conversation).`,
+    [
+      "codex",
+      ({ agentSessionId }) =>
+        `resume in Codex CLI: \`codex resume ${agentSessionId}\` (continues this conversation).`,
+    ],
+    [
+      "openai-codex",
+      ({ agentSessionId }) =>
+        `resume in Codex CLI: \`codex resume ${agentSessionId}\` (continues this conversation).`,
+    ],
+    [
+      "codex-cli",
+      ({ agentSessionId }) =>
+        `resume in Codex CLI: \`codex resume ${agentSessionId}\` (continues this conversation).`,
+    ],
   ],
-  [
-    "openai-codex",
-    ({ agentSessionId }) =>
-      `resume in Codex CLI: \`codex resume ${agentSessionId}\` (continues this conversation).`,
-  ],
-  [
-    "codex-cli",
-    ({ agentSessionId }) =>
-      `resume in Codex CLI: \`codex resume ${agentSessionId}\` (continues this conversation).`,
-  ],
-]);
+);
 
 function normalizeText(value: unknown): string | undefined {
   if (typeof value !== "string") {
@@ -77,7 +85,9 @@ export function resolveAcpSessionIdentifierLinesFromIdentity(params: {
   const agentSessionId = normalizeText(identity?.agentSessionId);
   const acpxSessionId = normalizeText(identity?.acpxSessionId);
   const acpxRecordId = normalizeText(identity?.acpxRecordId);
-  const hasIdentifier = Boolean(agentSessionId || acpxSessionId || acpxRecordId);
+  const hasIdentifier = Boolean(
+    agentSessionId || acpxSessionId || acpxRecordId,
+  );
   if (isSessionIdentityPending(identity) && hasIdentifier) {
     if (mode === "status") {
       return ["session ids: pending (available after the first reply)"];
@@ -97,7 +107,9 @@ export function resolveAcpSessionIdentifierLinesFromIdentity(params: {
   return lines;
 }
 
-export function resolveAcpSessionCwd(meta?: SessionAcpMeta): string | undefined {
+export function resolveAcpSessionCwd(
+  meta?: SessionAcpMeta,
+): string | undefined {
   const runtimeCwd = normalizeText(meta?.runtimeOptions?.cwd);
   if (runtimeCwd) {
     return runtimeCwd;

@@ -10,7 +10,11 @@ import { runCliAgent } from "../../agents/cli-runner.js";
 import { getCliSessionId, setCliSessionId } from "../../agents/cli-session.js";
 import { lookupContextTokens } from "../../agents/context.js";
 import { resolveCronStyleNow } from "../../agents/current-time.js";
-import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
+import {
+  DEFAULT_CONTEXT_TOKENS,
+  DEFAULT_MODEL,
+  DEFAULT_PROVIDER,
+} from "../../agents/defaults.js";
 import { loadModelCatalog } from "../../agents/model-catalog.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import {
@@ -24,7 +28,10 @@ import {
 } from "../../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
-import { deriveSessionTotalTokens, hasNonzeroUsage } from "../../agents/usage.js";
+import {
+  deriveSessionTotalTokens,
+  hasNonzeroUsage,
+} from "../../agents/usage.js";
 import { ensureAgentWorkspace } from "../../agents/workspace.js";
 import {
   normalizeThinkLevel,
@@ -115,11 +122,14 @@ export async function runCronIsolatedAgentTurn(params: {
       : typeof params.job.agentId === "string" && params.job.agentId.trim()
         ? params.job.agentId
         : undefined;
-  const normalizedRequested = requestedAgentId ? normalizeAgentId(requestedAgentId) : undefined;
+  const normalizedRequested = requestedAgentId
+    ? normalizeAgentId(requestedAgentId)
+    : undefined;
   const agentConfigOverride = normalizedRequested
     ? resolveAgentConfig(params.cfg, normalizedRequested)
     : undefined;
-  const { model: overrideModel, ...agentOverrideRest } = agentConfigOverride ?? {};
+  const { model: overrideModel, ...agentOverrideRest } =
+    agentConfigOverride ?? {};
   // Use the requested agentId even when there is no explicit agent config entry.
   // This ensures auth-profiles, workspace, and agentDir all resolve to the
   // correct per-agent paths (e.g. ~/.openclaw/agents/<agentId>/agent/).
@@ -132,7 +142,8 @@ export async function runCronIsolatedAgentTurn(params: {
   // Merge agent model override with defaults instead of replacing, so that
   // `fallbacks` from `agents.defaults.model` are preserved when the agent
   // (or its per-cron model pin) only specifies `primary`.
-  const existingModel = agentCfg.model && typeof agentCfg.model === "object" ? agentCfg.model : {};
+  const existingModel =
+    agentCfg.model && typeof agentCfg.model === "object" ? agentCfg.model : {};
   if (typeof overrideModel === "string") {
     agentCfg.model = { ...existingModel, primary: overrideModel };
   } else if (overrideModel) {
@@ -143,8 +154,13 @@ export async function runCronIsolatedAgentTurn(params: {
     agents: Object.assign({}, params.cfg.agents, { defaults: agentCfg }),
   };
 
-  const baseSessionKey = (params.sessionKey?.trim() || `cron:${params.job.id}`).trim();
-  const agentSessionKey = resolveCronAgentSessionKey({ sessionKey: baseSessionKey, agentId });
+  const baseSessionKey = (
+    params.sessionKey?.trim() || `cron:${params.job.id}`
+  ).trim();
+  const agentSessionKey = resolveCronAgentSessionKey({
+    sessionKey: baseSessionKey,
+    agentId,
+  });
 
   const workspaceDirRaw = resolveAgentWorkspaceDir(params.cfg, agentId);
   const agentDir = resolveAgentDir(params.cfg, agentId);
@@ -211,8 +227,11 @@ export async function runCronIsolatedAgentTurn(params: {
     }
   }
   const modelOverrideRaw =
-    params.job.payload.kind === "agentTurn" ? params.job.payload.model : undefined;
-  const modelOverride = typeof modelOverrideRaw === "string" ? modelOverrideRaw.trim() : undefined;
+    params.job.payload.kind === "agentTurn"
+      ? params.job.payload.model
+      : undefined;
+  const modelOverride =
+    typeof modelOverrideRaw === "string" ? modelOverrideRaw.trim() : undefined;
   if (modelOverride !== undefined && modelOverride.length > 0) {
     const resolvedOverride = resolveAllowedModelRef({
       cfg: cfgWithAgentDefaults,
@@ -269,7 +288,10 @@ export async function runCronIsolatedAgentTurn(params: {
     sessionId: runSessionId,
     sessionKey: runSessionKey,
   });
-  if (!cronSession.sessionEntry.label?.trim() && baseSessionKey.startsWith("cron:")) {
+  if (
+    !cronSession.sessionEntry.label?.trim() &&
+    baseSessionKey.startsWith("cron:")
+  ) {
     const labelSuffix =
       typeof params.job.name === "string" && params.job.name.trim()
         ? params.job.name.trim()
@@ -284,7 +306,8 @@ export async function runCronIsolatedAgentTurn(params: {
     const sessionModelOverride = cronSession.sessionEntry.modelOverride?.trim();
     if (sessionModelOverride) {
       const sessionProviderOverride =
-        cronSession.sessionEntry.providerOverride?.trim() || resolvedDefault.provider;
+        cronSession.sessionEntry.providerOverride?.trim() ||
+        resolvedDefault.provider;
       const resolvedSessionOverride = resolveAllowedModelRef({
         cfg: cfgWithAgentDefaults,
         catalog: await loadCatalog(),
@@ -304,8 +327,9 @@ export async function runCronIsolatedAgentTurn(params: {
     ? normalizeThinkLevel(params.cfg.hooks?.gmail?.thinking)
     : undefined;
   const jobThink = normalizeThinkLevel(
-    (params.job.payload.kind === "agentTurn" ? params.job.payload.thinking : undefined) ??
-      undefined,
+    (params.job.payload.kind === "agentTurn"
+      ? params.job.payload.thinking
+      : undefined) ?? undefined,
   );
   let thinkLevel = jobThink ?? hooksGmailThinking;
   if (!thinkLevel) {
@@ -326,29 +350,38 @@ export async function runCronIsolatedAgentTurn(params: {
   const timeoutMs = resolveAgentTimeoutMs({
     cfg: cfgWithAgentDefaults,
     overrideSeconds:
-      params.job.payload.kind === "agentTurn" ? params.job.payload.timeoutSeconds : undefined,
+      params.job.payload.kind === "agentTurn"
+        ? params.job.payload.timeoutSeconds
+        : undefined,
   });
 
-  const agentPayload = params.job.payload.kind === "agentTurn" ? params.job.payload : null;
+  const agentPayload =
+    params.job.payload.kind === "agentTurn" ? params.job.payload : null;
   const deliveryPlan = resolveCronDeliveryPlan(params.job);
   const deliveryRequested = deliveryPlan.requested;
 
-  const resolvedDelivery = await resolveDeliveryTarget(cfgWithAgentDefaults, agentId, {
-    channel: deliveryPlan.channel ?? "last",
-    to: deliveryPlan.to,
-    accountId: deliveryPlan.accountId,
-    sessionKey: params.job.sessionKey,
-  });
+  const resolvedDelivery = await resolveDeliveryTarget(
+    cfgWithAgentDefaults,
+    agentId,
+    {
+      channel: deliveryPlan.channel ?? "last",
+      to: deliveryPlan.to,
+      accountId: deliveryPlan.accountId,
+      sessionKey: params.job.sessionKey,
+    },
+  );
 
   const { formattedTime, timeLine } = resolveCronStyleNow(params.cfg, now);
-  const base = `[cron:${params.job.id} ${params.job.name}] ${params.message}`.trim();
+  const base =
+    `[cron:${params.job.id} ${params.job.name}] ${params.message}`.trim();
 
   // SECURITY: Wrap external hook content with security boundaries to prevent prompt injection
   // unless explicitly allowed via a dangerous config override.
   const isExternalHook = isExternalHookSession(baseSessionKey);
   const allowUnsafeExternalContent =
     agentPayload?.allowUnsafeExternalContent === true ||
-    (isGmailHook && params.cfg.hooks?.gmail?.allowUnsafeExternalContent === true);
+    (isGmailHook &&
+      params.cfg.hooks?.gmail?.allowUnsafeExternalContent === true);
   const shouldWrapExternal = isExternalHook && !allowUnsafeExternalContent;
   let commandBody: string;
 
@@ -411,7 +444,9 @@ export async function runCronIsolatedAgentTurn(params: {
   try {
     await persistSessionEntry();
   } catch (err) {
-    logWarn(`[cron:${params.job.id}] Failed to persist pre-run session entry: ${String(err)}`);
+    logWarn(
+      `[cron:${params.job.id}] Failed to persist pre-run session entry: ${String(err)}`,
+    );
   }
 
   // Resolve auth profile for the session, mirroring the inbound auto-reply path
@@ -427,7 +462,8 @@ export async function runCronIsolatedAgentTurn(params: {
     storePath: cronSession.storePath,
     isNewSession: cronSession.isNewSession,
   });
-  const authProfileIdSource = cronSession.sessionEntry.authProfileOverrideSource;
+  const authProfileIdSource =
+    cronSession.sessionEntry.authProfileOverrideSource;
 
   let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
   let fallbackProvider = provider;
@@ -435,7 +471,10 @@ export async function runCronIsolatedAgentTurn(params: {
   const runStartedAt = Date.now();
   let runEndedAt = runStartedAt;
   try {
-    const sessionFile = resolveSessionTranscriptPath(cronSession.sessionEntry.sessionId, agentId);
+    const sessionFile = resolveSessionTranscriptPath(
+      cronSession.sessionEntry.sessionId,
+      agentId,
+    );
     const resolvedVerboseLevel =
       normalizeVerboseLevel(cronSession.sessionEntry.verboseLevel) ??
       normalizeVerboseLevel(agentCfg?.verboseDefault) ??
@@ -447,7 +486,8 @@ export async function runCronIsolatedAgentTurn(params: {
     const messageChannel = resolvedDelivery.channel;
     // Per-job payload.fallbacks takes priority over agent-level fallbacks.
     const payloadFallbacks =
-      params.job.payload.kind === "agentTurn" && Array.isArray(params.job.payload.fallbacks)
+      params.job.payload.kind === "agentTurn" &&
+      Array.isArray(params.job.payload.fallbacks)
         ? params.job.payload.fallbacks
         : undefined;
     const fallbackResult = await runWithModelFallback({
@@ -456,7 +496,8 @@ export async function runCronIsolatedAgentTurn(params: {
       model,
       agentDir,
       fallbacksOverride:
-        payloadFallbacks ?? resolveAgentModelFallbacksOverride(params.cfg, agentId),
+        payloadFallbacks ??
+        resolveAgentModelFallbacksOverride(params.cfg, agentId),
       run: (providerOverride, modelOverride) => {
         if (abortSignal?.aborted) {
           throw new Error(abortReason());
@@ -506,13 +547,16 @@ export async function runCronIsolatedAgentTurn(params: {
           thinkLevel,
           verboseLevel: resolvedVerboseLevel,
           timeoutMs,
-          bootstrapContextMode: agentPayload?.lightContext ? "lightweight" : undefined,
+          bootstrapContextMode: agentPayload?.lightContext
+            ? "lightweight"
+            : undefined,
           bootstrapContextRunKind: "cron",
           runId: cronSession.sessionEntry.sessionId,
           // Only enforce an explicit message target when the cron delivery target
           // was successfully resolved. When resolution fails the agent should not
           // be blocked by a target it cannot satisfy (#27898).
-          requireExplicitMessageTarget: deliveryRequested && resolvedDelivery.ok,
+          requireExplicitMessageTarget:
+            deliveryRequested && resolvedDelivery.ok,
           disableMessageTool: deliveryRequested || deliveryPlan.mode === "none",
           abortSignal,
         });
@@ -538,10 +582,14 @@ export async function runCronIsolatedAgentTurn(params: {
   {
     const usage = runResult.meta?.agentMeta?.usage;
     const promptTokens = runResult.meta?.agentMeta?.promptTokens;
-    const modelUsed = runResult.meta?.agentMeta?.model ?? fallbackModel ?? model;
-    const providerUsed = runResult.meta?.agentMeta?.provider ?? fallbackProvider ?? provider;
+    const modelUsed =
+      runResult.meta?.agentMeta?.model ?? fallbackModel ?? model;
+    const providerUsed =
+      runResult.meta?.agentMeta?.provider ?? fallbackProvider ?? provider;
     const contextTokens =
-      agentCfg?.contextTokens ?? lookupContextTokens(modelUsed) ?? DEFAULT_CONTEXT_TOKENS;
+      agentCfg?.contextTokens ??
+      lookupContextTokens(modelUsed) ??
+      DEFAULT_CONTEXT_TOKENS;
 
     setSessionRuntimeModel(cronSession.sessionEntry, {
       provider: providerUsed,
@@ -568,7 +616,11 @@ export async function runCronIsolatedAgentTurn(params: {
         input_tokens: input,
         output_tokens: output,
       };
-      if (typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0) {
+      if (
+        typeof totalTokens === "number" &&
+        Number.isFinite(totalTokens) &&
+        totalTokens > 0
+      ) {
         cronSession.sessionEntry.totalTokens = totalTokens;
         cronSession.sessionEntry.totalTokensFresh = true;
         telemetryUsage.total_tokens = totalTokens;
@@ -594,10 +646,15 @@ export async function runCronIsolatedAgentTurn(params: {
   }
 
   if (isAborted()) {
-    return withRunSession({ status: "error", error: abortReason(), ...telemetry });
+    return withRunSession({
+      status: "error",
+      error: abortReason(),
+      ...telemetry,
+    });
   }
   const firstText = payloads[0]?.text ?? "";
-  let summary = pickSummaryFromPayloads(payloads) ?? pickSummaryFromOutput(firstText);
+  let summary =
+    pickSummaryFromPayloads(payloads) ?? pickSummaryFromOutput(firstText);
   let outputText = pickLastNonEmptyTextFromPayloads(payloads);
   let synthesizedText = outputText?.trim() || summary?.trim() || undefined;
   const deliveryPayload = pickLastDeliverablePayload(payloads);
@@ -614,29 +671,43 @@ export async function runCronIsolatedAgentTurn(params: {
   const deliveryBestEffort = resolveCronDeliveryBestEffort(params.job);
   const hasErrorPayload = payloads.some((payload) => payload?.isError === true);
   const runLevelError = runResult.meta?.error;
-  const lastErrorPayloadIndex = payloads.findLastIndex((payload) => payload?.isError === true);
+  const lastErrorPayloadIndex = payloads.findLastIndex(
+    (payload) => payload?.isError === true,
+  );
   const hasSuccessfulPayloadAfterLastError =
     !runLevelError &&
     lastErrorPayloadIndex >= 0 &&
     payloads
       .slice(lastErrorPayloadIndex + 1)
-      .some((payload) => payload?.isError !== true && Boolean(payload?.text?.trim()));
+      .some(
+        (payload) =>
+          payload?.isError !== true && Boolean(payload?.text?.trim()),
+      );
   // Tool wrappers can emit transient/false-positive error payloads before a valid final
   // assistant payload.  Only treat payload errors as recoverable when (a) the run itself
   // did not report a model/context-level error and (b) a non-error payload follows.
-  const hasFatalErrorPayload = hasErrorPayload && !hasSuccessfulPayloadAfterLastError;
+  const hasFatalErrorPayload =
+    hasErrorPayload && !hasSuccessfulPayloadAfterLastError;
   const lastErrorPayloadText = [...payloads]
     .toReversed()
-    .find((payload) => payload?.isError === true && Boolean(payload?.text?.trim()))
+    .find(
+      (payload) => payload?.isError === true && Boolean(payload?.text?.trim()),
+    )
     ?.text?.trim();
   const embeddedRunError = hasFatalErrorPayload
     ? (lastErrorPayloadText ?? "cron isolated run returned an error payload")
     : undefined;
-  const resolveRunOutcome = (params?: { delivered?: boolean; deliveryAttempted?: boolean }) =>
+  const resolveRunOutcome = (params?: {
+    delivered?: boolean;
+    deliveryAttempted?: boolean;
+  }) =>
     withRunSession({
       status: hasFatalErrorPayload ? "error" : "ok",
       ...(hasFatalErrorPayload
-        ? { error: embeddedRunError ?? "cron isolated run returned an error payload" }
+        ? {
+            error:
+              embeddedRunError ?? "cron isolated run returned an error payload",
+          }
         : {}),
       summary,
       outputText,
@@ -647,7 +718,8 @@ export async function runCronIsolatedAgentTurn(params: {
 
   // Skip delivery for heartbeat-only responses (HEARTBEAT_OK with no real content).
   const ackMaxChars = resolveHeartbeatAckMaxChars(agentCfg);
-  const skipHeartbeatDelivery = deliveryRequested && isHeartbeatOnlyResponse(payloads, ackMaxChars);
+  const skipHeartbeatDelivery =
+    deliveryRequested && isHeartbeatOnlyResponse(payloads, ackMaxChars);
   const skipMessagingToolDelivery =
     deliveryRequested &&
     runResult.didSendViaMessagingTool === true &&
@@ -690,7 +762,8 @@ export async function runCronIsolatedAgentTurn(params: {
     const resultWithDeliveryMeta: RunCronAgentTurnResult = {
       ...deliveryResult.result,
       deliveryAttempted:
-        deliveryResult.result.deliveryAttempted ?? deliveryResult.deliveryAttempted,
+        deliveryResult.result.deliveryAttempted ??
+        deliveryResult.deliveryAttempted,
     };
     if (!hasFatalErrorPayload || deliveryResult.result.status !== "ok") {
       return resultWithDeliveryMeta;

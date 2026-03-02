@@ -5,7 +5,10 @@ import { logVerbose } from "../globals.js";
 import { buildPairingReply } from "../pairing/pairing-messages.js";
 import { upsertChannelPairingRequest } from "../pairing/pairing-store.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
-import { resolveSenderAllowMatch, type NormalizedAllowFrom } from "./bot-access.js";
+import {
+  resolveSenderAllowMatch,
+  type NormalizedAllowFrom,
+} from "./bot-access.js";
 
 type TelegramDmAccessLogger = {
   info: (obj: Record<string, unknown>, msg: string) => void;
@@ -19,7 +22,10 @@ type TelegramSenderIdentity = {
   lastName?: string;
 };
 
-function resolveTelegramSenderIdentity(msg: Message, chatId: number): TelegramSenderIdentity {
+function resolveTelegramSenderIdentity(
+  msg: Message,
+  chatId: number,
+): TelegramSenderIdentity {
   const from = msg.from;
   const userId = from?.id != null ? String(from.id) : null;
   return {
@@ -41,7 +47,16 @@ export async function enforceTelegramDmAccess(params: {
   bot: Bot;
   logger: TelegramDmAccessLogger;
 }): Promise<boolean> {
-  const { isGroup, dmPolicy, msg, chatId, effectiveDmAllow, accountId, bot, logger } = params;
+  const {
+    isGroup,
+    dmPolicy,
+    msg,
+    chatId,
+    effectiveDmAllow,
+    accountId,
+    bot,
+    logger,
+  } = params;
   if (isGroup) {
     return true;
   }
@@ -62,7 +77,8 @@ export async function enforceTelegramDmAccess(params: {
     allowMatch.matchSource ?? "none"
   }`;
   const allowed =
-    effectiveDmAllow.hasWildcard || (effectiveDmAllow.hasEntries && allowMatch.allowed);
+    effectiveDmAllow.hasWildcard ||
+    (effectiveDmAllow.hasEntries && allowMatch.allowed);
   if (allowed) {
     return true;
   }
@@ -107,7 +123,9 @@ export async function enforceTelegramDmAccess(params: {
         });
       }
     } catch (err) {
-      logVerbose(`telegram pairing reply failed for chat ${chatId}: ${String(err)}`);
+      logVerbose(
+        `telegram pairing reply failed for chat ${chatId}: ${String(err)}`,
+      );
     }
     return false;
   }

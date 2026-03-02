@@ -133,7 +133,10 @@ export function lookupValueByPath(args: unknown, path: string): unknown {
   return current;
 }
 
-export function formatDetailKey(raw: string, overrides: Record<string, string> = {}): string {
+export function formatDetailKey(
+  raw: string,
+  overrides: Record<string, string> = {},
+): string {
   const segments = raw.split(".").filter(Boolean);
   const last = segments.at(-1) ?? raw;
   const override = overrides[last];
@@ -199,14 +202,18 @@ export function resolveReadDetail(args: unknown): string | undefined {
   return `from ${path}`;
 }
 
-export function resolveWriteDetail(toolKey: string, args: unknown): string | undefined {
+export function resolveWriteDetail(
+  toolKey: string,
+  args: unknown,
+): string | undefined {
   const record = asRecord(args);
   if (!record) {
     return undefined;
   }
 
   const path =
-    resolvePathArg(record) ?? (typeof record.url === "string" ? record.url.trim() : undefined);
+    resolvePathArg(record) ??
+    (typeof record.url === "string" ? record.url.trim() : undefined);
   if (!path) {
     return undefined;
   }
@@ -238,9 +245,12 @@ export function resolveWebSearchDetail(args: unknown): string | undefined {
     return undefined;
   }
 
-  const query = typeof record.query === "string" ? record.query.trim() : undefined;
+  const query =
+    typeof record.query === "string" ? record.query.trim() : undefined;
   const count =
-    typeof record.count === "number" && Number.isFinite(record.count) && record.count > 0
+    typeof record.count === "number" &&
+    Number.isFinite(record.count) &&
+    record.count > 0
       ? Math.floor(record.count)
       : undefined;
 
@@ -248,7 +258,9 @@ export function resolveWebSearchDetail(args: unknown): string | undefined {
     return undefined;
   }
 
-  return count !== undefined ? `for "${query}" (top ${count})` : `for "${query}"`;
+  return count !== undefined
+    ? `for "${query}" (top ${count})`
+    : `for "${query}"`;
 }
 
 export function resolveWebFetchDetail(args: unknown): string | undefined {
@@ -262,9 +274,14 @@ export function resolveWebFetchDetail(args: unknown): string | undefined {
     return undefined;
   }
 
-  const mode = typeof record.extractMode === "string" ? record.extractMode.trim() : undefined;
+  const mode =
+    typeof record.extractMode === "string"
+      ? record.extractMode.trim()
+      : undefined;
   const maxChars =
-    typeof record.maxChars === "number" && Number.isFinite(record.maxChars) && record.maxChars > 0
+    typeof record.maxChars === "number" &&
+    Number.isFinite(record.maxChars) &&
+    record.maxChars > 0
       ? Math.floor(record.maxChars)
       : undefined;
 
@@ -387,7 +404,11 @@ function optionValue(words: string[], names: string[]): string | undefined {
   return undefined;
 }
 
-function positionalArgs(words: string[], from = 1, optionsWithValue: string[] = []): string[] {
+function positionalArgs(
+  words: string[],
+  from = 1,
+  optionsWithValue: string[] = [],
+): string[] {
   const args: string[] = [];
   const takesValue = new Set(optionsWithValue);
 
@@ -464,7 +485,10 @@ function trimLeadingEnv(words: string[]): string[] {
     return words.slice(index);
   }
 
-  while (index < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[index])) {
+  while (
+    index < words.length &&
+    /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[index])
+  ) {
     index += 1;
   }
   return words.slice(index);
@@ -482,7 +506,8 @@ function unwrapShellWrapper(command: string): string {
   }
 
   const flagIndex = words.findIndex(
-    (token, index) => index > 0 && (token === "-c" || token === "-lc" || token === "-ic"),
+    (token, index) =>
+      index > 0 && (token === "-c" || token === "-lc" || token === "-ic"),
   );
   if (flagIndex === -1) {
     return command;
@@ -559,7 +584,11 @@ function splitTopLevelPipes(command: string): string[] {
   let start = 0;
 
   scanTopLevelChars(command, (char, index) => {
-    if (char === "|" && command[index - 1] !== "|" && command[index + 1] !== "|") {
+    if (
+      char === "|" &&
+      command[index - 1] !== "|" &&
+      command[index + 1] !== "|"
+    ) {
       parts.push(command.slice(start, index));
       start = index + 1;
     }
@@ -620,7 +649,10 @@ function stripShellPreamble(command: string): PreambleResult {
     // NOT for || — `cd /app || npm install` means npm runs when cd *fails*, so (in /app) is wrong.
     const isChdir = (first ? !first.isOr : i > 0) && isChdirCommand(head);
     const isPreamble =
-      head.startsWith("set ") || head.startsWith("export ") || head.startsWith("unset ") || isChdir;
+      head.startsWith("set ") ||
+      head.startsWith("export ") ||
+      head.startsWith("unset ") ||
+      isChdir;
 
     if (!isPreamble) {
       break;
@@ -716,7 +748,12 @@ function summarizeKnownExec(words: string[]): string {
     if (sub && map[sub]) {
       return map[sub];
     }
-    if (!sub || sub.startsWith("/") || sub.startsWith("~") || sub.includes("/")) {
+    if (
+      !sub ||
+      sub.startsWith("/") ||
+      sub.startsWith("~") ||
+      sub.includes("/")
+    ) {
       return gitCwd ? `run git command in ${gitCwd}` : "run git command";
     }
     return `run git ${sub}`;
@@ -740,7 +777,9 @@ function summarizeKnownExec(words: string[]): string {
     const pattern = optionValue(words, ["-e", "--regexp"]) ?? positional[0];
     const target = positional.length > 1 ? positional.at(-1) : undefined;
     if (pattern) {
-      return target ? `search "${pattern}" in ${target}` : `search "${pattern}"`;
+      return target
+        ? `search "${pattern}" in ${target}`
+        : `search "${pattern}"`;
     }
     return "search text";
   }
@@ -748,7 +787,9 @@ function summarizeKnownExec(words: string[]): string {
   if (bin === "find") {
     const path = words[1] && !words[1].startsWith("-") ? words[1] : ".";
     const name = optionValue(words, ["-name", "-iname"]);
-    return name ? `find files named "${name}" in ${path}` : `find files in ${path}`;
+    return name
+      ? `find files named "${name}" in ${path}`
+      : `find files in ${path}`;
   }
 
   if (bin === "ls") {
@@ -789,7 +830,12 @@ function summarizeKnownExec(words: string[]): string {
 
   if (bin === "sed") {
     const expression = optionValue(words, ["-e", "--expression"]);
-    const positional = positionalArgs(words, 1, ["-e", "--expression", "-f", "--file"]);
+    const positional = positionalArgs(words, 1, [
+      "-e",
+      "--expression",
+      "-f",
+      "--file",
+    ]);
     const script = expression ?? positional[0];
     const target = expression ? positional[0] : positional[1];
 
@@ -803,7 +849,9 @@ function summarizeKnownExec(words: string[]): string {
       }
       const single = compact.match(/^([0-9]+)p$/);
       if (single) {
-        return target ? `print line ${single[1]} from ${target}` : `print line ${single[1]}`;
+        return target
+          ? `print line ${single[1]} from ${target}`
+          : `print line ${single[1]}`;
       }
     }
 
@@ -815,7 +863,12 @@ function summarizeKnownExec(words: string[]): string {
   }
 
   if (bin === "cp" || bin === "mv") {
-    const positional = positionalArgs(words, 1, ["-t", "--target-directory", "-S", "--suffix"]);
+    const positional = positionalArgs(words, 1, [
+      "-t",
+      "--target-directory",
+      "-S",
+      "--suffix",
+    ]);
     const src = positional[0];
     const dst = positional[1];
     const action = bin === "cp" ? "copy" : "move";
@@ -849,7 +902,12 @@ function summarizeKnownExec(words: string[]): string {
   }
 
   if (bin === "npm" || bin === "pnpm" || bin === "yarn" || bin === "bun") {
-    const positional = positionalArgs(words, 1, ["--prefix", "-C", "--cwd", "--config"]);
+    const positional = positionalArgs(words, 1, [
+      "--prefix",
+      "-C",
+      "--cwd",
+      "--config",
+    ]);
     const sub = positional[0] ?? "command";
     const map: Record<string, string> = {
       install: "install dependencies",
@@ -862,7 +920,13 @@ function summarizeKnownExec(words: string[]): string {
     return map[sub] ?? `run ${bin} ${sub}`;
   }
 
-  if (bin === "node" || bin === "python" || bin === "python3" || bin === "ruby" || bin === "php") {
+  if (
+    bin === "node" ||
+    bin === "python" ||
+    bin === "python3" ||
+    bin === "ruby" ||
+    bin === "php"
+  ) {
     const heredoc = words.slice(1).find((token) => token.startsWith("<<"));
     if (heredoc) {
       return `run ${bin} inline script (heredoc)`;
@@ -915,8 +979,12 @@ function summarizeKnownExec(words: string[]): string {
 function summarizePipeline(stage: string): string {
   const pipeline = splitTopLevelPipes(stage);
   if (pipeline.length > 1) {
-    const first = summarizeKnownExec(trimLeadingEnv(splitShellWords(pipeline[0])));
-    const last = summarizeKnownExec(trimLeadingEnv(splitShellWords(pipeline[pipeline.length - 1])));
+    const first = summarizeKnownExec(
+      trimLeadingEnv(splitShellWords(pipeline[0])),
+    );
+    const last = summarizeKnownExec(
+      trimLeadingEnv(splitShellWords(pipeline[pipeline.length - 1])),
+    );
     const extra = pipeline.length > 2 ? ` (+${pipeline.length - 2} steps)` : "";
     return `${first} -> ${last}${extra}`;
   }
@@ -1028,7 +1096,8 @@ export function resolveExecDetail(args: unknown): string | undefined {
     return undefined;
   }
 
-  const raw = typeof record.command === "string" ? record.command.trim() : undefined;
+  const raw =
+    typeof record.command === "string" ? record.command.trim() : undefined;
   if (!raw) {
     return undefined;
   }
@@ -1102,7 +1171,10 @@ export function resolveDetailFromKeys(
     if (!display) {
       continue;
     }
-    entries.push({ label: opts.formatKey ? opts.formatKey(key) : key, value: display });
+    entries.push({
+      label: opts.formatKey ? opts.formatKey(key) : key,
+      value: display,
+    });
   }
   if (entries.length === 0) {
     return undefined;
@@ -1150,7 +1222,9 @@ export function resolveToolVerbAndDetail(params: {
       : params.toolKey === "web_fetch"
         ? "fetch"
         : params.toolKey.replace(/_/g, " ").replace(/\./g, " ");
-  const verb = normalizeVerb(actionSpec?.label ?? params.action ?? fallbackVerb);
+  const verb = normalizeVerb(
+    actionSpec?.label ?? params.action ?? fallbackVerb,
+  );
 
   let detail: string | undefined;
   if (params.toolKey === "exec") {
@@ -1161,7 +1235,9 @@ export function resolveToolVerbAndDetail(params: {
   }
   if (
     !detail &&
-    (params.toolKey === "write" || params.toolKey === "edit" || params.toolKey === "attach")
+    (params.toolKey === "write" ||
+      params.toolKey === "edit" ||
+      params.toolKey === "attach")
   ) {
     detail = resolveWriteDetail(params.toolKey, params.args);
   }
@@ -1173,7 +1249,10 @@ export function resolveToolVerbAndDetail(params: {
   }
 
   const detailKeys =
-    actionSpec?.detailKeys ?? params.spec?.detailKeys ?? params.fallbackDetailKeys ?? [];
+    actionSpec?.detailKeys ??
+    params.spec?.detailKeys ??
+    params.fallbackDetailKeys ??
+    [];
   if (!detail && detailKeys.length > 0) {
     detail = resolveDetailFromKeys(params.args, detailKeys, {
       mode: params.detailMode,

@@ -4,10 +4,19 @@ import { listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { listChannelPlugins } from "../channels/plugins/index.js";
 import type { ChannelId } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { readJsonBodyWithLimit, requestBodyErrorToText } from "../infra/http-body.js";
-import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
+import {
+  readJsonBodyWithLimit,
+  requestBodyErrorToText,
+} from "../infra/http-body.js";
+import {
+  normalizeAgentId,
+  parseAgentSessionKey,
+} from "../routing/session-key.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
-import { type HookMappingResolved, resolveHookMappings } from "./hooks-mapping.js";
+import {
+  type HookMappingResolved,
+  resolveHookMappings,
+} from "./hooks-mapping.js";
 
 const DEFAULT_HOOKS_PATH = "/hooks";
 const DEFAULT_HOOKS_MAX_BODY_BYTES = 256 * 1024;
@@ -33,7 +42,9 @@ export type HookSessionPolicyResolved = {
   allowedSessionKeyPrefixes?: string[];
 };
 
-export function resolveHooksConfig(cfg: OpenClawConfig): HooksConfigResolved | null {
+export function resolveHooksConfig(
+  cfg: OpenClawConfig,
+): HooksConfigResolved | null {
   if (cfg.hooks?.enabled !== true) {
     return null;
   }
@@ -43,7 +54,8 @@ export function resolveHooksConfig(cfg: OpenClawConfig): HooksConfigResolved | n
   }
   const rawPath = cfg.hooks?.path?.trim() || DEFAULT_HOOKS_PATH;
   const withSlash = rawPath.startsWith("/") ? rawPath : `/${rawPath}`;
-  const trimmed = withSlash.length > 1 ? withSlash.replace(/\/+$/, "") : withSlash;
+  const trimmed =
+    withSlash.length > 1 ? withSlash.replace(/\/+$/, "") : withSlash;
   if (trimmed === "/") {
     throw new Error("hooks.path may not be '/'");
   }
@@ -64,7 +76,9 @@ export function resolveHooksConfig(cfg: OpenClawConfig): HooksConfigResolved | n
     allowedSessionKeyPrefixes &&
     !isSessionKeyAllowedByPrefix(defaultSessionKey, allowedSessionKeyPrefixes)
   ) {
-    throw new Error("hooks.defaultSessionKey must match hooks.allowedSessionKeyPrefixes");
+    throw new Error(
+      "hooks.defaultSessionKey must match hooks.allowedSessionKeyPrefixes",
+    );
   }
   if (
     !defaultSessionKey &&
@@ -93,13 +107,18 @@ export function resolveHooksConfig(cfg: OpenClawConfig): HooksConfigResolved | n
   };
 }
 
-function resolveKnownAgentIds(cfg: OpenClawConfig, defaultAgentId: string): Set<string> {
+function resolveKnownAgentIds(
+  cfg: OpenClawConfig,
+  defaultAgentId: string,
+): Set<string> {
   const known = new Set(listAgentIds(cfg));
   known.add(defaultAgentId);
   return known;
 }
 
-function resolveAllowedAgentIds(raw: string[] | undefined): Set<string> | undefined {
+function resolveAllowedAgentIds(
+  raw: string[] | undefined,
+): Set<string> | undefined {
   if (!Array.isArray(raw)) {
     return undefined;
   }
@@ -132,7 +151,9 @@ function normalizeSessionKeyPrefix(raw: string): string | undefined {
   return value ? value : undefined;
 }
 
-function resolveAllowedSessionKeyPrefixes(raw: string[] | undefined): string[] | undefined {
+function resolveAllowedSessionKeyPrefixes(
+  raw: string[] | undefined,
+): string[] | undefined {
   if (!Array.isArray(raw)) {
     return undefined;
   }
@@ -147,7 +168,10 @@ function resolveAllowedSessionKeyPrefixes(raw: string[] | undefined): string[] |
   return set.size > 0 ? Array.from(set) : undefined;
 }
 
-function isSessionKeyAllowedByPrefix(sessionKey: string, prefixes: string[]): boolean {
+function isSessionKeyAllowedByPrefix(
+  sessionKey: string,
+  prefixes: string[],
+): boolean {
   const normalized = sessionKey.trim().toLowerCase();
   if (!normalized) {
     return false;
@@ -157,7 +181,9 @@ function isSessionKeyAllowedByPrefix(sessionKey: string, prefixes: string[]): bo
 
 export function extractHookToken(req: IncomingMessage): string | undefined {
   const auth =
-    typeof req.headers.authorization === "string" ? req.headers.authorization.trim() : "";
+    typeof req.headers.authorization === "string"
+      ? req.headers.authorization.trim()
+      : "";
   if (auth.toLowerCase().startsWith("bearer ")) {
     const token = auth.slice(7).trim();
     if (token) {
@@ -178,7 +204,10 @@ export async function readJsonBody(
   req: IncomingMessage,
   maxBytes: number,
 ): Promise<{ ok: true; value: unknown } | { ok: false; error: string }> {
-  const result = await readJsonBodyWithLimit(req, { maxBytes, emptyObjectOnEmpty: true });
+  const result = await readJsonBodyWithLimit(req, {
+    maxBytes,
+    emptyObjectOnEmpty: true,
+  });
   if (result.ok) {
     return result;
   }
@@ -238,12 +267,16 @@ export type HookAgentDispatchPayload = Omit<HookAgentPayload, "sessionKey"> & {
   allowUnsafeExternalContent?: boolean;
 };
 
-const listHookChannelValues = () => ["last", ...listChannelPlugins().map((plugin) => plugin.id)];
+const listHookChannelValues = () => [
+  "last",
+  ...listChannelPlugins().map((plugin) => plugin.id),
+];
 
 export type HookMessageChannel = ChannelId | "last";
 
 const getHookChannelSet = () => new Set<string>(listHookChannelValues());
-export const getHookChannelError = () => `channel must be ${listHookChannelValues().join("|")}`;
+export const getHookChannelError = () =>
+  `channel must be ${listHookChannelValues().join("|")}`;
 
 export function resolveHookChannel(raw: unknown): HookMessageChannel | null {
   if (raw === undefined) {
@@ -295,7 +328,8 @@ export function isHookAgentAllowed(
   return resolved ? allowed.has(resolved) : false;
 }
 
-export const getHookAgentPolicyError = () => "agentId is not allowed by hooks.allowedAgentIds";
+export const getHookAgentPolicyError = () =>
+  "agentId is not allowed by hooks.allowedAgentIds";
 export const getHookSessionKeyRequestPolicyError = () =>
   "sessionKey is disabled for external /hooks/agent payloads; set hooks.allowRequestSessionKey=true to enable";
 export const getHookSessionKeyPrefixError = (prefixes: string[]) =>
@@ -309,12 +343,22 @@ export function resolveHookSessionKey(params: {
 }): { ok: true; value: string } | { ok: false; error: string } {
   const requested = resolveSessionKey(params.sessionKey);
   if (requested) {
-    if (params.source === "request" && !params.hooksConfig.sessionPolicy.allowRequestSessionKey) {
+    if (
+      params.source === "request" &&
+      !params.hooksConfig.sessionPolicy.allowRequestSessionKey
+    ) {
       return { ok: false, error: getHookSessionKeyRequestPolicyError() };
     }
-    const allowedPrefixes = params.hooksConfig.sessionPolicy.allowedSessionKeyPrefixes;
-    if (allowedPrefixes && !isSessionKeyAllowedByPrefix(requested, allowedPrefixes)) {
-      return { ok: false, error: getHookSessionKeyPrefixError(allowedPrefixes) };
+    const allowedPrefixes =
+      params.hooksConfig.sessionPolicy.allowedSessionKeyPrefixes;
+    if (
+      allowedPrefixes &&
+      !isSessionKeyAllowedByPrefix(requested, allowedPrefixes)
+    ) {
+      return {
+        ok: false,
+        error: getHookSessionKeyPrefixError(allowedPrefixes),
+      };
     }
     return { ok: true, value: requested };
   }
@@ -325,8 +369,12 @@ export function resolveHookSessionKey(params: {
   }
 
   const generated = `hook:${(params.idFactory ?? randomUUID)()}`;
-  const allowedPrefixes = params.hooksConfig.sessionPolicy.allowedSessionKeyPrefixes;
-  if (allowedPrefixes && !isSessionKeyAllowedByPrefix(generated, allowedPrefixes)) {
+  const allowedPrefixes =
+    params.hooksConfig.sessionPolicy.allowedSessionKeyPrefixes;
+  if (
+    allowedPrefixes &&
+    !isSessionKeyAllowedByPrefix(generated, allowedPrefixes)
+  ) {
     return { ok: false, error: getHookSessionKeyPrefixError(allowedPrefixes) };
   }
   return { ok: true, value: generated };
@@ -357,37 +405,52 @@ export function normalizeAgentPayload(payload: Record<string, unknown>):
       value: HookAgentPayload;
     }
   | { ok: false; error: string } {
-  const message = typeof payload.message === "string" ? payload.message.trim() : "";
+  const message =
+    typeof payload.message === "string" ? payload.message.trim() : "";
   if (!message) {
     return { ok: false, error: "message required" };
   }
   const nameRaw = payload.name;
-  const name = typeof nameRaw === "string" && nameRaw.trim() ? nameRaw.trim() : "Hook";
+  const name =
+    typeof nameRaw === "string" && nameRaw.trim() ? nameRaw.trim() : "Hook";
   const agentIdRaw = payload.agentId;
   const agentId =
-    typeof agentIdRaw === "string" && agentIdRaw.trim() ? agentIdRaw.trim() : undefined;
-  const wakeMode = payload.wakeMode === "next-heartbeat" ? "next-heartbeat" : "now";
+    typeof agentIdRaw === "string" && agentIdRaw.trim()
+      ? agentIdRaw.trim()
+      : undefined;
+  const wakeMode =
+    payload.wakeMode === "next-heartbeat" ? "next-heartbeat" : "now";
   const sessionKeyRaw = payload.sessionKey;
   const sessionKey =
-    typeof sessionKeyRaw === "string" && sessionKeyRaw.trim() ? sessionKeyRaw.trim() : undefined;
+    typeof sessionKeyRaw === "string" && sessionKeyRaw.trim()
+      ? sessionKeyRaw.trim()
+      : undefined;
   const channel = resolveHookChannel(payload.channel);
   if (!channel) {
     return { ok: false, error: getHookChannelError() };
   }
   const toRaw = payload.to;
-  const to = typeof toRaw === "string" && toRaw.trim() ? toRaw.trim() : undefined;
+  const to =
+    typeof toRaw === "string" && toRaw.trim() ? toRaw.trim() : undefined;
   const modelRaw = payload.model;
-  const model = typeof modelRaw === "string" && modelRaw.trim() ? modelRaw.trim() : undefined;
+  const model =
+    typeof modelRaw === "string" && modelRaw.trim()
+      ? modelRaw.trim()
+      : undefined;
   if (modelRaw !== undefined && !model) {
     return { ok: false, error: "model required" };
   }
   const deliver = resolveHookDeliver(payload.deliver);
   const thinkingRaw = payload.thinking;
   const thinking =
-    typeof thinkingRaw === "string" && thinkingRaw.trim() ? thinkingRaw.trim() : undefined;
+    typeof thinkingRaw === "string" && thinkingRaw.trim()
+      ? thinkingRaw.trim()
+      : undefined;
   const timeoutRaw = payload.timeoutSeconds;
   const timeoutSeconds =
-    typeof timeoutRaw === "number" && Number.isFinite(timeoutRaw) && timeoutRaw > 0
+    typeof timeoutRaw === "number" &&
+    Number.isFinite(timeoutRaw) &&
+    timeoutRaw > 0
       ? Math.floor(timeoutRaw)
       : undefined;
   return {

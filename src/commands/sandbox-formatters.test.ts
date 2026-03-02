@@ -9,7 +9,8 @@ import {
 } from "./sandbox-formatters.js";
 
 /** Helper matching old formatAge behavior: spaced compound duration */
-const formatAge = (ms: number) => formatDurationCompact(ms, { spaced: true }) ?? "0s";
+const formatAge = (ms: number) =>
+  formatDurationCompact(ms, { spaced: true }) ?? "0s";
 
 describe("sandbox-formatters", () => {
   describe("formatStatus", () => {

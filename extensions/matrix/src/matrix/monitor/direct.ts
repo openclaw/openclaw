@@ -13,7 +13,10 @@ type DirectRoomTrackerOptions = {
 
 const DM_CACHE_TTL_MS = 30_000;
 
-export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTrackerOptions = {}) {
+export function createDirectRoomTracker(
+  client: MatrixClient,
+  opts: DirectRoomTrackerOptions = {},
+) {
   const log = opts.log ?? (() => {});
   const includeMemberCountInLogs = opts.includeMemberCountInLogs === true;
   let lastDmUpdateMs = 0;
@@ -67,13 +70,20 @@ export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTr
     }
   };
 
-  const hasDirectFlag = async (roomId: string, userId?: string): Promise<boolean> => {
+  const hasDirectFlag = async (
+    roomId: string,
+    userId?: string,
+  ): Promise<boolean> => {
     const target = userId?.trim();
     if (!target) {
       return false;
     }
     try {
-      const state = await client.getRoomStateEvent(roomId, "m.room.member", target);
+      const state = await client.getRoomStateEvent(
+        roomId,
+        "m.room.member",
+        target,
+      );
       return state?.is_direct === true;
     } catch {
       return false;
@@ -94,7 +104,8 @@ export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTr
       // Check m.room.member state for is_direct flag
       const selfUserId = params.selfUserId ?? (await ensureSelfUserId());
       const directViaState =
-        (await hasDirectFlag(roomId, senderId)) || (await hasDirectFlag(roomId, selfUserId ?? ""));
+        (await hasDirectFlag(roomId, senderId)) ||
+        (await hasDirectFlag(roomId, selfUserId ?? ""));
       if (directViaState) {
         log(`matrix: dm detected via member state room=${roomId}`);
         return true;
@@ -110,7 +121,9 @@ export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTr
         return false;
       }
       const memberCount = await resolveMemberCount(roomId);
-      log(`matrix: dm check room=${roomId} result=group members=${memberCount ?? "unknown"}`);
+      log(
+        `matrix: dm check room=${roomId} result=group members=${memberCount ?? "unknown"}`,
+      );
       return false;
     },
   };

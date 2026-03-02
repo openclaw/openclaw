@@ -2,7 +2,10 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import type { Command } from "commander";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import {
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig, writeConfigFile } from "../config/io.js";
 import {
@@ -51,7 +54,10 @@ export type HooksUpdateOptions = {
   dryRun?: boolean;
 };
 
-function mergeHookEntries(pluginEntries: HookEntry[], workspaceEntries: HookEntry[]): HookEntry[] {
+function mergeHookEntries(
+  pluginEntries: HookEntry[],
+  workspaceEntries: HookEntry[],
+): HookEntry[] {
   const merged = new Map<string, HookEntry>();
   for (const entry of pluginEntries) {
     merged.set(entry.hook.name, entry);
@@ -63,7 +69,10 @@ function mergeHookEntries(pluginEntries: HookEntry[], workspaceEntries: HookEntr
 }
 
 function buildHooksReport(config: OpenClawConfig): HookStatusReport {
-  const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
+  const workspaceDir = resolveAgentWorkspaceDir(
+    config,
+    resolveDefaultAgentId(config),
+  );
   const workspaceEntries = loadWorkspaceHookEntries(workspaceDir, { config });
   const pluginReport = buildPluginStatusReport({ config, workspaceDir });
   const pluginEntries = pluginReport.hooks.map((hook) => hook.entry);
@@ -86,7 +95,9 @@ function resolveHookForToggle(
     );
   }
   if (opts?.requireEligible && !hook.eligible) {
-    throw new Error(`Hook "${hookName}" is not eligible (missing requirements)`);
+    throw new Error(
+      `Hook "${hookName}" is not eligible (missing requirements)`,
+    );
   }
   return hook;
 }
@@ -98,7 +109,10 @@ function buildConfigWithHookEnabled(params: {
   ensureHooksEnabled?: boolean;
 }): OpenClawConfig {
   const entries = { ...params.config.hooks?.internal?.entries };
-  entries[params.hookName] = { ...entries[params.hookName], enabled: params.enabled };
+  entries[params.hookName] = {
+    ...entries[params.hookName],
+    enabled: params.enabled,
+  };
 
   const internal = {
     ...params.config.hooks?.internal,
@@ -164,7 +178,9 @@ function exitHooksCliWithError(err: unknown): never {
   process.exit(1);
 }
 
-async function runHooksCliAction(action: () => Promise<void> | void): Promise<void> {
+async function runHooksCliAction(
+  action: () => Promise<void> | void,
+): Promise<void> {
   try {
     await action();
   } catch (err) {
@@ -202,7 +218,9 @@ function logIntegrityDriftWarning(
   );
 }
 
-async function readInstalledPackageVersion(dir: string): Promise<string | undefined> {
+async function readInstalledPackageVersion(
+  dir: string,
+): Promise<string | undefined> {
   try {
     const raw = await fsp.readFile(path.join(dir, "package.json"), "utf-8");
     const parsed = JSON.parse(raw) as { version?: unknown };
@@ -214,8 +232,14 @@ async function readInstalledPackageVersion(dir: string): Promise<string | undefi
 
 type HookInternalEntryLike = Record<string, unknown> & { enabled?: boolean };
 
-function enableInternalHookEntries(config: OpenClawConfig, hookNames: string[]): OpenClawConfig {
-  const entries = { ...config.hooks?.internal?.entries } as Record<string, HookInternalEntryLike>;
+function enableInternalHookEntries(
+  config: OpenClawConfig,
+  hookNames: string[],
+): OpenClawConfig {
+  const entries = { ...config.hooks?.internal?.entries } as Record<
+    string,
+    HookInternalEntryLike
+  >;
 
   for (const hookName of hookNames) {
     entries[hookName] = {
@@ -240,8 +264,13 @@ function enableInternalHookEntries(config: OpenClawConfig, hookNames: string[]):
 /**
  * Format the hooks list output
  */
-export function formatHooksList(report: HookStatusReport, opts: HooksListOptions): string {
-  const hooks = opts.eligible ? report.hooks.filter((h) => h.eligible) : report.hooks;
+export function formatHooksList(
+  report: HookStatusReport,
+  opts: HooksListOptions,
+): string {
+  const hooks = opts.eligible
+    ? report.hooks.filter((h) => h.eligible)
+    : report.hooks;
 
   if (opts.json) {
     const jsonReport = {
@@ -291,7 +320,12 @@ export function formatHooksList(report: HookStatusReport, opts: HooksListOptions
     { key: "Source", header: "Source", minWidth: 12, flex: true },
   ];
   if (opts.verbose) {
-    columns.push({ key: "Missing", header: "Missing", minWidth: 18, flex: true });
+    columns.push({
+      key: "Missing",
+      header: "Missing",
+      minWidth: 18,
+      flex: true,
+    });
   }
 
   const lines: string[] = [];
@@ -316,7 +350,9 @@ export function formatHookInfo(
   hookName: string,
   opts: HookInfoOptions,
 ): string {
-  const hook = report.hooks.find((h) => h.name === hookName || h.hookKey === hookName);
+  const hook = report.hooks.find(
+    (h) => h.name === hookName || h.hookKey === hookName,
+  );
 
   if (!hook) {
     if (opts.json) {
@@ -345,12 +381,16 @@ export function formatHookInfo(
   // Details
   lines.push(theme.heading("Details:"));
   if (hook.managedByPlugin) {
-    lines.push(`${theme.muted("  Source:")} ${hook.source} (${hook.pluginId ?? "unknown"})`);
+    lines.push(
+      `${theme.muted("  Source:")} ${hook.source} (${hook.pluginId ?? "unknown"})`,
+    );
   } else {
     lines.push(`${theme.muted("  Source:")} ${hook.source}`);
   }
   lines.push(`${theme.muted("  Path:")} ${shortenHomePath(hook.filePath)}`);
-  lines.push(`${theme.muted("  Handler:")} ${shortenHomePath(hook.handlerPath)}`);
+  lines.push(
+    `${theme.muted("  Handler:")} ${shortenHomePath(hook.handlerPath)}`,
+  );
   if (hook.homepage) {
     lines.push(`${theme.muted("  Homepage:")} ${hook.homepage}`);
   }
@@ -358,7 +398,11 @@ export function formatHookInfo(
     lines.push(`${theme.muted("  Events:")} ${hook.events.join(", ")}`);
   }
   if (hook.managedByPlugin) {
-    lines.push(theme.muted("  Managed by plugin; enable/disable via hooks CLI not available."));
+    lines.push(
+      theme.muted(
+        "  Managed by plugin; enable/disable via hooks CLI not available.",
+      ),
+    );
   }
 
   // Requirements
@@ -383,7 +427,9 @@ export function formatHookInfo(
       const anyBinsStatus =
         hook.missing.anyBins.length > 0
           ? theme.error(`✗ (any of: ${hook.requirements.anyBins.join(", ")})`)
-          : theme.success(`✓ (any of: ${hook.requirements.anyBins.join(", ")})`);
+          : theme.success(
+              `✓ (any of: ${hook.requirements.anyBins.join(", ")})`,
+            );
       lines.push(`${theme.muted("  Any binary:")} ${anyBinsStatus}`);
     }
     if (hook.requirements.env.length > 0) {
@@ -395,7 +441,9 @@ export function formatHookInfo(
     }
     if (hook.requirements.config.length > 0) {
       const configStatus = hook.configChecks.map((check) => {
-        return check.satisfied ? theme.success(`✓ ${check.path}`) : theme.error(`✗ ${check.path}`);
+        return check.satisfied
+          ? theme.success(`✓ ${check.path}`)
+          : theme.error(`✗ ${check.path}`);
       });
       lines.push(`${theme.muted("  Config:")} ${configStatus.join(", ")}`);
     }
@@ -414,7 +462,10 @@ export function formatHookInfo(
 /**
  * Format check output
  */
-export function formatHooksCheck(report: HookStatusReport, opts: HooksCheckOptions): string {
+export function formatHooksCheck(
+  report: HookStatusReport,
+  opts: HooksCheckOptions,
+): string {
   if (opts.json) {
     const eligible = report.hooks.filter((h) => h.eligible);
     const notEligible = report.hooks.filter((h) => !h.eligible);
@@ -469,7 +520,9 @@ export function formatHooksCheck(report: HookStatusReport, opts: HooksCheckOptio
       if (hook.missing.os.length > 0) {
         reasons.push(`os: ${hook.missing.os.join(", ")}`);
       }
-      lines.push(`  ${hook.emoji ?? "🔗"} ${hook.name} - ${reasons.join("; ")}`);
+      lines.push(
+        `  ${hook.emoji ?? "🔗"} ${hook.name} - ${reasons.join("; ")}`,
+      );
     }
   }
 
@@ -478,7 +531,9 @@ export function formatHooksCheck(report: HookStatusReport, opts: HooksCheckOptio
 
 export async function enableHook(hookName: string): Promise<void> {
   const config = loadConfig();
-  const hook = resolveHookForToggle(buildHooksReport(config), hookName, { requireEligible: true });
+  const hook = resolveHookForToggle(buildHooksReport(config), hookName, {
+    requireEligible: true,
+  });
   const nextConfig = buildConfigWithHookEnabled({
     config,
     hookName,
@@ -495,7 +550,11 @@ export async function enableHook(hookName: string): Promise<void> {
 export async function disableHook(hookName: string): Promise<void> {
   const config = loadConfig();
   const hook = resolveHookForToggle(buildHooksReport(config), hookName);
-  const nextConfig = buildConfigWithHookEnabled({ config, hookName, enabled: false });
+  const nextConfig = buildConfigWithHookEnabled({
+    config,
+    hookName,
+    enabled: false,
+  });
 
   await writeConfigFile(nextConfig);
   defaultRuntime.log(
@@ -518,7 +577,11 @@ export function registerHooksCli(program: Command): void {
     .description("List all hooks")
     .option("--eligible", "Show only eligible hooks", false)
     .option("--json", "Output as JSON", false)
-    .option("-v, --verbose", "Show more details including missing requirements", false)
+    .option(
+      "-v, --verbose",
+      "Show more details including missing requirements",
+      false,
+    )
     .action(async (opts) =>
       runHooksCliAction(async () => {
         const config = loadConfig();
@@ -574,7 +637,11 @@ export function registerHooksCli(program: Command): void {
     .description("Install a hook pack (path, archive, or npm spec)")
     .argument("<path-or-spec>", "Path to a hook pack or npm package spec")
     .option("-l, --link", "Link a local path instead of copying", false)
-    .option("--pin", "Record npm installs as exact resolved <name>@<version>", false)
+    .option(
+      "--pin",
+      "Record npm installs as exact resolved <name>@<version>",
+      false,
+    )
     .action(async (raw: string, opts: { link?: boolean; pin?: boolean }) => {
       const resolved = resolveUserPath(raw);
       const cfg = loadConfig();
@@ -589,7 +656,10 @@ export function registerHooksCli(program: Command): void {
 
           const existing = cfg.hooks?.internal?.load?.extraDirs ?? [];
           const merged = Array.from(new Set([...existing, resolved]));
-          const probe = await installHooksFromPath({ path: resolved, dryRun: true });
+          const probe = await installHooksFromPath({
+            path: resolved,
+            dryRun: true,
+          });
           if (!probe.ok) {
             defaultRuntime.error(probe.error);
             process.exit(1);
@@ -638,7 +708,9 @@ export function registerHooksCli(program: Command): void {
 
         let next = enableInternalHookEntries(cfg, result.hooks);
 
-        const source: "archive" | "path" = resolveArchiveKind(resolved) ? "archive" : "path";
+        const source: "archive" | "path" = resolveArchiveKind(resolved)
+          ? "archive"
+          : "path";
 
         next = recordHookInstall(next, {
           hookId: result.hookPackId,
@@ -729,11 +801,15 @@ export function registerHooksCli(program: Command): void {
           continue;
         }
         if (record.source !== "npm") {
-          defaultRuntime.log(theme.warn(`Skipping "${hookId}" (source: ${record.source}).`));
+          defaultRuntime.log(
+            theme.warn(`Skipping "${hookId}" (source: ${record.source}).`),
+          );
           continue;
         }
         if (!record.spec) {
-          defaultRuntime.log(theme.warn(`Skipping "${hookId}" (missing npm spec).`));
+          defaultRuntime.log(
+            theme.warn(`Skipping "${hookId}" (missing npm spec).`),
+          );
           continue;
         }
 
@@ -741,7 +817,9 @@ export function registerHooksCli(program: Command): void {
         try {
           installPath = record.installPath ?? resolveHookInstallDir(hookId);
         } catch (err) {
-          defaultRuntime.log(theme.error(`Invalid install path for "${hookId}": ${String(err)}`));
+          defaultRuntime.log(
+            theme.error(`Invalid install path for "${hookId}": ${String(err)}`),
+          );
           continue;
         }
         const currentVersion = await readInstalledPackageVersion(installPath);
@@ -760,16 +838,24 @@ export function registerHooksCli(program: Command): void {
             logger: createInstallLogger(),
           });
           if (!probe.ok) {
-            defaultRuntime.log(theme.error(`Failed to check ${hookId}: ${probe.error}`));
+            defaultRuntime.log(
+              theme.error(`Failed to check ${hookId}: ${probe.error}`),
+            );
             continue;
           }
 
           const nextVersion = probe.version ?? "unknown";
           const currentLabel = currentVersion ?? "unknown";
-          if (currentVersion && probe.version && currentVersion === probe.version) {
+          if (
+            currentVersion &&
+            probe.version &&
+            currentVersion === probe.version
+          ) {
             defaultRuntime.log(`${hookId} is up to date (${currentLabel}).`);
           } else {
-            defaultRuntime.log(`Would update ${hookId}: ${currentLabel} → ${nextVersion}.`);
+            defaultRuntime.log(
+              `Would update ${hookId}: ${currentLabel} → ${nextVersion}.`,
+            );
           }
           continue;
         }
@@ -781,16 +867,22 @@ export function registerHooksCli(program: Command): void {
           expectedIntegrity: record.integrity,
           onIntegrityDrift: async (drift) => {
             logIntegrityDriftWarning(hookId, drift);
-            return await promptYesNo(`Continue updating "${hookId}" with this artifact?`);
+            return await promptYesNo(
+              `Continue updating "${hookId}" with this artifact?`,
+            );
           },
           logger: createInstallLogger(),
         });
         if (!result.ok) {
-          defaultRuntime.log(theme.error(`Failed to update ${hookId}: ${result.error}`));
+          defaultRuntime.log(
+            theme.error(`Failed to update ${hookId}: ${result.error}`),
+          );
           continue;
         }
 
-        const nextVersion = result.version ?? (await readInstalledPackageVersion(result.targetDir));
+        const nextVersion =
+          result.version ??
+          (await readInstalledPackageVersion(result.targetDir));
         nextCfg = recordHookInstall(nextCfg, {
           hookId,
           ...buildNpmInstallRecordFields({
@@ -808,7 +900,9 @@ export function registerHooksCli(program: Command): void {
         if (currentVersion && nextVersion && currentVersion === nextVersion) {
           defaultRuntime.log(`${hookId} already at ${currentLabel}.`);
         } else {
-          defaultRuntime.log(`Updated ${hookId}: ${currentLabel} → ${nextLabel}.`);
+          defaultRuntime.log(
+            `Updated ${hookId}: ${currentLabel} → ${nextLabel}.`,
+          );
         }
       }
 

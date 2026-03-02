@@ -12,7 +12,10 @@ export async function authorizeSlackDirectMessage(params: {
   resolveSenderName: (senderId: string) => Promise<{ name?: string }>;
   sendPairingReply: (text: string) => Promise<void>;
   onDisabled: () => Promise<void> | void;
-  onUnauthorized: (params: { allowMatchMeta: string; senderName?: string }) => Promise<void> | void;
+  onUnauthorized: (params: {
+    allowMatchMeta: string;
+    senderName?: string;
+  }) => Promise<void> | void;
   log: (message: string) => void;
 }): Promise<boolean> {
   if (!params.ctx.dmEnabled || params.ctx.dmPolicy === "disabled") {
@@ -56,7 +59,9 @@ export async function authorizeSlackDirectMessage(params: {
         );
       },
       onReplyError: (err) => {
-        params.log(`slack pairing reply failed for ${params.senderId}: ${String(err)}`);
+        params.log(
+          `slack pairing reply failed for ${params.senderId}: ${String(err)}`,
+        );
       },
     });
     return false;

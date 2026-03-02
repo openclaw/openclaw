@@ -24,15 +24,23 @@ describe("isPidAlive", () => {
 
     // Mock readFileSync to return zombie state for /proc/<pid>/status
     const originalReadFileSync = fsSync.readFileSync;
-    vi.spyOn(fsSync, "readFileSync").mockImplementation((filePath, encoding) => {
-      if (filePath === `/proc/${zombiePid}/status`) {
-        return `Name:\tnode\nUmask:\t0022\nState:\tZ (zombie)\nTgid:\t${zombiePid}\nPid:\t${zombiePid}\n`;
-      }
-      return originalReadFileSync(filePath as never, encoding as never) as never;
-    });
+    vi.spyOn(fsSync, "readFileSync").mockImplementation(
+      (filePath, encoding) => {
+        if (filePath === `/proc/${zombiePid}/status`) {
+          return `Name:\tnode\nUmask:\t0022\nState:\tZ (zombie)\nTgid:\t${zombiePid}\nPid:\t${zombiePid}\n`;
+        }
+        return originalReadFileSync(
+          filePath as never,
+          encoding as never,
+        ) as never;
+      },
+    );
 
     // Override platform to linux so the zombie check runs
-    const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+    const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(
+      process,
+      "platform",
+    );
     if (!originalPlatformDescriptor) {
       throw new Error("missing process.platform descriptor");
     }
@@ -55,7 +63,10 @@ describe("isPidAlive", () => {
 
 describe("getProcessStartTime", () => {
   it("returns a number on Linux for the current process", async () => {
-    const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+    const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(
+      process,
+      "platform",
+    );
     if (!originalPlatformDescriptor) {
       throw new Error("missing process.platform descriptor");
     }
@@ -63,12 +74,17 @@ describe("getProcessStartTime", () => {
     const originalReadFileSync = fsSync.readFileSync;
     // Simulate a realistic /proc/<pid>/stat line
     const fakeStat = `${process.pid} (node) S 1 ${process.pid} ${process.pid} 0 -1 4194304 12345 0 0 0 100 50 0 0 20 0 8 0 98765 123456789 5000 18446744073709551615 0 0 0 0 0 0 0 0 0 0 0 0 17 0 0 0 0 0 0`;
-    vi.spyOn(fsSync, "readFileSync").mockImplementation((filePath, encoding) => {
-      if (filePath === `/proc/${process.pid}/stat`) {
-        return fakeStat;
-      }
-      return originalReadFileSync(filePath as never, encoding as never) as never;
-    });
+    vi.spyOn(fsSync, "readFileSync").mockImplementation(
+      (filePath, encoding) => {
+        if (filePath === `/proc/${process.pid}/stat`) {
+          return fakeStat;
+        }
+        return originalReadFileSync(
+          filePath as never,
+          encoding as never,
+        ) as never;
+      },
+    );
 
     Object.defineProperty(process, "platform", {
       ...originalPlatformDescriptor,
@@ -104,18 +120,26 @@ describe("getProcessStartTime", () => {
   });
 
   it("returns null for malformed /proc stat content", async () => {
-    const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+    const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(
+      process,
+      "platform",
+    );
     if (!originalPlatformDescriptor) {
       throw new Error("missing process.platform descriptor");
     }
 
     const originalReadFileSync = fsSync.readFileSync;
-    vi.spyOn(fsSync, "readFileSync").mockImplementation((filePath, encoding) => {
-      if (filePath === "/proc/42/stat") {
-        return "42 node S malformed";
-      }
-      return originalReadFileSync(filePath as never, encoding as never) as never;
-    });
+    vi.spyOn(fsSync, "readFileSync").mockImplementation(
+      (filePath, encoding) => {
+        if (filePath === "/proc/42/stat") {
+          return "42 node S malformed";
+        }
+        return originalReadFileSync(
+          filePath as never,
+          encoding as never,
+        ) as never;
+      },
+    );
 
     Object.defineProperty(process, "platform", {
       ...originalPlatformDescriptor,
@@ -133,7 +157,10 @@ describe("getProcessStartTime", () => {
   });
 
   it("handles comm fields containing spaces and parentheses", async () => {
-    const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+    const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(
+      process,
+      "platform",
+    );
     if (!originalPlatformDescriptor) {
       throw new Error("missing process.platform descriptor");
     }
@@ -141,12 +168,17 @@ describe("getProcessStartTime", () => {
     const originalReadFileSync = fsSync.readFileSync;
     // comm field with spaces and nested parens: "(My App (v2))"
     const fakeStat = `42 (My App (v2)) S 1 42 42 0 -1 4194304 0 0 0 0 0 0 0 0 20 0 1 0 55555 0 0 0 0 0 0 0 0 0 0 0 0 0 17 0 0 0 0 0 0`;
-    vi.spyOn(fsSync, "readFileSync").mockImplementation((filePath, encoding) => {
-      if (filePath === "/proc/42/stat") {
-        return fakeStat;
-      }
-      return originalReadFileSync(filePath as never, encoding as never) as never;
-    });
+    vi.spyOn(fsSync, "readFileSync").mockImplementation(
+      (filePath, encoding) => {
+        if (filePath === "/proc/42/stat") {
+          return fakeStat;
+        }
+        return originalReadFileSync(
+          filePath as never,
+          encoding as never,
+        ) as never;
+      },
+    );
 
     Object.defineProperty(process, "platform", {
       ...originalPlatformDescriptor,

@@ -11,14 +11,22 @@ import {
 import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
 import type { StoredConversationReference } from "./conversation-store.js";
 import { classifyMSTeamsSendError } from "./errors.js";
-import { prepareFileConsentActivity, requiresFileConsent } from "./file-consent-helpers.js";
+import {
+  prepareFileConsentActivity,
+  requiresFileConsent,
+} from "./file-consent-helpers.js";
 import { buildTeamsFileInfoCard } from "./graph-chat.js";
 import {
   getDriveItemProperties,
   uploadAndShareOneDrive,
   uploadAndShareSharePoint,
 } from "./graph-upload.js";
-import { extractFilename, extractMessageId, getMimeType, isLocalPath } from "./media-helpers.js";
+import {
+  extractFilename,
+  extractMessageId,
+  getMimeType,
+  isLocalPath,
+} from "./media-helpers.js";
 import { parseMentions } from "./mentions.js";
 import { getMSTeamsRuntime } from "./runtime.js";
 
@@ -194,8 +202,12 @@ function computeRetryDelayMs(
   return clampMs(exponential, opts.maxDelayMs);
 }
 
-function shouldRetry(classification: ReturnType<typeof classifyMSTeamsSendError>): boolean {
-  return classification.kind === "throttled" || classification.kind === "transient";
+function shouldRetry(
+  classification: ReturnType<typeof classifyMSTeamsSendError>,
+): boolean {
+  return (
+    classification.kind === "throttled" || classification.kind === "transient"
+  );
 }
 
 export function renderReplyPayloadsToMessages(
@@ -215,7 +227,8 @@ export function renderReplyPayloadsToMessages(
     });
 
   for (const payload of replies) {
-    const mediaList = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
+    const mediaList =
+      payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
     const text = getMSTeamsRuntime().channel.text.convertMarkdownTables(
       payload.text ?? "",
       tableMode,
@@ -293,7 +306,8 @@ async function buildActivity(
 
       // Determine conversation type and file type
       // Teams only accepts base64 data URLs for images
-      const conversationType = conversationRef.conversation?.conversationType?.toLowerCase();
+      const conversationType =
+        conversationRef.conversation?.conversationType?.toLowerCase();
       const isPersonal = conversationType === "personal";
       const isImage = media.kind === "image";
 
@@ -358,8 +372,11 @@ async function buildActivity(
 
         // Bot Framework doesn't support "reference" attachment type for sending
         const fileLink = `📎 [${uploaded.name}](${uploaded.shareUrl})`;
-        const existingText = typeof activity.text === "string" ? activity.text : undefined;
-        activity.text = existingText ? `${existingText}\n\n${fileLink}` : fileLink;
+        const existingText =
+          typeof activity.text === "string" ? activity.text : undefined;
+        activity.text = existingText
+          ? `${existingText}\n\n${fileLink}`
+          : fileLink;
         return activity;
       }
 
@@ -419,12 +436,17 @@ export async function sendMSTeamsMessages(params: {
         return await sendOnce();
       } catch (err) {
         const classification = classifyMSTeamsSendError(err);
-        const canRetry = attempt < retryOptions.maxAttempts && shouldRetry(classification);
+        const canRetry =
+          attempt < retryOptions.maxAttempts && shouldRetry(classification);
         if (!canRetry) {
           throw err;
         }
 
-        const delayMs = computeRetryDelayMs(attempt, classification, retryOptions);
+        const delayMs = computeRetryDelayMs(
+          attempt,
+          classification,
+          retryOptions,
+        );
         const nextAttempt = attempt + 1;
         params.onRetry?.({
           messageIndex: meta.messageIndex,
@@ -477,8 +499,12 @@ export async function sendMSTeamsMessages(params: {
   };
 
   const messageIds: string[] = [];
-  await params.adapter.continueConversation(params.appId, proactiveRef, async (ctx) => {
-    messageIds.push(...(await sendMessagesInContext(ctx)));
-  });
+  await params.adapter.continueConversation(
+    params.appId,
+    proactiveRef,
+    async (ctx) => {
+      messageIds.push(...(await sendMessagesInContext(ctx)));
+    },
+  );
   return messageIds;
 }

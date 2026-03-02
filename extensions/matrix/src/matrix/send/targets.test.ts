@@ -38,7 +38,9 @@ describe("resolveMatrixRoomId", () => {
     const client = {
       getAccountData: vi.fn().mockRejectedValue(new Error("nope")),
       getJoinedRooms: vi.fn().mockResolvedValue([roomId]),
-      getJoinedRoomMembers: vi.fn().mockResolvedValue(["@bot:example.org", userId]),
+      getJoinedRoomMembers: vi
+        .fn()
+        .mockResolvedValue(["@bot:example.org", userId]),
       setAccountData,
     } as unknown as MatrixClient;
 

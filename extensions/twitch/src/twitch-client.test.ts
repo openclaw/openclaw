@@ -11,7 +11,11 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TwitchClientManager } from "./twitch-client.js";
-import type { ChannelLogSink, TwitchAccountConfig, TwitchChatMessage } from "./types.js";
+import type {
+  ChannelLogSink,
+  TwitchAccountConfig,
+  TwitchChatMessage,
+} from "./types.js";
 
 // Mock @twurple dependencies
 const mockConnect = vi.fn().mockResolvedValue(undefined);
@@ -22,8 +26,9 @@ const mockUnbind = vi.fn();
 
 // Event handler storage for testing
 // oxlint-disable-next-line typescript/no-explicit-any
-const messageHandlers: Array<(channel: string, user: string, message: string, msg: any) => void> =
-  [];
+const messageHandlers: Array<
+  (channel: string, user: string, message: string, msg: any) => void
+> = [];
 
 // Mock functions that track handlers and return unbind objects
 // oxlint-disable-next-line typescript/no-explicit-any
@@ -184,7 +189,10 @@ describe("TwitchClientManager", () => {
 
       await manager.getClient(accountWithPrefix);
 
-      expect(mockAuthProvider.constructor).toHaveBeenCalledWith("test-client-id", "actualtoken123");
+      expect(mockAuthProvider.constructor).toHaveBeenCalledWith(
+        "test-client-id",
+        "actualtoken123",
+      );
     });
 
     it("should use token directly when no oauth: prefix", async () => {
@@ -227,14 +235,18 @@ describe("TwitchClientManager", () => {
         source: "none" as const,
       });
 
-      await expect(manager.getClient(testAccount)).rejects.toThrow("Missing Twitch token");
+      await expect(manager.getClient(testAccount)).rejects.toThrow(
+        "Missing Twitch token",
+      );
     });
 
     it("should set up message handlers on client connection", async () => {
       await manager.getClient(testAccount);
 
       expect(mockOnMessage).toHaveBeenCalled();
-      expect(mockLogger.info).toHaveBeenCalledWith(expect.stringContaining("Set up handlers for"));
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        expect.stringContaining("Set up handlers for"),
+      );
     });
 
     it("should create separate clients for same account with different channels", async () => {
@@ -282,7 +294,9 @@ describe("TwitchClientManager", () => {
       await manager.disconnect(testAccount);
 
       expect(mockQuit).toHaveBeenCalledTimes(1);
-      expect(mockLogger.info).toHaveBeenCalledWith(expect.stringContaining("Disconnected"));
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        expect.stringContaining("Disconnected"),
+      );
     });
 
     it("should clear client and message handler", async () => {
@@ -346,7 +360,11 @@ describe("TwitchClientManager", () => {
     });
 
     it("should send message successfully", async () => {
-      const result = await manager.sendMessage(testAccount, "testchannel", "Hello, world!");
+      const result = await manager.sendMessage(
+        testAccount,
+        "testchannel",
+        "Hello, world!",
+      );
 
       expect(result.ok).toBe(true);
       expect(result.messageId).toBeDefined();
@@ -354,8 +372,16 @@ describe("TwitchClientManager", () => {
     });
 
     it("should generate unique message ID for each message", async () => {
-      const result1 = await manager.sendMessage(testAccount, "testchannel", "First message");
-      const result2 = await manager.sendMessage(testAccount, "testchannel", "Second message");
+      const result1 = await manager.sendMessage(
+        testAccount,
+        "testchannel",
+        "First message",
+      );
+      const result2 = await manager.sendMessage(
+        testAccount,
+        "testchannel",
+        "Second message",
+      );
 
       expect(result1.messageId).not.toBe(result2.messageId);
     });
@@ -375,7 +401,11 @@ describe("TwitchClientManager", () => {
     it("should return error on send failure", async () => {
       mockSay.mockRejectedValueOnce(new Error("Rate limited"));
 
-      const result = await manager.sendMessage(testAccount, "testchannel", "Test message");
+      const result = await manager.sendMessage(
+        testAccount,
+        "testchannel",
+        "Test message",
+      );
 
       expect(result.ok).toBe(false);
       expect(result.error).toBe("Rate limited");
@@ -387,7 +417,11 @@ describe("TwitchClientManager", () => {
     it("should handle unknown error types", async () => {
       mockSay.mockRejectedValueOnce("String error");
 
-      const result = await manager.sendMessage(testAccount, "testchannel", "Test message");
+      const result = await manager.sendMessage(
+        testAccount,
+        "testchannel",
+        "Test message",
+      );
 
       expect(result.ok).toBe(false);
       expect(result.error).toBe("String error");
@@ -401,10 +435,16 @@ describe("TwitchClientManager", () => {
       // Reset connect call count for this specific test
       const connectCallCountBefore = mockConnect.mock.calls.length;
 
-      const result = await manager.sendMessage(testAccount, "testchannel", "Test message");
+      const result = await manager.sendMessage(
+        testAccount,
+        "testchannel",
+        "Test message",
+      );
 
       expect(result.ok).toBe(true);
-      expect(mockConnect.mock.calls.length).toBeGreaterThan(connectCallCountBefore);
+      expect(mockConnect.mock.calls.length).toBeGreaterThan(
+        connectCallCountBefore,
+      );
     });
   });
 

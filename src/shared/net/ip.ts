@@ -29,7 +29,10 @@ const BLOCKED_IPV6_SPECIAL_USE_RANGES = new Set<Ipv6Range>([
   "uniqueLocal",
   "multicast",
 ]);
-const RFC2544_BENCHMARK_PREFIX: [ipaddr.IPv4, number] = [ipaddr.IPv4.parse("198.18.0.0"), 15];
+const RFC2544_BENCHMARK_PREFIX: [ipaddr.IPv4, number] = [
+  ipaddr.IPv4.parse("198.18.0.0"),
+  15,
+];
 export type Ipv4SpecialUseBlockOptions = {
   allowRfc2544BenchmarkRange?: boolean;
 };
@@ -100,7 +103,9 @@ function parseIpv6WithEmbeddedIpv4(raw: string): ipaddr.IPv6 | undefined {
   if (!ipaddr.IPv4.isValidFourPartDecimal(embeddedIpv4)) {
     return undefined;
   }
-  const octets = embeddedIpv4.split(".").map((part) => Number.parseInt(part, 10));
+  const octets = embeddedIpv4
+    .split(".")
+    .map((part) => Number.parseInt(part, 10));
   const high = ((octets[0] << 8) | octets[1]).toString(16);
   const low = ((octets[2] << 8) | octets[3]).toString(16);
   const normalizedIpv6 = `${prefix}${high}:${low}${zoneSuffix}`;
@@ -110,11 +115,15 @@ function parseIpv6WithEmbeddedIpv4(raw: string): ipaddr.IPv6 | undefined {
   return ipaddr.IPv6.parse(normalizedIpv6);
 }
 
-export function isIpv4Address(address: ParsedIpAddress): address is ipaddr.IPv4 {
+export function isIpv4Address(
+  address: ParsedIpAddress,
+): address is ipaddr.IPv4 {
   return address.kind() === "ipv4";
 }
 
-export function isIpv6Address(address: ParsedIpAddress): address is ipaddr.IPv6 {
+export function isIpv6Address(
+  address: ParsedIpAddress,
+): address is ipaddr.IPv6 {
   return address.kind() === "ipv6";
 }
 
@@ -128,7 +137,9 @@ function normalizeIpv4MappedAddress(address: ParsedIpAddress): ParsedIpAddress {
   return address.toIPv4Address();
 }
 
-export function parseCanonicalIpAddress(raw: string | undefined): ParsedIpAddress | undefined {
+export function parseCanonicalIpAddress(
+  raw: string | undefined,
+): ParsedIpAddress | undefined {
   const trimmed = raw?.trim();
   if (!trimmed) {
     return undefined;
@@ -149,7 +160,9 @@ export function parseCanonicalIpAddress(raw: string | undefined): ParsedIpAddres
   return parseIpv6WithEmbeddedIpv4(normalized);
 }
 
-export function parseLooseIpAddress(raw: string | undefined): ParsedIpAddress | undefined {
+export function parseLooseIpAddress(
+  raw: string | undefined,
+): ParsedIpAddress | undefined {
   const trimmed = raw?.trim();
   if (!trimmed) {
     return undefined;
@@ -164,7 +177,9 @@ export function parseLooseIpAddress(raw: string | undefined): ParsedIpAddress | 
   return parseIpv6WithEmbeddedIpv4(normalized);
 }
 
-export function normalizeIpAddress(raw: string | undefined): string | undefined {
+export function normalizeIpAddress(
+  raw: string | undefined,
+): string | undefined {
   const parsed = parseCanonicalIpAddress(raw);
   if (!parsed) {
     return undefined;
@@ -263,7 +278,10 @@ export function isBlockedSpecialUseIpv4Address(
   if (inRfc2544BenchmarkRange && options.allowRfc2544BenchmarkRange === true) {
     return false;
   }
-  return BLOCKED_IPV4_SPECIAL_USE_RANGES.has(address.range()) || inRfc2544BenchmarkRange;
+  return (
+    BLOCKED_IPV4_SPECIAL_USE_RANGES.has(address.range()) ||
+    inRfc2544BenchmarkRange
+  );
 }
 
 function decodeIpv4FromHextets(high: number, low: number): ipaddr.IPv4 {
@@ -276,7 +294,9 @@ function decodeIpv4FromHextets(high: number, low: number): ipaddr.IPv4 {
   return ipaddr.IPv4.parse(octets.join("."));
 }
 
-export function extractEmbeddedIpv4FromIpv6(address: ipaddr.IPv6): ipaddr.IPv4 | undefined {
+export function extractEmbeddedIpv4FromIpv6(
+  address: ipaddr.IPv6,
+): ipaddr.IPv4 | undefined {
   if (address.isIPv4MappedAddress()) {
     return address.toIPv4Address();
   }

@@ -1,4 +1,7 @@
-import type { BrowserActionPathResult, BrowserActionTargetOk } from "./client-actions-types.js";
+import type {
+  BrowserActionPathResult,
+  BrowserActionTargetOk,
+} from "./client-actions-types.js";
 import { buildProfileQuery, withBaseUrl } from "./client-actions-url.js";
 import { fetchBrowserJson } from "./client-fetch.js";
 import type {
@@ -7,7 +10,9 @@ import type {
   BrowserPageError,
 } from "./pw-session.js";
 
-function buildQuerySuffix(params: Array<[string, string | boolean | undefined]>): string {
+function buildQuerySuffix(
+  params: Array<[string, string | boolean | undefined]>,
+): string {
   const query = new URLSearchParams();
   for (const [key, value] of params) {
     if (typeof value === "boolean") {
@@ -43,12 +48,15 @@ export async function browserPdfSave(
   opts: { targetId?: string; profile?: string } = {},
 ): Promise<BrowserActionPathResult> {
   const q = buildProfileQuery(opts.profile);
-  return await fetchBrowserJson<BrowserActionPathResult>(withBaseUrl(baseUrl, `/pdf${q}`), {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ targetId: opts.targetId }),
-    timeoutMs: 20000,
-  });
+  return await fetchBrowserJson<BrowserActionPathResult>(
+    withBaseUrl(baseUrl, `/pdf${q}`),
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ targetId: opts.targetId }),
+      timeoutMs: 20000,
+    },
+  );
 }
 
 export async function browserPageErrors(
@@ -100,17 +108,20 @@ export async function browserTraceStart(
   } = {},
 ): Promise<BrowserActionTargetOk> {
   const q = buildProfileQuery(opts.profile);
-  return await fetchBrowserJson<BrowserActionTargetOk>(withBaseUrl(baseUrl, `/trace/start${q}`), {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      targetId: opts.targetId,
-      screenshots: opts.screenshots,
-      snapshots: opts.snapshots,
-      sources: opts.sources,
-    }),
-    timeoutMs: 20000,
-  });
+  return await fetchBrowserJson<BrowserActionTargetOk>(
+    withBaseUrl(baseUrl, `/trace/start${q}`),
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        targetId: opts.targetId,
+        screenshots: opts.screenshots,
+        snapshots: opts.snapshots,
+        sources: opts.sources,
+      }),
+      timeoutMs: 20000,
+    },
+  );
 }
 
 export async function browserTraceStop(
@@ -118,12 +129,15 @@ export async function browserTraceStop(
   opts: { targetId?: string; path?: string; profile?: string } = {},
 ): Promise<BrowserActionPathResult> {
   const q = buildProfileQuery(opts.profile);
-  return await fetchBrowserJson<BrowserActionPathResult>(withBaseUrl(baseUrl, `/trace/stop${q}`), {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ targetId: opts.targetId, path: opts.path }),
-    timeoutMs: 20000,
-  });
+  return await fetchBrowserJson<BrowserActionPathResult>(
+    withBaseUrl(baseUrl, `/trace/stop${q}`),
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ targetId: opts.targetId, path: opts.path }),
+      timeoutMs: 20000,
+    },
+  );
 }
 
 export async function browserHighlight(
@@ -131,12 +145,15 @@ export async function browserHighlight(
   opts: { ref: string; targetId?: string; profile?: string },
 ): Promise<BrowserActionTargetOk> {
   const q = buildProfileQuery(opts.profile);
-  return await fetchBrowserJson<BrowserActionTargetOk>(withBaseUrl(baseUrl, `/highlight${q}`), {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ targetId: opts.targetId, ref: opts.ref }),
-    timeoutMs: 20000,
-  });
+  return await fetchBrowserJson<BrowserActionTargetOk>(
+    withBaseUrl(baseUrl, `/highlight${q}`),
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ targetId: opts.targetId, ref: opts.ref }),
+      timeoutMs: 20000,
+    },
+  );
 }
 
 export async function browserResponseBody(

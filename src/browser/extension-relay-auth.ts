@@ -7,7 +7,8 @@ const OPENCLAW_RELAY_BROWSER = "OpenClaw/extension-relay";
 
 function resolveGatewayAuthToken(): string | null {
   const envToken =
-    process.env.OPENCLAW_GATEWAY_TOKEN?.trim() || process.env.CLAWDBOT_GATEWAY_TOKEN?.trim();
+    process.env.OPENCLAW_GATEWAY_TOKEN?.trim() ||
+    process.env.CLAWDBOT_GATEWAY_TOKEN?.trim();
   if (envToken) {
     return envToken;
   }
@@ -24,7 +25,9 @@ function resolveGatewayAuthToken(): string | null {
 }
 
 function deriveRelayAuthToken(gatewayToken: string, port: number): string {
-  return createHmac("sha256", gatewayToken).update(`${RELAY_TOKEN_CONTEXT}:${port}`).digest("hex");
+  return createHmac("sha256", gatewayToken)
+    .update(`${RELAY_TOKEN_CONTEXT}:${port}`)
+    .digest("hex");
 }
 
 export function resolveRelayAcceptedTokensForPort(port: number): string[] {
@@ -52,9 +55,15 @@ export async function probeAuthenticatedOpenClawRelay(params: {
   timeoutMs?: number;
 }): Promise<boolean> {
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), params.timeoutMs ?? DEFAULT_RELAY_PROBE_TIMEOUT_MS);
+  const timer = setTimeout(
+    () => ctrl.abort(),
+    params.timeoutMs ?? DEFAULT_RELAY_PROBE_TIMEOUT_MS,
+  );
   try {
-    const versionUrl = new URL("/json/version", `${params.baseUrl}/`).toString();
+    const versionUrl = new URL(
+      "/json/version",
+      `${params.baseUrl}/`,
+    ).toString();
     const res = await fetch(versionUrl, {
       signal: ctrl.signal,
       headers: { [params.relayAuthHeader]: params.relayAuthToken },
@@ -63,7 +72,8 @@ export async function probeAuthenticatedOpenClawRelay(params: {
       return false;
     }
     const body = (await res.json()) as { Browser?: unknown };
-    const browserName = typeof body?.Browser === "string" ? body.Browser.trim() : "";
+    const browserName =
+      typeof body?.Browser === "string" ? body.Browser.trim() : "";
     return browserName === OPENCLAW_RELAY_BROWSER;
   } catch {
     return false;

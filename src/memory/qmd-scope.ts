@@ -7,7 +7,10 @@ type ParsedQmdSessionScope = {
   normalizedKey?: string;
 };
 
-export function isQmdScopeAllowed(scope: ResolvedQmdConfig["scope"], sessionKey?: string): boolean {
+export function isQmdScopeAllowed(
+  scope: ResolvedQmdConfig["scope"],
+  sessionKey?: string,
+): boolean {
   if (!scope) {
     return true;
   }
@@ -54,7 +57,9 @@ export function deriveQmdScopeChannel(key?: string): string | undefined {
   return parseQmdSessionScope(key).channel;
 }
 
-export function deriveQmdScopeChatType(key?: string): "channel" | "group" | "direct" | undefined {
+export function deriveQmdScopeChatType(
+  key?: string,
+): "channel" | "group" | "direct" | undefined {
   return parseQmdSessionScope(key).chatType;
 }
 
@@ -67,7 +72,10 @@ function parseQmdSessionScope(key?: string): ParsedQmdSessionScope {
   let chatType: ParsedQmdSessionScope["chatType"];
   if (
     parts.length >= 2 &&
-    (parts[1] === "group" || parts[1] === "channel" || parts[1] === "direct" || parts[1] === "dm")
+    (parts[1] === "group" ||
+      parts[1] === "channel" ||
+      parts[1] === "direct" ||
+      parts[1] === "dm")
   ) {
     if (parts.includes("group")) {
       chatType = "group";

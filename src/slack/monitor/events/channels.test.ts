@@ -19,11 +19,16 @@ function createChannelContext(params?: {
 }) {
   const harness = createSlackSystemEventTestHarness();
   if (params?.shouldDropMismatchedSlackEvent) {
-    harness.ctx.shouldDropMismatchedSlackEvent = params.shouldDropMismatchedSlackEvent;
+    harness.ctx.shouldDropMismatchedSlackEvent =
+      params.shouldDropMismatchedSlackEvent;
   }
-  registerSlackChannelEvents({ ctx: harness.ctx, trackEvent: params?.trackEvent });
+  registerSlackChannelEvents({
+    ctx: harness.ctx,
+    trackEvent: params?.trackEvent,
+  });
   return {
-    getCreatedHandler: () => harness.getHandler("channel_created") as SlackChannelHandler | null,
+    getCreatedHandler: () =>
+      harness.getHandler("channel_created") as SlackChannelHandler | null,
   };
 }
 

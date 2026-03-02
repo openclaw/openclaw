@@ -500,7 +500,9 @@ Rules:
 {
   models: {
     providers: {
-      openai: { apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" } },
+      openai: {
+        apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+      },
     },
   },
   skills: {

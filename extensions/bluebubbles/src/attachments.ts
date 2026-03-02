@@ -9,7 +9,10 @@ import {
 } from "./probe.js";
 import { resolveRequestUrl } from "./request-url.js";
 import { getBlueBubblesRuntime, warnBlueBubbles } from "./runtime.js";
-import { extractBlueBubblesMessageId, resolveBlueBubblesSendTarget } from "./send-helpers.js";
+import {
+  extractBlueBubblesMessageId,
+  resolveBlueBubblesSendTarget,
+} from "./send-helpers.js";
 import { resolveChatGuidForTarget } from "./send.js";
 import {
   blueBubblesFetchWithTimeout,
@@ -38,7 +41,11 @@ function sanitizeFilename(input: string | undefined, fallback: string): string {
   return name.replace(/[\r\n"\\]/g, "_");
 }
 
-function ensureExtension(filename: string, extension: string, fallbackBase: string): string {
+function ensureExtension(
+  filename: string,
+  extension: string,
+  fallbackBase: string,
+): string {
   const currentExt = path.extname(filename);
   if (currentExt.toLowerCase() === extension) {
     return filename;
@@ -51,10 +58,13 @@ function resolveVoiceInfo(filename: string, contentType?: string) {
   const normalizedType = contentType?.trim().toLowerCase();
   const extension = path.extname(filename).toLowerCase();
   const isMp3 =
-    extension === ".mp3" || (normalizedType ? AUDIO_MIME_MP3.has(normalizedType) : false);
+    extension === ".mp3" ||
+    (normalizedType ? AUDIO_MIME_MP3.has(normalizedType) : false);
   const isCaf =
-    extension === ".caf" || (normalizedType ? AUDIO_MIME_CAF.has(normalizedType) : false);
-  const isAudio = isMp3 || isCaf || Boolean(normalizedType?.startsWith("audio/"));
+    extension === ".caf" ||
+    (normalizedType ? AUDIO_MIME_CAF.has(normalizedType) : false);
+  const isAudio =
+    isMp3 || isCaf || Boolean(normalizedType?.startsWith("audio/"));
   return { isAudio, isMp3, isCaf };
 }
 
@@ -73,12 +83,16 @@ function safeExtractHostname(url: string): string | undefined {
 
 type MediaFetchErrorCode = "max_bytes" | "http_error" | "fetch_failed";
 
-function readMediaFetchErrorCode(error: unknown): MediaFetchErrorCode | undefined {
+function readMediaFetchErrorCode(
+  error: unknown,
+): MediaFetchErrorCode | undefined {
   if (!error || typeof error !== "object") {
     return undefined;
   }
   const code = (error as { code?: unknown }).code;
-  return code === "max_bytes" || code === "http_error" || code === "fetch_failed"
+  return code === "max_bytes" ||
+    code === "http_error" ||
+    code === "fetch_failed"
     ? code
     : undefined;
 }
@@ -97,32 +111,39 @@ export async function downloadBlueBubblesAttachment(
     path: `/api/v1/attachment/${encodeURIComponent(guid)}/download`,
     password,
   });
-  const maxBytes = typeof opts.maxBytes === "number" ? opts.maxBytes : DEFAULT_ATTACHMENT_MAX_BYTES;
+  const maxBytes =
+    typeof opts.maxBytes === "number"
+      ? opts.maxBytes
+      : DEFAULT_ATTACHMENT_MAX_BYTES;
   const trustedHostname = safeExtractHostname(baseUrl);
   try {
-    const fetched = await getBlueBubblesRuntime().channel.media.fetchRemoteMedia({
-      url,
-      filePathHint: attachment.transferName ?? attachment.guid ?? "attachment",
-      maxBytes,
-      ssrfPolicy: allowPrivateNetwork
-        ? { allowPrivateNetwork: true }
-        : trustedHostname
-          ? { allowedHostnames: [trustedHostname] }
-          : undefined,
-      fetchImpl: async (input, init) =>
-        await blueBubblesFetchWithTimeout(
-          resolveRequestUrl(input),
-          { ...init, method: init?.method ?? "GET" },
-          opts.timeoutMs,
-        ),
-    });
+    const fetched =
+      await getBlueBubblesRuntime().channel.media.fetchRemoteMedia({
+        url,
+        filePathHint:
+          attachment.transferName ?? attachment.guid ?? "attachment",
+        maxBytes,
+        ssrfPolicy: allowPrivateNetwork
+          ? { allowPrivateNetwork: true }
+          : trustedHostname
+            ? { allowedHostnames: [trustedHostname] }
+            : undefined,
+        fetchImpl: async (input, init) =>
+          await blueBubblesFetchWithTimeout(
+            resolveRequestUrl(input),
+            { ...init, method: init?.method ?? "GET" },
+            opts.timeoutMs,
+          ),
+      });
     return {
       buffer: new Uint8Array(fetched.buffer),
       contentType: fetched.contentType ?? attachment.mimeType ?? undefined,
     };
   } catch (error) {
     if (readMediaFetchErrorCode(error) === "max_bytes") {
-      throw new Error(`BlueBubbles attachment too large (limit ${maxBytes} bytes)`);
+      throw new Error(
+        `BlueBubbles attachment too large (limit ${maxBytes} bytes)`,
+      );
     }
     const text = error instanceof Error ? error.message : String(error);
     throw new Error(`BlueBubbles attachment download failed: ${text}`);
@@ -149,7 +170,14 @@ export async function sendBlueBubblesAttachment(params: {
   asVoice?: boolean;
   opts?: BlueBubblesAttachmentOpts;
 }): Promise<SendBlueBubblesAttachmentResult> {
-  const { to, caption, replyToMessageGuid, replyToPartIndex, asVoice, opts = {} } = params;
+  const {
+    to,
+    caption,
+    replyToMessageGuid,
+    replyToPartIndex,
+    asVoice,
+    opts = {},
+  } = params;
   let { buffer, filename, contentType } = params;
   const wantsVoice = asVoice === true;
   const fallbackName = wantsVoice ? "Audio Message" : "attachment";
@@ -157,14 +185,17 @@ export async function sendBlueBubblesAttachment(params: {
   contentType = contentType?.trim() || undefined;
   const { baseUrl, password, accountId } = resolveAccount(opts);
   const privateApiStatus = getCachedBlueBubblesPrivateApiStatus(accountId);
-  const privateApiEnabled = isBlueBubblesPrivateApiStatusEnabled(privateApiStatus);
+  const privateApiEnabled =
+    isBlueBubblesPrivateApiStatusEnabled(privateApiStatus);
 
   // Validate voice memo format when requested (BlueBubbles converts MP3 -> CAF when isAudioMessage).
   const isAudioMessage = wantsVoice;
   if (isAudioMessage) {
     const voiceInfo = resolveVoiceInfo(filename, contentType);
     if (!voiceInfo.isAudio) {
-      throw new Error("BlueBubbles voice messages require audio media (mp3 or caf).");
+      throw new Error(
+        "BlueBubbles voice messages require audio media (mp3 or caf).",
+      );
     }
     if (voiceInfo.isMp3) {
       filename = ensureExtension(filename, ".mp3", fallbackName);
@@ -206,17 +237,30 @@ export async function sendBlueBubblesAttachment(params: {
   // Helper to add a form field
   const addField = (name: string, value: string) => {
     parts.push(encoder.encode(`--${boundary}\r\n`));
-    parts.push(encoder.encode(`Content-Disposition: form-data; name="${name}"\r\n\r\n`));
+    parts.push(
+      encoder.encode(`Content-Disposition: form-data; name="${name}"\r\n\r\n`),
+    );
     parts.push(encoder.encode(`${value}\r\n`));
   };
 
   // Helper to add a file field
-  const addFile = (name: string, fileBuffer: Uint8Array, fileName: string, mimeType?: string) => {
+  const addFile = (
+    name: string,
+    fileBuffer: Uint8Array,
+    fileName: string,
+    mimeType?: string,
+  ) => {
     parts.push(encoder.encode(`--${boundary}\r\n`));
     parts.push(
-      encoder.encode(`Content-Disposition: form-data; name="${name}"; filename="${fileName}"\r\n`),
+      encoder.encode(
+        `Content-Disposition: form-data; name="${name}"; filename="${fileName}"\r\n`,
+      ),
     );
-    parts.push(encoder.encode(`Content-Type: ${mimeType ?? "application/octet-stream"}\r\n\r\n`));
+    parts.push(
+      encoder.encode(
+        `Content-Type: ${mimeType ?? "application/octet-stream"}\r\n\r\n`,
+      ),
+    );
     parts.push(fileBuffer);
     parts.push(encoder.encode("\r\n"));
   };
@@ -238,7 +282,10 @@ export async function sendBlueBubblesAttachment(params: {
   const trimmedReplyTo = replyToMessageGuid?.trim();
   if (trimmedReplyTo && privateApiEnabled) {
     addField("selectedMessageGuid", trimmedReplyTo);
-    addField("partIndex", typeof replyToPartIndex === "number" ? String(replyToPartIndex) : "0");
+    addField(
+      "partIndex",
+      typeof replyToPartIndex === "number" ? String(replyToPartIndex) : "0",
+    );
   } else if (trimmedReplyTo && privateApiStatus === null) {
     warnBlueBubbles(
       "Private API status unknown; sending attachment without reply threading metadata. Run a status probe to restore private-api reply features.",

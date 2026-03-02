@@ -62,7 +62,8 @@ function setZalouserAccountScopedConfig(
           ...cfg.channels?.zalouser?.accounts,
           [accountId]: {
             ...cfg.channels?.zalouser?.accounts?.[accountId],
-            enabled: cfg.channels?.zalouser?.accounts?.[accountId]?.enabled ?? true,
+            enabled:
+              cfg.channels?.zalouser?.accounts?.[accountId]?.enabled ?? true,
             ...accountPatch,
           },
         },
@@ -76,7 +77,9 @@ function setZalouserDmPolicy(
   dmPolicy: "pairing" | "allowlist" | "open" | "disabled",
 ): OpenClawConfig {
   const allowFrom =
-    dmPolicy === "open" ? addWildcardAllowFrom(cfg.channels?.zalouser?.allowFrom) : undefined;
+    dmPolicy === "open"
+      ? addWildcardAllowFrom(cfg.channels?.zalouser?.allowFrom)
+      : undefined;
   return {
     ...cfg,
     channels: {
@@ -140,8 +143,11 @@ async function promptZalouserAllowFrom(params: {
     const entry = await prompter.text({
       message: "Zalouser allowFrom (name or user id)",
       placeholder: "Alice, 123456789",
-      initialValue: existingAllowFrom[0] ? String(existingAllowFrom[0]) : undefined,
-      validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
+      initialValue: existingAllowFrom[0]
+        ? String(existingAllowFrom[0])
+        : undefined,
+      validate: (value) =>
+        String(value ?? "").trim() ? undefined : "Required",
     });
     const parts = parseInput(String(entry));
     const resolvedEntries = await resolveZaloAllowFromEntries({
@@ -149,7 +155,9 @@ async function promptZalouserAllowFrom(params: {
       entries: parts,
     });
 
-    const unresolved = resolvedEntries.filter((item) => !item.resolved).map((item) => item.input);
+    const unresolved = resolvedEntries
+      .filter((item) => !item.resolved)
+      .map((item) => item.input);
     if (unresolved.length > 0) {
       await prompter.note(
         `Could not resolve: ${unresolved.join(", ")}. Use numeric user ids or exact friend names.`,
@@ -192,7 +200,9 @@ function setZalouserGroupAllowlist(
   accountId: string,
   groupKeys: string[],
 ): OpenClawConfig {
-  const groups = Object.fromEntries(groupKeys.map((key) => [key, { allow: true }]));
+  const groups = Object.fromEntries(
+    groupKeys.map((key) => [key, { allow: true }]),
+  );
   return setZalouserAccountScopedConfig(cfg, accountId, {
     groups,
   });
@@ -203,7 +213,8 @@ const dmPolicy: ChannelOnboardingDmPolicy = {
   channel,
   policyKey: "channels.zalouser.dmPolicy",
   allowFromKey: "channels.zalouser.allowFrom",
-  getCurrent: (cfg) => (cfg.channels?.zalouser?.dmPolicy ?? "pairing") as "pairing",
+  getCurrent: (cfg) =>
+    (cfg.channels?.zalouser?.dmPolicy ?? "pairing") as "pairing",
   setPolicy: (cfg, policy) => setZalouserDmPolicy(cfg, policy),
   promptAllowFrom: async ({ cfg, prompter, accountId }) => {
     const id =
@@ -235,8 +246,12 @@ export const zalouserOnboardingAdapter: ChannelOnboardingAdapter = {
     return {
       channel,
       configured,
-      statusLines: [`Zalo Personal: ${configured ? "logged in" : "needs QR login"}`],
-      selectionHint: configured ? "recommended · logged in" : "recommended · QR login",
+      statusLines: [
+        `Zalo Personal: ${configured ? "logged in" : "needs QR login"}`,
+      ],
+      selectionHint: configured
+        ? "recommended · logged in"
+        : "recommended · QR login",
       quickstartScore: configured ? 1 : 15,
     };
   },
@@ -249,7 +264,9 @@ export const zalouserOnboardingAdapter: ChannelOnboardingAdapter = {
   }) => {
     const zalouserOverride = accountOverrides.zalouser?.trim();
     const defaultAccountId = resolveDefaultZalouserAccountId(cfg);
-    let accountId = zalouserOverride ? normalizeAccountId(zalouserOverride) : defaultAccountId;
+    let accountId = zalouserOverride
+      ? normalizeAccountId(zalouserOverride)
+      : defaultAccountId;
 
     if (shouldPromptAccountIds && !zalouserOverride) {
       accountId = await promptAccountId({
@@ -275,9 +292,15 @@ export const zalouserOnboardingAdapter: ChannelOnboardingAdapter = {
       });
 
       if (wantsLogin) {
-        const start = await startZaloQrLogin({ profile: account.profile, timeoutMs: 35_000 });
+        const start = await startZaloQrLogin({
+          profile: account.profile,
+          timeoutMs: 35_000,
+        });
         if (start.qrDataUrl) {
-          const qrPath = await writeQrDataUrlToTempFile(start.qrDataUrl, account.profile);
+          const qrPath = await writeQrDataUrlToTempFile(
+            start.qrDataUrl,
+            account.profile,
+          );
           await prompter.note(
             [
               start.message,
@@ -297,7 +320,10 @@ export const zalouserOnboardingAdapter: ChannelOnboardingAdapter = {
               profile: account.profile,
               timeoutMs: 120_000,
             });
-            await prompter.note(waited.message, waited.connected ? "Success" : "Login pending");
+            await prompter.note(
+              waited.message,
+              waited.connected ? "Success" : "Login pending",
+            );
           }
         } else {
           await prompter.note(start.message, "Login pending");
@@ -316,15 +342,24 @@ export const zalouserOnboardingAdapter: ChannelOnboardingAdapter = {
           timeoutMs: 35_000,
         });
         if (start.qrDataUrl) {
-          const qrPath = await writeQrDataUrlToTempFile(start.qrDataUrl, account.profile);
+          const qrPath = await writeQrDataUrlToTempFile(
+            start.qrDataUrl,
+            account.profile,
+          );
           await prompter.note(
             [start.message, qrPath ? `QR image saved to: ${qrPath}` : undefined]
               .filter(Boolean)
               .join("\n"),
             "QR Login",
           );
-          const waited = await waitForZaloQrLogin({ profile: account.profile, timeoutMs: 120_000 });
-          await prompter.note(waited.message, waited.connected ? "Success" : "Login pending");
+          const waited = await waitForZaloQrLogin({
+            profile: account.profile,
+            timeoutMs: 120_000,
+          });
+          await prompter.note(
+            waited.message,
+            waited.connected ? "Success" : "Login pending",
+          );
         }
       }
     }
@@ -371,7 +406,10 @@ export const zalouserOnboardingAdapter: ChannelOnboardingAdapter = {
             const unresolved = resolved
               .filter((entry) => !entry.resolved)
               .map((entry) => entry.input);
-            keys = [...resolvedIds, ...unresolved.map((entry) => entry.trim()).filter(Boolean)];
+            keys = [
+              ...resolvedIds,
+              ...unresolved.map((entry) => entry.trim()).filter(Boolean),
+            ];
             const resolution = formatResolvedUnresolvedNote({
               resolved: resolvedIds,
               unresolved,

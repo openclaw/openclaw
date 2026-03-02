@@ -2,13 +2,24 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { expect, vi } from "vitest";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
-import { createGatewayRequest, createHooksConfig } from "./hooks-test-helpers.js";
-import { canonicalizePathVariant, isProtectedPluginRoutePath } from "./security-path.js";
-import { createGatewayHttpServer, createHooksRequestHandler } from "./server-http.js";
+import {
+  createGatewayRequest,
+  createHooksConfig,
+} from "./hooks-test-helpers.js";
+import {
+  canonicalizePathVariant,
+  isProtectedPluginRoutePath,
+} from "./security-path.js";
+import {
+  createGatewayHttpServer,
+  createHooksRequestHandler,
+} from "./server-http.js";
 import { withTempConfig } from "./test-temp-config.js";
 
 export type GatewayHttpServer = ReturnType<typeof createGatewayHttpServer>;
-export type GatewayServerOptions = Partial<Parameters<typeof createGatewayHttpServer>[0]>;
+export type GatewayServerOptions = Partial<
+  Parameters<typeof createGatewayHttpServer>[0]
+>;
 
 export const AUTH_NONE: ResolvedGatewayAuth = {
   mode: "none",
@@ -185,7 +196,10 @@ export const CANONICAL_UNAUTH_VARIANTS: RouteVariant[] = [
     path: "/api%2525252fchannels%2525252fnostr%2525252fdefault%2525252fprofile",
   },
   { label: "encoded-segment", path: "/api/%63hannels/nostr/default/profile" },
-  { label: "dot-traversal-encoded-slash", path: "/api/foo/..%2fchannels/nostr/default/profile" },
+  {
+    label: "dot-traversal-encoded-slash",
+    path: "/api/foo/..%2fchannels/nostr/default/profile",
+  },
   {
     label: "dot-traversal-encoded-dotdot-slash",
     path: "/api/foo/%2e%2e%2fchannels/nostr/default/profile",
@@ -206,8 +220,14 @@ export const CANONICAL_AUTH_VARIANTS: RouteVariant[] = [
     label: "auth-encoded-slash-4x",
     path: "/api%2525252fchannels%2525252fnostr%2525252fdefault%2525252fprofile",
   },
-  { label: "auth-encoded-segment", path: "/api/%63hannels/nostr/default/profile" },
-  { label: "auth-duplicate-trailing-slash", path: "/api/channels//nostr/default/profile/" },
+  {
+    label: "auth-encoded-segment",
+    path: "/api/%63hannels/nostr/default/profile",
+  },
+  {
+    label: "auth-duplicate-trailing-slash",
+    path: "/api/channels//nostr/default/profile/",
+  },
   {
     label: "auth-dot-traversal-encoded-slash",
     path: "/api/foo/..%2fchannels/nostr/default/profile",
@@ -259,7 +279,9 @@ export async function expectAuthorizedVariants(params: {
       authorization: params.authorization,
     });
     expect(response.res.statusCode, variant.label).toBe(200);
-    expect(response.getBody(), variant.label).toContain('"route":"channel-canonicalized"');
+    expect(response.getBody(), variant.label).toContain(
+      '"route":"channel-canonicalized"',
+    );
   }
 }
 

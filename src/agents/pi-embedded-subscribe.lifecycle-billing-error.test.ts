@@ -6,7 +6,10 @@ import {
 } from "./pi-embedded-subscribe.e2e-harness.js";
 
 describe("subscribeEmbeddedPiSession lifecycle billing errors", () => {
-  function createAgentEventHarness(options?: { runId?: string; sessionKey?: string }) {
+  function createAgentEventHarness(options?: {
+    runId?: string;
+    sessionKey?: string;
+  }) {
     const onAgentEvent = vi.fn();
     const { emit } = createSubscribedSessionHarness({
       runId: options?.runId ?? "run",
@@ -29,8 +32,12 @@ describe("subscribeEmbeddedPiSession lifecycle billing errors", () => {
       model: "claude-3-5-sonnet",
     });
 
-    const lifecycleError = findLifecycleErrorAgentEvent(onAgentEvent.mock.calls);
+    const lifecycleError = findLifecycleErrorAgentEvent(
+      onAgentEvent.mock.calls,
+    );
     expect(lifecycleError).toBeDefined();
-    expect(lifecycleError?.data?.error).toContain("Anthropic (claude-3-5-sonnet)");
+    expect(lifecycleError?.data?.error).toContain(
+      "Anthropic (claude-3-5-sonnet)",
+    );
   });
 });

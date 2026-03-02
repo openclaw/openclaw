@@ -26,7 +26,10 @@ export function normalizeControlUiBasePath(basePath?: string): string {
   return normalized;
 }
 
-export function buildControlUiAvatarUrl(basePath: string, agentId: string): string {
+export function buildControlUiAvatarUrl(
+  basePath: string,
+  agentId: string,
+): string {
   return basePath
     ? `${basePath}${CONTROL_UI_AVATAR_PREFIX}/${agentId}`
     : `${CONTROL_UI_AVATAR_PREFIX}/${agentId}`;

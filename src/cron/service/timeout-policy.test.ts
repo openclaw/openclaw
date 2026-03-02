@@ -24,12 +24,16 @@ function makeJob(payload: CronJob["payload"]): CronJob {
 
 describe("timeout-policy", () => {
   it("uses default timeout for non-agent jobs", () => {
-    const timeout = resolveCronJobTimeoutMs(makeJob({ kind: "systemEvent", text: "hello" }));
+    const timeout = resolveCronJobTimeoutMs(
+      makeJob({ kind: "systemEvent", text: "hello" }),
+    );
     expect(timeout).toBe(DEFAULT_JOB_TIMEOUT_MS);
   });
 
   it("uses expanded safety timeout for agentTurn jobs without explicit timeout", () => {
-    const timeout = resolveCronJobTimeoutMs(makeJob({ kind: "agentTurn", message: "hi" }));
+    const timeout = resolveCronJobTimeoutMs(
+      makeJob({ kind: "agentTurn", message: "hi" }),
+    );
     expect(timeout).toBe(AGENT_TURN_SAFETY_TIMEOUT_MS);
   });
 

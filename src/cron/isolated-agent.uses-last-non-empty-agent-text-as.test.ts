@@ -2,7 +2,15 @@ import "./isolated-agent.mocks.js";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import type { CliDeps } from "../cli/deps.js";
@@ -78,7 +86,9 @@ function makeDeps(): CliDeps {
   };
 }
 
-function mockEmbeddedPayloads(payloads: Array<{ text?: string; isError?: boolean }>) {
+function mockEmbeddedPayloads(
+  payloads: Array<{ text?: string; isError?: boolean }>,
+) {
   vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
     payloads,
     meta: {
@@ -96,7 +106,10 @@ function mockEmbeddedOk() {
   mockEmbeddedTexts(["ok"]);
 }
 
-function expectEmbeddedProviderModel(expected: { provider: string; model: string }) {
+function expectEmbeddedProviderModel(expected: {
+  provider: string;
+  model: string;
+}) {
   const call = vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0] as {
     provider?: string;
     model?: string;
@@ -107,7 +120,10 @@ function expectEmbeddedProviderModel(expected: { provider: string; model: string
 
 async function readSessionEntry(storePath: string, key: string) {
   const raw = await fs.readFile(storePath, "utf-8");
-  const store = JSON.parse(raw) as Record<string, { sessionId?: string; label?: string }>;
+  const store = JSON.parse(raw) as Record<
+    string,
+    { sessionId?: string; label?: string }
+  >;
   return store[key];
 }
 
@@ -156,7 +172,8 @@ async function runCronTurn(home: string, options: RunCronTurnOptions = {}) {
     deps,
     job: makeJob(jobPayload),
     message:
-      options.message ?? (jobPayload.kind === "agentTurn" ? jobPayload.message : DEFAULT_MESSAGE),
+      options.message ??
+      (jobPayload.kind === "agentTurn" ? jobPayload.message : DEFAULT_MESSAGE),
     sessionKey: options.sessionKey ?? DEFAULT_SESSION_KEY,
     lane: "cron",
   });
@@ -202,7 +219,9 @@ async function runTurnWithStoredModelOverride(
 
 describe("runCronIsolatedAgentTurn", () => {
   beforeAll(async () => {
-    tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-turn-suite-"));
+    tempRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-cron-turn-suite-"),
+    );
   });
 
   afterAll(async () => {
@@ -220,7 +239,11 @@ describe("runCronIsolatedAgentTurn", () => {
   it("treats blank model overrides as unset", async () => {
     await withTempHome(async (home) => {
       const { res } = await runCronTurn(home, {
-        jobPayload: { kind: "agentTurn", message: DEFAULT_MESSAGE, model: "   " },
+        jobPayload: {
+          kind: "agentTurn",
+          message: DEFAULT_MESSAGE,
+          model: "   ",
+        },
       });
 
       expect(res.status).toBe("ok");
@@ -291,7 +314,10 @@ describe("runCronIsolatedAgentTurn", () => {
         meta: {
           durationMs: 5,
           agentMeta: { sessionId: "s", provider: "p", model: "m" },
-          error: { kind: "context_overflow", message: "exceeded context window" },
+          error: {
+            kind: "context_overflow",
+            message: "exceeded context window",
+          },
         },
       });
       const { res } = await runCronTurn(home, {
@@ -313,7 +339,9 @@ describe("runCronIsolatedAgentTurn", () => {
       const call = vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0] as {
         agentDir?: string;
       };
-      expect(call?.agentDir).toBe(path.join(home, ".openclaw", "agents", "main", "agent"));
+      expect(call?.agentDir).toBe(
+        path.join(home, ".openclaw", "agents", "main", "agent"),
+      );
     });
   });
 
@@ -341,7 +369,14 @@ describe("runCronIsolatedAgentTurn", () => {
 
       const cfg = makeCfg(
         home,
-        path.join(home, ".openclaw", "agents", "{agentId}", "sessions", "sessions.json"),
+        path.join(
+          home,
+          ".openclaw",
+          "agents",
+          "{agentId}",
+          "sessions",
+          "sessions.json",
+        ),
         {
           agents: {
             defaults: { workspace: path.join(home, "default-workspace") },
@@ -409,7 +444,10 @@ describe("runCronIsolatedAgentTurn", () => {
         })
       ).res;
       expect(res.status).toBe("ok");
-      expectEmbeddedProviderModel({ provider: "openai", model: "gpt-4.1-mini" });
+      expectEmbeddedProviderModel({
+        provider: "openai",
+        model: "gpt-4.1-mini",
+      });
 
       vi.mocked(runEmbeddedPiAgent).mockClear();
       vi.mocked(loadModelCatalog).mockResolvedValue(deterministicCatalog);
@@ -421,7 +459,10 @@ describe("runCronIsolatedAgentTurn", () => {
         })
       ).res;
       expect(res.status).toBe("ok");
-      expectEmbeddedProviderModel({ provider: "openai", model: "gpt-4.1-mini" });
+      expectEmbeddedProviderModel({
+        provider: "openai",
+        model: "gpt-4.1-mini",
+      });
 
       vi.mocked(runEmbeddedPiAgent).mockClear();
       vi.mocked(loadModelCatalog).mockResolvedValue(deterministicCatalog);
@@ -434,7 +475,10 @@ describe("runCronIsolatedAgentTurn", () => {
         })
       ).res;
       expect(res.status).toBe("ok");
-      expectEmbeddedProviderModel({ provider: "anthropic", model: "claude-opus-4-5" });
+      expectEmbeddedProviderModel({
+        provider: "anthropic",
+        model: "claude-opus-4-5",
+      });
     });
   });
 
@@ -475,7 +519,9 @@ describe("runCronIsolatedAgentTurn", () => {
       });
 
       expect(res.status).toBe("ok");
-      const call = vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0] as { prompt?: string };
+      const call = vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0] as {
+        prompt?: string;
+      };
       expect(call?.prompt).toContain("EXTERNAL, UNTRUSTED");
       expect(call?.prompt).toContain("Hello");
     });
@@ -497,7 +543,9 @@ describe("runCronIsolatedAgentTurn", () => {
       });
 
       expect(res.status).toBe("ok");
-      const call = vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0] as { prompt?: string };
+      const call = vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0] as {
+        prompt?: string;
+      };
       expect(call?.prompt).not.toContain("EXTERNAL, UNTRUSTED");
       expect(call?.prompt).toContain("Hello");
     });
@@ -596,7 +644,10 @@ describe("runCronIsolatedAgentTurn", () => {
 
   it("starts a fresh session id for each cron run", async () => {
     await withTempHome(async (home) => {
-      const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
+      const storePath = await writeSessionStore(home, {
+        lastProvider: "webchat",
+        lastTo: "",
+      });
       const deps = makeDeps();
 
       const first = (
@@ -630,7 +681,10 @@ describe("runCronIsolatedAgentTurn", () => {
 
   it("preserves an existing cron session label", async () => {
     await withTempHome(async (home) => {
-      const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
+      const storePath = await writeSessionStore(home, {
+        lastProvider: "webchat",
+        lastTo: "",
+      });
       const raw = await fs.readFile(storePath, "utf-8");
       const store = JSON.parse(raw) as Record<string, Record<string, unknown>>;
       store["agent:main:cron:job-1"] = {

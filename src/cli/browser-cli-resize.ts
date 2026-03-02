@@ -1,6 +1,9 @@
 import { danger } from "../globals.js";
 import { defaultRuntime } from "../runtime.js";
-import { callBrowserResize, type BrowserParentOpts } from "./browser-cli-shared.js";
+import {
+  callBrowserResize,
+  type BrowserParentOpts,
+} from "./browser-cli-shared.js";
 
 export async function runBrowserResizeWithOutput(params: {
   parent: BrowserParentOpts;

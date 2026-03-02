@@ -6,7 +6,10 @@ export const connectHandlers: GatewayRequestHandlers = {
     respond(
       false,
       undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, "connect is only valid as the first request"),
+      errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        "connect is only valid as the first request",
+      ),
     );
   },
 };

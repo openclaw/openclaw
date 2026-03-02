@@ -22,7 +22,9 @@ function stripNullBytes(s: string): string {
 
 export { resolveAgentIdFromSessionKey };
 
-type AgentEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
+type AgentEntry = NonNullable<
+  NonNullable<OpenClawConfig["agents"]>["list"]
+>[number];
 
 type ResolvedAgentConfig = {
   name?: string;
@@ -47,7 +49,9 @@ export function listAgentEntries(cfg: OpenClawConfig): AgentEntry[] {
   if (!Array.isArray(list)) {
     return [];
   }
-  return list.filter((entry): entry is AgentEntry => Boolean(entry && typeof entry === "object"));
+  return list.filter((entry): entry is AgentEntry =>
+    Boolean(entry && typeof entry === "object"),
+  );
 }
 
 export function listAgentIds(cfg: OpenClawConfig): string[] {
@@ -76,7 +80,9 @@ export function resolveDefaultAgentId(cfg: OpenClawConfig): string {
   const defaults = agents.filter((agent) => agent?.default);
   if (defaults.length > 1 && !defaultAgentWarned) {
     defaultAgentWarned = true;
-    log.warn("Multiple agents marked default=true; using the first entry as default.");
+    log.warn(
+      "Multiple agents marked default=true; using the first entry as default.",
+    );
   }
   const chosen = (defaults[0] ?? agents[0])?.id?.trim();
   return normalizeAgentId(chosen || DEFAULT_AGENT_ID);
@@ -92,13 +98,22 @@ export function resolveSessionAgentIds(params: {
 } {
   const defaultAgentId = resolveDefaultAgentId(params.config ?? {});
   const explicitAgentIdRaw =
-    typeof params.agentId === "string" ? params.agentId.trim().toLowerCase() : "";
-  const explicitAgentId = explicitAgentIdRaw ? normalizeAgentId(explicitAgentIdRaw) : null;
+    typeof params.agentId === "string"
+      ? params.agentId.trim().toLowerCase()
+      : "";
+  const explicitAgentId = explicitAgentIdRaw
+    ? normalizeAgentId(explicitAgentIdRaw)
+    : null;
   const sessionKey = params.sessionKey?.trim();
-  const normalizedSessionKey = sessionKey ? sessionKey.toLowerCase() : undefined;
-  const parsed = normalizedSessionKey ? parseAgentSessionKey(normalizedSessionKey) : null;
+  const normalizedSessionKey = sessionKey
+    ? sessionKey.toLowerCase()
+    : undefined;
+  const parsed = normalizedSessionKey
+    ? parseAgentSessionKey(normalizedSessionKey)
+    : null;
   const sessionAgentId =
-    explicitAgentId ?? (parsed?.agentId ? normalizeAgentId(parsed.agentId) : defaultAgentId);
+    explicitAgentId ??
+    (parsed?.agentId ? normalizeAgentId(parsed.agentId) : defaultAgentId);
   return { defaultAgentId, sessionAgentId };
 }
 
@@ -109,9 +124,14 @@ export function resolveSessionAgentId(params: {
   return resolveSessionAgentIds(params).sessionAgentId;
 }
 
-function resolveAgentEntry(cfg: OpenClawConfig, agentId: string): AgentEntry | undefined {
+function resolveAgentEntry(
+  cfg: OpenClawConfig,
+  agentId: string,
+): AgentEntry | undefined {
   const id = normalizeAgentId(agentId);
-  return listAgentEntries(cfg).find((entry) => normalizeAgentId(entry.id) === id);
+  return listAgentEntries(cfg).find(
+    (entry) => normalizeAgentId(entry.id) === id,
+  );
 }
 
 export function resolveAgentConfig(
@@ -125,10 +145,12 @@ export function resolveAgentConfig(
   }
   return {
     name: typeof entry.name === "string" ? entry.name : undefined,
-    workspace: typeof entry.workspace === "string" ? entry.workspace : undefined,
+    workspace:
+      typeof entry.workspace === "string" ? entry.workspace : undefined,
     agentDir: typeof entry.agentDir === "string" ? entry.agentDir : undefined,
     model:
-      typeof entry.model === "string" || (entry.model && typeof entry.model === "object")
+      typeof entry.model === "string" ||
+      (entry.model && typeof entry.model === "object")
         ? entry.model
         : undefined,
     skills: Array.isArray(entry.skills) ? entry.skills : undefined,
@@ -137,7 +159,10 @@ export function resolveAgentConfig(
     heartbeat: entry.heartbeat,
     identity: entry.identity,
     groupChat: entry.groupChat,
-    subagents: typeof entry.subagents === "object" && entry.subagents ? entry.subagents : undefined,
+    subagents:
+      typeof entry.subagents === "object" && entry.subagents
+        ? entry.subagents
+        : undefined,
     sandbox: entry.sandbox,
     tools: entry.tools,
   };
@@ -185,7 +210,10 @@ export function resolveAgentEffectiveModelPrimary(
 }
 
 // Backward-compatible alias. Prefer explicit/effective helpers at new call sites.
-export function resolveAgentModelPrimary(cfg: OpenClawConfig, agentId: string): string | undefined {
+export function resolveAgentModelPrimary(
+  cfg: OpenClawConfig,
+  agentId: string,
+): string | undefined {
   return resolveAgentExplicitModelPrimary(cfg, agentId);
 }
 
@@ -208,7 +236,8 @@ export function resolveFallbackAgentId(params: {
   agentId?: string | null;
   sessionKey?: string | null;
 }): string {
-  const explicitAgentId = typeof params.agentId === "string" ? params.agentId.trim() : "";
+  const explicitAgentId =
+    typeof params.agentId === "string" ? params.agentId.trim() : "";
   if (explicitAgentId) {
     return normalizeAgentId(explicitAgentId);
   }
@@ -225,7 +254,10 @@ export function resolveRunModelFallbacksOverride(params: {
   }
   return resolveAgentModelFallbacksOverride(
     params.cfg,
-    resolveFallbackAgentId({ agentId: params.agentId, sessionKey: params.sessionKey }),
+    resolveFallbackAgentId({
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+    }),
   );
 }
 
@@ -235,7 +267,9 @@ export function hasConfiguredModelFallbacks(params: {
   sessionKey?: string | null;
 }): boolean {
   const fallbacksOverride = resolveRunModelFallbacksOverride(params);
-  const defaultFallbacks = resolveAgentModelFallbackValues(params.cfg?.agents?.defaults?.model);
+  const defaultFallbacks = resolveAgentModelFallbackValues(
+    params.cfg?.agents?.defaults?.model,
+  );
   return (fallbacksOverride ?? defaultFallbacks).length > 0;
 }
 
@@ -244,11 +278,16 @@ export function resolveEffectiveModelFallbacks(params: {
   agentId: string;
   hasSessionModelOverride: boolean;
 }): string[] | undefined {
-  const agentFallbacksOverride = resolveAgentModelFallbacksOverride(params.cfg, params.agentId);
+  const agentFallbacksOverride = resolveAgentModelFallbacksOverride(
+    params.cfg,
+    params.agentId,
+  );
   if (!params.hasSessionModelOverride) {
     return agentFallbacksOverride;
   }
-  const defaultFallbacks = resolveAgentModelFallbackValues(params.cfg.agents?.defaults?.model);
+  const defaultFallbacks = resolveAgentModelFallbackValues(
+    params.cfg.agents?.defaults?.model,
+  );
   return agentFallbacksOverride ?? defaultFallbacks;
 }
 

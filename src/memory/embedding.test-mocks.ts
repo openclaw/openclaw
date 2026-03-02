@@ -21,7 +21,9 @@ export function getEmbedQueryMock(): AnyMock {
 export function resetEmbeddingMocks(): void {
   hoisted.embedBatch.mockReset();
   hoisted.embedQuery.mockReset();
-  hoisted.embedBatch.mockImplementation(async (texts: string[]) => texts.map(() => [0, 1, 0]));
+  hoisted.embedBatch.mockImplementation(async (texts: string[]) =>
+    texts.map(() => [0, 1, 0]),
+  );
   hoisted.embedQuery.mockImplementation(async () => [0, 1, 0]);
 }
 

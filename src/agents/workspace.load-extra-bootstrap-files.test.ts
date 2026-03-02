@@ -2,7 +2,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { loadExtraBootstrapFiles, loadExtraBootstrapFilesWithDiagnostics } from "./workspace.js";
+import {
+  loadExtraBootstrapFiles,
+  loadExtraBootstrapFilesWithDiagnostics,
+} from "./workspace.js";
 
 describe("loadExtraBootstrapFiles", () => {
   let fixtureRoot = "";
@@ -15,7 +18,9 @@ describe("loadExtraBootstrapFiles", () => {
   };
 
   beforeAll(async () => {
-    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-extra-bootstrap-"));
+    fixtureRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-extra-bootstrap-"),
+    );
   });
 
   afterAll(async () => {
@@ -29,7 +34,11 @@ describe("loadExtraBootstrapFiles", () => {
     const packageDir = path.join(workspaceDir, "packages", "core");
     await fs.mkdir(packageDir, { recursive: true });
     await fs.writeFile(path.join(packageDir, "TOOLS.md"), "tools", "utf-8");
-    await fs.writeFile(path.join(packageDir, "README.md"), "not bootstrap", "utf-8");
+    await fs.writeFile(
+      path.join(packageDir, "README.md"),
+      "not bootstrap",
+      "utf-8",
+    );
 
     const files = await loadExtraBootstrapFiles(workspaceDir, ["packages/*/*"]);
 
@@ -46,7 +55,9 @@ describe("loadExtraBootstrapFiles", () => {
     await fs.mkdir(outsideDir, { recursive: true });
     await fs.writeFile(path.join(outsideDir, "AGENTS.md"), "outside", "utf-8");
 
-    const files = await loadExtraBootstrapFiles(workspaceDir, ["../outside/AGENTS.md"]);
+    const files = await loadExtraBootstrapFiles(workspaceDir, [
+      "../outside/AGENTS.md",
+    ]);
 
     expect(files).toHaveLength(0);
   });
@@ -60,7 +71,11 @@ describe("loadExtraBootstrapFiles", () => {
     const realWorkspace = path.join(rootDir, "real-workspace");
     const linkedWorkspace = path.join(rootDir, "linked-workspace");
     await fs.mkdir(realWorkspace, { recursive: true });
-    await fs.writeFile(path.join(realWorkspace, "AGENTS.md"), "linked agents", "utf-8");
+    await fs.writeFile(
+      path.join(realWorkspace, "AGENTS.md"),
+      "linked agents",
+      "utf-8",
+    );
     await fs.symlink(realWorkspace, linkedWorkspace, "dir");
 
     const files = await loadExtraBootstrapFiles(linkedWorkspace, ["AGENTS.md"]);
@@ -101,9 +116,10 @@ describe("loadExtraBootstrapFiles", () => {
     const payload = "x".repeat(2 * 1024 * 1024 + 1);
     await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), payload, "utf-8");
 
-    const { files, diagnostics } = await loadExtraBootstrapFilesWithDiagnostics(workspaceDir, [
-      "AGENTS.md",
-    ]);
+    const { files, diagnostics } = await loadExtraBootstrapFilesWithDiagnostics(
+      workspaceDir,
+      ["AGENTS.md"],
+    );
 
     expect(files).toHaveLength(0);
     expect(diagnostics.some((d) => d.reason === "security")).toBe(true);

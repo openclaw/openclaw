@@ -21,7 +21,10 @@ describe("slackPlugin actions", () => {
   });
 
   it("forwards read threadId to Slack action handler", async () => {
-    handleSlackActionMock.mockResolvedValueOnce({ messages: [], hasMore: false });
+    handleSlackActionMock.mockResolvedValueOnce({
+      messages: [],
+      hasMore: false,
+    });
     const handleAction = slackPlugin.actions?.handleAction;
     expect(handleAction).toBeDefined();
 

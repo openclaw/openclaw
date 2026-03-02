@@ -1,7 +1,16 @@
 import { attachFooterText } from "./common.js";
-import type { Action, FlexBox, FlexBubble, FlexComponent, FlexText } from "./types.js";
+import type {
+  Action,
+  FlexBox,
+  FlexBubble,
+  FlexComponent,
+  FlexText,
+} from "./types.js";
 
-function buildTitleSubtitleHeader(params: { title: string; subtitle?: string }): FlexComponent[] {
+function buildTitleSubtitleHeader(params: {
+  title: string;
+  subtitle?: string;
+}): FlexComponent[] {
   const { title, subtitle } = params;
   const headerContents: FlexComponent[] = [
     {
@@ -28,7 +37,9 @@ function buildTitleSubtitleHeader(params: { title: string; subtitle?: string }):
   return headerContents;
 }
 
-function buildCardHeaderSections(headerContents: FlexComponent[]): FlexComponent[] {
+function buildCardHeaderSections(
+  headerContents: FlexComponent[],
+): FlexComponent[] {
   return [
     {
       type: "box",
@@ -178,7 +189,16 @@ export function createEventCard(params: {
   isAllDay?: boolean;
   action?: Action;
 }): FlexBubble {
-  const { title, date, time, location, description, calendar, isAllDay, action } = params;
+  const {
+    title,
+    date,
+    time,
+    location,
+    description,
+    calendar,
+    isAllDay,
+    action,
+  } = params;
 
   // Hero date block - the most important information
   const dateBlock: FlexBox = {

@@ -17,7 +17,9 @@ describe("git-root", () => {
     await fs.mkdir(workspace, { recursive: true });
 
     expect(findGitRoot(workspace)).toBe(repoRoot);
-    expect(resolveGitHeadPath(workspace)).toBe(path.join(repoRoot, ".git", "HEAD"));
+    expect(resolveGitHeadPath(workspace)).toBe(
+      path.join(repoRoot, ".git", "HEAD"),
+    );
   });
 
   it("resolves HEAD path when .git is a gitdir pointer file", async () => {
@@ -27,7 +29,11 @@ describe("git-root", () => {
     const gitDir = path.join(repoRoot, ".actual-git");
     await fs.mkdir(workspace, { recursive: true });
     await fs.mkdir(gitDir, { recursive: true });
-    await fs.writeFile(path.join(repoRoot, ".git"), "gitdir: .actual-git\n", "utf-8");
+    await fs.writeFile(
+      path.join(repoRoot, ".git"),
+      "gitdir: .actual-git\n",
+      "utf-8",
+    );
 
     expect(findGitRoot(workspace)).toBe(repoRoot);
     expect(resolveGitHeadPath(workspace)).toBe(path.join(gitDir, "HEAD"));
@@ -40,10 +46,16 @@ describe("git-root", () => {
     const nested = path.join(childRoot, "nested");
     await fs.mkdir(path.join(parentRoot, ".git"), { recursive: true });
     await fs.mkdir(nested, { recursive: true });
-    await fs.writeFile(path.join(childRoot, ".git"), "not-a-gitdir-pointer\n", "utf-8");
+    await fs.writeFile(
+      path.join(childRoot, ".git"),
+      "not-a-gitdir-pointer\n",
+      "utf-8",
+    );
 
     expect(findGitRoot(nested)).toBe(childRoot);
-    expect(resolveGitHeadPath(nested)).toBe(path.join(parentRoot, ".git", "HEAD"));
+    expect(resolveGitHeadPath(nested)).toBe(
+      path.join(parentRoot, ".git", "HEAD"),
+    );
   });
 
   it("respects maxDepth traversal limit", async () => {

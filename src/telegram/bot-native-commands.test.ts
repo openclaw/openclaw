@@ -21,7 +21,8 @@ const deliveryMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../auto-reply/skill-commands.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../auto-reply/skill-commands.js")>();
+  const actual =
+    await importOriginal<typeof import("../auto-reply/skill-commands.js")>();
   return {
     ...actual,
     listSkillCommandsForAgents,
@@ -72,7 +73,9 @@ describe("registerTelegramNativeCommands", () => {
           sendMessage: vi.fn().mockResolvedValue(undefined),
         },
         command: vi.fn(),
-      } as unknown as Parameters<typeof registerTelegramNativeCommands>[0]["bot"],
+      } as unknown as Parameters<
+        typeof registerTelegramNativeCommands
+      >[0]["bot"],
       cfg,
       runtime: {} as RuntimeEnv,
       accountId,
@@ -134,7 +137,9 @@ describe("registerTelegramNativeCommands", () => {
           sendMessage: vi.fn().mockResolvedValue(undefined),
         },
         command: vi.fn(),
-      } as unknown as Parameters<typeof registerTelegramNativeCommands>[0]["bot"],
+      } as unknown as Parameters<
+        typeof registerTelegramNativeCommands
+      >[0]["bot"],
       runtime: { log: runtimeLog } as unknown as RuntimeEnv,
       telegramCfg: { customCommands } as TelegramAccountConfig,
       nativeEnabled: false,
@@ -164,12 +169,18 @@ describe("registerTelegramNativeCommands", () => {
           sendMessage: vi.fn().mockResolvedValue(undefined),
         },
         command,
-      } as unknown as Parameters<typeof registerTelegramNativeCommands>[0]["bot"],
+      } as unknown as Parameters<
+        typeof registerTelegramNativeCommands
+      >[0]["bot"],
     });
 
     const registeredCommands = await waitForRegisteredCommands(setMyCommands);
-    expect(registeredCommands.some((entry) => entry.command === "export_session")).toBe(true);
-    expect(registeredCommands.some((entry) => entry.command === "export-session")).toBe(false);
+    expect(
+      registeredCommands.some((entry) => entry.command === "export_session"),
+    ).toBe(true);
+    expect(
+      registeredCommands.some((entry) => entry.command === "export-session"),
+    ).toBe(false);
 
     const registeredHandlers = command.mock.calls.map(([name]) => name);
     expect(registeredHandlers).toContain("export_session");
@@ -192,7 +203,9 @@ describe("registerTelegramNativeCommands", () => {
           sendMessage: vi.fn().mockResolvedValue(undefined),
         },
         command: vi.fn(),
-      } as unknown as Parameters<typeof registerTelegramNativeCommands>[0]["bot"],
+      } as unknown as Parameters<
+        typeof registerTelegramNativeCommands
+      >[0]["bot"],
       telegramCfg: {
         customCommands: [
           { command: "custom-backup", description: "Custom backup" },
@@ -209,11 +222,21 @@ describe("registerTelegramNativeCommands", () => {
       expect(TELEGRAM_COMMAND_NAME_PATTERN.test(entry.command)).toBe(true);
     }
 
-    expect(registeredCommands.some((entry) => entry.command === "export_session")).toBe(true);
-    expect(registeredCommands.some((entry) => entry.command === "custom_backup")).toBe(true);
-    expect(registeredCommands.some((entry) => entry.command === "plugin_status")).toBe(true);
-    expect(registeredCommands.some((entry) => entry.command === "plugin-status")).toBe(false);
-    expect(registeredCommands.some((entry) => entry.command === "custom-bad")).toBe(false);
+    expect(
+      registeredCommands.some((entry) => entry.command === "export_session"),
+    ).toBe(true);
+    expect(
+      registeredCommands.some((entry) => entry.command === "custom_backup"),
+    ).toBe(true);
+    expect(
+      registeredCommands.some((entry) => entry.command === "plugin_status"),
+    ).toBe(true);
+    expect(
+      registeredCommands.some((entry) => entry.command === "plugin-status"),
+    ).toBe(false);
+    expect(
+      registeredCommands.some((entry) => entry.command === "custom-bad"),
+    ).toBe(false);
   });
 
   it("passes agent-scoped media roots for plugin command replies with media", async () => {
@@ -223,7 +246,12 @@ describe("registerTelegramNativeCommands", () => {
       agents: {
         list: [{ id: "main", default: true }, { id: "work" }],
       },
-      bindings: [{ agentId: "work", match: { channel: "telegram", accountId: "default" } }],
+      bindings: [
+        {
+          agentId: "work",
+          match: { channel: "telegram", accountId: "default" },
+        },
+      ],
     };
 
     pluginCommandMocks.getPluginCommandSpecs.mockReturnValue([
@@ -251,7 +279,9 @@ describe("registerTelegramNativeCommands", () => {
         command: vi.fn((name: string, cb: (ctx: unknown) => Promise<void>) => {
           commandHandlers.set(name, cb);
         }),
-      } as unknown as Parameters<typeof registerTelegramNativeCommands>[0]["bot"],
+      } as unknown as Parameters<
+        typeof registerTelegramNativeCommands
+      >[0]["bot"],
     });
 
     const handler = commandHandlers.get("plug");
@@ -268,7 +298,9 @@ describe("registerTelegramNativeCommands", () => {
 
     expect(deliveryMocks.deliverReplies).toHaveBeenCalledWith(
       expect.objectContaining({
-        mediaLocalRoots: expect.arrayContaining([path.join(STATE_DIR, "workspace-work")]),
+        mediaLocalRoots: expect.arrayContaining([
+          path.join(STATE_DIR, "workspace-work"),
+        ]),
       }),
     );
     expect(sendMessage).not.toHaveBeenCalledWith(123, "Command not found.");

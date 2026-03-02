@@ -33,7 +33,8 @@ function formatSummary(summary: AgentSummary) {
   if (summary.identityName) {
     identityParts.push(summary.identityName);
   }
-  const identityLine = identityParts.length > 0 ? identityParts.join(" ") : null;
+  const identityLine =
+    identityParts.length > 0 ? identityParts.join(" ") : null;
   const identitySource =
     summary.identitySource === "identity"
       ? "IDENTITY.md"
@@ -43,7 +44,9 @@ function formatSummary(summary: AgentSummary) {
 
   const lines = [`- ${header}`];
   if (identityLine) {
-    lines.push(`  Identity: ${identityLine}${identitySource ? ` (${identitySource})` : ""}`);
+    lines.push(
+      `  Identity: ${identityLine}${identitySource ? ` (${identitySource})` : ""}`,
+    );
   }
   lines.push(`  Workspace: ${shortenHomePath(summary.workspace)}`);
   lines.push(`  Agent dir: ${shortenHomePath(summary.agentDir)}`);
@@ -93,7 +96,9 @@ export async function agentsListCommand(
     for (const summary of summaries) {
       const bindings = bindingMap.get(summary.id) ?? [];
       if (bindings.length > 0) {
-        summary.bindingDetails = bindings.map((binding) => describeBinding(binding));
+        summary.bindingDetails = bindings.map((binding) =>
+          describeBinding(binding),
+        );
       }
     }
   }
@@ -126,7 +131,9 @@ export async function agentsListCommand(
   }
 
   const lines = ["Agents:", ...summaries.map(formatSummary)];
-  lines.push("Routing rules map channel/account/peer to an agent. Use --bindings for full rules.");
+  lines.push(
+    "Routing rules map channel/account/peer to an agent. Use --bindings for full rules.",
+  );
   lines.push(
     `Channel status reflects local config/creds. For live health: ${formatCliCommand("openclaw channels status --probe")}.`,
   );

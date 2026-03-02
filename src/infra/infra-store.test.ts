@@ -61,7 +61,10 @@ describe("infra store", () => {
 
     it("sanitizes and persists triggers", async () => {
       await withTempDir("openclaw-voicewake-", async (baseDir) => {
-        const saved = await setVoiceWakeTriggers(["  hi  ", "", "  there "], baseDir);
+        const saved = await setVoiceWakeTriggers(
+          ["  hi  ", "", "  there "],
+          baseDir,
+        );
         expect(saved.triggers).toEqual(["hi", "there"]);
         expect(saved.updatedAtMs).toBeGreaterThan(0);
 
@@ -141,7 +144,11 @@ describe("infra store", () => {
 
       stop();
 
-      expect(types).toEqual(["webhook.received", "message.queued", "session.state"]);
+      expect(types).toEqual([
+        "webhook.received",
+        "message.queued",
+        "session.state",
+      ]);
     });
   });
 
@@ -178,11 +185,15 @@ describe("infra store", () => {
         direction: "inbound",
         at: 2,
       });
-      expect(getChannelActivity({ channel: "whatsapp", accountId: "a" })).toEqual({
+      expect(
+        getChannelActivity({ channel: "whatsapp", accountId: "a" }),
+      ).toEqual({
         inboundAt: 1,
         outboundAt: null,
       });
-      expect(getChannelActivity({ channel: "whatsapp", accountId: "b" })).toEqual({
+      expect(
+        getChannelActivity({ channel: "whatsapp", accountId: "b" }),
+      ).toEqual({
         inboundAt: 2,
         outboundAt: null,
       });

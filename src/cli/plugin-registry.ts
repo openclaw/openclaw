@@ -1,4 +1,7 @@
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import {
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "../agents/agent-scope.js";
 import { loadConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging.js";
 import { loadOpenClawPlugins } from "../plugins/loader.js";
@@ -17,13 +20,18 @@ export function ensurePluginRegistryLoaded(): void {
   // doing an expensive load when we already have plugins/channels/tools.
   if (
     active &&
-    (active.plugins.length > 0 || active.channels.length > 0 || active.tools.length > 0)
+    (active.plugins.length > 0 ||
+      active.channels.length > 0 ||
+      active.tools.length > 0)
   ) {
     pluginRegistryLoaded = true;
     return;
   }
   const config = loadConfig();
-  const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
+  const workspaceDir = resolveAgentWorkspaceDir(
+    config,
+    resolveDefaultAgentId(config),
+  );
   const logger: PluginLogger = {
     info: (msg) => log.info(msg),
     warn: (msg) => log.warn(msg),

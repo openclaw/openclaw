@@ -36,7 +36,8 @@ describe("google-shared convertTools", () => {
     expect(contents[1].role).toBe("model");
     expect(contents[2].role).toBe("model");
     const toolCallPart = contents[2].parts?.find(
-      (part) => typeof part === "object" && part !== null && "functionCall" in part,
+      (part) =>
+        typeof part === "object" && part !== null && "functionCall" in part,
     );
     const toolCall = asRecord(toolCallPart);
     expect(toolCall.functionCall).toBeTruthy();
@@ -73,10 +74,12 @@ describe("google-shared convertTools", () => {
     const contents = convertMessages(model, context);
     const parts = contents.flatMap((content) => content.parts ?? []);
     const toolCallPart = parts.find(
-      (part) => typeof part === "object" && part !== null && "functionCall" in part,
+      (part) =>
+        typeof part === "object" && part !== null && "functionCall" in part,
     );
     const toolResponsePart = parts.find(
-      (part) => typeof part === "object" && part !== null && "functionResponse" in part,
+      (part) =>
+        typeof part === "object" && part !== null && "functionResponse" in part,
     );
 
     const toolCall = asRecord(toolCallPart);

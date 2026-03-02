@@ -3,18 +3,29 @@ import type { Llama, LlamaEmbeddingContext, LlamaModel } from "node-llama-cpp";
 import type { OpenClawConfig } from "../config/config.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveUserPath } from "../utils.js";
-import { createGeminiEmbeddingProvider, type GeminiEmbeddingClient } from "./embeddings-gemini.js";
+import {
+  createGeminiEmbeddingProvider,
+  type GeminiEmbeddingClient,
+} from "./embeddings-gemini.js";
 import {
   createMistralEmbeddingProvider,
   type MistralEmbeddingClient,
 } from "./embeddings-mistral.js";
-import { createOpenAiEmbeddingProvider, type OpenAiEmbeddingClient } from "./embeddings-openai.js";
-import { createVoyageEmbeddingProvider, type VoyageEmbeddingClient } from "./embeddings-voyage.js";
+import {
+  createOpenAiEmbeddingProvider,
+  type OpenAiEmbeddingClient,
+} from "./embeddings-openai.js";
+import {
+  createVoyageEmbeddingProvider,
+  type VoyageEmbeddingClient,
+} from "./embeddings-voyage.js";
 import { importNodeLlamaCpp } from "./node-llama.js";
 
 function sanitizeAndNormalizeEmbedding(vec: number[]): number[] {
   const sanitized = vec.map((value) => (Number.isFinite(value) ? value : 0));
-  const magnitude = Math.sqrt(sanitized.reduce((sum, value) => sum + value * value, 0));
+  const magnitude = Math.sqrt(
+    sanitized.reduce((sum, value) => sum + value * value, 0),
+  );
   if (magnitude < 1e-10) {
     return sanitized;
   }
@@ -34,11 +45,21 @@ export type EmbeddingProvider = {
   embedBatch: (texts: string[]) => Promise<number[][]>;
 };
 
-export type EmbeddingProviderId = "openai" | "local" | "gemini" | "voyage" | "mistral";
+export type EmbeddingProviderId =
+  | "openai"
+  | "local"
+  | "gemini"
+  | "voyage"
+  | "mistral";
 export type EmbeddingProviderRequest = EmbeddingProviderId | "auto";
 export type EmbeddingProviderFallback = EmbeddingProviderId | "none";
 
-const REMOTE_EMBEDDING_PROVIDER_IDS = ["openai", "gemini", "voyage", "mistral"] as const;
+const REMOTE_EMBEDDING_PROVIDER_IDS = [
+  "openai",
+  "gemini",
+  "voyage",
+  "mistral",
+] as const;
 
 export type EmbeddingProviderResult = {
   provider: EmbeddingProvider | null;
@@ -100,7 +121,8 @@ async function createLocalEmbeddingProvider(
   const modelCacheDir = options.local?.modelCacheDir?.trim();
 
   // Lazy-load node-llama-cpp to keep startup light unless local is enabled.
-  const { getLlama, resolveModelFile, LlamaLogLevel } = await importNodeLlamaCpp();
+  const { getLlama, resolveModelFile, LlamaLogLevel } =
+    await importNodeLlamaCpp();
 
   let llama: Llama | null = null;
   let embeddingModel: LlamaModel | null = null;
@@ -111,7 +133,10 @@ async function createLocalEmbeddingProvider(
       llama = await getLlama({ logLevel: LlamaLogLevel.error });
     }
     if (!embeddingModel) {
-      const resolved = await resolveModelFile(modelPath, modelCacheDir || undefined);
+      const resolved = await resolveModelFile(
+        modelPath,
+        modelCacheDir || undefined,
+      );
       embeddingModel = await llama.loadModel({ modelPath: resolved });
     }
     if (!embeddingContext) {
@@ -161,7 +186,8 @@ export async function createEmbeddingProvider(
       return { provider, voyage: client };
     }
     if (id === "mistral") {
-      const { provider, client } = await createMistralEmbeddingProvider(options);
+      const { provider, client } =
+        await createMistralEmbeddingProvider(options);
       return { provider, mistral: client };
     }
     const { provider, client } = await createOpenAiEmbeddingProvider(options);
@@ -202,8 +228,13 @@ export async function createEmbeddingProvider(
     }
 
     // All providers failed due to missing API keys - return null provider for FTS-only mode
-    const details = [...missingKeyErrors, localError].filter(Boolean) as string[];
-    const reason = details.length > 0 ? details.join("\n\n") : "No embeddings provider available.";
+    const details = [...missingKeyErrors, localError].filter(
+      Boolean,
+    ) as string[];
+    const reason =
+      details.length > 0
+        ? details.join("\n\n")
+        : "No embeddings provider available.";
     return {
       provider: null,
       requestedProvider,
@@ -229,7 +260,10 @@ export async function createEmbeddingProvider(
         // Both primary and fallback failed - check if it's auth-related
         const fallbackReason = formatErrorMessage(fallbackErr);
         const combinedReason = `${reason}\n\nFallback to ${fallback} failed: ${fallbackReason}`;
-        if (isMissingApiKeyError(primaryErr) && isMissingApiKeyError(fallbackErr)) {
+        if (
+          isMissingApiKeyError(primaryErr) &&
+          isMissingApiKeyError(fallbackErr)
+        ) {
           // Both failed due to missing API keys - return null for FTS-only mode
           return {
             provider: null,
@@ -240,7 +274,9 @@ export async function createEmbeddingProvider(
           };
         }
         // Non-auth errors are still fatal
-        const wrapped = new Error(combinedReason) as Error & { cause?: unknown };
+        const wrapped = new Error(combinedReason) as Error & {
+          cause?: unknown;
+        };
         wrapped.cause = fallbackErr;
         throw wrapped;
       }
@@ -288,7 +324,8 @@ function formatLocalSetupError(err: unknown): string {
       : null,
     "3) If you use pnpm: pnpm approve-builds (select node-llama-cpp), then pnpm rebuild node-llama-cpp",
     ...REMOTE_EMBEDDING_PROVIDER_IDS.map(
-      (provider) => `Or set agents.defaults.memorySearch.provider = "${provider}" (remote).`,
+      (provider) =>
+        `Or set agents.defaults.memorySearch.provider = "${provider}" (remote).`,
     ),
   ]
     .filter(Boolean)

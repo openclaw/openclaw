@@ -20,7 +20,8 @@ const TEST_EXEC_DEFAULTS = {
 
 const createTestExecTool = (
   defaults?: Parameters<typeof createExecTool>[0],
-): ReturnType<typeof createExecTool> => createExecTool({ ...TEST_EXEC_DEFAULTS, ...defaults });
+): ReturnType<typeof createExecTool> =>
+  createExecTool({ ...TEST_EXEC_DEFAULTS, ...defaults });
 
 afterEach(() => {
   resetProcessRegistryForTests();
@@ -72,7 +73,11 @@ async function expectBackgroundSessionSurvivesAbort(params: {
       () => {
         const running = getSession(sessionId);
         const finished = getFinishedSession(sessionId);
-        return Date.now() - startedAt >= ABORT_SETTLE_MS && !finished && running?.exited === false;
+        return (
+          Date.now() - startedAt >= ABORT_SETTLE_MS &&
+          !finished &&
+          running?.exited === false
+        );
       },
       { timeout: ABORT_WAIT_TIMEOUT_MS, interval: POLL_INTERVAL_MS },
     )
@@ -96,7 +101,11 @@ async function expectBackgroundSessionTimesOut(params: {
 }) {
   const abortController = new AbortController();
   const signal = params.signal ?? abortController.signal;
-  const result = await params.tool.execute("toolcall", params.executeParams, signal);
+  const result = await params.tool.execute(
+    "toolcall",
+    params.executeParams,
+    signal,
+  );
   expect(result.details.status).toBe("running");
   const sessionId = (result.details as { sessionId: string }).sessionId;
 
@@ -125,7 +134,11 @@ test("pty background exec is not killed when tool signal aborts", async () => {
   const tool = createTestExecTool({ allowBackground: true, backgroundMs: 0 });
   await expectBackgroundSessionSurvivesAbort({
     tool,
-    executeParams: { command: BACKGROUND_HOLD_CMD, background: true, pty: true },
+    executeParams: {
+      command: BACKGROUND_HOLD_CMD,
+      background: true,
+      pty: true,
+    },
   });
 });
 
@@ -148,10 +161,16 @@ test("background exec without explicit timeout ignores default timeout", async (
     backgroundMs: 0,
     timeoutSec: BACKGROUND_TIMEOUT_SEC,
   });
-  const result = await tool.execute("toolcall", { command: BACKGROUND_HOLD_CMD, background: true });
+  const result = await tool.execute("toolcall", {
+    command: BACKGROUND_HOLD_CMD,
+    background: true,
+  });
   expect(result.details.status).toBe("running");
   const sessionId = (result.details as { sessionId: string }).sessionId;
-  const waitMs = Math.max(ABORT_SETTLE_MS + 80, BACKGROUND_TIMEOUT_SEC * 1000 + 80);
+  const waitMs = Math.max(
+    ABORT_SETTLE_MS + 80,
+    BACKGROUND_TIMEOUT_SEC * 1000 + 80,
+  );
 
   const startedAt = Date.now();
   await expect
@@ -159,7 +178,11 @@ test("background exec without explicit timeout ignores default timeout", async (
       () => {
         const running = getSession(sessionId);
         const finished = getFinishedSession(sessionId);
-        return Date.now() - startedAt >= waitMs && !finished && running?.exited === false;
+        return (
+          Date.now() - startedAt >= waitMs &&
+          !finished &&
+          running?.exited === false
+        );
       },
       {
         timeout: waitMs + ABORT_WAIT_TIMEOUT_MS,

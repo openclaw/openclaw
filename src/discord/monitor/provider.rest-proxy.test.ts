@@ -30,7 +30,9 @@ describe("resolveDiscordRestFetch", () => {
       error: vi.fn(),
       exit: vi.fn(),
     } as const;
-    undiciFetchMock.mockClear().mockResolvedValue(new Response("ok", { status: 200 }));
+    undiciFetchMock
+      .mockClear()
+      .mockResolvedValue(new Response("ok", { status: 200 }));
     proxyAgentSpy.mockClear();
     const fetcher = resolveDiscordRestFetch("http://proxy.test:8080", runtime);
 
@@ -40,7 +42,9 @@ describe("resolveDiscordRestFetch", () => {
     expect(undiciFetchMock).toHaveBeenCalledWith(
       "https://discord.com/api/v10/oauth2/applications/@me",
       expect.objectContaining({
-        dispatcher: expect.objectContaining({ proxyUrl: "http://proxy.test:8080" }),
+        dispatcher: expect.objectContaining({
+          proxyUrl: "http://proxy.test:8080",
+        }),
       }),
     );
     expect(runtime.log).toHaveBeenCalledWith("discord: rest proxy enabled");

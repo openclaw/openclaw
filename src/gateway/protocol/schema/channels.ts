@@ -35,9 +35,13 @@ export const TalkConfigResultSchema = Type.Object(
           Type.Object(
             {
               provider: Type.Optional(Type.String()),
-              providers: Type.Optional(Type.Record(Type.String(), TalkProviderConfigSchema)),
+              providers: Type.Optional(
+                Type.Record(Type.String(), TalkProviderConfigSchema),
+              ),
               voiceId: Type.Optional(Type.String()),
-              voiceAliases: Type.Optional(Type.Record(Type.String(), Type.String())),
+              voiceAliases: Type.Optional(
+                Type.Record(Type.String(), Type.String()),
+              ),
               modelId: Type.Optional(Type.String()),
               outputFormat: Type.Optional(Type.String()),
               apiKey: Type.Optional(Type.String()),
@@ -106,7 +110,9 @@ export const ChannelAccountSnapshotSchema = Type.Object(
     allowUnmentionedGroups: Type.Optional(Type.Boolean()),
     cliPath: Type.Optional(Type.Union([Type.String(), Type.Null()])),
     dbPath: Type.Optional(Type.Union([Type.String(), Type.Null()])),
-    port: Type.Optional(Type.Union([Type.Integer({ minimum: 0 }), Type.Null()])),
+    port: Type.Optional(
+      Type.Union([Type.Integer({ minimum: 0 }), Type.Null()]),
+    ),
     probe: Type.Optional(Type.Unknown()),
     audit: Type.Optional(Type.Unknown()),
     application: Type.Optional(Type.Unknown()),
@@ -129,11 +135,18 @@ export const ChannelsStatusResultSchema = Type.Object(
     ts: Type.Integer({ minimum: 0 }),
     channelOrder: Type.Array(NonEmptyString),
     channelLabels: Type.Record(NonEmptyString, NonEmptyString),
-    channelDetailLabels: Type.Optional(Type.Record(NonEmptyString, NonEmptyString)),
-    channelSystemImages: Type.Optional(Type.Record(NonEmptyString, NonEmptyString)),
+    channelDetailLabels: Type.Optional(
+      Type.Record(NonEmptyString, NonEmptyString),
+    ),
+    channelSystemImages: Type.Optional(
+      Type.Record(NonEmptyString, NonEmptyString),
+    ),
     channelMeta: Type.Optional(Type.Array(ChannelUiMetaSchema)),
     channels: Type.Record(NonEmptyString, Type.Unknown()),
-    channelAccounts: Type.Record(NonEmptyString, Type.Array(ChannelAccountSnapshotSchema)),
+    channelAccounts: Type.Record(
+      NonEmptyString,
+      Type.Array(ChannelAccountSnapshotSchema),
+    ),
     channelDefaultAccountId: Type.Record(NonEmptyString, NonEmptyString),
   },
   { additionalProperties: false },

@@ -35,7 +35,9 @@ async function runEnvProviderCase(params: {
 
     const modelPath = path.join(resolveOpenClawAgentDir(), "models.json");
     const raw = await fs.readFile(modelPath, "utf8");
-    const parsed = JSON.parse(raw) as { providers: Record<string, ProviderConfig> };
+    const parsed = JSON.parse(raw) as {
+      providers: Record<string, ProviderConfig>;
+    };
     const provider = parsed.providers[params.providerKey];
     expect(provider?.baseUrl).toBe(params.expectedBaseUrl);
     expect(provider?.apiKey).toBe(params.expectedApiKeyRef);
@@ -55,24 +57,29 @@ async function runEnvProviderCase(params: {
 describe("models-config", () => {
   it("skips writing models.json when no env token or profile exists", async () => {
     await withTempHome(async (home) => {
-      await withTempEnv([...MODELS_CONFIG_IMPLICIT_ENV_VARS, "KIMI_API_KEY"], async () => {
-        unsetEnv([...MODELS_CONFIG_IMPLICIT_ENV_VARS, "KIMI_API_KEY"]);
+      await withTempEnv(
+        [...MODELS_CONFIG_IMPLICIT_ENV_VARS, "KIMI_API_KEY"],
+        async () => {
+          unsetEnv([...MODELS_CONFIG_IMPLICIT_ENV_VARS, "KIMI_API_KEY"]);
 
-        const agentDir = path.join(home, "agent-empty");
-        // ensureAuthProfileStore merges the main auth store into non-main dirs; point main at our temp dir.
-        process.env.OPENCLAW_AGENT_DIR = agentDir;
-        process.env.PI_CODING_AGENT_DIR = agentDir;
+          const agentDir = path.join(home, "agent-empty");
+          // ensureAuthProfileStore merges the main auth store into non-main dirs; point main at our temp dir.
+          process.env.OPENCLAW_AGENT_DIR = agentDir;
+          process.env.PI_CODING_AGENT_DIR = agentDir;
 
-        const result = await ensureOpenClawModelsJson(
-          {
-            models: { providers: {} },
-          },
-          agentDir,
-        );
+          const result = await ensureOpenClawModelsJson(
+            {
+              models: { providers: {} },
+            },
+            agentDir,
+          );
 
-        await expect(fs.stat(path.join(agentDir, "models.json"))).rejects.toThrow();
-        expect(result.wrote).toBe(false);
-      });
+          await expect(
+            fs.stat(path.join(agentDir, "models.json")),
+          ).rejects.toThrow();
+          expect(result.wrote).toBe(false);
+        },
+      );
     });
   });
 
@@ -86,7 +93,9 @@ describe("models-config", () => {
         providers: Record<string, { baseUrl?: string }>;
       };
 
-      expect(parsed.providers["custom-proxy"]?.baseUrl).toBe("http://localhost:4000/v1");
+      expect(parsed.providers["custom-proxy"]?.baseUrl).toBe(
+        "http://localhost:4000/v1",
+      );
     });
   });
 

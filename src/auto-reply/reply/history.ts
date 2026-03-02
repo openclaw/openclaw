@@ -1,6 +1,7 @@
 import { CURRENT_MESSAGE_MARKER } from "./mentions.js";
 
-export const HISTORY_CONTEXT_MARKER = "[Chat messages since your last reply - for context]";
+export const HISTORY_CONTEXT_MARKER =
+  "[Chat messages since your last reply - for context]";
 export const DEFAULT_GROUP_HISTORY_LIMIT = 50;
 
 /** Maximum number of group history keys to retain (LRU eviction when exceeded). */
@@ -44,9 +45,13 @@ export function buildHistoryContext(params: {
   if (!historyText.trim()) {
     return currentMessage;
   }
-  return [HISTORY_CONTEXT_MARKER, historyText, "", CURRENT_MESSAGE_MARKER, currentMessage].join(
-    lineBreak,
-  );
+  return [
+    HISTORY_CONTEXT_MARKER,
+    historyText,
+    "",
+    CURRENT_MESSAGE_MARKER,
+    currentMessage,
+  ].join(lineBreak);
 }
 
 export function appendHistoryEntry<T extends HistoryEntry>(params: {
@@ -83,7 +88,9 @@ export function recordPendingHistoryEntry<T extends HistoryEntry>(params: {
   return appendHistoryEntry(params);
 }
 
-export function recordPendingHistoryEntryIfEnabled<T extends HistoryEntry>(params: {
+export function recordPendingHistoryEntryIfEnabled<
+  T extends HistoryEntry,
+>(params: {
   historyMap: Map<string, T[]>;
   historyKey: string;
   entry?: T | null;
@@ -169,7 +176,10 @@ export function clearHistoryEntriesIfEnabled(params: {
   if (params.limit <= 0) {
     return;
   }
-  clearHistoryEntries({ historyMap: params.historyMap, historyKey: params.historyKey });
+  clearHistoryEntries({
+    historyMap: params.historyMap,
+    historyKey: params.historyKey,
+  });
 }
 
 export function buildHistoryContextFromEntries(params: {
@@ -180,7 +190,8 @@ export function buildHistoryContextFromEntries(params: {
   excludeLast?: boolean;
 }): string {
   const lineBreak = params.lineBreak ?? "\n";
-  const entries = params.excludeLast === false ? params.entries : params.entries.slice(0, -1);
+  const entries =
+    params.excludeLast === false ? params.entries : params.entries.slice(0, -1);
   if (entries.length === 0) {
     return params.currentMessage;
   }

@@ -1,9 +1,15 @@
-import type { ChannelGroupContext, GroupToolPolicyConfig } from "openclaw/plugin-sdk";
+import type {
+  ChannelGroupContext,
+  GroupToolPolicyConfig,
+} from "openclaw/plugin-sdk";
 import { resolveMatrixAccountConfig } from "./matrix/accounts.js";
 import { resolveMatrixRoomConfig } from "./matrix/monitor/rooms.js";
 import type { CoreConfig } from "./types.js";
 
-function stripLeadingPrefixCaseInsensitive(value: string, prefix: string): string {
+function stripLeadingPrefixCaseInsensitive(
+  value: string,
+  prefix: string,
+): string {
   return value.toLowerCase().startsWith(prefix.toLowerCase())
     ? value.slice(prefix.length).trim()
     : value;
@@ -19,7 +25,10 @@ function resolveMatrixRoomConfigForGroup(params: ChannelGroupContext) {
   const groupChannel = params.groupChannel?.trim() ?? "";
   const aliases = groupChannel ? [groupChannel] : [];
   const cfg = params.cfg as CoreConfig;
-  const matrixConfig = resolveMatrixAccountConfig({ cfg, accountId: params.accountId });
+  const matrixConfig = resolveMatrixAccountConfig({
+    cfg,
+    accountId: params.accountId,
+  });
   return resolveMatrixRoomConfig({
     rooms: matrixConfig.groups ?? matrixConfig.rooms,
     roomId,
@@ -28,7 +37,9 @@ function resolveMatrixRoomConfigForGroup(params: ChannelGroupContext) {
   }).config;
 }
 
-export function resolveMatrixGroupRequireMention(params: ChannelGroupContext): boolean {
+export function resolveMatrixGroupRequireMention(
+  params: ChannelGroupContext,
+): boolean {
   const resolved = resolveMatrixRoomConfigForGroup(params);
   if (resolved) {
     if (resolved.autoReply === true) {

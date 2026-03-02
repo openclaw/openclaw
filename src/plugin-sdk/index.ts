@@ -60,7 +60,10 @@ export type {
   BaseProbeResult,
   BaseTokenResolution,
 } from "../channels/plugins/types.js";
-export type { ChannelConfigSchema, ChannelPlugin } from "../channels/plugins/types.plugin.js";
+export type {
+  ChannelConfigSchema,
+  ChannelPlugin,
+} from "../channels/plugins/types.plugin.js";
 export type {
   ThreadBindingManager,
   ThreadBindingRecord,
@@ -260,12 +263,21 @@ export type { OutboundMediaLoadOptions } from "./outbound-media.js";
 export { loadOutboundMediaFromUrl } from "./outbound-media.js";
 export { resolveChannelAccountConfigBasePath } from "./config-paths.js";
 export { buildMediaPayload } from "../channels/plugins/media-payload.js";
-export type { MediaPayload, MediaPayloadInput } from "../channels/plugins/media-payload.js";
+export type {
+  MediaPayload,
+  MediaPayloadInput,
+} from "../channels/plugins/media-payload.js";
 export { createLoggerBackedRuntime } from "./runtime.js";
 export { chunkTextForOutbound } from "./text-chunking.js";
 export { readBooleanParam } from "./boolean-param.js";
-export { readJsonFileWithFallback, writeJsonFileAtomically } from "./json-store.js";
-export { generatePkceVerifierChallenge, toFormUrlEncoded } from "./oauth-utils.js";
+export {
+  readJsonFileWithFallback,
+  writeJsonFileAtomically,
+} from "./json-store.js";
+export {
+  generatePkceVerifierChallenge,
+  toFormUrlEncoded,
+} from "./oauth-utils.js";
 export { buildRandomTempFilePath, withTempDownloadPath } from "./temp-path.js";
 export {
   applyWindowsSpawnProgramPolicy,
@@ -384,7 +396,10 @@ export {
   recordPendingHistoryEntryIfEnabled,
 } from "../auto-reply/reply/history.js";
 export type { HistoryEntry } from "../auto-reply/reply/history.js";
-export { mergeAllowlist, summarizeMapping } from "../channels/allowlists/resolve-utils.js";
+export {
+  mergeAllowlist,
+  summarizeMapping,
+} from "../channels/allowlists/resolve-utils.js";
 export {
   resolveMentionGating,
   resolveMentionGatingWithBypass,
@@ -400,8 +415,15 @@ export {
   shouldAckReactionForWhatsApp,
 } from "../channels/ack-reactions.js";
 export { createTypingCallbacks } from "../channels/typing.js";
-export { createReplyPrefixContext, createReplyPrefixOptions } from "../channels/reply-prefix.js";
-export { logAckFailure, logInboundDrop, logTypingFailure } from "../channels/logging.js";
+export {
+  createReplyPrefixContext,
+  createReplyPrefixOptions,
+} from "../channels/reply-prefix.js";
+export {
+  logAckFailure,
+  logInboundDrop,
+  logTypingFailure,
+} from "../channels/logging.js";
 export { resolveChannelMediaMaxBytes } from "../channels/plugins/media-limits.js";
 export type { NormalizedLocation } from "../channels/location.js";
 export { formatLocationText, toLocationContext } from "../channels/location.js";
@@ -490,7 +512,13 @@ export {
 } from "../security/dm-policy-shared.js";
 export type { DmGroupAccessReasonCode } from "../security/dm-policy-shared.js";
 export type { HookEntry } from "../hooks/types.js";
-export { clamp, escapeRegExp, normalizeE164, safeParseJson, sleep } from "../utils.js";
+export {
+  clamp,
+  escapeRegExp,
+  normalizeE164,
+  safeParseJson,
+  sleep,
+} from "../utils.js";
 export { stripAnsi } from "../terminal/ansi.js";
 export { missingTargetError } from "../infra/outbound/target-errors.js";
 export { registerLogTransport } from "../logging/logger.js";
@@ -516,7 +544,11 @@ export type {
   DiagnosticWebhookProcessedEvent,
   DiagnosticWebhookReceivedEvent,
 } from "../infra/diagnostic-events.js";
-export { detectMime, extensionForMime, getFileExtension } from "../media/mime.js";
+export {
+  detectMime,
+  extensionForMime,
+  getFileExtension,
+} from "../media/mime.js";
 export { extractOriginalFilename } from "../media/store.js";
 
 // Channel: Discord
@@ -564,7 +596,10 @@ export {
   resolveSlackReplyToMode,
   type ResolvedSlackAccount,
 } from "../slack/accounts.js";
-export { extractSlackToolSend, listSlackMessageActions } from "../slack/message-actions.js";
+export {
+  extractSlackToolSend,
+  listSlackMessageActions,
+} from "../slack/message-actions.js";
 export { slackOnboardingAdapter } from "../channels/plugins/onboarding/slack.js";
 export {
   looksLikeSlackTargetId,
@@ -611,7 +646,10 @@ export {
   resolveWhatsAppAccount,
   type ResolvedWhatsAppAccount,
 } from "../web/accounts.js";
-export { isWhatsAppGroupJid, normalizeWhatsAppTarget } from "../whatsapp/normalize.js";
+export {
+  isWhatsAppGroupJid,
+  normalizeWhatsAppTarget,
+} from "../whatsapp/normalize.js";
 export { resolveWhatsAppOutboundTarget } from "../whatsapp/resolve-outbound-target.js";
 export { whatsappOnboardingAdapter } from "../channels/plugins/onboarding/whatsapp.js";
 export { resolveWhatsAppHeartbeatRecipients } from "../channels/plugins/whatsapp-heartbeat.js";

@@ -2,7 +2,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { withEnvAsync } from "../test-utils/env.js";
-import { createMediaAttachmentCache, normalizeMediaAttachments } from "./runner.js";
+import {
+  createMediaAttachmentCache,
+  normalizeMediaAttachments,
+} from "./runner.js";
 
 type MediaFixtureParams = {
   ctx: { MediaPath: string; MediaType: string };

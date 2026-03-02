@@ -1,6 +1,9 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
-import { isAcpSessionKey, normalizeMainKey } from "../../routing/session-key.js";
+import {
+  isAcpSessionKey,
+  normalizeMainKey,
+} from "../../routing/session-key.js";
 
 function normalizeKey(value?: string) {
   const trimmed = value?.trim();
@@ -14,7 +17,11 @@ export function resolveMainSessionAlias(cfg: OpenClawConfig) {
   return { mainKey, alias, scope };
 }
 
-export function resolveDisplaySessionKey(params: { key: string; alias: string; mainKey: string }) {
+export function resolveDisplaySessionKey(params: {
+  key: string;
+  alias: string;
+  mainKey: string;
+}) {
   if (params.key === params.alias) {
     return "main";
   }
@@ -24,7 +31,11 @@ export function resolveDisplaySessionKey(params: { key: string; alias: string; m
   return params.key;
 }
 
-export function resolveInternalSessionKey(params: { key: string; alias: string; mainKey: string }) {
+export function resolveInternalSessionKey(params: {
+  key: string;
+  alias: string;
+  mainKey: string;
+}) {
   if (params.key === "main") {
     return params.alias;
   }
@@ -112,7 +123,8 @@ export async function isResolvedSessionVisibleToRequester(params: {
   });
 }
 
-const SESSION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const SESSION_ID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export function looksLikeSessionId(value: string): boolean {
   return SESSION_ID_RE.test(value.trim());
@@ -172,7 +184,9 @@ async function resolveSessionKeyFromSessionId(params: {
       method: "sessions.resolve",
       params: {
         sessionId: params.sessionId,
-        spawnedBy: params.restrictToSpawned ? params.requesterInternalKey : undefined,
+        spawnedBy: params.restrictToSpawned
+          ? params.requesterInternalKey
+          : undefined,
         includeGlobal: !params.restrictToSpawned,
         includeUnknown: !params.restrictToSpawned,
       },
@@ -225,7 +239,9 @@ async function resolveSessionKeyFromKey(params: {
       method: "sessions.resolve",
       params: {
         key: params.key,
-        spawnedBy: params.restrictToSpawned ? params.requesterInternalKey : undefined,
+        spawnedBy: params.restrictToSpawned
+          ? params.requesterInternalKey
+          : undefined,
       },
     });
     const key = typeof result?.key === "string" ? result.key.trim() : "";
@@ -286,7 +302,12 @@ export async function resolveSessionReference(params: {
     alias: params.alias,
     mainKey: params.mainKey,
   });
-  return { ok: true, key: resolvedKey, displayKey, resolvedViaSessionId: false };
+  return {
+    ok: true,
+    key: resolvedKey,
+    displayKey,
+    resolvedViaSessionId: false,
+  };
 }
 
 export function normalizeOptionalKey(value?: string) {

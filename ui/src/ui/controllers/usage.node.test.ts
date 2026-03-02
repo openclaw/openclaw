@@ -3,7 +3,10 @@ import { __test, loadUsage, type UsageState } from "./usage.ts";
 
 type RequestFn = (method: string, params?: unknown) => Promise<unknown>;
 
-function createState(request: RequestFn, overrides: Partial<UsageState> = {}): UsageState {
+function createState(
+  request: RequestFn,
+  overrides: Partial<UsageState> = {},
+): UsageState {
   return {
     client: { request } as unknown as UsageState["client"],
     connected: true,

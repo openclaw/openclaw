@@ -2,13 +2,19 @@ import {
   discoverHuggingfaceModels,
   isHuggingfacePolicyLocked,
 } from "../agents/huggingface-models.js";
-import { normalizeApiKeyInput, validateApiKeyInput } from "./auth-choice.api-key.js";
+import {
+  normalizeApiKeyInput,
+  validateApiKeyInput,
+} from "./auth-choice.api-key.js";
 import {
   createAuthChoiceAgentModelNoter,
   ensureApiKeyFromOptionEnvOrPrompt,
   normalizeSecretInputModeInput,
 } from "./auth-choice.apply-helpers.js";
-import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
+import type {
+  ApplyAuthChoiceParams,
+  ApplyAuthChoiceResult,
+} from "./auth-choice.apply.js";
 import { applyDefaultModelChoice } from "./auth-choice.default-model.js";
 import { ensureModelAllowlistEntry } from "./model-allowlist.js";
 import {
@@ -28,7 +34,9 @@ export async function applyAuthChoiceHuggingface(
   let nextConfig = params.config;
   let agentModelOverride: string | undefined;
   const noteAgentModel = createAuthChoiceAgentModelNoter(params);
-  const requestedSecretInputMode = normalizeSecretInputModeInput(params.opts?.secretInputMode);
+  const requestedSecretInputMode = normalizeSecretInputModeInput(
+    params.opts?.secretInputMode,
+  );
 
   const hfKey = await ensureApiKeyFromOptionEnvOrPrompt({
     token: params.opts?.token,
@@ -63,7 +71,10 @@ export async function applyAuthChoiceHuggingface(
     const baseRef = `${modelRefPrefix}${m.id}`;
     const label = m.name ?? m.id;
     options.push({ value: baseRef, label });
-    options.push({ value: `${baseRef}:cheapest`, label: `${label} (cheapest)` });
+    options.push({
+      value: `${baseRef}:cheapest`,
+      label: `${label} (cheapest)`,
+    });
     options.push({ value: `${baseRef}:fastest`, label: `${label} (fastest)` });
   }
   const defaultRef = HUGGINGFACE_DEFAULT_MODEL_REF;
@@ -110,9 +121,12 @@ export async function applyAuthChoiceHuggingface(
           defaults: {
             ...withProvider.agents?.defaults,
             model: {
-              ...(existingModel && typeof existingModel === "object" && "fallbacks" in existingModel
+              ...(existingModel &&
+              typeof existingModel === "object" &&
+              "fallbacks" in existingModel
                 ? {
-                    fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks,
+                    fallbacks: (existingModel as { fallbacks?: string[] })
+                      .fallbacks,
                   }
                 : {}),
               primary: selectedModelRef,

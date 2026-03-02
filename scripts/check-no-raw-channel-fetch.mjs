@@ -2,7 +2,11 @@
 
 import ts from "typescript";
 import { runCallsiteGuard } from "./lib/callsite-guard.mjs";
-import { runAsScript, toLine, unwrapExpression } from "./lib/ts-guard-utils.mjs";
+import {
+  runAsScript,
+  toLine,
+  unwrapExpression,
+} from "./lib/ts-guard-utils.mjs";
 
 const sourceRoots = [
   "src/telegram",
@@ -79,7 +83,12 @@ function isRawFetchCall(expression) {
 }
 
 export function findRawFetchCallLines(content, fileName = "source.ts") {
-  const sourceFile = ts.createSourceFile(fileName, content, ts.ScriptTarget.Latest, true);
+  const sourceFile = ts.createSourceFile(
+    fileName,
+    content,
+    ts.ScriptTarget.Latest,
+    true,
+  );
   const lines = [];
   const visit = (node) => {
     if (ts.isCallExpression(node) && isRawFetchCall(node.expression)) {
@@ -98,8 +107,10 @@ export async function main() {
     extraTestSuffixes: [".browser.test.ts", ".node.test.ts"],
     findCallLines: findRawFetchCallLines,
     allowCallsite: (callsite) => allowedRawFetchCallsites.has(callsite),
-    header: "Found raw fetch() usage in channel/plugin runtime sources outside allowlist:",
-    footer: "Use fetchWithSsrFGuard() or existing channel/plugin SDK wrappers for network calls.",
+    header:
+      "Found raw fetch() usage in channel/plugin runtime sources outside allowlist:",
+    footer:
+      "Use fetchWithSsrFGuard() or existing channel/plugin SDK wrappers for network calls.",
   });
 }
 

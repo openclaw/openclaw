@@ -6,7 +6,9 @@ export function unscopedPackageName(name: string): string {
   if (!trimmed) {
     return trimmed;
   }
-  return trimmed.includes("/") ? (trimmed.split("/").pop() ?? trimmed) : trimmed;
+  return trimmed.includes("/")
+    ? (trimmed.split("/").pop() ?? trimmed)
+    : trimmed;
 }
 
 export function safeDirName(input: string): string {

@@ -15,7 +15,10 @@ export type MessagingTargetParseOptions = {
   ambiguousMessage?: string;
 };
 
-export function normalizeTargetId(kind: MessagingTargetKind, id: string): string {
+export function normalizeTargetId(
+  kind: MessagingTargetKind,
+  id: string,
+): string {
   return `${kind}:${id}`.toLowerCase();
 }
 
@@ -94,7 +97,9 @@ export function requireTargetKind(params: {
     throw new Error(`${params.platform} ${kindLabel} id is required.`);
   }
   if (params.target.kind !== params.kind) {
-    throw new Error(`${params.platform} ${kindLabel} id is required (use ${kindLabel}:<id>).`);
+    throw new Error(
+      `${params.platform} ${kindLabel} id is required (use ${kindLabel}:<id>).`,
+    );
   }
   return params.target.id;
 }

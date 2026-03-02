@@ -47,7 +47,10 @@ describe("cron listPage sort guards", () => {
     ];
     const state = createMockCronStateForJobs({ jobs });
 
-    const page = await listPage(state, { sortBy: "nextRunAtMs", sortDir: "asc" });
+    const page = await listPage(state, {
+      sortBy: "nextRunAtMs",
+      sortDir: "asc",
+    });
     expect(page.jobs).toHaveLength(2);
   });
 });

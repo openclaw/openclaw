@@ -1,4 +1,8 @@
-import { requiresExecApproval, type ExecAsk, type ExecSecurity } from "../infra/exec-approvals.js";
+import {
+  requiresExecApproval,
+  type ExecAsk,
+  type ExecSecurity,
+} from "../infra/exec-approvals.js";
 
 export type ExecApprovalDecision = "allow-once" | "allow-always" | null;
 
@@ -21,7 +25,9 @@ export type SystemRunPolicyDecision = {
     }
 );
 
-export function resolveExecApprovalDecision(value: unknown): ExecApprovalDecision {
+export function resolveExecApprovalDecision(
+  value: unknown,
+): ExecApprovalDecision {
   if (value === "allow-once" || value === "allow-always") {
     return value;
   }
@@ -60,12 +66,16 @@ export function evaluateSystemRunPolicy(params: {
   cmdInvocation: boolean;
   shellWrapperInvocation: boolean;
 }): SystemRunPolicyDecision {
-  const shellWrapperBlocked = params.security === "allowlist" && params.shellWrapperInvocation;
+  const shellWrapperBlocked =
+    params.security === "allowlist" && params.shellWrapperInvocation;
   const windowsShellWrapperBlocked =
     shellWrapperBlocked && params.isWindows && params.cmdInvocation;
   const analysisOk = shellWrapperBlocked ? false : params.analysisOk;
-  const allowlistSatisfied = shellWrapperBlocked ? false : params.allowlistSatisfied;
-  const approvedByAsk = params.approvalDecision !== null || params.approved === true;
+  const allowlistSatisfied = shellWrapperBlocked
+    ? false
+    : params.allowlistSatisfied;
+  const approvedByAsk =
+    params.approvalDecision !== null || params.approved === true;
 
   if (params.security === "deny") {
     return {
@@ -103,7 +113,11 @@ export function evaluateSystemRunPolicy(params: {
     };
   }
 
-  if (params.security === "allowlist" && (!analysisOk || !allowlistSatisfied) && !approvedByAsk) {
+  if (
+    params.security === "allowlist" &&
+    (!analysisOk || !allowlistSatisfied) &&
+    !approvedByAsk
+  ) {
     return {
       allowed: false,
       eventReason: "allowlist-miss",

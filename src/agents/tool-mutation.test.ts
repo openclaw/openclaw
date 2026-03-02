@@ -9,7 +9,9 @@ import {
 
 describe("tool mutation helpers", () => {
   it("treats session_status as mutating only when model override is provided", () => {
-    expect(isMutatingToolCall("session_status", { sessionKey: "agent:main:main" })).toBe(false);
+    expect(
+      isMutatingToolCall("session_status", { sessionKey: "agent:main:main" }),
+    ).toBe(false);
     expect(
       isMutatingToolCall("session_status", {
         sessionKey: "agent:main:main",
@@ -29,19 +31,28 @@ describe("tool mutation helpers", () => {
     expect(writeFingerprint).toContain("id=42");
     expect(writeFingerprint).not.toContain("meta=write /tmp/demo.txt");
 
-    const metaOnlyFingerprint = buildToolActionFingerprint("exec", { command: "ls -la" }, "ls -la");
+    const metaOnlyFingerprint = buildToolActionFingerprint(
+      "exec",
+      { command: "ls -la" },
+      "ls -la",
+    );
     expect(metaOnlyFingerprint).toContain("tool=exec");
     expect(metaOnlyFingerprint).toContain("meta=ls -la");
 
-    const readFingerprint = buildToolActionFingerprint("read", { path: "/tmp/demo.txt" });
+    const readFingerprint = buildToolActionFingerprint("read", {
+      path: "/tmp/demo.txt",
+    });
     expect(readFingerprint).toBeUndefined();
   });
 
   it("exposes mutation state for downstream payload rendering", () => {
     expect(
-      buildToolMutationState("message", { action: "send", to: "telegram:1" }).mutatingAction,
+      buildToolMutationState("message", { action: "send", to: "telegram:1" })
+        .mutatingAction,
     ).toBe(true);
-    expect(buildToolMutationState("browser", { action: "list" }).mutatingAction).toBe(false);
+    expect(
+      buildToolMutationState("browser", { action: "list" }).mutatingAction,
+    ).toBe(false);
   });
 
   it("matches tool actions by fingerprint and fails closed on asymmetric data", () => {

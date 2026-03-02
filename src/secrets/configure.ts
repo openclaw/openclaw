@@ -2,7 +2,11 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { confirm, select, text } from "@clack/prompts";
 import type { OpenClawConfig } from "../config/config.js";
-import type { SecretProviderConfig, SecretRef, SecretRefSource } from "../config/types.secrets.js";
+import type {
+  SecretProviderConfig,
+  SecretRef,
+  SecretRefSource,
+} from "../config/types.secrets.js";
 import { isSafeExecutableValue } from "../infra/exec-safety.js";
 import { runSecretsApply, type SecretsApplyResult } from "./apply.js";
 import { createSecretsConfigIO } from "./config-io.js";
@@ -11,7 +15,10 @@ import { resolveDefaultSecretProviderAlias } from "./ref-contract.js";
 import { isRecord } from "./shared.js";
 
 type ConfigureCandidate = {
-  type: "models.providers.apiKey" | "skills.entries.apiKey" | "channels.googlechat.serviceAccount";
+  type:
+    | "models.providers.apiKey"
+    | "skills.entries.apiKey"
+    | "channels.googlechat.serviceAccount";
   path: string;
   pathSegments: string[];
   label: string;
@@ -44,7 +51,10 @@ function parseCsv(value: string): string[] {
     .filter((entry) => entry.length > 0);
 }
 
-function parseOptionalPositiveInt(value: string, max: number): number | undefined {
+function parseOptionalPositiveInt(
+  value: string,
+  max: number,
+): number | undefined {
   const trimmed = value.trim();
   if (!trimmed) {
     return undefined;
@@ -59,7 +69,9 @@ function parseOptionalPositiveInt(value: string, max: number): number | undefine
   return parsed;
 }
 
-function getSecretProviders(config: OpenClawConfig): Record<string, SecretProviderConfig> {
+function getSecretProviders(
+  config: OpenClawConfig,
+): Record<string, SecretProviderConfig> {
   if (!isRecord(config.secrets?.providers)) {
     return {};
   }
@@ -78,7 +90,10 @@ function setSecretProvider(
   config.secrets.providers[providerAlias] = providerConfig;
 }
 
-function removeSecretProvider(config: OpenClawConfig, providerAlias: string): boolean {
+function removeSecretProvider(
+  config: OpenClawConfig,
+  providerAlias: string,
+): boolean {
   if (!isRecord(config.secrets?.providers)) {
     return false;
   }
@@ -116,7 +131,9 @@ function removeSecretProvider(config: OpenClawConfig, providerAlias: string): bo
 
 function providerHint(provider: SecretProviderConfig): string {
   if (provider.source === "env") {
-    return provider.allowlist?.length ? `env (${provider.allowlist.length} allowlisted)` : "env";
+    return provider.allowlist?.length
+      ? `env (${provider.allowlist.length} allowlisted)`
+      : "env";
   }
   if (provider.source === "file") {
     return `file (${provider.mode ?? "json"})`;
@@ -126,7 +143,9 @@ function providerHint(provider: SecretProviderConfig): string {
 
 function buildCandidates(config: OpenClawConfig): ConfigureCandidate[] {
   const out: ConfigureCandidate[] = [];
-  const providers = config.models?.providers as Record<string, unknown> | undefined;
+  const providers = config.models?.providers as
+    | Record<string, unknown>
+    | undefined;
   if (providers) {
     for (const [providerId, providerValue] of Object.entries(providers)) {
       if (!isRecord(providerValue)) {
@@ -174,7 +193,13 @@ function buildCandidates(config: OpenClawConfig): ConfigureCandidate[] {
         out.push({
           type: "channels.googlechat.serviceAccount",
           path: `channels.googlechat.accounts.${accountId}.serviceAccount`,
-          pathSegments: ["channels", "googlechat", "accounts", accountId, "serviceAccount"],
+          pathSegments: [
+            "channels",
+            "googlechat",
+            "accounts",
+            accountId,
+            "serviceAccount",
+          ],
           label: `Google Chat serviceAccount (${accountId})`,
           accountId,
         });
@@ -185,9 +210,13 @@ function buildCandidates(config: OpenClawConfig): ConfigureCandidate[] {
   return out;
 }
 
-function toSourceChoices(config: OpenClawConfig): Array<{ value: SecretRefSource; label: string }> {
+function toSourceChoices(
+  config: OpenClawConfig,
+): Array<{ value: SecretRefSource; label: string }> {
   const hasSource = (source: SecretRefSource) =>
-    Object.values(config.secrets?.providers ?? {}).some((provider) => provider?.source === source);
+    Object.values(config.secrets?.providers ?? {}).some(
+      (provider) => provider?.source === source,
+    );
   const choices: Array<{ value: SecretRefSource; label: string }> = [
     {
       value: "env",
@@ -220,7 +249,10 @@ async function promptOptionalPositiveInt(params: {
       message: params.message,
       initialValue: params.initialValue ? String(params.initialValue) : "",
       validate: (value) => {
-        const parsed = parseOptionalPositiveInt(String(value ?? ""), params.max);
+        const parsed = parseOptionalPositiveInt(
+          String(value ?? ""),
+          params.max,
+        );
         if (String(value ?? "").trim() && parsed === undefined) {
           return `Must be an integer between 1 and ${params.max}`;
         }
@@ -232,7 +264,9 @@ async function promptOptionalPositiveInt(params: {
   return parseOptionalPositiveInt(String(raw ?? ""), params.max);
 }
 
-async function promptProviderAlias(params: { existingAliases: Set<string> }): Promise<string> {
+async function promptProviderAlias(params: {
+  existingAliases: Set<string>;
+}): Promise<string> {
   const alias = assertNoCancel(
     await text({
       message: "Provider alias",
@@ -256,7 +290,9 @@ async function promptProviderAlias(params: { existingAliases: Set<string> }): Pr
   return String(alias).trim();
 }
 
-async function promptProviderSource(initial?: SecretRefSource): Promise<SecretRefSource> {
+async function promptProviderSource(
+  initial?: SecretRefSource,
+): Promise<SecretRefSource> {
   const source = assertNoCancel(
     await select({
       message: "Provider source",
@@ -357,7 +393,10 @@ async function parseArgsInput(rawValue: string): Promise<string[] | undefined> {
     return undefined;
   }
   const parsed = JSON.parse(trimmed) as unknown;
-  if (!Array.isArray(parsed) || !parsed.every((entry) => typeof entry === "string")) {
+  if (
+    !Array.isArray(parsed) ||
+    !parsed.every((entry) => typeof entry === "string")
+  ) {
     throw new Error("args must be a JSON array of strings");
   }
   return parsed;
@@ -398,7 +437,10 @@ async function promptExecProvider(
         }
         try {
           const parsed = JSON.parse(trimmed) as unknown;
-          if (!Array.isArray(parsed) || !parsed.every((entry) => typeof entry === "string")) {
+          if (
+            !Array.isArray(parsed) ||
+            !parsed.every((entry) => typeof entry === "string")
+          ) {
             return "Must be a JSON array of strings";
           }
           return undefined;
@@ -510,22 +552,34 @@ async function promptProviderConfig(
   current?: SecretProviderConfig,
 ): Promise<SecretProviderConfig> {
   if (source === "env") {
-    return await promptEnvProvider(current?.source === "env" ? current : undefined);
+    return await promptEnvProvider(
+      current?.source === "env" ? current : undefined,
+    );
   }
   if (source === "file") {
-    return await promptFileProvider(current?.source === "file" ? current : undefined);
+    return await promptFileProvider(
+      current?.source === "file" ? current : undefined,
+    );
   }
-  return await promptExecProvider(current?.source === "exec" ? current : undefined);
+  return await promptExecProvider(
+    current?.source === "exec" ? current : undefined,
+  );
 }
 
-async function configureProvidersInteractive(config: OpenClawConfig): Promise<void> {
+async function configureProvidersInteractive(
+  config: OpenClawConfig,
+): Promise<void> {
   while (true) {
     const providers = getSecretProviders(config);
-    const providerEntries = Object.entries(providers).toSorted(([left], [right]) =>
-      left.localeCompare(right),
+    const providerEntries = Object.entries(providers).toSorted(
+      ([left], [right]) => left.localeCompare(right),
     );
 
-    const actionOptions: Array<{ value: string; label: string; hint?: string }> = [
+    const actionOptions: Array<{
+      value: string;
+      label: string;
+      hint?: string;
+    }> = [
       {
         value: "add",
         label: "Add provider",
@@ -568,7 +622,9 @@ async function configureProvidersInteractive(config: OpenClawConfig): Promise<vo
     if (action === "add") {
       const source = await promptProviderSource();
       const alias = await promptProviderAlias({
-        existingAliases: new Set(providerEntries.map(([providerAlias]) => providerAlias)),
+        existingAliases: new Set(
+          providerEntries.map(([providerAlias]) => providerAlias),
+        ),
       });
       const providerConfig = await promptProviderConfig(source);
       setSecretProvider(config, alias, providerConfig);
@@ -626,7 +682,10 @@ async function configureProvidersInteractive(config: OpenClawConfig): Promise<vo
   }
 }
 
-function collectProviderPlanChanges(params: { original: OpenClawConfig; next: OpenClawConfig }): {
+function collectProviderPlanChanges(params: {
+  original: OpenClawConfig;
+  next: OpenClawConfig;
+}): {
   upserts: Record<string, SecretProviderConfig>;
   deletes: string[];
 } {
@@ -636,7 +695,9 @@ function collectProviderPlanChanges(params: { original: OpenClawConfig; next: Op
   const upserts: Record<string, SecretProviderConfig> = {};
   const deletes: string[] = [];
 
-  for (const [providerAlias, nextProviderConfig] of Object.entries(nextProviders)) {
+  for (const [providerAlias, nextProviderConfig] of Object.entries(
+    nextProviders,
+  )) {
     const current = originalProviders[providerAlias];
     if (isDeepStrictEqual(current, nextProviderConfig)) {
       continue;
@@ -667,14 +728,18 @@ export async function runSecretsConfigureInteractive(
     throw new Error("secrets configure requires an interactive TTY.");
   }
   if (params.providersOnly && params.skipProviderSetup) {
-    throw new Error("Cannot combine --providers-only with --skip-provider-setup.");
+    throw new Error(
+      "Cannot combine --providers-only with --skip-provider-setup.",
+    );
   }
 
   const env = params.env ?? process.env;
   const io = createSecretsConfigIO({ env });
   const { snapshot } = await io.readConfigFileSnapshotForWrite();
   if (!snapshot.valid) {
-    throw new Error("Cannot run interactive secrets configure because config is invalid.");
+    throw new Error(
+      "Cannot run interactive secrets configure because config is invalid.",
+    );
   }
 
   const stagedConfig = structuredClone(snapshot.config);
@@ -687,11 +752,16 @@ export async function runSecretsConfigureInteractive(
     next: stagedConfig,
   });
 
-  const selectedByPath = new Map<string, ConfigureCandidate & { ref: SecretRef }>();
+  const selectedByPath = new Map<
+    string,
+    ConfigureCandidate & { ref: SecretRef }
+  >();
   if (!params.providersOnly) {
     const candidates = buildCandidates(stagedConfig);
     if (candidates.length === 0) {
-      throw new Error("No configurable secret-bearing fields found in openclaw.json.");
+      throw new Error(
+        "No configurable secret-bearing fields found in openclaw.json.",
+      );
     }
 
     const sourceChoices = toSourceChoices(stagedConfig);
@@ -735,9 +805,13 @@ export async function runSecretsConfigureInteractive(
         "Secrets configure cancelled.",
       ) as SecretRefSource;
 
-      const defaultAlias = resolveDefaultSecretProviderAlias(stagedConfig, source, {
-        preferFirstProviderForSource: true,
-      });
+      const defaultAlias = resolveDefaultSecretProviderAlias(
+        stagedConfig,
+        source,
+        {
+          preferFirstProviderForSource: true,
+        },
+      );
       const provider = assertNoCancel(
         await text({
           message: "Provider alias",
@@ -758,7 +832,8 @@ export async function runSecretsConfigureInteractive(
       const id = assertNoCancel(
         await text({
           message: "Secret id",
-          validate: (value) => (String(value ?? "").trim().length > 0 ? undefined : "Required"),
+          validate: (value) =>
+            String(value ?? "").trim().length > 0 ? undefined : "Required",
         }),
         "Secrets configure cancelled.",
       );
@@ -811,7 +886,9 @@ export async function runSecretsConfigureInteractive(
     ...(Object.keys(providerChanges.upserts).length > 0
       ? { providerUpserts: providerChanges.upserts }
       : {}),
-    ...(providerChanges.deletes.length > 0 ? { providerDeletes: providerChanges.deletes } : {}),
+    ...(providerChanges.deletes.length > 0
+      ? { providerDeletes: providerChanges.deletes }
+      : {}),
     options: {
       scrubEnv: true,
       scrubAuthProfilesForProviderTargets: true,

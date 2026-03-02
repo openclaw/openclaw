@@ -15,7 +15,9 @@ export function normalizeDeviceAuthRole(role: string): string {
   return role.trim();
 }
 
-export function normalizeDeviceAuthScopes(scopes: string[] | undefined): string[] {
+export function normalizeDeviceAuthScopes(
+  scopes: string[] | undefined,
+): string[] {
   if (!Array.isArray(scopes)) {
     return [];
   }

@@ -1,4 +1,7 @@
-import { convertMessages, convertTools } from "@mariozechner/pi-ai/dist/providers/google-shared.js";
+import {
+  convertMessages,
+  convertTools,
+} from "@mariozechner/pi-ai/dist/providers/google-shared.js";
 import type { Context, Tool } from "@mariozechner/pi-ai/dist/types.js";
 import { describe, expect, it } from "vitest";
 import {
@@ -226,8 +229,12 @@ describe("google-shared convertMessages", () => {
           role: "user",
           content: "Hello",
         },
-        makeGoogleAssistantMessage(model.id, [{ type: "text", text: "Hi there!" }]),
-        makeGoogleAssistantMessage(model.id, [{ type: "text", text: "How can I help?" }]),
+        makeGoogleAssistantMessage(model.id, [
+          { type: "text", text: "Hi there!" },
+        ]),
+        makeGoogleAssistantMessage(model.id, [
+          { type: "text", text: "How can I help?" },
+        ]),
       ],
     } as unknown as Context;
 
@@ -278,7 +285,8 @@ describe("google-shared convertMessages", () => {
     expect(contents[2].role).toBe("user");
     expect(contents[3].role).toBe("user");
     const toolResponsePart = contents[2].parts?.find(
-      (part) => typeof part === "object" && part !== null && "functionResponse" in part,
+      (part) =>
+        typeof part === "object" && part !== null && "functionResponse" in part,
     );
     const toolResponse = asRecord(toolResponsePart);
     expect(toolResponse.functionResponse).toBeTruthy();

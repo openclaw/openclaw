@@ -59,13 +59,19 @@ describe("telegramPlugin duplicate token guard", () => {
     const workAccount = telegramPlugin.config.resolveAccount(cfg, "work");
     const opsAccount = telegramPlugin.config.resolveAccount(cfg, "ops");
 
-    expect(await telegramPlugin.config.isConfigured!(alertsAccount, cfg)).toBe(true);
-    expect(await telegramPlugin.config.isConfigured!(workAccount, cfg)).toBe(false);
-    expect(await telegramPlugin.config.isConfigured!(opsAccount, cfg)).toBe(true);
-
-    expect(telegramPlugin.config.unconfiguredReason?.(workAccount, cfg)).toContain(
-      'account "alerts"',
+    expect(await telegramPlugin.config.isConfigured!(alertsAccount, cfg)).toBe(
+      true,
     );
+    expect(await telegramPlugin.config.isConfigured!(workAccount, cfg)).toBe(
+      false,
+    );
+    expect(await telegramPlugin.config.isConfigured!(opsAccount, cfg)).toBe(
+      true,
+    );
+
+    expect(
+      telegramPlugin.config.unconfiguredReason?.(workAccount, cfg),
+    ).toContain('account "alerts"');
   });
 
   it("surfaces duplicate-token reason in status snapshot", async () => {
@@ -85,7 +91,10 @@ describe("telegramPlugin duplicate token guard", () => {
 
   it("blocks startup for duplicate token accounts before polling starts", async () => {
     const monitorTelegramProvider = vi.fn(async () => undefined);
-    const probeTelegram = vi.fn(async () => ({ ok: true, bot: { username: "bot" } }));
+    const probeTelegram = vi.fn(async () => ({
+      ok: true,
+      bot: { username: "bot" },
+    }));
     const runtime = {
       channel: {
         telegram: {
@@ -115,7 +124,10 @@ describe("telegramPlugin duplicate token guard", () => {
 
   it("passes webhookPort through to monitor startup options", async () => {
     const monitorTelegramProvider = vi.fn(async () => undefined);
-    const probeTelegram = vi.fn(async () => ({ ok: true, bot: { username: "opsbot" } }));
+    const probeTelegram = vi.fn(async () => ({
+      ok: true,
+      bot: { username: "opsbot" },
+    }));
     const runtime = {
       channel: {
         telegram: {

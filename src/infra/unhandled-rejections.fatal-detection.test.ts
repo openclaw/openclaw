@@ -1,5 +1,14 @@
 import process from "node:process";
-import { describe, it, expect, vi, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
+import {
+  describe,
+  it,
+  expect,
+  vi,
+  beforeAll,
+  afterAll,
+  beforeEach,
+  afterEach,
+} from "vitest";
 import { installUnhandledRejectionHandler } from "./unhandled-rejections.js";
 
 describe("installUnhandledRejectionHandler - fatal detection", () => {
@@ -16,12 +25,14 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
   beforeEach(() => {
     exitCalls = [];
 
-    vi.spyOn(process, "exit").mockImplementation((code?: string | number | null): never => {
-      if (code !== undefined && code !== null) {
-        exitCalls.push(code);
-      }
-      return undefined as never;
-    });
+    vi.spyOn(process, "exit").mockImplementation(
+      (code?: string | number | null): never => {
+        if (code !== undefined && code !== null) {
+          exitCalls.push(code);
+        }
+        return undefined as never;
+      },
+    );
 
     consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     consoleWarnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -41,7 +52,10 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
     process.emit("unhandledRejection", reason, Promise.resolve());
   }
 
-  function expectExitCodeFromUnhandled(reason: unknown, expected: number[]): void {
+  function expectExitCodeFromUnhandled(
+    reason: unknown,
+    expected: number[],
+  ): void {
     exitCalls = [];
     emitUnhandled(reason);
     expect(exitCalls).toEqual(expected);
@@ -51,12 +65,18 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
     it("exits on fatal runtime codes", () => {
       const fatalCases = [
         { code: "ERR_OUT_OF_MEMORY", message: "Out of memory" },
-        { code: "ERR_SCRIPT_EXECUTION_TIMEOUT", message: "Script execution timeout" },
+        {
+          code: "ERR_SCRIPT_EXECUTION_TIMEOUT",
+          message: "Script execution timeout",
+        },
         { code: "ERR_WORKER_OUT_OF_MEMORY", message: "Worker out of memory" },
       ] as const;
 
       for (const { code, message } of fatalCases) {
-        expectExitCodeFromUnhandled(Object.assign(new Error(message), { code }), [1]);
+        expectExitCodeFromUnhandled(
+          Object.assign(new Error(message), { code }),
+          [1],
+        );
       }
 
       expect(consoleErrorSpy).toHaveBeenCalledWith(
@@ -74,7 +94,10 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
       ] as const;
 
       for (const { code, message } of configurationCases) {
-        expectExitCodeFromUnhandled(Object.assign(new Error(message), { code }), [1]);
+        expectExitCodeFromUnhandled(
+          Object.assign(new Error(message), { code }),
+          [1],
+        );
       }
 
       expect(consoleErrorSpy).toHaveBeenCalledWith(
@@ -90,7 +113,9 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
         Object.assign(new TypeError("fetch failed"), {
           cause: { code: "UND_ERR_CONNECT_TIMEOUT", syscall: "connect" },
         }),
-        Object.assign(new Error("DNS resolve failed"), { code: "UND_ERR_DNS_RESOLVE_FAILED" }),
+        Object.assign(new Error("DNS resolve failed"), {
+          code: "UND_ERR_DNS_RESOLVE_FAILED",
+        }),
         Object.assign(new Error("Connection reset"), { code: "ECONNRESET" }),
         Object.assign(new Error("Timeout"), { code: "ETIMEDOUT" }),
         Object.assign(
@@ -99,10 +124,19 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
           ),
           { code: "slack_webapi_request_error" },
         ),
-        Object.assign(new Error("A request error occurred: getaddrinfo EAI_AGAIN slack.com"), {
-          code: "slack_webapi_request_error",
-          original: { code: "EAI_AGAIN", syscall: "getaddrinfo", hostname: "slack.com" },
-        }),
+        Object.assign(
+          new Error(
+            "A request error occurred: getaddrinfo EAI_AGAIN slack.com",
+          ),
+          {
+            code: "slack_webapi_request_error",
+            original: {
+              code: "EAI_AGAIN",
+              syscall: "getaddrinfo",
+              hostname: "slack.com",
+            },
+          },
+        ),
         Object.assign(new Error("A request error occurred: unknown"), {
           code: "slack_webapi_request_error",
           original: Object.assign(new Error("connect timeout"), {

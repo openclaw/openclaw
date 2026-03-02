@@ -114,7 +114,10 @@ describe("updateConfigFormValue", () => {
   it("seeds from snapshot when form is null", () => {
     const state = createState();
     state.configSnapshot = {
-      config: { channels: { telegram: { botToken: "t" } }, gateway: { mode: "local" } },
+      config: {
+        channels: { telegram: { botToken: "t" } },
+        gateway: { mode: "local" },
+      },
       valid: true,
       issues: [],
       raw: "{}",
@@ -238,7 +241,10 @@ describe("saveConfig", () => {
     await saveConfig(state);
 
     expect(request.mock.calls[0]?.[0]).toBe("config.set");
-    const params = request.mock.calls[0]?.[1] as { raw: string; baseHash: string };
+    const params = request.mock.calls[0]?.[1] as {
+      raw: string;
+      baseHash: string;
+    };
     const parsed = JSON.parse(params.raw) as {
       gateway: { port: unknown; enabled: unknown };
     };
@@ -263,7 +269,10 @@ describe("saveConfig", () => {
     await saveConfig(state);
 
     expect(request.mock.calls[0]?.[0]).toBe("config.set");
-    const params = request.mock.calls[0]?.[1] as { raw: string; baseHash: string };
+    const params = request.mock.calls[0]?.[1] as {
+      raw: string;
+      baseHash: string;
+    };
     const parsed = JSON.parse(params.raw) as {
       gateway: { port: unknown };
     };

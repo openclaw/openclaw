@@ -29,7 +29,9 @@ function normalizeStringList(value: unknown): string[] {
   if (!Array.isArray(value)) {
     return [];
   }
-  return value.map((entry) => (typeof entry === "string" ? entry.trim() : "")).filter(Boolean);
+  return value
+    .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+    .filter(Boolean);
 }
 
 export function resolvePluginManifestPath(rootDir: string): string {
@@ -51,7 +53,11 @@ export function loadPluginManifest(rootDir: string): PluginManifestLoadResult {
   });
   if (!opened.ok) {
     if (opened.reason === "path") {
-      return { ok: false, error: `plugin manifest not found: ${manifestPath}`, manifestPath };
+      return {
+        ok: false,
+        error: `plugin manifest not found: ${manifestPath}`,
+        manifestPath,
+      };
     }
     return {
       ok: false,
@@ -72,7 +78,11 @@ export function loadPluginManifest(rootDir: string): PluginManifestLoadResult {
     fs.closeSync(opened.fd);
   }
   if (!isRecord(raw)) {
-    return { ok: false, error: "plugin manifest must be an object", manifestPath };
+    return {
+      ok: false,
+      error: "plugin manifest must be an object",
+      manifestPath,
+    };
   }
   const id = typeof raw.id === "string" ? raw.id.trim() : "";
   if (!id) {
@@ -80,13 +90,20 @@ export function loadPluginManifest(rootDir: string): PluginManifestLoadResult {
   }
   const configSchema = isRecord(raw.configSchema) ? raw.configSchema : null;
   if (!configSchema) {
-    return { ok: false, error: "plugin manifest requires configSchema", manifestPath };
+    return {
+      ok: false,
+      error: "plugin manifest requires configSchema",
+      manifestPath,
+    };
   }
 
-  const kind = typeof raw.kind === "string" ? (raw.kind as PluginKind) : undefined;
+  const kind =
+    typeof raw.kind === "string" ? (raw.kind as PluginKind) : undefined;
   const name = typeof raw.name === "string" ? raw.name.trim() : undefined;
-  const description = typeof raw.description === "string" ? raw.description.trim() : undefined;
-  const version = typeof raw.version === "string" ? raw.version.trim() : undefined;
+  const description =
+    typeof raw.description === "string" ? raw.description.trim() : undefined;
+  const version =
+    typeof raw.version === "string" ? raw.version.trim() : undefined;
   const channels = normalizeStringList(raw.channels);
   const providers = normalizeStringList(raw.providers);
   const skills = normalizeStringList(raw.skills);

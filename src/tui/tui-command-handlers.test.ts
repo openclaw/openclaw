@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import { createCommandHandlers } from "./tui-command-handlers.js";
 
 type LoadHistoryMock = ReturnType<typeof vi.fn> & (() => Promise<void>);
-type SetActivityStatusMock = ReturnType<typeof vi.fn> & ((text: string) => void);
+type SetActivityStatusMock = ReturnType<typeof vi.fn> &
+  ((text: string) => void);
 
 function createHarness(params?: {
   sendChat?: ReturnType<typeof vi.fn>;
@@ -11,14 +12,18 @@ function createHarness(params?: {
   setActivityStatus?: SetActivityStatusMock;
   isConnected?: boolean;
 }) {
-  const sendChat = params?.sendChat ?? vi.fn().mockResolvedValue({ runId: "r1" });
-  const resetSession = params?.resetSession ?? vi.fn().mockResolvedValue({ ok: true });
+  const sendChat =
+    params?.sendChat ?? vi.fn().mockResolvedValue({ runId: "r1" });
+  const resetSession =
+    params?.resetSession ?? vi.fn().mockResolvedValue({ ok: true });
   const addUser = vi.fn();
   const addSystem = vi.fn();
   const requestRender = vi.fn();
   const loadHistory =
-    params?.loadHistory ?? (vi.fn().mockResolvedValue(undefined) as LoadHistoryMock);
-  const setActivityStatus = params?.setActivityStatus ?? (vi.fn() as SetActivityStatusMock);
+    params?.loadHistory ??
+    (vi.fn().mockResolvedValue(undefined) as LoadHistoryMock);
+  const setActivityStatus =
+    params?.setActivityStatus ?? (vi.fn() as SetActivityStatusMock);
 
   const { handleCommand } = createCommandHandlers({
     client: { sendChat, resetSession } as never,
@@ -89,7 +94,8 @@ describe("tui command handlers", () => {
   });
 
   it("forwards unknown slash commands to the gateway", async () => {
-    const { handleCommand, sendChat, addUser, addSystem, requestRender } = createHarness();
+    const { handleCommand, sendChat, addUser, addSystem, requestRender } =
+      createHarness();
 
     await handleCommand("/context");
 
@@ -130,15 +136,18 @@ describe("tui command handlers", () => {
   });
 
   it("reports disconnected status and skips gateway send when offline", async () => {
-    const { handleCommand, sendChat, addUser, addSystem, setActivityStatus } = createHarness({
-      isConnected: false,
-    });
+    const { handleCommand, sendChat, addUser, addSystem, setActivityStatus } =
+      createHarness({
+        isConnected: false,
+      });
 
     await handleCommand("/context");
 
     expect(sendChat).not.toHaveBeenCalled();
     expect(addUser).not.toHaveBeenCalled();
-    expect(addSystem).toHaveBeenCalledWith("not connected to gateway — message not sent");
+    expect(addSystem).toHaveBeenCalledWith(
+      "not connected to gateway — message not sent",
+    );
     expect(setActivityStatus).toHaveBeenLastCalledWith("disconnected");
   });
 });

@@ -276,7 +276,9 @@ describe("command queue", () => {
 
   it("clearCommandLane rejects pending promises", async () => {
     // First task blocks the lane.
-    const { task: first, release } = enqueueBlockedMainTask(async () => "first");
+    const { task: first, release } = enqueueBlockedMainTask(
+      async () => "first",
+    );
 
     // Second task is queued behind the first.
     const second = enqueueCommand(async () => "second");

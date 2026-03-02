@@ -61,7 +61,9 @@ function asPositiveInt(value: number | undefined, fallback: number): number {
   return value;
 }
 
-function resolveLoopDetectionConfig(config?: ToolLoopDetectionConfig): ResolvedLoopDetectionConfig {
+function resolveLoopDetectionConfig(
+  config?: ToolLoopDetectionConfig,
+): ResolvedLoopDetectionConfig {
   let warningThreshold = asPositiveInt(
     config?.warningThreshold,
     DEFAULT_LOOP_DETECTION_CONFIG.warningThreshold,
@@ -84,17 +86,23 @@ function resolveLoopDetectionConfig(config?: ToolLoopDetectionConfig): ResolvedL
 
   return {
     enabled: config?.enabled ?? DEFAULT_LOOP_DETECTION_CONFIG.enabled,
-    historySize: asPositiveInt(config?.historySize, DEFAULT_LOOP_DETECTION_CONFIG.historySize),
+    historySize: asPositiveInt(
+      config?.historySize,
+      DEFAULT_LOOP_DETECTION_CONFIG.historySize,
+    ),
     warningThreshold,
     criticalThreshold,
     globalCircuitBreakerThreshold,
     detectors: {
       genericRepeat:
-        config?.detectors?.genericRepeat ?? DEFAULT_LOOP_DETECTION_CONFIG.detectors.genericRepeat,
+        config?.detectors?.genericRepeat ??
+        DEFAULT_LOOP_DETECTION_CONFIG.detectors.genericRepeat,
       knownPollNoProgress:
         config?.detectors?.knownPollNoProgress ??
         DEFAULT_LOOP_DETECTION_CONFIG.detectors.knownPollNoProgress,
-      pingPong: config?.detectors?.pingPong ?? DEFAULT_LOOP_DETECTION_CONFIG.detectors.pingPong,
+      pingPong:
+        config?.detectors?.pingPong ??
+        DEFAULT_LOOP_DETECTION_CONFIG.detectors.pingPong,
     },
   };
 }
@@ -134,7 +142,11 @@ function stableStringifyFallback(value: unknown): string {
     if (typeof value === "string") {
       return value;
     }
-    if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+    if (
+      typeof value === "number" ||
+      typeof value === "boolean" ||
+      typeof value === "bigint"
+    ) {
       return `${value}`;
     }
     if (value instanceof Error) {
@@ -162,7 +174,9 @@ function extractTextContent(result: unknown): string {
   return result.content
     .filter(
       (entry): entry is { type: string; text: string } =>
-        isPlainObject(entry) && typeof entry.type === "string" && typeof entry.text === "string",
+        isPlainObject(entry) &&
+        typeof entry.type === "string" &&
+        typeof entry.text === "string",
     )
     .map((entry) => entry.text)
     .join("\n")
@@ -176,7 +190,11 @@ function formatErrorForHash(error: unknown): string {
   if (typeof error === "string") {
     return error;
   }
-  if (typeof error === "number" || typeof error === "boolean" || typeof error === "bigint") {
+  if (
+    typeof error === "number" ||
+    typeof error === "boolean" ||
+    typeof error === "bigint"
+  ) {
     return `${error}`;
   }
   return stableStringify(error);
@@ -197,7 +215,11 @@ function hashToolOutcome(
 
   const details = isPlainObject(result.details) ? result.details : {};
   const text = extractTextContent(result);
-  if (isKnownPollToolCall(toolName, params) && toolName === "process" && isPlainObject(params)) {
+  if (
+    isKnownPollToolCall(toolName, params) &&
+    toolName === "process" &&
+    isPlainObject(params)
+  ) {
     const action = params.action;
     if (action === "poll") {
       return digestStable({
@@ -239,7 +261,11 @@ function getNoProgressStreak(
 
   for (let i = history.length - 1; i >= 0; i -= 1) {
     const record = history[i];
-    if (!record || record.toolName !== toolName || record.argsHash !== argsHash) {
+    if (
+      !record ||
+      record.toolName !== toolName ||
+      record.argsHash !== argsHash
+    ) {
       continue;
     }
     if (typeof record.resultHash !== "string" || !record.resultHash) {
@@ -297,7 +323,8 @@ function getPingPongStreak(
     if (!call) {
       continue;
     }
-    const expected = alternatingTailCount % 2 === 0 ? last.argsHash : otherSignature;
+    const expected =
+      alternatingTailCount % 2 === 0 ? last.argsHash : otherSignature;
     if (call.argsHash !== expected) {
       break;
     }
@@ -405,7 +432,9 @@ export function detectToolCallLoop(
     resolvedConfig.detectors.knownPollNoProgress &&
     noProgressStreak >= resolvedConfig.criticalThreshold
   ) {
-    log.error(`Critical polling loop detected: ${toolName} repeated ${noProgressStreak} times`);
+    log.error(
+      `Critical polling loop detected: ${toolName} repeated ${noProgressStreak} times`,
+    );
     return {
       stuck: true,
       level: "critical",
@@ -421,7 +450,9 @@ export function detectToolCallLoop(
     resolvedConfig.detectors.knownPollNoProgress &&
     noProgressStreak >= resolvedConfig.warningThreshold
   ) {
-    log.warn(`Polling loop warning: ${toolName} repeated ${noProgressStreak} times`);
+    log.warn(
+      `Polling loop warning: ${toolName} repeated ${noProgressStreak} times`,
+    );
     return {
       stuck: true,
       level: "warning",
@@ -455,7 +486,10 @@ export function detectToolCallLoop(
     };
   }
 
-  if (resolvedConfig.detectors.pingPong && pingPong.count >= resolvedConfig.warningThreshold) {
+  if (
+    resolvedConfig.detectors.pingPong &&
+    pingPong.count >= resolvedConfig.warningThreshold
+  ) {
     log.warn(
       `Ping-pong loop warning: alternating calls count=${pingPong.count} currentTool=${toolName}`,
     );
@@ -480,7 +514,9 @@ export function detectToolCallLoop(
     resolvedConfig.detectors.genericRepeat &&
     recentCount >= resolvedConfig.warningThreshold
   ) {
-    log.warn(`Loop warning: ${toolName} called ${recentCount} times with identical arguments`);
+    log.warn(
+      `Loop warning: ${toolName} called ${recentCount} times with identical arguments`,
+    );
     return {
       stuck: true,
       level: "warning",
@@ -583,7 +619,10 @@ export function recordToolCallOutcome(
   }
 
   if (state.toolCallHistory.length > resolvedConfig.historySize) {
-    state.toolCallHistory.splice(0, state.toolCallHistory.length - resolvedConfig.historySize);
+    state.toolCallHistory.splice(
+      0,
+      state.toolCallHistory.length - resolvedConfig.historySize,
+    );
   }
 }
 

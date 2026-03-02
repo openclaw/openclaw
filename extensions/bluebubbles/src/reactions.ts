@@ -1,7 +1,10 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import { resolveBlueBubblesServerAccount } from "./account-resolve.js";
 import { getCachedBlueBubblesPrivateApiStatus } from "./probe.js";
-import { blueBubblesFetchWithTimeout, buildBlueBubblesApiUrl } from "./types.js";
+import {
+  blueBubblesFetchWithTimeout,
+  buildBlueBubblesApiUrl,
+} from "./types.js";
 
 export type BlueBubblesReactionOpts = {
   serverUrl?: string;
@@ -11,7 +14,14 @@ export type BlueBubblesReactionOpts = {
   cfg?: OpenClawConfig;
 };
 
-const REACTION_TYPES = new Set(["love", "like", "dislike", "laugh", "emphasize", "question"]);
+const REACTION_TYPES = new Set([
+  "love",
+  "like",
+  "dislike",
+  "laugh",
+  "emphasize",
+  "question",
+]);
 
 const REACTION_ALIASES = new Map<string, string>([
   // General
@@ -115,7 +125,10 @@ function resolveAccount(params: BlueBubblesReactionOpts) {
   return resolveBlueBubblesServerAccount(params);
 }
 
-export function normalizeBlueBubblesReactionInput(emoji: string, remove?: boolean): string {
+export function normalizeBlueBubblesReactionInput(
+  emoji: string,
+  remove?: boolean,
+): string {
   const trimmed = emoji.trim();
   if (!trimmed) {
     throw new Error("BlueBubbles reaction requires an emoji or name.");
@@ -125,7 +138,8 @@ export function normalizeBlueBubblesReactionInput(emoji: string, remove?: boolea
     raw = raw.slice(1);
   }
   const aliased = REACTION_ALIASES.get(raw) ?? raw;
-  const mapped = REACTION_EMOJIS.get(trimmed) ?? REACTION_EMOJIS.get(raw) ?? aliased;
+  const mapped =
+    REACTION_EMOJIS.get(trimmed) ?? REACTION_EMOJIS.get(raw) ?? aliased;
   if (!REACTION_TYPES.has(mapped)) {
     throw new Error(`Unsupported BlueBubbles reaction: ${trimmed}`);
   }
@@ -148,7 +162,10 @@ export async function sendBlueBubblesReaction(params: {
   if (!messageGuid) {
     throw new Error("BlueBubbles reaction requires messageGuid.");
   }
-  const reaction = normalizeBlueBubblesReactionInput(params.emoji, params.remove);
+  const reaction = normalizeBlueBubblesReactionInput(
+    params.emoji,
+    params.remove,
+  );
   const { baseUrl, password, accountId } = resolveAccount(params.opts ?? {});
   if (getCachedBlueBubblesPrivateApiStatus(accountId) === false) {
     throw new Error(
@@ -177,6 +194,8 @@ export async function sendBlueBubblesReaction(params: {
   );
   if (!res.ok) {
     const errorText = await res.text();
-    throw new Error(`BlueBubbles reaction failed (${res.status}): ${errorText || "unknown"}`);
+    throw new Error(
+      `BlueBubbles reaction failed (${res.status}): ${errorText || "unknown"}`,
+    );
   }
 }

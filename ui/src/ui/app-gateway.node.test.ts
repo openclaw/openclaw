@@ -40,7 +40,11 @@ vi.mock("./gateway.ts", () => {
           error?: { code: string; message: string; details?: unknown };
         }) => void;
         onGap?: (info: { expected: number; received: number }) => void;
-        onEvent?: (evt: { event: string; payload?: unknown; seq?: number }) => void;
+        onEvent?: (evt: {
+          event: string;
+          payload?: unknown;
+          seq?: number;
+        }) => void;
       },
     ) {
       gatewayClientInstances.push({
@@ -145,10 +149,16 @@ describe("connectGateway", () => {
     const secondClient = gatewayClientInstances[1];
     expect(secondClient).toBeDefined();
 
-    firstClient.emitEvent({ event: "presence", payload: { presence: [{ host: "stale" }] } });
+    firstClient.emitEvent({
+      event: "presence",
+      payload: { presence: [{ host: "stale" }] },
+    });
     expect(host.eventLogBuffer).toHaveLength(0);
 
-    secondClient.emitEvent({ event: "presence", payload: { presence: [{ host: "active" }] } });
+    secondClient.emitEvent({
+      event: "presence",
+      payload: { presence: [{ host: "active" }] },
+    });
     expect(host.eventLogBuffer).toHaveLength(1);
     expect(host.eventLogBuffer[0]?.event).toBe("presence");
   });
@@ -167,7 +177,11 @@ describe("connectGateway", () => {
     firstClient.emitEvent({
       event: GATEWAY_EVENT_UPDATE_AVAILABLE,
       payload: {
-        updateAvailable: { currentVersion: "1.0.0", latestVersion: "9.9.9", channel: "latest" },
+        updateAvailable: {
+          currentVersion: "1.0.0",
+          latestVersion: "9.9.9",
+          channel: "latest",
+        },
       },
     });
     expect(host.updateAvailable).toBeNull();
@@ -175,7 +189,11 @@ describe("connectGateway", () => {
     secondClient.emitEvent({
       event: GATEWAY_EVENT_UPDATE_AVAILABLE,
       payload: {
-        updateAvailable: { currentVersion: "1.0.0", latestVersion: "2.0.0", channel: "latest" },
+        updateAvailable: {
+          currentVersion: "1.0.0",
+          latestVersion: "2.0.0",
+          channel: "latest",
+        },
       },
     });
     expect(host.updateAvailable).toEqual({

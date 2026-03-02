@@ -1,6 +1,11 @@
 import type { VerboseLevel } from "../auto-reply/thinking.js";
 
-export type AgentEventStream = "lifecycle" | "tool" | "assistant" | "error" | (string & {});
+export type AgentEventStream =
+  | "lifecycle"
+  | "tool"
+  | "assistant"
+  | "error"
+  | (string & {});
 
 export type AgentEventPayload = {
   runId: string;
@@ -22,7 +27,10 @@ const seqByRun = new Map<string, number>();
 const listeners = new Set<(evt: AgentEventPayload) => void>();
 const runContextById = new Map<string, AgentRunContext>();
 
-export function registerAgentRunContext(runId: string, context: AgentRunContext) {
+export function registerAgentRunContext(
+  runId: string,
+  context: AgentRunContext,
+) {
   if (!runId) {
     return;
   }
@@ -37,7 +45,10 @@ export function registerAgentRunContext(runId: string, context: AgentRunContext)
   if (context.verboseLevel && existing.verboseLevel !== context.verboseLevel) {
     existing.verboseLevel = context.verboseLevel;
   }
-  if (context.isHeartbeat !== undefined && existing.isHeartbeat !== context.isHeartbeat) {
+  if (
+    context.isHeartbeat !== undefined &&
+    existing.isHeartbeat !== context.isHeartbeat
+  ) {
     existing.isHeartbeat = context.isHeartbeat;
   }
 }

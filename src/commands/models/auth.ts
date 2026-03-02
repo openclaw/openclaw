@@ -1,4 +1,8 @@
-import { confirm as clackConfirm, select as clackSelect, text as clackText } from "@clack/prompts";
+import {
+  confirm as clackConfirm,
+  select as clackSelect,
+  text as clackText,
+} from "@clack/prompts";
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
@@ -12,9 +16,15 @@ import { formatCliCommand } from "../../cli/command-format.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import { logConfigUpdated } from "../../config/logging.js";
 import { resolvePluginProviders } from "../../plugins/providers.js";
-import type { ProviderAuthResult, ProviderPlugin } from "../../plugins/types.js";
+import type {
+  ProviderAuthResult,
+  ProviderPlugin,
+} from "../../plugins/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
-import { stylePromptHint, stylePromptMessage } from "../../terminal/prompt-style.js";
+import {
+  stylePromptHint,
+  stylePromptMessage,
+} from "../../terminal/prompt-style.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import { validateAnthropicSetupToken } from "../auth-token.js";
 import { isRemoteEnvironment } from "../oauth-env.js";
@@ -44,7 +54,9 @@ const select = <T>(params: Parameters<typeof clackSelect<T>>[0]) =>
     ...params,
     message: stylePromptMessage(params.message),
     options: params.options.map((opt) =>
-      opt.hint === undefined ? opt : { ...opt, hint: stylePromptHint(opt.hint) },
+      opt.hint === undefined
+        ? opt
+        : { ...opt, hint: stylePromptHint(opt.hint) },
     ),
   });
 
@@ -130,7 +142,8 @@ export async function modelsAuthPasteTokenCommand(
     throw new Error("Missing --provider.");
   }
   const provider = normalizeProviderId(rawProvider);
-  const profileId = opts.profileId?.trim() || resolveDefaultTokenProfileId(provider);
+  const profileId =
+    opts.profileId?.trim() || resolveDefaultTokenProfileId(provider);
 
   const tokenInput = await text({
     message: `Paste token for ${provider}`,
@@ -140,7 +153,10 @@ export async function modelsAuthPasteTokenCommand(
 
   const expires =
     opts.expiresIn?.trim() && opts.expiresIn.trim().length > 0
-      ? Date.now() + parseDurationMs(String(opts.expiresIn ?? "").trim(), { defaultUnit: "d" })
+      ? Date.now() +
+        parseDurationMs(String(opts.expiresIn ?? "").trim(), {
+          defaultUnit: "d",
+        })
       : undefined;
 
   upsertAuthProfile({
@@ -153,13 +169,18 @@ export async function modelsAuthPasteTokenCommand(
     },
   });
 
-  await updateConfig((cfg) => applyAuthProfileConfig(cfg, { profileId, provider, mode: "token" }));
+  await updateConfig((cfg) =>
+    applyAuthProfileConfig(cfg, { profileId, provider, mode: "token" }),
+  );
 
   logConfigUpdated(runtime);
   runtime.log(`Auth profile: ${profileId} (${provider}/token)`);
 }
 
-export async function modelsAuthAddCommand(_opts: Record<string, never>, runtime: RuntimeEnv) {
+export async function modelsAuthAddCommand(
+  _opts: Record<string, never>,
+  runtime: RuntimeEnv,
+) {
   const provider = (await select({
     message: "Token provider",
     options: [
@@ -231,7 +252,10 @@ export async function modelsAuthAddCommand(_opts: Record<string, never>, runtime
       ).trim()
     : undefined;
 
-  await modelsAuthPasteTokenCommand({ provider: providerId, profileId, expiresIn }, runtime);
+  await modelsAuthPasteTokenCommand(
+    { provider: providerId, profileId, expiresIn },
+    runtime,
+  );
 }
 
 type LoginOptions = {
@@ -262,7 +286,9 @@ export function resolveRequestedLoginProviderOrThrow(
   );
 }
 
-function credentialMode(credential: AuthProfileCredential): "api_key" | "oauth" | "token" {
+function credentialMode(
+  credential: AuthProfileCredential,
+): "api_key" | "oauth" | "token" {
   if (credential.type === "api_key") {
     return "api_key";
   }
@@ -272,7 +298,10 @@ function credentialMode(credential: AuthProfileCredential): "api_key" | "oauth" 
   return "oauth";
 }
 
-export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: RuntimeEnv) {
+export async function modelsAuthLoginCommand(
+  opts: LoginOptions,
+  runtime: RuntimeEnv,
+) {
   if (!process.stdin.isTTY) {
     throw new Error("models auth login requires an interactive TTY.");
   }
@@ -281,7 +310,8 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
   const defaultAgentId = resolveDefaultAgentId(config);
   const agentDir = resolveAgentDir(config, defaultAgentId);
   const workspaceDir =
-    resolveAgentWorkspaceDir(config, defaultAgentId) ?? resolveDefaultAgentWorkspaceDir();
+    resolveAgentWorkspaceDir(config, defaultAgentId) ??
+    resolveDefaultAgentWorkspaceDir();
 
   const providers = resolvePluginProviders({ config, workspaceDir });
   if (providers.length === 0) {
@@ -291,7 +321,10 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
   }
 
   const prompter = createClackPrompter();
-  const requestedProvider = resolveRequestedLoginProviderOrThrow(providers, opts.provider);
+  const requestedProvider = resolveRequestedLoginProviderOrThrow(
+    providers,
+    opts.provider,
+  );
   const selectedProvider =
     requestedProvider ??
     (await prompter
@@ -306,7 +339,9 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
       .then((id) => resolveProviderMatch(providers, String(id))));
 
   if (!selectedProvider) {
-    throw new Error("Unknown provider. Use --provider <id> to pick a provider plugin.");
+    throw new Error(
+      "Unknown provider. Use --provider <id> to pick a provider plugin.",
+    );
   }
 
   const chosenMethod =
@@ -322,7 +357,9 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
               hint: method.hint,
             })),
           })
-          .then((id) => selectedProvider.auth.find((method) => method.id === String(id))));
+          .then((id) =>
+            selectedProvider.auth.find((method) => method.id === String(id)),
+          ));
 
   if (!chosenMethod) {
     throw new Error("Unknown auth method. Use --method <id> to select one.");

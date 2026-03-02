@@ -82,19 +82,31 @@ describe("assertWebChannel", () => {
 describe("normalizeE164 & toWhatsappJid", () => {
   it("strips formatting and prefixes", () => {
     expect(normalizeE164("whatsapp:(555) 123-4567")).toBe("+5551234567");
-    expect(toWhatsappJid("whatsapp:+555 123 4567")).toBe("5551234567@s.whatsapp.net");
+    expect(toWhatsappJid("whatsapp:+555 123 4567")).toBe(
+      "5551234567@s.whatsapp.net",
+    );
   });
 
   it("preserves existing JIDs", () => {
-    expect(toWhatsappJid("123456789-987654321@g.us")).toBe("123456789-987654321@g.us");
-    expect(toWhatsappJid("whatsapp:123456789-987654321@g.us")).toBe("123456789-987654321@g.us");
-    expect(toWhatsappJid("1555123@s.whatsapp.net")).toBe("1555123@s.whatsapp.net");
+    expect(toWhatsappJid("123456789-987654321@g.us")).toBe(
+      "123456789-987654321@g.us",
+    );
+    expect(toWhatsappJid("whatsapp:123456789-987654321@g.us")).toBe(
+      "123456789-987654321@g.us",
+    );
+    expect(toWhatsappJid("1555123@s.whatsapp.net")).toBe(
+      "1555123@s.whatsapp.net",
+    );
   });
 });
 
 describe("jidToE164", () => {
   it("maps @lid using reverse mapping file", () => {
-    const mappingPath = path.join(CONFIG_DIR, "credentials", "lid-mapping-123_reverse.json");
+    const mappingPath = path.join(
+      CONFIG_DIR,
+      "credentials",
+      "lid-mapping-123_reverse.json",
+    );
     const original = fs.readFileSync;
     const spy = vi.spyOn(fs, "readFileSync").mockImplementation((...args) => {
       if (args[0] === mappingPath) {
@@ -131,7 +143,9 @@ describe("jidToE164", () => {
       withTempDirSync("openclaw-lid-b-", (second) => {
         const mappingPath = path.join(second, "lid-mapping-321_reverse.json");
         fs.writeFileSync(mappingPath, JSON.stringify("123321"));
-        expect(jidToE164("321@lid", { lidMappingDirs: [first, second] })).toBe("+123321");
+        expect(jidToE164("321@lid", { lidMappingDirs: [first, second] })).toBe(
+          "+123321",
+        );
       });
     });
   });
@@ -139,7 +153,9 @@ describe("jidToE164", () => {
 
 describe("resolveConfigDir", () => {
   it("prefers ~/.openclaw when legacy dir is missing", async () => {
-    const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-config-dir-"));
+    const root = await fs.promises.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-config-dir-"),
+    );
     try {
       const newDir = path.join(root, ".openclaw");
       await fs.promises.mkdir(newDir, { recursive: true });
@@ -167,9 +183,11 @@ describe("shortenHomePath", () => {
     vi.stubEnv("OPENCLAW_HOME", "/srv/openclaw-home");
     vi.stubEnv("HOME", "/home/other");
 
-    expect(shortenHomePath(`${path.resolve("/srv/openclaw-home")}/.openclaw/openclaw.json`)).toBe(
-      "$OPENCLAW_HOME/.openclaw/openclaw.json",
-    );
+    expect(
+      shortenHomePath(
+        `${path.resolve("/srv/openclaw-home")}/.openclaw/openclaw.json`,
+      ),
+    ).toBe("$OPENCLAW_HOME/.openclaw/openclaw.json");
 
     vi.unstubAllEnvs();
   });
@@ -181,7 +199,9 @@ describe("shortenHomeInString", () => {
     vi.stubEnv("HOME", "/home/other");
 
     expect(
-      shortenHomeInString(`config: ${path.resolve("/srv/openclaw-home")}/.openclaw/openclaw.json`),
+      shortenHomeInString(
+        `config: ${path.resolve("/srv/openclaw-home")}/.openclaw/openclaw.json`,
+      ),
     ).toBe("config: $OPENCLAW_HOME/.openclaw/openclaw.json");
 
     vi.unstubAllEnvs();
@@ -193,7 +213,9 @@ describe("resolveJidToE164", () => {
     const lidLookup = {
       getPNForLID: vi.fn().mockResolvedValue("777:0@s.whatsapp.net"),
     };
-    await expect(resolveJidToE164("777@lid", { lidLookup })).resolves.toBe("+777");
+    await expect(resolveJidToE164("777@lid", { lidLookup })).resolves.toBe(
+      "+777",
+    );
     expect(lidLookup.getPNForLID).toHaveBeenCalledWith("777@lid");
   });
 
@@ -201,7 +223,9 @@ describe("resolveJidToE164", () => {
     const lidLookup = {
       getPNForLID: vi.fn().mockResolvedValue("888:0@s.whatsapp.net"),
     };
-    await expect(resolveJidToE164("888@s.whatsapp.net", { lidLookup })).resolves.toBe("+888");
+    await expect(
+      resolveJidToE164("888@s.whatsapp.net", { lidLookup }),
+    ).resolves.toBe("+888");
     expect(lidLookup.getPNForLID).not.toHaveBeenCalled();
   });
 
@@ -209,7 +233,9 @@ describe("resolveJidToE164", () => {
     const lidLookup = {
       getPNForLID: vi.fn().mockRejectedValue(new Error("lookup failed")),
     };
-    await expect(resolveJidToE164("777@lid", { lidLookup })).resolves.toBeNull();
+    await expect(
+      resolveJidToE164("777@lid", { lidLookup }),
+    ).resolves.toBeNull();
     expect(lidLookup.getPNForLID).toHaveBeenCalledWith("777@lid");
   });
 });
@@ -220,7 +246,9 @@ describe("resolveUserPath", () => {
   });
 
   it("expands ~/ to home dir", () => {
-    expect(resolveUserPath("~/openclaw")).toBe(path.resolve(os.homedir(), "openclaw"));
+    expect(resolveUserPath("~/openclaw")).toBe(
+      path.resolve(os.homedir(), "openclaw"),
+    );
   });
 
   it("resolves relative paths", () => {
@@ -231,7 +259,9 @@ describe("resolveUserPath", () => {
     vi.stubEnv("OPENCLAW_HOME", "/srv/openclaw-home");
     vi.stubEnv("HOME", "/home/other");
 
-    expect(resolveUserPath("~/openclaw")).toBe(path.resolve("/srv/openclaw-home", "openclaw"));
+    expect(resolveUserPath("~/openclaw")).toBe(
+      path.resolve("/srv/openclaw-home", "openclaw"),
+    );
 
     vi.unstubAllEnvs();
   });

@@ -48,12 +48,19 @@ describe("memory cli", () => {
   }
 
   function firstLoggedJson(log: ReturnType<typeof vi.spyOn>) {
-    return JSON.parse(String(log.mock.calls[0]?.[0] ?? "null")) as Record<string, unknown>;
+    return JSON.parse(String(log.mock.calls[0]?.[0] ?? "null")) as Record<
+      string,
+      unknown
+    >;
   }
 
   function expectCliSync(sync: ReturnType<typeof vi.fn>) {
     expect(sync).toHaveBeenCalledWith(
-      expect.objectContaining({ reason: "cli", force: false, progress: expect.any(Function) }),
+      expect.objectContaining({
+        reason: "cli",
+        force: false,
+        progress: expect.any(Function),
+      }),
     );
   }
 
@@ -83,8 +90,13 @@ describe("memory cli", () => {
     await program.parseAsync(["memory", ...args], { from: "user" });
   }
 
-  async function withQmdIndexDb(content: string, run: (dbPath: string) => Promise<void>) {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-cli-qmd-index-"));
+  async function withQmdIndexDb(
+    content: string,
+    run: (dbPath: string) => Promise<void>,
+  ) {
+    const tmpDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "memory-cli-qmd-index-"),
+    );
     const dbPath = path.join(tmpDir, "index.sqlite");
     try {
       await fs.writeFile(dbPath, content, "utf-8");
@@ -139,8 +151,12 @@ describe("memory cli", () => {
     await runMemoryCli(["status"]);
 
     expect(log).toHaveBeenCalledWith(expect.stringContaining("Vector: ready"));
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("Vector dims: 1024"));
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("Vector path: /opt/sqlite-vec.dylib"));
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining("Vector dims: 1024"),
+    );
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining("Vector path: /opt/sqlite-vec.dylib"),
+    );
     expect(log).toHaveBeenCalledWith(expect.stringContaining("FTS: ready"));
     expect(log).toHaveBeenCalledWith(
       expect.stringContaining("Embedding cache: enabled (123 entries)"),
@@ -167,8 +183,12 @@ describe("memory cli", () => {
     const log = spyRuntimeLogs();
     await runMemoryCli(["status", "--agent", "main"]);
 
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("Vector: unavailable"));
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("Vector error: load failed"));
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining("Vector: unavailable"),
+    );
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining("Vector error: load failed"),
+    );
     expect(close).toHaveBeenCalled();
   });
 
@@ -186,7 +206,9 @@ describe("memory cli", () => {
     await runMemoryCli(["status", "--deep"]);
 
     expect(probeEmbeddingAvailability).toHaveBeenCalled();
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("Embeddings: ready"));
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining("Embeddings: ready"),
+    );
     expect(close).toHaveBeenCalled();
   });
 
@@ -273,7 +295,9 @@ describe("memory cli", () => {
 
       expectCliSync(sync);
       expect(error).toHaveBeenCalledWith(
-        expect.stringContaining("Memory index failed (main): QMD index file is empty"),
+        expect.stringContaining(
+          "Memory index failed (main): QMD index file is empty",
+        ),
       );
       expect(close).toHaveBeenCalled();
       expect(process.exitCode).toBe(1);
@@ -322,7 +346,9 @@ describe("memory cli", () => {
 
     expect(search).toHaveBeenCalled();
     expect(close).toHaveBeenCalled();
-    expect(error).toHaveBeenCalledWith(expect.stringContaining("Memory search failed: boom"));
+    expect(error).toHaveBeenCalledWith(
+      expect.stringContaining("Memory search failed: boom"),
+    );
     expect(process.exitCode).toBe(1);
   });
 
@@ -362,7 +388,9 @@ describe("memory cli", () => {
     const log = spyRuntimeLogs();
     await runMemoryCli(["index"]);
 
-    expect(log).toHaveBeenCalledWith("Memory backend does not support manual reindex.");
+    expect(log).toHaveBeenCalledWith(
+      "Memory backend does not support manual reindex.",
+    );
     expect(close).toHaveBeenCalled();
   });
 

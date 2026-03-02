@@ -2,8 +2,14 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { emitHeartbeatEvent } from "../infra/heartbeat-events.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
-import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../utils/message-channel.js";
+import {
+  startGatewayServerHarness,
+  type GatewayServerHarness,
+} from "./server.e2e-ws-harness.js";
 import { installGatewayTestHooks, onceMessage } from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
@@ -40,8 +46,14 @@ describe("gateway server health/presence", () => {
     async () => {
       const { ws } = await harness.openClient();
 
-      const healthP = onceMessage<GatewayFrame>(ws, (o) => o.type === "res" && o.id === "health1");
-      const statusP = onceMessage<GatewayFrame>(ws, (o) => o.type === "res" && o.id === "status1");
+      const healthP = onceMessage<GatewayFrame>(
+        ws,
+        (o) => o.type === "res" && o.id === "health1",
+      );
+      const statusP = onceMessage<GatewayFrame>(
+        ws,
+        (o) => o.type === "res" && o.id === "status1",
+      );
       const presenceP = onceMessage<GatewayFrame>(
         ws,
         (o) => o.type === "res" && o.id === "presence1",
@@ -99,7 +111,10 @@ describe("gateway server health/presence", () => {
         method: "last-heartbeat",
       }),
     );
-    const last = await onceMessage<GatewayFrame>(ws, (o) => o.type === "res" && o.id === "hb-last");
+    const last = await onceMessage<GatewayFrame>(
+      ws,
+      (o) => o.type === "res" && o.id === "hb-last",
+    );
     expect(last.ok).toBe(true);
     const lastPayload = last.payload as HeartbeatPayload | null | undefined;
     expect(lastPayload?.status).toBe("sent");
@@ -118,7 +133,9 @@ describe("gateway server health/presence", () => {
       (o) => o.type === "res" && o.id === "hb-toggle-off",
     );
     expect(toggle.ok).toBe(true);
-    expect((toggle.payload as { enabled?: boolean } | undefined)?.enabled).toBe(false);
+    expect((toggle.payload as { enabled?: boolean } | undefined)?.enabled).toBe(
+      false,
+    );
 
     ws.close();
   });
@@ -152,42 +169,50 @@ describe("gateway server health/presence", () => {
     },
   );
 
-  test("agent events stream with seq", { timeout: PRESENCE_EVENT_TIMEOUT_MS }, async () => {
-    const { ws } = await harness.openClient();
+  test(
+    "agent events stream with seq",
+    { timeout: PRESENCE_EVENT_TIMEOUT_MS },
+    async () => {
+      const { ws } = await harness.openClient();
 
-    const runId = randomUUID();
-    const evtPromise = onceMessage<GatewayFrame>(
-      ws,
-      (o) =>
-        o.type === "event" &&
-        o.event === "agent" &&
-        o.payload?.runId === runId &&
-        o.payload?.stream === "lifecycle",
-    );
-    emitAgentEvent({ runId, stream: "lifecycle", data: { msg: "hi" } });
-    const evt = await evtPromise;
-    const payload = evt.payload as Record<string, unknown> | undefined;
-    expect(payload?.runId).toBe(runId);
-    expect(typeof evt.seq).toBe("number");
-    const data = payload?.data as Record<string, unknown> | undefined;
-    expect(data?.msg).toBe("hi");
+      const runId = randomUUID();
+      const evtPromise = onceMessage<GatewayFrame>(
+        ws,
+        (o) =>
+          o.type === "event" &&
+          o.event === "agent" &&
+          o.payload?.runId === runId &&
+          o.payload?.stream === "lifecycle",
+      );
+      emitAgentEvent({ runId, stream: "lifecycle", data: { msg: "hi" } });
+      const evt = await evtPromise;
+      const payload = evt.payload as Record<string, unknown> | undefined;
+      expect(payload?.runId).toBe(runId);
+      expect(typeof evt.seq).toBe("number");
+      const data = payload?.data as Record<string, unknown> | undefined;
+      expect(data?.msg).toBe("hi");
 
-    ws.close();
-  });
+      ws.close();
+    },
+  );
 
-  test("shutdown event is broadcast on close", { timeout: PRESENCE_EVENT_TIMEOUT_MS }, async () => {
-    const localHarness = await startGatewayServerHarness();
-    const { ws } = await localHarness.openClient();
-    const shutdownP = onceMessage<GatewayFrame>(
-      ws,
-      (o) => o.type === "event" && o.event === "shutdown",
-      SHUTDOWN_EVENT_TIMEOUT_MS,
-    );
-    await localHarness.close();
-    const evt = await shutdownP;
-    const evtPayload = evt.payload as { reason?: unknown } | undefined;
-    expect(evtPayload?.reason).toBeDefined();
-  });
+  test(
+    "shutdown event is broadcast on close",
+    { timeout: PRESENCE_EVENT_TIMEOUT_MS },
+    async () => {
+      const localHarness = await startGatewayServerHarness();
+      const { ws } = await localHarness.openClient();
+      const shutdownP = onceMessage<GatewayFrame>(
+        ws,
+        (o) => o.type === "event" && o.event === "shutdown",
+        SHUTDOWN_EVENT_TIMEOUT_MS,
+      );
+      await localHarness.close();
+      const evt = await shutdownP;
+      const evtPayload = evt.payload as { reason?: unknown } | undefined;
+      expect(evtPayload?.reason).toBeDefined();
+    },
+  );
 
   test(
     "presence broadcast reaches multiple clients",
@@ -199,7 +224,10 @@ describe("gateway server health/presence", () => {
         harness.openClient(),
       ]);
       const waits = clients.map(({ ws }) =>
-        onceMessage<GatewayFrame>(ws, (o) => o.type === "event" && o.event === "presence"),
+        onceMessage<GatewayFrame>(
+          ws,
+          (o) => o.type === "event" && o.event === "presence",
+        ),
       );
       clients[0].ws.send(
         JSON.stringify({
@@ -251,16 +279,23 @@ describe("gateway server health/presence", () => {
       }),
     );
 
-    const presenceRes = (await presenceP) as { ok?: boolean; payload?: unknown };
+    const presenceRes = (await presenceP) as {
+      ok?: boolean;
+      payload?: unknown;
+    };
     expect(presenceRes.ok).toBe(true);
     const presencePayload = presenceRes.payload;
     const entries = Array.isArray(presencePayload)
       ? presencePayload
-      : Array.isArray((presencePayload as { presence?: unknown } | undefined)?.presence)
-        ? ((presencePayload as { presence: Array<Record<string, unknown>> }).presence ?? [])
+      : Array.isArray(
+            (presencePayload as { presence?: unknown } | undefined)?.presence,
+          )
+        ? ((presencePayload as { presence: Array<Record<string, unknown>> })
+            .presence ?? [])
         : [];
     const clientEntry = entries.find(
-      (e) => e.host === GATEWAY_CLIENT_NAMES.FINGERPRINT && e.version === "9.9.9",
+      (e) =>
+        e.host === GATEWAY_CLIENT_NAMES.FINGERPRINT && e.version === "9.9.9",
     );
     expect(clientEntry?.host).toBe(GATEWAY_CLIENT_NAMES.FINGERPRINT);
     expect(clientEntry?.version).toBe("9.9.9");
@@ -297,7 +332,9 @@ describe("gateway server health/presence", () => {
     );
 
     const presenceRes = await presenceP;
-    const entries = (presenceRes.payload ?? []) as Array<Record<string, unknown>>;
+    const entries = (presenceRes.payload ?? []) as Array<
+      Record<string, unknown>
+    >;
     expect(entries.some((e) => e.instanceId === cliId)).toBe(false);
 
     ws.close();

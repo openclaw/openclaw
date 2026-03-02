@@ -38,14 +38,18 @@ describe("buildCleanupPlan", () => {
 
 describe("applyAgentDefaultPrimaryModel", () => {
   it("does not mutate when already set", () => {
-    const cfg = { agents: { defaults: { model: { primary: "a/b" } } } } as OpenClawConfig;
+    const cfg = {
+      agents: { defaults: { model: { primary: "a/b" } } },
+    } as OpenClawConfig;
     const result = applyAgentDefaultPrimaryModel({ cfg, model: "a/b" });
     expect(result.changed).toBe(false);
     expect(result.next).toBe(cfg);
   });
 
   it("normalizes legacy models", () => {
-    const cfg = { agents: { defaults: { model: { primary: "legacy" } } } } as OpenClawConfig;
+    const cfg = {
+      agents: { defaults: { model: { primary: "legacy" } } },
+    } as OpenClawConfig;
     const result = applyAgentDefaultPrimaryModel({
       cfg,
       model: "a/b",
@@ -69,7 +73,11 @@ describe("cleanup path removals", () => {
 
   it("removes state and only linked paths outside state", async () => {
     const runtime = createRuntimeMock();
-    const tmpRoot = path.join(path.parse(process.cwd()).root, "tmp", "openclaw-cleanup");
+    const tmpRoot = path.join(
+      path.parse(process.cwd()).root,
+      "tmp",
+      "openclaw-cleanup",
+    );
     await removeStateAndLinkedPaths(
       {
         stateDir: path.join(tmpRoot, "state"),
@@ -92,7 +100,10 @@ describe("cleanup path removals", () => {
 
   it("removes every workspace directory", async () => {
     const runtime = createRuntimeMock();
-    const workspaces = ["/tmp/openclaw-workspace-1", "/tmp/openclaw-workspace-2"];
+    const workspaces = [
+      "/tmp/openclaw-workspace-1",
+      "/tmp/openclaw-workspace-2",
+    ];
 
     await removeWorkspaceDirs(workspaces, runtime, { dryRun: true });
 

@@ -34,7 +34,10 @@ describe("noteSessionLockHealth", () => {
     const lockPath = path.join(sessionsDir, "active.jsonl.lock");
     await fs.writeFile(
       lockPath,
-      JSON.stringify({ pid: process.pid, createdAt: new Date(Date.now() - 1500).toISOString() }),
+      JSON.stringify({
+        pid: process.pid,
+        createdAt: new Date(Date.now() - 1500).toISOString(),
+      }),
       "utf8",
     );
 
@@ -58,7 +61,10 @@ describe("noteSessionLockHealth", () => {
 
     await fs.writeFile(
       staleLock,
-      JSON.stringify({ pid: -1, createdAt: new Date(Date.now() - 120_000).toISOString() }),
+      JSON.stringify({
+        pid: -1,
+        createdAt: new Date(Date.now() - 120_000).toISOString(),
+      }),
       "utf8",
     );
     await fs.writeFile(

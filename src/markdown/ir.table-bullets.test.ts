@@ -114,6 +114,8 @@ describe("markdownToIR tableMode bullets", () => {
       (s) => s.style === "italic" && ir.text.slice(s.start, s.end) === "Row",
     );
     expect(hasItalic).toBe(true);
-    expect(ir.links.some((link) => link.href === "https://example.com")).toBe(true);
+    expect(ir.links.some((link) => link.href === "https://example.com")).toBe(
+      true,
+    );
   });
 });

@@ -1,5 +1,9 @@
 import { resolveFetch } from "../infra/fetch.js";
-import { resolveRetryConfig, retryAsync, type RetryConfig } from "../infra/retry.js";
+import {
+  resolveRetryConfig,
+  retryAsync,
+  type RetryConfig,
+} from "../infra/retry.js";
 
 const DISCORD_API_BASE = "https://discord.com/api/v10";
 const DISCORD_API_RETRY_DEFAULTS = {
@@ -16,7 +20,9 @@ type DiscordApiErrorPayload = {
   global?: boolean;
 };
 
-function parseDiscordApiErrorPayload(text: string): DiscordApiErrorPayload | null {
+function parseDiscordApiErrorPayload(
+  text: string,
+): DiscordApiErrorPayload | null {
   const trimmed = text.trim();
   if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
     return null;
@@ -32,10 +38,15 @@ function parseDiscordApiErrorPayload(text: string): DiscordApiErrorPayload | nul
   return null;
 }
 
-function parseRetryAfterSeconds(text: string, response: Response): number | undefined {
+function parseRetryAfterSeconds(
+  text: string,
+  response: Response,
+): number | undefined {
   const payload = parseDiscordApiErrorPayload(text);
   const retryAfter =
-    payload && typeof payload.retry_after === "number" && Number.isFinite(payload.retry_after)
+    payload &&
+    typeof payload.retry_after === "number" &&
+    Number.isFinite(payload.retry_after)
       ? payload.retry_after
       : undefined;
   if (retryAfter !== undefined) {
@@ -49,7 +60,9 @@ function parseRetryAfterSeconds(text: string, response: Response): number | unde
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
-function formatRetryAfterSeconds(value: number | undefined): string | undefined {
+function formatRetryAfterSeconds(
+  value: number | undefined,
+): string | undefined {
   if (value === undefined || !Number.isFinite(value) || value < 0) {
     return undefined;
   }
@@ -104,7 +117,10 @@ export async function fetchDiscord<T>(
     throw new Error("fetch is not available");
   }
 
-  const retryConfig = resolveRetryConfig(DISCORD_API_RETRY_DEFAULTS, options?.retry);
+  const retryConfig = resolveRetryConfig(
+    DISCORD_API_RETRY_DEFAULTS,
+    options?.retry,
+  );
   return retryAsync(
     async () => {
       const res = await fetchImpl(`${DISCORD_API_BASE}${path}`, {
@@ -114,7 +130,8 @@ export async function fetchDiscord<T>(
         const text = await res.text().catch(() => "");
         const detail = formatDiscordApiErrorText(text);
         const suffix = detail ? `: ${detail}` : "";
-        const retryAfter = res.status === 429 ? parseRetryAfterSeconds(text, res) : undefined;
+        const retryAfter =
+          res.status === 429 ? parseRetryAfterSeconds(text, res) : undefined;
         throw new DiscordApiError(
           `Discord API ${path} failed (${res.status})${suffix}`,
           res.status,
@@ -126,7 +143,8 @@ export async function fetchDiscord<T>(
     {
       ...retryConfig,
       label: options?.label ?? path,
-      shouldRetry: (err) => err instanceof DiscordApiError && err.status === 429,
+      shouldRetry: (err) =>
+        err instanceof DiscordApiError && err.status === 429,
       retryAfterMs: (err) =>
         err instanceof DiscordApiError && typeof err.retryAfter === "number"
           ? err.retryAfter * 1000

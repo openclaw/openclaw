@@ -36,7 +36,10 @@ describe("getSubagentDepthFromSessionStore", () => {
     const key3 = "agent:main:subagent:three";
     const depth = getSubagentDepthFromSessionStore("subagent-three-session", {
       store: {
-        [key1]: { sessionId: "subagent-one-session", spawnedBy: "agent:main:main" },
+        [key1]: {
+          sessionId: "subagent-one-session",
+          spawnedBy: "agent:main:main",
+        },
         [key2]: { sessionId: "subagent-two-session", spawnedBy: key1 },
         [key3]: { sessionId: "subagent-three-session", spawnedBy: key2 },
       },
@@ -45,7 +48,9 @@ describe("getSubagentDepthFromSessionStore", () => {
   });
 
   it("resolves prefixed store keys when caller key omits the agent prefix", () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-subagent-depth-"));
+    const tmpDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "openclaw-subagent-depth-"),
+    );
     const storeTemplate = path.join(tmpDir, "sessions-{agentId}.json");
     const prefixedKey = "agent:main:subagent:flat";
     const storePath = storeTemplate.replaceAll("{agentId}", "main");
@@ -94,7 +99,11 @@ describe("resolveAgentTimeoutMs", () => {
   });
 
   it("clamps very large timeout overrides to timer-safe values", () => {
-    expect(resolveAgentTimeoutMs({ overrideSeconds: 9_999_999 })).toBe(2_147_000_000);
-    expect(resolveAgentTimeoutMs({ overrideMs: 9_999_999_999 })).toBe(2_147_000_000);
+    expect(resolveAgentTimeoutMs({ overrideSeconds: 9_999_999 })).toBe(
+      2_147_000_000,
+    );
+    expect(resolveAgentTimeoutMs({ overrideMs: 9_999_999_999 })).toBe(
+      2_147_000_000,
+    );
   });
 });

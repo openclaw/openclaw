@@ -7,10 +7,18 @@ describe("chunkTextForOutbound", () => {
   });
 
   it("splits on newline or whitespace boundaries", () => {
-    expect(chunkTextForOutbound("alpha\nbeta gamma", 8)).toEqual(["alpha", "beta", "gamma"]);
+    expect(chunkTextForOutbound("alpha\nbeta gamma", 8)).toEqual([
+      "alpha",
+      "beta",
+      "gamma",
+    ]);
   });
 
   it("falls back to hard limit when no separator exists", () => {
-    expect(chunkTextForOutbound("abcdefghij", 4)).toEqual(["abcd", "efgh", "ij"]);
+    expect(chunkTextForOutbound("abcdefghij", 4)).toEqual([
+      "abcd",
+      "efgh",
+      "ij",
+    ]);
   });
 });

@@ -3,7 +3,11 @@ import { resolveAgentSessionDirs } from "../../agents/session-dirs.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
 import { resolveStateDir } from "../../config/paths.js";
-import { loadSessionStore, resolveStorePath, updateSessionStore } from "../../config/sessions.js";
+import {
+  loadSessionStore,
+  resolveStorePath,
+  updateSessionStore,
+} from "../../config/sessions.js";
 import {
   mergeSessionEntry,
   type SessionAcpMeta,
@@ -21,7 +25,10 @@ export type AcpSessionStoreEntry = {
   storeReadFailed?: boolean;
 };
 
-function resolveStoreSessionKey(store: Record<string, SessionEntry>, sessionKey: string): string {
+function resolveStoreSessionKey(
+  store: Record<string, SessionEntry>,
+  sessionKey: string,
+): string {
   const normalized = sessionKey.trim();
   if (!normalized) {
     return "";

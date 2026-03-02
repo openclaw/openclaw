@@ -7,10 +7,12 @@ import { describe, expect, it, vi } from "vitest";
 // (macOS, CI runners). isPidAlive is left unmocked.
 const FAKE_STARTTIME = 12345;
 vi.mock("../shared/pid-alive.js", async (importOriginal) => {
-  const original = await importOriginal<typeof import("../shared/pid-alive.js")>();
+  const original =
+    await importOriginal<typeof import("../shared/pid-alive.js")>();
   return {
     ...original,
-    getProcessStartTime: (pid: number) => (pid === process.pid ? FAKE_STARTTIME : null),
+    getProcessStartTime: (pid: number) =>
+      pid === process.pid ? FAKE_STARTTIME : null,
   };
 });
 
@@ -40,7 +42,11 @@ async function expectCurrentPidOwnsLock(params: {
 }) {
   const { sessionFile, timeoutMs, staleMs } = params;
   const lockPath = `${sessionFile}.lock`;
-  const lock = await acquireSessionWriteLock({ sessionFile, timeoutMs, staleMs });
+  const lock = await acquireSessionWriteLock({
+    sessionFile,
+    timeoutMs,
+    staleMs,
+  });
   const raw = await fs.readFile(lockPath, "utf8");
   const payload = JSON.parse(raw) as { pid: number };
   expect(payload.pid).toBe(process.pid);
@@ -64,8 +70,14 @@ describe("acquireSessionWriteLock", () => {
       const sessionReal = path.join(realDir, "sessions.json");
       const sessionLink = path.join(linkDir, "sessions.json");
 
-      const lockA = await acquireSessionWriteLock({ sessionFile: sessionReal, timeoutMs: 500 });
-      const lockB = await acquireSessionWriteLock({ sessionFile: sessionLink, timeoutMs: 500 });
+      const lockA = await acquireSessionWriteLock({
+        sessionFile: sessionReal,
+        timeoutMs: 500,
+      });
+      const lockB = await acquireSessionWriteLock({
+        sessionFile: sessionLink,
+        timeoutMs: 500,
+      });
 
       await lockB.release();
       await lockA.release();
@@ -80,8 +92,14 @@ describe("acquireSessionWriteLock", () => {
       const sessionFile = path.join(root, "sessions.json");
       const lockPath = `${sessionFile}.lock`;
 
-      const lockA = await acquireSessionWriteLock({ sessionFile, timeoutMs: 500 });
-      const lockB = await acquireSessionWriteLock({ sessionFile, timeoutMs: 500 });
+      const lockA = await acquireSessionWriteLock({
+        sessionFile,
+        timeoutMs: 500,
+      });
+      const lockB = await acquireSessionWriteLock({
+        sessionFile,
+        timeoutMs: 500,
+      });
 
       await expectLockRemovedOnlyAfterFinalRelease({
         lockPath,
@@ -100,11 +118,18 @@ describe("acquireSessionWriteLock", () => {
       const lockPath = `${sessionFile}.lock`;
       await fs.writeFile(
         lockPath,
-        JSON.stringify({ pid: 123456, createdAt: new Date(Date.now() - 60_000).toISOString() }),
+        JSON.stringify({
+          pid: 123456,
+          createdAt: new Date(Date.now() - 60_000).toISOString(),
+        }),
         "utf8",
       );
 
-      await expectCurrentPidOwnsLock({ sessionFile, timeoutMs: 500, staleMs: 10 });
+      await expectCurrentPidOwnsLock({
+        sessionFile,
+        timeoutMs: 500,
+        staleMs: 10,
+      });
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
@@ -118,7 +143,11 @@ describe("acquireSessionWriteLock", () => {
       await fs.writeFile(lockPath, "{}", "utf8");
 
       await expect(
-        acquireSessionWriteLock({ sessionFile, timeoutMs: 50, staleMs: 60_000 }),
+        acquireSessionWriteLock({
+          sessionFile,
+          timeoutMs: 50,
+          staleMs: 60_000,
+        }),
       ).rejects.toThrow(/session file locked/);
       await expect(fs.access(lockPath)).resolves.toBeUndefined();
     } finally {
@@ -135,7 +164,11 @@ describe("acquireSessionWriteLock", () => {
       const staleDate = new Date(Date.now() - 2 * 60_000);
       await fs.utimes(lockPath, staleDate, staleDate);
 
-      const lock = await acquireSessionWriteLock({ sessionFile, timeoutMs: 500, staleMs: 10_000 });
+      const lock = await acquireSessionWriteLock({
+        sessionFile,
+        timeoutMs: 500,
+        staleMs: 10_000,
+      });
       await lock.release();
       await expect(fs.access(lockPath)).rejects.toThrow();
     } finally {
@@ -159,7 +192,10 @@ describe("acquireSessionWriteLock", () => {
       expect(released).toBeGreaterThanOrEqual(1);
       await expect(fs.access(lockPath)).rejects.toThrow();
 
-      const lockB = await acquireSessionWriteLock({ sessionFile, timeoutMs: 500 });
+      const lockB = await acquireSessionWriteLock({
+        sessionFile,
+        timeoutMs: 500,
+      });
       await expect(fs.access(lockPath)).resolves.toBeUndefined();
 
       // Old release handle must not affect the new lock.
@@ -175,8 +211,12 @@ describe("acquireSessionWriteLock", () => {
   });
 
   it("derives max hold from timeout plus grace", () => {
-    expect(resolveSessionLockMaxHoldFromTimeout({ timeoutMs: 600_000 })).toBe(720_000);
-    expect(resolveSessionLockMaxHoldFromTimeout({ timeoutMs: 1_000, minMs: 5_000 })).toBe(121_000);
+    expect(resolveSessionLockMaxHoldFromTimeout({ timeoutMs: 600_000 })).toBe(
+      720_000,
+    );
+    expect(
+      resolveSessionLockMaxHoldFromTimeout({ timeoutMs: 1_000, minMs: 5_000 }),
+    ).toBe(121_000);
   });
 
   it("clamps max hold for effectively no-timeout runs", () => {
@@ -232,10 +272,9 @@ describe("acquireSessionWriteLock", () => {
 
       expect(result.locks).toHaveLength(3);
       expect(result.cleaned).toHaveLength(2);
-      expect(result.cleaned.map((entry) => path.basename(entry.lockPath)).toSorted()).toEqual([
-        "dead.jsonl.lock",
-        "old-live.jsonl.lock",
-      ]);
+      expect(
+        result.cleaned.map((entry) => path.basename(entry.lockPath)).toSorted(),
+      ).toEqual(["dead.jsonl.lock", "old-live.jsonl.lock"]);
 
       await expect(fs.access(staleDeadLock)).rejects.toThrow();
       await expect(fs.access(staleAliveLock)).rejects.toThrow();
@@ -248,10 +287,13 @@ describe("acquireSessionWriteLock", () => {
   it("removes held locks on termination signals", async () => {
     const signals = ["SIGINT", "SIGTERM", "SIGQUIT", "SIGABRT"] as const;
     const originalKill = process.kill.bind(process);
-    process.kill = ((_pid: number, _signal?: NodeJS.Signals) => true) as typeof process.kill;
+    process.kill = ((_pid: number, _signal?: NodeJS.Signals) =>
+      true) as typeof process.kill;
     try {
       for (const signal of signals) {
-        const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-cleanup-"));
+        const root = await fs.mkdtemp(
+          path.join(os.tmpdir(), "openclaw-lock-cleanup-"),
+        );
         try {
           const sessionFile = path.join(root, "sessions.json");
           const lockPath = `${sessionFile}.lock`;
@@ -316,9 +358,9 @@ describe("acquireSessionWriteLock", () => {
         "utf8",
       );
 
-      await expect(acquireSessionWriteLock({ sessionFile, timeoutMs: 50 })).rejects.toThrow(
-        /session file locked/,
-      );
+      await expect(
+        acquireSessionWriteLock({ sessionFile, timeoutMs: 50 }),
+      ).rejects.toThrow(/session file locked/);
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
@@ -339,9 +381,9 @@ describe("acquireSessionWriteLock", () => {
         "utf8",
       );
 
-      await expect(acquireSessionWriteLock({ sessionFile, timeoutMs: 50 })).rejects.toThrow(
-        /session file locked/,
-      );
+      await expect(
+        acquireSessionWriteLock({ sessionFile, timeoutMs: 50 }),
+      ).rejects.toThrow(/session file locked/);
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }

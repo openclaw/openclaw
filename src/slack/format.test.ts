@@ -5,7 +5,11 @@ import { escapeSlackMrkdwn } from "./monitor/mrkdwn.js";
 describe("markdownToSlackMrkdwn", () => {
   it("handles core markdown formatting conversions", () => {
     const cases = [
-      ["converts bold from double asterisks to single", "**bold text**", "*bold text*"],
+      [
+        "converts bold from double asterisks to single",
+        "**bold text**",
+        "*bold text*",
+      ],
       ["preserves italic underscore format", "_italic text_", "_italic text_"],
       [
         "converts strikethrough from double tilde to single",
@@ -18,13 +22,21 @@ describe("markdownToSlackMrkdwn", () => {
         "hi _there_ *boss* `code`",
       ],
       ["renders inline code", "use `npm install`", "use `npm install`"],
-      ["renders fenced code blocks", "```js\nconst x = 1;\n```", "```\nconst x = 1;\n```"],
+      [
+        "renders fenced code blocks",
+        "```js\nconst x = 1;\n```",
+        "```\nconst x = 1;\n```",
+      ],
       [
         "renders links with Slack mrkdwn syntax",
         "see [docs](https://example.com)",
         "see <https://example.com|docs>",
       ],
-      ["does not duplicate bare URLs", "see https://example.com", "see https://example.com"],
+      [
+        "does not duplicate bare URLs",
+        "see https://example.com",
+        "see https://example.com",
+      ],
       ["escapes unsafe characters", "a & b < c > d", "a &amp; b &lt; c &gt; d"],
       [
         "preserves Slack angle-bracket markup (mentions/links)",
@@ -32,9 +44,17 @@ describe("markdownToSlackMrkdwn", () => {
         "hi <@U123> see <https://example.com|docs> and <!here>",
       ],
       ["escapes raw HTML", "<b>nope</b>", "&lt;b&gt;nope&lt;/b&gt;"],
-      ["renders paragraphs with blank lines", "first\n\nsecond", "first\n\nsecond"],
+      [
+        "renders paragraphs with blank lines",
+        "first\n\nsecond",
+        "first\n\nsecond",
+      ],
       ["renders bullet lists", "- one\n- two", "• one\n• two"],
-      ["renders ordered lists with numbering", "2. two\n3. three", "2. two\n3. three"],
+      [
+        "renders ordered lists with numbering",
+        "2. two\n3. three",
+        "2. two\n3. three",
+      ],
       ["renders headings as bold text", "# Title", "*Title*"],
       ["renders blockquotes", "> Quote", "> Quote"],
     ] as const;
@@ -61,10 +81,14 @@ describe("markdownToSlackMrkdwn", () => {
 
 describe("escapeSlackMrkdwn", () => {
   it("returns plain text unchanged", () => {
-    expect(escapeSlackMrkdwn("heartbeat status ok")).toBe("heartbeat status ok");
+    expect(escapeSlackMrkdwn("heartbeat status ok")).toBe(
+      "heartbeat status ok",
+    );
   });
 
   it("escapes slack and mrkdwn control characters", () => {
-    expect(escapeSlackMrkdwn("mode_*`~<&>\\")).toBe("mode\\_\\*\\`\\~&lt;&amp;&gt;\\\\");
+    expect(escapeSlackMrkdwn("mode_*`~<&>\\")).toBe(
+      "mode\\_\\*\\`\\~&lt;&amp;&gt;\\\\",
+    );
   });
 });

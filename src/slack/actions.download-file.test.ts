@@ -4,7 +4,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const resolveSlackMedia = vi.fn();
 
 vi.mock("./monitor/media.js", () => ({
-  resolveSlackMedia: (...args: Parameters<typeof resolveSlackMedia>) => resolveSlackMedia(...args),
+  resolveSlackMedia: (...args: Parameters<typeof resolveSlackMedia>) =>
+    resolveSlackMedia(...args),
 }));
 
 const { downloadSlackFile } = await import("./actions.js");
@@ -39,7 +40,9 @@ function makeResolvedSlackMedia() {
   };
 }
 
-function expectNoMediaDownload(result: Awaited<ReturnType<typeof downloadSlackFile>>) {
+function expectNoMediaDownload(
+  result: Awaited<ReturnType<typeof downloadSlackFile>>,
+) {
   expect(result).toBeNull();
   expect(resolveSlackMedia).not.toHaveBeenCalled();
 }
@@ -52,7 +55,8 @@ function expectResolveSlackMediaCalledWithDefaults() {
         name: "image.png",
         mimetype: "image/png",
         url_private: undefined,
-        url_private_download: "https://files.slack.com/files-pri/T1-F123/image.png",
+        url_private_download:
+          "https://files.slack.com/files-pri/T1-F123/image.png",
       },
     ],
     token: "xoxb-test",

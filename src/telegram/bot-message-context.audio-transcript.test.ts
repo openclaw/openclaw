@@ -4,7 +4,8 @@ import { buildTelegramMessageContextForTest } from "./bot-message-context.test-h
 const transcribeFirstAudioMock = vi.fn();
 
 vi.mock("../media-understanding/audio-preflight.js", () => ({
-  transcribeFirstAudio: (...args: unknown[]) => transcribeFirstAudioMock(...args),
+  transcribeFirstAudio: (...args: unknown[]) =>
+    transcribeFirstAudioMock(...args),
 }));
 
 describe("buildTelegramMessageContext audio transcript body", () => {
@@ -23,7 +24,12 @@ describe("buildTelegramMessageContext audio transcript body", () => {
       allMedia: [{ path: "/tmp/voice.ogg", contentType: "audio/ogg" }],
       options: { forceWasMentioned: true },
       cfg: {
-        agents: { defaults: { model: "anthropic/claude-opus-4-5", workspace: "/tmp/openclaw" } },
+        agents: {
+          defaults: {
+            model: "anthropic/claude-opus-4-5",
+            workspace: "/tmp/openclaw",
+          },
+        },
         channels: { telegram: {} },
         messages: { groupChat: { mentionPatterns: ["\\bbot\\b"] } },
       },

@@ -1,10 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { startHeartbeatRunner } from "./heartbeat-runner.js";
-import { requestHeartbeatNow, resetHeartbeatWakeStateForTests } from "./heartbeat-wake.js";
+import {
+  requestHeartbeatNow,
+  resetHeartbeatWakeStateForTests,
+} from "./heartbeat-wake.js";
 
 describe("startHeartbeatRunner", () => {
-  function startDefaultRunner(runOnce: Parameters<typeof startHeartbeatRunner>[0]["runOnce"]) {
+  function startDefaultRunner(
+    runOnce: Parameters<typeof startHeartbeatRunner>[0]["runOnce"],
+  ) {
     return startHeartbeatRunner({
       cfg: {
         agents: { defaults: { heartbeat: { every: "30m" } } },

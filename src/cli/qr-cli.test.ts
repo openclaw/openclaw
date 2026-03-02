@@ -105,7 +105,9 @@ describe("registerQrCli", () => {
     await runQr([]);
 
     expect(qrGenerate).toHaveBeenCalledTimes(1);
-    const output = runtime.log.mock.calls.map((call) => String(call[0] ?? "")).join("\n");
+    const output = runtime.log.mock.calls
+      .map((call) => String(call[0] ?? ""))
+      .join("\n");
     expect(output).toContain("Pairing QR");
     expect(output).toContain("ASCII-QR");
     expect(output).toContain("Gateway:");
@@ -139,7 +141,9 @@ describe("registerQrCli", () => {
 
     await expectQrExit([]);
 
-    const output = runtime.error.mock.calls.map((call) => String(call[0] ?? "")).join("\n");
+    const output = runtime.error.mock.calls
+      .map((call) => String(call[0] ?? ""))
+      .join("\n");
     expect(output).toContain("only bound to loopback");
   });
 
@@ -157,27 +161,34 @@ describe("registerQrCli", () => {
   it.each([
     { name: "without tailscale configured", withTailscale: false },
     { name: "when tailscale is configured", withTailscale: true },
-  ])("reports gateway.remote.url as source in --remote json output ($name)", async (testCase) => {
-    loadConfig.mockReturnValue(createRemoteQrConfig({ withTailscale: testCase.withTailscale }));
-    runCommandWithTimeout.mockResolvedValue({
-      code: 0,
-      stdout: '{"Self":{"DNSName":"ts-host.tailnet.ts.net."}}',
-      stderr: "",
-    });
+  ])(
+    "reports gateway.remote.url as source in --remote json output ($name)",
+    async (testCase) => {
+      loadConfig.mockReturnValue(
+        createRemoteQrConfig({ withTailscale: testCase.withTailscale }),
+      );
+      runCommandWithTimeout.mockResolvedValue({
+        code: 0,
+        stdout: '{"Self":{"DNSName":"ts-host.tailnet.ts.net."}}',
+        stderr: "",
+      });
 
-    await runQr(["--json", "--remote"]);
+      await runQr(["--json", "--remote"]);
 
-    const payload = JSON.parse(String(runtime.log.mock.calls.at(-1)?.[0] ?? "{}")) as {
-      setupCode?: string;
-      gatewayUrl?: string;
-      auth?: string;
-      urlSource?: string;
-    };
-    expect(payload.gatewayUrl).toBe("wss://remote.example.com:444");
-    expect(payload.auth).toBe("token");
-    expect(payload.urlSource).toBe("gateway.remote.url");
-    expect(runCommandWithTimeout).not.toHaveBeenCalled();
-  });
+      const payload = JSON.parse(
+        String(runtime.log.mock.calls.at(-1)?.[0] ?? "{}"),
+      ) as {
+        setupCode?: string;
+        gatewayUrl?: string;
+        auth?: string;
+        urlSource?: string;
+      };
+      expect(payload.gatewayUrl).toBe("wss://remote.example.com:444");
+      expect(payload.auth).toBe("token");
+      expect(payload.urlSource).toBe("gateway.remote.url");
+      expect(runCommandWithTimeout).not.toHaveBeenCalled();
+    },
+  );
 
   it("errors when --remote is set but no remote URL is configured", async () => {
     loadConfig.mockReturnValue({
@@ -189,7 +200,9 @@ describe("registerQrCli", () => {
     });
 
     await expectQrExit(["--remote"]);
-    const output = runtime.error.mock.calls.map((call) => String(call[0] ?? "")).join("\n");
+    const output = runtime.error.mock.calls
+      .map((call) => String(call[0] ?? ""))
+      .join("\n");
     expect(output).toContain("qr --remote requires");
   });
 });

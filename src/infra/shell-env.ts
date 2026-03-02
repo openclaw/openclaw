@@ -44,7 +44,10 @@ function readEtcShells(): Set<string> | null {
     const entries = raw
       .split(/\r?\n/)
       .map((line) => line.trim())
-      .filter((line) => line.length > 0 && !line.startsWith("#") && path.isAbsolute(line));
+      .filter(
+        (line) =>
+          line.length > 0 && !line.startsWith("#") && path.isAbsolute(line),
+      );
     cachedEtcShells = new Set(entries);
   } catch {
     cachedEtcShells = null;
@@ -125,10 +128,18 @@ function probeLoginShellEnv(params: {
   const execEnv = resolveShellExecEnv(params.env);
 
   try {
-    const stdout = execLoginShellEnvZero({ shell, env: execEnv, exec, timeoutMs });
+    const stdout = execLoginShellEnvZero({
+      shell,
+      env: execEnv,
+      exec,
+      timeoutMs,
+    });
     return { ok: true, shellEnv: parseShellEnv(stdout) };
   } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : String(err),
+    };
   }
 }
 
@@ -146,7 +157,9 @@ export type ShellEnvFallbackOptions = {
   exec?: typeof execFileSync;
 };
 
-export function loadShellEnvFallback(opts: ShellEnvFallbackOptions): ShellEnvFallbackResult {
+export function loadShellEnvFallback(
+  opts: ShellEnvFallbackOptions,
+): ShellEnvFallbackResult {
   const logger = opts.logger ?? console;
 
   if (!opts.enabled) {
@@ -154,7 +167,9 @@ export function loadShellEnvFallback(opts: ShellEnvFallbackOptions): ShellEnvFal
     return { ok: true, applied: [], skippedReason: "disabled" };
   }
 
-  const hasAnyKey = opts.expectedKeys.some((key) => Boolean(opts.env[key]?.trim()));
+  const hasAnyKey = opts.expectedKeys.some((key) =>
+    Boolean(opts.env[key]?.trim()),
+  );
   if (hasAnyKey) {
     lastAppliedKeys = [];
     return { ok: true, applied: [], skippedReason: "already-has-keys" };
@@ -196,7 +211,9 @@ export function shouldDeferShellEnvFallback(env: NodeJS.ProcessEnv): boolean {
   return isTruthyEnvValue(env.OPENCLAW_DEFER_SHELL_ENV_FALLBACK);
 }
 
-export function resolveShellEnvFallbackTimeoutMs(env: NodeJS.ProcessEnv): number {
+export function resolveShellEnvFallbackTimeoutMs(
+  env: NodeJS.ProcessEnv,
+): number {
   const raw = env.OPENCLAW_SHELL_ENV_TIMEOUT_MS?.trim();
   if (!raw) {
     return DEFAULT_TIMEOUT_MS;

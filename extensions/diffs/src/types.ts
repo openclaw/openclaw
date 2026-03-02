@@ -1,4 +1,8 @@
-import type { FileContents, FileDiffMetadata, SupportedLanguages } from "@pierre/diffs";
+import type {
+  FileContents,
+  FileDiffMetadata,
+  SupportedLanguages,
+} from "@pierre/diffs";
 
 export const DIFF_LAYOUTS = ["unified", "split"] as const;
 export const DIFF_MODES = ["view", "image", "file", "both"] as const;
@@ -11,7 +15,8 @@ export type DiffLayout = (typeof DIFF_LAYOUTS)[number];
 export type DiffMode = (typeof DIFF_MODES)[number];
 export type DiffTheme = (typeof DIFF_THEMES)[number];
 export type DiffIndicators = (typeof DIFF_INDICATORS)[number];
-export type DiffImageQualityPreset = (typeof DIFF_IMAGE_QUALITY_PRESETS)[number];
+export type DiffImageQualityPreset =
+  (typeof DIFF_IMAGE_QUALITY_PRESETS)[number];
 export type DiffOutputFormat = (typeof DIFF_OUTPUT_FORMATS)[number];
 
 export type DiffPresentationDefaults = {

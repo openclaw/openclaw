@@ -10,18 +10,32 @@ export async function modelsImageFallbacksListCommand(
   opts: { json?: boolean; plain?: boolean },
   runtime: RuntimeEnv,
 ) {
-  return await listFallbacksCommand({ label: "Image fallbacks", key: "imageModel" }, opts, runtime);
+  return await listFallbacksCommand(
+    { label: "Image fallbacks", key: "imageModel" },
+    opts,
+    runtime,
+  );
 }
 
-export async function modelsImageFallbacksAddCommand(modelRaw: string, runtime: RuntimeEnv) {
+export async function modelsImageFallbacksAddCommand(
+  modelRaw: string,
+  runtime: RuntimeEnv,
+) {
   return await addFallbackCommand(
-    { label: "Image fallbacks", key: "imageModel", logPrefix: "Image fallbacks" },
+    {
+      label: "Image fallbacks",
+      key: "imageModel",
+      logPrefix: "Image fallbacks",
+    },
     modelRaw,
     runtime,
   );
 }
 
-export async function modelsImageFallbacksRemoveCommand(modelRaw: string, runtime: RuntimeEnv) {
+export async function modelsImageFallbacksRemoveCommand(
+  modelRaw: string,
+  runtime: RuntimeEnv,
+) {
   return await removeFallbackCommand(
     {
       label: "Image fallbacks",

@@ -12,7 +12,8 @@ export type ResolvedIMessageAccount = {
   configured: boolean;
 };
 
-const { listAccountIds, resolveDefaultAccountId } = createAccountListHelpers("imessage");
+const { listAccountIds, resolveDefaultAccountId } =
+  createAccountListHelpers("imessage");
 export const listIMessageAccountIds = listAccountIds;
 export const resolveDefaultIMessageAccountId = resolveDefaultAccountId;
 
@@ -23,7 +24,10 @@ function resolveAccountConfig(
   return resolveAccountEntry(cfg.channels?.imessage?.accounts, accountId);
 }
 
-function mergeIMessageAccountConfig(cfg: OpenClawConfig, accountId: string): IMessageAccountConfig {
+function mergeIMessageAccountConfig(
+  cfg: OpenClawConfig,
+  accountId: string,
+): IMessageAccountConfig {
   const { accounts: _ignored, ...base } = (cfg.channels?.imessage ??
     {}) as IMessageAccountConfig & { accounts?: unknown };
   const account = resolveAccountConfig(cfg, accountId) ?? {};
@@ -63,7 +67,9 @@ export function resolveIMessageAccount(params: {
   };
 }
 
-export function listEnabledIMessageAccounts(cfg: OpenClawConfig): ResolvedIMessageAccount[] {
+export function listEnabledIMessageAccounts(
+  cfg: OpenClawConfig,
+): ResolvedIMessageAccount[] {
   return listIMessageAccountIds(cfg)
     .map((accountId) => resolveIMessageAccount({ cfg, accountId }))
     .filter((account) => account.enabled);

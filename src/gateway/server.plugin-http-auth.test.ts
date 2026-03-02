@@ -1,6 +1,9 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { describe, expect, test, vi } from "vitest";
-import { canonicalizePathVariant, isProtectedPluginRoutePath } from "./security-path.js";
+import {
+  canonicalizePathVariant,
+  isProtectedPluginRoutePath,
+} from "./security-path.js";
 import {
   AUTH_NONE,
   AUTH_TOKEN,
@@ -24,31 +27,44 @@ function canonicalizePluginPath(pathname: string): string {
 
 describe("gateway plugin HTTP auth boundary", () => {
   test("applies default security headers and optional strict transport security", async () => {
-    await withGatewayTempConfig("openclaw-plugin-http-security-headers-test-", async () => {
-      const withoutHsts = createTestGatewayServer({ resolvedAuth: AUTH_NONE });
-      const withoutHstsResponse = await sendRequest(withoutHsts, { path: "/missing" });
-      expect(withoutHstsResponse.setHeader).toHaveBeenCalledWith(
-        "X-Content-Type-Options",
-        "nosniff",
-      );
-      expect(withoutHstsResponse.setHeader).toHaveBeenCalledWith("Referrer-Policy", "no-referrer");
-      expect(withoutHstsResponse.setHeader).not.toHaveBeenCalledWith(
-        "Strict-Transport-Security",
-        expect.any(String),
-      );
+    await withGatewayTempConfig(
+      "openclaw-plugin-http-security-headers-test-",
+      async () => {
+        const withoutHsts = createTestGatewayServer({
+          resolvedAuth: AUTH_NONE,
+        });
+        const withoutHstsResponse = await sendRequest(withoutHsts, {
+          path: "/missing",
+        });
+        expect(withoutHstsResponse.setHeader).toHaveBeenCalledWith(
+          "X-Content-Type-Options",
+          "nosniff",
+        );
+        expect(withoutHstsResponse.setHeader).toHaveBeenCalledWith(
+          "Referrer-Policy",
+          "no-referrer",
+        );
+        expect(withoutHstsResponse.setHeader).not.toHaveBeenCalledWith(
+          "Strict-Transport-Security",
+          expect.any(String),
+        );
 
-      const withHsts = createTestGatewayServer({
-        resolvedAuth: AUTH_NONE,
-        overrides: {
-          strictTransportSecurityHeader: "max-age=31536000; includeSubDomains",
-        },
-      });
-      const withHstsResponse = await sendRequest(withHsts, { path: "/missing" });
-      expect(withHstsResponse.setHeader).toHaveBeenCalledWith(
-        "Strict-Transport-Security",
-        "max-age=31536000; includeSubDomains",
-      );
-    });
+        const withHsts = createTestGatewayServer({
+          resolvedAuth: AUTH_NONE,
+          overrides: {
+            strictTransportSecurityHeader:
+              "max-age=31536000; includeSubDomains",
+          },
+        });
+        const withHstsResponse = await sendRequest(withHsts, {
+          path: "/missing",
+        });
+        expect(withHstsResponse.setHeader).toHaveBeenCalledWith(
+          "Strict-Transport-Security",
+          "max-age=31536000; includeSubDomains",
+        );
+      },
+    );
   });
 
   test("serves unauthenticated liveness/readiness probe routes when no other route handles them", async () => {
@@ -75,16 +91,18 @@ describe("gateway plugin HTTP auth boundary", () => {
   });
 
   test("does not shadow plugin routes mounted on probe paths", async () => {
-    const handlePluginRequest = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
-      const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
-      if (pathname === "/healthz") {
-        res.statusCode = 200;
-        res.setHeader("Content-Type", "application/json; charset=utf-8");
-        res.end(JSON.stringify({ ok: true, route: "plugin-health" }));
-        return true;
-      }
-      return false;
-    });
+    const handlePluginRequest = vi.fn(
+      async (req: IncomingMessage, res: ServerResponse) => {
+        const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
+        if (pathname === "/healthz") {
+          res.statusCode = 200;
+          res.setHeader("Content-Type", "application/json; charset=utf-8");
+          res.end(JSON.stringify({ ok: true, route: "plugin-health" }));
+          return true;
+        }
+        return false;
+      },
+    );
 
     await withGatewayServer({
       prefix: "openclaw-plugin-http-probes-shadow-test-",
@@ -93,7 +111,9 @@ describe("gateway plugin HTTP auth boundary", () => {
       run: async (server) => {
         const response = await sendRequest(server, { path: "/healthz" });
         expect(response.res.statusCode).toBe(200);
-        expect(response.getBody()).toBe(JSON.stringify({ ok: true, route: "plugin-health" }));
+        expect(response.getBody()).toBe(
+          JSON.stringify({ ok: true, route: "plugin-health" }),
+        );
         expect(handlePluginRequest).toHaveBeenCalledTimes(1);
       },
     });
@@ -104,12 +124,21 @@ describe("gateway plugin HTTP auth boundary", () => {
       prefix: "openclaw-plugin-http-probes-method-test-",
       resolvedAuth: AUTH_NONE,
       run: async (server) => {
-        const postResponse = await sendRequest(server, { path: "/healthz", method: "POST" });
+        const postResponse = await sendRequest(server, {
+          path: "/healthz",
+          method: "POST",
+        });
         expect(postResponse.res.statusCode).toBe(405);
-        expect(postResponse.setHeader).toHaveBeenCalledWith("Allow", "GET, HEAD");
+        expect(postResponse.setHeader).toHaveBeenCalledWith(
+          "Allow",
+          "GET, HEAD",
+        );
         expect(postResponse.getBody()).toBe("Method Not Allowed");
 
-        const headResponse = await sendRequest(server, { path: "/readyz", method: "HEAD" });
+        const headResponse = await sendRequest(server, {
+          path: "/readyz",
+          method: "HEAD",
+        });
         expect(headResponse.res.statusCode).toBe(200);
         expect(headResponse.getBody()).toBe("");
       },
@@ -117,28 +146,30 @@ describe("gateway plugin HTTP auth boundary", () => {
   });
 
   test("requires gateway auth for protected plugin route space and allows authenticated pass-through", async () => {
-    const handlePluginRequest = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
-      const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
-      if (pathname === "/api/channels") {
-        res.statusCode = 200;
-        res.setHeader("Content-Type", "application/json; charset=utf-8");
-        res.end(JSON.stringify({ ok: true, route: "channel-root" }));
-        return true;
-      }
-      if (pathname === "/api/channels/nostr/default/profile") {
-        res.statusCode = 200;
-        res.setHeader("Content-Type", "application/json; charset=utf-8");
-        res.end(JSON.stringify({ ok: true, route: "channel" }));
-        return true;
-      }
-      if (pathname === "/plugin/public") {
-        res.statusCode = 200;
-        res.setHeader("Content-Type", "application/json; charset=utf-8");
-        res.end(JSON.stringify({ ok: true, route: "public" }));
-        return true;
-      }
-      return false;
-    });
+    const handlePluginRequest = vi.fn(
+      async (req: IncomingMessage, res: ServerResponse) => {
+        const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
+        if (pathname === "/api/channels") {
+          res.statusCode = 200;
+          res.setHeader("Content-Type", "application/json; charset=utf-8");
+          res.end(JSON.stringify({ ok: true, route: "channel-root" }));
+          return true;
+        }
+        if (pathname === "/api/channels/nostr/default/profile") {
+          res.statusCode = 200;
+          res.setHeader("Content-Type", "application/json; charset=utf-8");
+          res.end(JSON.stringify({ ok: true, route: "channel" }));
+          return true;
+        }
+        if (pathname === "/plugin/public") {
+          res.statusCode = 200;
+          res.setHeader("Content-Type", "application/json; charset=utf-8");
+          res.end(JSON.stringify({ ok: true, route: "public" }));
+          return true;
+        }
+        return false;
+      },
+    );
 
     await withGatewayServer({
       prefix: "openclaw-plugin-http-auth-test-",
@@ -156,7 +187,9 @@ describe("gateway plugin HTTP auth boundary", () => {
         expectUnauthorizedResponse(unauthenticated);
         expect(handlePluginRequest).not.toHaveBeenCalled();
 
-        const unauthenticatedRoot = await sendRequest(server, { path: "/api/channels" });
+        const unauthenticatedRoot = await sendRequest(server, {
+          path: "/api/channels",
+        });
         expectUnauthorizedResponse(unauthenticatedRoot);
         expect(handlePluginRequest).not.toHaveBeenCalled();
 
@@ -167,7 +200,9 @@ describe("gateway plugin HTTP auth boundary", () => {
         expect(authenticated.res.statusCode).toBe(200);
         expect(authenticated.getBody()).toContain('"route":"channel"');
 
-        const unauthenticatedPublic = await sendRequest(server, { path: "/plugin/public" });
+        const unauthenticatedPublic = await sendRequest(server, {
+          path: "/plugin/public",
+        });
         expectUnauthorizedResponse(unauthenticatedPublic);
 
         expect(handlePluginRequest).toHaveBeenCalledTimes(1);
@@ -176,22 +211,24 @@ describe("gateway plugin HTTP auth boundary", () => {
   });
 
   test("keeps wildcard plugin handlers ungated when auth enforcement predicate excludes their paths", async () => {
-    const handlePluginRequest = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
-      const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
-      if (pathname === "/plugin/routed") {
-        res.statusCode = 200;
-        res.setHeader("Content-Type", "application/json; charset=utf-8");
-        res.end(JSON.stringify({ ok: true, route: "routed" }));
-        return true;
-      }
-      if (pathname === "/googlechat") {
-        res.statusCode = 200;
-        res.setHeader("Content-Type", "application/json; charset=utf-8");
-        res.end(JSON.stringify({ ok: true, route: "wildcard-handler" }));
-        return true;
-      }
-      return false;
-    });
+    const handlePluginRequest = vi.fn(
+      async (req: IncomingMessage, res: ServerResponse) => {
+        const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
+        if (pathname === "/plugin/routed") {
+          res.statusCode = 200;
+          res.setHeader("Content-Type", "application/json; charset=utf-8");
+          res.end(JSON.stringify({ ok: true, route: "routed" }));
+          return true;
+        }
+        if (pathname === "/googlechat") {
+          res.statusCode = 200;
+          res.setHeader("Content-Type", "application/json; charset=utf-8");
+          res.end(JSON.stringify({ ok: true, route: "wildcard-handler" }));
+          return true;
+        }
+        return false;
+      },
+    );
 
     await withGatewayServer({
       prefix: "openclaw-plugin-http-auth-wildcard-handler-test-",
@@ -203,12 +240,18 @@ describe("gateway plugin HTTP auth boundary", () => {
           pathContext.pathname === "/plugin/routed",
       },
       run: async (server) => {
-        const unauthenticatedRouted = await sendRequest(server, { path: "/plugin/routed" });
+        const unauthenticatedRouted = await sendRequest(server, {
+          path: "/plugin/routed",
+        });
         expectUnauthorizedResponse(unauthenticatedRouted);
 
-        const unauthenticatedWildcard = await sendRequest(server, { path: "/googlechat" });
+        const unauthenticatedWildcard = await sendRequest(server, {
+          path: "/googlechat",
+        });
         expect(unauthenticatedWildcard.res.statusCode).toBe(200);
-        expect(unauthenticatedWildcard.getBody()).toContain('"route":"wildcard-handler"');
+        expect(unauthenticatedWildcard.getBody()).toContain(
+          '"route":"wildcard-handler"',
+        );
 
         const authenticatedRouted = await sendRequest(server, {
           path: "/plugin/routed",
@@ -221,31 +264,40 @@ describe("gateway plugin HTTP auth boundary", () => {
   });
 
   test("uses /api/channels auth by default while keeping wildcard handlers ungated with no predicate", async () => {
-    const handlePluginRequest = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
-      const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
-      if (canonicalizePluginPath(pathname) === "/api/channels/nostr/default/profile") {
-        res.statusCode = 200;
-        res.setHeader("Content-Type", "application/json; charset=utf-8");
-        res.end(JSON.stringify({ ok: true, route: "channel-default" }));
-        return true;
-      }
-      if (pathname === "/googlechat") {
-        res.statusCode = 200;
-        res.setHeader("Content-Type", "application/json; charset=utf-8");
-        res.end(JSON.stringify({ ok: true, route: "wildcard-default" }));
-        return true;
-      }
-      return false;
-    });
+    const handlePluginRequest = vi.fn(
+      async (req: IncomingMessage, res: ServerResponse) => {
+        const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
+        if (
+          canonicalizePluginPath(pathname) ===
+          "/api/channels/nostr/default/profile"
+        ) {
+          res.statusCode = 200;
+          res.setHeader("Content-Type", "application/json; charset=utf-8");
+          res.end(JSON.stringify({ ok: true, route: "channel-default" }));
+          return true;
+        }
+        if (pathname === "/googlechat") {
+          res.statusCode = 200;
+          res.setHeader("Content-Type", "application/json; charset=utf-8");
+          res.end(JSON.stringify({ ok: true, route: "wildcard-default" }));
+          return true;
+        }
+        return false;
+      },
+    );
 
     await withGatewayServer({
       prefix: "openclaw-plugin-http-auth-wildcard-default-test-",
       resolvedAuth: AUTH_TOKEN,
       overrides: { handlePluginRequest },
       run: async (server) => {
-        const unauthenticated = await sendRequest(server, { path: "/googlechat" });
+        const unauthenticated = await sendRequest(server, {
+          path: "/googlechat",
+        });
         expect(unauthenticated.res.statusCode).toBe(200);
-        expect(unauthenticated.getBody()).toContain('"route":"wildcard-default"');
+        expect(unauthenticated.getBody()).toContain(
+          '"route":"wildcard-default"',
+        );
 
         const unauthenticatedChannel = await sendRequest(server, {
           path: "/api/channels/nostr/default/profile",
@@ -269,29 +321,35 @@ describe("gateway plugin HTTP auth boundary", () => {
           authorization: "Bearer test-token",
         });
         expect(authenticatedChannel.res.statusCode).toBe(200);
-        expect(authenticatedChannel.getBody()).toContain('"route":"channel-default"');
+        expect(authenticatedChannel.getBody()).toContain(
+          '"route":"channel-default"',
+        );
 
         const authenticatedDeepEncodedChannel = await sendRequest(server, {
           path: "/api%2525252fchannels%2525252fnostr%2525252fdefault%2525252fprofile",
           authorization: "Bearer test-token",
         });
         expect(authenticatedDeepEncodedChannel.res.statusCode).toBe(200);
-        expect(authenticatedDeepEncodedChannel.getBody()).toContain('"route":"channel-default"');
+        expect(authenticatedDeepEncodedChannel.getBody()).toContain(
+          '"route":"channel-default"',
+        );
       },
     });
   });
 
   test("serves plugin routes before control ui spa fallback", async () => {
-    const handlePluginRequest = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
-      const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
-      if (pathname === "/plugins/diffs/view/demo-id/demo-token") {
-        res.statusCode = 200;
-        res.setHeader("Content-Type", "text/html; charset=utf-8");
-        res.end("<!doctype html><title>diff-view</title>");
-        return true;
-      }
-      return false;
-    });
+    const handlePluginRequest = vi.fn(
+      async (req: IncomingMessage, res: ServerResponse) => {
+        const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
+        if (pathname === "/plugins/diffs/view/demo-id/demo-token") {
+          res.statusCode = 200;
+          res.setHeader("Content-Type", "text/html; charset=utf-8");
+          res.end("<!doctype html><title>diff-view</title>");
+          return true;
+        }
+        return false;
+      },
+    );
 
     await withGatewayServer({
       prefix: "openclaw-plugin-http-control-ui-precedence-test-",
@@ -315,16 +373,18 @@ describe("gateway plugin HTTP auth boundary", () => {
   });
 
   test("passes POST webhook routes through root-mounted control ui to plugins", async () => {
-    const handlePluginRequest = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
-      const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
-      if (req.method !== "POST" || pathname !== "/bluebubbles-webhook") {
-        return false;
-      }
-      res.statusCode = 200;
-      res.setHeader("Content-Type", "text/plain; charset=utf-8");
-      res.end("plugin-webhook");
-      return true;
-    });
+    const handlePluginRequest = vi.fn(
+      async (req: IncomingMessage, res: ServerResponse) => {
+        const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
+        if (req.method !== "POST" || pathname !== "/bluebubbles-webhook") {
+          return false;
+        }
+        res.statusCode = 200;
+        res.setHeader("Content-Type", "text/plain; charset=utf-8");
+        res.end("plugin-webhook");
+        return true;
+      },
+    );
 
     await withGatewayServer({
       prefix: "openclaw-plugin-http-control-ui-webhook-post-test-",
@@ -349,16 +409,18 @@ describe("gateway plugin HTTP auth boundary", () => {
   });
 
   test("does not let plugin handlers shadow control ui routes", async () => {
-    const handlePluginRequest = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
-      const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
-      if (pathname === "/chat") {
-        res.statusCode = 200;
-        res.setHeader("Content-Type", "text/plain; charset=utf-8");
-        res.end("plugin-shadow");
-        return true;
-      }
-      return false;
-    });
+    const handlePluginRequest = vi.fn(
+      async (req: IncomingMessage, res: ServerResponse) => {
+        const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
+        if (pathname === "/chat") {
+          res.statusCode = 200;
+          res.setHeader("Content-Type", "text/plain; charset=utf-8");
+          res.end("plugin-shadow");
+          return true;
+        }
+        return false;
+      },
+    );
 
     await withGatewayServer({
       prefix: "openclaw-plugin-http-control-ui-shadow-test-",
@@ -391,7 +453,10 @@ describe("gateway plugin HTTP auth boundary", () => {
           isProtectedPluginRoutePath(pathContext.pathname),
       },
       run: async (server) => {
-        await expectUnauthorizedVariants({ server, variants: CANONICAL_UNAUTH_VARIANTS });
+        await expectUnauthorizedVariants({
+          server,
+          variants: CANONICAL_UNAUTH_VARIANTS,
+        });
         expect(handlePluginRequest).not.toHaveBeenCalled();
 
         await expectAuthorizedVariants({
@@ -399,7 +464,9 @@ describe("gateway plugin HTTP auth boundary", () => {
           variants: CANONICAL_AUTH_VARIANTS,
           authorization: "Bearer test-token",
         });
-        expect(handlePluginRequest).toHaveBeenCalledTimes(CANONICAL_AUTH_VARIANTS.length);
+        expect(handlePluginRequest).toHaveBeenCalledTimes(
+          CANONICAL_AUTH_VARIANTS.length,
+        );
       },
     });
   });
@@ -430,12 +497,14 @@ describe("gateway plugin HTTP auth boundary", () => {
     const encodedVariants = buildChannelPathFuzzCorpus().filter((variant) =>
       variant.path.includes("%"),
     );
-    const handlePluginRequest = vi.fn(async (_req: IncomingMessage, res: ServerResponse) => {
-      res.statusCode = 200;
-      res.setHeader("Content-Type", "application/json; charset=utf-8");
-      res.end(JSON.stringify({ ok: true, route: "should-not-run" }));
-      return true;
-    });
+    const handlePluginRequest = vi.fn(
+      async (_req: IncomingMessage, res: ServerResponse) => {
+        res.statusCode = 200;
+        res.setHeader("Content-Type", "application/json; charset=utf-8");
+        res.end(JSON.stringify({ ok: true, route: "should-not-run" }));
+        return true;
+      },
+    );
 
     await withGatewayServer({
       prefix: "openclaw-plugin-http-auth-encoded-order-test-",
@@ -455,33 +524,41 @@ describe("gateway plugin HTTP auth boundary", () => {
   test.each(["0.0.0.0", "::"])(
     "returns 404 (not 500) for non-hook routes with hooks enabled and bindHost=%s",
     async (bindHost) => {
-      await withGatewayTempConfig("openclaw-plugin-http-hooks-bindhost-", async () => {
-        const handleHooksRequest = createHooksHandler(bindHost);
+      await withGatewayTempConfig(
+        "openclaw-plugin-http-hooks-bindhost-",
+        async () => {
+          const handleHooksRequest = createHooksHandler(bindHost);
+          const server = createTestGatewayServer({
+            resolvedAuth: AUTH_NONE,
+            overrides: { handleHooksRequest },
+          });
+
+          const response = await sendRequest(server, { path: "/" });
+
+          expect(response.res.statusCode).toBe(404);
+          expect(response.getBody()).toBe("Not Found");
+        },
+      );
+    },
+  );
+
+  test("rejects query-token hooks requests with bindHost=::", async () => {
+    await withGatewayTempConfig(
+      "openclaw-plugin-http-hooks-query-token-",
+      async () => {
+        const handleHooksRequest = createHooksHandler("::");
         const server = createTestGatewayServer({
           resolvedAuth: AUTH_NONE,
           overrides: { handleHooksRequest },
         });
 
-        const response = await sendRequest(server, { path: "/" });
+        const response = await sendRequest(server, {
+          path: "/hooks/wake?token=bad",
+        });
 
-        expect(response.res.statusCode).toBe(404);
-        expect(response.getBody()).toBe("Not Found");
-      });
-    },
-  );
-
-  test("rejects query-token hooks requests with bindHost=::", async () => {
-    await withGatewayTempConfig("openclaw-plugin-http-hooks-query-token-", async () => {
-      const handleHooksRequest = createHooksHandler("::");
-      const server = createTestGatewayServer({
-        resolvedAuth: AUTH_NONE,
-        overrides: { handleHooksRequest },
-      });
-
-      const response = await sendRequest(server, { path: "/hooks/wake?token=bad" });
-
-      expect(response.res.statusCode).toBe(400);
-      expect(response.getBody()).toContain("Hook token must be provided");
-    });
+        expect(response.res.statusCode).toBe(400);
+        expect(response.getBody()).toContain("Hook token must be provided");
+      },
+    );
   });
 });

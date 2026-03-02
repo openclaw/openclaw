@@ -1,9 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
+import {
+  createOutboundTestPlugin,
+  createTestRegistry,
+} from "../test-utils/channel-plugins.js";
 import { resolveCommandAuthorization } from "./command-auth.js";
-import { hasControlCommand, hasInlineCommandTokens } from "./command-detection.js";
+import {
+  hasControlCommand,
+  hasInlineCommandTokens,
+} from "./command-detection.js";
 import { listChatCommands } from "./commands-registry.js";
 import { parseActivationCommand } from "./group-activation.js";
 import { parseSendPolicyCommand } from "./send-policy.js";
@@ -13,7 +19,10 @@ const createRegistry = () =>
   createTestRegistry([
     {
       pluginId: "discord",
-      plugin: createOutboundTestPlugin({ id: "discord", outbound: { deliveryMode: "direct" } }),
+      plugin: createOutboundTestPlugin({
+        id: "discord",
+        outbound: { deliveryMode: "direct" },
+      }),
       source: "test",
     },
   ]);
@@ -214,7 +223,10 @@ describe("resolveCommandAuthorization", () => {
       } as MsgContext;
     }
 
-    function makeDiscordContext(senderId: string, fromOverride?: string): MsgContext {
+    function makeDiscordContext(
+      senderId: string,
+      fromOverride?: string,
+    ): MsgContext {
       return {
         Provider: "discord",
         Surface: "discord",
@@ -223,7 +235,10 @@ describe("resolveCommandAuthorization", () => {
       } as MsgContext;
     }
 
-    function resolveWithCommandsAllowFrom(senderId: string, commandAuthorized: boolean) {
+    function resolveWithCommandsAllowFrom(
+      senderId: string,
+      commandAuthorized: boolean,
+    ) {
       return resolveCommandAuthorization({
         ctx: makeWhatsAppContext(senderId),
         cfg: commandsAllowFromConfig,

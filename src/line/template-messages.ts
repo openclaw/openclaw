@@ -88,7 +88,8 @@ export function createButtonTemplate(
 
   return {
     type: "template",
-    altText: options?.altText?.slice(0, 400) ?? `${title}: ${text}`.slice(0, 400),
+    altText:
+      options?.altText?.slice(0, 400) ?? `${title}: ${text}`.slice(0, 400),
     template,
   };
 }
@@ -161,7 +162,10 @@ export function createImageCarousel(
 /**
  * Create an image carousel column for use with createImageCarousel
  */
-export function createImageCarouselColumn(imageUrl: string, action: Action): ImageCarouselColumn {
+export function createImageCarouselColumn(
+  imageUrl: string,
+  action: Action,
+): ImageCarouselColumn {
   return {
     imageUrl,
     action,
@@ -190,11 +194,19 @@ export function createYesNoConfirm(
   },
 ): TemplateMessage {
   const yesAction: Action = options?.yesData
-    ? postbackAction(options.yesText ?? "Yes", options.yesData, options.yesText ?? "Yes")
+    ? postbackAction(
+        options.yesText ?? "Yes",
+        options.yesData,
+        options.yesText ?? "Yes",
+      )
     : messageAction(options?.yesText ?? "Yes");
 
   const noAction: Action = options?.noData
-    ? postbackAction(options.noText ?? "No", options.noData, options.noText ?? "No")
+    ? postbackAction(
+        options.noText ?? "No",
+        options.noData,
+        options.noText ?? "No",
+      )
     : messageAction(options?.noText ?? "No");
 
   return createConfirmTemplate(question, yesAction, noAction, options?.altText);
@@ -212,7 +224,9 @@ export function createButtonMenu(
     altText?: string;
   },
 ): TemplateMessage {
-  const actions = buttons.slice(0, 4).map((btn) => messageAction(btn.label, btn.text));
+  const actions = buttons
+    .slice(0, 4)
+    .map((btn) => messageAction(btn.label, btn.text));
 
   return createButtonTemplate(title, text, actions, {
     thumbnailImageUrl: options?.thumbnailImageUrl,
@@ -232,7 +246,9 @@ export function createLinkMenu(
     altText?: string;
   },
 ): TemplateMessage {
-  const actions = links.slice(0, 4).map((link) => uriAction(link.label, link.url));
+  const actions = links
+    .slice(0, 4)
+    .map((link) => uriAction(link.label, link.url));
 
   return createButtonTemplate(title, text, actions, {
     thumbnailImageUrl: options?.thumbnailImageUrl,
@@ -262,9 +278,13 @@ export function createProductCarousel(
     if (product.actionUrl) {
       actions.push(uriAction(product.actionLabel ?? "View", product.actionUrl));
     } else if (product.actionData) {
-      actions.push(postbackAction(product.actionLabel ?? "Select", product.actionData));
+      actions.push(
+        postbackAction(product.actionLabel ?? "Select", product.actionData),
+      );
     } else {
-      actions.push(messageAction(product.actionLabel ?? "Select", product.title));
+      actions.push(
+        messageAction(product.actionLabel ?? "Select", product.title),
+      );
     }
 
     return createCarouselColumn({
@@ -297,16 +317,29 @@ export function buildTemplateMessageFromPayload(
       const confirmAction = payload.confirmData.startsWith("http")
         ? uriAction(payload.confirmLabel, payload.confirmData)
         : payload.confirmData.includes("=")
-          ? postbackAction(payload.confirmLabel, payload.confirmData, payload.confirmLabel)
+          ? postbackAction(
+              payload.confirmLabel,
+              payload.confirmData,
+              payload.confirmLabel,
+            )
           : messageAction(payload.confirmLabel, payload.confirmData);
 
       const cancelAction = payload.cancelData.startsWith("http")
         ? uriAction(payload.cancelLabel, payload.cancelData)
         : payload.cancelData.includes("=")
-          ? postbackAction(payload.cancelLabel, payload.cancelData, payload.cancelLabel)
+          ? postbackAction(
+              payload.cancelLabel,
+              payload.cancelData,
+              payload.cancelLabel,
+            )
           : messageAction(payload.cancelLabel, payload.cancelData);
 
-      return createConfirmTemplate(payload.text, confirmAction, cancelAction, payload.altText);
+      return createConfirmTemplate(
+        payload.text,
+        confirmAction,
+        cancelAction,
+        payload.altText,
+      );
     }
 
     case "buttons": {
@@ -321,18 +354,20 @@ export function buildTemplateMessageFromPayload(
     }
 
     case "carousel": {
-      const columns: CarouselColumn[] = payload.columns.slice(0, 10).map((col) => {
-        const colActions: Action[] = col.actions
-          .slice(0, 3)
-          .map((action) => buildTemplatePayloadAction(action));
+      const columns: CarouselColumn[] = payload.columns
+        .slice(0, 10)
+        .map((col) => {
+          const colActions: Action[] = col.actions
+            .slice(0, 3)
+            .map((action) => buildTemplatePayloadAction(action));
 
-        return createCarouselColumn({
-          title: col.title,
-          text: col.text,
-          thumbnailImageUrl: col.thumbnailImageUrl,
-          actions: colActions,
+          return createCarouselColumn({
+            title: col.title,
+            text: col.text,
+            thumbnailImageUrl: col.thumbnailImageUrl,
+            actions: colActions,
+          });
         });
-      });
 
       return createTemplateCarousel(columns, { altText: payload.altText });
     }

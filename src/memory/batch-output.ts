@@ -39,13 +39,18 @@ export function applyEmbeddingBatchOutputLine(params: {
       response?.body && typeof response.body === "object"
         ? (response.body as { error?: { message?: string } }).error?.message
         : undefined;
-    const messageFromString = typeof response?.body === "string" ? response.body : undefined;
-    params.errors.push(`${customId}: ${messageFromObject ?? messageFromString ?? "unknown error"}`);
+    const messageFromString =
+      typeof response?.body === "string" ? response.body : undefined;
+    params.errors.push(
+      `${customId}: ${messageFromObject ?? messageFromString ?? "unknown error"}`,
+    );
     return;
   }
 
   const data =
-    response?.body && typeof response.body === "object" ? (response.body.data ?? []) : [];
+    response?.body && typeof response.body === "object"
+      ? (response.body.data ?? [])
+      : [];
   const embedding = data[0]?.embedding ?? [];
   if (embedding.length === 0) {
     params.errors.push(`${customId}: empty embedding`);

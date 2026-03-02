@@ -24,7 +24,8 @@ export function parseFrontmatter(content: string): ParsedSkillFrontmatter {
 }
 
 const BREW_FORMULA_PATTERN = /^[A-Za-z0-9][A-Za-z0-9@+._/-]*$/;
-const GO_MODULE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._~+\-/]*(?:@[A-Za-z0-9][A-Za-z0-9._~+\-/]*)?$/;
+const GO_MODULE_PATTERN =
+  /^[A-Za-z0-9][A-Za-z0-9._~+\-/]*(?:@[A-Za-z0-9][A-Za-z0-9._~+\-/]*)?$/;
 const UV_PACKAGE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._\-[\]=<>!~+,]*$/;
 
 function normalizeSafeBrewFormula(raw: unknown): string | undefined {
@@ -32,7 +33,12 @@ function normalizeSafeBrewFormula(raw: unknown): string | undefined {
     return undefined;
   }
   const formula = raw.trim();
-  if (!formula || formula.startsWith("-") || formula.includes("\\") || formula.includes("..")) {
+  if (
+    !formula ||
+    formula.startsWith("-") ||
+    formula.includes("\\") ||
+    formula.includes("..")
+  ) {
     return undefined;
   }
   if (!BREW_FORMULA_PATTERN.test(formula)) {
@@ -79,7 +85,12 @@ function normalizeSafeUvPackage(raw: unknown): string | undefined {
     return undefined;
   }
   const pkg = raw.trim();
-  if (!pkg || pkg.startsWith("-") || pkg.includes("\\") || pkg.includes("://")) {
+  if (
+    !pkg ||
+    pkg.startsWith("-") ||
+    pkg.includes("\\") ||
+    pkg.includes("://")
+  ) {
     return undefined;
   }
   if (!UV_PACKAGE_PATTERN.test(pkg)) {
@@ -108,7 +119,13 @@ function normalizeSafeDownloadUrl(raw: unknown): string | undefined {
 }
 
 function parseInstallSpec(input: unknown): SkillInstallSpec | undefined {
-  const parsed = parseOpenClawManifestInstallBase(input, ["brew", "node", "go", "uv", "download"]);
+  const parsed = parseOpenClawManifestInstallBase(input, [
+    "brew",
+    "node",
+    "go",
+    "uv",
+    "download",
+  ]);
   if (!parsed) {
     return undefined;
   }
@@ -200,11 +217,22 @@ export function resolveOpenClawMetadata(
   const install = resolveOpenClawManifestInstall(metadataObj, parseInstallSpec);
   const osRaw = resolveOpenClawManifestOs(metadataObj);
   return {
-    always: typeof metadataObj.always === "boolean" ? metadataObj.always : undefined,
-    emoji: typeof metadataObj.emoji === "string" ? metadataObj.emoji : undefined,
-    homepage: typeof metadataObj.homepage === "string" ? metadataObj.homepage : undefined,
-    skillKey: typeof metadataObj.skillKey === "string" ? metadataObj.skillKey : undefined,
-    primaryEnv: typeof metadataObj.primaryEnv === "string" ? metadataObj.primaryEnv : undefined,
+    always:
+      typeof metadataObj.always === "boolean" ? metadataObj.always : undefined,
+    emoji:
+      typeof metadataObj.emoji === "string" ? metadataObj.emoji : undefined,
+    homepage:
+      typeof metadataObj.homepage === "string"
+        ? metadataObj.homepage
+        : undefined,
+    skillKey:
+      typeof metadataObj.skillKey === "string"
+        ? metadataObj.skillKey
+        : undefined,
+    primaryEnv:
+      typeof metadataObj.primaryEnv === "string"
+        ? metadataObj.primaryEnv
+        : undefined,
     os: osRaw.length > 0 ? osRaw : undefined,
     requires: requires,
     install: install.length > 0 ? install : undefined,
@@ -215,7 +243,10 @@ export function resolveSkillInvocationPolicy(
   frontmatter: ParsedSkillFrontmatter,
 ): SkillInvocationPolicy {
   return {
-    userInvocable: parseFrontmatterBool(getFrontmatterString(frontmatter, "user-invocable"), true),
+    userInvocable: parseFrontmatterBool(
+      getFrontmatterString(frontmatter, "user-invocable"),
+      true,
+    ),
     disableModelInvocation: parseFrontmatterBool(
       getFrontmatterString(frontmatter, "disable-model-invocation"),
       false,

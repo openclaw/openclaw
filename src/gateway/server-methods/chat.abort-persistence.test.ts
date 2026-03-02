@@ -19,7 +19,10 @@ vi.mock("../session-utils.js", async (importOriginal) => {
     ...original,
     loadSessionEntry: () => ({
       cfg: {},
-      storePath: path.join(path.dirname(sessionEntryState.transcriptPath), "sessions.json"),
+      storePath: path.join(
+        path.dirname(sessionEntryState.transcriptPath),
+        "sessions.json",
+      ),
       entry: {
         sessionId: sessionEntryState.sessionId,
         sessionFile: sessionEntryState.transcriptPath,
@@ -42,7 +45,10 @@ function createActiveRun(sessionKey: string, sessionId: string) {
   };
 }
 
-async function writeTranscriptHeader(transcriptPath: string, sessionId: string) {
+async function writeTranscriptHeader(
+  transcriptPath: string,
+  sessionId: string,
+) {
   const header = {
     type: "session",
     version: CURRENT_SESSION_VERSION,
@@ -53,7 +59,9 @@ async function writeTranscriptHeader(transcriptPath: string, sessionId: string) 
   await fs.writeFile(transcriptPath, `${JSON.stringify(header)}\n`, "utf-8");
 }
 
-async function readTranscriptLines(transcriptPath: string): Promise<TranscriptLine[]> {
+async function readTranscriptLines(
+  transcriptPath: string,
+): Promise<TranscriptLine[]> {
   const raw = await fs.readFile(transcriptPath, "utf-8");
   return raw
     .split(/\r?\n/)
@@ -100,7 +108,10 @@ function createChatAbortContext(overrides: Record<string, unknown> = {}): {
     chatAbortedRuns: new Map<string, number>(),
     removeChatRun: vi
       .fn()
-      .mockImplementation((run: string) => ({ sessionKey: "main", clientRunId: run })),
+      .mockImplementation((run: string) => ({
+        sessionKey: "main",
+        clientRunId: run,
+      })),
     agentRunSeq: new Map<string, number>(),
     broadcast: vi.fn(),
     nodeSendToSession: vi.fn(),
@@ -130,16 +141,23 @@ afterEach(() => {
 
 describe("chat abort transcript persistence", () => {
   it("persists run-scoped abort partial with rpc metadata and idempotency", async () => {
-    const { transcriptPath, sessionId } = await createTranscriptFixture("openclaw-chat-abort-run-");
+    const { transcriptPath, sessionId } = await createTranscriptFixture(
+      "openclaw-chat-abort-run-",
+    );
     const runId = "idem-abort-run-1";
     const respond = vi.fn();
     const context = createChatAbortContext({
-      chatAbortControllers: new Map([[runId, createActiveRun("main", sessionId)]]),
+      chatAbortControllers: new Map([
+        [runId, createActiveRun("main", sessionId)],
+      ]),
       chatRunBuffers: new Map([[runId, "Partial from run abort"]]),
       chatDeltaSentAt: new Map([[runId, Date.now()]]),
       removeChatRun: vi
         .fn()
-        .mockReturnValue({ sessionKey: "main", clientRunId: "client-idem-abort-run-1" }),
+        .mockReturnValue({
+          sessionKey: "main",
+          clientRunId: "client-idem-abort-run-1",
+        }),
       agentRunSeq: new Map<string, number>([
         [runId, 2],
         ["client-idem-abort-run-1", 3],
@@ -228,13 +246,19 @@ describe("chat abort transcript persistence", () => {
   });
 
   it("persists /stop partials with stop-command metadata", async () => {
-    const { transcriptPath, sessionId } = await createTranscriptFixture("openclaw-chat-stop-");
+    const { transcriptPath, sessionId } = await createTranscriptFixture(
+      "openclaw-chat-stop-",
+    );
     const respond = vi.fn();
     const context = createChatAbortContext({
-      chatAbortControllers: new Map([["run-stop-1", createActiveRun("main", sessionId)]]),
+      chatAbortControllers: new Map([
+        ["run-stop-1", createActiveRun("main", sessionId)],
+      ]),
       chatRunBuffers: new Map([["run-stop-1", "Partial from /stop"]]),
       chatDeltaSentAt: new Map([["run-stop-1", Date.now()]]),
-      removeChatRun: vi.fn().mockReturnValue({ sessionKey: "main", clientRunId: "client-stop-1" }),
+      removeChatRun: vi
+        .fn()
+        .mockReturnValue({ sessionKey: "main", clientRunId: "client-stop-1" }),
       agentRunSeq: new Map<string, number>([["run-stop-1", 1]]),
       dedupe: {
         get: vi.fn(),
@@ -280,7 +304,9 @@ describe("chat abort transcript persistence", () => {
     const runId = "idem-abort-run-blank";
     const respond = vi.fn();
     const context = createChatAbortContext({
-      chatAbortControllers: new Map([[runId, createActiveRun("main", sessionId)]]),
+      chatAbortControllers: new Map([
+        [runId, createActiveRun("main", sessionId)],
+      ]),
       chatRunBuffers: new Map([[runId, "  \n\t  "]]),
       chatDeltaSentAt: new Map([[runId, Date.now()]]),
     });

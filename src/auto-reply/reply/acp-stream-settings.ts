@@ -1,6 +1,9 @@
 import type { AcpSessionUpdateTag } from "../../acp/runtime/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { clampPositiveInteger, resolveEffectiveBlockStreamingConfig } from "./block-streaming.js";
+import {
+  clampPositiveInteger,
+  resolveEffectiveBlockStreamingConfig,
+} from "./block-streaming.js";
 
 const DEFAULT_ACP_STREAM_COALESCE_IDLE_MS = 350;
 const DEFAULT_ACP_STREAM_MAX_CHUNK_CHARS = 1800;
@@ -11,21 +14,26 @@ const DEFAULT_ACP_HIDDEN_BOUNDARY_SEPARATOR_LIVE = "space";
 const DEFAULT_ACP_MAX_OUTPUT_CHARS = 24_000;
 const DEFAULT_ACP_MAX_SESSION_UPDATE_CHARS = 320;
 
-export const ACP_TAG_VISIBILITY_DEFAULTS: Record<AcpSessionUpdateTag, boolean> = {
-  agent_message_chunk: true,
-  tool_call: false,
-  tool_call_update: false,
-  usage_update: false,
-  available_commands_update: false,
-  current_mode_update: false,
-  config_option_update: false,
-  session_info_update: false,
-  plan: false,
-  agent_thought_chunk: false,
-};
+export const ACP_TAG_VISIBILITY_DEFAULTS: Record<AcpSessionUpdateTag, boolean> =
+  {
+    agent_message_chunk: true,
+    tool_call: false,
+    tool_call_update: false,
+    usage_update: false,
+    available_commands_update: false,
+    current_mode_update: false,
+    config_option_update: false,
+    session_info_update: false,
+    plan: false,
+    agent_thought_chunk: false,
+  };
 
 export type AcpDeliveryMode = "live" | "final_only";
-export type AcpHiddenBoundarySeparator = "none" | "space" | "newline" | "paragraph";
+export type AcpHiddenBoundarySeparator =
+  | "none"
+  | "space"
+  | "newline"
+  | "paragraph";
 
 export type AcpProjectionSettings = {
   deliveryMode: AcpDeliveryMode;
@@ -51,7 +59,12 @@ function resolveAcpHiddenBoundarySeparator(
   value: unknown,
   fallback: AcpHiddenBoundarySeparator,
 ): AcpHiddenBoundarySeparator {
-  if (value === "none" || value === "space" || value === "newline" || value === "paragraph") {
+  if (
+    value === "none" ||
+    value === "space" ||
+    value === "newline" ||
+    value === "paragraph"
+  ) {
     return value;
   }
   return fallback;
@@ -69,13 +82,19 @@ function resolveAcpStreamCoalesceIdleMs(cfg: OpenClawConfig): number {
 }
 
 function resolveAcpStreamMaxChunkChars(cfg: OpenClawConfig): number {
-  return clampPositiveInteger(cfg.acp?.stream?.maxChunkChars, DEFAULT_ACP_STREAM_MAX_CHUNK_CHARS, {
-    min: 50,
-    max: 4_000,
-  });
+  return clampPositiveInteger(
+    cfg.acp?.stream?.maxChunkChars,
+    DEFAULT_ACP_STREAM_MAX_CHUNK_CHARS,
+    {
+      min: 50,
+      max: 4_000,
+    },
+  );
 }
 
-export function resolveAcpProjectionSettings(cfg: OpenClawConfig): AcpProjectionSettings {
+export function resolveAcpProjectionSettings(
+  cfg: OpenClawConfig,
+): AcpProjectionSettings {
   const stream = cfg.acp?.stream;
   const deliveryMode = resolveAcpDeliveryMode(stream?.deliveryMode);
   const hiddenBoundaryFallback: AcpHiddenBoundarySeparator =
@@ -88,11 +107,18 @@ export function resolveAcpProjectionSettings(cfg: OpenClawConfig): AcpProjection
       stream?.hiddenBoundarySeparator,
       hiddenBoundaryFallback,
     ),
-    repeatSuppression: clampBoolean(stream?.repeatSuppression, DEFAULT_ACP_REPEAT_SUPPRESSION),
-    maxOutputChars: clampPositiveInteger(stream?.maxOutputChars, DEFAULT_ACP_MAX_OUTPUT_CHARS, {
-      min: 1,
-      max: 500_000,
-    }),
+    repeatSuppression: clampBoolean(
+      stream?.repeatSuppression,
+      DEFAULT_ACP_REPEAT_SUPPRESSION,
+    ),
+    maxOutputChars: clampPositiveInteger(
+      stream?.maxOutputChars,
+      DEFAULT_ACP_MAX_OUTPUT_CHARS,
+      {
+        min: 1,
+        max: 500_000,
+      },
+    ),
     maxSessionUpdateChars: clampPositiveInteger(
       stream?.maxSessionUpdateChars,
       DEFAULT_ACP_MAX_SESSION_UPDATE_CHARS,

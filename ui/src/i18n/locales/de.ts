@@ -39,10 +39,12 @@ export const de: TranslationMap = {
   },
   subtitles: {
     agents: "Agent-Arbeitsbereiche, Tools und Identitäten verwalten.",
-    overview: "Gateway-Status, Einstiegspunkte und eine schnelle Zustandsprüfung.",
+    overview:
+      "Gateway-Status, Einstiegspunkte und eine schnelle Zustandsprüfung.",
     channels: "Kanäle und Einstellungen verwalten.",
     instances: "Präsenzsignale von verbundenen Clients und Geräten.",
-    sessions: "Aktive Sitzungen inspizieren und Standardeinstellungen pro Sitzung anpassen.",
+    sessions:
+      "Aktive Sitzungen inspizieren und Standardeinstellungen pro Sitzung anpassen.",
     usage: "API-Nutzung und Kosten überwachen.",
     cron: "Aufweckzeiten und wiederkehrende Agent-Läufe planen.",
     skills: "Skill-Verfügbarkeit und API-Schlüsselinjektion verwalten.",
@@ -55,13 +57,15 @@ export const de: TranslationMap = {
   overview: {
     access: {
       title: "Gateway-Zugang",
-      subtitle: "Wo sich das Dashboard verbindet und wie es sich authentifiziert.",
+      subtitle:
+        "Wo sich das Dashboard verbindet und wie es sich authentifiziert.",
       wsUrl: "WebSocket-URL",
       token: "Gateway-Token",
       password: "Passwort (nicht gespeichert)",
       sessionKey: "Standard-Sitzungsschlüssel",
       language: "Sprache",
-      connectHint: "Klicken Sie auf Verbinden, um Verbindungsänderungen anzuwenden.",
+      connectHint:
+        "Klicken Sie auf Verbinden, um Verbindungsänderungen anzuwenden.",
       trustedProxy: "Authentifiziert über vertrauenswürdigen Proxy.",
     },
     snapshot: {
@@ -89,7 +93,8 @@ export const de: TranslationMap = {
       tailscaleText:
         "Bevorzugen Sie den Serve-Modus, um das Gateway auf Loopback mit Tailnet-Auth zu halten.",
       sessionTitle: "Sitzungshygiene",
-      sessionText: "Verwenden Sie /new oder sessions.patch, um den Kontext zurückzusetzen.",
+      sessionText:
+        "Verwenden Sie /new oder sessions.patch, um den Kontext zurückzusetzen.",
       cronTitle: "Cron-Erinnerungen",
       cronText: "Verwenden Sie isolierte Sitzungen für wiederkehrende Läufe.",
     },
@@ -106,14 +111,16 @@ export const de: TranslationMap = {
     },
     insecure: {
       hint: "Diese Seite ist HTTP, daher blockiert der Browser die Geräteidentifikation. Verwenden Sie HTTPS (Tailscale Serve) oder öffnen Sie {url} auf dem Gateway-Host.",
-      stayHttp: "Wenn Sie bei HTTP bleiben müssen, setzen Sie {config} (nur Token).",
+      stayHttp:
+        "Wenn Sie bei HTTP bleiben müssen, setzen Sie {config} (nur Token).",
     },
   },
   chat: {
     disconnected: "Verbindung zum Gateway getrennt.",
     refreshTitle: "Chat-Daten aktualisieren",
     thinkingToggle: "Ausgabe des Assistenten ein-/ausblenden",
-    focusToggle: "Fokusmodus ein-/ausschalten (Seitenleiste + Kopfzeile ausblenden)",
+    focusToggle:
+      "Fokusmodus ein-/ausschalten (Seitenleiste + Kopfzeile ausblenden)",
     hideCronSessions: "Cron-Sitzungen ausblenden",
     showCronSessions: "Cron-Sitzungen anzeigen",
     showCronSessionsHidden: "Cron-Sitzungen anzeigen ({count} ausgeblendet)",

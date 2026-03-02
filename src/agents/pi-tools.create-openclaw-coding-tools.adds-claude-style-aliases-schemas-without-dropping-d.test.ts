@@ -27,14 +27,16 @@ describe("createOpenClawCodingTools", () => {
         path: imagePath,
       });
 
-      expect(imageResult?.content?.some((block) => block.type === "image")).toBe(true);
-      const imageText = imageResult?.content?.find((block) => block.type === "text") as
-        | { text?: string }
-        | undefined;
+      expect(
+        imageResult?.content?.some((block) => block.type === "image"),
+      ).toBe(true);
+      const imageText = imageResult?.content?.find(
+        (block) => block.type === "text",
+      ) as { text?: string } | undefined;
       expect(imageText?.text ?? "").toContain("Read image file [image/png]");
-      const image = imageResult?.content?.find((block) => block.type === "image") as
-        | { mimeType?: string }
-        | undefined;
+      const image = imageResult?.content?.find(
+        (block) => block.type === "image",
+      ) as { mimeType?: string } | undefined;
       expect(image?.mimeType).toBe("image/png");
 
       const textPath = path.join(tmpDir, "sample.txt");
@@ -45,12 +47,16 @@ describe("createOpenClawCodingTools", () => {
         path: textPath,
       });
 
-      expect(textResult?.content?.some((block) => block.type === "image")).toBe(false);
-      const textBlocks = textResult?.content?.filter((block) => block.type === "text") as
-        | Array<{ text?: string }>
-        | undefined;
+      expect(textResult?.content?.some((block) => block.type === "image")).toBe(
+        false,
+      );
+      const textBlocks = textResult?.content?.filter(
+        (block) => block.type === "text",
+      ) as Array<{ text?: string }> | undefined;
       expect(textBlocks?.length ?? 0).toBeGreaterThan(0);
-      const combinedText = textBlocks?.map((block) => block.text ?? "").join("\n");
+      const combinedText = textBlocks
+        ?.map((block) => block.text ?? "")
+        .join("\n");
       expect(combinedText).toContain(contents);
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });

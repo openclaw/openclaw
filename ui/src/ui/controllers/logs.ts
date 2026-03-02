@@ -16,7 +16,14 @@ export type LogsState = {
 };
 
 const LOG_BUFFER_LIMIT = 2000;
-const LEVELS = new Set<LogLevel>(["trace", "debug", "info", "warn", "error", "fatal"]);
+const LEVELS = new Set<LogLevel>([
+  "trace",
+  "debug",
+  "info",
+  "warn",
+  "error",
+  "fatal",
+]);
 
 function parseMaybeJsonString(value: unknown) {
   if (typeof value !== "string") {
@@ -56,11 +63,19 @@ export function parseLogLine(line: string): LogEntry {
         ? (obj._meta as Record<string, unknown>)
         : null;
     const time =
-      typeof obj.time === "string" ? obj.time : typeof meta?.date === "string" ? meta?.date : null;
+      typeof obj.time === "string"
+        ? obj.time
+        : typeof meta?.date === "string"
+          ? meta?.date
+          : null;
     const level = normalizeLevel(meta?.logLevelName ?? meta?.level);
 
     const contextCandidate =
-      typeof obj["0"] === "string" ? obj["0"] : typeof meta?.name === "string" ? meta?.name : null;
+      typeof obj["0"] === "string"
+        ? obj["0"]
+        : typeof meta?.name === "string"
+          ? meta?.name
+          : null;
     const contextObj = parseMaybeJsonString(contextCandidate);
     let subsystem: string | null = null;
     if (contextObj) {
@@ -96,7 +111,10 @@ export function parseLogLine(line: string): LogEntry {
   }
 }
 
-export async function loadLogs(state: LogsState, opts?: { reset?: boolean; quiet?: boolean }) {
+export async function loadLogs(
+  state: LogsState,
+  opts?: { reset?: boolean; quiet?: boolean },
+) {
   if (!state.client || !state.connected) {
     return;
   }
@@ -125,7 +143,9 @@ export async function loadLogs(state: LogsState, opts?: { reset?: boolean; quiet
       ? payload.lines.filter((line) => typeof line === "string")
       : [];
     const entries = lines.map(parseLogLine);
-    const shouldReset = Boolean(opts?.reset || payload.reset || state.logsCursor == null);
+    const shouldReset = Boolean(
+      opts?.reset || payload.reset || state.logsCursor == null,
+    );
     state.logsEntries = shouldReset
       ? entries
       : [...state.logsEntries, ...entries].slice(-LOG_BUFFER_LIMIT);

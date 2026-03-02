@@ -3,7 +3,9 @@ import type { ChannelId } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { DiscordUiContainer } from "../../discord/ui.js";
 
-export type CrossContextComponentsBuilder = (message: string) => TopLevelComponents[];
+export type CrossContextComponentsBuilder = (
+  message: string,
+) => TopLevelComponents[];
 
 export type CrossContextComponentsFactory = (params: {
   originLabel: string;
@@ -25,7 +27,12 @@ type CrossContextContainerParams = {
 };
 
 class CrossContextContainer extends DiscordUiContainer {
-  constructor({ originLabel, message, cfg, accountId }: CrossContextContainerParams) {
+  constructor({
+    originLabel,
+    message,
+    cfg,
+    accountId,
+  }: CrossContextContainerParams) {
     const trimmed = message.trim();
     const components = [] as Array<TextDisplay | Separator>;
     if (trimmed) {
@@ -48,7 +55,9 @@ const DISCORD_ADAPTER: ChannelMessageAdapter = {
   ],
 };
 
-export function getChannelMessageAdapter(channel: ChannelId): ChannelMessageAdapter {
+export function getChannelMessageAdapter(
+  channel: ChannelId,
+): ChannelMessageAdapter {
   if (channel === "discord") {
     return DISCORD_ADAPTER;
   }

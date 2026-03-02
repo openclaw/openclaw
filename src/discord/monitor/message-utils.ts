@@ -1,5 +1,9 @@
 import type { ChannelType, Client, Message } from "@buape/carbon";
-import { StickerFormatType, type APIAttachment, type APIStickerItem } from "discord-api-types/v10";
+import {
+  StickerFormatType,
+  type APIAttachment,
+  type APIStickerItem,
+} from "discord-api-types/v10";
 import { buildMediaPayload } from "../../channels/plugins/media-payload.js";
 import { logVerbose } from "../../globals.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
@@ -108,8 +112,10 @@ export async function resolveDiscordChannelInfo(
     }
     const name = "name" in channel ? (channel.name ?? undefined) : undefined;
     const topic = "topic" in channel ? (channel.topic ?? undefined) : undefined;
-    const parentId = "parentId" in channel ? (channel.parentId ?? undefined) : undefined;
-    const ownerId = "ownerId" in channel ? (channel.ownerId ?? undefined) : undefined;
+    const parentId =
+      "parentId" in channel ? (channel.parentId ?? undefined) : undefined;
+    const ownerId =
+      "ownerId" in channel ? (channel.ownerId ?? undefined) : undefined;
     const payload: DiscordChannelInfo = {
       type: channel.type,
       name,
@@ -145,18 +151,23 @@ function normalizeStickerItems(value: unknown): APIStickerItem[] {
   );
 }
 
-export function resolveDiscordMessageStickers(message: Message): APIStickerItem[] {
+export function resolveDiscordMessageStickers(
+  message: Message,
+): APIStickerItem[] {
   const stickers = (message as { stickers?: unknown }).stickers;
   const normalized = normalizeStickerItems(stickers);
   if (normalized.length > 0) {
     return normalized;
   }
-  const rawData = (message as { rawData?: { sticker_items?: unknown; stickers?: unknown } })
-    .rawData;
+  const rawData = (
+    message as { rawData?: { sticker_items?: unknown; stickers?: unknown } }
+  ).rawData;
   return normalizeStickerItems(rawData?.sticker_items ?? rawData?.stickers);
 }
 
-function resolveDiscordSnapshotStickers(snapshot: DiscordSnapshotMessage): APIStickerItem[] {
+function resolveDiscordSnapshotStickers(
+  snapshot: DiscordSnapshotMessage,
+): APIStickerItem[] {
   return normalizeStickerItems(snapshot.stickers ?? snapshot.sticker_items);
 }
 
@@ -206,7 +217,9 @@ export async function resolveForwardedMediaList(
       fetchImpl,
     });
     await appendResolvedMediaFromStickers({
-      stickers: snapshot.message ? resolveDiscordSnapshotStickers(snapshot.message) : [],
+      stickers: snapshot.message
+        ? resolveDiscordSnapshotStickers(snapshot.message)
+        : [],
       maxBytes,
       out,
       errorPrefix: "discord: failed to download forwarded sticker",
@@ -265,7 +278,9 @@ type DiscordStickerAssetCandidate = {
   fileName: string;
 };
 
-function resolveStickerAssetCandidates(sticker: APIStickerItem): DiscordStickerAssetCandidate[] {
+function resolveStickerAssetCandidates(
+  sticker: APIStickerItem,
+): DiscordStickerAssetCandidate[] {
   const baseName = sticker.name?.trim() || `sticker-${sticker.id}`;
   switch (sticker.format_type) {
     case StickerFormatType.GIF:
@@ -366,7 +381,9 @@ async function appendResolvedMediaFromStickers(params: {
       }
     }
     if (lastError) {
-      logVerbose(`${params.errorPrefix} ${sticker.id}: ${formatStickerError(lastError)}`);
+      logVerbose(
+        `${params.errorPrefix} ${sticker.id}: ${formatStickerError(lastError)}`,
+      );
       const fallback = candidates[0];
       if (fallback) {
         params.out.push({
@@ -405,7 +422,9 @@ function isImageAttachment(attachment: APIAttachment): boolean {
   return /\.(avif|bmp|gif|heic|heif|jpe?g|png|tiff?|webp)$/.test(name);
 }
 
-function buildDiscordAttachmentPlaceholder(attachments?: APIAttachment[]): string {
+function buildDiscordAttachmentPlaceholder(
+  attachments?: APIAttachment[],
+): string {
   if (!attachments || attachments.length === 0) {
     return "";
   }
@@ -454,8 +473,9 @@ export function resolveDiscordMessageText(
   options?: { fallbackText?: string; includeForwarded?: boolean },
 ): string {
   const embedText = resolveDiscordEmbedText(
-    (message.embeds?.[0] as { title?: string | null; description?: string | null } | undefined) ??
-      null,
+    (message.embeds?.[0] as
+      | { title?: string | null; description?: string | null }
+      | undefined) ?? null,
   );
   const baseText =
     message.content?.trim() ||
@@ -507,8 +527,11 @@ function resolveDiscordForwardedMessagesText(message: Message): string {
   return forwardedBlocks.join("\n\n");
 }
 
-function resolveDiscordMessageSnapshots(message: Message): DiscordMessageSnapshot[] {
-  const rawData = (message as { rawData?: { message_snapshots?: unknown } }).rawData;
+function resolveDiscordMessageSnapshots(
+  message: Message,
+): DiscordMessageSnapshot[] {
+  const rawData = (message as { rawData?: { message_snapshots?: unknown } })
+    .rawData;
   const snapshots =
     rawData?.message_snapshots ??
     (message as { message_snapshots?: unknown }).message_snapshots ??
@@ -517,11 +540,14 @@ function resolveDiscordMessageSnapshots(message: Message): DiscordMessageSnapsho
     return [];
   }
   return snapshots.filter(
-    (entry): entry is DiscordMessageSnapshot => Boolean(entry) && typeof entry === "object",
+    (entry): entry is DiscordMessageSnapshot =>
+      Boolean(entry) && typeof entry === "object",
   );
 }
 
-function resolveDiscordSnapshotMessageText(snapshot: DiscordSnapshotMessage): string {
+function resolveDiscordSnapshotMessageText(
+  snapshot: DiscordSnapshotMessage,
+): string {
   const content = snapshot.content?.trim() ?? "";
   const attachmentText = buildDiscordMediaPlaceholder({
     attachments: snapshot.attachments ?? undefined,

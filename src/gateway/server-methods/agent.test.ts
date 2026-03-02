@@ -13,7 +13,9 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../session-utils.js", async () => {
-  const actual = await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
+  const actual = await vi.importActual<typeof import("../session-utils.js")>(
+    "../session-utils.js",
+  );
   return {
     ...actual,
     loadSessionEntry: mocks.loadSessionEntry,
@@ -21,9 +23,9 @@ vi.mock("../session-utils.js", async () => {
 });
 
 vi.mock("../../config/sessions.js", async () => {
-  const actual = await vi.importActual<typeof import("../../config/sessions.js")>(
-    "../../config/sessions.js",
-  );
+  const actual = await vi.importActual<
+    typeof import("../../config/sessions.js")
+  >("../../config/sessions.js");
   return {
     ...actual,
     updateSessionStore: mocks.updateSessionStore,
@@ -44,8 +46,9 @@ vi.mock("../../commands/agent.js", () => ({
 }));
 
 vi.mock("../../config/config.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("../../config/config.js")>("../../config/config.js");
+  const actual = await vi.importActual<typeof import("../../config/config.js")>(
+    "../../config/config.js",
+  );
   return {
     ...actual,
     loadConfig: () => mocks.loadConfigReturn,
@@ -73,9 +76,9 @@ vi.mock("../../sessions/send-policy.js", () => ({
 }));
 
 vi.mock("../../utils/delivery-context.js", async () => {
-  const actual = await vi.importActual<typeof import("../../utils/delivery-context.js")>(
-    "../../utils/delivery-context.js",
-  );
+  const actual = await vi.importActual<
+    typeof import("../../utils/delivery-context.js")
+  >("../../utils/delivery-context.js");
   return {
     ...actual,
     normalizeSessionDeliveryFields: () => ({}),
@@ -92,10 +95,15 @@ const makeContext = (): GatewayRequestContext =>
 type AgentHandlerArgs = Parameters<typeof agentHandlers.agent>[0];
 type AgentParams = AgentHandlerArgs["params"];
 
-type AgentIdentityGetHandlerArgs = Parameters<(typeof agentHandlers)["agent.identity.get"]>[0];
+type AgentIdentityGetHandlerArgs = Parameters<
+  (typeof agentHandlers)["agent.identity.get"]
+>[0];
 type AgentIdentityGetParams = AgentIdentityGetHandlerArgs["params"];
 
-function mockMainSessionEntry(entry: Record<string, unknown>, cfg: Record<string, unknown> = {}) {
+function mockMainSessionEntry(
+  entry: Record<string, unknown>,
+  cfg: Record<string, unknown> = {},
+) {
   mocks.loadSessionEntry.mockReturnValue({
     cfg,
     storePath: "/tmp/sessions.json",
@@ -118,7 +126,10 @@ function captureUpdatedMainEntry() {
   return () => capturedEntry;
 }
 
-function primeMainAgentRun(params?: { sessionId?: string; cfg?: Record<string, unknown> }) {
+function primeMainAgentRun(params?: {
+  sessionId?: string;
+  cfg?: Record<string, unknown>;
+}) {
   mockMainSessionEntry(
     { sessionId: params?.sessionId ?? "existing-session-id" },
     params?.cfg ?? {},
@@ -193,7 +204,11 @@ async function invokeAgent(
     params,
     respond: respond as never,
     context: options?.context ?? makeContext(),
-    req: { type: "req", id: options?.reqId ?? "agent-test-req", method: "agent" },
+    req: {
+      type: "req",
+      id: options?.reqId ?? "agent-test-req",
+      method: "agent",
+    },
     client: options?.client ?? null,
     isWebchatConnect: options?.isWebchatConnect ?? (() => false),
   });
@@ -319,7 +334,9 @@ describe("gateway agent handler", () => {
     await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalled());
 
     const callArgs = mocks.agentCommand.mock.calls[0][0];
-    expect(callArgs.message).toBe("[Wed 2026-01-28 20:30 EST] Is it the weekend?");
+    expect(callArgs.message).toBe(
+      "[Wed 2026-01-28 20:30 EST] Is it the weekend?",
+    );
 
     mocks.loadConfigReturn = {};
     vi.useRealTimers();
@@ -384,7 +401,10 @@ describe("gateway agent handler", () => {
     );
 
     await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalled());
-    const callArgs = mocks.agentCommand.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    const callArgs = mocks.agentCommand.mock.calls.at(-1)?.[0] as Record<
+      string,
+      unknown
+    >;
     expect(callArgs.bestEffortDeliver).toBe(false);
   });
 
@@ -521,7 +541,9 @@ describe("gateway agent handler", () => {
     expect(mocks.sessionsResetHandler).toHaveBeenCalledTimes(1);
     const call = readLastAgentCommandCall();
     expect(call?.message).toBe(BARE_SESSION_RESET_PROMPT);
-    expect(call?.message).toContain("Execute your Session Startup sequence now");
+    expect(call?.message).toContain(
+      "Execute your Session Startup sequence now",
+    );
     expect(call?.sessionId).toBe("reset-session-id");
   });
 

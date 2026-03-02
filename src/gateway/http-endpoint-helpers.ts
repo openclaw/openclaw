@@ -16,7 +16,10 @@ export async function handleGatewayPostJsonEndpoint(
     rateLimiter?: AuthRateLimiter;
   },
 ): Promise<false | { body: unknown } | undefined> {
-  const url = new URL(req.url ?? "/", `http://${req.headers.host || "localhost"}`);
+  const url = new URL(
+    req.url ?? "/",
+    `http://${req.headers.host || "localhost"}`,
+  );
   if (url.pathname !== opts.pathname) {
     return false;
   }

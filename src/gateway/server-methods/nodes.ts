@@ -19,7 +19,10 @@ import {
   CANVAS_CAPABILITY_TTL_MS,
   mintCanvasCapabilityToken,
 } from "../canvas-capability.js";
-import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "../node-command-policy.js";
+import {
+  isNodeCommandAllowed,
+  resolveNodeCommandAllowlist,
+} from "../node-command-policy.js";
 import { sanitizeNodeInvokeParamsForForwarding } from "../node-invoke-sanitize.js";
 import {
   ErrorCodes,
@@ -71,7 +74,13 @@ type NodeWakeAttempt = {
 type NodeWakeNudgeAttempt = {
   sent: boolean;
   throttled: boolean;
-  reason: "throttled" | "no-registration" | "no-auth" | "send-error" | "apns-not-ok" | "sent";
+  reason:
+    | "throttled"
+    | "no-registration"
+    | "no-auth"
+    | "send-error"
+    | "apns-not-ok"
+    | "sent";
   durationMs: number;
   apnsStatus?: number;
   apnsReason?: string;
@@ -104,13 +113,24 @@ async function maybeWakeNodeWithApns(
 
   const now = Date.now();
   const force = opts?.force === true;
-  if (!force && state.lastWakeAtMs > 0 && now - state.lastWakeAtMs < NODE_WAKE_THROTTLE_MS) {
-    return { available: true, throttled: true, path: "throttled", durationMs: 0 };
+  if (
+    !force &&
+    state.lastWakeAtMs > 0 &&
+    now - state.lastWakeAtMs < NODE_WAKE_THROTTLE_MS
+  ) {
+    return {
+      available: true,
+      throttled: true,
+      path: "throttled",
+      durationMs: 0,
+    };
   }
 
   state.inFlight = (async () => {
     const startedAtMs = Date.now();
-    const withDuration = (attempt: Omit<NodeWakeAttempt, "durationMs">): NodeWakeAttempt => ({
+    const withDuration = (
+      attempt: Omit<NodeWakeAttempt, "durationMs">,
+    ): NodeWakeAttempt => ({
       ...attempt,
       durationMs: Math.max(0, Date.now() - startedAtMs),
     });
@@ -118,7 +138,11 @@ async function maybeWakeNodeWithApns(
     try {
       const registration = await loadApnsRegistration(nodeId);
       if (!registration) {
-        return withDuration({ available: false, throttled: false, path: "no-registration" });
+        return withDuration({
+          available: false,
+          throttled: false,
+          path: "no-registration",
+        });
       }
 
       const auth = await resolveApnsAuthConfigFromEnv(process.env);
@@ -181,7 +205,9 @@ async function maybeWakeNodeWithApns(
   }
 }
 
-async function maybeSendNodeWakeNudge(nodeId: string): Promise<NodeWakeNudgeAttempt> {
+async function maybeSendNodeWakeNudge(
+  nodeId: string,
+): Promise<NodeWakeNudgeAttempt> {
   const startedAtMs = Date.now();
   const withDuration = (
     attempt: Omit<NodeWakeNudgeAttempt, "durationMs">,
@@ -191,13 +217,20 @@ async function maybeSendNodeWakeNudge(nodeId: string): Promise<NodeWakeNudgeAtte
   });
 
   const lastNudgeAtMs = nodeWakeNudgeById.get(nodeId) ?? 0;
-  if (lastNudgeAtMs > 0 && Date.now() - lastNudgeAtMs < NODE_WAKE_NUDGE_THROTTLE_MS) {
+  if (
+    lastNudgeAtMs > 0 &&
+    Date.now() - lastNudgeAtMs < NODE_WAKE_NUDGE_THROTTLE_MS
+  ) {
     return withDuration({ sent: false, throttled: true, reason: "throttled" });
   }
 
   const registration = await loadApnsRegistration(nodeId);
   if (!registration) {
-    return withDuration({ sent: false, throttled: false, reason: "no-registration" });
+    return withDuration({
+      sent: false,
+      throttled: false,
+      reason: "no-registration",
+    });
   }
   const auth = await resolveApnsAuthConfigFromEnv(process.env);
   if (!auth.ok) {
@@ -251,7 +284,10 @@ async function waitForNodeReconnect(params: {
   timeoutMs?: number;
   pollMs?: number;
 }): Promise<boolean> {
-  const timeoutMs = Math.max(250, params.timeoutMs ?? NODE_WAKE_RECONNECT_WAIT_MS);
+  const timeoutMs = Math.max(
+    250,
+    params.timeoutMs ?? NODE_WAKE_RECONNECT_WAIT_MS,
+  );
   const pollMs = Math.max(50, params.pollMs ?? NODE_WAKE_RECONNECT_POLL_MS);
   const deadline = Date.now() + timeoutMs;
 
@@ -338,7 +374,11 @@ export const nodeHandlers: GatewayRequestHandlers = {
     await respondUnavailableOnThrow(respond, async () => {
       const approved = await approveNodePairing(requestId);
       if (!approved) {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown requestId"));
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "unknown requestId"),
+        );
         return;
       }
       context.broadcast(
@@ -367,7 +407,11 @@ export const nodeHandlers: GatewayRequestHandlers = {
     await respondUnavailableOnThrow(respond, async () => {
       const rejected = await rejectNodePairing(requestId);
       if (!rejected) {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown requestId"));
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "unknown requestId"),
+        );
         return;
       }
       context.broadcast(
@@ -417,15 +461,27 @@ export const nodeHandlers: GatewayRequestHandlers = {
     await respondUnavailableOnThrow(respond, async () => {
       const trimmed = displayName.trim();
       if (!trimmed) {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "displayName required"));
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "displayName required"),
+        );
         return;
       }
       const updated = await renamePairedNode(nodeId, trimmed);
       if (!updated) {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown nodeId"));
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "unknown nodeId"),
+        );
         return;
       }
-      respond(true, { nodeId: updated.nodeId, displayName: updated.displayName }, undefined);
+      respond(
+        true,
+        { nodeId: updated.nodeId, displayName: updated.displayName },
+        undefined,
+      );
     });
   },
   "node.list": async ({ params, respond, context }) => {
@@ -462,14 +518,21 @@ export const nodeHandlers: GatewayRequestHandlers = {
       );
       const connected = context.nodeRegistry.listConnected();
       const connectedById = new Map(connected.map((n) => [n.nodeId, n]));
-      const nodeIds = new Set<string>([...pairedById.keys(), ...connectedById.keys()]);
+      const nodeIds = new Set<string>([
+        ...pairedById.keys(),
+        ...connectedById.keys(),
+      ]);
 
       const nodes = [...nodeIds].map((nodeId) => {
         const paired = pairedById.get(nodeId);
         const live = connectedById.get(nodeId);
 
-        const caps = uniqueSortedStrings([...(live?.caps ?? paired?.caps ?? [])]);
-        const commands = uniqueSortedStrings([...(live?.commands ?? paired?.commands ?? [])]);
+        const caps = uniqueSortedStrings([
+          ...(live?.caps ?? paired?.caps ?? []),
+        ]);
+        const commands = uniqueSortedStrings([
+          ...(live?.commands ?? paired?.commands ?? []),
+        ]);
 
         return {
           nodeId,
@@ -521,17 +584,27 @@ export const nodeHandlers: GatewayRequestHandlers = {
     const { nodeId } = params as { nodeId: string };
     const id = String(nodeId ?? "").trim();
     if (!id) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "nodeId required"));
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "nodeId required"),
+      );
       return;
     }
     await respondUnavailableOnThrow(respond, async () => {
       const list = await listDevicePairing();
-      const paired = list.paired.find((n) => n.deviceId === id && isNodeEntry(n));
+      const paired = list.paired.find(
+        (n) => n.deviceId === id && isNodeEntry(n),
+      );
       const connected = context.nodeRegistry.listConnected();
       const live = connected.find((n) => n.nodeId === id);
 
       if (!paired && !live) {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown nodeId"));
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "unknown nodeId"),
+        );
         return;
       }
 
@@ -577,19 +650,28 @@ export const nodeHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, "canvas host unavailable for this node session"),
+        errorShape(
+          ErrorCodes.UNAVAILABLE,
+          "canvas host unavailable for this node session",
+        ),
       );
       return;
     }
 
     const canvasCapability = mintCanvasCapabilityToken();
     const canvasCapabilityExpiresAtMs = Date.now() + CANVAS_CAPABILITY_TTL_MS;
-    const scopedCanvasHostUrl = buildCanvasScopedHostUrl(baseCanvasHostUrl, canvasCapability);
+    const scopedCanvasHostUrl = buildCanvasScopedHostUrl(
+      baseCanvasHostUrl,
+      canvasCapability,
+    );
     if (!scopedCanvasHostUrl) {
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, "failed to mint scoped canvas host URL"),
+        errorShape(
+          ErrorCodes.UNAVAILABLE,
+          "failed to mint scoped canvas host URL",
+        ),
       );
       return;
     }
@@ -634,7 +716,10 @@ export const nodeHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    if (command === "system.execApprovals.get" || command === "system.execApprovals.set") {
+    if (
+      command === "system.execApprovals.get" ||
+      command === "system.execApprovals.set"
+    ) {
       respond(
         false,
         undefined,
@@ -679,7 +764,9 @@ export const nodeHandlers: GatewayRequestHandlers = {
         }
         nodeSession = context.nodeRegistry.get(nodeId);
         if (!nodeSession && wake.available) {
-          const retryWake = await maybeWakeNodeWithApns(nodeId, { force: true });
+          const retryWake = await maybeWakeNodeWithApns(nodeId, {
+            force: true,
+          });
           context.logGateway.info(
             `node wake stage=wake2 node=${nodeId} req=${wakeReqId} force=true ` +
               `available=${retryWake.available} throttled=${retryWake.throttled} ` +
@@ -737,7 +824,11 @@ export const nodeHandlers: GatewayRequestHandlers = {
         allowlist,
       });
       if (!allowed.ok) {
-        const hint = buildNodeCommandRejectionHint(allowed.reason, command, nodeSession);
+        const hint = buildNodeCommandRejectionHint(
+          allowed.reason,
+          command,
+          nodeSession,
+        );
         respond(
           false,
           undefined,
@@ -774,7 +865,9 @@ export const nodeHandlers: GatewayRequestHandlers = {
       if (!respondUnavailableOnNodeInvokeError(respond, res)) {
         return;
       }
-      const payload = res.payloadJSON ? safeParseJson(res.payloadJSON) : res.payload;
+      const payload = res.payloadJSON
+        ? safeParseJson(res.payloadJSON)
+        : res.payload;
       respond(
         true,
         {
@@ -798,7 +891,11 @@ export const nodeHandlers: GatewayRequestHandlers = {
       });
       return;
     }
-    const p = params as { event: string; payload?: unknown; payloadJSON?: string | null };
+    const p = params as {
+      event: string;
+      payload?: unknown;
+      payloadJSON?: string | null;
+    };
     const payloadJSON =
       typeof p.payloadJSON === "string"
         ? p.payloadJSON
@@ -807,7 +904,8 @@ export const nodeHandlers: GatewayRequestHandlers = {
           : null;
     await respondUnavailableOnThrow(respond, async () => {
       const { handleNodeEvent } = await import("../server-node-events.js");
-      const nodeId = client?.connect?.device?.id ?? client?.connect?.client?.id ?? "node";
+      const nodeId =
+        client?.connect?.device?.id ?? client?.connect?.client?.id ?? "node";
       const nodeContext = {
         deps: context.deps,
         broadcast: context.broadcast,

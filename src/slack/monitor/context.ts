@@ -1,7 +1,10 @@
 import type { App } from "@slack/bolt";
 import type { HistoryEntry } from "../../auto-reply/reply/history.js";
 import { formatAllowlistMatchMeta } from "../../channels/allowlist-match.js";
-import type { OpenClawConfig, SlackReactionNotificationMode } from "../../config/config.js";
+import type {
+  OpenClawConfig,
+  SlackReactionNotificationMode,
+} from "../../config/config.js";
 import { resolveSessionKey, type SessionScope } from "../../config/sessions.js";
 import type { DmPolicy, GroupPolicy } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
@@ -9,7 +12,11 @@ import { createDedupeCache } from "../../infra/dedupe.js";
 import { getChildLogger } from "../../logging.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type { SlackMessageEvent } from "../types.js";
-import { normalizeAllowList, normalizeAllowListLower, normalizeSlackSlug } from "./allow-list.js";
+import {
+  normalizeAllowList,
+  normalizeAllowListLower,
+  normalizeSlackSlug,
+} from "./allow-list.js";
 import type { SlackChannelConfigEntries } from "./channel-config.js";
 import { resolveSlackChannelConfig } from "./channel-config.js";
 import { isSlackChannelAllowedByPolicy } from "./policy.js";
@@ -85,7 +92,9 @@ export type SlackMonitorContext = {
   replyToMode: "off" | "first" | "all";
   threadHistoryScope: "thread" | "channel";
   threadInheritParent: boolean;
-  slashCommand: Required<import("../../config/config.js").SlackSlashCommandConfig>;
+  slashCommand: Required<
+    import("../../config/config.js").SlackSlashCommandConfig
+  >;
   textLimit: number;
   ackReactionScope: string;
   mediaMaxBytes: number;
@@ -213,7 +222,8 @@ export function createSlackMonitorContext(params: {
         token: params.botToken,
         channel: channelId,
       });
-      const name = info.channel && "name" in info.channel ? info.channel.name : undefined;
+      const name =
+        info.channel && "name" in info.channel ? info.channel.name : undefined;
       const channel = info.channel ?? undefined;
       const type: SlackMessageEvent["channel_type"] | undefined = channel?.is_im
         ? "im"
@@ -224,9 +234,14 @@ export function createSlackMonitorContext(params: {
             : channel?.is_group
               ? "group"
               : undefined;
-      const topic = channel && "topic" in channel ? (channel.topic?.value ?? undefined) : undefined;
+      const topic =
+        channel && "topic" in channel
+          ? (channel.topic?.value ?? undefined)
+          : undefined;
       const purpose =
-        channel && "purpose" in channel ? (channel.purpose?.value ?? undefined) : undefined;
+        channel && "purpose" in channel
+          ? (channel.purpose?.value ?? undefined)
+          : undefined;
       const entry = { name, type, topic, purpose };
       channelCache.set(channelId, entry);
       return entry;
@@ -246,7 +261,11 @@ export function createSlackMonitorContext(params: {
         user: userId,
       });
       const profile = info.user?.profile;
-      const name = profile?.display_name || profile?.real_name || info.user?.name || undefined;
+      const name =
+        profile?.display_name ||
+        profile?.real_name ||
+        info.user?.name ||
+        undefined;
       const entry = { name };
       userCache.set(userId, entry);
       return entry;
@@ -286,7 +305,9 @@ export function createSlackMonitorContext(params: {
         await client.apiCall("assistant.threads.setStatus", payload);
       }
     } catch (err) {
-      logVerbose(`slack status update failed for channel ${p.channelId}: ${String(err)}`);
+      logVerbose(
+        `slack status update failed for channel ${p.channelId}: ${String(err)}`,
+      );
     }
   };
 
@@ -318,7 +339,8 @@ export function createSlackMonitorContext(params: {
         .filter((value): value is string => Boolean(value))
         .map((value) => value.toLowerCase());
       const permitted =
-        allowList.includes("*") || candidates.some((candidate) => allowList.includes(candidate));
+        allowList.includes("*") ||
+        candidates.some((candidate) => allowList.includes(candidate));
       if (!permitted) {
         return false;
       }
@@ -334,7 +356,8 @@ export function createSlackMonitorContext(params: {
       const channelMatchMeta = formatAllowlistMatchMeta(channelConfig);
       const channelAllowed = channelConfig?.allowed !== false;
       const channelAllowlistConfigured =
-        Boolean(params.channelsConfig) && Object.keys(params.channelsConfig ?? {}).length > 0;
+        Boolean(params.channelsConfig) &&
+        Object.keys(params.channelsConfig ?? {}).length > 0;
       if (
         !isSlackChannelAllowedByPolicy({
           groupPolicy: params.groupPolicy,
@@ -351,7 +374,10 @@ export function createSlackMonitorContext(params: {
       // (i.e., have a matching config entry with allow:false). Channels not in the
       // config (matchSource undefined) should be allowed under open policy.
       const hasExplicitConfig = Boolean(channelConfig?.matchSource);
-      if (!channelAllowed && (params.groupPolicy !== "open" || hasExplicitConfig)) {
+      if (
+        !channelAllowed &&
+        (params.groupPolicy !== "open" || hasExplicitConfig)
+      ) {
         logVerbose(`slack: drop channel ${p.channelId} (${channelMatchMeta})`);
         return false;
       }
@@ -370,7 +396,8 @@ export function createSlackMonitorContext(params: {
       team_id?: unknown;
       team?: { id?: unknown };
     };
-    const incomingApiAppId = typeof raw.api_app_id === "string" ? raw.api_app_id : "";
+    const incomingApiAppId =
+      typeof raw.api_app_id === "string" ? raw.api_app_id : "";
     const incomingTeamId =
       typeof raw.team_id === "string"
         ? raw.team_id
@@ -378,14 +405,20 @@ export function createSlackMonitorContext(params: {
           ? raw.team.id
           : "";
 
-    if (params.apiAppId && incomingApiAppId && incomingApiAppId !== params.apiAppId) {
+    if (
+      params.apiAppId &&
+      incomingApiAppId &&
+      incomingApiAppId !== params.apiAppId
+    ) {
       logVerbose(
         `slack: drop event with api_app_id=${incomingApiAppId} (expected ${params.apiAppId})`,
       );
       return true;
     }
     if (params.teamId && incomingTeamId && incomingTeamId !== params.teamId) {
-      logVerbose(`slack: drop event with team_id=${incomingTeamId} (expected ${params.teamId})`);
+      logVerbose(
+        `slack: drop event with team_id=${incomingTeamId} (expected ${params.teamId})`,
+      );
       return true;
     }
     return false;

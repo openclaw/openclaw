@@ -1,6 +1,9 @@
 import type { ClawdbotConfig } from "openclaw/plugin-sdk";
 import { describe, expect, it, vi } from "vitest";
-import { resolveReactionSyntheticEvent, type FeishuReactionCreatedEvent } from "./monitor.js";
+import {
+  resolveReactionSyntheticEvent,
+  type FeishuReactionCreatedEvent,
+} from "./monitor.js";
 
 const cfg = {} as ClawdbotConfig;
 
@@ -29,7 +32,9 @@ describe("resolveReactionSyntheticEvent", () => {
   });
 
   it("filters Typing reactions", async () => {
-    const event = makeReactionEvent({ reaction_type: { emoji_type: "Typing" } });
+    const event = makeReactionEvent({
+      reaction_type: { emoji_type: "Typing" },
+    });
     const result = await resolveReactionSyntheticEvent({
       cfg,
       accountId: "default",
@@ -116,7 +121,9 @@ describe("resolveReactionSyntheticEvent", () => {
       }),
       uuid: () => "fixed-uuid",
     });
-    expect(result?.message.message_id).toBe("om_msg1:reaction:THUMBSUP:fixed-uuid");
+    expect(result?.message.message_id).toBe(
+      "om_msg1:reaction:THUMBSUP:fixed-uuid",
+    );
   });
 
   it("drops unverified reactions when sender verification times out", async () => {
@@ -229,7 +236,9 @@ describe("resolveReactionSyntheticEvent", () => {
     });
     expect(result).toBeNull();
     expect(log).toHaveBeenCalledWith(
-      expect.stringContaining("ignoring reaction on non-bot/unverified message om_msg1"),
+      expect.stringContaining(
+        "ignoring reaction on non-bot/unverified message om_msg1",
+      ),
     );
   });
 });

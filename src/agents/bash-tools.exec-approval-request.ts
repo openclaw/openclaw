@@ -1,4 +1,8 @@
-import type { ExecAsk, ExecSecurity, SystemRunApprovalPlan } from "../infra/exec-approvals.js";
+import type {
+  ExecAsk,
+  ExecSecurity,
+  SystemRunApprovalPlan,
+} from "../infra/exec-approvals.js";
 import {
   DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS,
   DEFAULT_APPROVAL_TIMEOUT_MS,
@@ -68,15 +72,22 @@ function parseDecision(value: unknown): ParsedDecision {
     return { present: false, value: null };
   }
   const decision = (value as { decision?: unknown }).decision;
-  return { present: true, value: typeof decision === "string" ? decision : null };
+  return {
+    present: true,
+    value: typeof decision === "string" ? decision : null,
+  };
 }
 
 function parseString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+  return typeof value === "string" && value.trim().length > 0
+    ? value.trim()
+    : undefined;
 }
 
 function parseExpiresAtMs(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  return typeof value === "number" && Number.isFinite(value)
+    ? value
+    : undefined;
 }
 
 export type ExecApprovalRegistration = {
@@ -103,14 +114,17 @@ export async function registerExecApprovalRequest(
   const decision = parseDecision(registrationResult);
   const id = parseString(registrationResult?.id) ?? params.id;
   const expiresAtMs =
-    parseExpiresAtMs(registrationResult?.expiresAtMs) ?? Date.now() + DEFAULT_APPROVAL_TIMEOUT_MS;
+    parseExpiresAtMs(registrationResult?.expiresAtMs) ??
+    Date.now() + DEFAULT_APPROVAL_TIMEOUT_MS;
   if (decision.present) {
     return { id, expiresAtMs, finalDecision: decision.value };
   }
   return { id, expiresAtMs };
 }
 
-export async function waitForExecApprovalDecision(id: string): Promise<string | null> {
+export async function waitForExecApprovalDecision(
+  id: string,
+): Promise<string | null> {
   try {
     const decisionResult = await callGatewayTool<{ decision: string }>(
       "exec.approval.waitDecision",
@@ -173,7 +187,9 @@ type ExecApprovalRequesterContext = {
   sessionKey?: string;
 };
 
-export function buildExecApprovalRequesterContext(params: ExecApprovalRequesterContext): {
+export function buildExecApprovalRequesterContext(
+  params: ExecApprovalRequesterContext,
+): {
   agentId?: string;
   sessionKey?: string;
 } {
@@ -227,13 +243,17 @@ function buildHostApprovalDecisionParams(
 export async function requestExecApprovalDecisionForHost(
   params: HostExecApprovalParams,
 ): Promise<string | null> {
-  return await requestExecApprovalDecision(buildHostApprovalDecisionParams(params));
+  return await requestExecApprovalDecision(
+    buildHostApprovalDecisionParams(params),
+  );
 }
 
 export async function registerExecApprovalRequestForHost(
   params: HostExecApprovalParams,
 ): Promise<ExecApprovalRegistration> {
-  return await registerExecApprovalRequest(buildHostApprovalDecisionParams(params));
+  return await registerExecApprovalRequest(
+    buildHostApprovalDecisionParams(params),
+  );
 }
 
 export async function registerExecApprovalRequestForHostOrThrow(
@@ -242,6 +262,8 @@ export async function registerExecApprovalRequestForHostOrThrow(
   try {
     return await registerExecApprovalRequestForHost(params);
   } catch (err) {
-    throw new Error(`Exec approval registration failed: ${String(err)}`, { cause: err });
+    throw new Error(`Exec approval registration failed: ${String(err)}`, {
+      cause: err,
+    });
   }
 }

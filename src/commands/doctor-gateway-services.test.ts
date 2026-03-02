@@ -79,7 +79,12 @@ function makeDoctorPrompts() {
 }
 
 async function runRepair(cfg: OpenClawConfig) {
-  await maybeRepairGatewayServiceConfig(cfg, "local", makeDoctorIo(), makeDoctorPrompts());
+  await maybeRepairGatewayServiceConfig(
+    cfg,
+    "local",
+    makeDoctorIo(),
+    makeDoctorPrompts(),
+  );
 }
 
 const gatewayProgramArguments = [
@@ -102,7 +107,8 @@ function setupGatewayTokenRepairScenario(expectedToken: string) {
     issues: [
       {
         code: "gateway-token-mismatch",
-        message: "Gateway service OPENCLAW_GATEWAY_TOKEN does not match gateway.auth.token",
+        message:
+          "Gateway service OPENCLAW_GATEWAY_TOKEN does not match gateway.auth.token",
         level: "recommended",
       },
     ],

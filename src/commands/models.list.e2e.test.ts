@@ -1,4 +1,12 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 let modelsListCommand: typeof import("./models/list.list-command.js").modelsListCommand;
 let loadModelRegistry: typeof import("./models/list.registry.js").loadModelRegistry;
@@ -7,9 +15,13 @@ let toModelRow: typeof import("./models/list.registry.js").toModelRow;
 const loadConfig = vi.fn();
 const ensureOpenClawModelsJson = vi.fn().mockResolvedValue(undefined);
 const resolveOpenClawAgentDir = vi.fn().mockReturnValue("/tmp/openclaw-agent");
-const ensureAuthProfileStore = vi.fn().mockReturnValue({ version: 1, profiles: {} });
+const ensureAuthProfileStore = vi
+  .fn()
+  .mockReturnValue({ version: 1, profiles: {} });
 const listProfilesForProvider = vi.fn().mockReturnValue([]);
-const resolveAuthProfileDisplayLabel = vi.fn(({ profileId }: { profileId: string }) => profileId);
+const resolveAuthProfileDisplayLabel = vi.fn(
+  ({ profileId }: { profileId: string }) => profileId,
+);
 const resolveAuthStorePathForDisplay = vi
   .fn()
   .mockReturnValue("/tmp/openclaw-agent/auth-profiles.json");
@@ -57,8 +69,9 @@ vi.mock("../agents/pi-model-discovery.js", () => {
   class MockModelRegistry {
     find(provider: string, id: string) {
       return (
-        modelRegistryState.models.find((model) => model.provider === provider && model.id === id) ??
-        null
+        modelRegistryState.models.find(
+          (model) => model.provider === provider && model.id === id,
+        ) ?? null
       );
     }
 
@@ -102,7 +115,9 @@ function expectModelRegistryUnavailable(
   expectedDetail: string,
 ) {
   expect(runtime.error).toHaveBeenCalledTimes(1);
-  expect(runtime.error.mock.calls[0]?.[0]).toContain("Model registry unavailable:");
+  expect(runtime.error.mock.calls[0]?.[0]).toContain(
+    "Model registry unavailable:",
+  );
   expect(runtime.error.mock.calls[0]?.[0]).toContain(expectedDetail);
   expect(runtime.log).not.toHaveBeenCalled();
   expect(process.exitCode).toBe(1);
@@ -180,10 +195,11 @@ describe("models list/status", () => {
   }
 
   function enableGoogleAntigravityAuthProfile() {
-    listProfilesForProvider.mockImplementation((_: unknown, provider: string) =>
-      provider === "google-antigravity"
-        ? ([{ id: "profile-1" }] as Array<Record<string, unknown>>)
-        : [],
+    listProfilesForProvider.mockImplementation(
+      (_: unknown, provider: string) =>
+        provider === "google-antigravity"
+          ? ([{ id: "profile-1" }] as Array<Record<string, unknown>>)
+          : [],
     );
   }
 
@@ -212,7 +228,8 @@ describe("models list/status", () => {
 
   beforeAll(async () => {
     ({ modelsListCommand } = await import("./models/list.list-command.js"));
-    ({ loadModelRegistry, toModelRow } = await import("./models/list.registry.js"));
+    ({ loadModelRegistry, toModelRow } =
+      await import("./models/list.registry.js"));
   });
 
   it("models list runs model discovery without auth.json sync", async () => {
@@ -266,22 +283,30 @@ describe("models list/status", () => {
 
   it("models list does not treat availability-unavailable code as discovery fallback", async () => {
     configureGoogleAntigravityModel("claude-opus-4-6-thinking");
-    modelRegistryState.getAllError = Object.assign(new Error("model discovery failed"), {
-      code: "MODEL_AVAILABILITY_UNAVAILABLE",
-    });
+    modelRegistryState.getAllError = Object.assign(
+      new Error("model discovery failed"),
+      {
+        code: "MODEL_AVAILABILITY_UNAVAILABLE",
+      },
+    );
     const runtime = makeRuntime();
     await modelsListCommand({ json: true }, runtime);
 
     expectModelRegistryUnavailable(runtime, "model discovery failed");
-    expect(runtime.error.mock.calls[0]?.[0]).not.toContain("configured models may appear missing");
+    expect(runtime.error.mock.calls[0]?.[0]).not.toContain(
+      "configured models may appear missing",
+    );
   });
 
   it("models list fails fast when registry model discovery is unavailable", async () => {
     configureGoogleAntigravityModel("claude-opus-4-6-thinking");
     enableGoogleAntigravityAuthProfile();
-    modelRegistryState.getAllError = Object.assign(new Error("model discovery unavailable"), {
-      code: "MODEL_DISCOVERY_UNAVAILABLE",
-    });
+    modelRegistryState.getAllError = Object.assign(
+      new Error("model discovery unavailable"),
+      {
+        code: "MODEL_DISCOVERY_UNAVAILABLE",
+      },
+    );
     const runtime = makeRuntime();
 
     modelRegistryState.models = [];
@@ -292,14 +317,22 @@ describe("models list/status", () => {
   });
 
   it("loadModelRegistry throws when model discovery is unavailable", async () => {
-    modelRegistryState.getAllError = Object.assign(new Error("model discovery unavailable"), {
-      code: "MODEL_DISCOVERY_UNAVAILABLE",
-    });
+    modelRegistryState.getAllError = Object.assign(
+      new Error("model discovery unavailable"),
+      {
+        code: "MODEL_DISCOVERY_UNAVAILABLE",
+      },
+    );
     modelRegistryState.available = [
-      makeGoogleAntigravityTemplate("claude-opus-4-5-thinking", "Claude Opus 4.5 Thinking"),
+      makeGoogleAntigravityTemplate(
+        "claude-opus-4-5-thinking",
+        "Claude Opus 4.5 Thinking",
+      ),
     ];
 
-    await expect(loadModelRegistry({})).rejects.toThrow("model discovery unavailable");
+    await expect(loadModelRegistry({})).rejects.toThrow(
+      "model discovery unavailable",
+    );
   });
 
   it("toModelRow does not crash without cfg/authStore when availability is undefined", async () => {

@@ -3,13 +3,19 @@ import type { HumanDelayConfig } from "../../config/types.js";
 import { sleep } from "../../utils.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { registerDispatcher } from "./dispatcher-registry.js";
-import { normalizeReplyPayload, type NormalizeReplySkipReason } from "./normalize-reply.js";
+import {
+  normalizeReplyPayload,
+  type NormalizeReplySkipReason,
+} from "./normalize-reply.js";
 import type { ResponsePrefixContext } from "./response-prefix-template.js";
 import type { TypingController } from "./typing.js";
 
 export type ReplyDispatchKind = "tool" | "block" | "final";
 
-type ReplyDispatchErrorHandler = (err: unknown, info: { kind: ReplyDispatchKind }) => void;
+type ReplyDispatchErrorHandler = (
+  err: unknown,
+  info: { kind: ReplyDispatchKind },
+) => void;
 
 type ReplyDispatchSkipHandler = (
   payload: ReplyPayload,
@@ -31,9 +37,13 @@ function getHumanDelay(config: HumanDelayConfig | undefined): number {
     return 0;
   }
   const min =
-    mode === "custom" ? (config?.minMs ?? DEFAULT_HUMAN_DELAY_MIN_MS) : DEFAULT_HUMAN_DELAY_MIN_MS;
+    mode === "custom"
+      ? (config?.minMs ?? DEFAULT_HUMAN_DELAY_MIN_MS)
+      : DEFAULT_HUMAN_DELAY_MIN_MS;
   const max =
-    mode === "custom" ? (config?.maxMs ?? DEFAULT_HUMAN_DELAY_MAX_MS) : DEFAULT_HUMAN_DELAY_MAX_MS;
+    mode === "custom"
+      ? (config?.maxMs ?? DEFAULT_HUMAN_DELAY_MAX_MS)
+      : DEFAULT_HUMAN_DELAY_MAX_MS;
   if (max <= min) {
     return min;
   }
@@ -57,7 +67,10 @@ export type ReplyDispatcherOptions = {
   humanDelay?: HumanDelayConfig;
 };
 
-export type ReplyDispatcherWithTypingOptions = Omit<ReplyDispatcherOptions, "onIdle"> & {
+export type ReplyDispatcherWithTypingOptions = Omit<
+  ReplyDispatcherOptions,
+  "onIdle"
+> & {
   typingCallbacks?: TypingCallbacks;
   onReplyStart?: () => Promise<void> | void;
   onIdle?: () => void;
@@ -67,7 +80,10 @@ export type ReplyDispatcherWithTypingOptions = Omit<ReplyDispatcherOptions, "onI
 
 type ReplyDispatcherWithTypingResult = {
   dispatcher: ReplyDispatcher;
-  replyOptions: Pick<GetReplyOptions, "onReplyStart" | "onTypingController" | "onTypingCleanup">;
+  replyOptions: Pick<
+    GetReplyOptions,
+    "onReplyStart" | "onTypingController" | "onTypingCleanup"
+  >;
   markDispatchIdle: () => void;
 };
 
@@ -82,7 +98,10 @@ export type ReplyDispatcher = {
 
 type NormalizeReplyPayloadInternalOptions = Pick<
   ReplyDispatcherOptions,
-  "responsePrefix" | "responsePrefixContext" | "responsePrefixContextProvider" | "onHeartbeatStrip"
+  | "responsePrefix"
+  | "responsePrefixContext"
+  | "responsePrefixContextProvider"
+  | "onHeartbeatStrip"
 > & {
   onSkip?: (reason: NormalizeReplySkipReason) => void;
 };
@@ -92,7 +111,8 @@ function normalizeReplyPayloadInternal(
   opts: NormalizeReplyPayloadInternalOptions,
 ): ReplyPayload | null {
   // Prefer dynamic context provider over static context
-  const prefixContext = opts.responsePrefixContextProvider?.() ?? opts.responsePrefixContext;
+  const prefixContext =
+    opts.responsePrefixContextProvider?.() ?? opts.responsePrefixContext;
 
   return normalizeReplyPayload(payload, {
     responsePrefix: opts.responsePrefix,
@@ -102,7 +122,9 @@ function normalizeReplyPayloadInternal(
   });
 }
 
-export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDispatcher {
+export function createReplyDispatcher(
+  options: ReplyDispatcherOptions,
+): ReplyDispatcher {
   let sendChain: Promise<void> = Promise.resolve();
   // Track in-flight deliveries so we can emit a reliable "idle" signal.
   // Start with pending=1 as a "reservation" to prevent premature gateway restart.
@@ -211,7 +233,13 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
 export function createReplyDispatcherWithTyping(
   options: ReplyDispatcherWithTypingOptions,
 ): ReplyDispatcherWithTypingResult {
-  const { typingCallbacks, onReplyStart, onIdle, onCleanup, ...dispatcherOptions } = options;
+  const {
+    typingCallbacks,
+    onReplyStart,
+    onIdle,
+    onCleanup,
+    ...dispatcherOptions
+  } = options;
   const resolvedOnReplyStart = onReplyStart ?? typingCallbacks?.onReplyStart;
   const resolvedOnIdle = onIdle ?? typingCallbacks?.onIdle;
   const resolvedOnCleanup = onCleanup ?? typingCallbacks?.onCleanup;

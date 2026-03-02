@@ -3,7 +3,10 @@ import { createMockCronStateForJobs } from "./service.test-harness.js";
 import { recomputeNextRunsForMaintenance } from "./service/jobs.js";
 import type { CronJob } from "./types.js";
 
-function createCronSystemEventJob(now: number, overrides: Partial<CronJob> = {}): CronJob {
+function createCronSystemEventJob(
+  now: number,
+  overrides: Partial<CronJob> = {},
+): CronJob {
   const { state, ...jobOverrides } = overrides;
   return {
     id: "test-job",
@@ -130,7 +133,10 @@ describe("issue #13992 regression - cron jobs skip execution", () => {
       },
     };
 
-    const state = createMockCronStateForJobs({ jobs: [dueJob, malformedJob], nowMs: now });
+    const state = createMockCronStateForJobs({
+      jobs: [dueJob, malformedJob],
+      nowMs: now,
+    });
 
     expect(() => recomputeNextRunsForMaintenance(state)).not.toThrow();
     expect(dueJob.state.nextRunAtMs).toBe(pastDue);

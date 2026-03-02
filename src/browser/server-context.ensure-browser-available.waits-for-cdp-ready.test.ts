@@ -65,7 +65,8 @@ describe("browser server-context ensureBrowserAvailable", () => {
     isChromeReachable.mockResolvedValue(false);
     isChromeCdpReady.mockResolvedValueOnce(false).mockResolvedValue(true);
 
-    const proc = new EventEmitter() as unknown as ChildProcessWithoutNullStreams;
+    const proc =
+      new EventEmitter() as unknown as ChildProcessWithoutNullStreams;
     launchOpenClawChrome.mockResolvedValue({
       pid: 123,
       exe: { kind: "chromium", path: "/usr/bin/chromium" },
@@ -99,7 +100,8 @@ describe("browser server-context ensureBrowserAvailable", () => {
     isChromeReachable.mockResolvedValue(false);
     isChromeCdpReady.mockResolvedValue(false);
 
-    const proc = new EventEmitter() as unknown as ChildProcessWithoutNullStreams;
+    const proc =
+      new EventEmitter() as unknown as ChildProcessWithoutNullStreams;
     launchOpenClawChrome.mockResolvedValue({
       pid: 321,
       exe: { kind: "chromium", path: "/usr/bin/chromium" },
@@ -114,7 +116,9 @@ describe("browser server-context ensureBrowserAvailable", () => {
     const profile = ctx.forProfile("openclaw");
 
     const promise = profile.ensureBrowserAvailable();
-    const rejected = expect(promise).rejects.toThrow("not reachable after start");
+    const rejected = expect(promise).rejects.toThrow(
+      "not reachable after start",
+    );
     await vi.advanceTimersByTimeAsync(8100);
     await rejected;
 

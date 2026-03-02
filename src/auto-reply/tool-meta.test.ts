@@ -1,6 +1,11 @@
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { formatToolAggregate, formatToolPrefix, shortenMeta, shortenPath } from "./tool-meta.js";
+import {
+  formatToolAggregate,
+  formatToolPrefix,
+  shortenMeta,
+  shortenPath,
+} from "./tool-meta.js";
 
 // Use path.resolve so inputs match the resolved HOME on every platform.
 const home = path.resolve("/Users/test");
@@ -41,15 +46,21 @@ describe("tool meta formatting", () => {
 
   it("wraps aggregate meta in backticks when markdown is enabled", () => {
     vi.stubEnv("HOME", home);
-    const out = formatToolAggregate("fs", [`${home}/dir/a.txt`], { markdown: true });
+    const out = formatToolAggregate("fs", [`${home}/dir/a.txt`], {
+      markdown: true,
+    });
     expect(out).toContain("`~/dir/a.txt`");
   });
 
   it("keeps exec flags outside markdown and moves them to the front", () => {
     vi.stubEnv("HOME", home);
-    const out = formatToolAggregate("exec", [`cd ${home}/dir && gemini 2>&1 · elevated`], {
-      markdown: true,
-    });
+    const out = formatToolAggregate(
+      "exec",
+      [`cd ${home}/dir && gemini 2>&1 · elevated`],
+      {
+        markdown: true,
+      },
+    );
     expect(out).toBe("🛠️ Exec: elevated · `cd ~/dir && gemini 2>&1`");
   });
 

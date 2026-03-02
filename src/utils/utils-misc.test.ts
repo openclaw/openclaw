@@ -68,20 +68,36 @@ describe("isReasoningTagProvider", () => {
       value: "Google",
       expected: true,
     },
-    { name: "returns true for google-gemini-cli", value: "google-gemini-cli", expected: true },
+    {
+      name: "returns true for google-gemini-cli",
+      value: "google-gemini-cli",
+      expected: true,
+    },
     {
       name: "returns true for google-generative-ai",
       value: "google-generative-ai",
       expected: true,
     },
     { name: "returns true for minimax", value: "minimax", expected: true },
-    { name: "returns true for minimax-cn", value: "minimax-cn", expected: true },
+    {
+      name: "returns true for minimax-cn",
+      value: "minimax-cn",
+      expected: true,
+    },
     { name: "returns false for null", value: null, expected: false },
     { name: "returns false for undefined", value: undefined, expected: false },
     { name: "returns false for empty", value: "", expected: false },
-    { name: "returns false for anthropic", value: "anthropic", expected: false },
+    {
+      name: "returns false for anthropic",
+      value: "anthropic",
+      expected: false,
+    },
     { name: "returns false for openai", value: "openai", expected: false },
-    { name: "returns false for openrouter", value: "openrouter", expected: false },
+    {
+      name: "returns false for openrouter",
+      value: "openrouter",
+      expected: false,
+    },
   ];
 
   for (const testCase of cases) {
@@ -93,13 +109,24 @@ describe("isReasoningTagProvider", () => {
 
 describe("splitShellArgs", () => {
   it("splits whitespace and respects quotes", () => {
-    expect(splitShellArgs(`qmd --foo "bar baz"`)).toEqual(["qmd", "--foo", "bar baz"]);
-    expect(splitShellArgs(`qmd --foo 'bar baz'`)).toEqual(["qmd", "--foo", "bar baz"]);
+    expect(splitShellArgs(`qmd --foo "bar baz"`)).toEqual([
+      "qmd",
+      "--foo",
+      "bar baz",
+    ]);
+    expect(splitShellArgs(`qmd --foo 'bar baz'`)).toEqual([
+      "qmd",
+      "--foo",
+      "bar baz",
+    ]);
   });
 
   it("supports backslash escapes inside double quotes", () => {
     expect(splitShellArgs(String.raw`echo "a\"b"`)).toEqual(["echo", `a"b`]);
-    expect(splitShellArgs(String.raw`echo "\$HOME"`)).toEqual(["echo", "$HOME"]);
+    expect(splitShellArgs(String.raw`echo "\$HOME"`)).toEqual([
+      "echo",
+      "$HOME",
+    ]);
   });
 
   it("returns null for unterminated quotes", () => {

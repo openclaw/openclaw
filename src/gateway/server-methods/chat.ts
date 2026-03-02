@@ -15,7 +15,10 @@ import {
   stripInlineDirectiveTagsForDisplay,
   stripInlineDirectiveTagsFromMessageForDisplay,
 } from "../../utils/directive-tags.js";
-import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
+import {
+  INTERNAL_MESSAGE_CHANNEL,
+  normalizeMessageChannel,
+} from "../../utils/message-channel.js";
 import {
   abortChatRunById,
   abortChatRunsForSessionKey,
@@ -24,9 +27,18 @@ import {
   isChatStopCommandText,
   resolveChatRunExpiresAtMs,
 } from "../chat-abort.js";
-import { type ChatImageContent, parseMessageWithAttachments } from "../chat-attachments.js";
-import { stripEnvelopeFromMessage, stripEnvelopeFromMessages } from "../chat-sanitize.js";
-import { GATEWAY_CLIENT_CAPS, hasGatewayClientCap } from "../protocol/client-info.js";
+import {
+  type ChatImageContent,
+  parseMessageWithAttachments,
+} from "../chat-attachments.js";
+import {
+  stripEnvelopeFromMessage,
+  stripEnvelopeFromMessages,
+} from "../chat-sanitize.js";
+import {
+  GATEWAY_CLIENT_CAPS,
+  hasGatewayClientCap,
+} from "../protocol/client-info.js";
 import {
   ErrorCodes,
   errorShape,
@@ -67,14 +79,20 @@ type AbortedPartialSnapshot = {
 
 const CHAT_HISTORY_TEXT_MAX_CHARS = 12_000;
 const CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES = 128 * 1024;
-const CHAT_HISTORY_OVERSIZED_PLACEHOLDER = "[chat.history omitted: message too large]";
+const CHAT_HISTORY_OVERSIZED_PLACEHOLDER =
+  "[chat.history omitted: message too large]";
 let chatHistoryPlaceholderEmitCount = 0;
 
 function stripDisallowedChatControlChars(message: string): string {
   let output = "";
   for (const char of message) {
     const code = char.charCodeAt(0);
-    if (code === 9 || code === 10 || code === 13 || (code >= 32 && code !== 127)) {
+    if (
+      code === 9 ||
+      code === 10 ||
+      code === 13 ||
+      (code >= 32 && code !== 127)
+    ) {
       output += char;
     }
   }
@@ -91,7 +109,10 @@ export function sanitizeChatSendMessageInput(
   return { ok: true, message: stripDisallowedChatControlChars(normalized) };
 }
 
-function truncateChatHistoryText(text: string): { text: string; truncated: boolean } {
+function truncateChatHistoryText(text: string): {
+  text: string;
+  truncated: boolean;
+} {
   if (text.length <= CHAT_HISTORY_TEXT_MAX_CHARS) {
     return { text, truncated: false };
   }
@@ -101,7 +122,10 @@ function truncateChatHistoryText(text: string): { text: string; truncated: boole
   };
 }
 
-function sanitizeChatHistoryContentBlock(block: unknown): { block: unknown; changed: boolean } {
+function sanitizeChatHistoryContentBlock(block: unknown): {
+  block: unknown;
+  changed: boolean;
+} {
   if (!block || typeof block !== "object") {
     return { block, changed: false };
   }
@@ -143,7 +167,10 @@ function sanitizeChatHistoryContentBlock(block: unknown): { block: unknown; chan
   return { block: changed ? entry : block, changed };
 }
 
-function sanitizeChatHistoryMessage(message: unknown): { message: unknown; changed: boolean } {
+function sanitizeChatHistoryMessage(message: unknown): {
+  message: unknown;
+  changed: boolean;
+} {
   if (!message || typeof message !== "object") {
     return { message, changed: false };
   }
@@ -169,7 +196,9 @@ function sanitizeChatHistoryMessage(message: unknown): { message: unknown; chang
     entry.content = res.text;
     changed ||= stripped.changed || res.truncated;
   } else if (Array.isArray(entry.content)) {
-    const updated = entry.content.map((block) => sanitizeChatHistoryContentBlock(block));
+    const updated = entry.content.map((block) =>
+      sanitizeChatHistoryContentBlock(block),
+    );
     if (updated.some((item) => item.changed)) {
       entry.content = updated.map((item) => item.block);
       changed = true;
@@ -199,7 +228,9 @@ function sanitizeChatHistoryMessages(messages: unknown[]): unknown[] {
   return changed ? next : messages;
 }
 
-function buildOversizedHistoryPlaceholder(message?: unknown): Record<string, unknown> {
+function buildOversizedHistoryPlaceholder(
+  message?: unknown,
+): Record<string, unknown> {
   const role =
     message &&
     typeof message === "object" &&
@@ -239,7 +270,10 @@ function replaceOversizedChatHistoryMessages(params: {
   return { messages: replacedCount > 0 ? next : messages, replacedCount };
 }
 
-function enforceChatHistoryFinalBudget(params: { messages: unknown[]; maxBytes: number }): {
+function enforceChatHistoryFinalBudget(params: {
+  messages: unknown[];
+  maxBytes: number;
+}): {
   messages: unknown[];
   placeholderCount: number;
 } {
@@ -283,7 +317,10 @@ function resolveTranscriptPath(params: {
   }
 }
 
-function ensureTranscriptFile(params: { transcriptPath: string; sessionId: string }): {
+function ensureTranscriptFile(params: {
+  transcriptPath: string;
+  sessionId: string;
+}): {
   ok: boolean;
   error?: string;
 } {
@@ -305,18 +342,26 @@ function ensureTranscriptFile(params: { transcriptPath: string; sessionId: strin
     });
     return { ok: true };
   } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : String(err),
+    };
   }
 }
 
-function transcriptHasIdempotencyKey(transcriptPath: string, idempotencyKey: string): boolean {
+function transcriptHasIdempotencyKey(
+  transcriptPath: string,
+  idempotencyKey: string,
+): boolean {
   try {
     const lines = fs.readFileSync(transcriptPath, "utf-8").split(/\r?\n/);
     for (const line of lines) {
       if (!line.trim()) {
         continue;
       }
-      const parsed = JSON.parse(line) as { message?: { idempotencyKey?: unknown } };
+      const parsed = JSON.parse(line) as {
+        message?: { idempotencyKey?: unknown };
+      };
       if (parsed?.message?.idempotencyKey === idempotencyKey) {
         return true;
       }
@@ -361,11 +406,17 @@ function appendAssistantTranscriptMessage(params: {
       sessionId: params.sessionId,
     });
     if (!ensured.ok) {
-      return { ok: false, error: ensured.error ?? "failed to create transcript file" };
+      return {
+        ok: false,
+        error: ensured.error ?? "failed to create transcript file",
+      };
     }
   }
 
-  if (params.idempotencyKey && transcriptHasIdempotencyKey(transcriptPath, params.idempotencyKey)) {
+  if (
+    params.idempotencyKey &&
+    transcriptHasIdempotencyKey(transcriptPath, params.idempotencyKey)
+  ) {
     return { ok: true };
   }
 
@@ -475,19 +526,28 @@ function abortChatRunsForSessionKeyWithPartials(params: {
   return res;
 }
 
-function nextChatSeq(context: { agentRunSeq: Map<string, number> }, runId: string) {
+function nextChatSeq(
+  context: { agentRunSeq: Map<string, number> },
+  runId: string,
+) {
   const next = (context.agentRunSeq.get(runId) ?? 0) + 1;
   context.agentRunSeq.set(runId, next);
   return next;
 }
 
 function broadcastChatFinal(params: {
-  context: Pick<GatewayRequestContext, "broadcast" | "nodeSendToSession" | "agentRunSeq">;
+  context: Pick<
+    GatewayRequestContext,
+    "broadcast" | "nodeSendToSession" | "agentRunSeq"
+  >;
   runId: string;
   sessionKey: string;
   message?: Record<string, unknown>;
 }) {
-  const seq = nextChatSeq({ agentRunSeq: params.context.agentRunSeq }, params.runId);
+  const seq = nextChatSeq(
+    { agentRunSeq: params.context.agentRunSeq },
+    params.runId,
+  );
   const strippedEnvelopeMessage = stripEnvelopeFromMessage(params.message) as
     | Record<string, unknown>
     | undefined;
@@ -496,7 +556,9 @@ function broadcastChatFinal(params: {
     sessionKey: params.sessionKey,
     seq,
     state: "final" as const,
-    message: stripInlineDirectiveTagsFromMessageForDisplay(strippedEnvelopeMessage),
+    message: stripInlineDirectiveTagsFromMessageForDisplay(
+      strippedEnvelopeMessage,
+    ),
   };
   params.context.broadcast("chat", payload);
   params.context.nodeSendToSession(params.sessionKey, "chat", payload);
@@ -504,12 +566,18 @@ function broadcastChatFinal(params: {
 }
 
 function broadcastChatError(params: {
-  context: Pick<GatewayRequestContext, "broadcast" | "nodeSendToSession" | "agentRunSeq">;
+  context: Pick<
+    GatewayRequestContext,
+    "broadcast" | "nodeSendToSession" | "agentRunSeq"
+  >;
   runId: string;
   sessionKey: string;
   errorMessage?: string;
 }) {
-  const seq = nextChatSeq({ agentRunSeq: params.context.agentRunSeq }, params.runId);
+  const seq = nextChatSeq(
+    { agentRunSeq: params.context.agentRunSeq },
+    params.runId,
+  );
   const payload = {
     runId: params.runId,
     sessionKey: params.sessionKey,
@@ -542,22 +610,34 @@ export const chatHandlers: GatewayRequestHandlers = {
     const { cfg, storePath, entry } = loadSessionEntry(sessionKey);
     const sessionId = entry?.sessionId;
     const rawMessages =
-      sessionId && storePath ? readSessionMessages(sessionId, storePath, entry?.sessionFile) : [];
+      sessionId && storePath
+        ? readSessionMessages(sessionId, storePath, entry?.sessionFile)
+        : [];
     const hardMax = 1000;
     const defaultLimit = 200;
     const requested = typeof limit === "number" ? limit : defaultLimit;
     const max = Math.min(hardMax, requested);
-    const sliced = rawMessages.length > max ? rawMessages.slice(-max) : rawMessages;
+    const sliced =
+      rawMessages.length > max ? rawMessages.slice(-max) : rawMessages;
     const sanitized = stripEnvelopeFromMessages(sliced);
     const normalized = sanitizeChatHistoryMessages(sanitized);
     const maxHistoryBytes = getMaxChatHistoryMessagesBytes();
-    const perMessageHardCap = Math.min(CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES, maxHistoryBytes);
+    const perMessageHardCap = Math.min(
+      CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES,
+      maxHistoryBytes,
+    );
     const replaced = replaceOversizedChatHistoryMessages({
       messages: normalized,
       maxSingleMessageBytes: perMessageHardCap,
     });
-    const capped = capArrayByJsonBytes(replaced.messages, maxHistoryBytes).items;
-    const bounded = enforceChatHistoryFinalBudget({ messages: capped, maxBytes: maxHistoryBytes });
+    const capped = capArrayByJsonBytes(
+      replaced.messages,
+      maxHistoryBytes,
+    ).items;
+    const bounded = enforceChatHistoryFinalBudget({
+      messages: capped,
+      maxBytes: maxHistoryBytes,
+    });
     const placeholderCount = replaced.replacedCount + bounded.placeholderCount;
     if (placeholderCount > 0) {
       chatHistoryPlaceholderEmitCount += placeholderCount;
@@ -568,7 +648,11 @@ export const chatHandlers: GatewayRequestHandlers = {
     let thinkingLevel = entry?.thinkingLevel;
     if (!thinkingLevel) {
       const sessionAgentId = resolveSessionAgentId({ sessionKey, config: cfg });
-      const { provider, model } = resolveSessionModelRef(cfg, entry, sessionAgentId);
+      const { provider, model } = resolveSessionModelRef(
+        cfg,
+        entry,
+        sessionAgentId,
+      );
       const catalog = await context.loadGatewayModelCatalog();
       thinkingLevel = resolveThinkingDefault({
         cfg,
@@ -577,7 +661,8 @@ export const chatHandlers: GatewayRequestHandlers = {
         catalog,
       });
     }
-    const verboseLevel = entry?.verboseLevel ?? cfg.agents?.defaults?.verboseDefault;
+    const verboseLevel =
+      entry?.verboseLevel ?? cfg.agents?.defaults?.verboseDefault;
     respond(true, {
       sessionKey,
       sessionId,
@@ -626,7 +711,10 @@ export const chatHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "runId does not match sessionKey"),
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "runId does not match sessionKey",
+        ),
       );
       return;
     }
@@ -694,13 +782,18 @@ export const chatHandlers: GatewayRequestHandlers = {
     }
     const inboundMessage = sanitizedMessageResult.message;
     const stopCommand = isChatStopCommandText(inboundMessage);
-    const normalizedAttachments = normalizeRpcAttachmentsToChatAttachments(p.attachments);
+    const normalizedAttachments = normalizeRpcAttachmentsToChatAttachments(
+      p.attachments,
+    );
     const rawMessage = inboundMessage.trim();
     if (!rawMessage && normalizedAttachments.length === 0) {
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "message or attachment required"),
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "message or attachment required",
+        ),
       );
       return;
     }
@@ -708,19 +801,31 @@ export const chatHandlers: GatewayRequestHandlers = {
     let parsedImages: ChatImageContent[] = [];
     if (normalizedAttachments.length > 0) {
       try {
-        const parsed = await parseMessageWithAttachments(inboundMessage, normalizedAttachments, {
-          maxBytes: 5_000_000,
-          log: context.logGateway,
-        });
+        const parsed = await parseMessageWithAttachments(
+          inboundMessage,
+          normalizedAttachments,
+          {
+            maxBytes: 5_000_000,
+            log: context.logGateway,
+          },
+        );
         parsedMessage = parsed.message;
         parsedImages = parsed.images;
       } catch (err) {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, String(err)));
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, String(err)),
+        );
         return;
       }
     }
     const rawSessionKey = p.sessionKey;
-    const { cfg, entry, canonicalKey: sessionKey } = loadSessionEntry(rawSessionKey);
+    const {
+      cfg,
+      entry,
+      canonicalKey: sessionKey,
+    } = loadSessionEntry(rawSessionKey);
     const timeoutMs = resolveAgentTimeoutMs({
       cfg,
       overrideMs: p.timeoutMs,
@@ -739,7 +844,10 @@ export const chatHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "send blocked by session policy"),
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "send blocked by session policy",
+        ),
       );
       return;
     }
@@ -766,10 +874,15 @@ export const chatHandlers: GatewayRequestHandlers = {
 
     const activeExisting = context.chatAbortControllers.get(clientRunId);
     if (activeExisting) {
-      respond(true, { runId: clientRunId, status: "in_flight" as const }, undefined, {
-        cached: true,
-        runId: clientRunId,
-      });
+      respond(
+        true,
+        { runId: clientRunId, status: "in_flight" as const },
+        undefined,
+        {
+          cached: true,
+          runId: clientRunId,
+        },
+      );
       return;
     }
 
@@ -792,7 +905,9 @@ export const chatHandlers: GatewayRequestHandlers = {
       const injectThinking = Boolean(
         p.thinking && trimmedMessage && !trimmedMessage.startsWith("/"),
       );
-      const commandBody = injectThinking ? `/think ${p.thinking} ${parsedMessage}` : parsedMessage;
+      const commandBody = injectThinking
+        ? `/think ${p.thinking} ${parsedMessage}`
+        : parsedMessage;
       const clientInfo = client?.connect?.client;
       const routeChannelCandidate = normalizeMessageChannel(
         entry?.deliveryContext?.channel ?? entry?.lastChannel,
@@ -800,7 +915,8 @@ export const chatHandlers: GatewayRequestHandlers = {
       const routeToCandidate = entry?.deliveryContext?.to ?? entry?.lastTo;
       const routeAccountIdCandidate =
         entry?.deliveryContext?.accountId ?? entry?.lastAccountId ?? undefined;
-      const routeThreadIdCandidate = entry?.deliveryContext?.threadId ?? entry?.lastThreadId;
+      const routeThreadIdCandidate =
+        entry?.deliveryContext?.threadId ?? entry?.lastThreadId;
       const hasDeliverableRoute =
         routeChannelCandidate &&
         routeChannelCandidate !== INTERNAL_MESSAGE_CHANNEL &&
@@ -810,12 +926,19 @@ export const chatHandlers: GatewayRequestHandlers = {
         ? routeChannelCandidate
         : INTERNAL_MESSAGE_CHANNEL;
       const originatingTo = hasDeliverableRoute ? routeToCandidate : undefined;
-      const accountId = hasDeliverableRoute ? routeAccountIdCandidate : undefined;
-      const messageThreadId = hasDeliverableRoute ? routeThreadIdCandidate : undefined;
+      const accountId = hasDeliverableRoute
+        ? routeAccountIdCandidate
+        : undefined;
+      const messageThreadId = hasDeliverableRoute
+        ? routeThreadIdCandidate
+        : undefined;
       // Inject timestamp so agents know the current date/time.
       // Only BodyForAgent gets the timestamp — Body stays raw for UI display.
       // See: https://github.com/moltbot/moltbot/issues/3658
-      const stampedMessage = injectTimestamp(parsedMessage, timestampOptsFromConfig(cfg));
+      const stampedMessage = injectTimestamp(
+        parsedMessage,
+        timestampOptsFromConfig(cfg),
+      );
 
       const ctx: MsgContext = {
         Body: parsedMessage,
@@ -852,7 +975,9 @@ export const chatHandlers: GatewayRequestHandlers = {
       const dispatcher = createReplyDispatcher({
         ...prefixOptions,
         onError: (err) => {
-          context.logGateway.warn(`webchat dispatch failed: ${formatForLog(err)}`);
+          context.logGateway.warn(
+            `webchat dispatch failed: ${formatForLog(err)}`,
+          );
         },
         deliver: async (payload, info) => {
           if (info.kind !== "final") {
@@ -877,7 +1002,8 @@ export const chatHandlers: GatewayRequestHandlers = {
           images: parsedImages.length > 0 ? parsedImages : undefined,
           onAgentRunStart: (runId) => {
             agentRunStarted = true;
-            const connId = typeof client?.connId === "string" ? client.connId : undefined;
+            const connId =
+              typeof client?.connId === "string" ? client.connId : undefined;
             const wantsToolEvents = hasGatewayClientCap(
               client?.connect?.caps,
               GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
@@ -887,8 +1013,14 @@ export const chatHandlers: GatewayRequestHandlers = {
               // Register for any other active runs *in the same session* so
               // late-joining clients (e.g. page refresh mid-response) receive
               // in-progress tool events without leaking cross-session data.
-              for (const [activeRunId, active] of context.chatAbortControllers) {
-                if (activeRunId !== runId && active.sessionKey === p.sessionKey) {
+              for (const [
+                activeRunId,
+                active,
+              ] of context.chatAbortControllers) {
+                if (
+                  activeRunId !== runId &&
+                  active.sessionKey === p.sessionKey
+                ) {
                   context.registerToolEventRecipient(activeRunId, connId);
                 }
               }
@@ -908,7 +1040,8 @@ export const chatHandlers: GatewayRequestHandlers = {
             if (combinedReply) {
               const { storePath: latestStorePath, entry: latestEntry } =
                 loadSessionEntry(sessionKey);
-              const sessionId = latestEntry?.sessionId ?? entry?.sessionId ?? clientRunId;
+              const sessionId =
+                latestEntry?.sessionId ?? entry?.sessionId ?? clientRunId;
               const appended = appendAssistantTranscriptMessage({
                 message: combinedReply,
                 sessionId,
@@ -1012,7 +1145,11 @@ export const chatHandlers: GatewayRequestHandlers = {
     const { cfg, storePath, entry } = loadSessionEntry(rawSessionKey);
     const sessionId = entry?.sessionId;
     if (!sessionId || !storePath) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "session not found"));
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "session not found"),
+      );
       return;
     }
 
@@ -1022,7 +1159,10 @@ export const chatHandlers: GatewayRequestHandlers = {
       sessionId,
       storePath,
       sessionFile: entry?.sessionFile,
-      agentId: resolveSessionAgentId({ sessionKey: rawSessionKey, config: cfg }),
+      agentId: resolveSessionAgentId({
+        sessionKey: rawSessionKey,
+        config: cfg,
+      }),
       createIfMissing: false,
     });
     if (!appended.ok || !appended.messageId || !appended.message) {

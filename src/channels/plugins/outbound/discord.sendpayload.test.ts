@@ -9,7 +9,9 @@ function baseCtx(payload: ReplyPayload) {
     text: "",
     payload,
     deps: {
-      sendDiscord: vi.fn().mockResolvedValue({ messageId: "dc-1", channelId: "123456" }),
+      sendDiscord: vi
+        .fn()
+        .mockResolvedValue({ messageId: "dc-1", channelId: "123456" }),
     },
   };
 }

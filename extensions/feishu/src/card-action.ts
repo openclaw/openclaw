@@ -37,7 +37,10 @@ export async function handleFeishuCardAction(params: {
   if (typeof actionValue === "object" && actionValue !== null) {
     if ("text" in actionValue && typeof actionValue.text === "string") {
       content = actionValue.text;
-    } else if ("command" in actionValue && typeof actionValue.command === "string") {
+    } else if (
+      "command" in actionValue &&
+      typeof actionValue.command === "string"
+    ) {
       content = actionValue.command;
     } else {
       content = JSON.stringify(actionValue);

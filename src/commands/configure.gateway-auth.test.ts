@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { buildGatewayAuthConfig } from "./configure.js";
 
-function expectGeneratedTokenFromInput(token: string | undefined, literalToAvoid = "undefined") {
+function expectGeneratedTokenFromInput(
+  token: string | undefined,
+  literalToAvoid = "undefined",
+) {
   const result = buildGatewayAuthConfig({
     mode: "token",
     token,
@@ -25,7 +28,11 @@ describe("buildGatewayAuthConfig", () => {
       token: "abc",
     });
 
-    expect(result).toEqual({ mode: "token", token: "abc", allowTailscale: true });
+    expect(result).toEqual({
+      mode: "token",
+      token: "abc",
+      allowTailscale: true,
+    });
   });
 
   it("drops password when switching to token", () => {

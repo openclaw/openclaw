@@ -1,10 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { clampPercent, resolveUsageProviderId, withTimeout } from "./provider-usage.shared.js";
+import {
+  clampPercent,
+  resolveUsageProviderId,
+  withTimeout,
+} from "./provider-usage.shared.js";
 
 describe("provider-usage.shared", () => {
   it("normalizes supported usage provider ids", () => {
     expect(resolveUsageProviderId("z-ai")).toBe("zai");
-    expect(resolveUsageProviderId(" GOOGLE-GEMINI-CLI ")).toBe("google-gemini-cli");
+    expect(resolveUsageProviderId(" GOOGLE-GEMINI-CLI ")).toBe(
+      "google-gemini-cli",
+    );
     expect(resolveUsageProviderId("unknown-provider")).toBeUndefined();
     expect(resolveUsageProviderId()).toBeUndefined();
   });
@@ -17,11 +23,15 @@ describe("provider-usage.shared", () => {
   });
 
   it("returns work result when it resolves before timeout", async () => {
-    await expect(withTimeout(Promise.resolve("ok"), 100, "fallback")).resolves.toBe("ok");
+    await expect(
+      withTimeout(Promise.resolve("ok"), 100, "fallback"),
+    ).resolves.toBe("ok");
   });
 
   it("returns fallback when timeout wins", async () => {
-    const late = new Promise<string>((resolve) => setTimeout(() => resolve("late"), 50));
+    const late = new Promise<string>((resolve) =>
+      setTimeout(() => resolve("late"), 50),
+    );
     await expect(withTimeout(late, 1, "fallback")).resolves.toBe("fallback");
   });
 });

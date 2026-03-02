@@ -46,7 +46,8 @@ export async function getDeterministicFreePortBlock(params?: {
   const offsets = params?.offsets ?? [0, 1, 2, 3, 4];
   const maxOffset = Math.max(...offsets);
 
-  const workerIdRaw = process.env.VITEST_WORKER_ID ?? process.env.VITEST_POOL_ID ?? "";
+  const workerIdRaw =
+    process.env.VITEST_WORKER_ID ?? process.env.VITEST_POOL_ID ?? "";
   const workerId = Number.parseInt(workerIdRaw, 10);
   const shard = Number.isFinite(workerId)
     ? Math.max(0, workerId)
@@ -67,9 +68,9 @@ export async function getDeterministicFreePortBlock(params?: {
   for (let attempt = 0; attempt < usable; attempt += blockSize) {
     const start = base + ((nextTestPortOffset + attempt) % usable);
     // eslint-disable-next-line no-await-in-loop
-    const ok = (await Promise.all(offsets.map((offset) => isPortFree(start + offset)))).every(
-      Boolean,
-    );
+    const ok = (
+      await Promise.all(offsets.map((offset) => isPortFree(start + offset)))
+    ).every(Boolean);
     if (!ok) {
       continue;
     }
@@ -82,9 +83,9 @@ export async function getDeterministicFreePortBlock(params?: {
     // eslint-disable-next-line no-await-in-loop
     const port = await getOsFreePort();
     // eslint-disable-next-line no-await-in-loop
-    const ok = (await Promise.all(offsets.map((offset) => isPortFree(port + offset)))).every(
-      Boolean,
-    );
+    const ok = (
+      await Promise.all(offsets.map((offset) => isPortFree(port + offset)))
+    ).every(Boolean);
     if (ok) {
       return port;
     }

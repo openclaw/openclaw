@@ -41,7 +41,8 @@ vi.mock("../config/config.js", async (importOriginal) => {
 });
 
 vi.mock("./subagent-registry.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./subagent-registry.js")>();
+  const actual =
+    await importOriginal<typeof import("./subagent-registry.js")>();
   return {
     ...actual,
     countActiveRunsForSession: () => 0,
@@ -50,7 +51,8 @@ vi.mock("./subagent-registry.js", async (importOriginal) => {
 });
 
 vi.mock("./subagent-announce.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./subagent-announce.js")>();
+  const actual =
+    await importOriginal<typeof import("./subagent-announce.js")>();
   return {
     ...actual,
     buildSubagentSystemPrompt: () => "system-prompt",
@@ -74,18 +76,20 @@ vi.mock("../plugins/hook-runner-global.js", () => ({
 }));
 
 function setupGatewayMock() {
-  callGatewayMock.mockImplementation(async (opts: { method?: string; params?: unknown }) => {
-    if (opts.method === "sessions.patch") {
-      return { ok: true };
-    }
-    if (opts.method === "sessions.delete") {
-      return { ok: true };
-    }
-    if (opts.method === "agent") {
-      return { runId: "run-1" };
-    }
-    return {};
-  });
+  callGatewayMock.mockImplementation(
+    async (opts: { method?: string; params?: unknown }) => {
+      if (opts.method === "sessions.patch") {
+        return { ok: true };
+      }
+      if (opts.method === "sessions.delete") {
+        return { ok: true };
+      }
+      if (opts.method === "agent") {
+        return { runId: "run-1" };
+      }
+      return {};
+    },
+  );
 }
 
 // --- decodeStrictBase64 ---

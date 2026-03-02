@@ -7,14 +7,19 @@ import type { FeishuToolsConfig, ResolvedFeishuAccount } from "./types.js";
 
 type AccountAwareParams = { accountId?: string };
 
-function normalizeOptionalAccountId(value: string | undefined): string | undefined {
+function normalizeOptionalAccountId(
+  value: string | undefined,
+): string | undefined {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;
 }
 
-function readConfiguredDefaultAccountId(config: OpenClawPluginApi["config"]): string | undefined {
-  const value = (config?.channels?.feishu as { defaultAccount?: unknown } | undefined)
-    ?.defaultAccount;
+function readConfiguredDefaultAccountId(
+  config: OpenClawPluginApi["config"],
+): string | undefined {
+  const value = (
+    config?.channels?.feishu as { defaultAccount?: unknown } | undefined
+  )?.defaultAccount;
   if (typeof value !== "string") {
     return undefined;
   }

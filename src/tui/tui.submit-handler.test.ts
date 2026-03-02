@@ -1,10 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 import { createSubmitHarness } from "./tui-submit-test-helpers.js";
-import { createSubmitBurstCoalescer, shouldEnableWindowsGitBashPasteFallback } from "./tui.js";
+import {
+  createSubmitBurstCoalescer,
+  shouldEnableWindowsGitBashPasteFallback,
+} from "./tui.js";
 
 describe("createEditorSubmitHandler", () => {
   it("routes lines starting with ! to handleBangLine", () => {
-    const { handleCommand, sendMessage, handleBangLine, onSubmit } = createSubmitHarness();
+    const { handleCommand, sendMessage, handleBangLine, onSubmit } =
+      createSubmitHarness();
 
     onSubmit("!ls");
 
@@ -25,7 +29,8 @@ describe("createEditorSubmitHandler", () => {
   });
 
   it("does not treat leading whitespace before ! as a bang command", () => {
-    const { editor, sendMessage, handleBangLine, onSubmit } = createSubmitHarness();
+    const { editor, sendMessage, handleBangLine, onSubmit } =
+      createSubmitHarness();
 
     onSubmit("  !ls");
 
@@ -44,7 +49,8 @@ describe("createEditorSubmitHandler", () => {
   });
 
   it("preserves internal newlines for multiline messages", () => {
-    const { editor, handleCommand, sendMessage, handleBangLine, onSubmit } = createSubmitHarness();
+    const { editor, handleCommand, sendMessage, handleBangLine, onSubmit } =
+      createSubmitHarness();
 
     onSubmit("Line 1\nLine 2\nLine 3");
 

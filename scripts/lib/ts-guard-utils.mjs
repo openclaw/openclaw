@@ -3,19 +3,28 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 
-const baseTestSuffixes = [".test.ts", ".test-utils.ts", ".test-harness.ts", ".e2e-harness.ts"];
+const baseTestSuffixes = [
+  ".test.ts",
+  ".test-utils.ts",
+  ".test-harness.ts",
+  ".e2e-harness.ts",
+];
 
 export function resolveRepoRoot(importMetaUrl) {
   return path.resolve(path.dirname(fileURLToPath(importMetaUrl)), "..", "..");
 }
 
 export function resolveSourceRoots(repoRoot, relativeRoots) {
-  return relativeRoots.map((root) => path.join(repoRoot, ...root.split("/").filter(Boolean)));
+  return relativeRoots.map((root) =>
+    path.join(repoRoot, ...root.split("/").filter(Boolean)),
+  );
 }
 
 export function isTestLikeTypeScriptFile(filePath, options = {}) {
   const extraTestSuffixes = options.extraTestSuffixes ?? [];
-  return [...baseTestSuffixes, ...extraTestSuffixes].some((suffix) => filePath.endsWith(suffix));
+  return [...baseTestSuffixes, ...extraTestSuffixes].some((suffix) =>
+    filePath.endsWith(suffix),
+  );
 }
 
 export async function collectTypeScriptFiles(targetPath, options = {}) {
@@ -44,7 +53,10 @@ export async function collectTypeScriptFiles(targetPath, options = {}) {
     if (!targetPath.endsWith(".ts")) {
       return [];
     }
-    if (!includeTests && isTestLikeTypeScriptFile(targetPath, { extraTestSuffixes })) {
+    if (
+      !includeTests &&
+      isTestLikeTypeScriptFile(targetPath, { extraTestSuffixes })
+    ) {
       return [];
     }
     return [targetPath];
@@ -64,7 +76,10 @@ export async function collectTypeScriptFiles(targetPath, options = {}) {
     if (!entry.isFile() || !entryPath.endsWith(".ts")) {
       continue;
     }
-    if (!includeTests && isTestLikeTypeScriptFile(entryPath, { extraTestSuffixes })) {
+    if (
+      !includeTests &&
+      isTestLikeTypeScriptFile(entryPath, { extraTestSuffixes })
+    ) {
       continue;
     }
     out.push(entryPath);
@@ -72,7 +87,10 @@ export async function collectTypeScriptFiles(targetPath, options = {}) {
   return out;
 }
 
-export async function collectTypeScriptFilesFromRoots(sourceRoots, options = {}) {
+export async function collectTypeScriptFilesFromRoots(
+  sourceRoots,
+  options = {},
+) {
   return (
     await Promise.all(
       sourceRoots.map(
@@ -109,11 +127,17 @@ export async function collectFileViolations(params) {
 }
 
 export function toLine(sourceFile, node) {
-  return sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
+  return (
+    sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1
+  );
 }
 
 export function getPropertyNameText(name) {
-  if (ts.isIdentifier(name) || ts.isStringLiteral(name) || ts.isNumericLiteral(name)) {
+  if (
+    ts.isIdentifier(name) ||
+    ts.isStringLiteral(name) ||
+    ts.isNumericLiteral(name)
+  ) {
     return name.text;
   }
   return null;

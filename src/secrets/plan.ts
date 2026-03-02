@@ -1,4 +1,7 @@
-import type { SecretProviderConfig, SecretRef } from "../config/types.secrets.js";
+import type {
+  SecretProviderConfig,
+  SecretRef,
+} from "../config/types.secrets.js";
 import { SecretProviderSchema } from "../config/zod-schema.core.js";
 
 export type SecretsPlanTargetType =
@@ -45,9 +48,15 @@ export type SecretsApplyPlan = {
 };
 
 const PROVIDER_ALIAS_PATTERN = /^[a-z][a-z0-9_-]{0,63}$/;
-const FORBIDDEN_PATH_SEGMENTS = new Set(["__proto__", "prototype", "constructor"]);
+const FORBIDDEN_PATH_SEGMENTS = new Set([
+  "__proto__",
+  "prototype",
+  "constructor",
+]);
 
-function isSecretsPlanTargetType(value: unknown): value is SecretsPlanTargetType {
+function isSecretsPlanTargetType(
+  value: unknown,
+): value is SecretsPlanTargetType {
   return (
     value === "models.providers.apiKey" ||
     value === "skills.entries.apiKey" ||
@@ -59,7 +68,9 @@ function isObjectRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-function isSecretProviderConfigShape(value: unknown): value is SecretProviderConfig {
+function isSecretProviderConfigShape(
+  value: unknown,
+): value is SecretProviderConfig {
   return SecretProviderSchema.safeParse(value).success;
 }
 
@@ -107,7 +118,10 @@ function hasMatchingPathShape(
     segments[1] === "googlechat" &&
     segments[2] === "serviceAccount"
   ) {
-    return candidate.accountId === undefined || candidate.accountId.trim().length === 0;
+    return (
+      candidate.accountId === undefined ||
+      candidate.accountId.trim().length === 0
+    );
   }
   if (
     segments.length === 5 &&
@@ -141,7 +155,9 @@ export function resolveValidatedTargetPathSegments(candidate: {
   }
   const segments =
     Array.isArray(candidate.pathSegments) && candidate.pathSegments.length > 0
-      ? candidate.pathSegments.map((segment) => String(segment).trim()).filter(Boolean)
+      ? candidate.pathSegments
+          .map((segment) => String(segment).trim())
+          .filter(Boolean)
       : parseDotPath(path);
   if (
     segments.length === 0 ||
@@ -166,7 +182,11 @@ export function isSecretsApplyPlan(value: unknown): value is SecretsApplyPlan {
     return false;
   }
   const typed = value as Partial<SecretsApplyPlan>;
-  if (typed.version !== 1 || typed.protocolVersion !== 1 || !Array.isArray(typed.targets)) {
+  if (
+    typed.version !== 1 ||
+    typed.protocolVersion !== 1 ||
+    !Array.isArray(typed.targets)
+  ) {
     return false;
   }
   for (const target of typed.targets) {
@@ -181,7 +201,8 @@ export function isSecretsApplyPlan(value: unknown): value is SecretsApplyPlan {
         candidate.type !== "channels.googlechat.serviceAccount") ||
       typeof candidate.path !== "string" ||
       !candidate.path.trim() ||
-      (candidate.pathSegments !== undefined && !Array.isArray(candidate.pathSegments)) ||
+      (candidate.pathSegments !== undefined &&
+        !Array.isArray(candidate.pathSegments)) ||
       !resolveValidatedTargetPathSegments({
         type: candidate.type,
         path: candidate.path,
@@ -191,7 +212,9 @@ export function isSecretsApplyPlan(value: unknown): value is SecretsApplyPlan {
       }) ||
       !ref ||
       typeof ref !== "object" ||
-      (ref.source !== "env" && ref.source !== "file" && ref.source !== "exec") ||
+      (ref.source !== "env" &&
+        ref.source !== "file" &&
+        ref.source !== "exec") ||
       typeof ref.provider !== "string" ||
       ref.provider.trim().length === 0 ||
       typeof ref.id !== "string" ||
@@ -204,7 +227,9 @@ export function isSecretsApplyPlan(value: unknown): value is SecretsApplyPlan {
     if (!isObjectRecord(typed.providerUpserts)) {
       return false;
     }
-    for (const [providerAlias, providerValue] of Object.entries(typed.providerUpserts)) {
+    for (const [providerAlias, providerValue] of Object.entries(
+      typed.providerUpserts,
+    )) {
       if (!PROVIDER_ALIAS_PATTERN.test(providerAlias)) {
         return false;
       }
@@ -218,7 +243,8 @@ export function isSecretsApplyPlan(value: unknown): value is SecretsApplyPlan {
       !Array.isArray(typed.providerDeletes) ||
       typed.providerDeletes.some(
         (providerAlias) =>
-          typeof providerAlias !== "string" || !PROVIDER_ALIAS_PATTERN.test(providerAlias),
+          typeof providerAlias !== "string" ||
+          !PROVIDER_ALIAS_PATTERN.test(providerAlias),
       )
     ) {
       return false;
@@ -232,7 +258,8 @@ export function normalizeSecretsPlanOptions(
 ): Required<NonNullable<SecretsApplyPlan["options"]>> {
   return {
     scrubEnv: options?.scrubEnv ?? true,
-    scrubAuthProfilesForProviderTargets: options?.scrubAuthProfilesForProviderTargets ?? true,
+    scrubAuthProfilesForProviderTargets:
+      options?.scrubAuthProfilesForProviderTargets ?? true,
     scrubLegacyAuthJson: options?.scrubLegacyAuthJson ?? true,
   };
 }

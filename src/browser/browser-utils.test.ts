@@ -34,7 +34,10 @@ describe("toBoolean", () => {
 
 describe("browser target id resolution", () => {
   it("resolves exact ids", () => {
-    const res = resolveTargetIdFromTabs("FULL", [{ targetId: "AAA" }, { targetId: "FULL" }]);
+    const res = resolveTargetIdFromTabs("FULL", [
+      { targetId: "AAA" },
+      { targetId: "FULL" },
+    ]);
     expect(res).toEqual({ ok: true, targetId: "FULL" });
   });
 
@@ -151,13 +154,18 @@ describe("cdp.helpers", () => {
   });
 
   it("appends paths under a base prefix", () => {
-    const url = appendCdpPath("https://example.com/chrome/?token=abc", "json/list");
+    const url = appendCdpPath(
+      "https://example.com/chrome/?token=abc",
+      "json/list",
+    );
     expect(url).toBe("https://example.com/chrome/json/list?token=abc");
   });
 
   it("adds basic auth headers when credentials are present", () => {
     const headers = getHeadersWithAuth("https://user:pass@example.com");
-    expect(headers.Authorization).toBe(`Basic ${Buffer.from("user:pass").toString("base64")}`);
+    expect(headers.Authorization).toBe(
+      `Basic ${Buffer.from("user:pass").toString("base64")}`,
+    );
   });
 
   it("keeps preexisting authorization headers", () => {
@@ -199,11 +207,15 @@ describe("fetchBrowserJson loopback auth (bridge auth registry)", () => {
     const getBridgeAuthForPort = vi.fn((candidate: number) =>
       candidate === port ? { token: "registry-token" } : undefined,
     );
-    const init = __test.withLoopbackBrowserAuth(`http://127.0.0.1:${port}/`, undefined, {
-      loadConfig: () => ({}),
-      resolveBrowserControlAuth: () => ({}),
-      getBridgeAuthForPort,
-    });
+    const init = __test.withLoopbackBrowserAuth(
+      `http://127.0.0.1:${port}/`,
+      undefined,
+      {
+        loadConfig: () => ({}),
+        resolveBrowserControlAuth: () => ({}),
+        getBridgeAuthForPort,
+      },
+    );
     const headers = new Headers(init.headers ?? {});
     expect(headers.get("authorization")).toBe("Bearer registry-token");
     expect(getBridgeAuthForPort).toHaveBeenCalledWith(port);

@@ -9,12 +9,19 @@ export function resolveChannelDefaultAccountId<ResolvedAccount>(params: {
   cfg: OpenClawConfig;
   accountIds?: string[];
 }): string {
-  const accountIds = params.accountIds ?? params.plugin.config.listAccountIds(params.cfg);
-  return params.plugin.config.defaultAccountId?.(params.cfg) ?? accountIds[0] ?? DEFAULT_ACCOUNT_ID;
+  const accountIds =
+    params.accountIds ?? params.plugin.config.listAccountIds(params.cfg);
+  return (
+    params.plugin.config.defaultAccountId?.(params.cfg) ??
+    accountIds[0] ??
+    DEFAULT_ACCOUNT_ID
+  );
 }
 
 export function formatPairingApproveHint(channelId: string): string {
   const listCmd = formatCliCommand(`openclaw pairing list ${channelId}`);
-  const approveCmd = formatCliCommand(`openclaw pairing approve ${channelId} <code>`);
+  const approveCmd = formatCliCommand(
+    `openclaw pairing approve ${channelId} <code>`,
+  );
   return `Approve via: ${listCmd} / ${approveCmd}`;
 }

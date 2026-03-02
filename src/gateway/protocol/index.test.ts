@@ -27,7 +27,9 @@ describe("formatValidationErrors", () => {
       params: { additionalProperty: "token" },
     });
 
-    expect(formatValidationErrors([err])).toBe("at root: unexpected property 'token'");
+    expect(formatValidationErrors([err])).toBe(
+      "at root: unexpected property 'token'",
+    );
   });
 
   it("formats additionalProperties with instancePath", () => {
@@ -37,7 +39,9 @@ describe("formatValidationErrors", () => {
       params: { additionalProperty: "token" },
     });
 
-    expect(formatValidationErrors([err])).toBe("at /auth: unexpected property 'token'");
+    expect(formatValidationErrors([err])).toBe(
+      "at /auth: unexpected property 'token'",
+    );
   });
 
   it("formats message with path for other errors", () => {
@@ -47,7 +51,9 @@ describe("formatValidationErrors", () => {
       message: "must have required property 'token'",
     });
 
-    expect(formatValidationErrors([err])).toBe("at /auth: must have required property 'token'");
+    expect(formatValidationErrors([err])).toBe(
+      "at /auth: must have required property 'token'",
+    );
   });
 
   it("de-dupes repeated entries", () => {

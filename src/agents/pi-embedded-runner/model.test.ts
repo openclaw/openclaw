@@ -26,7 +26,12 @@ function buildForwardCompatTemplate(params: {
   api: "anthropic-messages" | "google-gemini-cli" | "openai-completions";
   baseUrl: string;
   input?: readonly ["text"] | readonly ["text", "image"];
-  cost?: { input: number; output: number; cacheRead: number; cacheWrite: number };
+  cost?: {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+  };
   contextWindow?: number;
   maxTokens?: number;
 }) {
@@ -38,7 +43,12 @@ function buildForwardCompatTemplate(params: {
     baseUrl: params.baseUrl,
     reasoning: true,
     input: params.input ?? (["text", "image"] as const),
-    cost: params.cost ?? { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+    cost: params.cost ?? {
+      input: 5,
+      output: 25,
+      cacheRead: 0.5,
+      cacheWrite: 6.25,
+    },
     contextWindow: params.contextWindow ?? 200000,
     maxTokens: params.maxTokens ?? 64000,
   };
@@ -50,7 +60,12 @@ function expectResolvedForwardCompatFallback(params: {
   expectedModel: Record<string, unknown>;
   cfg?: OpenClawConfig;
 }) {
-  const result = resolveModel(params.provider, params.id, "/tmp/agent", params.cfg);
+  const result = resolveModel(
+    params.provider,
+    params.id,
+    "/tmp/agent",
+    params.cfg,
+  );
   expect(result.error).toBeUndefined();
   expect(result.model).toMatchObject(params.expectedModel);
 }
@@ -64,7 +79,10 @@ function expectUnknownModelError(provider: string, id: string) {
 describe("buildInlineProviderModels", () => {
   it("attaches provider ids to inline models", () => {
     const providers: Parameters<typeof buildInlineProviderModels>[0] = {
-      " alpha ": { baseUrl: "http://alpha.local", models: [makeModel("alpha-model")] },
+      " alpha ": {
+        baseUrl: "http://alpha.local",
+        models: [makeModel("alpha-model")],
+      },
       beta: { baseUrl: "http://beta.local", models: [makeModel("beta-model")] },
     };
 
@@ -120,7 +138,9 @@ describe("buildInlineProviderModels", () => {
       custom: {
         baseUrl: "http://localhost:8000",
         api: "openai-responses",
-        models: [{ ...makeModel("custom-model"), api: "anthropic-messages" as const }],
+        models: [
+          { ...makeModel("custom-model"), api: "anthropic-messages" as const },
+        ],
       },
     };
 
@@ -232,7 +252,9 @@ describe("resolveModel", () => {
     const result = resolveModel("openai-codex", "gpt-5.3-codex", "/tmp/agent");
 
     expect(result.error).toBeUndefined();
-    expect(result.model).toMatchObject(buildOpenAICodexForwardCompatExpectation("gpt-5.3-codex"));
+    expect(result.model).toMatchObject(
+      buildOpenAICodexForwardCompatExpectation("gpt-5.3-codex"),
+    );
   });
 
   it("builds an anthropic forward-compat fallback for claude-opus-4-6", () => {
@@ -374,7 +396,11 @@ describe("resolveModel", () => {
   });
 
   it("does not add auth hint for non-local providers", () => {
-    const result = resolveModel("google-antigravity", "some-model", "/tmp/agent");
+    const result = resolveModel(
+      "google-antigravity",
+      "some-model",
+      "/tmp/agent",
+    );
 
     expect(result.model).toBeUndefined();
     expect(result.error).toBe("Unknown model: google-antigravity/some-model");

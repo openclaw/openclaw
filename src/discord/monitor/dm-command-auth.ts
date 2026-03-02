@@ -4,7 +4,10 @@ import {
   resolveDmGroupAccessWithLists,
   type DmGroupAccessDecision,
 } from "../../security/dm-policy-shared.js";
-import { normalizeDiscordAllowList, resolveDiscordAllowListMatch } from "./allow-list.js";
+import {
+  normalizeDiscordAllowList,
+  resolveDiscordAllowListMatch,
+} from "./allow-list.js";
 
 const DISCORD_ALLOW_LIST_PREFIXES = ["discord:", "user:", "pk:"];
 
@@ -14,7 +17,9 @@ export type DiscordDmCommandAccess = {
   decision: DmGroupAccessDecision;
   reason: string;
   commandAuthorized: boolean;
-  allowMatch: ReturnType<typeof resolveDiscordAllowListMatch> | { allowed: false };
+  allowMatch:
+    | ReturnType<typeof resolveDiscordAllowListMatch>
+    | { allowed: false };
 };
 
 function resolveSenderAllowMatch(params: {
@@ -22,7 +27,10 @@ function resolveSenderAllowMatch(params: {
   sender: { id: string; name?: string; tag?: string };
   allowNameMatching: boolean;
 }) {
-  const allowList = normalizeDiscordAllowList(params.allowEntries, DISCORD_ALLOW_LIST_PREFIXES);
+  const allowList = normalizeDiscordAllowList(
+    params.allowEntries,
+    DISCORD_ALLOW_LIST_PREFIXES,
+  );
   return allowList
     ? resolveDiscordAllowListMatch({
         allowList,

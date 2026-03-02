@@ -12,7 +12,9 @@ import {
 
 describe("web monitor inbox", () => {
   installWebMonitorInboxUnitTestHooks();
-  type InboxOnMessage = NonNullable<Parameters<typeof monitorWebInbox>[0]["onMessage"]>;
+  type InboxOnMessage = NonNullable<
+    Parameters<typeof monitorWebInbox>[0]["onMessage"]
+  >;
 
   async function tick() {
     await new Promise((resolve) => setImmediate(resolve));
@@ -129,7 +131,10 @@ describe("web monitor inbox", () => {
       },
     ]);
     expect(sock.sendPresenceUpdate).toHaveBeenCalledWith("available");
-    expect(sock.sendPresenceUpdate).toHaveBeenCalledWith("composing", "999@s.whatsapp.net");
+    expect(sock.sendPresenceUpdate).toHaveBeenCalledWith(
+      "composing",
+      "999@s.whatsapp.net",
+    );
     expect(sock.sendMessage).toHaveBeenCalledWith("999@s.whatsapp.net", {
       text: "pong",
     });
@@ -166,8 +171,13 @@ describe("web monitor inbox", () => {
     });
 
     const { listener, sock } = await startInboxMonitor(onMessage);
-    const getPNForLID = vi.spyOn(sock.signalRepository.lidMapping, "getPNForLID");
-    sock.signalRepository.lidMapping.getPNForLID.mockResolvedValueOnce("999:0@s.whatsapp.net");
+    const getPNForLID = vi.spyOn(
+      sock.signalRepository.lidMapping,
+      "getPNForLID",
+    );
+    sock.signalRepository.lidMapping.getPNForLID.mockResolvedValueOnce(
+      "999:0@s.whatsapp.net",
+    );
     const upsert = buildMessageUpsert({
       id: "abc",
       remoteJid: "999@lid",
@@ -197,7 +207,10 @@ describe("web monitor inbox", () => {
     );
 
     const { listener, sock } = await startInboxMonitor(onMessage);
-    const getPNForLID = vi.spyOn(sock.signalRepository.lidMapping, "getPNForLID");
+    const getPNForLID = vi.spyOn(
+      sock.signalRepository.lidMapping,
+      "getPNForLID",
+    );
     const upsert = buildMessageUpsert({
       id: "abc",
       remoteJid: "555@lid",
@@ -223,8 +236,13 @@ describe("web monitor inbox", () => {
     });
 
     const { listener, sock } = await startInboxMonitor(onMessage);
-    const getPNForLID = vi.spyOn(sock.signalRepository.lidMapping, "getPNForLID");
-    sock.signalRepository.lidMapping.getPNForLID.mockResolvedValueOnce("444:0@s.whatsapp.net");
+    const getPNForLID = vi.spyOn(
+      sock.signalRepository.lidMapping,
+      "getPNForLID",
+    );
+    sock.signalRepository.lidMapping.getPNForLID.mockResolvedValueOnce(
+      "444:0@s.whatsapp.net",
+    );
     const upsert = buildMessageUpsert({
       id: "abc",
       remoteJid: "123@g.us",

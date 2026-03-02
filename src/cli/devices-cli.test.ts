@@ -10,7 +10,9 @@ const buildGatewayConnectionDetails = vi.fn(() => ({
 const listDevicePairing = vi.fn();
 const approveDevicePairing = vi.fn();
 const summarizeDeviceTokens = vi.fn();
-const withProgress = vi.fn(async (_opts: unknown, fn: () => Promise<unknown>) => await fn());
+const withProgress = vi.fn(
+  async (_opts: unknown, fn: () => Promise<unknown>) => await fn(),
+);
 const runtime = {
   log: vi.fn(),
   error: vi.fn(),
@@ -86,27 +88,30 @@ describe("devices cli approve", () => {
       ],
       expectedRequestId: "req-3",
     },
-  ])("uses latest pending request when $name", async ({ args, pending, expectedRequestId }) => {
-    callGateway
-      .mockResolvedValueOnce({
-        pending,
-      })
-      .mockResolvedValueOnce({ device: { deviceId: "device-2" } });
+  ])(
+    "uses latest pending request when $name",
+    async ({ args, pending, expectedRequestId }) => {
+      callGateway
+        .mockResolvedValueOnce({
+          pending,
+        })
+        .mockResolvedValueOnce({ device: { deviceId: "device-2" } });
 
-    await runDevicesApprove(args);
+      await runDevicesApprove(args);
 
-    expect(callGateway).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({ method: "device.pair.list" }),
-    );
-    expect(callGateway).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        method: "device.pair.approve",
-        params: { requestId: expectedRequestId },
-      }),
-    );
-  });
+      expect(callGateway).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({ method: "device.pair.list" }),
+      );
+      expect(callGateway).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          method: "device.pair.approve",
+          params: { requestId: expectedRequestId },
+        }),
+      );
+    },
+  );
 
   it("prints an error and exits when no pending requests are available", async () => {
     callGateway.mockResolvedValueOnce({ pending: [] });
@@ -117,7 +122,9 @@ describe("devices cli approve", () => {
     expect(callGateway).toHaveBeenCalledWith(
       expect.objectContaining({ method: "device.pair.list" }),
     );
-    expect(runtime.error).toHaveBeenCalledWith("No pending device pairing requests to approve");
+    expect(runtime.error).toHaveBeenCalledWith(
+      "No pending device pairing requests to approve",
+    );
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(callGateway).not.toHaveBeenCalledWith(
       expect.objectContaining({ method: "device.pair.approve" }),
@@ -146,7 +153,9 @@ describe("devices cli clear", () => {
     await runDevicesCommand(["clear"]);
 
     expect(callGateway).not.toHaveBeenCalled();
-    expect(runtime.error).toHaveBeenCalledWith("Refusing to clear pairing table without --yes");
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Refusing to clear pairing table without --yes",
+    );
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 
@@ -168,15 +177,24 @@ describe("devices cli clear", () => {
     );
     expect(callGateway).toHaveBeenNthCalledWith(
       2,
-      expect.objectContaining({ method: "device.pair.remove", params: { deviceId: "device-1" } }),
+      expect.objectContaining({
+        method: "device.pair.remove",
+        params: { deviceId: "device-1" },
+      }),
     );
     expect(callGateway).toHaveBeenNthCalledWith(
       3,
-      expect.objectContaining({ method: "device.pair.remove", params: { deviceId: "device-2" } }),
+      expect.objectContaining({
+        method: "device.pair.remove",
+        params: { deviceId: "device-2" },
+      }),
     );
     expect(callGateway).toHaveBeenNthCalledWith(
       4,
-      expect.objectContaining({ method: "device.pair.reject", params: { requestId: "req-1" } }),
+      expect.objectContaining({
+        method: "device.pair.reject",
+        params: { requestId: "req-1" },
+      }),
     );
   });
 });
@@ -219,7 +237,9 @@ describe("devices cli tokens", () => {
   ])("$label", async ({ argv, expectedCall }) => {
     callGateway.mockResolvedValueOnce({ ok: true });
     await runDevicesCommand(argv);
-    expect(callGateway).toHaveBeenCalledWith(expect.objectContaining(expectedCall));
+    expect(callGateway).toHaveBeenCalledWith(
+      expect.objectContaining(expectedCall),
+    );
   });
 
   it("rejects blank device or role values", async () => {
@@ -235,9 +255,13 @@ describe("devices cli local fallback", () => {
   const fallbackNotice = "Direct scope access failed; using local fallback.";
 
   it("falls back to local pairing list when gateway returns pairing required on loopback", async () => {
-    callGateway.mockRejectedValueOnce(new Error("gateway closed (1008): pairing required"));
+    callGateway.mockRejectedValueOnce(
+      new Error("gateway closed (1008): pairing required"),
+    );
     listDevicePairing.mockResolvedValueOnce({
-      pending: [{ requestId: "req-1", deviceId: "device-1", publicKey: "pk", ts: 1 }],
+      pending: [
+        { requestId: "req-1", deviceId: "device-1", publicKey: "pk", ts: 1 },
+      ],
       paired: [],
     });
     summarizeDeviceTokens.mockReturnValue(undefined);
@@ -248,15 +272,28 @@ describe("devices cli local fallback", () => {
       expect.objectContaining({ method: "device.pair.list" }),
     );
     expect(listDevicePairing).toHaveBeenCalledTimes(1);
-    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining(fallbackNotice));
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining(fallbackNotice),
+    );
   });
 
   it("falls back to local approve when gateway returns pairing required on loopback", async () => {
     callGateway
-      .mockRejectedValueOnce(new Error("gateway closed (1008): pairing required"))
-      .mockRejectedValueOnce(new Error("gateway closed (1008): pairing required"));
+      .mockRejectedValueOnce(
+        new Error("gateway closed (1008): pairing required"),
+      )
+      .mockRejectedValueOnce(
+        new Error("gateway closed (1008): pairing required"),
+      );
     listDevicePairing.mockResolvedValueOnce({
-      pending: [{ requestId: "req-latest", deviceId: "device-1", publicKey: "pk", ts: 2 }],
+      pending: [
+        {
+          requestId: "req-latest",
+          deviceId: "device-1",
+          publicKey: "pk",
+          ts: 2,
+        },
+      ],
       paired: [],
     });
     approveDevicePairing.mockResolvedValueOnce({
@@ -273,12 +310,18 @@ describe("devices cli local fallback", () => {
     await runDevicesApprove(["--latest"]);
 
     expect(approveDevicePairing).toHaveBeenCalledWith("req-latest");
-    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining(fallbackNotice));
-    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("Approved"));
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining(fallbackNotice),
+    );
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining("Approved"),
+    );
   });
 
   it("does not use local fallback when an explicit --url is provided", async () => {
-    callGateway.mockRejectedValueOnce(new Error("gateway closed (1008): pairing required"));
+    callGateway.mockRejectedValueOnce(
+      new Error("gateway closed (1008): pairing required"),
+    );
 
     await expect(
       runDevicesCommand(["list", "--json", "--url", "ws://127.0.0.1:18789"]),

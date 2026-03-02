@@ -16,7 +16,13 @@ export type MemoryConfig = {
   captureMaxChars?: number;
 };
 
-export const MEMORY_CATEGORIES = ["preference", "fact", "decision", "entity", "other"] as const;
+export const MEMORY_CATEGORIES = [
+  "preference",
+  "fact",
+  "decision",
+  "entity",
+  "other",
+] as const;
 export type MemoryCategory = (typeof MEMORY_CATEGORIES)[number];
 
 const DEFAULT_MODEL = "text-embedding-3-small";
@@ -55,7 +61,11 @@ const EMBEDDING_DIMENSIONS: Record<string, number> = {
   "text-embedding-3-large": 3072,
 };
 
-function assertAllowedKeys(value: Record<string, unknown>, allowed: string[], label: string) {
+function assertAllowedKeys(
+  value: Record<string, unknown>,
+  allowed: string[],
+  label: string,
+) {
   const unknown = Object.keys(value).filter((key) => !allowed.includes(key));
   if (unknown.length === 0) {
     return;
@@ -82,7 +92,8 @@ function resolveEnvVars(value: string): string {
 }
 
 function resolveEmbeddingModel(embedding: Record<string, unknown>): string {
-  const model = typeof embedding.model === "string" ? embedding.model : DEFAULT_MODEL;
+  const model =
+    typeof embedding.model === "string" ? embedding.model : DEFAULT_MODEL;
   if (typeof embedding.dimensions !== "number") {
     vectorDimsForModel(model);
   }
@@ -105,12 +116,18 @@ export const memoryConfigSchema = {
     if (!embedding || typeof embedding.apiKey !== "string") {
       throw new Error("embedding.apiKey is required");
     }
-    assertAllowedKeys(embedding, ["apiKey", "model", "baseUrl", "dimensions"], "embedding config");
+    assertAllowedKeys(
+      embedding,
+      ["apiKey", "model", "baseUrl", "dimensions"],
+      "embedding config",
+    );
 
     const model = resolveEmbeddingModel(embedding);
 
     const captureMaxChars =
-      typeof cfg.captureMaxChars === "number" ? Math.floor(cfg.captureMaxChars) : undefined;
+      typeof cfg.captureMaxChars === "number"
+        ? Math.floor(cfg.captureMaxChars)
+        : undefined;
     if (
       typeof captureMaxChars === "number" &&
       (captureMaxChars < 100 || captureMaxChars > 10_000)
@@ -124,8 +141,13 @@ export const memoryConfigSchema = {
         model,
         apiKey: resolveEnvVars(embedding.apiKey),
         baseUrl:
-          typeof embedding.baseUrl === "string" ? resolveEnvVars(embedding.baseUrl) : undefined,
-        dimensions: typeof embedding.dimensions === "number" ? embedding.dimensions : undefined,
+          typeof embedding.baseUrl === "string"
+            ? resolveEnvVars(embedding.baseUrl)
+            : undefined,
+        dimensions:
+          typeof embedding.dimensions === "number"
+            ? embedding.dimensions
+            : undefined,
       },
       dbPath: typeof cfg.dbPath === "string" ? cfg.dbPath : DEFAULT_DB_PATH,
       autoCapture: cfg.autoCapture === true,

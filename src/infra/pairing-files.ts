@@ -1,9 +1,16 @@
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 
-export { createAsyncLock, readJsonFile, writeJsonAtomic } from "./json-files.js";
+export {
+  createAsyncLock,
+  readJsonFile,
+  writeJsonAtomic,
+} from "./json-files.js";
 
-export function resolvePairingPaths(baseDir: string | undefined, subdir: string) {
+export function resolvePairingPaths(
+  baseDir: string | undefined,
+  subdir: string,
+) {
   const root = baseDir ?? resolveStateDir();
   const dir = path.join(root, subdir);
   return {
@@ -31,7 +38,9 @@ export type PendingPairingRequestResult<TPending> = {
   created: boolean;
 };
 
-export async function upsertPendingPairingRequest<TPending extends { requestId: string }>(params: {
+export async function upsertPendingPairingRequest<
+  TPending extends { requestId: string },
+>(params: {
   pendingById: Record<string, TPending>;
   isExisting: (pending: TPending) => boolean;
   createRequest: (isRepair: boolean) => TPending;

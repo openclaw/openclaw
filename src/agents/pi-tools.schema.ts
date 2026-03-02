@@ -38,7 +38,9 @@ function mergePropertySchemas(existing: unknown, incoming: unknown): unknown {
   const existingEnum = extractEnumValues(existing);
   const incomingEnum = extractEnumValues(incoming);
   if (existingEnum || incomingEnum) {
-    const values = Array.from(new Set([...(existingEnum ?? []), ...(incomingEnum ?? [])]));
+    const values = Array.from(
+      new Set([...(existingEnum ?? []), ...(incomingEnum ?? [])]),
+    );
     const merged: Record<string, unknown> = {};
     for (const source of [existing, incoming]) {
       if (!source || typeof source !== "object") {
@@ -85,14 +87,23 @@ export function normalizeToolParameters(
   const isGeminiProvider =
     options?.modelProvider?.toLowerCase().includes("google") ||
     options?.modelProvider?.toLowerCase().includes("gemini");
-  const isAnthropicProvider = options?.modelProvider?.toLowerCase().includes("anthropic");
+  const isAnthropicProvider = options?.modelProvider
+    ?.toLowerCase()
+    .includes("anthropic");
 
   // If schema already has type + properties (no top-level anyOf to merge),
   // clean it for Gemini compatibility (but only if using Gemini, not Anthropic)
-  if ("type" in schema && "properties" in schema && !Array.isArray(schema.anyOf)) {
+  if (
+    "type" in schema &&
+    "properties" in schema &&
+    !Array.isArray(schema.anyOf)
+  ) {
     return {
       ...tool,
-      parameters: isGeminiProvider && !isAnthropicProvider ? cleanSchemaForGemini(schema) : schema,
+      parameters:
+        isGeminiProvider && !isAnthropicProvider
+          ? cleanSchemaForGemini(schema)
+          : schema,
     };
   }
 
@@ -136,12 +147,17 @@ export function normalizeToolParameters(
       continue;
     }
     objectVariants += 1;
-    for (const [key, value] of Object.entries(props as Record<string, unknown>)) {
+    for (const [key, value] of Object.entries(
+      props as Record<string, unknown>,
+    )) {
       if (!(key in mergedProperties)) {
         mergedProperties[key] = value;
         continue;
       }
-      mergedProperties[key] = mergePropertySchemas(mergedProperties[key], value);
+      mergedProperties[key] = mergePropertySchemas(
+        mergedProperties[key],
+        value,
+      );
     }
     const required = Array.isArray((entry as { required?: unknown }).required)
       ? (entry as { required: unknown[] }).required
@@ -169,12 +185,21 @@ export function normalizeToolParameters(
   const nextSchema: Record<string, unknown> = { ...schema };
   const flattenedSchema = {
     type: "object",
-    ...(typeof nextSchema.title === "string" ? { title: nextSchema.title } : {}),
-    ...(typeof nextSchema.description === "string" ? { description: nextSchema.description } : {}),
+    ...(typeof nextSchema.title === "string"
+      ? { title: nextSchema.title }
+      : {}),
+    ...(typeof nextSchema.description === "string"
+      ? { description: nextSchema.description }
+      : {}),
     properties:
-      Object.keys(mergedProperties).length > 0 ? mergedProperties : (schema.properties ?? {}),
-    ...(mergedRequired && mergedRequired.length > 0 ? { required: mergedRequired } : {}),
-    additionalProperties: "additionalProperties" in schema ? schema.additionalProperties : true,
+      Object.keys(mergedProperties).length > 0
+        ? mergedProperties
+        : (schema.properties ?? {}),
+    ...(mergedRequired && mergedRequired.length > 0
+      ? { required: mergedRequired }
+      : {}),
+    additionalProperties:
+      "additionalProperties" in schema ? schema.additionalProperties : true,
   };
 
   return {
@@ -195,6 +220,8 @@ export function normalizeToolParameters(
  * @deprecated Use normalizeToolParameters with modelProvider instead.
  * This function should only be used for Gemini providers.
  */
-export function cleanToolSchemaForGemini(schema: Record<string, unknown>): unknown {
+export function cleanToolSchemaForGemini(
+  schema: Record<string, unknown>,
+): unknown {
   return cleanSchemaForGemini(schema);
 }

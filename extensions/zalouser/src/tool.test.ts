@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { sendImageZalouser, sendLinkZalouser, sendMessageZalouser } from "./send.js";
+import {
+  sendImageZalouser,
+  sendLinkZalouser,
+  sendMessageZalouser,
+} from "./send.js";
 import { executeZalouserTool } from "./tool.js";
 import {
   checkZaloAuthenticated,
@@ -29,7 +33,9 @@ const mockGetUserInfo = vi.mocked(getZaloUserInfo);
 const mockListFriends = vi.mocked(listZaloFriendsMatching);
 const mockListGroups = vi.mocked(listZaloGroupsMatching);
 
-function extractDetails(result: Awaited<ReturnType<typeof executeZalouserTool>>): unknown {
+function extractDetails(
+  result: Awaited<ReturnType<typeof executeZalouserTool>>,
+): unknown {
   const text = result.content[0]?.text ?? "{}";
   return JSON.parse(text) as unknown;
 }
@@ -87,12 +93,19 @@ describe("executeZalouserTool", () => {
       message: "caption",
       isGroup: true,
     });
-    expect(mockSendImage).toHaveBeenCalledWith("g-1", "https://example.com/image.jpg", {
-      profile: undefined,
-      caption: "caption",
-      isGroup: true,
+    expect(mockSendImage).toHaveBeenCalledWith(
+      "g-1",
+      "https://example.com/image.jpg",
+      {
+        profile: undefined,
+        caption: "caption",
+        isGroup: true,
+      },
+    );
+    expect(extractDetails(imageResult)).toEqual({
+      success: true,
+      messageId: "img-1",
     });
-    expect(extractDetails(imageResult)).toEqual({ success: true, messageId: "img-1" });
 
     mockSendLink.mockResolvedValueOnce({ ok: true, messageId: "lnk-1" });
     const linkResult = await executeZalouserTool("tool-1", {
@@ -106,11 +119,16 @@ describe("executeZalouserTool", () => {
       caption: "read this",
       isGroup: undefined,
     });
-    expect(extractDetails(linkResult)).toEqual({ success: true, messageId: "lnk-1" });
+    expect(extractDetails(linkResult)).toEqual({
+      success: true,
+      messageId: "lnk-1",
+    });
   });
 
   it("returns friends/groups lists", async () => {
-    mockListFriends.mockResolvedValueOnce([{ userId: "1", displayName: "Alice" }]);
+    mockListFriends.mockResolvedValueOnce([
+      { userId: "1", displayName: "Alice" },
+    ]);
     mockListGroups.mockResolvedValueOnce([{ groupId: "2", name: "Work" }]);
 
     const friends = await executeZalouserTool("tool-1", {
@@ -119,7 +137,9 @@ describe("executeZalouserTool", () => {
       query: "ali",
     });
     expect(mockListFriends).toHaveBeenCalledWith("work", "ali");
-    expect(extractDetails(friends)).toEqual([{ userId: "1", displayName: "Alice" }]);
+    expect(extractDetails(friends)).toEqual([
+      { userId: "1", displayName: "Alice" },
+    ]);
 
     const groups = await executeZalouserTool("tool-1", {
       action: "groups",
@@ -134,11 +154,17 @@ describe("executeZalouserTool", () => {
     mockGetUserInfo.mockResolvedValueOnce({ userId: "7", displayName: "Me" });
     mockCheckAuth.mockResolvedValueOnce(true);
 
-    const me = await executeZalouserTool("tool-1", { action: "me", profile: "work" });
+    const me = await executeZalouserTool("tool-1", {
+      action: "me",
+      profile: "work",
+    });
     expect(mockGetUserInfo).toHaveBeenCalledWith("work");
     expect(extractDetails(me)).toEqual({ userId: "7", displayName: "Me" });
 
-    const status = await executeZalouserTool("tool-1", { action: "status", profile: "work" });
+    const status = await executeZalouserTool("tool-1", {
+      action: "status",
+      profile: "work",
+    });
     expect(mockCheckAuth).toHaveBeenCalledWith("work");
     expect(extractDetails(status)).toEqual({
       authenticated: true,

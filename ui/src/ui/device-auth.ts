@@ -64,7 +64,10 @@ export function storeDeviceAuthToken(params: {
   });
 }
 
-export function clearDeviceAuthToken(params: { deviceId: string; role: string }) {
+export function clearDeviceAuthToken(params: {
+  deviceId: string;
+  role: string;
+}) {
   clearDeviceAuthTokenFromStore({
     adapter: { readStore, writeStore },
     deviceId: params.deviceId,

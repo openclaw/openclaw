@@ -21,35 +21,38 @@ describe("rewriteUpdateFlagArgv", () => {
   });
 
   it("preserves global flags that appear before --update", () => {
-    expect(rewriteUpdateFlagArgv(["node", "entry.js", "--profile", "p", "--update"])).toEqual([
-      "node",
-      "entry.js",
-      "--profile",
-      "p",
-      "update",
-    ]);
+    expect(
+      rewriteUpdateFlagArgv(["node", "entry.js", "--profile", "p", "--update"]),
+    ).toEqual(["node", "entry.js", "--profile", "p", "update"]);
   });
 
   it("keeps update options after the rewritten command", () => {
-    expect(rewriteUpdateFlagArgv(["node", "entry.js", "--update", "--json"])).toEqual([
-      "node",
-      "entry.js",
-      "update",
-      "--json",
-    ]);
+    expect(
+      rewriteUpdateFlagArgv(["node", "entry.js", "--update", "--json"]),
+    ).toEqual(["node", "entry.js", "update", "--json"]);
   });
 });
 
 describe("shouldRegisterPrimarySubcommand", () => {
   it("skips eager primary registration for help/version invocations", () => {
-    expect(shouldRegisterPrimarySubcommand(["node", "openclaw", "status", "--help"])).toBe(false);
-    expect(shouldRegisterPrimarySubcommand(["node", "openclaw", "-V"])).toBe(false);
-    expect(shouldRegisterPrimarySubcommand(["node", "openclaw", "-v"])).toBe(false);
+    expect(
+      shouldRegisterPrimarySubcommand(["node", "openclaw", "status", "--help"]),
+    ).toBe(false);
+    expect(shouldRegisterPrimarySubcommand(["node", "openclaw", "-V"])).toBe(
+      false,
+    );
+    expect(shouldRegisterPrimarySubcommand(["node", "openclaw", "-v"])).toBe(
+      false,
+    );
   });
 
   it("keeps eager primary registration for regular command runs", () => {
-    expect(shouldRegisterPrimarySubcommand(["node", "openclaw", "status"])).toBe(true);
-    expect(shouldRegisterPrimarySubcommand(["node", "openclaw", "acp", "-v"])).toBe(true);
+    expect(
+      shouldRegisterPrimarySubcommand(["node", "openclaw", "status"]),
+    ).toBe(true);
+    expect(
+      shouldRegisterPrimarySubcommand(["node", "openclaw", "acp", "-v"]),
+    ).toBe(true);
   });
 });
 
@@ -114,14 +117,24 @@ describe("shouldEnsureCliPath", () => {
 
   it("skips path bootstrap for read-only fast paths", () => {
     expect(shouldEnsureCliPath(["node", "openclaw", "status"])).toBe(false);
-    expect(shouldEnsureCliPath(["node", "openclaw", "sessions", "--json"])).toBe(false);
-    expect(shouldEnsureCliPath(["node", "openclaw", "config", "get", "update"])).toBe(false);
-    expect(shouldEnsureCliPath(["node", "openclaw", "models", "status", "--json"])).toBe(false);
+    expect(
+      shouldEnsureCliPath(["node", "openclaw", "sessions", "--json"]),
+    ).toBe(false);
+    expect(
+      shouldEnsureCliPath(["node", "openclaw", "config", "get", "update"]),
+    ).toBe(false);
+    expect(
+      shouldEnsureCliPath(["node", "openclaw", "models", "status", "--json"]),
+    ).toBe(false);
   });
 
   it("keeps path bootstrap for mutating or unknown commands", () => {
-    expect(shouldEnsureCliPath(["node", "openclaw", "message", "send"])).toBe(true);
-    expect(shouldEnsureCliPath(["node", "openclaw", "voicecall", "status"])).toBe(true);
+    expect(shouldEnsureCliPath(["node", "openclaw", "message", "send"])).toBe(
+      true,
+    );
+    expect(
+      shouldEnsureCliPath(["node", "openclaw", "voicecall", "status"]),
+    ).toBe(true);
     expect(shouldEnsureCliPath(["node", "openclaw", "acp", "-v"])).toBe(true);
   });
 });

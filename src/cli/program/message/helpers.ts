@@ -12,10 +12,15 @@ export type MessageCliHelpers = {
   withMessageBase: (command: Command) => Command;
   withMessageTarget: (command: Command) => Command;
   withRequiredMessageTarget: (command: Command) => Command;
-  runMessageAction: (action: string, opts: Record<string, unknown>) => Promise<void>;
+  runMessageAction: (
+    action: string,
+    opts: Record<string, unknown>,
+  ) => Promise<void>;
 };
 
-function normalizeMessageOptions(opts: Record<string, unknown>): Record<string, unknown> {
+function normalizeMessageOptions(
+  opts: Record<string, unknown>,
+): Record<string, unknown> {
   const { account, ...rest } = opts;
   return {
     ...rest,
@@ -27,7 +32,8 @@ async function runPluginStopHooks(): Promise<void> {
   await runGlobalGatewayStopSafely({
     event: { reason: "cli message action complete" },
     ctx: {},
-    onError: (err) => defaultRuntime.error(danger(`gateway_stop hook failed: ${String(err)}`)),
+    onError: (err) =>
+      defaultRuntime.error(danger(`gateway_stop hook failed: ${String(err)}`)),
   });
 }
 
@@ -48,7 +54,10 @@ export function createMessageCliHelpers(
   const withRequiredMessageTarget = (command: Command) =>
     command.requiredOption("-t, --target <dest>", CHANNEL_TARGET_DESCRIPTION);
 
-  const runMessageAction = async (action: string, opts: Record<string, unknown>) => {
+  const runMessageAction = async (
+    action: string,
+    opts: Record<string, unknown>,
+  ) => {
     setVerbose(Boolean(opts.verbose));
     ensurePluginRegistryLoaded();
     const deps = createDefaultDeps();

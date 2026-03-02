@@ -14,7 +14,11 @@ export function resolveHeartbeatReplyPayload(
     if (!payload) {
       continue;
     }
-    if (payload.text || payload.mediaUrl || (payload.mediaUrls && payload.mediaUrls.length > 0)) {
+    if (
+      payload.text ||
+      payload.mediaUrl ||
+      (payload.mediaUrls && payload.mediaUrls.length > 0)
+    ) {
       return payload;
     }
   }

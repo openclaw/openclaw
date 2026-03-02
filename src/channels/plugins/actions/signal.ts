@@ -1,8 +1,21 @@
-import { createActionGate, jsonResult, readStringParam } from "../../../agents/tools/common.js";
-import { listEnabledSignalAccounts, resolveSignalAccount } from "../../../signal/accounts.js";
+import {
+  createActionGate,
+  jsonResult,
+  readStringParam,
+} from "../../../agents/tools/common.js";
+import {
+  listEnabledSignalAccounts,
+  resolveSignalAccount,
+} from "../../../signal/accounts.js";
 import { resolveSignalReactionLevel } from "../../../signal/reaction-level.js";
-import { sendReactionSignal, removeReactionSignal } from "../../../signal/send-reactions.js";
-import type { ChannelMessageActionAdapter, ChannelMessageActionName } from "../types.js";
+import {
+  sendReactionSignal,
+  removeReactionSignal,
+} from "../../../signal/send-reactions.js";
+import type {
+  ChannelMessageActionAdapter,
+  ChannelMessageActionName,
+} from "../types.js";
 
 const providerId = "signal";
 const GROUP_PREFIX = "group:";
@@ -22,7 +35,10 @@ function normalizeSignalReactionRecipient(raw: string): string {
   return withoutSignal;
 }
 
-function resolveSignalReactionTarget(raw: string): { recipient?: string; groupId?: string } {
+function resolveSignalReactionTarget(raw: string): {
+  recipient?: string;
+  groupId?: string;
+} {
   const trimmed = raw.trim();
   if (!trimmed) {
     return {};
@@ -62,7 +78,12 @@ async function mutateSignalReaction(params: {
     );
     return jsonResult({ ok: true, removed: params.emoji });
   }
-  await sendReactionSignal(params.target.recipient ?? "", params.timestamp, params.emoji, options);
+  await sendReactionSignal(
+    params.target.recipient ?? "",
+    params.timestamp,
+    params.emoji,
+    options,
+  );
   return jsonResult({ ok: true, added: params.emoji });
 }
 
@@ -92,7 +113,9 @@ export const signalMessageActions: ChannelMessageActionAdapter = {
 
   handleAction: async ({ action, params, cfg, accountId }) => {
     if (action === "send") {
-      throw new Error("Send should be handled by outbound, not actions handler.");
+      throw new Error(
+        "Send should be handled by outbound, not actions handler.",
+      );
     }
 
     if (action === "react") {
@@ -109,7 +132,8 @@ export const signalMessageActions: ChannelMessageActionAdapter = {
       }
 
       // Also check the action gate for backward compatibility
-      const actionConfig = resolveSignalAccount({ cfg, accountId }).config.actions;
+      const actionConfig = resolveSignalAccount({ cfg, accountId }).config
+        .actions;
       const isActionEnabled = createActionGate(actionConfig);
       if (!isActionEnabled("reactions")) {
         throw new Error("Signal reactions are disabled via actions.reactions.");
@@ -133,15 +157,20 @@ export const signalMessageActions: ChannelMessageActionAdapter = {
       const targetAuthor = readStringParam(params, "targetAuthor");
       const targetAuthorUuid = readStringParam(params, "targetAuthorUuid");
       if (target.groupId && !targetAuthor && !targetAuthorUuid) {
-        throw new Error("targetAuthor or targetAuthorUuid required for group reactions.");
+        throw new Error(
+          "targetAuthor or targetAuthorUuid required for group reactions.",
+        );
       }
 
       const emoji = readStringParam(params, "emoji", { allowEmpty: true });
-      const remove = typeof params.remove === "boolean" ? params.remove : undefined;
+      const remove =
+        typeof params.remove === "boolean" ? params.remove : undefined;
 
       const timestamp = parseInt(messageId, 10);
       if (!Number.isFinite(timestamp)) {
-        throw new Error(`Invalid messageId: ${messageId}. Expected numeric timestamp.`);
+        throw new Error(
+          `Invalid messageId: ${messageId}. Expected numeric timestamp.`,
+        );
       }
 
       if (remove) {

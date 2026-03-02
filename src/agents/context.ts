@@ -13,10 +13,15 @@ type ModelRegistryLike = {
 };
 type ConfigModelEntry = { id?: string; contextWindow?: number };
 type ProviderConfigEntry = { models?: ConfigModelEntry[] };
-type ModelsConfig = { providers?: Record<string, ProviderConfigEntry | undefined> };
+type ModelsConfig = {
+  providers?: Record<string, ProviderConfigEntry | undefined>;
+};
 type AgentModelEntry = { params?: Record<string, unknown> };
 
-const ANTHROPIC_1M_MODEL_PREFIXES = ["claude-opus-4", "claude-sonnet-4"] as const;
+const ANTHROPIC_1M_MODEL_PREFIXES = [
+  "claude-opus-4",
+  "claude-sonnet-4",
+] as const;
 export const ANTHROPIC_CONTEXT_1M_TOKENS = 1_048_576;
 
 export function applyDiscoveredContextWindows(params: {
@@ -28,7 +33,9 @@ export function applyDiscoveredContextWindows(params: {
       continue;
     }
     const contextWindow =
-      typeof model.contextWindow === "number" ? Math.trunc(model.contextWindow) : undefined;
+      typeof model.contextWindow === "number"
+        ? Math.trunc(model.contextWindow)
+        : undefined;
     if (!contextWindow || contextWindow <= 0) {
       continue;
     }
@@ -56,7 +63,9 @@ export function applyConfiguredContextWindows(params: {
     for (const model of provider.models) {
       const modelId = typeof model?.id === "string" ? model.id : undefined;
       const contextWindow =
-        typeof model?.contextWindow === "number" ? model.contextWindow : undefined;
+        typeof model?.contextWindow === "number"
+          ? model.contextWindow
+          : undefined;
       if (!modelId || !contextWindow || contextWindow <= 0) {
         continue;
       }
@@ -82,10 +91,14 @@ const loadPromise = (async () => {
   }
 
   try {
-    const { discoverAuthStorage, discoverModels } = await import("./pi-model-discovery.js");
+    const { discoverAuthStorage, discoverModels } =
+      await import("./pi-model-discovery.js");
     const agentDir = resolveOpenClawAgentDir();
     const authStorage = discoverAuthStorage(agentDir);
-    const modelRegistry = discoverModels(authStorage, agentDir) as unknown as ModelRegistryLike;
+    const modelRegistry = discoverModels(
+      authStorage,
+      agentDir,
+    ) as unknown as ModelRegistryLike;
     const models =
       typeof modelRegistry.getAvailable === "function"
         ? modelRegistry.getAvailable()
@@ -166,7 +179,9 @@ function isAnthropic1MModel(provider: string, model: string): boolean {
   const modelId = normalized.includes("/")
     ? (normalized.split("/").at(-1) ?? normalized)
     : normalized;
-  return ANTHROPIC_1M_MODEL_PREFIXES.some((prefix) => modelId.startsWith(prefix));
+  return ANTHROPIC_1M_MODEL_PREFIXES.some((prefix) =>
+    modelId.startsWith(prefix),
+  );
 }
 
 export function resolveContextTokensForModel(params: {
@@ -176,7 +191,10 @@ export function resolveContextTokensForModel(params: {
   contextTokensOverride?: number;
   fallbackContextTokens?: number;
 }): number | undefined {
-  if (typeof params.contextTokensOverride === "number" && params.contextTokensOverride > 0) {
+  if (
+    typeof params.contextTokensOverride === "number" &&
+    params.contextTokensOverride > 0
+  ) {
     return params.contextTokensOverride;
   }
 
@@ -185,8 +203,15 @@ export function resolveContextTokensForModel(params: {
     model: params.model,
   });
   if (ref) {
-    const modelParams = resolveConfiguredModelParams(params.cfg, ref.provider, ref.model);
-    if (modelParams?.context1m === true && isAnthropic1MModel(ref.provider, ref.model)) {
+    const modelParams = resolveConfiguredModelParams(
+      params.cfg,
+      ref.provider,
+      ref.model,
+    );
+    if (
+      modelParams?.context1m === true &&
+      isAnthropic1MModel(ref.provider, ref.model)
+    ) {
       return ANTHROPIC_CONTEXT_1M_TOKENS;
     }
   }

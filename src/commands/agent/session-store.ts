@@ -2,7 +2,10 @@ import { setCliSessionId } from "../../agents/cli-session.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { isCliProvider } from "../../agents/model-selection.js";
-import { deriveSessionTotalTokens, hasNonzeroUsage } from "../../agents/usage.js";
+import {
+  deriveSessionTotalTokens,
+  hasNonzeroUsage,
+} from "../../agents/usage.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   mergeSessionEntry,
@@ -12,7 +15,9 @@ import {
 } from "../../config/sessions.js";
 
 type RunResult = Awaited<
-  ReturnType<(typeof import("../../agents/pi-embedded.js"))["runEmbeddedPiAgent"]>
+  ReturnType<
+    (typeof import("../../agents/pi-embedded.js"))["runEmbeddedPiAgent"]
+  >
 >;
 
 export async function updateSessionStoreAfterAgentRun(params: {
@@ -43,9 +48,14 @@ export async function updateSessionStoreAfterAgentRun(params: {
 
   const usage = result.meta.agentMeta?.usage;
   const promptTokens = result.meta.agentMeta?.promptTokens;
-  const compactionsThisRun = Math.max(0, result.meta.agentMeta?.compactionCount ?? 0);
-  const modelUsed = result.meta.agentMeta?.model ?? fallbackModel ?? defaultModel;
-  const providerUsed = result.meta.agentMeta?.provider ?? fallbackProvider ?? defaultProvider;
+  const compactionsThisRun = Math.max(
+    0,
+    result.meta.agentMeta?.compactionCount ?? 0,
+  );
+  const modelUsed =
+    result.meta.agentMeta?.model ?? fallbackModel ?? defaultModel;
+  const providerUsed =
+    result.meta.agentMeta?.provider ?? fallbackProvider ?? defaultProvider;
   const contextTokens =
     resolveContextTokensForModel({
       cfg,
@@ -86,7 +96,11 @@ export async function updateSessionStoreAfterAgentRun(params: {
     });
     next.inputTokens = input;
     next.outputTokens = output;
-    if (typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0) {
+    if (
+      typeof totalTokens === "number" &&
+      Number.isFinite(totalTokens) &&
+      totalTokens > 0
+    ) {
       next.totalTokens = totalTokens;
       next.totalTokensFresh = true;
     } else {

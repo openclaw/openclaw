@@ -8,7 +8,12 @@ import { formatErrorWithStack } from "./list.errors.js";
 import { loadModelRegistry, toModelRow } from "./list.registry.js";
 import { printModelTable } from "./list.table.js";
 import type { ModelRow } from "./list.types.js";
-import { DEFAULT_PROVIDER, ensureFlagCompatibility, isLocalBaseUrl, modelKey } from "./shared.js";
+import {
+  DEFAULT_PROVIDER,
+  ensureFlagCompatibility,
+  isLocalBaseUrl,
+  modelKey,
+} from "./shared.js";
 
 export async function modelsListCommand(
   opts: {
@@ -22,7 +27,8 @@ export async function modelsListCommand(
 ) {
   ensureFlagCompatibility(opts);
   const { loadConfig } = await import("../../config/config.js");
-  const { ensureAuthProfileStore } = await import("../../agents/auth-profiles.js");
+  const { ensureAuthProfileStore } =
+    await import("../../agents/auth-profiles.js");
   const cfg = loadConfig();
   const authStore = ensureAuthProfileStore();
   const providerFilter = (() => {
@@ -55,7 +61,9 @@ export async function modelsListCommand(
     );
   }
 
-  const modelByKey = new Map(models.map((model) => [modelKey(model.provider, model.id), model]));
+  const modelByKey = new Map(
+    models.map((model) => [modelKey(model.provider, model.id), model]),
+  );
 
   const { entries } = resolveConfiguredEntries(cfg);
   const configuredByKey = new Map(entries.map((entry) => [entry.key, entry]));
@@ -94,7 +102,10 @@ export async function modelsListCommand(
     }
   } else {
     for (const entry of entries) {
-      if (providerFilter && entry.ref.provider.toLowerCase() !== providerFilter) {
+      if (
+        providerFilter &&
+        entry.ref.provider.toLowerCase() !== providerFilter
+      ) {
         continue;
       }
       let model = modelByKey.get(entry.key);
@@ -110,8 +121,14 @@ export async function modelsListCommand(
         }
       }
       if (!model) {
-        const { resolveModel } = await import("../../agents/pi-embedded-runner/model.js");
-        model = resolveModel(entry.ref.provider, entry.ref.model, undefined, cfg).model;
+        const { resolveModel } =
+          await import("../../agents/pi-embedded-runner/model.js");
+        model = resolveModel(
+          entry.ref.provider,
+          entry.ref.model,
+          undefined,
+          cfg,
+        ).model;
       }
       if (opts.local && model && !isLocalBaseUrl(model.baseUrl)) {
         continue;

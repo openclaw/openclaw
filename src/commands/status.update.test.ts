@@ -107,7 +107,9 @@ describe("formatUpdateOneLiner", () => {
       },
     });
 
-    expect(formatUpdateOneLiner(update)).toBe("Update: npm · npm latest unknown · deps missing");
+    expect(formatUpdateOneLiner(update)).toBe(
+      "Update: npm · npm latest unknown · deps missing",
+    );
   });
 });
 

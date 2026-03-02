@@ -71,7 +71,8 @@ export const zh_TW: TranslationMap = {
       uptime: "運行時間",
       tickInterval: "刻度間隔",
       lastChannelsRefresh: "最後頻道刷新",
-      channelsHint: "使用頻道鏈接 WhatsApp、Telegram、Discord、Signal 或 iMessage。",
+      channelsHint:
+        "使用頻道鏈接 WhatsApp、Telegram、Discord、Signal 或 iMessage。",
     },
     stats: {
       instances: "實例",
@@ -85,7 +86,8 @@ export const zh_TW: TranslationMap = {
       title: "備註",
       subtitle: "遠程控制設置的快速提醒。",
       tailscaleTitle: "Tailscale serve",
-      tailscaleText: "首選 serve 模式以通過 tailnet 身份驗證將網關保持在回環地址。",
+      tailscaleText:
+        "首選 serve 模式以通過 tailnet 身份驗證將網關保持在回環地址。",
       sessionTitle: "會話清理",
       sessionText: "使用 /new 或 sessions.patch 重置上下文。",
       cronTitle: "定時任務提醒",
@@ -93,7 +95,8 @@ export const zh_TW: TranslationMap = {
     },
     auth: {
       required: "此網關需要身份驗證。添加令牌或密碼，然後點擊連接。",
-      failed: "身份驗證失敗。請使用 {command} 重新複製令牌化 URL，或更新令牌，然後點擊連接。",
+      failed:
+        "身份驗證失敗。請使用 {command} 重新複製令牌化 URL，或更新令牌，然後點擊連接。",
     },
     pairing: {
       hint: "此裝置需要閘道主機的配對批准。",

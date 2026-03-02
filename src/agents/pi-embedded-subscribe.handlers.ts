@@ -19,7 +19,9 @@ import type {
   EmbeddedPiSubscribeEvent,
 } from "./pi-embedded-subscribe.handlers.types.js";
 
-export function createEmbeddedPiSessionEventHandler(ctx: EmbeddedPiSubscribeContext) {
+export function createEmbeddedPiSessionEventHandler(
+  ctx: EmbeddedPiSubscribeContext,
+) {
   return (evt: EmbeddedPiSubscribeEvent) => {
     switch (evt.type) {
       case "message_start":

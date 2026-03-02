@@ -28,7 +28,10 @@ export function hasTagFilter(query: string, tag: string): boolean {
   if (!normalizedTag) {
     return false;
   }
-  const pattern = new RegExp(`(^|\\s)tag:${escapeRegExp(normalizedTag)}(?=\\s|$)`, "i");
+  const pattern = new RegExp(
+    `(^|\\s)tag:${escapeRegExp(normalizedTag)}(?=\\s|$)`,
+    "i",
+  );
   return pattern.test(query.trim());
 }
 
@@ -53,11 +56,17 @@ export function removeTagFilter(query: string, tag: string): string {
   if (!normalizedTag || !trimmed) {
     return trimmed;
   }
-  const pattern = new RegExp(`(^|\\s)tag:${escapeRegExp(normalizedTag)}(?=\\s|$)`, "ig");
+  const pattern = new RegExp(
+    `(^|\\s)tag:${escapeRegExp(normalizedTag)}(?=\\s|$)`,
+    "ig",
+  );
   return trimmed.replace(pattern, " ").replace(/\s+/g, " ").trim();
 }
 
-export function replaceTagFilters(query: string, tags: readonly string[]): string {
+export function replaceTagFilters(
+  query: string,
+  tags: readonly string[],
+): string {
   const uniqueTags: string[] = [];
   const seen = new Set<string>();
   for (const tag of tags) {

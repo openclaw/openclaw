@@ -4,8 +4,14 @@ import { stripHeartbeatToken } from "../heartbeat.js";
 import type { OriginatingChannelType } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { ReplyPayload } from "../types.js";
-import { formatBunFetchSocketError, isBunFetchSocketError } from "./agent-runner-utils.js";
-import { createBlockReplyPayloadKey, type BlockReplyPipeline } from "./block-reply-pipeline.js";
+import {
+  formatBunFetchSocketError,
+  isBunFetchSocketError,
+} from "./agent-runner-utils.js";
+import {
+  createBlockReplyPayloadKey,
+  type BlockReplyPipeline,
+} from "./block-reply-pipeline.js";
 import {
   resolveOriginAccountId,
   resolveOriginMessageProvider,
@@ -59,7 +65,8 @@ export function buildReplyPayloads(params: {
           didLogHeartbeatStrip = true;
           logVerbose("Stripped stray HEARTBEAT_OK token from reply");
         }
-        const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
+        const hasMedia =
+          Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
         if (stripped.shouldSkip && !hasMedia) {
           return [];
         }
@@ -131,7 +138,10 @@ export function buildReplyPayloads(params: {
         )
       : params.directlySentBlockKeys?.size
         ? mediaFilteredPayloads.filter(
-            (payload) => !params.directlySentBlockKeys!.has(createBlockReplyPayloadKey(payload)),
+            (payload) =>
+              !params.directlySentBlockKeys!.has(
+                createBlockReplyPayloadKey(payload),
+              ),
           )
         : mediaFilteredPayloads;
   const replyPayloads = suppressMessagingToolReplies ? [] : filteredPayloads;

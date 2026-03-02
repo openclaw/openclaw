@@ -66,7 +66,8 @@ export async function listSandboxContainers(): Promise<SandboxContainerInfo[]> {
   const config = loadConfig();
   return listSandboxRegistryItems<SandboxRegistryEntry>({
     read: readRegistry,
-    resolveConfiguredImage: (agentId) => resolveSandboxConfigForAgent(config, agentId).docker.image,
+    resolveConfiguredImage: (agentId) =>
+      resolveSandboxConfigForAgent(config, agentId).docker.image,
   });
 }
 
@@ -79,7 +80,9 @@ export async function listSandboxBrowsers(): Promise<SandboxBrowserInfo[]> {
   });
 }
 
-export async function removeSandboxContainer(containerName: string): Promise<void> {
+export async function removeSandboxContainer(
+  containerName: string,
+): Promise<void> {
   try {
     await execDocker(["rm", "-f", containerName], { allowFailure: true });
   } catch {
@@ -88,7 +91,9 @@ export async function removeSandboxContainer(containerName: string): Promise<voi
   await removeRegistryEntry(containerName);
 }
 
-export async function removeSandboxBrowserContainer(containerName: string): Promise<void> {
+export async function removeSandboxBrowserContainer(
+  containerName: string,
+): Promise<void> {
   try {
     await execDocker(["rm", "-f", containerName], { allowFailure: true });
   } catch {
@@ -99,7 +104,9 @@ export async function removeSandboxBrowserContainer(containerName: string): Prom
   // Stop browser bridge if active
   for (const [sessionKey, bridge] of BROWSER_BRIDGES.entries()) {
     if (bridge.containerName === containerName) {
-      await stopBrowserBridgeServer(bridge.bridge.server).catch(() => undefined);
+      await stopBrowserBridgeServer(bridge.bridge.server).catch(
+        () => undefined,
+      );
       BROWSER_BRIDGES.delete(sessionKey);
     }
   }

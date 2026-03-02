@@ -42,7 +42,9 @@ export function expandToolGroups(list?: string[]) {
   return Array.from(new Set(expanded));
 }
 
-export function resolveToolProfilePolicy(profile?: string): ToolProfilePolicy | undefined {
+export function resolveToolProfilePolicy(
+  profile?: string,
+): ToolProfilePolicy | undefined {
   return resolveCoreToolProfilePolicy(profile);
 }
 

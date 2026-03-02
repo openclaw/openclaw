@@ -1,4 +1,8 @@
-import type { OpenClawConfig, PluginRuntime, RuntimeEnv } from "openclaw/plugin-sdk";
+import type {
+  OpenClawConfig,
+  PluginRuntime,
+  RuntimeEnv,
+} from "openclaw/plugin-sdk";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MSTeamsConversationStore } from "./conversation-store.js";
 import type { MSTeamsAdapter } from "./messenger.js";
@@ -7,7 +11,11 @@ import {
   type MSTeamsMessageHandlerDeps,
   registerMSTeamsHandlers,
 } from "./monitor-handler.js";
-import { clearPendingUploads, getPendingUpload, storePendingUpload } from "./pending-uploads.js";
+import {
+  clearPendingUploads,
+  getPendingUpload,
+  storePendingUpload,
+} from "./pending-uploads.js";
 import type { MSTeamsPollStore } from "./polls.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
@@ -17,7 +25,10 @@ const fileConsentMockState = vi.hoisted(() => ({
 }));
 
 vi.mock("./file-consent.js", async () => {
-  const actual = await vi.importActual<typeof import("./file-consent.js")>("./file-consent.js");
+  const actual =
+    await vi.importActual<typeof import("./file-consent.js")>(
+      "./file-consent.js",
+    );
   return {
     ...actual,
     uploadToConsentUrl: fileConsentMockState.uploadToConsentUrl,

@@ -13,7 +13,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import JSON5 from "json5";
-import { canUseBoundaryFileOpen, openBoundaryFileSync } from "../infra/boundary-file-read.js";
+import {
+  canUseBoundaryFileOpen,
+  openBoundaryFileSync,
+} from "../infra/boundary-file-read.js";
 import { isPathInside } from "../security/scan-paths.js";
 import { isPlainObject } from "../utils.js";
 import { isBlockedObjectKey } from "./prototype-keys.js";
@@ -57,7 +60,10 @@ export class ConfigIncludeError extends Error {
 
 export class CircularIncludeError extends ConfigIncludeError {
   constructor(public readonly chain: string[]) {
-    super(`Circular include detected: ${chain.join(" -> ")}`, chain[chain.length - 1]);
+    super(
+      `Circular include detected: ${chain.join(" -> ")}`,
+      chain[chain.length - 1],
+    );
     this.name = "CircularIncludeError";
   }
 }
@@ -77,7 +83,8 @@ export function deepMerge(target: unknown, source: unknown): unknown {
       if (isBlockedObjectKey(key)) {
         continue;
       }
-      result[key] = key in result ? deepMerge(result[key], source[key]) : source[key];
+      result[key] =
+        key in result ? deepMerge(result[key], source[key]) : source[key];
     }
     return result;
   }
@@ -258,7 +265,11 @@ class IncludeProcessor {
     }
   }
 
-  private parseFile(includePath: string, resolvedPath: string, raw: string): unknown {
+  private parseFile(
+    includePath: string,
+    resolvedPath: string,
+    raw: string,
+  ): unknown {
     try {
       return this.resolver.parseJson(raw);
     } catch (err) {
@@ -271,7 +282,11 @@ class IncludeProcessor {
   }
 
   private processNested(resolvedPath: string, parsed: unknown): unknown {
-    const nested = new IncludeProcessor(resolvedPath, this.resolver, this.rootDir);
+    const nested = new IncludeProcessor(
+      resolvedPath,
+      this.resolver,
+      this.rootDir,
+    );
     nested.visited = new Set([...this.visited, resolvedPath]);
     nested.depth = this.depth + 1;
     return nested.process(parsed);
@@ -286,7 +301,9 @@ function safeRealpath(target: string): string {
   }
 }
 
-export function readConfigIncludeFileWithGuards(params: IncludeFileReadParams): string {
+export function readConfigIncludeFileWithGuards(
+  params: IncludeFileReadParams,
+): string {
   const ioFs = params.ioFs ?? fs;
   const maxBytes = params.maxBytes ?? MAX_INCLUDE_FILE_BYTES;
   if (!canUseBoundaryFileOpen(ioFs)) {

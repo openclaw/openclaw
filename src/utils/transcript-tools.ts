@@ -13,7 +13,9 @@ const normalizeType = (value: unknown): string => {
   return value.trim().toLowerCase();
 };
 
-export const extractToolCallNames = (message: Record<string, unknown>): string[] => {
+export const extractToolCallNames = (
+  message: Record<string, unknown>,
+): string[] => {
   const names = new Set<string>();
   const toolNameRaw = message.toolName ?? message.tool_name;
   if (typeof toolNameRaw === "string" && toolNameRaw.trim()) {
@@ -46,7 +48,9 @@ export const extractToolCallNames = (message: Record<string, unknown>): string[]
 export const hasToolCall = (message: Record<string, unknown>): boolean =>
   extractToolCallNames(message).length > 0;
 
-export const countToolResults = (message: Record<string, unknown>): ToolResultCounts => {
+export const countToolResults = (
+  message: Record<string, unknown>,
+): ToolResultCounts => {
   const content = message.content;
   if (!Array.isArray(content)) {
     return { total: 0, errors: 0 };

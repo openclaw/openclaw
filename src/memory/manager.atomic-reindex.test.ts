@@ -1,9 +1,21 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { getEmbedBatchMock, resetEmbeddingMocks } from "./embedding.test-mocks.js";
+import {
+  getEmbedBatchMock,
+  resetEmbeddingMocks,
+} from "./embedding.test-mocks.js";
 import type { MemoryIndexManager } from "./index.js";
 import { getRequiredMemoryIndexManager } from "./test-manager-helpers.js";
 
@@ -18,7 +30,9 @@ describe("memory manager atomic reindex", () => {
   const embedBatch = getEmbedBatchMock();
 
   beforeAll(async () => {
-    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mem-atomic-"));
+    fixtureRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-mem-atomic-"),
+    );
   });
 
   beforeEach(async () => {
@@ -78,7 +92,9 @@ describe("memory manager atomic reindex", () => {
     expect(beforeStatus.chunks).toBeGreaterThan(0);
 
     shouldFail = true;
-    await expect(manager.sync({ force: true })).rejects.toThrow("embedding failure");
+    await expect(manager.sync({ force: true })).rejects.toThrow(
+      "embedding failure",
+    );
 
     const afterStatus = manager.status();
     expect(afterStatus.chunks).toBeGreaterThan(0);

@@ -41,7 +41,9 @@ vi.mock("../config/sessions.js", () => ({
   updateSessionStore: vi.fn(),
 }));
 vi.mock("./session-utils.js", () => ({
-  loadSessionEntry: vi.fn((sessionKey: string) => buildSessionLookup(sessionKey)),
+  loadSessionEntry: vi.fn((sessionKey: string) =>
+    buildSessionLookup(sessionKey),
+  ),
   pruneLegacyStoreKeys: vi.fn(),
   resolveGatewaySessionStoreTarget: vi.fn(({ key }: { key: string }) => ({
     canonicalKey: key,
@@ -111,7 +113,9 @@ describe("node exec events", () => {
       "Exec started (node=node-1 id=run-1): ls -la",
       { sessionKey: "agent:main:main", contextKey: "exec:run-1" },
     );
-    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({ reason: "exec-event" });
+    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
+      reason: "exec-event",
+    });
   });
 
   it("enqueues exec.finished events with output", async () => {
@@ -130,7 +134,9 @@ describe("node exec events", () => {
       "Exec finished (node=node-2 id=run-2, code 0)\ndone",
       { sessionKey: "node-node-2", contextKey: "exec:run-2" },
     );
-    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({ reason: "exec-event" });
+    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
+      reason: "exec-event",
+    });
   });
 
   it("suppresses noisy exec.finished success events with empty output", async () => {
@@ -163,10 +169,14 @@ describe("node exec events", () => {
 
     const [[text]] = enqueueSystemEventMock.mock.calls;
     expect(typeof text).toBe("string");
-    expect(text.startsWith("Exec finished (node=node-2 id=run-long, code 0)\n")).toBe(true);
+    expect(
+      text.startsWith("Exec finished (node=node-2 id=run-long, code 0)\n"),
+    ).toBe(true);
     expect(text.endsWith("…")).toBe(true);
     expect(text.length).toBeLessThan(280);
-    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({ reason: "exec-event" });
+    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
+      reason: "exec-event",
+    });
   });
 
   it("enqueues exec.denied events with reason", async () => {
@@ -185,7 +195,9 @@ describe("node exec events", () => {
       "Exec denied (node=node-3 id=run-3, allowlist-miss): rm -rf /",
       { sessionKey: "agent:demo:main", contextKey: "exec:run-3" },
     );
-    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({ reason: "exec-event" });
+    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
+      reason: "exec-event",
+    });
   });
 
   it("suppresses exec.started when notifyOnExit is false", async () => {
@@ -347,7 +359,9 @@ describe("voice transcript events", () => {
     await Promise.resolve();
 
     expect(agentCommandMock).toHaveBeenCalledTimes(1);
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("voice session-store update failed"));
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("voice session-store update failed"),
+    );
   });
 });
 
@@ -356,7 +370,9 @@ describe("notifications changed events", () => {
     enqueueSystemEventMock.mockClear();
     requestHeartbeatNowMock.mockClear();
     loadSessionEntryMock.mockClear();
-    loadSessionEntryMock.mockImplementation((sessionKey: string) => buildSessionLookup(sessionKey));
+    loadSessionEntryMock.mockImplementation((sessionKey: string) =>
+      buildSessionLookup(sessionKey),
+    );
     enqueueSystemEventMock.mockReturnValue(true);
   });
 
@@ -438,7 +454,10 @@ describe("notifications changed events", () => {
     expect(loadSessionEntryMock).toHaveBeenCalledWith("node-node-n5");
     expect(enqueueSystemEventMock).toHaveBeenCalledWith(
       "Notification posted (node=node-n5 key=notif-5)",
-      { sessionKey: "agent:main:node-node-n5", contextKey: "notification:notif-5" },
+      {
+        sessionKey: "agent:main:node-node-n5",
+        contextKey: "notification:notif-5",
+      },
     );
     expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
       reason: "notifications-event",
@@ -494,7 +513,9 @@ describe("agent request events", () => {
     updateSessionStoreMock.mockImplementation(async (_storePath, update) => {
       update({});
     });
-    loadSessionEntryMock.mockImplementation((sessionKey: string) => buildSessionLookup(sessionKey));
+    loadSessionEntryMock.mockImplementation((sessionKey: string) =>
+      buildSessionLookup(sessionKey),
+    );
   });
 
   it("disables delivery when route is unresolved instead of falling back globally", async () => {

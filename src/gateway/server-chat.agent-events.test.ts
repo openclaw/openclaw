@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadConfig } from "../config/config.js";
-import { registerAgentRunContext, resetAgentRunContextForTest } from "../infra/agent-events.js";
+import {
+  registerAgentRunContext,
+  resetAgentRunContextForTest,
+} from "../infra/agent-events.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
 import {
   createAgentEventHandler,
@@ -40,7 +43,9 @@ describe("agent event handler", () => {
     resolveSessionKeyForRun?: (runId: string) => string | undefined;
   }) {
     const nowSpy =
-      params?.now === undefined ? undefined : vi.spyOn(Date, "now").mockReturnValue(params.now);
+      params?.now === undefined
+        ? undefined
+        : vi.spyOn(Date, "now").mockReturnValue(params.now);
     const broadcast = vi.fn();
     const broadcastToConnIds = vi.fn();
     const nodeSendToSession = vi.fn();
@@ -54,7 +59,8 @@ describe("agent event handler", () => {
       nodeSendToSession,
       agentRunSeq,
       chatRunState,
-      resolveSessionKeyForRun: params?.resolveSessionKeyForRun ?? (() => undefined),
+      resolveSessionKeyForRun:
+        params?.resolveSessionKeyForRun ?? (() => undefined),
       clearAgentRunContext: vi.fn(),
       toolEventRecipients,
     });
@@ -135,8 +141,12 @@ describe("agent event handler", () => {
     });
   }
 
-  function expectSingleAgentBroadcastPayload(broadcast: ReturnType<typeof vi.fn>) {
-    const broadcastAgentCalls = broadcast.mock.calls.filter(([event]) => event === "agent");
+  function expectSingleAgentBroadcastPayload(
+    broadcast: ReturnType<typeof vi.fn>,
+  ) {
+    const broadcastAgentCalls = broadcast.mock.calls.filter(
+      ([event]) => event === "agent",
+    );
     expect(broadcastAgentCalls).toHaveLength(1);
     return broadcastAgentCalls[0]?.[1] as {
       runId?: string;
@@ -200,10 +210,14 @@ describe("agent event handler", () => {
   });
 
   it("does not include NO_REPLY text in chat final message", () => {
-    const { broadcast, nodeSendToSession, chatRunState, handler, nowSpy } = createHarness({
-      now: 2_000,
+    const { broadcast, nodeSendToSession, chatRunState, handler, nowSpy } =
+      createHarness({
+        now: 2_000,
+      });
+    chatRunState.registry.add("run-2", {
+      sessionKey: "session-2",
+      clientRunId: "client-2",
     });
-    chatRunState.registry.add("run-2", { sessionKey: "session-2", clientRunId: "client-2" });
 
     handler({
       runId: "run-2",
@@ -214,14 +228,18 @@ describe("agent event handler", () => {
     });
     emitLifecycleEnd(handler, "run-2");
 
-    const payload = expectSingleFinalChatPayload(broadcast) as { message?: unknown };
+    const payload = expectSingleFinalChatPayload(broadcast) as {
+      message?: unknown;
+    };
     expect(payload.message).toBeUndefined();
     expect(sessionChatCalls(nodeSendToSession)).toHaveLength(1);
     nowSpy?.mockRestore();
   });
 
   it("cleans up agent run sequence tracking when lifecycle completes", () => {
-    const { agentRunSeq, chatRunState, handler, nowSpy } = createHarness({ now: 2_500 });
+    const { agentRunSeq, chatRunState, handler, nowSpy } = createHarness({
+      now: 2_500,
+    });
     chatRunState.registry.add("run-cleanup", {
       sessionKey: "session-cleanup",
       clientRunId: "client-cleanup",
@@ -250,11 +268,15 @@ describe("agent event handler", () => {
   });
 
   it("routes tool events only to registered recipients when verbose is enabled", () => {
-    const { broadcast, broadcastToConnIds, toolEventRecipients, handler } = createHarness({
-      resolveSessionKeyForRun: () => "session-1",
-    });
+    const { broadcast, broadcastToConnIds, toolEventRecipients, handler } =
+      createHarness({
+        resolveSessionKeyForRun: () => "session-1",
+      });
 
-    registerAgentRunContext("run-tool", { sessionKey: "session-1", verboseLevel: "on" });
+    registerAgentRunContext("run-tool", {
+      sessionKey: "session-1",
+      verboseLevel: "on",
+    });
     toolEventRecipients.add("run-tool", "conn-1");
 
     handler({
@@ -271,11 +293,19 @@ describe("agent event handler", () => {
   });
 
   it("broadcasts tool events to WS recipients even when verbose is off, but skips node send", () => {
-    const { broadcastToConnIds, nodeSendToSession, toolEventRecipients, handler } = createHarness({
+    const {
+      broadcastToConnIds,
+      nodeSendToSession,
+      toolEventRecipients,
+      handler,
+    } = createHarness({
       resolveSessionKeyForRun: () => "session-1",
     });
 
-    registerAgentRunContext("run-tool-off", { sessionKey: "session-1", verboseLevel: "off" });
+    registerAgentRunContext("run-tool-off", {
+      sessionKey: "session-1",
+      verboseLevel: "off",
+    });
     toolEventRecipients.add("run-tool-off", "conn-1");
 
     handler({
@@ -289,7 +319,9 @@ describe("agent event handler", () => {
     // Tool events always broadcast to registered WS recipients
     expect(broadcastToConnIds).toHaveBeenCalledTimes(1);
     // But node/channel subscribers should NOT receive when verbose is off
-    const nodeToolCalls = nodeSendToSession.mock.calls.filter(([, event]) => event === "agent");
+    const nodeToolCalls = nodeSendToSession.mock.calls.filter(
+      ([, event]) => event === "agent",
+    );
     expect(nodeToolCalls).toHaveLength(0);
     resetAgentRunContextForTest();
   });
@@ -299,7 +331,10 @@ describe("agent event handler", () => {
       resolveSessionKeyForRun: () => "session-1",
     });
 
-    registerAgentRunContext("run-tool-on", { sessionKey: "session-1", verboseLevel: "on" });
+    registerAgentRunContext("run-tool-on", {
+      sessionKey: "session-1",
+      verboseLevel: "on",
+    });
     toolEventRecipients.add("run-tool-on", "conn-1");
 
     handler({
@@ -317,7 +352,9 @@ describe("agent event handler", () => {
     });
 
     expect(broadcastToConnIds).toHaveBeenCalledTimes(1);
-    const payload = broadcastToConnIds.mock.calls[0]?.[1] as { data?: Record<string, unknown> };
+    const payload = broadcastToConnIds.mock.calls[0]?.[1] as {
+      data?: Record<string, unknown>;
+    };
     expect(payload.data?.result).toBeUndefined();
     expect(payload.data?.partialResult).toBeUndefined();
     resetAgentRunContextForTest();
@@ -328,7 +365,10 @@ describe("agent event handler", () => {
       resolveSessionKeyForRun: () => "session-1",
     });
 
-    registerAgentRunContext("run-tool-full", { sessionKey: "session-1", verboseLevel: "full" });
+    registerAgentRunContext("run-tool-full", {
+      sessionKey: "session-1",
+      verboseLevel: "full",
+    });
     toolEventRecipients.add("run-tool-full", "conn-1");
 
     const result = { content: [{ type: "text", text: "secret" }] };
@@ -346,15 +386,18 @@ describe("agent event handler", () => {
     });
 
     expect(broadcastToConnIds).toHaveBeenCalledTimes(1);
-    const payload = broadcastToConnIds.mock.calls[0]?.[1] as { data?: Record<string, unknown> };
+    const payload = broadcastToConnIds.mock.calls[0]?.[1] as {
+      data?: Record<string, unknown>;
+    };
     expect(payload.data?.result).toEqual(result);
     resetAgentRunContextForTest();
   });
 
   it("broadcasts fallback events to agent subscribers and node session", () => {
-    const { broadcast, broadcastToConnIds, nodeSendToSession, handler } = createHarness({
-      resolveSessionKeyForRun: () => "session-fallback",
-    });
+    const { broadcast, broadcastToConnIds, nodeSendToSession, handler } =
+      createHarness({
+        resolveSessionKeyForRun: () => "session-fallback",
+      });
 
     emitFallbackLifecycle({ handler, runId: "run-fallback" });
 
@@ -365,14 +408,17 @@ describe("agent event handler", () => {
     expect(payload.sessionKey).toBe("session-fallback");
     expect(payload.data?.activeProvider).toBe("deepinfra");
 
-    const nodeCalls = nodeSendToSession.mock.calls.filter(([, event]) => event === "agent");
+    const nodeCalls = nodeSendToSession.mock.calls.filter(
+      ([, event]) => event === "agent",
+    );
     expect(nodeCalls).toHaveLength(1);
   });
 
   it("remaps chat-linked lifecycle runId to client runId", () => {
-    const { broadcast, nodeSendToSession, chatRunState, handler } = createHarness({
-      resolveSessionKeyForRun: () => "session-fallback",
-    });
+    const { broadcast, nodeSendToSession, chatRunState, handler } =
+      createHarness({
+        resolveSessionKeyForRun: () => "session-fallback",
+      });
     chatRunState.registry.add("run-fallback-internal", {
       sessionKey: "session-fallback",
       clientRunId: "run-fallback-client",
@@ -385,7 +431,9 @@ describe("agent event handler", () => {
     expect(payload.stream).toBe("lifecycle");
     expect(payload.data?.phase).toBe("fallback");
 
-    const nodeCalls = nodeSendToSession.mock.calls.filter(([, event]) => event === "agent");
+    const nodeCalls = nodeSendToSession.mock.calls.filter(
+      ([, event]) => event === "agent",
+    );
     expect(nodeCalls).toHaveLength(1);
     const nodePayload = nodeCalls[0]?.[2] as { runId?: string };
     expect(nodePayload.runId).toBe("run-fallback-client");
@@ -407,9 +455,10 @@ describe("agent event handler", () => {
   });
 
   it("remaps chat-linked tool runId for non-full verbose payloads", () => {
-    const { broadcastToConnIds, chatRunState, toolEventRecipients, handler } = createHarness({
-      resolveSessionKeyForRun: () => "session-tool-remap",
-    });
+    const { broadcastToConnIds, chatRunState, toolEventRecipients, handler } =
+      createHarness({
+        resolveSessionKeyForRun: () => "session-tool-remap",
+      });
 
     chatRunState.registry.add("run-tool-internal", {
       sessionKey: "session-tool-remap",
@@ -441,9 +490,10 @@ describe("agent event handler", () => {
   });
 
   it("suppresses heartbeat ack-like chat output when showOk is false", () => {
-    const { broadcast, nodeSendToSession, chatRunState, handler } = createHarness({
-      now: 2_000,
-    });
+    const { broadcast, nodeSendToSession, chatRunState, handler } =
+      createHarness({
+        now: 2_000,
+      });
     chatRunState.registry.add("run-heartbeat", {
       sessionKey: "session-heartbeat",
       clientRunId: "client-heartbeat",
@@ -469,7 +519,9 @@ describe("agent event handler", () => {
 
     emitLifecycleEnd(handler, "run-heartbeat");
 
-    const finalPayload = expectSingleFinalChatPayload(broadcast) as { message?: unknown };
+    const finalPayload = expectSingleFinalChatPayload(broadcast) as {
+      message?: unknown;
+    };
     expect(finalPayload.message).toBeUndefined();
     expect(sessionChatCalls(nodeSendToSession)).toHaveLength(1);
   });

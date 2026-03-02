@@ -1,5 +1,8 @@
 import { imessageOutbound } from "../channels/plugins/outbound/imessage.js";
-import type { ChannelOutboundAdapter, ChannelPlugin } from "../channels/plugins/types.js";
+import type {
+  ChannelOutboundAdapter,
+  ChannelPlugin,
+} from "../channels/plugins/types.js";
 import { normalizeIMessageHandle } from "../imessage/targets.js";
 
 export const createIMessageTestPlugin = (params?: {
@@ -22,7 +25,8 @@ export const createIMessageTestPlugin = (params?: {
   status: {
     collectStatusIssues: (accounts) =>
       accounts.flatMap((account) => {
-        const lastError = typeof account.lastError === "string" ? account.lastError.trim() : "";
+        const lastError =
+          typeof account.lastError === "string" ? account.lastError.trim() : "";
         if (!lastError) {
           return [];
         }
@@ -44,7 +48,11 @@ export const createIMessageTestPlugin = (params?: {
         if (!trimmed) {
           return false;
         }
-        if (/^(imessage:|sms:|auto:|chat_id:|chat_guid:|chat_identifier:)/i.test(trimmed)) {
+        if (
+          /^(imessage:|sms:|auto:|chat_id:|chat_guid:|chat_identifier:)/i.test(
+            trimmed,
+          )
+        ) {
           return true;
         }
         if (trimmed.includes("@")) {

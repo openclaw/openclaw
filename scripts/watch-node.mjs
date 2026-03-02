@@ -31,11 +31,15 @@ export async function runWatchMain(params = {}) {
     childEnv.OPENCLAW_WATCH_COMMAND = deps.args.join(" ");
   }
 
-  const watchProcess = deps.spawn(deps.process.execPath, buildWatchArgs(deps.args), {
-    cwd: deps.cwd,
-    env: childEnv,
-    stdio: "inherit",
-  });
+  const watchProcess = deps.spawn(
+    deps.process.execPath,
+    buildWatchArgs(deps.args),
+    {
+      cwd: deps.cwd,
+      env: childEnv,
+      stdio: "inherit",
+    },
+  );
 
   let settled = false;
   let onSigInt;

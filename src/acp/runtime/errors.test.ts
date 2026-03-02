@@ -19,7 +19,10 @@ describe("withAcpRuntimeErrorBoundary", () => {
   });
 
   it("passes through existing ACP runtime errors", async () => {
-    const existing = new AcpRuntimeError("ACP_BACKEND_MISSING", "backend missing");
+    const existing = new AcpRuntimeError(
+      "ACP_BACKEND_MISSING",
+      "backend missing",
+    );
     await expect(
       withAcpRuntimeErrorBoundary({
         run: async () => {

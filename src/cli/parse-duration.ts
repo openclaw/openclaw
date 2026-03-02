@@ -10,7 +10,10 @@ const DURATION_MULTIPLIERS: Record<string, number> = {
   d: 86_400_000,
 };
 
-export function parseDurationMs(raw: string, opts?: DurationMsParseOptions): number {
+export function parseDurationMs(
+  raw: string,
+  opts?: DurationMsParseOptions,
+): number {
   const trimmed = String(raw ?? "")
     .trim()
     .toLowerCase();
@@ -25,7 +28,12 @@ export function parseDurationMs(raw: string, opts?: DurationMsParseOptions): num
     if (!Number.isFinite(value) || value < 0) {
       throw new Error(`invalid duration: ${raw}`);
     }
-    const unit = (single[2] ?? opts?.defaultUnit ?? "ms") as "ms" | "s" | "m" | "h" | "d";
+    const unit = (single[2] ?? opts?.defaultUnit ?? "ms") as
+      | "ms"
+      | "s"
+      | "m"
+      | "h"
+      | "d";
     const ms = Math.round(value * DURATION_MULTIPLIERS[unit]);
     if (!Number.isFinite(ms)) {
       throw new Error(`invalid duration: ${raw}`);

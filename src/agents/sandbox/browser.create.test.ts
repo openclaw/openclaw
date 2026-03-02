@@ -109,7 +109,10 @@ describe("ensureSandboxBrowser create args", () => {
     bridgeMocks.startBrowserBridgeServer.mockClear();
     bridgeMocks.stopBrowserBridgeServer.mockClear();
 
-    dockerMocks.dockerContainerState.mockResolvedValue({ exists: false, running: false });
+    dockerMocks.dockerContainerState.mockResolvedValue({
+      exists: false,
+      running: false,
+    });
     dockerMocks.execDocker.mockImplementation(async (args: string[]) => {
       if (args[0] === "image" && args[1] === "inspect") {
         return { stdout: "[]", stderr: "", code: 0 };
@@ -118,15 +121,17 @@ describe("ensureSandboxBrowser create args", () => {
     });
     dockerMocks.readDockerContainerLabel.mockResolvedValue(null);
     dockerMocks.readDockerContainerEnvVar.mockResolvedValue(null);
-    dockerMocks.readDockerPort.mockImplementation(async (_containerName: string, port: number) => {
-      if (port === 9222) {
-        return 49100;
-      }
-      if (port === 6080) {
-        return 49101;
-      }
-      return null;
-    });
+    dockerMocks.readDockerPort.mockImplementation(
+      async (_containerName: string, port: number) => {
+        if (port === 9222) {
+          return 49100;
+        }
+        if (port === 6080) {
+          return 49101;
+        }
+        return null;
+      },
+    );
     registryMocks.readBrowserRegistry.mockResolvedValue({ entries: [] });
     registryMocks.updateBrowserRegistry.mockResolvedValue(undefined);
     bridgeMocks.startBrowserBridgeServer.mockResolvedValue({
@@ -162,8 +167,12 @@ describe("ensureSandboxBrowser create args", () => {
     const passwordEntry = envEntries.find((entry) =>
       entry.startsWith("OPENCLAW_BROWSER_NOVNC_PASSWORD="),
     );
-    expect(passwordEntry).toMatch(/^OPENCLAW_BROWSER_NOVNC_PASSWORD=[A-Za-z0-9]{8}$/);
-    expect(result?.noVncUrl).toMatch(/^http:\/\/127\.0\.0\.1:19000\/sandbox\/novnc\?token=/);
+    expect(passwordEntry).toMatch(
+      /^OPENCLAW_BROWSER_NOVNC_PASSWORD=[A-Za-z0-9]{8}$/,
+    );
+    expect(result?.noVncUrl).toMatch(
+      /^http:\/\/127\.0\.0\.1:19000\/sandbox\/novnc\?token=/,
+    );
     expect(result?.noVncUrl).not.toContain("password=");
   });
 
@@ -179,9 +188,11 @@ describe("ensureSandboxBrowser create args", () => {
       (call: unknown[]) => Array.isArray(call[0]) && call[0][0] === "create",
     )?.[0] as string[] | undefined;
     const envEntries = envEntriesFromDockerArgs(createArgs ?? []);
-    expect(envEntries.some((entry) => entry.startsWith("OPENCLAW_BROWSER_NOVNC_PASSWORD="))).toBe(
-      false,
-    );
+    expect(
+      envEntries.some((entry) =>
+        entry.startsWith("OPENCLAW_BROWSER_NOVNC_PASSWORD="),
+      ),
+    ).toBe(false);
     expect(result?.noVncUrl).toBeUndefined();
   });
 });

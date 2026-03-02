@@ -23,7 +23,9 @@ describe("reparseProgramFromActionArgs", () => {
 
   it("uses action command name + args as fallback argv", async () => {
     const program = new Command().name("openclaw");
-    const parseAsync = vi.spyOn(program, "parseAsync").mockResolvedValue(program);
+    const parseAsync = vi
+      .spyOn(program, "parseAsync")
+      .mockResolvedValue(program);
     const actionCommand = {
       name: () => "status",
       parent: {
@@ -44,7 +46,9 @@ describe("reparseProgramFromActionArgs", () => {
 
   it("falls back to action args without command name when action has no name", async () => {
     const program = new Command().name("openclaw");
-    const parseAsync = vi.spyOn(program, "parseAsync").mockResolvedValue(program);
+    const parseAsync = vi
+      .spyOn(program, "parseAsync")
+      .mockResolvedValue(program);
     const actionCommand = {
       name: () => "",
       parent: {},
@@ -63,7 +67,9 @@ describe("reparseProgramFromActionArgs", () => {
 
   it("uses program root when action command is missing", async () => {
     const program = new Command().name("openclaw");
-    const parseAsync = vi.spyOn(program, "parseAsync").mockResolvedValue(program);
+    const parseAsync = vi
+      .spyOn(program, "parseAsync")
+      .mockResolvedValue(program);
 
     await reparseProgramFromActionArgs(program, []);
 

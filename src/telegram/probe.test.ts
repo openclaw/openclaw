@@ -29,7 +29,11 @@ describe("probeTelegram retry logic", () => {
     });
   }
 
-  async function expectSuccessfulProbe(fetchMock: Mock, expectedCalls: number, retryCount = 0) {
+  async function expectSuccessfulProbe(
+    fetchMock: Mock,
+    expectedCalls: number,
+    retryCount = 0,
+  ) {
     const probePromise = probeTelegram(token, timeoutMs);
     if (retryCount > 0) {
       await vi.advanceTimersByTimeAsync(retryCount * 1000);
@@ -57,21 +61,24 @@ describe("probeTelegram retry logic", () => {
       expectedCalls: 4,
       retryCount: 2,
     },
-  ])("succeeds after retry pattern %#", async ({ errors, expectedCalls, retryCount }) => {
-    const fetchMock = installFetchMock();
-    vi.useFakeTimers();
-    try {
-      for (const message of errors) {
-        fetchMock.mockRejectedValueOnce(new Error(message));
-      }
+  ])(
+    "succeeds after retry pattern %#",
+    async ({ errors, expectedCalls, retryCount }) => {
+      const fetchMock = installFetchMock();
+      vi.useFakeTimers();
+      try {
+        for (const message of errors) {
+          fetchMock.mockRejectedValueOnce(new Error(message));
+        }
 
-      mockGetMeSuccess(fetchMock);
-      mockGetWebhookInfoSuccess(fetchMock);
-      await expectSuccessfulProbe(fetchMock, expectedCalls, retryCount);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+        mockGetMeSuccess(fetchMock);
+        mockGetWebhookInfoSuccess(fetchMock);
+        await expectSuccessfulProbe(fetchMock, expectedCalls, retryCount);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("should fail after 3 unsuccessful attempts", async () => {
     const fetchMock = installFetchMock();

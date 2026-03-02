@@ -45,7 +45,8 @@ export function collectProviderDangerousNameMatchingScopes(
 
   const providerPrefix = `channels.${provider}`;
   const providerDangerousFlagPath = `${providerPrefix}.dangerouslyAllowNameMatching`;
-  const providerDangerousNameMatchingEnabled = isDangerousNameMatchingEnabled(providerCfg);
+  const providerDangerousNameMatchingEnabled =
+    isDangerousNameMatchingEnabled(providerCfg);
 
   scopes.push({
     prefix: providerPrefix,
@@ -66,7 +67,9 @@ export function collectProviderDangerousNameMatchingScopes(
     }
 
     const accountPrefix = `${providerPrefix}.accounts.${key}`;
-    const accountDangerousNameMatching = asOptionalBoolean(account.dangerouslyAllowNameMatching);
+    const accountDangerousNameMatching = asOptionalBoolean(
+      account.dangerouslyAllowNameMatching,
+    );
 
     scopes.push({
       prefix: accountPrefix,

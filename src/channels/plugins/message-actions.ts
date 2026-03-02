@@ -1,7 +1,10 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { OpenClawConfig } from "../../config/config.js";
 import { getChannelPlugin, listChannelPlugins } from "./index.js";
-import type { ChannelMessageActionContext, ChannelMessageActionName } from "./types.js";
+import type {
+  ChannelMessageActionContext,
+  ChannelMessageActionName,
+} from "./types.js";
 
 const trustedRequesterRequiredByChannel: Readonly<
   Partial<Record<string, ReadonlySet<ChannelMessageActionName>>>
@@ -9,14 +12,20 @@ const trustedRequesterRequiredByChannel: Readonly<
   discord: new Set<ChannelMessageActionName>(["timeout", "kick", "ban"]),
 };
 
-type ChannelActions = NonNullable<NonNullable<ReturnType<typeof getChannelPlugin>>["actions"]>;
+type ChannelActions = NonNullable<
+  NonNullable<ReturnType<typeof getChannelPlugin>>["actions"]
+>;
 
-function requiresTrustedRequesterSender(ctx: ChannelMessageActionContext): boolean {
+function requiresTrustedRequesterSender(
+  ctx: ChannelMessageActionContext,
+): boolean {
   const actions = trustedRequesterRequiredByChannel[ctx.channel];
   return Boolean(actions?.has(ctx.action) && ctx.toolContext);
 }
 
-export function listChannelMessageActions(cfg: OpenClawConfig): ChannelMessageActionName[] {
+export function listChannelMessageActions(
+  cfg: OpenClawConfig,
+): ChannelMessageActionName[] {
   const actions = new Set<ChannelMessageActionName>(["send", "broadcast"]);
   for (const plugin of listChannelPlugins()) {
     const list = plugin.actions?.listActions?.({ cfg });
@@ -31,7 +40,10 @@ export function listChannelMessageActions(cfg: OpenClawConfig): ChannelMessageAc
 }
 
 export function supportsChannelMessageButtons(cfg: OpenClawConfig): boolean {
-  return supportsMessageFeature(cfg, (actions) => actions?.supportsButtons?.({ cfg }) === true);
+  return supportsMessageFeature(
+    cfg,
+    (actions) => actions?.supportsButtons?.({ cfg }) === true,
+  );
 }
 
 export function supportsChannelMessageButtonsForChannel(params: {
@@ -45,7 +57,10 @@ export function supportsChannelMessageButtonsForChannel(params: {
 }
 
 export function supportsChannelMessageCards(cfg: OpenClawConfig): boolean {
-  return supportsMessageFeature(cfg, (actions) => actions?.supportsCards?.({ cfg }) === true);
+  return supportsMessageFeature(
+    cfg,
+    (actions) => actions?.supportsCards?.({ cfg }) === true,
+  );
 }
 
 export function supportsChannelMessageCardsForChannel(params: {
@@ -80,7 +95,9 @@ function supportsMessageFeatureForChannel(
   if (!params.channel) {
     return false;
   }
-  const plugin = getChannelPlugin(params.channel as Parameters<typeof getChannelPlugin>[0]);
+  const plugin = getChannelPlugin(
+    params.channel as Parameters<typeof getChannelPlugin>[0],
+  );
   return plugin?.actions ? check(plugin.actions) : false;
 }
 
@@ -96,7 +113,10 @@ export async function dispatchChannelMessageAction(
   if (!plugin?.actions?.handleAction) {
     return null;
   }
-  if (plugin.actions.supportsAction && !plugin.actions.supportsAction({ action: ctx.action })) {
+  if (
+    plugin.actions.supportsAction &&
+    !plugin.actions.supportsAction({ action: ctx.action })
+  ) {
     return null;
   }
   return await plugin.actions.handleAction(ctx);

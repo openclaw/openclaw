@@ -15,7 +15,11 @@ import {
   normalizeWebhookReaction,
   type NormalizedWebhookMessage,
 } from "./monitor-normalize.js";
-import { logVerbose, processMessage, processReaction } from "./monitor-processing.js";
+import {
+  logVerbose,
+  processMessage,
+  processReaction,
+} from "./monitor-processing.js";
 import {
   _resetBlueBubblesShortIdState,
   resolveBlueBubblesMessageId,
@@ -51,7 +55,9 @@ const DEFAULT_INBOUND_DEBOUNCE_MS = 500;
  * Combines multiple debounced messages into a single message for processing.
  * Used when multiple webhook events arrive within the debounce window.
  */
-function combineDebounceEntries(entries: BlueBubblesDebounceEntry[]): NormalizedWebhookMessage {
+function combineDebounceEntries(
+  entries: BlueBubblesDebounceEntry[],
+): NormalizedWebhookMessage {
   if (entries.length === 0) {
     throw new Error("Cannot combine empty entries");
   }
@@ -87,7 +93,8 @@ function combineDebounceEntries(entries: BlueBubblesDebounceEntry[]): Normalized
   const timestamps = entries
     .map((e) => e.message.timestamp)
     .filter((t): t is number => typeof t === "number");
-  const latestTimestamp = timestamps.length > 0 ? Math.max(...timestamps) : first.timestamp;
+  const latestTimestamp =
+    timestamps.length > 0 ? Math.max(...timestamps) : first.timestamp;
 
   // Collect all message IDs for reference
   const messageIds = entries
@@ -132,11 +139,15 @@ function resolveBlueBubblesDebounceMs(
 ): number {
   const inbound = config.messages?.inbound;
   const hasExplicitDebounce =
-    typeof inbound?.debounceMs === "number" || typeof inbound?.byChannel?.bluebubbles === "number";
+    typeof inbound?.debounceMs === "number" ||
+    typeof inbound?.byChannel?.bluebubbles === "number";
   if (!hasExplicitDebounce) {
     return DEFAULT_INBOUND_DEBOUNCE_MS;
   }
-  return core.channel.debounce.resolveInboundDebounceMs({ cfg: config, channel: "bluebubbles" });
+  return core.channel.debounce.resolveInboundDebounceMs({
+    cfg: config,
+    channel: "bluebubbles",
+  });
 }
 
 /**
@@ -150,78 +161,81 @@ function getOrCreateDebouncer(target: WebhookTarget) {
 
   const { account, config, runtime, core } = target;
 
-  const debouncer = core.channel.debounce.createInboundDebouncer<BlueBubblesDebounceEntry>({
-    debounceMs: resolveBlueBubblesDebounceMs(config, core),
-    buildKey: (entry) => {
-      const msg = entry.message;
-      // Prefer stable, shared identifiers to coalesce rapid-fire webhook events for the
-      // same message (e.g., text-only then text+attachment).
-      //
-      // For balloons (URL previews, stickers, etc), BlueBubbles often uses a different
-      // messageId than the originating text. When present, key by associatedMessageGuid
-      // to keep text + balloon coalescing working.
-      const balloonBundleId = msg.balloonBundleId?.trim();
-      const associatedMessageGuid = msg.associatedMessageGuid?.trim();
-      if (balloonBundleId && associatedMessageGuid) {
-        return `bluebubbles:${account.accountId}:balloon:${associatedMessageGuid}`;
-      }
+  const debouncer =
+    core.channel.debounce.createInboundDebouncer<BlueBubblesDebounceEntry>({
+      debounceMs: resolveBlueBubblesDebounceMs(config, core),
+      buildKey: (entry) => {
+        const msg = entry.message;
+        // Prefer stable, shared identifiers to coalesce rapid-fire webhook events for the
+        // same message (e.g., text-only then text+attachment).
+        //
+        // For balloons (URL previews, stickers, etc), BlueBubbles often uses a different
+        // messageId than the originating text. When present, key by associatedMessageGuid
+        // to keep text + balloon coalescing working.
+        const balloonBundleId = msg.balloonBundleId?.trim();
+        const associatedMessageGuid = msg.associatedMessageGuid?.trim();
+        if (balloonBundleId && associatedMessageGuid) {
+          return `bluebubbles:${account.accountId}:balloon:${associatedMessageGuid}`;
+        }
 
-      const messageId = msg.messageId?.trim();
-      if (messageId) {
-        return `bluebubbles:${account.accountId}:msg:${messageId}`;
-      }
+        const messageId = msg.messageId?.trim();
+        if (messageId) {
+          return `bluebubbles:${account.accountId}:msg:${messageId}`;
+        }
 
-      const chatKey =
-        msg.chatGuid?.trim() ??
-        msg.chatIdentifier?.trim() ??
-        (msg.chatId ? String(msg.chatId) : "dm");
-      return `bluebubbles:${account.accountId}:${chatKey}:${msg.senderId}`;
-    },
-    shouldDebounce: (entry) => {
-      const msg = entry.message;
-      // Skip debouncing for from-me messages (they're just cached, not processed)
-      if (msg.fromMe) {
-        return false;
-      }
-      // Skip debouncing for control commands - process immediately
-      if (core.channel.text.hasControlCommand(msg.text, config)) {
-        return false;
-      }
-      // Debounce all other messages to coalesce rapid-fire webhook events
-      // (e.g., text+image arriving as separate webhooks for the same messageId)
-      return true;
-    },
-    onFlush: async (entries) => {
-      if (entries.length === 0) {
-        return;
-      }
+        const chatKey =
+          msg.chatGuid?.trim() ??
+          msg.chatIdentifier?.trim() ??
+          (msg.chatId ? String(msg.chatId) : "dm");
+        return `bluebubbles:${account.accountId}:${chatKey}:${msg.senderId}`;
+      },
+      shouldDebounce: (entry) => {
+        const msg = entry.message;
+        // Skip debouncing for from-me messages (they're just cached, not processed)
+        if (msg.fromMe) {
+          return false;
+        }
+        // Skip debouncing for control commands - process immediately
+        if (core.channel.text.hasControlCommand(msg.text, config)) {
+          return false;
+        }
+        // Debounce all other messages to coalesce rapid-fire webhook events
+        // (e.g., text+image arriving as separate webhooks for the same messageId)
+        return true;
+      },
+      onFlush: async (entries) => {
+        if (entries.length === 0) {
+          return;
+        }
 
-      // Use target from first entry (all entries have same target due to key structure)
-      const flushTarget = entries[0].target;
+        // Use target from first entry (all entries have same target due to key structure)
+        const flushTarget = entries[0].target;
 
-      if (entries.length === 1) {
-        // Single message - process normally
-        await processMessage(entries[0].message, flushTarget);
-        return;
-      }
+        if (entries.length === 1) {
+          // Single message - process normally
+          await processMessage(entries[0].message, flushTarget);
+          return;
+        }
 
-      // Multiple messages - combine and process
-      const combined = combineDebounceEntries(entries);
+        // Multiple messages - combine and process
+        const combined = combineDebounceEntries(entries);
 
-      if (core.logging.shouldLogVerbose()) {
-        const count = entries.length;
-        const preview = combined.text.slice(0, 50);
-        runtime.log?.(
-          `[bluebubbles] coalesced ${count} messages: "${preview}${combined.text.length > 50 ? "..." : ""}"`,
+        if (core.logging.shouldLogVerbose()) {
+          const count = entries.length;
+          const preview = combined.text.slice(0, 50);
+          runtime.log?.(
+            `[bluebubbles] coalesced ${count} messages: "${preview}${combined.text.length > 50 ? "..." : ""}"`,
+          );
+        }
+
+        await processMessage(combined, flushTarget);
+      },
+      onError: (err) => {
+        runtime.error?.(
+          `[${account.accountId}] [bluebubbles] debounce flush failed: ${String(err)}`,
         );
-      }
-
-      await processMessage(combined, flushTarget);
-    },
-    onError: (err) => {
-      runtime.error?.(`[${account.accountId}] [bluebubbles] debounce flush failed: ${String(err)}`);
-    },
-  });
+      },
+    });
 
   targetDebouncers.set(target, debouncer);
   return debouncer;
@@ -234,7 +248,9 @@ function removeDebouncer(target: WebhookTarget): void {
   targetDebouncers.delete(target);
 }
 
-export function registerBlueBubblesWebhookTarget(target: WebhookTarget): () => void {
+export function registerBlueBubblesWebhookTarget(
+  target: WebhookTarget,
+): () => void {
   const registered = registerWebhookTargetWithPluginRoute({
     targetsByPath: webhookTargets,
     target,
@@ -277,14 +293,18 @@ function parseBlueBubblesWebhookPayload(
     return { ok: true, value: JSON.parse(trimmed) as unknown };
   } catch {
     const params = new URLSearchParams(rawBody);
-    const payload = params.get("payload") ?? params.get("data") ?? params.get("message");
+    const payload =
+      params.get("payload") ?? params.get("data") ?? params.get("message");
     if (!payload) {
       return { ok: false, error: "invalid json" };
     }
     try {
       return { ok: true, value: JSON.parse(payload) as unknown };
     } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      return {
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+      };
     }
   }
 }
@@ -376,7 +396,9 @@ export async function handleBlueBubblesWebhookRequest(
   if (!body.ok) {
     res.statusCode = body.statusCode;
     res.end(body.error ?? "invalid payload");
-    console.warn(`[bluebubbles] webhook rejected: ${body.error ?? "invalid payload"}`);
+    console.warn(
+      `[bluebubbles] webhook rejected: ${body.error ?? "invalid payload"}`,
+    );
     return true;
   }
 
@@ -401,7 +423,11 @@ export async function handleBlueBubblesWebhookRequest(
     res.statusCode = 200;
     res.end("ok");
     if (firstTarget) {
-      logVerbose(firstTarget.core, firstTarget.runtime, `webhook ignored type=${eventType}`);
+      logVerbose(
+        firstTarget.core,
+        firstTarget.runtime,
+        `webhook ignored type=${eventType}`,
+      );
     }
     return true;
   }
@@ -427,17 +453,23 @@ export async function handleBlueBubblesWebhookRequest(
   if (!message && !reaction) {
     res.statusCode = 400;
     res.end("invalid payload");
-    console.warn("[bluebubbles] webhook rejected: unable to parse message payload");
+    console.warn(
+      "[bluebubbles] webhook rejected: unable to parse message payload",
+    );
     return true;
   }
 
-  const guidParam = url.searchParams.get("guid") ?? url.searchParams.get("password");
+  const guidParam =
+    url.searchParams.get("guid") ?? url.searchParams.get("password");
   const headerToken =
     req.headers["x-guid"] ??
     req.headers["x-password"] ??
     req.headers["x-bluebubbles-guid"] ??
     req.headers["authorization"];
-  const guid = (Array.isArray(headerToken) ? headerToken[0] : headerToken) ?? guidParam ?? "";
+  const guid =
+    (Array.isArray(headerToken) ? headerToken[0] : headerToken) ??
+    guidParam ??
+    "";
   const matchedTarget = resolveSingleWebhookTarget(targets, (target) => {
     const token = target.account.config.password?.trim() ?? "";
     return safeEqualSecret(guid, token);
@@ -455,7 +487,9 @@ export async function handleBlueBubblesWebhookRequest(
   if (matchedTarget.kind === "ambiguous") {
     res.statusCode = 401;
     res.end("ambiguous webhook target");
-    console.warn(`[bluebubbles] webhook rejected: ambiguous target match path=${path}`);
+    console.warn(
+      `[bluebubbles] webhook rejected: ambiguous target match path=${path}`,
+    );
     return true;
   }
 
@@ -515,7 +549,9 @@ export async function monitorBlueBubblesProvider(
     timeoutMs: 5000,
   }).catch(() => null);
   if (serverInfo?.os_version) {
-    runtime.log?.(`[${account.accountId}] BlueBubbles server macOS ${serverInfo.os_version}`);
+    runtime.log?.(
+      `[${account.accountId}] BlueBubbles server macOS ${serverInfo.os_version}`,
+    );
   }
   if (typeof serverInfo?.private_api === "boolean") {
     runtime.log?.(
@@ -550,4 +586,8 @@ export async function monitorBlueBubblesProvider(
   });
 }
 
-export { _resetBlueBubblesShortIdState, resolveBlueBubblesMessageId, resolveWebhookPathFromConfig };
+export {
+  _resetBlueBubblesShortIdState,
+  resolveBlueBubblesMessageId,
+  resolveWebhookPathFromConfig,
+};

@@ -8,7 +8,9 @@ const mockState = vi.hoisted(() => ({
   createMattermostPost: vi.fn(),
   fetchMattermostMe: vi.fn(),
   fetchMattermostUserByUsername: vi.fn(),
-  normalizeMattermostBaseUrl: vi.fn((input: string | undefined) => input?.trim() ?? ""),
+  normalizeMattermostBaseUrl: vi.fn(
+    (input: string | undefined) => input?.trim() ?? "",
+  ),
   uploadMattermostFile: vi.fn(),
 }));
 
@@ -41,7 +43,12 @@ vi.mock("../runtime.js", () => ({
     },
     logging: {
       shouldLogVerbose: () => false,
-      getChildLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
+      getChildLogger: () => ({
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      }),
     },
     channel: {
       text: {

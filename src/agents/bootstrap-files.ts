@@ -23,7 +23,8 @@ export function makeBootstrapWarn(params: {
   if (!params.warn) {
     return undefined;
   }
-  return (message: string) => params.warn?.(`${message} (sessionKey=${params.sessionLabel})`);
+  return (message: string) =>
+    params.warn?.(`${message} (sessionKey=${params.sessionLabel})`);
 }
 
 function sanitizeBootstrapFiles(

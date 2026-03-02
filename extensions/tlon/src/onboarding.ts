@@ -10,7 +10,10 @@ import {
 import { buildTlonAccountFields } from "./account-fields.js";
 import type { TlonResolvedAccount } from "./types.js";
 import { listTlonAccountIds, resolveTlonAccount } from "./types.js";
-import { isBlockedUrbitHostname, validateUrbitBaseUrl } from "./urbit/base-url.js";
+import {
+  isBlockedUrbitHostname,
+  validateUrbitBaseUrl,
+} from "./urbit/base-url.js";
 
 const channel = "tlon" as const;
 
@@ -64,9 +67,8 @@ function applyAccountConfig(params: {
         accounts: {
           ...(base as { accounts?: Record<string, unknown> }).accounts,
           [accountId]: {
-            ...(base as { accounts?: Record<string, Record<string, unknown>> }).accounts?.[
-              accountId
-            ],
+            ...(base as { accounts?: Record<string, Record<string, unknown>> })
+              .accounts?.[accountId],
             ...nextValues,
           },
         },
@@ -101,7 +103,9 @@ export const tlonOnboardingAdapter: ChannelOnboardingAdapter = {
     const accountIds = listTlonAccountIds(cfg);
     const configured =
       accountIds.length > 0
-        ? accountIds.some((accountId) => isConfigured(resolveTlonAccount(cfg, accountId)))
+        ? accountIds.some((accountId) =>
+            isConfigured(resolveTlonAccount(cfg, accountId)),
+          )
         : isConfigured(resolveTlonAccount(cfg, DEFAULT_ACCOUNT_ID));
 
     return {
@@ -112,7 +116,12 @@ export const tlonOnboardingAdapter: ChannelOnboardingAdapter = {
       quickstartScore: configured ? 1 : 4,
     };
   },
-  configure: async ({ cfg, prompter, accountOverrides, shouldPromptAccountIds }) => {
+  configure: async ({
+    cfg,
+    prompter,
+    accountOverrides,
+    shouldPromptAccountIds,
+  }) => {
     const override = accountOverrides[channel]?.trim();
     const defaultAccountId = DEFAULT_ACCOUNT_ID;
     let accountId = override ? normalizeAccountId(override) : defaultAccountId;
@@ -135,7 +144,8 @@ export const tlonOnboardingAdapter: ChannelOnboardingAdapter = {
       message: "Ship name",
       placeholder: "~sampel-palnet",
       initialValue: resolved.ship ?? undefined,
-      validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
+      validate: (value) =>
+        String(value ?? "").trim() ? undefined : "Required",
     });
 
     const url = await prompter.text({
@@ -164,7 +174,9 @@ export const tlonOnboardingAdapter: ChannelOnboardingAdapter = {
         initialValue: allowPrivateNetwork,
       });
       if (!allowPrivateNetwork) {
-        throw new Error("Refusing private/internal Ship URL without explicit approval");
+        throw new Error(
+          "Refusing private/internal Ship URL without explicit approval",
+        );
       }
     }
 
@@ -172,7 +184,8 @@ export const tlonOnboardingAdapter: ChannelOnboardingAdapter = {
       message: "Login code",
       placeholder: "lidlut-tabwed-pillex-ridrup",
       initialValue: resolved.code ?? undefined,
-      validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
+      validate: (value) =>
+        String(value ?? "").trim() ? undefined : "Required",
     });
 
     const wantsGroupChannels = await prompter.confirm({

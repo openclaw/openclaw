@@ -38,7 +38,9 @@ const model = {
   compat: {},
 } as unknown as Parameters<ReturnType<typeof createOpenAIWebSocketStreamFn>>[0];
 
-type StreamFnParams = Parameters<ReturnType<typeof createOpenAIWebSocketStreamFn>>;
+type StreamFnParams = Parameters<
+  ReturnType<typeof createOpenAIWebSocketStreamFn>
+>;
 function makeContext(userMessage: string): StreamFnParams[1] {
   return {
     systemPrompt: "You are a helpful assistant. Reply in one sentence.",
@@ -76,7 +78,10 @@ describe("OpenAI WebSocket e2e", () => {
       }
 
       const done = events.find((e) => e.type === "done") as
-        | { type: "done"; message: { content: Array<{ type: string; text?: string }> } }
+        | {
+            type: "done";
+            message: { content: Array<{ type: string; text?: string }> };
+          }
         | undefined;
       expect(done).toBeDefined();
       expect(done!.message.content.length).toBeGreaterThan(0);
@@ -95,9 +100,13 @@ describe("OpenAI WebSocket e2e", () => {
     async () => {
       const sid = freshSession("temp");
       const streamFn = createOpenAIWebSocketStreamFn(API_KEY!, sid);
-      const stream = streamFn(model, makeContext("Pick a random number between 1 and 1000."), {
-        temperature: 0.8,
-      });
+      const stream = streamFn(
+        model,
+        makeContext("Pick a random number between 1 and 1000."),
+        {
+          temperature: 0.8,
+        },
+      );
 
       const events: Array<{ type: string }> = [];
       for await (const event of stream as AsyncIterable<{ type: string }>) {
@@ -105,7 +114,9 @@ describe("OpenAI WebSocket e2e", () => {
       }
 
       // Stream must complete (done or error with fallback) — must NOT hang.
-      const hasTerminal = events.some((e) => e.type === "done" || e.type === "error");
+      const hasTerminal = events.some(
+        (e) => e.type === "done" || e.type === "error",
+      );
       expect(hasTerminal).toBe(true);
     },
     30_000,
@@ -143,7 +154,9 @@ describe("OpenAI WebSocket e2e", () => {
         events.push(event);
       }
 
-      const hasTerminal = events.some((e) => e.type === "done" || e.type === "error");
+      const hasTerminal = events.some(
+        (e) => e.type === "done" || e.type === "error",
+      );
       expect(hasTerminal).toBe(true);
     },
     30_000,

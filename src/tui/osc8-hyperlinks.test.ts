@@ -4,7 +4,9 @@ import { addOsc8Hyperlinks, extractUrls, wrapOsc8 } from "./osc8-hyperlinks.js";
 describe("wrapOsc8", () => {
   it("wraps text with OSC 8 open and close sequences", () => {
     const result = wrapOsc8("https://example.com", "click here");
-    expect(result).toBe("\x1b]8;;https://example.com\x07click here\x1b]8;;\x07");
+    expect(result).toBe(
+      "\x1b]8;;https://example.com\x07click here\x1b]8;;\x07",
+    );
   });
 
   it("handles empty text", () => {
@@ -32,12 +34,15 @@ describe("extractUrls", () => {
   });
 
   it("extracts markdown links with angle brackets and title text", () => {
-    const urls = extractUrls('[Click here](<https://example.com/path> "Example Title")');
+    const urls = extractUrls(
+      '[Click here](<https://example.com/path> "Example Title")',
+    );
     expect(urls).toEqual(["https://example.com/path"]);
   });
 
   it("extracts both bare URLs and markdown links", () => {
-    const md = "See [docs](https://docs.example.com) and https://api.example.com";
+    const md =
+      "See [docs](https://docs.example.com) and https://api.example.com";
     const urls = extractUrls(md);
     expect(urls).toContain("https://docs.example.com");
     expect(urls).toContain("https://api.example.com");
@@ -74,7 +79,9 @@ describe("addOsc8Hyperlinks", () => {
     expect(result[0]).toContain(`\x1b]8;;${url}\x07`);
     expect(result[0]).toContain(`\x1b]8;;\x07`);
     // The URL text should be between open and close
-    expect(result[0]).toBe(`Visit \x1b]8;;${url}\x07${url}\x1b]8;;\x07 for info`);
+    expect(result[0]).toBe(
+      `Visit \x1b]8;;${url}\x07${url}\x1b]8;;\x07 for info`,
+    );
   });
 
   it("wraps a URL broken across two lines", () => {
@@ -138,8 +145,13 @@ describe("addOsc8Hyperlinks", () => {
   });
 
   it("handles URL split across three lines", () => {
-    const fullUrl = "https://example.com/a/very/long/path/that/keeps/going/and/going";
-    const lines = ["https://example.com/a/very/lon", "g/path/that/keeps/going/and/g", "oing"];
+    const fullUrl =
+      "https://example.com/a/very/long/path/that/keeps/going/and/going";
+    const lines = [
+      "https://example.com/a/very/lon",
+      "g/path/that/keeps/going/and/g",
+      "oing",
+    ];
     const result = addOsc8Hyperlinks(lines, [fullUrl]);
 
     // All three lines should have OSC 8 wrapping

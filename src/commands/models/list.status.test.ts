@@ -42,7 +42,9 @@ const mocks = vi.hoisted(() => {
         .filter(([, cred]) => cred.provider === provider)
         .map(([id]) => id);
     }),
-    resolveAuthProfileDisplayLabel: vi.fn(({ profileId }: { profileId: string }) => profileId),
+    resolveAuthProfileDisplayLabel: vi.fn(
+      ({ profileId }: { profileId: string }) => profileId,
+    ),
     resolveAuthStorePathForDisplay: vi
       .fn()
       .mockReturnValue("/tmp/openclaw-agent/auth-profiles.json"),
@@ -62,7 +64,9 @@ const mocks = vi.hoisted(() => {
       return null;
     }),
     getCustomProviderApiKey: vi.fn().mockReturnValue(undefined),
-    getShellEnvAppliedKeys: vi.fn().mockReturnValue(["OPENAI_API_KEY", "ANTHROPIC_OAUTH_TOKEN"]),
+    getShellEnvAppliedKeys: vi
+      .fn()
+      .mockReturnValue(["OPENAI_API_KEY", "ANTHROPIC_OAUTH_TOKEN"]),
     shouldEnableShellEnvFallback: vi.fn().mockReturnValue(true),
     loadConfig: vi.fn().mockReturnValue({
       agents: {
@@ -91,7 +95,8 @@ vi.mock("../../agents/agent-scope.js", () => ({
 }));
 
 vi.mock("../../agents/auth-profiles.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../agents/auth-profiles.js")>();
+  const actual =
+    await importOriginal<typeof import("../../agents/auth-profiles.js")>();
   return {
     ...actual,
     ensureAuthProfileStore: mocks.ensureAuthProfileStore,
@@ -112,7 +117,8 @@ vi.mock("../../infra/shell-env.js", () => ({
 }));
 
 vi.mock("../../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../config/config.js")>();
+  const actual =
+    await importOriginal<typeof import("../../config/config.js")>();
   return {
     ...actual,
     loadConfig: mocks.loadConfig,
@@ -120,7 +126,8 @@ vi.mock("../../config/config.js", async (importOriginal) => {
 });
 
 vi.mock("../../infra/provider-usage.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../infra/provider-usage.js")>();
+  const actual =
+    await importOriginal<typeof import("../../infra/provider-usage.js")>();
   return {
     ...actual,
     loadProviderUsageSummary: mocks.loadProviderUsageSummary,
@@ -155,9 +162,12 @@ async function withAgentScopeOverrides<T>(
   },
   run: () => Promise<T>,
 ) {
-  const originalPrimary = mocks.resolveAgentExplicitModelPrimary.getMockImplementation();
-  const originalEffectivePrimary = mocks.resolveAgentEffectiveModelPrimary.getMockImplementation();
-  const originalFallbacks = mocks.resolveAgentModelFallbacksOverride.getMockImplementation();
+  const originalPrimary =
+    mocks.resolveAgentExplicitModelPrimary.getMockImplementation();
+  const originalEffectivePrimary =
+    mocks.resolveAgentEffectiveModelPrimary.getMockImplementation();
+  const originalFallbacks =
+    mocks.resolveAgentModelFallbacksOverride.getMockImplementation();
   const originalAgentDir = mocks.resolveAgentDir.getMockImplementation();
 
   mocks.resolveAgentExplicitModelPrimary.mockReturnValue(overrides.primary);
@@ -171,17 +181,23 @@ async function withAgentScopeOverrides<T>(
     return await run();
   } finally {
     if (originalPrimary) {
-      mocks.resolveAgentExplicitModelPrimary.mockImplementation(originalPrimary);
+      mocks.resolveAgentExplicitModelPrimary.mockImplementation(
+        originalPrimary,
+      );
     } else {
       mocks.resolveAgentExplicitModelPrimary.mockReturnValue(undefined);
     }
     if (originalEffectivePrimary) {
-      mocks.resolveAgentEffectiveModelPrimary.mockImplementation(originalEffectivePrimary);
+      mocks.resolveAgentEffectiveModelPrimary.mockImplementation(
+        originalEffectivePrimary,
+      );
     } else {
       mocks.resolveAgentEffectiveModelPrimary.mockReturnValue(undefined);
     }
     if (originalFallbacks) {
-      mocks.resolveAgentModelFallbacksOverride.mockImplementation(originalFallbacks);
+      mocks.resolveAgentModelFallbacksOverride.mockImplementation(
+        originalFallbacks,
+      );
     } else {
       mocks.resolveAgentModelFallbacksOverride.mockReturnValue(undefined);
     }
@@ -196,13 +212,19 @@ async function withAgentScopeOverrides<T>(
 describe("modelsStatusCommand auth overview", () => {
   it("includes masked auth sources in JSON output", async () => {
     await modelsStatusCommand({ json: true }, runtime as never);
-    const payload = JSON.parse(String((runtime.log as Mock).mock.calls[0]?.[0]));
+    const payload = JSON.parse(
+      String((runtime.log as Mock).mock.calls[0]?.[0]),
+    );
 
     expect(mocks.resolveOpenClawAgentDir).toHaveBeenCalled();
     expect(payload.defaultModel).toBe("anthropic/claude-opus-4-5");
-    expect(payload.auth.storePath).toBe("/tmp/openclaw-agent/auth-profiles.json");
+    expect(payload.auth.storePath).toBe(
+      "/tmp/openclaw-agent/auth-profiles.json",
+    );
     expect(payload.auth.shellEnvFallback.enabled).toBe(true);
-    expect(payload.auth.shellEnvFallback.appliedKeys).toContain("OPENAI_API_KEY");
+    expect(payload.auth.shellEnvFallback.appliedKeys).toContain(
+      "OPENAI_API_KEY",
+    );
     expect(payload.auth.missingProvidersInUse).toEqual([]);
     expect(payload.auth.oauth.warnAfterMs).toBeGreaterThan(0);
     expect(payload.auth.oauth.profiles.length).toBeGreaterThan(0);
@@ -222,10 +244,14 @@ describe("modelsStatusCommand auth overview", () => {
     expect(openai?.env?.value).toContain("...");
 
     expect(
-      (payload.auth.providersWithOAuth as string[]).some((e) => e.startsWith("anthropic")),
+      (payload.auth.providersWithOAuth as string[]).some((e) =>
+        e.startsWith("anthropic"),
+      ),
     ).toBe(true);
     expect(
-      (payload.auth.providersWithOAuth as string[]).some((e) => e.startsWith("openai-codex")),
+      (payload.auth.providersWithOAuth as string[]).some((e) =>
+        e.startsWith("openai-codex"),
+      ),
     ).toBe(true);
   });
 
@@ -244,7 +270,9 @@ describe("modelsStatusCommand auth overview", () => {
 
     try {
       await modelsStatusCommand({ json: true }, localRuntime as never);
-      const payload = JSON.parse(String((localRuntime.log as Mock).mock.calls[0]?.[0]));
+      const payload = JSON.parse(
+        String((localRuntime.log as Mock).mock.calls[0]?.[0]),
+      );
       const providers = payload.auth.providers as Array<{
         provider: string;
         profiles: { labels: string[] };
@@ -267,9 +295,17 @@ describe("modelsStatusCommand auth overview", () => {
         agentDir: "/tmp/openclaw-agent-custom",
       },
       async () => {
-        await modelsStatusCommand({ json: true, agent: "Jeremiah" }, localRuntime as never);
-        expect(mocks.resolveAgentDir).toHaveBeenCalledWith(expect.anything(), "jeremiah");
-        const payload = JSON.parse(String((localRuntime.log as Mock).mock.calls[0]?.[0]));
+        await modelsStatusCommand(
+          { json: true, agent: "Jeremiah" },
+          localRuntime as never,
+        );
+        expect(mocks.resolveAgentDir).toHaveBeenCalledWith(
+          expect.anything(),
+          "jeremiah",
+        );
+        const payload = JSON.parse(
+          String((localRuntime.log as Mock).mock.calls[0]?.[0]),
+        );
         expect(payload.agentId).toBe("jeremiah");
         expect(payload.agentDir).toBe("/tmp/openclaw-agent-custom");
         expect(payload.defaultModel).toBe("openai/gpt-4");
@@ -308,8 +344,13 @@ describe("modelsStatusCommand auth overview", () => {
         fallbacks: undefined,
       },
       async () => {
-        await modelsStatusCommand({ json: true, agent: "main" }, localRuntime as never);
-        const payload = JSON.parse(String((localRuntime.log as Mock).mock.calls[0]?.[0]));
+        await modelsStatusCommand(
+          { json: true, agent: "main" },
+          localRuntime as never,
+        );
+        const payload = JSON.parse(
+          String((localRuntime.log as Mock).mock.calls[0]?.[0]),
+        );
         expect(payload.modelConfig).toEqual({
           defaultSource: "defaults",
           fallbacksSource: "defaults",
@@ -320,9 +361,9 @@ describe("modelsStatusCommand auth overview", () => {
 
   it("throws when agent id is unknown", async () => {
     const localRuntime = createRuntime();
-    await expect(modelsStatusCommand({ agent: "unknown" }, localRuntime as never)).rejects.toThrow(
-      'Unknown agent id "unknown".',
-    );
+    await expect(
+      modelsStatusCommand({ agent: "unknown" }, localRuntime as never),
+    ).rejects.toThrow('Unknown agent id "unknown".');
   });
   it("exits non-zero when auth is missing", async () => {
     const originalProfiles = { ...mocks.store.profiles };
@@ -332,7 +373,10 @@ describe("modelsStatusCommand auth overview", () => {
     mocks.resolveEnvApiKey.mockImplementation(() => null);
 
     try {
-      await modelsStatusCommand({ check: true, plain: true }, localRuntime as never);
+      await modelsStatusCommand(
+        { check: true, plain: true },
+        localRuntime as never,
+      );
       expect(localRuntime.exit).toHaveBeenCalledWith(1);
     } finally {
       mocks.store.profiles = originalProfiles;

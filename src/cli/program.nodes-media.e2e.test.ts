@@ -1,8 +1,23 @@
 import * as fs from "node:fs/promises";
 import { Command } from "commander";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { IOS_NODE, createIosNodeListResponse } from "./program.nodes-test-helpers.js";
-import { callGateway, installBaseProgramMocks, runtime } from "./program.test-mocks.js";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
+import {
+  IOS_NODE,
+  createIosNodeListResponse,
+} from "./program.nodes-test-helpers.js";
+import {
+  callGateway,
+  installBaseProgramMocks,
+  runtime,
+} from "./program.test-mocks.js";
 
 installBaseProgramMocks();
 let registerNodesCli: (program: Command) => void;
@@ -10,7 +25,9 @@ let registerNodesCli: (program: Command) => void;
 function getFirstRuntimeLogLine(): string {
   const first = runtime.log.mock.calls[0]?.[0];
   if (typeof first !== "string") {
-    throw new Error(`Expected runtime.log first arg to be string, got ${typeof first}`);
+    throw new Error(
+      `Expected runtime.log first arg to be string, got ${typeof first}`,
+    );
   }
   return first;
 }
@@ -25,7 +42,9 @@ async function expectLoggedSingleMediaFile(params?: {
     expect(mediaPath).toMatch(params.expectedPathPattern);
   }
   try {
-    await expect(fs.readFile(mediaPath, "utf8")).resolves.toBe(params?.expectedContent ?? "hi");
+    await expect(fs.readFile(mediaPath, "utf8")).resolves.toBe(
+      params?.expectedContent ?? "hi",
+    );
   } finally {
     await fs.unlink(mediaPath).catch(() => {});
   }
@@ -84,15 +103,26 @@ describe("cli program (nodes media)", () => {
   });
 
   it("runs nodes camera snap and prints two MEDIA paths", async () => {
-    mockNodeGateway("camera.snap", { format: "jpg", base64: "aGk=", width: 1, height: 1 });
+    mockNodeGateway("camera.snap", {
+      format: "jpg",
+      base64: "aGk=",
+      width: 1,
+      height: 1,
+    });
 
     await runNodesCommand(["nodes", "camera", "snap", "--node", "ios-node"]);
 
     const invokeCalls = callGateway.mock.calls
-      .map((call) => call[0] as { method?: string; params?: Record<string, unknown> })
+      .map(
+        (call) =>
+          call[0] as { method?: string; params?: Record<string, unknown> },
+      )
       .filter((call) => call.method === "node.invoke");
     const facings = invokeCalls
-      .map((call) => (call.params?.params as { facing?: string } | undefined)?.facing)
+      .map(
+        (call) =>
+          (call.params?.params as { facing?: string } | undefined)?.facing,
+      )
       .filter((facing): facing is string => Boolean(facing))
       .toSorted((a, b) => a.localeCompare(b));
     expect(facings).toEqual(["back", "front"]);
@@ -125,7 +155,15 @@ describe("cli program (nodes media)", () => {
       hasAudio: true,
     });
 
-    await runNodesCommand(["nodes", "camera", "clip", "--node", "ios-node", "--duration", "3000"]);
+    await runNodesCommand([
+      "nodes",
+      "camera",
+      "clip",
+      "--node",
+      "ios-node",
+      "--duration",
+      "3000",
+    ]);
 
     expect(callGateway).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -151,7 +189,12 @@ describe("cli program (nodes media)", () => {
   });
 
   it("runs nodes camera snap with facing front and passes params", async () => {
-    mockNodeGateway("camera.snap", { format: "jpg", base64: "aGk=", width: 1, height: 1 });
+    mockNodeGateway("camera.snap", {
+      format: "jpg",
+      base64: "aGk=",
+      width: 1,
+      height: 1,
+    });
 
     await runNodesCommand([
       "nodes",
@@ -241,7 +284,15 @@ describe("cli program (nodes media)", () => {
       hasAudio: true,
     });
 
-    await runNodesCommand(["nodes", "camera", "clip", "--node", "ios-node", "--duration", "10s"]);
+    await runNodesCommand([
+      "nodes",
+      "camera",
+      "clip",
+      "--node",
+      "ios-node",
+      "--duration",
+      "10s",
+    ]);
 
     expect(callGateway).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -258,7 +309,15 @@ describe("cli program (nodes media)", () => {
   it("runs nodes canvas snapshot and prints MEDIA path", async () => {
     mockNodeGateway("canvas.snapshot", { format: "png", base64: "aGk=" });
 
-    await runNodesCommand(["nodes", "canvas", "snapshot", "--node", "ios-node", "--format", "png"]);
+    await runNodesCommand([
+      "nodes",
+      "canvas",
+      "snapshot",
+      "--node",
+      "ios-node",
+      "--format",
+      "png",
+    ]);
 
     await expectLoggedSingleMediaFile({
       expectedPathPattern: /openclaw-canvas-snapshot-.*\.png$/,
@@ -274,14 +333,19 @@ describe("cli program (nodes media)", () => {
     runtime.error.mockClear();
 
     await expect(
-      program.parseAsync(["nodes", "camera", "snap", "--node", "ios-node", "--facing", "nope"], {
-        from: "user",
-      }),
+      program.parseAsync(
+        ["nodes", "camera", "snap", "--node", "ios-node", "--facing", "nope"],
+        {
+          from: "user",
+        },
+      ),
     ).rejects.toThrow(/exit/i);
 
-    expect(runtime.error.mock.calls.some(([msg]) => /invalid facing/i.test(String(msg)))).toBe(
-      true,
-    );
+    expect(
+      runtime.error.mock.calls.some(([msg]) =>
+        /invalid facing/i.test(String(msg)),
+      ),
+    ).toBe(true);
   });
 
   it("fails nodes camera snap when --facing both and --device-id are combined", async () => {
@@ -344,7 +408,15 @@ describe("cli program (nodes media)", () => {
           width: 640,
           height: 480,
         },
-        argv: ["nodes", "camera", "snap", "--node", "ios-node", "--facing", "front"],
+        argv: [
+          "nodes",
+          "camera",
+          "snap",
+          "--node",
+          "ios-node",
+          "--facing",
+          "front",
+        ],
         expectedPathPattern: /openclaw-camera-snap-front-.*\.jpg$/,
       },
       {
@@ -356,7 +428,15 @@ describe("cli program (nodes media)", () => {
           durationMs: 5000,
           hasAudio: true,
         },
-        argv: ["nodes", "camera", "clip", "--node", "ios-node", "--duration", "5000"],
+        argv: [
+          "nodes",
+          "camera",
+          "clip",
+          "--node",
+          "ios-node",
+          "--duration",
+          "5000",
+        ],
         expectedPathPattern: /openclaw-camera-clip-front-.*\.mp4$/,
       },
     ])("$label", async ({ command, payload, argv, expectedPathPattern }) => {

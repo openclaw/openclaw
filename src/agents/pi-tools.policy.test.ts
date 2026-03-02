@@ -32,12 +32,18 @@ describe("pi-tools.policy", () => {
   });
 
   it("supports wildcard allow/deny patterns", () => {
-    expect(isToolAllowedByPolicyName("web_fetch", { allow: ["web_*"] })).toBe(true);
-    expect(isToolAllowedByPolicyName("web_search", { deny: ["web_*"] })).toBe(false);
+    expect(isToolAllowedByPolicyName("web_fetch", { allow: ["web_*"] })).toBe(
+      true,
+    );
+    expect(isToolAllowedByPolicyName("web_search", { deny: ["web_*"] })).toBe(
+      false,
+    );
   });
 
   it("keeps apply_patch when exec is allowlisted", () => {
-    expect(isToolAllowedByPolicyName("apply_patch", { allow: ["exec"] })).toBe(true);
+    expect(isToolAllowedByPolicyName("apply_patch", { allow: ["exec"] })).toBe(
+      true,
+    );
   });
 });
 
@@ -77,7 +83,9 @@ describe("resolveSubagentToolPolicy depth awareness", () => {
     const cfg = {
       agents: { defaults: { subagents: { maxSpawnDepth: 2 } } },
       tools: {
-        subagents: { tools: { allow: ["sessions_spawn"], alsoAllow: ["sessions_send"] } },
+        subagents: {
+          tools: { allow: ["sessions_spawn"], alsoAllow: ["sessions_send"] },
+        },
       },
     } as unknown as OpenClawConfig;
     const policy = resolveSubagentToolPolicy(cfg, 1);

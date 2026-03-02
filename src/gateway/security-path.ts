@@ -30,10 +30,16 @@ function resolveDotSegments(pathname: string): string {
 }
 
 function normalizePathForSecurity(pathname: string): string {
-  return normalizePathSeparators(resolveDotSegments(pathname).toLowerCase()) || "/";
+  return (
+    normalizePathSeparators(resolveDotSegments(pathname).toLowerCase()) || "/"
+  );
 }
 
-function pushNormalizedCandidate(candidates: string[], seen: Set<string>, value: string): void {
+function pushNormalizedCandidate(
+  candidates: string[],
+  seen: Set<string>,
+  value: string,
+): void {
   const normalized = normalizePathForSecurity(value);
   if (seen.has(normalized)) {
     return;
@@ -103,9 +109,15 @@ function prefixMatch(pathname: string, prefix: string): boolean {
   );
 }
 
-export function canonicalizePathForSecurity(pathname: string): SecurityPathCanonicalization {
-  const { candidates, decodePasses, decodePassLimitReached, malformedEncoding } =
-    buildCanonicalPathCandidates(pathname);
+export function canonicalizePathForSecurity(
+  pathname: string,
+): SecurityPathCanonicalization {
+  const {
+    candidates,
+    decodePasses,
+    decodePassLimitReached,
+    malformedEncoding,
+  } = buildCanonicalPathCandidates(pathname);
 
   return {
     canonicalPath: candidates[candidates.length - 1] ?? "/",
@@ -117,12 +129,17 @@ export function canonicalizePathForSecurity(pathname: string): SecurityPathCanon
   };
 }
 
-export function hasSecurityPathCanonicalizationAnomaly(pathname: string): boolean {
+export function hasSecurityPathCanonicalizationAnomaly(
+  pathname: string,
+): boolean {
   const canonical = canonicalizePathForSecurity(pathname);
   return canonical.malformedEncoding || canonical.decodePassLimitReached;
 }
 
-const normalizedPrefixesCache = new WeakMap<readonly string[], readonly string[]>();
+const normalizedPrefixesCache = new WeakMap<
+  readonly string[],
+  readonly string[]
+>();
 
 function getNormalizedPrefixes(prefixes: readonly string[]): readonly string[] {
   const cached = normalizedPrefixesCache.get(prefixes);
@@ -134,7 +151,10 @@ function getNormalizedPrefixes(prefixes: readonly string[]): readonly string[] {
   return normalized;
 }
 
-export function isPathProtectedByPrefixes(pathname: string, prefixes: readonly string[]): boolean {
+export function isPathProtectedByPrefixes(
+  pathname: string,
+  prefixes: readonly string[],
+): boolean {
   const canonical = canonicalizePathForSecurity(pathname);
   const normalizedPrefixes = getNormalizedPrefixes(prefixes);
   if (
@@ -151,7 +171,9 @@ export function isPathProtectedByPrefixes(pathname: string, prefixes: readonly s
   if (!canonical.malformedEncoding) {
     return false;
   }
-  return normalizedPrefixes.some((prefix) => prefixMatch(canonical.rawNormalizedPath, prefix));
+  return normalizedPrefixes.some((prefix) =>
+    prefixMatch(canonical.rawNormalizedPath, prefix),
+  );
 }
 
 export const PROTECTED_PLUGIN_ROUTE_PREFIXES = ["/api/channels"] as const;

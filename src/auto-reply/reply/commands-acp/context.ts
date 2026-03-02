@@ -6,7 +6,11 @@ function normalizeString(value: unknown): string {
   if (typeof value === "string") {
     return value.trim();
   }
-  if (typeof value === "number" || typeof value === "bigint" || typeof value === "boolean") {
+  if (
+    typeof value === "number" ||
+    typeof value === "bigint" ||
+    typeof value === "boolean"
+  ) {
     return `${value}`.trim();
   }
   return "";
@@ -21,25 +25,35 @@ export function resolveAcpCommandChannel(params: HandleCommandsParams): string {
   return normalizeString(raw).toLowerCase();
 }
 
-export function resolveAcpCommandAccountId(params: HandleCommandsParams): string {
+export function resolveAcpCommandAccountId(
+  params: HandleCommandsParams,
+): string {
   const accountId = normalizeString(params.ctx.AccountId);
   return accountId || "default";
 }
 
-export function resolveAcpCommandThreadId(params: HandleCommandsParams): string | undefined {
+export function resolveAcpCommandThreadId(
+  params: HandleCommandsParams,
+): string | undefined {
   const threadId =
-    params.ctx.MessageThreadId != null ? normalizeString(String(params.ctx.MessageThreadId)) : "";
+    params.ctx.MessageThreadId != null
+      ? normalizeString(String(params.ctx.MessageThreadId))
+      : "";
   return threadId || undefined;
 }
 
-export function resolveAcpCommandConversationId(params: HandleCommandsParams): string | undefined {
+export function resolveAcpCommandConversationId(
+  params: HandleCommandsParams,
+): string | undefined {
   return resolveConversationIdFromTargets({
     threadId: params.ctx.MessageThreadId,
     targets: [params.ctx.OriginatingTo, params.command.to, params.ctx.To],
   });
 }
 
-export function isAcpCommandDiscordChannel(params: HandleCommandsParams): boolean {
+export function isAcpCommandDiscordChannel(
+  params: HandleCommandsParams,
+): boolean {
   return resolveAcpCommandChannel(params) === DISCORD_THREAD_BINDING_CHANNEL;
 }
 

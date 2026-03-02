@@ -72,7 +72,13 @@ vi.mock("./target-writeback.js", () => ({
 }));
 
 export function getTelegramSendTestMocks(): TelegramSendTestMocks {
-  return { botApi, botCtorSpy, loadConfig, loadWebMedia, maybePersistResolvedTelegramTarget };
+  return {
+    botApi,
+    botCtorSpy,
+    loadConfig,
+    loadWebMedia,
+    maybePersistResolvedTelegramTarget,
+  };
 }
 
 export function installTelegramSendTestHooks() {

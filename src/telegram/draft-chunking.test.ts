@@ -4,7 +4,10 @@ import { resolveTelegramDraftStreamingChunking } from "./draft-chunking.js";
 
 describe("resolveTelegramDraftStreamingChunking", () => {
   it("uses smaller defaults than block streaming", () => {
-    const chunking = resolveTelegramDraftStreamingChunking(undefined, "default");
+    const chunking = resolveTelegramDraftStreamingChunking(
+      undefined,
+      "default",
+    );
     expect(chunking).toEqual({
       minChars: 200,
       maxChars: 800,

@@ -1,4 +1,7 @@
-export function resolveMatrixActionLimit(raw: unknown, fallback: number): number {
+export function resolveMatrixActionLimit(
+  raw: unknown,
+  fallback: number,
+): number {
   if (typeof raw !== "number" || !Number.isFinite(raw)) {
     return fallback;
   }

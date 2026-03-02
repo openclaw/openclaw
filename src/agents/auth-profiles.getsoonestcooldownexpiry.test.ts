@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import type { AuthProfileStore } from "./auth-profiles.js";
 import { getSoonestCooldownExpiry } from "./auth-profiles.js";
 
-function makeStore(usageStats?: AuthProfileStore["usageStats"]): AuthProfileStore {
+function makeStore(
+  usageStats?: AuthProfileStore["usageStats"],
+): AuthProfileStore {
   return {
     version: 1,
     profiles: {},
@@ -30,9 +32,9 @@ describe("getSoonestCooldownExpiry", () => {
       },
     });
 
-    expect(getSoonestCooldownExpiry(store, ["openai:p1", "openai:p2", "openai:p3"])).toBe(
-      1_700_000_001_000,
-    );
+    expect(
+      getSoonestCooldownExpiry(store, ["openai:p1", "openai:p2", "openai:p3"]),
+    ).toBe(1_700_000_001_000);
   });
 
   it("ignores unknown profiles and invalid cooldown values", () => {
@@ -72,6 +74,8 @@ describe("getSoonestCooldownExpiry", () => {
       },
     });
 
-    expect(getSoonestCooldownExpiry(store, ["openai:p1", "openai:p2"])).toBe(1_700_000_000_000);
+    expect(getSoonestCooldownExpiry(store, ["openai:p1", "openai:p2"])).toBe(
+      1_700_000_000_000,
+    );
   });
 });

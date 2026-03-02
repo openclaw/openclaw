@@ -15,7 +15,9 @@ import {
 let tempRoot: string | null = null;
 
 async function makeTempRoot() {
-  const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-doctor-"));
+  const root = await fs.promises.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-doctor-"),
+  );
   tempRoot = root;
   return root;
 }
@@ -62,10 +64,9 @@ async function detectAndRunMigrations(params: {
 }
 
 function readSessionsStore(targetDir: string) {
-  return JSON.parse(fs.readFileSync(path.join(targetDir, "sessions.json"), "utf-8")) as Record<
-    string,
-    { sessionId: string }
-  >;
+  return JSON.parse(
+    fs.readFileSync(path.join(targetDir, "sessions.json"), "utf-8"),
+  ) as Record<string, { sessionId: string }>;
 }
 
 async function runAndReadSessionsStore(params: {
@@ -82,7 +83,9 @@ async function runAndReadSessionsStore(params: {
   return readSessionsStore(params.targetDir);
 }
 
-type StateDirMigrationResult = Awaited<ReturnType<typeof autoMigrateLegacyStateDir>>;
+type StateDirMigrationResult = Awaited<
+  ReturnType<typeof autoMigrateLegacyStateDir>
+>;
 
 const DIR_LINK_TYPE = process.platform === "win32" ? "junction" : "dir";
 
@@ -100,7 +103,10 @@ function ensureLegacyAndTargetStateDirs(root: string) {
   return paths;
 }
 
-async function runStateDirMigration(root: string, env = {} as NodeJS.ProcessEnv) {
+async function runStateDirMigration(
+  root: string,
+  env = {} as NodeJS.ProcessEnv,
+) {
   return autoMigrateLegacyStateDir({
     env,
     homedir: () => root,
@@ -122,7 +128,10 @@ async function runAutoMigrateLegacyStateWithLog(params: {
   return { result, log };
 }
 
-function expectTargetAlreadyExistsWarning(result: StateDirMigrationResult, targetDir: string) {
+function expectTargetAlreadyExistsWarning(
+  result: StateDirMigrationResult,
+  targetDir: string,
+) {
   expect(result.migrated).toBe(false);
   expect(result.warnings).toEqual([
     `State dir migration skipped: target already exists (${targetDir}). Remove or merge manually.`,
@@ -195,7 +204,9 @@ describe("doctor legacy state migrations", () => {
     });
     await runLegacyStateMigrations({ detected, now: () => 123 });
 
-    expect(fs.readFileSync(path.join(targetAgentDir, "baz.txt"), "utf-8")).toBe("legacy2");
+    expect(fs.readFileSync(path.join(targetAgentDir, "baz.txt"), "utf-8")).toBe(
+      "legacy2",
+    );
     const backupDir = path.join(root, "agents", "main", "agent.legacy-123");
     expect(fs.existsSync(path.join(backupDir, "foo.txt"))).toBe(true);
   });
@@ -208,7 +219,10 @@ describe("doctor legacy state migrations", () => {
     fs.mkdirSync(legacyAgentDir, { recursive: true });
     fs.writeFileSync(path.join(legacyAgentDir, "auth.json"), "{}", "utf-8");
 
-    const { result, log } = await runAutoMigrateLegacyStateWithLog({ root, cfg });
+    const { result, log } = await runAutoMigrateLegacyStateWithLog({
+      root,
+      cfg,
+    });
 
     const targetAgentDir = path.join(root, "agents", "main", "agent");
     expect(fs.existsSync(path.join(targetAgentDir, "auth.json"))).toBe(true);
@@ -422,7 +436,10 @@ describe("doctor legacy state migrations", () => {
       main: { sessionId: "legacy", updatedAt: 10 },
     });
 
-    const { result, log } = await runAutoMigrateLegacyStateWithLog({ root, cfg });
+    const { result, log } = await runAutoMigrateLegacyStateWithLog({
+      root,
+      cfg,
+    });
 
     const store = JSON.parse(
       fs.readFileSync(path.join(targetDir, "sessions.json"), "utf-8"),
@@ -466,7 +483,11 @@ describe("doctor legacy state migrations", () => {
       path.join(legacyDir, "sessions"),
       DIR_LINK_TYPE,
     );
-    fs.symlinkSync(path.join(targetDir, "agent"), path.join(legacyDir, "agent"), DIR_LINK_TYPE);
+    fs.symlinkSync(
+      path.join(targetDir, "agent"),
+      path.join(legacyDir, "agent"),
+      DIR_LINK_TYPE,
+    );
 
     const result = await runStateDirMigration(root);
 
@@ -516,7 +537,11 @@ describe("doctor legacy state migrations", () => {
     fs.mkdirSync(path.join(targetDir, "sessions"), { recursive: true });
     fs.mkdirSync(outsideDir, { recursive: true });
 
-    fs.symlinkSync(path.join(outsideDir), path.join(legacyDir, "sessions"), DIR_LINK_TYPE);
+    fs.symlinkSync(
+      path.join(outsideDir),
+      path.join(legacyDir, "sessions"),
+      DIR_LINK_TYPE,
+    );
 
     const result = await runStateDirMigration(root);
     expectTargetAlreadyExistsWarning(result, targetDir);
@@ -528,7 +553,11 @@ describe("doctor legacy state migrations", () => {
     fs.mkdirSync(path.join(targetDir, "sessions"), { recursive: true });
 
     const targetSessionDir = path.join(targetDir, "sessions");
-    fs.symlinkSync(targetSessionDir, path.join(legacyDir, "sessions"), DIR_LINK_TYPE);
+    fs.symlinkSync(
+      targetSessionDir,
+      path.join(legacyDir, "sessions"),
+      DIR_LINK_TYPE,
+    );
     fs.rmSync(targetSessionDir, { recursive: true, force: true });
 
     const result = await runStateDirMigration(root);

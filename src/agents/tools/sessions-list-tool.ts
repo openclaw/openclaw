@@ -60,23 +60,30 @@ export function createSessionsListTool(opts?: {
       const allowedKindsList = (kindsRaw ?? []).filter((value) =>
         ["main", "group", "cron", "hook", "node", "other"].includes(value),
       );
-      const allowedKinds = allowedKindsList.length ? new Set(allowedKindsList) : undefined;
+      const allowedKinds = allowedKindsList.length
+        ? new Set(allowedKindsList)
+        : undefined;
 
       const limit =
         typeof params.limit === "number" && Number.isFinite(params.limit)
           ? Math.max(1, Math.floor(params.limit))
           : undefined;
       const activeMinutes =
-        typeof params.activeMinutes === "number" && Number.isFinite(params.activeMinutes)
+        typeof params.activeMinutes === "number" &&
+        Number.isFinite(params.activeMinutes)
           ? Math.max(1, Math.floor(params.activeMinutes))
           : undefined;
       const messageLimitRaw =
-        typeof params.messageLimit === "number" && Number.isFinite(params.messageLimit)
+        typeof params.messageLimit === "number" &&
+        Number.isFinite(params.messageLimit)
           ? Math.max(0, Math.floor(params.messageLimit))
           : 0;
       const messageLimit = Math.min(messageLimitRaw, 20);
 
-      const list = await callGateway<{ sessions: Array<SessionListRow>; path: string }>({
+      const list = await callGateway<{
+        sessions: Array<SessionListRow>;
+        path: string;
+      }>({
         method: "sessions.list",
         params: {
           limit,
@@ -97,7 +104,10 @@ export function createSessionsListTool(opts?: {
         a2aPolicy,
       });
       const rows: SessionListRow[] = [];
-      const historyTargets: Array<{ row: SessionListRow; resolvedKey: string }> = [];
+      const historyTargets: Array<{
+        row: SessionListRow;
+        resolvedKey: string;
+      }> = [];
 
       for (const entry of sessions) {
         if (!entry || typeof entry !== "object") {
@@ -119,7 +129,8 @@ export function createSessionsListTool(opts?: {
           continue;
         }
 
-        const gatewayKind = typeof entry.kind === "string" ? entry.kind : undefined;
+        const gatewayKind =
+          typeof entry.kind === "string" ? entry.kind : undefined;
         const kind = classifySessionKind({ key, gatewayKind, alias, mainKey });
         if (allowedKinds && !allowedKinds.has(kind)) {
           continue;
@@ -131,22 +142,34 @@ export function createSessionsListTool(opts?: {
           mainKey,
         });
 
-        const entryChannel = typeof entry.channel === "string" ? entry.channel : undefined;
+        const entryChannel =
+          typeof entry.channel === "string" ? entry.channel : undefined;
         const deliveryContext =
           entry.deliveryContext && typeof entry.deliveryContext === "object"
             ? (entry.deliveryContext as Record<string, unknown>)
             : undefined;
         const deliveryChannel =
-          typeof deliveryContext?.channel === "string" ? deliveryContext.channel : undefined;
-        const deliveryTo = typeof deliveryContext?.to === "string" ? deliveryContext.to : undefined;
+          typeof deliveryContext?.channel === "string"
+            ? deliveryContext.channel
+            : undefined;
+        const deliveryTo =
+          typeof deliveryContext?.to === "string"
+            ? deliveryContext.to
+            : undefined;
         const deliveryAccountId =
-          typeof deliveryContext?.accountId === "string" ? deliveryContext.accountId : undefined;
+          typeof deliveryContext?.accountId === "string"
+            ? deliveryContext.accountId
+            : undefined;
         const lastChannel =
           deliveryChannel ??
-          (typeof entry.lastChannel === "string" ? entry.lastChannel : undefined);
+          (typeof entry.lastChannel === "string"
+            ? entry.lastChannel
+            : undefined);
         const lastAccountId =
           deliveryAccountId ??
-          (typeof entry.lastAccountId === "string" ? entry.lastAccountId : undefined);
+          (typeof entry.lastAccountId === "string"
+            ? entry.lastAccountId
+            : undefined);
         const derivedChannel = deriveChannel({
           key,
           kind,
@@ -154,9 +177,11 @@ export function createSessionsListTool(opts?: {
           lastChannel,
         });
 
-        const sessionId = typeof entry.sessionId === "string" ? entry.sessionId : undefined;
+        const sessionId =
+          typeof entry.sessionId === "string" ? entry.sessionId : undefined;
         const sessionFileRaw = (entry as { sessionFile?: unknown }).sessionFile;
-        const sessionFile = typeof sessionFileRaw === "string" ? sessionFileRaw : undefined;
+        const sessionFile =
+          typeof sessionFileRaw === "string" ? sessionFileRaw : undefined;
         let transcriptPath: string | undefined;
         if (sessionId) {
           try {
@@ -164,8 +189,13 @@ export function createSessionsListTool(opts?: {
             const trimmedStorePath = storePath?.trim();
             let effectiveStorePath: string | undefined;
             if (trimmedStorePath && trimmedStorePath !== "(multiple)") {
-              if (trimmedStorePath.includes("{agentId}") || trimmedStorePath.startsWith("~")) {
-                effectiveStorePath = resolveStorePath(trimmedStorePath, { agentId });
+              if (
+                trimmedStorePath.includes("{agentId}") ||
+                trimmedStorePath.startsWith("~")
+              ) {
+                effectiveStorePath = resolveStorePath(trimmedStorePath, {
+                  agentId,
+                });
               } else if (path.isAbsolute(trimmedStorePath)) {
                 effectiveStorePath = trimmedStorePath;
               }
@@ -189,7 +219,10 @@ export function createSessionsListTool(opts?: {
           kind,
           channel: derivedChannel,
           label: typeof entry.label === "string" ? entry.label : undefined,
-          displayName: typeof entry.displayName === "string" ? entry.displayName : undefined,
+          displayName:
+            typeof entry.displayName === "string"
+              ? entry.displayName
+              : undefined,
           deliveryContext:
             deliveryChannel || deliveryTo || deliveryAccountId
               ? {
@@ -198,19 +231,40 @@ export function createSessionsListTool(opts?: {
                   accountId: deliveryAccountId,
                 }
               : undefined,
-          updatedAt: typeof entry.updatedAt === "number" ? entry.updatedAt : undefined,
+          updatedAt:
+            typeof entry.updatedAt === "number" ? entry.updatedAt : undefined,
           sessionId,
           model: typeof entry.model === "string" ? entry.model : undefined,
-          contextTokens: typeof entry.contextTokens === "number" ? entry.contextTokens : undefined,
-          totalTokens: typeof entry.totalTokens === "number" ? entry.totalTokens : undefined,
-          thinkingLevel: typeof entry.thinkingLevel === "string" ? entry.thinkingLevel : undefined,
-          verboseLevel: typeof entry.verboseLevel === "string" ? entry.verboseLevel : undefined,
-          systemSent: typeof entry.systemSent === "boolean" ? entry.systemSent : undefined,
+          contextTokens:
+            typeof entry.contextTokens === "number"
+              ? entry.contextTokens
+              : undefined,
+          totalTokens:
+            typeof entry.totalTokens === "number"
+              ? entry.totalTokens
+              : undefined,
+          thinkingLevel:
+            typeof entry.thinkingLevel === "string"
+              ? entry.thinkingLevel
+              : undefined,
+          verboseLevel:
+            typeof entry.verboseLevel === "string"
+              ? entry.verboseLevel
+              : undefined,
+          systemSent:
+            typeof entry.systemSent === "boolean"
+              ? entry.systemSent
+              : undefined,
           abortedLastRun:
-            typeof entry.abortedLastRun === "boolean" ? entry.abortedLastRun : undefined,
-          sendPolicy: typeof entry.sendPolicy === "string" ? entry.sendPolicy : undefined,
+            typeof entry.abortedLastRun === "boolean"
+              ? entry.abortedLastRun
+              : undefined,
+          sendPolicy:
+            typeof entry.sendPolicy === "string" ? entry.sendPolicy : undefined,
           lastChannel,
-          lastTo: deliveryTo ?? (typeof entry.lastTo === "string" ? entry.lastTo : undefined),
+          lastTo:
+            deliveryTo ??
+            (typeof entry.lastTo === "string" ? entry.lastTo : undefined),
           lastAccountId,
           transcriptPath,
         };
@@ -240,13 +294,19 @@ export function createSessionsListTool(opts?: {
               method: "chat.history",
               params: { sessionKey: target.resolvedKey, limit: messageLimit },
             });
-            const rawMessages = Array.isArray(history?.messages) ? history.messages : [];
+            const rawMessages = Array.isArray(history?.messages)
+              ? history.messages
+              : [];
             const filtered = stripToolMessages(rawMessages);
             target.row.messages =
-              filtered.length > messageLimit ? filtered.slice(-messageLimit) : filtered;
+              filtered.length > messageLimit
+                ? filtered.slice(-messageLimit)
+                : filtered;
           }
         };
-        await Promise.all(Array.from({ length: maxConcurrent }, () => worker()));
+        await Promise.all(
+          Array.from({ length: maxConcurrent }, () => worker()),
+        );
       }
 
       return jsonResult({

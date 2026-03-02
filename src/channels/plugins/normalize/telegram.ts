@@ -1,4 +1,7 @@
-import { normalizeTelegramLookupTarget, parseTelegramTarget } from "../../../telegram/targets.js";
+import {
+  normalizeTelegramLookupTarget,
+  parseTelegramTarget,
+} from "../../../telegram/targets.js";
 
 const TELEGRAM_PREFIX_RE = /^(telegram|tg):/i;
 
@@ -21,7 +24,9 @@ function normalizeTelegramTargetBody(raw: string): string | undefined {
 
   const keepLegacyGroupPrefix = /^group:/i.test(prefixStripped);
   const hasTopicSuffix = /:topic:\d+$/i.test(prefixStripped);
-  const chatSegment = keepLegacyGroupPrefix ? `group:${normalizedChatId}` : normalizedChatId;
+  const chatSegment = keepLegacyGroupPrefix
+    ? `group:${normalizedChatId}`
+    : normalizedChatId;
   if (parsed.messageThreadId == null) {
     return chatSegment;
   }
@@ -31,7 +36,9 @@ function normalizeTelegramTargetBody(raw: string): string | undefined {
   return `${chatSegment}${threadSuffix}`;
 }
 
-export function normalizeTelegramMessagingTarget(raw: string): string | undefined {
+export function normalizeTelegramMessagingTarget(
+  raw: string,
+): string | undefined {
   const normalizedBody = normalizeTelegramTargetBody(raw);
   if (!normalizedBody) {
     return undefined;

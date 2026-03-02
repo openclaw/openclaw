@@ -8,9 +8,14 @@ function isOptionalString(value: unknown): value is string | null | undefined {
   return value === undefined || value === null || typeof value === "string";
 }
 
-function isOptionalStringOrNumber(value: unknown): value is string | number | null | undefined {
+function isOptionalStringOrNumber(
+  value: unknown,
+): value is string | number | null | undefined {
   return (
-    value === undefined || value === null || typeof value === "string" || typeof value === "number"
+    value === undefined ||
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "number"
   );
 }
 
@@ -18,11 +23,15 @@ function isOptionalNumber(value: unknown): value is number | null | undefined {
   return value === undefined || value === null || typeof value === "number";
 }
 
-function isOptionalBoolean(value: unknown): value is boolean | null | undefined {
+function isOptionalBoolean(
+  value: unknown,
+): value is boolean | null | undefined {
   return value === undefined || value === null || typeof value === "boolean";
 }
 
-function isOptionalStringArray(value: unknown): value is string[] | null | undefined {
+function isOptionalStringArray(
+  value: unknown,
+): value is string[] | null | undefined {
   return (
     value === undefined ||
     value === null ||
@@ -30,7 +39,9 @@ function isOptionalStringArray(value: unknown): value is string[] | null | undef
   );
 }
 
-function isOptionalAttachments(value: unknown): value is IMessagePayload["attachments"] {
+function isOptionalAttachments(
+  value: unknown,
+): value is IMessagePayload["attachments"] {
   if (value === undefined || value === null) {
     return true;
   }
@@ -49,7 +60,9 @@ function isOptionalAttachments(value: unknown): value is IMessagePayload["attach
   });
 }
 
-export function parseIMessageNotification(raw: unknown): IMessagePayload | null {
+export function parseIMessageNotification(
+  raw: unknown,
+): IMessagePayload | null {
   if (!isRecord(raw)) {
     return null;
   }

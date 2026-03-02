@@ -16,7 +16,9 @@ describe("stripAssistantInternalScaffolding", () => {
       "",
       "User-visible answer",
     ].join("\n");
-    expect(stripAssistantInternalScaffolding(input)).toBe("User-visible answer");
+    expect(stripAssistantInternalScaffolding(input)).toBe(
+      "User-visible answer",
+    );
   });
 
   it("supports relevant_memories tag variants", () => {

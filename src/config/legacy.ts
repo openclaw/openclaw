@@ -13,13 +13,18 @@ function getPathValue(root: Record<string, unknown>, path: string[]): unknown {
   return cursor;
 }
 
-export function findLegacyConfigIssues(raw: unknown, sourceRaw?: unknown): LegacyConfigIssue[] {
+export function findLegacyConfigIssues(
+  raw: unknown,
+  sourceRaw?: unknown,
+): LegacyConfigIssue[] {
   if (!raw || typeof raw !== "object") {
     return [];
   }
   const root = raw as Record<string, unknown>;
   const sourceRoot =
-    sourceRaw && typeof sourceRaw === "object" ? (sourceRaw as Record<string, unknown>) : root;
+    sourceRaw && typeof sourceRaw === "object"
+      ? (sourceRaw as Record<string, unknown>)
+      : root;
   const issues: LegacyConfigIssue[] = [];
   for (const rule of LEGACY_CONFIG_RULES) {
     const cursor = getPathValue(root, rule.path);

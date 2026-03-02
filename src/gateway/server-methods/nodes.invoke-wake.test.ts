@@ -6,10 +6,12 @@ const mocks = vi.hoisted(() => ({
   loadConfig: vi.fn(() => ({})),
   resolveNodeCommandAllowlist: vi.fn(() => []),
   isNodeCommandAllowed: vi.fn(() => ({ ok: true })),
-  sanitizeNodeInvokeParamsForForwarding: vi.fn(({ rawParams }: { rawParams: unknown }) => ({
-    ok: true,
-    params: rawParams,
-  })),
+  sanitizeNodeInvokeParamsForForwarding: vi.fn(
+    ({ rawParams }: { rawParams: unknown }) => ({
+      ok: true,
+      params: rawParams,
+    }),
+  ),
   loadApnsRegistration: vi.fn(),
   resolveApnsAuthConfigFromEnv: vi.fn(),
   sendApnsBackgroundWake: vi.fn(),
@@ -26,7 +28,8 @@ vi.mock("../node-command-policy.js", () => ({
 }));
 
 vi.mock("../node-invoke-sanitize.js", () => ({
-  sanitizeNodeInvokeParamsForForwarding: mocks.sanitizeNodeInvokeParamsForForwarding,
+  sanitizeNodeInvokeParamsForForwarding:
+    mocks.sanitizeNodeInvokeParamsForForwarding,
 }));
 
 vi.mock("../../infra/push-apns.js", () => ({
@@ -137,7 +140,10 @@ describe("node.invoke APNs wake path", () => {
     mocks.isNodeCommandAllowed.mockReturnValue({ ok: true });
     mocks.sanitizeNodeInvokeParamsForForwarding.mockClear();
     mocks.sanitizeNodeInvokeParamsForForwarding.mockImplementation(
-      ({ rawParams }: { rawParams: unknown }) => ({ ok: true, params: rawParams }),
+      ({ rawParams }: { rawParams: unknown }) => ({
+        ok: true,
+        params: rawParams,
+      }),
     );
     mocks.loadApnsRegistration.mockClear();
     mocks.resolveApnsAuthConfigFromEnv.mockClear();
@@ -171,7 +177,10 @@ describe("node.invoke APNs wake path", () => {
     mockSuccessfulWakeConfig("ios-node-reconnect");
 
     let connected = false;
-    const session: TestNodeSession = { nodeId: "ios-node-reconnect", commands: ["camera.capture"] };
+    const session: TestNodeSession = {
+      nodeId: "ios-node-reconnect",
+      commands: ["camera.capture"],
+    };
     const nodeRegistry = {
       get: vi.fn((nodeId: string) => {
         if (nodeId !== "ios-node-reconnect") {
@@ -188,7 +197,10 @@ describe("node.invoke APNs wake path", () => {
 
     const invokePromise = invokeNode({
       nodeRegistry,
-      requestParams: { nodeId: "ios-node-reconnect", idempotencyKey: "idem-reconnect" },
+      requestParams: {
+        nodeId: "ios-node-reconnect",
+        idempotencyKey: "idem-reconnect",
+      },
     });
     setTimeout(() => {
       connected = true;
@@ -221,7 +233,10 @@ describe("node.invoke APNs wake path", () => {
 
     const invokePromise = invokeNode({
       nodeRegistry,
-      requestParams: { nodeId: "ios-node-throttle", idempotencyKey: "idem-throttle-1" },
+      requestParams: {
+        nodeId: "ios-node-throttle",
+        idempotencyKey: "idem-throttle-1",
+      },
     });
     await vi.advanceTimersByTimeAsync(20_000);
     await invokePromise;

@@ -12,7 +12,14 @@
     bytes[i] = binary.charCodeAt(i);
   }
   const data = JSON.parse(new TextDecoder("utf-8").decode(bytes));
-  const { header, entries, leafId: defaultLeafId, systemPrompt, tools, renderedTools } = data;
+  const {
+    header,
+    entries,
+    leafId: defaultLeafId,
+    systemPrompt,
+    tools,
+    renderedTools,
+  } = data;
 
   // ============================================================
   // URL PARAMETER HANDLING
@@ -48,7 +55,10 @@
       if (Array.isArray(content)) {
         for (const block of content) {
           if (block.type === "toolCall") {
-            toolCallMap.set(block.id, { name: block.name, arguments: block.arguments });
+            toolCallMap.set(block.id, {
+              name: block.name,
+              arguments: block.arguments,
+            });
           }
         }
       }
@@ -88,7 +98,11 @@
     // Build parent-child relationships
     for (const entry of entries) {
       const node = nodeMap.get(entry.id);
-      if (entry.parentId === null || entry.parentId === undefined || entry.parentId === entry.id) {
+      if (
+        entry.parentId === null ||
+        entry.parentId === undefined ||
+        entry.parentId === entry.id
+      ) {
         roots.push(node);
       } else {
         const parent = nodeMap.get(entry.parentId);
@@ -103,7 +117,9 @@
     // Sort children by timestamp
     function sortChildren(node) {
       node.children.sort(
-        (a, b) => new Date(a.entry.timestamp).getTime() - new Date(b.entry.timestamp).getTime(),
+        (a, b) =>
+          new Date(a.entry.timestamp).getTime() -
+          new Date(b.entry.timestamp).getTime(),
       );
       node.children.forEach(sortChildren);
     }
@@ -223,8 +239,15 @@
     }
 
     while (stack.length > 0) {
-      const [node, indent, justBranched, showConnector, isLast, gutters, isVirtualRootChild] =
-        stack.pop();
+      const [
+        node,
+        indent,
+        justBranched,
+        showConnector,
+        isLast,
+        gutters,
+        isVirtualRootChild,
+      ] = stack.pop();
 
       result.push({
         node,
@@ -259,7 +282,9 @@
 
       // Build gutters for children
       const connectorDisplayed = showConnector && !isVirtualRootChild;
-      const currentDisplayIndent = multipleRoots ? Math.max(0, indent - 1) : indent;
+      const currentDisplayIndent = multipleRoots
+        ? Math.max(0, indent - 1)
+        : indent;
       const connectorPosition = Math.max(0, currentDisplayIndent - 1);
       const childGutters = connectorDisplayed
         ? [...gutters, { position: connectorPosition, show: !isLast }]
@@ -287,9 +312,17 @@
    * Build ASCII prefix string for tree node.
    */
   function buildTreePrefix(flatNode) {
-    const { indent, showConnector, isLast, gutters, isVirtualRootChild, multipleRoots } = flatNode;
+    const {
+      indent,
+      showConnector,
+      isLast,
+      gutters,
+      isVirtualRootChild,
+      multipleRoots,
+    } = flatNode;
     const displayIndent = multipleRoots ? Math.max(0, indent - 1) : indent;
-    const connector = showConnector && !isVirtualRootChild ? (isLast ? "└─ " : "├─ ") : "";
+    const connector =
+      showConnector && !isVirtualRootChild ? (isLast ? "└─ " : "├─ ") : "";
     const connectorPosition = connector ? displayIndent - 1 : -1;
 
     const totalChars = displayIndent * 3;
@@ -371,7 +404,9 @@
       case "custom_message":
         parts.push(entry.customType);
         parts.push(
-          typeof entry.content === "string" ? entry.content : extractContent(entry.content),
+          typeof entry.content === "string"
+            ? entry.content
+            : extractContent(entry.content),
         );
         break;
       case "compaction":
@@ -412,25 +447,32 @@
         const msg = entry.message;
         const hasText = hasTextContent(msg.content);
         const isErrorOrAborted =
-          msg.stopReason && msg.stopReason !== "stop" && msg.stopReason !== "toolUse";
+          msg.stopReason &&
+          msg.stopReason !== "stop" &&
+          msg.stopReason !== "toolUse";
         if (!hasText && !isErrorOrAborted) {
           return false;
         }
       }
 
       // Apply filter mode
-      const isSettingsEntry = ["label", "custom", "model_change", "thinking_level_change"].includes(
-        entry.type,
-      );
+      const isSettingsEntry = [
+        "label",
+        "custom",
+        "model_change",
+        "thinking_level_change",
+      ].includes(entry.type);
       let passesFilter = true;
 
       switch (filterMode) {
         case "user-only":
-          passesFilter = entry.type === "message" && entry.message.role === "user";
+          passesFilter =
+            entry.type === "message" && entry.message.role === "user";
           break;
         case "no-tools":
           passesFilter =
-            !isSettingsEntry && !(entry.type === "message" && entry.message.role === "toolResult");
+            !isSettingsEntry &&
+            !(entry.type === "message" && entry.message.role === "toolResult");
           break;
         case "labeled-only":
           passesFilter = label !== undefined;
@@ -540,8 +582,15 @@
     }
 
     while (stack.length > 0) {
-      const [nodeId, indent, justBranched, showConnector, isLast, gutters, isVirtualRootChild] =
-        stack.pop();
+      const [
+        nodeId,
+        indent,
+        justBranched,
+        showConnector,
+        isLast,
+        gutters,
+        isVirtualRootChild,
+      ] = stack.pop();
 
       const flatNode = filteredNodeMap.get(nodeId);
       if (!flatNode) {
@@ -575,7 +624,9 @@
 
       // Build gutters for children (same logic as flattenTree)
       const connectorDisplayed = showConnector && !isVirtualRootChild;
-      const currentDisplayIndent = multipleRoots ? Math.max(0, indent - 1) : indent;
+      const currentDisplayIndent = multipleRoots
+        ? Math.max(0, indent - 1)
+        : indent;
       const connectorPosition = Math.max(0, currentDisplayIndent - 1);
       const childGutters = connectorDisplayed
         ? [...gutters, { position: connectorPosition, show: !isLast }]
@@ -666,7 +717,8 @@
   }
 
   // Validate image fields before interpolating data URLs.
-  const SAFE_IMAGE_MIME_RE = /^image\/(png|jpeg|gif|webp|svg\+xml|bmp|tiff|avif)$/i;
+  const SAFE_IMAGE_MIME_RE =
+    /^image\/(png|jpeg|gif|webp|svg\+xml|bmp|tiff|avif)$/i;
   const SAFE_BASE64_RE = /^[A-Za-z0-9+/]+={0,2}$/;
 
   function sanitizeImageMimeType(mimeType) {
@@ -710,14 +762,19 @@
    */
   function getTreeNodeDisplayHtml(entry, label) {
     const normalize = (s) => s.replace(/[\n\t]/g, " ").trim();
-    const labelHtml = label ? `<span class="tree-label">[${escapeHtml(label)}]</span> ` : "";
+    const labelHtml = label
+      ? `<span class="tree-label">[${escapeHtml(label)}]</span> `
+      : "";
 
     switch (entry.type) {
       case "message": {
         const msg = entry.message;
         if (msg.role === "user") {
           const content = truncate(normalize(extractContent(msg.content)));
-          return labelHtml + `<span class="tree-role-user">user:</span> ${escapeHtml(content)}`;
+          return (
+            labelHtml +
+            `<span class="tree-role-user">user:</span> ${escapeHtml(content)}`
+          );
         }
         if (msg.role === "assistant") {
           const textContent = truncate(normalize(extractContent(msg.content)));
@@ -745,20 +802,31 @@
           );
         }
         if (msg.role === "toolResult") {
-          const toolCall = msg.toolCallId ? toolCallMap.get(msg.toolCallId) : null;
+          const toolCall = msg.toolCallId
+            ? toolCallMap.get(msg.toolCallId)
+            : null;
           if (toolCall) {
             return (
               labelHtml +
               `<span class="tree-role-tool">${escapeHtml(formatToolCall(toolCall.name, toolCall.arguments))}</span>`
             );
           }
-          return labelHtml + `<span class="tree-role-tool">[${escapeHtml(msg.toolName || "tool")}]</span>`;
+          return (
+            labelHtml +
+            `<span class="tree-role-tool">[${escapeHtml(msg.toolName || "tool")}]</span>`
+          );
         }
         if (msg.role === "bashExecution") {
           const cmd = truncate(normalize(msg.command || ""));
-          return labelHtml + `<span class="tree-role-tool">[bash]:</span> ${escapeHtml(cmd)}`;
+          return (
+            labelHtml +
+            `<span class="tree-role-tool">[bash]:</span> ${escapeHtml(cmd)}`
+          );
         }
-        return labelHtml + `<span class="tree-muted">[${escapeHtml(msg.role)}]</span>`;
+        return (
+          labelHtml +
+          `<span class="tree-muted">[${escapeHtml(msg.role)}]</span>`
+        );
       }
       case "compaction":
         return (
@@ -774,18 +842,29 @@
       }
       case "custom_message": {
         const content =
-          typeof entry.content === "string" ? entry.content : extractContent(entry.content);
+          typeof entry.content === "string"
+            ? entry.content
+            : extractContent(entry.content);
         return (
           labelHtml +
           `<span class="tree-custom">[${escapeHtml(entry.customType)}]:</span> ${escapeHtml(truncate(normalize(content)))}`
         );
       }
       case "model_change":
-        return labelHtml + `<span class="tree-muted">[model: ${escapeHtml(entry.modelId)}]</span>`;
+        return (
+          labelHtml +
+          `<span class="tree-muted">[model: ${escapeHtml(entry.modelId)}]</span>`
+        );
       case "thinking_level_change":
-        return labelHtml + `<span class="tree-muted">[thinking: ${escapeHtml(entry.thinkingLevel)}]</span>`;
+        return (
+          labelHtml +
+          `<span class="tree-muted">[thinking: ${escapeHtml(entry.thinkingLevel)}]</span>`
+        );
       default:
-        return labelHtml + `<span class="tree-muted">[${escapeHtml(entry.type)}]</span>`;
+        return (
+          labelHtml +
+          `<span class="tree-muted">[${escapeHtml(entry.type)}]</span>`
+        );
     }
   }
 
@@ -992,7 +1071,9 @@
         const previewCode = displayLines.join("\n");
         let previewHighlighted;
         try {
-          previewHighlighted = hljs.highlight(previewCode, { language: lang }).value;
+          previewHighlighted = hljs.highlight(previewCode, {
+            language: lang,
+          }).value;
         } catch {
           previewHighlighted = escapeHtml(previewCode);
         }
@@ -1072,7 +1153,8 @@
     switch (name) {
       case "bash": {
         const command = str(args.command);
-        const cmdDisplay = command === null ? invalidArg : escapeHtml(command || "...");
+        const cmdDisplay =
+          command === null ? invalidArg : escapeHtml(command || "...");
         html += `<div class="tool-command">$ ${cmdDisplay}</div>`;
         if (result) {
           const output = getResultText().trim();
@@ -1087,8 +1169,14 @@
         const offset = args.offset;
         const limit = args.limit;
 
-        let pathHtml = filePath === null ? invalidArg : escapeHtml(shortenPath(filePath || ""));
-        if (filePath !== null && (offset !== undefined || limit !== undefined)) {
+        let pathHtml =
+          filePath === null
+            ? invalidArg
+            : escapeHtml(shortenPath(filePath || ""));
+        if (
+          filePath !== null &&
+          (offset !== undefined || limit !== undefined)
+        ) {
           const startLine = offset ?? 1;
           const endLine = limit !== undefined ? startLine + limit - 1 : "";
           pathHtml += `<span class="line-numbers">:${startLine}${endLine ? "-" + endLine : ""}</span>`;
@@ -1237,12 +1325,18 @@
    */
   function buildShareUrl(entryId) {
     // Check for injected base URL (used when loaded in iframe via srcdoc)
-    const baseUrlMeta = document.querySelector('meta[name="pi-share-base-url"]');
-    const baseUrl = baseUrlMeta ? baseUrlMeta.content : window.location.href.split("?")[0];
+    const baseUrlMeta = document.querySelector(
+      'meta[name="pi-share-base-url"]',
+    );
+    const baseUrl = baseUrlMeta
+      ? baseUrlMeta.content
+      : window.location.href.split("?")[0];
 
     const url = new URL(window.location.href);
     // Find the gist ID (first query param without value, e.g., ?abc123)
-    const gistId = Array.from(url.searchParams.keys()).find((k) => !url.searchParams.get(k));
+    const gistId = Array.from(url.searchParams.keys()).find(
+      (k) => !url.searchParams.get(k),
+    );
 
     // Build the share URL
     const params = new URLSearchParams();
@@ -1255,7 +1349,9 @@
     }
 
     // Otherwise build from current location (direct file access)
-    url.search = gistId ? `?${gistId}&${params.toString()}` : `?${params.toString()}`;
+    url.search = gistId
+      ? `?${gistId}&${params.toString()}`
+      : `?${params.toString()}`;
     return url.toString();
   }
 
@@ -1382,7 +1478,8 @@
       }
 
       if (msg.role === "bashExecution") {
-        const isError = msg.cancelled || (msg.exitCode !== 0 && msg.exitCode !== null);
+        const isError =
+          msg.cancelled || (msg.exitCode !== 0 && msg.exitCode !== null);
         let html = `<div class="tool-execution ${isError ? "error" : "success"}" id="${entryId}">${tsHtml}`;
         html += `<div class="tool-command">$ ${escapeHtml(msg.command)}</div>`;
         if (msg.output) {
@@ -1456,7 +1553,9 @@
         if (msg.role === "assistant") {
           assistantMessages++;
           if (msg.model) {
-            models.add(msg.provider ? `${msg.provider}/${msg.model}` : msg.model);
+            models.add(
+              msg.provider ? `${msg.provider}/${msg.model}` : msg.model,
+            );
           }
           if (msg.usage) {
             tokens.input += msg.usage.input || 0;
@@ -1768,7 +1867,9 @@
   // Filter buttons
   document.querySelectorAll(".filter-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
-      document.querySelectorAll(".filter-btn").forEach((b) => b.classList.remove("active"));
+      document
+        .querySelectorAll(".filter-btn")
+        .forEach((b) => b.classList.remove("active"));
       btn.classList.add("active");
       filterMode = btn.dataset.filter;
       forceTreeRerender();
@@ -1793,7 +1894,9 @@
   };
 
   overlay.addEventListener("click", closeSidebar);
-  document.getElementById("sidebar-close").addEventListener("click", closeSidebar);
+  document
+    .getElementById("sidebar-close")
+    .addEventListener("click", closeSidebar);
 
   // Toggle states
   let thinkingExpanded = true;

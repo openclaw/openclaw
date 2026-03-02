@@ -37,7 +37,10 @@ import { resolveDiscordAccount } from "../accounts.js";
 import { fetchDiscordApplicationId } from "../probe.js";
 import { normalizeDiscordToken } from "../token.js";
 import { createDiscordVoiceCommand } from "../voice/command.js";
-import { DiscordVoiceManager, DiscordVoiceReadyListener } from "../voice/manager.js";
+import {
+  DiscordVoiceManager,
+  DiscordVoiceReadyListener,
+} from "../voice/manager.js";
 import {
   createAgentComponentButton,
   createAgentSelectMenu,
@@ -50,7 +53,10 @@ import {
   createDiscordComponentUserSelect,
 } from "./agent-components.js";
 import { resolveDiscordSlashCommandConfig } from "./commands.js";
-import { createExecApprovalButton, DiscordExecApprovalHandler } from "./exec-approvals.js";
+import {
+  createExecApprovalButton,
+  DiscordExecApprovalHandler,
+} from "./exec-approvals.js";
 import { attachEarlyGatewayErrorGuard } from "./gateway-error-guard.js";
 import { createDiscordGatewayPlugin } from "./gateway-plugin.js";
 import {
@@ -96,7 +102,8 @@ function summarizeAllowList(list?: string[]) {
     return "any";
   }
   const sample = list.slice(0, 4).map((entry) => String(entry));
-  const suffix = list.length > sample.length ? ` (+${list.length - sample.length})` : "";
+  const suffix =
+    list.length > sample.length ? ` (+${list.length - sample.length})` : "";
   return `${sample.join(", ")}${suffix}`;
 }
 
@@ -106,7 +113,8 @@ function summarizeGuilds(entries?: Record<string, unknown>) {
   }
   const keys = Object.keys(entries);
   const sample = keys.slice(0, 4);
-  const suffix = keys.length > sample.length ? ` (+${keys.length - sample.length})` : "";
+  const suffix =
+    keys.length > sample.length ? ` (+${keys.length - sample.length})` : "";
   return `${sample.join(", ")}${suffix}`;
 }
 
@@ -196,13 +204,20 @@ async function deployDiscordCommands(params: {
   if (!params.enabled) {
     return;
   }
-  const runWithRetry = createDiscordRetryRunner({ verbose: shouldLogVerbose() });
+  const runWithRetry = createDiscordRetryRunner({
+    verbose: shouldLogVerbose(),
+  });
   try {
-    await runWithRetry(() => params.client.handleDeployRequest(), "command deploy");
+    await runWithRetry(
+      () => params.client.handleDeployRequest(),
+      "command deploy",
+    );
   } catch (err) {
     const details = formatDiscordDeployErrorDetails(err);
     params.runtime.error?.(
-      danger(`discord: failed to deploy native commands: ${formatErrorMessage(err)}${details}`),
+      danger(
+        `discord: failed to deploy native commands: ${formatErrorMessage(err)}${details}`,
+      ),
     );
   }
 }
@@ -227,11 +242,14 @@ function formatDiscordDeployErrorDetails(err: unknown): string {
       bodyText = JSON.stringify(rawBody);
     } catch {
       bodyText =
-        typeof rawBody === "string" ? rawBody : inspect(rawBody, { depth: 3, breakLength: 120 });
+        typeof rawBody === "string"
+          ? rawBody
+          : inspect(rawBody, { depth: 3, breakLength: 120 });
     }
     if (bodyText) {
       const maxLen = 800;
-      const trimmed = bodyText.length > maxLen ? `${bodyText.slice(0, maxLen)}...` : bodyText;
+      const trimmed =
+        bodyText.length > maxLen ? `${bodyText.slice(0, maxLen)}...` : bodyText;
       details.push(`body=${trimmed}`);
     }
   }
@@ -267,18 +285,24 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   const discordRootThreadBindings = cfg.channels?.discord?.threadBindings;
   const discordAccountThreadBindings =
     cfg.channels?.discord?.accounts?.[account.accountId]?.threadBindings;
-  const discordRestFetch = resolveDiscordRestFetch(rawDiscordCfg.proxy, runtime);
+  const discordRestFetch = resolveDiscordRestFetch(
+    rawDiscordCfg.proxy,
+    runtime,
+  );
   const dmConfig = rawDiscordCfg.dm;
   let guildEntries = rawDiscordCfg.guilds;
   const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
   const providerConfigPresent = cfg.channels?.discord !== undefined;
-  const { groupPolicy, providerMissingFallbackApplied } = resolveOpenProviderRuntimeGroupPolicy({
-    providerConfigPresent,
-    groupPolicy: rawDiscordCfg.groupPolicy,
-    defaultGroupPolicy,
-  });
+  const { groupPolicy, providerMissingFallbackApplied } =
+    resolveOpenProviderRuntimeGroupPolicy({
+      providerConfigPresent,
+      groupPolicy: rawDiscordCfg.groupPolicy,
+      defaultGroupPolicy,
+    });
   const discordCfg =
-    rawDiscordCfg.groupPolicy === groupPolicy ? rawDiscordCfg : { ...rawDiscordCfg, groupPolicy };
+    rawDiscordCfg.groupPolicy === groupPolicy
+      ? rawDiscordCfg
+      : { ...rawDiscordCfg, groupPolicy };
   warnMissingProviderGroupPolicyFallbackOnce({
     providerMissingFallbackApplied,
     providerKey: "discord",
@@ -287,29 +311,37 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     log: (message) => runtime.log?.(warn(message)),
   });
   let allowFrom = discordCfg.allowFrom ?? dmConfig?.allowFrom;
-  const mediaMaxBytes = (opts.mediaMaxMb ?? discordCfg.mediaMaxMb ?? 8) * 1024 * 1024;
+  const mediaMaxBytes =
+    (opts.mediaMaxMb ?? discordCfg.mediaMaxMb ?? 8) * 1024 * 1024;
   const textLimit = resolveTextChunkLimit(cfg, "discord", account.accountId, {
     fallbackLimit: 2000,
   });
   const historyLimit = Math.max(
     0,
-    opts.historyLimit ?? discordCfg.historyLimit ?? cfg.messages?.groupChat?.historyLimit ?? 20,
+    opts.historyLimit ??
+      discordCfg.historyLimit ??
+      cfg.messages?.groupChat?.historyLimit ??
+      20,
   );
   const replyToMode = opts.replyToMode ?? discordCfg.replyToMode ?? "off";
   const dmEnabled = dmConfig?.enabled ?? true;
   const dmPolicy = discordCfg.dmPolicy ?? dmConfig?.policy ?? "pairing";
   const threadBindingIdleTimeoutMs = resolveThreadBindingIdleTimeoutMs({
     channelIdleHoursRaw:
-      discordAccountThreadBindings?.idleHours ?? discordRootThreadBindings?.idleHours,
+      discordAccountThreadBindings?.idleHours ??
+      discordRootThreadBindings?.idleHours,
     sessionIdleHoursRaw: cfg.session?.threadBindings?.idleHours,
   });
   const threadBindingMaxAgeMs = resolveThreadBindingMaxAgeMs({
     channelMaxAgeHoursRaw:
-      discordAccountThreadBindings?.maxAgeHours ?? discordRootThreadBindings?.maxAgeHours,
+      discordAccountThreadBindings?.maxAgeHours ??
+      discordRootThreadBindings?.maxAgeHours,
     sessionMaxAgeHoursRaw: cfg.session?.threadBindings?.maxAgeHours,
   });
   const threadBindingsEnabled = resolveThreadBindingsEnabled({
-    channelEnabledRaw: discordAccountThreadBindings?.enabled ?? discordRootThreadBindings?.enabled,
+    channelEnabledRaw:
+      discordAccountThreadBindings?.enabled ??
+      discordRootThreadBindings?.enabled,
     sessionEnabledRaw: cfg.session?.threadBindings?.enabled,
   });
   const groupDmEnabled = dmConfig?.groupEnabled ?? false;
@@ -329,7 +361,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     globalSetting: cfg.commands?.native,
   });
   const useAccessGroups = cfg.commands?.useAccessGroups !== false;
-  const slashCommand = resolveDiscordSlashCommandConfig(discordCfg.slashCommand);
+  const slashCommand = resolveDiscordSlashCommandConfig(
+    discordCfg.slashCommand,
+  );
   const sessionPrefix = "discord:slash";
   const ephemeralDefault = slashCommand.ephemeral;
   const voiceEnabled = discordCfg.voice?.enabled !== false;
@@ -350,7 +384,11 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     );
   }
 
-  const applicationId = await fetchDiscordApplicationId(token, 4000, discordRestFetch);
+  const applicationId = await fetchDiscordApplicationId(
+    token,
+    4000,
+    discordRestFetch,
+  );
   if (!applicationId) {
     throw new Error("Failed to resolve Discord application id");
   }
@@ -361,12 +399,22 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       ? dedupeSkillCommandsForDiscord(listSkillCommandsForAgents({ cfg }))
       : [];
   let commandSpecs = nativeEnabled
-    ? listNativeCommandSpecsForConfig(cfg, { skillCommands, provider: "discord" })
+    ? listNativeCommandSpecsForConfig(cfg, {
+        skillCommands,
+        provider: "discord",
+      })
     : [];
   const initialCommandCount = commandSpecs.length;
-  if (nativeEnabled && nativeSkillsEnabled && commandSpecs.length > maxDiscordCommands) {
+  if (
+    nativeEnabled &&
+    nativeSkillsEnabled &&
+    commandSpecs.length > maxDiscordCommands
+  ) {
     skillCommands = [];
-    commandSpecs = listNativeCommandSpecsForConfig(cfg, { skillCommands: [], provider: "discord" });
+    commandSpecs = listNativeCommandSpecsForConfig(cfg, {
+      skillCommands: [],
+      provider: "discord",
+    });
     runtime.log?.(
       warn(
         `discord: ${initialCommandCount} commands exceeds limit; removing per-skill commands and keeping /skill.`,
@@ -380,7 +428,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       ),
     );
   }
-  const voiceManagerRef: { current: DiscordVoiceManager | null } = { current: null };
+  const voiceManagerRef: { current: DiscordVoiceManager | null } = {
+    current: null,
+  };
   const threadBindings = threadBindingsEnabled
     ? createThreadBindingManager({
         accountId: account.accountId,
@@ -470,7 +520,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     const modals: Modal[] = [];
 
     if (execApprovalsHandler) {
-      components.push(createExecApprovalButton({ handler: execApprovalsHandler }));
+      components.push(
+        createExecApprovalButton({ handler: execApprovalsHandler }),
+      );
     }
 
     if (agentComponentsEnabled) {
@@ -490,7 +542,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       components.push(createDiscordComponentStringSelect(componentContext));
       components.push(createDiscordComponentUserSelect(componentContext));
       components.push(createDiscordComponentRoleSelect(componentContext));
-      components.push(createDiscordComponentMentionableSelect(componentContext));
+      components.push(
+        createDiscordComponentMentionableSelect(componentContext),
+      );
       components.push(createDiscordComponentChannelSelect(componentContext));
       modals.push(createDiscordComponentModal(componentContext));
     }
@@ -563,9 +617,12 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     try {
       const botUser = await client.fetchUser("@me");
       botUserId = botUser?.id;
-      botUserName = botUser?.username?.trim() || botUser?.globalName?.trim() || undefined;
+      botUserName =
+        botUser?.username?.trim() || botUser?.globalName?.trim() || undefined;
     } catch (err) {
-      runtime.error?.(danger(`discord: failed to fetch bot identity: ${String(err)}`));
+      runtime.error?.(
+        danger(`discord: failed to fetch bot identity: ${String(err)}`),
+      );
     }
 
     if (voiceEnabled) {
@@ -578,7 +635,10 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         botUserId,
       });
       voiceManagerRef.current = voiceManager;
-      registerDiscordListener(client.listeners, new DiscordVoiceReadyListener(voiceManager));
+      registerDiscordListener(
+        client.listeners,
+        new DiscordVoiceReadyListener(voiceManager),
+      );
     }
 
     const messageHandler = createDiscordMessageHandler({
@@ -656,12 +716,18 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         client.listeners,
         new DiscordPresenceListener({ logger, accountId: account.accountId }),
       );
-      runtime.log?.("discord: GuildPresences intent enabled — presence listener registered");
+      runtime.log?.(
+        "discord: GuildPresences intent enabled — presence listener registered",
+      );
     }
 
     const botIdentity =
-      botUserId && botUserName ? `${botUserId} (${botUserName})` : (botUserId ?? botUserName ?? "");
-    runtime.log?.(`logged in to discord${botIdentity ? ` as ${botIdentity}` : ""}`);
+      botUserId && botUserName
+        ? `${botUserId} (${botUserName})`
+        : (botUserId ?? botUserName ?? "");
+    runtime.log?.(
+      `logged in to discord${botIdentity ? ` as ${botIdentity}` : ""}`,
+    );
 
     lifecycleStarted = true;
     await runDiscordGatewayLifecycle({
@@ -692,12 +758,17 @@ async function clearDiscordNativeCommands(params: {
   runtime: RuntimeEnv;
 }) {
   try {
-    await params.client.rest.put(Routes.applicationCommands(params.applicationId), {
-      body: [],
-    });
+    await params.client.rest.put(
+      Routes.applicationCommands(params.applicationId),
+      {
+        body: [],
+      },
+    );
     logVerbose("discord: cleared native commands (commands.native=false)");
   } catch (err) {
-    params.runtime.error?.(danger(`discord: failed to clear native commands: ${String(err)}`));
+    params.runtime.error?.(
+      danger(`discord: failed to clear native commands: ${String(err)}`),
+    );
   }
 }
 

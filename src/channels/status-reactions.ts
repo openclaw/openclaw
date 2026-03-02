@@ -212,11 +212,17 @@ export function createStatusReactionController(params: {
     }
 
     stallSoftTimer = setTimeout(() => {
-      scheduleEmoji(emojis.stallSoft, { immediate: true, skipStallReset: true });
+      scheduleEmoji(emojis.stallSoft, {
+        immediate: true,
+        skipStallReset: true,
+      });
     }, timing.stallSoftMs);
 
     stallHardTimer = setTimeout(() => {
-      scheduleEmoji(emojis.stallHard, { immediate: true, skipStallReset: true });
+      scheduleEmoji(emojis.stallHard, {
+        immediate: true,
+        skipStallReset: true,
+      });
     }, timing.stallHardMs);
   }
 
@@ -233,7 +239,11 @@ export function createStatusReactionController(params: {
       await adapter.setReaction(newEmoji);
 
       // If adapter supports removeReaction and there's a different previous emoji, remove it
-      if (adapter.removeReaction && previousEmoji && previousEmoji !== newEmoji) {
+      if (
+        adapter.removeReaction &&
+        previousEmoji &&
+        previousEmoji !== newEmoji
+      ) {
         await adapter.removeReaction(previousEmoji);
       }
 

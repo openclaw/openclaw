@@ -4,7 +4,10 @@ import { wrapToolWorkspaceRootGuardWithOptions } from "./pi-tools.read.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 
 const mocks = vi.hoisted(() => ({
-  assertSandboxPath: vi.fn(async () => ({ resolved: "/tmp/root", relative: "" })),
+  assertSandboxPath: vi.fn(async () => ({
+    resolved: "/tmp/root",
+    relative: "",
+  })),
 }));
 
 vi.mock("./sandbox-paths.js", () => ({
@@ -67,7 +70,9 @@ describe("wrapToolWorkspaceRootGuardWithOptions", () => {
       containerWorkdir: "/workspace",
     });
 
-    await wrapped.execute("tc-at-container", { path: "@/workspace/docs/readme.md" });
+    await wrapped.execute("tc-at-container", {
+      path: "@/workspace/docs/readme.md",
+    });
 
     expect(mocks.assertSandboxPath).toHaveBeenCalledWith({
       filePath: path.resolve(root, "docs", "readme.md"),

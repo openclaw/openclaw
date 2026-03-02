@@ -111,7 +111,9 @@ function normalizeRole(role: string | undefined): string | null {
   return trimmed ? trimmed : null;
 }
 
-function mergeRoles(...items: Array<string | string[] | undefined>): string[] | undefined {
+function mergeRoles(
+  ...items: Array<string | string[] | undefined>
+): string[] | undefined {
   const roles = new Set<string>();
   for (const item of items) {
     if (!item) {
@@ -137,7 +139,9 @@ function mergeRoles(...items: Array<string | string[] | undefined>): string[] | 
   return [...roles];
 }
 
-function mergeScopes(...items: Array<string[] | undefined>): string[] | undefined {
+function mergeScopes(
+  ...items: Array<string[] | undefined>
+): string[] | undefined {
   const scopes = new Set<string>();
   for (const item of items) {
     if (!item) {
@@ -193,7 +197,12 @@ function scopesAllow(requested: string[], allowed: string[]): boolean {
 }
 
 const DEVICE_SCOPE_IMPLICATIONS: Readonly<Record<string, readonly string[]>> = {
-  "operator.admin": ["operator.read", "operator.write", "operator.approvals", "operator.pairing"],
+  "operator.admin": [
+    "operator.read",
+    "operator.write",
+    "operator.approvals",
+    "operator.pairing",
+  ],
   "operator.write": ["operator.read"],
 };
 
@@ -215,8 +224,14 @@ function expandScopeImplications(scopes: string[]): string[] {
   return [...expanded];
 }
 
-function scopesAllowWithImplications(requested: string[], allowed: string[]): boolean {
-  return scopesAllow(expandScopeImplications(requested), expandScopeImplications(allowed));
+function scopesAllowWithImplications(
+  requested: string[],
+  allowed: string[],
+): boolean {
+  return scopesAllow(
+    expandScopeImplications(requested),
+    expandScopeImplications(allowed),
+  );
 }
 
 function newToken() {
@@ -230,7 +245,9 @@ function getPairedDeviceFromState(
   return state.pairedByDeviceId[normalizeDeviceId(deviceId)] ?? null;
 }
 
-function cloneDeviceTokens(device: PairedDevice): Record<string, DeviceAuthToken> {
+function cloneDeviceTokens(
+  device: PairedDevice,
+): Record<string, DeviceAuthToken> {
   return device.tokens ? { ...device.tokens } : {};
 }
 
@@ -252,9 +269,13 @@ function buildDeviceAuthToken(params: {
   };
 }
 
-export async function listDevicePairing(baseDir?: string): Promise<DevicePairingList> {
+export async function listDevicePairing(
+  baseDir?: string,
+): Promise<DevicePairingList> {
   const state = await loadState(baseDir);
-  const pending = Object.values(state.pendingById).toSorted((a, b) => b.ts - a.ts);
+  const pending = Object.values(state.pendingById).toSorted(
+    (a, b) => b.ts - a.ts,
+  );
   const paired = Object.values(state.pairedByDeviceId).toSorted(
     (a, b) => b.approvedAtMs - a.approvedAtMs,
   );
@@ -329,7 +350,12 @@ export async function approveDevicePairing(
     }
     const now = Date.now();
     const existing = state.pairedByDeviceId[pending.deviceId];
-    const roles = mergeRoles(existing?.roles, existing?.role, pending.roles, pending.role);
+    const roles = mergeRoles(
+      existing?.roles,
+      existing?.role,
+      pending.roles,
+      pending.role,
+    );
     const approvedScopes = mergeScopes(
       existing?.approvedScopes ?? existing?.scopes,
       pending.scopes,
@@ -421,7 +447,10 @@ export async function removePairedDevice(
 export async function updatePairedDeviceMetadata(
   deviceId: string,
   patch: Partial<
-    Omit<PairedDevice, "deviceId" | "createdAtMs" | "approvedAtMs" | "approvedScopes">
+    Omit<
+      PairedDevice,
+      "deviceId" | "createdAtMs" | "approvedAtMs" | "approvedScopes"
+    >
   >,
   baseDir?: string,
 ): Promise<void> {
@@ -495,7 +524,9 @@ export async function verifyDeviceToken(params: {
       return { ok: false, reason: "token-mismatch" };
     }
     const requestedScopes = normalizeDeviceAuthScopes(params.scopes);
-    if (!roleScopesAllow({ role, requestedScopes, allowedScopes: entry.scopes })) {
+    if (
+      !roleScopesAllow({ role, requestedScopes, allowedScopes: entry.scopes })
+    ) {
       return { ok: false, reason: "scope-mismatch" };
     }
     entry.lastUsedAtMs = Date.now();
@@ -526,7 +557,13 @@ export async function ensureDeviceToken(params: {
     }
     const { device, role, tokens, existing } = context;
     if (existing && !existing.revokedAtMs) {
-      if (roleScopesAllow({ role, requestedScopes, allowedScopes: existing.scopes })) {
+      if (
+        roleScopesAllow({
+          role,
+          requestedScopes,
+          allowedScopes: existing.scopes,
+        })
+      ) {
         return existing;
       }
     }
@@ -639,7 +676,10 @@ export async function revokeDeviceToken(params: {
   });
 }
 
-export async function clearDevicePairing(deviceId: string, baseDir?: string): Promise<boolean> {
+export async function clearDevicePairing(
+  deviceId: string,
+  baseDir?: string,
+): Promise<boolean> {
   return await withLock(async () => {
     const state = await loadState(baseDir);
     const normalizedId = normalizeDeviceId(deviceId);

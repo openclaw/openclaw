@@ -5,10 +5,12 @@ function createReplyChunksHarness() {
   const replyMessageLine = vi.fn(async () => ({}));
   const pushMessageLine = vi.fn(async () => ({}));
   const pushTextMessageWithQuickReplies = vi.fn(async () => ({}));
-  const createTextMessageWithQuickReplies = vi.fn((text: string, _quickReplies: string[]) => ({
-    type: "text" as const,
-    text,
-  }));
+  const createTextMessageWithQuickReplies = vi.fn(
+    (text: string, _quickReplies: string[]) => ({
+      type: "text" as const,
+      text,
+    }),
+  );
 
   return {
     replyMessageLine,
@@ -42,7 +44,10 @@ describe("sendLineReplyChunks", () => {
 
     expect(result.replyTokenUsed).toBe(true);
     expect(replyMessageLine).toHaveBeenCalledTimes(1);
-    expect(createTextMessageWithQuickReplies).toHaveBeenCalledWith("three", ["A", "B"]);
+    expect(createTextMessageWithQuickReplies).toHaveBeenCalledWith("three", [
+      "A",
+      "B",
+    ]);
     expect(replyMessageLine).toHaveBeenCalledWith(
       "token",
       [
@@ -57,13 +62,18 @@ describe("sendLineReplyChunks", () => {
   });
 
   it("attaches quick replies to a single reply chunk", async () => {
-    const { replyMessageLine, pushMessageLine, pushTextMessageWithQuickReplies } =
-      createReplyChunksHarness();
-    const createTextMessageWithQuickReplies = vi.fn((text: string, _quickReplies: string[]) => ({
-      type: "text" as const,
-      text,
-      quickReply: { items: [] },
-    }));
+    const {
+      replyMessageLine,
+      pushMessageLine,
+      pushTextMessageWithQuickReplies,
+    } = createReplyChunksHarness();
+    const createTextMessageWithQuickReplies = vi.fn(
+      (text: string, _quickReplies: string[]) => ({
+        type: "text" as const,
+        text,
+        quickReply: { items: [] },
+      }),
+    );
 
     const result = await sendLineReplyChunks({
       to: "line:user:1",
@@ -78,7 +88,9 @@ describe("sendLineReplyChunks", () => {
     });
 
     expect(result.replyTokenUsed).toBe(true);
-    expect(createTextMessageWithQuickReplies).toHaveBeenCalledWith("only", ["A"]);
+    expect(createTextMessageWithQuickReplies).toHaveBeenCalledWith("only", [
+      "A",
+    ]);
     expect(replyMessageLine).toHaveBeenCalledTimes(1);
     expect(pushMessageLine).not.toHaveBeenCalled();
     expect(pushTextMessageWithQuickReplies).not.toHaveBeenCalled();
@@ -119,11 +131,18 @@ describe("sendLineReplyChunks", () => {
       { accountId: undefined },
     );
     expect(pushMessageLine).toHaveBeenCalledTimes(1);
-    expect(pushMessageLine).toHaveBeenCalledWith("line:group:1", "6", { accountId: undefined });
-    expect(pushTextMessageWithQuickReplies).toHaveBeenCalledTimes(1);
-    expect(pushTextMessageWithQuickReplies).toHaveBeenCalledWith("line:group:1", "7", ["A"], {
+    expect(pushMessageLine).toHaveBeenCalledWith("line:group:1", "6", {
       accountId: undefined,
     });
+    expect(pushTextMessageWithQuickReplies).toHaveBeenCalledTimes(1);
+    expect(pushTextMessageWithQuickReplies).toHaveBeenCalledWith(
+      "line:group:1",
+      "7",
+      ["A"],
+      {
+        accountId: undefined,
+      },
+    );
     expect(createTextMessageWithQuickReplies).not.toHaveBeenCalled();
   });
 
@@ -159,8 +178,13 @@ describe("sendLineReplyChunks", () => {
     expect(pushMessageLine).toHaveBeenNthCalledWith(2, "line:group:1", "2", {
       accountId: "default",
     });
-    expect(pushTextMessageWithQuickReplies).toHaveBeenCalledWith("line:group:1", "3", ["A"], {
-      accountId: "default",
-    });
+    expect(pushTextMessageWithQuickReplies).toHaveBeenCalledWith(
+      "line:group:1",
+      "3",
+      ["A"],
+      {
+        accountId: "default",
+      },
+    );
   });
 });

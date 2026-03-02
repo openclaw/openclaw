@@ -7,9 +7,9 @@ import type { ThreadBindingRecord } from "./thread-bindings.types.js";
 
 describe("thread binding persona", () => {
   it("prefers explicit label and prefixes with gear", () => {
-    expect(resolveThreadBindingPersona({ label: "codex thread", agentId: "codex" })).toBe(
-      "⚙️ codex thread",
-    );
+    expect(
+      resolveThreadBindingPersona({ label: "codex thread", agentId: "codex" }),
+    ).toBe("⚙️ codex thread");
   });
 
   it("falls back to agent id when label is missing", () => {
@@ -29,6 +29,8 @@ describe("thread binding persona", () => {
       lastActivityAt: Date.now(),
       label: "codex-thread",
     } satisfies ThreadBindingRecord;
-    expect(resolveThreadBindingPersonaFromRecord(record)).toBe("⚙️ codex-thread");
+    expect(resolveThreadBindingPersonaFromRecord(record)).toBe(
+      "⚙️ codex-thread",
+    );
   });
 });

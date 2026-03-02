@@ -30,7 +30,8 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_3: LegacyConfigMigration[] = [
     // This migration runs on every gateway start via migrateLegacyConfig → applyLegacyMigrations
     // and writes the seeded origins to disk before the startup guard fires, preventing the loop.
     id: "gateway.controlUi.allowedOrigins-seed-for-non-loopback",
-    describe: "Seed gateway.controlUi.allowedOrigins for existing non-loopback gateway installs",
+    describe:
+      "Seed gateway.controlUi.allowedOrigins for existing non-loopback gateway installs",
     apply: (raw, changes) => {
       const gateway = getRecord(raw.gateway);
       if (!gateway) {
@@ -50,12 +51,17 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_3: LegacyConfigMigration[] = [
       ) {
         return;
       }
-      const port = resolveGatewayPortWithDefault(gateway.port, DEFAULT_GATEWAY_PORT);
+      const port = resolveGatewayPortWithDefault(
+        gateway.port,
+        DEFAULT_GATEWAY_PORT,
+      );
       const origins = buildDefaultControlUiAllowedOrigins({
         port,
         bind,
         customBindHost:
-          typeof gateway.customBindHost === "string" ? gateway.customBindHost : undefined,
+          typeof gateway.customBindHost === "string"
+            ? gateway.customBindHost
+            : undefined,
       });
       gateway.controlUi = { ...controlUi, allowedOrigins: origins };
       raw.gateway = gateway;
@@ -112,7 +118,9 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_3: LegacyConfigMigration[] = [
         return;
       }
       claudeCli.mode = "oauth";
-      changes.push('Updated auth.profiles["anthropic:claude-cli"].mode → "oauth".');
+      changes.push(
+        'Updated auth.profiles["anthropic:claude-cli"].mode → "oauth".',
+      );
     },
   },
   // tools.alsoAllow migration removed (field not shipped in prod; enforce via schema instead).
@@ -146,7 +154,9 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_3: LegacyConfigMigration[] = [
       if (tts.auto !== undefined) {
         if ("enabled" in tts) {
           delete tts.enabled;
-          changes.push("Removed messages.tts.enabled (messages.tts.auto already set).");
+          changes.push(
+            "Removed messages.tts.enabled (messages.tts.auto already set).",
+          );
         }
         return;
       }
@@ -155,7 +165,9 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_3: LegacyConfigMigration[] = [
       }
       tts.auto = tts.enabled ? "always" : "off";
       delete tts.enabled;
-      changes.push(`Moved messages.tts.enabled → messages.tts.auto (${String(tts.auto)}).`);
+      changes.push(
+        `Moved messages.tts.enabled → messages.tts.auto (${String(tts.auto)}).`,
+      );
     },
   },
   {
@@ -260,7 +272,9 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_3: LegacyConfigMigration[] = [
       const entry = ensureAgentEntry(list, defaultId);
       if (entry.identity === undefined) {
         entry.identity = identity;
-        changes.push(`Moved identity → agents.list (id "${defaultId}").identity.`);
+        changes.push(
+          `Moved identity → agents.list (id "${defaultId}").identity.`,
+        );
       } else {
         changes.push("Removed identity (agents.list identity already set).");
       }

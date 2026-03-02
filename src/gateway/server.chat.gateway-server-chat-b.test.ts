@@ -56,7 +56,9 @@ async function withGatewayChatHarness(
     testState.sessionStorePath = undefined;
     ws.close();
     await server.close();
-    await Promise.all(tempDirs.map((dir) => fs.rm(dir, { recursive: true, force: true })));
+    await Promise.all(
+      tempDirs.map((dir) => fs.rm(dir, { recursive: true, force: true })),
+    );
   }
 }
 
@@ -69,16 +71,24 @@ async function writeMainSessionStore() {
 }
 
 async function writeMainSessionTranscript(sessionDir: string, lines: string[]) {
-  await fs.writeFile(path.join(sessionDir, "sess-main.jsonl"), `${lines.join("\n")}\n`, "utf-8");
+  await fs.writeFile(
+    path.join(sessionDir, "sess-main.jsonl"),
+    `${lines.join("\n")}\n`,
+    "utf-8",
+  );
 }
 
 async function fetchHistoryMessages(
   ws: Awaited<ReturnType<typeof startServerWithClient>>["ws"],
 ): Promise<unknown[]> {
-  const historyRes = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
-    sessionKey: "main",
-    limit: 1000,
-  });
+  const historyRes = await rpcReq<{ messages?: unknown[] }>(
+    ws,
+    "chat.history",
+    {
+      sessionKey: "main",
+      limit: 1000,
+    },
+  );
   expect(historyRes.ok).toBe(true);
   return historyRes.payload?.messages ?? [];
 }
@@ -134,7 +144,9 @@ describe("gateway server chat", () => {
       if (!sessionStorePath) {
         throw new Error("expected session store path");
       }
-      const stored = JSON.parse(await fs.readFile(sessionStorePath, "utf-8")) as Record<
+      const stored = JSON.parse(
+        await fs.readFile(sessionStorePath, "utf-8"),
+      ) as Record<
         string,
         { lastChannel?: string; lastTo?: string } | undefined
       >;
@@ -154,10 +166,12 @@ describe("gateway server chat", () => {
       try {
         spy.mockClear();
         let capturedOpts: GetReplyOptions | undefined;
-        spy.mockImplementationOnce(async (_ctx: unknown, opts?: GetReplyOptions) => {
-          capturedOpts = opts;
-          return undefined;
-        });
+        spy.mockImplementationOnce(
+          async (_ctx: unknown, opts?: GetReplyOptions) => {
+            capturedOpts = opts;
+            return undefined;
+          },
+        );
 
         const sendRes = await rpcReq(ws, "chat.send", {
           sessionKey: "main",
@@ -285,7 +299,10 @@ describe("gateway server chat", () => {
           message: {
             role: "assistant",
             content: [
-              { type: "text", text: "Hello [[reply_to_current]] world [[audio_as_voice]]" },
+              {
+                type: "text",
+                text: "Hello [[reply_to_current]] world [[audio_as_voice]]",
+              },
             ],
             timestamp: Date.now(),
           },
@@ -325,7 +342,9 @@ describe("gateway server chat", () => {
       const third = messages[2] as { text?: string };
       const fourth = messages[3] as { content?: Array<{ text?: string }> };
 
-      expect(first.content?.[0]?.text?.replace(/\s+/g, " ").trim()).toBe("Hello world");
+      expect(first.content?.[0]?.text?.replace(/\s+/g, " ").trim()).toBe(
+        "Hello world",
+      );
       expect(second.content?.replace(/\s+/g, " ").trim()).toBe("A B");
       expect(third.text?.replace(/\s+/g, " ").trim()).toBe("C");
       expect(fourth.content?.[0]?.text).toBe("  keep padded  ");
@@ -363,7 +382,11 @@ describe("gateway server chat", () => {
         return undefined;
       });
 
-      const sendResP = onceMessage(ws, (o) => o.type === "res" && o.id === "send-abort-1", 2_000);
+      const sendResP = onceMessage(
+        ws,
+        (o) => o.type === "res" && o.id === "send-abort-1",
+        2_000,
+      );
       sendReq(ws, "send-abort-1", "chat.send", {
         sessionKey: "main",
         message: "hello",
@@ -383,7 +406,9 @@ describe("gateway server chat", () => {
         idempotencyKey: "idem-abort-1",
       });
       expect(inFlight.ok).toBe(true);
-      expect(["started", "in_flight", "ok"]).toContain(inFlight.payload?.status ?? "");
+      expect(["started", "in_flight", "ok"]).toContain(
+        inFlight.payload?.status ?? "",
+      );
 
       const abortRes = await rpcReq<{ aborted?: boolean }>(ws, "chat.abort", {
         sessionKey: "main",

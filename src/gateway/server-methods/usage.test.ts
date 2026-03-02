@@ -2,9 +2,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 
 vi.mock("../../infra/session-cost-usage.js", async () => {
-  const actual = await vi.importActual<typeof import("../../infra/session-cost-usage.js")>(
-    "../../infra/session-cost-usage.js",
-  );
+  const actual = await vi.importActual<
+    typeof import("../../infra/session-cost-usage.js")
+  >("../../infra/session-cost-usage.js");
   return {
     ...actual,
     loadCostUsageSummary: vi.fn(async () => ({
@@ -12,7 +12,14 @@ vi.mock("../../infra/session-cost-usage.js", async () => {
       startDate: "2026-02-01",
       endDate: "2026-02-02",
       daily: [],
-      totals: { totalTokens: 1, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalCost: 0 },
+      totals: {
+        totalTokens: 1,
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalCost: 0,
+      },
     })),
   };
 });
@@ -59,7 +66,10 @@ describe("gateway usage helpers", () => {
   });
 
   it("parseDateRange uses explicit start/end as UTC when mode is missing (backward compatible)", () => {
-    const range = __test.parseDateRange({ startDate: "2026-02-01", endDate: "2026-02-02" });
+    const range = __test.parseDateRange({
+      startDate: "2026-02-01",
+      endDate: "2026-02-02",
+    });
     expect(range.startMs).toBe(Date.UTC(2026, 1, 1));
     expect(range.endMs).toBe(Date.UTC(2026, 1, 2) + dayMs - 1);
   });

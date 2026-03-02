@@ -21,7 +21,12 @@ import {
 } from "../plugin-sdk/windows-spawn.js";
 import { DANGEROUS_ACP_TOOLS } from "../security/dangerous-tools.js";
 
-const SAFE_AUTO_APPROVE_TOOL_IDS = new Set(["read", "search", "web_search", "memory_search"]);
+const SAFE_AUTO_APPROVE_TOOL_IDS = new Set([
+  "read",
+  "search",
+  "web_search",
+  "memory_search",
+]);
 const TRUSTED_SAFE_TOOL_ALIASES = new Set(["search"]);
 const READ_TOOL_PATH_KEYS = ["path", "file_path", "filePath"];
 const TOOL_NAME_MAX_LENGTH = 128;
@@ -36,7 +41,10 @@ const TOOL_KIND_BY_ID = new Map<string, string>([
 type PermissionOption = RequestPermissionRequest["options"][number];
 
 type PermissionResolverDeps = {
-  prompt?: (toolName: string | undefined, toolTitle?: string) => Promise<boolean>;
+  prompt?: (
+    toolName: string | undefined,
+    toolTitle?: string,
+  ) => Promise<boolean>;
   log?: (line: string) => void;
   cwd?: string;
 };
@@ -74,7 +82,9 @@ function normalizeToolName(value: string): string | undefined {
   return normalized;
 }
 
-function parseToolNameFromTitle(title: string | undefined | null): string | undefined {
+function parseToolNameFromTitle(
+  title: string | undefined | null,
+): string | undefined {
   if (!title) {
     return undefined;
   }
@@ -85,20 +95,33 @@ function parseToolNameFromTitle(title: string | undefined | null): string | unde
   return normalizeToolName(head);
 }
 
-function resolveToolKindForPermission(toolName: string | undefined): string | undefined {
+function resolveToolKindForPermission(
+  toolName: string | undefined,
+): string | undefined {
   if (!toolName) {
     return undefined;
   }
   return TOOL_KIND_BY_ID.get(toolName) ?? "other";
 }
 
-function resolveToolNameForPermission(params: RequestPermissionRequest): string | undefined {
+function resolveToolNameForPermission(
+  params: RequestPermissionRequest,
+): string | undefined {
   const toolCall = params.toolCall;
   const toolMeta = asRecord(toolCall?._meta);
   const rawInput = asRecord(toolCall?.rawInput);
 
-  const fromMeta = readFirstStringValue(toolMeta, ["toolName", "tool_name", "name"]);
-  const fromRawInput = readFirstStringValue(rawInput, ["tool", "toolName", "tool_name", "name"]);
+  const fromMeta = readFirstStringValue(toolMeta, [
+    "toolName",
+    "tool_name",
+    "name",
+  ]);
+  const fromRawInput = readFirstStringValue(rawInput, [
+    "tool",
+    "toolName",
+    "tool_name",
+    "name",
+  ]);
   const fromTitle = parseToolNameFromTitle(toolCall?.title);
   return normalizeToolName(fromMeta ?? fromRawInput ?? fromTitle ?? "");
 }
@@ -118,7 +141,9 @@ function extractPathFromToolTitle(
   if (!tail) {
     return undefined;
   }
-  const keyedMatch = tail.match(/(?:^|,\s*)(?:path|file_path|filePath)\s*:\s*([^,]+)/);
+  const keyedMatch = tail.match(
+    /(?:^|,\s*)(?:path|file_path|filePath)\s*:\s*([^,]+)/,
+  );
   if (keyedMatch?.[1]) {
     return keyedMatch[1].trim();
   }
@@ -139,7 +164,10 @@ function resolveToolPathCandidate(
   return fromRawInput ?? fromTitle;
 }
 
-function resolveAbsoluteScopedPath(value: string, cwd: string): string | undefined {
+function resolveAbsoluteScopedPath(
+  value: string,
+  cwd: string,
+): string | undefined {
   let candidate = value.trim();
   if (!candidate) {
     return undefined;
@@ -165,7 +193,10 @@ function resolveAbsoluteScopedPath(value: string, cwd: string): string | undefin
 
 function isPathWithinRoot(candidatePath: string, root: string): boolean {
   const relative = path.relative(root, candidatePath);
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+  return (
+    relative === "" ||
+    (!relative.startsWith("..") && !path.isAbsolute(relative))
+  );
 }
 
 function isReadToolCallScopedToCwd(
@@ -197,7 +228,11 @@ function shouldAutoApproveToolCall(
   const isTrustedToolId =
     typeof toolName === "string" &&
     (isKnownCoreToolId(toolName) || TRUSTED_SAFE_TOOL_ALIASES.has(toolName));
-  if (!toolName || !isTrustedToolId || !SAFE_AUTO_APPROVE_TOOL_IDS.has(toolName)) {
+  if (
+    !toolName ||
+    !isTrustedToolId ||
+    !SAFE_AUTO_APPROVE_TOOL_IDS.has(toolName)
+  ) {
     return false;
   }
   if (toolName === "read") {
@@ -227,9 +262,14 @@ function cancelledPermission(): RequestPermissionResponse {
   return { outcome: { outcome: "cancelled" } };
 }
 
-function promptUserPermission(toolName: string | undefined, toolTitle?: string): Promise<boolean> {
+function promptUserPermission(
+  toolName: string | undefined,
+  toolTitle?: string,
+): Promise<boolean> {
   if (!process.stdin.isTTY || !process.stderr.isTTY) {
-    console.error(`[permission denied] ${toolName ?? "unknown"}: non-interactive terminal`);
+    console.error(
+      `[permission denied] ${toolName ?? "unknown"}: non-interactive terminal`,
+    );
     return Promise.resolve(false);
   }
   return new Promise((resolve) => {
@@ -261,7 +301,9 @@ function promptUserPermission(toolName: string | undefined, toolTitle?: string):
       : (toolName ?? "unknown tool");
     rl.question(`\n[permission] Allow "${label}"? (y/N) `, (answer) => {
       const approved = answer.trim().toLowerCase() === "y";
-      console.error(`[permission ${approved ? "approved" : "denied"}] ${toolName ?? "unknown"}`);
+      console.error(
+        `[permission ${approved ? "approved" : "denied"}] ${toolName ?? "unknown"}`,
+      );
       finish(approved);
     });
   });
@@ -280,14 +322,22 @@ export async function resolvePermissionRequest(
   const toolKind = resolveToolKindForPermission(toolName);
 
   if (options.length === 0) {
-    log(`[permission cancelled] ${toolName ?? "unknown"}: no options available`);
+    log(
+      `[permission cancelled] ${toolName ?? "unknown"}: no options available`,
+    );
     return cancelledPermission();
   }
 
   const allowOption = pickOption(options, ["allow_once", "allow_always"]);
   const rejectOption = pickOption(options, ["reject_once", "reject_always"]);
-  const autoApproveAllowed = shouldAutoApproveToolCall(params, toolName, toolTitle, cwd);
-  const promptRequired = !toolName || !autoApproveAllowed || DANGEROUS_ACP_TOOLS.has(toolName);
+  const autoApproveAllowed = shouldAutoApproveToolCall(
+    params,
+    toolName,
+    toolTitle,
+    cwd,
+  );
+  const promptRequired =
+    !toolName || !autoApproveAllowed || DANGEROUS_ACP_TOOLS.has(toolName);
 
   if (!promptRequired) {
     const option = allowOption ?? options[0];
@@ -340,7 +390,11 @@ function toArgs(value: string[] | string | undefined): string[] {
 
 function buildServerArgs(opts: AcpClientOptions): string[] {
   const args = ["acp", ...toArgs(opts.serverArgs)];
-  if (opts.serverVerbose && !args.includes("--verbose") && !args.includes("-v")) {
+  if (
+    opts.serverVerbose &&
+    !args.includes("--verbose") &&
+    !args.includes("-v")
+  ) {
     args.push("--verbose");
   }
   return args;
@@ -428,7 +482,9 @@ function printSessionUpdate(notification: SessionNotification): void {
       return;
     }
     case "available_commands_update": {
-      const names = update.availableCommands?.map((cmd) => `/${cmd.name}`).join(" ");
+      const names = update.availableCommands
+        ?.map((cmd) => `/${cmd.name}`)
+        .join(" ");
       if (names) {
         console.log(`\n[commands] ${names}`);
       }
@@ -439,17 +495,23 @@ function printSessionUpdate(notification: SessionNotification): void {
   }
 }
 
-export async function createAcpClient(opts: AcpClientOptions = {}): Promise<AcpClientHandle> {
+export async function createAcpClient(
+  opts: AcpClientOptions = {},
+): Promise<AcpClientHandle> {
   const cwd = opts.cwd ?? process.cwd();
   const verbose = Boolean(opts.verbose);
-  const log = verbose ? (msg: string) => console.error(`[acp-client] ${msg}`) : () => {};
+  const log = verbose
+    ? (msg: string) => console.error(`[acp-client] ${msg}`)
+    : () => {};
 
   ensureOpenClawCliOnPath();
   const serverArgs = buildServerArgs(opts);
 
   const entryPath = resolveSelfEntryPath();
-  const serverCommand = opts.serverCommand ?? (entryPath ? process.execPath : "openclaw");
-  const effectiveArgs = opts.serverCommand || !entryPath ? serverArgs : [entryPath, ...serverArgs];
+  const serverCommand =
+    opts.serverCommand ?? (entryPath ? process.execPath : "openclaw");
+  const effectiveArgs =
+    opts.serverCommand || !entryPath ? serverArgs : [entryPath, ...serverArgs];
   const spawnEnv = resolveAcpClientSpawnEnv();
   const spawnInvocation = resolveAcpClientSpawnInvocation(
     { serverCommand, serverArgs: effectiveArgs },
@@ -475,7 +537,9 @@ export async function createAcpClient(opts: AcpClientOptions = {}): Promise<AcpC
   }
 
   const input = Writable.toWeb(agent.stdin);
-  const output = Readable.toWeb(agent.stdout) as unknown as ReadableStream<Uint8Array>;
+  const output = Readable.toWeb(
+    agent.stdout,
+  ) as unknown as ReadableStream<Uint8Array>;
   const stream = ndJsonStream(input, output);
 
   const client = new ClientSideConnection(
@@ -513,7 +577,9 @@ export async function createAcpClient(opts: AcpClientOptions = {}): Promise<AcpC
   };
 }
 
-export async function runAcpClientInteractive(opts: AcpClientOptions = {}): Promise<void> {
+export async function runAcpClientInteractive(
+  opts: AcpClientOptions = {},
+): Promise<void> {
   const { client, agent, sessionId } = await createAcpClient(opts);
 
   const rl = readline.createInterface({

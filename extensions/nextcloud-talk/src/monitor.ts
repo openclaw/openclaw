@@ -1,4 +1,9 @@
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import {
+  createServer,
+  type IncomingMessage,
+  type Server,
+  type ServerResponse,
+} from "node:http";
 import os from "node:os";
 import {
   createLoggerBackedRuntime,
@@ -11,7 +16,10 @@ import { resolveNextcloudTalkAccount } from "./accounts.js";
 import { handleNextcloudTalkInbound } from "./inbound.js";
 import { createNextcloudTalkReplayGuard } from "./replay-guard.js";
 import { getNextcloudTalkRuntime } from "./runtime.js";
-import { extractNextcloudTalkHeaders, verifyNextcloudTalkSignature } from "./signature.js";
+import {
+  extractNextcloudTalkHeaders,
+  verifyNextcloudTalkSignature,
+} from "./signature.js";
 import type {
   CoreConfig,
   NextcloudTalkInboundMessage,
@@ -84,7 +92,11 @@ function writeJsonResponse(
   res.end();
 }
 
-function writeWebhookError(res: ServerResponse, status: number, error: string): void {
+function writeWebhookError(
+  res: ServerResponse,
+  status: number,
+  error: string,
+): void {
   if (res.headersSent) {
     return;
   }
@@ -176,7 +188,9 @@ export function readNextcloudTalkWebhookBody(
   });
 }
 
-export function createNextcloudTalkWebhookServer(opts: NextcloudTalkWebhookServerOptions): {
+export function createNextcloudTalkWebhookServer(
+  opts: NextcloudTalkWebhookServerOptions,
+): {
   server: Server;
   start: () => Promise<void>;
   stop: () => void;
@@ -192,83 +206,89 @@ export function createNextcloudTalkWebhookServer(opts: NextcloudTalkWebhookServe
   const isBackendAllowed = opts.isBackendAllowed;
   const shouldProcessMessage = opts.shouldProcessMessage;
 
-  const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
-    if (req.url === HEALTH_PATH) {
-      res.writeHead(200, { "Content-Type": "text/plain" });
-      res.end("ok");
-      return;
-    }
-
-    if (req.url !== path || req.method !== "POST") {
-      res.writeHead(404);
-      res.end();
-      return;
-    }
-
-    try {
-      const headers = validateWebhookHeaders({
-        req,
-        res,
-        isBackendAllowed,
-      });
-      if (!headers) {
+  const server = createServer(
+    async (req: IncomingMessage, res: ServerResponse) => {
+      if (req.url === HEALTH_PATH) {
+        res.writeHead(200, { "Content-Type": "text/plain" });
+        res.end("ok");
         return;
       }
 
-      const body = await readBody(req, maxBodyBytes);
-
-      const hasValidSignature = verifyWebhookSignature({
-        headers,
-        body,
-        secret,
-        res,
-      });
-      if (!hasValidSignature) {
+      if (req.url !== path || req.method !== "POST") {
+        res.writeHead(404);
+        res.end();
         return;
       }
 
-      const decoded = decodeWebhookCreateMessage({
-        body,
-        res,
-      });
-      if (decoded.kind === "invalid") {
-        return;
-      }
-      if (decoded.kind === "ignore") {
-        writeJsonResponse(res, 200);
-        return;
-      }
+      try {
+        const headers = validateWebhookHeaders({
+          req,
+          res,
+          isBackendAllowed,
+        });
+        if (!headers) {
+          return;
+        }
 
-      const message = decoded.message;
-      if (shouldProcessMessage) {
-        const shouldProcess = await shouldProcessMessage(message);
-        if (!shouldProcess) {
+        const body = await readBody(req, maxBodyBytes);
+
+        const hasValidSignature = verifyWebhookSignature({
+          headers,
+          body,
+          secret,
+          res,
+        });
+        if (!hasValidSignature) {
+          return;
+        }
+
+        const decoded = decodeWebhookCreateMessage({
+          body,
+          res,
+        });
+        if (decoded.kind === "invalid") {
+          return;
+        }
+        if (decoded.kind === "ignore") {
           writeJsonResponse(res, 200);
           return;
         }
-      }
 
-      writeJsonResponse(res, 200);
+        const message = decoded.message;
+        if (shouldProcessMessage) {
+          const shouldProcess = await shouldProcessMessage(message);
+          if (!shouldProcess) {
+            writeJsonResponse(res, 200);
+            return;
+          }
+        }
 
-      try {
-        await onMessage(message);
+        writeJsonResponse(res, 200);
+
+        try {
+          await onMessage(message);
+        } catch (err) {
+          onError?.(err instanceof Error ? err : new Error(formatError(err)));
+        }
       } catch (err) {
-        onError?.(err instanceof Error ? err : new Error(formatError(err)));
+        if (isRequestBodyLimitError(err, "PAYLOAD_TOO_LARGE")) {
+          writeWebhookError(res, 413, WEBHOOK_ERRORS.payloadTooLarge);
+          return;
+        }
+        if (isRequestBodyLimitError(err, "REQUEST_BODY_TIMEOUT")) {
+          writeWebhookError(
+            res,
+            408,
+            requestBodyErrorToText("REQUEST_BODY_TIMEOUT"),
+          );
+          return;
+        }
+        const error = err instanceof Error ? err : new Error(formatError(err));
+        onError?.(error);
+        writeWebhookError(res, 500, WEBHOOK_ERRORS.internalServerError);
       }
-    } catch (err) {
-      if (isRequestBodyLimitError(err, "PAYLOAD_TOO_LARGE")) {
-        writeWebhookError(res, 413, WEBHOOK_ERRORS.payloadTooLarge);
-        return;
-      }
-      if (isRequestBodyLimitError(err, "REQUEST_BODY_TIMEOUT")) {
-        writeWebhookError(res, 408, requestBodyErrorToText("REQUEST_BODY_TIMEOUT"));
-        return;
-      }
-      const error = err instanceof Error ? err : new Error(formatError(err));
-      onError?.(error);
-      writeWebhookError(res, 500, WEBHOOK_ERRORS.internalServerError);
-    }
-  });
+    },
+  );
 
   const start = (): Promise<void> => {
     return new Promise((resolve) => {
@@ -306,7 +326,10 @@ export type NextcloudTalkMonitorOptions = {
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
   onMessage?: (message: NextcloudTalkInboundMessage) => void | Promise<void>;
-  statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
+  statusSink?: (patch: {
+    lastInboundAt?: number;
+    lastOutboundAt?: number;
+  }) => void;
 };
 
 export async function monitorNextcloudTalkProvider(
@@ -326,7 +349,9 @@ export async function monitorNextcloudTalkProvider(
     });
 
   if (!account.secret) {
-    throw new Error(`Nextcloud Talk bot secret not configured for account "${account.accountId}"`);
+    throw new Error(
+      `Nextcloud Talk bot secret not configured for account "${account.accountId}"`,
+    );
   }
 
   const port = account.config.webhookPort ?? DEFAULT_WEBHOOK_PORT;
@@ -392,7 +417,9 @@ export async function monitorNextcloudTalkProvider(
       });
     },
     onError: (error) => {
-      logger.error(`[nextcloud-talk:${account.accountId}] webhook error: ${error.message}`);
+      logger.error(
+        `[nextcloud-talk:${account.accountId}] webhook error: ${error.message}`,
+      );
     },
     abortSignal: opts.abortSignal,
   });
@@ -409,7 +436,9 @@ export async function monitorNextcloudTalkProvider(
   const publicUrl =
     account.config.webhookPublicUrl ??
     `http://${host === "0.0.0.0" ? "localhost" : host}:${port}${path}`;
-  logger.info(`[nextcloud-talk:${account.accountId}] webhook listening on ${publicUrl}`);
+  logger.info(
+    `[nextcloud-talk:${account.accountId}] webhook listening on ${publicUrl}`,
+  );
 
   return { stop };
 }

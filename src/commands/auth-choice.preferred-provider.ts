@@ -49,6 +49,8 @@ const PREFERRED_PROVIDER_BY_AUTH_CHOICE: Partial<Record<AuthChoice, string>> = {
   "custom-api-key": "custom",
 };
 
-export function resolvePreferredProviderForAuthChoice(choice: AuthChoice): string | undefined {
+export function resolvePreferredProviderForAuthChoice(
+  choice: AuthChoice,
+): string | undefined {
   return PREFERRED_PROVIDER_BY_AUTH_CHOICE[choice];
 }

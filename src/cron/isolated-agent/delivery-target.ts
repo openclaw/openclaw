@@ -13,7 +13,10 @@ import {
 } from "../../infra/outbound/targets.js";
 import { readChannelAllowFromStoreSync } from "../../pairing/pairing-store.js";
 import { buildChannelAccountBindings } from "../../routing/bindings.js";
-import { normalizeAccountId, normalizeAgentId } from "../../routing/session-key.js";
+import {
+  normalizeAccountId,
+  normalizeAgentId,
+} from "../../routing/session-key.js";
 import { resolveWhatsAppAccount } from "../../web/accounts.js";
 import { normalizeWhatsAppTarget } from "../../whatsapp/normalize.js";
 
@@ -47,8 +50,10 @@ export async function resolveDeliveryTarget(
     sessionKey?: string;
   },
 ): Promise<DeliveryTargetResolution> {
-  const requestedChannel = typeof jobPayload.channel === "string" ? jobPayload.channel : "last";
-  const explicitTo = typeof jobPayload.to === "string" ? jobPayload.to : undefined;
+  const requestedChannel =
+    typeof jobPayload.channel === "string" ? jobPayload.channel : "last";
+  const explicitTo =
+    typeof jobPayload.to === "string" ? jobPayload.to : undefined;
   const allowMismatchedLastTo = requestedChannel === "last";
 
   const sessionCfg = cfg.session;
@@ -130,7 +135,8 @@ export async function resolveDeliveryTarget(
   // stale thread IDs from leaking to a different chat.
   const threadId =
     resolved.threadId &&
-    (resolved.threadIdExplicit || (resolved.to && resolved.to === resolved.lastTo))
+    (resolved.threadIdExplicit ||
+      (resolved.to && resolved.to === resolved.lastTo))
       ? resolved.threadId
       : undefined;
 
@@ -144,7 +150,9 @@ export async function resolveDeliveryTarget(
       mode,
       error:
         channelResolutionError ??
-        new Error("Channel is required when delivery.channel=last has no previous channel."),
+        new Error(
+          "Channel is required when delivery.channel=last has no previous channel.",
+        ),
     };
   }
 
@@ -158,7 +166,9 @@ export async function resolveDeliveryTarget(
       mode,
       error:
         channelResolutionError ??
-        new Error(`No delivery target resolved for channel "${channel}". Set delivery.to.`),
+        new Error(
+          `No delivery target resolved for channel "${channel}". Set delivery.to.`,
+        ),
     };
   }
 
@@ -166,20 +176,30 @@ export async function resolveDeliveryTarget(
   if (channel === "whatsapp") {
     const resolvedAccountId = normalizeAccountId(accountId);
     const configuredAllowFromRaw =
-      resolveWhatsAppAccount({ cfg, accountId: resolvedAccountId }).allowFrom ?? [];
+      resolveWhatsAppAccount({ cfg, accountId: resolvedAccountId }).allowFrom ??
+      [];
     const configuredAllowFrom = configuredAllowFromRaw
       .map((entry) => String(entry).trim())
       .filter((entry) => entry && entry !== "*")
       .map((entry) => normalizeWhatsAppTarget(entry))
       .filter((entry): entry is string => Boolean(entry));
-    const storeAllowFrom = readChannelAllowFromStoreSync("whatsapp", process.env, resolvedAccountId)
+    const storeAllowFrom = readChannelAllowFromStoreSync(
+      "whatsapp",
+      process.env,
+      resolvedAccountId,
+    )
       .map((entry) => normalizeWhatsAppTarget(entry))
       .filter((entry): entry is string => Boolean(entry));
-    allowFromOverride = [...new Set([...configuredAllowFrom, ...storeAllowFrom])];
+    allowFromOverride = [
+      ...new Set([...configuredAllowFrom, ...storeAllowFrom]),
+    ];
 
     if (mode === "implicit" && allowFromOverride.length > 0) {
       const normalizedCurrentTarget = normalizeWhatsAppTarget(toCandidate);
-      if (!normalizedCurrentTarget || !allowFromOverride.includes(normalizedCurrentTarget)) {
+      if (
+        !normalizedCurrentTarget ||
+        !allowFromOverride.includes(normalizedCurrentTarget)
+      ) {
         toCandidate = allowFromOverride[0];
       }
     }

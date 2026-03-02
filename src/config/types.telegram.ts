@@ -9,7 +9,10 @@ import type {
 } from "./types.base.js";
 import type { ChannelHeartbeatVisibilityConfig } from "./types.channels.js";
 import type { DmConfig, ProviderCommandsConfig } from "./types.messages.js";
-import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
+import type {
+  GroupToolPolicyBySenderConfig,
+  GroupToolPolicyConfig,
+} from "./types.tools.js";
 
 export type TelegramActionConfig = {
   reactions?: boolean;
@@ -33,7 +36,12 @@ export type TelegramNetworkConfig = {
   dnsResultOrder?: "ipv4first" | "verbatim";
 };
 
-export type TelegramInlineButtonsScope = "off" | "dm" | "group" | "all" | "allowlist";
+export type TelegramInlineButtonsScope =
+  | "off"
+  | "dm"
+  | "group"
+  | "all"
+  | "allowlist";
 export type TelegramStreamingMode = "off" | "partial" | "block" | "progress";
 
 export type TelegramCapabilitiesConfig =

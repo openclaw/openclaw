@@ -21,12 +21,20 @@ vi.mock("../../config/sessions.js", () => ({
     // Simulate a threaded Slack session
     if (sessionKey.includes(":thread:")) {
       return {
-        deliveryContext: { channel: "slack", to: "slack:C0123ABC", accountId: "workspace-1" },
+        deliveryContext: {
+          channel: "slack",
+          to: "slack:C0123ABC",
+          accountId: "workspace-1",
+        },
         threadId: "1234567890.123456",
       };
     }
     return {
-      deliveryContext: { channel: "webchat", to: "webchat:user-123", accountId: "default" },
+      deliveryContext: {
+        channel: "webchat",
+        to: "webchat:user-123",
+        accountId: "default",
+      },
       threadId: undefined,
     };
   },
@@ -105,9 +113,12 @@ describe("update.run sentinel deliveryContext", () => {
     capturedPayload = undefined;
 
     let responded = false;
-    await invokeUpdateRun({ sessionKey: "agent:main:webchat:dm:user-123" }, () => {
-      responded = true;
-    });
+    await invokeUpdateRun(
+      { sessionKey: "agent:main:webchat:dm:user-123" },
+      () => {
+        responded = true;
+      },
+    );
 
     expect(responded).toBe(true);
     expect(capturedPayload).toBeDefined();
@@ -131,7 +142,9 @@ describe("update.run sentinel deliveryContext", () => {
   it("includes threadId in sentinel payload for threaded sessions", async () => {
     capturedPayload = undefined;
 
-    await invokeUpdateRun({ sessionKey: "agent:main:slack:dm:C0123ABC:thread:1234567890.123456" });
+    await invokeUpdateRun({
+      sessionKey: "agent:main:slack:dm:C0123ABC:thread:1234567890.123456",
+    });
 
     expect(capturedPayload).toBeDefined();
     expect(capturedPayload!.deliveryContext).toEqual({

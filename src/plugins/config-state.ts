@@ -24,7 +24,9 @@ const normalizeList = (value: unknown): string[] => {
   if (!Array.isArray(value)) {
     return [];
   }
-  return value.map((entry) => (typeof entry === "string" ? entry.trim() : "")).filter(Boolean);
+  return value
+    .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+    .filter(Boolean);
 };
 
 const normalizeSlotValue = (value: unknown): string | null | undefined => {
@@ -41,7 +43,9 @@ const normalizeSlotValue = (value: unknown): string | null | undefined => {
   return trimmed;
 };
 
-const normalizePluginEntries = (entries: unknown): NormalizedPluginsConfig["entries"] => {
+const normalizePluginEntries = (
+  entries: unknown,
+): NormalizedPluginsConfig["entries"] => {
   if (!entries || typeof entries !== "object" || Array.isArray(entries)) {
     return {};
   }
@@ -73,17 +77,24 @@ export const normalizePluginsConfig = (
     deny: normalizeList(config?.deny),
     loadPaths: normalizeList(config?.load?.paths),
     slots: {
-      memory: memorySlot === undefined ? defaultSlotIdForKey("memory") : memorySlot,
+      memory:
+        memorySlot === undefined ? defaultSlotIdForKey("memory") : memorySlot,
     },
     entries: normalizePluginEntries(config?.entries),
   };
 };
 
 const hasExplicitMemorySlot = (plugins?: OpenClawConfig["plugins"]) =>
-  Boolean(plugins?.slots && Object.prototype.hasOwnProperty.call(plugins.slots, "memory"));
+  Boolean(
+    plugins?.slots &&
+    Object.prototype.hasOwnProperty.call(plugins.slots, "memory"),
+  );
 
 const hasExplicitMemoryEntry = (plugins?: OpenClawConfig["plugins"]) =>
-  Boolean(plugins?.entries && Object.prototype.hasOwnProperty.call(plugins.entries, "memory-core"));
+  Boolean(
+    plugins?.entries &&
+    Object.prototype.hasOwnProperty.call(plugins.entries, "memory-core"),
+  );
 
 const hasExplicitPluginConfig = (plugins?: OpenClawConfig["plugins"]) => {
   if (!plugins) {
@@ -98,7 +109,11 @@ const hasExplicitPluginConfig = (plugins?: OpenClawConfig["plugins"]) => {
   if (Array.isArray(plugins.deny) && plugins.deny.length > 0) {
     return true;
   }
-  if (plugins.load?.paths && Array.isArray(plugins.load.paths) && plugins.load.paths.length > 0) {
+  if (
+    plugins.load?.paths &&
+    Array.isArray(plugins.load.paths) &&
+    plugins.load.paths.length > 0
+  ) {
     return true;
   }
   if (plugins.slots && Object.keys(plugins.slots).length > 0) {

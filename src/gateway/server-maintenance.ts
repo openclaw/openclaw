@@ -1,5 +1,8 @@
 import type { HealthSummary } from "../commands/health.js";
-import { abortChatRunById, type ChatAbortControllerEntry } from "./chat-abort.js";
+import {
+  abortChatRunById,
+  type ChatAbortControllerEntry,
+} from "./chat-abort.js";
 import type { ChatRunEntry } from "./server-chat.js";
 import {
   DEDUPE_MAX,
@@ -23,7 +26,9 @@ export function startGatewayMaintenanceTimers(params: {
   nodeSendToAllSubscribed: (event: string, payload: unknown) => void;
   getPresenceVersion: () => number;
   getHealthVersion: () => number;
-  refreshGatewayHealthSnapshot: (opts?: { probe?: boolean }) => Promise<HealthSummary>;
+  refreshGatewayHealthSnapshot: (opts?: {
+    probe?: boolean;
+  }) => Promise<HealthSummary>;
   logHealth: { error: (msg: string) => void };
   dedupe: Map<string, DedupeEntry>;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
@@ -36,7 +41,11 @@ export function startGatewayMaintenanceTimers(params: {
     sessionKey?: string,
   ) => ChatRunEntry | undefined;
   agentRunSeq: Map<string, number>;
-  nodeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
+  nodeSendToSession: (
+    sessionKey: string,
+    event: string,
+    payload: unknown,
+  ) => void;
 }): {
   tickInterval: ReturnType<typeof setInterval>;
   healthInterval: ReturnType<typeof setInterval>;
@@ -63,13 +72,17 @@ export function startGatewayMaintenanceTimers(params: {
   const healthInterval = setInterval(() => {
     void params
       .refreshGatewayHealthSnapshot({ probe: true })
-      .catch((err) => params.logHealth.error(`refresh failed: ${formatError(err)}`));
+      .catch((err) =>
+        params.logHealth.error(`refresh failed: ${formatError(err)}`),
+      );
   }, HEALTH_REFRESH_INTERVAL_MS);
 
   // Prime cache so first client gets a snapshot without waiting.
   void params
     .refreshGatewayHealthSnapshot({ probe: true })
-    .catch((err) => params.logHealth.error(`initial refresh failed: ${formatError(err)}`));
+    .catch((err) =>
+      params.logHealth.error(`initial refresh failed: ${formatError(err)}`),
+    );
 
   // dedupe cache cleanup
   const dedupeCleanup = setInterval(() => {
@@ -81,7 +94,9 @@ export function startGatewayMaintenanceTimers(params: {
       }
     }
     if (params.dedupe.size > DEDUPE_MAX) {
-      const entries = [...params.dedupe.entries()].toSorted((a, b) => a[1].ts - b[1].ts);
+      const entries = [...params.dedupe.entries()].toSorted(
+        (a, b) => a[1].ts - b[1].ts,
+      );
       for (let i = 0; i < params.dedupe.size - DEDUPE_MAX; i++) {
         params.dedupe.delete(entries[i][0]);
       }

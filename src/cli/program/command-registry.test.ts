@@ -44,7 +44,8 @@ const testProgramContext: ProgramContext = {
 
 describe("command-registry", () => {
   const createProgram = () => new Command();
-  const namesOf = (program: Command) => program.commands.map((command) => command.name());
+  const namesOf = (program: Command) =>
+    program.commands.map((command) => command.name());
 
   const withProcessArgv = async (argv: string[], run: () => Promise<void>) => {
     const prevArgv = process.argv;
@@ -76,7 +77,11 @@ describe("command-registry", () => {
 
   it("registerCoreCliByName resolves agents to the agent entry", async () => {
     const program = createProgram();
-    const found = await registerCoreCliByName(program, testProgramContext, "agents");
+    const found = await registerCoreCliByName(
+      program,
+      testProgramContext,
+      "agents",
+    );
     expect(found).toBe(true);
     const agentsCmd = program.commands.find((c) => c.name() === "agents");
     expect(agentsCmd).toBeDefined();
@@ -87,20 +92,33 @@ describe("command-registry", () => {
 
   it("registerCoreCliByName returns false for unknown commands", async () => {
     const program = createProgram();
-    const found = await registerCoreCliByName(program, testProgramContext, "nonexistent");
+    const found = await registerCoreCliByName(
+      program,
+      testProgramContext,
+      "nonexistent",
+    );
     expect(found).toBe(false);
   });
 
   it("registers doctor placeholder for doctor primary command", () => {
     const program = createProgram();
-    registerCoreCliCommands(program, testProgramContext, ["node", "openclaw", "doctor"]);
+    registerCoreCliCommands(program, testProgramContext, [
+      "node",
+      "openclaw",
+      "doctor",
+    ]);
 
     expect(namesOf(program)).toEqual(["doctor"]);
   });
 
   it("does not narrow to the primary command when help is requested", () => {
     const program = createProgram();
-    registerCoreCliCommands(program, testProgramContext, ["node", "openclaw", "doctor", "--help"]);
+    registerCoreCliCommands(program, testProgramContext, [
+      "node",
+      "openclaw",
+      "doctor",
+      "--help",
+    ]);
 
     const names = namesOf(program);
     expect(names).toContain("doctor");
@@ -111,7 +129,9 @@ describe("command-registry", () => {
   it("treats maintenance commands as top-level builtins", async () => {
     const program = createProgram();
 
-    expect(await registerCoreCliByName(program, testProgramContext, "doctor")).toBe(true);
+    expect(
+      await registerCoreCliByName(program, testProgramContext, "doctor"),
+    ).toBe(true);
 
     const names = getCoreCliCommandNames();
     expect(names).toContain("doctor");
@@ -123,7 +143,11 @@ describe("command-registry", () => {
 
   it("registers grouped core entry placeholders without duplicate command errors", async () => {
     const program = createProgram();
-    registerCoreCliCommands(program, testProgramContext, ["node", "openclaw", "vitest"]);
+    registerCoreCliCommands(program, testProgramContext, [
+      "node",
+      "openclaw",
+      "vitest",
+    ]);
     program.exitOverride();
     await withProcessArgv(["node", "openclaw", "status"], async () => {
       await program.parseAsync(["node", "openclaw", "status"]);
@@ -137,11 +161,24 @@ describe("command-registry", () => {
 
   it("replaces placeholders when loading a grouped entry by secondary command name", async () => {
     const program = createProgram();
-    registerCoreCliCommands(program, testProgramContext, ["node", "openclaw", "doctor"]);
+    registerCoreCliCommands(program, testProgramContext, [
+      "node",
+      "openclaw",
+      "doctor",
+    ]);
     expect(namesOf(program)).toEqual(["doctor"]);
 
-    const found = await registerCoreCliByName(program, testProgramContext, "dashboard");
+    const found = await registerCoreCliByName(
+      program,
+      testProgramContext,
+      "dashboard",
+    );
     expect(found).toBe(true);
-    expect(namesOf(program)).toEqual(["doctor", "dashboard", "reset", "uninstall"]);
+    expect(namesOf(program)).toEqual([
+      "doctor",
+      "dashboard",
+      "reset",
+      "uninstall",
+    ]);
   });
 });

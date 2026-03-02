@@ -42,7 +42,10 @@ export type LogTransport = (logObj: LogTransportRecord) => void;
 
 const externalTransports = new Set<LogTransport>();
 
-function attachExternalTransport(logger: TsLogger<LogObj>, transport: LogTransport): void {
+function attachExternalTransport(
+  logger: TsLogger<LogObj>,
+  transport: LogTransport,
+): void {
   logger.attachTransport((logObj: LogObj) => {
     if (!externalTransports.has(transport)) {
       return;
@@ -57,7 +60,8 @@ function attachExternalTransport(logger: TsLogger<LogObj>, transport: LogTranspo
 
 function resolveSettings(): ResolvedSettings {
   let cfg: OpenClawConfig["logging"] | undefined =
-    (loggingState.overrideSettings as LoggerSettings | null) ?? readLoggingConfig();
+    (loggingState.overrideSettings as LoggerSettings | null) ??
+    readLoggingConfig();
   if (!cfg) {
     try {
       const loaded = requireConfig?.("../config/config.js") as
@@ -71,7 +75,9 @@ function resolveSettings(): ResolvedSettings {
     }
   }
   const defaultLevel =
-    process.env.VITEST === "true" && process.env.OPENCLAW_TEST_FILE_LOG !== "1" ? "silent" : "info";
+    process.env.VITEST === "true" && process.env.OPENCLAW_TEST_FILE_LOG !== "1"
+      ? "silent"
+      : "info";
   const fromConfig = normalizeLogLevel(cfg?.level, defaultLevel);
   const envLevel = resolveEnvLogLevelOverride();
   const level = envLevel ?? fromConfig;
@@ -84,11 +90,17 @@ function settingsChanged(a: ResolvedSettings | null, b: ResolvedSettings) {
   if (!a) {
     return true;
   }
-  return a.level !== b.level || a.file !== b.file || a.maxFileBytes !== b.maxFileBytes;
+  return (
+    a.level !== b.level ||
+    a.file !== b.file ||
+    a.maxFileBytes !== b.maxFileBytes
+  );
 }
 
 export function isFileLogLevelEnabled(level: LogLevel): boolean {
-  const settings = (loggingState.cachedSettings as ResolvedSettings | null) ?? resolveSettings();
+  const settings =
+    (loggingState.cachedSettings as ResolvedSettings | null) ??
+    resolveSettings();
   if (!loggingState.cachedSettings) {
     loggingState.cachedSettings = settings;
   }
@@ -199,7 +211,10 @@ export function getChildLogger(
 }
 
 // Baileys expects a pino-like logger shape. Provide a lightweight adapter.
-export function toPinoLikeLogger(logger: TsLogger<LogObj>, level: LogLevel): PinoLikeLogger {
+export function toPinoLikeLogger(
+  logger: TsLogger<LogObj>,
+  level: LogLevel,
+): PinoLikeLogger {
   const buildChild = (bindings?: Record<string, unknown>) =>
     toPinoLikeLogger(
       logger.getSubLogger({
@@ -290,7 +305,10 @@ function pruneOldRollingLogs(dir: string): void {
       if (!entry.isFile()) {
         continue;
       }
-      if (!entry.name.startsWith(`${LOG_PREFIX}-`) || !entry.name.endsWith(LOG_SUFFIX)) {
+      if (
+        !entry.name.startsWith(`${LOG_PREFIX}-`) ||
+        !entry.name.endsWith(LOG_SUFFIX)
+      ) {
         continue;
       }
       const fullPath = path.join(dir, entry.name);

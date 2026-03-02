@@ -8,7 +8,10 @@ process.env.OPENCLAW_PLUGIN_MANIFEST_CACHE_MS ??= "60000";
 // Vitest vm forks can load transitive lockfile helpers many times per worker.
 // Raise listener budget to avoid noisy MaxListeners warnings and warning-stack overhead.
 const TEST_PROCESS_MAX_LISTENERS = 128;
-if (process.getMaxListeners() > 0 && process.getMaxListeners() < TEST_PROCESS_MAX_LISTENERS) {
+if (
+  process.getMaxListeners() > 0 &&
+  process.getMaxListeners() < TEST_PROCESS_MAX_LISTENERS
+) {
   process.setMaxListeners(TEST_PROCESS_MAX_LISTENERS);
 }
 
@@ -25,12 +28,15 @@ import { withIsolatedTestHome } from "./test-env.js";
 const testEnv = withIsolatedTestHome();
 afterAll(() => testEnv.cleanup());
 
-const [{ installProcessWarningFilter }, { setActivePluginRegistry }, { createTestRegistry }] =
-  await Promise.all([
-    import("../src/infra/warning-filter.js"),
-    import("../src/plugins/runtime.js"),
-    import("../src/test-utils/channel-plugins.js"),
-  ]);
+const [
+  { installProcessWarningFilter },
+  { setActivePluginRegistry },
+  { createTestRegistry },
+] = await Promise.all([
+  import("../src/infra/warning-filter.js"),
+  import("../src/plugins/runtime.js"),
+  import("../src/test-utils/channel-plugins.js"),
+]);
 
 installProcessWarningFilter();
 
@@ -93,7 +99,8 @@ const createStubPlugin = (params: {
     docsPath: `/channels/${params.id}`,
     blurb: "test stub.",
     aliases: params.aliases,
-    preferSessionLookupForAnnounceTarget: params.preferSessionLookupForAnnounceTarget,
+    preferSessionLookupForAnnounceTarget:
+      params.preferSessionLookupForAnnounceTarget,
   },
   capabilities: { chatTypes: ["direct", "group"] },
   config: {
@@ -103,7 +110,8 @@ const createStubPlugin = (params: {
       if (!entry || typeof entry !== "object") {
         return [];
       }
-      const accounts = (entry as { accounts?: Record<string, unknown> }).accounts;
+      const accounts = (entry as { accounts?: Record<string, unknown> })
+        .accounts;
       const ids = accounts ? Object.keys(accounts).filter(Boolean) : [];
       return ids.length > 0 ? ids : ["default"];
     },
@@ -113,9 +121,12 @@ const createStubPlugin = (params: {
       if (!entry || typeof entry !== "object") {
         return {};
       }
-      const accounts = (entry as { accounts?: Record<string, unknown> }).accounts;
+      const accounts = (entry as { accounts?: Record<string, unknown> })
+        .accounts;
       const match = accountId ? accounts?.[accountId] : undefined;
-      return (match && typeof match === "object") || typeof match === "string" ? match : entry;
+      return (match && typeof match === "object") || typeof match === "string"
+        ? match
+        : entry;
     },
     isConfigured: async (_account, cfg: OpenClawConfig) => {
       const channels = cfg.channels as Record<string, unknown> | undefined;
@@ -167,7 +178,11 @@ const createDefaultRegistry = () =>
     },
     {
       pluginId: "imessage",
-      plugin: createStubPlugin({ id: "imessage", label: "iMessage", aliases: ["imsg"] }),
+      plugin: createStubPlugin({
+        id: "imessage",
+        label: "iMessage",
+        aliases: ["imsg"],
+      }),
       source: "test",
     },
   ]);

@@ -12,7 +12,9 @@ import {
 
 describe("resolveFinalAssistantText", () => {
   it("falls back to streamed text when final text is empty", () => {
-    expect(resolveFinalAssistantText({ finalText: "", streamedText: "Hello" })).toBe("Hello");
+    expect(
+      resolveFinalAssistantText({ finalText: "", streamedText: "Hello" }),
+    ).toBe("Hello");
   });
 
   it("prefers the final text when present", () => {
@@ -78,15 +80,21 @@ describe("resolveTuiSessionKey", () => {
 
 describe("resolveGatewayDisconnectState", () => {
   it("returns pairing recovery guidance when disconnect reason requires pairing", () => {
-    const state = resolveGatewayDisconnectState("gateway closed (1008): pairing required");
+    const state = resolveGatewayDisconnectState(
+      "gateway closed (1008): pairing required",
+    );
     expect(state.connectionStatus).toContain("pairing required");
-    expect(state.activityStatus).toBe("pairing required: run openclaw devices list");
+    expect(state.activityStatus).toBe(
+      "pairing required: run openclaw devices list",
+    );
     expect(state.pairingHint).toContain("openclaw devices list");
   });
 
   it("falls back to idle for generic disconnect reasons", () => {
     const state = resolveGatewayDisconnectState("network timeout");
-    expect(state.connectionStatus).toBe("gateway disconnected: network timeout");
+    expect(state.connectionStatus).toBe(
+      "gateway disconnected: network timeout",
+    );
     expect(state.activityStatus).toBe("idle");
     expect(state.pairingHint).toBeUndefined();
   });
@@ -132,21 +140,27 @@ describe("createBackspaceDeduper", () => {
 
 describe("resolveCtrlCAction", () => {
   it("clears input and arms exit on first ctrl+c when editor has text", () => {
-    expect(resolveCtrlCAction({ hasInput: true, now: 2000, lastCtrlCAt: 0 })).toEqual({
+    expect(
+      resolveCtrlCAction({ hasInput: true, now: 2000, lastCtrlCAt: 0 }),
+    ).toEqual({
       action: "clear",
       nextLastCtrlCAt: 2000,
     });
   });
 
   it("exits on second ctrl+c within the exit window", () => {
-    expect(resolveCtrlCAction({ hasInput: false, now: 2800, lastCtrlCAt: 2000 })).toEqual({
+    expect(
+      resolveCtrlCAction({ hasInput: false, now: 2800, lastCtrlCAt: 2000 }),
+    ).toEqual({
       action: "exit",
       nextLastCtrlCAt: 2000,
     });
   });
 
   it("shows warning when exit window has elapsed", () => {
-    expect(resolveCtrlCAction({ hasInput: false, now: 3501, lastCtrlCAt: 2000 })).toEqual({
+    expect(
+      resolveCtrlCAction({ hasInput: false, now: 3501, lastCtrlCAt: 2000 }),
+    ).toEqual({
       action: "warn",
       nextLastCtrlCAt: 3501,
     });
@@ -165,8 +179,12 @@ describe("TUI shutdown safety", () => {
   });
 
   it("does not ignore unrelated stop errors", () => {
-    expect(isIgnorableTuiStopError(new Error("something else failed"))).toBe(false);
-    expect(isIgnorableTuiStopError({ code: "EIO", syscall: "write" })).toBe(false);
+    expect(isIgnorableTuiStopError(new Error("something else failed"))).toBe(
+      false,
+    );
+    expect(isIgnorableTuiStopError({ code: "EIO", syscall: "write" })).toBe(
+      false,
+    );
   });
 
   it("swallows only ignorable stop errors", () => {

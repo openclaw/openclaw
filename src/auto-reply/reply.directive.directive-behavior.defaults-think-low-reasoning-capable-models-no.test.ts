@@ -61,7 +61,9 @@ async function expectThinkStatusForReasoningModel(params: {
   const res = await getReplyFromConfig(
     { Body: "/think", From: "+1222", To: "+1222", CommandAuthorized: true },
     {},
-    makeWhatsAppDirectiveConfig(params.home, { model: "anthropic/claude-opus-4-5" }),
+    makeWhatsAppDirectiveConfig(params.home, {
+      model: "anthropic/claude-opus-4-5",
+    }),
   );
 
   const text = replyText(res);
@@ -99,7 +101,9 @@ async function runReasoningDefaultCase(params: {
     {},
     makeWhatsAppDirectiveConfig(params.home, {
       model: { primary: "anthropic/claude-opus-4-5" },
-      ...(params.thinkingDefault ? { thinkingDefault: params.thinkingDefault } : {}),
+      ...(params.thinkingDefault
+        ? { thinkingDefault: params.thinkingDefault }
+        : {}),
     }),
   );
 
@@ -156,17 +160,28 @@ describe("directive behavior", () => {
       expect(aliasText).toContain("Switch: /model <provider/model>");
 
       vi.mocked(loadModelCatalog).mockResolvedValueOnce([]);
-      const unavailableCatalogText = await runModelDirectiveText(home, "/model");
-      expect(unavailableCatalogText).toContain("Current: anthropic/claude-opus-4-5");
-      expect(unavailableCatalogText).toContain("Switch: /model <provider/model>");
+      const unavailableCatalogText = await runModelDirectiveText(
+        home,
+        "/model",
+      );
+      expect(unavailableCatalogText).toContain(
+        "Current: anthropic/claude-opus-4-5",
+      );
+      expect(unavailableCatalogText).toContain(
+        "Switch: /model <provider/model>",
+      );
       expect(unavailableCatalogText).toContain(
         "Browse: /models (providers) or /models <provider> (models)",
       );
       expect(unavailableCatalogText).toContain("More: /model status");
 
-      const allowlistedStatusText = await runModelDirectiveText(home, "/model status", {
-        includeSessionStore: false,
-      });
+      const allowlistedStatusText = await runModelDirectiveText(
+        home,
+        "/model status",
+        {
+          includeSessionStore: false,
+        },
+      );
       expect(allowlistedStatusText).toContain("anthropic/claude-opus-4-5");
       expect(allowlistedStatusText).toContain("openai/gpt-4.1-mini");
       expect(allowlistedStatusText).not.toContain("claude-sonnet-4-1");
@@ -201,27 +216,31 @@ describe("directive behavior", () => {
         },
         { provider: "openai", id: "gpt-4.1-mini", name: "GPT-4.1 mini" },
       ]);
-      const configOnlyProviderText = await runModelDirectiveText(home, "/models minimax", {
-        defaults: {
-          models: {
-            "anthropic/claude-opus-4-5": {},
-            "openai/gpt-4.1-mini": {},
-            "minimax/MiniMax-M2.1": { alias: "minimax" },
+      const configOnlyProviderText = await runModelDirectiveText(
+        home,
+        "/models minimax",
+        {
+          defaults: {
+            models: {
+              "anthropic/claude-opus-4-5": {},
+              "openai/gpt-4.1-mini": {},
+              "minimax/MiniMax-M2.1": { alias: "minimax" },
+            },
           },
-        },
-        extra: {
-          models: {
-            mode: "merge",
-            providers: {
-              minimax: {
-                baseUrl: "https://api.minimax.io/anthropic",
-                api: "anthropic-messages",
-                models: [{ id: "MiniMax-M2.1", name: "MiniMax M2.1" }],
+          extra: {
+            models: {
+              mode: "merge",
+              providers: {
+                minimax: {
+                  baseUrl: "https://api.minimax.io/anthropic",
+                  api: "anthropic-messages",
+                  models: [{ id: "MiniMax-M2.1", name: "MiniMax M2.1" }],
+                },
               },
             },
           },
         },
-      });
+      );
       expect(configOnlyProviderText).toContain("Models (minimax");
       expect(configOnlyProviderText).toContain("minimax/MiniMax-M2.1");
 
@@ -242,7 +261,12 @@ describe("directive behavior", () => {
       const storePath = sessionStorePath(home);
 
       await getReplyFromConfig(
-        { Body: "/model openai/gpt-4.1-mini", From: "+1222", To: "+1222", CommandAuthorized: true },
+        {
+          Body: "/model openai/gpt-4.1-mini",
+          From: "+1222",
+          To: "+1222",
+          CommandAuthorized: true,
+        },
         {},
         makeWhatsAppDirectiveConfig(
           home,
@@ -294,7 +318,9 @@ describe("directive behavior", () => {
           To: "+2000",
         },
         {},
-        makeWhatsAppDirectiveConfig(home, { model: { primary: "anthropic/claude-opus-4-5" } }),
+        makeWhatsAppDirectiveConfig(home, {
+          model: { primary: "anthropic/claude-opus-4-5" },
+        }),
       );
 
       expect(replyTexts(inlineThinkRes)).toContain("done");
@@ -402,7 +428,10 @@ describe("directive behavior", () => {
   });
   it("handles reply_to_current tags and explicit reply_to precedence", async () => {
     await withTempHome(async (home) => {
-      for (const replyTag of ["[[reply_to_current]]", "[[ reply_to_current ]]"]) {
+      for (const replyTag of [
+        "[[reply_to_current]]",
+        "[[ reply_to_current ]]",
+      ]) {
         const payload = await runReplyToCurrentCase(home, `hello ${replyTag}`);
         expect(payload?.text).toBe("hello");
         expect(payload?.replyToId).toBe("msg-123");
@@ -420,7 +449,9 @@ describe("directive behavior", () => {
           MessageSid: "msg-123",
         },
         {},
-        makeWhatsAppDirectiveConfig(home, { model: { primary: "anthropic/claude-opus-4-5" } }),
+        makeWhatsAppDirectiveConfig(home, {
+          model: { primary: "anthropic/claude-opus-4-5" },
+        }),
       );
 
       const payload = Array.isArray(res) ? res[0] : res;

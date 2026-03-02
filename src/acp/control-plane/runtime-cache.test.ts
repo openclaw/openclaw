@@ -38,12 +38,20 @@ describe("RuntimeCache", () => {
       const actor = "agent:codex:acp:s1";
       cache.set(actor, mockState(actor), { now: 1_000 });
 
-      expect(cache.collectIdleCandidates({ maxIdleMs: 1_000, now: 1_999 })).toHaveLength(0);
-      expect(cache.collectIdleCandidates({ maxIdleMs: 1_000, now: 2_000 })).toHaveLength(1);
+      expect(
+        cache.collectIdleCandidates({ maxIdleMs: 1_000, now: 1_999 }),
+      ).toHaveLength(0);
+      expect(
+        cache.collectIdleCandidates({ maxIdleMs: 1_000, now: 2_000 }),
+      ).toHaveLength(1);
 
       cache.get(actor, { now: 2_500 });
-      expect(cache.collectIdleCandidates({ maxIdleMs: 1_000, now: 3_200 })).toHaveLength(0);
-      expect(cache.collectIdleCandidates({ maxIdleMs: 1_000, now: 3_500 })).toHaveLength(1);
+      expect(
+        cache.collectIdleCandidates({ maxIdleMs: 1_000, now: 3_200 }),
+      ).toHaveLength(0);
+      expect(
+        cache.collectIdleCandidates({ maxIdleMs: 1_000, now: 3_500 }),
+      ).toHaveLength(1);
     } finally {
       vi.useRealTimers();
     }

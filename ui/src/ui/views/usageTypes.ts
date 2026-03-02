@@ -78,7 +78,10 @@ export type UsageProps = {
   onDailyChartModeChange: (mode: "total" | "by-type") => void;
   onTimeSeriesModeChange: (mode: "cumulative" | "per-turn") => void;
   onTimeSeriesBreakdownChange: (mode: "total" | "by-type") => void;
-  onTimeSeriesCursorRangeChange: (start: number | null, end: number | null) => void;
+  onTimeSeriesCursorRangeChange: (
+    start: number | null,
+    end: number | null,
+  ) => void;
   onSelectDay: (day: string, shiftKey: boolean) => void; // Support shift-click
   onSelectHour: (hour: number, shiftKey: boolean) => void;
   onClearDays: () => void;
@@ -88,7 +91,9 @@ export type UsageProps = {
   onQueryDraftChange: (query: string) => void;
   onApplyQuery: () => void;
   onClearQuery: () => void;
-  onSessionSortChange: (sort: "tokens" | "cost" | "recent" | "messages" | "errors") => void;
+  onSessionSortChange: (
+    sort: "tokens" | "cost" | "recent" | "messages" | "errors",
+  ) => void;
   onSessionSortDirChange: (dir: "asc" | "desc") => void;
   onSessionsTabChange: (tab: "all" | "recent") => void;
   onToggleColumn: (column: UsageColumnId) => void;

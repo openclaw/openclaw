@@ -41,7 +41,9 @@ export const AgentDefaultsSchema = z
     bootstrapMaxChars: z.number().int().positive().optional(),
     bootstrapTotalMaxChars: z.number().int().positive().optional(),
     userTimezone: z.string().optional(),
-    timeFormat: z.union([z.literal("auto"), z.literal("12"), z.literal("24")]).optional(),
+    timeFormat: z
+      .union([z.literal("auto"), z.literal("12"), z.literal("24")])
+      .optional(),
     envelopeTimezone: z.string().optional(),
     envelopeTimestamp: z.union([z.literal("on"), z.literal("off")]).optional(),
     envelopeElapsed: z.union([z.literal("on"), z.literal("off")]).optional(),
@@ -83,7 +85,9 @@ export const AgentDefaultsSchema = z
       .optional(),
     compaction: z
       .object({
-        mode: z.union([z.literal("default"), z.literal("safeguard")]).optional(),
+        mode: z
+          .union([z.literal("default"), z.literal("safeguard")])
+          .optional(),
         reserveTokens: z.number().int().nonnegative().optional(),
         keepRecentTokens: z.number().int().positive().optional(),
         reserveTokensFloor: z.number().int().nonnegative().optional(),
@@ -101,7 +105,10 @@ export const AgentDefaultsSchema = z
                 z.number().int().nonnegative(),
                 z
                   .string()
-                  .refine(isValidNonNegativeByteSizeString, "Expected byte size string like 2mb"),
+                  .refine(
+                    isValidNonNegativeByteSizeString,
+                    "Expected byte size string like 2mb",
+                  ),
               ])
               .optional(),
             prompt: z.string().optional(),
@@ -115,7 +122,11 @@ export const AgentDefaultsSchema = z
     embeddedPi: z
       .object({
         projectSettingsPolicy: z
-          .union([z.literal("trusted"), z.literal("sanitize"), z.literal("ignore")])
+          .union([
+            z.literal("trusted"),
+            z.literal("sanitize"),
+            z.literal("ignore"),
+          ])
           .optional(),
       })
       .strict()
@@ -131,12 +142,23 @@ export const AgentDefaultsSchema = z
         z.literal("adaptive"),
       ])
       .optional(),
-    verboseDefault: z.union([z.literal("off"), z.literal("on"), z.literal("full")]).optional(),
-    elevatedDefault: z
-      .union([z.literal("off"), z.literal("on"), z.literal("ask"), z.literal("full")])
+    verboseDefault: z
+      .union([z.literal("off"), z.literal("on"), z.literal("full")])
       .optional(),
-    blockStreamingDefault: z.union([z.literal("off"), z.literal("on")]).optional(),
-    blockStreamingBreak: z.union([z.literal("text_end"), z.literal("message_end")]).optional(),
+    elevatedDefault: z
+      .union([
+        z.literal("off"),
+        z.literal("on"),
+        z.literal("ask"),
+        z.literal("full"),
+      ])
+      .optional(),
+    blockStreamingDefault: z
+      .union([z.literal("off"), z.literal("on")])
+      .optional(),
+    blockStreamingBreak: z
+      .union([z.literal("text_end"), z.literal("message_end")])
+      .optional(),
     blockStreamingChunk: BlockStreamingChunkSchema.optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
     humanDelay: HumanDelaySchema.optional(),

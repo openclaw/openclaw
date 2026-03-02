@@ -33,8 +33,12 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
     mockedGlobalHookRunner.hasHooks.mockImplementation(
       (hookName) => hookName === "before_agent_start",
     );
-    mockedGlobalHookRunner.runBeforeAgentStart.mockResolvedValueOnce(legacyResult);
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+    mockedGlobalHookRunner.runBeforeAgentStart.mockResolvedValueOnce(
+      legacyResult,
+    );
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({ promptError: null }),
+    );
 
     await runEmbeddedPiAgent({
       sessionId: "test-session",
@@ -111,7 +115,9 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
     const result = await runEmbeddedPiAgent(overflowBaseRunParams);
 
     expect(mockedCompactDirect).toHaveBeenCalledTimes(3);
-    expect(mockedTruncateOversizedToolResultsInSession).toHaveBeenCalledTimes(1);
+    expect(mockedTruncateOversizedToolResultsInSession).toHaveBeenCalledTimes(
+      1,
+    );
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(4);
     expect(result.meta.error?.kind).toBe("context_overflow");
   });
@@ -121,7 +127,9 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
     mockedCompactDirect.mockClear();
     mockedPickFallbackThinkingLevel.mockClear();
     mockedRunEmbeddedAttempt.mockResolvedValue(
-      makeAttemptResult({ promptError: new Error("unsupported reasoning mode") }),
+      makeAttemptResult({
+        promptError: new Error("unsupported reasoning mode"),
+      }),
     );
     mockedPickFallbackThinkingLevel.mockReturnValue("low");
 

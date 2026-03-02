@@ -3,7 +3,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { zalouserPlugin } from "./channel.js";
 
 vi.mock("./send.js", () => ({
-  sendMessageZalouser: vi.fn().mockResolvedValue({ ok: true, messageId: "zlu-1" }),
+  sendMessageZalouser: vi
+    .fn()
+    .mockResolvedValue({ ok: true, messageId: "zlu-1" }),
 }));
 
 vi.mock("./accounts.js", async (importOriginal) => {
@@ -30,7 +32,9 @@ function baseCtx(payload: ReplyPayload) {
 }
 
 describe("zalouserPlugin outbound sendPayload", () => {
-  let mockedSend: ReturnType<typeof vi.mocked<(typeof import("./send.js"))["sendMessageZalouser"]>>;
+  let mockedSend: ReturnType<
+    typeof vi.mocked<(typeof import("./send.js"))["sendMessageZalouser"]>
+  >;
 
   beforeEach(async () => {
     const mod = await import("./send.js");
@@ -42,9 +46,15 @@ describe("zalouserPlugin outbound sendPayload", () => {
   it("text-only delegates to sendText", async () => {
     mockedSend.mockResolvedValue({ ok: true, messageId: "zlu-t1" });
 
-    const result = await zalouserPlugin.outbound!.sendPayload!(baseCtx({ text: "hello" }));
+    const result = await zalouserPlugin.outbound!.sendPayload!(
+      baseCtx({ text: "hello" }),
+    );
 
-    expect(mockedSend).toHaveBeenCalledWith("987654321", "hello", expect.any(Object));
+    expect(mockedSend).toHaveBeenCalledWith(
+      "987654321",
+      "hello",
+      expect.any(Object),
+    );
     expect(result).toMatchObject({ channel: "zalouser", messageId: "zlu-t1" });
   });
 
@@ -104,7 +114,9 @@ describe("zalouserPlugin outbound sendPayload", () => {
       .mockResolvedValueOnce({ ok: true, messageId: "zlu-c2" });
 
     const longText = "a".repeat(3000);
-    const result = await zalouserPlugin.outbound!.sendPayload!(baseCtx({ text: longText }));
+    const result = await zalouserPlugin.outbound!.sendPayload!(
+      baseCtx({ text: longText }),
+    );
 
     // textChunkLimit is 2000 with chunkTextForOutbound, so it should split
     expect(mockedSend.mock.calls.length).toBeGreaterThanOrEqual(2);

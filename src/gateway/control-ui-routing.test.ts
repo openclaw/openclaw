@@ -39,7 +39,10 @@ describe("classifyControlUiRequest", () => {
       search: "?foo=1",
       method: "GET",
     });
-    expect(classified).toEqual({ kind: "redirect", location: "/openclaw/?foo=1" });
+    expect(classified).toEqual({
+      kind: "redirect",
+      location: "/openclaw/?foo=1",
+    });
   });
 
   it("classifies basePath subroutes as control ui", () => {

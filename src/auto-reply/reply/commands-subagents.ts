@@ -22,7 +22,10 @@ import type { CommandHandler } from "./commands-types.js";
 
 export { extractMessageText };
 
-export const handleSubagentsCommand: CommandHandler = async (params, allowTextCommands) => {
+export const handleSubagentsCommand: CommandHandler = async (
+  params,
+  allowTextCommands,
+) => {
   if (!allowTextCommands) {
     return null;
   }

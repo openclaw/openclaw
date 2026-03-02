@@ -32,12 +32,20 @@ describe("signalRpcRequest", () => {
 
   it("returns parsed RPC result", async () => {
     fetchWithTimeoutMock.mockResolvedValueOnce(
-      rpcResponse({ jsonrpc: "2.0", result: { version: "0.13.22" }, id: "test-id" }),
+      rpcResponse({
+        jsonrpc: "2.0",
+        result: { version: "0.13.22" },
+        id: "test-id",
+      }),
     );
 
-    const result = await signalRpcRequest<{ version: string }>("version", undefined, {
-      baseUrl: "http://127.0.0.1:8080",
-    });
+    const result = await signalRpcRequest<{ version: string }>(
+      "version",
+      undefined,
+      {
+        baseUrl: "http://127.0.0.1:8080",
+      },
+    );
 
     expect(result).toEqual({ version: "0.13.22" });
   });
@@ -56,12 +64,16 @@ describe("signalRpcRequest", () => {
   });
 
   it("throws when RPC response envelope has neither result nor error", async () => {
-    fetchWithTimeoutMock.mockResolvedValueOnce(rpcResponse({ jsonrpc: "2.0", id: "test-id" }));
+    fetchWithTimeoutMock.mockResolvedValueOnce(
+      rpcResponse({ jsonrpc: "2.0", id: "test-id" }),
+    );
 
     await expect(
       signalRpcRequest("version", undefined, {
         baseUrl: "http://127.0.0.1:8080",
       }),
-    ).rejects.toThrow("Signal RPC returned invalid response envelope (status 200)");
+    ).rejects.toThrow(
+      "Signal RPC returned invalid response envelope (status 200)",
+    );
   });
 });

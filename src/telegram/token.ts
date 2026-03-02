@@ -2,7 +2,10 @@ import fs from "node:fs";
 import type { BaseTokenResolution } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { TelegramAccountConfig } from "../config/types.telegram.js";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
+import {
+  DEFAULT_ACCOUNT_ID,
+  normalizeAccountId,
+} from "../routing/session-key.js";
 
 export type TelegramTokenSource = "env" | "tokenFile" | "config" | "none";
 
@@ -36,7 +39,9 @@ export function resolveTelegramToken(
       return direct;
     }
     // Fallback: match by normalized key
-    const matchKey = Object.keys(accounts).find((key) => normalizeAccountId(key) === id);
+    const matchKey = Object.keys(accounts).find(
+      (key) => normalizeAccountId(key) === id,
+    );
     return matchKey ? accounts[matchKey] : undefined;
   };
 
@@ -74,7 +79,9 @@ export function resolveTelegramToken(
   const tokenFile = telegramCfg?.tokenFile?.trim();
   if (tokenFile && allowEnv) {
     if (!fs.existsSync(tokenFile)) {
-      opts.logMissingFile?.(`channels.telegram.tokenFile not found: ${tokenFile}`);
+      opts.logMissingFile?.(
+        `channels.telegram.tokenFile not found: ${tokenFile}`,
+      );
       return { token: "", source: "none" };
     }
     try {
@@ -83,7 +90,9 @@ export function resolveTelegramToken(
         return { token, source: "tokenFile" };
       }
     } catch (err) {
-      opts.logMissingFile?.(`channels.telegram.tokenFile read failed: ${String(err)}`);
+      opts.logMissingFile?.(
+        `channels.telegram.tokenFile read failed: ${String(err)}`,
+      );
       return { token: "", source: "none" };
     }
   }
@@ -93,7 +102,9 @@ export function resolveTelegramToken(
     return { token: configToken, source: "config" };
   }
 
-  const envToken = allowEnv ? (opts.envToken ?? process.env.TELEGRAM_BOT_TOKEN)?.trim() : "";
+  const envToken = allowEnv
+    ? (opts.envToken ?? process.env.TELEGRAM_BOT_TOKEN)?.trim()
+    : "";
   if (envToken) {
     return { token: envToken, source: "env" };
   }

@@ -50,13 +50,17 @@ export function normalizeCompatibilityConfigValues(cfg: OpenClawConfig): {
         delete dm.policy;
         dmChanged = true;
       }
-      changes.push(`Moved ${params.pathPrefix}.dm.policy → ${params.pathPrefix}.dmPolicy.`);
+      changes.push(
+        `Moved ${params.pathPrefix}.dm.policy → ${params.pathPrefix}.dmPolicy.`,
+      );
     } else if (topDmPolicy !== undefined && legacyDmPolicy !== undefined) {
       if (topDmPolicy === legacyDmPolicy) {
         if (dm) {
           delete dm.policy;
           dmChanged = true;
-          changes.push(`Removed ${params.pathPrefix}.dm.policy (dmPolicy already set).`);
+          changes.push(
+            `Removed ${params.pathPrefix}.dm.policy (dmPolicy already set).`,
+          );
         }
       }
     }
@@ -70,13 +74,17 @@ export function normalizeCompatibilityConfigValues(cfg: OpenClawConfig): {
         delete dm.allowFrom;
         dmChanged = true;
       }
-      changes.push(`Moved ${params.pathPrefix}.dm.allowFrom → ${params.pathPrefix}.allowFrom.`);
+      changes.push(
+        `Moved ${params.pathPrefix}.dm.allowFrom → ${params.pathPrefix}.allowFrom.`,
+      );
     } else if (topAllowFrom !== undefined && legacyAllowFrom !== undefined) {
       if (allowFromEqual(topAllowFrom, legacyAllowFrom)) {
         if (dm) {
           delete dm.allowFrom;
           dmChanged = true;
-          changes.push(`Removed ${params.pathPrefix}.dm.allowFrom (allowFrom already set).`);
+          changes.push(
+            `Removed ${params.pathPrefix}.dm.allowFrom (allowFrom already set).`,
+          );
         }
       }
     }
@@ -88,7 +96,9 @@ export function normalizeCompatibilityConfigValues(cfg: OpenClawConfig): {
           const { dm: _ignored, ...rest } = updated;
           updated = rest;
           changed = true;
-          changes.push(`Removed empty ${params.pathPrefix}.dm after migration.`);
+          changes.push(
+            `Removed empty ${params.pathPrefix}.dm after migration.`,
+          );
         }
       } else {
         updated = { ...updated, dm };
@@ -130,8 +140,13 @@ export function normalizeCompatibilityConfigValues(cfg: OpenClawConfig): {
       );
     }
     if (typeof beforeStreaming === "boolean") {
-      changes.push(`Normalized ${params.pathPrefix}.streaming boolean → enum (${resolved}).`);
-    } else if (typeof beforeStreaming === "string" && beforeStreaming !== resolved) {
+      changes.push(
+        `Normalized ${params.pathPrefix}.streaming boolean → enum (${resolved}).`,
+      );
+    } else if (
+      typeof beforeStreaming === "string" &&
+      beforeStreaming !== resolved
+    ) {
       changes.push(
         `Normalized ${params.pathPrefix}.streaming (${beforeStreaming}) → (${resolved}).`,
       );
@@ -154,7 +169,8 @@ export function normalizeCompatibilityConfigValues(cfg: OpenClawConfig): {
     const shouldNormalize =
       hadLegacyStreamMode ||
       typeof legacyStreaming === "boolean" ||
-      (typeof legacyStreaming === "string" && legacyStreaming !== resolvedStreaming);
+      (typeof legacyStreaming === "string" &&
+        legacyStreaming !== resolvedStreaming);
     if (!shouldNormalize) {
       return { entry: updated, changed: false };
     }
@@ -183,7 +199,10 @@ export function normalizeCompatibilityConfigValues(cfg: OpenClawConfig): {
       changes.push(
         `Moved ${params.pathPrefix}.streaming (boolean) → ${params.pathPrefix}.nativeStreaming (${resolvedNativeStreaming}).`,
       );
-    } else if (typeof legacyStreaming === "string" && legacyStreaming !== resolvedStreaming) {
+    } else if (
+      typeof legacyStreaming === "string" &&
+      legacyStreaming !== resolvedStreaming
+    ) {
       changes.push(
         `Normalized ${params.pathPrefix}.streaming (${legacyStreaming}) → (${resolvedStreaming}).`,
       );
@@ -311,7 +330,9 @@ export function normalizeCompatibilityConfigValues(cfg: OpenClawConfig): {
       if (accountKeys.length === 0) {
         continue;
       }
-      const hasDefault = accountKeys.some((key) => key.trim().toLowerCase() === DEFAULT_ACCOUNT_ID);
+      const hasDefault = accountKeys.some(
+        (key) => key.trim().toLowerCase() === DEFAULT_ACCOUNT_ID,
+      );
       if (hasDefault) {
         continue;
       }
@@ -332,7 +353,8 @@ export function normalizeCompatibilityConfigValues(cfg: OpenClawConfig): {
       const defaultAccount: Record<string, unknown> = {};
       for (const key of keysToMove) {
         const value = rawChannel[key];
-        defaultAccount[key] = value && typeof value === "object" ? structuredClone(value) : value;
+        defaultAccount[key] =
+          value && typeof value === "object" ? structuredClone(value) : value;
       }
       const nextChannel: Record<string, unknown> = {
         ...rawChannel,
@@ -377,16 +399,19 @@ export function normalizeCompatibilityConfigValues(cfg: OpenClawConfig): {
     }
 
     const legacyAllowPrivateNetwork = rawSsrFPolicy.allowPrivateNetwork;
-    const currentDangerousAllowPrivateNetwork = rawSsrFPolicy.dangerouslyAllowPrivateNetwork;
+    const currentDangerousAllowPrivateNetwork =
+      rawSsrFPolicy.dangerouslyAllowPrivateNetwork;
 
-    let resolvedDangerousAllowPrivateNetwork: unknown = currentDangerousAllowPrivateNetwork;
+    let resolvedDangerousAllowPrivateNetwork: unknown =
+      currentDangerousAllowPrivateNetwork;
     if (
       typeof legacyAllowPrivateNetwork === "boolean" ||
       typeof currentDangerousAllowPrivateNetwork === "boolean"
     ) {
       // Preserve runtime behavior while collapsing to the canonical key.
       resolvedDangerousAllowPrivateNetwork =
-        legacyAllowPrivateNetwork === true || currentDangerousAllowPrivateNetwork === true;
+        legacyAllowPrivateNetwork === true ||
+        currentDangerousAllowPrivateNetwork === true;
     } else if (currentDangerousAllowPrivateNetwork === undefined) {
       resolvedDangerousAllowPrivateNetwork = legacyAllowPrivateNetwork;
     }
@@ -394,7 +419,8 @@ export function normalizeCompatibilityConfigValues(cfg: OpenClawConfig): {
     const nextSsrFPolicy: Record<string, unknown> = { ...rawSsrFPolicy };
     delete nextSsrFPolicy.allowPrivateNetwork;
     if (resolvedDangerousAllowPrivateNetwork !== undefined) {
-      nextSsrFPolicy.dangerouslyAllowPrivateNetwork = resolvedDangerousAllowPrivateNetwork;
+      nextSsrFPolicy.dangerouslyAllowPrivateNetwork =
+        resolvedDangerousAllowPrivateNetwork;
     }
 
     const migratedBrowser = { ...next.browser } as Record<string, unknown>;

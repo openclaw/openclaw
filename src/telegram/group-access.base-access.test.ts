@@ -23,7 +23,10 @@ describe("evaluateTelegramGroupBaseAccess", () => {
       requireSenderForAllowOverride: true,
     });
 
-    expect(result).toEqual({ allowed: false, reason: "group-override-unauthorized" });
+    expect(result).toEqual({
+      allowed: false,
+      reason: "group-override-unauthorized",
+    });
   });
 
   it("allows group message when override is not configured", () => {

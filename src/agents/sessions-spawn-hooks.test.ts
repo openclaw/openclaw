@@ -112,7 +112,10 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
       thread: true,
     });
 
-    expect(result.details).toMatchObject({ status: "accepted", runId: "run-1" });
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      runId: "run-1",
+    });
     expect(hookRunnerMocks.runSubagentSpawning).toHaveBeenCalledTimes(1);
     expect(hookRunnerMocks.runSubagentSpawning).toHaveBeenCalledWith(
       {
@@ -135,10 +138,8 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
     );
 
     expect(hookRunnerMocks.runSubagentSpawned).toHaveBeenCalledTimes(1);
-    const [event, ctx] = (hookRunnerMocks.runSubagentSpawned.mock.calls[0] ?? []) as unknown as [
-      Record<string, unknown>,
-      Record<string, unknown>,
-    ];
+    const [event, ctx] = (hookRunnerMocks.runSubagentSpawned.mock.calls[0] ??
+      []) as unknown as [Record<string, unknown>, Record<string, unknown>];
     expect(event).toMatchObject({
       runId: "run-1",
       agentId: "main",
@@ -152,7 +153,9 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
       },
       threadRequested: true,
     });
-    expect(event.childSessionKey).toEqual(expect.stringMatching(/^agent:main:subagent:/));
+    expect(event.childSessionKey).toEqual(
+      expect.stringMatching(/^agent:main:subagent:/),
+    );
     expect(ctx).toMatchObject({
       runId: "run-1",
       requesterSessionKey: "main",
@@ -172,12 +175,14 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
       runTimeoutSeconds: 1,
     });
 
-    expect(result.details).toMatchObject({ status: "accepted", runId: "run-1" });
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      runId: "run-1",
+    });
     expect(hookRunnerMocks.runSubagentSpawning).not.toHaveBeenCalled();
     expect(hookRunnerMocks.runSubagentSpawned).toHaveBeenCalledTimes(1);
-    const [event] = (hookRunnerMocks.runSubagentSpawned.mock.calls[0] ?? []) as unknown as [
-      Record<string, unknown>,
-    ];
+    const [event] = (hookRunnerMocks.runSubagentSpawned.mock.calls[0] ??
+      []) as unknown as [Record<string, unknown>];
     expect(event).toMatchObject({
       mode: "run",
       threadRequested: false,
@@ -202,11 +207,14 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
       mode: "run",
     });
 
-    expect(result.details).toMatchObject({ status: "accepted", runId: "run-1", mode: "run" });
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      runId: "run-1",
+      mode: "run",
+    });
     expect(hookRunnerMocks.runSubagentSpawning).toHaveBeenCalledTimes(1);
-    const [event] = (hookRunnerMocks.runSubagentSpawned.mock.calls[0] ?? []) as unknown as [
-      Record<string, unknown>,
-    ];
+    const [event] = (hookRunnerMocks.runSubagentSpawned.mock.calls[0] ??
+      []) as unknown as [Record<string, unknown>];
     expect(event).toMatchObject({
       mode: "run",
       threadRequested: true,
@@ -216,7 +224,8 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
   it("returns error when thread binding cannot be created", async () => {
     hookRunnerMocks.runSubagentSpawning.mockResolvedValueOnce({
       status: "error",
-      error: "Unable to create or bind a Discord thread for this subagent session.",
+      error:
+        "Unable to create or bind a Discord thread for this subagent session.",
     });
     const tool = await getSessionsSpawnTool({
       agentSessionKey: "main",
@@ -233,7 +242,10 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
     });
 
     expect(result.details).toMatchObject({ status: "error" });
-    const details = result.details as { error?: string; childSessionKey?: string };
+    const details = result.details as {
+      error?: string;
+      childSessionKey?: string;
+    };
     expect(details.error).toMatch(/thread/i);
     expect(hookRunnerMocks.runSubagentSpawned).not.toHaveBeenCalled();
     expectSessionsDeleteWithoutAgentStart();
@@ -264,7 +276,10 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
     });
 
     expect(result.details).toMatchObject({ status: "error" });
-    const details = result.details as { error?: string; childSessionKey?: string };
+    const details = result.details as {
+      error?: string;
+      childSessionKey?: string;
+    };
     expect(details.error).toMatch(/unable to create or bind a thread/i);
     expect(hookRunnerMocks.runSubagentSpawned).not.toHaveBeenCalled();
     expectSessionsDeleteWithoutAgentStart();
@@ -335,9 +350,8 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
 
     expect(result.details).toMatchObject({ status: "error" });
     expect(hookRunnerMocks.runSubagentEnded).toHaveBeenCalledTimes(1);
-    const [event] = (hookRunnerMocks.runSubagentEnded.mock.calls[0] ?? []) as unknown as [
-      Record<string, unknown>,
-    ];
+    const [event] = (hookRunnerMocks.runSubagentEnded.mock.calls[0] ??
+      []) as unknown as [Record<string, unknown>];
     expect(event).toMatchObject({
       targetSessionKey: expect.stringMatching(/^agent:main:subagent:/),
       accountId: "work",

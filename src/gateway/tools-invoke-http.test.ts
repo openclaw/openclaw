@@ -1,6 +1,18 @@
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import {
+  createServer,
+  type IncomingMessage,
+  type ServerResponse,
+} from "node:http";
 import type { AddressInfo } from "node:net";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 const TEST_GATEWAY_TOKEN = "test-gateway-token-1234567890";
 
@@ -21,7 +33,8 @@ vi.mock("../config/sessions.js", () => ({
       return "global";
     }
     const agents = params?.agents?.list ?? [];
-    const rawDefault = agents.find((agent) => agent?.default)?.id ?? agents[0]?.id ?? "main";
+    const rawDefault =
+      agents.find((agent) => agent?.default)?.id ?? agents[0]?.id ?? "main";
     const agentId =
       String(rawDefault ?? "main")
         .trim()
@@ -73,7 +86,10 @@ vi.mock("../agents/openclaw-tools.js", () => {
     },
     {
       name: "agents_list",
-      parameters: { type: "object", properties: { action: { type: "string" } } },
+      parameters: {
+        type: "object",
+        properties: { action: { type: "string" } },
+      },
       execute: async () => ({ ok: true, result: [] }),
     },
     {
@@ -154,7 +170,9 @@ vi.mock("../agents/openclaw-tools.js", () => {
 
 const { handleToolsInvokeHttpRequest } = await import("./tools-invoke-http.js");
 
-let pluginHttpHandlers: Array<(req: IncomingMessage, res: ServerResponse) => Promise<boolean>> = [];
+let pluginHttpHandlers: Array<
+  (req: IncomingMessage, res: ServerResponse) => Promise<boolean>
+> = [];
 
 let sharedPort = 0;
 let sharedServer: ReturnType<typeof createServer> | undefined;
@@ -163,7 +181,11 @@ beforeAll(async () => {
   sharedServer = createServer((req, res) => {
     void (async () => {
       const handled = await handleToolsInvokeHttpRequest(req, res, {
-        auth: { mode: "token", token: TEST_GATEWAY_TOKEN, allowTailscale: false },
+        auth: {
+          mode: "token",
+          token: TEST_GATEWAY_TOKEN,
+          allowTailscale: false,
+        },
       });
       if (handled) {
         return;
@@ -209,7 +231,9 @@ beforeEach(() => {
 });
 
 const resolveGatewayToken = (): string => TEST_GATEWAY_TOKEN;
-const gatewayAuthHeaders = () => ({ authorization: `Bearer ${resolveGatewayToken()}` });
+const gatewayAuthHeaders = () => ({
+  authorization: `Bearer ${resolveGatewayToken()}`,
+});
 
 const allowAgentsListForMain = () => {
   cfg = {
@@ -244,11 +268,19 @@ const invokeAgentsList = async (params: {
   headers?: Record<string, string>;
   sessionKey?: string;
 }) => {
-  const body: Record<string, unknown> = { tool: "agents_list", action: "json", args: {} };
+  const body: Record<string, unknown> = {
+    tool: "agents_list",
+    action: "json",
+    args: {},
+  };
   if (params.sessionKey) {
     body.sessionKey = params.sessionKey;
   }
-  return await postToolsInvoke({ port: params.port, headers: params.headers, body });
+  return await postToolsInvoke({
+    port: params.port,
+    headers: params.headers,
+    body,
+  });
 };
 
 const invokeTool = async (params: {
@@ -269,7 +301,11 @@ const invokeTool = async (params: {
   if (params.sessionKey) {
     body.sessionKey = params.sessionKey;
   }
-  return await postToolsInvoke({ port: params.port, headers: params.headers, body });
+  return await postToolsInvoke({
+    port: params.port,
+    headers: params.headers,
+    body,
+  });
 };
 
 const invokeAgentsListAuthed = async (params: { sessionKey?: string } = {}) =>
@@ -327,11 +363,13 @@ describe("POST /tools/invoke", () => {
   });
 
   it("routes tools invoke before plugin HTTP handlers", async () => {
-    const pluginHandler = vi.fn(async (_req: IncomingMessage, res: ServerResponse) => {
-      res.statusCode = 418;
-      res.end("plugin");
-      return true;
-    });
+    const pluginHandler = vi.fn(
+      async (_req: IncomingMessage, res: ServerResponse) => {
+        res.statusCode = 418;
+        res.end("plugin");
+        return true;
+      },
+    );
     allowAgentsListForMain();
     pluginHttpHandlers = [async (req, res) => pluginHandler(req, res)];
 
@@ -399,7 +437,9 @@ describe("POST /tools/invoke", () => {
     cfg = {
       ...cfg,
       agents: {
-        list: [{ id: "main", default: true, tools: { allow: ["sessions_spawn"] } }],
+        list: [
+          { id: "main", default: true, tools: { allow: ["sessions_spawn"] } },
+        ],
       },
       gateway: { tools: { allow: ["sessions_spawn"] } },
     };
@@ -428,7 +468,9 @@ describe("POST /tools/invoke", () => {
     cfg = {
       ...cfg,
       agents: {
-        list: [{ id: "main", default: true, tools: { allow: ["sessions_send"] } }],
+        list: [
+          { id: "main", default: true, tools: { allow: ["sessions_send"] } },
+        ],
       },
     };
 
@@ -528,7 +570,13 @@ describe("POST /tools/invoke", () => {
     cfg = {
       ...cfg,
       agents: {
-        list: [{ id: "main", default: true, tools: { allow: ["tools_invoke_test"] } }],
+        list: [
+          {
+            id: "main",
+            default: true,
+            tools: { allow: ["tools_invoke_test"] },
+          },
+        ],
       },
     };
 
@@ -570,7 +618,13 @@ describe("POST /tools/invoke", () => {
     cfg = {
       ...cfg,
       agents: {
-        list: [{ id: "main", default: true, tools: { allow: ["diffs_compat_test"] } }],
+        list: [
+          {
+            id: "main",
+            default: true,
+            tools: { allow: ["diffs_compat_test"] },
+          },
+        ],
       },
     };
 

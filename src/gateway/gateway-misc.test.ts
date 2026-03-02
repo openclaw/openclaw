@@ -15,7 +15,10 @@ import { createGatewayBroadcaster } from "./server-broadcast.js";
 import { createChatRunRegistry } from "./server-chat.js";
 import { handleNodeInvokeResult } from "./server-methods/nodes.handlers.invoke-result.js";
 import type { GatewayClient as GatewayMethodClient } from "./server-methods/types.js";
-import type { GatewayRequestContext, RespondFn } from "./server-methods/types.js";
+import type {
+  GatewayRequestContext,
+  RespondFn,
+} from "./server-methods/types.js";
 import { createNodeSubscriptionManager } from "./server-node-subscriptions.js";
 import { formatError, normalizeVoiceWakeTriggers } from "./server-utils.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
@@ -52,7 +55,10 @@ describe("GatewayClient", () => {
   ) {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ui-"));
     try {
-      await fs.writeFile(path.join(tmp, "index.html"), params.indexHtml ?? "<html></html>\n");
+      await fs.writeFile(
+        path.join(tmp, "index.html"),
+        params.indexHtml ?? "<html></html>\n",
+      );
       if (typeof params.faviconSvg === "string") {
         await fs.writeFile(path.join(tmp, "favicon.svg"), params.faviconSvg);
       }
@@ -69,7 +75,9 @@ describe("GatewayClient", () => {
     const last = wsMockState.last as { url: unknown; opts: unknown } | null;
 
     expect(last?.url).toBe("ws://127.0.0.1:1");
-    expect(last?.opts).toEqual(expect.objectContaining({ maxPayload: 25 * 1024 * 1024 }));
+    expect(last?.opts).toEqual(
+      expect.objectContaining({ maxPayload: 25 * 1024 * 1024 }),
+    );
   });
 
   it("returns 404 for missing static asset paths instead of SPA fallback", async () => {
@@ -126,7 +134,11 @@ describe("GatewayClient", () => {
 
   it("serves SPA fallback for dotted path segments that are not static assets", async () => {
     await withControlUiRoot({}, async (tmp) => {
-      for (const route of ["/webchat/user/jane.doe", "/webchat/v2.0", "/settings/v1.2"]) {
+      for (const route of [
+        "/webchat/user/jane.doe",
+        "/webchat/v2.0",
+        "/settings/v1.2",
+      ]) {
         const { res } = makeControlUiResponse();
         const handled = handleControlUiHttpRequest(
           { url: route, method: "GET" } as IncomingMessage,
@@ -180,22 +192,33 @@ describe("gateway broadcaster", () => {
     const clients = new Set<GatewayWsClient>([
       {
         socket: approvalsSocket as unknown as GatewayWsClient["socket"],
-        connect: { role: "operator", scopes: ["operator.approvals"] } as GatewayWsClient["connect"],
+        connect: {
+          role: "operator",
+          scopes: ["operator.approvals"],
+        } as GatewayWsClient["connect"],
         connId: "c-approvals",
       },
       {
         socket: pairingSocket as unknown as GatewayWsClient["socket"],
-        connect: { role: "operator", scopes: ["operator.pairing"] } as GatewayWsClient["connect"],
+        connect: {
+          role: "operator",
+          scopes: ["operator.pairing"],
+        } as GatewayWsClient["connect"],
         connId: "c-pairing",
       },
       {
         socket: readSocket as unknown as GatewayWsClient["socket"],
-        connect: { role: "operator", scopes: ["operator.read"] } as GatewayWsClient["connect"],
+        connect: {
+          role: "operator",
+          scopes: ["operator.read"],
+        } as GatewayWsClient["connect"],
         connId: "c-read",
       },
     ]);
 
-    const { broadcast, broadcastToConnIds } = createGatewayBroadcaster({ clients });
+    const { broadcast, broadcastToConnIds } = createGatewayBroadcaster({
+      clients,
+    });
 
     broadcast("exec.approval.requested", { id: "1" });
     broadcast("device.pair.requested", { requestId: "r1" });
@@ -263,7 +286,9 @@ describe("late-arriving invoke results", () => {
       });
 
       const [ok, rawPayload, error] = respond.mock.lastCall ?? [];
-      const payload = rawPayload as { ok?: boolean; ignored?: boolean } | undefined;
+      const payload = rawPayload as
+        | { ok?: boolean; ignored?: boolean }
+        | undefined;
 
       // Late-arriving results return success instead of error to reduce log noise.
       expect(ok).toBe(true);
@@ -282,8 +307,11 @@ describe("node subscription manager", () => {
       event: string;
       payloadJSON?: string | null;
     }> = [];
-    const sendEvent = (evt: { nodeId: string; event: string; payloadJSON?: string | null }) =>
-      sent.push(evt);
+    const sendEvent = (evt: {
+      nodeId: string;
+      event: string;
+      payloadJSON?: string | null;
+    }) => sent.push(evt);
 
     manager.subscribe("node-a", "main");
     manager.subscribe("node-b", "main");
@@ -398,7 +426,9 @@ describe("resolveNodeCommandAllowlist", () => {
 describe("normalizeVoiceWakeTriggers", () => {
   test("returns defaults when input is empty", () => {
     expect(normalizeVoiceWakeTriggers([])).toEqual(defaultVoiceWakeTriggers());
-    expect(normalizeVoiceWakeTriggers(null)).toEqual(defaultVoiceWakeTriggers());
+    expect(normalizeVoiceWakeTriggers(null)).toEqual(
+      defaultVoiceWakeTriggers(),
+    );
   });
 
   test("trims and limits entries", () => {
@@ -413,7 +443,9 @@ describe("formatError", () => {
   });
 
   test("handles status/code", () => {
-    expect(formatError({ status: 500, code: "EPIPE" })).toBe("status=500 code=EPIPE");
+    expect(formatError({ status: 500, code: "EPIPE" })).toBe(
+      "status=500 code=EPIPE",
+    );
     expect(formatError({ status: 404 })).toBe("status=404 code=unknown");
     expect(formatError({ code: "ENOENT" })).toBe("status=unknown code=ENOENT");
   });

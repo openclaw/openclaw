@@ -27,7 +27,9 @@ type TelegramGroupMembershipAuditSummary = {
   }>;
 };
 
-function readTelegramAccountStatus(value: ChannelAccountSnapshot): TelegramAccountStatus | null {
+function readTelegramAccountStatus(
+  value: ChannelAccountSnapshot,
+): TelegramAccountStatus | null {
   if (!isRecord(value)) {
     return null;
   }
@@ -47,7 +49,8 @@ function readTelegramGroupMembershipAuditSummary(
     return {};
   }
   const unresolvedGroups =
-    typeof value.unresolvedGroups === "number" && Number.isFinite(value.unresolvedGroups)
+    typeof value.unresolvedGroups === "number" &&
+    Number.isFinite(value.unresolvedGroups)
       ? value.unresolvedGroups
       : undefined;
   const hasWildcardUnmentionedGroups =

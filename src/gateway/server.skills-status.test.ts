@@ -36,9 +36,13 @@ describe("gateway skills.status", () => {
           expect(res.ok).toBe(true);
           expect(JSON.stringify(res.payload)).not.toContain(secret);
 
-          const discord = res.payload?.skills?.find((s) => s.name === "discord");
+          const discord = res.payload?.skills?.find(
+            (s) => s.name === "discord",
+          );
           expect(discord).toBeTruthy();
-          const check = discord?.configChecks?.find((c) => c.path === "channels.discord.token");
+          const check = discord?.configChecks?.find(
+            (c) => c.path === "channels.discord.token",
+          );
           expect(check).toBeTruthy();
           expect(check?.satisfied).toBe(true);
           expect(check && "value" in check).toBe(false);

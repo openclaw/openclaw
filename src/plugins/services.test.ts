@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "./registry.js";
-import type { OpenClawPluginService, OpenClawPluginServiceContext } from "./types.js";
+import type {
+  OpenClawPluginService,
+  OpenClawPluginServiceContext,
+} from "./types.js";
 
 const mockedLogger = vi.hoisted(() => ({
   info: vi.fn<(msg: string) => void>(),
@@ -19,7 +22,11 @@ import { startPluginServices } from "./services.js";
 function createRegistry(services: OpenClawPluginService[]) {
   const registry = createEmptyPluginRegistry();
   for (const service of services) {
-    registry.services.push({ pluginId: "plugin:test", service, source: "test" });
+    registry.services.push({
+      pluginId: "plugin:test",
+      service,
+      source: "test",
+    });
   }
   return registry;
 }
@@ -119,7 +126,9 @@ describe("startPluginServices", () => {
       expect.stringContaining("plugin service failed (service-start-fail):"),
     );
     expect(mockedLogger.warn).toHaveBeenCalledWith(
-      expect.stringContaining("plugin service stop failed (service-stop-fail):"),
+      expect.stringContaining(
+        "plugin service stop failed (service-stop-fail):",
+      ),
     );
     expect(stopOk).toHaveBeenCalledOnce();
     expect(stopThrows).toHaveBeenCalledOnce();

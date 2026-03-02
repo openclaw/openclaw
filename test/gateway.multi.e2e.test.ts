@@ -2,7 +2,10 @@ import { randomUUID } from "node:crypto";
 import { afterAll, describe, expect, it } from "vitest";
 import { GatewayClient } from "../src/gateway/client.js";
 import { connectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../src/utils/message-channel.js";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../src/utils/message-channel.js";
 import {
   type ChatEventPayload,
   type GatewayInstance,
@@ -38,7 +41,10 @@ describe("gateway multi-instance e2e", () => {
     "spins up two gateways and exercises WS + HTTP + node pairing",
     { timeout: E2E_TIMEOUT_MS },
     async () => {
-      const [gwA, gwB] = await Promise.all([spawnGatewayInstance("a"), spawnGatewayInstance("b")]);
+      const [gwA, gwB] = await Promise.all([
+        spawnGatewayInstance("a"),
+        spawnGatewayInstance("b"),
+      ]);
       instances.push(gwA, gwB);
 
       const [hookResA, hookResB] = await Promise.all([
@@ -94,7 +100,11 @@ describe("gateway multi-instance e2e", () => {
         platform: "test",
         mode: GATEWAY_CLIENT_MODES.CLI,
         onEvent: (evt) => {
-          if (evt.event === "chat" && evt.payload && typeof evt.payload === "object") {
+          if (
+            evt.event === "chat" &&
+            evt.payload &&
+            typeof evt.payload === "object"
+          ) {
             chatEvents.push(evt.payload as ChatEventPayload);
           }
         },
@@ -103,7 +113,10 @@ describe("gateway multi-instance e2e", () => {
 
       const sessionKey = "agent:main:telegram:direct:123456";
       const idempotencyKey = `idem-${randomUUID()}`;
-      const sendRes = await chatClient.request<{ runId?: string; status?: string }>("chat.send", {
+      const sendRes = await chatClient.request<{
+        runId?: string;
+        status?: string;
+      }>("chat.send", {
         sessionKey,
         message: "/context list",
         idempotencyKey,

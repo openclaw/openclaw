@@ -9,7 +9,9 @@ type CapabilitiesConfig = TelegramCapabilitiesConfig;
 const isStringArray = (value: unknown): value is string[] =>
   Array.isArray(value) && value.every((entry) => typeof entry === "string");
 
-function normalizeCapabilities(capabilities: CapabilitiesConfig | undefined): string[] | undefined {
+function normalizeCapabilities(
+  capabilities: CapabilitiesConfig | undefined,
+): string[] | undefined {
   // Handle object-format capabilities (e.g., { inlineButtons: "dm" }) gracefully.
   // Channel-specific handlers (like resolveTelegramInlineButtonsScope) process these separately.
   if (!isStringArray(capabilities)) {
@@ -35,7 +37,10 @@ function resolveAccountCapabilities(params: {
   if (accounts && typeof accounts === "object") {
     const match = resolveAccountEntry(accounts, normalizedAccountId);
     if (match) {
-      return normalizeCapabilities(match.capabilities) ?? normalizeCapabilities(cfg.capabilities);
+      return (
+        normalizeCapabilities(match.capabilities) ??
+        normalizeCapabilities(cfg.capabilities)
+      );
     }
   }
 
@@ -54,7 +59,8 @@ export function resolveChannelCapabilities(params: {
   }
 
   const channelsConfig = cfg.channels as Record<string, unknown> | undefined;
-  const channelConfig = (channelsConfig?.[channel] ?? (cfg as Record<string, unknown>)[channel]) as
+  const channelConfig = (channelsConfig?.[channel] ??
+    (cfg as Record<string, unknown>)[channel]) as
     | {
         accounts?: Record<string, { capabilities?: CapabilitiesConfig }>;
         capabilities?: CapabilitiesConfig;

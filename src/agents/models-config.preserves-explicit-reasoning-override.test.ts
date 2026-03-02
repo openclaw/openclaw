@@ -43,10 +43,14 @@ async function withMinimaxApiKey(run: () => Promise<void>) {
   }
 }
 
-async function generateAndReadMinimaxModel(cfg: OpenClawConfig): Promise<ModelEntry | undefined> {
+async function generateAndReadMinimaxModel(
+  cfg: OpenClawConfig,
+): Promise<ModelEntry | undefined> {
   await ensureOpenClawModelsJson(cfg);
   const parsed = await readGeneratedModelsJson<ModelsJson>();
-  return parsed.providers.minimax?.models?.find((model) => model.id === MINIMAX_MODEL_ID);
+  return parsed.providers.minimax?.models?.find(
+    (model) => model.id === MINIMAX_MODEL_ID,
+  );
 }
 
 describe("models-config: explicit reasoning override", () => {

@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { ResolvedQmdConfig } from "./backend-config.js";
-import { deriveQmdScopeChannel, deriveQmdScopeChatType, isQmdScopeAllowed } from "./qmd-scope.js";
+import {
+  deriveQmdScopeChannel,
+  deriveQmdScopeChatType,
+  isQmdScopeAllowed,
+} from "./qmd-scope.js";
 
 describe("qmd scope", () => {
   const allowDirect: ResolvedQmdConfig["scope"] = {
@@ -14,15 +18,23 @@ describe("qmd scope", () => {
   });
 
   it("derives channel and chat type from stored key suffixes", () => {
-    expect(deriveQmdScopeChannel("agent:agent-1:workspace:channel:chan-123")).toBe("workspace");
-    expect(deriveQmdScopeChatType("agent:agent-1:workspace:channel:chan-123")).toBe("channel");
+    expect(
+      deriveQmdScopeChannel("agent:agent-1:workspace:channel:chan-123"),
+    ).toBe("workspace");
+    expect(
+      deriveQmdScopeChatType("agent:agent-1:workspace:channel:chan-123"),
+    ).toBe("channel");
   });
 
   it("treats parsed keys with no chat prefix as direct", () => {
     expect(deriveQmdScopeChannel("agent:agent-1:peer-direct")).toBeUndefined();
     expect(deriveQmdScopeChatType("agent:agent-1:peer-direct")).toBe("direct");
-    expect(isQmdScopeAllowed(allowDirect, "agent:agent-1:peer-direct")).toBe(true);
-    expect(isQmdScopeAllowed(allowDirect, "agent:agent-1:peer:group:abc")).toBe(false);
+    expect(isQmdScopeAllowed(allowDirect, "agent:agent-1:peer-direct")).toBe(
+      true,
+    );
+    expect(isQmdScopeAllowed(allowDirect, "agent:agent-1:peer:group:abc")).toBe(
+      false,
+    );
   });
 
   it("applies scoped key-prefix checks against normalized key", () => {
@@ -30,17 +42,27 @@ describe("qmd scope", () => {
       default: "deny",
       rules: [{ action: "allow", match: { keyPrefix: "workspace:" } }],
     };
-    expect(isQmdScopeAllowed(scope, "agent:agent-1:workspace:group:123")).toBe(true);
-    expect(isQmdScopeAllowed(scope, "agent:agent-1:other:group:123")).toBe(false);
+    expect(isQmdScopeAllowed(scope, "agent:agent-1:workspace:group:123")).toBe(
+      true,
+    );
+    expect(isQmdScopeAllowed(scope, "agent:agent-1:other:group:123")).toBe(
+      false,
+    );
   });
 
   it("supports rawKeyPrefix matches for agent-prefixed keys", () => {
     const scope: ResolvedQmdConfig["scope"] = {
       default: "allow",
-      rules: [{ action: "deny", match: { rawKeyPrefix: "agent:main:discord:" } }],
+      rules: [
+        { action: "deny", match: { rawKeyPrefix: "agent:main:discord:" } },
+      ],
     };
-    expect(isQmdScopeAllowed(scope, "agent:main:discord:channel:c123")).toBe(false);
-    expect(isQmdScopeAllowed(scope, "agent:main:slack:channel:c123")).toBe(true);
+    expect(isQmdScopeAllowed(scope, "agent:main:discord:channel:c123")).toBe(
+      false,
+    );
+    expect(isQmdScopeAllowed(scope, "agent:main:slack:channel:c123")).toBe(
+      true,
+    );
   });
 
   it("keeps legacy agent-prefixed keyPrefix rules working", () => {
@@ -48,7 +70,11 @@ describe("qmd scope", () => {
       default: "allow",
       rules: [{ action: "deny", match: { keyPrefix: "agent:main:discord:" } }],
     };
-    expect(isQmdScopeAllowed(scope, "agent:main:discord:channel:c123")).toBe(false);
-    expect(isQmdScopeAllowed(scope, "agent:main:slack:channel:c123")).toBe(true);
+    expect(isQmdScopeAllowed(scope, "agent:main:discord:channel:c123")).toBe(
+      false,
+    );
+    expect(isQmdScopeAllowed(scope, "agent:main:slack:channel:c123")).toBe(
+      true,
+    );
   });
 });

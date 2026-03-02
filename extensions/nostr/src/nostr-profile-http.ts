@@ -17,7 +17,10 @@ import {
 import { z } from "zod";
 import { publishNostrProfile, getNostrProfileState } from "./channel.js";
 import { NostrProfileSchema, type NostrProfile } from "./config-schema.js";
-import { importProfileFromRelays, mergeProfiles } from "./nostr-profile-import.js";
+import {
+  importProfileFromRelays,
+  mergeProfiles,
+} from "./nostr-profile-import.js";
 
 // ============================================================================
 // Types
@@ -27,9 +30,14 @@ export interface NostrProfileHttpContext {
   /** Get current profile from config */
   getConfigProfile: (accountId: string) => NostrProfile | undefined;
   /** Update profile in config (after successful publish) */
-  updateConfigProfile: (accountId: string, profile: NostrProfile) => Promise<void>;
+  updateConfigProfile: (
+    accountId: string,
+    profile: NostrProfile,
+  ) => Promise<void>;
   /** Get account's public key and relays */
-  getAccountInfo: (accountId: string) => { pubkey: string; relays: string[] } | null;
+  getAccountInfo: (
+    accountId: string,
+  ) => { pubkey: string; relays: string[] } | null;
   /** Logger */
   log?: {
     info: (msg: string) => void;
@@ -59,7 +67,10 @@ export function getNostrProfileRateLimitStateSizeForTest(): number {
   return profileRateLimiter.size();
 }
 
-export function isNostrProfileRateLimitedForTest(accountId: string, nowMs: number): boolean {
+export function isNostrProfileRateLimitedForTest(
+  accountId: string,
+  nowMs: number,
+): boolean {
   return profileRateLimiter.isRateLimited(accountId, nowMs);
 }
 
@@ -73,7 +84,10 @@ function checkRateLimit(accountId: string): boolean {
 
 const publishLocks = new Map<string, Promise<void>>();
 
-async function withPublishLock<T>(accountId: string, fn: () => Promise<T>): Promise<T> {
+async function withPublishLock<T>(
+  accountId: string,
+  fn: () => Promise<T>,
+): Promise<T> {
   // Atomic mutex using promise chaining - prevents TOCTOU race condition
   const prev = publishLocks.get(accountId) ?? Promise.resolve();
   let resolve: () => void;
@@ -102,7 +116,9 @@ async function withPublishLock<T>(accountId: string, fn: () => Promise<T>): Prom
 // SSRF Protection
 // ============================================================================
 
-function validateUrlSafety(urlStr: string): { ok: true } | { ok: false; error: string } {
+function validateUrlSafety(
+  urlStr: string,
+): { ok: true } | { ok: false; error: string } {
   try {
     const url = new URL(urlStr);
 
@@ -113,7 +129,10 @@ function validateUrlSafety(urlStr: string): { ok: true } | { ok: false; error: s
     const hostname = url.hostname.toLowerCase();
 
     if (isBlockedHostnameOrIp(hostname)) {
-      return { ok: false, error: "URL must not point to private/internal addresses" };
+      return {
+        ok: false,
+        error: "URL must not point to private/internal addresses",
+      };
     }
 
     return { ok: true };
@@ -132,13 +151,19 @@ export { validateUrlSafety };
 // NIP-05 format: user@domain.com
 const nip05FormatSchema = z
   .string()
-  .regex(/^[a-z0-9._-]+@[a-z0-9.-]+\.[a-z]{2,}$/i, "Invalid NIP-05 format (user@domain.com)")
+  .regex(
+    /^[a-z0-9._-]+@[a-z0-9.-]+\.[a-z]{2,}$/i,
+    "Invalid NIP-05 format (user@domain.com)",
+  )
   .optional();
 
 // LUD-16 Lightning address format: user@domain.com
 const lud16FormatSchema = z
   .string()
-  .regex(/^[a-z0-9._-]+@[a-z0-9.-]+\.[a-z]{2,}$/i, "Invalid Lightning address format")
+  .regex(
+    /^[a-z0-9._-]+@[a-z0-9.-]+\.[a-z]{2,}$/i,
+    "Invalid Lightning address format",
+  )
   .optional();
 
 // Extended profile schema with additional format validation
@@ -179,7 +204,9 @@ async function readJsonBody(
   if (result.code === "CONNECTION_CLOSED") {
     throw new Error(requestBodyErrorToText("CONNECTION_CLOSED"));
   }
-  throw new Error(result.code === "INVALID_JSON" ? "Invalid JSON" : result.error);
+  throw new Error(
+    result.code === "INVALID_JSON" ? "Invalid JSON" : result.error,
+  );
 }
 
 function parseAccountIdFromPath(pathname: string): string | null {
@@ -218,7 +245,9 @@ function isLoopbackOriginLike(value: string): boolean {
   try {
     const url = new URL(value);
     const hostname = url.hostname.toLowerCase();
-    return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
+    return (
+      hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1"
+    );
   } catch {
     return false;
   }
@@ -232,7 +261,9 @@ function enforceLoopbackMutationGuards(
   // Mutation endpoints are local-control-plane only.
   const remoteAddress = req.socket.remoteAddress;
   if (!isLoopbackRemoteAddress(remoteAddress)) {
-    ctx.log?.warn?.(`Rejected mutation from non-loopback remoteAddress=${String(remoteAddress)}`);
+    ctx.log?.warn?.(
+      `Rejected mutation from non-loopback remoteAddress=${String(remoteAddress)}`,
+    );
     sendJson(res, 403, { ok: false, error: "Forbidden" });
     return false;
   }
@@ -263,7 +294,10 @@ export function createNostrProfileHttpHandler(
   ctx: NostrProfileHttpContext,
 ): (req: IncomingMessage, res: ServerResponse) => Promise<boolean> {
   return async (req, res) => {
-    const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+    const url = new URL(
+      req.url ?? "/",
+      `http://${req.headers.host ?? "localhost"}`,
+    );
 
     // Only handle /api/channels/nostr/:accountId/profile paths
     if (!url.pathname.startsWith("/api/channels/nostr/")) {
@@ -343,7 +377,10 @@ async function handleUpdateProfile(
 
   // Rate limiting
   if (!checkRateLimit(accountId)) {
-    sendJson(res, 429, { ok: false, error: "Rate limit exceeded (5 requests/minute)" });
+    sendJson(res, 429, {
+      ok: false,
+      error: "Rate limit exceeded (5 requests/minute)",
+    });
     return true;
   }
 
@@ -359,8 +396,14 @@ async function handleUpdateProfile(
   // Validate profile
   const parseResult = ProfileUpdateSchema.safeParse(body);
   if (!parseResult.success) {
-    const errors = parseResult.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`);
-    sendJson(res, 400, { ok: false, error: "Validation failed", details: errors });
+    const errors = parseResult.error.issues.map(
+      (i) => `${i.path.join(".")}: ${i.message}`,
+    );
+    sendJson(res, 400, {
+      ok: false,
+      error: "Validation failed",
+      details: errors,
+    });
     return true;
   }
 
@@ -370,7 +413,10 @@ async function handleUpdateProfile(
   if (profile.picture) {
     const pictureCheck = validateUrlSafety(profile.picture);
     if (!pictureCheck.ok) {
-      sendJson(res, 400, { ok: false, error: `picture: ${pictureCheck.error}` });
+      sendJson(res, 400, {
+        ok: false,
+        error: `picture: ${pictureCheck.error}`,
+      });
       return true;
     }
   }
@@ -388,7 +434,10 @@ async function handleUpdateProfile(
   if (profile.website) {
     const websiteCheck = validateUrlSafety(profile.website);
     if (!websiteCheck.ok) {
-      sendJson(res, 400, { ok: false, error: `website: ${websiteCheck.error}` });
+      sendJson(res, 400, {
+        ok: false,
+        error: `website: ${websiteCheck.error}`,
+      });
       return true;
     }
   }
@@ -409,7 +458,9 @@ async function handleUpdateProfile(
     // Only persist if at least one relay succeeded
     if (result.successes.length > 0) {
       await ctx.updateConfigProfile(accountId, mergedProfile);
-      ctx.log?.info(`[${accountId}] Profile published to ${result.successes.length} relay(s)`);
+      ctx.log?.info(
+        `[${accountId}] Profile published to ${result.successes.length} relay(s)`,
+      );
     } else {
       ctx.log?.warn(`[${accountId}] Profile publish failed on all relays`);
     }
@@ -454,7 +505,10 @@ async function handleImportProfile(
   const { pubkey, relays } = accountInfo;
 
   if (!pubkey) {
-    sendJson(res, 400, { ok: false, error: "Account has no public key configured" });
+    sendJson(res, 400, {
+      ok: false,
+      error: "Account has no public key configured",
+    });
     return true;
   }
 
@@ -469,7 +523,9 @@ async function handleImportProfile(
     // Ignore body parse errors - use defaults
   }
 
-  ctx.log?.info(`[${accountId}] Importing profile for ${pubkey.slice(0, 8)}...`);
+  ctx.log?.info(
+    `[${accountId}] Importing profile for ${pubkey.slice(0, 8)}...`,
+  );
 
   // Import from relays
   const result = await importProfileFromRelays({

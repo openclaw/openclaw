@@ -22,7 +22,9 @@ describe("createNextcloudTalkWebhookServer auth order", () => {
     });
 
     expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ error: "Missing signature headers" });
+    expect(await response.json()).toEqual({
+      error: "Missing signature headers",
+    });
     expect(readBody).not.toHaveBeenCalled();
   });
 });

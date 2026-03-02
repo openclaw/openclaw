@@ -11,17 +11,26 @@ import {
 describe("deleteTelegramUpdateOffset", () => {
   it("removes the offset file so a new bot starts fresh", async () => {
     await withStateDirEnv("openclaw-tg-offset-", async () => {
-      await writeTelegramUpdateOffset({ accountId: "default", updateId: 432_000_000 });
-      expect(await readTelegramUpdateOffset({ accountId: "default" })).toBe(432_000_000);
+      await writeTelegramUpdateOffset({
+        accountId: "default",
+        updateId: 432_000_000,
+      });
+      expect(await readTelegramUpdateOffset({ accountId: "default" })).toBe(
+        432_000_000,
+      );
 
       await deleteTelegramUpdateOffset({ accountId: "default" });
-      expect(await readTelegramUpdateOffset({ accountId: "default" })).toBeNull();
+      expect(
+        await readTelegramUpdateOffset({ accountId: "default" }),
+      ).toBeNull();
     });
   });
 
   it("does not throw when the offset file does not exist", async () => {
     await withStateDirEnv("openclaw-tg-offset-", async () => {
-      await expect(deleteTelegramUpdateOffset({ accountId: "nonexistent" })).resolves.not.toThrow();
+      await expect(
+        deleteTelegramUpdateOffset({ accountId: "nonexistent" }),
+      ).resolves.not.toThrow();
     });
   });
 
@@ -32,7 +41,9 @@ describe("deleteTelegramUpdateOffset", () => {
 
       await deleteTelegramUpdateOffset({ accountId: "default" });
 
-      expect(await readTelegramUpdateOffset({ accountId: "default" })).toBeNull();
+      expect(
+        await readTelegramUpdateOffset({ accountId: "default" }),
+      ).toBeNull();
       expect(await readTelegramUpdateOffset({ accountId: "alerts" })).toBe(200);
     });
   });
@@ -62,7 +73,11 @@ describe("deleteTelegramUpdateOffset", () => {
 
   it("treats legacy offset records without bot identity as stale when token is provided", async () => {
     await withStateDirEnv("openclaw-tg-offset-", async ({ stateDir }) => {
-      const legacyPath = path.join(stateDir, "telegram", "update-offset-default.json");
+      const legacyPath = path.join(
+        stateDir,
+        "telegram",
+        "update-offset-default.json",
+      );
       await fs.mkdir(path.dirname(legacyPath), { recursive: true });
       await fs.writeFile(
         legacyPath,

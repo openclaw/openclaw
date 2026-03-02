@@ -237,7 +237,9 @@ describe("buildStatusMessage", () => {
     });
 
     const normalized = normalizeTestText(text);
-    expect(normalized).toContain("Media: image ok (openai/gpt-5.2) · audio skipped (maxBytes)");
+    expect(normalized).toContain(
+      "Media: image ok (openai/gpt-5.2) · audio skipped (maxBytes)",
+    );
   });
 
   it("omits media line when all decisions are none", () => {
@@ -267,7 +269,9 @@ describe("buildStatusMessage", () => {
       queue: { mode: "collect", depth: 0 },
     });
 
-    const optionsLine = text.split("\n").find((line) => line.trim().startsWith("⚙️"));
+    const optionsLine = text
+      .split("\n")
+      .find((line) => line.trim().startsWith("⚙️"));
     expect(optionsLine).toBeTruthy();
     expect(optionsLine).not.toContain("elevated");
   });
@@ -367,7 +371,9 @@ describe("buildStatusMessage", () => {
       modelAuth: "api-key",
     });
 
-    expect(normalizeTestText(text)).toContain("Model: google-antigravity/claude-sonnet-4-5");
+    expect(normalizeTestText(text)).toContain(
+      "Model: google-antigravity/claude-sonnet-4-5",
+    );
   });
 
   it("handles missing agent config gracefully", () => {
@@ -419,7 +425,9 @@ describe("buildStatusMessage", () => {
       modelAuth: "api-key",
     });
 
-    expect(text).toContain("Queue: collect (depth 3 · debounce 2s · cap 5 · drop old)");
+    expect(text).toContain(
+      "Queue: collect (depth 3 · debounce 2s · cap 5 · drop old)",
+    );
   });
 
   it("inserts usage summary beneath context line", () => {
@@ -527,7 +535,10 @@ describe("buildStatusMessage", () => {
     });
   }
 
-  function buildTranscriptStatusText(params: { sessionId: string; sessionKey: string }) {
+  function buildTranscriptStatusText(params: {
+    sessionId: string;
+    sessionKey: string;
+  }) {
     return buildStatusMessage({
       agent: {
         model: "anthropic/claude-opus-4-5",
@@ -692,7 +703,11 @@ describe("buildCommandsMessagePaginated", () => {
 
   it("includes plugin commands in the paginated list", () => {
     listPluginCommands.mockReturnValue([
-      { name: "plugin_cmd", description: "Plugin command", pluginId: "demo-plugin" },
+      {
+        name: "plugin_cmd",
+        description: "Plugin command",
+        pluginId: "demo-plugin",
+      },
     ]);
     const result = buildCommandsMessagePaginated(
       {

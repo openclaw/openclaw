@@ -13,11 +13,15 @@ describe("stripTelegramInternalPrefixes", () => {
   });
 
   it("strips telegram+group prefixes", () => {
-    expect(stripTelegramInternalPrefixes("telegram:group:-100123")).toBe("-100123");
+    expect(stripTelegramInternalPrefixes("telegram:group:-100123")).toBe(
+      "-100123",
+    );
   });
 
   it("does not strip group prefix without telegram prefix", () => {
-    expect(stripTelegramInternalPrefixes("group:-100123")).toBe("group:-100123");
+    expect(stripTelegramInternalPrefixes("group:-100123")).toBe(
+      "group:-100123",
+    );
   });
 
   it("is idempotent", () => {
@@ -72,7 +76,9 @@ describe("parseTelegramTarget", () => {
   });
 
   it("strips internal prefixes before parsing", () => {
-    expect(parseTelegramTarget("telegram:group:-1001234567890:topic:456")).toEqual({
+    expect(
+      parseTelegramTarget("telegram:group:-1001234567890:topic:456"),
+    ).toEqual({
       chatId: "-1001234567890",
       messageThreadId: 456,
       chatType: "group",
@@ -82,7 +88,9 @@ describe("parseTelegramTarget", () => {
 
 describe("normalizeTelegramChatId", () => {
   it("rejects username and t.me forms", () => {
-    expect(normalizeTelegramChatId("telegram:https://t.me/MyChannel")).toBeUndefined();
+    expect(
+      normalizeTelegramChatId("telegram:https://t.me/MyChannel"),
+    ).toBeUndefined();
     expect(normalizeTelegramChatId("tg:t.me/mychannel")).toBeUndefined();
     expect(normalizeTelegramChatId("@MyChannel")).toBeUndefined();
     expect(normalizeTelegramChatId("MyChannel")).toBeUndefined();
@@ -100,14 +108,20 @@ describe("normalizeTelegramChatId", () => {
 
 describe("normalizeTelegramLookupTarget", () => {
   it("normalizes legacy t.me and username targets", () => {
-    expect(normalizeTelegramLookupTarget("telegram:https://t.me/MyChannel")).toBe("@MyChannel");
-    expect(normalizeTelegramLookupTarget("tg:t.me/mychannel")).toBe("@mychannel");
+    expect(
+      normalizeTelegramLookupTarget("telegram:https://t.me/MyChannel"),
+    ).toBe("@MyChannel");
+    expect(normalizeTelegramLookupTarget("tg:t.me/mychannel")).toBe(
+      "@mychannel",
+    );
     expect(normalizeTelegramLookupTarget("@MyChannel")).toBe("@MyChannel");
     expect(normalizeTelegramLookupTarget("MyChannel")).toBe("@MyChannel");
   });
 
   it("keeps numeric chat ids unchanged", () => {
-    expect(normalizeTelegramLookupTarget("-1001234567890")).toBe("-1001234567890");
+    expect(normalizeTelegramLookupTarget("-1001234567890")).toBe(
+      "-1001234567890",
+    );
     expect(normalizeTelegramLookupTarget("123456789")).toBe("123456789");
   });
 

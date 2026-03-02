@@ -12,7 +12,10 @@ function isAnySchema(schema: JsonSchema): boolean {
   return keys.length === 0;
 }
 
-function normalizeEnum(values: unknown[]): { enumValues: unknown[]; nullable: boolean } {
+function normalizeEnum(values: unknown[]): {
+  enumValues: unknown[];
+  nullable: boolean;
+} {
   const filtered = values.filter((value) => value != null);
   const nullable = filtered.length !== values.length;
   const enumValues: unknown[] = [];
@@ -49,12 +52,15 @@ function normalizeSchemaNode(
 
   const nullable = Array.isArray(schema.type) && schema.type.includes("null");
   const type =
-    schemaType(schema) ?? (schema.properties || schema.additionalProperties ? "object" : undefined);
+    schemaType(schema) ??
+    (schema.properties || schema.additionalProperties ? "object" : undefined);
   normalized.type = type ?? schema.type;
   normalized.nullable = nullable || schema.nullable;
 
   if (normalized.enum) {
-    const { enumValues, nullable: enumNullable } = normalizeEnum(normalized.enum);
+    const { enumValues, nullable: enumNullable } = normalizeEnum(
+      normalized.enum,
+    );
     normalized.enum = enumValues;
     if (enumNullable) {
       normalized.nullable = true;
@@ -82,17 +88,26 @@ function normalizeSchemaNode(
       unsupported.add(pathLabel);
     } else if (schema.additionalProperties === false) {
       normalized.additionalProperties = false;
-    } else if (schema.additionalProperties && typeof schema.additionalProperties === "object") {
+    } else if (
+      schema.additionalProperties &&
+      typeof schema.additionalProperties === "object"
+    ) {
       if (!isAnySchema(schema.additionalProperties)) {
-        const res = normalizeSchemaNode(schema.additionalProperties, [...path, "*"]);
-        normalized.additionalProperties = res.schema ?? schema.additionalProperties;
+        const res = normalizeSchemaNode(schema.additionalProperties, [
+          ...path,
+          "*",
+        ]);
+        normalized.additionalProperties =
+          res.schema ?? schema.additionalProperties;
         if (res.unsupportedPaths.length > 0) {
           unsupported.add(pathLabel);
         }
       }
     }
   } else if (type === "array") {
-    const itemsSchema = Array.isArray(schema.items) ? schema.items[0] : schema.items;
+    const itemsSchema = Array.isArray(schema.items)
+      ? schema.items[0]
+      : schema.items;
     if (!itemsSchema) {
       unsupported.add(pathLabel);
     } else {
@@ -193,7 +208,9 @@ function normalizeUnion(
   if (
     remaining.length > 0 &&
     literals.length === 0 &&
-    remaining.every((entry) => entry.type && primitiveTypes.has(String(entry.type)))
+    remaining.every(
+      (entry) => entry.type && primitiveTypes.has(String(entry.type)),
+    )
   ) {
     return {
       schema: {

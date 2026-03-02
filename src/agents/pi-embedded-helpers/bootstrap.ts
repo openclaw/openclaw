@@ -67,7 +67,9 @@ export function stripThoughtSignatures<T>(
     }
     const rec = block as ContentBlockWithSignature;
     const stripSnake = shouldStripSignature(rec.thought_signature);
-    const stripCamel = includeCamelCase ? shouldStripSignature(rec.thoughtSignature) : false;
+    const stripCamel = includeCamelCase
+      ? shouldStripSignature(rec.thoughtSignature)
+      : false;
     if (!stripSnake && !stripCamel) {
       return block;
     }
@@ -186,12 +188,19 @@ export async function ensureSessionHeader(params: {
 
 export function buildBootstrapContextFiles(
   files: WorkspaceBootstrapFile[],
-  opts?: { warn?: (message: string) => void; maxChars?: number; totalMaxChars?: number },
+  opts?: {
+    warn?: (message: string) => void;
+    maxChars?: number;
+    totalMaxChars?: number;
+  },
 ): EmbeddedContextFile[] {
   const maxChars = opts?.maxChars ?? DEFAULT_BOOTSTRAP_MAX_CHARS;
   const totalMaxChars = Math.max(
     1,
-    Math.floor(opts?.totalMaxChars ?? Math.max(maxChars, DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS)),
+    Math.floor(
+      opts?.totalMaxChars ??
+        Math.max(maxChars, DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS),
+    ),
   );
   let remainingTotalChars = totalMaxChars;
   const result: EmbeddedContextFile[] = [];
@@ -212,7 +221,10 @@ export function buildBootstrapContextFiles(
       if (!cappedMissingText) {
         break;
       }
-      remainingTotalChars = Math.max(0, remainingTotalChars - cappedMissingText.length);
+      remainingTotalChars = Math.max(
+        0,
+        remainingTotalChars - cappedMissingText.length,
+      );
       result.push({
         path: pathValue,
         content: cappedMissingText,
@@ -226,17 +238,30 @@ export function buildBootstrapContextFiles(
       break;
     }
     const fileMaxChars = Math.max(1, Math.min(maxChars, remainingTotalChars));
-    const trimmed = trimBootstrapContent(file.content ?? "", file.name, fileMaxChars);
-    const contentWithinBudget = clampToBudget(trimmed.content, remainingTotalChars);
+    const trimmed = trimBootstrapContent(
+      file.content ?? "",
+      file.name,
+      fileMaxChars,
+    );
+    const contentWithinBudget = clampToBudget(
+      trimmed.content,
+      remainingTotalChars,
+    );
     if (!contentWithinBudget) {
       continue;
     }
-    if (trimmed.truncated || contentWithinBudget.length < trimmed.content.length) {
+    if (
+      trimmed.truncated ||
+      contentWithinBudget.length < trimmed.content.length
+    ) {
       opts?.warn?.(
         `workspace bootstrap file ${file.name} is ${trimmed.originalLength} chars (limit ${trimmed.maxChars}); truncating in injected context`,
       );
     }
-    remainingTotalChars = Math.max(0, remainingTotalChars - contentWithinBudget.length);
+    remainingTotalChars = Math.max(
+      0,
+      remainingTotalChars - contentWithinBudget.length,
+    );
     result.push({
       path: pathValue,
       content: contentWithinBudget,
@@ -245,9 +270,13 @@ export function buildBootstrapContextFiles(
   return result;
 }
 
-export function sanitizeGoogleTurnOrdering(messages: AgentMessage[]): AgentMessage[] {
+export function sanitizeGoogleTurnOrdering(
+  messages: AgentMessage[],
+): AgentMessage[] {
   const GOOGLE_TURN_ORDER_BOOTSTRAP_TEXT = "(session bootstrap)";
-  const first = messages[0] as { role?: unknown; content?: unknown } | undefined;
+  const first = messages[0] as
+    | { role?: unknown; content?: unknown }
+    | undefined;
   const role = first?.role;
   const content = first?.content;
   if (

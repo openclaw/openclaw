@@ -127,7 +127,11 @@ import type {
   SessionsResolveParamsSchema,
   SessionsUsageParamsSchema,
 } from "./sessions.js";
-import type { PresenceEntrySchema, SnapshotSchema, StateVersionSchema } from "./snapshot.js";
+import type {
+  PresenceEntrySchema,
+  SnapshotSchema,
+  StateVersionSchema,
+} from "./snapshot.js";
 import type {
   WizardCancelParamsSchema,
   WizardNextParamsSchema,
@@ -164,7 +168,9 @@ export type NodeRenameParams = Static<typeof NodeRenameParamsSchema>;
 export type NodeListParams = Static<typeof NodeListParamsSchema>;
 export type NodeDescribeParams = Static<typeof NodeDescribeParamsSchema>;
 export type NodeInvokeParams = Static<typeof NodeInvokeParamsSchema>;
-export type NodeInvokeResultParams = Static<typeof NodeInvokeResultParamsSchema>;
+export type NodeInvokeResultParams = Static<
+  typeof NodeInvokeResultParamsSchema
+>;
 export type NodeEventParams = Static<typeof NodeEventParamsSchema>;
 export type PushTestParams = Static<typeof PushTestParamsSchema>;
 export type PushTestResult = Static<typeof PushTestResultSchema>;
@@ -238,19 +244,41 @@ export type CronRunsParams = Static<typeof CronRunsParamsSchema>;
 export type CronRunLogEntry = Static<typeof CronRunLogEntrySchema>;
 export type LogsTailParams = Static<typeof LogsTailParamsSchema>;
 export type LogsTailResult = Static<typeof LogsTailResultSchema>;
-export type ExecApprovalsGetParams = Static<typeof ExecApprovalsGetParamsSchema>;
-export type ExecApprovalsSetParams = Static<typeof ExecApprovalsSetParamsSchema>;
-export type ExecApprovalsNodeGetParams = Static<typeof ExecApprovalsNodeGetParamsSchema>;
-export type ExecApprovalsNodeSetParams = Static<typeof ExecApprovalsNodeSetParamsSchema>;
+export type ExecApprovalsGetParams = Static<
+  typeof ExecApprovalsGetParamsSchema
+>;
+export type ExecApprovalsSetParams = Static<
+  typeof ExecApprovalsSetParamsSchema
+>;
+export type ExecApprovalsNodeGetParams = Static<
+  typeof ExecApprovalsNodeGetParamsSchema
+>;
+export type ExecApprovalsNodeSetParams = Static<
+  typeof ExecApprovalsNodeSetParamsSchema
+>;
 export type ExecApprovalsSnapshot = Static<typeof ExecApprovalsSnapshotSchema>;
-export type ExecApprovalRequestParams = Static<typeof ExecApprovalRequestParamsSchema>;
-export type ExecApprovalResolveParams = Static<typeof ExecApprovalResolveParamsSchema>;
+export type ExecApprovalRequestParams = Static<
+  typeof ExecApprovalRequestParamsSchema
+>;
+export type ExecApprovalResolveParams = Static<
+  typeof ExecApprovalResolveParamsSchema
+>;
 export type DevicePairListParams = Static<typeof DevicePairListParamsSchema>;
-export type DevicePairApproveParams = Static<typeof DevicePairApproveParamsSchema>;
-export type DevicePairRejectParams = Static<typeof DevicePairRejectParamsSchema>;
-export type DevicePairRemoveParams = Static<typeof DevicePairRemoveParamsSchema>;
-export type DeviceTokenRotateParams = Static<typeof DeviceTokenRotateParamsSchema>;
-export type DeviceTokenRevokeParams = Static<typeof DeviceTokenRevokeParamsSchema>;
+export type DevicePairApproveParams = Static<
+  typeof DevicePairApproveParamsSchema
+>;
+export type DevicePairRejectParams = Static<
+  typeof DevicePairRejectParamsSchema
+>;
+export type DevicePairRemoveParams = Static<
+  typeof DevicePairRemoveParamsSchema
+>;
+export type DeviceTokenRotateParams = Static<
+  typeof DeviceTokenRotateParamsSchema
+>;
+export type DeviceTokenRevokeParams = Static<
+  typeof DeviceTokenRevokeParamsSchema
+>;
 export type ChatAbortParams = Static<typeof ChatAbortParamsSchema>;
 export type ChatInjectParams = Static<typeof ChatInjectParamsSchema>;
 export type ChatEvent = Static<typeof ChatEventSchema>;

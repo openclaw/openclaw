@@ -3,7 +3,10 @@ import { resolveDiscordAccount } from "../../discord/accounts.js";
 import { resolveSlackAccount } from "../../slack/accounts.js";
 import { resolveTelegramAccount } from "../../telegram/accounts.js";
 import { resolveWhatsAppAccount } from "../../web/accounts.js";
-import { isWhatsAppGroupJid, normalizeWhatsAppTarget } from "../../whatsapp/normalize.js";
+import {
+  isWhatsAppGroupJid,
+  normalizeWhatsAppTarget,
+} from "../../whatsapp/normalize.js";
 import { normalizeSlackMessagingTarget } from "./normalize/slack.js";
 import type { ChannelDirectoryEntry } from "./types.js";
 
@@ -61,44 +64,67 @@ function resolveDirectoryLimit(limit?: number | null): number | undefined {
   return typeof limit === "number" && limit > 0 ? limit : undefined;
 }
 
-function applyDirectoryQueryAndLimit(ids: string[], params: DirectoryConfigParams): string[] {
+function applyDirectoryQueryAndLimit(
+  ids: string[],
+  params: DirectoryConfigParams,
+): string[] {
   const q = resolveDirectoryQuery(params.query);
   const limit = resolveDirectoryLimit(params.limit);
-  const filtered = ids.filter((id) => (q ? id.toLowerCase().includes(q) : true));
+  const filtered = ids.filter((id) =>
+    q ? id.toLowerCase().includes(q) : true,
+  );
   return typeof limit === "number" ? filtered.slice(0, limit) : filtered;
 }
 
-function toDirectoryEntries(kind: "user" | "group", ids: string[]): ChannelDirectoryEntry[] {
+function toDirectoryEntries(
+  kind: "user" | "group",
+  ids: string[],
+): ChannelDirectoryEntry[] {
   return ids.map((id) => ({ kind, id }) as const);
 }
 
 export async function listSlackDirectoryPeersFromConfig(
   params: DirectoryConfigParams,
 ): Promise<ChannelDirectoryEntry[]> {
-  const account = resolveSlackAccount({ cfg: params.cfg, accountId: params.accountId });
+  const account = resolveSlackAccount({
+    cfg: params.cfg,
+    accountId: params.accountId,
+  });
   const ids = new Set<string>();
 
-  addAllowFromAndDmsIds(ids, account.config.allowFrom ?? account.dm?.allowFrom, account.config.dms);
+  addAllowFromAndDmsIds(
+    ids,
+    account.config.allowFrom ?? account.dm?.allowFrom,
+    account.config.dms,
+  );
   for (const channel of Object.values(account.config.channels ?? {})) {
     addTrimmedEntries(ids, channel.users ?? []);
   }
 
   const normalizedIds = normalizeTrimmedSet(ids, (raw) => {
     const mention = raw.match(/^<@([A-Z0-9]+)>$/i);
-    const normalizedUserId = (mention?.[1] ?? raw).replace(/^(slack|user):/i, "").trim();
+    const normalizedUserId = (mention?.[1] ?? raw)
+      .replace(/^(slack|user):/i, "")
+      .trim();
     if (!normalizedUserId) {
       return null;
     }
     const target = `user:${normalizedUserId}`;
     return normalizeSlackMessagingTarget(target) ?? target.toLowerCase();
   }).filter((id) => id.startsWith("user:"));
-  return toDirectoryEntries("user", applyDirectoryQueryAndLimit(normalizedIds, params));
+  return toDirectoryEntries(
+    "user",
+    applyDirectoryQueryAndLimit(normalizedIds, params),
+  );
 }
 
 export async function listSlackDirectoryGroupsFromConfig(
   params: DirectoryConfigParams,
 ): Promise<ChannelDirectoryEntry[]> {
-  const account = resolveSlackAccount({ cfg: params.cfg, accountId: params.accountId });
+  const account = resolveSlackAccount({
+    cfg: params.cfg,
+    accountId: params.accountId,
+  });
   const ids = Object.keys(account.config.channels ?? {})
     .map((raw) => raw.trim())
     .filter(Boolean)
@@ -110,7 +136,10 @@ export async function listSlackDirectoryGroupsFromConfig(
 export async function listDiscordDirectoryPeersFromConfig(
   params: DirectoryConfigParams,
 ): Promise<ChannelDirectoryEntry[]> {
-  const account = resolveDiscordAccount({ cfg: params.cfg, accountId: params.accountId });
+  const account = resolveDiscordAccount({
+    cfg: params.cfg,
+    accountId: params.accountId,
+  });
   const ids = new Set<string>();
 
   addAllowFromAndDmsIds(
@@ -127,19 +156,27 @@ export async function listDiscordDirectoryPeersFromConfig(
 
   const normalizedIds = normalizeTrimmedSet(ids, (raw) => {
     const mention = raw.match(/^<@!?(\d+)>$/);
-    const cleaned = (mention?.[1] ?? raw).replace(/^(discord|user):/i, "").trim();
+    const cleaned = (mention?.[1] ?? raw)
+      .replace(/^(discord|user):/i, "")
+      .trim();
     if (!/^\d+$/.test(cleaned)) {
       return null;
     }
     return `user:${cleaned}`;
   });
-  return toDirectoryEntries("user", applyDirectoryQueryAndLimit(normalizedIds, params));
+  return toDirectoryEntries(
+    "user",
+    applyDirectoryQueryAndLimit(normalizedIds, params),
+  );
 }
 
 export async function listDiscordDirectoryGroupsFromConfig(
   params: DirectoryConfigParams,
 ): Promise<ChannelDirectoryEntry[]> {
-  const account = resolveDiscordAccount({ cfg: params.cfg, accountId: params.accountId });
+  const account = resolveDiscordAccount({
+    cfg: params.cfg,
+    accountId: params.accountId,
+  });
   const ids = new Set<string>();
   for (const guild of Object.values(account.config.guilds ?? {})) {
     addTrimmedEntries(ids, Object.keys(guild.channels ?? {}));
@@ -147,19 +184,27 @@ export async function listDiscordDirectoryGroupsFromConfig(
 
   const normalizedIds = normalizeTrimmedSet(ids, (raw) => {
     const mention = raw.match(/^<#(\d+)>$/);
-    const cleaned = (mention?.[1] ?? raw).replace(/^(discord|channel|group):/i, "").trim();
+    const cleaned = (mention?.[1] ?? raw)
+      .replace(/^(discord|channel|group):/i, "")
+      .trim();
     if (!/^\d+$/.test(cleaned)) {
       return null;
     }
     return `channel:${cleaned}`;
   });
-  return toDirectoryEntries("group", applyDirectoryQueryAndLimit(normalizedIds, params));
+  return toDirectoryEntries(
+    "group",
+    applyDirectoryQueryAndLimit(normalizedIds, params),
+  );
 }
 
 export async function listTelegramDirectoryPeersFromConfig(
   params: DirectoryConfigParams,
 ): Promise<ChannelDirectoryEntry[]> {
-  const account = resolveTelegramAccount({ cfg: params.cfg, accountId: params.accountId });
+  const account = resolveTelegramAccount({
+    cfg: params.cfg,
+    accountId: params.accountId,
+  });
   const raw = [
     ...(account.config.allowFrom ?? []).map((entry) => String(entry)),
     ...Object.keys(account.config.dms ?? {}),
@@ -190,7 +235,10 @@ export async function listTelegramDirectoryPeersFromConfig(
 export async function listTelegramDirectoryGroupsFromConfig(
   params: DirectoryConfigParams,
 ): Promise<ChannelDirectoryEntry[]> {
-  const account = resolveTelegramAccount({ cfg: params.cfg, accountId: params.accountId });
+  const account = resolveTelegramAccount({
+    cfg: params.cfg,
+    accountId: params.accountId,
+  });
   const ids = Object.keys(account.config.groups ?? {})
     .map((id) => id.trim())
     .filter((id) => Boolean(id) && id !== "*");
@@ -200,7 +248,10 @@ export async function listTelegramDirectoryGroupsFromConfig(
 export async function listWhatsAppDirectoryPeersFromConfig(
   params: DirectoryConfigParams,
 ): Promise<ChannelDirectoryEntry[]> {
-  const account = resolveWhatsAppAccount({ cfg: params.cfg, accountId: params.accountId });
+  const account = resolveWhatsAppAccount({
+    cfg: params.cfg,
+    accountId: params.accountId,
+  });
   const ids = (account.allowFrom ?? [])
     .map((entry) => String(entry).trim())
     .filter((entry) => Boolean(entry) && entry !== "*")
@@ -213,7 +264,10 @@ export async function listWhatsAppDirectoryPeersFromConfig(
 export async function listWhatsAppDirectoryGroupsFromConfig(
   params: DirectoryConfigParams,
 ): Promise<ChannelDirectoryEntry[]> {
-  const account = resolveWhatsAppAccount({ cfg: params.cfg, accountId: params.accountId });
+  const account = resolveWhatsAppAccount({
+    cfg: params.cfg,
+    accountId: params.accountId,
+  });
   const ids = Object.keys(account.groups ?? {})
     .map((id) => id.trim())
     .filter((id) => Boolean(id) && id !== "*");

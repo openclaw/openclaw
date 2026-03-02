@@ -1,4 +1,7 @@
-import { formatToolSummary, resolveToolDisplay } from "../agents/tool-display.js";
+import {
+  formatToolSummary,
+  resolveToolDisplay,
+} from "../agents/tool-display.js";
 import { shortenHomeInString, shortenHomePath } from "../utils.js";
 
 type ToolAggregateOptions = {

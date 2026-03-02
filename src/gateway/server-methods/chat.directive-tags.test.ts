@@ -32,7 +32,10 @@ vi.mock("../session-utils.js", async (importOriginal) => {
     ...original,
     loadSessionEntry: () => ({
       cfg: {},
-      storePath: path.join(path.dirname(mockState.transcriptPath), "sessions.json"),
+      storePath: path.join(
+        path.dirname(mockState.transcriptPath),
+        "sessions.json",
+      ),
       entry: {
         sessionId: mockState.sessionId,
         sessionFile: mockState.transcriptPath,
@@ -124,7 +127,8 @@ function createChatContext(): Pick<
 > {
   return {
     broadcast: vi.fn() as unknown as GatewayRequestContext["broadcast"],
-    nodeSendToSession: vi.fn() as unknown as GatewayRequestContext["nodeSendToSession"],
+    nodeSendToSession:
+      vi.fn() as unknown as GatewayRequestContext["nodeSendToSession"],
     agentRunSeq: new Map<string, number>(),
     chatAbortControllers: new Map(),
     chatRunBuffers: new Map(),
@@ -168,7 +172,9 @@ async function runNonStreamingChatSend(params: {
   const shouldExpectBroadcast = params.expectBroadcast ?? true;
   if (!shouldExpectBroadcast) {
     await vi.waitFor(() => {
-      expect(params.context.dedupe.has(`chat:${params.idempotencyKey}`)).toBe(true);
+      expect(params.context.dedupe.has(`chat:${params.idempotencyKey}`)).toBe(
+        true,
+      );
     }, FAST_WAIT_OPTS);
     return undefined;
   }
@@ -176,12 +182,15 @@ async function runNonStreamingChatSend(params: {
   await vi.waitFor(
     () =>
       expect(
-        (params.context.broadcast as unknown as ReturnType<typeof vi.fn>).mock.calls.length,
+        (params.context.broadcast as unknown as ReturnType<typeof vi.fn>).mock
+          .calls.length,
       ).toBe(1),
     FAST_WAIT_OPTS,
   );
 
-  const chatCall = (params.context.broadcast as unknown as ReturnType<typeof vi.fn>).mock.calls[0];
+  const chatCall = (
+    params.context.broadcast as unknown as ReturnType<typeof vi.fn>
+  ).mock.calls[0];
   expect(chatCall?.[0]).toBe("chat");
   return chatCall?.[1];
 }
@@ -228,7 +237,8 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expectBroadcast: false,
     });
 
-    const register = context.registerToolEventRecipient as unknown as ReturnType<typeof vi.fn>;
+    const register =
+      context.registerToolEventRecipient as unknown as ReturnType<typeof vi.fn>;
     expect(register).toHaveBeenCalledWith("run-current", "conn-1");
     expect(register).toHaveBeenCalledWith("run-same-session", "conn-1");
     expect(register).not.toHaveBeenCalledWith("run-other-session", "conn-1");
@@ -253,7 +263,8 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expectBroadcast: false,
     });
 
-    const register = context.registerToolEventRecipient as unknown as ReturnType<typeof vi.fn>;
+    const register =
+      context.registerToolEventRecipient as unknown as ReturnType<typeof vi.fn>;
     expect(register).not.toHaveBeenCalled();
   });
 
@@ -275,7 +286,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     const [ok, payload] = respond.mock.calls.at(-1) ?? [];
     expect(ok).toBe(true);
     expect(payload).toMatchObject({ ok: true });
-    const chatCall = (context.broadcast as unknown as ReturnType<typeof vi.fn>).mock.calls.at(-1);
+    const chatCall = (
+      context.broadcast as unknown as ReturnType<typeof vi.fn>
+    ).mock.calls.at(-1);
     expect(chatCall?.[0]).toBe("chat");
     expect(chatCall?.[1]).toEqual(
       expect.objectContaining({
@@ -326,7 +339,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
 
     expect(respond).toHaveBeenCalled();
-    const chatCall = (context.broadcast as unknown as ReturnType<typeof vi.fn>).mock.calls.at(-1);
+    const chatCall = (
+      context.broadcast as unknown as ReturnType<typeof vi.fn>
+    ).mock.calls.at(-1);
     expect(chatCall?.[0]).toBe("chat");
     expect(extractFirstTextBlock(chatCall?.[1])).toBe("hello");
   });

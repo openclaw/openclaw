@@ -1,13 +1,23 @@
-import { normalizeApiKeyInput, validateApiKeyInput } from "./auth-choice.api-key.js";
+import {
+  normalizeApiKeyInput,
+  validateApiKeyInput,
+} from "./auth-choice.api-key.js";
 import {
   createAuthChoiceAgentModelNoter,
   ensureApiKeyFromOptionEnvOrPrompt,
   normalizeSecretInputModeInput,
 } from "./auth-choice.apply-helpers.js";
-import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
+import type {
+  ApplyAuthChoiceParams,
+  ApplyAuthChoiceResult,
+} from "./auth-choice.apply.js";
 import { applyDefaultModelChoice } from "./auth-choice.default-model.js";
 import { isRemoteEnvironment } from "./oauth-env.js";
-import { applyAuthProfileConfig, setOpenaiApiKey, writeOAuthCredentials } from "./onboard-auth.js";
+import {
+  applyAuthProfileConfig,
+  setOpenaiApiKey,
+  writeOAuthCredentials,
+} from "./onboard-auth.js";
 import { openUrl } from "./onboard-helpers.js";
 import {
   applyOpenAICodexModelDefault,
@@ -23,7 +33,9 @@ import {
 export async function applyAuthChoiceOpenAI(
   params: ApplyAuthChoiceParams,
 ): Promise<ApplyAuthChoiceResult | null> {
-  const requestedSecretInputMode = normalizeSecretInputModeInput(params.opts?.secretInputMode);
+  const requestedSecretInputMode = normalizeSecretInputModeInput(
+    params.opts?.secretInputMode,
+  );
   const noteAgentModel = createAuthChoiceAgentModelNoter(params);
   let authChoice = params.authChoice;
   if (authChoice === "apiKey" && params.opts?.tokenProvider === "openai") {
@@ -34,21 +46,22 @@ export async function applyAuthChoiceOpenAI(
     let nextConfig = params.config;
     let agentModelOverride: string | undefined;
 
-    const applyOpenAiDefaultModelChoice = async (): Promise<ApplyAuthChoiceResult> => {
-      const applied = await applyDefaultModelChoice({
-        config: nextConfig,
-        setDefaultModel: params.setDefaultModel,
-        defaultModel: OPENAI_DEFAULT_MODEL,
-        applyDefaultConfig: applyOpenAIConfig,
-        applyProviderConfig: applyOpenAIProviderConfig,
-        noteDefault: OPENAI_DEFAULT_MODEL,
-        noteAgentModel,
-        prompter: params.prompter,
-      });
-      nextConfig = applied.config;
-      agentModelOverride = applied.agentModelOverride ?? agentModelOverride;
-      return { config: nextConfig, agentModelOverride };
-    };
+    const applyOpenAiDefaultModelChoice =
+      async (): Promise<ApplyAuthChoiceResult> => {
+        const applied = await applyDefaultModelChoice({
+          config: nextConfig,
+          setDefaultModel: params.setDefaultModel,
+          defaultModel: OPENAI_DEFAULT_MODEL,
+          applyDefaultConfig: applyOpenAIConfig,
+          applyProviderConfig: applyOpenAIProviderConfig,
+          noteDefault: OPENAI_DEFAULT_MODEL,
+          noteAgentModel,
+          prompter: params.prompter,
+        });
+        nextConfig = applied.config;
+        agentModelOverride = applied.agentModelOverride ?? agentModelOverride;
+        return { config: nextConfig, agentModelOverride };
+      };
 
     await ensureApiKeyFromOptionEnvOrPrompt({
       token: params.opts?.token,
@@ -94,9 +107,14 @@ export async function applyAuthChoiceOpenAI(
       return { config: nextConfig, agentModelOverride };
     }
     if (creds) {
-      const profileId = await writeOAuthCredentials("openai-codex", creds, params.agentDir, {
-        syncSiblingAgents: true,
-      });
+      const profileId = await writeOAuthCredentials(
+        "openai-codex",
+        creds,
+        params.agentDir,
+        {
+          syncSiblingAgents: true,
+        },
+      );
       nextConfig = applyAuthProfileConfig(nextConfig, {
         profileId,
         provider: "openai-codex",

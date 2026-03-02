@@ -8,8 +8,12 @@ type RegisteredRoute = {
   handler: (req: IncomingMessage, res: ServerResponse) => Promise<void>;
 };
 
-const registerPluginHttpRouteMock = vi.fn<(params: RegisteredRoute) => () => void>(() => vi.fn());
-const dispatchReplyWithBufferedBlockDispatcher = vi.fn().mockResolvedValue({ counts: {} });
+const registerPluginHttpRouteMock = vi.fn<
+  (params: RegisteredRoute) => () => void
+>(() => vi.fn());
+const dispatchReplyWithBufferedBlockDispatcher = vi
+  .fn()
+  .mockResolvedValue({ counts: {} });
 
 vi.mock("openclaw/plugin-sdk", () => ({
   DEFAULT_ACCOUNT_ID: "default",
@@ -76,7 +80,8 @@ describe("Synology channel wiring integration", () => {
 
     const firstCall = registerPluginHttpRouteMock.mock.calls[0];
     expect(firstCall).toBeTruthy();
-    if (!firstCall) throw new Error("Expected registerPluginHttpRoute to be called");
+    if (!firstCall)
+      throw new Error("Expected registerPluginHttpRoute to be called");
     const registered = firstCall[0];
     expect(registered.path).toBe("/webhook/synology-alerts");
     expect(registered.accountId).toBe("alerts");

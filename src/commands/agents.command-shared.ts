@@ -6,6 +6,8 @@ export function createQuietRuntime(runtime: RuntimeEnv): RuntimeEnv {
   return { ...runtime, log: () => {} };
 }
 
-export async function requireValidConfig(runtime: RuntimeEnv): Promise<OpenClawConfig | null> {
+export async function requireValidConfig(
+  runtime: RuntimeEnv,
+): Promise<OpenClawConfig | null> {
   return await requireValidConfigSnapshot(runtime);
 }

@@ -14,7 +14,10 @@ const LEVELS = new Set<ReactionLevel>(["off", "ack", "minimal", "extensive"]);
 
 function parseLevel(
   value: unknown,
-): { kind: "missing" } | { kind: "invalid" } | { kind: "ok"; value: ReactionLevel } {
+):
+  | { kind: "missing" }
+  | { kind: "invalid" }
+  | { kind: "ok"; value: ReactionLevel } {
   if (value === undefined || value === null) {
     return { kind: "missing" };
   }

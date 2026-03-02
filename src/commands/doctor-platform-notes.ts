@@ -18,8 +18,12 @@ export async function noteMacLaunchAgentOverrides() {
     return;
   }
   const home = resolveHomeDir();
-  const markerCandidates = [path.join(home, ".openclaw", "disable-launchagent")];
-  const markerPath = markerCandidates.find((candidate) => fs.existsSync(candidate));
+  const markerCandidates = [
+    path.join(home, ".openclaw", "disable-launchagent"),
+  ];
+  const markerPath = markerCandidates.find((candidate) =>
+    fs.existsSync(candidate),
+  );
   if (!markerPath) {
     return;
   }
@@ -35,7 +39,9 @@ export async function noteMacLaunchAgentOverrides() {
 
 async function launchctlGetenv(name: string): Promise<string | undefined> {
   try {
-    const result = await execFileAsync("/bin/launchctl", ["getenv", name], { encoding: "utf8" });
+    const result = await execFileAsync("/bin/launchctl", ["getenv", name], {
+      encoding: "utf8",
+    });
     const value = String(result.stdout ?? "").trim();
     return value.length > 0 ? value : undefined;
   } catch {
@@ -45,13 +51,21 @@ async function launchctlGetenv(name: string): Promise<string | undefined> {
 
 function hasConfigGatewayCreds(cfg: OpenClawConfig): boolean {
   const localToken =
-    typeof cfg.gateway?.auth?.token === "string" ? cfg.gateway?.auth?.token.trim() : "";
+    typeof cfg.gateway?.auth?.token === "string"
+      ? cfg.gateway?.auth?.token.trim()
+      : "";
   const localPassword =
-    typeof cfg.gateway?.auth?.password === "string" ? cfg.gateway?.auth?.password.trim() : "";
+    typeof cfg.gateway?.auth?.password === "string"
+      ? cfg.gateway?.auth?.password.trim()
+      : "";
   const remoteToken =
-    typeof cfg.gateway?.remote?.token === "string" ? cfg.gateway?.remote?.token.trim() : "";
+    typeof cfg.gateway?.remote?.token === "string"
+      ? cfg.gateway?.remote?.token.trim()
+      : "";
   const remotePassword =
-    typeof cfg.gateway?.remote?.password === "string" ? cfg.gateway?.remote?.password.trim() : "";
+    typeof cfg.gateway?.remote?.password === "string"
+      ? cfg.gateway?.remote?.password.trim()
+      : "";
   return Boolean(localToken || localPassword || remoteToken || remotePassword);
 }
 
@@ -173,7 +187,8 @@ export function noteStartupOptimizationHints(
   const isArmHost = arch === "arm" || arch === "arm64";
   const isLowMemoryLinux =
     platform === "linux" && totalMemBytes > 0 && totalMemBytes <= 8 * 1024 ** 3;
-  const isStartupTuneTarget = platform === "linux" && (isArmHost || isLowMemoryLinux);
+  const isStartupTuneTarget =
+    platform === "linux" && (isArmHost || isLowMemoryLinux);
   if (!isStartupTuneTarget) {
     return;
   }
@@ -195,7 +210,9 @@ export function noteStartupOptimizationHints(
   }
 
   if (isTruthyEnvValue(disableCompileCache)) {
-    lines.push("- NODE_DISABLE_COMPILE_CACHE is set; startup compile cache is disabled.");
+    lines.push(
+      "- NODE_DISABLE_COMPILE_CACHE is set; startup compile cache is disabled.",
+    );
   }
 
   if (noRespawn !== "1") {
@@ -213,7 +230,9 @@ export function noteStartupOptimizationHints(
     "  export NODE_COMPILE_CACHE=/var/tmp/openclaw-compile-cache",
     "  mkdir -p /var/tmp/openclaw-compile-cache",
     "  export OPENCLAW_NO_RESPAWN=1",
-    isTruthyEnvValue(disableCompileCache) ? "  unset NODE_DISABLE_COMPILE_CACHE" : undefined,
+    isTruthyEnvValue(disableCompileCache)
+      ? "  unset NODE_DISABLE_COMPILE_CACHE"
+      : undefined,
   ].filter((line): line is string => Boolean(line));
 
   noteFn([...lines, ...suggestions].join("\n"), "Startup optimization");

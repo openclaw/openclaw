@@ -19,7 +19,9 @@ function normalizeEchoTextKey(text: string | undefined): string | null {
   return normalized ? normalized : null;
 }
 
-function normalizeEchoMessageIdKey(messageId: string | undefined): string | null {
+function normalizeEchoMessageIdKey(
+  messageId: string | undefined,
+): string | null {
   if (!messageId) {
     return null;
   }
@@ -58,7 +60,10 @@ class DefaultSentMessageCache implements SentMessageCache {
     const textKey = normalizeEchoTextKey(lookup.text);
     if (textKey) {
       const textTimestamp = this.textCache.get(`${scope}:${textKey}`);
-      if (textTimestamp && Date.now() - textTimestamp <= SENT_MESSAGE_TEXT_TTL_MS) {
+      if (
+        textTimestamp &&
+        Date.now() - textTimestamp <= SENT_MESSAGE_TEXT_TTL_MS
+      ) {
         return true;
       }
     }

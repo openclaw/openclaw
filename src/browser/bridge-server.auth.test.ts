@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { startBrowserBridgeServer, stopBrowserBridgeServer } from "./bridge-server.js";
+import {
+  startBrowserBridgeServer,
+  stopBrowserBridgeServer,
+} from "./bridge-server.js";
 import type { ResolvedBrowserConfig } from "./config.js";
 import {
   DEFAULT_OPENCLAW_BROWSER_COLOR,
@@ -64,7 +67,10 @@ describe("startBrowserBridgeServer auth", () => {
   });
 
   it("rejects unauthenticated requests when authToken is set", async () => {
-    await expectAuthFlow({ authToken: "secret-token" }, { Authorization: "Bearer secret-token" });
+    await expectAuthFlow(
+      { authToken: "secret-token" },
+      { Authorization: "Bearer secret-token" },
+    );
   });
 
   it("accepts x-openclaw-password when authPassword is set", async () => {
@@ -95,7 +101,9 @@ describe("startBrowserBridgeServer auth", () => {
     });
     servers.push({ stop: () => stopBrowserBridgeServer(bridge.server) });
 
-    const res = await fetch(`${bridge.baseUrl}/sandbox/novnc?token=valid-token`);
+    const res = await fetch(
+      `${bridge.baseUrl}/sandbox/novnc?token=valid-token`,
+    );
     expect(res.status).toBe(200);
     expect(res.headers.get("location")).toBeNull();
     expect(res.headers.get("cache-control")).toContain("no-store");

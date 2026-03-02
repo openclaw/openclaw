@@ -1,7 +1,10 @@
 import os from "node:os";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolveGatewayBindUrl } from "../shared/gateway-bind-url.js";
-import { isCarrierGradeNatIpv4Address, isRfc1918Ipv4Address } from "../shared/net/ip.js";
+import {
+  isCarrierGradeNatIpv4Address,
+  isRfc1918Ipv4Address,
+} from "../shared/net/ip.js";
 import { resolveTailnetHostWithRunner } from "../shared/tailscale-status.js";
 
 const DEFAULT_GATEWAY_PORT = 18789;
@@ -57,7 +60,10 @@ type ResolveAuthResult = {
   error?: string;
 };
 
-function normalizeUrl(raw: string, schemeFallback: "ws" | "wss"): string | null {
+function normalizeUrl(
+  raw: string,
+  schemeFallback: "ws" | "wss",
+): string | null {
   const trimmed = raw.trim();
   if (!trimmed) {
     return null;
@@ -68,7 +74,8 @@ function normalizeUrl(raw: string, schemeFallback: "ws" | "wss"): string | null 
     if (!scheme) {
       return null;
     }
-    const resolvedScheme = scheme === "http" ? "ws" : scheme === "https" ? "wss" : scheme;
+    const resolvedScheme =
+      scheme === "http" ? "ws" : scheme === "https" ? "wss" : scheme;
     if (resolvedScheme !== "ws" && resolvedScheme !== "wss") {
       return null;
     }
@@ -89,8 +96,12 @@ function normalizeUrl(raw: string, schemeFallback: "ws" | "wss"): string | null 
   return `${schemeFallback}://${withoutPath}`;
 }
 
-function resolveGatewayPort(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): number {
-  const envRaw = env.OPENCLAW_GATEWAY_PORT?.trim() || env.CLAWDBOT_GATEWAY_PORT?.trim();
+function resolveGatewayPort(
+  cfg: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+): number {
+  const envRaw =
+    env.OPENCLAW_GATEWAY_PORT?.trim() || env.CLAWDBOT_GATEWAY_PORT?.trim();
   if (envRaw) {
     const parsed = Number.parseInt(envRaw, 10);
     if (Number.isFinite(parsed) && parsed > 0) {
@@ -98,7 +109,11 @@ function resolveGatewayPort(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): number
     }
   }
   const configPort = cfg.gateway?.port;
-  if (typeof configPort === "number" && Number.isFinite(configPort) && configPort > 0) {
+  if (
+    typeof configPort === "number" &&
+    Number.isFinite(configPort) &&
+    configPort > 0
+  ) {
     return configPort;
   }
   return DEFAULT_GATEWAY_PORT;
@@ -163,7 +178,10 @@ function pickTailnetIPv4(
   return pickIPv4Matching(networkInterfaces, isTailnetIPv4);
 }
 
-function resolveAuth(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): ResolveAuthResult {
+function resolveAuth(
+  cfg: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+): ResolveAuthResult {
   const mode = cfg.gateway?.auth?.mode;
   const token =
     env.OPENCLAW_GATEWAY_TOKEN?.trim() ||
@@ -176,13 +194,18 @@ function resolveAuth(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): ResolveAuthRe
 
   if (mode === "password") {
     if (!password) {
-      return { error: "Gateway auth is set to password, but no password is configured." };
+      return {
+        error:
+          "Gateway auth is set to password, but no password is configured.",
+      };
     }
     return { password, label: "password" };
   }
   if (mode === "token") {
     if (!token) {
-      return { error: "Gateway auth is set to token, but no token is configured." };
+      return {
+        error: "Gateway auth is set to token, but no token is configured.",
+      };
     }
     return { token, label: "token" };
   }
@@ -230,9 +253,15 @@ async function resolveGatewayUrl(
   if (tailscaleMode === "serve" || tailscaleMode === "funnel") {
     const host = await resolveTailnetHostWithRunner(opts.runCommandWithTimeout);
     if (!host) {
-      return { error: "Tailscale Serve is enabled, but MagicDNS could not be resolved." };
+      return {
+        error:
+          "Tailscale Serve is enabled, but MagicDNS could not be resolved.",
+      };
     }
-    return { url: `wss://${host}`, source: `gateway.tailscale.mode=${tailscaleMode}` };
+    return {
+      url: `wss://${host}`,
+      source: `gateway.tailscale.mode=${tailscaleMode}`,
+    };
   }
 
   if (remoteUrl) {
@@ -287,7 +316,10 @@ export async function resolvePairingSetupFromConfig(
   }
 
   if (!auth.label) {
-    return { ok: false, error: "Gateway auth is not configured (no token or password)." };
+    return {
+      ok: false,
+      error: "Gateway auth is not configured (no token or password).",
+    };
   }
 
   return {

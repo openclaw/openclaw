@@ -32,7 +32,9 @@ describe("createCacheTrace", () => {
     });
 
     expect(trace).not.toBeNull();
-    expect(trace?.filePath).toBe(resolveUserPath("~/.openclaw/logs/cache-trace.jsonl"));
+    expect(trace?.filePath).toBe(
+      resolveUserPath("~/.openclaw/logs/cache-trace.jsonl"),
+    );
 
     trace?.recordStage("session:loaded", {
       messages: [],
@@ -63,7 +65,10 @@ describe("createCacheTrace", () => {
 
     trace?.recordStage("prompt:before", { prompt: "", system: "" });
 
-    const event = JSON.parse(lines[0]?.trim() ?? "{}") as Record<string, unknown>;
+    const event = JSON.parse(lines[0]?.trim() ?? "{}") as Record<
+      string,
+      unknown
+    >;
     expect(event.prompt).toBe("");
     expect(event.system).toBe("");
   });

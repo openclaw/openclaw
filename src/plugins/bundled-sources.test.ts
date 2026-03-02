@@ -1,11 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { findBundledPluginByNpmSpec, resolveBundledPluginSources } from "./bundled-sources.js";
+import {
+  findBundledPluginByNpmSpec,
+  resolveBundledPluginSources,
+} from "./bundled-sources.js";
 
 const discoverOpenClawPluginsMock = vi.fn();
 const loadPluginManifestMock = vi.fn();
 
 vi.mock("./discovery.js", () => ({
-  discoverOpenClawPlugins: (...args: unknown[]) => discoverOpenClawPluginsMock(...args),
+  discoverOpenClawPlugins: (...args: unknown[]) =>
+    discoverOpenClawPluginsMock(...args),
 }));
 
 vi.mock("./manifest.js", () => ({
@@ -85,7 +89,10 @@ describe("bundled plugin sources", () => {
       ],
       diagnostics: [],
     });
-    loadPluginManifestMock.mockReturnValue({ ok: true, manifest: { id: "feishu" } });
+    loadPluginManifestMock.mockReturnValue({
+      ok: true,
+      manifest: { id: "feishu" },
+    });
 
     const resolved = findBundledPluginByNpmSpec({ spec: "@openclaw/feishu" });
     const missing = findBundledPluginByNpmSpec({ spec: "@openclaw/not-found" });

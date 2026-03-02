@@ -16,7 +16,10 @@ type StubSession = {
 };
 
 describe("subscribeEmbeddedPiSession", () => {
-  function createAgentEventHarness(options?: { runId?: string; sessionKey?: string }) {
+  function createAgentEventHarness(options?: {
+    runId?: string;
+    sessionKey?: string;
+  }) {
     const { session, emit } = createStubSessionHarness();
     const onAgentEvent = vi.fn();
 
@@ -97,7 +100,9 @@ describe("subscribeEmbeddedPiSession", () => {
       const onBlockReply = vi.fn();
 
       subscribeEmbeddedPiSession({
-        session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
+        session: session as unknown as Parameters<
+          typeof subscribeEmbeddedPiSession
+        >[0]["session"],
         runId: "run",
         onReasoningStream,
         onBlockReply,
@@ -163,7 +168,9 @@ describe("subscribeEmbeddedPiSession", () => {
       const onBlockReply = vi.fn();
 
       subscribeEmbeddedPiSession({
-        session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
+        session: session as unknown as Parameters<
+          typeof subscribeEmbeddedPiSession
+        >[0]["session"],
         runId: "run",
         onBlockReply,
         blockReplyBreak: "text_end",
@@ -228,7 +235,9 @@ describe("subscribeEmbeddedPiSession", () => {
     const onReasoningEnd = vi.fn();
 
     subscribeEmbeddedPiSession({
-      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
+      session: session as unknown as Parameters<
+        typeof subscribeEmbeddedPiSession
+      >[0]["session"],
       runId: "run",
       reasoningMode: "stream",
       onReasoningStream,
@@ -277,7 +286,9 @@ describe("subscribeEmbeddedPiSession", () => {
     const onReasoningEnd = vi.fn();
 
     subscribeEmbeddedPiSession({
-      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
+      session: session as unknown as Parameters<
+        typeof subscribeEmbeddedPiSession
+      >[0]["session"],
       runId: "run",
       reasoningMode: "stream",
       onReasoningStream: vi.fn(),
@@ -382,7 +393,10 @@ describe("subscribeEmbeddedPiSession", () => {
     emit({
       type: "message_update",
       message: { role: "assistant" },
-      assistantMessageEvent: { type: "text_delta", delta: " https://example.com/a.png\nCaption" },
+      assistantMessageEvent: {
+        type: "text_delta",
+        delta: " https://example.com/a.png\nCaption",
+      },
     });
 
     const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
@@ -397,7 +411,10 @@ describe("subscribeEmbeddedPiSession", () => {
     emit({
       type: "message_update",
       message: { role: "assistant" },
-      assistantMessageEvent: { type: "text_delta", delta: "MEDIA: https://example.com/a.png" },
+      assistantMessageEvent: {
+        type: "text_delta",
+        delta: "MEDIA: https://example.com/a.png",
+      },
     });
 
     const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
@@ -504,7 +521,9 @@ describe("subscribeEmbeddedPiSession", () => {
     });
 
     // Look for lifecycle:error event
-    const lifecycleError = findLifecycleErrorAgentEvent(onAgentEvent.mock.calls);
+    const lifecycleError = findLifecycleErrorAgentEvent(
+      onAgentEvent.mock.calls,
+    );
 
     expect(lifecycleError).toBeDefined();
     expect(lifecycleError?.data?.error).toContain("API rate limit reached");

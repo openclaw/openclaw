@@ -58,7 +58,10 @@ const SLACK_SPEC: ToolDisplaySpec = {
     sendMessage: { label: "send", detailKeys: ["to", "content"] },
     editMessage: { label: "edit", detailKeys: ["channelId", "messageId"] },
     deleteMessage: { label: "delete", detailKeys: ["channelId", "messageId"] },
-    readMessages: { label: "read messages", detailKeys: ["channelId", "limit"] },
+    readMessages: {
+      label: "read messages",
+      detailKeys: ["channelId", "limit"],
+    },
     pinMessage: { label: "pin", detailKeys: ["channelId", "messageId"] },
     unpinMessage: { label: "unpin", detailKeys: ["channelId", "messageId"] },
     listPins: { label: "list pins", detailKeys: ["channelId"] },
@@ -84,8 +87,11 @@ function convertSpec(spec?: SharedToolDisplaySpec): ToolDisplaySpec {
   };
 }
 
-const SHARED_TOOL_DISPLAY_CONFIG = SHARED_TOOL_DISPLAY_JSON as SharedToolDisplayConfig;
-const FALLBACK = convertSpec(SHARED_TOOL_DISPLAY_CONFIG.fallback ?? { emoji: "🧩" });
+const SHARED_TOOL_DISPLAY_CONFIG =
+  SHARED_TOOL_DISPLAY_JSON as SharedToolDisplayConfig;
+const FALLBACK = convertSpec(
+  SHARED_TOOL_DISPLAY_CONFIG.fallback ?? { emoji: "🧩" },
+);
 const TOOL_MAP: Record<string, ToolDisplaySpec> = Object.fromEntries(
   Object.entries(SHARED_TOOL_DISPLAY_CONFIG.tools ?? {}).map(([key, spec]) => [
     key,

@@ -3,7 +3,10 @@
  */
 
 import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
-import type { NormalizedMessage, MessageContentItem } from "../types/chat-types.ts";
+import type {
+  NormalizedMessage,
+  MessageContentItem,
+} from "../types/chat-types.ts";
 
 /**
  * Normalize a raw message object into a consistent structure.
@@ -14,7 +17,8 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
 
   // Detect tool messages by common gateway shapes.
   // Some tool events come through as assistant role with tool_* items in the content array.
-  const hasToolId = typeof m.toolCallId === "string" || typeof m.tool_call_id === "string";
+  const hasToolId =
+    typeof m.toolCallId === "string" || typeof m.tool_call_id === "string";
 
   const contentRaw = m.content;
   const contentItems = Array.isArray(contentRaw) ? contentRaw : null;
@@ -26,7 +30,8 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
       return t === "toolresult" || t === "tool_result";
     });
 
-  const hasToolName = typeof m.toolName === "string" || typeof m.tool_name === "string";
+  const hasToolName =
+    typeof m.toolName === "string" || typeof m.tool_name === "string";
 
   if (hasToolId || hasToolContent || hasToolName) {
     role = "toolResult";

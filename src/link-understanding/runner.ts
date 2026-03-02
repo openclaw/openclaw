@@ -1,7 +1,10 @@
 import type { MsgContext } from "../auto-reply/templating.js";
 import { applyTemplate } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/config.js";
-import type { LinkModelConfig, LinkToolsConfig } from "../config/types.tools.js";
+import type {
+  LinkModelConfig,
+  LinkToolsConfig,
+} from "../config/types.tools.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { CLI_OUTPUT_MAX_BUFFER } from "../media-understanding/defaults.js";
 import { resolveTimeoutMs } from "../media-understanding/resolve.js";
@@ -34,7 +37,8 @@ function resolveTimeoutMsFromConfig(params: {
   config?: LinkToolsConfig;
   entry: LinkModelConfig;
 }): number {
-  const configured = params.entry.timeoutSeconds ?? params.config?.timeoutSeconds;
+  const configured =
+    params.entry.timeoutSeconds ?? params.config?.timeoutSeconds;
   return resolveTimeoutMs(configured, DEFAULT_LINK_TIMEOUT_SECONDS);
 }
 
@@ -52,7 +56,10 @@ async function runCliEntry(params: {
     return null;
   }
   const args = params.entry.args ?? [];
-  const timeoutMs = resolveTimeoutMsFromConfig({ config: params.config, entry: params.entry });
+  const timeoutMs = resolveTimeoutMsFromConfig({
+    config: params.config,
+    entry: params.entry,
+  });
   const templCtx = {
     ...params.ctx,
     LinkUrl: params.url,
@@ -94,7 +101,9 @@ async function runLinkEntries(params: {
     } catch (err) {
       lastError = err;
       if (shouldLogVerbose()) {
-        logVerbose(`Link understanding failed for ${params.url}: ${String(err)}`);
+        logVerbose(
+          `Link understanding failed for ${params.url}: ${String(err)}`,
+        );
       }
     }
   }
@@ -122,8 +131,14 @@ export async function runLinkUnderstanding(params: {
     return { urls: [], outputs: [] };
   }
 
-  const message = params.message ?? params.ctx.CommandBody ?? params.ctx.RawBody ?? params.ctx.Body;
-  const links = extractLinksFromMessage(message ?? "", { maxLinks: config?.maxLinks });
+  const message =
+    params.message ??
+    params.ctx.CommandBody ??
+    params.ctx.RawBody ??
+    params.ctx.Body;
+  const links = extractLinksFromMessage(message ?? "", {
+    maxLinks: config?.maxLinks,
+  });
   if (links.length === 0) {
     return { urls: [], outputs: [] };
   }

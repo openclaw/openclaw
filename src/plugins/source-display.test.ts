@@ -6,7 +6,8 @@ describe("formatPluginSourceForTable", () => {
     const out = formatPluginSourceForTable(
       {
         origin: "bundled",
-        source: "/opt/homebrew/lib/node_modules/openclaw/extensions/bluebubbles/index.ts",
+        source:
+          "/opt/homebrew/lib/node_modules/openclaw/extensions/bluebubbles/index.ts",
       },
       {
         stock: "/opt/homebrew/lib/node_modules/openclaw/extensions",

@@ -16,7 +16,10 @@ function createStartedCron(storePath: string) {
     log: noopLogger,
     enqueueSystemEvent: vi.fn(),
     requestHeartbeatNow: vi.fn(),
-    runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const, summary: "ok" })),
+    runIsolatedAgentJob: vi.fn(async () => ({
+      status: "ok" as const,
+      summary: "ok",
+    })),
   });
   return {
     cron,
@@ -88,10 +91,14 @@ describe("CronService store migrations", () => {
       bestEffort: true,
     });
 
-    const persisted = JSON.parse(await fs.readFile(store.storePath, "utf-8")) as {
+    const persisted = JSON.parse(
+      await fs.readFile(store.storePath, "utf-8"),
+    ) as {
       jobs: Array<Record<string, unknown>>;
     };
-    const persistedJob = persisted.jobs.find((entry) => entry.id === "legacy-agentturn-job");
+    const persistedJob = persisted.jobs.find(
+      (entry) => entry.id === "legacy-agentturn-job",
+    );
     expect(persistedJob).toBeDefined();
     expect(persistedJob?.state).toEqual(expect.any(Object));
     expect(persistedJob?.model).toBeUndefined();
@@ -138,7 +145,9 @@ describe("CronService store migrations", () => {
     const cron = await createStartedCron(store.storePath).start();
 
     const jobs = await cron.list({ includeDisabled: true });
-    const job = jobs.find((entry) => entry.id === "legacy-agentturn-no-timeout");
+    const job = jobs.find(
+      (entry) => entry.id === "legacy-agentturn-no-timeout",
+    );
     expect(job).toBeDefined();
     expect(job?.payload.kind).toBe("agentTurn");
     if (job?.payload.kind === "agentTurn") {
@@ -186,10 +195,14 @@ describe("CronService store migrations", () => {
       expect(job.schedule.expr).toBe("*/5 * * * *");
     }
 
-    const persisted = JSON.parse(await fs.readFile(store.storePath, "utf-8")) as {
+    const persisted = JSON.parse(
+      await fs.readFile(store.storePath, "utf-8"),
+    ) as {
       jobs: Array<Record<string, unknown>>;
     };
-    const persistedJob = persisted.jobs.find((entry) => entry.id === "legacy-cron-field-job");
+    const persistedJob = persisted.jobs.find(
+      (entry) => entry.id === "legacy-cron-field-job",
+    );
     expect(persistedJob).toBeDefined();
     expect(persistedJob?.jobId).toBeUndefined();
     expect(persistedJob?.wakeMode).toBe("now");

@@ -3,7 +3,9 @@ import type { MediaUnderstandingScopeConfig } from "../config/types.tools.js";
 
 export type MediaUnderstandingScopeDecision = "allow" | "deny";
 
-function normalizeDecision(value?: string | null): MediaUnderstandingScopeDecision | undefined {
+function normalizeDecision(
+  value?: string | null,
+): MediaUnderstandingScopeDecision | undefined {
   const normalized = value?.trim().toLowerCase();
   if (normalized === "allow") {
     return "allow";
@@ -19,7 +21,9 @@ function normalizeMatch(value?: string | null): string | undefined {
   return normalized || undefined;
 }
 
-export function normalizeMediaUnderstandingChatType(raw?: string | null): string | undefined {
+export function normalizeMediaUnderstandingChatType(
+  raw?: string | null,
+): string | undefined {
   return normalizeChatType(raw ?? undefined);
 }
 

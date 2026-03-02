@@ -30,14 +30,20 @@ const slackTestState: SlackTestState = vi.hoisted(() => ({
 export const getSlackTestState = (): SlackTestState => slackTestState;
 
 type SlackClient = {
-  auth: { test: Mock<(...args: unknown[]) => Promise<Record<string, unknown>>> };
+  auth: {
+    test: Mock<(...args: unknown[]) => Promise<Record<string, unknown>>>;
+  };
   conversations: {
     info: Mock<(...args: unknown[]) => Promise<Record<string, unknown>>>;
     replies: Mock<(...args: unknown[]) => Promise<Record<string, unknown>>>;
     history: Mock<(...args: unknown[]) => Promise<Record<string, unknown>>>;
   };
   users: {
-    info: Mock<(...args: unknown[]) => Promise<{ user: { profile: { display_name: string } } }>>;
+    info: Mock<
+      (
+        ...args: unknown[]
+      ) => Promise<{ user: { profile: { display_name: string } } }>
+    >;
   };
   assistant: {
     threads: {
@@ -56,7 +62,8 @@ export const getSlackHandlers = () =>
     }
   ).__slackHandlers;
 
-export const getSlackClient = () => (globalThis as { __slackClient?: SlackClient }).__slackClient;
+export const getSlackClient = () =>
+  (globalThis as { __slackClient?: SlackClient }).__slackClient;
 
 export const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -134,7 +141,9 @@ export const defaultSlackTestConfig = () => ({
   },
 });
 
-export function resetSlackTestState(config: Record<string, unknown> = defaultSlackTestConfig()) {
+export function resetSlackTestState(
+  config: Record<string, unknown> = defaultSlackTestConfig(),
+) {
   slackTestState.config = config;
   slackTestState.sendMock.mockReset().mockResolvedValue(undefined);
   slackTestState.replyMock.mockReset();
@@ -175,14 +184,16 @@ vi.mock("./send.js", () => ({
 }));
 
 vi.mock("../pairing/pairing-store.js", () => ({
-  readChannelAllowFromStore: (...args: unknown[]) => slackTestState.readAllowFromStoreMock(...args),
+  readChannelAllowFromStore: (...args: unknown[]) =>
+    slackTestState.readAllowFromStoreMock(...args),
   upsertChannelPairingRequest: (...args: unknown[]) =>
     slackTestState.upsertPairingRequestMock(...args),
 }));
 
 vi.mock("../config/sessions.js", () => ({
   resolveStorePath: vi.fn(() => "/tmp/openclaw-sessions.json"),
-  updateLastRoute: (...args: unknown[]) => slackTestState.updateLastRouteMock(...args),
+  updateLastRoute: (...args: unknown[]) =>
+    slackTestState.updateLastRouteMock(...args),
   resolveSessionKey: vi.fn(),
   readSessionUpdatedAt: vi.fn(() => undefined),
   recordSessionMetaFromInbound: vi.fn().mockResolvedValue(undefined),
@@ -190,7 +201,8 @@ vi.mock("../config/sessions.js", () => ({
 
 vi.mock("@slack/bolt", () => {
   const handlers = new Map<string, SlackHandler>();
-  (globalThis as { __slackHandlers?: typeof handlers }).__slackHandlers = handlers;
+  (globalThis as { __slackHandlers?: typeof handlers }).__slackHandlers =
+    handlers;
   const client = {
     auth: { test: vi.fn().mockResolvedValue({ user_id: "bot-user" }) },
     conversations: {

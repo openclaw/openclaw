@@ -2,7 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { type FSWatcher } from "chokidar";
-import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+import {
+  resolveAgentDir,
+  resolveAgentWorkspaceDir,
+} from "../agents/agent-scope.js";
 import type { ResolvedMemorySearchConfig } from "../agents/memory-search.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -17,7 +20,11 @@ import {
   type VoyageEmbeddingClient,
 } from "./embeddings.js";
 import { isFileMissingError, statRegularFile } from "./fs-utils.js";
-import { bm25RankToScore, buildFtsQuery, mergeHybridResults } from "./hybrid.js";
+import {
+  bm25RankToScore,
+  buildFtsQuery,
+  mergeHybridResults,
+} from "./hybrid.js";
 import { isMemoryPath, normalizeExtraMemoryPaths } from "./internal.js";
 import { MemoryManagerEmbeddingOps } from "./manager-embedding-ops.js";
 import { searchKeyword, searchVector } from "./manager-search.js";
@@ -41,14 +48,23 @@ const log = createSubsystemLogger("memory");
 const INDEX_CACHE = new Map<string, MemoryIndexManager>();
 const INDEX_CACHE_PENDING = new Map<string, Promise<MemoryIndexManager>>();
 
-export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements MemorySearchManager {
+export class MemoryIndexManager
+  extends MemoryManagerEmbeddingOps
+  implements MemorySearchManager
+{
   private readonly cacheKey: string;
   protected readonly cfg: OpenClawConfig;
   protected readonly agentId: string;
   protected readonly workspaceDir: string;
   protected readonly settings: ResolvedMemorySearchConfig;
   protected provider: EmbeddingProvider | null;
-  private readonly requestedProvider: "openai" | "local" | "gemini" | "voyage" | "mistral" | "auto";
+  private readonly requestedProvider:
+    | "openai"
+    | "local"
+    | "gemini"
+    | "voyage"
+    | "mistral"
+    | "auto";
   protected fallbackFrom?: "openai" | "local" | "gemini" | "voyage" | "mistral";
   protected fallbackReason?: string;
   private readonly providerUnavailableReason?: string;
@@ -180,7 +196,8 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     this.requestedProvider = params.providerResult.requestedProvider;
     this.fallbackFrom = params.providerResult.fallbackFrom;
     this.fallbackReason = params.providerResult.fallbackReason;
-    this.providerUnavailableReason = params.providerResult.providerUnavailableReason;
+    this.providerUnavailableReason =
+      params.providerResult.providerUnavailableReason;
     this.openAi = params.providerResult.openAi;
     this.gemini = params.providerResult.gemini;
     this.voyage = params.providerResult.voyage;
@@ -192,7 +209,10 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       enabled: params.settings.cache.enabled,
       maxEntries: params.settings.cache.maxEntries,
     };
-    this.fts = { enabled: params.settings.query.hybrid.enabled, available: false };
+    this.fts = {
+      enabled: params.settings.query.hybrid.enabled,
+      available: false,
+    };
     this.ensureSchema();
     this.vector = {
       enabled: params.settings.store.vector.enabled,
@@ -267,7 +287,9 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
 
       // Search with each keyword and merge results
       const resultSets = await Promise.all(
-        searchTerms.map((term) => this.searchKeyword(term, candidates).catch(() => [])),
+        searchTerms.map((term) =>
+          this.searchKeyword(term, candidates).catch(() => []),
+        ),
       );
 
       // Merge and deduplicate results, keeping highest score for each chunk
@@ -300,7 +322,9 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       : [];
 
     if (!hybrid.enabled) {
-      return vectorResults.filter((entry) => entry.score >= minScore).slice(0, maxResults);
+      return vectorResults
+        .filter((entry) => entry.score >= minScore)
+        .slice(0, maxResults);
     }
 
     const merged = await this.mergeHybridResults({
@@ -323,14 +347,16 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     const relaxedMinScore = Math.min(minScore, hybrid.textWeight);
     const keywordKeys = new Set(
       keywordResults.map(
-        (entry) => `${entry.source}:${entry.path}:${entry.startLine}:${entry.endLine}`,
+        (entry) =>
+          `${entry.source}:${entry.path}:${entry.startLine}:${entry.endLine}`,
       ),
     );
     return merged
       .filter(
         (entry) =>
-          keywordKeys.has(`${entry.source}:${entry.path}:${entry.startLine}:${entry.endLine}`) &&
-          entry.score >= relaxedMinScore,
+          keywordKeys.has(
+            `${entry.source}:${entry.path}:${entry.startLine}:${entry.endLine}`,
+          ) && entry.score >= relaxedMinScore,
       )
       .slice(0, maxResults);
   }
@@ -350,7 +376,8 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       queryVec,
       limit,
       snippetMaxChars: SNIPPET_MAX_CHARS,
-      ensureVectorReady: async (dimensions) => await this.ensureVectorReady(dimensions),
+      ensureVectorReady: async (dimensions) =>
+        await this.ensureVectorReady(dimensions),
       sourceFilterVec: this.buildSourceFilter("c"),
       sourceFilterChunks: this.buildSourceFilter(),
     });
@@ -382,7 +409,10 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       buildFtsQuery: (raw) => this.buildFtsQuery(raw),
       bm25RankToScore,
     });
-    return results.map((entry) => entry as MemorySearchResult & { id: string; textScore: number });
+    return results.map(
+      (entry) =>
+        entry as MemorySearchResult & { id: string; textScore: number },
+    );
   }
 
   private mergeHybridResults(params: {
@@ -501,7 +531,10 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       const reason = this.extractErrorReason(err);
       this.readonlyRecoveryAttempts += 1;
       this.readonlyRecoveryLastError = reason;
-      log.warn(`memory sync readonly handle detected; reopening sqlite connection`, { reason });
+      log.warn(
+        `memory sync readonly handle detected; reopening sqlite connection`,
+        { reason },
+      );
       try {
         this.db.close();
       } catch {}
@@ -534,9 +567,13 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     const absPath = path.isAbsolute(rawPath)
       ? path.resolve(rawPath)
       : path.resolve(this.workspaceDir, rawPath);
-    const relPath = path.relative(this.workspaceDir, absPath).replace(/\\/g, "/");
+    const relPath = path
+      .relative(this.workspaceDir, absPath)
+      .replace(/\\/g, "/");
     const inWorkspace =
-      relPath.length > 0 && !relPath.startsWith("..") && !path.isAbsolute(relPath);
+      relPath.length > 0 &&
+      !relPath.startsWith("..") &&
+      !path.isAbsolute(relPath);
     const allowedWorkspace = inWorkspace && isMemoryPath(relPath);
     let allowedAdditional = false;
     if (!allowedWorkspace && this.settings.extraPaths.length > 0) {
@@ -551,7 +588,10 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
             continue;
           }
           if (stat.isDirectory()) {
-            if (absPath === additionalPath || absPath.startsWith(`${additionalPath}${path.sep}`)) {
+            if (
+              absPath === additionalPath ||
+              absPath.startsWith(`${additionalPath}${path.sep}`)
+            ) {
               allowedAdditional = true;
               break;
             }
@@ -612,7 +652,10 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       if (sources.length === 0) {
         return [];
       }
-      const bySource = new Map<MemorySource, { files: number; chunks: number }>();
+      const bySource = new Map<
+        MemorySource,
+        { files: number; chunks: number }
+      >();
       for (const source of sources) {
         bySource.set(source, { files: 0, chunks: 0 });
       }
@@ -620,7 +663,10 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         .prepare(
           `SELECT source, COUNT(*) as c FROM files WHERE 1=1${sourceFilter.sql} GROUP BY source`,
         )
-        .all(...sourceFilter.params) as Array<{ source: MemorySource; c: number }>;
+        .all(...sourceFilter.params) as Array<{
+        source: MemorySource;
+        c: number;
+      }>;
       for (const row of fileRows) {
         const entry = bySource.get(row.source) ?? { files: 0, chunks: 0 };
         entry.files = row.c ?? 0;
@@ -630,13 +676,18 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         .prepare(
           `SELECT source, COUNT(*) as c FROM chunks WHERE 1=1${sourceFilter.sql} GROUP BY source`,
         )
-        .all(...sourceFilter.params) as Array<{ source: MemorySource; c: number }>;
+        .all(...sourceFilter.params) as Array<{
+        source: MemorySource;
+        c: number;
+      }>;
       for (const row of chunkRows) {
         const entry = bySource.get(row.source) ?? { files: 0, chunks: 0 };
         entry.chunks = row.c ?? 0;
         bySource.set(row.source, entry);
       }
-      return sources.map((source) => Object.assign({ source }, bySource.get(source)!));
+      return sources.map((source) =>
+        Object.assign({ source }, bySource.get(source)!),
+      );
     })();
 
     // Determine search mode: "fts-only" if no provider, "hybrid" otherwise
@@ -663,9 +714,9 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
             enabled: true,
             entries:
               (
-                this.db.prepare(`SELECT COUNT(*) as c FROM ${EMBEDDING_CACHE_TABLE}`).get() as
-                  | { c: number }
-                  | undefined
+                this.db
+                  .prepare(`SELECT COUNT(*) as c FROM ${EMBEDDING_CACHE_TABLE}`)
+                  .get() as { c: number } | undefined
               )?.c ?? 0,
             maxEntries: this.cache.maxEntries,
           }
@@ -725,7 +776,9 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     if (!this.provider) {
       return {
         ok: false,
-        error: this.providerUnavailableReason ?? "No embedding provider available (FTS-only mode)",
+        error:
+          this.providerUnavailableReason ??
+          "No embedding provider available (FTS-only mode)",
       };
     }
     try {

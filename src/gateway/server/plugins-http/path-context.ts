@@ -22,14 +22,18 @@ function normalizeProtectedPrefix(prefix: string): string {
 
 export function prefixMatchPath(pathname: string, prefix: string): boolean {
   return (
-    pathname === prefix || pathname.startsWith(`${prefix}/`) || pathname.startsWith(`${prefix}%`)
+    pathname === prefix ||
+    pathname.startsWith(`${prefix}/`) ||
+    pathname.startsWith(`${prefix}%`)
   );
 }
 
 const NORMALIZED_PROTECTED_PLUGIN_ROUTE_PREFIXES =
   PROTECTED_PLUGIN_ROUTE_PREFIXES.map(normalizeProtectedPrefix);
 
-export function isProtectedPluginRoutePathFromContext(context: PluginRoutePathContext): boolean {
+export function isProtectedPluginRoutePathFromContext(
+  context: PluginRoutePathContext,
+): boolean {
   if (
     context.candidates.some((candidate) =>
       NORMALIZED_PROTECTED_PLUGIN_ROUTE_PREFIXES.some((prefix) =>
@@ -47,7 +51,9 @@ export function isProtectedPluginRoutePathFromContext(context: PluginRoutePathCo
   );
 }
 
-export function resolvePluginRoutePathContext(pathname: string): PluginRoutePathContext {
+export function resolvePluginRoutePathContext(
+  pathname: string,
+): PluginRoutePathContext {
   const canonical = canonicalizePathForSecurity(pathname);
   return {
     pathname,

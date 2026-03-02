@@ -32,7 +32,9 @@ function makeEntry(params: {
       ...(params.os ? { os: params.os } : {}),
       ...(params.requires ? { requires: params.requires } : {}),
       ...(params.install ? { install: params.install } : {}),
-      ...(params.requires?.env?.[0] ? { primaryEnv: params.requires.env[0] } : {}),
+      ...(params.requires?.env?.[0]
+        ? { primaryEnv: params.requires.env[0] }
+        : {}),
     },
   };
 }
@@ -100,7 +102,9 @@ describe("buildWorkspaceSkillStatus", () => {
       entries: [entry],
       config: { skills: { allowBundled: ["other-skill"] } },
     });
-    const skill = report.skills.find((reportEntry) => reportEntry.name === "peekaboo");
+    const skill = report.skills.find(
+      (reportEntry) => reportEntry.name === "peekaboo",
+    );
 
     expect(skill).toBeDefined();
     expect(skill?.blockedByAllowlist).toBe(true);
@@ -141,7 +145,9 @@ describe("buildWorkspaceSkillStatus", () => {
         entries: [entry],
       }),
     );
-    const skill = report.skills.find((reportEntry) => reportEntry.name === "install-skill");
+    const skill = report.skills.find(
+      (reportEntry) => reportEntry.name === "install-skill",
+    );
 
     expect(skill).toBeDefined();
     if (process.platform === "darwin") {

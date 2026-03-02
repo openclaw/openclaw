@@ -4,7 +4,15 @@ export const MAX_DISPATCH_WRAPPER_DEPTH = 4;
 
 const WINDOWS_EXE_SUFFIX = ".exe";
 
-const POSIX_SHELL_WRAPPER_NAMES = ["ash", "bash", "dash", "fish", "ksh", "sh", "zsh"] as const;
+const POSIX_SHELL_WRAPPER_NAMES = [
+  "ash",
+  "bash",
+  "dash",
+  "fish",
+  "ksh",
+  "sh",
+  "zsh",
+] as const;
 const WINDOWS_CMD_WRAPPER_NAMES = ["cmd"] as const;
 const POWERSHELL_WRAPPER_NAMES = ["powershell", "pwsh"] as const;
 const SHELL_MULTIPLEXER_WRAPPER_NAMES = ["busybox", "toybox"] as const;
@@ -32,18 +40,32 @@ function withWindowsExeAliases(names: readonly string[]): string[] {
 }
 
 function stripWindowsExeSuffix(value: string): string {
-  return value.endsWith(WINDOWS_EXE_SUFFIX) ? value.slice(0, -WINDOWS_EXE_SUFFIX.length) : value;
+  return value.endsWith(WINDOWS_EXE_SUFFIX)
+    ? value.slice(0, -WINDOWS_EXE_SUFFIX.length)
+    : value;
 }
 
 export const POSIX_SHELL_WRAPPERS = new Set(POSIX_SHELL_WRAPPER_NAMES);
-export const WINDOWS_CMD_WRAPPERS = new Set(withWindowsExeAliases(WINDOWS_CMD_WRAPPER_NAMES));
-export const POWERSHELL_WRAPPERS = new Set(withWindowsExeAliases(POWERSHELL_WRAPPER_NAMES));
-export const DISPATCH_WRAPPER_EXECUTABLES = new Set(withWindowsExeAliases(DISPATCH_WRAPPER_NAMES));
+export const WINDOWS_CMD_WRAPPERS = new Set(
+  withWindowsExeAliases(WINDOWS_CMD_WRAPPER_NAMES),
+);
+export const POWERSHELL_WRAPPERS = new Set(
+  withWindowsExeAliases(POWERSHELL_WRAPPER_NAMES),
+);
+export const DISPATCH_WRAPPER_EXECUTABLES = new Set(
+  withWindowsExeAliases(DISPATCH_WRAPPER_NAMES),
+);
 
-const POSIX_SHELL_WRAPPER_CANONICAL = new Set<string>(POSIX_SHELL_WRAPPER_NAMES);
-const WINDOWS_CMD_WRAPPER_CANONICAL = new Set<string>(WINDOWS_CMD_WRAPPER_NAMES);
+const POSIX_SHELL_WRAPPER_CANONICAL = new Set<string>(
+  POSIX_SHELL_WRAPPER_NAMES,
+);
+const WINDOWS_CMD_WRAPPER_CANONICAL = new Set<string>(
+  WINDOWS_CMD_WRAPPER_NAMES,
+);
 const POWERSHELL_WRAPPER_CANONICAL = new Set<string>(POWERSHELL_WRAPPER_NAMES);
-const SHELL_MULTIPLEXER_WRAPPER_CANONICAL = new Set<string>(SHELL_MULTIPLEXER_WRAPPER_NAMES);
+const SHELL_MULTIPLEXER_WRAPPER_CANONICAL = new Set<string>(
+  SHELL_MULTIPLEXER_WRAPPER_NAMES,
+);
 const DISPATCH_WRAPPER_CANONICAL = new Set<string>(DISPATCH_WRAPPER_NAMES);
 const SHELL_WRAPPER_CANONICAL = new Set<string>([
   ...POSIX_SHELL_WRAPPER_NAMES,
@@ -52,7 +74,11 @@ const SHELL_WRAPPER_CANONICAL = new Set<string>([
 ]);
 
 const POSIX_INLINE_COMMAND_FLAGS = new Set(["-lc", "-c", "--command"]);
-const POWERSHELL_INLINE_COMMAND_FLAGS = new Set(["-c", "-command", "--command"]);
+const POWERSHELL_INLINE_COMMAND_FLAGS = new Set([
+  "-c",
+  "-command",
+  "--command",
+]);
 
 const ENV_OPTIONS_WITH_VALUE = new Set([
   "-u",
@@ -76,12 +102,39 @@ const ENV_INLINE_VALUE_PREFIXES = [
   "--ignore-signal=",
   "--block-signal=",
 ] as const;
-const ENV_FLAG_OPTIONS = new Set(["-i", "--ignore-environment", "-0", "--null"]);
+const ENV_FLAG_OPTIONS = new Set([
+  "-i",
+  "--ignore-environment",
+  "-0",
+  "--null",
+]);
 const NICE_OPTIONS_WITH_VALUE = new Set(["-n", "--adjustment", "--priority"]);
-const STDBUF_OPTIONS_WITH_VALUE = new Set(["-i", "--input", "-o", "--output", "-e", "--error"]);
-const TIMEOUT_FLAG_OPTIONS = new Set(["--foreground", "--preserve-status", "-v", "--verbose"]);
-const TIMEOUT_OPTIONS_WITH_VALUE = new Set(["-k", "--kill-after", "-s", "--signal"]);
-const TRANSPARENT_DISPATCH_WRAPPERS = new Set(["nice", "nohup", "stdbuf", "timeout"]);
+const STDBUF_OPTIONS_WITH_VALUE = new Set([
+  "-i",
+  "--input",
+  "-o",
+  "--output",
+  "-e",
+  "--error",
+]);
+const TIMEOUT_FLAG_OPTIONS = new Set([
+  "--foreground",
+  "--preserve-status",
+  "-v",
+  "--verbose",
+]);
+const TIMEOUT_OPTIONS_WITH_VALUE = new Set([
+  "-k",
+  "--kill-after",
+  "-s",
+  "--signal",
+]);
+const TRANSPARENT_DISPATCH_WRAPPERS = new Set([
+  "nice",
+  "nohup",
+  "stdbuf",
+  "timeout",
+]);
 
 type ShellWrapperKind = "posix" | "cmd" | "powershell";
 
@@ -188,7 +241,10 @@ function scanWrapperInvocation(
   params: {
     separators?: ReadonlySet<string>;
     onToken: (token: string, lowerToken: string) => WrapperScanDirective;
-    adjustCommandIndex?: (commandIndex: number, argv: string[]) => number | null;
+    adjustCommandIndex?: (
+      commandIndex: number,
+      argv: string[],
+    ) => number | null;
   },
 ): string[] | null {
   let idx = 1;
@@ -223,7 +279,9 @@ function scanWrapperInvocation(
   if (expectsOptionValue) {
     return null;
   }
-  const commandIndex = params.adjustCommandIndex ? params.adjustCommandIndex(idx, argv) : idx;
+  const commandIndex = params.adjustCommandIndex
+    ? params.adjustCommandIndex(idx, argv)
+    : idx;
   if (commandIndex === null || commandIndex >= argv.length) {
     return null;
   }
@@ -307,7 +365,9 @@ function unwrapNiceInvocation(argv: string[]): string[] | null {
         return "continue";
       }
       if (NICE_OPTIONS_WITH_VALUE.has(flag)) {
-        return lower.includes("=") || lower !== flag ? "continue" : "consume-next";
+        return lower.includes("=") || lower !== flag
+          ? "continue"
+          : "consume-next";
       }
       if (lower.startsWith("-n") && lower.length > 2) {
         return "continue";
@@ -324,7 +384,9 @@ function unwrapNohupInvocation(argv: string[]): string[] | null {
       if (!token.startsWith("-") || token === "-") {
         return "stop";
       }
-      return lower === "--help" || lower === "--version" ? "continue" : "invalid";
+      return lower === "--help" || lower === "--version"
+        ? "continue"
+        : "invalid";
     },
   });
 }
@@ -333,7 +395,10 @@ function unwrapDashOptionInvocation(
   argv: string[],
   params: {
     onFlag: (flag: string, lowerToken: string) => WrapperScanDirective;
-    adjustCommandIndex?: (commandIndex: number, argv: string[]) => number | null;
+    adjustCommandIndex?: (
+      commandIndex: number,
+      argv: string[],
+    ) => number | null;
   },
 ): string[] | null {
   return scanWrapperInvocation(argv, {
@@ -374,7 +439,9 @@ function unwrapTimeoutInvocation(argv: string[]): string[] | null {
     adjustCommandIndex: (commandIndex, currentArgv) => {
       // timeout consumes a required duration token before the wrapped command.
       const wrappedCommandIndex = commandIndex + 1;
-      return wrappedCommandIndex < currentArgv.length ? wrappedCommandIndex : null;
+      return wrappedCommandIndex < currentArgv.length
+        ? wrappedCommandIndex
+        : null;
     },
   });
 }
@@ -404,7 +471,9 @@ function unwrapDispatchWrapper(
     : blockDispatchWrapper(wrapper);
 }
 
-export function unwrapKnownDispatchWrapperInvocation(argv: string[]): DispatchWrapperUnwrapResult {
+export function unwrapKnownDispatchWrapperInvocation(
+  argv: string[],
+): DispatchWrapperUnwrapResult {
   const token0 = argv[0]?.trim();
   if (!token0) {
     return { kind: "not-wrapper" };
@@ -441,7 +510,10 @@ export function unwrapDispatchWrappersForResolution(
   return plan.argv;
 }
 
-function isSemanticDispatchWrapperUsage(wrapper: string, argv: string[]): boolean {
+function isSemanticDispatchWrapperUsage(
+  wrapper: string,
+  argv: string[],
+): boolean {
   if (wrapper === "env") {
     return envInvocationUsesModifiers(argv);
   }
@@ -522,7 +594,8 @@ function hasEnvManipulationBeforeShellWrapperInternal(
   }
   if (dispatchUnwrap.kind === "unwrapped") {
     const nextEnvManipulationSeen =
-      envManipulationSeen || (dispatchUnwrap.wrapper === "env" && envInvocationUsesModifiers(argv));
+      envManipulationSeen ||
+      (dispatchUnwrap.wrapper === "env" && envInvocationUsesModifiers(argv));
     return hasEnvManipulationBeforeShellWrapperInternal(
       dispatchUnwrap.argv,
       depth + 1,
@@ -558,7 +631,9 @@ export function hasEnvManipulationBeforeShellWrapper(argv: string[]): boolean {
 }
 
 function extractPosixShellInlineCommand(argv: string[]): string | null {
-  return extractInlineCommandByFlags(argv, POSIX_INLINE_COMMAND_FLAGS, { allowCombinedC: true });
+  return extractInlineCommandByFlags(argv, POSIX_INLINE_COMMAND_FLAGS, {
+    allowCombinedC: true,
+  });
 }
 
 function extractCmdInlineCommand(argv: string[]): string | null {
@@ -612,7 +687,10 @@ function extractInlineCommandByFlags(
   return null;
 }
 
-function extractShellWrapperPayload(argv: string[], spec: ShellWrapperSpec): string | null {
+function extractShellWrapperPayload(
+  argv: string[],
+  spec: ShellWrapperSpec,
+): string | null {
   switch (spec.kind) {
     case "posix":
       return extractPosixShellInlineCommand(argv);
@@ -642,7 +720,11 @@ function extractShellWrapperCommandInternal(
     return { isWrapper: false, command: null };
   }
   if (dispatchUnwrap.kind === "unwrapped") {
-    return extractShellWrapperCommandInternal(dispatchUnwrap.argv, rawCommand, depth + 1);
+    return extractShellWrapperCommandInternal(
+      dispatchUnwrap.argv,
+      rawCommand,
+      depth + 1,
+    );
   }
 
   const shellMultiplexerUnwrap = unwrapKnownShellMultiplexerInvocation(argv);
@@ -650,7 +732,11 @@ function extractShellWrapperCommandInternal(
     return { isWrapper: false, command: null };
   }
   if (shellMultiplexerUnwrap.kind === "unwrapped") {
-    return extractShellWrapperCommandInternal(shellMultiplexerUnwrap.argv, rawCommand, depth + 1);
+    return extractShellWrapperCommandInternal(
+      shellMultiplexerUnwrap.argv,
+      rawCommand,
+      depth + 1,
+    );
   }
 
   const base0 = normalizeExecutableToken(token0);
@@ -667,7 +753,9 @@ function extractShellWrapperCommandInternal(
   return { isWrapper: true, command: rawCommand ?? payload };
 }
 
-export function extractShellWrapperInlineCommand(argv: string[]): string | null {
+export function extractShellWrapperInlineCommand(
+  argv: string[],
+): string | null {
   const extracted = extractShellWrapperCommandInternal(argv, null, 0);
   return extracted.isWrapper ? extracted.command : null;
 }
@@ -676,5 +764,9 @@ export function extractShellWrapperCommand(
   argv: string[],
   rawCommand?: string | null,
 ): ShellWrapperCommand {
-  return extractShellWrapperCommandInternal(argv, normalizeRawCommand(rawCommand), 0);
+  return extractShellWrapperCommandInternal(
+    argv,
+    normalizeRawCommand(rawCommand),
+    0,
+  );
 }

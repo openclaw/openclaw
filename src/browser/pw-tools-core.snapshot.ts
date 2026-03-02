@@ -1,5 +1,9 @@
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
-import { type AriaSnapshotNode, formatAriaSnapshot, type RawAXNode } from "./cdp.js";
+import {
+  type AriaSnapshotNode,
+  formatAriaSnapshot,
+  type RawAXNode,
+} from "./cdp.js";
 import {
   assertBrowserNavigationAllowed,
   assertBrowserNavigationResultAllowed,
@@ -58,11 +62,16 @@ export async function snapshotAiViaPlaywright(opts: {
 
   const maybe = page as unknown as WithSnapshotForAI;
   if (!maybe._snapshotForAI) {
-    throw new Error("Playwright _snapshotForAI is not available. Upgrade playwright-core.");
+    throw new Error(
+      "Playwright _snapshotForAI is not available. Upgrade playwright-core.",
+    );
   }
 
   const result = await maybe._snapshotForAI({
-    timeout: Math.max(500, Math.min(60_000, Math.floor(opts.timeoutMs ?? 5000))),
+    timeout: Math.max(
+      500,
+      Math.min(60_000, Math.floor(opts.timeoutMs ?? 5000)),
+    ),
     track: "response",
   });
   let snapshot = String(result?.full ?? "");
@@ -85,7 +94,9 @@ export async function snapshotAiViaPlaywright(opts: {
     refs: built.refs,
     mode: "aria",
   });
-  return truncated ? { snapshot, truncated, refs: built.refs } : { snapshot, refs: built.refs };
+  return truncated
+    ? { snapshot, truncated, refs: built.refs }
+    : { snapshot, refs: built.refs };
 }
 
 export async function snapshotRoleViaPlaywright(opts: {
@@ -108,7 +119,9 @@ export async function snapshotRoleViaPlaywright(opts: {
 
   if (opts.refsMode === "aria") {
     if (opts.selector?.trim() || opts.frameSelector?.trim()) {
-      throw new Error("refs=aria does not support selector/frame snapshots yet.");
+      throw new Error(
+        "refs=aria does not support selector/frame snapshots yet.",
+      );
     }
     const maybe = page as unknown as WithSnapshotForAI;
     if (!maybe._snapshotForAI) {
@@ -118,7 +131,10 @@ export async function snapshotRoleViaPlaywright(opts: {
       timeout: 5000,
       track: "response",
     });
-    const built = buildRoleSnapshotFromAiSnapshot(String(result?.full ?? ""), opts.options);
+    const built = buildRoleSnapshotFromAiSnapshot(
+      String(result?.full ?? ""),
+      opts.options,
+    );
     storeRoleRefsForTarget({
       page,
       cdpUrl: opts.cdpUrl,
@@ -144,7 +160,10 @@ export async function snapshotRoleViaPlaywright(opts: {
       : page.locator(":root");
 
   const ariaSnapshot = await locator.ariaSnapshot();
-  const built = buildRoleSnapshotFromAriaSnapshot(String(ariaSnapshot ?? ""), opts.options);
+  const built = buildRoleSnapshotFromAriaSnapshot(
+    String(ariaSnapshot ?? ""),
+    opts.options,
+  );
   storeRoleRefsForTarget({
     page,
     cdpUrl: opts.cdpUrl,

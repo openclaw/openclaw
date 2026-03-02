@@ -2,7 +2,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { SandboxContext } from "../sandbox.js";
-import type { SandboxFsBridge, SandboxResolvedPath } from "../sandbox/fs-bridge.js";
+import type {
+  SandboxFsBridge,
+  SandboxResolvedPath,
+} from "../sandbox/fs-bridge.js";
 import { createSandboxFsBridgeFromResolver } from "./host-sandbox-fs-bridge.js";
 import { createPiToolsSandboxContext } from "./pi-tools-sandbox-context.js";
 
@@ -19,10 +22,14 @@ export function createUnsafeMountedBridge(params: {
     // Intentionally unsafe: simulate a sandbox FS bridge that maps /agent/* into a host path
     // outside the workspace root (e.g. an operator-configured bind mount).
     const hostPath =
-      filePath === "/agent" || filePath === "/agent/" || filePath.startsWith("/agent/")
+      filePath === "/agent" ||
+      filePath === "/agent/" ||
+      filePath.startsWith("/agent/")
         ? path.join(
             agentHostRoot,
-            filePath === "/agent" || filePath === "/agent/" ? "" : filePath.slice("/agent/".length),
+            filePath === "/agent" || filePath === "/agent/"
+              ? ""
+              : filePath.slice("/agent/".length),
           )
         : path.isAbsolute(filePath)
           ? filePath
@@ -30,7 +37,9 @@ export function createUnsafeMountedBridge(params: {
 
     const relFromRoot = path.relative(root, hostPath);
     const relativePath =
-      relFromRoot && !relFromRoot.startsWith("..") && !path.isAbsolute(relFromRoot)
+      relFromRoot &&
+      !relFromRoot.startsWith("..") &&
+      !path.isAbsolute(relFromRoot)
         ? relFromRoot.split(path.sep).filter(Boolean).join(path.posix.sep)
         : filePath.replace(/\\/g, "/");
 
@@ -66,9 +75,15 @@ export function createUnsafeMountedSandbox(params: {
 }
 
 export async function withUnsafeMountedSandboxHarness(
-  run: (ctx: { sandboxRoot: string; agentRoot: string; sandbox: SandboxContext }) => Promise<void>,
+  run: (ctx: {
+    sandboxRoot: string;
+    agentRoot: string;
+    sandbox: SandboxContext;
+  }) => Promise<void>,
 ) {
-  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sbx-mounts-"));
+  const stateDir = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-sbx-mounts-"),
+  );
   const sandboxRoot = path.join(stateDir, "sandbox");
   const agentRoot = path.join(stateDir, "agent");
   await fs.mkdir(sandboxRoot, { recursive: true });

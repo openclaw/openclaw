@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 import { buildTelegramMessageContextForTest } from "./bot-message-context.test-harness.js";
 
 describe("buildTelegramMessageContext sender prefix", () => {
-  async function buildCtx(params: { messageId: number; options?: Record<string, unknown> }) {
+  async function buildCtx(params: {
+    messageId: number;
+    options?: Record<string, unknown>;
+  }) {
     return await buildTelegramMessageContextForTest({
       message: {
         message_id: params.messageId,

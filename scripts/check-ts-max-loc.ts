@@ -27,9 +27,13 @@ function parseArgs(argv: string[]): ParsedArgs {
 
 function gitLsFilesAll(): string[] {
   // Include untracked files too so local refactors don’t “pass” by accident.
-  const stdout = execFileSync("git", ["ls-files", "--cached", "--others", "--exclude-standard"], {
-    encoding: "utf8",
-  });
+  const stdout = execFileSync(
+    "git",
+    ["ls-files", "--cached", "--others", "--exclude-standard"],
+    {
+      encoding: "utf8",
+    },
+  );
   return stdout
     .split("\n")
     .map((line) => line.trim())
@@ -54,10 +58,15 @@ async function main() {
   const { maxLines } = parseArgs(process.argv.slice(2));
   const files = gitLsFilesAll()
     .filter((filePath) => existsSync(filePath))
-    .filter((filePath) => filePath.endsWith(".ts") || filePath.endsWith(".tsx"));
+    .filter(
+      (filePath) => filePath.endsWith(".ts") || filePath.endsWith(".tsx"),
+    );
 
   const results = await Promise.all(
-    files.map(async (filePath) => ({ filePath, lines: await countLines(filePath) })),
+    files.map(async (filePath) => ({
+      filePath,
+      lines: await countLines(filePath),
+    })),
   );
 
   const offenders = results

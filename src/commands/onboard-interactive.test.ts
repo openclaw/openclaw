@@ -40,9 +40,12 @@ describe("runInteractiveOnboarding", () => {
     await runInteractiveOnboarding({} as never, runtime);
 
     expect(mocks.runOnboardingWizard).toHaveBeenCalledOnce();
-    expect(mocks.restoreTerminalState).toHaveBeenCalledWith("onboarding finish", {
-      resumeStdinIfPaused: false,
-    });
+    expect(mocks.restoreTerminalState).toHaveBeenCalledWith(
+      "onboarding finish",
+      {
+        resumeStdinIfPaused: false,
+      },
+    );
   });
 
   it("restores terminal state without resuming stdin on cancel", async () => {
@@ -54,19 +57,27 @@ describe("runInteractiveOnboarding", () => {
         throw exitError;
       }) as unknown as RuntimeEnv["exit"],
     };
-    mocks.runOnboardingWizard.mockRejectedValueOnce(new WizardCancelledError("cancelled"));
+    mocks.runOnboardingWizard.mockRejectedValueOnce(
+      new WizardCancelledError("cancelled"),
+    );
 
-    await expect(runInteractiveOnboarding({} as never, runtime)).rejects.toBe(exitError);
+    await expect(runInteractiveOnboarding({} as never, runtime)).rejects.toBe(
+      exitError,
+    );
 
     expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(mocks.restoreTerminalState).toHaveBeenCalledWith("onboarding finish", {
-      resumeStdinIfPaused: false,
-    });
+    expect(mocks.restoreTerminalState).toHaveBeenCalledWith(
+      "onboarding finish",
+      {
+        resumeStdinIfPaused: false,
+      },
+    );
     const restoreOrder =
-      mocks.restoreTerminalState.mock.invocationCallOrder[0] ?? Number.MAX_SAFE_INTEGER;
-    const exitOrder =
-      (runtime.exit as unknown as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0] ??
+      mocks.restoreTerminalState.mock.invocationCallOrder[0] ??
       Number.MAX_SAFE_INTEGER;
+    const exitOrder =
+      (runtime.exit as unknown as ReturnType<typeof vi.fn>).mock
+        .invocationCallOrder[0] ?? Number.MAX_SAFE_INTEGER;
     expect(restoreOrder).toBeLessThan(exitOrder);
   });
 
@@ -75,11 +86,16 @@ describe("runInteractiveOnboarding", () => {
     const err = new Error("boom");
     mocks.runOnboardingWizard.mockRejectedValueOnce(err);
 
-    await expect(runInteractiveOnboarding({} as never, runtime)).rejects.toThrow("boom");
+    await expect(
+      runInteractiveOnboarding({} as never, runtime),
+    ).rejects.toThrow("boom");
 
     expect(runtime.exit).not.toHaveBeenCalled();
-    expect(mocks.restoreTerminalState).toHaveBeenCalledWith("onboarding finish", {
-      resumeStdinIfPaused: false,
-    });
+    expect(mocks.restoreTerminalState).toHaveBeenCalledWith(
+      "onboarding finish",
+      {
+        resumeStdinIfPaused: false,
+      },
+    );
   });
 });

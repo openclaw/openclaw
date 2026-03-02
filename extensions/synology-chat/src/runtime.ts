@@ -14,7 +14,9 @@ export function setSynologyRuntime(r: PluginRuntime): void {
 
 export function getSynologyRuntime(): PluginRuntime {
   if (!runtime) {
-    throw new Error("Synology Chat runtime not initialized - plugin not registered");
+    throw new Error(
+      "Synology Chat runtime not initialized - plugin not registered",
+    );
   }
   return runtime;
 }

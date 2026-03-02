@@ -15,4 +15,6 @@ export type DiscordMonitorStatusPatch = {
   lastError?: string | null;
 };
 
-export type DiscordMonitorStatusSink = (patch: DiscordMonitorStatusPatch) => void;
+export type DiscordMonitorStatusSink = (
+  patch: DiscordMonitorStatusPatch,
+) => void;

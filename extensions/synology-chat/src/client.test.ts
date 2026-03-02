@@ -63,19 +63,25 @@ describe("sendMessage", () => {
 
   it("returns true on successful send", async () => {
     mockSuccessResponse();
-    const result = await settleTimers(sendMessage("https://nas.example.com/incoming", "Hello"));
+    const result = await settleTimers(
+      sendMessage("https://nas.example.com/incoming", "Hello"),
+    );
     expect(result).toBe(true);
   });
 
   it("returns false on server error after retries", async () => {
     mockFailureResponse(500);
-    const result = await settleTimers(sendMessage("https://nas.example.com/incoming", "Hello"));
+    const result = await settleTimers(
+      sendMessage("https://nas.example.com/incoming", "Hello"),
+    );
     expect(result).toBe(false);
   });
 
   it("includes user_ids when userId is numeric", async () => {
     mockSuccessResponse();
-    await settleTimers(sendMessage("https://nas.example.com/incoming", "Hello", 42));
+    await settleTimers(
+      sendMessage("https://nas.example.com/incoming", "Hello", 42),
+    );
     const httpsRequest = vi.mocked(https.request);
     expect(httpsRequest).toHaveBeenCalled();
     const callArgs = httpsRequest.mock.calls[0];
@@ -98,7 +104,10 @@ describe("sendFileUrl", () => {
   it("returns true on success", async () => {
     mockSuccessResponse();
     const result = await settleTimers(
-      sendFileUrl("https://nas.example.com/incoming", "https://example.com/file.png"),
+      sendFileUrl(
+        "https://nas.example.com/incoming",
+        "https://example.com/file.png",
+      ),
     );
     expect(result).toBe(true);
   });
@@ -106,7 +115,10 @@ describe("sendFileUrl", () => {
   it("returns false on failure", async () => {
     mockFailureResponse(500);
     const result = await settleTimers(
-      sendFileUrl("https://nas.example.com/incoming", "https://example.com/file.png"),
+      sendFileUrl(
+        "https://nas.example.com/incoming",
+        "https://example.com/file.png",
+      ),
     );
     expect(result).toBe(false);
   });

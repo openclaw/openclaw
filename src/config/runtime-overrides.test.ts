@@ -41,7 +41,11 @@ describe("runtime overrides", () => {
   });
 
   it("rejects prototype pollution paths", () => {
-    const attempts = ["__proto__.polluted", "constructor.polluted", "prototype.polluted"];
+    const attempts = [
+      "__proto__.polluted",
+      "constructor.polluted",
+      "prototype.polluted",
+    ];
     for (const path of attempts) {
       const result = setConfigOverride(path, true);
       expect(result.ok).toBe(false);
@@ -55,20 +59,30 @@ describe("runtime overrides", () => {
 
     const next = applyConfigOverrides(cfg);
     expect(next.commands?.bash).toBeUndefined();
-    expect(Object.prototype.hasOwnProperty.call(next.commands ?? {}, "bash")).toBe(false);
+    expect(
+      Object.prototype.hasOwnProperty.call(next.commands ?? {}, "bash"),
+    ).toBe(false);
   });
 
   it("blocks constructor/prototype keys inside override object values", () => {
     const cfg = { commands: {} } as OpenClawConfig;
-    setConfigOverride("commands", JSON.parse('{"constructor":{"prototype":{"bash":true}}}'));
+    setConfigOverride(
+      "commands",
+      JSON.parse('{"constructor":{"prototype":{"bash":true}}}'),
+    );
 
     const next = applyConfigOverrides(cfg);
     expect(next.commands?.bash).toBeUndefined();
-    expect(Object.prototype.hasOwnProperty.call(next.commands ?? {}, "bash")).toBe(false);
+    expect(
+      Object.prototype.hasOwnProperty.call(next.commands ?? {}, "bash"),
+    ).toBe(false);
   });
 
   it("sanitizes blocked object keys when writing overrides", () => {
-    setConfigOverride("commands", JSON.parse('{"__proto__":{"bash":true},"debug":true}'));
+    setConfigOverride(
+      "commands",
+      JSON.parse('{"__proto__":{"bash":true},"debug":true}'),
+    );
 
     expect(getConfigOverrides()).toEqual({
       commands: {

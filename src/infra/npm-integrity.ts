@@ -1,4 +1,7 @@
-import type { NpmIntegrityDrift, NpmSpecResolution } from "./install-source-utils.js";
+import type {
+  NpmIntegrityDrift,
+  NpmSpecResolution,
+} from "./install-source-utils.js";
 
 export type NpmIntegrityDriftPayload = {
   spec: string;
@@ -62,7 +65,9 @@ type ResolveNpmIntegrityDriftWithDefaultMessageParams = {
   spec: string;
   expectedIntegrity?: string;
   resolution: NpmSpecResolution;
-  onIntegrityDrift?: (payload: NpmIntegrityDriftPayload) => boolean | Promise<boolean>;
+  onIntegrityDrift?: (
+    payload: NpmIntegrityDriftPayload,
+  ) => boolean | Promise<boolean>;
   warn?: (message: string) => void;
 };
 

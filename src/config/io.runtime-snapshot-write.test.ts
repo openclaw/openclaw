@@ -20,7 +20,11 @@ describe("runtime config snapshot writes", () => {
           providers: {
             openai: {
               baseUrl: "https://api.openai.com/v1",
-              apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+              apiKey: {
+                source: "env",
+                provider: "default",
+                id: "OPENAI_API_KEY",
+              },
               models: [],
             },
           },
@@ -39,11 +43,17 @@ describe("runtime config snapshot writes", () => {
       };
 
       await fs.mkdir(path.dirname(configPath), { recursive: true });
-      await fs.writeFile(configPath, `${JSON.stringify(sourceConfig, null, 2)}\n`, "utf8");
+      await fs.writeFile(
+        configPath,
+        `${JSON.stringify(sourceConfig, null, 2)}\n`,
+        "utf8",
+      );
 
       try {
         setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
-        expect(loadConfig().models?.providers?.openai?.apiKey).toBe("sk-runtime-resolved");
+        expect(loadConfig().models?.providers?.openai?.apiKey).toBe(
+          "sk-runtime-resolved",
+        );
 
         await writeConfigFile(loadConfig());
 

@@ -23,7 +23,10 @@ type ChunkCase = {
   expected: string[];
 };
 
-function runChunkCases(chunker: (text: string, limit: number) => string[], cases: ChunkCase[]) {
+function runChunkCases(
+  chunker: (text: string, limit: number) => string[],
+  cases: ChunkCase[],
+) {
   for (const { name, text, limit, expected } of cases) {
     it(name, () => {
       expect(chunker(text, limit)).toEqual(expected);
@@ -72,15 +75,21 @@ describe("chunkText", () => {
   it("prefers breaking at a newline before the limit", () => {
     const text = `paragraph one line\n\nparagraph two starts here and continues`;
     const chunks = chunkText(text, 40);
-    expect(chunks).toEqual(["paragraph one line", "paragraph two starts here and continues"]);
+    expect(chunks).toEqual([
+      "paragraph one line",
+      "paragraph two starts here and continues",
+    ]);
   });
 
   it("otherwise breaks at the last whitespace under the limit", () => {
-    const text = "This is a message that should break nicely near a word boundary.";
+    const text =
+      "This is a message that should break nicely near a word boundary.";
     const chunks = chunkText(text, 30);
     expect(chunks[0].length).toBeLessThanOrEqual(30);
     expect(chunks[1].length).toBeLessThanOrEqual(30);
-    expect(chunks.join(" ").replace(/\s+/g, " ").trim()).toBe(text.replace(/\s+/g, " ").trim());
+    expect(chunks.join(" ").replace(/\s+/g, " ").trim()).toBe(
+      text.replace(/\s+/g, " ").trim(),
+    );
   });
 
   it("falls back to a hard break when no whitespace is present", () => {
@@ -191,8 +200,13 @@ describe("chunkMarkdownText", () => {
       expect(chunks.length, testCase.name).toBeGreaterThan(1);
       for (const chunk of chunks) {
         expect(chunk.length, testCase.name).toBeLessThanOrEqual(testCase.limit);
-        expect(chunk.startsWith(testCase.expectedPrefix), testCase.name).toBe(true);
-        expect(chunk.trimEnd().endsWith(testCase.expectedSuffix), testCase.name).toBe(true);
+        expect(chunk.startsWith(testCase.expectedPrefix), testCase.name).toBe(
+          true,
+        );
+        expect(
+          chunk.trimEnd().endsWith(testCase.expectedSuffix),
+          testCase.name,
+        ).toBe(true);
       }
       expectFencesBalanced(chunks);
     }
@@ -333,14 +347,16 @@ describe("chunkMarkdownTextWithMode", () => {
       },
     ] as const;
     for (const testCase of cases) {
-      expect(chunkMarkdownTextWithMode(testCase.text, 1000, testCase.mode), testCase.name).toEqual(
-        testCase.expected,
-      );
+      expect(
+        chunkMarkdownTextWithMode(testCase.text, 1000, testCase.mode),
+        testCase.name,
+      ).toEqual(testCase.expected);
     }
   });
 
   it("handles newline mode fence splitting rules", () => {
-    const fence = "```python\ndef my_function():\n    x = 1\n\n    y = 2\n    return x + y\n```";
+    const fence =
+      "```python\ndef my_function():\n    x = 1\n\n    y = 2\n    return x + y\n```";
     const longFence = `\`\`\`js\n${"const a = 1;\n".repeat(20)}\`\`\``;
     const cases = [
       {
@@ -380,7 +396,9 @@ describe("chunkMarkdownTextWithMode", () => {
 
 describe("resolveChunkMode", () => {
   it("resolves default, provider, account, and internal channel modes", () => {
-    const providerCfg = { channels: { slack: { chunkMode: "newline" as const } } };
+    const providerCfg = {
+      channels: { slack: { chunkMode: "newline" as const } },
+    };
     const accountCfg = {
       channels: {
         slack: {
@@ -392,20 +410,64 @@ describe("resolveChunkMode", () => {
       },
     };
     const cases = [
-      { cfg: undefined, provider: "telegram", accountId: undefined, expected: "length" },
-      { cfg: {}, provider: "discord", accountId: undefined, expected: "length" },
-      { cfg: undefined, provider: "bluebubbles", accountId: undefined, expected: "length" },
-      { cfg: providerCfg, provider: "__internal__", accountId: undefined, expected: "length" },
-      { cfg: providerCfg, provider: "slack", accountId: undefined, expected: "newline" },
-      { cfg: providerCfg, provider: "discord", accountId: undefined, expected: "length" },
-      { cfg: accountCfg, provider: "slack", accountId: "primary", expected: "newline" },
-      { cfg: accountCfg, provider: "slack", accountId: "other", expected: "length" },
+      {
+        cfg: undefined,
+        provider: "telegram",
+        accountId: undefined,
+        expected: "length",
+      },
+      {
+        cfg: {},
+        provider: "discord",
+        accountId: undefined,
+        expected: "length",
+      },
+      {
+        cfg: undefined,
+        provider: "bluebubbles",
+        accountId: undefined,
+        expected: "length",
+      },
+      {
+        cfg: providerCfg,
+        provider: "__internal__",
+        accountId: undefined,
+        expected: "length",
+      },
+      {
+        cfg: providerCfg,
+        provider: "slack",
+        accountId: undefined,
+        expected: "newline",
+      },
+      {
+        cfg: providerCfg,
+        provider: "discord",
+        accountId: undefined,
+        expected: "length",
+      },
+      {
+        cfg: accountCfg,
+        provider: "slack",
+        accountId: "primary",
+        expected: "newline",
+      },
+      {
+        cfg: accountCfg,
+        provider: "slack",
+        accountId: "other",
+        expected: "length",
+      },
     ] as const;
 
     for (const testCase of cases) {
-      expect(resolveChunkMode(testCase.cfg as never, testCase.provider, testCase.accountId)).toBe(
-        testCase.expected,
-      );
+      expect(
+        resolveChunkMode(
+          testCase.cfg as never,
+          testCase.provider,
+          testCase.accountId,
+        ),
+      ).toBe(testCase.expected);
     }
   });
 });

@@ -3,11 +3,15 @@ import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.j
 import type { OpenClawConfig } from "../config/config.js";
 import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 
-export async function withModelsTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
+export async function withModelsTempHome<T>(
+  fn: (home: string) => Promise<T>,
+): Promise<T> {
   return withTempHomeBase(fn, { prefix: "openclaw-models-" });
 }
 
-export function installModelsConfigTestHooks(opts?: { restoreFetch?: boolean }) {
+export function installModelsConfigTestHooks(opts?: {
+  restoreFetch?: boolean;
+}) {
   let previousHome: string | undefined;
   const originalFetch = globalThis.fetch;
 
@@ -23,7 +27,10 @@ export function installModelsConfigTestHooks(opts?: { restoreFetch?: boolean }) 
   });
 }
 
-export async function withTempEnv<T>(vars: string[], fn: () => Promise<T>): Promise<T> {
+export async function withTempEnv<T>(
+  vars: string[],
+  fn: () => Promise<T>,
+): Promise<T> {
   const previous: Record<string, string | undefined> = {};
   for (const envVar of vars) {
     previous[envVar] = process.env[envVar];
@@ -49,9 +56,15 @@ export function unsetEnv(vars: string[]) {
   }
 }
 
-export const COPILOT_TOKEN_ENV_VARS = ["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"];
+export const COPILOT_TOKEN_ENV_VARS = [
+  "COPILOT_GITHUB_TOKEN",
+  "GH_TOKEN",
+  "GITHUB_TOKEN",
+];
 
-export async function withUnsetCopilotTokenEnv<T>(fn: () => Promise<T>): Promise<T> {
+export async function withUnsetCopilotTokenEnv<T>(
+  fn: () => Promise<T>,
+): Promise<T> {
   return withTempEnv(COPILOT_TOKEN_ENV_VARS, async () => {
     unsetEnv(COPILOT_TOKEN_ENV_VARS);
     return fn();

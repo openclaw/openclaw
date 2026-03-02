@@ -45,7 +45,9 @@ export function resolveSafeExternalUrl(
 
   try {
     const parsed = new URL(candidate, baseHref);
-    return ALLOWED_EXTERNAL_PROTOCOLS.has(parsed.protocol.toLowerCase()) ? parsed.toString() : null;
+    return ALLOWED_EXTERNAL_PROTOCOLS.has(parsed.protocol.toLowerCase())
+      ? parsed.toString()
+      : null;
   } catch {
     return null;
   }

@@ -37,10 +37,16 @@ function resolveSandboxScript(scriptRel: string): SandboxScriptInfo | null {
   return null;
 }
 
-async function runSandboxScript(scriptRel: string, runtime: RuntimeEnv): Promise<boolean> {
+async function runSandboxScript(
+  scriptRel: string,
+  runtime: RuntimeEnv,
+): Promise<boolean> {
   const script = resolveSandboxScript(scriptRel);
   if (!script) {
-    note(`Unable to locate ${scriptRel}. Run it from the repo root.`, "Sandbox");
+    note(
+      `Unable to locate ${scriptRel}. Run it from the repo root.`,
+      "Sandbox",
+    );
     return false;
   }
 
@@ -99,7 +105,10 @@ function resolveSandboxBrowserImage(cfg: OpenClawConfig): string {
   return image ? image : DEFAULT_SANDBOX_BROWSER_IMAGE;
 }
 
-function updateSandboxDockerImage(cfg: OpenClawConfig, image: string): OpenClawConfig {
+function updateSandboxDockerImage(
+  cfg: OpenClawConfig,
+  image: string,
+): OpenClawConfig {
   return {
     ...cfg,
     agents: {
@@ -118,7 +127,10 @@ function updateSandboxDockerImage(cfg: OpenClawConfig, image: string): OpenClawC
   };
 }
 
-function updateSandboxBrowserImage(cfg: OpenClawConfig, image: string): OpenClawConfig {
+function updateSandboxBrowserImage(
+  cfg: OpenClawConfig,
+  image: string,
+): OpenClawConfig {
   return {
     ...cfg,
     agents: {
@@ -157,7 +169,10 @@ async function handleMissingSandboxImage(
   const buildHint = params.buildScript
     ? `Build it with ${params.buildScript}.`
     : "Build or pull it first.";
-  note(`Sandbox ${params.kind} image missing: ${params.image}. ${buildHint}`, "Sandbox");
+  note(
+    `Sandbox ${params.kind} image missing: ${params.image}. ${buildHint}`,
+    "Sandbox",
+  );
 
   let built = false;
   if (params.buildScript) {
@@ -232,7 +247,9 @@ export async function maybeRepairSandboxImages(
         buildScript: "scripts/sandbox-browser-setup.sh",
         updateConfig: (image) => {
           next = updateSandboxBrowserImage(next, image);
-          changes.push(`Updated agents.defaults.sandbox.browser.image → ${image}`);
+          changes.push(
+            `Updated agents.defaults.sandbox.browser.image → ${image}`,
+          );
         },
       },
       runtime,

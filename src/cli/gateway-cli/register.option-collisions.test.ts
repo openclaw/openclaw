@@ -3,10 +3,14 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { runRegisteredCli } from "../../test-utils/command-runner.js";
 import { createCliRuntimeCapture } from "../test-runtime-capture.js";
 
-const callGatewayCli = vi.fn(async (_method: string, _opts: unknown, _params?: unknown) => ({
-  ok: true,
-}));
-const gatewayStatusCommand = vi.fn(async (_opts: unknown, _runtime: unknown) => {});
+const callGatewayCli = vi.fn(
+  async (_method: string, _opts: unknown, _params?: unknown) => ({
+    ok: true,
+  }),
+);
+const gatewayStatusCommand = vi.fn(
+  async (_opts: unknown, _runtime: unknown) => {},
+);
 
 const { defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
 
@@ -29,7 +33,8 @@ vi.mock("../../runtime.js", () => ({
 }));
 
 vi.mock("../../commands/gateway-status.js", () => ({
-  gatewayStatusCommand: (opts: unknown, runtime: unknown) => gatewayStatusCommand(opts, runtime),
+  gatewayStatusCommand: (opts: unknown, runtime: unknown) =>
+    gatewayStatusCommand(opts, runtime),
 }));
 
 vi.mock("./call.js", () => ({
@@ -81,7 +86,8 @@ vi.mock("../../terminal/links.js", () => ({
 }));
 
 vi.mock("../../terminal/theme.js", () => ({
-  colorize: (_rich: boolean, _fn: (value: string) => string, value: string) => value,
+  colorize: (_rich: boolean, _fn: (value: string) => string, value: string) =>
+    value,
   isRich: () => false,
   theme: {
     heading: (value: string) => value,
@@ -100,7 +106,8 @@ vi.mock("../help-format.js", () => ({
 }));
 
 vi.mock("../progress.js", () => ({
-  withProgress: async (_opts: unknown, fn: () => Promise<unknown>) => await fn(),
+  withProgress: async (_opts: unknown, fn: () => Promise<unknown>) =>
+    await fn(),
 }));
 
 vi.mock("./discover.js", () => ({

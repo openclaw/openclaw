@@ -41,7 +41,9 @@ function getCards(): Array<{ host: HTMLElement; payload: DiffViewerPayload }> {
   const cards: Array<{ host: HTMLElement; payload: DiffViewerPayload }> = [];
   for (const card of document.querySelectorAll<HTMLElement>(".oc-diff-card")) {
     const host = card.querySelector<HTMLElement>("[data-openclaw-diff-host]");
-    const payloadNode = card.querySelector<HTMLScriptElement>("[data-openclaw-diff-payload]");
+    const payloadNode = card.querySelector<HTMLScriptElement>(
+      "[data-openclaw-diff-payload]",
+    );
     if (!host || !payloadNode) {
       continue;
     }
@@ -105,9 +107,14 @@ function createToolbarButton(params: {
   return button;
 }
 
-function applyToolbarButtonStyles(button: HTMLButtonElement, active: boolean): void {
+function applyToolbarButtonStyles(
+  button: HTMLButtonElement,
+  active: boolean,
+): void {
   button.style.color =
-    viewerState.theme === "dark" ? "rgba(226, 232, 240, 0.74)" : "rgba(15, 23, 42, 0.52)";
+    viewerState.theme === "dark"
+      ? "rgba(226, 232, 240, 0.74)"
+      : "rgba(15, 23, 42, 0.52)";
   button.dataset.active = String(active);
 }
 
@@ -166,11 +173,15 @@ function createToolbar(): HTMLElement {
 
   toolbar.append(
     createToolbarButton({
-      title: viewerState.layout === "unified" ? "Switch to split diff" : "Switch to unified diff",
+      title:
+        viewerState.layout === "unified"
+          ? "Switch to split diff"
+          : "Switch to unified diff",
       active: viewerState.layout === "split",
       iconMarkup: viewerState.layout === "split" ? splitIcon() : unifiedIcon(),
       onClick: () => {
-        viewerState.layout = viewerState.layout === "unified" ? "split" : "unified";
+        viewerState.layout =
+          viewerState.layout === "unified" ? "split" : "unified";
         syncAllControllers();
       },
     }),
@@ -204,7 +215,10 @@ function createToolbar(): HTMLElement {
 
   toolbar.append(
     createToolbarButton({
-      title: viewerState.theme === "dark" ? "Switch to light theme" : "Switch to dark theme",
+      title:
+        viewerState.theme === "dark"
+          ? "Switch to light theme"
+          : "Switch to dark theme",
       active: viewerState.theme === "dark",
       iconMarkup: themeIcon(viewerState.theme),
       onClick: () => {
@@ -217,7 +231,9 @@ function createToolbar(): HTMLElement {
   return toolbar;
 }
 
-function createRenderOptions(payload: DiffViewerPayload): FileDiffOptions<undefined> {
+function createRenderOptions(
+  payload: DiffViewerPayload,
+): FileDiffOptions<undefined> {
   return {
     theme: payload.options.theme,
     themeType: viewerState.theme,

@@ -66,7 +66,9 @@ export function createProfileAvailability({
     return await isChromeReachable(profile.cdpUrl, httpTimeoutMs);
   };
 
-  const attachRunning = (running: NonNullable<ProfileRuntimeState["running"]>) => {
+  const attachRunning = (
+    running: NonNullable<ProfileRuntimeState["running"]>,
+  ) => {
     setProfileRunning(running);
     running.proc.on("exit", () => {
       // Guard against server teardown (e.g., SIGUSR1 restart)

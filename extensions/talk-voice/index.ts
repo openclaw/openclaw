@@ -55,7 +55,10 @@ function formatVoiceList(voices: ElevenLabsVoice[], limit: number): string {
   return lines.join("\n");
 }
 
-function findVoice(voices: ElevenLabsVoice[], query: string): ElevenLabsVoice | null {
+function findVoice(
+  voices: ElevenLabsVoice[],
+  query: string,
+): ElevenLabsVoice | null {
   const q = query.trim();
   if (!q) {
     return null;
@@ -65,11 +68,15 @@ function findVoice(voices: ElevenLabsVoice[], query: string): ElevenLabsVoice | 
   if (byId) {
     return byId;
   }
-  const exactName = voices.find((v) => (v.name ?? "").trim().toLowerCase() === lower);
+  const exactName = voices.find(
+    (v) => (v.name ?? "").trim().toLowerCase() === lower,
+  );
   if (exactName) {
     return exactName;
   }
-  const partial = voices.find((v) => (v.name ?? "").trim().toLowerCase().includes(lower));
+  const partial = voices.find((v) =>
+    (v.name ?? "").trim().toLowerCase().includes(lower),
+  );
   return partial ?? null;
 }
 
@@ -108,7 +115,9 @@ export default function register(api: OpenClawPluginApi) {
       if (action === "list") {
         const limit = Number.parseInt(tokens[1] ?? "12", 10);
         const voices = await listVoices(apiKey);
-        return { text: formatVoiceList(voices, Number.isFinite(limit) ? limit : 12) };
+        return {
+          text: formatVoiceList(voices, Number.isFinite(limit) ? limit : 12),
+        };
       }
 
       if (action === "set") {

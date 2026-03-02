@@ -7,7 +7,9 @@ export const BASE_TWITCH_TEST_ACCOUNT = {
   channel: "#testchannel",
 };
 
-export function makeTwitchTestConfig(account: Record<string, unknown>): OpenClawConfig {
+export function makeTwitchTestConfig(
+  account: Record<string, unknown>,
+): OpenClawConfig {
   return {
     channels: {
       twitch: {

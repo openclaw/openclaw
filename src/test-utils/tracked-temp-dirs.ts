@@ -12,7 +12,11 @@ export function createTrackedTempDirs() {
       return dir;
     },
     async cleanup(): Promise<void> {
-      await Promise.all(dirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
+      await Promise.all(
+        dirs
+          .splice(0)
+          .map((dir) => fs.rm(dir, { recursive: true, force: true })),
+      );
     },
   };
 }

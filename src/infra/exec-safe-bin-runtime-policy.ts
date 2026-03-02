@@ -79,7 +79,9 @@ export function isInterpreterLikeSafeBin(raw: string): boolean {
   return INTERPRETER_LIKE_PATTERNS.some((pattern) => pattern.test(normalized));
 }
 
-export function listInterpreterLikeSafeBins(entries: Iterable<string>): string[] {
+export function listInterpreterLikeSafeBins(
+  entries: Iterable<string>,
+): string[] {
   return Array.from(entries)
     .map((entry) => normalizeSafeBinName(entry))
     .filter((entry) => entry.length > 0 && isInterpreterLikeSafeBin(entry))
@@ -90,7 +92,9 @@ export function resolveMergedSafeBinProfileFixtures(params: {
   global?: ExecSafeBinConfigScope | null;
   local?: ExecSafeBinConfigScope | null;
 }): Record<string, SafeBinProfileFixture> | undefined {
-  const global = normalizeSafeBinProfileFixtures(params.global?.safeBinProfiles);
+  const global = normalizeSafeBinProfileFixtures(
+    params.global?.safeBinProfiles,
+  );
   const local = normalizeSafeBinProfileFixtures(params.local?.safeBinProfiles);
   if (Object.keys(global).length === 0 && Object.keys(local).length === 0) {
     return undefined;
@@ -113,7 +117,9 @@ export function resolveExecSafeBinRuntimePolicy(params: {
   unprofiledInterpreterSafeBins: string[];
   writableTrustedSafeBinDirs: ReadonlyArray<WritableTrustedSafeBinDir>;
 } {
-  const safeBins = resolveSafeBins(params.local?.safeBins ?? params.global?.safeBins);
+  const safeBins = resolveSafeBins(
+    params.local?.safeBins ?? params.global?.safeBins,
+  );
   const safeBinProfiles = resolveSafeBinProfiles(
     resolveMergedSafeBinProfileFixtures({
       global: params.global,
@@ -151,7 +157,8 @@ export function resolveExecSafeBinRuntimePolicy(params: {
     safeBinProfiles,
     trustedSafeBinDirs,
     unprofiledSafeBins,
-    unprofiledInterpreterSafeBins: listInterpreterLikeSafeBins(unprofiledSafeBins),
+    unprofiledInterpreterSafeBins:
+      listInterpreterLikeSafeBins(unprofiledSafeBins),
     writableTrustedSafeBinDirs,
   };
 }

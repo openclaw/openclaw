@@ -12,7 +12,10 @@ import { resolveEffectiveMessagesConfig } from "../../agents/identity.js";
 import { normalizeChannelId } from "../../channels/plugins/index.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
-import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
+import {
+  INTERNAL_MESSAGE_CHANNEL,
+  normalizeMessageChannel,
+} from "../../utils/message-channel.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
@@ -56,8 +59,11 @@ export type RouteReplyResult = {
  * back to the originating channel when OriginatingChannel/OriginatingTo
  * are set.
  */
-export async function routeReply(params: RouteReplyParams): Promise<RouteReplyResult> {
-  const { payload, channel, to, accountId, threadId, cfg, abortSignal } = params;
+export async function routeReply(
+  params: RouteReplyParams,
+): Promise<RouteReplyResult> {
+  const { payload, channel, to, accountId, threadId, cfg, abortSignal } =
+    params;
   if (shouldSuppressReasoningPayload(payload)) {
     return { ok: true };
   }
@@ -116,13 +122,16 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
 
   const resolvedReplyToId =
     replyToId ??
-    (channelId === "slack" && threadId != null && threadId !== "" ? String(threadId) : undefined);
+    (channelId === "slack" && threadId != null && threadId !== ""
+      ? String(threadId)
+      : undefined);
   const resolvedThreadId = channelId === "slack" ? null : (threadId ?? null);
 
   try {
     // Provider docking: this is an execution boundary (we're about to send).
     // Keep the module cheap to import by loading outbound plumbing lazily.
-    const { deliverOutboundPayloads } = await import("../../infra/outbound/deliver.js");
+    const { deliverOutboundPayloads } =
+      await import("../../infra/outbound/deliver.js");
     const outboundSession = buildOutboundSessionContext({
       cfg,
       agentId: resolvedAgentId,

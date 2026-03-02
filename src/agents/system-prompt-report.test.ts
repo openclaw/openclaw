@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import { buildSystemPromptReport } from "./system-prompt-report.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
 
-function makeBootstrapFile(overrides: Partial<WorkspaceBootstrapFile>): WorkspaceBootstrapFile {
+function makeBootstrapFile(
+  overrides: Partial<WorkspaceBootstrapFile>,
+): WorkspaceBootstrapFile {
   return {
     name: "AGENTS.md",
     path: "/tmp/workspace/AGENTS.md",
@@ -27,31 +29,41 @@ describe("buildSystemPromptReport", () => {
       bootstrapTotalMaxChars: params.bootstrapTotalMaxChars,
       systemPrompt: "system",
       bootstrapFiles: [params.file],
-      injectedFiles: [{ path: params.injectedPath, content: params.injectedContent }],
+      injectedFiles: [
+        { path: params.injectedPath, content: params.injectedContent },
+      ],
       skillsPrompt: "",
       tools: [],
     });
 
   it("counts injected chars when injected file paths are absolute", () => {
-    const file = makeBootstrapFile({ path: "/tmp/workspace/policies/AGENTS.md" });
+    const file = makeBootstrapFile({
+      path: "/tmp/workspace/policies/AGENTS.md",
+    });
     const report = makeReport({
       file,
       injectedPath: "/tmp/workspace/policies/AGENTS.md",
       injectedContent: "trimmed",
     });
 
-    expect(report.injectedWorkspaceFiles[0]?.injectedChars).toBe("trimmed".length);
+    expect(report.injectedWorkspaceFiles[0]?.injectedChars).toBe(
+      "trimmed".length,
+    );
   });
 
   it("keeps legacy basename matching for injected files", () => {
-    const file = makeBootstrapFile({ path: "/tmp/workspace/policies/AGENTS.md" });
+    const file = makeBootstrapFile({
+      path: "/tmp/workspace/policies/AGENTS.md",
+    });
     const report = makeReport({
       file,
       injectedPath: "AGENTS.md",
       injectedContent: "trimmed",
     });
 
-    expect(report.injectedWorkspaceFiles[0]?.injectedChars).toBe("trimmed".length);
+    expect(report.injectedWorkspaceFiles[0]?.injectedChars).toBe(
+      "trimmed".length,
+    );
   });
 
   it("marks workspace files truncated when injected chars are smaller than raw chars", () => {
@@ -69,7 +81,9 @@ describe("buildSystemPromptReport", () => {
   });
 
   it("includes both bootstrap caps in the report payload", () => {
-    const file = makeBootstrapFile({ path: "/tmp/workspace/policies/AGENTS.md" });
+    const file = makeBootstrapFile({
+      path: "/tmp/workspace/policies/AGENTS.md",
+    });
     const report = makeReport({
       file,
       injectedPath: "AGENTS.md",
@@ -83,7 +97,9 @@ describe("buildSystemPromptReport", () => {
   });
 
   it("reports injectedChars=0 when injected file does not match by path or basename", () => {
-    const file = makeBootstrapFile({ path: "/tmp/workspace/policies/AGENTS.md" });
+    const file = makeBootstrapFile({
+      path: "/tmp/workspace/policies/AGENTS.md",
+    });
     const report = makeReport({
       file,
       injectedPath: "/tmp/workspace/policies/OTHER.md",
@@ -95,7 +111,9 @@ describe("buildSystemPromptReport", () => {
   });
 
   it("ignores malformed injected file paths and still matches valid entries", () => {
-    const file = makeBootstrapFile({ path: "/tmp/workspace/policies/AGENTS.md" });
+    const file = makeBootstrapFile({
+      path: "/tmp/workspace/policies/AGENTS.md",
+    });
     const report = buildSystemPromptReport({
       source: "run",
       generatedAt: 0,
@@ -110,6 +128,8 @@ describe("buildSystemPromptReport", () => {
       tools: [],
     });
 
-    expect(report.injectedWorkspaceFiles[0]?.injectedChars).toBe("trimmed".length);
+    expect(report.injectedWorkspaceFiles[0]?.injectedChars).toBe(
+      "trimmed".length,
+    );
   });
 });

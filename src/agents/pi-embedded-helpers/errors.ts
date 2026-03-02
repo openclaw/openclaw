@@ -7,11 +7,16 @@ import type { FailoverReason } from "./types.js";
 
 const log = createSubsystemLogger("errors");
 
-export function formatBillingErrorMessage(provider?: string, model?: string): string {
+export function formatBillingErrorMessage(
+  provider?: string,
+  model?: string,
+): string {
   const providerName = provider?.trim();
   const modelName = model?.trim();
   const providerLabel =
-    providerName && modelName ? `${providerName} (${modelName})` : providerName || undefined;
+    providerName && modelName
+      ? `${providerName} (${modelName})`
+      : providerName || undefined;
   if (providerLabel) {
     return `⚠️ ${providerLabel} returned a billing error — your API key has run out of credits or has an insufficient balance. Check your ${providerName} billing dashboard and top up or switch to a different API key.`;
   }
@@ -20,7 +25,8 @@ export function formatBillingErrorMessage(provider?: string, model?: string): st
 
 export const BILLING_ERROR_USER_MESSAGE = formatBillingErrorMessage();
 
-const RATE_LIMIT_ERROR_USER_MESSAGE = "⚠️ API rate limit reached. Please try again later.";
+const RATE_LIMIT_ERROR_USER_MESSAGE =
+  "⚠️ API rate limit reached. Please try again later.";
 const OVERLOADED_ERROR_USER_MESSAGE =
   "The AI service is temporarily overloaded. Please try again in a moment.";
 
@@ -84,8 +90,12 @@ export function isContextOverflowError(errorMessage?: string): boolean {
     lower.includes("context overflow:") ||
     lower.includes("exceed context limit") ||
     lower.includes("exceeds the model's maximum context") ||
-    (lower.includes("max_tokens") && lower.includes("exceed") && lower.includes("context")) ||
-    (lower.includes("input length") && lower.includes("exceed") && lower.includes("context")) ||
+    (lower.includes("max_tokens") &&
+      lower.includes("exceed") &&
+      lower.includes("context")) ||
+    (lower.includes("input length") &&
+      lower.includes("exceed") &&
+      lower.includes("context")) ||
     (lower.includes("413") && lower.includes("too large")) ||
     // Chinese proxy error messages for context overflow
     errorMessage.includes("上下文过长") ||
@@ -170,8 +180,12 @@ const BILLING_ERROR_HARD_402_RE =
 const HTTP_STATUS_PREFIX_RE = /^(?:http\s*)?(\d{3})\s+(.+)$/i;
 const HTTP_STATUS_CODE_PREFIX_RE = /^(?:http\s*)?(\d{3})(?:\s+([\s\S]+))?$/i;
 const HTML_ERROR_PREFIX_RE = /^\s*(?:<!doctype\s+html\b|<html\b)/i;
-const CLOUDFLARE_HTML_ERROR_CODES = new Set([521, 522, 523, 524, 525, 526, 530]);
-const TRANSIENT_HTTP_ERROR_CODES = new Set([500, 502, 503, 504, 521, 522, 523, 524, 529]);
+const CLOUDFLARE_HTML_ERROR_CODES = new Set([
+  521, 522, 523, 524, 525, 526, 530,
+]);
+const TRANSIENT_HTTP_ERROR_CODES = new Set([
+  500, 502, 503, 504, 521, 522, 523, 524, 529,
+]);
 const HTTP_ERROR_HINTS = [
   "error",
   "bad request",
@@ -190,7 +204,9 @@ const HTTP_ERROR_HINTS = [
   "permission",
 ];
 
-function extractLeadingHttpStatus(raw: string): { code: number; rest: string } | null {
+function extractLeadingHttpStatus(
+  raw: string,
+): { code: number; rest: string } | null {
   const match = raw.match(HTTP_STATUS_CODE_PREFIX_RE);
   if (!match) {
     return null;
@@ -218,7 +234,9 @@ export function isCloudflareOrHtmlErrorPage(raw: string): boolean {
   }
 
   return (
-    status.code < 600 && HTML_ERROR_PREFIX_RE.test(status.rest) && /<\/html>/i.test(status.rest)
+    status.code < 600 &&
+    HTML_ERROR_PREFIX_RE.test(status.rest) &&
+    /<\/html>/i.test(status.rest)
   );
 }
 
@@ -308,7 +326,10 @@ function isErrorPayloadObject(payload: unknown): payload is ErrorPayload {
   if (record.type === "error") {
     return true;
   }
-  if (typeof record.request_id === "string" || typeof record.requestId === "string") {
+  if (
+    typeof record.request_id === "string" ||
+    typeof record.requestId === "string"
+  ) {
     return true;
   }
   if ("error" in record) {
@@ -408,11 +429,16 @@ export function parseApiErrorInfo(raw?: string): ApiErrorInfo | null {
         : undefined;
 
   const topType = typeof payload.type === "string" ? payload.type : undefined;
-  const topMessage = typeof payload.message === "string" ? payload.message : undefined;
+  const topMessage =
+    typeof payload.message === "string" ? payload.message : undefined;
 
   let errType: string | undefined;
   let errMessage: string | undefined;
-  if (payload.error && typeof payload.error === "object" && !Array.isArray(payload.error)) {
+  if (
+    payload.error &&
+    typeof payload.error === "object" &&
+    !Array.isArray(payload.error)
+  ) {
     const err = payload.error as Record<string, unknown>;
     if (typeof err.type === "string") {
       errType = err.type;
@@ -465,7 +491,12 @@ export function formatRawAssistantErrorForUi(raw?: string): string {
 
 export function formatAssistantErrorText(
   msg: AssistantMessage,
-  opts?: { cfg?: OpenClawConfig; sessionKey?: string; provider?: string; model?: string },
+  opts?: {
+    cfg?: OpenClawConfig;
+    sessionKey?: string;
+    provider?: string;
+    model?: string;
+  },
 ): string | undefined {
   // Also format errors if errorMessage is present, even if stopReason isn't "error"
   const raw = (msg.errorMessage ?? "").trim();
@@ -478,7 +509,9 @@ export function formatAssistantErrorText(
 
   const unknownTool =
     raw.match(/unknown tool[:\s]+["']?([a-z0-9_-]+)["']?/i) ??
-    raw.match(/tool\s+["']?([a-z0-9_-]+)["']?\s+(?:not found|is not available)/i);
+    raw.match(
+      /tool\s+["']?([a-z0-9_-]+)["']?\s+(?:not found|is not available)/i,
+    );
   if (unknownTool?.[1]) {
     const rewritten = formatSandboxToolPolicyBlockedMessage({
       cfg: opts?.cfg,
@@ -524,7 +557,9 @@ export function formatAssistantErrorText(
     );
   }
 
-  const invalidRequest = raw.match(/"type":"invalid_request_error".*?"message":"([^"]+)"/);
+  const invalidRequest = raw.match(
+    /"type":"invalid_request_error".*?"message":"([^"]+)"/,
+  );
   if (invalidRequest?.[1]) {
     return `LLM request rejected: ${invalidRequest[1]}`;
   }
@@ -553,7 +588,10 @@ export function formatAssistantErrorText(
   return raw.length > 600 ? `${raw.slice(0, 600)}…` : raw;
 }
 
-export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boolean }): string {
+export function sanitizeUserFacingText(
+  text: string,
+  opts?: { errorContext?: boolean },
+): string {
   if (!text) {
     return text;
   }
@@ -607,7 +645,9 @@ export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boo
   return collapseConsecutiveDuplicateBlocks(withoutLeadingEmptyLines);
 }
 
-export function isRateLimitAssistantError(msg: AssistantMessage | undefined): boolean {
+export function isRateLimitAssistantError(
+  msg: AssistantMessage | undefined,
+): boolean {
   if (!msg || msg.stopReason !== "error") {
     return false;
   }
@@ -703,7 +743,10 @@ const IMAGE_DIMENSION_ERROR_RE =
 const IMAGE_DIMENSION_PATH_RE = /messages\.(\d+)\.content\.(\d+)\.image/i;
 const IMAGE_SIZE_ERROR_RE = /image exceeds\s*(\d+(?:\.\d+)?)\s*mb/i;
 
-function matchesErrorPatterns(raw: string, patterns: readonly ErrorPattern[]): boolean {
+function matchesErrorPatterns(
+  raw: string,
+  patterns: readonly ErrorPattern[],
+): boolean {
   if (!raw) {
     return false;
   }
@@ -759,10 +802,14 @@ export function isMissingToolCallInputError(raw: string): boolean {
   if (!raw) {
     return false;
   }
-  return TOOL_CALL_INPUT_MISSING_RE.test(raw) || TOOL_CALL_INPUT_PATH_RE.test(raw);
+  return (
+    TOOL_CALL_INPUT_MISSING_RE.test(raw) || TOOL_CALL_INPUT_PATH_RE.test(raw)
+  );
 }
 
-export function isBillingAssistantError(msg: AssistantMessage | undefined): boolean {
+export function isBillingAssistantError(
+  msg: AssistantMessage | undefined,
+): boolean {
   if (!msg || msg.stopReason !== "error") {
     return false;
   }
@@ -788,7 +835,10 @@ function isJsonApiInternalServerError(raw: string): boolean {
   const value = raw.toLowerCase();
   // Anthropic often wraps transient 500s in JSON payloads like:
   // {"type":"error","error":{"type":"api_error","message":"Internal server error"}}
-  return value.includes('"type":"api_error"') && value.includes("internal server error");
+  return (
+    value.includes('"type":"api_error"') &&
+    value.includes("internal server error")
+  );
 }
 
 export function parseImageDimensionError(raw: string): {
@@ -807,9 +857,15 @@ export function parseImageDimensionError(raw: string): {
   const limitMatch = raw.match(IMAGE_DIMENSION_ERROR_RE);
   const pathMatch = raw.match(IMAGE_DIMENSION_PATH_RE);
   return {
-    maxDimensionPx: limitMatch?.[1] ? Number.parseInt(limitMatch[1], 10) : undefined,
-    messageIndex: pathMatch?.[1] ? Number.parseInt(pathMatch[1], 10) : undefined,
-    contentIndex: pathMatch?.[2] ? Number.parseInt(pathMatch[2], 10) : undefined,
+    maxDimensionPx: limitMatch?.[1]
+      ? Number.parseInt(limitMatch[1], 10)
+      : undefined,
+    messageIndex: pathMatch?.[1]
+      ? Number.parseInt(pathMatch[1], 10)
+      : undefined,
+    contentIndex: pathMatch?.[2]
+      ? Number.parseInt(pathMatch[2], 10)
+      : undefined,
     raw,
   };
 }
@@ -844,10 +900,15 @@ export function isImageSizeError(errorMessage?: string): boolean {
 }
 
 export function isCloudCodeAssistFormatError(raw: string): boolean {
-  return !isImageDimensionErrorMessage(raw) && matchesErrorPatterns(raw, ERROR_PATTERNS.format);
+  return (
+    !isImageDimensionErrorMessage(raw) &&
+    matchesErrorPatterns(raw, ERROR_PATTERNS.format)
+  );
 }
 
-export function isAuthAssistantError(msg: AssistantMessage | undefined): boolean {
+export function isAuthAssistantError(
+  msg: AssistantMessage | undefined,
+): boolean {
   if (!msg || msg.stopReason !== "error") {
     return false;
   }
@@ -867,7 +928,8 @@ export function isModelNotFoundErrorMessage(raw: string): boolean {
     lower.includes("model_not_found") ||
     lower.includes("not_found_error") ||
     (lower.includes("does not exist") && lower.includes("model")) ||
-    (lower.includes("invalid model") && !lower.includes("invalid model reference"))
+    (lower.includes("invalid model") &&
+      !lower.includes("invalid model reference"))
   ) {
     return true;
   }
@@ -954,7 +1016,9 @@ export function isFailoverErrorMessage(raw: string): boolean {
   return classifyFailoverReason(raw) !== null;
 }
 
-export function isFailoverAssistantError(msg: AssistantMessage | undefined): boolean {
+export function isFailoverAssistantError(
+  msg: AssistantMessage | undefined,
+): boolean {
   if (!msg || msg.stopReason !== "error") {
     return false;
   }

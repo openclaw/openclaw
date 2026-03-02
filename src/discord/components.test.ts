@@ -34,10 +34,14 @@ describe("discord components", () => {
     const result = buildDiscordComponentMessage({ spec });
     expect(result.components).toHaveLength(1);
     expect(result.components[0]?.isV2).toBe(true);
-    expect(buildDiscordComponentMessageFlags(result.components)).toBe(MessageFlags.IsComponentsV2);
+    expect(buildDiscordComponentMessageFlags(result.components)).toBe(
+      MessageFlags.IsComponentsV2,
+    );
     expect(result.modals).toHaveLength(1);
 
-    const trigger = result.entries.find((entry) => entry.kind === "modal-trigger");
+    const trigger = result.entries.find(
+      (entry) => entry.kind === "modal-trigger",
+    );
     expect(trigger?.modalId).toBe(result.modals[0]?.id);
   });
 

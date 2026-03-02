@@ -67,7 +67,9 @@ export async function runSessionsSendA2AFlow(params: {
       let incomingMessage = latestReply;
       for (let turn = 1; turn <= params.maxPingPongTurns; turn += 1) {
         const currentRole =
-          currentSessionKey === params.requesterSessionKey ? "requester" : "target";
+          currentSessionKey === params.requesterSessionKey
+            ? "requester"
+            : "target";
         const replyPrompt = buildAgentToAgentReplyContext({
           requesterSessionKey: params.requesterSessionKey,
           requesterChannel: params.requesterChannel,
@@ -85,7 +87,9 @@ export async function runSessionsSendA2AFlow(params: {
           lane: AGENT_LANE_NESTED,
           sourceSessionKey: nextSessionKey,
           sourceChannel:
-            nextSessionKey === params.requesterSessionKey ? params.requesterChannel : targetChannel,
+            nextSessionKey === params.requesterSessionKey
+              ? params.requesterChannel
+              : targetChannel,
           sourceTool: "sessions_send",
         });
         if (!replyText || isReplySkip(replyText)) {
@@ -118,7 +122,12 @@ export async function runSessionsSendA2AFlow(params: {
       sourceChannel: params.requesterChannel,
       sourceTool: "sessions_send",
     });
-    if (announceTarget && announceReply && announceReply.trim() && !isAnnounceSkip(announceReply)) {
+    if (
+      announceTarget &&
+      announceReply &&
+      announceReply.trim() &&
+      !isAnnounceSkip(announceReply)
+    ) {
       try {
         await callGateway({
           method: "send",

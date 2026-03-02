@@ -25,7 +25,11 @@ Returns: title, plain text content, block statistics. Check `hint` field - if pr
 ### Write Document (Replace All)
 
 ```json
-{ "action": "write", "doc_token": "ABC123def", "content": "# Title\n\nMarkdown content..." }
+{
+  "action": "write",
+  "doc_token": "ABC123def",
+  "content": "# Title\n\nMarkdown content..."
+}
 ```
 
 Replaces entire document with markdown content. Supports: headings, lists, code blocks, quotes, links, images (`![](url)` auto-uploaded), bold/italic/strikethrough.
@@ -35,7 +39,11 @@ Replaces entire document with markdown content. Supports: headings, lists, code 
 ### Append Content
 
 ```json
-{ "action": "append", "doc_token": "ABC123def", "content": "Additional content" }
+{
+  "action": "append",
+  "doc_token": "ABC123def",
+  "content": "Additional content"
+}
 ```
 
 Appends markdown to end of document.

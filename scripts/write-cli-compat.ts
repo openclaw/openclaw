@@ -6,14 +6,19 @@ import {
   resolveLegacyDaemonCliAccessors,
 } from "../src/cli/daemon-cli-compat.ts";
 
-const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const rootDir = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..",
+);
 const distDir = path.join(rootDir, "dist");
 const cliDir = path.join(distDir, "cli");
 
 const findCandidates = () =>
   fs.readdirSync(distDir).filter((entry) => {
     const isDaemonCliBundle =
-      entry === "daemon-cli.js" || entry === "daemon-cli.mjs" || entry.startsWith("daemon-cli-");
+      entry === "daemon-cli.js" ||
+      entry === "daemon-cli.mjs" ||
+      entry.startsWith("daemon-cli-");
     if (!isDaemonCliBundle) {
       return false;
     }
@@ -30,7 +35,9 @@ for (let i = 0; i < 10 && candidates.length === 0; i++) {
 }
 
 if (candidates.length === 0) {
-  throw new Error("No daemon-cli bundle found in dist; cannot write legacy CLI shim.");
+  throw new Error(
+    "No daemon-cli bundle found in dist; cannot write legacy CLI shim.",
+  );
 }
 
 const orderedCandidates = candidates.toSorted();

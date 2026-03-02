@@ -156,7 +156,8 @@ export async function applyInlineDirectiveOverrides(params: {
     } = await resolveCurrentDirectiveLevels({
       sessionEntry,
       agentCfg,
-      resolveDefaultThinkingLevel: () => modelState.resolveDefaultThinkingLevel(),
+      resolveDefaultThinkingLevel: () =>
+        modelState.resolveDefaultThinkingLevel(),
     });
     const currentThinkLevel = resolvedDefaultThinkLevel;
     const directiveReply = await handleDirectiveOnly({
@@ -168,7 +169,11 @@ export async function applyInlineDirectiveOverrides(params: {
       surface: ctx.Surface,
     });
     let statusReply: ReplyPayload | undefined;
-    if (directives.hasStatusDirective && allowTextCommands && command.isAuthorizedSender) {
+    if (
+      directives.hasStatusDirective &&
+      allowTextCommands &&
+      command.isAuthorizedSender
+    ) {
       statusReply = await buildStatusReply({
         cfg,
         command,
@@ -270,7 +275,9 @@ export async function applyInlineDirectiveOverrides(params: {
   contextTokens = persisted.contextTokens;
 
   const perMessageQueueMode =
-    directives.hasQueueDirective && !directives.queueReset ? directives.queueMode : undefined;
+    directives.hasQueueDirective && !directives.queueReset
+      ? directives.queueMode
+      : undefined;
   const perMessageQueueOptions =
     directives.hasQueueDirective && !directives.queueReset
       ? {

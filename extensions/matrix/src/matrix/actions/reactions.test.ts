@@ -10,21 +10,23 @@ function createReactionsClient(params: {
   }>;
   userId?: string | null;
 }) {
-  const doRequest = vi.fn(async (_method: string, _path: string, _query: any) => ({
-    chunk: params.chunk.map((item) => ({
-      event_id: item.event_id ?? "",
-      sender: item.sender ?? "",
-      content: item.key
-        ? {
-            "m.relates_to": {
-              rel_type: "m.annotation",
-              event_id: "$target",
-              key: item.key,
-            },
-          }
-        : {},
-    })),
-  }));
+  const doRequest = vi.fn(
+    async (_method: string, _path: string, _query: any) => ({
+      chunk: params.chunk.map((item) => ({
+        event_id: item.event_id ?? "",
+        sender: item.sender ?? "",
+        content: item.key
+          ? {
+              "m.relates_to": {
+                rel_type: "m.annotation",
+                event_id: "$target",
+                key: item.key,
+              },
+            }
+          : {},
+      })),
+    }),
+  );
   const getUserId = vi.fn(async () => params.userId ?? null);
   const redactEvent = vi.fn(async () => undefined);
 
@@ -52,7 +54,10 @@ describe("matrix reaction actions", () => {
       userId: "@bot:example.org",
     });
 
-    const result = await listMatrixReactions("!room:example.org", "$msg", { client, limit: 2.9 });
+    const result = await listMatrixReactions("!room:example.org", "$msg", {
+      client,
+      limit: 2.9,
+    });
 
     expect(doRequest).toHaveBeenCalledWith(
       "GET",
@@ -64,7 +69,10 @@ describe("matrix reaction actions", () => {
         expect.objectContaining({
           key: "👍",
           count: 2,
-          users: expect.arrayContaining(["@alice:example.org", "@bob:example.org"]),
+          users: expect.arrayContaining([
+            "@alice:example.org",
+            "@bob:example.org",
+          ]),
         }),
         expect.objectContaining({
           key: "👎",
@@ -101,7 +109,9 @@ describe("matrix reaction actions", () => {
       userId: null,
     });
 
-    const result = await removeMatrixReactions("!room:example.org", "$msg", { client });
+    const result = await removeMatrixReactions("!room:example.org", "$msg", {
+      client,
+    });
 
     expect(result).toEqual({ removed: 0 });
     expect(redactEvent).not.toHaveBeenCalled();

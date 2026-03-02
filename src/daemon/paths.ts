@@ -4,7 +4,9 @@ import { resolveGatewayProfileSuffix } from "./constants.js";
 const windowsAbsolutePath = /^[a-zA-Z]:[\\/]/;
 const windowsUncPath = /^\\\\/;
 
-export function resolveHomeDir(env: Record<string, string | undefined>): string {
+export function resolveHomeDir(
+  env: Record<string, string | undefined>,
+): string {
   const home = env.HOME?.trim() || env.USERPROFILE?.trim();
   if (!home) {
     throw new Error("Missing HOME");
@@ -30,7 +32,9 @@ export function resolveUserPathWithHome(input: string, home?: string): string {
   return path.resolve(trimmed);
 }
 
-export function resolveGatewayStateDir(env: Record<string, string | undefined>): string {
+export function resolveGatewayStateDir(
+  env: Record<string, string | undefined>,
+): string {
   const override = env.OPENCLAW_STATE_DIR?.trim();
   if (override) {
     const home = override.startsWith("~") ? resolveHomeDir(env) : undefined;

@@ -25,7 +25,10 @@ import type { DaemonInstallOptions } from "./types.js";
 
 export async function runDaemonInstall(opts: DaemonInstallOptions) {
   const json = Boolean(opts.json);
-  const { stdout, warnings, emit, fail } = createDaemonActionContext({ action: "install", json });
+  const { stdout, warnings, emit, fail } = createDaemonActionContext({
+    action: "install",
+    json,
+  });
 
   if (resolveIsNixMode(process.env)) {
     fail("Nix mode detected; service install is disabled.");
@@ -43,7 +46,9 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     fail("Invalid port");
     return;
   }
-  const runtimeRaw = opts.runtime ? String(opts.runtime) : DEFAULT_GATEWAY_DAEMON_RUNTIME;
+  const runtimeRaw = opts.runtime
+    ? String(opts.runtime)
+    : DEFAULT_GATEWAY_DAEMON_RUNTIME;
   if (!isGatewayDaemonRuntime(runtimeRaw)) {
     fail('Invalid --runtime (use "node" or "bun")');
     return;
@@ -82,7 +87,9 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     tailscaleMode: cfg.gateway?.tailscale?.mode ?? "off",
   });
   const needsToken =
-    resolvedAuth.mode === "token" && !resolvedAuth.token && !resolvedAuth.allowTailscale;
+    resolvedAuth.mode === "token" &&
+    !resolvedAuth.token &&
+    !resolvedAuth.allowTailscale;
 
   let token: string | undefined =
     opts.token ||
@@ -92,7 +99,8 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
 
   if (!token && needsToken) {
     token = randomToken();
-    const warnMsg = "No gateway token found. Auto-generated one and saving to config.";
+    const warnMsg =
+      "No gateway token found. Auto-generated one and saving to config.";
     if (json) {
       warnings.push(warnMsg);
     } else {
@@ -107,7 +115,8 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
       if (snapshot.exists && !snapshot.valid) {
         // Config file exists but is corrupt/unparseable — don't risk overwriting.
         // Token is still embedded in the plist EnvironmentVariables.
-        const msg = "Warning: config file exists but is invalid; skipping token persistence.";
+        const msg =
+          "Warning: config file exists but is invalid; skipping token persistence.";
         if (json) {
           warnings.push(msg);
         } else {
@@ -143,20 +152,21 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     }
   }
 
-  const { programArguments, workingDirectory, environment } = await buildGatewayInstallPlan({
-    env: process.env,
-    port,
-    token,
-    runtime: runtimeRaw,
-    warn: (message) => {
-      if (json) {
-        warnings.push(message);
-      } else {
-        defaultRuntime.log(message);
-      }
-    },
-    config: cfg,
-  });
+  const { programArguments, workingDirectory, environment } =
+    await buildGatewayInstallPlan({
+      env: process.env,
+      port,
+      token,
+      runtime: runtimeRaw,
+      warn: (message) => {
+        if (json) {
+          warnings.push(message);
+        } else {
+          defaultRuntime.log(message);
+        }
+      },
+      config: cfg,
+    });
 
   await installDaemonServiceAndEmit({
     serviceNoun: "Gateway",

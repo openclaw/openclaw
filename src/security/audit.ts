@@ -105,7 +105,9 @@ export type SecurityAuditOptions = {
   execDockerRawFn?: typeof execDockerRaw;
 };
 
-function countBySeverity(findings: SecurityAuditFinding[]): SecurityAuditSummary {
+function countBySeverity(
+  findings: SecurityAuditFinding[],
+): SecurityAuditSummary {
   let critical = 0;
   let warn = 0;
   let info = 0;
@@ -121,7 +123,9 @@ function countBySeverity(findings: SecurityAuditFinding[]): SecurityAuditSummary
   return { critical, warn, info };
 }
 
-function normalizeAllowFromList(list: Array<string | number> | undefined | null): string[] {
+function normalizeAllowFromList(
+  list: Array<string | number> | undefined | null,
+): string[] {
   if (!Array.isArray(list)) {
     return [];
   }
@@ -316,9 +320,14 @@ function collectGatewayConfigFindings(
 ): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
 
-  const bind = typeof cfg.gateway?.bind === "string" ? cfg.gateway.bind : "loopback";
+  const bind =
+    typeof cfg.gateway?.bind === "string" ? cfg.gateway.bind : "loopback";
   const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
-  const auth = resolveGatewayAuth({ authConfig: cfg.gateway?.auth, tailscaleMode, env });
+  const auth = resolveGatewayAuth({
+    authConfig: cfg.gateway?.auth,
+    tailscaleMode,
+    env,
+  });
   const controlUiEnabled = cfg.gateway?.controlUi?.enabled !== false;
   const controlUiAllowedOrigins = (cfg.gateway?.controlUi?.allowedOrigins ?? [])
     .map((value) => value.trim())
@@ -328,10 +337,13 @@ function collectGatewayConfigFindings(
   const trustedProxies = Array.isArray(cfg.gateway?.trustedProxies)
     ? cfg.gateway.trustedProxies
     : [];
-  const hasToken = typeof auth.token === "string" && auth.token.trim().length > 0;
-  const hasPassword = typeof auth.password === "string" && auth.password.trim().length > 0;
+  const hasToken =
+    typeof auth.token === "string" && auth.token.trim().length > 0;
+  const hasPassword =
+    typeof auth.password === "string" && auth.password.trim().length > 0;
   const hasSharedSecret =
-    (auth.mode === "token" && hasToken) || (auth.mode === "password" && hasPassword);
+    (auth.mode === "token" && hasToken) ||
+    (auth.mode === "password" && hasPassword);
   const hasTailscaleAuth = auth.allowTailscale && tailscaleMode === "serve";
   const hasGatewayAuth = hasSharedSecret || hasTailscaleAuth;
   const allowRealIpFallback = cfg.gateway?.allowRealIpFallback === true;
@@ -364,7 +376,11 @@ function collectGatewayConfigFindings(
         "If you keep them enabled, keep gateway.bind loopback-only (or tailnet-only), restrict network exposure, and treat the gateway token/password as full-admin.",
     });
   }
-  if (bind !== "loopback" && !hasSharedSecret && auth.mode !== "trusted-proxy") {
+  if (
+    bind !== "loopback" &&
+    !hasSharedSecret &&
+    auth.mode !== "trusted-proxy"
+  ) {
     findings.push({
       checkId: "gateway.bind_no_auth",
       severity: "critical",
@@ -396,7 +412,8 @@ function collectGatewayConfigFindings(
       detail:
         "gateway.bind is loopback but no gateway auth secret is configured. " +
         "If the Control UI is exposed through a reverse proxy, unauthenticated access is possible.",
-      remediation: "Set gateway.auth (token recommended) or keep the Control UI local-only.",
+      remediation:
+        "Set gateway.auth (token recommended) or keep the Control UI local-only.",
     });
   }
   if (
@@ -448,7 +465,8 @@ function collectGatewayConfigFindings(
       (proxy) => !isStrictLoopbackTrustedProxyEntry(proxy),
     );
     const exposed =
-      bind !== "loopback" || (auth.mode === "trusted-proxy" && hasNonLoopbackTrustedProxy);
+      bind !== "loopback" ||
+      (auth.mode === "trusted-proxy" && hasNonLoopbackTrustedProxy);
     findings.push({
       checkId: "gateway.real_ip_fallback_enabled",
       severity: exposed ? "critical" : "warn",
@@ -500,7 +518,8 @@ function collectGatewayConfigFindings(
       title: "Control UI insecure auth toggle enabled",
       detail:
         "gateway.controlUi.allowInsecureAuth=true does not bypass secure context or device identity checks; only dangerouslyDisableDeviceAuth disables Control UI device identity checks.",
-      remediation: "Disable it or switch to HTTPS (Tailscale Serve) or localhost.",
+      remediation:
+        "Disable it or switch to HTTPS (Tailscale Serve) or localhost.",
     });
   }
 
@@ -511,7 +530,8 @@ function collectGatewayConfigFindings(
       title: "DANGEROUS: Control UI device auth disabled",
       detail:
         "gateway.controlUi.dangerouslyDisableDeviceAuth=true disables device identity checks for the Control UI.",
-      remediation: "Disable it unless you are in a short-lived break-glass scenario.",
+      remediation:
+        "Disable it unless you are in a short-lived break-glass scenario.",
     });
   }
 
@@ -540,7 +560,9 @@ function collectGatewayConfigFindings(
   }
 
   const token =
-    typeof auth.token === "string" && auth.token.trim().length > 0 ? auth.token.trim() : null;
+    typeof auth.token === "string" && auth.token.trim().length > 0
+      ? auth.token.trim()
+      : null;
   if (auth.mode === "token" && token && token.length < 24) {
     findings.push({
       checkId: "gateway.token_too_short",
@@ -577,7 +599,8 @@ function collectGatewayConfigFindings(
         detail:
           'gateway.auth.mode="trusted-proxy" but gateway.trustedProxies is empty. ' +
           "All requests will be rejected.",
-        remediation: "Set gateway.trustedProxies to the IP(s) of your reverse proxy.",
+        remediation:
+          "Set gateway.trustedProxies to the IP(s) of your reverse proxy.",
       });
     }
 
@@ -609,7 +632,11 @@ function collectGatewayConfigFindings(
     }
   }
 
-  if (bind !== "loopback" && auth.mode !== "trusted-proxy" && !cfg.gateway?.auth?.rateLimit) {
+  if (
+    bind !== "loopback" &&
+    auth.mode !== "trusted-proxy" &&
+    !cfg.gateway?.auth?.rateLimit
+  ) {
     findings.push({
       checkId: "gateway.auth_no_rate_limit",
       severity: "warn",
@@ -768,7 +795,9 @@ function collectElevatedFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
   return findings;
 }
 
-function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
+function collectExecRuntimeFindings(
+  cfg: OpenClawConfig,
+): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
   const globalExecHost = cfg.tools?.exec?.host;
   const defaultSandboxMode = resolveSandboxConfigForAgent(cfg).mode;
@@ -820,7 +849,9 @@ function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[]
     return Array.from(
       new Set(
         entries
-          .map((entry) => (typeof entry === "string" ? entry.trim().toLowerCase() : ""))
+          .map((entry) =>
+            typeof entry === "string" ? entry.trim().toLowerCase() : "",
+          )
           .filter((entry) => entry.length > 0),
       ),
     ).toSorted();
@@ -875,13 +906,18 @@ function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[]
 
   const globalExec = cfg.tools?.exec;
   const riskyTrustedDirHits: string[] = [];
-  const collectRiskyTrustedDirHits = (scopePath: string, entries: unknown): void => {
+  const collectRiskyTrustedDirHits = (
+    scopePath: string,
+    entries: unknown,
+  ): void => {
     for (const entry of normalizeConfiguredTrustedDirs(entries)) {
       const reason = classifyRiskySafeBinTrustedDir(entry);
       if (!reason) {
         continue;
       }
-      riskyTrustedDirHits.push(`- ${scopePath}.safeBinTrustedDirs: ${entry} (${reason})`);
+      riskyTrustedDirHits.push(
+        `- ${scopePath}.safeBinTrustedDirs: ${entry} (${reason})`,
+      );
     }
   };
   collectRiskyTrustedDirHits("tools.exec", globalExec?.safeBinTrustedDirs);
@@ -898,8 +934,11 @@ function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[]
   const interpreterHits: string[] = [];
   const globalSafeBins = normalizeConfiguredSafeBins(globalExec?.safeBins);
   if (globalSafeBins.length > 0) {
-    const merged = resolveMergedSafeBinProfileFixtures({ global: globalExec }) ?? {};
-    const interpreters = listInterpreterLikeSafeBins(globalSafeBins).filter((bin) => !merged[bin]);
+    const merged =
+      resolveMergedSafeBinProfileFixtures({ global: globalExec }) ?? {};
+    const interpreters = listInterpreterLikeSafeBins(globalSafeBins).filter(
+      (bin) => !merged[bin],
+    );
     if (interpreters.length > 0) {
       interpreterHits.push(`- tools.exec.safeBins: ${interpreters.join(", ")}`);
     }
@@ -919,7 +958,9 @@ function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[]
         global: globalExec,
         local: agentExec,
       }) ?? {};
-    const interpreters = listInterpreterLikeSafeBins(agentSafeBins).filter((bin) => !merged[bin]);
+    const interpreters = listInterpreterLikeSafeBins(agentSafeBins).filter(
+      (bin) => !merged[bin],
+    );
     if (interpreters.length === 0) {
       continue;
     }
@@ -932,7 +973,8 @@ function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[]
     findings.push({
       checkId: "tools.exec.safe_bins_interpreter_unprofiled",
       severity: "warn",
-      title: "safeBins includes interpreter/runtime binaries without explicit profiles",
+      title:
+        "safeBins includes interpreter/runtime binaries without explicit profiles",
       detail:
         `Detected interpreter-like safeBins entries missing explicit profiles:\n${interpreterHits.join("\n")}\n` +
         "These entries can turn safeBins into a broad execution surface when used with permissive argv profiles.",
@@ -969,24 +1011,36 @@ async function maybeProbeGateway(params: {
   const url = connection.url;
   const isRemoteMode = params.cfg.gateway?.mode === "remote";
   const remoteUrlRaw =
-    typeof params.cfg.gateway?.remote?.url === "string" ? params.cfg.gateway.remote.url.trim() : "";
+    typeof params.cfg.gateway?.remote?.url === "string"
+      ? params.cfg.gateway.remote.url.trim()
+      : "";
   const remoteUrlMissing = isRemoteMode && !remoteUrlRaw;
 
   const auth =
     !isRemoteMode || remoteUrlMissing
-      ? resolveGatewayProbeAuth({ cfg: params.cfg, env: params.env, mode: "local" })
-      : resolveGatewayProbeAuth({ cfg: params.cfg, env: params.env, mode: "remote" });
-  const res = await params.probe({ url, auth, timeoutMs: params.timeoutMs }).catch((err) => ({
-    ok: false,
-    url,
-    connectLatencyMs: null,
-    error: String(err),
-    close: null,
-    health: null,
-    status: null,
-    presence: null,
-    configSnapshot: null,
-  }));
+      ? resolveGatewayProbeAuth({
+          cfg: params.cfg,
+          env: params.env,
+          mode: "local",
+        })
+      : resolveGatewayProbeAuth({
+          cfg: params.cfg,
+          env: params.env,
+          mode: "remote",
+        });
+  const res = await params
+    .probe({ url, auth, timeoutMs: params.timeoutMs })
+    .catch((err) => ({
+      ok: false,
+      url,
+      connectLatencyMs: null,
+      error: String(err),
+      close: null,
+      health: null,
+      status: null,
+      presence: null,
+      configSnapshot: null,
+    }));
 
   return {
     gateway: {
@@ -994,12 +1048,16 @@ async function maybeProbeGateway(params: {
       url,
       ok: res.ok,
       error: res.ok ? null : res.error,
-      close: res.close ? { code: res.close.code, reason: res.close.reason } : null,
+      close: res.close
+        ? { code: res.close.code, reason: res.close.reason }
+        : null,
     },
   };
 }
 
-export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<SecurityAuditReport> {
+export async function runSecurityAudit(
+  opts: SecurityAuditOptions,
+): Promise<SecurityAuditReport> {
   const findings: SecurityAuditFinding[] = [];
   const cfg = opts.config;
   const env = opts.env ?? process.env;
@@ -1047,11 +1105,22 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
     );
     if (configSnapshot) {
       findings.push(
-        ...(await collectIncludeFilePermFindings({ configSnapshot, env, platform, execIcacls })),
+        ...(await collectIncludeFilePermFindings({
+          configSnapshot,
+          env,
+          platform,
+          execIcacls,
+        })),
       );
     }
     findings.push(
-      ...(await collectStateDeepFilesystemFindings({ cfg, env, stateDir, platform, execIcacls })),
+      ...(await collectStateDeepFilesystemFindings({
+        cfg,
+        env,
+        stateDir,
+        platform,
+        execIcacls,
+      })),
     );
     findings.push(
       ...(await collectSandboxBrowserHashLabelFindings({
@@ -1061,7 +1130,9 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
     findings.push(...(await collectPluginsTrustFindings({ cfg, stateDir })));
     if (opts.deep === true) {
       findings.push(...(await collectPluginsCodeSafetyFindings({ stateDir })));
-      findings.push(...(await collectInstalledSkillsCodeSafetyFindings({ cfg, stateDir })));
+      findings.push(
+        ...(await collectInstalledSkillsCodeSafetyFindings({ cfg, stateDir })),
+      );
     }
   }
 

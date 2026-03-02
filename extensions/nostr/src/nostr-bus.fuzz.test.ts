@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { createMetrics, type MetricName } from "./metrics.js";
-import { validatePrivateKey, isValidPubkey, normalizePubkey } from "./nostr-bus.js";
+import {
+  validatePrivateKey,
+  isValidPubkey,
+  normalizePubkey,
+} from "./nostr-bus.js";
 import { createSeenTracker } from "./seen-tracker.js";
 
 // ============================================================================
@@ -14,7 +18,9 @@ describe("validatePrivateKey fuzz", () => {
     });
 
     it("rejects undefined input", () => {
-      expect(() => validatePrivateKey(undefined as unknown as string)).toThrow();
+      expect(() =>
+        validatePrivateKey(undefined as unknown as string),
+      ).toThrow();
     });
 
     it("rejects number input", () => {
@@ -34,7 +40,9 @@ describe("validatePrivateKey fuzz", () => {
     });
 
     it("rejects function input", () => {
-      expect(() => validatePrivateKey((() => {}) as unknown as string)).toThrow();
+      expect(() =>
+        validatePrivateKey((() => {}) as unknown as string),
+      ).toThrow();
     });
   });
 
@@ -47,51 +55,60 @@ describe("validatePrivateKey fuzz", () => {
     });
 
     it("rejects RTL override", () => {
-      const withRtl = "\u202E0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+      const withRtl =
+        "\u202E0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
       expect(() => validatePrivateKey(withRtl)).toThrow();
     });
 
     it("rejects homoglyph 'a' (Cyrillic а)", () => {
       // Using Cyrillic 'а' (U+0430) instead of Latin 'a'
-      const withCyrillicA = "0123456789\u0430bcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+      const withCyrillicA =
+        "0123456789\u0430bcdef0123456789abcdef0123456789abcdef0123456789abcdef";
       expect(() => validatePrivateKey(withCyrillicA)).toThrow();
     });
 
     it("rejects emoji", () => {
-      const withEmoji = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789ab😀";
+      const withEmoji =
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789ab😀";
       expect(() => validatePrivateKey(withEmoji)).toThrow();
     });
 
     it("rejects combining characters", () => {
       // 'a' followed by combining acute accent
-      const withCombining = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde\u0301";
+      const withCombining =
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde\u0301";
       expect(() => validatePrivateKey(withCombining)).toThrow();
     });
   });
 
   describe("injection attempts", () => {
     it("rejects null byte injection", () => {
-      const withNullByte = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde\x00f";
+      const withNullByte =
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde\x00f";
       expect(() => validatePrivateKey(withNullByte)).toThrow();
     });
 
     it("rejects newline injection", () => {
-      const withNewline = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde\nf";
+      const withNewline =
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde\nf";
       expect(() => validatePrivateKey(withNewline)).toThrow();
     });
 
     it("rejects carriage return injection", () => {
-      const withCR = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde\rf";
+      const withCR =
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde\rf";
       expect(() => validatePrivateKey(withCR)).toThrow();
     });
 
     it("rejects tab injection", () => {
-      const withTab = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde\tf";
+      const withTab =
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde\tf";
       expect(() => validatePrivateKey(withTab)).toThrow();
     });
 
     it("rejects form feed injection", () => {
-      const withFormFeed = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde\ff";
+      const withFormFeed =
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde\ff";
       expect(() => validatePrivateKey(withFormFeed)).toThrow();
     });
   });
@@ -117,7 +134,8 @@ describe("validatePrivateKey fuzz", () => {
   describe("nsec format edge cases", () => {
     it("rejects nsec with invalid bech32 characters", () => {
       // 'b', 'i', 'o' are not valid bech32 characters
-      const invalidBech32 = "nsec1qypqxpq9qtpqscx7peytbfwtdjmcv0mrz5rjpej8vjppfkqfqy8skqfv3l";
+      const invalidBech32 =
+        "nsec1qypqxpq9qtpqscx7peytbfwtdjmcv0mrz5rjpej8vjppfkqfqy8skqfv3l";
       expect(() => validatePrivateKey(invalidBech32)).toThrow();
     });
 
@@ -190,14 +208,18 @@ describe("normalizePubkey fuzz", () => {
 
   describe("case sensitivity", () => {
     it("normalizes uppercase to lowercase", () => {
-      const upper = "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF";
-      const lower = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+      const upper =
+        "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF";
+      const lower =
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
       expect(normalizePubkey(upper)).toBe(lower);
     });
 
     it("normalizes mixed case to lowercase", () => {
-      const mixed = "0123456789AbCdEf0123456789AbCdEf0123456789AbCdEf0123456789AbCdEf";
-      const lower = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+      const mixed =
+        "0123456789AbCdEf0123456789AbCdEf0123456789AbCdEf0123456789AbCdEf";
+      const lower =
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
       expect(normalizePubkey(mixed)).toBe(lower);
     });
   });
@@ -346,7 +368,9 @@ describe("Metrics fuzz", () => {
     it("handles undefined relay label", () => {
       const metrics = createMetrics();
       expect(() => {
-        metrics.emit("relay.connect", 1, { relay: undefined as unknown as string });
+        metrics.emit("relay.connect", 1, {
+          relay: undefined as unknown as string,
+        });
       }).not.toThrow();
     });
 
@@ -447,7 +471,8 @@ describe("Event shape validation", () => {
       for (const event of malformedEvents) {
         // These should be caught by shape validation before processing
         const hasId = typeof event?.id === "string";
-        const hasPubkey = typeof (event as { pubkey?: unknown })?.pubkey === "string";
+        const hasPubkey =
+          typeof (event as { pubkey?: unknown })?.pubkey === "string";
         const hasTags = Array.isArray((event as { tags?: unknown })?.tags);
 
         // At least one should be invalid
@@ -478,7 +503,9 @@ describe("Event shape validation", () => {
           Number.isInteger(value);
 
         // Timestamps should be validated as positive integers
-        if (["NaN", "Infinity", "-Infinity", "negative", "float"].includes(desc)) {
+        if (
+          ["NaN", "Infinity", "-Infinity", "negative", "float"].includes(desc)
+        ) {
           expect(isValidTimestamp).toBe(false);
         }
       });
@@ -521,7 +548,9 @@ describe("JSON parsing edge cases", () => {
       if (!parseError) {
         // If it parsed, we need to validate the structure
         const isValidRelayMessage =
-          Array.isArray(parsed) && parsed.length >= 2 && typeof parsed[0] === "string";
+          Array.isArray(parsed) &&
+          parsed.length >= 2 &&
+          typeof parsed[0] === "string";
 
         // Most malformed cases won't produce valid relay messages
         if (["null literal", "plain number", "plain string"].includes(desc)) {

@@ -9,7 +9,11 @@ import {
 import type { NostrProfile } from "./config-schema.js";
 import { NostrConfigSchema } from "./config-schema.js";
 import type { MetricEvent, MetricsSnapshot } from "./metrics.js";
-import { normalizePubkey, startNostrBus, type NostrBusHandle } from "./nostr-bus.js";
+import {
+  normalizePubkey,
+  startNostrBus,
+  type NostrBusHandle,
+} from "./nostr-bus.js";
 import type { ProfilePublishResult } from "./nostr-profile.js";
 import { getNostrRuntime } from "./runtime.js";
 import {
@@ -56,8 +60,8 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
       publicKey: account.publicKey,
     }),
     resolveAllowFrom: ({ cfg, accountId }) =>
-      (resolveNostrAccount({ cfg, accountId }).config.allowFrom ?? []).map((entry) =>
-        String(entry),
+      (resolveNostrAccount({ cfg, accountId }).config.allowFrom ?? []).map(
+        (entry) => String(entry),
       ),
     formatAllowFrom: ({ allowFrom }) =>
       allowFrom
@@ -147,7 +151,10 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
         channel: "nostr",
         accountId: aid,
       });
-      const message = core.channel.text.convertMarkdownTables(text ?? "", tableMode);
+      const message = core.channel.text.convertMarkdownTables(
+        text ?? "",
+        tableMode,
+      );
       const normalizedTo = normalizePubkey(to);
       await bus.sendDm(normalizedTo, message);
       return {
@@ -160,7 +167,8 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
 
   status: {
     defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
-    collectStatusIssues: (accounts) => collectStatusIssuesFromLastError("nostr", accounts),
+    collectStatusIssues: (accounts) =>
+      collectStatusIssuesFromLastError("nostr", accounts),
     buildChannelSummary: ({ snapshot }) => ({
       configured: snapshot.configured ?? false,
       publicKey: snapshot.publicKey ?? null,
@@ -216,7 +224,9 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
 
           // Forward to OpenClaw's message pipeline
           await (
-            runtime.channel.reply as { handleInboundMessage?: (params: unknown) => Promise<void> }
+            runtime.channel.reply as {
+              handleInboundMessage?: (params: unknown) => Promise<void>;
+            }
           ).handleInboundMessage?.({
             channel: "nostr",
             accountId: account.accountId,
@@ -230,16 +240,24 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
           });
         },
         onError: (error, context) => {
-          ctx.log?.error?.(`[${account.accountId}] Nostr error (${context}): ${error.message}`);
+          ctx.log?.error?.(
+            `[${account.accountId}] Nostr error (${context}): ${error.message}`,
+          );
         },
         onConnect: (relay) => {
-          ctx.log?.debug?.(`[${account.accountId}] Connected to relay: ${relay}`);
+          ctx.log?.debug?.(
+            `[${account.accountId}] Connected to relay: ${relay}`,
+          );
         },
         onDisconnect: (relay) => {
-          ctx.log?.debug?.(`[${account.accountId}] Disconnected from relay: ${relay}`);
+          ctx.log?.debug?.(
+            `[${account.accountId}] Disconnected from relay: ${relay}`,
+          );
         },
         onEose: (relays) => {
-          ctx.log?.debug?.(`[${account.accountId}] EOSE received from relays: ${relays}`);
+          ctx.log?.debug?.(
+            `[${account.accountId}] EOSE received from relays: ${relays}`,
+          );
         },
         onMetric: (event: MetricEvent) => {
           // Log significant metrics at appropriate levels
@@ -256,7 +274,9 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
               `[${account.accountId}] Circuit breaker closed for relay: ${event.labels?.relay}`,
             );
           } else if (event.name === "relay.error") {
-            ctx.log?.debug?.(`[${account.accountId}] Relay error: ${event.labels?.relay}`);
+            ctx.log?.debug?.(
+              `[${account.accountId}] Relay error: ${event.labels?.relay}`,
+            );
           }
           // Update cached metrics snapshot
           if (busHandle) {
@@ -332,7 +352,9 @@ export async function publishNostrProfile(
  * @param accountId - Account ID (defaults to "default")
  * @returns Profile publish state or null if account not running
  */
-export async function getNostrProfileState(accountId: string = DEFAULT_ACCOUNT_ID): Promise<{
+export async function getNostrProfileState(
+  accountId: string = DEFAULT_ACCOUNT_ID,
+): Promise<{
   lastPublishedAt: number | null;
   lastPublishedEventId: string | null;
   lastPublishResults: Record<string, "ok" | "failed" | "timeout"> | null;

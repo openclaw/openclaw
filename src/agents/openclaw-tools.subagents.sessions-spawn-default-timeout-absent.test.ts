@@ -18,7 +18,9 @@ function configureDefaultsWithoutTimeout() {
   });
 }
 
-function readSpawnTimeout(calls: Array<{ method?: string; params?: unknown }>): number | undefined {
+function readSpawnTimeout(
+  calls: Array<{ method?: string; params?: unknown }>,
+): number | undefined {
   const spawn = calls.find((entry) => {
     if (entry.method !== "agent") {
       return false;
@@ -40,7 +42,9 @@ describe("sessions_spawn default runTimeoutSeconds (config absent)", () => {
   it("falls back to 0 (no timeout) when config key is absent", async () => {
     configureDefaultsWithoutTimeout();
     const gateway = setupSessionsSpawnGatewayMock({});
-    const tool = await getSessionsSpawnTool({ agentSessionKey: MAIN_SESSION_KEY });
+    const tool = await getSessionsSpawnTool({
+      agentSessionKey: MAIN_SESSION_KEY,
+    });
 
     const result = await tool.execute("call-1", { task: "hello" });
     expect(result.details).toMatchObject({ status: "accepted" });

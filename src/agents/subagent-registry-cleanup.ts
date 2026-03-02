@@ -41,14 +41,18 @@ export function resolveDeferredCleanupDecision(params: {
   resolveAnnounceRetryDelayMs: (retryCount: number) => number;
 }): DeferredCleanupDecision {
   const endedAgo = resolveEndedAgoMs(params.entry, params.now);
-  const isCompletionMessageFlow = params.entry.expectsCompletionMessage === true;
+  const isCompletionMessageFlow =
+    params.entry.expectsCompletionMessage === true;
   const completionHardExpiryExceeded =
     isCompletionMessageFlow && endedAgo > params.announceCompletionHardExpiryMs;
   if (isCompletionMessageFlow && params.activeDescendantRuns > 0) {
     if (completionHardExpiryExceeded) {
       return { kind: "give-up", reason: "expiry" };
     }
-    return { kind: "defer-descendants", delayMs: params.deferDescendantDelayMs };
+    return {
+      kind: "defer-descendants",
+      delayMs: params.deferDescendantDelayMs,
+    };
   }
 
   const retryCount = (params.entry.announceRetryCount ?? 0) + 1;
@@ -58,7 +62,8 @@ export function resolveDeferredCleanupDecision(params: {
   if (retryCount >= params.maxAnnounceRetryCount || expiryExceeded) {
     return {
       kind: "give-up",
-      reason: retryCount >= params.maxAnnounceRetryCount ? "retry-limit" : "expiry",
+      reason:
+        retryCount >= params.maxAnnounceRetryCount ? "retry-limit" : "expiry",
       retryCount,
     };
   }

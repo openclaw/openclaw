@@ -1,14 +1,21 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { readJsonBodyWithLimit, requestBodyErrorToText } from "../infra/http-body.js";
+import {
+  readJsonBodyWithLimit,
+  requestBodyErrorToText,
+} from "../infra/http-body.js";
 import type { FixedWindowRateLimiter } from "./webhook-memory-guards.js";
 
-export function isJsonContentType(value: string | string[] | undefined): boolean {
+export function isJsonContentType(
+  value: string | string[] | undefined,
+): boolean {
   const first = Array.isArray(value) ? value[0] : value;
   if (!first) {
     return false;
   }
   const mediaType = first.split(";", 1)[0]?.trim().toLowerCase();
-  return mediaType === "application/json" || Boolean(mediaType?.endsWith("+json"));
+  return (
+    mediaType === "application/json" || Boolean(mediaType?.endsWith("+json"))
+  );
 }
 
 export function applyBasicWebhookRequestGuards(params: {
@@ -31,7 +38,10 @@ export function applyBasicWebhookRequestGuards(params: {
   if (
     params.rateLimiter &&
     params.rateLimitKey &&
-    params.rateLimiter.isRateLimited(params.rateLimitKey, params.nowMs ?? Date.now())
+    params.rateLimiter.isRateLimited(
+      params.rateLimitKey,
+      params.nowMs ?? Date.now(),
+    )
   ) {
     params.res.statusCode = 429;
     params.res.end("Too Many Requests");
@@ -69,7 +79,11 @@ export async function readJsonWebhookBodyOrReject(params: {
   }
 
   params.res.statusCode =
-    body.code === "PAYLOAD_TOO_LARGE" ? 413 : body.code === "REQUEST_BODY_TIMEOUT" ? 408 : 400;
+    body.code === "PAYLOAD_TOO_LARGE"
+      ? 413
+      : body.code === "REQUEST_BODY_TIMEOUT"
+        ? 408
+        : 400;
   const message =
     body.code === "PAYLOAD_TOO_LARGE"
       ? requestBodyErrorToText("PAYLOAD_TOO_LARGE")

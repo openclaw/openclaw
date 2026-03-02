@@ -149,7 +149,9 @@ vi.mock("ws", () => {
 // Type alias for the mock class (improves test readability)
 // ─────────────────────────────────────────────────────────────────────────────
 
-type MockWS = typeof MockWebSocket extends { new (...a: infer _): infer R } ? R : never;
+type MockWS = typeof MockWebSocket extends { new (...a: infer _): infer R }
+  ? R
+  : never;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -163,7 +165,9 @@ function lastSocket(): MockWS {
   return sock;
 }
 
-function buildManager(opts?: ConstructorParameters<typeof OpenAIWebSocketManager>[0]) {
+function buildManager(
+  opts?: ConstructorParameters<typeof OpenAIWebSocketManager>[0],
+) {
   return new OpenAIWebSocketManager({
     // Use faster backoff in tests to avoid slow timer waits
     backoffDelaysMs: [10, 20, 40, 80, 160],
@@ -282,11 +286,15 @@ describe("OpenAIWebSocketManager", () => {
         type: "response.create",
         model: "gpt-5.2",
         previous_response_id: "resp_abc123",
-        input: [{ type: "function_call_output", call_id: "call_1", output: "result" }],
+        input: [
+          { type: "function_call_output", call_id: "call_1", output: "result" },
+        ],
       };
       manager.send(event);
 
-      const sent = JSON.parse(sock.sentMessages[0] ?? "{}") as ResponseCreateEvent;
+      const sent = JSON.parse(
+        sock.sentMessages[0] ?? "{}",
+      ) as ResponseCreateEvent;
       expect(sent.previous_response_id).toBe("resp_abc123");
     });
   });
@@ -327,9 +335,15 @@ describe("OpenAIWebSocketManager", () => {
       const received: OpenAIWebSocketEvent[] = [];
       const unsubscribe = manager.onMessage((e) => received.push(e));
 
-      sock.simulateMessage({ type: "response.in_progress", response: makeResponse("r1") });
+      sock.simulateMessage({
+        type: "response.in_progress",
+        response: makeResponse("r1"),
+      });
       unsubscribe();
-      sock.simulateMessage({ type: "response.in_progress", response: makeResponse("r2") });
+      sock.simulateMessage({
+        type: "response.in_progress",
+        response: makeResponse("r2"),
+      });
 
       expect(received).toHaveLength(1);
     });
@@ -345,7 +359,10 @@ describe("OpenAIWebSocketManager", () => {
       manager.onMessage(() => calls.push(1));
       manager.onMessage(() => calls.push(2));
 
-      sock.simulateMessage({ type: "response.in_progress", response: makeResponse("r1") });
+      sock.simulateMessage({
+        type: "response.in_progress",
+        response: makeResponse("r1"),
+      });
 
       expect(calls.toSorted((a, b) => a - b)).toEqual([1, 2]);
     });
@@ -400,7 +417,10 @@ describe("OpenAIWebSocketManager", () => {
       sock.simulateOpen();
       await connectPromise;
 
-      sock.simulateMessage({ type: "response.in_progress", response: makeResponse("resp_x") });
+      sock.simulateMessage({
+        type: "response.in_progress",
+        response: makeResponse("resp_x"),
+      });
 
       expect(manager.previousResponseId).toBeNull();
     });
@@ -506,12 +526,17 @@ describe("OpenAIWebSocketManager", () => {
         await vi.advanceTimersByTimeAsync(20);
       }
 
-      const maxRetryError = errors.find((e) => e.message.includes("max reconnect retries"));
+      const maxRetryError = errors.find((e) =>
+        e.message.includes("max reconnect retries"),
+      );
       expect(maxRetryError).toBeDefined();
     });
 
     it("resets retry count after a successful reconnect", async () => {
-      const manager = buildManager({ maxRetries: 3, backoffDelaysMs: [5, 10, 20] });
+      const manager = buildManager({
+        maxRetries: 3,
+        backoffDelaysMs: [5, 10, 20],
+      });
       const p = manager.connect("sk-test");
       lastSocket().simulateOpen();
       await p;
@@ -527,7 +552,9 @@ describe("OpenAIWebSocketManager", () => {
       lastSocket().simulateClose(1006, "drop again");
       await vi.advanceTimersByTimeAsync(10);
 
-      expect(MockWebSocket.instances.length).toBeGreaterThan(socketCountAfterReconnect);
+      expect(MockWebSocket.instances.length).toBeGreaterThan(
+        socketCountAfterReconnect,
+      );
     });
   });
 
@@ -544,7 +571,10 @@ describe("OpenAIWebSocketManager", () => {
       manager.warmUp({ model: "gpt-5.2", instructions: "You are helpful." });
 
       expect(sock.sentMessages).toHaveLength(1);
-      const sent = JSON.parse(sock.sentMessages[0] ?? "{}") as Record<string, unknown>;
+      const sent = JSON.parse(sock.sentMessages[0] ?? "{}") as Record<
+        string,
+        unknown
+      >;
       expect(sent["type"]).toBe("response.create");
       expect(sent["generate"]).toBe(false);
       expect(sent["model"]).toBe("gpt-5.2");
@@ -560,14 +590,23 @@ describe("OpenAIWebSocketManager", () => {
 
       manager.warmUp({
         model: "gpt-5.2",
-        tools: [{ type: "function", function: { name: "exec", description: "Run a command" } }],
+        tools: [
+          {
+            type: "function",
+            function: { name: "exec", description: "Run a command" },
+          },
+        ],
       });
 
-      const sent = JSON.parse(sock.sentMessages[0] ?? "{}") as Record<string, unknown>;
+      const sent = JSON.parse(sock.sentMessages[0] ?? "{}") as Record<
+        string,
+        unknown
+      >;
       expect(sent["tools"]).toHaveLength(1);
-      expect((sent["tools"] as Array<{ function?: { name?: string } }>)[0]?.function?.name).toBe(
-        "exec",
-      );
+      expect(
+        (sent["tools"] as Array<{ function?: { name?: string } }>)[0]?.function
+          ?.name,
+      ).toBe("exec");
     });
   });
 
@@ -618,7 +657,9 @@ describe("OpenAIWebSocketManager", () => {
       lastSocket().simulateError(new Error("SSL handshake failed"));
       await p;
 
-      expect(errors.some((e) => e.message === "SSL handshake failed")).toBe(true);
+      expect(errors.some((e) => e.message === "SSL handshake failed")).toBe(
+        true,
+      );
     });
 
     it("handles multiple successive socket errors without crashing", async () => {
@@ -656,10 +697,17 @@ describe("OpenAIWebSocketManager", () => {
       manager.onMessage((e) => received.push(e));
 
       // Send initial turn
-      manager.send({ type: "response.create", model: "gpt-5.2", input: "Hello" });
+      manager.send({
+        type: "response.create",
+        model: "gpt-5.2",
+        input: "Hello",
+      });
 
       // Simulate streaming events from server
-      sock.simulateMessage({ type: "response.created", response: makeResponse("resp_1") });
+      sock.simulateMessage({
+        type: "response.created",
+        response: makeResponse("resp_1"),
+      });
       sock.simulateMessage({
         type: "response.output_text.delta",
         item_id: "i1",
@@ -680,13 +728,25 @@ describe("OpenAIWebSocketManager", () => {
         type: "response.create",
         model: "gpt-5.2",
         previous_response_id: manager.previousResponseId!,
-        input: [{ type: "function_call_output", call_id: "call_99", output: "tool result" }],
+        input: [
+          {
+            type: "function_call_output",
+            call_id: "call_99",
+            output: "tool result",
+          },
+        ],
       });
 
-      const lastSent = JSON.parse(sock.sentMessages[1] ?? "{}") as ResponseCreateEvent;
+      const lastSent = JSON.parse(
+        sock.sentMessages[1] ?? "{}",
+      ) as ResponseCreateEvent;
       expect(lastSent.previous_response_id).toBe("resp_1");
       expect(lastSent.input).toEqual([
-        { type: "function_call_output", call_id: "call_99", output: "tool result" },
+        {
+          type: "function_call_output",
+          call_id: "call_99",
+          output: "tool result",
+        },
       ]);
     });
   });

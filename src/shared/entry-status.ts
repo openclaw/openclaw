@@ -13,7 +13,9 @@ export type EntryMetadataRequirementsParams = Parameters<
 
 export function evaluateEntryMetadataRequirements(params: {
   always: boolean;
-  metadata?: (RequirementsMetadata & { emoji?: string; homepage?: string }) | null;
+  metadata?:
+    | (RequirementsMetadata & { emoji?: string; homepage?: string })
+    | null;
   frontmatter?: {
     emoji?: string;
     homepage?: string;
@@ -37,15 +39,16 @@ export function evaluateEntryMetadataRequirements(params: {
     metadata: params.metadata,
     frontmatter: params.frontmatter,
   });
-  const { required, missing, eligible, configChecks } = evaluateRequirementsFromMetadataWithRemote({
-    always: params.always,
-    metadata: params.metadata ?? undefined,
-    hasLocalBin: params.hasLocalBin,
-    localPlatform: params.localPlatform,
-    remote: params.remote,
-    isEnvSatisfied: params.isEnvSatisfied,
-    isConfigSatisfied: params.isConfigSatisfied,
-  });
+  const { required, missing, eligible, configChecks } =
+    evaluateRequirementsFromMetadataWithRemote({
+      always: params.always,
+      metadata: params.metadata ?? undefined,
+      hasLocalBin: params.hasLocalBin,
+      localPlatform: params.localPlatform,
+      remote: params.remote,
+      isEnvSatisfied: params.isEnvSatisfied,
+      isConfigSatisfied: params.isConfigSatisfied,
+    });
   return {
     ...(emoji ? { emoji } : {}),
     ...(homepage ? { homepage } : {}),
@@ -68,7 +71,9 @@ export function evaluateEntryMetadataRequirementsForCurrentPlatform(
 export function evaluateEntryRequirementsForCurrentPlatform(params: {
   always: boolean;
   entry: {
-    metadata?: (RequirementsMetadata & { emoji?: string; homepage?: string }) | null;
+    metadata?:
+      | (RequirementsMetadata & { emoji?: string; homepage?: string })
+      | null;
     frontmatter?: {
       emoji?: string;
       homepage?: string;

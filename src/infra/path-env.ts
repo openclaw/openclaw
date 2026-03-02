@@ -30,13 +30,21 @@ function isDirectory(dirPath: string): boolean {
   }
 }
 
-function mergePath(params: { existing: string; prepend?: string[]; append?: string[] }): string {
+function mergePath(params: {
+  existing: string;
+  prepend?: string[];
+  append?: string[];
+}): string {
   const partsExisting = params.existing
     .split(path.delimiter)
     .map((part) => part.trim())
     .filter(Boolean);
-  const partsPrepend = (params.prepend ?? []).map((part) => part.trim()).filter(Boolean);
-  const partsAppend = (params.append ?? []).map((part) => part.trim()).filter(Boolean);
+  const partsPrepend = (params.prepend ?? [])
+    .map((part) => part.trim())
+    .filter(Boolean);
+  const partsAppend = (params.append ?? [])
+    .map((part) => part.trim())
+    .filter(Boolean);
 
   const seen = new Set<string>();
   const merged: string[] = [];
@@ -49,7 +57,10 @@ function mergePath(params: { existing: string; prepend?: string[]; append?: stri
   return merged.join(path.delimiter);
 }
 
-function candidateBinDirs(opts: EnsureOpenClawPathOpts): { prepend: string[]; append: string[] } {
+function candidateBinDirs(opts: EnsureOpenClawPathOpts): {
+  prepend: string[];
+  append: string[];
+} {
   const execPath = opts.execPath ?? process.execPath;
   const cwd = opts.cwd ?? process.cwd();
   const homeDir = opts.homeDir ?? os.homedir();
@@ -81,7 +92,8 @@ function candidateBinDirs(opts: EnsureOpenClawPathOpts): { prepend: string[]; ap
     }
   }
 
-  const miseDataDir = process.env.MISE_DATA_DIR ?? path.join(homeDir, ".local", "share", "mise");
+  const miseDataDir =
+    process.env.MISE_DATA_DIR ?? path.join(homeDir, ".local", "share", "mise");
   const miseShims = path.join(miseDataDir, "shims");
   if (isDirectory(miseShims)) {
     prepend.push(miseShims);
@@ -102,7 +114,10 @@ function candidateBinDirs(opts: EnsureOpenClawPathOpts): { prepend: string[]; ap
   prepend.push(path.join(homeDir, ".yarn", "bin"));
   prepend.push("/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin");
 
-  return { prepend: prepend.filter(isDirectory), append: append.filter(isDirectory) };
+  return {
+    prepend: prepend.filter(isDirectory),
+    append: append.filter(isDirectory),
+  };
 }
 
 /**

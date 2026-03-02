@@ -1,10 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { createChannelTestPluginBase, createOutboundTestPlugin } from "./channel-plugins.js";
+import {
+  createChannelTestPluginBase,
+  createOutboundTestPlugin,
+} from "./channel-plugins.js";
 
 describe("createChannelTestPluginBase", () => {
   it("builds a plugin base with defaults", () => {
     const cfg = {} as never;
-    const base = createChannelTestPluginBase({ id: "telegram", label: "Telegram" });
+    const base = createChannelTestPluginBase({
+      id: "telegram",
+      label: "Telegram",
+    });
     expect(base.id).toBe("telegram");
     expect(base.meta.label).toBe("Telegram");
     expect(base.meta.selectionLabel).toBe("Telegram");

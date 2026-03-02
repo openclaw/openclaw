@@ -38,7 +38,8 @@ describe("config plugin validation", () => {
   let bluebubblesPluginDir = "";
   const envSnapshot = {
     OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR,
-    OPENCLAW_PLUGIN_MANIFEST_CACHE_MS: process.env.OPENCLAW_PLUGIN_MANIFEST_CACHE_MS,
+    OPENCLAW_PLUGIN_MANIFEST_CACHE_MS:
+      process.env.OPENCLAW_PLUGIN_MANIFEST_CACHE_MS,
   };
 
   const validateInSuite = (raw: unknown) => {
@@ -47,7 +48,9 @@ describe("config plugin validation", () => {
   };
 
   beforeAll(async () => {
-    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-config-plugin-validation-"));
+    fixtureRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-config-plugin-validation-"),
+    );
     suiteHome = path.join(fixtureRoot, "home");
     await fs.mkdir(suiteHome, { recursive: true });
     badPluginDir = path.join(suiteHome, "bad-plugin");
@@ -85,7 +88,8 @@ describe("config plugin validation", () => {
     if (envSnapshot.OPENCLAW_PLUGIN_MANIFEST_CACHE_MS === undefined) {
       delete process.env.OPENCLAW_PLUGIN_MANIFEST_CACHE_MS;
     } else {
-      process.env.OPENCLAW_PLUGIN_MANIFEST_CACHE_MS = envSnapshot.OPENCLAW_PLUGIN_MANIFEST_CACHE_MS;
+      process.env.OPENCLAW_PLUGIN_MANIFEST_CACHE_MS =
+        envSnapshot.OPENCLAW_PLUGIN_MANIFEST_CACHE_MS;
     }
   });
 
@@ -107,14 +111,18 @@ describe("config plugin validation", () => {
       expect(
         res.issues.some(
           (issue) =>
-            issue.path === "plugins.load.paths" && issue.message.includes("plugin path not found"),
+            issue.path === "plugins.load.paths" &&
+            issue.message.includes("plugin path not found"),
         ),
       ).toBe(true);
       expect(res.issues).toEqual(
         expect.arrayContaining([
           { path: "plugins.allow", message: "plugin not found: missing-allow" },
           { path: "plugins.deny", message: "plugin not found: missing-deny" },
-          { path: "plugins.slots.memory", message: "plugin not found: missing-slot" },
+          {
+            path: "plugins.slots.memory",
+            message: "plugin not found: missing-slot",
+          },
         ]),
       );
       expect(res.warnings).toContainEqual({
@@ -206,7 +214,10 @@ describe("config plugin validation", () => {
 
   it("accepts plugin heartbeat targets", async () => {
     const res = validateInSuite({
-      agents: { defaults: { heartbeat: { target: "bluebubbles" } }, list: [{ id: "pi" }] },
+      agents: {
+        defaults: { heartbeat: { target: "bluebubbles" } },
+        list: [{ id: "pi" }],
+      },
       plugins: { enabled: false, load: { paths: [bluebubblesPluginDir] } },
     });
     expect(res.ok).toBe(true);
@@ -238,7 +249,9 @@ describe("config plugin validation", () => {
     expect(res.ok).toBe(false);
     if (!res.ok) {
       expect(
-        res.issues.some((issue) => issue.path === "agents.defaults.heartbeat.directPolicy"),
+        res.issues.some(
+          (issue) => issue.path === "agents.defaults.heartbeat.directPolicy",
+        ),
       ).toBe(true);
     }
   });

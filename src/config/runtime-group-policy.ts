@@ -17,9 +17,12 @@ export function resolveRuntimeGroupPolicy(
   params: RuntimeGroupPolicyParams,
 ): RuntimeGroupPolicyResolution {
   const configuredFallbackPolicy = params.configuredFallbackPolicy ?? "open";
-  const missingProviderFallbackPolicy = params.missingProviderFallbackPolicy ?? "allowlist";
+  const missingProviderFallbackPolicy =
+    params.missingProviderFallbackPolicy ?? "allowlist";
   const groupPolicy = params.providerConfigPresent
-    ? (params.groupPolicy ?? params.defaultGroupPolicy ?? configuredFallbackPolicy)
+    ? (params.groupPolicy ??
+      params.defaultGroupPolicy ??
+      configuredFallbackPolicy)
     : (params.groupPolicy ?? missingProviderFallbackPolicy);
   const providerMissingFallbackApplied =
     !params.providerConfigPresent && params.groupPolicy === undefined;
@@ -40,7 +43,9 @@ export type GroupPolicyDefaultsConfig = {
   };
 };
 
-export function resolveDefaultGroupPolicy(cfg: GroupPolicyDefaultsConfig): GroupPolicy | undefined {
+export function resolveDefaultGroupPolicy(
+  cfg: GroupPolicyDefaultsConfig,
+): GroupPolicy | undefined {
   return cfg.channels?.defaults?.groupPolicy;
 }
 

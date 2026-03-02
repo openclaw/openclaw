@@ -33,7 +33,8 @@ export async function promptGatewayConfig(
     await text({
       message: "Gateway port",
       initialValue: String(resolveGatewayPort(cfg)),
-      validate: (value) => (Number.isFinite(Number(value)) ? undefined : "Invalid port"),
+      validate: (value) =>
+        Number.isFinite(Number(value)) ? undefined : "Invalid port",
     }),
     runtime,
   );
@@ -136,7 +137,10 @@ export async function promptGatewayConfig(
   }
 
   if (tailscaleMode !== "off" && bind !== "loopback") {
-    note("Tailscale requires bind=loopback. Adjusting bind to loopback.", "Note");
+    note(
+      "Tailscale requires bind=loopback. Adjusting bind to loopback.",
+      "Note",
+    );
     bind = "loopback";
   }
 
@@ -204,7 +208,8 @@ export async function promptGatewayConfig(
         message: "Header containing user identity",
         placeholder: "x-forwarded-user",
         initialValue: "x-forwarded-user",
-        validate: (value) => (value?.trim() ? undefined : "User header is required"),
+        validate: (value) =>
+          value?.trim() ? undefined : "User header is required",
       }),
       runtime,
     );
@@ -225,7 +230,8 @@ export async function promptGatewayConfig(
 
     const allowUsersRaw = guardCancel(
       await text({
-        message: "Allowed users (comma-separated, blank = all authenticated users)",
+        message:
+          "Allowed users (comma-separated, blank = all authenticated users)",
         placeholder: "nick@example.com,admin@company.com",
       }),
       runtime,

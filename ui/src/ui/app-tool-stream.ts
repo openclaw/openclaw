@@ -168,7 +168,9 @@ function formatToolOutput(value: unknown): string | null {
   return `${truncated.text}\n\n… truncated (${truncated.total} chars, showing first ${truncated.text.length}).`;
 }
 
-function buildToolStreamMessage(entry: ToolStreamEntry): Record<string, unknown> {
+function buildToolStreamMessage(
+  entry: ToolStreamEntry,
+): Record<string, unknown> {
   const content: Array<Record<string, unknown>> = [];
   content.push({
     type: "toolcall",
@@ -263,7 +265,10 @@ type CompactionHost = ToolStreamHost & {
 const COMPACTION_TOAST_DURATION_MS = 5000;
 const FALLBACK_TOAST_DURATION_MS = 8000;
 
-export function handleCompactionEvent(host: CompactionHost, payload: AgentEventPayload) {
+export function handleCompactionEvent(
+  host: CompactionHost,
+  payload: AgentEventPayload,
+) {
   const data = payload.data ?? {};
   const phase = typeof data.phase === "string" ? data.phase : "";
 
@@ -300,7 +305,8 @@ function resolveAcceptedSession(
     allowSessionScopedWhenIdle?: boolean;
   },
 ): { accepted: boolean; sessionKey?: string } {
-  const sessionKey = typeof payload.sessionKey === "string" ? payload.sessionKey : undefined;
+  const sessionKey =
+    typeof payload.sessionKey === "string" ? payload.sessionKey : undefined;
   if (sessionKey && sessionKey !== host.sessionKey) {
     return { accepted: false };
   }
@@ -320,14 +326,24 @@ function resolveAcceptedSession(
   return { accepted: true, sessionKey };
 }
 
-function handleLifecycleFallbackEvent(host: CompactionHost, payload: AgentEventPayload) {
+function handleLifecycleFallbackEvent(
+  host: CompactionHost,
+  payload: AgentEventPayload,
+) {
   const data = payload.data ?? {};
-  const phase = payload.stream === "fallback" ? "fallback" : toTrimmedString(data.phase);
-  if (payload.stream === "lifecycle" && phase !== "fallback" && phase !== "fallback_cleared") {
+  const phase =
+    payload.stream === "fallback" ? "fallback" : toTrimmedString(data.phase);
+  if (
+    payload.stream === "lifecycle" &&
+    phase !== "fallback" &&
+    phase !== "fallback_cleared"
+  ) {
     return;
   }
 
-  const accepted = resolveAcceptedSession(host, payload, { allowSessionScopedWhenIdle: true });
+  const accepted = resolveAcceptedSession(host, payload, {
+    allowSessionScopedWhenIdle: true,
+  });
   if (!accepted.accepted) {
     return;
   }
@@ -348,7 +364,8 @@ function handleLifecycleFallbackEvent(host: CompactionHost, payload: AgentEventP
     return;
   }
 
-  const reason = toTrimmedString(data.reasonSummary) ?? toTrimmedString(data.reason);
+  const reason =
+    toTrimmedString(data.reasonSummary) ?? toTrimmedString(data.reason);
   const attempts = (() => {
     const summaries = parseFallbackAttemptSummaries(data.attemptSummaries);
     if (summaries.length > 0) {
@@ -382,7 +399,10 @@ function handleLifecycleFallbackEvent(host: CompactionHost, payload: AgentEventP
   }, FALLBACK_TOAST_DURATION_MS);
 }
 
-export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPayload) {
+export function handleAgentEvent(
+  host: ToolStreamHost,
+  payload?: AgentEventPayload,
+) {
   if (!payload) {
     return;
   }

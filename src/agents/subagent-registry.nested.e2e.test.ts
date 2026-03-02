@@ -29,7 +29,8 @@ describe("subagent registry nested agent tracking", () => {
   });
 
   it("listSubagentRunsForRequester returns children of the requesting session", async () => {
-    const { registerSubagentRun, listSubagentRunsForRequester } = subagentRegistry;
+    const { registerSubagentRun, listSubagentRunsForRequester } =
+      subagentRegistry;
 
     // Main agent spawns a depth-1 orchestrator
     registerSubagentRun({
@@ -59,7 +60,9 @@ describe("subagent registry nested agent tracking", () => {
     expect(mainRuns[0].runId).toBe("run-orch");
 
     // Orchestrator sees its direct child (the leaf)
-    const orchRuns = listSubagentRunsForRequester("agent:main:subagent:orch-uuid");
+    const orchRuns = listSubagentRunsForRequester(
+      "agent:main:subagent:orch-uuid",
+    );
     expect(orchRuns).toHaveLength(1);
     expect(orchRuns[0].runId).toBe("run-leaf");
 
@@ -90,7 +93,9 @@ describe("subagent registry nested agent tracking", () => {
     const orchRuns = listSubagentRunsForRequester("agent:main:subagent:orch");
     expect(orchRuns).toHaveLength(1);
     expect(orchRuns[0].requesterSessionKey).toBe("agent:main:subagent:orch");
-    expect(orchRuns[0].childSessionKey).toBe("agent:main:subagent:orch:subagent:child");
+    expect(orchRuns[0].childSessionKey).toBe(
+      "agent:main:subagent:orch:subagent:child",
+    );
   });
 
   it("countActiveRunsForSession only counts active children of the specific session", async () => {
@@ -133,7 +138,8 @@ describe("subagent registry nested agent tracking", () => {
   });
 
   it("countActiveDescendantRuns traverses through ended parents", async () => {
-    const { addSubagentRunForTests, countActiveDescendantRuns } = subagentRegistry;
+    const { addSubagentRunForTests, countActiveDescendantRuns } =
+      subagentRegistry;
 
     addSubagentRunForTests({
       runId: "run-parent-ended",
@@ -164,7 +170,8 @@ describe("subagent registry nested agent tracking", () => {
   });
 
   it("countPendingDescendantRuns includes ended descendants until cleanup completes", async () => {
-    const { addSubagentRunForTests, countPendingDescendantRuns } = subagentRegistry;
+    const { addSubagentRunForTests, countPendingDescendantRuns } =
+      subagentRegistry;
 
     addSubagentRunForTests({
       runId: "run-parent-ended-pending",
@@ -194,11 +201,14 @@ describe("subagent registry nested agent tracking", () => {
     });
 
     expect(countPendingDescendantRuns("agent:main:main")).toBe(2);
-    expect(countPendingDescendantRuns("agent:main:subagent:orch-pending")).toBe(1);
+    expect(countPendingDescendantRuns("agent:main:subagent:orch-pending")).toBe(
+      1,
+    );
 
     addSubagentRunForTests({
       runId: "run-leaf-completed",
-      childSessionKey: "agent:main:subagent:orch-pending:subagent:leaf-completed",
+      childSessionKey:
+        "agent:main:subagent:orch-pending:subagent:leaf-completed",
       requesterSessionKey: "agent:main:subagent:orch-pending",
       requesterDisplayKey: "orch-pending",
       task: "leaf complete",
@@ -209,11 +219,14 @@ describe("subagent registry nested agent tracking", () => {
       cleanupHandled: true,
       cleanupCompletedAt: 3,
     });
-    expect(countPendingDescendantRuns("agent:main:subagent:orch-pending")).toBe(1);
+    expect(countPendingDescendantRuns("agent:main:subagent:orch-pending")).toBe(
+      1,
+    );
   });
 
   it("countPendingDescendantRunsExcludingRun ignores only the active announce run", async () => {
-    const { addSubagentRunForTests, countPendingDescendantRunsExcludingRun } = subagentRegistry;
+    const { addSubagentRunForTests, countPendingDescendantRunsExcludingRun } =
+      subagentRegistry;
 
     addSubagentRunForTests({
       runId: "run-self",
@@ -243,7 +256,11 @@ describe("subagent registry nested agent tracking", () => {
       cleanupCompletedAt: undefined,
     });
 
-    expect(countPendingDescendantRunsExcludingRun("agent:main:main", "run-self")).toBe(1);
-    expect(countPendingDescendantRunsExcludingRun("agent:main:main", "run-sibling")).toBe(1);
+    expect(
+      countPendingDescendantRunsExcludingRun("agent:main:main", "run-self"),
+    ).toBe(1);
+    expect(
+      countPendingDescendantRunsExcludingRun("agent:main:main", "run-sibling"),
+    ).toBe(1);
   });
 });

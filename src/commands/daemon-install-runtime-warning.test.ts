@@ -32,7 +32,10 @@ describe("emitNodeRuntimeWarning", () => {
 
   it("emits warning when system node check returns one", async () => {
     const warn = vi.fn();
-    mocks.resolveSystemNodeInfo.mockResolvedValue({ path: "/usr/bin/node", version: "18.0.0" });
+    mocks.resolveSystemNodeInfo.mockResolvedValue({
+      path: "/usr/bin/node",
+      version: "18.0.0",
+    });
     mocks.renderSystemNodeWarning.mockReturnValue("Node too old");
 
     await emitNodeRuntimeWarning({

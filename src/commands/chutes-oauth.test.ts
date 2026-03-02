@@ -1,6 +1,9 @@
 import net from "node:net";
 import { describe, expect, it, vi } from "vitest";
-import { CHUTES_TOKEN_ENDPOINT, CHUTES_USERINFO_ENDPOINT } from "../agents/chutes-oauth.js";
+import {
+  CHUTES_TOKEN_ENDPOINT,
+  CHUTES_USERINFO_ENDPOINT,
+} from "../agents/chutes-oauth.js";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import { loginChutes } from "./chutes-oauth.js";
 
@@ -33,29 +36,31 @@ function createOAuthFetchFn(params: {
   username: string;
   passthrough?: boolean;
 }) {
-  return withFetchPreconnect(async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = urlToString(input);
-    if (url === CHUTES_TOKEN_ENDPOINT) {
-      return new Response(
-        JSON.stringify({
-          access_token: params.accessToken,
-          refresh_token: params.refreshToken,
-          expires_in: 3600,
-        }),
-        { status: 200, headers: { "Content-Type": "application/json" } },
-      );
-    }
-    if (url === CHUTES_USERINFO_ENDPOINT) {
-      return new Response(JSON.stringify({ username: params.username }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
-    }
-    if (params.passthrough) {
-      return fetch(input, init);
-    }
-    return new Response("not found", { status: 404 });
-  });
+  return withFetchPreconnect(
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = urlToString(input);
+      if (url === CHUTES_TOKEN_ENDPOINT) {
+        return new Response(
+          JSON.stringify({
+            access_token: params.accessToken,
+            refresh_token: params.refreshToken,
+            expires_in: 3600,
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      if (url === CHUTES_USERINFO_ENDPOINT) {
+        return new Response(JSON.stringify({ username: params.username }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (params.passthrough) {
+        return fetch(input, init);
+      }
+      return new Response("not found", { status: 404 });
+    },
+  );
 }
 
 describe("loginChutes", () => {
@@ -158,7 +163,9 @@ describe("loginChutes", () => {
   });
 
   it("rejects pasted redirect URLs missing state", async () => {
-    const fetchFn = withFetchPreconnect(async () => new Response("not found", { status: 404 }));
+    const fetchFn = withFetchPreconnect(
+      async () => new Response("not found", { status: 404 }),
+    );
 
     await expect(
       loginChutes({
@@ -171,7 +178,8 @@ describe("loginChutes", () => {
         createPkce: () => ({ verifier: "verifier_123", challenge: "chal_123" }),
         createState: () => "state_456",
         onAuth: async () => {},
-        onPrompt: async () => "http://127.0.0.1:1456/oauth-callback?code=code_only",
+        onPrompt: async () =>
+          "http://127.0.0.1:1456/oauth-callback?code=code_only",
         fetchFn,
       }),
     ).rejects.toThrow("Missing 'state' parameter");

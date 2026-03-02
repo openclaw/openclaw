@@ -141,7 +141,11 @@ export type DiagnosticToolLoopEvent = DiagnosticBaseEvent & {
   toolName: string;
   level: "warning" | "critical";
   action: "warn" | "block";
-  detector: "generic_repeat" | "known_poll_no_progress" | "global_circuit_breaker" | "ping_pong";
+  detector:
+    | "generic_repeat"
+    | "known_poll_no_progress"
+    | "global_circuit_breaker"
+    | "ping_pong";
   count: number;
   message: string;
   pairedToolName?: string;
@@ -226,7 +230,9 @@ export function emitDiagnosticEvent(event: DiagnosticEventInput) {
   state.dispatchDepth -= 1;
 }
 
-export function onDiagnosticEvent(listener: (evt: DiagnosticEventPayload) => void): () => void {
+export function onDiagnosticEvent(
+  listener: (evt: DiagnosticEventPayload) => void,
+): () => void {
   const state = getDiagnosticEventsState();
   state.listeners.add(listener);
   return () => {

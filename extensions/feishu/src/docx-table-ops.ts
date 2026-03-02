@@ -39,13 +39,19 @@ export function calculateAdaptiveColumnWidths(
   tableBlockId: string,
 ): number[] {
   // Find the table block
-  const tableBlock = blocks.find((b) => b.block_id === tableBlockId && b.block_type === 31);
+  const tableBlock = blocks.find(
+    (b) => b.block_id === tableBlockId && b.block_type === 31,
+  );
 
   if (!tableBlock?.table?.property) {
     return [];
   }
 
-  const { row_size, column_size, column_width: originalWidths } = tableBlock.table.property;
+  const {
+    row_size,
+    column_size,
+    column_width: originalWidths,
+  } = tableBlock.table.property;
 
   // Use original total width from Convert API, or fall back to default
   const totalWidth =
@@ -67,7 +73,9 @@ export function calculateAdaptiveColumnWidths(
     if (!cell?.children) return "";
 
     let text = "";
-    const childIds = Array.isArray(cell.children) ? cell.children : [cell.children];
+    const childIds = Array.isArray(cell.children)
+      ? cell.children
+      : [cell.children];
 
     for (const childId of childIds) {
       const child = blockMap.get(childId);
@@ -124,13 +132,17 @@ export function calculateAdaptiveColumnWidths(
   });
 
   // Apply min/max constraints
-  widths = widths.map((w) => Math.max(MIN_COLUMN_WIDTH, Math.min(MAX_COLUMN_WIDTH, w)));
+  widths = widths.map((w) =>
+    Math.max(MIN_COLUMN_WIDTH, Math.min(MAX_COLUMN_WIDTH, w)),
+  );
 
   // Redistribute remaining space to fill total width
   let remaining = totalWidth - widths.reduce((a, b) => a + b, 0);
   while (remaining > 0) {
     // Find columns that can still grow (not at max)
-    const growable = widths.map((w, i) => (w < MAX_COLUMN_WIDTH ? i : -1)).filter((i) => i >= 0);
+    const growable = widths
+      .map((w, i) => (w < MAX_COLUMN_WIDTH ? i : -1))
+      .filter((i) => i >= 0);
     if (growable.length === 0) break;
 
     // Distribute evenly among growable columns
@@ -174,7 +186,10 @@ export function cleanBlocksForDescendant(blocks: any[]): any[] {
     const { parent_id: _parentId, ...cleanBlock } = block;
 
     // Fix: Convert API sometimes returns children as string for TableCell
-    if (cleanBlock.block_type === 32 && typeof cleanBlock.children === "string") {
+    if (
+      cleanBlock.block_type === 32 &&
+      typeof cleanBlock.children === "string"
+    ) {
       cleanBlock.children = [cleanBlock.children];
     }
 
@@ -241,7 +256,12 @@ export async function deleteTableRows(
 ) {
   const res = await client.docx.documentBlock.patch({
     path: { document_id: docToken, block_id: blockId },
-    data: { delete_table_rows: { row_start_index: rowStart, row_end_index: rowStart + rowCount } },
+    data: {
+      delete_table_rows: {
+        row_start_index: rowStart,
+        row_end_index: rowStart + rowCount,
+      },
+    },
   });
   if (res.code !== 0) {
     throw new Error(res.msg);
@@ -268,7 +288,11 @@ export async function deleteTableColumns(
   if (res.code !== 0) {
     throw new Error(res.msg);
   }
-  return { success: true, columns_deleted: columnCount, block: res.data?.block };
+  return {
+    success: true,
+    columns_deleted: columnCount,
+    block: res.data?.block,
+  };
 }
 
 export async function mergeTableCells(

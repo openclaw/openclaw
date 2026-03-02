@@ -6,20 +6,30 @@ export type BrowserProxyFile = {
   mimeType?: string;
 };
 
-export async function persistBrowserProxyFiles(files: BrowserProxyFile[] | undefined) {
+export async function persistBrowserProxyFiles(
+  files: BrowserProxyFile[] | undefined,
+) {
   if (!files || files.length === 0) {
     return new Map<string, string>();
   }
   const mapping = new Map<string, string>();
   for (const file of files) {
     const buffer = Buffer.from(file.base64, "base64");
-    const saved = await saveMediaBuffer(buffer, file.mimeType, "browser", buffer.byteLength);
+    const saved = await saveMediaBuffer(
+      buffer,
+      file.mimeType,
+      "browser",
+      buffer.byteLength,
+    );
     mapping.set(file.path, saved.path);
   }
   return mapping;
 }
 
-export function applyBrowserProxyPaths(result: unknown, mapping: Map<string, string>) {
+export function applyBrowserProxyPaths(
+  result: unknown,
+  mapping: Map<string, string>,
+) {
   if (!result || typeof result !== "object") {
     return;
   }

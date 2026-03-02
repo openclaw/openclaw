@@ -3,7 +3,11 @@ import { isErrno } from "./errors.js";
 import { buildPortHints } from "./ports-format.js";
 import { resolveLsofCommand } from "./ports-lsof.js";
 import { tryListenOnPort } from "./ports-probe.js";
-import type { PortListener, PortUsage, PortUsageStatus } from "./ports-types.js";
+import type {
+  PortListener,
+  PortUsage,
+  PortUsageStatus,
+} from "./ports-types.js";
 
 type CommandResult = {
   stdout: string;
@@ -12,7 +16,10 @@ type CommandResult = {
   error?: string;
 };
 
-async function runCommandSafe(argv: string[], timeoutMs = 5_000): Promise<CommandResult> {
+async function runCommandSafe(
+  argv: string[],
+  timeoutMs = 5_000,
+): Promise<CommandResult> {
   try {
     const res = await runCommandWithTimeout(argv, { timeoutMs });
     return {
@@ -57,7 +64,9 @@ function parseLsofFieldOutput(output: string): PortListener[] {
   return listeners;
 }
 
-async function resolveUnixCommandLine(pid: number): Promise<string | undefined> {
+async function resolveUnixCommandLine(
+  pid: number,
+): Promise<string | undefined> {
   const res = await runCommandSafe(["ps", "-p", String(pid), "-o", "command="]);
   if (res.code !== 0) {
     return undefined;
@@ -90,7 +99,13 @@ async function readUnixListeners(
 ): Promise<{ listeners: PortListener[]; detail?: string; errors: string[] }> {
   const errors: string[] = [];
   const lsof = await resolveLsofCommand();
-  const res = await runCommandSafe([lsof, "-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-FpFcn"]);
+  const res = await runCommandSafe([
+    lsof,
+    "-nP",
+    `-iTCP:${port}`,
+    "-sTCP:LISTEN",
+    "-FpFcn",
+  ]);
   if (res.code === 0) {
     const listeners = parseLsofFieldOutput(res.stdout);
     await Promise.all(
@@ -163,8 +178,16 @@ function parseNetstatListeners(output: string, port: number): PortListener[] {
   return listeners;
 }
 
-async function resolveWindowsImageName(pid: number): Promise<string | undefined> {
-  const res = await runCommandSafe(["tasklist", "/FI", `PID eq ${pid}`, "/FO", "LIST"]);
+async function resolveWindowsImageName(
+  pid: number,
+): Promise<string | undefined> {
+  const res = await runCommandSafe([
+    "tasklist",
+    "/FI",
+    `PID eq ${pid}`,
+    "/FO",
+    "LIST",
+  ]);
   if (res.code !== 0) {
     return undefined;
   }
@@ -179,7 +202,9 @@ async function resolveWindowsImageName(pid: number): Promise<string | undefined>
   return undefined;
 }
 
-async function resolveWindowsCommandLine(pid: number): Promise<string | undefined> {
+async function resolveWindowsCommandLine(
+  pid: number,
+): Promise<string | undefined> {
   const res = await runCommandSafe([
     "wmic",
     "process",
@@ -212,7 +237,9 @@ async function readWindowsListeners(
     if (res.error) {
       errors.push(res.error);
     }
-    const detail = [res.stderr.trim(), res.stdout.trim()].filter(Boolean).join("\n");
+    const detail = [res.stderr.trim(), res.stdout.trim()]
+      .filter(Boolean)
+      .join("\n");
     if (detail) {
       errors.push(detail);
     }
@@ -239,7 +266,10 @@ async function readWindowsListeners(
   return { listeners, detail: res.stdout.trim() || undefined, errors };
 }
 
-async function tryListenOnHost(port: number, host: string): Promise<PortUsageStatus | "skip"> {
+async function tryListenOnHost(
+  port: number,
+  host: string,
+): Promise<PortUsageStatus | "skip"> {
   try {
     await tryListenOnPort({ port, host, exclusive: true });
     return "free";
@@ -247,7 +277,10 @@ async function tryListenOnHost(port: number, host: string): Promise<PortUsageSta
     if (isErrno(err) && err.code === "EADDRINUSE") {
       return "busy";
     }
-    if (isErrno(err) && (err.code === "EADDRNOTAVAIL" || err.code === "EAFNOSUPPORT")) {
+    if (
+      isErrno(err) &&
+      (err.code === "EADDRNOTAVAIL" || err.code === "EAFNOSUPPORT")
+    ) {
       return "skip";
     }
     return "unknown";
@@ -272,7 +305,9 @@ async function checkPortInUse(port: number): Promise<PortUsageStatus> {
 export async function inspectPortUsage(port: number): Promise<PortUsage> {
   const errors: string[] = [];
   const result =
-    process.platform === "win32" ? await readWindowsListeners(port) : await readUnixListeners(port);
+    process.platform === "win32"
+      ? await readWindowsListeners(port)
+      : await readUnixListeners(port);
   errors.push(...result.errors);
   let listeners = result.listeners;
   let status: PortUsageStatus = listeners.length > 0 ? "busy" : "unknown";

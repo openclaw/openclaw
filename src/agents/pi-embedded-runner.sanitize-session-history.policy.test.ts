@@ -15,7 +15,9 @@ vi.mock("./pi-embedded-helpers.js", async () => ({
   sanitizeSessionMessagesImages: vi.fn(async (msgs) => msgs),
 }));
 
-type SanitizeSessionHistory = Awaited<ReturnType<typeof loadSanitizeSessionHistoryWithCleanMocks>>;
+type SanitizeSessionHistory = Awaited<
+  ReturnType<typeof loadSanitizeSessionHistoryWithCleanMocks>
+>;
 let sanitizeSessionHistory: SanitizeSessionHistory;
 
 describe("sanitizeSessionHistory e2e smoke", () => {

@@ -21,11 +21,13 @@ const { nodesAction, registerNodesCli } = vi.hoisted(() => {
 vi.mock("../acp-cli.js", () => ({ registerAcpCli }));
 vi.mock("../nodes-cli.js", () => ({ registerNodesCli }));
 
-const { registerSubCliByName, registerSubCliCommands } = await import("./register.subclis.js");
+const { registerSubCliByName, registerSubCliCommands } =
+  await import("./register.subclis.js");
 
 describe("registerSubCliCommands", () => {
   const originalArgv = process.argv;
-  const originalDisableLazySubcommands = process.env.OPENCLAW_DISABLE_LAZY_SUBCOMMANDS;
+  const originalDisableLazySubcommands =
+    process.env.OPENCLAW_DISABLE_LAZY_SUBCOMMANDS;
 
   const createRegisteredProgram = (argv: string[], name?: string) => {
     process.argv = argv;
@@ -41,7 +43,8 @@ describe("registerSubCliCommands", () => {
     if (originalDisableLazySubcommands === undefined) {
       delete process.env.OPENCLAW_DISABLE_LAZY_SUBCOMMANDS;
     } else {
-      process.env.OPENCLAW_DISABLE_LAZY_SUBCOMMANDS = originalDisableLazySubcommands;
+      process.env.OPENCLAW_DISABLE_LAZY_SUBCOMMANDS =
+        originalDisableLazySubcommands;
     }
     registerAcpCli.mockClear();
     acpAction.mockClear();
@@ -54,7 +57,8 @@ describe("registerSubCliCommands", () => {
     if (originalDisableLazySubcommands === undefined) {
       delete process.env.OPENCLAW_DISABLE_LAZY_SUBCOMMANDS;
     } else {
-      process.env.OPENCLAW_DISABLE_LAZY_SUBCOMMANDS = originalDisableLazySubcommands;
+      process.env.OPENCLAW_DISABLE_LAZY_SUBCOMMANDS =
+        originalDisableLazySubcommands;
     }
   });
 
@@ -80,7 +84,10 @@ describe("registerSubCliCommands", () => {
   });
 
   it("re-parses argv for lazy subcommands", async () => {
-    const program = createRegisteredProgram(["node", "openclaw", "nodes", "list"], "openclaw");
+    const program = createRegisteredProgram(
+      ["node", "openclaw", "nodes", "list"],
+      "openclaw",
+    );
 
     expect(program.commands.map((cmd) => cmd.name())).toEqual(["nodes"]);
 
@@ -91,7 +98,10 @@ describe("registerSubCliCommands", () => {
   });
 
   it("replaces placeholder when registering a subcommand by name", async () => {
-    const program = createRegisteredProgram(["node", "openclaw", "acp", "--help"], "openclaw");
+    const program = createRegisteredProgram(
+      ["node", "openclaw", "acp", "--help"],
+      "openclaw",
+    );
 
     await registerSubCliByName(program, "acp");
 

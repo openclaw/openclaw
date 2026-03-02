@@ -4,7 +4,8 @@ const INLINE_SIMPLE_COMMAND_ALIASES = new Map<string, string>([
   ["/whoami", "/whoami"],
   ["/id", "/whoami"],
 ]);
-const INLINE_SIMPLE_COMMAND_RE = /(?:^|\s)\/(help|commands|whoami|id)(?=$|\s|:)/i;
+const INLINE_SIMPLE_COMMAND_RE =
+  /(?:^|\s)\/(help|commands|whoami|id)(?=$|\s|:)/i;
 
 const INLINE_STATUS_RE = /(?:^|\s)\/status(?=$|\s|:)(?:\s*:\s*)?/gi;
 
@@ -36,6 +37,9 @@ export function stripInlineStatus(body: string): {
   if (!trimmed) {
     return { cleaned: "", didStrip: false };
   }
-  const cleaned = trimmed.replace(INLINE_STATUS_RE, " ").replace(/\s+/g, " ").trim();
+  const cleaned = trimmed
+    .replace(INLINE_STATUS_RE, " ")
+    .replace(/\s+/g, " ")
+    .trim();
   return { cleaned, didStrip: cleaned !== trimmed };
 }

@@ -1,5 +1,8 @@
 import type { ChatType } from "../channels/chat-type.js";
-import { parseAgentSessionKey, type ParsedAgentSessionKey } from "../sessions/session-key-utils.js";
+import {
+  parseAgentSessionKey,
+  type ParsedAgentSessionKey,
+} from "../sessions/session-key-utils.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "./account-id.js";
 
 export {
@@ -18,7 +21,11 @@ export {
 
 export const DEFAULT_AGENT_ID = "main";
 export const DEFAULT_MAIN_KEY = "main";
-export type SessionKeyShape = "missing" | "agent" | "legacy_or_alias" | "malformed_agent";
+export type SessionKeyShape =
+  | "missing"
+  | "agent"
+  | "legacy_or_alias"
+  | "malformed_agent";
 
 // Pre-compiled regex
 const VALID_ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
@@ -35,7 +42,9 @@ export function normalizeMainKey(value: string | undefined | null): string {
   return trimmed ? trimmed.toLowerCase() : DEFAULT_MAIN_KEY;
 }
 
-export function toAgentRequestSessionKey(storeKey: string | undefined | null): string | undefined {
+export function toAgentRequestSessionKey(
+  storeKey: string | undefined | null,
+): string | undefined {
   const raw = (storeKey ?? "").trim();
   if (!raw) {
     return undefined;
@@ -50,7 +59,10 @@ export function toAgentStoreSessionKey(params: {
 }): string {
   const raw = (params.requestKey ?? "").trim();
   if (!raw || raw.toLowerCase() === DEFAULT_MAIN_KEY) {
-    return buildAgentMainSessionKey({ agentId: params.agentId, mainKey: params.mainKey });
+    return buildAgentMainSessionKey({
+      agentId: params.agentId,
+      mainKey: params.mainKey,
+    });
   }
   const parsed = parseAgentSessionKey(raw);
   if (parsed) {
@@ -63,12 +75,16 @@ export function toAgentStoreSessionKey(params: {
   return `agent:${normalizeAgentId(params.agentId)}:${lowered}`;
 }
 
-export function resolveAgentIdFromSessionKey(sessionKey: string | undefined | null): string {
+export function resolveAgentIdFromSessionKey(
+  sessionKey: string | undefined | null,
+): string {
   const parsed = parseAgentSessionKey(sessionKey);
   return normalizeAgentId(parsed?.agentId ?? DEFAULT_AGENT_ID);
 }
 
-export function classifySessionKeyShape(sessionKey: string | undefined | null): SessionKeyShape {
+export function classifySessionKeyShape(
+  sessionKey: string | undefined | null,
+): SessionKeyShape {
   const raw = (sessionKey ?? "").trim();
   if (!raw) {
     return "missing";
@@ -76,7 +92,9 @@ export function classifySessionKeyShape(sessionKey: string | undefined | null): 
   if (parseAgentSessionKey(raw)) {
     return "agent";
   }
-  return raw.toLowerCase().startsWith("agent:") ? "malformed_agent" : "legacy_or_alias";
+  return raw.toLowerCase().startsWith("agent:")
+    ? "malformed_agent"
+    : "legacy_or_alias";
 }
 
 export function normalizeAgentId(value: string | undefined | null): string {
@@ -126,7 +144,11 @@ export function buildAgentPeerSessionKey(params: {
   peerId?: string | null;
   identityLinks?: Record<string, string[]>;
   /** DM session scope. */
-  dmScope?: "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
+  dmScope?:
+    | "main"
+    | "per-peer"
+    | "per-channel-peer"
+    | "per-account-channel-peer";
 }): string {
   const peerKind = params.peerKind ?? "direct";
   if (peerKind === "direct") {
@@ -235,9 +257,9 @@ export function resolveThreadSessionKeys(params: {
   if (!threadId) {
     return { sessionKey: params.baseSessionKey, parentSessionKey: undefined };
   }
-  const normalizedThreadId = (params.normalizeThreadId ?? ((value: string) => value.toLowerCase()))(
-    threadId,
-  );
+  const normalizedThreadId = (
+    params.normalizeThreadId ?? ((value: string) => value.toLowerCase())
+  )(threadId);
   const useSuffix = params.useSuffix ?? true;
   const sessionKey = useSuffix
     ? `${params.baseSessionKey}:thread:${normalizedThreadId}`

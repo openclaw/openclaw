@@ -7,7 +7,9 @@ describe("filterMessagingToolMediaDuplicates", () => {
       payloads: [{ text: "hello", mediaUrl: "file:///tmp/photo.jpg" }],
       sentMediaUrls: ["file:///tmp/photo.jpg"],
     });
-    expect(result).toEqual([{ text: "hello", mediaUrl: undefined, mediaUrls: undefined }]);
+    expect(result).toEqual([
+      { text: "hello", mediaUrl: undefined, mediaUrls: undefined },
+    ]);
   });
 
   it("preserves mediaUrl when it is not in sentMediaUrls", () => {
@@ -15,7 +17,9 @@ describe("filterMessagingToolMediaDuplicates", () => {
       payloads: [{ text: "hello", mediaUrl: "file:///tmp/photo.jpg" }],
       sentMediaUrls: ["file:///tmp/other.jpg"],
     });
-    expect(result).toEqual([{ text: "hello", mediaUrl: "file:///tmp/photo.jpg" }]);
+    expect(result).toEqual([
+      { text: "hello", mediaUrl: "file:///tmp/photo.jpg" },
+    ]);
   });
 
   it("filters matching entries from mediaUrls array", () => {
@@ -23,13 +27,20 @@ describe("filterMessagingToolMediaDuplicates", () => {
       payloads: [
         {
           text: "gallery",
-          mediaUrls: ["file:///tmp/a.jpg", "file:///tmp/b.jpg", "file:///tmp/c.jpg"],
+          mediaUrls: [
+            "file:///tmp/a.jpg",
+            "file:///tmp/b.jpg",
+            "file:///tmp/c.jpg",
+          ],
         },
       ],
       sentMediaUrls: ["file:///tmp/b.jpg"],
     });
     expect(result).toEqual([
-      { text: "gallery", mediaUrls: ["file:///tmp/a.jpg", "file:///tmp/c.jpg"] },
+      {
+        text: "gallery",
+        mediaUrls: ["file:///tmp/a.jpg", "file:///tmp/c.jpg"],
+      },
     ]);
   });
 
@@ -38,7 +49,9 @@ describe("filterMessagingToolMediaDuplicates", () => {
       payloads: [{ text: "gallery", mediaUrls: ["file:///tmp/a.jpg"] }],
       sentMediaUrls: ["file:///tmp/a.jpg"],
     });
-    expect(result).toEqual([{ text: "gallery", mediaUrl: undefined, mediaUrls: undefined }]);
+    expect(result).toEqual([
+      { text: "gallery", mediaUrl: undefined, mediaUrls: undefined },
+    ]);
   });
 
   it("returns payloads unchanged when no media present", () => {
@@ -64,7 +77,9 @@ describe("filterMessagingToolMediaDuplicates", () => {
       payloads: [{ text: "hello", mediaUrl: "/tmp/photo.jpg" }],
       sentMediaUrls: ["file:///tmp/photo.jpg"],
     });
-    expect(result).toEqual([{ text: "hello", mediaUrl: undefined, mediaUrls: undefined }]);
+    expect(result).toEqual([
+      { text: "hello", mediaUrl: undefined, mediaUrls: undefined },
+    ]);
   });
 
   it("dedupes encoded file:// paths against local paths", () => {
@@ -72,6 +87,8 @@ describe("filterMessagingToolMediaDuplicates", () => {
       payloads: [{ text: "hello", mediaUrl: "/tmp/photo one.jpg" }],
       sentMediaUrls: ["file:///tmp/photo%20one.jpg"],
     });
-    expect(result).toEqual([{ text: "hello", mediaUrl: undefined, mediaUrls: undefined }]);
+    expect(result).toEqual([
+      { text: "hello", mediaUrl: undefined, mediaUrls: undefined },
+    ]);
   });
 });

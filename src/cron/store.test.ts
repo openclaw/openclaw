@@ -1,7 +1,15 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import { loadCronStore, resolveCronStorePath, saveCronStore } from "./store.js";
 import type { CronStoreFile } from "./types.js";
 
@@ -9,7 +17,9 @@ let fixtureRoot = "";
 let fixtureCount = 0;
 
 beforeAll(async () => {
-  fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-store-"));
+  fixtureRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-cron-store-"),
+  );
 });
 
 afterAll(async () => {
@@ -59,7 +69,9 @@ describe("resolveCronStorePath", () => {
     vi.stubEnv("HOME", "/home/other");
 
     const result = resolveCronStorePath("~/cron/jobs.json");
-    expect(result).toBe(path.resolve("/srv/openclaw-home", "cron", "jobs.json"));
+    expect(result).toBe(
+      path.resolve("/srv/openclaw-home", "cron", "jobs.json"),
+    );
   });
 });
 
@@ -73,7 +85,9 @@ describe("cron store", () => {
   it("throws when store contains invalid JSON", async () => {
     const store = await makeStorePath();
     await fs.writeFile(store.storePath, "{ not json", "utf-8");
-    await expect(loadCronStore(store.storePath)).rejects.toThrow(/Failed to parse cron store/i);
+    await expect(loadCronStore(store.storePath)).rejects.toThrow(
+      /Failed to parse cron store/i,
+    );
   });
 
   it("does not create a backup file when saving unchanged content", async () => {
@@ -116,8 +130,11 @@ describe("saveCronStore", () => {
     const realSetTimeout = globalThis.setTimeout;
     const setTimeoutSpy = vi
       .spyOn(globalThis, "setTimeout")
-      .mockImplementation(((handler: TimerHandler, _timeout?: number, ...args: unknown[]) =>
-        realSetTimeout(handler, 0, ...args)) as typeof setTimeout);
+      .mockImplementation(((
+        handler: TimerHandler,
+        _timeout?: number,
+        ...args: unknown[]
+      ) => realSetTimeout(handler, 0, ...args)) as typeof setTimeout);
     const origRename = fs.rename.bind(fs);
     let ebusyCount = 0;
     const spy = vi.spyOn(fs, "rename").mockImplementation(async (src, dest) => {

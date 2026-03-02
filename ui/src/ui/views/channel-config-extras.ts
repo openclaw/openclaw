@@ -21,7 +21,11 @@ export function formatChannelExtraValue(raw: unknown): string {
   if (raw == null) {
     return "n/a";
   }
-  if (typeof raw === "string" || typeof raw === "number" || typeof raw === "boolean") {
+  if (
+    typeof raw === "string" ||
+    typeof raw === "number" ||
+    typeof raw === "boolean"
+  ) {
     return String(raw);
   }
   try {

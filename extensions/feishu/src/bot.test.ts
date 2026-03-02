@@ -1,7 +1,15 @@
-import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "openclaw/plugin-sdk";
+import type {
+  ClawdbotConfig,
+  PluginRuntime,
+  RuntimeEnv,
+} from "openclaw/plugin-sdk";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { FeishuMessageEvent } from "./bot.js";
-import { buildFeishuAgentBody, handleFeishuMessage, toMessageResourceType } from "./bot.js";
+import {
+  buildFeishuAgentBody,
+  handleFeishuMessage,
+  toMessageResourceType,
+} from "./bot.js";
 import { setFeishuRuntime } from "./runtime.js";
 
 const {
@@ -17,7 +25,9 @@ const {
     replyOptions: {},
     markDispatchIdle: vi.fn(),
   })),
-  mockSendMessageFeishu: vi.fn().mockResolvedValue({ messageId: "pairing-msg", chatId: "oc-dm" }),
+  mockSendMessageFeishu: vi
+    .fn()
+    .mockResolvedValue({ messageId: "pairing-msg", chatId: "oc-dm" }),
   mockGetMessageFeishu: vi.fn().mockResolvedValue(null),
   mockDownloadMessageResourceFeishu: vi.fn().mockResolvedValue({
     buffer: Buffer.from("video"),
@@ -60,7 +70,10 @@ function createRuntimeEnv(): RuntimeEnv {
   } as RuntimeEnv;
 }
 
-async function dispatchMessage(params: { cfg: ClawdbotConfig; event: FeishuMessageEvent }) {
+async function dispatchMessage(params: {
+  cfg: ClawdbotConfig;
+  event: FeishuMessageEvent;
+}) {
   await handleFeishuMessage({
     cfg: params.cfg,
     event: params.event,
@@ -76,7 +89,9 @@ describe("buildFeishuAgentBody", () => {
         senderName: "Sender Name",
         senderOpenId: "ou-sender",
         messageId: "msg-42",
-        mentionTargets: [{ openId: "ou-target", name: "Target User", key: "@_user_1" }],
+        mentionTargets: [
+          { openId: "ou-target", name: "Target User", key: "@_user_1" },
+        ],
       },
       quotedContent: "previous message",
       permissionErrorForAgent: {
@@ -102,7 +117,9 @@ describe("handleFeishuMessage command authorization", () => {
       dispatcher,
       run,
       onSettled,
-    }: Parameters<PluginRuntime["channel"]["reply"]["withReplyDispatcher"]>[0]) => {
+    }: Parameters<
+      PluginRuntime["channel"]["reply"]["withReplyDispatcher"]
+    >[0]) => {
       try {
         return await run();
       } finally {
@@ -118,7 +135,9 @@ describe("handleFeishuMessage command authorization", () => {
   const mockResolveCommandAuthorizedFromAuthorizers = vi.fn(() => false);
   const mockShouldComputeCommandAuthorized = vi.fn(() => true);
   const mockReadAllowFromStore = vi.fn().mockResolvedValue([]);
-  const mockUpsertPairingRequest = vi.fn().mockResolvedValue({ code: "ABCDEFGH", created: false });
+  const mockUpsertPairingRequest = vi
+    .fn()
+    .mockResolvedValue({ code: "ABCDEFGH", created: false });
   const mockBuildPairingReply = vi.fn(() => "Pairing response");
   const mockEnqueueSystemEvent = vi.fn();
   const mockSaveMediaBuffer = vi.fn().mockResolvedValue({
@@ -138,7 +157,9 @@ describe("handleFeishuMessage command authorization", () => {
     mockCreateFeishuClient.mockReturnValue({
       contact: {
         user: {
-          get: vi.fn().mockResolvedValue({ data: { user: { name: "Sender" } } }),
+          get: vi
+            .fn()
+            .mockResolvedValue({ data: { user: { name: "Sender" } } }),
         },
       },
     });
@@ -152,7 +173,9 @@ describe("handleFeishuMessage command authorization", () => {
           resolveAgentRoute: mockResolveAgentRoute,
         },
         reply: {
-          resolveEnvelopeFormatOptions: vi.fn(() => ({ template: "channel+name+time" })),
+          resolveEnvelopeFormatOptions: vi.fn(() => ({
+            template: "channel+name+time",
+          })),
           formatAgentEnvelope: vi.fn((params: { body: string }) => params.body),
           finalizeInboundContext: mockFinalizeInboundContext,
           dispatchReplyFromConfig: mockDispatchReplyFromConfig,
@@ -160,7 +183,8 @@ describe("handleFeishuMessage command authorization", () => {
         },
         commands: {
           shouldComputeCommandAuthorized: mockShouldComputeCommandAuthorized,
-          resolveCommandAuthorizedFromAuthorizers: mockResolveCommandAuthorizedFromAuthorizers,
+          resolveCommandAuthorizedFromAuthorizers:
+            mockResolveCommandAuthorizedFromAuthorizers,
         },
         media: {
           saveMediaBuffer: mockSaveMediaBuffer,
@@ -369,7 +393,10 @@ describe("handleFeishuMessage command authorization", () => {
   it("creates pairing request and drops unauthorized DMs in pairing mode", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
     mockReadAllowFromStore.mockResolvedValue([]);
-    mockUpsertPairingRequest.mockResolvedValue({ code: "ABCDEFGH", created: true });
+    mockUpsertPairingRequest.mockResolvedValue({
+      code: "ABCDEFGH",
+      created: true,
+    });
 
     const cfg: ClawdbotConfig = {
       channels: {
@@ -859,7 +886,9 @@ describe("handleFeishuMessage command authorization", () => {
           {
             message_id: "container",
             msg_type: "merge_forward",
-            body: { content: JSON.stringify({ text: "Merged and Forwarded Message" }) },
+            body: {
+              content: JSON.stringify({ text: "Merged and Forwarded Message" }),
+            },
           },
           {
             message_id: "sub-2",
@@ -881,7 +910,9 @@ describe("handleFeishuMessage command authorization", () => {
     mockCreateFeishuClient.mockReturnValue({
       contact: {
         user: {
-          get: vi.fn().mockResolvedValue({ data: { user: { name: "Sender" } } }),
+          get: vi
+            .fn()
+            .mockResolvedValue({ data: { user: { name: "Sender" } } }),
         },
       },
       im: {
@@ -933,7 +964,9 @@ describe("handleFeishuMessage command authorization", () => {
     mockCreateFeishuClient.mockReturnValue({
       contact: {
         user: {
-          get: vi.fn().mockResolvedValue({ data: { user: { name: "Sender" } } }),
+          get: vi
+            .fn()
+            .mockResolvedValue({ data: { user: { name: "Sender" } } }),
         },
       },
       im: {
@@ -970,7 +1003,9 @@ describe("handleFeishuMessage command authorization", () => {
 
     expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
       expect.objectContaining({
-        BodyForAgent: expect.stringContaining("[Merged and Forwarded Message - could not fetch]"),
+        BodyForAgent: expect.stringContaining(
+          "[Merged and Forwarded Message - could not fetch]",
+        ),
       }),
     );
   });
@@ -1107,7 +1142,10 @@ describe("handleFeishuMessage command authorization", () => {
 
     expect(mockResolveAgentRoute).toHaveBeenCalledWith(
       expect.objectContaining({
-        peer: { kind: "group", id: "oc-group:topic:om_root_topic:sender:ou-topic-user" },
+        peer: {
+          kind: "group",
+          id: "oc-group:topic:om_root_topic:sender:ou-topic-user",
+        },
         parentPeer: { kind: "group", id: "oc-group" },
       }),
     );
@@ -1217,7 +1255,10 @@ describe("handleFeishuMessage command authorization", () => {
       },
     };
 
-    await Promise.all([dispatchMessage({ cfg, event }), dispatchMessage({ cfg, event })]);
+    await Promise.all([
+      dispatchMessage({ cfg, event }),
+      dispatchMessage({ cfg, event }),
+    ]);
     expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
   });
 });

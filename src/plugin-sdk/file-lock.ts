@@ -28,20 +28,31 @@ type HeldLock = {
 const HELD_LOCKS_KEY = Symbol.for("openclaw.fileLockHeldLocks");
 const HELD_LOCKS = resolveProcessScopedMap<HeldLock>(HELD_LOCKS_KEY);
 
-function computeDelayMs(retries: FileLockOptions["retries"], attempt: number): number {
+function computeDelayMs(
+  retries: FileLockOptions["retries"],
+  attempt: number,
+): number {
   const base = Math.min(
     retries.maxTimeout,
-    Math.max(retries.minTimeout, retries.minTimeout * retries.factor ** attempt),
+    Math.max(
+      retries.minTimeout,
+      retries.minTimeout * retries.factor ** attempt,
+    ),
   );
   const jitter = retries.randomize ? 1 + Math.random() : 1;
   return Math.min(retries.maxTimeout, Math.round(base * jitter));
 }
 
-async function readLockPayload(lockPath: string): Promise<LockFilePayload | null> {
+async function readLockPayload(
+  lockPath: string,
+): Promise<LockFilePayload | null> {
   try {
     const raw = await fs.readFile(lockPath, "utf8");
     const parsed = JSON.parse(raw) as Partial<LockFilePayload>;
-    if (typeof parsed.pid !== "number" || typeof parsed.createdAt !== "string") {
+    if (
+      typeof parsed.pid !== "number" ||
+      typeof parsed.createdAt !== "string"
+    ) {
       return null;
     }
     return { pid: parsed.pid, createdAt: parsed.createdAt };
@@ -62,7 +73,10 @@ async function resolveNormalizedFilePath(filePath: string): Promise<string> {
   }
 }
 
-async function isStaleLock(lockPath: string, staleMs: number): Promise<boolean> {
+async function isStaleLock(
+  lockPath: string,
+  staleMs: number,
+): Promise<boolean> {
   const payload = await readLockPayload(lockPath);
   if (payload?.pid && !isPidAlive(payload.pid)) {
     return true;
@@ -120,7 +134,11 @@ export async function acquireFileLock(
     try {
       const handle = await fs.open(lockPath, "wx");
       await handle.writeFile(
-        JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() }, null, 2),
+        JSON.stringify(
+          { pid: process.pid, createdAt: new Date().toISOString() },
+          null,
+          2,
+        ),
         "utf8",
       );
       HELD_LOCKS.set(normalizedFile, { count: 1, handle, lockPath });
@@ -140,7 +158,9 @@ export async function acquireFileLock(
       if (attempt >= attempts - 1) {
         break;
       }
-      await new Promise((resolve) => setTimeout(resolve, computeDelayMs(options.retries, attempt)));
+      await new Promise((resolve) =>
+        setTimeout(resolve, computeDelayMs(options.retries, attempt)),
+      );
     }
   }
 

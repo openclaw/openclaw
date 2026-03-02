@@ -2,7 +2,10 @@ import os from "node:os";
 import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
-import { extractAssistantText, sanitizeTextContent } from "./sessions-helpers.js";
+import {
+  extractAssistantText,
+  sanitizeTextContent,
+} from "./sessions-helpers.js";
 
 const callGatewayMock = vi.fn();
 vi.mock("../../gateway/call.js", () => ({
@@ -23,7 +26,8 @@ const loadConfigMock = vi.fn<() => SessionsToolTestConfig>(() => ({
 }));
 
 vi.mock("../../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../config/config.js")>();
+  const actual =
+    await importOriginal<typeof import("../../config/config.js")>();
   return {
     ...actual,
     loadConfig: () => loadConfigMock() as never,
@@ -38,7 +42,9 @@ let setActivePluginRegistry: (typeof import("../../plugins/runtime.js"))["setAct
 const MAIN_AGENT_SESSION_KEY = "agent:main:main";
 const MAIN_AGENT_CHANNEL = "whatsapp";
 
-type SessionsListResult = Awaited<ReturnType<ReturnType<typeof createSessionsListTool>["execute"]>>;
+type SessionsListResult = Awaited<
+  ReturnType<ReturnType<typeof createSessionsListTool>["execute"]>
+>;
 
 const installRegistry = async () => {
   setActivePluginRegistry(
@@ -115,7 +121,9 @@ function expectWorkerTranscriptPath(
   const session = getFirstListedSession(result);
   expect(session).toMatchObject({ key: "agent:worker:main" });
   const transcriptPath = String(session?.transcriptPath ?? "");
-  expect(path.normalize(transcriptPath)).toContain(path.normalize(params.containsPath));
+  expect(path.normalize(transcriptPath)).toContain(
+    path.normalize(params.containsPath),
+  );
   expect(transcriptPath).toMatch(new RegExp(`${params.sessionId}\\.jsonl$`));
 }
 
@@ -182,7 +190,9 @@ describe("extractAssistantText", () => {
       errorMessage: "500 Internal Server Error",
       content: [{ type: "text", text: "500 Internal Server Error" }],
     };
-    expect(extractAssistantText(message)).toBe("HTTP 500: Internal Server Error");
+    expect(extractAssistantText(message)).toBe(
+      "HTTP 500: Internal Server Error",
+    );
   });
 
   it("keeps normal status text that mentions billing", () => {
@@ -240,7 +250,9 @@ describe("resolveAnnounceTarget", () => {
       accountId: "work",
     });
     expect(callGatewayMock).toHaveBeenCalledTimes(1);
-    const first = callGatewayMock.mock.calls[0]?.[0] as { method?: string } | undefined;
+    const first = callGatewayMock.mock.calls[0]?.[0] as
+      | { method?: string }
+      | undefined;
     expect(first).toBeDefined();
     expect(first?.method).toBe("sessions.list");
   });
@@ -364,7 +376,8 @@ describe("sessions_list transcriptPath resolution", () => {
   });
 
   it("resolves absolute {agentId} template paths per session agent", async () => {
-    const templateStorePath = "/tmp/openclaw/agents/{agentId}/sessions/sessions.json";
+    const templateStorePath =
+      "/tmp/openclaw/agents/{agentId}/sessions/sessions.json";
 
     callGatewayMock.mockResolvedValueOnce({
       path: templateStorePath,
@@ -378,7 +391,9 @@ describe("sessions_list transcriptPath resolution", () => {
     });
 
     const result = await executeMainSessionsList();
-    const expectedSessionsDir = path.dirname(templateStorePath.replace("{agentId}", "worker"));
+    const expectedSessionsDir = path.dirname(
+      templateStorePath.replace("{agentId}", "worker"),
+    );
     expectWorkerTranscriptPath(result, {
       containsPath: expectedSessionsDir,
       sessionId: "sess-worker-template",
@@ -407,7 +422,9 @@ describe("sessions_send gating", () => {
   });
 
   it("returns an error when label resolution fails", async () => {
-    callGatewayMock.mockRejectedValueOnce(new Error("No session found with label: nope"));
+    callGatewayMock.mockRejectedValueOnce(
+      new Error("No session found with label: nope"),
+    );
     const tool = createMainSessionsSendTool();
 
     const result = await tool.execute("call-missing-label", {
@@ -419,11 +436,13 @@ describe("sessions_send gating", () => {
     expect(result.details).toMatchObject({
       status: "error",
     });
-    expect((result.details as { error?: string } | undefined)?.error ?? "").toContain(
-      "No session found with label",
-    );
+    expect(
+      (result.details as { error?: string } | undefined)?.error ?? "",
+    ).toContain("No session found with label");
     expect(callGatewayMock).toHaveBeenCalledTimes(1);
-    expect(callGatewayMock.mock.calls[0]?.[0]).toMatchObject({ method: "sessions.resolve" });
+    expect(callGatewayMock.mock.calls[0]?.[0]).toMatchObject({
+      method: "sessions.resolve",
+    });
   });
 
   it("blocks cross-agent sends when tools.agentToAgent.enabled is false", async () => {
@@ -436,7 +455,9 @@ describe("sessions_send gating", () => {
     });
 
     expect(callGatewayMock).toHaveBeenCalledTimes(1);
-    expect(callGatewayMock.mock.calls[0]?.[0]).toMatchObject({ method: "sessions.list" });
+    expect(callGatewayMock.mock.calls[0]?.[0]).toMatchObject({
+      method: "sessions.list",
+    });
     expect(result.details).toMatchObject({ status: "forbidden" });
   });
 });

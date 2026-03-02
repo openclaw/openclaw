@@ -14,7 +14,12 @@ const baseTelegramCfg: TelegramAccountConfig = {
   groupPolicy: "allowlist",
 } as unknown as TelegramAccountConfig;
 
-const emptyAllow = { entries: [], hasWildcard: false, hasEntries: false, invalidEntries: [] };
+const emptyAllow = {
+  entries: [],
+  hasWildcard: false,
+  hasEntries: false,
+  invalidEntries: [],
+};
 const senderAllow = {
   entries: ["111"],
   hasWildcard: false,
@@ -196,7 +201,9 @@ describe("evaluateTelegramGroupPolicyAccess – chat allowlist vs sender allowli
       isGroup: true,
       chatId: "-100123456",
       cfg: baseCfg,
-      telegramCfg: { groupPolicy: "disabled" } as unknown as TelegramAccountConfig,
+      telegramCfg: {
+        groupPolicy: "disabled",
+      } as unknown as TelegramAccountConfig,
       effectiveGroupAllow: emptyAllow,
       senderId: "999",
       senderUsername: "user",

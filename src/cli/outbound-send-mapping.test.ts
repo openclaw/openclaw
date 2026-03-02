@@ -7,12 +7,16 @@ import {
 describe("createOutboundSendDepsFromCliSource", () => {
   it("maps CLI send deps to outbound send deps", () => {
     const deps: CliOutboundSendSource = {
-      sendMessageWhatsApp: vi.fn() as CliOutboundSendSource["sendMessageWhatsApp"],
-      sendMessageTelegram: vi.fn() as CliOutboundSendSource["sendMessageTelegram"],
-      sendMessageDiscord: vi.fn() as CliOutboundSendSource["sendMessageDiscord"],
+      sendMessageWhatsApp:
+        vi.fn() as CliOutboundSendSource["sendMessageWhatsApp"],
+      sendMessageTelegram:
+        vi.fn() as CliOutboundSendSource["sendMessageTelegram"],
+      sendMessageDiscord:
+        vi.fn() as CliOutboundSendSource["sendMessageDiscord"],
       sendMessageSlack: vi.fn() as CliOutboundSendSource["sendMessageSlack"],
       sendMessageSignal: vi.fn() as CliOutboundSendSource["sendMessageSignal"],
-      sendMessageIMessage: vi.fn() as CliOutboundSendSource["sendMessageIMessage"],
+      sendMessageIMessage:
+        vi.fn() as CliOutboundSendSource["sendMessageIMessage"],
     };
 
     const outbound = createOutboundSendDepsFromCliSource(deps);

@@ -63,7 +63,9 @@ export function extractThinking(message: unknown): string | null {
     return null;
   }
   const matches = [
-    ...rawText.matchAll(/<\s*think(?:ing)?\s*>([\s\S]*?)<\s*\/\s*think(?:ing)?\s*>/gi),
+    ...rawText.matchAll(
+      /<\s*think(?:ing)?\s*>([\s\S]*?)<\s*\/\s*think(?:ing)?\s*>/gi,
+    ),
   ];
   const extracted = matches.map((m) => (m[1] ?? "").trim()).filter(Boolean);
   return extracted.length > 0 ? extracted.join("\n") : null;

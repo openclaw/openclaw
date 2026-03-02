@@ -11,7 +11,9 @@ import { stripMarkdown } from "../line/markdown-to-line.js";
  */
 describe("TTS text preparation – stripMarkdown", () => {
   it("strips markdown headers before TTS", () => {
-    expect(stripMarkdown("### System Design Basics")).toBe("System Design Basics");
+    expect(stripMarkdown("### System Design Basics")).toBe(
+      "System Design Basics",
+    );
     expect(stripMarkdown("## Heading\nSome text")).toBe("Heading\nSome text");
   });
 

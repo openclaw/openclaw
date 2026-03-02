@@ -19,8 +19,16 @@ describe("resolveRunWorkspaceDir", () => {
   });
 
   it("falls back to configured per-agent workspace when input is missing", () => {
-    const defaultWorkspace = path.join(process.cwd(), "tmp", "workspace-default-main");
-    const researchWorkspace = path.join(process.cwd(), "tmp", "workspace-research");
+    const defaultWorkspace = path.join(
+      process.cwd(),
+      "tmp",
+      "workspace-default-main",
+    );
+    const researchWorkspace = path.join(
+      process.cwd(),
+      "tmp",
+      "workspace-research",
+    );
     const cfg = {
       agents: {
         defaults: { workspace: defaultWorkspace },
@@ -41,7 +49,11 @@ describe("resolveRunWorkspaceDir", () => {
   });
 
   it("falls back to default workspace for blank strings", () => {
-    const defaultWorkspace = path.join(process.cwd(), "tmp", "workspace-default-main");
+    const defaultWorkspace = path.join(
+      process.cwd(),
+      "tmp",
+      "workspace-default-main",
+    );
     const cfg = {
       agents: {
         defaults: { workspace: defaultWorkspace },
@@ -70,7 +82,9 @@ describe("resolveRunWorkspaceDir", () => {
     expect(result.usedFallback).toBe(true);
     expect(result.fallbackReason).toBe("missing");
     expect(result.agentId).toBe("main");
-    expect(result.workspaceDir).toBe(path.resolve(resolveDefaultAgentWorkspaceDir(process.env)));
+    expect(result.workspaceDir).toBe(
+      path.resolve(resolveDefaultAgentWorkspaceDir(process.env)),
+    );
   });
 
   it("throws for malformed agent session keys", () => {
@@ -99,8 +113,16 @@ describe("resolveRunWorkspaceDir", () => {
   });
 
   it("throws for malformed agent session keys even when config has a default agent", () => {
-    const mainWorkspace = path.join(process.cwd(), "tmp", "workspace-main-default");
-    const researchWorkspace = path.join(process.cwd(), "tmp", "workspace-research-default");
+    const mainWorkspace = path.join(
+      process.cwd(),
+      "tmp",
+      "workspace-main-default",
+    );
+    const researchWorkspace = path.join(
+      process.cwd(),
+      "tmp",
+      "workspace-research-default",
+    );
     const cfg = {
       agents: {
         defaults: { workspace: mainWorkspace },
@@ -121,7 +143,11 @@ describe("resolveRunWorkspaceDir", () => {
   });
 
   it("treats non-agent legacy keys as default, not malformed", () => {
-    const fallbackWorkspace = path.join(process.cwd(), "tmp", "workspace-default-legacy");
+    const fallbackWorkspace = path.join(
+      process.cwd(),
+      "tmp",
+      "workspace-default-legacy",
+    );
     const cfg = {
       agents: {
         defaults: { workspace: fallbackWorkspace },

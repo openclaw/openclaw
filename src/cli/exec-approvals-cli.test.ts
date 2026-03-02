@@ -2,19 +2,22 @@ import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createCliRuntimeCapture } from "./test-runtime-capture.js";
 
-const callGatewayFromCli = vi.fn(async (method: string, _opts: unknown, params?: unknown) => {
-  if (method.endsWith(".get")) {
-    return {
-      path: "/tmp/exec-approvals.json",
-      exists: true,
-      hash: "hash-1",
-      file: { version: 1, agents: {} },
-    };
-  }
-  return { method, params };
-});
+const callGatewayFromCli = vi.fn(
+  async (method: string, _opts: unknown, params?: unknown) => {
+    if (method.endsWith(".get")) {
+      return {
+        path: "/tmp/exec-approvals.json",
+        exists: true,
+        hash: "hash-1",
+        file: { version: 1, agents: {} },
+      };
+    }
+    return { method, params };
+  },
+);
 
-const { runtimeErrors, defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
+const { runtimeErrors, defaultRuntime, resetRuntimeCapture } =
+  createCliRuntimeCapture();
 
 const localSnapshot = {
   path: "/tmp/local-exec-approvals.json",
@@ -34,7 +37,10 @@ vi.mock("./gateway-rpc.js", () => ({
 }));
 
 vi.mock("./nodes-cli/rpc.js", async () => {
-  const actual = await vi.importActual<typeof import("./nodes-cli/rpc.js")>("./nodes-cli/rpc.js");
+  const actual =
+    await vi.importActual<typeof import("./nodes-cli/rpc.js")>(
+      "./nodes-cli/rpc.js",
+    );
   return {
     ...actual,
     resolveNodeId: vi.fn(async () => "node-1"),
@@ -46,9 +52,9 @@ vi.mock("../runtime.js", () => ({
 }));
 
 vi.mock("../infra/exec-approvals.js", async () => {
-  const actual = await vi.importActual<typeof import("../infra/exec-approvals.js")>(
-    "../infra/exec-approvals.js",
-  );
+  const actual = await vi.importActual<
+    typeof import("../infra/exec-approvals.js")
+  >("../infra/exec-approvals.js");
   return {
     ...actual,
     readExecApprovalsSnapshot: () => localSnapshot,
@@ -87,15 +93,23 @@ describe("exec approvals CLI", () => {
 
     await runApprovalsCommand(["approvals", "get", "--gateway"]);
 
-    expect(callGatewayFromCli).toHaveBeenCalledWith("exec.approvals.get", expect.anything(), {});
+    expect(callGatewayFromCli).toHaveBeenCalledWith(
+      "exec.approvals.get",
+      expect.anything(),
+      {},
+    );
     expect(runtimeErrors).toHaveLength(0);
     callGatewayFromCli.mockClear();
 
     await runApprovalsCommand(["approvals", "get", "--node", "macbook"]);
 
-    expect(callGatewayFromCli).toHaveBeenCalledWith("exec.approvals.node.get", expect.anything(), {
-      nodeId: "node-1",
-    });
+    expect(callGatewayFromCli).toHaveBeenCalledWith(
+      "exec.approvals.node.get",
+      expect.anything(),
+      {
+        nodeId: "node-1",
+      },
+    );
     expect(runtimeErrors).toHaveLength(0);
   });
 
@@ -103,7 +117,12 @@ describe("exec approvals CLI", () => {
     const saveExecApprovals = vi.mocked(execApprovals.saveExecApprovals);
     saveExecApprovals.mockClear();
 
-    await runApprovalsCommand(["approvals", "allowlist", "add", "/usr/bin/uname"]);
+    await runApprovalsCommand([
+      "approvals",
+      "allowlist",
+      "add",
+      "/usr/bin/uname",
+    ]);
 
     expect(callGatewayFromCli).not.toHaveBeenCalledWith(
       "exec.approvals.set",
@@ -132,7 +151,12 @@ describe("exec approvals CLI", () => {
     const saveExecApprovals = vi.mocked(execApprovals.saveExecApprovals);
     saveExecApprovals.mockClear();
 
-    await runApprovalsCommand(["approvals", "allowlist", "remove", "/usr/bin/uname"]);
+    await runApprovalsCommand([
+      "approvals",
+      "allowlist",
+      "remove",
+      "/usr/bin/uname",
+    ]);
 
     expect(saveExecApprovals).toHaveBeenCalledWith(
       expect.objectContaining({

@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 import { buildContextReply } from "./commands-context-report.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
-function makeParams(commandBodyNormalized: string, truncated: boolean): HandleCommandsParams {
+function makeParams(
+  commandBodyNormalized: string,
+  truncated: boolean,
+): HandleCommandsParams {
   return {
     command: {
       commandBodyNormalized,
@@ -50,7 +53,14 @@ function makeParams(commandBodyNormalized: string, truncated: boolean): HandleCo
         tools: {
           listChars: 10,
           schemaChars: 20,
-          entries: [{ name: "read", summaryChars: 10, schemaChars: 20, propertiesCount: 1 }],
+          entries: [
+            {
+              name: "read",
+              summaryChars: 10,
+              schemaChars: 20,
+              propertiesCount: 1,
+            },
+          ],
         },
       },
     },
@@ -66,7 +76,9 @@ describe("buildContextReply", () => {
   it("shows bootstrap truncation warning in list output when context exceeds configured limits", async () => {
     const result = await buildContextReply(makeParams("/context list", true));
     expect(result.text).toContain("Bootstrap max/total: 150,000 chars");
-    expect(result.text).toContain("⚠ Bootstrap context is over configured limits");
+    expect(result.text).toContain(
+      "⚠ Bootstrap context is over configured limits",
+    );
     expect(result.text).toContain(
       "Causes: 1 file(s) exceeded max/file; raw total exceeded max/total.",
     );
@@ -74,6 +86,8 @@ describe("buildContextReply", () => {
 
   it("does not show bootstrap truncation warning when there is no truncation", async () => {
     const result = await buildContextReply(makeParams("/context list", false));
-    expect(result.text).not.toContain("Bootstrap context is over configured limits");
+    expect(result.text).not.toContain(
+      "Bootstrap context is over configured limits",
+    );
   });
 });

@@ -1,6 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { OpenClawPluginApi, OpenClawPluginService } from "openclaw/plugin-sdk";
+import type {
+  OpenClawPluginApi,
+  OpenClawPluginService,
+} from "openclaw/plugin-sdk";
 
 type ArmGroup = "camera" | "screen" | "writes" | "all";
 
@@ -64,7 +67,14 @@ function parseDurationMs(input: string | undefined): number | null {
     return null;
   }
   const unit = m[2];
-  const mult = unit === "s" ? 1000 : unit === "m" ? 60_000 : unit === "h" ? 3_600_000 : 86_400_000;
+  const mult =
+    unit === "s"
+      ? 1000
+      : unit === "m"
+        ? 60_000
+        : unit === "h"
+          ? 3_600_000
+          : 86_400_000;
   return n * mult;
 }
 
@@ -100,7 +110,9 @@ async function readArmState(statePath: string): Promise<ArmStateFile | null> {
     if (typeof parsed.armedAtMs !== "number") {
       return null;
     }
-    if (!(parsed.expiresAtMs === null || typeof parsed.expiresAtMs === "number")) {
+    if (
+      !(parsed.expiresAtMs === null || typeof parsed.expiresAtMs === "number")
+    ) {
       return null;
     }
 
@@ -115,7 +127,12 @@ async function readArmState(statePath: string): Promise<ArmStateFile | null> {
     }
 
     const group = typeof parsed.group === "string" ? parsed.group : "";
-    if (group !== "camera" && group !== "screen" && group !== "writes" && group !== "all") {
+    if (
+      group !== "camera" &&
+      group !== "screen" &&
+      group !== "writes" &&
+      group !== "all"
+    ) {
       return null;
     }
     if (
@@ -142,7 +159,10 @@ async function readArmState(statePath: string): Promise<ArmStateFile | null> {
   }
 }
 
-async function writeArmState(statePath: string, state: ArmStateFile | null): Promise<void> {
+async function writeArmState(
+  statePath: string,
+  state: ArmStateFile | null,
+): Promise<void> {
   await fs.mkdir(path.dirname(statePath), { recursive: true });
   if (!state) {
     try {
@@ -258,7 +278,12 @@ function parseGroup(raw: string | undefined): ArmGroup | null {
   if (!value) {
     return null;
   }
-  if (value === "camera" || value === "screen" || value === "writes" || value === "all") {
+  if (
+    value === "camera" ||
+    value === "screen" ||
+    value === "writes" ||
+    value === "all"
+  ) {
     return value;
   }
   return null;
@@ -329,7 +354,8 @@ export default function register(api: OpenClawPluginApi) {
 
   api.registerCommand({
     name: "phone",
-    description: "Arm/disarm high-risk phone node commands (camera/screen/writes).",
+    description:
+      "Arm/disarm high-risk phone node commands (camera/screen/writes).",
     acceptsArgs: true,
     handler: async (ctx) => {
       const args = ctx.args?.trim() ?? "";
@@ -359,8 +385,10 @@ export default function register(api: OpenClawPluginApi) {
         if (!res.changed) {
           return { text: "Phone control: disarmed." };
         }
-        const restoredLabel = res.restored.length > 0 ? res.restored.join(", ") : "none";
-        const removedLabel = res.removed.length > 0 ? res.removed.join(", ") : "none";
+        const restoredLabel =
+          res.restored.length > 0 ? res.restored.join(", ") : "none";
+        const removedLabel =
+          res.removed.length > 0 ? res.removed.join(", ") : "none";
         return {
           text: `Phone control: disarmed.\nRemoved allowlist: ${removedLabel}\nRestored denylist: ${restoredLabel}`,
         };
@@ -369,7 +397,9 @@ export default function register(api: OpenClawPluginApi) {
       if (action === "arm") {
         const group = parseGroup(tokens[1]);
         if (!group) {
-          return { text: `Usage: /phone arm <group> [duration]\nGroups: ${formatGroupList()}` };
+          return {
+            text: `Usage: /phone arm <group> [duration]\nGroups: ${formatGroupList()}`,
+          };
         }
         const durationMs = parseDurationMs(tokens[2]) ?? 10 * 60_000;
         const expiresAtMs = Date.now() + durationMs;

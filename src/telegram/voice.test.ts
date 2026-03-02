@@ -43,15 +43,18 @@ describe("resolveTelegramVoiceSend", () => {
   it.each([
     { contentType: "audio/mpeg", fileName: "track.mp3" },
     { contentType: "audio/mp4", fileName: "track.m4a" },
-  ])("keeps voice for compatible MIME $contentType", ({ contentType, fileName }) => {
-    const logFallback = vi.fn();
-    const result = resolveTelegramVoiceSend({
-      wantsVoice: true,
-      contentType,
-      fileName,
-      logFallback,
-    });
-    expect(result.useVoice).toBe(true);
-    expect(logFallback).not.toHaveBeenCalled();
-  });
+  ])(
+    "keeps voice for compatible MIME $contentType",
+    ({ contentType, fileName }) => {
+      const logFallback = vi.fn();
+      const result = resolveTelegramVoiceSend({
+        wantsVoice: true,
+        contentType,
+        fileName,
+        logFallback,
+      });
+      expect(result.useVoice).toBe(true);
+      expect(logFallback).not.toHaveBeenCalled();
+    },
+  );
 });

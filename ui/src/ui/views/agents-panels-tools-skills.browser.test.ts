@@ -2,7 +2,9 @@ import { render } from "lit";
 import { describe, expect, it } from "vitest";
 import { renderAgentTools } from "./agents-panels-tools-skills.ts";
 
-function createBaseParams(overrides: Partial<Parameters<typeof renderAgentTools>[0]> = {}) {
+function createBaseParams(
+  overrides: Partial<Parameters<typeof renderAgentTools>[0]> = {},
+) {
   return {
     agentId: "main",
     configForm: {
@@ -97,6 +99,8 @@ describe("agents tools panel (browser)", () => {
     );
     await Promise.resolve();
 
-    expect(container.textContent ?? "").toContain("Could not load runtime tool catalog");
+    expect(container.textContent ?? "").toContain(
+      "Could not load runtime tool catalog",
+    );
   });
 });

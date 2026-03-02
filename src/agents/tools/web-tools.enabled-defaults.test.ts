@@ -14,7 +14,10 @@ function installMockFetch(payload: unknown) {
   return mockFetch;
 }
 
-function createPerplexitySearchTool(perplexityConfig?: { apiKey?: string; baseUrl?: string }) {
+function createPerplexitySearchTool(perplexityConfig?: {
+  apiKey?: string;
+  baseUrl?: string;
+}) {
   return createWebSearchTool({
     config: {
       tools: {
@@ -30,7 +33,11 @@ function createPerplexitySearchTool(perplexityConfig?: { apiKey?: string; baseUr
   });
 }
 
-function createKimiSearchTool(kimiConfig?: { apiKey?: string; baseUrl?: string; model?: string }) {
+function createKimiSearchTool(kimiConfig?: {
+  apiKey?: string;
+  baseUrl?: string;
+  model?: string;
+}) {
   return createWebSearchTool({
     config: {
       tools: {
@@ -46,7 +53,9 @@ function createKimiSearchTool(kimiConfig?: { apiKey?: string; baseUrl?: string; 
   });
 }
 
-function createProviderSearchTool(provider: "brave" | "perplexity" | "grok" | "gemini" | "kimi") {
+function createProviderSearchTool(
+  provider: "brave" | "perplexity" | "grok" | "gemini" | "kimi",
+) {
   const searchConfig =
     provider === "perplexity"
       ? { provider, perplexity: { apiKey: "pplx-config-test" } }
@@ -72,10 +81,9 @@ function createProviderSearchTool(provider: "brave" | "perplexity" | "grok" | "g
 function parseFirstRequestBody(mockFetch: ReturnType<typeof installMockFetch>) {
   const request = mockFetch.mock.calls[0]?.[1] as RequestInit | undefined;
   const requestBody = request?.body;
-  return JSON.parse(typeof requestBody === "string" ? requestBody : "{}") as Record<
-    string,
-    unknown
-  >;
+  return JSON.parse(
+    typeof requestBody === "string" ? requestBody : "{}",
+  ) as Record<string, unknown>;
 }
 
 function installPerplexitySuccessFetch() {
@@ -108,7 +116,9 @@ function createProviderSuccessPayload(
     };
   }
   return {
-    choices: [{ finish_reason: "stop", message: { role: "assistant", content: "ok" } }],
+    choices: [
+      { finish_reason: "stop", message: { role: "assistant", content: "ok" } },
+    ],
     search_results: [],
   };
 }
@@ -190,7 +200,10 @@ describe("web_search country and language parameters", () => {
   it("rejects invalid freshness values", async () => {
     const mockFetch = installMockFetch({ web: { results: [] } });
     const tool = createWebSearchTool({ config: undefined, sandboxed: true });
-    const result = await tool?.execute?.("call-1", { query: "test", freshness: "yesterday" });
+    const result = await tool?.execute?.("call-1", {
+      query: "test",
+      freshness: "yesterday",
+    });
 
     expect(mockFetch).not.toHaveBeenCalled();
     expect(result?.details).toMatchObject({ error: "invalid_freshness" });
@@ -222,7 +235,9 @@ describe("web_search provider proxy dispatch", () => {
     "uses proxy-aware dispatcher for %s provider when HTTP_PROXY is configured",
     async (provider) => {
       vi.stubEnv("HTTP_PROXY", "http://127.0.0.1:7890");
-      const mockFetch = installMockFetch(createProviderSuccessPayload(provider));
+      const mockFetch = installMockFetch(
+        createProviderSuccessPayload(provider),
+      );
       const tool = createProviderSearchTool(provider);
       expect(tool).not.toBeNull();
 
@@ -246,9 +261,12 @@ describe("web_search perplexity baseUrl defaults", () => {
 
   it("passes freshness to Perplexity provider as search_recency_filter", async () => {
     vi.stubEnv("PERPLEXITY_API_KEY", "pplx-test");
-    const mockFetch = await executePerplexitySearch("perplexity-freshness-test", {
-      freshness: "pw",
-    });
+    const mockFetch = await executePerplexitySearch(
+      "perplexity-freshness-test",
+      {
+        freshness: "pw",
+      },
+    );
 
     expect(mockFetch).toHaveBeenCalledOnce();
     const body = parseFirstRequestBody(mockFetch);
@@ -295,22 +313,27 @@ describe("web_search perplexity baseUrl defaults", () => {
       perplexityConfig: { apiKey: "sk-or-v1-test" },
       expectedUrl: "https://openrouter.ai/api/v1/chat/completions",
     },
-  ])("$name", async ({ env, query, perplexityConfig, expectedUrl, expectedModel }) => {
-    if (env?.perplexity !== undefined) {
-      vi.stubEnv("PERPLEXITY_API_KEY", env.perplexity);
-    }
-    if (env?.openrouter !== undefined) {
-      vi.stubEnv("OPENROUTER_API_KEY", env.openrouter);
-    }
+  ])(
+    "$name",
+    async ({ env, query, perplexityConfig, expectedUrl, expectedModel }) => {
+      if (env?.perplexity !== undefined) {
+        vi.stubEnv("PERPLEXITY_API_KEY", env.perplexity);
+      }
+      if (env?.openrouter !== undefined) {
+        vi.stubEnv("OPENROUTER_API_KEY", env.openrouter);
+      }
 
-    const mockFetch = await executePerplexitySearch(query, { perplexityConfig });
-    expect(mockFetch).toHaveBeenCalled();
-    expect(mockFetch.mock.calls[0]?.[0]).toBe(expectedUrl);
-    if (expectedModel) {
-      const body = parseFirstRequestBody(mockFetch);
-      expect(body.model).toBe(expectedModel);
-    }
-  });
+      const mockFetch = await executePerplexitySearch(query, {
+        perplexityConfig,
+      });
+      expect(mockFetch).toHaveBeenCalled();
+      expect(mockFetch.mock.calls[0]?.[0]).toBe(expectedUrl);
+      if (expectedModel) {
+        const body = parseFirstRequestBody(mockFetch);
+        expect(body.model).toBe(expectedModel);
+      }
+    },
+  );
 });
 
 describe("web_search kimi provider", () => {
@@ -330,47 +353,56 @@ describe("web_search kimi provider", () => {
   });
 
   it("runs the Kimi web_search tool flow and echoes tool results", async () => {
-    const mockFetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => {
-      const idx = mockFetch.mock.calls.length;
-      if (idx === 1) {
+    const mockFetch = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) => {
+        const idx = mockFetch.mock.calls.length;
+        if (idx === 1) {
+          return new Response(
+            JSON.stringify({
+              choices: [
+                {
+                  finish_reason: "tool_calls",
+                  message: {
+                    role: "assistant",
+                    content: "",
+                    reasoning_content: "searching",
+                    tool_calls: [
+                      {
+                        id: "call_1",
+                        type: "function",
+                        function: {
+                          name: "$web_search",
+                          arguments: JSON.stringify({ q: "openclaw" }),
+                        },
+                      },
+                    ],
+                  },
+                },
+              ],
+              search_results: [
+                {
+                  title: "OpenClaw",
+                  url: "https://openclaw.ai/docs",
+                  content: "docs",
+                },
+              ],
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        }
         return new Response(
           JSON.stringify({
             choices: [
               {
-                finish_reason: "tool_calls",
-                message: {
-                  role: "assistant",
-                  content: "",
-                  reasoning_content: "searching",
-                  tool_calls: [
-                    {
-                      id: "call_1",
-                      type: "function",
-                      function: {
-                        name: "$web_search",
-                        arguments: JSON.stringify({ q: "openclaw" }),
-                      },
-                    },
-                  ],
-                },
+                finish_reason: "stop",
+                message: { role: "assistant", content: "final answer" },
               },
-            ],
-            search_results: [
-              { title: "OpenClaw", url: "https://openclaw.ai/docs", content: "docs" },
             ],
           }),
           { status: 200, headers: { "content-type": "application/json" } },
         );
-      }
-      return new Response(
-        JSON.stringify({
-          choices: [
-            { finish_reason: "stop", message: { role: "assistant", content: "final answer" } },
-          ],
-        }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      );
-    });
+      },
+    );
     global.fetch = withFetchPreconnect(mockFetch);
 
     const tool = createKimiSearchTool({
@@ -378,7 +410,9 @@ describe("web_search kimi provider", () => {
       baseUrl: "https://api.moonshot.ai/v1",
       model: "moonshot-v1-128k",
     });
-    const result = await tool?.execute?.("call-1", { query: "latest openclaw release" });
+    const result = await tool?.execute?.("call-1", {
+      query: "latest openclaw release",
+    });
 
     expect(mockFetch).toHaveBeenCalledTimes(2);
     const secondRequest = mockFetch.mock.calls[1]?.[1];
@@ -387,9 +421,9 @@ describe("web_search kimi provider", () => {
     ) as {
       messages?: Array<Record<string, unknown>>;
     };
-    const toolMessage = secondBody.messages?.find((message) => message.role === "tool") as
-      | { content?: string; tool_call_id?: string }
-      | undefined;
+    const toolMessage = secondBody.messages?.find(
+      (message) => message.role === "tool",
+    ) as { content?: string; tool_call_id?: string } | undefined;
     expect(toolMessage?.tool_call_id).toBe("call_1");
     expect(JSON.parse(toolMessage?.content ?? "{}")).toMatchObject({
       search_results: [{ url: "https://openclaw.ai/docs" }],
@@ -465,14 +499,20 @@ describe("web_search external content wrapping", () => {
     });
     const result = await executeBraveSearch("test");
     const details = result?.details as {
-      externalContent?: { untrusted?: boolean; source?: string; wrapped?: boolean };
+      externalContent?: {
+        untrusted?: boolean;
+        source?: string;
+        wrapped?: boolean;
+      };
       results?: Array<{ description?: string }>;
     };
 
     expect(details.results?.[0]?.description).toMatch(
       /<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/,
     );
-    expect(details.results?.[0]?.description).toContain("Ignore previous instructions");
+    expect(details.results?.[0]?.description).toContain(
+      "Ignore previous instructions",
+    );
     expect(details.externalContent).toMatchObject({
       untrusted: true,
       source: "web_search",
@@ -493,7 +533,9 @@ describe("web_search external content wrapping", () => {
 
     // URL should NOT be wrapped - kept raw for tool chaining (e.g., web_fetch)
     expect(details.results?.[0]?.url).toBe(url);
-    expect(details.results?.[0]?.url).not.toContain("<<<EXTERNAL_UNTRUSTED_CONTENT>>>");
+    expect(details.results?.[0]?.url).not.toContain(
+      "<<<EXTERNAL_UNTRUSTED_CONTENT>>>",
+    );
   });
 
   it("does not wrap Brave site names", async () => {
@@ -504,10 +546,14 @@ describe("web_search external content wrapping", () => {
       description: "Normal description",
     });
     const result = await executeBraveSearch("unique-test-site-name-wrapping");
-    const details = result?.details as { results?: Array<{ siteName?: string }> };
+    const details = result?.details as {
+      results?: Array<{ siteName?: string }>;
+    };
 
     expect(details.results?.[0]?.siteName).toBe("example.com");
-    expect(details.results?.[0]?.siteName).not.toContain("<<<EXTERNAL_UNTRUSTED_CONTENT>>>");
+    expect(details.results?.[0]?.siteName).not.toContain(
+      "<<<EXTERNAL_UNTRUSTED_CONTENT>>>",
+    );
   });
 
   it("does not wrap Brave published ages", async () => {
@@ -518,11 +564,17 @@ describe("web_search external content wrapping", () => {
       description: "Normal description",
       age: "2 days ago",
     });
-    const result = await executeBraveSearch("unique-test-brave-published-wrapping");
-    const details = result?.details as { results?: Array<{ published?: string }> };
+    const result = await executeBraveSearch(
+      "unique-test-brave-published-wrapping",
+    );
+    const details = result?.details as {
+      results?: Array<{ published?: string }>;
+    };
 
     expect(details.results?.[0]?.published).toBe("2 days ago");
-    expect(details.results?.[0]?.published).not.toContain("<<<EXTERNAL_UNTRUSTED_CONTENT>>>");
+    expect(details.results?.[0]?.published).not.toContain(
+      "<<<EXTERNAL_UNTRUSTED_CONTENT>>>",
+    );
   });
 
   it("wraps Perplexity content", async () => {
@@ -534,7 +586,9 @@ describe("web_search external content wrapping", () => {
     const result = await executePerplexitySearchForWrapping("test");
     const details = result?.details as { content?: string };
 
-    expect(details.content).toMatch(/<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/);
+    expect(details.content).toMatch(
+      /<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/,
+    );
     expect(details.content).toContain("Ignore previous instructions");
   });
 
@@ -545,11 +599,15 @@ describe("web_search external content wrapping", () => {
       choices: [{ message: { content: "ok" } }],
       citations: [citation],
     });
-    const result = await executePerplexitySearchForWrapping("unique-test-perplexity-citations-raw");
+    const result = await executePerplexitySearchForWrapping(
+      "unique-test-perplexity-citations-raw",
+    );
     const details = result?.details as { citations?: string[] };
 
     // Citations are URLs - should NOT be wrapped for tool chaining
     expect(details.citations?.[0]).toBe(citation);
-    expect(details.citations?.[0]).not.toContain("<<<EXTERNAL_UNTRUSTED_CONTENT>>>");
+    expect(details.citations?.[0]).not.toContain(
+      "<<<EXTERNAL_UNTRUSTED_CONTENT>>>",
+    );
   });
 });

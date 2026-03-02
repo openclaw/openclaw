@@ -31,7 +31,11 @@ describe("resolveConversationLabel", () => {
     },
     {
       name: "derives Telegram-like group labels with numeric id suffix",
-      ctx: { ChatType: "group", GroupSubject: "Ops", From: "telegram:group:42" },
+      ctx: {
+        ChatType: "group",
+        GroupSubject: "Ops",
+        From: "telegram:group:42",
+      },
       expected: "Ops id:42",
     },
     {

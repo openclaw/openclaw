@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CoreConfig } from "../types.js";
-import { resolveDefaultMatrixAccountId, resolveMatrixAccount } from "./accounts.js";
+import {
+  resolveDefaultMatrixAccountId,
+  resolveMatrixAccount,
+} from "./accounts.js";
 
 vi.mock("./credentials.js", () => ({
   loadMatrixCredentials: () => null,
@@ -88,8 +91,14 @@ describe("resolveDefaultMatrixAccountId", () => {
         matrix: {
           defaultAccount: "alerts",
           accounts: {
-            default: { homeserver: "https://matrix.example.org", accessToken: "tok-default" },
-            alerts: { homeserver: "https://matrix.example.org", accessToken: "tok-alerts" },
+            default: {
+              homeserver: "https://matrix.example.org",
+              accessToken: "tok-default",
+            },
+            alerts: {
+              homeserver: "https://matrix.example.org",
+              accessToken: "tok-alerts",
+            },
           },
         },
       },
@@ -104,7 +113,10 @@ describe("resolveDefaultMatrixAccountId", () => {
         matrix: {
           defaultAccount: "Team Alerts",
           accounts: {
-            "team-alerts": { homeserver: "https://matrix.example.org", accessToken: "tok-alerts" },
+            "team-alerts": {
+              homeserver: "https://matrix.example.org",
+              accessToken: "tok-alerts",
+            },
           },
         },
       },
@@ -119,8 +131,14 @@ describe("resolveDefaultMatrixAccountId", () => {
         matrix: {
           defaultAccount: "missing",
           accounts: {
-            default: { homeserver: "https://matrix.example.org", accessToken: "tok-default" },
-            alerts: { homeserver: "https://matrix.example.org", accessToken: "tok-alerts" },
+            default: {
+              homeserver: "https://matrix.example.org",
+              accessToken: "tok-default",
+            },
+            alerts: {
+              homeserver: "https://matrix.example.org",
+              accessToken: "tok-alerts",
+            },
           },
         },
       },

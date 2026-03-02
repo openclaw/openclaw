@@ -8,11 +8,17 @@ import type { ChannelOutboundAdapter } from "../channels/plugins/types.js";
 import { clearConfigCache } from "../config/config.js";
 import { resolveCanvasHostUrl } from "../infra/canvas-host-url.js";
 import { GatewayLockError } from "../infra/gateway-lock.js";
-import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
+import {
+  getActivePluginRegistry,
+  setActivePluginRegistry,
+} from "../plugins/runtime.js";
 import { createOutboundTestPlugin } from "../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createTempHomeEnv } from "../test-utils/temp-home.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../utils/message-channel.js";
 import { createRegistry } from "./server.e2e-registry-helpers.js";
 import {
   connectOk,
@@ -54,7 +60,10 @@ const whatsappOutbound: ChannelOutboundAdapter = {
     if (!deps?.sendWhatsApp) {
       throw new Error("Missing sendWhatsApp dep");
     }
-    return { channel: "whatsapp", ...(await deps.sendWhatsApp(to, text, { verbose: false })) };
+    return {
+      channel: "whatsapp",
+      ...(await deps.sendWhatsApp(to, text, { verbose: false })),
+    };
   },
   sendMedia: async ({ deps, to, text, mediaUrl }) => {
     if (!deps?.sendWhatsApp) {
@@ -145,14 +154,18 @@ const expectedSortedCatalog = (): ModelCatalogRpcEntry[] => [
 ];
 
 describe("gateway server models + voicewake", () => {
-  const listModels = async () => rpcReq<{ models: ModelCatalogRpcEntry[] }>(ws, "models.list");
+  const listModels = async () =>
+    rpcReq<{ models: ModelCatalogRpcEntry[] }>(ws, "models.list");
 
   const seedPiCatalog = () => {
     piSdkMock.enabled = true;
     piSdkMock.models = buildPiCatalogFixture();
   };
 
-  const withModelsConfig = async <T>(config: unknown, run: () => Promise<T>): Promise<T> => {
+  const withModelsConfig = async <T>(
+    config: unknown,
+    run: () => Promise<T>,
+  ): Promise<T> => {
     const configPath = process.env.OPENCLAW_CONFIG_PATH;
     if (!configPath) {
       throw new Error("Missing OPENCLAW_CONFIG_PATH");
@@ -182,7 +195,9 @@ describe("gateway server models + voicewake", () => {
     }
   };
 
-  const withTempHome = async <T>(fn: (homeDir: string) => Promise<T>): Promise<T> => {
+  const withTempHome = async <T>(
+    fn: (homeDir: string) => Promise<T>,
+  ): Promise<T> => {
     const tempHome = await createTempHomeEnv("openclaw-home-");
     try {
       return await fn(tempHome.home);
@@ -196,34 +211,50 @@ describe("gateway server models + voicewake", () => {
     { timeout: 20_000 },
     async () => {
       await withTempHome(async (homeDir) => {
-        const initial = await rpcReq<{ triggers: string[] }>(ws, "voicewake.get");
+        const initial = await rpcReq<{ triggers: string[] }>(
+          ws,
+          "voicewake.get",
+        );
         expect(initial.ok).toBe(true);
-        expect(initial.payload?.triggers).toEqual(["openclaw", "claude", "computer"]);
+        expect(initial.payload?.triggers).toEqual([
+          "openclaw",
+          "claude",
+          "computer",
+        ]);
 
         const changedP = onceMessage(
           ws,
           (o) => o.type === "event" && o.event === "voicewake.changed",
         );
 
-        const setRes = await rpcReq<{ triggers: string[] }>(ws, "voicewake.set", {
-          triggers: ["  hi  ", "", "there"],
-        });
+        const setRes = await rpcReq<{ triggers: string[] }>(
+          ws,
+          "voicewake.set",
+          {
+            triggers: ["  hi  ", "", "there"],
+          },
+        );
         expect(setRes.ok).toBe(true);
         expect(setRes.payload?.triggers).toEqual(["hi", "there"]);
 
-        const changed = (await changedP) as { event?: string; payload?: unknown };
+        const changed = (await changedP) as {
+          event?: string;
+          payload?: unknown;
+        };
         expect(changed.event).toBe("voicewake.changed");
-        expect((changed.payload as { triggers?: unknown } | undefined)?.triggers).toEqual([
-          "hi",
-          "there",
-        ]);
+        expect(
+          (changed.payload as { triggers?: unknown } | undefined)?.triggers,
+        ).toEqual(["hi", "there"]);
 
         const after = await rpcReq<{ triggers: string[] }>(ws, "voicewake.get");
         expect(after.ok).toBe(true);
         expect(after.payload?.triggers).toEqual(["hi", "there"]);
 
         const onDisk = JSON.parse(
-          await fs.readFile(path.join(homeDir, ".openclaw", "settings", "voicewake.json"), "utf8"),
+          await fs.readFile(
+            path.join(homeDir, ".openclaw", "settings", "voicewake.json"),
+            "utf8",
+          ),
         ) as { triggers?: unknown; updatedAtMs?: unknown };
         expect(onDisk.triggers).toEqual(["hi", "there"]);
         expect(typeof onDisk.updatedAtMs).toBe("number");
@@ -250,13 +281,14 @@ describe("gateway server models + voicewake", () => {
         },
       });
 
-      const first = (await firstEventP) as { event?: string; payload?: unknown };
+      const first = (await firstEventP) as {
+        event?: string;
+        payload?: unknown;
+      };
       expect(first.event).toBe("voicewake.changed");
-      expect((first.payload as { triggers?: unknown } | undefined)?.triggers).toEqual([
-        "openclaw",
-        "claude",
-        "computer",
-      ]);
+      expect(
+        (first.payload as { triggers?: unknown } | undefined)?.triggers,
+      ).toEqual(["openclaw", "claude", "computer"]);
 
       const broadcastP = onceMessage(
         nodeWs,
@@ -267,12 +299,14 @@ describe("gateway server models + voicewake", () => {
       });
       expect(setRes.ok).toBe(true);
 
-      const broadcast = (await broadcastP) as { event?: string; payload?: unknown };
+      const broadcast = (await broadcastP) as {
+        event?: string;
+        payload?: unknown;
+      };
       expect(broadcast.event).toBe("voicewake.changed");
-      expect((broadcast.payload as { triggers?: unknown } | undefined)?.triggers).toEqual([
-        "openclaw",
-        "computer",
-      ]);
+      expect(
+        (broadcast.payload as { triggers?: unknown } | undefined)?.triggers,
+      ).toEqual(["openclaw", "computer"]);
 
       nodeWs.close();
     });
@@ -373,15 +407,18 @@ describe("gateway server misc", () => {
       testState.gatewayBind = "lan";
       const canvasPort = await getFreePort();
       testState.canvasHostPort = canvasPort;
-      await withEnvAsync({ OPENCLAW_CANVAS_HOST_PORT: String(canvasPort) }, async () => {
-        const testPort = await getFreePort();
-        const canvasHostUrl = resolveCanvasHostUrl({
-          canvasPort,
-          requestHost: `100.64.0.1:${testPort}`,
-          localAddress: "127.0.0.1",
-        });
-        expect(canvasHostUrl).toBe(`http://100.64.0.1:${canvasPort}`);
-      });
+      await withEnvAsync(
+        { OPENCLAW_CANVAS_HOST_PORT: String(canvasPort) },
+        async () => {
+          const testPort = await getFreePort();
+          const canvasHostUrl = resolveCanvasHostUrl({
+            canvasPort,
+            requestHost: `100.64.0.1:${testPort}`,
+            localAddress: "127.0.0.1",
+          });
+          expect(canvasHostUrl).toBe(`http://100.64.0.1:${canvasPort}`);
+        },
+      );
     });
   });
 
@@ -447,7 +484,9 @@ describe("gateway server misc", () => {
     const autoServer = await startGatewayServer(autoPort);
     await autoServer.close();
 
-    const updated = JSON.parse(await fs.readFile(configPath, "utf-8")) as Record<string, unknown>;
+    const updated = JSON.parse(
+      await fs.readFile(configPath, "utf-8"),
+    ) as Record<string, unknown>;
     const channels = updated.channels as Record<string, unknown> | undefined;
     const discord = channels?.discord as Record<string, unknown> | undefined;
     expect(discord).toMatchObject({

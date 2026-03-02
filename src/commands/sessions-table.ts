@@ -39,7 +39,9 @@ export const SESSION_KEY_PAD = 26;
 export const SESSION_AGE_PAD = 9;
 export const SESSION_MODEL_PAD = 14;
 
-export function toSessionDisplayRows(store: Record<string, SessionEntry>): SessionDisplayRow[] {
+export function toSessionDisplayRows(
+  store: Record<string, SessionEntry>,
+): SessionDisplayRow[] {
   return Object.entries(store)
     .map(([key, entry]) => {
       const updatedAt = entry?.updatedAt ?? null;
@@ -70,7 +72,9 @@ export function toSessionDisplayRows(store: Record<string, SessionEntry>): Sessi
     .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
 }
 
-export function resolveSessionDisplayDefaults(cfg: OpenClawConfig): SessionDisplayDefaults {
+export function resolveSessionDisplayDefaults(
+  cfg: OpenClawConfig,
+): SessionDisplayDefaults {
   const resolved = resolveConfiguredModelRef({
     cfg,
     defaultProvider: DEFAULT_PROVIDER,
@@ -89,7 +93,11 @@ export function resolveSessionDisplayModel(
   >,
   defaults: SessionDisplayDefaults,
 ): string {
-  const resolved = resolveSessionModelRef(cfg, row, parseAgentSessionKey(row.key)?.agentId);
+  const resolved = resolveSessionModelRef(
+    cfg,
+    row,
+    parseAgentSessionKey(row.key)?.agentId,
+  );
   return resolved.model ?? defaults.model;
 }
 
@@ -106,13 +114,21 @@ export function formatSessionKeyCell(key: string, rich: boolean): string {
   return rich ? theme.accent(label) : label;
 }
 
-export function formatSessionAgeCell(updatedAt: number | null | undefined, rich: boolean): string {
-  const ageLabel = updatedAt ? formatTimeAgo(Date.now() - updatedAt) : "unknown";
+export function formatSessionAgeCell(
+  updatedAt: number | null | undefined,
+  rich: boolean,
+): string {
+  const ageLabel = updatedAt
+    ? formatTimeAgo(Date.now() - updatedAt)
+    : "unknown";
   const padded = ageLabel.padEnd(SESSION_AGE_PAD);
   return rich ? theme.muted(padded) : padded;
 }
 
-export function formatSessionModelCell(model: string | null | undefined, rich: boolean): string {
+export function formatSessionModelCell(
+  model: string | null | undefined,
+  rich: boolean,
+): string {
   const label = (model ?? "unknown").padEnd(SESSION_MODEL_PAD);
   return rich ? theme.info(label) : label;
 }

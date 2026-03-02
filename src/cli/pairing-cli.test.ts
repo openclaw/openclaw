@@ -151,9 +151,20 @@ describe("pairing cli", () => {
   it("forwards --account for list", async () => {
     listChannelPairingRequests.mockResolvedValueOnce([]);
 
-    await runPairing(["pairing", "list", "--channel", "telegram", "--account", "yy"]);
+    await runPairing([
+      "pairing",
+      "list",
+      "--channel",
+      "telegram",
+      "--account",
+      "yy",
+    ]);
 
-    expect(listChannelPairingRequests).toHaveBeenCalledWith("telegram", process.env, "yy");
+    expect(listChannelPairingRequests).toHaveBeenCalledWith(
+      "telegram",
+      process.env,
+      "yy",
+    );
   });
 
   it("normalizes channel aliases", async () => {
@@ -233,6 +244,8 @@ describe("pairing cli", () => {
   });
 
   it("keeps approve usage error when multiple channels exist and channel is omitted", async () => {
-    await expect(runPairing(["pairing", "approve", "ABCDEFGH"])).rejects.toThrow("Usage:");
+    await expect(
+      runPairing(["pairing", "approve", "ABCDEFGH"]),
+    ).rejects.toThrow("Usage:");
   });
 });

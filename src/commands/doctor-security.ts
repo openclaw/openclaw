@@ -28,7 +28,13 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
 
   const gatewayBind = (cfg.gateway?.bind ?? "loopback") as string;
   const customBindHost = cfg.gateway?.customBindHost?.trim();
-  const bindModes: GatewayBindMode[] = ["auto", "lan", "loopback", "custom", "tailnet"];
+  const bindModes: GatewayBindMode[] = [
+    "auto",
+    "lan",
+    "loopback",
+    "custom",
+    "tailnet",
+  ];
   const bindMode = bindModes.includes(gatewayBind as GatewayBindMode)
     ? (gatewayBind as GatewayBindMode)
     : undefined;
@@ -100,17 +106,20 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
   }) => {
     const dmPolicy = params.dmPolicy;
     const policyPath = params.policyPath ?? `${params.allowFromPath}policy`;
-    const { hasWildcard, allowCount, isMultiUserDm } = await resolveDmAllowState({
-      provider: params.provider,
-      accountId: params.accountId,
-      allowFrom: params.allowFrom,
-      normalizeEntry: params.normalizeEntry,
-    });
+    const { hasWildcard, allowCount, isMultiUserDm } =
+      await resolveDmAllowState({
+        provider: params.provider,
+        accountId: params.accountId,
+        allowFrom: params.allowFrom,
+        normalizeEntry: params.normalizeEntry,
+      });
     const dmScope = cfg.session?.dmScope ?? "main";
 
     if (dmPolicy === "open") {
       const allowFromPath = `${params.allowFromPath}allowFrom`;
-      warnings.push(`- ${params.label} DMs: OPEN (${policyPath}="open"). Anyone can DM it.`);
+      warnings.push(
+        `- ${params.label} DMs: OPEN (${policyPath}="open"). Anyone can DM it.`,
+      );
       if (!hasWildcard) {
         warnings.push(
           `- ${params.label} DMs: config invalid — "open" requires ${allowFromPath} to include "*".`,
@@ -119,7 +128,9 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
     }
 
     if (dmPolicy === "disabled") {
-      warnings.push(`- ${params.label} DMs: disabled (${policyPath}="disabled").`);
+      warnings.push(
+        `- ${params.label} DMs: disabled (${policyPath}="disabled").`,
+      );
       return;
     }
 
@@ -133,7 +144,9 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
     if (dmScope === "main" && isMultiUserDm) {
       warnings.push(
         `- ${params.label} DMs: multiple senders share the main session; run: ` +
-          formatCliCommand('openclaw config set session.dmScope "per-channel-peer"') +
+          formatCliCommand(
+            'openclaw config set session.dmScope "per-channel-peer"',
+          ) +
           ' (or "per-account-channel-peer" for multi-account channels) to isolate sessions.',
       );
     }
@@ -181,7 +194,10 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
     }
   }
 
-  const lines = warnings.length > 0 ? warnings : ["- No channel security warnings detected."];
+  const lines =
+    warnings.length > 0
+      ? warnings
+      : ["- No channel security warnings detected."];
   lines.push(auditHint);
   note(lines.join("\n"), "Security");
 }

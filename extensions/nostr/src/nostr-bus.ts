@@ -15,7 +15,10 @@ import {
   type MetricsSnapshot,
   type MetricEvent,
 } from "./metrics.js";
-import { publishProfile as publishProfileFn, type ProfilePublishResult } from "./nostr-profile.js";
+import {
+  publishProfile as publishProfileFn,
+  type ProfilePublishResult,
+} from "./nostr-profile.js";
 import {
   readNostrBusState,
   writeNostrBusState,
@@ -259,14 +262,20 @@ function createRelayHealthTracker(): RelayHealthTracker {
           : 0;
 
       // Latency penalty (lower is better)
-      const avgLatency = s.latencyCount > 0 ? s.latencySum / s.latencyCount : 1000;
+      const avgLatency =
+        s.latencyCount > 0 ? s.latencySum / s.latencyCount : 1000;
       const latencyPenalty = Math.min(0.2, avgLatency / 10000);
 
-      return Math.max(0, Math.min(1, successRate + recencyBonus - latencyPenalty));
+      return Math.max(
+        0,
+        Math.min(1, successRate + recencyBonus - latencyPenalty),
+      );
     },
 
     getSortedRelays(relays: string[]): string[] {
-      return [...relays].toSorted((a, b) => this.getScore(b) - this.getScore(a));
+      return [...relays].toSorted(
+        (a, b) => this.getScore(b) - this.getScore(a),
+      );
     },
   };
 }
@@ -292,7 +301,9 @@ export function validatePrivateKey(key: string): Uint8Array {
 
   // Handle hex format
   if (!/^[0-9a-fA-F]{64}$/.test(trimmed)) {
-    throw new Error("Private key must be 64 hex characters or nsec bech32 format");
+    throw new Error(
+      "Private key must be 64 hex characters or nsec bech32 format",
+    );
   }
 
   // Convert hex string to Uint8Array
@@ -318,7 +329,9 @@ export function getPublicKeyFromPrivate(privateKey: string): string {
 /**
  * Start the Nostr DM bus - subscribes to NIP-04 encrypted DMs
  */
-export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusHandle> {
+export async function startNostrBus(
+  options: NostrBusOptions,
+): Promise<NostrBusHandle> {
   const {
     privateKey,
     relays = DEFAULT_RELAYS,
@@ -374,7 +387,9 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
   // Debounced state persistence
   let pendingWrite: ReturnType<typeof setTimeout> | undefined;
   let lastProcessedAt = state?.lastProcessedAt ?? gatewayStartedAt;
-  let recentEventIds = (state?.recentEventIds ?? []).slice(-MAX_PERSISTED_EVENT_IDS);
+  let recentEventIds = (state?.recentEventIds ?? []).slice(
+    -MAX_PERSISTED_EVENT_IDS,
+  );
 
   function scheduleStatePersist(eventCreatedAt: number, eventId: string): void {
     lastProcessedAt = Math.max(lastProcessedAt, eventCreatedAt);
@@ -490,7 +505,9 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
 
   const sub = pool.subscribeMany(
     relays,
-    [{ kinds: [4], "#p": [pk], since }] as unknown as Parameters<typeof pool.subscribeMany>[1],
+    [{ kinds: [4], "#p": [pk], since }] as unknown as Parameters<
+      typeof pool.subscribeMany
+    >[1],
     {
       onevent: handleEvent,
       oneose: () => {
@@ -506,7 +523,10 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
           metrics.emit("relay.message.closed", 1, { relay });
           options.onDisconnect?.(relay);
         }
-        onError?.(new Error(`Subscription closed: ${reason.join(", ")}`), "subscription");
+        onError?.(
+          new Error(`Subscription closed: ${reason.join(", ")}`),
+          "subscription",
+        );
       },
     },
   );
@@ -527,13 +547,21 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
   };
 
   // Profile publishing function
-  const publishProfile = async (profile: NostrProfile): Promise<ProfilePublishResult> => {
+  const publishProfile = async (
+    profile: NostrProfile,
+  ): Promise<ProfilePublishResult> => {
     // Read last published timestamp for monotonic ordering
     const profileState = await readNostrProfileState({ accountId });
     const lastPublishedAt = profileState?.lastPublishedAt ?? undefined;
 
     // Publish the profile
-    const result = await publishProfileFn(pool, sk, relays, profile, lastPublishedAt);
+    const result = await publishProfileFn(
+      pool,
+      sk,
+      relays,
+      profile,
+      lastPublishedAt,
+    );
 
     // Convert results to state format
     const publishResults: Record<string, "ok" | "failed" | "timeout"> = {};

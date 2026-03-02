@@ -41,7 +41,9 @@ describe("printCronList", () => {
     });
 
     // This should not throw "Cannot read properties of undefined (reading 'trim')"
-    expect(() => printCronList([jobWithUndefinedTarget], runtime)).not.toThrow();
+    expect(() =>
+      printCronList([jobWithUndefinedTarget], runtime),
+    ).not.toThrow();
 
     // Verify output contains the job
     expect(logs.length).toBeGreaterThan(1);

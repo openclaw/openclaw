@@ -1,4 +1,7 @@
-import { loadWorkspaceBootstrapFiles, type WorkspaceBootstrapFile } from "./workspace.js";
+import {
+  loadWorkspaceBootstrapFiles,
+  type WorkspaceBootstrapFile,
+} from "./workspace.js";
 
 const cache = new Map<string, WorkspaceBootstrapFile[]>();
 

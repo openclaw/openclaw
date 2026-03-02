@@ -1,4 +1,8 @@
-import { createArgReader, createGatewayWsClient, resolveGatewayUrl } from "./gateway-ws-client.ts";
+import {
+  createArgReader,
+  createGatewayWsClient,
+  resolveGatewayUrl,
+} from "./gateway-ws-client.ts";
 
 const { get: getArg } = createArgReader();
 const urlRaw = getArg("--url") ?? process.env.OPENCLAW_GATEWAY_URL;
@@ -60,7 +64,11 @@ async function main() {
     process.exit(3);
   }
 
-  const historyRes = await request("chat.history", { sessionKey: "main" }, 15000);
+  const historyRes = await request(
+    "chat.history",
+    { sessionKey: "main" },
+    15000,
+  );
   if (!historyRes.ok) {
     // eslint-disable-next-line no-console
     console.error("chat.history failed:", historyRes.error);

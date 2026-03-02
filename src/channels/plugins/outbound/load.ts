@@ -6,9 +6,10 @@ import type { ChannelId, ChannelOutboundAdapter } from "../types.js";
 // The full channel plugins (src/channels/plugins/*.ts) pull in status,
 // onboarding, gateway monitors, etc. Outbound delivery only needs chunking +
 // send primitives, so we keep a dedicated, lightweight loader here.
-const loadOutboundAdapterFromRegistry = createChannelRegistryLoader<ChannelOutboundAdapter>(
-  (entry) => entry.plugin.outbound,
-);
+const loadOutboundAdapterFromRegistry =
+  createChannelRegistryLoader<ChannelOutboundAdapter>(
+    (entry) => entry.plugin.outbound,
+  );
 
 export async function loadChannelOutboundAdapter(
   id: ChannelId,

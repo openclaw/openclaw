@@ -8,10 +8,17 @@ import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.js";
 import { buildTestCtx } from "./test-ctx.js";
 
-type AbortResult = { handled: boolean; aborted: boolean; stoppedSubagents?: number };
+type AbortResult = {
+  handled: boolean;
+  aborted: boolean;
+  stoppedSubagents?: number;
+};
 
 const mocks = vi.hoisted(() => ({
-  routeReply: vi.fn(async (_params: unknown) => ({ ok: true, messageId: "mock" })),
+  routeReply: vi.fn(async (_params: unknown) => ({
+    ok: true,
+    messageId: "mock",
+  })),
   tryFastAbortFromMessage: vi.fn<() => Promise<AbortResult>>(async () => ({
     handled: false,
     aborted: false,
@@ -39,7 +46,9 @@ const acpMocks = vi.hoisted(() => ({
   requireAcpRuntimeBackend: vi.fn<() => unknown>(),
 }));
 const sessionBindingMocks = vi.hoisted(() => ({
-  listBySession: vi.fn<(targetSessionKey: string) => SessionBindingRecord[]>(() => []),
+  listBySession: vi.fn<(targetSessionKey: string) => SessionBindingRecord[]>(
+    () => [],
+  ),
 }));
 const ttsMocks = vi.hoisted(() => {
   const state = {
@@ -77,9 +86,15 @@ vi.mock("./route-reply.js", () => ({
   isRoutableChannel: (channel: string | undefined) =>
     Boolean(
       channel &&
-      ["telegram", "slack", "discord", "signal", "imessage", "whatsapp", "feishu"].includes(
-        channel,
-      ),
+      [
+        "telegram",
+        "slack",
+        "discord",
+        "signal",
+        "imessage",
+        "whatsapp",
+        "feishu",
+      ].includes(channel),
     ),
   routeReply: mocks.routeReply,
 }));
@@ -116,38 +131,46 @@ vi.mock("../../acp/runtime/session-meta.js", () => ({
 vi.mock("../../acp/runtime/registry.js", () => ({
   requireAcpRuntimeBackend: acpMocks.requireAcpRuntimeBackend,
 }));
-vi.mock("../../infra/outbound/session-binding-service.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../infra/outbound/session-binding-service.js")>();
-  return {
-    ...actual,
-    getSessionBindingService: () => ({
-      bind: vi.fn(async () => {
-        throw new Error("bind not mocked");
+vi.mock(
+  "../../infra/outbound/session-binding-service.js",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("../../infra/outbound/session-binding-service.js")
+      >();
+    return {
+      ...actual,
+      getSessionBindingService: () => ({
+        bind: vi.fn(async () => {
+          throw new Error("bind not mocked");
+        }),
+        getCapabilities: vi.fn(() => ({
+          adapterAvailable: true,
+          bindSupported: true,
+          unbindSupported: true,
+          placements: ["current", "child"] as const,
+        })),
+        listBySession: (targetSessionKey: string) =>
+          sessionBindingMocks.listBySession(targetSessionKey),
+        resolveByConversation: vi.fn(() => null),
+        touch: vi.fn(),
+        unbind: vi.fn(async () => []),
       }),
-      getCapabilities: vi.fn(() => ({
-        adapterAvailable: true,
-        bindSupported: true,
-        unbindSupported: true,
-        placements: ["current", "child"] as const,
-      })),
-      listBySession: (targetSessionKey: string) =>
-        sessionBindingMocks.listBySession(targetSessionKey),
-      resolveByConversation: vi.fn(() => null),
-      touch: vi.fn(),
-      unbind: vi.fn(async () => []),
-    }),
-  };
-});
+    };
+  },
+);
 vi.mock("../../tts/tts.js", () => ({
-  maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
-  normalizeTtsAutoMode: (value: unknown) => ttsMocks.normalizeTtsAutoMode(value),
+  maybeApplyTtsToPayload: (params: unknown) =>
+    ttsMocks.maybeApplyTtsToPayload(params),
+  normalizeTtsAutoMode: (value: unknown) =>
+    ttsMocks.normalizeTtsAutoMode(value),
   resolveTtsConfig: (cfg: OpenClawConfig) => ttsMocks.resolveTtsConfig(cfg),
 }));
 
 const { dispatchReplyFromConfig } = await import("./dispatch-from-config.js");
 const { resetInboundDedupe } = await import("./inbound-dedupe.js");
-const { __testing: acpManagerTesting } = await import("../../acp/control-plane/manager.js");
+const { __testing: acpManagerTesting } =
+  await import("../../acp/control-plane/manager.js");
 
 const noAbortResult = { handled: false, aborted: false } as const;
 const emptyConfig = {} as OpenClawConfig;
@@ -176,7 +199,11 @@ function createAcpRuntime(events: Array<Record<string, unknown>>) {
           sessionKey: input.sessionKey,
           backend: "acpx",
           runtimeSessionName: `${input.sessionKey}:${input.mode}`,
-        }) as { sessionKey: string; backend: string; runtimeSessionName: string },
+        }) as {
+          sessionKey: string;
+          backend: string;
+          runtimeSessionName: string;
+        },
     ),
     runTurn: vi.fn(async function* () {
       for (const event of events) {
@@ -188,13 +215,16 @@ function createAcpRuntime(events: Array<Record<string, unknown>>) {
   };
 }
 
-function firstToolResultPayload(dispatcher: ReplyDispatcher): ReplyPayload | undefined {
-  return (dispatcher.sendToolResult as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as
-    | ReplyPayload
-    | undefined;
+function firstToolResultPayload(
+  dispatcher: ReplyDispatcher,
+): ReplyPayload | undefined {
+  return (dispatcher.sendToolResult as ReturnType<typeof vi.fn>).mock
+    .calls[0]?.[0] as ReplyPayload | undefined;
 }
 
-async function dispatchTwiceWithFreshDispatchers(params: Omit<DispatchReplyArgs, "dispatcher">) {
+async function dispatchTwiceWithFreshDispatchers(
+  params: Omit<DispatchReplyArgs, "dispatcher">,
+) {
   await dispatchReplyFromConfig({
     ...params,
     dispatcher: createDispatcher(),
@@ -219,7 +249,9 @@ describe("dispatchReplyFromConfig", () => {
     hookMocks.runner.hasHooks.mockReturnValue(false);
     hookMocks.runner.runMessageReceived.mockClear();
     internalHookMocks.createInternalHookEvent.mockClear();
-    internalHookMocks.createInternalHookEvent.mockImplementation(createInternalHookEventPayload);
+    internalHookMocks.createInternalHookEvent.mockImplementation(
+      createInternalHookEventPayload,
+    );
     internalHookMocks.triggerInternalHook.mockClear();
     acpMocks.readAcpSessionEntry.mockReset();
     acpMocks.readAcpSessionEntry.mockReturnValue(null);
@@ -427,8 +459,12 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
     expect(mocks.routeReply).toHaveBeenCalledTimes(1);
-    const routed = mocks.routeReply.mock.calls[0]?.[0] as { payload?: ReplyPayload } | undefined;
-    expect(routed?.payload?.mediaUrls).toEqual(["https://example.com/tts-routed.opus"]);
+    const routed = mocks.routeReply.mock.calls[0]?.[0] as
+      | { payload?: ReplyPayload }
+      | undefined;
+    expect(routed?.payload?.mediaUrls).toEqual([
+      "https://example.com/tts-routed.opus",
+    ]);
     expect(routed?.payload?.text).toBeUndefined();
   });
 
@@ -633,7 +669,9 @@ describe("dispatchReplyFromConfig", () => {
       SessionKey: "agent:codex-acp:session-1",
       BodyForAgent: "write a test",
     });
-    const replyResolver = vi.fn(async () => ({ text: "fallback" }) as ReplyPayload);
+    const replyResolver = vi.fn(
+      async () => ({ text: "fallback" }) as ReplyPayload,
+    );
 
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
@@ -645,9 +683,12 @@ describe("dispatchReplyFromConfig", () => {
         mode: "persistent",
       }),
     );
-    const blockCalls = (dispatcher.sendBlockReply as ReturnType<typeof vi.fn>).mock.calls;
+    const blockCalls = (dispatcher.sendBlockReply as ReturnType<typeof vi.fn>)
+      .mock.calls;
     expect(blockCalls.length).toBeGreaterThan(0);
-    const streamedText = blockCalls.map((call) => (call[0] as ReplyPayload).text ?? "").join("");
+    const streamedText = blockCalls
+      .map((call) => (call[0] as ReplyPayload).text ?? "")
+      .join("");
     expect(streamedText).toContain("hello");
     expect(streamedText).toContain("world");
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
@@ -655,7 +696,10 @@ describe("dispatchReplyFromConfig", () => {
 
   it("posts a one-time resolved-session-id notice in thread after the first ACP turn", async () => {
     setNoAbort();
-    const runtime = createAcpRuntime([{ type: "text_delta", text: "hello" }, { type: "done" }]);
+    const runtime = createAcpRuntime([
+      { type: "text_delta", text: "hello" },
+      { type: "done" },
+    ]);
     const pendingAcp = {
       backend: "acpx",
       agent: "codex",
@@ -710,9 +754,15 @@ describe("dispatchReplyFromConfig", () => {
       BodyForAgent: "show ids",
     });
 
-    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver: vi.fn() });
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg,
+      dispatcher,
+      replyResolver: vi.fn(),
+    });
 
-    const finalCalls = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock.calls;
+    const finalCalls = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>)
+      .mock.calls;
     expect(finalCalls.length).toBe(1);
     const finalPayload = finalCalls[0]?.[0] as ReplyPayload | undefined;
     expect(finalPayload?.text).toContain("Session ids resolved");
@@ -723,7 +773,10 @@ describe("dispatchReplyFromConfig", () => {
 
   it("posts resolved-session-id notice when ACP session is bound even without MessageThreadId", async () => {
     setNoAbort();
-    const runtime = createAcpRuntime([{ type: "text_delta", text: "hello" }, { type: "done" }]);
+    const runtime = createAcpRuntime([
+      { type: "text_delta", text: "hello" },
+      { type: "done" },
+    ]);
     const pendingAcp = {
       backend: "acpx",
       agent: "codex",
@@ -793,9 +846,15 @@ describe("dispatchReplyFromConfig", () => {
       BodyForAgent: "show ids",
     });
 
-    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver: vi.fn() });
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg,
+      dispatcher,
+      replyResolver: vi.fn(),
+    });
 
-    const finalCalls = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock.calls;
+    const finalCalls = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>)
+      .mock.calls;
     expect(finalCalls.length).toBe(1);
     const finalPayload = finalCalls[0]?.[0] as ReplyPayload | undefined;
     expect(finalPayload?.text).toContain("Session ids resolved");
@@ -898,7 +957,9 @@ describe("dispatchReplyFromConfig", () => {
       BodyForCommands: "/acp cancel",
       BodyForAgent: "/acp cancel",
     });
-    const replyResolver = vi.fn(async () => ({ text: "command output" }) as ReplyPayload);
+    const replyResolver = vi.fn(
+      async () => ({ text: "command output" }) as ReplyPayload,
+    );
 
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
@@ -951,7 +1012,9 @@ describe("dispatchReplyFromConfig", () => {
       BodyForAgent: "/acp cancel",
       CommandSource: "text",
     });
-    const replyResolver = vi.fn(async () => ({ text: "should not bypass" }) as ReplyPayload);
+    const replyResolver = vi.fn(
+      async () => ({ text: "should not bypass" }) as ReplyPayload,
+    );
 
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
@@ -1004,7 +1067,9 @@ describe("dispatchReplyFromConfig", () => {
       BodyForAgent: "!poll",
       CommandAuthorized: false,
     });
-    const replyResolver = vi.fn(async () => ({ text: "should not bypass" }) as ReplyPayload);
+    const replyResolver = vi.fn(
+      async () => ({ text: "should not bypass" }) as ReplyPayload,
+    );
 
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
@@ -1061,7 +1126,9 @@ describe("dispatchReplyFromConfig", () => {
       CommandAuthorized: true,
       CommandSource: "text",
     });
-    const replyResolver = vi.fn(async () => ({ text: "should not bypass" }) as ReplyPayload);
+    const replyResolver = vi.fn(
+      async () => ({ text: "should not bypass" }) as ReplyPayload,
+    );
 
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
@@ -1119,7 +1186,9 @@ describe("dispatchReplyFromConfig", () => {
 
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher });
 
-    const blockTexts = (dispatcher.sendBlockReply as ReturnType<typeof vi.fn>).mock.calls
+    const blockTexts = (
+      dispatcher.sendBlockReply as ReturnType<typeof vi.fn>
+    ).mock.calls
       .map((call) => ((call[0] as ReplyPayload).text ?? "").trim())
       .filter(Boolean);
     expect(blockTexts).toEqual(["What do you want to work on?"]);
@@ -1170,8 +1239,8 @@ describe("dispatchReplyFromConfig", () => {
 
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher });
 
-    const finalPayload = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock
-      .calls[0]?.[0] as ReplyPayload | undefined;
+    const finalPayload = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>)
+      .mock.calls[0]?.[0] as ReplyPayload | undefined;
     expect(finalPayload?.mediaUrl).toBe("https://example.com/tts-synth.opus");
     expect(finalPayload?.text).toBeUndefined();
   });
@@ -1310,14 +1379,16 @@ describe("dispatchReplyFromConfig", () => {
       SessionKey: "agent:codex-acp:session-1",
       BodyForAgent: "write a test",
     });
-    const replyResolver = vi.fn(async () => ({ text: "fallback" }) as ReplyPayload);
+    const replyResolver = vi.fn(
+      async () => ({ text: "fallback" }) as ReplyPayload,
+    );
 
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
     expect(replyResolver).not.toHaveBeenCalled();
     expect(acpMocks.requireAcpRuntimeBackend).not.toHaveBeenCalled();
-    const finalPayload = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock
-      .calls[0]?.[0] as ReplyPayload | undefined;
+    const finalPayload = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>)
+      .mock.calls[0]?.[0] as ReplyPayload | undefined;
     expect(finalPayload?.text).toContain("ACP dispatch is disabled by policy");
   });
 
@@ -1338,14 +1409,16 @@ describe("dispatchReplyFromConfig", () => {
       SessionKey: "agent:codex:acp:session-1",
       BodyForAgent: "hello",
     });
-    const replyResolver = vi.fn(async () => ({ text: "fallback" }) as ReplyPayload);
+    const replyResolver = vi.fn(
+      async () => ({ text: "fallback" }) as ReplyPayload,
+    );
 
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
     expect(replyResolver).not.toHaveBeenCalled();
     expect(acpMocks.requireAcpRuntimeBackend).not.toHaveBeenCalled();
-    const finalPayload = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock
-      .calls[0]?.[0] as ReplyPayload | undefined;
+    const finalPayload = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>)
+      .mock.calls[0]?.[0] as ReplyPayload | undefined;
     expect(finalPayload?.text).toContain("ACP metadata is missing");
   });
 
@@ -1386,15 +1459,19 @@ describe("dispatchReplyFromConfig", () => {
       SessionKey: "agent:codex-acp:session-1",
       BodyForAgent: "write a test",
     });
-    const replyResolver = vi.fn(async () => ({ text: "fallback" }) as ReplyPayload);
+    const replyResolver = vi.fn(
+      async () => ({ text: "fallback" }) as ReplyPayload,
+    );
 
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
     expect(replyResolver).not.toHaveBeenCalled();
-    const finalPayload = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock
-      .calls[0]?.[0] as ReplyPayload | undefined;
+    const finalPayload = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>)
+      .mock.calls[0]?.[0] as ReplyPayload | undefined;
     expect(finalPayload?.text).toContain("ACP error (ACP_BACKEND_MISSING)");
-    expect(finalPayload?.text).toContain("Install and enable the acpx runtime plugin");
+    expect(finalPayload?.text).toContain(
+      "Install and enable the acpx runtime plugin",
+    );
   });
 
   it("deduplicates inbound messages by MessageSid and origin", async () => {
@@ -1588,8 +1665,14 @@ describe("dispatchReplyFromConfig", () => {
         { text: "Reasoning:\n_thinking..._", isReasoning: true },
         { text: "The answer is 42" },
       ] satisfies ReplyPayload[];
-    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
-    const finalCalls = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock.calls;
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+    const finalCalls = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>)
+      .mock.calls;
     expect(finalCalls).toHaveLength(1);
     expect(finalCalls[0][0]).toMatchObject({ text: "The answer is 42" });
   });
@@ -1604,7 +1687,10 @@ describe("dispatchReplyFromConfig", () => {
       opts?: GetReplyOptions,
     ): Promise<ReplyPayload> => {
       // Simulate block reply with reasoning payload
-      await opts?.onBlockReply?.({ text: "Reasoning:\n_thinking..._", isReasoning: true });
+      await opts?.onBlockReply?.({
+        text: "Reasoning:\n_thinking..._",
+        isReasoning: true,
+      });
       await opts?.onBlockReply?.({ text: "The answer is 42" });
       return { text: "The answer is 42" };
     };
@@ -1617,7 +1703,12 @@ describe("dispatchReplyFromConfig", () => {
         return true;
       },
     );
-    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
     expect(blockReplySentTexts).not.toContain("Reasoning:\n_thinking..._");
     expect(blockReplySentTexts).toContain("The answer is 42");
   });

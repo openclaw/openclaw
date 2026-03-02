@@ -57,7 +57,9 @@ const STATUS_PREFIXES = [
 
 const normalize = (value: string) => value.trim().toLowerCase();
 
-export function resolveWindowsUserPrincipal(env?: NodeJS.ProcessEnv): string | null {
+export function resolveWindowsUserPrincipal(
+  env?: NodeJS.ProcessEnv,
+): string | null {
   const username = env?.USERNAME?.trim() || os.userInfo().username?.trim();
   if (!username) {
     return null;
@@ -91,7 +93,9 @@ function classifyPrincipal(
   const normalized = normalize(principal);
 
   if (SID_RE.test(normalized)) {
-    return TRUSTED_SIDS.has(normalized) || trustedPrincipals.has(normalized) ? "trusted" : "group";
+    return TRUSTED_SIDS.has(normalized) || trustedPrincipals.has(normalized)
+      ? "trusted"
+      : "group";
   }
 
   if (
@@ -113,7 +117,9 @@ function classifyPrincipal(
     stripped !== normalized &&
     (TRUSTED_BASE.has(stripped) ||
       TRUSTED_SUFFIXES.some((suffix) => {
-        const strippedSuffix = suffix.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+        const strippedSuffix = suffix
+          .normalize("NFD")
+          .replace(/[\u0300-\u036f]/g, "");
         return stripped.endsWith(strippedSuffix);
       }))
   ) {
@@ -129,8 +135,12 @@ function rightsFromTokens(tokens: string[]): {
 } {
   const upper = tokens.join("").toUpperCase();
   const canWrite =
-    upper.includes("F") || upper.includes("M") || upper.includes("W") || upper.includes("D");
-  const canRead = upper.includes("F") || upper.includes("M") || upper.includes("R");
+    upper.includes("F") ||
+    upper.includes("M") ||
+    upper.includes("W") ||
+    upper.includes("D");
+  const canRead =
+    upper.includes("F") || upper.includes("M") || upper.includes("R");
   return { canRead, canWrite };
 }
 
@@ -177,7 +187,9 @@ function parseAceEntry(entry: string): WindowsAclEntry | null {
     return null;
   }
 
-  const rights = tokens.filter((token) => !INHERIT_FLAGS.has(token.toUpperCase()));
+  const rights = tokens.filter(
+    (token) => !INHERIT_FLAGS.has(token.toUpperCase()),
+  );
   if (rights.length === 0) {
     return null;
   }
@@ -186,7 +198,10 @@ function parseAceEntry(entry: string): WindowsAclEntry | null {
   return { principal, rights, rawRights, canRead, canWrite };
 }
 
-export function parseIcaclsOutput(output: string, targetPath: string): WindowsAclEntry[] {
+export function parseIcaclsOutput(
+  output: string,
+  targetPath: string,
+): WindowsAclEntry[] {
   const entries: WindowsAclEntry[] = [];
   const normalizedTarget = targetPath.trim();
   const lowerTarget = normalizedTarget.toLowerCase();
@@ -231,7 +246,10 @@ export function summarizeWindowsAcl(
   const untrustedWorld: WindowsAclEntry[] = [];
   const untrustedGroup: WindowsAclEntry[] = [];
   for (const entry of entries) {
-    const classification = classifyPrincipal(entry.principal, trustedPrincipals);
+    const classification = classifyPrincipal(
+      entry.principal,
+      trustedPrincipals,
+    );
     if (classification === "trusted") {
       trusted.push(entry);
     } else if (classification === "world") {
@@ -252,7 +270,10 @@ export async function inspectWindowsAcl(
     const { stdout, stderr } = await exec("icacls", [targetPath]);
     const output = `${stdout}\n${stderr}`.trim();
     const entries = parseIcaclsOutput(output, targetPath);
-    const { trusted, untrustedWorld, untrustedGroup } = summarizeWindowsAcl(entries, opts?.env);
+    const { trusted, untrustedWorld, untrustedGroup } = summarizeWindowsAcl(
+      entries,
+      opts?.env,
+    );
     return { ok: true, entries, trusted, untrustedWorld, untrustedGroup };
   } catch (err) {
     return {
@@ -274,7 +295,9 @@ export function formatWindowsAclSummary(summary: WindowsAclSummary): string {
   if (untrusted.length === 0) {
     return "trusted-only";
   }
-  return untrusted.map((entry) => `${entry.principal}:${entry.rawRights}`).join(", ");
+  return untrusted
+    .map((entry) => `${entry.principal}:${entry.rawRights}`)
+    .join(", ");
 }
 
 export function formatIcaclsResetCommand(

@@ -126,22 +126,38 @@ describe("healthCommand", () => {
         telegram: {
           accountId: "main",
           configured: true,
-          probe: { ok: true, elapsedMs: 196, bot: { username: "pinguini_ugi_bot" } },
+          probe: {
+            ok: true,
+            elapsedMs: 196,
+            bot: { username: "pinguini_ugi_bot" },
+          },
           accounts: {
             main: {
               accountId: "main",
               configured: true,
-              probe: { ok: true, elapsedMs: 196, bot: { username: "pinguini_ugi_bot" } },
+              probe: {
+                ok: true,
+                elapsedMs: 196,
+                bot: { username: "pinguini_ugi_bot" },
+              },
             },
             flurry: {
               accountId: "flurry",
               configured: true,
-              probe: { ok: true, elapsedMs: 190, bot: { username: "flurry_ugi_bot" } },
+              probe: {
+                ok: true,
+                elapsedMs: 190,
+                bot: { username: "flurry_ugi_bot" },
+              },
             },
             poe: {
               accountId: "poe",
               configured: true,
-              probe: { ok: true, elapsedMs: 188, bot: { username: "poe_ugi_bot" } },
+              probe: {
+                ok: true,
+                elapsedMs: 188,
+                bot: { username: "poe_ugi_bot" },
+              },
             },
           },
         },
@@ -159,7 +175,9 @@ describe("healthCommand", () => {
 
 describe("formatHealthCheckFailure", () => {
   it("keeps non-rich output stable", () => {
-    const err = new Error("gateway closed (1006 abnormal closure): no close reason");
+    const err = new Error(
+      "gateway closed (1006 abnormal closure): no close reason",
+    );
     expect(formatHealthCheckFailure(err, { rich: false })).toBe(
       `Health check failed: ${String(err)}`,
     );

@@ -169,7 +169,8 @@ function replaceMarkers(content: string): string {
       value: "[[MARKER_SANITIZED]]",
     },
     {
-      regex: /<<<END_EXTERNAL_UNTRUSTED_CONTENT(?:\s+id="[^"]{1,128}")?\s*>>>/gi,
+      regex:
+        /<<<END_EXTERNAL_UNTRUSTED_CONTENT(?:\s+id="[^"]{1,128}")?\s*>>>/gi,
       value: "[[END_MARKER_SANITIZED]]",
     },
   ];
@@ -232,7 +233,10 @@ export type WrapExternalContentOptions = {
  * // Pass safeContent to LLM instead of raw emailBody
  * ```
  */
-export function wrapExternalContent(content: string, options: WrapExternalContentOptions): string {
+export function wrapExternalContent(
+  content: string,
+  options: WrapExternalContentOptions,
+): string {
   const { source, sender, subject, includeWarning = true } = options;
 
   const sanitized = replaceMarkers(content);
@@ -273,7 +277,8 @@ export function buildSafeExternalPrompt(params: {
   jobId?: string;
   timestamp?: string;
 }): string {
-  const { content, source, sender, subject, jobName, jobId, timestamp } = params;
+  const { content, source, sender, subject, jobName, jobId, timestamp } =
+    params;
 
   const wrappedContent = wrapExternalContent(content, {
     source,
@@ -293,7 +298,8 @@ export function buildSafeExternalPrompt(params: {
     contextLines.push(`Received: ${timestamp}`);
   }
 
-  const context = contextLines.length > 0 ? `${contextLines.join(" | ")}\n\n` : "";
+  const context =
+    contextLines.length > 0 ? `${contextLines.join(" | ")}\n\n` : "";
 
   return `${context}${wrappedContent}`;
 }

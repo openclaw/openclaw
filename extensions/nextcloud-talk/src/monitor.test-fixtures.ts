@@ -1,6 +1,8 @@
 import { generateNextcloudTalkSignature } from "./signature.js";
 
-export function createSignedCreateMessageRequest(params?: { backend?: string }) {
+export function createSignedCreateMessageRequest(params?: {
+  backend?: string;
+}) {
   const payload = {
     type: "Create",
     actor: { type: "Person", id: "alice", name: "Alice" },
@@ -24,7 +26,8 @@ export function createSignedCreateMessageRequest(params?: { backend?: string }) 
       "content-type": "application/json",
       "x-nextcloud-talk-random": random,
       "x-nextcloud-talk-signature": signature,
-      "x-nextcloud-talk-backend": params?.backend ?? "https://nextcloud.example",
+      "x-nextcloud-talk-backend":
+        params?.backend ?? "https://nextcloud.example",
     },
   };
 }

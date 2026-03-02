@@ -27,7 +27,11 @@ import { incrementCompactionCount } from "./session-updates.js";
 const tempDirs: string[] = [];
 
 afterEach(async () => {
-  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
+  await Promise.all(
+    tempDirs
+      .splice(0)
+      .map((dir) => fs.rm(dir, { recursive: true, force: true })),
+  );
 });
 
 async function seedSessionStore(params: {
@@ -110,7 +114,10 @@ describe("history helpers", () => {
       entry: { sender: "C", body: "three" },
     });
 
-    expect(historyMap.get("group")?.map((entry) => entry.body)).toEqual(["two", "three"]);
+    expect(historyMap.get("group")?.map((entry) => entry.body)).toEqual([
+      "two",
+      "three",
+    ]);
   });
 
   it("builds context from map and appends entry", () => {
@@ -125,7 +132,11 @@ describe("history helpers", () => {
       formatEntry: (entry) => `${entry.sender}: ${entry.body}`,
     });
 
-    expect(historyMap.get("group")?.map((entry) => entry.body)).toEqual(["one", "two", "three"]);
+    expect(historyMap.get("group")?.map((entry) => entry.body)).toEqual([
+      "one",
+      "two",
+      "three",
+    ]);
     expect(result).toContain(HISTORY_CONTEXT_MARKER);
     expect(result).toContain("A: one");
     expect(result).toContain("B: two");
@@ -143,7 +154,10 @@ describe("history helpers", () => {
       formatEntry: (entry) => `${entry.sender}: ${entry.body}`,
     });
 
-    expect(historyMap.get("group")?.map((entry) => entry.body)).toEqual(["one", "two"]);
+    expect(historyMap.get("group")?.map((entry) => entry.body)).toEqual([
+      "one",
+      "two",
+    ]);
     expect(result).toContain(HISTORY_CONTEXT_MARKER);
     expect(result).toContain("A: one");
     expect(result).toContain("B: two");
@@ -176,7 +190,9 @@ describe("history helpers", () => {
       limit: 2,
       entry: { sender: "B", body: "two" },
     });
-    expect(historyMap.get("group")?.map((entry) => entry.body)).toEqual(["two"]);
+    expect(historyMap.get("group")?.map((entry) => entry.body)).toEqual([
+      "two",
+    ]);
   });
 
   it("clears history entries only when enabled", () => {
@@ -187,7 +203,10 @@ describe("history helpers", () => {
     ]);
 
     clearHistoryEntriesIfEnabled({ historyMap, historyKey: "group", limit: 0 });
-    expect(historyMap.get("group")?.map((entry) => entry.body)).toEqual(["one", "two"]);
+    expect(historyMap.get("group")?.map((entry) => entry.body)).toEqual([
+      "one",
+      "two",
+    ]);
 
     clearHistoryEntriesIfEnabled({ historyMap, historyKey: "group", limit: 2 });
     expect(historyMap.get("group")).toEqual([]);
@@ -199,7 +218,9 @@ describe("memory flush settings", () => {
     const settings = resolveMemoryFlushSettings();
     expect(settings).not.toBeNull();
     expect(settings?.enabled).toBe(true);
-    expect(settings?.forceFlushTranscriptBytes).toBe(DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES);
+    expect(settings?.forceFlushTranscriptBytes).toBe(
+      DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES,
+    );
     expect(settings?.prompt.length).toBeGreaterThan(0);
     expect(settings?.systemPrompt.length).toBeGreaterThan(0);
   });
@@ -245,9 +266,15 @@ describe("memory flush settings", () => {
       },
     });
 
-    expect(settings?.softThresholdTokens).toBe(DEFAULT_MEMORY_FLUSH_SOFT_TOKENS);
-    expect(settings?.forceFlushTranscriptBytes).toBe(DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES);
-    expect(settings?.reserveTokensFloor).toBe(DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR);
+    expect(settings?.softThresholdTokens).toBe(
+      DEFAULT_MEMORY_FLUSH_SOFT_TOKENS,
+    );
+    expect(settings?.forceFlushTranscriptBytes).toBe(
+      DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES,
+    );
+    expect(settings?.reserveTokensFloor).toBe(
+      DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR,
+    );
   });
 
   it("parses forceFlushTranscriptBytes from byte-size strings", () => {
@@ -341,7 +368,11 @@ describe("shouldRunMemoryFlush", () => {
   it("ignores stale cached totals", () => {
     expect(
       shouldRunMemoryFlush({
-        entry: { totalTokens: 96_000, totalTokensFresh: false, compactionCount: 1 },
+        entry: {
+          totalTokens: 96_000,
+          totalTokensFresh: false,
+          compactionCount: 1,
+        },
         contextWindowTokens: 100_000,
         reserveTokensFloor: 5_000,
         softThresholdTokens: 2_000,
@@ -352,14 +383,21 @@ describe("shouldRunMemoryFlush", () => {
 
 describe("resolveMemoryFlushContextWindowTokens", () => {
   it("falls back to agent config or default tokens", () => {
-    expect(resolveMemoryFlushContextWindowTokens({ agentCfgContextTokens: 42_000 })).toBe(42_000);
+    expect(
+      resolveMemoryFlushContextWindowTokens({ agentCfgContextTokens: 42_000 }),
+    ).toBe(42_000);
   });
 });
 
 describe("incrementCompactionCount", () => {
   it("increments compaction count", async () => {
-    const entry = { sessionId: "s1", updatedAt: Date.now(), compactionCount: 2 } as SessionEntry;
-    const { storePath, sessionKey, sessionStore } = await createCompactionSessionFixture(entry);
+    const entry = {
+      sessionId: "s1",
+      updatedAt: Date.now(),
+      compactionCount: 2,
+    } as SessionEntry;
+    const { storePath, sessionKey, sessionStore } =
+      await createCompactionSessionFixture(entry);
 
     const count = await incrementCompactionCount({
       sessionEntry: entry,
@@ -382,7 +420,8 @@ describe("incrementCompactionCount", () => {
       inputTokens: 170_000,
       outputTokens: 10_000,
     } as SessionEntry;
-    const { storePath, sessionKey, sessionStore } = await createCompactionSessionFixture(entry);
+    const { storePath, sessionKey, sessionStore } =
+      await createCompactionSessionFixture(entry);
 
     await incrementCompactionCount({
       sessionEntry: entry,
@@ -407,7 +446,8 @@ describe("incrementCompactionCount", () => {
       compactionCount: 0,
       totalTokens: 180_000,
     } as SessionEntry;
-    const { storePath, sessionKey, sessionStore } = await createCompactionSessionFixture(entry);
+    const { storePath, sessionKey, sessionStore } =
+      await createCompactionSessionFixture(entry);
 
     await incrementCompactionCount({
       sessionEntry: entry,

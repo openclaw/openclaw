@@ -18,7 +18,10 @@ beforeEach(() => {
 });
 
 describe("heartbeat transcript pruning", () => {
-  async function createTranscriptWithContent(transcriptPath: string, sessionId: string) {
+  async function createTranscriptWithContent(
+    transcriptPath: string,
+    sessionId: string,
+  ) {
     const header = {
       type: "session",
       version: 3,
@@ -49,7 +52,10 @@ describe("heartbeat transcript pruning", () => {
       async ({ tmpDir, storePath, replySpy }) => {
         const sessionKey = resolveMainSessionKey(undefined);
         const transcriptPath = path.join(tmpDir, `${params.sessionId}.jsonl`);
-        const originalContent = await createTranscriptWithContent(transcriptPath, params.sessionId);
+        const originalContent = await createTranscriptWithContent(
+          transcriptPath,
+          params.sessionId,
+        );
         const originalSize = (await fs.stat(transcriptPath)).size;
 
         await seedSessionStore(storePath, sessionKey, {
@@ -94,7 +100,12 @@ describe("heartbeat transcript pruning", () => {
       sessionId: "test-session-prune",
       reply: {
         text: "HEARTBEAT_OK",
-        usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+        usage: {
+          inputTokens: 0,
+          outputTokens: 0,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+        },
       },
       expectPruned: true,
     });
@@ -105,7 +116,12 @@ describe("heartbeat transcript pruning", () => {
       sessionId: "test-session-no-prune",
       reply: {
         text: "Alert: Something needs your attention!",
-        usage: { inputTokens: 10, outputTokens: 20, cacheReadTokens: 0, cacheWriteTokens: 0 },
+        usage: {
+          inputTokens: 10,
+          outputTokens: 20,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+        },
       },
       expectPruned: false,
     });

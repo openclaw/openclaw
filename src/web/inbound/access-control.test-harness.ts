@@ -13,7 +13,9 @@ export const upsertPairingRequestMock = vi.fn() as AsyncMock;
 
 let config: Record<string, unknown> = {};
 
-export function setAccessControlTestConfig(next: Record<string, unknown>): void {
+export function setAccessControlTestConfig(
+  next: Record<string, unknown>,
+): void {
   config = next;
 }
 
@@ -29,12 +31,15 @@ export function setupAccessControlTestHarness(): void {
     };
     sendMessageMock.mockReset().mockResolvedValue(undefined);
     readAllowFromStoreMock.mockReset().mockResolvedValue([]);
-    upsertPairingRequestMock.mockReset().mockResolvedValue({ code: "PAIRCODE", created: true });
+    upsertPairingRequestMock
+      .mockReset()
+      .mockResolvedValue({ code: "PAIRCODE", created: true });
   });
 }
 
 vi.mock("../../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../config/config.js")>();
+  const actual =
+    await importOriginal<typeof import("../../config/config.js")>();
   return {
     ...actual,
     loadConfig: () => config,
@@ -42,6 +47,8 @@ vi.mock("../../config/config.js", async (importOriginal) => {
 });
 
 vi.mock("../../pairing/pairing-store.js", () => ({
-  readChannelAllowFromStore: (...args: unknown[]) => readAllowFromStoreMock(...args),
-  upsertChannelPairingRequest: (...args: unknown[]) => upsertPairingRequestMock(...args),
+  readChannelAllowFromStore: (...args: unknown[]) =>
+    readAllowFromStoreMock(...args),
+  upsertChannelPairingRequest: (...args: unknown[]) =>
+    upsertPairingRequestMock(...args),
 }));

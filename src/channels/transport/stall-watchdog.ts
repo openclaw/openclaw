@@ -24,7 +24,9 @@ export function createArmableStallWatchdog(params: {
   const timeoutMs = Math.max(1, Math.floor(params.timeoutMs));
   const checkIntervalMs = Math.max(
     100,
-    Math.floor(params.checkIntervalMs ?? Math.min(5_000, Math.max(250, timeoutMs / 6))),
+    Math.floor(
+      params.checkIntervalMs ?? Math.min(5_000, Math.max(250, timeoutMs / 6)),
+    ),
   );
 
   let armed = false;

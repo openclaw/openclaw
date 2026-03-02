@@ -7,7 +7,9 @@ describe("buildControlUiCspHeader", () => {
     expect(csp).toContain("frame-ancestors 'none'");
     expect(csp).toContain("script-src 'self'");
     expect(csp).not.toContain("script-src 'self' 'unsafe-inline'");
-    expect(csp).toContain("style-src 'self' 'unsafe-inline' https://fonts.googleapis.com");
+    expect(csp).toContain(
+      "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+    );
   });
 
   it("allows Google Fonts for style and font loading", () => {

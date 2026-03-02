@@ -13,7 +13,9 @@ describe("searchGraphUsers", () => {
   });
 
   it("returns empty array for blank queries", async () => {
-    await expect(searchGraphUsers({ token: "token-1", query: "   " })).resolves.toEqual([]);
+    await expect(
+      searchGraphUsers({ token: "token-1", query: "   " }),
+    ).resolves.toEqual([]);
     expect(fetchGraphJson).not.toHaveBeenCalled();
   });
 
@@ -56,7 +58,9 @@ describe("searchGraphUsers", () => {
   it("falls back to default top and empty value handling", async () => {
     vi.mocked(fetchGraphJson).mockResolvedValueOnce({} as never);
 
-    await expect(searchGraphUsers({ token: "token-4", query: "carol" })).resolves.toEqual([]);
+    await expect(
+      searchGraphUsers({ token: "token-4", query: "carol" }),
+    ).resolves.toEqual([]);
     expect(fetchGraphJson).toHaveBeenCalledWith({
       token: "token-4",
       path: "/users?$search=%22displayName%3Acarol%22&$select=id,displayName,mail,userPrincipalName&$top=10",

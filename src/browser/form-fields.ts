@@ -13,8 +13,12 @@ export function normalizeBrowserFormFieldType(value: unknown): string {
   return type || DEFAULT_FILL_FIELD_TYPE;
 }
 
-export function normalizeBrowserFormFieldValue(value: unknown): BrowserFormFieldValue | undefined {
-  return typeof value === "string" || typeof value === "number" || typeof value === "boolean"
+export function normalizeBrowserFormFieldValue(
+  value: unknown,
+): BrowserFormFieldValue | undefined {
+  return typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
     ? value
     : undefined;
 }

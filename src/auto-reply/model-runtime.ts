@@ -1,6 +1,9 @@
 import type { SessionEntry } from "../config/sessions.js";
 
-export function formatProviderModelRef(providerRaw: string, modelRaw: string): string {
+export function formatProviderModelRef(
+  providerRaw: string,
+  modelRaw: string,
+): string {
   const provider = String(providerRaw ?? "").trim();
   const model = String(modelRaw ?? "").trim();
   if (!provider) {
@@ -25,7 +28,10 @@ type ModelRef = {
   label: string;
 };
 
-function normalizeModelWithinProvider(provider: string, modelRaw: string): string {
+function normalizeModelWithinProvider(
+  provider: string,
+  modelRaw: string,
+): string {
   const model = String(modelRaw ?? "").trim();
   if (!provider || !model) {
     return model;
@@ -63,7 +69,9 @@ function normalizeModelRef(
   return {
     provider,
     model: dedupedModel || trimmed,
-    label: provider ? formatProviderModelRef(provider, dedupedModel || trimmed) : trimmed,
+    label: provider
+      ? formatProviderModelRef(provider, dedupedModel || trimmed)
+      : trimmed,
   };
 }
 
@@ -76,14 +84,22 @@ export function resolveSelectedAndActiveModel(params: {
   active: ModelRef;
   activeDiffers: boolean;
 } {
-  const selected = normalizeModelRef(params.selectedModel, params.selectedProvider);
+  const selected = normalizeModelRef(
+    params.selectedModel,
+    params.selectedProvider,
+  );
   const runtimeModel = params.sessionEntry?.model?.trim();
   const runtimeProvider = params.sessionEntry?.modelProvider?.trim();
 
   const active = runtimeModel
-    ? normalizeModelRef(runtimeModel, runtimeProvider || selected.provider, !runtimeProvider)
+    ? normalizeModelRef(
+        runtimeModel,
+        runtimeProvider || selected.provider,
+        !runtimeProvider,
+      )
     : selected;
-  const activeDiffers = active.provider !== selected.provider || active.model !== selected.model;
+  const activeDiffers =
+    active.provider !== selected.provider || active.model !== selected.model;
 
   return {
     selected,

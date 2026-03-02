@@ -34,13 +34,19 @@ describe("web_search perplexity baseUrl defaults", () => {
   });
 
   it("prefers explicit baseUrl over key-based defaults", () => {
-    expect(resolvePerplexityBaseUrl({ baseUrl: "https://example.com" }, "config", "pplx-123")).toBe(
-      "https://example.com",
-    );
+    expect(
+      resolvePerplexityBaseUrl(
+        { baseUrl: "https://example.com" },
+        "config",
+        "pplx-123",
+      ),
+    ).toBe("https://example.com");
   });
 
   it("defaults to direct when using PERPLEXITY_API_KEY", () => {
-    expect(resolvePerplexityBaseUrl(undefined, "perplexity_env")).toBe("https://api.perplexity.ai");
+    expect(resolvePerplexityBaseUrl(undefined, "perplexity_env")).toBe(
+      "https://api.perplexity.ai",
+    );
   });
 
   it("defaults to OpenRouter when using OPENROUTER_API_KEY", () => {
@@ -72,35 +78,47 @@ describe("web_search perplexity model normalization", () => {
   it("detects direct Perplexity host", () => {
     expect(isDirectPerplexityBaseUrl("https://api.perplexity.ai")).toBe(true);
     expect(isDirectPerplexityBaseUrl("https://api.perplexity.ai/")).toBe(true);
-    expect(isDirectPerplexityBaseUrl("https://openrouter.ai/api/v1")).toBe(false);
+    expect(isDirectPerplexityBaseUrl("https://openrouter.ai/api/v1")).toBe(
+      false,
+    );
   });
 
   it("strips provider prefix for direct Perplexity", () => {
-    expect(resolvePerplexityRequestModel("https://api.perplexity.ai", "perplexity/sonar-pro")).toBe(
-      "sonar-pro",
-    );
+    expect(
+      resolvePerplexityRequestModel(
+        "https://api.perplexity.ai",
+        "perplexity/sonar-pro",
+      ),
+    ).toBe("sonar-pro");
   });
 
   it("keeps prefixed model for OpenRouter", () => {
     expect(
-      resolvePerplexityRequestModel("https://openrouter.ai/api/v1", "perplexity/sonar-pro"),
+      resolvePerplexityRequestModel(
+        "https://openrouter.ai/api/v1",
+        "perplexity/sonar-pro",
+      ),
     ).toBe("perplexity/sonar-pro");
   });
 
   it("keeps model unchanged when URL is invalid", () => {
-    expect(resolvePerplexityRequestModel("not-a-url", "perplexity/sonar-pro")).toBe(
-      "perplexity/sonar-pro",
-    );
+    expect(
+      resolvePerplexityRequestModel("not-a-url", "perplexity/sonar-pro"),
+    ).toBe("perplexity/sonar-pro");
   });
 });
 
 describe("web_search brave language param normalization", () => {
   it("normalizes and auto-corrects swapped Brave language params", () => {
-    expect(normalizeBraveLanguageParams({ search_lang: "tr-TR", ui_lang: "tr" })).toEqual({
+    expect(
+      normalizeBraveLanguageParams({ search_lang: "tr-TR", ui_lang: "tr" }),
+    ).toEqual({
       search_lang: "tr",
       ui_lang: "tr-TR",
     });
-    expect(normalizeBraveLanguageParams({ search_lang: "EN", ui_lang: "en-us" })).toEqual({
+    expect(
+      normalizeBraveLanguageParams({ search_lang: "EN", ui_lang: "en-us" }),
+    ).toEqual({
       search_lang: "en",
       ui_lang: "en-US",
     });
@@ -123,7 +141,9 @@ describe("web_search freshness normalization", () => {
   });
 
   it("accepts valid date ranges", () => {
-    expect(normalizeFreshness("2024-01-01to2024-01-31")).toBe("2024-01-01to2024-01-31");
+    expect(normalizeFreshness("2024-01-01to2024-01-31")).toBe(
+      "2024-01-01to2024-01-31",
+    );
   });
 
   it("rejects invalid date ranges", () => {
@@ -142,7 +162,9 @@ describe("freshnessToPerplexityRecency", () => {
   });
 
   it("returns undefined for date ranges (not supported by Perplexity)", () => {
-    expect(freshnessToPerplexityRecency("2024-01-01to2024-01-31")).toBeUndefined();
+    expect(
+      freshnessToPerplexityRecency("2024-01-01to2024-01-31"),
+    ).toBeUndefined();
   });
 
   it("returns undefined for undefined/empty input", () => {
@@ -232,11 +254,16 @@ describe("web_search grok response parsing", () => {
       ],
     });
     expect(result.text).toBe("hello with citations");
-    expect(result.annotationCitations).toEqual(["https://example.com/a", "https://example.com/b"]);
+    expect(result.annotationCitations).toEqual([
+      "https://example.com/a",
+      "https://example.com/b",
+    ]);
   });
 
   it("falls back to deprecated output_text", () => {
-    const result = extractGrokContent({ output_text: "hello from output_text" });
+    const result = extractGrokContent({
+      output_text: "hello from output_text",
+    });
     expect(result.text).toBe("hello from output_text");
     expect(result.annotationCitations).toEqual([]);
   });
@@ -272,16 +299,24 @@ describe("web_search grok response parsing", () => {
 
 describe("web_search kimi config resolution", () => {
   it("uses config apiKey when provided", () => {
-    expect(resolveKimiApiKey({ apiKey: "kimi-test-key" })).toBe("kimi-test-key");
+    expect(resolveKimiApiKey({ apiKey: "kimi-test-key" })).toBe(
+      "kimi-test-key",
+    );
   });
 
   it("falls back to KIMI_API_KEY, then MOONSHOT_API_KEY", () => {
-    withEnv({ KIMI_API_KEY: "kimi-env", MOONSHOT_API_KEY: "moonshot-env" }, () => {
-      expect(resolveKimiApiKey({})).toBe("kimi-env");
-    });
-    withEnv({ KIMI_API_KEY: undefined, MOONSHOT_API_KEY: "moonshot-env" }, () => {
-      expect(resolveKimiApiKey({})).toBe("moonshot-env");
-    });
+    withEnv(
+      { KIMI_API_KEY: "kimi-env", MOONSHOT_API_KEY: "moonshot-env" },
+      () => {
+        expect(resolveKimiApiKey({})).toBe("kimi-env");
+      },
+    );
+    withEnv(
+      { KIMI_API_KEY: undefined, MOONSHOT_API_KEY: "moonshot-env" },
+      () => {
+        expect(resolveKimiApiKey({})).toBe("moonshot-env");
+      },
+    );
   });
 
   it("returns undefined when no Kimi key is configured", () => {
@@ -301,7 +336,10 @@ describe("extractKimiCitations", () => {
   it("collects unique URLs from search_results and tool arguments", () => {
     expect(
       extractKimiCitations({
-        search_results: [{ url: "https://example.com/a" }, { url: "https://example.com/a" }],
+        search_results: [
+          { url: "https://example.com/a" },
+          { url: "https://example.com/a" },
+        ],
         choices: [
           {
             message: {
@@ -319,6 +357,10 @@ describe("extractKimiCitations", () => {
           },
         ],
       }).toSorted(),
-    ).toEqual(["https://example.com/a", "https://example.com/b", "https://example.com/c"]);
+    ).toEqual([
+      "https://example.com/a",
+      "https://example.com/b",
+      "https://example.com/c",
+    ]);
   });
 });

@@ -6,7 +6,9 @@ export function selectStyled<T>(params: Parameters<typeof select<T>>[0]) {
     ...params,
     message: stylePromptMessage(params.message),
     options: params.options.map((opt) =>
-      opt.hint === undefined ? opt : { ...opt, hint: stylePromptHint(opt.hint) },
+      opt.hint === undefined
+        ? opt
+        : { ...opt, hint: stylePromptHint(opt.hint) },
     ),
   });
 }

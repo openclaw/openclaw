@@ -27,7 +27,9 @@ function assertSlackFileUrl(rawUrl: string): URL {
     throw new Error(`Invalid Slack file URL: ${rawUrl}`);
   }
   if (parsed.protocol !== "https:") {
-    throw new Error(`Refusing Slack file URL with non-HTTPS protocol: ${parsed.protocol}`);
+    throw new Error(
+      `Refusing Slack file URL with non-HTTPS protocol: ${parsed.protocol}`,
+    );
   }
   if (!isSlackHostname(parsed.hostname)) {
     throw new Error(
@@ -75,7 +77,10 @@ function createSlackMediaFetch(token: string): FetchLike {
  * Slack's file URLs redirect to CDN domains with pre-signed URLs that don't need the
  * Authorization header, so we handle the initial auth request manually.
  */
-export async function fetchWithSlackAuth(url: string, token: string): Promise<Response> {
+export async function fetchWithSlackAuth(
+  url: string,
+  token: string,
+): Promise<Response> {
   const parsed = assertSlackFileUrl(url);
 
   // Initial request with auth and manual redirect handling
@@ -131,7 +136,11 @@ function resolveSlackMediaMimetype(
 }
 
 function looksLikeHtmlBuffer(buffer: Buffer): boolean {
-  const head = buffer.subarray(0, 512).toString("utf-8").replace(/^\s+/, "").toLowerCase();
+  const head = buffer
+    .subarray(0, 512)
+    .toString("utf-8")
+    .replace(/^\s+/, "")
+    .toLowerCase();
   return head.startsWith("<!doctype html") || head.startsWith("<html");
 }
 
@@ -150,7 +159,9 @@ function isForwardedSlackAttachment(attachment: SlackAttachment): boolean {
   return attachment.is_share === true;
 }
 
-function resolveForwardedAttachmentImageUrl(attachment: SlackAttachment): string | null {
+function resolveForwardedAttachmentImageUrl(
+  attachment: SlackAttachment,
+): string | null {
   const rawUrl = attachment.image_url?.trim();
   if (!rawUrl) {
     return null;
@@ -203,7 +214,9 @@ export async function resolveSlackMedia(params: {
 }): Promise<SlackMediaResult[] | null> {
   const files = params.files ?? [];
   const limitedFiles =
-    files.length > MAX_SLACK_MEDIA_FILES ? files.slice(0, MAX_SLACK_MEDIA_FILES) : files;
+    files.length > MAX_SLACK_MEDIA_FILES
+      ? files.slice(0, MAX_SLACK_MEDIA_FILES)
+      : files;
 
   const resolved = await mapLimit<SlackFile, SlackMediaResult | null>(
     limitedFiles,
@@ -234,15 +247,26 @@ export async function resolveSlackMedia(params: {
         const fileMime = file.mimetype?.toLowerCase();
         const fileName = file.name?.toLowerCase() ?? "";
         const isExpectedHtml =
-          fileMime === "text/html" || fileName.endsWith(".html") || fileName.endsWith(".htm");
+          fileMime === "text/html" ||
+          fileName.endsWith(".html") ||
+          fileName.endsWith(".htm");
         if (!isExpectedHtml) {
-          const detectedMime = fetched.contentType?.split(";")[0]?.trim().toLowerCase();
-          if (detectedMime === "text/html" || looksLikeHtmlBuffer(fetched.buffer)) {
+          const detectedMime = fetched.contentType
+            ?.split(";")[0]
+            ?.trim()
+            .toLowerCase();
+          if (
+            detectedMime === "text/html" ||
+            looksLikeHtmlBuffer(fetched.buffer)
+          ) {
             return null;
           }
         }
 
-        const effectiveMime = resolveSlackMediaMimetype(file, fetched.contentType);
+        const effectiveMime = resolveSlackMediaMimetype(
+          file,
+          fetched.contentType,
+        );
         const saved = await saveMediaBuffer(
           fetched.buffer,
           effectiveMime,
@@ -262,7 +286,9 @@ export async function resolveSlackMedia(params: {
     },
   );
 
-  const results = resolved.filter((entry): entry is SlackMediaResult => Boolean(entry));
+  const results = resolved.filter((entry): entry is SlackMediaResult =>
+    Boolean(entry),
+  );
   return results.length > 0 ? results : null;
 }
 
@@ -291,7 +317,9 @@ export async function resolveSlackAttachmentContent(params: {
     const text = att.text?.trim() || att.fallback?.trim();
     if (text) {
       const author = att.author_name;
-      const heading = author ? `[Forwarded message from ${author}]` : "[Forwarded message]";
+      const heading = author
+        ? `[Forwarded message from ${author}]`
+        : "[Forwarded message]";
       textBlocks.push(`${heading}\n${text}`);
     }
 
@@ -400,7 +428,14 @@ export async function resolveSlackThreadStarter(params: {
       ts: params.threadTs,
       limit: 1,
       inclusive: true,
-    })) as { messages?: Array<{ text?: string; user?: string; ts?: string; files?: SlackFile[] }> };
+    })) as {
+      messages?: Array<{
+        text?: string;
+        user?: string;
+        ts?: string;
+        files?: SlackFile[];
+      }>;
+    };
     const message = response?.messages?.[0];
     const text = (message?.text ?? "").trim();
     if (!message || !text) {
@@ -500,7 +535,10 @@ export async function resolveSlackThreadHistory(params: {
       }
 
       const next = response.response_metadata?.next_cursor;
-      cursor = typeof next === "string" && next.trim().length > 0 ? next.trim() : undefined;
+      cursor =
+        typeof next === "string" && next.trim().length > 0
+          ? next.trim()
+          : undefined;
     } while (cursor);
 
     return retained.map((msg) => ({

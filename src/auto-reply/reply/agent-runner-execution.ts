@@ -19,7 +19,10 @@ import {
   updateSessionStore,
 } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
-import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
+import {
+  emitAgentEvent,
+  registerAgentRunContext,
+} from "../../infra/agent-events.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
   isMarkdownCapableMessageChannel,
@@ -128,7 +131,9 @@ export async function runAgentTurnWithFallback(params: {
 
   while (true) {
     try {
-      const normalizeStreamingText = (payload: ReplyPayload): { text?: string; skip: boolean } => {
+      const normalizeStreamingText = (
+        payload: ReplyPayload,
+      ): { text?: string; skip: boolean } => {
         let text = payload.text;
         if (!params.isHeartbeat && text?.includes("HEARTBEAT_OK")) {
           const stripped = stripHeartbeatToken(text, {
@@ -167,7 +172,9 @@ export async function runAgentTurnWithFallback(params: {
         }
         return { text: sanitized, skip: false };
       };
-      const handlePartialForTyping = async (payload: ReplyPayload): Promise<string | undefined> => {
+      const handlePartialForTyping = async (
+        payload: ReplyPayload,
+      ): Promise<string | undefined> => {
         if (isSilentReplyPrefixText(payload.text, SILENT_REPLY_TOKEN)) {
           return undefined;
         }
@@ -202,7 +209,10 @@ export async function runAgentTurnWithFallback(params: {
                 startedAt,
               },
             });
-            const cliSessionId = getCliSessionId(params.getActiveSessionEntry(), provider);
+            const cliSessionId = getCliSessionId(
+              params.getActiveSessionEntry(),
+              provider,
+            );
             return (async () => {
               let lifecycleTerminalEmitted = false;
               try {
@@ -273,19 +283,21 @@ export async function runAgentTurnWithFallback(params: {
                       phase: "error",
                       startedAt,
                       endedAt: Date.now(),
-                      error: "CLI run completed without lifecycle terminal event",
+                      error:
+                        "CLI run completed without lifecycle terminal event",
                     },
                   });
                 }
               }
             })();
           }
-          const { authProfile, embeddedContext, senderContext } = buildEmbeddedRunContexts({
-            run: params.followupRun.run,
-            sessionCtx: params.sessionCtx,
-            hasRepliedRef: params.opts?.hasRepliedRef,
-            provider,
-          });
+          const { authProfile, embeddedContext, senderContext } =
+            buildEmbeddedRunContexts({
+              run: params.followupRun.run,
+              sessionCtx: params.sessionCtx,
+              hasRepliedRef: params.opts?.hasRepliedRef,
+              provider,
+            });
           const runBaseParams = buildEmbeddedRunBaseParams({
             run: params.followupRun.run,
             provider,
@@ -297,7 +309,8 @@ export async function runAgentTurnWithFallback(params: {
             ...embeddedContext,
             groupId: resolveGroupSessionKey(params.sessionCtx)?.id,
             groupChannel:
-              params.sessionCtx.GroupChannel?.trim() ?? params.sessionCtx.GroupSubject?.trim(),
+              params.sessionCtx.GroupChannel?.trim() ??
+              params.sessionCtx.GroupSubject?.trim(),
             groupSpace: params.sessionCtx.GroupSpace?.trim() ?? undefined,
             ...senderContext,
             ...runBaseParams,
@@ -311,11 +324,15 @@ export async function runAgentTurnWithFallback(params: {
               if (!channel) {
                 return "markdown";
               }
-              return isMarkdownCapableMessageChannel(channel) ? "markdown" : "plain";
+              return isMarkdownCapableMessageChannel(channel)
+                ? "markdown"
+                : "plain";
             })(),
             suppressToolErrorWarnings: params.opts?.suppressToolErrorWarnings,
             bootstrapContextMode: params.opts?.bootstrapContextMode,
-            bootstrapContextRunKind: params.opts?.isHeartbeat ? "heartbeat" : "default",
+            bootstrapContextRunKind: params.opts?.isHeartbeat
+              ? "heartbeat"
+              : "default",
             images: params.opts?.images,
             abortSignal: params.opts?.abortSignal,
             blockReplyBreak: params.resolvedBlockStreamingBreak,
@@ -335,7 +352,8 @@ export async function runAgentTurnWithFallback(params: {
               await params.opts?.onAssistantMessageStart?.();
             },
             onReasoningStream:
-              params.typingSignals.shouldStartOnReasoning || params.opts?.onReasoningStream
+              params.typingSignals.shouldStartOnReasoning ||
+              params.opts?.onReasoningStream
                 ? async (payload) => {
                     await params.typingSignals.signalReasoningDelta();
                     await params.opts?.onReasoningStream?.({
@@ -348,15 +366,18 @@ export async function runAgentTurnWithFallback(params: {
             onAgentEvent: async (evt) => {
               // Signal run start only after the embedded agent emits real activity.
               const hasLifecyclePhase =
-                evt.stream === "lifecycle" && typeof evt.data.phase === "string";
+                evt.stream === "lifecycle" &&
+                typeof evt.data.phase === "string";
               if (evt.stream !== "lifecycle" || hasLifecyclePhase) {
                 notifyAgentRunStart();
               }
               // Trigger typing when tools start executing.
               // Must await to ensure typing indicator starts before tool summaries are emitted.
               if (evt.stream === "tool") {
-                const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
-                const name = typeof evt.data.name === "string" ? evt.data.name : undefined;
+                const phase =
+                  typeof evt.data.phase === "string" ? evt.data.phase : "";
+                const name =
+                  typeof evt.data.name === "string" ? evt.data.name : undefined;
                 if (phase === "start" || phase === "update") {
                   await params.typingSignals.signalToolStart();
                   await params.opts?.onToolStart?.({ name, phase });
@@ -364,7 +385,8 @@ export async function runAgentTurnWithFallback(params: {
               }
               // Track auto-compaction completion
               if (evt.stream === "compaction") {
-                const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
+                const phase =
+                  typeof evt.data.phase === "string" ? evt.data.phase : "";
                 if (phase === "end") {
                   autoCompactionCompleted = true;
                 }
@@ -377,7 +399,8 @@ export async function runAgentTurnWithFallback(params: {
               ? createBlockReplyDeliveryHandler({
                   onBlockReply: params.opts.onBlockReply,
                   currentMessageId:
-                    params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid,
+                    params.sessionCtx.MessageSidFull ??
+                    params.sessionCtx.MessageSid,
                   normalizeStreamingText,
                   applyReplyToMode: params.applyReplyToMode,
                   typingSignals: params.typingSignals,
@@ -416,7 +439,9 @@ export async function runAgentTurnWithFallback(params: {
                       })
                       .catch((err) => {
                         // Keep chain healthy after an error so later tool results still deliver.
-                        logVerbose(`tool result delivery failed: ${String(err)}`);
+                        logVerbose(
+                          `tool result delivery failed: ${String(err)}`,
+                        );
                       });
                     const task = toolResultChain.finally(() => {
                       params.pendingToolTasks.delete(task);
@@ -437,7 +462,8 @@ export async function runAgentTurnWithFallback(params: {
             model: String(attempt.model ?? ""),
             error: String(attempt.error ?? ""),
             reason: attempt.reason ? String(attempt.reason) : undefined,
-            status: typeof attempt.status === "number" ? attempt.status : undefined,
+            status:
+              typeof attempt.status === "number" ? attempt.status : undefined,
             code: attempt.code ? String(attempt.code) : undefined,
           }))
         : [];
@@ -460,7 +486,9 @@ export async function runAgentTurnWithFallback(params: {
         };
       }
       if (embeddedError?.kind === "role_ordering") {
-        const didReset = await params.resetSessionAfterRoleOrderingConflict(embeddedError.message);
+        const didReset = await params.resetSessionAfterRoleOrderingConflict(
+          embeddedError.message,
+        );
         if (didReset) {
           return {
             kind: "final",
@@ -476,8 +504,10 @@ export async function runAgentTurnWithFallback(params: {
       const message = err instanceof Error ? err.message : String(err);
       const isContextOverflow = isLikelyContextOverflowError(message);
       const isCompactionFailure = isCompactionFailureError(message);
-      const isSessionCorruption = /function call turn comes immediately after/i.test(message);
-      const isRoleOrderingError = /incorrect role information|roles must alternate/i.test(message);
+      const isSessionCorruption =
+        /function call turn comes immediately after/i.test(message);
+      const isRoleOrderingError =
+        /incorrect role information|roles must alternate/i.test(message);
       const isTransientHttp = isTransientHttpError(message);
 
       if (
@@ -494,7 +524,8 @@ export async function runAgentTurnWithFallback(params: {
         };
       }
       if (isRoleOrderingError) {
-        const didReset = await params.resetSessionAfterRoleOrderingConflict(message);
+        const didReset =
+          await params.resetSessionAfterRoleOrderingConflict(message);
         if (didReset) {
           return {
             kind: "final",
@@ -521,7 +552,8 @@ export async function runAgentTurnWithFallback(params: {
         try {
           // Delete transcript file if it exists
           if (corruptedSessionId) {
-            const transcriptPath = resolveSessionTranscriptPath(corruptedSessionId);
+            const transcriptPath =
+              resolveSessionTranscriptPath(corruptedSessionId);
             try {
               fs.unlinkSync(transcriptPath);
             } catch {
@@ -592,7 +624,11 @@ export async function runAgentTurnWithFallback(params: {
   // overflow errors were returned as embedded error payloads.
   const finalEmbeddedError = runResult?.meta?.error;
   const hasPayloadText = runResult?.payloads?.some((p) => p.text?.trim());
-  if (finalEmbeddedError && isContextOverflowError(finalEmbeddedError.message) && !hasPayloadText) {
+  if (
+    finalEmbeddedError &&
+    isContextOverflowError(finalEmbeddedError.message) &&
+    !hasPayloadText
+  ) {
     return {
       kind: "final",
       payload: {
@@ -610,6 +646,7 @@ export async function runAgentTurnWithFallback(params: {
     fallbackAttempts,
     didLogHeartbeatStrip,
     autoCompactionCompleted,
-    directlySentBlockKeys: directlySentBlockKeys.size > 0 ? directlySentBlockKeys : undefined,
+    directlySentBlockKeys:
+      directlySentBlockKeys.size > 0 ? directlySentBlockKeys : undefined,
   };
 }

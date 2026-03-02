@@ -24,7 +24,9 @@ describe("convertToOllamaMessages", () => {
       },
     ];
     const result = convertToOllamaMessages(messages);
-    expect(result).toEqual([{ role: "user", content: "describe this", images: ["base64data"] }]);
+    expect(result).toEqual([
+      { role: "user", content: "describe this", images: ["base64data"] },
+    ]);
   });
 
   it("prepends system message when provided", () => {
@@ -40,7 +42,12 @@ describe("convertToOllamaMessages", () => {
         role: "assistant",
         content: [
           { type: "text", text: "Let me check." },
-          { type: "toolCall", id: "call_1", name: "bash", arguments: { command: "ls" } },
+          {
+            type: "toolCall",
+            id: "call_1",
+            name: "bash",
+            arguments: { command: "ls" },
+          },
         ],
       },
     ];
@@ -65,9 +72,13 @@ describe("convertToOllamaMessages", () => {
   });
 
   it("includes tool_name from SDK toolResult messages", () => {
-    const messages = [{ role: "toolResult", content: "file contents here", toolName: "read" }];
+    const messages = [
+      { role: "toolResult", content: "file contents here", toolName: "read" },
+    ];
     const result = convertToOllamaMessages(messages);
-    expect(result).toEqual([{ role: "tool", content: "file contents here", tool_name: "read" }]);
+    expect(result).toEqual([
+      { role: "tool", content: "file contents here", tool_name: "read" },
+    ]);
   });
 
   it("omits tool_name when not provided in toolResult", () => {
@@ -117,7 +128,9 @@ describe("buildAssistantMessage", () => {
     };
     const result = buildAssistantMessage(response, modelInfo);
     expect(result.stopReason).toBe("stop");
-    expect(result.content).toEqual([{ type: "text", text: "Reasoning output" }]);
+    expect(result.content).toEqual([
+      { type: "text", text: "Reasoning output" },
+    ]);
   });
 
   it("builds response with tool calls", () => {
@@ -127,7 +140,9 @@ describe("buildAssistantMessage", () => {
       message: {
         role: "assistant" as const,
         content: "",
-        tool_calls: [{ function: { name: "bash", arguments: { command: "ls -la" } } }],
+        tool_calls: [
+          { function: { name: "bash", arguments: { command: "ls -la" } } },
+        ],
       },
       done: true,
       prompt_eval_count: 20,
@@ -167,7 +182,9 @@ describe("buildAssistantMessage", () => {
 });
 
 // Helper: build a ReadableStreamDefaultReader from NDJSON lines
-function mockNdjsonReader(lines: string[]): ReadableStreamDefaultReader<Uint8Array> {
+function mockNdjsonReader(
+  lines: string[],
+): ReadableStreamDefaultReader<Uint8Array> {
   const encoder = new TextEncoder();
   const payload = lines.join("\n") + "\n";
   let consumed = false;
@@ -345,7 +362,10 @@ describe("createOllamaStreamFn", () => {
         expect(events.at(-1)?.type).toBe("done");
 
         expect(fetchMock).toHaveBeenCalledTimes(1);
-        const [url, requestInit] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+        const [url, requestInit] = fetchMock.mock.calls[0] as unknown as [
+          string,
+          RequestInit,
+        ];
         expect(url).toBe("http://ollama-host:11434/api/chat");
         expect(requestInit.signal).toBe(signal);
         if (typeof requestInit.body !== "string") {
@@ -369,7 +389,9 @@ describe("createOllamaStreamFn", () => {
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":2}',
       ],
       async () => {
-        const stream = await createOllamaTestStream({ baseUrl: "http://ollama-host:11434" });
+        const stream = await createOllamaTestStream({
+          baseUrl: "http://ollama-host:11434",
+        });
         const events = await collectStreamEvents(stream);
 
         const doneEvent = events.at(-1);
@@ -377,7 +399,9 @@ describe("createOllamaStreamFn", () => {
           throw new Error("Expected done event");
         }
 
-        expect(doneEvent.message.content).toEqual([{ type: "text", text: "reasoned output" }]);
+        expect(doneEvent.message.content).toEqual([
+          { type: "text", text: "reasoned output" },
+        ]);
       },
     );
   });

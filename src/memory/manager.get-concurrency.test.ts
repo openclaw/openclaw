@@ -15,7 +15,9 @@ vi.mock("./embeddings.js", () => ({
   createEmbeddingProvider: async () => {
     hoisted.providerCreateCalls += 1;
     if (hoisted.providerDelayMs > 0) {
-      await new Promise((resolve) => setTimeout(resolve, hoisted.providerDelayMs));
+      await new Promise((resolve) =>
+        setTimeout(resolve, hoisted.providerDelayMs),
+      );
     }
     return {
       requestedProvider: "openai",
@@ -34,7 +36,9 @@ describe("memory manager cache hydration", () => {
   let workspaceDir = "";
 
   beforeEach(async () => {
-    workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mem-concurrent-"));
+    workspaceDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-mem-concurrent-"),
+    );
     await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
     await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "Hello memory.");
     hoisted.providerCreateCalls = 0;

@@ -23,7 +23,10 @@ function hasRequiredAccountIdProperty(node) {
     return false;
   }
   for (const property of node.properties) {
-    if (ts.isShorthandPropertyAssignment(property) && property.name.text === "accountId") {
+    if (
+      ts.isShorthandPropertyAssignment(property) &&
+      property.name.text === "accountId"
+    ) {
       return true;
     }
     if (!ts.isPropertyAssignment(property)) {
@@ -41,17 +44,26 @@ function hasRequiredAccountIdProperty(node) {
 }
 
 function findViolations(content, filePath) {
-  const sourceFile = ts.createSourceFile(filePath, content, ts.ScriptTarget.Latest, true);
+  const sourceFile = ts.createSourceFile(
+    filePath,
+    content,
+    ts.ScriptTarget.Latest,
+    true,
+  );
   const violations = [];
 
   const visit = (node) => {
     if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)) {
       const callName = node.expression.text;
       if (callName === "readChannelAllowFromStore") {
-        if (node.arguments.length < 3 || isUndefinedLikeExpression(node.arguments[2])) {
+        if (
+          node.arguments.length < 3 ||
+          isUndefinedLikeExpression(node.arguments[2])
+        ) {
           violations.push({
             line: toLine(sourceFile, node),
-            reason: "readChannelAllowFromStore call must pass explicit accountId as 3rd arg",
+            reason:
+              "readChannelAllowFromStore call must pass explicit accountId as 3rd arg",
           });
         }
       } else if (
@@ -67,7 +79,8 @@ function findViolations(content, filePath) {
         if (!firstArg || !hasRequiredAccountIdProperty(firstArg)) {
           violations.push({
             line: toLine(sourceFile, node),
-            reason: "upsertChannelPairingRequest call must include accountId in params",
+            reason:
+              "upsertChannelPairingRequest call must include accountId in params",
           });
         }
       }
@@ -92,7 +105,9 @@ async function main() {
 
   console.error("Found unscoped pairing-store calls:");
   for (const violation of violations) {
-    console.error(`- ${violation.path}:${violation.line} (${violation.reason})`);
+    console.error(
+      `- ${violation.path}:${violation.line} (${violation.reason})`,
+    );
   }
   process.exit(1);
 }

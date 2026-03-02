@@ -10,7 +10,9 @@ import {
 const TOOL_CALL_BLOCK_TYPES = new Set(["toolCall", "toolUse", "functionCall"]);
 
 function getAssistantToolCallBlocks(messages: AgentMessage[]) {
-  const assistant = messages[0] as Extract<AgentMessage, { role: "assistant" }> | undefined;
+  const assistant = messages[0] as
+    | Extract<AgentMessage, { role: "assistant" }>
+    | undefined;
   if (!assistant || !Array.isArray(assistant.content)) {
     return [] as Array<{ type?: unknown; id?: unknown; name?: unknown }>;
   }
@@ -28,7 +30,9 @@ describe("sanitizeToolUseResultPairing", () => {
     [
       {
         role: "assistant",
-        content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
+        content: [
+          { type: "toolCall", id: "call_1", name: "read", arguments: {} },
+        ],
       },
       {
         role: "toolResult",
@@ -79,7 +83,9 @@ describe("sanitizeToolUseResultPairing", () => {
     const input = [
       {
         role: "assistant",
-        content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
+        content: [
+          { type: "toolCall", id: "call_1", name: "read", arguments: {} },
+        ],
       },
       {
         role: "toolResult",
@@ -110,7 +116,10 @@ describe("sanitizeToolUseResultPairing", () => {
 
   it("drops duplicate tool results for the same id across the transcript", () => {
     const input = buildDuplicateToolResultInput({
-      middleMessage: { role: "assistant", content: [{ type: "text", text: "ok" }] },
+      middleMessage: {
+        role: "assistant",
+        content: [{ type: "text", text: "ok" }],
+      },
       secondText: "second (duplicate)",
     });
 
@@ -150,7 +159,9 @@ describe("sanitizeToolUseResultPairing", () => {
     const input = [
       {
         role: "assistant",
-        content: [{ type: "toolCall", id: "call_error", name: "exec", arguments: {} }],
+        content: [
+          { type: "toolCall", id: "call_error", name: "exec", arguments: {} },
+        ],
         stopReason: "error",
       },
       { role: "user", content: "something went wrong" },
@@ -172,7 +183,9 @@ describe("sanitizeToolUseResultPairing", () => {
     const input = [
       {
         role: "assistant",
-        content: [{ type: "toolCall", id: "call_aborted", name: "Bash", arguments: {} }],
+        content: [
+          { type: "toolCall", id: "call_aborted", name: "Bash", arguments: {} },
+        ],
         stopReason: "aborted",
       },
       { role: "user", content: "retrying after abort" },
@@ -193,7 +206,9 @@ describe("sanitizeToolUseResultPairing", () => {
     const input = [
       {
         role: "assistant",
-        content: [{ type: "toolCall", id: "call_normal", name: "read", arguments: {} }],
+        content: [
+          { type: "toolCall", id: "call_normal", name: "read", arguments: {} },
+        ],
         stopReason: "toolUse",
       },
       { role: "user", content: "user message" },
@@ -213,7 +228,9 @@ describe("sanitizeToolUseResultPairing", () => {
     const input = [
       {
         role: "assistant",
-        content: [{ type: "toolCall", id: "call_aborted", name: "exec", arguments: {} }],
+        content: [
+          { type: "toolCall", id: "call_aborted", name: "exec", arguments: {} },
+        ],
         stopReason: "aborted",
       },
       {
@@ -258,7 +275,9 @@ describe("sanitizeToolCallInputs", () => {
     content: unknown[],
     options?: Parameters<typeof sanitizeToolCallInputs>[1],
   ) {
-    return getAssistantToolCallBlocks(sanitizeAssistantContent(content, options));
+    return getAssistantToolCallBlocks(
+      sanitizeAssistantContent(content, options),
+    );
   }
 
   it("drops tool calls missing input or arguments", () => {
@@ -330,7 +349,12 @@ describe("sanitizeToolCallInputs", () => {
         role: "assistant",
         content: [
           { type: "text", text: "before" },
-          { type: "toolUse", id: "call_ok", name: "read", input: { path: "a" } },
+          {
+            type: "toolUse",
+            id: "call_ok",
+            name: "read",
+            input: { path: "a" },
+          },
           { type: "toolCall", id: "call_drop", name: "read" },
         ],
       },
@@ -347,13 +371,22 @@ describe("sanitizeToolCallInputs", () => {
   it.each([
     {
       name: "trims leading whitespace from tool names",
-      content: [{ type: "toolCall", id: "call_1", name: " read", arguments: {} }],
+      content: [
+        { type: "toolCall", id: "call_1", name: " read", arguments: {} },
+      ],
       options: undefined,
       expectedNames: ["read"],
     },
     {
       name: "trims trailing whitespace from tool names",
-      content: [{ type: "toolUse", id: "call_1", name: "exec ", input: { command: "ls" } }],
+      content: [
+        {
+          type: "toolUse",
+          id: "call_1",
+          name: "exec ",
+          input: { command: "ls" },
+        },
+      ],
       options: undefined,
       expectedNames: ["exec"],
     },
@@ -399,7 +432,9 @@ describe("sanitizeToolCallInputs", () => {
     ] as unknown as AgentMessage[];
 
     const out = sanitizeToolCallInputs(input);
-    const toolCalls = getAssistantToolCallBlocks(out) as Array<Record<string, unknown>>;
+    const toolCalls = getAssistantToolCallBlocks(out) as Array<
+      Record<string, unknown>
+    >;
 
     expect(toolCalls).toHaveLength(1);
     expect(Object.hasOwn(toolCalls[0] ?? {}, "input")).toBe(true);
@@ -426,23 +461,34 @@ describe("sanitizeToolCallInputs", () => {
     ] as unknown as AgentMessage[];
 
     const out = sanitizeToolCallInputs(input);
-    const toolCalls = getAssistantToolCallBlocks(out) as Array<Record<string, unknown>>;
+    const toolCalls = getAssistantToolCallBlocks(out) as Array<
+      Record<string, unknown>
+    >;
 
     expect(toolCalls).toHaveLength(1);
     expect((toolCalls[0] ?? {}).name).toBe("SESSIONS_SPAWN");
     const inputObj = (toolCalls[0]?.input ?? {}) as Record<string, unknown>;
-    const attachments = (inputObj.attachments ?? []) as Array<Record<string, unknown>>;
+    const attachments = (inputObj.attachments ?? []) as Array<
+      Record<string, unknown>
+    >;
     expect(attachments[0]?.content).toBe("__OPENCLAW_REDACTED__");
   });
   it("preserves other block properties when trimming tool names", () => {
     const toolCalls = sanitizeAssistantToolCalls([
-      { type: "toolCall", id: "call_1", name: " read ", arguments: { path: "/tmp/test" } },
+      {
+        type: "toolCall",
+        id: "call_1",
+        name: " read ",
+        arguments: { path: "/tmp/test" },
+      },
     ]);
 
     expect(toolCalls).toHaveLength(1);
     expect((toolCalls[0] as { name?: unknown }).name).toBe("read");
     expect((toolCalls[0] as { id?: unknown }).id).toBe("call_1");
-    expect((toolCalls[0] as { arguments?: unknown }).arguments).toEqual({ path: "/tmp/test" });
+    expect((toolCalls[0] as { arguments?: unknown }).arguments).toEqual({
+      path: "/tmp/test",
+    });
   });
 });
 
@@ -456,11 +502,17 @@ describe("stripToolResultDetails", () => {
         content: [{ type: "text", text: "ok" }],
         details: { internal: true },
       },
-      { role: "assistant", content: [{ type: "text", text: "keep me" }], details: { no: "touch" } },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "keep me" }],
+        details: { no: "touch" },
+      },
       { role: "user", content: "hello" },
     ] as unknown as AgentMessage[];
 
-    const out = stripToolResultDetails(input) as unknown as Array<Record<string, unknown>>;
+    const out = stripToolResultDetails(input) as unknown as Array<
+      Record<string, unknown>
+    >;
 
     expect(Object.hasOwn(out[0] ?? {}, "details")).toBe(false);
     expect((out[0] ?? {}).role).toBe("toolResult");

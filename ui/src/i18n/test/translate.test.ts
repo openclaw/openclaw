@@ -17,7 +17,9 @@ describe("i18n", () => {
   });
 
   it("should replace parameters correctly", () => {
-    expect(t("overview.stats.cronNext", { time: "10:00" })).toBe("Next wake 10:00");
+    expect(t("overview.stats.cronNext", { time: "10:00" })).toBe(
+      "Next wake 10:00",
+    );
   });
 
   it("should fallback to English if key is missing in another locale", async () => {
@@ -46,7 +48,11 @@ describe("i18n", () => {
     vi.resetModules();
     const fresh = await import("../lib/translate.ts");
 
-    for (let index = 0; index < 5 && fresh.i18n.getLocale() !== "zh-CN"; index += 1) {
+    for (
+      let index = 0;
+      index < 5 && fresh.i18n.getLocale() !== "zh-CN";
+      index += 1
+    ) {
       await Promise.resolve();
     }
 

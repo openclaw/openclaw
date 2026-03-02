@@ -6,7 +6,10 @@ import {
 } from "../../browser/form-fields.js";
 import { danger } from "../../globals.js";
 import { defaultRuntime } from "../../runtime.js";
-import { callBrowserRequest, type BrowserParentOpts } from "../browser-cli-shared.js";
+import {
+  callBrowserRequest,
+  type BrowserParentOpts,
+} from "../browser-cli-shared.js";
 
 export type BrowserActionContext = {
   parent: BrowserParentOpts;
@@ -59,7 +62,9 @@ export async function readFields(opts: {
   fields?: string;
   fieldsFile?: string;
 }): Promise<BrowserFormField[]> {
-  const payload = opts.fieldsFile ? await readFile(opts.fieldsFile) : (opts.fields ?? "");
+  const payload = opts.fieldsFile
+    ? await readFile(opts.fieldsFile)
+    : (opts.fields ?? "");
   if (!payload.trim()) {
     throw new Error("fields are required");
   }
@@ -83,6 +88,8 @@ export async function readFields(opts: {
     ) {
       return parsedField;
     }
-    throw new Error(`fields[${index}].value must be string, number, boolean, or null`);
+    throw new Error(
+      `fields[${index}].value must be string, number, boolean, or null`,
+    );
   });
 }

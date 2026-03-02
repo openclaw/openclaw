@@ -28,7 +28,11 @@ function ensureDir(filePath: string) {
 const ED25519_SPKI_PREFIX = Buffer.from("302a300506032b6570032100", "hex");
 
 function base64UrlEncode(buf: Buffer): string {
-  return buf.toString("base64").replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/g, "");
+  return buf
+    .toString("base64")
+    .replaceAll("+", "-")
+    .replaceAll("/", "_")
+    .replace(/=+$/g, "");
 }
 
 function base64UrlDecode(input: string): Buffer {
@@ -56,8 +60,12 @@ function fingerprintPublicKey(publicKeyPem: string): string {
 
 function generateIdentity(): DeviceIdentity {
   const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
-  const publicKeyPem = publicKey.export({ type: "spki", format: "pem" }).toString();
-  const privateKeyPem = privateKey.export({ type: "pkcs8", format: "pem" }).toString();
+  const publicKeyPem = publicKey
+    .export({ type: "spki", format: "pem" })
+    .toString();
+  const privateKeyPem = privateKey
+    .export({ type: "pkcs8", format: "pem" })
+    .toString();
   const deviceId = fingerprintPublicKey(publicKeyPem);
   return { deviceId, publicKeyPem, privateKeyPem };
 }
@@ -81,7 +89,9 @@ export function loadOrCreateDeviceIdentity(
             ...parsed,
             deviceId: derivedId,
           };
-          fs.writeFileSync(filePath, `${JSON.stringify(updated, null, 2)}\n`, { mode: 0o600 });
+          fs.writeFileSync(filePath, `${JSON.stringify(updated, null, 2)}\n`, {
+            mode: 0o600,
+          });
           try {
             fs.chmodSync(filePath, 0o600);
           } catch {
@@ -113,7 +123,9 @@ export function loadOrCreateDeviceIdentity(
     privateKeyPem: identity.privateKeyPem,
     createdAtMs: Date.now(),
   };
-  fs.writeFileSync(filePath, `${JSON.stringify(stored, null, 2)}\n`, { mode: 0o600 });
+  fs.writeFileSync(filePath, `${JSON.stringify(stored, null, 2)}\n`, {
+    mode: 0o600,
+  });
   try {
     fs.chmodSync(filePath, 0o600);
   } catch {
@@ -122,13 +134,18 @@ export function loadOrCreateDeviceIdentity(
   return identity;
 }
 
-export function signDevicePayload(privateKeyPem: string, payload: string): string {
+export function signDevicePayload(
+  privateKeyPem: string,
+  payload: string,
+): string {
   const key = crypto.createPrivateKey(privateKeyPem);
   const sig = crypto.sign(null, Buffer.from(payload, "utf8"), key);
   return base64UrlEncode(sig);
 }
 
-export function normalizeDevicePublicKeyBase64Url(publicKey: string): string | null {
+export function normalizeDevicePublicKeyBase64Url(
+  publicKey: string,
+): string | null {
   try {
     if (publicKey.includes("BEGIN")) {
       return base64UrlEncode(derivePublicKeyRaw(publicKey));

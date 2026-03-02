@@ -14,8 +14,14 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { getMachineDisplayName } from "../../infra/machine-name.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import { type enqueueCommand, enqueueCommandInLane } from "../../process/command-queue.js";
-import { isCronSessionKey, isSubagentSessionKey } from "../../routing/session-key.js";
+import {
+  type enqueueCommand,
+  enqueueCommandInLane,
+} from "../../process/command-queue.js";
+import {
+  isCronSessionKey,
+  isSubagentSessionKey,
+} from "../../routing/session-key.js";
 import { resolveSignalReactionLevel } from "../../signal/reaction-level.js";
 import { resolveTelegramInlineButtonsScope } from "../../telegram/inline-buttons.js";
 import { resolveTelegramReactionLevel } from "../../telegram/reaction-level.js";
@@ -26,9 +32,19 @@ import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
 import type { ExecElevatedDefaults } from "../bash-tools.js";
-import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../bootstrap-files.js";
-import { listChannelSupportedActions, resolveChannelMessageToolHints } from "../channel-tools.js";
-import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../date-time.js";
+import {
+  makeBootstrapWarn,
+  resolveBootstrapContextForRun,
+} from "../bootstrap-files.js";
+import {
+  listChannelSupportedActions,
+  resolveChannelMessageToolHints,
+} from "../channel-tools.js";
+import {
+  formatUserTime,
+  resolveUserTimeFormat,
+  resolveUserTimezone,
+} from "../date-time.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { resolveOpenClawDocsPath } from "../docs-path.js";
 import { getApiKeyForModel, resolveModelAuthMode } from "../model-auth.js";
@@ -68,12 +84,18 @@ import {
   sanitizeSessionHistory,
   sanitizeToolsForGoogle,
 } from "./google.js";
-import { getDmHistoryLimitFromSessionKey, limitHistoryTurns } from "./history.js";
+import {
+  getDmHistoryLimitFromSessionKey,
+  limitHistoryTurns,
+} from "./history.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
 import { buildModelAliasLines, resolveModel } from "./model.js";
 import { buildEmbeddedSandboxInfo } from "./sandbox-info.js";
-import { prewarmSessionFile, trackSessionManagerAccess } from "./session-manager-cache.js";
+import {
+  prewarmSessionFile,
+  trackSessionManagerAccess,
+} from "./session-manager-cache.js";
 import {
   applySystemPromptOverrideToSession,
   buildEmbeddedSystemPrompt,
@@ -162,13 +184,18 @@ function resolveMessageToolLabel(msg: AgentMessage): string | undefined {
     (msg as { toolName?: unknown }).toolName ??
     (msg as { name?: unknown }).name ??
     (msg as { tool?: unknown }).tool;
-  return typeof candidate === "string" && candidate.trim().length > 0 ? candidate : undefined;
+  return typeof candidate === "string" && candidate.trim().length > 0
+    ? candidate
+    : undefined;
 }
 
-function summarizeCompactionMessages(messages: AgentMessage[]): CompactionMessageMetrics {
+function summarizeCompactionMessages(
+  messages: AgentMessage[],
+): CompactionMessageMetrics {
   let historyTextChars = 0;
   let toolResultChars = 0;
-  const contributors: Array<{ role: string; chars: number; tool?: string }> = [];
+  const contributors: Array<{ role: string; chars: number; tool?: string }> =
+    [];
   let estTokens = 0;
   let tokenEstimationFailed = false;
 
@@ -194,7 +221,9 @@ function summarizeCompactionMessages(messages: AgentMessage[]): CompactionMessag
     historyTextChars,
     toolResultChars,
     estTokens: tokenEstimationFailed ? undefined : estTokens,
-    contributors: contributors.toSorted((a, b) => b.chars - a.chars).slice(0, 3),
+    contributors: contributors
+      .toSorted((a, b) => b.chars - a.chars)
+      .slice(0, 3),
   };
 }
 
@@ -256,7 +285,8 @@ export async function compactEmbeddedPiSessionDirect(
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
   const prevCwd = process.cwd();
 
-  const provider = (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
+  const provider =
+    (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
   const modelId = (params.model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
   const fail = (reason: string): EmbeddedPiCompactResult => {
     log.warn(
@@ -298,7 +328,8 @@ export async function compactEmbeddedPiSessionDirect(
         );
       }
     } else if (model.provider === "github-copilot") {
-      const { resolveCopilotApiToken } = await import("../../providers/github-copilot-token.js");
+      const { resolveCopilotApiToken } =
+        await import("../../providers/github-copilot-token.js");
       const copilotToken = await resolveCopilotApiToken({
         githubToken: apiKeyInfo.apiKey,
       });
@@ -333,7 +364,8 @@ export async function compactEmbeddedPiSessionDirect(
   let restoreSkillEnv: (() => void) | undefined;
   process.chdir(effectiveWorkspace);
   try {
-    const shouldLoadSkillEntries = !params.skillsSnapshot || !params.skillsSnapshot.resolvedSkills;
+    const shouldLoadSkillEntries =
+      !params.skillsSnapshot || !params.skillsSnapshot.resolvedSkills;
     const skillEntries = shouldLoadSkillEntries
       ? loadWorkspaceSkillEntries(effectiveWorkspace)
       : [];
@@ -359,7 +391,10 @@ export async function compactEmbeddedPiSessionDirect(
       config: params.config,
       sessionKey: params.sessionKey,
       sessionId: params.sessionId,
-      warn: makeBootstrapWarn({ sessionLabel, warn: (message) => log.warn(message) }),
+      warn: makeBootstrapWarn({
+        sessionLabel,
+        warn: (message) => log.warn(message),
+      }),
     });
     const runAbortController = new AbortController();
     const toolsRaw = createOpenClawCodingTools({
@@ -388,7 +423,9 @@ export async function compactEmbeddedPiSessionDirect(
     const allowedToolNames = collectAllowedToolNames({ tools });
     logToolSchemasForGoogle({ tools, provider });
     const machineName = await getMachineDisplayName();
-    const runtimeChannel = normalizeMessageChannel(params.messageChannel ?? params.messageProvider);
+    const runtimeChannel = normalizeMessageChannel(
+      params.messageChannel ?? params.messageProvider,
+    );
     let runtimeCapabilities = runtimeChannel
       ? (resolveChannelCapabilities({
           cfg: params.config,
@@ -406,7 +443,9 @@ export async function compactEmbeddedPiSessionDirect(
           runtimeCapabilities = [];
         }
         if (
-          !runtimeCapabilities.some((cap) => String(cap).trim().toLowerCase() === "inlinebuttons")
+          !runtimeCapabilities.some(
+            (cap) => String(cap).trim().toLowerCase() === "inlinebuttons",
+          )
         ) {
           runtimeCapabilities.push("inlineButtons");
         }
@@ -462,8 +501,12 @@ export async function compactEmbeddedPiSessionDirect(
     };
     const sandboxInfo = buildEmbeddedSandboxInfo(sandbox, params.bashElevated);
     const reasoningTagHint = isReasoningTagProvider(provider);
-    const userTimezone = resolveUserTimezone(params.config?.agents?.defaults?.userTimezone);
-    const userTimeFormat = resolveUserTimeFormat(params.config?.agents?.defaults?.timeFormat);
+    const userTimezone = resolveUserTimezone(
+      params.config?.agents?.defaults?.userTimezone,
+    );
+    const userTimeFormat = resolveUserTimeFormat(
+      params.config?.agents?.defaults?.timeFormat,
+    );
     const userTime = formatUserTime(new Date(), userTimezone, userTimeFormat);
     const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({
       sessionKey: params.sessionKey,
@@ -471,7 +514,8 @@ export async function compactEmbeddedPiSessionDirect(
     });
     const isDefaultAgent = sessionAgentId === defaultAgentId;
     const promptMode =
-      isSubagentSessionKey(params.sessionKey) || isCronSessionKey(params.sessionKey)
+      isSubagentSessionKey(params.sessionKey) ||
+      isCronSessionKey(params.sessionKey)
         ? "minimal"
         : "full";
     const docsPath = await resolveOpenClawDocsPath({
@@ -480,7 +524,9 @@ export async function compactEmbeddedPiSessionDirect(
       cwd: process.cwd(),
       moduleUrl: import.meta.url,
     });
-    const ttsHint = params.config ? buildTtsSystemPromptHint(params.config) : undefined;
+    const ttsHint = params.config
+      ? buildTtsSystemPromptHint(params.config)
+      : undefined;
     const ownerDisplay = resolveOwnerDisplaySetting(params.config);
     const appendPrompt = buildEmbeddedSystemPrompt({
       workspaceDir: effectiveWorkspace,
@@ -492,7 +538,9 @@ export async function compactEmbeddedPiSessionDirect(
       ownerDisplaySecret: ownerDisplay.ownerDisplaySecret,
       reasoningTagHint,
       heartbeatPrompt: isDefaultAgent
-        ? resolveHeartbeatPrompt(params.config?.agents?.defaults?.heartbeat?.prompt)
+        ? resolveHeartbeatPrompt(
+            params.config?.agents?.defaults?.heartbeat?.prompt,
+          )
         : undefined,
       skillsPrompt,
       docsPath: docsPath ?? undefined,
@@ -530,12 +578,15 @@ export async function compactEmbeddedPiSessionDirect(
         provider,
         modelId,
       });
-      const sessionManager = guardSessionManager(SessionManager.open(params.sessionFile), {
-        agentId: sessionAgentId,
-        sessionKey: params.sessionKey,
-        allowSyntheticToolResults: transcriptPolicy.allowSyntheticToolResults,
-        allowedToolNames,
-      });
+      const sessionManager = guardSessionManager(
+        SessionManager.open(params.sessionFile),
+        {
+          agentId: sessionAgentId,
+          sessionKey: params.sessionKey,
+          allowSyntheticToolResults: transcriptPolicy.allowSyntheticToolResults,
+          allowedToolNames,
+        },
+      );
       trackSessionManagerAccess(params.sessionFile);
       const settingsManager = createPreparedEmbeddedPiSettingsManager({
         cwd: effectiveWorkspace,
@@ -646,7 +697,9 @@ export async function compactEmbeddedPiSessionDirect(
         }
 
         const diagEnabled = log.isEnabled("debug");
-        const preMetrics = diagEnabled ? summarizeCompactionMessages(session.messages) : undefined;
+        const preMetrics = diagEnabled
+          ? summarizeCompactionMessages(session.messages)
+          : undefined;
         if (diagEnabled && preMetrics) {
           log.debug(
             `[compaction-diag] start runId=${runId} sessionKey=${params.sessionKey ?? params.sessionId} ` +
@@ -698,7 +751,9 @@ export async function compactEmbeddedPiSessionDirect(
             });
         }
 
-        const postMetrics = diagEnabled ? summarizeCompactionMessages(session.messages) : undefined;
+        const postMetrics = diagEnabled
+          ? summarizeCompactionMessages(session.messages)
+          : undefined;
         if (diagEnabled && preMetrics && postMetrics) {
           log.debug(
             `[compaction-diag] end runId=${runId} sessionKey=${params.sessionKey ?? params.sessionId} ` +
@@ -751,10 +806,13 @@ export async function compactEmbeddedPiSessionDirect(
 export async function compactEmbeddedPiSession(
   params: CompactEmbeddedPiSessionParams,
 ): Promise<EmbeddedPiCompactResult> {
-  const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);
+  const sessionLane = resolveSessionLane(
+    params.sessionKey?.trim() || params.sessionId,
+  );
   const globalLane = resolveGlobalLane(params.lane);
   const enqueueGlobal =
-    params.enqueue ?? ((task, opts) => enqueueCommandInLane(globalLane, task, opts));
+    params.enqueue ??
+    ((task, opts) => enqueueCommandInLane(globalLane, task, opts));
   return enqueueCommandInLane(sessionLane, () =>
     enqueueGlobal(async () => compactEmbeddedPiSessionDirect(params)),
   );

@@ -36,27 +36,51 @@ export function registerUpdateCli(program: Command) {
     .command("update")
     .description("Update OpenClaw and inspect update channel status")
     .option("--json", "Output result as JSON", false)
-    .option("--no-restart", "Skip restarting the gateway service after a successful update")
+    .option(
+      "--no-restart",
+      "Skip restarting the gateway service after a successful update",
+    )
     .option("--dry-run", "Preview update actions without making changes", false)
     .option("--channel <stable|beta|dev>", "Persist update channel (git + npm)")
-    .option("--tag <dist-tag|version>", "Override npm dist-tag or version for this update")
-    .option("--timeout <seconds>", "Timeout for each update step in seconds (default: 1200)")
+    .option(
+      "--tag <dist-tag|version>",
+      "Override npm dist-tag or version for this update",
+    )
+    .option(
+      "--timeout <seconds>",
+      "Timeout for each update step in seconds (default: 1200)",
+    )
     .option("--yes", "Skip confirmation prompts (non-interactive)", false)
     .addHelpText("after", () => {
       const examples = [
         ["openclaw update", "Update a source checkout (git)"],
-        ["openclaw update --channel beta", "Switch to beta channel (git + npm)"],
+        [
+          "openclaw update --channel beta",
+          "Switch to beta channel (git + npm)",
+        ],
         ["openclaw update --channel dev", "Switch to dev channel (git + npm)"],
-        ["openclaw update --tag beta", "One-off update to a dist-tag or version"],
-        ["openclaw update --dry-run", "Preview actions without changing anything"],
-        ["openclaw update --no-restart", "Update without restarting the service"],
+        [
+          "openclaw update --tag beta",
+          "One-off update to a dist-tag or version",
+        ],
+        [
+          "openclaw update --dry-run",
+          "Preview actions without changing anything",
+        ],
+        [
+          "openclaw update --no-restart",
+          "Update without restarting the service",
+        ],
         ["openclaw update --json", "Output result as JSON"],
         ["openclaw update --yes", "Non-interactive (accept downgrade prompts)"],
         ["openclaw update wizard", "Interactive update wizard"],
         ["openclaw --update", "Shorthand for openclaw update"],
       ] as const;
       const fmtExamples = examples
-        .map(([cmd, desc]) => `  ${theme.command(cmd)} ${theme.muted(`# ${desc}`)}`)
+        .map(
+          ([cmd, desc]) =>
+            `  ${theme.command(cmd)} ${theme.muted(`# ${desc}`)}`,
+        )
         .join("\n");
       return `
 ${theme.heading("What this does:")}
@@ -104,7 +128,10 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
   update
     .command("wizard")
     .description("Interactive update wizard")
-    .option("--timeout <seconds>", "Timeout for each update step in seconds (default: 1200)")
+    .option(
+      "--timeout <seconds>",
+      "Timeout for each update step in seconds (default: 1200)",
+    )
     .addHelpText(
       "after",
       `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/update")}\n`,
@@ -124,7 +151,10 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
     .command("status")
     .description("Show update channel and version status")
     .option("--json", "Output result as JSON", false)
-    .option("--timeout <seconds>", "Timeout for update checks in seconds (default: 3)")
+    .option(
+      "--timeout <seconds>",
+      "Timeout for update checks in seconds (default: 3)",
+    )
     .addHelpText(
       "after",
       () =>

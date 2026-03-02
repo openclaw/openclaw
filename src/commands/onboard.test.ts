@@ -5,7 +5,11 @@ import type { RuntimeEnv } from "../runtime.js";
 const mocks = vi.hoisted(() => ({
   runInteractiveOnboarding: vi.fn(async () => {}),
   runNonInteractiveOnboarding: vi.fn(async () => {}),
-  readConfigFileSnapshot: vi.fn(async () => ({ exists: false, valid: false, config: {} })),
+  readConfigFileSnapshot: vi.fn(async () => ({
+    exists: false,
+    valid: false,
+    config: {},
+  })),
   handleReset: vi.fn(async () => {}),
 }));
 
@@ -39,7 +43,11 @@ function makeRuntime(): RuntimeEnv {
 describe("onboardCommand", () => {
   afterEach(() => {
     vi.clearAllMocks();
-    mocks.readConfigFileSnapshot.mockResolvedValue({ exists: false, valid: false, config: {} });
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      exists: false,
+      valid: false,
+      config: {},
+    });
   });
 
   it("fails fast for invalid secret-input-mode before onboarding starts", async () => {
@@ -116,7 +124,11 @@ describe("onboardCommand", () => {
       runtime,
     );
 
-    expect(mocks.handleReset).toHaveBeenCalledWith("full", expect.any(String), runtime);
+    expect(mocks.handleReset).toHaveBeenCalledWith(
+      "full",
+      expect.any(String),
+      runtime,
+    );
   });
 
   it("fails fast for invalid --reset-scope", async () => {

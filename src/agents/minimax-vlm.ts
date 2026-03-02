@@ -56,7 +56,9 @@ export async function minimaxUnderstandImage(params: {
     throw new Error("MiniMax VLM: imageDataUrl required");
   }
   if (!/^data:image\/(png|jpeg|webp);base64,/i.test(imageDataUrl)) {
-    throw new Error("MiniMax VLM: imageDataUrl must be a base64 data:image/(png|jpeg|webp) URL");
+    throw new Error(
+      "MiniMax VLM: imageDataUrl must be a base64 data:image/(png|jpeg|webp) URL",
+    );
   }
 
   const host = coerceApiHost({
@@ -95,12 +97,17 @@ export async function minimaxUnderstandImage(params: {
     throw new Error(`MiniMax VLM response was not JSON.${trace}`);
   }
 
-  const baseResp = isRecord(json.base_resp) ? (json.base_resp as MinimaxBaseResp) : {};
-  const code = typeof baseResp.status_code === "number" ? baseResp.status_code : -1;
+  const baseResp = isRecord(json.base_resp)
+    ? (json.base_resp as MinimaxBaseResp)
+    : {};
+  const code =
+    typeof baseResp.status_code === "number" ? baseResp.status_code : -1;
   if (code !== 0) {
     const msg = (baseResp.status_msg ?? "").trim();
     const trace = traceId ? ` Trace-Id: ${traceId}` : "";
-    throw new Error(`MiniMax VLM API error (${code})${msg ? `: ${msg}` : ""}.${trace}`);
+    throw new Error(
+      `MiniMax VLM API error (${code})${msg ? `: ${msg}` : ""}.${trace}`,
+    );
   }
 
   const content = pickString(json, "content").trim();

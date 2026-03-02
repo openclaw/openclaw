@@ -47,7 +47,8 @@ export async function connectGatewayClient(params: {
 }) {
   const role = params.role ?? "operator";
   const platform = params.platform ?? process.platform;
-  const identityRoot = process.env.OPENCLAW_STATE_DIR ?? process.env.HOME ?? os.tmpdir();
+  const identityRoot =
+    process.env.OPENCLAW_STATE_DIR ?? process.env.HOME ?? os.tmpdir();
   const deviceIdentity =
     params.deviceIdentity ??
     loadOrCreateDeviceIdentity(
@@ -56,55 +57,68 @@ export async function connectGatewayClient(params: {
           `${params.clientName ?? GATEWAY_CLIENT_NAMES.TEST}-${params.mode ?? GATEWAY_CLIENT_MODES.TEST}-${platform}-${params.deviceFamily ?? "none"}-${role}`
             .replace(/[^a-zA-Z0-9._-]+/g, "_")
             .toLowerCase();
-        return path.join(identityRoot, "test-device-identities", `${safe}.json`);
+        return path.join(
+          identityRoot,
+          "test-device-identities",
+          `${safe}.json`,
+        );
       })(),
     );
-  return await new Promise<InstanceType<typeof GatewayClient>>((resolve, reject) => {
-    let settled = false;
-    const stop = (err?: Error, client?: InstanceType<typeof GatewayClient>) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(timer);
-      if (err) {
-        reject(err);
-      } else {
-        resolve(client as InstanceType<typeof GatewayClient>);
-      }
-    };
-    const client = new GatewayClient({
-      url: params.url,
-      token: params.token,
-      connectDelayMs: params.connectDelayMs ?? 0,
-      clientName: params.clientName ?? GATEWAY_CLIENT_NAMES.TEST,
-      clientDisplayName: params.clientDisplayName ?? "vitest",
-      clientVersion: params.clientVersion ?? "dev",
-      platform,
-      deviceFamily: params.deviceFamily,
-      mode: params.mode ?? GATEWAY_CLIENT_MODES.TEST,
-      role,
-      scopes: params.scopes,
-      caps: params.caps,
-      commands: params.commands,
-      instanceId: params.instanceId,
-      deviceIdentity,
-      onEvent: params.onEvent,
-      onHelloOk: () => stop(undefined, client),
-      onConnectError: (err) => stop(err),
-      onClose: (code, reason) =>
-        stop(new Error(`gateway closed during connect (${code}): ${reason}`)),
-    });
-    const timer = setTimeout(
-      () => stop(new Error(params.timeoutMessage ?? "gateway connect timeout")),
-      params.timeoutMs ?? 10_000,
-    );
-    timer.unref();
-    client.start();
-  });
+  return await new Promise<InstanceType<typeof GatewayClient>>(
+    (resolve, reject) => {
+      let settled = false;
+      const stop = (
+        err?: Error,
+        client?: InstanceType<typeof GatewayClient>,
+      ) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timer);
+        if (err) {
+          reject(err);
+        } else {
+          resolve(client as InstanceType<typeof GatewayClient>);
+        }
+      };
+      const client = new GatewayClient({
+        url: params.url,
+        token: params.token,
+        connectDelayMs: params.connectDelayMs ?? 0,
+        clientName: params.clientName ?? GATEWAY_CLIENT_NAMES.TEST,
+        clientDisplayName: params.clientDisplayName ?? "vitest",
+        clientVersion: params.clientVersion ?? "dev",
+        platform,
+        deviceFamily: params.deviceFamily,
+        mode: params.mode ?? GATEWAY_CLIENT_MODES.TEST,
+        role,
+        scopes: params.scopes,
+        caps: params.caps,
+        commands: params.commands,
+        instanceId: params.instanceId,
+        deviceIdentity,
+        onEvent: params.onEvent,
+        onHelloOk: () => stop(undefined, client),
+        onConnectError: (err) => stop(err),
+        onClose: (code, reason) =>
+          stop(new Error(`gateway closed during connect (${code}): ${reason}`)),
+      });
+      const timer = setTimeout(
+        () =>
+          stop(new Error(params.timeoutMessage ?? "gateway connect timeout")),
+        params.timeoutMs ?? 10_000,
+      );
+      timer.unref();
+      client.start();
+    },
+  );
 }
 
-export async function connectDeviceAuthReq(params: { url: string; token?: string }) {
+export async function connectDeviceAuthReq(params: {
+  url: string;
+  token?: string;
+}) {
   const ws = new WebSocket(params.url);
   const connectNoncePromise = new Promise<string>((resolve, reject) => {
     const timer = setTimeout(
@@ -198,7 +212,10 @@ export async function connectDeviceAuthReq(params: { url: string; token?: string
       reject(new Error(`closed ${code}: ${rawDataToString(reason)}`));
     };
     const handler = (data: WebSocket.RawData) => {
-      const obj = JSON.parse(rawDataToString(data)) as { type?: unknown; id?: unknown };
+      const obj = JSON.parse(rawDataToString(data)) as {
+        type?: unknown;
+        id?: unknown;
+      };
       if (obj?.type !== "res" || obj?.id !== "c1") {
         return;
       }
@@ -227,7 +244,10 @@ export async function startGatewayWithClient(params: {
   token: string;
   clientDisplayName?: string;
 }) {
-  await writeFile(params.configPath, `${JSON.stringify(params.cfg, null, 2)}\n`);
+  await writeFile(
+    params.configPath,
+    `${JSON.stringify(params.cfg, null, 2)}\n`,
+  );
   process.env.OPENCLAW_CONFIG_PATH = params.configPath;
 
   const port = await getFreeGatewayPort();

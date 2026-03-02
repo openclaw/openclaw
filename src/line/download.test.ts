@@ -37,7 +37,9 @@ describe("downloadLineMedia", () => {
     const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0x00]);
     getMessageContentMock.mockResolvedValueOnce(chunks([jpeg]));
 
-    const writeSpy = vi.spyOn(fs.promises, "writeFile").mockResolvedValueOnce(undefined);
+    const writeSpy = vi
+      .spyOn(fs.promises, "writeFile")
+      .mockResolvedValueOnce(undefined);
 
     const result = await downloadLineMedia(messageId, "token");
     const writtenPath = writeSpy.mock.calls[0]?.[0];
@@ -60,10 +62,16 @@ describe("downloadLineMedia", () => {
   });
 
   it("rejects oversized media before writing to disk", async () => {
-    getMessageContentMock.mockResolvedValueOnce(chunks([Buffer.alloc(4), Buffer.alloc(4)]));
-    const writeSpy = vi.spyOn(fs.promises, "writeFile").mockResolvedValue(undefined);
+    getMessageContentMock.mockResolvedValueOnce(
+      chunks([Buffer.alloc(4), Buffer.alloc(4)]),
+    );
+    const writeSpy = vi
+      .spyOn(fs.promises, "writeFile")
+      .mockResolvedValue(undefined);
 
-    await expect(downloadLineMedia("mid", "token", 7)).rejects.toThrow(/Media exceeds/i);
+    await expect(downloadLineMedia("mid", "token", 7)).rejects.toThrow(
+      /Media exceeds/i,
+    );
     expect(writeSpy).not.toHaveBeenCalled();
   });
 

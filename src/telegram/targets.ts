@@ -77,7 +77,9 @@ export function normalizeTelegramLookupTarget(raw: string): string | undefined {
  * - `chatId:topicId` (numeric topic/thread ID)
  * - `chatId:topic:topicId` (explicit topic marker; preferred)
  */
-function resolveTelegramChatType(chatId: string): "direct" | "group" | "unknown" {
+function resolveTelegramChatType(
+  chatId: string,
+): "direct" | "group" | "unknown" {
   const trimmed = chatId.trim();
   if (!trimmed) {
     return "unknown";
@@ -115,6 +117,8 @@ export function parseTelegramTarget(to: string): TelegramTarget {
   };
 }
 
-export function resolveTelegramTargetChatType(target: string): "direct" | "group" | "unknown" {
+export function resolveTelegramTargetChatType(
+  target: string,
+): "direct" | "group" | "unknown" {
   return parseTelegramTarget(target).chatType;
 }

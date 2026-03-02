@@ -10,7 +10,11 @@ import {
   stripArchivePath,
   validateArchiveEntryPath,
 } from "./archive-path.js";
-import { isNotFoundPathError, isPathInside, isSymlinkOpenError } from "./path-guards.js";
+import {
+  isNotFoundPathError,
+  isPathInside,
+  isSymlinkOpenError,
+} from "./path-guards.js";
 
 export type ArchiveKind = "tar" | "zip";
 
@@ -40,7 +44,11 @@ export type ArchiveSecurityErrorCode =
 export class ArchiveSecurityError extends Error {
   code: ArchiveSecurityErrorCode;
 
-  constructor(code: ArchiveSecurityErrorCode, message: string, options?: ErrorOptions) {
+  constructor(
+    code: ArchiveSecurityErrorCode,
+    message: string,
+    options?: ErrorOptions,
+  ) {
     super(message, options);
     this.code = code;
     this.name = "ArchiveSecurityError";
@@ -57,18 +65,23 @@ export const DEFAULT_MAX_EXTRACTED_BYTES = 512 * 1024 * 1024;
 export const DEFAULT_MAX_ENTRY_BYTES = 256 * 1024 * 1024;
 
 const ERROR_ARCHIVE_SIZE_EXCEEDS_LIMIT = "archive size exceeds limit";
-const ERROR_ARCHIVE_ENTRY_COUNT_EXCEEDS_LIMIT = "archive entry count exceeds limit";
+const ERROR_ARCHIVE_ENTRY_COUNT_EXCEEDS_LIMIT =
+  "archive entry count exceeds limit";
 const ERROR_ARCHIVE_ENTRY_EXTRACTED_SIZE_EXCEEDS_LIMIT =
   "archive entry extracted size exceeds limit";
-const ERROR_ARCHIVE_EXTRACTED_SIZE_EXCEEDS_LIMIT = "archive extracted size exceeds limit";
-const ERROR_ARCHIVE_ENTRY_TRAVERSES_SYMLINK = "archive entry traverses symlink in destination";
+const ERROR_ARCHIVE_EXTRACTED_SIZE_EXCEEDS_LIMIT =
+  "archive extracted size exceeds limit";
+const ERROR_ARCHIVE_ENTRY_TRAVERSES_SYMLINK =
+  "archive entry traverses symlink in destination";
 
 const TAR_SUFFIXES = [".tgz", ".tar.gz", ".tar"];
 const OPEN_WRITE_FLAGS =
   fsConstants.O_WRONLY |
   fsConstants.O_CREAT |
   fsConstants.O_TRUNC |
-  (process.platform !== "win32" && "O_NOFOLLOW" in fsConstants ? fsConstants.O_NOFOLLOW : 0);
+  (process.platform !== "win32" && "O_NOFOLLOW" in fsConstants
+    ? fsConstants.O_NOFOLLOW
+    : 0);
 
 export function resolveArchiveKind(filePath: string): ArchiveKind | null {
   const lower = filePath.toLowerCase();
@@ -81,7 +94,9 @@ export function resolveArchiveKind(filePath: string): ArchiveKind | null {
   return null;
 }
 
-export async function resolvePackedRootDir(extractDir: string): Promise<string> {
+export async function resolvePackedRootDir(
+  extractDir: string,
+): Promise<string> {
   const direct = path.join(extractDir, "package");
   try {
     const stat = await fs.stat(direct);
@@ -93,7 +108,9 @@ export async function resolvePackedRootDir(extractDir: string): Promise<string> 
   }
 
   const entries = await fs.readdir(extractDir, { withFileTypes: true });
-  const dirs = entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name);
+  const dirs = entries
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name);
   if (dirs.length !== 1) {
     throw new Error(`unexpected archive layout (dirs: ${dirs.join(", ")})`);
   }
@@ -137,12 +154,16 @@ function clampLimit(value: number | undefined): number | undefined {
   return v > 0 ? v : undefined;
 }
 
-function resolveExtractLimits(limits?: ArchiveExtractLimits): ResolvedArchiveExtractLimits {
+function resolveExtractLimits(
+  limits?: ArchiveExtractLimits,
+): ResolvedArchiveExtractLimits {
   // Defaults: defensive, but should not break normal installs.
   return {
-    maxArchiveBytes: clampLimit(limits?.maxArchiveBytes) ?? DEFAULT_MAX_ARCHIVE_BYTES_ZIP,
+    maxArchiveBytes:
+      clampLimit(limits?.maxArchiveBytes) ?? DEFAULT_MAX_ARCHIVE_BYTES_ZIP,
     maxEntries: clampLimit(limits?.maxEntries) ?? DEFAULT_MAX_ENTRIES,
-    maxExtractedBytes: clampLimit(limits?.maxExtractedBytes) ?? DEFAULT_MAX_EXTRACTED_BYTES,
+    maxExtractedBytes:
+      clampLimit(limits?.maxExtractedBytes) ?? DEFAULT_MAX_EXTRACTED_BYTES,
     maxEntryBytes: clampLimit(limits?.maxEntryBytes) ?? DEFAULT_MAX_ENTRY_BYTES,
   };
 }
@@ -201,7 +222,8 @@ function createExtractBudgetTransform(params: {
   return new Transform({
     transform(chunk, _encoding, callback) {
       try {
-        const buf = chunk instanceof Buffer ? chunk : Buffer.from(chunk as Uint8Array);
+        const buf =
+          chunk instanceof Buffer ? chunk : Buffer.from(chunk as Uint8Array);
         params.onChunkBytes(buf.byteLength);
         callback(null, buf);
       } catch (err) {
@@ -221,7 +243,10 @@ function symlinkTraversalError(originalPath: string): ArchiveSecurityError {
 async function assertDestinationDirReady(destDir: string): Promise<string> {
   const stat = await fs.lstat(destDir);
   if (stat.isSymbolicLink()) {
-    throw new ArchiveSecurityError("destination-symlink", "archive destination is a symlink");
+    throw new ArchiveSecurityError(
+      "destination-symlink",
+      "archive destination is a symlink",
+    );
   }
   if (!stat.isDirectory()) {
     throw new ArchiveSecurityError(
@@ -311,7 +336,9 @@ type ZipEntry = {
 
 type ZipExtractBudget = ReturnType<typeof createByteBudgetTracker>;
 
-async function readZipEntryStream(entry: ZipEntry): Promise<NodeJS.ReadableStream> {
+async function readZipEntryStream(
+  entry: ZipEntry,
+): Promise<NodeJS.ReadableStream> {
   if (typeof entry.nodeStream === "function") {
     return entry.nodeStream();
   }
@@ -566,7 +593,9 @@ export async function extractArchive(params: {
             const error = err instanceof Error ? err : new Error(String(err));
             // Node's EventEmitter calls listeners with `this` bound to the
             // emitter (tar.Unpack), which exposes Parser.abort().
-            const emitter = this as unknown as { abort?: (error: Error) => void };
+            const emitter = this as unknown as {
+              abort?: (error: Error) => void;
+            };
             emitter.abort?.(error);
           }
         },

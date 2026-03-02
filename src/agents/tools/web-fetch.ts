@@ -2,7 +2,10 @@ import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
 import { SsrFBlockedError } from "../../infra/net/ssrf.js";
 import { logDebug } from "../../logger.js";
-import { wrapExternalContent, wrapWebContent } from "../../security/external-content.js";
+import {
+  wrapExternalContent,
+  wrapWebContent,
+} from "../../security/external-content.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import { stringEnum } from "../schema/typebox.js";
 import type { AnyAgentTool } from "./common.js";
@@ -62,7 +65,9 @@ const WebFetchSchema = Type.Object({
   ),
 });
 
-type WebFetchConfig = NonNullable<OpenClawConfig["tools"]>["web"] extends infer Web
+type WebFetchConfig = NonNullable<
+  OpenClawConfig["tools"]
+>["web"] extends infer Web
   ? Web extends { fetch?: infer Fetch }
     ? Fetch
     : undefined
@@ -87,7 +92,10 @@ function resolveFetchConfig(cfg?: OpenClawConfig): WebFetchConfig {
   return fetch as WebFetchConfig;
 }
 
-function resolveFetchEnabled(params: { fetch?: WebFetchConfig; sandboxed?: boolean }): boolean {
+function resolveFetchEnabled(params: {
+  fetch?: WebFetchConfig;
+  sandboxed?: boolean;
+}): boolean {
   if (typeof params.fetch?.enabled === "boolean") {
     return params.fetch.enabled;
   }
@@ -114,14 +122,19 @@ function resolveFetchMaxCharsCap(fetch?: WebFetchConfig): number {
 
 function resolveFetchMaxResponseBytes(fetch?: WebFetchConfig): number {
   const raw =
-    fetch && "maxResponseBytes" in fetch && typeof fetch.maxResponseBytes === "number"
+    fetch &&
+    "maxResponseBytes" in fetch &&
+    typeof fetch.maxResponseBytes === "number"
       ? fetch.maxResponseBytes
       : undefined;
   if (typeof raw !== "number" || !Number.isFinite(raw) || raw <= 0) {
     return DEFAULT_FETCH_MAX_RESPONSE_BYTES;
   }
   const value = Math.floor(raw);
-  return Math.min(FETCH_MAX_RESPONSE_BYTES_MAX, Math.max(FETCH_MAX_RESPONSE_BYTES_MIN, value));
+  return Math.min(
+    FETCH_MAX_RESPONSE_BYTES_MAX,
+    Math.max(FETCH_MAX_RESPONSE_BYTES_MIN, value),
+  );
 }
 
 function resolveFirecrawlConfig(fetch?: WebFetchConfig): FirecrawlFetchConfig {
@@ -135,7 +148,9 @@ function resolveFirecrawlConfig(fetch?: WebFetchConfig): FirecrawlFetchConfig {
   return firecrawl as FirecrawlFetchConfig;
 }
 
-function resolveFirecrawlApiKey(firecrawl?: FirecrawlFetchConfig): string | undefined {
+function resolveFirecrawlApiKey(
+  firecrawl?: FirecrawlFetchConfig,
+): string | undefined {
   const fromConfig =
     firecrawl && "apiKey" in firecrawl && typeof firecrawl.apiKey === "string"
       ? normalizeSecretInput(firecrawl.apiKey)
@@ -162,16 +177,22 @@ function resolveFirecrawlBaseUrl(firecrawl?: FirecrawlFetchConfig): string {
   return raw || DEFAULT_FIRECRAWL_BASE_URL;
 }
 
-function resolveFirecrawlOnlyMainContent(firecrawl?: FirecrawlFetchConfig): boolean {
+function resolveFirecrawlOnlyMainContent(
+  firecrawl?: FirecrawlFetchConfig,
+): boolean {
   if (typeof firecrawl?.onlyMainContent === "boolean") {
     return firecrawl.onlyMainContent;
   }
   return true;
 }
 
-function resolveFirecrawlMaxAgeMs(firecrawl?: FirecrawlFetchConfig): number | undefined {
+function resolveFirecrawlMaxAgeMs(
+  firecrawl?: FirecrawlFetchConfig,
+): number | undefined {
   const raw =
-    firecrawl && "maxAgeMs" in firecrawl && typeof firecrawl.maxAgeMs === "number"
+    firecrawl &&
+    "maxAgeMs" in firecrawl &&
+    typeof firecrawl.maxAgeMs === "number"
       ? firecrawl.maxAgeMs
       : undefined;
   if (typeof raw !== "number" || !Number.isFinite(raw)) {
@@ -181,7 +202,9 @@ function resolveFirecrawlMaxAgeMs(firecrawl?: FirecrawlFetchConfig): number | un
   return parsed > 0 ? parsed : undefined;
 }
 
-function resolveFirecrawlMaxAgeMsOrDefault(firecrawl?: FirecrawlFetchConfig): number {
+function resolveFirecrawlMaxAgeMsOrDefault(
+  firecrawl?: FirecrawlFetchConfig,
+): number {
   const resolved = resolveFirecrawlMaxAgeMs(firecrawl);
   if (typeof resolved === "number") {
     return resolved;
@@ -189,14 +212,20 @@ function resolveFirecrawlMaxAgeMsOrDefault(firecrawl?: FirecrawlFetchConfig): nu
   return DEFAULT_FIRECRAWL_MAX_AGE_MS;
 }
 
-function resolveMaxChars(value: unknown, fallback: number, cap: number): number {
-  const parsed = typeof value === "number" && Number.isFinite(value) ? value : fallback;
+function resolveMaxChars(
+  value: unknown,
+  fallback: number,
+  cap: number,
+): number {
+  const parsed =
+    typeof value === "number" && Number.isFinite(value) ? value : fallback;
   const clamped = Math.max(100, Math.floor(parsed));
   return Math.min(clamped, cap);
 }
 
 function resolveMaxRedirects(value: unknown, fallback: number): number {
-  const parsed = typeof value === "number" && Number.isFinite(value) ? value : fallback;
+  const parsed =
+    typeof value === "number" && Number.isFinite(value) ? value : fallback;
   return Math.max(0, Math.floor(parsed));
 }
 
@@ -222,7 +251,9 @@ function formatWebFetchErrorDetail(params: {
   const contentTypeLower = contentType?.toLowerCase();
   if (contentTypeLower?.includes("text/html") || looksLikeHtml(detail)) {
     const rendered = htmlToMarkdown(detail);
-    const withTitle = rendered.title ? `${rendered.title}\n${rendered.text}` : rendered.text;
+    const withTitle = rendered.title
+      ? `${rendered.title}\n${rendered.text}`
+      : rendered.text;
     text = markdownToText(withTitle);
   }
   const truncated = truncateText(text.trim(), maxChars);
@@ -232,13 +263,18 @@ function formatWebFetchErrorDetail(params: {
 function redactUrlForDebugLog(rawUrl: string): string {
   try {
     const parsed = new URL(rawUrl);
-    return parsed.pathname && parsed.pathname !== "/" ? `${parsed.origin}/...` : parsed.origin;
+    return parsed.pathname && parsed.pathname !== "/"
+      ? `${parsed.origin}/...`
+      : parsed.origin;
   } catch {
     return "[invalid-url]";
   }
 }
 
-const WEB_FETCH_WRAPPER_WITH_WARNING_OVERHEAD = wrapWebContent("", "web_fetch").length;
+const WEB_FETCH_WRAPPER_WITH_WARNING_OVERHEAD = wrapWebContent(
+  "",
+  "web_fetch",
+).length;
 const WEB_FETCH_WRAPPER_NO_WARNING_OVERHEAD = wrapExternalContent("", {
   source: "web_fetch",
   includeWarning: false,
@@ -276,7 +312,10 @@ function wrapWebFetchContent(
   let truncated = truncateText(value, maxInner);
   let wrappedText = includeWarning
     ? wrapWebContent(truncated.text, "web_fetch")
-    : wrapExternalContent(truncated.text, { source: "web_fetch", includeWarning: false });
+    : wrapExternalContent(truncated.text, {
+        source: "web_fetch",
+        includeWarning: false,
+      });
 
   if (wrappedText.length > maxChars) {
     const excess = wrappedText.length - maxChars;
@@ -284,7 +323,10 @@ function wrapWebFetchContent(
     truncated = truncateText(value, adjustedMaxInner);
     wrappedText = includeWarning
       ? wrapWebContent(truncated.text, "web_fetch")
-      : wrapExternalContent(truncated.text, { source: "web_fetch", includeWarning: false });
+      : wrapExternalContent(truncated.text, {
+          source: "web_fetch",
+          includeWarning: false,
+        });
   }
 
   return {
@@ -299,7 +341,10 @@ function wrapWebFetchField(value: string | undefined): string | undefined {
   if (!value) {
     return value;
   }
-  return wrapExternalContent(value, { source: "web_fetch", includeWarning: false });
+  return wrapExternalContent(value, {
+    source: "web_fetch",
+    includeWarning: false,
+  });
 }
 
 function buildFirecrawlWebFetchPayload(params: {
@@ -339,7 +384,9 @@ function buildFirecrawlWebFetchPayload(params: {
   };
 }
 
-function normalizeContentType(value: string | null | undefined): string | undefined {
+function normalizeContentType(
+  value: string | null | undefined,
+): string | undefined {
   if (!value) {
     return undefined;
   }
@@ -415,7 +462,8 @@ export async function fetchFirecrawlContent(params: {
       : typeof data.content === "string"
         ? data.content
         : "";
-  const text = params.extractMode === "text" ? markdownToText(rawText) : rawText;
+  const text =
+    params.extractMode === "text" ? markdownToText(rawText) : rawText;
   return {
     text,
     title: data.metadata?.title,
@@ -499,7 +547,9 @@ async function maybeFetchFirecrawlWebFetchPayload(
   return payload;
 }
 
-async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string, unknown>> {
+async function runWebFetch(
+  params: WebFetchRuntimeParams,
+): Promise<Record<string, unknown>> {
   const cacheKey = normalizeCacheKey(
     `fetch:${params.url}:${params.extractMode}:${params.maxChars}`,
   );
@@ -577,20 +627,31 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
       if (payload) {
         return payload;
       }
-      const rawDetailResult = await readResponseText(res, { maxBytes: DEFAULT_ERROR_MAX_BYTES });
+      const rawDetailResult = await readResponseText(res, {
+        maxBytes: DEFAULT_ERROR_MAX_BYTES,
+      });
       const rawDetail = rawDetailResult.text;
       const detail = formatWebFetchErrorDetail({
         detail: rawDetail,
         contentType: res.headers.get("content-type"),
         maxChars: DEFAULT_ERROR_MAX_CHARS,
       });
-      const wrappedDetail = wrapWebFetchContent(detail || res.statusText, DEFAULT_ERROR_MAX_CHARS);
-      throw new Error(`Web fetch failed (${res.status}): ${wrappedDetail.text}`);
+      const wrappedDetail = wrapWebFetchContent(
+        detail || res.statusText,
+        DEFAULT_ERROR_MAX_CHARS,
+      );
+      throw new Error(
+        `Web fetch failed (${res.status}): ${wrappedDetail.text}`,
+      );
     }
 
-    const contentType = res.headers.get("content-type") ?? "application/octet-stream";
-    const normalizedContentType = normalizeContentType(contentType) ?? "application/octet-stream";
-    const bodyResult = await readResponseText(res, { maxBytes: params.maxResponseBytes });
+    const contentType =
+      res.headers.get("content-type") ?? "application/octet-stream";
+    const normalizedContentType =
+      normalizeContentType(contentType) ?? "application/octet-stream";
+    const bodyResult = await readResponseText(res, {
+      maxBytes: params.maxResponseBytes,
+    });
     const body = bodyResult.text;
     const responseTruncatedWarning = bodyResult.truncated
       ? `Response body truncated after ${params.maxResponseBytes} bytes.`
@@ -617,7 +678,10 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
           title = readable.title;
           extractor = "readability";
         } else {
-          const firecrawl = await tryFirecrawlFallback({ ...params, url: finalUrl });
+          const firecrawl = await tryFirecrawlFallback({
+            ...params,
+            url: finalUrl,
+          });
           if (firecrawl) {
             text = firecrawl.text;
             title = firecrawl.title;
@@ -720,7 +784,10 @@ export function createWebFetchTool(options?: {
   const readabilityEnabled = resolveFetchReadabilityEnabled(fetch);
   const firecrawl = resolveFirecrawlConfig(fetch);
   const firecrawlApiKey = resolveFirecrawlApiKey(firecrawl);
-  const firecrawlEnabled = resolveFirecrawlEnabled({ firecrawl, apiKey: firecrawlApiKey });
+  const firecrawlEnabled = resolveFirecrawlEnabled({
+    firecrawl,
+    apiKey: firecrawlApiKey,
+  });
   const firecrawlBaseUrl = resolveFirecrawlBaseUrl(firecrawl);
   const firecrawlOnlyMainContent = resolveFirecrawlOnlyMainContent(firecrawl);
   const firecrawlMaxAgeMs = resolveFirecrawlMaxAgeMsOrDefault(firecrawl);
@@ -729,7 +796,10 @@ export function createWebFetchTool(options?: {
     DEFAULT_TIMEOUT_SECONDS,
   );
   const userAgent =
-    (fetch && "userAgent" in fetch && typeof fetch.userAgent === "string" && fetch.userAgent) ||
+    (fetch &&
+      "userAgent" in fetch &&
+      typeof fetch.userAgent === "string" &&
+      fetch.userAgent) ||
     DEFAULT_FETCH_USER_AGENT;
   const maxResponseBytes = resolveFetchMaxResponseBytes(fetch);
   return {
@@ -741,7 +811,8 @@ export function createWebFetchTool(options?: {
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const url = readStringParam(params, "url", { required: true });
-      const extractMode = readStringParam(params, "extractMode") === "text" ? "text" : "markdown";
+      const extractMode =
+        readStringParam(params, "extractMode") === "text" ? "text" : "markdown";
       const maxChars = readNumberParam(params, "maxChars", { integer: true });
       const maxCharsCap = resolveFetchMaxCharsCap(fetch);
       const result = await runWebFetch({
@@ -753,9 +824,18 @@ export function createWebFetchTool(options?: {
           maxCharsCap,
         ),
         maxResponseBytes,
-        maxRedirects: resolveMaxRedirects(fetch?.maxRedirects, DEFAULT_FETCH_MAX_REDIRECTS),
-        timeoutSeconds: resolveTimeoutSeconds(fetch?.timeoutSeconds, DEFAULT_TIMEOUT_SECONDS),
-        cacheTtlMs: resolveCacheTtlMs(fetch?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES),
+        maxRedirects: resolveMaxRedirects(
+          fetch?.maxRedirects,
+          DEFAULT_FETCH_MAX_REDIRECTS,
+        ),
+        timeoutSeconds: resolveTimeoutSeconds(
+          fetch?.timeoutSeconds,
+          DEFAULT_TIMEOUT_SECONDS,
+        ),
+        cacheTtlMs: resolveCacheTtlMs(
+          fetch?.cacheTtlMinutes,
+          DEFAULT_CACHE_TTL_MINUTES,
+        ),
         userAgent,
         readabilityEnabled,
         firecrawlEnabled,

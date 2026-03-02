@@ -42,18 +42,42 @@
           "Roboto",
           sans-serif;
         background:
-          radial-gradient(1200px 900px at 15% 20%, rgba(42, 113, 255, 0.18), rgba(0, 0, 0, 0) 55%),
-          radial-gradient(900px 700px at 85% 30%, rgba(255, 0, 138, 0.14), rgba(0, 0, 0, 0) 60%),
-          radial-gradient(1000px 900px at 60% 90%, rgba(0, 209, 255, 0.1), rgba(0, 0, 0, 0) 60%),
+          radial-gradient(
+            1200px 900px at 15% 20%,
+            rgba(42, 113, 255, 0.18),
+            rgba(0, 0, 0, 0) 55%
+          ),
+          radial-gradient(
+            900px 700px at 85% 30%,
+            rgba(255, 0, 138, 0.14),
+            rgba(0, 0, 0, 0) 60%
+          ),
+          radial-gradient(
+            1000px 900px at 60% 90%,
+            rgba(0, 209, 255, 0.1),
+            rgba(0, 0, 0, 0) 60%
+          ),
           #000;
         color: #e5e7eb;
         overflow: hidden;
       }
       :root[data-platform="android"] body {
         background:
-          radial-gradient(1200px 900px at 15% 20%, rgba(42, 113, 255, 0.62), rgba(0, 0, 0, 0) 55%),
-          radial-gradient(900px 700px at 85% 30%, rgba(255, 0, 138, 0.52), rgba(0, 0, 0, 0) 60%),
-          radial-gradient(1000px 900px at 60% 90%, rgba(0, 209, 255, 0.48), rgba(0, 0, 0, 0) 60%),
+          radial-gradient(
+            1200px 900px at 15% 20%,
+            rgba(42, 113, 255, 0.62),
+            rgba(0, 0, 0, 0) 55%
+          ),
+          radial-gradient(
+            900px 700px at 85% 30%,
+            rgba(255, 0, 138, 0.52),
+            rgba(0, 0, 0, 0) 60%
+          ),
+          radial-gradient(
+            1000px 900px at 60% 90%,
+            rgba(0, 209, 255, 0.48),
+            rgba(0, 0, 0, 0) 60%
+          ),
           #0b1328;
       }
       body::before {
@@ -91,9 +115,21 @@
         position: fixed;
         inset: -35%;
         background:
-          radial-gradient(900px 700px at 30% 30%, rgba(42, 113, 255, 0.16), rgba(0, 0, 0, 0) 60%),
-          radial-gradient(800px 650px at 70% 35%, rgba(255, 0, 138, 0.12), rgba(0, 0, 0, 0) 62%),
-          radial-gradient(900px 800px at 55% 75%, rgba(0, 209, 255, 0.1), rgba(0, 0, 0, 0) 62%);
+          radial-gradient(
+            900px 700px at 30% 30%,
+            rgba(42, 113, 255, 0.16),
+            rgba(0, 0, 0, 0) 60%
+          ),
+          radial-gradient(
+            800px 650px at 70% 35%,
+            rgba(255, 0, 138, 0.12),
+            rgba(0, 0, 0, 0) 62%
+          ),
+          radial-gradient(
+            900px 800px at 55% 75%,
+            rgba(0, 209, 255, 0.1),
+            rgba(0, 0, 0, 0) 62%
+          );
         filter: blur(28px);
         opacity: 0.52;
         will-change: transform, opacity;
@@ -155,9 +191,21 @@
       }
       :root[data-platform="android"] #openclaw-canvas {
         background:
-          radial-gradient(1100px 800px at 20% 15%, rgba(42, 113, 255, 0.78), rgba(0, 0, 0, 0) 58%),
-          radial-gradient(900px 650px at 82% 28%, rgba(255, 0, 138, 0.66), rgba(0, 0, 0, 0) 62%),
-          radial-gradient(1000px 900px at 60% 88%, rgba(0, 209, 255, 0.58), rgba(0, 0, 0, 0) 62%),
+          radial-gradient(
+            1100px 800px at 20% 15%,
+            rgba(42, 113, 255, 0.78),
+            rgba(0, 0, 0, 0) 58%
+          ),
+          radial-gradient(
+            900px 650px at 82% 28%,
+            rgba(255, 0, 138, 0.66),
+            rgba(0, 0, 0, 0) 62%
+          ),
+          radial-gradient(
+            1000px 900px at 60% 88%,
+            rgba(0, 209, 255, 0.58),
+            rgba(0, 0, 0, 0) 62%
+          ),
           #141c33;
       }
       #openclaw-status {
@@ -177,7 +225,11 @@
         text-align: left;
         padding: 14px 16px 12px;
         border-radius: 16px;
-        background: linear-gradient(140deg, rgba(23, 24, 35, 0.78), rgba(18, 19, 28, 0.55));
+        background: linear-gradient(
+          140deg,
+          rgba(23, 24, 35, 0.78),
+          rgba(18, 19, 28, 0.55)
+        );
         border: 1px solid rgba(255, 255, 255, 0.12);
         box-shadow:
           0 16px 46px rgba(0, 0, 0, 0.52),
@@ -229,7 +281,9 @@
     <div id="openclaw-status" role="status" aria-live="polite">
       <section class="card">
         <div class="title" id="openclaw-status-title">Ready</div>
-        <div class="subtitle" id="openclaw-status-subtitle">Waiting for agent</div>
+        <div class="subtitle" id="openclaw-status-subtitle">
+          Waiting for agent
+        </div>
       </section>
     </div>
     <openclaw-a2ui-host></openclaw-a2ui-host>
@@ -247,7 +301,11 @@
             const raw = params.get("debugStatus") ?? params.get("debug");
             if (!raw) return false;
             const normalized = String(raw).trim().toLowerCase();
-            return normalized === "1" || normalized === "true" || normalized === "yes";
+            return (
+              normalized === "1" ||
+              normalized === "true" ||
+              normalized === "yes"
+            );
           } catch (_) {
             return false;
           }
@@ -289,8 +347,10 @@
               return;
             }
             statusEl.style.display = "flex";
-            if (titleEl && typeof title === "string") titleEl.textContent = title;
-            if (subtitleEl && typeof subtitle === "string") subtitleEl.textContent = subtitle;
+            if (titleEl && typeof title === "string")
+              titleEl.textContent = title;
+            if (subtitleEl && typeof subtitle === "string")
+              subtitleEl.textContent = subtitle;
             if (!debugStatusEnabled) {
               clearTimeout(window.__statusTimeout);
               window.__statusTimeout = setTimeout(() => {

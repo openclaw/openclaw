@@ -11,9 +11,16 @@ import {
   NODE_SYSTEM_RUN_COMMANDS,
 } from "../infra/node-commands.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../utils/message-channel.js";
 import { VERSION } from "../version.js";
-import { ensureNodeHostConfig, saveNodeHostConfig, type NodeHostGatewayConfig } from "./config.js";
+import {
+  ensureNodeHostConfig,
+  saveNodeHostConfig,
+  type NodeHostGatewayConfig,
+} from "./config.js";
 import {
   coerceNodeInvokePayload,
   handleInvoke,
@@ -32,16 +39,23 @@ type NodeHostRunOptions = {
   displayName?: string;
 };
 
-const DEFAULT_NODE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+const DEFAULT_NODE_PATH =
+  "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 
-function resolveExecutablePathFromEnv(bin: string, pathEnv: string): string | null {
+function resolveExecutablePathFromEnv(
+  bin: string,
+  pathEnv: string,
+): string | null {
   if (bin.includes("/") || bin.includes("\\")) {
     return null;
   }
   return resolveExecutableFromPathEnv(bin, pathEnv) ?? null;
 }
 
-function resolveSkillBinTrustEntries(bins: string[], pathEnv: string): SkillBinTrustEntry[] {
+function resolveSkillBinTrustEntries(
+  bins: string[],
+  pathEnv: string,
+): SkillBinTrustEntry[] {
   const trustEntries: SkillBinTrustEntry[] = [];
   const seen = new Set<string>();
   for (const bin of bins) {
@@ -62,7 +76,8 @@ function resolveSkillBinTrustEntries(bins: string[], pathEnv: string): SkillBinT
   }
   return trustEntries.toSorted(
     (left, right) =>
-      left.name.localeCompare(right.name) || left.resolvedPath.localeCompare(right.resolvedPath),
+      left.name.localeCompare(right.name) ||
+      left.resolvedPath.localeCompare(right.resolvedPath),
   );
 }
 
@@ -115,7 +130,9 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     config.nodeId = nodeId;
   }
   const displayName =
-    opts.displayName?.trim() || config.displayName || (await getMachineDisplayName());
+    opts.displayName?.trim() ||
+    config.displayName ||
+    (await getMachineDisplayName());
   config.displayName = displayName;
 
   const gateway: NodeHostGatewayConfig = {
@@ -137,7 +154,9 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     (isRemoteMode ? cfg.gateway?.remote?.token : cfg.gateway?.auth?.token);
   const password =
     process.env.OPENCLAW_GATEWAY_PASSWORD?.trim() ||
-    (isRemoteMode ? cfg.gateway?.remote?.password : cfg.gateway?.auth?.password);
+    (isRemoteMode
+      ? cfg.gateway?.remote?.password
+      : cfg.gateway?.auth?.password);
 
   const host = gateway.host ?? "127.0.0.1";
   const port = gateway.port ?? 18789;
@@ -191,8 +210,13 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   });
 
   const skillBins = new SkillBinsCache(async () => {
-    const res = await client.request<{ bins: Array<unknown> }>("skills.bins", {});
-    const bins = Array.isArray(res?.bins) ? res.bins.map((bin) => String(bin)) : [];
+    const res = await client.request<{ bins: Array<unknown> }>(
+      "skills.bins",
+      {},
+    );
+    const bins = Array.isArray(res?.bins)
+      ? res.bins.map((bin) => String(bin))
+      : [];
     return bins;
   }, pathEnv);
 

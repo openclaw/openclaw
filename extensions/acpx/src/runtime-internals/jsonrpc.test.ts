@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { isAcpJsonRpcMessage, isJsonRpcId, normalizeJsonRpcId } from "./jsonrpc.js";
+import {
+  isAcpJsonRpcMessage,
+  isJsonRpcId,
+  normalizeJsonRpcId,
+} from "./jsonrpc.js";
 
 describe("jsonrpc helpers", () => {
   it("validates json-rpc ids", () => {

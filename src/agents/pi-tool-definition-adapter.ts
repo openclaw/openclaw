@@ -33,16 +33,23 @@ type ToolExecuteArgsLegacy = [
   unknown,
   AbortSignal | undefined,
 ];
-type ToolExecuteArgs = ToolDefinition["execute"] extends (...args: infer P) => unknown
+type ToolExecuteArgs = ToolDefinition["execute"] extends (
+  ...args: infer P
+) => unknown
   ? P
   : ToolExecuteArgsCurrent;
-type ToolExecuteArgsAny = ToolExecuteArgs | ToolExecuteArgsLegacy | ToolExecuteArgsCurrent;
+type ToolExecuteArgsAny =
+  | ToolExecuteArgs
+  | ToolExecuteArgsLegacy
+  | ToolExecuteArgsCurrent;
 
 function isAbortSignal(value: unknown): value is AbortSignal {
   return typeof value === "object" && value !== null && "aborted" in value;
 }
 
-function isLegacyToolExecuteArgs(args: ToolExecuteArgsAny): args is ToolExecuteArgsLegacy {
+function isLegacyToolExecuteArgs(
+  args: ToolExecuteArgsAny,
+): args is ToolExecuteArgsLegacy {
   const third = args[2];
   const fifth = args[4];
   if (typeof third === "function") {
@@ -87,7 +94,9 @@ function normalizeToolExecutionResult(params: {
     if (Array.isArray(record.content)) {
       return result as AgentToolResult<unknown>;
     }
-    logDebug(`tools: ${toolName} returned non-standard result (missing content[]); coercing`);
+    logDebug(
+      `tools: ${toolName} returned non-standard result (missing content[]); coercing`,
+    );
     const details = "details" in record ? record.details : record;
     const safeDetails = details ?? { status: "ok", tool: toolName };
     return {
@@ -146,8 +155,11 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
       label: tool.label ?? name,
       description: tool.description ?? "",
       parameters: tool.parameters,
-      execute: async (...args: ToolExecuteArgs): Promise<AgentToolResult<unknown>> => {
-        const { toolCallId, params, onUpdate, signal } = splitToolExecuteArgs(args);
+      execute: async (
+        ...args: ToolExecuteArgs
+      ): Promise<AgentToolResult<unknown>> => {
+        const { toolCallId, params, onUpdate, signal } =
+          splitToolExecuteArgs(args);
         let executeParams = params;
         try {
           if (!beforeHookWrapped) {
@@ -161,7 +173,12 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
             }
             executeParams = hookOutcome.params;
           }
-          const rawResult = await tool.execute(toolCallId, executeParams, signal, onUpdate);
+          const rawResult = await tool.execute(
+            toolCallId,
+            executeParams,
+            signal,
+            onUpdate,
+          );
           const result = normalizeToolExecutionResult({
             toolName: normalizedName,
             result: rawResult,
@@ -206,7 +223,9 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
           }
           const described = describeToolExecutionError(err);
           if (described.stack && described.stack !== described.message) {
-            logDebug(`tools: ${normalizedName} failed stack:\n${described.stack}`);
+            logDebug(
+              `tools: ${normalizedName} failed stack:\n${described.stack}`,
+            );
           }
           logError(`[tools] ${normalizedName} failed: ${described.message}`);
 
@@ -246,7 +265,10 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
 // These tools are intercepted to return a "pending" result instead of executing
 export function toClientToolDefinitions(
   tools: ClientToolDefinition[],
-  onClientToolCall?: (toolName: string, params: Record<string, unknown>) => void,
+  onClientToolCall?: (
+    toolName: string,
+    params: Record<string, unknown>,
+  ) => void,
   hookContext?: HookContext,
 ): ToolDefinition[] {
   return tools.map((tool) => {
@@ -256,7 +278,9 @@ export function toClientToolDefinitions(
       label: func.name,
       description: func.description ?? "",
       parameters: func.parameters as ToolDefinition["parameters"],
-      execute: async (...args: ToolExecuteArgs): Promise<AgentToolResult<unknown>> => {
+      execute: async (
+        ...args: ToolExecuteArgs
+      ): Promise<AgentToolResult<unknown>> => {
         const { toolCallId, params } = splitToolExecuteArgs(args);
         const outcome = await runBeforeToolCallHook({
           toolName: func.name,
@@ -268,7 +292,9 @@ export function toClientToolDefinitions(
           throw new Error(outcome.reason);
         }
         const adjustedParams = outcome.params;
-        const paramsRecord = isPlainObject(adjustedParams) ? adjustedParams : {};
+        const paramsRecord = isPlainObject(adjustedParams)
+          ? adjustedParams
+          : {};
         // Notify handler that a client tool was called
         if (onClientToolCall) {
           onClientToolCall(func.name, paramsRecord);

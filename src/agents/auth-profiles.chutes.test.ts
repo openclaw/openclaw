@@ -74,7 +74,9 @@ describe("auth-profiles (chutes)", () => {
         expect(resolved?.apiKey).toBe("at_new");
         expect(fetchSpy).toHaveBeenCalled();
 
-        const persisted = JSON.parse(await fs.readFile(authProfilePath, "utf8")) as {
+        const persisted = JSON.parse(
+          await fs.readFile(authProfilePath, "utf8"),
+        ) as {
           profiles?: Record<string, { access?: string }>;
         };
         expect(persisted.profiles?.["chutes:default"]?.access).toBe("at_new");

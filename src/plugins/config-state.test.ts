@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
+import {
+  normalizePluginsConfig,
+  resolveEffectiveEnableState,
+} from "./config-state.js";
 
 describe("normalizePluginsConfig", () => {
   it("uses default memory slot when not specified", () => {

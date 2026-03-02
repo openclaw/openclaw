@@ -6,8 +6,14 @@ const HIDDEN_STYLE_PATTERNS: Array<[string, RegExp]> = [
   ["font-size", /^\s*0(px|em|rem|pt|%)?\s*$/i],
   ["text-indent", /^\s*-\d{4,}px\s*$/],
   ["color", /^\s*transparent\s*$/i],
-  ["color", /^\s*rgba\s*\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*,\s*0(?:\.0+)?\s*\)\s*$/i],
-  ["color", /^\s*hsla\s*\(\s*[\d.]+\s*,\s*[\d.]+%?\s*,\s*[\d.]+%?\s*,\s*0(?:\.0+)?\s*\)\s*$/i],
+  [
+    "color",
+    /^\s*rgba\s*\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*,\s*0(?:\.0+)?\s*\)\s*$/i,
+  ],
+  [
+    "color",
+    /^\s*hsla\s*\(\s*[\d.]+\s*,\s*[\d.]+%?\s*,\s*[\d.]+%?\s*,\s*0(?:\.0+)?\s*\)\s*$/i,
+  ],
 ];
 
 // Class names associated with visually hidden content
@@ -29,7 +35,9 @@ function hasHiddenClass(className: string): boolean {
 function isStyleHidden(style: string): boolean {
   for (const [prop, pattern] of HIDDEN_STYLE_PATTERNS) {
     const escapedProp = prop.replace(/-/g, "\\-");
-    const match = style.match(new RegExp(`(?:^|;)\\s*${escapedProp}\\s*:\\s*([^;]+)`, "i"));
+    const match = style.match(
+      new RegExp(`(?:^|;)\\s*${escapedProp}\\s*:\\s*([^;]+)`, "i"),
+    );
     if (match && pattern.test(match[1])) {
       return true;
     }
@@ -89,12 +97,19 @@ function shouldRemoveElement(element: Element): boolean {
   const tagName = element.tagName.toLowerCase();
 
   // Always-remove tags
-  if (["meta", "template", "svg", "canvas", "iframe", "object", "embed"].includes(tagName)) {
+  if (
+    ["meta", "template", "svg", "canvas", "iframe", "object", "embed"].includes(
+      tagName,
+    )
+  ) {
     return true;
   }
 
   // input type=hidden
-  if (tagName === "input" && element.getAttribute("type")?.toLowerCase() === "hidden") {
+  if (
+    tagName === "input" &&
+    element.getAttribute("type")?.toLowerCase() === "hidden"
+  ) {
     return true;
   }
 

@@ -13,7 +13,9 @@ describe("createSandboxBridgeReadFile", () => {
         } as unknown as SandboxFsBridge,
       },
     });
-    await expect(scopedRead("media/inbound/example.png")).resolves.toEqual(Buffer.from("ok"));
+    await expect(scopedRead("media/inbound/example.png")).resolves.toEqual(
+      Buffer.from("ok"),
+    );
     expect(readFile).toHaveBeenCalledWith({
       filePath: "media/inbound/example.png",
       cwd: "/tmp/sandbox-root",

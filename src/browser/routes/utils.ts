@@ -32,7 +32,11 @@ export function getProfileContext(
   }
 }
 
-export function jsonError(res: BrowserResponse, status: number, message: string) {
+export function jsonError(
+  res: BrowserResponse,
+  status: number,
+  message: string,
+) {
   res.status(status).json({ error: message });
 }
 

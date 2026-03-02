@@ -80,7 +80,11 @@ export type OpenRouterScanOptions = {
   maxAgeDays?: number;
   providerFilter?: string;
   probe?: boolean;
-  onProgress?: (update: { phase: "catalog" | "probe"; completed: number; total: number }) => void;
+  onProgress?: (update: {
+    phase: "catalog" | "probe";
+    completed: number;
+    total: number;
+  }) => void;
 };
 
 type OpenAIModel = Model<"openai-completions">;
@@ -174,7 +178,9 @@ async function withTimeout<T>(
   }
 }
 
-async function fetchOpenRouterModels(fetchImpl: typeof fetch): Promise<OpenRouterModelMeta[]> {
+async function fetchOpenRouterModels(
+  fetchImpl: typeof fetch,
+): Promise<OpenRouterModelMeta[]> {
   const res = await fetchImpl(OPENROUTER_MODELS_URL, {
     headers: { Accept: "application/json" },
   });
@@ -194,17 +200,21 @@ async function fetchOpenRouterModels(fetchImpl: typeof fetch): Promise<OpenRoute
       if (!id) {
         return null;
       }
-      const name = typeof obj.name === "string" && obj.name.trim() ? obj.name.trim() : id;
+      const name =
+        typeof obj.name === "string" && obj.name.trim() ? obj.name.trim() : id;
 
       const contextLength =
-        typeof obj.context_length === "number" && Number.isFinite(obj.context_length)
+        typeof obj.context_length === "number" &&
+        Number.isFinite(obj.context_length)
           ? obj.context_length
           : null;
 
       const maxCompletionTokens =
-        typeof obj.max_completion_tokens === "number" && Number.isFinite(obj.max_completion_tokens)
+        typeof obj.max_completion_tokens === "number" &&
+        Number.isFinite(obj.max_completion_tokens)
           ? obj.max_completion_tokens
-          : typeof obj.max_output_tokens === "number" && Number.isFinite(obj.max_output_tokens)
+          : typeof obj.max_output_tokens === "number" &&
+              Number.isFinite(obj.max_output_tokens)
             ? obj.max_output_tokens
             : null;
 
@@ -219,7 +229,9 @@ async function fetchOpenRouterModels(fetchImpl: typeof fetch): Promise<OpenRoute
       const supportsToolsMeta = supportedParameters.includes("tools");
 
       const modality =
-        typeof obj.modality === "string" && obj.modality.trim() ? obj.modality.trim() : null;
+        typeof obj.modality === "string" && obj.modality.trim()
+          ? obj.modality.trim()
+          : null;
 
       const inferredParamB = inferParamBFromIdOrName(`${id} ${name}`);
       const createdAtMs = normalizeCreatedAtMs(obj.created_at);
@@ -269,7 +281,9 @@ async function probeTool(
       } satisfies OpenAICompletionsOptions),
     );
 
-    const hasToolCall = message.content.some((block) => block.type === "toolCall");
+    const hasToolCall = message.content.some(
+      (block) => block.type === "toolCall",
+    );
     if (!hasToolCall) {
       return {
         ok: false,
@@ -368,7 +382,10 @@ async function mapWithConcurrency<T, R>(
   opts?: { onProgress?: (completed: number, total: number) => void },
 ): Promise<R[]> {
   const limit = Math.max(1, Math.floor(concurrency));
-  const results: R[] = Array.from({ length: items.length }, () => undefined as R);
+  const results: R[] = Array.from(
+    { length: items.length },
+    () => undefined as R,
+  );
   let nextIndex = 0;
   let completed = 0;
 
@@ -390,7 +407,9 @@ async function mapWithConcurrency<T, R>(
     return results;
   }
 
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => worker()));
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, () => worker()),
+  );
   return results;
 }
 
@@ -401,11 +420,19 @@ export async function scanOpenRouterModels(
   const probe = options.probe ?? true;
   const apiKey = options.apiKey?.trim() || getEnvApiKey("openrouter") || "";
   if (probe && !apiKey) {
-    throw new Error("Missing OpenRouter API key. Set OPENROUTER_API_KEY to run models scan.");
+    throw new Error(
+      "Missing OpenRouter API key. Set OPENROUTER_API_KEY to run models scan.",
+    );
   }
 
-  const timeoutMs = Math.max(1, Math.floor(options.timeoutMs ?? DEFAULT_TIMEOUT_MS));
-  const concurrency = Math.max(1, Math.floor(options.concurrency ?? DEFAULT_CONCURRENCY));
+  const timeoutMs = Math.max(
+    1,
+    Math.floor(options.timeoutMs ?? DEFAULT_TIMEOUT_MS),
+  );
+  const concurrency = Math.max(
+    1,
+    Math.floor(options.concurrency ?? DEFAULT_CONCURRENCY),
+  );
   const minParamB = Math.max(0, Math.floor(options.minParamB ?? 0));
   const maxAgeDays = Math.max(0, Math.floor(options.maxAgeDays ?? 0));
   const providerFilter = options.providerFilter?.trim().toLowerCase() ?? "";

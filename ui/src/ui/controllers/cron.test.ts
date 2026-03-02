@@ -112,7 +112,9 @@ describe("cron controller", () => {
 
     await addCronJob(state);
 
-    const addCall = request.mock.calls.find(([method]) => method === "cron.add");
+    const addCall = request.mock.calls.find(
+      ([method]) => method === "cron.add",
+    );
     expect(addCall).toBeDefined();
     expect(addCall?.[1]).toMatchObject({
       name: "webhook job",
@@ -152,7 +154,9 @@ describe("cron controller", () => {
 
     await addCronJob(state);
 
-    const addCall = request.mock.calls.find(([method]) => method === "cron.add");
+    const addCall = request.mock.calls.find(
+      ([method]) => method === "cron.add",
+    );
     expect(addCall).toBeDefined();
     expect(addCall?.[1]).toMatchObject({
       sessionKey: "agent:ops:main",
@@ -190,7 +194,9 @@ describe("cron controller", () => {
 
     await addCronJob(state);
 
-    const addCall = request.mock.calls.find(([method]) => method === "cron.add");
+    const addCall = request.mock.calls.find(
+      ([method]) => method === "cron.add",
+    );
     expect(addCall).toBeDefined();
     expect(addCall?.[1]).toMatchObject({
       payload: { kind: "agentTurn", lightContext: true },
@@ -231,9 +237,13 @@ describe("cron controller", () => {
 
     await addCronJob(state);
 
-    const addCall = request.mock.calls.find(([method]) => method === "cron.add");
+    const addCall = request.mock.calls.find(
+      ([method]) => method === "cron.add",
+    );
     expect(addCall).toBeDefined();
-    expect((addCall?.[1] as { delivery?: unknown } | undefined)?.delivery).toEqual({
+    expect(
+      (addCall?.[1] as { delivery?: unknown } | undefined)?.delivery,
+    ).toEqual({
       mode: "none",
     });
   });
@@ -273,10 +283,13 @@ describe("cron controller", () => {
 
     await addCronJob(state);
 
-    const updateCall = request.mock.calls.find(([method]) => method === "cron.update");
+    const updateCall = request.mock.calls.find(
+      ([method]) => method === "cron.update",
+    );
     expect(updateCall).toBeDefined();
     expect(
-      (updateCall?.[1] as { patch?: { delivery?: unknown } } | undefined)?.patch?.delivery,
+      (updateCall?.[1] as { patch?: { delivery?: unknown } } | undefined)?.patch
+        ?.delivery,
     ).toEqual({
       mode: "none",
     });
@@ -317,14 +330,18 @@ describe("cron controller", () => {
 
     await addCronJob(state);
 
-    const addCall = request.mock.calls.find(([method]) => method === "cron.add");
+    const addCall = request.mock.calls.find(
+      ([method]) => method === "cron.add",
+    );
     expect(addCall).toBeDefined();
     expect(addCall?.[1]).toMatchObject({
       name: "main job",
     });
     // Delivery is explicitly sent as { mode: "none" } to clear the announce delivery on the backend.
     // Previously this was sent as undefined, which left announce in place (bug #31075).
-    expect((addCall?.[1] as { delivery?: unknown } | undefined)?.delivery).toEqual({
+    expect(
+      (addCall?.[1] as { delivery?: unknown } | undefined)?.delivery,
+    ).toEqual({
       mode: "none",
     });
     // After submit, form is reset to defaults (deliveryMode = "announce" from DEFAULT_CRON_FORM).
@@ -367,7 +384,9 @@ describe("cron controller", () => {
 
     await addCronJob(state);
 
-    const updateCall = request.mock.calls.find(([method]) => method === "cron.update");
+    const updateCall = request.mock.calls.find(
+      ([method]) => method === "cron.update",
+    );
     expect(updateCall).toBeDefined();
     expect(updateCall?.[1]).toMatchObject({
       id: "job-1",
@@ -432,7 +451,9 @@ describe("cron controller", () => {
 
     await addCronJob(state);
 
-    const updateCall = request.mock.calls.find(([method]) => method === "cron.update");
+    const updateCall = request.mock.calls.find(
+      ([method]) => method === "cron.update",
+    );
     expect(updateCall).toBeDefined();
     expect(updateCall?.[1]).toMatchObject({
       id: "job-clear-account-id",
@@ -458,8 +479,17 @@ describe("cron controller", () => {
       schedule: { kind: "every" as const, everyMs: 7_200_000 },
       sessionTarget: "isolated" as const,
       wakeMode: "next-heartbeat" as const,
-      payload: { kind: "agentTurn" as const, message: "ship it", timeoutSeconds: 45 },
-      delivery: { mode: "announce" as const, channel: "telegram", to: "123", accountId: "bot-2" },
+      payload: {
+        kind: "agentTurn" as const,
+        message: "ship it",
+        timeoutSeconds: 45,
+      },
+      delivery: {
+        mode: "announce" as const,
+        channel: "telegram",
+        to: "123",
+        accountId: "bot-2",
+      },
       state: {},
     };
 
@@ -516,7 +546,9 @@ describe("cron controller", () => {
 
     await addCronJob(state);
 
-    const updateCall = request.mock.calls.find(([method]) => method === "cron.update");
+    const updateCall = request.mock.calls.find(
+      ([method]) => method === "cron.update",
+    );
     expect(updateCall).toBeDefined();
     expect(updateCall?.[1]).toMatchObject({
       id: "job-2",
@@ -576,7 +608,9 @@ describe("cron controller", () => {
 
     await addCronJob(state);
 
-    const updateCall = request.mock.calls.find(([method]) => method === "cron.update");
+    const updateCall = request.mock.calls.find(
+      ([method]) => method === "cron.update",
+    );
     expect(updateCall).toBeDefined();
     expect(updateCall?.[1]).toMatchObject({
       id: "job-clear-light",
@@ -620,7 +654,9 @@ describe("cron controller", () => {
 
     await addCronJob(state);
 
-    const updateCall = request.mock.calls.find(([method]) => method === "cron.update");
+    const updateCall = request.mock.calls.find(
+      ([method]) => method === "cron.update",
+    );
     expect(updateCall).toBeDefined();
     expect(updateCall?.[1]).toMatchObject({
       id: "job-alert",
@@ -667,7 +703,9 @@ describe("cron controller", () => {
 
     await addCronJob(state);
 
-    const updateCall = request.mock.calls.find(([method]) => method === "cron.update");
+    const updateCall = request.mock.calls.find(
+      ([method]) => method === "cron.update",
+    );
     expect(updateCall).toBeDefined();
     expect(updateCall?.[1]).toMatchObject({
       id: "job-alert-mode",
@@ -712,7 +750,9 @@ describe("cron controller", () => {
 
     await addCronJob(state);
 
-    const updateCall = request.mock.calls.find(([method]) => method === "cron.update");
+    const updateCall = request.mock.calls.find(
+      ([method]) => method === "cron.update",
+    );
     expect(updateCall).toBeDefined();
     expect(updateCall?.[1]).toMatchObject({
       id: "job-alert-no-cooldown",
@@ -725,8 +765,11 @@ describe("cron controller", () => {
       },
     });
     expect(
-      (updateCall?.[1] as { patch?: { failureAlert?: { cooldownMs?: number } } })?.patch
-        ?.failureAlert,
+      (
+        updateCall?.[1] as {
+          patch?: { failureAlert?: { cooldownMs?: number } };
+        }
+      )?.patch?.failureAlert,
     ).not.toHaveProperty("cooldownMs");
   });
 
@@ -757,7 +800,9 @@ describe("cron controller", () => {
 
     await addCronJob(state);
 
-    const updateCall = request.mock.calls.find(([method]) => method === "cron.update");
+    const updateCall = request.mock.calls.find(
+      ([method]) => method === "cron.update",
+    );
     expect(updateCall).toBeDefined();
     expect(updateCall?.[1]).toMatchObject({
       id: "job-no-alert",
@@ -774,7 +819,12 @@ describe("cron controller", () => {
       deleteAfterRun: true,
       createdAtMs: 0,
       updatedAtMs: 0,
-      schedule: { kind: "cron" as const, expr: "0 7 * * *", tz: "UTC", staggerMs: 60_000 },
+      schedule: {
+        kind: "cron" as const,
+        expr: "0 7 * * *",
+        tz: "UTC",
+        staggerMs: 60_000,
+      },
       sessionTarget: "isolated" as const,
       wakeMode: "now" as const,
       payload: {
@@ -957,11 +1007,17 @@ describe("cron controller", () => {
     startCronClone(state, sourceJob);
     await addCronJob(state);
 
-    const addCall = request.mock.calls.find(([method]) => method === "cron.add");
-    const updateCall = request.mock.calls.find(([method]) => method === "cron.update");
+    const addCall = request.mock.calls.find(
+      ([method]) => method === "cron.add",
+    );
+    const updateCall = request.mock.calls.find(
+      ([method]) => method === "cron.update",
+    );
     expect(addCall).toBeDefined();
     expect(updateCall).toBeUndefined();
-    expect((addCall?.[1] as { name?: string } | undefined)?.name).toBe("Daily ping copy");
+    expect((addCall?.[1] as { name?: string } | undefined)?.name).toBe(
+      "Daily ping copy",
+    );
   });
 
   it("loads paged jobs with query/filter/sort params", async () => {
@@ -1065,6 +1121,9 @@ describe("cron controller", () => {
 
     await runCronJob(state, job, "due");
 
-    expect(request).toHaveBeenCalledWith("cron.run", { id: "job-due", mode: "due" });
+    expect(request).toHaveBeenCalledWith("cron.run", {
+      id: "job-due",
+      mode: "due",
+    });
   });
 });

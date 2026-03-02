@@ -14,11 +14,14 @@ const forceFreePortAndWait = vi.fn(async (_port: number, _opts: unknown) => ({
   escalatedToSigkill: false,
 }));
 const ensureDevGatewayConfig = vi.fn(async (_opts?: unknown) => {});
-const runGatewayLoop = vi.fn(async ({ start }: { start: () => Promise<unknown> }) => {
-  await start();
-});
+const runGatewayLoop = vi.fn(
+  async ({ start }: { start: () => Promise<unknown> }) => {
+    await start();
+  },
+);
 
-const { runtimeErrors, defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
+const { runtimeErrors, defaultRuntime, resetRuntimeCapture } =
+  createCliRuntimeCapture();
 
 vi.mock("../../config/config.js", () => ({
   getConfigPath: () => "/tmp/openclaw-test-missing-config.json",
@@ -29,7 +32,10 @@ vi.mock("../../config/config.js", () => ({
 }));
 
 vi.mock("../../gateway/auth.js", () => ({
-  resolveGatewayAuth: (params: { authConfig?: { token?: string }; env?: NodeJS.ProcessEnv }) => ({
+  resolveGatewayAuth: (params: {
+    authConfig?: { token?: string };
+    env?: NodeJS.ProcessEnv;
+  }) => ({
     mode: "token",
     token: params.authConfig?.token ?? params.env?.OPENCLAW_GATEWAY_TOKEN,
     password: undefined,
@@ -38,7 +44,8 @@ vi.mock("../../gateway/auth.js", () => ({
 }));
 
 vi.mock("../../gateway/server.js", () => ({
-  startGatewayServer: (port: number, opts?: unknown) => startGatewayServer(port, opts),
+  startGatewayServer: (port: number, opts?: unknown) =>
+    startGatewayServer(port, opts),
 }));
 
 vi.mock("../../gateway/ws-logging.js", () => ({
@@ -80,7 +87,8 @@ vi.mock("../command-format.js", () => ({
 }));
 
 vi.mock("../ports.js", () => ({
-  forceFreePortAndWait: (port: number, opts: unknown) => forceFreePortAndWait(port, opts),
+  forceFreePortAndWait: (port: number, opts: unknown) =>
+    forceFreePortAndWait(port, opts),
 }));
 
 vi.mock("./dev.js", () => ({
@@ -88,7 +96,8 @@ vi.mock("./dev.js", () => ({
 }));
 
 vi.mock("./run-loop.js", () => ({
-  runGatewayLoop: (params: { start: () => Promise<unknown> }) => runGatewayLoop(params),
+  runGatewayLoop: (params: { start: () => Promise<unknown> }) =>
+    runGatewayLoop(params),
 }));
 
 describe("gateway run option collisions", () => {
@@ -165,20 +174,38 @@ describe("gateway run option collisions", () => {
   });
 
   it("accepts --auth none override", async () => {
-    await runGatewayCli(["gateway", "run", "--auth", "none", "--allow-unconfigured"]);
+    await runGatewayCli([
+      "gateway",
+      "run",
+      "--auth",
+      "none",
+      "--allow-unconfigured",
+    ]);
 
     expectAuthOverrideMode("none");
   });
 
   it("accepts --auth trusted-proxy override", async () => {
-    await runGatewayCli(["gateway", "run", "--auth", "trusted-proxy", "--allow-unconfigured"]);
+    await runGatewayCli([
+      "gateway",
+      "run",
+      "--auth",
+      "trusted-proxy",
+      "--allow-unconfigured",
+    ]);
 
     expectAuthOverrideMode("trusted-proxy");
   });
 
   it("prints all supported modes on invalid --auth value", async () => {
     await expect(
-      runGatewayCli(["gateway", "run", "--auth", "bad-mode", "--allow-unconfigured"]),
+      runGatewayCli([
+        "gateway",
+        "run",
+        "--auth",
+        "bad-mode",
+        "--allow-unconfigured",
+      ]),
     ).rejects.toThrow("__exit__:1");
 
     expect(runtimeErrors).toContain(

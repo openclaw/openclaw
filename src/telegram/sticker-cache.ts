@@ -124,7 +124,11 @@ export function getAllCachedStickers(): CachedSticker[] {
 /**
  * Get cache statistics.
  */
-export function getCacheStats(): { count: number; oldestAt?: string; newestAt?: string } {
+export function getCacheStats(): {
+  count: number;
+  oldestAt?: string;
+  newestAt?: string;
+} {
   const cache = loadCache();
   const stickers = Object.values(cache.stickers);
   if (stickers.length === 0) {
@@ -156,18 +160,29 @@ export interface DescribeStickerParams {
  * Auto-detects an available vision provider based on configured API keys.
  * Returns null if no vision provider is available.
  */
-export async function describeStickerImage(params: DescribeStickerParams): Promise<string | null> {
+export async function describeStickerImage(
+  params: DescribeStickerParams,
+): Promise<string | null> {
   const { imagePath, cfg, agentDir, agentId } = params;
 
   const defaultModel = resolveDefaultModelForAgent({ cfg, agentId });
-  let activeModel = undefined as { provider: string; model: string } | undefined;
+  let activeModel = undefined as
+    | { provider: string; model: string }
+    | undefined;
   let catalog: ModelCatalogEntry[] = [];
   try {
     catalog = await loadModelCatalog({ config: cfg });
-    const entry = findModelInCatalog(catalog, defaultModel.provider, defaultModel.model);
+    const entry = findModelInCatalog(
+      catalog,
+      defaultModel.provider,
+      defaultModel.model,
+    );
     const supportsVision = modelSupportsVision(entry);
     if (supportsVision) {
-      activeModel = { provider: defaultModel.provider, model: defaultModel.model };
+      activeModel = {
+        provider: defaultModel.provider,
+        model: defaultModel.model,
+      };
     }
   } catch {
     // Ignore catalog failures; fall back to auto selection.
@@ -185,7 +200,8 @@ export async function describeStickerImage(params: DescribeStickerParams): Promi
   const selectCatalogModel = (provider: string) => {
     const entries = catalog.filter(
       (entry) =>
-        entry.provider.toLowerCase() === provider.toLowerCase() && modelSupportsVision(entry),
+        entry.provider.toLowerCase() === provider.toLowerCase() &&
+        modelSupportsVision(entry),
     );
     if (entries.length === 0) {
       return undefined;
@@ -205,7 +221,9 @@ export async function describeStickerImage(params: DescribeStickerParams): Promi
   let resolved = null as { provider: string; model?: string } | null;
   if (
     activeModel &&
-    VISION_PROVIDERS.includes(activeModel.provider as (typeof VISION_PROVIDERS)[number]) &&
+    VISION_PROVIDERS.includes(
+      activeModel.provider as (typeof VISION_PROVIDERS)[number],
+    ) &&
     (await hasProviderKey(activeModel.provider))
   ) {
     resolved = activeModel;
@@ -233,7 +251,9 @@ export async function describeStickerImage(params: DescribeStickerParams): Promi
   }
 
   if (!resolved?.model) {
-    logVerbose("telegram: no vision provider available for sticker description");
+    logVerbose(
+      "telegram: no vision provider available for sticker description",
+    );
     return null;
   }
 
@@ -243,7 +263,8 @@ export async function describeStickerImage(params: DescribeStickerParams): Promi
   try {
     const buffer = await fs.readFile(imagePath);
     // Dynamic import to avoid circular dependency
-    const { describeImageWithModel } = await import("../media-understanding/providers/image.js");
+    const { describeImageWithModel } =
+      await import("../media-understanding/providers/image.js");
     const result = await describeImageWithModel({
       buffer,
       fileName: "sticker.webp",

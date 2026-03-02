@@ -33,13 +33,19 @@ export {
   syncSkillsToWorkspace,
 } from "./skills/workspace.js";
 
-export function resolveSkillsInstallPreferences(config?: OpenClawConfig): SkillsInstallPreferences {
+export function resolveSkillsInstallPreferences(
+  config?: OpenClawConfig,
+): SkillsInstallPreferences {
   const raw = config?.skills?.install;
   const preferBrew = raw?.preferBrew ?? true;
-  const managerRaw = typeof raw?.nodeManager === "string" ? raw.nodeManager.trim() : "";
+  const managerRaw =
+    typeof raw?.nodeManager === "string" ? raw.nodeManager.trim() : "";
   const manager = managerRaw.toLowerCase();
   const nodeManager: SkillsInstallPreferences["nodeManager"] =
-    manager === "pnpm" || manager === "yarn" || manager === "bun" || manager === "npm"
+    manager === "pnpm" ||
+    manager === "yarn" ||
+    manager === "bun" ||
+    manager === "npm"
       ? manager
       : "npm";
   return { preferBrew, nodeManager };

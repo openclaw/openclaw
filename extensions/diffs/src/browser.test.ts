@@ -20,7 +20,9 @@ describe("PlaywrightDiffScreenshotter", () => {
 
   beforeEach(async () => {
     vi.useFakeTimers();
-    rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-diffs-browser-"));
+    rootDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-diffs-browser-"),
+    );
     outputPath = path.join(rootDir, "preview.png");
     launchMock.mockReset();
     const browserModule = await import("./browser.js");
@@ -35,7 +37,8 @@ describe("PlaywrightDiffScreenshotter", () => {
   });
 
   it("reuses the same browser across renders and closes it after the idle window", async () => {
-    const { pages, browser, screenshotter } = await createScreenshotterHarness();
+    const { pages, browser, screenshotter } =
+      await createScreenshotterHarness();
 
     await screenshotter.screenshotHtml({
       html: '<html><head></head><body><main class="oc-frame"></main></body></html>',
@@ -94,7 +97,8 @@ describe("PlaywrightDiffScreenshotter", () => {
   });
 
   it("renders PDF output when format is pdf", async () => {
-    const { pages, browser, screenshotter } = await createScreenshotterHarness();
+    const { pages, browser, screenshotter } =
+      await createScreenshotterHarness();
     const pdfPath = path.join(rootDir, "preview.pdf");
 
     await screenshotter.screenshotHtml({
@@ -113,7 +117,9 @@ describe("PlaywrightDiffScreenshotter", () => {
     expect(launchMock).toHaveBeenCalledTimes(1);
     expect(pages).toHaveLength(1);
     expect(pages[0]?.pdf).toHaveBeenCalledTimes(1);
-    const pdfCall = pages[0]?.pdf.mock.calls[0]?.[0] as Record<string, unknown> | undefined;
+    const pdfCall = pages[0]?.pdf.mock.calls[0]?.[0] as
+      | Record<string, unknown>
+      | undefined;
     expect(pdfCall).toBeDefined();
     expect(pdfCall).not.toHaveProperty("pageRanges");
     expect(pages[0]?.screenshot).toHaveBeenCalledTimes(0);
@@ -213,7 +219,9 @@ function createMockBrowser(
     screenshot: ReturnType<typeof vi.fn>;
     pdf: ReturnType<typeof vi.fn>;
   }>,
-  options?: { boundingBox?: { x: number; y: number; width: number; height: number } },
+  options?: {
+    boundingBox?: { x: number; y: number; width: number; height: number };
+  },
 ) {
   const browser = {
     newPage: vi.fn(async () => {
@@ -231,9 +239,11 @@ function createMockPage(options?: {
   boundingBox?: { x: number; y: number; width: number; height: number };
 }) {
   const box = options?.boundingBox ?? { x: 40, y: 40, width: 640, height: 240 };
-  const screenshot = vi.fn(async ({ path: screenshotPath }: { path: string }) => {
-    await fs.writeFile(screenshotPath, Buffer.from("png"));
-  });
+  const screenshot = vi.fn(
+    async ({ path: screenshotPath }: { path: string }) => {
+      await fs.writeFile(screenshotPath, Buffer.from("png"));
+    },
+  );
   const pdf = vi.fn(async ({ path: pdfPath }: { path: string }) => {
     await fs.writeFile(pdfPath, "%PDF-1.7 mock");
   });

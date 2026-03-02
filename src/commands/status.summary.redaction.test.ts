@@ -24,7 +24,9 @@ describe("redactSensitiveStatusSummary", () => {
     const input: StatusSummary = {
       heartbeat: {
         defaultAgentId: "main",
-        agents: [{ agentId: "main", enabled: true, every: "5m", everyMs: 300_000 }],
+        agents: [
+          { agentId: "main", enabled: true, every: "5m", everyMs: 300_000 },
+        ],
       },
       channelSummary: ["ok"],
       queuedSystemEvents: ["none"],
@@ -46,7 +48,10 @@ describe("redactSensitiveStatusSummary", () => {
 
     const redacted = redactSensitiveStatusSummary(input);
     expect(redacted.sessions.paths).toEqual([]);
-    expect(redacted.sessions.defaults).toEqual({ model: null, contextTokens: null });
+    expect(redacted.sessions.defaults).toEqual({
+      model: null,
+      contextTokens: null,
+    });
     expect(redacted.sessions.recent).toEqual([]);
     expect(redacted.sessions.byAgent[0]?.path).toBe("[redacted]");
     expect(redacted.sessions.byAgent[0]?.recent).toEqual([]);

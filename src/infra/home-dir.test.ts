@@ -1,6 +1,10 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { expandHomePrefix, resolveEffectiveHomeDir, resolveRequiredHomeDir } from "./home-dir.js";
+import {
+  expandHomePrefix,
+  resolveEffectiveHomeDir,
+  resolveRequiredHomeDir,
+} from "./home-dir.js";
 
 describe("resolveEffectiveHomeDir", () => {
   it("prefers OPENCLAW_HOME over HOME and USERPROFILE", () => {
@@ -16,15 +20,17 @@ describe("resolveEffectiveHomeDir", () => {
   });
 
   it("falls back to HOME then USERPROFILE then homedir", () => {
-    expect(resolveEffectiveHomeDir({ HOME: "/home/alice" } as NodeJS.ProcessEnv)).toBe(
-      path.resolve("/home/alice"),
-    );
-    expect(resolveEffectiveHomeDir({ USERPROFILE: "C:/Users/alice" } as NodeJS.ProcessEnv)).toBe(
-      path.resolve("C:/Users/alice"),
-    );
-    expect(resolveEffectiveHomeDir({} as NodeJS.ProcessEnv, () => "/fallback")).toBe(
-      path.resolve("/fallback"),
-    );
+    expect(
+      resolveEffectiveHomeDir({ HOME: "/home/alice" } as NodeJS.ProcessEnv),
+    ).toBe(path.resolve("/home/alice"));
+    expect(
+      resolveEffectiveHomeDir({
+        USERPROFILE: "C:/Users/alice",
+      } as NodeJS.ProcessEnv),
+    ).toBe(path.resolve("C:/Users/alice"));
+    expect(
+      resolveEffectiveHomeDir({} as NodeJS.ProcessEnv, () => "/fallback"),
+    ).toBe(path.resolve("/fallback"));
   });
 
   it("expands OPENCLAW_HOME when set to ~", () => {
@@ -56,9 +62,12 @@ describe("resolveRequiredHomeDir", () => {
 
   it("returns cwd when OPENCLAW_HOME is tilde-only and no fallback home exists", () => {
     expect(
-      resolveRequiredHomeDir({ OPENCLAW_HOME: "~" } as NodeJS.ProcessEnv, () => {
-        throw new Error("no home");
-      }),
+      resolveRequiredHomeDir(
+        { OPENCLAW_HOME: "~" } as NodeJS.ProcessEnv,
+        () => {
+          throw new Error("no home");
+        },
+      ),
     ).toBe(process.cwd());
   });
 });

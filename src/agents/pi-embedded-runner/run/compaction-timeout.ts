@@ -6,7 +6,9 @@ export type CompactionTimeoutSignal = {
   isCompactionInFlight: boolean;
 };
 
-export function shouldFlagCompactionTimeout(signal: CompactionTimeoutSignal): boolean {
+export function shouldFlagCompactionTimeout(
+  signal: CompactionTimeoutSignal,
+): boolean {
   if (!signal.isTimeout) {
     return false;
   }

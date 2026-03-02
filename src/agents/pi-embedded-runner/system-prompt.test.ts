@@ -1,6 +1,9 @@
 import type { AgentSession } from "@mariozechner/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
-import { applySystemPromptOverrideToSession, createSystemPromptOverride } from "./system-prompt.js";
+import {
+  applySystemPromptOverrideToSession,
+  createSystemPromptOverride,
+} from "./system-prompt.js";
 
 function createMockSession() {
   const setSystemPrompt = vi.fn();

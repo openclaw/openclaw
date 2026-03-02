@@ -10,7 +10,9 @@ export type CliOutboundSendSource = {
 };
 
 // Provider docking: extend this mapping when adding new outbound send deps.
-export function createOutboundSendDepsFromCliSource(deps: CliOutboundSendSource): OutboundSendDeps {
+export function createOutboundSendDepsFromCliSource(
+  deps: CliOutboundSendSource,
+): OutboundSendDeps {
   return {
     sendWhatsApp: deps.sendMessageWhatsApp,
     sendTelegram: deps.sendMessageTelegram,

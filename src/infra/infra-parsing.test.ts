@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { isDiagnosticFlagEnabled, resolveDiagnosticFlags } from "./diagnostic-flags.js";
+import {
+  isDiagnosticFlagEnabled,
+  resolveDiagnosticFlags,
+} from "./diagnostic-flags.js";
 import { isMainModule } from "./is-main.js";
 import { buildNodeShellCommand } from "./node-shell.js";
 import { parseSshTarget } from "./ssh-tunnel.js";
@@ -16,7 +19,9 @@ describe("infra parsing", () => {
       } as NodeJS.ProcessEnv;
 
       const flags = resolveDiagnosticFlags(cfg, env);
-      expect(flags).toEqual(expect.arrayContaining(["telegram.http", "cache.*", "foo", "bar"]));
+      expect(flags).toEqual(
+        expect.arrayContaining(["telegram.http", "cache.*", "foo", "bar"]),
+      );
       expect(isDiagnosticFlagEnabled("telegram.http", cfg, env)).toBe(true);
       expect(isDiagnosticFlagEnabled("cache.hit", cfg, env)).toBe(true);
       expect(isDiagnosticFlagEnabled("foo", cfg, env)).toBe(true);
@@ -24,12 +29,16 @@ describe("infra parsing", () => {
 
     it("treats env true as wildcard", () => {
       const env = { OPENCLAW_DIAGNOSTICS: "1" } as NodeJS.ProcessEnv;
-      expect(isDiagnosticFlagEnabled("anything.here", undefined, env)).toBe(true);
+      expect(isDiagnosticFlagEnabled("anything.here", undefined, env)).toBe(
+        true,
+      );
     });
 
     it("treats env false as disabled", () => {
       const env = { OPENCLAW_DIAGNOSTICS: "0" } as NodeJS.ProcessEnv;
-      expect(isDiagnosticFlagEnabled("telegram.http", undefined, env)).toBe(false);
+      expect(isDiagnosticFlagEnabled("telegram.http", undefined, env)).toBe(
+        false,
+      );
     });
   });
 
@@ -63,7 +72,9 @@ describe("infra parsing", () => {
           argv: ["node", "/repo/openclaw.mjs"],
           cwd: "/repo",
           env: {},
-          wrapperEntryPairs: [{ wrapperBasename: "openclaw.mjs", entryBasename: "entry.js" }],
+          wrapperEntryPairs: [
+            { wrapperBasename: "openclaw.mjs", entryBasename: "entry.js" },
+          ],
         }),
       ).toBe(true);
     });
@@ -86,7 +97,9 @@ describe("infra parsing", () => {
           argv: ["node", "/repo/openclaw.mjs"],
           cwd: "/repo",
           env: {},
-          wrapperEntryPairs: [{ wrapperBasename: "openclaw.mjs", entryBasename: "entry.js" }],
+          wrapperEntryPairs: [
+            { wrapperBasename: "openclaw.mjs", entryBasename: "entry.js" },
+          ],
         }),
       ).toBe(false);
     });
@@ -132,11 +145,19 @@ describe("infra parsing", () => {
     });
 
     it("uses /bin/sh for darwin", () => {
-      expect(buildNodeShellCommand("echo hi", "darwin")).toEqual(["/bin/sh", "-lc", "echo hi"]);
+      expect(buildNodeShellCommand("echo hi", "darwin")).toEqual([
+        "/bin/sh",
+        "-lc",
+        "echo hi",
+      ]);
     });
 
     it("uses /bin/sh when platform missing", () => {
-      expect(buildNodeShellCommand("echo hi")).toEqual(["/bin/sh", "-lc", "echo hi"]);
+      expect(buildNodeShellCommand("echo hi")).toEqual([
+        "/bin/sh",
+        "-lc",
+        "echo hi",
+      ]);
     });
   });
 

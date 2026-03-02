@@ -16,9 +16,9 @@ describe("canvas a2ui copy", () => {
 
   it("throws a helpful error when assets are missing", async () => {
     await withA2uiFixture(async (dir) => {
-      await expect(copyA2uiAssets({ srcDir: dir, outDir: path.join(dir, "out") })).rejects.toThrow(
-        'Run "pnpm canvas:a2ui:bundle"',
-      );
+      await expect(
+        copyA2uiAssets({ srcDir: dir, outDir: path.join(dir, "out") }),
+      ).rejects.toThrow('Run "pnpm canvas:a2ui:bundle"');
     });
   });
 
@@ -45,13 +45,25 @@ describe("canvas a2ui copy", () => {
       const srcDir = path.join(dir, "src");
       const outDir = path.join(dir, "dist");
       await fs.mkdir(srcDir, { recursive: true });
-      await fs.writeFile(path.join(srcDir, "index.html"), "<html></html>", "utf8");
-      await fs.writeFile(path.join(srcDir, "a2ui.bundle.js"), "console.log(1);", "utf8");
+      await fs.writeFile(
+        path.join(srcDir, "index.html"),
+        "<html></html>",
+        "utf8",
+      );
+      await fs.writeFile(
+        path.join(srcDir, "a2ui.bundle.js"),
+        "console.log(1);",
+        "utf8",
+      );
 
       await copyA2uiAssets({ srcDir, outDir });
 
-      await expect(fs.stat(path.join(outDir, "index.html"))).resolves.toBeTruthy();
-      await expect(fs.stat(path.join(outDir, "a2ui.bundle.js"))).resolves.toBeTruthy();
+      await expect(
+        fs.stat(path.join(outDir, "index.html")),
+      ).resolves.toBeTruthy();
+      await expect(
+        fs.stat(path.join(outDir, "a2ui.bundle.js")),
+      ).resolves.toBeTruthy();
     });
   });
 });

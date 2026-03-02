@@ -2,7 +2,8 @@ import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { sendBlueBubblesReaction } from "./reactions.js";
 
 vi.mock("./accounts.js", async () => {
-  const { createBlueBubblesAccountsMockModule } = await import("./test-harness.js");
+  const { createBlueBubblesAccountsMockModule } =
+    await import("./test-harness.js");
   return createBlueBubblesAccountsMockModule();
 });
 

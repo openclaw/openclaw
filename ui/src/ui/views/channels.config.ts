@@ -1,8 +1,16 @@
 import { html } from "lit";
 import type { ConfigUiHints } from "../types.ts";
-import { formatChannelExtraValue, resolveChannelConfigValue } from "./channel-config-extras.ts";
+import {
+  formatChannelExtraValue,
+  resolveChannelConfigValue,
+} from "./channel-config-extras.ts";
 import type { ChannelsProps } from "./channels.types.ts";
-import { analyzeConfigSchema, renderNode, schemaType, type JsonSchema } from "./config-form.ts";
+import {
+  analyzeConfigSchema,
+  renderNode,
+  schemaType,
+  type JsonSchema,
+} from "./config-form.ts";
 
 type ChannelConfigFormProps = {
   channelId: string;
@@ -30,7 +38,11 @@ function resolveSchemaNode(
         continue;
       }
       const additional = current.additionalProperties;
-      if (typeof key === "string" && additional && typeof additional === "object") {
+      if (
+        typeof key === "string" &&
+        additional &&
+        typeof additional === "object"
+      ) {
         current = additional;
         continue;
       }
@@ -40,7 +52,9 @@ function resolveSchemaNode(
       if (typeof key !== "number") {
         return null;
       }
-      const items = Array.isArray(current.items) ? current.items[0] : current.items;
+      const items = Array.isArray(current.items)
+        ? current.items[0]
+        : current.items;
       current = items ?? null;
       continue;
     }
@@ -115,25 +129,24 @@ export function renderChannelConfigForm(props: ChannelConfigFormProps) {
   `;
 }
 
-export function renderChannelConfigSection(params: { channelId: string; props: ChannelsProps }) {
+export function renderChannelConfigSection(params: {
+  channelId: string;
+  props: ChannelsProps;
+}) {
   const { channelId, props } = params;
   const disabled = props.configSaving || props.configSchemaLoading;
   return html`
     <div style="margin-top: 16px;">
-      ${
-        props.configSchemaLoading
-          ? html`
-              <div class="muted">Loading config schema…</div>
-            `
-          : renderChannelConfigForm({
-              channelId,
-              configValue: props.configForm,
-              schema: props.configSchema,
-              uiHints: props.configUiHints,
-              disabled,
-              onPatch: props.onConfigPatch,
-            })
-      }
+      ${props.configSchemaLoading
+        ? html` <div class="muted">Loading config schema…</div> `
+        : renderChannelConfigForm({
+            channelId,
+            configValue: props.configForm,
+            schema: props.configSchema,
+            uiHints: props.configUiHints,
+            disabled,
+            onPatch: props.onConfigPatch,
+          })}
       <div class="row" style="margin-top: 12px;">
         <button
           class="btn primary"

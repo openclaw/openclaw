@@ -5,14 +5,23 @@ import type { MentionTarget } from "./mention.js";
 import { buildMentionedMessage, buildMentionedCardContent } from "./mention.js";
 import { parsePostContent } from "./post.js";
 import { getFeishuRuntime } from "./runtime.js";
-import { assertFeishuMessageApiSuccess, toFeishuSendResult } from "./send-result.js";
+import {
+  assertFeishuMessageApiSuccess,
+  toFeishuSendResult,
+} from "./send-result.js";
 import { resolveFeishuSendTarget } from "./send-target.js";
 import type { FeishuSendResult } from "./types.js";
 
 const WITHDRAWN_REPLY_ERROR_CODES = new Set([230011, 231003]);
 
-function shouldFallbackFromReplyTarget(response: { code?: number; msg?: string }): boolean {
-  if (response.code !== undefined && WITHDRAWN_REPLY_ERROR_CODES.has(response.code)) {
+function shouldFallbackFromReplyTarget(response: {
+  code?: number;
+  msg?: string;
+}): boolean {
+  if (
+    response.code !== undefined &&
+    WITHDRAWN_REPLY_ERROR_CODES.has(response.code)
+  ) {
     return true;
   }
   const msg = response.msg?.toLowerCase() ?? "";
@@ -61,7 +70,10 @@ function parseInteractiveCardContent(parsed: unknown): string {
   return texts.join("\n").trim() || "[Interactive Card]";
 }
 
-function parseQuotedMessageContent(rawContent: string, msgType: string): string {
+function parseQuotedMessageContent(
+  rawContent: string,
+  msgType: string,
+): string {
   if (!rawContent) {
     return "";
   }
@@ -90,7 +102,8 @@ function parseQuotedMessageContent(rawContent: string, msgType: string): string 
     return parsed;
   }
 
-  const genericText = (parsed as { text?: unknown; title?: unknown } | null)?.text;
+  const genericText = (parsed as { text?: unknown; title?: unknown } | null)
+    ?.text;
   if (typeof genericText === "string" && genericText.trim()) {
     return genericText;
   }
@@ -159,7 +172,8 @@ export async function getMessageFeishu(params: {
     const rawItem = response.data?.items?.[0] ?? response.data;
     const item =
       rawItem &&
-      (rawItem.body !== undefined || (rawItem as { message_id?: string }).message_id !== undefined)
+      (rawItem.body !== undefined ||
+        (rawItem as { message_id?: string }).message_id !== undefined)
         ? rawItem
         : null;
     if (!item) {
@@ -174,11 +188,14 @@ export async function getMessageFeishu(params: {
       messageId: item.message_id ?? messageId,
       chatId: item.chat_id ?? "",
       senderId: item.sender?.id,
-      senderOpenId: item.sender?.id_type === "open_id" ? item.sender?.id : undefined,
+      senderOpenId:
+        item.sender?.id_type === "open_id" ? item.sender?.id : undefined,
       senderType: item.sender?.sender_type,
       content,
       contentType: msgType,
-      createTime: item.create_time ? parseInt(String(item.create_time), 10) : undefined,
+      createTime: item.create_time
+        ? parseInt(String(item.create_time), 10)
+        : undefined,
     };
   } catch {
     return null;
@@ -223,8 +240,20 @@ function buildFeishuPostMessagePayload(params: { messageText: string }): {
 export async function sendMessageFeishu(
   params: SendFeishuMessageParams,
 ): Promise<FeishuSendResult> {
-  const { cfg, to, text, replyToMessageId, replyInThread, mentions, accountId } = params;
-  const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({ cfg, to, accountId });
+  const {
+    cfg,
+    to,
+    text,
+    replyToMessageId,
+    replyInThread,
+    mentions,
+    accountId,
+  } = params;
+  const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({
+    cfg,
+    to,
+    accountId,
+  });
   const tableMode = getFeishuRuntime().channel.text.resolveMarkdownTableMode({
     cfg,
     channel: "feishu",
@@ -235,7 +264,10 @@ export async function sendMessageFeishu(
   if (mentions && mentions.length > 0) {
     rawText = buildMentionedMessage(mentions, rawText);
   }
-  const messageText = getFeishuRuntime().channel.text.convertMarkdownTables(rawText, tableMode);
+  const messageText = getFeishuRuntime().channel.text.convertMarkdownTables(
+    rawText,
+    tableMode,
+  );
 
   const { content, msgType } = buildFeishuPostMessagePayload({ messageText });
 
@@ -286,9 +318,15 @@ export type SendFeishuCardParams = {
   accountId?: string;
 };
 
-export async function sendCardFeishu(params: SendFeishuCardParams): Promise<FeishuSendResult> {
+export async function sendCardFeishu(
+  params: SendFeishuCardParams,
+): Promise<FeishuSendResult> {
   const { cfg, to, card, replyToMessageId, replyInThread, accountId } = params;
-  const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({ cfg, to, accountId });
+  const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({
+    cfg,
+    to,
+    accountId,
+  });
   const content = JSON.stringify(card);
 
   if (replyToMessageId) {
@@ -349,7 +387,9 @@ export async function updateCardFeishu(params: {
   });
 
   if (response.code !== 0) {
-    throw new Error(`Feishu card update failed: ${response.msg || `code ${response.code}`}`);
+    throw new Error(
+      `Feishu card update failed: ${response.msg || `code ${response.code}`}`,
+    );
   }
 }
 
@@ -390,13 +430,28 @@ export async function sendMarkdownCardFeishu(params: {
   mentions?: MentionTarget[];
   accountId?: string;
 }): Promise<FeishuSendResult> {
-  const { cfg, to, text, replyToMessageId, replyInThread, mentions, accountId } = params;
+  const {
+    cfg,
+    to,
+    text,
+    replyToMessageId,
+    replyInThread,
+    mentions,
+    accountId,
+  } = params;
   let cardText = text;
   if (mentions && mentions.length > 0) {
     cardText = buildMentionedCardContent(mentions, text);
   }
   const card = buildMarkdownCard(cardText);
-  return sendCardFeishu({ cfg, to, card, replyToMessageId, replyInThread, accountId });
+  return sendCardFeishu({
+    cfg,
+    to,
+    card,
+    replyToMessageId,
+    replyInThread,
+    accountId,
+  });
 }
 
 /**
@@ -420,7 +475,10 @@ export async function editMessageFeishu(params: {
     cfg,
     channel: "feishu",
   });
-  const messageText = getFeishuRuntime().channel.text.convertMarkdownTables(text ?? "", tableMode);
+  const messageText = getFeishuRuntime().channel.text.convertMarkdownTables(
+    text ?? "",
+    tableMode,
+  );
 
   const { content, msgType } = buildFeishuPostMessagePayload({ messageText });
 
@@ -433,6 +491,8 @@ export async function editMessageFeishu(params: {
   });
 
   if (response.code !== 0) {
-    throw new Error(`Feishu message edit failed: ${response.msg || `code ${response.code}`}`);
+    throw new Error(
+      `Feishu message edit failed: ${response.msg || `code ${response.code}`}`,
+    );
   }
 }

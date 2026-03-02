@@ -1,5 +1,9 @@
 import { createConfigIO, loadConfig } from "../config/config.js";
-import { resolveBrowserConfig, resolveProfile, type ResolvedBrowserProfile } from "./config.js";
+import {
+  resolveBrowserConfig,
+  resolveProfile,
+  type ResolvedBrowserProfile,
+} from "./config.js";
 import type { BrowserServerState } from "./server-context.types.js";
 
 function applyResolvedConfig(
@@ -27,7 +31,8 @@ export function refreshResolvedBrowserConfigFromDisk(params: {
   if (!params.refreshConfigFromDisk) {
     return;
   }
-  const cfg = params.mode === "fresh" ? createConfigIO().loadConfig() : loadConfig();
+  const cfg =
+    params.mode === "fresh" ? createConfigIO().loadConfig() : loadConfig();
   const freshResolved = resolveBrowserConfig(cfg.browser, cfg);
   applyResolvedConfig(params.current, freshResolved);
 }

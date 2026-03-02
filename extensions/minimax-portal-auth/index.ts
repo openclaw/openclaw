@@ -45,7 +45,9 @@ function createOAuthHandler(region: MiniMaxRegion) {
   const regionLabel = region === "cn" ? "CN" : "Global";
 
   return async (ctx: ProviderAuthContext): Promise<ProviderAuthResult> => {
-    const progress = ctx.prompter.progress(`Starting MiniMax OAuth (${regionLabel})…`);
+    const progress = ctx.prompter.progress(
+      `Starting MiniMax OAuth (${regionLabel})…`,
+    );
     try {
       const result = await loginMiniMaxPortalOAuth({
         openUrl: ctx.openUrl,

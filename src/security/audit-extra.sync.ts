@@ -3,7 +3,10 @@ import {
   resolveSandboxConfigForAgent,
   resolveSandboxToolPolicyForAgent,
 } from "../agents/sandbox.js";
-import { isDangerousNetworkMode, normalizeNetworkMode } from "../agents/sandbox/network-mode.js";
+import {
+  isDangerousNetworkMode,
+  normalizeNetworkMode,
+} from "../agents/sandbox/network-mode.js";
 /**
  * Synchronous security audit collector functions.
  *
@@ -88,7 +91,8 @@ function looksLikeEnvRef(value: string): boolean {
 }
 
 function isGatewayRemotelyExposed(cfg: OpenClawConfig): boolean {
-  const bind = typeof cfg.gateway?.bind === "string" ? cfg.gateway.bind : "loopback";
+  const bind =
+    typeof cfg.gateway?.bind === "string" ? cfg.gateway.bind : "loopback";
   if (bind !== "loopback") {
     return true;
   }
@@ -116,7 +120,9 @@ function collectModels(cfg: OpenClawConfig): ModelRef[] {
     resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model),
     "agents.defaults.model.primary",
   );
-  for (const f of resolveAgentModelFallbackValues(cfg.agents?.defaults?.model)) {
+  for (const f of resolveAgentModelFallbackValues(
+    cfg.agents?.defaults?.model,
+  )) {
     addModel(out, f, "agents.defaults.model.fallbacks");
   }
   addModel(
@@ -124,7 +130,9 @@ function collectModels(cfg: OpenClawConfig): ModelRef[] {
     resolveAgentModelPrimaryValue(cfg.agents?.defaults?.imageModel),
     "agents.defaults.imageModel.primary",
   );
-  for (const f of resolveAgentModelFallbackValues(cfg.agents?.defaults?.imageModel)) {
+  for (const f of resolveAgentModelFallbackValues(
+    cfg.agents?.defaults?.imageModel,
+  )) {
     addModel(out, f, "agents.defaults.imageModel.fallbacks");
   }
 
@@ -134,12 +142,18 @@ function collectModels(cfg: OpenClawConfig): ModelRef[] {
       continue;
     }
     const id =
-      typeof (agent as { id?: unknown }).id === "string" ? (agent as { id: string }).id : "";
+      typeof (agent as { id?: unknown }).id === "string"
+        ? (agent as { id: string }).id
+        : "";
     const model = (agent as { model?: unknown }).model;
     if (typeof model === "string") {
       addModel(out, model, `agents.list.${id}.model`);
     } else if (model && typeof model === "object") {
-      addModel(out, (model as { primary?: unknown }).primary, `agents.list.${id}.model.primary`);
+      addModel(
+        out,
+        (model as { primary?: unknown }).primary,
+        `agents.list.${id}.model.primary`,
+      );
       const fallbacks = (model as { fallbacks?: unknown }).fallbacks;
       if (Array.isArray(fallbacks)) {
         for (const f of fallbacks) {
@@ -151,14 +165,31 @@ function collectModels(cfg: OpenClawConfig): ModelRef[] {
   return out;
 }
 
-const LEGACY_MODEL_PATTERNS: Array<{ id: string; re: RegExp; label: string }> = [
-  { id: "openai.gpt35", re: /\bgpt-3\.5\b/i, label: "GPT-3.5 family" },
-  { id: "anthropic.claude2", re: /\bclaude-(instant|2)\b/i, label: "Claude 2/Instant family" },
-  { id: "openai.gpt4_legacy", re: /\bgpt-4-(0314|0613)\b/i, label: "Legacy GPT-4 snapshots" },
-];
+const LEGACY_MODEL_PATTERNS: Array<{ id: string; re: RegExp; label: string }> =
+  [
+    { id: "openai.gpt35", re: /\bgpt-3\.5\b/i, label: "GPT-3.5 family" },
+    {
+      id: "anthropic.claude2",
+      re: /\bclaude-(instant|2)\b/i,
+      label: "Claude 2/Instant family",
+    },
+    {
+      id: "openai.gpt4_legacy",
+      re: /\bgpt-4-(0314|0613)\b/i,
+      label: "Legacy GPT-4 snapshots",
+    },
+  ];
 
-const WEAK_TIER_MODEL_PATTERNS: Array<{ id: string; re: RegExp; label: string }> = [
-  { id: "anthropic.haiku", re: /\bhaiku\b/i, label: "Haiku tier (smaller model)" },
+const WEAK_TIER_MODEL_PATTERNS: Array<{
+  id: string;
+  re: RegExp;
+  label: string;
+}> = [
+  {
+    id: "anthropic.haiku",
+    re: /\bhaiku\b/i,
+    label: "Haiku tier (smaller model)",
+  },
 ];
 
 function isGptModel(id: string): boolean {
@@ -210,7 +241,14 @@ function listKnownNodeCommands(cfg: OpenClawConfig): Set<string> {
     },
   };
   const out = new Set<string>();
-  for (const platform of ["ios", "android", "macos", "linux", "windows", "unknown"]) {
+  for (const platform of [
+    "ios",
+    "android",
+    "macos",
+    "linux",
+    "windows",
+    "unknown",
+  ]) {
     const allow = resolveNodeCommandAllowlist(baseCfg, { platform });
     for (const cmd of allow) {
       const normalized = normalizeNodeCommand(cmd);
@@ -264,7 +302,10 @@ function resolveToolPolicies(params: {
   }
 
   if (params.sandboxMode === "all") {
-    const sandboxPolicy = resolveSandboxToolPolicyForAgent(params.cfg, params.agentId ?? undefined);
+    const sandboxPolicy = resolveSandboxToolPolicyForAgent(
+      params.cfg,
+      params.agentId ?? undefined,
+    );
     policies.push(sandboxPolicy);
   }
 
@@ -282,7 +323,10 @@ function hasWebSearchKey(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
   );
 }
 
-function isWebSearchEnabled(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
+function isWebSearchEnabled(
+  cfg: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+): boolean {
   const enabled = cfg.tools?.web?.search?.enabled;
   if (enabled === false) {
     return false;
@@ -343,7 +387,9 @@ function hasConfiguredGroupTargets(section: Record<string, unknown>): boolean {
   const groupKeys = ["groups", "guilds", "channels", "rooms"];
   return groupKeys.some((key) => {
     const value = section[key];
-    return Boolean(value && typeof value === "object" && Object.keys(value).length > 0);
+    return Boolean(
+      value && typeof value === "object" && Object.keys(value).length > 0,
+    );
   });
 }
 
@@ -354,15 +400,25 @@ function listPotentialMultiUserSignals(cfg: OpenClawConfig): string[] {
     return [];
   }
 
-  const inspectSection = (section: Record<string, unknown>, basePath: string) => {
-    const groupPolicy = typeof section.groupPolicy === "string" ? section.groupPolicy : null;
+  const inspectSection = (
+    section: Record<string, unknown>,
+    basePath: string,
+  ) => {
+    const groupPolicy =
+      typeof section.groupPolicy === "string" ? section.groupPolicy : null;
     if (groupPolicy === "open") {
       out.add(`${basePath}.groupPolicy="open"`);
-    } else if (groupPolicy === "allowlist" && hasConfiguredGroupTargets(section)) {
-      out.add(`${basePath}.groupPolicy="allowlist" with configured group targets`);
+    } else if (
+      groupPolicy === "allowlist" &&
+      hasConfiguredGroupTargets(section)
+    ) {
+      out.add(
+        `${basePath}.groupPolicy="allowlist" with configured group targets`,
+      );
     }
 
-    const dmPolicy = typeof section.dmPolicy === "string" ? section.dmPolicy : null;
+    const dmPolicy =
+      typeof section.dmPolicy === "string" ? section.dmPolicy : null;
     if (dmPolicy === "open") {
       out.add(`${basePath}.dmPolicy="open"`);
     }
@@ -372,7 +428,9 @@ function listPotentialMultiUserSignals(cfg: OpenClawConfig): string[] {
       out.add(`${basePath}.allowFrom includes "*"`);
     }
 
-    const groupAllowFrom = Array.isArray(section.groupAllowFrom) ? section.groupAllowFrom : [];
+    const groupAllowFrom = Array.isArray(section.groupAllowFrom)
+      ? section.groupAllowFrom
+      : [];
     if (groupAllowFrom.some((entry) => String(entry).trim() === "*")) {
       out.add(`${basePath}.groupAllowFrom includes "*"`);
     }
@@ -380,11 +438,14 @@ function listPotentialMultiUserSignals(cfg: OpenClawConfig): string[] {
     const dm = section.dm;
     if (dm && typeof dm === "object") {
       const dmSection = dm as Record<string, unknown>;
-      const dmLegacyPolicy = typeof dmSection.policy === "string" ? dmSection.policy : null;
+      const dmLegacyPolicy =
+        typeof dmSection.policy === "string" ? dmSection.policy : null;
       if (dmLegacyPolicy === "open") {
         out.add(`${basePath}.dm.policy="open"`);
       }
-      const dmAllowFrom = Array.isArray(dmSection.allowFrom) ? dmSection.allowFrom : [];
+      const dmAllowFrom = Array.isArray(dmSection.allowFrom)
+        ? dmSection.allowFrom
+        : [];
       if (dmAllowFrom.some((entry) => String(entry).trim() === "*")) {
         out.add(`${basePath}.dm.allowFrom includes "*"`);
       }
@@ -451,9 +512,11 @@ function collectRiskyToolExposureContexts(cfg: OpenClawConfig): {
     const fsTools = ["read", "write", "edit", "apply_patch"].filter((tool) =>
       isToolAllowedByPolicies(tool, policies),
     );
-    const fsWorkspaceOnly = context.tools?.fs?.workspaceOnly ?? cfg.tools?.fs?.workspaceOnly;
+    const fsWorkspaceOnly =
+      context.tools?.fs?.workspaceOnly ?? cfg.tools?.fs?.workspaceOnly;
     const runtimeUnguarded = runtimeTools.length > 0 && sandboxMode !== "all";
-    const fsUnguarded = fsTools.length > 0 && sandboxMode !== "all" && fsWorkspaceOnly !== true;
+    const fsUnguarded =
+      fsTools.length > 0 && sandboxMode !== "all" && fsWorkspaceOnly !== true;
     if (!runtimeUnguarded && !fsUnguarded) {
       continue;
     }
@@ -474,7 +537,9 @@ function collectRiskyToolExposureContexts(cfg: OpenClawConfig): {
 // Exported collectors
 // --------------------------------------------------------------------------
 
-export function collectAttackSurfaceSummaryFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
+export function collectAttackSurfaceSummaryFindings(
+  cfg: OpenClawConfig,
+): SecurityAuditFinding[] {
   const group = summarizeGroupPolicy(cfg);
   const elevated = cfg.tools?.elevated?.enabled !== false;
   const webhooksEnabled = cfg.hooks?.enabled === true;
@@ -509,7 +574,10 @@ export function collectSyncedFolderFindings(params: {
   configPath: string;
 }): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
-  if (isProbablySyncedPath(params.stateDir) || isProbablySyncedPath(params.configPath)) {
+  if (
+    isProbablySyncedPath(params.stateDir) ||
+    isProbablySyncedPath(params.configPath)
+  ) {
     findings.push({
       checkId: "fs.synced_dir",
       severity: "warn",
@@ -521,10 +589,14 @@ export function collectSyncedFolderFindings(params: {
   return findings;
 }
 
-export function collectSecretsInConfigFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
+export function collectSecretsInConfigFindings(
+  cfg: OpenClawConfig,
+): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
   const password =
-    typeof cfg.gateway?.auth?.password === "string" ? cfg.gateway.auth.password.trim() : "";
+    typeof cfg.gateway?.auth?.password === "string"
+      ? cfg.gateway.auth.password.trim()
+      : "";
   if (password && !looksLikeEnvRef(password)) {
     findings.push({
       checkId: "config.secrets.gateway_password_in_config",
@@ -537,8 +609,13 @@ export function collectSecretsInConfigFindings(cfg: OpenClawConfig): SecurityAud
     });
   }
 
-  const hooksToken = typeof cfg.hooks?.token === "string" ? cfg.hooks.token.trim() : "";
-  if (cfg.hooks?.enabled === true && hooksToken && !looksLikeEnvRef(hooksToken)) {
+  const hooksToken =
+    typeof cfg.hooks?.token === "string" ? cfg.hooks.token.trim() : "";
+  if (
+    cfg.hooks?.enabled === true &&
+    hooksToken &&
+    !looksLikeEnvRef(hooksToken)
+  ) {
     findings.push({
       checkId: "config.secrets.hooks_token_in_config",
       severity: "info",
@@ -560,7 +637,8 @@ export function collectHooksHardeningFindings(
     return findings;
   }
 
-  const token = typeof cfg.hooks?.token === "string" ? cfg.hooks.token.trim() : "";
+  const token =
+    typeof cfg.hooks?.token === "string" ? cfg.hooks.token.trim() : "";
   if (token && token.length < 24) {
     findings.push({
       checkId: "hooks.token_too_short",
@@ -576,7 +654,8 @@ export function collectHooksHardeningFindings(
     env,
   });
   const openclawGatewayToken =
-    typeof env.OPENCLAW_GATEWAY_TOKEN === "string" && env.OPENCLAW_GATEWAY_TOKEN.trim()
+    typeof env.OPENCLAW_GATEWAY_TOKEN === "string" &&
+    env.OPENCLAW_GATEWAY_TOKEN.trim()
       ? env.OPENCLAW_GATEWAY_TOKEN.trim()
       : null;
   const gatewayToken =
@@ -598,7 +677,8 @@ export function collectHooksHardeningFindings(
     });
   }
 
-  const rawPath = typeof cfg.hooks?.path === "string" ? cfg.hooks.path.trim() : "";
+  const rawPath =
+    typeof cfg.hooks?.path === "string" ? cfg.hooks.path.trim() : "";
   if (rawPath === "/") {
     findings.push({
       checkId: "hooks.path_root",
@@ -611,7 +691,9 @@ export function collectHooksHardeningFindings(
 
   const allowRequestSessionKey = cfg.hooks?.allowRequestSessionKey === true;
   const defaultSessionKey =
-    typeof cfg.hooks?.defaultSessionKey === "string" ? cfg.hooks.defaultSessionKey.trim() : "";
+    typeof cfg.hooks?.defaultSessionKey === "string"
+      ? cfg.hooks.defaultSessionKey.trim()
+      : "";
   const allowedPrefixes = Array.isArray(cfg.hooks?.allowedSessionKeyPrefixes)
     ? cfg.hooks.allowedSessionKeyPrefixes
         .map((prefix) => prefix.trim())
@@ -646,7 +728,8 @@ export function collectHooksHardeningFindings(
     findings.push({
       checkId: "hooks.request_session_key_prefixes_missing",
       severity: remoteExposure ? "critical" : "warn",
-      title: "Request sessionKey override is enabled without prefix restrictions",
+      title:
+        "Request sessionKey override is enabled without prefix restrictions",
       detail:
         "hooks.allowRequestSessionKey=true and hooks.allowedSessionKeyPrefixes is unset/empty, so request payloads can target arbitrary session key shapes.",
       remediation:
@@ -661,8 +744,10 @@ export function collectGatewayHttpSessionKeyOverrideFindings(
   cfg: OpenClawConfig,
 ): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
-  const chatCompletionsEnabled = cfg.gateway?.http?.endpoints?.chatCompletions?.enabled === true;
-  const responsesEnabled = cfg.gateway?.http?.endpoints?.responses?.enabled === true;
+  const chatCompletionsEnabled =
+    cfg.gateway?.http?.endpoints?.chatCompletions?.enabled === true;
+  const responsesEnabled =
+    cfg.gateway?.http?.endpoints?.responses?.enabled === true;
   if (!chatCompletionsEnabled && !responsesEnabled) {
     return findings;
   }
@@ -690,13 +775,19 @@ export function collectGatewayHttpNoAuthFindings(
 ): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
   const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
-  const auth = resolveGatewayAuth({ authConfig: cfg.gateway?.auth, tailscaleMode, env });
+  const auth = resolveGatewayAuth({
+    authConfig: cfg.gateway?.auth,
+    tailscaleMode,
+    env,
+  });
   if (auth.mode !== "none") {
     return findings;
   }
 
-  const chatCompletionsEnabled = cfg.gateway?.http?.endpoints?.chatCompletions?.enabled === true;
-  const responsesEnabled = cfg.gateway?.http?.endpoints?.responses?.enabled === true;
+  const chatCompletionsEnabled =
+    cfg.gateway?.http?.endpoints?.chatCompletions?.enabled === true;
+  const responsesEnabled =
+    cfg.gateway?.http?.endpoints?.responses?.enabled === true;
   const enabledEndpoints = [
     "/tools/invoke",
     chatCompletionsEnabled ? "/v1/chat/completions" : null,
@@ -718,7 +809,9 @@ export function collectGatewayHttpNoAuthFindings(
   return findings;
 }
 
-export function collectSandboxDockerNoopFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
+export function collectSandboxDockerNoopFindings(
+  cfg: OpenClawConfig,
+): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
   const configuredPaths: string[] = [];
   const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
@@ -742,7 +835,11 @@ export function collectSandboxDockerNoopFindings(cfg: OpenClawConfig): SecurityA
     if (!entry || typeof entry !== "object" || typeof entry.id !== "string") {
       continue;
     }
-    if (!hasConfiguredDockerConfig(entry.sandbox?.docker as Record<string, unknown> | undefined)) {
+    if (
+      !hasConfiguredDockerConfig(
+        entry.sandbox?.docker as Record<string, unknown> | undefined,
+      )
+    ) {
       continue;
     }
     if (resolveSandboxConfigForAgent(cfg, entry.id).mode === "off") {
@@ -768,11 +865,14 @@ export function collectSandboxDockerNoopFindings(cfg: OpenClawConfig): SecurityA
   return findings;
 }
 
-export function collectSandboxDangerousConfigFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
+export function collectSandboxDangerousConfigFindings(
+  cfg: OpenClawConfig,
+): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
   const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
 
-  const configs: Array<{ source: string; docker: Record<string, unknown> }> = [];
+  const configs: Array<{ source: string; docker: Record<string, unknown> }> =
+    [];
   const defaultDocker = cfg.agents?.defaults?.sandbox?.docker;
   if (defaultDocker && typeof defaultDocker === "object") {
     configs.push({
@@ -830,10 +930,12 @@ export function collectSandboxDangerousConfigFindings(cfg: OpenClawConfig): Secu
       });
     }
 
-    const network = typeof docker.network === "string" ? docker.network : undefined;
+    const network =
+      typeof docker.network === "string" ? docker.network : undefined;
     const normalizedNetwork = normalizeNetworkMode(network);
     if (isDangerousNetworkMode(network)) {
-      const modeLabel = normalizedNetwork === "host" ? '"host"' : `"${network}"`;
+      const modeLabel =
+        normalizedNetwork === "host" ? '"host"' : `"${network}"`;
       const detail =
         normalizedNetwork === "host"
           ? `${source}.network is "host" which bypasses container network isolation entirely.`
@@ -850,8 +952,13 @@ export function collectSandboxDangerousConfigFindings(cfg: OpenClawConfig): Secu
     }
 
     const seccompProfile =
-      typeof docker.seccompProfile === "string" ? docker.seccompProfile : undefined;
-    if (seccompProfile && seccompProfile.trim().toLowerCase() === "unconfined") {
+      typeof docker.seccompProfile === "string"
+        ? docker.seccompProfile
+        : undefined;
+    if (
+      seccompProfile &&
+      seccompProfile.trim().toLowerCase() === "unconfined"
+    ) {
       findings.push({
         checkId: "sandbox.dangerous_seccomp_profile",
         severity: "critical",
@@ -862,8 +969,13 @@ export function collectSandboxDangerousConfigFindings(cfg: OpenClawConfig): Secu
     }
 
     const apparmorProfile =
-      typeof docker.apparmorProfile === "string" ? docker.apparmorProfile : undefined;
-    if (apparmorProfile && apparmorProfile.trim().toLowerCase() === "unconfined") {
+      typeof docker.apparmorProfile === "string"
+        ? docker.apparmorProfile
+        : undefined;
+    if (
+      apparmorProfile &&
+      apparmorProfile.trim().toLowerCase() === "unconfined"
+    ) {
       findings.push({
         checkId: "sandbox.dangerous_apparmor_profile",
         severity: "critical",
@@ -916,7 +1028,9 @@ export function collectSandboxDangerousConfigFindings(cfg: OpenClawConfig): Secu
   return findings;
 }
 
-export function collectNodeDenyCommandPatternFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
+export function collectNodeDenyCommandPatternFindings(
+  cfg: OpenClawConfig,
+): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
   const denyListRaw = cfg.gateway?.nodes?.denyCommands;
   if (!Array.isArray(denyListRaw) || denyListRaw.length === 0) {
@@ -929,7 +1043,9 @@ export function collectNodeDenyCommandPatternFindings(cfg: OpenClawConfig): Secu
   }
 
   const knownCommands = listKnownNodeCommands(cfg);
-  const patternLike = denyList.filter((entry) => looksLikeNodeCommandPattern(entry));
+  const patternLike = denyList.filter((entry) =>
+    looksLikeNodeCommandPattern(entry),
+  );
   const unknownExact = denyList.filter(
     (entry) => !looksLikeNodeCommandPattern(entry) && !knownCommands.has(entry),
   );
@@ -979,7 +1095,9 @@ export function collectNodeDangerousAllowCommandFindings(
     return findings;
   }
 
-  const deny = new Set((cfg.gateway?.nodes?.denyCommands ?? []).map(normalizeNodeCommand));
+  const deny = new Set(
+    (cfg.gateway?.nodes?.denyCommands ?? []).map(normalizeNodeCommand),
+  );
   const dangerousAllowed = DEFAULT_DANGEROUS_NODE_COMMANDS.filter(
     (cmd) => allow.has(cmd) && !deny.has(cmd),
   );
@@ -1002,7 +1120,9 @@ export function collectNodeDangerousAllowCommandFindings(
   return findings;
 }
 
-export function collectMinimalProfileOverrideFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
+export function collectMinimalProfileOverrideFindings(
+  cfg: OpenClawConfig,
+): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
   if (cfg.tools?.profile !== "minimal") {
     return findings;
@@ -1038,14 +1158,19 @@ export function collectMinimalProfileOverrideFindings(cfg: OpenClawConfig): Secu
   return findings;
 }
 
-export function collectModelHygieneFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
+export function collectModelHygieneFindings(
+  cfg: OpenClawConfig,
+): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
   const models = collectModels(cfg);
   if (models.length === 0) {
     return findings;
   }
 
-  const weakMatches = new Map<string, { model: string; source: string; reasons: string[] }>();
+  const weakMatches = new Map<
+    string,
+    { model: string; source: string; reasons: string[] }
+  >();
   const addWeakMatch = (model: string, source: string, reason: string) => {
     const key = `${model}@@${source}`;
     const existing = weakMatches.get(key);
@@ -1077,7 +1202,11 @@ export function collectModelHygieneFindings(cfg: OpenClawConfig): SecurityAuditF
   for (const entry of models) {
     for (const pat of LEGACY_MODEL_PATTERNS) {
       if (pat.re.test(entry.id)) {
-        matches.push({ model: entry.id, source: entry.source, reason: pat.label });
+        matches.push({
+          model: entry.id,
+          source: entry.source,
+          reason: pat.label,
+        });
         break;
       }
     }
@@ -1097,7 +1226,8 @@ export function collectModelHygieneFindings(cfg: OpenClawConfig): SecurityAuditF
         "Older/legacy models can be less robust against prompt injection and tool misuse.\n" +
         lines +
         more,
-      remediation: "Prefer modern, instruction-hardened models for any bot that can run tools.",
+      remediation:
+        "Prefer modern, instruction-hardened models for any bot that can run tools.",
     });
   }
 
@@ -1106,7 +1236,8 @@ export function collectModelHygieneFindings(cfg: OpenClawConfig): SecurityAuditF
       .slice(0, 12)
       .map((m) => `- ${m.model} (${m.reasons.join("; ")}) @ ${m.source}`)
       .join("\n");
-    const more = weakMatches.size > 12 ? `\n…${weakMatches.size - 12} more` : "";
+    const more =
+      weakMatches.size > 12 ? `\n…${weakMatches.size - 12} more` : "";
     findings.push({
       checkId: "models.weak_tier",
       severity: "warn",
@@ -1128,7 +1259,9 @@ export function collectSmallModelRiskFindings(params: {
   env: NodeJS.ProcessEnv;
 }): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
-  const models = collectModels(params.cfg).filter((entry) => !entry.source.includes("imageModel"));
+  const models = collectModels(params.cfg).filter(
+    (entry) => !entry.source.includes("imageModel"),
+  );
   if (models.length === 0) {
     return findings;
   }
@@ -1141,7 +1274,9 @@ export function collectSmallModelRiskFindings(params: {
       }
       return { ...entry, paramB };
     })
-    .filter((entry): entry is { id: string; source: string; paramB: number } => Boolean(entry));
+    .filter((entry): entry is { id: string; source: string; paramB: number } =>
+      Boolean(entry),
+    );
 
   if (smallModels.length === 0) {
     return findings;
@@ -1152,7 +1287,10 @@ export function collectSmallModelRiskFindings(params: {
   const exposureSet = new Set<string>();
   for (const entry of smallModels) {
     const agentId = extractAgentIdFromSource(entry.source);
-    const sandboxMode = resolveSandboxConfigForAgent(params.cfg, agentId ?? undefined).mode;
+    const sandboxMode = resolveSandboxConfigForAgent(
+      params.cfg,
+      agentId ?? undefined,
+    ).mode;
     const agentTools =
       agentId && params.cfg.agents?.list
         ? params.cfg.agents.list.find((agent) => agent?.id === agentId)?.tools
@@ -1182,8 +1320,10 @@ export function collectSmallModelRiskFindings(params: {
     for (const tool of exposed) {
       exposureSet.add(tool);
     }
-    const sandboxLabel = sandboxMode === "all" ? "sandbox=all" : `sandbox=${sandboxMode}`;
-    const exposureLabel = exposed.length > 0 ? ` web=[${exposed.join(", ")}]` : " web=[off]";
+    const sandboxLabel =
+      sandboxMode === "all" ? "sandbox=all" : `sandbox=${sandboxMode}`;
+    const exposureLabel =
+      exposed.length > 0 ? ` web=[${exposed.join(", ")}]` : " web=[off]";
     const safe = sandboxMode === "all" && exposed.length === 0;
     if (!safe) {
       hasUnsafe = true;
@@ -1218,7 +1358,9 @@ export function collectSmallModelRiskFindings(params: {
   return findings;
 }
 
-export function collectExposureMatrixFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
+export function collectExposureMatrixFindings(
+  cfg: OpenClawConfig,
+): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
   const openGroups = listGroupPolicyOpen(cfg);
   if (openGroups.length === 0) {
@@ -1238,7 +1380,8 @@ export function collectExposureMatrixFindings(cfg: OpenClawConfig): SecurityAudi
     });
   }
 
-  const { riskyContexts, hasRuntimeRisk } = collectRiskyToolExposureContexts(cfg);
+  const { riskyContexts, hasRuntimeRisk } =
+    collectRiskyToolExposureContexts(cfg);
 
   if (riskyContexts.length > 0) {
     findings.push({
@@ -1257,14 +1400,17 @@ export function collectExposureMatrixFindings(cfg: OpenClawConfig): SecurityAudi
   return findings;
 }
 
-export function collectLikelyMultiUserSetupFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
+export function collectLikelyMultiUserSetupFindings(
+  cfg: OpenClawConfig,
+): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
   const signals = listPotentialMultiUserSignals(cfg);
   if (signals.length === 0) {
     return findings;
   }
 
-  const { riskyContexts, hasRuntimeRisk } = collectRiskyToolExposureContexts(cfg);
+  const { riskyContexts, hasRuntimeRisk } =
+    collectRiskyToolExposureContexts(cfg);
   const impactLine = hasRuntimeRisk
     ? "Runtime/process tools are exposed without full sandboxing in at least one context."
     : "No unguarded runtime/process tools were detected by this heuristic.";
@@ -1276,7 +1422,8 @@ export function collectLikelyMultiUserSetupFindings(cfg: OpenClawConfig): Securi
   findings.push({
     checkId: "security.trust_model.multi_user_heuristic",
     severity: "warn",
-    title: "Potential multi-user setup detected (personal-assistant model warning)",
+    title:
+      "Potential multi-user setup detected (personal-assistant model warning)",
     detail:
       "Heuristic signals indicate this gateway may be reachable by multiple users:\n" +
       signals.map((signal) => `- ${signal}`).join("\n") +

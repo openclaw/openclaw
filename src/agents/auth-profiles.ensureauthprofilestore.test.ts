@@ -7,7 +7,9 @@ import { AUTH_STORE_VERSION, log } from "./auth-profiles/constants.js";
 
 describe("ensureAuthProfileStore", () => {
   it("migrates legacy auth.json and deletes it (PR #368)", () => {
-    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-profiles-"));
+    const agentDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "openclaw-auth-profiles-"),
+    );
     try {
       const legacyPath = path.join(agentDir, "auth.json");
       fs.writeFileSync(
@@ -178,7 +180,9 @@ describe("ensureAuthProfileStore", () => {
     ] as const;
 
     for (const testCase of cases) {
-      const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-alias-"));
+      const agentDir = fs.mkdtempSync(
+        path.join(os.tmpdir(), "openclaw-auth-alias-"),
+      );
       try {
         const storeData = {
           version: AUTH_STORE_VERSION,
@@ -193,7 +197,9 @@ describe("ensureAuthProfileStore", () => {
         );
 
         const store = ensureAuthProfileStore(agentDir);
-        expect(store.profiles["anthropic:work"], testCase.name).toMatchObject(testCase.expected);
+        expect(store.profiles["anthropic:work"], testCase.name).toMatchObject(
+          testCase.expected,
+        );
       } finally {
         fs.rmSync(agentDir, { recursive: true, force: true });
       }
@@ -201,7 +207,9 @@ describe("ensureAuthProfileStore", () => {
   });
 
   it("normalizes mode/apiKey aliases while migrating legacy auth.json", () => {
-    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-legacy-alias-"));
+    const agentDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "openclaw-auth-legacy-alias-"),
+    );
     try {
       fs.writeFileSync(
         path.join(agentDir, "auth.json"),
@@ -231,7 +239,9 @@ describe("ensureAuthProfileStore", () => {
   });
 
   it("logs one warning with aggregated reasons for rejected auth-profiles entries", () => {
-    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-invalid-"));
+    const agentDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "openclaw-auth-invalid-"),
+    );
     const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => undefined);
     try {
       const invalidStore = {
@@ -266,7 +276,11 @@ describe("ensureAuthProfileStore", () => {
             missing_provider: 1,
             non_object: 1,
           },
-          keys: ["anthropic:missing-type", "openai:missing-provider", "qwen:not-object"],
+          keys: [
+            "anthropic:missing-type",
+            "openai:missing-provider",
+            "qwen:not-object",
+          ],
         },
       );
     } finally {

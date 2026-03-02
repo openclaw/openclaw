@@ -1,6 +1,14 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 const TEST_GATEWAY_TOKEN = "test-gateway-token-1234567890";
 
@@ -38,12 +46,18 @@ vi.mock("../agents/openclaw-tools.js", () => {
   const tools = [
     {
       name: "cron",
-      parameters: { type: "object", properties: { action: { type: "string" } } },
+      parameters: {
+        type: "object",
+        properties: { action: { type: "string" } },
+      },
       execute: async () => ({ ok: true, via: "cron" }),
     },
     {
       name: "gateway",
-      parameters: { type: "object", properties: { action: { type: "string" } } },
+      parameters: {
+        type: "object",
+        properties: { action: { type: "string" } },
+      },
       execute: async () => ({ ok: true, via: "gateway" }),
     },
   ];
@@ -98,7 +112,12 @@ async function invoke(tool: string) {
       "content-type": "application/json",
       authorization: `Bearer ${TEST_GATEWAY_TOKEN}`,
     },
-    body: JSON.stringify({ tool, action: "status", args: {}, sessionKey: "main" }),
+    body: JSON.stringify({
+      tool,
+      action: "status",
+      args: {},
+      sessionKey: "main",
+    }),
   });
 }
 

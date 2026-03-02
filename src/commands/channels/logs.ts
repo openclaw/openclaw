@@ -78,7 +78,8 @@ export async function channelsLogsCommand(
   runtime: RuntimeEnv = defaultRuntime,
 ) {
   const channel = parseChannelFilter(opts.channel);
-  const limitRaw = typeof opts.lines === "string" ? Number(opts.lines) : opts.lines;
+  const limitRaw =
+    typeof opts.lines === "string" ? Number(opts.lines) : opts.lines;
   const limit =
     typeof limitRaw === "number" && Number.isFinite(limitRaw) && limitRaw > 0
       ? Math.floor(limitRaw)

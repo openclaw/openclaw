@@ -8,14 +8,23 @@ export const DEFAULT_TIMEOUT_SECONDS = 30;
 export const DEFAULT_CACHE_TTL_MINUTES = 15;
 const DEFAULT_CACHE_MAX_ENTRIES = 100;
 
-export function resolveTimeoutSeconds(value: unknown, fallback: number): number {
-  const parsed = typeof value === "number" && Number.isFinite(value) ? value : fallback;
+export function resolveTimeoutSeconds(
+  value: unknown,
+  fallback: number,
+): number {
+  const parsed =
+    typeof value === "number" && Number.isFinite(value) ? value : fallback;
   return Math.max(1, Math.floor(parsed));
 }
 
-export function resolveCacheTtlMs(value: unknown, fallbackMinutes: number): number {
+export function resolveCacheTtlMs(
+  value: unknown,
+  fallbackMinutes: number,
+): number {
   const minutes =
-    typeof value === "number" && Number.isFinite(value) ? Math.max(0, value) : fallbackMinutes;
+    typeof value === "number" && Number.isFinite(value)
+      ? Math.max(0, value)
+      : fallbackMinutes;
   return Math.round(minutes * 60_000);
 }
 
@@ -60,7 +69,10 @@ export function writeCache<T>(
   });
 }
 
-export function withTimeout(signal: AbortSignal | undefined, timeoutMs: number): AbortSignal {
+export function withTimeout(
+  signal: AbortSignal | undefined,
+  timeoutMs: number,
+): AbortSignal {
   if (timeoutMs <= 0) {
     return signal ?? new AbortController().signal;
   }
@@ -98,7 +110,9 @@ export async function readResponseText(
 ): Promise<ReadResponseTextResult> {
   const maxBytesRaw = options?.maxBytes;
   const maxBytes =
-    typeof maxBytesRaw === "number" && Number.isFinite(maxBytesRaw) && maxBytesRaw > 0
+    typeof maxBytesRaw === "number" &&
+    Number.isFinite(maxBytesRaw) &&
+    maxBytesRaw > 0
       ? Math.floor(maxBytesRaw)
       : undefined;
 

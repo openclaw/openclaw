@@ -105,7 +105,11 @@ export function deriveChannel(params: {
   channel?: string | null;
   lastChannel?: string | null;
 }): string {
-  if (params.kind === "cron" || params.kind === "hook" || params.kind === "node") {
+  if (
+    params.kind === "cron" ||
+    params.kind === "hook" ||
+    params.kind === "node"
+  ) {
     return "internal";
   }
   const channel = normalizeKey(params.channel ?? undefined);
@@ -141,7 +145,9 @@ export function sanitizeTextContent(text: string): string {
   if (!text) {
     return text;
   }
-  return stripThinkingTagsFromText(stripDowngradedToolCallText(stripMinimaxToolCallXml(text)));
+  return stripThinkingTagsFromText(
+    stripDowngradedToolCallText(stripMinimaxToolCallXml(text)),
+  );
 }
 
 export function extractAssistantText(message: unknown): string | undefined {
@@ -164,7 +170,8 @@ export function extractAssistantText(message: unknown): string | undefined {
   const stopReason = (message as { stopReason?: unknown }).stopReason;
   const errorMessage = (message as { errorMessage?: unknown }).errorMessage;
   const errorContext =
-    stopReason === "error" || (typeof errorMessage === "string" && Boolean(errorMessage.trim()));
+    stopReason === "error" ||
+    (typeof errorMessage === "string" && Boolean(errorMessage.trim()));
 
   return joined ? sanitizeUserFacingText(joined, { errorContext }) : undefined;
 }

@@ -42,7 +42,11 @@ async function withAuthProfileStore(
   }
 }
 
-function expectCooldownInRange(remainingMs: number, minMs: number, maxMs: number): void {
+function expectCooldownInRange(
+  remainingMs: number,
+  minMs: number,
+  maxMs: number,
+): void {
   expect(remainingMs).toBeGreaterThan(minMs);
   expect(remainingMs).toBeLessThan(maxMs);
 }
@@ -58,10 +62,15 @@ describe("markAuthProfileFailure", () => {
         agentDir,
       });
 
-      const disabledUntil = store.usageStats?.["anthropic:default"]?.disabledUntil;
+      const disabledUntil =
+        store.usageStats?.["anthropic:default"]?.disabledUntil;
       expect(typeof disabledUntil).toBe("number");
       const remainingMs = (disabledUntil as number) - startedAt;
-      expectCooldownInRange(remainingMs, 4.5 * 60 * 60 * 1000, 5.5 * 60 * 60 * 1000);
+      expectCooldownInRange(
+        remainingMs,
+        4.5 * 60 * 60 * 1000,
+        5.5 * 60 * 60 * 1000,
+      );
     });
   });
   it("honors per-provider billing backoff overrides", async () => {
@@ -82,10 +91,15 @@ describe("markAuthProfileFailure", () => {
         } as never,
       });
 
-      const disabledUntil = store.usageStats?.["anthropic:default"]?.disabledUntil;
+      const disabledUntil =
+        store.usageStats?.["anthropic:default"]?.disabledUntil;
       expect(typeof disabledUntil).toBe("number");
       const remainingMs = (disabledUntil as number) - startedAt;
-      expectCooldownInRange(remainingMs, 0.8 * 60 * 60 * 1000, 1.2 * 60 * 60 * 1000);
+      expectCooldownInRange(
+        remainingMs,
+        0.8 * 60 * 60 * 1000,
+        1.2 * 60 * 60 * 1000,
+      );
     });
   });
   it("keeps persisted cooldownUntil unchanged across mid-window retries", async () => {
@@ -97,7 +111,8 @@ describe("markAuthProfileFailure", () => {
         agentDir,
       });
 
-      const firstCooldownUntil = store.usageStats?.["anthropic:default"]?.cooldownUntil;
+      const firstCooldownUntil =
+        store.usageStats?.["anthropic:default"]?.cooldownUntil;
       expect(typeof firstCooldownUntil).toBe("number");
 
       await markAuthProfileFailure({
@@ -107,11 +122,14 @@ describe("markAuthProfileFailure", () => {
         agentDir,
       });
 
-      const secondCooldownUntil = store.usageStats?.["anthropic:default"]?.cooldownUntil;
+      const secondCooldownUntil =
+        store.usageStats?.["anthropic:default"]?.cooldownUntil;
       expect(secondCooldownUntil).toBe(firstCooldownUntil);
 
       const reloaded = ensureAuthProfileStore(agentDir);
-      expect(reloaded.usageStats?.["anthropic:default"]?.cooldownUntil).toBe(firstCooldownUntil);
+      expect(reloaded.usageStats?.["anthropic:default"]?.cooldownUntil).toBe(
+        firstCooldownUntil,
+      );
     });
   });
   it("disables auth_permanent failures via disabledUntil (like billing)", async () => {
@@ -168,7 +186,9 @@ describe("markAuthProfileFailure", () => {
       });
 
       expect(store.usageStats?.["anthropic:default"]?.errorCount).toBe(1);
-      expect(store.usageStats?.["anthropic:default"]?.failureCounts?.billing).toBe(1);
+      expect(
+        store.usageStats?.["anthropic:default"]?.failureCounts?.billing,
+      ).toBe(1);
     } finally {
       fs.rmSync(agentDir, { recursive: true, force: true });
     }

@@ -148,7 +148,9 @@ function parsePresence(text: string): SystemPresence {
     host: host.trim(),
     ip: ip.trim(),
     version: version.trim(),
-    lastInputSeconds: Number.isFinite(lastInputSeconds) ? lastInputSeconds : undefined,
+    lastInputSeconds: Number.isFinite(lastInputSeconds)
+      ? lastInputSeconds
+      : undefined,
     mode: mode.trim(),
     reason,
     text: trimmed,
@@ -174,7 +176,9 @@ type SystemPresencePayload = {
   tags?: string[];
 };
 
-function mergeStringList(...values: Array<string[] | undefined>): string[] | undefined {
+function mergeStringList(
+  ...values: Array<string[] | undefined>
+): string[] | undefined {
   const out = new Set<string>();
   for (const list of values) {
     if (!Array.isArray(list)) {
@@ -190,7 +194,9 @@ function mergeStringList(...values: Array<string[] | undefined>): string[] | und
   return out.size > 0 ? [...out] : undefined;
 }
 
-export function updateSystemPresence(payload: SystemPresencePayload): SystemPresenceUpdate {
+export function updateSystemPresence(
+  payload: SystemPresencePayload,
+): SystemPresenceUpdate {
   ensureSelfPresence();
   const parsed = parsePresence(payload.text);
   const key =
@@ -214,7 +220,9 @@ export function updateSystemPresence(payload: SystemPresencePayload): SystemPres
     modelIdentifier: payload.modelIdentifier ?? existing.modelIdentifier,
     mode: payload.mode ?? parsed.mode ?? existing.mode,
     lastInputSeconds:
-      payload.lastInputSeconds ?? parsed.lastInputSeconds ?? existing.lastInputSeconds,
+      payload.lastInputSeconds ??
+      parsed.lastInputSeconds ??
+      existing.lastInputSeconds,
     reason: payload.reason ?? parsed.reason ?? existing.reason,
     deviceId: payload.deviceId ?? existing.deviceId,
     roles: mergeStringList(existing.roles, payload.roles),
@@ -247,7 +255,8 @@ export function updateSystemPresence(payload: SystemPresencePayload): SystemPres
 
 export function upsertPresence(key: string, presence: Partial<SystemPresence>) {
   ensureSelfPresence();
-  const normalizedKey = normalizePresenceKey(key) ?? os.hostname().toLowerCase();
+  const normalizedKey =
+    normalizePresenceKey(key) ?? os.hostname().toLowerCase();
   const existing = entries.get(normalizedKey) ?? ({} as SystemPresence);
   const roles = mergeStringList(existing.roles, presence.roles);
   const scopes = mergeStringList(existing.scopes, presence.scopes);

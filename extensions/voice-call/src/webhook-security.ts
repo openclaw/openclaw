@@ -30,7 +30,10 @@ function sha256Hex(input: string): string {
   return crypto.createHash("sha256").update(input).digest("hex");
 }
 
-function createSkippedVerificationReplayKey(provider: string, ctx: WebhookContext): string {
+function createSkippedVerificationReplayKey(
+  provider: string,
+  ctx: WebhookContext,
+): string {
   return `${provider}:skip:${sha256Hex(`${ctx.method}\n${ctx.url}\n${ctx.rawBody}`)}`;
 }
 
@@ -255,7 +258,10 @@ function normalizeAllowedHosts(allowedHosts?: string[]): Set<string> | null {
  * 3. Ngrok-Forwarded-Host (ngrok specific)
  * 4. Host header (direct connection)
  */
-export function reconstructWebhookUrl(ctx: WebhookContext, options?: WebhookUrlOptions): string {
+export function reconstructWebhookUrl(
+  ctx: WebhookContext,
+  options?: WebhookUrlOptions,
+): string {
   const { headers } = ctx;
 
   // SECURITY: Only trust forwarding headers if explicitly configured.
@@ -270,12 +276,15 @@ export function reconstructWebhookUrl(ctx: WebhookContext, options?: WebhookUrlO
   const hasTrustedProxyIPs = trustedProxyIPs.length > 0;
   const remoteIP = options?.remoteIP ?? ctx.remoteAddress;
   const fromTrustedProxy =
-    !hasTrustedProxyIPs || (remoteIP ? trustedProxyIPs.includes(remoteIP) : false);
+    !hasTrustedProxyIPs ||
+    (remoteIP ? trustedProxyIPs.includes(remoteIP) : false);
 
   // Only trust forwarding headers if: (has whitelist OR explicitly trusted) AND from trusted proxy
-  const shouldTrustForwardingHeaders = (hasAllowedHosts || explicitlyTrusted) && fromTrustedProxy;
+  const shouldTrustForwardingHeaders =
+    (hasAllowedHosts || explicitlyTrusted) && fromTrustedProxy;
 
-  const isAllowedForwardedHost = (host: string): boolean => !allowedHosts || allowedHosts.has(host);
+  const isAllowedForwardedHost = (host: string): boolean =>
+    !allowedHosts || allowedHosts.has(host);
 
   // Determine protocol - only trust X-Forwarded-Proto from trusted proxies
   let proto = "https";
@@ -291,7 +300,11 @@ export function reconstructWebhookUrl(ctx: WebhookContext, options?: WebhookUrlO
 
   if (shouldTrustForwardingHeaders) {
     // Try forwarding headers in priority order
-    const forwardingHeaders = ["x-forwarded-host", "x-original-host", "ngrok-forwarded-host"];
+    const forwardingHeaders = [
+      "x-forwarded-host",
+      "x-original-host",
+      "ngrok-forwarded-host",
+    ];
 
     for (const headerName of forwardingHeaders) {
       const headerValue = getHeader(headers, headerName);
@@ -424,7 +437,11 @@ function decodeBase64OrBase64Url(input: string): Buffer {
 }
 
 function base64UrlEncode(buf: Buffer): string {
-  return buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+  return buf
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
 }
 
 function importEd25519PublicKey(publicKey: string): crypto.KeyObject | string {
@@ -481,7 +498,10 @@ export function verifyTelnyxWebhook(
   }
 
   if (!publicKey) {
-    return { ok: false, reason: "Missing telnyx.publicKey (configure to verify webhooks)" };
+    return {
+      ok: false,
+      reason: "Missing telnyx.publicKey (configure to verify webhooks)",
+    };
   }
 
   const signature = getHeader(ctx.headers, "telnyx-signature-ed25519");
@@ -501,7 +521,12 @@ export function verifyTelnyxWebhook(
     const signatureBuffer = decodeBase64OrBase64Url(signature);
     const key = importEd25519PublicKey(publicKey);
 
-    const isValid = crypto.verify(null, Buffer.from(signedPayload), key, signatureBuffer);
+    const isValid = crypto.verify(
+      null,
+      Buffer.from(signedPayload),
+      key,
+      signatureBuffer,
+    );
     if (!isValid) {
       return { ok: false, reason: "Invalid signature" };
     }
@@ -584,12 +609,14 @@ export function verifyTwilioWebhook(
   }
 
   const isLoopback = isLoopbackAddress(options?.remoteIP ?? ctx.remoteAddress);
-  const allowLoopbackForwarding = options?.allowNgrokFreeTierLoopbackBypass && isLoopback;
+  const allowLoopbackForwarding =
+    options?.allowNgrokFreeTierLoopbackBypass && isLoopback;
 
   // Reconstruct the URL Twilio used
   const verificationUrl = buildTwilioVerificationUrl(ctx, options?.publicUrl, {
     allowedHosts: options?.allowedHosts,
-    trustForwardingHeaders: options?.trustForwardingHeaders || allowLoopbackForwarding,
+    trustForwardingHeaders:
+      options?.trustForwardingHeaders || allowLoopbackForwarding,
     trustedProxyIPs: options?.trustedProxyIPs,
     remoteIP: options?.remoteIP,
   });
@@ -597,7 +624,12 @@ export function verifyTwilioWebhook(
   // Parse the body as URL-encoded params
   const params = new URLSearchParams(ctx.rawBody);
 
-  const isValid = validateTwilioSignature(authToken, signature, verificationUrl, params);
+  const isValid = validateTwilioSignature(
+    authToken,
+    signature,
+    verificationUrl,
+    params,
+  );
 
   if (isValid) {
     const replayKey = createTwilioReplayKey({
@@ -606,12 +638,18 @@ export function verifyTwilioWebhook(
       requestParams: params,
     });
     const isReplay = markReplay(twilioReplayCache, replayKey);
-    return { ok: true, verificationUrl, isReplay, verifiedRequestKey: replayKey };
+    return {
+      ok: true,
+      verificationUrl,
+      isReplay,
+      verifiedRequestKey: replayKey,
+    };
   }
 
   // Check if this is ngrok free tier - the URL might have different format
   const isNgrokFreeTier =
-    verificationUrl.includes(".ngrok-free.app") || verificationUrl.includes(".ngrok.io");
+    verificationUrl.includes(".ngrok-free.app") ||
+    verificationUrl.includes(".ngrok.io");
 
   return {
     ok: false,
@@ -754,7 +792,10 @@ function validatePlivoV3Signature(params: {
   });
 
   const hmacBase = `${baseUrl}.${params.nonce}`;
-  const digest = crypto.createHmac("sha256", params.authToken).update(hmacBase).digest("base64");
+  const digest = crypto
+    .createHmac("sha256", params.authToken)
+    .update(hmacBase)
+    .digest("base64");
   const expected = normalizeSignatureBase64(digest);
 
   // Header can contain multiple signatures separated by commas.
@@ -845,7 +886,8 @@ export function verifyPlivoWebhook(
   }
 
   if (signatureV3 && nonceV3) {
-    const method = ctx.method === "GET" || ctx.method === "POST" ? ctx.method : null;
+    const method =
+      ctx.method === "GET" || ctx.method === "POST" ? ctx.method : null;
 
     if (!method) {
       return {
@@ -856,7 +898,9 @@ export function verifyPlivoWebhook(
       };
     }
 
-    const postParams = toParamMapFromSearchParams(new URLSearchParams(ctx.rawBody));
+    const postParams = toParamMapFromSearchParams(
+      new URLSearchParams(ctx.rawBody),
+    );
     const ok = validatePlivoV3Signature({
       authToken,
       signatureHeader: signatureV3,
@@ -875,7 +919,13 @@ export function verifyPlivoWebhook(
     }
     const replayKey = `plivo:v3:${sha256Hex(`${verificationUrl}\n${nonceV3}`)}`;
     const isReplay = markReplay(plivoReplayCache, replayKey);
-    return { ok: true, version: "v3", verificationUrl, isReplay, verifiedRequestKey: replayKey };
+    return {
+      ok: true,
+      version: "v3",
+      verificationUrl,
+      isReplay,
+      verifiedRequestKey: replayKey,
+    };
   }
 
   if (signatureV2 && nonceV2) {
@@ -895,7 +945,13 @@ export function verifyPlivoWebhook(
     }
     const replayKey = `plivo:v2:${sha256Hex(`${verificationUrl}\n${nonceV2}`)}`;
     const isReplay = markReplay(plivoReplayCache, replayKey);
-    return { ok: true, version: "v2", verificationUrl, isReplay, verifiedRequestKey: replayKey };
+    return {
+      ok: true,
+      version: "v2",
+      verificationUrl,
+      isReplay,
+      verifiedRequestKey: replayKey,
+    };
   }
 
   return {

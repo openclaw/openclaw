@@ -28,7 +28,9 @@ export {
 };
 export type { FeishuReactionCreatedEvent };
 
-export async function monitorFeishuProvider(opts: MonitorFeishuOpts = {}): Promise<void> {
+export async function monitorFeishuProvider(
+  opts: MonitorFeishuOpts = {},
+): Promise<void> {
   const cfg = opts.config;
   if (!cfg) {
     throw new Error("Config is required for Feishu monitor");
@@ -39,7 +41,9 @@ export async function monitorFeishuProvider(opts: MonitorFeishuOpts = {}): Promi
   if (opts.accountId) {
     const account = resolveFeishuAccount({ cfg, accountId: opts.accountId });
     if (!account.enabled || !account.configured) {
-      throw new Error(`Feishu account "${opts.accountId}" not configured or disabled`);
+      throw new Error(
+        `Feishu account "${opts.accountId}" not configured or disabled`,
+      );
     }
     return monitorSingleAccount({
       cfg,
@@ -61,7 +65,9 @@ export async function monitorFeishuProvider(opts: MonitorFeishuOpts = {}): Promi
   const monitorPromises: Promise<void>[] = [];
   for (const account of accounts) {
     if (opts.abortSignal?.aborted) {
-      log("feishu: abort signal received during startup preflight; stopping startup");
+      log(
+        "feishu: abort signal received during startup preflight; stopping startup",
+      );
       break;
     }
 
@@ -72,7 +78,9 @@ export async function monitorFeishuProvider(opts: MonitorFeishuOpts = {}): Promi
     });
 
     if (opts.abortSignal?.aborted) {
-      log("feishu: abort signal received during startup preflight; stopping startup");
+      log(
+        "feishu: abort signal received during startup preflight; stopping startup",
+      );
       break;
     }
 

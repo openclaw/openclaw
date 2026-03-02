@@ -17,9 +17,14 @@ vi.mock("./store.js", () => ({
   loadSessionStore: () => storeState.store,
 }));
 
-import { extractDeliveryInfo, parseSessionThreadInfo } from "./delivery-info.js";
+import {
+  extractDeliveryInfo,
+  parseSessionThreadInfo,
+} from "./delivery-info.js";
 
-const buildEntry = (deliveryContext: SessionEntry["deliveryContext"]): SessionEntry => ({
+const buildEntry = (
+  deliveryContext: SessionEntry["deliveryContext"],
+): SessionEntry => ({
   sessionId: "session-1",
   updatedAt: Date.now(),
   deliveryContext,
@@ -31,11 +36,15 @@ beforeEach(() => {
 
 describe("extractDeliveryInfo", () => {
   it("parses base session and thread/topic ids", () => {
-    expect(parseSessionThreadInfo("agent:main:telegram:group:1:topic:55")).toEqual({
+    expect(
+      parseSessionThreadInfo("agent:main:telegram:group:1:topic:55"),
+    ).toEqual({
       baseSessionKey: "agent:main:telegram:group:1",
       threadId: "55",
     });
-    expect(parseSessionThreadInfo("agent:main:slack:channel:C1:thread:123.456")).toEqual({
+    expect(
+      parseSessionThreadInfo("agent:main:slack:channel:C1:thread:123.456"),
+    ).toEqual({
       baseSessionKey: "agent:main:slack:channel:C1",
       threadId: "123.456",
     });

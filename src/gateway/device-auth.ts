@@ -17,7 +17,9 @@ export type DeviceAuthPayloadV3Params = DeviceAuthPayloadParams & {
   deviceFamily?: string | null;
 };
 
-export function buildDeviceAuthPayload(params: DeviceAuthPayloadParams): string {
+export function buildDeviceAuthPayload(
+  params: DeviceAuthPayloadParams,
+): string {
   const scopes = params.scopes.join(",");
   const token = params.token ?? "";
   return [
@@ -33,7 +35,9 @@ export function buildDeviceAuthPayload(params: DeviceAuthPayloadParams): string 
   ].join("|");
 }
 
-export function buildDeviceAuthPayloadV3(params: DeviceAuthPayloadV3Params): string {
+export function buildDeviceAuthPayloadV3(
+  params: DeviceAuthPayloadV3Params,
+): string {
   const scopes = params.scopes.join(",");
   const token = params.token ?? "";
   const platform = normalizeDeviceMetadataForAuth(params.platform);

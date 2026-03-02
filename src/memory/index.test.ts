@@ -1,7 +1,15 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import { getMemorySearchManager, type MemoryIndexManager } from "./index.js";
 import "./test-runtime-mocks.js";
 
@@ -44,7 +52,9 @@ describe("memory index", () => {
   const managersForCleanup = new Set<MemoryIndexManager>();
 
   beforeAll(async () => {
-    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mem-fixtures-"));
+    fixtureRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-mem-fixtures-"),
+    );
     workspaceDir = path.join(fixtureRoot, "workspace");
     memoryDir = path.join(workspaceDir, "memory");
     extraDir = path.join(workspaceDir, "extra");
@@ -60,7 +70,9 @@ describe("memory index", () => {
   });
 
   afterAll(async () => {
-    await Promise.all(Array.from(managersForCleanup).map((manager) => manager.close()));
+    await Promise.all(
+      Array.from(managersForCleanup).map((manager) => manager.close()),
+    );
     await fs.rm(fixtureRoot, { recursive: true, force: true });
   });
 
@@ -108,7 +120,10 @@ describe("memory index", () => {
           memorySearch: {
             provider: "openai",
             model: params.model ?? "mock-embed",
-            store: { path: params.storePath, vector: { enabled: params.vectorEnabled ?? false } },
+            store: {
+              path: params.storePath,
+              vector: { enabled: params.vectorEnabled ?? false },
+            },
             // Perf: keep test indexes to a single chunk to reduce sqlite work.
             chunking: { tokens: 4000, overlap: 0 },
             sync: { watch: false, onSessionStart: false, onSearch: true },
@@ -138,7 +153,9 @@ describe("memory index", () => {
     return result.manager as MemoryIndexManager;
   }
 
-  async function getPersistentManager(cfg: TestCfg): Promise<MemoryIndexManager> {
+  async function getPersistentManager(
+    cfg: TestCfg,
+  ): Promise<MemoryIndexManager> {
     const storePath = cfg.agents?.defaults?.memorySearch?.store?.path;
     if (!storePath) {
       throw new Error("store path missing");
@@ -194,7 +211,10 @@ describe("memory index", () => {
   });
 
   it("keeps dirty false in status-only manager after prior indexing", async () => {
-    const indexStatusPath = path.join(workspaceDir, `index-status-${Date.now()}.sqlite`);
+    const indexStatusPath = path.join(
+      workspaceDir,
+      `index-status-${Date.now()}.sqlite`,
+    );
     const cfg = createCfg({ storePath: indexStatusPath });
 
     const first = await getMemorySearchManager({ cfg, agentId: "main" });
@@ -218,7 +238,10 @@ describe("memory index", () => {
       workspaceDir,
       `index-source-change-${Date.now()}.sqlite`,
     );
-    const stateDir = path.join(fixtureRoot, `state-source-change-${Date.now()}`);
+    const stateDir = path.join(
+      fixtureRoot,
+      `state-source-change-${Date.now()}`,
+    );
     const sessionDir = path.join(stateDir, "agents", "main", "sessions");
     await fs.mkdir(sessionDir, { recursive: true });
     await fs.writeFile(
@@ -235,7 +258,9 @@ describe("memory index", () => {
           type: "message",
           message: {
             role: "assistant",
-            content: [{ type: "text", text: "session change test assistant line" }],
+            content: [
+              { type: "text", text: "session change test assistant line" },
+            ],
           },
         }),
       ].join("\n") + "\n",
@@ -256,24 +281,33 @@ describe("memory index", () => {
     });
 
     try {
-      const first = await getMemorySearchManager({ cfg: firstCfg, agentId: "main" });
+      const first = await getMemorySearchManager({
+        cfg: firstCfg,
+        agentId: "main",
+      });
       const firstManager = requireManager(first);
       await firstManager.sync?.({ reason: "test" });
       const firstStatus = firstManager.status();
       expect(
-        firstStatus.sourceCounts?.find((entry) => entry.source === "sessions")?.files ?? 0,
+        firstStatus.sourceCounts?.find((entry) => entry.source === "sessions")
+          ?.files ?? 0,
       ).toBe(0);
       await firstManager.close?.();
 
-      const second = await getMemorySearchManager({ cfg: secondCfg, agentId: "main" });
+      const second = await getMemorySearchManager({
+        cfg: secondCfg,
+        agentId: "main",
+      });
       const secondManager = requireManager(second);
       await secondManager.sync?.({ reason: "test" });
       const secondStatus = secondManager.status();
-      expect(secondStatus.sourceCounts?.find((entry) => entry.source === "sessions")?.files).toBe(
-        1,
-      );
       expect(
-        secondStatus.sourceCounts?.find((entry) => entry.source === "sessions")?.chunks ?? 0,
+        secondStatus.sourceCounts?.find((entry) => entry.source === "sessions")
+          ?.files,
+      ).toBe(1);
+      expect(
+        secondStatus.sourceCounts?.find((entry) => entry.source === "sessions")
+          ?.chunks ?? 0,
       ).toBeGreaterThan(0);
       await secondManager.close?.();
     } finally {
@@ -287,7 +321,10 @@ describe("memory index", () => {
   });
 
   it("reindexes when the embedding model changes", async () => {
-    const indexModelPath = path.join(workspaceDir, `index-model-change-${Date.now()}.sqlite`);
+    const indexModelPath = path.join(
+      workspaceDir,
+      `index-model-change-${Date.now()}.sqlite`,
+    );
     const base = createCfg({ storePath: indexModelPath });
     const baseAgents = base.agents!;
     const baseDefaults = baseAgents.defaults!;
@@ -383,16 +420,23 @@ describe("memory index", () => {
   it("rejects reading non-memory paths", async () => {
     const cfg = createCfg({ storePath: indexMainPath });
     const manager = await getPersistentManager(cfg);
-    await expect(manager.readFile({ relPath: "NOTES.md" })).rejects.toThrow("path required");
+    await expect(manager.readFile({ relPath: "NOTES.md" })).rejects.toThrow(
+      "path required",
+    );
   });
 
   it("allows reading from additional memory paths and blocks symlinks", async () => {
     await fs.mkdir(extraDir, { recursive: true });
     await fs.writeFile(path.join(extraDir, "extra.md"), "Extra content.");
 
-    const cfg = createCfg({ storePath: indexExtraPath, extraPaths: [extraDir] });
+    const cfg = createCfg({
+      storePath: indexExtraPath,
+      extraPaths: [extraDir],
+    });
     const manager = await getPersistentManager(cfg);
-    await expect(manager.readFile({ relPath: "extra/extra.md" })).resolves.toEqual({
+    await expect(
+      manager.readFile({ relPath: "extra/extra.md" }),
+    ).resolves.toEqual({
       path: "extra/extra.md",
       text: "Extra content.",
     });
@@ -410,9 +454,9 @@ describe("memory index", () => {
       }
     }
     if (symlinkOk) {
-      await expect(manager.readFile({ relPath: "extra/linked.md" })).rejects.toThrow(
-        "path required",
-      );
+      await expect(
+        manager.readFile({ relPath: "extra/linked.md" }),
+      ).rejects.toThrow("path required");
     }
   });
 });

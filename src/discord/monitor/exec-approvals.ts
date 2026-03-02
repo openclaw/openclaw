@@ -22,9 +22,15 @@ import type {
   ExecApprovalResolved,
 } from "../../infra/exec-approvals.js";
 import { logDebug, logError } from "../../logger.js";
-import { normalizeAccountId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import {
+  normalizeAccountId,
+  resolveAgentIdFromSessionKey,
+} from "../../routing/session-key.js";
 import type { RuntimeEnv } from "../../runtime.js";
-import { compileSafeRegex, testRegexWithBoundedInput } from "../../security/safe-regex.js";
+import {
+  compileSafeRegex,
+  testRegexWithBoundedInput,
+} from "../../security/safe-regex.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -37,7 +43,9 @@ const EXEC_APPROVAL_KEY = "execapproval";
 export type { ExecApprovalRequest, ExecApprovalResolved };
 
 /** Extract Discord channel ID from a session key like "agent:main:discord:channel:123456789" */
-export function extractDiscordChannelId(sessionKey?: string | null): string | null {
+export function extractDiscordChannelId(
+  sessionKey?: string | null,
+): string | null {
   if (!sessionKey) {
     return null;
   }
@@ -68,9 +76,10 @@ export function buildExecApprovalCustomId(
   approvalId: string,
   action: ExecApprovalDecision,
 ): string {
-  return [`${EXEC_APPROVAL_KEY}:id=${encodeCustomIdValue(approvalId)}`, `action=${action}`].join(
-    ";",
-  );
+  return [
+    `${EXEC_APPROVAL_KEY}:id=${encodeCustomIdValue(approvalId)}`,
+    `action=${action}`,
+  ].join(";");
 }
 
 export function parseExecApprovalData(
@@ -87,7 +96,11 @@ export function parseExecApprovalData(
     return null;
   }
   const action = rawAction as ExecApprovalDecision;
-  if (action !== "allow-once" && action !== "allow-always" && action !== "deny") {
+  if (
+    action !== "allow-once" &&
+    action !== "allow-always" &&
+    action !== "deny"
+  ) {
     return null;
   }
   return {
@@ -117,7 +130,9 @@ class ExecApprovalContainer extends DiscordUiContainer {
       components.push(new TextDisplay(params.description));
     }
     components.push(new Separator({ divider: true, spacing: "small" }));
-    components.push(new TextDisplay(`### Command\n\`\`\`\n${params.commandPreview}\n\`\`\``));
+    components.push(
+      new TextDisplay(`### Command\n\`\`\`\n${params.commandPreview}\n\`\`\``),
+    );
     if (params.metadataLines?.length) {
       components.push(new TextDisplay(params.metadataLines.join("\n")));
     }
@@ -193,7 +208,9 @@ function resolveExecApprovalAccountId(params: {
     const storePath = resolveStorePath(params.cfg.session?.store, { agentId });
     const store = loadSessionStore(storePath);
     const entry = store[sessionKey];
-    const channel = normalizeMessageChannel(entry?.origin?.provider ?? entry?.lastChannel);
+    const channel = normalizeMessageChannel(
+      entry?.origin?.provider ?? entry?.lastChannel,
+    );
     if (channel && channel !== "discord") {
       return null;
     }
@@ -204,7 +221,9 @@ function resolveExecApprovalAccountId(params: {
   }
 }
 
-function buildExecApprovalMetadataLines(request: ExecApprovalRequest): string[] {
+function buildExecApprovalMetadataLines(
+  request: ExecApprovalRequest,
+): string[] {
   const lines: string[] = [];
   if (request.request.cwd) {
     lines.push(`- Working Directory: ${request.request.cwd}`);
@@ -212,7 +231,10 @@ function buildExecApprovalMetadataLines(request: ExecApprovalRequest): string[] 
   if (request.request.host) {
     lines.push(`- Host: ${request.request.host}`);
   }
-  if (Array.isArray(request.request.envKeys) && request.request.envKeys.length > 0) {
+  if (
+    Array.isArray(request.request.envKeys) &&
+    request.request.envKeys.length > 0
+  ) {
     lines.push(`- Env Overrides: ${request.request.envKeys.join(", ")}`);
   }
   if (request.request.agentId) {
@@ -221,14 +243,18 @@ function buildExecApprovalMetadataLines(request: ExecApprovalRequest): string[] 
   return lines;
 }
 
-function buildExecApprovalPayload(container: DiscordUiContainer): MessagePayloadObject {
+function buildExecApprovalPayload(
+  container: DiscordUiContainer,
+): MessagePayloadObject {
   const components: TopLevelComponents[] = [container];
   return { components };
 }
 
 function formatCommandPreview(commandText: string, maxChars: number): string {
   const commandRaw =
-    commandText.length > maxChars ? `${commandText.slice(0, maxChars)}...` : commandText;
+    commandText.length > maxChars
+      ? `${commandText.slice(0, maxChars)}...`
+      : commandText;
   return commandRaw.replace(/`/g, "\u200b`");
 }
 
@@ -240,7 +266,10 @@ function createExecApprovalRequestContainer(params: {
 }): ExecApprovalContainer {
   const commandText = params.request.request.command;
   const commandPreview = formatCommandPreview(commandText, 1000);
-  const expiresAtSeconds = Math.max(0, Math.floor(params.request.expiresAtMs / 1000));
+  const expiresAtSeconds = Math.max(
+    0,
+    Math.floor(params.request.expiresAtMs / 1000),
+  );
 
   return new ExecApprovalContainer({
     cfg: params.cfg,
@@ -283,7 +312,9 @@ function createResolvedContainer(params: {
     cfg: params.cfg,
     accountId: params.accountId,
     title: `Exec Approval: ${decisionLabel}`,
-    description: params.resolvedBy ? `Resolved by ${params.resolvedBy}` : "Resolved",
+    description: params.resolvedBy
+      ? `Resolved by ${params.resolvedBy}`
+      : "Resolved",
     commandPreview,
     footer: `ID: ${params.request.id}`,
     accentColor,
@@ -455,7 +486,9 @@ export class DiscordExecApprovalHandler {
     }
   }
 
-  private async handleApprovalRequested(request: ExecApprovalRequest): Promise<void> {
+  private async handleApprovalRequested(
+    request: ExecApprovalRequest,
+  ): Promise<void> {
     if (!this.shouldHandle(request)) {
       return;
     }
@@ -509,10 +542,14 @@ export class DiscordExecApprovalHandler {
               timeoutId,
             });
 
-            logDebug(`discord exec approvals: sent approval ${request.id} to channel ${channelId}`);
+            logDebug(
+              `discord exec approvals: sent approval ${request.id} to channel ${channelId}`,
+            );
           }
         } catch (err) {
-          logError(`discord exec approvals: failed to send to channel: ${String(err)}`);
+          logError(
+            `discord exec approvals: failed to send to channel: ${String(err)}`,
+          );
         }
       } else {
         if (!sendToDm) {
@@ -521,7 +558,9 @@ export class DiscordExecApprovalHandler {
           );
           fallbackToDm = true;
         } else {
-          logDebug("discord exec approvals: could not extract channel id from session key");
+          logDebug(
+            "discord exec approvals: could not extract channel id from session key",
+          );
         }
       }
     }
@@ -543,7 +582,9 @@ export class DiscordExecApprovalHandler {
           )) as { id: string };
 
           if (!dmChannel?.id) {
-            logError(`discord exec approvals: failed to create DM for user ${userId}`);
+            logError(
+              `discord exec approvals: failed to create DM for user ${userId}`,
+            );
             continue;
           }
 
@@ -557,7 +598,9 @@ export class DiscordExecApprovalHandler {
           )) as { id: string; channel_id: string };
 
           if (!message?.id) {
-            logError(`discord exec approvals: failed to send message to user ${userId}`);
+            logError(
+              `discord exec approvals: failed to send message to user ${userId}`,
+            );
             continue;
           }
 
@@ -579,15 +622,21 @@ export class DiscordExecApprovalHandler {
             timeoutId,
           });
 
-          logDebug(`discord exec approvals: sent approval ${request.id} to user ${userId}`);
+          logDebug(
+            `discord exec approvals: sent approval ${request.id} to user ${userId}`,
+          );
         } catch (err) {
-          logError(`discord exec approvals: failed to notify user ${userId}: ${String(err)}`);
+          logError(
+            `discord exec approvals: failed to notify user ${userId}: ${String(err)}`,
+          );
         }
       }
     }
   }
 
-  private async handleApprovalResolved(resolved: ExecApprovalResolved): Promise<void> {
+  private async handleApprovalResolved(
+    resolved: ExecApprovalResolved,
+  ): Promise<void> {
     // Clean up all pending entries for this approval (channel + dm)
     const request = this.requestCache.get(resolved.id);
     this.requestCache.delete(resolved.id);
@@ -596,7 +645,9 @@ export class DiscordExecApprovalHandler {
       return;
     }
 
-    logDebug(`discord exec approvals: resolved ${resolved.id} with ${resolved.decision}`);
+    logDebug(
+      `discord exec approvals: resolved ${resolved.id} with ${resolved.decision}`,
+    );
 
     const container = createResolvedContainer({
       request,
@@ -616,7 +667,11 @@ export class DiscordExecApprovalHandler {
       clearTimeout(pending.timeoutId);
       this.pending.delete(key);
 
-      await this.finalizeMessage(pending.discordChannelId, pending.discordMessageId, container);
+      await this.finalizeMessage(
+        pending.discordChannelId,
+        pending.discordMessageId,
+        container,
+      );
     }
   }
 
@@ -647,14 +702,20 @@ export class DiscordExecApprovalHandler {
       return;
     }
 
-    logDebug(`discord exec approvals: timeout for ${approvalId} (${source ?? "default"})`);
+    logDebug(
+      `discord exec approvals: timeout for ${approvalId} (${source ?? "default"})`,
+    );
 
     const container = createExpiredContainer({
       request,
       cfg: this.opts.cfg,
       accountId: this.opts.accountId,
     });
-    await this.finalizeMessage(pending.discordChannelId, pending.discordMessageId, container);
+    await this.finalizeMessage(
+      pending.discordChannelId,
+      pending.discordMessageId,
+      container,
+    );
   }
 
   private async finalizeMessage(
@@ -674,11 +735,16 @@ export class DiscordExecApprovalHandler {
       );
 
       await discordRequest(
-        () => rest.delete(Routes.channelMessage(channelId, messageId)) as Promise<void>,
+        () =>
+          rest.delete(
+            Routes.channelMessage(channelId, messageId),
+          ) as Promise<void>,
         "delete-approval",
       );
     } catch (err) {
-      logError(`discord exec approvals: failed to delete message: ${String(err)}`);
+      logError(
+        `discord exec approvals: failed to delete message: ${String(err)}`,
+      );
       await this.updateMessage(channelId, messageId, container);
     }
   }
@@ -703,17 +769,24 @@ export class DiscordExecApprovalHandler {
         "update-approval",
       );
     } catch (err) {
-      logError(`discord exec approvals: failed to update message: ${String(err)}`);
+      logError(
+        `discord exec approvals: failed to update message: ${String(err)}`,
+      );
     }
   }
 
-  async resolveApproval(approvalId: string, decision: ExecApprovalDecision): Promise<boolean> {
+  async resolveApproval(
+    approvalId: string,
+    decision: ExecApprovalDecision,
+  ): Promise<boolean> {
     if (!this.gatewayClient) {
       logError("discord exec approvals: gateway client not connected");
       return false;
     }
 
-    logDebug(`discord exec approvals: resolving ${approvalId} with ${decision}`);
+    logDebug(
+      `discord exec approvals: resolving ${approvalId} with ${decision}`,
+    );
 
     try {
       await this.gatewayClient.request("exec.approval.resolve", {
@@ -749,7 +822,10 @@ export class ExecApprovalButton extends Button {
     this.ctx = ctx;
   }
 
-  async run(interaction: ButtonInteraction, data: ComponentData): Promise<void> {
+  async run(
+    interaction: ButtonInteraction,
+    data: ComponentData,
+  ): Promise<void> {
     const parsed = parseExecApprovalData(data);
     if (!parsed) {
       try {
@@ -795,7 +871,10 @@ export class ExecApprovalButton extends Button {
       // Interaction may have expired, try to continue anyway
     }
 
-    const ok = await this.ctx.handler.resolveApproval(parsed.approvalId, parsed.action);
+    const ok = await this.ctx.handler.resolveApproval(
+      parsed.approvalId,
+      parsed.action,
+    );
 
     if (!ok) {
       try {
@@ -812,6 +891,8 @@ export class ExecApprovalButton extends Button {
   }
 }
 
-export function createExecApprovalButton(ctx: ExecApprovalButtonContext): Button {
+export function createExecApprovalButton(
+  ctx: ExecApprovalButtonContext,
+): Button {
   return new ExecApprovalButton(ctx);
 }

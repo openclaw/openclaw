@@ -1,7 +1,10 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
+import {
+  CURRENT_SESSION_VERSION,
+  SessionManager,
+} from "@mariozechner/pi-coding-agent";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -30,7 +33,10 @@ import { archiveSessionTranscripts } from "../../gateway/session-utils.fs.js";
 import { deliverSessionMaintenanceWarning } from "../../infra/session-maintenance-warning.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import { buildAgentMainSessionKey, normalizeMainKey } from "../../routing/session-key.js";
+import {
+  buildAgentMainSessionKey,
+  normalizeMainKey,
+} from "../../routing/session-key.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import {
   deliveryContextFromSession,
@@ -56,7 +62,13 @@ function resolveSessionKeyChannelHint(sessionKey?: string): string | undefined {
     return undefined;
   }
   const head = parsed.rest.split(":")[0]?.trim().toLowerCase();
-  if (!head || head === "main" || head === "cron" || head === "subagent" || head === "acp") {
+  if (
+    !head ||
+    head === "main" ||
+    head === "cron" ||
+    head === "subagent" ||
+    head === "acp"
+  ) {
     return undefined;
   }
   return normalizeMessageChannel(head);
@@ -64,7 +76,9 @@ function resolveSessionKeyChannelHint(sessionKey?: string): string | undefined {
 
 function isExternalRoutingChannel(channel?: string): channel is string {
   return Boolean(
-    channel && channel !== INTERNAL_MESSAGE_CHANNEL && isDeliverableMessageChannel(channel),
+    channel &&
+    channel !== INTERNAL_MESSAGE_CHANNEL &&
+    isDeliverableMessageChannel(channel),
   );
 }
 
@@ -73,7 +87,9 @@ function resolveLastChannelRaw(params: {
   persistedLastChannel?: string;
   sessionKey?: string;
 }): string | undefined {
-  const originatingChannel = normalizeMessageChannel(params.originatingChannelRaw);
+  const originatingChannel = normalizeMessageChannel(
+    params.originatingChannelRaw,
+  );
   const persistedChannel = normalizeMessageChannel(params.persistedLastChannel);
   const sessionKeyChannelHint = resolveSessionKeyChannelHint(params.sessionKey);
   let resolved = params.originatingChannelRaw || params.persistedLastChannel;
@@ -97,7 +113,9 @@ function resolveLastToRaw(params: {
   persistedLastChannel?: string;
   sessionKey?: string;
 }): string | undefined {
-  const originatingChannel = normalizeMessageChannel(params.originatingChannelRaw);
+  const originatingChannel = normalizeMessageChannel(
+    params.originatingChannelRaw,
+  );
   const persistedChannel = normalizeMessageChannel(params.persistedLastChannel);
   const sessionKeyChannelHint = resolveSessionKeyChannelHint(params.sessionKey);
 
@@ -106,7 +124,8 @@ function resolveLastToRaw(params: {
   // (e.g., session/webchat ids).
   if (!isExternalRoutingChannel(originatingChannel)) {
     const hasExternalFallback =
-      isExternalRoutingChannel(persistedChannel) || isExternalRoutingChannel(sessionKeyChannelHint);
+      isExternalRoutingChannel(persistedChannel) ||
+      isExternalRoutingChannel(sessionKeyChannelHint);
     if (hasExternalFallback && params.persistedLastTo) {
       return params.persistedLastTo;
     }
@@ -148,7 +167,11 @@ type LegacyMainDeliveryRetirement = {
 
 function resolveParentForkMaxTokens(cfg: OpenClawConfig): number {
   const configured = cfg.session?.parentForkMaxTokens;
-  if (typeof configured === "number" && Number.isFinite(configured) && configured >= 0) {
+  if (
+    typeof configured === "number" &&
+    Number.isFinite(configured) &&
+    configured >= 0
+  ) {
     return Math.floor(configured);
   }
   return DEFAULT_PARENT_FORK_MAX_TOKENS;
@@ -178,7 +201,9 @@ function maybeRetireLegacyMainDeliveryRoute(params: {
   if (!legacyMain) {
     return undefined;
   }
-  const legacyRouteKey = deliveryContextKey(deliveryContextFromSession(legacyMain));
+  const legacyRouteKey = deliveryContextKey(
+    deliveryContextFromSession(legacyMain),
+  );
   if (!legacyRouteKey) {
     return undefined;
   }
@@ -232,7 +257,8 @@ function forkSessionFromParent(params: {
     const manager = SessionManager.open(parentSessionFile);
     const leafId = manager.getLeafId();
     if (leafId) {
-      const sessionFile = manager.createBranchedSession(leafId) ?? manager.getSessionFile();
+      const sessionFile =
+        manager.createBranchedSession(leafId) ?? manager.getSessionFile();
       const sessionId = manager.getSessionId();
       if (sessionFile && sessionId) {
         return { sessionId, sessionFile };
@@ -241,7 +267,10 @@ function forkSessionFromParent(params: {
     const sessionId = crypto.randomUUID();
     const timestamp = new Date().toISOString();
     const fileTimestamp = timestamp.replace(/[:.]/g, "-");
-    const sessionFile = path.join(manager.getSessionDir(), `${fileTimestamp}_${sessionId}.jsonl`);
+    const sessionFile = path.join(
+      manager.getSessionDir(),
+      `${fileTimestamp}_${sessionId}.jsonl`,
+    );
     const header = {
       type: "session",
       version: CURRENT_SESSION_VERSION,
@@ -266,7 +295,9 @@ export async function initSessionState(params: {
   // Native slash commands (Telegram/Discord/Slack) are delivered on a separate
   // "slash session" key, but should mutate the target chat session.
   const targetSessionKey =
-    ctx.CommandSource === "native" ? ctx.CommandTargetSessionKey?.trim() : undefined;
+    ctx.CommandSource === "native"
+      ? ctx.CommandTargetSessionKey?.trim()
+      : undefined;
   const sessionCtxForState =
     targetSessionKey && targetSessionKey !== ctx.SessionKey
       ? { ...ctx, SessionKey: targetSessionKey }
@@ -277,7 +308,8 @@ export async function initSessionState(params: {
     sessionKey: sessionCtxForState.SessionKey,
     config: cfg,
   });
-  const groupResolution = resolveGroupSessionKey(sessionCtxForState) ?? undefined;
+  const groupResolution =
+    resolveGroupSessionKey(sessionCtxForState) ?? undefined;
   const resetTriggers = sessionCfg?.resetTriggers?.length
     ? sessionCfg.resetTriggers
     : DEFAULT_RESET_TRIGGERS;
@@ -289,9 +321,12 @@ export async function initSessionState(params: {
   // Stale cache (especially with multiple gateway processes or on Windows where
   // mtime granularity may miss rapid writes) can cause incorrect sessionId
   // generation, leading to orphaned transcript files. See #17971.
-  const sessionStore: Record<string, SessionEntry> = loadSessionStore(storePath, {
-    skipCache: true,
-  });
+  const sessionStore: Record<string, SessionEntry> = loadSessionStore(
+    storePath,
+    {
+      skipCache: true,
+    },
+  );
   let sessionKey: string | undefined;
   let sessionEntry: SessionEntry;
 
@@ -312,10 +347,13 @@ export async function initSessionState(params: {
 
   const normalizedChatType = normalizeChatType(ctx.ChatType);
   const isGroup =
-    normalizedChatType != null && normalizedChatType !== "direct" ? true : Boolean(groupResolution);
+    normalizedChatType != null && normalizedChatType !== "direct"
+      ? true
+      : Boolean(groupResolution);
   // Prefer CommandBody/RawBody (clean message) for command detection; fall back
   // to Body which may contain structural context (history, sender labels).
-  const commandSource = ctx.BodyForCommands ?? ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "";
+  const commandSource =
+    ctx.BodyForCommands ?? ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "";
   // IMPORTANT: do NOT lowercase the entire command body.
   // Users often pass case-sensitive arguments (e.g. filesystem paths on Linux).
   // Command parsing downstream lowercases only the command token for matching.
@@ -349,7 +387,10 @@ export async function initSessionState(params: {
       break;
     }
     const triggerLower = trigger.toLowerCase();
-    if (trimmedBodyLower === triggerLower || strippedForResetLower === triggerLower) {
+    if (
+      trimmedBodyLower === triggerLower ||
+      strippedForResetLower === triggerLower
+    ) {
       isNewSession = true;
       bodyStripped = "";
       resetTriggered = true;
@@ -378,10 +419,12 @@ export async function initSessionState(params: {
     ctx,
   });
   if (retiredLegacyMainDelivery) {
-    sessionStore[retiredLegacyMainDelivery.key] = retiredLegacyMainDelivery.entry;
+    sessionStore[retiredLegacyMainDelivery.key] =
+      retiredLegacyMainDelivery.entry;
   }
   const entry = sessionStore[sessionKey];
-  const previousSessionEntry = resetTriggered && entry ? { ...entry } : undefined;
+  const previousSessionEntry =
+    resetTriggered && entry ? { ...entry } : undefined;
   const now = Date.now();
   const isThread = resolveThreadFlag({
     sessionKey,
@@ -405,7 +448,11 @@ export async function initSessionState(params: {
     resetOverride: channelReset,
   });
   const freshEntry = entry
-    ? evaluateSessionFreshness({ updatedAt: entry.updatedAt, now, policy: resetPolicy }).fresh
+    ? evaluateSessionFreshness({
+        updatedAt: entry.updatedAt,
+        now,
+        policy: resetPolicy,
+      }).fresh
     : false;
 
   if (!isNewSession && freshEntry) {
@@ -458,7 +505,8 @@ export async function initSessionState(params: {
   // Only fall back to persisted threadId for thread sessions.  Non-thread
   // sessions (e.g. DM without topics) must not inherit a stale threadId from a
   // previous interaction that happened inside a topic/thread.
-  const lastThreadIdRaw = ctx.MessageThreadId || (isThread ? baseEntry?.lastThreadId : undefined);
+  const lastThreadIdRaw =
+    ctx.MessageThreadId || (isThread ? baseEntry?.lastThreadId : undefined);
   const deliveryFields = normalizeSessionDeliveryFields({
     deliveryContext: {
       channel: lastChannelRaw,
@@ -559,7 +607,11 @@ export async function initSessionState(params: {
     }
   }
   const fallbackSessionFile = !sessionEntry.sessionFile
-    ? resolveSessionTranscriptPath(sessionEntry.sessionId, agentId, ctx.MessageThreadId)
+    ? resolveSessionTranscriptPath(
+        sessionEntry.sessionId,
+        agentId,
+        ctx.MessageThreadId,
+      )
     : undefined;
   const resolvedSessionFile = await resolveAndPersistSessionFile({
     sessionId: sessionEntry.sessionId,
@@ -641,7 +693,10 @@ export async function initSessionState(params: {
     const effectiveSessionId = sessionId ?? "";
 
     // If replacing an existing session, fire session_end for the old one
-    if (previousSessionEntry?.sessionId && previousSessionEntry.sessionId !== effectiveSessionId) {
+    if (
+      previousSessionEntry?.sessionId &&
+      previousSessionEntry.sessionId !== effectiveSessionId
+    ) {
       if (hookRunner.hasHooks("session_end")) {
         void hookRunner
           .runSessionEnd(

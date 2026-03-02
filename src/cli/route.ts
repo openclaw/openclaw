@@ -20,7 +20,9 @@ async function prepareRoutedCommand(params: {
     ...(suppressDoctorStdout ? { suppressDoctorStdout: true } : {}),
   });
   const shouldLoadPlugins =
-    typeof params.loadPlugins === "function" ? params.loadPlugins(params.argv) : params.loadPlugins;
+    typeof params.loadPlugins === "function"
+      ? params.loadPlugins(params.argv)
+      : params.loadPlugins;
   if (shouldLoadPlugins) {
     ensurePluginRegistryLoaded();
   }
@@ -42,6 +44,10 @@ export async function tryRouteCli(argv: string[]): Promise<boolean> {
   if (!route) {
     return false;
   }
-  await prepareRoutedCommand({ argv, commandPath: path, loadPlugins: route.loadPlugins });
+  await prepareRoutedCommand({
+    argv,
+    commandPath: path,
+    loadPlugins: route.loadPlugins,
+  });
   return route.run(argv);
 }

@@ -11,14 +11,21 @@ import {
   resolveMainSessionKey,
 } from "../config/sessions/main-session.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
-import { loadSessionStore, updateSessionStore } from "../config/sessions/store.js";
+import {
+  loadSessionStore,
+  updateSessionStore,
+} from "../config/sessions/store.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { type RuntimeEnv, defaultRuntime } from "../runtime.js";
 
 function generateBootSessionId(): string {
   const now = new Date();
-  const ts = now.toISOString().replace(/[:.]/g, "-").replace("T", "_").replace("Z", "");
+  const ts = now
+    .toISOString()
+    .replace(/[:.]/g, "-")
+    .replace("T", "_")
+    .replace("Z", "");
   const suffix = crypto.randomUUID().slice(0, 8);
   return `boot-${ts}-${suffix}`;
 }
@@ -187,9 +194,12 @@ export async function runBootOnce(params: {
     log.error(`boot: agent run failed: ${agentFailure}`);
   }
 
-  const mappingRestoreFailure = await restoreMainSessionMapping(mappingSnapshot);
+  const mappingRestoreFailure =
+    await restoreMainSessionMapping(mappingSnapshot);
   if (mappingRestoreFailure) {
-    log.error(`boot: failed to restore main session mapping: ${mappingRestoreFailure}`);
+    log.error(
+      `boot: failed to restore main session mapping: ${mappingRestoreFailure}`,
+    );
   }
 
   if (!agentFailure && !mappingRestoreFailure) {
@@ -197,7 +207,9 @@ export async function runBootOnce(params: {
   }
   const reasonParts = [
     agentFailure ? `agent run failed: ${agentFailure}` : undefined,
-    mappingRestoreFailure ? `mapping restore failed: ${mappingRestoreFailure}` : undefined,
+    mappingRestoreFailure
+      ? `mapping restore failed: ${mappingRestoreFailure}`
+      : undefined,
   ].filter((part): part is string => Boolean(part));
   return { status: "failed", reason: reasonParts.join("; ") };
 }

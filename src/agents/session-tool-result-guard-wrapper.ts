@@ -25,13 +25,18 @@ export function guardSessionManager(
     allowedToolNames?: Iterable<string>;
   },
 ): GuardedSessionManager {
-  if (typeof (sessionManager as GuardedSessionManager).flushPendingToolResults === "function") {
+  if (
+    typeof (sessionManager as GuardedSessionManager).flushPendingToolResults ===
+    "function"
+  ) {
     return sessionManager as GuardedSessionManager;
   }
 
   const hookRunner = getGlobalHookRunner();
   const beforeMessageWrite = hookRunner?.hasHooks("before_message_write")
-    ? (event: { message: import("@mariozechner/pi-agent-core").AgentMessage }) => {
+    ? (event: {
+        message: import("@mariozechner/pi-agent-core").AgentMessage;
+      }) => {
         return hookRunner.runBeforeMessageWrite(event, {
           agentId: opts?.agentId,
           sessionKey: opts?.sessionKey,
@@ -41,7 +46,10 @@ export function guardSessionManager(
 
   const transform = hookRunner?.hasHooks("tool_result_persist")
     ? // oxlint-disable-next-line typescript/no-explicit-any
-      (message: any, meta: { toolCallId?: string; toolName?: string; isSynthetic?: boolean }) => {
+      (
+        message: any,
+        meta: { toolCallId?: string; toolName?: string; isSynthetic?: boolean },
+      ) => {
         const out = hookRunner.runToolResultPersist(
           {
             toolName: meta.toolName,
@@ -68,6 +76,7 @@ export function guardSessionManager(
     allowedToolNames: opts?.allowedToolNames,
     beforeMessageWriteHook: beforeMessageWrite,
   });
-  (sessionManager as GuardedSessionManager).flushPendingToolResults = guard.flushPendingToolResults;
+  (sessionManager as GuardedSessionManager).flushPendingToolResults =
+    guard.flushPendingToolResults;
   return sessionManager as GuardedSessionManager;
 }

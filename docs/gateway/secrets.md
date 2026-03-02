@@ -134,7 +134,11 @@ Define providers under `secrets.providers`:
 - Request payload (stdin):
 
 ```json
-{ "protocolVersion": 1, "provider": "vault", "ids": ["providers/openai/apiKey"] }
+{
+  "protocolVersion": 1,
+  "provider": "vault",
+  "ids": ["providers/openai/apiKey"]
+}
 ```
 
 - Response payload (stdout):
@@ -224,7 +228,12 @@ Optional per-id errors:
         command: "/opt/homebrew/bin/sops",
         allowSymlinkCommand: true, // required for Homebrew symlinked binaries
         trustedDirs: ["/opt/homebrew"],
-        args: ["-d", "--extract", '["providers"]["openai"]["apiKey"]', "/path/to/secrets.enc.json"],
+        args: [
+          "-d",
+          "--extract",
+          '["providers"]["openai"]["apiKey"]',
+          "/path/to/secrets.enc.json",
+        ],
         passEnv: ["SOPS_AGE_KEY_FILE"],
         jsonOnly: false,
       },

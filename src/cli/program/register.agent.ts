@@ -19,29 +19,48 @@ import { createDefaultDeps } from "../deps.js";
 import { formatHelpExamples } from "../help-format.js";
 import { collectOption } from "./helpers.js";
 
-export function registerAgentCommands(program: Command, args: { agentChannelOptions: string }) {
+export function registerAgentCommands(
+  program: Command,
+  args: { agentChannelOptions: string },
+) {
   program
     .command("agent")
     .description("Run an agent turn via the Gateway (use --local for embedded)")
     .requiredOption("-m, --message <text>", "Message body for the agent")
-    .option("-t, --to <number>", "Recipient number in E.164 used to derive the session key")
+    .option(
+      "-t, --to <number>",
+      "Recipient number in E.164 used to derive the session key",
+    )
     .option("--session-id <id>", "Use an explicit session id")
     .option("--agent <id>", "Agent id (overrides routing bindings)")
-    .option("--thinking <level>", "Thinking level: off | minimal | low | medium | high")
+    .option(
+      "--thinking <level>",
+      "Thinking level: off | minimal | low | medium | high",
+    )
     .option("--verbose <on|off>", "Persist agent verbose level for the session")
     .option(
       "--channel <channel>",
       `Delivery channel: ${args.agentChannelOptions} (omit to use the main session channel)`,
     )
-    .option("--reply-to <target>", "Delivery target override (separate from session routing)")
-    .option("--reply-channel <channel>", "Delivery channel override (separate from routing)")
+    .option(
+      "--reply-to <target>",
+      "Delivery target override (separate from session routing)",
+    )
+    .option(
+      "--reply-channel <channel>",
+      "Delivery channel override (separate from routing)",
+    )
     .option("--reply-account <id>", "Delivery account id override")
     .option(
       "--local",
       "Run the embedded agent locally (requires model provider API keys in your shell)",
       false,
     )
-    .option("--deliver", "Send the agent's reply back to the selected channel", false)
+    .option(
+      "--deliver",
+      "Send the agent's reply back to the selected channel",
+      false,
+    )
     .option("--json", "Output result as JSON", false)
     .option(
       "--timeout <seconds>",
@@ -53,8 +72,14 @@ export function registerAgentCommands(program: Command, args: { agentChannelOpti
         `
 ${theme.heading("Examples:")}
 ${formatHelpExamples([
-  ['openclaw agent --to +15555550123 --message "status update"', "Start a new session."],
-  ['openclaw agent --agent ops --message "Summarize logs"', "Use a specific agent."],
+  [
+    'openclaw agent --to +15555550123 --message "status update"',
+    "Start a new session.",
+  ],
+  [
+    'openclaw agent --agent ops --message "Summarize logs"',
+    "Use a specific agent.",
+  ],
   [
     'openclaw agent --session-id 1234 --message "Summarize inbox" --thinking medium',
     "Target a session with explicit thinking level.",
@@ -63,7 +88,10 @@ ${formatHelpExamples([
     'openclaw agent --to +15555550123 --message "Trace logs" --verbose on --json',
     "Enable verbose logging and JSON output.",
   ],
-  ['openclaw agent --to +15555550123 --message "Summon reply" --deliver', "Deliver reply."],
+  [
+    'openclaw agent --to +15555550123 --message "Summon reply" --deliver',
+    "Deliver reply.",
+  ],
   [
     'openclaw agent --agent ops --message "Generate report" --deliver --reply-channel slack --reply-to "#reports"',
     "Send reply to a different channel/target.",
@@ -73,7 +101,8 @@ ${formatHelpExamples([
 ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.openclaw.ai/cli/agent")}`,
     )
     .action(async (opts) => {
-      const verboseLevel = typeof opts.verbose === "string" ? opts.verbose.toLowerCase() : "";
+      const verboseLevel =
+        typeof opts.verbose === "string" ? opts.verbose.toLowerCase() : "";
       setVerbose(verboseLevel === "on");
       // Build default deps (keeps parity with other commands; future-proofing).
       const deps = createDefaultDeps();
@@ -138,7 +167,9 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.openclaw.ai/cli/age
         await agentsBindCommand(
           {
             agent: opts.agent as string | undefined,
-            bind: Array.isArray(opts.bind) ? (opts.bind as string[]) : undefined,
+            bind: Array.isArray(opts.bind)
+              ? (opts.bind as string[])
+              : undefined,
             json: Boolean(opts.json),
           },
           defaultRuntime,
@@ -150,7 +181,12 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.openclaw.ai/cli/age
     .command("unbind")
     .description("Remove routing bindings for an agent")
     .option("--agent <id>", "Agent id (defaults to current default agent)")
-    .option("--bind <channel[:accountId]>", "Binding to remove (repeatable)", collectOption, [])
+    .option(
+      "--bind <channel[:accountId]>",
+      "Binding to remove (repeatable)",
+      collectOption,
+      [],
+    )
     .option("--all", "Remove all bindings for this agent", false)
     .option("--json", "Output JSON summary", false)
     .action(async (opts) => {
@@ -158,7 +194,9 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.openclaw.ai/cli/age
         await agentsUnbindCommand(
           {
             agent: opts.agent as string | undefined,
-            bind: Array.isArray(opts.bind) ? (opts.bind as string[]) : undefined,
+            bind: Array.isArray(opts.bind)
+              ? (opts.bind as string[])
+              : undefined,
             all: Boolean(opts.all),
             json: Boolean(opts.json),
           },
@@ -173,7 +211,12 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.openclaw.ai/cli/age
     .option("--workspace <dir>", "Workspace directory for the new agent")
     .option("--model <id>", "Model id for this agent")
     .option("--agent-dir <dir>", "Agent state directory for this agent")
-    .option("--bind <channel[:accountId]>", "Route channel binding (repeatable)", collectOption, [])
+    .option(
+      "--bind <channel[:accountId]>",
+      "Route channel binding (repeatable)",
+      collectOption,
+      [],
+    )
     .option("--non-interactive", "Disable prompts; requires --workspace", false)
     .option("--json", "Output JSON summary", false)
     .action(async (name, opts, command) => {
@@ -191,7 +234,9 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.openclaw.ai/cli/age
             workspace: opts.workspace as string | undefined,
             model: opts.model as string | undefined,
             agentDir: opts.agentDir as string | undefined,
-            bind: Array.isArray(opts.bind) ? (opts.bind as string[]) : undefined,
+            bind: Array.isArray(opts.bind)
+              ? (opts.bind as string[])
+              : undefined,
             nonInteractive: Boolean(opts.nonInteractive),
             json: Boolean(opts.json),
           },
@@ -205,13 +250,19 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.openclaw.ai/cli/age
     .command("set-identity")
     .description("Update an agent identity (name/theme/emoji/avatar)")
     .option("--agent <id>", "Agent id to update")
-    .option("--workspace <dir>", "Workspace directory used to locate the agent + IDENTITY.md")
+    .option(
+      "--workspace <dir>",
+      "Workspace directory used to locate the agent + IDENTITY.md",
+    )
     .option("--identity-file <path>", "Explicit IDENTITY.md path to read")
     .option("--from-identity", "Read values from IDENTITY.md", false)
     .option("--name <name>", "Identity name")
     .option("--theme <theme>", "Identity theme")
     .option("--emoji <emoji>", "Identity emoji")
-    .option("--avatar <value>", "Identity avatar (workspace path, http(s) URL, or data URI)")
+    .option(
+      "--avatar <value>",
+      "Identity avatar (workspace path, http(s) URL, or data URI)",
+    )
     .option("--json", "Output JSON summary", false)
     .addHelpText(
       "after",
@@ -219,8 +270,14 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.openclaw.ai/cli/age
         `
 ${theme.heading("Examples:")}
 ${formatHelpExamples([
-  ['openclaw agents set-identity --agent main --name "OpenClaw" --emoji "🦞"', "Set name + emoji."],
-  ["openclaw agents set-identity --agent main --avatar avatars/openclaw.png", "Set avatar path."],
+  [
+    'openclaw agents set-identity --agent main --name "OpenClaw" --emoji "🦞"',
+    "Set name + emoji.",
+  ],
+  [
+    "openclaw agents set-identity --agent main --avatar avatars/openclaw.png",
+    "Set avatar path.",
+  ],
   [
     "openclaw agents set-identity --workspace ~/.openclaw/workspace --from-identity",
     "Load from IDENTITY.md.",

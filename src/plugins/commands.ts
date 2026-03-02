@@ -111,7 +111,10 @@ export function registerPluginCommand(
 ): CommandRegistrationResult {
   // Prevent registration while commands are being processed
   if (registryLocked) {
-    return { ok: false, error: "Cannot register commands while processing is in progress" };
+    return {
+      ok: false,
+      error: "Cannot register commands while processing is in progress",
+    };
   }
 
   // Validate handler is a function
@@ -177,8 +180,10 @@ export function matchPluginCommand(
 
   // Extract command name and args
   const spaceIndex = trimmed.indexOf(" ");
-  const commandName = spaceIndex === -1 ? trimmed : trimmed.slice(0, spaceIndex);
-  const args = spaceIndex === -1 ? undefined : trimmed.slice(spaceIndex + 1).trim();
+  const commandName =
+    spaceIndex === -1 ? trimmed : trimmed.slice(0, spaceIndex);
+  const args =
+    spaceIndex === -1 ? undefined : trimmed.slice(spaceIndex + 1).trim();
 
   const key = commandName.toLowerCase();
   const command = pluginCommands.get(key);
@@ -213,7 +218,8 @@ function sanitizeArgs(args: string | undefined): string | undefined {
   let sanitized = "";
   for (const char of args) {
     const code = char.charCodeAt(0);
-    const isControl = (code <= 0x1f && code !== 0x09 && code !== 0x0a) || code === 0x7f;
+    const isControl =
+      (code <= 0x1f && code !== 0x09 && code !== 0x0a) || code === 0x7f;
     if (!isControl) {
       sanitized += char;
     }
@@ -241,7 +247,15 @@ export async function executePluginCommand(params: {
   accountId?: PluginCommandContext["accountId"];
   messageThreadId?: PluginCommandContext["messageThreadId"];
 }): Promise<PluginCommandResult> {
-  const { command, args, senderId, channel, isAuthorizedSender, commandBody, config } = params;
+  const {
+    command,
+    args,
+    senderId,
+    channel,
+    isAuthorizedSender,
+    commandBody,
+    config,
+  } = params;
 
   // Check authorization
   const requireAuth = command.requireAuth !== false; // Default to true

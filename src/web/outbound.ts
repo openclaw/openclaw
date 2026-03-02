@@ -8,10 +8,15 @@ import { convertMarkdownTables } from "../markdown/tables.js";
 import { markdownToWhatsApp } from "../markdown/whatsapp.js";
 import { normalizePollInput, type PollInput } from "../polls.js";
 import { toWhatsappJid } from "../utils.js";
-import { type ActiveWebSendOptions, requireActiveWebListener } from "./active-listener.js";
+import {
+  type ActiveWebSendOptions,
+  requireActiveWebListener,
+} from "./active-listener.js";
 import { loadWebMedia } from "./media.js";
 
-const outboundLog = createSubsystemLogger("gateway/channels/whatsapp").child("outbound");
+const outboundLog = createSubsystemLogger("gateway/channels/whatsapp").child(
+  "outbound",
+);
 
 export async function sendMessageWhatsApp(
   to: string,
@@ -27,9 +32,8 @@ export async function sendMessageWhatsApp(
   let text = body;
   const correlationId = generateSecureUuid();
   const startedAt = Date.now();
-  const { listener: active, accountId: resolvedAccountId } = requireActiveWebListener(
-    options.accountId,
-  );
+  const { listener: active, accountId: resolvedAccountId } =
+    requireActiveWebListener(options.accountId);
   const cfg = loadConfig();
   const tableMode = resolveMarkdownTableMode({
     cfg,
@@ -72,8 +76,13 @@ export async function sendMessageWhatsApp(
         documentFileName = media.fileName;
       }
     }
-    outboundLog.info(`Sending message -> ${redactedJid}${options.mediaUrl ? " (media)" : ""}`);
-    logger.info({ jid: redactedJid, hasMedia: Boolean(options.mediaUrl) }, "sending message");
+    outboundLog.info(
+      `Sending message -> ${redactedJid}${options.mediaUrl ? " (media)" : ""}`,
+    );
+    logger.info(
+      { jid: redactedJid, hasMedia: Boolean(options.mediaUrl) },
+      "sending message",
+    );
     await active.sendComposingTo(to);
     const hasExplicitAccountId = Boolean(options.accountId?.trim());
     const accountId = hasExplicitAccountId ? resolvedAccountId : undefined;
@@ -88,7 +97,8 @@ export async function sendMessageWhatsApp(
     const result = sendOptions
       ? await active.sendMessage(to, text, mediaBuffer, mediaType, sendOptions)
       : await active.sendMessage(to, text, mediaBuffer, mediaType);
-    const messageId = (result as { messageId?: string })?.messageId ?? "unknown";
+    const messageId =
+      (result as { messageId?: string })?.messageId ?? "unknown";
     const durationMs = Date.now() - startedAt;
     outboundLog.info(
       `Sent message ${messageId} -> ${redactedJid}${options.mediaUrl ? " (media)" : ""} (${durationMs}ms)`,
@@ -175,13 +185,19 @@ export async function sendPollWhatsApp(
       "sending poll",
     );
     const result = await active.sendPoll(to, normalized);
-    const messageId = (result as { messageId?: string })?.messageId ?? "unknown";
+    const messageId =
+      (result as { messageId?: string })?.messageId ?? "unknown";
     const durationMs = Date.now() - startedAt;
-    outboundLog.info(`Sent poll ${messageId} -> ${redactedJid} (${durationMs}ms)`);
+    outboundLog.info(
+      `Sent poll ${messageId} -> ${redactedJid} (${durationMs}ms)`,
+    );
     logger.info({ jid: redactedJid, messageId }, "sent poll");
     return { messageId, toJid: jid };
   } catch (err) {
-    logger.error({ err: String(err), to: redactedTo }, "failed to send poll via web session");
+    logger.error(
+      { err: String(err), to: redactedTo },
+      "failed to send poll via web session",
+    );
     throw err;
   }
 }

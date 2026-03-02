@@ -1,7 +1,10 @@
 import fs from "node:fs/promises";
 import { writeJsonAtomic } from "../../infra/json-files.js";
 import { acquireSessionWriteLock } from "../session-write-lock.js";
-import { SANDBOX_BROWSER_REGISTRY_PATH, SANDBOX_REGISTRY_PATH } from "./constants.js";
+import {
+  SANDBOX_BROWSER_REGISTRY_PATH,
+  SANDBOX_REGISTRY_PATH,
+} from "./constants.js";
 
 export type SandboxRegistryEntry = {
   containerName: string;
@@ -55,7 +58,9 @@ function isRegistryEntry(value: unknown): value is RegistryEntry {
   return isRecord(value) && typeof value.containerName === "string";
 }
 
-function isRegistryFile<T extends RegistryEntry>(value: unknown): value is RegistryFile<T> {
+function isRegistryFile<T extends RegistryEntry>(
+  value: unknown,
+): value is RegistryFile<T> {
   if (!isRecord(value)) {
     return false;
   }
@@ -64,8 +69,14 @@ function isRegistryFile<T extends RegistryEntry>(value: unknown): value is Regis
   return Array.isArray(maybeEntries) && maybeEntries.every(isRegistryEntry);
 }
 
-async function withRegistryLock<T>(registryPath: string, fn: () => Promise<T>): Promise<T> {
-  const lock = await acquireSessionWriteLock({ sessionFile: registryPath, allowReentrant: false });
+async function withRegistryLock<T>(
+  registryPath: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const lock = await acquireSessionWriteLock({
+    sessionFile: registryPath,
+    allowReentrant: false,
+  });
   try {
     return await fn();
   } finally {
@@ -98,7 +109,9 @@ async function readRegistryFromFile<T extends RegistryEntry>(
     if (error instanceof Error) {
       throw error;
     }
-    throw new Error(`Failed to read sandbox registry file: ${registryPath}`, { cause: error });
+    throw new Error(`Failed to read sandbox registry file: ${registryPath}`, {
+      cause: error,
+    });
   }
 }
 
@@ -110,12 +123,19 @@ async function writeRegistryFile<T extends RegistryEntry>(
 }
 
 export async function readRegistry(): Promise<SandboxRegistry> {
-  return await readRegistryFromFile<SandboxRegistryEntry>(SANDBOX_REGISTRY_PATH, "fallback");
+  return await readRegistryFromFile<SandboxRegistryEntry>(
+    SANDBOX_REGISTRY_PATH,
+    "fallback",
+  );
 }
 
 function upsertEntry<T extends UpsertEntry>(entries: T[], entry: T): T[] {
-  const existing = entries.find((item) => item.containerName === entry.containerName);
-  const next = entries.filter((item) => item.containerName !== entry.containerName);
+  const existing = entries.find(
+    (item) => item.containerName === entry.containerName,
+  );
+  const next = entries.filter(
+    (item) => item.containerName !== entry.containerName,
+  );
   next.push({
     ...entry,
     createdAtMs: existing?.createdAtMs ?? entry.createdAtMs,
@@ -125,7 +145,10 @@ function upsertEntry<T extends UpsertEntry>(entries: T[], entry: T): T[] {
   return next;
 }
 
-function removeEntry<T extends RegistryEntry>(entries: T[], containerName: string): T[] {
+function removeEntry<T extends RegistryEntry>(
+  entries: T[],
+  containerName: string,
+): T[] {
   return entries.filter((entry) => entry.containerName !== containerName);
 }
 
@@ -144,19 +167,23 @@ async function withRegistryMutation<T extends RegistryEntry>(
 }
 
 export async function updateRegistry(entry: SandboxRegistryEntry) {
-  await withRegistryMutation<SandboxRegistryEntry>(SANDBOX_REGISTRY_PATH, (entries) =>
-    upsertEntry(entries, entry),
+  await withRegistryMutation<SandboxRegistryEntry>(
+    SANDBOX_REGISTRY_PATH,
+    (entries) => upsertEntry(entries, entry),
   );
 }
 
 export async function removeRegistryEntry(containerName: string) {
-  await withRegistryMutation<SandboxRegistryEntry>(SANDBOX_REGISTRY_PATH, (entries) => {
-    const next = removeEntry(entries, containerName);
-    if (next.length === entries.length) {
-      return null;
-    }
-    return next;
-  });
+  await withRegistryMutation<SandboxRegistryEntry>(
+    SANDBOX_REGISTRY_PATH,
+    (entries) => {
+      const next = removeEntry(entries, containerName);
+      if (next.length === entries.length) {
+        return null;
+      }
+      return next;
+    },
+  );
 }
 
 export async function readBrowserRegistry(): Promise<SandboxBrowserRegistry> {
@@ -166,7 +193,9 @@ export async function readBrowserRegistry(): Promise<SandboxBrowserRegistry> {
   );
 }
 
-export async function updateBrowserRegistry(entry: SandboxBrowserRegistryEntry) {
+export async function updateBrowserRegistry(
+  entry: SandboxBrowserRegistryEntry,
+) {
   await withRegistryMutation<SandboxBrowserRegistryEntry>(
     SANDBOX_BROWSER_REGISTRY_PATH,
     (entries) => upsertEntry(entries, entry),

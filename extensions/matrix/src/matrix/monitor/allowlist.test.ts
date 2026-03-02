@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { normalizeMatrixAllowList, resolveMatrixAllowListMatch } from "./allowlist.js";
+import {
+  normalizeMatrixAllowList,
+  resolveMatrixAllowListMatch,
+} from "./allowlist.js";
 
 describe("resolveMatrixAllowListMatch", () => {
   it("matches full user IDs and prefixes", () => {

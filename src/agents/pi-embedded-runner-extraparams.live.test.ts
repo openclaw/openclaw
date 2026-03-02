@@ -7,16 +7,22 @@ import { applyExtraParamsToAgent } from "./pi-embedded-runner.js";
 
 const OPENAI_KEY = process.env.OPENAI_API_KEY ?? "";
 const GEMINI_KEY = process.env.GEMINI_API_KEY ?? "";
-const LIVE = isTruthyEnvValue(process.env.OPENAI_LIVE_TEST) || isTruthyEnvValue(process.env.LIVE);
+const LIVE =
+  isTruthyEnvValue(process.env.OPENAI_LIVE_TEST) ||
+  isTruthyEnvValue(process.env.LIVE);
 const GEMINI_LIVE =
-  isTruthyEnvValue(process.env.GEMINI_LIVE_TEST) || isTruthyEnvValue(process.env.LIVE);
+  isTruthyEnvValue(process.env.GEMINI_LIVE_TEST) ||
+  isTruthyEnvValue(process.env.LIVE);
 
 const describeLive = LIVE && OPENAI_KEY ? describe : describe.skip;
 const describeGeminiLive = GEMINI_LIVE && GEMINI_KEY ? describe : describe.skip;
 
 describeLive("pi embedded extra params (live)", () => {
   it("applies config maxTokens to openai streamFn", async () => {
-    const model = getModel("openai", "gpt-5.2") as unknown as Model<"openai-completions">;
+    const model = getModel(
+      "openai",
+      "gpt-5.2",
+    ) as unknown as Model<"openai-completions">;
 
     const cfg: OpenClawConfig = {
       agents: {
@@ -43,7 +49,8 @@ describeLive("pi embedded extra params (live)", () => {
         messages: [
           {
             role: "user",
-            content: "Write the alphabet letters A through Z as words separated by commas.",
+            content:
+              "Write the alphabet letters A through Z as words separated by commas.",
             timestamp: Date.now(),
           },
         ],
@@ -102,9 +109,14 @@ describeGeminiLive("pi embedded extra params (gemini live)", () => {
     includeImage?: boolean;
     prompt: string;
     onPayload?: (payload: Record<string, unknown>) => void;
-  }): Promise<{ sawDone: boolean; stopReason?: string; errorMessage?: string }> {
+  }): Promise<{
+    sawDone: boolean;
+    stopReason?: string;
+    errorMessage?: string;
+  }> {
     const userContent: Array<
-      { type: "text"; text: string } | { type: "image"; mimeType: string; data: string }
+      | { type: "text"; text: string }
+      | { type: "image"; mimeType: string; data: string }
     > = [{ type: "text", text: params.prompt }];
     if (params.includeImage ?? true) {
       userContent.push({
@@ -153,10 +165,20 @@ describeGeminiLive("pi embedded extra params (gemini live)", () => {
   }
 
   it("sanitizes Gemini 3.1 thinking payload and keeps image parts with reasoning enabled", async () => {
-    const model = getModel("google", "gemini-2.5-pro") as unknown as Model<"google-generative-ai">;
+    const model = getModel(
+      "google",
+      "gemini-2.5-pro",
+    ) as unknown as Model<"google-generative-ai">;
 
     const agent = { streamFn: streamSimple };
-    applyExtraParamsToAgent(agent, undefined, "google", model.id, undefined, "high");
+    applyExtraParamsToAgent(
+      agent,
+      undefined,
+      "google",
+      model.id,
+      undefined,
+      "high",
+    );
 
     const oneByOneRedPngBase64 =
       "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGP4zwAAAgIBAJBzWgkAAAAASUVORK5CYII=";
@@ -176,14 +198,20 @@ describeGeminiLive("pi embedded extra params (gemini live)", () => {
 
     expect(capturedPayload).toBeDefined();
     const thinkingConfig = (
-      capturedPayload?.config as { thinkingConfig?: Record<string, unknown> } | undefined
+      capturedPayload?.config as
+        | { thinkingConfig?: Record<string, unknown> }
+        | undefined
     )?.thinkingConfig;
     expect(thinkingConfig?.thinkingBudget).toBeUndefined();
     expect(thinkingConfig?.thinkingLevel).toBe("HIGH");
 
     const imagePart = (
       capturedPayload?.contents as
-        | Array<{ parts?: Array<{ inlineData?: { mimeType?: string; data?: string } }> }>
+        | Array<{
+            parts?: Array<{
+              inlineData?: { mimeType?: string; data?: string };
+            }>;
+          }>
         | undefined
     )?.[0]?.parts?.find((part) => part.inlineData !== undefined)?.inlineData;
     expect(imagePart).toEqual({
@@ -191,7 +219,10 @@ describeGeminiLive("pi embedded extra params (gemini live)", () => {
       data: oneByOneRedPngBase64,
     });
 
-    if (!imageResult.sawDone && !isGoogleModelUnavailableError(imageResult.errorMessage)) {
+    if (
+      !imageResult.sawDone &&
+      !isGoogleModelUnavailableError(imageResult.errorMessage)
+    ) {
       expect(isGoogleImageProcessingError(imageResult.errorMessage)).toBe(true);
     }
 
@@ -204,7 +235,10 @@ describeGeminiLive("pi embedded extra params (gemini live)", () => {
       prompt: "Reply with exactly OK.",
     });
 
-    if (!textResult.sawDone && isGoogleModelUnavailableError(textResult.errorMessage)) {
+    if (
+      !textResult.sawDone &&
+      isGoogleModelUnavailableError(textResult.errorMessage)
+    ) {
       // Some keys/regions do not expose Gemini 3.1 preview. Fall back to a
       // stable model to keep live reasoning verification active.
       const fallbackModel = getModel(

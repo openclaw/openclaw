@@ -181,7 +181,8 @@ describe("wrapNoteMessage", () => {
   });
 
   it("preserves UNC paths without inserting spaces/newlines", () => {
-    const input = "\\\\\\\\server\\\\share\\\\some\\\\really\\\\long\\\\path\\\\file.txt";
+    const input =
+      "\\\\\\\\server\\\\share\\\\some\\\\really\\\\long\\\\path\\\\file.txt";
     const wrapped = wrapNoteMessage(input, { maxWidth: 12, columns: 80 });
     expect(wrapped).toBe(input);
   });

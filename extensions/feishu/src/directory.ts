@@ -21,7 +21,10 @@ export async function listFeishuDirectoryPeers(params: {
   limit?: number;
   accountId?: string;
 }): Promise<FeishuDirectoryPeer[]> {
-  const account = resolveFeishuAccount({ cfg: params.cfg, accountId: params.accountId });
+  const account = resolveFeishuAccount({
+    cfg: params.cfg,
+    accountId: params.accountId,
+  });
   const feishuCfg = account.config;
   const q = params.query?.trim().toLowerCase() || "";
   const ids = new Set<string>();
@@ -55,7 +58,10 @@ export async function listFeishuDirectoryGroups(params: {
   limit?: number;
   accountId?: string;
 }): Promise<FeishuDirectoryGroup[]> {
-  const account = resolveFeishuAccount({ cfg: params.cfg, accountId: params.accountId });
+  const account = resolveFeishuAccount({
+    cfg: params.cfg,
+    accountId: params.accountId,
+  });
   const feishuCfg = account.config;
   const q = params.query?.trim().toLowerCase() || "";
   const ids = new Set<string>();
@@ -88,7 +94,10 @@ export async function listFeishuDirectoryPeersLive(params: {
   limit?: number;
   accountId?: string;
 }): Promise<FeishuDirectoryPeer[]> {
-  const account = resolveFeishuAccount({ cfg: params.cfg, accountId: params.accountId });
+  const account = resolveFeishuAccount({
+    cfg: params.cfg,
+    accountId: params.accountId,
+  });
   if (!account.configured) {
     return listFeishuDirectoryPeers(params);
   }
@@ -109,7 +118,11 @@ export async function listFeishuDirectoryPeersLive(params: {
         if (user.open_id) {
           const q = params.query?.trim().toLowerCase() || "";
           const name = user.name || "";
-          if (!q || user.open_id.toLowerCase().includes(q) || name.toLowerCase().includes(q)) {
+          if (
+            !q ||
+            user.open_id.toLowerCase().includes(q) ||
+            name.toLowerCase().includes(q)
+          ) {
             peers.push({
               kind: "user",
               id: user.open_id,
@@ -135,7 +148,10 @@ export async function listFeishuDirectoryGroupsLive(params: {
   limit?: number;
   accountId?: string;
 }): Promise<FeishuDirectoryGroup[]> {
-  const account = resolveFeishuAccount({ cfg: params.cfg, accountId: params.accountId });
+  const account = resolveFeishuAccount({
+    cfg: params.cfg,
+    accountId: params.accountId,
+  });
   if (!account.configured) {
     return listFeishuDirectoryGroups(params);
   }
@@ -156,7 +172,11 @@ export async function listFeishuDirectoryGroupsLive(params: {
         if (chat.chat_id) {
           const q = params.query?.trim().toLowerCase() || "";
           const name = chat.name || "";
-          if (!q || chat.chat_id.toLowerCase().includes(q) || name.toLowerCase().includes(q)) {
+          if (
+            !q ||
+            chat.chat_id.toLowerCase().includes(q) ||
+            name.toLowerCase().includes(q)
+          ) {
             groups.push({
               kind: "group",
               id: chat.chat_id,

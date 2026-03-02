@@ -48,7 +48,10 @@ export function captureFullEnv() {
   };
 }
 
-export function withEnv<T>(env: Record<string, string | undefined>, fn: () => T): T {
+export function withEnv<T>(
+  env: Record<string, string | undefined>,
+  fn: () => T,
+): T {
   const snapshot = captureEnv(Object.keys(env));
   try {
     applyEnvValues(env);

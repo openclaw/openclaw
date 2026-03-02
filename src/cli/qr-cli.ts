@@ -1,7 +1,10 @@
 import type { Command } from "commander";
 import qrcode from "qrcode-terminal";
 import { loadConfig } from "../config/config.js";
-import { resolvePairingSetupFromConfig, encodePairingSetupCode } from "../pairing/setup-code.js";
+import {
+  resolvePairingSetupFromConfig,
+  encodePairingSetupCode,
+} from "../pairing/setup-code.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
@@ -26,7 +29,9 @@ function renderQrAscii(data: string): Promise<string> {
   });
 }
 
-function readDevicePairPublicUrlFromConfig(cfg: ReturnType<typeof loadConfig>): string | undefined {
+function readDevicePairPublicUrlFromConfig(
+  cfg: ReturnType<typeof loadConfig>,
+): string | undefined {
   const value = cfg.plugins?.entries?.["device-pair"]?.config?.["publicUrl"];
   if (typeof value !== "string") {
     return undefined;
@@ -41,7 +46,8 @@ export function registerQrCli(program: Command) {
     .description("Generate an iOS pairing QR code and setup code")
     .addHelpText(
       "after",
-      () => `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/qr", "docs.openclaw.ai/cli/qr")}\n`,
+      () =>
+        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/qr", "docs.openclaw.ai/cli/qr")}\n`,
     )
     .option(
       "--remote",
@@ -49,9 +55,15 @@ export function registerQrCli(program: Command) {
       false,
     )
     .option("--url <url>", "Override gateway URL used in the setup payload")
-    .option("--public-url <url>", "Override gateway public URL used in the setup payload")
+    .option(
+      "--public-url <url>",
+      "Override gateway public URL used in the setup payload",
+    )
     .option("--token <token>", "Override gateway token for setup payload")
-    .option("--password <password>", "Override gateway password for setup payload")
+    .option(
+      "--password <password>",
+      "Override gateway password for setup payload",
+    )
     .option("--setup-code-only", "Print only the setup code", false)
     .option("--no-ascii", "Skip ASCII QR rendering")
     .option("--json", "Output JSON", false)
@@ -73,7 +85,8 @@ export function registerQrCli(program: Command) {
         };
 
         const token = typeof opts.token === "string" ? opts.token.trim() : "";
-        const password = typeof opts.password === "string" ? opts.password.trim() : "";
+        const password =
+          typeof opts.password === "string" ? opts.password.trim() : "";
         const wantsRemote = opts.remote === true;
         if (token) {
           cfg.gateway.auth.mode = "token";
@@ -85,7 +98,9 @@ export function registerQrCli(program: Command) {
         }
         if (wantsRemote && !token && !password) {
           const remoteToken =
-            typeof cfg.gateway?.remote?.token === "string" ? cfg.gateway.remote.token.trim() : "";
+            typeof cfg.gateway?.remote?.token === "string"
+              ? cfg.gateway.remote.token.trim()
+              : "";
           const remotePassword =
             typeof cfg.gateway?.remote?.password === "string"
               ? cfg.gateway.remote.password.trim()
@@ -103,8 +118,10 @@ export function registerQrCli(program: Command) {
         if (wantsRemote && !opts.url && !opts.publicUrl) {
           const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
           const remoteUrl = cfg.gateway?.remote?.url;
-          const hasRemoteUrl = typeof remoteUrl === "string" && remoteUrl.trim().length > 0;
-          const hasTailscaleServe = tailscaleMode === "serve" || tailscaleMode === "funnel";
+          const hasRemoteUrl =
+            typeof remoteUrl === "string" && remoteUrl.trim().length > 0;
+          const hasTailscaleServe =
+            tailscaleMode === "serve" || tailscaleMode === "funnel";
           if (!hasRemoteUrl && !hasTailscaleServe) {
             throw new Error(
               "qr --remote requires gateway.remote.url (or gateway.tailscale.mode=serve/funnel).",
@@ -119,7 +136,8 @@ export function registerQrCli(program: Command) {
               ? opts.publicUrl.trim()
               : undefined;
         const publicUrl =
-          explicitUrl ?? (wantsRemote ? undefined : readDevicePairPublicUrlFromConfig(cfg));
+          explicitUrl ??
+          (wantsRemote ? undefined : readDevicePairPublicUrlFromConfig(cfg));
 
         const resolved = await resolvePairingSetupFromConfig(cfg, {
           publicUrl,

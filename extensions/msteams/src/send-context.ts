@@ -127,10 +127,13 @@ export async function resolveMSTeamsSendContext(params: {
   const adapter = createMSTeamsAdapter(authConfig, sdk);
 
   // Create token provider for Graph API / OneDrive operations
-  const tokenProvider = new sdk.MsalTokenProvider(authConfig) as MSTeamsAccessTokenProvider;
+  const tokenProvider = new sdk.MsalTokenProvider(
+    authConfig,
+  ) as MSTeamsAccessTokenProvider;
 
   // Determine conversation type from stored reference
-  const storedConversationType = ref.conversation?.conversationType?.toLowerCase() ?? "";
+  const storedConversationType =
+    ref.conversation?.conversationType?.toLowerCase() ?? "";
   let conversationType: MSTeamsConversationType;
   if (storedConversationType === "personal") {
     conversationType = "personal";

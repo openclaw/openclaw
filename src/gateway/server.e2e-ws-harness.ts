@@ -15,7 +15,9 @@ export type GatewayWsClient = {
 export type GatewayServerHarness = {
   port: number;
   server: Awaited<ReturnType<typeof startGatewayServer>>;
-  openClient: (opts?: Parameters<typeof connectOk>[1]) => Promise<GatewayWsClient>;
+  openClient: (
+    opts?: Parameters<typeof connectOk>[1],
+  ) => Promise<GatewayWsClient>;
   close: () => Promise<void>;
 };
 
@@ -25,7 +27,9 @@ export async function startGatewayServerHarness(): Promise<GatewayServerHarness>
   const port = await getFreePort();
   const server = await startGatewayServer(port);
 
-  const openClient = async (opts?: Parameters<typeof connectOk>[1]): Promise<GatewayWsClient> => {
+  const openClient = async (
+    opts?: Parameters<typeof connectOk>[1],
+  ): Promise<GatewayWsClient> => {
     const ws = new WebSocket(`ws://127.0.0.1:${port}`);
     trackConnectChallengeNonce(ws);
     await new Promise<void>((resolve) => ws.once("open", resolve));

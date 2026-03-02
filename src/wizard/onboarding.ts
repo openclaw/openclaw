@@ -15,7 +15,10 @@ import {
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
-import type { QuickstartGatewayDefaults, WizardFlow } from "./onboarding.types.js";
+import type {
+  QuickstartGatewayDefaults,
+  WizardFlow,
+} from "./onboarding.types.js";
 import { WizardCancelledError, type WizardPrompter } from "./prompts.js";
 
 async function requireRiskAcknowledgement(params: {
@@ -82,7 +85,10 @@ export async function runOnboardingWizard(
   let baseConfig: OpenClawConfig = snapshot.valid ? snapshot.config : {};
 
   if (snapshot.exists && !snapshot.valid) {
-    await prompter.note(onboardHelpers.summarizeExistingConfig(baseConfig), "Invalid config");
+    await prompter.note(
+      onboardHelpers.summarizeExistingConfig(baseConfig),
+      "Invalid config",
+    );
     if (snapshot.issues.length > 0) {
       await prompter.note(
         [
@@ -103,7 +109,8 @@ export async function runOnboardingWizard(
   const quickstartHint = `Configure details later via ${formatCliCommand("openclaw configure")}.`;
   const manualHint = "Configure port, network, Tailscale, and auth options.";
   const explicitFlowRaw = opts.flow?.trim();
-  const normalizedExplicitFlow = explicitFlowRaw === "manual" ? "advanced" : explicitFlowRaw;
+  const normalizedExplicitFlow =
+    explicitFlowRaw === "manual" ? "advanced" : explicitFlowRaw;
   if (
     normalizedExplicitFlow &&
     normalizedExplicitFlow !== "quickstart" &&
@@ -114,7 +121,8 @@ export async function runOnboardingWizard(
     return;
   }
   const explicitFlow: WizardFlow | undefined =
-    normalizedExplicitFlow === "quickstart" || normalizedExplicitFlow === "advanced"
+    normalizedExplicitFlow === "quickstart" ||
+    normalizedExplicitFlow === "advanced"
       ? normalizedExplicitFlow
       : undefined;
   let flow: WizardFlow =
@@ -153,7 +161,8 @@ export async function runOnboardingWizard(
 
     if (action === "reset") {
       const workspaceDefault =
-        baseConfig.agents?.defaults?.workspace ?? onboardHelpers.DEFAULT_WORKSPACE;
+        baseConfig.agents?.defaults?.workspace ??
+        onboardHelpers.DEFAULT_WORKSPACE;
       const resetScope = (await prompter.select({
         message: "Reset scope",
         options: [
@@ -168,7 +177,11 @@ export async function runOnboardingWizard(
           },
         ],
       })) as ResetScope;
-      await onboardHelpers.handleReset(resetScope, resolveUserPath(workspaceDefault), runtime);
+      await onboardHelpers.handleReset(
+        resetScope,
+        resolveUserPath(workspaceDefault),
+        runtime,
+      );
       baseConfig = {};
     }
   }
@@ -207,7 +220,9 @@ export async function runOnboardingWizard(
 
     const tailscaleRaw = baseConfig.gateway?.tailscale?.mode;
     const tailscaleMode =
-      tailscaleRaw === "off" || tailscaleRaw === "serve" || tailscaleRaw === "funnel"
+      tailscaleRaw === "off" ||
+      tailscaleRaw === "serve" ||
+      tailscaleRaw === "funnel"
         ? tailscaleRaw
         : "off";
 
@@ -225,7 +240,9 @@ export async function runOnboardingWizard(
   })();
 
   if (flow === "quickstart") {
-    const formatBind = (value: "loopback" | "lan" | "auto" | "custom" | "tailnet") => {
+    const formatBind = (
+      value: "loopback" | "lan" | "auto" | "custom" | "tailnet",
+    ) => {
       if (value === "loopback") {
         return "Loopback (127.0.0.1)";
       }
@@ -260,7 +277,8 @@ export async function runOnboardingWizard(
           "Keeping your current gateway settings:",
           `Gateway port: ${quickstartGateway.port}`,
           `Gateway bind: ${formatBind(quickstartGateway.bind)}`,
-          ...(quickstartGateway.bind === "custom" && quickstartGateway.customBindHost
+          ...(quickstartGateway.bind === "custom" &&
+          quickstartGateway.customBindHost
             ? [`Gateway custom IP: ${quickstartGateway.customBindHost}`]
             : []),
           `Gateway auth: ${formatAuth(quickstartGateway.authMode)}`,
@@ -281,8 +299,11 @@ export async function runOnboardingWizard(
   const localUrl = `ws://127.0.0.1:${localPort}`;
   const localProbe = await onboardHelpers.probeGatewayReachable({
     url: localUrl,
-    token: baseConfig.gateway?.auth?.token ?? process.env.OPENCLAW_GATEWAY_TOKEN,
-    password: baseConfig.gateway?.auth?.password ?? process.env.OPENCLAW_GATEWAY_PASSWORD,
+    token:
+      baseConfig.gateway?.auth?.token ?? process.env.OPENCLAW_GATEWAY_TOKEN,
+    password:
+      baseConfig.gateway?.auth?.password ??
+      process.env.OPENCLAW_GATEWAY_PASSWORD,
   });
   const remoteUrl = baseConfig.gateway?.remote?.url?.trim() ?? "";
   const remoteProbe = remoteUrl
@@ -319,10 +340,14 @@ export async function runOnboardingWizard(
         })) as OnboardMode));
 
   if (mode === "remote") {
-    const { promptRemoteGatewayConfig } = await import("../commands/onboard-remote.js");
+    const { promptRemoteGatewayConfig } =
+      await import("../commands/onboard-remote.js");
     const { logConfigUpdated } = await import("../config/logging.js");
     let nextConfig = await promptRemoteGatewayConfig(baseConfig, prompter);
-    nextConfig = onboardHelpers.applyWizardMetadata(nextConfig, { command: "onboard", mode });
+    nextConfig = onboardHelpers.applyWizardMetadata(nextConfig, {
+      command: "onboard",
+      mode,
+    });
     await writeConfigFile(nextConfig);
     logConfigUpdated(runtime);
     await prompter.outro("Remote gateway configured.");
@@ -332,23 +357,38 @@ export async function runOnboardingWizard(
   const workspaceInput =
     opts.workspace ??
     (flow === "quickstart"
-      ? (baseConfig.agents?.defaults?.workspace ?? onboardHelpers.DEFAULT_WORKSPACE)
+      ? (baseConfig.agents?.defaults?.workspace ??
+        onboardHelpers.DEFAULT_WORKSPACE)
       : await prompter.text({
           message: "Workspace directory",
-          initialValue: baseConfig.agents?.defaults?.workspace ?? onboardHelpers.DEFAULT_WORKSPACE,
+          initialValue:
+            baseConfig.agents?.defaults?.workspace ??
+            onboardHelpers.DEFAULT_WORKSPACE,
         }));
 
-  const workspaceDir = resolveUserPath(workspaceInput.trim() || onboardHelpers.DEFAULT_WORKSPACE);
+  const workspaceDir = resolveUserPath(
+    workspaceInput.trim() || onboardHelpers.DEFAULT_WORKSPACE,
+  );
 
-  const { applyOnboardingLocalWorkspaceConfig } = await import("../commands/onboard-config.js");
-  let nextConfig: OpenClawConfig = applyOnboardingLocalWorkspaceConfig(baseConfig, workspaceDir);
+  const { applyOnboardingLocalWorkspaceConfig } =
+    await import("../commands/onboard-config.js");
+  let nextConfig: OpenClawConfig = applyOnboardingLocalWorkspaceConfig(
+    baseConfig,
+    workspaceDir,
+  );
 
   const { ensureAuthProfileStore } = await import("../agents/auth-profiles.js");
-  const { promptAuthChoiceGrouped } = await import("../commands/auth-choice-prompt.js");
-  const { promptCustomApiConfig } = await import("../commands/onboard-custom.js");
-  const { applyAuthChoice, resolvePreferredProviderForAuthChoice, warnIfModelConfigLooksOff } =
-    await import("../commands/auth-choice.js");
-  const { applyPrimaryModel, promptDefaultModel } = await import("../commands/model-picker.js");
+  const { promptAuthChoiceGrouped } =
+    await import("../commands/auth-choice-prompt.js");
+  const { promptCustomApiConfig } =
+    await import("../commands/onboard-custom.js");
+  const {
+    applyAuthChoice,
+    resolvePreferredProviderForAuthChoice,
+    warnIfModelConfigLooksOff,
+  } = await import("../commands/auth-choice.js");
+  const { applyPrimaryModel, promptDefaultModel } =
+    await import("../commands/model-picker.js");
 
   const authStore = ensureAuthProfileStore(undefined, {
     allowKeychainPrompt: false,
@@ -379,7 +419,8 @@ export async function runOnboardingWizard(
       setDefaultModel: true,
       opts: {
         tokenProvider: opts.tokenProvider,
-        token: opts.authChoice === "apiKey" && opts.token ? opts.token : undefined,
+        token:
+          opts.authChoice === "apiKey" && opts.token ? opts.token : undefined,
       },
     });
     nextConfig = authResult.config;
@@ -404,7 +445,8 @@ export async function runOnboardingWizard(
 
   await warnIfModelConfigLooksOff(nextConfig, prompter);
 
-  const { configureGatewayForOnboarding } = await import("./onboarding.gateway-config.js");
+  const { configureGatewayForOnboarding } =
+    await import("./onboarding.gateway-config.js");
   const gateway = await configureGatewayForOnboarding({
     flow,
     baseConfig,
@@ -455,7 +497,10 @@ export async function runOnboardingWizard(
   const { setupInternalHooks } = await import("../commands/onboard-hooks.js");
   nextConfig = await setupInternalHooks(nextConfig, runtime, prompter);
 
-  nextConfig = onboardHelpers.applyWizardMetadata(nextConfig, { command: "onboard", mode });
+  nextConfig = onboardHelpers.applyWizardMetadata(nextConfig, {
+    command: "onboard",
+    mode,
+  });
   await writeConfigFile(nextConfig);
 
   const { finalizeOnboardingWizard } = await import("./onboarding.finalize.js");

@@ -1,6 +1,9 @@
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
-import { getChannelPlugin, listChannelPlugins } from "../channels/plugins/index.js";
+import {
+  getChannelPlugin,
+  listChannelPlugins,
+} from "../channels/plugins/index.js";
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.js";
 import { withProgress } from "../cli/progress.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -14,7 +17,10 @@ import {
   type HeartbeatSummary,
   resolveHeartbeatSummaryForAgent,
 } from "../infra/heartbeat-runner.js";
-import { buildChannelAccountBindings, resolvePreferredAccountId } from "../routing/bindings.js";
+import {
+  buildChannelAccountBindings,
+  resolvePreferredAccountId,
+} from "../routing/bindings.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { styleHealthChannelLine } from "../terminal/health-style.js";
@@ -108,8 +114,10 @@ const formatDurationParts = (ms: number): string => {
   return parts.join(" ");
 };
 
-const resolveHeartbeatSummary = (cfg: ReturnType<typeof loadConfig>, agentId: string) =>
-  resolveHeartbeatSummaryForAgent(cfg, agentId);
+const resolveHeartbeatSummary = (
+  cfg: ReturnType<typeof loadConfig>,
+  agentId: string,
+) => resolveHeartbeatSummaryForAgent(cfg, agentId);
 
 const resolveAgentOrder = (cfg: ReturnType<typeof loadConfig>) => {
   const defaultAgentId = resolveDefaultAgentId(cfg);
@@ -129,7 +137,10 @@ const resolveAgentOrder = (cfg: ReturnType<typeof loadConfig>) => {
       continue;
     }
     seen.add(id);
-    ordered.push({ id, name: typeof entry.name === "string" ? entry.name : undefined });
+    ordered.push({
+      id,
+      name: typeof entry.name === "string" ? entry.name : undefined,
+    });
   }
 
   if (!seen.has(defaultAgentId)) {
@@ -170,9 +181,14 @@ const isAccountEnabled = (account: unknown): boolean => {
 };
 
 const asRecord = (value: unknown): Record<string, unknown> | null =>
-  value && typeof value === "object" ? (value as Record<string, unknown>) : null;
+  value && typeof value === "object"
+    ? (value as Record<string, unknown>)
+    : null;
 
-const formatProbeLine = (probe: unknown, opts: { botUsernames?: string[] } = {}): string | null => {
+const formatProbeLine = (
+  probe: unknown,
+  opts: { botUsernames?: string[] } = {},
+): string | null => {
   const record = asRecord(probe);
   if (!record) {
     return null;
@@ -181,13 +197,16 @@ const formatProbeLine = (probe: unknown, opts: { botUsernames?: string[] } = {})
   if (ok === undefined) {
     return null;
   }
-  const elapsedMs = typeof record.elapsedMs === "number" ? record.elapsedMs : null;
+  const elapsedMs =
+    typeof record.elapsedMs === "number" ? record.elapsedMs : null;
   const status = typeof record.status === "number" ? record.status : null;
   const error = typeof record.error === "string" ? record.error : null;
   const bot = asRecord(record.bot);
-  const botUsername = bot && typeof bot.username === "string" ? bot.username : null;
+  const botUsername =
+    bot && typeof bot.username === "string" ? bot.username : null;
   const webhook = asRecord(record.webhook);
-  const webhookUrl = webhook && typeof webhook.url === "string" ? webhook.url : null;
+  const webhookUrl =
+    webhook && typeof webhook.url === "string" ? webhook.url : null;
 
   const usernames = new Set<string>();
   if (botUsername) {
@@ -219,12 +238,15 @@ const formatProbeLine = (probe: unknown, opts: { botUsernames?: string[] } = {})
   return label;
 };
 
-const formatAccountProbeTiming = (summary: ChannelAccountHealthSummary): string | null => {
+const formatAccountProbeTiming = (
+  summary: ChannelAccountHealthSummary,
+): string | null => {
   const probe = asRecord(summary.probe);
   if (!probe) {
     return null;
   }
-  const elapsedMs = typeof probe.elapsedMs === "number" ? Math.round(probe.elapsedMs) : null;
+  const elapsedMs =
+    typeof probe.elapsedMs === "number" ? Math.round(probe.elapsedMs) : null;
   const ok = typeof probe.ok === "boolean" ? probe.ok : null;
   if (elapsedMs == null && ok !== true) {
     return null;
@@ -233,7 +255,9 @@ const formatAccountProbeTiming = (summary: ChannelAccountHealthSummary): string 
   const accountId = summary.accountId || "default";
   const botRecord = asRecord(probe.bot);
   const botUsername =
-    botRecord && typeof botRecord.username === "string" ? botRecord.username : null;
+    botRecord && typeof botRecord.username === "string"
+      ? botRecord.username
+      : null;
   const handle = botUsername ? `@${botUsername}` : accountId;
   const timing = elapsedMs != null ? `${elapsedMs}ms` : "ok";
 
@@ -258,7 +282,9 @@ export const formatHealthChannelLines = (
 ): string[] => {
   const channels = summary.channels ?? {};
   const channelOrder =
-    summary.channelOrder?.length > 0 ? summary.channelOrder : Object.keys(channels);
+    summary.channelOrder?.length > 0
+      ? summary.channelOrder
+      : Object.keys(channels);
   const accountMode = opts.accountMode ?? "default";
 
   const lines: string[] = [];
@@ -268,35 +294,50 @@ export const formatHealthChannelLines = (
       continue;
     }
     const plugin = getChannelPlugin(channelId as never);
-    const label = summary.channelLabels?.[channelId] ?? plugin?.meta.label ?? channelId;
+    const label =
+      summary.channelLabels?.[channelId] ?? plugin?.meta.label ?? channelId;
     const accountSummaries = channelSummary.accounts ?? {};
     const accountIds = opts.accountIdsByChannel?.[channelId];
     const filteredSummaries =
       accountIds && accountIds.length > 0
         ? accountIds
             .map((accountId) => accountSummaries[accountId])
-            .filter((entry): entry is ChannelAccountHealthSummary => Boolean(entry))
+            .filter((entry): entry is ChannelAccountHealthSummary =>
+              Boolean(entry),
+            )
         : undefined;
     const listSummaries =
       accountMode === "all"
         ? Object.values(accountSummaries)
-        : (filteredSummaries ?? (channelSummary.accounts ? Object.values(accountSummaries) : []));
+        : (filteredSummaries ??
+          (channelSummary.accounts ? Object.values(accountSummaries) : []));
     const baseSummary =
-      filteredSummaries && filteredSummaries.length > 0 ? filteredSummaries[0] : channelSummary;
+      filteredSummaries && filteredSummaries.length > 0
+        ? filteredSummaries[0]
+        : channelSummary;
     const botUsernames = listSummaries
       ? listSummaries
           .map((account) => {
             const probeRecord = asRecord(account.probe);
             const bot = probeRecord ? asRecord(probeRecord.bot) : null;
-            return bot && typeof bot.username === "string" ? bot.username : null;
+            return bot && typeof bot.username === "string"
+              ? bot.username
+              : null;
           })
           .filter((value): value is string => Boolean(value))
       : [];
-    const linked = typeof baseSummary.linked === "boolean" ? baseSummary.linked : null;
+    const linked =
+      typeof baseSummary.linked === "boolean" ? baseSummary.linked : null;
     if (linked !== null) {
       if (linked) {
-        const authAgeMs = typeof baseSummary.authAgeMs === "number" ? baseSummary.authAgeMs : null;
-        const authLabel = authAgeMs != null ? ` (auth age ${Math.round(authAgeMs / 60000)}m)` : "";
+        const authAgeMs =
+          typeof baseSummary.authAgeMs === "number"
+            ? baseSummary.authAgeMs
+            : null;
+        const authLabel =
+          authAgeMs != null
+            ? ` (auth age ${Math.round(authAgeMs / 60000)}m)`
+            : "";
         lines.push(`${label}: linked${authLabel}`);
       } else {
         lines.push(`${label}: not linked`);
@@ -304,7 +345,10 @@ export const formatHealthChannelLines = (
       continue;
     }
 
-    const configured = typeof baseSummary.configured === "boolean" ? baseSummary.configured : null;
+    const configured =
+      typeof baseSummary.configured === "boolean"
+        ? baseSummary.configured
+        : null;
     if (configured === false) {
       lines.push(`${label}: not configured`);
       continue;
@@ -316,9 +360,13 @@ export const formatHealthChannelLines = (
             .map((account) => formatAccountProbeTiming(account))
             .filter((value): value is string => Boolean(value))
         : [];
-    const failedSummary = listSummaries.find((summary) => isProbeFailure(summary));
+    const failedSummary = listSummaries.find((summary) =>
+      isProbeFailure(summary),
+    );
     if (failedSummary) {
-      const failureLine = formatProbeLine(failedSummary.probe, { botUsernames });
+      const failureLine = formatProbeLine(failedSummary.probe, {
+        botUsernames,
+      });
       if (failureLine) {
         lines.push(`${label}: ${failureLine}`);
         continue;
@@ -355,8 +403,11 @@ export async function getHealthSnapshot(params?: {
   const channelBindings = buildChannelAccountBindings(cfg);
   const sessionCache = new Map<string, HealthSummary["sessions"]>();
   const agents: AgentHealthSummary[] = ordered.map((entry) => {
-    const storePath = resolveStorePath(cfg.session?.store, { agentId: entry.id });
-    const sessions = sessionCache.get(storePath) ?? buildSessionSummary(storePath);
+    const storePath = resolveStorePath(cfg.session?.store, {
+      agentId: entry.id,
+    });
+    const sessions =
+      sessionCache.get(storePath) ?? buildSessionSummary(storePath);
     sessionCache.set(storePath, sessions);
     return {
       agentId: entry.id,
@@ -372,10 +423,13 @@ export async function getHealthSnapshot(params?: {
     : 0;
   const sessions =
     defaultAgent?.sessions ??
-    buildSessionSummary(resolveStorePath(cfg.session?.store, { agentId: defaultAgentId }));
+    buildSessionSummary(
+      resolveStorePath(cfg.session?.store, { agentId: defaultAgentId }),
+    );
 
   const start = Date.now();
-  const cappedTimeout = timeoutMs === undefined ? DEFAULT_TIMEOUT_MS : Math.max(50, timeoutMs);
+  const cappedTimeout =
+    timeoutMs === undefined ? DEFAULT_TIMEOUT_MS : Math.max(50, timeoutMs);
   const doProbe = params?.probe !== false;
   const channels: Record<string, ChannelHealthSummary> = {};
   const channelOrder = listChannelPlugins().map((plugin) => plugin.id);
@@ -389,20 +443,28 @@ export async function getHealthSnapshot(params?: {
       cfg,
       accountIds,
     });
-    const boundAccounts = channelBindings.get(plugin.id)?.get(defaultAgentId) ?? [];
+    const boundAccounts =
+      channelBindings.get(plugin.id)?.get(defaultAgentId) ?? [];
     const preferredAccountId = resolvePreferredAccountId({
       accountIds,
       defaultAccountId,
       boundAccounts,
     });
     const boundAccountIdsAll = Array.from(
-      new Set(Array.from(channelBindings.get(plugin.id)?.values() ?? []).flatMap((ids) => ids)),
+      new Set(
+        Array.from(channelBindings.get(plugin.id)?.values() ?? []).flatMap(
+          (ids) => ids,
+        ),
+      ),
     );
     const accountIdsToProbe = Array.from(
       new Set(
-        [preferredAccountId, defaultAccountId, ...accountIds, ...boundAccountIdsAll].filter(
-          (value) => value && value.trim(),
-        ),
+        [
+          preferredAccountId,
+          defaultAccountId,
+          ...accountIds,
+          ...boundAccountIdsAll,
+        ].filter((value) => value && value.trim()),
       ),
     );
     debugHealth("channel", {
@@ -441,13 +503,19 @@ export async function getHealthSnapshot(params?: {
       }
 
       const probeRecord =
-        probe && typeof probe === "object" ? (probe as Record<string, unknown>) : null;
+        probe && typeof probe === "object"
+          ? (probe as Record<string, unknown>)
+          : null;
       const bot =
         probeRecord && typeof probeRecord.bot === "object"
           ? (probeRecord.bot as { username?: string | null })
           : null;
       if (bot?.username) {
-        debugHealth("probe.bot", { channel: plugin.id, accountId, username: bot.username });
+        debugHealth("probe.bot", {
+          channel: plugin.id,
+          accountId,
+          username: bot.username,
+        });
       }
 
       const snapshot: ChannelAccountSnapshot = {
@@ -493,7 +561,8 @@ export async function getHealthSnapshot(params?: {
       accountSummaries[preferredAccountId] ??
       accountSummaries[defaultAccountId] ??
       accountSummaries[accountIdsToProbe[0] ?? preferredAccountId];
-    const fallbackSummary = defaultSummary ?? accountSummaries[Object.keys(accountSummaries)[0]];
+    const fallbackSummary =
+      defaultSummary ?? accountSummaries[Object.keys(accountSummaries)[0]];
     if (fallbackSummary) {
       channels[plugin.id] = {
         ...fallbackSummary,
@@ -523,7 +592,12 @@ export async function getHealthSnapshot(params?: {
 }
 
 export async function healthCommand(
-  opts: { json?: boolean; timeoutMs?: number; verbose?: boolean; config?: OpenClawConfig },
+  opts: {
+    json?: boolean;
+    timeoutMs?: number;
+    verbose?: boolean;
+    config?: OpenClawConfig;
+  },
   runtime: RuntimeEnv,
 ) {
   const cfg = opts.config ?? loadConfig();
@@ -561,7 +635,9 @@ export async function healthCommand(
     const defaultAgentId = summary.defaultAgentId ?? localAgents.defaultAgentId;
     const agents = Array.isArray(summary.agents) ? summary.agents : [];
     const fallbackAgents = localAgents.ordered.map((entry) => {
-      const storePath = resolveStorePath(cfg.session?.store, { agentId: entry.id });
+      const storePath = resolveStorePath(cfg.session?.store, {
+        agentId: entry.id,
+      });
       return {
         agentId: entry.id,
         name: entry.name,
@@ -591,7 +667,9 @@ export async function healthCommand(
           const account = plugin.config.resolveAccount(cfg, accountId);
           const record = asRecord(account);
           const tokenSource =
-            record && typeof record.tokenSource === "string" ? record.tokenSource : undefined;
+            record && typeof record.tokenSource === "string"
+              ? record.tokenSource
+              : undefined;
           const configured = plugin.config.isConfigured
             ? await plugin.config.isConfigured(account, cfg)
             : true;
@@ -608,14 +686,19 @@ export async function healthCommand(
         runtime.log(`  ${channelId}: ${entries.join(" ")}`);
       }
       runtime.log(info("[debug] gateway channel probes"));
-      for (const [channelId, channelSummary] of Object.entries(summary.channels ?? {})) {
+      for (const [channelId, channelSummary] of Object.entries(
+        summary.channels ?? {},
+      )) {
         const accounts = channelSummary.accounts ?? {};
-        const probes = Object.entries(accounts).map(([accountId, accountSummary]) => {
-          const probe = asRecord(accountSummary.probe);
-          const bot = probe ? asRecord(probe.bot) : null;
-          const username = bot && typeof bot.username === "string" ? bot.username : null;
-          return `${accountId}=${username ?? "(no bot)"}`;
-        });
+        const probes = Object.entries(accounts).map(
+          ([accountId, accountSummary]) => {
+            const probe = asRecord(accountSummary.probe);
+            const bot = probe ? asRecord(probe.bot) : null;
+            const username =
+              bot && typeof bot.username === "string" ? bot.username : null;
+            return `${accountId}=${username ?? "(no bot)"}`;
+          },
+        );
         runtime.log(`  ${channelId}: ${probes.join(", ") || "(none)"}`);
       }
     }
@@ -630,7 +713,8 @@ export async function healthCommand(
         const preferred = resolvePreferredAccountId({
           accountIds,
           defaultAccountId,
-          boundAccounts: channelBindings.get(plugin.id)?.get(defaultAgentId) ?? [],
+          boundAccounts:
+            channelBindings.get(plugin.id)?.get(defaultAgentId) ?? [],
         });
         return [plugin.id, [preferred] as string[]] as const;
       }),
@@ -652,7 +736,9 @@ export async function healthCommand(
           byChannel[channelId] = accountIds;
         }
       }
-      for (const [channelId, fallbackIds] of Object.entries(channelAccountFallbacks)) {
+      for (const [channelId, fallbackIds] of Object.entries(
+        channelAccountFallbacks,
+      )) {
         if (!byChannel[channelId] || byChannel[channelId].length === 0) {
           byChannel[channelId] = fallbackIds;
         }
@@ -679,7 +765,8 @@ export async function healthCommand(
       if (!plugin.status?.logSelfId) {
         continue;
       }
-      const boundAccounts = channelBindings.get(plugin.id)?.get(defaultAgentId) ?? [];
+      const boundAccounts =
+        channelBindings.get(plugin.id)?.get(defaultAgentId) ?? [];
       const accountIds = plugin.config.listAccountIds(cfg);
       const defaultAccountId = resolveChannelDefaultAccountId({
         plugin,
@@ -718,7 +805,9 @@ export async function healthCommand(
     }
     if (displayAgents.length === 0) {
       runtime.log(
-        info(`Session store: ${summary.sessions.path} (${summary.sessions.count} entries)`),
+        info(
+          `Session store: ${summary.sessions.path} (${summary.sessions.count} entries)`,
+        ),
       );
       if (summary.sessions.recent.length > 0) {
         for (const r of summary.sessions.recent) {

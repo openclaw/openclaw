@@ -13,7 +13,9 @@ type BrowserRequestParams = {
   body?: unknown;
 };
 
-function normalizeQuery(query: BrowserRequestParams["query"]): Record<string, string> | undefined {
+function normalizeQuery(
+  query: BrowserRequestParams["query"],
+): Record<string, string> | undefined {
   if (!query) {
     return undefined;
   }
@@ -42,7 +44,10 @@ export async function callBrowserRequest<T>(
     typeof resolvedTimeoutMs === "number" && Number.isFinite(resolvedTimeoutMs)
       ? resolvedTimeoutMs
       : undefined;
-  const timeout = typeof resolvedTimeout === "number" ? String(resolvedTimeout) : opts.timeout;
+  const timeout =
+    typeof resolvedTimeout === "number"
+      ? String(resolvedTimeout)
+      : opts.timeout;
   const payload = await callGatewayFromCli(
     "browser.request",
     { ...opts, timeout },
@@ -63,7 +68,12 @@ export async function callBrowserRequest<T>(
 
 export async function callBrowserResize(
   opts: BrowserParentOpts,
-  params: { profile?: string; width: number; height: number; targetId?: string },
+  params: {
+    profile?: string;
+    width: number;
+    height: number;
+    targetId?: string;
+  },
   extra?: { timeoutMs?: number },
 ): Promise<unknown> {
   return callBrowserRequest(

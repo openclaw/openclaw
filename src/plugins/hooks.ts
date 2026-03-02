@@ -122,7 +122,10 @@ function getHooksForName<K extends PluginHookName>(
 /**
  * Create a hook runner for a specific registry.
  */
-export function createHookRunner(registry: PluginRegistry, options: HookRunnerOptions = {}) {
+export function createHookRunner(
+  registry: PluginRegistry,
+  options: HookRunnerOptions = {},
+) {
   const logger = options.logger;
   const catchErrors = options.catchErrors ?? true;
 
@@ -158,7 +161,9 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     }
     return {
       status: "ok",
-      threadBindingReady: Boolean(acc?.threadBindingReady || next.threadBindingReady),
+      threadBindingReady: Boolean(
+        acc?.threadBindingReady || next.threadBindingReady,
+      ),
     };
   };
 
@@ -205,7 +210,10 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
 
     const promises = hooks.map(async (hook) => {
       try {
-        await (hook.handler as (event: unknown, ctx: unknown) => Promise<void>)(event, ctx);
+        await (hook.handler as (event: unknown, ctx: unknown) => Promise<void>)(
+          event,
+          ctx,
+        );
       } catch (err) {
         handleHookError({ hookName, pluginId: hook.pluginId, error: err });
       }
@@ -229,7 +237,9 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
       return undefined;
     }
 
-    logger?.debug?.(`[hooks] running ${hookName} (${hooks.length} handlers, sequential)`);
+    logger?.debug?.(
+      `[hooks] running ${hookName} (${hooks.length} handlers, sequential)`,
+    );
 
     let result: TResult | undefined;
 
@@ -266,12 +276,10 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     event: PluginHookBeforeModelResolveEvent,
     ctx: PluginHookAgentContext,
   ): Promise<PluginHookBeforeModelResolveResult | undefined> {
-    return runModifyingHook<"before_model_resolve", PluginHookBeforeModelResolveResult>(
+    return runModifyingHook<
       "before_model_resolve",
-      event,
-      ctx,
-      mergeBeforeModelResolve,
-    );
+      PluginHookBeforeModelResolveResult
+    >("before_model_resolve", event, ctx, mergeBeforeModelResolve);
   }
 
   /**
@@ -282,12 +290,10 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     event: PluginHookBeforePromptBuildEvent,
     ctx: PluginHookAgentContext,
   ): Promise<PluginHookBeforePromptBuildResult | undefined> {
-    return runModifyingHook<"before_prompt_build", PluginHookBeforePromptBuildResult>(
+    return runModifyingHook<
       "before_prompt_build",
-      event,
-      ctx,
-      mergeBeforePromptBuild,
-    );
+      PluginHookBeforePromptBuildResult
+    >("before_prompt_build", event, ctx, mergeBeforePromptBuild);
   }
 
   /**
@@ -298,15 +304,13 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     event: PluginHookBeforeAgentStartEvent,
     ctx: PluginHookAgentContext,
   ): Promise<PluginHookBeforeAgentStartResult | undefined> {
-    return runModifyingHook<"before_agent_start", PluginHookBeforeAgentStartResult>(
+    return runModifyingHook<
       "before_agent_start",
-      event,
-      ctx,
-      (acc, next) => ({
-        ...mergeBeforePromptBuild(acc, next),
-        ...mergeBeforeModelResolve(acc, next),
-      }),
-    );
+      PluginHookBeforeAgentStartResult
+    >("before_agent_start", event, ctx, (acc, next) => ({
+      ...mergeBeforePromptBuild(acc, next),
+      ...mergeBeforeModelResolve(acc, next),
+    }));
   }
 
   /**
@@ -326,7 +330,10 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
    * Allows plugins to observe the exact input payload sent to the LLM.
    * Runs in parallel (fire-and-forget).
    */
-  async function runLlmInput(event: PluginHookLlmInputEvent, ctx: PluginHookAgentContext) {
+  async function runLlmInput(
+    event: PluginHookLlmInputEvent,
+    ctx: PluginHookAgentContext,
+  ) {
     return runVoidHook("llm_input", event, ctx);
   }
 
@@ -335,7 +342,10 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
    * Allows plugins to observe the exact output payload returned by the LLM.
    * Runs in parallel (fire-and-forget).
    */
-  async function runLlmOutput(event: PluginHookLlmOutputEvent, ctx: PluginHookAgentContext) {
+  async function runLlmOutput(
+    event: PluginHookLlmOutputEvent,
+    ctx: PluginHookAgentContext,
+  ) {
     return runVoidHook("llm_output", event, ctx);
   }
 
@@ -477,10 +487,10 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     for (const hook of hooks) {
       try {
         // oxlint-disable-next-line typescript/no-explicit-any
-        const out = (hook.handler as any)({ ...event, message: current }, ctx) as
-          | PluginHookToolResultPersistResult
-          | void
-          | Promise<unknown>;
+        const out = (hook.handler as any)(
+          { ...event, message: current },
+          ctx,
+        ) as PluginHookToolResultPersistResult | void | Promise<unknown>;
 
         // Guard against accidental async handlers (this hook is sync-only).
         // oxlint-disable-next-line typescript/no-explicit-any
@@ -495,7 +505,8 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
           throw new Error(msg);
         }
 
-        const next = (out as PluginHookToolResultPersistResult | undefined)?.message;
+        const next = (out as PluginHookToolResultPersistResult | undefined)
+          ?.message;
         if (next) {
           current = next;
         }
@@ -542,10 +553,10 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     for (const hook of hooks) {
       try {
         // oxlint-disable-next-line typescript/no-explicit-any
-        const out = (hook.handler as any)({ ...event, message: current }, ctx) as
-          | PluginHookBeforeMessageWriteResult
-          | void
-          | Promise<unknown>;
+        const out = (hook.handler as any)(
+          { ...event, message: current },
+          ctx,
+        ) as PluginHookBeforeMessageWriteResult | void | Promise<unknown>;
 
         // Guard against accidental async handlers (this hook is sync-only).
         // oxlint-disable-next-line typescript/no-explicit-any
@@ -623,12 +634,10 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     event: PluginHookSubagentSpawningEvent,
     ctx: PluginHookSubagentContext,
   ): Promise<PluginHookSubagentSpawningResult | undefined> {
-    return runModifyingHook<"subagent_spawning", PluginHookSubagentSpawningResult>(
+    return runModifyingHook<
       "subagent_spawning",
-      event,
-      ctx,
-      mergeSubagentSpawningResult,
-    );
+      PluginHookSubagentSpawningResult
+    >("subagent_spawning", event, ctx, mergeSubagentSpawningResult);
   }
 
   /**
@@ -639,7 +648,10 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     event: PluginHookSubagentDeliveryTargetEvent,
     ctx: PluginHookSubagentContext,
   ): Promise<PluginHookSubagentDeliveryTargetResult | undefined> {
-    return runModifyingHook<"subagent_delivery_target", PluginHookSubagentDeliveryTargetResult>(
+    return runModifyingHook<
+      "subagent_delivery_target",
+      PluginHookSubagentDeliveryTargetResult
+    >(
       "subagent_delivery_target",
       event,
       ctx,

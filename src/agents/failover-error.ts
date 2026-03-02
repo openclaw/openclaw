@@ -43,7 +43,9 @@ export function isFailoverError(err: unknown): err is FailoverError {
   return err instanceof FailoverError;
 }
 
-export function resolveFailoverStatus(reason: FailoverReason): number | undefined {
+export function resolveFailoverStatus(
+  reason: FailoverReason,
+): number | undefined {
   switch (reason) {
     case "billing":
       return 402;
@@ -108,7 +110,11 @@ function getErrorMessage(err: unknown): string {
   if (typeof err === "string") {
     return err;
   }
-  if (typeof err === "number" || typeof err === "boolean" || typeof err === "bigint") {
+  if (
+    typeof err === "number" ||
+    typeof err === "boolean" ||
+    typeof err === "bigint"
+  ) {
     return String(err);
   }
   if (typeof err === "symbol") {
@@ -149,11 +155,14 @@ export function isTimeoutError(err: unknown): boolean {
     return true;
   }
   const cause = "cause" in err ? (err as { cause?: unknown }).cause : undefined;
-  const reason = "reason" in err ? (err as { reason?: unknown }).reason : undefined;
+  const reason =
+    "reason" in err ? (err as { reason?: unknown }).reason : undefined;
   return hasTimeoutHint(cause) || hasTimeoutHint(reason);
 }
 
-export function resolveFailoverReasonFromError(err: unknown): FailoverReason | null {
+export function resolveFailoverReasonFromError(
+  err: unknown,
+): FailoverReason | null {
   if (isFailoverError(err)) {
     return err.reason;
   }

@@ -9,7 +9,10 @@ import {
   resolveEnvApiKey,
 } from "../../agents/model-auth.js";
 import { ensureOpenClawModelsJson } from "../../agents/models-config.js";
-import { discoverAuthStorage, discoverModels } from "../../agents/pi-model-discovery.js";
+import {
+  discoverAuthStorage,
+  discoverModels,
+} from "../../agents/pi-model-discovery.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   formatErrorWithStack,
@@ -105,7 +108,9 @@ export async function loadModelRegistry(cfg: OpenClawConfig) {
 
   try {
     const availableModels = loadAvailableModels(registry);
-    availableKeys = new Set(availableModels.map((model) => modelKey(model.provider, model.id)));
+    availableKeys = new Set(
+      availableModels.map((model) => modelKey(model.provider, model.id)),
+    );
   } catch (err) {
     if (!shouldFallbackToAuthHeuristics(err)) {
       throw err;
@@ -130,7 +135,15 @@ export function toModelRow(params: {
   cfg?: OpenClawConfig;
   authStore?: AuthProfileStore;
 }): ModelRow {
-  const { model, key, tags, aliases = [], availableKeys, cfg, authStore } = params;
+  const {
+    model,
+    key,
+    tags,
+    aliases = [],
+    availableKeys,
+    cfg,
+    authStore,
+  } = params;
   if (!model) {
     return {
       key,

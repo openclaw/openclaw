@@ -17,14 +17,20 @@ export function resolveCliName(argv: string[] = process.argv): string {
   return DEFAULT_CLI_NAME;
 }
 
-export function replaceCliName(command: string, cliName = resolveCliName()): string {
+export function replaceCliName(
+  command: string,
+  cliName = resolveCliName(),
+): string {
   if (!command.trim()) {
     return command;
   }
   if (!CLI_PREFIX_RE.test(command)) {
     return command;
   }
-  return command.replace(CLI_PREFIX_RE, (_match, runner: string | undefined) => {
-    return `${runner ?? ""}${cliName}`;
-  });
+  return command.replace(
+    CLI_PREFIX_RE,
+    (_match, runner: string | undefined) => {
+      return `${runner ?? ""}${cliName}`;
+    },
+  );
 }

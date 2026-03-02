@@ -5,7 +5,10 @@ import { describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import { CONFIG_PATH } from "../config/config.js";
 import type { DeviceIdentity } from "../infra/device-identity.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../utils/message-channel.js";
 import type { GatewayClient } from "./client.js";
 
 vi.mock("../infra/update-runner.js", () => ({
@@ -20,7 +23,11 @@ vi.mock("../infra/update-runner.js", () => ({
 
 import { runGatewayUpdate } from "../infra/update-runner.js";
 import { connectGatewayClient } from "./test-helpers.e2e.js";
-import { installGatewayTestHooks, onceMessage, rpcReq } from "./test-helpers.js";
+import {
+  installGatewayTestHooks,
+  onceMessage,
+  rpcReq,
+} from "./test-helpers.js";
 import { installConnectedControlUiServerSuite } from "./test-with-server.js";
 
 installGatewayTestHooks({ scope: "suite" });
@@ -68,14 +75,17 @@ const connectNodeClient = async (params: {
 };
 
 const approveAllPendingPairings = async () => {
-  const { approveDevicePairing, listDevicePairing } = await import("../infra/device-pairing.js");
+  const { approveDevicePairing, listDevicePairing } =
+    await import("../infra/device-pairing.js");
   const list = await listDevicePairing();
   for (const pending of list.pending) {
     await approveDevicePairing(pending.requestId);
   }
 };
 
-const connectNodeClientWithPairing = async (params: Parameters<typeof connectNodeClient>[0]) => {
+const connectNodeClientWithPairing = async (
+  params: Parameters<typeof connectNodeClient>[0],
+) => {
   try {
     return await connectNodeClient(params);
   } catch (error) {
@@ -93,7 +103,10 @@ describe("gateway role enforcement", () => {
     let nodeClient: GatewayClient | undefined;
 
     try {
-      const eventRes = await rpcReq(ws, "node.event", { event: "test", payload: { ok: true } });
+      const eventRes = await rpcReq(ws, "node.event", {
+        event: "test",
+        payload: { ok: true },
+      });
       expect(eventRes.ok).toBe(false);
       expect(eventRes.error?.message ?? "").toContain("unauthorized role");
 
@@ -112,10 +125,15 @@ describe("gateway role enforcement", () => {
         displayName: "node-role-enforcement",
       });
 
-      const binsPayload = await nodeClient.request<{ bins?: unknown[] }>("skills.bins", {});
+      const binsPayload = await nodeClient.request<{ bins?: unknown[] }>(
+        "skills.bins",
+        {},
+      );
       expect(Array.isArray(binsPayload?.bins)).toBe(true);
 
-      await expect(nodeClient.request("status", {})).rejects.toThrow("unauthorized role");
+      await expect(nodeClient.request("status", {})).rejects.toThrow(
+        "unauthorized role",
+      );
 
       const healthPayload = await nodeClient.request("health", {});
       expect(healthPayload).toBeDefined();
@@ -151,7 +169,11 @@ describe("gateway update.run", () => {
       }, FAST_WAIT_OPTS);
       expect(sigusr1).toHaveBeenCalled();
 
-      const sentinelPath = path.join(os.homedir(), ".openclaw", "restart-sentinel.json");
+      const sentinelPath = path.join(
+        os.homedir(),
+        ".openclaw",
+        "restart-sentinel.json",
+      );
       const raw = await fs.readFile(sentinelPath, "utf-8");
       const parsed = JSON.parse(raw) as {
         payload?: { kind?: string; stats?: { mode?: string } };
@@ -169,7 +191,10 @@ describe("gateway update.run", () => {
 
     try {
       await fs.mkdir(path.dirname(CONFIG_PATH), { recursive: true });
-      await fs.writeFile(CONFIG_PATH, JSON.stringify({ update: { channel: "beta" } }, null, 2));
+      await fs.writeFile(
+        CONFIG_PATH,
+        JSON.stringify({ update: { channel: "beta" } }, null, 2),
+      );
       const updateMock = vi.mocked(runGatewayUpdate);
       updateMock.mockClear();
 
@@ -208,12 +233,11 @@ describe("gateway node command allowlist", () => {
     };
 
     const getConnectedNodeId = async () => {
-      const listRes = await rpcReq<{ nodes?: Array<{ nodeId: string; connected?: boolean }> }>(
-        ws,
-        "node.list",
-        {},
-      );
-      const nodeId = listRes.payload?.nodes?.find((node) => node.connected)?.nodeId ?? "";
+      const listRes = await rpcReq<{
+        nodes?: Array<{ nodeId: string; connected?: boolean }>;
+      }>(ws, "node.list", {});
+      const nodeId =
+        listRes.payload?.nodes?.find((node) => node.connected)?.nodeId ?? "";
       expect(nodeId).toBeTruthy();
       return nodeId;
     };
@@ -237,7 +261,9 @@ describe("gateway node command allowlist", () => {
         idempotencyKey: "allowlist-1",
       });
       expect(disallowedRes.ok).toBe(false);
-      expect(disallowedRes.error?.message).toContain("node command not allowed");
+      expect(disallowedRes.error?.message).toContain(
+        "node command not allowed",
+      );
       systemClient.stop();
       await waitForConnectedCount(0);
 
@@ -259,7 +285,9 @@ describe("gateway node command allowlist", () => {
       emptyClient.stop();
       await waitForConnectedCount(0);
 
-      let resolveInvoke: ((payload: { id?: string; nodeId?: string }) => void) | null = null;
+      let resolveInvoke:
+        | ((payload: { id?: string; nodeId?: string }) => void)
+        | null = null;
       const waitForInvoke = () =>
         new Promise<{ id?: string; nodeId?: string }>((resolve) => {
           resolveInvoke = resolve;
@@ -321,7 +349,8 @@ describe("gateway node command allowlist", () => {
   });
 
   test("rejects reconnect metadata spoof for paired node devices", async () => {
-    const { loadOrCreateDeviceIdentity } = await import("../infra/device-identity.js");
+    const { loadOrCreateDeviceIdentity } =
+      await import("../infra/device-identity.js");
     const deviceIdentityPath = path.join(
       os.tmpdir(),
       `openclaw-spoof-test-device-${Date.now()}-${Math.random().toString(36).slice(2)}.json`,
@@ -342,12 +371,11 @@ describe("gateway node command allowlist", () => {
       iosClient.stop();
       await expect
         .poll(async () => {
-          const listRes = await rpcReq<{ nodes?: Array<{ connected?: boolean }> }>(
-            ws,
-            "node.list",
-            {},
-          );
-          return (listRes.payload?.nodes ?? []).filter((node) => node.connected).length;
+          const listRes = await rpcReq<{
+            nodes?: Array<{ connected?: boolean }>;
+          }>(ws, "node.list", {});
+          return (listRes.payload?.nodes ?? []).filter((node) => node.connected)
+            .length;
         }, FAST_WAIT_OPTS)
         .toBe(0);
 
@@ -368,7 +396,8 @@ describe("gateway node command allowlist", () => {
   });
 
   test("filters system.run for confusable iOS metadata at connect time", async () => {
-    const { loadOrCreateDeviceIdentity } = await import("../infra/device-identity.js");
+    const { loadOrCreateDeviceIdentity } =
+      await import("../infra/device-identity.js");
     const cases = [
       {
         label: "dotted-i-platform",
@@ -437,7 +466,9 @@ describe("gateway node command allowlist", () => {
           idempotencyKey: `allowlist-confusable-${testCase.label}`,
         });
         expect(systemRunRes.ok).toBe(false);
-        expect(systemRunRes.error?.message ?? "").toContain("node command not allowed");
+        expect(systemRunRes.error?.message ?? "").toContain(
+          "node command not allowed",
+        );
       } finally {
         client?.stop();
       }

@@ -4,7 +4,8 @@ import { DEFAULT_GEMINI_EMBEDDING_MODEL } from "./embeddings-gemini.js";
 import { createEmbeddingProvider, DEFAULT_LOCAL_MODEL } from "./embeddings.js";
 
 vi.mock("../agents/model-auth.js", async () => {
-  const { createModelAuthMockModule } = await import("../test-utils/model-auth-mock.js");
+  const { createModelAuthMockModule } =
+    await import("../test-utils/model-auth-mock.js");
   return createModelAuthMockModule();
 });
 
@@ -37,7 +38,9 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function requireProvider(result: Awaited<ReturnType<typeof createEmbeddingProvider>>) {
+function requireProvider(
+  result: Awaited<ReturnType<typeof createEmbeddingProvider>>,
+) {
   if (!result.provider) {
     throw new Error("Expected embedding provider");
   }
@@ -242,19 +245,27 @@ describe("embedding provider remote overrides", () => {
     expect(url).toBe("https://api.mistral.ai/v1/embeddings");
     const headers = (init?.headers ?? {}) as Record<string, string>;
     expect(headers.Authorization).toBe("Bearer mistral-key");
-    const payload = JSON.parse((init?.body as string | undefined) ?? "{}") as { model?: string };
+    const payload = JSON.parse((init?.body as string | undefined) ?? "{}") as {
+      model?: string;
+    };
     expect(payload.model).toBe("mistral-embed");
   });
 });
 
 describe("embedding provider auto selection", () => {
   it("prefers openai when a key resolves", async () => {
-    vi.mocked(authModule.resolveApiKeyForProvider).mockImplementation(async ({ provider }) => {
-      if (provider === "openai") {
-        return { apiKey: "openai-key", source: "env: OPENAI_API_KEY", mode: "api-key" };
-      }
-      throw new Error(`No API key found for provider "${provider}".`);
-    });
+    vi.mocked(authModule.resolveApiKeyForProvider).mockImplementation(
+      async ({ provider }) => {
+        if (provider === "openai") {
+          return {
+            apiKey: "openai-key",
+            source: "env: OPENAI_API_KEY",
+            mode: "api-key",
+          };
+        }
+        throw new Error(`No API key found for provider "${provider}".`);
+      },
+    );
 
     const result = await createAutoProvider();
     expectAutoSelectedProvider(result, "openai");
@@ -263,15 +274,21 @@ describe("embedding provider auto selection", () => {
   it("uses gemini when openai is missing", async () => {
     const fetchMock = createGeminiFetchMock();
     vi.stubGlobal("fetch", fetchMock);
-    vi.mocked(authModule.resolveApiKeyForProvider).mockImplementation(async ({ provider }) => {
-      if (provider === "openai") {
-        throw new Error('No API key found for provider "openai".');
-      }
-      if (provider === "google") {
-        return { apiKey: "gemini-key", source: "env: GEMINI_API_KEY", mode: "api-key" };
-      }
-      throw new Error(`Unexpected provider ${provider}`);
-    });
+    vi.mocked(authModule.resolveApiKeyForProvider).mockImplementation(
+      async ({ provider }) => {
+        if (provider === "openai") {
+          throw new Error('No API key found for provider "openai".');
+        }
+        if (provider === "google") {
+          return {
+            apiKey: "gemini-key",
+            source: "env: GEMINI_API_KEY",
+            mode: "api-key",
+          };
+        }
+        throw new Error(`Unexpected provider ${provider}`);
+      },
+    );
 
     const result = await createAutoProvider();
     const provider = expectAutoSelectedProvider(result, "gemini");
@@ -289,12 +306,18 @@ describe("embedding provider auto selection", () => {
       json: async () => ({ data: [{ embedding: [1, 2, 3] }] }),
     }));
     vi.stubGlobal("fetch", fetchMock);
-    vi.mocked(authModule.resolveApiKeyForProvider).mockImplementation(async ({ provider }) => {
-      if (provider === "openai") {
-        return { apiKey: "openai-key", source: "env: OPENAI_API_KEY", mode: "api-key" };
-      }
-      throw new Error(`Unexpected provider ${provider}`);
-    });
+    vi.mocked(authModule.resolveApiKeyForProvider).mockImplementation(
+      async ({ provider }) => {
+        if (provider === "openai") {
+          return {
+            apiKey: "openai-key",
+            source: "env: OPENAI_API_KEY",
+            mode: "api-key",
+          };
+        }
+        throw new Error(`Unexpected provider ${provider}`);
+      },
+    );
 
     const result = await createEmbeddingProvider({
       config: {} as never,
@@ -317,12 +340,18 @@ describe("embedding provider auto selection", () => {
   it("uses mistral when openai/gemini/voyage are missing", async () => {
     const fetchMock = createFetchMock();
     vi.stubGlobal("fetch", fetchMock);
-    vi.mocked(authModule.resolveApiKeyForProvider).mockImplementation(async ({ provider }) => {
-      if (provider === "mistral") {
-        return { apiKey: "mistral-key", source: "env: MISTRAL_API_KEY", mode: "api-key" };
-      }
-      throw new Error(`No API key found for provider "${provider}".`);
-    });
+    vi.mocked(authModule.resolveApiKeyForProvider).mockImplementation(
+      async ({ provider }) => {
+        if (provider === "mistral") {
+          return {
+            apiKey: "mistral-key",
+            source: "env: MISTRAL_API_KEY",
+            mode: "api-key",
+          };
+        }
+        throw new Error(`No API key found for provider "${provider}".`);
+      },
+    );
 
     const result = await createAutoProvider();
     const provider = expectAutoSelectedProvider(result, "mistral");
@@ -351,13 +380,17 @@ describe("embedding provider local fallback", () => {
 
   it("throws a helpful error when local is requested and fallback is none", async () => {
     mockMissingLocalEmbeddingDependency();
-    await expect(createLocalProvider()).rejects.toThrow(/optional dependency node-llama-cpp/i);
+    await expect(createLocalProvider()).rejects.toThrow(
+      /optional dependency node-llama-cpp/i,
+    );
   });
 
   it("mentions every remote provider in local setup guidance", async () => {
     mockMissingLocalEmbeddingDependency();
     await expect(createLocalProvider()).rejects.toThrow(/provider = "gemini"/i);
-    await expect(createLocalProvider()).rejects.toThrow(/provider = "mistral"/i);
+    await expect(createLocalProvider()).rejects.toThrow(
+      /provider = "mistral"/i,
+    );
   });
 });
 
@@ -373,8 +406,10 @@ describe("local embedding normalization", () => {
 
   function mockSingleLocalEmbeddingVector(
     vector: number[],
-    resolveModelFile: (modelPath: string, modelDirectory?: string) => Promise<string> = async () =>
-      "/fake/model.gguf",
+    resolveModelFile: (
+      modelPath: string,
+      modelDirectory?: string,
+    ) => Promise<string> = async () => "/fake/model.gguf",
   ): void {
     importNodeLlamaCppMock.mockResolvedValue({
       getLlama: async () => ({
@@ -405,7 +440,10 @@ describe("local embedding normalization", () => {
     const magnitude = Math.sqrt(embedding.reduce((sum, x) => sum + x * x, 0));
 
     expect(magnitude).toBeCloseTo(1.0, 5);
-    expect(resolveModelFileMock).toHaveBeenCalledWith(DEFAULT_LOCAL_MODEL, undefined);
+    expect(resolveModelFileMock).toHaveBeenCalledWith(
+      DEFAULT_LOCAL_MODEL,
+      undefined,
+    );
   });
 
   it("handles zero vector without division by zero", async () => {
@@ -423,7 +461,12 @@ describe("local embedding normalization", () => {
   });
 
   it("sanitizes non-finite values before normalization", async () => {
-    const nonFiniteVector = [1, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY];
+    const nonFiniteVector = [
+      1,
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      Number.NEGATIVE_INFINITY,
+    ];
 
     mockSingleLocalEmbeddingVector(nonFiniteVector);
 
@@ -449,9 +492,15 @@ describe("local embedding normalization", () => {
           createEmbeddingContext: vi.fn().mockResolvedValue({
             getEmbeddingFor: vi
               .fn()
-              .mockResolvedValueOnce({ vector: new Float32Array(unnormalizedVectors[0]) })
-              .mockResolvedValueOnce({ vector: new Float32Array(unnormalizedVectors[1]) })
-              .mockResolvedValueOnce({ vector: new Float32Array(unnormalizedVectors[2]) }),
+              .mockResolvedValueOnce({
+                vector: new Float32Array(unnormalizedVectors[0]),
+              })
+              .mockResolvedValueOnce({
+                vector: new Float32Array(unnormalizedVectors[1]),
+              })
+              .mockResolvedValueOnce({
+                vector: new Float32Array(unnormalizedVectors[2]),
+              }),
           }),
         }),
       }),
@@ -522,6 +571,8 @@ describe("FTS-only fallback when no provider available", () => {
     expect(result.provider).toBeNull();
     expect(result.requestedProvider).toBe("openai");
     expect(result.fallbackFrom).toBe("openai");
-    expect(result.providerUnavailableReason).toContain("Fallback to gemini failed");
+    expect(result.providerUnavailableReason).toContain(
+      "Fallback to gemini failed",
+    );
   });
 });

@@ -2,7 +2,9 @@ import type { SignalMention } from "./event-handler.types.js";
 
 const OBJECT_REPLACEMENT = "\uFFFC";
 
-function isValidMention(mention: SignalMention | null | undefined): mention is SignalMention {
+function isValidMention(
+  mention: SignalMention | null | undefined,
+): mention is SignalMention {
   if (!mention) {
     return false;
   }
@@ -25,13 +27,18 @@ function clampBounds(start: number, length: number, textLength: number) {
   return { start: safeStart, end: safeEnd };
 }
 
-export function renderSignalMentions(message: string, mentions?: SignalMention[] | null) {
+export function renderSignalMentions(
+  message: string,
+  mentions?: SignalMention[] | null,
+) {
   if (!message || !mentions?.length) {
     return message;
   }
 
   let normalized = message;
-  const candidates = mentions.filter(isValidMention).toSorted((a, b) => b.start! - a.start!);
+  const candidates = mentions
+    .filter(isValidMention)
+    .toSorted((a, b) => b.start! - a.start!);
 
   for (const mention of candidates) {
     const identifier = mention.uuid ?? mention.number;
@@ -39,7 +46,11 @@ export function renderSignalMentions(message: string, mentions?: SignalMention[]
       continue;
     }
 
-    const { start, end } = clampBounds(mention.start!, mention.length!, normalized.length);
+    const { start, end } = clampBounds(
+      mention.start!,
+      mention.length!,
+      normalized.length,
+    );
     if (start >= end) {
       continue;
     }
@@ -49,7 +60,8 @@ export function renderSignalMentions(message: string, mentions?: SignalMention[]
       continue;
     }
 
-    normalized = normalized.slice(0, start) + `@${identifier}` + normalized.slice(end);
+    normalized =
+      normalized.slice(0, start) + `@${identifier}` + normalized.slice(end);
   }
 
   return normalized;

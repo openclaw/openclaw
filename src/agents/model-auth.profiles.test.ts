@@ -5,7 +5,11 @@ import type { Api, Model } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
 import { withEnvAsync } from "../test-utils/env.js";
 import { ensureAuthProfileStore } from "./auth-profiles.js";
-import { getApiKeyForModel, resolveApiKeyForProvider, resolveEnvApiKey } from "./model-auth.js";
+import {
+  getApiKeyForModel,
+  resolveApiKeyForProvider,
+  resolveEnvApiKey,
+} from "./model-auth.js";
 
 const oauthFixture = {
   access: "access-token",
@@ -127,7 +131,11 @@ describe("getApiKeyForModel", () => {
           PI_CODING_AGENT_DIR: agentDir,
         },
         async () => {
-          const authProfilesPath = path.join(tempDir, "agent", "auth-profiles.json");
+          const authProfilesPath = path.join(
+            tempDir,
+            "agent",
+            "auth-profiles.json",
+          );
           await fs.mkdir(path.dirname(authProfilesPath), {
             recursive: true,
             mode: 0o700,
@@ -205,14 +213,17 @@ describe("getApiKeyForModel", () => {
   });
 
   it("resolves Synthetic API key from env", async () => {
-    await withEnvAsync({ SYNTHETIC_API_KEY: "synthetic-test-key" }, async () => {
-      const resolved = await resolveApiKeyForProvider({
-        provider: "synthetic",
-        store: { version: 1, profiles: {} },
-      });
-      expect(resolved.apiKey).toBe("synthetic-test-key");
-      expect(resolved.source).toContain("SYNTHETIC_API_KEY");
-    });
+    await withEnvAsync(
+      { SYNTHETIC_API_KEY: "synthetic-test-key" },
+      async () => {
+        const resolved = await resolveApiKeyForProvider({
+          provider: "synthetic",
+          store: { version: 1, profiles: {} },
+        });
+        expect(resolved.apiKey).toBe("synthetic-test-key");
+        expect(resolved.source).toContain("SYNTHETIC_API_KEY");
+      },
+    );
   });
 
   it("resolves Qianfan API key from env", async () => {
@@ -285,11 +296,14 @@ describe("getApiKeyForModel", () => {
   });
 
   it("strips embedded CR/LF from ANTHROPIC_API_KEY", async () => {
-    await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test-\r\nkey" }, async () => {
-      const resolved = resolveEnvApiKey("anthropic");
-      expect(resolved?.apiKey).toBe("sk-ant-test-key");
-      expect(resolved?.source).toContain("ANTHROPIC_API_KEY");
-    });
+    await withEnvAsync(
+      { ANTHROPIC_API_KEY: "sk-ant-test-\r\nkey" },
+      async () => {
+        const resolved = resolveEnvApiKey("anthropic");
+        expect(resolved?.apiKey).toBe("sk-ant-test-key");
+        expect(resolved?.source).toContain("ANTHROPIC_API_KEY");
+      },
+    );
   });
 
   it("resolveEnvApiKey('huggingface') returns HUGGINGFACE_HUB_TOKEN when set", async () => {

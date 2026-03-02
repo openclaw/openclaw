@@ -61,7 +61,10 @@ function existsSyncMaybe(p: string | undefined): boolean | null {
   }
 }
 
-function formatTokenHint(token: string, opts: { showSecrets: boolean }): string {
+function formatTokenHint(
+  token: string,
+  opts: { showSecrets: boolean },
+): string {
   const t = token.trim();
   if (!t) {
     return "empty";
@@ -146,7 +149,8 @@ const buildAccountNotes = (params: {
   }
 
   const allowFrom =
-    plugin.config.resolveAllowFrom?.({ cfg, accountId: snapshot.accountId }) ?? snapshot.allowFrom;
+    plugin.config.resolveAllowFrom?.({ cfg, accountId: snapshot.accountId }) ??
+    snapshot.allowFrom;
   if (allowFrom?.length) {
     const formatted = formatChannelAllowFrom({
       plugin,
@@ -171,7 +175,8 @@ function resolveLinkFields(summary: unknown): {
   const linked = typeof rec.linked === "boolean" ? rec.linked : null;
   const authAgeMs = typeof rec.authAgeMs === "number" ? rec.authAgeMs : null;
   const self = asRecord(rec.self);
-  const selfE164 = typeof self.e164 === "string" && self.e164.trim() ? self.e164.trim() : null;
+  const selfE164 =
+    typeof self.e164 === "string" && self.e164.trim() ? self.e164.trim() : null;
   return { linked, authAgeMs, selfE164 };
 }
 
@@ -189,7 +194,8 @@ function collectMissingPaths(accounts: ChannelAccountRow[]): string[] {
       "authDir",
     ]) {
       const raw =
-        (accountRec[key] as string | undefined) ?? (snapshotRec[key] as string | undefined);
+        (accountRec[key] as string | undefined) ??
+        (snapshotRec[key] as string | undefined);
       const ok = existsSyncMaybe(raw);
       if (ok === false) {
         missing.push(String(raw));
@@ -246,8 +252,12 @@ function summarizeTokenConfig(params: {
       return { state: "setup", detail: "no tokens (need bot+app)" };
     }
 
-    const botSources = summarizeSources(ready.map((a) => a.snapshot.botTokenSource ?? "none"));
-    const appSources = summarizeSources(ready.map((a) => a.snapshot.appTokenSource ?? "none"));
+    const botSources = summarizeSources(
+      ready.map((a) => a.snapshot.botTokenSource ?? "none"),
+    );
+    const appSources = summarizeSources(
+      ready.map((a) => a.snapshot.appTokenSource ?? "none"),
+    );
 
     const sample = ready[0]?.account ? asRecord(ready[0].account) : {};
     const botToken = typeof sample.botToken === "string" ? sample.botToken : "";
@@ -259,7 +269,10 @@ function summarizeTokenConfig(params: {
       ? formatTokenHint(appToken, { showSecrets: params.showSecrets })
       : "";
 
-    const hint = botHint || appHint ? ` (bot ${botHint || "?"}, app ${appHint || "?"})` : "";
+    const hint =
+      botHint || appHint
+        ? ` (bot ${botHint || "?"}, app ${appHint || "?"})`
+        : "";
     return {
       state: "ok",
       detail: `tokens ok (bot ${botSources.label}, app ${appSources.label})${hint} · accounts ${ready.length}/${enabled.length || 1}`,
@@ -338,7 +351,8 @@ export async function buildChannelsTable(
       cfg,
       accountIds,
     });
-    const resolvedAccountIds = accountIds.length > 0 ? accountIds : [defaultAccountId];
+    const resolvedAccountIds =
+      accountIds.length > 0 ? accountIds : [defaultAccountId];
 
     const accounts: ChannelAccountRow[] = [];
     for (const accountId of resolvedAccountIds) {
@@ -359,7 +373,8 @@ export async function buildChannelsTable(
     const anyEnabled = accounts.some((a) => a.enabled);
     const enabledAccounts = accounts.filter((a) => a.enabled);
     const configuredAccounts = enabledAccounts.filter((a) => a.configured);
-    const defaultEntry = accounts.find((a) => a.accountId === defaultAccountId) ?? accounts[0];
+    const defaultEntry =
+      accounts.find((a) => a.accountId === defaultAccountId) ?? accounts[0];
 
     const summary = plugin.status?.buildChannelSummary
       ? await plugin.status.buildChannelSummary({
@@ -367,7 +382,8 @@ export async function buildChannelsTable(
           cfg,
           defaultAccountId,
           snapshot:
-            defaultEntry?.snapshot ?? ({ accountId: defaultAccountId } as ChannelAccountSnapshot),
+            defaultEntry?.snapshot ??
+            ({ accountId: defaultAccountId } as ChannelAccountSnapshot),
         })
       : undefined;
 
@@ -416,7 +432,10 @@ export async function buildChannelsTable(
         if (!defaultEntry) {
           return "disabled";
         }
-        return plugin.config.disabledReason?.(defaultEntry.account, cfg) ?? "disabled";
+        return (
+          plugin.config.disabledReason?.(defaultEntry.account, cfg) ??
+          "disabled"
+        );
       }
       if (missingPaths.length > 0) {
         return `missing file (${missingPaths[0]})`;

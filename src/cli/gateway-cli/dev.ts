@@ -13,10 +13,16 @@ const DEV_IDENTITY_THEME = "protocol droid";
 const DEV_IDENTITY_EMOJI = "🤖";
 const DEV_AGENT_WORKSPACE_SUFFIX = "dev";
 
-async function loadDevTemplate(name: string, fallback: string): Promise<string> {
+async function loadDevTemplate(
+  name: string,
+  fallback: string,
+): Promise<string> {
   try {
     const templateDir = await resolveWorkspaceTemplateDir();
-    const raw = await fs.promises.readFile(path.join(templateDir, name), "utf-8");
+    const raw = await fs.promises.readFile(
+      path.join(templateDir, name),
+      "utf-8",
+    );
     if (!raw.startsWith("---")) {
       return raw;
     }
@@ -30,7 +36,9 @@ async function loadDevTemplate(name: string, fallback: string): Promise<string> 
   }
 }
 
-const resolveDevWorkspaceDir = (env: NodeJS.ProcessEnv = process.env): string => {
+const resolveDevWorkspaceDir = (
+  env: NodeJS.ProcessEnv = process.env,
+): string => {
   const baseDir = resolveDefaultAgentWorkspaceDir(env, os.homedir);
   const profile = env.OPENCLAW_PROFILE?.trim().toLowerCase();
   if (profile === "dev") {
@@ -126,5 +134,7 @@ export async function ensureDevGatewayConfig(opts: { reset?: boolean }) {
   });
   await ensureDevWorkspace(workspace);
   defaultRuntime.log(`Dev config ready: ${shortenHomePath(configPath)}`);
-  defaultRuntime.log(`Dev workspace ready: ${shortenHomePath(resolveUserPath(workspace))}`);
+  defaultRuntime.log(
+    `Dev workspace ready: ${shortenHomePath(resolveUserPath(workspace))}`,
+  );
 }

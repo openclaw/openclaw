@@ -67,13 +67,16 @@ export async function runDaemonStop(opts: DaemonLifecycleOptions = {}) {
  * @returns `true` if restart succeeded, `false` if the service was not loaded.
  * Throws/exits on check or restart failures.
  */
-export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promise<boolean> {
+export async function runDaemonRestart(
+  opts: DaemonLifecycleOptions = {},
+): Promise<boolean> {
   const json = Boolean(opts.json);
   const service = resolveGatewayService();
   const restartPort = await resolveGatewayRestartPort().catch(() =>
     resolveGatewayPort(loadConfig(), process.env),
   );
-  const restartWaitMs = POST_RESTART_HEALTH_ATTEMPTS * POST_RESTART_HEALTH_DELAY_MS;
+  const restartWaitMs =
+    POST_RESTART_HEALTH_ATTEMPTS * POST_RESTART_HEALTH_DELAY_MS;
   const restartWaitSeconds = Math.round(restartWaitMs / 1000);
 
   return await runServiceRestart({
@@ -96,7 +99,9 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
         warnings.push(staleMsg);
         if (!json) {
           defaultRuntime.log(theme.warn(staleMsg));
-          defaultRuntime.log(theme.muted("Stopping stale process(es) and retrying restart..."));
+          defaultRuntime.log(
+            theme.muted("Stopping stale process(es) and retrying restart..."),
+          );
         }
 
         await terminateStaleGatewayPids(health.staleGatewayPids);
@@ -117,7 +122,8 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
       const diagnostics = renderRestartDiagnostics(health);
       const timeoutLine = `Timed out after ${restartWaitSeconds}s waiting for gateway port ${restartPort} to become healthy.`;
       const runningNoPortLine =
-        health.runtime.status === "running" && health.portUsage.status === "free"
+        health.runtime.status === "running" &&
+        health.portUsage.status === "free"
           ? `Gateway process is running but port ${restartPort} is still free (startup hang/crash loop or very slow VM startup).`
           : null;
       if (!json) {
@@ -136,10 +142,13 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
         warnings.push(...diagnostics);
       }
 
-      fail(`Gateway restart timed out after ${restartWaitSeconds}s waiting for health checks.`, [
-        formatCliCommand("openclaw gateway status --deep"),
-        formatCliCommand("openclaw doctor"),
-      ]);
+      fail(
+        `Gateway restart timed out after ${restartWaitSeconds}s waiting for health checks.`,
+        [
+          formatCliCommand("openclaw gateway status --deep"),
+          formatCliCommand("openclaw doctor"),
+        ],
+      );
     },
   });
 }

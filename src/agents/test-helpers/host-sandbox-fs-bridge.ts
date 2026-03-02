@@ -1,7 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveSandboxPath } from "../sandbox-paths.js";
-import type { SandboxFsBridge, SandboxFsStat, SandboxResolvedPath } from "../sandbox/fs-bridge.js";
+import type {
+  SandboxFsBridge,
+  SandboxFsStat,
+  SandboxResolvedPath,
+} from "../sandbox/fs-bridge.js";
 
 export function createSandboxFsBridgeFromResolver(
   resolvePath: (filePath: string, cwd?: string) => SandboxResolvedPath,
@@ -42,7 +46,11 @@ export function createSandboxFsBridgeFromResolver(
         const target = resolvePath(filePath, cwd);
         const stats = await fs.stat(target.hostPath);
         return {
-          type: stats.isDirectory() ? "directory" : stats.isFile() ? "file" : "other",
+          type: stats.isDirectory()
+            ? "directory"
+            : stats.isFile()
+              ? "file"
+              : "other",
           size: stats.size,
           mtimeMs: stats.mtimeMs,
         } satisfies SandboxFsStat;
@@ -68,7 +76,9 @@ export function createHostSandboxFsBridge(rootDir: string): SandboxFsBridge {
     const relativePath = resolved.relative
       ? resolved.relative.split(path.sep).filter(Boolean).join(path.posix.sep)
       : "";
-    const containerPath = relativePath ? path.posix.join("/workspace", relativePath) : "/workspace";
+    const containerPath = relativePath
+      ? path.posix.join("/workspace", relativePath)
+      : "/workspace";
     return {
       hostPath: resolved.resolved,
       relativePath,

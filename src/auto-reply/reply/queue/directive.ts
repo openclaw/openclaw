@@ -1,5 +1,8 @@
 import { parseDurationMs } from "../../../cli/parse-duration.js";
-import { skipDirectiveArgPrefix, takeDirectiveToken } from "../directive-parsing.js";
+import {
+  skipDirectiveArgPrefix,
+  takeDirectiveToken,
+} from "../directive-parsing.js";
 import { normalizeQueueDropPolicy, normalizeQueueMode } from "./normalize.js";
 import type { QueueDropPolicy, QueueMode } from "./types.js";
 

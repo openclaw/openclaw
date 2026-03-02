@@ -112,7 +112,12 @@ function getShellProfilePath(shell: string): string {
           "Microsoft.PowerShell_profile.ps1",
         );
       }
-      return path.join(home, ".config", "powershell", "Microsoft.PowerShell_profile.ps1");
+      return path.join(
+        home,
+        ".config",
+        "powershell",
+        "Microsoft.PowerShell_profile.ps1",
+      );
     default:
       return path.join(home, ".zshrc");
   }
@@ -133,15 +138,21 @@ async function main() {
   // Get completion status using the same function used by doctor/update/onboard
   const status = await checkShellCompletionStatus(CLI_NAME);
 
-  console.log(`  Shell: ${theme.accent(status.shell)} ${theme.muted("(detected from $SHELL)")}`);
-  console.log(`  Platform: ${theme.muted(process.platform)} ${theme.muted(`(${os.release()})`)}`);
+  console.log(
+    `  Shell: ${theme.accent(status.shell)} ${theme.muted("(detected from $SHELL)")}`,
+  );
+  console.log(
+    `  Platform: ${theme.muted(process.platform)} ${theme.muted(`(${os.release()})`)}`,
+  );
   console.log(`  Profile: ${theme.muted(getShellProfilePath(status.shell))}`);
   console.log(`  Cache path: ${theme.muted(status.cachePath)}`);
   console.log("");
   console.log(
     `  Profile configured: ${status.profileInstalled ? theme.success("yes") : theme.warn("no")}`,
   );
-  console.log(`  Cache exists: ${status.cacheExists ? theme.success("yes") : theme.warn("no")}`);
+  console.log(
+    `  Cache exists: ${status.cacheExists ? theme.success("yes") : theme.warn("no")}`,
+  );
   console.log(
     `  Uses slow pattern: ${status.usesSlowPattern ? theme.error("yes (needs upgrade)") : theme.success("no")}`,
   );
@@ -154,7 +165,11 @@ async function main() {
 
   // Profile uses slow dynamic pattern - upgrade to cached version
   if (status.usesSlowPattern) {
-    console.log(theme.warn("Profile uses slow dynamic completion. Upgrading to cached version..."));
+    console.log(
+      theme.warn(
+        "Profile uses slow dynamic completion. Upgrading to cached version...",
+      ),
+    );
     const cacheGenerated = await ensureCompletionCacheExists(CLI_NAME);
     if (cacheGenerated) {
       await installCompletion(status.shell, false, CLI_NAME);
@@ -167,7 +182,11 @@ async function main() {
 
   // Profile has completion but no cache - auto-fix
   if (status.profileInstalled && !status.cacheExists) {
-    console.log(theme.warn("Profile has completion but cache is missing. Regenerating..."));
+    console.log(
+      theme.warn(
+        "Profile has completion but cache is missing. Regenerating...",
+      ),
+    );
     const cacheGenerated = await ensureCompletionCacheExists(CLI_NAME);
     if (cacheGenerated) {
       console.log(theme.success("Cache regenerated successfully."));
@@ -179,9 +198,13 @@ async function main() {
 
   // Both profile and cache exist - nothing to do
   if (status.profileInstalled && status.cacheExists && !options.force) {
-    console.log(theme.muted("Shell completion is fully configured. To test the prompt:"));
     console.log(
-      theme.muted("  1. Remove the '# OpenClaw Completion' block from your shell profile"),
+      theme.muted("Shell completion is fully configured. To test the prompt:"),
+    );
+    console.log(
+      theme.muted(
+        "  1. Remove the '# OpenClaw Completion' block from your shell profile",
+      ),
     );
     console.log(theme.muted("  2. Re-run this script"));
     console.log(theme.muted("  Or use --force to prompt anyway"));
@@ -193,12 +216,18 @@ async function main() {
   console.log(theme.heading("Shell completion"));
 
   const shouldInstall = await confirm({
-    message: stylePromptMessage(`Enable ${status.shell} shell completion for ${CLI_NAME}?`),
+    message: stylePromptMessage(
+      `Enable ${status.shell} shell completion for ${CLI_NAME}?`,
+    ),
     initialValue: true,
   });
 
   if (isCancel(shouldInstall) || !shouldInstall) {
-    console.log(theme.muted(`Skipped. Run \`openclaw completion --install\` later to enable.`));
+    console.log(
+      theme.muted(
+        `Skipped. Run \`openclaw completion --install\` later to enable.`,
+      ),
+    );
     return;
   }
 

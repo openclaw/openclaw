@@ -95,6 +95,8 @@ describe("onboard auth provider config merges", () => {
       },
     );
 
-    expect(next.models?.providers?.custom?.models?.map((m) => m.id)).toEqual(["model-z"]);
+    expect(next.models?.providers?.custom?.models?.map((m) => m.id)).toEqual([
+      "model-z",
+    ]);
   });
 });

@@ -22,7 +22,10 @@ export async function applyUpdateHunk(
   });
 
   const originalLines = originalContents.split("\n");
-  if (originalLines.length > 0 && originalLines[originalLines.length - 1] === "") {
+  if (
+    originalLines.length > 0 &&
+    originalLines[originalLines.length - 1] === ""
+  ) {
     originalLines.pop();
   }
 
@@ -44,16 +47,24 @@ function computeReplacements(
 
   for (const chunk of chunks) {
     if (chunk.changeContext) {
-      const ctxIndex = seekSequence(originalLines, [chunk.changeContext], lineIndex, false);
+      const ctxIndex = seekSequence(
+        originalLines,
+        [chunk.changeContext],
+        lineIndex,
+        false,
+      );
       if (ctxIndex === null) {
-        throw new Error(`Failed to find context '${chunk.changeContext}' in ${filePath}`);
+        throw new Error(
+          `Failed to find context '${chunk.changeContext}' in ${filePath}`,
+        );
       }
       lineIndex = ctxIndex + 1;
     }
 
     if (chunk.oldLines.length === 0) {
       const insertionIndex =
-        originalLines.length > 0 && originalLines[originalLines.length - 1] === ""
+        originalLines.length > 0 &&
+        originalLines[originalLines.length - 1] === ""
           ? originalLines.length - 1
           : originalLines.length;
       replacements.push([insertionIndex, 0, chunk.newLines]);
@@ -62,14 +73,24 @@ function computeReplacements(
 
     let pattern = chunk.oldLines;
     let newSlice = chunk.newLines;
-    let found = seekSequence(originalLines, pattern, lineIndex, chunk.isEndOfFile);
+    let found = seekSequence(
+      originalLines,
+      pattern,
+      lineIndex,
+      chunk.isEndOfFile,
+    );
 
     if (found === null && pattern[pattern.length - 1] === "") {
       pattern = pattern.slice(0, -1);
       if (newSlice.length > 0 && newSlice[newSlice.length - 1] === "") {
         newSlice = newSlice.slice(0, -1);
       }
-      found = seekSequence(originalLines, pattern, lineIndex, chunk.isEndOfFile);
+      found = seekSequence(
+        originalLines,
+        pattern,
+        lineIndex,
+        chunk.isEndOfFile,
+      );
     }
 
     if (found === null) {
@@ -139,7 +160,11 @@ function seekSequence(
     }
   }
   for (let i = searchStart; i <= maxStart; i += 1) {
-    if (linesMatch(lines, pattern, i, (value) => normalizePunctuation(value.trim()))) {
+    if (
+      linesMatch(lines, pattern, i, (value) =>
+        normalizePunctuation(value.trim()),
+      )
+    ) {
       return i;
     }
   }

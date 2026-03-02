@@ -15,7 +15,11 @@ import { getFeishuRuntime } from "./runtime.js";
 import { sendMarkdownCardFeishu, sendMessageFeishu } from "./send.js";
 import { FeishuStreamingSession } from "./streaming-card.js";
 import { resolveReceiveIdType } from "./targets.js";
-import { addTypingIndicator, removeTypingIndicator, type TypingIndicatorState } from "./typing.js";
+import {
+  addTypingIndicator,
+  removeTypingIndicator,
+  type TypingIndicatorState,
+} from "./typing.js";
 
 /** Detect if text contains markdown elements that benefit from card rendering */
 function shouldUseCard(text: string): boolean {
@@ -28,7 +32,11 @@ const TYPING_INDICATOR_MAX_AGE_MS = 2 * 60_000;
 const MS_EPOCH_MIN = 1_000_000_000_000;
 
 function normalizeEpochMs(timestamp: number | undefined): number | undefined {
-  if (!Number.isFinite(timestamp) || timestamp === undefined || timestamp <= 0) {
+  if (
+    !Number.isFinite(timestamp) ||
+    timestamp === undefined ||
+    timestamp <= 0
+  ) {
     return undefined;
   }
   // Defensive normalization: some payloads use seconds, others milliseconds.
@@ -53,7 +61,9 @@ export type CreateFeishuReplyDispatcherParams = {
   messageCreateTimeMs?: number;
 };
 
-export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherParams) {
+export function createFeishuReplyDispatcher(
+  params: CreateFeishuReplyDispatcherParams,
+) {
   const core = getFeishuRuntime();
   const {
     cfg,
@@ -66,7 +76,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     mentionTargets,
     accountId,
   } = params;
-  const sendReplyToMessageId = skipReplyToInMessages ? undefined : replyToMessageId;
+  const sendReplyToMessageId = skipReplyToInMessages
+    ? undefined
+    : replyToMessageId;
   const account = resolveFeishuAccount({ cfg, accountId });
   const prefixContext = createReplyPrefixContext({ cfg, agentId });
 
@@ -100,7 +112,12 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       if (!typingState) {
         return;
       }
-      await removeTypingIndicator({ cfg, state: typingState, accountId, runtime: params.runtime });
+      await removeTypingIndicator({
+        cfg,
+        state: typingState,
+        accountId,
+        runtime: params.runtime,
+      });
       typingState = null;
     },
     onStartError: (err) =>
@@ -119,13 +136,22 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       }),
   });
 
-  const textChunkLimit = core.channel.text.resolveTextChunkLimit(cfg, "feishu", accountId, {
-    fallbackLimit: 4000,
-  });
+  const textChunkLimit = core.channel.text.resolveTextChunkLimit(
+    cfg,
+    "feishu",
+    accountId,
+    {
+      fallbackLimit: 4000,
+    },
+  );
   const chunkMode = core.channel.text.resolveChunkMode(cfg, "feishu");
-  const tableMode = core.channel.text.resolveMarkdownTableMode({ cfg, channel: "feishu" });
+  const tableMode = core.channel.text.resolveMarkdownTableMode({
+    cfg,
+    channel: "feishu",
+  });
   const renderMode = account.config?.renderMode ?? "auto";
-  const streamingEnabled = account.config?.streaming !== false && renderMode !== "raw";
+  const streamingEnabled =
+    account.config?.streaming !== false && renderMode !== "raw";
 
   let streaming: FeishuStreamingSession | null = null;
   let streamText = "";
@@ -140,14 +166,21 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     streamingStartPromise = (async () => {
       const creds =
         account.appId && account.appSecret
-          ? { appId: account.appId, appSecret: account.appSecret, domain: account.domain }
+          ? {
+              appId: account.appId,
+              appSecret: account.appSecret,
+              domain: account.domain,
+            }
           : null;
       if (!creds) {
         return;
       }
 
-      streaming = new FeishuStreamingSession(createFeishuClient(account), creds, (message) =>
-        params.runtime.log?.(`feishu[${account.accountId}] ${message}`),
+      streaming = new FeishuStreamingSession(
+        createFeishuClient(account),
+        creds,
+        (message) =>
+          params.runtime.log?.(`feishu[${account.accountId}] ${message}`),
       );
       try {
         await streaming.start(chatId, resolveReceiveIdType(chatId), {
@@ -156,7 +189,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           rootId,
         });
       } catch (error) {
-        params.runtime.error?.(`feishu: streaming start failed: ${String(error)}`);
+        params.runtime.error?.(
+          `feishu: streaming start failed: ${String(error)}`,
+        );
         streaming = null;
       }
     })();
@@ -183,7 +218,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   const { dispatcher, replyOptions, markDispatchIdle } =
     core.channel.reply.createReplyDispatcherWithTyping({
       responsePrefix: prefixContext.responsePrefix,
-      responsePrefixContextProvider: prefixContext.responsePrefixContextProvider,
+      responsePrefixContextProvider:
+        prefixContext.responsePrefixContextProvider,
       humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, agentId),
       onReplyStart: () => {
         if (streamingEnabled && renderMode === "card") {
@@ -207,9 +243,15 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         }
 
         if (hasText) {
-          const useCard = renderMode === "card" || (renderMode === "auto" && shouldUseCard(text));
+          const useCard =
+            renderMode === "card" ||
+            (renderMode === "auto" && shouldUseCard(text));
 
-          if ((info?.kind === "block" || info?.kind === "final") && streamingEnabled && useCard) {
+          if (
+            (info?.kind === "block" || info?.kind === "final") &&
+            streamingEnabled &&
+            useCard
+          ) {
             startStreaming();
             if (streamingStartPromise) {
               await streamingStartPromise;
@@ -256,7 +298,10 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               first = false;
             }
           } else {
-            const converted = core.channel.text.convertMarkdownTables(text, tableMode);
+            const converted = core.channel.text.convertMarkdownTables(
+              text,
+              tableMode,
+            );
             for (const chunk of core.channel.text.chunkTextWithMode(
               converted,
               textChunkLimit,

@@ -14,7 +14,9 @@ describe("heartbeat-wake", () => {
     expectedRetryReason: string;
   }) {
     setHeartbeatWakeHandler(
-      params.handler as unknown as Parameters<typeof setHeartbeatWakeHandler>[0],
+      params.handler as unknown as Parameters<
+        typeof setHeartbeatWakeHandler
+      >[0],
     );
     requestHeartbeatNow({ reason: params.initialReason, coalesceMs: 0 });
 
@@ -26,7 +28,9 @@ describe("heartbeat-wake", () => {
 
     await vi.advanceTimersByTimeAsync(500);
     expect(params.handler).toHaveBeenCalledTimes(2);
-    expect(params.handler.mock.calls[1]?.[0]).toEqual({ reason: params.expectedRetryReason });
+    expect(params.handler.mock.calls[1]?.[0]).toEqual({
+      reason: params.expectedRetryReason,
+    });
   }
 
   beforeEach(() => {
@@ -41,7 +45,9 @@ describe("heartbeat-wake", () => {
 
   it("coalesces multiple wake requests into one run", async () => {
     vi.useFakeTimers();
-    const handler = vi.fn().mockResolvedValue({ status: "skipped", reason: "disabled" });
+    const handler = vi
+      .fn()
+      .mockResolvedValue({ status: "skipped", reason: "disabled" });
     setHeartbeatWakeHandler(handler);
 
     requestHeartbeatNow({ reason: "interval", coalesceMs: 200 });
@@ -63,7 +69,10 @@ describe("heartbeat-wake", () => {
     vi.useFakeTimers();
     const handler = vi
       .fn()
-      .mockResolvedValueOnce({ status: "skipped", reason: "requests-in-flight" })
+      .mockResolvedValueOnce({
+        status: "skipped",
+        reason: "requests-in-flight",
+      })
       .mockResolvedValueOnce({ status: "ran", durationMs: 1 });
     await expectRetryAfterDefaultDelay({
       handler,
@@ -76,7 +85,10 @@ describe("heartbeat-wake", () => {
     vi.useFakeTimers();
     const handler = vi
       .fn()
-      .mockResolvedValueOnce({ status: "skipped", reason: "requests-in-flight" })
+      .mockResolvedValueOnce({
+        status: "skipped",
+        reason: "requests-in-flight",
+      })
       .mockResolvedValueOnce({ status: "ran", durationMs: 1 });
     setHeartbeatWakeHandler(handler);
 
@@ -109,8 +121,12 @@ describe("heartbeat-wake", () => {
 
   it("stale disposer does not clear a newer handler", async () => {
     vi.useFakeTimers();
-    const handlerA = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
-    const handlerB = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const handlerA = vi
+      .fn()
+      .mockResolvedValue({ status: "ran", durationMs: 1 });
+    const handlerB = vi
+      .fn()
+      .mockResolvedValue({ status: "ran", durationMs: 1 });
 
     // Runner A registers its handler
     const disposeA = setHeartbeatWakeHandler(handlerA);
@@ -189,7 +205,9 @@ describe("heartbeat-wake", () => {
     });
     const handlerA = vi
       .fn()
-      .mockReturnValue(hangPromise.then(() => ({ status: "ran" as const, durationMs: 1 })));
+      .mockReturnValue(
+        hangPromise.then(() => ({ status: "ran" as const, durationMs: 1 })),
+      );
     setHeartbeatWakeHandler(handlerA);
 
     // Trigger the handler — it starts running but never finishes
@@ -199,7 +217,9 @@ describe("heartbeat-wake", () => {
 
     // Now simulate SIGUSR1: register a new handler while handlerA is still running.
     // Without the fix, `running` would stay true and handlerB would never fire.
-    const handlerB = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const handlerB = vi
+      .fn()
+      .mockResolvedValue({ status: "ran", durationMs: 1 });
     setHeartbeatWakeHandler(handlerB);
 
     // handlerB should be able to fire (running was reset)
@@ -214,7 +234,9 @@ describe("heartbeat-wake", () => {
 
   it("clears stale retry cooldown when a new handler is registered", async () => {
     vi.useFakeTimers();
-    const handlerA = vi.fn().mockResolvedValue({ status: "skipped", reason: "requests-in-flight" });
+    const handlerA = vi
+      .fn()
+      .mockResolvedValue({ status: "skipped", reason: "requests-in-flight" });
     setHeartbeatWakeHandler(handlerA);
 
     requestHeartbeatNow({ reason: "interval", coalesceMs: 0 });
@@ -222,7 +244,9 @@ describe("heartbeat-wake", () => {
     expect(handlerA).toHaveBeenCalledTimes(1);
 
     // Simulate SIGUSR1 startup with a fresh wake handler.
-    const handlerB = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const handlerB = vi
+      .fn()
+      .mockResolvedValue({ status: "ran", durationMs: 1 });
     setHeartbeatWakeHandler(handlerB);
 
     requestHeartbeatNow({ reason: "manual", coalesceMs: 0 });
@@ -238,7 +262,9 @@ describe("heartbeat-wake", () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(hasPendingHeartbeatWake()).toBe(true);
 
-    const handler = vi.fn().mockResolvedValue({ status: "skipped", reason: "disabled" });
+    const handler = vi
+      .fn()
+      .mockResolvedValue({ status: "skipped", reason: "disabled" });
     setHeartbeatWakeHandler(handler);
 
     await vi.advanceTimersByTimeAsync(249);
@@ -254,7 +280,10 @@ describe("heartbeat-wake", () => {
     vi.useFakeTimers();
     const handler = vi
       .fn()
-      .mockResolvedValueOnce({ status: "skipped", reason: "requests-in-flight" })
+      .mockResolvedValueOnce({
+        status: "skipped",
+        reason: "requests-in-flight",
+      })
       .mockResolvedValueOnce({ status: "ran", durationMs: 1 });
     setHeartbeatWakeHandler(handler);
 

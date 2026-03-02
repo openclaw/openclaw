@@ -28,7 +28,16 @@ export function createMediaPlayerCard(params: {
   };
   extraActions?: Array<{ label: string; data: string }>;
 }): FlexBubble {
-  const { title, subtitle, source, imageUrl, isPlaying, progress, controls, extraActions } = params;
+  const {
+    title,
+    subtitle,
+    source,
+    imageUrl,
+    isPlaying,
+    progress,
+    controls,
+    extraActions,
+  } = params;
 
   // Track info section
   const trackInfo: FlexComponent[] = [
@@ -324,7 +333,11 @@ export function createAppleTvRemoteCard(params: {
     {
       type: "box",
       layout: "horizontal",
-      contents: [{ type: "filler" }, makeButton("↑", actionData.up), { type: "filler" }],
+      contents: [
+        { type: "filler" },
+        makeButton("↑", actionData.up),
+        { type: "filler" },
+      ],
     } as FlexBox,
     {
       type: "box",
@@ -339,7 +352,11 @@ export function createAppleTvRemoteCard(params: {
     {
       type: "box",
       layout: "horizontal",
-      contents: [{ type: "filler" }, makeButton("↓", actionData.down), { type: "filler" }],
+      contents: [
+        { type: "filler" },
+        makeButton("↓", actionData.down),
+        { type: "filler" },
+      ],
       margin: "md",
     } as FlexBox,
   ];
@@ -347,14 +364,20 @@ export function createAppleTvRemoteCard(params: {
   const menuRow: FlexComponent = {
     type: "box",
     layout: "horizontal",
-    contents: [makeButton("Menu", actionData.menu), makeButton("Home", actionData.home)],
+    contents: [
+      makeButton("Menu", actionData.menu),
+      makeButton("Home", actionData.home),
+    ],
     margin: "lg",
   } as FlexBox;
 
   const playbackRow: FlexComponent = {
     type: "box",
     layout: "horizontal",
-    contents: [makeButton("Play", actionData.play), makeButton("Pause", actionData.pause)],
+    contents: [
+      makeButton("Play", actionData.play),
+      makeButton("Pause", actionData.pause),
+    ],
     margin: "md",
   } as FlexBox;
 
@@ -416,7 +439,8 @@ export function createDeviceControlCard(params: {
     style?: "primary" | "secondary";
   }>;
 }): FlexBubble {
-  const { deviceName, deviceType, status, isOnline, imageUrl, controls } = params;
+  const { deviceName, deviceType, status, isOnline, imageUrl, controls } =
+    params;
 
   // Device header with status indicator
   const headerContents: FlexComponent[] = [
@@ -511,7 +535,9 @@ export function createDeviceControlCard(params: {
 
       for (let j = i; j < Math.min(i + 2, limitedControls.length); j++) {
         const ctrl = limitedControls[j];
-        const buttonLabel = ctrl.icon ? `${ctrl.icon} ${ctrl.label}` : ctrl.label;
+        const buttonLabel = ctrl.icon
+          ? `${ctrl.icon} ${ctrl.label}`
+          : ctrl.label;
 
         rowButtons.push({
           type: "button",

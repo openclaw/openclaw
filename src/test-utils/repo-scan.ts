@@ -1,7 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-export const DEFAULT_REPO_SCAN_SKIP_DIR_NAMES = new Set([".git", "dist", "node_modules"]);
+export const DEFAULT_REPO_SCAN_SKIP_DIR_NAMES = new Set([
+  ".git",
+  "dist",
+  "node_modules",
+]);
 export const DEFAULT_RUNTIME_SOURCE_ROOTS = ["src", "extensions"] as const;
 export const DEFAULT_RUNTIME_SOURCE_EXTENSIONS = [".ts", ".tsx"] as const;
 export const RUNTIME_SOURCE_SKIP_PATTERNS = [
@@ -42,7 +46,10 @@ function shouldSkipDirectory(
   return (options.skipDirNames ?? DEFAULT_REPO_SCAN_SKIP_DIR_NAMES).has(name);
 }
 
-function hasAllowedExtension(fileName: string, extensions: readonly string[]): boolean {
+function hasAllowedExtension(
+  fileName: string,
+  extensions: readonly string[],
+): boolean {
   return extensions.some((extension) => fileName.endsWith(extension));
 }
 
@@ -54,7 +61,10 @@ function toSortedUnique(values: readonly string[]): Array<string> {
   return [...new Set(values)].toSorted();
 }
 
-function getRuntimeScanCacheKey(repoRoot: string, roots: readonly string[]): string {
+function getRuntimeScanCacheKey(
+  repoRoot: string,
+  roots: readonly string[],
+): string {
   return `${repoRoot}::${toSortedUnique(roots).join(",")}`;
 }
 
@@ -82,20 +92,30 @@ export async function listRepoFiles(
     if (!current) {
       continue;
     }
-    const entries = await fs.readdir(current.absolutePath, { withFileTypes: true });
+    const entries = await fs.readdir(current.absolutePath, {
+      withFileTypes: true,
+    });
     for (const entry of entries) {
       if (entry.isDirectory()) {
         if (!shouldSkipDirectory(entry.name, options)) {
-          pending.push({ absolutePath: path.join(current.absolutePath, entry.name) });
+          pending.push({
+            absolutePath: path.join(current.absolutePath, entry.name),
+          });
         }
         continue;
       }
-      if (!entry.isFile() || !hasAllowedExtension(entry.name, options.extensions)) {
+      if (
+        !entry.isFile() ||
+        !hasAllowedExtension(entry.name, options.extensions)
+      ) {
         continue;
       }
       const filePath = path.join(current.absolutePath, entry.name);
       const relativePath = path.relative(repoRoot, filePath);
-      if (options.shouldIncludeFile && !options.shouldIncludeFile(relativePath)) {
+      if (
+        options.shouldIncludeFile &&
+        !options.shouldIncludeFile(relativePath)
+      ) {
         continue;
       }
       files.push(filePath);
@@ -108,7 +128,9 @@ export async function listRepoFiles(
 
 export function shouldSkipRuntimeSourcePath(relativePath: string): boolean {
   const normalizedPath = normalizeRelativePath(relativePath);
-  return RUNTIME_SOURCE_SKIP_PATTERNS.some((pattern) => pattern.test(normalizedPath));
+  return RUNTIME_SOURCE_SKIP_PATTERNS.some((pattern) =>
+    pattern.test(normalizedPath),
+  );
 }
 
 export async function listRuntimeSourceFiles(
@@ -127,7 +149,8 @@ export async function listRuntimeSourceFiles(
       roots,
       extensions: DEFAULT_RUNTIME_SOURCE_EXTENSIONS,
       skipHiddenDirectories: true,
-      shouldIncludeFile: (relativePath) => !shouldSkipRuntimeSourcePath(relativePath),
+      shouldIncludeFile: (relativePath) =>
+        !shouldSkipRuntimeSourcePath(relativePath),
     });
     runtimeSourceScanCache.set(cacheKey, pending);
   }

@@ -19,16 +19,25 @@ type WebToolGuardedFetchOptions = Omit<
   timeoutSeconds?: number;
   useEnvProxy?: boolean;
 };
-type WebToolEndpointFetchOptions = Omit<WebToolGuardedFetchOptions, "policy" | "useEnvProxy">;
+type WebToolEndpointFetchOptions = Omit<
+  WebToolGuardedFetchOptions,
+  "policy" | "useEnvProxy"
+>;
 
 function resolveTimeoutMs(params: {
   timeoutMs?: number;
   timeoutSeconds?: number;
 }): number | undefined {
-  if (typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)) {
+  if (
+    typeof params.timeoutMs === "number" &&
+    Number.isFinite(params.timeoutMs)
+  ) {
     return params.timeoutMs;
   }
-  if (typeof params.timeoutSeconds === "number" && Number.isFinite(params.timeoutSeconds)) {
+  if (
+    typeof params.timeoutSeconds === "number" &&
+    Number.isFinite(params.timeoutSeconds)
+  ) {
     return params.timeoutSeconds * 1000;
   }
   return undefined;
@@ -53,7 +62,8 @@ async function withWebToolsNetworkGuard<T>(
   params: WebToolGuardedFetchOptions,
   run: (result: { response: Response; finalUrl: string }) => Promise<T>,
 ): Promise<T> {
-  const { response, finalUrl, release } = await fetchWithWebToolsNetworkGuard(params);
+  const { response, finalUrl, release } =
+    await fetchWithWebToolsNetworkGuard(params);
   try {
     return await run({ response, finalUrl });
   } finally {

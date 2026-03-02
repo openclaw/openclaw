@@ -1,6 +1,12 @@
 import { createRequire } from "node:module";
-import { resolveEffectiveMessagesConfig, resolveHumanDelayConfig } from "../../agents/identity.js";
-import { createMemoryGetTool, createMemorySearchTool } from "../../agents/tools/memory-tool.js";
+import {
+  resolveEffectiveMessagesConfig,
+  resolveHumanDelayConfig,
+} from "../../agents/identity.js";
+import {
+  createMemoryGetTool,
+  createMemorySearchTool,
+} from "../../agents/tools/memory-tool.js";
 import { handleSlackAction } from "../../agents/tools/slack-actions.js";
 import {
   chunkByNewline,
@@ -36,7 +42,10 @@ import {
 } from "../../auto-reply/reply/mentions.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../../auto-reply/reply/provider-dispatcher.js";
 import { createReplyDispatcherWithTyping } from "../../auto-reply/reply/reply-dispatcher.js";
-import { removeAckReactionAfterReply, shouldAckReaction } from "../../channels/ack-reactions.js";
+import {
+  removeAckReactionAfterReply,
+  shouldAckReaction,
+} from "../../channels/ack-reactions.js";
 import { resolveCommandAuthorizedFromAuthorizers } from "../../channels/command-gating.js";
 import { discordMessageActions } from "../../channels/plugins/actions/discord.js";
 import { signalMessageActions } from "../../channels/plugins/actions/signal.js";
@@ -71,7 +80,10 @@ import { shouldLogVerbose } from "../../globals.js";
 import { monitorIMessageProvider } from "../../imessage/monitor.js";
 import { probeIMessage } from "../../imessage/probe.js";
 import { sendMessageIMessage } from "../../imessage/send.js";
-import { getChannelActivity, recordChannelActivity } from "../../infra/channel-activity.js";
+import {
+  getChannelActivity,
+  recordChannelActivity,
+} from "../../infra/channel-activity.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import {
   listLineAccountIds,
@@ -158,45 +170,42 @@ function resolveVersion(): string {
   }
 }
 
-const sendMessageWhatsAppLazy: PluginRuntime["channel"]["whatsapp"]["sendMessageWhatsApp"] = async (
+const sendMessageWhatsAppLazy: PluginRuntime["channel"]["whatsapp"]["sendMessageWhatsApp"] =
+  async (...args) => {
+    const { sendMessageWhatsApp } = await loadWebOutbound();
+    return sendMessageWhatsApp(...args);
+  };
+
+const sendPollWhatsAppLazy: PluginRuntime["channel"]["whatsapp"]["sendPollWhatsApp"] =
+  async (...args) => {
+    const { sendPollWhatsApp } = await loadWebOutbound();
+    return sendPollWhatsApp(...args);
+  };
+
+const loginWebLazy: PluginRuntime["channel"]["whatsapp"]["loginWeb"] = async (
   ...args
 ) => {
-  const { sendMessageWhatsApp } = await loadWebOutbound();
-  return sendMessageWhatsApp(...args);
-};
-
-const sendPollWhatsAppLazy: PluginRuntime["channel"]["whatsapp"]["sendPollWhatsApp"] = async (
-  ...args
-) => {
-  const { sendPollWhatsApp } = await loadWebOutbound();
-  return sendPollWhatsApp(...args);
-};
-
-const loginWebLazy: PluginRuntime["channel"]["whatsapp"]["loginWeb"] = async (...args) => {
   const { loginWeb } = await loadWebLogin();
   return loginWeb(...args);
 };
 
-const startWebLoginWithQrLazy: PluginRuntime["channel"]["whatsapp"]["startWebLoginWithQr"] = async (
-  ...args
-) => {
-  const { startWebLoginWithQr } = await loadWebLoginQr();
-  return startWebLoginWithQr(...args);
-};
+const startWebLoginWithQrLazy: PluginRuntime["channel"]["whatsapp"]["startWebLoginWithQr"] =
+  async (...args) => {
+    const { startWebLoginWithQr } = await loadWebLoginQr();
+    return startWebLoginWithQr(...args);
+  };
 
-const waitForWebLoginLazy: PluginRuntime["channel"]["whatsapp"]["waitForWebLogin"] = async (
-  ...args
-) => {
-  const { waitForWebLogin } = await loadWebLoginQr();
-  return waitForWebLogin(...args);
-};
+const waitForWebLoginLazy: PluginRuntime["channel"]["whatsapp"]["waitForWebLogin"] =
+  async (...args) => {
+    const { waitForWebLogin } = await loadWebLoginQr();
+    return waitForWebLogin(...args);
+  };
 
-const monitorWebChannelLazy: PluginRuntime["channel"]["whatsapp"]["monitorWebChannel"] = async (
-  ...args
-) => {
-  const { monitorWebChannel } = await loadWebChannel();
-  return monitorWebChannel(...args);
-};
+const monitorWebChannelLazy: PluginRuntime["channel"]["whatsapp"]["monitorWebChannel"] =
+  async (...args) => {
+    const { monitorWebChannel } = await loadWebChannel();
+    return monitorWebChannel(...args);
+  };
 
 const handleWhatsAppActionLazy: PluginRuntime["channel"]["whatsapp"]["handleWhatsAppAction"] =
   async (...args) => {
@@ -204,10 +213,14 @@ const handleWhatsAppActionLazy: PluginRuntime["channel"]["whatsapp"]["handleWhat
     return handleWhatsAppAction(...args);
   };
 
-let webOutboundPromise: Promise<typeof import("../../web/outbound.js")> | null = null;
+let webOutboundPromise: Promise<typeof import("../../web/outbound.js")> | null =
+  null;
 let webLoginPromise: Promise<typeof import("../../web/login.js")> | null = null;
-let webLoginQrPromise: Promise<typeof import("../../web/login-qr.js")> | null = null;
-let webChannelPromise: Promise<typeof import("../../channels/web/index.js")> | null = null;
+let webLoginQrPromise: Promise<typeof import("../../web/login-qr.js")> | null =
+  null;
+let webChannelPromise: Promise<
+  typeof import("../../channels/web/index.js")
+> | null = null;
 let whatsappActionsPromise: Promise<
   typeof import("../../agents/tools/whatsapp-actions.js")
 > | null = null;
@@ -319,7 +332,14 @@ function createRuntimeChannel(): PluginRuntime["channel"] {
       buildPairingReply,
       readAllowFromStore: ({ channel, accountId, env }) =>
         readChannelAllowFromStore(channel, env, accountId),
-      upsertPairingRequest: ({ channel, id, accountId, meta, env, pairingAdapter }) =>
+      upsertPairingRequest: ({
+        channel,
+        id,
+        accountId,
+        meta,
+        env,
+        pairingAdapter,
+      }) =>
         upsertChannelPairingRequest({
           channel,
           id,

@@ -34,8 +34,9 @@ function readExecOutput(value: string | Buffer | undefined): string {
 }
 
 function withErrnoCode(message: string, code: string, cause: unknown): Error {
-  const out = new Error(message, { cause: cause instanceof Error ? cause : undefined }) as Error &
-    NodeJS.ErrnoException;
+  const out = new Error(message, {
+    cause: cause instanceof Error ? cause : undefined,
+  }) as Error & NodeJS.ErrnoException;
   out.code = code;
   return out;
 }
@@ -79,7 +80,9 @@ function parseFuserPidList(output: string): number[] {
     if (!line) {
       continue;
     }
-    const pidRegion = line.includes(":") ? line.slice(line.indexOf(":") + 1) : line;
+    const pidRegion = line.includes(":")
+      ? line.slice(line.indexOf(":") + 1)
+      : line;
     const pidMatches = pidRegion.match(/\d+/g) ?? [];
     for (const match of pidMatches) {
       const pid = Number.parseInt(match, 10);
@@ -91,7 +94,10 @@ function parseFuserPidList(output: string): number[] {
   return [...values];
 }
 
-function killPortWithFuser(port: number, signal: "SIGTERM" | "SIGKILL"): PortProcess[] {
+function killPortWithFuser(
+  port: number,
+  signal: "SIGTERM" | "SIGKILL",
+): PortProcess[] {
   const args = ["-k", `-${FUSER_SIGNALS[signal]}`, `${port}/tcp`];
   try {
     const stdout = execFileSync("fuser", args, {
@@ -105,7 +111,9 @@ function killPortWithFuser(port: number, signal: "SIGTERM" | "SIGKILL"): PortPro
     const status = execErr.status;
     const stdout = readExecOutput(execErr.stdout);
     const stderr = readExecOutput(execErr.stderr);
-    const parsed = parseFuserPidList([stdout, stderr].filter(Boolean).join("\n"));
+    const parsed = parseFuserPidList(
+      [stdout, stderr].filter(Boolean).join("\n"),
+    );
     if (status === 1) {
       // fuser exits 1 if nothing matched; keep any parsed PIDs in case signal succeeded.
       return parsed.map((pid) => ({ pid }));
@@ -118,7 +126,11 @@ function killPortWithFuser(port: number, signal: "SIGTERM" | "SIGKILL"): PortPro
       );
     }
     if (code === "EACCES" || code === "EPERM") {
-      throw withErrnoCode("fuser permission denied while forcing gateway port", code, err);
+      throw withErrnoCode(
+        "fuser permission denied while forcing gateway port",
+        code,
+        err,
+      );
     }
     throw err instanceof Error ? err : new Error(String(err));
   }
@@ -160,7 +172,9 @@ export function parseLsofOutput(output: string): PortProcess[] {
 export function listPortListeners(port: number): PortProcess[] {
   if (process.platform === "win32") {
     try {
-      const out = execFileSync("netstat", ["-ano", "-p", "TCP"], { encoding: "utf-8" });
+      const out = execFileSync("netstat", ["-ano", "-p", "TCP"], {
+        encoding: "utf-8",
+      });
       const lines = out.split(/\r?\n/).filter(Boolean);
       const results: PortProcess[] = [];
       for (const line of lines) {
@@ -186,25 +200,39 @@ export function listPortListeners(port: number): PortProcess[] {
 
   try {
     const lsof = resolveLsofCommandSync();
-    const out = execFileSync(lsof, ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-FpFc"], {
-      encoding: "utf-8",
-    });
+    const out = execFileSync(
+      lsof,
+      ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-FpFc"],
+      {
+        encoding: "utf-8",
+      },
+    );
     return parseLsofOutput(out);
   } catch (err: unknown) {
     const execErr = err as ExecFileError;
     const status = execErr.status ?? undefined;
     const code = execErr.code;
     if (code === "ENOENT") {
-      throw withErrnoCode("lsof not found; required for --force", "ENOENT", err);
+      throw withErrnoCode(
+        "lsof not found; required for --force",
+        "ENOENT",
+        err,
+      );
     }
     if (code === "EACCES" || code === "EPERM") {
-      throw withErrnoCode("lsof permission denied while inspecting gateway port", code, err);
+      throw withErrnoCode(
+        "lsof permission denied while inspecting gateway port",
+        code,
+        err,
+      );
     }
     if (status === 1) {
       const stderr = readExecOutput(execErr.stderr).trim();
       if (
         stderr &&
-        /permission denied|not permitted|operation not permitted|can't stat/i.test(stderr)
+        /permission denied|not permitted|operation not permitted|can't stat/i.test(
+          stderr,
+        )
       ) {
         throw withErrnoCode(
           `lsof permission denied while inspecting gateway port: ${stderr}`,
@@ -259,7 +287,10 @@ export async function forceFreePortAndWait(
 ): Promise<ForceFreePortResult> {
   const timeoutMs = Math.max(opts.timeoutMs ?? 1500, 0);
   const intervalMs = Math.max(opts.intervalMs ?? 100, 1);
-  const sigtermTimeoutMs = Math.min(Math.max(opts.sigtermTimeoutMs ?? 600, 0), timeoutMs);
+  const sigtermTimeoutMs = Math.min(
+    Math.max(opts.sigtermTimeoutMs ?? 600, 0),
+    timeoutMs,
+  );
 
   let killed: PortProcess[] = [];
   let useFuserFallback = false;
@@ -282,7 +313,8 @@ export async function forceFreePortAndWait(
   }
 
   let waitedMs = 0;
-  const triesSigterm = intervalMs > 0 ? Math.ceil(sigtermTimeoutMs / intervalMs) : 0;
+  const triesSigterm =
+    intervalMs > 0 ? Math.ceil(sigtermTimeoutMs / intervalMs) : 0;
   for (let i = 0; i < triesSigterm; i++) {
     if (!(await checkBusy())) {
       return { killed, waitedMs, escalatedToSigkill: false };
@@ -303,7 +335,8 @@ export async function forceFreePortAndWait(
   }
 
   const remainingBudget = Math.max(timeoutMs - waitedMs, 0);
-  const triesSigkill = intervalMs > 0 ? Math.ceil(remainingBudget / intervalMs) : 0;
+  const triesSigkill =
+    intervalMs > 0 ? Math.ceil(remainingBudget / intervalMs) : 0;
   for (let i = 0; i < triesSigkill; i++) {
     if (!(await checkBusy())) {
       return { killed, waitedMs, escalatedToSigkill: true };
@@ -317,7 +350,9 @@ export async function forceFreePortAndWait(
   }
 
   if (useFuserFallback) {
-    throw new Error(`port ${port} still has listeners after --force (fuser fallback)`);
+    throw new Error(
+      `port ${port} still has listeners after --force (fuser fallback)`,
+    );
   }
   const still = listPortListeners(port);
   throw new Error(

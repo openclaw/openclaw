@@ -46,7 +46,9 @@ describe("pi embedded model e2e smoke", () => {
 
     const result = resolveModel("openai-codex", "gpt-5.3-codex", "/tmp/agent");
     expect(result.error).toBeUndefined();
-    expect(result.model).toMatchObject(buildOpenAICodexForwardCompatExpectation("gpt-5.3-codex"));
+    expect(result.model).toMatchObject(
+      buildOpenAICodexForwardCompatExpectation("gpt-5.3-codex"),
+    );
   });
 
   it("keeps unknown-model errors for non-forward-compat IDs", () => {
@@ -58,7 +60,11 @@ describe("pi embedded model e2e smoke", () => {
   it("builds a google-gemini-cli forward-compat fallback for gemini-3.1-pro-preview", () => {
     mockGoogleGeminiCliProTemplateModel();
 
-    const result = resolveModel("google-gemini-cli", "gemini-3.1-pro-preview", "/tmp/agent");
+    const result = resolveModel(
+      "google-gemini-cli",
+      "gemini-3.1-pro-preview",
+      "/tmp/agent",
+    );
     expect(result.error).toBeUndefined();
     expect(result.model).toMatchObject({
       ...GOOGLE_GEMINI_CLI_PRO_TEMPLATE_MODEL,
@@ -71,7 +77,11 @@ describe("pi embedded model e2e smoke", () => {
   it("builds a google-gemini-cli forward-compat fallback for gemini-3.1-flash-preview", () => {
     mockGoogleGeminiCliFlashTemplateModel();
 
-    const result = resolveModel("google-gemini-cli", "gemini-3.1-flash-preview", "/tmp/agent");
+    const result = resolveModel(
+      "google-gemini-cli",
+      "gemini-3.1-flash-preview",
+      "/tmp/agent",
+    );
     expect(result.error).toBeUndefined();
     expect(result.model).toMatchObject({
       ...GOOGLE_GEMINI_CLI_FLASH_TEMPLATE_MODEL,
@@ -82,8 +92,14 @@ describe("pi embedded model e2e smoke", () => {
   });
 
   it("keeps unknown-model errors for unrecognized google-gemini-cli model IDs", () => {
-    const result = resolveModel("google-gemini-cli", "gemini-4-unknown", "/tmp/agent");
+    const result = resolveModel(
+      "google-gemini-cli",
+      "gemini-4-unknown",
+      "/tmp/agent",
+    );
     expect(result.model).toBeUndefined();
-    expect(result.error).toBe("Unknown model: google-gemini-cli/gemini-4-unknown");
+    expect(result.error).toBe(
+      "Unknown model: google-gemini-cli/gemini-4-unknown",
+    );
   });
 });

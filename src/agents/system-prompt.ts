@@ -17,7 +17,10 @@ import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
 export type PromptMode = "full" | "minimal" | "none";
 type OwnerIdDisplay = "raw" | "hash";
 
-function buildSkillsSection(params: { skillsPrompt?: string; readToolName: string }) {
+function buildSkillsSection(params: {
+  skillsPrompt?: string;
+  readToolName: string;
+}) {
   const trimmed = params.skillsPrompt?.trim();
   if (!trimmed) {
     return [];
@@ -42,7 +45,10 @@ function buildMemorySection(params: {
   if (params.isMinimal) {
     return [];
   }
-  if (!params.availableTools.has("memory_search") && !params.availableTools.has("memory_get")) {
+  if (
+    !params.availableTools.has("memory_search") &&
+    !params.availableTools.has("memory_get")
+  ) {
     return [];
   }
   const lines = [
@@ -62,7 +68,10 @@ function buildMemorySection(params: {
   return lines;
 }
 
-function buildUserIdentitySection(ownerLine: string | undefined, isMinimal: boolean) {
+function buildUserIdentitySection(
+  ownerLine: string | undefined,
+  isMinimal: boolean,
+) {
   if (!ownerLine || isMinimal) {
     return [];
   }
@@ -88,7 +97,9 @@ function buildOwnerIdentityLine(
   }
   const displayOwnerNumbers =
     ownerDisplay === "hash"
-      ? normalized.map((ownerId) => formatOwnerDisplayId(ownerId, ownerDisplaySecret))
+      ? normalized.map((ownerId) =>
+          formatOwnerDisplayId(ownerId, ownerDisplaySecret),
+        )
       : normalized;
   return `Authorized senders: ${displayOwnerNumbers.join(", ")}. These senders are allowlisted; do not assume they are the owner.`;
 }
@@ -167,7 +178,11 @@ function buildVoiceSection(params: { isMinimal: boolean; ttsHint?: string }) {
   return ["## Voice (TTS)", hint, ""];
 }
 
-function buildDocsSection(params: { docsPath?: string; isMinimal: boolean; readToolName: string }) {
+function buildDocsSection(params: {
+  docsPath?: string;
+  isMinimal: boolean;
+  readToolName: string;
+}) {
   const docsPath = params.docsPath?.trim();
   if (!docsPath || params.isMinimal) {
     return [];
@@ -251,7 +266,8 @@ export function buildAgentSystemPrompt(params: {
     nodes: "List/describe/notify/camera/screen on paired nodes",
     cron: "Manage cron jobs and wake events (use for reminders; when scheduling a reminder, write the systemEvent text as something that will read like a reminder when it fires, and mention that it is a reminder depending on the time gap between setting and firing; include recent context in reminder text if appropriate)",
     message: "Send messages and channel actions",
-    gateway: "Restart, apply config, or run updates on the running OpenClaw process",
+    gateway:
+      "Restart, apply config, or run updates on the running OpenClaw process",
     agents_list: acpEnabled
       ? 'List OpenClaw agent ids allowed for sessions_spawn when runtime="subagent" (not ACP harness ids)'
       : "List OpenClaw agent ids allowed for sessions_spawn",
@@ -368,12 +384,15 @@ export function buildAgentSystemPrompt(params: {
   const runtimeCapabilities = (runtimeInfo?.capabilities ?? [])
     .map((cap) => String(cap).trim())
     .filter(Boolean);
-  const runtimeCapabilitiesLower = new Set(runtimeCapabilities.map((cap) => cap.toLowerCase()));
+  const runtimeCapabilitiesLower = new Set(
+    runtimeCapabilities.map((cap) => cap.toLowerCase()),
+  );
   const inlineButtonsEnabled = runtimeCapabilitiesLower.has("inlinebuttons");
   const messageChannelOptions = listDeliverableMessageChannels().join("|");
   const promptMode = params.promptMode ?? "full";
   const isMinimal = promptMode === "minimal" || promptMode === "none";
-  const sandboxContainerWorkspace = params.sandboxInfo?.containerWorkspaceDir?.trim();
+  const sandboxContainerWorkspace =
+    params.sandboxInfo?.containerWorkspaceDir?.trim();
   const sanitizedWorkspaceDir = sanitizeForPromptLiteral(params.workspaceDir);
   const sanitizedSandboxContainerWorkspace = sandboxContainerWorkspace
     ? sanitizeForPromptLiteral(sandboxContainerWorkspace)
@@ -407,7 +426,9 @@ export function buildAgentSystemPrompt(params: {
     isMinimal,
     readToolName,
   });
-  const workspaceNotes = (params.workspaceNotes ?? []).map((note) => note.trim()).filter(Boolean);
+  const workspaceNotes = (params.workspaceNotes ?? [])
+    .map((note) => note.trim())
+    .filter(Boolean);
 
   // For "none" mode, return just the basic identity line
   if (promptMode === "none") {
@@ -495,7 +516,9 @@ export function buildAgentSystemPrompt(params: {
     params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal
       ? params.modelAliasLines.join("\n")
       : "",
-    params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal ? "" : "",
+    params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal
+      ? ""
+      : "",
     userTimezone
       ? "If you need the current date, time, or day of week, run session_status (📊 session_status)."
       : "",
@@ -524,7 +547,9 @@ export function buildAgentSystemPrompt(params: {
                   : ""
               }`
             : "",
-          params.sandboxInfo.browserBridgeUrl ? "Sandbox browser: enabled." : "",
+          params.sandboxInfo.browserBridgeUrl
+            ? "Sandbox browser: enabled."
+            : "",
           params.sandboxInfo.browserNoVncUrl
             ? `Sandbox browser observer (noVNC): ${sanitizeForPromptLiteral(params.sandboxInfo.browserNoVncUrl)}`
             : "",
@@ -572,7 +597,9 @@ export function buildAgentSystemPrompt(params: {
   if (extraSystemPrompt) {
     // Use "Subagent Context" header for minimal mode (subagents), otherwise "Group Chat Context"
     const contextHeader =
-      promptMode === "minimal" ? "## Subagent Context" : "## Group Chat Context";
+      promptMode === "minimal"
+        ? "## Subagent Context"
+        : "## Group Chat Context";
     lines.push(contextHeader, extraSystemPrompt, "");
   }
   if (params.reactionGuidance) {
@@ -612,7 +639,11 @@ export function buildAgentSystemPrompt(params: {
       const baseName = normalizedPath.split("/").pop() ?? normalizedPath;
       return baseName.toLowerCase() === "soul.md";
     });
-    lines.push("# Project Context", "", "The following project context files have been loaded:");
+    lines.push(
+      "# Project Context",
+      "",
+      "The following project context files have been loaded:",
+    );
     if (hasSoulFile) {
       lines.push(
         "If SOUL.md is present, embody its persona and tone. Avoid stiff, generic replies; follow its guidance unless higher-priority instructions override it.",
@@ -657,7 +688,12 @@ export function buildAgentSystemPrompt(params: {
 
   lines.push(
     "## Runtime",
-    buildRuntimeLine(runtimeInfo, runtimeChannel, runtimeCapabilities, params.defaultThinkLevel),
+    buildRuntimeLine(
+      runtimeInfo,
+      runtimeChannel,
+      runtimeCapabilities,
+      params.defaultThinkLevel,
+    ),
     `Reasoning: ${reasoningLevel} (hidden unless on/stream). Toggle /reasoning; /status shows Reasoning when enabled.`,
   );
 
@@ -691,7 +727,9 @@ export function buildRuntimeLine(
         : "",
     runtimeInfo?.node ? `node=${runtimeInfo.node}` : "",
     runtimeInfo?.model ? `model=${runtimeInfo.model}` : "",
-    runtimeInfo?.defaultModel ? `default_model=${runtimeInfo.defaultModel}` : "",
+    runtimeInfo?.defaultModel
+      ? `default_model=${runtimeInfo.defaultModel}`
+      : "",
     runtimeInfo?.shell ? `shell=${runtimeInfo.shell}` : "",
     runtimeChannel ? `channel=${runtimeChannel}` : "",
     runtimeChannel

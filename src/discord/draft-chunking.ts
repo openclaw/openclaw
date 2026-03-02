@@ -15,12 +15,16 @@ export function resolveDiscordDraftStreamingChunking(
   maxChars: number;
   breakPreference: "paragraph" | "newline" | "sentence";
 } {
-  const providerChunkLimit = getChannelDock("discord")?.outbound?.textChunkLimit;
+  const providerChunkLimit =
+    getChannelDock("discord")?.outbound?.textChunkLimit;
   const textLimit = resolveTextChunkLimit(cfg, "discord", accountId, {
     fallbackLimit: providerChunkLimit,
   });
   const normalizedAccountId = normalizeAccountId(accountId);
-  const accountCfg = resolveAccountEntry(cfg?.channels?.discord?.accounts, normalizedAccountId);
+  const accountCfg = resolveAccountEntry(
+    cfg?.channels?.discord?.accounts,
+    normalizedAccountId,
+  );
   const draftCfg = accountCfg?.draftChunk ?? cfg?.channels?.discord?.draftChunk;
 
   const maxRequested = Math.max(
@@ -34,7 +38,8 @@ export function resolveDiscordDraftStreamingChunking(
   );
   const minChars = Math.min(minRequested, maxChars);
   const breakPreference =
-    draftCfg?.breakPreference === "newline" || draftCfg?.breakPreference === "sentence"
+    draftCfg?.breakPreference === "newline" ||
+    draftCfg?.breakPreference === "sentence"
       ? draftCfg.breakPreference
       : "paragraph";
   return { minChars, maxChars, breakPreference };

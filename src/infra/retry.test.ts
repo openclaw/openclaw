@@ -8,7 +8,10 @@ async function runRetryAfterCase(params: {
 }): Promise<number[]> {
   vi.useFakeTimers();
   try {
-    const fn = vi.fn().mockRejectedValueOnce(new Error("boom")).mockResolvedValueOnce("ok");
+    const fn = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("boom"))
+      .mockResolvedValueOnce("ok");
     const delays: number[] = [];
     const promise = retryAsync(fn, {
       attempts: 2,
@@ -35,7 +38,10 @@ describe("retryAsync", () => {
   });
 
   it("retries then succeeds", async () => {
-    const fn = vi.fn().mockRejectedValueOnce(new Error("fail1")).mockResolvedValueOnce("ok");
+    const fn = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("fail1"))
+      .mockResolvedValueOnce("ok");
     const result = await retryAsync(fn, 3, 1);
     expect(result).toBe("ok");
     expect(fn).toHaveBeenCalledTimes(2);
@@ -49,12 +55,17 @@ describe("retryAsync", () => {
 
   it("stops when shouldRetry returns false", async () => {
     const fn = vi.fn().mockRejectedValue(new Error("boom"));
-    await expect(retryAsync(fn, { attempts: 3, shouldRetry: () => false })).rejects.toThrow("boom");
+    await expect(
+      retryAsync(fn, { attempts: 3, shouldRetry: () => false }),
+    ).rejects.toThrow("boom");
     expect(fn).toHaveBeenCalledTimes(1);
   });
 
   it("calls onRetry before retrying", async () => {
-    const fn = vi.fn().mockRejectedValueOnce(new Error("boom")).mockResolvedValueOnce("ok");
+    const fn = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("boom"))
+      .mockResolvedValueOnce("ok");
     const onRetry = vi.fn();
     const res = await retryAsync(fn, {
       attempts: 2,
@@ -63,29 +74,43 @@ describe("retryAsync", () => {
       onRetry,
     });
     expect(res).toBe("ok");
-    expect(onRetry).toHaveBeenCalledWith(expect.objectContaining({ attempt: 1, maxAttempts: 2 }));
+    expect(onRetry).toHaveBeenCalledWith(
+      expect.objectContaining({ attempt: 1, maxAttempts: 2 }),
+    );
   });
 
   it("clamps attempts to at least 1", async () => {
     const fn = vi.fn().mockRejectedValue(new Error("boom"));
-    await expect(retryAsync(fn, { attempts: 0, minDelayMs: 0, maxDelayMs: 0 })).rejects.toThrow(
-      "boom",
-    );
+    await expect(
+      retryAsync(fn, { attempts: 0, minDelayMs: 0, maxDelayMs: 0 }),
+    ).rejects.toThrow("boom");
     expect(fn).toHaveBeenCalledTimes(1);
   });
 
   it("uses retryAfterMs when provided", async () => {
-    const delays = await runRetryAfterCase({ minDelayMs: 0, maxDelayMs: 1000, retryAfterMs: 500 });
+    const delays = await runRetryAfterCase({
+      minDelayMs: 0,
+      maxDelayMs: 1000,
+      retryAfterMs: 500,
+    });
     expect(delays[0]).toBe(500);
   });
 
   it("clamps retryAfterMs to maxDelayMs", async () => {
-    const delays = await runRetryAfterCase({ minDelayMs: 0, maxDelayMs: 100, retryAfterMs: 500 });
+    const delays = await runRetryAfterCase({
+      minDelayMs: 0,
+      maxDelayMs: 100,
+      retryAfterMs: 500,
+    });
     expect(delays[0]).toBe(100);
   });
 
   it("clamps retryAfterMs to minDelayMs", async () => {
-    const delays = await runRetryAfterCase({ minDelayMs: 250, maxDelayMs: 1000, retryAfterMs: 50 });
+    const delays = await runRetryAfterCase({
+      minDelayMs: 250,
+      maxDelayMs: 1000,
+      retryAfterMs: 50,
+    });
     expect(delays[0]).toBe(250);
   });
 });

@@ -1,6 +1,8 @@
 import { vi, type Mock } from "vitest";
 
-type SessionsSpawnTestConfig = ReturnType<(typeof import("../config/config.js"))["loadConfig"]>;
+type SessionsSpawnTestConfig = ReturnType<
+  (typeof import("../config/config.js"))["loadConfig"]
+>;
 type CreateSessionsSpawnTool =
   (typeof import("./tools/sessions-spawn-tool.js"))["createSessionsSpawnTool"];
 export type CreateOpenClawToolsOpts = Parameters<CreateSessionsSpawnTool>[0];
@@ -13,7 +15,11 @@ type SessionsSpawnGatewayMockOptions = {
   onAgentSubagentSpawn?: (params: unknown) => void;
   onSessionsPatch?: (params: unknown) => void;
   onSessionsDelete?: (params: unknown) => void;
-  agentWaitResult?: { status: "ok" | "timeout"; startedAt: number; endedAt: number };
+  agentWaitResult?: {
+    status: "ok" | "timeout";
+    startedAt: number;
+    endedAt: number;
+  };
 };
 
 const hoisted = vi.hoisted(() => {
@@ -33,7 +39,9 @@ export function getCallGatewayMock(): Mock {
 }
 
 export function getGatewayRequests(): Array<GatewayRequest> {
-  return getCallGatewayMock().mock.calls.map((call: unknown[]) => call[0] as GatewayRequest);
+  return getCallGatewayMock().mock.calls.map(
+    (call: unknown[]) => call[0] as GatewayRequest,
+  );
 }
 
 export function getGatewayMethods(): Array<string | undefined> {
@@ -48,17 +56,22 @@ export function resetSessionsSpawnConfigOverride(): void {
   hoisted.state.configOverride = hoisted.defaultConfigOverride;
 }
 
-export function setSessionsSpawnConfigOverride(next: SessionsSpawnTestConfig): void {
+export function setSessionsSpawnConfigOverride(
+  next: SessionsSpawnTestConfig,
+): void {
   hoisted.state.configOverride = next;
 }
 
 export async function getSessionsSpawnTool(opts: CreateOpenClawToolsOpts) {
   // Dynamic import: ensure harness mocks are installed before tool modules load.
-  const { createSessionsSpawnTool } = await import("./tools/sessions-spawn-tool.js");
+  const { createSessionsSpawnTool } =
+    await import("./tools/sessions-spawn-tool.js");
   return createSessionsSpawnTool(opts);
 }
 
-export function setupSessionsSpawnGatewayMock(setupOpts: SessionsSpawnGatewayMockOptions): {
+export function setupSessionsSpawnGatewayMock(
+  setupOpts: SessionsSpawnGatewayMockOptions,
+): {
   calls: Array<GatewayRequest>;
   waitCalls: Array<AgentWaitCall>;
   getChild: () => { runId?: string; sessionKey?: string };
@@ -88,7 +101,9 @@ export function setupSessionsSpawnGatewayMock(setupOpts: SessionsSpawnGatewayMoc
     if (request.method === "agent") {
       agentCallCount += 1;
       const runId = `run-${agentCallCount}`;
-      const params = request.params as { lane?: string; sessionKey?: string } | undefined;
+      const params = request.params as
+        | { lane?: string; sessionKey?: string }
+        | undefined;
       // Capture only the subagent run metadata.
       if (params?.lane === "subagent") {
         childRunId = runId;
@@ -131,7 +146,9 @@ export function setupSessionsSpawnGatewayMock(setupOpts: SessionsSpawnGatewayMoc
         messages: [
           {
             role: "assistant",
-            content: [{ type: "text", text: setupOpts.chatHistoryText ?? "done" }],
+            content: [
+              { type: "text", text: setupOpts.chatHistoryText ?? "done" },
+            ],
           },
         ],
       };

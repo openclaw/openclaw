@@ -13,7 +13,9 @@ export type TimestampValidationSuccess = {
   ok: true;
 };
 
-export type TimestampValidationResult = TimestampValidationSuccess | TimestampValidationError;
+export type TimestampValidationResult =
+  | TimestampValidationSuccess
+  | TimestampValidationError;
 
 /**
  * Validates at timestamps in cron schedules.

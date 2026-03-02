@@ -4,7 +4,9 @@ import { buildCompactionSummarizationInstructions } from "./compaction.js";
 describe("compaction identifier policy", () => {
   it("defaults to strict identifier preservation", () => {
     const built = buildCompactionSummarizationInstructions();
-    expect(built).toContain("Preserve all opaque identifiers exactly as written");
+    expect(built).toContain(
+      "Preserve all opaque identifiers exactly as written",
+    );
     expect(built).toContain("UUIDs");
   });
 
@@ -22,7 +24,9 @@ describe("compaction identifier policy", () => {
     });
 
     expect(built).toContain("Keep ticket IDs unchanged.");
-    expect(built).not.toContain("Preserve all opaque identifiers exactly as written");
+    expect(built).not.toContain(
+      "Preserve all opaque identifiers exactly as written",
+    );
   });
 
   it("falls back to strict text when custom policy is missing instructions", () => {
@@ -30,13 +34,18 @@ describe("compaction identifier policy", () => {
       identifierPolicy: "custom",
       identifierInstructions: "   ",
     });
-    expect(built).toContain("Preserve all opaque identifiers exactly as written");
+    expect(built).toContain(
+      "Preserve all opaque identifiers exactly as written",
+    );
   });
 
   it("keeps custom focus text when identifier policy is off", () => {
-    const built = buildCompactionSummarizationInstructions("Track release blockers.", {
-      identifierPolicy: "off",
-    });
+    const built = buildCompactionSummarizationInstructions(
+      "Track release blockers.",
+      {
+        identifierPolicy: "off",
+      },
+    );
     expect(built).toBe("Additional focus:\nTrack release blockers.");
   });
 });

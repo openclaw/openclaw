@@ -1,4 +1,7 @@
-import type { SkillStatusEntry, SkillStatusReport } from "../agents/skills-status.js";
+import type {
+  SkillStatusEntry,
+  SkillStatusReport,
+} from "../agents/skills-status.js";
 import { renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
 import { shortenHomePath } from "../utils.js";
@@ -63,8 +66,13 @@ function formatSkillMissingSummary(skill: SkillStatusEntry): string {
   return missing.join("; ");
 }
 
-export function formatSkillsList(report: SkillStatusReport, opts: SkillsListOptions): string {
-  const skills = opts.eligible ? report.skills.filter((s) => s.eligible) : report.skills;
+export function formatSkillsList(
+  report: SkillStatusReport,
+  opts: SkillsListOptions,
+): string {
+  const skills = opts.eligible
+    ? report.skills.filter((s) => s.eligible)
+    : report.skills;
 
   if (opts.json) {
     const jsonReport = {
@@ -114,7 +122,12 @@ export function formatSkillsList(report: SkillStatusReport, opts: SkillsListOpti
     { key: "Source", header: "Source", minWidth: 10 },
   ];
   if (opts.verbose) {
-    columns.push({ key: "Missing", header: "Missing", minWidth: 18, flex: true });
+    columns.push({
+      key: "Missing",
+      header: "Missing",
+      minWidth: 18,
+      flex: true,
+    });
   }
 
   const lines: string[] = [];
@@ -137,7 +150,9 @@ export function formatSkillInfo(
   skillName: string,
   opts: SkillInfoOptions,
 ): string {
-  const skill = report.skills.find((s) => s.name === skillName || s.skillKey === skillName);
+  const skill = report.skills.find(
+    (s) => s.name === skillName || s.skillKey === skillName,
+  );
 
   if (!skill) {
     if (opts.json) {
@@ -201,7 +216,9 @@ export function formatSkillInfo(
         const missing = anyBinsMissing;
         return missing ? theme.error(`✗ ${bin}`) : theme.success(`✓ ${bin}`);
       });
-      lines.push(`${theme.muted("  Any binaries:")} ${anyBinsStatus.join(", ")}`);
+      lines.push(
+        `${theme.muted("  Any binaries:")} ${anyBinsStatus.join(", ")}`,
+      );
     }
     if (skill.requirements.env.length > 0) {
       const envStatus = skill.requirements.env.map((env) => {
@@ -220,7 +237,9 @@ export function formatSkillInfo(
     if (skill.requirements.os.length > 0) {
       const osStatus = skill.requirements.os.map((osName) => {
         const missing = skill.missing.os.includes(osName);
-        return missing ? theme.error(`✗ ${osName}`) : theme.success(`✓ ${osName}`);
+        return missing
+          ? theme.error(`✗ ${osName}`)
+          : theme.success(`✓ ${osName}`);
       });
       lines.push(`${theme.muted("  OS:")} ${osStatus.join(", ")}`);
     }
@@ -237,10 +256,15 @@ export function formatSkillInfo(
   return appendClawHubHint(lines.join("\n"), opts.json);
 }
 
-export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOptions): string {
+export function formatSkillsCheck(
+  report: SkillStatusReport,
+  opts: SkillsCheckOptions,
+): string {
   const eligible = report.skills.filter((s) => s.eligible);
   const disabled = report.skills.filter((s) => s.disabled);
-  const blocked = report.skills.filter((s) => s.blockedByAllowlist && !s.disabled);
+  const blocked = report.skills.filter(
+    (s) => s.blockedByAllowlist && !s.disabled,
+  );
   const missingReqs = report.skills.filter(
     (s) => !s.eligible && !s.disabled && !s.blockedByAllowlist,
   );
@@ -273,10 +297,18 @@ export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOp
   lines.push(theme.heading("Skills Status Check"));
   lines.push("");
   lines.push(`${theme.muted("Total:")} ${report.skills.length}`);
-  lines.push(`${theme.success("✓")} ${theme.muted("Eligible:")} ${eligible.length}`);
-  lines.push(`${theme.warn("⏸")} ${theme.muted("Disabled:")} ${disabled.length}`);
-  lines.push(`${theme.warn("🚫")} ${theme.muted("Blocked by allowlist:")} ${blocked.length}`);
-  lines.push(`${theme.error("✗")} ${theme.muted("Missing requirements:")} ${missingReqs.length}`);
+  lines.push(
+    `${theme.success("✓")} ${theme.muted("Eligible:")} ${eligible.length}`,
+  );
+  lines.push(
+    `${theme.warn("⏸")} ${theme.muted("Disabled:")} ${disabled.length}`,
+  );
+  lines.push(
+    `${theme.warn("🚫")} ${theme.muted("Blocked by allowlist:")} ${blocked.length}`,
+  );
+  lines.push(
+    `${theme.error("✗")} ${theme.muted("Missing requirements:")} ${missingReqs.length}`,
+  );
 
   if (eligible.length > 0) {
     lines.push("");

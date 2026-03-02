@@ -7,7 +7,9 @@ const MAX_CONTEXT_CHARS = 3000;
  * Read critical sections from workspace AGENTS.md for post-compaction injection.
  * Returns formatted system event text, or null if no AGENTS.md or no relevant sections.
  */
-export async function readPostCompactionContext(workspaceDir: string): Promise<string | null> {
+export async function readPostCompactionContext(
+  workspaceDir: string,
+): Promise<string | null> {
   const agentsPath = path.join(workspaceDir, "AGENTS.md");
 
   try {
@@ -49,7 +51,10 @@ export async function readPostCompactionContext(workspaceDir: string): Promise<s
  * Skips content inside fenced code blocks.
  * Captures until the next heading of same or higher level, or end of string.
  */
-export function extractSections(content: string, sectionNames: string[]): string[] {
+export function extractSections(
+  content: string,
+  sectionNames: string[],
+): string[] {
   const results: string[] = [];
   const lines = content.split("\n");
 

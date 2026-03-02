@@ -3,7 +3,10 @@ import { getChannelDock, listChannelDocks } from "../channels/dock.js";
 import type { ChannelId } from "../channels/plugins/types.js";
 import { normalizeAnyChannelId } from "../channels/registry.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../utils/message-channel.js";
+import {
+  INTERNAL_MESSAGE_CHANNEL,
+  normalizeMessageChannel,
+} from "../utils/message-channel.js";
 import type { MsgContext } from "./templating.js";
 
 export type CommandAuthorization = {
@@ -16,7 +19,10 @@ export type CommandAuthorization = {
   to?: string;
 };
 
-function resolveProviderFromContext(ctx: MsgContext, cfg: OpenClawConfig): ChannelId | undefined {
+function resolveProviderFromContext(
+  ctx: MsgContext,
+  cfg: OpenClawConfig,
+): ChannelId | undefined {
   const explicitMessageChannel =
     normalizeMessageChannel(ctx.Provider) ??
     normalizeMessageChannel(ctx.Surface) ??
@@ -187,7 +193,9 @@ function isConversationLikeIdentity(value: string): boolean {
   if (normalized.startsWith("chat_id:")) {
     return true;
   }
-  return /(^|:)(channel|group|thread|topic|room|space|spaces):/.test(normalized);
+  return /(^|:)(channel|group|thread|topic|room|space|spaces):/.test(
+    normalized,
+  );
 }
 
 function shouldUseFromAsSenderFallback(params: {
@@ -233,14 +241,22 @@ function resolveSenderCandidates(params: {
   }
   if (
     candidates.length === 0 &&
-    shouldUseFromAsSenderFallback({ from: params.from, chatType: params.chatType })
+    shouldUseFromAsSenderFallback({
+      from: params.from,
+      chatType: params.chatType,
+    })
   ) {
     pushCandidate(params.from);
   }
 
   const normalized: string[] = [];
   for (const sender of candidates) {
-    const entries = normalizeAllowFromEntry({ dock, cfg, accountId, value: sender });
+    const entries = normalizeAllowFromEntry({
+      dock,
+      cfg,
+      accountId,
+      value: sender,
+    });
     for (const entry of entries) {
       if (!normalized.includes(entry)) {
         normalized.push(entry);
@@ -293,9 +309,12 @@ export function resolveCommandAuthorization(params: {
     allowFrom: ctx.OwnerAllowFrom,
   });
   const allowAll =
-    allowFromList.length === 0 || allowFromList.some((entry) => entry.trim() === "*");
+    allowFromList.length === 0 ||
+    allowFromList.some((entry) => entry.trim() === "*");
 
-  const ownerCandidatesForCommands = allowAll ? [] : allowFromList.filter((entry) => entry !== "*");
+  const ownerCandidatesForCommands = allowAll
+    ? []
+    : allowFromList.filter((entry) => entry !== "*");
   if (!allowAll && ownerCandidatesForCommands.length === 0 && to) {
     const normalizedTo = normalizeAllowFromEntry({
       dock,
@@ -307,9 +326,15 @@ export function resolveCommandAuthorization(params: {
       ownerCandidatesForCommands.push(...normalizedTo);
     }
   }
-  const ownerAllowAll = configOwnerAllowFromList.some((entry) => entry.trim() === "*");
-  const explicitOwners = configOwnerAllowFromList.filter((entry) => entry !== "*");
-  const explicitOverrides = contextOwnerAllowFromList.filter((entry) => entry !== "*");
+  const ownerAllowAll = configOwnerAllowFromList.some(
+    (entry) => entry.trim() === "*",
+  );
+  const explicitOwners = configOwnerAllowFromList.filter(
+    (entry) => entry !== "*",
+  );
+  const explicitOverrides = contextOwnerAllowFromList.filter(
+    (entry) => entry !== "*",
+  );
   const ownerList = Array.from(
     new Set(
       explicitOwners.length > 0
@@ -336,7 +361,9 @@ export function resolveCommandAuthorization(params: {
     ? senderCandidates.find((candidate) => ownerList.includes(candidate))
     : undefined;
   const matchedCommandOwner = ownerCandidatesForCommands.length
-    ? senderCandidates.find((candidate) => ownerCandidatesForCommands.includes(candidate))
+    ? senderCandidates.find((candidate) =>
+        ownerCandidatesForCommands.includes(candidate),
+      )
     : undefined;
   const senderId = matchedSender ?? senderCandidates[0];
 
@@ -350,16 +377,22 @@ export function resolveCommandAuthorization(params: {
       ? true
       : ownerAllowlistConfigured
         ? senderIsOwner
-        : allowAll || ownerCandidatesForCommands.length === 0 || Boolean(matchedCommandOwner);
+        : allowAll ||
+          ownerCandidatesForCommands.length === 0 ||
+          Boolean(matchedCommandOwner);
 
   // If commands.allowFrom is configured, use it for command authorization
   // Otherwise, fall back to existing behavior (channel allowFrom + owner checks)
   let isAuthorizedSender: boolean;
   if (commandsAllowFromList !== null) {
     // commands.allowFrom is configured - use it for authorization
-    const commandsAllowAll = commandsAllowFromList.some((entry) => entry.trim() === "*");
+    const commandsAllowAll = commandsAllowFromList.some(
+      (entry) => entry.trim() === "*",
+    );
     const matchedCommandsAllowFrom = commandsAllowFromList.length
-      ? senderCandidates.find((candidate) => commandsAllowFromList.includes(candidate))
+      ? senderCandidates.find((candidate) =>
+          commandsAllowFromList.includes(candidate),
+        )
       : undefined;
     isAuthorizedSender = commandsAllowAll || Boolean(matchedCommandsAllowFrom);
   } else {

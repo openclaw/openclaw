@@ -31,7 +31,10 @@ function isAllowedUrl(raw: string): boolean {
   }
 }
 
-export function extractLinksFromMessage(message: string, opts?: { maxLinks?: number }): string[] {
+export function extractLinksFromMessage(
+  message: string,
+  opts?: { maxLinks?: number },
+): string[] {
   const source = message?.trim();
   if (!source) {
     return [];

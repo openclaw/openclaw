@@ -60,52 +60,61 @@ describe("CronService", () => {
   });
 
   it("skips main jobs with empty systemEvent text", async () => {
-    await withCronService(true, async ({ cron, enqueueSystemEvent, requestHeartbeatNow }) => {
-      const atMs = Date.parse("2025-12-13T00:00:01.000Z");
-      await cron.add({
-        name: "empty systemEvent test",
-        enabled: true,
-        schedule: { kind: "at", at: new Date(atMs).toISOString() },
-        sessionTarget: "main",
-        wakeMode: "now",
-        payload: { kind: "systemEvent", text: "   " },
-      });
+    await withCronService(
+      true,
+      async ({ cron, enqueueSystemEvent, requestHeartbeatNow }) => {
+        const atMs = Date.parse("2025-12-13T00:00:01.000Z");
+        await cron.add({
+          name: "empty systemEvent test",
+          enabled: true,
+          schedule: { kind: "at", at: new Date(atMs).toISOString() },
+          sessionTarget: "main",
+          wakeMode: "now",
+          payload: { kind: "systemEvent", text: "   " },
+        });
 
-      vi.setSystemTime(new Date("2025-12-13T00:00:01.000Z"));
-      await vi.runOnlyPendingTimersAsync();
+        vi.setSystemTime(new Date("2025-12-13T00:00:01.000Z"));
+        await vi.runOnlyPendingTimersAsync();
 
-      expect(enqueueSystemEvent).not.toHaveBeenCalled();
-      expect(requestHeartbeatNow).not.toHaveBeenCalled();
+        expect(enqueueSystemEvent).not.toHaveBeenCalled();
+        expect(requestHeartbeatNow).not.toHaveBeenCalled();
 
-      const job = await waitForFirstJob(cron, (current) => current?.state.lastStatus === "skipped");
-      expect(job?.state.lastStatus).toBe("skipped");
-      expect(job?.state.lastError).toMatch(/non-empty/i);
-    });
+        const job = await waitForFirstJob(
+          cron,
+          (current) => current?.state.lastStatus === "skipped",
+        );
+        expect(job?.state.lastStatus).toBe("skipped");
+        expect(job?.state.lastError).toMatch(/non-empty/i);
+      },
+    );
   });
 
   it("does not schedule timers when cron is disabled", async () => {
-    await withCronService(false, async ({ cron, enqueueSystemEvent, requestHeartbeatNow }) => {
-      const atMs = Date.parse("2025-12-13T00:00:01.000Z");
-      await cron.add({
-        name: "disabled cron job",
-        enabled: true,
-        schedule: { kind: "at", at: new Date(atMs).toISOString() },
-        sessionTarget: "main",
-        wakeMode: "now",
-        payload: { kind: "systemEvent", text: "hello" },
-      });
+    await withCronService(
+      false,
+      async ({ cron, enqueueSystemEvent, requestHeartbeatNow }) => {
+        const atMs = Date.parse("2025-12-13T00:00:01.000Z");
+        await cron.add({
+          name: "disabled cron job",
+          enabled: true,
+          schedule: { kind: "at", at: new Date(atMs).toISOString() },
+          sessionTarget: "main",
+          wakeMode: "now",
+          payload: { kind: "systemEvent", text: "hello" },
+        });
 
-      const status = await cron.status();
-      expect(status.enabled).toBe(false);
-      expect(status.nextWakeAtMs).toBeNull();
+        const status = await cron.status();
+        expect(status.enabled).toBe(false);
+        expect(status.nextWakeAtMs).toBeNull();
 
-      vi.setSystemTime(new Date("2025-12-13T00:00:01.000Z"));
-      await vi.runOnlyPendingTimersAsync();
+        vi.setSystemTime(new Date("2025-12-13T00:00:01.000Z"));
+        await vi.runOnlyPendingTimersAsync();
 
-      expect(enqueueSystemEvent).not.toHaveBeenCalled();
-      expect(requestHeartbeatNow).not.toHaveBeenCalled();
-      expect(noopLogger.warn).toHaveBeenCalled();
-    });
+        expect(enqueueSystemEvent).not.toHaveBeenCalled();
+        expect(requestHeartbeatNow).not.toHaveBeenCalled();
+        expect(noopLogger.warn).toHaveBeenCalled();
+      },
+    );
   });
 
   it("status reports next wake when enabled", async () => {

@@ -215,16 +215,21 @@ describe("isCommandMessage", () => {
 describe("sanitizeRenderableText", () => {
   function expectTokenWidthUnderLimit(input: string) {
     const sanitized = sanitizeRenderableText(input);
-    const longestSegment = Math.max(...sanitized.split(/\s+/).map((segment) => segment.length));
+    const longestSegment = Math.max(
+      ...sanitized.split(/\s+/).map((segment) => segment.length),
+    );
     expect(longestSegment).toBeLessThanOrEqual(32);
   }
 
   it.each([
     { label: "very long", input: "a".repeat(140) },
     { label: "moderately long", input: "b".repeat(90) },
-  ])("breaks $label unbroken tokens to protect narrow terminals", ({ input }) => {
-    expectTokenWidthUnderLimit(input);
-  });
+  ])(
+    "breaks $label unbroken tokens to protect narrow terminals",
+    ({ input }) => {
+      expectTokenWidthUnderLimit(input);
+    },
+  );
 
   it("preserves long filesystem paths verbatim for copy safety", () => {
     const input =

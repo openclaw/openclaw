@@ -3,7 +3,9 @@ export type AnnounceIdFromChildRunParams = {
   childRunId: string;
 };
 
-export function buildAnnounceIdFromChildRun(params: AnnounceIdFromChildRunParams): string {
+export function buildAnnounceIdFromChildRun(
+  params: AnnounceIdFromChildRunParams,
+): string {
   return `v1:${params.childSessionKey}:${params.childRunId}`;
 }
 

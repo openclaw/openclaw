@@ -11,8 +11,12 @@ describe("compactWithSafetyTimeout", () => {
 
   it("rejects with timeout when compaction never settles", async () => {
     vi.useFakeTimers();
-    const compactPromise = compactWithSafetyTimeout(() => new Promise<never>(() => {}));
-    const timeoutAssertion = expect(compactPromise).rejects.toThrow("Compaction timed out");
+    const compactPromise = compactWithSafetyTimeout(
+      () => new Promise<never>(() => {}),
+    );
+    const timeoutAssertion = expect(compactPromise).rejects.toThrow(
+      "Compaction timed out",
+    );
 
     await vi.advanceTimersByTimeAsync(EMBEDDED_COMPACTION_TIMEOUT_MS);
     await timeoutAssertion;
@@ -22,7 +26,8 @@ describe("compactWithSafetyTimeout", () => {
   it("returns result and clears timer when compaction settles first", async () => {
     vi.useFakeTimers();
     const compactPromise = compactWithSafetyTimeout(
-      () => new Promise<string>((resolve) => setTimeout(() => resolve("ok"), 10)),
+      () =>
+        new Promise<string>((resolve) => setTimeout(() => resolve("ok"), 10)),
       30,
     );
 

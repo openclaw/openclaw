@@ -178,7 +178,9 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
     expect(first?.lane).toBe("subagent");
 
     // Second call: main agent trigger (not "Sub-agent announce step." anymore)
-    const second = agentCalls[1]?.params as { sessionKey?: string; message?: string } | undefined;
+    const second = agentCalls[1]?.params as
+      | { sessionKey?: string; message?: string }
+      | undefined;
     expect(second?.sessionKey).toBe("agent:main:main");
     expect(second?.message).toContain("subagent task");
 
@@ -214,7 +216,9 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
     });
 
     await waitFor(
-      () => ctx.calls.filter((call) => call.method === "agent").length >= 2 && Boolean(deletedKey),
+      () =>
+        ctx.calls.filter((call) => call.method === "agent").length >= 2 &&
+        Boolean(deletedKey),
     );
 
     const childWait = ctx.waitCalls.find((call) => call.runId === child.runId);
@@ -295,7 +299,9 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
     expect(first?.lane).toBe("subagent");
 
     // Second call: main agent trigger
-    const second = agentCalls[1]?.params as { sessionKey?: string; deliver?: boolean } | undefined;
+    const second = agentCalls[1]?.params as
+      | { sessionKey?: string; deliver?: boolean }
+      | undefined;
     expect(second?.sessionKey).toBe("agent:main:discord:group:req");
     expect(second?.deliver).toBe(false);
 
@@ -321,7 +327,9 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
       cleanup: "keep",
     });
 
-    await waitFor(() => ctx.calls.filter((call) => call.method === "agent").length >= 2);
+    await waitFor(
+      () => ctx.calls.filter((call) => call.method === "agent").length >= 2,
+    );
 
     const mainAgentCall = ctx.calls
       .filter((call) => call.method === "agent")
@@ -329,7 +337,9 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
         const params = call.params as { lane?: string } | undefined;
         return params?.lane !== "subagent";
       });
-    const mainMessage = (mainAgentCall?.params as { message?: string } | undefined)?.message ?? "";
+    const mainMessage =
+      (mainAgentCall?.params as { message?: string } | undefined)?.message ??
+      "";
 
     expect(mainMessage).toContain("timed out");
     expect(mainMessage).not.toContain("completed successfully");

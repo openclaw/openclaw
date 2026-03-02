@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { buildOutboundMediaLoadOptions, resolveOutboundMediaLocalRoots } from "./load-options.js";
+import {
+  buildOutboundMediaLoadOptions,
+  resolveOutboundMediaLocalRoots,
+} from "./load-options.js";
 
 describe("media load options", () => {
   it("returns undefined localRoots when mediaLocalRoots is empty", () => {
@@ -8,7 +11,9 @@ describe("media load options", () => {
   });
 
   it("keeps trusted mediaLocalRoots entries", () => {
-    expect(resolveOutboundMediaLocalRoots(["/tmp/workspace"])).toEqual(["/tmp/workspace"]);
+    expect(resolveOutboundMediaLocalRoots(["/tmp/workspace"])).toEqual([
+      "/tmp/workspace",
+    ]);
   });
 
   it("builds loadWebMedia options from maxBytes and mediaLocalRoots", () => {

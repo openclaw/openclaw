@@ -47,7 +47,9 @@ export function createBlueBubblesAccountsMockModule() {
 
 type BlueBubblesProbeMockModule = {
   getCachedBlueBubblesPrivateApiStatus: Mock<() => boolean | null>;
-  isBlueBubblesPrivateApiStatusEnabled: Mock<(status: boolean | null) => boolean>;
+  isBlueBubblesPrivateApiStatusEnabled: Mock<
+    (status: boolean | null) => boolean
+  >;
 };
 
 export function createBlueBubblesProbeMockModule(): BlueBubblesProbeMockModule {
@@ -55,7 +57,9 @@ export function createBlueBubblesProbeMockModule(): BlueBubblesProbeMockModule {
     getCachedBlueBubblesPrivateApiStatus: vi
       .fn()
       .mockReturnValue(BLUE_BUBBLES_PRIVATE_API_STATUS.unknown),
-    isBlueBubblesPrivateApiStatusEnabled: vi.fn((status: boolean | null) => status === true),
+    isBlueBubblesPrivateApiStatusEnabled: vi.fn(
+      (status: boolean | null) => status === true,
+    ),
   };
 }
 
@@ -70,7 +74,9 @@ export function installBlueBubblesFetchTestHooks(params: {
     vi.stubGlobal("fetch", params.mockFetch);
     params.mockFetch.mockReset();
     params.privateApiStatusMock.mockReset();
-    params.privateApiStatusMock.mockReturnValue(BLUE_BUBBLES_PRIVATE_API_STATUS.unknown);
+    params.privateApiStatusMock.mockReturnValue(
+      BLUE_BUBBLES_PRIVATE_API_STATUS.unknown,
+    );
   });
 
   afterEach(() => {

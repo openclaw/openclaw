@@ -60,7 +60,9 @@ export type GatewayService = {
   stop: (args: GatewayServiceControlArgs) => Promise<void>;
   restart: (args: GatewayServiceControlArgs) => Promise<void>;
   isLoaded: (args: GatewayServiceEnvArgs) => Promise<boolean>;
-  readCommand: (env: GatewayServiceEnv) => Promise<GatewayServiceCommandConfig | null>;
+  readCommand: (
+    env: GatewayServiceEnv,
+  ) => Promise<GatewayServiceCommandConfig | null>;
   readRuntime: (env: GatewayServiceEnv) => Promise<GatewayServiceRuntime>;
 };
 
@@ -110,5 +112,7 @@ export function resolveGatewayService(): GatewayService {
     };
   }
 
-  throw new Error(`Gateway service install not supported on ${process.platform}`);
+  throw new Error(
+    `Gateway service install not supported on ${process.platform}`,
+  );
 }

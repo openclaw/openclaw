@@ -8,7 +8,10 @@ import {
 import { normalizeIMessageHandle } from "../../../imessage/targets.js";
 import { formatDocsLink } from "../../../terminal/links.js";
 import type { WizardPrompter } from "../../../wizard/prompts.js";
-import type { ChannelOnboardingAdapter, ChannelOnboardingDmPolicy } from "../onboarding-types.js";
+import type {
+  ChannelOnboardingAdapter,
+  ChannelOnboardingDmPolicy,
+} from "../onboarding-types.js";
 import {
   parseOnboardingEntriesAllowingWildcard,
   patchChannelConfigForAccount,
@@ -20,7 +23,10 @@ import {
 
 const channel = "imessage" as const;
 
-export function parseIMessageAllowFromEntries(raw: string): { entries: string[]; error?: string } {
+export function parseIMessageAllowFromEntries(raw: string): {
+  entries: string[];
+  error?: string;
+} {
   return parseOnboardingEntriesAllowingWildcard(raw, (entry) => {
     const lower = entry.toLowerCase();
     if (lower.startsWith("chat_id:")) {
@@ -122,7 +128,12 @@ export const imessageOnboardingAdapter: ChannelOnboardingAdapter = {
       quickstartScore: imessageCliDetected ? 1 : 0,
     };
   },
-  configure: async ({ cfg, prompter, accountOverrides, shouldPromptAccountIds }) => {
+  configure: async ({
+    cfg,
+    prompter,
+    accountOverrides,
+    shouldPromptAccountIds,
+  }) => {
     const defaultIMessageAccountId = resolveDefaultIMessageAccountId(cfg);
     const imessageAccountId = await resolveAccountIdForConfigure({
       cfg,
@@ -149,7 +160,10 @@ export const imessageOnboardingAdapter: ChannelOnboardingAdapter = {
       });
       resolvedCliPath = String(entered).trim();
       if (!resolvedCliPath) {
-        await prompter.note("imsg CLI path required to enable iMessage.", "iMessage");
+        await prompter.note(
+          "imsg CLI path required to enable iMessage.",
+          "iMessage",
+        );
       }
     }
 

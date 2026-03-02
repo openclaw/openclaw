@@ -1,4 +1,8 @@
-import type { OpenClawConfig, PluginRuntime, RuntimeEnv } from "openclaw/plugin-sdk";
+import type {
+  OpenClawConfig,
+  PluginRuntime,
+  RuntimeEnv,
+} from "openclaw/plugin-sdk";
 import { describe, expect, it, vi } from "vitest";
 import { __testing } from "./monitor.js";
 import { setZalouserRuntime } from "./runtime.js";
@@ -30,7 +34,10 @@ describe("zalouser monitor pairing account scoping", () => {
         return scopedAccountId === "beta" ? [] : ["attacker"];
       },
     );
-    const upsertPairingRequest = vi.fn(async () => ({ code: "PAIRME88", created: true }));
+    const upsertPairingRequest = vi.fn(async () => ({
+      code: "PAIRME88",
+      created: true,
+    }));
 
     setZalouserRuntime({
       logging: {

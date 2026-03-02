@@ -8,7 +8,10 @@ type ChannelConfigWithAccounts = {
   accounts?: Record<string, { configWrites?: boolean }>;
 };
 
-function resolveAccountConfig(accounts: ChannelConfigWithAccounts["accounts"], accountId: string) {
+function resolveAccountConfig(
+  accounts: ChannelConfigWithAccounts["accounts"],
+  accountId: string,
+) {
   return resolveAccountEntry(accounts, accountId);
 }
 
@@ -20,7 +23,9 @@ export function resolveChannelConfigWrites(params: {
   if (!params.channelId) {
     return true;
   }
-  const channels = params.cfg.channels as Record<string, ChannelConfigWithAccounts> | undefined;
+  const channels = params.cfg.channels as
+    | Record<string, ChannelConfigWithAccounts>
+    | undefined;
   const channelConfig = channels?.[params.channelId];
   if (!channelConfig) {
     return true;

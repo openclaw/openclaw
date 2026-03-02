@@ -29,7 +29,10 @@ export default function (pi: ExtensionAPI) {
       const branch = ctx.sessionManager.getBranch();
 
       // First pass: collect tool calls (id -> {path, name}) from assistant messages
-      const toolCalls = new Map<string, { path: string; name: FileToolName; timestamp: number }>();
+      const toolCalls = new Map<
+        string,
+        { path: string; name: FileToolName; timestamp: number }
+      >();
 
       for (const entry of branch) {
         if (entry.type !== "message") {
@@ -44,7 +47,11 @@ export default function (pi: ExtensionAPI) {
               if (name === "read" || name === "write" || name === "edit") {
                 const path = block.arguments?.path;
                 if (path && typeof path === "string") {
-                  toolCalls.set(block.id, { path, name, timestamp: msg.timestamp });
+                  toolCalls.set(block.id, {
+                    path,
+                    name,
+                    timestamp: msg.timestamp,
+                  });
                 }
               }
             }
@@ -100,7 +107,8 @@ export default function (pi: ExtensionAPI) {
         try {
           await pi.exec("code", ["-g", file.path], { cwd: ctx.cwd });
         } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
+          const message =
+            error instanceof Error ? error.message : String(error);
           ctx.ui.notify(`Failed to open ${file.path}: ${message}`, "error");
         }
       };

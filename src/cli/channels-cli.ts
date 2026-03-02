@@ -60,7 +60,10 @@ function runChannelsCommand(action: () => Promise<void>) {
   return runCommandWithRuntime(defaultRuntime, action);
 }
 
-function runChannelsCommandWithDanger(action: () => Promise<void>, label: string) {
+function runChannelsCommandWithDanger(
+  action: () => Promise<void>,
+  label: string,
+) {
   return runCommandWithRuntime(defaultRuntime, action, (err) => {
     defaultRuntime.error(danger(`${label}: ${String(err)}`));
     defaultRuntime.exit(1);
@@ -76,13 +79,22 @@ export function registerChannelsCli(program: Command) {
       "after",
       () =>
         `\n${theme.heading("Examples:")}\n${formatHelpExamples([
-          ["openclaw channels list", "List configured channels and auth profiles."],
-          ["openclaw channels status --probe", "Run channel status checks and probes."],
+          [
+            "openclaw channels list",
+            "List configured channels and auth profiles.",
+          ],
+          [
+            "openclaw channels status --probe",
+            "Run channel status checks and probes.",
+          ],
           [
             "openclaw channels add --channel telegram --token <token>",
             "Add or update a channel account non-interactively.",
           ],
-          ["openclaw channels login --channel whatsapp", "Link a WhatsApp Web account."],
+          [
+            "openclaw channels login --channel whatsapp",
+            "Link a WhatsApp Web account.",
+          ],
         ])}\n\n${theme.muted("Docs:")} ${formatDocsLink(
           "/cli/channels",
           "docs.openclaw.ai/cli/channels",
@@ -114,10 +126,15 @@ export function registerChannelsCli(program: Command) {
 
   channels
     .command("capabilities")
-    .description("Show provider capabilities (intents/scopes + supported features)")
+    .description(
+      "Show provider capabilities (intents/scopes + supported features)",
+    )
     .option("--channel <name>", `Channel (${formatCliChannelOptions(["all"])})`)
     .option("--account <id>", "Account id (only with --channel)")
-    .option("--target <dest>", "Channel target for permission audit (Discord channel:<id>)")
+    .option(
+      "--target <dest>",
+      "Channel target for permission audit (Discord channel:<id>)",
+    )
     .option("--timeout <ms>", "Timeout in ms", "10000")
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
@@ -152,7 +169,11 @@ export function registerChannelsCli(program: Command) {
   channels
     .command("logs")
     .description("Show recent channel logs from the gateway log file")
-    .option("--channel <name>", `Channel (${formatCliChannelOptions(["all"])})`, "all")
+    .option(
+      "--channel <name>",
+      `Channel (${formatCliChannelOptions(["all"])})`,
+      "all",
+    )
     .option("--lines <n>", "Number of lines (default: 200)", "200")
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
@@ -182,8 +203,14 @@ export function registerChannelsCli(program: Command) {
     .option("--http-port <port>", "Signal HTTP port")
     .option("--webhook-path <path>", "Webhook path (Google Chat/BlueBubbles)")
     .option("--webhook-url <url>", "Google Chat webhook URL")
-    .option("--audience-type <type>", "Google Chat audience type (app-url|project-number)")
-    .option("--audience <value>", "Google Chat audience value (app URL or project number)")
+    .option(
+      "--audience-type <type>",
+      "Google Chat audience type (app-url|project-number)",
+    )
+    .option(
+      "--audience <value>",
+      "Google Chat audience value (app URL or project number)",
+    )
     .option("--homeserver <url>", "Matrix homeserver URL")
     .option("--user-id <id>", "Matrix user ID")
     .option("--access-token <token>", "Matrix access token")
@@ -194,7 +221,10 @@ export function registerChannelsCli(program: Command) {
     .option("--url <url>", "Tlon ship URL")
     .option("--code <code>", "Tlon login code")
     .option("--group-channels <list>", "Tlon group channels (comma-separated)")
-    .option("--dm-allowlist <list>", "Tlon DM allowlist (comma-separated ships)")
+    .option(
+      "--dm-allowlist <list>",
+      "Tlon DM allowlist (comma-separated ships)",
+    )
     .option("--auto-discover-channels", "Tlon auto-discover group channels")
     .option("--no-auto-discover-channels", "Disable Tlon auto-discovery")
     .option("--use-env", "Use env token (default account only)", false)
@@ -221,7 +251,10 @@ export function registerChannelsCli(program: Command) {
   channels
     .command("login")
     .description("Link a channel account (if supported)")
-    .option("--channel <channel>", "Channel alias (auto when only one is configured)")
+    .option(
+      "--channel <channel>",
+      "Channel alias (auto when only one is configured)",
+    )
     .option("--account <id>", "Account id (accountId)")
     .option("--verbose", "Verbose connection logs", false)
     .action(async (opts) => {
@@ -240,7 +273,10 @@ export function registerChannelsCli(program: Command) {
   channels
     .command("logout")
     .description("Log out of a channel session (if supported)")
-    .option("--channel <channel>", "Channel alias (auto when only one is configured)")
+    .option(
+      "--channel <channel>",
+      "Channel alias (auto when only one is configured)",
+    )
     .option("--account <id>", "Account id (accountId)")
     .action(async (opts) => {
       await runChannelsCommandWithDanger(async () => {

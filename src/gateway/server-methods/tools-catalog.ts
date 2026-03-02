@@ -40,13 +40,17 @@ type ToolCatalogGroup = {
 function resolveAgentIdOrRespondError(rawAgentId: unknown, respond: RespondFn) {
   const cfg = loadConfig();
   const knownAgents = listAgentIds(cfg);
-  const requestedAgentId = typeof rawAgentId === "string" ? rawAgentId.trim() : "";
+  const requestedAgentId =
+    typeof rawAgentId === "string" ? rawAgentId.trim() : "";
   const agentId = requestedAgentId || resolveDefaultAgentId(cfg);
   if (requestedAgentId && !knownAgents.includes(agentId)) {
     respond(
       false,
       undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, `unknown agent id "${requestedAgentId}"`),
+      errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        `unknown agent id "${requestedAgentId}"`,
+      ),
     );
     return null;
   }
@@ -102,7 +106,10 @@ function buildPluginGroups(params: {
       } as ToolCatalogGroup);
     existing.tools.push({
       id: tool.name,
-      label: typeof tool.label === "string" && tool.label.trim() ? tool.label.trim() : tool.name,
+      label:
+        typeof tool.label === "string" && tool.label.trim()
+          ? tool.label.trim()
+          : tool.name,
       description:
         typeof tool.description === "string" && tool.description.trim()
           ? tool.description.trim()
@@ -157,7 +164,10 @@ export const toolsCatalogHandlers: GatewayRequestHandlers = {
       true,
       {
         agentId: resolved.agentId,
-        profiles: PROFILE_OPTIONS.map((profile) => ({ id: profile.id, label: profile.label })),
+        profiles: PROFILE_OPTIONS.map((profile) => ({
+          id: profile.id,
+          label: profile.label,
+        })),
         groups,
       },
       undefined,

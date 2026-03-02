@@ -47,7 +47,10 @@ export function extractMentionTargets(
  * - Group: message mentions bot + at least one other user
  * - DM: message mentions any user (no need to mention bot)
  */
-export function isMentionForwardRequest(event: FeishuMessageEvent, botOpenId?: string): boolean {
+export function isMentionForwardRequest(
+  event: FeishuMessageEvent,
+  botOpenId?: string,
+): boolean {
   const mentions = event.message.mentions ?? [];
   if (mentions.length === 0) {
     return false;
@@ -69,7 +72,10 @@ export function isMentionForwardRequest(event: FeishuMessageEvent, botOpenId?: s
 /**
  * Extract message body from text (remove @ placeholders)
  */
-export function extractMessageBody(text: string, allMentionKeys: string[]): string {
+export function extractMessageBody(
+  text: string,
+  allMentionKeys: string[],
+): string {
   let result = text;
 
   // Remove all @ placeholders
@@ -111,7 +117,10 @@ export function formatMentionAllForCard(): string {
 /**
  * Build complete message with @mentions (text format)
  */
-export function buildMentionedMessage(targets: MentionTarget[], message: string): string {
+export function buildMentionedMessage(
+  targets: MentionTarget[],
+  message: string,
+): string {
   if (targets.length === 0) {
     return message;
   }
@@ -123,7 +132,10 @@ export function buildMentionedMessage(targets: MentionTarget[], message: string)
 /**
  * Build card content with @mentions (Markdown format)
  */
-export function buildMentionedCardContent(targets: MentionTarget[], message: string): string {
+export function buildMentionedCardContent(
+  targets: MentionTarget[],
+  message: string,
+): string {
   if (targets.length === 0) {
     return message;
   }

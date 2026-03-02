@@ -80,7 +80,10 @@ Skills 注意事项：`read` 工具以沙箱为根。使用 `workspaceAccess: "n
     defaults: {
       sandbox: {
         docker: {
-          binds: ["/home/user/source:/source:ro", "/var/run/docker.sock:/var/run/docker.sock"],
+          binds: [
+            "/home/user/source:/source:ro",
+            "/var/run/docker.sock:/var/run/docker.sock",
+          ],
         },
       },
     },

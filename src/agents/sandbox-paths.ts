@@ -1,7 +1,10 @@
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, URL } from "node:url";
-import { assertNoPathAliasEscape, type PathAliasPolicy } from "../infra/path-alias-guards.js";
+import {
+  assertNoPathAliasEscape,
+  type PathAliasPolicy,
+} from "../infra/path-alias-guards.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 
@@ -41,7 +44,11 @@ export function resolveSandboxInputPath(filePath: string, cwd: string): string {
   return resolveToCwd(filePath, cwd);
 }
 
-export function resolveSandboxPath(params: { filePath: string; cwd: string; root: string }): {
+export function resolveSandboxPath(params: {
+  filePath: string;
+  cwd: string;
+  root: string;
+}): {
   resolved: string;
   relative: string;
 } {
@@ -52,7 +59,9 @@ export function resolveSandboxPath(params: { filePath: string; cwd: string; root
     return { resolved, relative: "" };
   }
   if (relative.startsWith("..") || path.isAbsolute(relative)) {
-    throw new Error(`Path escapes sandbox root (${shortPath(rootResolved)}): ${params.filePath}`);
+    throw new Error(
+      `Path escapes sandbox root (${shortPath(rootResolved)}): ${params.filePath}`,
+    );
   }
   return { resolved, relative };
 }
@@ -81,7 +90,9 @@ export async function assertSandboxPath(params: {
 export function assertMediaNotDataUrl(media: string): void {
   const raw = media.trim();
   if (DATA_URL_RE.test(raw)) {
-    throw new Error("data: URLs are not supported for media. Use buffer instead.");
+    throw new Error(
+      "data: URLs are not supported for media. Use buffer instead.",
+    );
   }
 }
 
@@ -149,7 +160,10 @@ function mapContainerWorkspaceFileUrl(params: {
   }
   // Sandbox paths are Linux-style (/workspace/*). Parse the URL path directly so
   // Windows hosts can still accept file:///workspace/... media references.
-  const normalizedPathname = decodeURIComponent(parsed.pathname).replace(/\\/g, "/");
+  const normalizedPathname = decodeURIComponent(parsed.pathname).replace(
+    /\\/g,
+    "/",
+  );
   if (
     normalizedPathname !== SANDBOX_CONTAINER_WORKDIR &&
     !normalizedPathname.startsWith(`${SANDBOX_CONTAINER_WORKDIR}/`)
@@ -189,7 +203,9 @@ async function resolveAllowedTmpMediaPath(params: {
   if (!candidateIsAbsolute) {
     return undefined;
   }
-  const resolved = path.resolve(resolveSandboxInputPath(params.candidate, params.sandboxRoot));
+  const resolved = path.resolve(
+    resolveSandboxInputPath(params.candidate, params.sandboxRoot),
+  );
   const openClawTmpDir = path.resolve(resolvePreferredOpenClawTmpDir());
   if (!isPathInside(openClawTmpDir, resolved)) {
     return undefined;

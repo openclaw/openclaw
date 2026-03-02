@@ -304,7 +304,13 @@ describe("web monitor inbox", () => {
     });
     const sock = getSock();
 
-    await listener.sendReaction("12345@g.us", "msg123", "👍", false, "+6421000000");
+    await listener.sendReaction(
+      "12345@g.us",
+      "msg123",
+      "👍",
+      false,
+      "+6421000000",
+    );
 
     expect(sock.sendMessage).toHaveBeenCalledWith("12345@g.us", {
       react: {

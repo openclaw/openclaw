@@ -20,7 +20,10 @@ vi.mock("./embeddings.js", () => ({
 }));
 
 vi.mock("./sqlite-vec.js", () => ({
-  loadSqliteVecExtension: async () => ({ ok: false, error: "sqlite-vec disabled in tests" }),
+  loadSqliteVecExtension: async () => ({
+    ok: false,
+    error: "sqlite-vec disabled in tests",
+  }),
 }));
 
 function createProvider(id: string): EmbeddingProvider {
@@ -44,7 +47,10 @@ function buildConfig(params: {
         workspace: params.workspaceDir,
         memorySearch: {
           provider: params.provider,
-          model: params.provider === "mistral" ? "mistral/mistral-embed" : "text-embedding-3-small",
+          model:
+            params.provider === "mistral"
+              ? "mistral/mistral-embed"
+              : "text-embedding-3-small",
           fallback: params.fallback ?? "none",
           store: { path: params.indexPath, vector: { enabled: false } },
           sync: { watch: false, onSessionStart: false, onSearch: false },
@@ -63,7 +69,9 @@ describe("memory manager mistral provider wiring", () => {
 
   beforeEach(async () => {
     createEmbeddingProviderMock.mockReset();
-    workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-mistral-"));
+    workspaceDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-memory-mistral-"),
+    );
     indexPath = path.join(workspaceDir, "index.sqlite");
     await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
     await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "test");
@@ -97,7 +105,9 @@ describe("memory manager mistral provider wiring", () => {
     const cfg = buildConfig({ workspaceDir, indexPath, provider: "mistral" });
     const result = await getMemorySearchManager({ cfg, agentId: "main" });
     if (!result.manager) {
-      throw new Error(`manager missing: ${result.error ?? "no error provided"}`);
+      throw new Error(
+        `manager missing: ${result.error ?? "no error provided"}`,
+      );
     }
     manager = result.manager as unknown as MemoryIndexManager;
 
@@ -127,10 +137,17 @@ describe("memory manager mistral provider wiring", () => {
       mistral: mistralClient,
     } as EmbeddingProviderResult);
 
-    const cfg = buildConfig({ workspaceDir, indexPath, provider: "openai", fallback: "mistral" });
+    const cfg = buildConfig({
+      workspaceDir,
+      indexPath,
+      provider: "openai",
+      fallback: "mistral",
+    });
     const result = await getMemorySearchManager({ cfg, agentId: "main" });
     if (!result.manager) {
-      throw new Error(`manager missing: ${result.error ?? "no error provided"}`);
+      throw new Error(
+        `manager missing: ${result.error ?? "no error provided"}`,
+      );
     }
     manager = result.manager as unknown as MemoryIndexManager;
     const internal = manager as unknown as {

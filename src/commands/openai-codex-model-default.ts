@@ -18,7 +18,9 @@ function shouldSetOpenAICodexModel(model?: string): boolean {
   return normalized === "gpt" || normalized === "gpt-mini";
 }
 
-function resolvePrimaryModel(model?: AgentModelListConfig | string): string | undefined {
+function resolvePrimaryModel(
+  model?: AgentModelListConfig | string,
+): string | undefined {
   if (typeof model === "string") {
     return model;
   }
@@ -44,7 +46,8 @@ export function applyOpenAICodexModelDefault(cfg: OpenClawConfig): {
         defaults: {
           ...cfg.agents?.defaults,
           model:
-            cfg.agents?.defaults?.model && typeof cfg.agents.defaults.model === "object"
+            cfg.agents?.defaults?.model &&
+            typeof cfg.agents.defaults.model === "object"
               ? {
                   ...cfg.agents.defaults.model,
                   primary: OPENAI_CODEX_DEFAULT_MODEL,

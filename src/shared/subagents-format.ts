@@ -50,11 +50,15 @@ export function resolveTotalTokens(entry?: TokenUsageLike) {
   if (!entry || typeof entry !== "object") {
     return undefined;
   }
-  if (typeof entry.totalTokens === "number" && Number.isFinite(entry.totalTokens)) {
+  if (
+    typeof entry.totalTokens === "number" &&
+    Number.isFinite(entry.totalTokens)
+  ) {
     return entry.totalTokens;
   }
   const input = typeof entry.inputTokens === "number" ? entry.inputTokens : 0;
-  const output = typeof entry.outputTokens === "number" ? entry.outputTokens : 0;
+  const output =
+    typeof entry.outputTokens === "number" ? entry.outputTokens : 0;
   const total = input + output;
   return total > 0 ? total : undefined;
 }
@@ -68,7 +72,8 @@ export function resolveIoTokens(entry?: TokenUsageLike) {
       ? entry.inputTokens
       : 0;
   const output =
-    typeof entry.outputTokens === "number" && Number.isFinite(entry.outputTokens)
+    typeof entry.outputTokens === "number" &&
+    Number.isFinite(entry.outputTokens)
       ? entry.outputTokens
       : 0;
   const total = input + output;
@@ -85,7 +90,9 @@ export function formatTokenUsageDisplay(entry?: TokenUsageLike) {
   if (io) {
     const input = formatTokenShort(io.input) ?? "0";
     const output = formatTokenShort(io.output) ?? "0";
-    parts.push(`tokens ${formatTokenShort(io.total)} (in ${input} / out ${output})`);
+    parts.push(
+      `tokens ${formatTokenShort(io.total)} (in ${input} / out ${output})`,
+    );
   } else if (typeof promptCache === "number" && promptCache > 0) {
     parts.push(`tokens ${formatTokenShort(promptCache)} prompt/cache`);
   }

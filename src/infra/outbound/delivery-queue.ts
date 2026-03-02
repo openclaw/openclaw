@@ -71,7 +71,10 @@ function resolveFailedDir(stateDir?: string): string {
 export async function ensureQueueDir(stateDir?: string): Promise<string> {
   const queueDir = resolveQueueDir(stateDir);
   await fs.promises.mkdir(queueDir, { recursive: true, mode: 0o700 });
-  await fs.promises.mkdir(resolveFailedDir(stateDir), { recursive: true, mode: 0o700 });
+  await fs.promises.mkdir(resolveFailedDir(stateDir), {
+    recursive: true,
+    mode: 0o700,
+  });
   return queueDir;
 }
 
@@ -108,7 +111,10 @@ export async function enqueueDelivery(
 }
 
 /** Remove a successfully delivered entry from the queue. */
-export async function ackDelivery(id: string, stateDir?: string): Promise<void> {
+export async function ackDelivery(
+  id: string,
+  stateDir?: string,
+): Promise<void> {
   const filePath = path.join(resolveQueueDir(stateDir), `${id}.json`);
   try {
     await fs.promises.unlink(filePath);
@@ -125,7 +131,11 @@ export async function ackDelivery(id: string, stateDir?: string): Promise<void> 
 }
 
 /** Update a queue entry after a failed delivery attempt. */
-export async function failDelivery(id: string, error: string, stateDir?: string): Promise<void> {
+export async function failDelivery(
+  id: string,
+  error: string,
+  stateDir?: string,
+): Promise<void> {
   const filePath = path.join(resolveQueueDir(stateDir), `${id}.json`);
   const raw = await fs.promises.readFile(filePath, "utf-8");
   const entry: QueuedDelivery = JSON.parse(raw);
@@ -141,7 +151,9 @@ export async function failDelivery(id: string, error: string, stateDir?: string)
 }
 
 /** Load all pending delivery entries from the queue directory. */
-export async function loadPendingDeliveries(stateDir?: string): Promise<QueuedDelivery[]> {
+export async function loadPendingDeliveries(
+  stateDir?: string,
+): Promise<QueuedDelivery[]> {
   const queueDir = resolveQueueDir(stateDir);
   let files: string[];
   try {
@@ -187,7 +199,10 @@ export async function loadPendingDeliveries(stateDir?: string): Promise<QueuedDe
 }
 
 /** Move a queue entry to the failed/ subdirectory. */
-export async function moveToFailed(id: string, stateDir?: string): Promise<void> {
+export async function moveToFailed(
+  id: string,
+  stateDir?: string,
+): Promise<void> {
   const queueDir = resolveQueueDir(stateDir);
   const failedDir = resolveFailedDir(stateDir);
   await fs.promises.mkdir(failedDir, { recursive: true, mode: 0o700 });
@@ -201,7 +216,11 @@ export function computeBackoffMs(retryCount: number): number {
   if (retryCount <= 0) {
     return 0;
   }
-  return BACKOFF_MS[Math.min(retryCount - 1, BACKOFF_MS.length - 1)] ?? BACKOFF_MS.at(-1) ?? 0;
+  return (
+    BACKOFF_MS[Math.min(retryCount - 1, BACKOFF_MS.length - 1)] ??
+    BACKOFF_MS.at(-1) ??
+    0
+  );
 }
 
 export function isEntryEligibleForRecoveryRetry(
@@ -212,7 +231,8 @@ export function isEntryEligibleForRecoveryRetry(
   if (backoff <= 0) {
     return { eligible: true };
   }
-  const firstReplayAfterCrash = entry.retryCount === 0 && entry.lastAttemptAt === undefined;
+  const firstReplayAfterCrash =
+    entry.retryCount === 0 && entry.lastAttemptAt === undefined;
   if (firstReplayAfterCrash) {
     return { eligible: true };
   }
@@ -285,13 +305,20 @@ export async function recoverPendingDeliveries(opts: {
 }): Promise<RecoverySummary> {
   const pending = await loadPendingDeliveries(opts.stateDir);
   if (pending.length === 0) {
-    return { recovered: 0, failed: 0, skippedMaxRetries: 0, deferredBackoff: 0 };
+    return {
+      recovered: 0,
+      failed: 0,
+      skippedMaxRetries: 0,
+      deferredBackoff: 0,
+    };
   }
 
   // Process oldest first.
   pending.sort((a, b) => a.enqueuedAt - b.enqueuedAt);
 
-  opts.log.info(`Found ${pending.length} pending delivery entries — starting recovery`);
+  opts.log.info(
+    `Found ${pending.length} pending delivery entries — starting recovery`,
+  );
 
   const deadline = Date.now() + (opts.maxRecoveryMs ?? 60_000);
 
@@ -303,8 +330,15 @@ export async function recoverPendingDeliveries(opts: {
   for (const entry of pending) {
     const now = Date.now();
     if (now >= deadline) {
-      const deferred = pending.length - recovered - failed - skippedMaxRetries - deferredBackoff;
-      opts.log.warn(`Recovery time budget exceeded — ${deferred} entries deferred to next restart`);
+      const deferred =
+        pending.length -
+        recovered -
+        failed -
+        skippedMaxRetries -
+        deferredBackoff;
+      opts.log.warn(
+        `Recovery time budget exceeded — ${deferred} entries deferred to next restart`,
+      );
       break;
     }
     if (entry.retryCount >= MAX_RETRIES) {
@@ -314,7 +348,9 @@ export async function recoverPendingDeliveries(opts: {
       try {
         await moveToFailed(entry.id, opts.stateDir);
       } catch (err) {
-        opts.log.error(`Failed to move entry ${entry.id} to failed/: ${String(err)}`);
+        opts.log.error(
+          `Failed to move entry ${entry.id} to failed/: ${String(err)}`,
+        );
       }
       skippedMaxRetries += 1;
       continue;
@@ -346,15 +382,21 @@ export async function recoverPendingDeliveries(opts: {
       });
       await ackDelivery(entry.id, opts.stateDir);
       recovered += 1;
-      opts.log.info(`Recovered delivery ${entry.id} to ${entry.channel}:${entry.to}`);
+      opts.log.info(
+        `Recovered delivery ${entry.id} to ${entry.channel}:${entry.to}`,
+      );
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
       if (isPermanentDeliveryError(errMsg)) {
-        opts.log.warn(`Delivery ${entry.id} hit permanent error — moving to failed/: ${errMsg}`);
+        opts.log.warn(
+          `Delivery ${entry.id} hit permanent error — moving to failed/: ${errMsg}`,
+        );
         try {
           await moveToFailed(entry.id, opts.stateDir);
         } catch (moveErr) {
-          opts.log.error(`Failed to move entry ${entry.id} to failed/: ${String(moveErr)}`);
+          opts.log.error(
+            `Failed to move entry ${entry.id} to failed/: ${String(moveErr)}`,
+          );
         }
         failed += 1;
         continue;

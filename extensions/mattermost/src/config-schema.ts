@@ -37,16 +37,18 @@ const MattermostAccountSchemaBase = z
   })
   .strict();
 
-const MattermostAccountSchema = MattermostAccountSchemaBase.superRefine((value, ctx) => {
-  requireOpenAllowFrom({
-    policy: value.dmPolicy,
-    allowFrom: value.allowFrom,
-    ctx,
-    path: ["allowFrom"],
-    message:
-      'channels.mattermost.dmPolicy="open" requires channels.mattermost.allowFrom to include "*"',
-  });
-});
+const MattermostAccountSchema = MattermostAccountSchemaBase.superRefine(
+  (value, ctx) => {
+    requireOpenAllowFrom({
+      policy: value.dmPolicy,
+      allowFrom: value.allowFrom,
+      ctx,
+      path: ["allowFrom"],
+      message:
+        'channels.mattermost.dmPolicy="open" requires channels.mattermost.allowFrom to include "*"',
+    });
+  },
+);
 
 export const MattermostConfigSchema = MattermostAccountSchemaBase.extend({
   accounts: z.record(z.string(), MattermostAccountSchema.optional()).optional(),

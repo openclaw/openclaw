@@ -34,7 +34,9 @@ export function parseAgentSessionKey(
 /**
  * Best-effort chat-type extraction from session keys across canonical and legacy formats.
  */
-export function deriveSessionChatType(sessionKey: string | undefined | null): SessionKeyChatType {
+export function deriveSessionChatType(
+  sessionKey: string | undefined | null,
+): SessionKeyChatType {
   const raw = (sessionKey ?? "").trim().toLowerCase();
   if (!raw) {
     return "unknown";
@@ -58,7 +60,9 @@ export function deriveSessionChatType(sessionKey: string | undefined | null): Se
   return "unknown";
 }
 
-export function isCronRunSessionKey(sessionKey: string | undefined | null): boolean {
+export function isCronRunSessionKey(
+  sessionKey: string | undefined | null,
+): boolean {
   const parsed = parseAgentSessionKey(sessionKey);
   if (!parsed) {
     return false;
@@ -66,7 +70,9 @@ export function isCronRunSessionKey(sessionKey: string | undefined | null): bool
   return /^cron:[^:]+:run:[^:]+$/.test(parsed.rest);
 }
 
-export function isCronSessionKey(sessionKey: string | undefined | null): boolean {
+export function isCronSessionKey(
+  sessionKey: string | undefined | null,
+): boolean {
   const parsed = parseAgentSessionKey(sessionKey);
   if (!parsed) {
     return false;
@@ -74,7 +80,9 @@ export function isCronSessionKey(sessionKey: string | undefined | null): boolean
   return parsed.rest.toLowerCase().startsWith("cron:");
 }
 
-export function isSubagentSessionKey(sessionKey: string | undefined | null): boolean {
+export function isSubagentSessionKey(
+  sessionKey: string | undefined | null,
+): boolean {
   const raw = (sessionKey ?? "").trim();
   if (!raw) {
     return false;
@@ -86,7 +94,9 @@ export function isSubagentSessionKey(sessionKey: string | undefined | null): boo
   return Boolean((parsed?.rest ?? "").toLowerCase().startsWith("subagent:"));
 }
 
-export function getSubagentDepth(sessionKey: string | undefined | null): number {
+export function getSubagentDepth(
+  sessionKey: string | undefined | null,
+): number {
   const raw = (sessionKey ?? "").trim().toLowerCase();
   if (!raw) {
     return 0;
@@ -94,7 +104,9 @@ export function getSubagentDepth(sessionKey: string | undefined | null): number 
   return raw.split(":subagent:").length - 1;
 }
 
-export function isAcpSessionKey(sessionKey: string | undefined | null): boolean {
+export function isAcpSessionKey(
+  sessionKey: string | undefined | null,
+): boolean {
   const raw = (sessionKey ?? "").trim();
   if (!raw) {
     return false;

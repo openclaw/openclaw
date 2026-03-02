@@ -20,9 +20,11 @@ export function normalizeRpcAttachmentsToChatAttachments(
           typeof a?.content === "string"
             ? a.content
             : ArrayBuffer.isView(a?.content)
-              ? Buffer.from(a.content.buffer, a.content.byteOffset, a.content.byteLength).toString(
-                  "base64",
-                )
+              ? Buffer.from(
+                  a.content.buffer,
+                  a.content.byteOffset,
+                  a.content.byteLength,
+                ).toString("base64")
               : a?.content instanceof ArrayBuffer
                 ? Buffer.from(a.content).toString("base64")
                 : undefined,

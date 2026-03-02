@@ -12,11 +12,18 @@ import {
   type ExecCommandSegment,
   type ExecSecurity,
 } from "../infra/exec-approvals.js";
-import type { ExecHostRequest, ExecHostResponse, ExecHostRunResult } from "../infra/exec-host.js";
+import type {
+  ExecHostRequest,
+  ExecHostResponse,
+  ExecHostRunResult,
+} from "../infra/exec-host.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import { sanitizeSystemRunEnvOverrides } from "../infra/host-env-security.js";
 import { resolveSystemRunCommand } from "../infra/system-run-command.js";
-import { evaluateSystemRunPolicy, resolveExecApprovalDecision } from "./exec-policy.js";
+import {
+  evaluateSystemRunPolicy,
+  resolveExecApprovalDecision,
+} from "./exec-policy.js";
 import {
   applyOutputTruncation,
   evaluateSystemRunAllowlist,
@@ -92,7 +99,9 @@ function warnWritableTrustedDirOnce(message: string): void {
   console.warn(message);
 }
 
-function normalizeDeniedReason(reason: string | null | undefined): SystemRunDeniedReason {
+function normalizeDeniedReason(
+  reason: string | null | undefined,
+): SystemRunDeniedReason {
   switch (reason) {
     case "security=deny":
     case "approval-required":
@@ -115,7 +124,9 @@ export type HandleSystemRunInvokeOptions = {
   resolveExecSecurity: (value?: string) => ExecSecurity;
   resolveExecAsk: (value?: string) => ExecAsk;
   isCmdExeInvocation: (argv: string[]) => boolean;
-  sanitizeEnv: (overrides?: Record<string, string> | null) => Record<string, string> | undefined;
+  sanitizeEnv: (
+    overrides?: Record<string, string> | null,
+  ) => Record<string, string> | undefined;
   runCommand: (
     argv: string[],
     cwd: string | undefined,
@@ -126,7 +137,11 @@ export type HandleSystemRunInvokeOptions = {
     approvals: ReturnType<typeof resolveExecApprovals>;
     request: ExecHostRequest;
   }) => Promise<ExecHostResponse | null>;
-  sendNodeEvent: (client: GatewayClient, event: string, payload: unknown) => Promise<void>;
+  sendNodeEvent: (
+    client: GatewayClient,
+    event: string,
+    payload: unknown,
+  ) => Promise<void>;
   buildExecEventPayload: (payload: ExecEventPayload) => ExecEventPayload;
   sendInvokeResult: (result: SystemRunInvokeResult) => Promise<void>;
   sendExecFinishedEvent: (params: {
@@ -236,7 +251,9 @@ async function evaluateSystemRunPolicyPhase(
   const configuredSecurity = opts.resolveExecSecurity(
     agentExec?.security ?? cfg.tools?.exec?.security,
   );
-  const configuredAsk = opts.resolveExecAsk(agentExec?.ask ?? cfg.tools?.exec?.ask);
+  const configuredAsk = opts.resolveExecAsk(
+    agentExec?.ask ?? cfg.tools?.exec?.ask,
+  );
   const approvals = resolveExecApprovals(parsed.agentId, {
     security: configuredSecurity,
     ask: configuredAsk,
@@ -244,25 +261,27 @@ async function evaluateSystemRunPolicyPhase(
   const security = approvals.agent.security;
   const ask = approvals.agent.ask;
   const autoAllowSkills = approvals.agent.autoAllowSkills;
-  const { safeBins, safeBinProfiles, trustedSafeBinDirs } = resolveExecSafeBinRuntimePolicy({
-    global: cfg.tools?.exec,
-    local: agentExec,
-    onWarning: warnWritableTrustedDirOnce,
-  });
+  const { safeBins, safeBinProfiles, trustedSafeBinDirs } =
+    resolveExecSafeBinRuntimePolicy({
+      global: cfg.tools?.exec,
+      local: agentExec,
+      onWarning: warnWritableTrustedDirOnce,
+    });
   const bins = autoAllowSkills ? await opts.skillBins.current() : [];
-  let { analysisOk, allowlistMatches, allowlistSatisfied, segments } = evaluateSystemRunAllowlist({
-    shellCommand: parsed.shellCommand,
-    argv: parsed.argv,
-    approvals,
-    security,
-    safeBins,
-    safeBinProfiles,
-    trustedSafeBinDirs,
-    cwd: parsed.cwd,
-    env: parsed.env,
-    skillBins: bins,
-    autoAllowSkills,
-  });
+  let { analysisOk, allowlistMatches, allowlistSatisfied, segments } =
+    evaluateSystemRunAllowlist({
+      shellCommand: parsed.shellCommand,
+      argv: parsed.argv,
+      approvals,
+      security,
+      safeBins,
+      safeBinProfiles,
+      trustedSafeBinDirs,
+      cwd: parsed.cwd,
+      env: parsed.env,
+      skillBins: bins,
+      autoAllowSkills,
+    });
   const isWindows = process.platform === "win32";
   const cmdInvocation = parsed.shellCommand
     ? opts.isCmdExeInvocation(segments[0]?.argv ?? [])
@@ -289,7 +308,11 @@ async function evaluateSystemRunPolicyPhase(
   }
 
   // Fail closed if policy/runtime drift re-allows unapproved shell wrappers.
-  if (security === "allowlist" && parsed.shellCommand && !policy.approvedByAsk) {
+  if (
+    security === "allowlist" &&
+    parsed.shellCommand &&
+    !policy.approvedByAsk
+  ) {
     await sendSystemRunDenied(opts, parsed.execution, {
       reason: "approval-required",
       message: "SYSTEM_RUN_DENIED: approval required",
@@ -392,7 +415,10 @@ async function executeSystemRunPhase(
     }
   }
 
-  if (phase.policy.approvalDecision === "allow-always" && phase.security === "allowlist") {
+  if (
+    phase.policy.approvalDecision === "allow-always" &&
+    phase.security === "allowlist"
+  ) {
     if (phase.policy.analysisOk) {
       const patterns = resolveAllowAlwaysPatterns({
         segments: phase.segments,
@@ -443,7 +469,12 @@ async function executeSystemRunPhase(
     segments: phase.segments,
   });
 
-  const result = await opts.runCommand(execArgv, phase.cwd, phase.env, phase.timeoutMs);
+  const result = await opts.runCommand(
+    execArgv,
+    phase.cwd,
+    phase.env,
+    phase.timeoutMs,
+  );
   applyOutputTruncation(result);
   await opts.sendExecFinishedEvent({
     sessionKey: phase.sessionKey,
@@ -465,7 +496,9 @@ async function executeSystemRunPhase(
   });
 }
 
-export async function handleSystemRunInvoke(opts: HandleSystemRunInvokeOptions): Promise<void> {
+export async function handleSystemRunInvoke(
+  opts: HandleSystemRunInvokeOptions,
+): Promise<void> {
   const parsed = await parseSystemRunPhase(opts);
   if (!parsed) {
     return;

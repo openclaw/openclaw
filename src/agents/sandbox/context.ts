@@ -1,6 +1,9 @@
 import fs from "node:fs/promises";
 import { DEFAULT_BROWSER_EVALUATE_ENABLED } from "../../browser/constants.js";
-import { ensureBrowserControlAuth, resolveBrowserControlAuth } from "../../browser/control-auth.js";
+import {
+  ensureBrowserControlAuth,
+  resolveBrowserControlAuth,
+} from "../../browser/control-auth.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -13,8 +16,15 @@ import { ensureSandboxContainer } from "./docker.js";
 import { createSandboxFsBridge } from "./fs-bridge.js";
 import { maybePruneSandboxes } from "./prune.js";
 import { resolveSandboxRuntimeStatus } from "./runtime-status.js";
-import { resolveSandboxScopeKey, resolveSandboxWorkspaceDir } from "./shared.js";
-import type { SandboxContext, SandboxDockerConfig, SandboxWorkspaceInfo } from "./types.js";
+import {
+  resolveSandboxScopeKey,
+  resolveSandboxWorkspaceDir,
+} from "./shared.js";
+import type {
+  SandboxContext,
+  SandboxDockerConfig,
+  SandboxWorkspaceInfo,
+} from "./types.js";
 import { ensureSandboxWorkspace } from "./workspace.js";
 
 async function ensureSandboxWorkspaceLayout(params: {
@@ -36,8 +46,11 @@ async function ensureSandboxWorkspaceLayout(params: {
   const workspaceRoot = resolveUserPath(cfg.workspaceRoot);
   const scopeKey = resolveSandboxScopeKey(cfg.scope, rawSessionKey);
   const sandboxWorkspaceDir =
-    cfg.scope === "shared" ? workspaceRoot : resolveSandboxWorkspaceDir(workspaceRoot, scopeKey);
-  const workspaceDir = cfg.workspaceAccess === "rw" ? agentWorkspaceDir : sandboxWorkspaceDir;
+    cfg.scope === "shared"
+      ? workspaceRoot
+      : resolveSandboxWorkspaceDir(workspaceRoot, scopeKey);
+  const workspaceDir =
+    cfg.workspaceAccess === "rw" ? agentWorkspaceDir : sandboxWorkspaceDir;
 
   if (workspaceDir === sandboxWorkspaceDir) {
     await ensureSandboxWorkspace(
@@ -53,7 +66,8 @@ async function ensureSandboxWorkspaceLayout(params: {
           config: params.config,
         });
       } catch (error) {
-        const message = error instanceof Error ? error.message : JSON.stringify(error);
+        const message =
+          error instanceof Error ? error.message : JSON.stringify(error);
         defaultRuntime.error?.(`Sandbox skill sync failed: ${message}`);
       }
     }
@@ -87,7 +101,10 @@ export async function resolveSandboxDockerUser(params: {
   }
 }
 
-function resolveSandboxSession(params: { config?: OpenClawConfig; sessionKey?: string }) {
+function resolveSandboxSession(params: {
+  config?: OpenClawConfig;
+  sessionKey?: string;
+}) {
   const rawSessionKey = params.sessionKey?.trim();
   if (!rawSessionKey) {
     return null;
@@ -118,12 +135,13 @@ export async function resolveSandboxContext(params: {
 
   await maybePruneSandboxes(cfg);
 
-  const { agentWorkspaceDir, scopeKey, workspaceDir } = await ensureSandboxWorkspaceLayout({
-    cfg,
-    rawSessionKey,
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-  });
+  const { agentWorkspaceDir, scopeKey, workspaceDir } =
+    await ensureSandboxWorkspaceLayout({
+      cfg,
+      rawSessionKey,
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+    });
 
   const docker = await resolveSandboxDockerUser({
     docker: cfg.docker,
@@ -151,8 +169,11 @@ export async function resolveSandboxContext(params: {
           const ensured = await ensureBrowserControlAuth({ cfg: cfgForAuth });
           browserAuth = ensured.auth;
         } catch (error) {
-          const message = error instanceof Error ? error.message : JSON.stringify(error);
-          defaultRuntime.error?.(`Sandbox browser auth ensure failed: ${message}`);
+          const message =
+            error instanceof Error ? error.message : JSON.stringify(error);
+          defaultRuntime.error?.(
+            `Sandbox browser auth ensure failed: ${message}`,
+          );
         }
         return browserAuth;
       })()

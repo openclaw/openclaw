@@ -1,4 +1,7 @@
-import { getChannelPlugin, listChannelPlugins } from "../channels/plugins/index.js";
+import {
+  getChannelPlugin,
+  listChannelPlugins,
+} from "../channels/plugins/index.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { CONFIG_PATH } from "../config/config.js";
@@ -73,9 +76,10 @@ export async function removeChannelConfigWizard(
     };
 
     note(
-      [`${label} removed from config.`, "Note: credentials/sessions on disk are unchanged."].join(
-        "\n",
-      ),
+      [
+        `${label} removed from config.`,
+        "Note: credentials/sessions on disk are unchanged.",
+      ].join("\n"),
       "Channel removed",
     );
   }

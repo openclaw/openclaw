@@ -14,16 +14,18 @@ type DirectSendOptions = {
 
 type DirectSendResult = { messageId: string; [key: string]: unknown };
 
-type DirectSendFn<TOpts extends Record<string, unknown>, TResult extends DirectSendResult> = (
-  to: string,
-  text: string,
-  opts: TOpts,
-) => Promise<TResult>;
+type DirectSendFn<
+  TOpts extends Record<string, unknown>,
+  TResult extends DirectSendResult,
+> = (to: string, text: string, opts: TOpts) => Promise<TResult>;
 
 export function resolveScopedChannelMediaMaxBytes(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
-  resolveChannelLimitMb: (params: { cfg: OpenClawConfig; accountId: string }) => number | undefined;
+  resolveChannelLimitMb: (params: {
+    cfg: OpenClawConfig;
+    accountId: string;
+  }) => number | undefined;
 }): number | undefined {
   return resolveChannelMediaMaxBytes({
     cfg: params.cfg,
@@ -32,7 +34,9 @@ export function resolveScopedChannelMediaMaxBytes(params: {
   });
 }
 
-export function createScopedChannelMediaMaxBytesResolver(channel: "imessage" | "signal") {
+export function createScopedChannelMediaMaxBytesResolver(
+  channel: "imessage" | "signal",
+) {
   return (params: { cfg: OpenClawConfig; accountId?: string | null }) =>
     resolveScopedChannelMediaMaxBytes({
       cfg: params.cfg,
@@ -48,7 +52,9 @@ export function createDirectTextMediaOutbound<
   TResult extends DirectSendResult,
 >(params: {
   channel: "imessage" | "signal";
-  resolveSender: (deps: OutboundSendDeps | undefined) => DirectSendFn<TOpts, TResult>;
+  resolveSender: (
+    deps: OutboundSendDeps | undefined,
+  ) => DirectSendFn<TOpts, TResult>;
   resolveMaxBytes: (params: {
     cfg: OpenClawConfig;
     accountId?: string | null;
@@ -117,8 +123,11 @@ export function createDirectTextMediaOutbound<
         return lastResult;
       }
       const limit = outbound.textChunkLimit;
-      const chunks = limit && outbound.chunker ? outbound.chunker(text, limit) : [text];
-      let lastResult: Awaited<ReturnType<NonNullable<typeof outbound.sendText>>>;
+      const chunks =
+        limit && outbound.chunker ? outbound.chunker(text, limit) : [text];
+      let lastResult: Awaited<
+        ReturnType<NonNullable<typeof outbound.sendText>>
+      >;
       for (const chunk of chunks) {
         lastResult = await outbound.sendText!({ ...ctx, text: chunk });
       }
@@ -135,7 +144,16 @@ export function createDirectTextMediaOutbound<
         buildOptions: params.buildTextOptions,
       });
     },
-    sendMedia: async ({ cfg, to, text, mediaUrl, mediaLocalRoots, accountId, deps, replyToId }) => {
+    sendMedia: async ({
+      cfg,
+      to,
+      text,
+      mediaUrl,
+      mediaLocalRoots,
+      accountId,
+      deps,
+      replyToId,
+    }) => {
       return await sendDirect({
         cfg,
         to,

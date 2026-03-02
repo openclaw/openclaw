@@ -107,7 +107,9 @@ Para`;
 
       for (const input of inputs) {
         const result = markdownToIR(input);
-        expect(result.text, `Input: ${JSON.stringify(input)}`).not.toMatch(/\n{3,}/);
+        expect(result.text, `Input: ${JSON.stringify(input)}`).not.toMatch(
+          /\n{3,}/,
+        );
       }
     });
 

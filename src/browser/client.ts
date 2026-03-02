@@ -108,7 +108,9 @@ export async function browserStatus(
   });
 }
 
-export async function browserProfiles(baseUrl?: string): Promise<ProfileStatus[]> {
+export async function browserProfiles(
+  baseUrl?: string,
+): Promise<ProfileStatus[]> {
   const res = await fetchBrowserJson<{ profiles: ProfileStatus[] }>(
     withBaseUrl(baseUrl, `/profiles`),
     {
@@ -118,7 +120,10 @@ export async function browserProfiles(baseUrl?: string): Promise<ProfileStatus[]
   return res.profiles ?? [];
 }
 
-export async function browserStart(baseUrl?: string, opts?: { profile?: string }): Promise<void> {
+export async function browserStart(
+  baseUrl?: string,
+  opts?: { profile?: string },
+): Promise<void> {
   const q = buildProfileQuery(opts?.profile);
   await fetchBrowserJson(withBaseUrl(baseUrl, `/start${q}`), {
     method: "POST",
@@ -126,7 +131,10 @@ export async function browserStart(baseUrl?: string, opts?: { profile?: string }
   });
 }
 
-export async function browserStop(baseUrl?: string, opts?: { profile?: string }): Promise<void> {
+export async function browserStop(
+  baseUrl?: string,
+  opts?: { profile?: string },
+): Promise<void> {
   const q = buildProfileQuery(opts?.profile);
   await fetchBrowserJson(withBaseUrl(baseUrl, `/stop${q}`), {
     method: "POST",
@@ -219,12 +227,15 @@ export async function browserOpenTab(
   opts?: { profile?: string },
 ): Promise<BrowserTab> {
   const q = buildProfileQuery(opts?.profile);
-  return await fetchBrowserJson<BrowserTab>(withBaseUrl(baseUrl, `/tabs/open${q}`), {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ url }),
-    timeoutMs: 15000,
-  });
+  return await fetchBrowserJson<BrowserTab>(
+    withBaseUrl(baseUrl, `/tabs/open${q}`),
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url }),
+      timeoutMs: 15000,
+    },
+  );
 }
 
 export async function browserFocusTab(
@@ -247,10 +258,13 @@ export async function browserCloseTab(
   opts?: { profile?: string },
 ): Promise<void> {
   const q = buildProfileQuery(opts?.profile);
-  await fetchBrowserJson(withBaseUrl(baseUrl, `/tabs/${encodeURIComponent(targetId)}${q}`), {
-    method: "DELETE",
-    timeoutMs: 5000,
-  });
+  await fetchBrowserJson(
+    withBaseUrl(baseUrl, `/tabs/${encodeURIComponent(targetId)}${q}`),
+    {
+      method: "DELETE",
+      timeoutMs: 5000,
+    },
+  );
 }
 
 export async function browserTabAction(
@@ -329,9 +343,12 @@ export async function browserSnapshot(
   if (opts.profile) {
     q.set("profile", opts.profile);
   }
-  return await fetchBrowserJson<SnapshotResult>(withBaseUrl(baseUrl, `/snapshot?${q.toString()}`), {
-    timeoutMs: 20000,
-  });
+  return await fetchBrowserJson<SnapshotResult>(
+    withBaseUrl(baseUrl, `/snapshot?${q.toString()}`),
+    {
+      timeoutMs: 20000,
+    },
+  );
 }
 
 // Actions beyond the basic read-only commands live in client-actions.ts.

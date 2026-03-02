@@ -1,5 +1,12 @@
-import { chunkTextWithMode, resolveChunkMode, resolveTextChunkLimit } from "../auto-reply/chunk.js";
-import { DEFAULT_GROUP_HISTORY_LIMIT, type HistoryEntry } from "../auto-reply/reply/history.js";
+import {
+  chunkTextWithMode,
+  resolveChunkMode,
+  resolveTextChunkLimit,
+} from "../auto-reply/chunk.js";
+import {
+  DEFAULT_GROUP_HISTORY_LIMIT,
+  type HistoryEntry,
+} from "../auto-reply/reply/history.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
@@ -17,7 +24,11 @@ import { normalizeStringEntries } from "../shared/string-normalization.js";
 import { normalizeE164 } from "../utils.js";
 import { resolveSignalAccount } from "./accounts.js";
 import { signalCheck, signalRpcRequest } from "./client.js";
-import { formatSignalDaemonExit, spawnSignalDaemon, type SignalDaemonHandle } from "./daemon.js";
+import {
+  formatSignalDaemonExit,
+  spawnSignalDaemon,
+  type SignalDaemonHandle,
+} from "./daemon.js";
 import { isSignalSenderAllowed, type resolveSignalSender } from "./identity.js";
 import { createSignalEventHandler } from "./monitor/event-handler.js";
 import type {
@@ -99,7 +110,10 @@ function createSignalDaemonLifecycle(params: { abortSignal?: AbortSignal }) {
   let daemonStopRequested = false;
   let daemonExitError: Error | undefined;
   const daemonAbortController = new AbortController();
-  const mergedAbort = mergeAbortSignals(params.abortSignal, daemonAbortController.signal);
+  const mergedAbort = mergeAbortSignals(
+    params.abortSignal,
+    daemonAbortController.signal,
+  );
   const stop = () => {
     daemonStopRequested = true;
     daemonHandle?.stop();
@@ -130,7 +144,9 @@ function normalizeAllowList(raw?: Array<string | number>): string[] {
   return normalizeStringEntries(raw);
 }
 
-function resolveSignalReactionTargets(reaction: SignalReactionMessage): SignalReactionTarget[] {
+function resolveSignalReactionTargets(
+  reaction: SignalReactionMessage,
+): SignalReactionTarget[] {
   const targets: SignalReactionTarget[] = [];
   const uuid = reaction.targetAuthorUuid?.trim();
   if (uuid) {
@@ -152,8 +168,12 @@ function isSignalReactionMessage(
   }
   const emoji = reaction.emoji?.trim();
   const timestamp = reaction.targetSentTimestamp;
-  const hasTarget = Boolean(reaction.targetAuthor?.trim() || reaction.targetAuthorUuid?.trim());
-  return Boolean(emoji && typeof timestamp === "number" && timestamp > 0 && hasTarget);
+  const hasTarget = Boolean(
+    reaction.targetAuthor?.trim() || reaction.targetAuthorUuid?.trim(),
+  );
+  return Boolean(
+    emoji && typeof timestamp === "number" && timestamp > 0 && hasTarget,
+  );
 }
 
 function shouldEmitSignalReactionNotification(params: {
@@ -198,8 +218,12 @@ function buildSignalReactionSystemEventText(params: {
   groupLabel?: string;
 }) {
   const base = `Signal reaction added: ${params.emojiLabel} by ${params.actorLabel} msg ${params.messageId}`;
-  const withTarget = params.targetLabel ? `${base} from ${params.targetLabel}` : base;
-  return params.groupLabel ? `${withTarget} in ${params.groupLabel}` : withTarget;
+  const withTarget = params.targetLabel
+    ? `${base} from ${params.targetLabel}`
+    : base;
+  return params.groupLabel
+    ? `${withTarget} in ${params.groupLabel}`
+    : withTarget;
 }
 
 async function waitForSignalDaemonReady(params: {
@@ -262,9 +286,13 @@ async function fetchAttachment(params: {
     return null;
   }
 
-  const result = await signalRpcRequest<{ data?: string }>("getAttachment", rpcParams, {
-    baseUrl: params.baseUrl,
-  });
+  const result = await signalRpcRequest<{ data?: string }>(
+    "getAttachment",
+    rpcParams,
+    {
+      baseUrl: params.baseUrl,
+    },
+  );
   if (!result?.data) {
     return null;
   }
@@ -289,10 +317,20 @@ async function deliverReplies(params: {
   textLimit: number;
   chunkMode: "length" | "newline";
 }) {
-  const { replies, target, baseUrl, account, accountId, runtime, maxBytes, textLimit, chunkMode } =
-    params;
+  const {
+    replies,
+    target,
+    baseUrl,
+    account,
+    accountId,
+    runtime,
+    maxBytes,
+    textLimit,
+    chunkMode,
+  } = params;
   for (const payload of replies) {
-    const mediaList = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
+    const mediaList =
+      payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
     const text = payload.text ?? "";
     if (!text && mediaList.length === 0) {
       continue;
@@ -324,7 +362,9 @@ async function deliverReplies(params: {
   }
 }
 
-export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promise<void> {
+export async function monitorSignalProvider(
+  opts: MonitorSignalOpts = {},
+): Promise<void> {
   const runtime = resolveRuntime(opts);
   const cfg = opts.config ?? loadConfig();
   const accountInfo = resolveSignalAccount({
@@ -343,7 +383,9 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
   const baseUrl = opts.baseUrl?.trim() || accountInfo.baseUrl;
   const account = opts.account?.trim() || accountInfo.config.account?.trim();
   const dmPolicy = accountInfo.config.dmPolicy ?? "pairing";
-  const allowFrom = normalizeAllowList(opts.allowFrom ?? accountInfo.config.allowFrom);
+  const allowFrom = normalizeAllowList(
+    opts.allowFrom ?? accountInfo.config.allowFrom,
+  );
   const groupAllowFrom = normalizeAllowList(
     opts.groupAllowFrom ??
       accountInfo.config.groupAllowFrom ??
@@ -365,23 +407,38 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
     log: (message) => runtime.log?.(message),
   });
   const reactionMode = accountInfo.config.reactionNotifications ?? "own";
-  const reactionAllowlist = normalizeAllowList(accountInfo.config.reactionAllowlist);
-  const mediaMaxBytes = (opts.mediaMaxMb ?? accountInfo.config.mediaMaxMb ?? 8) * 1024 * 1024;
-  const ignoreAttachments = opts.ignoreAttachments ?? accountInfo.config.ignoreAttachments ?? false;
-  const sendReadReceipts = Boolean(opts.sendReadReceipts ?? accountInfo.config.sendReadReceipts);
+  const reactionAllowlist = normalizeAllowList(
+    accountInfo.config.reactionAllowlist,
+  );
+  const mediaMaxBytes =
+    (opts.mediaMaxMb ?? accountInfo.config.mediaMaxMb ?? 8) * 1024 * 1024;
+  const ignoreAttachments =
+    opts.ignoreAttachments ?? accountInfo.config.ignoreAttachments ?? false;
+  const sendReadReceipts = Boolean(
+    opts.sendReadReceipts ?? accountInfo.config.sendReadReceipts,
+  );
 
-  const autoStart = opts.autoStart ?? accountInfo.config.autoStart ?? !accountInfo.config.httpUrl;
+  const autoStart =
+    opts.autoStart ??
+    accountInfo.config.autoStart ??
+    !accountInfo.config.httpUrl;
   const startupTimeoutMs = Math.min(
     120_000,
-    Math.max(1_000, opts.startupTimeoutMs ?? accountInfo.config.startupTimeoutMs ?? 30_000),
+    Math.max(
+      1_000,
+      opts.startupTimeoutMs ?? accountInfo.config.startupTimeoutMs ?? 30_000,
+    ),
   );
   const readReceiptsViaDaemon = Boolean(autoStart && sendReadReceipts);
-  const daemonLifecycle = createSignalDaemonLifecycle({ abortSignal: opts.abortSignal });
+  const daemonLifecycle = createSignalDaemonLifecycle({
+    abortSignal: opts.abortSignal,
+  });
   let daemonHandle: SignalDaemonHandle | null = null;
 
   if (autoStart) {
     const cliPath = opts.cliPath ?? accountInfo.config.cliPath ?? "signal-cli";
-    const httpHost = opts.httpHost ?? accountInfo.config.httpHost ?? "127.0.0.1";
+    const httpHost =
+      opts.httpHost ?? accountInfo.config.httpHost ?? "127.0.0.1";
     const httpPort = opts.httpPort ?? accountInfo.config.httpPort ?? 8080;
     daemonHandle = spawnSignalDaemon({
       cliPath,
@@ -389,7 +446,8 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       httpHost,
       httpPort,
       receiveMode: opts.receiveMode ?? accountInfo.config.receiveMode,
-      ignoreAttachments: opts.ignoreAttachments ?? accountInfo.config.ignoreAttachments,
+      ignoreAttachments:
+        opts.ignoreAttachments ?? accountInfo.config.ignoreAttachments,
       ignoreStories: opts.ignoreStories ?? accountInfo.config.ignoreStories,
       sendReadReceipts,
       runtime,

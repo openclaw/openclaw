@@ -10,7 +10,8 @@ export type ContextPruningRuntimeValue = {
 
 // Important: this relies on Pi passing the same SessionManager object instance into
 // ExtensionContext (ctx.sessionManager) that we used when calling setContextPruningRuntime.
-const registry = createSessionManagerRuntimeRegistry<ContextPruningRuntimeValue>();
+const registry =
+  createSessionManagerRuntimeRegistry<ContextPruningRuntimeValue>();
 
 export const setContextPruningRuntime = registry.set;
 

@@ -1,9 +1,16 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { deleteSession, deleteSessionAndRefresh, type SessionsState } from "./sessions.ts";
+import {
+  deleteSession,
+  deleteSessionAndRefresh,
+  type SessionsState,
+} from "./sessions.ts";
 
 type RequestFn = (method: string, params?: unknown) => Promise<unknown>;
 
-function createState(request: RequestFn, overrides: Partial<SessionsState> = {}): SessionsState {
+function createState(
+  request: RequestFn,
+  overrides: Partial<SessionsState> = {},
+): SessionsState {
   return {
     client: { request } as unknown as SessionsState["client"],
     connected: true,

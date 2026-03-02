@@ -1,5 +1,8 @@
 import { vi } from "vitest";
-import { createEmptyPluginRegistry, type PluginRegistry } from "../plugins/registry.js";
+import {
+  createEmptyPluginRegistry,
+  type PluginRegistry,
+} from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 
 export const registryState: { registry: PluginRegistry } = {

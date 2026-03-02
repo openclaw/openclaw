@@ -19,7 +19,10 @@ import {
 } from "../../slack/actions.js";
 import { parseSlackBlocksInput } from "../../slack/blocks-input.js";
 import { recordSlackThreadParticipation } from "../../slack/sent-thread-cache.js";
-import { parseSlackTarget, resolveSlackChannelId } from "../../slack/targets.js";
+import {
+  parseSlackTarget,
+  resolveSlackChannelId,
+} from "../../slack/targets.js";
 import { withNormalizedTimestamp } from "../date-time.js";
 import {
   createActionGate,
@@ -89,7 +92,11 @@ function resolveThreadTsFromContext(
   if (context.replyToMode === "all") {
     return context.currentThreadTs;
   }
-  if (context.replyToMode === "first" && context.hasRepliedRef && !context.hasRepliedRef.value) {
+  if (
+    context.replyToMode === "first" &&
+    context.hasRepliedRef &&
+    !context.hasRepliedRef.value
+  ) {
     context.hasRepliedRef.value = true;
     return context.currentThreadTs;
   }
@@ -196,10 +203,14 @@ export async function handleSlackAction(
         const mediaUrl = readStringParam(params, "mediaUrl");
         const blocks = readSlackBlocksParam(params);
         if (!content && !mediaUrl && !blocks) {
-          throw new Error("Slack sendMessage requires content, blocks, or mediaUrl.");
+          throw new Error(
+            "Slack sendMessage requires content, blocks, or mediaUrl.",
+          );
         }
         if (mediaUrl && blocks) {
-          throw new Error("Slack sendMessage does not support blocks with mediaUrl.");
+          throw new Error(
+            "Slack sendMessage does not support blocks with mediaUrl.",
+          );
         }
         const threadTs = resolveThreadTsFromContext(
           readStringParam(params, "threadTs"),
@@ -214,7 +225,11 @@ export async function handleSlackAction(
         });
 
         if (threadTs && result.channelId && account.accountId) {
-          recordSlackThreadParticipation(account.accountId, result.channelId, threadTs);
+          recordSlackThreadParticipation(
+            account.accountId,
+            result.channelId,
+            threadTs,
+          );
         }
 
         // Keep "first" mode consistent even when the agent explicitly provided
@@ -222,7 +237,10 @@ export async function handleSlackAction(
         // first reply "used" so later tool calls don't auto-thread again.
         if (context?.hasRepliedRef && context.currentChannelId) {
           const parsedTarget = parseSlackTarget(to, { defaultKind: "channel" });
-          if (parsedTarget?.kind === "channel" && parsedTarget.id === context.currentChannelId) {
+          if (
+            parsedTarget?.kind === "channel" &&
+            parsedTarget.id === context.currentChannelId
+          ) {
             context.hasRepliedRef.value = true;
           }
         }
@@ -269,7 +287,9 @@ export async function handleSlackAction(
         const channelId = resolveChannelId();
         const limitRaw = params.limit;
         const limit =
-          typeof limitRaw === "number" && Number.isFinite(limitRaw) ? limitRaw : undefined;
+          typeof limitRaw === "number" && Number.isFinite(limitRaw)
+            ? limitRaw
+            : undefined;
         const before = readStringParam(params, "before");
         const after = readStringParam(params, "after");
         const threadId = readStringParam(params, "threadId");
@@ -290,9 +310,14 @@ export async function handleSlackAction(
       }
       case "downloadFile": {
         const fileId = readStringParam(params, "fileId", { required: true });
-        const channelTarget = readStringParam(params, "channelId") ?? readStringParam(params, "to");
-        const channelId = channelTarget ? resolveSlackChannelId(channelTarget) : undefined;
-        const threadId = readStringParam(params, "threadId") ?? readStringParam(params, "replyTo");
+        const channelTarget =
+          readStringParam(params, "channelId") ?? readStringParam(params, "to");
+        const channelId = channelTarget
+          ? resolveSlackChannelId(channelTarget)
+          : undefined;
+        const threadId =
+          readStringParam(params, "threadId") ??
+          readStringParam(params, "replyTo");
         const maxBytes = account.config?.mediaMaxMb
           ? account.config.mediaMaxMb * 1024 * 1024
           : 20 * 1024 * 1024;
@@ -305,7 +330,8 @@ export async function handleSlackAction(
         if (!downloaded) {
           return jsonResult({
             ok: false,
-            error: "File could not be downloaded (not found, too large, or inaccessible).",
+            error:
+              "File could not be downloaded (not found, too large, or inaccessible).",
           });
         }
         return await imageResultFromFile({
@@ -377,10 +403,14 @@ export async function handleSlackAction(
     if (!isActionEnabled("emojiList")) {
       throw new Error("Slack emoji list is disabled.");
     }
-    const result = readOpts ? await listSlackEmojis(readOpts) : await listSlackEmojis();
+    const result = readOpts
+      ? await listSlackEmojis(readOpts)
+      : await listSlackEmojis();
     const limit = readNumberParam(params, "limit", { integer: true });
     if (limit != null && limit > 0 && result.emoji != null) {
-      const entries = Object.entries(result.emoji).toSorted(([a], [b]) => a.localeCompare(b));
+      const entries = Object.entries(result.emoji).toSorted(([a], [b]) =>
+        a.localeCompare(b),
+      );
       if (entries.length > limit) {
         return jsonResult({
           ok: true,

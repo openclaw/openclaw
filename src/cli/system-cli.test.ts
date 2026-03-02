@@ -66,7 +66,11 @@ describe("system-cli", () => {
   });
 
   it.each([
-    { args: ["system", "heartbeat", "last"], method: "last-heartbeat", params: undefined },
+    {
+      args: ["system", "heartbeat", "last"],
+      method: "last-heartbeat",
+      params: undefined,
+    },
     {
       args: ["system", "heartbeat", "enable"],
       method: "set-heartbeats",
@@ -77,15 +81,24 @@ describe("system-cli", () => {
       method: "set-heartbeats",
       params: { enabled: false },
     },
-    { args: ["system", "presence"], method: "system-presence", params: undefined },
+    {
+      args: ["system", "presence"],
+      method: "system-presence",
+      params: undefined,
+    },
   ])("routes $args to gateway", async ({ args, method, params }) => {
     callGatewayFromCli.mockResolvedValueOnce({ method });
 
     await runCli(args);
 
-    expect(callGatewayFromCli).toHaveBeenCalledWith(method, expect.any(Object), params, {
-      expectFinal: false,
-    });
+    expect(callGatewayFromCli).toHaveBeenCalledWith(
+      method,
+      expect.any(Object),
+      params,
+      {
+        expectFinal: false,
+      },
+    );
     expect(runtimeLogs).toEqual([JSON.stringify({ method }, null, 2)]);
   });
 });

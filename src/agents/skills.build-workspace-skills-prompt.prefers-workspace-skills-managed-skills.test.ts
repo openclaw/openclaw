@@ -69,7 +69,8 @@ describe("buildWorkspaceSkillsPrompt", () => {
       dir: path.join(skillsDir, "anybin-skill"),
       name: "anybin-skill",
       description: "Needs any bin",
-      metadata: '{"openclaw":{"requires":{"anyBins":["missingbin","fakebin"]}}}',
+      metadata:
+        '{"openclaw":{"requires":{"anyBins":["missingbin","fakebin"]}}}',
     });
     await writeSkill({
       dir: path.join(skillsDir, "config-skill"),
@@ -87,7 +88,8 @@ describe("buildWorkspaceSkillsPrompt", () => {
       dir: path.join(skillsDir, "env-skill"),
       name: "env-skill",
       description: "Needs env",
-      metadata: '{"openclaw":{"requires":{"env":["ENV_KEY"]},"primaryEnv":"ENV_KEY"}}',
+      metadata:
+        '{"openclaw":{"requires":{"env":["ENV_KEY"]},"primaryEnv":"ENV_KEY"}}',
     });
 
     const managedSkillsDir = path.join(workspaceDir, ".managed");

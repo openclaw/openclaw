@@ -1,8 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { computeSandboxBrowserConfigHash, computeSandboxConfigHash } from "./config-hash.js";
+import {
+  computeSandboxBrowserConfigHash,
+  computeSandboxConfigHash,
+} from "./config-hash.js";
 import type { SandboxDockerConfig } from "./types.js";
 
-function createDockerConfig(overrides?: Partial<SandboxDockerConfig>): SandboxDockerConfig {
+function createDockerConfig(
+  overrides?: Partial<SandboxDockerConfig>,
+): SandboxDockerConfig {
   return {
     image: "openclaw-sandbox:test",
     containerPrefix: "openclaw-sbx-",
@@ -83,26 +88,29 @@ describe("computeSandboxConfigHash", () => {
     expect(left).toBe(right);
   });
 
-  it.each(ORDER_SENSITIVE_ARRAY_CASES)("treats $field order as significant", (testCase) => {
-    const shared = {
-      workspaceAccess: "rw" as const,
-      workspaceDir: "/tmp/workspace",
-      agentWorkspaceDir: "/tmp/workspace",
-    };
-    const left = computeSandboxConfigHash({
-      ...shared,
-      docker: createDockerConfig({
-        [testCase.field]: testCase.before,
-      } as Partial<SandboxDockerConfig>),
-    });
-    const right = computeSandboxConfigHash({
-      ...shared,
-      docker: createDockerConfig({
-        [testCase.field]: testCase.after,
-      } as Partial<SandboxDockerConfig>),
-    });
-    expect(left).not.toBe(right);
-  });
+  it.each(ORDER_SENSITIVE_ARRAY_CASES)(
+    "treats $field order as significant",
+    (testCase) => {
+      const shared = {
+        workspaceAccess: "rw" as const,
+        workspaceDir: "/tmp/workspace",
+        agentWorkspaceDir: "/tmp/workspace",
+      };
+      const left = computeSandboxConfigHash({
+        ...shared,
+        docker: createDockerConfig({
+          [testCase.field]: testCase.before,
+        } as Partial<SandboxDockerConfig>),
+      });
+      const right = computeSandboxConfigHash({
+        ...shared,
+        docker: createDockerConfig({
+          [testCase.field]: testCase.after,
+        } as Partial<SandboxDockerConfig>),
+      });
+      expect(left).not.toBe(right);
+    },
+  );
 });
 
 describe("computeSandboxBrowserConfigHash", () => {

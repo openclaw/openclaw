@@ -8,7 +8,10 @@ import {
 const PNG_1x1 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
 
-async function parseWithWarnings(message: string, attachments: ChatAttachment[]) {
+async function parseWithWarnings(
+  message: string,
+  attachments: ChatAttachment[],
+) {
   const logs: string[] = [];
   const parsed = await parseMessageWithAttachments(message, attachments, {
     log: { warn: (warning) => logs.push(warning) },
@@ -165,13 +168,18 @@ describe("shared attachment validation", () => {
 
     const fromSpy = vi.spyOn(Buffer, "from");
     try {
-      expect(() => buildMessageWithAttachments("x", [att], { maxBytes: 16 })).toThrow(
-        /exceeds size limit/i,
-      );
+      expect(() =>
+        buildMessageWithAttachments("x", [att], { maxBytes: 16 }),
+      ).toThrow(/exceeds size limit/i);
       await expect(
-        parseMessageWithAttachments("x", [att], { maxBytes: 16, log: { warn: () => {} } }),
+        parseMessageWithAttachments("x", [att], {
+          maxBytes: 16,
+          log: { warn: () => {} },
+        }),
       ).rejects.toThrow(/exceeds size limit/i);
-      const base64Calls = fromSpy.mock.calls.filter((args) => (args as unknown[])[1] === "base64");
+      const base64Calls = fromSpy.mock.calls.filter(
+        (args) => (args as unknown[])[1] === "base64",
+      );
       expect(base64Calls).toHaveLength(0);
     } finally {
       fromSpy.mockRestore();

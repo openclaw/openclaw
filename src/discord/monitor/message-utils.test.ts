@@ -97,7 +97,12 @@ describe("resolveForwardedMediaList", () => {
       ssrfPolicy: expect.objectContaining({ allowRfc2544BenchmarkRange: true }),
     });
     expect(saveMediaBuffer).toHaveBeenCalledTimes(1);
-    expect(saveMediaBuffer).toHaveBeenCalledWith(expect.any(Buffer), "image/png", "inbound", 512);
+    expect(saveMediaBuffer).toHaveBeenCalledWith(
+      expect.any(Buffer),
+      "image/png",
+      "inbound",
+      512,
+    );
     expect(result).toEqual([
       {
         path: "/tmp/image.png",
@@ -200,7 +205,12 @@ describe("resolveForwardedMediaList", () => {
       ssrfPolicy: expect.objectContaining({ allowRfc2544BenchmarkRange: true }),
     });
     expect(saveMediaBuffer).toHaveBeenCalledTimes(1);
-    expect(saveMediaBuffer).toHaveBeenCalledWith(expect.any(Buffer), "image/png", "inbound", 512);
+    expect(saveMediaBuffer).toHaveBeenCalledWith(
+      expect.any(Buffer),
+      "image/png",
+      "inbound",
+      512,
+    );
     expect(result).toEqual([
       {
         path: "/tmp/sticker.png",
@@ -269,7 +279,12 @@ describe("resolveMediaList", () => {
       ssrfPolicy: expect.objectContaining({ allowRfc2544BenchmarkRange: true }),
     });
     expect(saveMediaBuffer).toHaveBeenCalledTimes(1);
-    expect(saveMediaBuffer).toHaveBeenCalledWith(expect.any(Buffer), "image/png", "inbound", 512);
+    expect(saveMediaBuffer).toHaveBeenCalledWith(
+      expect.any(Buffer),
+      "image/png",
+      "inbound",
+      512,
+    );
     expect(result).toEqual([
       {
         path: "/tmp/sticker-2.png",
@@ -455,7 +470,13 @@ describe("Discord media SSRF policy", () => {
 
     await resolveMediaList(
       asMessage({
-        attachments: [{ id: "a1", url: "https://cdn.discordapp.com/a.png", filename: "a.png" }],
+        attachments: [
+          {
+            id: "a1",
+            url: "https://cdn.discordapp.com/a.png",
+            filename: "a.png",
+          },
+        ],
       }),
       1024,
     );
@@ -567,7 +588,12 @@ describe("resolveDiscordMessageText", () => {
             {
               message: {
                 content: "",
-                embeds: [{ title: "Forwarded title", description: "Forwarded details" }],
+                embeds: [
+                  {
+                    title: "Forwarded title",
+                    description: "Forwarded details",
+                  },
+                ],
                 attachments: [],
                 author: {
                   id: "u2",

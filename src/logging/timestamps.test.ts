@@ -32,18 +32,23 @@ describe("formatLocalIsoWithOffset", () => {
   it("outputs a valid ISO 8601 string with offset", () => {
     const result = formatLocalIsoWithOffset(testDate, "Asia/Shanghai");
     // ISO 8601 with offset: YYYY-MM-DDTHH:MM:SS.mmm±HH:MM
-    const iso8601WithOffset = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}[+-]\d{2}:\d{2}$/;
+    const iso8601WithOffset =
+      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}[+-]\d{2}:\d{2}$/;
     expect(result).toMatch(iso8601WithOffset);
   });
 
   it("falls back gracefully for an invalid timezone", () => {
     const result = formatLocalIsoWithOffset(testDate, "not-a-tz");
-    const iso8601WithOffset = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}[+-]\d{2}:\d{2}$/;
+    const iso8601WithOffset =
+      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}[+-]\d{2}:\d{2}$/;
     expect(result).toMatch(iso8601WithOffset);
   });
 
   it("does NOT use getHours, getMinutes, getTimezoneOffset in the implementation", () => {
-    const source = fs.readFileSync(path.resolve(__dirname, "timestamps.ts"), "utf-8");
+    const source = fs.readFileSync(
+      path.resolve(__dirname, "timestamps.ts"),
+      "utf-8",
+    );
     expect(source).not.toMatch(/\.getHours\s*\(/);
     expect(source).not.toMatch(/\.getMinutes\s*\(/);
     expect(source).not.toMatch(/\.getTimezoneOffset\s*\(/);

@@ -5,10 +5,17 @@ import { resolveMentionGating } from "../../../channels/mention-gating.js";
 import type { loadConfig } from "../../../config/config.js";
 import { normalizeE164 } from "../../../utils.js";
 import type { MentionConfig } from "../mentions.js";
-import { buildMentionConfig, debugMention, resolveOwnerList } from "../mentions.js";
+import {
+  buildMentionConfig,
+  debugMention,
+  resolveOwnerList,
+} from "../mentions.js";
 import type { WebInboundMsg } from "../types.js";
 import { stripMentionsForCommand } from "./commands.js";
-import { resolveGroupActivationFor, resolveGroupPolicyFor } from "./group-activation.js";
+import {
+  resolveGroupActivationFor,
+  resolveGroupPolicyFor,
+} from "./group-activation.js";
 import { noteGroupMember } from "./group-members.js";
 
 export type GroupHistoryEntry = {
@@ -68,7 +75,10 @@ function recordPendingGroupHistoryEntry(params: {
   });
 }
 
-function skipGroupMessageAndStoreHistory(params: ApplyGroupGatingParams, verboseMessage: string) {
+function skipGroupMessageAndStoreHistory(
+  params: ApplyGroupGatingParams,
+  verboseMessage: string,
+) {
   params.logVerbose(verboseMessage);
   recordPendingGroupHistoryEntry({
     msg: params.msg,
@@ -82,7 +92,9 @@ function skipGroupMessageAndStoreHistory(params: ApplyGroupGatingParams, verbose
 export function applyGroupGating(params: ApplyGroupGatingParams) {
   const groupPolicy = resolveGroupPolicyFor(params.cfg, params.conversationId);
   if (groupPolicy.allowlistEnabled && !groupPolicy.allowed) {
-    params.logVerbose(`Skipping group message ${params.conversationId} (not in allowlist)`);
+    params.logVerbose(
+      `Skipping group message ${params.conversationId} (not in allowlist)`,
+    );
     return { shouldProcess: false };
   }
 
@@ -101,7 +113,8 @@ export function applyGroupGating(params: ApplyGroupGatingParams) {
   );
   const activationCommand = parseActivationCommand(commandBody);
   const owner = isOwnerSender(params.baseMentionConfig, params.msg);
-  const shouldBypassMention = owner && hasControlCommand(commandBody, params.cfg);
+  const shouldBypassMention =
+    owner && hasControlCommand(commandBody, params.cfg);
 
   if (activationCommand.hasCommand && !owner) {
     return skipGroupMessageAndStoreHistory(
@@ -129,7 +142,9 @@ export function applyGroupGating(params: ApplyGroupGatingParams) {
   const requireMention = activation !== "always";
   const selfJid = params.msg.selfJid?.replace(/:\\d+/, "");
   const replySenderJid = params.msg.replyToSenderJid?.replace(/:\\d+/, "");
-  const selfE164 = params.msg.selfE164 ? normalizeE164(params.msg.selfE164) : null;
+  const selfE164 = params.msg.selfE164
+    ? normalizeE164(params.msg.selfE164)
+    : null;
   const replySenderE164 = params.msg.replyToSenderE164
     ? normalizeE164(params.msg.replyToSenderE164)
     : null;

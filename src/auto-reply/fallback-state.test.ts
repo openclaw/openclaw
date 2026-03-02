@@ -63,7 +63,9 @@ describe("fallback-state", () => {
     expect(resolved.stateChanged).toBe(true);
     expect(resolved.reasonSummary).toBe("rate limit");
     expect(resolved.nextState.selectedModel).toBe("fireworks/minimax-m2p5");
-    expect(resolved.nextState.activeModel).toBe("deepinfra/moonshotai/Kimi-K2.5");
+    expect(resolved.nextState.activeModel).toBe(
+      "deepinfra/moonshotai/Kimi-K2.5",
+    );
   });
 
   it("normalizes fallback reason whitespace for summaries", () => {

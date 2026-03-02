@@ -9,7 +9,9 @@ type GatewayCall = {
 
 const gatewayCalls: GatewayCall[] = [];
 let sessionStore: Record<string, Record<string, unknown>> = {};
-let configOverride: ReturnType<(typeof import("../config/config.js"))["loadConfig"]> = {
+let configOverride: ReturnType<
+  (typeof import("../config/config.js"))["loadConfig"]
+> = {
   session: {
     mainKey: "main",
     scope: "per-sender",
@@ -103,7 +105,9 @@ async function runAnnounceFlowForTest(
   });
 }
 
-function findGatewayCall(predicate: (call: GatewayCall) => boolean): GatewayCall | undefined {
+function findGatewayCall(
+  predicate: (call: GatewayCall) => boolean,
+): GatewayCall | undefined {
   return gatewayCalls.find(predicate);
 }
 

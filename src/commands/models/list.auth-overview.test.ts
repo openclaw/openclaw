@@ -12,13 +12,19 @@ describe("resolveProviderAuthOverview", () => {
           "github-copilot:default": {
             type: "token",
             provider: "github-copilot",
-            tokenRef: { source: "env", provider: "default", id: "GITHUB_TOKEN" },
+            tokenRef: {
+              source: "env",
+              provider: "default",
+              id: "GITHUB_TOKEN",
+            },
           },
         },
       } as never,
       modelsPath: "/tmp/models.json",
     });
 
-    expect(overview.profiles.labels[0]).toContain("token:ref(env:GITHUB_TOKEN)");
+    expect(overview.profiles.labels[0]).toContain(
+      "token:ref(env:GITHUB_TOKEN)",
+    );
   });
 });

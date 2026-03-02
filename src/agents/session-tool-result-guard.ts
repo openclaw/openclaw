@@ -9,8 +9,14 @@ import {
   HARD_MAX_TOOL_RESULT_CHARS,
   truncateToolResultMessage,
 } from "./pi-embedded-runner/tool-result-truncation.js";
-import { makeMissingToolResult, sanitizeToolCallInputs } from "./session-transcript-repair.js";
-import { extractToolCallsFromAssistant, extractToolResultId } from "./tool-call-id.js";
+import {
+  makeMissingToolResult,
+  sanitizeToolCallInputs,
+} from "./session-transcript-repair.js";
+import {
+  extractToolCallsFromAssistant,
+  extractToolResultId,
+} from "./tool-call-id.js";
 
 const GUARD_TRUNCATION_SUFFIX =
   "\n\n⚠️ [Content truncated during persistence — original exceeded size limit. " +
@@ -147,7 +153,10 @@ export function installSessionToolResultGuard(
     }
     if (allowSyntheticToolResults) {
       for (const [id, name] of pending.entries()) {
-        const synthetic = makeMissingToolResult({ toolCallId: id, toolName: name });
+        const synthetic = makeMissingToolResult({
+          toolCallId: id,
+          toolName: name,
+        });
         const flushed = applyBeforeWriteHook(
           persistToolResult(persistMessage(synthetic), {
             toolCallId: id,
@@ -181,12 +190,17 @@ export function installSessionToolResultGuard(
     const nextRole = (nextMessage as { role?: unknown }).role;
 
     if (nextRole === "toolResult") {
-      const id = extractToolResultId(nextMessage as Extract<AgentMessage, { role: "toolResult" }>);
+      const id = extractToolResultId(
+        nextMessage as Extract<AgentMessage, { role: "toolResult" }>,
+      );
       const toolName = id ? pending.get(id) : undefined;
       if (id) {
         pending.delete(id);
       }
-      const normalizedToolResult = normalizePersistedToolResultName(nextMessage, toolName);
+      const normalizedToolResult = normalizePersistedToolResultName(
+        nextMessage,
+        toolName,
+      );
       // Apply hard size cap before persistence to prevent oversized tool results
       // from consuming the entire context window on subsequent LLM calls.
       const capped = capToolResultSize(persistMessage(normalizedToolResult));
@@ -211,13 +225,20 @@ export function installSessionToolResultGuard(
     // This matches the behavior in repairToolUseResultPairing (session-transcript-repair.ts)
     const stopReason = (nextMessage as { stopReason?: string }).stopReason;
     const toolCalls =
-      nextRole === "assistant" && stopReason !== "aborted" && stopReason !== "error"
-        ? extractToolCallsFromAssistant(nextMessage as Extract<AgentMessage, { role: "assistant" }>)
+      nextRole === "assistant" &&
+      stopReason !== "aborted" &&
+      stopReason !== "error"
+        ? extractToolCallsFromAssistant(
+            nextMessage as Extract<AgentMessage, { role: "assistant" }>,
+          )
         : [];
 
     if (allowSyntheticToolResults) {
       // If previous tool calls are still pending, flush before non-tool results.
-      if (pending.size > 0 && (toolCalls.length === 0 || nextRole !== "assistant")) {
+      if (
+        pending.size > 0 &&
+        (toolCalls.length === 0 || nextRole !== "assistant")
+      ) {
         flushPendingToolResults();
       }
       // If new tool calls arrive while older ones are pending, flush the old ones first.
@@ -249,7 +270,8 @@ export function installSessionToolResultGuard(
   };
 
   // Monkey-patch appendMessage with our guarded version.
-  sessionManager.appendMessage = guardedAppend as SessionManager["appendMessage"];
+  sessionManager.appendMessage =
+    guardedAppend as SessionManager["appendMessage"];
 
   return {
     flushPendingToolResults,

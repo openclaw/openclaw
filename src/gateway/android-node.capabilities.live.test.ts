@@ -4,13 +4,20 @@ import { loadConfig } from "../config/config.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { parseNodeList, parsePairingList } from "../shared/node-list-parse.js";
 import type { NodeListNode } from "../shared/node-list-types.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../utils/message-channel.js";
 import { buildGatewayConnectionDetails } from "./call.js";
 import { GatewayClient } from "./client.js";
 import { resolveGatewayCredentialsFromConfig } from "./credentials.js";
 
-const LIVE = isTruthyEnvValue(process.env.LIVE) || isTruthyEnvValue(process.env.OPENCLAW_LIVE_TEST);
-const LIVE_ANDROID_NODE = isTruthyEnvValue(process.env.OPENCLAW_LIVE_ANDROID_NODE);
+const LIVE =
+  isTruthyEnvValue(process.env.LIVE) ||
+  isTruthyEnvValue(process.env.OPENCLAW_LIVE_TEST);
+const LIVE_ANDROID_NODE = isTruthyEnvValue(
+  process.env.OPENCLAW_LIVE_ANDROID_NODE,
+);
 const describeLive = LIVE && LIVE_ANDROID_NODE ? describe : describe.skip;
 const SKIPPED_INTERACTIVE_COMMANDS = new Set<string>(["screen.record"]);
 
@@ -38,11 +45,15 @@ type CommandResult = {
 };
 
 function asRecord(value: unknown): Record<string, unknown> {
-  return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
+  return typeof value === "object" && value !== null
+    ? (value as Record<string, unknown>)
+    : {};
 }
 
 function readString(value: unknown): string | null {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+  return typeof value === "string" && value.trim().length > 0
+    ? value.trim()
+    : null;
 }
 
 function readStringArray(value: unknown): string[] {
@@ -64,9 +75,15 @@ function parseErrorCode(message: string): string {
   return "UNKNOWN";
 }
 
-function assertObjectPayload(command: string, payload: unknown): Record<string, unknown> {
+function assertObjectPayload(
+  command: string,
+  payload: unknown,
+): Record<string, unknown> {
   const obj = asRecord(payload);
-  expect(Object.keys(obj).length, `${command} payload must be a JSON object`).toBeGreaterThan(0);
+  expect(
+    Object.keys(obj).length,
+    `${command} payload must be a JSON object`,
+  ).toBeGreaterThan(0);
   return obj;
 }
 
@@ -139,7 +156,12 @@ const COMMAND_PROFILES: Record<string, CommandProfile> = {
     },
   },
   "camera.snap": {
-    buildParams: () => ({ facing: "front", maxWidth: 640, quality: 0.6, format: "jpg" }),
+    buildParams: () => ({
+      facing: "front",
+      maxWidth: 640,
+      quality: 0.6,
+      format: "jpg",
+    }),
     timeoutMs: 60_000,
     outcome: "success",
     onSuccess: (payload) => {
@@ -148,7 +170,12 @@ const COMMAND_PROFILES: Record<string, CommandProfile> = {
     },
   },
   "camera.clip": {
-    buildParams: () => ({ facing: "front", durationMs: 1500, includeAudio: false, format: "mp4" }),
+    buildParams: () => ({
+      facing: "front",
+      durationMs: 1500,
+      includeAudio: false,
+      format: "mp4",
+    }),
     timeoutMs: 90_000,
     outcome: "success",
     onSuccess: (payload) => {
@@ -206,7 +233,9 @@ const COMMAND_PROFILES: Record<string, CommandProfile> = {
     outcome: "success",
     onSuccess: (payload, ctx) => {
       const obj = assertObjectPayload("notifications.list", payload);
-      const notifications = Array.isArray(obj.notifications) ? obj.notifications : [];
+      const notifications = Array.isArray(obj.notifications)
+        ? obj.notifications
+        : [];
       ctx.notifications = notifications.map((entry) => asRecord(entry));
     },
   },
@@ -256,7 +285,9 @@ function resolveGatewayConnection() {
     ...(urlOverride ? { url: urlOverride } : {}),
   });
   const tokenOverride = readString(process.env.OPENCLAW_ANDROID_GATEWAY_TOKEN);
-  const passwordOverride = readString(process.env.OPENCLAW_ANDROID_GATEWAY_PASSWORD);
+  const passwordOverride = readString(
+    process.env.OPENCLAW_ANDROID_GATEWAY_PASSWORD,
+  );
   const creds = resolveGatewayCredentialsFromConfig({
     cfg,
     explicitAuth: {
@@ -307,7 +338,10 @@ async function connectGatewayClient(params: {
         stop(new Error(`gateway closed during connect (${code}): ${reason}`)),
     });
 
-    const timer = setTimeout(() => stop(new Error("gateway connect timeout")), 10_000);
+    const timer = setTimeout(
+      () => stop(new Error("gateway connect timeout")),
+      10_000,
+    );
     timer.unref();
     client.start();
   });
@@ -327,18 +361,25 @@ function selectTargetNode(nodes: NodeListNode[]): NodeListNode {
   if (nodeIdOverride) {
     const match = nodes.find((node) => node.nodeId === nodeIdOverride);
     if (!match) {
-      throw new Error(`OPENCLAW_ANDROID_NODE_ID not found in node.list: ${nodeIdOverride}`);
+      throw new Error(
+        `OPENCLAW_ANDROID_NODE_ID not found in node.list: ${nodeIdOverride}`,
+      );
     }
     return match;
   }
 
-  const nodeNameOverride = readString(process.env.OPENCLAW_ANDROID_NODE_NAME)?.toLowerCase();
+  const nodeNameOverride = readString(
+    process.env.OPENCLAW_ANDROID_NODE_NAME,
+  )?.toLowerCase();
   if (nodeNameOverride) {
     const match = nodes.find(
-      (node) => readString(node.displayName)?.toLowerCase() === nodeNameOverride,
+      (node) =>
+        readString(node.displayName)?.toLowerCase() === nodeNameOverride,
     );
     if (!match) {
-      throw new Error(`OPENCLAW_ANDROID_NODE_NAME not found in node.list: ${nodeNameOverride}`);
+      throw new Error(
+        `OPENCLAW_ANDROID_NODE_NAME not found in node.list: ${nodeNameOverride}`,
+      );
     }
     return match;
   }
@@ -444,7 +485,9 @@ describeLive("android node capability integration (preconditioned)", () => {
     if (!target.connected || !target.paired) {
       const pairingRaw = await client.request("node.pair.list", {});
       const pairing = parsePairingList(pairingRaw);
-      const pendingForNode = pairing.pending.filter((entry) => entry.nodeId === nodeId);
+      const pendingForNode = pairing.pending.filter(
+        (entry) => entry.nodeId === nodeId,
+      );
       const pendingHint =
         pendingForNode.length > 0
           ? `pending request(s): ${pendingForNode.map((entry) => entry.requestId).join(", ")}`
@@ -461,14 +504,21 @@ describeLive("android node capability integration (preconditioned)", () => {
     const describeRaw = await client.request("node.describe", { nodeId });
     const describeObj = asRecord(describeRaw);
     const commands = readStringArray(describeObj.commands);
-    expect(commands.length, "node.describe advertised no commands").toBeGreaterThan(0);
-    commandsToRun = commands.filter((command) => !SKIPPED_INTERACTIVE_COMMANDS.has(command));
+    expect(
+      commands.length,
+      "node.describe advertised no commands",
+    ).toBeGreaterThan(0);
+    commandsToRun = commands.filter(
+      (command) => !SKIPPED_INTERACTIVE_COMMANDS.has(command),
+    );
     expect(
       commandsToRun.length,
       "node.describe advertised only interactive commands (nothing runnable in CI/dev integration mode)",
     ).toBeGreaterThan(0);
 
-    const missingProfiles = commandsToRun.filter((command) => !COMMAND_PROFILES[command]);
+    const missingProfiles = commandsToRun.filter(
+      (command) => !COMMAND_PROFILES[command],
+    );
     if (missingProfiles.length > 0) {
       throw new Error(
         `unmapped advertised commands: ${missingProfiles.join(", ")} (update COMMAND_PROFILES before running this suite)`,
@@ -492,7 +542,13 @@ describeLive("android node capability integration (preconditioned)", () => {
       if (!commandsToRun.includes(command)) {
         return;
       }
-      const result = await invokeNodeCommand({ client, nodeId, command, profile, ctx });
+      const result = await invokeNodeCommand({
+        client,
+        nodeId,
+        command,
+        profile,
+        ctx,
+      });
       results.set(command, result);
       const issue = evaluateCommandResult({ result, profile, ctx });
       if (!issue) {
@@ -510,7 +566,9 @@ describeLive("android node capability integration (preconditioned)", () => {
   }
 
   it("covers every advertised non-interactive command", () => {
-    const missingRuns = commandsToRun.filter((command) => !results.has(command));
+    const missingRuns = commandsToRun.filter(
+      (command) => !results.has(command),
+    );
     if (missingRuns.length === 0) {
       return;
     }

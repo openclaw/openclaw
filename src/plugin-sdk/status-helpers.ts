@@ -9,7 +9,9 @@ type RuntimeLifecycleSnapshot = {
   lastOutboundAt?: number | null;
 };
 
-export function createDefaultChannelRuntimeState<T extends Record<string, unknown>>(
+export function createDefaultChannelRuntimeState<
+  T extends Record<string, unknown>,
+>(
   accountId: string,
   extra?: T,
 ): {
@@ -45,7 +47,9 @@ export function buildBaseChannelStatusSummary(snapshot: {
   };
 }
 
-export function buildProbeChannelStatusSummary<TExtra extends Record<string, unknown>>(
+export function buildProbeChannelStatusSummary<
+  TExtra extends Record<string, unknown>,
+>(
   snapshot: {
     configured?: boolean | null;
     running?: boolean | null;
@@ -125,7 +129,8 @@ export function collectStatusIssuesFromLastError(
   accounts: Array<{ accountId: string; lastError?: unknown }>,
 ): ChannelStatusIssue[] {
   return accounts.flatMap((account) => {
-    const lastError = typeof account.lastError === "string" ? account.lastError.trim() : "";
+    const lastError =
+      typeof account.lastError === "string" ? account.lastError.trim() : "";
     if (!lastError) {
       return [];
     }

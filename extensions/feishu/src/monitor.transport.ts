@@ -83,10 +83,14 @@ export async function monitorWebhook({
   const path = account.config.webhookPath ?? "/feishu/events";
   const host = account.config.webhookHost ?? "127.0.0.1";
 
-  log(`feishu[${accountId}]: starting Webhook server on ${host}:${port}, path ${path}...`);
+  log(
+    `feishu[${accountId}]: starting Webhook server on ${host}:${port}, path ${path}...`,
+  );
 
   const server = http.createServer();
-  const webhookHandler = Lark.adaptDefault(path, eventDispatcher, { autoChallenge: true });
+  const webhookHandler = Lark.adaptDefault(path, eventDispatcher, {
+    autoChallenge: true,
+  });
 
   server.on("request", (req, res) => {
     res.on("finish", () => {
@@ -137,7 +141,9 @@ export async function monitorWebhook({
     };
 
     const handleAbort = () => {
-      log(`feishu[${accountId}]: abort signal received, stopping Webhook server`);
+      log(
+        `feishu[${accountId}]: abort signal received, stopping Webhook server`,
+      );
       cleanup();
       resolve();
     };

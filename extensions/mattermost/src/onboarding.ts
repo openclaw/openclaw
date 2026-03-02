@@ -1,5 +1,12 @@
-import type { ChannelOnboardingAdapter, OpenClawConfig, WizardPrompter } from "openclaw/plugin-sdk";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import type {
+  ChannelOnboardingAdapter,
+  OpenClawConfig,
+  WizardPrompter,
+} from "openclaw/plugin-sdk";
+import {
+  DEFAULT_ACCOUNT_ID,
+  normalizeAccountId,
+} from "openclaw/plugin-sdk/account-id";
 import {
   listMattermostAccountIds,
   resolveDefaultMattermostAccountId,
@@ -51,12 +58,19 @@ export const mattermostOnboardingAdapter: ChannelOnboardingAdapter = {
     return {
       channel,
       configured,
-      statusLines: [`Mattermost: ${configured ? "configured" : "needs token + url"}`],
+      statusLines: [
+        `Mattermost: ${configured ? "configured" : "needs token + url"}`,
+      ],
       selectionHint: configured ? "configured" : "needs setup",
       quickstartScore: configured ? 2 : 1,
     };
   },
-  configure: async ({ cfg, prompter, accountOverrides, shouldPromptAccountIds }) => {
+  configure: async ({
+    cfg,
+    prompter,
+    accountOverrides,
+    shouldPromptAccountIds,
+  }) => {
     const override = accountOverrides.mattermost?.trim();
     const defaultAccountId = resolveDefaultMattermostAccountId(cfg);
     let accountId = override ? normalizeAccountId(override) : defaultAccountId;
@@ -76,14 +90,17 @@ export const mattermostOnboardingAdapter: ChannelOnboardingAdapter = {
       cfg: next,
       accountId,
     });
-    const accountConfigured = Boolean(resolvedAccount.botToken && resolvedAccount.baseUrl);
+    const accountConfigured = Boolean(
+      resolvedAccount.botToken && resolvedAccount.baseUrl,
+    );
     const allowEnv = accountId === DEFAULT_ACCOUNT_ID;
     const canUseEnv =
       allowEnv &&
       Boolean(process.env.MATTERMOST_BOT_TOKEN?.trim()) &&
       Boolean(process.env.MATTERMOST_URL?.trim());
     const hasConfigValues =
-      Boolean(resolvedAccount.config.botToken) || Boolean(resolvedAccount.config.baseUrl);
+      Boolean(resolvedAccount.config.botToken) ||
+      Boolean(resolvedAccount.config.baseUrl);
 
     let botToken: string | null = null;
     let baseUrl: string | null = null;
@@ -94,7 +111,8 @@ export const mattermostOnboardingAdapter: ChannelOnboardingAdapter = {
 
     if (canUseEnv && !hasConfigValues) {
       const keepEnv = await prompter.confirm({
-        message: "MATTERMOST_BOT_TOKEN + MATTERMOST_URL detected. Use env vars?",
+        message:
+          "MATTERMOST_BOT_TOKEN + MATTERMOST_URL detected. Use env vars?",
         initialValue: true,
       });
       if (keepEnv) {
@@ -155,7 +173,9 @@ export const mattermostOnboardingAdapter: ChannelOnboardingAdapter = {
                 ...next.channels?.mattermost?.accounts,
                 [accountId]: {
                   ...next.channels?.mattermost?.accounts?.[accountId],
-                  enabled: next.channels?.mattermost?.accounts?.[accountId]?.enabled ?? true,
+                  enabled:
+                    next.channels?.mattermost?.accounts?.[accountId]?.enabled ??
+                    true,
                   ...(botToken ? { botToken } : {}),
                   ...(baseUrl ? { baseUrl } : {}),
                 },

@@ -26,7 +26,9 @@ export function listRunsForRequesterFromRuns(
   if (!key) {
     return [];
   }
-  return [...runs.values()].filter((entry) => entry.requesterSessionKey === key);
+  return [...runs.values()].filter(
+    (entry) => entry.requesterSessionKey === key,
+  );
 }
 
 export function resolveRequesterForChildSessionFromRuns(

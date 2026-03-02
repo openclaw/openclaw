@@ -14,7 +14,8 @@ const REASONING_TAG_PREFIXES = [
   "</thought",
   "</antthinking",
 ];
-const THINKING_TAG_RE = /<\s*(\/?)\s*(?:think(?:ing)?|thought|antthinking)\b[^<>]*>/gi;
+const THINKING_TAG_RE =
+  /<\s*(\/?)\s*(?:think(?:ing)?|thought|antthinking)\b[^<>]*>/gi;
 
 function extractThinkingFromTaggedStreamOutsideCode(text: string): string {
   if (!text) {
@@ -59,7 +60,9 @@ export type TelegramReasoningSplit = {
   answerText?: string;
 };
 
-export function splitTelegramReasoningText(text?: string): TelegramReasoningSplit {
+export function splitTelegramReasoningText(
+  text?: string,
+): TelegramReasoningSplit {
   if (typeof text !== "string") {
     return {};
   }
@@ -76,13 +79,18 @@ export function splitTelegramReasoningText(text?: string): TelegramReasoningSpli
   }
 
   const taggedReasoning = extractThinkingFromTaggedStreamOutsideCode(text);
-  const strippedAnswer = stripReasoningTagsFromText(text, { mode: "strict", trim: "both" });
+  const strippedAnswer = stripReasoningTagsFromText(text, {
+    mode: "strict",
+    trim: "both",
+  });
 
   if (!taggedReasoning && strippedAnswer === text) {
     return { answerText: text };
   }
 
-  const reasoningText = taggedReasoning ? formatReasoningMessage(taggedReasoning) : undefined;
+  const reasoningText = taggedReasoning
+    ? formatReasoningMessage(taggedReasoning)
+    : undefined;
   const answerText = strippedAnswer || undefined;
   return { reasoningText, answerText };
 }

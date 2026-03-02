@@ -1,4 +1,7 @@
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import {
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "../agents/agent-scope.js";
 import { resolveAgentIdentity } from "../agents/identity.js";
 import { loadAgentIdentity } from "../commands/agents.config.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -83,8 +86,11 @@ export function resolveAssistantIdentity(params: {
   agentId?: string | null;
   workspaceDir?: string | null;
 }): AssistantIdentity {
-  const agentId = normalizeAgentId(params.agentId ?? resolveDefaultAgentId(params.cfg));
-  const workspaceDir = params.workspaceDir ?? resolveAgentWorkspaceDir(params.cfg, agentId);
+  const agentId = normalizeAgentId(
+    params.agentId ?? resolveDefaultAgentId(params.cfg),
+  );
+  const workspaceDir =
+    params.workspaceDir ?? resolveAgentWorkspaceDir(params.cfg, agentId);
   const configAssistant = params.cfg.ui?.assistant;
   const agentIdentity = resolveAgentIdentity(params.cfg, agentId);
   const fileIdentity = workspaceDir ? loadAgentIdentity(workspaceDir) : null;
@@ -103,8 +109,9 @@ export function resolveAssistantIdentity(params: {
     coerceIdentityValue(fileIdentity?.emoji, MAX_ASSISTANT_AVATAR),
   ];
   const avatar =
-    avatarCandidates.map((candidate) => normalizeAvatarValue(candidate)).find(Boolean) ??
-    DEFAULT_ASSISTANT_IDENTITY.avatar;
+    avatarCandidates
+      .map((candidate) => normalizeAvatarValue(candidate))
+      .find(Boolean) ?? DEFAULT_ASSISTANT_IDENTITY.avatar;
 
   const emojiCandidates = [
     coerceIdentityValue(agentIdentity?.emoji, MAX_ASSISTANT_EMOJI),
@@ -112,7 +119,9 @@ export function resolveAssistantIdentity(params: {
     coerceIdentityValue(agentIdentity?.avatar, MAX_ASSISTANT_EMOJI),
     coerceIdentityValue(fileIdentity?.avatar, MAX_ASSISTANT_EMOJI),
   ];
-  const emoji = emojiCandidates.map((candidate) => normalizeEmojiValue(candidate)).find(Boolean);
+  const emoji = emojiCandidates
+    .map((candidate) => normalizeEmojiValue(candidate))
+    .find(Boolean);
 
   return { agentId, name, avatar, emoji };
 }

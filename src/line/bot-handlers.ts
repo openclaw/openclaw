@@ -57,10 +57,14 @@ function resolveLineGroupConfig(params: {
 }): LineGroupConfig | undefined {
   const groups = params.config.groups ?? {};
   if (params.groupId) {
-    return groups[params.groupId] ?? groups[`group:${params.groupId}`] ?? groups["*"];
+    return (
+      groups[params.groupId] ?? groups[`group:${params.groupId}`] ?? groups["*"]
+    );
   }
   if (params.roomId) {
-    return groups[params.roomId] ?? groups[`room:${params.roomId}`] ?? groups["*"];
+    return (
+      groups[params.roomId] ?? groups[`room:${params.roomId}`] ?? groups["*"]
+    );
   }
   return groups["*"];
 }
@@ -132,7 +136,11 @@ async function shouldProcessLineEvent(
     storeAllowFrom,
     dmPolicy,
   });
-  const groupConfig = resolveLineGroupConfig({ config: account.config, groupId, roomId });
+  const groupConfig = resolveLineGroupConfig({
+    config: account.config,
+    groupId,
+    roomId,
+  });
   const groupAllowOverride = groupConfig?.allowFrom;
   const fallbackGroupAllowFrom = account.config.allowFrom?.length
     ? account.config.allowFrom
@@ -161,16 +169,22 @@ async function shouldProcessLineEvent(
 
   if (isGroup) {
     if (groupConfig?.enabled === false) {
-      logVerbose(`Blocked line group ${groupId ?? roomId ?? "unknown"} (group disabled)`);
+      logVerbose(
+        `Blocked line group ${groupId ?? roomId ?? "unknown"} (group disabled)`,
+      );
       return false;
     }
     if (typeof groupAllowOverride !== "undefined") {
       if (!senderId) {
-        logVerbose("Blocked line group message (group allowFrom override, no sender ID)");
+        logVerbose(
+          "Blocked line group message (group allowFrom override, no sender ID)",
+        );
         return false;
       }
       if (!isSenderAllowed({ allow: effectiveGroupAllow, senderId })) {
-        logVerbose(`Blocked line group sender ${senderId} (group allowFrom override)`);
+        logVerbose(
+          `Blocked line group sender ${senderId} (group allowFrom override)`,
+        );
         return false;
       }
     }
@@ -180,15 +194,21 @@ async function shouldProcessLineEvent(
     }
     if (groupPolicy === "allowlist") {
       if (!senderId) {
-        logVerbose("Blocked line group message (no sender ID, groupPolicy: allowlist)");
+        logVerbose(
+          "Blocked line group message (no sender ID, groupPolicy: allowlist)",
+        );
         return false;
       }
       if (!effectiveGroupAllow.hasEntries) {
-        logVerbose("Blocked line group message (groupPolicy: allowlist, no groupAllowFrom)");
+        logVerbose(
+          "Blocked line group message (groupPolicy: allowlist, no groupAllowFrom)",
+        );
         return false;
       }
       if (!isSenderAllowed({ allow: effectiveGroupAllow, senderId })) {
-        logVerbose(`Blocked line group message from ${senderId} (groupPolicy: allowlist)`);
+        logVerbose(
+          `Blocked line group message from ${senderId} (groupPolicy: allowlist)`,
+        );
         return false;
       }
     }
@@ -200,7 +220,9 @@ async function shouldProcessLineEvent(
     return false;
   }
 
-  const dmAllowed = dmPolicy === "open" || isSenderAllowed({ allow: effectiveDmAllow, senderId });
+  const dmAllowed =
+    dmPolicy === "open" ||
+    isSenderAllowed({ allow: effectiveDmAllow, senderId });
   if (!dmAllowed) {
     if (dmPolicy === "pairing") {
       if (!senderId) {
@@ -213,7 +235,9 @@ async function shouldProcessLineEvent(
         context,
       });
     } else {
-      logVerbose(`Blocked line sender ${senderId || "unknown"} (dmPolicy: ${dmPolicy})`);
+      logVerbose(
+        `Blocked line sender ${senderId || "unknown"} (dmPolicy: ${dmPolicy})`,
+      );
     }
     return false;
   }
@@ -221,7 +245,10 @@ async function shouldProcessLineEvent(
   return true;
 }
 
-async function handleMessageEvent(event: MessageEvent, context: LineHandlerContext): Promise<void> {
+async function handleMessageEvent(
+  event: MessageEvent,
+  context: LineHandlerContext,
+): Promise<void> {
   const { cfg, account, runtime, mediaMaxBytes, processMessage } = context;
   const message = event.message;
 
@@ -232,9 +259,17 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
   // Download media if applicable
   const allMedia: MediaRef[] = [];
 
-  if (message.type === "image" || message.type === "video" || message.type === "audio") {
+  if (
+    message.type === "image" ||
+    message.type === "video" ||
+    message.type === "audio"
+  ) {
     try {
-      const media = await downloadLineMedia(message.id, account.channelAccessToken, mediaMaxBytes);
+      const media = await downloadLineMedia(
+        message.id,
+        account.channelAccessToken,
+        mediaMaxBytes,
+      );
       allMedia.push({
         path: media.path,
         contentType: media.contentType,
@@ -265,7 +300,10 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
   await processMessage(messageContext);
 }
 
-async function handleFollowEvent(event: FollowEvent, _context: LineHandlerContext): Promise<void> {
+async function handleFollowEvent(
+  event: FollowEvent,
+  _context: LineHandlerContext,
+): Promise<void> {
   const userId = event.source.type === "user" ? event.source.userId : undefined;
   logVerbose(`line: user ${userId ?? "unknown"} followed`);
   // Could implement welcome message here
@@ -279,16 +317,28 @@ async function handleUnfollowEvent(
   logVerbose(`line: user ${userId ?? "unknown"} unfollowed`);
 }
 
-async function handleJoinEvent(event: JoinEvent, _context: LineHandlerContext): Promise<void> {
-  const groupId = event.source.type === "group" ? event.source.groupId : undefined;
+async function handleJoinEvent(
+  event: JoinEvent,
+  _context: LineHandlerContext,
+): Promise<void> {
+  const groupId =
+    event.source.type === "group" ? event.source.groupId : undefined;
   const roomId = event.source.type === "room" ? event.source.roomId : undefined;
-  logVerbose(`line: bot joined ${groupId ? `group ${groupId}` : `room ${roomId}`}`);
+  logVerbose(
+    `line: bot joined ${groupId ? `group ${groupId}` : `room ${roomId}`}`,
+  );
 }
 
-async function handleLeaveEvent(event: LeaveEvent, _context: LineHandlerContext): Promise<void> {
-  const groupId = event.source.type === "group" ? event.source.groupId : undefined;
+async function handleLeaveEvent(
+  event: LeaveEvent,
+  _context: LineHandlerContext,
+): Promise<void> {
+  const groupId =
+    event.source.type === "group" ? event.source.groupId : undefined;
   const roomId = event.source.type === "room" ? event.source.roomId : undefined;
-  logVerbose(`line: bot left ${groupId ? `group ${groupId}` : `room ${roomId}`}`);
+  logVerbose(
+    `line: bot left ${groupId ? `group ${groupId}` : `room ${roomId}`}`,
+  );
 }
 
 async function handlePostbackEvent(
@@ -340,10 +390,14 @@ export async function handleLineWebhookEvents(
           await handlePostbackEvent(event, context);
           break;
         default:
-          logVerbose(`line: unhandled event type: ${(event as WebhookEvent).type}`);
+          logVerbose(
+            `line: unhandled event type: ${(event as WebhookEvent).type}`,
+          );
       }
     } catch (err) {
-      context.runtime.error?.(danger(`line: event handler failed: ${String(err)}`));
+      context.runtime.error?.(
+        danger(`line: event handler failed: ${String(err)}`),
+      );
     }
   }
 }

@@ -1,10 +1,16 @@
-import { normalizeApiKeyInput, validateApiKeyInput } from "./auth-choice.api-key.js";
+import {
+  normalizeApiKeyInput,
+  validateApiKeyInput,
+} from "./auth-choice.api-key.js";
 import {
   createAuthChoiceAgentModelNoter,
   ensureApiKeyFromOptionEnvOrPrompt,
   normalizeSecretInputModeInput,
 } from "./auth-choice.apply-helpers.js";
-import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
+import type {
+  ApplyAuthChoiceParams,
+  ApplyAuthChoiceResult,
+} from "./auth-choice.apply.js";
 import { applyDefaultModelChoice } from "./auth-choice.default-model.js";
 import {
   applyAuthProfileConfig,
@@ -24,7 +30,9 @@ export async function applyAuthChoiceXAI(
   let nextConfig = params.config;
   let agentModelOverride: string | undefined;
   const noteAgentModel = createAuthChoiceAgentModelNoter(params);
-  const requestedSecretInputMode = normalizeSecretInputModeInput(params.opts?.secretInputMode);
+  const requestedSecretInputMode = normalizeSecretInputModeInput(
+    params.opts?.secretInputMode,
+  );
   await ensureApiKeyFromOptionEnvOrPrompt({
     token: params.opts?.xaiApiKey,
     tokenProvider: "xai",

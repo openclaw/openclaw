@@ -6,8 +6,15 @@ import {
   type GatewayClientName,
 } from "../../../src/gateway/protocol/client-info.js";
 import { readConnectErrorDetailCode } from "../../../src/gateway/protocol/connect-error-details.js";
-import { clearDeviceAuthToken, loadDeviceAuthToken, storeDeviceAuthToken } from "./device-auth.ts";
-import { loadOrCreateDeviceIdentity, signDevicePayload } from "./device-identity.ts";
+import {
+  clearDeviceAuthToken,
+  loadDeviceAuthToken,
+  storeDeviceAuthToken,
+} from "./device-auth.ts";
+import {
+  loadOrCreateDeviceIdentity,
+  signDevicePayload,
+} from "./device-identity.ts";
 import { generateUUID } from "./uuid.ts";
 
 export type GatewayEventFrame = {
@@ -84,7 +91,11 @@ export type GatewayBrowserClientOptions = {
   instanceId?: string;
   onHello?: (hello: GatewayHelloOk) => void;
   onEvent?: (evt: GatewayEventFrame) => void;
-  onClose?: (info: { code: number; reason: string; error?: GatewayErrorInfo }) => void;
+  onClose?: (info: {
+    code: number;
+    reason: string;
+    error?: GatewayErrorInfo;
+  }) => void;
   onGap?: (info: { expected: number; received: number }) => void;
 };
 
@@ -127,7 +138,9 @@ export class GatewayBrowserClient {
     }
     this.ws = new WebSocket(this.opts.url);
     this.ws.addEventListener("open", () => this.queueConnect());
-    this.ws.addEventListener("message", (ev) => this.handleMessage(String(ev.data ?? "")));
+    this.ws.addEventListener("message", (ev) =>
+      this.handleMessage(String(ev.data ?? "")),
+    );
     this.ws.addEventListener("close", (ev) => {
       const reason = String(ev.reason ?? "");
       const connectError = this.pendingConnectError;
@@ -175,7 +188,9 @@ export class GatewayBrowserClient {
 
     const scopes = ["operator.admin", "operator.approvals", "operator.pairing"];
     const role = "operator";
-    let deviceIdentity: Awaited<ReturnType<typeof loadOrCreateDeviceIdentity>> | null = null;
+    let deviceIdentity: Awaited<
+      ReturnType<typeof loadOrCreateDeviceIdentity>
+    > | null = null;
     let canFallbackToShared = false;
     let authToken = this.opts.token;
 
@@ -219,7 +234,10 @@ export class GatewayBrowserClient {
         token: authToken ?? null,
         nonce,
       });
-      const signature = await signDevicePayload(deviceIdentity.privateKey, payload);
+      const signature = await signDevicePayload(
+        deviceIdentity.privateKey,
+        payload,
+      );
       device = {
         id: deviceIdentity.deviceId,
         publicKey: deviceIdentity.publicKey,
@@ -290,7 +308,8 @@ export class GatewayBrowserClient {
       const evt = parsed as GatewayEventFrame;
       if (evt.event === "connect.challenge") {
         const payload = evt.payload as { nonce?: unknown } | undefined;
-        const nonce = payload && typeof payload.nonce === "string" ? payload.nonce : null;
+        const nonce =
+          payload && typeof payload.nonce === "string" ? payload.nonce : null;
         if (nonce) {
           this.connectNonce = nonce;
           void this.sendConnect();

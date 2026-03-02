@@ -38,11 +38,15 @@ async function pollSession(
   });
 }
 
-function retryMs(result: Awaited<ReturnType<ReturnType<typeof createProcessTool>["execute"]>>) {
+function retryMs(
+  result: Awaited<ReturnType<ReturnType<typeof createProcessTool>["execute"]>>,
+) {
   return (result.details as { retryInMs?: number }).retryInMs;
 }
 
-function pollStatus(result: Awaited<ReturnType<ReturnType<typeof createProcessTool>["execute"]>>) {
+function pollStatus(
+  result: Awaited<ReturnType<ReturnType<typeof createProcessTool>["execute"]>>,
+) {
   return (result.details as { status?: string }).status;
 }
 
@@ -55,14 +59,21 @@ async function expectCompletedPollWithTimeout(params: {
 }) {
   vi.useFakeTimers();
   try {
-    const { processTool, session } = createProcessSessionHarness(params.sessionId);
+    const { processTool, session } = createProcessSessionHarness(
+      params.sessionId,
+    );
 
     setTimeout(() => {
       appendOutput(session, "stdout", "done\n");
       markExited(session, 0, null, "completed");
     }, 10);
 
-    const pollPromise = pollSession(processTool, params.callId, params.sessionId, params.timeout);
+    const pollPromise = pollSession(
+      processTool,
+      params.callId,
+      params.sessionId,
+      params.timeout,
+    );
     if (params.assertUnresolvedAtMs !== undefined) {
       let resolved = false;
       void pollPromise.finally(() => {
@@ -113,7 +124,9 @@ test("process poll exposes adaptive retryInMs for repeated no-output polls", asy
     pollSession(processTool, "toolcall-5", sessionId),
   ]);
 
-  expect(polls.map((poll) => retryMs(poll))).toEqual([5000, 10000, 30000, 60000, 60000]);
+  expect(polls.map((poll) => retryMs(poll))).toEqual([
+    5000, 10000, 30000, 60000, 60000,
+  ]);
 });
 
 test("process poll resets retryInMs when output appears and clears on completion", async () => {
@@ -126,15 +139,27 @@ test("process poll resets retryInMs when output appears and clears on completion
   expect(retryMs(poll2)).toBe(10000);
 
   appendOutput(session, "stdout", "step complete\n");
-  const pollWithOutput = await pollSession(processTool, "toolcall-output", sessionId);
+  const pollWithOutput = await pollSession(
+    processTool,
+    "toolcall-output",
+    sessionId,
+  );
   expect(retryMs(pollWithOutput)).toBe(5000);
 
   markExited(session, 0, null, "completed");
-  const pollCompleted = await pollSession(processTool, "toolcall-completed", sessionId);
+  const pollCompleted = await pollSession(
+    processTool,
+    "toolcall-completed",
+    sessionId,
+  );
   expect(pollStatus(pollCompleted)).toBe("completed");
   expect(retryMs(pollCompleted)).toBeUndefined();
 
-  const pollFinished = await pollSession(processTool, "toolcall-finished", sessionId);
+  const pollFinished = await pollSession(
+    processTool,
+    "toolcall-finished",
+    sessionId,
+  );
   expect(pollStatus(pollFinished)).toBe("completed");
   expect(retryMs(pollFinished)).toBeUndefined();
 });

@@ -42,6 +42,9 @@ function stripRelevantMemoriesTags(text: string): string {
 }
 
 export function stripAssistantInternalScaffolding(text: string): string {
-  const withoutReasoning = stripReasoningTagsFromText(text, { mode: "preserve", trim: "start" });
+  const withoutReasoning = stripReasoningTagsFromText(text, {
+    mode: "preserve",
+    trim: "start",
+  });
   return stripRelevantMemoriesTags(withoutReasoning).trimStart();
 }

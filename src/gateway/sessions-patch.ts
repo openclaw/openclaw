@@ -23,7 +23,10 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
-import { applyVerboseOverride, parseVerboseOverride } from "../sessions/level-overrides.js";
+import {
+  applyVerboseOverride,
+  parseVerboseOverride,
+} from "../sessions/level-overrides.js";
 import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js";
 import { normalizeSendPolicy } from "../sessions/send-policy.js";
 import { parseSessionLabel } from "../sessions/session-label.js";
@@ -38,25 +41,43 @@ function invalid(message: string): { ok: false; error: ErrorShape } {
   return { ok: false, error: errorShape(ErrorCodes.INVALID_REQUEST, message) };
 }
 
-function normalizeExecHost(raw: string): "sandbox" | "gateway" | "node" | undefined {
+function normalizeExecHost(
+  raw: string,
+): "sandbox" | "gateway" | "node" | undefined {
   const normalized = raw.trim().toLowerCase();
-  if (normalized === "sandbox" || normalized === "gateway" || normalized === "node") {
+  if (
+    normalized === "sandbox" ||
+    normalized === "gateway" ||
+    normalized === "node"
+  ) {
     return normalized;
   }
   return undefined;
 }
 
-function normalizeExecSecurity(raw: string): "deny" | "allowlist" | "full" | undefined {
+function normalizeExecSecurity(
+  raw: string,
+): "deny" | "allowlist" | "full" | undefined {
   const normalized = raw.trim().toLowerCase();
-  if (normalized === "deny" || normalized === "allowlist" || normalized === "full") {
+  if (
+    normalized === "deny" ||
+    normalized === "allowlist" ||
+    normalized === "full"
+  ) {
     return normalized;
   }
   return undefined;
 }
 
-function normalizeExecAsk(raw: string): "off" | "on-miss" | "always" | undefined {
+function normalizeExecAsk(
+  raw: string,
+): "off" | "on-miss" | "always" | undefined {
   const normalized = raw.trim().toLowerCase();
-  if (normalized === "off" || normalized === "on-miss" || normalized === "always") {
+  if (
+    normalized === "off" ||
+    normalized === "on-miss" ||
+    normalized === "always"
+  ) {
     return normalized;
   }
   return undefined;
@@ -68,12 +89,19 @@ export async function applySessionsPatchToStore(params: {
   storeKey: string;
   patch: SessionsPatchParams;
   loadGatewayModelCatalog?: () => Promise<ModelCatalogEntry[]>;
-}): Promise<{ ok: true; entry: SessionEntry } | { ok: false; error: ErrorShape }> {
+}): Promise<
+  { ok: true; entry: SessionEntry } | { ok: false; error: ErrorShape }
+> {
   const { cfg, store, storeKey, patch } = params;
   const now = Date.now();
   const parsedAgent = parseAgentSessionKey(storeKey);
-  const sessionAgentId = normalizeAgentId(parsedAgent?.agentId ?? resolveDefaultAgentId(cfg));
-  const resolvedDefault = resolveDefaultModelForAgent({ cfg, agentId: sessionAgentId });
+  const sessionAgentId = normalizeAgentId(
+    parsedAgent?.agentId ?? resolveDefaultAgentId(cfg),
+  );
+  const resolvedDefault = resolveDefaultModelForAgent({
+    cfg,
+    agentId: sessionAgentId,
+  });
   const subagentModelHint = isSubagentSessionKey(storeKey)
     ? resolveSubagentConfiguredModelSelection({ cfg, agentId: sessionAgentId })
     : undefined;
@@ -122,7 +150,10 @@ export async function applySessionsPatchToStore(params: {
         return invalid("invalid spawnDepth (use an integer >= 0)");
       }
       const normalized = numeric;
-      if (typeof existing?.spawnDepth === "number" && existing.spawnDepth !== normalized) {
+      if (
+        typeof existing?.spawnDepth === "number" &&
+        existing.spawnDepth !== normalized
+      ) {
         return invalid("spawnDepth cannot be changed once set");
       }
       next.spawnDepth = normalized;
@@ -158,8 +189,10 @@ export async function applySessionsPatchToStore(params: {
     } else if (raw !== undefined) {
       const normalized = normalizeThinkLevel(String(raw));
       if (!normalized) {
-        const hintProvider = existing?.providerOverride?.trim() || resolvedDefault.provider;
-        const hintModel = existing?.modelOverride?.trim() || resolvedDefault.model;
+        const hintProvider =
+          existing?.providerOverride?.trim() || resolvedDefault.provider;
+        const hintModel =
+          existing?.modelOverride?.trim() || resolvedDefault.model;
         return invalid(
           `invalid thinkingLevel (use ${formatThinkingLevels(hintProvider, hintModel, "|")})`,
         );
@@ -294,7 +327,10 @@ export async function applySessionsPatchToStore(params: {
       if (!params.loadGatewayModelCatalog) {
         return {
           ok: false,
-          error: errorShape(ErrorCodes.UNAVAILABLE, "model catalog unavailable"),
+          error: errorShape(
+            ErrorCodes.UNAVAILABLE,
+            "model catalog unavailable",
+          ),
         };
       }
       const catalog = await params.loadGatewayModelCatalog();
@@ -327,7 +363,9 @@ export async function applySessionsPatchToStore(params: {
     const effectiveModel = next.modelOverride ?? resolvedDefault.model;
     if (!supportsXHighThinking(effectiveProvider, effectiveModel)) {
       if ("thinkingLevel" in patch) {
-        return invalid(`thinkingLevel "xhigh" is only supported for ${formatXHighModelHint()}`);
+        return invalid(
+          `thinkingLevel "xhigh" is only supported for ${formatXHighModelHint()}`,
+        );
       }
       next.thinkingLevel = "high";
     }

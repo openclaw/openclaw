@@ -10,7 +10,11 @@ import {
   validateWizardStatusParams,
 } from "../protocol/index.js";
 import { formatForLog } from "../ws-log.js";
-import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
+import type {
+  GatewayRequestContext,
+  GatewayRequestHandlers,
+  RespondFn,
+} from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 function readWizardStatus(session: WizardSession) {
@@ -27,7 +31,11 @@ function findWizardSessionOrRespond(params: {
 }): WizardSession | null {
   const session = params.context.wizardSessions.get(params.sessionId);
   if (!session) {
-    params.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "wizard not found"));
+    params.respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.INVALID_REQUEST, "wizard not found"),
+    );
     return null;
   }
   return session;
@@ -35,18 +43,30 @@ function findWizardSessionOrRespond(params: {
 
 export const wizardHandlers: GatewayRequestHandlers = {
   "wizard.start": async ({ params, respond, context }) => {
-    if (!assertValidParams(params, validateWizardStartParams, "wizard.start", respond)) {
+    if (
+      !assertValidParams(
+        params,
+        validateWizardStartParams,
+        "wizard.start",
+        respond,
+      )
+    ) {
       return;
     }
     const running = context.findRunningWizard();
     if (running) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "wizard already running"));
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, "wizard already running"),
+      );
       return;
     }
     const sessionId = randomUUID();
     const opts = {
       mode: params.mode,
-      workspace: typeof params.workspace === "string" ? params.workspace : undefined,
+      workspace:
+        typeof params.workspace === "string" ? params.workspace : undefined,
     };
     const session = new WizardSession((prompter) =>
       context.wizardRunner(opts, defaultRuntime, prompter),
@@ -59,7 +79,14 @@ export const wizardHandlers: GatewayRequestHandlers = {
     respond(true, { sessionId, ...result }, undefined);
   },
   "wizard.next": async ({ params, respond, context }) => {
-    if (!assertValidParams(params, validateWizardNextParams, "wizard.next", respond)) {
+    if (
+      !assertValidParams(
+        params,
+        validateWizardNextParams,
+        "wizard.next",
+        respond,
+      )
+    ) {
       return;
     }
     const sessionId = params.sessionId;
@@ -67,16 +94,26 @@ export const wizardHandlers: GatewayRequestHandlers = {
     if (!session) {
       return;
     }
-    const answer = params.answer as { stepId?: string; value?: unknown } | undefined;
+    const answer = params.answer as
+      | { stepId?: string; value?: unknown }
+      | undefined;
     if (answer) {
       if (session.getStatus() !== "running") {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "wizard not running"));
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "wizard not running"),
+        );
         return;
       }
       try {
         await session.answer(String(answer.stepId ?? ""), answer.value);
       } catch (err) {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(err)));
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(err)),
+        );
         return;
       }
     }
@@ -87,7 +124,14 @@ export const wizardHandlers: GatewayRequestHandlers = {
     respond(true, result, undefined);
   },
   "wizard.cancel": ({ params, respond, context }) => {
-    if (!assertValidParams(params, validateWizardCancelParams, "wizard.cancel", respond)) {
+    if (
+      !assertValidParams(
+        params,
+        validateWizardCancelParams,
+        "wizard.cancel",
+        respond,
+      )
+    ) {
       return;
     }
     const sessionId = params.sessionId;
@@ -101,7 +145,14 @@ export const wizardHandlers: GatewayRequestHandlers = {
     respond(true, status, undefined);
   },
   "wizard.status": ({ params, respond, context }) => {
-    if (!assertValidParams(params, validateWizardStatusParams, "wizard.status", respond)) {
+    if (
+      !assertValidParams(
+        params,
+        validateWizardStatusParams,
+        "wizard.status",
+        respond,
+      )
+    ) {
       return;
     }
     const sessionId = params.sessionId;

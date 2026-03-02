@@ -13,8 +13,12 @@ import type { GatewayRequestHandlers } from "./types.js";
 const ADMIN_SCOPE = "operator.admin";
 const TALK_SECRETS_SCOPE = "operator.talk.secrets";
 
-function canReadTalkSecrets(client: { connect?: { scopes?: string[] } } | null): boolean {
-  const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
+function canReadTalkSecrets(
+  client: { connect?: { scopes?: string[] } } | null,
+): boolean {
+  const scopes = Array.isArray(client?.connect?.scopes)
+    ? client.connect.scopes
+    : [];
   return scopes.includes(ADMIN_SCOPE) || scopes.includes(TALK_SECRETS_SCOPE);
 }
 
@@ -32,12 +36,17 @@ export const talkHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const includeSecrets = Boolean((params as { includeSecrets?: boolean }).includeSecrets);
+    const includeSecrets = Boolean(
+      (params as { includeSecrets?: boolean }).includeSecrets,
+    );
     if (includeSecrets && !canReadTalkSecrets(client)) {
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, `missing scope: ${TALK_SECRETS_SCOPE}`),
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `missing scope: ${TALK_SECRETS_SCOPE}`,
+        ),
       );
       return;
     }
@@ -66,11 +75,18 @@ export const talkHandlers: GatewayRequestHandlers = {
     respond(true, { config: configPayload }, undefined);
   },
   "talk.mode": ({ params, respond, context, client, isWebchatConnect }) => {
-    if (client && isWebchatConnect(client.connect) && !context.hasConnectedMobileNode()) {
+    if (
+      client &&
+      isWebchatConnect(client.connect) &&
+      !context.hasConnectedMobileNode()
+    ) {
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, "talk disabled: no connected iOS/Android nodes"),
+        errorShape(
+          ErrorCodes.UNAVAILABLE,
+          "talk disabled: no connected iOS/Android nodes",
+        ),
       );
       return;
     }

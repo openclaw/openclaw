@@ -6,7 +6,9 @@ export type ProcessedMessageTracker = {
   size: () => number;
 };
 
-export function createProcessedMessageTracker(limit = 2000): ProcessedMessageTracker {
+export function createProcessedMessageTracker(
+  limit = 2000,
+): ProcessedMessageTracker {
   const dedupe = createDedupeCache({ ttlMs: 0, maxSize: limit });
 
   const mark = (id?: string | null) => {

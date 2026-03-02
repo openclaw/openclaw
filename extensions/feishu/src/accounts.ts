@@ -1,5 +1,8 @@
 import type { ClawdbotConfig } from "openclaw/plugin-sdk";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import {
+  DEFAULT_ACCOUNT_ID,
+  normalizeAccountId,
+} from "openclaw/plugin-sdk/account-id";
 import type {
   FeishuConfig,
   FeishuAccountConfig,
@@ -35,7 +38,9 @@ export function listFeishuAccountIds(cfg: ClawdbotConfig): string[] {
  * Resolve the default account ID.
  */
 export function resolveDefaultFeishuAccountId(cfg: ClawdbotConfig): string {
-  const preferredRaw = (cfg.channels?.feishu as FeishuConfig | undefined)?.defaultAccount?.trim();
+  const preferredRaw = (
+    cfg.channels?.feishu as FeishuConfig | undefined
+  )?.defaultAccount?.trim();
   const preferred = preferredRaw ? normalizeAccountId(preferredRaw) : undefined;
   const ids = listFeishuAccountIds(cfg);
   if (preferred && ids.includes(preferred)) {
@@ -65,11 +70,18 @@ function resolveAccountConfig(
  * Merge top-level config with account-specific config.
  * Account-specific fields override top-level fields.
  */
-function mergeFeishuAccountConfig(cfg: ClawdbotConfig, accountId: string): FeishuConfig {
+function mergeFeishuAccountConfig(
+  cfg: ClawdbotConfig,
+  accountId: string,
+): FeishuConfig {
   const feishuCfg = cfg.channels?.feishu as FeishuConfig | undefined;
 
   // Extract base config (exclude accounts field to avoid recursion)
-  const { accounts: _ignored, defaultAccount: _ignoredDefaultAccount, ...base } = feishuCfg ?? {};
+  const {
+    accounts: _ignored,
+    defaultAccount: _ignoredDefaultAccount,
+    ...base
+  } = feishuCfg ?? {};
 
   // Get account-specific overrides
   const account = resolveAccountConfig(cfg, accountId) ?? {};
@@ -146,7 +158,9 @@ export function resolveFeishuAccount(params: {
 /**
  * List all enabled and configured accounts.
  */
-export function listEnabledFeishuAccounts(cfg: ClawdbotConfig): ResolvedFeishuAccount[] {
+export function listEnabledFeishuAccounts(
+  cfg: ClawdbotConfig,
+): ResolvedFeishuAccount[] {
   return listFeishuAccountIds(cfg)
     .map((accountId) => resolveFeishuAccount({ cfg, accountId }))
     .filter((account) => account.enabled && account.configured);

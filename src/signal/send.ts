@@ -24,7 +24,10 @@ export type SignalSendResult = {
   timestamp?: number;
 };
 
-export type SignalRpcOpts = Pick<SignalSendOpts, "baseUrl" | "account" | "accountId" | "timeoutMs">;
+export type SignalRpcOpts = Pick<
+  SignalSendOpts,
+  "baseUrl" | "account" | "accountId" | "timeoutMs"
+>;
 
 export type SignalReceiptType = "read" | "viewed";
 
@@ -126,9 +129,13 @@ export async function sendMessageSignal(
 
   let attachments: string[] | undefined;
   if (opts.mediaUrl?.trim()) {
-    const resolved = await resolveOutboundAttachmentFromUrl(opts.mediaUrl.trim(), maxBytes, {
-      localRoots: opts.mediaLocalRoots,
-    });
+    const resolved = await resolveOutboundAttachmentFromUrl(
+      opts.mediaUrl.trim(),
+      maxBytes,
+      {
+        localRoots: opts.mediaLocalRoots,
+      },
+    );
     attachments = [resolved.path];
     const kind = mediaKindFromMime(resolved.contentType ?? undefined);
     if (!message && kind) {
@@ -180,10 +187,14 @@ export async function sendMessageSignal(
   }
   Object.assign(params, targetParams);
 
-  const result = await signalRpcRequest<{ timestamp?: number }>("send", params, {
-    baseUrl,
-    timeoutMs: opts.timeoutMs,
-  });
+  const result = await signalRpcRequest<{ timestamp?: number }>(
+    "send",
+    params,
+    {
+      baseUrl,
+      timeoutMs: opts.timeoutMs,
+    },
+  );
   const timestamp = result?.timestamp;
   return {
     messageId: timestamp ? String(timestamp) : "unknown",

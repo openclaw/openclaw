@@ -17,7 +17,9 @@ describe("Volcengine and BytePlus providers", () => {
       expect(providers?.volcengine).toBeDefined();
       expect(providers?.["volcengine-plan"]).toBeDefined();
       expect(providers?.volcengine?.apiKey).toBe("VOLCANO_ENGINE_API_KEY");
-      expect(providers?.["volcengine-plan"]?.apiKey).toBe("VOLCANO_ENGINE_API_KEY");
+      expect(providers?.["volcengine-plan"]?.apiKey).toBe(
+        "VOLCANO_ENGINE_API_KEY",
+      );
     } finally {
       envSnapshot.restore();
     }
@@ -41,7 +43,10 @@ describe("Volcengine and BytePlus providers", () => {
 
   it("includes providers when auth profiles are env keyRef-only", async () => {
     const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
-    const envSnapshot = captureEnv(["VOLCANO_ENGINE_API_KEY", "BYTEPLUS_API_KEY"]);
+    const envSnapshot = captureEnv([
+      "VOLCANO_ENGINE_API_KEY",
+      "BYTEPLUS_API_KEY",
+    ]);
     delete process.env.VOLCANO_ENGINE_API_KEY;
     delete process.env.BYTEPLUS_API_KEY;
 
@@ -50,7 +55,11 @@ describe("Volcengine and BytePlus providers", () => {
       credential: {
         type: "api_key",
         provider: "volcengine",
-        keyRef: { source: "env", provider: "default", id: "VOLCANO_ENGINE_API_KEY" },
+        keyRef: {
+          source: "env",
+          provider: "default",
+          id: "VOLCANO_ENGINE_API_KEY",
+        },
       },
       agentDir,
     });
@@ -67,7 +76,9 @@ describe("Volcengine and BytePlus providers", () => {
     try {
       const providers = await resolveImplicitProviders({ agentDir });
       expect(providers?.volcengine?.apiKey).toBe("VOLCANO_ENGINE_API_KEY");
-      expect(providers?.["volcengine-plan"]?.apiKey).toBe("VOLCANO_ENGINE_API_KEY");
+      expect(providers?.["volcengine-plan"]?.apiKey).toBe(
+        "VOLCANO_ENGINE_API_KEY",
+      );
       expect(providers?.byteplus?.apiKey).toBe("BYTEPLUS_API_KEY");
       expect(providers?.["byteplus-plan"]?.apiKey).toBe("BYTEPLUS_API_KEY");
     } finally {

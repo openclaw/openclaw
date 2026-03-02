@@ -8,7 +8,9 @@ describe("resolveAccountEntry", () => {
       Business: { id: "business" },
     };
     expect(resolveAccountEntry(accounts, "default")).toEqual({ id: "default" });
-    expect(resolveAccountEntry(accounts, "business")).toEqual({ id: "business" });
+    expect(resolveAccountEntry(accounts, "business")).toEqual({
+      id: "business",
+    });
   });
 
   it("ignores prototype-chain values", () => {

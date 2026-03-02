@@ -1,5 +1,10 @@
 import { applyQueueRuntimeSettings } from "../../../utils/queue-helpers.js";
-import type { FollowupRun, QueueDropPolicy, QueueMode, QueueSettings } from "./types.js";
+import type {
+  FollowupRun,
+  QueueDropPolicy,
+  QueueMode,
+  QueueSettings,
+} from "./types.js";
 
 export type FollowupQueueState = {
   items: FollowupRun[];
@@ -20,7 +25,9 @@ export const DEFAULT_QUEUE_DROP: QueueDropPolicy = "summarize";
 
 export const FOLLOWUP_QUEUES = new Map<string, FollowupQueueState>();
 
-export function getExistingFollowupQueue(key: string): FollowupQueueState | undefined {
+export function getExistingFollowupQueue(
+  key: string,
+): FollowupQueueState | undefined {
   const cleaned = key.trim();
   if (!cleaned) {
     return undefined;
@@ -28,7 +35,10 @@ export function getExistingFollowupQueue(key: string): FollowupQueueState | unde
   return FOLLOWUP_QUEUES.get(cleaned);
 }
 
-export function getFollowupQueue(key: string, settings: QueueSettings): FollowupQueueState {
+export function getFollowupQueue(
+  key: string,
+  settings: QueueSettings,
+): FollowupQueueState {
   const existing = FOLLOWUP_QUEUES.get(key);
   if (existing) {
     applyQueueRuntimeSettings({

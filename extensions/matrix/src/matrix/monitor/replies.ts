@@ -1,5 +1,9 @@
 import type { MatrixClient } from "@vector-im/matrix-bot-sdk";
-import type { MarkdownTableMode, ReplyPayload, RuntimeEnv } from "openclaw/plugin-sdk";
+import type {
+  MarkdownTableMode,
+  ReplyPayload,
+  RuntimeEnv,
+} from "openclaw/plugin-sdk";
 import { getMatrixRuntime } from "../../runtime.js";
 import { sendMessageMatrix } from "../send.js";
 
@@ -29,13 +33,20 @@ export async function deliverMatrixReplies(params: {
     }
   };
   const chunkLimit = Math.min(params.textLimit, 4000);
-  const chunkMode = core.channel.text.resolveChunkMode(cfg, "matrix", params.accountId);
+  const chunkMode = core.channel.text.resolveChunkMode(
+    cfg,
+    "matrix",
+    params.accountId,
+  );
   let hasReplied = false;
   for (const reply of params.replies) {
-    const hasMedia = Boolean(reply?.mediaUrl) || (reply?.mediaUrls?.length ?? 0) > 0;
+    const hasMedia =
+      Boolean(reply?.mediaUrl) || (reply?.mediaUrls?.length ?? 0) > 0;
     if (!reply?.text && !hasMedia) {
       if (reply?.audioAsVoice) {
-        logVerbose("matrix reply has audioAsVoice without media/text; skipping");
+        logVerbose(
+          "matrix reply has audioAsVoice without media/text; skipping",
+        );
         continue;
       }
       params.runtime.error?.("matrix reply missing text/media");
@@ -47,7 +58,10 @@ export async function deliverMatrixReplies(params: {
       continue;
     }
     const replyToIdRaw = reply.replyToId?.trim();
-    const replyToId = params.threadId || params.replyToMode === "off" ? undefined : replyToIdRaw;
+    const replyToId =
+      params.threadId || params.replyToMode === "off"
+        ? undefined
+        : replyToIdRaw;
     const rawText = reply.text ?? "";
     const text = core.channel.text.convertMarkdownTables(rawText, tableMode);
     const mediaList = reply.mediaUrls?.length
@@ -58,7 +72,9 @@ export async function deliverMatrixReplies(params: {
 
     const shouldIncludeReply = (id?: string) =>
       Boolean(id) && (params.replyToMode === "all" || !hasReplied);
-    const replyToIdForReply = shouldIncludeReply(replyToId) ? replyToId : undefined;
+    const replyToIdForReply = shouldIncludeReply(replyToId)
+      ? replyToId
+      : undefined;
 
     if (mediaList.length === 0) {
       let sentTextChunk = false;

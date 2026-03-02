@@ -16,7 +16,9 @@ type OpenAIReasoningSignature = {
   type: string;
 };
 
-function parseOpenAIReasoningSignature(value: unknown): OpenAIReasoningSignature | null {
+function parseOpenAIReasoningSignature(
+  value: unknown,
+): OpenAIReasoningSignature | null {
   if (!value) {
     return null;
   }
@@ -130,12 +132,19 @@ export function downgradeOpenAIFunctionCallReasoningPairs(
         }
 
         const toolCallBlock = block as OpenAIToolCallBlock;
-        if (!isOpenAIToolCallType(toolCallBlock.type) || typeof toolCallBlock.id !== "string") {
+        if (
+          !isOpenAIToolCallType(toolCallBlock.type) ||
+          typeof toolCallBlock.id !== "string"
+        ) {
           return block;
         }
 
         const pairing = splitOpenAIFunctionCallPairing(toolCallBlock.id);
-        if (seenReplayableReasoning || !pairing.itemId || !pairing.itemId.startsWith("fc_")) {
+        if (
+          seenReplayableReasoning ||
+          !pairing.itemId ||
+          !pairing.itemId.startsWith("fc_")
+        ) {
           return block;
         }
 
@@ -147,18 +156,29 @@ export function downgradeOpenAIFunctionCallReasoningPairs(
         } as typeof block;
       });
 
-      pendingRewrittenIds = localRewrittenIds.size > 0 ? localRewrittenIds : null;
+      pendingRewrittenIds =
+        localRewrittenIds.size > 0 ? localRewrittenIds : null;
       if (!assistantChanged) {
         rewrittenMessages.push(msg);
         continue;
       }
       changed = true;
-      rewrittenMessages.push({ ...assistantMsg, content: nextContent } as AgentMessage);
+      rewrittenMessages.push({
+        ...assistantMsg,
+        content: nextContent,
+      } as AgentMessage);
       continue;
     }
 
-    if (role === "toolResult" && pendingRewrittenIds && pendingRewrittenIds.size > 0) {
-      const toolResult = msg as Extract<AgentMessage, { role: "toolResult" }> & {
+    if (
+      role === "toolResult" &&
+      pendingRewrittenIds &&
+      pendingRewrittenIds.size > 0
+    ) {
+      const toolResult = msg as Extract<
+        AgentMessage,
+        { role: "toolResult" }
+      > & {
         toolUseId?: unknown;
       };
       let toolResultChanged = false;
@@ -206,7 +226,9 @@ export function downgradeOpenAIFunctionCallReasoningPairs(
  * OpenClaw persists provider-specific reasoning metadata in `thinkingSignature`; if that metadata
  * is incomplete, drop the block to keep history usable.
  */
-export function downgradeOpenAIReasoningBlocks(messages: AgentMessage[]): AgentMessage[] {
+export function downgradeOpenAIReasoningBlocks(
+  messages: AgentMessage[],
+): AgentMessage[] {
   const out: AgentMessage[] = [];
 
   for (const msg of messages) {

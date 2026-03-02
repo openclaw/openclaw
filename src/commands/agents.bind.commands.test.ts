@@ -1,8 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
+import {
+  baseConfigSnapshot,
+  createTestRuntime,
+} from "./test-runtime-config-helpers.js";
 
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
-const writeConfigFileMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+const writeConfigFileMock = vi.hoisted(() =>
+  vi.fn().mockResolvedValue(undefined),
+);
 
 vi.mock("../config/config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/config.js")>()),
@@ -11,7 +16,8 @@ vi.mock("../config/config.js", async (importOriginal) => ({
 }));
 
 vi.mock("../channels/plugins/index.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../channels/plugins/index.js")>();
+  const actual =
+    await importOriginal<typeof import("../channels/plugins/index.js")>();
   return {
     ...actual,
     getChannelPlugin: (channel: string) => {
@@ -19,7 +25,8 @@ vi.mock("../channels/plugins/index.js", async (importOriginal) => {
         return {
           id: "matrix-js",
           setup: {
-            resolveBindingAccountId: ({ agentId }: { agentId: string }) => agentId.toLowerCase(),
+            resolveBindingAccountId: ({ agentId }: { agentId: string }) =>
+              agentId.toLowerCase(),
           },
         };
       }
@@ -34,7 +41,11 @@ vi.mock("../channels/plugins/index.js", async (importOriginal) => {
   };
 });
 
-import { agentsBindCommand, agentsBindingsCommand, agentsUnbindCommand } from "./agents.js";
+import {
+  agentsBindCommand,
+  agentsBindingsCommand,
+  agentsUnbindCommand,
+} from "./agents.js";
 
 const runtime = createTestRuntime();
 
@@ -60,7 +71,9 @@ describe("agents bind/unbind commands", () => {
 
     await agentsBindingsCommand({}, runtime);
 
-    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("main <- matrix-js"));
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining("main <- matrix-js"),
+    );
     expect(runtime.log).toHaveBeenCalledWith(
       expect.stringContaining("ops <- telegram accountId=work"),
     );
@@ -92,7 +105,12 @@ describe("agents bind/unbind commands", () => {
 
     expect(writeConfigFileMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        bindings: [{ agentId: "main", match: { channel: "matrix-js", accountId: "main" } }],
+        bindings: [
+          {
+            agentId: "main",
+            match: { channel: "matrix-js", accountId: "main" },
+          },
+        ],
       }),
     );
     expect(runtime.exit).not.toHaveBeenCalled();
@@ -110,7 +128,12 @@ describe("agents bind/unbind commands", () => {
 
     expect(writeConfigFileMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        bindings: [{ agentId: "main", match: { channel: "telegram", accountId: "work" } }],
+        bindings: [
+          {
+            agentId: "main",
+            match: { channel: "telegram", accountId: "work" },
+          },
+        ],
       }),
     );
     expect(runtime.log).toHaveBeenCalledWith("Updated bindings:");
@@ -144,14 +167,21 @@ describe("agents bind/unbind commands", () => {
       ...baseConfigSnapshot,
       config: {
         agents: { list: [{ id: "ops", workspace: "/tmp/ops" }] },
-        bindings: [{ agentId: "main", match: { channel: "telegram", accountId: "ops" } }],
+        bindings: [
+          { agentId: "main", match: { channel: "telegram", accountId: "ops" } },
+        ],
       },
     });
 
-    await agentsUnbindCommand({ agent: "ops", bind: ["telegram:ops"] }, runtime);
+    await agentsUnbindCommand(
+      { agent: "ops", bind: ["telegram:ops"] },
+      runtime,
+    );
 
     expect(writeConfigFileMock).not.toHaveBeenCalled();
-    expect(runtime.error).toHaveBeenCalledWith("Bindings are owned by another agent:");
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Bindings are owned by another agent:",
+    );
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 

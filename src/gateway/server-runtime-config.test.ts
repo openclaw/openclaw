@@ -46,7 +46,11 @@ describe("resolveGatewayRuntimeConfig", () => {
       {
         name: "loopback binding with ::1 proxy",
         cfg: {
-          gateway: { bind: "loopback" as const, auth: TRUSTED_PROXY_AUTH, trustedProxies: ["::1"] },
+          gateway: {
+            bind: "loopback" as const,
+            auth: TRUSTED_PROXY_AUTH,
+            trustedProxies: ["::1"],
+          },
         },
         expectedBindHost: "127.0.0.1",
       },
@@ -71,7 +75,11 @@ describe("resolveGatewayRuntimeConfig", () => {
       {
         name: "loopback binding without trusted proxies",
         cfg: {
-          gateway: { bind: "loopback" as const, auth: TRUSTED_PROXY_AUTH, trustedProxies: [] },
+          gateway: {
+            bind: "loopback" as const,
+            auth: TRUSTED_PROXY_AUTH,
+            trustedProxies: [],
+          },
         },
         expectedMessage:
           "gateway auth mode=trusted-proxy requires gateway.trustedProxies to be configured",
@@ -102,9 +110,9 @@ describe("resolveGatewayRuntimeConfig", () => {
           "gateway auth mode=trusted-proxy requires gateway.trustedProxies to be configured",
       },
     ])("rejects $name", async ({ cfg, expectedMessage }) => {
-      await expect(resolveGatewayRuntimeConfig({ cfg, port: 18789 })).rejects.toThrow(
-        expectedMessage,
-      );
+      await expect(
+        resolveGatewayRuntimeConfig({ cfg, port: 18789 }),
+      ).rejects.toThrow(expectedMessage);
     });
   });
 
@@ -139,7 +147,12 @@ describe("resolveGatewayRuntimeConfig", () => {
       },
       {
         name: "loopback binding with explicit none auth",
-        cfg: { gateway: { bind: "loopback" as const, auth: { mode: "none" as const } } },
+        cfg: {
+          gateway: {
+            bind: "loopback" as const,
+            auth: { mode: "none" as const },
+          },
+        },
         expectedAuthMode: "none",
         expectedBindHost: "127.0.0.1",
       },
@@ -152,18 +165,27 @@ describe("resolveGatewayRuntimeConfig", () => {
     it.each([
       {
         name: "token mode without token",
-        cfg: { gateway: { bind: "lan" as const, auth: { mode: "token" as const } } },
+        cfg: {
+          gateway: { bind: "lan" as const, auth: { mode: "token" as const } },
+        },
         expectedMessage:
           "gateway auth mode is token, but no token was configured (set gateway.auth.token or OPENCLAW_GATEWAY_TOKEN)",
       },
       {
         name: "lan binding with explicit none auth",
-        cfg: { gateway: { bind: "lan" as const, auth: { mode: "none" as const } } },
+        cfg: {
+          gateway: { bind: "lan" as const, auth: { mode: "none" as const } },
+        },
         expectedMessage: "refusing to bind gateway",
       },
       {
         name: "loopback binding that resolves to non-loopback host",
-        cfg: { gateway: { bind: "loopback" as const, auth: { mode: "none" as const } } },
+        cfg: {
+          gateway: {
+            bind: "loopback" as const,
+            auth: { mode: "none" as const },
+          },
+        },
         host: "0.0.0.0",
         expectedMessage: "gateway bind=loopback resolved to non-loopback host",
       },
@@ -181,7 +203,8 @@ describe("resolveGatewayRuntimeConfig", () => {
             auth: TOKEN_AUTH,
           },
         },
-        expectedMessage: "gateway.bind=custom requires a valid IPv4 customBindHost",
+        expectedMessage:
+          "gateway.bind=custom requires a valid IPv4 customBindHost",
       },
       {
         name: "custom bind with mismatched resolved host",
@@ -193,12 +216,13 @@ describe("resolveGatewayRuntimeConfig", () => {
           },
         },
         host: "0.0.0.0",
-        expectedMessage: "gateway bind=custom requested 192.168.1.100 but resolved 0.0.0.0",
+        expectedMessage:
+          "gateway bind=custom requested 192.168.1.100 but resolved 0.0.0.0",
       },
     ])("rejects $name", async ({ cfg, host, expectedMessage }) => {
-      await expect(resolveGatewayRuntimeConfig({ cfg, port: 18789, host })).rejects.toThrow(
-        expectedMessage,
-      );
+      await expect(
+        resolveGatewayRuntimeConfig({ cfg, port: 18789, host }),
+      ).rejects.toThrow(expectedMessage);
     });
 
     it("rejects non-loopback control UI when allowed origins are missing", async () => {
@@ -212,7 +236,9 @@ describe("resolveGatewayRuntimeConfig", () => {
           },
           port: 18789,
         }),
-      ).rejects.toThrow("non-loopback Control UI requires gateway.controlUi.allowedOrigins");
+      ).rejects.toThrow(
+        "non-loopback Control UI requires gateway.controlUi.allowedOrigins",
+      );
     });
 
     it("allows non-loopback control UI without allowed origins when dangerous fallback is enabled", async () => {
@@ -241,7 +267,8 @@ describe("resolveGatewayRuntimeConfig", () => {
             auth: { mode: "none" },
             http: {
               securityHeaders: {
-                strictTransportSecurity: "  max-age=31536000; includeSubDomains  ",
+                strictTransportSecurity:
+                  "  max-age=31536000; includeSubDomains  ",
               },
             },
           },
@@ -249,7 +276,9 @@ describe("resolveGatewayRuntimeConfig", () => {
         port: 18789,
       });
 
-      expect(result.strictTransportSecurityHeader).toBe("max-age=31536000; includeSubDomains");
+      expect(result.strictTransportSecurityHeader).toBe(
+        "max-age=31536000; includeSubDomains",
+      );
     });
 
     it("does not set strict transport security when explicitly disabled", async () => {

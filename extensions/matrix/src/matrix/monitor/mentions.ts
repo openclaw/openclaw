@@ -16,7 +16,10 @@ type MessageContentWithMentions = {
  * Many Matrix clients (including Element) use HTML links in formatted_body instead of
  * or in addition to the m.mentions field.
  */
-function checkFormattedBodyMention(formattedBody: string | undefined, userId: string): boolean {
+function checkFormattedBodyMention(
+  formattedBody: string | undefined,
+  userId: string,
+): boolean {
   if (!formattedBody || !userId) {
     return false;
   }
@@ -24,13 +27,22 @@ function checkFormattedBodyMention(formattedBody: string | undefined, userId: st
   const escapedUserId = userId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   // Match matrix.to links with the user ID, handling both URL-encoded and plain formats
   // Example: href="https://matrix.to/#/@user:matrix.org" or href="https://matrix.to/#/%40user%3Amatrix.org"
-  const plainPattern = new RegExp(`href=["']https://matrix\\.to/#/${escapedUserId}["']`, "i");
+  const plainPattern = new RegExp(
+    `href=["']https://matrix\\.to/#/${escapedUserId}["']`,
+    "i",
+  );
   if (plainPattern.test(formattedBody)) {
     return true;
   }
   // Also check URL-encoded version (@ -> %40, : -> %3A)
-  const encodedUserId = encodeURIComponent(userId).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const encodedPattern = new RegExp(`href=["']https://matrix\\.to/#/${encodedUserId}["']`, "i");
+  const encodedUserId = encodeURIComponent(userId).replace(
+    /[.*+?^${}()|[\]\\]/g,
+    "\\$&",
+  );
+  const encodedPattern = new RegExp(
+    `href=["']https://matrix\\.to/#/${encodedUserId}["']`,
+    "i",
+  );
   return encodedPattern.test(formattedBody);
 }
 

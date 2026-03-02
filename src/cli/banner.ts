@@ -33,9 +33,13 @@ const hasJsonFlag = (argv: string[]) =>
   argv.some((arg) => arg === "--json" || arg.startsWith("--json="));
 
 const hasVersionFlag = (argv: string[]) =>
-  argv.some((arg) => arg === "--version" || arg === "-V") || hasRootVersionAlias(argv);
+  argv.some((arg) => arg === "--version" || arg === "-V") ||
+  hasRootVersionAlias(argv);
 
-export function formatCliBannerLine(version: string, options: BannerOptions = {}): string {
+export function formatCliBannerLine(
+  version: string,
+  options: BannerOptions = {},
+): string {
   const commit = options.commit ?? resolveCommitHash({ env: options.env });
   const commitLabel = commit ?? "unknown";
   const tagline = pickTagline(options);

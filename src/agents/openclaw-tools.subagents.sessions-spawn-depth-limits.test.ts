@@ -2,7 +2,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { addSubagentRunForTests, resetSubagentRegistryForTests } from "./subagent-registry.js";
+import {
+  addSubagentRunForTests,
+  resetSubagentRegistryForTests,
+} from "./subagent-registry.js";
 import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
 
 const callGatewayMock = vi.fn();
@@ -95,19 +98,24 @@ describe("sessions_spawn depth + child limits", () => {
   });
 
   it("rejects spawning when caller depth reaches maxSpawnDepth", async () => {
-    const tool = createSessionsSpawnTool({ agentSessionKey: "agent:main:subagent:parent" });
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:subagent:parent",
+    });
     const result = await tool.execute("call-depth-reject", { task: "hello" });
 
     expect(result.details).toMatchObject({
       status: "forbidden",
-      error: "sessions_spawn is not allowed at this depth (current depth: 1, max: 1)",
+      error:
+        "sessions_spawn is not allowed at this depth (current depth: 1, max: 1)",
     });
   });
 
   it("allows depth-1 callers when maxSpawnDepth is 2", async () => {
     setSubagentLimits({ maxSpawnDepth: 2 });
 
-    const tool = createSessionsSpawnTool({ agentSessionKey: "agent:main:subagent:parent" });
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:subagent:parent",
+    });
     const result = await tool.execute("call-depth-allow", { task: "hello" });
 
     expect(result.details).toMatchObject({
@@ -117,13 +125,15 @@ describe("sessions_spawn depth + child limits", () => {
     });
 
     const calls = callGatewayMock.mock.calls.map(
-      (call) => call[0] as { method?: string; params?: Record<string, unknown> },
+      (call) =>
+        call[0] as { method?: string; params?: Record<string, unknown> },
     );
     const agentCall = calls.find((entry) => entry.method === "agent");
     expect(agentCall?.params?.spawnedBy).toBe("agent:main:subagent:parent");
 
     const spawnDepthPatch = calls.find(
-      (entry) => entry.method === "sessions.patch" && entry.params?.spawnDepth === 2,
+      (entry) =>
+        entry.method === "sessions.patch" && entry.params?.spawnDepth === 2,
     );
     expect(spawnDepthPatch?.params?.key).toMatch(/^agent:main:subagent:/);
   });
@@ -145,7 +155,8 @@ describe("sessions_spawn depth + child limits", () => {
 
     expect(result.details).toMatchObject({
       status: "forbidden",
-      error: "sessions_spawn is not allowed at this depth (current depth: 2, max: 2)",
+      error:
+        "sessions_spawn is not allowed at this depth (current depth: 2, max: 2)",
     });
   });
 
@@ -154,11 +165,14 @@ describe("sessions_spawn depth + child limits", () => {
     const { callerKey } = seedDepthTwoAncestryStore();
 
     const tool = createSessionsSpawnTool({ agentSessionKey: callerKey });
-    const result = await tool.execute("call-depth-ancestry-reject", { task: "hello" });
+    const result = await tool.execute("call-depth-ancestry-reject", {
+      task: "hello",
+    });
 
     expect(result.details).toMatchObject({
       status: "forbidden",
-      error: "sessions_spawn is not allowed at this depth (current depth: 2, max: 2)",
+      error:
+        "sessions_spawn is not allowed at this depth (current depth: 2, max: 2)",
     });
   });
 
@@ -166,12 +180,17 @@ describe("sessions_spawn depth + child limits", () => {
     setSubagentLimits({ maxSpawnDepth: 2 });
     seedDepthTwoAncestryStore({ sessionIds: true });
 
-    const tool = createSessionsSpawnTool({ agentSessionKey: "depth-2-session" });
-    const result = await tool.execute("call-depth-sessionid-reject", { task: "hello" });
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "depth-2-session",
+    });
+    const result = await tool.execute("call-depth-sessionid-reject", {
+      task: "hello",
+    });
 
     expect(result.details).toMatchObject({
       status: "forbidden",
-      error: "sessions_spawn is not allowed at this depth (current depth: 2, max: 2)",
+      error:
+        "sessions_spawn is not allowed at this depth (current depth: 2, max: 2)",
     });
   });
 
@@ -203,12 +222,15 @@ describe("sessions_spawn depth + child limits", () => {
       startedAt: Date.now(),
     });
 
-    const tool = createSessionsSpawnTool({ agentSessionKey: "agent:main:subagent:parent" });
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:subagent:parent",
+    });
     const result = await tool.execute("call-max-children", { task: "hello" });
 
     expect(result.details).toMatchObject({
       status: "forbidden",
-      error: "sessions_spawn has reached max active children for this session (1/1)",
+      error:
+        "sessions_spawn has reached max active children for this session (1/1)",
     });
   });
 
@@ -230,8 +252,12 @@ describe("sessions_spawn depth + child limits", () => {
       },
     };
 
-    const tool = createSessionsSpawnTool({ agentSessionKey: "agent:main:subagent:parent" });
-    const result = await tool.execute("call-max-concurrent-independent", { task: "hello" });
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:subagent:parent",
+    });
+    const result = await tool.execute("call-max-concurrent-independent", {
+      task: "hello",
+    });
 
     expect(result.details).toMatchObject({
       status: "accepted",
@@ -243,7 +269,10 @@ describe("sessions_spawn depth + child limits", () => {
     setSubagentLimits({ maxSpawnDepth: 2 });
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const req = opts as { method?: string; params?: { model?: string } };
-      if (req.method === "sessions.patch" && req.params?.model === "bad-model") {
+      if (
+        req.method === "sessions.patch" &&
+        req.params?.model === "bad-model"
+      ) {
         throw new Error("invalid model: bad-model");
       }
       if (req.method === "agent") {
@@ -264,7 +293,9 @@ describe("sessions_spawn depth + child limits", () => {
     expect(result.details).toMatchObject({
       status: "error",
     });
-    expect(String((result.details as { error?: string }).error ?? "")).toContain("invalid model");
+    expect(
+      String((result.details as { error?: string }).error ?? ""),
+    ).toContain("invalid model");
     expect(
       callGatewayMock.mock.calls.some(
         (call) => (call[0] as { method?: string }).method === "agent",

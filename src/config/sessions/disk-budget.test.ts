@@ -15,7 +15,9 @@ async function createCaseDir(prefix: string): Promise<string> {
 }
 
 afterEach(async () => {
-  await Promise.all(createdDirs.map((dir) => fs.rm(dir, { recursive: true, force: true })));
+  await Promise.all(
+    createdDirs.map((dir) => fs.rm(dir, { recursive: true, force: true })),
+  );
   createdDirs.length = 0;
 });
 

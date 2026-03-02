@@ -1,4 +1,8 @@
-import type { ContentBlock, ImageContent, ToolKind } from "@agentclientprotocol/sdk";
+import type {
+  ContentBlock,
+  ImageContent,
+  ToolKind,
+} from "@agentclientprotocol/sdk";
 
 export type GatewayAttachment = {
   type: string;
@@ -53,10 +57,16 @@ function escapeInlineControlChars(value: string): string {
 
 function escapeResourceTitle(value: string): string {
   // Keep title content, but escape characters that can break the resource-link annotation shape.
-  return escapeInlineControlChars(value).replace(/[()[\]]/g, (char) => `\\${char}`);
+  return escapeInlineControlChars(value).replace(
+    /[()[\]]/g,
+    (char) => `\\${char}`,
+  );
 }
 
-export function extractTextFromPrompt(prompt: ContentBlock[], maxBytes?: number): string {
+export function extractTextFromPrompt(
+  prompt: ContentBlock[],
+  maxBytes?: number,
+): string {
   const parts: string[] = [];
   // Track accumulated byte count per block to catch oversized prompts before full concatenation
   let totalBytes = 0;
@@ -72,7 +82,9 @@ export function extractTextFromPrompt(prompt: ContentBlock[], maxBytes?: number)
     } else if (block.type === "resource_link") {
       const title = block.title ? ` (${escapeResourceTitle(block.title)})` : "";
       const uri = block.uri ? escapeInlineControlChars(block.uri) : "";
-      blockText = uri ? `[Resource link${title}] ${uri}` : `[Resource link${title}]`;
+      blockText = uri
+        ? `[Resource link${title}] ${uri}`
+        : `[Resource link${title}]`;
     }
     if (blockText !== undefined) {
       // Guard: reject before allocating the full concatenated string
@@ -80,7 +92,9 @@ export function extractTextFromPrompt(prompt: ContentBlock[], maxBytes?: number)
         const separatorBytes = parts.length > 0 ? 1 : 0; // "\n" added by join() between blocks
         totalBytes += separatorBytes + Buffer.byteLength(blockText, "utf-8");
         if (totalBytes > maxBytes) {
-          throw new Error(`Prompt exceeds maximum allowed size of ${maxBytes} bytes`);
+          throw new Error(
+            `Prompt exceeds maximum allowed size of ${maxBytes} bytes`,
+          );
         }
       }
       parts.push(blockText);
@@ -89,7 +103,9 @@ export function extractTextFromPrompt(prompt: ContentBlock[], maxBytes?: number)
   return parts.join("\n");
 }
 
-export function extractAttachmentsFromPrompt(prompt: ContentBlock[]): GatewayAttachment[] {
+export function extractAttachmentsFromPrompt(
+  prompt: ContentBlock[],
+): GatewayAttachment[] {
   const attachments: GatewayAttachment[] = [];
   for (const block of prompt) {
     if (block.type !== "image") {
@@ -144,7 +160,11 @@ export function inferToolKind(name?: string): ToolKind {
   if (normalized.includes("search") || normalized.includes("find")) {
     return "search";
   }
-  if (normalized.includes("exec") || normalized.includes("run") || normalized.includes("bash")) {
+  if (
+    normalized.includes("exec") ||
+    normalized.includes("run") ||
+    normalized.includes("bash")
+  ) {
     return "execute";
   }
   if (normalized.includes("fetch") || normalized.includes("http")) {

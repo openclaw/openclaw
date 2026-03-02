@@ -24,8 +24,12 @@ type AuthSyncFixture = {
   authPath: string;
 };
 
-async function withAuthSyncFixture(run: (fixture: AuthSyncFixture) => Promise<void>) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-models-list-auth-sync-"));
+async function withAuthSyncFixture(
+  run: (fixture: AuthSyncFixture) => Promise<void>,
+) {
+  const root = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-models-list-auth-sync-"),
+  );
   try {
     const stateDir = path.join(root, "state");
     const agentDir = path.join(stateDir, "agents", "main", "agent");
@@ -65,7 +69,9 @@ function getProviderRow(payloadText: string, providerPrefix: string) {
   const payload = JSON.parse(payloadText) as {
     models?: Array<{ key?: string; available?: boolean }>;
   };
-  return payload.models?.find((model) => String(model.key ?? "").startsWith(providerPrefix));
+  return payload.models?.find((model) =>
+    String(model.key ?? "").startsWith(providerPrefix),
+  );
 }
 
 async function runModelsListAndGetProvider(providerPrefix: string) {
@@ -74,7 +80,10 @@ async function runModelsListAndGetProvider(providerPrefix: string) {
 
   expect(runtime.error).not.toHaveBeenCalled();
   expect(runtime.log).toHaveBeenCalledTimes(1);
-  const provider = getProviderRow(String(runtime.log.mock.calls[0]?.[0]), providerPrefix);
+  const provider = getProviderRow(
+    String(runtime.log.mock.calls[0]?.[0]),
+    providerPrefix,
+  );
   expect(provider).toBeDefined();
   return provider;
 }
@@ -122,10 +131,9 @@ describe("models list auth-profile sync", () => {
 
       await runModelsListAndGetProvider("openrouter/");
       if (await pathExists(authPath)) {
-        const parsed = JSON.parse(await fs.readFile(authPath, "utf8")) as Record<
-          string,
-          { type?: string; key?: string }
-        >;
+        const parsed = JSON.parse(
+          await fs.readFile(authPath, "utf8"),
+        ) as Record<string, { type?: string; key?: string }>;
         const openrouterKey = parsed.openrouter?.key;
         if (openrouterKey !== undefined) {
           expect(openrouterKey.trim().length).toBeGreaterThan(0);

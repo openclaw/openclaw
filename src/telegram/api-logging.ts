@@ -15,7 +15,10 @@ type TelegramApiLoggingParams<T> = {
 
 const fallbackLogger = createSubsystemLogger("telegram/api");
 
-function resolveTelegramApiLogger(runtime?: RuntimeEnv, logger?: TelegramApiLogger) {
+function resolveTelegramApiLogger(
+  runtime?: RuntimeEnv,
+  logger?: TelegramApiLogger,
+) {
   if (logger) {
     return logger;
   }

@@ -4,7 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
 import { WebSocket } from "ws";
-import { resolveMainSessionKeyFromConfig, type SessionEntry } from "../config/sessions.js";
+import {
+  resolveMainSessionKeyFromConfig,
+  type SessionEntry,
+} from "../config/sessions.js";
 import { resetAgentRunContextForTest } from "../infra/agent-events.js";
 import {
   loadOrCreateDeviceIdentity,
@@ -14,10 +17,16 @@ import {
 import { drainSystemEvents, peekSystemEvents } from "../infra/system-events.js";
 import { rawDataToString } from "../infra/ws.js";
 import { resetLogger, setLoggerOverride } from "../logging.js";
-import { DEFAULT_AGENT_ID, toAgentStoreSessionKey } from "../routing/session-key.js";
+import {
+  DEFAULT_AGENT_ID,
+  toAgentStoreSessionKey,
+} from "../routing/session-key.js";
 import { captureEnv } from "../test-utils/env.js";
 import { getDeterministicFreePortBlock } from "../test-utils/ports.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../utils/message-channel.js";
 import { buildDeviceAuthPayloadV3 } from "./device-auth.js";
 import { PROTOCOL_VERSION } from "./protocol/index.js";
 import type { GatewayServerOptions } from "./server.js";
@@ -117,7 +126,9 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
   vi.useRealTimers();
   setLoggerOverride({ level: "silent", consoleLevel: "silent" });
   if (!tempHome) {
-    throw new Error("resetGatewayTestState called before temp home was initialized");
+    throw new Error(
+      "resetGatewayTestState called before temp home was initialized",
+    );
   }
   applyGatewaySkipEnv();
   if (options.uniqueConfigRoot) {
@@ -132,7 +143,10 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
   testTailnetIPv4.value = undefined;
   testTailscaleWhois.value = null;
   testState.gatewayBind = undefined;
-  testState.gatewayAuth = { mode: "token", token: "test-gateway-token-1234567890" };
+  testState.gatewayAuth = {
+    mode: "token",
+    token: "test-gateway-token-1234567890",
+  };
   testState.gatewayControlUi = undefined;
   testState.hooksConfig = undefined;
   testState.canvasHostPort = undefined;
@@ -184,7 +198,9 @@ async function cleanupGatewayTestHome(options: { restoreEnv: boolean }) {
   tempConfigRoot = undefined;
 }
 
-export function installGatewayTestHooks(options?: { scope?: "test" | "suite" }) {
+export function installGatewayTestHooks(options?: {
+  scope?: "test" | "suite";
+}) {
   const scope = options?.scope ?? "test";
   if (scope === "suite") {
     beforeAll(async () => {
@@ -246,9 +262,13 @@ const CONNECT_CHALLENGE_NONCE_KEY = "__openclawTestConnectChallengeNonce";
 const CONNECT_CHALLENGE_TRACKED_KEY = "__openclawTestConnectChallengeTracked";
 type TrackedWs = WebSocket & Record<string, unknown>;
 
-export function getTrackedConnectChallengeNonce(ws: WebSocket): string | undefined {
+export function getTrackedConnectChallengeNonce(
+  ws: WebSocket,
+): string | undefined {
   const tracked = (ws as TrackedWs)[CONNECT_CHALLENGE_NONCE_KEY];
-  return typeof tracked === "string" && tracked.trim().length > 0 ? tracked.trim() : undefined;
+  return typeof tracked === "string" && tracked.trim().length > 0
+    ? tracked.trim()
+    : undefined;
 }
 
 export function trackConnectChallengeNonce(ws: WebSocket): void {
@@ -302,17 +322,25 @@ export function onceMessage<T extends GatewayTestMessage = GatewayTestMessage>(
   });
 }
 
-export async function startGatewayServer(port: number, opts?: GatewayServerOptions) {
+export async function startGatewayServer(
+  port: number,
+  opts?: GatewayServerOptions,
+) {
   const mod = await getServerModule();
   const resolvedOpts =
-    opts?.controlUiEnabled === undefined ? { ...opts, controlUiEnabled: false } : opts;
+    opts?.controlUiEnabled === undefined
+      ? { ...opts, controlUiEnabled: false }
+      : opts;
   return await mod.startGatewayServer(port, resolvedOpts);
 }
 
 async function startGatewayServerWithRetries(params: {
   port: number;
   opts?: GatewayServerOptions;
-}): Promise<{ port: number; server: Awaited<ReturnType<typeof startGatewayServer>> }> {
+}): Promise<{
+  port: number;
+  server: Awaited<ReturnType<typeof startGatewayServer>>;
+}> {
   let port = params.port;
   for (let attempt = 0; attempt < 10; attempt++) {
     try {
@@ -332,7 +360,10 @@ async function startGatewayServerWithRetries(params: {
 }
 
 export async function withGatewayServer<T>(
-  fn: (ctx: { port: number; server: Awaited<ReturnType<typeof startGatewayServer>> }) => Promise<T>,
+  fn: (ctx: {
+    port: number;
+    server: Awaited<ReturnType<typeof startGatewayServer>>;
+  }) => Promise<T>,
   opts?: { port?: number; serverOptions?: GatewayServerOptions },
 ): Promise<T> {
   const started = await startGatewayServerWithRetries({
@@ -359,7 +390,8 @@ export async function startServerWithClient(
   }
   const fallbackToken =
     token ??
-    (typeof (testState.gatewayAuth as { token?: unknown } | undefined)?.token === "string"
+    (typeof (testState.gatewayAuth as { token?: unknown } | undefined)
+      ?.token === "string"
       ? (testState.gatewayAuth as { token?: string }).token
       : undefined);
   if (fallbackToken === undefined) {
@@ -368,7 +400,10 @@ export async function startServerWithClient(
     process.env.OPENCLAW_GATEWAY_TOKEN = fallbackToken;
   }
 
-  const started = await startGatewayServerWithRetries({ port, opts: gatewayOpts });
+  const started = await startGatewayServerWithRetries({
+    port,
+    opts: gatewayOpts,
+  });
   port = started.port;
   const server = started.server;
 
@@ -378,7 +413,10 @@ export async function startServerWithClient(
   );
   trackConnectChallengeNonce(ws);
   await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("timeout waiting for ws open")), 10_000);
+    const timer = setTimeout(
+      () => reject(new Error("timeout waiting for ws open")),
+      10_000,
+    );
     const cleanup = () => {
       clearTimeout(timer);
       ws.off("open", onOpen);
@@ -432,7 +470,8 @@ function resolveDefaultTestDeviceIdentityPath(params: {
     `${params.clientId}-${params.clientMode}-${params.platform}-${params.deviceFamily ?? "none"}-${params.role}`
       .replace(/[^a-zA-Z0-9._-]+/g, "_")
       .toLowerCase();
-  const suiteRoot = process.env.OPENCLAW_STATE_DIR ?? process.env.HOME ?? os.tmpdir();
+  const suiteRoot =
+    process.env.OPENCLAW_STATE_DIR ?? process.env.HOME ?? os.tmpdir();
   return path.join(suiteRoot, "test-device-identities", `${safe}.json`);
 }
 
@@ -450,7 +489,11 @@ export async function readConnectChallengeNonce(
       type?: string;
       event?: string;
       payload?: Record<string, unknown> | null;
-    }>(ws, (o) => o.type === "event" && o.event === "connect.challenge", timeoutMs);
+    }>(
+      ws,
+      (o) => o.type === "event" && o.event === "connect.challenge",
+      timeoutMs,
+    );
     const nonce = (evt.payload as { nonce?: unknown } | undefined)?.nonce;
     if (typeof nonce === "string" && nonce.trim().length > 0) {
       (ws as TrackedWs)[CONNECT_CHALLENGE_NONCE_KEY] = nonce.trim();
@@ -510,14 +553,17 @@ export async function connectReq(
   const defaultToken =
     opts?.skipDefaultAuth === true
       ? undefined
-      : typeof (testState.gatewayAuth as { token?: unknown } | undefined)?.token === "string"
+      : typeof (testState.gatewayAuth as { token?: unknown } | undefined)
+            ?.token === "string"
         ? ((testState.gatewayAuth as { token?: string }).token ?? undefined)
         : process.env.OPENCLAW_GATEWAY_TOKEN;
   const defaultPassword =
     opts?.skipDefaultAuth === true
       ? undefined
-      : typeof (testState.gatewayAuth as { password?: unknown } | undefined)?.password === "string"
-        ? ((testState.gatewayAuth as { password?: string }).password ?? undefined)
+      : typeof (testState.gatewayAuth as { password?: unknown } | undefined)
+            ?.password === "string"
+        ? ((testState.gatewayAuth as { password?: string }).password ??
+          undefined)
         : process.env.OPENCLAW_GATEWAY_PASSWORD;
   const token = opts?.token ?? defaultToken;
   const deviceToken = opts?.deviceToken?.trim() || undefined;
@@ -529,10 +575,14 @@ export async function connectReq(
       ? ["operator.admin"]
       : [];
   if (opts?.skipConnectChallengeNonce && opts?.device === undefined) {
-    throw new Error("skipConnectChallengeNonce requires an explicit device override");
+    throw new Error(
+      "skipConnectChallengeNonce requires an explicit device override",
+    );
   }
   const connectChallengeNonce =
-    opts?.device !== undefined ? undefined : await readConnectChallengeNonce(ws);
+    opts?.device !== undefined
+      ? undefined
+      : await readConnectChallengeNonce(ws);
   const device = (() => {
     if (opts?.device === null) {
       return undefined;
@@ -607,13 +657,22 @@ export async function connectReq(
     const rec = o as Record<string, unknown>;
     return rec.type === "res" && rec.id === id;
   };
-  return await onceMessage<ConnectResponse>(ws, isResponseForId, opts?.timeoutMs);
+  return await onceMessage<ConnectResponse>(
+    ws,
+    isResponseForId,
+    opts?.timeoutMs,
+  );
 }
 
-export async function connectOk(ws: WebSocket, opts?: Parameters<typeof connectReq>[1]) {
+export async function connectOk(
+  ws: WebSocket,
+  opts?: Parameters<typeof connectReq>[1],
+) {
   const res = await connectReq(ws, opts);
   expect(res.ok).toBe(true);
-  expect((res.payload as { type?: unknown } | undefined)?.type).toBe("hello-ok");
+  expect((res.payload as { type?: unknown } | undefined)?.type).toBe(
+    "hello-ok",
+  );
   return res.payload as { type: "hello-ok" };
 }
 
@@ -628,7 +687,10 @@ export async function connectWebchatClient(params: {
   });
   trackConnectChallengeNonce(ws);
   await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("timeout waiting for ws open")), 10_000);
+    const timer = setTimeout(
+      () => reject(new Error("timeout waiting for ws open")),
+      10_000,
+    );
     const onOpen = () => {
       clearTimeout(timer);
       ws.off("error", onError);

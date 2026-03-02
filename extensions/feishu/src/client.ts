@@ -46,11 +46,15 @@ export type FeishuClientCredentials = {
  * Create or get a cached Feishu client for an account.
  * Accepts any object with appId, appSecret, and optional domain/accountId.
  */
-export function createFeishuClient(creds: FeishuClientCredentials): Lark.Client {
+export function createFeishuClient(
+  creds: FeishuClientCredentials,
+): Lark.Client {
   const { accountId = "default", appId, appSecret, domain } = creds;
 
   if (!appId || !appSecret) {
-    throw new Error(`Feishu credentials not configured for account "${accountId}"`);
+    throw new Error(
+      `Feishu credentials not configured for account "${accountId}"`,
+    );
   }
 
   // Check cache
@@ -85,11 +89,15 @@ export function createFeishuClient(creds: FeishuClientCredentials): Lark.Client 
  * Create a Feishu WebSocket client for an account.
  * Note: WSClient is not cached since each call creates a new connection.
  */
-export function createFeishuWSClient(account: ResolvedFeishuAccount): Lark.WSClient {
+export function createFeishuWSClient(
+  account: ResolvedFeishuAccount,
+): Lark.WSClient {
   const { accountId, appId, appSecret, domain } = account;
 
   if (!appId || !appSecret) {
-    throw new Error(`Feishu credentials not configured for account "${accountId}"`);
+    throw new Error(
+      `Feishu credentials not configured for account "${accountId}"`,
+    );
   }
 
   const agent = getWsProxyAgent();
@@ -105,7 +113,9 @@ export function createFeishuWSClient(account: ResolvedFeishuAccount): Lark.WSCli
 /**
  * Create an event dispatcher for an account.
  */
-export function createEventDispatcher(account: ResolvedFeishuAccount): Lark.EventDispatcher {
+export function createEventDispatcher(
+  account: ResolvedFeishuAccount,
+): Lark.EventDispatcher {
   return new Lark.EventDispatcher({
     encryptKey: account.encryptKey,
     verificationToken: account.verificationToken,

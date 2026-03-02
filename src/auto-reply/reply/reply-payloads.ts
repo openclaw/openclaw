@@ -19,7 +19,9 @@ function resolveReplyThreadingForPayload(params: {
 
   // 1) Apply implicit reply threading first (replyToMode will strip later if needed).
   let resolved: ReplyPayload =
-    params.payload.replyToId || params.payload.replyToCurrent === false || !implicitReplyToId
+    params.payload.replyToId ||
+    params.payload.replyToCurrent === false ||
+    !implicitReplyToId
       ? params.payload
       : { ...params.payload, replyToId: implicitReplyToId };
 
@@ -80,11 +82,18 @@ export function applyReplyThreading(params: {
   currentMessageId?: string;
 }): ReplyPayload[] {
   const { payloads, replyToMode, replyToChannel, currentMessageId } = params;
-  const applyReplyToMode = createReplyToModeFilterForChannel(replyToMode, replyToChannel);
+  const applyReplyToMode = createReplyToModeFilterForChannel(
+    replyToMode,
+    replyToChannel,
+  );
   const implicitReplyToId = currentMessageId?.trim() || undefined;
   return payloads
     .map((payload) =>
-      resolveReplyThreadingForPayload({ payload, implicitReplyToId, currentMessageId }),
+      resolveReplyThreadingForPayload({
+        payload,
+        implicitReplyToId,
+        currentMessageId,
+      }),
     )
     .filter(isRenderablePayload)
     .map(applyReplyToMode);
@@ -98,7 +107,9 @@ export function filterMessagingToolDuplicates(params: {
   if (sentTexts.length === 0) {
     return payloads;
   }
-  return payloads.filter((payload) => !isMessagingToolDuplicate(payload.text ?? "", sentTexts));
+  return payloads.filter(
+    (payload) => !isMessagingToolDuplicate(payload.text ?? "", sentTexts),
+  );
 }
 
 export function filterMessagingToolMediaDuplicates(params: {
@@ -128,13 +139,21 @@ export function filterMessagingToolMediaDuplicates(params: {
   if (sentMediaUrls.length === 0) {
     return payloads;
   }
-  const sentSet = new Set(sentMediaUrls.map(normalizeMediaForDedupe).filter(Boolean));
+  const sentSet = new Set(
+    sentMediaUrls.map(normalizeMediaForDedupe).filter(Boolean),
+  );
   return payloads.map((payload) => {
     const mediaUrl = payload.mediaUrl;
     const mediaUrls = payload.mediaUrls;
-    const stripSingle = mediaUrl && sentSet.has(normalizeMediaForDedupe(mediaUrl));
-    const filteredUrls = mediaUrls?.filter((u) => !sentSet.has(normalizeMediaForDedupe(u)));
-    if (!stripSingle && (!mediaUrls || filteredUrls?.length === mediaUrls.length)) {
+    const stripSingle =
+      mediaUrl && sentSet.has(normalizeMediaForDedupe(mediaUrl));
+    const filteredUrls = mediaUrls?.filter(
+      (u) => !sentSet.has(normalizeMediaForDedupe(u)),
+    );
+    if (
+      !stripSingle &&
+      (!mediaUrls || filteredUrls?.length === mediaUrls.length)
+    ) {
       return payload; // No change
     }
     return {
@@ -172,7 +191,10 @@ export function shouldSuppressMessagingToolReplies(params: {
   if (!provider) {
     return false;
   }
-  const originTarget = normalizeTargetForProvider(provider, params.originatingTo);
+  const originTarget = normalizeTargetForProvider(
+    provider,
+    params.originatingTo,
+  );
   if (!originTarget) {
     return false;
   }
@@ -190,8 +212,13 @@ export function shouldSuppressMessagingToolReplies(params: {
     if (!isGenericMessageProvider && targetProvider !== provider) {
       return false;
     }
-    const targetNormalizationProvider = isGenericMessageProvider ? provider : targetProvider;
-    const targetKey = normalizeTargetForProvider(targetNormalizationProvider, target.to);
+    const targetNormalizationProvider = isGenericMessageProvider
+      ? provider
+      : targetProvider;
+    const targetKey = normalizeTargetForProvider(
+      targetNormalizationProvider,
+      target.to,
+    );
     if (!targetKey) {
       return false;
     }

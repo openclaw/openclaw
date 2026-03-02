@@ -12,7 +12,9 @@ describe("legacy migrate audio transcription", () => {
       },
     });
 
-    expect(res.changes).toContain("Moved routing.transcribeAudio → tools.media.audio.models.");
+    expect(res.changes).toContain(
+      "Moved routing.transcribeAudio → tools.media.audio.models.",
+    );
     expect(res.config?.tools?.media?.audio).toEqual({
       enabled: true,
       models: [
@@ -24,7 +26,9 @@ describe("legacy migrate audio transcription", () => {
         },
       ],
     });
-    expect((res.config as { routing?: unknown } | null)?.routing).toBeUndefined();
+    expect(
+      (res.config as { routing?: unknown } | null)?.routing,
+    ).toBeUndefined();
   });
 
   it("keeps existing tools media model and drops legacy routing value", () => {
@@ -46,8 +50,12 @@ describe("legacy migrate audio transcription", () => {
     expect(res.changes).toContain(
       "Removed routing.transcribeAudio (tools.media.audio.models already set).",
     );
-    expect(res.config?.tools?.media?.audio?.models).toEqual([{ command: "existing", type: "cli" }]);
-    expect((res.config as { routing?: unknown } | null)?.routing).toBeUndefined();
+    expect(res.config?.tools?.media?.audio?.models).toEqual([
+      { command: "existing", type: "cli" },
+    ]);
+    expect(
+      (res.config as { routing?: unknown } | null)?.routing,
+    ).toBeUndefined();
   });
 
   it("drops invalid audio.transcription payloads", () => {
@@ -59,7 +67,9 @@ describe("legacy migrate audio transcription", () => {
       },
     });
 
-    expect(res.changes).toContain("Removed audio.transcription (invalid or empty command).");
+    expect(res.changes).toContain(
+      "Removed audio.transcription (invalid or empty command).",
+    );
     expect(res.config?.audio).toBeUndefined();
     expect(res.config?.tools?.media?.audio).toBeUndefined();
   });
@@ -81,9 +91,15 @@ describe("legacy migrate mention routing", () => {
     expect(res.changes).toContain(
       'Moved routing.groupChat.requireMention → channels.imessage.groups."*".requireMention.',
     );
-    expect(res.config?.channels?.telegram?.groups?.["*"]?.requireMention).toBe(true);
-    expect(res.config?.channels?.imessage?.groups?.["*"]?.requireMention).toBe(true);
-    expect((res.config as { routing?: unknown } | null)?.routing).toBeUndefined();
+    expect(res.config?.channels?.telegram?.groups?.["*"]?.requireMention).toBe(
+      true,
+    );
+    expect(res.config?.channels?.imessage?.groups?.["*"]?.requireMention).toBe(
+      true,
+    );
+    expect(
+      (res.config as { routing?: unknown } | null)?.routing,
+    ).toBeUndefined();
   });
 
   it("moves channels.telegram.requireMention into groups.*.requireMention", () => {
@@ -98,9 +114,15 @@ describe("legacy migrate mention routing", () => {
     expect(res.changes).toContain(
       'Moved telegram.requireMention → channels.telegram.groups."*".requireMention.',
     );
-    expect(res.config?.channels?.telegram?.groups?.["*"]?.requireMention).toBe(false);
+    expect(res.config?.channels?.telegram?.groups?.["*"]?.requireMention).toBe(
+      false,
+    );
     expect(
-      (res.config?.channels?.telegram as { requireMention?: unknown } | undefined)?.requireMention,
+      (
+        res.config?.channels?.telegram as
+          | { requireMention?: unknown }
+          | undefined
+      )?.requireMention,
     ).toBeUndefined();
   });
 });
@@ -117,7 +139,9 @@ describe("legacy migrate controlUi.allowedOrigins seed (issue #29385)", () => {
       "http://localhost:18789",
       "http://127.0.0.1:18789",
     ]);
-    expect(res.changes.some((c) => c.includes("gateway.controlUi.allowedOrigins"))).toBe(true);
+    expect(
+      res.changes.some((c) => c.includes("gateway.controlUi.allowedOrigins")),
+    ).toBe(true);
     expect(res.changes.some((c) => c.includes("bind=lan"))).toBe(true);
   });
 
@@ -143,8 +167,12 @@ describe("legacy migrate controlUi.allowedOrigins seed (issue #29385)", () => {
         auth: { mode: "token", token: "tok" },
       },
     });
-    expect(res.config?.gateway?.controlUi?.allowedOrigins).toContain("http://192.168.1.100:18789");
-    expect(res.config?.gateway?.controlUi?.allowedOrigins).toContain("http://localhost:18789");
+    expect(res.config?.gateway?.controlUi?.allowedOrigins).toContain(
+      "http://192.168.1.100:18789",
+    );
+    expect(res.config?.gateway?.controlUi?.allowedOrigins).toContain(
+      "http://localhost:18789",
+    );
   });
 
   it("does not overwrite existing allowedOrigins — returns null (no migration needed)", () => {
@@ -185,7 +213,9 @@ describe("legacy migrate controlUi.allowedOrigins seed (issue #29385)", () => {
       "http://localhost:18789",
       "http://127.0.0.1:18789",
     ]);
-    expect(res.changes.some((c) => c.includes("gateway.controlUi.allowedOrigins"))).toBe(true);
+    expect(
+      res.changes.some((c) => c.includes("gateway.controlUi.allowedOrigins")),
+    ).toBe(true);
   });
 
   it("does not migrate loopback bind — returns null", () => {

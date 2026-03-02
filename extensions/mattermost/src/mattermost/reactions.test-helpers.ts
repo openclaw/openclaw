@@ -45,12 +45,16 @@ export function createMattermostReactionFetchMock(params: {
         emoji_name: params.emojiName,
       });
 
-      const responseBody = params.body === undefined ? { ok: true } : params.body;
+      const responseBody =
+        params.body === undefined ? { ok: true } : params.body;
       return new Response(
         responseBody === null ? null : JSON.stringify(responseBody),
         responseBody === null
           ? { status: addStatus, headers: { "content-type": "text/plain" } }
-          : { status: addStatus, headers: { "content-type": "application/json" } },
+          : {
+              status: addStatus,
+              headers: { "content-type": "application/json" },
+            },
       );
     }
 
@@ -61,7 +65,10 @@ export function createMattermostReactionFetchMock(params: {
         responseBody === null ? null : JSON.stringify(responseBody),
         responseBody === null
           ? { status: removeStatus, headers: { "content-type": "text/plain" } }
-          : { status: removeStatus, headers: { "content-type": "application/json" } },
+          : {
+              status: removeStatus,
+              headers: { "content-type": "application/json" },
+            },
       );
     }
 

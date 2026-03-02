@@ -81,7 +81,10 @@ export async function modelsAliasesAddCommand(
   runtime.log(`Alias ${alias} -> ${resolved.provider}/${resolved.model}`);
 }
 
-export async function modelsAliasesRemoveCommand(aliasRaw: string, runtime: RuntimeEnv) {
+export async function modelsAliasesRemoveCommand(
+  aliasRaw: string,
+  runtime: RuntimeEnv,
+) {
   const alias = normalizeAlias(aliasRaw);
   const updated = await updateConfig((cfg) => {
     const nextModels = { ...cfg.agents?.defaults?.models };
@@ -111,7 +114,9 @@ export async function modelsAliasesRemoveCommand(aliasRaw: string, runtime: Runt
   logConfigUpdated(runtime);
   if (
     !updated.agents?.defaults?.models ||
-    Object.values(updated.agents.defaults.models).every((entry) => !entry?.alias?.trim())
+    Object.values(updated.agents.defaults.models).every(
+      (entry) => !entry?.alias?.trim(),
+    )
   ) {
     runtime.log("No aliases configured.");
   }

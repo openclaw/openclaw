@@ -20,10 +20,14 @@ describe("createInfoCard", () => {
 
 describe("createListCard", () => {
   it("limits items to 8", () => {
-    const items = Array.from({ length: 15 }, (_, i) => ({ title: `Item ${i}` }));
+    const items = Array.from({ length: 15 }, (_, i) => ({
+      title: `Item ${i}`,
+    }));
     const card = createListCard("List", items);
 
-    const body = card.body as { contents: Array<{ type: string; contents?: unknown[] }> };
+    const body = card.body as {
+      contents: Array<{ type: string; contents?: unknown[] }>;
+    };
     // The list items are in the third content (after title and separator)
     const listBox = body.contents[2] as { contents: unknown[] };
     expect(listBox.contents.length).toBe(8);
@@ -32,7 +36,11 @@ describe("createListCard", () => {
 
 describe("createImageCard", () => {
   it("includes body text when provided", () => {
-    const card = createImageCard("https://example.com/img.jpg", "Title", "Body text");
+    const card = createImageCard(
+      "https://example.com/img.jpg",
+      "Title",
+      "Body text",
+    );
 
     const body = card.body as { contents: Array<{ text: string }> };
     expect(body.contents.length).toBe(2);
@@ -55,7 +63,9 @@ describe("createActionCard", () => {
 
 describe("createCarousel", () => {
   it("limits to 12 bubbles", () => {
-    const bubbles = Array.from({ length: 15 }, (_, i) => createInfoCard(`Card ${i}`, `Body ${i}`));
+    const bubbles = Array.from({ length: 15 }, (_, i) =>
+      createInfoCard(`Card ${i}`, `Body ${i}`),
+    );
     const carousel = createCarousel(bubbles);
 
     expect(carousel.contents.length).toBe(12);

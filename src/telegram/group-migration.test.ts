@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { migrateTelegramGroupConfig, migrateTelegramGroupsInPlace } from "./group-migration.js";
+import {
+  migrateTelegramGroupConfig,
+  migrateTelegramGroupsInPlace,
+} from "./group-migration.js";
 
-function createTelegramGlobalGroupConfig(groups: Record<string, Record<string, unknown>>) {
+function createTelegramGlobalGroupConfig(
+  groups: Record<string, Record<string, unknown>>,
+) {
   return {
     channels: {
       telegram: {

@@ -7,7 +7,10 @@ import type { RuntimeEnv } from "../../../runtime.js";
 import { resolveDefaultSecretProviderAlias } from "../../../secrets/ref-contract.js";
 import { normalizeSecretInput } from "../../../utils/normalize-secret-input.js";
 import { normalizeSecretInputModeInput } from "../../auth-choice.apply-helpers.js";
-import { buildTokenProfileId, validateAnthropicSetupToken } from "../../auth-token.js";
+import {
+  buildTokenProfileId,
+  validateAnthropicSetupToken,
+} from "../../auth-token.js";
 import { applyGoogleGeminiModelDefault } from "../../google-gemini-model-default.js";
 import { applyPrimaryModel } from "../../model-picker.js";
 import {
@@ -81,7 +84,9 @@ export async function applyNonInteractiveAuthChoice(params: {
 }): Promise<OpenClawConfig | null> {
   const { authChoice, opts, runtime, baseConfig } = params;
   let nextConfig = params.nextConfig;
-  const requestedSecretInputMode = normalizeSecretInputModeInput(opts.secretInputMode);
+  const requestedSecretInputMode = normalizeSecretInputModeInput(
+    opts.secretInputMode,
+  );
   if (opts.secretInputMode && !requestedSecretInputMode) {
     runtime.error('Invalid --secret-input-mode. Use "plaintext" or "ref".');
     runtime.exit(1);
@@ -90,7 +95,9 @@ export async function applyNonInteractiveAuthChoice(params: {
   const apiKeyStorageOptions = requestedSecretInputMode
     ? { secretInputMode: requestedSecretInputMode }
     : undefined;
-  const toStoredSecretInput = (resolved: ResolvedNonInteractiveApiKey): SecretInput | null => {
+  const toStoredSecretInput = (
+    resolved: ResolvedNonInteractiveApiKey,
+  ): SecretInput | null => {
     if (requestedSecretInputMode !== "ref") {
       return resolved.key;
     }
@@ -115,7 +122,9 @@ export async function applyNonInteractiveAuthChoice(params: {
       id: resolved.envVarName,
     };
   };
-  const resolveApiKey = (input: Parameters<typeof resolveNonInteractiveApiKey>[0]) =>
+  const resolveApiKey = (
+    input: Parameters<typeof resolveNonInteractiveApiKey>[0],
+  ) =>
     resolveNonInteractiveApiKey({
       ...input,
       secretInputMode: requestedSecretInputMode,
@@ -203,7 +212,9 @@ export async function applyNonInteractiveAuthChoice(params: {
     }
     const provider = normalizeProviderId(providerRaw);
     if (provider !== "anthropic") {
-      runtime.error("Only --token-provider anthropic is supported for --auth-choice token.");
+      runtime.error(
+        "Only --token-provider anthropic is supported for --auth-choice token.",
+      );
       runtime.exit(1);
       return null;
     }
@@ -224,7 +235,8 @@ export async function applyNonInteractiveAuthChoice(params: {
     const expiresInRaw = opts.tokenExpiresIn?.trim();
     if (expiresInRaw) {
       try {
-        expires = Date.now() + parseDurationMs(expiresInRaw, { defaultUnit: "d" });
+        expires =
+          Date.now() + parseDurationMs(expiresInRaw, { defaultUnit: "d" });
       } catch (err) {
         runtime.error(`Invalid --token-expires-in: ${String(err)}`);
         runtime.exit(1);
@@ -232,7 +244,9 @@ export async function applyNonInteractiveAuthChoice(params: {
       }
     }
 
-    const profileId = opts.tokenProfileId?.trim() || buildTokenProfileId({ provider, name: "" });
+    const profileId =
+      opts.tokenProfileId?.trim() ||
+      buildTokenProfileId({ provider, name: "" });
     upsertAuthProfile({
       profileId,
       credential: {
@@ -831,7 +845,9 @@ export async function applyNonInteractiveAuthChoice(params: {
       mode: "api_key",
     });
     const modelId =
-      authChoice === "minimax-api-lightning" ? "MiniMax-M2.5-Lightning" : "MiniMax-M2.5";
+      authChoice === "minimax-api-lightning"
+        ? "MiniMax-M2.5-Lightning"
+        : "MiniMax-M2.5";
     return isCn
       ? applyMinimaxApiConfigCn(nextConfig, modelId)
       : applyMinimaxApiConfig(nextConfig, modelId);

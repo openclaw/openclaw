@@ -8,7 +8,9 @@ import type { WizardPrompter } from "../wizard/prompts.js";
 import { detectBinary, resolveNodeManagerOptions } from "./onboard-helpers.js";
 
 function summarizeInstallFailure(message: string): string | undefined {
-  const cleaned = message.replace(/^Install failed(?:\s*\([^)]*\))?\s*:?\s*/i, "").trim();
+  const cleaned = message
+    .replace(/^Install failed(?:\s*\([^)]*\))?\s*:?\s*/i, "")
+    .trim();
   if (!cleaned) {
     return undefined;
   }
@@ -22,12 +24,15 @@ function formatSkillHint(skill: {
 }): string {
   const desc = skill.description?.trim();
   const installLabel = skill.install[0]?.label?.trim();
-  const combined = desc && installLabel ? `${desc} — ${installLabel}` : desc || installLabel;
+  const combined =
+    desc && installLabel ? `${desc} — ${installLabel}` : desc || installLabel;
   if (!combined) {
     return "install";
   }
   const maxLen = 90;
-  return combined.length > maxLen ? `${combined.slice(0, maxLen - 1)}…` : combined;
+  return combined.length > maxLen
+    ? `${combined.slice(0, maxLen - 1)}…`
+    : combined;
 }
 
 function upsertSkillEntry(
@@ -59,7 +64,11 @@ export async function setupSkills(
     (s) => !s.disabled && !s.blockedByAllowlist && s.missing.os.length > 0,
   );
   const missing = report.skills.filter(
-    (s) => !s.eligible && !s.disabled && !s.blockedByAllowlist && s.missing.os.length === 0,
+    (s) =>
+      !s.eligible &&
+      !s.disabled &&
+      !s.blockedByAllowlist &&
+      s.missing.os.length === 0,
   );
   const blocked = report.skills.filter((s) => s.blockedByAllowlist);
 
@@ -110,7 +119,9 @@ export async function setupSkills(
 
     const needsBrewPrompt =
       process.platform !== "win32" &&
-      selectedSkills.some((skill) => skill.install.some((option) => option.kind === "brew")) &&
+      selectedSkills.some((skill) =>
+        skill.install.some((option) => option.kind === "brew"),
+      ) &&
       !(await detectBinary("brew"));
 
     if (needsBrewPrompt) {
@@ -174,7 +185,11 @@ export async function setupSkills(
       });
       const warnings = result.warnings ?? [];
       if (result.ok) {
-        spin.stop(warnings.length > 0 ? `Installed ${name} (with warnings)` : `Installed ${name}`);
+        spin.stop(
+          warnings.length > 0
+            ? `Installed ${name} (with warnings)`
+            : `Installed ${name}`,
+        );
         for (const warning of warnings) {
           runtime.log(warning);
         }
@@ -182,7 +197,9 @@ export async function setupSkills(
       }
       const code = result.code == null ? "" : ` (exit ${result.code})`;
       const detail = summarizeInstallFailure(result.message);
-      spin.stop(`Install failed: ${name}${code}${detail ? ` — ${detail}` : ""}`);
+      spin.stop(
+        `Install failed: ${name}${code}${detail ? ` — ${detail}` : ""}`,
+      );
       for (const warning of warnings) {
         runtime.log(warning);
       }
@@ -215,7 +232,9 @@ export async function setupSkills(
         validate: (value) => (value?.trim() ? undefined : "Required"),
       }),
     );
-    next = upsertSkillEntry(next, skill.skillKey, { apiKey: normalizeSecretInput(apiKey) });
+    next = upsertSkillEntry(next, skill.skillKey, {
+      apiKey: normalizeSecretInput(apiKey),
+    });
   }
 
   return next;

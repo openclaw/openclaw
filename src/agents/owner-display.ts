@@ -20,7 +20,9 @@ function trimToUndefined(value?: string): string | undefined {
  * Resolve owner display settings for prompt rendering.
  * Keep auth secrets decoupled from owner hash secrets.
  */
-export function resolveOwnerDisplaySetting(config?: OpenClawConfig): OwnerDisplaySetting {
+export function resolveOwnerDisplaySetting(
+  config?: OpenClawConfig,
+): OwnerDisplaySetting {
   const ownerDisplay = config?.commands?.ownerDisplay;
   if (ownerDisplay !== "hash") {
     return { ownerDisplay, ownerDisplaySecret: undefined };

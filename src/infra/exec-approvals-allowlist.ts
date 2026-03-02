@@ -115,7 +115,9 @@ function normalizeSkillBinName(value: string | undefined): string | null {
   return trimmed && trimmed.length > 0 ? trimmed : null;
 }
 
-function normalizeSkillBinResolvedPath(value: string | undefined): string | null {
+function normalizeSkillBinResolvedPath(
+  value: string | undefined,
+): string | null {
   const trimmed = value?.trim();
   if (!trimmed) {
     return null;
@@ -199,10 +201,14 @@ function evaluateSegments(
       return false;
     }
     const effectiveArgv =
-      segment.resolution?.effectiveArgv && segment.resolution.effectiveArgv.length > 0
+      segment.resolution?.effectiveArgv &&
+      segment.resolution.effectiveArgv.length > 0
         ? segment.resolution.effectiveArgv
         : segment.argv;
-    const candidatePath = resolveAllowlistCandidatePath(segment.resolution, params.cwd);
+    const candidatePath = resolveAllowlistCandidatePath(
+      segment.resolution,
+      params.cwd,
+    );
     const candidateResolution =
       candidatePath && segment.resolution
         ? { ...segment.resolution, resolvedPath: candidatePath }
@@ -238,7 +244,9 @@ function evaluateSegments(
   return { satisfied, matches, segmentSatisfiedBy };
 }
 
-function resolveAnalysisSegmentGroups(analysis: ExecCommandAnalysis): ExecCommandSegment[][] {
+function resolveAnalysisSegmentGroups(
+  analysis: ExecCommandAnalysis,
+): ExecCommandSegment[][] {
   if (analysis.chains) {
     return analysis.chains;
   }
@@ -282,7 +290,11 @@ export function evaluateExecAllowlist(params: {
           segmentSatisfiedBy: result.segmentSatisfiedBy,
         };
       }
-      return { allowlistSatisfied: false, allowlistMatches: [], segmentSatisfiedBy: [] };
+      return {
+        allowlistSatisfied: false,
+        allowlistMatches: [],
+        segmentSatisfiedBy: [],
+      };
     }
     allowlistMatches.push(...result.matches);
     segmentSatisfiedBy.push(...result.segmentSatisfiedBy);
@@ -340,15 +352,24 @@ function collectAllowAlwaysPatterns(params: {
   }
 
   if (isDispatchWrapperSegment(params.segment)) {
-    const dispatchUnwrap = unwrapKnownDispatchWrapperInvocation(params.segment.argv);
-    if (dispatchUnwrap.kind !== "unwrapped" || dispatchUnwrap.argv.length === 0) {
+    const dispatchUnwrap = unwrapKnownDispatchWrapperInvocation(
+      params.segment.argv,
+    );
+    if (
+      dispatchUnwrap.kind !== "unwrapped" ||
+      dispatchUnwrap.argv.length === 0
+    ) {
       return;
     }
     collectAllowAlwaysPatterns({
       segment: {
         raw: dispatchUnwrap.argv.join(" "),
         argv: dispatchUnwrap.argv,
-        resolution: resolveCommandResolutionFromArgv(dispatchUnwrap.argv, params.cwd, params.env),
+        resolution: resolveCommandResolutionFromArgv(
+          dispatchUnwrap.argv,
+          params.cwd,
+          params.env,
+        ),
       },
       cwd: params.cwd,
       env: params.env,
@@ -359,7 +380,9 @@ function collectAllowAlwaysPatterns(params: {
     return;
   }
 
-  const shellMultiplexerUnwrap = unwrapKnownShellMultiplexerInvocation(params.segment.argv);
+  const shellMultiplexerUnwrap = unwrapKnownShellMultiplexerInvocation(
+    params.segment.argv,
+  );
   if (shellMultiplexerUnwrap.kind === "blocked") {
     return;
   }
@@ -383,7 +406,10 @@ function collectAllowAlwaysPatterns(params: {
     return;
   }
 
-  const candidatePath = resolveAllowlistCandidatePath(params.segment.resolution, params.cwd);
+  const candidatePath = resolveAllowlistCandidatePath(
+    params.segment.resolution,
+    params.cwd,
+  );
   if (!candidatePath) {
     return;
   }
@@ -470,7 +496,9 @@ export function evaluateShellAllowlist(params: {
     return analysisFailure();
   }
 
-  const chainParts = isWindowsPlatform(params.platform) ? null : splitCommandChain(params.command);
+  const chainParts = isWindowsPlatform(params.platform)
+    ? null
+    : splitCommandChain(params.command);
   if (!chainParts) {
     const analysis = analyzeShellCommand({
       command: params.command,

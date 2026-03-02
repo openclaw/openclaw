@@ -12,7 +12,9 @@ export type ControlUiBootstrapState = {
   assistantAgentId: string | null;
 };
 
-export async function loadControlUiBootstrapConfig(state: ControlUiBootstrapState) {
+export async function loadControlUiBootstrapConfig(
+  state: ControlUiBootstrapState,
+) {
   if (typeof window === "undefined") {
     return;
   }

@@ -1,4 +1,7 @@
-import type { AudioTranscriptionRequest, AudioTranscriptionResult } from "../../types.js";
+import type {
+  AudioTranscriptionRequest,
+  AudioTranscriptionResult,
+} from "../../types.js";
 import {
   assertOkOrThrowHttpError,
   normalizeBaseUrl,
@@ -28,7 +31,10 @@ export async function transcribeDeepgramAudio(
   params: AudioTranscriptionRequest,
 ): Promise<AudioTranscriptionResult> {
   const fetchFn = params.fetchFn ?? fetch;
-  const baseUrl = normalizeBaseUrl(params.baseUrl, DEFAULT_DEEPGRAM_AUDIO_BASE_URL);
+  const baseUrl = normalizeBaseUrl(
+    params.baseUrl,
+    DEFAULT_DEEPGRAM_AUDIO_BASE_URL,
+  );
   const allowPrivate = Boolean(params.baseUrl?.trim());
   const model = resolveModel(params.model);
 

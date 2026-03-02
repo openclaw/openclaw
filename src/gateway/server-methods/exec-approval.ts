@@ -19,7 +19,9 @@ export function createExecApprovalHandlers(
   manager: ExecApprovalManager,
   opts?: { forwarder?: ExecApprovalForwarder },
 ): GatewayRequestHandlers {
-  const hasApprovalClients = (context: { hasExecApprovalClients?: () => boolean }) => {
+  const hasApprovalClients = (context: {
+    hasExecApprovalClients?: () => boolean;
+  }) => {
     if (typeof context.hasExecApprovalClients === "function") {
       return context.hasExecApprovalClients();
     }
@@ -65,8 +67,11 @@ export function createExecApprovalHandlers(
       };
       const twoPhase = p.twoPhase === true;
       const timeoutMs =
-        typeof p.timeoutMs === "number" ? p.timeoutMs : DEFAULT_EXEC_APPROVAL_TIMEOUT_MS;
-      const explicitId = typeof p.id === "string" && p.id.trim().length > 0 ? p.id.trim() : null;
+        typeof p.timeoutMs === "number"
+          ? p.timeoutMs
+          : DEFAULT_EXEC_APPROVAL_TIMEOUT_MS;
+      const explicitId =
+        typeof p.id === "string" && p.id.trim().length > 0 ? p.id.trim() : null;
       const host = typeof p.host === "string" ? p.host.trim() : "";
       const nodeId = typeof p.nodeId === "string" ? p.nodeId.trim() : "";
       const approvalContext = resolveSystemRunApprovalRequestContext({
@@ -87,7 +92,10 @@ export function createExecApprovalHandlers(
         respond(
           false,
           undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "nodeId is required for host=node"),
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "nodeId is required for host=node",
+          ),
         );
         return;
       }
@@ -95,18 +103,25 @@ export function createExecApprovalHandlers(
         respond(
           false,
           undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "systemRunPlan is required for host=node"),
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "systemRunPlan is required for host=node",
+          ),
         );
         return;
       }
       if (
         host === "node" &&
-        (!Array.isArray(effectiveCommandArgv) || effectiveCommandArgv.length === 0)
+        (!Array.isArray(effectiveCommandArgv) ||
+          effectiveCommandArgv.length === 0)
       ) {
         respond(
           false,
           undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "commandArgv is required for host=node"),
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "commandArgv is required for host=node",
+          ),
         );
         return;
       }
@@ -131,7 +146,9 @@ export function createExecApprovalHandlers(
       const request = {
         command: effectiveCommandText,
         commandArgv: effectiveCommandArgv,
-        envKeys: systemRunBinding?.envKeys?.length ? systemRunBinding.envKeys : undefined,
+        envKeys: systemRunBinding?.envKeys?.length
+          ? systemRunBinding.envKeys
+          : undefined,
         systemRunBinding: systemRunBinding?.binding ?? null,
         systemRunPlan: approvalContext.plan,
         cwd: effectiveCwd ?? null,
@@ -143,10 +160,17 @@ export function createExecApprovalHandlers(
         resolvedPath: p.resolvedPath ?? null,
         sessionKey: effectiveSessionKey ?? null,
         turnSourceChannel:
-          typeof p.turnSourceChannel === "string" ? p.turnSourceChannel.trim() || null : null,
-        turnSourceTo: typeof p.turnSourceTo === "string" ? p.turnSourceTo.trim() || null : null,
+          typeof p.turnSourceChannel === "string"
+            ? p.turnSourceChannel.trim() || null
+            : null,
+        turnSourceTo:
+          typeof p.turnSourceTo === "string"
+            ? p.turnSourceTo.trim() || null
+            : null,
         turnSourceAccountId:
-          typeof p.turnSourceAccountId === "string" ? p.turnSourceAccountId.trim() || null : null,
+          typeof p.turnSourceAccountId === "string"
+            ? p.turnSourceAccountId.trim() || null
+            : null,
         turnSourceThreadId: p.turnSourceThreadId ?? null,
       };
       const record = manager.create(request, timeoutMs, explicitId);
@@ -164,7 +188,10 @@ export function createExecApprovalHandlers(
         respond(
           false,
           undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, `registration failed: ${String(err)}`),
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `registration failed: ${String(err)}`,
+          ),
         );
         return;
       }
@@ -188,7 +215,9 @@ export function createExecApprovalHandlers(
             expiresAtMs: record.expiresAtMs,
           });
         } catch (err) {
-          context.logGateway?.error?.(`exec approvals: forward request failed: ${String(err)}`);
+          context.logGateway?.error?.(
+            `exec approvals: forward request failed: ${String(err)}`,
+          );
         }
       }
 
@@ -228,7 +257,11 @@ export function createExecApprovalHandlers(
       const p = params as { id?: string };
       const id = typeof p.id === "string" ? p.id.trim() : "";
       if (!id) {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "id is required"));
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "id is required"),
+        );
         return;
       }
       const decisionPromise = manager.awaitDecision(id);
@@ -236,7 +269,10 @@ export function createExecApprovalHandlers(
         respond(
           false,
           undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "approval expired or not found"),
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "approval expired or not found",
+          ),
         );
         return;
       }
@@ -271,20 +307,39 @@ export function createExecApprovalHandlers(
       }
       const p = params as { id: string; decision: string };
       const decision = p.decision as ExecApprovalDecision;
-      if (decision !== "allow-once" && decision !== "allow-always" && decision !== "deny") {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "invalid decision"));
+      if (
+        decision !== "allow-once" &&
+        decision !== "allow-always" &&
+        decision !== "deny"
+      ) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "invalid decision"),
+        );
         return;
       }
       const snapshot = manager.getSnapshot(p.id);
-      const resolvedBy = client?.connect?.client?.displayName ?? client?.connect?.client?.id;
+      const resolvedBy =
+        client?.connect?.client?.displayName ?? client?.connect?.client?.id;
       const ok = manager.resolve(p.id, decision, resolvedBy ?? null);
       if (!ok) {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown approval id"));
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "unknown approval id"),
+        );
         return;
       }
       context.broadcast(
         "exec.approval.resolved",
-        { id: p.id, decision, resolvedBy, ts: Date.now(), request: snapshot?.request },
+        {
+          id: p.id,
+          decision,
+          resolvedBy,
+          ts: Date.now(),
+          request: snapshot?.request,
+        },
         { dropIfSlow: true },
       );
       void opts?.forwarder
@@ -296,7 +351,9 @@ export function createExecApprovalHandlers(
           request: snapshot?.request,
         })
         .catch((err) => {
-          context.logGateway?.error?.(`exec approvals: forward resolve failed: ${String(err)}`);
+          context.logGateway?.error?.(
+            `exec approvals: forward resolve failed: ${String(err)}`,
+          );
         });
       respond(true, { ok: true }, undefined);
     },

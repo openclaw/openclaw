@@ -1,4 +1,7 @@
-import { readConfigFileSnapshot, resolveGatewayPort } from "../config/config.js";
+import {
+  readConfigFileSnapshot,
+  resolveGatewayPort,
+} from "../config/config.js";
 import { copyToClipboard } from "../infra/clipboard.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
@@ -23,7 +26,8 @@ export async function dashboardCommand(
   const bind = cfg.gateway?.bind ?? "loopback";
   const basePath = cfg.gateway?.controlUi?.basePath;
   const customBindHost = cfg.gateway?.customBindHost;
-  const token = cfg.gateway?.auth?.token ?? process.env.OPENCLAW_GATEWAY_TOKEN ?? "";
+  const token =
+    cfg.gateway?.auth?.token ?? process.env.OPENCLAW_GATEWAY_TOKEN ?? "";
 
   // LAN URLs fail secure-context checks in browsers.
   // Coerce only lan->loopback and preserve other bind modes.
@@ -41,7 +45,9 @@ export async function dashboardCommand(
   runtime.log(`Dashboard URL: ${dashboardUrl}`);
 
   const copied = await copyToClipboard(dashboardUrl).catch(() => false);
-  runtime.log(copied ? "Copied to clipboard." : "Copy to clipboard unavailable.");
+  runtime.log(
+    copied ? "Copied to clipboard." : "Copy to clipboard unavailable.",
+  );
 
   let opened = false;
   let hint: string | undefined;

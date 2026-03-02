@@ -86,10 +86,17 @@ function toExecApprovalsPayload(snapshot: ExecApprovalsSnapshot) {
   };
 }
 
-function resolveNodeIdOrRespond(nodeId: string, respond: RespondFn): string | null {
+function resolveNodeIdOrRespond(
+  nodeId: string,
+  respond: RespondFn,
+): string | null {
   const id = nodeId.trim();
   if (!id) {
-    respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "nodeId required"));
+    respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.INVALID_REQUEST, "nodeId required"),
+    );
     return null;
   }
   return id;
@@ -97,7 +104,14 @@ function resolveNodeIdOrRespond(nodeId: string, respond: RespondFn): string | nu
 
 export const execApprovalsHandlers: GatewayRequestHandlers = {
   "exec.approvals.get": ({ params, respond }) => {
-    if (!assertValidParams(params, validateExecApprovalsGetParams, "exec.approvals.get", respond)) {
+    if (
+      !assertValidParams(
+        params,
+        validateExecApprovalsGetParams,
+        "exec.approvals.get",
+        respond,
+      )
+    ) {
       return;
     }
     ensureExecApprovals();
@@ -105,7 +119,14 @@ export const execApprovalsHandlers: GatewayRequestHandlers = {
     respond(true, toExecApprovalsPayload(snapshot), undefined);
   },
   "exec.approvals.set": ({ params, respond }) => {
-    if (!assertValidParams(params, validateExecApprovalsSetParams, "exec.approvals.set", respond)) {
+    if (
+      !assertValidParams(
+        params,
+        validateExecApprovalsSetParams,
+        "exec.approvals.set",
+        respond,
+      )
+    ) {
       return;
     }
     ensureExecApprovals();
@@ -118,12 +139,18 @@ export const execApprovalsHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "exec approvals file is required"),
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "exec approvals file is required",
+        ),
       );
       return;
     }
     const normalized = normalizeExecApprovals(incoming as ExecApprovalsFile);
-    const next = mergeExecApprovalsSocketDefaults({ normalized, current: snapshot.file });
+    const next = mergeExecApprovalsSocketDefaults({
+      normalized,
+      current: snapshot.file,
+    });
     saveExecApprovals(next);
     const nextSnapshot = readExecApprovalsSnapshot();
     respond(true, toExecApprovalsPayload(nextSnapshot), undefined);
@@ -153,7 +180,9 @@ export const execApprovalsHandlers: GatewayRequestHandlers = {
       if (!respondUnavailableOnNodeInvokeError(respond, res)) {
         return;
       }
-      const payload = res.payloadJSON ? safeParseJson(res.payloadJSON) : res.payload;
+      const payload = res.payloadJSON
+        ? safeParseJson(res.payloadJSON)
+        : res.payload;
       respond(true, payload, undefined);
     });
   },

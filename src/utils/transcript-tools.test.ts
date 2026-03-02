@@ -1,10 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { countToolResults, extractToolCallNames, hasToolCall } from "./transcript-tools.js";
+import {
+  countToolResults,
+  extractToolCallNames,
+  hasToolCall,
+} from "./transcript-tools.js";
 
 describe("transcript-tools", () => {
   describe("extractToolCallNames", () => {
     it("extracts tool name from message.toolName/tool_name", () => {
-      expect(extractToolCallNames({ toolName: " weather " })).toEqual(["weather"]);
+      expect(extractToolCallNames({ toolName: " weather " })).toEqual([
+        "weather",
+      ]);
       expect(extractToolCallNames({ tool_name: "notes" })).toEqual(["notes"]);
     });
 
@@ -36,12 +42,16 @@ describe("transcript-tools", () => {
   describe("hasToolCall", () => {
     it("returns true when tool call names exist", () => {
       expect(hasToolCall({ toolName: "weather" })).toBe(true);
-      expect(hasToolCall({ content: [{ type: "tool_use", name: "read" }] })).toBe(true);
+      expect(
+        hasToolCall({ content: [{ type: "tool_use", name: "read" }] }),
+      ).toBe(true);
     });
 
     it("returns false when no tool calls exist", () => {
       expect(hasToolCall({})).toBe(false);
-      expect(hasToolCall({ content: [{ type: "text", text: "hi" }] })).toBe(false);
+      expect(hasToolCall({ content: [{ type: "text", text: "hi" }] })).toBe(
+        false,
+      );
     });
   });
 
@@ -60,7 +70,10 @@ describe("transcript-tools", () => {
     });
 
     it("handles non-array content", () => {
-      expect(countToolResults({ content: "nope" })).toEqual({ total: 0, errors: 0 });
+      expect(countToolResults({ content: "nope" })).toEqual({
+        total: 0,
+        errors: 0,
+      });
     });
   });
 });

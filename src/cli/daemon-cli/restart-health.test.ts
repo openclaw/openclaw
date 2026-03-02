@@ -2,13 +2,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayService } from "../../daemon/service.js";
 import type { PortListenerKind, PortUsage } from "../../infra/ports.js";
 
-const inspectPortUsage = vi.hoisted(() => vi.fn<(port: number) => Promise<PortUsage>>());
+const inspectPortUsage = vi.hoisted(() =>
+  vi.fn<(port: number) => Promise<PortUsage>>(),
+);
 const classifyPortListener = vi.hoisted(() =>
-  vi.fn<(_listener: unknown, _port: number) => PortListenerKind>(() => "gateway"),
+  vi.fn<(_listener: unknown, _port: number) => PortListenerKind>(
+    () => "gateway",
+  ),
 );
 
 vi.mock("../../infra/ports.js", () => ({
-  classifyPortListener: (listener: unknown, port: number) => classifyPortListener(listener, port),
+  classifyPortListener: (listener: unknown, port: number) =>
+    classifyPortListener(listener, port),
   formatPortDiagnostics: vi.fn(() => []),
   inspectPortUsage: (port: number) => inspectPortUsage(port),
 }));
@@ -29,7 +34,10 @@ describe("inspectGatewayRestart", () => {
   });
 
   afterEach(() => {
-    Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+    Object.defineProperty(process, "platform", {
+      value: originalPlatform,
+      configurable: true,
+    });
   });
 
   it("treats a gateway listener child pid as healthy ownership", async () => {
@@ -71,7 +79,10 @@ describe("inspectGatewayRestart", () => {
   });
 
   it("treats unknown listeners as stale on Windows when enabled", async () => {
-    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    Object.defineProperty(process, "platform", {
+      value: "win32",
+      configurable: true,
+    });
     classifyPortListener.mockReturnValue("unknown");
 
     const service = {
@@ -96,7 +107,10 @@ describe("inspectGatewayRestart", () => {
   });
 
   it("does not treat unknown listeners as stale when fallback is disabled", async () => {
-    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    Object.defineProperty(process, "platform", {
+      value: "win32",
+      configurable: true,
+    });
     classifyPortListener.mockReturnValue("unknown");
 
     const service = {
@@ -121,7 +135,10 @@ describe("inspectGatewayRestart", () => {
   });
 
   it("does not apply unknown-listener fallback while runtime is running", async () => {
-    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    Object.defineProperty(process, "platform", {
+      value: "win32",
+      configurable: true,
+    });
     classifyPortListener.mockReturnValue("unknown");
 
     const service = {
@@ -146,7 +163,10 @@ describe("inspectGatewayRestart", () => {
   });
 
   it("does not treat known non-gateway listeners as stale in fallback mode", async () => {
-    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    Object.defineProperty(process, "platform", {
+      value: "win32",
+      configurable: true,
+    });
     classifyPortListener.mockReturnValue("ssh");
 
     const service = {

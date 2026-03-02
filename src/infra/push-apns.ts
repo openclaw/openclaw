@@ -3,7 +3,11 @@ import fs from "node:fs/promises";
 import http2 from "node:http2";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
-import { createAsyncLock, readJsonFile, writeJsonAtomic } from "./json-files.js";
+import {
+  createAsyncLock,
+  readJsonFile,
+  writeJsonAtomic,
+} from "./json-files.js";
 
 export type ApnsEnvironment = "sandbox" | "production";
 
@@ -60,7 +64,9 @@ type ApnsRequestParams = {
 
 type ApnsRequestResponse = { status: number; apnsId?: string; body: string };
 
-type ApnsRequestSender = (params: ApnsRequestParams) => Promise<ApnsRequestResponse>;
+type ApnsRequestSender = (
+  params: ApnsRequestParams,
+) => Promise<ApnsRequestResponse>;
 
 type ApnsRegistrationState = {
   registrationsByNodeId: Record<string, ApnsRegistration>;
@@ -71,7 +77,8 @@ const APNS_JWT_TTL_MS = 50 * 60 * 1000;
 const DEFAULT_APNS_TIMEOUT_MS = 10_000;
 const withLock = createAsyncLock();
 
-let cachedJwt: { cacheKey: string; token: string; expiresAtMs: number } | null = null;
+let cachedJwt: { cacheKey: string; token: string; expiresAtMs: number } | null =
+  null;
 
 function resolveApnsRegistrationPath(baseDir?: string): string {
   const root = baseDir ?? resolveStateDir();
@@ -129,9 +136,16 @@ function getJwtCacheKey(auth: ApnsAuthConfig): string {
   return `${auth.teamId}:${auth.keyId}:${keyHash}`;
 }
 
-function getApnsBearerToken(auth: ApnsAuthConfig, nowMs: number = Date.now()): string {
+function getApnsBearerToken(
+  auth: ApnsAuthConfig,
+  nowMs: number = Date.now(),
+): string {
   const cacheKey = getJwtCacheKey(auth);
-  if (cachedJwt && cachedJwt.cacheKey === cacheKey && nowMs < cachedJwt.expiresAtMs) {
+  if (
+    cachedJwt &&
+    cachedJwt.cacheKey === cacheKey &&
+    nowMs < cachedJwt.expiresAtMs
+  ) {
     return cachedJwt.token;
   }
 
@@ -161,7 +175,9 @@ function normalizeNonEmptyString(value: string | undefined): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
-async function loadRegistrationsState(baseDir?: string): Promise<ApnsRegistrationState> {
+async function loadRegistrationsState(
+  baseDir?: string,
+): Promise<ApnsRegistrationState> {
   const filePath = resolveApnsRegistrationPath(baseDir);
   const existing = await readJsonFile<ApnsRegistrationState>(filePath);
   if (!existing || typeof existing !== "object") {
@@ -184,7 +200,9 @@ async function persistRegistrationsState(
   await writeJsonAtomic(filePath, state);
 }
 
-export function normalizeApnsEnvironment(value: unknown): ApnsEnvironment | null {
+export function normalizeApnsEnvironment(
+  value: unknown,
+): ApnsEnvironment | null {
   if (typeof value !== "string") {
     return null;
   }
@@ -252,7 +270,8 @@ export async function resolveApnsAuthConfigFromEnv(
   if (!teamId || !keyId) {
     return {
       ok: false,
-      error: "APNs auth missing: set OPENCLAW_APNS_TEAM_ID and OPENCLAW_APNS_KEY_ID",
+      error:
+        "APNs auth missing: set OPENCLAW_APNS_TEAM_ID and OPENCLAW_APNS_KEY_ID",
     };
   }
 
@@ -326,7 +345,11 @@ async function sendApnsRequest(params: {
       client.destroy();
       reject(err);
     };
-    const finish = (result: { status: number; apnsId?: string; body: string }) => {
+    const finish = (result: {
+      status: number;
+      apnsId?: string;
+      body: string;
+    }) => {
       if (settled) {
         return;
       }
@@ -360,7 +383,10 @@ async function sendApnsRequest(params: {
     });
     req.on("response", (headers) => {
       const statusHeader = headers[":status"];
-      statusCode = typeof statusHeader === "number" ? statusHeader : Number(statusHeader ?? 0);
+      statusCode =
+        typeof statusHeader === "number"
+          ? statusHeader
+          : Number(statusHeader ?? 0);
       const idHeader = headers["apns-id"];
       if (typeof idHeader === "string" && idHeader.trim().length > 0) {
         apnsId = idHeader.trim();
@@ -386,7 +412,10 @@ function resolveApnsTimeoutMs(timeoutMs: number | undefined): number {
     : DEFAULT_APNS_TIMEOUT_MS;
 }
 
-function resolveApnsSendContext(params: { auth: ApnsAuthConfig; registration: ApnsRegistration }): {
+function resolveApnsSendContext(params: {
+  auth: ApnsAuthConfig;
+  registration: ApnsRegistration;
+}): {
   token: string;
   topic: string;
   environment: ApnsEnvironment;
@@ -429,7 +458,12 @@ function createOpenClawPushMetadata(params: {
   kind: "push.test" | "node.wake";
   nodeId: string;
   reason?: string;
-}): { kind: "push.test" | "node.wake"; nodeId: string; ts: number; reason?: string } {
+}): {
+  kind: "push.test" | "node.wake";
+  nodeId: string;
+  ts: number;
+  reason?: string;
+} {
   return {
     kind: params.kind,
     nodeId: params.nodeId,

@@ -1,5 +1,11 @@
-import { ensureAuthProfileStore, listProfilesForProvider } from "../agents/auth-profiles.js";
-import { getCustomProviderApiKey, resolveEnvApiKey } from "../agents/model-auth.js";
+import {
+  ensureAuthProfileStore,
+  listProfilesForProvider,
+} from "../agents/auth-profiles.js";
+import {
+  getCustomProviderApiKey,
+  resolveEnvApiKey,
+} from "../agents/model-auth.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/config.js";

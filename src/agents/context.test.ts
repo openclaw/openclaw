@@ -24,13 +24,17 @@ describe("applyDiscoveredContextWindows", () => {
 
 describe("applyConfiguredContextWindows", () => {
   it("overrides discovered cache values with explicit models.providers contextWindow", () => {
-    const cache = new Map<string, number>([["anthropic/claude-opus-4-6", 1_000_000]]);
+    const cache = new Map<string, number>([
+      ["anthropic/claude-opus-4-6", 1_000_000],
+    ]);
     applyConfiguredContextWindows({
       cache,
       modelsConfig: {
         providers: {
           openrouter: {
-            models: [{ id: "anthropic/claude-opus-4-6", contextWindow: 200_000 }],
+            models: [
+              { id: "anthropic/claude-opus-4-6", contextWindow: 200_000 },
+            ],
           },
         },
       },

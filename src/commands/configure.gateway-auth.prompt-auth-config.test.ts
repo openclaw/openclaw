@@ -88,9 +88,13 @@ function createApplyAuthChoiceConfig(includeMinimaxProvider = false) {
   };
 }
 
-async function runPromptAuthConfigWithAllowlist(includeMinimaxProvider = false) {
+async function runPromptAuthConfigWithAllowlist(
+  includeMinimaxProvider = false,
+) {
   mocks.promptAuthChoiceGrouped.mockResolvedValue("kilocode-api-key");
-  mocks.applyAuthChoice.mockResolvedValue(createApplyAuthChoiceConfig(includeMinimaxProvider));
+  mocks.applyAuthChoice.mockResolvedValue(
+    createApplyAuthChoiceConfig(includeMinimaxProvider),
+  );
   mocks.promptModelAllowlist.mockResolvedValue({
     models: ["kilocode/anthropic/claude-opus-4.6"],
   });
@@ -101,10 +105,9 @@ async function runPromptAuthConfigWithAllowlist(includeMinimaxProvider = false) 
 describe("promptAuthConfig", () => {
   it("keeps Kilo provider models while applying allowlist defaults", async () => {
     const result = await runPromptAuthConfigWithAllowlist();
-    expect(result.models?.providers?.kilocode?.models?.map((model) => model.id)).toEqual([
-      "anthropic/claude-opus-4.6",
-      "minimax/minimax-m2.5:free",
-    ]);
+    expect(
+      result.models?.providers?.kilocode?.models?.map((model) => model.id),
+    ).toEqual(["anthropic/claude-opus-4.6", "minimax/minimax-m2.5:free"]);
     expect(Object.keys(result.agents?.defaults?.models ?? {})).toEqual([
       "kilocode/anthropic/claude-opus-4.6",
     ]);
@@ -112,12 +115,11 @@ describe("promptAuthConfig", () => {
 
   it("does not mutate provider model catalogs when allowlist is set", async () => {
     const result = await runPromptAuthConfigWithAllowlist(true);
-    expect(result.models?.providers?.kilocode?.models?.map((model) => model.id)).toEqual([
-      "anthropic/claude-opus-4.6",
-      "minimax/minimax-m2.5:free",
-    ]);
-    expect(result.models?.providers?.minimax?.models?.map((model) => model.id)).toEqual([
-      "MiniMax-M2.1",
-    ]);
+    expect(
+      result.models?.providers?.kilocode?.models?.map((model) => model.id),
+    ).toEqual(["anthropic/claude-opus-4.6", "minimax/minimax-m2.5:free"]);
+    expect(
+      result.models?.providers?.minimax?.models?.map((model) => model.id),
+    ).toEqual(["MiniMax-M2.1"]);
   });
 });

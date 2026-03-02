@@ -9,7 +9,8 @@ const FLAG_TERMINATOR = "--";
 
 export function hasHelpOrVersion(argv: string[]): boolean {
   return (
-    argv.some((arg) => HELP_FLAGS.has(arg) || VERSION_FLAGS.has(arg)) || hasRootVersionAlias(argv)
+    argv.some((arg) => HELP_FLAGS.has(arg) || VERSION_FLAGS.has(arg)) ||
+    hasRootVersionAlias(argv)
   );
 }
 
@@ -84,7 +85,9 @@ export function hasRootVersionAlias(argv: string[]): boolean {
 }
 
 export function isRootVersionInvocation(argv: string[]): boolean {
-  return isRootInvocationForFlags(argv, VERSION_FLAGS, { includeVersionAlias: true });
+  return isRootInvocationForFlags(argv, VERSION_FLAGS, {
+    includeVersionAlias: true,
+  });
 }
 
 function isRootInvocationForFlags(
@@ -132,7 +135,10 @@ export function isRootHelpInvocation(argv: string[]): boolean {
   return isRootInvocationForFlags(argv, HELP_FLAGS);
 }
 
-export function getFlagValue(argv: string[], name: string): string | null | undefined {
+export function getFlagValue(
+  argv: string[],
+  name: string,
+): string | null | undefined {
   const args = argv.slice(2);
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
@@ -151,7 +157,10 @@ export function getFlagValue(argv: string[], name: string): string | null | unde
   return undefined;
 }
 
-export function getVerboseFlag(argv: string[], options?: { includeDebug?: boolean }): boolean {
+export function getVerboseFlag(
+  argv: string[],
+  options?: { includeDebug?: boolean },
+): boolean {
   if (hasFlag(argv, "--verbose")) {
     return true;
   }
@@ -161,7 +170,10 @@ export function getVerboseFlag(argv: string[], options?: { includeDebug?: boolea
   return false;
 }
 
-export function getPositiveIntFlagValue(argv: string[], name: string): number | null | undefined {
+export function getPositiveIntFlagValue(
+  argv: string[],
+  name: string,
+): number | null | undefined {
   const raw = getFlagValue(argv, name);
   if (raw === null || raw === undefined) {
     return raw;
@@ -216,7 +228,8 @@ export function buildParseArgv(params: {
         : baseArgv;
   const looksLikeNode =
     normalizedArgv.length >= 2 &&
-    (isNodeRuntime(normalizedArgv[0] ?? "") || isBunRuntime(normalizedArgv[0] ?? ""));
+    (isNodeRuntime(normalizedArgv[0] ?? "") ||
+      isBunRuntime(normalizedArgv[0] ?? ""));
   if (looksLikeNode) {
     return normalizedArgv;
   }
@@ -234,7 +247,10 @@ export function shouldMigrateStateFromPath(path: string[]): boolean {
   if (primary === "config" && (secondary === "get" || secondary === "unset")) {
     return false;
   }
-  if (primary === "models" && (secondary === "list" || secondary === "status")) {
+  if (
+    primary === "models" &&
+    (secondary === "list" || secondary === "status")
+  ) {
     return false;
   }
   if (primary === "memory" && secondary === "status") {

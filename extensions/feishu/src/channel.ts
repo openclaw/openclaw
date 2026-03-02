@@ -1,4 +1,8 @@
-import type { ChannelMeta, ChannelPlugin, ClawdbotConfig } from "openclaw/plugin-sdk";
+import type {
+  ChannelMeta,
+  ChannelPlugin,
+  ClawdbotConfig,
+} from "openclaw/plugin-sdk";
 import {
   buildBaseChannelStatusSummary,
   createDefaultChannelRuntimeState,
@@ -24,7 +28,11 @@ import { feishuOutbound } from "./outbound.js";
 import { resolveFeishuGroupToolPolicy } from "./policy.js";
 import { probeFeishu } from "./probe.js";
 import { sendMessageFeishu } from "./send.js";
-import { normalizeFeishuTarget, looksLikeFeishuId, formatFeishuTarget } from "./targets.js";
+import {
+  normalizeFeishuTarget,
+  looksLikeFeishuId,
+  formatFeishuTarget,
+} from "./targets.js";
 import type { ResolvedFeishuAccount, FeishuConfig } from "./types.js";
 
 const meta: ChannelMeta = {
@@ -45,7 +53,8 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
   },
   pairing: {
     idLabel: "feishuUserId",
-    normalizeAllowEntry: (entry) => entry.replace(/^(feishu|user|open_id):/i, ""),
+    normalizeAllowEntry: (entry) =>
+      entry.replace(/^(feishu|user|open_id):/i, ""),
     notifyApproval: async ({ cfg, id }) => {
       await sendMessageFeishu({
         cfg,
@@ -95,8 +104,14 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
         webhookHost: { type: "string" },
         webhookPort: { type: "integer", minimum: 1 },
         dmPolicy: { type: "string", enum: ["open", "pairing", "allowlist"] },
-        allowFrom: { type: "array", items: { oneOf: [{ type: "string" }, { type: "number" }] } },
-        groupPolicy: { type: "string", enum: ["open", "allowlist", "disabled"] },
+        allowFrom: {
+          type: "array",
+          items: { oneOf: [{ type: "string" }, { type: "number" }] },
+        },
+        groupPolicy: {
+          type: "string",
+          enum: ["open", "allowlist", "disabled"],
+        },
         groupAllowFrom: {
           type: "array",
           items: { oneOf: [{ type: "string" }, { type: "number" }] },
@@ -126,7 +141,10 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
               encryptKey: { type: "string" },
               verificationToken: { type: "string" },
               domain: { type: "string", enum: ["feishu", "lark"] },
-              connectionMode: { type: "string", enum: ["websocket", "webhook"] },
+              connectionMode: {
+                type: "string",
+                enum: ["websocket", "webhook"],
+              },
               webhookHost: { type: "string" },
               webhookPath: { type: "string" },
               webhookPort: { type: "integer", minimum: 1 },
@@ -138,7 +156,8 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
   },
   config: {
     listAccountIds: (cfg) => listFeishuAccountIds(cfg),
-    resolveAccount: (cfg, accountId) => resolveFeishuAccount({ cfg, accountId }),
+    resolveAccount: (cfg, accountId) =>
+      resolveFeishuAccount({ cfg, accountId }),
     defaultAccountId: (cfg) => resolveDefaultFeishuAccountId(cfg),
     setAccountEnabled: ({ cfg, accountId, enabled }) => {
       const account = resolveFeishuAccount({ cfg, accountId });
@@ -322,7 +341,9 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
   },
   outbound: feishuOutbound,
   status: {
-    defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID, { port: null }),
+    defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID, {
+      port: null,
+    }),
     buildChannelSummary: ({ snapshot }) => ({
       ...buildBaseChannelStatusSummary(snapshot),
       port: snapshot.port ?? null,
@@ -348,7 +369,10 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
   gateway: {
     startAccount: async (ctx) => {
       const { monitorFeishuProvider } = await import("./monitor.js");
-      const account = resolveFeishuAccount({ cfg: ctx.cfg, accountId: ctx.accountId });
+      const account = resolveFeishuAccount({
+        cfg: ctx.cfg,
+        accountId: ctx.accountId,
+      });
       const port = account.config?.webhookPort ?? null;
       ctx.setStatus({ accountId: ctx.accountId, port });
       ctx.log?.info(

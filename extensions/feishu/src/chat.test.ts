@@ -46,9 +46,16 @@ describe("registerFeishuChatTools", () => {
       code: 0,
       data: { name: "group name", user_count: 3 },
     });
-    const infoResult = await tool.execute("tc_1", { action: "info", chat_id: "oc_1" });
+    const infoResult = await tool.execute("tc_1", {
+      action: "info",
+      chat_id: "oc_1",
+    });
     expect(infoResult.details).toEqual(
-      expect.objectContaining({ chat_id: "oc_1", name: "group name", user_count: 3 }),
+      expect.objectContaining({
+        chat_id: "oc_1",
+        name: "group name",
+        user_count: 3,
+      }),
     );
 
     chatMembersGetMock.mockResolvedValueOnce({
@@ -56,14 +63,21 @@ describe("registerFeishuChatTools", () => {
       data: {
         has_more: false,
         page_token: "",
-        items: [{ member_id: "ou_1", name: "member1", member_id_type: "open_id" }],
+        items: [
+          { member_id: "ou_1", name: "member1", member_id_type: "open_id" },
+        ],
       },
     });
-    const membersResult = await tool.execute("tc_2", { action: "members", chat_id: "oc_1" });
+    const membersResult = await tool.execute("tc_2", {
+      action: "members",
+      chat_id: "oc_1",
+    });
     expect(membersResult.details).toEqual(
       expect.objectContaining({
         chat_id: "oc_1",
-        members: [expect.objectContaining({ member_id: "ou_1", name: "member1" })],
+        members: [
+          expect.objectContaining({ member_id: "ou_1", name: "member1" }),
+        ],
       }),
     );
   });

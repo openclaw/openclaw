@@ -45,7 +45,10 @@ import {
   resolveHookChannel,
   resolveHookDeliver,
 } from "./hooks.js";
-import { sendGatewayAuthFailure, setDefaultSecurityHeaders } from "./http-common.js";
+import {
+  sendGatewayAuthFailure,
+  setDefaultSecurityHeaders,
+} from "./http-common.js";
 import { handleOpenAiHttpRequest } from "./openai-http.js";
 import { handleOpenResponsesHttpRequest } from "./openresponses-http.js";
 import {
@@ -68,7 +71,10 @@ const HOOK_AUTH_FAILURE_LIMIT = 20;
 const HOOK_AUTH_FAILURE_WINDOW_MS = 60_000;
 
 type HookDispatchers = {
-  dispatchWakeHook: (value: { text: string; mode: "now" | "next-heartbeat" }) => void;
+  dispatchWakeHook: (value: {
+    text: string;
+    mode: "now" | "next-heartbeat";
+  }) => void;
   dispatchAgentHook: (value: HookAgentDispatchPayload) => string;
 };
 
@@ -85,7 +91,9 @@ const GATEWAY_PROBE_STATUS_BY_PATH = new Map<string, "live" | "ready">([
   ["/readyz", "ready"],
 ]);
 
-function shouldEnforceDefaultPluginGatewayAuth(pathContext: PluginRoutePathContext): boolean {
+function shouldEnforceDefaultPluginGatewayAuth(
+  pathContext: PluginRoutePathContext,
+): boolean {
   return (
     pathContext.malformedEncoding ||
     pathContext.decodePassLimitReached ||
@@ -129,7 +137,9 @@ function writeUpgradeAuthFailure(
 ) {
   if (auth.rateLimited) {
     const retryAfterSeconds =
-      auth.retryAfterMs && auth.retryAfterMs > 0 ? Math.ceil(auth.retryAfterMs / 1000) : undefined;
+      auth.retryAfterMs && auth.retryAfterMs > 0
+        ? Math.ceil(auth.retryAfterMs / 1000)
+        : undefined;
     socket.write(
       [
         "HTTP/1.1 429 Too Many Requests",
@@ -139,7 +149,8 @@ function writeUpgradeAuthFailure(
         "",
         JSON.stringify({
           error: {
-            message: "Too many failed authentication attempts. Please try again later.",
+            message:
+              "Too many failed authentication attempts. Please try again later.",
             type: "rate_limited",
           },
         }),
@@ -152,7 +163,10 @@ function writeUpgradeAuthFailure(
   socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
 }
 
-export type HooksRequestHandler = (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
+export type HooksRequestHandler = (
+  req: IncomingMessage,
+  res: ServerResponse,
+) => Promise<boolean>;
 
 type GatewayHttpRequestStage = {
   name: string;
@@ -176,7 +190,9 @@ function buildPluginRequestStages(params: {
   requestPath: string;
   pluginPathContext: PluginRoutePathContext | null;
   handlePluginRequest?: PluginHttpRequestHandler;
-  shouldEnforcePluginGatewayAuth?: (pathContext: PluginRoutePathContext) => boolean;
+  shouldEnforcePluginGatewayAuth?: (
+    pathContext: PluginRoutePathContext,
+  ) => boolean;
   resolvedAuth: ResolvedGatewayAuth;
   trustedProxies: string[];
   allowRealIpFallback: boolean;
@@ -190,11 +206,13 @@ function buildPluginRequestStages(params: {
       name: "plugin-auth",
       run: async () => {
         const pathContext =
-          params.pluginPathContext ?? resolvePluginRoutePathContext(params.requestPath);
+          params.pluginPathContext ??
+          resolvePluginRoutePathContext(params.requestPath);
         if (
-          !(params.shouldEnforcePluginGatewayAuth ?? shouldEnforceDefaultPluginGatewayAuth)(
-            pathContext,
-          )
+          !(
+            params.shouldEnforcePluginGatewayAuth ??
+            shouldEnforceDefaultPluginGatewayAuth
+          )(pathContext)
         ) {
           return false;
         }
@@ -216,8 +234,12 @@ function buildPluginRequestStages(params: {
       name: "plugin-http",
       run: () => {
         const pathContext =
-          params.pluginPathContext ?? resolvePluginRoutePathContext(params.requestPath);
-        return params.handlePluginRequest?.(params.req, params.res, pathContext) ?? false;
+          params.pluginPathContext ??
+          resolvePluginRoutePathContext(params.requestPath);
+        return (
+          params.handlePluginRequest?.(params.req, params.res, pathContext) ??
+          false
+        );
       },
     },
   ];
@@ -231,7 +253,8 @@ export function createHooksRequestHandler(
     logHooks: SubsystemLogger;
   } & HookDispatchers,
 ): HooksRequestHandler {
-  const { getHooksConfig, logHooks, dispatchAgentHook, dispatchWakeHook } = opts;
+  const { getHooksConfig, logHooks, dispatchAgentHook, dispatchWakeHook } =
+    opts;
   const hookAuthLimiter = createAuthRateLimiter({
     maxAttempts: HOOK_AUTH_FAILURE_LIMIT,
     windowMs: HOOK_AUTH_FAILURE_WINDOW_MS,
@@ -270,14 +293,22 @@ export function createHooksRequestHandler(
     const token = extractHookToken(req);
     const clientKey = resolveHookClientKey(req);
     if (!safeEqualSecret(token, hooksConfig.token)) {
-      const throttle = hookAuthLimiter.check(clientKey, AUTH_RATE_LIMIT_SCOPE_HOOK_AUTH);
+      const throttle = hookAuthLimiter.check(
+        clientKey,
+        AUTH_RATE_LIMIT_SCOPE_HOOK_AUTH,
+      );
       if (!throttle.allowed) {
-        const retryAfter = throttle.retryAfterMs > 0 ? Math.ceil(throttle.retryAfterMs / 1000) : 1;
+        const retryAfter =
+          throttle.retryAfterMs > 0
+            ? Math.ceil(throttle.retryAfterMs / 1000)
+            : 1;
         res.statusCode = 429;
         res.setHeader("Retry-After", String(retryAfter));
         res.setHeader("Content-Type", "text/plain; charset=utf-8");
         res.end("Too Many Requests");
-        logHooks.warn(`hook auth throttled for ${clientKey}; retry-after=${retryAfter}s`);
+        logHooks.warn(
+          `hook auth throttled for ${clientKey}; retry-after=${retryAfter}s`,
+        );
         return true;
       }
       hookAuthLimiter.recordFailure(clientKey, AUTH_RATE_LIMIT_SCOPE_HOOK_AUTH);
@@ -316,11 +347,14 @@ export function createHooksRequestHandler(
       return true;
     }
 
-    const payload = typeof body.value === "object" && body.value !== null ? body.value : {};
+    const payload =
+      typeof body.value === "object" && body.value !== null ? body.value : {};
     const headers = normalizeHookHeaders(req);
 
     if (subPath === "wake") {
-      const normalized = normalizeWakePayload(payload as Record<string, unknown>);
+      const normalized = normalizeWakePayload(
+        payload as Record<string, unknown>,
+      );
       if (!normalized.ok) {
         sendJson(res, 400, { ok: false, error: normalized.error });
         return true;
@@ -331,7 +365,9 @@ export function createHooksRequestHandler(
     }
 
     if (subPath === "agent") {
-      const normalized = normalizeAgentPayload(payload as Record<string, unknown>);
+      const normalized = normalizeAgentPayload(
+        payload as Record<string, unknown>,
+      );
       if (!normalized.ok) {
         sendJson(res, 400, { ok: false, error: normalized.error });
         return true;
@@ -349,7 +385,10 @@ export function createHooksRequestHandler(
         sendJson(res, 400, { ok: false, error: sessionKey.error });
         return true;
       }
-      const targetAgentId = resolveHookTargetAgentId(hooksConfig, normalized.value.agentId);
+      const targetAgentId = resolveHookTargetAgentId(
+        hooksConfig,
+        normalized.value.agentId,
+      );
       const runId = dispatchAgentHook({
         ...normalized.value,
         sessionKey: normalizeHookDispatchSessionKey({
@@ -406,7 +445,10 @@ export function createHooksRequestHandler(
             sendJson(res, 400, { ok: false, error: sessionKey.error });
             return true;
           }
-          const targetAgentId = resolveHookTargetAgentId(hooksConfig, mapped.action.agentId);
+          const targetAgentId = resolveHookTargetAgentId(
+            hooksConfig,
+            mapped.action.agentId,
+          );
           const runId = dispatchAgentHook({
             message: mapped.action.message,
             name: mapped.action.name ?? "Hook",
@@ -422,7 +464,8 @@ export function createHooksRequestHandler(
             model: mapped.action.model,
             thinking: mapped.action.thinking,
             timeoutSeconds: mapped.action.timeoutSeconds,
-            allowUnsafeExternalContent: mapped.action.allowUnsafeExternalContent,
+            allowUnsafeExternalContent:
+              mapped.action.allowUnsafeExternalContent,
           });
           sendJson(res, 202, { ok: true, runId });
           return true;
@@ -453,7 +496,9 @@ export function createGatewayHttpServer(opts: {
   strictTransportSecurityHeader?: string;
   handleHooksRequest: HooksRequestHandler;
   handlePluginRequest?: PluginHttpRequestHandler;
-  shouldEnforcePluginGatewayAuth?: (pathContext: PluginRoutePathContext) => boolean;
+  shouldEnforcePluginGatewayAuth?: (
+    pathContext: PluginRoutePathContext,
+  ) => boolean;
   resolvedAuth: ResolvedGatewayAuth;
   /** Optional rate limiter for auth brute-force protection. */
   rateLimiter?: AuthRateLimiter;
@@ -496,7 +541,8 @@ export function createGatewayHttpServer(opts: {
     try {
       const configSnapshot = loadConfig();
       const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
-      const allowRealIpFallback = configSnapshot.gateway?.allowRealIpFallback === true;
+      const allowRealIpFallback =
+        configSnapshot.gateway?.allowRealIpFallback === true;
       const scopedCanvas = normalizeCanvasScopedUrl(req.url ?? "/");
       if (scopedCanvas.malformedScopedPath) {
         sendGatewayAuthFailure(res, { ok: false, reason: "unauthorized" });
@@ -593,7 +639,8 @@ export function createGatewayHttpServer(opts: {
           run: () =>
             handleControlUiAvatarRequest(req, res, {
               basePath: controlUiBasePath,
-              resolveAvatar: (agentId) => resolveAgentAvatar(configSnapshot, agentId),
+              resolveAvatar: (agentId) =>
+                resolveAgentAvatar(configSnapshot, agentId),
             }),
         });
         requestStages.push({
@@ -654,7 +701,8 @@ export function attachGatewayUpgradeHandler(opts: {
   /** Optional rate limiter for auth brute-force protection. */
   rateLimiter?: AuthRateLimiter;
 }) {
-  const { httpServer, wss, canvasHost, clients, resolvedAuth, rateLimiter } = opts;
+  const { httpServer, wss, canvasHost, clients, resolvedAuth, rateLimiter } =
+    opts;
   httpServer.on("upgrade", (req, socket, head) => {
     void (async () => {
       const scopedCanvas = normalizeCanvasScopedUrl(req.url ?? "/");
@@ -671,7 +719,8 @@ export function attachGatewayUpgradeHandler(opts: {
         if (url.pathname === CANVAS_WS_PATH) {
           const configSnapshot = loadConfig();
           const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
-          const allowRealIpFallback = configSnapshot.gateway?.allowRealIpFallback === true;
+          const allowRealIpFallback =
+            configSnapshot.gateway?.allowRealIpFallback === true;
           const ok = await authorizeCanvasRequest({
             req,
             auth: resolvedAuth,

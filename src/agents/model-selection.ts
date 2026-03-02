@@ -1,7 +1,13 @@
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveAgentModelPrimaryValue, toAgentModelListLike } from "../config/model-input.js";
+import {
+  resolveAgentModelPrimaryValue,
+  toAgentModelListLike,
+} from "../config/model-input.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { resolveAgentConfig, resolveAgentEffectiveModelPrimary } from "./agent-scope.js";
+import {
+  resolveAgentConfig,
+  resolveAgentEffectiveModelPrimary,
+} from "./agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import type { ModelCatalogEntry } from "./model-catalog.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
@@ -14,7 +20,14 @@ export type ModelRef = {
   model: string;
 };
 
-export type ThinkLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive";
+export type ThinkLevel =
+  | "off"
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "adaptive";
 
 export type ModelAliasIndex = {
   byAlias: Map<string, { alias: string; ref: ModelRef }>;
@@ -85,7 +98,9 @@ export function findNormalizedProviderKey(
     return undefined;
   }
   const providerKey = normalizeProviderId(provider);
-  return Object.keys(entries).find((key) => normalizeProviderId(key) === providerKey);
+  return Object.keys(entries).find(
+    (key) => normalizeProviderId(key) === providerKey,
+  );
 }
 
 export function isCliProvider(provider: string, cfg?: OpenClawConfig): boolean {
@@ -97,7 +112,9 @@ export function isCliProvider(provider: string, cfg?: OpenClawConfig): boolean {
     return true;
   }
   const backends = cfg?.agents?.defaults?.cliBackends ?? {};
-  return Object.keys(backends).some((key) => normalizeProviderId(key) === normalized);
+  return Object.keys(backends).some(
+    (key) => normalizeProviderId(key) === normalized,
+  );
 }
 
 function normalizeAnthropicModelId(model: string): string {
@@ -135,11 +152,17 @@ function normalizeProviderModelId(provider: string, model: string): string {
 
 export function normalizeModelRef(provider: string, model: string): ModelRef {
   const normalizedProvider = normalizeProviderId(provider);
-  const normalizedModel = normalizeProviderModelId(normalizedProvider, model.trim());
+  const normalizedModel = normalizeProviderModelId(
+    normalizedProvider,
+    model.trim(),
+  );
   return { provider: normalizedProvider, model: normalizedModel };
 }
 
-export function parseModelRef(raw: string, defaultProvider: string): ModelRef | null {
+export function parseModelRef(
+  raw: string,
+  defaultProvider: string,
+): ModelRef | null {
   const trimmed = raw.trim();
   if (!trimmed) {
     return null;
@@ -192,7 +215,10 @@ export function inferUniqueProviderFromConfiguredModels(params: {
   return providers.values().next().value;
 }
 
-export function resolveAllowlistModelKey(raw: string, defaultProvider: string): string | null {
+export function resolveAllowlistModelKey(
+  raw: string,
+  defaultProvider: string,
+): string | null {
   const parsed = parseModelRef(raw, defaultProvider);
   if (!parsed) {
     return null;
@@ -211,7 +237,10 @@ export function buildConfiguredAllowlistKeys(params: {
 
   const keys = new Set<string>();
   for (const raw of rawAllowlist) {
-    const key = resolveAllowlistModelKey(String(raw ?? ""), params.defaultProvider);
+    const key = resolveAllowlistModelKey(
+      String(raw ?? ""),
+      params.defaultProvider,
+    );
     if (key) {
       keys.add(key);
     }
@@ -232,7 +261,9 @@ export function buildModelAliasIndex(params: {
     if (!parsed) {
       continue;
     }
-    const alias = String((entryRaw as { alias?: string } | undefined)?.alias ?? "").trim();
+    const alias = String(
+      (entryRaw as { alias?: string } | undefined)?.alias ?? "",
+    ).trim();
     if (!alias) {
       continue;
     }
@@ -275,7 +306,8 @@ export function resolveConfiguredModelRef(params: {
   defaultProvider: string;
   defaultModel: string;
 }): ModelRef {
-  const rawModel = resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.model) ?? "";
+  const rawModel =
+    resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.model) ?? "";
   if (rawModel) {
     const trimmed = rawModel.trim();
     const aliasIndex = buildModelAliasIndex({
@@ -365,7 +397,9 @@ export function resolveSubagentSpawnModelSelection(params: {
       cfg: params.cfg,
       agentId: params.agentId,
     }) ??
-    normalizeModelSelection(resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.model)) ??
+    normalizeModelSelection(
+      resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.model),
+    ) ??
     `${runtimeDefault.provider}/${runtimeDefault.model}`
   );
 }
@@ -390,8 +424,12 @@ export function buildAllowedModelSet(params: {
     defaultModel && params.defaultProvider
       ? parseModelRef(defaultModel, params.defaultProvider)
       : null;
-  const defaultKey = defaultRef ? modelKey(defaultRef.provider, defaultRef.model) : undefined;
-  const catalogKeys = new Set(params.catalog.map((entry) => modelKey(entry.provider, entry.id)));
+  const defaultKey = defaultRef
+    ? modelKey(defaultRef.provider, defaultRef.model)
+    : undefined;
+  const catalogKeys = new Set(
+    params.catalog.map((entry) => modelKey(entry.provider, entry.id)),
+  );
 
   if (allowAny) {
     if (defaultKey) {
@@ -430,7 +468,9 @@ export function buildAllowedModelSet(params: {
   }
 
   const allowedCatalog = [
-    ...params.catalog.filter((entry) => allowedKeys.has(modelKey(entry.provider, entry.id))),
+    ...params.catalog.filter((entry) =>
+      allowedKeys.has(modelKey(entry.provider, entry.id)),
+    ),
     ...syntheticCatalogEntries.values(),
   ];
 
@@ -471,7 +511,9 @@ export function getModelRefStatus(params: {
   const key = modelKey(params.ref.provider, params.ref.model);
   return {
     key,
-    inCatalog: params.catalog.some((entry) => modelKey(entry.provider, entry.id) === key),
+    inCatalog: params.catalog.some(
+      (entry) => modelKey(entry.provider, entry.id) === key,
+    ),
     allowAny: allowed.allowAny,
     allowed: allowed.allowAny || allowed.allowedKeys.has(key),
   };
@@ -529,8 +571,9 @@ export function resolveThinkingDefault(params: {
   const normalizedProvider = normalizeProviderId(params.provider);
   const modelLower = params.model.toLowerCase();
   const perModelThinking =
-    params.cfg.agents?.defaults?.models?.[modelKey(params.provider, params.model)]?.params
-      ?.thinking;
+    params.cfg.agents?.defaults?.models?.[
+      modelKey(params.provider, params.model)
+    ]?.params?.thinking;
   if (
     perModelThinking === "off" ||
     perModelThinking === "minimal" ||

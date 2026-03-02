@@ -4,7 +4,9 @@ import { validateConfigObject } from "./config.js";
 import { applyPluginAutoEnable } from "./plugin-auto-enable.js";
 
 /** Helper to build a minimal PluginManifestRegistry for testing. */
-function makeRegistry(plugins: Array<{ id: string; channels: string[] }>): PluginManifestRegistry {
+function makeRegistry(
+  plugins: Array<{ id: string; channels: string[] }>,
+): PluginManifestRegistry {
   return {
     plugins: plugins.map((p) => ({
       id: p.id,
@@ -33,7 +35,9 @@ describe("applyPluginAutoEnable", () => {
     expect(result.config.channels?.slack?.enabled).toBe(true);
     expect(result.config.plugins?.entries?.slack).toBeUndefined();
     expect(result.config.plugins?.allow).toEqual(["telegram", "slack"]);
-    expect(result.changes.join("\n")).toContain("Slack configured, enabled automatically.");
+    expect(result.changes.join("\n")).toContain(
+      "Slack configured, enabled automatically.",
+    );
   });
 
   it("does not create plugins.allow when allowlist is unset", () => {
@@ -120,7 +124,9 @@ describe("applyPluginAutoEnable", () => {
     });
 
     expect(result.config.channels?.irc?.enabled).toBe(true);
-    expect(result.changes.join("\n")).toContain("IRC configured, enabled automatically.");
+    expect(result.changes.join("\n")).toContain(
+      "IRC configured, enabled automatically.",
+    );
   });
 
   it("auto-enables provider auth plugins when profiles exist", () => {
@@ -138,7 +144,9 @@ describe("applyPluginAutoEnable", () => {
       env: {},
     });
 
-    expect(result.config.plugins?.entries?.["google-gemini-cli-auth"]?.enabled).toBe(true);
+    expect(
+      result.config.plugins?.entries?.["google-gemini-cli-auth"]?.enabled,
+    ).toBe(true);
   });
 
   it("auto-enables acpx plugin when ACP is configured", () => {
@@ -152,7 +160,9 @@ describe("applyPluginAutoEnable", () => {
     });
 
     expect(result.config.plugins?.entries?.acpx?.enabled).toBe(true);
-    expect(result.changes.join("\n")).toContain("ACP runtime configured, enabled automatically.");
+    expect(result.changes.join("\n")).toContain(
+      "ACP runtime configured, enabled automatically.",
+    );
   });
 
   it("does not auto-enable acpx when a different ACP backend is configured", () => {
@@ -192,12 +202,18 @@ describe("applyPluginAutoEnable", () => {
           channels: { apn: { someKey: "value" } },
         },
         env: {},
-        manifestRegistry: makeRegistry([{ id: "apn-channel", channels: ["apn"] }]),
+        manifestRegistry: makeRegistry([
+          { id: "apn-channel", channels: ["apn"] },
+        ]),
       });
 
-      expect(result.config.plugins?.entries?.["apn-channel"]?.enabled).toBe(true);
+      expect(result.config.plugins?.entries?.["apn-channel"]?.enabled).toBe(
+        true,
+      );
       expect(result.config.plugins?.entries?.["apn"]).toBeUndefined();
-      expect(result.changes.join("\n")).toContain("apn configured, enabled automatically.");
+      expect(result.changes.join("\n")).toContain(
+        "apn configured, enabled automatically.",
+      );
     });
 
     it("does not double-enable when plugin is already enabled under its plugin id", () => {
@@ -207,7 +223,9 @@ describe("applyPluginAutoEnable", () => {
           plugins: { entries: { "apn-channel": { enabled: true } } },
         },
         env: {},
-        manifestRegistry: makeRegistry([{ id: "apn-channel", channels: ["apn"] }]),
+        manifestRegistry: makeRegistry([
+          { id: "apn-channel", channels: ["apn"] },
+        ]),
       });
 
       expect(result.changes).toEqual([]);
@@ -220,10 +238,14 @@ describe("applyPluginAutoEnable", () => {
           plugins: { entries: { "apn-channel": { enabled: false } } },
         },
         env: {},
-        manifestRegistry: makeRegistry([{ id: "apn-channel", channels: ["apn"] }]),
+        manifestRegistry: makeRegistry([
+          { id: "apn-channel", channels: ["apn"] },
+        ]),
       });
 
-      expect(result.config.plugins?.entries?.["apn-channel"]?.enabled).toBe(false);
+      expect(result.config.plugins?.entries?.["apn-channel"]?.enabled).toBe(
+        false,
+      );
       expect(result.changes).toEqual([]);
     });
 
@@ -237,7 +259,9 @@ describe("applyPluginAutoEnable", () => {
         manifestRegistry: makeRegistry([]),
       });
 
-      expect(result.config.plugins?.entries?.["unknown-chan"]?.enabled).toBe(true);
+      expect(result.config.plugins?.entries?.["unknown-chan"]?.enabled).toBe(
+        true,
+      );
     });
   });
 
@@ -255,7 +279,9 @@ describe("applyPluginAutoEnable", () => {
 
       expect(result.config.plugins?.entries?.bluebubbles?.enabled).toBe(true);
       expect(result.config.plugins?.entries?.imessage?.enabled).toBeUndefined();
-      expect(result.changes.join("\n")).toContain("bluebubbles configured, enabled automatically.");
+      expect(result.changes.join("\n")).toContain(
+        "bluebubbles configured, enabled automatically.",
+      );
       expect(result.changes.join("\n")).not.toContain(
         "iMessage configured, enabled automatically.",
       );
@@ -291,7 +317,9 @@ describe("applyPluginAutoEnable", () => {
 
       expect(result.config.plugins?.entries?.bluebubbles?.enabled).toBe(false);
       expect(result.config.channels?.imessage?.enabled).toBe(true);
-      expect(result.changes.join("\n")).toContain("iMessage configured, enabled automatically.");
+      expect(result.changes.join("\n")).toContain(
+        "iMessage configured, enabled automatically.",
+      );
     });
 
     it("allows imessage auto-configure when bluebubbles is in deny list", () => {
@@ -306,7 +334,9 @@ describe("applyPluginAutoEnable", () => {
         env: {},
       });
 
-      expect(result.config.plugins?.entries?.bluebubbles?.enabled).toBeUndefined();
+      expect(
+        result.config.plugins?.entries?.bluebubbles?.enabled,
+      ).toBeUndefined();
       expect(result.config.channels?.imessage?.enabled).toBe(true);
     });
 
@@ -319,7 +349,9 @@ describe("applyPluginAutoEnable", () => {
       });
 
       expect(result.config.channels?.imessage?.enabled).toBe(true);
-      expect(result.changes.join("\n")).toContain("iMessage configured, enabled automatically.");
+      expect(result.changes.join("\n")).toContain(
+        "iMessage configured, enabled automatically.",
+      );
     });
   });
 });

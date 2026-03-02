@@ -203,8 +203,18 @@ interface OllamaChatResponse {
 type InputContentPart =
   | { type: "text"; text: string }
   | { type: "image"; data: string }
-  | { type: "toolCall"; id: string; name: string; arguments: Record<string, unknown> }
-  | { type: "tool_use"; id: string; name: string; input: Record<string, unknown> };
+  | {
+      type: "toolCall";
+      id: string;
+      name: string;
+      arguments: Record<string, unknown>;
+    }
+  | {
+      type: "tool_use";
+      id: string;
+      name: string;
+      input: Record<string, unknown>;
+    };
 
 function extractTextContent(content: unknown): string {
   if (typeof content === "string") {
@@ -214,7 +224,9 @@ function extractTextContent(content: unknown): string {
     return "";
   }
   return (content as InputContentPart[])
-    .filter((part): part is { type: "text"; text: string } => part.type === "text")
+    .filter(
+      (part): part is { type: "text"; text: string } => part.type === "text",
+    )
     .map((part) => part.text)
     .join("");
 }
@@ -224,7 +236,9 @@ function extractOllamaImages(content: unknown): string[] {
     return [];
   }
   return (content as InputContentPart[])
-    .filter((part): part is { type: "image"; data: string } => part.type === "image")
+    .filter(
+      (part): part is { type: "image"; data: string } => part.type === "image",
+    )
     .map((part) => part.data);
 }
 
@@ -307,7 +321,8 @@ function extractOllamaTools(tools: Tool[] | undefined): OllamaTool[] {
       type: "function",
       function: {
         name: tool.name,
-        description: typeof tool.description === "string" ? tool.description : "",
+        description:
+          typeof tool.description === "string" ? tool.description : "",
         parameters: (tool.parameters ?? {}) as Record<string, unknown>,
       },
     });
@@ -389,9 +404,13 @@ export async function* parseNdjsonStream(
 
   if (buffer.trim()) {
     try {
-      yield parseJsonPreservingUnsafeIntegers(buffer.trim()) as OllamaChatResponse;
+      yield parseJsonPreservingUnsafeIntegers(
+        buffer.trim(),
+      ) as OllamaChatResponse;
     } catch {
-      log.warn(`Skipping malformed trailing data: ${buffer.trim().slice(0, 120)}`);
+      log.warn(
+        `Skipping malformed trailing data: ${buffer.trim().slice(0, 120)}`,
+      );
     }
   }
 }
@@ -422,7 +441,9 @@ export function createOllamaStreamFn(baseUrl: string): StreamFn {
 
         // Ollama defaults to num_ctx=4096 which is too small for large
         // system prompts + many tool definitions. Use model's contextWindow.
-        const ollamaOptions: Record<string, unknown> = { num_ctx: model.contextWindow ?? 65536 };
+        const ollamaOptions: Record<string, unknown> = {
+          num_ctx: model.contextWindow ?? 65536,
+        };
         if (typeof options?.temperature === "number") {
           ollamaOptions.temperature = options.temperature;
         }

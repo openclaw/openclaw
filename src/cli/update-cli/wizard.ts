@@ -21,7 +21,9 @@ import {
 } from "./shared.js";
 import { updateCommand } from "./update-command.js";
 
-export async function updateWizardCommand(opts: UpdateWizardOptions = {}): Promise<void> {
+export async function updateWizardCommand(
+  opts: UpdateWizardOptions = {},
+): Promise<void> {
   if (!process.stdin.isTTY) {
     defaultRuntime.error(
       "Update wizard requires a TTY. Use `openclaw update --channel <stable|beta|dev>` instead.",

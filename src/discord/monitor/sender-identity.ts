@@ -21,9 +21,13 @@ type DiscordWebhookMessageLike = {
   webhook_id?: string | null;
 };
 
-export function resolveDiscordWebhookId(message: DiscordWebhookMessageLike): string | null {
+export function resolveDiscordWebhookId(
+  message: DiscordWebhookMessageLike,
+): string | null {
   const candidate = message.webhookId ?? message.webhook_id;
-  return typeof candidate === "string" && candidate.trim() ? candidate.trim() : null;
+  return typeof candidate === "string" && candidate.trim()
+    ? candidate.trim()
+    : null;
 }
 
 export function resolveDiscordSenderIdentity(params: {
@@ -40,7 +44,9 @@ export function resolveDiscordSenderIdentity(params: {
   const memberName = memberNameRaw?.trim();
   if (memberId && memberName) {
     const systemName = pkSystem?.name?.trim();
-    const label = systemName ? `${memberName} (PK:${systemName})` : `${memberName} (PK)`;
+    const label = systemName
+      ? `${memberName} (PK:${systemName})`
+      : `${memberName} (PK)`;
     return {
       id: memberId,
       name: memberName,
@@ -58,7 +64,9 @@ export function resolveDiscordSenderIdentity(params: {
 
   const senderTag = formatDiscordUserTag(params.author);
   const senderDisplay =
-    params.member?.nickname ?? params.author.globalName ?? params.author.username;
+    params.member?.nickname ??
+    params.author.globalName ??
+    params.author.username;
   const senderLabel =
     senderDisplay && senderTag && senderDisplay !== senderTag
       ? `${senderDisplay} (${senderTag})`

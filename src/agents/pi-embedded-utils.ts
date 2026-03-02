@@ -5,7 +5,9 @@ import { stripReasoningTagsFromText } from "../shared/text/reasoning-tags.js";
 import { sanitizeUserFacingText } from "./pi-embedded-helpers.js";
 import { formatToolDetail, resolveToolDisplay } from "./tool-display.js";
 
-export function isAssistantMessage(msg: AgentMessage | undefined): msg is AssistantMessage {
+export function isAssistantMessage(
+  msg: AgentMessage | undefined,
+): msg is AssistantMessage {
   return msg?.role === "assistant";
 }
 
@@ -43,7 +45,10 @@ export function stripDowngradedToolCallText(text: string): string {
   if (!text) {
     return text;
   }
-  if (!/\[Tool (?:Call|Result)/i.test(text) && !/\[Historical context/i.test(text)) {
+  if (
+    !/\[Tool (?:Call|Result)/i.test(text) &&
+    !/\[Historical context/i.test(text)
+  ) {
     return text;
   }
 
@@ -142,7 +147,10 @@ export function stripDowngradedToolCallText(text: string): string {
       }
       result += input.slice(cursor, start);
       let index = start + match[0].length;
-      while (index < input.length && (input[index] === " " || input[index] === "\t")) {
+      while (
+        index < input.length &&
+        (input[index] === " " || input[index] === "\t")
+      ) {
         index += 1;
       }
       if (input[index] === "\r") {
@@ -153,7 +161,10 @@ export function stripDowngradedToolCallText(text: string): string {
       } else if (input[index] === "\n") {
         index += 1;
       }
-      while (index < input.length && (input[index] === " " || input[index] === "\t")) {
+      while (
+        index < input.length &&
+        (input[index] === " " || input[index] === "\t")
+      ) {
         index += 1;
       }
       if (input.slice(index, index + 9).toLowerCase() === "arguments") {
@@ -164,7 +175,9 @@ export function stripDowngradedToolCallText(text: string): string {
         if (input[index] === " ") {
           index += 1;
         }
-        const end = consumeJsonish(input, index, { allowLeadingNewlines: true });
+        const end = consumeJsonish(input, index, {
+          allowLeadingNewlines: true,
+        });
         if (end !== null) {
           index = end;
         }
@@ -190,7 +203,10 @@ export function stripDowngradedToolCallText(text: string): string {
   let cleaned = stripToolCalls(text);
 
   // Remove [Tool Result for ID ...] blocks and their content.
-  cleaned = cleaned.replace(/\[Tool Result for ID[^\]]*\]\n?[\s\S]*?(?=\n*\[Tool |\n*$)/gi, "");
+  cleaned = cleaned.replace(
+    /\[Tool Result for ID[^\]]*\]\n?[\s\S]*?(?=\n*\[Tool |\n*$)/gi,
+    "",
+  );
 
   // Remove [Historical context: ...] markers (self-contained within brackets).
   cleaned = cleaned.replace(/\[Historical context:[^\]]*\]\n?/gi, "");
@@ -219,7 +235,8 @@ export function extractAssistantText(msg: AssistantMessage): string {
     }) ?? "";
   // Only apply keyword-based error rewrites when the assistant message is actually an error.
   // Otherwise normal prose that *mentions* errors (e.g. "context overflow") can get clobbered.
-  const errorContext = msg.stopReason === "error" || Boolean(msg.errorMessage?.trim());
+  const errorContext =
+    msg.stopReason === "error" || Boolean(msg.errorMessage?.trim());
   return sanitizeUserFacingText(extracted, { errorContext });
 }
 
@@ -262,7 +279,9 @@ type ThinkTaggedSplitBlock =
   | { type: "thinking"; thinking: string }
   | { type: "text"; text: string };
 
-export function splitThinkingTaggedText(text: string): ThinkTaggedSplitBlock[] | null {
+export function splitThinkingTaggedText(
+  text: string,
+): ThinkTaggedSplitBlock[] | null {
   const trimmedStart = text.trimStart();
   // Avoid false positives: only treat it as structured thinking when it begins
   // with a think tag (common for local/OpenAI-compat providers that emulate
@@ -333,7 +352,9 @@ export function promoteThinkingTagsToBlocks(message: AssistantMessage): void {
   if (!Array.isArray(message.content)) {
     return;
   }
-  const hasThinkingBlock = message.content.some((block) => block.type === "thinking");
+  const hasThinkingBlock = message.content.some(
+    (block) => block.type === "thinking",
+  );
   if (hasThinkingBlock) {
     return;
   }
@@ -415,7 +436,10 @@ export function extractThinkingFromTaggedStream(text: string): string {
   return text.slice(start).trim();
 }
 
-export function inferToolMetaFromArgs(toolName: string, args: unknown): string | undefined {
+export function inferToolMetaFromArgs(
+  toolName: string,
+  args: unknown,
+): string | undefined {
   const display = resolveToolDisplay({ name: toolName, args });
   return formatToolDetail(display);
 }

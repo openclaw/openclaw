@@ -1,7 +1,10 @@
 import crypto from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { formatThinkingLevels, normalizeThinkLevel } from "../auto-reply/thinking.js";
+import {
+  formatThinkingLevels,
+  normalizeThinkLevel,
+} from "../auto-reply/thinking.js";
 import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
 import { loadConfig } from "../config/config.js";
 import { callGateway } from "../gateway/call.js";
@@ -19,7 +22,10 @@ import { resolveSubagentSpawnModelSelection } from "./model-selection.js";
 import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
 import { buildSubagentSystemPrompt } from "./subagent-announce.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
-import { countActiveRunsForSession, registerSubagentRun } from "./subagent-registry.js";
+import {
+  countActiveRunsForSession,
+  registerSubagentRun,
+} from "./subagent-registry.js";
 import { readStringParam } from "./tools/common.js";
 import {
   resolveDisplaySessionKey,
@@ -30,9 +36,13 @@ import {
 export const SUBAGENT_SPAWN_MODES = ["run", "session"] as const;
 export type SpawnSubagentMode = (typeof SUBAGENT_SPAWN_MODES)[number];
 export const SUBAGENT_SPAWN_SANDBOX_MODES = ["inherit", "require"] as const;
-export type SpawnSubagentSandboxMode = (typeof SUBAGENT_SPAWN_SANDBOX_MODES)[number];
+export type SpawnSubagentSandboxMode =
+  (typeof SUBAGENT_SPAWN_SANDBOX_MODES)[number];
 
-export function decodeStrictBase64(value: string, maxDecodedBytes: number): Buffer | null {
+export function decodeStrictBase64(
+  value: string,
+  maxDecodedBytes: number,
+): Buffer | null {
   const maxEncodedBytes = Math.ceil(maxDecodedBytes / 3) * 4;
   if (value.length > maxEncodedBytes * 2) {
     return null;
@@ -224,7 +234,9 @@ async function ensureThreadBindingForSubagentSpawn(params: {
       const error = result.error.trim();
       return {
         status: "error",
-        error: error || "Failed to prepare thread binding for this subagent session.",
+        error:
+          error ||
+          "Failed to prepare thread binding for this subagent session.",
       };
     }
     if (result?.status !== "ok" || !result.threadBindingReady) {
@@ -272,7 +284,8 @@ export async function spawnSubagentDirect(
   if (spawnMode === "session" && !requestThreadBinding) {
     return {
       status: "error",
-      error: 'mode="session" requires thread=true so the subagent can stay bound to a thread.',
+      error:
+        'mode="session" requires thread=true so the subagent can stay bound to a thread.',
     };
   }
   const cleanup =
@@ -300,7 +313,8 @@ export async function spawnSubagentDirect(
       ? Math.max(0, Math.floor(cfg.agents.defaults.subagents.runTimeoutSeconds))
       : 0;
   const runTimeoutSeconds =
-    typeof params.runTimeoutSeconds === "number" && Number.isFinite(params.runTimeoutSeconds)
+    typeof params.runTimeoutSeconds === "number" &&
+    Number.isFinite(params.runTimeoutSeconds)
       ? Math.max(0, Math.floor(params.runTimeoutSeconds))
       : cfgSubagentTimeout;
   let modelApplied = false;
@@ -320,9 +334,12 @@ export async function spawnSubagentDirect(
     mainKey,
   });
 
-  const callerDepth = getSubagentDepthFromSessionStore(requesterInternalKey, { cfg });
+  const callerDepth = getSubagentDepthFromSessionStore(requesterInternalKey, {
+    cfg,
+  });
   const maxSpawnDepth =
-    cfg.agents?.defaults?.subagents?.maxSpawnDepth ?? DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH;
+    cfg.agents?.defaults?.subagents?.maxSpawnDepth ??
+    DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH;
   if (callerDepth >= maxSpawnDepth) {
     return {
       status: "forbidden",
@@ -340,11 +357,15 @@ export async function spawnSubagentDirect(
   }
 
   const requesterAgentId = normalizeAgentId(
-    ctx.requesterAgentIdOverride ?? parseAgentSessionKey(requesterInternalKey)?.agentId,
+    ctx.requesterAgentIdOverride ??
+      parseAgentSessionKey(requesterInternalKey)?.agentId,
   );
-  const targetAgentId = requestedAgentId ? normalizeAgentId(requestedAgentId) : requesterAgentId;
+  const targetAgentId = requestedAgentId
+    ? normalizeAgentId(requestedAgentId)
+    : requesterAgentId;
   if (targetAgentId !== requesterAgentId) {
-    const allowAgents = resolveAgentConfig(cfg, requesterAgentId)?.subagents?.allowAgents ?? [];
+    const allowAgents =
+      resolveAgentConfig(cfg, requesterAgentId)?.subagents?.allowAgents ?? [];
     const allowAny = allowAgents.some((value) => value.trim() === "*");
     const normalizedTargetId = targetAgentId.toLowerCase();
     const allowSet = new Set(
@@ -353,7 +374,8 @@ export async function spawnSubagentDirect(
         .map((value) => normalizeAgentId(value).toLowerCase()),
     );
     if (!allowAny && !allowSet.has(normalizedTargetId)) {
-      const allowedText = allowSet.size > 0 ? Array.from(allowSet).join(", ") : "none";
+      const allowedText =
+        allowSet.size > 0 ? Array.from(allowSet).join(", ") : "none";
       return {
         status: "forbidden",
         error: `agentId is not allowed for sessions_spawn (allowed: ${allowedText})`,
@@ -369,7 +391,10 @@ export async function spawnSubagentDirect(
     cfg,
     sessionKey: childSessionKey,
   });
-  if (!childRuntime.sandboxed && (requesterRuntime.sandboxed || sandboxMode === "require")) {
+  if (
+    !childRuntime.sandboxed &&
+    (requesterRuntime.sandboxed || sandboxMode === "require")
+  ) {
     if (requesterRuntime.sandboxed) {
       return {
         status: "forbidden",
@@ -397,7 +422,8 @@ export async function spawnSubagentDirect(
     readStringParam(cfg.agents?.defaults?.subagents ?? {}, "thinking");
 
   let thinkingOverride: string | undefined;
-  const thinkingCandidateRaw = thinkingOverrideRaw || resolvedThinkingDefaultRaw;
+  const thinkingCandidateRaw =
+    thinkingOverrideRaw || resolvedThinkingDefaultRaw;
   if (thinkingCandidateRaw) {
     const normalized = normalizeThinkLevel(thinkingCandidateRaw);
     if (!normalized) {
@@ -418,7 +444,11 @@ export async function spawnSubagentDirect(
     });
   } catch (err) {
     const messageText =
-      err instanceof Error ? err.message : typeof err === "string" ? err : "error";
+      err instanceof Error
+        ? err.message
+        : typeof err === "string"
+          ? err
+          : "error";
     return {
       status: "error",
       error: messageText,
@@ -436,7 +466,11 @@ export async function spawnSubagentDirect(
       modelApplied = true;
     } catch (err) {
       const messageText =
-        err instanceof Error ? err.message : typeof err === "string" ? err : "error";
+        err instanceof Error
+          ? err.message
+          : typeof err === "string"
+            ? err
+            : "error";
       return {
         status: "error",
         error: messageText,
@@ -456,7 +490,11 @@ export async function spawnSubagentDirect(
       });
     } catch (err) {
       const messageText =
-        err instanceof Error ? err.message : typeof err === "string" ? err : "error";
+        err instanceof Error
+          ? err.message
+          : typeof err === "string"
+            ? err
+            : "error";
       return {
         status: "error",
         error: messageText,
@@ -522,11 +560,13 @@ export async function spawnSubagentDirect(
       ? Math.max(0, Math.floor(attachmentsCfg.maxTotalBytes))
       : 5 * 1024 * 1024;
   const maxFiles =
-    typeof attachmentsCfg?.maxFiles === "number" && Number.isFinite(attachmentsCfg.maxFiles)
+    typeof attachmentsCfg?.maxFiles === "number" &&
+    Number.isFinite(attachmentsCfg.maxFiles)
       ? Math.max(0, Math.floor(attachmentsCfg.maxFiles))
       : 50;
   const maxFileBytes =
-    typeof attachmentsCfg?.maxFileBytes === "number" && Number.isFinite(attachmentsCfg.maxFileBytes)
+    typeof attachmentsCfg?.maxFileBytes === "number" &&
+    Number.isFinite(attachmentsCfg.maxFileBytes)
       ? Math.max(0, Math.floor(attachmentsCfg.maxFileBytes))
       : 1 * 1024 * 1024;
   const retainOnSessionKeep = attachmentsCfg?.retainOnSessionKeep === true;
@@ -543,7 +583,9 @@ export async function spawnSubagentDirect(
   let attachmentAbsDir: string | undefined;
   let attachmentRootDir: string | undefined;
 
-  const requestedAttachments = Array.isArray(params.attachments) ? params.attachments : [];
+  const requestedAttachments = Array.isArray(params.attachments)
+    ? params.attachments
+    : [];
 
   if (requestedAttachments.length > 0) {
     if (!attachmentsEnabled) {
@@ -591,13 +633,18 @@ export async function spawnSubagentDirect(
       for (const raw of requestedAttachments) {
         const name = typeof raw?.name === "string" ? raw.name.trim() : "";
         const contentVal = typeof raw?.content === "string" ? raw.content : "";
-        const encodingRaw = typeof raw?.encoding === "string" ? raw.encoding.trim() : "utf8";
+        const encodingRaw =
+          typeof raw?.encoding === "string" ? raw.encoding.trim() : "utf8";
         const encoding = encodingRaw === "base64" ? "base64" : "utf8";
 
         if (!name) {
           fail("attachments_invalid_name (empty)");
         }
-        if (name.includes("/") || name.includes("\\") || name.includes("\u0000")) {
+        if (
+          name.includes("/") ||
+          name.includes("\\") ||
+          name.includes("\u0000")
+        ) {
           fail(`attachments_invalid_name (${name})`);
         }
         // eslint-disable-next-line no-control-regex
@@ -690,7 +737,10 @@ export async function spawnSubagentDirect(
         emitLifecycleHooks: threadBindingReady,
         deleteTranscript: true,
       });
-      const messageText = err instanceof Error ? err.message : "attachments_materialization_failed";
+      const messageText =
+        err instanceof Error
+          ? err.message
+          : "attachments_materialization_failed";
       return { status: "error", error: messageText };
     }
   }
@@ -716,7 +766,10 @@ export async function spawnSubagentDirect(
         channel: requesterOrigin?.channel,
         to: requesterOrigin?.to ?? undefined,
         accountId: requesterOrigin?.accountId ?? undefined,
-        threadId: requesterOrigin?.threadId != null ? String(requesterOrigin.threadId) : undefined,
+        threadId:
+          requesterOrigin?.threadId != null
+            ? String(requesterOrigin.threadId)
+            : undefined,
         idempotencyKey: childIdem,
         deliver: false,
         lane: AGENT_LANE_SUBAGENT,
@@ -823,7 +876,11 @@ export async function spawnSubagentDirect(
     try {
       await callGateway({
         method: "sessions.delete",
-        params: { key: childSessionKey, deleteTranscript: true, emitLifecycleHooks: false },
+        params: {
+          key: childSessionKey,
+          deleteTranscript: true,
+          emitLifecycleHooks: false,
+        },
         timeoutMs: 10_000,
       });
     } catch {

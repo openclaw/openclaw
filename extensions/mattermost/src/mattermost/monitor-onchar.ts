@@ -1,7 +1,11 @@
 const DEFAULT_ONCHAR_PREFIXES = [">", "!"];
 
-export function resolveOncharPrefixes(prefixes: string[] | undefined): string[] {
-  const cleaned = prefixes?.map((entry) => entry.trim()).filter(Boolean) ?? DEFAULT_ONCHAR_PREFIXES;
+export function resolveOncharPrefixes(
+  prefixes: string[] | undefined,
+): string[] {
+  const cleaned =
+    prefixes?.map((entry) => entry.trim()).filter(Boolean) ??
+    DEFAULT_ONCHAR_PREFIXES;
   return cleaned.length > 0 ? cleaned : DEFAULT_ONCHAR_PREFIXES;
 }
 

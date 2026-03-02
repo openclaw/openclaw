@@ -124,7 +124,9 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
       });
 
       child.on("close", (code, signal) => {
-        const combined = (stdout + (stderr ? (stdout ? "\n" : "") + stderr : ""))
+        const combined = (
+          stdout + (stderr ? (stdout ? "\n" : "") + stderr : "")
+        )
           .slice(0, maxChars)
           .trimEnd();
 

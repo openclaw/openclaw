@@ -1,7 +1,10 @@
 import type { Command } from "commander";
 import type { MessageCliHelpers } from "./helpers.js";
 
-export function registerMessageReactionsCommands(message: Command, helpers: MessageCliHelpers) {
+export function registerMessageReactionsCommands(
+  message: Command,
+  helpers: MessageCliHelpers,
+) {
   helpers
     .withMessageBase(
       helpers.withRequiredMessageTarget(
@@ -13,7 +16,10 @@ export function registerMessageReactionsCommands(message: Command, helpers: Mess
     .option("--remove", "Remove reaction", false)
     .option("--participant <id>", "WhatsApp reaction participant")
     .option("--from-me", "WhatsApp reaction fromMe", false)
-    .option("--target-author <id>", "Signal reaction target author (uuid or phone)")
+    .option(
+      "--target-author <id>",
+      "Signal reaction target author (uuid or phone)",
+    )
     .option("--target-author-uuid <uuid>", "Signal reaction target author uuid")
     .action(async (opts) => {
       await helpers.runMessageAction("react", opts);

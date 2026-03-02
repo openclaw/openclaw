@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto";
 import type { LookupFn, SsrFPolicy } from "openclaw/plugin-sdk";
-import { ensureUrbitChannelOpen, pokeUrbitChannel, scryUrbitPath } from "./channel-ops.js";
+import {
+  ensureUrbitChannelOpen,
+  pokeUrbitChannel,
+  scryUrbitPath,
+} from "./channel-ops.js";
 import { getUrbitContext, normalizeUrbitCookie } from "./context.js";
 import { urbitFetch } from "./fetch.js";
 
@@ -8,7 +12,10 @@ export type UrbitChannelClientOptions = {
   ship?: string;
   ssrfPolicy?: SsrFPolicy;
   lookupFn?: LookupFn;
-  fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+  fetchImpl?: (
+    input: RequestInfo | URL,
+    init?: RequestInit,
+  ) => Promise<Response>;
 };
 
 export class UrbitChannelClient {
@@ -17,11 +24,18 @@ export class UrbitChannelClient {
   readonly ship: string;
   readonly ssrfPolicy?: SsrFPolicy;
   readonly lookupFn?: LookupFn;
-  readonly fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+  readonly fetchImpl?: (
+    input: RequestInfo | URL,
+    init?: RequestInit,
+  ) => Promise<Response>;
 
   private channelId: string | null = null;
 
-  constructor(url: string, cookie: string, options: UrbitChannelClientOptions = {}) {
+  constructor(
+    url: string,
+    cookie: string,
+    options: UrbitChannelClientOptions = {},
+  ) {
     const ctx = getUrbitContext(url, options.ship);
     this.baseUrl = ctx.baseUrl;
     this.cookie = normalizeUrbitCookie(cookie);
@@ -69,7 +83,11 @@ export class UrbitChannelClient {
     }
   }
 
-  async poke(params: { app: string; mark: string; json: unknown }): Promise<number> {
+  async poke(params: {
+    app: string;
+    mark: string;
+    json: unknown;
+  }): Promise<number> {
     await this.open();
     const channelId = this.channelId;
     if (!channelId) {

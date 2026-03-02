@@ -6,8 +6,10 @@ import {
   VOLC_SHARED_CODING_MODEL_CATALOG,
 } from "./volc-models.shared.js";
 
-export const BYTEPLUS_BASE_URL = "https://ark.ap-southeast.bytepluses.com/api/v3";
-export const BYTEPLUS_CODING_BASE_URL = "https://ark.ap-southeast.bytepluses.com/api/coding/v3";
+export const BYTEPLUS_BASE_URL =
+  "https://ark.ap-southeast.bytepluses.com/api/v3";
+export const BYTEPLUS_CODING_BASE_URL =
+  "https://ark.ap-southeast.bytepluses.com/api/coding/v3";
 export const BYTEPLUS_DEFAULT_MODEL_ID = "seed-1-8-251228";
 export const BYTEPLUS_CODING_DEFAULT_MODEL_ID = "ark-code-latest";
 export const BYTEPLUS_DEFAULT_MODEL_REF = `byteplus/${BYTEPLUS_DEFAULT_MODEL_ID}`;
@@ -40,7 +42,8 @@ export const BYTEPLUS_MODEL_CATALOG = [
 ] as const;
 
 export type BytePlusCatalogEntry = (typeof BYTEPLUS_MODEL_CATALOG)[number];
-export type BytePlusCodingCatalogEntry = (typeof BYTEPLUS_CODING_MODEL_CATALOG)[number];
+export type BytePlusCodingCatalogEntry =
+  (typeof BYTEPLUS_CODING_MODEL_CATALOG)[number];
 
 export function buildBytePlusModelDefinition(
   entry: BytePlusCatalogEntry | BytePlusCodingCatalogEntry,

@@ -13,11 +13,15 @@ describe("extractToolResultMediaPaths", () => {
   });
 
   it("returns empty array when content is missing", () => {
-    expect(extractToolResultMediaPaths({ details: { path: "/tmp/img.png" } })).toEqual([]);
+    expect(
+      extractToolResultMediaPaths({ details: { path: "/tmp/img.png" } }),
+    ).toEqual([]);
   });
 
   it("returns empty array when content has no text or image blocks", () => {
-    expect(extractToolResultMediaPaths({ content: [{ type: "other" }] })).toEqual([]);
+    expect(
+      extractToolResultMediaPaths({ content: [{ type: "other" }] }),
+    ).toEqual([]);
   });
 
   it("extracts MEDIA: path from text content block", () => {
@@ -28,12 +32,19 @@ describe("extractToolResultMediaPaths", () => {
       ],
       details: { path: "/tmp/screenshot.png" },
     };
-    expect(extractToolResultMediaPaths(result)).toEqual(["/tmp/screenshot.png"]);
+    expect(extractToolResultMediaPaths(result)).toEqual([
+      "/tmp/screenshot.png",
+    ]);
   });
 
   it("extracts MEDIA: path with extra text in the block", () => {
     const result = {
-      content: [{ type: "text", text: "Here is the image\nMEDIA:/tmp/output.jpg\nDone" }],
+      content: [
+        {
+          type: "text",
+          text: "Here is the image\nMEDIA:/tmp/output.jpg\nDone",
+        },
+      ],
     };
     expect(extractToolResultMediaPaths(result)).toEqual(["/tmp/output.jpg"]);
   });
@@ -45,7 +56,10 @@ describe("extractToolResultMediaPaths", () => {
         { type: "text", text: "MEDIA:/tmp/page2.png" },
       ],
     };
-    expect(extractToolResultMediaPaths(result)).toEqual(["/tmp/page1.png", "/tmp/page2.png"]);
+    expect(extractToolResultMediaPaths(result)).toEqual([
+      "/tmp/page1.png",
+      "/tmp/page2.png",
+    ]);
   });
 
   it("falls back to details.path when image content exists but no MEDIA: text", () => {
@@ -88,7 +102,9 @@ describe("extractToolResultMediaPaths", () => {
     const result = {
       content: [{ type: "text", text: "MEDIA: `/tmp/screenshot.png`" }],
     };
-    expect(extractToolResultMediaPaths(result)).toEqual(["/tmp/screenshot.png"]);
+    expect(extractToolResultMediaPaths(result)).toEqual([
+      "/tmp/screenshot.png",
+    ]);
   });
 
   it("ignores null/undefined items in content array", () => {
@@ -196,7 +212,9 @@ describe("extractToolResultMediaPaths", () => {
         },
       ],
     };
-    expect(extractToolResultMediaPaths(result)).toEqual(["/tmp/screenshot.png"]);
+    expect(extractToolResultMediaPaths(result)).toEqual([
+      "/tmp/screenshot.png",
+    ]);
   });
 
   it("extracts indented MEDIA: line", () => {
@@ -215,7 +233,9 @@ describe("extractToolResultMediaPaths", () => {
         },
       ],
     };
-    expect(extractToolResultMediaPaths(result)).toEqual(["/tmp/tts-output.opus"]);
+    expect(extractToolResultMediaPaths(result)).toEqual([
+      "/tmp/tts-output.opus",
+    ]);
   });
 
   it("extracts multiple MEDIA: lines from a single text block", () => {
@@ -227,6 +247,9 @@ describe("extractToolResultMediaPaths", () => {
         },
       ],
     };
-    expect(extractToolResultMediaPaths(result)).toEqual(["/tmp/page1.png", "/tmp/page2.png"]);
+    expect(extractToolResultMediaPaths(result)).toEqual([
+      "/tmp/page1.png",
+      "/tmp/page2.png",
+    ]);
   });
 });

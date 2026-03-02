@@ -18,7 +18,9 @@ describe("buildProgram version alias handling", () => {
   it("exits with version output for root -v", () => {
     process.argv = ["node", "openclaw", "-v"];
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
-    const exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(((
+      code?: number,
+    ) => {
       throw new Error(`process.exit:${String(code)}`);
     }) as typeof process.exit);
 
@@ -29,7 +31,9 @@ describe("buildProgram version alias handling", () => {
 
   it("does not treat subcommand -v as root version alias", () => {
     process.argv = ["node", "openclaw", "acp", "-v"];
-    const exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(((
+      code?: number,
+    ) => {
       throw new Error(`unexpected process.exit:${String(code)}`);
     }) as typeof process.exit);
 

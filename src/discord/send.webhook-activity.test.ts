@@ -4,10 +4,12 @@ import { sendWebhookMessageDiscord } from "./send.js";
 const recordChannelActivityMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../infra/channel-activity.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../infra/channel-activity.js")>();
+  const actual =
+    await importOriginal<typeof import("../infra/channel-activity.js")>();
   return {
     ...actual,
-    recordChannelActivity: (...args: unknown[]) => recordChannelActivityMock(...args),
+    recordChannelActivity: (...args: unknown[]) =>
+      recordChannelActivityMock(...args),
   };
 });
 
@@ -17,10 +19,13 @@ describe("sendWebhookMessageDiscord activity", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => {
-        return new Response(JSON.stringify({ id: "msg-1", channel_id: "thread-1" }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        });
+        return new Response(
+          JSON.stringify({ id: "msg-1", channel_id: "thread-1" }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
       }),
     );
   });

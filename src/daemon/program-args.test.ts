@@ -23,8 +23,12 @@ afterEach(() => {
 
 describe("resolveGatewayProgramArguments", () => {
   it("uses realpath-resolved dist entry when running via npx shim", async () => {
-    const argv1 = path.resolve("/tmp/.npm/_npx/63c3/node_modules/.bin/openclaw");
-    const entryPath = path.resolve("/tmp/.npm/_npx/63c3/node_modules/openclaw/dist/entry.js");
+    const argv1 = path.resolve(
+      "/tmp/.npm/_npx/63c3/node_modules/.bin/openclaw",
+    );
+    const entryPath = path.resolve(
+      "/tmp/.npm/_npx/63c3/node_modules/openclaw/dist/entry.js",
+    );
     process.argv = ["node", argv1];
     fsMocks.realpath.mockResolvedValue(entryPath);
     fsMocks.access.mockImplementation(async (target: string) => {
@@ -66,8 +70,12 @@ describe("resolveGatewayProgramArguments", () => {
   });
 
   it("falls back to node_modules package dist when .bin path is not resolved", async () => {
-    const argv1 = path.resolve("/tmp/.npm/_npx/63c3/node_modules/.bin/openclaw");
-    const indexPath = path.resolve("/tmp/.npm/_npx/63c3/node_modules/openclaw/dist/index.js");
+    const argv1 = path.resolve(
+      "/tmp/.npm/_npx/63c3/node_modules/.bin/openclaw",
+    );
+    const indexPath = path.resolve(
+      "/tmp/.npm/_npx/63c3/node_modules/openclaw/dist/index.js",
+    );
     process.argv = ["node", argv1];
     fsMocks.realpath.mockRejectedValue(new Error("no realpath"));
     fsMocks.access.mockImplementation(async (target: string) => {

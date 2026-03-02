@@ -4,7 +4,10 @@ import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR } from "../../agents/pi-settings.js";
 import { parseNonNegativeByteSize } from "../../config/byte-size.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { resolveFreshSessionTotalTokens, type SessionEntry } from "../../config/sessions.js";
+import {
+  resolveFreshSessionTotalTokens,
+  type SessionEntry,
+} from "../../config/sessions.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 
 export const DEFAULT_MEMORY_FLUSH_SOFT_TOKENS = 4000;
@@ -44,8 +47,13 @@ export function resolveMemoryFlushPromptForRun(params: {
   cfg?: OpenClawConfig;
   nowMs?: number;
 }): string {
-  const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
-  const { userTimezone, timeLine } = resolveCronStyleNow(params.cfg ?? {}, nowMs);
+  const nowMs = Number.isFinite(params.nowMs)
+    ? (params.nowMs as number)
+    : Date.now();
+  const { userTimezone, timeLine } = resolveCronStyleNow(
+    params.cfg ?? {},
+    nowMs,
+  );
   const dateStamp = formatDateStampInTimezone(nowMs, userTimezone);
   const withDate = params.prompt.replaceAll("YYYY-MM-DD", dateStamp).trimEnd();
   if (!withDate) {
@@ -78,22 +86,27 @@ const normalizeNonNegativeInt = (value: unknown): number | null => {
   return int >= 0 ? int : null;
 };
 
-export function resolveMemoryFlushSettings(cfg?: OpenClawConfig): MemoryFlushSettings | null {
+export function resolveMemoryFlushSettings(
+  cfg?: OpenClawConfig,
+): MemoryFlushSettings | null {
   const defaults = cfg?.agents?.defaults?.compaction?.memoryFlush;
   const enabled = defaults?.enabled ?? true;
   if (!enabled) {
     return null;
   }
   const softThresholdTokens =
-    normalizeNonNegativeInt(defaults?.softThresholdTokens) ?? DEFAULT_MEMORY_FLUSH_SOFT_TOKENS;
+    normalizeNonNegativeInt(defaults?.softThresholdTokens) ??
+    DEFAULT_MEMORY_FLUSH_SOFT_TOKENS;
   const forceFlushTranscriptBytes =
     parseNonNegativeByteSize(defaults?.forceFlushTranscriptBytes) ??
     DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES;
   const prompt = defaults?.prompt?.trim() || DEFAULT_MEMORY_FLUSH_PROMPT;
-  const systemPrompt = defaults?.systemPrompt?.trim() || DEFAULT_MEMORY_FLUSH_SYSTEM_PROMPT;
+  const systemPrompt =
+    defaults?.systemPrompt?.trim() || DEFAULT_MEMORY_FLUSH_SYSTEM_PROMPT;
   const reserveTokensFloor =
-    normalizeNonNegativeInt(cfg?.agents?.defaults?.compaction?.reserveTokensFloor) ??
-    DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR;
+    normalizeNonNegativeInt(
+      cfg?.agents?.defaults?.compaction?.reserveTokensFloor,
+    ) ?? DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR;
 
   return {
     enabled,
@@ -117,14 +130,19 @@ export function resolveMemoryFlushContextWindowTokens(params: {
   agentCfgContextTokens?: number;
 }): number {
   return (
-    lookupContextTokens(params.modelId) ?? params.agentCfgContextTokens ?? DEFAULT_CONTEXT_TOKENS
+    lookupContextTokens(params.modelId) ??
+    params.agentCfgContextTokens ??
+    DEFAULT_CONTEXT_TOKENS
   );
 }
 
 export function shouldRunMemoryFlush(params: {
   entry?: Pick<
     SessionEntry,
-    "totalTokens" | "totalTokensFresh" | "compactionCount" | "memoryFlushCompactionCount"
+    | "totalTokens"
+    | "totalTokensFresh"
+    | "compactionCount"
+    | "memoryFlushCompactionCount"
   >;
   /**
    * Optional token count override for flush gating. When provided, this value is
@@ -146,7 +164,8 @@ export function shouldRunMemoryFlush(params: {
       ? Math.floor(override)
       : undefined;
 
-  const totalTokens = overrideTokens ?? resolveFreshSessionTotalTokens(params.entry);
+  const totalTokens =
+    overrideTokens ?? resolveFreshSessionTotalTokens(params.entry);
   if (!totalTokens || totalTokens <= 0) {
     return false;
   }

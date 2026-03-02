@@ -18,7 +18,9 @@ const A2UI_ROOT_RETRY_NULL_AFTER_MS = 10_000;
 
 async function resolveA2uiRoot(): Promise<string | null> {
   const here = path.dirname(fileURLToPath(import.meta.url));
-  const entryDir = process.argv[1] ? path.dirname(path.resolve(process.argv[1])) : null;
+  const entryDir = process.argv[1]
+    ? path.dirname(path.resolve(process.argv[1]))
+    : null;
   const candidates = [
     // Running from source (bun) or dist/canvas-host chunk.
     path.resolve(here, "a2ui"),
@@ -62,7 +64,8 @@ async function resolveA2uiRootReal(): Promise<string | null> {
   const nowMs = Date.now();
   if (
     cachedA2uiRootReal !== undefined &&
-    (cachedA2uiRootReal !== null || nowMs - cachedA2uiResolvedAtMs < A2UI_ROOT_RETRY_NULL_AFTER_MS)
+    (cachedA2uiRootReal !== null ||
+      nowMs - cachedA2uiResolvedAtMs < A2UI_ROOT_RETRY_NULL_AFTER_MS)
   ) {
     return cachedA2uiRootReal;
   }
@@ -150,7 +153,9 @@ export async function handleA2uiHttpRequest(
 
   const url = new URL(urlRaw, "http://localhost");
   const basePath =
-    url.pathname === A2UI_PATH || url.pathname.startsWith(`${A2UI_PATH}/`) ? A2UI_PATH : undefined;
+    url.pathname === A2UI_PATH || url.pathname.startsWith(`${A2UI_PATH}/`)
+      ? A2UI_PATH
+      : undefined;
   if (!basePath) {
     return false;
   }
@@ -184,11 +189,15 @@ export async function handleA2uiHttpRequest(
     const mime =
       lower.endsWith(".html") || lower.endsWith(".htm")
         ? "text/html"
-        : ((await detectMime({ filePath: result.realPath })) ?? "application/octet-stream");
+        : ((await detectMime({ filePath: result.realPath })) ??
+          "application/octet-stream");
     res.setHeader("Cache-Control", "no-store");
 
     if (req.method === "HEAD") {
-      res.setHeader("Content-Type", mime === "text/html" ? "text/html; charset=utf-8" : mime);
+      res.setHeader(
+        "Content-Type",
+        mime === "text/html" ? "text/html; charset=utf-8" : mime,
+      );
       res.end();
       return true;
     }

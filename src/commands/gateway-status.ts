@@ -51,9 +51,12 @@ export async function gatewayStatusCommand(
     wideAreaDomain,
   });
 
-  let sshTarget = sanitizeSshTarget(opts.ssh) ?? sanitizeSshTarget(cfg.gateway?.remote?.sshTarget);
+  let sshTarget =
+    sanitizeSshTarget(opts.ssh) ??
+    sanitizeSshTarget(cfg.gateway?.remote?.sshTarget);
   let sshIdentity =
-    sanitizeSshTarget(opts.sshIdentity) ?? sanitizeSshTarget(cfg.gateway?.remote?.sshIdentity);
+    sanitizeSshTarget(opts.sshIdentity) ??
+    sanitizeSshTarget(cfg.gateway?.remote?.sshIdentity);
   const remotePort = resolveGatewayPort(cfg);
 
   let sshTunnelError: string | null = null;
@@ -64,7 +67,11 @@ export async function gatewayStatusCommand(
   }
 
   if (sshTarget) {
-    const resolved = await resolveSshTarget(sshTarget, sshIdentity, overallTimeoutMs);
+    const resolved = await resolveSshTarget(
+      sshTarget,
+      sshIdentity,
+      overallTimeoutMs,
+    );
     if (resolved) {
       sshTarget = resolved.target;
       if (!sshIdentity && resolved.identity) {
@@ -103,7 +110,10 @@ export async function gatewayStatusCommand(
       const discoveryTask = discoveryPromise.catch(() => []);
       const tunnelTask = sshTarget ? tryStartTunnel() : Promise.resolve(null);
 
-      const [discovery, tunnelFirst] = await Promise.all([discoveryTask, tunnelTask]);
+      const [discovery, tunnelFirst] = await Promise.all([
+        discoveryTask,
+        tunnelTask,
+      ]);
 
       if (!sshTarget && opts.sshAuto) {
         const user = process.env.USER?.trim() || "";
@@ -113,7 +123,8 @@ export async function gatewayStatusCommand(
             if (!host?.trim()) {
               return null;
             }
-            const sshPort = typeof b.sshPort === "number" && b.sshPort > 0 ? b.sshPort : 22;
+            const sshPort =
+              typeof b.sshPort === "number" && b.sshPort > 0 ? b.sshPort : 22;
             const base = user ? `${user}@${host.trim()}` : host.trim();
             return sshPort !== 22 ? `${base}:${sshPort}` : base;
           })
@@ -127,7 +138,9 @@ export async function gatewayStatusCommand(
 
       const tunnel =
         tunnelFirst ||
-        (sshTarget && !sshTunnelStarted && !sshTunnelError ? await tryStartTunnel() : null);
+        (sshTarget && !sshTunnelStarted && !sshTunnelError
+          ? await tryStartTunnel()
+          : null);
 
       const tunnelTarget: GatewayStatusTarget | null = tunnel
         ? {
@@ -146,7 +159,10 @@ export async function gatewayStatusCommand(
         : null;
 
       const targets: GatewayStatusTarget[] = tunnelTarget
-        ? [tunnelTarget, ...baseTargets.filter((t) => t.url !== tunnelTarget.url)]
+        ? [
+            tunnelTarget,
+            ...baseTargets.filter((t) => t.url !== tunnelTarget.url),
+          ]
         : baseTargets;
 
       try {
@@ -154,9 +170,13 @@ export async function gatewayStatusCommand(
           targets.map(async (target) => {
             const auth = resolveAuthForTarget(cfg, target, {
               token: typeof opts.token === "string" ? opts.token : undefined,
-              password: typeof opts.password === "string" ? opts.password : undefined,
+              password:
+                typeof opts.password === "string" ? opts.password : undefined,
             });
-            const timeoutMs = resolveProbeBudgetMs(overallTimeoutMs, target.kind);
+            const timeoutMs = resolveProbeBudgetMs(
+              overallTimeoutMs,
+              target.kind,
+            );
             const probe = await probeGateway({
               url: target.url,
               auth,
@@ -280,7 +300,9 @@ export async function gatewayStatusCommand(
       ? `${colorize(rich, theme.success, "Reachable")}: yes`
       : `${colorize(rich, theme.error, "Reachable")}: no`,
   );
-  runtime.log(colorize(rich, theme.muted, `Probe budget: ${overallTimeoutMs}ms`));
+  runtime.log(
+    colorize(rich, theme.muted, `Probe budget: ${overallTimeoutMs}ms`),
+  );
 
   if (warnings.length > 0) {
     runtime.log("");
@@ -292,7 +314,9 @@ export async function gatewayStatusCommand(
 
   runtime.log("");
   runtime.log(colorize(rich, theme.heading, "Discovery (this machine)"));
-  const discoveryDomains = wideAreaDomain ? `local. + ${wideAreaDomain}` : "local.";
+  const discoveryDomains = wideAreaDomain
+    ? `local. + ${wideAreaDomain}`
+    : "local.";
   runtime.log(
     discovery.length > 0
       ? `Found ${discovery.length} gateway(s) via Bonjour (${discoveryDomains})`
@@ -323,7 +347,9 @@ export async function gatewayStatusCommand(
       const ip = p.self.ip ? ` (${p.self.ip})` : "";
       const platform = p.self.platform ? ` · ${p.self.platform}` : "";
       const version = p.self.version ? ` · app ${p.self.version}` : "";
-      runtime.log(`  ${colorize(rich, theme.info, "Gateway")}: ${host}${ip}${platform}${version}`);
+      runtime.log(
+        `  ${colorize(rich, theme.info, "Gateway")}: ${host}${ip}${platform}${version}`,
+      );
     }
     if (p.configSummary) {
       const c = p.configSummary;
@@ -333,7 +359,9 @@ export async function gatewayStatusCommand(
           : c.discovery.wideAreaEnabled === false
             ? "disabled"
             : "unknown";
-      runtime.log(`  ${colorize(rich, theme.info, "Wide-area discovery")}: ${wideArea}`);
+      runtime.log(
+        `  ${colorize(rich, theme.info, "Wide-area discovery")}: ${wideArea}`,
+      );
     }
     runtime.log("");
   }
@@ -364,7 +392,11 @@ function inferSshTargetFromRemoteUrl(rawUrl?: string | null): string | null {
   return user ? `${user}@${host}` : host;
 }
 
-function buildSshTarget(input: { user?: string; host?: string; port?: number }): string | null {
+function buildSshTarget(input: {
+  user?: string;
+  host?: string;
+  port?: number;
+}): string | null {
   const host = input.host?.trim() ?? "";
   if (!host) {
     return null;
@@ -403,6 +435,8 @@ async function resolveSshTarget(
     return { target: rawTarget, identity: identity ?? undefined };
   }
   const identityFile =
-    identity ?? config.identityFiles.find((entry) => entry.trim().length > 0)?.trim() ?? undefined;
+    identity ??
+    config.identityFiles.find((entry) => entry.trim().length > 0)?.trim() ??
+    undefined;
   return { target, identity: identityFile };
 }

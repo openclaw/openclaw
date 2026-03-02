@@ -37,9 +37,13 @@ export async function maybeBroadcastMessage(params: {
   }
 
   const strategy = params.cfg.broadcast?.strategy || "parallel";
-  whatsappInboundLog.info(`Broadcasting message to ${broadcastAgents.length} agents (${strategy})`);
+  whatsappInboundLog.info(
+    `Broadcasting message to ${broadcastAgents.length} agents (${strategy})`,
+  );
 
-  const agentIds = params.cfg.agents?.list?.map((agent) => normalizeAgentId(agent.id));
+  const agentIds = params.cfg.agents?.list?.map((agent) =>
+    normalizeAgentId(agent.id),
+  );
   const hasKnownAgents = (agentIds?.length ?? 0) > 0;
   const groupHistorySnapshot =
     params.msg.chatType === "group"
@@ -49,7 +53,9 @@ export async function maybeBroadcastMessage(params: {
   const processForAgent = async (agentId: string): Promise<boolean> => {
     const normalizedAgentId = normalizeAgentId(agentId);
     if (hasKnownAgents && !agentIds?.includes(normalizedAgentId)) {
-      whatsappInboundLog.warn(`Broadcast agent ${agentId} not found in agents.list; skipping`);
+      whatsappInboundLog.warn(
+        `Broadcast agent ${agentId} not found in agents.list; skipping`,
+      );
       return false;
     }
     const agentRoute = {
@@ -73,12 +79,19 @@ export async function maybeBroadcastMessage(params: {
     };
 
     try {
-      return await params.processMessage(params.msg, agentRoute, params.groupHistoryKey, {
-        groupHistory: groupHistorySnapshot,
-        suppressGroupHistoryClear: true,
-      });
+      return await params.processMessage(
+        params.msg,
+        agentRoute,
+        params.groupHistoryKey,
+        {
+          groupHistory: groupHistorySnapshot,
+          suppressGroupHistoryClear: true,
+        },
+      );
     } catch (err) {
-      whatsappInboundLog.error(`Broadcast agent ${agentId} failed: ${formatError(err)}`);
+      whatsappInboundLog.error(
+        `Broadcast agent ${agentId} failed: ${formatError(err)}`,
+      );
       return false;
     }
   };

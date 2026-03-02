@@ -1,11 +1,20 @@
-import { ensureAuthProfileStore, resolveAuthProfileOrder } from "../agents/auth-profiles.js";
-import { normalizeApiKeyInput, validateApiKeyInput } from "./auth-choice.api-key.js";
+import {
+  ensureAuthProfileStore,
+  resolveAuthProfileOrder,
+} from "../agents/auth-profiles.js";
+import {
+  normalizeApiKeyInput,
+  validateApiKeyInput,
+} from "./auth-choice.api-key.js";
 import {
   createAuthChoiceAgentModelNoter,
   ensureApiKeyFromOptionEnvOrPrompt,
   normalizeSecretInputModeInput,
 } from "./auth-choice.apply-helpers.js";
-import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
+import type {
+  ApplyAuthChoiceParams,
+  ApplyAuthChoiceResult,
+} from "./auth-choice.apply.js";
 import { applyDefaultModelChoice } from "./auth-choice.default-model.js";
 import {
   applyAuthProfileConfig,
@@ -21,16 +30,24 @@ export async function applyAuthChoiceOpenRouter(
   let nextConfig = params.config;
   let agentModelOverride: string | undefined;
   const noteAgentModel = createAuthChoiceAgentModelNoter(params);
-  const requestedSecretInputMode = normalizeSecretInputModeInput(params.opts?.secretInputMode);
+  const requestedSecretInputMode = normalizeSecretInputModeInput(
+    params.opts?.secretInputMode,
+  );
 
-  const store = ensureAuthProfileStore(params.agentDir, { allowKeychainPrompt: false });
+  const store = ensureAuthProfileStore(params.agentDir, {
+    allowKeychainPrompt: false,
+  });
   const profileOrder = resolveAuthProfileOrder({
     cfg: nextConfig,
     store,
     provider: "openrouter",
   });
-  const existingProfileId = profileOrder.find((profileId) => Boolean(store.profiles[profileId]));
-  const existingCred = existingProfileId ? store.profiles[existingProfileId] : undefined;
+  const existingProfileId = profileOrder.find((profileId) =>
+    Boolean(store.profiles[profileId]),
+  );
+  const existingCred = existingProfileId
+    ? store.profiles[existingProfileId]
+    : undefined;
   let profileId = "openrouter:default";
   let mode: "api_key" | "oauth" | "token" = "api_key";
   let hasCredential = false;
@@ -38,14 +55,26 @@ export async function applyAuthChoiceOpenRouter(
   if (existingProfileId && existingCred?.type) {
     profileId = existingProfileId;
     mode =
-      existingCred.type === "oauth" ? "oauth" : existingCred.type === "token" ? "token" : "api_key";
+      existingCred.type === "oauth"
+        ? "oauth"
+        : existingCred.type === "token"
+          ? "token"
+          : "api_key";
     hasCredential = true;
   }
 
-  if (!hasCredential && params.opts?.token && params.opts?.tokenProvider === "openrouter") {
-    await setOpenrouterApiKey(normalizeApiKeyInput(params.opts.token), params.agentDir, {
-      secretInputMode: requestedSecretInputMode,
-    });
+  if (
+    !hasCredential &&
+    params.opts?.token &&
+    params.opts?.tokenProvider === "openrouter"
+  ) {
+    await setOpenrouterApiKey(
+      normalizeApiKeyInput(params.opts.token),
+      params.agentDir,
+      {
+        secretInputMode: requestedSecretInputMode,
+      },
+    );
     hasCredential = true;
   }
 

@@ -27,7 +27,11 @@ import {
 import { resolveNextcloudTalkRoomKind } from "./room-info.js";
 import { getNextcloudTalkRuntime } from "./runtime.js";
 import { sendMessageNextcloudTalk } from "./send.js";
-import type { CoreConfig, GroupPolicy, NextcloudTalkInboundMessage } from "./types.js";
+import type {
+  CoreConfig,
+  GroupPolicy,
+  NextcloudTalkInboundMessage,
+} from "./types.js";
 
 const CHANNEL_ID = "nextcloud-talk" as const;
 
@@ -38,7 +42,10 @@ async function deliverNextcloudTalkReply(params: {
   statusSink?: (patch: { lastOutboundAt?: number }) => void;
 }): Promise<void> {
   const { payload, roomToken, accountId, statusSink } = params;
-  const combined = formatTextWithAttachmentLinks(payload.text, resolveOutboundMediaUrls(payload));
+  const combined = formatTextWithAttachmentLinks(
+    payload.text,
+    resolveOutboundMediaUrls(payload),
+  );
   if (!combined) {
     return;
   }
@@ -55,7 +62,10 @@ export async function handleNextcloudTalkInbound(params: {
   account: ResolvedNextcloudTalkAccount;
   config: CoreConfig;
   runtime: RuntimeEnv;
-  statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
+  statusSink?: (patch: {
+    lastInboundAt?: number;
+    lastOutboundAt?: number;
+  }) => void;
 }): Promise<void> {
   const { message, account, config, runtime, statusSink } = params;
   const core = getNextcloudTalkRuntime();
@@ -75,7 +85,12 @@ export async function handleNextcloudTalkInbound(params: {
     roomToken: message.roomToken,
     runtime,
   });
-  const isGroup = roomKind === "direct" ? false : roomKind === "group" ? true : message.isGroupChat;
+  const isGroup =
+    roomKind === "direct"
+      ? false
+      : roomKind === "group"
+        ? true
+        : message.isGroupChat;
   const senderId = message.senderId;
   const senderName = message.senderName;
   const roomToken = message.roomToken;
@@ -84,12 +99,15 @@ export async function handleNextcloudTalkInbound(params: {
   statusSink?.({ lastInboundAt: message.timestamp });
 
   const dmPolicy = account.config.dmPolicy ?? "pairing";
-  const defaultGroupPolicy = resolveDefaultGroupPolicy(config as OpenClawConfig);
+  const defaultGroupPolicy = resolveDefaultGroupPolicy(
+    config as OpenClawConfig,
+  );
   const { groupPolicy, providerMissingFallbackApplied } =
     resolveAllowlistProviderRuntimeGroupPolicy({
       providerConfigPresent:
-        ((config.channels as Record<string, unknown> | undefined)?.["nextcloud-talk"] ??
-          undefined) !== undefined,
+        ((config.channels as Record<string, unknown> | undefined)?.[
+          "nextcloud-talk"
+        ] ?? undefined) !== undefined,
       groupPolicy: account.config.groupPolicy as GroupPolicy | undefined,
       defaultGroupPolicy,
     });
@@ -101,8 +119,12 @@ export async function handleNextcloudTalkInbound(params: {
     log: (message) => runtime.log?.(message),
   });
 
-  const configAllowFrom = normalizeNextcloudTalkAllowlist(account.config.allowFrom);
-  const configGroupAllowFrom = normalizeNextcloudTalkAllowlist(account.config.groupAllowFrom);
+  const configAllowFrom = normalizeNextcloudTalkAllowlist(
+    account.config.allowFrom,
+  );
+  const configGroupAllowFrom = normalizeNextcloudTalkAllowlist(
+    account.config.groupAllowFrom,
+  );
   const storeAllowFrom = await readStoreAllowFromForDmPolicy({
     provider: CHANNEL_ID,
     accountId: account.accountId,
@@ -133,8 +155,12 @@ export async function handleNextcloudTalkInbound(params: {
     surface: CHANNEL_ID,
   });
   const useAccessGroups =
-    (config.commands as Record<string, unknown> | undefined)?.useAccessGroups !== false;
-  const hasControlCommand = core.channel.text.hasControlCommand(rawBody, config as OpenClawConfig);
+    (config.commands as Record<string, unknown> | undefined)
+      ?.useAccessGroups !== false;
+  const hasControlCommand = core.channel.text.hasControlCommand(
+    rawBody,
+    config as OpenClawConfig,
+  );
   const access = resolveDmGroupAccessWithCommandGate({
     isGroup,
     dmPolicy,
@@ -158,7 +184,9 @@ export async function handleNextcloudTalkInbound(params: {
 
   if (isGroup) {
     if (access.decision !== "allow") {
-      runtime.log?.(`nextcloud-talk: drop group sender ${senderId} (reason=${access.reason})`);
+      runtime.log?.(
+        `nextcloud-talk: drop group sender ${senderId} (reason=${access.reason})`,
+      );
       return;
     }
     const groupAllow = resolveNextcloudTalkGroupAllow({
@@ -168,7 +196,9 @@ export async function handleNextcloudTalkInbound(params: {
       senderId,
     });
     if (!groupAllow.allowed) {
-      runtime.log?.(`nextcloud-talk: drop group sender ${senderId} (policy=${groupPolicy})`);
+      runtime.log?.(
+        `nextcloud-talk: drop group sender ${senderId} (policy=${groupPolicy})`,
+      );
       return;
     }
   } else {
@@ -191,11 +221,15 @@ export async function handleNextcloudTalkInbound(params: {
             );
             statusSink?.({ lastOutboundAt: Date.now() });
           } catch (err) {
-            runtime.error?.(`nextcloud-talk: pairing reply failed for ${senderId}: ${String(err)}`);
+            runtime.error?.(
+              `nextcloud-talk: pairing reply failed for ${senderId}: ${String(err)}`,
+            );
           }
         }
       }
-      runtime.log?.(`nextcloud-talk: drop DM sender ${senderId} (reason=${access.reason})`);
+      runtime.log?.(
+        `nextcloud-talk: drop DM sender ${senderId} (reason=${access.reason})`,
+      );
       return;
     }
   }
@@ -210,7 +244,9 @@ export async function handleNextcloudTalkInbound(params: {
     return;
   }
 
-  const mentionRegexes = core.channel.mentions.buildMentionRegexes(config as OpenClawConfig);
+  const mentionRegexes = core.channel.mentions.buildMentionRegexes(
+    config as OpenClawConfig,
+  );
   const wasMentioned = mentionRegexes.length
     ? core.channel.mentions.matchesMentionPatterns(rawBody, mentionRegexes)
     : false;
@@ -243,14 +279,20 @@ export async function handleNextcloudTalkInbound(params: {
     },
   });
 
-  const fromLabel = isGroup ? `room:${roomName || roomToken}` : senderName || `user:${senderId}`;
+  const fromLabel = isGroup
+    ? `room:${roomName || roomToken}`
+    : senderName || `user:${senderId}`;
   const storePath = core.channel.session.resolveStorePath(
-    (config.session as Record<string, unknown> | undefined)?.store as string | undefined,
+    (config.session as Record<string, unknown> | undefined)?.store as
+      | string
+      | undefined,
     {
       agentId: route.agentId,
     },
   );
-  const envelopeOptions = core.channel.reply.resolveEnvelopeFormatOptions(config as OpenClawConfig);
+  const envelopeOptions = core.channel.reply.resolveEnvelopeFormatOptions(
+    config as OpenClawConfig,
+  );
   const previousTimestamp = core.channel.session.readSessionUpdatedAt({
     storePath,
     sessionKey: route.sessionKey,
@@ -271,7 +313,9 @@ export async function handleNextcloudTalkInbound(params: {
     BodyForAgent: rawBody,
     RawBody: rawBody,
     CommandBody: rawBody,
-    From: isGroup ? `nextcloud-talk:room:${roomToken}` : `nextcloud-talk:${senderId}`,
+    From: isGroup
+      ? `nextcloud-talk:room:${roomToken}`
+      : `nextcloud-talk:${senderId}`,
     To: `nextcloud-talk:${roomToken}`,
     SessionKey: route.sessionKey,
     AccountId: route.accountId,
@@ -296,7 +340,9 @@ export async function handleNextcloudTalkInbound(params: {
     sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
     ctx: ctxPayload,
     onRecordError: (err) => {
-      runtime.error?.(`nextcloud-talk: failed updating session meta: ${String(err)}`);
+      runtime.error?.(
+        `nextcloud-talk: failed updating session meta: ${String(err)}`,
+      );
     },
   });
 
@@ -322,7 +368,9 @@ export async function handleNextcloudTalkInbound(params: {
       ...prefixOptions,
       deliver: deliverReply,
       onError: (err, info) => {
-        runtime.error?.(`nextcloud-talk ${info.kind} reply failed: ${String(err)}`);
+        runtime.error?.(
+          `nextcloud-talk ${info.kind} reply failed: ${String(err)}`,
+        );
       },
     },
     replyOptions: {

@@ -1,4 +1,8 @@
-import { computeBackoff, sleepWithAbort, type BackoffPolicy } from "../infra/backoff.js";
+import {
+  computeBackoff,
+  sleepWithAbort,
+  type BackoffPolicy,
+} from "../infra/backoff.js";
 
 export type TelegramSendChatActionLogger = (message: string) => void;
 
@@ -52,8 +56,11 @@ function is401Error(error: unknown): boolean {
   if (!error) {
     return false;
   }
-  const message = error instanceof Error ? error.message : JSON.stringify(error);
-  return message.includes("401") || message.toLowerCase().includes("unauthorized");
+  const message =
+    error instanceof Error ? error.message : JSON.stringify(error);
+  return (
+    message.includes("401") || message.toLowerCase().includes("unauthorized")
+  );
 }
 
 /**
@@ -100,7 +107,9 @@ export function createTelegramSendChatActionHandler({
       await sendChatActionFn(chatId, action, threadParams);
       // Success: reset failure counter
       if (consecutive401Failures > 0) {
-        logger(`sendChatAction recovered after ${consecutive401Failures} consecutive 401 failures`);
+        logger(
+          `sendChatAction recovered after ${consecutive401Failures} consecutive 401 failures`,
+        );
         consecutive401Failures = 0;
       }
     } catch (error) {

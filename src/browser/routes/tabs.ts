@@ -1,6 +1,15 @@
 import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
-import type { BrowserRequest, BrowserResponse, BrowserRouteRegistrar } from "./types.js";
-import { getProfileContext, jsonError, toNumber, toStringOrEmpty } from "./utils.js";
+import type {
+  BrowserRequest,
+  BrowserResponse,
+  BrowserRouteRegistrar,
+} from "./types.js";
+import {
+  getProfileContext,
+  jsonError,
+  toNumber,
+  toStringOrEmpty,
+} from "./utils.js";
 
 function resolveTabsProfileContext(
   req: BrowserRequest,
@@ -37,18 +46,27 @@ async function withTabsProfileRoute(params: {
   mapTabError?: boolean;
   run: (profileCtx: ProfileContext) => Promise<void>;
 }) {
-  const profileCtx = resolveTabsProfileContext(params.req, params.res, params.ctx);
+  const profileCtx = resolveTabsProfileContext(
+    params.req,
+    params.res,
+    params.ctx,
+  );
   if (!profileCtx) {
     return;
   }
   try {
     await params.run(profileCtx);
   } catch (err) {
-    handleTabsRouteError(params.ctx, params.res, err, { mapTabError: params.mapTabError });
+    handleTabsRouteError(params.ctx, params.res, err, {
+      mapTabError: params.mapTabError,
+    });
   }
 }
 
-async function ensureBrowserRunning(profileCtx: ProfileContext, res: BrowserResponse) {
+async function ensureBrowserRunning(
+  profileCtx: ProfileContext,
+  res: BrowserResponse,
+) {
   if (!(await profileCtx.isReachable(300))) {
     jsonError(res, 409, "browser not running");
     return false;
@@ -63,7 +81,10 @@ function resolveIndexedTab(
   return typeof index === "number" ? tabs[index] : tabs.at(0);
 }
 
-function parseRequiredTargetId(res: BrowserResponse, rawTargetId: unknown): string | null {
+function parseRequiredTargetId(
+  res: BrowserResponse,
+  rawTargetId: unknown,
+): string | null {
   const targetId = toStringOrEmpty(rawTargetId);
   if (!targetId) {
     jsonError(res, 400, "targetId is required");
@@ -94,7 +115,10 @@ async function runTabTargetMutation(params: {
   });
 }
 
-export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: BrowserRouteContext) {
+export function registerBrowserTabRoutes(
+  app: BrowserRouteRegistrar,
+  ctx: BrowserRouteContext,
+) {
   app.get("/tabs", async (req, res) => {
     await withTabsProfileRoute({
       req,
@@ -131,7 +155,10 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
   });
 
   app.post("/tabs/focus", async (req, res) => {
-    const targetId = parseRequiredTargetId(res, (req.body as { targetId?: unknown })?.targetId);
+    const targetId = parseRequiredTargetId(
+      res,
+      (req.body as { targetId?: unknown })?.targetId,
+    );
     if (!targetId) {
       return;
     }

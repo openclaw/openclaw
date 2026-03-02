@@ -11,7 +11,9 @@ type ResolveDiscordAccentColorParams = {
   accountId?: string | null;
 };
 
-export function normalizeDiscordAccentColor(raw?: string | null): string | null {
+export function normalizeDiscordAccentColor(
+  raw?: string | null,
+): string | null {
   const trimmed = (raw ?? "").trim();
   if (!trimmed) {
     return null;
@@ -23,9 +25,16 @@ export function normalizeDiscordAccentColor(raw?: string | null): string | null 
   return normalized.toUpperCase();
 }
 
-export function resolveDiscordAccentColor(params: ResolveDiscordAccentColorParams): string {
-  const account = resolveDiscordAccount({ cfg: params.cfg, accountId: params.accountId });
-  const configured = normalizeDiscordAccentColor(account.config.ui?.components?.accentColor);
+export function resolveDiscordAccentColor(
+  params: ResolveDiscordAccentColorParams,
+): string {
+  const account = resolveDiscordAccount({
+    cfg: params.cfg,
+    accountId: params.accountId,
+  });
+  const configured = normalizeDiscordAccentColor(
+    account.config.ui?.components?.accentColor,
+  );
   return configured ?? DEFAULT_DISCORD_ACCENT_COLOR;
 }
 
@@ -39,7 +48,11 @@ export class DiscordUiContainer extends Container {
   }) {
     const accentOverride = normalizeDiscordAccentColor(params.accentColor);
     const accentColor =
-      accentOverride ?? resolveDiscordAccentColor({ cfg: params.cfg, accountId: params.accountId });
+      accentOverride ??
+      resolveDiscordAccentColor({
+        cfg: params.cfg,
+        accountId: params.accountId,
+      });
     super(params.components, { accentColor, spoiler: params.spoiler });
   }
 }

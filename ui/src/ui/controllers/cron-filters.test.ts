@@ -19,7 +19,10 @@ function job(id: string, overrides: Partial<CronJob> = {}): CronJob {
 
 describe("getVisibleCronJobs", () => {
   it("returns all jobs when no client-side filters are active", () => {
-    const jobs = [job("a"), job("b", { schedule: { kind: "cron", expr: "0 9 * * *" } })];
+    const jobs = [
+      job("a"),
+      job("b", { schedule: { kind: "cron", expr: "0 9 * * *" } }),
+    ];
     const visible = getVisibleCronJobs({
       cronJobs: jobs,
       cronJobsScheduleKindFilter: "all",

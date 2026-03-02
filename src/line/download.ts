@@ -27,7 +27,9 @@ export async function downloadLineMedia(
   for await (const chunk of response as AsyncIterable<Buffer>) {
     totalSize += chunk.length;
     if (totalSize > maxBytes) {
-      throw new Error(`Media exceeds ${Math.round(maxBytes / (1024 * 1024))}MB limit`);
+      throw new Error(
+        `Media exceeds ${Math.round(maxBytes / (1024 * 1024))}MB limit`,
+      );
     }
     chunks.push(chunk);
   }
@@ -39,11 +41,16 @@ export async function downloadLineMedia(
   const ext = getExtensionForContentType(contentType);
 
   // Use random temp names; never derive paths from external message identifiers.
-  const filePath = buildRandomTempFilePath({ prefix: "line-media", extension: ext });
+  const filePath = buildRandomTempFilePath({
+    prefix: "line-media",
+    extension: ext,
+  });
 
   await fs.promises.writeFile(filePath, buffer);
 
-  logVerbose(`line: downloaded media ${messageId} to ${filePath} (${buffer.length} bytes)`);
+  logVerbose(
+    `line: downloaded media ${messageId} to ${filePath} (${buffer.length} bytes)`,
+  );
 
   return {
     path: filePath,
@@ -60,7 +67,12 @@ function detectContentType(buffer: Buffer): string {
       return "image/jpeg";
     }
     // PNG
-    if (buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47) {
+    if (
+      buffer[0] === 0x89 &&
+      buffer[1] === 0x50 &&
+      buffer[2] === 0x4e &&
+      buffer[3] === 0x47
+    ) {
       return "image/png";
     }
     // GIF
@@ -89,7 +101,12 @@ function detectContentType(buffer: Buffer): string {
       buffer[6] === 0x79 &&
       buffer[7] === 0x70
     ) {
-      const brand = String.fromCharCode(buffer[8], buffer[9], buffer[10], buffer[11]);
+      const brand = String.fromCharCode(
+        buffer[8],
+        buffer[9],
+        buffer[10],
+        buffer[11],
+      );
       if (brand === "M4A " || brand === "M4B ") {
         return "audio/mp4";
       }

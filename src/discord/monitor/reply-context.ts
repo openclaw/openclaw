@@ -12,7 +12,10 @@ export type DiscordReplyContext = {
 
 export function resolveReplyContext(
   message: Message,
-  resolveDiscordMessageText: (message: Message, options?: { includeForwarded?: boolean }) => string,
+  resolveDiscordMessageText: (
+    message: Message,
+    options?: { includeForwarded?: boolean },
+  ) => string,
 ): DiscordReplyContext | null {
   const referenced = message.referencedMessage;
   if (!referenced?.author) {
@@ -39,7 +42,8 @@ export function resolveReplyContext(
 
 export function buildDirectLabel(author: User, tagOverride?: string) {
   const username =
-    tagOverride?.trim() || resolveDiscordSenderIdentity({ author, pluralkitInfo: null }).tag;
+    tagOverride?.trim() ||
+    resolveDiscordSenderIdentity({ author, pluralkitInfo: null }).tag;
   return `${username ?? "unknown"} user id:${author.id}`;
 }
 

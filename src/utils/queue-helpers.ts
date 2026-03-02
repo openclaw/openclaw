@@ -55,7 +55,8 @@ export function applyQueueRuntimeSettings<TMode extends string>(params: {
     typeof params.settings.cap === "number" && params.settings.cap > 0
       ? Math.floor(params.settings.cap)
       : params.target.cap;
-  params.target.dropPolicy = params.settings.dropPolicy ?? params.target.dropPolicy;
+  params.target.dropPolicy =
+    params.settings.dropPolicy ?? params.target.dropPolicy;
 }
 
 export function elideQueueText(text: string, limit = 140): string {
@@ -98,7 +99,9 @@ export function applyQueueDropPolicy<T>(params: {
   if (params.queue.dropPolicy === "summarize") {
     for (const item of dropped) {
       params.queue.droppedCount += 1;
-      params.queue.summaryLines.push(buildQueueSummaryLine(params.summarize(item)));
+      params.queue.summaryLines.push(
+        buildQueueSummaryLine(params.summarize(item)),
+      );
     }
     const limit = Math.max(0, params.summaryLimit ?? cap);
     while (params.queue.summaryLines.length > limit) {
@@ -196,7 +199,10 @@ export function buildQueueSummaryPrompt(params: {
   noun: string;
   title?: string;
 }): string | undefined {
-  if (params.state.dropPolicy !== "summarize" || params.state.droppedCount <= 0) {
+  if (
+    params.state.dropPolicy !== "summarize" ||
+    params.state.droppedCount <= 0
+  ) {
     return undefined;
   }
   const noun = params.noun;

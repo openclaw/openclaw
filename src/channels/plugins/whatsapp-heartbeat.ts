@@ -17,7 +17,9 @@ function getSessionRecipients(cfg: OpenClawConfig) {
   const storePath = resolveStorePath(cfg.session?.store);
   const store = loadSessionStore(storePath);
   const isGroupKey = (key: string) =>
-    key.includes(":group:") || key.includes(":channel:") || key.includes("@g.us");
+    key.includes(":group:") ||
+    key.includes(":channel:") ||
+    key.includes("@g.us");
   const isCronKey = (key: string) => key.startsWith("cron:");
 
   const recipients = Object.entries(store)
@@ -25,7 +27,8 @@ function getSessionRecipients(cfg: OpenClawConfig) {
     .filter(([key]) => !isGroupKey(key) && !isCronKey(key))
     .map(([_, entry]) => ({
       to:
-        normalizeChatChannelId(entry?.lastChannel) === "whatsapp" && entry?.lastTo
+        normalizeChatChannelId(entry?.lastChannel) === "whatsapp" &&
+        entry?.lastTo
           ? normalizeE164(entry.lastTo)
           : "",
       updatedAt: entry?.updatedAt ?? 0,
@@ -54,8 +57,11 @@ export function resolveWhatsAppHeartbeatRecipients(
 
   const sessionRecipients = getSessionRecipients(cfg);
   const configuredAllowFrom =
-    Array.isArray(cfg.channels?.whatsapp?.allowFrom) && cfg.channels.whatsapp.allowFrom.length > 0
-      ? cfg.channels.whatsapp.allowFrom.filter((v) => v !== "*").map(normalizeE164)
+    Array.isArray(cfg.channels?.whatsapp?.allowFrom) &&
+    cfg.channels.whatsapp.allowFrom.length > 0
+      ? cfg.channels.whatsapp.allowFrom
+          .filter((v) => v !== "*")
+          .map(normalizeE164)
       : [];
   const storeAllowFrom = readChannelAllowFromStoreSync(
     "whatsapp",
@@ -77,10 +83,16 @@ export function resolveWhatsAppHeartbeatRecipients(
       .map((entry) => entry.to)
       .filter((recipient) => allowSet.has(recipient));
     if (authorizedSessionRecipients.length === 1) {
-      return { recipients: [authorizedSessionRecipients[0]], source: "session-single" };
+      return {
+        recipients: [authorizedSessionRecipients[0]],
+        source: "session-single",
+      };
     }
     if (authorizedSessionRecipients.length > 1) {
-      return { recipients: authorizedSessionRecipients, source: "session-ambiguous" };
+      return {
+        recipients: authorizedSessionRecipients,
+        source: "session-ambiguous",
+      };
     }
     return { recipients: allowFrom, source: "allowFrom" };
   }

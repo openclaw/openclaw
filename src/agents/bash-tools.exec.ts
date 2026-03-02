@@ -8,7 +8,10 @@ import {
   resolveShellEnvFallbackTimeoutMs,
 } from "../infra/shell-env.js";
 import { logInfo } from "../logger.js";
-import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import {
+  parseAgentSessionKey,
+  resolveAgentIdFromSessionKey,
+} from "../routing/session-key.js";
 import { markBackgrounded } from "./bash-process-registry.js";
 import { processGatewayAllowlist } from "./bash-tools.exec-host-gateway.js";
 import { executeNodeHostCommand } from "./bash-tools.exec-host-node.js";
@@ -54,7 +57,10 @@ export type {
 
 function extractScriptTargetFromCommand(
   command: string,
-): { kind: "python"; relOrAbsPath: string } | { kind: "node"; relOrAbsPath: string } | null {
+):
+  | { kind: "python"; relOrAbsPath: string }
+  | { kind: "node"; relOrAbsPath: string }
+  | null {
   const raw = command.trim();
   if (!raw) {
     return null;
@@ -65,7 +71,9 @@ function extractScriptTargetFromCommand(
   //   python3 -u file.py
   //   node --experimental-something file.js
   // If the command is more complex (pipes, heredocs, quoted paths with spaces), skip preflight.
-  const pythonMatch = raw.match(/^\s*(python3?|python)\s+(?:-[^\s]+\s+)*([^\s]+\.py)\b/i);
+  const pythonMatch = raw.match(
+    /^\s*(python3?|python)\s+(?:-[^\s]+\s+)*([^\s]+\.py)\b/i,
+  );
   if (pythonMatch?.[2]) {
     return { kind: "python", relOrAbsPath: pythonMatch[2] };
   }
@@ -193,12 +201,16 @@ export function createExecTool(
   const notifyOnExit = defaults?.notifyOnExit !== false;
   const notifyOnExitEmptySuccess = defaults?.notifyOnExitEmptySuccess === true;
   const notifySessionKey = defaults?.sessionKey?.trim() || undefined;
-  const approvalRunningNoticeMs = resolveApprovalRunningNoticeMs(defaults?.approvalRunningNoticeMs);
+  const approvalRunningNoticeMs = resolveApprovalRunningNoticeMs(
+    defaults?.approvalRunningNoticeMs,
+  );
   // Derive agentId only when sessionKey is an agent session key.
   const parsedAgentSession = parseAgentSessionKey(defaults?.sessionKey);
   const agentId =
     defaults?.agentId ??
-    (parsedAgentSession ? resolveAgentIdFromSessionKey(defaults?.sessionKey) : undefined);
+    (parsedAgentSession
+      ? resolveAgentIdFromSessionKey(defaults?.sessionKey)
+      : undefined);
 
   return {
     name: "exec",
@@ -233,7 +245,9 @@ export function createExecTool(
       const backgroundRequested = params.background === true;
       const yieldRequested = typeof params.yieldMs === "number";
       if (!allowBackground && (backgroundRequested || yieldRequested)) {
-        warnings.push("Warning: background execution is disabled; running synchronously.");
+        warnings.push(
+          "Warning: background execution is disabled; running synchronously.",
+        );
       }
       const yieldWindow = allowBackground
         ? backgroundRequested
@@ -246,7 +260,9 @@ export function createExecTool(
             )
         : null;
       const elevatedDefaults = defaults?.elevated;
-      const elevatedAllowed = Boolean(elevatedDefaults?.enabled && elevatedDefaults.allowed);
+      const elevatedAllowed = Boolean(
+        elevatedDefaults?.enabled && elevatedDefaults.allowed,
+      );
       const elevatedDefaultMode =
         elevatedDefaults?.defaultLevel === "full"
           ? "full"
@@ -255,7 +271,9 @@ export function createExecTool(
             : elevatedDefaults?.defaultLevel === "on"
               ? "ask"
               : "off";
-      const effectiveDefaultMode = elevatedAllowed ? elevatedDefaultMode : "off";
+      const effectiveDefaultMode = elevatedAllowed
+        ? elevatedDefaultMode
+        : "off";
       const elevatedMode =
         typeof params.elevated === "boolean"
           ? params.elevated
@@ -279,7 +297,9 @@ export function createExecTool(
             contextParts.push(`session=${sessionKey}`);
           }
           if (!elevatedDefaults?.enabled) {
-            gates.push("enabled (tools.elevated.enabled / agents.list[].tools.elevated.enabled)");
+            gates.push(
+              "enabled (tools.elevated.enabled / agents.list[].tools.elevated.enabled)",
+            );
           } else {
             gates.push(
               "allowFrom (tools.elevated.allowFrom.<provider> / agents.list[].tools.elevated.allowFrom.<provider>)",
@@ -289,7 +309,9 @@ export function createExecTool(
             [
               `elevated is not available right now (runtime=${runtime}).`,
               `Failing gates: ${gates.join(", ")}`,
-              contextParts.length > 0 ? `Context: ${contextParts.join(" ")}` : undefined,
+              contextParts.length > 0
+                ? `Context: ${contextParts.join(" ")}`
+                : undefined,
               "Fix-it keys:",
               "- tools.elevated.enabled",
               "- tools.elevated.allowFrom.<provider>",
@@ -302,13 +324,19 @@ export function createExecTool(
         }
       }
       if (elevatedRequested) {
-        logInfo(`exec: elevated command ${truncateMiddle(params.command, 120)}`);
+        logInfo(
+          `exec: elevated command ${truncateMiddle(params.command, 120)}`,
+        );
       }
       const configuredHost = defaults?.host ?? "sandbox";
       const sandboxHostConfigured = defaults?.host === "sandbox";
       const requestedHost = normalizeExecHost(params.host) ?? null;
       let host: ExecHost = requestedHost ?? configuredHost;
-      if (!elevatedRequested && requestedHost && requestedHost !== configuredHost) {
+      if (
+        !elevatedRequested &&
+        requestedHost &&
+        requestedHost !== configuredHost
+      ) {
         throw new Error(
           `exec host not allowed (requested ${renderExecHostLabel(requestedHost)}; ` +
             `configure tools.exec.host=${renderExecHostLabel(configuredHost)} to allow).`,
@@ -318,9 +346,13 @@ export function createExecTool(
         host = "gateway";
       }
 
-      const configuredSecurity = defaults?.security ?? (host === "sandbox" ? "deny" : "allowlist");
+      const configuredSecurity =
+        defaults?.security ?? (host === "sandbox" ? "deny" : "allowlist");
       const requestedSecurity = normalizeExecSecurity(params.security);
-      let security = minSecurity(configuredSecurity, requestedSecurity ?? configuredSecurity);
+      let security = minSecurity(
+        configuredSecurity,
+        requestedSecurity ?? configuredSecurity,
+      );
       if (elevatedRequested && elevatedMode === "full") {
         security = "full";
       }
@@ -345,7 +377,8 @@ export function createExecTool(
           ].join("\n"),
         );
       }
-      const rawWorkdir = params.workdir?.trim() || defaults?.cwd || process.cwd();
+      const rawWorkdir =
+        params.workdir?.trim() || defaults?.cwd || process.cwd();
       let workdir = rawWorkdir;
       let containerWorkdir = sandbox?.containerWorkdir;
       if (sandbox) {
@@ -361,7 +394,10 @@ export function createExecTool(
       }
 
       const inheritedBaseEnv = coerceEnv(process.env);
-      const baseEnv = host === "sandbox" ? inheritedBaseEnv : sanitizeHostBaseEnv(inheritedBaseEnv);
+      const baseEnv =
+        host === "sandbox"
+          ? inheritedBaseEnv
+          : sanitizeHostBaseEnv(inheritedBaseEnv);
 
       // Logic: Sandbox gets raw env. Host (gateway/node) must pass validation.
       // We validate BEFORE merging to prevent any dangerous vars from entering the stream.
@@ -455,18 +491,25 @@ export function createExecTool(
         execCommandOverride = gatewayResult.execCommandOverride;
       }
 
-      const explicitTimeoutSec = typeof params.timeout === "number" ? params.timeout : null;
+      const explicitTimeoutSec =
+        typeof params.timeout === "number" ? params.timeout : null;
       const backgroundTimeoutBypass =
-        allowBackground && explicitTimeoutSec === null && (backgroundRequested || yieldRequested);
+        allowBackground &&
+        explicitTimeoutSec === null &&
+        (backgroundRequested || yieldRequested);
       const effectiveTimeout = backgroundTimeoutBypass
         ? null
         : (explicitTimeoutSec ?? defaultTimeoutSec);
-      const getWarningText = () => (warnings.length ? `${warnings.join("\n")}\n\n` : "");
+      const getWarningText = () =>
+        warnings.length ? `${warnings.join("\n")}\n\n` : "";
       const usePty = params.pty === true && !sandbox;
 
       // Preflight: catch a common model failure mode (shell syntax leaking into Python/JS sources)
       // before we execute and burn tokens in cron loops.
-      await validateScriptFileForShellBleed({ command: params.command, workdir });
+      await validateScriptFileForShellBleed({
+        command: params.command,
+        workdir,
+      });
 
       const run = await runExecProcess({
         command: params.command,
@@ -504,92 +547,94 @@ export function createExecTool(
         signal.addEventListener("abort", onAbortSignal, { once: true });
       }
 
-      return new Promise<AgentToolResult<ExecToolDetails>>((resolve, reject) => {
-        const resolveRunning = () =>
-          resolve({
-            content: [
-              {
-                type: "text",
-                text: `${getWarningText()}Command still running (session ${run.session.id}, pid ${
-                  run.session.pid ?? "n/a"
-                }). Use process (list/poll/log/write/kill/clear/remove) for follow-up.`,
-              },
-            ],
-            details: {
-              status: "running",
-              sessionId: run.session.id,
-              pid: run.session.pid ?? undefined,
-              startedAt: run.startedAt,
-              cwd: run.session.cwd,
-              tail: run.session.tail,
-            },
-          });
-
-        const onYieldNow = () => {
-          if (yieldTimer) {
-            clearTimeout(yieldTimer);
-          }
-          if (yielded) {
-            return;
-          }
-          yielded = true;
-          markBackgrounded(run.session);
-          resolveRunning();
-        };
-
-        if (allowBackground && yieldWindow !== null) {
-          if (yieldWindow === 0) {
-            onYieldNow();
-          } else {
-            yieldTimer = setTimeout(() => {
-              if (yielded) {
-                return;
-              }
-              yielded = true;
-              markBackgrounded(run.session);
-              resolveRunning();
-            }, yieldWindow);
-          }
-        }
-
-        run.promise
-          .then((outcome) => {
-            if (yieldTimer) {
-              clearTimeout(yieldTimer);
-            }
-            if (yielded || run.session.backgrounded) {
-              return;
-            }
-            if (outcome.status === "failed") {
-              reject(new Error(outcome.reason ?? "Command failed."));
-              return;
-            }
+      return new Promise<AgentToolResult<ExecToolDetails>>(
+        (resolve, reject) => {
+          const resolveRunning = () =>
             resolve({
               content: [
                 {
                   type: "text",
-                  text: `${getWarningText()}${outcome.aggregated || "(no output)"}`,
+                  text: `${getWarningText()}Command still running (session ${run.session.id}, pid ${
+                    run.session.pid ?? "n/a"
+                  }). Use process (list/poll/log/write/kill/clear/remove) for follow-up.`,
                 },
               ],
               details: {
-                status: "completed",
-                exitCode: outcome.exitCode ?? 0,
-                durationMs: outcome.durationMs,
-                aggregated: outcome.aggregated,
+                status: "running",
+                sessionId: run.session.id,
+                pid: run.session.pid ?? undefined,
+                startedAt: run.startedAt,
                 cwd: run.session.cwd,
+                tail: run.session.tail,
               },
             });
-          })
-          .catch((err) => {
+
+          const onYieldNow = () => {
             if (yieldTimer) {
               clearTimeout(yieldTimer);
             }
-            if (yielded || run.session.backgrounded) {
+            if (yielded) {
               return;
             }
-            reject(err as Error);
-          });
-      });
+            yielded = true;
+            markBackgrounded(run.session);
+            resolveRunning();
+          };
+
+          if (allowBackground && yieldWindow !== null) {
+            if (yieldWindow === 0) {
+              onYieldNow();
+            } else {
+              yieldTimer = setTimeout(() => {
+                if (yielded) {
+                  return;
+                }
+                yielded = true;
+                markBackgrounded(run.session);
+                resolveRunning();
+              }, yieldWindow);
+            }
+          }
+
+          run.promise
+            .then((outcome) => {
+              if (yieldTimer) {
+                clearTimeout(yieldTimer);
+              }
+              if (yielded || run.session.backgrounded) {
+                return;
+              }
+              if (outcome.status === "failed") {
+                reject(new Error(outcome.reason ?? "Command failed."));
+                return;
+              }
+              resolve({
+                content: [
+                  {
+                    type: "text",
+                    text: `${getWarningText()}${outcome.aggregated || "(no output)"}`,
+                  },
+                ],
+                details: {
+                  status: "completed",
+                  exitCode: outcome.exitCode ?? 0,
+                  durationMs: outcome.durationMs,
+                  aggregated: outcome.aggregated,
+                  cwd: run.session.cwd,
+                },
+              });
+            })
+            .catch((err) => {
+              if (yieldTimer) {
+                clearTimeout(yieldTimer);
+              }
+              if (yielded || run.session.backgrounded) {
+                return;
+              }
+              reject(err as Error);
+            });
+        },
+      );
     },
   };
 }

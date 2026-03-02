@@ -10,7 +10,10 @@ export type AgentSkillsState = {
   agentSkillsAgentId: string | null;
 };
 
-export async function loadAgentSkills(state: AgentSkillsState, agentId: string) {
+export async function loadAgentSkills(
+  state: AgentSkillsState,
+  agentId: string,
+) {
   if (!state.client || !state.connected) {
     return;
   }

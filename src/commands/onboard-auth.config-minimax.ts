@@ -19,7 +19,9 @@ import {
   MINIMAX_LM_STUDIO_COST,
 } from "./onboard-auth.models.js";
 
-export function applyMinimaxProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+export function applyMinimaxProviderConfig(
+  cfg: OpenClawConfig,
+): OpenClawConfig {
   const models = { ...cfg.agents?.defaults?.models };
   models["anthropic/claude-opus-4-6"] = {
     ...models["anthropic/claude-opus-4-6"],
@@ -49,7 +51,10 @@ export function applyMinimaxProviderConfig(cfg: OpenClawConfig): OpenClawConfig 
     };
   }
 
-  return applyOnboardAuthAgentModelsAndProviders(cfg, { agentModels: models, providers });
+  return applyOnboardAuthAgentModelsAndProviders(cfg, {
+    agentModels: models,
+    providers,
+  });
 }
 
 export function applyMinimaxHostedProviderConfig(
@@ -70,9 +75,15 @@ export function applyMinimaxHostedProviderConfig(
     maxTokens: DEFAULT_MINIMAX_MAX_TOKENS,
   });
   const existingProvider = providers.minimax;
-  const existingModels = Array.isArray(existingProvider?.models) ? existingProvider.models : [];
-  const hasHostedModel = existingModels.some((model) => model.id === MINIMAX_HOSTED_MODEL_ID);
-  const mergedModels = hasHostedModel ? existingModels : [...existingModels, hostedModel];
+  const existingModels = Array.isArray(existingProvider?.models)
+    ? existingProvider.models
+    : [];
+  const hasHostedModel = existingModels.some(
+    (model) => model.id === MINIMAX_HOSTED_MODEL_ID,
+  );
+  const mergedModels = hasHostedModel
+    ? existingModels
+    : [...existingModels, hostedModel];
   providers.minimax = {
     ...existingProvider,
     baseUrl: params?.baseUrl?.trim() || DEFAULT_MINIMAX_BASE_URL,
@@ -81,7 +92,10 @@ export function applyMinimaxHostedProviderConfig(
     models: mergedModels.length > 0 ? mergedModels : [hostedModel],
   };
 
-  return applyOnboardAuthAgentModelsAndProviders(cfg, { agentModels: models, providers });
+  return applyOnboardAuthAgentModelsAndProviders(cfg, {
+    agentModels: models,
+    providers,
+  });
 }
 
 export function applyMinimaxConfig(cfg: OpenClawConfig): OpenClawConfig {
@@ -165,18 +179,28 @@ function applyMinimaxApiProviderConfigWithBaseUrl(
   cfg: OpenClawConfig,
   params: MinimaxApiProviderConfigParams,
 ): OpenClawConfig {
-  const providers = { ...cfg.models?.providers } as Record<string, ModelProviderConfig>;
+  const providers = { ...cfg.models?.providers } as Record<
+    string,
+    ModelProviderConfig
+  >;
   const existingProvider = providers[params.providerId];
   const existingModels = existingProvider?.models ?? [];
   const apiModel = buildMinimaxApiModelDefinition(params.modelId);
-  const hasApiModel = existingModels.some((model) => model.id === params.modelId);
-  const mergedModels = hasApiModel ? existingModels : [...existingModels, apiModel];
-  const { apiKey: existingApiKey, ...existingProviderRest } = existingProvider ?? {
-    baseUrl: params.baseUrl,
-    models: [],
-  };
-  const resolvedApiKey = typeof existingApiKey === "string" ? existingApiKey : undefined;
-  const normalizedApiKey = resolvedApiKey?.trim() === "minimax" ? "" : resolvedApiKey;
+  const hasApiModel = existingModels.some(
+    (model) => model.id === params.modelId,
+  );
+  const mergedModels = hasApiModel
+    ? existingModels
+    : [...existingModels, apiModel];
+  const { apiKey: existingApiKey, ...existingProviderRest } =
+    existingProvider ?? {
+      baseUrl: params.baseUrl,
+      models: [],
+    };
+  const resolvedApiKey =
+    typeof existingApiKey === "string" ? existingApiKey : undefined;
+  const normalizedApiKey =
+    resolvedApiKey?.trim() === "minimax" ? "" : resolvedApiKey;
   providers[params.providerId] = {
     ...existingProviderRest,
     baseUrl: params.baseUrl,
@@ -211,5 +235,8 @@ function applyMinimaxApiConfigWithBaseUrl(
   params: MinimaxApiProviderConfigParams,
 ): OpenClawConfig {
   const next = applyMinimaxApiProviderConfigWithBaseUrl(cfg, params);
-  return applyAgentDefaultModelPrimary(next, `${params.providerId}/${params.modelId}`);
+  return applyAgentDefaultModelPrimary(
+    next,
+    `${params.providerId}/${params.modelId}`,
+  );
 }

@@ -23,7 +23,8 @@ if (!(globalThis as Record<symbol, unknown>)[CONFIG_KEY]) {
 }
 
 export function setLoadConfigMock(fn: unknown) {
-  (globalThis as Record<symbol, unknown>)[CONFIG_KEY] = typeof fn === "function" ? fn : () => fn;
+  (globalThis as Record<symbol, unknown>)[CONFIG_KEY] =
+    typeof fn === "function" ? fn : () => fn;
 }
 
 export function resetLoadConfigMock() {
@@ -65,18 +66,21 @@ vi.mock("../../config/config.js", async (importOriginal) => {
 });
 
 vi.mock("../media/store.js", () => ({
-  saveMediaBuffer: vi.fn().mockImplementation(async (_buf: Buffer, contentType?: string) => ({
-    id: "mid",
-    path: "/tmp/mid",
-    size: _buf.length,
-    contentType,
-  })),
+  saveMediaBuffer: vi
+    .fn()
+    .mockImplementation(async (_buf: Buffer, contentType?: string) => ({
+      id: "mid",
+      path: "/tmp/mid",
+      size: _buf.length,
+      contentType,
+    })),
 }));
 
 vi.mock("@whiskeysockets/baileys", () => {
   const created = createMockBaileys();
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw:lastSocket")] =
-    created.lastSocket;
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw:lastSocket")
+  ] = created.lastSocket;
   return created.mod;
 });
 
@@ -89,43 +93,60 @@ export const baileys = await import("@whiskeysockets/baileys");
 
 export function resetBaileysMocks() {
   const recreated = createMockBaileys();
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw:lastSocket")] =
-    recreated.lastSocket;
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw:lastSocket")
+  ] = recreated.lastSocket;
 
   const makeWASocket = vi.mocked(baileys.makeWASocket);
   const makeWASocketImpl: typeof baileys.makeWASocket = (...args) =>
-    (recreated.mod.makeWASocket as unknown as typeof baileys.makeWASocket)(...args);
+    (recreated.mod.makeWASocket as unknown as typeof baileys.makeWASocket)(
+      ...args,
+    );
   makeWASocket.mockReset();
   makeWASocket.mockImplementation(makeWASocketImpl);
 
   const useMultiFileAuthState = vi.mocked(baileys.useMultiFileAuthState);
-  const useMultiFileAuthStateImpl: typeof baileys.useMultiFileAuthState = (...args) =>
-    (recreated.mod.useMultiFileAuthState as unknown as typeof baileys.useMultiFileAuthState)(
-      ...args,
-    );
+  const useMultiFileAuthStateImpl: typeof baileys.useMultiFileAuthState = (
+    ...args
+  ) =>
+    (
+      recreated.mod
+        .useMultiFileAuthState as unknown as typeof baileys.useMultiFileAuthState
+    )(...args);
   useMultiFileAuthState.mockReset();
   useMultiFileAuthState.mockImplementation(useMultiFileAuthStateImpl);
 
-  const fetchLatestBaileysVersion = vi.mocked(baileys.fetchLatestBaileysVersion);
-  const fetchLatestBaileysVersionImpl: typeof baileys.fetchLatestBaileysVersion = (...args) =>
-    (
-      recreated.mod.fetchLatestBaileysVersion as unknown as typeof baileys.fetchLatestBaileysVersion
-    )(...args);
+  const fetchLatestBaileysVersion = vi.mocked(
+    baileys.fetchLatestBaileysVersion,
+  );
+  const fetchLatestBaileysVersionImpl: typeof baileys.fetchLatestBaileysVersion =
+    (...args) =>
+      (
+        recreated.mod
+          .fetchLatestBaileysVersion as unknown as typeof baileys.fetchLatestBaileysVersion
+      )(...args);
   fetchLatestBaileysVersion.mockReset();
   fetchLatestBaileysVersion.mockImplementation(fetchLatestBaileysVersionImpl);
 
-  const makeCacheableSignalKeyStore = vi.mocked(baileys.makeCacheableSignalKeyStore);
-  const makeCacheableSignalKeyStoreImpl: typeof baileys.makeCacheableSignalKeyStore = (...args) =>
-    (
-      recreated.mod
-        .makeCacheableSignalKeyStore as unknown as typeof baileys.makeCacheableSignalKeyStore
-    )(...args);
+  const makeCacheableSignalKeyStore = vi.mocked(
+    baileys.makeCacheableSignalKeyStore,
+  );
+  const makeCacheableSignalKeyStoreImpl: typeof baileys.makeCacheableSignalKeyStore =
+    (...args) =>
+      (
+        recreated.mod
+          .makeCacheableSignalKeyStore as unknown as typeof baileys.makeCacheableSignalKeyStore
+      )(...args);
   makeCacheableSignalKeyStore.mockReset();
-  makeCacheableSignalKeyStore.mockImplementation(makeCacheableSignalKeyStoreImpl);
+  makeCacheableSignalKeyStore.mockImplementation(
+    makeCacheableSignalKeyStoreImpl,
+  );
 }
 
 export function getLastSocket(): MockBaileysSocket {
-  const getter = (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw:lastSocket")];
+  const getter = (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw:lastSocket")
+  ];
   if (typeof getter === "function") {
     return (getter as () => MockBaileysSocket)();
   }

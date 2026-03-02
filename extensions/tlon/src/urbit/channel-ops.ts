@@ -9,7 +9,10 @@ export type UrbitChannelDeps = {
   channelId: string;
   ssrfPolicy?: SsrFPolicy;
   lookupFn?: LookupFn;
-  fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+  fetchImpl?: (
+    input: RequestInfo | URL,
+    init?: RequestInit,
+  ) => Promise<Response>;
 };
 
 export async function pokeUrbitChannel(
@@ -47,7 +50,9 @@ export async function pokeUrbitChannel(
   try {
     if (!response.ok && response.status !== 204) {
       const errorText = await response.text().catch(() => "");
-      throw new Error(`Poke failed: ${response.status}${errorText ? ` - ${errorText}` : ""}`);
+      throw new Error(
+        `Poke failed: ${response.status}${errorText ? ` - ${errorText}` : ""}`,
+      );
     }
     return pokeId;
   } finally {
@@ -56,7 +61,10 @@ export async function pokeUrbitChannel(
 }
 
 export async function scryUrbitPath(
-  deps: Pick<UrbitChannelDeps, "baseUrl" | "cookie" | "ssrfPolicy" | "lookupFn" | "fetchImpl">,
+  deps: Pick<
+    UrbitChannelDeps,
+    "baseUrl" | "cookie" | "ssrfPolicy" | "lookupFn" | "fetchImpl"
+  >,
   params: { path: string; auditContext: string },
 ): Promise<unknown> {
   const scryPath = `/~/scry${params.path}`;
@@ -76,7 +84,9 @@ export async function scryUrbitPath(
 
   try {
     if (!response.ok) {
-      throw new Error(`Scry failed: ${response.status} for path ${params.path}`);
+      throw new Error(
+        `Scry failed: ${response.status} for path ${params.path}`,
+      );
     }
     return await response.json();
   } finally {
@@ -108,7 +118,10 @@ export async function createUrbitChannel(
 
   try {
     if (!response.ok && response.status !== 204) {
-      throw new UrbitHttpError({ operation: "Channel creation", status: response.status });
+      throw new UrbitHttpError({
+        operation: "Channel creation",
+        status: response.status,
+      });
     }
   } finally {
     await release();
@@ -145,7 +158,10 @@ export async function wakeUrbitChannel(deps: UrbitChannelDeps): Promise<void> {
 
   try {
     if (!response.ok && response.status !== 204) {
-      throw new UrbitHttpError({ operation: "Channel activation", status: response.status });
+      throw new UrbitHttpError({
+        operation: "Channel activation",
+        status: response.status,
+      });
     }
   } finally {
     await release();

@@ -9,7 +9,10 @@ import {
 import { formatDocsLink } from "../../../terminal/links.js";
 import type { WizardPrompter } from "../../../wizard/prompts.js";
 import { fetchTelegramChatId } from "../../telegram/api.js";
-import type { ChannelOnboardingAdapter, ChannelOnboardingDmPolicy } from "../onboarding-types.js";
+import type {
+  ChannelOnboardingAdapter,
+  ChannelOnboardingDmPolicy,
+} from "../onboarding-types.js";
 import {
   applySingleTokenPromptResult,
   patchChannelConfigForAccount,
@@ -75,7 +78,10 @@ async function promptTelegramAllowFrom(params: {
 
   const token = resolved.token;
   if (!token) {
-    await prompter.note("Telegram token missing; username lookup is unavailable.", "Telegram");
+    await prompter.note(
+      "Telegram token missing; username lookup is unavailable.",
+      "Telegram",
+    );
   }
   const unique = await promptResolvedAllowFrom({
     prompter,
@@ -100,7 +106,10 @@ async function promptTelegramAllowFrom(params: {
             return { input: entry, resolved: false, id: null };
           }
           const username = stripped.startsWith("@") ? stripped : `@${stripped}`;
-          const id = await fetchTelegramChatId({ token: tokenValue, chatId: username });
+          const id = await fetchTelegramChatId({
+            token: tokenValue,
+            chatId: username,
+          });
           return { input: entry, resolved: Boolean(id), id };
         }),
       );
@@ -157,7 +166,9 @@ export const telegramOnboardingAdapter: ChannelOnboardingAdapter = {
       channel,
       configured,
       statusLines: [`Telegram: ${configured ? "configured" : "needs token"}`],
-      selectionHint: configured ? "recommended · configured" : "recommended · newcomer-friendly",
+      selectionHint: configured
+        ? "recommended · configured"
+        : "recommended · newcomer-friendly",
       quickstartScore: configured ? 1 : 10,
     };
   },

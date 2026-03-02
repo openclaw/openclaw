@@ -6,7 +6,9 @@ describe("telegram custom commands schema", () => {
     const res = OpenClawSchema.safeParse({
       channels: {
         telegram: {
-          customCommands: [{ command: "/Backup", description: "  Git backup  " }],
+          customCommands: [
+            { command: "/Backup", description: "  Git backup  " },
+          ],
         },
       },
     });
@@ -25,7 +27,9 @@ describe("telegram custom commands schema", () => {
     const res = OpenClawSchema.safeParse({
       channels: {
         telegram: {
-          customCommands: [{ command: "Bad-Name", description: "Override status" }],
+          customCommands: [
+            { command: "Bad-Name", description: "Override status" },
+          ],
         },
       },
     });

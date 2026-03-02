@@ -36,7 +36,11 @@ describe("cmd argv helpers", () => {
   });
 
   it("rejects CR/LF in command arguments", () => {
-    expect(() => quoteCmdScriptArg("bad\narg")).toThrow(/Command argument cannot contain CR or LF/);
-    expect(() => quoteCmdScriptArg("bad\rarg")).toThrow(/Command argument cannot contain CR or LF/);
+    expect(() => quoteCmdScriptArg("bad\narg")).toThrow(
+      /Command argument cannot contain CR or LF/,
+    );
+    expect(() => quoteCmdScriptArg("bad\rarg")).toThrow(
+      /Command argument cannot contain CR or LF/,
+    );
   });
 });

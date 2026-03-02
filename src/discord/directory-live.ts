@@ -6,7 +6,12 @@ import { normalizeDiscordSlug } from "./monitor/allow-list.js";
 import { normalizeDiscordToken } from "./token.js";
 
 type DiscordGuild = { id: string; name: string };
-type DiscordUser = { id: string; username: string; global_name?: string; bot?: boolean };
+type DiscordUser = {
+  id: string;
+  username: string;
+  global_name?: string;
+  bot?: boolean;
+};
 type DiscordMember = { user: DiscordUser; nick?: string | null };
 type DiscordChannel = { id: string; name?: string | null };
 type DiscordDirectoryAccess = { token: string; query: string };
@@ -22,7 +27,10 @@ function buildUserRank(user: DiscordUser): number {
 function resolveDiscordDirectoryAccess(
   params: DirectoryConfigParams,
 ): DiscordDirectoryAccess | null {
-  const account = resolveDiscordAccount({ cfg: params.cfg, accountId: params.accountId });
+  const account = resolveDiscordAccount({
+    cfg: params.cfg,
+    accountId: params.accountId,
+  });
   const token = normalizeDiscordToken(account.token);
   if (!token) {
     return null;
@@ -31,7 +39,10 @@ function resolveDiscordDirectoryAccess(
 }
 
 async function listDiscordGuilds(token: string): Promise<DiscordGuild[]> {
-  const rawGuilds = await fetchDiscord<DiscordGuild[]>("/users/@me/guilds", token);
+  const rawGuilds = await fetchDiscord<DiscordGuild[]>(
+    "/users/@me/guilds",
+    token,
+  );
   return rawGuilds.filter((guild) => guild.id && guild.name);
 }
 
@@ -47,13 +58,19 @@ export async function listDiscordDirectoryGroupsLive(
   const rows: ChannelDirectoryEntry[] = [];
 
   for (const guild of guilds) {
-    const channels = await fetchDiscord<DiscordChannel[]>(`/guilds/${guild.id}/channels`, token);
+    const channels = await fetchDiscord<DiscordChannel[]>(
+      `/guilds/${guild.id}/channels`,
+      token,
+    );
     for (const channel of channels) {
       const name = channel.name?.trim();
       if (!name) {
         continue;
       }
-      if (query && !normalizeDiscordSlug(name).includes(normalizeDiscordSlug(query))) {
+      if (
+        query &&
+        !normalizeDiscordSlug(name).includes(normalizeDiscordSlug(query))
+      ) {
         continue;
       }
       rows.push({
@@ -63,7 +80,11 @@ export async function listDiscordDirectoryGroupsLive(
         handle: `#${name}`,
         raw: channel,
       });
-      if (typeof params.limit === "number" && params.limit > 0 && rows.length >= params.limit) {
+      if (
+        typeof params.limit === "number" &&
+        params.limit > 0 &&
+        rows.length >= params.limit
+      ) {
         return rows;
       }
     }
@@ -86,7 +107,8 @@ export async function listDiscordDirectoryPeersLive(
 
   const guilds = await listDiscordGuilds(token);
   const rows: ChannelDirectoryEntry[] = [];
-  const limit = typeof params.limit === "number" && params.limit > 0 ? params.limit : 25;
+  const limit =
+    typeof params.limit === "number" && params.limit > 0 ? params.limit : 25;
 
   for (const guild of guilds) {
     const paramsObj = new URLSearchParams({
@@ -102,7 +124,10 @@ export async function listDiscordDirectoryPeersLive(
       if (!user?.id) {
         continue;
       }
-      const name = member.nick?.trim() || user.global_name?.trim() || user.username?.trim();
+      const name =
+        member.nick?.trim() ||
+        user.global_name?.trim() ||
+        user.username?.trim();
       rows.push({
         kind: "user",
         id: `user:${user.id}`,

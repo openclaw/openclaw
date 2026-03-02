@@ -1,7 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
-import { CONFIG_PATH, type HookMappingConfig, type HooksConfig } from "../config/config.js";
-import { importFileModule, resolveFunctionModuleExport } from "../hooks/module-loader.js";
+import {
+  CONFIG_PATH,
+  type HookMappingConfig,
+  type HooksConfig,
+} from "../config/config.js";
+import {
+  importFileModule,
+  resolveFunctionModuleExport,
+} from "../hooks/module-loader.js";
 import type { HookMessageChannel } from "./hooks.js";
 
 export type HookMappingResolved = {
@@ -141,7 +148,9 @@ export function resolveHookMappings(
     "Hook transformsDir",
   );
 
-  return mappings.map((mapping, index) => normalizeHookMapping(mapping, index, transformsDir));
+  return mappings.map((mapping, index) =>
+    normalizeHookMapping(mapping, index, transformsDir),
+  );
 }
 
 export async function applyHookMappings(
@@ -194,7 +203,11 @@ function normalizeHookMapping(
   const wakeMode = mapping.wakeMode ?? "now";
   const transform = mapping.transform
     ? {
-        modulePath: resolveContainedPath(transformsDir, mapping.transform.module, "Hook transform"),
+        modulePath: resolveContainedPath(
+          transformsDir,
+          mapping.transform.module,
+          "Hook transform",
+        ),
         exportName: mapping.transform.export?.trim() || undefined,
       }
     : undefined;
@@ -228,7 +241,8 @@ function mappingMatches(mapping: HookMappingResolved, ctx: HookMappingContext) {
     }
   }
   if (mapping.matchSource) {
-    const source = typeof ctx.payload.source === "string" ? ctx.payload.source : undefined;
+    const source =
+      typeof ctx.payload.source === "string" ? ctx.payload.source : undefined;
     if (!source || source !== mapping.matchSource) {
       return false;
     }
@@ -283,15 +297,25 @@ function mergeAction(
   const kind = override.kind ?? base.kind ?? defaultAction;
   if (kind === "wake") {
     const baseWake = base.kind === "wake" ? base : undefined;
-    const text = typeof override.text === "string" ? override.text : (baseWake?.text ?? "");
-    const mode = override.mode === "next-heartbeat" ? "next-heartbeat" : (baseWake?.mode ?? "now");
+    const text =
+      typeof override.text === "string"
+        ? override.text
+        : (baseWake?.text ?? "");
+    const mode =
+      override.mode === "next-heartbeat"
+        ? "next-heartbeat"
+        : (baseWake?.mode ?? "now");
     return validateAction({ kind: "wake", text, mode });
   }
   const baseAgent = base.kind === "agent" ? base : undefined;
   const message =
-    typeof override.message === "string" ? override.message : (baseAgent?.message ?? "");
+    typeof override.message === "string"
+      ? override.message
+      : (baseAgent?.message ?? "");
   const wakeMode =
-    override.wakeMode === "next-heartbeat" ? "next-heartbeat" : (baseAgent?.wakeMode ?? "now");
+    override.wakeMode === "next-heartbeat"
+      ? "next-heartbeat"
+      : (baseAgent?.wakeMode ?? "now");
   return validateAction({
     kind: "agent",
     message,
@@ -299,7 +323,10 @@ function mergeAction(
     name: override.name ?? baseAgent?.name,
     agentId: override.agentId ?? baseAgent?.agentId,
     sessionKey: override.sessionKey ?? baseAgent?.sessionKey,
-    deliver: typeof override.deliver === "boolean" ? override.deliver : baseAgent?.deliver,
+    deliver:
+      typeof override.deliver === "boolean"
+        ? override.deliver
+        : baseAgent?.deliver,
     allowUnsafeExternalContent:
       typeof override.allowUnsafeExternalContent === "boolean"
         ? override.allowUnsafeExternalContent
@@ -325,7 +352,9 @@ function validateAction(action: HookAction): HookMappingResult {
   return { ok: true, action };
 }
 
-async function loadTransform(transform: HookMappingTransformResolved): Promise<HookTransformFn> {
+async function loadTransform(
+  transform: HookMappingTransformResolved,
+): Promise<HookTransformFn> {
   const cacheKey = `${transform.modulePath}::${transform.exportName ?? "default"}`;
   const cached = transformCache.get(cacheKey);
   if (cached) {
@@ -337,7 +366,10 @@ async function loadTransform(transform: HookMappingTransformResolved): Promise<H
   return fn;
 }
 
-function resolveTransformFn(mod: Record<string, unknown>, exportName?: string): HookTransformFn {
+function resolveTransformFn(
+  mod: Record<string, unknown>,
+  exportName?: string,
+): HookTransformFn {
   const candidate = resolveFunctionModuleExport<HookTransformFn>({
     mod,
     exportName,
@@ -353,18 +385,28 @@ function resolvePath(baseDir: string, target: string): string {
   if (!target) {
     return path.resolve(baseDir);
   }
-  return path.isAbsolute(target) ? path.resolve(target) : path.resolve(baseDir, target);
+  return path.isAbsolute(target)
+    ? path.resolve(target)
+    : path.resolve(baseDir, target);
 }
 
 function escapesBase(baseDir: string, candidate: string): boolean {
   const relative = path.relative(baseDir, candidate);
-  return relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative);
+  return (
+    relative === ".." ||
+    relative.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(relative)
+  );
 }
 
 function safeRealpathSync(candidate: string): string | null {
   try {
-    const nativeRealpath = fs.realpathSync.native as ((path: string) => string) | undefined;
-    return nativeRealpath ? nativeRealpath(candidate) : fs.realpathSync(candidate);
+    const nativeRealpath = fs.realpathSync.native as
+      | ((path: string) => string)
+      | undefined;
+    return nativeRealpath
+      ? nativeRealpath(candidate)
+      : fs.realpathSync(candidate);
   } catch {
     return null;
   }
@@ -384,7 +426,11 @@ function resolveExistingAncestor(candidate: string): string | null {
   }
 }
 
-function resolveContainedPath(baseDir: string, target: string, label: string): string {
+function resolveContainedPath(
+  baseDir: string,
+  target: string,
+  label: string,
+): string {
   const base = path.resolve(baseDir);
   const trimmed = target?.trim();
   if (!trimmed) {
@@ -399,7 +445,9 @@ function resolveContainedPath(baseDir: string, target: string, label: string): s
   // behavior for not-yet-created files.
   const baseRealpath = safeRealpathSync(base);
   const existingAncestor = resolveExistingAncestor(resolved);
-  const existingAncestorRealpath = existingAncestor ? safeRealpathSync(existingAncestor) : null;
+  const existingAncestorRealpath = existingAncestor
+    ? safeRealpathSync(existingAncestor)
+    : null;
   if (
     baseRealpath &&
     existingAncestorRealpath &&

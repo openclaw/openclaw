@@ -55,7 +55,10 @@ export class ExecApprovalManager {
    * This separates registration (synchronous) from waiting (async), allowing callers to
    * confirm registration before the decision is made.
    */
-  register(record: ExecApprovalRecord, timeoutMs: number): Promise<ExecApprovalDecision | null> {
+  register(
+    record: ExecApprovalRecord,
+    timeoutMs: number,
+  ): Promise<ExecApprovalDecision | null> {
     const existing = this.pending.get(record.id);
     if (existing) {
       // Idempotent: return existing promise if still pending
@@ -67,10 +70,12 @@ export class ExecApprovalManager {
     }
     let resolvePromise: (decision: ExecApprovalDecision | null) => void;
     let rejectPromise: (err: Error) => void;
-    const promise = new Promise<ExecApprovalDecision | null>((resolve, reject) => {
-      resolvePromise = resolve;
-      rejectPromise = reject;
-    });
+    const promise = new Promise<ExecApprovalDecision | null>(
+      (resolve, reject) => {
+        resolvePromise = resolve;
+        rejectPromise = reject;
+      },
+    );
     // Create entry first so we can capture it in the closure (not re-fetch from map)
     const entry: PendingEntry = {
       record,
@@ -96,7 +101,11 @@ export class ExecApprovalManager {
     return this.register(record, timeoutMs);
   }
 
-  resolve(recordId: string, decision: ExecApprovalDecision, resolvedBy?: string | null): boolean {
+  resolve(
+    recordId: string,
+    decision: ExecApprovalDecision,
+    resolvedBy?: string | null,
+  ): boolean {
     const pending = this.pending.get(recordId);
     if (!pending) {
       return false;

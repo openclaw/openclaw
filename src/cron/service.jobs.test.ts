@@ -32,7 +32,10 @@ describe("applyJobPatch", () => {
     payload: { kind: "systemEvent", text: "ping" },
   });
 
-  const createMainSystemEventJob = (id: string, delivery: CronJob["delivery"]): CronJob => {
+  const createMainSystemEventJob = (
+    id: string,
+    delivery: CronJob["delivery"],
+  ): CronJob => {
     return createIsolatedAgentTurnJob(id, delivery, {
       sessionTarget: "main",
       payload: { kind: "systemEvent", text: "ping" },
@@ -60,7 +63,10 @@ describe("applyJobPatch", () => {
 
     expect(() => applyJobPatch(job, switchToMainPatch())).not.toThrow();
     expect(job.sessionTarget).toBe("main");
-    expect(job.delivery).toEqual({ mode: "webhook", to: "https://example.invalid/cron" });
+    expect(job.delivery).toEqual({
+      mode: "webhook",
+      to: "https://example.invalid/cron",
+    });
   });
 
   it("maps legacy payload delivery updates onto delivery", () => {
@@ -122,7 +128,9 @@ describe("applyJobPatch", () => {
       to: "-100123",
     });
 
-    applyJobPatch(job, { delivery: { mode: "announce", accountId: " coordinator " } });
+    applyJobPatch(job, {
+      delivery: { mode: "announce", accountId: " coordinator " },
+    });
     expect(job.delivery?.accountId).toBe("coordinator");
     expect(job.delivery?.mode).toBe("announce");
     expect(job.delivery?.to).toBe("-100123");
@@ -185,9 +193,13 @@ describe("applyJobPatch", () => {
   });
 
   it("rejects webhook delivery without a valid http(s) target URL", () => {
-    const expectedError = "cron webhook delivery requires delivery.to to be a valid http(s) URL";
+    const expectedError =
+      "cron webhook delivery requires delivery.to to be a valid http(s) URL";
     const cases = [
-      { name: "no delivery update", patch: { enabled: true } satisfies CronJobPatch },
+      {
+        name: "no delivery update",
+        patch: { enabled: true } satisfies CronJobPatch,
+      },
       {
         name: "blank webhook target",
         patch: { delivery: { mode: "webhook", to: "" } } satisfies CronJobPatch,
@@ -200,13 +212,19 @@ describe("applyJobPatch", () => {
       },
       {
         name: "invalid URL",
-        patch: { delivery: { mode: "webhook", to: "not-a-url" } } satisfies CronJobPatch,
+        patch: {
+          delivery: { mode: "webhook", to: "not-a-url" },
+        } satisfies CronJobPatch,
       },
     ] as const;
 
     for (const testCase of cases) {
-      const job = createMainSystemEventJob("job-webhook-invalid", { mode: "webhook" });
-      expect(() => applyJobPatch(job, testCase.patch), testCase.name).toThrow(expectedError);
+      const job = createMainSystemEventJob("job-webhook-invalid", {
+        mode: "webhook",
+      });
+      expect(() => applyJobPatch(job, testCase.patch), testCase.name).toThrow(
+        expectedError,
+      );
     }
   });
 
@@ -217,9 +235,14 @@ describe("applyJobPatch", () => {
     });
 
     expect(() =>
-      applyJobPatch(job, { delivery: { mode: "webhook", to: "  https://example.invalid/trim  " } }),
+      applyJobPatch(job, {
+        delivery: { mode: "webhook", to: "  https://example.invalid/trim  " },
+      }),
     ).not.toThrow();
-    expect(job.delivery).toEqual({ mode: "webhook", to: "https://example.invalid/trim" });
+    expect(job.delivery).toEqual({
+      mode: "webhook",
+      to: "https://example.invalid/trim",
+    });
   });
 
   it("rejects failureDestination on main jobs without webhook delivery mode", () => {
@@ -264,7 +287,9 @@ describe("applyJobPatch", () => {
       },
     };
     expect(() => applyJobPatch(job, { enabled: true })).not.toThrow();
-    expect(job.delivery?.failureDestination?.to).toBe("https://example.invalid/failure");
+    expect(job.delivery?.failureDestination?.to).toBe(
+      "https://example.invalid/failure",
+    );
   });
 
   it("rejects Telegram delivery with invalid target (chatId/topicId format)", () => {
@@ -349,7 +374,10 @@ describe("applyJobPatch", () => {
   });
 });
 
-function createMockState(now: number, opts?: { defaultAgentId?: string }): CronServiceState {
+function createMockState(
+  now: number,
+  opts?: { defaultAgentId?: string },
+): CronServiceState {
   return {
     deps: {
       nowMs: () => now,
@@ -427,7 +455,9 @@ describe("createJob rejects sessionTarget main for non-default agents", () => {
           },
         },
       }),
-    ).toThrow('cron channel delivery config is only supported for sessionTarget="isolated"');
+    ).toThrow(
+      'cron channel delivery config is only supported for sessionTarget="isolated"',
+    );
   });
 });
 
@@ -514,7 +544,12 @@ describe("cron stagger defaults", () => {
       enabled: true,
       createdAtMs: now,
       updatedAtMs: now,
-      schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC", staggerMs: 120_000 },
+      schedule: {
+        kind: "cron",
+        expr: "0 * * * *",
+        tz: "UTC",
+        staggerMs: 120_000,
+      },
       sessionTarget: "main",
       wakeMode: "now",
       payload: { kind: "systemEvent", text: "tick" },

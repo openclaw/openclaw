@@ -16,18 +16,30 @@ describe("runtime-guard", () => {
   });
 
   it("compares versions correctly", () => {
-    expect(isAtLeast({ major: 22, minor: 12, patch: 0 }, { major: 22, minor: 12, patch: 0 })).toBe(
-      true,
-    );
-    expect(isAtLeast({ major: 22, minor: 13, patch: 0 }, { major: 22, minor: 12, patch: 0 })).toBe(
-      true,
-    );
-    expect(isAtLeast({ major: 22, minor: 11, patch: 0 }, { major: 22, minor: 12, patch: 0 })).toBe(
-      false,
-    );
-    expect(isAtLeast({ major: 21, minor: 9, patch: 0 }, { major: 22, minor: 12, patch: 0 })).toBe(
-      false,
-    );
+    expect(
+      isAtLeast(
+        { major: 22, minor: 12, patch: 0 },
+        { major: 22, minor: 12, patch: 0 },
+      ),
+    ).toBe(true);
+    expect(
+      isAtLeast(
+        { major: 22, minor: 13, patch: 0 },
+        { major: 22, minor: 12, patch: 0 },
+      ),
+    ).toBe(true);
+    expect(
+      isAtLeast(
+        { major: 22, minor: 11, patch: 0 },
+        { major: 22, minor: 12, patch: 0 },
+      ),
+    ).toBe(false);
+    expect(
+      isAtLeast(
+        { major: 21, minor: 9, patch: 0 },
+        { major: 22, minor: 12, patch: 0 },
+      ),
+    ).toBe(false);
   });
 
   it("validates runtime thresholds", () => {
@@ -66,7 +78,9 @@ describe("runtime-guard", () => {
       pathEnv: "/usr/bin",
     };
     expect(() => assertSupportedRuntime(runtime, details)).toThrow("exit");
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("requires Node"));
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("requires Node"),
+    );
   });
 
   it("returns silently when runtime meets requirements", () => {

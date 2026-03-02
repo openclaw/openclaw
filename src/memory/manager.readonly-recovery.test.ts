@@ -31,14 +31,20 @@ describe("memory manager readonly recovery", () => {
   }
 
   async function createManager() {
-    manager = await getRequiredMemoryIndexManager({ cfg: createMemoryConfig(), agentId: "main" });
+    manager = await getRequiredMemoryIndexManager({
+      cfg: createMemoryConfig(),
+      agentId: "main",
+    });
     return manager;
   }
 
   function createSyncSpies(instance: MemoryIndexManager) {
     const runSyncSpy = vi.spyOn(
       instance as unknown as {
-        runSync: (params?: { reason?: string; force?: boolean }) => Promise<void>;
+        runSync: (params?: {
+          reason?: string;
+          force?: boolean;
+        }) => Promise<void>;
       },
       "runSync",
     );
@@ -60,7 +66,9 @@ describe("memory manager readonly recovery", () => {
 
   beforeEach(async () => {
     resetEmbeddingMocks();
-    workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mem-readonly-"));
+    workspaceDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-mem-readonly-"),
+    );
     indexPath = path.join(workspaceDir, "index.sqlite");
     await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
     await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "Hello memory.");
@@ -92,7 +100,10 @@ describe("memory manager readonly recovery", () => {
     const currentManager = await createManager();
     const { runSyncSpy, openDatabaseSpy } = createSyncSpies(currentManager);
     runSyncSpy
-      .mockRejectedValueOnce({ message: "write failed", code: "SQLITE_READONLY" })
+      .mockRejectedValueOnce({
+        message: "write failed",
+        code: "SQLITE_READONLY",
+      })
       .mockResolvedValueOnce(undefined);
 
     await currentManager.sync({ reason: "test" });
@@ -107,7 +118,9 @@ describe("memory manager readonly recovery", () => {
     const { runSyncSpy, openDatabaseSpy } = createSyncSpies(currentManager);
     runSyncSpy.mockRejectedValueOnce(new Error("embedding timeout"));
 
-    await expect(currentManager.sync({ reason: "test" })).rejects.toThrow("embedding timeout");
+    await expect(currentManager.sync({ reason: "test" })).rejects.toThrow(
+      "embedding timeout",
+    );
     expect(runSyncSpy).toHaveBeenCalledTimes(1);
     expect(openDatabaseSpy).toHaveBeenCalledTimes(0);
   });

@@ -9,10 +9,16 @@ const OPENAI_CODEX_TEMPLATE_MODEL_IDS = ["gpt-5.2-codex"] as const;
 
 const ANTHROPIC_OPUS_46_MODEL_ID = "claude-opus-4-6";
 const ANTHROPIC_OPUS_46_DOT_MODEL_ID = "claude-opus-4.6";
-const ANTHROPIC_OPUS_TEMPLATE_MODEL_IDS = ["claude-opus-4-5", "claude-opus-4.5"] as const;
+const ANTHROPIC_OPUS_TEMPLATE_MODEL_IDS = [
+  "claude-opus-4-5",
+  "claude-opus-4.5",
+] as const;
 const ANTHROPIC_SONNET_46_MODEL_ID = "claude-sonnet-4-6";
 const ANTHROPIC_SONNET_46_DOT_MODEL_ID = "claude-sonnet-4.6";
-const ANTHROPIC_SONNET_TEMPLATE_MODEL_IDS = ["claude-sonnet-4-5", "claude-sonnet-4.5"] as const;
+const ANTHROPIC_SONNET_TEMPLATE_MODEL_IDS = [
+  "claude-sonnet-4-5",
+  "claude-sonnet-4.5",
+] as const;
 
 const ZAI_GLM5_MODEL_ID = "glm-5";
 const ZAI_GLM5_TEMPLATE_MODEL_IDS = ["glm-4.7"] as const;
@@ -32,9 +38,13 @@ function cloneFirstTemplateModel(params: {
   modelRegistry: ModelRegistry;
   patch?: Partial<Model<Api>>;
 }): Model<Api> | undefined {
-  const { normalizedProvider, trimmedModelId, templateIds, modelRegistry } = params;
+  const { normalizedProvider, trimmedModelId, templateIds, modelRegistry } =
+    params;
   for (const templateId of [...new Set(templateIds)].filter(Boolean)) {
-    const template = modelRegistry.find(normalizedProvider, templateId) as Model<Api> | null;
+    const template = modelRegistry.find(
+      normalizedProvider,
+      templateId,
+    ) as Model<Api> | null;
     if (!template) {
       continue;
     }
@@ -48,7 +58,10 @@ function cloneFirstTemplateModel(params: {
   return undefined;
 }
 
-const CODEX_GPT53_ELIGIBLE_PROVIDERS = new Set(["openai-codex", "github-copilot"]);
+const CODEX_GPT53_ELIGIBLE_PROVIDERS = new Set([
+  "openai-codex",
+  "github-copilot",
+]);
 
 function resolveOpenAICodexGpt53FallbackModel(
   provider: string,
@@ -65,7 +78,10 @@ function resolveOpenAICodexGpt53FallbackModel(
   }
 
   for (const templateId of OPENAI_CODEX_TEMPLATE_MODEL_IDS) {
-    const template = modelRegistry.find(normalizedProvider, templateId) as Model<Api> | null;
+    const template = modelRegistry.find(
+      normalizedProvider,
+      templateId,
+    ) as Model<Api> | null;
     if (!template) {
       continue;
     }
@@ -212,7 +228,10 @@ function resolveZaiGlm5ForwardCompatModel(
   }
   const trimmed = modelId.trim();
   const lower = trimmed.toLowerCase();
-  if (lower !== ZAI_GLM5_MODEL_ID && !lower.startsWith(`${ZAI_GLM5_MODEL_ID}-`)) {
+  if (
+    lower !== ZAI_GLM5_MODEL_ID &&
+    !lower.startsWith(`${ZAI_GLM5_MODEL_ID}-`)
+  ) {
     return undefined;
   }
 
@@ -249,8 +268,16 @@ export function resolveForwardCompatModel(
 ): Model<Api> | undefined {
   return (
     resolveOpenAICodexGpt53FallbackModel(provider, modelId, modelRegistry) ??
-    resolveAnthropicOpus46ForwardCompatModel(provider, modelId, modelRegistry) ??
-    resolveAnthropicSonnet46ForwardCompatModel(provider, modelId, modelRegistry) ??
+    resolveAnthropicOpus46ForwardCompatModel(
+      provider,
+      modelId,
+      modelRegistry,
+    ) ??
+    resolveAnthropicSonnet46ForwardCompatModel(
+      provider,
+      modelId,
+      modelRegistry,
+    ) ??
     resolveZaiGlm5ForwardCompatModel(provider, modelId, modelRegistry) ??
     resolveGoogleGeminiCli31ForwardCompatModel(provider, modelId, modelRegistry)
   );

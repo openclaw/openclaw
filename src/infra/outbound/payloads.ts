@@ -18,7 +18,9 @@ export type OutboundPayloadJson = {
   channelData?: Record<string, unknown>;
 };
 
-function mergeMediaUrls(...lists: Array<ReadonlyArray<string | undefined> | undefined>): string[] {
+function mergeMediaUrls(
+  ...lists: Array<ReadonlyArray<string | undefined> | undefined>
+): string[] {
   const seen = new Set<string>();
   const merged: string[] = [];
   for (const list of lists) {
@@ -84,7 +86,8 @@ export function normalizeOutboundPayloads(
       const channelData = payload.channelData;
       const normalized: NormalizedOutboundPayload = {
         text: payload.text ?? "",
-        mediaUrls: payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []),
+        mediaUrls:
+          payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []),
       };
       if (channelData && Object.keys(channelData).length > 0) {
         normalized.channelData = channelData;
@@ -95,7 +98,9 @@ export function normalizeOutboundPayloads(
       (payload) =>
         payload.text ||
         payload.mediaUrls.length > 0 ||
-        Boolean(payload.channelData && Object.keys(payload.channelData).length > 0),
+        Boolean(
+          payload.channelData && Object.keys(payload.channelData).length > 0,
+        ),
     );
 }
 
@@ -105,7 +110,8 @@ export function normalizeOutboundPayloadsForJson(
   return normalizeReplyPayloadsForDelivery(payloads).map((payload) => ({
     text: payload.text ?? "",
     mediaUrl: payload.mediaUrl ?? null,
-    mediaUrls: payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : undefined),
+    mediaUrls:
+      payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : undefined),
     channelData: payload.channelData,
   }));
 }

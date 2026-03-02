@@ -32,7 +32,15 @@ export type SessionsProps = {
   onDelete: (key: string) => void;
 };
 
-const THINK_LEVELS = ["", "off", "minimal", "low", "medium", "high", "xhigh"] as const;
+const THINK_LEVELS = [
+  "",
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+] as const;
 const BINARY_THINK_LEVELS = ["", "off", "on"] as const;
 const VERBOSE_LEVELS = [
   { value: "", label: "inherit" },
@@ -58,10 +66,15 @@ function isBinaryThinkingProvider(provider?: string | null): boolean {
 }
 
 function resolveThinkLevelOptions(provider?: string | null): readonly string[] {
-  return isBinaryThinkingProvider(provider) ? BINARY_THINK_LEVELS : THINK_LEVELS;
+  return isBinaryThinkingProvider(provider)
+    ? BINARY_THINK_LEVELS
+    : THINK_LEVELS;
 }
 
-function withCurrentOption(options: readonly string[], current: string): string[] {
+function withCurrentOption(
+  options: readonly string[],
+  current: string,
+): string[] {
   if (!current) {
     return [...options];
   }
@@ -94,7 +107,10 @@ function resolveThinkLevelDisplay(value: string, isBinary: boolean): string {
   return "on";
 }
 
-function resolveThinkLevelPatchValue(value: string, isBinary: boolean): string | null {
+function resolveThinkLevelPatchValue(
+  value: string,
+  isBinary: boolean,
+): string | null {
   if (!value) {
     return null;
   }
@@ -114,9 +130,15 @@ export function renderSessions(props: SessionsProps) {
       <div class="row" style="justify-content: space-between;">
         <div>
           <div class="card-title">Sessions</div>
-          <div class="card-sub">Active session keys and per-session overrides.</div>
+          <div class="card-sub">
+            Active session keys and per-session overrides.
+          </div>
         </div>
-        <button class="btn" ?disabled=${props.loading} @click=${props.onRefresh}>
+        <button
+          class="btn"
+          ?disabled=${props.loading}
+          @click=${props.onRefresh}
+        >
           ${props.loading ? "Loading…" : "Refresh"}
         </button>
       </div>
@@ -178,11 +200,11 @@ export function renderSessions(props: SessionsProps) {
         </label>
       </div>
 
-      ${
-        props.error
-          ? html`<div class="callout danger" style="margin-top: 12px;">${props.error}</div>`
-          : nothing
-      }
+      ${props.error
+        ? html`<div class="callout danger" style="margin-top: 12px;">
+            ${props.error}
+          </div>`
+        : nothing}
 
       <div class="muted" style="margin-top: 12px;">
         ${props.result ? `Store: ${props.result.path}` : ""}
@@ -200,15 +222,17 @@ export function renderSessions(props: SessionsProps) {
           <div>Reasoning</div>
           <div>Actions</div>
         </div>
-        ${
-          rows.length === 0
-            ? html`
-                <div class="muted">No sessions found.</div>
-              `
-            : rows.map((row) =>
-                renderRow(row, props.basePath, props.onPatch, props.onDelete, props.loading),
-              )
-        }
+        ${rows.length === 0
+          ? html` <div class="muted">No sessions found.</div> `
+          : rows.map((row) =>
+              renderRow(
+                row,
+                props.basePath,
+                props.onPatch,
+                props.onDelete,
+                props.loading,
+              ),
+            )}
       </div>
     </section>
   `;
@@ -221,11 +245,16 @@ function renderRow(
   onDelete: SessionsProps["onDelete"],
   disabled: boolean,
 ) {
-  const updated = row.updatedAt ? formatRelativeTimestamp(row.updatedAt) : "n/a";
+  const updated = row.updatedAt
+    ? formatRelativeTimestamp(row.updatedAt)
+    : "n/a";
   const rawThinking = row.thinkingLevel ?? "";
   const isBinaryThinking = isBinaryThinkingProvider(row.modelProvider);
   const thinking = resolveThinkLevelDisplay(rawThinking, isBinaryThinking);
-  const thinkLevels = withCurrentOption(resolveThinkLevelOptions(row.modelProvider), thinking);
+  const thinkLevels = withCurrentOption(
+    resolveThinkLevelOptions(row.modelProvider),
+    thinking,
+  );
   const verbose = row.verboseLevel ?? "";
   const verboseLevels = withCurrentLabeledOption(VERBOSE_LEVELS, verbose);
   const reasoning = row.reasoningLevel ?? "";
@@ -235,7 +264,9 @@ function renderRow(
       ? row.displayName.trim()
       : null;
   const label = typeof row.label === "string" ? row.label.trim() : "";
-  const showDisplayName = Boolean(displayName && displayName !== row.key && displayName !== label);
+  const showDisplayName = Boolean(
+    displayName && displayName !== row.key && displayName !== label,
+  );
   const canLink = row.kind !== "global";
   const chatUrl = canLink
     ? `${pathForTab("chat", basePath)}?session=${encodeURIComponent(row.key)}`
@@ -244,8 +275,14 @@ function renderRow(
   return html`
     <div class="table-row">
       <div class="mono session-key-cell">
-        ${canLink ? html`<a href=${chatUrl} class="session-link">${row.key}</a>` : row.key}
-        ${showDisplayName ? html`<span class="muted session-key-display-name">${displayName}</span>` : nothing}
+        ${canLink
+          ? html`<a href=${chatUrl} class="session-link">${row.key}</a>`
+          : row.key}
+        ${showDisplayName
+          ? html`<span class="muted session-key-display-name"
+              >${displayName}</span
+            >`
+          : nothing}
       </div>
       <div>
         <input
@@ -267,7 +304,10 @@ function renderRow(
           @change=${(e: Event) => {
             const value = (e.target as HTMLSelectElement).value;
             onPatch(row.key, {
-              thinkingLevel: resolveThinkLevelPatchValue(value, isBinaryThinking),
+              thinkingLevel: resolveThinkLevelPatchValue(
+                value,
+                isBinaryThinking,
+              ),
             });
           }}
         >
@@ -289,7 +329,10 @@ function renderRow(
         >
           ${verboseLevels.map(
             (level) =>
-              html`<option value=${level.value} ?selected=${verbose === level.value}>
+              html`<option
+                value=${level.value}
+                ?selected=${verbose === level.value}
+              >
                 ${level.label}
               </option>`,
           )}
@@ -312,7 +355,11 @@ function renderRow(
         </select>
       </div>
       <div>
-        <button class="btn danger" ?disabled=${disabled} @click=${() => onDelete(row.key)}>
+        <button
+          class="btn danger"
+          ?disabled=${disabled}
+          @click=${() => onDelete(row.key)}
+        >
           Delete
         </button>
       </div>

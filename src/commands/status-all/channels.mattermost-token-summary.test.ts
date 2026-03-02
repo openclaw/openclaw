@@ -36,7 +36,10 @@ function makeMattermostPlugin(): ChannelPlugin {
   };
 }
 
-function makeSlackPlugin(params?: { botToken?: string; appToken?: string }): ChannelPlugin {
+function makeSlackPlugin(params?: {
+  botToken?: string;
+  appToken?: string;
+}): ChannelPlugin {
   return {
     id: "slack",
     meta: {

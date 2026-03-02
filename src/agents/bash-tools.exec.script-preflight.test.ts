@@ -24,14 +24,20 @@ describeNonWin("exec script preflight", () => {
         "utf-8",
       );
 
-      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+      const tool = createExecTool({
+        host: "gateway",
+        security: "full",
+        ask: "off",
+      });
 
       await expect(
         tool.execute("call1", {
           command: "python bad.py",
           workdir: tmp,
         }),
-      ).rejects.toThrow(/exec preflight: detected likely shell variable injection \(\$DM_JSON\)/);
+      ).rejects.toThrow(
+        /exec preflight: detected likely shell variable injection \(\$DM_JSON\)/,
+      );
     });
   });
 
@@ -45,7 +51,11 @@ describeNonWin("exec script preflight", () => {
         "utf-8",
       );
 
-      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+      const tool = createExecTool({
+        host: "gateway",
+        security: "full",
+        ask: "off",
+      });
 
       await expect(
         tool.execute("call1", {
@@ -63,12 +73,17 @@ describeNonWin("exec script preflight", () => {
       const jsPath = path.join(tmp, "bad.js");
       await fs.writeFile(jsPath, "const value = $DM_JSON;", "utf-8");
 
-      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+      const tool = createExecTool({
+        host: "gateway",
+        security: "full",
+        ask: "off",
+      });
       const result = await tool.execute("call-quoted", {
         command: 'node "bad.js"',
         workdir: tmp,
       });
-      const text = result.content.find((block) => block.type === "text")?.text ?? "";
+      const text =
+        result.content.find((block) => block.type === "text")?.text ?? "";
       expect(text).not.toMatch(/exec preflight:/);
     });
   });
@@ -80,13 +95,18 @@ describeNonWin("exec script preflight", () => {
       await fs.mkdir(workdir, { recursive: true });
       await fs.writeFile(outsidePath, "const value = $DM_JSON;", "utf-8");
 
-      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+      const tool = createExecTool({
+        host: "gateway",
+        security: "full",
+        ask: "off",
+      });
 
       const result = await tool.execute("call-outside", {
         command: "node ../outside.js",
         workdir,
       });
-      const text = result.content.find((block) => block.type === "text")?.text ?? "";
+      const text =
+        result.content.find((block) => block.type === "text")?.text ?? "";
       expect(text).not.toMatch(/exec preflight:/);
     });
   });

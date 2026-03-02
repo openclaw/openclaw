@@ -21,8 +21,15 @@ import {
   describeBinding,
   parseBindingSpecs,
 } from "./agents.bindings.js";
-import { createQuietRuntime, requireValidConfig } from "./agents.command-shared.js";
-import { applyAgentConfig, findAgentEntryIndex, listAgentEntries } from "./agents.config.js";
+import {
+  createQuietRuntime,
+  requireValidConfig,
+} from "./agents.command-shared.js";
+import {
+  applyAgentConfig,
+  findAgentEntryIndex,
+  listAgentEntries,
+} from "./agents.config.js";
 import { promptAuthChoiceGrouped } from "./auth-choice-prompt.js";
 import { applyAuthChoice, warnIfModelConfigLooksOff } from "./auth-choice.js";
 import { setupChannels } from "./onboard-channels.js";
@@ -125,7 +132,13 @@ export async function agentsAddCommand(
     const bindingResult =
       bindingParse.bindings.length > 0
         ? applyAgentBindings(nextConfig, bindingParse.bindings)
-        : { config: nextConfig, added: [], updated: [], skipped: [], conflicts: [] };
+        : {
+            config: nextConfig,
+            added: [],
+            updated: [],
+            skipped: [],
+            conflicts: [],
+          };
 
     await writeConfigFile(bindingResult.config);
     if (!opts.json) {
@@ -133,7 +146,9 @@ export async function agentsAddCommand(
     }
     const quietRuntime = opts.json ? createQuietRuntime(runtime) : runtime;
     await ensureWorkspaceAndSessions(workspaceDir, quietRuntime, {
-      skipBootstrap: Boolean(bindingResult.config.agents?.defaults?.skipBootstrap),
+      skipBootstrap: Boolean(
+        bindingResult.config.agents?.defaults?.skipBootstrap,
+      ),
       agentId,
     });
 
@@ -148,7 +163,8 @@ export async function agentsAddCommand(
         updated: bindingResult.updated.map(describeBinding),
         skipped: bindingResult.skipped.map(describeBinding),
         conflicts: bindingResult.conflicts.map(
-          (conflict) => `${describeBinding(conflict.binding)} (agent=${conflict.existingAgentId})`,
+          (conflict) =>
+            `${describeBinding(conflict.binding)} (agent=${conflict.existingAgentId})`,
         ),
       },
     };
@@ -221,7 +237,9 @@ export async function agentsAddCommand(
       initialValue: workspaceDefault,
       validate: (value) => (value?.trim() ? undefined : "Required"),
     });
-    const workspaceDir = resolveUserPath(String(workspaceInput ?? "").trim() || workspaceDefault);
+    const workspaceDir = resolveUserPath(
+      String(workspaceInput ?? "").trim() || workspaceDefault,
+    );
     const agentDir = resolveAgentDir(cfg, agentId);
 
     let nextConfig = applyAgentConfig(cfg, {
@@ -233,10 +251,13 @@ export async function agentsAddCommand(
 
     const defaultAgentId = resolveDefaultAgentId(cfg);
     if (defaultAgentId !== agentId) {
-      const sourceAuthPath = resolveAuthStorePath(resolveAgentDir(cfg, defaultAgentId));
+      const sourceAuthPath = resolveAuthStorePath(
+        resolveAgentDir(cfg, defaultAgentId),
+      );
       const destAuthPath = resolveAuthStorePath(agentDir);
       const sameAuthPath =
-        path.resolve(sourceAuthPath).toLowerCase() === path.resolve(destAuthPath).toLowerCase();
+        path.resolve(sourceAuthPath).toLowerCase() ===
+        path.resolve(destAuthPath).toLowerCase();
       if (
         !sameAuthPath &&
         (await fileExists(sourceAuthPath)) &&
@@ -249,7 +270,10 @@ export async function agentsAddCommand(
         if (shouldCopy) {
           await fs.mkdir(path.dirname(destAuthPath), { recursive: true });
           await fs.copyFile(sourceAuthPath, destAuthPath);
-          await prompter.note(`Copied auth profiles from "${defaultAgentId}".`, "Auth profiles");
+          await prompter.note(
+            `Copied auth profiles from "${defaultAgentId}".`,
+            "Auth profiles",
+          );
         }
       }
     }

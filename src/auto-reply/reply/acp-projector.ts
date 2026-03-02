@@ -1,6 +1,12 @@
-import type { AcpRuntimeEvent, AcpSessionUpdateTag } from "../../acp/runtime/types.js";
+import type {
+  AcpRuntimeEvent,
+  AcpSessionUpdateTag,
+} from "../../acp/runtime/types.js";
 import { EmbeddedBlockChunker } from "../../agents/pi-embedded-block-chunker.js";
-import { formatToolSummary, resolveToolDisplay } from "../../agents/tool-display.js";
+import {
+  formatToolSummary,
+  resolveToolDisplay,
+} from "../../agents/tool-display.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { prefixSystemMessage } from "../../infra/system-message.js";
 import type { ReplyPayload } from "../types.js";
@@ -19,8 +25,17 @@ const ACP_LIVE_IDLE_MIN_CHARS = 80;
 const ACP_LIVE_SOFT_FLUSH_CHARS = 220;
 const ACP_LIVE_HARD_FLUSH_CHARS = 480;
 
-const TERMINAL_TOOL_STATUSES = new Set(["completed", "failed", "cancelled", "done", "error"]);
-const HIDDEN_BOUNDARY_TAGS = new Set<AcpSessionUpdateTag>(["tool_call", "tool_call_update"]);
+const TERMINAL_TOOL_STATUSES = new Set([
+  "completed",
+  "failed",
+  "cancelled",
+  "done",
+  "error",
+]);
+const HIDDEN_BOUNDARY_TAGS = new Set<AcpSessionUpdateTag>([
+  "tool_call",
+  "tool_call_update",
+]);
 
 export type AcpProjectedDeliveryMeta = {
   tag?: AcpSessionUpdateTag;
@@ -62,7 +77,9 @@ function normalizeToolStatus(status: string | undefined): string | undefined {
   return normalized || undefined;
 }
 
-function resolveHiddenBoundarySeparatorText(mode: AcpHiddenBoundarySeparator): string {
+function resolveHiddenBoundarySeparatorText(
+  mode: AcpHiddenBoundarySeparator,
+): string {
   if (mode === "space") {
     return " ";
   }
@@ -97,7 +114,10 @@ function shouldInsertSeparator(params: {
   if (params.separator === " " && /\s$/.test(tail)) {
     return false;
   }
-  if ((params.separator === "\n" || params.separator === "\n\n") && tail.endsWith("\n")) {
+  if (
+    (params.separator === "\n" || params.separator === "\n\n") &&
+    tail.endsWith("\n")
+  ) {
     return false;
   }
   return true;
@@ -138,7 +158,9 @@ function shouldFlushLiveBufferOnIdle(text: string): boolean {
   return false;
 }
 
-function renderToolSummaryText(event: Extract<AcpRuntimeEvent, { type: "tool_call" }>): string {
+function renderToolSummaryText(
+  event: Extract<AcpRuntimeEvent, { type: "tool_call" }>,
+): string {
   const detailParts: string[] = [];
   const title = event.title?.trim();
   if (title) {
@@ -188,11 +210,15 @@ export function createAcpReplyProjector(params: {
         await params.deliver("block", payload);
       },
       timeoutMs: ACP_BLOCK_REPLY_TIMEOUT_MS,
-      coalescing: settings.deliveryMode === "live" ? undefined : streaming.coalescing,
+      coalescing:
+        settings.deliveryMode === "live" ? undefined : streaming.coalescing,
     });
   let blockReplyPipeline = createTurnBlockReplyPipeline();
   const chunker = new EmbeddedBlockChunker(streaming.chunking);
-  const liveIdleFlushMs = Math.max(streaming.coalescing.idleMs, ACP_LIVE_IDLE_FLUSH_FLOOR_MS);
+  const liveIdleFlushMs = Math.max(
+    streaming.coalescing.idleMs,
+    ACP_LIVE_IDLE_FLUSH_FLOOR_MS,
+  );
 
   let emittedOutputChars = 0;
   let truncationNoticeEmitted = false;
@@ -278,7 +304,10 @@ export function createAcpReplyProjector(params: {
     if (!(settings.deliveryMode === "final_only" && force)) {
       return;
     }
-    for (const entry of pendingToolDeliveries.splice(0, pendingToolDeliveries.length)) {
+    for (const entry of pendingToolDeliveries.splice(
+      0,
+      pendingToolDeliveries.length,
+    )) {
       await params.deliver("tool", entry.payload, entry.meta);
     }
   };
@@ -323,7 +352,9 @@ export function createAcpReplyProjector(params: {
     lastStatusHash = hash;
   };
 
-  const emitToolSummary = async (event: Extract<AcpRuntimeEvent, { type: "tool_call" }>) => {
+  const emitToolSummary = async (
+    event: Extract<AcpRuntimeEvent, { type: "tool_call" }>,
+  ) => {
     if (!params.shouldSendToolSummaries) {
       return;
     }
@@ -332,7 +363,10 @@ export function createAcpReplyProjector(params: {
     }
 
     const renderedToolSummary = renderToolSummaryText(event);
-    const toolSummary = truncateText(renderedToolSummary, settings.maxSessionUpdateChars);
+    const toolSummary = truncateText(
+      renderedToolSummary,
+      settings.maxSessionUpdateChars,
+    );
     const hash = hashText(renderedToolSummary);
     const toolCallId = event.toolCallId?.trim() || undefined;
     const status = normalizeToolStatus(event.status);
@@ -416,7 +450,9 @@ export function createAcpReplyProjector(params: {
       if (
         pendingHiddenBoundary &&
         shouldInsertSeparator({
-          separator: resolveHiddenBoundarySeparatorText(settings.hiddenBoundarySeparator),
+          separator: resolveHiddenBoundarySeparatorText(
+            settings.hiddenBoundarySeparator,
+          ),
           previousTail: lastVisibleOutputTail,
           nextText: text,
         })
@@ -429,7 +465,8 @@ export function createAcpReplyProjector(params: {
         return;
       }
       const remaining = settings.maxOutputChars - emittedOutputChars;
-      const accepted = remaining < text.length ? text.slice(0, remaining) : text;
+      const accepted =
+        remaining < text.length ? text.slice(0, remaining) : text;
       if (accepted.length > 0) {
         emittedOutputChars += accepted.length;
         lastVisibleOutputTail = accepted.slice(-1);
@@ -466,9 +503,13 @@ export function createAcpReplyProjector(params: {
         }
         lastUsageTuple = usageTuple;
       }
-      await emitSystemStatus(event.text, event.tag ? { tag: event.tag } : undefined, {
-        dedupe: true,
-      });
+      await emitSystemStatus(
+        event.text,
+        event.tag ? { tag: event.tag } : undefined,
+        {
+          dedupe: true,
+        },
+      );
       return;
     }
 
@@ -476,8 +517,11 @@ export function createAcpReplyProjector(params: {
       if (!isAcpTagVisible(settings, event.tag)) {
         if (event.tag && HIDDEN_BOUNDARY_TAGS.has(event.tag)) {
           const status = normalizeToolStatus(event.status);
-          const isTerminal = status ? TERMINAL_TOOL_STATUSES.has(status) : false;
-          pendingHiddenBoundary = pendingHiddenBoundary || event.tag === "tool_call" || isTerminal;
+          const isTerminal = status
+            ? TERMINAL_TOOL_STATUSES.has(status)
+            : false;
+          pendingHiddenBoundary =
+            pendingHiddenBoundary || event.tag === "tool_call" || isTerminal;
         }
         return;
       }

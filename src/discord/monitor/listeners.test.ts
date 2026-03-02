@@ -18,9 +18,14 @@ describe("DiscordMessageListener", () => {
       await handlerDone;
     });
     const logger = createLogger();
-    const listener = new DiscordMessageListener(handler as never, logger as never);
+    const listener = new DiscordMessageListener(
+      handler as never,
+      logger as never,
+    );
 
-    await expect(listener.handle({} as never, {} as never)).resolves.toBeUndefined();
+    await expect(
+      listener.handle({} as never, {} as never),
+    ).resolves.toBeUndefined();
     expect(handler).toHaveBeenCalledTimes(1);
     expect(logger.error).not.toHaveBeenCalled();
 
@@ -46,10 +51,17 @@ describe("DiscordMessageListener", () => {
       }
       await secondDone;
     });
-    const listener = new DiscordMessageListener(handler as never, createLogger() as never);
+    const listener = new DiscordMessageListener(
+      handler as never,
+      createLogger() as never,
+    );
 
-    await expect(listener.handle({} as never, {} as never)).resolves.toBeUndefined();
-    await expect(listener.handle({} as never, {} as never)).resolves.toBeUndefined();
+    await expect(
+      listener.handle({} as never, {} as never),
+    ).resolves.toBeUndefined();
+    await expect(
+      listener.handle({} as never, {} as never),
+    ).resolves.toBeUndefined();
 
     // Second event is queued until the first handler run settles.
     expect(handler).toHaveBeenCalledTimes(1);
@@ -67,9 +79,14 @@ describe("DiscordMessageListener", () => {
       throw new Error("boom");
     });
     const logger = createLogger();
-    const listener = new DiscordMessageListener(handler as never, logger as never);
+    const listener = new DiscordMessageListener(
+      handler as never,
+      logger as never,
+    );
 
-    await expect(listener.handle({} as never, {} as never)).resolves.toBeUndefined();
+    await expect(
+      listener.handle({} as never, {} as never),
+    ).resolves.toBeUndefined();
     await vi.waitFor(() => {
       expect(logger.error).toHaveBeenCalledWith(
         expect.stringContaining("discord handler failed: Error: boom"),

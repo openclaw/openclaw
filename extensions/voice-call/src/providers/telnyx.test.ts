@@ -94,7 +94,10 @@ describe("TelnyxProvider.verifyWebhook", () => {
 
     const rawPublicKey = decodeBase64Url(jwk.x as string);
     const rawPublicKeyBase64 = rawPublicKey.toString("base64");
-    expectWebhookVerificationSucceeds({ publicKey: rawPublicKeyBase64, privateKey });
+    expectWebhookVerificationSucceeds({
+      publicKey: rawPublicKeyBase64,
+      privateKey,
+    });
   });
 
   it("verifies a valid signature with a DER SPKI public key (Base64)", () => {
@@ -108,7 +111,11 @@ describe("TelnyxProvider.verifyWebhook", () => {
     const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
     const spkiDer = publicKey.export({ format: "der", type: "spki" }) as Buffer;
     const provider = new TelnyxProvider(
-      { apiKey: "KEY123", connectionId: "CONN456", publicKey: spkiDer.toString("base64") },
+      {
+        apiKey: "KEY123",
+        connectionId: "CONN456",
+        publicKey: spkiDer.toString("base64"),
+      },
       { skipVerification: false },
     );
 
@@ -119,7 +126,9 @@ describe("TelnyxProvider.verifyWebhook", () => {
     });
     const timestamp = String(Math.floor(Date.now() / 1000));
     const signedPayload = `${timestamp}|${rawBody}`;
-    const signature = crypto.sign(null, Buffer.from(signedPayload), privateKey).toString("base64");
+    const signature = crypto
+      .sign(null, Buffer.from(signedPayload), privateKey)
+      .toString("base64");
     const ctx = createCtx({
       rawBody,
       headers: {

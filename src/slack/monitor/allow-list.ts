@@ -21,9 +21,18 @@ export function normalizeAllowListLower(list?: Array<string | number>) {
 }
 
 export type SlackAllowListMatch = AllowlistMatch<
-  "wildcard" | "id" | "prefixed-id" | "prefixed-user" | "name" | "prefixed-name" | "slug"
+  | "wildcard"
+  | "id"
+  | "prefixed-id"
+  | "prefixed-user"
+  | "name"
+  | "prefixed-name"
+  | "slug"
 >;
-type SlackAllowListSource = Exclude<SlackAllowListMatch["matchSource"], undefined>;
+type SlackAllowListSource = Exclude<
+  SlackAllowListMatch["matchSource"],
+  undefined
+>;
 
 export function resolveSlackAllowListMatch(params: {
   allowList: string[];
@@ -48,7 +57,10 @@ export function resolveSlackAllowListMatch(params: {
     ...(params.allowNameMatching === true
       ? ([
           { value: name, source: "name" as const },
-          { value: name ? `slack:${name}` : undefined, source: "prefixed-name" as const },
+          {
+            value: name ? `slack:${name}` : undefined,
+            source: "prefixed-name" as const,
+          },
           { value: slug, source: "slug" as const },
         ] satisfies Array<{ value?: string; source: SlackAllowListSource }>)
       : []),

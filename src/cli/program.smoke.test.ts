@@ -55,13 +55,19 @@ describe("cli program (smoke)", () => {
 
   it("runs tui with explicit timeout override", async () => {
     await runProgram(["tui", "--timeout-ms", "45000"]);
-    expect(runTui).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 45000 }));
+    expect(runTui).toHaveBeenCalledWith(
+      expect.objectContaining({ timeoutMs: 45000 }),
+    );
   });
 
   it("warns and ignores invalid tui timeout override", async () => {
     await runProgram(["tui", "--timeout-ms", "nope"]);
-    expect(runtime.error).toHaveBeenCalledWith('warning: invalid --timeout-ms "nope"; ignoring');
-    expect(runTui).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: undefined }));
+    expect(runtime.error).toHaveBeenCalledWith(
+      'warning: invalid --timeout-ms "nope"; ignoring',
+    );
+    expect(runTui).toHaveBeenCalledWith(
+      expect.objectContaining({ timeoutMs: undefined }),
+    );
   });
 
   it("runs setup wizard when wizard flags are present", async () => {

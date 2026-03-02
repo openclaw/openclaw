@@ -64,7 +64,9 @@ async function runGatewayPrompt(params: {
   baseConfig?: OpenClawConfig;
   randomToken?: string;
   confirmResult?: boolean;
-  authConfigFactory?: (input: Record<string, unknown>) => Record<string, unknown>;
+  authConfigFactory?: (
+    input: Record<string, unknown>,
+  ) => Record<string, unknown>;
 }) {
   vi.clearAllMocks();
   mocks.resolveGatewayPort.mockReturnValue(18789);
@@ -73,10 +75,15 @@ async function runGatewayPrompt(params: {
   mocks.randomToken.mockReturnValue(params.randomToken ?? "generated-token");
   mocks.confirm.mockResolvedValue(params.confirmResult ?? true);
   mocks.buildGatewayAuthConfig.mockImplementation((input) =>
-    params.authConfigFactory ? params.authConfigFactory(input as Record<string, unknown>) : input,
+    params.authConfigFactory
+      ? params.authConfigFactory(input as Record<string, unknown>)
+      : input,
   );
 
-  const result = await promptGatewayConfig(params.baseConfig ?? {}, makeRuntime());
+  const result = await promptGatewayConfig(
+    params.baseConfig ?? {},
+    makeRuntime(),
+  );
   const call = mocks.buildGatewayAuthConfig.mock.calls[0]?.[0];
   return { result, call };
 }
@@ -98,7 +105,11 @@ describe("promptGatewayConfig", () => {
       selectQueue: ["loopback", "token", "off"],
       textQueue: ["18789", undefined],
       randomToken: "generated-token",
-      authConfigFactory: ({ mode, token, password }) => ({ mode, token, password }),
+      authConfigFactory: ({ mode, token, password }) => ({
+        mode,
+        token,
+        password,
+      }),
     });
     expect(result.token).toBe("generated-token");
   });
@@ -108,7 +119,11 @@ describe("promptGatewayConfig", () => {
       selectQueue: ["loopback", "password", "off"],
       textQueue: ["18789", undefined],
       randomToken: "unused",
-      authConfigFactory: ({ mode, token, password }) => ({ mode, token, password }),
+      authConfigFactory: ({ mode, token, password }) => ({
+        mode,
+        token,
+        password,
+      }),
     });
     expect(call?.password).not.toBe("undefined");
     expect(call?.password).toBe("");
@@ -132,7 +147,10 @@ describe("promptGatewayConfig", () => {
       allowUsers: ["nick@example.com"],
     });
     expect(result.config.gateway?.bind).toBe("loopback");
-    expect(result.config.gateway?.trustedProxies).toEqual(["10.0.1.10", "192.168.1.5"]);
+    expect(result.config.gateway?.trustedProxies).toEqual([
+      "10.0.1.10",
+      "192.168.1.5",
+    ]);
   });
 
   it("handles trusted-proxy with no optional fields", async () => {

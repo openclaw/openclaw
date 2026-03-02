@@ -6,7 +6,10 @@ import {
   renderReadingIndicatorGroup,
   renderStreamingGroup,
 } from "../chat/grouped-render.ts";
-import { normalizeMessage, normalizeRoleForGrouping } from "../chat/message-normalizer.ts";
+import {
+  normalizeMessage,
+  normalizeRoleForGrouping,
+} from "../chat/message-normalizer.ts";
 import { icons } from "../icons.ts";
 import { detectTextDirection } from "../text-direction.ts";
 import type { SessionsListResult } from "../types.ts";
@@ -90,7 +93,9 @@ function adjustTextareaHeight(el: HTMLTextAreaElement) {
   el.style.height = `${el.scrollHeight}px`;
 }
 
-function renderCompactionIndicator(status: CompactionIndicatorStatus | null | undefined) {
+function renderCompactionIndicator(
+  status: CompactionIndicatorStatus | null | undefined,
+) {
   if (!status) {
     return nothing;
   }
@@ -98,7 +103,11 @@ function renderCompactionIndicator(status: CompactionIndicatorStatus | null | un
   // Show "compacting..." while active
   if (status.active) {
     return html`
-      <div class="compaction-indicator compaction-indicator--active" role="status" aria-live="polite">
+      <div
+        class="compaction-indicator compaction-indicator--active"
+        role="status"
+        aria-live="polite"
+      >
         ${icons.loader} Compacting context...
       </div>
     `;
@@ -109,7 +118,11 @@ function renderCompactionIndicator(status: CompactionIndicatorStatus | null | un
     const elapsed = Date.now() - status.completedAt;
     if (elapsed < COMPACTION_TOAST_DURATION_MS) {
       return html`
-        <div class="compaction-indicator compaction-indicator--complete" role="status" aria-live="polite">
+        <div
+          class="compaction-indicator compaction-indicator--complete"
+          role="status"
+          aria-live="polite"
+        >
           ${icons.check} Context compacted
         </div>
       `;
@@ -119,7 +132,9 @@ function renderCompactionIndicator(status: CompactionIndicatorStatus | null | un
   return nothing;
 }
 
-function renderFallbackIndicator(status: FallbackIndicatorStatus | null | undefined) {
+function renderFallbackIndicator(
+  status: FallbackIndicatorStatus | null | undefined,
+) {
   if (!status) {
     return nothing;
   }
@@ -130,10 +145,16 @@ function renderFallbackIndicator(status: FallbackIndicatorStatus | null | undefi
   }
   const details = [
     `Selected: ${status.selected}`,
-    phase === "cleared" ? `Active: ${status.selected}` : `Active: ${status.active}`,
-    phase === "cleared" && status.previous ? `Previous fallback: ${status.previous}` : null,
+    phase === "cleared"
+      ? `Active: ${status.selected}`
+      : `Active: ${status.active}`,
+    phase === "cleared" && status.previous
+      ? `Previous fallback: ${status.previous}`
+      : null,
     status.reason ? `Reason: ${status.reason}` : null,
-    status.attempts.length > 0 ? `Attempts: ${status.attempts.slice(0, 3).join(" | ")}` : null,
+    status.attempts.length > 0
+      ? `Attempts: ${status.attempts.slice(0, 3).join(" | ")}`
+      : null,
   ]
     .filter(Boolean)
     .join(" • ");
@@ -147,12 +168,7 @@ function renderFallbackIndicator(status: FallbackIndicatorStatus | null | undefi
       : "compaction-indicator compaction-indicator--fallback";
   const icon = phase === "cleared" ? icons.check : icons.brain;
   return html`
-    <div
-      class=${className}
-      role="status"
-      aria-live="polite"
-      title=${details}
-    >
+    <div class=${className} role="status" aria-live="polite" title=${details}>
       ${icon} ${message}
     </div>
   `;
@@ -224,7 +240,9 @@ function renderAttachmentPreview(props: ChatProps) {
               type="button"
               aria-label="Remove attachment"
               @click=${() => {
-                const next = (props.attachments ?? []).filter((a) => a.id !== att.id);
+                const next = (props.attachments ?? []).filter(
+                  (a) => a.id !== att.id,
+                );
                 props.onAttachmentsChange?.(next);
               }}
             >
@@ -241,7 +259,9 @@ export function renderChat(props: ChatProps) {
   const canCompose = props.connected;
   const isBusy = props.sending || props.stream !== null;
   const canAbort = Boolean(props.canAbort && props.onAbort);
-  const activeSession = props.sessions?.sessions?.find((row) => row.key === props.sessionKey);
+  const activeSession = props.sessions?.sessions?.find(
+    (row) => row.key === props.sessionKey,
+  );
   const reasoningLevel = activeSession?.reasoningLevel ?? "off";
   const showReasoning = props.showThinking && reasoningLevel !== "off";
   const assistantIdentity = {
@@ -265,20 +285,20 @@ export function renderChat(props: ChatProps) {
       aria-live="polite"
       @scroll=${props.onChatScroll}
     >
-      ${
-        props.loading
-          ? html`
-              <div class="muted">Loading chat…</div>
-            `
-          : nothing
-      }
+      ${props.loading
+        ? html` <div class="muted">Loading chat…</div> `
+        : nothing}
       ${repeat(
         buildChatItems(props),
         (item) => item.key,
         (item) => {
           if (item.kind === "divider") {
             return html`
-              <div class="chat-divider" role="separator" data-ts=${String(item.timestamp)}>
+              <div
+                class="chat-divider"
+                role="separator"
+                data-ts=${String(item.timestamp)}
+              >
                 <span class="chat-divider__line"></span>
                 <span class="chat-divider__label">${item.label}</span>
                 <span class="chat-divider__line"></span>
@@ -316,13 +336,14 @@ export function renderChat(props: ChatProps) {
 
   return html`
     <section class="card chat">
-      ${props.disabledReason ? html`<div class="callout">${props.disabledReason}</div>` : nothing}
-
-      ${props.error ? html`<div class="callout danger">${props.error}</div>` : nothing}
-
-      ${
-        props.focusMode
-          ? html`
+      ${props.disabledReason
+        ? html`<div class="callout">${props.disabledReason}</div>`
+        : nothing}
+      ${props.error
+        ? html`<div class="callout danger">${props.error}</div>`
+        : nothing}
+      ${props.focusMode
+        ? html`
             <button
               class="chat-focus-exit"
               type="button"
@@ -333,11 +354,12 @@ export function renderChat(props: ChatProps) {
               ${icons.x}
             </button>
           `
-          : nothing
-      }
+        : nothing}
 
       <div
-        class="chat-split-container ${sidebarOpen ? "chat-split-container--open" : ""}"
+        class="chat-split-container ${sidebarOpen
+          ? "chat-split-container--open"
+          : ""}"
       >
         <div
           class="chat-main"
@@ -346,12 +368,12 @@ export function renderChat(props: ChatProps) {
           ${thread}
         </div>
 
-        ${
-          sidebarOpen
-            ? html`
+        ${sidebarOpen
+          ? html`
               <resizable-divider
                 .splitRatio=${splitRatio}
-                @resize=${(e: CustomEvent) => props.onSplitRatioChange?.(e.detail.splitRatio)}
+                @resize=${(e: CustomEvent) =>
+                  props.onSplitRatioChange?.(e.detail.splitRatio)}
               ></resizable-divider>
               <div class="chat-sidebar">
                 ${renderMarkdownSidebar({
@@ -362,29 +384,31 @@ export function renderChat(props: ChatProps) {
                     if (!props.sidebarContent || !props.onOpenSidebar) {
                       return;
                     }
-                    props.onOpenSidebar(`\`\`\`\n${props.sidebarContent}\n\`\`\``);
+                    props.onOpenSidebar(
+                      `\`\`\`\n${props.sidebarContent}\n\`\`\``,
+                    );
                   },
                 })}
               </div>
             `
-            : nothing
-        }
+          : nothing}
       </div>
 
-      ${
-        props.queue.length
-          ? html`
+      ${props.queue.length
+        ? html`
             <div class="chat-queue" role="status" aria-live="polite">
-              <div class="chat-queue__title">Queued (${props.queue.length})</div>
+              <div class="chat-queue__title">
+                Queued (${props.queue.length})
+              </div>
               <div class="chat-queue__list">
                 ${props.queue.map(
                   (item) => html`
                     <div class="chat-queue__item">
                       <div class="chat-queue__text">
-                        ${
-                          item.text ||
-                          (item.attachments?.length ? `Image (${item.attachments.length})` : "")
-                        }
+                        ${item.text ||
+                        (item.attachments?.length
+                          ? `Image (${item.attachments.length})`
+                          : "")}
                       </div>
                       <button
                         class="btn chat-queue__remove"
@@ -400,15 +424,11 @@ export function renderChat(props: ChatProps) {
               </div>
             </div>
           `
-          : nothing
-      }
-
+        : nothing}
       ${renderFallbackIndicator(props.fallbackStatus)}
       ${renderCompactionIndicator(props.compactionStatus)}
-
-      ${
-        props.showNewMessages
-          ? html`
+      ${props.showNewMessages
+        ? html`
             <button
               class="btn chat-new-messages"
               type="button"
@@ -417,8 +437,7 @@ export function renderChat(props: ChatProps) {
               New messages ${icons.arrowDown}
             </button>
           `
-          : nothing
-      }
+        : nothing}
 
       <div class="chat-compose">
         ${renderAttachmentPreview(props)}
@@ -426,7 +445,9 @@ export function renderChat(props: ChatProps) {
           <label class="field chat-compose__field">
             <span>Message</span>
             <textarea
-              ${ref((el) => el && adjustTextareaHeight(el as HTMLTextAreaElement))}
+              ${ref(
+                (el) => el && adjustTextareaHeight(el as HTMLTextAreaElement),
+              )}
               .value=${props.draft}
               dir=${detectTextDirection(props.draft)}
               ?disabled=${!props.connected}

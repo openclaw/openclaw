@@ -4,7 +4,9 @@ import path from "node:path";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 
 function sanitizePrefix(prefix: string): string {
-  const normalized = prefix.replace(/[^a-zA-Z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
+  const normalized = prefix
+    .replace(/[^a-zA-Z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "");
   return normalized || "tmp";
 }
 
@@ -55,7 +57,10 @@ export function buildRandomTempFilePath(params: {
       ? Math.trunc(nowCandidate)
       : Date.now();
   const uuid = params.uuid?.trim() || crypto.randomUUID();
-  return path.join(resolveTempRoot(params.tmpDir), `${prefix}-${now}-${uuid}${extension}`);
+  return path.join(
+    resolveTempRoot(params.tmpDir),
+    `${prefix}-${now}-${uuid}${extension}`,
+  );
 }
 
 export async function withTempDownloadPath<T>(
@@ -69,7 +74,10 @@ export async function withTempDownloadPath<T>(
   const tempRoot = resolveTempRoot(params.tmpDir);
   const prefix = `${sanitizePrefix(params.prefix)}-`;
   const dir = await mkdtemp(path.join(tempRoot, prefix));
-  const tmpPath = path.join(dir, sanitizeFileName(params.fileName ?? "download.bin"));
+  const tmpPath = path.join(
+    dir,
+    sanitizeFileName(params.fileName ?? "download.bin"),
+  );
   try {
     return await fn(tmpPath);
   } finally {

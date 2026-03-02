@@ -66,7 +66,8 @@ export function parseColorMarkup(content: string): Segment[] {
   // Closing tag name is still not validated against the opening tag:
   // [red]text[/green] is treated as [red]text[/red] — opening style applies
   // and the closing tag is consumed regardless of its name.
-  const KNOWN = "(?:bg:[a-z]+|bold|red|orange|yellow|green|blue|purple|gr[ae]y)";
+  const KNOWN =
+    "(?:bg:[a-z]+|bold|red|orange|yellow|green|blue|purple|gr[ae]y)";
   const tagPattern = new RegExp(
     `\\[(${KNOWN}(?:\\s+${KNOWN})*)\\](.*?)\\[\\/(?:[^\\]]+)\\]|([^[]+|\\[)`,
     "gis",

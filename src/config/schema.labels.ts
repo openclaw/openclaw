@@ -31,7 +31,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "update.auto.enabled": "Auto Update Enabled",
   "update.auto.stableDelayHours": "Auto Update Stable Delay (hours)",
   "update.auto.stableJitterHours": "Auto Update Stable Jitter (hours)",
-  "update.auto.betaCheckIntervalHours": "Auto Update Beta Check Interval (hours)",
+  "update.auto.betaCheckIntervalHours":
+    "Auto Update Beta Check Interval (hours)",
   "diagnostics.enabled": "Diagnostics Enabled",
   "diagnostics.flags": "Diagnostics Flags",
   "diagnostics.stuckSessionWarnMs": "Stuck Session Warning Threshold (ms)",
@@ -72,7 +73,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "gateway.tools": "Gateway Tool Exposure Policy",
   "gateway.tools.allow": "Gateway Tool Allowlist",
   "gateway.tools.deny": "Gateway Tool Denylist",
-  "gateway.channelHealthCheckMinutes": "Gateway Channel Health Check Interval (min)",
+  "gateway.channelHealthCheckMinutes":
+    "Gateway Channel Health Check Interval (min)",
   "gateway.tailscale": "Gateway Tailscale",
   "gateway.tailscale.mode": "Gateway Tailscale Mode",
   "gateway.tailscale.resetOnExit": "Gateway Tailscale Reset on Exit",
@@ -88,7 +90,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "gateway.http": "Gateway HTTP API",
   "gateway.http.endpoints": "Gateway HTTP Endpoints",
   "gateway.http.securityHeaders": "Gateway HTTP Security Headers",
-  "gateway.http.securityHeaders.strictTransportSecurity": "Strict Transport Security Header",
+  "gateway.http.securityHeaders.strictTransportSecurity":
+    "Strict Transport Security Header",
   "gateway.remote.url": "Remote Gateway URL",
   "gateway.remote.sshTarget": "Remote Gateway SSH Target",
   "gateway.remote.sshIdentity": "Remote Gateway SSH Identity",
@@ -163,9 +166,12 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.loopDetection.historySize": "Tool-loop History Size",
   "tools.loopDetection.warningThreshold": "Tool-loop Warning Threshold",
   "tools.loopDetection.criticalThreshold": "Tool-loop Critical Threshold",
-  "tools.loopDetection.globalCircuitBreakerThreshold": "Tool-loop Global Circuit Breaker Threshold",
-  "tools.loopDetection.detectors.genericRepeat": "Tool-loop Generic Repeat Detection",
-  "tools.loopDetection.detectors.knownPollNoProgress": "Tool-loop Poll No-Progress Detection",
+  "tools.loopDetection.globalCircuitBreakerThreshold":
+    "Tool-loop Global Circuit Breaker Threshold",
+  "tools.loopDetection.detectors.genericRepeat":
+    "Tool-loop Generic Repeat Detection",
+  "tools.loopDetection.detectors.knownPollNoProgress":
+    "Tool-loop Poll No-Progress Detection",
   "tools.loopDetection.detectors.pingPong": "Tool-loop Ping-Pong Detection",
   "tools.fs.workspaceOnly": "Workspace-only FS tools",
   "tools.sessions.visibility": "Session Tools Visibility",
@@ -202,8 +208,10 @@ export const FIELD_LABELS: Record<string, string> = {
   "approvals.exec.targets[].accountId": "Approval Target Account ID",
   "approvals.exec.targets[].threadId": "Approval Target Thread ID",
   "tools.message.allowCrossContextSend": "Allow Cross-Context Messaging",
-  "tools.message.crossContext.allowWithinProvider": "Allow Cross-Context (Same Provider)",
-  "tools.message.crossContext.allowAcrossProviders": "Allow Cross-Context (Across Providers)",
+  "tools.message.crossContext.allowWithinProvider":
+    "Allow Cross-Context (Same Provider)",
+  "tools.message.crossContext.allowAcrossProviders":
+    "Allow Cross-Context (Across Providers)",
   "tools.message.crossContext.marker.enabled": "Cross-Context Marker",
   "tools.message.crossContext.marker.prefix": "Cross-Context Marker Prefix",
   "tools.message.crossContext.marker.suffix": "Cross-Context Marker Suffix",
@@ -244,8 +252,10 @@ export const FIELD_LABELS: Record<string, string> = {
   "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback":
     "Dangerously Allow Host-Header Origin Fallback",
   "gateway.controlUi.allowInsecureAuth": "Insecure Control UI Auth Toggle",
-  "gateway.controlUi.dangerouslyDisableDeviceAuth": "Dangerously Disable Control UI Device Auth",
-  "gateway.http.endpoints.chatCompletions.enabled": "OpenAI Chat Completions Endpoint",
+  "gateway.controlUi.dangerouslyDisableDeviceAuth":
+    "Dangerously Disable Control UI Device Auth",
+  "gateway.http.endpoints.chatCompletions.enabled":
+    "OpenAI Chat Completions Endpoint",
   "gateway.reload.mode": "Config Reload Mode",
   "gateway.reload.debounceMs": "Config Reload Debounce (ms)",
   "gateway.nodes.browser.mode": "Gateway Node Browser Mode",
@@ -295,39 +305,56 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.memorySearch.remote.baseUrl": "Remote Embedding Base URL",
   "agents.defaults.memorySearch.remote.apiKey": "Remote Embedding API Key",
   "agents.defaults.memorySearch.remote.headers": "Remote Embedding Headers",
-  "agents.defaults.memorySearch.remote.batch.enabled": "Remote Batch Embedding Enabled",
-  "agents.defaults.memorySearch.remote.batch.wait": "Remote Batch Wait for Completion",
-  "agents.defaults.memorySearch.remote.batch.concurrency": "Remote Batch Concurrency",
-  "agents.defaults.memorySearch.remote.batch.pollIntervalMs": "Remote Batch Poll Interval (ms)",
-  "agents.defaults.memorySearch.remote.batch.timeoutMinutes": "Remote Batch Timeout (min)",
+  "agents.defaults.memorySearch.remote.batch.enabled":
+    "Remote Batch Embedding Enabled",
+  "agents.defaults.memorySearch.remote.batch.wait":
+    "Remote Batch Wait for Completion",
+  "agents.defaults.memorySearch.remote.batch.concurrency":
+    "Remote Batch Concurrency",
+  "agents.defaults.memorySearch.remote.batch.pollIntervalMs":
+    "Remote Batch Poll Interval (ms)",
+  "agents.defaults.memorySearch.remote.batch.timeoutMinutes":
+    "Remote Batch Timeout (min)",
   "agents.defaults.memorySearch.model": "Memory Search Model",
   "agents.defaults.memorySearch.fallback": "Memory Search Fallback",
   "agents.defaults.memorySearch.local.modelPath": "Local Embedding Model Path",
   "agents.defaults.memorySearch.store.path": "Memory Search Index Path",
-  "agents.defaults.memorySearch.store.vector.enabled": "Memory Search Vector Index",
-  "agents.defaults.memorySearch.store.vector.extensionPath": "Memory Search Vector Extension Path",
+  "agents.defaults.memorySearch.store.vector.enabled":
+    "Memory Search Vector Index",
+  "agents.defaults.memorySearch.store.vector.extensionPath":
+    "Memory Search Vector Extension Path",
   "agents.defaults.memorySearch.chunking.tokens": "Memory Chunk Tokens",
-  "agents.defaults.memorySearch.chunking.overlap": "Memory Chunk Overlap Tokens",
+  "agents.defaults.memorySearch.chunking.overlap":
+    "Memory Chunk Overlap Tokens",
   "agents.defaults.memorySearch.sync.onSessionStart": "Index on Session Start",
   "agents.defaults.memorySearch.sync.onSearch": "Index on Search (Lazy)",
   "agents.defaults.memorySearch.sync.watch": "Watch Memory Files",
-  "agents.defaults.memorySearch.sync.watchDebounceMs": "Memory Watch Debounce (ms)",
-  "agents.defaults.memorySearch.sync.sessions.deltaBytes": "Session Delta Bytes",
-  "agents.defaults.memorySearch.sync.sessions.deltaMessages": "Session Delta Messages",
+  "agents.defaults.memorySearch.sync.watchDebounceMs":
+    "Memory Watch Debounce (ms)",
+  "agents.defaults.memorySearch.sync.sessions.deltaBytes":
+    "Session Delta Bytes",
+  "agents.defaults.memorySearch.sync.sessions.deltaMessages":
+    "Session Delta Messages",
   "agents.defaults.memorySearch.query.maxResults": "Memory Search Max Results",
   "agents.defaults.memorySearch.query.minScore": "Memory Search Min Score",
   "agents.defaults.memorySearch.query.hybrid.enabled": "Memory Search Hybrid",
-  "agents.defaults.memorySearch.query.hybrid.vectorWeight": "Memory Search Vector Weight",
-  "agents.defaults.memorySearch.query.hybrid.textWeight": "Memory Search Text Weight",
+  "agents.defaults.memorySearch.query.hybrid.vectorWeight":
+    "Memory Search Vector Weight",
+  "agents.defaults.memorySearch.query.hybrid.textWeight":
+    "Memory Search Text Weight",
   "agents.defaults.memorySearch.query.hybrid.candidateMultiplier":
     "Memory Search Hybrid Candidate Multiplier",
-  "agents.defaults.memorySearch.query.hybrid.mmr.enabled": "Memory Search MMR Re-ranking",
-  "agents.defaults.memorySearch.query.hybrid.mmr.lambda": "Memory Search MMR Lambda",
-  "agents.defaults.memorySearch.query.hybrid.temporalDecay.enabled": "Memory Search Temporal Decay",
+  "agents.defaults.memorySearch.query.hybrid.mmr.enabled":
+    "Memory Search MMR Re-ranking",
+  "agents.defaults.memorySearch.query.hybrid.mmr.lambda":
+    "Memory Search MMR Lambda",
+  "agents.defaults.memorySearch.query.hybrid.temporalDecay.enabled":
+    "Memory Search Temporal Decay",
   "agents.defaults.memorySearch.query.hybrid.temporalDecay.halfLifeDays":
     "Memory Search Temporal Decay Half-life (Days)",
   "agents.defaults.memorySearch.cache.enabled": "Memory Search Embedding Cache",
-  "agents.defaults.memorySearch.cache.maxEntries": "Memory Search Embedding Cache Max Entries",
+  "agents.defaults.memorySearch.cache.maxEntries":
+    "Memory Search Embedding Cache Max Entries",
   memory: "Memory",
   "memory.backend": "Memory Backend",
   "memory.citations": "Memory Citations Mode",
@@ -387,7 +414,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "models.providers.*.apiKey": "Model Provider API Key",
   "models.providers.*.auth": "Model Provider Auth Mode",
   "models.providers.*.api": "Model Provider API Adapter",
-  "models.providers.*.injectNumCtxForOpenAICompat": "Model Provider Inject num_ctx (OpenAI Compat)",
+  "models.providers.*.injectNumCtxForOpenAICompat":
+    "Model Provider Inject num_ctx (OpenAI Compat)",
   "models.providers.*.headers": "Model Provider Headers",
   "models.providers.*.authHeader": "Model Provider Authorization Header",
   "models.providers.*.models": "Model Provider Model List",
@@ -395,8 +423,10 @@ export const FIELD_LABELS: Record<string, string> = {
   "models.bedrockDiscovery.enabled": "Bedrock Discovery Enabled",
   "models.bedrockDiscovery.region": "Bedrock Discovery Region",
   "models.bedrockDiscovery.providerFilter": "Bedrock Discovery Provider Filter",
-  "models.bedrockDiscovery.refreshInterval": "Bedrock Discovery Refresh Interval (s)",
-  "models.bedrockDiscovery.defaultContextWindow": "Bedrock Default Context Window",
+  "models.bedrockDiscovery.refreshInterval":
+    "Bedrock Discovery Refresh Interval (s)",
+  "models.bedrockDiscovery.defaultContextWindow":
+    "Bedrock Default Context Window",
   "models.bedrockDiscovery.defaultMaxTokens": "Bedrock Default Max Tokens",
   "auth.cooldowns.billingBackoffHours": "Billing Backoff (hours)",
   "auth.cooldowns.billingBackoffHoursByProvider": "Billing Backoff Overrides",
@@ -419,26 +449,35 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.compaction": "Compaction",
   "agents.defaults.compaction.mode": "Compaction Mode",
   "agents.defaults.compaction.reserveTokens": "Compaction Reserve Tokens",
-  "agents.defaults.compaction.keepRecentTokens": "Compaction Keep Recent Tokens",
-  "agents.defaults.compaction.reserveTokensFloor": "Compaction Reserve Token Floor",
+  "agents.defaults.compaction.keepRecentTokens":
+    "Compaction Keep Recent Tokens",
+  "agents.defaults.compaction.reserveTokensFloor":
+    "Compaction Reserve Token Floor",
   "agents.defaults.compaction.maxHistoryShare": "Compaction Max History Share",
   "agents.defaults.compaction.identifierPolicy": "Compaction Identifier Policy",
-  "agents.defaults.compaction.identifierInstructions": "Compaction Identifier Instructions",
+  "agents.defaults.compaction.identifierInstructions":
+    "Compaction Identifier Instructions",
   "agents.defaults.compaction.memoryFlush": "Compaction Memory Flush",
-  "agents.defaults.compaction.memoryFlush.enabled": "Compaction Memory Flush Enabled",
+  "agents.defaults.compaction.memoryFlush.enabled":
+    "Compaction Memory Flush Enabled",
   "agents.defaults.compaction.memoryFlush.softThresholdTokens":
     "Compaction Memory Flush Soft Threshold",
   "agents.defaults.compaction.memoryFlush.forceFlushTranscriptBytes":
     "Compaction Memory Flush Transcript Size Threshold",
-  "agents.defaults.compaction.memoryFlush.prompt": "Compaction Memory Flush Prompt",
-  "agents.defaults.compaction.memoryFlush.systemPrompt": "Compaction Memory Flush System Prompt",
+  "agents.defaults.compaction.memoryFlush.prompt":
+    "Compaction Memory Flush Prompt",
+  "agents.defaults.compaction.memoryFlush.systemPrompt":
+    "Compaction Memory Flush System Prompt",
   "agents.defaults.embeddedPi": "Embedded Pi",
-  "agents.defaults.embeddedPi.projectSettingsPolicy": "Embedded Pi Project Settings Policy",
+  "agents.defaults.embeddedPi.projectSettingsPolicy":
+    "Embedded Pi Project Settings Policy",
   "agents.defaults.heartbeat.directPolicy": "Heartbeat Direct Policy",
   "agents.list.*.heartbeat.directPolicy": "Heartbeat Direct Policy",
-  "agents.defaults.heartbeat.suppressToolErrorWarnings": "Heartbeat Suppress Tool Error Warnings",
+  "agents.defaults.heartbeat.suppressToolErrorWarnings":
+    "Heartbeat Suppress Tool Error Warnings",
   "agents.defaults.sandbox.browser.network": "Sandbox Browser Network",
-  "agents.defaults.sandbox.browser.cdpSourceRange": "Sandbox Browser CDP Source Port Range",
+  "agents.defaults.sandbox.browser.cdpSourceRange":
+    "Sandbox Browser CDP Source Port Range",
   "agents.defaults.sandbox.docker.dangerouslyAllowContainerNamespaceJoin":
     "Sandbox Docker Allow Container Namespace Join",
   commands: "Commands",
@@ -465,7 +504,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "browser.snapshotDefaults.mode": "Browser Snapshot Mode",
   "browser.ssrfPolicy": "Browser SSRF Policy",
   "browser.ssrfPolicy.allowPrivateNetwork": "Browser Allow Private Network",
-  "browser.ssrfPolicy.dangerouslyAllowPrivateNetwork": "Browser Dangerously Allow Private Network",
+  "browser.ssrfPolicy.dangerouslyAllowPrivateNetwork":
+    "Browser Dangerously Allow Private Network",
   "browser.ssrfPolicy.allowedHostnames": "Browser Allowed Hostnames",
   "browser.ssrfPolicy.hostnameAllowlist": "Browser Hostname Allowlist",
   "browser.remoteCdpTimeoutMs": "Remote CDP Timeout (ms)",
@@ -499,7 +539,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "session.sendPolicy.rules[].match.channel": "Session Send Rule Channel",
   "session.sendPolicy.rules[].match.chatType": "Session Send Rule Chat Type",
   "session.sendPolicy.rules[].match.keyPrefix": "Session Send Rule Key Prefix",
-  "session.sendPolicy.rules[].match.rawKeyPrefix": "Session Send Rule Raw Key Prefix",
+  "session.sendPolicy.rules[].match.rawKeyPrefix":
+    "Session Send Rule Raw Key Prefix",
   "session.agentToAgent": "Session Agent-to-Agent",
   "session.agentToAgent.maxPingPongTurns": "Agent-to-Agent Ping-Pong Turns",
   "session.threadBindings": "Session Thread Bindings",
@@ -512,7 +553,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "session.maintenance.pruneDays": "Session Prune Days (Deprecated)",
   "session.maintenance.maxEntries": "Session Max Entries",
   "session.maintenance.rotateBytes": "Session Rotate Size",
-  "session.maintenance.resetArchiveRetention": "Session Reset Archive Retention",
+  "session.maintenance.resetArchiveRetention":
+    "Session Reset Archive Retention",
   "session.maintenance.maxDiskBytes": "Session Max Disk Budget",
   "session.maintenance.highWaterBytes": "Session Disk High-water Target",
   cron: "Cron",
@@ -553,7 +595,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "hooks.mappings[].messageTemplate": "Hook Mapping Message Template",
   "hooks.mappings[].textTemplate": "Hook Mapping Text Template",
   "hooks.mappings[].deliver": "Hook Mapping Deliver Reply",
-  "hooks.mappings[].allowUnsafeExternalContent": "Hook Mapping Allow Unsafe External Content",
+  "hooks.mappings[].allowUnsafeExternalContent":
+    "Hook Mapping Allow Unsafe External Content",
   "hooks.mappings[].channel": "Hook Mapping Delivery Channel",
   "hooks.mappings[].to": "Hook Mapping Delivery Destination",
   "hooks.mappings[].model": "Hook Mapping Model Override",
@@ -572,7 +615,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "hooks.gmail.includeBody": "Gmail Hook Include Body",
   "hooks.gmail.maxBytes": "Gmail Hook Max Body Bytes",
   "hooks.gmail.renewEveryMinutes": "Gmail Hook Renew Interval (min)",
-  "hooks.gmail.allowUnsafeExternalContent": "Gmail Hook Allow Unsafe External Content",
+  "hooks.gmail.allowUnsafeExternalContent":
+    "Gmail Hook Allow Unsafe External Content",
   "hooks.gmail.serve": "Gmail Hook Local Server",
   "hooks.gmail.serve.bind": "Gmail Hook Server Bind Address",
   "hooks.gmail.serve.port": "Gmail Hook Server Port",
@@ -703,27 +747,37 @@ export const FIELD_LABELS: Record<string, string> = {
   "channels.discord.streamMode": "Discord Stream Mode (Legacy)",
   "channels.discord.draftChunk.minChars": "Discord Draft Chunk Min Chars",
   "channels.discord.draftChunk.maxChars": "Discord Draft Chunk Max Chars",
-  "channels.discord.draftChunk.breakPreference": "Discord Draft Chunk Break Preference",
+  "channels.discord.draftChunk.breakPreference":
+    "Discord Draft Chunk Break Preference",
   "channels.discord.retry.attempts": "Discord Retry Attempts",
   "channels.discord.retry.minDelayMs": "Discord Retry Min Delay (ms)",
   "channels.discord.retry.maxDelayMs": "Discord Retry Max Delay (ms)",
   "channels.discord.retry.jitter": "Discord Retry Jitter",
   "channels.discord.maxLinesPerMessage": "Discord Max Lines Per Message",
-  "channels.discord.eventQueue.listenerTimeout": "Discord EventQueue Listener Timeout (ms)",
-  "channels.discord.eventQueue.maxQueueSize": "Discord EventQueue Max Queue Size",
-  "channels.discord.eventQueue.maxConcurrency": "Discord EventQueue Max Concurrency",
+  "channels.discord.eventQueue.listenerTimeout":
+    "Discord EventQueue Listener Timeout (ms)",
+  "channels.discord.eventQueue.maxQueueSize":
+    "Discord EventQueue Max Queue Size",
+  "channels.discord.eventQueue.maxConcurrency":
+    "Discord EventQueue Max Concurrency",
   "channels.discord.threadBindings.enabled": "Discord Thread Binding Enabled",
-  "channels.discord.threadBindings.idleHours": "Discord Thread Binding Idle Timeout (hours)",
-  "channels.discord.threadBindings.maxAgeHours": "Discord Thread Binding Max Age (hours)",
-  "channels.discord.threadBindings.spawnSubagentSessions": "Discord Thread-Bound Subagent Spawn",
-  "channels.discord.threadBindings.spawnAcpSessions": "Discord Thread-Bound ACP Spawn",
-  "channels.discord.ui.components.accentColor": "Discord Component Accent Color",
+  "channels.discord.threadBindings.idleHours":
+    "Discord Thread Binding Idle Timeout (hours)",
+  "channels.discord.threadBindings.maxAgeHours":
+    "Discord Thread Binding Max Age (hours)",
+  "channels.discord.threadBindings.spawnSubagentSessions":
+    "Discord Thread-Bound Subagent Spawn",
+  "channels.discord.threadBindings.spawnAcpSessions":
+    "Discord Thread-Bound ACP Spawn",
+  "channels.discord.ui.components.accentColor":
+    "Discord Component Accent Color",
   "channels.discord.intents.presence": "Discord Presence Intent",
   "channels.discord.intents.guildMembers": "Discord Guild Members Intent",
   "channels.discord.voice.enabled": "Discord Voice Enabled",
   "channels.discord.voice.autoJoin": "Discord Voice Auto-Join",
   "channels.discord.voice.daveEncryption": "Discord Voice DAVE Encryption",
-  "channels.discord.voice.decryptionFailureTolerance": "Discord Voice Decrypt Failure Tolerance",
+  "channels.discord.voice.decryptionFailureTolerance":
+    "Discord Voice Decrypt Failure Tolerance",
   "channels.discord.voice.tts": "Discord Voice Text-to-Speech",
   "channels.discord.pluralkit.enabled": "Discord PluralKit Enabled",
   "channels.discord.pluralkit.token": "Discord PluralKit Token",
@@ -747,7 +801,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "channels.slack.streamMode": "Slack Stream Mode (Legacy)",
   "channels.slack.thread.historyScope": "Slack Thread History Scope",
   "channels.slack.thread.inheritParent": "Slack Thread Parent Inheritance",
-  "channels.slack.thread.initialHistoryLimit": "Slack Thread Initial History Limit",
+  "channels.slack.thread.initialHistoryLimit":
+    "Slack Thread Initial History Limit",
   "channels.mattermost.botToken": "Mattermost Bot Token",
   "channels.mattermost.baseUrl": "Mattermost Base URL",
   "channels.mattermost.configWrites": "Mattermost Config Writes",
@@ -761,7 +816,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.list[].heartbeat.suppressToolErrorWarnings":
     "Agent Heartbeat Suppress Tool Error Warnings",
   "agents.list[].sandbox.browser.network": "Agent Sandbox Browser Network",
-  "agents.list[].sandbox.browser.cdpSourceRange": "Agent Sandbox Browser CDP Source Port Range",
+  "agents.list[].sandbox.browser.cdpSourceRange":
+    "Agent Sandbox Browser CDP Source Port Range",
   "agents.list[].sandbox.docker.dangerouslyAllowContainerNamespaceJoin":
     "Agent Sandbox Docker Allow Container Namespace Join",
   "discovery.mdns.mode": "mDNS Discovery Mode",

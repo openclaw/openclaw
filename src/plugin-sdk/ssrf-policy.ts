@@ -21,7 +21,9 @@ function isHostnameAllowedBySuffixAllowlist(
     return true;
   }
   const normalized = hostname.toLowerCase();
-  return allowlist.some((entry) => normalized === entry || normalized.endsWith(`.${entry}`));
+  return allowlist.some(
+    (entry) => normalized === entry || normalized.endsWith(`.${entry}`),
+  );
 }
 
 export function normalizeHostnameSuffixAllowlist(

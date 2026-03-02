@@ -62,14 +62,18 @@ export async function resolveTargetIdAfterNavigate(opts: {
       // Prefer a URL match whose targetId differs from the old one
       // to avoid picking a pre-existing tab when multiple share the URL.
       const byUrl = refreshed.filter((t) => t.url === opts.navigatedUrl);
-      const replaced = byUrl.find((t) => t.targetId !== opts.oldTargetId) ?? byUrl[0];
+      const replaced =
+        byUrl.find((t) => t.targetId !== opts.oldTargetId) ?? byUrl[0];
       if (replaced) {
         currentTargetId = replaced.targetId;
       } else {
         await new Promise((r) => setTimeout(r, 800));
         const retried = await opts.listTabs();
         const match =
-          retried.find((t) => t.url === opts.navigatedUrl && t.targetId !== opts.oldTargetId) ??
+          retried.find(
+            (t) =>
+              t.url === opts.navigatedUrl && t.targetId !== opts.oldTargetId,
+          ) ??
           retried.find((t) => t.url === opts.navigatedUrl) ??
           (retried.length === 1 ? retried[0] : null);
         if (match) {
@@ -152,7 +156,11 @@ export function registerBrowserAgentSnapshotRoutes(
     const type = body.type === "jpeg" ? "jpeg" : "png";
 
     if (fullPage && (ref || element)) {
-      return jsonError(res, 400, "fullPage is not supported for element screenshots");
+      return jsonError(
+        res,
+        400,
+        "fullPage is not supported for element screenshots",
+      );
     }
 
     await withRouteTabContext({
@@ -211,19 +219,30 @@ export function registerBrowserAgentSnapshotRoutes(
     if (!profileCtx) {
       return;
     }
-    const targetId = typeof req.query.targetId === "string" ? req.query.targetId.trim() : "";
+    const targetId =
+      typeof req.query.targetId === "string" ? req.query.targetId.trim() : "";
     const mode = req.query.mode === "efficient" ? "efficient" : undefined;
     const labels = toBoolean(req.query.labels) ?? undefined;
     const explicitFormat =
-      req.query.format === "aria" ? "aria" : req.query.format === "ai" ? "ai" : undefined;
-    const format = explicitFormat ?? (mode ? "ai" : (await getPwAiModule()) ? "ai" : "aria");
-    const limitRaw = typeof req.query.limit === "string" ? Number(req.query.limit) : undefined;
+      req.query.format === "aria"
+        ? "aria"
+        : req.query.format === "ai"
+          ? "ai"
+          : undefined;
+    const format =
+      explicitFormat ?? (mode ? "ai" : (await getPwAiModule()) ? "ai" : "aria");
+    const limitRaw =
+      typeof req.query.limit === "string" ? Number(req.query.limit) : undefined;
     const hasMaxChars = Object.hasOwn(req.query, "maxChars");
     const maxCharsRaw =
-      typeof req.query.maxChars === "string" ? Number(req.query.maxChars) : undefined;
+      typeof req.query.maxChars === "string"
+        ? Number(req.query.maxChars)
+        : undefined;
     const limit = Number.isFinite(limitRaw) ? limitRaw : undefined;
     const maxChars =
-      typeof maxCharsRaw === "number" && Number.isFinite(maxCharsRaw) && maxCharsRaw > 0
+      typeof maxCharsRaw === "number" &&
+      Number.isFinite(maxCharsRaw) &&
+      maxCharsRaw > 0
         ? Math.floor(maxCharsRaw)
         : undefined;
     const resolvedMaxChars =
@@ -239,11 +258,17 @@ export function registerBrowserAgentSnapshotRoutes(
     const depthRaw = toNumber(req.query.depth);
     const refsModeRaw = toStringOrEmpty(req.query.refs).trim();
     const refsMode: "aria" | "role" | undefined =
-      refsModeRaw === "aria" ? "aria" : refsModeRaw === "role" ? "role" : undefined;
-    const interactive = interactiveRaw ?? (mode === "efficient" ? true : undefined);
+      refsModeRaw === "aria"
+        ? "aria"
+        : refsModeRaw === "role"
+          ? "role"
+          : undefined;
+    const interactive =
+      interactiveRaw ?? (mode === "efficient" ? true : undefined);
     const compact = compactRaw ?? (mode === "efficient" ? true : undefined);
     const depth =
-      depthRaw ?? (mode === "efficient" ? DEFAULT_AI_SNAPSHOT_EFFICIENT_DEPTH : undefined);
+      depthRaw ??
+      (mode === "efficient" ? DEFAULT_AI_SNAPSHOT_EFFICIENT_DEPTH : undefined);
     const selector = toStringOrEmpty(req.query.selector);
     const frameSelector = toStringOrEmpty(req.query.frame);
     const selectorValue = selector.trim() || undefined;
@@ -286,7 +311,9 @@ export function registerBrowserAgentSnapshotRoutes(
               .snapshotAiViaPlaywright({
                 cdpUrl: profileCtx.profile.cdpUrl,
                 targetId: tab.targetId,
-                ...(typeof resolvedMaxChars === "number" ? { maxChars: resolvedMaxChars } : {}),
+                ...(typeof resolvedMaxChars === "number"
+                  ? { maxChars: resolvedMaxChars }
+                  : {}),
               })
               .catch(async (err) => {
                 // Public-API fallback when Playwright's private _snapshotForAI is missing.
@@ -313,7 +340,9 @@ export function registerBrowserAgentSnapshotRoutes(
             "browser",
             DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES,
           );
-          const imageType = normalized.contentType?.includes("jpeg") ? "jpeg" : "png";
+          const imageType = normalized.contentType?.includes("jpeg")
+            ? "jpeg"
+            : "png";
           return res.json({
             ok: true,
             format,

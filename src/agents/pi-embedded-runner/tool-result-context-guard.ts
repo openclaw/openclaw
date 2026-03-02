@@ -7,7 +7,8 @@ const SINGLE_TOOL_RESULT_CONTEXT_SHARE = 0.5;
 const TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE = 2;
 const IMAGE_CHAR_ESTIMATE = 8_000;
 
-export const CONTEXT_LIMIT_TRUNCATION_NOTICE = "[truncated: output exceeded context limit]";
+export const CONTEXT_LIMIT_TRUNCATION_NOTICE =
+  "[truncated: output exceeded context limit]";
 const CONTEXT_LIMIT_TRUNCATION_SUFFIX = `\n${CONTEXT_LIMIT_TRUNCATION_NOTICE}`;
 
 export const PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER =
@@ -25,11 +26,19 @@ type GuardableAgentRecord = {
 };
 
 function isTextBlock(block: unknown): block is { type: "text"; text: string } {
-  return !!block && typeof block === "object" && (block as { type?: unknown }).type === "text";
+  return (
+    !!block &&
+    typeof block === "object" &&
+    (block as { type?: unknown }).type === "text"
+  );
 }
 
 function isImageBlock(block: unknown): boolean {
-  return !!block && typeof block === "object" && (block as { type?: unknown }).type === "image";
+  return (
+    !!block &&
+    typeof block === "object" &&
+    (block as { type?: unknown }).type === "image"
+  );
 }
 
 function estimateUnknownChars(value: unknown): number {
@@ -116,7 +125,10 @@ function estimateMessageChars(msg: AgentMessage): number {
         };
         if (typed.type === "text" && typeof typed.text === "string") {
           chars += typed.text.length;
-        } else if (typed.type === "thinking" && typeof typed.thinking === "string") {
+        } else if (
+          typed.type === "thinking" &&
+          typeof typed.thinking === "string"
+        ) {
           chars += typed.thinking.length;
         } else if (typed.type === "toolCall") {
           try {
@@ -168,7 +180,10 @@ function truncateTextToBudget(text: string, maxChars: number): string {
     return CONTEXT_LIMIT_TRUNCATION_NOTICE;
   }
 
-  const bodyBudget = Math.max(0, maxChars - CONTEXT_LIMIT_TRUNCATION_SUFFIX.length);
+  const bodyBudget = Math.max(
+    0,
+    maxChars - CONTEXT_LIMIT_TRUNCATION_SUFFIX.length,
+  );
   if (bodyBudget <= 0) {
     return CONTEXT_LIMIT_TRUNCATION_NOTICE;
   }
@@ -185,7 +200,9 @@ function truncateTextToBudget(text: string, maxChars: number): string {
 function replaceToolResultText(msg: AgentMessage, text: string): AgentMessage {
   const content = (msg as { content?: unknown }).content;
   const replacementContent =
-    typeof content === "string" || content === undefined ? text : [{ type: "text", text }];
+    typeof content === "string" || content === undefined
+      ? text
+      : [{ type: "text", text }];
 
   const sourceRecord = msg as unknown as Record<string, unknown>;
   const { details: _details, ...rest } = sourceRecord;
@@ -195,7 +212,10 @@ function replaceToolResultText(msg: AgentMessage, text: string): AgentMessage {
   } as AgentMessage;
 }
 
-function truncateToolResultToChars(msg: AgentMessage, maxChars: number): AgentMessage {
+function truncateToolResultToChars(
+  msg: AgentMessage,
+  maxChars: number,
+): AgentMessage {
   if (!isToolResultMessage(msg)) {
     return msg;
   }
@@ -235,7 +255,10 @@ function compactExistingToolResultsInPlace(params: {
       continue;
     }
 
-    const compacted = replaceToolResultText(msg, PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
+    const compacted = replaceToolResultText(
+      msg,
+      PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER,
+    );
     applyMessageMutationInPlace(msg, compacted);
     const after = estimateMessageChars(msg);
     if (after >= before) {
@@ -251,7 +274,10 @@ function compactExistingToolResultsInPlace(params: {
   return reduced;
 }
 
-function applyMessageMutationInPlace(target: AgentMessage, source: AgentMessage): void {
+function applyMessageMutationInPlace(
+  target: AgentMessage,
+  source: AgentMessage,
+): void {
   if (target === source) {
     return;
   }
@@ -278,7 +304,10 @@ function enforceToolResultContextBudgetInPlace(params: {
     if (!isToolResultMessage(message)) {
       continue;
     }
-    const truncated = truncateToolResultToChars(message, maxSingleToolResultChars);
+    const truncated = truncateToolResultToChars(
+      message,
+      maxSingleToolResultChars,
+    );
     applyMessageMutationInPlace(message, truncated);
   }
 
@@ -298,15 +327,24 @@ export function installToolResultContextGuard(params: {
   agent: GuardableAgent;
   contextWindowTokens: number;
 }): () => void {
-  const contextWindowTokens = Math.max(1, Math.floor(params.contextWindowTokens));
+  const contextWindowTokens = Math.max(
+    1,
+    Math.floor(params.contextWindowTokens),
+  );
   const contextBudgetChars = Math.max(
     1_024,
-    Math.floor(contextWindowTokens * CHARS_PER_TOKEN_ESTIMATE * CONTEXT_INPUT_HEADROOM_RATIO),
+    Math.floor(
+      contextWindowTokens *
+        CHARS_PER_TOKEN_ESTIMATE *
+        CONTEXT_INPUT_HEADROOM_RATIO,
+    ),
   );
   const maxSingleToolResultChars = Math.max(
     1_024,
     Math.floor(
-      contextWindowTokens * TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE * SINGLE_TOOL_RESULT_CONTEXT_SHARE,
+      contextWindowTokens *
+        TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE *
+        SINGLE_TOOL_RESULT_CONTEXT_SHARE,
     ),
   );
 
@@ -315,7 +353,10 @@ export function installToolResultContextGuard(params: {
   const mutableAgent = params.agent as GuardableAgentRecord;
   const originalTransformContext = mutableAgent.transformContext;
 
-  mutableAgent.transformContext = (async (messages: AgentMessage[], signal: AbortSignal) => {
+  mutableAgent.transformContext = (async (
+    messages: AgentMessage[],
+    signal: AbortSignal,
+  ) => {
     const transformed = originalTransformContext
       ? await originalTransformContext.call(mutableAgent, messages, signal)
       : messages;

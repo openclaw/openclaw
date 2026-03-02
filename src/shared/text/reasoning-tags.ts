@@ -4,7 +4,8 @@ export type ReasoningTagTrim = "none" | "start" | "both";
 
 const QUICK_TAG_RE = /<\s*\/?\s*(?:think(?:ing)?|thought|antthinking|final)\b/i;
 const FINAL_TAG_RE = /<\s*\/?\s*final\b[^<>]*>/gi;
-const THINKING_TAG_RE = /<\s*(\/?)\s*(?:think(?:ing)?|thought|antthinking)\b[^<>]*>/gi;
+const THINKING_TAG_RE =
+  /<\s*(\/?)\s*(?:think(?:ing)?|thought|antthinking)\b[^<>]*>/gi;
 
 function applyTrim(value: string, mode: ReasoningTagTrim): string {
   if (mode === "none") {
@@ -36,7 +37,11 @@ export function stripReasoningTagsFromText(
   let cleaned = text;
   if (FINAL_TAG_RE.test(cleaned)) {
     FINAL_TAG_RE.lastIndex = 0;
-    const finalMatches: Array<{ start: number; length: number; inCode: boolean }> = [];
+    const finalMatches: Array<{
+      start: number;
+      length: number;
+      inCode: boolean;
+    }> = [];
     const preCodeRegions = findCodeRegions(cleaned);
     for (const match of cleaned.matchAll(FINAL_TAG_RE)) {
       const start = match.index ?? 0;

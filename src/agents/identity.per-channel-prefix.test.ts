@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveResponsePrefix, resolveEffectiveMessagesConfig } from "./identity.js";
+import {
+  resolveResponsePrefix,
+  resolveEffectiveMessagesConfig,
+} from "./identity.js";
 
 const makeConfig = <T extends OpenClawConfig>(cfg: T) => cfg;
 
@@ -44,7 +47,9 @@ describe("resolveResponsePrefix with per-channel override", () => {
           whatsapp: { responsePrefix: "[WA] " },
         },
       } satisfies OpenClawConfig);
-      expect(resolveResponsePrefix(cfg, "main", { channel: "whatsapp" })).toBe("[WA] ");
+      expect(resolveResponsePrefix(cfg, "main", { channel: "whatsapp" })).toBe(
+        "[WA] ",
+      );
     });
 
     it("falls through to global when channel prefix is undefined", () => {
@@ -54,7 +59,9 @@ describe("resolveResponsePrefix with per-channel override", () => {
           whatsapp: {},
         },
       } satisfies OpenClawConfig);
-      expect(resolveResponsePrefix(cfg, "main", { channel: "whatsapp" })).toBe("[Global] ");
+      expect(resolveResponsePrefix(cfg, "main", { channel: "whatsapp" })).toBe(
+        "[Global] ",
+      );
     });
 
     it("channel empty string stops cascade (no global prefix applied)", () => {
@@ -64,7 +71,9 @@ describe("resolveResponsePrefix with per-channel override", () => {
           telegram: { responsePrefix: "" },
         },
       } satisfies OpenClawConfig);
-      expect(resolveResponsePrefix(cfg, "main", { channel: "telegram" })).toBe("");
+      expect(resolveResponsePrefix(cfg, "main", { channel: "telegram" })).toBe(
+        "",
+      );
     });
 
     it("resolves 'auto' at channel level to identity name", () => {
@@ -76,7 +85,9 @@ describe("resolveResponsePrefix with per-channel override", () => {
           whatsapp: { responsePrefix: "auto" },
         },
       } satisfies OpenClawConfig);
-      expect(resolveResponsePrefix(cfg, "main", { channel: "whatsapp" })).toBe("[MyBot]");
+      expect(resolveResponsePrefix(cfg, "main", { channel: "whatsapp" })).toBe(
+        "[MyBot]",
+      );
     });
 
     it("different channels get different prefixes", () => {
@@ -87,9 +98,15 @@ describe("resolveResponsePrefix with per-channel override", () => {
           discord: { responsePrefix: "🤖 " },
         },
       } satisfies OpenClawConfig);
-      expect(resolveResponsePrefix(cfg, "main", { channel: "whatsapp" })).toBe("[WA Bot] ");
-      expect(resolveResponsePrefix(cfg, "main", { channel: "telegram" })).toBe("");
-      expect(resolveResponsePrefix(cfg, "main", { channel: "discord" })).toBe("🤖 ");
+      expect(resolveResponsePrefix(cfg, "main", { channel: "whatsapp" })).toBe(
+        "[WA Bot] ",
+      );
+      expect(resolveResponsePrefix(cfg, "main", { channel: "telegram" })).toBe(
+        "",
+      );
+      expect(resolveResponsePrefix(cfg, "main", { channel: "discord" })).toBe(
+        "🤖 ",
+      );
     });
 
     it("returns undefined when channel not in config", () => {
@@ -98,7 +115,9 @@ describe("resolveResponsePrefix with per-channel override", () => {
           whatsapp: { responsePrefix: "[WA] " },
         },
       } satisfies OpenClawConfig);
-      expect(resolveResponsePrefix(cfg, "main", { channel: "telegram" })).toBeUndefined();
+      expect(
+        resolveResponsePrefix(cfg, "main", { channel: "telegram" }),
+      ).toBeUndefined();
     });
   });
 
@@ -118,7 +137,10 @@ describe("resolveResponsePrefix with per-channel override", () => {
         },
       } satisfies OpenClawConfig);
       expect(
-        resolveResponsePrefix(cfg, "main", { channel: "whatsapp", accountId: "business" }),
+        resolveResponsePrefix(cfg, "main", {
+          channel: "whatsapp",
+          accountId: "business",
+        }),
       ).toBe("[Biz] ");
     });
 
@@ -134,7 +156,10 @@ describe("resolveResponsePrefix with per-channel override", () => {
         },
       } satisfies OpenClawConfig);
       expect(
-        resolveResponsePrefix(cfg, "main", { channel: "whatsapp", accountId: "business" }),
+        resolveResponsePrefix(cfg, "main", {
+          channel: "whatsapp",
+          accountId: "business",
+        }),
       ).toBe("[WA] ");
     });
 
@@ -150,7 +175,10 @@ describe("resolveResponsePrefix with per-channel override", () => {
         },
       } satisfies OpenClawConfig);
       expect(
-        resolveResponsePrefix(cfg, "main", { channel: "whatsapp", accountId: "business" }),
+        resolveResponsePrefix(cfg, "main", {
+          channel: "whatsapp",
+          accountId: "business",
+        }),
       ).toBe("[Global] ");
     });
 
@@ -167,7 +195,10 @@ describe("resolveResponsePrefix with per-channel override", () => {
         },
       } satisfies OpenClawConfig);
       expect(
-        resolveResponsePrefix(cfg, "main", { channel: "whatsapp", accountId: "business" }),
+        resolveResponsePrefix(cfg, "main", {
+          channel: "whatsapp",
+          accountId: "business",
+        }),
       ).toBe("");
     });
 
@@ -185,7 +216,10 @@ describe("resolveResponsePrefix with per-channel override", () => {
         },
       } satisfies OpenClawConfig);
       expect(
-        resolveResponsePrefix(cfg, "main", { channel: "whatsapp", accountId: "business" }),
+        resolveResponsePrefix(cfg, "main", {
+          channel: "whatsapp",
+          accountId: "business",
+        }),
       ).toBe("[BizBot]");
     });
 
@@ -202,10 +236,16 @@ describe("resolveResponsePrefix with per-channel override", () => {
         },
       } satisfies OpenClawConfig);
       expect(
-        resolveResponsePrefix(cfg, "main", { channel: "whatsapp", accountId: "business" }),
+        resolveResponsePrefix(cfg, "main", {
+          channel: "whatsapp",
+          accountId: "business",
+        }),
       ).toBe("[Biz] ");
       expect(
-        resolveResponsePrefix(cfg, "main", { channel: "whatsapp", accountId: "personal" }),
+        resolveResponsePrefix(cfg, "main", {
+          channel: "whatsapp",
+          accountId: "personal",
+        }),
       ).toBe("[Personal] ");
     });
 
@@ -221,7 +261,10 @@ describe("resolveResponsePrefix with per-channel override", () => {
         },
       } satisfies OpenClawConfig);
       expect(
-        resolveResponsePrefix(cfg, "main", { channel: "whatsapp", accountId: "unknown" }),
+        resolveResponsePrefix(cfg, "main", {
+          channel: "whatsapp",
+          accountId: "unknown",
+        }),
       ).toBe("[WA] ");
     });
   });
@@ -248,25 +291,35 @@ describe("resolveResponsePrefix with per-channel override", () => {
 
     it("L1: account prefix wins when all levels set", () => {
       expect(
-        resolveResponsePrefix(fullCfg, "main", { channel: "whatsapp", accountId: "business" }),
+        resolveResponsePrefix(fullCfg, "main", {
+          channel: "whatsapp",
+          accountId: "business",
+        }),
       ).toBe("[L1-Account] ");
     });
 
     it("L2: channel prefix when account undefined", () => {
       expect(
-        resolveResponsePrefix(fullCfg, "main", { channel: "whatsapp", accountId: "default" }),
+        resolveResponsePrefix(fullCfg, "main", {
+          channel: "whatsapp",
+          accountId: "default",
+        }),
       ).toBe("[L2-Channel] ");
     });
 
     it("L4: global prefix when channel has no prefix", () => {
-      expect(resolveResponsePrefix(fullCfg, "main", { channel: "telegram" })).toBe("[L4-Global] ");
+      expect(
+        resolveResponsePrefix(fullCfg, "main", { channel: "telegram" }),
+      ).toBe("[L4-Global] ");
     });
 
     it("undefined: no prefix at any level", () => {
       const cfg = makeConfig({
         channels: { telegram: {} },
       } satisfies OpenClawConfig);
-      expect(resolveResponsePrefix(cfg, "main", { channel: "telegram" })).toBeUndefined();
+      expect(
+        resolveResponsePrefix(cfg, "main", { channel: "telegram" }),
+      ).toBeUndefined();
     });
   });
 

@@ -63,7 +63,9 @@ function mockNewChatSendResponse(guid: string) {
 
 describe("send", () => {
   describe("resolveChatGuidForTarget", () => {
-    const resolveHandleTargetGuid = async (data: Array<Record<string, unknown>>) => {
+    const resolveHandleTargetGuid = async (
+      data: Array<Record<string, unknown>>,
+    ) => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
         json: () => Promise.resolve({ data }),
@@ -195,7 +197,10 @@ describe("send", () => {
       const result = await resolveHandleTargetGuid([
         {
           guid: "iMessage;+;group-123",
-          participants: [{ address: "+15551234567" }, { address: "+15550001111" }],
+          participants: [
+            { address: "+15551234567" },
+            { address: "+15550001111" },
+          ],
         },
         {
           guid: "iMessage;-;+15551234567",
@@ -401,9 +406,9 @@ describe("send", () => {
     });
 
     it("throws when serverUrl is missing", async () => {
-      await expect(sendMessageBlueBubbles("+15551234567", "Hello", {})).rejects.toThrow(
-        "serverUrl is required",
-      );
+      await expect(
+        sendMessageBlueBubbles("+15551234567", "Hello", {}),
+      ).rejects.toThrow("serverUrl is required");
     });
 
     it("throws when password is missing", async () => {
@@ -432,10 +437,14 @@ describe("send", () => {
       mockResolvedHandleTarget();
       mockSendResponse({ data: { guid: "msg-uuid-123" } });
 
-      const result = await sendMessageBlueBubbles("+15551234567", "Hello world!", {
-        serverUrl: "http://localhost:1234",
-        password: "test",
-      });
+      const result = await sendMessageBlueBubbles(
+        "+15551234567",
+        "Hello world!",
+        {
+          serverUrl: "http://localhost:1234",
+          password: "test",
+        },
+      );
 
       expect(result.messageId).toBe("msg-uuid-123");
       expect(mockFetch).toHaveBeenCalledTimes(2);
@@ -472,10 +481,14 @@ describe("send", () => {
     it("strips markdown when creating a new chat", async () => {
       mockNewChatSendResponse("new-msg-stripped");
 
-      const result = await sendMessageBlueBubbles("+15550009999", "**Welcome** to the _chat_!", {
-        serverUrl: "http://localhost:1234",
-        password: "test",
-      });
+      const result = await sendMessageBlueBubbles(
+        "+15550009999",
+        "**Welcome** to the _chat_!",
+        {
+          serverUrl: "http://localhost:1234",
+          password: "test",
+        },
+      );
 
       expect(result.messageId).toBe("new-msg-stripped");
 
@@ -489,10 +502,14 @@ describe("send", () => {
     it("creates a new chat when handle target is missing", async () => {
       mockNewChatSendResponse("new-msg-guid");
 
-      const result = await sendMessageBlueBubbles("+15550009999", "Hello new chat", {
-        serverUrl: "http://localhost:1234",
-        password: "test",
-      });
+      const result = await sendMessageBlueBubbles(
+        "+15550009999",
+        "Hello new chat",
+        {
+          serverUrl: "http://localhost:1234",
+          password: "test",
+        },
+      );
 
       expect(result.messageId).toBe("new-msg-guid");
       expect(mockFetch).toHaveBeenCalledTimes(2);
@@ -557,12 +574,16 @@ describe("send", () => {
       mockResolvedHandleTarget();
       mockSendResponse({ data: { guid: "msg-uuid-plain" } });
 
-      const result = await sendMessageBlueBubbles("+15551234567", "Reply fallback", {
-        serverUrl: "http://localhost:1234",
-        password: "test",
-        replyToMessageGuid: "reply-guid-123",
-        replyToPartIndex: 1,
-      });
+      const result = await sendMessageBlueBubbles(
+        "+15551234567",
+        "Reply fallback",
+        {
+          serverUrl: "http://localhost:1234",
+          password: "test",
+          replyToMessageGuid: "reply-guid-123",
+          replyToPartIndex: 1,
+        },
+      );
 
       expect(result.messageId).toBe("msg-uuid-plain");
       const sendCall = mockFetch.mock.calls[1];
@@ -592,7 +613,9 @@ describe("send", () => {
       const sendCall = mockFetch.mock.calls[1];
       const body = JSON.parse(sendCall[1].body);
       expect(body.method).toBe("private-api");
-      expect(body.effectId).toBe("com.apple.MobileSMS.expressivesend.invisibleink");
+      expect(body.effectId).toBe(
+        "com.apple.MobileSMS.expressivesend.invisibleink",
+      );
     });
 
     it("warns and downgrades private-api features when status is unknown", async () => {
@@ -603,16 +626,22 @@ describe("send", () => {
       mockSendResponse({ data: { guid: "msg-uuid-unknown" } });
 
       try {
-        const result = await sendMessageBlueBubbles("+15551234567", "Reply fallback", {
-          serverUrl: "http://localhost:1234",
-          password: "test",
-          replyToMessageGuid: "reply-guid-123",
-          effectId: "invisible ink",
-        });
+        const result = await sendMessageBlueBubbles(
+          "+15551234567",
+          "Reply fallback",
+          {
+            serverUrl: "http://localhost:1234",
+            password: "test",
+            replyToMessageGuid: "reply-guid-123",
+            effectId: "invisible ink",
+          },
+        );
 
         expect(result.messageId).toBe("msg-uuid-unknown");
         expect(runtimeLog).toHaveBeenCalledTimes(1);
-        expect(runtimeLog.mock.calls[0]?.[0]).toContain("Private API status unknown");
+        expect(runtimeLog.mock.calls[0]?.[0]).toContain(
+          "Private API status unknown",
+        );
         expect(warnSpy).not.toHaveBeenCalled();
 
         const sendCall = mockFetch.mock.calls[1];

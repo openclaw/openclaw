@@ -29,7 +29,9 @@ describe("formatMediaUnderstandingBody", () => {
         },
       ],
     });
-    expect(body).toBe("[Audio]\nUser text:\ncaption here\nTranscript:\ntranscribed");
+    expect(body).toBe(
+      "[Audio]\nUser text:\ncaption here\nTranscript:\ntranscribed",
+    );
   });
 
   it("strips leading media placeholders from user text", () => {
@@ -44,7 +46,9 @@ describe("formatMediaUnderstandingBody", () => {
         },
       ],
     });
-    expect(body).toBe("[Audio]\nUser text:\ncaption here\nTranscript:\ntranscribed");
+    expect(body).toBe(
+      "[Audio]\nUser text:\ncaption here\nTranscript:\ntranscribed",
+    );
   });
 
   it("keeps user text once when multiple outputs exist", () => {

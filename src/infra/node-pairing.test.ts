@@ -64,7 +64,9 @@ describe("node pairing tokens", () => {
       ok: true,
       node: expect.objectContaining({ nodeId: "node-1" }),
     });
-    await expect(verifyNodeToken("node-1", "x".repeat(token.length), baseDir)).resolves.toEqual({
+    await expect(
+      verifyNodeToken("node-1", "x".repeat(token.length), baseDir),
+    ).resolves.toEqual({
       ok: false,
     });
   });
@@ -73,9 +75,13 @@ describe("node pairing tokens", () => {
     const baseDir = await mkdtemp(join(tmpdir(), "openclaw-node-pairing-"));
     const token = await setupPairedNode(baseDir);
     const multibyteToken = "é".repeat(token.length);
-    expect(Buffer.from(multibyteToken).length).not.toBe(Buffer.from(token).length);
+    expect(Buffer.from(multibyteToken).length).not.toBe(
+      Buffer.from(token).length,
+    );
 
-    await expect(verifyNodeToken("node-1", multibyteToken, baseDir)).resolves.toEqual({
+    await expect(
+      verifyNodeToken("node-1", multibyteToken, baseDir),
+    ).resolves.toEqual({
       ok: false,
     });
   });

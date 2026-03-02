@@ -1,9 +1,15 @@
 import type { EventLogEntry } from "./app-events.ts";
 import type { CompactionStatus, FallbackStatus } from "./app-tool-stream.ts";
-import type { CronModelSuggestionsState, CronState } from "./controllers/cron.ts";
+import type {
+  CronModelSuggestionsState,
+  CronState,
+} from "./controllers/cron.ts";
 import type { DevicePairingList } from "./controllers/devices.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
-import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
+import type {
+  ExecApprovalsFile,
+  ExecApprovalsSnapshot,
+} from "./controllers/exec-approvals.ts";
 import type { SkillMessage } from "./controllers/skills.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 import type { Tab } from "./navigation.ts";
@@ -269,13 +275,21 @@ export type AppViewState = {
     handleWhatsAppLogout: () => Promise<void>;
     handleChannelConfigSave: () => Promise<void>;
     handleChannelConfigReload: () => Promise<void>;
-    handleNostrProfileEdit: (accountId: string, profile: NostrProfile | null) => void;
+    handleNostrProfileEdit: (
+      accountId: string,
+      profile: NostrProfile | null,
+    ) => void;
     handleNostrProfileCancel: () => void;
-    handleNostrProfileFieldChange: (field: keyof NostrProfile, value: string) => void;
+    handleNostrProfileFieldChange: (
+      field: keyof NostrProfile,
+      value: string,
+    ) => void;
     handleNostrProfileSave: () => Promise<void>;
     handleNostrProfileImport: () => Promise<void>;
     handleNostrProfileToggleAdvanced: () => void;
-    handleExecApprovalDecision: (decision: "allow-once" | "allow-always" | "deny") => Promise<void>;
+    handleExecApprovalDecision: (
+      decision: "allow-once" | "allow-always" | "deny",
+    ) => Promise<void>;
     handleGatewayUrlConfirm: () => void;
     handleGatewayUrlCancel: () => void;
     handleConfigLoad: () => Promise<void>;
@@ -307,7 +321,10 @@ export type AppViewState = {
     setPassword: (next: string) => void;
     setSessionKey: (next: string) => void;
     setChatMessage: (next: string) => void;
-    handleSendChat: (messageOverride?: string, opts?: { restoreDraft?: boolean }) => Promise<void>;
+    handleSendChat: (
+      messageOverride?: string,
+      opts?: { restoreDraft?: boolean },
+    ) => Promise<void>;
     handleAbortChat: () => Promise<void>;
     removeQueuedMessage: (id: string) => void;
     handleChatScroll: (event: Event) => void;

@@ -23,21 +23,27 @@ describe("toSanitizedMarkdownHtml", () => {
   });
 
   it("renders fenced code blocks", () => {
-    const html = toSanitizedMarkdownHtml(["```ts", "console.log(1)", "```"].join("\n"));
+    const html = toSanitizedMarkdownHtml(
+      ["```ts", "console.log(1)", "```"].join("\n"),
+    );
     expect(html).toContain("<pre>");
     expect(html).toContain("<code");
     expect(html).toContain("console.log(1)");
   });
 
   it("preserves img tags with src and alt from markdown images (#15437)", () => {
-    const html = toSanitizedMarkdownHtml("![Alt text](https://example.com/image.png)");
+    const html = toSanitizedMarkdownHtml(
+      "![Alt text](https://example.com/image.png)",
+    );
     expect(html).toContain("<img");
     expect(html).toContain('src="https://example.com/image.png"');
     expect(html).toContain('alt="Alt text"');
   });
 
   it("preserves base64 data URI images (#15437)", () => {
-    const html = toSanitizedMarkdownHtml("![Chart](data:image/png;base64,iVBORw0KGgo=)");
+    const html = toSanitizedMarkdownHtml(
+      "![Chart](data:image/png;base64,iVBORw0KGgo=)",
+    );
     expect(html).toContain("<img");
     expect(html).toContain("data:image/png;base64,");
   });

@@ -13,7 +13,9 @@ describe("mattermost client", () => {
       fetchImpl: fetchImpl as any,
     });
 
-    const result = await client.request<unknown>("/anything", { method: "DELETE" });
+    const result = await client.request<unknown>("/anything", {
+      method: "DELETE",
+    });
     expect(result).toBeUndefined();
   });
 });

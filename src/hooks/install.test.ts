@@ -2,7 +2,15 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import { expectSingleNpmPackIgnoreScriptsCall } from "../test-utils/exec-assertions.js";
 import {
   expectInstallUsesIgnoreScripts,
@@ -12,17 +20,35 @@ import {
 } from "../test-utils/npm-spec-install-test-helpers.js";
 import { isAddressInUseError } from "./gmail-watcher.js";
 
-const fixtureRoot = path.join(os.tmpdir(), `openclaw-hook-install-${randomUUID()}`);
+const fixtureRoot = path.join(
+  os.tmpdir(),
+  `openclaw-hook-install-${randomUUID()}`,
+);
 let tempDirIndex = 0;
 
-const fixturesDir = path.resolve(process.cwd(), "test", "fixtures", "hooks-install");
+const fixturesDir = path.resolve(
+  process.cwd(),
+  "test",
+  "fixtures",
+  "hooks-install",
+);
 const zipHooksBuffer = fs.readFileSync(path.join(fixturesDir, "zip-hooks.zip"));
-const zipTraversalBuffer = fs.readFileSync(path.join(fixturesDir, "zip-traversal.zip"));
+const zipTraversalBuffer = fs.readFileSync(
+  path.join(fixturesDir, "zip-traversal.zip"),
+);
 const tarHooksBuffer = fs.readFileSync(path.join(fixturesDir, "tar-hooks.tar"));
-const tarTraversalBuffer = fs.readFileSync(path.join(fixturesDir, "tar-traversal.tar"));
-const tarEvilIdBuffer = fs.readFileSync(path.join(fixturesDir, "tar-evil-id.tar"));
-const tarReservedIdBuffer = fs.readFileSync(path.join(fixturesDir, "tar-reserved-id.tar"));
-const npmPackHooksBuffer = fs.readFileSync(path.join(fixturesDir, "npm-pack-hooks.tgz"));
+const tarTraversalBuffer = fs.readFileSync(
+  path.join(fixturesDir, "tar-traversal.tar"),
+);
+const tarEvilIdBuffer = fs.readFileSync(
+  path.join(fixturesDir, "tar-evil-id.tar"),
+);
+const tarReservedIdBuffer = fs.readFileSync(
+  path.join(fixturesDir, "tar-reserved-id.tar"),
+);
+const npmPackHooksBuffer = fs.readFileSync(
+  path.join(fixturesDir, "npm-pack-hooks.tgz"),
+);
 
 vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: vi.fn(),
@@ -35,8 +61,11 @@ function makeTempDir() {
 }
 
 const { runCommandWithTimeout } = await import("../process/exec.js");
-const { installHooksFromArchive, installHooksFromNpmSpec, installHooksFromPath } =
-  await import("./install.js");
+const {
+  installHooksFromArchive,
+  installHooksFromNpmSpec,
+  installHooksFromPath,
+} = await import("./install.js");
 
 afterAll(() => {
   try {
@@ -96,7 +125,10 @@ describe("installHooksFromArchive", () => {
       expectedHook: "tar-hook",
     },
   ])("installs hook packs from $name archives", async (tc) => {
-    const fixture = writeArchiveFixture({ fileName: tc.fileName, contents: tc.contents });
+    const fixture = writeArchiveFixture({
+      fileName: tc.fileName,
+      contents: tc.contents,
+    });
     const result = await installHooksFromArchive({
       archivePath: fixture.archivePath,
       hooksDir: fixture.hooksDir,
@@ -108,10 +140,14 @@ describe("installHooksFromArchive", () => {
     }
     expect(result.hookPackId).toBe(tc.expectedPackId);
     expect(result.hooks).toContain(tc.expectedHook);
-    expect(result.targetDir).toBe(path.join(fixture.stateDir, "hooks", tc.expectedPackId));
-    expect(fs.existsSync(path.join(result.targetDir, "hooks", tc.expectedHook, "HOOK.md"))).toBe(
-      true,
+    expect(result.targetDir).toBe(
+      path.join(fixture.stateDir, "hooks", tc.expectedPackId),
     );
+    expect(
+      fs.existsSync(
+        path.join(result.targetDir, "hooks", tc.expectedHook, "HOOK.md"),
+      ),
+    ).toBe(true);
   });
 
   it.each([
@@ -128,12 +164,18 @@ describe("installHooksFromArchive", () => {
       expectedDetail: "escapes destination",
     },
   ])("rejects $name archives with traversal entries", async (tc) => {
-    const fixture = writeArchiveFixture({ fileName: tc.fileName, contents: tc.contents });
+    const fixture = writeArchiveFixture({
+      fileName: tc.fileName,
+      contents: tc.contents,
+    });
     const result = await installHooksFromArchive({
       archivePath: fixture.archivePath,
       hooksDir: fixture.hooksDir,
     });
-    expectInstallFailureContains(result, ["failed to extract archive", tc.expectedDetail]);
+    expectInstallFailureContains(result, [
+      "failed to extract archive",
+      tc.expectedDetail,
+    ]);
   });
 
   it.each([
@@ -146,7 +188,10 @@ describe("installHooksFromArchive", () => {
       contents: tarReservedIdBuffer,
     },
   ])("rejects hook packs with $name", async (tc) => {
-    const fixture = writeArchiveFixture({ fileName: "hooks.tar", contents: tc.contents });
+    const fixture = writeArchiveFixture({
+      fileName: "hooks.tar",
+      contents: tc.contents,
+    });
     const result = await installHooksFromArchive({
       archivePath: fixture.archivePath,
       hooksDir: fixture.hooksDir,
@@ -219,7 +264,10 @@ describe("installHooksFromPath", () => {
       ].join("\n"),
       "utf-8",
     );
-    fs.writeFileSync(path.join(hookDir, "handler.ts"), "export default async () => {};\n");
+    fs.writeFileSync(
+      path.join(hookDir, "handler.ts"),
+      "export default async () => {};\n",
+    );
 
     const hooksDir = path.join(stateDir, "hooks");
     const result = await installHooksFromPath({ path: hookDir, hooksDir });
@@ -250,8 +298,15 @@ describe("installHooksFromPath", () => {
       }),
       "utf-8",
     );
-    fs.writeFileSync(path.join(outsideHookDir, "HOOK.md"), "---\nname: outside\n---\n", "utf-8");
-    fs.writeFileSync(path.join(outsideHookDir, "handler.ts"), "export default async () => {};\n");
+    fs.writeFileSync(
+      path.join(outsideHookDir, "HOOK.md"),
+      "---\nname: outside\n---\n",
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(outsideHookDir, "handler.ts"),
+      "export default async () => {};\n",
+    );
 
     const result = await installHooksFromPath({
       path: pkgDir,
@@ -262,7 +317,9 @@ describe("installHooksFromPath", () => {
     if (result.ok) {
       return;
     }
-    expect(result.error).toContain("openclaw.hooks entry escapes package directory");
+    expect(result.error).toContain(
+      "openclaw.hooks entry escapes package directory",
+    );
   });
 
   it("rejects hook pack entries that escape via symlink", async () => {
@@ -273,10 +330,21 @@ describe("installHooksFromPath", () => {
     const linkedDir = path.join(pkgDir, "linked");
     fs.mkdirSync(pkgDir, { recursive: true });
     fs.mkdirSync(outsideHookDir, { recursive: true });
-    fs.writeFileSync(path.join(outsideHookDir, "HOOK.md"), "---\nname: outside\n---\n", "utf-8");
-    fs.writeFileSync(path.join(outsideHookDir, "handler.ts"), "export default async () => {};\n");
+    fs.writeFileSync(
+      path.join(outsideHookDir, "HOOK.md"),
+      "---\nname: outside\n---\n",
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(outsideHookDir, "handler.ts"),
+      "export default async () => {};\n",
+    );
     try {
-      fs.symlinkSync(outsideHookDir, linkedDir, process.platform === "win32" ? "junction" : "dir");
+      fs.symlinkSync(
+        outsideHookDir,
+        linkedDir,
+        process.platform === "win32" ? "junction" : "dir",
+      );
     } catch {
       return;
     }
@@ -299,7 +367,9 @@ describe("installHooksFromPath", () => {
     if (result.ok) {
       return;
     }
-    expect(result.error).toContain("openclaw.hooks entry resolves outside package directory");
+    expect(result.error).toContain(
+      "openclaw.hooks entry resolves outside package directory",
+    );
   });
 });
 
@@ -346,9 +416,15 @@ describe("installHooksFromNpmSpec", () => {
       return;
     }
     expect(result.hookPackId).toBe("test-hooks");
-    expect(result.npmResolution?.resolvedSpec).toBe("@openclaw/test-hooks@0.0.1");
+    expect(result.npmResolution?.resolvedSpec).toBe(
+      "@openclaw/test-hooks@0.0.1",
+    );
     expect(result.npmResolution?.integrity).toBe("sha512-hook-test");
-    expect(fs.existsSync(path.join(result.targetDir, "hooks", "one-hook", "HOOK.md"))).toBe(true);
+    expect(
+      fs.existsSync(
+        path.join(result.targetDir, "hooks", "one-hook", "HOOK.md"),
+      ),
+    ).toBe(true);
 
     expectSingleNpmPackIgnoreScriptsCall({
       calls: run.mock.calls,
@@ -391,10 +467,14 @@ describe("installHooksFromNpmSpec", () => {
 
 describe("gmail watcher", () => {
   it("detects address already in use errors", () => {
-    expect(isAddressInUseError("listen tcp 127.0.0.1:8788: bind: address already in use")).toBe(
+    expect(
+      isAddressInUseError(
+        "listen tcp 127.0.0.1:8788: bind: address already in use",
+      ),
+    ).toBe(true);
+    expect(isAddressInUseError("EADDRINUSE: address already in use")).toBe(
       true,
     );
-    expect(isAddressInUseError("EADDRINUSE: address already in use")).toBe(true);
     expect(isAddressInUseError("some other error")).toBe(false);
   });
 });

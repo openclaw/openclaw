@@ -241,12 +241,20 @@ scripts/sandbox-setup.sh
       sandbox: { mode: "all", scope: "session" },
     },
     // 合并所有客户的智能体列表
-    list: { $include: ["./clients/mueller/agents.json5", "./clients/schmidt/agents.json5"] },
+    list: {
+      $include: [
+        "./clients/mueller/agents.json5",
+        "./clients/schmidt/agents.json5",
+      ],
+    },
   },
 
   // 合并广播配置
   broadcast: {
-    $include: ["./clients/mueller/broadcast.json5", "./clients/schmidt/broadcast.json5"],
+    $include: [
+      "./clients/mueller/broadcast.json5",
+      "./clients/schmidt/broadcast.json5",
+    ],
   },
 
   channels: { whatsapp: { groupPolicy: "allowlist" } },
@@ -394,7 +402,11 @@ OpenClaw 在以下位置存储**每个智能体的**认证配置文件（OAuth +
 {
   auth: {
     profiles: {
-      "anthropic:me@example.com": { provider: "anthropic", mode: "oauth", email: "me@example.com" },
+      "anthropic:me@example.com": {
+        provider: "anthropic",
+        mode: "oauth",
+        email: "me@example.com",
+      },
       "anthropic:work": { provider: "anthropic", mode: "api_key" },
     },
     order: {
@@ -606,7 +618,9 @@ OpenClaw 在以下位置存储**每个智能体的**认证配置文件（OAuth +
     groupChat: { historyLimit: 50 },
   },
   agents: {
-    list: [{ id: "main", groupChat: { mentionPatterns: ["@openclaw", "openclaw"] } }],
+    list: [
+      { id: "main", groupChat: { mentionPatterns: ["@openclaw", "openclaw"] } },
+    ],
   },
 }
 ```
@@ -644,8 +658,14 @@ OpenClaw 在以下位置存储**每个智能体的**认证配置文件（OAuth +
 {
   agents: {
     list: [
-      { id: "work", groupChat: { mentionPatterns: ["@workbot", "\\+15555550123"] } },
-      { id: "personal", groupChat: { mentionPatterns: ["@homebot", "\\+15555550999"] } },
+      {
+        id: "work",
+        groupChat: { mentionPatterns: ["@workbot", "\\+15555550123"] },
+      },
+      {
+        id: "personal",
+        groupChat: { mentionPatterns: ["@homebot", "\\+15555550999"] },
+      },
     ],
   },
 }
@@ -1365,7 +1385,10 @@ Signal 反应可以发出系统事件（共享反应工具）：
   channels: {
     signal: {
       reactionNotifications: "own", // off | own | all | allowlist
-      reactionAllowlist: ["+15551234567", "uuid:123e4567-e89b-12d3-a456-426614174000"],
+      reactionAllowlist: [
+        "+15551234567",
+        "uuid:123e4567-e89b-12d3-a456-426614174000",
+      ],
       historyLimit: 50, // 包含最近 N 条群消息作为上下文（0 禁用）
     },
   },
@@ -1871,7 +1894,10 @@ MiniMax 认证：设置 `MINIMAX_API_KEY`（环境变量）或配置 `models.pro
         hardClearRatio: 0.5,
         minPrunableToolChars: 50000,
         softTrim: { maxChars: 4000, headChars: 1500, tailChars: 1500 },
-        hardClear: { enabled: true, placeholder: "[Old tool result content cleared]" },
+        hardClear: {
+          enabled: true,
+          placeholder: "[Old tool result content cleared]",
+        },
         // 可选：限制裁剪仅针对特定工具（deny 优先；支持 "*" 通配符）
         tools: { deny: ["browser", "canvas"] },
       },
@@ -1928,7 +1954,9 @@ MiniMax 认证：设置 `MINIMAX_API_KEY`（环境变量）或配置 `models.pro
   示例：
   ```json5
   {
-    agents: { defaults: { blockStreamingChunk: { minChars: 800, maxChars: 1200 } } },
+    agents: {
+      defaults: { blockStreamingChunk: { minChars: 800, maxChars: 1200 } },
+    },
   }
   ```
 - `agents.defaults.blockStreamingCoalesce`：发送前合并流式块。
@@ -2061,7 +2089,11 @@ Z.AI 模型可通过 `zai/<model>` 使用（例如 `zai/glm-4.7`），需要环�
         },
         models: [
           { provider: "openai", model: "gpt-4o-mini-transcribe" },
-          { type: "cli", command: "whisper", args: ["--model", "base", "{{MediaPath}}"] },
+          {
+            type: "cli",
+            command: "whisper",
+            args: ["--model", "base", "{{MediaPath}}"],
+          },
         ],
       },
       video: {
@@ -2284,7 +2316,10 @@ Z.AI 模型可通过 `zai/<model>` 使用（例如 `zai/glm-4.7`），需要环�
           apparmorProfile: "openclaw-sandbox",
           dns: ["1.1.1.1", "8.8.8.8"],
           extraHosts: ["internal.service:10.0.0.5"],
-          binds: ["/var/run/docker.sock:/var/run/docker.sock", "/home/user/source:/source:rw"],
+          binds: [
+            "/var/run/docker.sock:/var/run/docker.sock",
+            "/home/user/source:/source:rw",
+          ],
         },
         browser: {
           enabled: false,
@@ -2541,7 +2576,9 @@ Z.AI 模型通过内置的 `zai` 提供商提供。在环境中设置 `ZAI_API_K
   agents: {
     defaults: {
       model: { primary: "synthetic/hf:MiniMaxAI/MiniMax-M2.1" },
-      models: { "synthetic/hf:MiniMaxAI/MiniMax-M2.1": { alias: "MiniMax M2.1" } },
+      models: {
+        "synthetic/hf:MiniMaxAI/MiniMax-M2.1": { alias: "MiniMax M2.1" },
+      },
     },
   },
   models: {
@@ -2703,7 +2740,9 @@ Z.AI 模型通过内置的 `zai` 提供商提供。在环境中设置 `ZAI_API_K
       maxPingPongTurns: 5,
     },
     sendPolicy: {
-      rules: [{ action: "deny", match: { channel: "discord", chatType: "group" } }],
+      rules: [
+        { action: "deny", match: { channel: "discord", chatType: "group" } },
+      ],
       default: "allow",
     },
   },
@@ -2757,7 +2796,10 @@ Z.AI 模型通过内置的 `zai` 提供商提供。在环境中设置 `ZAI_API_K
   skills: {
     allowBundled: ["gemini", "peekaboo"],
     load: {
-      extraDirs: ["~/Projects/agent-scripts/skills", "~/Projects/oss/some-skill-pack/skills"],
+      extraDirs: [
+        "~/Projects/agent-scripts/skills",
+        "~/Projects/oss/some-skill-pack/skills",
+      ],
     },
     install: {
       preferBrew: true,

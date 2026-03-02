@@ -6,7 +6,9 @@ import { sendMediaFeishu } from "./media.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { sendMarkdownCardFeishu, sendMessageFeishu } from "./send.js";
 
-function normalizePossibleLocalImagePath(text: string | undefined): string | null {
+function normalizePossibleLocalImagePath(
+  text: string | undefined,
+): string | null {
   const raw = text?.trim();
   if (!raw) return null;
 
@@ -19,9 +21,16 @@ function normalizePossibleLocalImagePath(text: string | undefined): string | nul
   if (/^(https?:\/\/|data:|file:\/\/)/i.test(raw)) return null;
 
   const ext = path.extname(raw).toLowerCase();
-  const isImageExt = [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".ico", ".tiff"].includes(
-    ext,
-  );
+  const isImageExt = [
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".gif",
+    ".webp",
+    ".bmp",
+    ".ico",
+    ".tiff",
+  ].includes(ext);
   if (!isImageExt) return null;
 
   if (!path.isAbsolute(raw)) return null;
@@ -62,7 +71,8 @@ async function sendOutboundText(params: {
 
 export const feishuOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
-  chunker: (text, limit) => getFeishuRuntime().channel.text.chunkMarkdownText(text, limit),
+  chunker: (text, limit) =>
+    getFeishuRuntime().channel.text.chunkMarkdownText(text, limit),
   chunkerMode: "markdown",
   textChunkLimit: 4000,
   sendText: async ({ cfg, to, text, accountId }) => {
@@ -93,7 +103,14 @@ export const feishuOutbound: ChannelOutboundAdapter = {
     });
     return { channel: "feishu", ...result };
   },
-  sendMedia: async ({ cfg, to, text, mediaUrl, accountId, mediaLocalRoots }) => {
+  sendMedia: async ({
+    cfg,
+    to,
+    text,
+    mediaUrl,
+    accountId,
+    mediaLocalRoots,
+  }) => {
     // Send text first if provided
     if (text?.trim()) {
       await sendOutboundText({

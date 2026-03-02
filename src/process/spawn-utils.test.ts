@@ -11,7 +11,11 @@ function createStubChild() {
   child.stdout = new PassThrough() as ChildProcess["stdout"];
   child.stderr = new PassThrough() as ChildProcess["stderr"];
   Object.defineProperty(child, "pid", { value: 1234, configurable: true });
-  Object.defineProperty(child, "killed", { value: false, configurable: true, writable: true });
+  Object.defineProperty(child, "killed", {
+    value: false,
+    configurable: true,
+    writable: true,
+  });
   child.kill = vi.fn(() => true) as ChildProcess["kill"];
   queueMicrotask(() => {
     child.emit("spawn");
@@ -33,15 +37,25 @@ describe("spawnWithFallback", () => {
     const result = await spawnWithFallback({
       argv: ["echo", "ok"],
       options: { stdio: ["pipe", "pipe", "pipe"] },
-      fallbacks: [{ label: "safe-stdin", options: { stdio: ["ignore", "pipe", "pipe"] } }],
+      fallbacks: [
+        { label: "safe-stdin", options: { stdio: ["ignore", "pipe", "pipe"] } },
+      ],
       spawnImpl: spawnMock,
     });
 
     expect(result.usedFallback).toBe(true);
     expect(result.fallbackLabel).toBe("safe-stdin");
     expect(spawnMock).toHaveBeenCalledTimes(2);
-    expect(spawnMock.mock.calls[0]?.[2]?.stdio).toEqual(["pipe", "pipe", "pipe"]);
-    expect(spawnMock.mock.calls[1]?.[2]?.stdio).toEqual(["ignore", "pipe", "pipe"]);
+    expect(spawnMock.mock.calls[0]?.[2]?.stdio).toEqual([
+      "pipe",
+      "pipe",
+      "pipe",
+    ]);
+    expect(spawnMock.mock.calls[1]?.[2]?.stdio).toEqual([
+      "ignore",
+      "pipe",
+      "pipe",
+    ]);
   });
 
   it("does not retry on non-EBADF errors", async () => {
@@ -55,7 +69,12 @@ describe("spawnWithFallback", () => {
       spawnWithFallback({
         argv: ["missing"],
         options: { stdio: ["pipe", "pipe", "pipe"] },
-        fallbacks: [{ label: "safe-stdin", options: { stdio: ["ignore", "pipe", "pipe"] } }],
+        fallbacks: [
+          {
+            label: "safe-stdin",
+            options: { stdio: ["ignore", "pipe", "pipe"] },
+          },
+        ],
         spawnImpl: spawnMock,
       }),
     ).rejects.toThrow(/ENOENT/);

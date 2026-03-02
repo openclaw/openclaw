@@ -3,7 +3,12 @@ import { setVerbose } from "../../globals.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
 import type { LogLevel } from "../../logging/levels.js";
 import { defaultRuntime } from "../../runtime.js";
-import { getCommandPath, getVerboseFlag, hasFlag, hasHelpOrVersion } from "../argv.js";
+import {
+  getCommandPath,
+  getVerboseFlag,
+  hasFlag,
+  hasHelpOrVersion,
+} from "../argv.js";
 import { emitCliBanner } from "../banner.js";
 import { resolveCliName } from "../cli-name.js";
 
@@ -29,10 +34,18 @@ const PLUGIN_REQUIRED_COMMANDS = new Set([
   "configure",
   "onboard",
 ]);
-const CONFIG_GUARD_BYPASS_COMMANDS = new Set(["doctor", "completion", "secrets"]);
+const CONFIG_GUARD_BYPASS_COMMANDS = new Set([
+  "doctor",
+  "completion",
+  "secrets",
+]);
 const JSON_PARSE_ONLY_COMMANDS = new Set(["config set"]);
-let configGuardModulePromise: Promise<typeof import("./config-guard.js")> | undefined;
-let pluginRegistryModulePromise: Promise<typeof import("../plugin-registry.js")> | undefined;
+let configGuardModulePromise:
+  | Promise<typeof import("./config-guard.js")>
+  | undefined;
+let pluginRegistryModulePromise:
+  | Promise<typeof import("../plugin-registry.js")>
+  | undefined;
 
 function loadConfigGuardModule() {
   configGuardModulePromise ??= import("./config-guard.js");
@@ -75,7 +88,10 @@ function isJsonOutputMode(commandPath: string[], argv: string[]): boolean {
   return true;
 }
 
-export function registerPreActionHooks(program: Command, programVersion: string) {
+export function registerPreActionHooks(
+  program: Command,
+  programVersion: string,
+) {
   program.hook("preAction", async (_thisCommand, actionCommand) => {
     setProcessTitleForCommand(actionCommand);
     const argv = process.argv;

@@ -36,17 +36,18 @@ export async function buildNodeInstallPlan(params: {
       env: params.env,
       runtime: params.runtime,
     }));
-  const { programArguments, workingDirectory } = await resolveNodeProgramArguments({
-    host: params.host,
-    port: params.port,
-    tls: params.tls,
-    tlsFingerprint: params.tlsFingerprint,
-    nodeId: params.nodeId,
-    displayName: params.displayName,
-    dev: devMode,
-    runtime: params.runtime,
-    nodePath,
-  });
+  const { programArguments, workingDirectory } =
+    await resolveNodeProgramArguments({
+      host: params.host,
+      port: params.port,
+      tls: params.tls,
+      tlsFingerprint: params.tlsFingerprint,
+      nodeId: params.nodeId,
+      displayName: params.displayName,
+      dev: devMode,
+      runtime: params.runtime,
+      nodePath,
+    });
 
   await emitNodeRuntimeWarning({
     env: params.env,

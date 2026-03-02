@@ -5,7 +5,12 @@ export function resolveRequestUrl(input: RequestInfo | URL): string {
   if (input instanceof URL) {
     return input.toString();
   }
-  if (typeof input === "object" && input && "url" in input && typeof input.url === "string") {
+  if (
+    typeof input === "object" &&
+    input &&
+    "url" in input &&
+    typeof input.url === "string"
+  ) {
     return input.url;
   }
   return String(input);

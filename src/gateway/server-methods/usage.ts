@@ -107,7 +107,11 @@ const parseDateParts = (
   const year = Number(yearStr);
   const monthIndex = Number(monthStr) - 1;
   const day = Number(dayStr);
-  if (!Number.isFinite(year) || !Number.isFinite(monthIndex) || !Number.isFinite(day)) {
+  if (
+    !Number.isFinite(year) ||
+    !Number.isFinite(monthIndex) ||
+    !Number.isFinite(day)
+  ) {
     return undefined;
   }
   return { year, monthIndex, day };
@@ -176,21 +180,32 @@ const parseDateToMs = (
     return Number.isNaN(ms) ? undefined : ms;
   }
   if (interpretation.mode === "specific") {
-    const ms = Date.UTC(year, monthIndex, day) - interpretation.utcOffsetMinutes * 60 * 1000;
+    const ms =
+      Date.UTC(year, monthIndex, day) -
+      interpretation.utcOffsetMinutes * 60 * 1000;
     return Number.isNaN(ms) ? undefined : ms;
   }
   const ms = Date.UTC(year, monthIndex, day);
   return Number.isNaN(ms) ? undefined : ms;
 };
 
-const getTodayStartMs = (now: Date, interpretation: DateInterpretation): number => {
+const getTodayStartMs = (
+  now: Date,
+  interpretation: DateInterpretation,
+): number => {
   if (interpretation.mode === "gateway") {
     return new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
   }
   if (interpretation.mode === "specific") {
-    const shifted = new Date(now.getTime() + interpretation.utcOffsetMinutes * 60 * 1000);
+    const shifted = new Date(
+      now.getTime() + interpretation.utcOffsetMinutes * 60 * 1000,
+    );
     return (
-      Date.UTC(shifted.getUTCFullYear(), shifted.getUTCMonth(), shifted.getUTCDate()) -
+      Date.UTC(
+        shifted.getUTCFullYear(),
+        shifted.getUTCMonth(),
+        shifted.getUTCDate(),
+      ) -
       interpretation.utcOffsetMinutes * 60 * 1000
     );
   }
@@ -251,7 +266,10 @@ type DiscoveredSessionWithAgent = DiscoveredSession & { agentId: string };
 function buildStoreBySessionId(
   store: Record<string, SessionEntry>,
 ): Map<string, { key: string; entry: SessionEntry }> {
-  const storeBySessionId = new Map<string, { key: string; entry: SessionEntry }>();
+  const storeBySessionId = new Map<
+    string,
+    { key: string; entry: SessionEntry }
+  >();
   for (const [key, entry] of Object.entries(store)) {
     if (entry?.sessionId) {
       storeBySessionId.set(entry.sessionId, { key, entry });
@@ -287,7 +305,11 @@ async function loadCostUsageSummaryCached(params: {
   const cacheKey = `${params.startMs}-${params.endMs}`;
   const now = Date.now();
   const cached = costUsageCache.get(cacheKey);
-  if (cached?.summary && cached.updatedAt && now - cached.updatedAt < COST_USAGE_CACHE_TTL_MS) {
+  if (
+    cached?.summary &&
+    cached.updatedAt &&
+    now - cached.updatedAt < COST_USAGE_CACHE_TTL_MS
+  ) {
     return cached.summary;
   }
 
@@ -361,7 +383,11 @@ export const usageHandlers: GatewayRequestHandlers = {
       mode: params?.mode,
       utcOffset: params?.utcOffset,
     });
-    const summary = await loadCostUsageSummaryCached({ startMs, endMs, config });
+    const summary = await loadCostUsageSummaryCached({
+      startMs,
+      endMs,
+      config,
+    });
     respond(true, summary, undefined);
   },
   "sessions.usage": async ({ respond, params }) => {
@@ -385,7 +411,8 @@ export const usageHandlers: GatewayRequestHandlers = {
       mode: p.mode,
       utcOffset: p.utcOffset,
     });
-    const limit = typeof p.limit === "number" && Number.isFinite(p.limit) ? p.limit : 50;
+    const limit =
+      typeof p.limit === "number" && Number.isFinite(p.limit) ? p.limit : 50;
     const includeContextWeight = p.includeContextWeight ?? false;
     const specificKey = typeof p.key === "string" ? p.key.trim() : null;
 
@@ -420,7 +447,8 @@ export const usageHandlers: GatewayRequestHandlers = {
         ? { key: specificKey, entry: store[specificKey] }
         : null;
       const storeByIdMatch = storeBySessionId.get(keyRest) ?? null;
-      const resolvedStoreKey = storeMatch?.key ?? storeByIdMatch?.key ?? specificKey;
+      const resolvedStoreKey =
+        storeMatch?.key ?? storeByIdMatch?.key ?? specificKey;
       const storeEntry = storeMatch?.entry ?? storeByIdMatch?.entry;
       const sessionId = storeEntry?.sessionId ?? keyRest;
 
@@ -436,7 +464,10 @@ export const usageHandlers: GatewayRequestHandlers = {
         respond(
           false,
           undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, `Invalid session reference: ${specificKey}`),
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `Invalid session reference: ${specificKey}`,
+          ),
         );
         return;
       }
@@ -547,7 +578,14 @@ export const usageHandlers: GatewayRequestHandlers = {
     };
     const dailyLatencyMap = new Map<
       string,
-      { date: string; count: number; sum: number; min: number; max: number; p95Max: number }
+      {
+        date: string;
+        count: number;
+        sum: number;
+        min: number;
+        max: number;
+        p95Max: number;
+      }
     >();
     const modelDailyMap = new Map<string, SessionDailyModelUsage>();
 
@@ -607,8 +645,10 @@ export const usageHandlers: GatewayRequestHandlers = {
         aggregateTotals.missingCostEntries += usage.missingCostEntries;
       }
 
-      const channel = merged.storeEntry?.channel ?? merged.storeEntry?.origin?.provider;
-      const chatType = merged.storeEntry?.chatType ?? merged.storeEntry?.origin?.chatType;
+      const channel =
+        merged.storeEntry?.channel ?? merged.storeEntry?.origin?.provider;
+      const chatType =
+        merged.storeEntry?.chatType ?? merged.storeEntry?.origin?.chatType;
 
       if (usage) {
         if (usage.messageCounts) {
@@ -622,7 +662,10 @@ export const usageHandlers: GatewayRequestHandlers = {
 
         if (usage.toolUsage) {
           for (const tool of usage.toolUsage.tools) {
-            toolAggregateMap.set(tool.name, (toolAggregateMap.get(tool.name) ?? 0) + tool.count);
+            toolAggregateMap.set(
+              tool.name,
+              (toolAggregateMap.get(tool.name) ?? 0) + tool.count,
+            );
           }
         }
 
@@ -762,7 +805,10 @@ export const usageHandlers: GatewayRequestHandlers = {
     const aggregates: SessionsUsageAggregates = {
       messages: aggregateMessages,
       tools: {
-        totalCalls: Array.from(toolAggregateMap.values()).reduce((sum, count) => sum + count, 0),
+        totalCalls: Array.from(toolAggregateMap.values()).reduce(
+          (sum, count) => sum + count,
+          0,
+        ),
         uniqueTools: toolAggregateMap.size,
         tools: Array.from(toolAggregateMap.entries())
           .map(([name, count]) => ({ name, count }))
@@ -805,7 +851,10 @@ export const usageHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "key is required for timeseries"),
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "key is required for timeseries",
+        ),
       );
       return;
     }
@@ -829,7 +878,10 @@ export const usageHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, `No transcript found for session: ${key}`),
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `No transcript found for session: ${key}`,
+        ),
       );
       return;
     }
@@ -839,7 +891,11 @@ export const usageHandlers: GatewayRequestHandlers = {
   "sessions.usage.logs": async ({ respond, params }) => {
     const key = typeof params?.key === "string" ? params.key.trim() : null;
     if (!key) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "key is required for logs"));
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "key is required for logs"),
+      );
       return;
     }
 
@@ -854,7 +910,8 @@ export const usageHandlers: GatewayRequestHandlers = {
     }
     const { config, entry, agentId, sessionId, sessionFile } = resolved;
 
-    const { loadSessionLogs } = await import("../../infra/session-cost-usage.js");
+    const { loadSessionLogs } =
+      await import("../../infra/session-cost-usage.js");
     const logs = await loadSessionLogs({
       sessionId,
       sessionEntry: entry,

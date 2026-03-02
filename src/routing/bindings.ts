@@ -33,7 +33,8 @@ function resolveNormalizedBindingMatch(binding: AgentBinding): {
   if (!channelId) {
     return null;
   }
-  const accountId = typeof match.accountId === "string" ? match.accountId.trim() : "";
+  const accountId =
+    typeof match.accountId === "string" ? match.accountId.trim() : "";
   if (!accountId || accountId === "*") {
     return null;
   }
@@ -44,7 +45,10 @@ function resolveNormalizedBindingMatch(binding: AgentBinding): {
   };
 }
 
-export function listBoundAccountIds(cfg: OpenClawConfig, channelId: string): string[] {
+export function listBoundAccountIds(
+  cfg: OpenClawConfig,
+  channelId: string,
+): string[] {
   const normalizedChannel = normalizeBindingChannelId(channelId);
   if (!normalizedChannel) {
     return [];

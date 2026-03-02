@@ -45,7 +45,9 @@ function parseSlackChannelMention(raw: string): { id?: string; name?: string } {
   return name ? { name } : {};
 }
 
-async function listSlackChannels(client: WebClient): Promise<SlackChannelLookup[]> {
+async function listSlackChannels(
+  client: WebClient,
+): Promise<SlackChannelLookup[]> {
   const channels: SlackChannelLookup[] = [];
   let cursor: string | undefined;
   do {
@@ -82,7 +84,9 @@ function resolveByName(
   if (!target) {
     return undefined;
   }
-  const matches = channels.filter((channel) => channel.name.toLowerCase() === target);
+  const matches = channels.filter(
+    (channel) => channel.name.toLowerCase() === target,
+  );
   if (matches.length === 0) {
     return undefined;
   }

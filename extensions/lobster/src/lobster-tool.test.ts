@@ -3,8 +3,20 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawPluginApi, OpenClawPluginToolContext } from "../../../src/plugins/types.js";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
+import type {
+  OpenClawPluginApi,
+  OpenClawPluginToolContext,
+} from "../../../src/plugins/types.js";
 import {
   createWindowsCmdShimFixture,
   restorePlatformPathEnv,
@@ -27,7 +39,9 @@ vi.mock("node:child_process", async (importOriginal) => {
 
 let createLobsterTool: typeof import("./lobster-tool.js").createLobsterTool;
 
-function fakeApi(overrides: Partial<OpenClawPluginApi> = {}): OpenClawPluginApi {
+function fakeApi(
+  overrides: Partial<OpenClawPluginApi> = {},
+): OpenClawPluginApi {
   return {
     id: "lobster",
     name: "lobster",
@@ -52,7 +66,9 @@ function fakeApi(overrides: Partial<OpenClawPluginApi> = {}): OpenClawPluginApi 
   };
 }
 
-function fakeCtx(overrides: Partial<OpenClawPluginToolContext> = {}): OpenClawPluginToolContext {
+function fakeCtx(
+  overrides: Partial<OpenClawPluginToolContext> = {},
+): OpenClawPluginToolContext {
   return {
     config: {},
     workspaceDir: "/tmp",
@@ -73,7 +89,9 @@ describe("lobster plugin tool", () => {
   beforeAll(async () => {
     ({ createLobsterTool } = await import("./lobster-tool.js"));
 
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lobster-plugin-"));
+    tempDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-lobster-plugin-"),
+    );
   });
 
   afterEach(() => {
@@ -85,7 +103,12 @@ describe("lobster plugin tool", () => {
       return;
     }
     if (process.platform === "win32") {
-      await fs.rm(tempDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+      await fs.rm(tempDir, {
+        recursive: true,
+        force: true,
+        maxRetries: 10,
+        retryDelay: 50,
+      });
     } else {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
@@ -154,7 +177,12 @@ describe("lobster plugin tool", () => {
   });
 
   it("tolerates noisy stdout before the JSON envelope", async () => {
-    const payload = { ok: true, status: "ok", output: [], requiresApproval: null };
+    const payload = {
+      ok: true,
+      status: "ok",
+      output: [],
+      requiresApproval: null,
+    };
     spawnState.queue.push({
       stdout: `noise before json\n${JSON.stringify(payload)}`,
     });
@@ -171,7 +199,9 @@ describe("lobster plugin tool", () => {
 
   it("requires action", async () => {
     const tool = createLobsterTool(fakeApi());
-    await expect(tool.execute("call-action-missing", {})).rejects.toThrow(/action required/);
+    await expect(tool.execute("call-action-missing", {})).rejects.toThrow(
+      /action required/,
+    );
   });
 
   it("requires pipeline for run action", async () => {

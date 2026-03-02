@@ -49,7 +49,9 @@ const telegramPlugin: ChannelPlugin = {
   }),
   gateway: {
     logoutAccount: async ({ cfg }) => {
-      const nextTelegram = cfg.channels?.telegram ? { ...cfg.channels.telegram } : {};
+      const nextTelegram = cfg.channels?.telegram
+        ? { ...cfg.channels.telegram }
+        : {};
       delete nextTelegram.botToken;
       await writeConfigFile({
         ...cfg,
@@ -89,7 +91,8 @@ let server: Awaited<ReturnType<typeof startServerWithClient>>["server"];
 let ws: Awaited<ReturnType<typeof startServerWithClient>>["ws"];
 
 beforeAll(async () => {
-  ({ readConfigFileSnapshot, writeConfigFile } = await import("../config/config.js"));
+  ({ readConfigFileSnapshot, writeConfigFile } =
+    await import("../config/config.js"));
   setRegistry(defaultRegistry);
   const started = await startServerWithClient();
   server = started.server;
@@ -133,9 +136,13 @@ describe("gateway server channels", () => {
 
   test("channels.logout reports no session when missing", async () => {
     setRegistry(defaultRegistry);
-    const res = await rpcReq<{ cleared?: boolean; channel?: string }>(ws, "channels.logout", {
-      channel: "whatsapp",
-    });
+    const res = await rpcReq<{ cleared?: boolean; channel?: string }>(
+      ws,
+      "channels.logout",
+      {
+        channel: "whatsapp",
+      },
+    );
     expect(res.ok).toBe(true);
     expect(res.payload?.channel).toBe("whatsapp");
     expect(res.payload?.cleared).toBe(false);
@@ -165,6 +172,8 @@ describe("gateway server channels", () => {
     const snap = await readConfigFileSnapshot();
     expect(snap.valid).toBe(true);
     expect(snap.config?.channels?.telegram?.botToken).toBeUndefined();
-    expect(snap.config?.channels?.telegram?.groups?.["*"]?.requireMention).toBe(false);
+    expect(snap.config?.channels?.telegram?.groups?.["*"]?.requireMention).toBe(
+      false,
+    );
   });
 });

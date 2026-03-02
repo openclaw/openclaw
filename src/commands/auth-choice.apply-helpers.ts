@@ -20,7 +20,11 @@ const ENV_SECRET_REF_ID_RE = /^[A-Z][A-Z0-9_]{0,127}$/;
 type SecretRefChoice = "env" | "provider";
 
 function formatErrorMessage(error: unknown): string {
-  if (error instanceof Error && typeof error.message === "string" && error.message.trim()) {
+  if (
+    error instanceof Error &&
+    typeof error.message === "string" &&
+    error.message.trim()
+  ) {
     return error.message;
   }
   return String(error);
@@ -45,7 +49,8 @@ function resolveRefFallbackInput(params: {
   provider: string;
   preferredEnvVar?: string;
 }): { ref: SecretRef; resolvedValue: string } {
-  const fallbackEnvVar = params.preferredEnvVar ?? resolveDefaultProviderEnvVar(params.provider);
+  const fallbackEnvVar =
+    params.preferredEnvVar ?? resolveDefaultProviderEnvVar(params.provider);
   if (!fallbackEnvVar) {
     throw new Error(
       `No default environment variable mapping found for provider "${params.provider}". Set a provider-specific env var, or re-run onboarding in an interactive terminal to configure a ref.`,
@@ -76,28 +81,32 @@ async function resolveApiKeyRefForOnboarding(params: {
   preferredEnvVar?: string;
 }): Promise<{ ref: SecretRef; resolvedValue: string }> {
   const defaultEnvVar =
-    params.preferredEnvVar ?? resolveDefaultProviderEnvVar(params.provider) ?? "";
+    params.preferredEnvVar ??
+    resolveDefaultProviderEnvVar(params.provider) ??
+    "";
   const defaultFilePointer = resolveDefaultFilePointerId(params.provider);
   let sourceChoice: SecretRefChoice = "env";
 
   while (true) {
-    const sourceRaw: SecretRefChoice = await params.prompter.select<SecretRefChoice>({
-      message: "Where is this API key stored?",
-      initialValue: sourceChoice,
-      options: [
-        {
-          value: "env",
-          label: "Environment variable",
-          hint: "Reference a variable from your runtime environment",
-        },
-        {
-          value: "provider",
-          label: "Configured secret provider",
-          hint: "Use a configured file or exec secret provider",
-        },
-      ],
-    });
-    const source: SecretRefChoice = sourceRaw === "provider" ? "provider" : "env";
+    const sourceRaw: SecretRefChoice =
+      await params.prompter.select<SecretRefChoice>({
+        message: "Where is this API key stored?",
+        initialValue: sourceChoice,
+        options: [
+          {
+            value: "env",
+            label: "Environment variable",
+            hint: "Reference a variable from your runtime environment",
+          },
+          {
+            value: "provider",
+            label: "Configured secret provider",
+            hint: "Use a configured file or exec secret provider",
+          },
+        ],
+      });
+    const source: SecretRefChoice =
+      sourceRaw === "provider" ? "provider" : "env";
     sourceChoice = source;
 
     if (source === "env") {
@@ -118,7 +127,9 @@ async function resolveApiKeyRefForOnboarding(params: {
       });
       const envCandidate = String(envVarRaw ?? "").trim();
       const envVar =
-        envCandidate && ENV_SECRET_REF_ID_RE.test(envCandidate) ? envCandidate : defaultEnvVar;
+        envCandidate && ENV_SECRET_REF_ID_RE.test(envCandidate)
+          ? envCandidate
+          : defaultEnvVar;
       if (!envVar) {
         throw new Error(
           `No valid environment variable name provided for provider "${params.provider}".`,
@@ -142,8 +153,11 @@ async function resolveApiKeyRefForOnboarding(params: {
       return { ref, resolvedValue };
     }
 
-    const externalProviders = Object.entries(params.config.secrets?.providers ?? {}).filter(
-      ([, provider]) => provider?.source === "file" || provider?.source === "exec",
+    const externalProviders = Object.entries(
+      params.config.secrets?.providers ?? {},
+    ).filter(
+      ([, provider]) =>
+        provider?.source === "file" || provider?.source === "exec",
     );
     if (externalProviders.length === 0) {
       await params.prompter.note(
@@ -152,14 +166,19 @@ async function resolveApiKeyRefForOnboarding(params: {
       );
       continue;
     }
-    const defaultProvider = resolveDefaultSecretProviderAlias(params.config, "file", {
-      preferFirstProviderForSource: true,
-    });
+    const defaultProvider = resolveDefaultSecretProviderAlias(
+      params.config,
+      "file",
+      {
+        preferFirstProviderForSource: true,
+      },
+    );
     const selectedProvider = await params.prompter.select<string>({
       message: "Select secret provider",
       initialValue:
-        externalProviders.find(([providerName]) => providerName === defaultProvider)?.[0] ??
-        externalProviders[0]?.[0],
+        externalProviders.find(
+          ([providerName]) => providerName === defaultProvider,
+        )?.[0] ?? externalProviders[0]?.[0],
       options: externalProviders.map(([providerName, provider]) => ({
         value: providerName,
         label: providerName,
@@ -167,7 +186,10 @@ async function resolveApiKeyRefForOnboarding(params: {
       })),
     });
     const providerEntry = params.config.secrets?.providers?.[selectedProvider];
-    if (!providerEntry || (providerEntry.source !== "file" && providerEntry.source !== "exec")) {
+    if (
+      !providerEntry ||
+      (providerEntry.source !== "file" && providerEntry.source !== "exec")
+    ) {
       await params.prompter.note(
         `Provider "${selectedProvider}" is not a file/exec provider.`,
         "Invalid provider",
@@ -187,7 +209,10 @@ async function resolveApiKeyRefForOnboarding(params: {
     const idRaw = await params.prompter.text({
       message: idPrompt,
       initialValue: idDefault,
-      placeholder: providerEntry.source === "file" ? "/providers/openai/apiKey" : "openai/api-key",
+      placeholder:
+        providerEntry.source === "file"
+          ? "/providers/openai/apiKey"
+          : "openai/api-key",
       validate: (value) => {
         const candidate = value.trim();
         if (!candidate) {
@@ -300,7 +325,8 @@ export function createAuthChoiceDefaultModelApplier(
       ...options,
     });
     state.config = applied.config;
-    state.agentModelOverride = applied.agentModelOverride ?? state.agentModelOverride;
+    state.agentModelOverride =
+      applied.agentModelOverride ?? state.agentModelOverride;
   };
 }
 
@@ -368,7 +394,11 @@ export async function maybeApplyApiKeyFromOption(params: {
   const expectedProviders = params.expectedProviders
     .map((provider) => normalizeTokenProviderInput(provider))
     .filter((provider): provider is string => Boolean(provider));
-  if (!params.token || !tokenProvider || !expectedProviders.includes(tokenProvider)) {
+  if (
+    !params.token ||
+    !tokenProvider ||
+    !expectedProviders.includes(tokenProvider)
+  ) {
     return undefined;
   }
   const apiKey = params.normalize(params.token);
@@ -443,7 +473,9 @@ export async function ensureApiKeyFromEnvOrPrompt(params: {
       const fallback = resolveRefFallbackInput({
         config: params.config,
         provider: params.provider,
-        preferredEnvVar: envKey?.source ? extractEnvVarFromSourceLabel(envKey.source) : undefined,
+        preferredEnvVar: envKey?.source
+          ? extractEnvVarFromSourceLabel(envKey.source)
+          : undefined,
       });
       await params.setCredential(fallback.ref, selectedMode);
       return fallback.resolvedValue;
@@ -452,7 +484,9 @@ export async function ensureApiKeyFromEnvOrPrompt(params: {
       provider: params.provider,
       config: params.config,
       prompter: params.prompter,
-      preferredEnvVar: envKey?.source ? extractEnvVarFromSourceLabel(envKey.source) : undefined,
+      preferredEnvVar: envKey?.source
+        ? extractEnvVarFromSourceLabel(envKey.source)
+        : undefined,
     });
     await params.setCredential(resolved.ref, selectedMode);
     return resolved.resolvedValue;

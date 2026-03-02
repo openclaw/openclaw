@@ -54,7 +54,10 @@ describe("tailscale helpers", () => {
   });
 
   it("ensureGoInstalled installs when missing and user agrees", async () => {
-    const exec = vi.fn().mockRejectedValueOnce(new Error("no go")).mockResolvedValue({}); // brew install go
+    const exec = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("no go"))
+      .mockResolvedValue({}); // brew install go
     const prompt = vi.fn().mockResolvedValue(true);
     const runtime = createRuntimeWithExitError();
     await ensureGoInstalled(exec as never, prompt, runtime);
@@ -66,7 +69,9 @@ describe("tailscale helpers", () => {
     const prompt = vi.fn().mockResolvedValue(false);
     const runtime = createRuntimeWithExitError();
 
-    await expect(ensureGoInstalled(exec as never, prompt, runtime)).rejects.toThrow("exit 1");
+    await expect(
+      ensureGoInstalled(exec as never, prompt, runtime),
+    ).rejects.toThrow("exit 1");
 
     expect(runtime.error).toHaveBeenCalledWith(
       "Go is required to build tailscaled from source. Aborting.",
@@ -75,7 +80,10 @@ describe("tailscale helpers", () => {
   });
 
   it("ensureTailscaledInstalled installs when missing and user agrees", async () => {
-    const exec = vi.fn().mockRejectedValueOnce(new Error("missing")).mockResolvedValue({});
+    const exec = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("missing"))
+      .mockResolvedValue({});
     const prompt = vi.fn().mockResolvedValue(true);
     const runtime = createRuntimeWithExitError();
     await ensureTailscaledInstalled(exec as never, prompt, runtime);
@@ -87,9 +95,9 @@ describe("tailscale helpers", () => {
     const prompt = vi.fn().mockResolvedValue(false);
     const runtime = createRuntimeWithExitError();
 
-    await expect(ensureTailscaledInstalled(exec as never, prompt, runtime)).rejects.toThrow(
-      "exit 1",
-    );
+    await expect(
+      ensureTailscaledInstalled(exec as never, prompt, runtime),
+    ).rejects.toThrow("exit 1");
 
     expect(runtime.error).toHaveBeenCalledWith(
       "tailscaled is required for user-space funnel. Aborting.",
@@ -117,7 +125,14 @@ describe("tailscale helpers", () => {
     expect(exec).toHaveBeenNthCalledWith(
       2,
       "sudo",
-      expect.arrayContaining(["-n", tailscaleBin, "serve", "--bg", "--yes", "3000"]),
+      expect.arrayContaining([
+        "-n",
+        tailscaleBin,
+        "serve",
+        "--bg",
+        "--yes",
+        "3000",
+      ]),
       expect.any(Object),
     );
   });
@@ -159,7 +174,9 @@ describe("tailscale helpers", () => {
     // 3. enable sudo (success)
     const exec = vi
       .fn()
-      .mockResolvedValueOnce({ stdout: JSON.stringify({ BackendState: "Running" }) }) // status
+      .mockResolvedValueOnce({
+        stdout: JSON.stringify({ BackendState: "Running" }),
+      }) // status
       .mockRejectedValueOnce(new Error("permission denied")) // enable normal
       .mockResolvedValueOnce({ stdout: "" }); // enable sudo
 
@@ -191,7 +208,14 @@ describe("tailscale helpers", () => {
     expect(exec).toHaveBeenNthCalledWith(
       3,
       "sudo",
-      expect.arrayContaining(["-n", tailscaleBin, "funnel", "--yes", "--bg", "8080"]),
+      expect.arrayContaining([
+        "-n",
+        tailscaleBin,
+        "funnel",
+        "--yes",
+        "--bg",
+        "8080",
+      ]),
       expect.any(Object),
     );
   });
@@ -199,7 +223,9 @@ describe("tailscale helpers", () => {
   it("enableTailscaleServe skips sudo on non-permission errors", async () => {
     const exec = vi.fn().mockRejectedValueOnce(new Error("boom"));
 
-    await expect(enableTailscaleServe(3000, exec as never)).rejects.toThrow("boom");
+    await expect(enableTailscaleServe(3000, exec as never)).rejects.toThrow(
+      "boom",
+    );
 
     expect(exec).toHaveBeenCalledTimes(1);
   });
@@ -213,7 +239,9 @@ describe("tailscale helpers", () => {
       .mockRejectedValueOnce(originalError)
       .mockRejectedValueOnce(new Error("sudo: a password is required"));
 
-    await expect(enableTailscaleServe(3000, exec as never)).rejects.toBe(originalError);
+    await expect(enableTailscaleServe(3000, exec as never)).rejects.toBe(
+      originalError,
+    );
 
     expect(exec).toHaveBeenCalledTimes(2);
   });

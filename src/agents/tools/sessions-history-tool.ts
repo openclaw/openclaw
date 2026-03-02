@@ -127,7 +127,9 @@ function sanitizeHistoryMessage(message: unknown): {
     truncated ||= res.truncated;
     redacted ||= res.redacted;
   } else if (Array.isArray(entry.content)) {
-    const updated = entry.content.map((block) => sanitizeHistoryContentBlock(block));
+    const updated = entry.content.map((block) =>
+      sanitizeHistoryContentBlock(block),
+    );
     entry.content = updated.map((item) => item.block);
     truncated ||= updated.some((item) => item.truncated);
     redacted ||= updated.some((item) => item.redacted);
@@ -163,7 +165,11 @@ function enforceSessionsHistoryHardCap(params: {
       content: "[sessions_history omitted: message too large]",
     },
   ];
-  return { items: placeholder, bytes: jsonUtf8Bytes(placeholder), hardCapped: true };
+  return {
+    items: placeholder,
+    bytes: jsonUtf8Bytes(placeholder),
+    hardCapped: true,
+  };
 }
 
 export function createSessionsHistoryTool(opts?: {
@@ -195,7 +201,10 @@ export function createSessionsHistoryTool(opts?: {
         restrictToSpawned,
       });
       if (!resolvedSession.ok) {
-        return jsonResult({ status: resolvedSession.status, error: resolvedSession.error });
+        return jsonResult({
+          status: resolvedSession.status,
+          error: resolvedSession.error,
+        });
       }
       // From here on, use the canonical key (sessionId inputs already resolved).
       const resolvedKey = resolvedSession.key;
@@ -243,16 +252,25 @@ export function createSessionsHistoryTool(opts?: {
         method: "chat.history",
         params: { sessionKey: resolvedKey, limit },
       });
-      const rawMessages = Array.isArray(result?.messages) ? result.messages : [];
-      const selectedMessages = includeTools ? rawMessages : stripToolMessages(rawMessages);
-      const sanitizedMessages = selectedMessages.map((message) => sanitizeHistoryMessage(message));
-      const contentTruncated = sanitizedMessages.some((entry) => entry.truncated);
+      const rawMessages = Array.isArray(result?.messages)
+        ? result.messages
+        : [];
+      const selectedMessages = includeTools
+        ? rawMessages
+        : stripToolMessages(rawMessages);
+      const sanitizedMessages = selectedMessages.map((message) =>
+        sanitizeHistoryMessage(message),
+      );
+      const contentTruncated = sanitizedMessages.some(
+        (entry) => entry.truncated,
+      );
       const contentRedacted = sanitizedMessages.some((entry) => entry.redacted);
       const cappedMessages = capArrayByJsonBytes(
         sanitizedMessages.map((entry) => entry.message),
         SESSIONS_HISTORY_MAX_BYTES,
       );
-      const droppedMessages = cappedMessages.items.length < selectedMessages.length;
+      const droppedMessages =
+        cappedMessages.items.length < selectedMessages.length;
       const hardened = enforceSessionsHistoryHardCap({
         items: cappedMessages.items,
         bytes: cappedMessages.bytes,

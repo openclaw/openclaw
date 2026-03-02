@@ -76,16 +76,24 @@ const asFiniteNumber = (value: unknown): number | undefined => {
   return value;
 };
 
-export function hasNonzeroUsage(usage?: NormalizedUsage | null): usage is NormalizedUsage {
+export function hasNonzeroUsage(
+  usage?: NormalizedUsage | null,
+): usage is NormalizedUsage {
   if (!usage) {
     return false;
   }
-  return [usage.input, usage.output, usage.cacheRead, usage.cacheWrite, usage.total].some(
-    (v) => typeof v === "number" && Number.isFinite(v) && v > 0,
-  );
+  return [
+    usage.input,
+    usage.output,
+    usage.cacheRead,
+    usage.cacheWrite,
+    usage.total,
+  ].some((v) => typeof v === "number" && Number.isFinite(v) && v > 0);
 }
 
-export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefined {
+export function normalizeUsage(
+  raw?: UsageLike | null,
+): NormalizedUsage | undefined {
   if (!raw) {
     return undefined;
   }
@@ -94,7 +102,11 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
   // prompt_tokens upstream.  When cached_tokens > prompt_tokens the result is
   // negative, which is nonsensical.  Clamp to 0.
   const rawInput = asFiniteNumber(
-    raw.input ?? raw.inputTokens ?? raw.input_tokens ?? raw.promptTokens ?? raw.prompt_tokens,
+    raw.input ??
+      raw.inputTokens ??
+      raw.input_tokens ??
+      raw.promptTokens ??
+      raw.prompt_tokens,
   );
   const input = rawInput !== undefined && rawInput < 0 ? 0 : rawInput;
   const output = asFiniteNumber(
@@ -114,7 +126,9 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
   const cacheWrite = asFiniteNumber(
     raw.cacheWrite ?? raw.cache_write ?? raw.cache_creation_input_tokens,
   );
-  const total = asFiniteNumber(raw.total ?? raw.totalTokens ?? raw.total_tokens);
+  const total = asFiniteNumber(
+    raw.total ?? raw.totalTokens ?? raw.total_tokens,
+  );
 
   if (
     input === undefined &&
@@ -163,7 +177,9 @@ export function deriveSessionTotalTokens(params: {
 }): number | undefined {
   const promptOverride = params.promptTokens;
   const hasPromptOverride =
-    typeof promptOverride === "number" && Number.isFinite(promptOverride) && promptOverride > 0;
+    typeof promptOverride === "number" &&
+    Number.isFinite(promptOverride) &&
+    promptOverride > 0;
 
   const usage = params.usage;
   if (!usage && !hasPromptOverride) {
@@ -180,7 +196,11 @@ export function deriveSessionTotalTokens(params: {
         cacheWrite: usage?.cacheWrite,
       });
 
-  if (!(typeof promptTokens === "number") || !Number.isFinite(promptTokens) || promptTokens <= 0) {
+  if (
+    !(typeof promptTokens === "number") ||
+    !Number.isFinite(promptTokens) ||
+    promptTokens <= 0
+  ) {
     return undefined;
   }
 

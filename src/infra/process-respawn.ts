@@ -15,10 +15,17 @@ function isTruthy(value: string | undefined): boolean {
     return false;
   }
   const normalized = value.trim().toLowerCase();
-  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
+  return (
+    normalized === "1" ||
+    normalized === "true" ||
+    normalized === "yes" ||
+    normalized === "on"
+  );
 }
 
-function isLikelySupervisedProcess(env: NodeJS.ProcessEnv = process.env): boolean {
+function isLikelySupervisedProcess(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
   return hasSupervisorHint(env);
 }
 
@@ -35,7 +42,10 @@ export function restartGatewayProcessWithFreshPid(): GatewayRespawnResult {
   if (isLikelySupervisedProcess(process.env)) {
     // On macOS under launchd, actively kickstart the supervised service to
     // bypass ThrottleInterval delays for intentional restarts.
-    if (process.platform === "darwin" && process.env.OPENCLAW_LAUNCHD_LABEL?.trim()) {
+    if (
+      process.platform === "darwin" &&
+      process.env.OPENCLAW_LAUNCHD_LABEL?.trim()
+    ) {
       const restart = triggerOpenClawRestart();
       if (!restart.ok) {
         return {

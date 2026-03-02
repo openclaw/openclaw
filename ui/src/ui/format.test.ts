@@ -15,7 +15,9 @@ describe("formatAgo", () => {
   });
 
   it("returns 'Xd from now' for future timestamps beyond 48h", () => {
-    expect(formatRelativeTimestamp(Date.now() + 3 * 24 * 60 * 60_000)).toBe("in 3d");
+    expect(formatRelativeTimestamp(Date.now() + 3 * 24 * 60 * 60_000)).toBe(
+      "in 3d",
+    );
   });
 
   it("returns 'Xs ago' for recent past timestamps", () => {
@@ -39,7 +41,9 @@ describe("stripThinkingTags", () => {
   });
 
   it("strips <thinking>…</thinking> segments", () => {
-    const input = ["<thinking>", "secret", "</thinking>", "", "Hello"].join("\n");
+    const input = ["<thinking>", "secret", "</thinking>", "", "Hello"].join(
+      "\n",
+    );
     expect(stripThinkingTags(input)).toBe("Hello");
   });
 

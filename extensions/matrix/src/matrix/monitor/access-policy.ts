@@ -21,7 +21,10 @@ export async function resolveMatrixAccessState(params: {
   allowFrom: string[];
   groupAllowFrom: Array<string | number>;
   senderId: string;
-  readStoreForDmPolicy: (provider: string, accountId: string) => Promise<string[]>;
+  readStoreForDmPolicy: (
+    provider: string,
+    accountId: string,
+  ) => Promise<string[]>;
 }) {
   const storeAllowFrom = params.isDirectMessage
     ? await readStoreAllowFromForDmPolicy({
@@ -31,7 +34,9 @@ export async function resolveMatrixAccessState(params: {
         readStore: params.readStoreForDmPolicy,
       })
     : [];
-  const normalizedGroupAllowFrom = normalizeMatrixAllowList(params.groupAllowFrom);
+  const normalizedGroupAllowFrom = normalizeMatrixAllowList(
+    params.groupAllowFrom,
+  );
   const senderGroupPolicy =
     params.groupPolicy === "disabled"
       ? "disabled"
@@ -52,8 +57,12 @@ export async function resolveMatrixAccessState(params: {
         userId: params.senderId,
       }),
   });
-  const effectiveAllowFrom = normalizeMatrixAllowList(access.effectiveAllowFrom);
-  const effectiveGroupAllowFrom = normalizeMatrixAllowList(access.effectiveGroupAllowFrom);
+  const effectiveAllowFrom = normalizeMatrixAllowList(
+    access.effectiveAllowFrom,
+  );
+  const effectiveGroupAllowFrom = normalizeMatrixAllowList(
+    access.effectiveGroupAllowFrom,
+  );
   return {
     access,
     effectiveAllowFrom,

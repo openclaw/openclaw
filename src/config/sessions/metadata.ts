@@ -5,7 +5,11 @@ import { getChannelDock } from "../../channels/dock.js";
 import { normalizeChannelId } from "../../channels/plugins/index.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { buildGroupDisplayName, resolveGroupSessionKey } from "./group.js";
-import type { GroupKeyResolution, SessionEntry, SessionOrigin } from "./types.js";
+import type {
+  GroupKeyResolution,
+  SessionEntry,
+  SessionOrigin,
+} from "./types.js";
 
 const mergeOrigin = (
   existing: SessionOrigin | undefined,
@@ -42,7 +46,9 @@ const mergeOrigin = (
   return Object.keys(merged).length > 0 ? merged : undefined;
 };
 
-export function deriveSessionOrigin(ctx: MsgContext): SessionOrigin | undefined {
+export function deriveSessionOrigin(
+  ctx: MsgContext,
+): SessionOrigin | undefined {
   const label = resolveConversationLabel(ctx)?.trim();
   const providerRaw =
     (typeof ctx.OriginatingChannel === "string" && ctx.OriginatingChannel) ||
@@ -53,7 +59,10 @@ export function deriveSessionOrigin(ctx: MsgContext): SessionOrigin | undefined 
   const chatType = normalizeChatType(ctx.ChatType) ?? undefined;
   const from = ctx.From?.trim();
   const to =
-    (typeof ctx.OriginatingTo === "string" ? ctx.OriginatingTo : ctx.To)?.trim() ?? undefined;
+    (typeof ctx.OriginatingTo === "string"
+      ? ctx.OriginatingTo
+      : ctx.To
+    )?.trim() ?? undefined;
   const accountId = ctx.AccountId?.trim();
   const threadId = ctx.MessageThreadId ?? undefined;
 
@@ -86,7 +95,9 @@ export function deriveSessionOrigin(ctx: MsgContext): SessionOrigin | undefined 
   return Object.keys(origin).length > 0 ? origin : undefined;
 }
 
-export function snapshotSessionOrigin(entry?: SessionEntry): SessionOrigin | undefined {
+export function snapshotSessionOrigin(
+  entry?: SessionEntry,
+): SessionOrigin | undefined {
   if (!entry?.origin) {
     return undefined;
   }
@@ -99,7 +110,8 @@ export function deriveGroupSessionPatch(params: {
   existing?: SessionEntry;
   groupResolution?: GroupKeyResolution | null;
 }): Partial<SessionEntry> | null {
-  const resolution = params.groupResolution ?? resolveGroupSessionKey(params.ctx);
+  const resolution =
+    params.groupResolution ?? resolveGroupSessionKey(params.ctx);
   if (!resolution?.channel) {
     return null;
   }
@@ -111,11 +123,15 @@ export function deriveGroupSessionPatch(params: {
   const normalizedChannel = normalizeChannelId(channel);
   const isChannelProvider = Boolean(
     normalizedChannel &&
-    getChannelDock(normalizedChannel)?.capabilities.chatTypes.includes("channel"),
+    getChannelDock(normalizedChannel)?.capabilities.chatTypes.includes(
+      "channel",
+    ),
   );
   const nextGroupChannel =
     explicitChannel ??
-    ((resolution.chatType === "channel" || isChannelProvider) && subject && subject.startsWith("#")
+    ((resolution.chatType === "channel" || isChannelProvider) &&
+    subject &&
+    subject.startsWith("#")
       ? subject
       : undefined);
   const nextSubject = nextGroupChannel ? undefined : subject;

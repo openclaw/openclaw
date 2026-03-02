@@ -11,7 +11,8 @@ type FetchBotOpenIdOptions = {
 };
 
 function isTimeoutErrorMessage(message: string | undefined): boolean {
-  return message?.toLowerCase().includes("timeout") || message?.toLowerCase().includes("timed out")
+  return message?.toLowerCase().includes("timeout") ||
+    message?.toLowerCase().includes("timed out")
     ? true
     : false;
 }

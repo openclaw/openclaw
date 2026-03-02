@@ -19,16 +19,18 @@ describe("skills/filter", () => {
   });
 
   it("normalizes for comparison with dedupe + ordering", () => {
-    expect(normalizeSkillFilterForComparison(["weather", "meme-factory", "weather"])).toEqual([
-      "meme-factory",
-      "weather",
-    ]);
+    expect(
+      normalizeSkillFilterForComparison(["weather", "meme-factory", "weather"]),
+    ).toEqual(["meme-factory", "weather"]);
   });
 
   it("matches equivalent filters after normalization", () => {
-    expect(matchesSkillFilter(["weather", "meme-factory"], [" meme-factory ", "weather"])).toBe(
-      true,
-    );
+    expect(
+      matchesSkillFilter(
+        ["weather", "meme-factory"],
+        [" meme-factory ", "weather"],
+      ),
+    ).toBe(true);
     expect(matchesSkillFilter(undefined, undefined)).toBe(true);
     expect(matchesSkillFilter([], undefined)).toBe(false);
   });

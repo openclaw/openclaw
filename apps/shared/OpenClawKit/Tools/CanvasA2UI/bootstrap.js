@@ -44,7 +44,9 @@ const appendComponentStyles = (tagName, extraStyles) => {
     return;
   }
 
-  component.styles = Array.isArray(current) ? [...current, extraStyles] : [current, extraStyles];
+  component.styles = Array.isArray(current)
+    ? [...current, extraStyles]
+    : [current, extraStyles];
 };
 
 appendComponentStyles(
@@ -93,12 +95,26 @@ appendComponentStyles(
 );
 
 const emptyClasses = () => ({});
-const textHintStyles = () => ({ h1: {}, h2: {}, h3: {}, h4: {}, h5: {}, body: {}, caption: {} });
+const textHintStyles = () => ({
+  h1: {},
+  h2: {},
+  h3: {},
+  h4: {},
+  h5: {},
+  body: {},
+  caption: {},
+});
 
 const isAndroid = /Android/i.test(globalThis.navigator?.userAgent ?? "");
-const cardShadow = isAndroid ? "0 2px 10px rgba(0,0,0,.18)" : "0 10px 30px rgba(0,0,0,.35)";
-const buttonShadow = isAndroid ? "0 2px 10px rgba(6, 182, 212, 0.14)" : "0 10px 25px rgba(6, 182, 212, 0.18)";
-const statusShadow = isAndroid ? "0 2px 10px rgba(0, 0, 0, 0.18)" : "0 10px 24px rgba(0, 0, 0, 0.25)";
+const cardShadow = isAndroid
+  ? "0 2px 10px rgba(0,0,0,.18)"
+  : "0 10px 30px rgba(0,0,0,.35)";
+const buttonShadow = isAndroid
+  ? "0 2px 10px rgba(6, 182, 212, 0.14)"
+  : "0 10px 25px rgba(6, 182, 212, 0.18)";
+const statusShadow = isAndroid
+  ? "0 2px 10px rgba(0, 0, 0, 0.18)"
+  : "0 10px 24px rgba(0, 0, 0, 0.25)";
 const statusBlur = isAndroid ? "10px" : "14px";
 
 const openclawTheme = {
@@ -107,8 +123,16 @@ const openclawTheme = {
     Button: emptyClasses(),
     Card: emptyClasses(),
     Column: emptyClasses(),
-    CheckBox: { container: emptyClasses(), element: emptyClasses(), label: emptyClasses() },
-    DateTimeInput: { container: emptyClasses(), element: emptyClasses(), label: emptyClasses() },
+    CheckBox: {
+      container: emptyClasses(),
+      element: emptyClasses(),
+      label: emptyClasses(),
+    },
+    DateTimeInput: {
+      container: emptyClasses(),
+      element: emptyClasses(),
+      label: emptyClasses(),
+    },
     Divider: emptyClasses(),
     Image: {
       all: emptyClasses(),
@@ -122,10 +146,22 @@ const openclawTheme = {
     Icon: emptyClasses(),
     List: emptyClasses(),
     Modal: { backdrop: emptyClasses(), element: emptyClasses() },
-    MultipleChoice: { container: emptyClasses(), element: emptyClasses(), label: emptyClasses() },
+    MultipleChoice: {
+      container: emptyClasses(),
+      element: emptyClasses(),
+      label: emptyClasses(),
+    },
     Row: emptyClasses(),
-    Slider: { container: emptyClasses(), element: emptyClasses(), label: emptyClasses() },
-    Tabs: { container: emptyClasses(), element: emptyClasses(), controls: { all: emptyClasses(), selected: emptyClasses() } },
+    Slider: {
+      container: emptyClasses(),
+      element: emptyClasses(),
+      label: emptyClasses(),
+    },
+    Tabs: {
+      container: emptyClasses(),
+      element: emptyClasses(),
+      controls: { all: emptyClasses(), selected: emptyClasses() },
+    },
     Text: {
       all: emptyClasses(),
       h1: emptyClasses(),
@@ -136,7 +172,11 @@ const openclawTheme = {
       caption: emptyClasses(),
       body: emptyClasses(),
     },
-    TextField: { container: emptyClasses(), element: emptyClasses(), label: emptyClasses() },
+    TextField: {
+      container: emptyClasses(),
+      element: emptyClasses(),
+      label: emptyClasses(),
+    },
     Video: emptyClasses(),
   },
   elements: {
@@ -172,7 +212,8 @@ const openclawTheme = {
   },
   additionalStyles: {
     Card: {
-      background: "linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.03))",
+      background:
+        "linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.03))",
       border: "1px solid rgba(255,255,255,.09)",
       borderRadius: "14px",
       padding: "14px",
@@ -235,8 +276,7 @@ class OpenClawA2UIHost extends LitElement {
       height: 100%;
       position: relative;
       box-sizing: border-box;
-      padding:
-        var(--openclaw-a2ui-inset-top, 0px)
+      padding: var(--openclaw-a2ui-inset-top, 0px)
         var(--openclaw-a2ui-inset-right, 0px)
         var(--openclaw-a2ui-inset-bottom, 0px)
         var(--openclaw-a2ui-inset-left, 0px);
@@ -264,7 +304,12 @@ class OpenClawA2UIHost extends LitElement {
       background: rgba(0, 0, 0, 0.45);
       border: 1px solid rgba(255, 255, 255, 0.18);
       color: rgba(255, 255, 255, 0.92);
-      font: 13px/1.2 system-ui, -apple-system, BlinkMacSystemFont, "Roboto", sans-serif;
+      font:
+        13px/1.2 system-ui,
+        -apple-system,
+        BlinkMacSystemFont,
+        "Roboto",
+        sans-serif;
       pointer-events: none;
       backdrop-filter: blur(${unsafeCSS(statusBlur)});
       -webkit-backdrop-filter: blur(${unsafeCSS(statusBlur)});
@@ -285,7 +330,12 @@ class OpenClawA2UIHost extends LitElement {
       background: rgba(0, 0, 0, 0.45);
       border: 1px solid rgba(255, 255, 255, 0.18);
       color: rgba(255, 255, 255, 0.92);
-      font: 13px/1.2 system-ui, -apple-system, BlinkMacSystemFont, "Roboto", sans-serif;
+      font:
+        13px/1.2 system-ui,
+        -apple-system,
+        BlinkMacSystemFont,
+        "Roboto",
+        sans-serif;
       pointer-events: none;
       backdrop-filter: blur(${unsafeCSS(statusBlur)});
       -webkit-backdrop-filter: blur(${unsafeCSS(statusBlur)});
@@ -302,7 +352,10 @@ class OpenClawA2UIHost extends LitElement {
       position: absolute;
       left: 50%;
       transform: translateX(-50%);
-      top: var(--openclaw-a2ui-empty-top, var(--openclaw-a2ui-status-top, 12px));
+      top: var(
+        --openclaw-a2ui-empty-top,
+        var(--openclaw-a2ui-status-top, 12px)
+      );
       text-align: center;
       opacity: 0.8;
       padding: 10px 12px;
@@ -360,7 +413,10 @@ class OpenClawA2UIHost extends LitElement {
   }
 
   #makeActionId() {
-    return globalThis.crypto?.randomUUID?.() ?? `a2ui_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+    return (
+      globalThis.crypto?.randomUUID?.() ??
+      `a2ui_${Date.now()}_${Math.random().toString(16).slice(2)}`
+    );
   }
 
   #setToast(text, kind = "ok", timeoutMs = 1400) {
@@ -377,14 +433,29 @@ class OpenClawA2UIHost extends LitElement {
 
   #handleActionStatus(evt) {
     const detail = evt?.detail ?? null;
-    if (!detail || typeof detail.id !== "string") {return;}
-    if (!this.pendingAction || this.pendingAction.id !== detail.id) {return;}
+    if (!detail || typeof detail.id !== "string") {
+      return;
+    }
+    if (!this.pendingAction || this.pendingAction.id !== detail.id) {
+      return;
+    }
 
     if (detail.ok) {
-      this.pendingAction = { ...this.pendingAction, phase: "sent", sentAt: Date.now() };
+      this.pendingAction = {
+        ...this.pendingAction,
+        phase: "sent",
+        sentAt: Date.now(),
+      };
     } else {
-      const msg = typeof detail.error === "string" && detail.error ? detail.error : "send failed";
-      this.pendingAction = { ...this.pendingAction, phase: "error", error: msg };
+      const msg =
+        typeof detail.error === "string" && detail.error
+          ? detail.error
+          : "send failed";
+      this.pendingAction = {
+        ...this.pendingAction,
+        phase: "error",
+        error: msg,
+      };
       this.#setToast(`Failed: ${msg}`, "error", 4500);
     }
     this.requestUpdate();
@@ -421,11 +492,17 @@ class OpenClawA2UIHost extends LitElement {
     for (const item of ctxItems) {
       const key = item?.key;
       const value = item?.value ?? null;
-      if (!key || !value) {continue;}
+      if (!key || !value) {
+        continue;
+      }
 
       if (typeof value.path === "string") {
         const resolved = sourceNode
-          ? this.#processor.getData(sourceNode, value.path, surfaceId ?? undefined)
+          ? this.#processor.getData(
+              sourceNode,
+              value.path,
+              surfaceId ?? undefined,
+            )
           : null;
         context[key] = resolved;
         continue;
@@ -445,7 +522,12 @@ class OpenClawA2UIHost extends LitElement {
     }
 
     const actionId = this.#makeActionId();
-    this.pendingAction = { id: actionId, name, phase: "sending", startedAt: Date.now() };
+    this.pendingAction = {
+      id: actionId,
+      name,
+      phase: "sending",
+      startedAt: Date.now(),
+    };
     this.requestUpdate();
 
     const userAction = {
@@ -472,11 +554,23 @@ class OpenClawA2UIHost extends LitElement {
         }
       } catch (e) {
         const msg = String(e?.message ?? e);
-        this.pendingAction = { id: actionId, name, phase: "error", startedAt: Date.now(), error: msg };
+        this.pendingAction = {
+          id: actionId,
+          name,
+          phase: "error",
+          startedAt: Date.now(),
+          error: msg,
+        };
         this.#setToast(`Failed: ${msg}`, "error", 4500);
       }
     } else {
-      this.pendingAction = { id: actionId, name, phase: "error", startedAt: Date.now(), error: "missing native bridge" };
+      this.pendingAction = {
+        id: actionId,
+        name,
+        phase: "error",
+        startedAt: Date.now(),
+        error: "missing native bridge",
+      };
       this.#setToast("Failed: missing native bridge", "error", 4500);
     }
   }
@@ -523,24 +617,29 @@ class OpenClawA2UIHost extends LitElement {
             ? `Failed: ${this.pendingAction.name}`
             : "";
 
-    return html`
-      ${this.pendingAction && this.pendingAction.phase !== "error"
-        ? html`<div class="status"><div class="spinner"></div><div>${statusText}</div></div>`
+    return html` ${this.pendingAction && this.pendingAction.phase !== "error"
+        ? html`<div class="status">
+            <div class="spinner"></div>
+            <div>${statusText}</div>
+          </div>`
         : ""}
       ${this.toast
-        ? html`<div class="toast ${this.toast.kind === "error" ? "error" : ""}">${this.toast.text}</div>`
+        ? html`<div class="toast ${this.toast.kind === "error" ? "error" : ""}">
+            ${this.toast.text}
+          </div>`
         : ""}
       <section id="surfaces">
-      ${repeat(
-        this.surfaces,
-        ([surfaceId]) => surfaceId,
-        ([surfaceId, surface]) => html`<a2ui-surface
-          .surfaceId=${surfaceId}
-          .surface=${surface}
-          .processor=${this.#processor}
-        ></a2ui-surface>`
-      )}
-    </section>`;
+        ${repeat(
+          this.surfaces,
+          ([surfaceId]) => surfaceId,
+          ([surfaceId, surface]) =>
+            html`<a2ui-surface
+              .surfaceId=${surfaceId}
+              .surface=${surface}
+              .processor=${this.#processor}
+            ></a2ui-surface>`,
+        )}
+      </section>`;
   }
 }
 

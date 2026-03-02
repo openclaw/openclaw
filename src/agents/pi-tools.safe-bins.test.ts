@@ -35,7 +35,8 @@ vi.mock("../plugins/tools.js", () => ({
 }));
 
 vi.mock("../infra/exec-approvals.js", async (importOriginal) => {
-  const mod = await importOriginal<typeof import("../infra/exec-approvals.js")>();
+  const mod =
+    await importOriginal<typeof import("../infra/exec-approvals.js")>();
   const approvals: ExecApprovalsResolved = {
     path: "/tmp/exec-approvals.json",
     socketPath: "/tmp/exec-approvals.sock",
@@ -124,7 +125,9 @@ async function createSafeBinsExecTool(params: {
 
 async function withSafeBinsExecTool(
   params: Parameters<typeof createSafeBinsExecTool>[0],
-  run: (ctx: Awaited<ReturnType<typeof createSafeBinsExecTool>>) => Promise<void>,
+  run: (
+    ctx: Awaited<ReturnType<typeof createSafeBinsExecTool>>,
+  ) => Promise<void>,
 ) {
   if (process.platform === "win32") {
     return;
@@ -153,7 +156,8 @@ describe("createOpenClawCodingTools safeBins", () => {
           command: `echo ${marker}`,
           workdir: tmpDir,
         });
-        const text = result.content.find((content) => content.type === "text")?.text ?? "";
+        const text =
+          result.content.find((content) => content.type === "text")?.text ?? "";
 
         const resultDetails = result.details as { status?: string };
         expect(resultDetails.status).toBe("completed");
@@ -208,10 +212,19 @@ describe("createOpenClawCodingTools safeBins", () => {
       async ({ tmpDir, execTool }) => {
         const run = async (command: string) => {
           try {
-            const result = await execTool.execute("call-oracle", { command, workdir: tmpDir });
-            const text = result.content.find((content) => content.type === "text")?.text ?? "";
+            const result = await execTool.execute("call-oracle", {
+              command,
+              workdir: tmpDir,
+            });
+            const text =
+              result.content.find((content) => content.type === "text")?.text ??
+              "";
             const resultDetails = result.details as { status?: string };
-            return { kind: "result" as const, status: resultDetails.status, text };
+            return {
+              kind: "result" as const,
+              status: resultDetails.status,
+              text,
+            };
           } catch (err) {
             return { kind: "error" as const, message: String(err) };
           }
@@ -223,7 +236,10 @@ describe("createOpenClawCodingTools safeBins", () => {
 
         const outputFlagCases = [
           { command: "sort -oblocked-short.txt", target: "blocked-short.txt" },
-          { command: "sort --output=blocked-long.txt", target: "blocked-long.txt" },
+          {
+            command: "sort --output=blocked-long.txt",
+            target: "blocked-long.txt",
+          },
         ] as const;
         for (const [index, testCase] of outputFlagCases.entries()) {
           await expect(
@@ -259,7 +275,9 @@ describe("createOpenClawCodingTools safeBins", () => {
             workdir: tmpDir,
           }),
         ).rejects.toThrow("exec denied: allowlist miss");
-        expect(fs.existsSync(path.join(tmpDir, "blocked-redirect.txt"))).toBe(false);
+        expect(fs.existsSync(path.join(tmpDir, "blocked-redirect.txt"))).toBe(
+          false,
+        );
       },
     );
   });
@@ -269,7 +287,12 @@ describe("createOpenClawCodingTools safeBins", () => {
       {
         tmpPrefix: "openclaw-safe-bins-grep-",
         safeBins: ["grep"],
-        files: [{ name: "secret.txt", contents: "SAFE_BINS_RECURSIVE_SHOULD_NOT_LEAK\n" }],
+        files: [
+          {
+            name: "secret.txt",
+            contents: "SAFE_BINS_RECURSIVE_SHOULD_NOT_LEAK\n",
+          },
+        ],
       },
       async ({ tmpDir, execTool }) => {
         await expect(

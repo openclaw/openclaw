@@ -1,6 +1,10 @@
 import { splitMediaFromOutput } from "../../media/parse.js";
 import { parseInlineDirectives } from "../../utils/directive-tags.js";
-import { isSilentReplyPrefixText, isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
+import {
+  isSilentReplyPrefixText,
+  isSilentReplyText,
+  SILENT_REPLY_TOKEN,
+} from "../tokens.js";
 import type { ReplyDirectiveParseResult } from "./reply-directives.js";
 
 type PendingReplyState = {
@@ -18,7 +22,9 @@ type ConsumeOptions = {
   silentToken?: string;
 };
 
-const splitTrailingDirective = (text: string): { text: string; tail: string } => {
+const splitTrailingDirective = (
+  text: string,
+): { text: string; tail: string } => {
   const openIndex = text.lastIndexOf("[[");
   if (openIndex < 0) {
     return { text, tail: "" };
@@ -33,7 +39,10 @@ const splitTrailingDirective = (text: string): { text: string; tail: string } =>
   };
 };
 
-const parseChunk = (raw: string, options?: { silentToken?: string }): ParsedChunk => {
+const parseChunk = (
+  raw: string,
+  options?: { silentToken?: string },
+): ParsedChunk => {
   const split = splitMediaFromOutput(raw);
   let text = split.text ?? "";
 
@@ -48,7 +57,8 @@ const parseChunk = (raw: string, options?: { silentToken?: string }): ParsedChun
 
   const silentToken = options?.silentToken ?? SILENT_REPLY_TOKEN;
   const isSilent =
-    isSilentReplyText(text, silentToken) || isSilentReplyPrefixText(text, silentToken);
+    isSilentReplyText(text, silentToken) ||
+    isSilentReplyPrefixText(text, silentToken);
   if (isSilent) {
     text = "";
   }
@@ -83,7 +93,10 @@ export function createStreamingDirectiveAccumulator() {
     activeReply = { sawCurrent: false, hasTag: false };
   };
 
-  const consume = (raw: string, options: ConsumeOptions = {}): ReplyDirectiveParseResult | null => {
+  const consume = (
+    raw: string,
+    options: ConsumeOptions = {},
+  ): ReplyDirectiveParseResult | null => {
     let combined = `${pendingTail}${raw ?? ""}`;
     pendingTail = "";
 
@@ -98,10 +111,16 @@ export function createStreamingDirectiveAccumulator() {
     }
 
     const parsed = parseChunk(combined, { silentToken: options.silentToken });
-    const hasTag = activeReply.hasTag || pendingReply.hasTag || parsed.replyToTag;
-    const sawCurrent = activeReply.sawCurrent || pendingReply.sawCurrent || parsed.replyToCurrent;
+    const hasTag =
+      activeReply.hasTag || pendingReply.hasTag || parsed.replyToTag;
+    const sawCurrent =
+      activeReply.sawCurrent ||
+      pendingReply.sawCurrent ||
+      parsed.replyToCurrent;
     const explicitId =
-      parsed.replyToExplicitId ?? pendingReply.explicitId ?? activeReply.explicitId;
+      parsed.replyToExplicitId ??
+      pendingReply.explicitId ??
+      activeReply.explicitId;
 
     const combinedResult: ReplyDirectiveParseResult = {
       ...parsed,

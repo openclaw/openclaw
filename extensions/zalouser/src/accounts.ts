@@ -4,11 +4,16 @@ import {
   normalizeAccountId,
   normalizeOptionalAccountId,
 } from "openclaw/plugin-sdk/account-id";
-import type { ResolvedZalouserAccount, ZalouserAccountConfig, ZalouserConfig } from "./types.js";
+import type {
+  ResolvedZalouserAccount,
+  ZalouserAccountConfig,
+  ZalouserConfig,
+} from "./types.js";
 import { checkZaloAuthenticated, getZaloUserInfo } from "./zalo-js.js";
 
 function listConfiguredAccountIds(cfg: OpenClawConfig): string[] {
-  const accounts = (cfg.channels?.zalouser as ZalouserConfig | undefined)?.accounts;
+  const accounts = (cfg.channels?.zalouser as ZalouserConfig | undefined)
+    ?.accounts;
   if (!accounts || typeof accounts !== "object") {
     return [];
   }
@@ -28,7 +33,9 @@ export function resolveDefaultZalouserAccountId(cfg: OpenClawConfig): string {
   const preferred = normalizeOptionalAccountId(zalouserConfig?.defaultAccount);
   if (
     preferred &&
-    listZalouserAccountIds(cfg).some((accountId) => normalizeAccountId(accountId) === preferred)
+    listZalouserAccountIds(cfg).some(
+      (accountId) => normalizeAccountId(accountId) === preferred,
+    )
   ) {
     return preferred;
   }
@@ -43,21 +50,28 @@ function resolveAccountConfig(
   cfg: OpenClawConfig,
   accountId: string,
 ): ZalouserAccountConfig | undefined {
-  const accounts = (cfg.channels?.zalouser as ZalouserConfig | undefined)?.accounts;
+  const accounts = (cfg.channels?.zalouser as ZalouserConfig | undefined)
+    ?.accounts;
   if (!accounts || typeof accounts !== "object") {
     return undefined;
   }
   return accounts[accountId] as ZalouserAccountConfig | undefined;
 }
 
-function mergeZalouserAccountConfig(cfg: OpenClawConfig, accountId: string): ZalouserAccountConfig {
+function mergeZalouserAccountConfig(
+  cfg: OpenClawConfig,
+  accountId: string,
+): ZalouserAccountConfig {
   const raw = (cfg.channels?.zalouser ?? {}) as ZalouserConfig;
   const { accounts: _ignored, defaultAccount: _ignored2, ...base } = raw;
   const account = resolveAccountConfig(cfg, accountId) ?? {};
   return { ...base, ...account };
 }
 
-function resolveProfile(config: ZalouserAccountConfig, accountId: string): string {
+function resolveProfile(
+  config: ZalouserAccountConfig,
+  accountId: string,
+): string {
   if (config.profile?.trim()) {
     return config.profile.trim();
   }
@@ -79,7 +93,8 @@ export async function resolveZalouserAccount(params: {
 }): Promise<ResolvedZalouserAccount> {
   const accountId = normalizeAccountId(params.accountId);
   const baseEnabled =
-    (params.cfg.channels?.zalouser as ZalouserConfig | undefined)?.enabled !== false;
+    (params.cfg.channels?.zalouser as ZalouserConfig | undefined)?.enabled !==
+    false;
   const merged = mergeZalouserAccountConfig(params.cfg, accountId);
   const accountEnabled = merged.enabled !== false;
   const enabled = baseEnabled && accountEnabled;
@@ -102,7 +117,8 @@ export function resolveZalouserAccountSync(params: {
 }): ResolvedZalouserAccount {
   const accountId = normalizeAccountId(params.accountId);
   const baseEnabled =
-    (params.cfg.channels?.zalouser as ZalouserConfig | undefined)?.enabled !== false;
+    (params.cfg.channels?.zalouser as ZalouserConfig | undefined)?.enabled !==
+    false;
   const merged = mergeZalouserAccountConfig(params.cfg, accountId);
   const accountEnabled = merged.enabled !== false;
   const enabled = baseEnabled && accountEnabled;

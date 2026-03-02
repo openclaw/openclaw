@@ -2,7 +2,15 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import sharp from "sharp";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import { resolveStateDir } from "../config/paths.js";
 import { sendVoiceMessageDiscord } from "../discord/send.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
@@ -46,12 +54,20 @@ function buildDeterministicBytes(length: number): Buffer {
   return buffer;
 }
 
-async function createLargeTestJpeg(): Promise<{ buffer: Buffer; file: string }> {
+async function createLargeTestJpeg(): Promise<{
+  buffer: Buffer;
+  file: string;
+}> {
   return { buffer: largeJpegBuffer, file: largeJpegFile };
 }
 
-function cloneStatWithDev<T extends { dev: number | bigint }>(stat: T, dev: number | bigint): T {
-  return Object.assign(Object.create(Object.getPrototypeOf(stat)), stat, { dev }) as T;
+function cloneStatWithDev<T extends { dev: number | bigint }>(
+  stat: T,
+  dev: number | bigint,
+): T {
+  return Object.assign(Object.create(Object.getPrototypeOf(stat)), stat, {
+    dev,
+  }) as T;
 }
 
 beforeAll(async () => {
@@ -90,13 +106,18 @@ beforeAll(async () => {
   // Keep this small so the alpha-fallback test stays deterministic but fast.
   const size = 24;
   const raw = buildDeterministicBytes(size * size * 4);
-  fallbackPngBuffer = await sharp(raw, { raw: { width: size, height: size, channels: 4 } })
+  fallbackPngBuffer = await sharp(raw, {
+    raw: { width: size, height: size, channels: 4 },
+  })
     .png()
     .toBuffer();
   fallbackPngFile = await writeTempFile(fallbackPngBuffer, ".png");
   const smallestPng = await optimizeImageToPng(fallbackPngBuffer, 1);
   fallbackPngCap = Math.max(1, smallestPng.optimizedSize - 1);
-  const jpegOptimized = await optimizeImageToJpeg(fallbackPngBuffer, fallbackPngCap);
+  const jpegOptimized = await optimizeImageToJpeg(
+    fallbackPngBuffer,
+    fallbackPngCap,
+  );
   if (jpegOptimized.buffer.length >= smallestPng.optimizedSize) {
     throw new Error(
       `JPEG fallback did not shrink below PNG (jpeg=${jpegOptimized.buffer.length}, png=${smallestPng.optimizedSize})`,
@@ -166,9 +187,9 @@ describe("web media loading", () => {
     const { buffer, file } = await createLargeTestJpeg();
     const cap = Math.max(1, Math.floor(buffer.length * 0.8));
 
-    await expect(loadWebMedia(file, { maxBytes: cap, optimizeImages: false })).rejects.toThrow(
-      /Media exceeds/i,
-    );
+    await expect(
+      loadWebMedia(file, { maxBytes: cap, optimizeImages: false }),
+    ).rejects.toThrow(/Media exceeds/i);
   });
 
   it("sniffs mime before extension when loading local files", async () => {
@@ -189,7 +210,9 @@ describe("web media loading", () => {
       url: "https://example.com/missing.jpg",
     } as unknown as Response);
 
-    await expect(loadWebMedia("https://example.com/missing.jpg", 1024 * 1024)).rejects.toThrow(
+    await expect(
+      loadWebMedia("https://example.com/missing.jpg", 1024 * 1024),
+    ).rejects.toThrow(
       /Failed to fetch media from https:\/\/example\.com\/missing\.jpg.*HTTP 404/i,
     );
 
@@ -212,9 +235,10 @@ describe("web media loading", () => {
     ] as const;
 
     for (const testCase of cases) {
-      await expect(loadWebMedia(testCase.url, 1024 * 1024), testCase.name).rejects.toThrow(
-        testCase.expectedMessage,
-      );
+      await expect(
+        loadWebMedia(testCase.url, 1024 * 1024),
+        testCase.name,
+      ).rejects.toThrow(testCase.expectedMessage);
     }
     expect(fetchMock).not.toHaveBeenCalled();
     fetchMock.mockRestore();
@@ -229,9 +253,9 @@ describe("web media loading", () => {
       status: 200,
     } as unknown as Response);
 
-    await expect(loadWebMediaRaw("https://example.com/too-big.png", 1024)).rejects.toThrow(
-      /exceeds maxBytes 1024/i,
-    );
+    await expect(
+      loadWebMediaRaw("https://example.com/too-big.png", 1024),
+    ).rejects.toThrow(/exceeds maxBytes 1024/i);
 
     fetchMock.mockRestore();
   });
@@ -267,7 +291,10 @@ describe("web media loading", () => {
       status: 200,
     } as unknown as Response);
 
-    const result = await loadWebMedia("https://example.com/download?id=1", 1024 * 1024);
+    const result = await loadWebMedia(
+      "https://example.com/download?id=1",
+      1024 * 1024,
+    );
 
     expect(result.kind).toBe("document");
     expect(result.fileName).toBe("report.pdf");
@@ -277,20 +304,27 @@ describe("web media loading", () => {
 
   it("preserves GIF from URL without JPEG conversion", async () => {
     const gifBytes = new Uint8Array([
-      0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x2c, 0x00,
-      0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x02, 0x01, 0x44, 0x00, 0x3b,
+      0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00,
+      0x00, 0x2c, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x02,
+      0x01, 0x44, 0x00, 0x3b,
     ]);
 
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
       ok: true,
       body: true,
       arrayBuffer: async () =>
-        gifBytes.buffer.slice(gifBytes.byteOffset, gifBytes.byteOffset + gifBytes.byteLength),
+        gifBytes.buffer.slice(
+          gifBytes.byteOffset,
+          gifBytes.byteOffset + gifBytes.byteLength,
+        ),
       headers: { get: () => "image/gif" },
       status: 200,
     } as unknown as Response);
 
-    const result = await loadWebMedia("https://example.com/animation.gif", 1024 * 1024);
+    const result = await loadWebMedia(
+      "https://example.com/animation.gif",
+      1024 * 1024,
+    );
 
     expect(result.kind).toBe("image");
     expect(result.contentType).toBe("image/gif");
@@ -333,7 +367,8 @@ describe("Discord voice message input hardening", () => {
       {
         name: "non-http URL scheme",
         candidate: "rtsp://example.com/voice.ogg",
-        expectedMessage: /Local media path is not under an allowed directory|ENOENT|no such file/i,
+        expectedMessage:
+          /Local media path is not under an allowed directory|ENOENT|no such file/i,
       },
     ] as const;
 
@@ -350,7 +385,9 @@ describe("local media root guard", () => {
   it("rejects local paths outside allowed roots", async () => {
     // Explicit roots that don't contain the temp file.
     await expect(
-      loadWebMedia(tinyPngFile, 1024 * 1024, { localRoots: ["/nonexistent-root"] }),
+      loadWebMedia(tinyPngFile, 1024 * 1024, {
+        localRoots: ["/nonexistent-root"],
+      }),
     ).rejects.toMatchObject({ code: "path-not-allowed" });
   });
 
@@ -366,11 +403,15 @@ describe("local media root guard", () => {
     const actualStat = await fs.stat(tinyPngFile);
     const zeroDev = typeof actualLstat.dev === "bigint" ? 0n : 0;
 
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const platformSpy = vi
+      .spyOn(process, "platform", "get")
+      .mockReturnValue("win32");
     const lstatSpy = vi
       .spyOn(fs, "lstat")
       .mockResolvedValue(cloneStatWithDev(actualLstat, zeroDev));
-    const statSpy = vi.spyOn(fs, "stat").mockResolvedValue(cloneStatWithDev(actualStat, zeroDev));
+    const statSpy = vi
+      .spyOn(fs, "stat")
+      .mockResolvedValue(cloneStatWithDev(actualStat, zeroDev));
 
     try {
       const result = await loadWebMedia(tinyPngFile, 1024 * 1024, {
@@ -449,10 +490,13 @@ describe("local media root guard", () => {
     const readFile = vi.fn(async () => Buffer.from("generated-media"));
 
     await expect(
-      loadWebMedia(path.join(stateDir, "workspace-clawdy", "tmp", "render.bin"), {
-        maxBytes: 1024 * 1024,
-        readFile,
-      }),
+      loadWebMedia(
+        path.join(stateDir, "workspace-clawdy", "tmp", "render.bin"),
+        {
+          maxBytes: 1024 * 1024,
+          readFile,
+        },
+      ),
     ).rejects.toMatchObject({ code: "path-not-allowed" });
   });
 

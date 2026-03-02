@@ -22,7 +22,9 @@ describe("buildEmbeddedRunPayloads", () => {
   },
   "request_id": "req_011CX7DwS7tSvggaNHmefwWg"
 }`;
-  const makeAssistant = (overrides: Partial<AssistantMessage>): AssistantMessage =>
+  const makeAssistant = (
+    overrides: Partial<AssistantMessage>,
+  ): AssistantMessage =>
     makeAssistantMessageFixture({
       errorMessage: errorJson,
       content: [{ type: "text", text: errorJson }],
@@ -35,7 +37,9 @@ describe("buildEmbeddedRunPayloads", () => {
       content: [],
     });
 
-  const expectOverloadedFallback = (payloads: ReturnType<typeof buildPayloads>) => {
+  const expectOverloadedFallback = (
+    payloads: ReturnType<typeof buildPayloads>,
+  ) => {
     expect(payloads).toHaveLength(1);
     expect(payloads[0]?.text).toBe(OVERLOADED_FALLBACK_TEXT);
   };
@@ -60,16 +64,22 @@ describe("buildEmbeddedRunPayloads", () => {
     });
 
     expectOverloadedFallback(payloads);
-    expect(payloads.some((payload) => payload.text === errorJsonPretty)).toBe(false);
+    expect(payloads.some((payload) => payload.text === errorJsonPretty)).toBe(
+      false,
+    );
   });
 
   it("suppresses raw error JSON from fallback assistant text", () => {
     const payloads = buildPayloads({
-      lastAssistant: makeAssistant({ content: [{ type: "text", text: errorJsonPretty }] }),
+      lastAssistant: makeAssistant({
+        content: [{ type: "text", text: errorJsonPretty }],
+      }),
     });
 
     expectOverloadedFallback(payloads);
-    expect(payloads.some((payload) => payload.text?.includes("request_id"))).toBe(false);
+    expect(
+      payloads.some((payload) => payload.text?.includes("request_id")),
+    ).toBe(false);
   });
 
   it("includes provider and model context for billing errors", () => {
@@ -84,7 +94,9 @@ describe("buildEmbeddedRunPayloads", () => {
     });
 
     expect(payloads).toHaveLength(1);
-    expect(payloads[0]?.text).toBe(formatBillingErrorMessage("Anthropic", "claude-3-5-sonnet"));
+    expect(payloads[0]?.text).toBe(
+      formatBillingErrorMessage("Anthropic", "claude-3-5-sonnet"),
+    );
     expect(payloads[0]?.isError).toBe(true);
   });
 
@@ -96,7 +108,9 @@ describe("buildEmbeddedRunPayloads", () => {
 
     expect(payloads).toHaveLength(1);
     expect(payloads[0]?.isError).toBe(true);
-    expect(payloads.some((payload) => payload.text?.includes("request_id"))).toBe(false);
+    expect(
+      payloads.some((payload) => payload.text?.includes("request_id")),
+    ).toBe(false);
   });
 
   it("does not suppress error-shaped JSON when the assistant did not error", () => {
@@ -302,7 +316,11 @@ describe("buildEmbeddedRunPayloads", () => {
     {
       name: "shows recoverable tool errors for mutating tools",
       payload: {
-        lastToolError: { toolName: "message", meta: "reply", error: "text required" },
+        lastToolError: {
+          toolName: "message",
+          meta: "reply",
+          error: "text required",
+        },
       },
       title: "Message",
       absentDetail: "required",

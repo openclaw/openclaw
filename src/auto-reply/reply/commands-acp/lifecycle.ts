@@ -33,7 +33,10 @@ import {
   getSessionBindingService,
   type SessionBindingRecord,
 } from "../../../infra/outbound/session-binding-service.js";
-import type { CommandHandlerResult, HandleCommandsParams } from "../commands-types.js";
+import type {
+  CommandHandlerResult,
+  HandleCommandsParams,
+} from "../commands-types.js";
 import {
   resolveAcpCommandAccountId,
   resolveAcpCommandBindingContext,
@@ -58,7 +61,9 @@ async function bindSpawnedAcpSessionToThread(params: {
   label?: string;
   threadMode: AcpSpawnThreadMode;
   sessionMeta?: SessionAcpMeta;
-}): Promise<{ ok: true; binding: SessionBindingRecord } | { ok: false; error: string }> {
+}): Promise<
+  { ok: true; binding: SessionBindingRecord } | { ok: false; error: string }
+> {
   const { commandParams, threadMode } = params;
   if (threadMode === "off") {
     return {
@@ -139,7 +144,8 @@ async function bindSpawnedAcpSessionToThread(params: {
       error: `Thread bindings do not support ${placement} placement for ${channel}.`,
     };
   }
-  const channelId = placement === "child" ? bindingContext.conversationId : undefined;
+  const channelId =
+    placement === "child" ? bindingContext.conversationId : undefined;
 
   if (placement === "child" && !channelId) {
     return {
@@ -159,7 +165,13 @@ async function bindSpawnedAcpSessionToThread(params: {
       typeof existingBinding?.metadata?.boundBy === "string"
         ? existingBinding.metadata.boundBy.trim()
         : "";
-    if (existingBinding && boundBy && boundBy !== "system" && senderId && senderId !== boundBy) {
+    if (
+      existingBinding &&
+      boundBy &&
+      boundBy !== "system" &&
+      senderId &&
+      senderId !== boundBy
+    ) {
       return {
         ok: false,
         error: `Only ${boundBy} can rebind this thread.`,
@@ -223,7 +235,9 @@ async function bindSpawnedAcpSessionToThread(params: {
     const message = error instanceof Error ? error.message : String(error);
     return {
       ok: false,
-      error: message || `Failed to bind a ${channel} thread/conversation to the new ACP session.`,
+      error:
+        message ||
+        `Failed to bind a ${channel} thread/conversation to the new ACP session.`,
     };
   }
 }
@@ -257,7 +271,10 @@ export async function handleAcpSpawnAction(
   }
 
   const spawn = parsed.value;
-  const agentPolicyError = resolveAcpAgentPolicyError(params.cfg, spawn.agentId);
+  const agentPolicyError = resolveAcpAgentPolicyError(
+    params.cfg,
+    spawn.agentId,
+  );
   if (agentPolicyError) {
     return stopWithText(
       collectAcpErrorText({
@@ -349,10 +366,14 @@ export async function handleAcpSpawnAction(
     if (currentThreadId && boundConversationId === currentThreadId) {
       parts.push(`Bound this thread to ${sessionKey}.`);
     } else {
-      parts.push(`Created thread ${boundConversationId} and bound it to ${sessionKey}.`);
+      parts.push(
+        `Created thread ${boundConversationId} and bound it to ${sessionKey}.`,
+      );
     }
   } else {
-    parts.push("Session is unbound (use /focus <session-key> to bind this thread/conversation).");
+    parts.push(
+      "Session is unbound (use /focus <session-key> to bind this thread/conversation).",
+    );
   }
 
   const dispatchNote = resolveAcpDispatchPolicyMessage(params.cfg);
@@ -458,7 +479,8 @@ export async function handleAcpCancelAction(
           }),
         fallbackCode: "ACP_TURN_FAILED",
         fallbackMessage: "ACP cancel failed before completion.",
-        onSuccess: () => stopWithText(`✅ Cancel requested for ACP session ${sessionKey}.`),
+        onSuccess: () =>
+          stopWithText(`✅ Cancel requested for ACP session ${sessionKey}.`),
       }),
   });
 }
@@ -548,7 +570,9 @@ export async function handleAcpSteerAction(
       if (!steerOutput) {
         return stopWithText(`✅ ACP steer sent to ${target.sessionKey}.`);
       }
-      return stopWithText(`✅ ACP steer sent to ${target.sessionKey}.\n${steerOutput}`);
+      return stopWithText(
+        `✅ ACP steer sent to ${target.sessionKey}.\n${steerOutput}`,
+      );
     },
   });
 }
@@ -570,7 +594,9 @@ export async function handleAcpCloseAction(
           allowBackendUnavailable: true,
           clearMeta: true,
         });
-        runtimeNotice = closed.runtimeNotice ? ` (${closed.runtimeNotice})` : "";
+        runtimeNotice = closed.runtimeNotice
+          ? ` (${closed.runtimeNotice})`
+          : "";
       } catch (error) {
         return stopWithText(
           collectAcpErrorText({

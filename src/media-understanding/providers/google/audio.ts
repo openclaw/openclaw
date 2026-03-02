@@ -1,7 +1,11 @@
-import type { AudioTranscriptionRequest, AudioTranscriptionResult } from "../../types.js";
+import type {
+  AudioTranscriptionRequest,
+  AudioTranscriptionResult,
+} from "../../types.js";
 import { generateGeminiInlineDataText } from "./inline-data.js";
 
-export const DEFAULT_GOOGLE_AUDIO_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
+export const DEFAULT_GOOGLE_AUDIO_BASE_URL =
+  "https://generativelanguage.googleapis.com/v1beta";
 const DEFAULT_GOOGLE_AUDIO_MODEL = "gemini-3-flash-preview";
 const DEFAULT_GOOGLE_AUDIO_PROMPT = "Transcribe the audio.";
 

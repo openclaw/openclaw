@@ -36,7 +36,10 @@ import {
   resolveUsageProviderId,
   type UsageProviderId,
 } from "../../infra/provider-usage.js";
-import { getShellEnvAppliedKeys, shouldEnableShellEnvFallback } from "../../infra/shell-env.js";
+import {
+  getShellEnvAppliedKeys,
+  shouldEnableShellEnvFallback,
+} from "../../infra/shell-env.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { renderTable } from "../../terminal/table.js";
 import { colorize, theme } from "../../terminal/theme.js";
@@ -78,8 +81,12 @@ export async function modelsStatusCommand(
   }
   const cfg = loadConfig();
   const agentId = resolveKnownAgentId({ cfg, rawAgentId: opts.agent });
-  const agentDir = agentId ? resolveAgentDir(cfg, agentId) : resolveOpenClawAgentDir();
-  const agentModelPrimary = agentId ? resolveAgentExplicitModelPrimary(cfg, agentId) : undefined;
+  const agentDir = agentId
+    ? resolveAgentDir(cfg, agentId)
+    : resolveOpenClawAgentDir();
+  const agentModelPrimary = agentId
+    ? resolveAgentExplicitModelPrimary(cfg, agentId)
+    : undefined;
   const agentFallbacksOverride = agentId
     ? resolveAgentModelFallbacksOverride(cfg, agentId)
     : undefined;
@@ -91,24 +98,30 @@ export async function modelsStatusCommand(
         defaultModel: DEFAULT_MODEL,
       });
 
-  const rawDefaultsModel = resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model) ?? "";
+  const rawDefaultsModel =
+    resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model) ?? "";
   const rawModel = agentModelPrimary ?? rawDefaultsModel;
   const resolvedLabel = `${resolved.provider}/${resolved.model}`;
   const defaultLabel = rawModel || resolvedLabel;
-  const defaultsFallbacks = resolveAgentModelFallbackValues(cfg.agents?.defaults?.model);
-  const fallbacks = agentFallbacksOverride ?? defaultsFallbacks;
-  const imageModel = resolveAgentModelPrimaryValue(cfg.agents?.defaults?.imageModel) ?? "";
-  const imageFallbacks = resolveAgentModelFallbackValues(cfg.agents?.defaults?.imageModel);
-  const aliases = Object.entries(cfg.agents?.defaults?.models ?? {}).reduce<Record<string, string>>(
-    (acc, [key, entry]) => {
-      const alias = typeof entry?.alias === "string" ? entry.alias.trim() : undefined;
-      if (alias) {
-        acc[alias] = key;
-      }
-      return acc;
-    },
-    {},
+  const defaultsFallbacks = resolveAgentModelFallbackValues(
+    cfg.agents?.defaults?.model,
   );
+  const fallbacks = agentFallbacksOverride ?? defaultsFallbacks;
+  const imageModel =
+    resolveAgentModelPrimaryValue(cfg.agents?.defaults?.imageModel) ?? "";
+  const imageFallbacks = resolveAgentModelFallbackValues(
+    cfg.agents?.defaults?.imageModel,
+  );
+  const aliases = Object.entries(cfg.agents?.defaults?.models ?? {}).reduce<
+    Record<string, string>
+  >((acc, [key, entry]) => {
+    const alias =
+      typeof entry?.alias === "string" ? entry.alias.trim() : undefined;
+    if (alias) {
+      acc[alias] = key;
+    }
+    return acc;
+  }, {});
   const allowed = Object.keys(cfg.agents?.defaults?.models ?? {});
 
   const store = ensureAuthProfileStore(agentDir);
@@ -126,13 +139,24 @@ export async function modelsStatusCommand(
   );
   const providersFromModels = new Set<string>();
   const providersInUse = new Set<string>();
-  for (const raw of [defaultLabel, ...fallbacks, imageModel, ...imageFallbacks, ...allowed]) {
+  for (const raw of [
+    defaultLabel,
+    ...fallbacks,
+    imageModel,
+    ...imageFallbacks,
+    ...allowed,
+  ]) {
     const parsed = parseModelRef(String(raw ?? ""), DEFAULT_PROVIDER);
     if (parsed?.provider) {
       providersFromModels.add(parsed.provider);
     }
   }
-  for (const raw of [defaultLabel, ...fallbacks, imageModel, ...imageFallbacks]) {
+  for (const raw of [
+    defaultLabel,
+    ...fallbacks,
+    imageModel,
+    ...imageFallbacks,
+  ]) {
     const parsed = parseModelRef(String(raw ?? ""), DEFAULT_PROVIDER);
     if (parsed?.provider) {
       providersInUse.add(parsed.provider);
@@ -176,15 +200,23 @@ export async function modelsStatusCommand(
 
   const applied = getShellEnvAppliedKeys();
   const shellFallbackEnabled =
-    shouldEnableShellEnvFallback(process.env) || cfg.env?.shellEnv?.enabled === true;
+    shouldEnableShellEnvFallback(process.env) ||
+    cfg.env?.shellEnv?.enabled === true;
 
   const providerAuth = providers
-    .map((provider) => resolveProviderAuthOverview({ provider, cfg, store, modelsPath }))
+    .map((provider) =>
+      resolveProviderAuthOverview({ provider, cfg, store, modelsPath }),
+    )
     .filter((entry) => {
-      const hasAny = entry.profiles.count > 0 || Boolean(entry.env) || Boolean(entry.modelsJson);
+      const hasAny =
+        entry.profiles.count > 0 ||
+        Boolean(entry.env) ||
+        Boolean(entry.modelsJson);
       return hasAny;
     });
-  const providerAuthMap = new Map(providerAuth.map((entry) => [entry.provider, entry]));
+  const providerAuthMap = new Map(
+    providerAuth.map((entry) => [entry.provider, entry]),
+  );
   const missingProvidersInUse = Array.from(providersInUse)
     .filter((provider) => !providerAuthMap.has(provider))
     .toSorted((a, b) => a.localeCompare(b));
@@ -193,7 +225,9 @@ export async function modelsStatusCommand(
     if (!opts.probeProfile) {
       return [];
     }
-    const raw = Array.isArray(opts.probeProfile) ? opts.probeProfile : [opts.probeProfile];
+    const raw = Array.isArray(opts.probeProfile)
+      ? opts.probeProfile
+      : [opts.probeProfile];
     return raw
       .flatMap((value) => String(value ?? "").split(","))
       .map((value) => value.trim())
@@ -203,7 +237,9 @@ export async function modelsStatusCommand(
   if (!Number.isFinite(probeTimeoutMs) || probeTimeoutMs <= 0) {
     throw new Error("--probe-timeout must be a positive number (ms).");
   }
-  const probeConcurrency = opts.probeConcurrency ? Number(opts.probeConcurrency) : 2;
+  const probeConcurrency = opts.probeConcurrency
+    ? Number(opts.probeConcurrency)
+    : 2;
   if (!Number.isFinite(probeConcurrency) || probeConcurrency <= 0) {
     throw new Error("--probe-concurrency must be > 0.");
   }
@@ -212,7 +248,10 @@ export async function modelsStatusCommand(
     throw new Error("--probe-max-tokens must be > 0.");
   }
 
-  const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider: DEFAULT_PROVIDER });
+  const aliasIndex = buildModelAliasIndex({
+    cfg,
+    defaultProvider: DEFAULT_PROVIDER,
+  });
   const rawCandidates = [
     rawModel || resolvedLabel,
     ...fallbacks,
@@ -230,7 +269,9 @@ export async function modelsStatusCommand(
         })?.ref,
     )
     .filter((ref): ref is { provider: string; model: string } => Boolean(ref));
-  const modelCandidates = resolvedCandidates.map((ref) => `${ref.provider}/${ref.model}`);
+  const modelCandidates = resolvedCandidates.map(
+    (ref) => `${ref.provider}/${ref.model}`,
+  );
 
   let probeSummary: AuthProbeSummary | undefined;
   if (opts.probe) {
@@ -257,11 +298,15 @@ export async function modelsStatusCommand(
   const providersWithOauth = providerAuth
     .filter(
       (entry) =>
-        entry.profiles.oauth > 0 || entry.profiles.token > 0 || entry.env?.value === "OAuth (env)",
+        entry.profiles.oauth > 0 ||
+        entry.profiles.token > 0 ||
+        entry.env?.value === "OAuth (env)",
     )
     .map((entry) => {
       const count =
-        entry.profiles.oauth + entry.profiles.token + (entry.env?.value === "OAuth (env)" ? 1 : 0);
+        entry.profiles.oauth +
+        entry.profiles.token +
+        (entry.env?.value === "OAuth (env)" ? 1 : 0);
       return `${entry.provider} (${count})`;
     });
 
@@ -286,7 +331,10 @@ export async function modelsStatusCommand(
       remainingMs: number;
     }> = [];
     for (const profileId of Object.keys(store.usageStats ?? {})) {
-      const unusableUntil = resolveProfileUnusableUntilForDisplay(store, profileId);
+      const unusableUntil = resolveProfileUnusableUntilForDisplay(
+        store,
+        profileId,
+      );
       if (!unusableUntil || now >= unusableUntil) {
         continue;
       }
@@ -309,9 +357,12 @@ export async function modelsStatusCommand(
 
   const checkStatus = (() => {
     const hasExpiredOrMissing =
-      oauthProfiles.some((profile) => ["expired", "missing"].includes(profile.status)) ||
-      missingProvidersInUse.length > 0;
-    const hasExpiring = oauthProfiles.some((profile) => profile.status === "expiring");
+      oauthProfiles.some((profile) =>
+        ["expired", "missing"].includes(profile.status),
+      ) || missingProvidersInUse.length > 0;
+    const hasExpiring = oauthProfiles.some(
+      (profile) => profile.status === "expiring",
+    );
     if (hasExpiredOrMissing) {
       return 1;
     }
@@ -337,7 +388,8 @@ export async function modelsStatusCommand(
             ? {
                 modelConfig: {
                   defaultSource: agentModelPrimary ? "agent" : "defaults",
-                  fallbacksSource: agentFallbacksOverride !== undefined ? "agent" : "defaults",
+                  fallbacksSource:
+                    agentFallbacksOverride !== undefined ? "agent" : "defaults",
                 },
               }
             : {}),
@@ -381,11 +433,14 @@ export async function modelsStatusCommand(
 
   const rich = isRich(opts);
   type ModelConfigSource = "agent" | "defaults";
-  const label = (value: string) => colorize(rich, theme.accent, value.padEnd(14));
+  const label = (value: string) =>
+    colorize(rich, theme.accent, value.padEnd(14));
   const labelWithSource = (value: string, source?: ModelConfigSource) =>
     label(source ? `${value} (${source})` : value);
   const displayDefault =
-    rawModel && rawModel !== resolvedLabel ? `${resolvedLabel} (from ${rawModel})` : resolvedLabel;
+    rawModel && rawModel !== resolvedLabel
+      ? `${resolvedLabel} (from ${rawModel})`
+      : resolvedLabel;
 
   runtime.log(
     `${label("Config")}${colorize(rich, theme.muted, ":")} ${colorize(rich, theme.info, shortenHomePath(CONFIG_PATH))}`,
@@ -407,7 +462,11 @@ export async function modelsStatusCommand(
   runtime.log(
     `${labelWithSource(
       `Fallbacks (${fallbacks.length || 0})`,
-      agentId ? (agentFallbacksOverride !== undefined ? "agent" : "defaults") : undefined,
+      agentId
+        ? agentFallbacksOverride !== undefined
+          ? "agent"
+          : "defaults"
+        : undefined,
     )}${colorize(rich, theme.muted, ":")} ${colorize(
       rich,
       fallbacks.length ? theme.warn : theme.muted,
@@ -606,7 +665,9 @@ export async function modelsStatusCommand(
     for (const [provider, profiles] of profilesByProvider) {
       const usageKey = resolveUsageProviderId(provider);
       const usage = usageKey ? usageByProvider.get(usageKey) : undefined;
-      const usageSuffix = usage ? colorize(rich, theme.muted, ` usage: ${usage}`) : "";
+      const usageSuffix = usage
+        ? colorize(rich, theme.muted, ` usage: ${usage}`)
+        : "";
       runtime.log(`- ${colorize(rich, theme.heading, provider)}${usageSuffix}`);
       for (const profile of profiles) {
         const labelText = profile.label || profile.profileId;
@@ -650,13 +711,21 @@ export async function modelsStatusCommand(
         return theme.muted;
       };
       const rows = sorted.map((result) => {
-        const status = colorize(rich, statusColor(result.status), result.status);
+        const status = colorize(
+          rich,
+          statusColor(result.status),
+          result.status,
+        );
         const latency = formatProbeLatency(result.latencyMs);
         const modelLabel = result.model ?? `${result.provider}/-`;
-        const modeLabel = result.mode ? ` ${colorize(rich, theme.muted, `(${result.mode})`)}` : "";
+        const modeLabel = result.mode
+          ? ` ${colorize(rich, theme.muted, `(${result.mode})`)}`
+          : "";
         const profile = `${colorize(rich, theme.accent, result.label)}${modeLabel}`;
         const detail = result.error?.trim();
-        const detailLabel = detail ? `\n${colorize(rich, theme.muted, `↳ ${detail}`)}` : "";
+        const detailLabel = detail
+          ? `\n${colorize(rich, theme.muted, `↳ ${detail}`)}`
+          : "";
         const statusLabel = `${status}${colorize(rich, theme.muted, ` · ${latency}`)}${detailLabel}`;
         return {
           Model: colorize(rich, theme.heading, modelLabel),
@@ -675,7 +744,9 @@ export async function modelsStatusCommand(
           rows,
         }).trimEnd(),
       );
-      runtime.log(colorize(rich, theme.muted, describeProbeSummary(probeSummary)));
+      runtime.log(
+        colorize(rich, theme.muted, describeProbeSummary(probeSummary)),
+      );
     }
   }
 

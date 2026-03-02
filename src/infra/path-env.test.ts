@@ -1,5 +1,13 @@
 import path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 const state = vi.hoisted(() => ({
   dirs: new Set<string>(),
@@ -21,7 +29,9 @@ vi.mock("node:fs", async (importOriginal) => {
     accessSync: (p: string, mode?: number) => {
       // `mode` is ignored in tests; we only model "is executable" or "not".
       if (!state.executables.has(absInMock(p))) {
-        throw new Error(`EACCES: permission denied, access '${p}' (mode=${mode ?? 0})`);
+        throw new Error(
+          `EACCES: permission denied, access '${p}' (mode=${mode ?? 0})`,
+        );
       }
     },
     statSync: (p: string) => ({
@@ -52,7 +62,9 @@ describe("ensureOpenClawCliOnPath", () => {
   });
 
   beforeEach(() => {
-    envSnapshot = Object.fromEntries(envKeys.map((k) => [k, process.env[k]])) as typeof envSnapshot;
+    envSnapshot = Object.fromEntries(
+      envKeys.map((k) => [k, process.env[k]]),
+    ) as typeof envSnapshot;
     state.dirs.clear();
     state.executables.clear();
 

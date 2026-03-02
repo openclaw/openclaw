@@ -92,7 +92,10 @@ export function renderNostrProfileForm(params: {
     if (type === "textarea") {
       return html`
         <div class="form-field" style="margin-bottom: 12px;">
-          <label for="${inputId}" style="display: block; margin-bottom: 4px; font-weight: 500;">
+          <label
+            for="${inputId}"
+            style="display: block; margin-bottom: 4px; font-weight: 500;"
+          >
             ${label}
           </label>
           <textarea
@@ -108,15 +111,30 @@ export function renderNostrProfileForm(params: {
             }}
             ?disabled=${state.saving}
           ></textarea>
-          ${help ? html`<div style="font-size: 12px; color: var(--text-muted); margin-top: 2px;">${help}</div>` : nothing}
-          ${error ? html`<div style="font-size: 12px; color: var(--danger-color); margin-top: 2px;">${error}</div>` : nothing}
+          ${help
+            ? html`<div
+                style="font-size: 12px; color: var(--text-muted); margin-top: 2px;"
+              >
+                ${help}
+              </div>`
+            : nothing}
+          ${error
+            ? html`<div
+                style="font-size: 12px; color: var(--danger-color); margin-top: 2px;"
+              >
+                ${error}
+              </div>`
+            : nothing}
         </div>
       `;
     }
 
     return html`
       <div class="form-field" style="margin-bottom: 12px;">
-        <label for="${inputId}" style="display: block; margin-bottom: 4px; font-weight: 500;">
+        <label
+          for="${inputId}"
+          style="display: block; margin-bottom: 4px; font-weight: 500;"
+        >
           ${label}
         </label>
         <input
@@ -132,8 +150,20 @@ export function renderNostrProfileForm(params: {
           }}
           ?disabled=${state.saving}
         />
-        ${help ? html`<div style="font-size: 12px; color: var(--text-muted); margin-top: 2px;">${help}</div>` : nothing}
-        ${error ? html`<div style="font-size: 12px; color: var(--danger-color); margin-top: 2px;">${error}</div>` : nothing}
+        ${help
+          ? html`<div
+              style="font-size: 12px; color: var(--text-muted); margin-top: 2px;"
+            >
+              ${help}
+            </div>`
+          : nothing}
+        ${error
+          ? html`<div
+              style="font-size: 12px; color: var(--danger-color); margin-top: 2px;"
+            >
+              ${error}
+            </div>`
+          : nothing}
       </div>
     `;
   };
@@ -164,82 +194,83 @@ export function renderNostrProfileForm(params: {
   };
 
   return html`
-    <div class="nostr-profile-form" style="padding: 16px; background: var(--bg-secondary); border-radius: 8px; margin-top: 12px;">
-      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+    <div
+      class="nostr-profile-form"
+      style="padding: 16px; background: var(--bg-secondary); border-radius: 8px; margin-top: 12px;"
+    >
+      <div
+        style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;"
+      >
         <div style="font-weight: 600; font-size: 16px;">Edit Profile</div>
-        <div style="font-size: 12px; color: var(--text-muted);">Account: ${accountId}</div>
+        <div style="font-size: 12px; color: var(--text-muted);">
+          Account: ${accountId}
+        </div>
       </div>
 
-      ${
-        state.error
-          ? html`<div class="callout danger" style="margin-bottom: 12px;">${state.error}</div>`
-          : nothing
-      }
-
-      ${
-        state.success
-          ? html`<div class="callout success" style="margin-bottom: 12px;">${state.success}</div>`
-          : nothing
-      }
-
+      ${state.error
+        ? html`<div class="callout danger" style="margin-bottom: 12px;">
+            ${state.error}
+          </div>`
+        : nothing}
+      ${state.success
+        ? html`<div class="callout success" style="margin-bottom: 12px;">
+            ${state.success}
+          </div>`
+        : nothing}
       ${renderPicturePreview()}
-
       ${renderField("name", "Username", {
         placeholder: "satoshi",
         maxLength: 256,
         help: "Short username (e.g., satoshi)",
       })}
-
       ${renderField("displayName", "Display Name", {
         placeholder: "Satoshi Nakamoto",
         maxLength: 256,
         help: "Your full display name",
       })}
-
       ${renderField("about", "Bio", {
         type: "textarea",
         placeholder: "Tell people about yourself...",
         maxLength: 2000,
         help: "A brief bio or description",
       })}
-
       ${renderField("picture", "Avatar URL", {
         type: "url",
         placeholder: "https://example.com/avatar.jpg",
         help: "HTTPS URL to your profile picture",
       })}
-
-      ${
-        state.showAdvanced
-          ? html`
-            <div style="border-top: 1px solid var(--border-color); padding-top: 12px; margin-top: 12px;">
-              <div style="font-weight: 500; margin-bottom: 12px; color: var(--text-muted);">Advanced</div>
+      ${state.showAdvanced
+        ? html`
+            <div
+              style="border-top: 1px solid var(--border-color); padding-top: 12px; margin-top: 12px;"
+            >
+              <div
+                style="font-weight: 500; margin-bottom: 12px; color: var(--text-muted);"
+              >
+                Advanced
+              </div>
 
               ${renderField("banner", "Banner URL", {
                 type: "url",
                 placeholder: "https://example.com/banner.jpg",
                 help: "HTTPS URL to a banner image",
               })}
-
               ${renderField("website", "Website", {
                 type: "url",
                 placeholder: "https://example.com",
                 help: "Your personal website",
               })}
-
               ${renderField("nip05", "NIP-05 Identifier", {
                 placeholder: "you@example.com",
                 help: "Verifiable identifier (e.g., you@domain.com)",
               })}
-
               ${renderField("lud16", "Lightning Address", {
                 placeholder: "you@getalby.com",
                 help: "Lightning address for tips (LUD-16)",
               })}
             </div>
           `
-          : nothing
-      }
+        : nothing}
 
       <div style="display: flex; gap: 8px; margin-top: 16px; flex-wrap: wrap;">
         <button
@@ -258,10 +289,7 @@ export function renderNostrProfileForm(params: {
           ${state.importing ? "Importing..." : "Import from Relays"}
         </button>
 
-        <button
-          class="btn"
-          @click=${callbacks.onToggleAdvanced}
-        >
+        <button class="btn" @click=${callbacks.onToggleAdvanced}>
           ${state.showAdvanced ? "Hide Advanced" : "Show Advanced"}
         </button>
 
@@ -274,15 +302,15 @@ export function renderNostrProfileForm(params: {
         </button>
       </div>
 
-      ${
-        isDirty
-          ? html`
-              <div style="font-size: 12px; color: var(--warning-color); margin-top: 8px">
-                You have unsaved changes
-              </div>
-            `
-          : nothing
-      }
+      ${isDirty
+        ? html`
+            <div
+              style="font-size: 12px; color: var(--warning-color); margin-top: 8px"
+            >
+              You have unsaved changes
+            </div>
+          `
+        : nothing}
     </div>
   `;
 }
@@ -316,6 +344,8 @@ export function createNostrProfileFormState(
     error: null,
     success: null,
     fieldErrors: {},
-    showAdvanced: Boolean(profile?.banner || profile?.website || profile?.nip05 || profile?.lud16),
+    showAdvanced: Boolean(
+      profile?.banner || profile?.website || profile?.nip05 || profile?.lud16,
+    ),
   };
 }

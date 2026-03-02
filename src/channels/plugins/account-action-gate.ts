@@ -3,10 +3,9 @@ export type ActionGate<T extends Record<string, boolean | undefined>> = (
   defaultValue?: boolean,
 ) => boolean;
 
-export function createAccountActionGate<T extends Record<string, boolean | undefined>>(params: {
-  baseActions?: T;
-  accountActions?: T;
-}): ActionGate<T> {
+export function createAccountActionGate<
+  T extends Record<string, boolean | undefined>,
+>(params: { baseActions?: T; accountActions?: T }): ActionGate<T> {
   return (key, defaultValue = true) => {
     const accountValue = params.accountActions?.[key];
     if (accountValue !== undefined) {

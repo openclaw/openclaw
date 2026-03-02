@@ -10,7 +10,8 @@ export type CliRuntimeCapture = {
 export function createCliRuntimeCapture(): CliRuntimeCapture {
   const runtimeLogs: string[] = [];
   const runtimeErrors: string[] = [];
-  const stringifyArgs = (args: unknown[]) => args.map((value) => String(value)).join(" ");
+  const stringifyArgs = (args: unknown[]) =>
+    args.map((value) => String(value)).join(" ");
   return {
     runtimeLogs,
     runtimeErrors,

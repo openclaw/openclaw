@@ -10,7 +10,11 @@ import { getClientManager as getRegistryClientManager } from "./client-manager-r
 import { DEFAULT_ACCOUNT_ID, getAccountConfig } from "./config.js";
 import { resolveTwitchToken } from "./token.js";
 import { stripMarkdownForTwitch } from "./utils/markdown.js";
-import { generateMessageId, isAccountConfigured, normalizeTwitchChannel } from "./utils/twitch.js";
+import {
+  generateMessageId,
+  isAccountConfigured,
+  normalizeTwitchChannel,
+} from "./utils/twitch.js";
 
 /**
  * Result from sending a message to Twitch.

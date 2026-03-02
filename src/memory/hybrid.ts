@@ -1,4 +1,8 @@
-import { applyMMRToHybridResults, type MMRConfig, DEFAULT_MMR_CONFIG } from "./mmr.js";
+import {
+  applyMMRToHybridResults,
+  type MMRConfig,
+  DEFAULT_MMR_CONFIG,
+} from "./mmr.js";
 import {
   applyTemporalDecayToHybridResults,
   type TemporalDecayConfig,
@@ -119,7 +123,9 @@ export async function mergeHybridResults(params: {
   }
 
   const merged = Array.from(byId.values()).map((entry) => {
-    const score = params.vectorWeight * entry.vectorScore + params.textWeight * entry.textScore;
+    const score =
+      params.vectorWeight * entry.vectorScore +
+      params.textWeight * entry.textScore;
     return {
       path: entry.path,
       startLine: entry.startLine,
@@ -130,7 +136,10 @@ export async function mergeHybridResults(params: {
     };
   });
 
-  const temporalDecayConfig = { ...DEFAULT_TEMPORAL_DECAY_CONFIG, ...params.temporalDecay };
+  const temporalDecayConfig = {
+    ...DEFAULT_TEMPORAL_DECAY_CONFIG,
+    ...params.temporalDecay,
+  };
   const decayed = await applyTemporalDecayToHybridResults({
     results: merged,
     temporalDecay: temporalDecayConfig,

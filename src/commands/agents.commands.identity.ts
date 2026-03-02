@@ -1,7 +1,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { identityHasValues, parseIdentityMarkdown } from "../agents/identity-file.js";
+import {
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "../agents/agent-scope.js";
+import {
+  identityHasValues,
+  parseIdentityMarkdown,
+} from "../agents/identity-file.js";
 import { DEFAULT_IDENTITY_FILENAME } from "../agents/workspace.js";
 import { writeConfigFile } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
@@ -30,14 +36,17 @@ type AgentsSetIdentityOptions = {
   json?: boolean;
 };
 
-const normalizeWorkspacePath = (input: string) => path.resolve(resolveUserPath(input));
+const normalizeWorkspacePath = (input: string) =>
+  path.resolve(resolveUserPath(input));
 
 const coerceTrimmed = (value?: string) => {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;
 };
 
-async function loadIdentityFromFile(filePath: string): Promise<AgentIdentity | null> {
+async function loadIdentityFromFile(
+  filePath: string,
+): Promise<AgentIdentity | null> {
   try {
     const content = await fs.readFile(filePath, "utf-8");
     const parsed = parseIdentityMarkdown(content);
@@ -61,7 +70,9 @@ function resolveAgentIdByWorkspace(
       : [resolveDefaultAgentId(cfg)];
   const normalizedTarget = normalizeWorkspacePath(workspaceDir);
   return ids.filter(
-    (id) => normalizeWorkspacePath(resolveAgentWorkspaceDir(cfg, id)) === normalizedTarget,
+    (id) =>
+      normalizeWorkspacePath(resolveAgentWorkspaceDir(cfg, id)) ===
+      normalizedTarget,
   );
 }
 
@@ -79,11 +90,15 @@ export async function agentsSetIdentityCommand(
   const emojiRaw = coerceTrimmed(opts.emoji);
   const themeRaw = coerceTrimmed(opts.theme);
   const avatarRaw = coerceTrimmed(opts.avatar);
-  const hasExplicitIdentity = Boolean(nameRaw || emojiRaw || themeRaw || avatarRaw);
+  const hasExplicitIdentity = Boolean(
+    nameRaw || emojiRaw || themeRaw || avatarRaw,
+  );
 
   const identityFileRaw = coerceTrimmed(opts.identityFile);
   const workspaceRaw = coerceTrimmed(opts.workspace);
-  const wantsIdentityFile = Boolean(opts.fromIdentity || identityFileRaw || !hasExplicitIdentity);
+  const wantsIdentityFile = Boolean(
+    opts.fromIdentity || identityFileRaw || !hasExplicitIdentity,
+  );
 
   let identityFilePath: string | undefined;
   let workspaceDir: string | undefined;
@@ -100,7 +115,9 @@ export async function agentsSetIdentityCommand(
   let agentId = agentRaw ? normalizeAgentId(agentRaw) : undefined;
   if (!agentId) {
     if (!workspaceDir) {
-      runtime.error("Select an agent with --agent or provide a workspace via --workspace.");
+      runtime.error(
+        "Select an agent with --agent or provide a workspace via --workspace.",
+      );
       runtime.exit(1);
       return;
     }
@@ -132,18 +149,29 @@ export async function agentsSetIdentityCommand(
     if (!identityFromFile) {
       const targetPath =
         identityFilePath ??
-        (workspaceDir ? path.join(workspaceDir, DEFAULT_IDENTITY_FILENAME) : "IDENTITY.md");
-      runtime.error(`No identity data found in ${shortenHomePath(targetPath)}.`);
+        (workspaceDir
+          ? path.join(workspaceDir, DEFAULT_IDENTITY_FILENAME)
+          : "IDENTITY.md");
+      runtime.error(
+        `No identity data found in ${shortenHomePath(targetPath)}.`,
+      );
       runtime.exit(1);
       return;
     }
   }
 
   const fileTheme =
-    identityFromFile?.theme ?? identityFromFile?.creature ?? identityFromFile?.vibe ?? undefined;
+    identityFromFile?.theme ??
+    identityFromFile?.creature ??
+    identityFromFile?.vibe ??
+    undefined;
   const incomingIdentity: IdentityConfig = {
-    ...(nameRaw || identityFromFile?.name ? { name: nameRaw ?? identityFromFile?.name } : {}),
-    ...(emojiRaw || identityFromFile?.emoji ? { emoji: emojiRaw ?? identityFromFile?.emoji } : {}),
+    ...(nameRaw || identityFromFile?.name
+      ? { name: nameRaw ?? identityFromFile?.name }
+      : {}),
+    ...(emojiRaw || identityFromFile?.emoji
+      ? { emoji: emojiRaw ?? identityFromFile?.emoji }
+      : {}),
     ...(themeRaw || fileTheme ? { theme: themeRaw ?? fileTheme } : {}),
     ...(avatarRaw || identityFromFile?.avatar
       ? { avatar: avatarRaw ?? identityFromFile?.avatar }

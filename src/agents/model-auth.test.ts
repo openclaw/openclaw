@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { AuthProfileStore } from "./auth-profiles.js";
-import { requireApiKey, resolveAwsSdkEnvVarName, resolveModelAuthMode } from "./model-auth.js";
+import {
+  requireApiKey,
+  resolveAwsSdkEnvVarName,
+  resolveModelAuthMode,
+} from "./model-auth.js";
 
 describe("resolveAwsSdkEnvVarName", () => {
   it("prefers bearer token over access keys and profile", () => {
@@ -79,15 +83,18 @@ describe("resolveModelAuthMode", () => {
   });
 
   it("returns aws-sdk for bedrock alias without explicit auth override", () => {
-    expect(resolveModelAuthMode("bedrock", undefined, { version: 1, profiles: {} })).toBe(
-      "aws-sdk",
-    );
+    expect(
+      resolveModelAuthMode("bedrock", undefined, { version: 1, profiles: {} }),
+    ).toBe("aws-sdk");
   });
 
   it("returns aws-sdk for aws-bedrock alias without explicit auth override", () => {
-    expect(resolveModelAuthMode("aws-bedrock", undefined, { version: 1, profiles: {} })).toBe(
-      "aws-sdk",
-    );
+    expect(
+      resolveModelAuthMode("aws-bedrock", undefined, {
+        version: 1,
+        profiles: {},
+      }),
+    ).toBe("aws-sdk");
   });
 });
 

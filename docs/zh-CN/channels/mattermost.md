@@ -129,8 +129,16 @@ Mattermost 支持在 `channels.mattermost.accounts` 下配置多个账户：
   channels: {
     mattermost: {
       accounts: {
-        default: { name: "Primary", botToken: "mm-token", baseUrl: "https://chat.example.com" },
-        alerts: { name: "Alerts", botToken: "mm-token-2", baseUrl: "https://alerts.example.com" },
+        default: {
+          name: "Primary",
+          botToken: "mm-token",
+          baseUrl: "https://chat.example.com",
+        },
+        alerts: {
+          name: "Alerts",
+          botToken: "mm-token-2",
+          baseUrl: "https://alerts.example.com",
+        },
       },
     },
   },

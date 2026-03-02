@@ -29,7 +29,10 @@ export function validateArchiveEntryPath(
   }
 }
 
-export function stripArchivePath(entryPath: string, stripComponents: number): string | null {
+export function stripArchivePath(
+  entryPath: string,
+  stripComponents: number,
+): string | null {
   const raw = normalizeArchiveEntryPath(entryPath);
   if (!raw || raw === "." || raw === "./") {
     return null;
@@ -37,7 +40,9 @@ export function stripArchivePath(entryPath: string, stripComponents: number): st
 
   // Mimic tar --strip-components semantics (raw segments before normalization)
   // so strip-induced escapes like "a/../b" are visible to validators.
-  const parts = raw.split("/").filter((part) => part.length > 0 && part !== ".");
+  const parts = raw
+    .split("/")
+    .filter((part) => part.length > 0 && part !== ".");
   const strip = Math.max(0, Math.floor(stripComponents));
   const stripped = strip === 0 ? parts.join("/") : parts.slice(strip).join("/");
   const result = path.posix.normalize(stripped);
@@ -57,7 +62,9 @@ export function resolveArchiveOutputPath(params: {
   const outPath = path.resolve(params.rootDir, params.relPath);
   const escapeLabel = params.escapeLabel ?? "destination";
   if (!outPath.startsWith(safeBase)) {
-    throw new Error(`archive entry escapes ${escapeLabel}: ${params.originalPath}`);
+    throw new Error(
+      `archive entry escapes ${escapeLabel}: ${params.originalPath}`,
+    );
   }
   return outPath;
 }

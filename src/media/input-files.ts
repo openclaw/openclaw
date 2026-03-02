@@ -74,7 +74,12 @@ export type InputFetchResult = {
   contentType?: string;
 };
 
-export const DEFAULT_INPUT_IMAGE_MIMES = ["image/jpeg", "image/png", "image/gif", "image/webp"];
+export const DEFAULT_INPUT_IMAGE_MIMES = [
+  "image/jpeg",
+  "image/png",
+  "image/gif",
+  "image/webp",
+];
 export const DEFAULT_INPUT_FILE_MIMES = [
   "text/plain",
   "text/markdown",
@@ -105,7 +110,9 @@ function rejectOversizedBase64Payload(params: {
   }
 }
 
-export function normalizeMimeType(value: string | undefined): string | undefined {
+export function normalizeMimeType(
+  value: string | undefined,
+): string | undefined {
   if (!value) {
     return undefined;
   }
@@ -129,15 +136,25 @@ export function parseContentType(value: string | undefined): {
   return { mimeType, charset };
 }
 
-export function normalizeMimeList(values: string[] | undefined, fallback: string[]): Set<string> {
+export function normalizeMimeList(
+  values: string[] | undefined,
+  fallback: string[],
+): Set<string> {
   const input = values && values.length > 0 ? values : fallback;
-  return new Set(input.map((value) => normalizeMimeType(value)).filter(Boolean) as string[]);
+  return new Set(
+    input.map((value) => normalizeMimeType(value)).filter(Boolean) as string[],
+  );
 }
 
-export function resolveInputFileLimits(config?: InputFileLimitsConfig): InputFileLimits {
+export function resolveInputFileLimits(
+  config?: InputFileLimitsConfig,
+): InputFileLimits {
   return {
     allowUrl: config?.allowUrl ?? true,
-    allowedMimes: normalizeMimeList(config?.allowedMimes, DEFAULT_INPUT_FILE_MIMES),
+    allowedMimes: normalizeMimeList(
+      config?.allowedMimes,
+      DEFAULT_INPUT_FILE_MIMES,
+    ),
     maxBytes: config?.maxBytes ?? DEFAULT_INPUT_FILE_MAX_BYTES,
     maxChars: config?.maxChars ?? DEFAULT_INPUT_FILE_MAX_CHARS,
     maxRedirects: config?.maxRedirects ?? DEFAULT_INPUT_MAX_REDIRECTS,
@@ -145,7 +162,8 @@ export function resolveInputFileLimits(config?: InputFileLimitsConfig): InputFil
     pdf: {
       maxPages: config?.pdf?.maxPages ?? DEFAULT_INPUT_PDF_MAX_PAGES,
       maxPixels: config?.pdf?.maxPixels ?? DEFAULT_INPUT_PDF_MAX_PIXELS,
-      minTextChars: config?.pdf?.minTextChars ?? DEFAULT_INPUT_PDF_MIN_TEXT_CHARS,
+      minTextChars:
+        config?.pdf?.minTextChars ?? DEFAULT_INPUT_PDF_MIN_TEXT_CHARS,
     },
   };
 }
@@ -169,14 +187,18 @@ export async function fetchWithGuard(params: {
 
   try {
     if (!response.ok) {
-      throw new Error(`Failed to fetch: ${response.status} ${response.statusText}`);
+      throw new Error(
+        `Failed to fetch: ${response.status} ${response.statusText}`,
+      );
     }
 
     const contentLength = response.headers.get("content-length");
     if (contentLength) {
       const size = Number(contentLength);
       if (Number.isFinite(size) && size > params.maxBytes) {
-        throw new Error(`Content too large: ${size} bytes (limit: ${params.maxBytes} bytes)`);
+        throw new Error(
+          `Content too large: ${size} bytes (limit: ${params.maxBytes} bytes)`,
+        );
       }
     }
 
@@ -191,7 +213,10 @@ export async function fetchWithGuard(params: {
   }
 }
 
-function decodeTextContent(buffer: Buffer, charset: string | undefined): string {
+function decodeTextContent(
+  buffer: Buffer,
+  charset: string | undefined,
+): string {
   const encoding = charset?.trim().toLowerCase() || "utf-8";
   try {
     return new TextDecoder(encoding).decode(buffer);
@@ -215,7 +240,11 @@ export async function extractImageContentFromSource(
     if (!source.data) {
       throw new Error("input_image base64 source missing 'data' field");
     }
-    rejectOversizedBase64Payload({ data: source.data, maxBytes: limits.maxBytes, label: "Image" });
+    rejectOversizedBase64Payload({
+      data: source.data,
+      maxBytes: limits.maxBytes,
+      label: "Image",
+    });
     const canonicalData = canonicalizeBase64(source.data);
     if (!canonicalData) {
       throw new Error("input_image base64 source has invalid 'data' field");
@@ -249,9 +278,15 @@ export async function extractImageContentFromSource(
       auditContext: "openresponses.input_image",
     });
     if (!limits.allowedMimes.has(result.mimeType)) {
-      throw new Error(`Unsupported image MIME type from URL: ${result.mimeType}`);
+      throw new Error(
+        `Unsupported image MIME type from URL: ${result.mimeType}`,
+      );
     }
-    return { type: "image", data: result.buffer.toString("base64"), mimeType: result.mimeType };
+    return {
+      type: "image",
+      data: result.buffer.toString("base64"),
+      mimeType: result.mimeType,
+    };
   }
 
   throw new Error("input_image must have 'source.url' or 'source.data'");
@@ -272,7 +307,11 @@ export async function extractFileContentFromSource(params: {
     if (!source.data) {
       throw new Error("input_file base64 source missing 'data' field");
     }
-    rejectOversizedBase64Payload({ data: source.data, maxBytes: limits.maxBytes, label: "File" });
+    rejectOversizedBase64Payload({
+      data: source.data,
+      maxBytes: limits.maxBytes,
+      label: "File",
+    });
     const canonicalData = canonicalizeBase64(source.data);
     if (!canonicalData) {
       throw new Error("input_file base64 source has invalid 'data' field");
@@ -305,7 +344,9 @@ export async function extractFileContentFromSource(params: {
   }
 
   if (buffer.byteLength > limits.maxBytes) {
-    throw new Error(`File too large: ${buffer.byteLength} bytes (limit: ${limits.maxBytes} bytes)`);
+    throw new Error(
+      `File too large: ${buffer.byteLength} bytes (limit: ${limits.maxBytes} bytes)`,
+    );
   }
 
   if (!mimeType) {
@@ -325,7 +366,9 @@ export async function extractFileContentFromSource(params: {
         logWarn(`media: PDF image extraction skipped, ${String(err)}`);
       },
     });
-    const text = extracted.text ? clampText(extracted.text, limits.maxChars) : "";
+    const text = extracted.text
+      ? clampText(extracted.text, limits.maxChars)
+      : "";
     return {
       filename,
       text,

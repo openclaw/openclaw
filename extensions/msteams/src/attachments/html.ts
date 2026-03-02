@@ -6,7 +6,10 @@ import {
   isLikelyImageAttachment,
   safeHostForUrl,
 } from "./shared.js";
-import type { MSTeamsAttachmentLike, MSTeamsHtmlAttachmentSummary } from "./types.js";
+import type {
+  MSTeamsAttachmentLike,
+  MSTeamsHtmlAttachmentSummary,
+} from "./types.js";
 
 export function summarizeMSTeamsHtmlAttachments(
   attachments: MSTeamsAttachmentLike[] | undefined,

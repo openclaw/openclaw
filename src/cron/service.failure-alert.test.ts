@@ -12,7 +12,9 @@ const noopLogger = {
 };
 
 async function makeStorePath() {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-failure-alert-"));
+  const dir = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-cron-failure-alert-"),
+  );
   return {
     storePath: path.join(dir, "cron", "jobs.json"),
     cleanup: async () => {

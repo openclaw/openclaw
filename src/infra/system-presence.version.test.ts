@@ -20,7 +20,9 @@ describe("system-presence version fallback", () => {
         npm_package_version: "1.0.0-package",
       },
       ({ listSystemPresence }) => {
-        const selfEntry = listSystemPresence().find((entry) => entry.reason === "self");
+        const selfEntry = listSystemPresence().find(
+          (entry) => entry.reason === "self",
+        );
         expect(selfEntry?.version).toBe("2.4.6-service");
       },
     );
@@ -34,7 +36,9 @@ describe("system-presence version fallback", () => {
         npm_package_version: "1.0.0-package",
       },
       ({ listSystemPresence }) => {
-        const selfEntry = listSystemPresence().find((entry) => entry.reason === "self");
+        const selfEntry = listSystemPresence().find(
+          (entry) => entry.reason === "self",
+        );
         expect(selfEntry?.version).toBe("9.9.9-cli");
       },
     );
@@ -48,7 +52,9 @@ describe("system-presence version fallback", () => {
         npm_package_version: "1.0.0-package",
       },
       ({ listSystemPresence }) => {
-        const selfEntry = listSystemPresence().find((entry) => entry.reason === "self");
+        const selfEntry = listSystemPresence().find(
+          (entry) => entry.reason === "self",
+        );
         expect(selfEntry?.version).toBe("1.0.0-package");
       },
     );

@@ -27,12 +27,19 @@ describe("downloadGoogleChatMedia", () => {
     });
     const response = new Response(body, {
       status: 200,
-      headers: { "content-length": "50", "content-type": "application/octet-stream" },
+      headers: {
+        "content-length": "50",
+        "content-type": "application/octet-stream",
+      },
     });
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response));
 
     await expect(
-      downloadGoogleChatMedia({ account, resourceName: "media/123", maxBytes: 10 }),
+      downloadGoogleChatMedia({
+        account,
+        resourceName: "media/123",
+        maxBytes: 10,
+      }),
     ).rejects.toThrow(/max bytes/i);
   });
 
@@ -55,7 +62,11 @@ describe("downloadGoogleChatMedia", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response));
 
     await expect(
-      downloadGoogleChatMedia({ account, resourceName: "media/123", maxBytes: 10 }),
+      downloadGoogleChatMedia({
+        account,
+        resourceName: "media/123",
+        maxBytes: 10,
+      }),
     ).rejects.toThrow(/max bytes/i);
   });
 });
@@ -69,7 +80,9 @@ describe("sendGoogleChatMessage", () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValue(
-        new Response(JSON.stringify({ name: "spaces/AAA/messages/123" }), { status: 200 }),
+        new Response(JSON.stringify({ name: "spaces/AAA/messages/123" }), {
+          status: 200,
+        }),
       );
     vi.stubGlobal("fetch", fetchMock);
 
@@ -81,7 +94,9 @@ describe("sendGoogleChatMessage", () => {
     });
 
     const [url, init] = fetchMock.mock.calls[0] ?? [];
-    expect(String(url)).toContain("messageReplyOption=REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD");
+    expect(String(url)).toContain(
+      "messageReplyOption=REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD",
+    );
     expect(JSON.parse(String(init?.body))).toMatchObject({
       text: "hello",
       thread: { name: "spaces/AAA/threads/xyz" },
@@ -92,7 +107,9 @@ describe("sendGoogleChatMessage", () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValue(
-        new Response(JSON.stringify({ name: "spaces/AAA/messages/124" }), { status: 200 }),
+        new Response(JSON.stringify({ name: "spaces/AAA/messages/124" }), {
+          status: 200,
+        }),
       );
     vi.stubGlobal("fetch", fetchMock);
 

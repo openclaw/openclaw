@@ -5,7 +5,8 @@ import {
 } from "@mariozechner/pi-coding-agent";
 import { Container, Text } from "@mariozechner/pi-tui";
 
-const PR_PROMPT_PATTERN = /^\s*You are given one or more GitHub PR URLs:\s*(\S+)/im;
+const PR_PROMPT_PATTERN =
+  /^\s*You are given one or more GitHub PR URLs:\s*(\S+)/im;
 const ISSUE_PROMPT_PATTERN = /^\s*Analyze GitHub issue\(s\):\s*(\S+)/im;
 
 type PromptMatch = {
@@ -82,7 +83,9 @@ export default function promptUrlWidgetExtension(pi: ExtensionAPI) {
     authorText?: string,
   ) => {
     ctx.ui.setWidget("prompt-url", (_tui, thm) => {
-      const titleText = title ? thm.fg("accent", title) : thm.fg("accent", match.url);
+      const titleText = title
+        ? thm.fg("accent", title)
+        : thm.fg("accent", match.url);
       const authorLine = authorText ? thm.fg("muted", authorText) : undefined;
       const urlLine = thm.fg("dim", match.url);
 
@@ -99,11 +102,17 @@ export default function promptUrlWidgetExtension(pi: ExtensionAPI) {
     });
   };
 
-  const applySessionName = (ctx: ExtensionContext, match: PromptMatch, title?: string) => {
+  const applySessionName = (
+    ctx: ExtensionContext,
+    match: PromptMatch,
+    title?: string,
+  ) => {
     const label = match.kind === "pr" ? "PR" : "Issue";
     const trimmedTitle = title?.trim();
     const fallbackName = `${label}: ${match.url}`;
-    const desiredName = trimmedTitle ? `${label}: ${trimmedTitle} (${match.url})` : fallbackName;
+    const desiredName = trimmedTitle
+      ? `${label}: ${trimmedTitle} (${match.url})`
+      : fallbackName;
     const currentName = pi.getSessionName()?.trim();
     if (!currentName) {
       pi.setSessionName(desiredName);
@@ -137,7 +146,9 @@ export default function promptUrlWidgetExtension(pi: ExtensionAPI) {
     rebuildFromSession(ctx);
   });
 
-  const getUserText = (content: string | { type: string; text?: string }[] | undefined): string => {
+  const getUserText = (
+    content: string | { type: string; text?: string }[] | undefined,
+  ): string => {
     if (!content) {
       return "";
     }
@@ -146,7 +157,10 @@ export default function promptUrlWidgetExtension(pi: ExtensionAPI) {
     }
     return (
       content
-        .filter((block): block is { type: "text"; text: string } => block.type === "text")
+        .filter(
+          (block): block is { type: "text"; text: string } =>
+            block.type === "text",
+        )
         .map((block) => block.text)
         .join("\n") ?? ""
     );

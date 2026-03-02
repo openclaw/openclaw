@@ -35,7 +35,10 @@ describe("parseSlackTarget", () => {
   it("rejects invalid @ and # targets", () => {
     const cases = [
       { input: "@bob-1", expectedMessage: /Slack DMs require a user id/ },
-      { input: "#general-1", expectedMessage: /Slack channels require a channel id/ },
+      {
+        input: "#general-1",
+        expectedMessage: /Slack channels require a channel id/,
+      },
     ] as const;
     for (const testCase of cases) {
       expect(() => parseSlackTarget(testCase.input), testCase.input).toThrow(
@@ -52,7 +55,9 @@ describe("resolveSlackChannelId", () => {
   });
 
   it("rejects user targets", () => {
-    expect(() => resolveSlackChannelId("user:U123")).toThrow(/channel id is required/i);
+    expect(() => resolveSlackChannelId("user:U123")).toThrow(
+      /channel id is required/i,
+    );
   });
 });
 

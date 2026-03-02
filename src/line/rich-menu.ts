@@ -3,7 +3,12 @@ import { messagingApi } from "@line/bot-sdk";
 import { loadConfig } from "../config/config.js";
 import { logVerbose } from "../globals.js";
 import { resolveLineAccount } from "./accounts.js";
-import { datetimePickerAction, messageAction, postbackAction, uriAction } from "./actions.js";
+import {
+  datetimePickerAction,
+  messageAction,
+  postbackAction,
+  uriAction,
+} from "./actions.js";
 import { resolveLineChannelAccessToken } from "./channel-access-token.js";
 
 type RichMenuRequest = messagingApi.RichMenuRequest;
@@ -54,7 +59,9 @@ function getClient(opts: RichMenuOpts = {}): messagingApi.MessagingApiClient {
   });
 }
 
-function getBlobClient(opts: RichMenuOpts = {}): messagingApi.MessagingApiBlobClient {
+function getBlobClient(
+  opts: RichMenuOpts = {},
+): messagingApi.MessagingApiBlobClient {
   const cfg = loadConfig();
   const account = resolveLineAccount({
     cfg,
@@ -117,9 +124,14 @@ export async function uploadRichMenuImage(
   const blobClient = getBlobClient(opts);
 
   const imageData = await readFile(imagePath);
-  const contentType = imagePath.toLowerCase().endsWith(".png") ? "image/png" : "image/jpeg";
+  const contentType = imagePath.toLowerCase().endsWith(".png")
+    ? "image/png"
+    : "image/jpeg";
 
-  await blobClient.setRichMenuImage(richMenuId, new Blob([imageData], { type: contentType }));
+  await blobClient.setRichMenuImage(
+    richMenuId,
+    new Blob([imageData], { type: contentType }),
+  );
 
   if (opts.verbose) {
     logVerbose(`line: uploaded image to rich menu ${richMenuId}`);
@@ -145,7 +157,9 @@ export async function setDefaultRichMenu(
 /**
  * Cancel the default rich menu
  */
-export async function cancelDefaultRichMenu(opts: RichMenuOpts = {}): Promise<void> {
+export async function cancelDefaultRichMenu(
+  opts: RichMenuOpts = {},
+): Promise<void> {
   const client = getClient(opts);
 
   await client.cancelDefaultRichMenu();
@@ -158,7 +172,9 @@ export async function cancelDefaultRichMenu(opts: RichMenuOpts = {}): Promise<vo
 /**
  * Get the default rich menu ID
  */
-export async function getDefaultRichMenuId(opts: RichMenuOpts = {}): Promise<string | null> {
+export async function getDefaultRichMenuId(
+  opts: RichMenuOpts = {},
+): Promise<string | null> {
   const client = getClient(opts);
 
   try {
@@ -204,7 +220,9 @@ export async function linkRichMenuToUsers(
   }
 
   if (opts.verbose) {
-    logVerbose(`line: linked rich menu ${richMenuId} to ${userIds.length} users`);
+    logVerbose(
+      `line: linked rich menu ${richMenuId} to ${userIds.length} users`,
+    );
   }
 }
 
@@ -264,7 +282,9 @@ export async function getRichMenuIdOfUser(
 /**
  * Get a list of all rich menus
  */
-export async function getRichMenuList(opts: RichMenuOpts = {}): Promise<RichMenuResponse[]> {
+export async function getRichMenuList(
+  opts: RichMenuOpts = {},
+): Promise<RichMenuResponse[]> {
   const client = getClient(opts);
 
   const response = await client.getRichMenuList();
@@ -290,7 +310,10 @@ export async function getRichMenu(
 /**
  * Delete a rich menu
  */
-export async function deleteRichMenu(richMenuId: string, opts: RichMenuOpts = {}): Promise<void> {
+export async function deleteRichMenu(
+  richMenuId: string,
+  opts: RichMenuOpts = {},
+): Promise<void> {
   const client = getClient(opts);
 
   await client.deleteRichMenu(richMenuId);
@@ -323,7 +346,10 @@ export async function createRichMenuAlias(
 /**
  * Delete a rich menu alias
  */
-export async function deleteRichMenuAlias(aliasId: string, opts: RichMenuOpts = {}): Promise<void> {
+export async function deleteRichMenuAlias(
+  aliasId: string,
+  opts: RichMenuOpts = {},
+): Promise<void> {
   const client = getClient(opts);
 
   await client.deleteRichMenuAlias(aliasId);
@@ -350,17 +376,34 @@ export function createGridLayout(
 
   return [
     // Top row
-    { bounds: { x: 0, y: 0, width: colWidth, height: rowHeight }, action: actions[0] },
-    { bounds: { x: colWidth, y: 0, width: colWidth, height: rowHeight }, action: actions[1] },
-    { bounds: { x: colWidth * 2, y: 0, width: colWidth, height: rowHeight }, action: actions[2] },
+    {
+      bounds: { x: 0, y: 0, width: colWidth, height: rowHeight },
+      action: actions[0],
+    },
+    {
+      bounds: { x: colWidth, y: 0, width: colWidth, height: rowHeight },
+      action: actions[1],
+    },
+    {
+      bounds: { x: colWidth * 2, y: 0, width: colWidth, height: rowHeight },
+      action: actions[2],
+    },
     // Bottom row
-    { bounds: { x: 0, y: rowHeight, width: colWidth, height: rowHeight }, action: actions[3] },
+    {
+      bounds: { x: 0, y: rowHeight, width: colWidth, height: rowHeight },
+      action: actions[3],
+    },
     {
       bounds: { x: colWidth, y: rowHeight, width: colWidth, height: rowHeight },
       action: actions[4],
     },
     {
-      bounds: { x: colWidth * 2, y: rowHeight, width: colWidth, height: rowHeight },
+      bounds: {
+        x: colWidth * 2,
+        y: rowHeight,
+        width: colWidth,
+        height: rowHeight,
+      },
       action: actions[5],
     },
   ];

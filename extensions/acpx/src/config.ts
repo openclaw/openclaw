@@ -2,18 +2,33 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { OpenClawPluginConfigSchema } from "openclaw/plugin-sdk";
 
-export const ACPX_PERMISSION_MODES = ["approve-all", "approve-reads", "deny-all"] as const;
+export const ACPX_PERMISSION_MODES = [
+  "approve-all",
+  "approve-reads",
+  "deny-all",
+] as const;
 export type AcpxPermissionMode = (typeof ACPX_PERMISSION_MODES)[number];
 
 export const ACPX_NON_INTERACTIVE_POLICIES = ["deny", "fail"] as const;
-export type AcpxNonInteractivePermissionPolicy = (typeof ACPX_NON_INTERACTIVE_POLICIES)[number];
+export type AcpxNonInteractivePermissionPolicy =
+  (typeof ACPX_NON_INTERACTIVE_POLICIES)[number];
 
 export const ACPX_PINNED_VERSION = "0.1.15";
 export const ACPX_VERSION_ANY = "any";
 const ACPX_BIN_NAME = process.platform === "win32" ? "acpx.cmd" : "acpx";
-export const ACPX_PLUGIN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-export const ACPX_BUNDLED_BIN = path.join(ACPX_PLUGIN_ROOT, "node_modules", ".bin", ACPX_BIN_NAME);
-export function buildAcpxLocalInstallCommand(version: string = ACPX_PINNED_VERSION): string {
+export const ACPX_PLUGIN_ROOT = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..",
+);
+export const ACPX_BUNDLED_BIN = path.join(
+  ACPX_PLUGIN_ROOT,
+  "node_modules",
+  ".bin",
+  ACPX_BIN_NAME,
+);
+export function buildAcpxLocalInstallCommand(
+  version: string = ACPX_PINNED_VERSION,
+): string {
   return `npm install --omit=dev --no-save acpx@${version}`;
 }
 export const ACPX_LOCAL_INSTALL_COMMAND = buildAcpxLocalInstallCommand();
@@ -43,7 +58,8 @@ export type ResolvedAcpxPluginConfig = {
 };
 
 const DEFAULT_PERMISSION_MODE: AcpxPermissionMode = "approve-reads";
-const DEFAULT_NON_INTERACTIVE_POLICY: AcpxNonInteractivePermissionPolicy = "fail";
+const DEFAULT_NON_INTERACTIVE_POLICY: AcpxNonInteractivePermissionPolicy =
+  "fail";
 const DEFAULT_QUEUE_OWNER_TTL_SECONDS = 0.1;
 const DEFAULT_STRICT_WINDOWS_CMD_WRAPPER = true;
 
@@ -62,7 +78,9 @@ function isPermissionMode(value: string): value is AcpxPermissionMode {
 function isNonInteractivePermissionPolicy(
   value: string,
 ): value is AcpxNonInteractivePermissionPolicy {
-  return ACPX_NON_INTERACTIVE_POLICIES.includes(value as AcpxNonInteractivePermissionPolicy);
+  return ACPX_NON_INTERACTIVE_POLICIES.includes(
+    value as AcpxNonInteractivePermissionPolicy,
+  );
 }
 
 function parseAcpxPluginConfig(value: unknown): ParseResult {
@@ -89,7 +107,10 @@ function parseAcpxPluginConfig(value: unknown): ParseResult {
   }
 
   const command = value.command;
-  if (command !== undefined && (typeof command !== "string" || command.trim() === "")) {
+  if (
+    command !== undefined &&
+    (typeof command !== "string" || command.trim() === "")
+  ) {
     return { ok: false, message: "command must be a non-empty string" };
   }
 
@@ -132,13 +153,18 @@ function parseAcpxPluginConfig(value: unknown): ParseResult {
   const timeoutSeconds = value.timeoutSeconds;
   if (
     timeoutSeconds !== undefined &&
-    (typeof timeoutSeconds !== "number" || !Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0)
+    (typeof timeoutSeconds !== "number" ||
+      !Number.isFinite(timeoutSeconds) ||
+      timeoutSeconds <= 0)
   ) {
     return { ok: false, message: "timeoutSeconds must be a positive number" };
   }
 
   const strictWindowsCmdWrapper = value.strictWindowsCmdWrapper;
-  if (strictWindowsCmdWrapper !== undefined && typeof strictWindowsCmdWrapper !== "boolean") {
+  if (
+    strictWindowsCmdWrapper !== undefined &&
+    typeof strictWindowsCmdWrapper !== "boolean"
+  ) {
     return { ok: false, message: "strictWindowsCmdWrapper must be a boolean" };
   }
 
@@ -149,33 +175,54 @@ function parseAcpxPluginConfig(value: unknown): ParseResult {
       !Number.isFinite(queueOwnerTtlSeconds) ||
       queueOwnerTtlSeconds < 0)
   ) {
-    return { ok: false, message: "queueOwnerTtlSeconds must be a non-negative number" };
+    return {
+      ok: false,
+      message: "queueOwnerTtlSeconds must be a non-negative number",
+    };
   }
 
   return {
     ok: true,
     value: {
       command: typeof command === "string" ? command.trim() : undefined,
-      expectedVersion: typeof expectedVersion === "string" ? expectedVersion.trim() : undefined,
+      expectedVersion:
+        typeof expectedVersion === "string"
+          ? expectedVersion.trim()
+          : undefined,
       cwd: typeof cwd === "string" ? cwd.trim() : undefined,
-      permissionMode: typeof permissionMode === "string" ? permissionMode : undefined,
+      permissionMode:
+        typeof permissionMode === "string" ? permissionMode : undefined,
       nonInteractivePermissions:
-        typeof nonInteractivePermissions === "string" ? nonInteractivePermissions : undefined,
+        typeof nonInteractivePermissions === "string"
+          ? nonInteractivePermissions
+          : undefined,
       strictWindowsCmdWrapper:
-        typeof strictWindowsCmdWrapper === "boolean" ? strictWindowsCmdWrapper : undefined,
-      timeoutSeconds: typeof timeoutSeconds === "number" ? timeoutSeconds : undefined,
+        typeof strictWindowsCmdWrapper === "boolean"
+          ? strictWindowsCmdWrapper
+          : undefined,
+      timeoutSeconds:
+        typeof timeoutSeconds === "number" ? timeoutSeconds : undefined,
       queueOwnerTtlSeconds:
-        typeof queueOwnerTtlSeconds === "number" ? queueOwnerTtlSeconds : undefined,
+        typeof queueOwnerTtlSeconds === "number"
+          ? queueOwnerTtlSeconds
+          : undefined,
     },
   };
 }
 
-function resolveConfiguredCommand(params: { configured?: string; workspaceDir?: string }): string {
+function resolveConfiguredCommand(params: {
+  configured?: string;
+  workspaceDir?: string;
+}): string {
   const configured = params.configured?.trim();
   if (!configured) {
     return ACPX_BUNDLED_BIN;
   }
-  if (path.isAbsolute(configured) || configured.includes(path.sep) || configured.includes("/")) {
+  if (
+    path.isAbsolute(configured) ||
+    configured.includes(path.sep) ||
+    configured.includes("/")
+  ) {
     const baseDir = params.workspaceDir?.trim() || process.cwd();
     return path.resolve(baseDir, configured);
   }
@@ -188,7 +235,9 @@ export function createAcpxPluginConfigSchema(): OpenClawPluginConfigSchema {
       | { success: true; data?: unknown }
       | {
           success: false;
-          error: { issues: Array<{ path: Array<string | number>; message: string }> };
+          error: {
+            issues: Array<{ path: Array<string | number>; message: string }>;
+          };
         } {
       const parsed = parseAcpxPluginConfig(value);
       if (parsed.ok) {
@@ -244,8 +293,11 @@ export function resolveAcpxPluginConfig(params: {
   const expectedVersion =
     configuredExpectedVersion === ACPX_VERSION_ANY
       ? undefined
-      : (configuredExpectedVersion ?? (allowPluginLocalInstall ? ACPX_PINNED_VERSION : undefined));
-  const installCommand = buildAcpxLocalInstallCommand(expectedVersion ?? ACPX_PINNED_VERSION);
+      : (configuredExpectedVersion ??
+        (allowPluginLocalInstall ? ACPX_PINNED_VERSION : undefined));
+  const installCommand = buildAcpxLocalInstallCommand(
+    expectedVersion ?? ACPX_PINNED_VERSION,
+  );
 
   return {
     command,
@@ -259,6 +311,7 @@ export function resolveAcpxPluginConfig(params: {
     strictWindowsCmdWrapper:
       normalized.strictWindowsCmdWrapper ?? DEFAULT_STRICT_WINDOWS_CMD_WRAPPER,
     timeoutSeconds: normalized.timeoutSeconds,
-    queueOwnerTtlSeconds: normalized.queueOwnerTtlSeconds ?? DEFAULT_QUEUE_OWNER_TTL_SECONDS,
+    queueOwnerTtlSeconds:
+      normalized.queueOwnerTtlSeconds ?? DEFAULT_QUEUE_OWNER_TTL_SECONDS,
   };
 }

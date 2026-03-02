@@ -36,7 +36,8 @@ export function resolveSandboxToolPolicyForAgent(
   cfg?: OpenClawConfig,
   agentId?: string,
 ): SandboxToolPolicyResolved {
-  const agentConfig = cfg && agentId ? resolveAgentConfig(cfg, agentId) : undefined;
+  const agentConfig =
+    cfg && agentId ? resolveAgentConfig(cfg, agentId) : undefined;
   const agentAllow = agentConfig?.tools?.sandbox?.tools?.allow;
   const agentDeny = agentConfig?.tools?.sandbox?.tools?.deny;
   const globalAllow = cfg?.tools?.sandbox?.tools?.allow;

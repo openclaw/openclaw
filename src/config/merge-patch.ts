@@ -7,7 +7,9 @@ type MergePatchOptions = {
   mergeObjectArraysById?: boolean;
 };
 
-function isObjectWithStringId(value: unknown): value is Record<string, unknown> & { id: string } {
+function isObjectWithStringId(
+  value: unknown,
+): value is Record<string, unknown> & { id: string } {
   if (!isPlainObject(value)) {
     return false;
   }
@@ -53,7 +55,11 @@ function mergeObjectArraysById(
       continue;
     }
 
-    merged[existingIndex] = applyMergePatch(merged[existingIndex], patchEntry, options);
+    merged[existingIndex] = applyMergePatch(
+      merged[existingIndex],
+      patchEntry,
+      options,
+    );
   }
 
   return merged;
@@ -78,8 +84,16 @@ export function applyMergePatch(
       delete result[key];
       continue;
     }
-    if (options.mergeObjectArraysById && Array.isArray(result[key]) && Array.isArray(value)) {
-      const mergedArray = mergeObjectArraysById(result[key] as unknown[], value, options);
+    if (
+      options.mergeObjectArraysById &&
+      Array.isArray(result[key]) &&
+      Array.isArray(value)
+    ) {
+      const mergedArray = mergeObjectArraysById(
+        result[key] as unknown[],
+        value,
+        options,
+      );
       if (mergedArray) {
         result[key] = mergedArray;
         continue;
@@ -87,7 +101,11 @@ export function applyMergePatch(
     }
     if (isPlainObject(value)) {
       const baseValue = result[key];
-      result[key] = applyMergePatch(isPlainObject(baseValue) ? baseValue : {}, value, options);
+      result[key] = applyMergePatch(
+        isPlainObject(baseValue) ? baseValue : {},
+        value,
+        options,
+      );
       continue;
     }
     result[key] = value;

@@ -33,7 +33,9 @@ const loadConfigFallbackDefault: ConsoleConfigLoader = () => {
 };
 let loadConfigFallback: ConsoleConfigLoader = loadConfigFallbackDefault;
 
-export function setConsoleConfigLoaderForTests(loader?: ConsoleConfigLoader): void {
+export function setConsoleConfigLoaderForTests(
+  loader?: ConsoleConfigLoader,
+): void {
   loadConfigFallback = loader ?? loadConfigFallbackDefault;
 }
 
@@ -41,7 +43,11 @@ function normalizeConsoleLevel(level?: string): LogLevel {
   if (isVerbose()) {
     return "debug";
   }
-  if (!level && process.env.VITEST === "true" && process.env.OPENCLAW_TEST_CONSOLE !== "1") {
+  if (
+    !level &&
+    process.env.VITEST === "true" &&
+    process.env.OPENCLAW_TEST_CONSOLE !== "1"
+  ) {
     return "silent";
   }
   return normalizeLogLevel(level, "info");
@@ -59,7 +65,8 @@ function normalizeConsoleStyle(style?: string): ConsoleStyle {
 
 function resolveConsoleSettings(): ConsoleSettings {
   let cfg: OpenClawConfig["logging"] | undefined =
-    (loggingState.overrideSettings as LoggerSettings | null) ?? readLoggingConfig();
+    (loggingState.overrideSettings as LoggerSettings | null) ??
+    readLoggingConfig();
   if (!cfg) {
     if (loggingState.resolvingConsoleSettings) {
       cfg = undefined;
@@ -109,8 +116,11 @@ export function setConsoleSubsystemFilter(filters?: string[] | null): void {
     loggingState.consoleSubsystemFilter = null;
     return;
   }
-  const normalized = filters.map((value) => value.trim()).filter((value) => value.length > 0);
-  loggingState.consoleSubsystemFilter = normalized.length > 0 ? normalized : null;
+  const normalized = filters
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0);
+  loggingState.consoleSubsystemFilter =
+    normalized.length > 0 ? normalized : null;
 }
 
 export function setConsoleTimestampPrefix(enabled: boolean): void {
@@ -122,7 +132,9 @@ export function shouldLogSubsystemToConsole(subsystem: string): boolean {
   if (!filter || filter.length === 0) {
     return true;
   }
-  return filter.some((prefix) => subsystem === prefix || subsystem.startsWith(`${prefix}/`));
+  return filter.some(
+    (prefix) => subsystem === prefix || subsystem.startsWith(`${prefix}/`),
+  );
 }
 
 const SUPPRESSED_CONSOLE_PREFIXES = [
@@ -137,7 +149,9 @@ function shouldSuppressConsoleMessage(message: string): boolean {
   if (isVerbose()) {
     return false;
   }
-  if (SUPPRESSED_CONSOLE_PREFIXES.some((prefix) => message.startsWith(prefix))) {
+  if (
+    SUPPRESSED_CONSOLE_PREFIXES.some((prefix) => message.startsWith(prefix))
+  ) {
     return true;
   }
   if (

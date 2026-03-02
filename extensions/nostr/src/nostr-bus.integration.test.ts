@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { createMetrics, createNoopMetrics, type MetricEvent } from "./metrics.js";
+import {
+  createMetrics,
+  createNoopMetrics,
+  type MetricEvent,
+} from "./metrics.js";
 import { createSeenTracker } from "./seen-tracker.js";
 
 // ============================================================================
@@ -254,16 +258,24 @@ describe("Metrics", () => {
     it("tracks circuit breaker state changes", () => {
       const metrics = createMetrics();
 
-      metrics.emit("relay.circuit_breaker.open", 1, { relay: "wss://relay.com" });
+      metrics.emit("relay.circuit_breaker.open", 1, {
+        relay: "wss://relay.com",
+      });
 
       let snapshot = metrics.getSnapshot();
-      expect(snapshot.relays["wss://relay.com"].circuitBreakerState).toBe("open");
+      expect(snapshot.relays["wss://relay.com"].circuitBreakerState).toBe(
+        "open",
+      );
       expect(snapshot.relays["wss://relay.com"].circuitBreakerOpens).toBe(1);
 
-      metrics.emit("relay.circuit_breaker.close", 1, { relay: "wss://relay.com" });
+      metrics.emit("relay.circuit_breaker.close", 1, {
+        relay: "wss://relay.com",
+      });
 
       snapshot = metrics.getSnapshot();
-      expect(snapshot.relays["wss://relay.com"].circuitBreakerState).toBe("closed");
+      expect(snapshot.relays["wss://relay.com"].circuitBreakerState).toBe(
+        "closed",
+      );
       expect(snapshot.relays["wss://relay.com"].circuitBreakerCloses).toBe(1);
     });
 
@@ -390,10 +402,16 @@ describe("Circuit Breaker Behavior", () => {
     metrics.emit("relay.circuit_breaker.open", 1, { relay: "wss://relay.com" });
 
     // Simulate recovery
-    metrics.emit("relay.circuit_breaker.half_open", 1, { relay: "wss://relay.com" });
-    metrics.emit("relay.circuit_breaker.close", 1, { relay: "wss://relay.com" });
+    metrics.emit("relay.circuit_breaker.half_open", 1, {
+      relay: "wss://relay.com",
+    });
+    metrics.emit("relay.circuit_breaker.close", 1, {
+      relay: "wss://relay.com",
+    });
 
-    const cbEvents = events.filter((e) => e.name.startsWith("relay.circuit_breaker"));
+    const cbEvents = events.filter((e) =>
+      e.name.startsWith("relay.circuit_breaker"),
+    );
     expect(cbEvents).toHaveLength(3);
     expect(cbEvents[0].name).toBe("relay.circuit_breaker.open");
     expect(cbEvents[1].name).toBe("relay.circuit_breaker.half_open");

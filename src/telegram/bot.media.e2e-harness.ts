@@ -29,7 +29,8 @@ export function setNextSavedMediaPath(params: {
       id: params.id ?? "media",
       path: params.path,
       size: params.size ?? buffer.byteLength,
-      contentType: params.contentType ?? detectedContentType ?? "application/octet-stream",
+      contentType:
+        params.contentType ?? detectedContentType ?? "application/octet-stream",
     }),
   );
 }
@@ -43,7 +44,9 @@ type ApiStub = {
   config: { use: (arg: unknown) => void };
   sendChatAction: Mock;
   sendMessage: Mock;
-  setMyCommands: (commands: Array<{ command: string; description: string }>) => Promise<void>;
+  setMyCommands: (
+    commands: Array<{ command: string; description: string }>,
+  ) => Promise<void>;
 };
 
 const apiStub: ApiStub = {

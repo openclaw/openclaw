@@ -76,7 +76,9 @@ describe("stageSandboxMedia", () => {
         });
 
         await expect(
-          fs.stat(join(sandboxDir, "media", "inbound", basename(sensitiveFile))),
+          fs.stat(
+            join(sandboxDir, "media", "inbound", basename(sensitiveFile)),
+          ),
         ).rejects.toThrow();
         expect(ctx.MediaPath).toBe(sensitiveFile);
       }
@@ -126,7 +128,10 @@ describe("stageSandboxMedia", () => {
 
       await fs.mkdir(sandboxDir, { recursive: true });
       await fs.symlink(outsideDir, join(sandboxDir, "media"));
-      await fs.symlink(victimPath, join(outsideInboundDir, basename(mediaPath)));
+      await fs.symlink(
+        victimPath,
+        join(outsideInboundDir, basename(mediaPath)),
+      );
 
       const { ctx, sessionCtx } = createSandboxMediaContexts(mediaPath);
       await stageSandboxMedia({

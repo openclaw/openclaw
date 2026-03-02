@@ -1,8 +1,14 @@
 import { loadConfig, resolveGatewayPort } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
-import { resolveGatewayCredentialsFromConfig, trimToUndefined } from "../../gateway/credentials.js";
+import {
+  resolveGatewayCredentialsFromConfig,
+  trimToUndefined,
+} from "../../gateway/credentials.js";
 import { resolveLeastPrivilegeOperatorScopesForMethod } from "../../gateway/method-scopes.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../../utils/message-channel.js";
 import { readStringParam } from "./common.js";
 
 export const DEFAULT_GATEWAY_URL = "ws://127.0.0.1:18789";
@@ -15,26 +21,36 @@ export type GatewayCallOptions = {
 
 type GatewayOverrideTarget = "local" | "remote";
 
-export function readGatewayCallOptions(params: Record<string, unknown>): GatewayCallOptions {
+export function readGatewayCallOptions(
+  params: Record<string, unknown>,
+): GatewayCallOptions {
   return {
     gatewayUrl: readStringParam(params, "gatewayUrl", { trim: false }),
     gatewayToken: readStringParam(params, "gatewayToken", { trim: false }),
-    timeoutMs: typeof params.timeoutMs === "number" ? params.timeoutMs : undefined,
+    timeoutMs:
+      typeof params.timeoutMs === "number" ? params.timeoutMs : undefined,
   };
 }
 
-function canonicalizeToolGatewayWsUrl(raw: string): { origin: string; key: string } {
+function canonicalizeToolGatewayWsUrl(raw: string): {
+  origin: string;
+  key: string;
+} {
   const input = raw.trim();
   let url: URL;
   try {
     url = new URL(input);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`invalid gatewayUrl: ${input} (${message})`, { cause: error });
+    throw new Error(`invalid gatewayUrl: ${input} (${message})`, {
+      cause: error,
+    });
   }
 
   if (url.protocol !== "ws:" && url.protocol !== "wss:") {
-    throw new Error(`invalid gatewayUrl protocol: ${url.protocol} (expected ws:// or wss://)`);
+    throw new Error(
+      `invalid gatewayUrl protocol: ${url.protocol} (expected ws:// or wss://)`,
+    );
   }
   if (url.username || url.password) {
     throw new Error("invalid gatewayUrl: credentials are not allowed");
@@ -70,7 +86,9 @@ function validateGatewayUrlOverrideForAgentTools(params: {
 
   let remoteKey: string | undefined;
   const remoteUrl =
-    typeof cfg.gateway?.remote?.url === "string" ? cfg.gateway.remote.url.trim() : "";
+    typeof cfg.gateway?.remote?.url === "string"
+      ? cfg.gateway.remote.url.trim()
+      : "";
   if (remoteUrl) {
     try {
       const remote = canonicalizeToolGatewayWsUrl(remoteUrl);
@@ -108,8 +126,10 @@ function resolveGatewayOverrideToken(params: {
     cfg: params.cfg,
     env: process.env,
     modeOverride: params.target,
-    remoteTokenFallback: params.target === "remote" ? "remote-only" : "remote-env-local",
-    remotePasswordFallback: params.target === "remote" ? "remote-only" : "remote-env-local",
+    remoteTokenFallback:
+      params.target === "remote" ? "remote-only" : "remote-env-local",
+    remotePasswordFallback:
+      params.target === "remote" ? "remote-only" : "remote-env-local",
   }).token;
 }
 

@@ -31,7 +31,9 @@ function makeRuntime() {
 
 async function withCapturedStdout(run: () => Promise<void>): Promise<string> {
   const writes: string[] = [];
-  const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(((chunk: unknown) => {
+  const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(((
+    chunk: unknown,
+  ) => {
     writes.push(String(chunk));
     return true;
   }) as typeof process.stdout.write);
@@ -51,13 +53,22 @@ describe("ensureConfigReady", () => {
   }) => Promise<void>;
   let resetConfigGuardStateForTests: () => void;
 
-  async function runEnsureConfigReady(commandPath: string[], suppressDoctorStdout = false) {
+  async function runEnsureConfigReady(
+    commandPath: string[],
+    suppressDoctorStdout = false,
+  ) {
     const runtime = makeRuntime();
-    await ensureConfigReady({ runtime: runtime as never, commandPath, suppressDoctorStdout });
+    await ensureConfigReady({
+      runtime: runtime as never,
+      commandPath,
+      suppressDoctorStdout,
+    });
     return runtime;
   }
 
-  function setInvalidSnapshot(overrides?: Partial<ReturnType<typeof makeSnapshot>>) {
+  function setInvalidSnapshot(
+    overrides?: Partial<ReturnType<typeof makeSnapshot>>,
+  ) {
     readConfigFileSnapshotMock.mockResolvedValue({
       ...makeSnapshot(),
       exists: true,
@@ -93,15 +104,21 @@ describe("ensureConfigReady", () => {
     },
   ])("$name", async ({ commandPath, expectedDoctorCalls }) => {
     await runEnsureConfigReady(commandPath);
-    expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledTimes(expectedDoctorCalls);
+    expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledTimes(
+      expectedDoctorCalls,
+    );
   });
 
   it("exits for invalid config on non-allowlisted commands", async () => {
     setInvalidSnapshot();
     const runtime = await runEnsureConfigReady(["message"]);
 
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("Config invalid"));
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("doctor --fix"));
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Config invalid"),
+    );
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("doctor --fix"),
+    );
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 
@@ -118,8 +135,14 @@ describe("ensureConfigReady", () => {
     const runtimeA = makeRuntime();
     const runtimeB = makeRuntime();
 
-    await ensureConfigReady({ runtime: runtimeA as never, commandPath: ["message"] });
-    await ensureConfigReady({ runtime: runtimeB as never, commandPath: ["message"] });
+    await ensureConfigReady({
+      runtime: runtimeA as never,
+      commandPath: ["message"],
+    });
+    await ensureConfigReady({
+      runtime: runtimeB as never,
+      commandPath: ["message"],
+    });
 
     expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledTimes(1);
   });

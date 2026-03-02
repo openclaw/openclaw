@@ -15,7 +15,10 @@ import {
   resolveStorePath,
   updateSessionStore,
 } from "../../config/sessions.js";
-import { emitHeartbeatEvent, resolveIndicatorType } from "../../infra/heartbeat-events.js";
+import {
+  emitHeartbeatEvent,
+  resolveIndicatorType,
+} from "../../infra/heartbeat-events.js";
 import { resolveHeartbeatVisibility } from "../../infra/heartbeat-visibility.js";
 import { getChildLogger } from "../../logging.js";
 import { redactIdentifier } from "../../logging/redact-identifier.js";
@@ -36,7 +39,14 @@ export async function runWebHeartbeatOnce(opts: {
   overrideBody?: string;
   dryRun?: boolean;
 }) {
-  const { cfg: cfgOverride, to, verbose = false, sessionId, overrideBody, dryRun = false } = opts;
+  const {
+    cfg: cfgOverride,
+    to,
+    verbose = false,
+    sessionId,
+    overrideBody,
+    dryRun = false,
+  } = opts;
   const replyResolver = opts.replyResolver ?? getReplyFromConfig;
   const sender = opts.sender ?? sendMessageWhatsApp;
   const runId = newConnectionId();
@@ -71,7 +81,9 @@ export async function runWebHeartbeatOnce(opts: {
       },
       "heartbeat ok sent",
     );
-    whatsappHeartbeatLog.info(`heartbeat ok sent to ${redactedTo} (id ${sendResult.messageId})`);
+    whatsappHeartbeatLog.info(
+      `heartbeat ok sent to ${redactedTo} (id ${sendResult.messageId})`,
+    );
     return true;
   };
 
@@ -134,7 +146,9 @@ export async function runWebHeartbeatOnce(opts: {
         preview: overrideBody.slice(0, 160),
         hasMedia: false,
         channel: "whatsapp",
-        indicatorType: visibility.useIndicator ? resolveIndicatorType("sent") : undefined,
+        indicatorType: visibility.useIndicator
+          ? resolveIndicatorType("sent")
+          : undefined,
       });
       heartbeatLogger.info(
         {
@@ -151,8 +165,15 @@ export async function runWebHeartbeatOnce(opts: {
       return;
     }
 
-    if (!visibility.showAlerts && !visibility.showOk && !visibility.useIndicator) {
-      heartbeatLogger.info({ to: redactedTo, reason: "alerts-disabled" }, "heartbeat skipped");
+    if (
+      !visibility.showAlerts &&
+      !visibility.showOk &&
+      !visibility.useIndicator
+    ) {
+      heartbeatLogger.info(
+        { to: redactedTo, reason: "alerts-disabled" },
+        "heartbeat skipped",
+      );
       emitHeartbeatEvent({
         status: "skipped",
         to,
@@ -180,7 +201,9 @@ export async function runWebHeartbeatOnce(opts: {
 
     if (
       !replyPayload ||
-      (!replyPayload.text && !replyPayload.mediaUrl && !replyPayload.mediaUrls?.length)
+      (!replyPayload.text &&
+        !replyPayload.mediaUrl &&
+        !replyPayload.mediaUrls?.length)
     ) {
       heartbeatLogger.info(
         {
@@ -196,15 +219,20 @@ export async function runWebHeartbeatOnce(opts: {
         to,
         channel: "whatsapp",
         silent: !okSent,
-        indicatorType: visibility.useIndicator ? resolveIndicatorType("ok-empty") : undefined,
+        indicatorType: visibility.useIndicator
+          ? resolveIndicatorType("ok-empty")
+          : undefined,
       });
       return;
     }
 
-    const hasMedia = Boolean(replyPayload.mediaUrl || (replyPayload.mediaUrls?.length ?? 0) > 0);
+    const hasMedia = Boolean(
+      replyPayload.mediaUrl || (replyPayload.mediaUrls?.length ?? 0) > 0,
+    );
     const ackMaxChars = Math.max(
       0,
-      cfg.agents?.defaults?.heartbeat?.ackMaxChars ?? DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
+      cfg.agents?.defaults?.heartbeat?.ackMaxChars ??
+        DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
     );
     const stripped = stripHeartbeatToken(replyPayload.text, {
       mode: "heartbeat",
@@ -229,7 +257,11 @@ export async function runWebHeartbeatOnce(opts: {
       }
 
       heartbeatLogger.info(
-        { to: redactedTo, reason: "heartbeat-token", rawLength: replyPayload.text?.length },
+        {
+          to: redactedTo,
+          reason: "heartbeat-token",
+          rawLength: replyPayload.text?.length,
+        },
         "heartbeat skipped",
       );
       const okSent = await maybeSendHeartbeatOk();
@@ -238,7 +270,9 @@ export async function runWebHeartbeatOnce(opts: {
         to,
         channel: "whatsapp",
         silent: !okSent,
-        indicatorType: visibility.useIndicator ? resolveIndicatorType("ok-token") : undefined,
+        indicatorType: visibility.useIndicator
+          ? resolveIndicatorType("ok-token")
+          : undefined,
       });
       return;
     }
@@ -254,7 +288,10 @@ export async function runWebHeartbeatOnce(opts: {
 
     // Check if alerts are disabled for WhatsApp
     if (!visibility.showAlerts) {
-      heartbeatLogger.info({ to: redactedTo, reason: "alerts-disabled" }, "heartbeat skipped");
+      heartbeatLogger.info(
+        { to: redactedTo, reason: "alerts-disabled" },
+        "heartbeat skipped",
+      );
       emitHeartbeatEvent({
         status: "skipped",
         to,
@@ -262,7 +299,9 @@ export async function runWebHeartbeatOnce(opts: {
         preview: finalText.slice(0, 200),
         channel: "whatsapp",
         hasMedia,
-        indicatorType: visibility.useIndicator ? resolveIndicatorType("sent") : undefined,
+        indicatorType: visibility.useIndicator
+          ? resolveIndicatorType("sent")
+          : undefined,
       });
       return;
     }
@@ -272,7 +311,9 @@ export async function runWebHeartbeatOnce(opts: {
         { to: redactedTo, reason: "dry-run", chars: finalText.length },
         "heartbeat dry-run",
       );
-      whatsappHeartbeatLog.info(`[dry-run] heartbeat -> ${redactedTo} (${finalText.length} chars)`);
+      whatsappHeartbeatLog.info(
+        `[dry-run] heartbeat -> ${redactedTo} (${finalText.length} chars)`,
+      );
       return;
     }
 
@@ -283,7 +324,9 @@ export async function runWebHeartbeatOnce(opts: {
       preview: finalText.slice(0, 160),
       hasMedia,
       channel: "whatsapp",
-      indicatorType: visibility.useIndicator ? resolveIndicatorType("sent") : undefined,
+      indicatorType: visibility.useIndicator
+        ? resolveIndicatorType("sent")
+        : undefined,
     });
     heartbeatLogger.info(
       {
@@ -303,7 +346,9 @@ export async function runWebHeartbeatOnce(opts: {
       to,
       reason,
       channel: "whatsapp",
-      indicatorType: visibility.useIndicator ? resolveIndicatorType("failed") : undefined,
+      indicatorType: visibility.useIndicator
+        ? resolveIndicatorType("failed")
+        : undefined,
     });
     throw err;
   }

@@ -19,7 +19,10 @@ export const NodePairRequestParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
-export const NodePairListParamsSchema = Type.Object({}, { additionalProperties: false });
+export const NodePairListParamsSchema = Type.Object(
+  {},
+  { additionalProperties: false },
+);
 
 export const NodePairApproveParamsSchema = Type.Object(
   { requestId: NonEmptyString },
@@ -41,7 +44,10 @@ export const NodeRenameParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
-export const NodeListParamsSchema = Type.Object({}, { additionalProperties: false });
+export const NodeListParamsSchema = Type.Object(
+  {},
+  { additionalProperties: false },
+);
 
 export const NodeDescribeParamsSchema = Type.Object(
   { nodeId: NonEmptyString },

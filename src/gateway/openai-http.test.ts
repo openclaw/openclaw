@@ -36,7 +36,10 @@ async function startServerWithDefaultConfig(port: number) {
   });
 }
 
-async function startServer(port: number, opts?: { openAiChatCompletionsEnabled?: boolean }) {
+async function startServer(
+  port: number,
+  opts?: { openAiChatCompletionsEnabled?: boolean },
+) {
   return await startGatewayServer(port, {
     host: "127.0.0.1",
     auth: { mode: "token", token: "secret" },
@@ -45,7 +48,11 @@ async function startServer(port: number, opts?: { openAiChatCompletionsEnabled?:
   });
 }
 
-async function postChatCompletions(port: number, body: unknown, headers?: Record<string, string>) {
+async function postChatCompletions(
+  port: number,
+  body: unknown,
+  headers?: Record<string, string>,
+) {
   const res = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
     method: "POST",
     headers: {
@@ -59,7 +66,9 @@ async function postChatCompletions(port: number, body: unknown, headers?: Record
 }
 
 async function expectChatCompletionsDisabled(
-  start: (port: number) => Promise<{ close: (opts?: { reason?: string }) => Promise<void> }>,
+  start: (
+    port: number,
+  ) => Promise<{ close: (opts?: { reason?: string }) => Promise<void> }>,
 ) {
   const port = await getFreePort();
   const server = await start(port);
@@ -84,14 +93,18 @@ function parseSseDataLines(text: string): string[] {
 }
 
 describe("OpenAI-compatible HTTP API (e2e)", () => {
-  it("rejects when disabled (default + config)", { timeout: 15_000 }, async () => {
-    await expectChatCompletionsDisabled(startServerWithDefaultConfig);
-    await expectChatCompletionsDisabled((port) =>
-      startServer(port, {
-        openAiChatCompletionsEnabled: false,
-      }),
-    );
-  });
+  it(
+    "rejects when disabled (default + config)",
+    { timeout: 15_000 },
+    async () => {
+      await expectChatCompletionsDisabled(startServerWithDefaultConfig);
+      await expectChatCompletionsDisabled((port) =>
+        startServer(port, {
+          openAiChatCompletionsEnabled: false,
+        }),
+      );
+    },
+  );
 
   it("handles request validation and routing", async () => {
     const port = enabledPort;
@@ -105,13 +118,17 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       matcher: RegExp;
     }) => {
       mockAgentOnce([{ text: "hello" }]);
-      const res = await postChatCompletions(port, request.body, request.headers);
+      const res = await postChatCompletions(
+        port,
+        request.body,
+        request.headers,
+      );
       expect(res.status).toBe(200);
       expect(agentCommand).toHaveBeenCalledTimes(1);
       const opts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
-      expect((opts as { sessionKey?: string } | undefined)?.sessionKey ?? "").toMatch(
-        request.matcher,
-      );
+      expect(
+        (opts as { sessionKey?: string } | undefined)?.sessionKey ?? "",
+      ).toMatch(request.matcher);
       await res.text();
     };
     const expectMessageContext = (
@@ -139,27 +156,38 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
 
     try {
       {
-        const res = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
-          method: "GET",
-          headers: { authorization: "Bearer secret" },
-        });
+        const res = await fetch(
+          `http://127.0.0.1:${port}/v1/chat/completions`,
+          {
+            method: "GET",
+            headers: { authorization: "Bearer secret" },
+          },
+        );
         expect(res.status).toBe(405);
         await res.text();
       }
 
       {
-        const res = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ messages: [{ role: "user", content: "hi" }] }),
-        });
+        const res = await fetch(
+          `http://127.0.0.1:${port}/v1/chat/completions`,
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              messages: [{ role: "user", content: "hi" }],
+            }),
+          },
+        );
         expect(res.status).toBe(401);
         await res.text();
       }
 
       {
         await expectAgentSessionKeyMatch({
-          body: { model: "openclaw", messages: [{ role: "user", content: "hi" }] },
+          body: {
+            model: "openclaw",
+            messages: [{ role: "user", content: "hi" }],
+          },
           headers: { "x-openclaw-agent-id": "beta" },
           matcher: /^agent:beta:/,
         });
@@ -215,9 +243,9 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         expect(res.status).toBe(200);
 
         const opts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
-        expect((opts as { sessionKey?: string } | undefined)?.sessionKey ?? "").toContain(
-          "openai-user:alice",
-        );
+        expect(
+          (opts as { sessionKey?: string } | undefined)?.sessionKey ?? "",
+        ).toContain("openai-user:alice");
         await res.text();
       }
 
@@ -238,7 +266,9 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         expect(res.status).toBe(200);
 
         const opts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
-        expect((opts as { message?: string } | undefined)?.message).toBe("hello\nworld");
+        expect((opts as { message?: string } | undefined)?.message).toBe(
+          "hello\nworld",
+        );
         await res.text();
       }
 
@@ -312,7 +342,10 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
 
         const message = getFirstAgentMessage();
         expectMessageContext(message, {
-          history: ["User: What's the weather?", "Assistant: Checking the weather."],
+          history: [
+            "User: What's the weather?",
+            "Assistant: Checking the weather.",
+          ],
           current: ["Tool: Sunny, 70F."],
         });
         await res.text();
@@ -329,15 +362,19 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         const json = (await res.json()) as Record<string, unknown>;
         expect(json.object).toBe("chat.completion");
         expect(Array.isArray(json.choices)).toBe(true);
-        const choice0 = (json.choices as Array<Record<string, unknown>>)[0] ?? {};
-        const msg = (choice0.message as Record<string, unknown> | undefined) ?? {};
+        const choice0 =
+          (json.choices as Array<Record<string, unknown>>)[0] ?? {};
+        const msg =
+          (choice0.message as Record<string, unknown> | undefined) ?? {};
         expect(msg.role).toBe("assistant");
         expect(msg.content).toBe("hello");
       }
 
       {
         agentCommand.mockClear();
-        agentCommand.mockResolvedValueOnce({ payloads: [{ text: "" }] } as never);
+        agentCommand.mockResolvedValueOnce({
+          payloads: [{ text: "" }],
+        } as never);
         const res = await postChatCompletions(port, {
           stream: false,
           model: "openclaw",
@@ -345,8 +382,10 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         });
         expect(res.status).toBe(200);
         const json = (await res.json()) as Record<string, unknown>;
-        const choice0 = (json.choices as Array<Record<string, unknown>>)[0] ?? {};
-        const msg = (choice0.message as Record<string, unknown> | undefined) ?? {};
+        const choice0 =
+          (json.choices as Array<Record<string, unknown>>)[0] ?? {};
+        const msg =
+          (choice0.message as Record<string, unknown> | undefined) ?? {};
         expect(msg.content).toBe("No response from OpenClaw.");
       }
 
@@ -357,9 +396,9 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         });
         expect(res.status).toBe(400);
         const missingUserJson = (await res.json()) as Record<string, unknown>;
-        expect((missingUserJson.error as Record<string, unknown> | undefined)?.type).toBe(
-          "invalid_request_error",
-        );
+        expect(
+          (missingUserJson.error as Record<string, unknown> | undefined)?.type,
+        ).toBe("invalid_request_error");
       }
     } finally {
       // shared server
@@ -370,7 +409,12 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     testState.gatewayAuth = {
       mode: "token",
       token: "secret",
-      rateLimit: { maxAttempts: 1, windowMs: 60_000, lockoutMs: 60_000, exemptLoopback: false },
+      rateLimit: {
+        maxAttempts: 1,
+        windowMs: 60_000,
+        lockoutMs: 60_000,
+        exemptLoopback: false,
+      },
       // oxlint-disable-next-line typescript/no-explicit-any
     } as any;
     await withGatewayServer(
@@ -384,18 +428,24 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
           messages: [{ role: "user", content: "hi" }],
         };
 
-        const first = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
-          method: "POST",
-          headers,
-          body: JSON.stringify(body),
-        });
+        const first = await fetch(
+          `http://127.0.0.1:${port}/v1/chat/completions`,
+          {
+            method: "POST",
+            headers,
+            body: JSON.stringify(body),
+          },
+        );
         expect(first.status).toBe(401);
 
-        const second = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
-          method: "POST",
-          headers,
-          body: JSON.stringify(body),
-        });
+        const second = await fetch(
+          `http://127.0.0.1:${port}/v1/chat/completions`,
+          {
+            method: "POST",
+            headers,
+            body: JSON.stringify(body),
+          },
+        );
         expect(second.status).toBe(429);
         expect(second.headers.get("retry-after")).toBeTruthy();
       },
@@ -428,7 +478,9 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
           messages: [{ role: "user", content: "hi" }],
         });
         expect(res.status).toBe(200);
-        expect(res.headers.get("content-type") ?? "").toContain("text/event-stream");
+        expect(res.headers.get("content-type") ?? "").toContain(
+          "text/event-stream",
+        );
 
         const text = await res.text();
         const data = parseSseDataLines(text);
@@ -437,10 +489,18 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         const jsonChunks = data
           .filter((d) => d !== "[DONE]")
           .map((d) => JSON.parse(d) as Record<string, unknown>);
-        expect(jsonChunks.some((c) => c.object === "chat.completion.chunk")).toBe(true);
+        expect(
+          jsonChunks.some((c) => c.object === "chat.completion.chunk"),
+        ).toBe(true);
         const allContent = jsonChunks
-          .flatMap((c) => (c.choices as Array<Record<string, unknown>> | undefined) ?? [])
-          .map((choice) => (choice.delta as Record<string, unknown> | undefined)?.content)
+          .flatMap(
+            (c) =>
+              (c.choices as Array<Record<string, unknown>> | undefined) ?? [],
+          )
+          .map(
+            (choice) =>
+              (choice.delta as Record<string, unknown> | undefined)?.content,
+          )
           .filter((v): v is string => typeof v === "string")
           .join("");
         expect(allContent).toBe("hello");
@@ -468,8 +528,14 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
           .filter((d) => d !== "[DONE]")
           .map((d) => JSON.parse(d) as Record<string, unknown>);
         const repeatedContent = repeatedChunks
-          .flatMap((c) => (c.choices as Array<Record<string, unknown>> | undefined) ?? [])
-          .map((choice) => (choice.delta as Record<string, unknown> | undefined)?.content)
+          .flatMap(
+            (c) =>
+              (c.choices as Array<Record<string, unknown>> | undefined) ?? [],
+          )
+          .map(
+            (choice) =>
+              (choice.delta as Record<string, unknown> | undefined)?.content,
+          )
           .filter((v): v is string => typeof v === "string")
           .join("");
         expect(repeatedContent).toBe("hihi");
@@ -510,11 +576,14 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
           .filter((d) => d !== "[DONE]")
           .map((d) => JSON.parse(d) as Record<string, unknown>);
         const stopChoice = errorChunks
-          .flatMap((c) => (c.choices as Array<Record<string, unknown>> | undefined) ?? [])
+          .flatMap(
+            (c) =>
+              (c.choices as Array<Record<string, unknown>> | undefined) ?? [],
+          )
           .find((choice) => choice.finish_reason === "stop");
-        expect((stopChoice?.delta as Record<string, unknown> | undefined)?.content).toBe(
-          "Error: internal error",
-        );
+        expect(
+          (stopChoice?.delta as Record<string, unknown> | undefined)?.content,
+        ).toBe("Error: internal error");
       }
     } finally {
       // shared server

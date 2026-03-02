@@ -33,7 +33,11 @@ vi.mock("../config/config.js", async (importOriginal) => {
 import "./test-helpers/fast-core-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 
-const waitForCalls = async (getCount: () => number, count: number, timeoutMs = 2000) => {
+const waitForCalls = async (
+  getCount: () => number,
+  count: number,
+  timeoutMs = 2000,
+) => {
   await vi.waitFor(
     () => {
       expect(getCount()).toBeGreaterThanOrEqual(count);
@@ -89,7 +93,9 @@ describe("sessions tools", () => {
     expect(schemaProp("sessions_list", "messageLimit").type).toBe("number");
     expect(schemaProp("sessions_send", "timeoutSeconds").type).toBe("number");
     expect(schemaProp("sessions_spawn", "thinking").type).toBe("string");
-    expect(schemaProp("sessions_spawn", "runTimeoutSeconds").type).toBe("number");
+    expect(schemaProp("sessions_spawn", "runTimeoutSeconds").type).toBe(
+      "number",
+    );
     expect(schemaProp("sessions_spawn", "thread").type).toBe("boolean");
     expect(schemaProp("sessions_spawn", "mode").type).toBe("string");
     expect(schemaProp("sessions_spawn", "sandbox").type).toBe("string");
@@ -145,7 +151,9 @@ describe("sessions tools", () => {
       return {};
     });
 
-    const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_list");
+    const tool = createOpenClawTools().find(
+      (candidate) => candidate.name === "sessions_list",
+    );
     expect(tool).toBeDefined();
     if (!tool) {
       throw new Error("missing sessions_list tool");
@@ -192,7 +200,9 @@ describe("sessions tools", () => {
       return {};
     });
 
-    const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_list");
+    const tool = createOpenClawTools().find(
+      (candidate) => candidate.name === "sessions_list",
+    );
     expect(tool).toBeDefined();
     if (!tool) {
       throw new Error("missing sessions_list tool");
@@ -227,7 +237,9 @@ describe("sessions tools", () => {
       return {};
     });
 
-    const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_history");
+    const tool = createOpenClawTools().find(
+      (candidate) => candidate.name === "sessions_history",
+    );
     expect(tool).toBeDefined();
     if (!tool) {
       throw new Error("missing sessions_history tool");
@@ -276,7 +288,9 @@ describe("sessions tools", () => {
       return {};
     });
 
-    const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_history");
+    const tool = createOpenClawTools().find(
+      (candidate) => candidate.name === "sessions_history",
+    );
     expect(tool).toBeDefined();
     if (!tool) {
       throw new Error("missing sessions_history tool");
@@ -319,7 +333,9 @@ describe("sessions tools", () => {
     const textBlock = first?.content?.find((block) => block.type === "text");
     expect(typeof textBlock?.text).toBe("string");
     expect((textBlock?.text ?? "").length <= 4015).toBe(true);
-    const thinkingBlock = first?.content?.find((block) => block.type === "thinking");
+    const thinkingBlock = first?.content?.find(
+      (block) => block.type === "thinking",
+    );
     expect(thinkingBlock?.thinkingSignature).toBeUndefined();
   });
 
@@ -340,7 +356,9 @@ describe("sessions tools", () => {
       return {};
     });
 
-    const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_history");
+    const tool = createOpenClawTools().find(
+      (candidate) => candidate.name === "sessions_history",
+    );
     expect(tool).toBeDefined();
     if (!tool) {
       throw new Error("missing sessions_history tool");
@@ -380,7 +398,10 @@ describe("sessions tools", () => {
             {
               role: "assistant",
               content: [
-                { type: "text", text: "Use sk-1234567890abcdef1234 to authenticate with the API." },
+                {
+                  type: "text",
+                  text: "Use sk-1234567890abcdef1234 to authenticate with the API.",
+                },
               ],
             },
           ],
@@ -389,7 +410,9 @@ describe("sessions tools", () => {
       return {};
     });
 
-    const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_history");
+    const tool = createOpenClawTools().find(
+      (candidate) => candidate.name === "sessions_history",
+    );
     expect(tool).toBeDefined();
     if (!tool) {
       throw new Error("missing sessions_history tool");
@@ -405,7 +428,9 @@ describe("sessions tools", () => {
     expect(details.contentRedacted).toBe(true);
     expect(details.contentTruncated).toBe(false);
     expect(details.truncated).toBe(false);
-    const msg = details.messages?.[0] as { content?: Array<{ type?: string; text?: string }> };
+    const msg = details.messages?.[0] as {
+      content?: Array<{ type?: string; text?: string }>;
+    };
     const textBlock = msg?.content?.find((b) => b.type === "text");
     expect(typeof textBlock?.text).toBe("string");
     expect(textBlock?.text).not.toContain("sk-1234567890abcdef1234");
@@ -430,7 +455,9 @@ describe("sessions tools", () => {
       return {};
     });
 
-    const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_history");
+    const tool = createOpenClawTools().find(
+      (candidate) => candidate.name === "sessions_history",
+    );
     expect(tool).toBeDefined();
     if (!tool) {
       throw new Error("missing sessions_history tool");
@@ -462,13 +489,17 @@ describe("sessions tools", () => {
       }
       if (request.method === "chat.history") {
         return {
-          messages: [{ role: "assistant", content: [{ type: "text", text: "ok" }] }],
+          messages: [
+            { role: "assistant", content: [{ type: "text", text: "ok" }] },
+          ],
         };
       }
       return {};
     });
 
-    const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_history");
+    const tool = createOpenClawTools().find(
+      (candidate) => candidate.name === "sessions_history",
+    );
     expect(tool).toBeDefined();
     if (!tool) {
       throw new Error("missing sessions_history tool");
@@ -496,7 +527,9 @@ describe("sessions tools", () => {
       return {};
     });
 
-    const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_history");
+    const tool = createOpenClawTools().find(
+      (candidate) => candidate.name === "sessions_history",
+    );
     expect(tool).toBeDefined();
     if (!tool) {
       throw new Error("missing sessions_history tool");
@@ -522,7 +555,9 @@ describe("sessions tools", () => {
       if (request.method === "agent") {
         agentCallCount += 1;
         const runId = `run-${agentCallCount}`;
-        const params = request.params as { message?: string; sessionKey?: string } | undefined;
+        const params = request.params as
+          | { message?: string; sessionKey?: string }
+          | undefined;
         const message = params?.message ?? "";
         let reply = "REPLY_SKIP";
         if (message === "ping" || message === "wait") {
@@ -546,7 +581,8 @@ describe("sessions tools", () => {
       }
       if (request.method === "chat.history") {
         _historyCallCount += 1;
-        const text = (lastWaitedRunId && replyByRunId.get(lastWaitedRunId)) ?? "";
+        const text =
+          (lastWaitedRunId && replyByRunId.get(lastWaitedRunId)) ?? "";
         return {
           messages: [
             {
@@ -588,9 +624,18 @@ describe("sessions tools", () => {
       runId: "run-1",
       delivery: { status: "pending", mode: "announce" },
     });
-    await waitForCalls(() => calls.filter((call) => call.method === "agent").length, 4);
-    await waitForCalls(() => calls.filter((call) => call.method === "agent.wait").length, 4);
-    await waitForCalls(() => calls.filter((call) => call.method === "chat.history").length, 4);
+    await waitForCalls(
+      () => calls.filter((call) => call.method === "agent").length,
+      4,
+    );
+    await waitForCalls(
+      () => calls.filter((call) => call.method === "agent.wait").length,
+      4,
+    );
+    await waitForCalls(
+      () => calls.filter((call) => call.method === "chat.history").length,
+      4,
+    );
 
     const waitPromise = tool.execute("call6", {
       sessionKey: "main",
@@ -604,13 +649,24 @@ describe("sessions tools", () => {
       delivery: { status: "pending", mode: "announce" },
     });
     expect(typeof (waited.details as { runId?: string }).runId).toBe("string");
-    await waitForCalls(() => calls.filter((call) => call.method === "agent").length, 8);
-    await waitForCalls(() => calls.filter((call) => call.method === "agent.wait").length, 8);
-    await waitForCalls(() => calls.filter((call) => call.method === "chat.history").length, 8);
+    await waitForCalls(
+      () => calls.filter((call) => call.method === "agent").length,
+      8,
+    );
+    await waitForCalls(
+      () => calls.filter((call) => call.method === "agent.wait").length,
+      8,
+    );
+    await waitForCalls(
+      () => calls.filter((call) => call.method === "chat.history").length,
+      8,
+    );
 
     const agentCalls = calls.filter((call) => call.method === "agent");
     const waitCalls = calls.filter((call) => call.method === "agent.wait");
-    const historyOnlyCalls = calls.filter((call) => call.method === "chat.history");
+    const historyOnlyCalls = calls.filter(
+      (call) => call.method === "chat.history",
+    );
     expect(agentCalls).toHaveLength(8);
     for (const call of agentCalls) {
       expect(call.params).toMatchObject({
@@ -622,28 +678,31 @@ describe("sessions tools", () => {
     expect(
       agentCalls.some(
         (call) =>
-          typeof (call.params as { extraSystemPrompt?: string })?.extraSystemPrompt === "string" &&
-          (call.params as { extraSystemPrompt?: string })?.extraSystemPrompt?.includes(
-            "Agent-to-agent message context",
-          ),
+          typeof (call.params as { extraSystemPrompt?: string })
+            ?.extraSystemPrompt === "string" &&
+          (
+            call.params as { extraSystemPrompt?: string }
+          )?.extraSystemPrompt?.includes("Agent-to-agent message context"),
       ),
     ).toBe(true);
     expect(
       agentCalls.some(
         (call) =>
-          typeof (call.params as { extraSystemPrompt?: string })?.extraSystemPrompt === "string" &&
-          (call.params as { extraSystemPrompt?: string })?.extraSystemPrompt?.includes(
-            "Agent-to-agent reply step",
-          ),
+          typeof (call.params as { extraSystemPrompt?: string })
+            ?.extraSystemPrompt === "string" &&
+          (
+            call.params as { extraSystemPrompt?: string }
+          )?.extraSystemPrompt?.includes("Agent-to-agent reply step"),
       ),
     ).toBe(true);
     expect(
       agentCalls.some(
         (call) =>
-          typeof (call.params as { extraSystemPrompt?: string })?.extraSystemPrompt === "string" &&
-          (call.params as { extraSystemPrompt?: string })?.extraSystemPrompt?.includes(
-            "Agent-to-agent announce step",
-          ),
+          typeof (call.params as { extraSystemPrompt?: string })
+            ?.extraSystemPrompt === "string" &&
+          (
+            call.params as { extraSystemPrompt?: string }
+          )?.extraSystemPrompt?.includes("Agent-to-agent announce step"),
       ),
     ).toBe(true);
     expect(waitCalls).toHaveLength(8);
@@ -724,7 +783,9 @@ describe("sessions tools", () => {
         if (params?.extraSystemPrompt?.includes("Agent-to-agent reply step")) {
           reply = params.sessionKey === requesterKey ? "pong-1" : "pong-2";
         }
-        if (params?.extraSystemPrompt?.includes("Agent-to-agent announce step")) {
+        if (
+          params?.extraSystemPrompt?.includes("Agent-to-agent announce step")
+        ) {
           reply = "announce now";
         }
         replyByRunId.set(runId, reply);
@@ -740,7 +801,8 @@ describe("sessions tools", () => {
         return { runId: params?.runId ?? "run-1", status: "ok" };
       }
       if (request.method === "chat.history") {
-        const text = (lastWaitedRunId && replyByRunId.get(lastWaitedRunId)) ?? "";
+        const text =
+          (lastWaitedRunId && replyByRunId.get(lastWaitedRunId)) ?? "";
         return {
           messages: [
             {
@@ -803,10 +865,11 @@ describe("sessions tools", () => {
     const replySteps = calls.filter(
       (call) =>
         call.method === "agent" &&
-        typeof (call.params as { extraSystemPrompt?: string })?.extraSystemPrompt === "string" &&
-        (call.params as { extraSystemPrompt?: string })?.extraSystemPrompt?.includes(
-          "Agent-to-agent reply step",
-        ),
+        typeof (call.params as { extraSystemPrompt?: string })
+          ?.extraSystemPrompt === "string" &&
+        (
+          call.params as { extraSystemPrompt?: string }
+        )?.extraSystemPrompt?.includes("Agent-to-agent reply step"),
     );
     expect(replySteps).toHaveLength(2);
     expect(sendParams).toMatchObject({
@@ -862,7 +925,9 @@ describe("sessions tools", () => {
       throw new Error("missing subagents tool");
     }
 
-    const result = await tool.execute("call-subagents-list", { action: "list" });
+    const result = await tool.execute("call-subagents-list", {
+      action: "list",
+    });
     const details = result.details as {
       status?: string;
       active?: unknown[];
@@ -910,7 +975,9 @@ describe("sessions tools", () => {
       throw new Error("missing subagents tool");
     }
 
-    const result = await tool.execute("call-subagents-list-orchestrator", { action: "list" });
+    const result = await tool.execute("call-subagents-list-orchestrator", {
+      action: "list",
+    });
     const details = result.details as {
       status?: string;
       active?: Array<{ runId?: string; status?: string }>;
@@ -926,7 +993,9 @@ describe("sessions tools", () => {
         }),
       ]),
     );
-    expect(details.recent?.find((entry) => entry.runId === "run-orchestrator-ended")).toBeFalsy();
+    expect(
+      details.recent?.find((entry) => entry.runId === "run-orchestrator-ended"),
+    ).toBeFalsy();
   });
 
   it("subagents list usage separates io tokens from prompt/cache", async () => {
@@ -966,7 +1035,9 @@ describe("sessions tools", () => {
         throw new Error("missing subagents tool");
       }
 
-      const result = await tool.execute("call-subagents-list-usage", { action: "list" });
+      const result = await tool.execute("call-subagents-list-usage", {
+        action: "list",
+      });
       const details = result.details as {
         status?: string;
         text?: string;
@@ -1023,15 +1094,20 @@ describe("sessions tools", () => {
         target: "1",
         message: "skip changelog and focus on tests",
       });
-      const details = result.details as { status?: string; runId?: string; text?: string };
+      const details = result.details as {
+        status?: string;
+        runId?: string;
+        text?: string;
+      };
       expect(details.status).toBe("accepted");
       expect(details.runId).toBe("run-steer-1");
       expect(details.text).toContain("steered");
       const steerWaitIndex = callGatewayMock.mock.calls.findIndex(
         (call) =>
-          (call[0] as { method?: string; params?: { runId?: string } }).method === "agent.wait" &&
-          (call[0] as { method?: string; params?: { runId?: string } }).params?.runId ===
-            "run-steer",
+          (call[0] as { method?: string; params?: { runId?: string } })
+            .method === "agent.wait" &&
+          (call[0] as { method?: string; params?: { runId?: string } }).params
+            ?.runId === "run-steer",
       );
       expect(steerWaitIndex).toBeGreaterThanOrEqual(0);
       const steerRunIndex = callGatewayMock.mock.calls.findIndex(
@@ -1099,7 +1175,11 @@ describe("sessions tools", () => {
       action: "kill",
       target: "1",
     });
-    const details = result.details as { status?: string; runId?: string; text?: string };
+    const details = result.details as {
+      status?: string;
+      runId?: string;
+      text?: string;
+    };
     expect(details.status).toBe("ok");
     expect(details.runId).toBe("run-active");
     expect(details.text).toContain("killed");
@@ -1175,13 +1255,19 @@ describe("sessions tools", () => {
       action: "kill",
       target: "all",
     });
-    const details = result.details as { status?: string; killed?: number; text?: string };
+    const details = result.details as {
+      status?: string;
+      killed?: number;
+      text?: string;
+    };
     expect(details.status).toBe("ok");
     expect(details.killed).toBe(1);
     expect(details.text).toContain("killed 1 subagent");
 
     const descendants = listSubagentRunsForRequester(endedParentKey);
-    const worker = descendants.find((entry) => entry.runId === "run-worker-active");
+    const worker = descendants.find(
+      (entry) => entry.runId === "run-worker-active",
+    );
     expect(worker?.endedAt).toBeTypeOf("number");
   });
 });

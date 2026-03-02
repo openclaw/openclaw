@@ -20,7 +20,9 @@ describe("markdownToIR tableMode code - style overlap", () => {
     // 2. If bold spans exist, they should not overlap with code_block span
     if (codeBlockSpan && boldSpan) {
       // Check for overlap
-      const overlaps = boldSpan.start < codeBlockSpan.end && boldSpan.end > codeBlockSpan.start;
+      const overlaps =
+        boldSpan.start < codeBlockSpan.end &&
+        boldSpan.end > codeBlockSpan.start;
       // Overlapping styles are the bug - this should fail until fixed
       expect(overlaps).toBe(false);
     }
@@ -39,7 +41,9 @@ describe("markdownToIR tableMode code - style overlap", () => {
     const italicSpan = ir.styles.find((s) => s.style === "italic");
 
     if (codeBlockSpan && italicSpan) {
-      const overlaps = italicSpan.start < codeBlockSpan.end && italicSpan.end > codeBlockSpan.start;
+      const overlaps =
+        italicSpan.start < codeBlockSpan.end &&
+        italicSpan.end > codeBlockSpan.start;
       expect(overlaps).toBe(false);
     }
   });
@@ -57,7 +61,9 @@ describe("markdownToIR tableMode code - style overlap", () => {
     const codeSpan = ir.styles.find((s) => s.style === "code");
 
     if (codeBlockSpan && codeSpan) {
-      const overlaps = codeSpan.start < codeBlockSpan.end && codeSpan.end > codeBlockSpan.start;
+      const overlaps =
+        codeSpan.start < codeBlockSpan.end &&
+        codeSpan.end > codeBlockSpan.start;
       expect(overlaps).toBe(false);
     }
   });
@@ -82,7 +88,8 @@ describe("markdownToIR tableMode code - style overlap", () => {
       if (style.style === "code_block") {
         continue;
       }
-      const overlaps = style.start < codeBlockSpan.end && style.end > codeBlockSpan.start;
+      const overlaps =
+        style.start < codeBlockSpan.end && style.end > codeBlockSpan.start;
       expect(overlaps).toBe(false);
     }
   });

@@ -1,6 +1,9 @@
 import type { ChatType } from "../channels/chat-type.js";
 import type { SafeBinProfileFixture } from "../infra/exec-safe-bin-policy.js";
-import type { AgentElevatedAllowFromConfig, SessionSendPolicyAction } from "./types.base.js";
+import type {
+  AgentElevatedAllowFromConfig,
+  SessionSendPolicyAction,
+} from "./types.base.js";
 
 export type MediaUnderstandingScopeMatch = {
   channel?: string;
@@ -176,7 +179,12 @@ export type GroupToolPolicyConfig = {
   deny?: string[];
 };
 
-export const TOOLS_BY_SENDER_KEY_TYPES = ["id", "e164", "username", "name"] as const;
+export const TOOLS_BY_SENDER_KEY_TYPES = [
+  "id",
+  "e164",
+  "username",
+  "name",
+] as const;
 export type ToolsBySenderKeyType = (typeof TOOLS_BY_SENDER_KEY_TYPES)[number];
 
 export function parseToolsBySenderTypedKey(
@@ -212,7 +220,10 @@ export function parseToolsBySenderTypedKey(
  *
  * Legacy unprefixed keys are supported for backward compatibility and are matched as senderId only.
  */
-export type GroupToolPolicyBySenderConfig = Record<string, GroupToolPolicyConfig>;
+export type GroupToolPolicyBySenderConfig = Record<
+  string,
+  GroupToolPolicyConfig
+>;
 
 export type ExecToolConfig = {
   /** Exec host routing (default: sandbox). */

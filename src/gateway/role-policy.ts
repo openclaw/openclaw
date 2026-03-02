@@ -11,11 +11,17 @@ export function parseGatewayRole(roleRaw: unknown): GatewayRole | null {
   return null;
 }
 
-export function roleCanSkipDeviceIdentity(role: GatewayRole, sharedAuthOk: boolean): boolean {
+export function roleCanSkipDeviceIdentity(
+  role: GatewayRole,
+  sharedAuthOk: boolean,
+): boolean {
   return role === "operator" && sharedAuthOk;
 }
 
-export function isRoleAuthorizedForMethod(role: GatewayRole, method: string): boolean {
+export function isRoleAuthorizedForMethod(
+  role: GatewayRole,
+  method: string,
+): boolean {
   if (isNodeRoleMethod(method)) {
     return role === "node";
   }

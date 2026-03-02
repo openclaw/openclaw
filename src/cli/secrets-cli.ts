@@ -4,12 +4,19 @@ import type { Command } from "commander";
 import { danger } from "../globals.js";
 import { defaultRuntime } from "../runtime.js";
 import { runSecretsApply } from "../secrets/apply.js";
-import { resolveSecretsAuditExitCode, runSecretsAudit } from "../secrets/audit.js";
+import {
+  resolveSecretsAuditExitCode,
+  runSecretsAudit,
+} from "../secrets/audit.js";
 import { runSecretsConfigureInteractive } from "../secrets/configure.js";
 import { isSecretsApplyPlan, type SecretsApplyPlan } from "../secrets/plan.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
-import { addGatewayClientOptions, callGatewayFromCli, type GatewayRpcOpts } from "./gateway-rpc.js";
+import {
+  addGatewayClientOptions,
+  callGatewayFromCli,
+  type GatewayRpcOpts,
+} from "./gateway-rpc.js";
 
 type SecretsReloadOptions = GatewayRpcOpts & { json?: boolean };
 type SecretsAuditOptions = {
@@ -52,13 +59,20 @@ export function registerSecretsCli(program: Command) {
   addGatewayClientOptions(
     secrets
       .command("reload")
-      .description("Re-resolve secret references and atomically swap runtime snapshot")
+      .description(
+        "Re-resolve secret references and atomically swap runtime snapshot",
+      )
       .option("--json", "Output JSON", false),
   ).action(async (opts: SecretsReloadOptions) => {
     try {
-      const result = await callGatewayFromCli("secrets.reload", opts, undefined, {
-        expectFinal: false,
-      });
+      const result = await callGatewayFromCli(
+        "secrets.reload",
+        opts,
+        undefined,
+        {
+          expectFinal: false,
+        },
+      );
       if (opts.json) {
         defaultRuntime.log(JSON.stringify(result, null, 2));
         return;
@@ -79,7 +93,9 @@ export function registerSecretsCli(program: Command) {
 
   secrets
     .command("audit")
-    .description("Audit plaintext secrets, unresolved refs, and precedence drift")
+    .description(
+      "Audit plaintext secrets, unresolved refs, and precedence drift",
+    )
     .option("--check", "Exit non-zero when findings are present", false)
     .option("--json", "Output JSON", false)
     .action(async (opts: SecretsAuditOptions) => {
@@ -98,11 +114,16 @@ export function registerSecretsCli(program: Command) {
               );
             }
             if (report.findings.length > 20) {
-              defaultRuntime.log(`... ${report.findings.length - 20} more finding(s).`);
+              defaultRuntime.log(
+                `... ${report.findings.length - 20} more finding(s).`,
+              );
             }
           }
         }
-        const exitCode = resolveSecretsAuditExitCode(report, Boolean(opts.check));
+        const exitCode = resolveSecretsAuditExitCode(
+          report,
+          Boolean(opts.check),
+        );
         if (exitCode !== 0) {
           defaultRuntime.exit(exitCode);
         }
@@ -114,10 +135,16 @@ export function registerSecretsCli(program: Command) {
 
   secrets
     .command("configure")
-    .description("Interactive secrets helper (provider setup + SecretRef mapping + preflight)")
+    .description(
+      "Interactive secrets helper (provider setup + SecretRef mapping + preflight)",
+    )
     .option("--apply", "Apply changes immediately after preflight", false)
     .option("--yes", "Skip apply confirmation prompt", false)
-    .option("--providers-only", "Configure secrets.providers only, skip credential mapping", false)
+    .option(
+      "--providers-only",
+      "Configure secrets.providers only, skip credential mapping",
+      false,
+    )
     .option(
       "--skip-provider-setup",
       "Skip provider setup and only map credential fields to existing providers",
@@ -132,7 +159,11 @@ export function registerSecretsCli(program: Command) {
           skipProviderSetup: Boolean(opts.skipProviderSetup),
         });
         if (opts.planOut) {
-          fs.writeFileSync(opts.planOut, `${JSON.stringify(configured.plan, null, 2)}\n`, "utf8");
+          fs.writeFileSync(
+            opts.planOut,
+            `${JSON.stringify(configured.plan, null, 2)}\n`,
+            "utf8",
+          );
         }
         if (opts.json) {
           defaultRuntime.log(
@@ -154,7 +185,9 @@ export function registerSecretsCli(program: Command) {
               defaultRuntime.log(`- warning: ${warning}`);
             }
           }
-          const providerUpserts = Object.keys(configured.plan.providerUpserts ?? {}).length;
+          const providerUpserts = Object.keys(
+            configured.plan.providerUpserts ?? {},
+          ).length;
           const providerDeletes = configured.plan.providerDeletes?.length ?? 0;
           defaultRuntime.log(
             `Plan: targets=${configured.plan.targets.length}, providerUpserts=${providerUpserts}, providerDeletes=${providerDeletes}.`,

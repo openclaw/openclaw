@@ -126,9 +126,9 @@ describe("healthCommand (coverage)", () => {
     await healthCommand({ json: false, timeoutMs: 1000 }, runtime as never);
 
     expect(runtime.exit).not.toHaveBeenCalled();
-    expect(stripAnsi(runtime.log.mock.calls.map((c) => String(c[0])).join("\n"))).toMatch(
-      /WhatsApp: linked/i,
-    );
+    expect(
+      stripAnsi(runtime.log.mock.calls.map((c) => String(c[0])).join("\n")),
+    ).toMatch(/WhatsApp: linked/i);
     expect(logWebSelfIdMock).toHaveBeenCalled();
   });
 });

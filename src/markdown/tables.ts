@@ -10,7 +10,10 @@ const MARKDOWN_STYLE_MARKERS = {
   code_block: { open: "```\n", close: "```" },
 } as const;
 
-export function convertMarkdownTables(markdown: string, mode: MarkdownTableMode): string {
+export function convertMarkdownTables(
+  markdown: string,
+  mode: MarkdownTableMode,
+): string {
   if (!markdown || mode === "off") {
     return markdown;
   }
@@ -36,7 +39,12 @@ export function convertMarkdownTables(markdown: string, mode: MarkdownTableMode)
       if (!label) {
         return null;
       }
-      return { start: link.start, end: link.end, open: "[", close: `](${href})` };
+      return {
+        start: link.start,
+        end: link.end,
+        open: "[",
+        close: `](${href})`,
+      };
     },
   });
 }

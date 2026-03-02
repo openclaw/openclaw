@@ -1,4 +1,7 @@
-import type { ChannelAccountSnapshot, ChannelStatusIssue } from "openclaw/plugin-sdk";
+import type {
+  ChannelAccountSnapshot,
+  ChannelStatusIssue,
+} from "openclaw/plugin-sdk";
 
 type ZaloAccountStatus = {
   accountId?: unknown;
@@ -11,9 +14,15 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value && typeof value === "object");
 
 const asString = (value: unknown): string | undefined =>
-  typeof value === "string" ? value : typeof value === "number" ? String(value) : undefined;
+  typeof value === "string"
+    ? value
+    : typeof value === "number"
+      ? String(value)
+      : undefined;
 
-function readZaloAccountStatus(value: ChannelAccountSnapshot): ZaloAccountStatus | null {
+function readZaloAccountStatus(
+  value: ChannelAccountSnapshot,
+): ZaloAccountStatus | null {
   if (!isRecord(value)) {
     return null;
   }
@@ -25,7 +34,9 @@ function readZaloAccountStatus(value: ChannelAccountSnapshot): ZaloAccountStatus
   };
 }
 
-export function collectZaloStatusIssues(accounts: ChannelAccountSnapshot[]): ChannelStatusIssue[] {
+export function collectZaloStatusIssues(
+  accounts: ChannelAccountSnapshot[],
+): ChannelStatusIssue[] {
   const issues: ChannelStatusIssue[] = [];
   for (const entry of accounts) {
     const account = readZaloAccountStatus(entry);
@@ -44,7 +55,8 @@ export function collectZaloStatusIssues(accounts: ChannelAccountSnapshot[]): Cha
         channel: "zalo",
         accountId,
         kind: "config",
-        message: 'Zalo dmPolicy is "open", allowing any user to message the bot without pairing.',
+        message:
+          'Zalo dmPolicy is "open", allowing any user to message the bot without pairing.',
         fix: 'Set channels.zalo.dmPolicy to "pairing" or "allowlist" to restrict access.',
       });
     }

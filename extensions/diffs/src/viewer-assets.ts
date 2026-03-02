@@ -6,7 +6,10 @@ export const VIEWER_ASSET_PREFIX = "/plugins/diffs/assets/";
 export const VIEWER_LOADER_PATH = `${VIEWER_ASSET_PREFIX}viewer.js`;
 export const VIEWER_RUNTIME_PATH = `${VIEWER_ASSET_PREFIX}viewer-runtime.js`;
 
-const VIEWER_RUNTIME_FILE_URL = new URL("../assets/viewer-runtime.js", import.meta.url);
+const VIEWER_RUNTIME_FILE_URL = new URL(
+  "../assets/viewer-runtime.js",
+  import.meta.url,
+);
 
 export type ServedViewerAsset = {
   body: string | Buffer;
@@ -21,7 +24,9 @@ type RuntimeAssetCache = {
 
 let runtimeAssetCache: RuntimeAssetCache | null = null;
 
-export async function getServedViewerAsset(pathname: string): Promise<ServedViewerAsset | null> {
+export async function getServedViewerAsset(
+  pathname: string,
+): Promise<ServedViewerAsset | null> {
   if (pathname !== VIEWER_LOADER_PATH && pathname !== VIEWER_RUNTIME_PATH) {
     return null;
   }
@@ -52,7 +57,11 @@ async function loadViewerAssets(): Promise<RuntimeAssetCache> {
   }
 
   const runtimeBody = await fs.readFile(runtimePath);
-  const hash = crypto.createHash("sha1").update(runtimeBody).digest("hex").slice(0, 12);
+  const hash = crypto
+    .createHash("sha1")
+    .update(runtimeBody)
+    .digest("hex")
+    .slice(0, 12);
   runtimeAssetCache = {
     mtimeMs: runtimeStat.mtimeMs,
     runtimeBody,

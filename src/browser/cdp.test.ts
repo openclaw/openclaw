@@ -3,7 +3,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { type WebSocket, WebSocketServer } from "ws";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import { rawDataToString } from "../infra/ws.js";
-import { createTargetViaCdp, evaluateJavaScript, normalizeCdpWsUrl, snapshotAria } from "./cdp.js";
+import {
+  createTargetViaCdp,
+  evaluateJavaScript,
+  normalizeCdpWsUrl,
+  snapshotAria,
+} from "./cdp.js";
 import { InvalidBrowserNavigationUrlError } from "./navigation-guard.js";
 
 describe("cdp", () => {
@@ -39,7 +44,9 @@ describe("cdp", () => {
     return wsPort;
   };
 
-  const startVersionHttpServer = async (versionBody: Record<string, unknown>) => {
+  const startVersionHttpServer = async (
+    versionBody: Record<string, unknown>,
+  ) => {
     httpServer = createServer((req, res) => {
       if (req.url === "/json/version") {
         res.setHeader("content-type", "application/json");
@@ -49,7 +56,9 @@ describe("cdp", () => {
       res.statusCode = 404;
       res.end("not found");
     });
-    await new Promise<void>((resolve) => httpServer?.listen(0, "127.0.0.1", resolve));
+    await new Promise<void>((resolve) =>
+      httpServer?.listen(0, "127.0.0.1", resolve),
+    );
     return (httpServer.address() as { port: number }).port;
   };
 
@@ -242,7 +251,9 @@ describe("cdp", () => {
       "ws://127.0.0.1:9222/devtools/browser/ABC",
       "https://user:pass@example.com?token=abc",
     );
-    expect(normalized).toBe("wss://user:pass@example.com/devtools/browser/ABC?token=abc");
+    expect(normalized).toBe(
+      "wss://user:pass@example.com/devtools/browser/ABC?token=abc",
+    );
   });
 
   it("upgrades ws to wss when CDP uses https", () => {

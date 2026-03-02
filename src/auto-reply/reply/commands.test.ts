@@ -1,17 +1,34 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { abortEmbeddedPiRun, compactEmbeddedPiSession } from "../../agents/pi-embedded.js";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
+import {
+  abortEmbeddedPiRun,
+  compactEmbeddedPiSession,
+} from "../../agents/pi-embedded.js";
 import {
   addSubagentRunForTests,
   listSubagentRunsForRequester,
   resetSubagentRegistryForTests,
 } from "../../agents/subagent-registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { updateSessionStore, type SessionEntry } from "../../config/sessions.js";
+import {
+  updateSessionStore,
+  type SessionEntry,
+} from "../../config/sessions.js";
 import * as internalHooks from "../../hooks/internal-hooks.js";
-import { clearPluginCommands, registerPluginCommand } from "../../plugins/commands.js";
+import {
+  clearPluginCommands,
+  registerPluginCommand,
+} from "../../plugins/commands.js";
 import { typedCases } from "../../test-utils/typed-cases.js";
 import type { MsgContext } from "../templating.js";
 import { resetBashChatCommandForTests } from "./bash-command.js";
@@ -28,8 +45,9 @@ const validateConfigObjectWithPluginsMock = vi.hoisted(() => vi.fn());
 const writeConfigFileMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../config/config.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("../../config/config.js")>("../../config/config.js");
+  const actual = await vi.importActual<typeof import("../../config/config.js")>(
+    "../../config/config.js",
+  );
   return {
     ...actual,
     readConfigFileSnapshot: readConfigFileSnapshotMock,
@@ -43,9 +61,9 @@ const addChannelAllowFromStoreEntryMock = vi.hoisted(() => vi.fn());
 const removeChannelAllowFromStoreEntryMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../pairing/pairing-store.js", async () => {
-  const actual = await vi.importActual<typeof import("../../pairing/pairing-store.js")>(
-    "../../pairing/pairing-store.js",
-  );
+  const actual = await vi.importActual<
+    typeof import("../../pairing/pairing-store.js")
+  >("../../pairing/pairing-store.js");
   return {
     ...actual,
     readChannelAllowFromStore: readChannelAllowFromStoreMock,
@@ -55,9 +73,9 @@ vi.mock("../../pairing/pairing-store.js", async () => {
 });
 
 vi.mock("../../channels/plugins/pairing.js", async () => {
-  const actual = await vi.importActual<typeof import("../../channels/plugins/pairing.js")>(
-    "../../channels/plugins/pairing.js",
-  );
+  const actual = await vi.importActual<
+    typeof import("../../channels/plugins/pairing.js")
+  >("../../channels/plugins/pairing.js");
   return {
     ...actual,
     listPairingChannels: () => ["telegram"],
@@ -109,7 +127,9 @@ import { buildCommandContext, handleCommands } from "./commands.js";
 
 // Avoid expensive workspace scans during /context tests.
 vi.mock("./commands-context-report.js", () => ({
-  buildContextReply: async (params: { command: { commandBodyNormalized: string } }) => {
+  buildContextReply: async (params: {
+    command: { commandBodyNormalized: string };
+  }) => {
     const normalized = params.command.commandBodyNormalized;
     if (normalized === "/context list") {
       return { text: "Injected workspace files:\n- AGENTS.md" };
@@ -124,16 +144,28 @@ vi.mock("./commands-context-report.js", () => ({
 let testWorkspaceDir = os.tmpdir();
 
 beforeAll(async () => {
-  testWorkspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-commands-"));
-  await fs.writeFile(path.join(testWorkspaceDir, "AGENTS.md"), "# Agents\n", "utf-8");
+  testWorkspaceDir = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-commands-"),
+  );
+  await fs.writeFile(
+    path.join(testWorkspaceDir, "AGENTS.md"),
+    "# Agents\n",
+    "utf-8",
+  );
 });
 
 afterAll(async () => {
   await fs.rm(testWorkspaceDir, { recursive: true, force: true });
 });
 
-function buildParams(commandBody: string, cfg: OpenClawConfig, ctxOverrides?: Partial<MsgContext>) {
-  return buildCommandTestParams(commandBody, cfg, ctxOverrides, { workspaceDir: testWorkspaceDir });
+function buildParams(
+  commandBody: string,
+  cfg: OpenClawConfig,
+  ctxOverrides?: Partial<MsgContext>,
+) {
+  return buildCommandTestParams(commandBody, cfg, ctxOverrides, {
+    workspaceDir: testWorkspaceDir,
+  });
 }
 
 describe("handleCommands gating", () => {
@@ -167,7 +199,9 @@ describe("handleCommands gating", () => {
           params.elevated = {
             enabled: true,
             allowed: false,
-            failures: [{ gate: "allowFrom", key: "tools.elevated.allowFrom.whatsapp" }],
+            failures: [
+              { gate: "allowFrom", key: "tools.elevated.allowFrom.whatsapp" },
+            ],
           };
         },
         expectedText: "elevated is not available",
@@ -248,7 +282,9 @@ describe("handleCommands gating", () => {
       testCase.applyParams?.(params);
       const result = await handleCommands(params);
       expect(result.shouldContinue, testCase.name).toBe(false);
-      expect(result.reply?.text, testCase.name).toContain(testCase.expectedText);
+      expect(result.reply?.text, testCase.name).toContain(
+        testCase.expectedText,
+      );
     }
   });
 });
@@ -274,7 +310,9 @@ describe("/approve command", () => {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
     } as OpenClawConfig;
-    const params = buildParams("/approve abc allow-once", cfg, { SenderId: "123" });
+    const params = buildParams("/approve abc allow-once", cfg, {
+      SenderId: "123",
+    });
 
     callGatewayMock.mockResolvedValue({ ok: true });
 
@@ -322,7 +360,9 @@ describe("/approve command", () => {
 
       const result = await handleCommands(params);
       expect(result.shouldContinue).toBe(false);
-      expect(result.reply?.text).toContain("Exec approval allow-once submitted");
+      expect(result.reply?.text).toContain(
+        "Exec approval allow-once submitted",
+      );
       expect(callGatewayMock).toHaveBeenLastCalledWith(
         expect.objectContaining({
           method: "exec.approval.resolve",
@@ -486,7 +526,11 @@ describe("parseConfigCommand", () => {
       input: string;
       expected: unknown;
     }> = [
-      { parse: parseConfigCommand, input: "/config", expected: { action: "show" } },
+      {
+        parse: parseConfigCommand,
+        input: "/config",
+        expected: { action: "show" },
+      },
       {
         parse: parseConfigCommand,
         input: "/config show",
@@ -512,9 +556,21 @@ describe("parseConfigCommand", () => {
         input: '/config set foo={"a":1}',
         expected: { action: "set", path: "foo", value: { a: 1 } },
       },
-      { parse: parseDebugCommand, input: "/debug", expected: { action: "show" } },
-      { parse: parseDebugCommand, input: "/debug show", expected: { action: "show" } },
-      { parse: parseDebugCommand, input: "/debug reset", expected: { action: "reset" } },
+      {
+        parse: parseDebugCommand,
+        input: "/debug",
+        expected: { action: "show" },
+      },
+      {
+        parse: parseDebugCommand,
+        input: "/debug show",
+        expected: { action: "show" },
+      },
+      {
+        parse: parseDebugCommand,
+        input: "/debug reset",
+        expected: { action: "reset" },
+      },
       {
         parse: parseDebugCommand,
         input: "/debug unset foo.bar",
@@ -541,7 +597,10 @@ describe("extractMessageText", () => {
         expectedText: "Here [Tool Call: foo (ID: 1)] ok",
       },
       {
-        message: { role: "assistant", content: "Here [Tool Call: foo (ID: 1)] ok" },
+        message: {
+          role: "assistant",
+          content: "Here [Tool Call: foo (ID: 1)] ok",
+        },
         expectedText: "Here ok",
       },
     ] as const;
@@ -653,10 +712,12 @@ describe("handleCommands /allowlist", () => {
         channels: { telegram: { allowFrom: ["123"] } },
       },
     });
-    validateConfigObjectWithPluginsMock.mockImplementation((config: unknown) => ({
-      ok: true,
-      config,
-    }));
+    validateConfigObjectWithPluginsMock.mockImplementation(
+      (config: unknown) => ({
+        ok: true,
+        config,
+      }),
+    );
     addChannelAllowFromStoreEntryMock.mockResolvedValueOnce({
       changed: true,
       allowFrom: ["123", "789"],
@@ -689,12 +750,17 @@ describe("handleCommands /allowlist", () => {
       commands: { text: true, config: true },
       channels: { telegram: { allowFrom: ["123"] } },
     } as OpenClawConfig;
-    const params = buildPolicyParams("/allowlist add dm --account __proto__ 789", cfg);
+    const params = buildPolicyParams(
+      "/allowlist add dm --account __proto__ 789",
+      cfg,
+    );
     const result = await handleCommands(params);
 
     expect(result.shouldContinue).toBe(false);
     expect(result.reply?.text).toContain("Invalid account id");
-    expect((Object.prototype as Record<string, unknown>).allowFrom).toBeUndefined();
+    expect(
+      (Object.prototype as Record<string, unknown>).allowFrom,
+    ).toBeUndefined();
     expect(writeConfigFileMock).not.toHaveBeenCalled();
   });
 
@@ -713,10 +779,12 @@ describe("handleCommands /allowlist", () => {
         expectedAllowFrom: ["222"],
       },
     ] as const;
-    validateConfigObjectWithPluginsMock.mockImplementation((config: unknown) => ({
-      ok: true,
-      config,
-    }));
+    validateConfigObjectWithPluginsMock.mockImplementation(
+      (config: unknown) => ({
+        ok: true,
+        config,
+      }),
+    );
 
     for (const testCase of cases) {
       const previousWriteCount = writeConfigFileMock.mock.calls.length;
@@ -744,19 +812,29 @@ describe("handleCommands /allowlist", () => {
         },
       } as OpenClawConfig;
 
-      const params = buildPolicyParams(`/allowlist remove dm ${testCase.removeId}`, cfg, {
-        Provider: testCase.provider,
-        Surface: testCase.provider,
-      });
+      const params = buildPolicyParams(
+        `/allowlist remove dm ${testCase.removeId}`,
+        cfg,
+        {
+          Provider: testCase.provider,
+          Surface: testCase.provider,
+        },
+      );
       const result = await handleCommands(params);
 
       expect(result.shouldContinue).toBe(false);
-      expect(writeConfigFileMock.mock.calls.length).toBe(previousWriteCount + 1);
-      const written = writeConfigFileMock.mock.calls.at(-1)?.[0] as OpenClawConfig;
+      expect(writeConfigFileMock.mock.calls.length).toBe(
+        previousWriteCount + 1,
+      );
+      const written = writeConfigFileMock.mock.calls.at(
+        -1,
+      )?.[0] as OpenClawConfig;
       const channelConfig = written.channels?.[testCase.provider];
       expect(channelConfig?.allowFrom).toEqual(testCase.expectedAllowFrom);
       expect(channelConfig?.dm?.allowFrom).toBeUndefined();
-      expect(result.reply?.text).toContain(`channels.${testCase.provider}.allowFrom`);
+      expect(result.reply?.text).toContain(
+        `channels.${testCase.provider}.allowFrom`,
+      );
     }
   });
 });
@@ -767,17 +845,26 @@ describe("/models command", () => {
     agents: { defaults: { model: { primary: "anthropic/claude-opus-4-5" } } },
   } as unknown as OpenClawConfig;
 
-  it.each(["discord", "whatsapp"])("lists providers on %s (text)", async (surface) => {
-    const params = buildPolicyParams("/models", cfg, { Provider: surface, Surface: surface });
-    const result = await handleCommands(params);
-    expect(result.shouldContinue).toBe(false);
-    expect(result.reply?.text).toContain("Providers:");
-    expect(result.reply?.text).toContain("anthropic");
-    expect(result.reply?.text).toContain("Use: /models <provider>");
-  });
+  it.each(["discord", "whatsapp"])(
+    "lists providers on %s (text)",
+    async (surface) => {
+      const params = buildPolicyParams("/models", cfg, {
+        Provider: surface,
+        Surface: surface,
+      });
+      const result = await handleCommands(params);
+      expect(result.shouldContinue).toBe(false);
+      expect(result.reply?.text).toContain("Providers:");
+      expect(result.reply?.text).toContain("anthropic");
+      expect(result.reply?.text).toContain("Use: /models <provider>");
+    },
+  );
 
   it("rejects unauthorized /models commands", async () => {
-    const params = buildPolicyParams("/models", cfg, { Provider: "discord", Surface: "discord" });
+    const params = buildPolicyParams("/models", cfg, {
+      Provider: "discord",
+      Surface: "discord",
+    });
     const result = await handleCommands({
       ...params,
       command: {
@@ -790,12 +877,16 @@ describe("/models command", () => {
   });
 
   it("lists providers on telegram (buttons)", async () => {
-    const params = buildPolicyParams("/models", cfg, { Provider: "telegram", Surface: "telegram" });
+    const params = buildPolicyParams("/models", cfg, {
+      Provider: "telegram",
+      Surface: "telegram",
+    });
     const result = await handleCommands(params);
     expect(result.shouldContinue).toBe(false);
     expect(result.reply?.text).toBe("Select a provider:");
-    const buttons = (result.reply?.channelData as { telegram?: { buttons?: unknown[][] } })
-      ?.telegram?.buttons;
+    const buttons = (
+      result.reply?.channelData as { telegram?: { buttons?: unknown[][] } }
+    )?.telegram?.buttons;
     expect(buttons).toBeDefined();
     expect(buttons?.length).toBeGreaterThan(0);
   });
@@ -817,7 +908,11 @@ describe("/models command", () => {
       {
         name: "ignores page argument when all flag is present",
         command: "/models anthropic 3 all",
-        includes: ["Models (anthropic", "page 1/1", "anthropic/claude-opus-4-5"],
+        includes: [
+          "Models (anthropic",
+          "page 1/1",
+          "anthropic/claude-opus-4-5",
+        ],
         excludes: ["Page out of range"],
       },
       {
@@ -844,10 +939,15 @@ describe("/models command", () => {
       );
       expect(result.shouldContinue, testCase.name).toBe(false);
       for (const expected of testCase.includes) {
-        expect(result.reply?.text, `${testCase.name}: ${expected}`).toContain(expected);
+        expect(result.reply?.text, `${testCase.name}: ${expected}`).toContain(
+          expected,
+        );
       }
       for (const blocked of testCase.excludes ?? []) {
-        expect(result.reply?.text, `${testCase.name}: !${blocked}`).not.toContain(blocked);
+        expect(
+          result.reply?.text,
+          `${testCase.name}: !${blocked}`,
+        ).not.toContain(blocked);
       }
     }
   });
@@ -933,11 +1033,15 @@ describe("handleCommands hooks", () => {
       channels: { whatsapp: { allowFrom: ["*"] } },
     } as OpenClawConfig;
     const params = buildParams("/new take notes", cfg);
-    const spy = vi.spyOn(internalHooks, "triggerInternalHook").mockResolvedValue();
+    const spy = vi
+      .spyOn(internalHooks, "triggerInternalHook")
+      .mockResolvedValue();
 
     await handleCommands(params);
 
-    expect(spy).toHaveBeenCalledWith(expect.objectContaining({ type: "command", action: "new" }));
+    expect(spy).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "command", action: "new" }),
+    );
     spy.mockRestore();
   });
 
@@ -958,7 +1062,9 @@ describe("handleCommands hooks", () => {
       CommandAuthorized: true,
     });
     params.sessionKey = "agent:main:telegram:direct:123";
-    const spy = vi.spyOn(internalHooks, "triggerInternalHook").mockResolvedValue();
+    const spy = vi
+      .spyOn(internalHooks, "triggerInternalHook")
+      .mockResolvedValue();
 
     await handleCommands(params);
 
@@ -990,7 +1096,10 @@ describe("handleCommands context", () => {
       },
       {
         commandBody: "/context detail",
-        expectedText: ["Context breakdown (detailed)", "Top tools (schema size):"],
+        expectedText: [
+          "Context breakdown (detailed)",
+          "Top tools (schema size):",
+        ],
       },
     ] as const;
     for (const testCase of cases) {
@@ -1022,7 +1131,9 @@ describe("handleCommands subagents", () => {
     expect(result.reply?.text).toContain("active subagents:\n-----\n");
     expect(result.reply?.text).toContain("recent subagents (last 30m):");
     expect(result.reply?.text).toContain("\n\nrecent subagents (last 30m):");
-    expect(result.reply?.text).toContain("recent subagents (last 30m):\n-----\n");
+    expect(result.reply?.text).toContain(
+      "recent subagents (last 30m):\n-----\n",
+    );
   });
 
   it("truncates long subagent task text in /subagents list", async () => {
@@ -1098,7 +1209,10 @@ describe("handleCommands subagents", () => {
       createdAt: 1000,
       startedAt: 1000,
     });
-    const storePath = path.join(testWorkspaceDir, "sessions-subagents-usage.json");
+    const storePath = path.join(
+      testWorkspaceDir,
+      "sessions-subagents-usage.json",
+    );
     await updateSessionStore(storePath, (store) => {
       store["agent:main:subagent:usage"] = {
         sessionId: "child-session-usage",
@@ -1117,7 +1231,9 @@ describe("handleCommands subagents", () => {
     const params = buildParams("/subagents list", cfg);
     const result = await handleCommands(params);
     expect(result.shouldContinue).toBe(false);
-    expect(result.reply?.text).toMatch(/tokens 1(\.0)?k \(in 12 \/ out 1(\.0)?k\)/);
+    expect(result.reply?.text).toMatch(
+      /tokens 1(\.0)?k \(in 12 \/ out 1(\.0)?k\)/,
+    );
     expect(result.reply?.text).toContain("prompt/cache 197k");
     expect(result.reply?.text).not.toContain("1k io");
   });
@@ -1178,26 +1294,29 @@ describe("handleCommands subagents", () => {
       expectedText: ["🤖 Subagents: 1 active", "· 1 done"],
       unexpectedText: [] as string[],
     },
-  ])("$name", async ({ seedRuns, verboseLevel, expectedText, unexpectedText }) => {
-    seedRuns();
-    const cfg = {
-      commands: { text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-      session: { mainKey: "main", scope: "per-sender" },
-    } as OpenClawConfig;
-    const params = buildParams("/status", cfg);
-    if (verboseLevel === "on") {
-      params.resolvedVerboseLevel = "on";
-    }
-    const result = await handleCommands(params);
-    expect(result.shouldContinue).toBe(false);
-    for (const expected of expectedText) {
-      expect(result.reply?.text).toContain(expected);
-    }
-    for (const blocked of unexpectedText) {
-      expect(result.reply?.text).not.toContain(blocked);
-    }
-  });
+  ])(
+    "$name",
+    async ({ seedRuns, verboseLevel, expectedText, unexpectedText }) => {
+      seedRuns();
+      const cfg = {
+        commands: { text: true },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+        session: { mainKey: "main", scope: "per-sender" },
+      } as OpenClawConfig;
+      const params = buildParams("/status", cfg);
+      if (verboseLevel === "on") {
+        params.resolvedVerboseLevel = "on";
+      }
+      const result = await handleCommands(params);
+      expect(result.shouldContinue).toBe(false);
+      for (const expected of expectedText) {
+        expect(result.reply?.text).toContain(expected);
+      }
+      for (const blocked of unexpectedText) {
+        expect(result.reply?.text).not.toContain(blocked);
+      }
+    },
+  );
 
   it("returns help/usage for invalid or incomplete subagents commands", async () => {
     const cfg = {
@@ -1329,7 +1448,10 @@ describe("handleCommands subagents", () => {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
     } as OpenClawConfig;
-    const params = buildParams("/subagents send 1 continue with follow-up details", cfg);
+    const params = buildParams(
+      "/subagents send 1 continue with follow-up details",
+      cfg,
+    );
     const result = await handleCommands(params);
     expect(result.shouldContinue).toBe(false);
     expect(result.reply?.text).toContain("✅ Sent to");
@@ -1348,9 +1470,10 @@ describe("handleCommands subagents", () => {
 
     const waitCall = callGatewayMock.mock.calls.find(
       (call) =>
-        (call[0] as { method?: string; params?: { runId?: string } }).method === "agent.wait" &&
-        (call[0] as { method?: string; params?: { runId?: string } }).params?.runId ===
-          "run-followup-1",
+        (call[0] as { method?: string; params?: { runId?: string } }).method ===
+          "agent.wait" &&
+        (call[0] as { method?: string; params?: { runId?: string } }).params
+          ?.runId === "run-followup-1",
     );
     expect(waitCall).toBeDefined();
   });
@@ -1363,7 +1486,10 @@ describe("handleCommands subagents", () => {
       }
       return {};
     });
-    const storePath = path.join(testWorkspaceDir, "sessions-subagents-steer.json");
+    const storePath = path.join(
+      testWorkspaceDir,
+      "sessions-subagents-steer.json",
+    );
     await updateSessionStore(storePath, (store) => {
       store["agent:main:subagent:abc"] = {
         sessionId: "child-session-steer",
@@ -1391,8 +1517,10 @@ describe("handleCommands subagents", () => {
     expect(result.reply?.text).toContain("steered");
     const steerWaitIndex = callGatewayMock.mock.calls.findIndex(
       (call) =>
-        (call[0] as { method?: string; params?: { runId?: string } }).method === "agent.wait" &&
-        (call[0] as { method?: string; params?: { runId?: string } }).params?.runId === "run-1",
+        (call[0] as { method?: string; params?: { runId?: string } }).method ===
+          "agent.wait" &&
+        (call[0] as { method?: string; params?: { runId?: string } }).params
+          ?.runId === "run-1",
     );
     expect(steerWaitIndex).toBeGreaterThanOrEqual(0);
     const steerRunIndex = callGatewayMock.mock.calls.findIndex(

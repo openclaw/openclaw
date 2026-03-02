@@ -15,7 +15,10 @@ const outputFile = path.resolve(
   "a2ui.bundle.js",
 );
 
-const a2uiLitDist = path.resolve(repoRoot, "vendor/a2ui/renderers/lit/dist/src");
+const a2uiLitDist = path.resolve(
+  repoRoot,
+  "vendor/a2ui/renderers/lit/dist/src",
+);
 const a2uiThemeContext = path.resolve(a2uiLitDist, "0.8/ui/context/theme.js");
 const uiNodeModules = path.resolve(uiRoot, "node_modules");
 const repoNodeModules = path.resolve(repoRoot, "node_modules");

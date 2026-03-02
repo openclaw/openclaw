@@ -1,6 +1,9 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { normalizePluginHttpPath } from "./http-path.js";
-import type { PluginHttpRouteRegistration, PluginRegistry } from "./registry.js";
+import type {
+  PluginHttpRouteRegistration,
+  PluginRegistry,
+} from "./registry.js";
 import { requireActivePluginRegistry } from "./runtime.js";
 
 export type PluginHttpRouteHandler = (
@@ -25,7 +28,10 @@ export function registerPluginHttpRoute(params: {
   const routes = registry.httpRoutes ?? [];
   registry.httpRoutes = routes;
 
-  const normalizedPath = normalizePluginHttpPath(params.path, params.fallbackPath);
+  const normalizedPath = normalizePluginHttpPath(
+    params.path,
+    params.fallbackPath,
+  );
   const suffix = params.accountId ? ` for account "${params.accountId}"` : "";
   if (!normalizedPath) {
     params.log?.(`plugin: webhook path missing${suffix}`);
@@ -47,7 +53,11 @@ export function registerPluginHttpRoute(params: {
       );
       return () => {};
     }
-    if (existing.pluginId && params.pluginId && existing.pluginId !== params.pluginId) {
+    if (
+      existing.pluginId &&
+      params.pluginId &&
+      existing.pluginId !== params.pluginId
+    ) {
       params.log?.(
         `plugin: route replacement denied for ${normalizedPath} (${routeMatch})${suffix}; owned by ${existing.pluginId}`,
       );

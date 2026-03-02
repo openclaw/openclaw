@@ -32,9 +32,12 @@ export async function loadSessions(
   state.sessionsLoading = true;
   state.sessionsError = null;
   try {
-    const includeGlobal = overrides?.includeGlobal ?? state.sessionsIncludeGlobal;
-    const includeUnknown = overrides?.includeUnknown ?? state.sessionsIncludeUnknown;
-    const activeMinutes = overrides?.activeMinutes ?? toNumber(state.sessionsFilterActive, 0);
+    const includeGlobal =
+      overrides?.includeGlobal ?? state.sessionsIncludeGlobal;
+    const includeUnknown =
+      overrides?.includeUnknown ?? state.sessionsIncludeUnknown;
+    const activeMinutes =
+      overrides?.activeMinutes ?? toNumber(state.sessionsFilterActive, 0);
     const limit = overrides?.limit ?? toNumber(state.sessionsFilterLimit, 0);
     const params: Record<string, unknown> = {
       includeGlobal,
@@ -46,7 +49,10 @@ export async function loadSessions(
     if (limit > 0) {
       params.limit = limit;
     }
-    const res = await state.client.request<SessionsListResult | undefined>("sessions.list", params);
+    const res = await state.client.request<SessionsListResult | undefined>(
+      "sessions.list",
+      params,
+    );
     if (res) {
       state.sessionsResult = res;
     }
@@ -91,7 +97,10 @@ export async function patchSession(
   }
 }
 
-export async function deleteSession(state: SessionsState, key: string): Promise<boolean> {
+export async function deleteSession(
+  state: SessionsState,
+  key: string,
+): Promise<boolean> {
   if (!state.client || !state.connected) {
     return false;
   }
@@ -107,7 +116,10 @@ export async function deleteSession(state: SessionsState, key: string): Promise<
   state.sessionsLoading = true;
   state.sessionsError = null;
   try {
-    await state.client.request("sessions.delete", { key, deleteTranscript: true });
+    await state.client.request("sessions.delete", {
+      key,
+      deleteTranscript: true,
+    });
     return true;
   } catch (err) {
     state.sessionsError = String(err);
@@ -117,7 +129,10 @@ export async function deleteSession(state: SessionsState, key: string): Promise<
   }
 }
 
-export async function deleteSessionAndRefresh(state: SessionsState, key: string): Promise<boolean> {
+export async function deleteSessionAndRefresh(
+  state: SessionsState,
+  key: string,
+): Promise<boolean> {
   const deleted = await deleteSession(state, key);
   if (!deleted) {
     return false;

@@ -12,7 +12,11 @@ import {
   resetLoadConfigMock as _resetLoadConfigMock,
 } from "./test-helpers.js";
 
-export { resetBaileysMocks, resetLoadConfigMock, setLoadConfigMock } from "./test-helpers.js";
+export {
+  resetBaileysMocks,
+  resetLoadConfigMock,
+  setLoadConfigMock,
+} from "./test-helpers.js";
 
 // Avoid exporting inferred vitest mock types (TS2742 under pnpm + d.ts emit).
 // oxlint-disable-next-line typescript/no-explicit-any
@@ -35,7 +39,8 @@ vi.mock("../agents/pi-embedded.js", () => ({
   isEmbeddedPiRunStreaming: vi.fn().mockReturnValue(false),
   runEmbeddedPiAgent: vi.fn(),
   queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
-  resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
+  resolveEmbeddedSessionLane: (key: string) =>
+    `session:${key.trim() || "main"}`,
 }));
 
 export async function rmDirWithRetries(
@@ -84,7 +89,9 @@ let tempHomeId = 0;
 
 export function installWebAutoReplyTestHomeHooks() {
   beforeAll(async () => {
-    tempHomeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-web-home-suite-"));
+    tempHomeRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-web-home-suite-"),
+    );
   });
 
   beforeEach(async () => {
@@ -141,7 +148,10 @@ export function installWebAutoReplyUnitTestHooks(opts?: { pinDns?: boolean }) {
           return {
             hostname: normalized,
             addresses,
-            lookup: ssrf.createPinnedLookup({ hostname: normalized, addresses }),
+            lookup: ssrf.createPinnedLookup({
+              hostname: normalized,
+              addresses,
+            }),
           };
         });
     }
@@ -157,7 +167,9 @@ export function installWebAutoReplyUnitTestHooks(opts?: { pinDns?: boolean }) {
 }
 
 export function createWebListenerFactoryCapture(): AnyExport {
-  let capturedOnMessage: ((msg: WebInboundMessage) => Promise<void>) | undefined;
+  let capturedOnMessage:
+    | ((msg: WebInboundMessage) => Promise<void>)
+    | undefined;
   const listenerFactory = async (opts: {
     onMessage: (msg: WebInboundMessage) => Promise<void>;
   }) => {

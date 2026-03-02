@@ -1,5 +1,9 @@
 import { isPlainObject } from "../utils.js";
-import { parseConfigPath, setConfigValueAtPath, unsetConfigValueAtPath } from "./config-paths.js";
+import {
+  parseConfigPath,
+  setConfigValueAtPath,
+  unsetConfigValueAtPath,
+} from "./config-paths.js";
 import { isBlockedObjectKey } from "./prototype-keys.js";
 import type { OpenClawConfig } from "./types.js";
 
@@ -7,7 +11,10 @@ type OverrideTree = Record<string, unknown>;
 
 let overrides: OverrideTree = {};
 
-function sanitizeOverrideValue(value: unknown, seen = new WeakSet<object>()): unknown {
+function sanitizeOverrideValue(
+  value: unknown,
+  seen = new WeakSet<object>(),
+): unknown {
   if (Array.isArray(value)) {
     return value.map((entry) => sanitizeOverrideValue(entry, seen));
   }

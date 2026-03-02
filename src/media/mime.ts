@@ -26,16 +26,20 @@ const EXT_BY_MIME: Record<string, string> = {
   "application/msword": ".doc",
   "application/vnd.ms-excel": ".xls",
   "application/vnd.ms-powerpoint": ".ppt",
-  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+    ".docx",
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
-  "application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation":
+    ".pptx",
   "text/csv": ".csv",
   "text/plain": ".txt",
   "text/markdown": ".md",
 };
 
 const MIME_BY_EXT: Record<string, string> = {
-  ...Object.fromEntries(Object.entries(EXT_BY_MIME).map(([mime, ext]) => [ext, mime])),
+  ...Object.fromEntries(
+    Object.entries(EXT_BY_MIME).map(([mime, ext]) => [ext, mime]),
+  ),
   // Additional extension aliases
   ".jpeg": "image/jpeg",
   ".js": "text/javascript",
@@ -164,7 +168,9 @@ export function isGifMedia(opts: {
   return ext === ".gif";
 }
 
-export function imageMimeFromFormat(format?: string | null): string | undefined {
+export function imageMimeFromFormat(
+  format?: string | null,
+): string | undefined {
   if (!format) {
     return undefined;
   }

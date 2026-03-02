@@ -22,7 +22,11 @@ export function parseFrontmatter(content: string): ParsedHookFrontmatter {
 }
 
 function parseInstallSpec(input: unknown): HookInstallSpec | undefined {
-  const parsed = parseOpenClawManifestInstallBase(input, ["bundled", "npm", "git"]);
+  const parsed = parseOpenClawManifestInstallBase(input, [
+    "bundled",
+    "npm",
+    "git",
+  ]);
   if (!parsed) {
     return undefined;
   }
@@ -62,11 +66,18 @@ export function resolveOpenClawMetadata(
   const osRaw = resolveOpenClawManifestOs(metadataObj);
   const eventsRaw = normalizeStringList(metadataObj.events);
   return {
-    always: typeof metadataObj.always === "boolean" ? metadataObj.always : undefined,
-    emoji: typeof metadataObj.emoji === "string" ? metadataObj.emoji : undefined,
-    homepage: typeof metadataObj.homepage === "string" ? metadataObj.homepage : undefined,
-    hookKey: typeof metadataObj.hookKey === "string" ? metadataObj.hookKey : undefined,
-    export: typeof metadataObj.export === "string" ? metadataObj.export : undefined,
+    always:
+      typeof metadataObj.always === "boolean" ? metadataObj.always : undefined,
+    emoji:
+      typeof metadataObj.emoji === "string" ? metadataObj.emoji : undefined,
+    homepage:
+      typeof metadataObj.homepage === "string"
+        ? metadataObj.homepage
+        : undefined,
+    hookKey:
+      typeof metadataObj.hookKey === "string" ? metadataObj.hookKey : undefined,
+    export:
+      typeof metadataObj.export === "string" ? metadataObj.export : undefined,
     os: osRaw.length > 0 ? osRaw : undefined,
     events: eventsRaw.length > 0 ? eventsRaw : [],
     requires: requires,
@@ -78,7 +89,10 @@ export function resolveHookInvocationPolicy(
   frontmatter: ParsedHookFrontmatter,
 ): HookInvocationPolicy {
   return {
-    enabled: parseFrontmatterBool(getFrontmatterString(frontmatter, "enabled"), true),
+    enabled: parseFrontmatterBool(
+      getFrontmatterString(frontmatter, "enabled"),
+      true,
+    ),
   };
 }
 

@@ -39,7 +39,11 @@ export type CronFailureDestination = {
 export type CronDeliveryPatch = Partial<CronDelivery>;
 
 export type CronRunStatus = "ok" | "error" | "skipped";
-export type CronDeliveryStatus = "delivered" | "not-delivered" | "unknown" | "not-requested";
+export type CronDeliveryStatus =
+  | "delivered"
+  | "not-delivered"
+  | "unknown"
+  | "not-requested";
 
 export type CronUsageSummary = {
   input_tokens?: number;
@@ -163,11 +167,16 @@ export type CronStoreFile = {
   jobs: CronJob[];
 };
 
-export type CronJobCreate = Omit<CronJob, "id" | "createdAtMs" | "updatedAtMs" | "state"> & {
+export type CronJobCreate = Omit<
+  CronJob,
+  "id" | "createdAtMs" | "updatedAtMs" | "state"
+> & {
   state?: Partial<CronJobState>;
 };
 
-export type CronJobPatch = Partial<Omit<CronJob, "id" | "createdAtMs" | "state" | "payload">> & {
+export type CronJobPatch = Partial<
+  Omit<CronJob, "id" | "createdAtMs" | "state" | "payload">
+> & {
   payload?: CronPayloadPatch;
   delivery?: CronDeliveryPatch;
   state?: Partial<CronJobState>;

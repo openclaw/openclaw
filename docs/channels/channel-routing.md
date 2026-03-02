@@ -86,11 +86,20 @@ Example:
 ```json5
 {
   agents: {
-    list: [{ id: "support", name: "Support", workspace: "~/.openclaw/workspace-support" }],
+    list: [
+      {
+        id: "support",
+        name: "Support",
+        workspace: "~/.openclaw/workspace-support",
+      },
+    ],
   },
   bindings: [
     { match: { channel: "slack", teamId: "T123" }, agentId: "support" },
-    { match: { channel: "telegram", peer: { kind: "group", id: "-100123" } }, agentId: "support" },
+    {
+      match: { channel: "telegram", peer: { kind: "group", id: "-100123" } },
+      agentId: "support",
+    },
   ],
 }
 ```

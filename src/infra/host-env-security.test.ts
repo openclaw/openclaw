@@ -117,7 +117,9 @@ describe("isDangerousHostEnvOverrideVarName", () => {
 
 describe("normalizeEnvVarKey", () => {
   it("normalizes and validates keys", () => {
-    expect(normalizeEnvVarKey(" OPENROUTER_API_KEY ")).toBe("OPENROUTER_API_KEY");
+    expect(normalizeEnvVarKey(" OPENROUTER_API_KEY ")).toBe(
+      "OPENROUTER_API_KEY",
+    );
     expect(normalizeEnvVarKey("NOT-PORTABLE", { portable: true })).toBeNull();
     expect(normalizeEnvVarKey(" BASH_FUNC_echo%% ")).toBe("BASH_FUNC_echo%%");
     expect(normalizeEnvVarKey("   ")).toBeNull();
@@ -162,7 +164,10 @@ describe("shell wrapper exploit regression", () => {
     if (process.platform === "win32" || !fs.existsSync(bashPath)) {
       return;
     }
-    const marker = path.join(os.tmpdir(), `openclaw-ps4-marker-${process.pid}-${Date.now()}`);
+    const marker = path.join(
+      os.tmpdir(),
+      `openclaw-ps4-marker-${process.pid}-${Date.now()}`,
+    );
     try {
       fs.unlinkSync(marker);
     } catch {
@@ -184,7 +189,10 @@ describe("shell wrapper exploit regression", () => {
     });
 
     await new Promise<void>((resolve, reject) => {
-      const child = spawn(bashPath, ["-lc", "echo SAFE"], { env, stdio: "ignore" });
+      const child = spawn(bashPath, ["-lc", "echo SAFE"], {
+        env,
+        stdio: "ignore",
+      });
       child.once("error", reject);
       child.once("close", () => resolve());
     });

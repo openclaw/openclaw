@@ -13,7 +13,13 @@ type ProviderAccountStatus = {
   provider: ChannelId;
   accountId: string;
   name?: string;
-  state: "linked" | "not linked" | "configured" | "not configured" | "enabled" | "disabled";
+  state:
+    | "linked"
+    | "not linked"
+    | "configured"
+    | "not configured"
+    | "enabled"
+    | "disabled";
   enabled?: boolean;
   configured?: boolean;
 };
@@ -27,7 +33,8 @@ function formatChannelAccountLabel(params: {
   accountId: string;
   name?: string;
 }): string {
-  const label = getChannelPlugin(params.provider)?.meta.label ?? params.provider;
+  const label =
+    getChannelPlugin(params.provider)?.meta.label ?? params.provider;
   const account = params.name?.trim()
     ? `${params.accountId} (${params.name.trim()})`
     : params.accountId;
@@ -61,7 +68,8 @@ export async function buildProviderStatusIndex(
         ? await plugin.config.isConfigured(account, cfg)
         : snapshot?.configured;
       const resolvedEnabled = typeof enabled === "boolean" ? enabled : true;
-      const resolvedConfigured = typeof configured === "boolean" ? configured : true;
+      const resolvedConfigured =
+        typeof configured === "boolean" ? configured : true;
       const state =
         plugin.status?.resolveAccountState?.({
           account,
@@ -91,7 +99,10 @@ export async function buildProviderStatusIndex(
   return map;
 }
 
-function resolveDefaultAccountId(cfg: OpenClawConfig, provider: ChannelId): string {
+function resolveDefaultAccountId(
+  cfg: OpenClawConfig,
+  provider: ChannelId,
+): string {
   const plugin = getChannelPlugin(provider);
   if (!plugin) {
     return DEFAULT_ACCOUNT_ID;
@@ -99,7 +110,10 @@ function resolveDefaultAccountId(cfg: OpenClawConfig, provider: ChannelId): stri
   return resolveChannelDefaultAccountId({ plugin, cfg });
 }
 
-function shouldShowProviderEntry(entry: ProviderAccountStatus, cfg: OpenClawConfig): boolean {
+function shouldShowProviderEntry(
+  entry: ProviderAccountStatus,
+  cfg: OpenClawConfig,
+): boolean {
   const plugin = getChannelPlugin(entry.provider);
   if (!plugin) {
     return Boolean(entry.configured);
@@ -120,7 +134,10 @@ function formatProviderEntry(entry: ProviderAccountStatus): string {
   return `${label}: ${formatProviderState(entry)}`;
 }
 
-export function summarizeBindings(cfg: OpenClawConfig, bindings: AgentBinding[]): string[] {
+export function summarizeBindings(
+  cfg: OpenClawConfig,
+  bindings: AgentBinding[],
+): string[] {
   if (bindings.length === 0) {
     return [];
   }
@@ -130,7 +147,8 @@ export function summarizeBindings(cfg: OpenClawConfig, bindings: AgentBinding[])
     if (!channel) {
       continue;
     }
-    const accountId = binding.match.accountId ?? resolveDefaultAccountId(cfg, channel);
+    const accountId =
+      binding.match.accountId ?? resolveDefaultAccountId(cfg, channel);
     const key = providerAccountKey(channel, accountId);
     if (!seen.has(key)) {
       const label = formatChannelAccountLabel({
@@ -158,7 +176,8 @@ export function listProvidersForAgent(params: {
       if (!channel) {
         continue;
       }
-      const accountId = binding.match.accountId ?? resolveDefaultAccountId(params.cfg, channel);
+      const accountId =
+        binding.match.accountId ?? resolveDefaultAccountId(params.cfg, channel);
       const key = providerAccountKey(channel, accountId);
       if (seen.has(key)) {
         continue;

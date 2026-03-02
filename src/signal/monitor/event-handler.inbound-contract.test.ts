@@ -7,26 +7,29 @@ import {
   createSignalReceiveEvent,
 } from "./event-handler.test-harness.js";
 
-const { sendTypingMock, sendReadReceiptMock, dispatchInboundMessageMock, capture } = vi.hoisted(
-  () => {
-    const captureState: { ctx: MsgContext | undefined } = { ctx: undefined };
-    return {
-      sendTypingMock: vi.fn(),
-      sendReadReceiptMock: vi.fn(),
-      dispatchInboundMessageMock: vi.fn(
-        async (params: {
-          ctx: MsgContext;
-          replyOptions?: { onReplyStart?: () => void | Promise<void> };
-        }) => {
-          captureState.ctx = params.ctx;
-          await Promise.resolve(params.replyOptions?.onReplyStart?.());
-          return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
-        },
-      ),
-      capture: captureState,
-    };
-  },
-);
+const {
+  sendTypingMock,
+  sendReadReceiptMock,
+  dispatchInboundMessageMock,
+  capture,
+} = vi.hoisted(() => {
+  const captureState: { ctx: MsgContext | undefined } = { ctx: undefined };
+  return {
+    sendTypingMock: vi.fn(),
+    sendReadReceiptMock: vi.fn(),
+    dispatchInboundMessageMock: vi.fn(
+      async (params: {
+        ctx: MsgContext;
+        replyOptions?: { onReplyStart?: () => void | Promise<void> };
+      }) => {
+        captureState.ctx = params.ctx;
+        await Promise.resolve(params.replyOptions?.onReplyStart?.());
+        return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
+      },
+    ),
+    capture: captureState,
+  };
+});
 
 vi.mock("../send.js", () => ({
   sendMessageSignal: vi.fn(),
@@ -35,7 +38,8 @@ vi.mock("../send.js", () => ({
 }));
 
 vi.mock("../../auto-reply/dispatch.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../auto-reply/dispatch.js")>();
+  const actual =
+    await importOriginal<typeof import("../../auto-reply/dispatch.js")>();
   return {
     ...actual,
     dispatchInboundMessage: dispatchInboundMessageMock,
@@ -136,7 +140,10 @@ describe("signal createSignalEventHandler inbound contract", () => {
       }),
     );
 
-    expect(sendTypingMock).toHaveBeenCalledWith("+15550001111", expect.any(Object));
+    expect(sendTypingMock).toHaveBeenCalledWith(
+      "+15550001111",
+      expect.any(Object),
+    );
     expect(sendReadReceiptMock).toHaveBeenCalledWith(
       "signal:+15550001111",
       1700000000000,
@@ -179,7 +186,13 @@ describe("signal createSignalEventHandler inbound contract", () => {
       createBaseSignalEventHandlerDeps({
         cfg: {
           messages: { inbound: { debounceMs: 0 } },
-          channels: { signal: { dmPolicy: "open", allowFrom: ["*"], accountUuid: ownUuid } },
+          channels: {
+            signal: {
+              dmPolicy: "open",
+              allowFrom: ["*"],
+              accountUuid: ownUuid,
+            },
+          },
         },
         account: undefined,
         accountUuid: ownUuid,

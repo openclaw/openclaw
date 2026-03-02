@@ -67,17 +67,22 @@ describe("exec safe bin trust", () => {
   it("does not trust PATH entries by default", () => {
     const injected = `/tmp/openclaw-path-injected-${Date.now()}`;
 
-    withEnv({ PATH: `${injected}${path.delimiter}${process.env.PATH ?? ""}` }, () => {
-      const refreshed = getTrustedSafeBinDirs({ refresh: true });
-      expect(refreshed.has(path.resolve(injected))).toBe(false);
-    });
+    withEnv(
+      { PATH: `${injected}${path.delimiter}${process.env.PATH ?? ""}` },
+      () => {
+        const refreshed = getTrustedSafeBinDirs({ refresh: true });
+        expect(refreshed.has(path.resolve(injected))).toBe(false);
+      },
+    );
   });
 
   it("flags explicitly trusted dirs that are group/world writable", async () => {
     if (process.platform === "win32") {
       return;
     }
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-safe-bin-trust-"));
+    const dir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-safe-bin-trust-"),
+    );
     try {
       await fs.chmod(dir, 0o777);
       const hits = listWritableExplicitTrustedSafeBinDirs([dir]);

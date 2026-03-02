@@ -12,7 +12,9 @@ function hasControlOrWhitespace(value: string): boolean {
   return false;
 }
 
-export function normalizeScpRemoteHost(value: string | null | undefined): string | undefined {
+export function normalizeScpRemoteHost(
+  value: string | null | undefined,
+): string | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
@@ -23,7 +25,11 @@ export function normalizeScpRemoteHost(value: string | null | undefined): string
   if (hasControlOrWhitespace(trimmed)) {
     return undefined;
   }
-  if (trimmed.startsWith("-") || trimmed.includes("/") || trimmed.includes("\\")) {
+  if (
+    trimmed.startsWith("-") ||
+    trimmed.includes("/") ||
+    trimmed.includes("\\")
+  ) {
     return undefined;
   }
 

@@ -33,13 +33,22 @@ async function updateMatrixPins(
   opts: MatrixActionClientOpts,
   update: (current: string[]) => string[],
 ): Promise<{ pinned: string[] }> {
-  return await withResolvedPinRoom(roomId, opts, async (client, resolvedRoom) => {
-    const current = await readPinnedEvents(client, resolvedRoom);
-    const next = update(current);
-    const payload: RoomPinnedEventsEventContent = { pinned: next };
-    await client.sendStateEvent(resolvedRoom, EventType.RoomPinnedEvents, "", payload);
-    return { pinned: next };
-  });
+  return await withResolvedPinRoom(
+    roomId,
+    opts,
+    async (client, resolvedRoom) => {
+      const current = await readPinnedEvents(client, resolvedRoom);
+      const next = update(current);
+      const payload: RoomPinnedEventsEventContent = { pinned: next };
+      await client.sendStateEvent(
+        resolvedRoom,
+        EventType.RoomPinnedEvents,
+        "",
+        payload,
+      );
+      return { pinned: next };
+    },
+  );
 }
 
 export async function pinMatrixMessage(
@@ -66,19 +75,23 @@ export async function listMatrixPins(
   roomId: string,
   opts: MatrixActionClientOpts = {},
 ): Promise<{ pinned: string[]; events: MatrixMessageSummary[] }> {
-  return await withResolvedPinRoom(roomId, opts, async (client, resolvedRoom) => {
-    const pinned = await readPinnedEvents(client, resolvedRoom);
-    const events = (
-      await Promise.all(
-        pinned.map(async (eventId) => {
-          try {
-            return await fetchEventSummary(client, resolvedRoom, eventId);
-          } catch {
-            return null;
-          }
-        }),
-      )
-    ).filter((event): event is MatrixMessageSummary => Boolean(event));
-    return { pinned, events };
-  });
+  return await withResolvedPinRoom(
+    roomId,
+    opts,
+    async (client, resolvedRoom) => {
+      const pinned = await readPinnedEvents(client, resolvedRoom);
+      const events = (
+        await Promise.all(
+          pinned.map(async (eventId) => {
+            try {
+              return await fetchEventSummary(client, resolvedRoom, eventId);
+            } catch {
+              return null;
+            }
+          }),
+        )
+      ).filter((event): event is MatrixMessageSummary => Boolean(event));
+      return { pinned, events };
+    },
+  );
 }

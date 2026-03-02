@@ -19,7 +19,9 @@ describe("classifySessionKeyShape", () => {
 
   it("classifies valid agent keys", () => {
     expect(classifySessionKeyShape("agent:main:main")).toBe("agent");
-    expect(classifySessionKeyShape("agent:research:subagent:worker")).toBe("agent");
+    expect(classifySessionKeyShape("agent:research:subagent:worker")).toBe(
+      "agent",
+    );
   });
 
   it("classifies malformed agent keys", () => {
@@ -38,15 +40,27 @@ describe("session key backward compatibility", () => {
   it("classifies legacy :dm: session keys as valid agent keys", () => {
     // Legacy session keys use :dm: instead of :direct:
     // Both should be recognized as valid agent keys
-    expect(classifySessionKeyShape("agent:main:telegram:dm:123456")).toBe("agent");
-    expect(classifySessionKeyShape("agent:main:whatsapp:dm:+15551234567")).toBe("agent");
-    expect(classifySessionKeyShape("agent:main:discord:dm:user123")).toBe("agent");
+    expect(classifySessionKeyShape("agent:main:telegram:dm:123456")).toBe(
+      "agent",
+    );
+    expect(classifySessionKeyShape("agent:main:whatsapp:dm:+15551234567")).toBe(
+      "agent",
+    );
+    expect(classifySessionKeyShape("agent:main:discord:dm:user123")).toBe(
+      "agent",
+    );
   });
 
   it("classifies new :direct: session keys as valid agent keys", () => {
-    expect(classifySessionKeyShape("agent:main:telegram:direct:123456")).toBe("agent");
-    expect(classifySessionKeyShape("agent:main:whatsapp:direct:+15551234567")).toBe("agent");
-    expect(classifySessionKeyShape("agent:main:discord:direct:user123")).toBe("agent");
+    expect(classifySessionKeyShape("agent:main:telegram:direct:123456")).toBe(
+      "agent",
+    );
+    expect(
+      classifySessionKeyShape("agent:main:whatsapp:direct:+15551234567"),
+    ).toBe("agent");
+    expect(classifySessionKeyShape("agent:main:discord:direct:user123")).toBe(
+      "agent",
+    );
   });
 });
 
@@ -58,7 +72,9 @@ describe("getSubagentDepth", () => {
   });
 
   it("returns 2 for nested subagent session keys", () => {
-    expect(getSubagentDepth("agent:main:subagent:parent:subagent:child")).toBe(2);
+    expect(getSubagentDepth("agent:main:subagent:parent:subagent:child")).toBe(
+      2,
+    );
   });
 });
 
@@ -78,18 +94,26 @@ describe("isCronSessionKey", () => {
 
 describe("deriveSessionChatType", () => {
   it("detects canonical direct/group/channel session keys", () => {
-    expect(deriveSessionChatType("agent:main:discord:direct:user1")).toBe("direct");
+    expect(deriveSessionChatType("agent:main:discord:direct:user1")).toBe(
+      "direct",
+    );
     expect(deriveSessionChatType("agent:main:telegram:group:g1")).toBe("group");
-    expect(deriveSessionChatType("agent:main:discord:channel:c1")).toBe("channel");
+    expect(deriveSessionChatType("agent:main:discord:channel:c1")).toBe(
+      "channel",
+    );
   });
 
   it("detects legacy direct markers", () => {
-    expect(deriveSessionChatType("agent:main:telegram:dm:123456")).toBe("direct");
+    expect(deriveSessionChatType("agent:main:telegram:dm:123456")).toBe(
+      "direct",
+    );
     expect(deriveSessionChatType("telegram:dm:123456")).toBe("direct");
   });
 
   it("detects legacy discord guild channel keys", () => {
-    expect(deriveSessionChatType("discord:acc-1:guild-123:channel-456")).toBe("channel");
+    expect(deriveSessionChatType("discord:acc-1:guild-123:channel-456")).toBe(
+      "channel",
+    );
   });
 
   it("returns unknown for main or malformed session keys", () => {

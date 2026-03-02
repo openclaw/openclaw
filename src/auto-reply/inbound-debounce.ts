@@ -95,7 +95,8 @@ export function createInboundDebouncer<T>(params: {
   const enqueue = async (item: T) => {
     const key = params.buildKey(item);
     const debounceMs = resolveDebounceMs(item);
-    const canDebounce = debounceMs > 0 && (params.shouldDebounce?.(item) ?? true);
+    const canDebounce =
+      debounceMs > 0 && (params.shouldDebounce?.(item) ?? true);
 
     if (!canDebounce || !key) {
       if (key && buffers.has(key)) {
@@ -113,7 +114,11 @@ export function createInboundDebouncer<T>(params: {
       return;
     }
 
-    const buffer: DebounceBuffer<T> = { items: [item], timeout: null, debounceMs };
+    const buffer: DebounceBuffer<T> = {
+      items: [item],
+      timeout: null,
+      debounceMs,
+    };
     buffers.set(key, buffer);
     scheduleFlush(key, buffer);
   };

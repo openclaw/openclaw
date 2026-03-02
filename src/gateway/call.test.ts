@@ -55,8 +55,12 @@ vi.mock("./client.js", () => ({
   },
 }));
 
-const { buildGatewayConnectionDetails, callGateway, callGatewayCli, callGatewayScoped } =
-  await import("./call.js");
+const {
+  buildGatewayConnectionDetails,
+  callGateway,
+  callGatewayCli,
+  callGatewayScoped,
+} = await import("./call.js");
 
 function resetGatewayCallMocks() {
   loadConfig.mockClear();
@@ -79,7 +83,10 @@ function setLocalLoopbackGatewayConfig(port = 18789) {
   setGatewayNetworkDefaults(port);
 }
 
-function makeRemotePasswordGatewayConfig(remotePassword: string, localPassword = "from-config") {
+function makeRemotePasswordGatewayConfig(
+  remotePassword: string,
+  localPassword = "from-config",
+) {
   return {
     gateway: {
       mode: "remote",
@@ -103,11 +110,13 @@ describe("callGateway url resolution", () => {
 
   it.each([
     {
-      label: "keeps loopback when local bind is auto even if tailnet is present",
+      label:
+        "keeps loopback when local bind is auto even if tailnet is present",
       tailnetIp: "100.64.0.1",
     },
     {
-      label: "falls back to loopback when local bind is auto without tailnet IP",
+      label:
+        "falls back to loopback when local bind is auto without tailnet IP",
       tailnetIp: undefined,
     },
   ])("local auto-bind: $label", async ({ tailnetIp }) => {
@@ -156,16 +165,19 @@ describe("callGateway url resolution", () => {
       lanIp: undefined,
       expectedUrl: "ws://127.0.0.1:18800",
     },
-  ])("uses loopback for $label", async ({ gateway, tailnetIp, lanIp, expectedUrl }) => {
-    loadConfig.mockReturnValue({ gateway });
-    resolveGatewayPort.mockReturnValue(18800);
-    pickPrimaryTailnetIPv4.mockReturnValue(tailnetIp);
-    pickPrimaryLanIPv4.mockReturnValue(lanIp);
+  ])(
+    "uses loopback for $label",
+    async ({ gateway, tailnetIp, lanIp, expectedUrl }) => {
+      loadConfig.mockReturnValue({ gateway });
+      resolveGatewayPort.mockReturnValue(18800);
+      pickPrimaryTailnetIPv4.mockReturnValue(tailnetIp);
+      pickPrimaryLanIPv4.mockReturnValue(lanIp);
 
-    await callGateway({ method: "health" });
+      await callGateway({ method: "health" });
 
-    expect(lastClientOptions?.url).toBe(expectedUrl);
-  });
+      expect(lastClientOptions?.url).toBe(expectedUrl);
+    },
+  );
 
   it("uses url override in remote mode even when remote url is missing", async () => {
     loadConfig.mockReturnValue({
@@ -249,7 +261,9 @@ describe("buildGatewayConnectionDetails", () => {
     const details = buildGatewayConnectionDetails();
 
     expect(details.url).toBe("ws://127.0.0.1:18789");
-    expect(details.urlSource).toBe("missing gateway.remote.url (fallback local)");
+    expect(details.urlSource).toBe(
+      "missing gateway.remote.url (fallback local)",
+    );
     expect(details.bindDetail).toBe("Bind: loopback");
     expect(details.remoteFallbackNote).toContain(
       "gateway.mode=remote but gateway.remote.url is missing",
@@ -385,9 +399,11 @@ describe("callGateway error details", () => {
 
     vi.useFakeTimers();
     let errMessage = "";
-    const promise = callGateway({ method: "health", timeoutMs: 5 }).catch((caught) => {
-      errMessage = caught instanceof Error ? caught.message : String(caught);
-    });
+    const promise = callGateway({ method: "health", timeoutMs: 5 }).catch(
+      (caught) => {
+        errMessage = caught instanceof Error ? caught.message : String(caught);
+      },
+    );
 
     await vi.advanceTimersByTimeAsync(5);
     await promise;
@@ -404,7 +420,10 @@ describe("callGateway error details", () => {
 
     vi.useFakeTimers();
     let errMessage = "";
-    const promise = callGateway({ method: "health", timeoutMs: 2_592_010_000 }).catch((caught) => {
+    const promise = callGateway({
+      method: "health",
+      timeoutMs: 2_592_010_000,
+    }).catch((caught) => {
       errMessage = caught instanceof Error ? caught.message : String(caught);
     });
 
@@ -434,7 +453,10 @@ describe("callGateway url override auth requirements", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
 
   beforeEach(() => {
-    envSnapshot = captureEnv(["OPENCLAW_GATEWAY_TOKEN", "OPENCLAW_GATEWAY_PASSWORD"]);
+    envSnapshot = captureEnv([
+      "OPENCLAW_GATEWAY_TOKEN",
+      "OPENCLAW_GATEWAY_PASSWORD",
+    ]);
     resetGatewayCallMocks();
     setGatewayNetworkDefaults(18789);
   });
@@ -481,7 +503,10 @@ describe("callGateway password resolution", () => {
   ] as const;
 
   beforeEach(() => {
-    envSnapshot = captureEnv(["OPENCLAW_GATEWAY_PASSWORD", "OPENCLAW_GATEWAY_TOKEN"]);
+    envSnapshot = captureEnv([
+      "OPENCLAW_GATEWAY_PASSWORD",
+      "OPENCLAW_GATEWAY_TOKEN",
+    ]);
     resetGatewayCallMocks();
     delete process.env.OPENCLAW_GATEWAY_PASSWORD;
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
@@ -540,25 +565,30 @@ describe("callGateway password resolution", () => {
     expect(lastClientOptions?.password).toBe(expectedPassword);
   });
 
-  it.each(explicitAuthCases)("uses explicit $label when url override is set", async (testCase) => {
-    process.env[testCase.envKey] = testCase.envValue;
-    const auth = { [testCase.authKey]: testCase.configValue } as {
-      password?: string;
-      token?: string;
-    };
-    loadConfig.mockReturnValue({
-      gateway: {
-        mode: "local",
-        auth,
-      },
-    });
+  it.each(explicitAuthCases)(
+    "uses explicit $label when url override is set",
+    async (testCase) => {
+      process.env[testCase.envKey] = testCase.envValue;
+      const auth = { [testCase.authKey]: testCase.configValue } as {
+        password?: string;
+        token?: string;
+      };
+      loadConfig.mockReturnValue({
+        gateway: {
+          mode: "local",
+          auth,
+        },
+      });
 
-    await callGateway({
-      method: "health",
-      url: "wss://override.example/ws",
-      [testCase.authKey]: testCase.explicitValue,
-    });
+      await callGateway({
+        method: "health",
+        url: "wss://override.example/ws",
+        [testCase.authKey]: testCase.explicitValue,
+      });
 
-    expect(lastClientOptions?.[testCase.authKey]).toBe(testCase.explicitValue);
-  });
+      expect(lastClientOptions?.[testCase.authKey]).toBe(
+        testCase.explicitValue,
+      );
+    },
+  );
 });

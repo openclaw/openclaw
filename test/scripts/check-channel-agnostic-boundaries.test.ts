@@ -15,7 +15,8 @@ describe("check-channel-agnostic-boundaries", () => {
     expect(findChannelAgnosticBoundaryViolations(source)).toEqual([
       {
         line: 2,
-        reason: 'imports channel module "../discord/monitor/thread-bindings.js"',
+        reason:
+          'imports channel module "../discord/monitor/thread-bindings.js"',
       },
     ]);
   });
@@ -74,7 +75,8 @@ describe("check-channel-agnostic-boundaries", () => {
     expect(findChannelCoreReverseDependencyViolations(source)).toEqual([
       {
         line: 2,
-        reason: 're-exports channel module "../discord/monitor/thread-bindings.messages.js"',
+        reason:
+          're-exports channel module "../discord/monitor/thread-bindings.messages.js"',
       },
     ]);
   });
@@ -94,7 +96,8 @@ describe("check-channel-agnostic-boundaries", () => {
     expect(findAcpUserFacingChannelNameViolations(source)).toEqual([
       {
         line: 2,
-        reason: 'user-facing text references channel name ("Bind a Discord thread first.")',
+        reason:
+          'user-facing text references channel name ("Bind a Discord thread first.")',
       },
     ]);
   });

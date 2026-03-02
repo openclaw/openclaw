@@ -7,7 +7,11 @@ import { getAcpSessionManager } from "./manager.js";
 export type AcpSpawnRuntimeCloseHandle = {
   runtime: {
     close: (params: {
-      handle: { sessionKey: string; backend: string; runtimeSessionName: string };
+      handle: {
+        sessionKey: string;
+        backend: string;
+        runtimeSessionName: string;
+      };
       reason: string;
     }) => Promise<void>;
   };

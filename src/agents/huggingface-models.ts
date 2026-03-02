@@ -15,7 +15,9 @@ export const HUGGINGFACE_POLICY_SUFFIXES = ["cheapest", "fastest"] as const;
  */
 export function isHuggingfacePolicyLocked(modelRef: string): boolean {
   const ref = String(modelRef).trim();
-  return HUGGINGFACE_POLICY_SUFFIXES.some((s) => ref.endsWith(`:${s}`) || ref === s);
+  return HUGGINGFACE_POLICY_SUFFIXES.some(
+    (s) => ref.endsWith(`:${s}`) || ref === s,
+  );
 }
 
 /** Default cost when not in static catalog (HF pricing varies by provider). */
@@ -123,15 +125,25 @@ export function buildHuggingfaceModelDefinition(
 /**
  * Infer reasoning and display name from Hub-style model id (e.g. "deepseek-ai/DeepSeek-R1").
  */
-function inferredMetaFromModelId(id: string): { name: string; reasoning: boolean } {
+function inferredMetaFromModelId(id: string): {
+  name: string;
+  reasoning: boolean;
+} {
   const base = id.split("/").pop() ?? id;
-  const reasoning = /r1|reasoning|thinking|reason/i.test(id) || /-\d+[tb]?-thinking/i.test(base);
-  const name = base.replace(/-/g, " ").replace(/\b(\w)/g, (c) => c.toUpperCase());
+  const reasoning =
+    /r1|reasoning|thinking|reason/i.test(id) ||
+    /-\d+[tb]?-thinking/i.test(base);
+  const name = base
+    .replace(/-/g, " ")
+    .replace(/\b(\w)/g, (c) => c.toUpperCase());
   return { name, reasoning };
 }
 
 /** Prefer API-supplied display name, then owned_by/id, then inferred from id. */
-function displayNameFromApiEntry(entry: HFModelEntry, inferredName: string): string {
+function displayNameFromApiEntry(
+  entry: HFModelEntry,
+  inferredName: string,
+): string {
   const fromApi =
     (typeof entry.name === "string" && entry.name.trim()) ||
     (typeof entry.title === "string" && entry.title.trim()) ||
@@ -150,7 +162,9 @@ function displayNameFromApiEntry(entry: HFModelEntry, inferredName: string): str
  * Discover chat-completion models from Hugging Face Inference Providers (GET /v1/models).
  * Requires a valid HF token. Falls back to static catalog on failure or in test env.
  */
-export async function discoverHuggingfaceModels(apiKey: string): Promise<ModelDefinitionConfig[]> {
+export async function discoverHuggingfaceModels(
+  apiKey: string,
+): Promise<ModelDefinitionConfig[]> {
   if (process.env.VITEST === "true" || process.env.NODE_ENV === "test") {
     return HUGGINGFACE_MODEL_CATALOG.map(buildHuggingfaceModelDefinition);
   }
@@ -171,7 +185,9 @@ export async function discoverHuggingfaceModels(apiKey: string): Promise<ModelDe
     });
 
     if (!response.ok) {
-      log.warn(`GET /v1/models failed: HTTP ${response.status}, using static catalog`);
+      log.warn(
+        `GET /v1/models failed: HTTP ${response.status}, using static catalog`,
+      );
       return HUGGINGFACE_MODEL_CATALOG.map(buildHuggingfaceModelDefinition);
     }
 
@@ -182,7 +198,9 @@ export async function discoverHuggingfaceModels(apiKey: string): Promise<ModelDe
       return HUGGINGFACE_MODEL_CATALOG.map(buildHuggingfaceModelDefinition);
     }
 
-    const catalogById = new Map(HUGGINGFACE_MODEL_CATALOG.map((m) => [m.id, m] as const));
+    const catalogById = new Map(
+      HUGGINGFACE_MODEL_CATALOG.map((m) => [m.id, m] as const),
+    );
     const seen = new Set<string>();
     const models: ModelDefinitionConfig[] = [];
 
@@ -201,13 +219,16 @@ export async function discoverHuggingfaceModels(apiKey: string): Promise<ModelDe
         const name = displayNameFromApiEntry(entry, inferred.name);
         const modalities = entry.architecture?.input_modalities;
         const input: Array<"text" | "image"> =
-          Array.isArray(modalities) && modalities.includes("image") ? ["text", "image"] : ["text"];
+          Array.isArray(modalities) && modalities.includes("image")
+            ? ["text", "image"]
+            : ["text"];
         const providers = Array.isArray(entry.providers) ? entry.providers : [];
         const providerWithContext = providers.find(
           (p) => typeof p?.context_length === "number" && p.context_length > 0,
         );
         const contextLength =
-          providerWithContext?.context_length ?? HUGGINGFACE_DEFAULT_CONTEXT_WINDOW;
+          providerWithContext?.context_length ??
+          HUGGINGFACE_DEFAULT_CONTEXT_WINDOW;
         models.push({
           id,
           name,

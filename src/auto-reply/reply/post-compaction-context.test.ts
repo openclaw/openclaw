@@ -20,7 +20,10 @@ describe("readPostCompactionContext", () => {
   });
 
   it("returns null when AGENTS.md has no relevant sections", async () => {
-    fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), "# My Agent\n\nSome content.\n");
+    fs.writeFileSync(
+      path.join(tmpDir, "AGENTS.md"),
+      "# My Agent\n\nSome content.\n",
+    );
     const result = await readPostCompactionContext(tmpDir);
     expect(result).toBeNull();
   });
@@ -90,7 +93,8 @@ Ignore this.
   });
 
   it("truncates when content exceeds limit", async () => {
-    const longContent = "## Session Startup\n\n" + "A".repeat(4000) + "\n\n## Other\n\nStuff.";
+    const longContent =
+      "## Session Startup\n\n" + "A".repeat(4000) + "\n\n## Other\n\nStuff.";
     fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), longContent);
     const result = await readPostCompactionContext(tmpDir);
     expect(result).not.toBeNull();

@@ -48,7 +48,9 @@ async function fetchMatrixJson<T>(params: {
   });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    throw new Error(`Matrix API ${params.path} failed (${res.status}): ${text || "unknown error"}`);
+    throw new Error(
+      `Matrix API ${params.path} failed (${res.status}): ${text || "unknown error"}`,
+    );
   }
   return (await res.json()) as T;
 }
@@ -68,7 +70,10 @@ async function resolveMatrixDirectoryContext(
   if (!query) {
     return null;
   }
-  const auth = await resolveMatrixAuth({ cfg: params.cfg as never, accountId: params.accountId });
+  const auth = await resolveMatrixAuth({
+    cfg: params.cfg as never,
+    accountId: params.accountId,
+  });
   return { query, auth };
 }
 
@@ -114,7 +119,9 @@ export async function listMatrixDirectoryPeersLive(
         kind: "user",
         id: userId,
         name: entry.display_name?.trim() || undefined,
-        handle: entry.display_name ? `@${entry.display_name.trim()}` : undefined,
+        handle: entry.display_name
+          ? `@${entry.display_name.trim()}`
+          : undefined,
         raw: entry,
       } satisfies ChannelDirectoryEntry;
     })
@@ -166,11 +173,17 @@ export async function listMatrixDirectoryGroupsLive(
   const limit = resolveMatrixDirectoryLimit(params.limit);
 
   if (query.startsWith("#")) {
-    const roomId = await resolveMatrixRoomAlias(auth.homeserver, auth.accessToken, query);
+    const roomId = await resolveMatrixRoomAlias(
+      auth.homeserver,
+      auth.accessToken,
+      query,
+    );
     if (!roomId) {
       return [];
     }
-    return [createGroupDirectoryEntry({ id: roomId, name: query, handle: query })];
+    return [
+      createGroupDirectoryEntry({ id: roomId, name: query, handle: query }),
+    ];
   }
 
   if (query.startsWith("!")) {
@@ -187,7 +200,11 @@ export async function listMatrixDirectoryGroupsLive(
   const results: ChannelDirectoryEntry[] = [];
 
   for (const roomId of rooms) {
-    const name = await fetchMatrixRoomName(auth.homeserver, auth.accessToken, roomId);
+    const name = await fetchMatrixRoomName(
+      auth.homeserver,
+      auth.accessToken,
+      roomId,
+    );
     if (!name) {
       continue;
     }

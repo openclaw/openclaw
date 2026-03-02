@@ -15,7 +15,9 @@ describe("resolveWindowsLobsterSpawn", () => {
   const originalProcessState = snapshotPlatformPathEnv();
 
   beforeEach(async () => {
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lobster-win-spawn-"));
+    tempDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-lobster-win-spawn-"),
+    );
     setProcessPlatform("win32");
   });
 
@@ -36,7 +38,11 @@ describe("resolveWindowsLobsterSpawn", () => {
       shimLine: `"%dp0%\\..\\shim-dist\\lobster-cli.cjs" %*`,
     });
 
-    const target = resolveWindowsLobsterSpawn(shimPath, ["run", "noop"], process.env);
+    const target = resolveWindowsLobsterSpawn(
+      shimPath,
+      ["run", "noop"],
+      process.env,
+    );
     expect(target.command).toBe(process.execPath);
     expect(target.argv).toEqual([scriptPath, "run", "noop"]);
     expect(target.windowsHide).toBe(true);
@@ -51,7 +57,11 @@ describe("resolveWindowsLobsterSpawn", () => {
       shimLine: `"%~dp0%\\..\\shim-dist\\lobster-cli.cjs" %*`,
     });
 
-    const target = resolveWindowsLobsterSpawn(shimPath, ["run", "noop"], process.env);
+    const target = resolveWindowsLobsterSpawn(
+      shimPath,
+      ["run", "noop"],
+      process.env,
+    );
     expect(target.command).toBe(process.execPath);
     expect(target.argv).toEqual([scriptPath, "run", "noop"]);
     expect(target.windowsHide).toBe(true);
@@ -71,7 +81,11 @@ describe("resolveWindowsLobsterSpawn", () => {
       "utf8",
     );
 
-    const target = resolveWindowsLobsterSpawn(shimPath, ["run", "noop"], process.env);
+    const target = resolveWindowsLobsterSpawn(
+      shimPath,
+      ["run", "noop"],
+      process.env,
+    );
     expect(target.command).toBe(process.execPath);
     expect(target.argv).toEqual([scriptPath, "run", "noop"]);
     expect(target.windowsHide).toBe(true);
@@ -87,7 +101,11 @@ describe("resolveWindowsLobsterSpawn", () => {
     await fs.writeFile(shimPath, "@echo off\r\n", "utf8");
     await fs.writeFile(
       path.join(packageDir, "package.json"),
-      JSON.stringify({ name: "lobster", version: "0.0.0", bin: { lobster: "dist/cli.js" } }),
+      JSON.stringify({
+        name: "lobster",
+        version: "0.0.0",
+        bin: { lobster: "dist/cli.js" },
+      }),
       "utf8",
     );
     await fs.writeFile(scriptPath, "module.exports = {};\n", "utf8");
@@ -106,10 +124,14 @@ describe("resolveWindowsLobsterSpawn", () => {
   it("fails fast when wrapper cannot be resolved without shell execution", async () => {
     const badShimPath = path.join(tempDir, "bad-shim", "lobster.cmd");
     await fs.mkdir(path.dirname(badShimPath), { recursive: true });
-    await fs.writeFile(badShimPath, "@echo off\r\nREM no entrypoint\r\n", "utf8");
-
-    expect(() => resolveWindowsLobsterSpawn(badShimPath, ["run", "noop"], process.env)).toThrow(
-      /without shell execution/,
+    await fs.writeFile(
+      badShimPath,
+      "@echo off\r\nREM no entrypoint\r\n",
+      "utf8",
     );
+
+    expect(() =>
+      resolveWindowsLobsterSpawn(badShimPath, ["run", "noop"], process.env),
+    ).toThrow(/without shell execution/);
   });
 });

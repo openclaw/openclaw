@@ -10,7 +10,9 @@ type SlackActionInvoke = (
 ) => Promise<AgentToolResult<unknown>>;
 
 function readSlackBlocksParam(actionParams: Record<string, unknown>) {
-  return parseSlackBlocksInput(actionParams.blocks) as Record<string, unknown>[] | undefined;
+  return parseSlackBlocksInput(actionParams.blocks) as
+    | Record<string, unknown>[]
+    | undefined;
 }
 
 export async function handleSlackMessageAction(params: {
@@ -20,7 +22,13 @@ export async function handleSlackMessageAction(params: {
   normalizeChannelId?: (channelId: string) => string;
   includeReadThreadId?: boolean;
 }): Promise<AgentToolResult<unknown>> {
-  const { providerId, ctx, invoke, normalizeChannelId, includeReadThreadId = false } = params;
+  const {
+    providerId,
+    ctx,
+    invoke,
+    normalizeChannelId,
+    includeReadThreadId = false,
+  } = params;
   const { action, cfg, params: actionParams } = ctx;
   const accountId = ctx.accountId ?? undefined;
   const resolveChannelId = () => {
@@ -66,7 +74,10 @@ export async function handleSlackMessageAction(params: {
       required: true,
     });
     const emoji = readStringParam(actionParams, "emoji", { allowEmpty: true });
-    const remove = typeof actionParams.remove === "boolean" ? actionParams.remove : undefined;
+    const remove =
+      typeof actionParams.remove === "boolean"
+        ? actionParams.remove
+        : undefined;
     return await invoke(
       {
         action: "react",
@@ -117,7 +128,9 @@ export async function handleSlackMessageAction(params: {
     const messageId = readStringParam(actionParams, "messageId", {
       required: true,
     });
-    const content = readStringParam(actionParams, "message", { allowEmpty: true });
+    const content = readStringParam(actionParams, "message", {
+      allowEmpty: true,
+    });
     const blocks = readSlackBlocksParam(actionParams);
     if (!content && !blocks) {
       throw new Error("Slack edit requires message or blocks.");
@@ -157,7 +170,12 @@ export async function handleSlackMessageAction(params: {
         : readStringParam(actionParams, "messageId", { required: true });
     return await invoke(
       {
-        action: action === "pin" ? "pinMessage" : action === "unpin" ? "unpinMessage" : "listPins",
+        action:
+          action === "pin"
+            ? "pinMessage"
+            : action === "unpin"
+              ? "unpinMessage"
+              : "listPins",
         channelId: resolveChannelId(),
         messageId,
         accountId,
@@ -179,9 +197,11 @@ export async function handleSlackMessageAction(params: {
   if (action === "download-file") {
     const fileId = readStringParam(actionParams, "fileId", { required: true });
     const channelId =
-      readStringParam(actionParams, "channelId") ?? readStringParam(actionParams, "to");
+      readStringParam(actionParams, "channelId") ??
+      readStringParam(actionParams, "to");
     const threadId =
-      readStringParam(actionParams, "threadId") ?? readStringParam(actionParams, "replyTo");
+      readStringParam(actionParams, "threadId") ??
+      readStringParam(actionParams, "replyTo");
     return await invoke(
       {
         action: "downloadFile",
@@ -194,5 +214,7 @@ export async function handleSlackMessageAction(params: {
     );
   }
 
-  throw new Error(`Action ${action} is not supported for provider ${providerId}.`);
+  throw new Error(
+    `Action ${action} is not supported for provider ${providerId}.`,
+  );
 }

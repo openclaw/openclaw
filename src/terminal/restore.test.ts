@@ -15,9 +15,16 @@ function configureTerminalIO(params: {
   resume?: () => void;
   isPaused?: () => boolean;
 }) {
-  Object.defineProperty(process.stdin, "isTTY", { value: params.stdinIsTTY, configurable: true });
-  Object.defineProperty(process.stdout, "isTTY", { value: params.stdoutIsTTY, configurable: true });
-  (process.stdin as { setRawMode?: (mode: boolean) => void }).setRawMode = params.setRawMode;
+  Object.defineProperty(process.stdin, "isTTY", {
+    value: params.stdinIsTTY,
+    configurable: true,
+  });
+  Object.defineProperty(process.stdout, "isTTY", {
+    value: params.stdoutIsTTY,
+    configurable: true,
+  });
+  (process.stdin as { setRawMode?: (mode: boolean) => void }).setRawMode =
+    params.setRawMode;
   (process.stdin as { resume?: () => void }).resume = params.resume;
   (process.stdin as { isPaused?: () => boolean }).isPaused = params.isPaused;
 }
@@ -25,9 +32,12 @@ function configureTerminalIO(params: {
 describe("restoreTerminalState", () => {
   const originalStdinIsTTY = process.stdin.isTTY;
   const originalStdoutIsTTY = process.stdout.isTTY;
-  const originalSetRawMode = (process.stdin as { setRawMode?: (mode: boolean) => void }).setRawMode;
+  const originalSetRawMode = (
+    process.stdin as { setRawMode?: (mode: boolean) => void }
+  ).setRawMode;
   const originalResume = (process.stdin as { resume?: () => void }).resume;
-  const originalIsPaused = (process.stdin as { isPaused?: () => boolean }).isPaused;
+  const originalIsPaused = (process.stdin as { isPaused?: () => boolean })
+    .isPaused;
 
   afterEach(() => {
     vi.restoreAllMocks();
@@ -39,7 +49,8 @@ describe("restoreTerminalState", () => {
       value: originalStdoutIsTTY,
       configurable: true,
     });
-    (process.stdin as { setRawMode?: (mode: boolean) => void }).setRawMode = originalSetRawMode;
+    (process.stdin as { setRawMode?: (mode: boolean) => void }).setRawMode =
+      originalSetRawMode;
     (process.stdin as { resume?: () => void }).resume = originalResume;
     (process.stdin as { isPaused?: () => boolean }).isPaused = originalIsPaused;
   });

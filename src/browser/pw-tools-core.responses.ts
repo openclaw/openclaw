@@ -12,7 +12,9 @@ function matchUrlPattern(pattern: string, url: string): boolean {
   }
   if (p.includes("*")) {
     const escaped = p.replace(/[|\\{}()[\]^$+?.]/g, "\\$&");
-    const regex = new RegExp(`^${escaped.replace(/\*\*/g, ".*").replace(/\*/g, ".*")}$`);
+    const regex = new RegExp(
+      `^${escaped.replace(/\*\*/g, ".*").replace(/\*/g, ".*")}$`,
+    );
     return regex.test(url);
   }
   return url.includes(p);
@@ -109,10 +111,14 @@ export async function responseBodyViaPlaywright(opts: {
       bodyText = new TextDecoder("utf-8").decode(buf);
     }
   } catch (err) {
-    throw new Error(`Failed to read response body for "${url}": ${String(err)}`, { cause: err });
+    throw new Error(
+      `Failed to read response body for "${url}": ${String(err)}`,
+      { cause: err },
+    );
   }
 
-  const trimmed = bodyText.length > maxChars ? bodyText.slice(0, maxChars) : bodyText;
+  const trimmed =
+    bodyText.length > maxChars ? bodyText.slice(0, maxChars) : bodyText;
   return {
     url,
     status,

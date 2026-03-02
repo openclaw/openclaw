@@ -1,7 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { Readable } from "node:stream";
 import type { LookupFn, SsrFPolicy } from "openclaw/plugin-sdk";
-import { ensureUrbitChannelOpen, pokeUrbitChannel, scryUrbitPath } from "./channel-ops.js";
+import {
+  ensureUrbitChannelOpen,
+  pokeUrbitChannel,
+  scryUrbitPath,
+} from "./channel-ops.js";
 import { getUrbitContext, normalizeUrbitCookie } from "./context.js";
 import { urbitFetch } from "./fetch.js";
 
@@ -14,7 +18,10 @@ type UrbitSseOptions = {
   ship?: string;
   ssrfPolicy?: SsrFPolicy;
   lookupFn?: LookupFn;
-  fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+  fetchImpl?: (
+    input: RequestInfo | URL,
+    init?: RequestInit,
+  ) => Promise<Response>;
   onReconnect?: (client: UrbitSSEClient) => Promise<void> | void;
   autoReconnect?: boolean;
   maxReconnectAttempts?: number;
@@ -38,7 +45,11 @@ export class UrbitSSEClient {
   }> = [];
   eventHandlers = new Map<
     number,
-    { event?: (data: unknown) => void; err?: (error: unknown) => void; quit?: () => void }
+    {
+      event?: (data: unknown) => void;
+      err?: (error: unknown) => void;
+      quit?: () => void;
+    }
   >();
   aborted = false;
   streamController: AbortController | null = null;
@@ -52,7 +63,10 @@ export class UrbitSSEClient {
   logger: UrbitSseLogger;
   ssrfPolicy?: SsrFPolicy;
   lookupFn?: LookupFn;
-  fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+  fetchImpl?: (
+    input: RequestInfo | URL,
+    init?: RequestInit,
+  ) => Promise<Response>;
   streamRelease: (() => Promise<void>) | null = null;
 
   constructor(url: string, cookie: string, options: UrbitSseOptions = {}) {
@@ -61,7 +75,10 @@ export class UrbitSSEClient {
     this.cookie = normalizeUrbitCookie(cookie);
     this.ship = ctx.ship;
     this.channelId = `${Math.floor(Date.now() / 1000)}-${randomUUID()}`;
-    this.channelUrl = new URL(`/~/channel/${this.channelId}`, this.url).toString();
+    this.channelUrl = new URL(
+      `/~/channel/${this.channelId}`,
+      this.url,
+    ).toString();
     this.onReconnect = options.onReconnect ?? null;
     this.autoReconnect = options.autoReconnect !== false;
     this.maxReconnectAttempts = options.maxReconnectAttempts ?? 10;
@@ -90,7 +107,11 @@ export class UrbitSSEClient {
     } as const;
 
     this.subscriptions.push(subscription);
-    this.eventHandlers.set(subId, { event: params.event, err: params.err, quit: params.quit });
+    this.eventHandlers.set(subId, {
+      event: params.event,
+      err: params.err,
+      quit: params.quit,
+    });
 
     if (this.isConnected) {
       try {
@@ -215,7 +236,8 @@ export class UrbitSSEClient {
       return;
     }
     // oxlint-disable-next-line typescript/no-explicit-any
-    const stream = body instanceof ReadableStream ? Readable.fromWeb(body as any) : body;
+    const stream =
+      body instanceof ReadableStream ? Readable.fromWeb(body as any) : body;
     let buffer = "";
 
     try {
@@ -261,7 +283,11 @@ export class UrbitSSEClient {
     }
 
     try {
-      const parsed = JSON.parse(data) as { id?: number; json?: unknown; response?: string };
+      const parsed = JSON.parse(data) as {
+        id?: number;
+        json?: unknown;
+        response?: string;
+      };
 
       if (parsed.response === "quit") {
         if (parsed.id) {
@@ -345,7 +371,10 @@ export class UrbitSSEClient {
 
     try {
       this.channelId = `${Math.floor(Date.now() / 1000)}-${randomUUID()}`;
-      this.channelUrl = new URL(`/~/channel/${this.channelId}`, this.url).toString();
+      this.channelUrl = new URL(
+        `/~/channel/${this.channelId}`,
+        this.url,
+      ).toString();
 
       if (this.onReconnect) {
         await this.onReconnect(this);

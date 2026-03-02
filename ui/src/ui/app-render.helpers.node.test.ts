@@ -18,7 +18,10 @@ function row(overrides: Partial<SessionRow> & { key: string }): SessionRow {
 
 describe("parseSessionKey", () => {
   it("identifies main session (bare 'main')", () => {
-    expect(parseSessionKey("main")).toEqual({ prefix: "", fallbackName: "Main Session" });
+    expect(parseSessionKey("main")).toEqual({
+      prefix: "",
+      fallbackName: "Main Session",
+    });
   });
 
   it("identifies main session (agent:main:main)", () => {
@@ -29,7 +32,11 @@ describe("parseSessionKey", () => {
   });
 
   it("identifies subagent sessions", () => {
-    expect(parseSessionKey("agent:main:subagent:18abfefe-1fa6-43cb-8ba8-ebdc9b43e253")).toEqual({
+    expect(
+      parseSessionKey(
+        "agent:main:subagent:18abfefe-1fa6-43cb-8ba8-ebdc9b43e253",
+      ),
+    ).toEqual({
       prefix: "Subagent:",
       fallbackName: "Subagent:",
     });
@@ -47,7 +54,9 @@ describe("parseSessionKey", () => {
   });
 
   it("identifies direct chat with known channel", () => {
-    expect(parseSessionKey("agent:main:bluebubbles:direct:+19257864429")).toEqual({
+    expect(
+      parseSessionKey("agent:main:bluebubbles:direct:+19257864429"),
+    ).toEqual({
       prefix: "",
       fallbackName: "iMessage · +19257864429",
     });
@@ -75,7 +84,11 @@ describe("parseSessionKey", () => {
   });
 
   it("identifies channel-prefixed legacy keys", () => {
-    expect(parseSessionKey("bluebubbles:g-agent-main-bluebubbles-direct-+19257864429")).toEqual({
+    expect(
+      parseSessionKey(
+        "bluebubbles:g-agent-main-bluebubbles-direct-+19257864429",
+      ),
+    ).toEqual({
       prefix: "",
       fallbackName: "iMessage Session",
     });
@@ -116,43 +129,59 @@ describe("resolveSessionDisplayName", () => {
   });
 
   it("returns 'Subagent:' for subagent key without row", () => {
-    expect(resolveSessionDisplayName("agent:main:subagent:abc-123")).toBe("Subagent:");
-  });
-
-  it("returns 'Cron Job:' for cron key without row", () => {
-    expect(resolveSessionDisplayName("agent:main:cron:abc-123")).toBe("Cron Job:");
-  });
-
-  it("parses direct chat key with channel", () => {
-    expect(resolveSessionDisplayName("agent:main:bluebubbles:direct:+19257864429")).toBe(
-      "iMessage · +19257864429",
+    expect(resolveSessionDisplayName("agent:main:subagent:abc-123")).toBe(
+      "Subagent:",
     );
   });
 
+  it("returns 'Cron Job:' for cron key without row", () => {
+    expect(resolveSessionDisplayName("agent:main:cron:abc-123")).toBe(
+      "Cron Job:",
+    );
+  });
+
+  it("parses direct chat key with channel", () => {
+    expect(
+      resolveSessionDisplayName("agent:main:bluebubbles:direct:+19257864429"),
+    ).toBe("iMessage · +19257864429");
+  });
+
   it("parses channel-prefixed legacy key", () => {
-    expect(resolveSessionDisplayName("discord:123:456")).toBe("Discord Session");
+    expect(resolveSessionDisplayName("discord:123:456")).toBe(
+      "Discord Session",
+    );
   });
 
   it("returns raw key for unknown patterns", () => {
-    expect(resolveSessionDisplayName("something-custom")).toBe("something-custom");
+    expect(resolveSessionDisplayName("something-custom")).toBe(
+      "something-custom",
+    );
   });
 
   // ── With row data (label / displayName) ──────────
 
   it("returns parsed fallback when row has no label or displayName", () => {
-    expect(resolveSessionDisplayName("agent:main:main", row({ key: "agent:main:main" }))).toBe(
-      "Main Session",
-    );
+    expect(
+      resolveSessionDisplayName(
+        "agent:main:main",
+        row({ key: "agent:main:main" }),
+      ),
+    ).toBe("Main Session");
   });
 
   it("returns parsed fallback when displayName matches key", () => {
-    expect(resolveSessionDisplayName("mykey", row({ key: "mykey", displayName: "mykey" }))).toBe(
-      "mykey",
-    );
+    expect(
+      resolveSessionDisplayName(
+        "mykey",
+        row({ key: "mykey", displayName: "mykey" }),
+      ),
+    ).toBe("mykey");
   });
 
   it("returns parsed fallback when label matches key", () => {
-    expect(resolveSessionDisplayName("mykey", row({ key: "mykey", label: "mykey" }))).toBe("mykey");
+    expect(
+      resolveSessionDisplayName("mykey", row({ key: "mykey", label: "mykey" })),
+    ).toBe("mykey");
   });
 
   it("uses label alone when available", () => {
@@ -177,7 +206,11 @@ describe("resolveSessionDisplayName", () => {
     expect(
       resolveSessionDisplayName(
         "discord:123:456",
-        row({ key: "discord:123:456", displayName: "My Chat", label: "General" }),
+        row({
+          key: "discord:123:456",
+          displayName: "My Chat",
+          label: "General",
+        }),
       ),
     ).toBe("General");
   });
@@ -193,15 +226,23 @@ describe("resolveSessionDisplayName", () => {
 
   it("uses parsed fallback when whitespace-only label and no displayName", () => {
     expect(
-      resolveSessionDisplayName("discord:123:456", row({ key: "discord:123:456", label: "   " })),
+      resolveSessionDisplayName(
+        "discord:123:456",
+        row({ key: "discord:123:456", label: "   " }),
+      ),
     ).toBe("Discord Session");
   });
 
   it("trims label and displayName", () => {
-    expect(resolveSessionDisplayName("k", row({ key: "k", label: "  General  " }))).toBe("General");
-    expect(resolveSessionDisplayName("k", row({ key: "k", displayName: "  My Chat  " }))).toBe(
-      "My Chat",
-    );
+    expect(
+      resolveSessionDisplayName("k", row({ key: "k", label: "  General  " })),
+    ).toBe("General");
+    expect(
+      resolveSessionDisplayName(
+        "k",
+        row({ key: "k", displayName: "  My Chat  " }),
+      ),
+    ).toBe("My Chat");
   });
 
   // ── Type prefixes applied to labels / displayNames ──
@@ -255,7 +296,10 @@ describe("resolveSessionDisplayName", () => {
     expect(
       resolveSessionDisplayName(
         "agent:main:subagent:abc-123",
-        row({ key: "agent:main:subagent:abc-123", displayName: "Subagent: Runner" }),
+        row({
+          key: "agent:main:subagent:abc-123",
+          displayName: "Subagent: Runner",
+        }),
       ),
     ).toBe("Subagent: Runner");
   });
@@ -264,7 +308,10 @@ describe("resolveSessionDisplayName", () => {
     expect(
       resolveSessionDisplayName(
         "agent:main:bluebubbles:direct:+19257864429",
-        row({ key: "agent:main:bluebubbles:direct:+19257864429", label: "Tyler" }),
+        row({
+          key: "agent:main:bluebubbles:direct:+19257864429",
+          label: "Tyler",
+        }),
       ),
     ).toBe("Tyler");
   });

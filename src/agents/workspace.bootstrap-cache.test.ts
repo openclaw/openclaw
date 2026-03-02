@@ -1,8 +1,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, beforeEach } from "vitest";
-import { makeTempWorkspace, writeWorkspaceFile } from "../test-helpers/workspace.js";
-import { loadWorkspaceBootstrapFiles, DEFAULT_AGENTS_FILENAME } from "./workspace.js";
+import {
+  makeTempWorkspace,
+  writeWorkspaceFile,
+} from "../test-helpers/workspace.js";
+import {
+  loadWorkspaceBootstrapFiles,
+  DEFAULT_AGENTS_FILENAME,
+} from "./workspace.js";
 
 describe("workspace bootstrap file caching", () => {
   let workspaceDir: string;
@@ -106,7 +112,11 @@ describe("workspace bootstrap file caching", () => {
     const content = "# Some content";
     const filePath = path.join(workspaceDir, DEFAULT_AGENTS_FILENAME);
 
-    await writeWorkspaceFile({ dir: workspaceDir, name: DEFAULT_AGENTS_FILENAME, content });
+    await writeWorkspaceFile({
+      dir: workspaceDir,
+      name: DEFAULT_AGENTS_FILENAME,
+      content,
+    });
 
     // First load
     const agentsFile1 = await loadAgentsFile(workspaceDir);
@@ -124,10 +134,16 @@ describe("workspace bootstrap file caching", () => {
 
   it("handles concurrent access", async () => {
     const content = "# Concurrent test content";
-    await writeWorkspaceFile({ dir: workspaceDir, name: DEFAULT_AGENTS_FILENAME, content });
+    await writeWorkspaceFile({
+      dir: workspaceDir,
+      name: DEFAULT_AGENTS_FILENAME,
+      content,
+    });
 
     // Multiple concurrent loads should all succeed
-    const promises = Array.from({ length: 10 }, () => loadWorkspaceBootstrapFiles(workspaceDir));
+    const promises = Array.from({ length: 10 }, () =>
+      loadWorkspaceBootstrapFiles(workspaceDir),
+    );
 
     const results = await Promise.all(promises);
 
@@ -146,8 +162,16 @@ describe("workspace bootstrap file caching", () => {
     const workspace1 = await makeTempWorkspace("openclaw-cache-test1-");
     const workspace2 = await makeTempWorkspace("openclaw-cache-test2-");
 
-    await writeWorkspaceFile({ dir: workspace1, name: DEFAULT_AGENTS_FILENAME, content: content1 });
-    await writeWorkspaceFile({ dir: workspace2, name: DEFAULT_AGENTS_FILENAME, content: content2 });
+    await writeWorkspaceFile({
+      dir: workspace1,
+      name: DEFAULT_AGENTS_FILENAME,
+      content: content1,
+    });
+    await writeWorkspaceFile({
+      dir: workspace2,
+      name: DEFAULT_AGENTS_FILENAME,
+      content: content2,
+    });
 
     // Load from both workspaces
     const result1 = await loadWorkspaceBootstrapFiles(workspace1);

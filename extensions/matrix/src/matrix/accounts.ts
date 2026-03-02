@@ -5,16 +5,27 @@ import {
 } from "openclaw/plugin-sdk/account-id";
 import type { CoreConfig, MatrixConfig } from "../types.js";
 import { resolveMatrixConfigForAccount } from "./client.js";
-import { credentialsMatchConfig, loadMatrixCredentials } from "./credentials.js";
+import {
+  credentialsMatchConfig,
+  loadMatrixCredentials,
+} from "./credentials.js";
 
 /** Merge account config with top-level defaults, preserving nested objects. */
-function mergeAccountConfig(base: MatrixConfig, account: MatrixConfig): MatrixConfig {
+function mergeAccountConfig(
+  base: MatrixConfig,
+  account: MatrixConfig,
+): MatrixConfig {
   const merged = { ...base, ...account };
   // Deep-merge known nested objects so partial overrides inherit base fields
   for (const key of ["dm", "actions"] as const) {
     const b = base[key];
     const o = account[key];
-    if (typeof b === "object" && b != null && typeof o === "object" && o != null) {
+    if (
+      typeof b === "object" &&
+      b != null &&
+      typeof o === "object" &&
+      o != null
+    ) {
       (merged as Record<string, unknown>)[key] = { ...b, ...o };
     }
   }
@@ -59,10 +70,14 @@ export function listMatrixAccountIds(cfg: CoreConfig): string[] {
 }
 
 export function resolveDefaultMatrixAccountId(cfg: CoreConfig): string {
-  const preferred = normalizeOptionalAccountId(cfg.channels?.matrix?.defaultAccount);
+  const preferred = normalizeOptionalAccountId(
+    cfg.channels?.matrix?.defaultAccount,
+  );
   if (
     preferred &&
-    listMatrixAccountIds(cfg).some((accountId) => normalizeAccountId(accountId) === preferred)
+    listMatrixAccountIds(cfg).some(
+      (accountId) => normalizeAccountId(accountId) === preferred,
+    )
   ) {
     return preferred;
   }
@@ -73,7 +88,10 @@ export function resolveDefaultMatrixAccountId(cfg: CoreConfig): string {
   return ids[0] ?? DEFAULT_ACCOUNT_ID;
 }
 
-function resolveAccountConfig(cfg: CoreConfig, accountId: string): MatrixConfig | undefined {
+function resolveAccountConfig(
+  cfg: CoreConfig,
+  accountId: string,
+): MatrixConfig | undefined {
   const accounts = cfg.channels?.matrix?.accounts;
   if (!accounts || typeof accounts !== "object") {
     return undefined;
@@ -101,7 +119,11 @@ export function resolveMatrixAccount(params: {
   const base = resolveMatrixAccountConfig({ cfg: params.cfg, accountId });
   const enabled = base.enabled !== false && matrixBase.enabled !== false;
 
-  const resolved = resolveMatrixConfigForAccount(params.cfg, accountId, process.env);
+  const resolved = resolveMatrixConfigForAccount(
+    params.cfg,
+    accountId,
+    process.env,
+  );
   const hasHomeserver = Boolean(resolved.homeserver);
   const hasUserId = Boolean(resolved.userId);
   const hasAccessToken = Boolean(resolved.accessToken);
@@ -115,7 +137,8 @@ export function resolveMatrixAccount(params: {
           userId: resolved.userId || "",
         })
       : false;
-  const configured = hasHomeserver && (hasAccessToken || hasPasswordAuth || Boolean(hasStored));
+  const configured =
+    hasHomeserver && (hasAccessToken || hasPasswordAuth || Boolean(hasStored));
   return {
     accountId,
     enabled,
@@ -142,7 +165,9 @@ export function resolveMatrixAccountConfig(params: {
   return mergeAccountConfig(matrixBase, accountConfig);
 }
 
-export function listEnabledMatrixAccounts(cfg: CoreConfig): ResolvedMatrixAccount[] {
+export function listEnabledMatrixAccounts(
+  cfg: CoreConfig,
+): ResolvedMatrixAccount[] {
   return listMatrixAccountIds(cfg)
     .map((accountId) => resolveMatrixAccount({ cfg, accountId }))
     .filter((account) => account.enabled);

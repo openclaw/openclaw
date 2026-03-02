@@ -7,7 +7,9 @@ function normalizeTrimmedMetadata(value?: string | null): string {
 }
 
 function toLowerAscii(input: string): string {
-  return input.replace(/[A-Z]/g, (char) => String.fromCharCode(char.charCodeAt(0) + 32));
+  return input.replace(/[A-Z]/g, (char) =>
+    String.fromCharCode(char.charCodeAt(0) + 32),
+  );
 }
 
 export function normalizeDeviceMetadataForAuth(value?: string | null): string {
@@ -20,7 +22,9 @@ export function normalizeDeviceMetadataForAuth(value?: string | null): string {
   return toLowerAscii(trimmed);
 }
 
-export function normalizeDeviceMetadataForPolicy(value?: string | null): string {
+export function normalizeDeviceMetadataForPolicy(
+  value?: string | null,
+): string {
   const trimmed = normalizeTrimmedMetadata(value);
   if (!trimmed) {
     return "";

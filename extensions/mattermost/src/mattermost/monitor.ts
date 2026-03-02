@@ -40,7 +40,10 @@ import {
   type MattermostPost,
   type MattermostUser,
 } from "./client.js";
-import { isMattermostSenderAllowed, normalizeMattermostAllowList } from "./monitor-auth.js";
+import {
+  isMattermostSenderAllowed,
+  normalizeMattermostAllowList,
+} from "./monitor-auth.js";
 import {
   createDedupeCache,
   formatInboundFromLabel,
@@ -110,7 +113,9 @@ function isSystemPost(post: MattermostPost): boolean {
   return Boolean(type);
 }
 
-export function mapMattermostChannelTypeToChatType(channelType?: string | null): ChatType {
+export function mapMattermostChannelTypeToChatType(
+  channelType?: string | null,
+): ChatType {
   if (!channelType) {
     return "channel";
   }
@@ -147,12 +152,15 @@ type MattermostMediaInfo = {
   kind: MediaKind;
 };
 
-function buildMattermostAttachmentPlaceholder(mediaList: MattermostMediaInfo[]): string {
+function buildMattermostAttachmentPlaceholder(
+  mediaList: MattermostMediaInfo[],
+): string {
   if (mediaList.length === 0) {
     return "";
   }
   if (mediaList.length === 1) {
-    const kind = mediaList[0].kind === "unknown" ? "document" : mediaList[0].kind;
+    const kind =
+      mediaList[0].kind === "unknown" ? "document" : mediaList[0].kind;
     return `<media:${kind}>`;
   }
   const allImages = mediaList.every((media) => media.kind === "image");
@@ -171,7 +179,9 @@ function buildMattermostWsUrl(baseUrl: string): string {
   return `${wsBase}/api/v4/websocket`;
 }
 
-export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}): Promise<void> {
+export async function monitorMattermostProvider(
+  opts: MonitorMattermostOpts = {},
+): Promise<void> {
   const core = getMattermostRuntime();
   const runtime = resolveRuntime(opts);
   const cfg = opts.config ?? core.config.loadConfig();
@@ -202,10 +212,18 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
   const botUser = await fetchMattermostMe(client);
   const botUserId = botUser.id;
   const botUsername = botUser.username?.trim() || undefined;
-  runtime.log?.(`mattermost connected as ${botUsername ? `@${botUsername}` : botUserId}`);
+  runtime.log?.(
+    `mattermost connected as ${botUsername ? `@${botUsername}` : botUserId}`,
+  );
 
-  const channelCache = new Map<string, { value: MattermostChannel | null; expiresAt: number }>();
-  const userCache = new Map<string, { value: MattermostUser | null; expiresAt: number }>();
+  const channelCache = new Map<
+    string,
+    { value: MattermostChannel | null; expiresAt: number }
+  >();
+  const userCache = new Map<
+    string,
+    { value: MattermostUser | null; expiresAt: number }
+  >();
   const logger = core.logging.getChildLogger({ module: "mattermost" });
   const logVerboseMessage = (message: string) => {
     if (!core.logging.shouldLogVerbose()) {
@@ -264,14 +282,17 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           "inbound",
           mediaMaxBytes,
         );
-        const contentType = saved.contentType ?? fetched.contentType ?? undefined;
+        const contentType =
+          saved.contentType ?? fetched.contentType ?? undefined;
         out.push({
           path: saved.path,
           contentType,
           kind: core.media.mediaKindFromMime(contentType),
         });
       } catch (err) {
-        logger.debug?.(`mattermost: failed to download file ${fileId}: ${String(err)}`);
+        logger.debug?.(
+          `mattermost: failed to download file ${fileId}: ${String(err)}`,
+        );
       }
     }
     return out;
@@ -281,7 +302,9 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     await sendMattermostTyping(client, { channelId, parentId });
   };
 
-  const resolveChannelInfo = async (channelId: string): Promise<MattermostChannel | null> => {
+  const resolveChannelInfo = async (
+    channelId: string,
+  ): Promise<MattermostChannel | null> => {
     const cached = channelCache.get(channelId);
     if (cached && cached.expiresAt > Date.now()) {
       return cached.value;
@@ -303,7 +326,9 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     }
   };
 
-  const resolveUserInfo = async (userId: string): Promise<MattermostUser | null> => {
+  const resolveUserInfo = async (
+    userId: string,
+  ): Promise<MattermostUser | null> => {
     const cached = userCache.get(userId);
     if (cached && cached.expiresAt > Date.now()) {
       return cached.value;
@@ -330,12 +355,19 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     payload: MattermostEventPayload,
     messageIds?: string[],
   ) => {
-    const channelId = post.channel_id ?? payload.data?.channel_id ?? payload.broadcast?.channel_id;
+    const channelId =
+      post.channel_id ??
+      payload.data?.channel_id ??
+      payload.broadcast?.channel_id;
     if (!channelId) {
       return;
     }
 
-    const allMessageIds = messageIds?.length ? messageIds : post.id ? [post.id] : [];
+    const allMessageIds = messageIds?.length
+      ? messageIds
+      : post.id
+        ? [post.id]
+        : [];
     if (allMessageIds.length === 0) {
       return;
     }
@@ -358,7 +390,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     }
 
     const channelInfo = await resolveChannelInfo(channelId);
-    const channelType = payload.data?.channel_type ?? channelInfo?.type ?? undefined;
+    const channelType =
+      payload.data?.channel_type ?? channelInfo?.type ?? undefined;
     const kind = mapMattermostChannelTypeToChatType(channelType);
     const chatType = channelChatType(kind);
 
@@ -368,7 +401,9 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       senderId;
     const rawText = post.message?.trim() || "";
     const dmPolicy = account.config.dmPolicy ?? "pairing";
-    const normalizedAllowFrom = normalizeMattermostAllowList(account.config.allowFrom ?? []);
+    const normalizedAllowFrom = normalizeMattermostAllowList(
+      account.config.allowFrom ?? [],
+    );
     const normalizedGroupAllowFrom = normalizeMattermostAllowList(
       account.config.groupAllowFrom ?? [],
     );
@@ -404,7 +439,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     const hasControlCommand = core.channel.text.hasControlCommand(rawText, cfg);
     const isControlCommand = allowTextCommands && hasControlCommand;
     const useAccessGroups = cfg.commands?.useAccessGroups !== false;
-    const commandDmAllowFrom = kind === "direct" ? effectiveAllowFrom : normalizedAllowFrom;
+    const commandDmAllowFrom =
+      kind === "direct" ? effectiveAllowFrom : normalizedAllowFrom;
     const senderAllowedForCommands = isMattermostSenderAllowed({
       senderId,
       senderName,
@@ -420,7 +456,10 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     const commandGate = resolveControlCommandGate({
       useAccessGroups,
       authorizers: [
-        { configured: commandDmAllowFrom.length > 0, allowed: senderAllowedForCommands },
+        {
+          configured: commandDmAllowFrom.length > 0,
+          allowed: senderAllowedForCommands,
+        },
         {
           configured: effectiveGroupAllowFrom.length > 0,
           allowed: groupAllowedForCommands,
@@ -433,8 +472,13 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
 
     if (accessDecision.decision !== "allow") {
       if (kind === "direct") {
-        if (accessDecision.reasonCode === DM_GROUP_ACCESS_REASON.DM_POLICY_DISABLED) {
-          logVerboseMessage(`mattermost: drop dm (dmPolicy=disabled sender=${senderId})`);
+        if (
+          accessDecision.reasonCode ===
+          DM_GROUP_ACCESS_REASON.DM_POLICY_DISABLED
+        ) {
+          logVerboseMessage(
+            `mattermost: drop dm (dmPolicy=disabled sender=${senderId})`,
+          );
           return;
         }
         if (accessDecision.decision === "pairing") {
@@ -442,7 +486,9 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             id: senderId,
             meta: { name: senderName },
           });
-          logVerboseMessage(`mattermost: pairing request sender=${senderId} created=${created}`);
+          logVerboseMessage(
+            `mattermost: pairing request sender=${senderId} created=${created}`,
+          );
           if (created) {
             try {
               await sendMessageMattermost(
@@ -456,24 +502,43 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
               );
               opts.statusSink?.({ lastOutboundAt: Date.now() });
             } catch (err) {
-              logVerboseMessage(`mattermost: pairing reply failed for ${senderId}: ${String(err)}`);
+              logVerboseMessage(
+                `mattermost: pairing reply failed for ${senderId}: ${String(err)}`,
+              );
             }
           }
           return;
         }
-        logVerboseMessage(`mattermost: drop dm sender=${senderId} (dmPolicy=${dmPolicy})`);
+        logVerboseMessage(
+          `mattermost: drop dm sender=${senderId} (dmPolicy=${dmPolicy})`,
+        );
         return;
       }
-      if (accessDecision.reasonCode === DM_GROUP_ACCESS_REASON.GROUP_POLICY_DISABLED) {
-        logVerboseMessage("mattermost: drop group message (groupPolicy=disabled)");
+      if (
+        accessDecision.reasonCode ===
+        DM_GROUP_ACCESS_REASON.GROUP_POLICY_DISABLED
+      ) {
+        logVerboseMessage(
+          "mattermost: drop group message (groupPolicy=disabled)",
+        );
         return;
       }
-      if (accessDecision.reasonCode === DM_GROUP_ACCESS_REASON.GROUP_POLICY_EMPTY_ALLOWLIST) {
-        logVerboseMessage("mattermost: drop group message (no group allowlist)");
+      if (
+        accessDecision.reasonCode ===
+        DM_GROUP_ACCESS_REASON.GROUP_POLICY_EMPTY_ALLOWLIST
+      ) {
+        logVerboseMessage(
+          "mattermost: drop group message (no group allowlist)",
+        );
         return;
       }
-      if (accessDecision.reasonCode === DM_GROUP_ACCESS_REASON.GROUP_POLICY_NOT_ALLOWLISTED) {
-        logVerboseMessage(`mattermost: drop group sender=${senderId} (not in groupAllowFrom)`);
+      if (
+        accessDecision.reasonCode ===
+        DM_GROUP_ACCESS_REASON.GROUP_POLICY_NOT_ALLOWLISTED
+      ) {
+        logVerboseMessage(
+          `mattermost: drop group sender=${senderId} (not in groupAllowFrom)`,
+        );
         return;
       }
       logVerboseMessage(
@@ -495,8 +560,12 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     const teamId = payload.data?.team_id ?? channelInfo?.team_id ?? undefined;
     const channelName = payload.data?.channel_name ?? channelInfo?.name ?? "";
     const channelDisplay =
-      payload.data?.channel_display_name ?? channelInfo?.display_name ?? channelName;
-    const roomLabel = channelName ? `#${channelName}` : channelDisplay || `#${channelId}`;
+      payload.data?.channel_display_name ??
+      channelInfo?.display_name ??
+      channelName;
+    const roomLabel = channelName
+      ? `#${channelName}`
+      : channelDisplay || `#${channelId}`;
 
     const route = core.channel.routing.resolveAgentRoute({
       cfg,
@@ -519,10 +588,15 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     const sessionKey = threadKeys.sessionKey;
     const historyKey = kind === "direct" ? null : sessionKey;
 
-    const mentionRegexes = core.channel.mentions.buildMentionRegexes(cfg, route.agentId);
+    const mentionRegexes = core.channel.mentions.buildMentionRegexes(
+      cfg,
+      route.agentId,
+    );
     const wasMentioned =
       kind !== "direct" &&
-      ((botUsername ? rawText.toLowerCase().includes(`@${botUsername.toLowerCase()}`) : false) ||
+      ((botUsername
+        ? rawText.toLowerCase().includes(`@${botUsername.toLowerCase()}`)
+        : false) ||
         core.channel.mentions.matchesMentionPatterns(rawText, mentionRegexes));
     const pendingBody =
       rawText ||
@@ -541,7 +615,10 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             ? {
                 sender: pendingSender,
                 body: trimmed,
-                timestamp: typeof post.create_at === "number" ? post.create_at : undefined,
+                timestamp:
+                  typeof post.create_at === "number"
+                    ? post.create_at
+                    : undefined,
                 messageId: post.id ?? undefined,
               }
             : null,
@@ -549,7 +626,9 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     };
 
     const oncharEnabled = account.chatmode === "onchar" && kind !== "direct";
-    const oncharPrefixes = oncharEnabled ? resolveOncharPrefixes(account.oncharPrefixes) : [];
+    const oncharPrefixes = oncharEnabled
+      ? resolveOncharPrefixes(account.oncharPrefixes)
+      : [];
     const oncharResult = oncharEnabled
       ? stripOncharPrefix(rawText, oncharPrefixes)
       : { triggered: false, stripped: rawText };
@@ -564,11 +643,20 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         groupId: channelId,
       });
     const shouldBypassMention =
-      isControlCommand && shouldRequireMention && !wasMentioned && commandAuthorized;
-    const effectiveWasMentioned = wasMentioned || shouldBypassMention || oncharTriggered;
+      isControlCommand &&
+      shouldRequireMention &&
+      !wasMentioned &&
+      commandAuthorized;
+    const effectiveWasMentioned =
+      wasMentioned || shouldBypassMention || oncharTriggered;
     const canDetectMention = Boolean(botUsername) || mentionRegexes.length > 0;
 
-    if (oncharEnabled && !oncharTriggered && !wasMentioned && !isControlCommand) {
+    if (
+      oncharEnabled &&
+      !oncharTriggered &&
+      !wasMentioned &&
+      !isControlCommand
+    ) {
       recordPendingHistory();
       return;
     }
@@ -582,7 +670,10 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     const mediaList = await resolveMattermostMedia(post.file_ids);
     const mediaPlaceholder = buildMattermostAttachmentPlaceholder(mediaList);
     const bodySource = oncharTriggered ? oncharResult.stripped : rawText;
-    const baseText = [bodySource, mediaPlaceholder].filter(Boolean).join("\n").trim();
+    const baseText = [bodySource, mediaPlaceholder]
+      .filter(Boolean)
+      .join("\n")
+      .trim();
     const bodyText = normalizeMention(baseText, botUsername);
     if (!bodyText) {
       return;
@@ -617,7 +708,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     const body = core.channel.reply.formatInboundEnvelope({
       channel: "Mattermost",
       from: fromLabel,
-      timestamp: typeof post.create_at === "number" ? post.create_at : undefined,
+      timestamp:
+        typeof post.create_at === "number" ? post.create_at : undefined,
       body: textWithId,
       chatType,
       sender: { name: senderName, id: senderId },
@@ -635,7 +727,9 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             from: fromLabel,
             timestamp: entry.timestamp,
             body: `${entry.body}${
-              entry.messageId ? ` [id:${entry.messageId} channel:${channelId}]` : ""
+              entry.messageId
+                ? ` [id:${entry.messageId} channel:${channelId}]`
+                : ""
             }`,
             chatType,
             senderLabel: entry.sender,
@@ -684,10 +778,13 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       MessageSids: allMessageIds.length > 1 ? allMessageIds : undefined,
       MessageSidFirst: allMessageIds.length > 1 ? allMessageIds[0] : undefined,
       MessageSidLast:
-        allMessageIds.length > 1 ? allMessageIds[allMessageIds.length - 1] : undefined,
+        allMessageIds.length > 1
+          ? allMessageIds[allMessageIds.length - 1]
+          : undefined,
       ReplyToId: threadRootId,
       MessageThreadId: threadRootId,
-      Timestamp: typeof post.create_at === "number" ? post.create_at : undefined,
+      Timestamp:
+        typeof post.create_at === "number" ? post.create_at : undefined,
       WasMentioned: kind !== "direct" ? effectiveWasMentioned : undefined,
       CommandAuthorized: commandAuthorized,
       OriginatingChannel: "mattermost" as const,
@@ -697,9 +794,12 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
 
     if (kind === "direct") {
       const sessionCfg = cfg.session;
-      const storePath = core.channel.session.resolveStorePath(sessionCfg?.store, {
-        agentId: route.agentId,
-      });
+      const storePath = core.channel.session.resolveStorePath(
+        sessionCfg?.store,
+        {
+          agentId: route.agentId,
+        },
+      );
       await core.channel.session.updateLastRoute({
         storePath,
         sessionKey: route.mainSessionKey,
@@ -751,18 +851,29 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     const { dispatcher, replyOptions, markDispatchIdle } =
       core.channel.reply.createReplyDispatcherWithTyping({
         ...prefixOptions,
-        humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, route.agentId),
+        humanDelay: core.channel.reply.resolveHumanDelayConfig(
+          cfg,
+          route.agentId,
+        ),
         typingCallbacks,
         deliver: async (payload: ReplyPayload) => {
-          const mediaUrls = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
-          const text = core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode);
+          const mediaUrls =
+            payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
+          const text = core.channel.text.convertMarkdownTables(
+            payload.text ?? "",
+            tableMode,
+          );
           if (mediaUrls.length === 0) {
             const chunkMode = core.channel.text.resolveChunkMode(
               cfg,
               "mattermost",
               account.accountId,
             );
-            const chunks = core.channel.text.chunkMarkdownTextWithMode(text, textLimit, chunkMode);
+            const chunks = core.channel.text.chunkMarkdownTextWithMode(
+              text,
+              textLimit,
+              chunkMode,
+            );
             for (const chunk of chunks.length > 0 ? chunks : [text]) {
               if (!chunk) {
                 continue;
@@ -787,7 +898,9 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           runtime.log?.(`delivered reply to ${to}`);
         },
         onError: (err, info) => {
-          runtime.error?.(`mattermost ${info.kind} reply failed: ${String(err)}`);
+          runtime.error?.(
+            `mattermost ${info.kind} reply failed: ${String(err)}`,
+          );
         },
       });
 
@@ -804,7 +917,9 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           replyOptions: {
             ...replyOptions,
             disableBlockStreaming:
-              typeof account.blockStreaming === "boolean" ? !account.blockStreaming : undefined,
+              typeof account.blockStreaming === "boolean"
+                ? !account.blockStreaming
+                : undefined,
             onModelSelected,
           },
         }),
@@ -867,7 +982,9 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     const channelInfo = await resolveChannelInfo(channelId);
     if (!channelInfo?.type) {
       // Cannot determine channel type — drop to avoid policy bypass
-      logVerboseMessage(`mattermost: drop reaction (cannot resolve channel type for ${channelId})`);
+      logVerboseMessage(
+        `mattermost: drop reaction (cannot resolve channel type for ${channelId})`,
+      );
       return;
     }
     const kind = mapMattermostChannelTypeToChatType(channelInfo.type);
@@ -887,7 +1004,9 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       dmPolicy,
       groupPolicy,
       allowFrom: normalizeMattermostAllowList(account.config.allowFrom ?? []),
-      groupAllowFrom: normalizeMattermostAllowList(account.config.groupAllowFrom ?? []),
+      groupAllowFrom: normalizeMattermostAllowList(
+        account.config.groupAllowFrom ?? [],
+      ),
       storeAllowFrom,
       isSenderAllowed: (allowFrom) =>
         isMattermostSenderAllowed({
@@ -985,7 +1104,11 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         file_ids: [],
       };
       const ids = entries.map((entry) => entry.post.id).filter(Boolean);
-      await handlePost(mergedPost, last.payload, ids.length > 0 ? ids : undefined);
+      await handlePost(
+        mergedPost,
+        last.payload,
+        ids.length > 0 ? ids : undefined,
+      );
     },
     onError: (err) => {
       runtime.error?.(`mattermost debounce flush failed: ${String(err)}`);
@@ -1018,7 +1141,9 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       opts.statusSink?.({ lastError: String(err), connected: false });
     },
     onReconnect: (delayMs) => {
-      runtime.log?.(`mattermost reconnecting in ${Math.round(delayMs / 1000)}s`);
+      runtime.log?.(
+        `mattermost reconnecting in ${Math.round(delayMs / 1000)}s`,
+      );
     },
   });
 }

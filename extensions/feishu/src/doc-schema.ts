@@ -17,32 +17,40 @@ const tableCreationProperties = {
 export const FeishuDocSchema = Type.Union([
   Type.Object({
     action: Type.Literal("read"),
-    doc_token: Type.String({ description: "Document token (extract from URL /docx/XXX)" }),
+    doc_token: Type.String({
+      description: "Document token (extract from URL /docx/XXX)",
+    }),
   }),
   Type.Object({
     action: Type.Literal("write"),
     doc_token: Type.String({ description: "Document token" }),
     content: Type.String({
-      description: "Markdown content to write (replaces entire document content)",
+      description:
+        "Markdown content to write (replaces entire document content)",
     }),
   }),
   Type.Object({
     action: Type.Literal("append"),
     doc_token: Type.String({ description: "Document token" }),
-    content: Type.String({ description: "Markdown content to append to end of document" }),
+    content: Type.String({
+      description: "Markdown content to append to end of document",
+    }),
   }),
   Type.Object({
     action: Type.Literal("insert"),
     doc_token: Type.String({ description: "Document token" }),
     content: Type.String({ description: "Markdown content to insert" }),
     after_block_id: Type.String({
-      description: "Insert content after this block ID. Use list_blocks to find block IDs.",
+      description:
+        "Insert content after this block ID. Use list_blocks to find block IDs.",
     }),
   }),
   Type.Object({
     action: Type.Literal("create"),
     title: Type.String({ description: "Document title" }),
-    folder_token: Type.Optional(Type.String({ description: "Target folder token (optional)" })),
+    folder_token: Type.Optional(
+      Type.String({ description: "Target folder token (optional)" }),
+    ),
     grant_to_requester: Type.Optional(
       Type.Boolean({
         description:
@@ -98,7 +106,9 @@ export const FeishuDocSchema = Type.Union([
     doc_token: Type.String({ description: "Document token" }),
     block_id: Type.String({ description: "Table block ID" }),
     row_index: Type.Optional(
-      Type.Number({ description: "Row index to insert at (-1 for end, default: -1)" }),
+      Type.Number({
+        description: "Row index to insert at (-1 for end, default: -1)",
+      }),
     ),
   }),
   Type.Object({
@@ -106,7 +116,9 @@ export const FeishuDocSchema = Type.Union([
     doc_token: Type.String({ description: "Document token" }),
     block_id: Type.String({ description: "Table block ID" }),
     column_index: Type.Optional(
-      Type.Number({ description: "Column index to insert at (-1 for end, default: -1)" }),
+      Type.Number({
+        description: "Column index to insert at (-1 for end, default: -1)",
+      }),
     ),
   }),
   Type.Object({
@@ -114,7 +126,9 @@ export const FeishuDocSchema = Type.Union([
     doc_token: Type.String({ description: "Document token" }),
     block_id: Type.String({ description: "Table block ID" }),
     row_start: Type.Number({ description: "Start row index (0-based)" }),
-    row_count: Type.Optional(Type.Number({ description: "Number of rows to delete (default: 1)" })),
+    row_count: Type.Optional(
+      Type.Number({ description: "Number of rows to delete (default: 1)" }),
+    ),
   }),
   Type.Object({
     action: Type.Literal("delete_table_columns"),
@@ -138,8 +152,12 @@ export const FeishuDocSchema = Type.Union([
   Type.Object({
     action: Type.Literal("upload_image"),
     doc_token: Type.String({ description: "Document token" }),
-    url: Type.Optional(Type.String({ description: "Remote image URL (http/https)" })),
-    file_path: Type.Optional(Type.String({ description: "Local image file path" })),
+    url: Type.Optional(
+      Type.String({ description: "Remote image URL (http/https)" }),
+    ),
+    file_path: Type.Optional(
+      Type.String({ description: "Local image file path" }),
+    ),
     image: Type.Optional(
       Type.String({
         description:
@@ -149,23 +167,30 @@ export const FeishuDocSchema = Type.Union([
     parent_block_id: Type.Optional(
       Type.String({ description: "Parent block ID (default: document root)" }),
     ),
-    filename: Type.Optional(Type.String({ description: "Optional filename override" })),
+    filename: Type.Optional(
+      Type.String({ description: "Optional filename override" }),
+    ),
     index: Type.Optional(
       Type.Integer({
         minimum: 0,
-        description: "Insert position (0-based index among siblings). Omit to append.",
+        description:
+          "Insert position (0-based index among siblings). Omit to append.",
       }),
     ),
   }),
   Type.Object({
     action: Type.Literal("upload_file"),
     doc_token: Type.String({ description: "Document token" }),
-    url: Type.Optional(Type.String({ description: "Remote file URL (http/https)" })),
+    url: Type.Optional(
+      Type.String({ description: "Remote file URL (http/https)" }),
+    ),
     file_path: Type.Optional(Type.String({ description: "Local file path" })),
     parent_block_id: Type.Optional(
       Type.String({ description: "Parent block ID (default: document root)" }),
     ),
-    filename: Type.Optional(Type.String({ description: "Optional filename override" })),
+    filename: Type.Optional(
+      Type.String({ description: "Optional filename override" }),
+    ),
   }),
   // Text color / style
   Type.Object({

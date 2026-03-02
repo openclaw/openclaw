@@ -8,7 +8,14 @@ metadata:
       {
         "emoji": "📝",
         "events": ["command"],
-        "install": [{ "id": "bundled", "kind": "bundled", "label": "Bundled with OpenClaw" }],
+        "install":
+          [
+            {
+              "id": "bundled",
+              "kind": "bundled",
+              "label": "Bundled with OpenClaw",
+            },
+          ],
       },
   }
 ---

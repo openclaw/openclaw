@@ -18,7 +18,8 @@ vi.mock("../infra/shell-env.js", async (importOriginal) => {
 });
 
 vi.mock("../infra/exec-approvals.js", async (importOriginal) => {
-  const mod = await importOriginal<typeof import("../infra/exec-approvals.js")>();
+  const mod =
+    await importOriginal<typeof import("../infra/exec-approvals.js")>();
   const approvals: ExecApprovalsResolved = {
     path: "/tmp/exec-approvals.json",
     socketPath: "/tmp/exec-approvals.sock",
@@ -87,9 +88,15 @@ describe("exec PATH login shell merge", () => {
     shellPathMock.mockClear();
     shellPathMock.mockReturnValue("/custom/bin:/opt/bin");
 
-    const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+    const tool = createExecTool({
+      host: "gateway",
+      security: "full",
+      ask: "off",
+    });
     const result = await tool.execute("call1", { command: "echo $PATH" });
-    const entries = normalizePathEntries(result.content.find((c) => c.type === "text")?.text);
+    const entries = normalizePathEntries(
+      result.content.find((c) => c.type === "text")?.text,
+    );
 
     expect(entries).toEqual(["/custom/bin", "/opt/bin", "/usr/bin"]);
     expect(shellPathMock).toHaveBeenCalledTimes(1);
@@ -100,11 +107,17 @@ describe("exec PATH login shell merge", () => {
       return;
     }
 
-    const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+    const tool = createExecTool({
+      host: "gateway",
+      security: "full",
+      ask: "off",
+    });
     const result = await tool.execute("call-openclaw-shell", {
       command: 'printf "%s" "${OPENCLAW_SHELL:-}"',
     });
-    const value = normalizeText(result.content.find((c) => c.type === "text")?.text);
+    const value = normalizeText(
+      result.content.find((c) => c.type === "text")?.text,
+    );
 
     expect(value).toBe("exec");
   });
@@ -118,14 +131,20 @@ describe("exec PATH login shell merge", () => {
     const shellPathMock = vi.mocked(getShellPathFromLoginShell);
     shellPathMock.mockClear();
 
-    const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+    const tool = createExecTool({
+      host: "gateway",
+      security: "full",
+      ask: "off",
+    });
 
     await expect(
       tool.execute("call1", {
         command: "echo $PATH",
         env: { PATH: "/explicit/bin" },
       }),
-    ).rejects.toThrow(/Security Violation: Custom 'PATH' variable is forbidden/);
+    ).rejects.toThrow(
+      /Security Violation: Custom 'PATH' variable is forbidden/,
+    );
 
     expect(shellPathMock).not.toHaveBeenCalled();
   });
@@ -135,7 +154,9 @@ describe("exec PATH login shell merge", () => {
       return;
     }
     process.env.PATH = "/usr/bin";
-    const shellDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-shell-env-"));
+    const shellDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "openclaw-shell-env-"),
+    );
     const unregisteredShellPath = path.join(shellDir, "unregistered-shell");
     fs.writeFileSync(unregisteredShellPath, '#!/bin/sh\nexec /bin/sh "$@"\n', {
       encoding: "utf8",
@@ -147,12 +168,20 @@ describe("exec PATH login shell merge", () => {
       const shellPathMock = vi.mocked(getShellPathFromLoginShell);
       shellPathMock.mockClear();
       shellPathMock.mockImplementation((opts) =>
-        opts.env.SHELL?.trim() === unregisteredShellPath ? null : "/custom/bin:/opt/bin",
+        opts.env.SHELL?.trim() === unregisteredShellPath
+          ? null
+          : "/custom/bin:/opt/bin",
       );
 
-      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+      const tool = createExecTool({
+        host: "gateway",
+        security: "full",
+        ask: "off",
+      });
       const result = await tool.execute("call1", { command: "echo $PATH" });
-      const entries = normalizePathEntries(result.content.find((c) => c.type === "text")?.text);
+      const entries = normalizePathEntries(
+        result.content.find((c) => c.type === "text")?.text,
+      );
 
       expect(entries).toEqual(["/usr/bin"]);
       expect(shellPathMock).toHaveBeenCalledTimes(1);
@@ -170,14 +199,20 @@ describe("exec PATH login shell merge", () => {
 
 describe("exec host env validation", () => {
   it("blocks LD_/DYLD_ env vars on host execution", async () => {
-    const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+    const tool = createExecTool({
+      host: "gateway",
+      security: "full",
+      ask: "off",
+    });
 
     await expect(
       tool.execute("call1", {
         command: "echo ok",
         env: { LD_DEBUG: "1" },
       }),
-    ).rejects.toThrow(/Security Violation: Environment variable 'LD_DEBUG' is forbidden/);
+    ).rejects.toThrow(
+      /Security Violation: Environment variable 'LD_DEBUG' is forbidden/,
+    );
   });
 
   it("strips dangerous inherited env vars from host execution", async () => {
@@ -188,11 +223,17 @@ describe("exec host env validation", () => {
     process.env.SSLKEYLOGFILE = "/tmp/openclaw-ssl-keys.log";
     try {
       const { createExecTool } = await import("./bash-tools.exec.js");
-      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+      const tool = createExecTool({
+        host: "gateway",
+        security: "full",
+        ask: "off",
+      });
       const result = await tool.execute("call1", {
         command: "printf '%s' \"${SSLKEYLOGFILE:-}\"",
       });
-      const output = normalizeText(result.content.find((c) => c.type === "text")?.text);
+      const output = normalizeText(
+        result.content.find((c) => c.type === "text")?.text,
+      );
       expect(output).not.toContain("/tmp/openclaw-ssl-keys.log");
     } finally {
       if (original === undefined) {
@@ -209,7 +250,9 @@ describe("exec host env validation", () => {
     const result = await tool.execute("call1", {
       command: "echo ok",
     });
-    const text = normalizeText(result.content.find((c) => c.type === "text")?.text);
+    const text = normalizeText(
+      result.content.find((c) => c.type === "text")?.text,
+    );
     expect(text).toContain("ok");
 
     const err = await tool
@@ -218,14 +261,20 @@ describe("exec host env validation", () => {
         host: "gateway",
       })
       .then(() => null)
-      .catch((error: unknown) => (error instanceof Error ? error : new Error(String(error))));
+      .catch((error: unknown) =>
+        error instanceof Error ? error : new Error(String(error)),
+      );
     expect(err).toBeTruthy();
     expect(err?.message).toMatch(/exec host not allowed/);
     expect(err?.message).toMatch(/tools\.exec\.host=sandbox/);
   });
 
   it("fails closed when sandbox host is explicitly configured without sandbox runtime", async () => {
-    const tool = createExecTool({ host: "sandbox", security: "full", ask: "off" });
+    const tool = createExecTool({
+      host: "sandbox",
+      security: "full",
+      ask: "off",
+    });
 
     await expect(
       tool.execute("call1", {

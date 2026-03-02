@@ -58,7 +58,10 @@ describe("channel-auth", () => {
   });
 
   it("runs login with explicit trimmed account and verbose flag", async () => {
-    await runChannelLogin({ channel: "wa", account: "  acct-1  ", verbose: true }, runtime);
+    await runChannelLogin(
+      { channel: "wa", account: "  acct-1  ", verbose: true },
+      runtime,
+    );
 
     expect(mocks.setVerbose).toHaveBeenCalledWith(true);
     expect(mocks.resolveChannelDefaultAccountId).not.toHaveBeenCalled();
@@ -76,7 +79,9 @@ describe("channel-auth", () => {
   it("auto-picks the single configured channel when opts are empty", async () => {
     await runChannelLogin({}, runtime);
 
-    expect(mocks.resolveMessageChannelSelection).toHaveBeenCalledWith({ cfg: { channels: {} } });
+    expect(mocks.resolveMessageChannelSelection).toHaveBeenCalledWith({
+      cfg: { channels: {} },
+    });
     expect(mocks.normalizeChannelId).toHaveBeenCalledWith("whatsapp");
     expect(mocks.login).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -87,19 +92,23 @@ describe("channel-auth", () => {
 
   it("propagates channel ambiguity when channel is omitted", async () => {
     mocks.resolveMessageChannelSelection.mockRejectedValueOnce(
-      new Error("Channel is required when multiple channels are configured: telegram, slack"),
+      new Error(
+        "Channel is required when multiple channels are configured: telegram, slack",
+      ),
     );
 
-    await expect(runChannelLogin({}, runtime)).rejects.toThrow("Channel is required");
+    await expect(runChannelLogin({}, runtime)).rejects.toThrow(
+      "Channel is required",
+    );
     expect(mocks.login).not.toHaveBeenCalled();
   });
 
   it("throws for unsupported channel aliases", async () => {
     mocks.normalizeChannelId.mockReturnValueOnce(undefined);
 
-    await expect(runChannelLogin({ channel: "bad-channel" }, runtime)).rejects.toThrow(
-      "Unsupported channel: bad-channel",
-    );
+    await expect(
+      runChannelLogin({ channel: "bad-channel" }, runtime),
+    ).rejects.toThrow("Unsupported channel: bad-channel");
     expect(mocks.login).not.toHaveBeenCalled();
   });
 
@@ -110,15 +119,21 @@ describe("channel-auth", () => {
       config: { resolveAccount: mocks.resolveAccount },
     });
 
-    await expect(runChannelLogin({ channel: "whatsapp" }, runtime)).rejects.toThrow(
-      "Channel whatsapp does not support login",
-    );
+    await expect(
+      runChannelLogin({ channel: "whatsapp" }, runtime),
+    ).rejects.toThrow("Channel whatsapp does not support login");
   });
 
   it("runs logout with resolved account and explicit account id", async () => {
-    await runChannelLogout({ channel: "whatsapp", account: " acct-2 " }, runtime);
+    await runChannelLogout(
+      { channel: "whatsapp", account: " acct-2 " },
+      runtime,
+    );
 
-    expect(mocks.resolveAccount).toHaveBeenCalledWith({ channels: {} }, "acct-2");
+    expect(mocks.resolveAccount).toHaveBeenCalledWith(
+      { channels: {} },
+      "acct-2",
+    );
     expect(mocks.logoutAccount).toHaveBeenCalledWith({
       cfg: { channels: {} },
       accountId: "acct-2",
@@ -135,8 +150,8 @@ describe("channel-auth", () => {
       config: { resolveAccount: mocks.resolveAccount },
     });
 
-    await expect(runChannelLogout({ channel: "whatsapp" }, runtime)).rejects.toThrow(
-      "Channel whatsapp does not support logout",
-    );
+    await expect(
+      runChannelLogout({ channel: "whatsapp" }, runtime),
+    ).rejects.toThrow("Channel whatsapp does not support logout");
   });
 });

@@ -87,7 +87,13 @@ type SuccessResult = {
 type FailureResult = {
   ok: false;
   smokeId: string;
-  stage: "validation" | "send-message" | "wait-binding" | "wait-ack" | "discord-api" | "unexpected";
+  stage:
+    | "validation"
+    | "send-message"
+    | "wait-binding"
+    | "wait-ack"
+    | "discord-api"
+    | "unexpected";
   error: string;
   diagnostics?: {
     parentChannelRecent?: Array<{
@@ -121,7 +127,9 @@ function parseNumber(value: string | undefined, fallback: number): number {
 }
 
 function resolveStateDir(): string {
-  const override = process.env.OPENCLAW_STATE_DIR?.trim() || process.env.CLAWDBOT_STATE_DIR?.trim();
+  const override =
+    process.env.OPENCLAW_STATE_DIR?.trim() ||
+    process.env.CLAWDBOT_STATE_DIR?.trim();
   if (override) {
     return override.startsWith("~")
       ? path.resolve(process.env.HOME || "", override.slice(1))
@@ -213,7 +221,9 @@ function parseArgs(): Args {
     process.env.CLAWDBOT_DISCORD_SMOKE_DRIVER_TOKEN ||
     "";
   const driverTokenPrefix =
-    resolveArg("--token-prefix") || process.env.OPENCLAW_DISCORD_SMOKE_DRIVER_TOKEN_PREFIX || "Bot";
+    resolveArg("--token-prefix") ||
+    process.env.OPENCLAW_DISCORD_SMOKE_DRIVER_TOKEN_PREFIX ||
+    "Bot";
   const botToken =
     resolveArg("--bot-token") ||
     process.env.OPENCLAW_DISCORD_SMOKE_BOT_TOKEN ||
@@ -247,13 +257,19 @@ function parseArgs(): Args {
     resolveArg("--poll-ms") || process.env.OPENCLAW_DISCORD_SMOKE_POLL_MS,
     1_500,
   );
-  const defaultBindingsPath = path.join(resolveStateDir(), "discord", "thread-bindings.json");
+  const defaultBindingsPath = path.join(
+    resolveStateDir(),
+    "discord",
+    "thread-bindings.json",
+  );
   const threadBindingsPath =
     resolveArg("--thread-bindings-path") ||
     process.env.OPENCLAW_DISCORD_SMOKE_THREAD_BINDINGS_PATH ||
     defaultBindingsPath;
   const openclawBin =
-    resolveArg("--openclaw-bin") || process.env.OPENCLAW_DISCORD_SMOKE_OPENCLAW_BIN || "openclaw";
+    resolveArg("--openclaw-bin") ||
+    process.env.OPENCLAW_DISCORD_SMOKE_OPENCLAW_BIN ||
+    "openclaw";
   const json = hasFlag("--json");
 
   if (!channelId) {
@@ -284,7 +300,10 @@ function parseArgs(): Args {
   };
 }
 
-async function openclawCliJson<T>(params: { openclawBin: string; args: string[] }): Promise<T> {
+async function openclawCliJson<T>(params: {
+  openclawBin: string;
+  args: string[];
+}): Promise<T> {
   const result = await execFileAsync(params.openclawBin, params.args, {
     maxBuffer: 8 * 1024 * 1024,
     env: process.env,
@@ -319,10 +338,15 @@ async function readMessagesWithOpenclaw(params: {
       "--json",
     ],
   });
-  return Array.isArray(response.payload?.messages) ? response.payload.messages : [];
+  return Array.isArray(response.payload?.messages)
+    ? response.payload.messages
+    : [];
 }
 
-function resolveAuthorizationHeader(params: { token: string; tokenPrefix: string }): string {
+function resolveAuthorizationHeader(params: {
+  token: string;
+  tokenPrefix: string;
+}): string {
   const token = params.token.trim();
   if (!token) {
     throw new Error("Missing Discord driver token.");
@@ -392,8 +416,11 @@ async function requestDiscordJson<T>(params: {
     });
 
     if (response.status === 429) {
-      const body = (await response.json().catch(() => ({}))) as { retry_after?: number };
-      const waitSeconds = typeof body.retry_after === "number" ? body.retry_after : 1;
+      const body = (await response.json().catch(() => ({}))) as {
+        retry_after?: number;
+      };
+      const waitSeconds =
+        typeof body.retry_after === "number" ? body.retry_after : 1;
       await sleep(Math.ceil(waitSeconds * 1000));
       continue;
     }
@@ -412,14 +439,20 @@ async function requestDiscordJson<T>(params: {
     return (await response.json()) as T;
   }
 
-  throw new Error(`${params.errorPrefix} ${params.method} ${params.path} exceeded retry budget.`);
+  throw new Error(
+    `${params.errorPrefix} ${params.method} ${params.path} exceeded retry budget.`,
+  );
 }
 
-async function readThreadBindings(filePath: string): Promise<ThreadBindingRecord[]> {
+async function readThreadBindings(
+  filePath: string,
+): Promise<ThreadBindingRecord[]> {
   const raw = await fs.readFile(filePath, "utf8");
   const payload = JSON.parse(raw) as ThreadBindingsPayload;
   const entries = Object.values(payload.bindings ?? {});
-  return entries.filter((entry) => Boolean(entry?.threadId && entry?.targetSessionKey));
+  return entries.filter((entry) =>
+    Boolean(entry?.threadId && entry?.targetSessionKey),
+  );
 }
 
 function normalizeBoundAt(record: ThreadBindingRecord): number {
@@ -449,7 +482,11 @@ function resolveCandidateBindings(params: {
       const agentId = String(entry.agentId || "")
         .trim()
         .toLowerCase();
-      if (normalizedTargetAgent && agentId && agentId !== normalizedTargetAgent) {
+      if (
+        normalizedTargetAgent &&
+        agentId &&
+        agentId !== normalizedTargetAgent
+      ) {
         return false;
       }
       return true;
@@ -464,7 +501,9 @@ function buildInstruction(params: {
   mentionUserId?: string;
   template?: string;
 }): string {
-  const mentionPrefix = params.mentionUserId?.trim() ? `<@${params.mentionUserId.trim()}> ` : "";
+  const mentionPrefix = params.mentionUserId?.trim()
+    ? `<@${params.mentionUserId.trim()}> `
+    : "";
   if (params.template?.trim()) {
     return mentionPrefix + params.template.trim();
   }
@@ -501,7 +540,10 @@ async function loadParentRecentMessages(params: {
   });
 }
 
-function printOutput(params: { json: boolean; payload: SuccessResult | FailureResult }) {
+function printOutput(params: {
+  json: boolean;
+  payload: SuccessResult | FailureResult;
+}) {
   if (params.json) {
     // eslint-disable-next-line no-console
     console.log(JSON.stringify(params.payload, null, 2));
@@ -551,7 +593,9 @@ function printOutput(params: { json: boolean; payload: SuccessResult | FailureRe
     console.error("recent parent channel messages:");
     for (const row of failure.diagnostics.parentChannelRecent) {
       // eslint-disable-next-line no-console
-      console.error(`  ${row.id} ${row.author}${row.bot ? " [bot]" : ""}: ${row.content || ""}`);
+      console.error(
+        `  ${row.id} ${row.author}${row.bot ? " [bot]" : ""}: ${row.content || ""}`,
+      );
     }
   }
 }
@@ -689,7 +733,9 @@ async function run(): Promise<SuccessResult | FailureResult> {
       });
       sentMessageId = String(sent.payload?.result?.messageId || "");
       if (!sentMessageId) {
-        throw new Error("openclaw message send did not return payload.result.messageId");
+        throw new Error(
+          "openclaw message send did not return payload.result.messageId",
+        );
       }
     }
   } catch (err) {

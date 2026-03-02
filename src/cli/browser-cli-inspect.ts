@@ -4,7 +4,10 @@ import { loadConfig } from "../config/config.js";
 import { danger } from "../globals.js";
 import { defaultRuntime } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
-import { callBrowserRequest, type BrowserParentOpts } from "./browser-cli-shared.js";
+import {
+  callBrowserRequest,
+  type BrowserParentOpts,
+} from "./browser-cli-shared.js";
 
 export function registerBrowserInspectCommands(
   browser: Command,
@@ -51,10 +54,14 @@ export function registerBrowserInspectCommands(
 
   browser
     .command("snapshot")
-    .description("Capture a snapshot (default: ai; aria is the accessibility tree)")
+    .description(
+      "Capture a snapshot (default: ai; aria is the accessibility tree)",
+    )
     .option("--format <aria|ai>", "Snapshot format (default: ai)", "ai")
     .option("--target-id <id>", "CDP target id (or unique prefix)")
-    .option("--limit <n>", "Max nodes (default: 500/800)", (v: string) => Number(v))
+    .option("--limit <n>", "Max nodes (default: 500/800)", (v: string) =>
+      Number(v),
+    )
     .option("--mode <efficient>", "Snapshot preset (efficient)")
     .option("--efficient", "Use the efficient snapshot preset", false)
     .option("--interactive", "Role snapshot: interactive elements only", false)
@@ -69,10 +76,14 @@ export function registerBrowserInspectCommands(
       const profile = parent?.browserProfile;
       const format = opts.format === "aria" ? "aria" : "ai";
       const configMode =
-        format === "ai" && loadConfig().browser?.snapshotDefaults?.mode === "efficient"
+        format === "ai" &&
+        loadConfig().browser?.snapshotDefaults?.mode === "efficient"
           ? "efficient"
           : undefined;
-      const mode = opts.efficient === true || opts.mode === "efficient" ? "efficient" : configMode;
+      const mode =
+        opts.efficient === true || opts.mode === "efficient"
+          ? "efficient"
+          : configMode;
       try {
         const query: Record<string, string | number | boolean | undefined> = {
           format,

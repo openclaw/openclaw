@@ -20,7 +20,10 @@ function resolveOutboundMessageId(result: unknown): string {
 export function createWebSendApi(params: {
   sock: {
     sendMessage: (jid: string, content: AnyMessageContent) => Promise<unknown>;
-    sendPresenceUpdate: (presence: WAPresence, jid?: string) => Promise<unknown>;
+    sendPresenceUpdate: (
+      presence: WAPresence,
+      jid?: string,
+    ) => Promise<unknown>;
   };
   defaultAccountId: string;
 }) {

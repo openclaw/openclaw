@@ -60,7 +60,8 @@ export const formatDaemonRuntimeShort = (runtime?: {
   const details: string[] = [];
   const detail = runtime.detail?.replace(/\s+/g, " ").trim() || "";
   const noisyLaunchctlDetail =
-    runtime.missingUnit === true && detail.toLowerCase().includes("could not find service");
+    runtime.missingUnit === true &&
+    detail.toLowerCase().includes("could not find service");
   if (detail && !noisyLaunchctlDetail) {
     details.push(detail);
   }

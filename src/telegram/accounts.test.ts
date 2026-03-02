@@ -87,20 +87,25 @@ describe("resolveTelegramAccount", () => {
   });
 
   it("formats debug logs with inspect-style output when debug env is enabled", () => {
-    withEnv({ TELEGRAM_BOT_TOKEN: "", OPENCLAW_DEBUG_TELEGRAM_ACCOUNTS: "1" }, () => {
-      const cfg: OpenClawConfig = {
-        channels: {
-          telegram: { accounts: { work: { botToken: "tok-work" } } },
-        },
-      };
+    withEnv(
+      { TELEGRAM_BOT_TOKEN: "", OPENCLAW_DEBUG_TELEGRAM_ACCOUNTS: "1" },
+      () => {
+        const cfg: OpenClawConfig = {
+          channels: {
+            telegram: { accounts: { work: { botToken: "tok-work" } } },
+          },
+        };
 
-      expect(listTelegramAccountIds(cfg)).toEqual(["work"]);
-      resolveTelegramAccount({ cfg, accountId: "work" });
-    });
+        expect(listTelegramAccountIds(cfg)).toEqual(["work"]);
+        resolveTelegramAccount({ cfg, accountId: "work" });
+      },
+    );
 
     const lines = warnMock.mock.calls.map(([line]) => String(line));
     expect(lines).toContain("listTelegramAccountIds [ 'work' ]");
-    expect(lines).toContain("resolve { accountId: 'work', enabled: true, tokenSource: 'config' }");
+    expect(lines).toContain(
+      "resolve { accountId: 'work', enabled: true, tokenSource: 'config' }",
+    );
   });
 });
 
@@ -110,7 +115,10 @@ describe("resolveDefaultTelegramAccountId", () => {
       channels: {
         telegram: {
           defaultAccount: "work",
-          accounts: { default: { botToken: "tok-default" }, work: { botToken: "tok-work" } },
+          accounts: {
+            default: { botToken: "tok-default" },
+            work: { botToken: "tok-work" },
+          },
         },
       },
     };
@@ -136,7 +144,10 @@ describe("resolveDefaultTelegramAccountId", () => {
       channels: {
         telegram: {
           defaultAccount: "missing",
-          accounts: { default: { botToken: "tok-default" }, work: { botToken: "tok-work" } },
+          accounts: {
+            default: { botToken: "tok-default" },
+            work: { botToken: "tok-work" },
+          },
         },
       },
     };
@@ -230,7 +241,9 @@ describe("resolveTelegramAccount groups inheritance (#30673)", () => {
       accountId: "default",
     });
 
-    expect(resolved.config.groups).toEqual({ "-100123": { requireMention: false } });
+    expect(resolved.config.groups).toEqual({
+      "-100123": { requireMention: false },
+    });
   });
 
   it("does NOT inherit channel-level groups to secondary account in multi-account setup", () => {
@@ -290,7 +303,9 @@ describe("resolveTelegramAccount groups inheritance (#30673)", () => {
       accountId: "default",
     });
 
-    expect(resolved.config.groups).toEqual({ "-100123": { requireMention: false } });
+    expect(resolved.config.groups).toEqual({
+      "-100123": { requireMention: false },
+    });
   });
 
   it("account-level groups takes priority over channel-level in single-account setup", () => {
@@ -311,6 +326,8 @@ describe("resolveTelegramAccount groups inheritance (#30673)", () => {
       accountId: "default",
     });
 
-    expect(resolved.config.groups).toEqual({ "-100123": { requireMention: false } });
+    expect(resolved.config.groups).toEqual({
+      "-100123": { requireMention: false },
+    });
   });
 });

@@ -35,7 +35,15 @@ export type ShellChainPart = {
   opToNext: ShellChainOperator | null;
 };
 
-const DISALLOWED_PIPELINE_TOKENS = new Set([">", "<", "`", "\n", "\r", "(", ")"]);
+const DISALLOWED_PIPELINE_TOKENS = new Set([
+  ">",
+  "<",
+  "`",
+  "\n",
+  "\r",
+  "(",
+  ")",
+]);
 const DOUBLE_QUOTE_ESCAPES = new Set(["\\", '"', "$", "`"]);
 const WINDOWS_UNSUPPORTED_TOKENS = new Set([
   "&",
@@ -59,7 +67,11 @@ function isEscapedLineContinuation(next: string | undefined): next is string {
   return next === "\n" || next === "\r";
 }
 
-function splitShellPipeline(command: string): { ok: boolean; reason?: string; segments: string[] } {
+function splitShellPipeline(command: string): {
+  ok: boolean;
+  reason?: string;
+  segments: string[];
+} {
   type HeredocSpec = {
     delimiter: string;
     stripTabs: boolean;
@@ -105,7 +117,14 @@ function splitShellPipeline(command: string): { ok: boolean; reason?: string; se
     let delimiter = "";
     while (i < source.length) {
       const ch = source[i];
-      if (/\s/.test(ch) || ch === "|" || ch === "&" || ch === ";" || ch === "<" || ch === ">") {
+      if (
+        /\s/.test(ch) ||
+        ch === "|" ||
+        ch === "&" ||
+        ch === ";" ||
+        ch === "<" ||
+        ch === ">"
+      ) {
         break;
       }
       delimiter += ch;
@@ -167,11 +186,20 @@ function splitShellPipeline(command: string): { ok: boolean; reason?: string; se
       if (ch === "\n" || ch === "\r") {
         const current = pendingHeredocs[0];
         if (current) {
-          const line = current.stripTabs ? heredocLine.replace(/^\t+/, "") : heredocLine;
+          const line = current.stripTabs
+            ? heredocLine.replace(/^\t+/, "")
+            : heredocLine;
           if (line === current.delimiter) {
             pendingHeredocs.shift();
-          } else if (!current.quoted && hasUnquotedHeredocExpansionToken(heredocLine)) {
-            return { ok: false, reason: "command substitution in unquoted heredoc", segments: [] };
+          } else if (
+            !current.quoted &&
+            hasUnquotedHeredocExpansionToken(heredocLine)
+          ) {
+            return {
+              ok: false,
+              reason: "command substitution in unquoted heredoc",
+              segments: [],
+            };
           }
         }
         heredocLine = "";
@@ -209,7 +237,11 @@ function splitShellPipeline(command: string): { ok: boolean; reason?: string; se
     }
     if (inDouble) {
       if (ch === "\\" && isEscapedLineContinuation(next)) {
-        return { ok: false, reason: "unsupported shell token: newline", segments: [] };
+        return {
+          ok: false,
+          reason: "unsupported shell token: newline",
+          segments: [],
+        };
       }
       if (ch === "\\" && isDoubleQuoteEscape(next)) {
         buf += ch;
@@ -219,13 +251,25 @@ function splitShellPipeline(command: string): { ok: boolean; reason?: string; se
         continue;
       }
       if (ch === "$" && next === "(") {
-        return { ok: false, reason: "unsupported shell token: $()", segments: [] };
+        return {
+          ok: false,
+          reason: "unsupported shell token: $()",
+          segments: [],
+        };
       }
       if (ch === "`") {
-        return { ok: false, reason: "unsupported shell token: `", segments: [] };
+        return {
+          ok: false,
+          reason: "unsupported shell token: `",
+          segments: [],
+        };
       }
       if (ch === "\n" || ch === "\r") {
-        return { ok: false, reason: "unsupported shell token: newline", segments: [] };
+        return {
+          ok: false,
+          reason: "unsupported shell token: newline",
+          segments: [],
+        };
       }
       if (ch === '"') {
         inDouble = false;
@@ -268,7 +312,11 @@ function splitShellPipeline(command: string): { ok: boolean; reason?: string; se
       continue;
     }
     if (ch === "&" || ch === ";") {
-      return { ok: false, reason: `unsupported shell token: ${ch}`, segments: [] };
+      return {
+        ok: false,
+        reason: `unsupported shell token: ${ch}`,
+        segments: [],
+      };
     }
     if (ch === "<" && next === "<") {
       buf += "<<";
@@ -285,17 +333,29 @@ function splitShellPipeline(command: string): { ok: boolean; reason?: string; se
 
       const parsed = parseHeredocDelimiter(command, scanIndex);
       if (parsed) {
-        pendingHeredocs.push({ delimiter: parsed.delimiter, stripTabs, quoted: parsed.quoted });
+        pendingHeredocs.push({
+          delimiter: parsed.delimiter,
+          stripTabs,
+          quoted: parsed.quoted,
+        });
         buf += command.slice(scanIndex, parsed.end);
         i = parsed.end - 1;
       }
       continue;
     }
     if (DISALLOWED_PIPELINE_TOKENS.has(ch)) {
-      return { ok: false, reason: `unsupported shell token: ${ch}`, segments: [] };
+      return {
+        ok: false,
+        reason: `unsupported shell token: ${ch}`,
+        segments: [],
+      };
     }
     if (ch === "$" && next === "(") {
-      return { ok: false, reason: "unsupported shell token: $()", segments: [] };
+      return {
+        ok: false,
+        reason: "unsupported shell token: $()",
+        segments: [],
+      };
     }
     buf += ch;
     emptySegment = false;
@@ -303,7 +363,9 @@ function splitShellPipeline(command: string): { ok: boolean; reason?: string; se
 
   if (inHeredocBody && pendingHeredocs.length > 0) {
     const current = pendingHeredocs[0];
-    const line = current.stripTabs ? heredocLine.replace(/^\t+/, "") : heredocLine;
+    const line = current.stripTabs
+      ? heredocLine.replace(/^\t+/, "")
+      : heredocLine;
     if (line === current.delimiter) {
       pendingHeredocs.shift();
       if (pendingHeredocs.length === 0) {
@@ -317,14 +379,19 @@ function splitShellPipeline(command: string): { ok: boolean; reason?: string; se
   }
 
   if (escaped || inSingle || inDouble) {
-    return { ok: false, reason: "unterminated shell quote/escape", segments: [] };
+    return {
+      ok: false,
+      reason: "unterminated shell quote/escape",
+      segments: [],
+    };
   }
 
   pushPart();
   if (emptySegment || segments.length === 0) {
     return {
       ok: false,
-      reason: segments.length === 0 ? "empty command" : "empty pipeline segment",
+      reason:
+        segments.length === 0 ? "empty command" : "empty pipeline segment",
       segments: [],
     };
   }
@@ -390,7 +457,11 @@ function analyzeWindowsShellCommand(params: {
   }
   const argv = tokenizeWindowsSegment(params.command);
   if (!argv || argv.length === 0) {
-    return { ok: false, reason: "unable to parse windows command", segments: [] };
+    return {
+      ok: false,
+      reason: "unable to parse windows command",
+      segments: [],
+    };
   }
   return {
     ok: true,
@@ -398,7 +469,11 @@ function analyzeWindowsShellCommand(params: {
       {
         raw: params.command,
         argv,
-        resolution: resolveCommandResolutionFromArgv(argv, params.cwd, params.env),
+        resolution: resolveCommandResolutionFromArgv(
+          argv,
+          params.cwd,
+          params.env,
+        ),
       },
     ],
   };
@@ -435,7 +510,9 @@ function parseSegmentsFromParts(
  * Splits a command string by chain operators (&&, ||, ;) while preserving the operators.
  * Returns null when no chain is present or when the chain is malformed.
  */
-export function splitCommandChainWithOperators(command: string): ShellChainPart[] | null {
+export function splitCommandChainWithOperators(
+  command: string,
+): ShellChainPart[] | null {
   const parts: ShellChainPart[] = [];
   let buf = "";
   let inSingle = false;
@@ -550,12 +627,17 @@ function shellEscapeSingleArg(value: string): string {
   return `'${value.replace(/'/g, singleQuoteEscape)}'`;
 }
 
-type ShellSegmentRenderResult = { ok: true; rendered: string } | { ok: false; reason: string };
+type ShellSegmentRenderResult =
+  | { ok: true; rendered: string }
+  | { ok: false; reason: string };
 
 function rebuildShellCommandFromSource(params: {
   command: string;
   platform?: string | null;
-  renderSegment: (rawSegment: string, segmentIndex: number) => ShellSegmentRenderResult;
+  renderSegment: (
+    rawSegment: string,
+    segmentIndex: number,
+  ) => ShellSegmentRenderResult;
 }): { ok: boolean; command?: string; reason?: string; segmentCount?: number } {
   const platform = params.platform ?? null;
   if (isWindowsPlatform(platform)) {
@@ -567,14 +649,19 @@ function rebuildShellCommandFromSource(params: {
   }
 
   const chain = splitCommandChainWithOperators(source);
-  const chainParts: ShellChainPart[] = chain ?? [{ part: source, opToNext: null }];
+  const chainParts: ShellChainPart[] = chain ?? [
+    { part: source, opToNext: null },
+  ];
   let segmentCount = 0;
   let out = "";
 
   for (const part of chainParts) {
     const pipelineSplit = splitShellPipeline(part.part);
     if (!pipelineSplit.ok) {
-      return { ok: false, reason: pipelineSplit.reason ?? "unable to parse pipeline" };
+      return {
+        ok: false,
+        reason: pipelineSplit.reason ?? "unable to parse pipeline",
+      };
     }
     const renderedSegments: string[] = [];
     for (const segmentRaw of pipelineSplit.segments) {
@@ -600,7 +687,10 @@ function rebuildShellCommandFromSource(params: {
  *
  * Used to make "safe bins" actually stdin-only even though execution happens via `shell -c`.
  */
-export function buildSafeShellCommand(params: { command: string; platform?: string | null }): {
+export function buildSafeShellCommand(params: {
+  command: string;
+  platform?: string | null;
+}): {
   ok: boolean;
   command?: string;
   reason?: string;
@@ -613,7 +703,10 @@ export function buildSafeShellCommand(params: { command: string; platform?: stri
       if (!argv || argv.length === 0) {
         return { ok: false, reason: "unable to parse shell segment" };
       }
-      return { ok: true, rendered: argv.map((token) => shellEscapeSingleArg(token)).join(" ") };
+      return {
+        ok: true,
+        rendered: argv.map((token) => shellEscapeSingleArg(token)).join(" "),
+      };
     },
   });
   if (!rebuilt.ok) {
@@ -626,12 +719,15 @@ function renderQuotedArgv(argv: string[]): string {
   return argv.map((token) => shellEscapeSingleArg(token)).join(" ");
 }
 
-export function resolvePlannedSegmentArgv(segment: ExecCommandSegment): string[] | null {
+export function resolvePlannedSegmentArgv(
+  segment: ExecCommandSegment,
+): string[] | null {
   if (segment.resolution?.policyBlocked === true) {
     return null;
   }
   const baseArgv =
-    segment.resolution?.effectiveArgv && segment.resolution.effectiveArgv.length > 0
+    segment.resolution?.effectiveArgv &&
+    segment.resolution.effectiveArgv.length > 0
       ? segment.resolution.effectiveArgv
       : segment.argv;
   if (baseArgv.length === 0) {
@@ -639,7 +735,9 @@ export function resolvePlannedSegmentArgv(segment: ExecCommandSegment): string[]
   }
   const argv = [...baseArgv];
   const resolvedExecutable =
-    segment.resolution?.resolvedRealPath?.trim() ?? segment.resolution?.resolvedPath?.trim() ?? "";
+    segment.resolution?.resolvedRealPath?.trim() ??
+    segment.resolution?.resolvedPath?.trim() ??
+    "";
   if (resolvedExecutable) {
     argv[0] = resolvedExecutable;
   }
@@ -758,9 +856,17 @@ export function analyzeShellCommand(params: {
       if (!pipelineSplit.ok) {
         return { ok: false, reason: pipelineSplit.reason, segments: [] };
       }
-      const segments = parseSegmentsFromParts(pipelineSplit.segments, params.cwd, params.env);
+      const segments = parseSegmentsFromParts(
+        pipelineSplit.segments,
+        params.cwd,
+        params.env,
+      );
       if (!segments) {
-        return { ok: false, reason: "unable to parse shell segment", segments: [] };
+        return {
+          ok: false,
+          reason: "unable to parse shell segment",
+          segments: [],
+        };
       }
       chains.push(segments);
       allSegments.push(...segments);
@@ -774,7 +880,11 @@ export function analyzeShellCommand(params: {
   if (!split.ok) {
     return { ok: false, reason: split.reason, segments: [] };
   }
-  const segments = parseSegmentsFromParts(split.segments, params.cwd, params.env);
+  const segments = parseSegmentsFromParts(
+    split.segments,
+    params.cwd,
+    params.env,
+  );
   if (!segments) {
     return { ok: false, reason: "unable to parse shell segment", segments: [] };
   }
@@ -796,7 +906,11 @@ export function analyzeArgvCommand(params: {
       {
         raw: argv.join(" "),
         argv,
-        resolution: resolveCommandResolutionFromArgv(argv, params.cwd, params.env),
+        resolution: resolveCommandResolutionFromArgv(
+          argv,
+          params.cwd,
+          params.env,
+        ),
       },
     ],
   };

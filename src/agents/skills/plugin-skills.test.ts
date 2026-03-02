@@ -10,14 +10,18 @@ const hoisted = vi.hoisted(() => ({
 }));
 
 vi.mock("../../plugins/manifest-registry.js", () => ({
-  loadPluginManifestRegistry: (...args: unknown[]) => hoisted.loadPluginManifestRegistry(...args),
+  loadPluginManifestRegistry: (...args: unknown[]) =>
+    hoisted.loadPluginManifestRegistry(...args),
 }));
 
 const { resolvePluginSkillDirs } = await import("./plugin-skills.js");
 
 const tempDirs = createTrackedTempDirs();
 
-function buildRegistry(params: { acpxRoot: string; helperRoot: string }): PluginManifestRegistry {
+function buildRegistry(params: {
+  acpxRoot: string;
+  helperRoot: string;
+}): PluginManifestRegistry {
   return {
     diagnostics: [],
     plugins: [
@@ -75,7 +79,9 @@ async function setupAcpxAndHelperRegistry() {
   const helperRoot = await tempDirs.make("openclaw-helper-plugin-");
   await fs.mkdir(path.join(acpxRoot, "skills"), { recursive: true });
   await fs.mkdir(path.join(helperRoot, "skills"), { recursive: true });
-  hoisted.loadPluginManifestRegistry.mockReturnValue(buildRegistry({ acpxRoot, helperRoot }));
+  hoisted.loadPluginManifestRegistry.mockReturnValue(
+    buildRegistry({ acpxRoot, helperRoot }),
+  );
   return { workspaceDir, acpxRoot, helperRoot };
 }
 
@@ -97,7 +103,13 @@ describe("resolvePluginSkillDirs", () => {
     {
       name: "keeps acpx plugin skills when ACP is enabled",
       acpEnabled: true,
-      expectedDirs: ({ acpxRoot, helperRoot }: { acpxRoot: string; helperRoot: string }) => [
+      expectedDirs: ({
+        acpxRoot,
+        helperRoot,
+      }: {
+        acpxRoot: string;
+        helperRoot: string;
+      }) => [
         path.resolve(acpxRoot, "skills"),
         path.resolve(helperRoot, "skills"),
       ],
@@ -105,12 +117,16 @@ describe("resolvePluginSkillDirs", () => {
     {
       name: "skips acpx plugin skills when ACP is disabled",
       acpEnabled: false,
-      expectedDirs: ({ helperRoot }: { acpxRoot: string; helperRoot: string }) => [
-        path.resolve(helperRoot, "skills"),
-      ],
+      expectedDirs: ({
+        helperRoot,
+      }: {
+        acpxRoot: string;
+        helperRoot: string;
+      }) => [path.resolve(helperRoot, "skills")],
     },
   ])("$name", async ({ acpEnabled, expectedDirs }) => {
-    const { workspaceDir, acpxRoot, helperRoot } = await setupAcpxAndHelperRegistry();
+    const { workspaceDir, acpxRoot, helperRoot } =
+      await setupAcpxAndHelperRegistry();
 
     const dirs = resolvePluginSkillDirs({
       workspaceDir,
@@ -123,7 +139,8 @@ describe("resolvePluginSkillDirs", () => {
   });
 
   it("rejects plugin skill paths that escape the plugin root", async () => {
-    const { workspaceDir, pluginRoot, outsideSkills } = await setupPluginOutsideSkills();
+    const { workspaceDir, pluginRoot, outsideSkills } =
+      await setupPluginOutsideSkills();
     await fs.mkdir(path.join(pluginRoot, "skills"), { recursive: true });
     await fs.mkdir(outsideSkills, { recursive: true });
     const escapePath = path.relative(pluginRoot, outsideSkills);
@@ -144,7 +161,8 @@ describe("resolvePluginSkillDirs", () => {
   });
 
   it("rejects plugin skill symlinks that resolve outside plugin root", async () => {
-    const { workspaceDir, pluginRoot, outsideSkills } = await setupPluginOutsideSkills();
+    const { workspaceDir, pluginRoot, outsideSkills } =
+      await setupPluginOutsideSkills();
     const linkPath = path.join(pluginRoot, "skills-link");
     await fs.mkdir(outsideSkills, { recursive: true });
     await fs.symlink(

@@ -112,7 +112,9 @@ describe("applyDefaultModelChoice", () => {
     });
 
     expect(applied.config.agents?.defaults?.models?.[defaultModel]).toEqual({});
-    expect(applied.config.agents?.defaults?.models?.["anthropic/claude-opus-4-6"]).toEqual({});
+    expect(
+      applied.config.agents?.defaults?.models?.["anthropic/claude-opus-4-6"],
+    ).toEqual({});
   });
 
   it("uses applyDefaultConfig path when setDefaultModel is true", async () => {
@@ -135,7 +137,9 @@ describe("applyDefaultModelChoice", () => {
     });
 
     expect(applied.agentModelOverride).toBeUndefined();
-    expect(applied.config.agents?.defaults?.model).toEqual({ primary: defaultModel });
+    expect(applied.config.agents?.defaults?.model).toEqual({
+      primary: defaultModel,
+    });
   });
 });
 
@@ -166,7 +170,9 @@ describe("shared default model behavior", () => {
 describe("applyOpenAIProviderConfig", () => {
   it("adds allowlist entry for default model", () => {
     const next = applyOpenAIProviderConfig({});
-    expect(Object.keys(next.agents?.defaults?.models ?? {})).toContain(OPENAI_DEFAULT_MODEL);
+    expect(Object.keys(next.agents?.defaults?.models ?? {})).toContain(
+      OPENAI_DEFAULT_MODEL,
+    );
   });
 
   it("preserves existing alias for default model", () => {
@@ -179,21 +185,32 @@ describe("applyOpenAIProviderConfig", () => {
         },
       },
     });
-    expect(next.agents?.defaults?.models?.[OPENAI_DEFAULT_MODEL]?.alias).toBe("My GPT");
+    expect(next.agents?.defaults?.models?.[OPENAI_DEFAULT_MODEL]?.alias).toBe(
+      "My GPT",
+    );
   });
 });
 
 describe("applyOpenAIConfig", () => {
   it("sets default when model is unset", () => {
     const next = applyOpenAIConfig({});
-    expect(next.agents?.defaults?.model).toEqual({ primary: OPENAI_DEFAULT_MODEL });
+    expect(next.agents?.defaults?.model).toEqual({
+      primary: OPENAI_DEFAULT_MODEL,
+    });
   });
 
   it("overrides model.primary when model object already exists", () => {
     const next = applyOpenAIConfig({
-      agents: { defaults: { model: { primary: "anthropic/claude-opus-4-6", fallbacks: [] } } },
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-6", fallbacks: [] },
+        },
+      },
     });
-    expect(next.agents?.defaults?.model).toEqual({ primary: OPENAI_DEFAULT_MODEL, fallbacks: [] });
+    expect(next.agents?.defaults?.model).toEqual({
+      primary: OPENAI_DEFAULT_MODEL,
+      fallbacks: [],
+    });
   });
 });
 

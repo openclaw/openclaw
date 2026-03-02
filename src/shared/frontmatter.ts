@@ -26,7 +26,10 @@ export function getFrontmatterString(
   return typeof raw === "string" ? raw : undefined;
 }
 
-export function parseFrontmatterBool(value: string | undefined, fallback: boolean): boolean {
+export function parseFrontmatterBool(
+  value: string | undefined,
+  fallback: boolean,
+): boolean {
   const parsed = parseBooleanValue(value);
   return parsed === undefined ? fallback : parsed;
 }
@@ -35,7 +38,10 @@ export function resolveOpenClawManifestBlock(params: {
   frontmatter: Record<string, unknown>;
   key?: string;
 }): Record<string, unknown> | undefined {
-  const raw = getFrontmatterString(params.frontmatter, params.key ?? "metadata");
+  const raw = getFrontmatterString(
+    params.frontmatter,
+    params.key ?? "metadata",
+  );
   if (!raw) {
     return undefined;
   }
@@ -88,13 +94,17 @@ export function resolveOpenClawManifestInstall<T>(
   metadataObj: Record<string, unknown>,
   parseInstallSpec: (input: unknown) => T | undefined,
 ): T[] {
-  const installRaw = Array.isArray(metadataObj.install) ? (metadataObj.install as unknown[]) : [];
+  const installRaw = Array.isArray(metadataObj.install)
+    ? (metadataObj.install as unknown[])
+    : [];
   return installRaw
     .map((entry) => parseInstallSpec(entry))
     .filter((entry): entry is T => Boolean(entry));
 }
 
-export function resolveOpenClawManifestOs(metadataObj: Record<string, unknown>): string[] {
+export function resolveOpenClawManifestOs(
+  metadataObj: Record<string, unknown>,
+): string[] {
   return normalizeStringList(metadataObj.os);
 }
 
@@ -115,7 +125,11 @@ export function parseOpenClawManifestInstallBase(
   }
   const raw = input as Record<string, unknown>;
   const kindRaw =
-    typeof raw.kind === "string" ? raw.kind : typeof raw.type === "string" ? raw.type : "";
+    typeof raw.kind === "string"
+      ? raw.kind
+      : typeof raw.type === "string"
+        ? raw.type
+        : "";
   const kind = kindRaw.trim().toLowerCase();
   if (!allowedKinds.includes(kind)) {
     return undefined;

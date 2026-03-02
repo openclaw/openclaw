@@ -73,7 +73,10 @@ function mockLocalAgentReply(text = "local") {
     rt?.log?.(text);
     return {
       payloads: [{ text }],
-      meta: { durationMs: 1, agentMeta: { sessionId: "s", provider: "p", model: "m" } },
+      meta: {
+        durationMs: 1,
+        agentMeta: { sessionId: "s", provider: "p", model: "m" },
+      },
     } as unknown as Awaited<ReturnType<typeof agentCommand>>;
   });
 }
@@ -87,10 +90,15 @@ describe("agentCliCommand", () => {
     await withTempStore(async () => {
       mockGatewaySuccessReply();
 
-      await agentCliCommand({ message: "hi", to: "+1555", timeout: "0" }, runtime);
+      await agentCliCommand(
+        { message: "hi", to: "+1555", timeout: "0" },
+        runtime,
+      );
 
       expect(callGateway).toHaveBeenCalledTimes(1);
-      const request = vi.mocked(callGateway).mock.calls[0]?.[0] as { timeoutMs?: number };
+      const request = vi.mocked(callGateway).mock.calls[0]?.[0] as {
+        timeoutMs?: number;
+      };
       expect(request.timeoutMs).toBe(2_147_000_000);
     });
   });
@@ -109,7 +117,9 @@ describe("agentCliCommand", () => {
 
   it("falls back to embedded agent when gateway fails", async () => {
     await withTempStore(async () => {
-      vi.mocked(callGateway).mockRejectedValue(new Error("gateway not connected"));
+      vi.mocked(callGateway).mockRejectedValue(
+        new Error("gateway not connected"),
+      );
       mockLocalAgentReply();
 
       await agentCliCommand({ message: "hi", to: "+1555" }, runtime);

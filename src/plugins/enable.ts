@@ -9,13 +9,19 @@ export type PluginEnableResult = {
   reason?: string;
 };
 
-export function enablePluginInConfig(cfg: OpenClawConfig, pluginId: string): PluginEnableResult {
+export function enablePluginInConfig(
+  cfg: OpenClawConfig,
+  pluginId: string,
+): PluginEnableResult {
   const builtInChannelId = normalizeChatChannelId(pluginId);
   const resolvedId = builtInChannelId ?? pluginId;
   if (cfg.plugins?.enabled === false) {
     return { config: cfg, enabled: false, reason: "plugins disabled" };
   }
-  if (cfg.plugins?.deny?.includes(pluginId) || cfg.plugins?.deny?.includes(resolvedId)) {
+  if (
+    cfg.plugins?.deny?.includes(pluginId) ||
+    cfg.plugins?.deny?.includes(resolvedId)
+  ) {
     return { config: cfg, enabled: false, reason: "blocked by denylist" };
   }
   let next = setPluginEnabledInConfig(cfg, resolvedId, true);

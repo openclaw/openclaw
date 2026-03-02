@@ -3,11 +3,18 @@ import { resolveAgentAvatar } from "../../agents/identity-avatar.js";
 import type { ChunkMode } from "../../auto-reply/chunk.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { loadConfig } from "../../config/config.js";
-import type { MarkdownTableMode, ReplyToMode } from "../../config/types.base.js";
+import type {
+  MarkdownTableMode,
+  ReplyToMode,
+} from "../../config/types.base.js";
 import { convertMarkdownTables } from "../../markdown/tables.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { chunkDiscordTextWithMode } from "../chunk.js";
-import { sendMessageDiscord, sendVoiceMessageDiscord, sendWebhookMessageDiscord } from "../send.js";
+import {
+  sendMessageDiscord,
+  sendVoiceMessageDiscord,
+  sendWebhookMessageDiscord,
+} from "../send.js";
 
 export type DiscordThreadBindingLookupRecord = {
   accountId: string;
@@ -19,8 +26,14 @@ export type DiscordThreadBindingLookupRecord = {
 };
 
 export type DiscordThreadBindingLookup = {
-  listBySessionKey: (targetSessionKey: string) => DiscordThreadBindingLookupRecord[];
-  touchThread?: (params: { threadId: string; at?: number; persist?: boolean }) => unknown;
+  listBySessionKey: (
+    targetSessionKey: string,
+  ) => DiscordThreadBindingLookupRecord[];
+  touchThread?: (params: {
+    threadId: string;
+    at?: number;
+    persist?: boolean;
+  }) => unknown;
 };
 
 function resolveTargetChannelId(target: string): string | undefined {
@@ -51,7 +64,9 @@ function resolveBoundThreadBinding(params: {
   return bindings.find((entry) => entry.threadId === targetChannelId);
 }
 
-function resolveBindingPersona(binding: DiscordThreadBindingLookupRecord | undefined): {
+function resolveBindingPersona(
+  binding: DiscordThreadBindingLookupRecord | undefined,
+): {
   username?: string;
   avatarUrl?: string;
 } {
@@ -176,7 +191,8 @@ export async function deliverDiscordReply(params: {
   const persona = resolveBindingPersona(binding);
   let deliveredAny = false;
   for (const payload of params.replies) {
-    const mediaList = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
+    const mediaList =
+      payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
     const rawText = payload.text ?? "";
     const tableMode = params.tableMode ?? "code";
     const text = convertMarkdownTables(rawText, tableMode);

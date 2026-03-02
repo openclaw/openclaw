@@ -45,9 +45,13 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
       if (!account.channelAccessToken) {
         throw new Error("LINE channel access token not configured");
       }
-      await line.pushMessageLine(id, "OpenClaw: your access has been approved.", {
-        channelAccessToken: account.channelAccessToken,
-      });
+      await line.pushMessageLine(
+        id,
+        "OpenClaw: your access has been approved.",
+        {
+          channelAccessToken: account.channelAccessToken,
+        },
+      );
     },
   },
   capabilities: {
@@ -61,10 +65,15 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
   reload: { configPrefixes: ["channels.line"] },
   configSchema: buildChannelConfigSchema(LineConfigSchema),
   config: {
-    listAccountIds: (cfg) => getLineRuntime().channel.line.listLineAccountIds(cfg),
+    listAccountIds: (cfg) =>
+      getLineRuntime().channel.line.listLineAccountIds(cfg),
     resolveAccount: (cfg, accountId) =>
-      getLineRuntime().channel.line.resolveLineAccount({ cfg, accountId: accountId ?? undefined }),
-    defaultAccountId: (cfg) => getLineRuntime().channel.line.resolveDefaultLineAccountId(cfg),
+      getLineRuntime().channel.line.resolveLineAccount({
+        cfg,
+        accountId: accountId ?? undefined,
+      }),
+    defaultAccountId: (cfg) =>
+      getLineRuntime().channel.line.resolveDefaultLineAccountId(cfg),
     setAccountEnabled: ({ cfg, accountId, enabled }) => {
       const lineConfig = (cfg.channels?.line ?? {}) as LineConfig;
       if (accountId === DEFAULT_ACCOUNT_ID) {
@@ -123,18 +132,24 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
       };
     },
     isConfigured: (account) =>
-      Boolean(account.channelAccessToken?.trim() && account.channelSecret?.trim()),
+      Boolean(
+        account.channelAccessToken?.trim() && account.channelSecret?.trim(),
+      ),
     describeAccount: (account) => ({
       accountId: account.accountId,
       name: account.name,
       enabled: account.enabled,
-      configured: Boolean(account.channelAccessToken?.trim() && account.channelSecret?.trim()),
+      configured: Boolean(
+        account.channelAccessToken?.trim() && account.channelSecret?.trim(),
+      ),
       tokenSource: account.tokenSource ?? undefined,
     }),
     resolveAllowFrom: ({ cfg, accountId }) =>
       (
-        getLineRuntime().channel.line.resolveLineAccount({ cfg, accountId: accountId ?? undefined })
-          .config.allowFrom ?? []
+        getLineRuntime().channel.line.resolveLineAccount({
+          cfg,
+          accountId: accountId ?? undefined,
+        }).config.allowFrom ?? []
       ).map((entry) => String(entry)),
     formatAllowFrom: ({ allowFrom }) =>
       allowFrom
@@ -147,9 +162,12 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
   },
   security: {
     resolveDmPolicy: ({ cfg, accountId, account }) => {
-      const resolvedAccountId = accountId ?? account.accountId ?? DEFAULT_ACCOUNT_ID;
+      const resolvedAccountId =
+        accountId ?? account.accountId ?? DEFAULT_ACCOUNT_ID;
       const useAccountPath = Boolean(
-        (cfg.channels?.line as LineConfig | undefined)?.accounts?.[resolvedAccountId],
+        (cfg.channels?.line as LineConfig | undefined)?.accounts?.[
+          resolvedAccountId
+        ],
       );
       const basePath = useAccountPath
         ? `channels.line.accounts.${resolvedAccountId}.`
@@ -198,7 +216,9 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
       if (!trimmed) {
         return undefined;
       }
-      return trimmed.replace(/^line:(group|room|user):/i, "").replace(/^line:/i, "");
+      return trimmed
+        .replace(/^line:(group|room|user):/i, "")
+        .replace(/^line:/i, "");
     },
     targetResolver: {
       looksLikeId: (id) => {
@@ -264,10 +284,18 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
       if (typedInput.useEnv && accountId !== DEFAULT_ACCOUNT_ID) {
         return "LINE_CHANNEL_ACCESS_TOKEN can only be used for the default account.";
       }
-      if (!typedInput.useEnv && !typedInput.channelAccessToken && !typedInput.tokenFile) {
+      if (
+        !typedInput.useEnv &&
+        !typedInput.channelAccessToken &&
+        !typedInput.tokenFile
+      ) {
         return "LINE requires channelAccessToken or --token-file (or --use-env).";
       }
-      if (!typedInput.useEnv && !typedInput.channelSecret && !typedInput.secretFile) {
+      if (
+        !typedInput.useEnv &&
+        !typedInput.channelSecret &&
+        !typedInput.secretFile
+      ) {
         return "LINE requires channelSecret or --secret-file (or --use-env).";
       }
       return null;
@@ -343,33 +371,43 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
   },
   outbound: {
     deliveryMode: "direct",
-    chunker: (text, limit) => getLineRuntime().channel.text.chunkMarkdownText(text, limit),
+    chunker: (text, limit) =>
+      getLineRuntime().channel.text.chunkMarkdownText(text, limit),
     textChunkLimit: 5000, // LINE allows up to 5000 characters per text message
     sendPayload: async ({ to, payload, accountId, cfg }) => {
       const runtime = getLineRuntime();
-      const lineData = (payload.channelData?.line as LineChannelData | undefined) ?? {};
+      const lineData =
+        (payload.channelData?.line as LineChannelData | undefined) ?? {};
       const sendText = runtime.channel.line.pushMessageLine;
       const sendBatch = runtime.channel.line.pushMessagesLine;
       const sendFlex = runtime.channel.line.pushFlexMessage;
       const sendTemplate = runtime.channel.line.pushTemplateMessage;
       const sendLocation = runtime.channel.line.pushLocationMessage;
-      const sendQuickReplies = runtime.channel.line.pushTextMessageWithQuickReplies;
-      const buildTemplate = runtime.channel.line.buildTemplateMessageFromPayload;
+      const sendQuickReplies =
+        runtime.channel.line.pushTextMessageWithQuickReplies;
+      const buildTemplate =
+        runtime.channel.line.buildTemplateMessageFromPayload;
       const createQuickReplyItems = runtime.channel.line.createQuickReplyItems;
 
       let lastResult: { messageId: string; chatId: string } | null = null;
       const quickReplies = lineData.quickReplies ?? [];
       const hasQuickReplies = quickReplies.length > 0;
-      const quickReply = hasQuickReplies ? createQuickReplyItems(quickReplies) : undefined;
+      const quickReply = hasQuickReplies
+        ? createQuickReplyItems(quickReplies)
+        : undefined;
 
       // oxlint-disable-next-line typescript/no-explicit-any
-      const sendMessageBatch = async (messages: Array<Record<string, unknown>>) => {
+      const sendMessageBatch = async (
+        messages: Array<Record<string, unknown>>,
+      ) => {
         if (messages.length === 0) {
           return;
         }
         for (let i = 0; i < messages.length; i += 5) {
           // LINE SDK expects Message[] but we build dynamically
-          const batch = messages.slice(i, i + 5) as unknown as Parameters<typeof sendBatch>[1];
+          const batch = messages.slice(i, i + 5) as unknown as Parameters<
+            typeof sendBatch
+          >[1];
           const result = await sendBatch(to, batch, {
             verbose: false,
             accountId: accountId ?? undefined,
@@ -383,24 +421,38 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
         : { text: "", flexMessages: [] };
 
       const chunkLimit =
-        runtime.channel.text.resolveTextChunkLimit?.(cfg, "line", accountId ?? undefined, {
-          fallbackLimit: 5000,
-        }) ?? 5000;
+        runtime.channel.text.resolveTextChunkLimit?.(
+          cfg,
+          "line",
+          accountId ?? undefined,
+          {
+            fallbackLimit: 5000,
+          },
+        ) ?? 5000;
 
       const chunks = processed.text
         ? runtime.channel.text.chunkMarkdownText(processed.text, chunkLimit)
         : [];
-      const mediaUrls = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
-      const shouldSendQuickRepliesInline = chunks.length === 0 && hasQuickReplies;
+      const mediaUrls =
+        payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
+      const shouldSendQuickRepliesInline =
+        chunks.length === 0 && hasQuickReplies;
 
       if (!shouldSendQuickRepliesInline) {
         if (lineData.flexMessage) {
           // LINE SDK expects FlexContainer but we receive contents as unknown
-          const flexContents = lineData.flexMessage.contents as Parameters<typeof sendFlex>[2];
-          lastResult = await sendFlex(to, lineData.flexMessage.altText, flexContents, {
-            verbose: false,
-            accountId: accountId ?? undefined,
-          });
+          const flexContents = lineData.flexMessage.contents as Parameters<
+            typeof sendFlex
+          >[2];
+          lastResult = await sendFlex(
+            to,
+            lineData.flexMessage.altText,
+            flexContents,
+            {
+              verbose: false,
+              accountId: accountId ?? undefined,
+            },
+          );
         }
 
         if (lineData.templateMessage) {
@@ -422,7 +474,9 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
 
         for (const flexMsg of processed.flexMessages) {
           // LINE SDK expects FlexContainer but we receive contents as unknown
-          const flexContents = flexMsg.contents as Parameters<typeof sendFlex>[2];
+          const flexContents = flexMsg.contents as Parameters<
+            typeof sendFlex
+          >[2];
           lastResult = await sendFlex(to, flexMsg.altText, flexContents, {
             verbose: false,
             accountId: accountId ?? undefined,
@@ -431,7 +485,11 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
       }
 
       const sendMediaAfterText = !(hasQuickReplies && chunks.length > 0);
-      if (mediaUrls.length > 0 && !shouldSendQuickRepliesInline && !sendMediaAfterText) {
+      if (
+        mediaUrls.length > 0 &&
+        !shouldSendQuickRepliesInline &&
+        !sendMediaAfterText
+      ) {
         for (const url of mediaUrls) {
           lastResult = await runtime.channel.line.sendMessageLine(to, "", {
             verbose: false,
@@ -508,7 +566,11 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
         }
       }
 
-      if (mediaUrls.length > 0 && !shouldSendQuickRepliesInline && sendMediaAfterText) {
+      if (
+        mediaUrls.length > 0 &&
+        !shouldSendQuickRepliesInline &&
+        sendMediaAfterText
+      ) {
         for (const url of mediaUrls) {
           lastResult = await runtime.channel.line.sendMessageLine(to, "", {
             verbose: false,
@@ -596,9 +658,13 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
       }
       return issues;
     },
-    buildChannelSummary: ({ snapshot }) => buildTokenChannelStatusSummary(snapshot),
+    buildChannelSummary: ({ snapshot }) =>
+      buildTokenChannelStatusSummary(snapshot),
     probeAccount: async ({ account, timeoutMs }) =>
-      getLineRuntime().channel.line.probeLineBot(account.channelAccessToken, timeoutMs),
+      getLineRuntime().channel.line.probeLineBot(
+        account.channelAccessToken,
+        timeoutMs,
+      ),
     buildAccountSnapshot: ({ account, runtime, probe }) => {
       const configured = Boolean(
         account.channelAccessToken?.trim() && account.channelSecret?.trim(),
@@ -638,18 +704,25 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
 
       let lineBotLabel = "";
       try {
-        const probe = await getLineRuntime().channel.line.probeLineBot(token, 2500);
+        const probe = await getLineRuntime().channel.line.probeLineBot(
+          token,
+          2500,
+        );
         const displayName = probe.ok ? probe.bot?.displayName?.trim() : null;
         if (displayName) {
           lineBotLabel = ` (${displayName})`;
         }
       } catch (err) {
         if (getLineRuntime().logging.shouldLogVerbose()) {
-          ctx.log?.debug?.(`[${account.accountId}] bot probe failed: ${String(err)}`);
+          ctx.log?.debug?.(
+            `[${account.accountId}] bot probe failed: ${String(err)}`,
+          );
         }
       }
 
-      ctx.log?.info(`[${account.accountId}] starting LINE provider${lineBotLabel}`);
+      ctx.log?.info(
+        `[${account.accountId}] starting LINE provider${lineBotLabel}`,
+      );
 
       const monitor = await getLineRuntime().channel.line.monitorLineProvider({
         channelAccessToken: token,

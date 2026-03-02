@@ -3,13 +3,22 @@ import {
   createBrowserControlContext,
   startBrowserControlServiceFromConfig,
 } from "../../browser/control-service.js";
-import { applyBrowserProxyPaths, persistBrowserProxyFiles } from "../../browser/proxy-files.js";
+import {
+  applyBrowserProxyPaths,
+  persistBrowserProxyFiles,
+} from "../../browser/proxy-files.js";
 import { createBrowserRouteDispatcher } from "../../browser/routes/dispatcher.js";
 import { loadConfig } from "../../config/config.js";
-import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "../node-command-policy.js";
+import {
+  isNodeCommandAllowed,
+  resolveNodeCommandAllowlist,
+} from "../node-command-policy.js";
 import type { NodeSession } from "../node-registry.js";
 import { ErrorCodes, errorShape } from "../protocol/index.js";
-import { respondUnavailableOnNodeInvokeError, safeParseJson } from "./nodes.helpers.js";
+import {
+  respondUnavailableOnNodeInvokeError,
+  safeParseJson,
+} from "./nodes.helpers.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 type BrowserRequestParams = {
@@ -25,7 +34,9 @@ function resolveRequestedProfile(params: {
   body?: unknown;
 }): string | undefined {
   const queryProfile =
-    typeof params.query?.profile === "string" ? params.query.profile.trim() : undefined;
+    typeof params.query?.profile === "string"
+      ? params.query.profile.trim()
+      : undefined;
   if (queryProfile) {
     return queryProfile;
   }
@@ -63,7 +74,10 @@ function normalizeNodeKey(value: string) {
     .replace(/[^a-z0-9]+/g, "");
 }
 
-function resolveBrowserNode(nodes: NodeSession[], query: string): NodeSession | null {
+function resolveBrowserNode(
+  nodes: NodeSession[],
+  query: string,
+): NodeSession | null {
   const q = query.trim();
   if (!q) {
     return null;
@@ -142,9 +156,11 @@ function applyProxyPaths(result: unknown, mapping: Map<string, string>) {
 export const browserHandlers: GatewayRequestHandlers = {
   "browser.request": async ({ params, respond, context }) => {
     const typed = params as BrowserRequestParams;
-    const methodRaw = typeof typed.method === "string" ? typed.method.trim().toUpperCase() : "";
+    const methodRaw =
+      typeof typed.method === "string" ? typed.method.trim().toUpperCase() : "";
     const path = typeof typed.path === "string" ? typed.path.trim() : "";
-    const query = typed.query && typeof typed.query === "object" ? typed.query : undefined;
+    const query =
+      typed.query && typeof typed.query === "object" ? typed.query : undefined;
     const body = typed.body;
     const timeoutMs =
       typeof typed.timeoutMs === "number" && Number.isFinite(typed.timeoutMs)
@@ -163,7 +179,10 @@ export const browserHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "method must be GET, POST, or DELETE"),
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "method must be GET, POST, or DELETE",
+        ),
       );
       return;
     }
@@ -176,7 +195,11 @@ export const browserHandlers: GatewayRequestHandlers = {
         nodes: context.nodeRegistry.listConnected(),
       });
     } catch (err) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, String(err)),
+      );
       return;
     }
 
@@ -218,10 +241,19 @@ export const browserHandlers: GatewayRequestHandlers = {
       if (!respondUnavailableOnNodeInvokeError(respond, res)) {
         return;
       }
-      const payload = res.payloadJSON ? safeParseJson(res.payloadJSON) : res.payload;
-      const proxy = payload && typeof payload === "object" ? (payload as BrowserProxyResult) : null;
+      const payload = res.payloadJSON
+        ? safeParseJson(res.payloadJSON)
+        : res.payload;
+      const proxy =
+        payload && typeof payload === "object"
+          ? (payload as BrowserProxyResult)
+          : null;
       if (!proxy || !("result" in proxy)) {
-        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "browser proxy failed"));
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.UNAVAILABLE, "browser proxy failed"),
+        );
         return;
       }
       const mapping = await persistProxyFiles(proxy.files);
@@ -232,7 +264,11 @@ export const browserHandlers: GatewayRequestHandlers = {
 
     const ready = await startBrowserControlServiceFromConfig();
     if (!ready) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "browser control is disabled"));
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, "browser control is disabled"),
+      );
       return;
     }
 
@@ -240,7 +276,11 @@ export const browserHandlers: GatewayRequestHandlers = {
     try {
       dispatcher = createBrowserRouteDispatcher(createBrowserControlContext());
     } catch (err) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, String(err)),
+      );
       return;
     }
 
@@ -256,8 +296,15 @@ export const browserHandlers: GatewayRequestHandlers = {
         result.body && typeof result.body === "object" && "error" in result.body
           ? String((result.body as { error?: unknown }).error)
           : `browser request failed (${result.status})`;
-      const code = result.status >= 500 ? ErrorCodes.UNAVAILABLE : ErrorCodes.INVALID_REQUEST;
-      respond(false, undefined, errorShape(code, message, { details: result.body }));
+      const code =
+        result.status >= 500
+          ? ErrorCodes.UNAVAILABLE
+          : ErrorCodes.INVALID_REQUEST;
+      respond(
+        false,
+        undefined,
+        errorShape(code, message, { details: result.body }),
+      );
       return;
     }
 

@@ -1,4 +1,5 @@
-export type UpdateAvailable = import("../../../src/infra/update-startup.js").UpdateAvailable;
+export type UpdateAvailable =
+  import("../../../src/infra/update-startup.js").UpdateAvailable;
 import type { ConfigUiHints } from "../../../src/shared/config-ui-hints-types.js";
 export type { ConfigUiHints } from "../../../src/shared/config-ui-hints-types.js";
 
@@ -538,7 +539,11 @@ export type CronJobsSortBy = "nextRunAtMs" | "updatedAtMs" | "name";
 export type CronSortDir = "asc" | "desc";
 export type CronRunsStatusFilter = "all" | "ok" | "error" | "skipped";
 export type CronRunsStatusValue = "ok" | "error" | "skipped";
-export type CronDeliveryStatus = "delivered" | "not-delivered" | "unknown" | "not-requested";
+export type CronDeliveryStatus =
+  | "delivered"
+  | "not-delivered"
+  | "unknown"
+  | "not-requested";
 export type CronRunScope = "job" | "all";
 
 export type CronRunLogEntry = {

@@ -12,7 +12,10 @@ import {
   listEnabledTelegramAccounts,
 } from "../../../telegram/accounts.js";
 import { isTelegramInlineButtonsEnabled } from "../../../telegram/inline-buttons.js";
-import type { ChannelMessageActionAdapter, ChannelMessageActionName } from "../types.js";
+import type {
+  ChannelMessageActionAdapter,
+  ChannelMessageActionName,
+} from "../types.js";
 import { createUnionActionGate, listTokenSourcedAccounts } from "./shared.js";
 
 const providerId = "telegram";
@@ -20,13 +23,17 @@ const providerId = "telegram";
 function readTelegramSendParams(params: Record<string, unknown>) {
   const to = readStringParam(params, "to", { required: true });
   const mediaUrl = readStringParam(params, "media", { trim: false });
-  const message = readStringParam(params, "message", { required: !mediaUrl, allowEmpty: true });
+  const message = readStringParam(params, "message", {
+    required: !mediaUrl,
+    allowEmpty: true,
+  });
   const caption = readStringParam(params, "caption", { allowEmpty: true });
   const content = message || caption || "";
   const replyTo = readStringParam(params, "replyTo");
   const threadId = readStringParam(params, "threadId");
   const buttons = params.buttons;
-  const asVoice = typeof params.asVoice === "boolean" ? params.asVoice : undefined;
+  const asVoice =
+    typeof params.asVoice === "boolean" ? params.asVoice : undefined;
   const silent = typeof params.silent === "boolean" ? params.silent : undefined;
   const quoteText = readStringParam(params, "quoteText");
   return {
@@ -42,7 +49,9 @@ function readTelegramSendParams(params: Record<string, unknown>) {
   };
 }
 
-function readTelegramChatIdParam(params: Record<string, unknown>): string | number {
+function readTelegramChatIdParam(
+  params: Record<string, unknown>,
+): string | number {
   return (
     readStringOrNumberParam(params, "chatId") ??
     readStringOrNumberParam(params, "channelId") ??
@@ -107,7 +116,14 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
   extractToolSend: ({ args }) => {
     return extractToolSend(args, "sendMessage");
   },
-  handleAction: async ({ action, params, cfg, accountId, mediaLocalRoots, toolContext }) => {
+  handleAction: async ({
+    action,
+    params,
+    cfg,
+    accountId,
+    mediaLocalRoots,
+    toolContext,
+  }) => {
     if (action === "send") {
       const sendParams = readTelegramSendParams(params);
       return await handleTelegramAction(
@@ -123,9 +139,11 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
 
     if (action === "react") {
       const messageId =
-        readStringOrNumberParam(params, "messageId") ?? toolContext?.currentMessageId;
+        readStringOrNumberParam(params, "messageId") ??
+        toolContext?.currentMessageId;
       const emoji = readStringParam(params, "emoji", { allowEmpty: true });
-      const remove = typeof params.remove === "boolean" ? params.remove : undefined;
+      const remove =
+        typeof params.remove === "boolean" ? params.remove : undefined;
       return await handleTelegramAction(
         {
           action: "react",
@@ -158,7 +176,10 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
     if (action === "edit") {
       const chatId = readTelegramChatIdParam(params);
       const messageId = readTelegramMessageIdParam(params);
-      const message = readStringParam(params, "message", { required: true, allowEmpty: false });
+      const message = readStringParam(params, "message", {
+        required: true,
+        allowEmpty: false,
+      });
       const buttons = params.buttons;
       return await handleTelegramAction(
         {
@@ -176,12 +197,19 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
 
     if (action === "sticker") {
       const to =
-        readStringParam(params, "to") ?? readStringParam(params, "target", { required: true });
+        readStringParam(params, "to") ??
+        readStringParam(params, "target", { required: true });
       // Accept stickerId (array from shared schema) and use first element as fileId
       const stickerIds = readStringArrayParam(params, "stickerId");
-      const fileId = stickerIds?.[0] ?? readStringParam(params, "fileId", { required: true });
-      const replyToMessageId = readNumberParam(params, "replyTo", { integer: true });
-      const messageThreadId = readNumberParam(params, "threadId", { integer: true });
+      const fileId =
+        stickerIds?.[0] ??
+        readStringParam(params, "fileId", { required: true });
+      const replyToMessageId = readNumberParam(params, "replyTo", {
+        integer: true,
+      });
+      const messageThreadId = readNumberParam(params, "threadId", {
+        integer: true,
+      });
       return await handleTelegramAction(
         {
           action: "sendSticker",
@@ -230,6 +258,8 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
       );
     }
 
-    throw new Error(`Action ${action} is not supported for provider ${providerId}.`);
+    throw new Error(
+      `Action ${action} is not supported for provider ${providerId}.`,
+    );
   },
 };

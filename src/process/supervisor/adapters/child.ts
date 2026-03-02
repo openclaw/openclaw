@@ -1,4 +1,7 @@
-import type { ChildProcessWithoutNullStreams, SpawnOptions } from "node:child_process";
+import type {
+  ChildProcessWithoutNullStreams,
+  SpawnOptions,
+} from "node:child_process";
 import { killProcessTree } from "../../kill-tree.js";
 import { spawnWithFallback } from "../../spawn-utils.js";
 import type { ManagedRunStdin, SpawnProcessAdapter } from "../types.js";
@@ -9,11 +12,20 @@ function resolveCommand(command: string): string {
     return command;
   }
   const lower = command.toLowerCase();
-  if (lower.endsWith(".exe") || lower.endsWith(".cmd") || lower.endsWith(".bat")) {
+  if (
+    lower.endsWith(".exe") ||
+    lower.endsWith(".cmd") ||
+    lower.endsWith(".bat")
+  ) {
     return command;
   }
   const basename = lower.split(/[\\/]/).pop() ?? lower;
-  if (basename === "npm" || basename === "pnpm" || basename === "yarn" || basename === "npx") {
+  if (
+    basename === "npm" ||
+    basename === "pnpm" ||
+    basename === "yarn" ||
+    basename === "npx"
+  ) {
     return `${command}.cmd`;
   }
   return command;
@@ -32,7 +44,9 @@ export async function createChildAdapter(params: {
   const resolvedArgv = [...params.argv];
   resolvedArgv[0] = resolveCommand(resolvedArgv[0] ?? "");
 
-  const stdinMode = params.stdinMode ?? (params.input !== undefined ? "pipe-closed" : "inherit");
+  const stdinMode =
+    params.stdinMode ??
+    (params.input !== undefined ? "pipe-closed" : "inherit");
 
   // On Windows, `detached: true` creates a new process group and can prevent
   // stdout/stderr pipes from connecting when running under a Scheduled Task
@@ -117,12 +131,14 @@ export async function createChildAdapter(params: {
   };
 
   const wait = async () =>
-    await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
-      child.once("error", reject);
-      child.once("close", (code, signal) => {
-        resolve({ code, signal });
-      });
-    });
+    await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+      (resolve, reject) => {
+        child.once("error", reject);
+        child.once("close", (code, signal) => {
+          resolve({ code, signal });
+        });
+      },
+    );
 
   const kill = (signal?: NodeJS.Signals) => {
     const pid = child.pid ?? undefined;

@@ -15,7 +15,10 @@ function toRelativePathUnderRoot(params: {
 }): string {
   const rootResolved = path.resolve(params.root);
   const resolvedCandidate = path.resolve(
-    resolveSandboxInputPath(params.candidate, params.options?.cwd ?? params.root),
+    resolveSandboxInputPath(
+      params.candidate,
+      params.options?.cwd ?? params.root,
+    ),
   );
   const relative = path.relative(rootResolved, resolvedCandidate);
   if (relative === "" || relative === ".") {
@@ -23,12 +26,16 @@ function toRelativePathUnderRoot(params: {
       return "";
     }
     const boundary = params.options?.boundaryLabel ?? "workspace root";
-    const suffix = params.options?.includeRootInError ? ` (${rootResolved})` : "";
+    const suffix = params.options?.includeRootInError
+      ? ` (${rootResolved})`
+      : "";
     throw new Error(`Path escapes ${boundary}${suffix}: ${params.candidate}`);
   }
   if (relative.startsWith("..") || path.isAbsolute(relative)) {
     const boundary = params.options?.boundaryLabel ?? "workspace root";
-    const suffix = params.options?.includeRootInError ? ` (${rootResolved})` : "";
+    const suffix = params.options?.includeRootInError
+      ? ` (${rootResolved})`
+      : "";
     throw new Error(`Path escapes ${boundary}${suffix}: ${params.candidate}`);
   }
   return relative;

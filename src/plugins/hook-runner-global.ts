@@ -8,7 +8,10 @@
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createHookRunner, type HookRunner } from "./hooks.js";
 import type { PluginRegistry } from "./registry.js";
-import type { PluginHookGatewayContext, PluginHookGatewayStopEvent } from "./types.js";
+import type {
+  PluginHookGatewayContext,
+  PluginHookGatewayStopEvent,
+} from "./types.js";
 
 const log = createSubsystemLogger("plugins");
 
@@ -55,7 +58,9 @@ export function getGlobalPluginRegistry(): PluginRegistry | null {
 /**
  * Check if any hooks are registered for a given hook name.
  */
-export function hasGlobalHooks(hookName: Parameters<HookRunner["hasHooks"]>[0]): boolean {
+export function hasGlobalHooks(
+  hookName: Parameters<HookRunner["hasHooks"]>[0],
+): boolean {
   return globalHookRunner?.hasHooks(hookName) ?? false;
 }
 

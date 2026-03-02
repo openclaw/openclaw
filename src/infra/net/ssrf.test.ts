@@ -79,11 +79,20 @@ const unsupportedLegacyIpv4Cases = [
   "999.1.1.1",
 ];
 
-const nonIpHostnameCases = ["example.com", "abc.123.example", "1password.com", "0x.example.com"];
+const nonIpHostnameCases = [
+  "example.com",
+  "abc.123.example",
+  "1password.com",
+  "0x.example.com",
+];
 
 describe("ssrf ip classification", () => {
   it("classifies blocked ip literals as private", () => {
-    const blockedCases = [...privateIpCases, ...malformedIpv6Cases, ...unsupportedLegacyIpv4Cases];
+    const blockedCases = [
+      ...privateIpCases,
+      ...malformedIpv6Cases,
+      ...unsupportedLegacyIpv4Cases,
+    ];
     for (const address of blockedCases) {
       expect(isPrivateIpAddress(address)).toBe(true);
     }

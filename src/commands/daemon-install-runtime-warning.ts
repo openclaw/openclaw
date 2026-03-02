@@ -1,4 +1,7 @@
-import { renderSystemNodeWarning, resolveSystemNodeInfo } from "../daemon/runtime-paths.js";
+import {
+  renderSystemNodeWarning,
+  resolveSystemNodeInfo,
+} from "../daemon/runtime-paths.js";
 
 export type DaemonInstallWarnFn = (message: string, title?: string) => void;
 

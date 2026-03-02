@@ -10,7 +10,9 @@ export const FeishuChatSchema = Type.Object({
     description: "Action to run: members | info",
   }),
   chat_id: Type.String({ description: "Chat ID (from URL or event payload)" }),
-  page_size: Type.Optional(Type.Number({ description: "Page size (1-100, default 50)" })),
+  page_size: Type.Optional(
+    Type.Number({ description: "Page size (1-100, default 50)" }),
+  ),
   page_token: Type.Optional(Type.String({ description: "Pagination token" })),
   member_id_type: Type.Optional(
     Type.Unsafe<(typeof MEMBER_ID_TYPE_VALUES)[number]>({

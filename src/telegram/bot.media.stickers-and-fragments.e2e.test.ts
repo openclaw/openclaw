@@ -10,7 +10,8 @@ import {
 } from "./bot.media.test-utils.js";
 
 describe("telegram stickers", () => {
-  const STICKER_TEST_TIMEOUT_MS = process.platform === "win32" ? 30_000 : 20_000;
+  const STICKER_TEST_TIMEOUT_MS =
+    process.platform === "win32" ? 30_000 : 20_000;
 
   beforeEach(() => {
     cacheStickerSpy.mockClear();
@@ -87,7 +88,8 @@ describe("telegram stickers", () => {
         status: 200,
         statusText: "OK",
         headers: { get: () => "image/webp" },
-        arrayBuffer: async () => new Uint8Array([0x52, 0x49, 0x46, 0x46]).buffer,
+        arrayBuffer: async () =>
+          new Uint8Array([0x52, 0x49, 0x46, 0x46]).buffer,
       } as unknown as Response);
 
       await handler({
@@ -195,7 +197,8 @@ describe("telegram text fragments", () => {
     vi.clearAllTimers();
   });
 
-  const TEXT_FRAGMENT_TEST_TIMEOUT_MS = process.platform === "win32" ? 45_000 : 20_000;
+  const TEXT_FRAGMENT_TEST_TIMEOUT_MS =
+    process.platform === "win32" ? 45_000 : 20_000;
   const TEXT_FRAGMENT_FLUSH_MS = TELEGRAM_TEST_TIMINGS.textFragmentGapMs + 80;
 
   it(

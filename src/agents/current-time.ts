@@ -20,16 +20,26 @@ type TimeConfigLike = {
   };
 };
 
-export function resolveCronStyleNow(cfg: TimeConfigLike, nowMs: number): CronStyleNow {
+export function resolveCronStyleNow(
+  cfg: TimeConfigLike,
+  nowMs: number,
+): CronStyleNow {
   const userTimezone = resolveUserTimezone(cfg.agents?.defaults?.userTimezone);
-  const userTimeFormat = resolveUserTimeFormat(cfg.agents?.defaults?.timeFormat);
+  const userTimeFormat = resolveUserTimeFormat(
+    cfg.agents?.defaults?.timeFormat,
+  );
   const formattedTime =
-    formatUserTime(new Date(nowMs), userTimezone, userTimeFormat) ?? new Date(nowMs).toISOString();
+    formatUserTime(new Date(nowMs), userTimezone, userTimeFormat) ??
+    new Date(nowMs).toISOString();
   const timeLine = `Current time: ${formattedTime} (${userTimezone})`;
   return { userTimezone, formattedTime, timeLine };
 }
 
-export function appendCronStyleCurrentTimeLine(text: string, cfg: TimeConfigLike, nowMs: number) {
+export function appendCronStyleCurrentTimeLine(
+  text: string,
+  cfg: TimeConfigLike,
+  nowMs: number,
+) {
   const base = text.trimEnd();
   if (!base || base.includes("Current time:")) {
     return base;

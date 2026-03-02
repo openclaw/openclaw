@@ -4,14 +4,22 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import { buildMentionConfig } from "./mentions.js";
-import { applyGroupGating, type GroupHistoryEntry } from "./monitor/group-gating.js";
-import { buildInboundLine, formatReplyContext } from "./monitor/message-line.js";
+import {
+  applyGroupGating,
+  type GroupHistoryEntry,
+} from "./monitor/group-gating.js";
+import {
+  buildInboundLine,
+  formatReplyContext,
+} from "./monitor/message-line.js";
 
 let sessionDir: string | undefined;
 let sessionStorePath: string;
 
 beforeEach(async () => {
-  sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-group-gating-"));
+  sessionDir = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-group-gating-"),
+  );
   sessionStorePath = path.join(sessionDir, "sessions.json");
   await fs.writeFile(sessionStorePath, "{}");
 });
@@ -33,7 +41,9 @@ const makeConfig = (overrides: Record<string, unknown>) =>
     },
     session: { store: sessionStorePath },
     ...overrides,
-  }) as unknown as ReturnType<typeof import("../../config/config.js").loadConfig>;
+  }) as unknown as ReturnType<
+    typeof import("../../config/config.js").loadConfig
+  >;
 
 function runGroupGating(params: {
   cfg: ReturnType<typeof import("../../config/config.js").loadConfig>;
@@ -128,19 +138,22 @@ describe("applyGroupGating", () => {
   it.each([
     { id: "g-new", command: "/new" },
     { id: "g-status", command: "/status" },
-  ])("bypasses mention gating for owner $command in group chats", ({ id, command }) => {
-    const { result } = runGroupGating({
-      cfg: makeOwnerGroupConfig(),
-      msg: createGroupMessage({
-        id,
-        body: command,
-        senderE164: "+111",
-        senderName: "Owner",
-      }),
-    });
+  ])(
+    "bypasses mention gating for owner $command in group chats",
+    ({ id, command }) => {
+      const { result } = runGroupGating({
+        cfg: makeOwnerGroupConfig(),
+        msg: createGroupMessage({
+          id,
+          body: command,
+          senderE164: "+111",
+          senderName: "Owner",
+        }),
+      });
 
-    expect(result.shouldProcess).toBe(true);
-  });
+      expect(result.shouldProcess).toBe(true);
+    },
+  );
 
   it("does not bypass mention gating for non-owner /new in group chats", () => {
     const cfg = makeConfig({
@@ -163,7 +176,9 @@ describe("applyGroupGating", () => {
     });
 
     expect(result.shouldProcess).toBe(false);
-    expect(groupHistories.get("whatsapp:default:group:123@g.us")?.length).toBe(1);
+    expect(groupHistories.get("whatsapp:default:group:123@g.us")?.length).toBe(
+      1,
+    );
   });
 
   it("uses per-agent mention patterns for group gating (routing + mentionPatterns)", () => {

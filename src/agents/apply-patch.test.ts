@@ -14,7 +14,9 @@ async function withTempDir<T>(fn: (dir: string) => Promise<T>) {
 }
 
 async function withWorkspaceTempDir<T>(fn: (dir: string) => Promise<T>) {
-  const dir = await fs.mkdtemp(path.join(process.cwd(), "openclaw-patch-workspace-"));
+  const dir = await fs.mkdtemp(
+    path.join(process.cwd(), "openclaw-patch-workspace-"),
+  );
   try {
     return await fn(dir);
   } finally {
@@ -35,7 +37,9 @@ async function expectOutsideWriteRejected(params: {
   outsidePath: string;
 }) {
   const patch = buildAddFilePatch(params.patchTargetPath);
-  await expect(applyPatch(patch, { cwd: params.dir })).rejects.toThrow(/Path escapes sandbox root/);
+  await expect(applyPatch(patch, { cwd: params.dir })).rejects.toThrow(
+    /Path escapes sandbox root/,
+  );
   await expect(fs.readFile(params.outsidePath, "utf8")).rejects.toBeDefined();
 }
 
@@ -119,7 +123,10 @@ describe("applyPatch", () => {
 
   it("rejects absolute paths outside cwd by default", async () => {
     await withTempDir(async (dir) => {
-      const escapedPath = path.join(os.tmpdir(), `openclaw-apply-patch-${Date.now()}.txt`);
+      const escapedPath = path.join(
+        os.tmpdir(),
+        `openclaw-apply-patch-${Date.now()}.txt`,
+      );
 
       try {
         await expectOutsideWriteRejected({
@@ -165,7 +172,9 @@ describe("applyPatch", () => {
 +pwned
 *** End Patch`;
 
-      await expect(applyPatch(patch, { cwd: dir })).rejects.toThrow(/Symlink escapes sandbox root/);
+      await expect(applyPatch(patch, { cwd: dir })).rejects.toThrow(
+        /Symlink escapes sandbox root/,
+      );
       const outsideContents = await fs.readFile(outside, "utf8");
       expect(outsideContents).toBe("initial\n");
       await fs.rm(outside, { force: true });
@@ -177,7 +186,10 @@ describe("applyPatch", () => {
       return;
     }
     await withWorkspaceTempDir(async (dir) => {
-      const outsideDir = path.join(path.dirname(dir), `outside-broken-link-${Date.now()}`);
+      const outsideDir = path.join(
+        path.dirname(dir),
+        `outside-broken-link-${Date.now()}`,
+      );
       const outsideFile = path.join(outsideDir, "owned.txt");
       const linkPath = path.join(dir, "jump");
       await fs.mkdir(outsideDir, { recursive: true });
@@ -225,7 +237,9 @@ describe("applyPatch", () => {
 -initial
 +pwned
 *** End Patch`;
-        await expect(applyPatch(patch, { cwd: dir })).rejects.toThrow(/hardlink|sandbox/i);
+        await expect(applyPatch(patch, { cwd: dir })).rejects.toThrow(
+          /hardlink|sandbox/i,
+        );
         const outsideContents = await fs.readFile(outside, "utf8");
         expect(outsideContents).toBe("initial\n");
       } finally {
@@ -261,7 +275,10 @@ describe("applyPatch", () => {
 
   it("rejects delete path traversal via symlink directories by default", async () => {
     await withTempDir(async (dir) => {
-      const outsideDir = path.join(path.dirname(dir), `outside-dir-${process.pid}-${Date.now()}`);
+      const outsideDir = path.join(
+        path.dirname(dir),
+        `outside-dir-${process.pid}-${Date.now()}`,
+      );
       const outsideFile = path.join(outsideDir, "victim.txt");
       await fs.mkdir(outsideDir, { recursive: true });
       await fs.writeFile(outsideFile, "victim\n", "utf8");
@@ -269,7 +286,11 @@ describe("applyPatch", () => {
       const linkDir = path.join(dir, "linkdir");
       // Use 'junction' on Windows — junctions target directories without
       // requiring SeCreateSymbolicLinkPrivilege.
-      await fs.symlink(outsideDir, linkDir, process.platform === "win32" ? "junction" : undefined);
+      await fs.symlink(
+        outsideDir,
+        linkDir,
+        process.platform === "win32" ? "junction" : undefined,
+      );
 
       const patch = `*** Begin Patch
 *** Delete File: linkdir/victim.txt
@@ -302,7 +323,10 @@ describe("applyPatch", () => {
 *** End Patch`;
 
       try {
-        const result = await applyPatch(patch, { cwd: dir, workspaceOnly: false });
+        const result = await applyPatch(patch, {
+          cwd: dir,
+          workspaceOnly: false,
+        });
         expect(result.summary.added.length).toBe(1);
         const contents = await fs.readFile(escapedPath, "utf8");
         expect(contents).toBe("escaped\n");
@@ -314,7 +338,9 @@ describe("applyPatch", () => {
 
   it("allows deleting a symlink itself even if it points outside cwd", async () => {
     await withTempDir(async (dir) => {
-      const outsideDir = await fs.mkdtemp(path.join(path.dirname(dir), "openclaw-patch-outside-"));
+      const outsideDir = await fs.mkdtemp(
+        path.join(path.dirname(dir), "openclaw-patch-outside-"),
+      );
       try {
         const outsideTarget = path.join(outsideDir, "target.txt");
         await fs.writeFile(outsideTarget, "keep\n", "utf8");

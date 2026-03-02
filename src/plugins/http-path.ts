@@ -8,7 +8,9 @@ export function normalizePluginHttpPath(
     if (!fallbackTrimmed) {
       return null;
     }
-    return fallbackTrimmed.startsWith("/") ? fallbackTrimmed : `/${fallbackTrimmed}`;
+    return fallbackTrimmed.startsWith("/")
+      ? fallbackTrimmed
+      : `/${fallbackTrimmed}`;
   }
   return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
 }

@@ -44,7 +44,9 @@ describe("createModelSelectionState parent inheritance", () => {
     });
   }
 
-  async function resolveHeartbeatStoredOverrideState(hasResolvedHeartbeatModelOverride: boolean) {
+  async function resolveHeartbeatStoredOverrideState(
+    hasResolvedHeartbeatModelOverride: boolean,
+  ) {
     const cfg = {} as OpenClawConfig;
     const sessionKey = "agent:main:discord:channel:c1";
     const sessionEntry = makeEntry({
@@ -269,7 +271,12 @@ describe("createModelSelectionState resolveDefaultReasoningLevel", () => {
   it("returns on when catalog model has reasoning true", async () => {
     const { loadModelCatalog } = await import("../../agents/model-catalog.js");
     vi.mocked(loadModelCatalog).mockResolvedValueOnce([
-      { provider: "openrouter", id: "x-ai/grok-4.1-fast", name: "Grok", reasoning: true },
+      {
+        provider: "openrouter",
+        id: "x-ai/grok-4.1-fast",
+        name: "Grok",
+        reasoning: true,
+      },
     ]);
     const state = await createModelSelectionState({
       cfg: {} as OpenClawConfig,

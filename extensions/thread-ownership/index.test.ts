@@ -7,7 +7,9 @@ describe("thread-ownership plugin", () => {
     pluginConfig: {},
     config: {
       agents: {
-        list: [{ id: "test-agent", default: true, identity: { name: "TestBot" } }],
+        list: [
+          { id: "test-agent", default: true, identity: { name: "TestBot" } },
+        ],
       },
     },
     id: "thread-ownership",
@@ -42,8 +44,14 @@ describe("thread-ownership plugin", () => {
     register(api as any);
 
     expect(api.on).toHaveBeenCalledTimes(2);
-    expect(api.on).toHaveBeenCalledWith("message_received", expect.any(Function));
-    expect(api.on).toHaveBeenCalledWith("message_sending", expect.any(Function));
+    expect(api.on).toHaveBeenCalledWith(
+      "message_received",
+      expect.any(Function),
+    );
+    expect(api.on).toHaveBeenCalledWith(
+      "message_sending",
+      expect.any(Function),
+    );
   });
 
   describe("message_sending", () => {
@@ -53,7 +61,11 @@ describe("thread-ownership plugin", () => {
 
     it("allows non-slack channels", async () => {
       const result = await hooks.message_sending(
-        { content: "hello", metadata: { threadTs: "1234.5678", channelId: "C123" }, to: "C123" },
+        {
+          content: "hello",
+          metadata: { threadTs: "1234.5678", channelId: "C123" },
+          to: "C123",
+        },
         { channelId: "discord", conversationId: "C123" },
       );
 
@@ -77,7 +89,11 @@ describe("thread-ownership plugin", () => {
       );
 
       const result = await hooks.message_sending(
-        { content: "hello", metadata: { threadTs: "1234.5678", channelId: "C123" }, to: "C123" },
+        {
+          content: "hello",
+          metadata: { threadTs: "1234.5678", channelId: "C123" },
+          to: "C123",
+        },
         { channelId: "slack", conversationId: "C123" },
       );
 
@@ -97,19 +113,29 @@ describe("thread-ownership plugin", () => {
       );
 
       const result = await hooks.message_sending(
-        { content: "hello", metadata: { threadTs: "1234.5678", channelId: "C123" }, to: "C123" },
+        {
+          content: "hello",
+          metadata: { threadTs: "1234.5678", channelId: "C123" },
+          to: "C123",
+        },
         { channelId: "slack", conversationId: "C123" },
       );
 
       expect(result).toEqual({ cancel: true });
-      expect(api.logger.info).toHaveBeenCalledWith(expect.stringContaining("cancelled send"));
+      expect(api.logger.info).toHaveBeenCalledWith(
+        expect.stringContaining("cancelled send"),
+      );
     });
 
     it("fails open on network error", async () => {
       vi.mocked(globalThis.fetch).mockRejectedValue(new Error("ECONNREFUSED"));
 
       const result = await hooks.message_sending(
-        { content: "hello", metadata: { threadTs: "1234.5678", channelId: "C123" }, to: "C123" },
+        {
+          content: "hello",
+          metadata: { threadTs: "1234.5678", channelId: "C123" },
+          to: "C123",
+        },
         { channelId: "slack", conversationId: "C123" },
       );
 
@@ -128,13 +154,20 @@ describe("thread-ownership plugin", () => {
     it("tracks @-mentions and skips ownership check for mentioned threads", async () => {
       // Simulate receiving a message that @-mentions the agent.
       await hooks.message_received(
-        { content: "Hey @TestBot help me", metadata: { threadTs: "9999.0001", channelId: "C456" } },
+        {
+          content: "Hey @TestBot help me",
+          metadata: { threadTs: "9999.0001", channelId: "C456" },
+        },
         { channelId: "slack", conversationId: "C456" },
       );
 
       // Now send in the same thread -- should skip the ownership HTTP call.
       const result = await hooks.message_sending(
-        { content: "Sure!", metadata: { threadTs: "9999.0001", channelId: "C456" }, to: "C456" },
+        {
+          content: "Sure!",
+          metadata: { threadTs: "9999.0001", channelId: "C456" },
+          to: "C456",
+        },
         { channelId: "slack", conversationId: "C456" },
       );
 
@@ -145,7 +178,10 @@ describe("thread-ownership plugin", () => {
     it("ignores @-mentions on non-slack channels", async () => {
       // Use a unique thread key so module-level state from other tests doesn't interfere.
       await hooks.message_received(
-        { content: "Hey @TestBot", metadata: { threadTs: "7777.0001", channelId: "C999" } },
+        {
+          content: "Hey @TestBot",
+          metadata: { threadTs: "7777.0001", channelId: "C999" },
+        },
         { channelId: "discord", conversationId: "C999" },
       );
 
@@ -155,7 +191,11 @@ describe("thread-ownership plugin", () => {
       );
 
       await hooks.message_sending(
-        { content: "Sure!", metadata: { threadTs: "7777.0001", channelId: "C999" }, to: "C999" },
+        {
+          content: "Sure!",
+          metadata: { threadTs: "7777.0001", channelId: "C999" },
+          to: "C999",
+        },
         { channelId: "slack", conversationId: "C999" },
       );
 
@@ -164,12 +204,19 @@ describe("thread-ownership plugin", () => {
 
     it("tracks bot user ID mentions via <@U999> syntax", async () => {
       await hooks.message_received(
-        { content: "Hey <@U999> help", metadata: { threadTs: "8888.0001", channelId: "C789" } },
+        {
+          content: "Hey <@U999> help",
+          metadata: { threadTs: "8888.0001", channelId: "C789" },
+        },
         { channelId: "slack", conversationId: "C789" },
       );
 
       const result = await hooks.message_sending(
-        { content: "On it!", metadata: { threadTs: "8888.0001", channelId: "C789" }, to: "C789" },
+        {
+          content: "On it!",
+          metadata: { threadTs: "8888.0001", channelId: "C789" },
+          to: "C789",
+        },
         { channelId: "slack", conversationId: "C789" },
       );
 

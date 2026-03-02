@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { looksLikeFeishuId, normalizeFeishuTarget, resolveReceiveIdType } from "./targets.js";
+import {
+  looksLikeFeishuId,
+  normalizeFeishuTarget,
+  resolveReceiveIdType,
+} from "./targets.js";
 
 describe("resolveReceiveIdType", () => {
   it("resolves chat IDs by oc_ prefix", () => {

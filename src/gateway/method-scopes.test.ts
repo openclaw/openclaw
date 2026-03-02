@@ -8,43 +8,59 @@ import { coreGatewayHandlers } from "./server-methods.js";
 
 describe("method scope resolution", () => {
   it("classifies sessions.resolve as read and poll as write", () => {
-    expect(resolveLeastPrivilegeOperatorScopesForMethod("sessions.resolve")).toEqual([
-      "operator.read",
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("sessions.resolve"),
+    ).toEqual(["operator.read"]);
+    expect(resolveLeastPrivilegeOperatorScopesForMethod("poll")).toEqual([
+      "operator.write",
     ]);
-    expect(resolveLeastPrivilegeOperatorScopesForMethod("poll")).toEqual(["operator.write"]);
   });
 
   it("returns empty scopes for unknown methods", () => {
-    expect(resolveLeastPrivilegeOperatorScopesForMethod("totally.unknown.method")).toEqual([]);
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("totally.unknown.method"),
+    ).toEqual([]);
   });
 });
 
 describe("operator scope authorization", () => {
   it("allows read methods with operator.read or operator.write", () => {
-    expect(authorizeOperatorScopesForMethod("health", ["operator.read"])).toEqual({
+    expect(
+      authorizeOperatorScopesForMethod("health", ["operator.read"]),
+    ).toEqual({
       allowed: true,
     });
-    expect(authorizeOperatorScopesForMethod("health", ["operator.write"])).toEqual({
+    expect(
+      authorizeOperatorScopesForMethod("health", ["operator.write"]),
+    ).toEqual({
       allowed: true,
     });
   });
 
   it("requires operator.write for write methods", () => {
-    expect(authorizeOperatorScopesForMethod("send", ["operator.read"])).toEqual({
-      allowed: false,
-      missingScope: "operator.write",
-    });
+    expect(authorizeOperatorScopesForMethod("send", ["operator.read"])).toEqual(
+      {
+        allowed: false,
+        missingScope: "operator.write",
+      },
+    );
   });
 
   it("requires approvals scope for approval methods", () => {
-    expect(authorizeOperatorScopesForMethod("exec.approval.resolve", ["operator.write"])).toEqual({
+    expect(
+      authorizeOperatorScopesForMethod("exec.approval.resolve", [
+        "operator.write",
+      ]),
+    ).toEqual({
       allowed: false,
       missingScope: "operator.approvals",
     });
   });
 
   it("requires admin for unknown methods", () => {
-    expect(authorizeOperatorScopesForMethod("unknown.method", ["operator.read"])).toEqual({
+    expect(
+      authorizeOperatorScopesForMethod("unknown.method", ["operator.read"]),
+    ).toEqual({
       allowed: false,
       missingScope: "operator.admin",
     });

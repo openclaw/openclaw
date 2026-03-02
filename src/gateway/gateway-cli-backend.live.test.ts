@@ -13,14 +13,25 @@ import { renderCatNoncePngBase64 } from "./live-image-probe.js";
 import { startGatewayServer } from "./server.js";
 import { extractPayloadText } from "./test-helpers.agent-results.js";
 
-const LIVE = isTruthyEnvValue(process.env.LIVE) || isTruthyEnvValue(process.env.OPENCLAW_LIVE_TEST);
+const LIVE =
+  isTruthyEnvValue(process.env.LIVE) ||
+  isTruthyEnvValue(process.env.OPENCLAW_LIVE_TEST);
 const CLI_LIVE = isTruthyEnvValue(process.env.OPENCLAW_LIVE_CLI_BACKEND);
-const CLI_IMAGE = isTruthyEnvValue(process.env.OPENCLAW_LIVE_CLI_BACKEND_IMAGE_PROBE);
-const CLI_RESUME = isTruthyEnvValue(process.env.OPENCLAW_LIVE_CLI_BACKEND_RESUME_PROBE);
+const CLI_IMAGE = isTruthyEnvValue(
+  process.env.OPENCLAW_LIVE_CLI_BACKEND_IMAGE_PROBE,
+);
+const CLI_RESUME = isTruthyEnvValue(
+  process.env.OPENCLAW_LIVE_CLI_BACKEND_RESUME_PROBE,
+);
 const describeLive = LIVE && CLI_LIVE ? describe : describe.skip;
 
 const DEFAULT_MODEL = "claude-cli/claude-sonnet-4-6";
-const DEFAULT_CLAUDE_ARGS = ["-p", "--output-format", "json", "--dangerously-skip-permissions"];
+const DEFAULT_CLAUDE_ARGS = [
+  "-p",
+  "--output-format",
+  "json",
+  "--dangerously-skip-permissions",
+];
 const DEFAULT_CODEX_ARGS = [
   "exec",
   "--json",
@@ -78,13 +89,19 @@ function editDistance(a: string, b: string): number {
   return prev[bLen] ?? Number.POSITIVE_INFINITY;
 }
 
-function parseJsonStringArray(name: string, raw?: string): string[] | undefined {
+function parseJsonStringArray(
+  name: string,
+  raw?: string,
+): string[] | undefined {
   const trimmed = raw?.trim();
   if (!trimmed) {
     return undefined;
   }
   const parsed = JSON.parse(trimmed);
-  if (!Array.isArray(parsed) || !parsed.every((entry) => typeof entry === "string")) {
+  if (
+    !Array.isArray(parsed) ||
+    !parsed.every((entry) => typeof entry === "string")
+  ) {
     throw new Error(`${name} must be a JSON array of strings.`);
   }
   return parsed;
@@ -98,10 +115,15 @@ function parseImageMode(raw?: string): "list" | "repeat" | undefined {
   if (trimmed === "list" || trimmed === "repeat") {
     return trimmed;
   }
-  throw new Error("OPENCLAW_LIVE_CLI_BACKEND_IMAGE_MODE must be 'list' or 'repeat'.");
+  throw new Error(
+    "OPENCLAW_LIVE_CLI_BACKEND_IMAGE_MODE must be 'list' or 'repeat'.",
+  );
 }
 
-function withMcpConfigOverrides(args: string[], mcpConfigPath: string): string[] {
+function withMcpConfigOverrides(
+  args: string[],
+  mcpConfigPath: string,
+): string[] {
   const next = [...args];
   if (!next.includes("--strict-mcp-config")) {
     next.push("--strict-mcp-config");
@@ -136,7 +158,9 @@ async function connectClient(params: { url: string; token: string }) {
     };
 
     const failWithClose = (code: number, reason: string) =>
-      finish({ error: new Error(`gateway closed during connect (${code}): ${reason}`) });
+      finish({
+        error: new Error(`gateway closed during connect (${code}): ${reason}`),
+      });
 
     const client = new GatewayClient({
       url: params.url,
@@ -181,7 +205,8 @@ describeLive("gateway live (cli backend)", () => {
     const token = `test-${randomUUID()}`;
     process.env.OPENCLAW_GATEWAY_TOKEN = token;
 
-    const rawModel = process.env.OPENCLAW_LIVE_CLI_BACKEND_MODEL ?? DEFAULT_MODEL;
+    const rawModel =
+      process.env.OPENCLAW_LIVE_CLI_BACKEND_MODEL ?? DEFAULT_MODEL;
     const parsed = parseModelRef(rawModel, "claude-cli");
     if (!parsed) {
       throw new Error(
@@ -198,7 +223,9 @@ describeLive("gateway live (cli backend)", () => {
           ? { command: "codex", args: DEFAULT_CODEX_ARGS }
           : null;
 
-    const cliCommand = process.env.OPENCLAW_LIVE_CLI_BACKEND_COMMAND ?? providerDefaults?.command;
+    const cliCommand =
+      process.env.OPENCLAW_LIVE_CLI_BACKEND_COMMAND ??
+      providerDefaults?.command;
     if (!cliCommand) {
       throw new Error(
         `OPENCLAW_LIVE_CLI_BACKEND_COMMAND is required for provider "${providerId}".`,
@@ -210,15 +237,20 @@ describeLive("gateway live (cli backend)", () => {
         process.env.OPENCLAW_LIVE_CLI_BACKEND_ARGS,
       ) ?? providerDefaults?.args;
     if (!baseCliArgs || baseCliArgs.length === 0) {
-      throw new Error(`OPENCLAW_LIVE_CLI_BACKEND_ARGS is required for provider "${providerId}".`);
+      throw new Error(
+        `OPENCLAW_LIVE_CLI_BACKEND_ARGS is required for provider "${providerId}".`,
+      );
     }
     const cliClearEnv =
       parseJsonStringArray(
         "OPENCLAW_LIVE_CLI_BACKEND_CLEAR_ENV",
         process.env.OPENCLAW_LIVE_CLI_BACKEND_CLEAR_ENV,
       ) ?? (providerId === "claude-cli" ? DEFAULT_CLEAR_ENV : []);
-    const cliImageArg = process.env.OPENCLAW_LIVE_CLI_BACKEND_IMAGE_ARG?.trim() || undefined;
-    const cliImageMode = parseImageMode(process.env.OPENCLAW_LIVE_CLI_BACKEND_IMAGE_MODE);
+    const cliImageArg =
+      process.env.OPENCLAW_LIVE_CLI_BACKEND_IMAGE_ARG?.trim() || undefined;
+    const cliImageMode = parseImageMode(
+      process.env.OPENCLAW_LIVE_CLI_BACKEND_IMAGE_MODE,
+    );
 
     if (cliImageMode && !cliImageArg) {
       throw new Error(
@@ -226,12 +258,18 @@ describeLive("gateway live (cli backend)", () => {
       );
     }
 
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-live-cli-"));
-    const disableMcpConfig = process.env.OPENCLAW_LIVE_CLI_BACKEND_DISABLE_MCP_CONFIG !== "0";
+    const tempDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-live-cli-"),
+    );
+    const disableMcpConfig =
+      process.env.OPENCLAW_LIVE_CLI_BACKEND_DISABLE_MCP_CONFIG !== "0";
     let cliArgs = baseCliArgs;
     if (providerId === "claude-cli" && disableMcpConfig) {
       const mcpConfigPath = path.join(tempDir, "claude-mcp.json");
-      await fs.writeFile(mcpConfigPath, `${JSON.stringify({ mcpServers: {} }, null, 2)}\n`);
+      await fs.writeFile(
+        mcpConfigPath,
+        `${JSON.stringify({ mcpServers: {} }, null, 2)}\n`,
+      );
       cliArgs = withMcpConfigOverrides(baseCliArgs, mcpConfigPath);
     }
 
@@ -254,7 +292,9 @@ describeLive("gateway live (cli backend)", () => {
               args: cliArgs,
               clearEnv: cliClearEnv.length > 0 ? cliClearEnv : undefined,
               systemPromptWhen: "never",
-              ...(cliImageArg ? { imageArg: cliImageArg, imageMode: cliImageMode } : {}),
+              ...(cliImageArg
+                ? { imageArg: cliImageArg, imageMode: cliImageMode }
+                : {}),
             },
           },
           sandbox: { mode: "off" },
@@ -360,13 +400,16 @@ describeLive("gateway live (cli backend)", () => {
           { expectFinal: true },
         );
         if (imageProbe?.status !== "ok") {
-          throw new Error(`image probe failed: status=${String(imageProbe?.status)}`);
+          throw new Error(
+            `image probe failed: status=${String(imageProbe?.status)}`,
+          );
         }
         const imageText = extractPayloadText(imageProbe?.result);
         if (!/\bcat\b/i.test(imageText)) {
           throw new Error(`image probe missing 'cat': ${imageText}`);
         }
-        const candidates = imageText.toUpperCase().match(/[A-Z0-9]{6,20}/g) ?? [];
+        const candidates =
+          imageText.toUpperCase().match(/[A-Z0-9]{6,20}/g) ?? [];
         const bestDistance = candidates.reduce((best, cand) => {
           if (Math.abs(cand.length - imageCode.length) > 2) {
             return best;
@@ -374,7 +417,9 @@ describeLive("gateway live (cli backend)", () => {
           return Math.min(best, editDistance(cand, imageCode));
         }, Number.POSITIVE_INFINITY);
         if (!(bestDistance <= 5)) {
-          throw new Error(`image probe missing code (${imageCode}): ${imageText}`);
+          throw new Error(
+            `image probe missing code (${imageCode}): ${imageText}`,
+          );
         }
       }
     } finally {

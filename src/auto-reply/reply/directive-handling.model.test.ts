@@ -104,7 +104,9 @@ describe("/model chat UX", () => {
     });
 
     expect(reply?.text).toContain("Current: fireworks/minimax-m2p5 (selected)");
-    expect(reply?.text).toContain("Active: deepinfra/moonshotai/Kimi-K2.5 (runtime)");
+    expect(reply?.text).toContain(
+      "Active: deepinfra/moonshotai/Kimi-K2.5 (runtime)",
+    );
   });
 
   it("auto-applies closest match for typos", () => {
@@ -139,8 +141,12 @@ describe("/model chat UX", () => {
     });
 
     expect(resolved.modelSelection).toBeUndefined();
-    expect(resolved.errorText).toContain("Numeric model selection is not supported in chat.");
-    expect(resolved.errorText).toContain("Browse: /models or /models <provider>");
+    expect(resolved.errorText).toContain(
+      "Numeric model selection is not supported in chat.",
+    );
+    expect(resolved.errorText).toContain(
+      "Browse: /models or /models <provider>",
+    );
   });
 
   it("treats explicit default /model selection as resettable default", () => {
@@ -190,7 +196,10 @@ describe("/model chat UX", () => {
 });
 
 describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
-  const allowedModelKeys = new Set(["anthropic/claude-opus-4-5", "openai/gpt-4o"]);
+  const allowedModelKeys = new Set([
+    "anthropic/claude-opus-4-5",
+    "openai/gpt-4o",
+  ]);
   const allowedModelCatalog = [
     { provider: "anthropic", id: "claude-opus-4-5", name: "Claude Opus 4.5" },
     { provider: "openai", id: "gpt-4o", name: "GPT-4o" },
@@ -213,7 +222,11 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     const storeOverride = overrides.sessionStore;
     const entry = entryOverride ?? createSessionEntry();
     const store = storeOverride ?? ({ [sessionKey]: entry } as const);
-    const { sessionEntry: _ignoredEntry, sessionStore: _ignoredStore, ...rest } = overrides;
+    const {
+      sessionEntry: _ignoredEntry,
+      sessionStore: _ignoredStore,
+      ...rest
+    } = overrides;
 
     return {
       cfg: baseConfig(),

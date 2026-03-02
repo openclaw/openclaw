@@ -22,9 +22,9 @@ describe("browser control server", () => {
   it("agent contract: snapshot endpoints", async () => {
     const base = await startServerAndBase();
 
-    const snapAria = (await realFetch(`${base}/snapshot?format=aria&limit=1`).then((r) =>
-      r.json(),
-    )) as { ok: boolean; format?: string };
+    const snapAria = (await realFetch(
+      `${base}/snapshot?format=aria&limit=1`,
+    ).then((r) => r.json())) as { ok: boolean; format?: string };
     expect(snapAria.ok).toBe(true);
     expect(snapAria.format).toBe("aria");
     expect(cdpMocks.snapshotAria).toHaveBeenCalledWith({
@@ -32,7 +32,9 @@ describe("browser control server", () => {
       limit: 1,
     });
 
-    const snapAi = (await realFetch(`${base}/snapshot?format=ai`).then((r) => r.json())) as {
+    const snapAi = (await realFetch(`${base}/snapshot?format=ai`).then((r) =>
+      r.json(),
+    )) as {
       ok: boolean;
       format?: string;
     };
@@ -44,9 +46,9 @@ describe("browser control server", () => {
       maxChars: DEFAULT_AI_SNAPSHOT_MAX_CHARS,
     });
 
-    const snapAiZero = (await realFetch(`${base}/snapshot?format=ai&maxChars=0`).then((r) =>
-      r.json(),
-    )) as { ok: boolean; format?: string };
+    const snapAiZero = (await realFetch(
+      `${base}/snapshot?format=ai&maxChars=0`,
+    ).then((r) => r.json())) as { ok: boolean; format?: string };
     expect(snapAiZero.ok).toBe(true);
     expect(snapAiZero.format).toBe("ai");
     const [lastCall] = pwMocks.snapshotAiViaPlaywright.mock.calls.at(-1) ?? [];
@@ -59,9 +61,12 @@ describe("browser control server", () => {
   it("agent contract: navigation + common act commands", async () => {
     const base = await startServerAndBase();
 
-    const nav = await postJson<{ ok: boolean; targetId?: string }>(`${base}/navigate`, {
-      url: "https://example.com",
-    });
+    const nav = await postJson<{ ok: boolean; targetId?: string }>(
+      `${base}/navigate`,
+      {
+        url: "https://example.com",
+      },
+    );
     expect(nav.ok).toBe(true);
     expect(typeof nav.targetId).toBe("string");
     expect(pwMocks.navigateViaPlaywright).toHaveBeenCalledWith(

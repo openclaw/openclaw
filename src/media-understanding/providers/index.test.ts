@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { buildMediaUnderstandingRegistry, getMediaUnderstandingProvider } from "./index.js";
+import {
+  buildMediaUnderstandingRegistry,
+  getMediaUnderstandingProvider,
+} from "./index.js";
 
 describe("media-understanding provider registry", () => {
   it("registers the Mistral provider", () => {

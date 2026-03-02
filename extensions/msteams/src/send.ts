@@ -6,7 +6,10 @@ import {
   formatMSTeamsSendErrorHint,
   formatUnknownError,
 } from "./errors.js";
-import { prepareFileConsentActivity, requiresFileConsent } from "./file-consent-helpers.js";
+import {
+  prepareFileConsentActivity,
+  requiresFileConsent,
+} from "./file-consent-helpers.js";
 import { buildTeamsFileInfoCard } from "./graph-chat.js";
 import {
   getDriveItemProperties,
@@ -14,10 +17,16 @@ import {
   uploadAndShareSharePoint,
 } from "./graph-upload.js";
 import { extractFilename, extractMessageId } from "./media-helpers.js";
-import { buildConversationReference, sendMSTeamsMessages } from "./messenger.js";
+import {
+  buildConversationReference,
+  sendMSTeamsMessages,
+} from "./messenger.js";
 import { buildMSTeamsPollCard } from "./polls.js";
 import { getMSTeamsRuntime } from "./runtime.js";
-import { resolveMSTeamsSendContext, type MSTeamsProactiveContext } from "./send-context.js";
+import {
+  resolveMSTeamsSendContext,
+  type MSTeamsProactiveContext,
+} from "./send-context.js";
 
 export type SendMSTeamsMessageParams = {
   /** Full config (for credentials) */
@@ -99,7 +108,10 @@ export async function sendMessageMSTeams(
     cfg,
     channel: "msteams",
   });
-  const messageText = getMSTeamsRuntime().channel.text.convertMarkdownTables(text ?? "", tableMode);
+  const messageText = getMSTeamsRuntime().channel.text.convertMarkdownTables(
+    text ?? "",
+    tableMode,
+  );
   const ctx = await resolveMSTeamsSendContext({ cfg, to });
   const {
     adapter,
@@ -150,33 +162,51 @@ export async function sendMessageMSTeams(
       })
     ) {
       const { activity, uploadId } = prepareFileConsentActivity({
-        media: { buffer: media.buffer, filename: fileName, contentType: media.contentType },
+        media: {
+          buffer: media.buffer,
+          filename: fileName,
+          contentType: media.contentType,
+        },
         conversationId,
         description: messageText || undefined,
       });
 
-      log.debug?.("sending file consent card", { uploadId, fileName, size: media.buffer.length });
+      log.debug?.("sending file consent card", {
+        uploadId,
+        fileName,
+        size: media.buffer.length,
+      });
 
       const baseRef = buildConversationReference(ref);
       const proactiveRef = { ...baseRef, activityId: undefined };
 
       let messageId = "unknown";
       try {
-        await adapter.continueConversation(appId, proactiveRef, async (turnCtx) => {
-          const response = await turnCtx.sendActivity(activity);
-          messageId = extractMessageId(response) ?? "unknown";
-        });
+        await adapter.continueConversation(
+          appId,
+          proactiveRef,
+          async (turnCtx) => {
+            const response = await turnCtx.sendActivity(activity);
+            messageId = extractMessageId(response) ?? "unknown";
+          },
+        );
       } catch (err) {
         const classification = classifyMSTeamsSendError(err);
         const hint = formatMSTeamsSendErrorHint(classification);
-        const status = classification.statusCode ? ` (HTTP ${classification.statusCode})` : "";
+        const status = classification.statusCode
+          ? ` (HTTP ${classification.statusCode})`
+          : "";
         throw new Error(
           `msteams consent card send failed${status}: ${formatUnknownError(err)}${hint ? ` (${hint})` : ""}`,
           { cause: err },
         );
       }
 
-      log.info("sent file consent card", { conversationId, messageId, uploadId });
+      log.info("sent file consent card", {
+        conversationId,
+        messageId,
+        uploadId,
+      });
 
       return {
         messageId,
@@ -250,10 +280,14 @@ export async function sendMessageMSTeams(
         const proactiveRef = { ...baseRef, activityId: undefined };
 
         let messageId = "unknown";
-        await adapter.continueConversation(appId, proactiveRef, async (turnCtx) => {
-          const response = await turnCtx.sendActivity(activity);
-          messageId = extractMessageId(response) ?? "unknown";
-        });
+        await adapter.continueConversation(
+          appId,
+          proactiveRef,
+          async (turnCtx) => {
+            const response = await turnCtx.sendActivity(activity);
+            messageId = extractMessageId(response) ?? "unknown";
+          },
+        );
 
         log.info("sent native file card", {
           conversationId,
@@ -293,10 +327,14 @@ export async function sendMessageMSTeams(
       const proactiveRef = { ...baseRef, activityId: undefined };
 
       let messageId = "unknown";
-      await adapter.continueConversation(appId, proactiveRef, async (turnCtx) => {
-        const response = await turnCtx.sendActivity(activity);
-        messageId = extractMessageId(response) ?? "unknown";
-      });
+      await adapter.continueConversation(
+        appId,
+        proactiveRef,
+        async (turnCtx) => {
+          const response = await turnCtx.sendActivity(activity);
+          messageId = extractMessageId(response) ?? "unknown";
+        },
+      );
 
       log.info("sent message with OneDrive file link", {
         conversationId,
@@ -308,7 +346,9 @@ export async function sendMessageMSTeams(
     } catch (err) {
       const classification = classifyMSTeamsSendError(err);
       const hint = formatMSTeamsSendErrorHint(classification);
-      const status = classification.statusCode ? ` (HTTP ${classification.statusCode})` : "";
+      const status = classification.statusCode
+        ? ` (HTTP ${classification.statusCode})`
+        : "";
       throw new Error(
         `msteams file send failed${status}: ${formatUnknownError(err)}${hint ? ` (${hint})` : ""}`,
         { cause: err },
@@ -358,7 +398,9 @@ async function sendTextWithMedia(
   } catch (err) {
     const classification = classifyMSTeamsSendError(err);
     const hint = formatMSTeamsSendErrorHint(classification);
-    const status = classification.statusCode ? ` (HTTP ${classification.statusCode})` : "";
+    const status = classification.statusCode
+      ? ` (HTTP ${classification.statusCode})`
+      : "";
     throw new Error(
       `msteams send failed${status}: ${formatUnknownError(err)}${hint ? ` (${hint})` : ""}`,
       { cause: err },
@@ -405,7 +447,9 @@ async function sendProactiveActivity({
   } catch (err) {
     const classification = classifyMSTeamsSendError(err);
     const hint = formatMSTeamsSendErrorHint(classification);
-    const status = classification.statusCode ? ` (HTTP ${classification.statusCode})` : "";
+    const status = classification.statusCode
+      ? ` (HTTP ${classification.statusCode})`
+      : "";
     throw new Error(
       `${errorPrefix} failed${status}: ${formatUnknownError(err)}${hint ? ` (${hint})` : ""}`,
       { cause: err },
@@ -420,10 +464,11 @@ export async function sendPollMSTeams(
   params: SendMSTeamsPollParams,
 ): Promise<SendMSTeamsPollResult> {
   const { cfg, to, question, options, maxSelections } = params;
-  const { adapter, appId, conversationId, ref, log } = await resolveMSTeamsSendContext({
-    cfg,
-    to,
-  });
+  const { adapter, appId, conversationId, ref, log } =
+    await resolveMSTeamsSendContext({
+      cfg,
+      to,
+    });
 
   const pollCard = buildMSTeamsPollCard({
     question,
@@ -472,10 +517,11 @@ export async function sendAdaptiveCardMSTeams(
   params: SendMSTeamsCardParams,
 ): Promise<SendMSTeamsCardResult> {
   const { cfg, to, card } = params;
-  const { adapter, appId, conversationId, ref, log } = await resolveMSTeamsSendContext({
-    cfg,
-    to,
-  });
+  const { adapter, appId, conversationId, ref, log } =
+    await resolveMSTeamsSendContext({
+      cfg,
+      to,
+    });
 
   log.debug?.("sending adaptive card", {
     conversationId,

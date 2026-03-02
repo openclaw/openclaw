@@ -14,7 +14,11 @@ const { logger: noopLogger, makeStorePath } = setupCronServiceSuite({
 
 async function writeJobsStore(storePath: string, jobs: unknown[]) {
   await fs.mkdir(path.dirname(storePath), { recursive: true });
-  await fs.writeFile(storePath, JSON.stringify({ version: 1, jobs }, null, 2), "utf-8");
+  await fs.writeFile(
+    storePath,
+    JSON.stringify({ version: 1, jobs }, null, 2),
+    "utf-8",
+  );
 }
 
 function createCronFromStorePath(storePath: string) {
@@ -31,10 +35,11 @@ function createCronFromStorePath(storePath: string) {
 describe("#16156: cron.list() must not silently advance past-due recurring jobs", () => {
   it("does not skip a cron job when list() is called while the job is past-due", async () => {
     const store = await makeStorePath();
-    const { cron, enqueueSystemEvent, finished } = createStartedCronServiceWithFinishedBarrier({
-      storePath: store.storePath,
-      logger: noopLogger,
-    });
+    const { cron, enqueueSystemEvent, finished } =
+      createStartedCronServiceWithFinishedBarrier({
+        storePath: store.storePath,
+        logger: noopLogger,
+      });
 
     await cron.start();
 
@@ -86,10 +91,11 @@ describe("#16156: cron.list() must not silently advance past-due recurring jobs"
 
   it("does not skip a cron job when status() is called while the job is past-due", async () => {
     const store = await makeStorePath();
-    const { cron, enqueueSystemEvent, finished } = createStartedCronServiceWithFinishedBarrier({
-      storePath: store.storePath,
-      logger: noopLogger,
-    });
+    const { cron, enqueueSystemEvent, finished } =
+      createStartedCronServiceWithFinishedBarrier({
+        storePath: store.storePath,
+        logger: noopLogger,
+      });
 
     await cron.start();
 

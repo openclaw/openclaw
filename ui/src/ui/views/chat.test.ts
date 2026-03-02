@@ -86,7 +86,9 @@ describe("chat view", () => {
       container,
     );
 
-    const indicator = container.querySelector(".compaction-indicator--complete");
+    const indicator = container.querySelector(
+      ".compaction-indicator--complete",
+    );
     expect(indicator).not.toBeNull();
     expect(indicator?.textContent).toContain("Context compacted");
     nowSpy.mockRestore();
@@ -129,9 +131,13 @@ describe("chat view", () => {
       container,
     );
 
-    const indicator = container.querySelector(".compaction-indicator--fallback");
+    const indicator = container.querySelector(
+      ".compaction-indicator--fallback",
+    );
     expect(indicator).not.toBeNull();
-    expect(indicator?.textContent).toContain("Fallback active: deepinfra/moonshotai/Kimi-K2.5");
+    expect(indicator?.textContent).toContain(
+      "Fallback active: deepinfra/moonshotai/Kimi-K2.5",
+    );
     nowSpy.mockRestore();
   });
 
@@ -152,7 +158,9 @@ describe("chat view", () => {
       container,
     );
 
-    expect(container.querySelector(".compaction-indicator--fallback")).toBeNull();
+    expect(
+      container.querySelector(".compaction-indicator--fallback"),
+    ).toBeNull();
     nowSpy.mockRestore();
   });
 
@@ -175,9 +183,13 @@ describe("chat view", () => {
       container,
     );
 
-    const indicator = container.querySelector(".compaction-indicator--fallback-cleared");
+    const indicator = container.querySelector(
+      ".compaction-indicator--fallback-cleared",
+    );
     expect(indicator).not.toBeNull();
-    expect(indicator?.textContent).toContain("Fallback cleared: fireworks/minimax-m2p5");
+    expect(indicator?.textContent).toContain(
+      "Fallback cleared: fireworks/minimax-m2p5",
+    );
     nowSpy.mockRestore();
   });
 
@@ -216,9 +228,9 @@ describe("chat view", () => {
       container,
     );
 
-    const newSessionButton = Array.from(container.querySelectorAll("button")).find(
-      (btn) => btn.textContent?.trim() === "New session",
-    );
+    const newSessionButton = Array.from(
+      container.querySelectorAll("button"),
+    ).find((btn) => btn.textContent?.trim() === "New session");
     expect(newSessionButton).not.toBeUndefined();
     newSessionButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onNewSession).toHaveBeenCalledTimes(1);

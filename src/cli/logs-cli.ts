@@ -2,7 +2,10 @@ import { setTimeout as delay } from "node:timers/promises";
 import type { Command } from "commander";
 import { buildGatewayConnectionDetails } from "../gateway/call.js";
 import { parseLogLine } from "../logging/parse-log-line.js";
-import { formatLocalIsoWithOffset, isValidTimeZone } from "../logging/timestamps.js";
+import {
+  formatLocalIsoWithOffset,
+  isValidTimeZone,
+} from "../logging/timestamps.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { clearActiveProgressLine } from "../terminal/progress-line.js";
 import { createSafeStreamWriter } from "../terminal/stream-writer.js";
@@ -99,7 +102,11 @@ function formatLogLine(
     return raw;
   }
   const label = parsed.subsystem ?? parsed.module ?? "";
-  const time = formatLogTimestamp(parsed.time, opts.pretty ? "pretty" : "plain", opts.localTime);
+  const time = formatLogTimestamp(
+    parsed.time,
+    opts.pretty ? "pretty" : "plain",
+    opts.localTime,
+  );
   const level = parsed.level ?? "";
   const levelLabel = level.padEnd(5).trim();
   const message = parsed.message || parsed.raw;
@@ -151,7 +158,10 @@ function createLogWriters() {
     logLine: (text: string) => writer.writeLine(process.stdout, text),
     errorLine: (text: string) => writer.writeLine(process.stderr, text),
     emitJsonLine: (payload: Record<string, unknown>, toStdErr = false) =>
-      writer.write(toStdErr ? process.stderr : process.stdout, `${JSON.stringify(payload)}\n`),
+      writer.write(
+        toStdErr ? process.stderr : process.stdout,
+        `${JSON.stringify(payload)}\n`,
+      ),
   };
 }
 
@@ -160,7 +170,10 @@ function emitGatewayError(
   opts: LogsCliOptions,
   mode: "json" | "text",
   rich: boolean,
-  emitJsonLine: (payload: Record<string, unknown>, toStdErr?: boolean) => boolean,
+  emitJsonLine: (
+    payload: Record<string, unknown>,
+    toStdErr?: boolean,
+  ) => boolean,
   errorLine: (text: string) => boolean,
 ) {
   const details = buildGatewayConnectionDetails({ url: opts.url });
@@ -224,7 +237,8 @@ export function registerLogsCli(program: Command) {
     const pretty = !jsonMode && Boolean(process.stdout.isTTY) && !opts.plain;
     const rich = isRich() && opts.color !== false;
     const localTime =
-      Boolean(opts.localTime) || (!!process.env.TZ && isValidTimeZone(process.env.TZ));
+      Boolean(opts.localTime) ||
+      (!!process.env.TZ && isValidTimeZone(process.env.TZ));
 
     while (true) {
       let payload: LogsTailPayload;
@@ -233,7 +247,14 @@ export function registerLogsCli(program: Command) {
       try {
         payload = await fetchLogs(opts, cursor, showProgress);
       } catch (err) {
-        emitGatewayError(err, opts, jsonMode ? "json" : "text", rich, emitJsonLine, errorLine);
+        emitGatewayError(
+          err,
+          opts,
+          jsonMode ? "json" : "text",
+          rich,
+          emitJsonLine,
+          errorLine,
+        );
         process.exit(1);
         return;
       }
@@ -285,7 +306,9 @@ export function registerLogsCli(program: Command) {
         }
       } else {
         if (first && payload.file) {
-          const prefix = pretty ? colorize(rich, theme.muted, "Log file:") : "Log file:";
+          const prefix = pretty
+            ? colorize(rich, theme.muted, "Log file:")
+            : "Log file:";
           if (!logLine(`${prefix} ${payload.file}`)) {
             return;
           }

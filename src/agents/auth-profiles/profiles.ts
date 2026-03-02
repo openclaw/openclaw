@@ -57,7 +57,10 @@ export function upsertAuthProfile(params: {
             : {}),
         }
       : params.credential.type === "token"
-        ? { ...params.credential, token: normalizeSecretInput(params.credential.token) }
+        ? {
+            ...params.credential,
+            token: normalizeSecretInput(params.credential.token),
+          }
         : params.credential;
   const store = ensureAuthProfileStore(params.agentDir);
   store.profiles[params.profileId] = credential;
@@ -78,7 +81,10 @@ export async function upsertAuthProfileWithLock(params: {
   });
 }
 
-export function listProfilesForProvider(store: AuthProfileStore, provider: string): string[] {
+export function listProfilesForProvider(
+  store: AuthProfileStore,
+  provider: string,
+): string[] {
   const providerKey = normalizeProviderId(provider);
   return Object.entries(store.profiles)
     .filter(([, cred]) => normalizeProviderId(cred.provider) === providerKey)

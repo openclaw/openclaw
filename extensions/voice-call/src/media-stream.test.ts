@@ -37,10 +37,16 @@ const waitForAbort = (signal: AbortSignal): Promise<void> =>
     signal.addEventListener("abort", () => resolve(), { once: true });
   });
 
-const withTimeout = async <T>(promise: Promise<T>, timeoutMs = 2000): Promise<T> => {
+const withTimeout = async <T>(
+  promise: Promise<T>,
+  timeoutMs = 2000,
+): Promise<T> => {
   let timer: ReturnType<typeof setTimeout> | null = null;
   const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`Timed out after ${timeoutMs}ms`)), timeoutMs);
+    timer = setTimeout(
+      () => reject(new Error(`Timed out after ${timeoutMs}ms`)),
+      timeoutMs,
+    );
   });
 
   try {
@@ -94,7 +100,8 @@ const waitForClose = async (
   code: number;
   reason: string;
 }> => {
-  const [code, reason] = (await withTimeout(once(ws, "close") as Promise<[number, Buffer]>)) ?? [];
+  const [code, reason] =
+    (await withTimeout(once(ws, "close") as Promise<[number, Buffer]>)) ?? [];
   return {
     code,
     reason: Buffer.isBuffer(reason) ? reason.toString() : String(reason || ""),
@@ -164,8 +171,11 @@ describe("MediaStreamHandler TTS queue", () => {
 
 describe("MediaStreamHandler security hardening", () => {
   it("closes idle pre-start connections after timeout", async () => {
-    const shouldAcceptStreamCalls: Array<{ callId: string; streamSid: string; token?: string }> =
-      [];
+    const shouldAcceptStreamCalls: Array<{
+      callId: string;
+      streamSid: string;
+      token?: string;
+    }> = [];
     const handler = new MediaStreamHandler({
       sttProvider: createStubSttProvider(),
       preStartTimeoutMs: 40,

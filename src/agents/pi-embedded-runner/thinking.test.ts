@@ -1,6 +1,9 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { describe, expect, it } from "vitest";
-import { dropThinkingBlocks, isAssistantMessageWithContent } from "./thinking.js";
+import {
+  dropThinkingBlocks,
+  isAssistantMessageWithContent,
+} from "./thinking.js";
 
 describe("isAssistantMessageWithContent", () => {
   it("accepts assistant messages with array content and rejects others", () => {
@@ -9,7 +12,10 @@ describe("isAssistantMessageWithContent", () => {
       content: [{ type: "text", text: "ok" }],
     } as AgentMessage;
     const user = { role: "user", content: "hi" } as AgentMessage;
-    const malformed = { role: "assistant", content: "not-array" } as unknown as AgentMessage;
+    const malformed = {
+      role: "assistant",
+      content: "not-array",
+    } as unknown as AgentMessage;
 
     expect(isAssistantMessageWithContent(assistant)).toBe(true);
     expect(isAssistantMessageWithContent(user)).toBe(false);
@@ -21,7 +27,10 @@ describe("dropThinkingBlocks", () => {
   it("returns the original reference when no thinking blocks are present", () => {
     const messages: AgentMessage[] = [
       { role: "user", content: "hello" } as AgentMessage,
-      { role: "assistant", content: [{ type: "text", text: "world" }] } as AgentMessage,
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "world" }],
+      } as AgentMessage,
     ];
 
     const result = dropThinkingBlocks(messages);

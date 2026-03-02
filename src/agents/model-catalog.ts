@@ -49,7 +49,8 @@ function applyOpenAICodexSparkFallback(models: ModelCatalogEntry[]): void {
 
   const baseModel = models.find(
     (entry) =>
-      entry.provider === CODEX_PROVIDER && entry.id.toLowerCase() === OPENAI_CODEX_GPT53_MODEL_ID,
+      entry.provider === CODEX_PROVIDER &&
+      entry.id.toLowerCase() === OPENAI_CODEX_GPT53_MODEL_ID,
   );
   if (!baseModel) {
     return;
@@ -62,17 +63,22 @@ function applyOpenAICodexSparkFallback(models: ModelCatalogEntry[]): void {
   });
 }
 
-function normalizeConfiguredModelInput(input: unknown): ModelInputType[] | undefined {
+function normalizeConfiguredModelInput(
+  input: unknown,
+): ModelInputType[] | undefined {
   if (!Array.isArray(input)) {
     return undefined;
   }
   const normalized = input.filter(
-    (item): item is ModelInputType => item === "text" || item === "image" || item === "document",
+    (item): item is ModelInputType =>
+      item === "text" || item === "image" || item === "document",
   );
   return normalized.length > 0 ? normalized : undefined;
 }
 
-function readConfiguredOptInProviderModels(config: OpenClawConfig): ModelCatalogEntry[] {
+function readConfiguredOptInProviderModels(
+  config: OpenClawConfig,
+): ModelCatalogEntry[] {
   const providers = config.models?.providers;
   if (!providers || typeof providers !== "object") {
     return [];
@@ -107,12 +113,19 @@ function readConfiguredOptInProviderModels(config: OpenClawConfig): ModelCatalog
       }
       const rawName = (configuredModel as { name?: unknown }).name;
       const name = (typeof rawName === "string" ? rawName : id).trim() || id;
-      const contextWindowRaw = (configuredModel as { contextWindow?: unknown }).contextWindow;
+      const contextWindowRaw = (configuredModel as { contextWindow?: unknown })
+        .contextWindow;
       const contextWindow =
-        typeof contextWindowRaw === "number" && contextWindowRaw > 0 ? contextWindowRaw : undefined;
-      const reasoningRaw = (configuredModel as { reasoning?: unknown }).reasoning;
-      const reasoning = typeof reasoningRaw === "boolean" ? reasoningRaw : undefined;
-      const input = normalizeConfiguredModelInput((configuredModel as { input?: unknown }).input);
+        typeof contextWindowRaw === "number" && contextWindowRaw > 0
+          ? contextWindowRaw
+          : undefined;
+      const reasoningRaw = (configuredModel as { reasoning?: unknown })
+        .reasoning;
+      const reasoning =
+        typeof reasoningRaw === "boolean" ? reasoningRaw : undefined;
+      const input = normalizeConfiguredModelInput(
+        (configuredModel as { input?: unknown }).input,
+      );
       out.push({ id, name, provider, contextWindow, reasoning, input });
     }
   }
@@ -131,7 +144,8 @@ function mergeConfiguredOptInProviderModels(params: {
 
   const seen = new Set(
     params.models.map(
-      (entry) => `${entry.provider.toLowerCase().trim()}::${entry.id.toLowerCase().trim()}`,
+      (entry) =>
+        `${entry.provider.toLowerCase().trim()}::${entry.id.toLowerCase().trim()}`,
     ),
   );
 
@@ -152,7 +166,9 @@ export function resetModelCatalogCacheForTest() {
 }
 
 // Test-only escape hatch: allow mocking the dynamic import to simulate transient failures.
-export function __setModelCatalogImportForTest(loader?: () => Promise<PiSdkModule>) {
+export function __setModelCatalogImportForTest(
+  loader?: () => Promise<PiSdkModule>,
+) {
   importPiSdk = loader ?? defaultImportPiSdk;
 }
 
@@ -213,7 +229,8 @@ export async function loadModelCatalog(params?: {
           typeof entry?.contextWindow === "number" && entry.contextWindow > 0
             ? entry.contextWindow
             : undefined;
-        const reasoning = typeof entry?.reasoning === "boolean" ? entry.reasoning : undefined;
+        const reasoning =
+          typeof entry?.reasoning === "boolean" ? entry.reasoning : undefined;
         const input = Array.isArray(entry?.input) ? entry.input : undefined;
         models.push({ id, name, provider, contextWindow, reasoning, input });
       }
@@ -246,14 +263,18 @@ export async function loadModelCatalog(params?: {
 /**
  * Check if a model supports image input based on its catalog entry.
  */
-export function modelSupportsVision(entry: ModelCatalogEntry | undefined): boolean {
+export function modelSupportsVision(
+  entry: ModelCatalogEntry | undefined,
+): boolean {
   return entry?.input?.includes("image") ?? false;
 }
 
 /**
  * Check if a model supports native document/PDF input based on its catalog entry.
  */
-export function modelSupportsDocument(entry: ModelCatalogEntry | undefined): boolean {
+export function modelSupportsDocument(
+  entry: ModelCatalogEntry | undefined,
+): boolean {
   return entry?.input?.includes("document") ?? false;
 }
 

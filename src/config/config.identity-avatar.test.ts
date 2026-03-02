@@ -9,7 +9,13 @@ describe("identity avatar validation", () => {
       const workspace = path.join(home, "openclaw");
       const res = validateConfigObject({
         agents: {
-          list: [{ id: "main", workspace, identity: { avatar: "avatars/openclaw.png" } }],
+          list: [
+            {
+              id: "main",
+              workspace,
+              identity: { avatar: "avatars/openclaw.png" },
+            },
+          ],
         },
       });
       expect(res.ok).toBe(true);
@@ -21,14 +27,26 @@ describe("identity avatar validation", () => {
       const workspace = path.join(home, "openclaw");
       const httpRes = validateConfigObject({
         agents: {
-          list: [{ id: "main", workspace, identity: { avatar: "https://example.com/avatar.png" } }],
+          list: [
+            {
+              id: "main",
+              workspace,
+              identity: { avatar: "https://example.com/avatar.png" },
+            },
+          ],
         },
       });
       expect(httpRes.ok).toBe(true);
 
       const dataRes = validateConfigObject({
         agents: {
-          list: [{ id: "main", workspace, identity: { avatar: "data:image/png;base64,AAA" } }],
+          list: [
+            {
+              id: "main",
+              workspace,
+              identity: { avatar: "data:image/png;base64,AAA" },
+            },
+          ],
         },
       });
       expect(dataRes.ok).toBe(true);
@@ -40,7 +58,9 @@ describe("identity avatar validation", () => {
       const workspace = path.join(home, "openclaw");
       const res = validateConfigObject({
         agents: {
-          list: [{ id: "main", workspace, identity: { avatar: "../oops.png" } }],
+          list: [
+            { id: "main", workspace, identity: { avatar: "../oops.png" } },
+          ],
         },
       });
       expect(res.ok).toBe(false);

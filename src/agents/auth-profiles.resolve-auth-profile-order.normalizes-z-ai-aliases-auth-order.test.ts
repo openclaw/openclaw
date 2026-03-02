@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { type AuthProfileStore, resolveAuthProfileOrder } from "./auth-profiles.js";
+import {
+  type AuthProfileStore,
+  resolveAuthProfileOrder,
+} from "./auth-profiles.js";
 
-function makeApiKeyStore(provider: string, profileIds: string[]): AuthProfileStore {
+function makeApiKeyStore(
+  provider: string,
+  profileIds: string[],
+): AuthProfileStore {
   return {
     version: 1,
     profiles: Object.fromEntries(

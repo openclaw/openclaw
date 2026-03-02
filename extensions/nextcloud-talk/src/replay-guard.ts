@@ -13,7 +13,10 @@ function sanitizeSegment(value: string): string {
   return trimmed.replace(/[^a-zA-Z0-9_-]/g, "_");
 }
 
-function buildReplayKey(params: { roomToken: string; messageId: string }): string | null {
+function buildReplayKey(params: {
+  roomToken: string;
+  messageId: string;
+}): string | null {
   const roomToken = params.roomToken.trim();
   const messageId = params.messageId.trim();
   if (!roomToken || !messageId) {
@@ -47,7 +50,12 @@ export function createNextcloudTalkReplayGuard(
     memoryMaxSize: options.memoryMaxSize ?? DEFAULT_MEMORY_MAX_SIZE,
     fileMaxEntries: options.fileMaxEntries ?? DEFAULT_FILE_MAX_ENTRIES,
     resolveFilePath: (namespace) =>
-      path.join(stateDir, "nextcloud-talk", "replay-dedupe", `${sanitizeSegment(namespace)}.json`),
+      path.join(
+        stateDir,
+        "nextcloud-talk",
+        "replay-dedupe",
+        `${sanitizeSegment(namespace)}.json`,
+      ),
   });
 
   return {

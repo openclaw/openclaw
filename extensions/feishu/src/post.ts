@@ -31,7 +31,10 @@ function toBoolean(value: unknown): boolean {
   return value === true || value === 1 || value === "true";
 }
 
-function isStyleEnabled(style: Record<string, unknown> | undefined, key: string): boolean {
+function isStyleEnabled(
+  style: Record<string, unknown> | undefined,
+  key: string,
+): boolean {
   if (!style) {
     return false;
   }
@@ -39,7 +42,10 @@ function isStyleEnabled(style: Record<string, unknown> | undefined, key: string)
 }
 
 function wrapInlineCode(text: string): string {
-  const maxRun = Math.max(0, ...(text.match(/`+/g) ?? []).map((run) => run.length));
+  const maxRun = Math.max(
+    0,
+    ...(text.match(/`+/g) ?? []).map((run) => run.length),
+  );
   const fence = "`".repeat(maxRun + 1);
   const needsPadding = text.startsWith("`") || text.endsWith("`");
   const body = needsPadding ? ` ${text} ` : text;
@@ -118,10 +124,9 @@ function renderCodeBlockElement(element: Record<string, unknown>): string {
   const language = sanitizeFenceLanguage(
     toStringOrEmpty(element.language) || toStringOrEmpty(element.lang),
   );
-  const code = (toStringOrEmpty(element.text) || toStringOrEmpty(element.content)).replace(
-    /\r\n/g,
-    "\n",
-  );
+  const code = (
+    toStringOrEmpty(element.text) || toStringOrEmpty(element.content)
+  ).replace(/\r\n/g, "\n");
   const trailingNewline = code.endsWith("\n") ? "" : "\n";
   return `\`\`\`${language}\n${code}${trailingNewline}\`\`\``;
 }
@@ -144,7 +149,8 @@ function renderElement(
       return renderLinkElement(element);
     case "at":
       {
-        const mentioned = toStringOrEmpty(element.open_id) || toStringOrEmpty(element.user_id);
+        const mentioned =
+          toStringOrEmpty(element.open_id) || toStringOrEmpty(element.user_id);
         const normalizedMention = normalizeFeishuExternalKey(mentioned);
         if (normalizedMention) {
           mentionedOpenIds.push(normalizedMention);
@@ -152,14 +158,18 @@ function renderElement(
       }
       return renderMentionElement(element);
     case "img": {
-      const imageKey = normalizeFeishuExternalKey(toStringOrEmpty(element.image_key));
+      const imageKey = normalizeFeishuExternalKey(
+        toStringOrEmpty(element.image_key),
+      );
       if (imageKey) {
         imageKeys.push(imageKey);
       }
       return "![image]";
     }
     case "media": {
-      const fileKey = normalizeFeishuExternalKey(toStringOrEmpty(element.file_key));
+      const fileKey = normalizeFeishuExternalKey(
+        toStringOrEmpty(element.file_key),
+      );
       if (fileKey) {
         const fileName = toStringOrEmpty(element.file_name) || undefined;
         mediaKeys.push({ fileKey, fileName });
@@ -173,7 +183,8 @@ function renderElement(
     case "hr":
       return "\n\n---\n\n";
     case "code": {
-      const code = toStringOrEmpty(element.text) || toStringOrEmpty(element.content);
+      const code =
+        toStringOrEmpty(element.text) || toStringOrEmpty(element.content);
       return code ? wrapInlineCode(code) : "";
     }
     case "code_block":
@@ -253,7 +264,12 @@ export function parsePostContent(content: string): PostParseResult {
       }
       let renderedParagraph = "";
       for (const element of paragraph) {
-        renderedParagraph += renderElement(element, imageKeys, mediaKeys, mentionedOpenIds);
+        renderedParagraph += renderElement(
+          element,
+          imageKeys,
+          mediaKeys,
+          mentionedOpenIds,
+        );
       }
       paragraphs.push(renderedParagraph);
     }
@@ -269,6 +285,11 @@ export function parsePostContent(content: string): PostParseResult {
       mentionedOpenIds,
     };
   } catch {
-    return { textContent: FALLBACK_POST_TEXT, imageKeys: [], mediaKeys: [], mentionedOpenIds: [] };
+    return {
+      textContent: FALLBACK_POST_TEXT,
+      imageKeys: [],
+      mediaKeys: [],
+      mentionedOpenIds: [],
+    };
   }
 }

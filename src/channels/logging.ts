@@ -19,7 +19,9 @@ export function logTypingFailure(params: {
 }): void {
   const target = params.target ? ` target=${params.target}` : "";
   const action = params.action ? ` action=${params.action}` : "";
-  params.log(`${params.channel} typing${action} failed${target}: ${String(params.error)}`);
+  params.log(
+    `${params.channel} typing${action} failed${target}: ${String(params.error)}`,
+  );
 }
 
 export function logAckFailure(params: {
@@ -29,5 +31,7 @@ export function logAckFailure(params: {
   error: unknown;
 }): void {
   const target = params.target ? ` target=${params.target}` : "";
-  params.log(`${params.channel} ack cleanup failed${target}: ${String(params.error)}`);
+  params.log(
+    `${params.channel} ack cleanup failed${target}: ${String(params.error)}`,
+  );
 }

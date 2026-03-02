@@ -51,7 +51,9 @@ const probeGateway = vi.fn(async (opts: { url: string }) => {
         },
         sessions: { count: 0 },
       },
-      presence: [{ mode: "gateway", reason: "self", host: "local", ip: "127.0.0.1" }],
+      presence: [
+        { mode: "gateway", reason: "self", host: "local", ip: "127.0.0.1" },
+      ],
       configSnapshot: {
         path: "/tmp/cfg.json",
         exists: true,
@@ -80,7 +82,9 @@ const probeGateway = vi.fn(async (opts: { url: string }) => {
       },
       sessions: { count: 2 },
     },
-    presence: [{ mode: "gateway", reason: "self", host: "remote", ip: "100.64.0.2" }],
+    presence: [
+      { mode: "gateway", reason: "self", host: "remote", ip: "100.64.0.2" },
+    ],
     configSnapshot: {
       path: "/tmp/remote.json",
       exists: true,
@@ -106,7 +110,8 @@ vi.mock("../infra/tailnet.js", () => ({
 }));
 
 vi.mock("../infra/ssh-tunnel.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../infra/ssh-tunnel.js")>();
+  const actual =
+    await importOriginal<typeof import("../infra/ssh-tunnel.js")>();
   return {
     ...actual,
     startSshPortForward,
@@ -160,7 +165,10 @@ describe("gateway-status command", () => {
     );
 
     expect(runtimeErrors).toHaveLength(0);
-    const parsed = JSON.parse(runtimeLogs.join("\n")) as Record<string, unknown>;
+    const parsed = JSON.parse(runtimeLogs.join("\n")) as Record<
+      string,
+      unknown
+    >;
     expect(parsed.ok).toBe(true);
     expect(parsed.targets).toBeTruthy();
     const targets = parsed.targets as Array<Record<string, unknown>>;
@@ -185,12 +193,17 @@ describe("gateway-status command", () => {
     expect(startSshPortForward).toHaveBeenCalledTimes(1);
     expect(probeGateway).toHaveBeenCalled();
     const tunnelCall = probeGateway.mock.calls.find(
-      (call) => typeof call?.[0]?.url === "string" && call[0].url.startsWith("ws://127.0.0.1:"),
+      (call) =>
+        typeof call?.[0]?.url === "string" &&
+        call[0].url.startsWith("ws://127.0.0.1:"),
     )?.[0] as { auth?: { token?: string } } | undefined;
     expect(tunnelCall?.auth?.token).toBe("rtok");
     expect(sshStop).toHaveBeenCalledTimes(1);
 
-    const parsed = JSON.parse(runtimeLogs.join("\n")) as Record<string, unknown>;
+    const parsed = JSON.parse(runtimeLogs.join("\n")) as Record<
+      string,
+      unknown
+    >;
     const targets = parsed.targets as Array<Record<string, unknown>>;
     expect(targets.some((t) => t.kind === "sshTunnel")).toBe(true);
   });
@@ -229,7 +242,10 @@ describe("gateway-status command", () => {
       loadConfig.mockReturnValueOnce({
         gateway: {
           mode: "remote",
-          remote: { url: "ws://peters-mac-studio-1.sheep-coho.ts.net:18789", token: "rtok" },
+          remote: {
+            url: "ws://peters-mac-studio-1.sheep-coho.ts.net:18789",
+            token: "rtok",
+          },
           auth: { token: "ltok" },
         },
       });
@@ -252,7 +268,9 @@ describe("gateway-status command", () => {
         target: string;
         identity?: string;
       };
-      expect(call.target).toBe("steipete@peters-mac-studio-1.sheep-coho.ts.net:2222");
+      expect(call.target).toBe(
+        "steipete@peters-mac-studio-1.sheep-coho.ts.net:2222",
+      );
       expect(call.identity).toBe("/tmp/id_ed25519");
     });
   });

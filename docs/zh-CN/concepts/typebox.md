@@ -120,7 +120,11 @@ Hello-ok 响应：
       "stateVersion": { "presence": 0, "health": 0 },
       "uptimeMs": 0
     },
-    "policy": { "maxPayload": 1048576, "maxBufferedBytes": 1048576, "tickIntervalMs": 30000 }
+    "policy": {
+      "maxPayload": 1048576,
+      "maxBufferedBytes": 1048576,
+      "tickIntervalMs": 30000
+    }
   }
 }
 ```
@@ -220,7 +224,9 @@ export type SystemEchoResult = Static<typeof SystemEchoResultSchema>;
 在 `src/gateway/protocol/index.ts` 中，导出一个 AJV 验证器：
 
 ```ts
-export const validateSystemEchoParams = ajv.compile<SystemEchoParams>(SystemEchoParamsSchema);
+export const validateSystemEchoParams = ajv.compile<SystemEchoParams>(
+  SystemEchoParamsSchema,
+);
 ```
 
 3. **服务器行为**

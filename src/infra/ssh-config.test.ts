@@ -1,4 +1,8 @@
-import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
+import {
+  spawn,
+  type ChildProcess,
+  type SpawnOptions,
+} from "node:child_process";
 import { EventEmitter } from "node:events";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
@@ -45,7 +49,8 @@ let resolveSshConfig: typeof import("./ssh-config.js").resolveSshConfig;
 
 describe("ssh-config", () => {
   beforeAll(async () => {
-    ({ parseSshConfigOutput, resolveSshConfig } = await import("./ssh-config.js"));
+    ({ parseSshConfigOutput, resolveSshConfig } =
+      await import("./ssh-config.js"));
   });
 
   it("parses ssh -G output", () => {
@@ -59,7 +64,11 @@ describe("ssh-config", () => {
   });
 
   it("resolves ssh config via ssh -G", async () => {
-    const config = await resolveSshConfig({ user: "me", host: "alias", port: 22 });
+    const config = await resolveSshConfig({
+      user: "me",
+      host: "alias",
+      port: 22,
+    });
     expect(config?.user).toBe("steipete");
     expect(config?.host).toBe("peters-mac-studio-1.sheep-coho.ts.net");
     expect(config?.port).toBe(2222);
@@ -70,7 +79,11 @@ describe("ssh-config", () => {
 
   it("returns null when ssh -G fails", async () => {
     spawnMock.mockImplementationOnce(
-      (_command: string, _args: readonly string[], _options: SpawnOptions): ChildProcess => {
+      (
+        _command: string,
+        _args: readonly string[],
+        _options: SpawnOptions,
+      ): ChildProcess => {
         const { child } = createMockSpawnChild();
         process.nextTick(() => {
           child.emit("exit", 1);
@@ -79,7 +92,11 @@ describe("ssh-config", () => {
       },
     );
 
-    const config = await resolveSshConfig({ user: "me", host: "bad-host", port: 22 });
+    const config = await resolveSshConfig({
+      user: "me",
+      host: "bad-host",
+      port: 22,
+    });
     expect(config).toBeNull();
   });
 });

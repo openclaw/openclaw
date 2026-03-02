@@ -1,4 +1,7 @@
-import { buildChannelKeyCandidates, resolveChannelEntryMatch } from "openclaw/plugin-sdk";
+import {
+  buildChannelKeyCandidates,
+  resolveChannelEntryMatch,
+} from "openclaw/plugin-sdk";
 import type { MatrixRoomConfig } from "../../types.js";
 
 export type MatrixRoomConfigResolved = {
@@ -34,9 +37,15 @@ export function resolveMatrixRoomConfig(params: {
     wildcardKey: "*",
   });
   const resolved = matched ?? wildcardEntry;
-  const allowed = resolved ? resolved.enabled !== false && resolved.allow !== false : false;
+  const allowed = resolved
+    ? resolved.enabled !== false && resolved.allow !== false
+    : false;
   const matchKey = matchedKey ?? wildcardKey;
-  const matchSource = matched ? "direct" : wildcardEntry ? "wildcard" : undefined;
+  const matchSource = matched
+    ? "direct"
+    : wildcardEntry
+      ? "wildcard"
+      : undefined;
   return {
     allowed,
     allowlistConfigured,

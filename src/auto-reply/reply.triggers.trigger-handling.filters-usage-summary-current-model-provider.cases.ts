@@ -15,7 +15,9 @@ type GetReplyFromConfig = typeof import("./reply.js").getReplyFromConfig;
 
 const usageMocks = getProviderUsageMocks();
 
-async function readSessionStore(storePath: string): Promise<Record<string, unknown>> {
+async function readSessionStore(
+  storePath: string,
+): Promise<Record<string, unknown>> {
   const raw = await readFile(storePath, "utf-8");
   return JSON.parse(raw) as Record<string, unknown>;
 }
@@ -25,7 +27,9 @@ function pickFirstStoreEntry<T>(store: Record<string, unknown>): T | undefined {
   return entries[0];
 }
 
-function getReplyFromConfigNow(getReplyFromConfig: () => GetReplyFromConfig): GetReplyFromConfig {
+function getReplyFromConfigNow(
+  getReplyFromConfig: () => GetReplyFromConfig,
+): GetReplyFromConfig {
   return getReplyFromConfig();
 }
 
@@ -36,7 +40,9 @@ export function registerTriggerHandlingUsageSummaryCases(params: {
     it("handles status, usage cycles, and auth-profile status details", async () => {
       await withTempHome(async (home) => {
         const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
-        const getReplyFromConfig = getReplyFromConfigNow(params.getReplyFromConfig);
+        const getReplyFromConfig = getReplyFromConfigNow(
+          params.getReplyFromConfig,
+        );
         usageMocks.loadProviderUsageSummary.mockClear();
         usageMocks.loadProviderUsageSummary.mockResolvedValue({
           updatedAt: 0,
@@ -71,7 +77,9 @@ export function registerTriggerHandlingUsageSummaryCases(params: {
           const text = Array.isArray(res) ? res[0]?.text : res?.text;
           expect(text).toContain("Model:");
           expect(text).toContain("OpenClaw");
-          expect(normalizeTestText(text ?? "")).toContain("Usage: Claude 80% left");
+          expect(normalizeTestText(text ?? "")).toContain(
+            "Usage: Claude 80% left",
+          );
           expect(usageMocks.loadProviderUsageSummary).toHaveBeenCalledWith(
             expect.objectContaining({ providers: ["anthropic"] }),
           );
@@ -80,7 +88,10 @@ export function registerTriggerHandlingUsageSummaryCases(params: {
 
         {
           const cfg = makeCfg(home);
-          cfg.session = { ...cfg.session, store: join(home, "usage-cycle.sessions.json") };
+          cfg.session = {
+            ...cfg.session,
+            store: join(home, "usage-cycle.sessions.json"),
+          };
           const usageStorePath = requireSessionStorePath(cfg);
           const r0 = await getReplyFromConfig(
             {
@@ -94,9 +105,9 @@ export function registerTriggerHandlingUsageSummaryCases(params: {
             undefined,
             cfg,
           );
-          expect(String((Array.isArray(r0) ? r0[0]?.text : r0?.text) ?? "")).toContain(
-            "Usage footer: tokens",
-          );
+          expect(
+            String((Array.isArray(r0) ? r0[0]?.text : r0?.text) ?? ""),
+          ).toContain("Usage footer: tokens");
 
           const r1 = await getReplyFromConfig(
             {
@@ -110,9 +121,9 @@ export function registerTriggerHandlingUsageSummaryCases(params: {
             undefined,
             cfg,
           );
-          expect(String((Array.isArray(r1) ? r1[0]?.text : r1?.text) ?? "")).toContain(
-            "Usage footer: full",
-          );
+          expect(
+            String((Array.isArray(r1) ? r1[0]?.text : r1?.text) ?? ""),
+          ).toContain("Usage footer: full");
 
           const r2 = await getReplyFromConfig(
             {
@@ -126,9 +137,9 @@ export function registerTriggerHandlingUsageSummaryCases(params: {
             undefined,
             cfg,
           );
-          expect(String((Array.isArray(r2) ? r2[0]?.text : r2?.text) ?? "")).toContain(
-            "Usage footer: off",
-          );
+          expect(
+            String((Array.isArray(r2) ? r2[0]?.text : r2?.text) ?? ""),
+          ).toContain("Usage footer: off");
 
           const r3 = await getReplyFromConfig(
             {
@@ -142,20 +153,24 @@ export function registerTriggerHandlingUsageSummaryCases(params: {
             undefined,
             cfg,
           );
-          expect(String((Array.isArray(r3) ? r3[0]?.text : r3?.text) ?? "")).toContain(
-            "Usage footer: tokens",
-          );
+          expect(
+            String((Array.isArray(r3) ? r3[0]?.text : r3?.text) ?? ""),
+          ).toContain("Usage footer: tokens");
           const finalStore = await readSessionStore(usageStorePath);
-          expect(pickFirstStoreEntry<{ responseUsage?: string }>(finalStore)?.responseUsage).toBe(
-            "tokens",
-          );
+          expect(
+            pickFirstStoreEntry<{ responseUsage?: string }>(finalStore)
+              ?.responseUsage,
+          ).toBe("tokens");
           expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
         }
 
         {
           runEmbeddedPiAgentMock.mockClear();
           const cfg = makeCfg(home);
-          cfg.session = { ...cfg.session, store: join(home, "auth-profile-status.sessions.json") };
+          cfg.session = {
+            ...cfg.session,
+            store: join(home, "auth-profile-status.sessions.json"),
+          };
           const agentDir = join(home, ".openclaw", "agents", "main", "agent");
           await mkdir(agentDir, { recursive: true });
           await writeFile(

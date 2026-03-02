@@ -7,7 +7,9 @@ export const originalFetch = globalThis.fetch;
 
 export function makeState(
   profile: "remote" | "openclaw",
-): BrowserServerState & { profiles: Map<string, { lastTargetId?: string | null }> } {
+): BrowserServerState & {
+  profiles: Map<string, { lastTargetId?: string | null }>;
+} {
   return {
     // oxlint-disable-next-line typescript/no-explicit-any
     server: null as any,
@@ -49,12 +51,18 @@ export function makeUnexpectedFetchMock() {
   });
 }
 
-export function createRemoteRouteHarness(fetchMock?: (url: unknown) => Promise<Response>) {
+export function createRemoteRouteHarness(
+  fetchMock?: (url: unknown) => Promise<Response>,
+) {
   const activeFetchMock = fetchMock ?? makeUnexpectedFetchMock();
   global.fetch = withFetchPreconnect(activeFetchMock);
   const state = makeState("remote");
   const ctx = createBrowserRouteContext({ getState: () => state });
-  return { state, remote: ctx.forProfile("remote"), fetchMock: activeFetchMock };
+  return {
+    state,
+    remote: ctx.forProfile("remote"),
+    fetchMock: activeFetchMock,
+  };
 }
 
 export function createSequentialPageLister<T>(responses: T[]) {
@@ -98,7 +106,9 @@ function makeManagedTab(id: string, ordinal: number): JsonListEntry {
   };
 }
 
-export function makeManagedTabsWithNew(params?: { newFirst?: boolean }): JsonListEntry[] {
+export function makeManagedTabsWithNew(params?: {
+  newFirst?: boolean;
+}): JsonListEntry[] {
   const oldTabs = Array.from({ length: 8 }, (_, index) =>
     makeManagedTab(`OLD${index + 1}`, index + 1),
   );

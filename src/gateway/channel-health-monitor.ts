@@ -37,7 +37,10 @@ type RestartRecord = {
   restartsThisHour: { at: number }[];
 };
 
-function isManagedAccount(snapshot: { enabled?: boolean; configured?: boolean }): boolean {
+function isManagedAccount(snapshot: {
+  enabled?: boolean;
+  configured?: boolean;
+}): boolean {
   return snapshot.enabled !== false && snapshot.configured !== false;
 }
 
@@ -80,7 +83,9 @@ function isChannelHealthy(
   return true;
 }
 
-export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): ChannelHealthMonitor {
+export function startChannelHealthMonitor(
+  deps: ChannelHealthMonitorDeps,
+): ChannelHealthMonitor {
   const {
     channelManager,
     checkIntervalMs = DEFAULT_CHECK_INTERVAL_MS,
@@ -98,10 +103,13 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
   let checkInFlight = false;
   let timer: ReturnType<typeof setInterval> | null = null;
 
-  const rKey = (channelId: string, accountId: string) => `${channelId}:${accountId}`;
+  const rKey = (channelId: string, accountId: string) =>
+    `${channelId}:${accountId}`;
 
   function pruneOldRestarts(record: RestartRecord, now: number) {
-    record.restartsThisHour = record.restartsThisHour.filter((r) => now - r.at < ONE_HOUR_MS);
+    record.restartsThisHour = record.restartsThisHour.filter(
+      (r) => now - r.at < ONE_HOUR_MS,
+    );
   }
 
   async function runCheck() {
@@ -118,7 +126,9 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
 
       const snapshot = channelManager.getRuntimeSnapshot();
 
-      for (const [channelId, accounts] of Object.entries(snapshot.channelAccounts)) {
+      for (const [channelId, accounts] of Object.entries(
+        snapshot.channelAccounts,
+      )) {
         if (!accounts) {
           continue;
         }
@@ -129,7 +139,9 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
           if (!isManagedAccount(status)) {
             continue;
           }
-          if (channelManager.isManuallyStopped(channelId as ChannelId, accountId)) {
+          if (
+            channelManager.isManuallyStopped(channelId as ChannelId, accountId)
+          ) {
             continue;
           }
           if (isChannelHealthy(status, { now, staleEventThresholdMs })) {
@@ -168,14 +180,25 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
               ? "stale-socket"
               : "stuck";
 
-          log.info?.(`[${channelId}:${accountId}] health-monitor: restarting (reason: ${reason})`);
+          log.info?.(
+            `[${channelId}:${accountId}] health-monitor: restarting (reason: ${reason})`,
+          );
 
           try {
             if (status.running) {
-              await channelManager.stopChannel(channelId as ChannelId, accountId);
+              await channelManager.stopChannel(
+                channelId as ChannelId,
+                accountId,
+              );
             }
-            channelManager.resetRestartAttempts(channelId as ChannelId, accountId);
-            await channelManager.startChannel(channelId as ChannelId, accountId);
+            channelManager.resetRestartAttempts(
+              channelId as ChannelId,
+              accountId,
+            );
+            await channelManager.startChannel(
+              channelId as ChannelId,
+              accountId,
+            );
             record.lastRestartAt = now;
             record.restartsThisHour.push({ at: now });
             restartRecords.set(key, record);

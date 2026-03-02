@@ -42,7 +42,11 @@ export class SearchableSelectList implements Component {
   // Keep a small right margin so we don't risk wrapping due to styling/terminal quirks.
   private static readonly RIGHT_MARGIN_WIDTH = 2;
 
-  constructor(items: SelectItem[], maxVisible: number, theme: SearchableSelectListTheme) {
+  constructor(
+    items: SelectItem[],
+    maxVisible: number,
+    theme: SearchableSelectListTheme,
+  ) {
     this.items = items;
     this.filteredItems = items;
     this.maxVisible = maxVisible;
@@ -125,7 +129,10 @@ export class SearchableSelectList implements Component {
 
     scoredItems.sort(this.compareByScore);
     const fuzzyMatches = fuzzyFilterLower(fuzzyCandidates, q);
-    return [...scoredItems.map((s) => s.item), ...fuzzyMatches.map((entry) => entry.item)];
+    return [
+      ...scoredItems.map((s) => s.item),
+      ...fuzzyMatches.map((entry) => entry.item),
+    ];
   }
 
   private escapeRegex(str: string): string {
@@ -149,7 +156,9 @@ export class SearchableSelectList implements Component {
     return item.label || item.value;
   }
 
-  private splitAnsiParts(text: string): Array<{ text: string; isAnsi: boolean }> {
+  private splitAnsiParts(
+    text: string,
+  ): Array<{ text: string; isAnsi: boolean }> {
     const parts: Array<{ text: string; isAnsi: boolean }> = [];
     ANSI_SGR_REGEX.lastIndex = 0;
     let lastIndex = 0;
@@ -178,7 +187,9 @@ export class SearchableSelectList implements Component {
       return text;
     }
 
-    const uniqueTokens = Array.from(new Set(tokens)).toSorted((a, b) => b.length - a.length);
+    const uniqueTokens = Array.from(new Set(tokens)).toSorted(
+      (a, b) => b.length - a.length,
+    );
     let parts = this.splitAnsiParts(text);
     for (const token of uniqueTokens) {
       const regex = this.getCachedRegex(token);
@@ -189,7 +200,9 @@ export class SearchableSelectList implements Component {
           continue;
         }
         regex.lastIndex = 0;
-        const replaced = part.text.replace(regex, (match) => this.theme.matchHighlight(match));
+        const replaced = part.text.replace(regex, (match) =>
+          this.theme.matchHighlight(match),
+        );
         if (replaced === part.text) {
           nextParts.push(part);
           continue;
@@ -202,7 +215,10 @@ export class SearchableSelectList implements Component {
   }
 
   setSelectedIndex(index: number) {
-    this.selectedIndex = Math.max(0, Math.min(index, this.filteredItems.length - 1));
+    this.selectedIndex = Math.max(
+      0,
+      Math.min(index, this.filteredItems.length - 1),
+    );
   }
 
   invalidate() {
@@ -237,7 +253,10 @@ export class SearchableSelectList implements Component {
         this.filteredItems.length - this.maxVisible,
       ),
     );
-    const endIndex = Math.min(startIndex + this.maxVisible, this.filteredItems.length);
+    const endIndex = Math.min(
+      startIndex + this.maxVisible,
+      this.filteredItems.length,
+    );
 
     // Render visible items
     for (let i = startIndex; i < endIndex; i++) {
@@ -272,19 +291,30 @@ export class SearchableSelectList implements Component {
     if (description) {
       const descriptionLayout = this.getDescriptionLayout(width, prefixWidth);
       if (descriptionLayout) {
-        const truncatedValue = truncateToWidth(displayValue, descriptionLayout.maxValueWidth, "");
+        const truncatedValue = truncateToWidth(
+          displayValue,
+          descriptionLayout.maxValueWidth,
+          "",
+        );
         const valueText = this.highlightMatch(truncatedValue, query);
 
         const usedByValue = visibleWidth(valueText);
         const remainingWidth = descriptionLayout.availableWidth - usedByValue;
-        const descriptionWidth = remainingWidth - descriptionLayout.spacingWidth;
+        const descriptionWidth =
+          remainingWidth - descriptionLayout.spacingWidth;
 
         if (descriptionWidth >= SearchableSelectList.DESCRIPTION_MIN_WIDTH) {
           const spacing = " ".repeat(descriptionLayout.spacingWidth);
-          const truncatedDesc = truncateToWidth(description, descriptionWidth, "");
+          const truncatedDesc = truncateToWidth(
+            description,
+            descriptionWidth,
+            "",
+          );
           // Highlight plain text first, then apply theme styling to avoid corrupting ANSI codes
           const highlightedDesc = this.highlightMatch(truncatedDesc, query);
-          const descText = isSelected ? highlightedDesc : this.theme.description(highlightedDesc);
+          const descText = isSelected
+            ? highlightedDesc
+            : this.theme.description(highlightedDesc);
           const line = `${prefix}${valueText}${spacing}${descText}`;
           return isSelected ? this.theme.selectedText(line) : line;
         }
@@ -301,7 +331,11 @@ export class SearchableSelectList implements Component {
   private getDescriptionLayout(
     width: number,
     prefixWidth: number,
-  ): { availableWidth: number; maxValueWidth: number; spacingWidth: number } | null {
+  ): {
+    availableWidth: number;
+    maxValueWidth: number;
+    spacingWidth: number;
+  } | null {
     if (width <= SearchableSelectList.DESCRIPTION_LAYOUT_MIN_WIDTH) {
       return null;
     }
@@ -349,7 +383,10 @@ export class SearchableSelectList implements Component {
       matchesKey(keyData, "ctrl+n") ||
       (allowVimNav && keyData === "j")
     ) {
-      this.selectedIndex = Math.min(this.filteredItems.length - 1, this.selectedIndex + 1);
+      this.selectedIndex = Math.min(
+        this.filteredItems.length - 1,
+        this.selectedIndex + 1,
+      );
       this.notifySelectionChange();
       return;
     }

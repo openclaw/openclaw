@@ -2,10 +2,16 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { resolveBoundaryPath, resolveBoundaryPathSync } from "./boundary-path.js";
+import {
+  resolveBoundaryPath,
+  resolveBoundaryPathSync,
+} from "./boundary-path.js";
 import { isPathInside } from "./path-guards.js";
 
-async function withTempRoot<T>(prefix: string, run: (root: string) => Promise<T>): Promise<T> {
+async function withTempRoot<T>(
+  prefix: string,
+  run: (root: string) => Promise<T>,
+): Promise<T> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
   try {
     return await run(root);
@@ -46,7 +52,9 @@ describe("resolveBoundaryPath", () => {
       expect(result.exists).toBe(false);
       expect(result.kind).toBe("missing");
       expect(result.canonicalPath).toBe(path.join(targetReal, "missing.txt"));
-      expect(isPathInside(result.rootCanonicalPath, result.canonicalPath)).toBe(true);
+      expect(isPathInside(result.rootCanonicalPath, result.canonicalPath)).toBe(
+        true,
+      );
     });
   });
 
@@ -127,7 +135,11 @@ describe("resolveBoundaryPath", () => {
       const aliasRoot = path.join(base, "workspace-alias");
       const fileName = "plugin.js";
       await fs.mkdir(root, { recursive: true });
-      await fs.writeFile(path.join(root, fileName), "export default {}", "utf8");
+      await fs.writeFile(
+        path.join(root, fileName),
+        "export default {}",
+        "utf8",
+      );
       await fs.symlink(root, aliasRoot);
 
       const resolved = await resolveBoundaryPath({
@@ -136,7 +148,9 @@ describe("resolveBoundaryPath", () => {
         boundaryLabel: "plugin root",
       });
       expect(resolved.exists).toBe(true);
-      expect(isPathInside(resolved.rootCanonicalPath, resolved.canonicalPath)).toBe(true);
+      expect(
+        isPathInside(resolved.rootCanonicalPath, resolved.canonicalPath),
+      ).toBe(true);
 
       const resolvedSync = resolveBoundaryPathSync({
         absolutePath: path.join(aliasRoot, fileName),
@@ -144,7 +158,12 @@ describe("resolveBoundaryPath", () => {
         boundaryLabel: "plugin root",
       });
       expect(resolvedSync.exists).toBe(true);
-      expect(isPathInside(resolvedSync.rootCanonicalPath, resolvedSync.canonicalPath)).toBe(true);
+      expect(
+        isPathInside(
+          resolvedSync.rootCanonicalPath,
+          resolvedSync.canonicalPath,
+        ),
+      ).toBe(true);
     });
   });
 
@@ -181,7 +200,12 @@ describe("resolveBoundaryPath", () => {
           rootPath: root,
           boundaryLabel: "sandbox root",
         });
-        expect(isPathInside(safeResolved.rootCanonicalPath, safeResolved.canonicalPath)).toBe(true);
+        expect(
+          isPathInside(
+            safeResolved.rootCanonicalPath,
+            safeResolved.canonicalPath,
+          ),
+        ).toBe(true);
 
         const unsafeCandidate = path.join(escapeLink, `new-${token}.txt`);
         await expect(

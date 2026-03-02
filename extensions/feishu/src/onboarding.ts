@@ -5,17 +5,26 @@ import type {
   DmPolicy,
   WizardPrompter,
 } from "openclaw/plugin-sdk";
-import { addWildcardAllowFrom, DEFAULT_ACCOUNT_ID, formatDocsLink } from "openclaw/plugin-sdk";
+import {
+  addWildcardAllowFrom,
+  DEFAULT_ACCOUNT_ID,
+  formatDocsLink,
+} from "openclaw/plugin-sdk";
 import { resolveFeishuCredentials } from "./accounts.js";
 import { probeFeishu } from "./probe.js";
 import type { FeishuConfig } from "./types.js";
 
 const channel = "feishu" as const;
 
-function setFeishuDmPolicy(cfg: ClawdbotConfig, dmPolicy: DmPolicy): ClawdbotConfig {
+function setFeishuDmPolicy(
+  cfg: ClawdbotConfig,
+  dmPolicy: DmPolicy,
+): ClawdbotConfig {
   const allowFrom =
     dmPolicy === "open"
-      ? addWildcardAllowFrom(cfg.channels?.feishu?.allowFrom)?.map((entry) => String(entry))
+      ? addWildcardAllowFrom(cfg.channels?.feishu?.allowFrom)?.map((entry) =>
+          String(entry),
+        )
       : undefined;
   return {
     ...cfg,
@@ -30,7 +39,10 @@ function setFeishuDmPolicy(cfg: ClawdbotConfig, dmPolicy: DmPolicy): ClawdbotCon
   };
 }
 
-function setFeishuAllowFrom(cfg: ClawdbotConfig, allowFrom: string[]): ClawdbotConfig {
+function setFeishuAllowFrom(
+  cfg: ClawdbotConfig,
+  allowFrom: string[],
+): ClawdbotConfig {
   return {
     ...cfg,
     channels: {
@@ -71,17 +83,23 @@ async function promptFeishuAllowFrom(params: {
       message: "Feishu allowFrom (user open_ids)",
       placeholder: "ou_xxxxx, ou_yyyyy",
       initialValue: existing[0] ? String(existing[0]) : undefined,
-      validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
+      validate: (value) =>
+        String(value ?? "").trim() ? undefined : "Required",
     });
     const parts = parseAllowFromInput(String(entry));
     if (parts.length === 0) {
-      await params.prompter.note("Enter at least one user.", "Feishu allowlist");
+      await params.prompter.note(
+        "Enter at least one user.",
+        "Feishu allowlist",
+      );
       continue;
     }
 
     const unique = [
       ...new Set([
-        ...existing.map((v: string | number) => String(v).trim()).filter(Boolean),
+        ...existing
+          .map((v: string | number) => String(v).trim())
+          .filter(Boolean),
         ...parts,
       ]),
     ];
@@ -89,7 +107,9 @@ async function promptFeishuAllowFrom(params: {
   }
 }
 
-async function noteFeishuCredentialHelp(prompter: WizardPrompter): Promise<void> {
+async function noteFeishuCredentialHelp(
+  prompter: WizardPrompter,
+): Promise<void> {
   await prompter.note(
     [
       "1) Go to Feishu Open Platform (open.feishu.cn)",
@@ -140,7 +160,10 @@ function setFeishuGroupPolicy(
   };
 }
 
-function setFeishuGroupAllowFrom(cfg: ClawdbotConfig, groupAllowFrom: string[]): ClawdbotConfig {
+function setFeishuGroupAllowFrom(
+  cfg: ClawdbotConfig,
+  groupAllowFrom: string[],
+): ClawdbotConfig {
   return {
     ...cfg,
     channels: {
@@ -158,7 +181,8 @@ const dmPolicy: ChannelOnboardingDmPolicy = {
   channel,
   policyKey: "channels.feishu.dmPolicy",
   allowFromKey: "channels.feishu.allowFrom",
-  getCurrent: (cfg) => (cfg.channels?.feishu as FeishuConfig | undefined)?.dmPolicy ?? "pairing",
+  getCurrent: (cfg) =>
+    (cfg.channels?.feishu as FeishuConfig | undefined)?.dmPolicy ?? "pairing",
   setPolicy: (cfg, policy) => setFeishuDmPolicy(cfg, policy),
   promptAllowFrom: promptFeishuAllowFrom,
 };
@@ -202,9 +226,13 @@ export const feishuOnboardingAdapter: ChannelOnboardingAdapter = {
   configure: async ({ cfg, prompter }) => {
     const feishuCfg = cfg.channels?.feishu as FeishuConfig | undefined;
     const resolved = resolveFeishuCredentials(feishuCfg);
-    const hasConfigCreds = Boolean(feishuCfg?.appId?.trim() && feishuCfg?.appSecret?.trim());
+    const hasConfigCreds = Boolean(
+      feishuCfg?.appId?.trim() && feishuCfg?.appSecret?.trim(),
+    );
     const canUseEnv = Boolean(
-      !hasConfigCreds && process.env.FEISHU_APP_ID?.trim() && process.env.FEISHU_APP_SECRET?.trim(),
+      !hasConfigCreds &&
+      process.env.FEISHU_APP_ID?.trim() &&
+      process.env.FEISHU_APP_SECRET?.trim(),
     );
 
     let next = cfg;
@@ -279,12 +307,16 @@ export const feishuOnboardingAdapter: ChannelOnboardingAdapter = {
           );
         }
       } catch (err) {
-        await prompter.note(`Connection test failed: ${String(err)}`, "Feishu connection test");
+        await prompter.note(
+          `Connection test failed: ${String(err)}`,
+          "Feishu connection test",
+        );
       }
     }
 
     // Domain selection
-    const currentDomain = (next.channels?.feishu as FeishuConfig | undefined)?.domain ?? "feishu";
+    const currentDomain =
+      (next.channels?.feishu as FeishuConfig | undefined)?.domain ?? "feishu";
     const domain = await prompter.select({
       message: "Which Feishu domain?",
       options: [
@@ -310,23 +342,37 @@ export const feishuOnboardingAdapter: ChannelOnboardingAdapter = {
     const groupPolicy = await prompter.select({
       message: "Group chat policy",
       options: [
-        { value: "allowlist", label: "Allowlist - only respond in specific groups" },
-        { value: "open", label: "Open - respond in all groups (requires mention)" },
+        {
+          value: "allowlist",
+          label: "Allowlist - only respond in specific groups",
+        },
+        {
+          value: "open",
+          label: "Open - respond in all groups (requires mention)",
+        },
         { value: "disabled", label: "Disabled - don't respond in groups" },
       ],
-      initialValue: (next.channels?.feishu as FeishuConfig | undefined)?.groupPolicy ?? "allowlist",
+      initialValue:
+        (next.channels?.feishu as FeishuConfig | undefined)?.groupPolicy ??
+        "allowlist",
     });
     if (groupPolicy) {
-      next = setFeishuGroupPolicy(next, groupPolicy as "open" | "allowlist" | "disabled");
+      next = setFeishuGroupPolicy(
+        next,
+        groupPolicy as "open" | "allowlist" | "disabled",
+      );
     }
 
     // Group allowlist if needed
     if (groupPolicy === "allowlist") {
-      const existing = (next.channels?.feishu as FeishuConfig | undefined)?.groupAllowFrom ?? [];
+      const existing =
+        (next.channels?.feishu as FeishuConfig | undefined)?.groupAllowFrom ??
+        [];
       const entry = await prompter.text({
         message: "Group chat allowlist (chat_ids)",
         placeholder: "oc_xxxxx, oc_yyyyy",
-        initialValue: existing.length > 0 ? existing.map(String).join(", ") : undefined,
+        initialValue:
+          existing.length > 0 ? existing.map(String).join(", ") : undefined,
       });
       if (entry) {
         const parts = parseAllowFromInput(String(entry));

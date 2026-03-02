@@ -74,14 +74,25 @@ describe("message action capability checks", () => {
     activateMessageActionTestRegistry();
 
     expect(
-      supportsChannelMessageButtonsForChannel({ cfg: {} as OpenClawConfig, channel: "discord" }),
+      supportsChannelMessageButtonsForChannel({
+        cfg: {} as OpenClawConfig,
+        channel: "discord",
+      }),
     ).toBe(true);
     expect(
-      supportsChannelMessageButtonsForChannel({ cfg: {} as OpenClawConfig, channel: "telegram" }),
+      supportsChannelMessageButtonsForChannel({
+        cfg: {} as OpenClawConfig,
+        channel: "telegram",
+      }),
     ).toBe(false);
     expect(
-      supportsChannelMessageCardsForChannel({ cfg: {} as OpenClawConfig, channel: "telegram" }),
+      supportsChannelMessageCardsForChannel({
+        cfg: {} as OpenClawConfig,
+        channel: "telegram",
+      }),
     ).toBe(true);
-    expect(supportsChannelMessageCardsForChannel({ cfg: {} as OpenClawConfig })).toBe(false);
+    expect(
+      supportsChannelMessageCardsForChannel({ cfg: {} as OpenClawConfig }),
+    ).toBe(false);
   });
 });

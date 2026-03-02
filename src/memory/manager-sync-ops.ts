@@ -81,7 +81,9 @@ const log = createSubsystemLogger("memory");
 
 function shouldIgnoreMemoryWatchPath(watchPath: string): boolean {
   const normalized = path.normalize(watchPath);
-  const parts = normalized.split(path.sep).map((segment) => segment.trim().toLowerCase());
+  const parts = normalized
+    .split(path.sep)
+    .map((segment) => segment.trim().toLowerCase());
   return parts.some((segment) => IGNORED_MEMORY_WATCH_DIR_NAMES.has(segment));
 }
 
@@ -194,7 +196,10 @@ export abstract class MemoryManagerSyncOps {
       const resolvedPath = this.vector.extensionPath?.trim()
         ? resolveUserPath(this.vector.extensionPath)
         : undefined;
-      const loaded = await loadSqliteVecExtension({ db: this.db, extensionPath: resolvedPath });
+      const loaded = await loadSqliteVecExtension({
+        db: this.db,
+        extensionPath: resolvedPath,
+      });
       if (!loaded.ok) {
         throw new Error(loaded.error ?? "unknown sqlite-vec load error");
       }
@@ -235,7 +240,10 @@ export abstract class MemoryManagerSyncOps {
     }
   }
 
-  protected buildSourceFilter(alias?: string): { sql: string; params: MemorySource[] } {
+  protected buildSourceFilter(alias?: string): {
+    sql: string;
+    params: MemorySource[];
+  } {
     const sources = Array.from(this.sources);
     if (sources.length === 0) {
       return { sql: "", params: [] };
@@ -254,7 +262,9 @@ export abstract class MemoryManagerSyncOps {
     const dir = path.dirname(dbPath);
     ensureDir(dir);
     const { DatabaseSync } = requireNodeSqlite();
-    return new DatabaseSync(dbPath, { allowExtension: this.settings.store.vector.enabled });
+    return new DatabaseSync(dbPath, {
+      allowExtension: this.settings.store.vector.enabled,
+    });
   }
 
   private seedEmbeddingCache(sourceDb: DatabaseSync): void {
@@ -307,7 +317,10 @@ export abstract class MemoryManagerSyncOps {
     }
   }
 
-  private async swapIndexFiles(targetPath: string, tempPath: string): Promise<void> {
+  private async swapIndexFiles(
+    targetPath: string,
+    tempPath: string,
+  ): Promise<void> {
     const backupPath = `${targetPath}.backup-${randomUUID()}`;
     await this.moveIndexFiles(targetPath, backupPath);
     try {
@@ -319,7 +332,10 @@ export abstract class MemoryManagerSyncOps {
     await this.removeIndexFiles(backupPath);
   }
 
-  private async moveIndexFiles(sourceBase: string, targetBase: string): Promise<void> {
+  private async moveIndexFiles(
+    sourceBase: string,
+    targetBase: string,
+  ): Promise<void> {
     const suffixes = ["", "-wal", "-shm"];
     for (const suffix of suffixes) {
       const source = `${sourceBase}${suffix}`;
@@ -336,7 +352,9 @@ export abstract class MemoryManagerSyncOps {
 
   private async removeIndexFiles(basePath: string): Promise<void> {
     const suffixes = ["", "-wal", "-shm"];
-    await Promise.all(suffixes.map((suffix) => fs.rm(`${basePath}${suffix}`, { force: true })));
+    await Promise.all(
+      suffixes.map((suffix) => fs.rm(`${basePath}${suffix}`, { force: true })),
+    );
   }
 
   protected ensureSchema() {
@@ -354,7 +372,11 @@ export abstract class MemoryManagerSyncOps {
   }
 
   protected ensureWatcher() {
-    if (!this.sources.has("memory") || !this.settings.sync.watch || this.watcher) {
+    if (
+      !this.sources.has("memory") ||
+      !this.settings.sync.watch ||
+      this.watcher
+    ) {
       return;
     }
     const watchPaths = new Set<string>([
@@ -362,7 +384,10 @@ export abstract class MemoryManagerSyncOps {
       path.join(this.workspaceDir, "memory.md"),
       path.join(this.workspaceDir, "memory", "**", "*.md"),
     ]);
-    const additionalPaths = normalizeExtraMemoryPaths(this.workspaceDir, this.settings.extraPaths);
+    const additionalPaths = normalizeExtraMemoryPaths(
+      this.workspaceDir,
+      this.settings.extraPaths,
+    );
     for (const entry of additionalPaths) {
       try {
         const stat = fsSync.lstatSync(entry);
@@ -441,7 +466,9 @@ export abstract class MemoryManagerSyncOps {
       const bytesThreshold = delta.deltaBytes;
       const messagesThreshold = delta.deltaMessages;
       const bytesHit =
-        bytesThreshold <= 0 ? delta.pendingBytes > 0 : delta.pendingBytes >= bytesThreshold;
+        bytesThreshold <= 0
+          ? delta.pendingBytes > 0
+          : delta.pendingBytes >= bytesThreshold;
       const messagesHit =
         messagesThreshold <= 0
           ? delta.pendingMessages > 0
@@ -452,9 +479,13 @@ export abstract class MemoryManagerSyncOps {
       this.sessionsDirtyFiles.add(sessionFile);
       this.sessionsDirty = true;
       delta.pendingBytes =
-        bytesThreshold > 0 ? Math.max(0, delta.pendingBytes - bytesThreshold) : 0;
+        bytesThreshold > 0
+          ? Math.max(0, delta.pendingBytes - bytesThreshold)
+          : 0;
       delta.pendingMessages =
-        messagesThreshold > 0 ? Math.max(0, delta.pendingMessages - messagesThreshold) : 0;
+        messagesThreshold > 0
+          ? Math.max(0, delta.pendingMessages - messagesThreshold)
+          : 0;
       shouldSync = true;
     }
     if (shouldSync) {
@@ -500,7 +531,8 @@ export abstract class MemoryManagerSyncOps {
       state.pendingBytes += size;
       const shouldCountMessages =
         thresholds.deltaMessages > 0 &&
-        (thresholds.deltaBytes <= 0 || state.pendingBytes < thresholds.deltaBytes);
+        (thresholds.deltaBytes <= 0 ||
+          state.pendingBytes < thresholds.deltaBytes);
       if (shouldCountMessages) {
         state.pendingMessages += await this.countNewlines(sessionFile, 0, size);
       }
@@ -508,9 +540,14 @@ export abstract class MemoryManagerSyncOps {
       state.pendingBytes += deltaBytes;
       const shouldCountMessages =
         thresholds.deltaMessages > 0 &&
-        (thresholds.deltaBytes <= 0 || state.pendingBytes < thresholds.deltaBytes);
+        (thresholds.deltaBytes <= 0 ||
+          state.pendingBytes < thresholds.deltaBytes);
       if (shouldCountMessages) {
-        state.pendingMessages += await this.countNewlines(sessionFile, state.lastSize, size);
+        state.pendingMessages += await this.countNewlines(
+          sessionFile,
+          state.lastSize,
+          size,
+        );
       }
       state.lastSize = size;
     }
@@ -523,7 +560,11 @@ export abstract class MemoryManagerSyncOps {
     };
   }
 
-  private async countNewlines(absPath: string, start: number, end: number): Promise<number> {
+  private async countNewlines(
+    absPath: string,
+    start: number,
+    end: number,
+  ): Promise<number> {
     if (end <= start) {
       return 0;
     }
@@ -633,13 +674,20 @@ export abstract class MemoryManagerSyncOps {
   }) {
     // FTS-only mode: skip embedding sync (no provider)
     if (!this.provider) {
-      log.debug("Skipping memory file sync in FTS-only mode (no embedding provider)");
+      log.debug(
+        "Skipping memory file sync in FTS-only mode (no embedding provider)",
+      );
       return;
     }
 
-    const files = await listMemoryFiles(this.workspaceDir, this.settings.extraPaths);
+    const files = await listMemoryFiles(
+      this.workspaceDir,
+      this.settings.extraPaths,
+    );
     const fileEntries = (
-      await Promise.all(files.map(async (file) => buildFileEntry(file, this.workspaceDir)))
+      await Promise.all(
+        files.map(async (file) => buildFileEntry(file, this.workspaceDir)),
+      )
     ).filter((entry): entry is MemoryFileEntry => entry !== null);
     log.debug("memory sync: indexing memory files", {
       files: fileEntries.length,
@@ -653,7 +701,9 @@ export abstract class MemoryManagerSyncOps {
       params.progress.report({
         completed: params.progress.completed,
         total: params.progress.total,
-        label: this.batch.enabled ? "Indexing memory files (batch)..." : "Indexing memory files…",
+        label: this.batch.enabled
+          ? "Indexing memory files (batch)..."
+          : "Indexing memory files…",
       });
     }
 
@@ -689,7 +739,9 @@ export abstract class MemoryManagerSyncOps {
       if (activePaths.has(stale.path)) {
         continue;
       }
-      this.db.prepare(`DELETE FROM files WHERE path = ? AND source = ?`).run(stale.path, "memory");
+      this.db
+        .prepare(`DELETE FROM files WHERE path = ? AND source = ?`)
+        .run(stale.path, "memory");
       try {
         this.db
           .prepare(
@@ -697,11 +749,15 @@ export abstract class MemoryManagerSyncOps {
           )
           .run(stale.path, "memory");
       } catch {}
-      this.db.prepare(`DELETE FROM chunks WHERE path = ? AND source = ?`).run(stale.path, "memory");
+      this.db
+        .prepare(`DELETE FROM chunks WHERE path = ? AND source = ?`)
+        .run(stale.path, "memory");
       if (this.fts.enabled && this.fts.available) {
         try {
           this.db
-            .prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ? AND model = ?`)
+            .prepare(
+              `DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ? AND model = ?`,
+            )
             .run(stale.path, "memory", this.provider.model);
         } catch {}
       }
@@ -714,13 +770,16 @@ export abstract class MemoryManagerSyncOps {
   }) {
     // FTS-only mode: skip embedding sync (no provider)
     if (!this.provider) {
-      log.debug("Skipping session file sync in FTS-only mode (no embedding provider)");
+      log.debug(
+        "Skipping session file sync in FTS-only mode (no embedding provider)",
+      );
       return;
     }
 
     const files = await listSessionFilesForAgent(this.agentId);
     const activePaths = new Set(files.map((file) => sessionPathForFile(file)));
-    const indexAll = params.needsFullReindex || this.sessionsDirtyFiles.size === 0;
+    const indexAll =
+      params.needsFullReindex || this.sessionsDirtyFiles.size === 0;
     log.debug("memory sync: indexing session files", {
       files: files.length,
       indexAll,
@@ -733,7 +792,9 @@ export abstract class MemoryManagerSyncOps {
       params.progress.report({
         completed: params.progress.completed,
         total: params.progress.total,
-        label: this.batch.enabled ? "Indexing session files (batch)..." : "Indexing session files…",
+        label: this.batch.enabled
+          ? "Indexing session files (batch)..."
+          : "Indexing session files…",
       });
     }
 
@@ -773,7 +834,10 @@ export abstract class MemoryManagerSyncOps {
         this.resetSessionDelta(absPath, entry.size);
         return;
       }
-      await this.indexFile(entry, { source: "sessions", content: entry.content });
+      await this.indexFile(entry, {
+        source: "sessions",
+        content: entry.content,
+      });
       this.resetSessionDelta(absPath, entry.size);
       if (params.progress) {
         params.progress.completed += 1;
@@ -808,7 +872,9 @@ export abstract class MemoryManagerSyncOps {
       if (this.fts.enabled && this.fts.available) {
         try {
           this.db
-            .prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ? AND model = ?`)
+            .prepare(
+              `DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ? AND model = ?`,
+            )
             .run(stale.path, "sessions", this.provider.model);
         } catch {}
       }
@@ -845,7 +911,9 @@ export abstract class MemoryManagerSyncOps {
     force?: boolean;
     progress?: (update: MemorySyncProgressUpdate) => void;
   }) {
-    const progress = params?.progress ? this.createSyncProgress(params.progress) : undefined;
+    const progress = params?.progress
+      ? this.createSyncProgress(params.progress)
+      : undefined;
     if (progress) {
       progress.report({
         completed: progress.completed,
@@ -888,16 +956,26 @@ export abstract class MemoryManagerSyncOps {
       }
 
       const shouldSyncMemory =
-        this.sources.has("memory") && (params?.force || needsFullReindex || this.dirty);
-      const shouldSyncSessions = this.shouldSyncSessions(params, needsFullReindex);
+        this.sources.has("memory") &&
+        (params?.force || needsFullReindex || this.dirty);
+      const shouldSyncSessions = this.shouldSyncSessions(
+        params,
+        needsFullReindex,
+      );
 
       if (shouldSyncMemory) {
-        await this.syncMemoryFiles({ needsFullReindex, progress: progress ?? undefined });
+        await this.syncMemoryFiles({
+          needsFullReindex,
+          progress: progress ?? undefined,
+        });
         this.dirty = false;
       }
 
       if (shouldSyncSessions) {
-        await this.syncSessionFiles({ needsFullReindex, progress: progress ?? undefined });
+        await this.syncSessionFiles({
+          needsFullReindex,
+          progress: progress ?? undefined,
+        });
         this.sessionsDirty = false;
         this.sessionsDirtyFiles.clear();
       } else if (this.sessionsDirtyFiles.size > 0) {
@@ -908,7 +986,8 @@ export abstract class MemoryManagerSyncOps {
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
       const activated =
-        this.shouldFallbackOnError(reason) && (await this.activateFallbackProvider(reason));
+        this.shouldFallbackOnError(reason) &&
+        (await this.activateFallbackProvider(reason));
       if (activated) {
         await this.runSafeReindex({
           reason: params?.reason ?? "fallback",
@@ -951,13 +1030,23 @@ export abstract class MemoryManagerSyncOps {
 
   private async activateFallbackProvider(reason: string): Promise<boolean> {
     const fallback = this.settings.fallback;
-    if (!fallback || fallback === "none" || !this.provider || fallback === this.provider.id) {
+    if (
+      !fallback ||
+      fallback === "none" ||
+      !this.provider ||
+      fallback === this.provider.id
+    ) {
       return false;
     }
     if (this.fallbackFrom) {
       return false;
     }
-    const fallbackFrom = this.provider.id as "openai" | "gemini" | "local" | "voyage" | "mistral";
+    const fallbackFrom = this.provider.id as
+      | "openai"
+      | "gemini"
+      | "local"
+      | "voyage"
+      | "mistral";
 
     const fallbackModel =
       fallback === "gemini"
@@ -989,7 +1078,9 @@ export abstract class MemoryManagerSyncOps {
     this.mistral = fallbackResult.mistral;
     this.providerKey = this.computeProviderKey();
     this.batch = this.resolveBatchConfig();
-    log.warn(`memory embeddings: switched to fallback provider (${fallback})`, { reason });
+    log.warn(`memory embeddings: switched to fallback provider (${fallback})`, {
+      reason,
+    });
     return true;
   }
 
@@ -1021,7 +1112,9 @@ export abstract class MemoryManagerSyncOps {
       }
       this.fts.available = originalState.ftsAvailable;
       this.fts.loadError = originalState.ftsError;
-      this.vector.available = originalDbClosed ? null : originalState.vectorAvailable;
+      this.vector.available = originalDbClosed
+        ? null
+        : originalState.vectorAvailable;
       this.vector.loadError = originalState.vectorLoadError;
       this.vector.dims = originalState.vectorDims;
       this.vectorReady = originalDbClosed ? null : originalState.vectorReady;
@@ -1047,12 +1140,18 @@ export abstract class MemoryManagerSyncOps {
       );
 
       if (shouldSyncMemory) {
-        await this.syncMemoryFiles({ needsFullReindex: true, progress: params.progress });
+        await this.syncMemoryFiles({
+          needsFullReindex: true,
+          progress: params.progress,
+        });
         this.dirty = false;
       }
 
       if (shouldSyncSessions) {
-        await this.syncSessionFiles({ needsFullReindex: true, progress: params.progress });
+        await this.syncSessionFiles({
+          needsFullReindex: true,
+          progress: params.progress,
+        });
         this.sessionsDirty = false;
         this.sessionsDirtyFiles.clear();
       } else if (this.sessionsDirtyFiles.size > 0) {
@@ -1070,7 +1169,9 @@ export abstract class MemoryManagerSyncOps {
         chunkOverlap: this.settings.chunking.overlap,
       };
       if (!nextMeta) {
-        throw new Error("Failed to compute memory index metadata for reindexing.");
+        throw new Error(
+          "Failed to compute memory index metadata for reindexing.",
+        );
       }
 
       if (this.vector.available && this.vector.dims) {
@@ -1118,12 +1219,18 @@ export abstract class MemoryManagerSyncOps {
     );
 
     if (shouldSyncMemory) {
-      await this.syncMemoryFiles({ needsFullReindex: true, progress: params.progress });
+      await this.syncMemoryFiles({
+        needsFullReindex: true,
+        progress: params.progress,
+      });
       this.dirty = false;
     }
 
     if (shouldSyncSessions) {
-      await this.syncSessionFiles({ needsFullReindex: true, progress: params.progress });
+      await this.syncSessionFiles({
+        needsFullReindex: true,
+        progress: params.progress,
+      });
       this.sessionsDirty = false;
       this.sessionsDirtyFiles.clear();
     } else if (this.sessionsDirtyFiles.size > 0) {
@@ -1162,9 +1269,9 @@ export abstract class MemoryManagerSyncOps {
   }
 
   protected readMeta(): MemoryIndexMeta | null {
-    const row = this.db.prepare(`SELECT value FROM meta WHERE key = ?`).get(META_KEY) as
-      | { value: string }
-      | undefined;
+    const row = this.db
+      .prepare(`SELECT value FROM meta WHERE key = ?`)
+      .get(META_KEY) as { value: string } | undefined;
     if (!row?.value) {
       return null;
     }
@@ -1186,7 +1293,10 @@ export abstract class MemoryManagerSyncOps {
 
   private resolveConfiguredSourcesForMeta(): MemorySource[] {
     const normalized = Array.from(this.sources)
-      .filter((source): source is MemorySource => source === "memory" || source === "sessions")
+      .filter(
+        (source): source is MemorySource =>
+          source === "memory" || source === "sessions",
+      )
       .toSorted();
     return normalized.length > 0 ? normalized : ["memory"];
   }
@@ -1199,18 +1309,24 @@ export abstract class MemoryManagerSyncOps {
     const normalized = Array.from(
       new Set(
         meta.sources.filter(
-          (source): source is MemorySource => source === "memory" || source === "sessions",
+          (source): source is MemorySource =>
+            source === "memory" || source === "sessions",
         ),
       ),
     ).toSorted();
     return normalized.length > 0 ? normalized : ["memory"];
   }
 
-  private metaSourcesDiffer(meta: MemoryIndexMeta, configuredSources: MemorySource[]): boolean {
+  private metaSourcesDiffer(
+    meta: MemoryIndexMeta,
+    configuredSources: MemorySource[],
+  ): boolean {
     const metaSources = this.normalizeMetaSources(meta);
     if (metaSources.length !== configuredSources.length) {
       return true;
     }
-    return metaSources.some((source, index) => source !== configuredSources[index]);
+    return metaSources.some(
+      (source, index) => source !== configuredSources[index],
+    );
   }
 }

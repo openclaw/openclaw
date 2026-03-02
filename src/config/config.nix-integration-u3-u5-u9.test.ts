@@ -11,7 +11,9 @@ import {
 } from "./config.js";
 import { withTempHome, withTempHomeConfig } from "./test-helpers.js";
 
-function envWith(overrides: Record<string, string | undefined>): NodeJS.ProcessEnv {
+function envWith(
+  overrides: Record<string, string | undefined>,
+): NodeJS.ProcessEnv {
   // Hermetic env: don't inherit process.env because other tests may mutate it.
   return { ...overrides };
 }
@@ -36,7 +38,9 @@ async function withLoadedConfigForHome(
 describe("Nix integration (U3, U5, U9)", () => {
   describe("U3: isNixMode env var detection", () => {
     it("isNixMode is false when OPENCLAW_NIX_MODE is not set", () => {
-      expect(resolveIsNixMode(envWith({ OPENCLAW_NIX_MODE: undefined }))).toBe(false);
+      expect(resolveIsNixMode(envWith({ OPENCLAW_NIX_MODE: undefined }))).toBe(
+        false,
+      );
     });
 
     it("isNixMode is false when OPENCLAW_NIX_MODE is empty", () => {
@@ -44,7 +48,9 @@ describe("Nix integration (U3, U5, U9)", () => {
     });
 
     it("isNixMode is false when OPENCLAW_NIX_MODE is not '1'", () => {
-      expect(resolveIsNixMode(envWith({ OPENCLAW_NIX_MODE: "true" }))).toBe(false);
+      expect(resolveIsNixMode(envWith({ OPENCLAW_NIX_MODE: "true" }))).toBe(
+        false,
+      );
     });
 
     it("isNixMode is true when OPENCLAW_NIX_MODE=1", () => {
@@ -54,19 +60,23 @@ describe("Nix integration (U3, U5, U9)", () => {
 
   describe("U5: CONFIG_PATH and STATE_DIR env var overrides", () => {
     it("STATE_DIR defaults to ~/.openclaw when env not set", () => {
-      expect(resolveStateDir(envWith({ OPENCLAW_STATE_DIR: undefined }))).toMatch(/\.openclaw$/);
+      expect(
+        resolveStateDir(envWith({ OPENCLAW_STATE_DIR: undefined })),
+      ).toMatch(/\.openclaw$/);
     });
 
     it("STATE_DIR respects OPENCLAW_STATE_DIR override", () => {
-      expect(resolveStateDir(envWith({ OPENCLAW_STATE_DIR: "/custom/state/dir" }))).toBe(
-        path.resolve("/custom/state/dir"),
-      );
+      expect(
+        resolveStateDir(envWith({ OPENCLAW_STATE_DIR: "/custom/state/dir" })),
+      ).toBe(path.resolve("/custom/state/dir"));
     });
 
     it("STATE_DIR respects OPENCLAW_HOME when state override is unset", () => {
       const customHome = path.join(path.sep, "custom", "home");
       expect(
-        resolveStateDir(envWith({ OPENCLAW_HOME: customHome, OPENCLAW_STATE_DIR: undefined })),
+        resolveStateDir(
+          envWith({ OPENCLAW_HOME: customHome, OPENCLAW_STATE_DIR: undefined }),
+        ),
       ).toBe(path.join(path.resolve(customHome), ".openclaw"));
     });
 
@@ -86,7 +96,10 @@ describe("Nix integration (U3, U5, U9)", () => {
     it("CONFIG_PATH defaults to ~/.openclaw/openclaw.json when env not set", () => {
       expect(
         resolveConfigPathCandidate(
-          envWith({ OPENCLAW_CONFIG_PATH: undefined, OPENCLAW_STATE_DIR: undefined }),
+          envWith({
+            OPENCLAW_CONFIG_PATH: undefined,
+            OPENCLAW_STATE_DIR: undefined,
+          }),
         ),
       ).toMatch(/\.openclaw[\\/]openclaw\.json$/);
     });
@@ -103,7 +116,10 @@ describe("Nix integration (U3, U5, U9)", () => {
       await withTempHome(async (home) => {
         expect(
           resolveConfigPathCandidate(
-            envWith({ OPENCLAW_HOME: home, OPENCLAW_CONFIG_PATH: "~/.openclaw/custom.json" }),
+            envWith({
+              OPENCLAW_HOME: home,
+              OPENCLAW_CONFIG_PATH: "~/.openclaw/custom.json",
+            }),
             () => home,
           ),
         ).toBe(path.join(home, ".openclaw", "custom.json"));
@@ -111,9 +127,11 @@ describe("Nix integration (U3, U5, U9)", () => {
     });
 
     it("CONFIG_PATH uses STATE_DIR when only state dir is overridden", () => {
-      expect(resolveConfigPathCandidate(envWith({ OPENCLAW_STATE_DIR: "/custom/state" }))).toBe(
-        path.join(path.resolve("/custom/state"), "openclaw.json"),
-      );
+      expect(
+        resolveConfigPathCandidate(
+          envWith({ OPENCLAW_STATE_DIR: "/custom/state" }),
+        ),
+      ).toBe(path.join(path.resolve("/custom/state"), "openclaw.json"));
     });
   });
 
@@ -134,7 +152,11 @@ describe("Nix integration (U3, U5, U9)", () => {
           JSON.stringify(
             {
               id: "demo-plugin",
-              configSchema: { type: "object", additionalProperties: false, properties: {} },
+              configSchema: {
+                type: "object",
+                additionalProperties: false,
+                properties: {},
+              },
             },
             null,
             2,
@@ -179,13 +201,21 @@ describe("Nix integration (U3, U5, U9)", () => {
 
         const cfg = loadConfigForHome(home);
 
-        expect(cfg.plugins?.load?.paths?.[0]).toBe(path.join(home, "plugins", "demo-plugin"));
-        expect(cfg.agents?.defaults?.workspace).toBe(path.join(home, "ws-default"));
-        expect(cfg.agents?.list?.[0]?.workspace).toBe(path.join(home, "ws-agent"));
+        expect(cfg.plugins?.load?.paths?.[0]).toBe(
+          path.join(home, "plugins", "demo-plugin"),
+        );
+        expect(cfg.agents?.defaults?.workspace).toBe(
+          path.join(home, "ws-default"),
+        );
+        expect(cfg.agents?.list?.[0]?.workspace).toBe(
+          path.join(home, "ws-agent"),
+        );
         expect(cfg.agents?.list?.[0]?.agentDir).toBe(
           path.join(home, ".openclaw", "agents", "main"),
         );
-        expect(cfg.agents?.list?.[0]?.sandbox?.workspaceRoot).toBe(path.join(home, "sandbox-root"));
+        expect(cfg.agents?.list?.[0]?.sandbox?.workspaceRoot).toBe(
+          path.join(home, "sandbox-root"),
+        );
         expect(cfg.channels?.whatsapp?.accounts?.personal?.authDir).toBe(
           path.join(home, ".openclaw", "credentials", "wa-personal"),
         );
@@ -195,9 +225,9 @@ describe("Nix integration (U3, U5, U9)", () => {
 
   describe("U6: gateway port resolution", () => {
     it("uses default when env and config are unset", () => {
-      expect(resolveGatewayPort({}, envWith({ OPENCLAW_GATEWAY_PORT: undefined }))).toBe(
-        DEFAULT_GATEWAY_PORT,
-      );
+      expect(
+        resolveGatewayPort({}, envWith({ OPENCLAW_GATEWAY_PORT: undefined })),
+      ).toBe(DEFAULT_GATEWAY_PORT);
     });
 
     it("prefers OPENCLAW_GATEWAY_PORT over config", () => {
@@ -238,7 +268,9 @@ describe("Nix integration (U3, U5, U9)", () => {
           channels: { telegram: { tokenFile: "/run/agenix/telegram-token" } },
         },
         async (cfg) => {
-          expect(cfg.channels?.telegram?.tokenFile).toBe("/run/agenix/telegram-token");
+          expect(cfg.channels?.telegram?.tokenFile).toBe(
+            "/run/agenix/telegram-token",
+          );
           expect(cfg.channels?.telegram?.botToken).toBeUndefined();
         },
       );
@@ -256,7 +288,9 @@ describe("Nix integration (U3, U5, U9)", () => {
         },
         async (cfg) => {
           expect(cfg.channels?.telegram?.botToken).toBe("fallback:token");
-          expect(cfg.channels?.telegram?.tokenFile).toBe("/run/agenix/telegram-token");
+          expect(cfg.channels?.telegram?.tokenFile).toBe(
+            "/run/agenix/telegram-token",
+          );
         },
       );
     });

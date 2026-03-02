@@ -13,12 +13,16 @@ import {
 } from "./push-apns.js";
 
 const tempDirs: string[] = [];
-const testAuthPrivateKey = generateKeyPairSync("ec", { namedCurve: "prime256v1" })
+const testAuthPrivateKey = generateKeyPairSync("ec", {
+  namedCurve: "prime256v1",
+})
   .privateKey.export({ format: "pem", type: "pkcs8" })
   .toString();
 
 async function makeTempDir(): Promise<string> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-push-apns-test-"));
+  const dir = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-push-apns-test-"),
+  );
   tempDirs.push(dir);
   return dir;
 }
@@ -90,7 +94,9 @@ describe("push APNs env config", () => {
   });
 
   it("returns an error when required APNs auth vars are missing", async () => {
-    const resolved = await resolveApnsAuthConfigFromEnv({} as NodeJS.ProcessEnv);
+    const resolved = await resolveApnsAuthConfigFromEnv(
+      {} as NodeJS.ProcessEnv,
+    );
     expect(resolved.ok).toBe(false);
     if (resolved.ok) {
       return;
@@ -183,7 +189,9 @@ describe("push APNs send semantics", () => {
         nodeId: "ios-node-wake",
       },
     });
-    const sentPayload = sent?.payload as { aps?: { alert?: unknown; sound?: unknown } } | undefined;
+    const sentPayload = sent?.payload as
+      | { aps?: { alert?: unknown; sound?: unknown } }
+      | undefined;
     const aps = sentPayload?.aps;
     expect(aps?.alert).toBeUndefined();
     expect(aps?.sound).toBeUndefined();

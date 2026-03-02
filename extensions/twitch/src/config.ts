@@ -28,7 +28,9 @@ export function getAccountConfig(
   const twitch = cfg.channels?.twitch;
   // Access accounts via unknown to handle union type (single-account vs multi-account)
   const twitchRaw = twitch as Record<string, unknown> | undefined;
-  const accounts = twitchRaw?.accounts as Record<string, TwitchAccountConfig> | undefined;
+  const accounts = twitchRaw?.accounts as
+    | Record<string, TwitchAccountConfig>
+    | undefined;
 
   // For default account, check base-level config first
   if (accountId === DEFAULT_ACCOUNT_ID) {
@@ -36,20 +38,44 @@ export function getAccountConfig(
 
     // Base-level properties that can form an implicit default account
     const baseLevel = {
-      username: typeof twitchRaw?.username === "string" ? twitchRaw.username : undefined,
-      accessToken: typeof twitchRaw?.accessToken === "string" ? twitchRaw.accessToken : undefined,
-      clientId: typeof twitchRaw?.clientId === "string" ? twitchRaw.clientId : undefined,
-      channel: typeof twitchRaw?.channel === "string" ? twitchRaw.channel : undefined,
-      enabled: typeof twitchRaw?.enabled === "boolean" ? twitchRaw.enabled : undefined,
-      allowFrom: Array.isArray(twitchRaw?.allowFrom) ? twitchRaw.allowFrom : undefined,
-      allowedRoles: Array.isArray(twitchRaw?.allowedRoles) ? twitchRaw.allowedRoles : undefined,
+      username:
+        typeof twitchRaw?.username === "string"
+          ? twitchRaw.username
+          : undefined,
+      accessToken:
+        typeof twitchRaw?.accessToken === "string"
+          ? twitchRaw.accessToken
+          : undefined,
+      clientId:
+        typeof twitchRaw?.clientId === "string"
+          ? twitchRaw.clientId
+          : undefined,
+      channel:
+        typeof twitchRaw?.channel === "string" ? twitchRaw.channel : undefined,
+      enabled:
+        typeof twitchRaw?.enabled === "boolean" ? twitchRaw.enabled : undefined,
+      allowFrom: Array.isArray(twitchRaw?.allowFrom)
+        ? twitchRaw.allowFrom
+        : undefined,
+      allowedRoles: Array.isArray(twitchRaw?.allowedRoles)
+        ? twitchRaw.allowedRoles
+        : undefined,
       requireMention:
-        typeof twitchRaw?.requireMention === "boolean" ? twitchRaw.requireMention : undefined,
+        typeof twitchRaw?.requireMention === "boolean"
+          ? twitchRaw.requireMention
+          : undefined,
       clientSecret:
-        typeof twitchRaw?.clientSecret === "string" ? twitchRaw.clientSecret : undefined,
+        typeof twitchRaw?.clientSecret === "string"
+          ? twitchRaw.clientSecret
+          : undefined,
       refreshToken:
-        typeof twitchRaw?.refreshToken === "string" ? twitchRaw.refreshToken : undefined,
-      expiresIn: typeof twitchRaw?.expiresIn === "number" ? twitchRaw.expiresIn : undefined,
+        typeof twitchRaw?.refreshToken === "string"
+          ? twitchRaw.refreshToken
+          : undefined,
+      expiresIn:
+        typeof twitchRaw?.expiresIn === "number"
+          ? twitchRaw.expiresIn
+          : undefined,
       obtainmentTimestamp:
         typeof twitchRaw?.obtainmentTimestamp === "number"
           ? twitchRaw.obtainmentTimestamp

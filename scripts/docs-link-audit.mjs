@@ -8,7 +8,9 @@ const DOCS_DIR = path.join(ROOT, "docs");
 const DOCS_JSON_PATH = path.join(DOCS_DIR, "docs.json");
 
 if (!fs.existsSync(DOCS_DIR) || !fs.statSync(DOCS_DIR).isDirectory()) {
-  console.error("docs:check-links: missing docs directory; run from repo root.");
+  console.error(
+    "docs:check-links: missing docs directory; run from repo root.",
+  );
   process.exit(1);
 }
 
@@ -61,7 +63,9 @@ for (const item of docsConfig.redirects || []) {
 }
 
 const allFiles = walk(DOCS_DIR);
-const relAllFiles = new Set(allFiles.map((abs) => normalizeSlashes(path.relative(DOCS_DIR, abs))));
+const relAllFiles = new Set(
+  allFiles.map((abs) => normalizeSlashes(path.relative(DOCS_DIR, abs))),
+);
 
 const markdownFiles = allFiles.filter((abs) => /\.(md|mdx)$/i.test(abs));
 const routes = new Set();
@@ -187,7 +191,9 @@ for (const abs of markdownFiles) {
         continue;
       }
 
-      const normalizedRel = normalizeSlashes(path.normalize(path.join(baseDir, clean)));
+      const normalizedRel = normalizeSlashes(
+        path.normalize(path.join(baseDir, clean)),
+      );
 
       if (/\.[a-zA-Z0-9]+$/.test(normalizedRel)) {
         if (!relAllFiles.has(normalizedRel)) {

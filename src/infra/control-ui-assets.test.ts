@@ -26,7 +26,10 @@ vi.mock("node:fs", async (importOriginal) => {
   const fixturesRoot = `${absInMock("fixtures")}${pathMod.sep}`;
   const isFixturePath = (p: string) => {
     const resolved = absInMock(p);
-    return resolved === fixturesRoot.slice(0, -1) || resolved.startsWith(fixturesRoot);
+    return (
+      resolved === fixturesRoot.slice(0, -1) ||
+      resolved.startsWith(fixturesRoot)
+    );
   };
   const readFixtureEntry = (p: string) => state.entries.get(absInMock(p));
 
@@ -126,30 +129,46 @@ describe("control UI assets helpers (fs-mocked)", () => {
   it("uses resolveOpenClawPackageRoot when available", async () => {
     const pkgRoot = abs("fixtures/openclaw");
     (
-      openclawRoot.resolveOpenClawPackageRoot as unknown as ReturnType<typeof vi.fn>
+      openclawRoot.resolveOpenClawPackageRoot as unknown as ReturnType<
+        typeof vi.fn
+      >
     ).mockResolvedValueOnce(pkgRoot);
 
-    await expect(resolveControlUiDistIndexPath(abs("fixtures/bin/openclaw"))).resolves.toBe(
-      path.join(pkgRoot, "dist", "control-ui", "index.html"),
-    );
+    await expect(
+      resolveControlUiDistIndexPath(abs("fixtures/bin/openclaw")),
+    ).resolves.toBe(path.join(pkgRoot, "dist", "control-ui", "index.html"));
   });
 
   it("falls back to package.json name matching when root resolution fails", async () => {
     const root = abs("fixtures/fallback");
-    setFile(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }));
-    setFile(path.join(root, "dist", "control-ui", "index.html"), "<html></html>\n");
-
-    await expect(resolveControlUiDistIndexPath(path.join(root, "openclaw.mjs"))).resolves.toBe(
-      path.join(root, "dist", "control-ui", "index.html"),
+    setFile(
+      path.join(root, "package.json"),
+      JSON.stringify({ name: "openclaw" }),
     );
+    setFile(
+      path.join(root, "dist", "control-ui", "index.html"),
+      "<html></html>\n",
+    );
+
+    await expect(
+      resolveControlUiDistIndexPath(path.join(root, "openclaw.mjs")),
+    ).resolves.toBe(path.join(root, "dist", "control-ui", "index.html"));
   });
 
   it("returns null when fallback package name does not match", async () => {
     const root = abs("fixtures/not-openclaw");
-    setFile(path.join(root, "package.json"), JSON.stringify({ name: "malicious-pkg" }));
-    setFile(path.join(root, "dist", "control-ui", "index.html"), "<html></html>\n");
+    setFile(
+      path.join(root, "package.json"),
+      JSON.stringify({ name: "malicious-pkg" }),
+    );
+    setFile(
+      path.join(root, "dist", "control-ui", "index.html"),
+      "<html></html>\n",
+    );
 
-    await expect(resolveControlUiDistIndexPath(path.join(root, "index.mjs"))).resolves.toBeNull();
+    await expect(
+      resolveControlUiDistIndexPath(path.join(root, "index.mjs")),
+    ).resolves.toBeNull();
   });
 
   it("reports health for missing + existing dist assets", async () => {
@@ -178,25 +197,33 @@ describe("control UI assets helpers (fs-mocked)", () => {
 
     expect(resolveControlUiRootOverrideSync(uiDir)).toBe(uiDir);
     expect(resolveControlUiRootOverrideSync(indexPath)).toBe(uiDir);
-    expect(resolveControlUiRootOverrideSync(path.join(uiDir, "missing.html"))).toBeNull();
+    expect(
+      resolveControlUiRootOverrideSync(path.join(uiDir, "missing.html")),
+    ).toBeNull();
   });
 
   it("resolves control-ui root for dist bundle argv1 and moduleUrl candidates", async () => {
     const pkgRoot = abs("fixtures/openclaw-bundle");
     (
-      openclawRoot.resolveOpenClawPackageRootSync as unknown as ReturnType<typeof vi.fn>
+      openclawRoot.resolveOpenClawPackageRootSync as unknown as ReturnType<
+        typeof vi.fn
+      >
     ).mockReturnValueOnce(pkgRoot);
 
     const uiDir = path.join(pkgRoot, "dist", "control-ui");
     setFile(path.join(uiDir, "index.html"), "<html></html>\n");
 
     // argv1Dir candidate: <argv1Dir>/control-ui
-    expect(resolveControlUiRootSync({ argv1: path.join(pkgRoot, "dist", "bundle.js") })).toBe(
-      uiDir,
-    );
+    expect(
+      resolveControlUiRootSync({
+        argv1: path.join(pkgRoot, "dist", "bundle.js"),
+      }),
+    ).toBe(uiDir);
 
     // moduleUrl candidate: <moduleDir>/control-ui
-    const moduleUrl = pathToFileURL(path.join(pkgRoot, "dist", "bundle.js")).toString();
+    const moduleUrl = pathToFileURL(
+      path.join(pkgRoot, "dist", "bundle.js"),
+    ).toString();
     expect(resolveControlUiRootSync({ moduleUrl })).toBe(uiDir);
   });
 });

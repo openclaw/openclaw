@@ -13,7 +13,11 @@ export type CachedCopilotToken = {
 };
 
 function resolveCopilotTokenCachePath(env: NodeJS.ProcessEnv = process.env) {
-  return path.join(resolveStateDir(env), "credentials", "github-copilot.token.json");
+  return path.join(
+    resolveStateDir(env),
+    "credentials",
+    "github-copilot.token.json",
+  );
 }
 
 function isTokenUsable(cache: CachedCopilotToken, now = Date.now()): boolean {
@@ -52,7 +56,8 @@ function parseCopilotTokenResponse(value: unknown): {
   return { token, expiresAt: expiresAtMs };
 }
 
-export const DEFAULT_COPILOT_API_BASE_URL = "https://api.individual.githubcopilot.com";
+export const DEFAULT_COPILOT_API_BASE_URL =
+  "https://api.individual.githubcopilot.com";
 
 export function deriveCopilotApiBaseUrlFromToken(token: string): string | null {
   const trimmed = token.trim();
@@ -92,17 +97,24 @@ export async function resolveCopilotApiToken(params: {
   baseUrl: string;
 }> {
   const env = params.env ?? process.env;
-  const cachePath = params.cachePath?.trim() || resolveCopilotTokenCachePath(env);
+  const cachePath =
+    params.cachePath?.trim() || resolveCopilotTokenCachePath(env);
   const loadJsonFileFn = params.loadJsonFileImpl ?? loadJsonFile;
   const saveJsonFileFn = params.saveJsonFileImpl ?? saveJsonFile;
   const cached = loadJsonFileFn(cachePath) as CachedCopilotToken | undefined;
-  if (cached && typeof cached.token === "string" && typeof cached.expiresAt === "number") {
+  if (
+    cached &&
+    typeof cached.token === "string" &&
+    typeof cached.expiresAt === "number"
+  ) {
     if (isTokenUsable(cached)) {
       return {
         token: cached.token,
         expiresAt: cached.expiresAt,
         source: `cache:${cachePath}`,
-        baseUrl: deriveCopilotApiBaseUrlFromToken(cached.token) ?? DEFAULT_COPILOT_API_BASE_URL,
+        baseUrl:
+          deriveCopilotApiBaseUrlFromToken(cached.token) ??
+          DEFAULT_COPILOT_API_BASE_URL,
       };
     }
   }
@@ -132,6 +144,8 @@ export async function resolveCopilotApiToken(params: {
     token: payload.token,
     expiresAt: payload.expiresAt,
     source: `fetched:${COPILOT_TOKEN_URL}`,
-    baseUrl: deriveCopilotApiBaseUrlFromToken(payload.token) ?? DEFAULT_COPILOT_API_BASE_URL,
+    baseUrl:
+      deriveCopilotApiBaseUrlFromToken(payload.token) ??
+      DEFAULT_COPILOT_API_BASE_URL,
   };
 }

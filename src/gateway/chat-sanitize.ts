@@ -53,7 +53,10 @@ export function stripEnvelopeFromMessage(message: unknown): unknown {
       changed = true;
     }
   } else if (Array.isArray(entry.content)) {
-    const updated = stripEnvelopeFromContentWithRole(entry.content, stripUserEnvelope);
+    const updated = stripEnvelopeFromContentWithRole(
+      entry.content,
+      stripUserEnvelope,
+    );
     if (updated.changed) {
       next.content = updated.content;
       changed = true;

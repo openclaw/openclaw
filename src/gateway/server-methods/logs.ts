@@ -30,7 +30,9 @@ async function resolveLogFile(file: string): Promise<string> {
   }
 
   const dir = path.dirname(file);
-  const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => null);
+  const entries = await fs
+    .readdir(dir, { withFileTypes: true })
+    .catch(() => null);
   if (!entries) {
     return file;
   }

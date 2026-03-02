@@ -15,7 +15,10 @@ export function setDefaultSecurityHeaders(
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("Referrer-Policy", "no-referrer");
   const strictTransportSecurity = opts?.strictTransportSecurity;
-  if (typeof strictTransportSecurity === "string" && strictTransportSecurity.length > 0) {
+  if (
+    typeof strictTransportSecurity === "string" &&
+    strictTransportSecurity.length > 0
+  ) {
     res.setHeader("Strict-Transport-Security", strictTransportSecurity);
   }
 }
@@ -49,13 +52,17 @@ export function sendRateLimited(res: ServerResponse, retryAfterMs?: number) {
   }
   sendJson(res, 429, {
     error: {
-      message: "Too many failed authentication attempts. Please try again later.",
+      message:
+        "Too many failed authentication attempts. Please try again later.",
       type: "rate_limited",
     },
   });
 }
 
-export function sendGatewayAuthFailure(res: ServerResponse, authResult: GatewayAuthResult) {
+export function sendGatewayAuthFailure(
+  res: ServerResponse,
+  authResult: GatewayAuthResult,
+) {
   if (authResult.rateLimited) {
     sendRateLimited(res, authResult.retryAfterMs);
     return;
@@ -84,7 +91,10 @@ export async function readJsonBodyOrError(
     }
     if (body.error === "request body timeout") {
       sendJson(res, 408, {
-        error: { message: "Request body timeout", type: "invalid_request_error" },
+        error: {
+          message: "Request body timeout",
+          type: "invalid_request_error",
+        },
       });
       return undefined;
     }

@@ -74,9 +74,13 @@ export type ExplicitGatewayAuth = {
   password?: string;
 };
 
-export function resolveExplicitGatewayAuth(opts?: ExplicitGatewayAuth): ExplicitGatewayAuth {
+export function resolveExplicitGatewayAuth(
+  opts?: ExplicitGatewayAuth,
+): ExplicitGatewayAuth {
   const token =
-    typeof opts?.token === "string" && opts.token.trim().length > 0 ? opts.token.trim() : undefined;
+    typeof opts?.token === "string" && opts.token.trim().length > 0
+      ? opts.token.trim()
+      : undefined;
   const password =
     typeof opts?.password === "string" && opts.password.trim().length > 0
       ? opts.password.trim()
@@ -111,7 +115,8 @@ export function buildGatewayConnectionDetails(
 ): GatewayConnectionDetails {
   const config = options.config ?? loadConfig();
   const configPath =
-    options.configPath ?? resolveConfigPath(process.env, resolveStateDir(process.env));
+    options.configPath ??
+    resolveConfigPath(process.env, resolveStateDir(process.env));
   const isRemoteMode = config.gateway?.mode === "remote";
   const remote = isRemoteMode ? config.gateway?.remote : undefined;
   const tlsEnabled = config.gateway?.tls?.enabled === true;
@@ -125,7 +130,9 @@ export function buildGatewayConnectionDetails(
       ? options.url.trim()
       : undefined;
   const remoteUrl =
-    typeof remote?.url === "string" && remote.url.trim().length > 0 ? remote.url.trim() : undefined;
+    typeof remote?.url === "string" && remote.url.trim().length > 0
+      ? remote.url.trim()
+      : undefined;
   const remoteMisconfigured = isRemoteMode && !urlOverride && !remoteUrl;
   const url = urlOverride || remoteUrl || localUrl;
   const urlSource = urlOverride
@@ -138,7 +145,8 @@ export function buildGatewayConnectionDetails(
   const remoteFallbackNote = remoteMisconfigured
     ? "Warn: gateway.mode=remote but gateway.remote.url is missing; set gateway.remote.url or switch gateway.mode=local."
     : undefined;
-  const bindDetail = !urlOverride && !remoteUrl ? `Bind: ${bindMode}` : undefined;
+  const bindDetail =
+    !urlOverride && !remoteUrl ? `Bind: ${bindMode}` : undefined;
 
   const allowPrivateWs = process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS === "1";
   // Security check: block ALL insecure ws:// to non-loopback addresses (CWE-319, CVSS 9.8)
@@ -213,26 +221,47 @@ function resolveGatewayCallTimeout(timeoutValue: unknown): {
   safeTimerTimeoutMs: number;
 } {
   const timeoutMs =
-    typeof timeoutValue === "number" && Number.isFinite(timeoutValue) ? timeoutValue : 10_000;
-  const safeTimerTimeoutMs = Math.max(1, Math.min(Math.floor(timeoutMs), 2_147_483_647));
+    typeof timeoutValue === "number" && Number.isFinite(timeoutValue)
+      ? timeoutValue
+      : 10_000;
+  const safeTimerTimeoutMs = Math.max(
+    1,
+    Math.min(Math.floor(timeoutMs), 2_147_483_647),
+  );
   return { timeoutMs, safeTimerTimeoutMs };
 }
 
-function resolveGatewayCallContext(opts: CallGatewayBaseOptions): ResolvedGatewayCallContext {
+function resolveGatewayCallContext(
+  opts: CallGatewayBaseOptions,
+): ResolvedGatewayCallContext {
   const config = opts.config ?? loadConfig();
   const configPath =
-    opts.configPath ?? resolveConfigPath(process.env, resolveStateDir(process.env));
+    opts.configPath ??
+    resolveConfigPath(process.env, resolveStateDir(process.env));
   const isRemoteMode = config.gateway?.mode === "remote";
   const remote = isRemoteMode
     ? (config.gateway?.remote as GatewayRemoteSettings | undefined)
     : undefined;
   const urlOverride = trimToUndefined(opts.url);
   const remoteUrl = trimToUndefined(remote?.url);
-  const explicitAuth = resolveExplicitGatewayAuth({ token: opts.token, password: opts.password });
-  return { config, configPath, isRemoteMode, remote, urlOverride, remoteUrl, explicitAuth };
+  const explicitAuth = resolveExplicitGatewayAuth({
+    token: opts.token,
+    password: opts.password,
+  });
+  return {
+    config,
+    configPath,
+    isRemoteMode,
+    remote,
+    urlOverride,
+    remoteUrl,
+    explicitAuth,
+  };
 }
 
-function ensureRemoteModeUrlConfigured(context: ResolvedGatewayCallContext): void {
+function ensureRemoteModeUrlConfigured(
+  context: ResolvedGatewayCallContext,
+): void {
   if (!context.isRemoteMode || context.urlOverride || context.remoteUrl) {
     return;
   }
@@ -291,7 +320,11 @@ function formatGatewayCloseError(
 ): string {
   const reasonText = reason?.trim() || "no close reason";
   const hint =
-    code === 1006 ? "abnormal closure (no close frame)" : code === 1000 ? "normal closure" : "";
+    code === 1006
+      ? "abnormal closure (no close frame)"
+      : code === 1000
+        ? "normal closure"
+        : "";
   const suffix = hint ? ` ${hint}` : "";
   return `gateway closed (${code}${suffix}): ${reasonText}\n${connectionDetails.message}`;
 }
@@ -314,8 +347,16 @@ async function executeGatewayRequestWithScopes<T>(params: {
   safeTimerTimeoutMs: number;
   connectionDetails: GatewayConnectionDetails;
 }): Promise<T> {
-  const { opts, scopes, url, token, password, tlsFingerprint, timeoutMs, safeTimerTimeoutMs } =
-    params;
+  const {
+    opts,
+    scopes,
+    url,
+    token,
+    password,
+    tlsFingerprint,
+    timeoutMs,
+    safeTimerTimeoutMs,
+  } = params;
   return await new Promise<T>((resolve, reject) => {
     let settled = false;
     let ignoreClose = false;
@@ -368,14 +409,22 @@ async function executeGatewayRequestWithScopes<T>(params: {
         }
         ignoreClose = true;
         client.stop();
-        stop(new Error(formatGatewayCloseError(code, reason, params.connectionDetails)));
+        stop(
+          new Error(
+            formatGatewayCloseError(code, reason, params.connectionDetails),
+          ),
+        );
       },
     });
 
     const timer = setTimeout(() => {
       ignoreClose = true;
       client.stop();
-      stop(new Error(formatGatewayTimeoutError(timeoutMs, params.connectionDetails)));
+      stop(
+        new Error(
+          formatGatewayTimeoutError(timeoutMs, params.connectionDetails),
+        ),
+      );
     }, safeTimerTimeoutMs);
 
     client.start();
@@ -386,7 +435,9 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
   opts: CallGatewayBaseOptions,
   scopes: OperatorScope[],
 ): Promise<T> {
-  const { timeoutMs, safeTimerTimeoutMs } = resolveGatewayCallTimeout(opts.timeoutMs);
+  const { timeoutMs, safeTimerTimeoutMs } = resolveGatewayCallTimeout(
+    opts.timeoutMs,
+  );
   const context = resolveGatewayCallContext(opts);
   ensureExplicitGatewayAuth({
     urlOverride: context.urlOverride,
@@ -401,7 +452,11 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
     ...(opts.configPath ? { configPath: opts.configPath } : {}),
   });
   const url = connectionDetails.url;
-  const tlsFingerprint = await resolveGatewayTlsFingerprint({ opts, context, url });
+  const tlsFingerprint = await resolveGatewayTlsFingerprint({
+    opts,
+    context,
+    url,
+  });
   const { token, password } = resolveGatewayCredentials(context);
   return await executeGatewayRequestWithScopes<T>({
     opts,
@@ -425,7 +480,9 @@ export async function callGatewayScoped<T = Record<string, unknown>>(
 export async function callGatewayCli<T = Record<string, unknown>>(
   opts: CallGatewayCliOptions,
 ): Promise<T> {
-  const scopes = Array.isArray(opts.scopes) ? opts.scopes : CLI_DEFAULT_OPERATOR_SCOPES;
+  const scopes = Array.isArray(opts.scopes)
+    ? opts.scopes
+    : CLI_DEFAULT_OPERATOR_SCOPES;
   return await callGatewayWithScopes(opts, scopes);
 }
 
@@ -444,7 +501,10 @@ export async function callGateway<T = Record<string, unknown>>(
   }
   const callerMode = opts.mode ?? GATEWAY_CLIENT_MODES.BACKEND;
   const callerName = opts.clientName ?? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT;
-  if (callerMode === GATEWAY_CLIENT_MODES.CLI || callerName === GATEWAY_CLIENT_NAMES.CLI) {
+  if (
+    callerMode === GATEWAY_CLIENT_MODES.CLI ||
+    callerName === GATEWAY_CLIENT_NAMES.CLI
+  ) {
     return await callGatewayCli(opts);
   }
   return await callGatewayLeastPrivilege({

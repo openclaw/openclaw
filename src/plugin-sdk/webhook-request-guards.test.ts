@@ -46,7 +46,9 @@ function createMockRequest(params: {
 describe("isJsonContentType", () => {
   it("accepts application/json and +json suffixes", () => {
     expect(isJsonContentType("application/json")).toBe(true);
-    expect(isJsonContentType("application/cloudevents+json; charset=utf-8")).toBe(true);
+    expect(
+      isJsonContentType("application/cloudevents+json; charset=utf-8"),
+    ).toBe(true);
   });
 
   it("rejects non-json media types", () => {

@@ -4,7 +4,9 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 export function makeReq(method: string, body: string): IncomingMessage {
   const req = new EventEmitter() as IncomingMessage;
   req.method = method;
-  req.socket = { remoteAddress: "127.0.0.1" } as unknown as IncomingMessage["socket"];
+  req.socket = {
+    remoteAddress: "127.0.0.1",
+  } as unknown as IncomingMessage["socket"];
   process.nextTick(() => {
     req.emit("data", Buffer.from(body));
     req.emit("end");

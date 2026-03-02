@@ -5,7 +5,10 @@ import { formatLogTimestamp } from "./logs-cli.js";
 const callGatewayFromCli = vi.fn();
 
 vi.mock("./gateway-rpc.js", async () => {
-  const actual = await vi.importActual<typeof import("./gateway-rpc.js")>("./gateway-rpc.js");
+  const actual =
+    await vi.importActual<typeof import("./gateway-rpc.js")>(
+      "./gateway-rpc.js",
+    );
   return {
     ...actual,
     callGatewayFromCli: (...args: unknown[]) => callGatewayFromCli(...args),
@@ -66,7 +69,10 @@ describe("logs cli", () => {
       lines: [
         JSON.stringify({
           time: "2025-01-01T12:00:00.000Z",
-          _meta: { logLevelName: "INFO", name: JSON.stringify({ subsystem: "gateway" }) },
+          _meta: {
+            logLevelName: "INFO",
+            name: JSON.stringify({ subsystem: "gateway" }),
+          },
           0: "line one",
         }),
       ],
@@ -82,7 +88,9 @@ describe("logs cli", () => {
 
     const output = stdoutWrites.join("");
     expect(output).toContain("line one");
-    const timestamp = output.match(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z?/u)?.[0];
+    const timestamp = output.match(
+      /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z?/u,
+    )?.[0];
     expect(timestamp).toBeTruthy();
     expect(timestamp?.endsWith("Z")).toBe(false);
   });
@@ -124,7 +132,9 @@ describe("logs cli", () => {
       const utcTime = "2025-01-01T12:00:00.000Z";
       const result = formatLogTimestamp(utcTime, "plain", true);
       // Should be local time with explicit timezone offset (not 'Z' suffix).
-      expect(result).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}[+-]\d{2}:\d{2}$/);
+      expect(result).toMatch(
+        /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}[+-]\d{2}:\d{2}$/,
+      );
       // The exact time depends on timezone, but should be different from UTC
       expect(result).not.toBe(utcTime);
     });

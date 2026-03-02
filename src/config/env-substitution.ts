@@ -31,7 +31,9 @@ export class MissingEnvVarError extends Error {
     public readonly varName: string,
     public readonly configPath: string,
   ) {
-    super(`Missing env var "${varName}" referenced at config path: ${configPath}`);
+    super(
+      `Missing env var "${varName}" referenced at config path: ${configPath}`,
+    );
     this.name = "MissingEnvVarError";
   }
 }
@@ -75,7 +77,11 @@ function parseEnvTokenAt(value: string, index: number): EnvToken | null {
   return null;
 }
 
-function substituteString(value: string, env: NodeJS.ProcessEnv, configPath: string): string {
+function substituteString(
+  value: string,
+  env: NodeJS.ProcessEnv,
+  configPath: string,
+): string {
   if (!value.includes("$")) {
     return value;
   }
@@ -136,13 +142,19 @@ export function containsEnvVarReference(value: string): boolean {
   return false;
 }
 
-function substituteAny(value: unknown, env: NodeJS.ProcessEnv, path: string): unknown {
+function substituteAny(
+  value: unknown,
+  env: NodeJS.ProcessEnv,
+  path: string,
+): unknown {
   if (typeof value === "string") {
     return substituteString(value, env, path);
   }
 
   if (Array.isArray(value)) {
-    return value.map((item, index) => substituteAny(item, env, `${path}[${index}]`));
+    return value.map((item, index) =>
+      substituteAny(item, env, `${path}[${index}]`),
+    );
   }
 
   if (isPlainObject(value)) {
@@ -166,6 +178,9 @@ function substituteAny(value: unknown, env: NodeJS.ProcessEnv, path: string): un
  * @returns The config object with env vars substituted
  * @throws {MissingEnvVarError} If a referenced env var is not set or empty
  */
-export function resolveConfigEnvVars(obj: unknown, env: NodeJS.ProcessEnv = process.env): unknown {
+export function resolveConfigEnvVars(
+  obj: unknown,
+  env: NodeJS.ProcessEnv = process.env,
+): unknown {
   return substituteAny(obj, env, "");
 }

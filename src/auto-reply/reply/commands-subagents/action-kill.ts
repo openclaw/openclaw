@@ -25,7 +25,9 @@ export async function handleSubagentsKillAction(
   const target = restTokens[0];
   if (!target) {
     return stopWithText(
-      handledPrefix === COMMAND ? "Usage: /subagents kill <id|#|all>" : "Usage: /kill <id|#|all>",
+      handledPrefix === COMMAND
+        ? "Usage: /subagents kill <id|#|all>"
+        : "Usage: /kill <id|#|all>",
     );
   }
 
@@ -42,14 +44,20 @@ export async function handleSubagentsKillAction(
     return targetResolution.reply;
   }
   if (targetResolution.entry.endedAt) {
-    return stopWithText(`${formatRunLabel(targetResolution.entry)} is already finished.`);
+    return stopWithText(
+      `${formatRunLabel(targetResolution.entry)} is already finished.`,
+    );
   }
 
   const childKey = targetResolution.entry.childSessionKey;
-  const { storePath, store, entry } = loadSubagentSessionEntry(params, childKey, {
-    loadSessionStore,
-    resolveStorePath,
-  });
+  const { storePath, store, entry } = loadSubagentSessionEntry(
+    params,
+    childKey,
+    {
+      loadSessionStore,
+      resolveStorePath,
+    },
+  );
   const sessionId = entry?.sessionId;
   if (sessionId) {
     abortEmbeddedPiRun(sessionId);

@@ -32,7 +32,8 @@ export const DISCORD_MODEL_PICKER_PROVIDER_PAGE_SIZE =
 // When providers fit in one page, we can use all button rows and hide nav controls.
 export const DISCORD_MODEL_PICKER_PROVIDER_SINGLE_PAGE_MAX =
   DISCORD_COMPONENT_MAX_BUTTONS_PER_ROW * DISCORD_COMPONENT_MAX_ROWS;
-export const DISCORD_MODEL_PICKER_MODEL_PAGE_SIZE = DISCORD_COMPONENT_MAX_SELECT_OPTIONS;
+export const DISCORD_MODEL_PICKER_MODEL_PAGE_SIZE =
+  DISCORD_COMPONENT_MAX_SELECT_OPTIONS;
 
 const DISCORD_PROVIDER_BUTTON_LABEL_MAX_CHARS = 18;
 
@@ -50,7 +51,8 @@ const PICKER_ACTIONS = [
 ] as const;
 const PICKER_VIEWS = ["providers", "models", "recents"] as const;
 
-export type DiscordModelPickerCommandContext = (typeof COMMAND_CONTEXTS)[number];
+export type DiscordModelPickerCommandContext =
+  (typeof COMMAND_CONTEXTS)[number];
 export type DiscordModelPickerAction = (typeof PICKER_ACTIONS)[number];
 export type DiscordModelPickerView = (typeof PICKER_VIEWS)[number];
 
@@ -154,7 +156,9 @@ function decodeCustomIdValue(value: string): string {
   }
 }
 
-function isValidCommandContext(value: string): value is DiscordModelPickerCommandContext {
+function isValidCommandContext(
+  value: string,
+): value is DiscordModelPickerCommandContext {
   return (COMMAND_CONTEXTS as readonly string[]).includes(value);
 }
 
@@ -199,10 +203,16 @@ function parseRawPositiveInt(value: unknown): number | undefined {
 }
 
 function coerceString(value: unknown): string {
-  return typeof value === "string" || typeof value === "number" ? String(value) : "";
+  return typeof value === "string" || typeof value === "number"
+    ? String(value)
+    : "";
 }
 
-function clampPageSize(rawPageSize: number | undefined, max: number, fallback: number): number {
+function clampPageSize(
+  rawPageSize: number | undefined,
+  max: number,
+  fallback: number,
+): number {
   if (!Number.isFinite(rawPageSize)) {
     return fallback;
   }
@@ -231,7 +241,9 @@ function paginateItems<T>(params: {
   };
 }
 
-function parseCurrentModelRef(raw?: string): DiscordModelPickerCurrentModelRef | null {
+function parseCurrentModelRef(
+  raw?: string,
+): DiscordModelPickerCurrentModelRef | null {
   const trimmed = raw?.trim();
   if (!trimmed) {
     return null;
@@ -270,7 +282,10 @@ function chunkProvidersForRows(
     return [];
   }
 
-  const rowCount = Math.max(1, Math.ceil(items.length / DISCORD_COMPONENT_MAX_BUTTONS_PER_ROW));
+  const rowCount = Math.max(
+    1,
+    Math.ceil(items.length / DISCORD_COMPONENT_MAX_BUTTONS_PER_ROW),
+  );
   const minPerRow = Math.floor(items.length / rowCount);
   const rowsWithExtraItem = items.length % rowCount;
 
@@ -287,7 +302,9 @@ function chunkProvidersForRows(
   return rows;
 }
 
-function createModelPickerButton(params: DiscordModelPickerButtonOptions): Button {
+function createModelPickerButton(
+  params: DiscordModelPickerButtonOptions,
+): Button {
   class DiscordModelPickerButton extends Button {
     label = params.label;
     customId = params.customId;
@@ -318,7 +335,12 @@ function buildRenderedShell(
   params: DiscordModelPickerRenderShellParams,
 ): DiscordModelPickerRenderedView {
   if (params.layout === "classic") {
-    const lines = [params.title, ...params.detailLines, "", params.footer].filter(Boolean);
+    const lines = [
+      params.title,
+      ...params.detailLines,
+      "",
+      params.footer,
+    ].filter(Boolean);
     return {
       layout: "classic",
       content: lines.join("\n"),
@@ -326,9 +348,9 @@ function buildRenderedShell(
     };
   }
 
-  const containerComponents: Array<TextDisplay | Separator | DiscordModelPickerRow> = [
-    new TextDisplay(`## ${params.title}`),
-  ];
+  const containerComponents: Array<
+    TextDisplay | Separator | DiscordModelPickerRow
+  > = [new TextDisplay(`## ${params.title}`)];
   if (params.detailLines.length > 0) {
     containerComponents.push(new TextDisplay(params.detailLines.join("\n")));
   }
@@ -338,11 +360,15 @@ function buildRenderedShell(
   }
   containerComponents.push(...params.rows);
   if (params.trailingRows && params.trailingRows.length > 0) {
-    containerComponents.push(new Separator({ divider: true, spacing: "small" }));
+    containerComponents.push(
+      new Separator({ divider: true, spacing: "small" }),
+    );
     containerComponents.push(...params.trailingRows);
   }
   if (params.footer) {
-    containerComponents.push(new Separator({ divider: false, spacing: "small" }));
+    containerComponents.push(
+      new Separator({ divider: false, spacing: "small" }),
+    );
     containerComponents.push(new TextDisplay(`-# ${params.footer}`));
   }
 
@@ -364,7 +390,9 @@ function buildProviderRows(params: {
       new Row(
         providers.map((provider) => {
           const style =
-            provider.id === params.currentProvider ? ButtonStyle.Primary : ButtonStyle.Secondary;
+            provider.id === params.currentProvider
+              ? ButtonStyle.Primary
+              : ButtonStyle.Secondary;
           return createModelPickerButton({
             label: formatProviderButtonLabel(provider.id),
             style,
@@ -405,11 +433,13 @@ function buildModelRows(params: {
     data: params.data,
     page: params.providerPage,
   });
-  const providerOptions: APISelectMenuOption[] = providerPage.items.map((provider) => ({
-    label: provider.id,
-    value: provider.id,
-    default: provider.id === params.modelPage.provider,
-  }));
+  const providerOptions: APISelectMenuOption[] = providerPage.items.map(
+    (provider) => ({
+      label: provider.id,
+      value: provider.id,
+      default: provider.id === params.modelPage.provider,
+    }),
+  );
 
   rows.push(
     new Row([
@@ -430,13 +460,16 @@ function buildModelRows(params: {
   );
 
   const selectedModelRef = parsedPendingModel ?? parsedCurrentModel;
-  const modelOptions: APISelectMenuOption[] = params.modelPage.items.map((model) => ({
-    label: model,
-    value: model,
-    default: selectedModelRef
-      ? selectedModelRef.provider === params.modelPage.provider && selectedModelRef.model === model
-      : false,
-  }));
+  const modelOptions: APISelectMenuOption[] = params.modelPage.items.map(
+    (model) => ({
+      label: model,
+      value: model,
+      default: selectedModelRef
+        ? selectedModelRef.provider === params.modelPage.provider &&
+          selectedModelRef.model === model
+        : false,
+    }),
+  );
 
   rows.push(
     new Row([
@@ -541,7 +574,9 @@ function buildModelRows(params: {
  * Source-of-truth data for Discord picker views. This intentionally reuses the
  * same provider/model resolver used by text and Telegram model commands.
  */
-export async function loadDiscordModelPickerData(cfg: OpenClawConfig): Promise<ModelsProviderData> {
+export async function loadDiscordModelPickerData(
+  cfg: OpenClawConfig,
+): Promise<ModelsProviderData> {
   return buildModelsProviderData(cfg);
 }
 
@@ -563,10 +598,13 @@ export function buildDiscordModelPickerCustomId(params: {
 
   const page = normalizePage(params.page);
   const providerPage =
-    typeof params.providerPage === "number" && Number.isFinite(params.providerPage)
+    typeof params.providerPage === "number" &&
+    Number.isFinite(params.providerPage)
       ? Math.max(1, Math.floor(params.providerPage))
       : undefined;
-  const normalizedProvider = params.provider ? normalizeProviderId(params.provider) : undefined;
+  const normalizedProvider = params.provider
+    ? normalizeProviderId(params.provider)
+    : undefined;
   const modelIndex =
     typeof params.modelIndex === "number" && Number.isFinite(params.modelIndex)
       ? Math.max(1, Math.floor(params.modelIndex))
@@ -605,7 +643,9 @@ export function buildDiscordModelPickerCustomId(params: {
   return customId;
 }
 
-export function parseDiscordModelPickerCustomId(customId: string): DiscordModelPickerState | null {
+export function parseDiscordModelPickerCustomId(
+  customId: string,
+): DiscordModelPickerState | null {
   const trimmed = customId.trim();
   if (!trimmed.startsWith(`${DISCORD_MODEL_PICKER_CUSTOM_ID_KEY}:`)) {
     return null;
@@ -620,7 +660,9 @@ export function parseDiscordModelPickerCustomId(customId: string): DiscordModelP
     }
     const rawKey = part.slice(0, equalsIndex);
     const rawValue = part.slice(equalsIndex + 1);
-    const key = rawKey.includes(":") ? rawKey.split(":").slice(1).join(":") : rawKey;
+    const key = rawKey.includes(":")
+      ? rawKey.split(":").slice(1).join(":")
+      : rawKey;
     if (!key) {
       continue;
     }
@@ -630,7 +672,9 @@ export function parseDiscordModelPickerCustomId(customId: string): DiscordModelP
   return parseDiscordModelPickerData(data);
 }
 
-export function parseDiscordModelPickerData(data: ComponentData): DiscordModelPickerState | null {
+export function parseDiscordModelPickerData(
+  data: ComponentData,
+): DiscordModelPickerState | null {
   if (!data || typeof data !== "object") {
     return null;
   }
@@ -645,7 +689,11 @@ export function parseDiscordModelPickerData(data: ComponentData): DiscordModelPi
   const modelIndex = parseRawPositiveInt(data.mi);
   const recentSlot = parseRawPositiveInt(data.rs);
 
-  if (!isValidCommandContext(command) || !isValidPickerAction(action) || !isValidPickerView(view)) {
+  if (
+    !isValidCommandContext(command) ||
+    !isValidPickerAction(action) ||
+    !isValidPickerView(view)
+  ) {
     return null;
   }
 
@@ -684,7 +732,8 @@ export function getDiscordModelPickerProviderPage(params: {
   pageSize?: number;
 }): DiscordModelPickerPage<DiscordModelPickerProviderItem> {
   const items = buildDiscordModelPickerProviderItems(params.data);
-  const canFitSinglePage = items.length <= DISCORD_MODEL_PICKER_PROVIDER_SINGLE_PAGE_MAX;
+  const canFitSinglePage =
+    items.length <= DISCORD_MODEL_PICKER_PROVIDER_SINGLE_PAGE_MAX;
   const maxPageSize = canFitSinglePage
     ? DISCORD_MODEL_PICKER_PROVIDER_SINGLE_PAGE_MAX
     : DISCORD_MODEL_PICKER_PROVIDER_PAGE_SIZE;
@@ -729,7 +778,10 @@ export function getDiscordModelPickerModelPage(params: {
 export function renderDiscordModelPickerProvidersView(
   params: DiscordModelPickerProviderViewParams,
 ): DiscordModelPickerRenderedView {
-  const page = getDiscordModelPickerProviderPage({ data: params.data, page: params.page });
+  const page = getDiscordModelPickerProviderPage({
+    data: params.data,
+    page: params.page,
+  });
   const parsedCurrent = parseCurrentModelRef(params.currentModel);
   const rows = buildProviderRows({
     command: params.command,
@@ -809,7 +861,10 @@ export function renderDiscordModelPickerModelsView(
   return buildRenderedShell({
     layout: params.layout ?? "v2",
     title: "Model Picker",
-    detailLines: [formatCurrentModelLine(params.currentModel), `Default: ${defaultModel}`],
+    detailLines: [
+      formatCurrentModelLine(params.currentModel),
+      `Default: ${defaultModel}`,
+    ],
     preRowText: pendingLine,
     rows,
     trailingRows: [buttonRow],
@@ -847,7 +902,9 @@ export function renderDiscordModelPickerRecentsView(
   const rows: DiscordModelPickerRow[] = [];
 
   // Dedupe: filter recents that match the default model.
-  const dedupedQuickModels = params.quickModels.filter((modelRef) => modelRef !== defaultModelRef);
+  const dedupedQuickModels = params.quickModels.filter(
+    (modelRef) => modelRef !== defaultModelRef,
+  );
 
   // Default model button — slot 1.
   rows.push(

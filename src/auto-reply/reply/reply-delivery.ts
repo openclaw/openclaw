@@ -4,7 +4,10 @@ import type { BlockReplyContext, ReplyPayload } from "../types.js";
 import type { BlockReplyPipeline } from "./block-reply-pipeline.js";
 import { createBlockReplyPayloadKey } from "./block-reply-pipeline.js";
 import { parseReplyDirectives } from "./reply-directives.js";
-import { applyReplyTagsToPayload, isRenderablePayload } from "./reply-payloads.js";
+import {
+  applyReplyTagsToPayload,
+  isRenderablePayload,
+} from "./reply-payloads.js";
 import type { TypingSignaler } from "./typing-mode.js";
 
 export type ReplyDirectiveParseMode = "always" | "auto" | "never";
@@ -34,13 +37,16 @@ export function normalizeReplyPayloadDirectives(params: {
       })
     : undefined;
 
-  let text = parsed ? parsed.text || undefined : params.payload.text || undefined;
+  let text = parsed
+    ? parsed.text || undefined
+    : params.payload.text || undefined;
   if (params.trimLeadingWhitespace && text) {
     text = text.trimStart() || undefined;
   }
 
   const mediaUrls = params.payload.mediaUrls ?? parsed?.mediaUrls;
-  const mediaUrl = params.payload.mediaUrl ?? parsed?.mediaUrl ?? mediaUrls?.[0];
+  const mediaUrl =
+    params.payload.mediaUrl ?? parsed?.mediaUrl ?? mediaUrls?.[0];
 
   return {
     payload: {
@@ -51,7 +57,9 @@ export function normalizeReplyPayloadDirectives(params: {
       replyToId: params.payload.replyToId ?? parsed?.replyToId,
       replyToTag: params.payload.replyToTag || parsed?.replyToTag,
       replyToCurrent: params.payload.replyToCurrent || parsed?.replyToCurrent,
-      audioAsVoice: Boolean(params.payload.audioAsVoice || parsed?.audioAsVoice),
+      audioAsVoice: Boolean(
+        params.payload.audioAsVoice || parsed?.audioAsVoice,
+      ),
     },
     isSilent: parsed?.isSilent ?? false,
   };
@@ -61,9 +69,15 @@ const hasRenderableMedia = (payload: ReplyPayload): boolean =>
   Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
 
 export function createBlockReplyDeliveryHandler(params: {
-  onBlockReply: (payload: ReplyPayload, context?: BlockReplyContext) => Promise<void> | void;
+  onBlockReply: (
+    payload: ReplyPayload,
+    context?: BlockReplyContext,
+  ) => Promise<void> | void;
   currentMessageId?: string;
-  normalizeStreamingText: (payload: ReplyPayload) => { text?: string; skip: boolean };
+  normalizeStreamingText: (payload: ReplyPayload) => {
+    text?: string;
+    skip: boolean;
+  };
   applyReplyToMode: (payload: ReplyPayload) => ReplyPayload;
   typingSignals: TypingSignaler;
   blockStreamingEnabled: boolean;
@@ -83,7 +97,9 @@ export function createBlockReplyDeliveryHandler(params: {
         mediaUrl: payload.mediaUrl ?? payload.mediaUrls?.[0],
         replyToId:
           payload.replyToId ??
-          (payload.replyToCurrent === false ? undefined : params.currentMessageId),
+          (payload.replyToCurrent === false
+            ? undefined
+            : params.currentMessageId),
       },
       params.currentMessageId,
     );
@@ -113,9 +129,11 @@ export function createBlockReplyDeliveryHandler(params: {
     }
 
     if (blockPayload.text) {
-      void params.typingSignals.signalTextDelta(blockPayload.text).catch((err) => {
-        logVerbose(`block reply typing signal failed: ${String(err)}`);
-      });
+      void params.typingSignals
+        .signalTextDelta(blockPayload.text)
+        .catch((err) => {
+          logVerbose(`block reply typing signal failed: ${String(err)}`);
+        });
     }
 
     // Use pipeline if available (block streaming enabled), otherwise send directly.
@@ -124,7 +142,9 @@ export function createBlockReplyDeliveryHandler(params: {
     } else if (params.blockStreamingEnabled) {
       // Send directly when flushing before tool execution (no pipeline but streaming enabled).
       // Track sent key to avoid duplicate in final payloads.
-      params.directlySentBlockKeys.add(createBlockReplyPayloadKey(blockPayload));
+      params.directlySentBlockKeys.add(
+        createBlockReplyPayloadKey(blockPayload),
+      );
       await params.onBlockReply(blockPayload);
     }
     // When streaming is disabled entirely, blocks are accumulated in final text instead.

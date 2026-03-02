@@ -2,9 +2,12 @@ import { describe, expect, it } from "vitest";
 import { createConfigIO } from "./io.js";
 
 function makeEaccesFs(configPath: string) {
-  const eaccesErr = Object.assign(new Error(`EACCES: permission denied, open '${configPath}'`), {
-    code: "EACCES",
-  });
+  const eaccesErr = Object.assign(
+    new Error(`EACCES: permission denied, open '${configPath}'`),
+    {
+      code: "EACCES",
+    },
+  );
   return {
     existsSync: (p: string) => p === configPath,
     readFileSync: (p: string): string => {

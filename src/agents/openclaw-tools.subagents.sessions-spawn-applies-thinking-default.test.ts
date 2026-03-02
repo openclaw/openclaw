@@ -21,7 +21,9 @@ function findSubagentThinking(
     if (call.method !== "agent") {
       continue;
     }
-    const params = call.params as { lane?: string; thinking?: string } | undefined;
+    const params = call.params as
+      | { lane?: string; thinking?: string }
+      | undefined;
     if (params?.lane === "subagent") {
       return params.thinking;
     }
@@ -51,7 +53,9 @@ async function expectThinkingPropagation(input: {
   expected: ThinkingLevel;
 }) {
   const gateway = harness.setupSessionsSpawnGatewayMock({});
-  const tool = await harness.getSessionsSpawnTool({ agentSessionKey: MAIN_SESSION_KEY });
+  const tool = await harness.getSessionsSpawnTool({
+    agentSessionKey: MAIN_SESSION_KEY,
+  });
   const result = await tool.execute(input.callId, input.payload);
   expect(result.details).toMatchObject({ status: "accepted" });
 

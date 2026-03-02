@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-let configOverride: ReturnType<(typeof import("../config/config.js"))["loadConfig"]> = {
+let configOverride: ReturnType<
+  (typeof import("../config/config.js"))["loadConfig"]
+> = {
   session: {
     mainKey: "main",
     scope: "per-sender",
@@ -20,7 +22,9 @@ import "./test-helpers/fast-core-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 
 describe("agents_list", () => {
-  type AgentConfig = NonNullable<NonNullable<typeof configOverride.agents>["list"]>[number];
+  type AgentConfig = NonNullable<
+    NonNullable<typeof configOverride.agents>["list"]
+  >[number];
 
   function setConfigWithAgentList(agentList: AgentConfig[]) {
     configOverride = {
@@ -45,8 +49,11 @@ describe("agents_list", () => {
   }
 
   function readAgentList(result: unknown) {
-    return (result as { details?: { agents?: Array<{ id: string; configured?: boolean }> } })
-      .details?.agents;
+    return (
+      result as {
+        details?: { agents?: Array<{ id: string; configured?: boolean }> };
+      }
+    ).details?.agents;
   }
 
   beforeEach(() => {
@@ -114,7 +121,11 @@ describe("agents_list", () => {
       allowAny: true,
     });
     const agents = readAgentList(result);
-    expect(agents?.map((agent) => agent.id)).toEqual(["main", "coder", "research"]);
+    expect(agents?.map((agent) => agent.id)).toEqual([
+      "main",
+      "coder",
+      "research",
+    ]);
   });
 
   it("marks allowlisted-but-unconfigured agents", async () => {

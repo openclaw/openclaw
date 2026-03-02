@@ -18,15 +18,17 @@ function createMockClient(params: {
     getJoinedRoomMembers: vi.fn().mockResolvedValue(members),
     getRoomStateEvent: vi
       .fn()
-      .mockImplementation(async (_roomId: string, _event: string, stateKey: string) => {
-        if (stateKey === "@alice:example.org") {
-          return { is_direct: params.senderDirect === true };
-        }
-        if (stateKey === "@bot:example.org") {
-          return { is_direct: params.selfDirect === true };
-        }
-        return {};
-      }),
+      .mockImplementation(
+        async (_roomId: string, _event: string, stateKey: string) => {
+          if (stateKey === "@alice:example.org") {
+            return { is_direct: params.senderDirect === true };
+          }
+          if (stateKey === "@bot:example.org") {
+            return { is_direct: params.selfDirect === true };
+          }
+          return {};
+        },
+      ),
   } as unknown as MatrixClient;
 }
 
@@ -54,7 +56,9 @@ describe("createDirectRoomTracker", () => {
   });
 
   it("uses is_direct member flags when present", async () => {
-    const tracker = createDirectRoomTracker(createMockClient({ senderDirect: true }));
+    const tracker = createDirectRoomTracker(
+      createMockClient({ senderDirect: true }),
+    );
     await expect(
       tracker.isDirectMessage({
         roomId: "!room:example.org",

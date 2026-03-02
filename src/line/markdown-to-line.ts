@@ -1,5 +1,9 @@
 import type { messagingApi } from "@line/bot-sdk";
-import { createReceiptCard, toFlexMessage, type FlexBubble } from "./flex-templates.js";
+import {
+  createReceiptCard,
+  toFlexMessage,
+  type FlexBubble,
+} from "./flex-templates.js";
 
 type FlexMessage = messagingApi.FlexMessage;
 type FlexComponent = messagingApi.FlexComponent;
@@ -16,7 +20,8 @@ export interface ProcessedLineMessage {
 /**
  * Regex patterns for markdown detection
  */
-const MARKDOWN_TABLE_REGEX = /^\|(.+)\|[\r\n]+\|[-:\s|]+\|[\r\n]+((?:\|.+\|[\r\n]*)+)/gm;
+const MARKDOWN_TABLE_REGEX =
+  /^\|(.+)\|[\r\n]+\|[-:\s|]+\|[\r\n]+((?:\|.+\|[\r\n]*)+)/gm;
 const MARKDOWN_CODE_BLOCK_REGEX = /```(\w*)\n([\s\S]*?)```/g;
 const MARKDOWN_LINK_REGEX = /\[([^\]]+)\]\(([^)]+)\)/g;
 
@@ -148,27 +153,33 @@ export function convertTableToFlexBubble(table: MarkdownTable): FlexBubble {
     paddingBottom: "sm",
   } as FlexBox;
 
-  const dataRows: FlexComponent[] = rowCells.slice(0, 10).map((row, rowIndex) => {
-    const rowContents = table.headers.map((_, colIndex) => {
-      const cell = row[colIndex] ?? { text: "-", bold: false, hasMarkup: false };
-      return {
-        type: "text",
-        text: cell.text,
-        size: "sm",
-        color: "#666666",
-        flex: 1,
-        wrap: true,
-        weight: cell.bold ? "bold" : undefined,
-      };
-    }) as FlexText[];
+  const dataRows: FlexComponent[] = rowCells
+    .slice(0, 10)
+    .map((row, rowIndex) => {
+      const rowContents = table.headers.map((_, colIndex) => {
+        const cell = row[colIndex] ?? {
+          text: "-",
+          bold: false,
+          hasMarkup: false,
+        };
+        return {
+          type: "text",
+          text: cell.text,
+          size: "sm",
+          color: "#666666",
+          flex: 1,
+          wrap: true,
+          weight: cell.bold ? "bold" : undefined,
+        };
+      }) as FlexText[];
 
-    return {
-      type: "box",
-      layout: "horizontal",
-      contents: rowContents,
-      margin: rowIndex === 0 ? "md" : "sm",
-    } as FlexBox;
-  });
+      return {
+        type: "box",
+        layout: "horizontal",
+        contents: rowContents,
+        margin: rowIndex === 0 ? "md" : "sm",
+      } as FlexBox;
+    });
 
   return {
     type: "bubble",
@@ -230,7 +241,8 @@ export function convertCodeBlockToFlexBubble(block: CodeBlock): FlexBubble {
   const titleText = block.language ? `Code (${block.language})` : "Code";
 
   // Truncate very long code to fit LINE's limits
-  const displayCode = block.code.length > 2000 ? block.code.slice(0, 2000) + "\n..." : block.code;
+  const displayCode =
+    block.code.length > 2000 ? block.code.slice(0, 2000) + "\n..." : block.code;
 
   return {
     type: "bubble",
@@ -271,7 +283,10 @@ export function convertCodeBlockToFlexBubble(block: CodeBlock): FlexBubble {
 /**
  * Extract markdown links from text
  */
-export function extractLinks(text: string): { links: MarkdownLink[]; textWithLinks: string } {
+export function extractLinks(text: string): {
+  links: MarkdownLink[];
+  textWithLinks: string;
+} {
   const links: MarkdownLink[] = [];
 
   // Reset regex state

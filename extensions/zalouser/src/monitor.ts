@@ -19,14 +19,21 @@ import {
 import { getZalouserRuntime } from "./runtime.js";
 import { sendMessageZalouser } from "./send.js";
 import type { ResolvedZalouserAccount, ZaloInboundMessage } from "./types.js";
-import { listZaloFriends, listZaloGroups, startZaloListener } from "./zalo-js.js";
+import {
+  listZaloFriends,
+  listZaloGroups,
+  startZaloListener,
+} from "./zalo-js.js";
 
 export type ZalouserMonitorOptions = {
   account: ResolvedZalouserAccount;
   config: OpenClawConfig;
   runtime: RuntimeEnv;
   abortSignal: AbortSignal;
-  statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
+  statusSink?: (patch: {
+    lastInboundAt?: number;
+    lastOutboundAt?: number;
+  }) => void;
 };
 
 export type ZalouserMonitorResult = {
@@ -39,7 +46,10 @@ function normalizeZalouserEntry(entry: string): string {
   return entry.replace(/^(zalouser|zlu):/i, "").trim();
 }
 
-function buildNameIndex<T>(items: T[], nameFn: (item: T) => string | undefined): Map<string, T[]> {
+function buildNameIndex<T>(
+  items: T[],
+  nameFn: (item: T) => string | undefined,
+): Map<string, T[]> {
   const index = new Map<string, T[]>();
   for (const item of items) {
     const name = nameFn(item)?.trim().toLowerCase();
@@ -55,13 +65,20 @@ function buildNameIndex<T>(items: T[], nameFn: (item: T) => string | undefined):
 
 type ZalouserCoreRuntime = ReturnType<typeof getZalouserRuntime>;
 
-function logVerbose(core: ZalouserCoreRuntime, runtime: RuntimeEnv, message: string): void {
+function logVerbose(
+  core: ZalouserCoreRuntime,
+  runtime: RuntimeEnv,
+  message: string,
+): void {
   if (core.logging.shouldLogVerbose()) {
     runtime.log(`[zalouser] ${message}`);
   }
 }
 
-function isSenderAllowed(senderId: string | undefined, allowFrom: string[]): boolean {
+function isSenderAllowed(
+  senderId: string | undefined,
+  allowFrom: string[],
+): boolean {
   if (allowFrom.includes("*")) {
     return true;
   }
@@ -122,7 +139,10 @@ async function processMessage(
   config: OpenClawConfig,
   core: ZalouserCoreRuntime,
   runtime: RuntimeEnv,
-  statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void,
+  statusSink?: (patch: {
+    lastInboundAt?: number;
+    lastOutboundAt?: number;
+  }) => void,
 ): Promise<void> {
   const pairing = createScopedPairingAccess({
     core,
@@ -139,18 +159,23 @@ async function processMessage(
   const chatId = message.threadId;
   const senderId = message.senderId?.trim();
   if (!senderId) {
-    logVerbose(core, runtime, `zalouser: drop message ${chatId} (missing senderId)`);
+    logVerbose(
+      core,
+      runtime,
+      `zalouser: drop message ${chatId} (missing senderId)`,
+    );
     return;
   }
   const senderName = message.senderName ?? "";
   const groupName = message.groupName ?? "";
 
   const defaultGroupPolicy = resolveDefaultGroupPolicy(config);
-  const { groupPolicy, providerMissingFallbackApplied } = resolveOpenProviderRuntimeGroupPolicy({
-    providerConfigPresent: config.channels?.zalouser !== undefined,
-    groupPolicy: account.config.groupPolicy,
-    defaultGroupPolicy,
-  });
+  const { groupPolicy, providerMissingFallbackApplied } =
+    resolveOpenProviderRuntimeGroupPolicy({
+      providerConfigPresent: config.channels?.zalouser !== undefined,
+      groupPolicy: account.config.groupPolicy,
+      defaultGroupPolicy,
+    });
   warnMissingProviderGroupPolicyFallbackOnce({
     providerMissingFallbackApplied,
     providerKey: "zalouser",
@@ -161,38 +186,53 @@ async function processMessage(
   const groups = account.config.groups ?? {};
   if (isGroup) {
     if (groupPolicy === "disabled") {
-      logVerbose(core, runtime, `zalouser: drop group ${chatId} (groupPolicy=disabled)`);
+      logVerbose(
+        core,
+        runtime,
+        `zalouser: drop group ${chatId} (groupPolicy=disabled)`,
+      );
       return;
     }
     if (groupPolicy === "allowlist") {
       const allowed = isGroupAllowed({ groupId: chatId, groupName, groups });
       if (!allowed) {
-        logVerbose(core, runtime, `zalouser: drop group ${chatId} (not allowlisted)`);
+        logVerbose(
+          core,
+          runtime,
+          `zalouser: drop group ${chatId} (not allowlisted)`,
+        );
         return;
       }
     }
   }
 
   const dmPolicy = account.config.dmPolicy ?? "pairing";
-  const configAllowFrom = (account.config.allowFrom ?? []).map((v) => String(v));
-  const { senderAllowedForCommands, commandAuthorized } = await resolveSenderCommandAuthorization({
-    cfg: config,
-    rawBody,
-    isGroup,
-    dmPolicy,
-    configuredAllowFrom: configAllowFrom,
-    senderId,
-    isSenderAllowed,
-    readAllowFromStore: pairing.readAllowFromStore,
-    shouldComputeCommandAuthorized: (body, cfg) =>
-      core.channel.commands.shouldComputeCommandAuthorized(body, cfg),
-    resolveCommandAuthorizedFromAuthorizers: (params) =>
-      core.channel.commands.resolveCommandAuthorizedFromAuthorizers(params),
-  });
+  const configAllowFrom = (account.config.allowFrom ?? []).map((v) =>
+    String(v),
+  );
+  const { senderAllowedForCommands, commandAuthorized } =
+    await resolveSenderCommandAuthorization({
+      cfg: config,
+      rawBody,
+      isGroup,
+      dmPolicy,
+      configuredAllowFrom: configAllowFrom,
+      senderId,
+      isSenderAllowed,
+      readAllowFromStore: pairing.readAllowFromStore,
+      shouldComputeCommandAuthorized: (body, cfg) =>
+        core.channel.commands.shouldComputeCommandAuthorized(body, cfg),
+      resolveCommandAuthorizedFromAuthorizers: (params) =>
+        core.channel.commands.resolveCommandAuthorizedFromAuthorizers(params),
+    });
 
   if (!isGroup) {
     if (dmPolicy === "disabled") {
-      logVerbose(core, runtime, `Blocked zalouser DM from ${senderId} (dmPolicy=disabled)`);
+      logVerbose(
+        core,
+        runtime,
+        `Blocked zalouser DM from ${senderId} (dmPolicy=disabled)`,
+      );
       return;
     }
 
@@ -206,7 +246,11 @@ async function processMessage(
           });
 
           if (created) {
-            logVerbose(core, runtime, `zalouser pairing request sender=${senderId}`);
+            logVerbose(
+              core,
+              runtime,
+              `zalouser pairing request sender=${senderId}`,
+            );
             try {
               await sendMessageZalouser(
                 chatId,
@@ -266,11 +310,17 @@ async function processMessage(
     },
   });
 
-  const fromLabel = isGroup ? groupName || `group:${chatId}` : senderName || `user:${senderId}`;
-  const storePath = core.channel.session.resolveStorePath(config.session?.store, {
-    agentId: route.agentId,
-  });
-  const envelopeOptions = core.channel.reply.resolveEnvelopeFormatOptions(config);
+  const fromLabel = isGroup
+    ? groupName || `group:${chatId}`
+    : senderName || `user:${senderId}`;
+  const storePath = core.channel.session.resolveStorePath(
+    config.session?.store,
+    {
+      agentId: route.agentId,
+    },
+  );
+  const envelopeOptions =
+    core.channel.reply.resolveEnvelopeFormatOptions(config);
   const previousTimestamp = core.channel.session.readSessionUpdatedAt({
     storePath,
     sessionKey: route.sessionKey,
@@ -328,7 +378,11 @@ async function processMessage(
       ...prefixOptions,
       deliver: async (payload) => {
         await deliverZalouserReply({
-          payload: payload as { text?: string; mediaUrls?: string[]; mediaUrl?: string },
+          payload: payload as {
+            text?: string;
+            mediaUrls?: string[];
+            mediaUrl?: string;
+          },
           profile: account.profile,
           chatId,
           isGroup,
@@ -345,7 +399,9 @@ async function processMessage(
         });
       },
       onError: (err, info) => {
-        runtime.error(`[${account.accountId}] Zalouser ${info.kind} reply failed: ${String(err)}`);
+        runtime.error(
+          `[${account.accountId}] Zalouser ${info.kind} reply failed: ${String(err)}`,
+        );
       },
     },
     replyOptions: {
@@ -363,13 +419,28 @@ async function deliverZalouserReply(params: {
   core: ZalouserCoreRuntime;
   config: OpenClawConfig;
   accountId?: string;
-  statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
+  statusSink?: (patch: {
+    lastInboundAt?: number;
+    lastOutboundAt?: number;
+  }) => void;
   tableMode?: MarkdownTableMode;
 }): Promise<void> {
-  const { payload, profile, chatId, isGroup, runtime, core, config, accountId, statusSink } =
-    params;
+  const {
+    payload,
+    profile,
+    chatId,
+    isGroup,
+    runtime,
+    core,
+    config,
+    accountId,
+    statusSink,
+  } = params;
   const tableMode = params.tableMode ?? "code";
-  const text = core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode);
+  const text = core.channel.text.convertMarkdownTables(
+    payload.text ?? "",
+    tableMode,
+  );
 
   const sentMedia = await sendMediaWithLeadingCaption({
     mediaUrls: resolveOutboundMediaUrls(payload),
@@ -392,13 +463,21 @@ async function deliverZalouserReply(params: {
   }
 
   if (text) {
-    const chunkMode = core.channel.text.resolveChunkMode(config, "zalouser", accountId);
+    const chunkMode = core.channel.text.resolveChunkMode(
+      config,
+      "zalouser",
+      accountId,
+    );
     const chunks = core.channel.text.chunkMarkdownTextWithMode(
       text,
       ZALOUSER_TEXT_LIMIT,
       chunkMode,
     );
-    logVerbose(core, runtime, `Sending ${chunks.length} text chunk(s) to ${chatId}`);
+    logVerbose(
+      core,
+      runtime,
+      `Sending ${chunks.length} text chunk(s) to ${chatId}`,
+    );
     for (const chunk of chunks) {
       try {
         await sendMessageZalouser(chatId, chunk, { profile, isGroup });
@@ -445,7 +524,10 @@ export async function monitorZalouserProvider(
           unresolved.push(entry);
         }
       }
-      const allowFrom = mergeAllowlist({ existing: account.config.allowFrom, additions });
+      const allowFrom = mergeAllowlist({
+        existing: account.config.allowFrom,
+        additions,
+      });
       account = {
         ...account,
         config: {
@@ -495,7 +577,9 @@ export async function monitorZalouserProvider(
       summarizeMapping("zalouser groups", mapping, unresolved, runtime);
     }
   } catch (err) {
-    runtime.log?.(`zalouser resolve failed; using config entries. ${String(err)}`);
+    runtime.log?.(
+      `zalouser resolve failed; using config entries. ${String(err)}`,
+    );
   }
 
   let listenerStop: (() => void) | null = null;
@@ -520,15 +604,21 @@ export async function monitorZalouserProvider(
       }
       logVerbose(core, runtime, `[${account.accountId}] inbound message`);
       statusSink?.({ lastInboundAt: Date.now() });
-      processMessage(msg, account, config, core, runtime, statusSink).catch((err) => {
-        runtime.error(`[${account.accountId}] Failed to process message: ${String(err)}`);
-      });
+      processMessage(msg, account, config, core, runtime, statusSink).catch(
+        (err) => {
+          runtime.error(
+            `[${account.accountId}] Failed to process message: ${String(err)}`,
+          );
+        },
+      );
     },
     onError: (err) => {
       if (stopped || abortSignal.aborted) {
         return;
       }
-      runtime.error(`[${account.accountId}] Zalo listener error: ${String(err)}`);
+      runtime.error(
+        `[${account.accountId}] Zalo listener error: ${String(err)}`,
+      );
     },
   });
 
@@ -554,7 +644,10 @@ export const __testing = {
     account: ResolvedZalouserAccount;
     config: OpenClawConfig;
     runtime: RuntimeEnv;
-    statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
+    statusSink?: (patch: {
+      lastInboundAt?: number;
+      lastOutboundAt?: number;
+    }) => void;
   }) => {
     await processMessage(
       params.message,

@@ -56,7 +56,9 @@ export function isRequestBodyLimitError(
   return error.code === code;
 }
 
-export function requestBodyErrorToText(code: RequestBodyLimitErrorCode): string {
+export function requestBodyErrorToText(
+  code: RequestBodyLimitErrorCode,
+): string {
   return DEFAULT_RESPONSE_MESSAGE[code];
 }
 
@@ -196,7 +198,11 @@ export async function readRequestBodyWithLimit(
 
 export type ReadJsonBodyResult =
   | { ok: true; value: unknown }
-  | { ok: false; error: string; code: RequestBodyLimitErrorCode | "INVALID_JSON" };
+  | {
+      ok: false;
+      error: string;
+      code: RequestBodyLimitErrorCode | "INVALID_JSON";
+    };
 
 export type ReadJsonBodyOptions = ReadRequestBodyOptions & {
   emptyObjectOnEmpty?: boolean;
@@ -226,7 +232,11 @@ export async function readJsonBodyWithLimit(
     }
   } catch (error) {
     if (isRequestBodyLimitError(error)) {
-      return { ok: false, code: error.code, error: requestBodyErrorToText(error.code) };
+      return {
+        ok: false,
+        code: error.code,
+        error: requestBodyErrorToText(error.code),
+      };
     }
     return {
       ok: false,

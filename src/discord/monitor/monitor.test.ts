@@ -16,7 +16,10 @@ import {
   resolveDiscordComponentEntry,
   resolveDiscordModalEntry,
 } from "../components-registry.js";
-import type { DiscordComponentEntry, DiscordModalEntry } from "../components.js";
+import type {
+  DiscordComponentEntry,
+  DiscordModalEntry,
+} from "../components.js";
 import {
   createAgentComponentButton,
   createAgentSelectMenu,
@@ -35,7 +38,12 @@ import {
   registerGateway,
   unregisterGateway,
 } from "./gateway-registry.js";
-import { clearPresences, getPresence, presenceCacheSize, setPresence } from "./presence-cache.js";
+import {
+  clearPresences,
+  getPresence,
+  presenceCacheSize,
+  setPresence,
+} from "./presence-cache.js";
 import { resolveDiscordPresenceUpdate } from "./presence.js";
 import {
   maybeCreateDiscordAutoThread,
@@ -55,12 +63,15 @@ const resolveStorePathMock = vi.hoisted(() => vi.fn());
 let lastDispatchCtx: Record<string, unknown> | undefined;
 
 vi.mock("../../pairing/pairing-store.js", () => ({
-  readChannelAllowFromStore: (...args: unknown[]) => readAllowFromStoreMock(...args),
-  upsertChannelPairingRequest: (...args: unknown[]) => upsertPairingRequestMock(...args),
+  readChannelAllowFromStore: (...args: unknown[]) =>
+    readAllowFromStoreMock(...args),
+  upsertChannelPairingRequest: (...args: unknown[]) =>
+    upsertPairingRequestMock(...args),
 }));
 
 vi.mock("../../infra/system-events.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../infra/system-events.js")>();
+  const actual =
+    await importOriginal<typeof import("../../infra/system-events.js")>();
   return {
     ...actual,
     enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
@@ -68,7 +79,8 @@ vi.mock("../../infra/system-events.js", async (importOriginal) => {
 });
 
 vi.mock("../../auto-reply/reply/provider-dispatcher.js", () => ({
-  dispatchReplyWithBufferedBlockDispatcher: (...args: unknown[]) => dispatchReplyMock(...args),
+  dispatchReplyWithBufferedBlockDispatcher: (...args: unknown[]) =>
+    dispatchReplyMock(...args),
 }));
 
 vi.mock("./reply-delivery.js", () => ({
@@ -76,14 +88,17 @@ vi.mock("./reply-delivery.js", () => ({
 }));
 
 vi.mock("../../channels/session.js", () => ({
-  recordInboundSession: (...args: unknown[]) => recordInboundSessionMock(...args),
+  recordInboundSession: (...args: unknown[]) =>
+    recordInboundSessionMock(...args),
 }));
 
 vi.mock("../../config/sessions.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../config/sessions.js")>();
+  const actual =
+    await importOriginal<typeof import("../../config/sessions.js")>();
   return {
     ...actual,
-    readSessionUpdatedAt: (...args: unknown[]) => readSessionUpdatedAtMock(...args),
+    readSessionUpdatedAt: (...args: unknown[]) =>
+      readSessionUpdatedAtMock(...args),
     resolveStorePath: (...args: unknown[]) => resolveStorePathMock(...args),
   };
 });
@@ -104,7 +119,9 @@ describe("agent components", () => {
     return { interaction, defer, reply };
   };
 
-  const createDmButtonInteraction = (overrides: Partial<ButtonInteraction> = {}) => {
+  const createDmButtonInteraction = (
+    overrides: Partial<ButtonInteraction> = {},
+  ) => {
     const { interaction, defer, reply } = createBaseDmInteraction(
       overrides as Record<string, unknown>,
     );
@@ -115,7 +132,9 @@ describe("agent components", () => {
     };
   };
 
-  const createDmSelectInteraction = (overrides: Partial<StringSelectMenuInteraction> = {}) => {
+  const createDmSelectInteraction = (
+    overrides: Partial<StringSelectMenuInteraction> = {},
+  ) => {
     const { interaction, defer, reply } = createBaseDmInteraction({
       values: ["alpha"],
       ...(overrides as Record<string, unknown>),
@@ -129,7 +148,9 @@ describe("agent components", () => {
 
   beforeEach(() => {
     readAllowFromStoreMock.mockClear().mockResolvedValue([]);
-    upsertPairingRequestMock.mockClear().mockResolvedValue({ code: "PAIRCODE", created: true });
+    upsertPairingRequestMock
+      .mockClear()
+      .mockResolvedValue({ code: "PAIRCODE", created: true });
     enqueueSystemEventMock.mockClear();
   });
 
@@ -145,7 +166,9 @@ describe("agent components", () => {
 
     expect(defer).toHaveBeenCalledWith({ ephemeral: true });
     expect(reply).toHaveBeenCalledTimes(1);
-    expect(reply.mock.calls[0]?.[0]?.content).toContain("Pairing code: PAIRCODE");
+    expect(reply.mock.calls[0]?.[0]?.content).toContain(
+      "Pairing code: PAIRCODE",
+    );
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
   });
 
@@ -161,7 +184,9 @@ describe("agent components", () => {
     await button.run(interaction, { componentId: "hello" } as ComponentData);
 
     expect(defer).toHaveBeenCalledWith({ ephemeral: true });
-    expect(reply).toHaveBeenCalledWith({ content: "You are not authorized to use this button." });
+    expect(reply).toHaveBeenCalledWith({
+      content: "You are not authorized to use this button.",
+    });
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
     expect(readAllowFromStoreMock).not.toHaveBeenCalled();
   });
@@ -170,7 +195,9 @@ describe("agent components", () => {
     const select = createAgentSelectMenu({
       cfg: createCfg(),
       accountId: "default",
-      discordConfig: { dangerouslyAllowNameMatching: true } as DiscordAccountConfig,
+      discordConfig: {
+        dangerouslyAllowNameMatching: true,
+      } as DiscordAccountConfig,
       dmPolicy: "allowlist",
       allowFrom: ["Alice#1234"],
     });
@@ -232,7 +259,9 @@ describe("discord component interactions", () => {
       },
     }) as OpenClawConfig;
 
-  const createDiscordConfig = (overrides?: Partial<DiscordAccountConfig>): DiscordAccountConfig =>
+  const createDiscordConfig = (
+    overrides?: Partial<DiscordAccountConfig>,
+  ): DiscordAccountConfig =>
     ({
       replyToMode: "first",
       ...overrides,
@@ -258,7 +287,9 @@ describe("discord component interactions", () => {
       ...overrides,
     }) as Parameters<typeof createDiscordComponentButton>[0];
 
-  const createComponentButtonInteraction = (overrides: Partial<ButtonInteraction> = {}) => {
+  const createComponentButtonInteraction = (
+    overrides: Partial<ButtonInteraction> = {},
+  ) => {
     const reply = vi.fn().mockResolvedValue(undefined);
     const defer = vi.fn().mockResolvedValue(undefined);
     const interaction = {
@@ -274,7 +305,9 @@ describe("discord component interactions", () => {
     return { interaction, defer, reply };
   };
 
-  const createModalInteraction = (overrides: Partial<ModalInteraction> = {}) => {
+  const createModalInteraction = (
+    overrides: Partial<ModalInteraction> = {},
+  ) => {
     const reply = vi.fn().mockResolvedValue(undefined);
     const acknowledge = vi.fn().mockResolvedValue(undefined);
     const fields = {
@@ -309,7 +342,9 @@ describe("discord component interactions", () => {
     ...overrides,
   });
 
-  const createModalEntry = (overrides: Partial<DiscordModalEntry> = {}): DiscordModalEntry => ({
+  const createModalEntry = (
+    overrides: Partial<DiscordModalEntry> = {},
+  ): DiscordModalEntry => ({
     id: "mdl_1",
     title: "Details",
     messageId: "msg-2",
@@ -331,16 +366,22 @@ describe("discord component interactions", () => {
     clearDiscordComponentEntries();
     lastDispatchCtx = undefined;
     readAllowFromStoreMock.mockClear().mockResolvedValue([]);
-    upsertPairingRequestMock.mockClear().mockResolvedValue({ code: "PAIRCODE", created: true });
+    upsertPairingRequestMock
+      .mockClear()
+      .mockResolvedValue({ code: "PAIRCODE", created: true });
     enqueueSystemEventMock.mockClear();
-    dispatchReplyMock.mockClear().mockImplementation(async (params: DispatchParams) => {
-      lastDispatchCtx = params.ctx;
-      await params.dispatcherOptions.deliver({ text: "ok" });
-    });
+    dispatchReplyMock
+      .mockClear()
+      .mockImplementation(async (params: DispatchParams) => {
+        lastDispatchCtx = params.ctx;
+        await params.dispatcherOptions.deliver({ text: "ok" });
+      });
     deliverDiscordReplyMock.mockClear();
     recordInboundSessionMock.mockClear().mockResolvedValue(undefined);
     readSessionUpdatedAtMock.mockClear().mockReturnValue(undefined);
-    resolveStorePathMock.mockClear().mockReturnValue("/tmp/openclaw-sessions-test.json");
+    resolveStorePathMock
+      .mockClear()
+      .mockReturnValue("/tmp/openclaw-sessions-test.json");
   });
 
   it("routes button clicks with reply references", async () => {
@@ -372,16 +413,20 @@ describe("discord component interactions", () => {
     const { interaction } = createComponentButtonInteraction();
     await button.run(interaction, { cid: "btn_1" } as ComponentData);
 
-    const { interaction: secondInteraction } = createComponentButtonInteraction({
-      rawData: {
-        channel_id: "dm-channel",
-        id: "interaction-2",
-      } as unknown as ButtonInteraction["rawData"],
-    });
+    const { interaction: secondInteraction } = createComponentButtonInteraction(
+      {
+        rawData: {
+          channel_id: "dm-channel",
+          id: "interaction-2",
+        } as unknown as ButtonInteraction["rawData"],
+      },
+    );
     await button.run(secondInteraction, { cid: "btn_1" } as ComponentData);
 
     expect(dispatchReplyMock).toHaveBeenCalledTimes(2);
-    expect(resolveDiscordComponentEntry({ id: "btn_1", consume: false })).not.toBeNull();
+    expect(
+      resolveDiscordComponentEntry({ id: "btn_1", consume: false }),
+    ).not.toBeNull();
   });
 
   it("blocks buttons when allowedUsers does not match", async () => {
@@ -395,9 +440,13 @@ describe("discord component interactions", () => {
 
     await button.run(interaction, { cid: "btn_1" } as ComponentData);
 
-    expect(reply).toHaveBeenCalledWith({ content: "You are not authorized to use this button." });
+    expect(reply).toHaveBeenCalledWith({
+      content: "You are not authorized to use this button.",
+    });
     expect(dispatchReplyMock).not.toHaveBeenCalled();
-    expect(resolveDiscordComponentEntry({ id: "btn_1", consume: false })).not.toBeNull();
+    expect(
+      resolveDiscordComponentEntry({ id: "btn_1", consume: false }),
+    ).not.toBeNull();
   });
 
   async function runModalSubmission(params?: { reusable?: boolean }) {
@@ -421,7 +470,9 @@ describe("discord component interactions", () => {
     const { acknowledge } = await runModalSubmission();
 
     expect(acknowledge).toHaveBeenCalledTimes(1);
-    expect(lastDispatchCtx?.BodyForAgent).toContain('Form "Details" submitted.');
+    expect(lastDispatchCtx?.BodyForAgent).toContain(
+      'Form "Details" submitted.',
+    );
     expect(lastDispatchCtx?.BodyForAgent).toContain("- Name: Casey");
     expect(dispatchReplyMock).toHaveBeenCalledTimes(1);
     expect(deliverDiscordReplyMock).toHaveBeenCalledTimes(1);
@@ -451,7 +502,10 @@ describe("discord component interactions", () => {
         id: "interaction-guild-1",
         member: { roles: [] },
       } as unknown as ModalInteraction["rawData"],
-      guild: { id: "guild-1", name: "Test Guild" } as unknown as ModalInteraction["guild"],
+      guild: {
+        id: "guild-1",
+        name: "Test Guild",
+      } as unknown as ModalInteraction["guild"],
     });
 
     await modal.run(interaction, { mid: "mdl_1" } as ComponentData);
@@ -483,7 +537,10 @@ describe("discord component interactions", () => {
         id: "interaction-guild-2",
         member: { roles: [] },
       } as unknown as ModalInteraction["rawData"],
-      guild: { id: "guild-1", name: "Test Guild" } as unknown as ModalInteraction["guild"],
+      guild: {
+        id: "guild-1",
+        name: "Test Guild",
+      } as unknown as ModalInteraction["guild"],
     });
 
     await modal.run(interaction, { mid: "mdl_1" } as ComponentData);
@@ -497,7 +554,9 @@ describe("discord component interactions", () => {
     const { acknowledge } = await runModalSubmission({ reusable: true });
 
     expect(acknowledge).toHaveBeenCalledTimes(1);
-    expect(resolveDiscordModalEntry({ id: "mdl_1", consume: false })).not.toBeNull();
+    expect(
+      resolveDiscordModalEntry({ id: "mdl_1", consume: false }),
+    ).not.toBeNull();
   });
 });
 
@@ -513,7 +572,10 @@ describe("resolveDiscordOwnerAllowFrom", () => {
 
   it("skips wildcard matches for owner allowFrom", () => {
     const result = resolveDiscordOwnerAllowFrom({
-      channelConfig: { allowed: true, users: ["*"] } as DiscordChannelConfigResolved,
+      channelConfig: {
+        allowed: true,
+        users: ["*"],
+      } as DiscordChannelConfigResolved,
       sender: { id: "123" },
     });
 
@@ -522,7 +584,10 @@ describe("resolveDiscordOwnerAllowFrom", () => {
 
   it("returns a matching user id entry", () => {
     const result = resolveDiscordOwnerAllowFrom({
-      channelConfig: { allowed: true, users: ["123"] } as DiscordChannelConfigResolved,
+      channelConfig: {
+        allowed: true,
+        users: ["123"],
+      } as DiscordChannelConfigResolved,
       sender: { id: "123" },
     });
 
@@ -531,13 +596,19 @@ describe("resolveDiscordOwnerAllowFrom", () => {
 
   it("returns the normalized name slug for name matches only when enabled", () => {
     const defaultResult = resolveDiscordOwnerAllowFrom({
-      channelConfig: { allowed: true, users: ["Some User"] } as DiscordChannelConfigResolved,
+      channelConfig: {
+        allowed: true,
+        users: ["Some User"],
+      } as DiscordChannelConfigResolved,
       sender: { id: "999", name: "Some User" },
     });
     expect(defaultResult).toBeUndefined();
 
     const enabledResult = resolveDiscordOwnerAllowFrom({
-      channelConfig: { allowed: true, users: ["Some User"] } as DiscordChannelConfigResolved,
+      channelConfig: {
+        allowed: true,
+        users: ["Some User"],
+      } as DiscordChannelConfigResolved,
       sender: { id: "999", name: "Some User" },
       allowNameMatching: true,
     });
@@ -872,8 +943,12 @@ describe("resolveDiscordReplyDeliveryPlan", () => {
 
     for (const testCase of cases) {
       const plan = resolveDiscordReplyDeliveryPlan(testCase.input);
-      expect(plan.deliverTarget, testCase.name).toBe(testCase.expectedDeliverTarget);
-      expect(plan.replyTarget, testCase.name).toBe(testCase.expectedReplyTarget);
+      expect(plan.deliverTarget, testCase.name).toBe(
+        testCase.expectedDeliverTarget,
+      );
+      expect(plan.replyTarget, testCase.name).toBe(
+        testCase.expectedReplyTarget,
+      );
       for (const expected of testCase.expectedReplyReferenceCalls) {
         expect(plan.replyReference.use(), testCase.name).toBe(expected);
       }
@@ -925,7 +1000,9 @@ describe("maybeCreateDiscordAutoThread", () => {
         },
       } as unknown as Client;
 
-      const result = await maybeCreateDiscordAutoThread(createAutoThreadParams(client));
+      const result = await maybeCreateDiscordAutoThread(
+        createAutoThreadParams(client),
+      );
       expect(result, testCase.name).toBe(testCase.expected);
     }
   });
@@ -940,7 +1017,9 @@ describe("resolveDiscordAutoThreadReplyPlan", () => {
     return {
       client:
         overrides?.client ??
-        ({ rest: { post: async () => ({ id: "thread" }) } } as unknown as Client),
+        ({
+          rest: { post: async () => ({ id: "thread" }) },
+        } as unknown as Client),
       message: {
         id: "m1",
         channelId: "parent",
@@ -983,7 +1062,9 @@ describe("resolveDiscordAutoThreadReplyPlan", () => {
       {
         name: "autoThread disabled",
         params: {
-          channelConfig: { autoThread: false } as unknown as DiscordChannelConfigResolved,
+          channelConfig: {
+            autoThread: false,
+          } as unknown as DiscordChannelConfigResolved,
         },
         expectedDeliverTarget: "channel:parent",
         expectedReplyReference: "m1",
@@ -995,12 +1076,18 @@ describe("resolveDiscordAutoThreadReplyPlan", () => {
       const plan = await resolveDiscordAutoThreadReplyPlan(
         createAutoThreadPlanParams(testCase.params),
       );
-      expect(plan.deliverTarget, testCase.name).toBe(testCase.expectedDeliverTarget);
-      expect(plan.replyReference.use(), testCase.name).toBe(testCase.expectedReplyReference);
+      expect(plan.deliverTarget, testCase.name).toBe(
+        testCase.expectedDeliverTarget,
+      );
+      expect(plan.replyReference.use(), testCase.name).toBe(
+        testCase.expectedReplyReference,
+      );
       if (testCase.expectedSessionKey == null) {
         expect(plan.autoThreadContext, testCase.name).toBeNull();
       } else {
-        expect(plan.autoThreadContext?.SessionKey, testCase.name).toBe(testCase.expectedSessionKey);
+        expect(plan.autoThreadContext?.SessionKey, testCase.name).toBe(
+          testCase.expectedSessionKey,
+        );
       }
     }
   });

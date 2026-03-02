@@ -3,7 +3,11 @@ export function isStatusCommand(body: string) {
   if (!trimmed) {
     return false;
   }
-  return trimmed === "/status" || trimmed === "status" || trimmed.startsWith("/status ");
+  return (
+    trimmed === "/status" ||
+    trimmed === "status" ||
+    trimmed.startsWith("/status ")
+  );
 }
 
 export function stripMentionsForCommand(

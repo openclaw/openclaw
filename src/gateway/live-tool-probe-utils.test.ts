@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { hasExpectedToolNonce, shouldRetryToolReadProbe } from "./live-tool-probe-utils.js";
+import {
+  hasExpectedToolNonce,
+  shouldRetryToolReadProbe,
+} from "./live-tool-probe-utils.js";
 
 describe("live tool probe utils", () => {
   it("matches nonce pair when both are present", () => {

@@ -158,7 +158,11 @@ export NOSTR_PRIVATE_KEY="nsec1..."
   "channels": {
     "nostr": {
       "privateKey": "${NOSTR_PRIVATE_KEY}",
-      "relays": ["wss://relay.damus.io", "wss://relay.primal.net", "wss://nostr.wine"]
+      "relays": [
+        "wss://relay.damus.io",
+        "wss://relay.primal.net",
+        "wss://nostr.wine"
+      ]
     }
   }
 }

@@ -22,9 +22,17 @@ describe("inheritOptionFromParent", () => {
       expected: "root-token",
     },
     {
-      label: "prefers nearest ancestor value when multiple ancestors set the same option",
+      label:
+        "prefers nearest ancestor value when multiple ancestors set the same option",
       parentHasTokenOption: true,
-      argv: ["--token", "root-token", "gateway", "--token", "gateway-token", "run"],
+      argv: [
+        "--token",
+        "root-token",
+        "gateway",
+        "--token",
+        "gateway-token",
+        "run",
+      ],
       expected: "gateway-token",
     },
   ])("$label", async ({ parentHasTokenOption, argv, expected }) => {
@@ -40,7 +48,9 @@ describe("inheritOptionFromParent", () => {
 
   it("does not inherit when the child option was set explicitly", async () => {
     const program = new Command().option("--token <token>", "Root token");
-    const gateway = program.command("gateway").option("--token <token>", "Gateway token");
+    const gateway = program
+      .command("gateway")
+      .option("--token <token>", "Gateway token");
     const run = gateway.command("run").option("--token <token>", "Run token");
 
     program.setOptionValueWithSource("token", "root-token", "cli");
@@ -56,20 +66,27 @@ describe("inheritOptionFromParent", () => {
     const level2 = level1.command("level2");
     const getInherited = attachRunCommandAndCaptureInheritedToken(level2);
 
-    await program.parseAsync(["--token", "root-token", "level1", "level2", "run"], {
-      from: "user",
-    });
+    await program.parseAsync(
+      ["--token", "root-token", "level1", "level2", "run"],
+      {
+        from: "user",
+      },
+    );
     expect(getInherited()).toBeUndefined();
   });
 
   it("inherits values from non-default ancestor sources (for example env)", () => {
     const program = new Command().option("--token <token>", "Root token");
-    const gateway = program.command("gateway").option("--token <token>", "Gateway token");
+    const gateway = program
+      .command("gateway")
+      .option("--token <token>", "Gateway token");
     const run = gateway.command("run").option("--token <token>", "Run token");
 
     gateway.setOptionValueWithSource("token", "gateway-env-token", "env");
 
-    expect(inheritOptionFromParent<string>(run, "token")).toBe("gateway-env-token");
+    expect(inheritOptionFromParent<string>(run, "token")).toBe(
+      "gateway-env-token",
+    );
   });
 
   it("skips default-valued ancestor options and keeps traversing", async () => {

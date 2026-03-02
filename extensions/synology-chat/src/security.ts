@@ -3,11 +3,17 @@
  */
 
 import * as crypto from "node:crypto";
-import { createFixedWindowRateLimiter, type FixedWindowRateLimiter } from "openclaw/plugin-sdk";
+import {
+  createFixedWindowRateLimiter,
+  type FixedWindowRateLimiter,
+} from "openclaw/plugin-sdk";
 
 export type DmAuthorizationResult =
   | { allowed: true }
-  | { allowed: false; reason: "disabled" | "allowlist-empty" | "not-allowlisted" };
+  | {
+      allowed: false;
+      reason: "disabled" | "allowlist-empty" | "not-allowlisted";
+    };
 
 /**
  * Validate webhook token using constant-time comparison.
@@ -29,7 +35,10 @@ export function validateToken(received: string, expected: string): boolean {
  * Check if a user ID is in the allowed list.
  * Allowlist mode must be explicit; empty lists should not match any user.
  */
-export function checkUserAllowed(userId: string, allowedUserIds: string[]): boolean {
+export function checkUserAllowed(
+  userId: string,
+  allowedUserIds: string[],
+): boolean {
   if (allowedUserIds.length === 0) return false;
   return allowedUserIds.includes(userId);
 }

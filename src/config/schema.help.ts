@@ -47,14 +47,18 @@ export const FIELD_HELP: Record<string, string> = {
     "Additional custom redact regex patterns applied to log output before emission/storage. Use this to mask org-specific tokens and identifiers not covered by built-in redaction rules.",
   update:
     "Update-channel and startup-check behavior for keeping OpenClaw runtime versions current. Use conservative channels in production and more experimental channels only in controlled environments.",
-  "update.channel": 'Update channel for git + npm installs ("stable", "beta", or "dev").',
-  "update.checkOnStart": "Check for npm updates when the gateway starts (default: true).",
-  "update.auto.enabled": "Enable background auto-update for package installs (default: false).",
+  "update.channel":
+    'Update channel for git + npm installs ("stable", "beta", or "dev").',
+  "update.checkOnStart":
+    "Check for npm updates when the gateway starts (default: true).",
+  "update.auto.enabled":
+    "Enable background auto-update for package installs (default: false).",
   "update.auto.stableDelayHours":
     "Minimum delay before stable-channel auto-apply starts (default: 6).",
   "update.auto.stableJitterHours":
     "Extra stable-channel rollout spread window in hours (default: 12).",
-  "update.auto.betaCheckIntervalHours": "How often beta-channel checks run in hours (default: 1).",
+  "update.auto.betaCheckIntervalHours":
+    "How often beta-channel checks run in hours (default: 1).",
   gateway:
     "Gateway runtime surface for bind mode, auth, control UI, remote transport, and operational safety controls. Keep conservative defaults unless you intentionally expose the gateway beyond trusted local interfaces.",
   "gateway.port":
@@ -132,14 +136,17 @@ export const FIELD_HELP: Record<string, string> = {
     "Expected sha256 TLS fingerprint for the remote gateway (pin to avoid MITM).",
   "gateway.remote.sshTarget":
     "Remote gateway over SSH (tunnels the gateway port to localhost). Format: user@host or user@host:port.",
-  "gateway.remote.sshIdentity": "Optional SSH identity file path (passed to ssh -i).",
+  "gateway.remote.sshIdentity":
+    "Optional SSH identity file path (passed to ssh -i).",
   "talk.provider": 'Active Talk provider id (for example "elevenlabs").',
   "talk.providers":
     "Provider-specific Talk settings keyed by provider id. During migration, prefer this over legacy talk.* keys.",
   "talk.providers.*.voiceId": "Provider default voice ID for Talk mode.",
-  "talk.providers.*.voiceAliases": "Optional provider voice alias map for Talk directives.",
+  "talk.providers.*.voiceAliases":
+    "Optional provider voice alias map for Talk directives.",
   "talk.providers.*.modelId": "Provider default model ID for Talk mode.",
-  "talk.providers.*.outputFormat": "Provider default output format for Talk mode.",
+  "talk.providers.*.outputFormat":
+    "Provider default output format for Talk mode.",
   "talk.providers.*.apiKey": "Provider API key for Talk mode.",
   "talk.voiceId":
     "Legacy ElevenLabs default voice ID for Talk mode. Prefer talk.providers.elevenlabs.voiceId.",
@@ -337,7 +344,8 @@ export const FIELD_HELP: Record<string, string> = {
   "gateway.auth.password": "Required for Tailscale funnel.",
   "agents.defaults.sandbox.browser.network":
     "Docker network for sandbox browser containers (default: openclaw-sandbox-browser). Avoid bridge if you need stricter isolation.",
-  "agents.list[].sandbox.browser.network": "Per-agent override for sandbox browser Docker network.",
+  "agents.list[].sandbox.browser.network":
+    "Per-agent override for sandbox browser Docker network.",
   "agents.defaults.sandbox.docker.dangerouslyAllowContainerNamespaceJoin":
     "DANGEROUS break-glass override that allows sandbox Docker network mode container:<id>. This joins another container namespace and weakens sandbox isolation.",
   "agents.list[].sandbox.docker.dangerouslyAllowContainerNamespaceJoin":
@@ -362,10 +370,12 @@ export const FIELD_HELP: Record<string, string> = {
     "Enable the OpenAI-compatible `POST /v1/chat/completions` endpoint (default: false).",
   "gateway.reload.mode":
     'Controls how config edits are applied: "off" ignores live edits, "restart" always restarts, "hot" applies in-process, and "hybrid" tries hot then restarts if required. Keep "hybrid" for safest routine updates.',
-  "gateway.reload.debounceMs": "Debounce window (ms) before applying config changes.",
+  "gateway.reload.debounceMs":
+    "Debounce window (ms) before applying config changes.",
   "gateway.nodes.browser.mode":
     'Node browser routing ("auto" = pick single connected browser node, "manual" = require node param, "off" = disable).',
-  "gateway.nodes.browser.node": "Pin browser routing to a specific node id or name (optional).",
+  "gateway.nodes.browser.node":
+    "Pin browser routing to a specific node id or name (optional).",
   "gateway.nodes.allowCommands":
     "Extra node.invoke commands to allow beyond the gateway defaults (array of command strings). Enabling dangerous commands here is a security-sensitive override and is flagged by `openclaw security audit`.",
   "gateway.nodes.denyCommands":
@@ -450,8 +460,10 @@ export const FIELD_HELP: Record<string, string> = {
     "JSONL output path for cache trace logs (default: $OPENCLAW_STATE_DIR/logs/cache-trace.jsonl).",
   "diagnostics.cacheTrace.includeMessages":
     "Include full message payloads in trace output (default: true).",
-  "diagnostics.cacheTrace.includePrompt": "Include prompt text in trace output (default: true).",
-  "diagnostics.cacheTrace.includeSystem": "Include system prompt in trace output (default: true).",
+  "diagnostics.cacheTrace.includePrompt":
+    "Include prompt text in trace output (default: true).",
+  "diagnostics.cacheTrace.includeSystem":
+    "Include system prompt in trace output (default: true).",
   "tools.exec.applyPatch.enabled":
     "Experimental. Enables apply_patch for OpenAI models when allowed by tool policy.",
   "tools.exec.applyPatch.workspaceOnly":
@@ -460,7 +472,8 @@ export const FIELD_HELP: Record<string, string> = {
     'Optional allowlist of model ids (e.g. "gpt-5.2" or "openai/gpt-5.2").',
   "tools.loopDetection.enabled":
     "Enable repetitive tool-call loop detection and backoff safety checks (default: false).",
-  "tools.loopDetection.historySize": "Tool history window size for loop detection (default: 30).",
+  "tools.loopDetection.historySize":
+    "Tool history window size for loop detection (default: 30).",
   "tools.loopDetection.warningThreshold":
     "Warning threshold for repetitive patterns when detector is enabled (default: 10).",
   "tools.loopDetection.criticalThreshold":
@@ -471,12 +484,14 @@ export const FIELD_HELP: Record<string, string> = {
     "Enable generic repeated same-tool/same-params loop detection (default: true).",
   "tools.loopDetection.detectors.knownPollNoProgress":
     "Enable known poll tool no-progress loop detection (default: true).",
-  "tools.loopDetection.detectors.pingPong": "Enable ping-pong loop detection (default: true).",
+  "tools.loopDetection.detectors.pingPong":
+    "Enable ping-pong loop detection (default: true).",
   "tools.exec.notifyOnExit":
     "When true (default), backgrounded exec sessions on exit and node exec lifecycle events enqueue a system event and request a heartbeat.",
   "tools.exec.notifyOnExitEmptySuccess":
     "When true, successful backgrounded exec exits with empty output still enqueue a completion system event (default: false).",
-  "tools.exec.pathPrepend": "Directories to prepend to PATH for exec runs (gateway/sandbox).",
+  "tools.exec.pathPrepend":
+    "Directories to prepend to PATH for exec runs (gateway/sandbox).",
   "tools.exec.safeBins":
     "Allow stdin-only safe binaries to run without explicit allowlist entries.",
   "tools.exec.safeBinTrustedDirs":
@@ -604,48 +619,65 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.message.crossContext.marker.suffix":
     'Text suffix for cross-context markers (supports "{channel}").',
   "tools.message.broadcast.enabled": "Enable broadcast action (default: true).",
-  "tools.web.search.enabled": "Enable the web_search tool (requires a provider API key).",
+  "tools.web.search.enabled":
+    "Enable the web_search tool (requires a provider API key).",
   "tools.web.search.provider":
     'Search provider ("brave", "perplexity", "grok", "gemini", or "kimi"). Auto-detected from available API keys if omitted.',
-  "tools.web.search.apiKey": "Brave Search API key (fallback: BRAVE_API_KEY env var).",
+  "tools.web.search.apiKey":
+    "Brave Search API key (fallback: BRAVE_API_KEY env var).",
   "tools.web.search.maxResults": "Default number of results to return (1-10).",
-  "tools.web.search.timeoutSeconds": "Timeout in seconds for web_search requests.",
-  "tools.web.search.cacheTtlMinutes": "Cache TTL in minutes for web_search results.",
+  "tools.web.search.timeoutSeconds":
+    "Timeout in seconds for web_search requests.",
+  "tools.web.search.cacheTtlMinutes":
+    "Cache TTL in minutes for web_search results.",
   "tools.web.search.gemini.apiKey":
     "Gemini API key for Google Search grounding (fallback: GEMINI_API_KEY env var).",
-  "tools.web.search.gemini.model": 'Gemini model override (default: "gemini-2.5-flash").',
-  "tools.web.search.grok.apiKey": "Grok (xAI) API key (fallback: XAI_API_KEY env var).",
-  "tools.web.search.grok.model": 'Grok model override (default: "grok-4-1-fast").',
+  "tools.web.search.gemini.model":
+    'Gemini model override (default: "gemini-2.5-flash").',
+  "tools.web.search.grok.apiKey":
+    "Grok (xAI) API key (fallback: XAI_API_KEY env var).",
+  "tools.web.search.grok.model":
+    'Grok model override (default: "grok-4-1-fast").',
   "tools.web.search.kimi.apiKey":
     "Moonshot/Kimi API key (fallback: KIMI_API_KEY or MOONSHOT_API_KEY env var).",
   "tools.web.search.kimi.baseUrl":
     'Kimi base URL override (default: "https://api.moonshot.ai/v1").',
-  "tools.web.search.kimi.model": 'Kimi model override (default: "moonshot-v1-128k").',
+  "tools.web.search.kimi.model":
+    'Kimi model override (default: "moonshot-v1-128k").',
   "tools.web.search.perplexity.apiKey":
     "Perplexity or OpenRouter API key (fallback: PERPLEXITY_API_KEY or OPENROUTER_API_KEY env var).",
   "tools.web.search.perplexity.baseUrl":
     "Perplexity base URL override (default: https://openrouter.ai/api/v1 or https://api.perplexity.ai).",
   "tools.web.search.perplexity.model":
     'Perplexity model override (default: "perplexity/sonar-pro").',
-  "tools.web.fetch.enabled": "Enable the web_fetch tool (lightweight HTTP fetch).",
-  "tools.web.fetch.maxChars": "Max characters returned by web_fetch (truncated).",
+  "tools.web.fetch.enabled":
+    "Enable the web_fetch tool (lightweight HTTP fetch).",
+  "tools.web.fetch.maxChars":
+    "Max characters returned by web_fetch (truncated).",
   "tools.web.fetch.maxCharsCap":
     "Hard cap for web_fetch maxChars (applies to config and tool calls).",
-  "tools.web.fetch.timeoutSeconds": "Timeout in seconds for web_fetch requests.",
-  "tools.web.fetch.cacheTtlMinutes": "Cache TTL in minutes for web_fetch results.",
-  "tools.web.fetch.maxRedirects": "Maximum redirects allowed for web_fetch (default: 3).",
-  "tools.web.fetch.userAgent": "Override User-Agent header for web_fetch requests.",
+  "tools.web.fetch.timeoutSeconds":
+    "Timeout in seconds for web_fetch requests.",
+  "tools.web.fetch.cacheTtlMinutes":
+    "Cache TTL in minutes for web_fetch results.",
+  "tools.web.fetch.maxRedirects":
+    "Maximum redirects allowed for web_fetch (default: 3).",
+  "tools.web.fetch.userAgent":
+    "Override User-Agent header for web_fetch requests.",
   "tools.web.fetch.readability":
     "Use Readability to extract main content from HTML (fallbacks to basic HTML cleanup).",
-  "tools.web.fetch.firecrawl.enabled": "Enable Firecrawl fallback for web_fetch (if configured).",
-  "tools.web.fetch.firecrawl.apiKey": "Firecrawl API key (fallback: FIRECRAWL_API_KEY env var).",
+  "tools.web.fetch.firecrawl.enabled":
+    "Enable Firecrawl fallback for web_fetch (if configured).",
+  "tools.web.fetch.firecrawl.apiKey":
+    "Firecrawl API key (fallback: FIRECRAWL_API_KEY env var).",
   "tools.web.fetch.firecrawl.baseUrl":
     "Firecrawl base URL (e.g. https://api.firecrawl.dev or custom endpoint).",
   "tools.web.fetch.firecrawl.onlyMainContent":
     "When true, Firecrawl returns only the main content (default: true).",
   "tools.web.fetch.firecrawl.maxAgeMs":
     "Firecrawl maxAge (ms) for cached results when supported by the API.",
-  "tools.web.fetch.firecrawl.timeoutSeconds": "Timeout in seconds for Firecrawl requests.",
+  "tools.web.fetch.firecrawl.timeoutSeconds":
+    "Timeout in seconds for Firecrawl requests.",
   models:
     "Model catalog root for provider definitions, merge/replace behavior, and optional Bedrock discovery integration. Keep provider definitions explicit and validated before relying on production failover paths.",
   "models.mode":
@@ -697,19 +729,23 @@ export const FIELD_HELP: Record<string, string> = {
     "Base URL for your Mattermost server (e.g., https://chat.example.com).",
   "channels.mattermost.chatmode":
     'Reply to channel messages on mention ("oncall"), on trigger chars (">" or "!") ("onchar"), or on every message ("onmessage").',
-  "channels.mattermost.oncharPrefixes": 'Trigger prefixes for onchar mode (default: [">", "!"]).',
+  "channels.mattermost.oncharPrefixes":
+    'Trigger prefixes for onchar mode (default: [">", "!"]).',
   "channels.mattermost.requireMention":
     "Require @mention in channels before responding (default: true).",
   "auth.profiles": "Named auth profiles (provider + mode + optional email).",
-  "auth.order": "Ordered auth profile IDs per provider (used for automatic failover).",
+  "auth.order":
+    "Ordered auth profile IDs per provider (used for automatic failover).",
   "auth.cooldowns":
     "Cooldown/backoff controls for temporary profile suppression after billing-related failures and retry windows. Use these to prevent rapid re-selection of profiles that are still blocked.",
   "auth.cooldowns.billingBackoffHours":
     "Base backoff (hours) when a profile fails due to billing/insufficient credits (default: 5).",
   "auth.cooldowns.billingBackoffHoursByProvider":
     "Optional per-provider overrides for billing backoff (hours).",
-  "auth.cooldowns.billingMaxHours": "Cap (hours) for billing backoff (default: 24).",
-  "auth.cooldowns.failureWindowHours": "Failure window (hours) for backoff counters (default: 24).",
+  "auth.cooldowns.billingMaxHours":
+    "Cap (hours) for billing backoff (default: 24).",
+  "auth.cooldowns.failureWindowHours":
+    "Failure window (hours) for backoff counters (default: 24).",
   "agents.defaults.workspace":
     "Default workspace path exposed to agent runtime tools for filesystem context and repo-aware behavior. Set this explicitly when running from wrappers so path resolution stays deterministic.",
   "agents.defaults.bootstrapMaxChars":
@@ -722,8 +758,10 @@ export const FIELD_HELP: Record<string, string> = {
     'Timezone for message envelopes ("utc", "local", "user", or an IANA timezone string).',
   "agents.defaults.envelopeTimestamp":
     'Include absolute timestamps in message envelopes ("on" or "off").',
-  "agents.defaults.envelopeElapsed": 'Include elapsed time in message envelopes ("on" or "off").',
-  "agents.defaults.models": "Configured model catalog (keys are full provider/model IDs).",
+  "agents.defaults.envelopeElapsed":
+    'Include elapsed time in message envelopes ("on" or "off").',
+  "agents.defaults.models":
+    "Configured model catalog (keys are full provider/model IDs).",
   "agents.defaults.memorySearch":
     "Vector search over MEMORY.md and memory/*.md (per-agent overrides supported).",
   "agents.defaults.memorySearch.enabled":
@@ -901,12 +939,16 @@ export const FIELD_HELP: Record<string, string> = {
   "plugins.installs":
     "CLI-managed install metadata (used by `openclaw plugins update` to locate install sources).",
   "plugins.installs.*.source": 'Install source ("npm", "archive", or "path").',
-  "plugins.installs.*.spec": "Original npm spec used for install (if source is npm).",
-  "plugins.installs.*.sourcePath": "Original archive/path used for install (if any).",
+  "plugins.installs.*.spec":
+    "Original npm spec used for install (if source is npm).",
+  "plugins.installs.*.sourcePath":
+    "Original archive/path used for install (if any).",
   "plugins.installs.*.installPath":
     "Resolved install directory (usually ~/.openclaw/extensions/<id>).",
-  "plugins.installs.*.version": "Version recorded at install time (if available).",
-  "plugins.installs.*.resolvedName": "Resolved npm package name from the fetched artifact.",
+  "plugins.installs.*.version":
+    "Version recorded at install time (if available).",
+  "plugins.installs.*.resolvedName":
+    "Resolved npm package name from the fetched artifact.",
   "plugins.installs.*.resolvedVersion":
     "Resolved npm package version from the fetched artifact (useful for non-pinned specs).",
   "plugins.installs.*.resolvedSpec":
@@ -925,17 +967,20 @@ export const FIELD_HELP: Record<string, string> = {
     "Ordered fallback models (provider/model). Used when the primary model fails.",
   "agents.defaults.imageModel.primary":
     "Optional image model (provider/model) used when the primary model lacks image input.",
-  "agents.defaults.imageModel.fallbacks": "Ordered fallback image models (provider/model).",
+  "agents.defaults.imageModel.fallbacks":
+    "Ordered fallback image models (provider/model).",
   "agents.defaults.pdfModel.primary":
     "Optional PDF model (provider/model) for the PDF analysis tool. Defaults to imageModel, then session model.",
-  "agents.defaults.pdfModel.fallbacks": "Ordered fallback PDF models (provider/model).",
+  "agents.defaults.pdfModel.fallbacks":
+    "Ordered fallback PDF models (provider/model).",
   "agents.defaults.pdfMaxBytesMb":
     "Maximum PDF file size in megabytes for the PDF tool (default: 10).",
   "agents.defaults.pdfMaxPages":
     "Maximum number of PDF pages to process for the PDF tool (default: 20).",
   "agents.defaults.imageMaxDimensionPx":
     "Max image side length in pixels when sanitizing transcript/tool-result image payloads (default: 1200).",
-  "agents.defaults.cliBackends": "Optional CLI backends for text-only fallback (claude-cli, etc.).",
+  "agents.defaults.cliBackends":
+    "Optional CLI backends for text-only fallback (claude-cli, etc.).",
   "agents.defaults.compaction":
     "Compaction tuning for when context nears token limits, including history share, reserve headroom, and pre-compaction memory flush behavior. Use this when long-running sessions need stable continuity under tight context windows.",
   "agents.defaults.compaction.mode":
@@ -968,9 +1013,12 @@ export const FIELD_HELP: Record<string, string> = {
     "Embedded Pi runner hardening controls for how workspace-local Pi settings are trusted and applied in OpenClaw sessions.",
   "agents.defaults.embeddedPi.projectSettingsPolicy":
     'How embedded Pi handles workspace-local `.pi/config/settings.json`: "sanitize" (default) strips shellPath/shellCommandPrefix, "ignore" disables project settings entirely, and "trusted" applies project settings as-is.',
-  "agents.defaults.humanDelay.mode": 'Delay style for block replies ("off", "natural", "custom").',
-  "agents.defaults.humanDelay.minMs": "Minimum delay in ms for custom humanDelay (default: 800).",
-  "agents.defaults.humanDelay.maxMs": "Maximum delay in ms for custom humanDelay (default: 2500).",
+  "agents.defaults.humanDelay.mode":
+    'Delay style for block replies ("off", "natural", "custom").',
+  "agents.defaults.humanDelay.minMs":
+    "Minimum delay in ms for custom humanDelay (default: 800).",
+  "agents.defaults.humanDelay.maxMs":
+    "Maximum delay in ms for custom humanDelay (default: 2500).",
   commands:
     "Controls chat command surfaces, owner gating, and elevated command access behavior across providers. Keep defaults unless you need stricter operator controls or broader command availability.",
   "commands.native":
@@ -983,10 +1031,14 @@ export const FIELD_HELP: Record<string, string> = {
     "Allow bash chat command (`!`; `/bash` alias) to run host shell commands (default: false; requires tools.elevated).",
   "commands.bashForegroundMs":
     "How long bash waits before backgrounding (default: 2000; 0 backgrounds immediately).",
-  "commands.config": "Allow /config chat command to read/write config on disk (default: false).",
-  "commands.debug": "Allow /debug chat command for runtime-only overrides (default: false).",
-  "commands.restart": "Allow /restart and gateway restart tool actions (default: true).",
-  "commands.useAccessGroups": "Enforce access-group allowlists/policies for commands.",
+  "commands.config":
+    "Allow /config chat command to read/write config on disk (default: false).",
+  "commands.debug":
+    "Allow /debug chat command for runtime-only overrides (default: false).",
+  "commands.restart":
+    "Allow /restart and gateway restart tool actions (default: true).",
+  "commands.useAccessGroups":
+    "Enforce access-group allowlists/policies for commands.",
   "commands.ownerAllowFrom":
     "Explicit owner allowlist for owner-only tools/commands. Use channel-native IDs (optionally prefixed like \"whatsapp:+15551234567\"). '*' is ignored.",
   "commands.ownerDisplay":
@@ -1351,13 +1403,16 @@ export const FIELD_HELP: Record<string, string> = {
   "channels.modelByChannel":
     "Map provider -> channel id -> model override (values are provider/model or aliases).",
   ...IRC_FIELD_HELP,
-  "channels.discord.commands.native": 'Override native commands for Discord (bool or "auto").',
+  "channels.discord.commands.native":
+    'Override native commands for Discord (bool or "auto").',
   "channels.discord.commands.nativeSkills":
     'Override native skill commands for Discord (bool or "auto").',
-  "channels.telegram.commands.native": 'Override native commands for Telegram (bool or "auto").',
+  "channels.telegram.commands.native":
+    'Override native commands for Telegram (bool or "auto").',
   "channels.telegram.commands.nativeSkills":
     'Override native skill commands for Telegram (bool or "auto").',
-  "channels.slack.commands.native": 'Override native commands for Slack (bool or "auto").',
+  "channels.slack.commands.native":
+    'Override native commands for Slack (bool or "auto").',
   "channels.slack.commands.nativeSkills":
     'Override native skill commands for Slack (bool or "auto").',
   "channels.slack.streaming":
@@ -1370,7 +1425,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Additional Telegram bot menu commands (merged with native; conflicts ignored).",
   "messages.suppressToolErrors":
     "When true, suppress ⚠️ tool-error warnings from being shown to the user. The agent already sees errors in context and can retry. Default: false.",
-  "messages.ackReaction": "Emoji reaction used to acknowledge inbound messages (empty disables).",
+  "messages.ackReaction":
+    "Emoji reaction used to acknowledge inbound messages (empty disables).",
   "messages.ackReactionScope":
     'When to send ack reactions ("group-mentions", "group-all", "direct", "all", "off", "none"). "off"/"none" disables ack reactions entirely.',
   "messages.statusReactions":
@@ -1399,17 +1455,20 @@ export const FIELD_HELP: Record<string, string> = {
     "Preferred breakpoints for Discord draft chunks (paragraph | newline | sentence). Default: paragraph.",
   "channels.telegram.retry.attempts":
     "Max retry attempts for outbound Telegram API calls (default: 3).",
-  "channels.telegram.retry.minDelayMs": "Minimum retry delay in ms for Telegram outbound calls.",
+  "channels.telegram.retry.minDelayMs":
+    "Minimum retry delay in ms for Telegram outbound calls.",
   "channels.telegram.retry.maxDelayMs":
     "Maximum retry delay cap in ms for Telegram outbound calls.",
-  "channels.telegram.retry.jitter": "Jitter factor (0-1) applied to Telegram retry delays.",
+  "channels.telegram.retry.jitter":
+    "Jitter factor (0-1) applied to Telegram retry delays.",
   "channels.telegram.network.autoSelectFamily":
     "Override Node autoSelectFamily for Telegram (true=enable, false=disable).",
   "channels.telegram.timeoutSeconds":
     "Max seconds before Telegram API requests are aborted (default: 500 per grammY).",
   "channels.whatsapp.dmPolicy":
     'Direct message access control ("pairing" recommended). "open" requires channels.whatsapp.allowFrom=["*"].',
-  "channels.whatsapp.selfChatMode": "Same-phone setup (bot uses your personal WhatsApp number).",
+  "channels.whatsapp.selfChatMode":
+    "Same-phone setup (bot uses your personal WhatsApp number).",
   "channels.whatsapp.debounceMs":
     "Debounce window (ms) for batching rapid consecutive messages from the same sender (0 to disable).",
   "channels.signal.dmPolicy":
@@ -1424,10 +1483,14 @@ export const FIELD_HELP: Record<string, string> = {
     'Direct message access control ("pairing" recommended). "open" requires channels.discord.allowFrom=["*"] (legacy: channels.discord.dm.allowFrom).',
   "channels.discord.retry.attempts":
     "Max retry attempts for outbound Discord API calls (default: 3).",
-  "channels.discord.retry.minDelayMs": "Minimum retry delay in ms for Discord outbound calls.",
-  "channels.discord.retry.maxDelayMs": "Maximum retry delay cap in ms for Discord outbound calls.",
-  "channels.discord.retry.jitter": "Jitter factor (0-1) applied to Discord retry delays.",
-  "channels.discord.maxLinesPerMessage": "Soft max line count per Discord message (default: 17).",
+  "channels.discord.retry.minDelayMs":
+    "Minimum retry delay in ms for Discord outbound calls.",
+  "channels.discord.retry.maxDelayMs":
+    "Maximum retry delay cap in ms for Discord outbound calls.",
+  "channels.discord.retry.jitter":
+    "Jitter factor (0-1) applied to Discord retry delays.",
+  "channels.discord.maxLinesPerMessage":
+    "Soft max line count per Discord message (default: 17).",
   "channels.discord.eventQueue.listenerTimeout":
     "Canonical Discord listener timeout control in ms for gateway event handlers. Default is 120000 in OpenClaw; set per account via channels.discord.accounts.<id>.eventQueue.listenerTimeout.",
   "channels.discord.eventQueue.maxQueueSize":
@@ -1464,11 +1527,14 @@ export const FIELD_HELP: Record<string, string> = {
     "Resolve PluralKit proxied messages and treat system members as distinct senders.",
   "channels.discord.pluralkit.token":
     "Optional PluralKit token for resolving private systems or members.",
-  "channels.discord.activity": "Discord presence activity text (defaults to custom status).",
-  "channels.discord.status": "Discord presence status (online, dnd, idle, invisible).",
+  "channels.discord.activity":
+    "Discord presence activity text (defaults to custom status).",
+  "channels.discord.status":
+    "Discord presence status (online, dnd, idle, invisible).",
   "channels.discord.activityType":
     "Discord presence activity type (0=Playing,1=Streaming,2=Listening,3=Watching,4=Custom,5=Competing).",
-  "channels.discord.activityUrl": "Discord presence streaming URL (required for activityType=1).",
+  "channels.discord.activityUrl":
+    "Discord presence streaming URL (required for activityType=1).",
   "channels.slack.dm.policy":
     'Direct message access control ("pairing" recommended). "open" requires channels.slack.allowFrom=["*"] (legacy: channels.slack.dm.allowFrom).',
   "channels.slack.dmPolicy":

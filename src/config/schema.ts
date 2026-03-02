@@ -1,7 +1,11 @@
 import { CHANNEL_IDS } from "../channels/registry.js";
 import { VERSION } from "../version.js";
 import type { ConfigUiHint, ConfigUiHints } from "./schema.hints.js";
-import { applySensitiveHints, buildBaseHints, mapSensitivePaths } from "./schema.hints.js";
+import {
+  applySensitiveHints,
+  buildBaseHints,
+  mapSensitivePaths,
+} from "./schema.hints.js";
 import { applyDerivedTags } from "./schema.tags.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
@@ -43,8 +47,14 @@ function isObjectSchema(schema: JsonSchemaObject): boolean {
   return Boolean(schema.properties || schema.additionalProperties);
 }
 
-function mergeObjectSchema(base: JsonSchemaObject, extension: JsonSchemaObject): JsonSchemaObject {
-  const mergedRequired = new Set<string>([...(base.required ?? []), ...(extension.required ?? [])]);
+function mergeObjectSchema(
+  base: JsonSchemaObject,
+  extension: JsonSchemaObject,
+): JsonSchemaObject {
+  const mergedRequired = new Set<string>([
+    ...(base.required ?? []),
+    ...(extension.required ?? []),
+  ]);
   const merged: JsonSchemaObject = {
     ...base,
     ...extension,
@@ -56,7 +66,8 @@ function mergeObjectSchema(base: JsonSchemaObject, extension: JsonSchemaObject):
   if (mergedRequired.size > 0) {
     merged.required = Array.from(mergedRequired);
   }
-  const additional = extension.additionalProperties ?? base.additionalProperties;
+  const additional =
+    extension.additionalProperties ?? base.additionalProperties;
   if (additional !== undefined) {
     merged.additionalProperties = additional;
   }
@@ -76,7 +87,10 @@ export type PluginUiMetadata = {
   description?: string;
   configUiHints?: Record<
     string,
-    Pick<ConfigUiHint, "label" | "help" | "tags" | "advanced" | "sensitive" | "placeholder">
+    Pick<
+      ConfigUiHint,
+      "label" | "help" | "tags" | "advanced" | "sensitive" | "placeholder"
+    >
   >;
   configSchema?: JsonSchemaNode;
 };
@@ -111,7 +125,10 @@ function collectExtensionHintKeys(
   );
 }
 
-function applyPluginHints(hints: ConfigUiHints, plugins: PluginUiMetadata[]): ConfigUiHints {
+function applyPluginHints(
+  hints: ConfigUiHints,
+  plugins: PluginUiMetadata[],
+): ConfigUiHints {
   const next: ConfigUiHints = { ...hints };
   for (const plugin of plugins) {
     const id = plugin.id.trim();
@@ -154,7 +171,10 @@ function applyPluginHints(hints: ConfigUiHints, plugins: PluginUiMetadata[]): Co
   return next;
 }
 
-function applyChannelHints(hints: ConfigUiHints, channels: ChannelUiMetadata[]): ConfigUiHints {
+function applyChannelHints(
+  hints: ConfigUiHints,
+  channels: ChannelUiMetadata[],
+): ConfigUiHints {
   const next: ConfigUiHints = { ...hints };
   for (const channel of channels) {
     const id = channel.id.trim();
@@ -215,9 +235,14 @@ function applyHeartbeatTargetHints(
 ): ConfigUiHints {
   const next: ConfigUiHints = { ...hints };
   const channelList = listHeartbeatTargetChannels(channels);
-  const channelHelp = channelList.length ? ` Known channels: ${channelList.join(", ")}.` : "";
+  const channelHelp = channelList.length
+    ? ` Known channels: ${channelList.join(", ")}.`
+    : "";
   const help = `Delivery target ("last", "none", or a channel id).${channelHelp}`;
-  const paths = ["agents.defaults.heartbeat.target", "agents.list.*.heartbeat.target"];
+  const paths = [
+    "agents.defaults.heartbeat.target",
+    "agents.list.*.heartbeat.target",
+  ];
   for (const path of paths) {
     const current = next[path] ?? {};
     next[path] = {
@@ -229,7 +254,10 @@ function applyHeartbeatTargetHints(
   return next;
 }
 
-function applyPluginSchemas(schema: ConfigSchema, plugins: PluginUiMetadata[]): ConfigSchema {
+function applyPluginSchemas(
+  schema: ConfigSchema,
+  plugins: PluginUiMetadata[],
+): ConfigSchema {
   const next = cloneSchema(schema);
   const root = asSchemaObject(next);
   const pluginsNode = asSchemaObject(root?.properties?.plugins);
@@ -249,7 +277,8 @@ function applyPluginSchemas(schema: ConfigSchema, plugins: PluginUiMetadata[]): 
     const entrySchema = entryBase
       ? cloneSchema(entryBase)
       : ({ type: "object" } as JsonSchemaObject);
-    const entryObject = asSchemaObject(entrySchema) ?? ({ type: "object" } as JsonSchemaObject);
+    const entryObject =
+      asSchemaObject(entrySchema) ?? ({ type: "object" } as JsonSchemaObject);
     const baseConfigSchema = asSchemaObject(entryObject.properties?.config);
     const pluginSchema = asSchemaObject(plugin.configSchema);
     const nextConfigSchema =
@@ -270,7 +299,10 @@ function applyPluginSchemas(schema: ConfigSchema, plugins: PluginUiMetadata[]): 
   return next;
 }
 
-function applyChannelSchemas(schema: ConfigSchema, channels: ChannelUiMetadata[]): ConfigSchema {
+function applyChannelSchemas(
+  schema: ConfigSchema,
+  channels: ChannelUiMetadata[],
+): ConfigSchema {
   const next = cloneSchema(schema);
   const root = asSchemaObject(next);
   const channelsNode = asSchemaObject(root?.properties?.channels);
@@ -286,7 +318,12 @@ function applyChannelSchemas(schema: ConfigSchema, channels: ChannelUiMetadata[]
     }
     const existing = asSchemaObject(channelProps[channel.id]);
     const incoming = asSchemaObject(channel.configSchema);
-    if (existing && incoming && isObjectSchema(existing) && isObjectSchema(incoming)) {
+    if (
+      existing &&
+      incoming &&
+      isObjectSchema(existing) &&
+      isObjectSchema(incoming)
+    ) {
       channelProps[channel.id] = mergeObjectSchema(existing, incoming);
     } else {
       channelProps[channel.id] = cloneSchema(channel.configSchema);
@@ -328,7 +365,9 @@ function buildBaseConfigSchema(): ConfigSchemaResponse {
     unrepresentable: "any",
   });
   schema.title = "OpenClawConfig";
-  const hints = applyDerivedTags(mapSensitivePaths(OpenClawSchema, "", buildBaseHints()));
+  const hints = applyDerivedTags(
+    mapSensitivePaths(OpenClawSchema, "", buildBaseHints()),
+  );
   const next = {
     schema: stripChannelSchema(schema),
     uiHints: hints,
@@ -361,7 +400,10 @@ export function buildConfigSchema(params?: {
   const mergedHints = applyDerivedTags(
     applySensitiveHints(mergedWithoutSensitiveHints, extensionHintKeys),
   );
-  const mergedSchema = applyChannelSchemas(applyPluginSchemas(base.schema, plugins), channels);
+  const mergedSchema = applyChannelSchemas(
+    applyPluginSchemas(base.schema, plugins),
+    channels,
+  );
   return {
     ...base,
     schema: mergedSchema,

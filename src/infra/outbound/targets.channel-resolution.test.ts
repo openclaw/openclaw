@@ -26,7 +26,8 @@ vi.mock("../../agents/agent-scope.js", () => ({
 }));
 
 vi.mock("../../config/plugin-auto-enable.js", () => ({
-  applyPluginAutoEnable: ({ config }: { config: unknown }) => passthroughPluginAutoEnable(config),
+  applyPluginAutoEnable: ({ config }: { config: unknown }) =>
+    passthroughPluginAutoEnable(config),
 }));
 
 vi.mock("../../plugins/loader.js", () => ({
@@ -42,7 +43,10 @@ describe("resolveOutboundTarget channel resolution", () => {
 
   beforeEach(() => {
     registrySeq += 1;
-    setActivePluginRegistry(createTestRegistry([]), `targets-test-${registrySeq}`);
+    setActivePluginRegistry(
+      createTestRegistry([]),
+      `targets-test-${registrySeq}`,
+    );
     mocks.getChannelPlugin.mockReset();
     mocks.loadOpenClawPlugins.mockReset();
   });

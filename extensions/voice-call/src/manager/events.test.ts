@@ -8,8 +8,13 @@ import type { HangupCallInput, NormalizedEvent } from "../types.js";
 import type { CallManagerContext } from "./context.js";
 import { processEvent } from "./events.js";
 
-function createContext(overrides: Partial<CallManagerContext> = {}): CallManagerContext {
-  const storePath = path.join(os.tmpdir(), `openclaw-voice-call-events-test-${Date.now()}`);
+function createContext(
+  overrides: Partial<CallManagerContext> = {},
+): CallManagerContext {
+  const storePath = path.join(
+    os.tmpdir(),
+    `openclaw-voice-call-events-test-${Date.now()}`,
+  );
   fs.mkdirSync(storePath, { recursive: true });
   return {
     activeCalls: new Map(),
@@ -31,12 +36,17 @@ function createContext(overrides: Partial<CallManagerContext> = {}): CallManager
   };
 }
 
-function createProvider(overrides: Partial<VoiceCallProvider> = {}): VoiceCallProvider {
+function createProvider(
+  overrides: Partial<VoiceCallProvider> = {},
+): VoiceCallProvider {
   return {
     name: "plivo",
     verifyWebhook: () => ({ ok: true }),
     parseWebhookEvent: () => ({ events: [] }),
-    initiateCall: async () => ({ providerCallId: "provider-call-id", status: "initiated" }),
+    initiateCall: async () => ({
+      providerCallId: "provider-call-id",
+      status: "initiated",
+    }),
     hangupCall: async () => {},
     playTts: async () => {},
     startListening: async () => {},

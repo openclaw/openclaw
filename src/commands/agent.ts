@@ -1,5 +1,8 @@
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
-import { resolveAcpAgentPolicyError, resolveAcpDispatchPolicyError } from "../acp/policy.js";
+import {
+  resolveAcpAgentPolicyError,
+  resolveAcpDispatchPolicyError,
+} from "../acp/policy.js";
 import { toAcpRuntimeError } from "../acp/runtime/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 
@@ -109,7 +112,9 @@ const OVERRIDE_FIELDS_CLEARED_BY_DELETE: OverrideFieldClearedByDelete[] = [
   "claudeCliSessionId",
 ];
 
-async function persistSessionEntry(params: PersistSessionEntryParams): Promise<void> {
+async function persistSessionEntry(
+  params: PersistSessionEntryParams,
+): Promise<void> {
   const persisted = await updateSessionStore(params.storePath, (store) => {
     const merged = mergeSessionEntry(store[params.sessionKey], params.entry);
     // Preserve explicit `delete` clears done by session override helpers.
@@ -124,7 +129,10 @@ async function persistSessionEntry(params: PersistSessionEntryParams): Promise<v
   params.sessionStore[params.sessionKey] = persisted;
 }
 
-function resolveFallbackRetryPrompt(params: { body: string; isFallbackRetry: boolean }): string {
+function resolveFallbackRetryPrompt(params: {
+  body: string;
+  isFallbackRetry: boolean;
+}): string {
   if (!params.isFallbackRetry) {
     return params.body;
   }
@@ -167,7 +175,10 @@ function runAgentAttempt(params: {
   skillsSnapshot: ReturnType<typeof buildWorkspaceSkillSnapshot> | undefined;
   resolvedVerboseLevel: VerboseLevel | undefined;
   agentDir: string;
-  onAgentEvent: (evt: { stream: string; data?: Record<string, unknown> }) => void;
+  onAgentEvent: (evt: {
+    stream: string;
+    data?: Record<string, unknown>;
+  }) => void;
   primaryProvider: string;
   sessionStore?: Record<string, SessionEntry>;
   storePath?: string;
@@ -178,7 +189,10 @@ function runAgentAttempt(params: {
     isFallbackRetry: params.isFallbackRetry,
   });
   if (isCliProvider(params.providerOverride, params.cfg)) {
-    const cliSessionId = getCliSessionId(params.sessionEntry, params.providerOverride);
+    const cliSessionId = getCliSessionId(
+      params.sessionEntry,
+      params.providerOverride,
+    );
     const runCliWithSession = (nextCliSessionId: string | undefined) =>
       runCliAgent({
         sessionId: params.sessionId,
@@ -220,7 +234,9 @@ function runAgentAttempt(params: {
             delete updatedEntry.claudeCliSessionId;
           }
           if (updatedEntry.cliSessionIds) {
-            const normalizedProvider = normalizeProviderId(params.providerOverride);
+            const normalizedProvider = normalizeProviderId(
+              params.providerOverride,
+            );
             const newCliSessionIds = { ...updatedEntry.cliSessionIds };
             delete newCliSessionIds[normalizedProvider];
             updatedEntry.cliSessionIds = newCliSessionIds;
@@ -303,7 +319,9 @@ function runAgentAttempt(params: {
     provider: params.providerOverride,
     model: params.modelOverride,
     authProfileId,
-    authProfileIdSource: authProfileId ? params.sessionEntry?.authProfileOverrideSource : undefined,
+    authProfileIdSource: authProfileId
+      ? params.sessionEntry?.authProfileOverrideSource
+      : undefined,
     thinkLevel: params.resolvedThinkLevel,
     verboseLevel: params.resolvedVerboseLevel,
     timeoutMs: params.timeoutMs,
@@ -329,12 +347,16 @@ export async function agentCommand(
   }
   const body = prependInternalEventContext(message, opts.internalEvents);
   if (!opts.to && !opts.sessionId && !opts.sessionKey && !opts.agentId) {
-    throw new Error("Pass --to <E.164>, --session-id, or --agent to choose a session");
+    throw new Error(
+      "Pass --to <E.164>, --session-id, or --agent to choose a session",
+    );
   }
 
   const cfg = loadConfig();
   const agentIdOverrideRaw = opts.agentId?.trim();
-  const agentIdOverride = agentIdOverrideRaw ? normalizeAgentId(agentIdOverrideRaw) : undefined;
+  const agentIdOverride = agentIdOverrideRaw
+    ? normalizeAgentId(agentIdOverrideRaw)
+    : undefined;
   if (agentIdOverride) {
     const knownAgents = listAgentIds(cfg);
     if (!knownAgents.includes(agentIdOverride)) {
@@ -357,15 +379,22 @@ export async function agentCommand(
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
   });
-  const thinkingLevelsHint = formatThinkingLevels(configuredModel.provider, configuredModel.model);
+  const thinkingLevelsHint = formatThinkingLevels(
+    configuredModel.provider,
+    configuredModel.model,
+  );
 
   const thinkOverride = normalizeThinkLevel(opts.thinking);
   const thinkOnce = normalizeThinkLevel(opts.thinkingOnce);
   if (opts.thinking && !thinkOverride) {
-    throw new Error(`Invalid thinking level. Use one of: ${thinkingLevelsHint}.`);
+    throw new Error(
+      `Invalid thinking level. Use one of: ${thinkingLevelsHint}.`,
+    );
   }
   if (opts.thinkingOnce && !thinkOnce) {
-    throw new Error(`Invalid one-shot thinking level. Use one of: ${thinkingLevelsHint}.`);
+    throw new Error(
+      `Invalid one-shot thinking level. Use one of: ${thinkingLevelsHint}.`,
+    );
   }
 
   const verboseOverride = normalizeVerboseLevel(opts.verbose);
@@ -385,7 +414,9 @@ export async function agentCommand(
     timeoutSecondsRaw !== undefined &&
     (Number.isNaN(timeoutSecondsRaw) || timeoutSecondsRaw < 0)
   ) {
-    throw new Error("--timeout must be a non-negative integer (seconds; 0 means no timeout)");
+    throw new Error(
+      "--timeout must be a non-negative integer (seconds; 0 means no timeout)",
+    );
   }
   const timeoutMs = resolveAgentTimeoutMs({
     cfg,
@@ -575,7 +606,9 @@ export async function agentCommand(
 
     let resolvedThinkLevel = thinkOnce ?? thinkOverride ?? persistedThinking;
     const resolvedVerboseLevel =
-      verboseOverride ?? persistedVerbose ?? (agentCfg?.verboseDefault as VerboseLevel | undefined);
+      verboseOverride ??
+      persistedVerbose ??
+      (agentCfg?.verboseDefault as VerboseLevel | undefined);
 
     if (sessionKey) {
       registerAgentRunContext(runId, {
@@ -638,20 +671,23 @@ export async function agentCommand(
       cfg,
       agentId: sessionAgentId,
     });
-    const { provider: defaultProvider, model: defaultModel } = normalizeModelRef(
-      configuredDefaultRef.provider,
-      configuredDefaultRef.model,
-    );
+    const { provider: defaultProvider, model: defaultModel } =
+      normalizeModelRef(
+        configuredDefaultRef.provider,
+        configuredDefaultRef.model,
+      );
     let provider = defaultProvider;
     let model = defaultModel;
-    const hasAllowlist = agentCfg?.models && Object.keys(agentCfg.models).length > 0;
+    const hasAllowlist =
+      agentCfg?.models && Object.keys(agentCfg.models).length > 0;
     const hasStoredOverride = Boolean(
       sessionEntry?.modelOverride || sessionEntry?.providerOverride,
     );
     const needsModelCatalog = hasAllowlist || hasStoredOverride;
     let allowedModelKeys = new Set<string>();
     let allowedModelCatalog: Awaited<ReturnType<typeof loadModelCatalog>> = [];
-    let modelCatalog: Awaited<ReturnType<typeof loadModelCatalog>> | null = null;
+    let modelCatalog: Awaited<ReturnType<typeof loadModelCatalog>> | null =
+      null;
     let allowAnyModel = false;
 
     if (needsModelCatalog) {
@@ -669,11 +705,18 @@ export async function agentCommand(
 
     if (sessionEntry && sessionStore && sessionKey && hasStoredOverride) {
       const entry = sessionEntry;
-      const overrideProvider = sessionEntry.providerOverride?.trim() || defaultProvider;
+      const overrideProvider =
+        sessionEntry.providerOverride?.trim() || defaultProvider;
       const overrideModel = sessionEntry.modelOverride?.trim();
       if (overrideModel) {
-        const normalizedOverride = normalizeModelRef(overrideProvider, overrideModel);
-        const key = modelKey(normalizedOverride.provider, normalizedOverride.model);
+        const normalizedOverride = normalizeModelRef(
+          overrideProvider,
+          overrideModel,
+        );
+        const key = modelKey(
+          normalizedOverride.provider,
+          normalizedOverride.model,
+        );
         if (
           !isCliProvider(normalizedOverride.provider, cfg) &&
           !allowAnyModel &&
@@ -681,7 +724,11 @@ export async function agentCommand(
         ) {
           const { updated } = applyModelOverrideToSessionEntry({
             entry,
-            selection: { provider: defaultProvider, model: defaultModel, isDefault: true },
+            selection: {
+              provider: defaultProvider,
+              model: defaultModel,
+              isDefault: true,
+            },
           });
           if (updated) {
             await persistSessionEntry({
@@ -699,7 +746,10 @@ export async function agentCommand(
     const storedModelOverride = sessionEntry?.modelOverride?.trim();
     if (storedModelOverride) {
       const candidateProvider = storedProviderOverride || defaultProvider;
-      const normalizedStored = normalizeModelRef(candidateProvider, storedModelOverride);
+      const normalizedStored = normalizeModelRef(
+        candidateProvider,
+        storedModelOverride,
+      );
       const key = modelKey(normalizedStored.provider, normalizedStored.model);
       if (
         isCliProvider(normalizedStored.provider, cfg) ||
@@ -742,13 +792,23 @@ export async function agentCommand(
         catalog: catalogForThinking,
       });
     }
-    if (resolvedThinkLevel === "xhigh" && !supportsXHighThinking(provider, model)) {
+    if (
+      resolvedThinkLevel === "xhigh" &&
+      !supportsXHighThinking(provider, model)
+    ) {
       const explicitThink = Boolean(thinkOnce || thinkOverride);
       if (explicitThink) {
-        throw new Error(`Thinking level "xhigh" is only supported for ${formatXHighModelHint()}.`);
+        throw new Error(
+          `Thinking level "xhigh" is only supported for ${formatXHighModelHint()}.`,
+        );
       }
       resolvedThinkLevel = "high";
-      if (sessionEntry && sessionStore && sessionKey && sessionEntry.thinkingLevel === "xhigh") {
+      if (
+        sessionEntry &&
+        sessionStore &&
+        sessionKey &&
+        sessionEntry.thinkingLevel === "xhigh"
+      ) {
         const entry = sessionEntry;
         entry.thinkingLevel = "high";
         entry.updatedAt = Date.now();
@@ -764,9 +824,14 @@ export async function agentCommand(
       agentId: sessionAgentId,
       storePath,
     });
-    let sessionFile = resolveSessionFilePath(sessionId, sessionEntry, sessionPathOpts);
+    let sessionFile = resolveSessionFilePath(
+      sessionId,
+      sessionEntry,
+      sessionPathOpts,
+    );
     if (sessionStore && sessionKey) {
-      const threadIdFromSessionKey = parseSessionThreadInfo(sessionKey).threadId;
+      const threadIdFromSessionKey =
+        parseSessionThreadInfo(sessionKey).threadId;
       const fallbackSessionFile = !sessionEntry?.sessionFile
         ? resolveSessionTranscriptPath(
             sessionId,

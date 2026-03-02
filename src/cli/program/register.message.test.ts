@@ -37,7 +37,8 @@ vi.mock("./message/register.reactions.js", () => ({
 }));
 
 vi.mock("./message/register.read-edit-delete.js", () => ({
-  registerMessageReadEditDeleteCommands: registerMessageReadEditDeleteCommandsMock,
+  registerMessageReadEditDeleteCommands:
+    registerMessageReadEditDeleteCommandsMock,
 }));
 
 vi.mock("./message/register.pins.js", () => ({
@@ -85,9 +86,14 @@ describe("registerMessageCommands", () => {
     const program = new Command();
     registerMessageCommands(program, ctx);
 
-    const message = program.commands.find((command) => command.name() === "message");
+    const message = program.commands.find(
+      (command) => command.name() === "message",
+    );
     expect(message).toBeDefined();
-    expect(createMessageCliHelpersMock).toHaveBeenCalledWith(message, "telegram|discord");
+    expect(createMessageCliHelpersMock).toHaveBeenCalledWith(
+      message,
+      "telegram|discord",
+    );
 
     const expectedRegistrars = [
       registerMessageSendCommandMock,
@@ -111,13 +117,19 @@ describe("registerMessageCommands", () => {
   it("shows command help when root message command is invoked", async () => {
     const program = new Command().exitOverride();
     registerMessageCommands(program, ctx);
-    const message = program.commands.find((command) => command.name() === "message");
+    const message = program.commands.find(
+      (command) => command.name() === "message",
+    );
     expect(message).toBeDefined();
-    const helpSpy = vi.spyOn(message as Command, "help").mockImplementation(() => {
-      throw new Error("help-called");
-    });
+    const helpSpy = vi
+      .spyOn(message as Command, "help")
+      .mockImplementation(() => {
+        throw new Error("help-called");
+      });
 
-    await expect(program.parseAsync(["message"], { from: "user" })).rejects.toThrow("help-called");
+    await expect(
+      program.parseAsync(["message"], { from: "user" }),
+    ).rejects.toThrow("help-called");
     expect(helpSpy).toHaveBeenCalledWith({ error: true });
   });
 });

@@ -15,9 +15,15 @@ type ConvertedTools = ReadonlyArray<{
   }>;
 }>;
 
-export const getFirstToolParameters = (converted: ConvertedTools): Record<string, unknown> => {
-  const functionDeclaration = asRecord(converted?.[0]?.functionDeclarations?.[0]);
-  return asRecord(functionDeclaration.parametersJsonSchema ?? functionDeclaration.parameters);
+export const getFirstToolParameters = (
+  converted: ConvertedTools,
+): Record<string, unknown> => {
+  const functionDeclaration = asRecord(
+    converted?.[0]?.functionDeclarations?.[0],
+  );
+  return asRecord(
+    functionDeclaration.parametersJsonSchema ?? functionDeclaration.parameters,
+  );
 };
 
 export const makeModel = (id: string): Model<"google-generative-ai"> =>

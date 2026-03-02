@@ -20,31 +20,51 @@ import {
 import { isModernModelRef } from "../agents/live-model-filter.js";
 import { getApiKeyForModel } from "../agents/model-auth.js";
 import { ensureOpenClawModelsJson } from "../agents/models-config.js";
-import { discoverAuthStorage, discoverModels } from "../agents/pi-model-discovery.js";
+import {
+  discoverAuthStorage,
+  discoverModels,
+} from "../agents/pi-model-discovery.js";
 import { loadConfig } from "../config/config.js";
-import type { ModelsConfig, OpenClawConfig, ModelProviderConfig } from "../config/types.js";
+import type {
+  ModelsConfig,
+  OpenClawConfig,
+  ModelProviderConfig,
+} from "../config/types.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
 import { renderCatNoncePngBase64 } from "./live-image-probe.js";
-import { hasExpectedToolNonce, shouldRetryToolReadProbe } from "./live-tool-probe-utils.js";
+import {
+  hasExpectedToolNonce,
+  shouldRetryToolReadProbe,
+} from "./live-tool-probe-utils.js";
 import { startGatewayServer } from "./server.js";
 import { extractPayloadText } from "./test-helpers.agent-results.js";
 
-const LIVE = isTruthyEnvValue(process.env.LIVE) || isTruthyEnvValue(process.env.OPENCLAW_LIVE_TEST);
+const LIVE =
+  isTruthyEnvValue(process.env.LIVE) ||
+  isTruthyEnvValue(process.env.OPENCLAW_LIVE_TEST);
 const GATEWAY_LIVE = isTruthyEnvValue(process.env.OPENCLAW_LIVE_GATEWAY);
-const ZAI_FALLBACK = isTruthyEnvValue(process.env.OPENCLAW_LIVE_GATEWAY_ZAI_FALLBACK);
+const ZAI_FALLBACK = isTruthyEnvValue(
+  process.env.OPENCLAW_LIVE_GATEWAY_ZAI_FALLBACK,
+);
 const PROVIDERS = parseFilter(process.env.OPENCLAW_LIVE_GATEWAY_PROVIDERS);
 const THINKING_LEVEL = "high";
 const THINKING_TAG_RE = /<\s*\/?\s*(?:think(?:ing)?|thought|antthinking)\s*>/i;
 const FINAL_TAG_RE = /<\s*\/?\s*final\s*>/i;
-const ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL = "ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL";
+const ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL =
+  "ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL";
 const GATEWAY_LIVE_DEFAULT_TIMEOUT_MS = 20 * 60 * 1000;
 const GATEWAY_LIVE_UNBOUNDED_TIMEOUT_MS = 60 * 60 * 1000;
 const GATEWAY_LIVE_MAX_TIMEOUT_MS = 2 * 60 * 60 * 1000;
 const GATEWAY_LIVE_MAX_MODELS = resolveGatewayLiveMaxModels();
-const GATEWAY_LIVE_SUITE_TIMEOUT_MS = resolveGatewayLiveSuiteTimeoutMs(GATEWAY_LIVE_MAX_MODELS);
+const GATEWAY_LIVE_SUITE_TIMEOUT_MS = resolveGatewayLiveSuiteTimeoutMs(
+  GATEWAY_LIVE_MAX_MODELS,
+);
 
 const describeLive = LIVE || GATEWAY_LIVE ? describe : describe.skip;
 
@@ -144,7 +164,8 @@ function formatFailurePreview(
   const limit = Math.max(1, maxItems);
   const lines = failures.slice(0, limit).map((failure, index) => {
     const normalized = failure.error.replace(/\s+/g, " ").trim();
-    const clipped = normalized.length > 320 ? `${normalized.slice(0, 317)}...` : normalized;
+    const clipped =
+      normalized.length > 320 ? `${normalized.slice(0, 317)}...` : normalized;
     return `${index + 1}. ${failure.model}: ${clipped}`;
   });
   const remaining = failures.length - limit;
@@ -164,7 +185,8 @@ function assertNoReasoningTags(params: {
     return;
   }
   if (THINKING_TAG_RE.test(params.text) || FINAL_TAG_RE.test(params.text)) {
-    const snippet = params.text.length > 200 ? `${params.text.slice(0, 200)}…` : params.text;
+    const snippet =
+      params.text.length > 200 ? `${params.text.slice(0, 200)}…` : params.text;
     throw new Error(
       `[${params.label}] reasoning tag leak (${params.model} / ${params.phase}): ${snippet}`,
     );
@@ -219,7 +241,9 @@ function isRefreshTokenReused(error: string): boolean {
 
 function isChatGPTUsageLimitErrorMessage(raw: string): boolean {
   const msg = raw.toLowerCase();
-  return msg.includes("hit your chatgpt usage limit") && msg.includes("try again in");
+  return (
+    msg.includes("hit your chatgpt usage limit") && msg.includes("try again in")
+  );
 }
 
 function isProviderUnavailableErrorMessage(raw: string): boolean {
@@ -319,7 +343,9 @@ async function runAnthropicRefusalProbe(params: {
     { expectFinal: true },
   );
   if (followup?.status !== "ok") {
-    throw new Error(`refusal followup failed: status=${String(followup?.status)}`);
+    throw new Error(
+      `refusal followup failed: status=${String(followup?.status)}`,
+    );
   }
   const followupText = extractPayloadText(followup?.result);
   assertNoReasoningTags({
@@ -420,9 +446,9 @@ async function getFreeGatewayPort(): Promise<number> {
   for (let attempt = 0; attempt < 25; attempt += 1) {
     const port = await getFreePort();
     const candidates = [port, port + 1, port + 2, port + 4];
-    const ok = (await Promise.all(candidates.map((candidate) => isPortFree(candidate)))).every(
-      Boolean,
-    );
+    const ok = (
+      await Promise.all(candidates.map((candidate) => isPortFree(candidate)))
+    ).every(Boolean);
     if (ok) {
       return port;
     }
@@ -462,7 +488,10 @@ async function connectClient(params: { url: string; token: string }) {
       onClose: (code, reason) =>
         stop(new Error(`gateway closed during connect (${code}): ${reason}`)),
     });
-    const timer = setTimeout(() => stop(new Error("gateway connect timeout")), 10_000);
+    const timer = setTimeout(
+      () => stop(new Error("gateway connect timeout")),
+      10_000,
+    );
     timer.unref();
     client.start();
   });
@@ -498,7 +527,8 @@ function buildLiveGatewayConfig(params: {
       : {}),
     ...providerOverrides,
   };
-  const providers = Object.keys(nextProviders).length > 0 ? nextProviders : baseProviders;
+  const providers =
+    Object.keys(nextProviders).length > 0 ? nextProviders : baseProviders;
   const baseModels = params.cfg.models;
   return {
     ...params.cfg,
@@ -513,7 +543,9 @@ function buildLiveGatewayConfig(params: {
         // Live tests should avoid Docker sandboxing so tool probes can
         // operate on the temporary probe files we create in the host workspace.
         sandbox: { mode: "off" },
-        models: Object.fromEntries(params.candidates.map((m) => [`${m.provider}/${m.id}`, {}])),
+        models: Object.fromEntries(
+          params.candidates.map((m) => [`${m.provider}/${m.id}`, {}]),
+        ),
       },
     },
     models:
@@ -580,7 +612,11 @@ function buildMinimaxProviderOverride(params: {
   baseUrl: string;
 }): ModelProviderConfig | null {
   const existing = params.cfg.models?.providers?.minimax;
-  if (!existing || !Array.isArray(existing.models) || existing.models.length === 0) {
+  if (
+    !existing ||
+    !Array.isArray(existing.models) ||
+    existing.models.length === 0
+  ) {
     return null;
   }
   return {
@@ -627,11 +663,18 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
     lastGood: hostStore.lastGood ? { ...hostStore.lastGood } : undefined,
     usageStats: hostStore.usageStats ? { ...hostStore.usageStats } : undefined,
   };
-  tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-live-state-"));
+  tempStateDir = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-live-state-"),
+  );
   process.env.OPENCLAW_STATE_DIR = tempStateDir;
   tempAgentDir = path.join(tempStateDir, "agents", DEFAULT_AGENT_ID, "agent");
   saveAuthProfileStore(sanitizedStore, tempAgentDir);
-  const tempSessionAgentDir = path.join(tempStateDir, "agents", agentId, "agent");
+  const tempSessionAgentDir = path.join(
+    tempStateDir,
+    "agents",
+    agentId,
+    "agent",
+  );
   if (tempSessionAgentDir !== tempAgentDir) {
     saveAuthProfileStore(sanitizedStore, tempSessionAgentDir);
   }
@@ -642,7 +685,10 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
   await fs.mkdir(workspaceDir, { recursive: true });
   const nonceA = randomUUID();
   const nonceB = randomUUID();
-  const toolProbePath = path.join(workspaceDir, `.openclaw-live-tool-probe.${nonceA}.txt`);
+  const toolProbePath = path.join(
+    workspaceDir,
+    `.openclaw-live-tool-probe.${nonceA}.txt`,
+  );
   await fs.writeFile(toolProbePath, `nonceA=${nonceA}\nnonceB=${nonceB}\n`);
 
   const agentDir = resolveOpenClawAgentDir();
@@ -681,7 +727,9 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
     const anthropicKeys = collectAnthropicApiKeys();
     if (anthropicKeys.length > 0) {
       process.env.ANTHROPIC_API_KEY = anthropicKeys[0];
-      logProgress(`[${params.label}] anthropic keys loaded: ${anthropicKeys.length}`);
+      logProgress(
+        `[${params.label}] anthropic keys loaded: ${anthropicKeys.length}`,
+      );
     }
     const sessionKey = `agent:${agentId}:${params.label}`;
     const failures: Array<{ model: string; error: string }> = [];
@@ -693,7 +741,9 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
       const progressLabel = `[${params.label}] ${index + 1}/${total} ${modelKey}`;
 
       const attemptMax =
-        model.provider === "anthropic" && anthropicKeys.length > 0 ? anthropicKeys.length : 1;
+        model.provider === "anthropic" && anthropicKeys.length > 0
+          ? anthropicKeys.length
+          : 1;
 
       for (let attempt = 0; attempt < attemptMax; attempt += 1) {
         if (model.provider === "anthropic" && anthropicKeys.length > 0) {
@@ -757,10 +807,15 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
             isEmptyStreamText(text) &&
             (model.provider === "minimax" || model.provider === "openai-codex")
           ) {
-            logProgress(`${progressLabel}: skip (${model.provider} empty response)`);
+            logProgress(
+              `${progressLabel}: skip (${model.provider} empty response)`,
+            );
             break;
           }
-          if (isGoogleishProvider(model.provider) && isGoogleModelNotFoundText(text)) {
+          if (
+            isGoogleishProvider(model.provider) &&
+            isGoogleModelNotFoundText(text)
+          ) {
             // Catalog drift: model IDs can disappear or become unavailable on the API.
             // Treat as skip when scanning "all models" for Google.
             logProgress(`${progressLabel}: skip (google model not found)`);
@@ -773,13 +828,19 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
             label: params.label,
           });
           if (!isMeaningful(text)) {
-            if (isGoogleishProvider(model.provider) && /gemini/i.test(model.id)) {
+            if (
+              isGoogleishProvider(model.provider) &&
+              /gemini/i.test(model.id)
+            ) {
               logProgress(`${progressLabel}: skip (google not meaningful)`);
               break;
             }
             throw new Error(`not meaningful: ${text}`);
           }
-          if (!/\bmicro\s*-?\s*tasks?\b/i.test(text) || !/\bmacro\s*-?\s*tasks?\b/i.test(text)) {
+          if (
+            !/\bmicro\s*-?\s*tasks?\b/i.test(text) ||
+            !/\bmacro\s*-?\s*tasks?\b/i.test(text)
+          ) {
             throw new Error(`missing required keywords: ${text}`);
           }
 
@@ -818,14 +879,19 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
                 );
                 continue;
               }
-              throw new Error(`tool probe failed: status=${String(toolProbe?.status)}`);
+              throw new Error(
+                `tool probe failed: status=${String(toolProbe?.status)}`,
+              );
             }
             toolText = extractPayloadText(toolProbe?.result);
             if (
               isEmptyStreamText(toolText) &&
-              (model.provider === "minimax" || model.provider === "openai-codex")
+              (model.provider === "minimax" ||
+                model.provider === "openai-codex")
             ) {
-              logProgress(`${progressLabel}: skip (${model.provider} empty response)`);
+              logProgress(
+                `${progressLabel}: skip (${model.provider} empty response)`,
+              );
               break;
             }
             assertNoReasoningTags({
@@ -880,14 +946,19 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
               { expectFinal: true },
             );
             if (execReadProbe?.status !== "ok") {
-              throw new Error(`exec+read probe failed: status=${String(execReadProbe?.status)}`);
+              throw new Error(
+                `exec+read probe failed: status=${String(execReadProbe?.status)}`,
+              );
             }
             const execReadText = extractPayloadText(execReadProbe?.result);
             if (
               isEmptyStreamText(execReadText) &&
-              (model.provider === "minimax" || model.provider === "openai-codex")
+              (model.provider === "minimax" ||
+                model.provider === "openai-codex")
             ) {
-              logProgress(`${progressLabel}: skip (${model.provider} empty response)`);
+              logProgress(
+                `${progressLabel}: skip (${model.provider} empty response)`,
+              );
               break;
             }
             assertNoReasoningTags({
@@ -934,14 +1005,19 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
             // Best-effort: do not fail the whole live suite on flaky image handling.
             // (We still keep prompt + tool probes as hard checks.)
             if (imageProbe?.status !== "ok") {
-              logProgress(`${progressLabel}: image skip (status=${String(imageProbe?.status)})`);
+              logProgress(
+                `${progressLabel}: image skip (status=${String(imageProbe?.status)})`,
+              );
             } else {
               const imageText = extractPayloadText(imageProbe?.result);
               if (
                 isEmptyStreamText(imageText) &&
-                (model.provider === "minimax" || model.provider === "openai-codex")
+                (model.provider === "minimax" ||
+                  model.provider === "openai-codex")
               ) {
-                logProgress(`${progressLabel}: image skip (${model.provider} empty response)`);
+                logProgress(
+                  `${progressLabel}: image skip (${model.provider} empty response)`,
+                );
               } else {
                 assertNoReasoningTags({
                   text: imageText,
@@ -952,7 +1028,8 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
                 if (!/\bcat\b/i.test(imageText)) {
                   logProgress(`${progressLabel}: image skip (missing 'cat')`);
                 } else {
-                  const candidates = imageText.toUpperCase().match(/[A-Z0-9]{6,20}/g) ?? [];
+                  const candidates =
+                    imageText.toUpperCase().match(/[A-Z0-9]{6,20}/g) ?? [];
                   const bestDistance = candidates.reduce((best, cand) => {
                     if (Math.abs(cand.length - imageCode.length) > 2) {
                       return best;
@@ -971,7 +1048,8 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
           // Regression: tool-call-only turn followed by a user message (OpenAI responses bug class).
           if (
             (model.provider === "openai" && model.api === "openai-responses") ||
-            (model.provider === "openai-codex" && model.api === "openai-codex-responses")
+            (model.provider === "openai-codex" &&
+              model.api === "openai-codex-responses")
           ) {
             logProgress(`${progressLabel}: tool-only regression`);
             const runId2 = randomUUID();
@@ -987,7 +1065,9 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
               { expectFinal: true },
             );
             if (first?.status !== "ok") {
-              throw new Error(`tool-only turn failed: status=${String(first?.status)}`);
+              throw new Error(
+                `tool-only turn failed: status=${String(first?.status)}`,
+              );
             }
             const firstText = extractPayloadText(first?.result);
             assertNoReasoningTags({
@@ -1009,7 +1089,9 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
               { expectFinal: true },
             );
             if (second?.status !== "ok") {
-              throw new Error(`post-tool message failed: status=${String(second?.status)}`);
+              throw new Error(
+                `post-tool message failed: status=${String(second?.status)}`,
+              );
             }
             const reply = extractPayloadText(second?.result);
             assertNoReasoningTags({
@@ -1045,9 +1127,14 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
             logProgress(`${progressLabel}: rate limit, retrying with next key`);
             continue;
           }
-          if (model.provider === "anthropic" && isAnthropicBillingError(message)) {
+          if (
+            model.provider === "anthropic" &&
+            isAnthropicBillingError(message)
+          ) {
             if (attempt + 1 < attemptMax) {
-              logProgress(`${progressLabel}: billing issue, retrying with next key`);
+              logProgress(
+                `${progressLabel}: billing issue, retrying with next key`,
+              );
               continue;
             }
             logProgress(`${progressLabel}: skip (anthropic billing)`);
@@ -1058,7 +1145,9 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
             isEmptyStreamText(message) &&
             attempt + 1 < attemptMax
           ) {
-            logProgress(`${progressLabel}: empty response, retrying with next key`);
+            logProgress(
+              `${progressLabel}: empty response, retrying with next key`,
+            );
             continue;
           }
           if (model.provider === "anthropic" && isEmptyStreamText(message)) {
@@ -1072,29 +1161,42 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
             break;
           }
           // OpenAI Codex refresh tokens can become single-use; skip instead of failing all live tests.
-          if (model.provider === "openai-codex" && isRefreshTokenReused(message)) {
+          if (
+            model.provider === "openai-codex" &&
+            isRefreshTokenReused(message)
+          ) {
             logProgress(`${progressLabel}: skip (codex refresh token reused)`);
             break;
           }
-          if (model.provider === "openai-codex" && isChatGPTUsageLimitErrorMessage(message)) {
+          if (
+            model.provider === "openai-codex" &&
+            isChatGPTUsageLimitErrorMessage(message)
+          ) {
             logProgress(`${progressLabel}: skip (chatgpt usage limit)`);
             break;
           }
-          if (model.provider === "openai-codex" && isInstructionsRequiredError(message)) {
+          if (
+            model.provider === "openai-codex" &&
+            isInstructionsRequiredError(message)
+          ) {
             skippedCount += 1;
             logProgress(`${progressLabel}: skip (instructions required)`);
             break;
           }
           if (
-            (model.provider === "openai" || model.provider === "openai-codex") &&
+            (model.provider === "openai" ||
+              model.provider === "openai-codex") &&
             isOpenAIReasoningSequenceError(message)
           ) {
             skippedCount += 1;
-            logProgress(`${progressLabel}: skip (openai reasoning sequence error)`);
+            logProgress(
+              `${progressLabel}: skip (openai reasoning sequence error)`,
+            );
             break;
           }
           if (
-            (model.provider === "openai" || model.provider === "openai-codex") &&
+            (model.provider === "openai" ||
+              model.provider === "openai-codex") &&
             isToolNonceRefusal(message)
           ) {
             skippedCount += 1;
@@ -1167,13 +1269,16 @@ describeLive("gateway live (dev agent, profile keys)", () => {
       const all = modelRegistry.getAll();
 
       const rawModels = process.env.OPENCLAW_LIVE_GATEWAY_MODELS?.trim();
-      const useModern = !rawModels || rawModels === "modern" || rawModels === "all";
+      const useModern =
+        !rawModels || rawModels === "modern" || rawModels === "all";
       const useExplicit = Boolean(rawModels) && !useModern;
       const filter = useExplicit ? parseFilter(rawModels) : null;
       const maxModels = GATEWAY_LIVE_MAX_MODELS;
       const wanted = filter
         ? all.filter((m) => filter.has(`${m.provider}/${m.id}`))
-        : all.filter((m) => isModernModelRef({ provider: m.provider, id: m.id }));
+        : all.filter((m) =>
+            isModernModelRef({ provider: m.provider, id: m.id }),
+          );
 
       const candidates: Array<Model<Api>> = [];
       for (const model of wanted) {
@@ -1206,15 +1311,21 @@ describeLive("gateway live (dev agent, profile keys)", () => {
         maxModels > 0 ? maxModels : candidates.length,
         (model) => model.provider,
       );
-      logProgress(`[all-models] selection=${useExplicit ? "explicit" : "modern"}`);
+      logProgress(
+        `[all-models] selection=${useExplicit ? "explicit" : "modern"}`,
+      );
       if (selectedCandidates.length < candidates.length) {
         logProgress(
           `[all-models] capped to ${selectedCandidates.length}/${candidates.length} via OPENCLAW_LIVE_GATEWAY_MAX_MODELS=${maxModels}`,
         );
       }
-      const imageCandidates = selectedCandidates.filter((m) => m.input?.includes("image"));
+      const imageCandidates = selectedCandidates.filter((m) =>
+        m.input?.includes("image"),
+      );
       if (imageCandidates.length === 0) {
-        logProgress("[all-models] no image-capable models selected; image probe will be skipped");
+        logProgress(
+          "[all-models] no image-capable models selected; image probe will be skipped",
+        );
       }
       await runGatewayModelSuite({
         label: "all-models",
@@ -1225,9 +1336,13 @@ describeLive("gateway live (dev agent, profile keys)", () => {
         thinkingLevel: THINKING_LEVEL,
       });
 
-      const minimaxCandidates = selectedCandidates.filter((model) => model.provider === "minimax");
+      const minimaxCandidates = selectedCandidates.filter(
+        (model) => model.provider === "minimax",
+      );
       if (minimaxCandidates.length === 0) {
-        logProgress("[minimax] no candidates with keys; skipping dual endpoint probes");
+        logProgress(
+          "[minimax] no candidates with keys; skipping dual endpoint probes",
+        );
         return;
       }
 
@@ -1247,7 +1362,9 @@ describeLive("gateway live (dev agent, profile keys)", () => {
           providerOverrides: { minimax: minimaxAnthropic },
         });
       } else {
-        logProgress("[minimax-anthropic] missing minimax provider config; skipping");
+        logProgress(
+          "[minimax-anthropic] missing minimax provider config; skipping",
+        );
       }
     },
     GATEWAY_LIVE_SUITE_TIMEOUT_MS,
@@ -1280,7 +1397,10 @@ describeLive("gateway live (dev agent, profile keys)", () => {
     const agentDir = resolveOpenClawAgentDir();
     const authStorage = discoverAuthStorage(agentDir);
     const modelRegistry = discoverModels(authStorage, agentDir);
-    const anthropic = modelRegistry.find("anthropic", "claude-opus-4-5") as Model<Api> | null;
+    const anthropic = modelRegistry.find(
+      "anthropic",
+      "claude-opus-4-5",
+    ) as Model<Api> | null;
     const zai = modelRegistry.find("zai", "glm-4.7") as Model<Api> | null;
 
     if (!anthropic || !zai) {
@@ -1298,7 +1418,10 @@ describeLive("gateway live (dev agent, profile keys)", () => {
     await fs.mkdir(workspaceDir, { recursive: true });
     const nonceA = randomUUID();
     const nonceB = randomUUID();
-    const toolProbePath = path.join(workspaceDir, `.openclaw-live-zai-fallback.${nonceA}.txt`);
+    const toolProbePath = path.join(
+      workspaceDir,
+      `.openclaw-live-zai-fallback.${nonceA}.txt`,
+    );
     await fs.writeFile(toolProbePath, `nonceA=${nonceA}\nnonceB=${nonceB}\n`);
 
     const port = await getFreeGatewayPort();
@@ -1339,7 +1462,9 @@ describeLive("gateway live (dev agent, profile keys)", () => {
         { expectFinal: true },
       );
       if (toolProbe?.status !== "ok") {
-        throw new Error(`anthropic tool probe failed: status=${String(toolProbe?.status)}`);
+        throw new Error(
+          `anthropic tool probe failed: status=${String(toolProbe?.status)}`,
+        );
       }
       const toolText = extractPayloadText(toolProbe?.result);
       assertNoReasoningTags({
@@ -1372,7 +1497,9 @@ describeLive("gateway live (dev agent, profile keys)", () => {
         { expectFinal: true },
       );
       if (followup?.status !== "ok") {
-        throw new Error(`zai followup failed: status=${String(followup?.status)}`);
+        throw new Error(
+          `zai followup failed: status=${String(followup?.status)}`,
+        );
       }
       const followupText = extractPayloadText(followup?.result);
       assertNoReasoningTags({

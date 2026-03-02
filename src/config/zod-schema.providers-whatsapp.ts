@@ -9,7 +9,9 @@ import {
   MarkdownConfigSchema,
 } from "./zod-schema.core.js";
 
-const ToolPolicyBySenderSchema = z.record(z.string(), ToolPolicySchema).optional();
+const ToolPolicyBySenderSchema = z
+  .record(z.string(), ToolPolicySchema)
+  .optional();
 
 const WhatsAppGroupEntrySchema = z
   .object({
@@ -20,13 +22,18 @@ const WhatsAppGroupEntrySchema = z
   .strict()
   .optional();
 
-const WhatsAppGroupsSchema = z.record(z.string(), WhatsAppGroupEntrySchema).optional();
+const WhatsAppGroupsSchema = z
+  .record(z.string(), WhatsAppGroupEntrySchema)
+  .optional();
 
 const WhatsAppAckReactionSchema = z
   .object({
     emoji: z.string().optional(),
     direct: z.boolean().optional().default(true),
-    group: z.enum(["always", "mentions", "never"]).optional().default("mentions"),
+    group: z
+      .enum(["always", "mentions", "never"])
+      .optional()
+      .default("mentions"),
   })
   .strict()
   .optional();

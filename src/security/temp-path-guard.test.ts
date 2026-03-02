@@ -20,7 +20,9 @@ function shouldSkip(relativePath: string): boolean {
 }
 
 function stripCommentsForScan(input: string): string {
-  return input.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+  return input
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/(^|[^:])\/\/.*$/gm, "$1");
 }
 
 function findMatchingParen(source: string, openIndex: number): number {
@@ -102,7 +104,12 @@ function splitTopLevelArguments(source: string): string[] {
       current += ch;
       continue;
     }
-    if (ch === "," && parenDepth === 0 && bracketDepth === 0 && braceDepth === 0) {
+    if (
+      ch === "," &&
+      parenDepth === 0 &&
+      bracketDepth === 0 &&
+      braceDepth === 0
+    ) {
       out.push(current.trim());
       current = "";
       continue;
@@ -146,7 +153,11 @@ function isOsTmpdirExpression(argument: string): boolean {
 }
 
 function mightContainDynamicTmpdirJoin(source: string): boolean {
-  if (!source.includes("path") || !source.includes("join") || !source.includes("tmpdir")) {
+  if (
+    !source.includes("path") ||
+    !source.includes("join") ||
+    !source.includes("tmpdir")
+  ) {
     return false;
   }
   return (
@@ -170,7 +181,10 @@ function hasDynamicTmpdirJoin(source: string): boolean {
     if (openParenIndex !== -1) {
       const closeParenIndex = findMatchingParen(scanSource, openParenIndex);
       if (closeParenIndex !== -1) {
-        const argsSource = scanSource.slice(openParenIndex + 1, closeParenIndex);
+        const argsSource = scanSource.slice(
+          openParenIndex + 1,
+          closeParenIndex,
+        );
         const args = splitTopLevelArguments(argsSource);
         if (args.length >= 2 && isOsTmpdirExpression(args[0])) {
           for (const arg of args.slice(1)) {

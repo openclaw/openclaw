@@ -1,8 +1,15 @@
 import type { MatrixClient } from "@vector-im/matrix-bot-sdk";
 import { describe, expect, it, vi } from "vitest";
-import { listMatrixPins, pinMatrixMessage, unpinMatrixMessage } from "./pins.js";
+import {
+  listMatrixPins,
+  pinMatrixMessage,
+  unpinMatrixMessage,
+} from "./pins.js";
 
-function createPinsClient(seedPinned: string[], knownBodies: Record<string, string> = {}) {
+function createPinsClient(
+  seedPinned: string[],
+  knownBodies: Record<string, string> = {},
+) {
   let pinned = [...seedPinned];
   const getRoomStateEvent = vi.fn(async () => ({ pinned: [...pinned] }));
   const sendStateEvent = vi.fn(
@@ -41,7 +48,9 @@ describe("matrix pins actions", () => {
     const { client, getPinned, sendStateEvent } = createPinsClient(["$a"]);
 
     const first = await pinMatrixMessage("!room:example.org", "$b", { client });
-    const second = await pinMatrixMessage("!room:example.org", "$b", { client });
+    const second = await pinMatrixMessage("!room:example.org", "$b", {
+      client,
+    });
 
     expect(first.pinned).toEqual(["$a", "$b"]);
     expect(second.pinned).toEqual(["$a", "$b"]);
@@ -52,7 +61,9 @@ describe("matrix pins actions", () => {
   it("unpinds only the selected message id", async () => {
     const { client, getPinned } = createPinsClient(["$a", "$b", "$c"]);
 
-    const result = await unpinMatrixMessage("!room:example.org", "$b", { client });
+    const result = await unpinMatrixMessage("!room:example.org", "$b", {
+      client,
+    });
 
     expect(result.pinned).toEqual(["$a", "$c"]);
     expect(getPinned()).toEqual(["$a", "$c"]);

@@ -16,7 +16,10 @@ export const DEFAULT_MAX_BYTES: Record<MediaUnderstandingCapability, number> = {
   audio: 20 * MB,
   video: 50 * MB,
 };
-export const DEFAULT_TIMEOUT_SECONDS: Record<MediaUnderstandingCapability, number> = {
+export const DEFAULT_TIMEOUT_SECONDS: Record<
+  MediaUnderstandingCapability,
+  number
+> = {
   image: 60,
   audio: 60,
   video: 120,

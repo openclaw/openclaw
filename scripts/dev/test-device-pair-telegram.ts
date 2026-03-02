@@ -1,5 +1,8 @@
 import { loadConfig } from "../../src/config/config.js";
-import { matchPluginCommand, executePluginCommand } from "../../src/plugins/commands.js";
+import {
+  matchPluginCommand,
+  executePluginCommand,
+} from "../../src/plugins/commands.js";
 import { loadOpenClawPlugins } from "../../src/plugins/loader.js";
 import { sendMessageTelegram } from "../../src/telegram/send.js";
 
@@ -59,4 +62,8 @@ if (result.text) {
 }
 
 // eslint-disable-next-line no-console
-console.log("Sent split /pair messages to", chatId, accountId ? `(${accountId})` : "");
+console.log(
+  "Sent split /pair messages to",
+  chatId,
+  accountId ? `(${accountId})` : "",
+);

@@ -18,7 +18,10 @@ describe("parseOAuthCallbackInput", () => {
   });
 
   it("accepts querystring-only input when state matches", () => {
-    const parsed = parseOAuthCallbackInput("code=abc123&state=expected-state", "expected-state");
+    const parsed = parseOAuthCallbackInput(
+      "code=abc123&state=expected-state",
+      "expected-state",
+    );
     expect(parsed).toEqual({ code: "abc123", state: "expected-state" });
   });
 

@@ -37,7 +37,9 @@ describe("ChatLog", () => {
     }
 
     // Should no-op safely after the tool component is pruned.
-    chatLog.updateToolResult("tool-1", { content: [{ type: "text", text: "done" }] });
+    chatLog.updateToolResult("tool-1", {
+      content: [{ type: "text", text: "done" }],
+    });
 
     expect(chatLog.children.length).toBe(20);
   });

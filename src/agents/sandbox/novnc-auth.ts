@@ -3,7 +3,8 @@ import crypto from "node:crypto";
 export const NOVNC_PASSWORD_ENV_KEY = "OPENCLAW_BROWSER_NOVNC_PASSWORD";
 const NOVNC_TOKEN_TTL_MS = 60 * 1000;
 const NOVNC_PASSWORD_LENGTH = 8;
-const NOVNC_PASSWORD_ALPHABET = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+const NOVNC_PASSWORD_ALPHABET =
+  "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
 type NoVncObserverTokenEntry = {
   noVncPort: number;
@@ -26,7 +27,10 @@ function pruneExpiredNoVncObserverTokens(now: number) {
   }
 }
 
-export function isNoVncEnabled(params: { enableNoVnc: boolean; headless: boolean }) {
+export function isNoVncEnabled(params: {
+  enableNoVnc: boolean;
+  headless: boolean;
+}) {
   return params.enableNoVnc && !params.headless;
 }
 
@@ -34,7 +38,10 @@ export function generateNoVncPassword() {
   // VNC auth uses an 8-char password max.
   let out = "";
   for (let i = 0; i < NOVNC_PASSWORD_LENGTH; i += 1) {
-    out += NOVNC_PASSWORD_ALPHABET[crypto.randomInt(0, NOVNC_PASSWORD_ALPHABET.length)];
+    out +=
+      NOVNC_PASSWORD_ALPHABET[
+        crypto.randomInt(0, NOVNC_PASSWORD_ALPHABET.length)
+      ];
   }
   return out;
 }
@@ -43,7 +50,10 @@ export function buildNoVncDirectUrl(port: number) {
   return `http://127.0.0.1:${port}/vnc.html`;
 }
 
-export function buildNoVncObserverTargetUrl(params: { port: number; password?: string }) {
+export function buildNoVncObserverTargetUrl(params: {
+  port: number;
+  password?: string;
+}) {
   const query = new URLSearchParams({
     autoconnect: "1",
     resize: "remote",

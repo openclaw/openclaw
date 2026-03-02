@@ -36,10 +36,16 @@ describe("describeMoonshotVideo", () => {
     expect(headers.get("content-type")).toBe("application/json");
     expect(headers.get("x-trace")).toBe("1");
 
-    const body = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as {
+    const body = JSON.parse(
+      typeof init?.body === "string" ? init.body : "{}",
+    ) as {
       model?: string;
       messages?: Array<{
-        content?: Array<{ type?: string; text?: string; video_url?: { url?: string } }>;
+        content?: Array<{
+          type?: string;
+          text?: string;
+          video_url?: { url?: string };
+        }>;
       }>;
     };
     expect(body.model).toBe("kimi-k2.5");
@@ -55,7 +61,9 @@ describe("describeMoonshotVideo", () => {
 
   it("falls back to reasoning_content when content is empty", async () => {
     const { fetchFn } = createRequestCaptureJsonFetch({
-      choices: [{ message: { content: "", reasoning_content: "reasoned answer" } }],
+      choices: [
+        { message: { content: "", reasoning_content: "reasoned answer" } },
+      ],
     });
 
     const result = await describeMoonshotVideo({

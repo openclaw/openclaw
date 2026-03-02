@@ -1,4 +1,8 @@
-export function hasExpectedToolNonce(text: string, nonceA: string, nonceB: string): boolean {
+export function hasExpectedToolNonce(
+  text: string,
+  nonceA: string,
+  nonceB: string,
+): boolean {
   return text.includes(nonceA) && text.includes(nonceB);
 }
 
@@ -24,10 +28,17 @@ export function shouldRetryToolReadProbe(params: {
   if (trimmed.includes("[object Object]")) {
     return true;
   }
-  if (/\bread\s*\[/.test(lower) || /\btool\b/.test(lower) || /\bfunction\b/.test(lower)) {
+  if (
+    /\bread\s*\[/.test(lower) ||
+    /\btool\b/.test(lower) ||
+    /\bfunction\b/.test(lower)
+  ) {
     return true;
   }
-  if (params.provider === "mistral" && (lower.includes("noncea=") || lower.includes("nonceb="))) {
+  if (
+    params.provider === "mistral" &&
+    (lower.includes("noncea=") || lower.includes("nonceb="))
+  ) {
     return true;
   }
   return false;

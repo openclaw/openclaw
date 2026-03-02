@@ -45,8 +45,12 @@ describe("withTempDownloadPath", () => {
       },
     );
 
-    expect(capturedPath).toContain(path.join(resolvePreferredOpenClawTmpDir(), "line-media-"));
-    await expect(fs.stat(capturedPath)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(capturedPath).toContain(
+      path.join(resolvePreferredOpenClawTmpDir(), "line-media-"),
+    );
+    await expect(fs.stat(capturedPath)).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 
   it("sanitizes prefix and fileName", async () => {

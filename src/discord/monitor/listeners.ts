@@ -30,13 +30,22 @@ import { formatDiscordReactionEmoji, formatDiscordUserTag } from "./format.js";
 import { resolveDiscordChannelInfo } from "./message-utils.js";
 import { setPresence } from "./presence-cache.js";
 
-type LoadedConfig = ReturnType<typeof import("../../config/config.js").loadConfig>;
+type LoadedConfig = ReturnType<
+  typeof import("../../config/config.js").loadConfig
+>;
 type RuntimeEnv = import("../../runtime.js").RuntimeEnv;
-type Logger = ReturnType<typeof import("../../logging/subsystem.js").createSubsystemLogger>;
+type Logger = ReturnType<
+  typeof import("../../logging/subsystem.js").createSubsystemLogger
+>;
 
-export type DiscordMessageEvent = Parameters<MessageCreateListener["handle"]>[0];
+export type DiscordMessageEvent = Parameters<
+  MessageCreateListener["handle"]
+>[0];
 
-export type DiscordMessageHandler = (data: DiscordMessageEvent, client: Client) => Promise<void>;
+export type DiscordMessageHandler = (
+  data: DiscordMessageEvent,
+  client: Client,
+) => Promise<void>;
 
 type DiscordReactionEvent = Parameters<MessageReactionAddListener["handle"]>[0];
 
@@ -52,7 +61,10 @@ type DiscordReactionListenerParams = {
   allowFrom: string[];
   groupPolicy: "open" | "allowlist" | "disabled";
   allowNameMatching: boolean;
-  guildEntries?: Record<string, import("./allow-list.js").DiscordGuildEntryResolved>;
+  guildEntries?: Record<
+    string,
+    import("./allow-list.js").DiscordGuildEntryResolved
+  >;
   logger: Logger;
   onEvent?: () => void;
 };
@@ -110,8 +122,13 @@ async function runDiscordListenerWithSlowLog(params: {
   }
 }
 
-export function registerDiscordListener(listeners: Array<object>, listener: object) {
-  if (listeners.some((existing) => existing.constructor === listener.constructor)) {
+export function registerDiscordListener(
+  listeners: Array<object>,
+  listener: object,
+) {
+  if (
+    listeners.some((existing) => existing.constructor === listener.constructor)
+  ) {
     return false;
   }
   listeners.push(listener);
@@ -266,7 +283,11 @@ async function authorizeDiscordReactionIngress(
       groupAllowFrom: [],
       storeAllowFrom,
       isSenderAllowed: (allowEntries) => {
-        const allowList = normalizeDiscordAllowList(allowEntries, ["discord:", "user:", "pk:"]);
+        const allowList = normalizeDiscordAllowList(allowEntries, [
+          "discord:",
+          "user:",
+          "pk:",
+        ]);
         const allowMatch = allowList
           ? resolveDiscordAllowListMatch({
               allowList,
@@ -300,7 +321,8 @@ async function authorizeDiscordReactionIngress(
     return { allowed: true };
   }
   const channelAllowlistConfigured =
-    Boolean(params.guildInfo?.channels) && Object.keys(params.guildInfo?.channels ?? {}).length > 0;
+    Boolean(params.guildInfo?.channels) &&
+    Object.keys(params.guildInfo?.channels ?? {}).length > 0;
   const channelAllowed = params.channelConfig?.allowed !== false;
   if (
     !isDiscordGroupAllowedByPolicy({
@@ -332,7 +354,10 @@ async function handleDiscordReactionEvent(params: {
   allowFrom: string[];
   groupPolicy: "open" | "allowlist" | "disabled";
   allowNameMatching: boolean;
-  guildEntries?: Record<string, import("./allow-list.js").DiscordGuildEntryResolved>;
+  guildEntries?: Record<
+    string,
+    import("./allow-list.js").DiscordGuildEntryResolved
+  >;
   logger: Logger;
 }) {
   try {
@@ -357,7 +382,12 @@ async function handleDiscordReactionEvent(params: {
           guildEntries,
         })
       : null;
-    if (isGuildMessage && guildEntries && Object.keys(guildEntries).length > 0 && !guildInfo) {
+    if (
+      isGuildMessage &&
+      guildEntries &&
+      Object.keys(guildEntries).length > 0 &&
+      !guildInfo
+    ) {
       return;
     }
 
@@ -365,7 +395,8 @@ async function handleDiscordReactionEvent(params: {
     if (!channel) {
       return;
     }
-    const channelName = "name" in channel ? (channel.name ?? undefined) : undefined;
+    const channelName =
+      "name" in channel ? (channel.name ?? undefined) : undefined;
     const channelSlug = channelName ? normalizeDiscordSlug(channelName) : "";
     const channelType = "type" in channel ? channel.type : undefined;
     const isDirectMessage = channelType === ChannelType.DM;
@@ -393,10 +424,13 @@ async function handleDiscordReactionEvent(params: {
       guildInfo,
     });
     if (!ingressAccess.allowed) {
-      logVerbose(`discord reaction blocked sender=${user.id} (reason=${ingressAccess.reason})`);
+      logVerbose(
+        `discord reaction blocked sender=${user.id} (reason=${ingressAccess.reason})`,
+      );
       return;
     }
-    let parentId = "parentId" in channel ? (channel.parentId ?? undefined) : undefined;
+    let parentId =
+      "parentId" in channel ? (channel.parentId ?? undefined) : undefined;
     let parentName: string | undefined;
     let parentSlug = "";
     const memberRoleIds = Array.isArray(data.rawMember?.roles)
@@ -436,7 +470,9 @@ async function handleDiscordReactionEvent(params: {
           kind: isDirectMessage ? "direct" : isGroupDm ? "group" : "channel",
           id: isDirectMessage ? user.id : data.channel_id,
         },
-        parentPeer: parentPeerId ? { kind: "channel", id: parentPeerId } : undefined,
+        parentPeer: parentPeerId
+          ? { kind: "channel", id: parentPeerId }
+          : undefined,
       });
       enqueueSystemEvent(text, {
         sessionKey: route.sessionKey,
@@ -459,7 +495,9 @@ async function handleDiscordReactionEvent(params: {
       });
     const emitReactionWithAuthor = (message: { author?: User } | null) => {
       const { baseText } = resolveReactionBase();
-      const authorLabel = message?.author ? formatDiscordUserTag(message.author) : undefined;
+      const authorLabel = message?.author
+        ? formatDiscordUserTag(message.author)
+        : undefined;
       const text = authorLabel ? `${baseText} from ${authorLabel}` : baseText;
       emitReaction(text, parentId);
     };
@@ -504,10 +542,14 @@ async function handleDiscordReactionEvent(params: {
         guildInfo,
         channelConfig,
       });
-    const authorizeThreadChannelAccess = async (channelInfo: { parentId?: string } | null) => {
+    const authorizeThreadChannelAccess = async (
+      channelInfo: { parentId?: string } | null,
+    ) => {
       parentId = channelInfo?.parentId;
       await loadThreadParentInfo();
-      return await authorizeReactionIngressForChannel(resolveThreadChannelConfig());
+      return await authorizeReactionIngressForChannel(
+        resolveThreadChannelConfig(),
+      );
     };
 
     // Parallelize async operations for thread channels
@@ -546,7 +588,10 @@ async function handleDiscordReactionEvent(params: {
       // For "own" mode, we need to fetch the message to check the author
       const messagePromise = data.message.fetch().catch(() => null);
 
-      const [channelInfo, message] = await Promise.all([channelInfoPromise, messagePromise]);
+      const [channelInfo, message] = await Promise.all([
+        channelInfoPromise,
+        messagePromise,
+      ]);
       const threadAccess = await authorizeThreadChannelAccess(channelInfo);
       if (!threadAccess.allowed) {
         return;
@@ -573,7 +618,8 @@ async function handleDiscordReactionEvent(params: {
       scope: "channel",
     });
     if (isGuildMessage) {
-      const channelAccess = await authorizeReactionIngressForChannel(channelConfig);
+      const channelAccess =
+        await authorizeReactionIngressForChannel(channelConfig);
       if (!channelAccess.allowed) {
         return;
       }
@@ -609,7 +655,9 @@ async function handleDiscordReactionEvent(params: {
 
     emitReactionWithAuthor(message);
   } catch (err) {
-    params.logger.error(danger(`discord reaction handler failed: ${String(err)}`));
+    params.logger.error(
+      danger(`discord reaction handler failed: ${String(err)}`),
+    );
   }
 }
 
@@ -628,7 +676,10 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
   async handle(data: PresenceUpdateEvent) {
     try {
       const userId =
-        "user" in data && data.user && typeof data.user === "object" && "id" in data.user
+        "user" in data &&
+        data.user &&
+        typeof data.user === "object" &&
+        "id" in data.user
           ? String(data.user.id)
           : undefined;
       if (!userId) {

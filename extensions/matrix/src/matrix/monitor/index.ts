@@ -10,7 +10,12 @@ import {
 } from "openclaw/plugin-sdk";
 import { resolveMatrixTargets } from "../../resolve-targets.js";
 import { getMatrixRuntime } from "../../runtime.js";
-import type { CoreConfig, MatrixConfig, MatrixRoomConfig, ReplyToMode } from "../../types.js";
+import type {
+  CoreConfig,
+  MatrixConfig,
+  MatrixRoomConfig,
+  ReplyToMode,
+} from "../../types.js";
 import { resolveMatrixAccount } from "../accounts.js";
 import { setActiveMatrixClient } from "../active-client.js";
 import {
@@ -39,7 +44,9 @@ const DEFAULT_MEDIA_MAX_MB = 20;
 export const DEFAULT_STARTUP_GRACE_MS = 5000;
 
 export function isConfiguredMatrixRoomEntry(entry: string): boolean {
-  return entry.startsWith("!") || (entry.startsWith("#") && entry.includes(":"));
+  return (
+    entry.startsWith("!") || (entry.startsWith("#") && entry.includes(":"))
+  );
 }
 
 function normalizeMatrixUserEntry(raw: string): string {
@@ -129,7 +136,11 @@ async function resolveMatrixRoomsConfig(params: {
   if (roomsConfig["*"]) {
     nextRooms["*"] = roomsConfig["*"];
   }
-  const pending: Array<{ input: string; query: string; config: MatrixRoomConfig }> = [];
+  const pending: Array<{
+    input: string;
+    query: string;
+    config: MatrixRoomConfig;
+  }> = [];
   for (const [entry, roomConfig] of Object.entries(roomsConfig)) {
     if (entry === "*") {
       continue;
@@ -230,9 +241,13 @@ async function resolveMatrixMonitorConfig(params: {
   return { allowFrom, groupAllowFrom, roomsConfig };
 }
 
-export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promise<void> {
+export async function monitorMatrixProvider(
+  opts: MonitorMatrixOpts = {},
+): Promise<void> {
   if (isBunRuntime()) {
-    throw new Error("Matrix provider requires Node (bun runtime not supported)");
+    throw new Error(
+      "Matrix provider requires Node (bun runtime not supported)",
+    );
   }
   const core = getMatrixRuntime();
   let cfg = core.config.loadConfig() as CoreConfig;
@@ -257,11 +272,12 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   const account = resolveMatrixAccount({ cfg, accountId: opts.accountId });
   const accountConfig = account.config;
   const allowlistOnly = accountConfig.allowlistOnly === true;
-  const { allowFrom, groupAllowFrom, roomsConfig } = await resolveMatrixMonitorConfig({
-    cfg,
-    runtime,
-    accountConfig,
-  });
+  const { allowFrom, groupAllowFrom, roomsConfig } =
+    await resolveMatrixMonitorConfig({
+      cfg,
+      runtime,
+      accountConfig,
+    });
 
   cfg = {
     ...cfg,
@@ -311,15 +327,18 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     blockedLabel: GROUP_POLICY_BLOCKED_LABEL.room,
     log: (message) => logVerboseMessage(message),
   });
-  const groupPolicy = allowlistOnly && groupPolicyRaw === "open" ? "allowlist" : groupPolicyRaw;
+  const groupPolicy =
+    allowlistOnly && groupPolicyRaw === "open" ? "allowlist" : groupPolicyRaw;
   const replyToMode = opts.replyToMode ?? accountConfig.replyToMode ?? "off";
   const threadReplies = accountConfig.threadReplies ?? "inbound";
   const dmConfig = accountConfig.dm;
   const dmEnabled = dmConfig?.enabled ?? true;
   const dmPolicyRaw = dmConfig?.policy ?? "pairing";
-  const dmPolicy = allowlistOnly && dmPolicyRaw !== "disabled" ? "allowlist" : dmPolicyRaw;
+  const dmPolicy =
+    allowlistOnly && dmPolicyRaw !== "disabled" ? "allowlist" : dmPolicyRaw;
   const textLimit = core.channel.text.resolveTextChunkLimit(cfg, "matrix");
-  const mediaMaxMb = opts.mediaMaxMb ?? accountConfig.mediaMaxMb ?? DEFAULT_MEDIA_MAX_MB;
+  const mediaMaxMb =
+    opts.mediaMaxMb ?? accountConfig.mediaMaxMb ?? DEFAULT_MEDIA_MAX_MB;
   const mediaMaxBytes = Math.max(1, mediaMaxMb) * 1024 * 1024;
   const startupMs = Date.now();
   const startupGraceMs = DEFAULT_STARTUP_GRACE_MS;
@@ -331,7 +350,8 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   const warnedEncryptedRooms = new Set<string>();
   const warnedCryptoMissingRooms = new Set<string>();
 
-  const { getRoomInfo, getMemberDisplayName } = createMatrixRoomInfoResolver(client);
+  const { getRoomInfo, getMemberDisplayName } =
+    createMatrixRoomInfoResolver(client);
   const handleRoomMessage = createMatrixRoomMessageHandler({
     client,
     core,
@@ -387,12 +407,17 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
         client.crypto as { requestOwnUserVerification?: () => Promise<unknown> }
       ).requestOwnUserVerification?.();
       if (verificationRequest) {
-        logger.info("matrix: device verification requested - please verify in another client");
+        logger.info(
+          "matrix: device verification requested - please verify in another client",
+        );
       }
     } catch (err) {
-      logger.debug?.("Device verification request failed (may already be verified)", {
-        error: String(err),
-      });
+      logger.debug?.(
+        "Device verification request failed (may already be verified)",
+        {
+          error: String(err),
+        },
+      );
     }
   }
 

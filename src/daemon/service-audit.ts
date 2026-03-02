@@ -47,7 +47,9 @@ export const SERVICE_AUDIT_CODES = {
   systemdWantsNetworkOnline: "systemd-wants-network-online",
 } as const;
 
-export function needsNodeRuntimeMigration(issues: ServiceConfigIssue[]): boolean {
+export function needsNodeRuntimeMigration(
+  issues: ServiceConfigIssue[],
+): boolean {
   return issues.some(
     (issue) =>
       issue.code === SERVICE_AUDIT_CODES.gatewayRuntimeBun ||
@@ -190,7 +192,10 @@ async function auditLaunchdPlist(
   }
 }
 
-function auditGatewayCommand(programArguments: string[] | undefined, issues: ServiceConfigIssue[]) {
+function auditGatewayCommand(
+  programArguments: string[] | undefined,
+  issues: ServiceConfigIssue[],
+) {
   if (!programArguments || programArguments.length === 0) {
     return;
   }
@@ -220,7 +225,9 @@ function auditGatewayToken(
     code: SERVICE_AUDIT_CODES.gatewayTokenMismatch,
     message:
       "Gateway service OPENCLAW_GATEWAY_TOKEN does not match gateway.auth.token in openclaw.json",
-    detail: serviceToken ? "service token is stale" : "service token is missing",
+    detail: serviceToken
+      ? "service token is stale"
+      : "service token is missing",
     level: "recommended",
   });
 }
@@ -251,7 +258,8 @@ function auditGatewayServicePath(
   if (!servicePath) {
     issues.push({
       code: SERVICE_AUDIT_CODES.gatewayPathMissing,
-      message: "Gateway service PATH is not set; the daemon should use a minimal PATH.",
+      message:
+        "Gateway service PATH is not set; the daemon should use a minimal PATH.",
       level: "recommended",
     });
     return;
@@ -262,8 +270,12 @@ function auditGatewayServicePath(
     .split(getPathModule(platform).delimiter)
     .map((entry) => entry.trim())
     .filter(Boolean);
-  const normalizedParts = new Set(parts.map((entry) => normalizePathEntry(entry, platform)));
-  const normalizedExpected = new Set(expected.map((entry) => normalizePathEntry(entry, platform)));
+  const normalizedParts = new Set(
+    parts.map((entry) => normalizePathEntry(entry, platform)),
+  );
+  const normalizedExpected = new Set(
+    expected.map((entry) => normalizePathEntry(entry, platform)),
+  );
   const missing = expected.filter((entry) => {
     const normalized = normalizePathEntry(entry, platform);
     return !normalizedParts.has(normalized);
@@ -320,7 +332,8 @@ async function auditGatewayRuntime(
   if (isBunRuntime(execPath)) {
     issues.push({
       code: SERVICE_AUDIT_CODES.gatewayRuntimeBun,
-      message: "Gateway service uses Bun; Bun is incompatible with WhatsApp + Telegram channels.",
+      message:
+        "Gateway service uses Bun; Bun is incompatible with WhatsApp + Telegram channels.",
       detail: execPath,
       level: "recommended",
     });
@@ -334,7 +347,8 @@ async function auditGatewayRuntime(
   if (isVersionManagedNodePath(execPath, platform)) {
     issues.push({
       code: SERVICE_AUDIT_CODES.gatewayRuntimeNodeVersionManager,
-      message: "Gateway service uses Node from a version manager; it can break after upgrades.",
+      message:
+        "Gateway service uses Node from a version manager; it can break after upgrades.",
       detail: execPath,
       level: "recommended",
     });

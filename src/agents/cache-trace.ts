@@ -6,7 +6,10 @@ import { resolveStateDir } from "../config/paths.js";
 import { resolveUserPath } from "../utils.js";
 import { parseBooleanValue } from "../utils/boolean.js";
 import { safeJsonStringify } from "../utils/safe-json.js";
-import { getQueuedFileWriter, type QueuedFileWriter } from "./queued-file-writer.js";
+import {
+  getQueuedFileWriter,
+  type QueuedFileWriter,
+} from "./queued-file-writer.js";
 
 export type CacheTraceStage =
   | "session:loaded"
@@ -45,7 +48,10 @@ export type CacheTraceEvent = {
 export type CacheTrace = {
   enabled: true;
   filePath: string;
-  recordStage: (stage: CacheTraceStage, payload?: Partial<CacheTraceEvent>) => void;
+  recordStage: (
+    stage: CacheTraceStage,
+    payload?: Partial<CacheTraceEvent>,
+  ) => void;
   wrapStreamFn: (streamFn: StreamFn) => StreamFn;
 };
 
@@ -79,15 +85,19 @@ function resolveCacheTraceConfig(params: CacheTraceInit): CacheTraceConfig {
   const config = params.cfg?.diagnostics?.cacheTrace;
   const envEnabled = parseBooleanValue(env.OPENCLAW_CACHE_TRACE);
   const enabled = envEnabled ?? config?.enabled ?? false;
-  const fileOverride = config?.filePath?.trim() || env.OPENCLAW_CACHE_TRACE_FILE?.trim();
+  const fileOverride =
+    config?.filePath?.trim() || env.OPENCLAW_CACHE_TRACE_FILE?.trim();
   const filePath = fileOverride
     ? resolveUserPath(fileOverride)
     : path.join(resolveStateDir(env), "logs", "cache-trace.jsonl");
 
   const includeMessages =
-    parseBooleanValue(env.OPENCLAW_CACHE_TRACE_MESSAGES) ?? config?.includeMessages;
-  const includePrompt = parseBooleanValue(env.OPENCLAW_CACHE_TRACE_PROMPT) ?? config?.includePrompt;
-  const includeSystem = parseBooleanValue(env.OPENCLAW_CACHE_TRACE_SYSTEM) ?? config?.includeSystem;
+    parseBooleanValue(env.OPENCLAW_CACHE_TRACE_MESSAGES) ??
+    config?.includeMessages;
+  const includePrompt =
+    parseBooleanValue(env.OPENCLAW_CACHE_TRACE_PROMPT) ?? config?.includePrompt;
+  const includeSystem =
+    parseBooleanValue(env.OPENCLAW_CACHE_TRACE_SYSTEM) ?? config?.includeSystem;
 
   return {
     enabled,
@@ -138,7 +148,9 @@ function stableStringify(value: unknown): string {
   const record = value as Record<string, unknown>;
   const serializedFields: string[] = [];
   for (const key of Object.keys(record).toSorted()) {
-    serializedFields.push(`${JSON.stringify(key)}:${stableStringify(record[key])}`);
+    serializedFields.push(
+      `${JSON.stringify(key)}:${stableStringify(record[key])}`,
+    );
   }
   return `{${serializedFields.join(",")}}`;
 }

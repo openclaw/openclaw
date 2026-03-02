@@ -13,7 +13,10 @@ import {
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { type SessionEntry, updateSessionStore } from "../../config/sessions.js";
+import {
+  type SessionEntry,
+  updateSessionStore,
+} from "../../config/sessions.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { applyVerboseOverride } from "../../sessions/level-overrides.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
@@ -71,14 +74,16 @@ export async function persistInlineDirectives(params: {
       (sessionEntry.elevatedLevel as ElevatedLevel | undefined) ??
       (agentCfg?.elevatedDefault as ElevatedLevel | undefined) ??
       (elevatedAllowed ? ("on" as ElevatedLevel) : ("off" as ElevatedLevel));
-    const prevReasoningLevel = (sessionEntry.reasoningLevel as ReasoningLevel | undefined) ?? "off";
+    const prevReasoningLevel =
+      (sessionEntry.reasoningLevel as ReasoningLevel | undefined) ?? "off";
     let elevatedChanged =
       directives.hasElevatedDirective &&
       directives.elevatedLevel !== undefined &&
       elevatedEnabled &&
       elevatedAllowed;
     let reasoningChanged =
-      directives.hasReasoningDirective && directives.reasoningLevel !== undefined;
+      directives.hasReasoningDirective &&
+      directives.reasoningLevel !== undefined;
     let updated = false;
 
     if (directives.hasThinkDirective && directives.thinkLevel) {
@@ -112,7 +117,8 @@ export async function persistInlineDirectives(params: {
       sessionEntry.elevatedLevel = directives.elevatedLevel;
       elevatedChanged =
         elevatedChanged ||
-        (directives.elevatedLevel !== prevElevatedLevel && directives.elevatedLevel !== undefined);
+        (directives.elevatedLevel !== prevElevatedLevel &&
+          directives.elevatedLevel !== undefined);
       updated = true;
     }
     if (directives.hasExecDirective && directives.hasExecOptions) {
@@ -161,7 +167,8 @@ export async function persistInlineDirectives(params: {
             profileOverride = profileResolved.profileId;
           }
           const isDefault =
-            resolved.ref.provider === defaultProvider && resolved.ref.model === defaultModel;
+            resolved.ref.provider === defaultProvider &&
+            resolved.ref.model === defaultModel;
           const { updated: modelUpdated } = applyModelOverrideToSessionEntry({
             entry: sessionEntry,
             selection: {
@@ -175,10 +182,13 @@ export async function persistInlineDirectives(params: {
           model = resolved.ref.model;
           const nextLabel = `${provider}/${model}`;
           if (nextLabel !== initialModelLabel) {
-            enqueueSystemEvent(formatModelSwitchEvent(nextLabel, resolved.alias), {
-              sessionKey,
-              contextKey: `model:${nextLabel}`,
-            });
+            enqueueSystemEvent(
+              formatModelSwitchEvent(nextLabel, resolved.alias),
+              {
+                sessionKey,
+                contextKey: `model:${nextLabel}`,
+              },
+            );
           }
           updated = updated || modelUpdated;
         }
@@ -213,11 +223,17 @@ export async function persistInlineDirectives(params: {
   return {
     provider,
     model,
-    contextTokens: agentCfg?.contextTokens ?? lookupContextTokens(model) ?? DEFAULT_CONTEXT_TOKENS,
+    contextTokens:
+      agentCfg?.contextTokens ??
+      lookupContextTokens(model) ??
+      DEFAULT_CONTEXT_TOKENS,
   };
 }
 
-export function resolveDefaultModel(params: { cfg: OpenClawConfig; agentId?: string }): {
+export function resolveDefaultModel(params: {
+  cfg: OpenClawConfig;
+  agentId?: string;
+}): {
   defaultProvider: string;
   defaultModel: string;
   aliasIndex: ModelAliasIndex;

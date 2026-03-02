@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { withEnv } from "../test-utils/env.js";
-import { decodeCapturedOutputBuffer, parseWindowsCodePage, sanitizeEnv } from "./invoke.js";
+import {
+  decodeCapturedOutputBuffer,
+  parseWindowsCodePage,
+  sanitizeEnv,
+} from "./invoke.js";
 import { buildNodeInvokeResultParams } from "./runner.js";
 
 describe("node-host sanitizeEnv", () => {
@@ -13,7 +17,12 @@ describe("node-host sanitizeEnv", () => {
 
   it("blocks dangerous env keys/prefixes", () => {
     withEnv(
-      { PYTHONPATH: undefined, LD_PRELOAD: undefined, BASH_ENV: undefined, SHELLOPTS: undefined },
+      {
+        PYTHONPATH: undefined,
+        LD_PRELOAD: undefined,
+        BASH_ENV: undefined,
+        SHELLOPTS: undefined,
+      },
       () => {
         const env = sanitizeEnv({
           PYTHONPATH: "/tmp/pwn",

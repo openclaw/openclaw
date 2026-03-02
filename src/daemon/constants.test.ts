@@ -104,9 +104,9 @@ describe("formatGatewayServiceDescription", () => {
   });
 
   it("includes profile and version when set", () => {
-    expect(formatGatewayServiceDescription({ profile: "dev", version: "1.2.3" })).toBe(
-      "OpenClaw Gateway (profile: dev, v1.2.3)",
-    );
+    expect(
+      formatGatewayServiceDescription({ profile: "dev", version: "1.2.3" }),
+    ).toBe("OpenClaw Gateway (profile: dev, v1.2.3)");
   });
 });
 

@@ -158,13 +158,22 @@ Use this baseline first, then selectively re-enable tools per trusted agent:
   },
   tools: {
     profile: "messaging",
-    deny: ["group:automation", "group:runtime", "group:fs", "sessions_spawn", "sessions_send"],
+    deny: [
+      "group:automation",
+      "group:runtime",
+      "group:fs",
+      "sessions_spawn",
+      "sessions_send",
+    ],
     fs: { workspaceOnly: true },
     exec: { security: "deny", ask: "always" },
     elevated: { enabled: false },
   },
   channels: {
-    whatsapp: { dmPolicy: "pairing", groups: { "*": { requireMention: true } } },
+    whatsapp: {
+      dmPolicy: "pairing",
+      groups: { "*": { requireMention: true } },
+    },
   },
 }
 ```

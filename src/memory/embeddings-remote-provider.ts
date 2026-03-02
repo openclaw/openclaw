@@ -4,7 +4,10 @@ import {
   type RemoteEmbeddingProviderId,
 } from "./embeddings-remote-client.js";
 import { fetchRemoteEmbeddingVectors } from "./embeddings-remote-fetch.js";
-import type { EmbeddingProvider, EmbeddingProviderOptions } from "./embeddings.js";
+import type {
+  EmbeddingProvider,
+  EmbeddingProviderOptions,
+} from "./embeddings.js";
 
 export type RemoteEmbeddingClient = {
   baseUrl: string;
@@ -38,7 +41,9 @@ export function createRemoteEmbeddingProvider(params: {
   return {
     id: params.id,
     model: client.model,
-    ...(typeof params.maxInputTokens === "number" ? { maxInputTokens: params.maxInputTokens } : {}),
+    ...(typeof params.maxInputTokens === "number"
+      ? { maxInputTokens: params.maxInputTokens }
+      : {}),
     embedQuery: async (text) => {
       const [vec] = await embed([text]);
       return vec ?? [];
@@ -53,11 +58,12 @@ export async function resolveRemoteEmbeddingClient(params: {
   defaultBaseUrl: string;
   normalizeModel: (model: string) => string;
 }): Promise<RemoteEmbeddingClient> {
-  const { baseUrl, headers, ssrfPolicy } = await resolveRemoteEmbeddingBearerClient({
-    provider: params.provider,
-    options: params.options,
-    defaultBaseUrl: params.defaultBaseUrl,
-  });
+  const { baseUrl, headers, ssrfPolicy } =
+    await resolveRemoteEmbeddingBearerClient({
+      provider: params.provider,
+      options: params.options,
+      defaultBaseUrl: params.defaultBaseUrl,
+    });
   const model = params.normalizeModel(params.options.model);
   return { baseUrl, headers, ssrfPolicy, model };
 }

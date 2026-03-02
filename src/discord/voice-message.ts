@@ -51,7 +51,9 @@ export async function getAudioDuration(filePath: string): Promise<number> {
     return Math.round(duration * 100) / 100; // Round to 2 decimal places
   } catch (err) {
     const errMessage = err instanceof Error ? err.message : String(err);
-    throw new Error(`Failed to get audio duration: ${errMessage}`, { cause: err });
+    throw new Error(`Failed to get audio duration: ${errMessage}`, {
+      cause: err,
+    });
   }
 }
 
@@ -94,7 +96,11 @@ async function generateWaveformFromPcm(filePath: string): Promise<string> {
     ]);
 
     const pcmData = await fs.readFile(tempPcm);
-    const samples = new Int16Array(pcmData.buffer, pcmData.byteOffset, pcmData.byteLength / 2);
+    const samples = new Int16Array(
+      pcmData.buffer,
+      pcmData.byteOffset,
+      pcmData.byteLength / 2,
+    );
 
     // Sample the PCM data to get WAVEFORM_SAMPLES points
     const step = Math.max(1, Math.floor(samples.length / WAVEFORM_SAMPLES));
@@ -137,7 +143,9 @@ function generatePlaceholderWaveform(): string {
   // Generate a simple sine-wave-like pattern
   const waveform: number[] = [];
   for (let i = 0; i < WAVEFORM_SAMPLES; i++) {
-    const value = Math.round(128 + 64 * Math.sin((i / WAVEFORM_SAMPLES) * Math.PI * 8));
+    const value = Math.round(
+      128 + 64 * Math.sin((i / WAVEFORM_SAMPLES) * Math.PI * 8),
+    );
     waveform.push(Math.min(255, Math.max(0, value)));
   }
   return Buffer.from(waveform).toString("base64");
@@ -147,7 +155,9 @@ function generatePlaceholderWaveform(): string {
  * Convert audio file to OGG/Opus format if needed
  * Returns path to the OGG file (may be same as input if already OGG/Opus)
  */
-export async function ensureOggOpus(filePath: string): Promise<{ path: string; cleanup: boolean }> {
+export async function ensureOggOpus(
+  filePath: string,
+): Promise<{ path: string; cleanup: boolean }> {
   const trimmed = filePath.trim();
   // Defense-in-depth: callers should never hand ffmpeg/ffprobe a URL/protocol path.
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)) {
@@ -202,7 +212,9 @@ export async function ensureOggOpus(filePath: string): Promise<{ path: string; c
 /**
  * Get voice message metadata (duration and waveform)
  */
-export async function getVoiceMessageMetadata(filePath: string): Promise<VoiceMessageMetadata> {
+export async function getVoiceMessageMetadata(
+  filePath: string,
+): Promise<VoiceMessageMetadata> {
   const [durationSecs, waveform] = await Promise.all([
     getAudioDuration(filePath),
     generateWaveform(filePath),

@@ -1,37 +1,62 @@
 import { describe, expect, it } from "vitest";
-import { extractFilename, extractMessageId, getMimeType, isLocalPath } from "./media-helpers.js";
+import {
+  extractFilename,
+  extractMessageId,
+  getMimeType,
+  isLocalPath,
+} from "./media-helpers.js";
 
 describe("msteams media-helpers", () => {
   describe("getMimeType", () => {
     it("detects png from URL", async () => {
-      expect(await getMimeType("https://example.com/image.png")).toBe("image/png");
+      expect(await getMimeType("https://example.com/image.png")).toBe(
+        "image/png",
+      );
     });
 
     it("detects jpeg from URL (both extensions)", async () => {
-      expect(await getMimeType("https://example.com/photo.jpg")).toBe("image/jpeg");
-      expect(await getMimeType("https://example.com/photo.jpeg")).toBe("image/jpeg");
+      expect(await getMimeType("https://example.com/photo.jpg")).toBe(
+        "image/jpeg",
+      );
+      expect(await getMimeType("https://example.com/photo.jpeg")).toBe(
+        "image/jpeg",
+      );
     });
 
     it("detects gif from URL", async () => {
-      expect(await getMimeType("https://example.com/anim.gif")).toBe("image/gif");
+      expect(await getMimeType("https://example.com/anim.gif")).toBe(
+        "image/gif",
+      );
     });
 
     it("detects webp from URL", async () => {
-      expect(await getMimeType("https://example.com/modern.webp")).toBe("image/webp");
+      expect(await getMimeType("https://example.com/modern.webp")).toBe(
+        "image/webp",
+      );
     });
 
     it("handles URLs with query strings", async () => {
-      expect(await getMimeType("https://example.com/image.png?v=123")).toBe("image/png");
+      expect(await getMimeType("https://example.com/image.png?v=123")).toBe(
+        "image/png",
+      );
     });
 
     it("handles data URLs", async () => {
-      expect(await getMimeType("data:image/png;base64,iVBORw0KGgo=")).toBe("image/png");
-      expect(await getMimeType("data:image/jpeg;base64,/9j/4AAQ")).toBe("image/jpeg");
-      expect(await getMimeType("data:image/gif;base64,R0lGOD")).toBe("image/gif");
+      expect(await getMimeType("data:image/png;base64,iVBORw0KGgo=")).toBe(
+        "image/png",
+      );
+      expect(await getMimeType("data:image/jpeg;base64,/9j/4AAQ")).toBe(
+        "image/jpeg",
+      );
+      expect(await getMimeType("data:image/gif;base64,R0lGOD")).toBe(
+        "image/gif",
+      );
     });
 
     it("handles data URLs without base64", async () => {
-      expect(await getMimeType("data:image/svg+xml,%3Csvg")).toBe("image/svg+xml");
+      expect(await getMimeType("data:image/svg+xml,%3Csvg")).toBe(
+        "image/svg+xml",
+      );
     });
 
     it("handles local paths", async () => {
@@ -44,19 +69,27 @@ describe("msteams media-helpers", () => {
     });
 
     it("defaults to application/octet-stream for unknown extensions", async () => {
-      expect(await getMimeType("https://example.com/image")).toBe("application/octet-stream");
+      expect(await getMimeType("https://example.com/image")).toBe(
+        "application/octet-stream",
+      );
       expect(await getMimeType("https://example.com/image.unknown")).toBe(
         "application/octet-stream",
       );
     });
 
     it("is case-insensitive", async () => {
-      expect(await getMimeType("https://example.com/IMAGE.PNG")).toBe("image/png");
-      expect(await getMimeType("https://example.com/Photo.JPEG")).toBe("image/jpeg");
+      expect(await getMimeType("https://example.com/IMAGE.PNG")).toBe(
+        "image/png",
+      );
+      expect(await getMimeType("https://example.com/Photo.JPEG")).toBe(
+        "image/jpeg",
+      );
     });
 
     it("detects document types", async () => {
-      expect(await getMimeType("https://example.com/doc.pdf")).toBe("application/pdf");
+      expect(await getMimeType("https://example.com/doc.pdf")).toBe(
+        "application/pdf",
+      );
       expect(await getMimeType("https://example.com/doc.docx")).toBe(
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
       );
@@ -68,29 +101,43 @@ describe("msteams media-helpers", () => {
 
   describe("extractFilename", () => {
     it("extracts filename from URL with extension", async () => {
-      expect(await extractFilename("https://example.com/photo.jpg")).toBe("photo.jpg");
+      expect(await extractFilename("https://example.com/photo.jpg")).toBe(
+        "photo.jpg",
+      );
     });
 
     it("extracts filename from URL with path", async () => {
-      expect(await extractFilename("https://example.com/images/2024/photo.png")).toBe("photo.png");
+      expect(
+        await extractFilename("https://example.com/images/2024/photo.png"),
+      ).toBe("photo.png");
     });
 
     it("handles URLs without extension by deriving from MIME", async () => {
       // Now defaults to application/octet-stream → .bin fallback
-      expect(await extractFilename("https://example.com/images/photo")).toBe("photo.bin");
+      expect(await extractFilename("https://example.com/images/photo")).toBe(
+        "photo.bin",
+      );
     });
 
     it("handles data URLs", async () => {
-      expect(await extractFilename("data:image/png;base64,iVBORw0KGgo=")).toBe("image.png");
-      expect(await extractFilename("data:image/jpeg;base64,/9j/4AAQ")).toBe("image.jpg");
+      expect(await extractFilename("data:image/png;base64,iVBORw0KGgo=")).toBe(
+        "image.png",
+      );
+      expect(await extractFilename("data:image/jpeg;base64,/9j/4AAQ")).toBe(
+        "image.jpg",
+      );
     });
 
     it("handles document data URLs", async () => {
-      expect(await extractFilename("data:application/pdf;base64,JVBERi0")).toBe("file.pdf");
+      expect(await extractFilename("data:application/pdf;base64,JVBERi0")).toBe(
+        "file.pdf",
+      );
     });
 
     it("handles local paths", async () => {
-      expect(await extractFilename("/tmp/screenshot.png")).toBe("screenshot.png");
+      expect(await extractFilename("/tmp/screenshot.png")).toBe(
+        "screenshot.png",
+      );
       expect(await extractFilename("/Users/test/photo.jpg")).toBe("photo.jpg");
     });
 
@@ -105,7 +152,9 @@ describe("msteams media-helpers", () => {
     it("extracts original filename from embedded pattern", async () => {
       // Pattern: {original}---{uuid}.{ext}
       expect(
-        await extractFilename("/media/inbound/report---a1b2c3d4-e5f6-7890-abcd-ef1234567890.pdf"),
+        await extractFilename(
+          "/media/inbound/report---a1b2c3d4-e5f6-7890-abcd-ef1234567890.pdf",
+        ),
       ).toBe("report.pdf");
     });
 
@@ -119,14 +168,18 @@ describe("msteams media-helpers", () => {
 
     it("falls back to UUID filename for legacy paths", async () => {
       // UUID-only filename (legacy format, no embedded name)
-      expect(await extractFilename("/media/inbound/a1b2c3d4-e5f6-7890-abcd-ef1234567890.pdf")).toBe(
-        "a1b2c3d4-e5f6-7890-abcd-ef1234567890.pdf",
-      );
+      expect(
+        await extractFilename(
+          "/media/inbound/a1b2c3d4-e5f6-7890-abcd-ef1234567890.pdf",
+        ),
+      ).toBe("a1b2c3d4-e5f6-7890-abcd-ef1234567890.pdf");
     });
 
     it("handles --- in filename without valid UUID pattern", async () => {
       // foo---bar.txt (bar is not a valid UUID)
-      expect(await extractFilename("/media/inbound/foo---bar.txt")).toBe("foo---bar.txt");
+      expect(await extractFilename("/media/inbound/foo---bar.txt")).toBe(
+        "foo---bar.txt",
+      );
     });
   });
 

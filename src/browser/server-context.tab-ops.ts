@@ -34,7 +34,10 @@ type ProfileTabOps = {
 /**
  * Normalize a CDP WebSocket URL to use the correct base URL.
  */
-function normalizeWsUrl(raw: string | undefined, cdpBaseUrl: string): string | undefined {
+function normalizeWsUrl(
+  raw: string | undefined,
+  cdpBaseUrl: string,
+): string | undefined {
   if (!raw) {
     return undefined;
   }
@@ -62,7 +65,8 @@ export function createProfileTabOps({
     // For remote profiles, use Playwright's persistent connection to avoid ephemeral sessions
     if (!profile.cdpIsLoopback) {
       const mod = await getPwAiModule({ mode: "strict" });
-      const listPagesViaPlaywright = (mod as Partial<PwAiModule> | null)?.listPagesViaPlaywright;
+      const listPagesViaPlaywright = (mod as Partial<PwAiModule> | null)
+        ?.listPagesViaPlaywright;
       if (typeof listPagesViaPlaywright === "function") {
         const pages = await listPagesViaPlaywright({ cdpUrl: profile.cdpUrl });
         return pages.map((p) => ({
@@ -94,7 +98,9 @@ export function createProfileTabOps({
       .filter((t) => Boolean(t.targetId));
   };
 
-  const enforceManagedTabLimit = async (keepTargetId: string): Promise<void> => {
+  const enforceManagedTabLimit = async (
+    keepTargetId: string,
+  ): Promise<void> => {
     const profileState = getProfileState();
     if (
       profile.driver !== "openclaw" ||
@@ -115,7 +121,9 @@ export function createProfileTabOps({
     const candidates = pageTabs.filter((tab) => tab.targetId !== keepTargetId);
     const excessCount = pageTabs.length - MANAGED_BROWSER_PAGE_TAB_LIMIT;
     for (const tab of candidates.slice(0, excessCount)) {
-      void fetchOk(appendCdpPath(profile.cdpUrl, `/json/close/${tab.targetId}`)).catch(() => {
+      void fetchOk(
+        appendCdpPath(profile.cdpUrl, `/json/close/${tab.targetId}`),
+      ).catch(() => {
         // best-effort cleanup only
       });
     }
@@ -128,13 +136,16 @@ export function createProfileTabOps({
   };
 
   const openTab = async (url: string): Promise<BrowserTab> => {
-    const ssrfPolicyOpts = withBrowserNavigationPolicy(state().resolved.ssrfPolicy);
+    const ssrfPolicyOpts = withBrowserNavigationPolicy(
+      state().resolved.ssrfPolicy,
+    );
 
     // For remote profiles, use Playwright's persistent connection to create tabs
     // This ensures the tab persists beyond a single request.
     if (!profile.cdpIsLoopback) {
       const mod = await getPwAiModule({ mode: "strict" });
-      const createPageViaPlaywright = (mod as Partial<PwAiModule> | null)?.createPageViaPlaywright;
+      const createPageViaPlaywright = (mod as Partial<PwAiModule> | null)
+        ?.createPageViaPlaywright;
       if (typeof createPageViaPlaywright === "function") {
         const page = await createPageViaPlaywright({
           cdpUrl: profile.cdpUrl,
@@ -169,7 +180,10 @@ export function createProfileTabOps({
         const tabs = await listTabs().catch(() => [] as BrowserTab[]);
         const found = tabs.find((t) => t.targetId === createdViaCdp);
         if (found) {
-          await assertBrowserNavigationResultAllowed({ url: found.url, ...ssrfPolicyOpts });
+          await assertBrowserNavigationResultAllowed({
+            url: found.url,
+            ...ssrfPolicyOpts,
+          });
           triggerManagedTabLimit(found.targetId);
           return found;
         }
@@ -188,9 +202,13 @@ export function createProfileTabOps({
           return endpointUrl.toString();
         })()
       : `${endpointUrl.toString()}?${encoded}`;
-    const created = await fetchJson<CdpTarget>(endpoint, CDP_JSON_NEW_TIMEOUT_MS, {
-      method: "PUT",
-    }).catch(async (err) => {
+    const created = await fetchJson<CdpTarget>(
+      endpoint,
+      CDP_JSON_NEW_TIMEOUT_MS,
+      {
+        method: "PUT",
+      },
+    ).catch(async (err) => {
       if (String(err).includes("HTTP 405")) {
         return await fetchJson<CdpTarget>(endpoint, CDP_JSON_NEW_TIMEOUT_MS);
       }
@@ -203,7 +221,10 @@ export function createProfileTabOps({
     const profileState = getProfileState();
     profileState.lastTargetId = created.id;
     const resolvedUrl = created.url ?? url;
-    await assertBrowserNavigationResultAllowed({ url: resolvedUrl, ...ssrfPolicyOpts });
+    await assertBrowserNavigationResultAllowed({
+      url: resolvedUrl,
+      ...ssrfPolicyOpts,
+    });
     triggerManagedTabLimit(created.id);
     return {
       targetId: created.id,

@@ -126,7 +126,9 @@ function resolveStorePath(agentId: string, raw?: string): string {
   if (!raw) {
     return fallback;
   }
-  const withToken = raw.includes("{agentId}") ? raw.replaceAll("{agentId}", agentId) : raw;
+  const withToken = raw.includes("{agentId}")
+    ? raw.replaceAll("{agentId}", agentId)
+    : raw;
   return resolveUserPath(withToken);
 }
 
@@ -137,7 +139,9 @@ function mergeConfig(
 ): ResolvedMemorySearchConfig {
   const enabled = overrides?.enabled ?? defaults?.enabled ?? true;
   const sessionMemory =
-    overrides?.experimental?.sessionMemory ?? defaults?.experimental?.sessionMemory ?? false;
+    overrides?.experimental?.sessionMemory ??
+    defaults?.experimental?.sessionMemory ??
+    false;
   const provider = overrides?.provider ?? defaults?.provider ?? "auto";
   const defaultRemote = defaults?.remote;
   const overrideRemote = overrides?.remote;
@@ -157,16 +161,23 @@ function mergeConfig(
     provider === "mistral" ||
     provider === "auto";
   const batch = {
-    enabled: overrideRemote?.batch?.enabled ?? defaultRemote?.batch?.enabled ?? false,
+    enabled:
+      overrideRemote?.batch?.enabled ?? defaultRemote?.batch?.enabled ?? false,
     wait: overrideRemote?.batch?.wait ?? defaultRemote?.batch?.wait ?? true,
     concurrency: Math.max(
       1,
-      overrideRemote?.batch?.concurrency ?? defaultRemote?.batch?.concurrency ?? 2,
+      overrideRemote?.batch?.concurrency ??
+        defaultRemote?.batch?.concurrency ??
+        2,
     ),
     pollIntervalMs:
-      overrideRemote?.batch?.pollIntervalMs ?? defaultRemote?.batch?.pollIntervalMs ?? 2000,
+      overrideRemote?.batch?.pollIntervalMs ??
+      defaultRemote?.batch?.pollIntervalMs ??
+      2000,
     timeoutMinutes:
-      overrideRemote?.batch?.timeoutMinutes ?? defaultRemote?.batch?.timeoutMinutes ?? 60,
+      overrideRemote?.batch?.timeoutMinutes ??
+      defaultRemote?.batch?.timeoutMinutes ??
+      60,
   };
   const remote = includeRemote
     ? {
@@ -190,36 +201,58 @@ function mergeConfig(
   const model = overrides?.model ?? defaults?.model ?? modelDefault ?? "";
   const local = {
     modelPath: overrides?.local?.modelPath ?? defaults?.local?.modelPath,
-    modelCacheDir: overrides?.local?.modelCacheDir ?? defaults?.local?.modelCacheDir,
+    modelCacheDir:
+      overrides?.local?.modelCacheDir ?? defaults?.local?.modelCacheDir,
   };
-  const sources = normalizeSources(overrides?.sources ?? defaults?.sources, sessionMemory);
-  const rawPaths = [...(defaults?.extraPaths ?? []), ...(overrides?.extraPaths ?? [])]
+  const sources = normalizeSources(
+    overrides?.sources ?? defaults?.sources,
+    sessionMemory,
+  );
+  const rawPaths = [
+    ...(defaults?.extraPaths ?? []),
+    ...(overrides?.extraPaths ?? []),
+  ]
     .map((value) => value.trim())
     .filter(Boolean);
   const extraPaths = Array.from(new Set(rawPaths));
   const vector = {
-    enabled: overrides?.store?.vector?.enabled ?? defaults?.store?.vector?.enabled ?? true,
+    enabled:
+      overrides?.store?.vector?.enabled ??
+      defaults?.store?.vector?.enabled ??
+      true,
     extensionPath:
-      overrides?.store?.vector?.extensionPath ?? defaults?.store?.vector?.extensionPath,
+      overrides?.store?.vector?.extensionPath ??
+      defaults?.store?.vector?.extensionPath,
   };
   const store = {
     driver: overrides?.store?.driver ?? defaults?.store?.driver ?? "sqlite",
-    path: resolveStorePath(agentId, overrides?.store?.path ?? defaults?.store?.path),
+    path: resolveStorePath(
+      agentId,
+      overrides?.store?.path ?? defaults?.store?.path,
+    ),
     vector,
   };
   const chunking = {
-    tokens: overrides?.chunking?.tokens ?? defaults?.chunking?.tokens ?? DEFAULT_CHUNK_TOKENS,
-    overlap: overrides?.chunking?.overlap ?? defaults?.chunking?.overlap ?? DEFAULT_CHUNK_OVERLAP,
+    tokens:
+      overrides?.chunking?.tokens ??
+      defaults?.chunking?.tokens ??
+      DEFAULT_CHUNK_TOKENS,
+    overlap:
+      overrides?.chunking?.overlap ??
+      defaults?.chunking?.overlap ??
+      DEFAULT_CHUNK_OVERLAP,
   };
   const sync = {
-    onSessionStart: overrides?.sync?.onSessionStart ?? defaults?.sync?.onSessionStart ?? true,
+    onSessionStart:
+      overrides?.sync?.onSessionStart ?? defaults?.sync?.onSessionStart ?? true,
     onSearch: overrides?.sync?.onSearch ?? defaults?.sync?.onSearch ?? true,
     watch: overrides?.sync?.watch ?? defaults?.sync?.watch ?? true,
     watchDebounceMs:
       overrides?.sync?.watchDebounceMs ??
       defaults?.sync?.watchDebounceMs ??
       DEFAULT_WATCH_DEBOUNCE_MS,
-    intervalMinutes: overrides?.sync?.intervalMinutes ?? defaults?.sync?.intervalMinutes ?? 0,
+    intervalMinutes:
+      overrides?.sync?.intervalMinutes ?? defaults?.sync?.intervalMinutes ?? 0,
     sessions: {
       deltaBytes:
         overrides?.sync?.sessions?.deltaBytes ??
@@ -232,8 +265,14 @@ function mergeConfig(
     },
   };
   const query = {
-    maxResults: overrides?.query?.maxResults ?? defaults?.query?.maxResults ?? DEFAULT_MAX_RESULTS,
-    minScore: overrides?.query?.minScore ?? defaults?.query?.minScore ?? DEFAULT_MIN_SCORE,
+    maxResults:
+      overrides?.query?.maxResults ??
+      defaults?.query?.maxResults ??
+      DEFAULT_MAX_RESULTS,
+    minScore:
+      overrides?.query?.minScore ??
+      defaults?.query?.minScore ??
+      DEFAULT_MIN_SCORE,
   };
   const hybrid = {
     enabled:
@@ -274,17 +313,26 @@ function mergeConfig(
     },
   };
   const cache = {
-    enabled: overrides?.cache?.enabled ?? defaults?.cache?.enabled ?? DEFAULT_CACHE_ENABLED,
+    enabled:
+      overrides?.cache?.enabled ??
+      defaults?.cache?.enabled ??
+      DEFAULT_CACHE_ENABLED,
     maxEntries: overrides?.cache?.maxEntries ?? defaults?.cache?.maxEntries,
   };
 
-  const overlap = clampNumber(chunking.overlap, 0, Math.max(0, chunking.tokens - 1));
+  const overlap = clampNumber(
+    chunking.overlap,
+    0,
+    Math.max(0, chunking.tokens - 1),
+  );
   const minScore = clampNumber(query.minScore, 0, 1);
   const vectorWeight = clampNumber(hybrid.vectorWeight, 0, 1);
   const textWeight = clampNumber(hybrid.textWeight, 0, 1);
   const sum = vectorWeight + textWeight;
-  const normalizedVectorWeight = sum > 0 ? vectorWeight / sum : DEFAULT_HYBRID_VECTOR_WEIGHT;
-  const normalizedTextWeight = sum > 0 ? textWeight / sum : DEFAULT_HYBRID_TEXT_WEIGHT;
+  const normalizedVectorWeight =
+    sum > 0 ? vectorWeight / sum : DEFAULT_HYBRID_VECTOR_WEIGHT;
+  const normalizedTextWeight =
+    sum > 0 ? textWeight / sum : DEFAULT_HYBRID_TEXT_WEIGHT;
   const candidateMultiplier = clampInt(hybrid.candidateMultiplier, 1, 20);
   const temporalDecayHalfLifeDays = Math.max(
     1,
@@ -294,8 +342,16 @@ function mergeConfig(
         : DEFAULT_TEMPORAL_DECAY_HALF_LIFE_DAYS,
     ),
   );
-  const deltaBytes = clampInt(sync.sessions.deltaBytes, 0, Number.MAX_SAFE_INTEGER);
-  const deltaMessages = clampInt(sync.sessions.deltaMessages, 0, Number.MAX_SAFE_INTEGER);
+  const deltaBytes = clampInt(
+    sync.sessions.deltaBytes,
+    0,
+    Number.MAX_SAFE_INTEGER,
+  );
+  const deltaMessages = clampInt(
+    sync.sessions.deltaMessages,
+    0,
+    Number.MAX_SAFE_INTEGER,
+  );
   return {
     enabled,
     sources,
@@ -340,7 +396,8 @@ function mergeConfig(
     cache: {
       enabled: Boolean(cache.enabled),
       maxEntries:
-        typeof cache.maxEntries === "number" && Number.isFinite(cache.maxEntries)
+        typeof cache.maxEntries === "number" &&
+        Number.isFinite(cache.maxEntries)
           ? Math.max(1, Math.floor(cache.maxEntries))
           : undefined,
     },

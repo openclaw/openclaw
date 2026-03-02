@@ -4,7 +4,11 @@ import path from "node:path";
 import { describe, it, expect, beforeEach } from "vitest";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import type { Logger } from "./service/state.js";
-import { sweepCronRunSessions, resolveRetentionMs, resetReaperThrottle } from "./session-reaper.js";
+import {
+  sweepCronRunSessions,
+  resolveRetentionMs,
+  resetReaperThrottle,
+} from "./session-reaper.js";
 
 function createTestLogger(): Logger {
   return {
@@ -35,14 +39,20 @@ describe("resolveRetentionMs", () => {
   });
 
   it("falls back to default on invalid string", () => {
-    expect(resolveRetentionMs({ sessionRetention: "abc" })).toBe(24 * 3_600_000);
+    expect(resolveRetentionMs({ sessionRetention: "abc" })).toBe(
+      24 * 3_600_000,
+    );
   });
 });
 
 describe("isCronRunSessionKey", () => {
   it("matches cron run session keys", () => {
-    expect(isCronRunSessionKey("agent:main:cron:abc-123:run:def-456")).toBe(true);
-    expect(isCronRunSessionKey("agent:debugger:cron:249ecf82:run:1102aabb")).toBe(true);
+    expect(isCronRunSessionKey("agent:main:cron:abc-123:run:def-456")).toBe(
+      true,
+    );
+    expect(
+      isCronRunSessionKey("agent:debugger:cron:249ecf82:run:1102aabb"),
+    ).toBe(true);
   });
 
   it("does not match base cron session keys", () => {
@@ -54,7 +64,9 @@ describe("isCronRunSessionKey", () => {
   });
 
   it("does not match non-canonical cron-like keys", () => {
-    expect(isCronRunSessionKey("agent:main:slack:cron:job:run:uuid")).toBe(false);
+    expect(isCronRunSessionKey("agent:main:slack:cron:job:run:uuid")).toBe(
+      false,
+    );
     expect(isCronRunSessionKey("cron:job:run:uuid")).toBe(false);
   });
 });
@@ -132,15 +144,22 @@ describe("sweepCronRunSessions", () => {
     expect(result.pruned).toBe(1);
     expect(fs.existsSync(runTranscript)).toBe(false);
     const files = fs.readdirSync(tmpDir);
-    expect(files.some((name) => name.startsWith(`${runSessionId}.jsonl.deleted.`))).toBe(true);
+    expect(
+      files.some((name) => name.startsWith(`${runSessionId}.jsonl.deleted.`)),
+    ).toBe(true);
   });
 
   it("does not archive external transcript paths for pruned runs", async () => {
     const now = Date.now();
-    const externalDir = fs.mkdtempSync(path.join(os.tmpdir(), "cron-reaper-external-"));
+    const externalDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "cron-reaper-external-"),
+    );
     const externalTranscript = path.join(externalDir, "outside.jsonl");
     fs.writeFileSync(externalTranscript, '{"type":"session"}\n');
-    const store: Record<string, { sessionId: string; sessionFile?: string; updatedAt: number }> = {
+    const store: Record<
+      string,
+      { sessionId: string; sessionFile?: string; updatedAt: number }
+    > = {
       "agent:main:cron:job1:run:old-run": {
         sessionId: "old-run",
         sessionFile: externalTranscript,

@@ -59,7 +59,9 @@ describe("acp runtime registry", () => {
 
   it("throws a typed missing-backend error when no backend is registered", () => {
     expect(() => requireAcpRuntimeBackend()).toThrowError(AcpRuntimeError);
-    expect(() => requireAcpRuntimeBackend()).toThrowError(/ACP runtime backend is not configured/i);
+    expect(() => requireAcpRuntimeBackend()).toThrowError(
+      /ACP runtime backend is not configured/i,
+    );
   });
 
   it("throws a typed unavailable error when the requested backend is unhealthy", () => {

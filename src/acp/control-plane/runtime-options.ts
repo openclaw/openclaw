@@ -1,5 +1,8 @@
 import { isAbsolute } from "node:path";
-import type { AcpSessionRuntimeOptions, SessionAcpMeta } from "../../config/sessions/types.js";
+import type {
+  AcpSessionRuntimeOptions,
+  SessionAcpMeta,
+} from "../../config/sessions/types.js";
 import { AcpRuntimeError } from "../runtime/errors.js";
 
 const MAX_RUNTIME_MODE_LENGTH = 64;
@@ -28,13 +31,19 @@ function validateNoControlChars(value: string, field: string): string {
   return value;
 }
 
-function validateBoundedText(params: { value: unknown; field: string; maxLength: number }): string {
+function validateBoundedText(params: {
+  value: unknown;
+  field: string;
+  maxLength: number;
+}): string {
   const normalized = normalizeText(params.value);
   if (!normalized) {
     failInvalidOption(`${params.field} must not be empty.`);
   }
   if (normalized.length > params.maxLength) {
-    failInvalidOption(`${params.field} must be at most ${params.maxLength} characters.`);
+    failInvalidOption(
+      `${params.field} must be at most ${params.maxLength} characters.`,
+    );
   }
   return validateNoControlChars(normalized, params.field);
 }
@@ -77,7 +86,9 @@ export function validateRuntimeModelInput(rawModel: unknown): string {
   });
 }
 
-export function validateRuntimePermissionProfileInput(rawProfile: unknown): string {
+export function validateRuntimePermissionProfileInput(
+  rawProfile: unknown,
+): string {
   return validateBoundedText({
     value: rawProfile,
     field: "Permission profile",
@@ -92,12 +103,16 @@ export function validateRuntimeCwdInput(rawCwd: unknown): string {
     maxLength: MAX_CWD_LENGTH,
   });
   if (!isAbsolute(cwd)) {
-    failInvalidOption(`Working directory must be an absolute path. Received "${cwd}".`);
+    failInvalidOption(
+      `Working directory must be an absolute path. Received "${cwd}".`,
+    );
   }
   return cwd;
 }
 
-export function validateRuntimeTimeoutSecondsInput(rawTimeout: unknown): number {
+export function validateRuntimeTimeoutSecondsInput(
+  rawTimeout: unknown,
+): number {
   if (typeof rawTimeout !== "number" || !Number.isFinite(rawTimeout)) {
     failInvalidOption("Timeout must be a positive integer in seconds.");
   }
@@ -178,30 +193,43 @@ export function validateRuntimeOptionPatch(
     if (rawPatch.permissionProfile === undefined) {
       next.permissionProfile = undefined;
     } else {
-      next.permissionProfile = validateRuntimePermissionProfileInput(rawPatch.permissionProfile);
+      next.permissionProfile = validateRuntimePermissionProfileInput(
+        rawPatch.permissionProfile,
+      );
     }
   }
   if (Object.hasOwn(rawPatch, "timeoutSeconds")) {
     if (rawPatch.timeoutSeconds === undefined) {
       next.timeoutSeconds = undefined;
     } else {
-      next.timeoutSeconds = validateRuntimeTimeoutSecondsInput(rawPatch.timeoutSeconds);
+      next.timeoutSeconds = validateRuntimeTimeoutSecondsInput(
+        rawPatch.timeoutSeconds,
+      );
     }
   }
   if (Object.hasOwn(rawPatch, "backendExtras")) {
     const rawExtras = rawPatch.backendExtras;
     if (rawExtras === undefined) {
       next.backendExtras = undefined;
-    } else if (!rawExtras || typeof rawExtras !== "object" || Array.isArray(rawExtras)) {
+    } else if (
+      !rawExtras ||
+      typeof rawExtras !== "object" ||
+      Array.isArray(rawExtras)
+    ) {
       failInvalidOption("Backend extras must be a key/value object.");
     } else {
       const entries = Object.entries(rawExtras);
       if (entries.length > MAX_BACKEND_EXTRAS) {
-        failInvalidOption(`Backend extras must include at most ${MAX_BACKEND_EXTRAS} entries.`);
+        failInvalidOption(
+          `Backend extras must include at most ${MAX_BACKEND_EXTRAS} entries.`,
+        );
       }
       const extras: Record<string, string> = {};
       for (const [entryKey, entryValue] of entries) {
-        const { key, value } = validateRuntimeConfigOptionInput(entryKey, entryValue);
+        const { key, value } = validateRuntimeConfigOptionInput(
+          entryKey,
+          entryValue,
+        );
         extras[key] = value;
       }
       next.backendExtras = Object.keys(extras).length > 0 ? extras : undefined;
@@ -227,7 +255,10 @@ export function normalizeRuntimeOptions(
   const cwd = normalizeText(options?.cwd);
   const permissionProfile = normalizeText(options?.permissionProfile);
   let timeoutSeconds: number | undefined;
-  if (typeof options?.timeoutSeconds === "number" && Number.isFinite(options.timeoutSeconds)) {
+  if (
+    typeof options?.timeoutSeconds === "number" &&
+    Number.isFinite(options.timeoutSeconds)
+  ) {
     const rounded = Math.round(options.timeoutSeconds);
     if (rounded > 0) {
       timeoutSeconds = rounded;
@@ -237,7 +268,9 @@ export function normalizeRuntimeOptions(
     .map(([key, value]) => [normalizeText(key), normalizeText(value)] as const)
     .filter(([key, value]) => Boolean(key && value)) as Array<[string, string]>;
   const backendExtras =
-    backendExtrasEntries.length > 0 ? Object.fromEntries(backendExtrasEntries) : undefined;
+    backendExtrasEntries.length > 0
+      ? Object.fromEntries(backendExtrasEntries)
+      : undefined;
   return {
     ...(runtimeMode ? { runtimeMode } : {}),
     ...(model ? { model } : {}),
@@ -253,7 +286,9 @@ export function mergeRuntimeOptions(params: {
   patch?: Partial<AcpSessionRuntimeOptions>;
 }): AcpSessionRuntimeOptions {
   const current = normalizeRuntimeOptions(params.current);
-  const patch = normalizeRuntimeOptions(validateRuntimeOptionPatch(params.patch));
+  const patch = normalizeRuntimeOptions(
+    validateRuntimeOptionPatch(params.patch),
+  );
   const mergedExtras = {
     ...current.backendExtras,
     ...patch.backendExtras,
@@ -261,11 +296,15 @@ export function mergeRuntimeOptions(params: {
   return normalizeRuntimeOptions({
     ...current,
     ...patch,
-    ...(Object.keys(mergedExtras).length > 0 ? { backendExtras: mergedExtras } : {}),
+    ...(Object.keys(mergedExtras).length > 0
+      ? { backendExtras: mergedExtras }
+      : {}),
   });
 }
 
-export function resolveRuntimeOptionsFromMeta(meta: SessionAcpMeta): AcpSessionRuntimeOptions {
+export function resolveRuntimeOptionsFromMeta(
+  meta: SessionAcpMeta,
+): AcpSessionRuntimeOptions {
   const normalized = normalizeRuntimeOptions(meta.runtimeOptions);
   if (normalized.cwd || !meta.cwd) {
     return normalized;
@@ -280,13 +319,18 @@ export function runtimeOptionsEqual(
   a: AcpSessionRuntimeOptions | undefined,
   b: AcpSessionRuntimeOptions | undefined,
 ): boolean {
-  return JSON.stringify(normalizeRuntimeOptions(a)) === JSON.stringify(normalizeRuntimeOptions(b));
+  return (
+    JSON.stringify(normalizeRuntimeOptions(a)) ===
+    JSON.stringify(normalizeRuntimeOptions(b))
+  );
 }
 
-export function buildRuntimeControlSignature(options: AcpSessionRuntimeOptions): string {
+export function buildRuntimeControlSignature(
+  options: AcpSessionRuntimeOptions,
+): string {
   const normalized = normalizeRuntimeOptions(options);
-  const extras = Object.entries(normalized.backendExtras ?? {}).toSorted(([a], [b]) =>
-    a.localeCompare(b),
+  const extras = Object.entries(normalized.backendExtras ?? {}).toSorted(
+    ([a], [b]) => a.localeCompare(b),
   );
   return JSON.stringify({
     runtimeMode: normalized.runtimeMode ?? null,
@@ -333,7 +377,9 @@ export function inferRuntimeOptionPatchFromConfigOption(
     normalizedKey === "permission_profile" ||
     normalizedKey === "permissions"
   ) {
-    return { permissionProfile: validateRuntimePermissionProfileInput(validated.value) };
+    return {
+      permissionProfile: validateRuntimePermissionProfileInput(validated.value),
+    };
   }
   if (normalizedKey === "timeout" || normalizedKey === "timeout_seconds") {
     return { timeoutSeconds: parseRuntimeTimeoutSecondsInput(validated.value) };

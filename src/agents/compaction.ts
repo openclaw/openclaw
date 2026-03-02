@@ -5,7 +5,10 @@ import type { AgentCompactionIdentifierPolicy } from "../config/types.agent-defa
 import { retryAsync } from "../infra/retry.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { DEFAULT_CONTEXT_TOKENS } from "./defaults.js";
-import { repairToolUseResultPairing, stripToolResultDetails } from "./session-transcript-repair.js";
+import {
+  repairToolUseResultPairing,
+  stripToolResultDetails,
+} from "./session-transcript-repair.js";
 
 const log = createSubsystemLogger("compaction");
 
@@ -35,7 +38,9 @@ function resolveIdentifierPreservationInstructions(
   }
   if (policy === "custom") {
     const custom = instructions?.identifierInstructions?.trim();
-    return custom && custom.length > 0 ? custom : IDENTIFIER_PRESERVATION_INSTRUCTIONS;
+    return custom && custom.length > 0
+      ? custom
+      : IDENTIFIER_PRESERVATION_INSTRUCTIONS;
   }
   return IDENTIFIER_PRESERVATION_INSTRUCTIONS;
 }
@@ -45,7 +50,8 @@ export function buildCompactionSummarizationInstructions(
   instructions?: CompactionSummarizationInstructions,
 ): string | undefined {
   const custom = customInstructions?.trim();
-  const identifierPreservation = resolveIdentifierPreservationInstructions(instructions);
+  const identifierPreservation =
+    resolveIdentifierPreservationInstructions(instructions);
   if (!identifierPreservation && !custom) {
     return undefined;
   }
@@ -139,7 +145,10 @@ export function chunkMessagesByMaxTokens(
 
   for (const message of messages) {
     const messageTokens = estimateCompactionMessageTokens(message);
-    if (currentChunk.length > 0 && currentTokens + messageTokens > effectiveMax) {
+    if (
+      currentChunk.length > 0 &&
+      currentTokens + messageTokens > effectiveMax
+    ) {
       chunks.push(currentChunk);
       currentChunk = [];
       currentTokens = 0;
@@ -167,7 +176,10 @@ export function chunkMessagesByMaxTokens(
  * Compute adaptive chunk ratio based on average message size.
  * When messages are large, we use smaller chunks to avoid exceeding model limits.
  */
-export function computeAdaptiveChunkRatio(messages: AgentMessage[], contextWindow: number): number {
+export function computeAdaptiveChunkRatio(
+  messages: AgentMessage[],
+  contextWindow: number,
+): number {
   if (messages.length === 0) {
     return BASE_CHUNK_RATIO;
   }
@@ -181,7 +193,10 @@ export function computeAdaptiveChunkRatio(messages: AgentMessage[], contextWindo
 
   // If average message is > 10% of context, reduce chunk ratio
   if (avgRatio > 0.1) {
-    const reduction = Math.min(avgRatio * 2, BASE_CHUNK_RATIO - MIN_CHUNK_RATIO);
+    const reduction = Math.min(
+      avgRatio * 2,
+      BASE_CHUNK_RATIO - MIN_CHUNK_RATIO,
+    );
     return Math.max(MIN_CHUNK_RATIO, BASE_CHUNK_RATIO - reduction);
   }
 
@@ -192,7 +207,10 @@ export function computeAdaptiveChunkRatio(messages: AgentMessage[], contextWindo
  * Check if a single message is too large to summarize.
  * If single message > 50% of context, it can't be summarized safely.
  */
-export function isOversizedForSummary(msg: AgentMessage, contextWindow: number): boolean {
+export function isOversizedForSummary(
+  msg: AgentMessage,
+  contextWindow: number,
+): boolean {
   const tokens = estimateCompactionMessageTokens(msg) * SAFETY_MARGIN;
   return tokens > contextWindow * 0.5;
 }
@@ -238,7 +256,8 @@ async function summarizeChunks(params: {
         maxDelayMs: 5000,
         jitter: 0.2,
         label: "compaction/generateSummary",
-        shouldRetry: (err) => !(err instanceof Error && err.name === "AbortError"),
+        shouldRetry: (err) =>
+          !(err instanceof Error && err.name === "AbortError"),
       },
     );
   }
@@ -301,12 +320,15 @@ export async function summarizeWithFallback(params: {
         ...params,
         messages: smallMessages,
       });
-      const notes = oversizedNotes.length > 0 ? `\n\n${oversizedNotes.join("\n")}` : "";
+      const notes =
+        oversizedNotes.length > 0 ? `\n\n${oversizedNotes.join("\n")}` : "";
       return partialSummary + notes;
     } catch (partialError) {
       log.warn(
         `Partial summarization also failed: ${
-          partialError instanceof Error ? partialError.message : String(partialError)
+          partialError instanceof Error
+            ? partialError.message
+            : String(partialError)
         }`,
       );
     }
@@ -342,11 +364,17 @@ export async function summarizeInStages(params: {
   const parts = normalizeParts(params.parts ?? DEFAULT_PARTS, messages.length);
   const totalTokens = estimateMessagesTokens(messages);
 
-  if (parts <= 1 || messages.length < minMessagesForSplit || totalTokens <= params.maxChunkTokens) {
+  if (
+    parts <= 1 ||
+    messages.length < minMessagesForSplit ||
+    totalTokens <= params.maxChunkTokens
+  ) {
     return summarizeWithFallback(params);
   }
 
-  const splits = splitMessagesByTokenShare(messages, parts).filter((chunk) => chunk.length > 0);
+  const splits = splitMessagesByTokenShare(messages, parts).filter(
+    (chunk) => chunk.length > 0,
+  );
   if (splits.length <= 1) {
     return summarizeWithFallback(params);
   }
@@ -399,16 +427,25 @@ export function pruneHistoryForContextShare(params: {
   budgetTokens: number;
 } {
   const maxHistoryShare = params.maxHistoryShare ?? 0.5;
-  const budgetTokens = Math.max(1, Math.floor(params.maxContextTokens * maxHistoryShare));
+  const budgetTokens = Math.max(
+    1,
+    Math.floor(params.maxContextTokens * maxHistoryShare),
+  );
   let keptMessages = params.messages;
   const allDroppedMessages: AgentMessage[] = [];
   let droppedChunks = 0;
   let droppedMessages = 0;
   let droppedTokens = 0;
 
-  const parts = normalizeParts(params.parts ?? DEFAULT_PARTS, keptMessages.length);
+  const parts = normalizeParts(
+    params.parts ?? DEFAULT_PARTS,
+    keptMessages.length,
+  );
 
-  while (keptMessages.length > 0 && estimateMessagesTokens(keptMessages) > budgetTokens) {
+  while (
+    keptMessages.length > 0 &&
+    estimateMessagesTokens(keptMessages) > budgetTokens
+  ) {
     const chunks = splitMessagesByTokenShare(keptMessages, parts);
     if (chunks.length <= 1) {
       break;
@@ -448,6 +485,11 @@ export function pruneHistoryForContextShare(params: {
   };
 }
 
-export function resolveContextWindowTokens(model?: ExtensionContext["model"]): number {
-  return Math.max(1, Math.floor(model?.contextWindow ?? DEFAULT_CONTEXT_TOKENS));
+export function resolveContextWindowTokens(
+  model?: ExtensionContext["model"],
+): number {
+  return Math.max(
+    1,
+    Math.floor(model?.contextWindow ?? DEFAULT_CONTEXT_TOKENS),
+  );
 }

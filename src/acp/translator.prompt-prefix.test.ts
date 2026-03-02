@@ -5,7 +5,10 @@ import { describe, expect, it, vi } from "vitest";
 import type { GatewayClient } from "../gateway/client.js";
 import { createInMemorySessionStore } from "./session.js";
 import { AcpGatewayAgent } from "./translator.js";
-import { createAcpConnection, createAcpGateway } from "./translator.test-helpers.js";
+import {
+  createAcpConnection,
+  createAcpGateway,
+} from "./translator.test-helpers.js";
 
 describe("acp prompt cwd prefix", () => {
   async function runPromptWithCwd(cwd: string) {
@@ -61,11 +64,15 @@ describe("acp prompt cwd prefix", () => {
   }
 
   it("redacts home directory in prompt prefix", async () => {
-    const requestSpy = await runPromptWithCwd(path.join(os.homedir(), "openclaw-test"));
+    const requestSpy = await runPromptWithCwd(
+      path.join(os.homedir(), "openclaw-test"),
+    );
     expect(requestSpy).toHaveBeenCalledWith(
       "chat.send",
       expect.objectContaining({
-        message: expect.stringMatching(/\[Working directory: ~[\\/]openclaw-test\]/),
+        message: expect.stringMatching(
+          /\[Working directory: ~[\\/]openclaw-test\]/,
+        ),
       }),
       { expectFinal: true },
     );
@@ -76,7 +83,9 @@ describe("acp prompt cwd prefix", () => {
     expect(requestSpy).toHaveBeenCalledWith(
       "chat.send",
       expect.objectContaining({
-        message: expect.stringContaining("[Working directory: ~\\openclaw-test]"),
+        message: expect.stringContaining(
+          "[Working directory: ~\\openclaw-test]",
+        ),
       }),
       { expectFinal: true },
     );

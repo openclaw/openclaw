@@ -28,8 +28,15 @@ import {
   type ResolvedGoogleChatAccount,
 } from "./accounts.js";
 import { googlechatMessageActions } from "./actions.js";
-import { sendGoogleChatMessage, uploadGoogleChatAttachment, probeGoogleChat } from "./api.js";
-import { resolveGoogleChatWebhookPath, startGoogleChatMonitor } from "./monitor.js";
+import {
+  sendGoogleChatMessage,
+  uploadGoogleChatAttachment,
+  probeGoogleChat,
+} from "./api.js";
+import {
+  resolveGoogleChatWebhookPath,
+  startGoogleChatMonitor,
+} from "./monitor.js";
 import { googlechatOnboardingAdapter } from "./onboarding.js";
 import { getGoogleChatRuntime } from "./runtime.js";
 import {
@@ -61,9 +68,10 @@ export const googlechatDock: ChannelDock = {
   outbound: { textChunkLimit: 4000 },
   config: {
     resolveAllowFrom: ({ cfg, accountId }) =>
-      (resolveGoogleChatAccount({ cfg: cfg, accountId }).config.dm?.allowFrom ?? []).map((entry) =>
-        String(entry),
-      ),
+      (
+        resolveGoogleChatAccount({ cfg: cfg, accountId }).config.dm
+          ?.allowFrom ?? []
+      ).map((entry) => String(entry)),
     formatAllowFrom: ({ allowFrom }) =>
       allowFrom
         .map((entry) => String(entry))
@@ -74,7 +82,8 @@ export const googlechatDock: ChannelDock = {
     resolveRequireMention: resolveGoogleChatGroupRequireMention,
   },
   threading: {
-    resolveReplyToMode: ({ cfg }) => cfg.channels?.["googlechat"]?.replyToMode ?? "off",
+    resolveReplyToMode: ({ cfg }) =>
+      cfg.channels?.["googlechat"]?.replyToMode ?? "off",
     buildToolContext: ({ context, hasRepliedRef }) => {
       const threadId = context.MessageThreadId ?? context.ReplyToId;
       return {
@@ -88,7 +97,8 @@ export const googlechatDock: ChannelDock = {
 
 const googlechatActions: ChannelMessageActionAdapter = {
   listActions: (ctx) => googlechatMessageActions.listActions?.(ctx) ?? [],
-  extractToolSend: (ctx) => googlechatMessageActions.extractToolSend?.(ctx) ?? null,
+  extractToolSend: (ctx) =>
+    googlechatMessageActions.extractToolSend?.(ctx) ?? null,
   handleAction: async (ctx) => {
     if (!googlechatMessageActions.handleAction) {
       throw new Error("Google Chat actions are not available.");
@@ -134,7 +144,8 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
   configSchema: buildChannelConfigSchema(GoogleChatConfigSchema),
   config: {
     listAccountIds: (cfg) => listGoogleChatAccountIds(cfg),
-    resolveAccount: (cfg, accountId) => resolveGoogleChatAccount({ cfg: cfg, accountId }),
+    resolveAccount: (cfg, accountId) =>
+      resolveGoogleChatAccount({ cfg: cfg, accountId }),
     defaultAccountId: (cfg) => resolveDefaultGoogleChatAccountId(cfg),
     setAccountEnabled: ({ cfg, accountId, enabled }) =>
       setAccountEnabledInConfigSection({
@@ -181,12 +192,16 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
         .filter(Boolean)
         .map(formatAllowFromEntry),
     resolveDefaultTo: ({ cfg, accountId }) =>
-      resolveGoogleChatAccount({ cfg, accountId }).config.defaultTo?.trim() || undefined,
+      resolveGoogleChatAccount({ cfg, accountId }).config.defaultTo?.trim() ||
+      undefined,
   },
   security: {
     resolveDmPolicy: ({ cfg, accountId, account }) => {
-      const resolvedAccountId = accountId ?? account.accountId ?? DEFAULT_ACCOUNT_ID;
-      const useAccountPath = Boolean(cfg.channels?.["googlechat"]?.accounts?.[resolvedAccountId]);
+      const resolvedAccountId =
+        accountId ?? account.accountId ?? DEFAULT_ACCOUNT_ID;
+      const useAccountPath = Boolean(
+        cfg.channels?.["googlechat"]?.accounts?.[resolvedAccountId],
+      );
       const allowFromPath = useAccountPath
         ? `channels.googlechat.accounts.${resolvedAccountId}.dm.`
         : "channels.googlechat.dm.";
@@ -223,7 +238,8 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
     resolveRequireMention: resolveGoogleChatGroupRequireMention,
   },
   threading: {
-    resolveReplyToMode: ({ cfg }) => cfg.channels?.["googlechat"]?.replyToMode ?? "off",
+    resolveReplyToMode: ({ cfg }) =>
+      cfg.channels?.["googlechat"]?.replyToMode ?? "off",
   },
   messaging: {
     normalizeTarget: normalizeGoogleChatTarget,
@@ -380,7 +396,8 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
   },
   outbound: {
     deliveryMode: "direct",
-    chunker: (text, limit) => getGoogleChatRuntime().channel.text.chunkMarkdownText(text, limit),
+    chunker: (text, limit) =>
+      getGoogleChatRuntime().channel.text.chunkMarkdownText(text, limit),
     chunkerMode: "markdown",
     textChunkLimit: 4000,
     resolveTarget: ({ to }) => {
@@ -391,7 +408,10 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
         if (!normalized) {
           return {
             ok: false,
-            error: missingTargetError("Google Chat", "<spaces/{space}|users/{user}>"),
+            error: missingTargetError(
+              "Google Chat",
+              "<spaces/{space}|users/{user}>",
+            ),
           };
         }
         return { ok: true, to: normalized };
@@ -399,7 +419,10 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
 
       return {
         ok: false,
-        error: missingTargetError("Google Chat", "<spaces/{space}|users/{user}>"),
+        error: missingTargetError(
+          "Google Chat",
+          "<spaces/{space}|users/{user}>",
+        ),
       };
     },
     sendText: async ({ cfg, to, text, accountId, replyToId, threadId }) => {
@@ -407,7 +430,10 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
         cfg: cfg,
         accountId,
       });
-      const space = await resolveGoogleChatOutboundSpace({ account, target: to });
+      const space = await resolveGoogleChatOutboundSpace({
+        account,
+        target: to,
+      });
       const thread = (threadId ?? replyToId ?? undefined) as string | undefined;
       const result = await sendGoogleChatMessage({
         account,
@@ -421,7 +447,15 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
         chatId: space,
       };
     },
-    sendMedia: async ({ cfg, to, text, mediaUrl, accountId, replyToId, threadId }) => {
+    sendMedia: async ({
+      cfg,
+      to,
+      text,
+      mediaUrl,
+      accountId,
+      replyToId,
+      threadId,
+    }) => {
       if (!mediaUrl) {
         throw new Error("Google Chat mediaUrl is required.");
       }
@@ -429,7 +463,10 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
         cfg: cfg,
         accountId,
       });
-      const space = await resolveGoogleChatOutboundSpace({ account, target: to });
+      const space = await resolveGoogleChatOutboundSpace({
+        account,
+        target: to,
+      });
       const thread = (threadId ?? replyToId ?? undefined) as string | undefined;
       const runtime = getGoogleChatRuntime();
       const maxBytes = resolveChannelMediaMaxBytes({
@@ -437,10 +474,14 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
         resolveChannelLimitMb: ({ cfg, accountId }) =>
           (
             cfg.channels?.["googlechat"] as
-              | { accounts?: Record<string, { mediaMaxMb?: number }>; mediaMaxMb?: number }
+              | {
+                  accounts?: Record<string, { mediaMaxMb?: number }>;
+                  mediaMaxMb?: number;
+                }
               | undefined
           )?.accounts?.[accountId]?.mediaMaxMb ??
-          (cfg.channels?.["googlechat"] as { mediaMaxMb?: number } | undefined)?.mediaMaxMb,
+          (cfg.channels?.["googlechat"] as { mediaMaxMb?: number } | undefined)
+            ?.mediaMaxMb,
         accountId,
       });
       const loaded = await runtime.channel.media.fetchRemoteMedia({
@@ -460,7 +501,12 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
         text,
         thread,
         attachments: upload.attachmentUploadToken
-          ? [{ attachmentUploadToken: upload.attachmentUploadToken, contentName: loaded.fileName }]
+          ? [
+              {
+                attachmentUploadToken: upload.attachmentUploadToken,
+                contentName: loaded.fileName,
+              },
+            ]
           : undefined,
       });
       return {
@@ -492,7 +538,8 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
             channel: "googlechat",
             accountId,
             kind: "config",
-            message: "Google Chat audience is missing (set channels.googlechat.audience).",
+            message:
+              "Google Chat audience is missing (set channels.googlechat.audience).",
             fix: "Set channels.googlechat.audienceType and channels.googlechat.audience.",
           });
         }
@@ -501,7 +548,8 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
             channel: "googlechat",
             accountId,
             kind: "config",
-            message: "Google Chat audienceType is missing (app-url or project-number).",
+            message:
+              "Google Chat audienceType is missing (app-url or project-number).",
             fix: "Set channels.googlechat.audienceType and channels.googlechat.audience.",
           });
         }
@@ -561,7 +609,8 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
         abortSignal: ctx.abortSignal,
         webhookPath: account.config.webhookPath,
         webhookUrl: account.config.webhookUrl,
-        statusSink: (patch) => ctx.setStatus({ accountId: account.accountId, ...patch }),
+        statusSink: (patch) =>
+          ctx.setStatus({ accountId: account.accountId, ...patch }),
       });
       // Keep the promise pending until abort (webhook mode is passive).
       await new Promise<void>((resolve) => {
@@ -569,7 +618,9 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
           resolve();
           return;
         }
-        ctx.abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        ctx.abortSignal.addEventListener("abort", () => resolve(), {
+          once: true,
+        });
       });
       unregister?.();
       ctx.setStatus({

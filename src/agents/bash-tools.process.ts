@@ -15,8 +15,16 @@ import {
   markExited,
   setJobTtlMs,
 } from "./bash-process-registry.js";
-import { deriveSessionName, pad, sliceLogLines, truncateMiddle } from "./bash-tools.shared.js";
-import { recordCommandPoll, resetCommandPollCount } from "./command-poll-backoff.js";
+import {
+  deriveSessionName,
+  pad,
+  sliceLogLines,
+  truncateMiddle,
+} from "./bash-tools.shared.js";
+import {
+  recordCommandPoll,
+  resetCommandPollCount,
+} from "./command-poll-backoff.js";
 import { encodeKeySequence, encodePaste } from "./pty-keys.js";
 
 export type ProcessToolDefaults = {
@@ -51,21 +59,34 @@ function defaultTailNote(totalLines: number, usingDefaultTail: boolean) {
 
 const processSchema = Type.Object({
   action: Type.String({ description: "Process action" }),
-  sessionId: Type.Optional(Type.String({ description: "Session id for actions other than list" })),
+  sessionId: Type.Optional(
+    Type.String({ description: "Session id for actions other than list" }),
+  ),
   data: Type.Optional(Type.String({ description: "Data to write for write" })),
   keys: Type.Optional(
-    Type.Array(Type.String(), { description: "Key tokens to send for send-keys" }),
+    Type.Array(Type.String(), {
+      description: "Key tokens to send for send-keys",
+    }),
   ),
-  hex: Type.Optional(Type.Array(Type.String(), { description: "Hex bytes to send for send-keys" })),
-  literal: Type.Optional(Type.String({ description: "Literal string for send-keys" })),
+  hex: Type.Optional(
+    Type.Array(Type.String(), {
+      description: "Hex bytes to send for send-keys",
+    }),
+  ),
+  literal: Type.Optional(
+    Type.String({ description: "Literal string for send-keys" }),
+  ),
   text: Type.Optional(Type.String({ description: "Text to paste for paste" })),
-  bracketed: Type.Optional(Type.Boolean({ description: "Wrap paste in bracketed mode" })),
+  bracketed: Type.Optional(
+    Type.Boolean({ description: "Wrap paste in bracketed mode" }),
+  ),
   eof: Type.Optional(Type.Boolean({ description: "Close stdin after write" })),
   offset: Type.Optional(Type.Number({ description: "Log offset" })),
   limit: Type.Optional(Type.Number({ description: "Log length" })),
   timeout: Type.Optional(
     Type.Number({
-      description: "For poll: wait up to this many milliseconds before returning",
+      description:
+        "For poll: wait up to this many milliseconds before returning",
       minimum: 0,
     }),
   ),
@@ -98,7 +119,10 @@ function failText(text: string): AgentToolResult<unknown> {
   };
 }
 
-function recordPollRetrySuggestion(sessionId: string, hasNewOutput: boolean): number | undefined {
+function recordPollRetrySuggestion(
+  sessionId: string,
+  hasNewOutput: boolean,
+): number | undefined {
   try {
     const sessionState = getDiagnosticSessionState({ sessionId });
     return recordCommandPoll(sessionState, sessionId, hasNewOutput);
@@ -152,7 +176,12 @@ export function createProcessTool(
     description:
       "Manage running exec sessions: list, poll, log, write, send-keys, submit, paste, kill.",
     parameters: processSchema,
-    execute: async (_toolCallId, args, _signal, _onUpdate): Promise<AgentToolResult<unknown>> => {
+    execute: async (
+      _toolCallId,
+      args,
+      _signal,
+      _onUpdate,
+    ): Promise<AgentToolResult<unknown>> => {
       const params = args as {
         action:
           | "list"
@@ -212,7 +241,9 @@ export function createProcessTool(
         const lines = [...running, ...finished]
           .toSorted((a, b) => b.startedAt - a.startedAt)
           .map((s) => {
-            const label = s.name ? truncateMiddle(s.name, 80) : truncateMiddle(s.command, 120);
+            const label = s.name
+              ? truncateMiddle(s.name, 80)
+              : truncateMiddle(s.command, 120);
             return `${s.sessionId} ${pad(s.status, 9)} ${formatDurationCompact(s.runtimeMs) ?? "n/a"} :: ${label}`;
           });
         return {
@@ -228,7 +259,9 @@ export function createProcessTool(
 
       if (!params.sessionId) {
         return {
-          content: [{ type: "text", text: "sessionId is required for this action." }],
+          content: [
+            { type: "text", text: "sessionId is required for this action." },
+          ],
           details: { status: "failed" },
         };
       }
@@ -247,23 +280,33 @@ export function createProcessTool(
         if (!scopedSession) {
           return {
             ok: false as const,
-            result: failedResult(`No active session found for ${params.sessionId}`),
+            result: failedResult(
+              `No active session found for ${params.sessionId}`,
+            ),
           };
         }
         if (!scopedSession.backgrounded) {
           return {
             ok: false as const,
-            result: failedResult(`Session ${params.sessionId} is not backgrounded.`),
+            result: failedResult(
+              `Session ${params.sessionId} is not backgrounded.`,
+            ),
           };
         }
         const stdin = scopedSession.stdin ?? scopedSession.child?.stdin;
         if (!stdin || stdin.destroyed) {
           return {
             ok: false as const,
-            result: failedResult(`Session ${params.sessionId} stdin is not writable.`),
+            result: failedResult(
+              `Session ${params.sessionId} stdin is not writable.`,
+            ),
           };
         }
-        return { ok: true as const, session: scopedSession, stdin: stdin as WritableStdin };
+        return {
+          ok: true as const,
+          session: scopedSession,
+          stdin: stdin as WritableStdin,
+        };
       };
 
       const writeToStdin = async (stdin: WritableStdin, data: string) => {
@@ -312,7 +355,10 @@ export function createProcessTool(
                   },
                 ],
                 details: {
-                  status: scopedFinished.status === "completed" ? "completed" : "failed",
+                  status:
+                    scopedFinished.status === "completed"
+                      ? "completed"
+                      : "failed",
                   sessionId: params.sessionId,
                   exitCode: scopedFinished.exitCode ?? undefined,
                   aggregated: scopedFinished.aggregated,
@@ -331,7 +377,10 @@ export function createProcessTool(
             const deadline = Date.now() + pollWaitMs;
             while (!scopedSession.exited && Date.now() < deadline) {
               await new Promise((resolve) =>
-                setTimeout(resolve, Math.max(0, Math.min(250, deadline - Date.now()))),
+                setTimeout(
+                  resolve,
+                  Math.max(0, Math.min(250, deadline - Date.now())),
+                ),
               );
             }
           }
@@ -340,7 +389,8 @@ export function createProcessTool(
           const exitCode = scopedSession.exitCode ?? 0;
           const exitSignal = scopedSession.exitSignal ?? undefined;
           if (exited) {
-            const status = exitCode === 0 && exitSignal == null ? "completed" : "failed";
+            const status =
+              exitCode === 0 && exitSignal == null ? "completed" : "failed";
             markExited(
               scopedSession,
               scopedSession.exitCode ?? null,
@@ -353,7 +403,10 @@ export function createProcessTool(
               ? "completed"
               : "failed"
             : "running";
-          const output = [stdout.trimEnd(), stderr.trimEnd()].filter(Boolean).join("\n").trim();
+          const output = [stdout.trimEnd(), stderr.trimEnd()]
+            .filter(Boolean)
+            .join("\n")
+            .trim();
           const hasNewOutput = output.length > 0;
           const retryInMs = exited
             ? undefined
@@ -404,9 +457,17 @@ export function createProcessTool(
               window.effectiveOffset,
               window.effectiveLimit,
             );
-            const logDefaultTailNote = defaultTailNote(totalLines, window.usingDefaultTail);
+            const logDefaultTailNote = defaultTailNote(
+              totalLines,
+              window.usingDefaultTail,
+            );
             return {
-              content: [{ type: "text", text: (slice || "(no output yet)") + logDefaultTailNote }],
+              content: [
+                {
+                  type: "text",
+                  text: (slice || "(no output yet)") + logDefaultTailNote,
+                },
+              ],
               details: {
                 status: scopedSession.exited ? "completed" : "running",
                 sessionId: params.sessionId,
@@ -425,11 +486,18 @@ export function createProcessTool(
               window.effectiveOffset,
               window.effectiveLimit,
             );
-            const status = scopedFinished.status === "completed" ? "completed" : "failed";
-            const logDefaultTailNote = defaultTailNote(totalLines, window.usingDefaultTail);
+            const status =
+              scopedFinished.status === "completed" ? "completed" : "failed";
+            const logDefaultTailNote = defaultTailNote(
+              totalLines,
+              window.usingDefaultTail,
+            );
             return {
               content: [
-                { type: "text", text: (slice || "(no output recorded)") + logDefaultTailNote },
+                {
+                  type: "text",
+                  text: (slice || "(no output recorded)") + logDefaultTailNote,
+                },
               ],
               details: {
                 status,
@@ -497,7 +565,9 @@ export function createProcessTool(
           return runningSessionResult(
             resolved.session,
             `Sent ${data.length} bytes to session ${params.sessionId}.` +
-              (warnings.length ? `\nWarnings:\n- ${warnings.join("\n- ")}` : ""),
+              (warnings.length
+                ? `\nWarnings:\n- ${warnings.join("\n- ")}`
+                : ""),
           );
         }
 
@@ -518,7 +588,10 @@ export function createProcessTool(
           if (!resolved.ok) {
             return resolved.result;
           }
-          const payload = encodePaste(params.text ?? "", params.bracketed !== false);
+          const payload = encodePaste(
+            params.text ?? "",
+            params.bracketed !== false,
+          );
           if (!payload) {
             return {
               content: [
@@ -566,7 +639,9 @@ export function createProcessTool(
             ],
             details: {
               status: "failed",
-              name: scopedSession ? deriveSessionName(scopedSession.command) : undefined,
+              name: scopedSession
+                ? deriveSessionName(scopedSession.command)
+                : undefined,
             },
           };
         }
@@ -576,7 +651,9 @@ export function createProcessTool(
             resetPollRetrySuggestion(params.sessionId);
             deleteSession(params.sessionId);
             return {
-              content: [{ type: "text", text: `Cleared session ${params.sessionId}.` }],
+              content: [
+                { type: "text", text: `Cleared session ${params.sessionId}.` },
+              ],
               details: { status: "completed" },
             };
           }
@@ -620,7 +697,9 @@ export function createProcessTool(
               ],
               details: {
                 status: "failed",
-                name: scopedSession ? deriveSessionName(scopedSession.command) : undefined,
+                name: scopedSession
+                  ? deriveSessionName(scopedSession.command)
+                  : undefined,
               },
             };
           }
@@ -628,7 +707,9 @@ export function createProcessTool(
             resetPollRetrySuggestion(params.sessionId);
             deleteSession(params.sessionId);
             return {
-              content: [{ type: "text", text: `Removed session ${params.sessionId}.` }],
+              content: [
+                { type: "text", text: `Removed session ${params.sessionId}.` },
+              ],
               details: { status: "completed" },
             };
           }
@@ -645,7 +726,9 @@ export function createProcessTool(
       }
 
       return {
-        content: [{ type: "text", text: `Unknown action ${params.action as string}` }],
+        content: [
+          { type: "text", text: `Unknown action ${params.action as string}` },
+        ],
         details: { status: "failed" },
       };
     },

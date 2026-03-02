@@ -29,7 +29,9 @@ export async function installFromNpmSpecArchiveWithInstaller<
   spec: string;
   timeoutMs: number;
   expectedIntegrity?: string;
-  onIntegrityDrift?: (payload: NpmIntegrityDriftPayload) => boolean | Promise<boolean>;
+  onIntegrityDrift?: (
+    payload: NpmIntegrityDriftPayload,
+  ) => boolean | Promise<boolean>;
   warn?: (message: string) => void;
   installFromArchive: (params: TArchiveInstallParams) => Promise<TResult>;
   archiveInstallParams: Omit<TArchiveInstallParams, "archivePath">;
@@ -79,17 +81,23 @@ export function finalizeNpmSpecArchiveInstall<TResult extends { ok: boolean }>(
   } = {
     ...installResult,
     npmResolution: flowResult.npmResolution,
-    ...(flowResult.integrityDrift ? { integrityDrift: flowResult.integrityDrift } : {}),
+    ...(flowResult.integrityDrift
+      ? { integrityDrift: flowResult.integrityDrift }
+      : {}),
   };
   return finalized;
 }
 
-export async function installFromNpmSpecArchive<TResult extends { ok: boolean }>(params: {
+export async function installFromNpmSpecArchive<
+  TResult extends { ok: boolean },
+>(params: {
   tempDirPrefix: string;
   spec: string;
   timeoutMs: number;
   expectedIntegrity?: string;
-  onIntegrityDrift?: (payload: NpmIntegrityDriftPayload) => boolean | Promise<boolean>;
+  onIntegrityDrift?: (
+    payload: NpmIntegrityDriftPayload,
+  ) => boolean | Promise<boolean>;
   warn?: (message: string) => void;
   installFromArchive: (params: { archivePath: string }) => Promise<TResult>;
 }): Promise<NpmSpecArchiveInstallFlowResult<TResult>> {

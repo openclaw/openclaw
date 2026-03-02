@@ -29,7 +29,10 @@ describe("shouldReloadHistoryForFinalEvent", () => {
         runId: "run-1",
         sessionKey: "main",
         state: "final",
-        message: { role: "assistant", content: [{ type: "text", text: "done" }] },
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "done" }],
+        },
       }),
     ).toBe(false);
   });

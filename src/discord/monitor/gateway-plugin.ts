@@ -54,15 +54,20 @@ export function createDiscordGatewayPlugin(params: {
         super(options);
       }
 
-      override async registerClient(client: Parameters<GatewayPlugin["registerClient"]>[0]) {
+      override async registerClient(
+        client: Parameters<GatewayPlugin["registerClient"]>[0],
+      ) {
         if (!this.gatewayInfo) {
           try {
-            const response = await undiciFetch("https://discord.com/api/v10/gateway/bot", {
-              headers: {
-                Authorization: `Bot ${client.options.token}`,
-              },
-              dispatcher: fetchAgent,
-            } as Record<string, unknown>);
+            const response = await undiciFetch(
+              "https://discord.com/api/v10/gateway/bot",
+              {
+                headers: {
+                  Authorization: `Bot ${client.options.token}`,
+                },
+                dispatcher: fetchAgent,
+              } as Record<string, unknown>,
+            );
             this.gatewayInfo = (await response.json()) as APIGatewayBotInfo;
           } catch (error) {
             throw new Error(
@@ -81,7 +86,9 @@ export function createDiscordGatewayPlugin(params: {
 
     return new ProxyGatewayPlugin();
   } catch (err) {
-    params.runtime.error?.(danger(`discord: invalid gateway proxy: ${String(err)}`));
+    params.runtime.error?.(
+      danger(`discord: invalid gateway proxy: ${String(err)}`),
+    );
     return new GatewayPlugin(options);
   }
 }

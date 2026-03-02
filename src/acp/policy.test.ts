@@ -27,7 +27,9 @@ describe("acp policy", () => {
     expect(isAcpEnabledByPolicy(cfg)).toBe(false);
     expect(resolveAcpDispatchPolicyState(cfg)).toBe("acp_disabled");
     expect(resolveAcpDispatchPolicyMessage(cfg)).toContain("acp.enabled=false");
-    expect(resolveAcpDispatchPolicyError(cfg)?.code).toBe("ACP_DISPATCH_DISABLED");
+    expect(resolveAcpDispatchPolicyError(cfg)?.code).toBe(
+      "ACP_DISPATCH_DISABLED",
+    );
   });
 
   it("reports dispatch-disabled state when dispatch gate is false", () => {
@@ -41,7 +43,9 @@ describe("acp policy", () => {
     } satisfies OpenClawConfig;
     expect(isAcpDispatchEnabledByPolicy(cfg)).toBe(false);
     expect(resolveAcpDispatchPolicyState(cfg)).toBe("dispatch_disabled");
-    expect(resolveAcpDispatchPolicyMessage(cfg)).toContain("acp.dispatch.enabled=false");
+    expect(resolveAcpDispatchPolicyMessage(cfg)).toContain(
+      "acp.dispatch.enabled=false",
+    );
   });
 
   it("applies allowlist filtering for ACP agents", () => {
@@ -53,7 +57,9 @@ describe("acp policy", () => {
     expect(isAcpAgentAllowedByPolicy(cfg, "codex")).toBe(true);
     expect(isAcpAgentAllowedByPolicy(cfg, "claude-code")).toBe(true);
     expect(isAcpAgentAllowedByPolicy(cfg, "gemini")).toBe(false);
-    expect(resolveAcpAgentPolicyError(cfg, "gemini")?.code).toBe("ACP_SESSION_INIT_FAILED");
+    expect(resolveAcpAgentPolicyError(cfg, "gemini")?.code).toBe(
+      "ACP_SESSION_INIT_FAILED",
+    );
     expect(resolveAcpAgentPolicyError(cfg, "codex")).toBeNull();
   });
 });

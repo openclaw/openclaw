@@ -23,7 +23,9 @@ const fixturePath = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "../../test/fixtures/system-run-command-contract.json",
 );
-const fixture = JSON.parse(fs.readFileSync(fixturePath, "utf8")) as ContractFixture;
+const fixture = JSON.parse(
+  fs.readFileSync(fixturePath, "utf8"),
+) as ContractFixture;
 
 describe("system-run command contract fixtures", () => {
   for (const entry of fixture.cases) {

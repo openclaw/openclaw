@@ -14,7 +14,9 @@ const serviceRestart = vi.fn().mockResolvedValue(undefined);
 const serviceIsLoaded = vi.fn().mockResolvedValue(false);
 const serviceReadCommand = vi.fn().mockResolvedValue(null);
 const serviceReadRuntime = vi.fn().mockResolvedValue({ status: "running" });
-const findExtraGatewayServices = vi.fn(async (_env: unknown, _opts?: unknown) => []);
+const findExtraGatewayServices = vi.fn(
+  async (_env: unknown, _opts?: unknown) => [],
+);
 const inspectPortUsage = vi.fn(async (port: number) => ({
   port,
   status: "free",
@@ -22,8 +24,18 @@ const inspectPortUsage = vi.fn(async (port: number) => ({
   hints: [],
 }));
 const buildGatewayInstallPlan = vi.fn(
-  async (params: { port: number; token?: string; env?: NodeJS.ProcessEnv }) => ({
-    programArguments: ["/bin/node", "cli", "gateway", "--port", String(params.port)],
+  async (params: {
+    port: number;
+    token?: string;
+    env?: NodeJS.ProcessEnv;
+  }) => ({
+    programArguments: [
+      "/bin/node",
+      "cli",
+      "gateway",
+      "--port",
+      String(params.port),
+    ],
     workingDirectory: process.cwd(),
     environment: {
       OPENCLAW_GATEWAY_PORT: String(params.port),
@@ -32,14 +44,16 @@ const buildGatewayInstallPlan = vi.fn(
   }),
 );
 
-const { runtimeLogs, defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
+const { runtimeLogs, defaultRuntime, resetRuntimeCapture } =
+  createCliRuntimeCapture();
 
 vi.mock("../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGateway(opts),
 }));
 
 vi.mock("../daemon/program-args.js", () => ({
-  resolveGatewayProgramArguments: (opts: unknown) => resolveGatewayProgramArguments(opts),
+  resolveGatewayProgramArguments: (opts: unknown) =>
+    resolveGatewayProgramArguments(opts),
 }));
 
 vi.mock("../daemon/service.js", () => ({
@@ -62,7 +76,8 @@ vi.mock("../daemon/legacy.js", () => ({
 }));
 
 vi.mock("../daemon/inspect.js", () => ({
-  findExtraGatewayServices: (env: unknown, opts?: unknown) => findExtraGatewayServices(env, opts),
+  findExtraGatewayServices: (env: unknown, opts?: unknown) =>
+    findExtraGatewayServices(env, opts),
   renderGatewayServiceCleanupHints: () => [],
 }));
 
@@ -76,8 +91,11 @@ vi.mock("../runtime.js", () => ({
 }));
 
 vi.mock("../commands/daemon-install-helpers.js", () => ({
-  buildGatewayInstallPlan: (params: { port: number; token?: string; env?: NodeJS.ProcessEnv }) =>
-    buildGatewayInstallPlan(params),
+  buildGatewayInstallPlan: (params: {
+    port: number;
+    token?: string;
+    env?: NodeJS.ProcessEnv;
+  }) => buildGatewayInstallPlan(params),
 }));
 
 vi.mock("./deps.js", () => ({
@@ -85,7 +103,8 @@ vi.mock("./deps.js", () => ({
 }));
 
 vi.mock("./progress.js", () => ({
-  withProgress: async (_opts: unknown, fn: () => Promise<unknown>) => await fn(),
+  withProgress: async (_opts: unknown, fn: () => Promise<unknown>) =>
+    await fn(),
 }));
 
 const { registerDaemonCli } = await import("./daemon-cli.js");
@@ -137,7 +156,9 @@ describe("daemon-cli coverage", () => {
     await runDaemonCommand(["daemon", "status"]);
 
     expect(callGateway).toHaveBeenCalledTimes(1);
-    expect(callGateway).toHaveBeenCalledWith(expect.objectContaining({ method: "status" }));
+    expect(callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({ method: "status" }),
+    );
     expect(findExtraGatewayServices).toHaveBeenCalled();
     expect(inspectPortUsage).toHaveBeenCalled();
   });
@@ -230,8 +251,14 @@ describe("daemon-cli coverage", () => {
     expect(serviceRestart).toHaveBeenCalledTimes(1);
     expect(serviceStop).toHaveBeenCalledTimes(1);
     const jsonLines = runtimeLogs.filter((line) => line.trim().startsWith("{"));
-    const parsed = jsonLines.map((line) => JSON.parse(line) as { action?: string; ok?: boolean });
-    expect(parsed.some((entry) => entry.action === "start" && entry.ok === true)).toBe(true);
-    expect(parsed.some((entry) => entry.action === "stop" && entry.ok === true)).toBe(true);
+    const parsed = jsonLines.map(
+      (line) => JSON.parse(line) as { action?: string; ok?: boolean },
+    );
+    expect(
+      parsed.some((entry) => entry.action === "start" && entry.ok === true),
+    ).toBe(true);
+    expect(
+      parsed.some((entry) => entry.action === "stop" && entry.ok === true),
+    ).toBe(true);
   });
 });

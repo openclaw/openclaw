@@ -11,7 +11,10 @@ async function createAgentDir() {
   return fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
 }
 
-function writeProfiles(agentDir: string, profiles: AuthProfileStore["profiles"]) {
+function writeProfiles(
+  agentDir: string,
+  profiles: AuthProfileStore["profiles"],
+) {
   saveAuthProfileStore(
     {
       version: 1,
@@ -23,7 +26,10 @@ function writeProfiles(agentDir: string, profiles: AuthProfileStore["profiles"])
 
 async function readAuthJson(agentDir: string) {
   const authPath = path.join(agentDir, "auth.json");
-  return JSON.parse(await fs.readFile(authPath, "utf8")) as Record<string, unknown>;
+  return JSON.parse(await fs.readFile(authPath, "utf8")) as Record<
+    string,
+    unknown
+  >;
 }
 
 describe("ensurePiAuthJsonFromAuthProfiles", () => {
@@ -124,9 +130,18 @@ describe("ensurePiAuthJsonFromAuthProfiles", () => {
 
     const auth = await readAuthJson(agentDir);
 
-    expect(auth["openrouter"]).toMatchObject({ type: "api_key", key: "sk-or-key" });
-    expect(auth["anthropic"]).toMatchObject({ type: "api_key", key: "sk-ant-token" });
-    expect(auth["openai-codex"]).toMatchObject({ type: "oauth", access: "access" });
+    expect(auth["openrouter"]).toMatchObject({
+      type: "api_key",
+      key: "sk-or-key",
+    });
+    expect(auth["anthropic"]).toMatchObject({
+      type: "api_key",
+      key: "sk-ant-token",
+    });
+    expect(auth["openai-codex"]).toMatchObject({
+      type: "oauth",
+      access: "access",
+    });
   });
 
   it("skips profiles with empty keys", async () => {
@@ -186,7 +201,9 @@ describe("ensurePiAuthJsonFromAuthProfiles", () => {
     await fs.mkdir(agentDir, { recursive: true });
     await fs.writeFile(
       authPath,
-      JSON.stringify({ "legacy-provider": { type: "api_key", key: "legacy-key" } }),
+      JSON.stringify({
+        "legacy-provider": { type: "api_key", key: "legacy-key" },
+      }),
     );
 
     writeProfiles(agentDir, {
@@ -200,7 +217,13 @@ describe("ensurePiAuthJsonFromAuthProfiles", () => {
     await ensurePiAuthJsonFromAuthProfiles(agentDir);
 
     const auth = await readAuthJson(agentDir);
-    expect(auth["legacy-provider"]).toMatchObject({ type: "api_key", key: "legacy-key" });
-    expect(auth["openrouter"]).toMatchObject({ type: "api_key", key: "new-key" });
+    expect(auth["legacy-provider"]).toMatchObject({
+      type: "api_key",
+      key: "legacy-key",
+    });
+    expect(auth["openrouter"]).toMatchObject({
+      type: "api_key",
+      key: "new-key",
+    });
   });
 });

@@ -14,7 +14,8 @@ const PAGE_SIZE = 50;
 const WORK_BATCH_SIZE = 500;
 const STATE_VERSION = 1;
 const STATE_FILE_NAME = "issue-labeler-state.json";
-const CONFIG_BASE_DIR = process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config");
+const CONFIG_BASE_DIR =
+  process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config");
 const STATE_FILE_PATH = join(CONFIG_BASE_DIR, "openclaw", STATE_FILE_NAME);
 
 const ISSUE_QUERY = `
@@ -268,12 +269,14 @@ function loadState(statePath: string): LoadedState {
   const parsed = JSON.parse(raw) as Partial<ScriptState>;
   const issues = Array.isArray(parsed.issues)
     ? parsed.issues.filter(
-        (value): value is number => typeof value === "number" && Number.isFinite(value),
+        (value): value is number =>
+          typeof value === "number" && Number.isFinite(value),
       )
     : [];
   const pullRequests = Array.isArray(parsed.pullRequests)
     ? parsed.pullRequests.filter(
-        (value): value is number => typeof value === "number" && Number.isFinite(value),
+        (value): value is number =>
+          typeof value === "number" && Number.isFinite(value),
       )
     : [];
 
@@ -295,7 +298,10 @@ function saveState(statePath: string, state: ScriptState): void {
   writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`);
 }
 
-function buildStateSnapshot(issueSet: Set<number>, pullRequestSet: Set<number>): ScriptState {
+function buildStateSnapshot(
+  issueSet: Set<number>,
+  pullRequestSet: Set<number>,
+): ScriptState {
   return {
     version: STATE_VERSION,
     issues: Array.from(issueSet).toSorted((a, b) => a - b),
@@ -362,7 +368,9 @@ function fetchIssuePage(repo: RepoInfo, after: string | null): IssuePage {
   const payload = JSON.parse(stdout) as IssueQueryResponse;
 
   if (payload.errors?.length) {
-    const message = payload.errors.map((error) => error.message ?? "Unknown error").join("; ");
+    const message = payload.errors
+      .map((error) => error.message ?? "Unknown error")
+      .join("; ");
     throw new Error(`GitHub API error: ${message}`);
   }
 
@@ -374,7 +382,10 @@ function fetchIssuePage(repo: RepoInfo, after: string | null): IssuePage {
   return issues;
 }
 
-function fetchPullRequestPage(repo: RepoInfo, after: string | null): PullRequestPage {
+function fetchPullRequestPage(
+  repo: RepoInfo,
+  after: string | null,
+): PullRequestPage {
   const args = [
     "api",
     "graphql",
@@ -396,7 +407,9 @@ function fetchPullRequestPage(repo: RepoInfo, after: string | null): PullRequest
   const payload = JSON.parse(stdout) as PullRequestQueryResponse;
 
   if (payload.errors?.length) {
-    const message = payload.errors.map((error) => error.message ?? "Unknown error").join("; ");
+    const message = payload.errors
+      .map((error) => error.message ?? "Unknown error")
+      .join("; ");
     throw new Error(`GitHub API error: ${message}`);
   }
 
@@ -471,7 +484,9 @@ function* fetchOpenIssueBatches(limit: number): Generator<IssueBatch> {
   }
 }
 
-function* fetchOpenPullRequestBatches(limit: number): Generator<PullRequestBatch> {
+function* fetchOpenPullRequestBatches(
+  limit: number,
+): Generator<PullRequestBatch> {
   const repo = resolveRepo();
   const results: PullRequest[] = [];
   let page = 1;
@@ -541,7 +556,10 @@ function truncateBody(body: string): string {
   return `${body.slice(0, MAX_BODY_CHARS)}\n\n[truncated]`;
 }
 
-function buildItemPrompt(item: LabelItem, kind: "issue" | "pull request"): string {
+function buildItemPrompt(
+  item: LabelItem,
+  kind: "issue" | "pull request",
+): string {
   const body = truncateBody(item.body?.trim() ?? "");
   return `Type: ${kind}\nTitle:\n${item.title.trim()}\n\nBody:\n${body}`;
 }
@@ -582,10 +600,15 @@ function fallbackCategory(issueText: string): "bug" | "enhancement" {
     "failure",
     "incorrect",
   ];
-  return bugSignals.some((signal) => lower.includes(signal)) ? "bug" : "enhancement";
+  return bugSignals.some((signal) => lower.includes(signal))
+    ? "bug"
+    : "enhancement";
 }
 
-function normalizeClassification(raw: unknown, issueText: string): Classification {
+function normalizeClassification(
+  raw: unknown,
+  issueText: string,
+): Classification {
   const fallback = fallbackCategory(issueText);
 
   if (!isRecord(raw)) {
@@ -593,7 +616,10 @@ function normalizeClassification(raw: unknown, issueText: string): Classificatio
   }
 
   const categoryRaw = raw.category;
-  const category = categoryRaw === "bug" || categoryRaw === "enhancement" ? categoryRaw : fallback;
+  const category =
+    categoryRaw === "bug" || categoryRaw === "enhancement"
+      ? categoryRaw
+      : fallback;
 
   const isSupport = raw.isSupport === true;
   const isSkillOnly = raw.isSkillOnly === true;
@@ -666,9 +692,12 @@ async function classifyItem(
     try {
       parsed = JSON.parse(rawText);
     } catch (error) {
-      throw new Error(`Failed to parse OpenAI response: ${String(error)} (raw: ${rawText})`, {
-        cause: error,
-      });
+      throw new Error(
+        `Failed to parse OpenAI response: ${String(error)} (raw: ${rawText})`,
+        {
+          cause: error,
+        },
+      );
     }
   }
 
@@ -694,7 +723,13 @@ function applyLabels(
 
   execFileSync(
     "gh",
-    [ghTarget, "edit", String(item.number), "--add-label", labelsToAdd.join(",")],
+    [
+      ghTarget,
+      "edit",
+      String(item.number),
+      "--add-label",
+      labelsToAdd.join(","),
+    ],
     { stdio: "inherit" },
   );
   return true;
@@ -712,7 +747,9 @@ async function main() {
   const { limit, dryRun, model } = parseArgs(process.argv.slice(2));
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
-    throw new Error("OPENAI_API_KEY is required to classify issues and pull requests.");
+    throw new Error(
+      "OPENAI_API_KEY is required to classify issues and pull requests.",
+    );
   }
 
   logHeader("OpenClaw Issue Label Audit");
@@ -758,22 +795,33 @@ async function main() {
     scannedCount += batch.issues.length;
     totalCount = batch.totalCount ?? totalCount;
 
-    const pendingIssues = batch.issues.filter((issue) => !issueState.has(issue.number));
+    const pendingIssues = batch.issues.filter(
+      (issue) => !issueState.has(issue.number),
+    );
     const skippedInBatch = batch.issues.length - pendingIssues.length;
     skippedCount += skippedInBatch;
 
     logHeader(`Issue Batch ${batch.batchIndex}`);
-    logInfo(`Fetched ${batch.issues.length} issues (${skippedInBatch} already processed).`);
-    logInfo(`Processing ${pendingIssues.length} issues (scanned so far: ${scannedCount}).`);
+    logInfo(
+      `Fetched ${batch.issues.length} issues (${skippedInBatch} already processed).`,
+    );
+    logInfo(
+      `Processing ${pendingIssues.length} issues (scanned so far: ${scannedCount}).`,
+    );
 
     for (const issue of pendingIssues) {
       // eslint-disable-next-line no-console
       console.log(`\n#${issue.number} — ${issue.title}`);
 
       const labels = new Set(issue.labels.map((label) => label.name));
-      logInfo(`Existing labels: ${Array.from(labels).toSorted().join(", ") || "none"}`);
+      logInfo(
+        `Existing labels: ${Array.from(labels).toSorted().join(", ") || "none"}`,
+      );
 
-      const classification = await classifyItem(issue, "issue", { apiKey, model });
+      const classification = await classifyItem(issue, "issue", {
+        apiKey,
+        model,
+      });
       logInfo(
         `Classification: category=${classification.category}, support=${classification.isSupport ? "yes" : "no"}, skill-only=${classification.isSkillOnly ? "yes" : "no"}.`,
       );
@@ -808,7 +856,10 @@ async function main() {
     }
 
     if (!dryRun && pendingIssues.length > 0) {
-      saveState(STATE_FILE_PATH, buildStateSnapshot(issueState, pullRequestState));
+      saveState(
+        STATE_FILE_PATH,
+        buildStateSnapshot(issueState, pullRequestState),
+      );
       logInfo("State checkpoint saved.");
     }
   }
@@ -831,7 +882,8 @@ async function main() {
     const pendingPullRequests = batch.pullRequests.filter(
       (pullRequest) => !pullRequestState.has(pullRequest.number),
     );
-    const skippedInBatch = batch.pullRequests.length - pendingPullRequests.length;
+    const skippedInBatch =
+      batch.pullRequests.length - pendingPullRequests.length;
     prSkippedCount += skippedInBatch;
 
     logHeader(`PR Batch ${batch.batchIndex}`);
@@ -847,7 +899,9 @@ async function main() {
       console.log(`\n#${pullRequest.number} — ${pullRequest.title}`);
 
       const labels = new Set(pullRequest.labels.map((label) => label.name));
-      logInfo(`Existing labels: ${Array.from(labels).toSorted().join(", ") || "none"}`);
+      logInfo(
+        `Existing labels: ${Array.from(labels).toSorted().join(", ") || "none"}`,
+      );
 
       if (labels.has(SKILL_LABEL)) {
         logInfo("Skill label already present; skipping classification.");
@@ -856,7 +910,10 @@ async function main() {
         continue;
       }
 
-      const classification = await classifyItem(pullRequest, "pull request", { apiKey, model });
+      const classification = await classifyItem(pullRequest, "pull request", {
+        apiKey,
+        model,
+      });
       logInfo(
         `Classification: category=${classification.category}, support=${classification.isSupport ? "yes" : "no"}, skill-only=${classification.isSkillOnly ? "yes" : "no"}.`,
       );
@@ -881,7 +938,10 @@ async function main() {
     }
 
     if (!dryRun && pendingPullRequests.length > 0) {
-      saveState(STATE_FILE_PATH, buildStateSnapshot(issueState, pullRequestState));
+      saveState(
+        STATE_FILE_PATH,
+        buildStateSnapshot(issueState, pullRequestState),
+      );
       logInfo("State checkpoint saved.");
     }
   }

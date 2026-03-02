@@ -17,7 +17,9 @@ export type DeliveryContextSessionSource = {
   deliveryContext?: DeliveryContext;
 };
 
-export function normalizeDeliveryContext(context?: DeliveryContext): DeliveryContext | undefined {
+export function normalizeDeliveryContext(
+  context?: DeliveryContext,
+): DeliveryContext | undefined {
   if (!context) {
     return undefined;
   }
@@ -49,7 +51,9 @@ export function normalizeDeliveryContext(context?: DeliveryContext): DeliveryCon
   return normalized;
 }
 
-export function normalizeSessionDeliveryFields(source?: DeliveryContextSessionSource): {
+export function normalizeSessionDeliveryFields(
+  source?: DeliveryContextSessionSource,
+): {
   deliveryContext?: DeliveryContext;
   lastChannel?: string;
   lastTo?: string;
@@ -96,7 +100,9 @@ export function normalizeSessionDeliveryFields(source?: DeliveryContextSessionSo
 }
 
 export function deliveryContextFromSession(
-  entry?: DeliveryContextSessionSource & { origin?: { threadId?: string | number } },
+  entry?: DeliveryContextSessionSource & {
+    origin?: { threadId?: string | number };
+  },
 ): DeliveryContext | undefined {
   if (!entry) {
     return undefined;
@@ -106,7 +112,10 @@ export function deliveryContextFromSession(
     lastChannel: entry.lastChannel,
     lastTo: entry.lastTo,
     lastAccountId: entry.lastAccountId,
-    lastThreadId: entry.lastThreadId ?? entry.deliveryContext?.threadId ?? entry.origin?.threadId,
+    lastThreadId:
+      entry.lastThreadId ??
+      entry.deliveryContext?.threadId ??
+      entry.origin?.threadId,
     deliveryContext: entry.deliveryContext,
   };
   return normalizeSessionDeliveryFields(source).deliveryContext;
@@ -129,12 +138,16 @@ export function mergeDeliveryContext(
   });
 }
 
-export function deliveryContextKey(context?: DeliveryContext): string | undefined {
+export function deliveryContextKey(
+  context?: DeliveryContext,
+): string | undefined {
   const normalized = normalizeDeliveryContext(context);
   if (!normalized?.channel || !normalized?.to) {
     return undefined;
   }
   const threadId =
-    normalized.threadId != null && normalized.threadId !== "" ? String(normalized.threadId) : "";
+    normalized.threadId != null && normalized.threadId !== ""
+      ? String(normalized.threadId)
+      : "";
   return `${normalized.channel}|${normalized.to}|${normalized.accountId ?? ""}|${threadId}`;
 }

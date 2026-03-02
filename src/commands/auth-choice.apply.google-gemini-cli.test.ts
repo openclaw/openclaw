@@ -2,7 +2,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { applyAuthChoiceGoogleGeminiCli } from "./auth-choice.apply.google-gemini-cli.js";
 import type { ApplyAuthChoiceParams } from "./auth-choice.apply.js";
 import { applyAuthChoicePluginProvider } from "./auth-choice.apply.plugin-provider.js";
-import { createExitThrowingRuntime, createWizardPrompter } from "./test-wizard-helpers.js";
+import {
+  createExitThrowingRuntime,
+  createWizardPrompter,
+} from "./test-wizard-helpers.js";
 
 vi.mock("./auth-choice.apply.plugin-provider.js", () => ({
   applyAuthChoicePluginProvider: vi.fn(),
@@ -23,14 +26,18 @@ function createParams(
 }
 
 describe("applyAuthChoiceGoogleGeminiCli", () => {
-  const mockedApplyAuthChoicePluginProvider = vi.mocked(applyAuthChoicePluginProvider);
+  const mockedApplyAuthChoicePluginProvider = vi.mocked(
+    applyAuthChoicePluginProvider,
+  );
 
   beforeEach(() => {
     mockedApplyAuthChoicePluginProvider.mockReset();
   });
 
   it("returns null for unrelated authChoice", async () => {
-    const result = await applyAuthChoiceGoogleGeminiCli(createParams("openrouter-api-key"));
+    const result = await applyAuthChoiceGoogleGeminiCli(
+      createParams("openrouter-api-key"),
+    );
 
     expect(result).toBeNull();
     expect(mockedApplyAuthChoicePluginProvider).not.toHaveBeenCalled();
@@ -48,7 +55,9 @@ describe("applyAuthChoiceGoogleGeminiCli", () => {
     expect(result).toEqual({ config: params.config });
     expect(note).toHaveBeenNthCalledWith(
       1,
-      expect.stringContaining("This is an unofficial integration and is not endorsed by Google."),
+      expect.stringContaining(
+        "This is an unofficial integration and is not endorsed by Google.",
+      ),
       "Google Gemini CLI caution",
     );
     expect(confirm).toHaveBeenCalledWith({

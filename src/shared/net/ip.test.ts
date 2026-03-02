@@ -42,7 +42,9 @@ describe("shared ip helpers", () => {
       if (!parsed || !isIpv6Address(parsed)) {
         continue;
       }
-      expect(extractEmbeddedIpv4FromIpv6(parsed)?.toString(), ipv6Literal).toBe(expectedIpv4);
+      expect(extractEmbeddedIpv4FromIpv6(parsed)?.toString(), ipv6Literal).toBe(
+        expectedIpv4,
+      );
     }
   });
 

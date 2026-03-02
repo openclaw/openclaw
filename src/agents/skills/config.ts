@@ -16,7 +16,10 @@ const DEFAULT_CONFIG_VALUES: Record<string, boolean> = {
 
 export { hasBinary, resolveConfigPath, resolveRuntimePlatform };
 
-export function isConfigPathTruthy(config: OpenClawConfig | undefined, pathStr: string): boolean {
+export function isConfigPathTruthy(
+  config: OpenClawConfig | undefined,
+  pathStr: string,
+): boolean {
   return isConfigPathTruthyWithDefaults(config, pathStr, DEFAULT_CONFIG_VALUES);
 }
 
@@ -52,11 +55,16 @@ function isBundledSkill(entry: SkillEntry): boolean {
   return BUNDLED_SOURCES.has(entry.skill.source);
 }
 
-export function resolveBundledAllowlist(config?: OpenClawConfig): string[] | undefined {
+export function resolveBundledAllowlist(
+  config?: OpenClawConfig,
+): string[] | undefined {
   return normalizeAllowlist(config?.skills?.allowBundled);
 }
 
-export function isBundledSkillAllowed(entry: SkillEntry, allowlist?: string[]): boolean {
+export function isBundledSkillAllowed(
+  entry: SkillEntry,
+  allowlist?: string[],
+): boolean {
   if (!allowlist || allowlist.length === 0) {
     return true;
   }

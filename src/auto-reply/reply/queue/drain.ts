@@ -15,23 +15,38 @@ import type { FollowupRun } from "./types.js";
 
 type OriginRoutingMetadata = Pick<
   FollowupRun,
-  "originatingChannel" | "originatingTo" | "originatingAccountId" | "originatingThreadId"
+  | "originatingChannel"
+  | "originatingTo"
+  | "originatingAccountId"
+  | "originatingThreadId"
 >;
 
-function resolveOriginRoutingMetadata(items: FollowupRun[]): OriginRoutingMetadata {
+function resolveOriginRoutingMetadata(
+  items: FollowupRun[],
+): OriginRoutingMetadata {
   return {
-    originatingChannel: items.find((item) => item.originatingChannel)?.originatingChannel,
+    originatingChannel: items.find((item) => item.originatingChannel)
+      ?.originatingChannel,
     originatingTo: items.find((item) => item.originatingTo)?.originatingTo,
-    originatingAccountId: items.find((item) => item.originatingAccountId)?.originatingAccountId,
+    originatingAccountId: items.find((item) => item.originatingAccountId)
+      ?.originatingAccountId,
     // Support both number (Telegram topic) and string (Slack thread_ts) thread IDs.
     originatingThreadId: items.find(
-      (item) => item.originatingThreadId != null && item.originatingThreadId !== "",
+      (item) =>
+        item.originatingThreadId != null && item.originatingThreadId !== "",
     )?.originatingThreadId,
   };
 }
 
-function resolveCrossChannelKey(item: FollowupRun): { cross?: true; key?: string } {
-  const { originatingChannel: channel, originatingTo: to, originatingAccountId: accountId } = item;
+function resolveCrossChannelKey(item: FollowupRun): {
+  cross?: true;
+  key?: string;
+} {
+  const {
+    originatingChannel: channel,
+    originatingTo: to,
+    originatingAccountId: accountId,
+  } = item;
   const threadId = item.originatingThreadId;
   if (!channel && !to && !accountId && (threadId == null || threadId === "")) {
     return {};
@@ -66,7 +81,10 @@ export function scheduleFollowupDrain(
           // Debug: `pnpm test src/auto-reply/reply/reply-flow.test.ts`
           // Check if messages span multiple channels.
           // If so, process individually to preserve per-message routing.
-          const isCrossChannel = hasCrossChannelItems(queue.items, resolveCrossChannelKey);
+          const isCrossChannel = hasCrossChannelItems(
+            queue.items,
+            resolveCrossChannelKey,
+          );
 
           const collectDrainResult = await drainCollectQueueStep({
             collectState,
@@ -82,7 +100,10 @@ export function scheduleFollowupDrain(
           }
 
           const items = queue.items.slice();
-          const summary = previewQueueSummaryPrompt({ state: queue, noun: "message" });
+          const summary = previewQueueSummaryPrompt({
+            state: queue,
+            noun: "message",
+          });
           const run = items.at(-1)?.run ?? queue.lastRun;
           if (!run) {
             break;
@@ -94,7 +115,8 @@ export function scheduleFollowupDrain(
             title: "[Queued messages while agent was busy]",
             items,
             summary,
-            renderItem: (item, idx) => `---\nQueued #${idx + 1}\n${item.prompt}`.trim(),
+            renderItem: (item, idx) =>
+              `---\nQueued #${idx + 1}\n${item.prompt}`.trim(),
           });
           await runFollowup({
             prompt,
@@ -109,7 +131,10 @@ export function scheduleFollowupDrain(
           continue;
         }
 
-        const summaryPrompt = previewQueueSummaryPrompt({ state: queue, noun: "message" });
+        const summaryPrompt = previewQueueSummaryPrompt({
+          state: queue,
+          noun: "message",
+        });
         if (summaryPrompt) {
           const run = queue.lastRun;
           if (!run) {
@@ -140,7 +165,9 @@ export function scheduleFollowupDrain(
       }
     } catch (err) {
       queue.lastEnqueuedAt = Date.now();
-      defaultRuntime.error?.(`followup queue drain failed for ${key}: ${String(err)}`);
+      defaultRuntime.error?.(
+        `followup queue drain failed for ${key}: ${String(err)}`,
+      );
     } finally {
       queue.draining = false;
       if (queue.items.length === 0 && queue.droppedCount === 0) {

@@ -16,11 +16,15 @@ vi.mock("../../../infra/system-events.js", () => {
 
 vi.mock("../../../pairing/pairing-store.js", () => {
   return {
-    readChannelAllowFromStore: (...args: unknown[]) => reactionAllowMock(...args),
+    readChannelAllowFromStore: (...args: unknown[]) =>
+      reactionAllowMock(...args),
   };
 });
 
-type ReactionHandler = (args: { event: Record<string, unknown>; body: unknown }) => Promise<void>;
+type ReactionHandler = (args: {
+  event: Record<string, unknown>;
+  body: unknown;
+}) => Promise<void>;
 
 type ReactionRunInput = {
   handler?: "added" | "removed";
@@ -52,9 +56,13 @@ function createReactionHandlers(params: {
 }) {
   const harness = createSlackSystemEventTestHarness(params.overrides);
   if (params.shouldDropMismatchedSlackEvent) {
-    harness.ctx.shouldDropMismatchedSlackEvent = params.shouldDropMismatchedSlackEvent;
+    harness.ctx.shouldDropMismatchedSlackEvent =
+      params.shouldDropMismatchedSlackEvent;
   }
-  registerSlackReactionEvents({ ctx: harness.ctx, trackEvent: params.trackEvent });
+  registerSlackReactionEvents({
+    ctx: harness.ctx,
+    trackEvent: params.trackEvent,
+  });
   return {
     added: harness.getHandler("reaction_added") as ReactionHandler | null,
     removed: harness.getHandler("reaction_removed") as ReactionHandler | null,
@@ -78,7 +86,11 @@ async function executeReactionCase(input: ReactionRunInput = {}) {
 }
 
 describe("registerSlackReactionEvents", () => {
-  const cases: Array<{ name: string; input: ReactionRunInput; expectedCalls: number }> = [
+  const cases: Array<{
+    name: string;
+    input: ReactionRunInput;
+    expectedCalls: number;
+  }> = [
     {
       name: "enqueues DM reaction system events when dmPolicy is open",
       input: { overrides: { dmPolicy: "open" } },

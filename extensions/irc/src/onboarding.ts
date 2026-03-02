@@ -9,13 +9,21 @@ import {
   type DmPolicy,
   type WizardPrompter,
 } from "openclaw/plugin-sdk";
-import { listIrcAccountIds, resolveDefaultIrcAccountId, resolveIrcAccount } from "./accounts.js";
+import {
+  listIrcAccountIds,
+  resolveDefaultIrcAccountId,
+  resolveIrcAccount,
+} from "./accounts.js";
 import {
   isChannelTarget,
   normalizeIrcAllowEntry,
   normalizeIrcMessagingTarget,
 } from "./normalize.js";
-import type { CoreConfig, IrcAccountConfig, IrcNickServConfig } from "./types.js";
+import type {
+  CoreConfig,
+  IrcAccountConfig,
+  IrcNickServConfig,
+} from "./types.js";
 
 const channel = "irc" as const;
 
@@ -91,7 +99,9 @@ function updateIrcAccountConfig(
 
 function setIrcDmPolicy(cfg: CoreConfig, dmPolicy: DmPolicy): CoreConfig {
   const allowFrom =
-    dmPolicy === "open" ? addWildcardAllowFrom(cfg.channels?.irc?.allowFrom) : undefined;
+    dmPolicy === "open"
+      ? addWildcardAllowFrom(cfg.channels?.irc?.allowFrom)
+      : undefined;
   return {
     ...cfg,
     channels: {
@@ -133,12 +143,19 @@ function setIrcGroupAccess(
   entries: string[],
 ): CoreConfig {
   if (policy !== "allowlist") {
-    return updateIrcAccountConfig(cfg, accountId, { enabled: true, groupPolicy: policy });
+    return updateIrcAccountConfig(cfg, accountId, {
+      enabled: true,
+      groupPolicy: policy,
+    });
   }
   const normalizedEntries = [
-    ...new Set(entries.map((entry) => normalizeGroupEntry(entry)).filter(Boolean)),
+    ...new Set(
+      entries.map((entry) => normalizeGroupEntry(entry)).filter(Boolean),
+    ),
   ];
-  const groups = Object.fromEntries(normalizedEntries.map((entry) => [entry, {}]));
+  const groups = Object.fromEntries(
+    normalizedEntries.map((entry) => [entry, {}]),
+  );
   return updateIrcAccountConfig(cfg, accountId, {
     enabled: true,
     groupPolicy: "allowlist",
@@ -203,11 +220,16 @@ async function promptIrcNickServConfig(params: {
   prompter: WizardPrompter;
   accountId: string;
 }): Promise<CoreConfig> {
-  const resolved = resolveIrcAccount({ cfg: params.cfg, accountId: params.accountId });
+  const resolved = resolveIrcAccount({
+    cfg: params.cfg,
+    accountId: params.accountId,
+  });
   const existing = resolved.config.nickserv;
   const hasExisting = Boolean(existing?.password || existing?.passwordFile);
   const wants = await params.prompter.confirm({
-    message: hasExisting ? "Update NickServ settings?" : "Configure NickServ identify/register?",
+    message: hasExisting
+      ? "Update NickServ settings?"
+      : "Configure NickServ identify/register?",
     initialValue: hasExisting,
   });
   if (!wants) {
@@ -218,7 +240,8 @@ async function promptIrcNickServConfig(params: {
     await params.prompter.text({
       message: "NickServ service nick",
       initialValue: existing?.service || "NickServ",
-      validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
+      validate: (value) =>
+        String(value ?? "").trim() ? undefined : "Required",
     }),
   ).trim();
 
@@ -261,7 +284,8 @@ async function promptIrcNickServConfig(params: {
             (params.accountId === DEFAULT_ACCOUNT_ID
               ? process.env.IRC_NICKSERV_REGISTER_EMAIL
               : undefined),
-          validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
+          validate: (value) =>
+            String(value ?? "").trim() ? undefined : "Required",
         }),
       ).trim()
     : undefined;
@@ -333,7 +357,12 @@ export const ircOnboardingAdapter: ChannelOnboardingAdapter = {
     }
 
     let useEnv = false;
-    if (envReady && isDefaultAccount && !resolved.config.host && !resolved.config.nick) {
+    if (
+      envReady &&
+      isDefaultAccount &&
+      !resolved.config.host &&
+      !resolved.config.nick
+    ) {
       useEnv = await prompter.confirm({
         message: "IRC_HOST and IRC_NICK detected. Use env vars?",
         initialValue: true,
@@ -347,7 +376,8 @@ export const ircOnboardingAdapter: ChannelOnboardingAdapter = {
         await prompter.text({
           message: "IRC server host",
           initialValue: resolved.config.host || envHost || undefined,
-          validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
+          validate: (value) =>
+            String(value ?? "").trim() ? undefined : "Required",
         }),
       ).trim();
 
@@ -372,7 +402,8 @@ export const ircOnboardingAdapter: ChannelOnboardingAdapter = {
         await prompter.text({
           message: "IRC nick",
           initialValue: resolved.config.nick || envNick || undefined,
-          validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
+          validate: (value) =>
+            String(value ?? "").trim() ? undefined : "Required",
         }),
       ).trim();
 
@@ -380,7 +411,8 @@ export const ircOnboardingAdapter: ChannelOnboardingAdapter = {
         await prompter.text({
           message: "IRC username",
           initialValue: resolved.config.username || nick || "openclaw",
-          validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
+          validate: (value) =>
+            String(value ?? "").trim() ? undefined : "Required",
         }),
       ).trim();
 
@@ -388,7 +420,8 @@ export const ircOnboardingAdapter: ChannelOnboardingAdapter = {
         await prompter.text({
           message: "IRC real name",
           initialValue: resolved.config.realname || "OpenClaw",
-          validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
+          validate: (value) =>
+            String(value ?? "").trim() ? undefined : "Required",
         }),
       ).trim();
 
@@ -428,7 +461,12 @@ export const ircOnboardingAdapter: ChannelOnboardingAdapter = {
       updatePrompt: Boolean(afterConfig.config.groups),
     });
     if (accessConfig) {
-      next = setIrcGroupAccess(next, accountId, accessConfig.policy, accessConfig.entries);
+      next = setIrcGroupAccess(
+        next,
+        accountId,
+        accessConfig.policy,
+        accessConfig.entries,
+      );
 
       // Mention gating: groups/channels are mention-gated by default. Make this explicit in onboarding.
       const wantsMentions = await prompter.confirm({
@@ -439,7 +477,10 @@ export const ircOnboardingAdapter: ChannelOnboardingAdapter = {
         const resolvedAfter = resolveIrcAccount({ cfg: next, accountId });
         const groups = resolvedAfter.config.groups ?? {};
         const patched = Object.fromEntries(
-          Object.entries(groups).map(([key, value]) => [key, { ...value, requireMention: false }]),
+          Object.entries(groups).map(([key, value]) => [
+            key,
+            { ...value, requireMention: false },
+          ]),
         );
         next = updateIrcAccountConfig(next, accountId, { groups: patched });
       }

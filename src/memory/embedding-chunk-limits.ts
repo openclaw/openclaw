@@ -1,4 +1,7 @@
-import { estimateUtf8Bytes, splitTextToUtf8ByteLimit } from "./embedding-input-limits.js";
+import {
+  estimateUtf8Bytes,
+  splitTextToUtf8ByteLimit,
+} from "./embedding-input-limits.js";
 import { resolveEmbeddingMaxInputTokens } from "./embedding-model-limits.js";
 import type { EmbeddingProvider } from "./embeddings.js";
 import { hashText, type MemoryChunk } from "./internal.js";

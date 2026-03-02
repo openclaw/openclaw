@@ -15,7 +15,9 @@ const NOW_MS = Date.UTC(2026, 1, 10, 0, 0, 0);
 const tempDirs: string[] = [];
 
 async function makeTempDir(): Promise<string> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-temporal-decay-"));
+  const dir = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-temporal-decay-"),
+  );
   tempDirs.push(dir);
   return dir;
 }
@@ -35,16 +37,18 @@ describe("temporal decay", () => {
     const lambda = Math.LN2 / halfLifeDays;
     const expectedMultiplier = Math.exp(-lambda * ageInDays);
 
-    expect(calculateTemporalDecayMultiplier({ ageInDays, halfLifeDays })).toBeCloseTo(
-      expectedMultiplier,
-    );
-    expect(applyTemporalDecayToScore({ score: 0.8, ageInDays, halfLifeDays })).toBeCloseTo(
-      0.8 * expectedMultiplier,
-    );
+    expect(
+      calculateTemporalDecayMultiplier({ ageInDays, halfLifeDays }),
+    ).toBeCloseTo(expectedMultiplier);
+    expect(
+      applyTemporalDecayToScore({ score: 0.8, ageInDays, halfLifeDays }),
+    ).toBeCloseTo(0.8 * expectedMultiplier);
   });
 
   it("is 0.5 exactly at half-life", () => {
-    expect(calculateTemporalDecayMultiplier({ ageInDays: 30, halfLifeDays: 30 })).toBeCloseTo(0.5);
+    expect(
+      calculateTemporalDecayMultiplier({ ageInDays: 30, halfLifeDays: 30 }),
+    ).toBeCloseTo(0.5);
   });
 
   it("does not decay evergreen memory files", async () => {
@@ -162,7 +166,9 @@ describe("temporal decay", () => {
     await fs.utimes(sessionPath, oldMtime, oldMtime);
 
     const decayed = await applyTemporalDecayToHybridResults({
-      results: [{ path: "sessions/thread.jsonl", score: 1, source: "sessions" }],
+      results: [
+        { path: "sessions/thread.jsonl", score: 1, source: "sessions" },
+      ],
       workspaceDir: dir,
       temporalDecay: { enabled: true, halfLifeDays: 30 },
       nowMs: NOW_MS,

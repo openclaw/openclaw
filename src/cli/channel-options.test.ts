@@ -7,7 +7,10 @@ const ensurePluginRegistryLoadedMock = vi.hoisted(() => vi.fn());
 
 vi.mock("node:fs", async () => {
   const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
-  const base = ("default" in actual ? actual.default : actual) as Record<string, unknown>;
+  const base = ("default" in actual ? actual.default : actual) as Record<
+    string,
+    unknown
+  >;
   return {
     ...actual,
     default: {
@@ -52,7 +55,11 @@ describe("resolveCliChannelOptions", () => {
     listCatalogMock.mockReturnValue([{ id: "catalog-only" }]);
 
     const mod = await loadModule();
-    expect(mod.resolveCliChannelOptions()).toEqual(["cached", "telegram", "catalog-only"]);
+    expect(mod.resolveCliChannelOptions()).toEqual([
+      "cached",
+      "telegram",
+      "catalog-only",
+    ]);
     expect(listCatalogMock).toHaveBeenCalledOnce();
   });
 
@@ -63,13 +70,19 @@ describe("resolveCliChannelOptions", () => {
     listCatalogMock.mockReturnValue([{ id: "feishu" }, { id: "telegram" }]);
 
     const mod = await loadModule();
-    expect(mod.resolveCliChannelOptions()).toEqual(["telegram", "discord", "feishu"]);
+    expect(mod.resolveCliChannelOptions()).toEqual([
+      "telegram",
+      "discord",
+      "feishu",
+    ]);
     expect(listCatalogMock).toHaveBeenCalledOnce();
   });
 
   it("respects eager mode and includes loaded plugin ids", async () => {
     process.env.OPENCLAW_EAGER_CHANNEL_OPTIONS = "1";
-    readFileSyncMock.mockReturnValue(JSON.stringify({ channelOptions: ["cached"] }));
+    readFileSyncMock.mockReturnValue(
+      JSON.stringify({ channelOptions: ["cached"] }),
+    );
     listCatalogMock.mockReturnValue([{ id: "zalo" }]);
     listPluginsMock.mockReturnValue([{ id: "custom-a" }, { id: "custom-b" }]);
 
@@ -87,11 +100,17 @@ describe("resolveCliChannelOptions", () => {
 
   it("keeps dynamic catalog resolution when external catalog env is set", async () => {
     process.env.OPENCLAW_PLUGIN_CATALOG_PATHS = "/tmp/plugins-catalog.json";
-    readFileSyncMock.mockReturnValue(JSON.stringify({ channelOptions: ["cached", "telegram"] }));
+    readFileSyncMock.mockReturnValue(
+      JSON.stringify({ channelOptions: ["cached", "telegram"] }),
+    );
     listCatalogMock.mockReturnValue([{ id: "custom-catalog" }]);
 
     const mod = await loadModule();
-    expect(mod.resolveCliChannelOptions()).toEqual(["cached", "telegram", "custom-catalog"]);
+    expect(mod.resolveCliChannelOptions()).toEqual([
+      "cached",
+      "telegram",
+      "custom-catalog",
+    ]);
     expect(listCatalogMock).toHaveBeenCalledOnce();
     delete process.env.OPENCLAW_PLUGIN_CATALOG_PATHS;
   });

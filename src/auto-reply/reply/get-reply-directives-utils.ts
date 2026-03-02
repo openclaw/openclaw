@@ -50,7 +50,9 @@ export function clearInlineDirectives(cleaned: string): InlineDirectives {
   };
 }
 
-export function clearExecInlineDirectives(directives: InlineDirectives): InlineDirectives {
+export function clearExecInlineDirectives(
+  directives: InlineDirectives,
+): InlineDirectives {
   return {
     ...directives,
     ...CLEARED_EXEC_FIELDS,

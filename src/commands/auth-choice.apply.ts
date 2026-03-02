@@ -35,7 +35,9 @@ export type ApplyAuthChoiceResult = {
 export async function applyAuthChoice(
   params: ApplyAuthChoiceParams,
 ): Promise<ApplyAuthChoiceResult> {
-  const handlers: Array<(p: ApplyAuthChoiceParams) => Promise<ApplyAuthChoiceResult | null>> = [
+  const handlers: Array<
+    (p: ApplyAuthChoiceParams) => Promise<ApplyAuthChoiceResult | null>
+  > = [
     applyAuthChoiceAnthropic,
     applyAuthChoiceVllm,
     applyAuthChoiceOpenAI,

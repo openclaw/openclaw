@@ -14,7 +14,9 @@ export function clearActiveProgressLine(): void {
   activeStream.write("\r\x1b[2K");
 }
 
-export function unregisterActiveProgressLine(stream?: NodeJS.WriteStream): void {
+export function unregisterActiveProgressLine(
+  stream?: NodeJS.WriteStream,
+): void {
   if (!activeStream) {
     return;
   }

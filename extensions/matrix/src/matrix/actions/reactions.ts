@@ -20,10 +20,14 @@ async function listReactionEvents(
   messageId: string,
   limit: number,
 ): Promise<MatrixRawEvent[]> {
-  const res = (await client.doRequest("GET", getReactionsPath(roomId, messageId), {
-    dir: "b",
-    limit,
-  })) as { chunk: MatrixRawEvent[] };
+  const res = (await client.doRequest(
+    "GET",
+    getReactionsPath(roomId, messageId),
+    {
+      dir: "b",
+      limit,
+    },
+  )) as { chunk: MatrixRawEvent[] };
   return res.chunk;
 }
 
@@ -36,7 +40,12 @@ export async function listMatrixReactions(
   try {
     const resolvedRoom = await resolveMatrixRoomId(client, roomId);
     const limit = resolveMatrixActionLimit(opts.limit, 100);
-    const chunk = await listReactionEvents(client, resolvedRoom, messageId, limit);
+    const chunk = await listReactionEvents(
+      client,
+      resolvedRoom,
+      messageId,
+      limit,
+    );
     const summaries = new Map<string, MatrixReactionSummary>();
     for (const event of chunk) {
       const content = event.content as ReactionEventContent;
@@ -72,7 +81,12 @@ export async function removeMatrixReactions(
   const { client, stopOnDone } = await resolveActionClient(opts);
   try {
     const resolvedRoom = await resolveMatrixRoomId(client, roomId);
-    const chunk = await listReactionEvents(client, resolvedRoom, messageId, 200);
+    const chunk = await listReactionEvents(
+      client,
+      resolvedRoom,
+      messageId,
+      200,
+    );
     const userId = await client.getUserId();
     if (!userId) {
       return { removed: 0 };
@@ -92,7 +106,9 @@ export async function removeMatrixReactions(
     if (toRemove.length === 0) {
       return { removed: 0 };
     }
-    await Promise.all(toRemove.map((id) => client.redactEvent(resolvedRoom, id)));
+    await Promise.all(
+      toRemove.map((id) => client.redactEvent(resolvedRoom, id)),
+    );
     return { removed: toRemove.length };
   } finally {
     if (stopOnDone) {

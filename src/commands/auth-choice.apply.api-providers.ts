@@ -1,6 +1,12 @@
-import { ensureAuthProfileStore, resolveAuthProfileOrder } from "../agents/auth-profiles.js";
+import {
+  ensureAuthProfileStore,
+  resolveAuthProfileOrder,
+} from "../agents/auth-profiles.js";
 import type { SecretInput } from "../config/types.secrets.js";
-import { normalizeApiKeyInput, validateApiKeyInput } from "./auth-choice.api-key.js";
+import {
+  normalizeApiKeyInput,
+  validateApiKeyInput,
+} from "./auth-choice.api-key.js";
 import {
   normalizeSecretInputModeInput,
   createAuthChoiceAgentModelNoter,
@@ -10,7 +16,10 @@ import {
   normalizeTokenProviderInput,
 } from "./auth-choice.apply-helpers.js";
 import { applyAuthChoiceHuggingface } from "./auth-choice.apply.huggingface.js";
-import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
+import type {
+  ApplyAuthChoiceParams,
+  ApplyAuthChoiceResult,
+} from "./auth-choice.apply.js";
 import { applyAuthChoiceOpenRouter } from "./auth-choice.apply.openrouter.js";
 import {
   applyGoogleGeminiModelDefault,
@@ -138,7 +147,9 @@ type SimpleApiKeyProviderFlow = {
   noteTitle?: string;
 };
 
-const SIMPLE_API_KEY_PROVIDER_FLOWS: Partial<Record<AuthChoice, SimpleApiKeyProviderFlow>> = {
+const SIMPLE_API_KEY_PROVIDER_FLOWS: Partial<
+  Record<AuthChoice, SimpleApiKeyProviderFlow>
+> = {
   "ai-gateway-api-key": {
     provider: "vercel-ai-gateway",
     profileId: "vercel-ai-gateway:default",
@@ -328,11 +339,20 @@ export async function applyAuthChoiceApiProviders(
   );
 
   let authChoice = params.authChoice;
-  const normalizedTokenProvider = normalizeTokenProviderInput(params.opts?.tokenProvider);
-  const requestedSecretInputMode = normalizeSecretInputModeInput(params.opts?.secretInputMode);
+  const normalizedTokenProvider = normalizeTokenProviderInput(
+    params.opts?.tokenProvider,
+  );
+  const requestedSecretInputMode = normalizeSecretInputModeInput(
+    params.opts?.secretInputMode,
+  );
   if (authChoice === "apiKey" && params.opts?.tokenProvider) {
-    if (normalizedTokenProvider !== "anthropic" && normalizedTokenProvider !== "openai") {
-      authChoice = API_KEY_TOKEN_PROVIDER_AUTH_CHOICE[normalizedTokenProvider ?? ""] ?? authChoice;
+    if (
+      normalizedTokenProvider !== "anthropic" &&
+      normalizedTokenProvider !== "openai"
+    ) {
+      authChoice =
+        API_KEY_TOKEN_PROVIDER_AUTH_CHOICE[normalizedTokenProvider ?? ""] ??
+        authChoice;
     }
   }
 
@@ -353,12 +373,17 @@ export async function applyAuthChoiceApiProviders(
     validate = validateApiKeyInput,
     noteDefault = defaultModel,
   }: {
-    provider: Parameters<typeof ensureApiKeyFromOptionEnvOrPrompt>[0]["provider"];
+    provider: Parameters<
+      typeof ensureApiKeyFromOptionEnvOrPrompt
+    >[0]["provider"];
     profileId: string;
     expectedProviders: string[];
     envLabel: string;
     promptMessage: string;
-    setCredential: (apiKey: SecretInput, mode?: SecretInputMode) => void | Promise<void>;
+    setCredential: (
+      apiKey: SecretInput,
+      mode?: SecretInputMode,
+    ) => void | Promise<void>;
     defaultModel: string;
     applyDefaultConfig: (
       config: ApplyAuthChoiceParams["config"],
@@ -412,12 +437,24 @@ export async function applyAuthChoiceApiProviders(
   }
 
   if (authChoice === "litellm-api-key") {
-    const store = ensureAuthProfileStore(params.agentDir, { allowKeychainPrompt: false });
-    const profileOrder = resolveAuthProfileOrder({ cfg: nextConfig, store, provider: "litellm" });
-    const existingProfileId = profileOrder.find((profileId) => Boolean(store.profiles[profileId]));
-    const existingCred = existingProfileId ? store.profiles[existingProfileId] : undefined;
+    const store = ensureAuthProfileStore(params.agentDir, {
+      allowKeychainPrompt: false,
+    });
+    const profileOrder = resolveAuthProfileOrder({
+      cfg: nextConfig,
+      store,
+      provider: "litellm",
+    });
+    const existingProfileId = profileOrder.find((profileId) =>
+      Boolean(store.profiles[profileId]),
+    );
+    const existingCred = existingProfileId
+      ? store.profiles[existingProfileId]
+      : undefined;
     let profileId = "litellm:default";
-    let hasCredential = Boolean(existingProfileId && existingCred?.type === "api_key");
+    let hasCredential = Boolean(
+      existingProfileId && existingCred?.type === "api_key",
+    );
     if (hasCredential && existingProfileId) {
       profileId = existingProfileId;
     }
@@ -492,14 +529,16 @@ export async function applyAuthChoiceApiProviders(
       if (!accountId) {
         const value = await params.prompter.text({
           message: "Enter Cloudflare Account ID",
-          validate: (val) => (String(val ?? "").trim() ? undefined : "Account ID is required"),
+          validate: (val) =>
+            String(val ?? "").trim() ? undefined : "Account ID is required",
         });
         accountId = String(value ?? "").trim();
       }
       if (!gatewayId) {
         const value = await params.prompter.text({
           message: "Enter Cloudflare AI Gateway ID",
-          validate: (val) => (String(val ?? "").trim() ? undefined : "Gateway ID is required"),
+          validate: (val) =>
+            String(val ?? "").trim() ? undefined : "Gateway ID is required",
         });
         gatewayId = String(value ?? "").trim();
       }
@@ -520,9 +559,15 @@ export async function applyAuthChoiceApiProviders(
       validate: validateApiKeyInput,
       prompter: params.prompter,
       setCredential: async (apiKey, mode) =>
-        setCloudflareAiGatewayConfig(accountId, gatewayId, apiKey, params.agentDir, {
-          secretInputMode: mode,
-        }),
+        setCloudflareAiGatewayConfig(
+          accountId,
+          gatewayId,
+          apiKey,
+          params.agentDir,
+          {
+            secretInputMode: mode,
+          },
+        ),
     });
 
     nextConfig = applyAuthProfileConfig(nextConfig, {
@@ -653,7 +698,9 @@ export async function applyAuthChoiceApiProviders(
       mode: "api_key",
     });
 
-    const defaultModel = modelIdOverride ? `zai/${modelIdOverride}` : ZAI_DEFAULT_MODEL_REF;
+    const defaultModel = modelIdOverride
+      ? `zai/${modelIdOverride}`
+      : ZAI_DEFAULT_MODEL_REF;
     await applyProviderDefaultModel({
       defaultModel,
       applyDefaultConfig: (config) =>

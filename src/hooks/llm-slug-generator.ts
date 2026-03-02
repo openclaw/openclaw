@@ -84,14 +84,18 @@ Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", 
 
     return null;
   } catch (err) {
-    const message = err instanceof Error ? (err.stack ?? err.message) : String(err);
+    const message =
+      err instanceof Error ? (err.stack ?? err.message) : String(err);
     log.error(`Failed to generate slug: ${message}`);
     return null;
   } finally {
     // Clean up temporary session file
     if (tempSessionFile) {
       try {
-        await fs.rm(path.dirname(tempSessionFile), { recursive: true, force: true });
+        await fs.rm(path.dirname(tempSessionFile), {
+          recursive: true,
+          force: true,
+        });
       } catch {
         // Ignore cleanup errors
       }

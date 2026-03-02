@@ -40,7 +40,11 @@ function buildMainSessionSystemEventJob(name: string): CronAddInput {
 function createIsolatedCronWithFinishedBarrier(params: {
   storePath: string;
   delivered?: boolean;
-  onFinished?: (evt: { jobId: string; delivered?: boolean; deliveryStatus?: string }) => void;
+  onFinished?: (evt: {
+    jobId: string;
+    delivered?: boolean;
+    deliveryStatus?: string;
+  }) => void;
 }) {
   const finished = createFinishedBarrier();
   const cron = new CronService({
@@ -52,7 +56,9 @@ function createIsolatedCronWithFinishedBarrier(params: {
     runIsolatedAgentJob: vi.fn(async () => ({
       status: "ok" as const,
       summary: "done",
-      ...(params.delivered === undefined ? {} : { delivered: params.delivered }),
+      ...(params.delivered === undefined
+        ? {}
+        : { delivered: params.delivered }),
     })),
     onEvent: (evt) => {
       if (evt.action === "finished") {
@@ -178,10 +184,11 @@ describe("CronService persists delivered status", () => {
 
   it("does not set lastDelivered for main session jobs", async () => {
     const store = await makeStorePath();
-    const { cron, enqueueSystemEvent, finished } = createStartedCronServiceWithFinishedBarrier({
-      storePath: store.storePath,
-      logger: noopLogger,
-    });
+    const { cron, enqueueSystemEvent, finished } =
+      createStartedCronServiceWithFinishedBarrier({
+        storePath: store.storePath,
+        logger: noopLogger,
+      });
 
     await cron.start();
     const { updated } = await runSingleJobAndReadState({
@@ -201,7 +208,9 @@ describe("CronService persists delivered status", () => {
 
   it("emits delivered in the finished event", async () => {
     const store = await makeStorePath();
-    let capturedEvent: { jobId: string; delivered?: boolean; deliveryStatus?: string } | undefined;
+    let capturedEvent:
+      | { jobId: string; delivered?: boolean; deliveryStatus?: string }
+      | undefined;
     const { cron, finished } = createIsolatedCronWithFinishedBarrier({
       storePath: store.storePath,
       delivered: true,

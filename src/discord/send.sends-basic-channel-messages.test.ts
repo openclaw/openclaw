@@ -1,4 +1,8 @@
-import { ChannelType, PermissionFlagsBits, Routes } from "discord-api-types/v10";
+import {
+  ChannelType,
+  PermissionFlagsBits,
+  Routes,
+} from "discord-api-types/v10";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   deleteMessageDiscord,
@@ -32,7 +36,10 @@ describe("sendMessageDiscord", () => {
     });
   }
 
-  async function sendChunkedReplyAndCollectBodies(params: { text: string; mediaUrl?: string }) {
+  async function sendChunkedReplyAndCollectBodies(params: {
+    text: string;
+    mediaUrl?: string;
+  }) {
     const { rest, postMock } = makeDiscordRest();
     postMock.mockResolvedValue({ id: "msg1", channel_id: "789" });
     await sendMessageDiscord("channel:789", params.text, {
@@ -43,8 +50,12 @@ describe("sendMessageDiscord", () => {
     });
     expect(postMock).toHaveBeenCalledTimes(2);
     return {
-      firstBody: postMock.mock.calls[0]?.[1]?.body as { message_reference?: unknown } | undefined,
-      secondBody: postMock.mock.calls[1]?.[1]?.body as { message_reference?: unknown } | undefined,
+      firstBody: postMock.mock.calls[0]?.[1]?.body as
+        | { message_reference?: unknown }
+        | undefined,
+      secondBody: postMock.mock.calls[1]?.[1]?.body as
+        | { message_reference?: unknown }
+        | undefined,
     };
   }
 
@@ -91,10 +102,14 @@ describe("sendMessageDiscord", () => {
       id: "thread1",
       message: { id: "starter1", channel_id: "thread1" },
     });
-    const res = await sendMessageDiscord("channel:forum1", "Discussion topic\nBody of the post", {
-      rest,
-      token: "t",
-    });
+    const res = await sendMessageDiscord(
+      "channel:forum1",
+      "Discussion topic\nBody of the post",
+      {
+        rest,
+        token: "t",
+      },
+    );
     expect(res).toEqual({ messageId: "starter1", channelId: "thread1" });
     // Should POST to threads route, not channelMessages.
     expect(postMock).toHaveBeenCalledWith(
@@ -109,7 +124,10 @@ describe("sendMessageDiscord", () => {
   });
 
   it("posts media as a follow-up message in forum channels", async () => {
-    const { rest, postMock } = setupForumSend({ id: "media1", channel_id: "thread1" });
+    const { rest, postMock } = setupForumSend({
+      id: "media1",
+      channel_id: "thread1",
+    });
     const res = await sendMessageDiscord("channel:forum1", "Topic", {
       rest,
       token: "t",
@@ -138,7 +156,10 @@ describe("sendMessageDiscord", () => {
   });
 
   it("chunks long forum posts into follow-up messages", async () => {
-    const { rest, postMock } = setupForumSend({ id: "msg2", channel_id: "thread1" });
+    const { rest, postMock } = setupForumSend({
+      id: "msg2",
+      channel_id: "thread1",
+    });
     const longText = "a".repeat(2001);
     await sendMessageDiscord("channel:forum1", longText, {
       rest,
@@ -147,7 +168,9 @@ describe("sendMessageDiscord", () => {
     const firstBody = postMock.mock.calls[0]?.[1]?.body as {
       message?: { content?: string };
     };
-    const secondBody = postMock.mock.calls[1]?.[1]?.body as { content?: string };
+    const secondBody = postMock.mock.calls[1]?.[1]?.body as {
+      content?: string;
+    };
     expect(firstBody?.message?.content).toHaveLength(2000);
     expect(secondBody?.content).toBe("a");
   });
@@ -386,7 +409,9 @@ describe("fetchReactionsDiscord", () => {
           { count: 1, emoji: { name: "party_blob", id: "123" } },
         ],
       })
-      .mockResolvedValueOnce([{ id: "u1", username: "alpha", discriminator: "0001" }])
+      .mockResolvedValueOnce([
+        { id: "u1", username: "alpha", discriminator: "0001" },
+      ])
       .mockResolvedValueOnce([{ id: "u2", username: "beta" }]);
     const res = await fetchReactionsDiscord("chan1", "msg1", {
       rest,
@@ -414,7 +439,8 @@ describe("fetchChannelPermissionsDiscord", () => {
 
   it("calculates permissions from guild roles", async () => {
     const { rest, getMock } = makeDiscordRest();
-    const perms = PermissionFlagsBits.ViewChannel | PermissionFlagsBits.SendMessages;
+    const perms =
+      PermissionFlagsBits.ViewChannel | PermissionFlagsBits.SendMessages;
     getMock
       .mockResolvedValueOnce({
         id: "chan1",
@@ -457,7 +483,12 @@ describe("fetchChannelPermissionsDiscord", () => {
       .mockResolvedValueOnce({ id: "bot1" })
       .mockResolvedValueOnce({
         id: "guild1",
-        roles: [{ id: "guild1", permissions: PermissionFlagsBits.Administrator.toString() }],
+        roles: [
+          {
+            id: "guild1",
+            permissions: PermissionFlagsBits.Administrator.toString(),
+          },
+        ],
       })
       .mockResolvedValueOnce({ roles: [] });
     const res = await fetchChannelPermissionsDiscord("chan1", {
@@ -477,7 +508,11 @@ describe("readMessagesDiscord", () => {
   it("passes query params as an object", async () => {
     const { rest, getMock } = makeDiscordRest();
     getMock.mockResolvedValue([]);
-    await readMessagesDiscord("chan1", { limit: 5, before: "10" }, { rest, token: "t" });
+    await readMessagesDiscord(
+      "chan1",
+      { limit: 5, before: "10" },
+      { rest, token: "t" },
+    );
     const call = getMock.mock.calls[0];
     const options = call?.[1] as Record<string, unknown>;
     expect(options).toEqual({ limit: 5, before: "10" });
@@ -492,7 +527,12 @@ describe("edit/delete message helpers", () => {
   it("edits message content", async () => {
     const { rest, patchMock } = makeDiscordRest();
     patchMock.mockResolvedValue({ id: "m1" });
-    await editMessageDiscord("chan1", "m1", { content: "hello" }, { rest, token: "t" });
+    await editMessageDiscord(
+      "chan1",
+      "m1",
+      { content: "hello" },
+      { rest, token: "t" },
+    );
     expect(patchMock).toHaveBeenCalledWith(
       Routes.channelMessage("chan1", "m1"),
       expect.objectContaining({ body: { content: "hello" } }),
@@ -503,7 +543,9 @@ describe("edit/delete message helpers", () => {
     const { rest, deleteMock } = makeDiscordRest();
     deleteMock.mockResolvedValue({});
     await deleteMessageDiscord("chan1", "m1", { rest, token: "t" });
-    expect(deleteMock).toHaveBeenCalledWith(Routes.channelMessage("chan1", "m1"));
+    expect(deleteMock).toHaveBeenCalledWith(
+      Routes.channelMessage("chan1", "m1"),
+    );
   });
 });
 

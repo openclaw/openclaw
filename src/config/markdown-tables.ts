@@ -48,14 +48,20 @@ export function resolveMarkdownTableMode(params: {
   accountId?: string | null;
 }): MarkdownTableMode {
   const channel = normalizeChannelId(params.channel);
-  const defaultMode = channel ? (DEFAULT_TABLE_MODES.get(channel) ?? "code") : "code";
+  const defaultMode = channel
+    ? (DEFAULT_TABLE_MODES.get(channel) ?? "code")
+    : "code";
   if (!channel || !params.cfg) {
     return defaultMode;
   }
-  const channelsConfig = params.cfg.channels as Record<string, unknown> | undefined;
+  const channelsConfig = params.cfg.channels as
+    | Record<string, unknown>
+    | undefined;
   const section = (channelsConfig?.[channel] ??
     (params.cfg as Record<string, unknown> | undefined)?.[channel]) as
     | MarkdownConfigSection
     | undefined;
-  return resolveMarkdownModeFromSection(section, params.accountId) ?? defaultMode;
+  return (
+    resolveMarkdownModeFromSection(section, params.accountId) ?? defaultMode
+  );
 }

@@ -34,7 +34,9 @@ export const WEBHOOK_ANOMALY_COUNTER_DEFAULTS = Object.freeze({
   logEvery: 25,
 });
 
-export const WEBHOOK_ANOMALY_STATUS_CODES = Object.freeze([400, 401, 408, 413, 415, 429]);
+export const WEBHOOK_ANOMALY_STATUS_CODES = Object.freeze([
+  400, 401, 408, 413, 415, 429,
+]);
 
 export type WebhookAnomalyTracker = {
   record: (params: {
@@ -57,7 +59,10 @@ export function createFixedWindowRateLimiter(options: {
   const windowMs = Math.max(1, Math.floor(options.windowMs));
   const maxRequests = Math.max(1, Math.floor(options.maxRequests));
   const maxTrackedKeys = Math.max(1, Math.floor(options.maxTrackedKeys));
-  const pruneIntervalMs = Math.max(1, Math.floor(options.pruneIntervalMs ?? windowMs));
+  const pruneIntervalMs = Math.max(
+    1,
+    Math.floor(options.pruneIntervalMs ?? windowMs),
+  );
   const state = new Map<string, FixedWindowState>();
   let lastPruneMs = 0;
 
@@ -147,7 +152,8 @@ export function createBoundedCounter(options: {
       }
 
       const existing = counters.get(key);
-      const baseCount = existing && !isExpired(existing, nowMs) ? existing.count : 0;
+      const baseCount =
+        existing && !isExpired(existing, nowMs) ? existing.count : 0;
       const nextCount = baseCount + 1;
       touch(key, { count: nextCount, updatedAtMs: nowMs });
       pruneMapToMaxSize(counters, maxTrackedKeys);
@@ -169,14 +175,22 @@ export function createWebhookAnomalyTracker(options?: {
 }): WebhookAnomalyTracker {
   const maxTrackedKeys = Math.max(
     1,
-    Math.floor(options?.maxTrackedKeys ?? WEBHOOK_ANOMALY_COUNTER_DEFAULTS.maxTrackedKeys),
+    Math.floor(
+      options?.maxTrackedKeys ??
+        WEBHOOK_ANOMALY_COUNTER_DEFAULTS.maxTrackedKeys,
+    ),
   );
-  const ttlMs = Math.max(0, Math.floor(options?.ttlMs ?? WEBHOOK_ANOMALY_COUNTER_DEFAULTS.ttlMs));
+  const ttlMs = Math.max(
+    0,
+    Math.floor(options?.ttlMs ?? WEBHOOK_ANOMALY_COUNTER_DEFAULTS.ttlMs),
+  );
   const logEvery = Math.max(
     1,
     Math.floor(options?.logEvery ?? WEBHOOK_ANOMALY_COUNTER_DEFAULTS.logEvery),
   );
-  const trackedStatusCodes = new Set(options?.trackedStatusCodes ?? WEBHOOK_ANOMALY_STATUS_CODES);
+  const trackedStatusCodes = new Set(
+    options?.trackedStatusCodes ?? WEBHOOK_ANOMALY_STATUS_CODES,
+  );
   const counter = createBoundedCounter({ maxTrackedKeys, ttlMs });
 
   return {

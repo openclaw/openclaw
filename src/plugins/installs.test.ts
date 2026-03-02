@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { buildNpmResolutionInstallFields, recordPluginInstall } from "./installs.js";
+import {
+  buildNpmResolutionInstallFields,
+  recordPluginInstall,
+} from "./installs.js";
 
 describe("buildNpmResolutionInstallFields", () => {
   it("maps npm resolution metadata into install record fields", () => {
@@ -35,7 +38,10 @@ describe("buildNpmResolutionInstallFields", () => {
 
 describe("recordPluginInstall", () => {
   it("stores install metadata for the plugin id", () => {
-    const next = recordPluginInstall({}, { pluginId: "demo", source: "npm", spec: "demo@latest" });
+    const next = recordPluginInstall(
+      {},
+      { pluginId: "demo", source: "npm", spec: "demo@latest" },
+    );
     expect(next.plugins?.installs?.demo).toMatchObject({
       source: "npm",
       spec: "demo@latest",

@@ -37,7 +37,9 @@ export function getBrowserControlServerBaseUrl(): string {
   return `http://127.0.0.1:${state.testPort}`;
 }
 
-export function restoreGatewayPortEnv(prevGatewayPort: string | undefined): void {
+export function restoreGatewayPortEnv(
+  prevGatewayPort: string | undefined,
+): void {
   if (prevGatewayPort === undefined) {
     delete process.env.OPENCLAW_GATEWAY_PORT;
     return;
@@ -45,7 +47,9 @@ export function restoreGatewayPortEnv(prevGatewayPort: string | undefined): void
   process.env.OPENCLAW_GATEWAY_PORT = prevGatewayPort;
 }
 
-export function setBrowserControlServerCreateTargetId(targetId: string | null): void {
+export function setBrowserControlServerCreateTargetId(
+  targetId: string | null,
+): void {
   state.createTargetId = targetId;
 }
 
@@ -70,8 +74,14 @@ const cdpMocks = vi.hoisted(() => ({
   })),
 }));
 
-export function getCdpMocks(): { createTargetViaCdp: MockFn; snapshotAria: MockFn } {
-  return cdpMocks as unknown as { createTargetViaCdp: MockFn; snapshotAria: MockFn };
+export function getCdpMocks(): {
+  createTargetViaCdp: MockFn;
+  snapshotAria: MockFn;
+} {
+  return cdpMocks as unknown as {
+    createTargetViaCdp: MockFn;
+    snapshotAria: MockFn;
+  };
 }
 
 const pwMocks = vi.hoisted(() => ({
@@ -177,18 +187,20 @@ export function getLaunchCalls() {
 vi.mock("./chrome.js", () => ({
   isChromeCdpReady: vi.fn(async () => state.reachable),
   isChromeReachable: vi.fn(async () => state.reachable),
-  launchOpenClawChrome: vi.fn(async (_resolved: unknown, profile: { cdpPort: number }) => {
-    launchCalls.push({ port: profile.cdpPort });
-    state.reachable = true;
-    return {
-      pid: 123,
-      exe: { kind: "chrome", path: "/fake/chrome" },
-      userDataDir: chromeUserDataDir.dir,
-      cdpPort: profile.cdpPort,
-      startedAt: Date.now(),
-      proc,
-    };
-  }),
+  launchOpenClawChrome: vi.fn(
+    async (_resolved: unknown, profile: { cdpPort: number }) => {
+      launchCalls.push({ port: profile.cdpPort });
+      state.reachable = true;
+      return {
+        pid: 123,
+        exe: { kind: "chrome", path: "/fake/chrome" },
+        userDataDir: chromeUserDataDir.dir,
+        cdpPort: profile.cdpPort,
+        startedAt: Date.now(),
+        proc,
+      };
+    },
+  ),
   resolveOpenClawUserDataDir: vi.fn(() => chromeUserDataDir.dir),
   stopOpenClawChrome: vi.fn(async () => {
     state.reachable = false;
@@ -224,7 +236,8 @@ vi.mock("./screenshot.js", () => ({
 }));
 
 const server = await import("./server.js");
-export const startBrowserControlServerFromConfig = server.startBrowserControlServerFromConfig;
+export const startBrowserControlServerFromConfig =
+  server.startBrowserControlServerFromConfig;
 export const stopBrowserControlServer = server.stopBrowserControlServer;
 
 export function makeResponse(

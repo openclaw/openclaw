@@ -1,5 +1,8 @@
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
-import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
+import {
+  getChannelPlugin,
+  normalizeChannelId,
+} from "../channels/plugins/index.js";
 import { loadConfig, type OpenClawConfig } from "../config/config.js";
 import { setVerbose } from "../globals.js";
 import { resolveMessageChannelSelection } from "../infra/outbound/channel-selection.js";
@@ -29,7 +32,9 @@ async function resolveChannelPluginForMode(
   }
   const plugin = getChannelPlugin(channelId);
   const supportsMode =
-    mode === "login" ? Boolean(plugin?.auth?.login) : Boolean(plugin?.gateway?.logoutAccount);
+    mode === "login"
+      ? Boolean(plugin?.auth?.login)
+      : Boolean(plugin?.gateway?.logoutAccount);
   if (!supportsMode) {
     throw new Error(`Channel ${channelId} does not support ${mode}`);
   }
@@ -41,7 +46,8 @@ function resolveAccountContext(
   opts: ChannelAuthOptions,
   cfg: OpenClawConfig,
 ) {
-  const accountId = opts.account?.trim() || resolveChannelDefaultAccountId({ plugin, cfg });
+  const accountId =
+    opts.account?.trim() || resolveChannelDefaultAccountId({ plugin, cfg });
   return { accountId };
 }
 
@@ -50,7 +56,11 @@ export async function runChannelLogin(
   runtime: RuntimeEnv = defaultRuntime,
 ) {
   const cfg = loadConfig();
-  const { channelInput, plugin } = await resolveChannelPluginForMode(opts, "login", cfg);
+  const { channelInput, plugin } = await resolveChannelPluginForMode(
+    opts,
+    "login",
+    cfg,
+  );
   const login = plugin.auth?.login;
   if (!login) {
     throw new Error(`Channel ${channelInput} does not support login`);
@@ -72,7 +82,11 @@ export async function runChannelLogout(
   runtime: RuntimeEnv = defaultRuntime,
 ) {
   const cfg = loadConfig();
-  const { channelInput, plugin } = await resolveChannelPluginForMode(opts, "logout", cfg);
+  const { channelInput, plugin } = await resolveChannelPluginForMode(
+    opts,
+    "logout",
+    cfg,
+  );
   const logoutAccount = plugin.gateway?.logoutAccount;
   if (!logoutAccount) {
     throw new Error(`Channel ${channelInput} does not support logout`);

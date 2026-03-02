@@ -14,7 +14,8 @@ let requestExecApprovalDecision: typeof import("./bash-tools.exec-approval-reque
 describe("requestExecApprovalDecision", () => {
   beforeAll(async () => {
     ({ callGatewayTool } = await import("./tools/gateway.js"));
-    ({ requestExecApprovalDecision } = await import("./bash-tools.exec-approval-request.js"));
+    ({ requestExecApprovalDecision } =
+      await import("./bash-tools.exec-approval-request.js"));
   });
 
   beforeEach(() => {
@@ -80,7 +81,11 @@ describe("requestExecApprovalDecision", () => {
 
   it("returns null for missing or non-string decisions", async () => {
     vi.mocked(callGatewayTool)
-      .mockResolvedValueOnce({ status: "accepted", id: "approval-id", expiresAtMs: 1234 })
+      .mockResolvedValueOnce({
+        status: "accepted",
+        id: "approval-id",
+        expiresAtMs: 1234,
+      })
       .mockResolvedValueOnce({});
     await expect(
       requestExecApprovalDecision({
@@ -95,7 +100,11 @@ describe("requestExecApprovalDecision", () => {
     ).resolves.toBeNull();
 
     vi.mocked(callGatewayTool)
-      .mockResolvedValueOnce({ status: "accepted", id: "approval-id-2", expiresAtMs: 1234 })
+      .mockResolvedValueOnce({
+        status: "accepted",
+        id: "approval-id-2",
+        expiresAtMs: 1234,
+      })
       .mockResolvedValueOnce({ decision: 123 });
     await expect(
       requestExecApprovalDecision({
@@ -160,7 +169,10 @@ describe("requestExecApprovalDecision", () => {
   });
 
   it("returns final decision directly when gateway already replies with decision", async () => {
-    vi.mocked(callGatewayTool).mockResolvedValue({ decision: "deny", id: "approval-id" });
+    vi.mocked(callGatewayTool).mockResolvedValue({
+      decision: "deny",
+      id: "approval-id",
+    });
 
     const result = await requestExecApprovalDecision({
       id: "approval-id",

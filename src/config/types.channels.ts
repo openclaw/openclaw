@@ -24,7 +24,10 @@ export type ChannelDefaultsConfig = {
   heartbeat?: ChannelHeartbeatVisibilityConfig;
 };
 
-export type ChannelModelByChannelConfig = Record<string, Record<string, string>>;
+export type ChannelModelByChannelConfig = Record<
+  string,
+  Record<string, string>
+>;
 
 /**
  * Base type for extension channel config sections.

@@ -31,7 +31,12 @@ export async function runEmbeddingBatchGroups<TRequest>(params: {
   const groups = splitBatchRequests(params.requests, params.maxRequests);
   const byCustomId = new Map<string, number[]>();
   const tasks = groups.map((group, groupIndex) => async () => {
-    await params.runGroup({ group, groupIndex, groups: groups.length, byCustomId });
+    await params.runGroup({
+      group,
+      groupIndex,
+      groups: groups.length,
+      byCustomId,
+    });
   });
 
   params.debug?.(params.debugLabel, {

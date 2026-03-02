@@ -35,7 +35,10 @@ function normalizeMentionPatterns(patterns: string[]): string[] {
   return patterns.map(normalizeMentionPattern);
 }
 
-function resolveMentionPatterns(cfg: OpenClawConfig | undefined, agentId?: string): string[] {
+function resolveMentionPatterns(
+  cfg: OpenClawConfig | undefined,
+  agentId?: string,
+): string[] {
   if (!cfg) {
     return [];
   }
@@ -52,8 +55,13 @@ function resolveMentionPatterns(cfg: OpenClawConfig | undefined, agentId?: strin
   return derived.length > 0 ? derived : [];
 }
 
-export function buildMentionRegexes(cfg: OpenClawConfig | undefined, agentId?: string): RegExp[] {
-  const patterns = normalizeMentionPatterns(resolveMentionPatterns(cfg, agentId));
+export function buildMentionRegexes(
+  cfg: OpenClawConfig | undefined,
+  agentId?: string,
+): RegExp[] {
+  const patterns = normalizeMentionPatterns(
+    resolveMentionPatterns(cfg, agentId),
+  );
   return patterns
     .map((pattern) => {
       try {
@@ -66,10 +74,15 @@ export function buildMentionRegexes(cfg: OpenClawConfig | undefined, agentId?: s
 }
 
 export function normalizeMentionText(text: string): string {
-  return (text ?? "").replace(/[\u200b-\u200f\u202a-\u202e\u2060-\u206f]/g, "").toLowerCase();
+  return (text ?? "")
+    .replace(/[\u200b-\u200f\u202a-\u202e\u2060-\u206f]/g, "")
+    .toLowerCase();
 }
 
-export function matchesMentionPatterns(text: string, mentionRegexes: RegExp[]): boolean {
+export function matchesMentionPatterns(
+  text: string,
+  mentionRegexes: RegExp[],
+): boolean {
   if (mentionRegexes.length === 0) {
     return false;
   }
@@ -98,7 +111,9 @@ export function matchesMentionWithExplicit(params: {
   const hasAnyMention = params.explicit?.hasAnyMention === true;
 
   // Check transcript if text is empty and transcript is provided
-  const transcriptCleaned = params.transcript ? normalizeMentionText(params.transcript) : "";
+  const transcriptCleaned = params.transcript
+    ? normalizeMentionText(params.transcript)
+    : "";
   const textToCheck = cleaned || transcriptCleaned;
 
   if (hasAnyMention && explicitAvailable) {
@@ -114,7 +129,11 @@ export function stripStructuralPrefixes(text: string): string {
   // Ignore wrapper labels, timestamps, and sender prefixes so directive-only
   // detection still works in group batches that include history/context.
   const afterMarker = text.includes(CURRENT_MESSAGE_MARKER)
-    ? text.slice(text.indexOf(CURRENT_MESSAGE_MARKER) + CURRENT_MESSAGE_MARKER.length).trimStart()
+    ? text
+        .slice(
+          text.indexOf(CURRENT_MESSAGE_MARKER) + CURRENT_MESSAGE_MARKER.length,
+        )
+        .trimStart()
     : text;
 
   return afterMarker
@@ -133,7 +152,9 @@ export function stripMentions(
 ): string {
   let result = text;
   const providerId = ctx.Provider ? normalizeChannelId(ctx.Provider) : null;
-  const providerMentions = providerId ? getChannelDock(providerId)?.mentions : undefined;
+  const providerMentions = providerId
+    ? getChannelDock(providerId)?.mentions
+    : undefined;
   const patterns = normalizeMentionPatterns([
     ...resolveMentionPatterns(cfg, agentId),
     ...(providerMentions?.stripPatterns?.({ ctx, cfg, agentId }) ?? []),

@@ -4,7 +4,9 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createConfigIO } from "./io.js";
 
-async function withTempHome(run: (home: string) => Promise<void>): Promise<void> {
+async function withTempHome(
+  run: (home: string) => Promise<void>,
+): Promise<void> {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-config-"));
   try {
     await run(home);
@@ -22,11 +24,17 @@ async function writeConfig(
   const dir = path.join(home, dirname);
   await fs.mkdir(dir, { recursive: true });
   const configPath = path.join(dir, filename);
-  await fs.writeFile(configPath, JSON.stringify({ gateway: { port } }, null, 2));
+  await fs.writeFile(
+    configPath,
+    JSON.stringify({ gateway: { port } }, null, 2),
+  );
   return configPath;
 }
 
-function createIoForHome(home: string, env: NodeJS.ProcessEnv = {} as NodeJS.ProcessEnv) {
+function createIoForHome(
+  home: string,
+  env: NodeJS.ProcessEnv = {} as NodeJS.ProcessEnv,
+) {
   return createConfigIO({
     env,
     homedir: () => home,
@@ -53,17 +61,28 @@ describe("config io paths", () => {
   it("uses OPENCLAW_HOME for default config path", async () => {
     await withTempHome(async (home) => {
       const io = createConfigIO({
-        env: { OPENCLAW_HOME: path.join(home, "svc-home") } as NodeJS.ProcessEnv,
+        env: {
+          OPENCLAW_HOME: path.join(home, "svc-home"),
+        } as NodeJS.ProcessEnv,
         homedir: () => path.join(home, "ignored-home"),
       });
-      expect(io.configPath).toBe(path.join(home, "svc-home", ".openclaw", "openclaw.json"));
+      expect(io.configPath).toBe(
+        path.join(home, "svc-home", ".openclaw", "openclaw.json"),
+      );
     });
   });
 
   it("honors explicit OPENCLAW_CONFIG_PATH override", async () => {
     await withTempHome(async (home) => {
-      const customPath = await writeConfig(home, ".openclaw", 20002, "custom.json");
-      const io = createIoForHome(home, { OPENCLAW_CONFIG_PATH: customPath } as NodeJS.ProcessEnv);
+      const customPath = await writeConfig(
+        home,
+        ".openclaw",
+        20002,
+        "custom.json",
+      );
+      const io = createIoForHome(home, {
+        OPENCLAW_CONFIG_PATH: customPath,
+      } as NodeJS.ProcessEnv);
       expect(io.configPath).toBe(customPath);
       expect(io.loadConfig().gateway?.port).toBe(20002);
     });
@@ -71,8 +90,15 @@ describe("config io paths", () => {
 
   it("honors legacy CLAWDBOT_CONFIG_PATH override", async () => {
     await withTempHome(async (home) => {
-      const customPath = await writeConfig(home, ".openclaw", 20003, "legacy-custom.json");
-      const io = createIoForHome(home, { CLAWDBOT_CONFIG_PATH: customPath } as NodeJS.ProcessEnv);
+      const customPath = await writeConfig(
+        home,
+        ".openclaw",
+        20003,
+        "legacy-custom.json",
+      );
+      const io = createIoForHome(home, {
+        CLAWDBOT_CONFIG_PATH: customPath,
+      } as NodeJS.ProcessEnv);
       expect(io.configPath).toBe(customPath);
       expect(io.loadConfig().gateway?.port).toBe(20003);
     });
@@ -89,7 +115,12 @@ describe("config io paths", () => {
           {
             tools: {
               exec: {
-                safeBinTrustedDirs: [" /custom/bin ", "", "/custom/bin", "/agent/bin"],
+                safeBinTrustedDirs: [
+                  " /custom/bin ",
+                  "",
+                  "/custom/bin",
+                  "/agent/bin",
+                ],
                 safeBinProfiles: {
                   " MyFilter ": {
                     allowedValueFlags: ["--limit", " --limit ", ""],
@@ -128,13 +159,18 @@ describe("config io paths", () => {
           allowedValueFlags: ["--limit"],
         },
       });
-      expect(cfg.tools?.exec?.safeBinTrustedDirs).toEqual(["/custom/bin", "/agent/bin"]);
+      expect(cfg.tools?.exec?.safeBinTrustedDirs).toEqual([
+        "/custom/bin",
+        "/agent/bin",
+      ]);
       expect(cfg.agents?.list?.[0]?.tools?.exec?.safeBinProfiles).toEqual({
         custom: {
           deniedFlags: ["-f"],
         },
       });
-      expect(cfg.agents?.list?.[0]?.tools?.exec?.safeBinTrustedDirs).toEqual(["/ops/bin"]);
+      expect(cfg.agents?.list?.[0]?.tools?.exec?.safeBinTrustedDirs).toEqual([
+        "/ops/bin",
+      ]);
     });
   });
 
@@ -163,7 +199,9 @@ describe("config io paths", () => {
       expect(logger.error).toHaveBeenCalledWith(
         expect.stringContaining(`Invalid config at ${configPath}:\\n`),
       );
-      expect(logger.error).toHaveBeenCalledWith(expect.stringContaining("- gateway.port:"));
+      expect(logger.error).toHaveBeenCalledWith(
+        expect.stringContaining("- gateway.port:"),
+      );
     });
   });
 });

@@ -8,7 +8,9 @@ import {
   stopWithText,
 } from "./shared.js";
 
-export function handleSubagentsAgentsAction(ctx: SubagentsCommandContext): CommandHandlerResult {
+export function handleSubagentsAgentsAction(
+  ctx: SubagentsCommandContext,
+): CommandHandlerResult {
   const { params, requesterKey, runs } = ctx;
   const isDiscord = isDiscordSurface(params);
   const accountId = isDiscord ? resolveDiscordAccountId(params) : undefined;
@@ -26,7 +28,9 @@ export function handleSubagentsAgentsAction(ctx: SubagentsCommandContext): Comma
   } else {
     let index = 1;
     for (const entry of visibleRuns) {
-      const threadBinding = threadBindings?.listBySessionKey(entry.childSessionKey)[0];
+      const threadBinding = threadBindings?.listBySessionKey(
+        entry.childSessionKey,
+      )[0];
       const bindingText = threadBinding
         ? `thread:${threadBinding.threadId}`
         : isDiscord
@@ -40,7 +44,10 @@ export function handleSubagentsAgentsAction(ctx: SubagentsCommandContext): Comma
   if (threadBindings) {
     const acpBindings = threadBindings
       .listBindings()
-      .filter((entry) => entry.targetKind === "acp" && entry.targetSessionKey === requesterKey);
+      .filter(
+        (entry) =>
+          entry.targetKind === "acp" && entry.targetSessionKey === requesterKey,
+      );
     if (acpBindings.length > 0) {
       lines.push("", "acp/session bindings:", "-----");
       for (const binding of acpBindings) {

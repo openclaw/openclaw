@@ -60,7 +60,8 @@ describe("scheduled task runtime derivation", () => {
       }),
     ).toEqual({
       status: "stopped",
-      detail: "Task reports Running but Last Run Result=0x0; treating as stale runtime state.",
+      detail:
+        "Task reports Running but Last Run Result=0x0; treating as stale runtime state.",
     });
   });
 });
@@ -75,7 +76,11 @@ describe("resolveTaskScriptPath", () => {
     {
       name: "uses profile-specific path when OPENCLAW_PROFILE is set to a custom value",
       env: { USERPROFILE: "C:\\Users\\test", OPENCLAW_PROFILE: "jbphoenix" },
-      expected: path.join("C:\\Users\\test", ".openclaw-jbphoenix", "gateway.cmd"),
+      expected: path.join(
+        "C:\\Users\\test",
+        ".openclaw-jbphoenix",
+        "gateway.cmd",
+      ),
     },
     {
       name: "prefers OPENCLAW_STATE_DIR over profile-derived defaults",
@@ -106,9 +111,12 @@ describe("readScheduledTaskCommand", () => {
     },
     run: (env: Record<string, string | undefined>) => Promise<void>,
   ) {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-schtasks-test-"));
+    const tmpDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-schtasks-test-"),
+    );
     try {
-      const extraEnv = typeof options.env === "function" ? options.env(tmpDir) : options.env;
+      const extraEnv =
+        typeof options.env === "function" ? options.env(tmpDir) : options.env;
       const env = {
         USERPROFILE: tmpDir,
         OPENCLAW_PROFILE: "default",
@@ -117,7 +125,11 @@ describe("readScheduledTaskCommand", () => {
       if (options.scriptLines) {
         const scriptPath = resolveTaskScriptPath(env);
         await fs.mkdir(path.dirname(scriptPath), { recursive: true });
-        await fs.writeFile(scriptPath, options.scriptLines.join("\r\n"), "utf8");
+        await fs.writeFile(
+          scriptPath,
+          options.scriptLines.join("\r\n"),
+          "utf8",
+        );
       }
       await run(env);
     } finally {
@@ -129,7 +141,10 @@ describe("readScheduledTaskCommand", () => {
     await withScheduledTaskScript(
       {
         // Use forward slashes which work in Windows cmd and avoid escape parsing issues.
-        scriptLines: ["@echo off", '"C:/Program Files/Node/node.exe" gateway.js'],
+        scriptLines: [
+          "@echo off",
+          '"C:/Program Files/Node/node.exe" gateway.js',
+        ],
       },
       async (env) => {
         const result = await readScheduledTaskCommand(env);
@@ -232,7 +247,9 @@ describe("readScheduledTaskCommand", () => {
   it("reads script from OPENCLAW_STATE_DIR override", async () => {
     await withScheduledTaskScript(
       {
-        env: (tmpDir) => ({ OPENCLAW_STATE_DIR: path.join(tmpDir, "custom-state") }),
+        env: (tmpDir) => ({
+          OPENCLAW_STATE_DIR: path.join(tmpDir, "custom-state"),
+        }),
         scriptLines: ["@echo off", "node gateway.js --from-state-dir"],
       },
       async (env) => {

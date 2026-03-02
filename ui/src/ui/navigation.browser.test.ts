@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import "../styles.css";
-import { mountApp as mountTestApp, registerAppMountHooks } from "./test-helpers/app-mount.ts";
+import {
+  mountApp as mountTestApp,
+  registerAppMountHooks,
+} from "./test-helpers/app-mount.ts";
 
 registerAppMountHooks();
 
@@ -55,9 +58,13 @@ describe("control UI routing", () => {
     const app = mountApp("/chat");
     await app.updateComplete;
 
-    const link = app.querySelector<HTMLAnchorElement>('a.nav-item[href="/channels"]');
+    const link = app.querySelector<HTMLAnchorElement>(
+      'a.nav-item[href="/channels"]',
+    );
     expect(link).not.toBeNull();
-    link?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
+    link?.dispatchEvent(
+      new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }),
+    );
 
     await app.updateComplete;
     expect(app.tab).toBe("channels");
@@ -68,9 +75,13 @@ describe("control UI routing", () => {
     const app = mountApp("/sessions?session=agent:main:subagent:task-123");
     await app.updateComplete;
 
-    const link = app.querySelector<HTMLAnchorElement>('a.nav-item[href="/chat"]');
+    const link = app.querySelector<HTMLAnchorElement>(
+      'a.nav-item[href="/chat"]',
+    );
     expect(link).not.toBeNull();
-    link?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
+    link?.dispatchEvent(
+      new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }),
+    );
 
     await app.updateComplete;
     expect(app.tab).toBe("chat");
@@ -111,7 +122,8 @@ describe("control UI routing", () => {
     const app = mountApp("/chat");
     await app.updateComplete;
 
-    const initialContainer: HTMLElement | null = app.querySelector(".chat-thread");
+    const initialContainer: HTMLElement | null =
+      app.querySelector(".chat-thread");
     expect(initialContainer).not.toBeNull();
     if (!initialContainer) {
       return;

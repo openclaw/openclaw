@@ -1,7 +1,11 @@
 import { nothing } from "lit";
 import type { AppViewState } from "./app-view-state.ts";
 import type { UsageState } from "./controllers/usage.ts";
-import { loadUsage, loadSessionTimeSeries, loadSessionLogs } from "./controllers/usage.ts";
+import {
+  loadUsage,
+  loadSessionTimeSeries,
+  loadSessionLogs,
+} from "./controllers/usage.ts";
 import { renderUsage } from "./views/usage.ts";
 
 // Module-scope debounce for usage date changes (avoids type-unsafe hacks on state object)
@@ -10,7 +14,10 @@ const debouncedLoadUsage = (state: UsageState) => {
   if (usageDateDebounceTimeout) {
     clearTimeout(usageDateDebounceTimeout);
   }
-  usageDateDebounceTimeout = window.setTimeout(() => void loadUsage(state), 400);
+  usageDateDebounceTimeout = window.setTimeout(
+    () => void loadUsage(state),
+    400,
+  );
 };
 
 export function renderUsageTab(state: AppViewState) {
@@ -52,7 +59,8 @@ export function renderUsageTab(state: AppViewState) {
     sessionSortDir: state.usageSessionSortDir,
     recentSessions: state.usageRecentSessions,
     sessionsTab: state.usageSessionsTab,
-    visibleColumns: state.usageVisibleColumns as import("./views/usage.ts").UsageColumnId[],
+    visibleColumns:
+      state.usageVisibleColumns as import("./views/usage.ts").UsageColumnId[],
     timeZone: state.usageTimeZone,
     contextExpanded: state.usageContextExpanded,
     headerPinned: state.usageHeaderPinned,
@@ -108,17 +116,23 @@ export function renderUsageTab(state: AppViewState) {
     onSelectHour: (hour, shiftKey) => {
       if (shiftKey && state.usageSelectedHours.length > 0) {
         const allHours = Array.from({ length: 24 }, (_, i) => i);
-        const lastSelected = state.usageSelectedHours[state.usageSelectedHours.length - 1];
+        const lastSelected =
+          state.usageSelectedHours[state.usageSelectedHours.length - 1];
         const lastIdx = allHours.indexOf(lastSelected);
         const thisIdx = allHours.indexOf(hour);
         if (lastIdx !== -1 && thisIdx !== -1) {
-          const [start, end] = lastIdx < thisIdx ? [lastIdx, thisIdx] : [thisIdx, lastIdx];
+          const [start, end] =
+            lastIdx < thisIdx ? [lastIdx, thisIdx] : [thisIdx, lastIdx];
           const range = allHours.slice(start, end + 1);
-          state.usageSelectedHours = [...new Set([...state.usageSelectedHours, ...range])];
+          state.usageSelectedHours = [
+            ...new Set([...state.usageSelectedHours, ...range]),
+          ];
         }
       } else {
         if (state.usageSelectedHours.includes(hour)) {
-          state.usageSelectedHours = state.usageSelectedHours.filter((h) => h !== hour);
+          state.usageSelectedHours = state.usageSelectedHours.filter(
+            (h) => h !== hour,
+          );
         } else {
           state.usageSelectedHours = [...state.usageSelectedHours, hour];
         }
@@ -160,7 +174,9 @@ export function renderUsageTab(state: AppViewState) {
     },
     onToggleColumn: (column) => {
       if (state.usageVisibleColumns.includes(column)) {
-        state.usageVisibleColumns = state.usageVisibleColumns.filter((entry) => entry !== column);
+        state.usageVisibleColumns = state.usageVisibleColumns.filter(
+          (entry) => entry !== column,
+        );
       } else {
         state.usageVisibleColumns = [...state.usageVisibleColumns, column];
       }
@@ -177,25 +193,38 @@ export function renderUsageTab(state: AppViewState) {
         // Shift-click: select range from last selected to this session
         // Sort sessions same way as displayed (by tokens or cost descending)
         const isTokenMode = state.usageChartMode === "tokens";
-        const sortedSessions = [...(state.usageResult?.sessions ?? [])].toSorted((a, b) => {
-          const valA = isTokenMode ? (a.usage?.totalTokens ?? 0) : (a.usage?.totalCost ?? 0);
-          const valB = isTokenMode ? (b.usage?.totalTokens ?? 0) : (b.usage?.totalCost ?? 0);
+        const sortedSessions = [
+          ...(state.usageResult?.sessions ?? []),
+        ].toSorted((a, b) => {
+          const valA = isTokenMode
+            ? (a.usage?.totalTokens ?? 0)
+            : (a.usage?.totalCost ?? 0);
+          const valB = isTokenMode
+            ? (b.usage?.totalTokens ?? 0)
+            : (b.usage?.totalCost ?? 0);
           return valB - valA;
         });
         const allKeys = sortedSessions.map((s) => s.key);
-        const lastSelected = state.usageSelectedSessions[state.usageSelectedSessions.length - 1];
+        const lastSelected =
+          state.usageSelectedSessions[state.usageSelectedSessions.length - 1];
         const lastIdx = allKeys.indexOf(lastSelected);
         const thisIdx = allKeys.indexOf(key);
         if (lastIdx !== -1 && thisIdx !== -1) {
-          const [start, end] = lastIdx < thisIdx ? [lastIdx, thisIdx] : [thisIdx, lastIdx];
+          const [start, end] =
+            lastIdx < thisIdx ? [lastIdx, thisIdx] : [thisIdx, lastIdx];
           const range = allKeys.slice(start, end + 1);
-          const newSelection = [...new Set([...state.usageSelectedSessions, ...range])];
+          const newSelection = [
+            ...new Set([...state.usageSelectedSessions, ...range]),
+          ];
           state.usageSelectedSessions = newSelection;
         }
       } else {
         // Regular click: focus a single session (so details always open).
         // Click the focused session again to clear selection.
-        if (state.usageSelectedSessions.length === 1 && state.usageSelectedSessions[0] === key) {
+        if (
+          state.usageSelectedSessions.length === 1 &&
+          state.usageSelectedSessions[0] === key
+        ) {
           state.usageSelectedSessions = [];
         } else {
           state.usageSelectedSessions = [key];
@@ -215,21 +244,29 @@ export function renderUsageTab(state: AppViewState) {
     onSelectDay: (day, shiftKey) => {
       if (shiftKey && state.usageSelectedDays.length > 0) {
         // Shift-click: select range from last selected to this day
-        const allDays = (state.usageCostSummary?.daily ?? []).map((d) => d.date);
-        const lastSelected = state.usageSelectedDays[state.usageSelectedDays.length - 1];
+        const allDays = (state.usageCostSummary?.daily ?? []).map(
+          (d) => d.date,
+        );
+        const lastSelected =
+          state.usageSelectedDays[state.usageSelectedDays.length - 1];
         const lastIdx = allDays.indexOf(lastSelected);
         const thisIdx = allDays.indexOf(day);
         if (lastIdx !== -1 && thisIdx !== -1) {
-          const [start, end] = lastIdx < thisIdx ? [lastIdx, thisIdx] : [thisIdx, lastIdx];
+          const [start, end] =
+            lastIdx < thisIdx ? [lastIdx, thisIdx] : [thisIdx, lastIdx];
           const range = allDays.slice(start, end + 1);
           // Merge with existing selection
-          const newSelection = [...new Set([...state.usageSelectedDays, ...range])];
+          const newSelection = [
+            ...new Set([...state.usageSelectedDays, ...range]),
+          ];
           state.usageSelectedDays = newSelection;
         }
       } else {
         // Regular click: toggle single day
         if (state.usageSelectedDays.includes(day)) {
-          state.usageSelectedDays = state.usageSelectedDays.filter((d) => d !== day);
+          state.usageSelectedDays = state.usageSelectedDays.filter(
+            (d) => d !== day,
+          );
         } else {
           state.usageSelectedDays = [day];
         }

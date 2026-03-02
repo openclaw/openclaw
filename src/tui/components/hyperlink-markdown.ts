@@ -1,4 +1,8 @@
-import type { Component, DefaultTextStyle, MarkdownTheme } from "@mariozechner/pi-tui";
+import type {
+  Component,
+  DefaultTextStyle,
+  MarkdownTheme,
+} from "@mariozechner/pi-tui";
 import { Markdown } from "@mariozechner/pi-tui";
 import { addOsc8Hyperlinks, extractUrls } from "../osc8-hyperlinks.js";
 

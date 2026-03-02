@@ -68,12 +68,18 @@ describe("parsePromptEventLine", () => {
   });
 
   it("keeps compatibility with simplified text/done lines", () => {
-    expect(parsePromptEventLine(JSON.stringify({ type: "text", content: "alpha" }))).toEqual({
+    expect(
+      parsePromptEventLine(JSON.stringify({ type: "text", content: "alpha" })),
+    ).toEqual({
       type: "text_delta",
       text: "alpha",
       stream: "output",
     });
-    expect(parsePromptEventLine(JSON.stringify({ type: "done", stopReason: "end_turn" }))).toEqual({
+    expect(
+      parsePromptEventLine(
+        JSON.stringify({ type: "done", stopReason: "end_turn" }),
+      ),
+    ).toEqual({
       type: "done",
       stopReason: "end_turn",
     });

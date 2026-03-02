@@ -84,7 +84,9 @@ export function handleAutoCompactionEnd(
   }
 }
 
-function clearStaleAssistantUsageOnSessionMessages(ctx: EmbeddedPiSubscribeContext): void {
+function clearStaleAssistantUsageOnSessionMessages(
+  ctx: EmbeddedPiSubscribeContext,
+): void {
   const messages = ctx.params.session.messages;
   if (!Array.isArray(messages)) {
     return;

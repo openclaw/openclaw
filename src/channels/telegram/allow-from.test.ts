@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { isNumericTelegramUserId, normalizeTelegramAllowFromEntry } from "./allow-from.js";
+import {
+  isNumericTelegramUserId,
+  normalizeTelegramAllowFromEntry,
+} from "./allow-from.js";
 
 describe("telegram allow-from helpers", () => {
   it("normalizes tg/telegram prefixes", () => {
@@ -8,7 +11,9 @@ describe("telegram allow-from helpers", () => {
       { value: "telegram:@someone", expected: "@someone" },
     ] as const;
     for (const testCase of cases) {
-      expect(normalizeTelegramAllowFromEntry(testCase.value)).toBe(testCase.expected);
+      expect(normalizeTelegramAllowFromEntry(testCase.value)).toBe(
+        testCase.expected,
+      );
     }
   });
 

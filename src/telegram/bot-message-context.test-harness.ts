@@ -6,7 +6,12 @@ import {
 } from "./bot-message-context.js";
 
 export const baseTelegramMessageContextConfig = {
-  agents: { defaults: { model: "anthropic/claude-opus-4-5", workspace: "/tmp/openclaw" } },
+  agents: {
+    defaults: {
+      model: "anthropic/claude-opus-4-5",
+      workspace: "/tmp/openclaw",
+    },
+  },
   channels: { telegram: {} },
   messages: { groupChat: { mentionPatterns: [] } },
 } as never;
@@ -54,7 +59,8 @@ export async function buildTelegramMessageContextForTest(
     ackReactionScope: "off",
     logger: { info: vi.fn() },
     resolveGroupActivation: params.resolveGroupActivation ?? (() => undefined),
-    resolveGroupRequireMention: params.resolveGroupRequireMention ?? (() => false),
+    resolveGroupRequireMention:
+      params.resolveGroupRequireMention ?? (() => false),
     resolveTelegramGroupConfig:
       params.resolveTelegramGroupConfig ??
       (() => ({

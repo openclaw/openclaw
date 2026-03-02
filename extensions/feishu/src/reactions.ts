@@ -42,7 +42,9 @@ export async function addReactionFeishu(params: {
   };
 
   if (response.code !== 0) {
-    throw new Error(`Feishu add reaction failed: ${response.msg || `code ${response.code}`}`);
+    throw new Error(
+      `Feishu add reaction failed: ${response.msg || `code ${response.code}`}`,
+    );
   }
 
   const reactionId = response.data?.reaction_id;
@@ -78,7 +80,9 @@ export async function removeReactionFeishu(params: {
   })) as { code?: number; msg?: string };
 
   if (response.code !== 0) {
-    throw new Error(`Feishu remove reaction failed: ${response.msg || `code ${response.code}`}`);
+    throw new Error(
+      `Feishu remove reaction failed: ${response.msg || `code ${response.code}`}`,
+    );
   }
 }
 
@@ -116,7 +120,9 @@ export async function listReactionsFeishu(params: {
   };
 
   if (response.code !== 0) {
-    throw new Error(`Feishu list reactions failed: ${response.msg || `code ${response.code}`}`);
+    throw new Error(
+      `Feishu list reactions failed: ${response.msg || `code ${response.code}`}`,
+    );
   }
 
   const items = response.data?.items ?? [];
@@ -125,7 +131,10 @@ export async function listReactionsFeishu(params: {
     emojiType: item.reaction_type?.emoji_type ?? "",
     operatorType: item.operator_type === "app" ? "app" : "user",
     operatorId:
-      item.operator_id?.open_id ?? item.operator_id?.user_id ?? item.operator_id?.union_id ?? "",
+      item.operator_id?.open_id ??
+      item.operator_id?.user_id ??
+      item.operator_id?.union_id ??
+      "",
   }));
 }
 

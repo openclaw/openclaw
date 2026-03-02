@@ -12,7 +12,12 @@ import type { CoreConfig, NextcloudTalkAccountConfig } from "./types.js";
 
 function isTruthyEnvValue(value?: string): boolean {
   const normalized = (value ?? "").trim().toLowerCase();
-  return normalized === "true" || normalized === "1" || normalized === "yes" || normalized === "on";
+  return (
+    normalized === "true" ||
+    normalized === "1" ||
+    normalized === "yes" ||
+    normalized === "on"
+  );
 }
 
 const debugAccounts = (...args: unknown[]) => {
@@ -33,7 +38,9 @@ export type ResolvedNextcloudTalkAccount = {
 
 function listConfiguredAccountIds(cfg: CoreConfig): string[] {
   return listConfiguredAccountIdsFromSection({
-    accounts: cfg.channels?.["nextcloud-talk"]?.accounts as Record<string, unknown> | undefined,
+    accounts: cfg.channels?.["nextcloud-talk"]?.accounts as
+      | Record<string, unknown>
+      | undefined,
     normalizeAccountId,
   });
 }
@@ -48,7 +55,9 @@ export function listNextcloudTalkAccountIds(cfg: CoreConfig): string[] {
 }
 
 export function resolveDefaultNextcloudTalkAccountId(cfg: CoreConfig): string {
-  const preferred = normalizeOptionalAccountId(cfg.channels?.["nextcloud-talk"]?.defaultAccount);
+  const preferred = normalizeOptionalAccountId(
+    cfg.channels?.["nextcloud-talk"]?.defaultAccount,
+  );
   if (
     preferred &&
     listNextcloudTalkAccountIds(cfg).some(
@@ -77,8 +86,12 @@ function resolveAccountConfig(
     return direct;
   }
   const normalized = normalizeAccountId(accountId);
-  const matchKey = Object.keys(accounts).find((key) => normalizeAccountId(key) === normalized);
-  return matchKey ? (accounts[matchKey] as NextcloudTalkAccountConfig | undefined) : undefined;
+  const matchKey = Object.keys(accounts).find(
+    (key) => normalizeAccountId(key) === normalized,
+  );
+  return matchKey
+    ? (accounts[matchKey] as NextcloudTalkAccountConfig | undefined)
+    : undefined;
 }
 
 function mergeNextcloudTalkAccountConfig(
@@ -101,7 +114,10 @@ function resolveNextcloudTalkSecret(
   cfg: CoreConfig,
   opts: { accountId?: string },
 ): { secret: string; source: ResolvedNextcloudTalkAccount["secretSource"] } {
-  const merged = mergeNextcloudTalkAccountConfig(cfg, opts.accountId ?? DEFAULT_ACCOUNT_ID);
+  const merged = mergeNextcloudTalkAccountConfig(
+    cfg,
+    opts.accountId ?? DEFAULT_ACCOUNT_ID,
+  );
 
   const envSecret = process.env.NEXTCLOUD_TALK_BOT_SECRET?.trim();
   if (envSecret && (!opts.accountId || opts.accountId === DEFAULT_ACCOUNT_ID)) {
@@ -130,13 +146,16 @@ export function resolveNextcloudTalkAccount(params: {
   cfg: CoreConfig;
   accountId?: string | null;
 }): ResolvedNextcloudTalkAccount {
-  const baseEnabled = params.cfg.channels?.["nextcloud-talk"]?.enabled !== false;
+  const baseEnabled =
+    params.cfg.channels?.["nextcloud-talk"]?.enabled !== false;
 
   const resolve = (accountId: string) => {
     const merged = mergeNextcloudTalkAccountConfig(params.cfg, accountId);
     const accountEnabled = merged.enabled !== false;
     const enabled = baseEnabled && accountEnabled;
-    const secretResolution = resolveNextcloudTalkSecret(params.cfg, { accountId });
+    const secretResolution = resolveNextcloudTalkSecret(params.cfg, {
+      accountId,
+    });
     const baseUrl = merged.baseUrl?.trim()?.replace(/\/$/, "") ?? "";
 
     debugAccounts("resolve", {
@@ -162,11 +181,14 @@ export function resolveNextcloudTalkAccount(params: {
     normalizeAccountId,
     resolvePrimary: resolve,
     hasCredential: (account) => account.secretSource !== "none",
-    resolveDefaultAccountId: () => resolveDefaultNextcloudTalkAccountId(params.cfg),
+    resolveDefaultAccountId: () =>
+      resolveDefaultNextcloudTalkAccountId(params.cfg),
   });
 }
 
-export function listEnabledNextcloudTalkAccounts(cfg: CoreConfig): ResolvedNextcloudTalkAccount[] {
+export function listEnabledNextcloudTalkAccounts(
+  cfg: CoreConfig,
+): ResolvedNextcloudTalkAccount[] {
   return listNextcloudTalkAccountIds(cfg)
     .map((accountId) => resolveNextcloudTalkAccount({ cfg, accountId }))
     .filter((account) => account.enabled);

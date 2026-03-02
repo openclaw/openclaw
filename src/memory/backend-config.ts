@@ -177,7 +177,9 @@ function resolveTimeoutMs(raw: number | undefined, fallback: number): number {
   return fallback;
 }
 
-function resolveLimits(raw?: MemoryQmdConfig["limits"]): ResolvedQmdLimitsConfig {
+function resolveLimits(
+  raw?: MemoryQmdConfig["limits"],
+): ResolvedQmdLimitsConfig {
   const parsed: ResolvedQmdLimitsConfig = { ...DEFAULT_QMD_LIMITS };
   if (raw?.maxResults && raw.maxResults > 0) {
     parsed.maxResults = Math.floor(raw.maxResults);
@@ -194,7 +196,9 @@ function resolveLimits(raw?: MemoryQmdConfig["limits"]): ResolvedQmdLimitsConfig
   return parsed;
 }
 
-function resolveSearchMode(raw?: MemoryQmdConfig["searchMode"]): MemoryQmdSearchMode {
+function resolveSearchMode(
+  raw?: MemoryQmdConfig["searchMode"],
+): MemoryQmdSearchMode {
   if (raw === "search" || raw === "vsearch" || raw === "query") {
     return raw;
   }
@@ -207,9 +211,13 @@ function resolveSessionConfig(
 ): ResolvedQmdSessionConfig {
   const enabled = Boolean(cfg?.enabled);
   const exportDirRaw = cfg?.exportDir?.trim();
-  const exportDir = exportDirRaw ? resolvePath(exportDirRaw, workspaceDir) : undefined;
+  const exportDir = exportDirRaw
+    ? resolvePath(exportDirRaw, workspaceDir)
+    : undefined;
   const retentionDays =
-    cfg?.retentionDays && cfg.retentionDays > 0 ? Math.floor(cfg.retentionDays) : undefined;
+    cfg?.retentionDays && cfg.retentionDays > 0
+      ? Math.floor(cfg.retentionDays)
+      : undefined;
   return {
     enabled,
     exportDir,
@@ -239,7 +247,10 @@ function resolveCustomPaths(
       return;
     }
     const pattern = entry.pattern?.trim() || "**/*.md";
-    const baseName = scopeCollectionBase(entry.name?.trim() || `custom-${index + 1}`, agentId);
+    const baseName = scopeCollectionBase(
+      entry.name?.trim() || `custom-${index + 1}`,
+      agentId,
+    );
     const name = ensureUniqueName(baseName, existing);
     collections.push({
       name,
@@ -251,7 +262,9 @@ function resolveCustomPaths(
   return collections;
 }
 
-function resolveMcporterConfig(raw?: MemoryQmdMcporterConfig): ResolvedQmdMcporterConfig {
+function resolveMcporterConfig(
+  raw?: MemoryQmdMcporterConfig,
+): ResolvedQmdMcporterConfig {
   const parsed: ResolvedQmdMcporterConfig = { ...DEFAULT_QMD_MCPORTER };
   if (!raw) {
     return parsed;
@@ -284,7 +297,11 @@ function resolveDefaultCollections(
   const entries: Array<{ path: string; pattern: string; base: string }> = [
     { path: workspaceDir, pattern: "MEMORY.md", base: "memory-root" },
     { path: workspaceDir, pattern: "memory.md", base: "memory-alt" },
-    { path: path.join(workspaceDir, "memory"), pattern: "**/*.md", base: "memory-dir" },
+    {
+      path: path.join(workspaceDir, "memory"),
+      pattern: "**/*.md",
+      base: "memory-dir",
+    },
   ];
   return entries.map((entry) => ({
     name: ensureUniqueName(scopeCollectionBase(entry.base, agentId), existing),
@@ -309,7 +326,12 @@ export function resolveMemoryBackendConfig(params: {
   const includeDefaultMemory = qmdCfg?.includeDefaultMemory !== false;
   const nameSet = new Set<string>();
   const collections = [
-    ...resolveDefaultCollections(includeDefaultMemory, workspaceDir, nameSet, params.agentId),
+    ...resolveDefaultCollections(
+      includeDefaultMemory,
+      workspaceDir,
+      nameSet,
+      params.agentId,
+    ),
     ...resolveCustomPaths(qmdCfg?.paths, workspaceDir, nameSet, params.agentId),
   ];
 

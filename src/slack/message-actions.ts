@@ -1,9 +1,14 @@
 import { createActionGate } from "../agents/tools/common.js";
-import type { ChannelMessageActionName, ChannelToolSend } from "../channels/plugins/types.js";
+import type {
+  ChannelMessageActionName,
+  ChannelToolSend,
+} from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { listEnabledSlackAccounts } from "./accounts.js";
 
-export function listSlackMessageActions(cfg: OpenClawConfig): ChannelMessageActionName[] {
+export function listSlackMessageActions(
+  cfg: OpenClawConfig,
+): ChannelMessageActionName[] {
   const accounts = listEnabledSlackAccounts(cfg).filter(
     (account) => account.botTokenSource !== "none",
   );
@@ -14,7 +19,10 @@ export function listSlackMessageActions(cfg: OpenClawConfig): ChannelMessageActi
   const isActionEnabled = (key: string, defaultValue = true) => {
     for (const account of accounts) {
       const gate = createActionGate(
-        (account.actions ?? cfg.channels?.slack?.actions) as Record<string, boolean | undefined>,
+        (account.actions ?? cfg.channels?.slack?.actions) as Record<
+          string,
+          boolean | undefined
+        >,
       );
       if (gate(key, defaultValue)) {
         return true;
@@ -48,7 +56,9 @@ export function listSlackMessageActions(cfg: OpenClawConfig): ChannelMessageActi
   return Array.from(actions);
 }
 
-export function extractSlackToolSend(args: Record<string, unknown>): ChannelToolSend | null {
+export function extractSlackToolSend(
+  args: Record<string, unknown>,
+): ChannelToolSend | null {
   const action = typeof args.action === "string" ? args.action.trim() : "";
   if (action !== "sendMessage") {
     return null;
@@ -57,6 +67,7 @@ export function extractSlackToolSend(args: Record<string, unknown>): ChannelTool
   if (!to) {
     return null;
   }
-  const accountId = typeof args.accountId === "string" ? args.accountId.trim() : undefined;
+  const accountId =
+    typeof args.accountId === "string" ? args.accountId.trim() : undefined;
   return { to, accountId };
 }

@@ -97,7 +97,8 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     skillsSnapshot: params.sessionEntry.skillsSnapshot,
     provider: params.provider,
     model: params.model,
-    thinkLevel: params.resolvedThinkLevel ?? (await params.resolveDefaultThinkingLevel()),
+    thinkLevel:
+      params.resolvedThinkLevel ?? (await params.resolveDefaultThinkingLevel()),
     bashElevated: {
       enabled: false,
       allowed: false,
@@ -106,12 +107,16 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     customInstructions,
     trigger: "manual",
     senderIsOwner: params.command.senderIsOwner,
-    ownerNumbers: params.command.ownerList.length > 0 ? params.command.ownerList : undefined,
+    ownerNumbers:
+      params.command.ownerList.length > 0
+        ? params.command.ownerList
+        : undefined,
   });
 
   const compactLabel = result.ok
     ? result.compacted
-      ? result.result?.tokensBefore != null && result.result?.tokensAfter != null
+      ? result.result?.tokensBefore != null &&
+        result.result?.tokensAfter != null
         ? `Compacted (${formatTokenCount(result.result.tokensBefore)} → ${formatTokenCount(result.result.tokensAfter)})`
         : result.result?.tokensBefore
           ? `Compacted (${formatTokenCount(result.result.tokensBefore)} before)`
@@ -130,7 +135,9 @@ export const handleCompactCommand: CommandHandler = async (params) => {
   }
   // Use the post-compaction token count for context summary if available
   const tokensAfterCompaction = result.result?.tokensAfter;
-  const totalTokens = tokensAfterCompaction ?? resolveFreshSessionTotalTokens(params.sessionEntry);
+  const totalTokens =
+    tokensAfterCompaction ??
+    resolveFreshSessionTotalTokens(params.sessionEntry);
   const contextSummary = formatContextUsageShort(
     typeof totalTokens === "number" && totalTokens > 0 ? totalTokens : null,
     params.contextTokens ?? params.sessionEntry.contextTokens ?? null,

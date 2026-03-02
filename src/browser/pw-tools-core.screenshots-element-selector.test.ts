@@ -34,7 +34,9 @@ describe("pw-tools-core", () => {
 
     expect(res.buffer.toString()).toBe("E");
     expect(sessionMocks.getPageForTargetId).toHaveBeenCalled();
-    expect(page.locator as ReturnType<typeof vi.fn>).toHaveBeenCalledWith("#main");
+    expect(page.locator as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(
+      "#main",
+    );
     expect(elementScreenshot).toHaveBeenCalledWith({ type: "png" });
   });
   it("screenshots a ref locator", async () => {
@@ -58,7 +60,9 @@ describe("pw-tools-core", () => {
     expect(refScreenshot).toHaveBeenCalledWith({ type: "jpeg" });
   });
   it("rejects fullPage for element or ref screenshots", async () => {
-    setPwToolsCoreCurrentRefLocator({ screenshot: vi.fn(async () => Buffer.from("R")) });
+    setPwToolsCoreCurrentRefLocator({
+      screenshot: vi.fn(async () => Buffer.from("R")),
+    });
     setPwToolsCoreCurrentPage({
       locator: vi.fn(() => ({
         first: () => ({ screenshot: vi.fn(async () => Buffer.from("E")) }),
@@ -85,12 +89,17 @@ describe("pw-tools-core", () => {
     ).rejects.toThrow(/fullPage is not supported/i);
   });
   it("arms the next file chooser and sets files (default timeout)", async () => {
-    const uploadPath = path.join(DEFAULT_UPLOAD_DIR, `vitest-upload-${crypto.randomUUID()}.txt`);
+    const uploadPath = path.join(
+      DEFAULT_UPLOAD_DIR,
+      `vitest-upload-${crypto.randomUUID()}.txt`,
+    );
     await fs.mkdir(path.dirname(uploadPath), { recursive: true });
     await fs.writeFile(uploadPath, "fixture", "utf8");
     const canonicalUploadPath = await fs.realpath(uploadPath);
     const fileChooser = { setFiles: vi.fn(async () => {}) };
-    const waitForEvent = vi.fn(async (_event: string, _opts: unknown) => fileChooser);
+    const waitForEvent = vi.fn(
+      async (_event: string, _opts: unknown) => fileChooser,
+    );
     setPwToolsCoreCurrentPage({
       waitForEvent,
       keyboard: { press: vi.fn(async () => {}) },
@@ -110,14 +119,19 @@ describe("pw-tools-core", () => {
         timeout: 120_000,
       });
       await vi.waitFor(() => {
-        expect(fileChooser.setFiles).toHaveBeenCalledWith([canonicalUploadPath]);
+        expect(fileChooser.setFiles).toHaveBeenCalledWith([
+          canonicalUploadPath,
+        ]);
       });
     } finally {
       await fs.rm(uploadPath, { force: true });
     }
   });
   it("revalidates file-chooser paths at use-time and cancels missing files", async () => {
-    const missingPath = path.join(DEFAULT_UPLOAD_DIR, `vitest-missing-${crypto.randomUUID()}.txt`);
+    const missingPath = path.join(
+      DEFAULT_UPLOAD_DIR,
+      `vitest-missing-${crypto.randomUUID()}.txt`,
+    );
     const fileChooser = { setFiles: vi.fn(async () => {}) };
     const press = vi.fn(async () => {});
     const waitForEvent = vi.fn(async () => fileChooser);

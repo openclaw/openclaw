@@ -67,7 +67,9 @@ describe("extractTelegramAllowedEmojiReactions", () => {
   });
 
   it("returns null when available_reactions is omitted/null", () => {
-    const result = extractTelegramAllowedEmojiReactions({ available_reactions: null });
+    const result = extractTelegramAllowedEmojiReactions({
+      available_reactions: null,
+    });
     expect(result).toBeNull();
   });
 

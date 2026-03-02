@@ -55,7 +55,9 @@ const {
   resolveEdgeOutputFormat,
 } = _test;
 
-const mockAssistantMessage = (content: AssistantMessage["content"]): AssistantMessage => ({
+const mockAssistantMessage = (
+  content: AssistantMessage["content"],
+): AssistantMessage => ({
   role: "assistant",
   content,
   api: "openai-completions",
@@ -107,7 +109,9 @@ describe("tts", () => {
         { value: "voice?param=value", expected: false },
       ] as const;
       for (const testCase of cases) {
-        expect(isValidVoiceId(testCase.value), testCase.value).toBe(testCase.expected);
+        expect(isValidVoiceId(testCase.value), testCase.value).toBe(
+          testCase.expected,
+        );
       }
     });
   });
@@ -117,7 +121,13 @@ describe("tts", () => {
       for (const voice of OPENAI_TTS_VOICES) {
         expect(isValidOpenAIVoice(voice)).toBe(true);
       }
-      for (const newerVoice of ["ballad", "cedar", "juniper", "marin", "verse"]) {
+      for (const newerVoice of [
+        "ballad",
+        "cedar",
+        "juniper",
+        "marin",
+        "verse",
+      ]) {
         expect(isValidOpenAIVoice(newerVoice), newerVoice).toBe(true);
       }
     });
@@ -148,7 +158,9 @@ describe("tts", () => {
         { model: "gpt-4", expected: false },
       ] as const;
       for (const testCase of cases) {
-        expect(isValidOpenAIModel(testCase.model), testCase.model).toBe(testCase.expected);
+        expect(isValidOpenAIModel(testCase.model), testCase.model).toBe(
+          testCase.expected,
+        );
       }
     });
   });
@@ -196,9 +208,15 @@ describe("tts", () => {
       for (const testCase of cases) {
         const output = resolveOutputFormat(testCase.channel);
         expect(output.openai, testCase.channel).toBe(testCase.expected.openai);
-        expect(output.elevenlabs, testCase.channel).toBe(testCase.expected.elevenlabs);
-        expect(output.extension, testCase.channel).toBe(testCase.expected.extension);
-        expect(output.voiceCompatible, testCase.channel).toBe(testCase.expected.voiceCompatible);
+        expect(output.elevenlabs, testCase.channel).toBe(
+          testCase.expected.elevenlabs,
+        );
+        expect(output.extension, testCase.channel).toBe(
+          testCase.expected.extension,
+        );
+        expect(output.voiceCompatible, testCase.channel).toBe(
+          testCase.expected.voiceCompatible,
+        );
       }
     });
   });
@@ -231,14 +249,19 @@ describe("tts", () => {
       ] as const;
       for (const testCase of cases) {
         const config = resolveTtsConfig(testCase.cfg);
-        expect(resolveEdgeOutputFormat(config), testCase.name).toBe(testCase.expected);
+        expect(resolveEdgeOutputFormat(config), testCase.name).toBe(
+          testCase.expected,
+        );
       }
     });
   });
 
   describe("parseTtsDirectives", () => {
     it("extracts overrides and strips directives when enabled", () => {
-      const policy = resolveModelOverridePolicy({ enabled: true, allowProvider: true });
+      const policy = resolveModelOverridePolicy({
+        enabled: true,
+        allowProvider: true,
+      });
       const input =
         "Hello [[tts:provider=elevenlabs voiceId=pMsXgVXv3BLzUgSXRplE stability=0.4 speed=1.1]] world\n\n" +
         "[[tts:text]](laughs) Read the song once more.[[/tts:text]]";
@@ -253,7 +276,10 @@ describe("tts", () => {
     });
 
     it("accepts edge as provider override", () => {
-      const policy = resolveModelOverridePolicy({ enabled: true, allowProvider: true });
+      const policy = resolveModelOverridePolicy({
+        enabled: true,
+        allowProvider: true,
+      });
       const input = "Hello [[tts:provider=edge]] world";
       const result = parseTtsDirectives(input, policy);
 
@@ -326,7 +352,9 @@ describe("tts", () => {
 
     it("uses summaryModel override when configured", async () => {
       const cfg: OpenClawConfig = {
-        agents: { defaults: { model: { primary: "anthropic/claude-opus-4-5" } } },
+        agents: {
+          defaults: { model: { primary: "anthropic/claude-opus-4-5" } },
+        },
         messages: { tts: { summaryModel: "openai/gpt-4.1-mini" } },
       };
       const config = resolveTtsConfig(cfg);
@@ -338,7 +366,12 @@ describe("tts", () => {
         timeoutMs: 30_000,
       });
 
-      expect(resolveModel).toHaveBeenCalledWith("openai", "gpt-4.1-mini", undefined, cfg);
+      expect(resolveModel).toHaveBeenCalledWith(
+        "openai",
+        "gpt-4.1-mini",
+        undefined,
+        cfg,
+      );
     });
 
     it("validates targetLength bounds", async () => {
@@ -361,7 +394,10 @@ describe("tts", () => {
             `Invalid targetLength: ${testCase.targetLength}`,
           );
         } else {
-          await expect(call, String(testCase.targetLength)).resolves.toBeDefined();
+          await expect(
+            call,
+            String(testCase.targetLength),
+          ).resolves.toBeDefined();
         }
       }
     });
@@ -444,7 +480,11 @@ describe("tts", () => {
         tts: {
           auto: "inbound",
           provider: "openai",
-          openai: { apiKey: "test-key", model: "gpt-4o-mini-tts", voice: "alloy" },
+          openai: {
+            apiKey: "test-key",
+            model: "gpt-4o-mini-tts",
+            voice: "alloy",
+          },
         },
       },
     };
@@ -509,7 +549,9 @@ describe("tts", () => {
             kind: "final",
             inboundAudio: testCase.inboundAudio,
           });
-          expect(fetchMock, testCase.name).toHaveBeenCalledTimes(testCase.expectedFetchCalls);
+          expect(fetchMock, testCase.name).toHaveBeenCalledTimes(
+            testCase.expectedFetchCalls,
+          );
           if (testCase.expectSamePayload) {
             expect(result, testCase.name).toBe(testCase.payload);
           } else {

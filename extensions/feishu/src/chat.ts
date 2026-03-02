@@ -79,7 +79,9 @@ export function registerFeishuChatTools(api: OpenClawPluginApi) {
 
   const accounts = listEnabledFeishuAccounts(api.config);
   if (accounts.length === 0) {
-    api.logger.debug?.("feishu_chat: No Feishu accounts configured, skipping chat tools");
+    api.logger.debug?.(
+      "feishu_chat: No Feishu accounts configured, skipping chat tools",
+    );
     return;
   }
 
@@ -119,7 +121,9 @@ export function registerFeishuChatTools(api: OpenClawPluginApi) {
               return json({ error: `Unknown action: ${String(p.action)}` });
           }
         } catch (err) {
-          return json({ error: err instanceof Error ? err.message : String(err) });
+          return json({
+            error: err instanceof Error ? err.message : String(err),
+          });
         }
       },
     },

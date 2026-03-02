@@ -93,9 +93,13 @@ function newToken() {
   return generatePairingToken();
 }
 
-export async function listNodePairing(baseDir?: string): Promise<NodePairingList> {
+export async function listNodePairing(
+  baseDir?: string,
+): Promise<NodePairingList> {
   const state = await loadState(baseDir);
-  const pending = Object.values(state.pendingById).toSorted((a, b) => b.ts - a.ts);
+  const pending = Object.values(state.pendingById).toSorted(
+    (a, b) => b.ts - a.ts,
+  );
   const paired = Object.values(state.pairedByNodeId).toSorted(
     (a, b) => b.approvedAtMs - a.approvedAtMs,
   );
@@ -220,12 +224,19 @@ export async function verifyNodeToken(
   if (!node) {
     return { ok: false };
   }
-  return verifyPairingToken(token, node.token) ? { ok: true, node } : { ok: false };
+  return verifyPairingToken(token, node.token)
+    ? { ok: true, node }
+    : { ok: false };
 }
 
 export async function updatePairedNodeMetadata(
   nodeId: string,
-  patch: Partial<Omit<NodePairingPairedNode, "nodeId" | "token" | "createdAtMs" | "approvedAtMs">>,
+  patch: Partial<
+    Omit<
+      NodePairingPairedNode,
+      "nodeId" | "token" | "createdAtMs" | "approvedAtMs"
+    >
+  >,
   baseDir?: string,
 ) {
   await withLock(async () => {

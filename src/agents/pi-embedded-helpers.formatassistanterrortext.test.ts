@@ -45,8 +45,12 @@ describe("formatAssistantErrorText", () => {
     expect(result).not.toContain("Context overflow");
   });
   it("returns a friendly message for Anthropic role ordering", () => {
-    const msg = makeAssistantError('messages: roles must alternate between "user" and "assistant"');
-    expect(formatAssistantErrorText(msg)).toContain("Message ordering conflict");
+    const msg = makeAssistantError(
+      'messages: roles must alternate between "user" and "assistant"',
+    );
+    expect(formatAssistantErrorText(msg)).toContain(
+      "Message ordering conflict",
+    );
   });
   it("returns a friendly message for Anthropic overload errors", () => {
     const msg = makeAssistantError(
@@ -63,7 +67,9 @@ describe("formatAssistantErrorText", () => {
     expect(result).toContain("/new");
   });
   it("handles JSON-wrapped role errors", () => {
-    const msg = makeAssistantError('{"error":{"message":"400 Incorrect role information"}}');
+    const msg = makeAssistantError(
+      '{"error":{"message":"400 Incorrect role information"}}',
+    );
     const result = formatAssistantErrorText(msg);
     expect(result).toContain("Message ordering conflict");
     expect(result).not.toContain("400");
@@ -72,10 +78,14 @@ describe("formatAssistantErrorText", () => {
     const msg = makeAssistantError(
       '{"type":"error","error":{"message":"Something exploded","type":"server_error"}}',
     );
-    expect(formatAssistantErrorText(msg)).toBe("LLM error server_error: Something exploded");
+    expect(formatAssistantErrorText(msg)).toBe(
+      "LLM error server_error: Something exploded",
+    );
   });
   it("returns a friendly billing message for credit balance errors", () => {
-    const msg = makeAssistantError("Your credit balance is too low to access the Anthropic API.");
+    const msg = makeAssistantError(
+      "Your credit balance is too low to access the Anthropic API.",
+    );
     const result = formatAssistantErrorText(msg);
     expect(result).toBe(BILLING_ERROR_USER_MESSAGE);
   });
@@ -100,7 +110,9 @@ describe("formatAssistantErrorText", () => {
     const msg = makeAssistantError("insufficient credits");
     msg.model = "claude-3-5-sonnet";
     const result = formatAssistantErrorText(msg, { provider: "Anthropic" });
-    expect(result).toBe(formatBillingErrorMessage("Anthropic", "claude-3-5-sonnet"));
+    expect(result).toBe(
+      formatBillingErrorMessage("Anthropic", "claude-3-5-sonnet"),
+    );
   });
   it("returns generic billing message when provider is not given", () => {
     const msg = makeAssistantError("insufficient credits");

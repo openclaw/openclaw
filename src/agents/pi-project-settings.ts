@@ -4,13 +4,18 @@ import { applyMergePatch } from "../config/merge-patch.js";
 import { applyPiCompactionSettingsFromConfig } from "./pi-settings.js";
 
 export const DEFAULT_EMBEDDED_PI_PROJECT_SETTINGS_POLICY = "sanitize";
-export const SANITIZED_PROJECT_PI_KEYS = ["shellPath", "shellCommandPrefix"] as const;
+export const SANITIZED_PROJECT_PI_KEYS = [
+  "shellPath",
+  "shellCommandPrefix",
+] as const;
 
 export type EmbeddedPiProjectSettingsPolicy = "trusted" | "sanitize" | "ignore";
 
 type PiSettingsSnapshot = ReturnType<SettingsManager["getGlobalSettings"]>;
 
-function sanitizeProjectSettings(settings: PiSettingsSnapshot): PiSettingsSnapshot {
+function sanitizeProjectSettings(
+  settings: PiSettingsSnapshot,
+): PiSettingsSnapshot {
   const sanitized = { ...settings };
   // Never allow workspace-local settings to override shell execution behavior.
   for (const key of SANITIZED_PROJECT_PI_KEYS) {
@@ -40,7 +45,10 @@ export function buildEmbeddedPiSettingsSnapshot(params: {
       : params.policy === "sanitize"
         ? sanitizeProjectSettings(params.projectSettings)
         : params.projectSettings;
-  return applyMergePatch(params.globalSettings, effectiveProjectSettings) as PiSettingsSnapshot;
+  return applyMergePatch(
+    params.globalSettings,
+    effectiveProjectSettings,
+  ) as PiSettingsSnapshot;
 }
 
 export function createEmbeddedPiSettingsManager(params: {
@@ -48,7 +56,10 @@ export function createEmbeddedPiSettingsManager(params: {
   agentDir: string;
   cfg?: OpenClawConfig;
 }): SettingsManager {
-  const fileSettingsManager = SettingsManager.create(params.cwd, params.agentDir);
+  const fileSettingsManager = SettingsManager.create(
+    params.cwd,
+    params.agentDir,
+  );
   const policy = resolveEmbeddedPiProjectSettingsPolicy(params.cfg);
   if (policy === "trusted") {
     return fileSettingsManager;

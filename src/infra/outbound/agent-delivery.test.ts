@@ -5,7 +5,8 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("./targets.js", async () => {
-  const actual = await vi.importActual<typeof import("./targets.js")>("./targets.js");
+  const actual =
+    await vi.importActual<typeof import("./targets.js")>("./targets.js");
   return {
     ...actual,
     resolveOutboundTarget: mocks.resolveOutboundTarget,
@@ -13,7 +14,10 @@ vi.mock("./targets.js", async () => {
 });
 
 import type { OpenClawConfig } from "../../config/config.js";
-import { resolveAgentDeliveryPlan, resolveAgentOutboundTarget } from "./agent-delivery.js";
+import {
+  resolveAgentDeliveryPlan,
+  resolveAgentOutboundTarget,
+} from "./agent-delivery.js";
 
 describe("agent delivery helpers", () => {
   it("builds a delivery plan from session delivery context", () => {
@@ -21,7 +25,11 @@ describe("agent delivery helpers", () => {
       sessionEntry: {
         sessionId: "s1",
         updatedAt: 1,
-        deliveryContext: { channel: "whatsapp", to: "+1555", accountId: "work" },
+        deliveryContext: {
+          channel: "whatsapp",
+          to: "+1555",
+          accountId: "work",
+        },
       },
       requestedChannel: "last",
       explicitTo: undefined,
@@ -102,7 +110,11 @@ describe("agent delivery helpers", () => {
       sessionEntry: {
         sessionId: "s4",
         updatedAt: 4,
-        deliveryContext: { channel: "slack", to: "U_WRONG", accountId: "wrong" },
+        deliveryContext: {
+          channel: "slack",
+          to: "U_WRONG",
+          accountId: "wrong",
+        },
       },
       requestedChannel: "last",
       turnSourceChannel: "whatsapp",

@@ -6,7 +6,9 @@ import { resolveTalkApiKey } from "./talk.js";
 
 describe("talk api key fallback", () => {
   it("reads ELEVENLABS_API_KEY from profile when env is missing", () => {
-    const existsSync = vi.fn((candidate: string) => candidate.endsWith(".profile"));
+    const existsSync = vi.fn((candidate: string) =>
+      candidate.endsWith(".profile"),
+    );
     const readFileSync = vi.fn(() => "export ELEVENLABS_API_KEY=profile-key\n");
     const homedir = vi.fn(() => "/tmp/home");
 
@@ -15,7 +17,9 @@ describe("talk api key fallback", () => {
       {
         fs: { existsSync, readFileSync } as unknown as typeof fs,
         os: { homedir } as unknown as typeof os,
-        path: { join: (...parts: string[]) => parts.join("/") } as unknown as typeof path,
+        path: {
+          join: (...parts: string[]) => parts.join("/"),
+        } as unknown as typeof path,
       },
     );
 
@@ -34,7 +38,9 @@ describe("talk api key fallback", () => {
       {
         fs: { existsSync, readFileSync } as unknown as typeof fs,
         os: { homedir: () => "/tmp/home" } as unknown as typeof os,
-        path: { join: (...parts: string[]) => parts.join("/") } as unknown as typeof path,
+        path: {
+          join: (...parts: string[]) => parts.join("/"),
+        } as unknown as typeof path,
       },
     );
 

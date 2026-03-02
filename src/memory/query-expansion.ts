@@ -670,7 +670,9 @@ function tokenize(text: string): string[] {
     // Extract script-specific chunks so technical terms like "API" / "バグ" are retained.
     if (/[\u3040-\u30ff]/.test(segment)) {
       const jpParts =
-        segment.match(/[a-z0-9_]+|[\u30a0-\u30ffー]+|[\u4e00-\u9fff]+|[\u3040-\u309f]{2,}/g) ?? [];
+        segment.match(
+          /[a-z0-9_]+|[\u30a0-\u30ffー]+|[\u4e00-\u9fff]+|[\u3040-\u309f]{2,}/g,
+        ) ?? [];
       for (const part of jpParts) {
         if (/^[\u4e00-\u9fff]+$/.test(part)) {
           tokens.push(part);
@@ -684,7 +686,9 @@ function tokenize(text: string): string[] {
     } else if (/[\u4e00-\u9fff]/.test(segment)) {
       // Check if segment contains CJK characters (Chinese)
       // For Chinese, extract character n-grams (unigrams and bigrams)
-      const chars = Array.from(segment).filter((c) => /[\u4e00-\u9fff]/.test(c));
+      const chars = Array.from(segment).filter((c) =>
+        /[\u4e00-\u9fff]/.test(c),
+      );
       // Add individual characters
       tokens.push(...chars);
       // Add bigrams for better phrase matching
@@ -770,7 +774,8 @@ export function expandQueryForFts(query: string): {
 
   // Build expanded query: original terms OR extracted keywords
   // This ensures both exact matches and keyword matches are found
-  const expanded = keywords.length > 0 ? `${original} OR ${keywords.join(" OR ")}` : original;
+  const expanded =
+    keywords.length > 0 ? `${original} OR ${keywords.join(" OR ")}` : original;
 
   return { original, keywords, expanded };
 }

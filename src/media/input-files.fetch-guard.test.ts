@@ -15,8 +15,11 @@ let extractImageContentFromSource: typeof import("./input-files.js").extractImag
 let extractFileContentFromSource: typeof import("./input-files.js").extractFileContentFromSource;
 
 beforeAll(async () => {
-  ({ fetchWithGuard, extractImageContentFromSource, extractFileContentFromSource } =
-    await import("./input-files.js"));
+  ({
+    fetchWithGuard,
+    extractImageContentFromSource,
+    extractFileContentFromSource,
+  } = await import("./input-files.js"));
 });
 
 describe("fetchWithGuard", () => {
@@ -89,7 +92,12 @@ describe("base64 size guards", () => {
       expectedError: "File too large",
       run: async (data: string) => {
         return await extractFileContentFromSource({
-          source: { type: "base64", data, mediaType: "text/plain", filename: "x.txt" },
+          source: {
+            type: "base64",
+            data,
+            mediaType: "text/plain",
+            filename: "x.txt",
+          },
           limits: {
             allowUrl: false,
             allowedMimes: new Set(["text/plain"]),
@@ -102,16 +110,21 @@ describe("base64 size guards", () => {
         });
       },
     },
-  ] as const)("rejects oversized base64 $kind before decoding", async (testCase) => {
-    const data = Buffer.alloc(7).toString("base64");
-    const fromSpy = vi.spyOn(Buffer, "from");
-    await expect(testCase.run(data)).rejects.toThrow(testCase.expectedError);
+  ] as const)(
+    "rejects oversized base64 $kind before decoding",
+    async (testCase) => {
+      const data = Buffer.alloc(7).toString("base64");
+      const fromSpy = vi.spyOn(Buffer, "from");
+      await expect(testCase.run(data)).rejects.toThrow(testCase.expectedError);
 
-    // Regression check: oversize reject happens before Buffer.from(..., "base64") allocates.
-    const base64Calls = fromSpy.mock.calls.filter((args) => (args as unknown[])[1] === "base64");
-    expect(base64Calls).toHaveLength(0);
-    fromSpy.mockRestore();
-  });
+      // Regression check: oversize reject happens before Buffer.from(..., "base64") allocates.
+      const base64Calls = fromSpy.mock.calls.filter(
+        (args) => (args as unknown[])[1] === "base64",
+      );
+      expect(base64Calls).toHaveLength(0);
+      fromSpy.mockRestore();
+    },
+  );
 });
 
 describe("input image base64 validation", () => {

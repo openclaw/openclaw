@@ -64,13 +64,15 @@ describe("sanitizeHtml", () => {
   });
 
   it("strips transform:translateX far-offscreen elements", async () => {
-    const html = '<p>Show</p><div style="transform:translateX(-9999px)">Translated</div>';
+    const html =
+      '<p>Show</p><div style="transform:translateX(-9999px)">Translated</div>';
     const result = await sanitizeHtml(html);
     expect(result).not.toContain("Translated");
   });
 
   it("strips width:0 height:0 overflow:hidden elements", async () => {
-    const html = '<p>Show</p><div style="width:0;height:0;overflow:hidden">Zero</div>';
+    const html =
+      '<p>Show</p><div style="width:0;height:0;overflow:hidden">Zero</div>';
     const result = await sanitizeHtml(html);
     expect(result).not.toContain("Zero");
   });
@@ -106,7 +108,8 @@ describe("sanitizeHtml", () => {
   });
 
   it("strips visually-hidden class elements", async () => {
-    const html = '<p>Main</p><span class="visually-hidden">Hidden visually</span>';
+    const html =
+      '<p>Main</p><span class="visually-hidden">Hidden visually</span>';
     const result = await sanitizeHtml(html);
     expect(result).not.toContain("Hidden visually");
   });
@@ -142,7 +145,8 @@ describe("sanitizeHtml", () => {
   });
 
   it("strips input type=hidden", async () => {
-    const html = '<form><input type="hidden" value="csrf-token-secret"/></form>';
+    const html =
+      '<form><input type="hidden" value="csrf-token-secret"/></form>';
     const result = await sanitizeHtml(html);
     expect(result).not.toContain("csrf-token-secret");
   });
@@ -155,7 +159,8 @@ describe("sanitizeHtml", () => {
   });
 
   it("strips meta tags", async () => {
-    const html = '<head><meta name="inject" content="prompt payload"/></head><p>Body</p>';
+    const html =
+      '<head><meta name="inject" content="prompt payload"/></head><p>Body</p>';
     const result = await sanitizeHtml(html);
     expect(result).not.toContain("prompt payload");
   });
@@ -173,7 +178,8 @@ describe("sanitizeHtml", () => {
   });
 
   it("preserves visible content", async () => {
-    const html = "<p>Hello world</p><h1>Title</h1><a href='https://example.com'>Link</a>";
+    const html =
+      "<p>Hello world</p><h1>Title</h1><a href='https://example.com'>Link</a>";
     const result = await sanitizeHtml(html);
     expect(result).toContain("Hello world");
     expect(result).toContain("Title");

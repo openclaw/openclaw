@@ -8,12 +8,18 @@ type RepairReport = {
   reason?: string;
 };
 
-function isSessionHeader(entry: unknown): entry is { type: string; id: string } {
+function isSessionHeader(
+  entry: unknown,
+): entry is { type: string; id: string } {
   if (!entry || typeof entry !== "object") {
     return false;
   }
   const record = entry as { type?: unknown; id?: unknown };
-  return record.type === "session" && typeof record.id === "string" && record.id.length > 0;
+  return (
+    record.type === "session" &&
+    typeof record.id === "string" &&
+    record.id.length > 0
+  );
 }
 
 export async function repairSessionFileIfNeeded(params: {
@@ -31,10 +37,16 @@ export async function repairSessionFileIfNeeded(params: {
   } catch (err) {
     const code = (err as { code?: unknown } | undefined)?.code;
     if (code === "ENOENT") {
-      return { repaired: false, droppedLines: 0, reason: "missing session file" };
+      return {
+        repaired: false,
+        droppedLines: 0,
+        reason: "missing session file",
+      };
     }
     const reason = `failed to read session file: ${err instanceof Error ? err.message : "unknown error"}`;
-    params.warn?.(`session file repair skipped: ${reason} (${path.basename(sessionFile)})`);
+    params.warn?.(
+      `session file repair skipped: ${reason} (${path.basename(sessionFile)})`,
+    );
     return { repaired: false, droppedLines: 0, reason };
   }
 

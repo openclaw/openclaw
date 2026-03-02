@@ -19,7 +19,10 @@ import {
 import { logVerbose } from "../../globals.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
-import { normalizeCommandBody, type CommandNormalizeOptions } from "../commands-registry.js";
+import {
+  normalizeCommandBody,
+  type CommandNormalizeOptions,
+} from "../commands-registry.js";
 import type { FinalizedMsgContext, MsgContext } from "../templating.js";
 import {
   applyAbortCutoffToSessionEntry,
@@ -29,7 +32,10 @@ import {
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import { clearSessionQueues } from "./queue.js";
 
-export { resolveAbortCutoffFromContext, shouldSkipMessageByAbortCutoff } from "./abort-cutoff.js";
+export {
+  resolveAbortCutoffFromContext,
+  shouldSkipMessageByAbortCutoff,
+} from "./abort-cutoff.js";
 
 const ABORT_TRIGGERS = new Set([
   "stop",
@@ -97,7 +103,10 @@ export function isAbortTrigger(text?: string): boolean {
   return ABORT_TRIGGERS.has(normalized);
 }
 
-export function isAbortRequestText(text?: string, options?: CommandNormalizeOptions): boolean {
+export function isAbortRequestText(
+  text?: string,
+  options?: CommandNormalizeOptions,
+): boolean {
   if (!text) {
     return false;
   }
@@ -208,7 +217,10 @@ export function stopSubagentsForRequester(params: {
   cfg: OpenClawConfig;
   requesterSessionKey?: string;
 }): { stopped: number } {
-  const requesterKey = normalizeRequesterSessionKey(params.cfg, params.requesterSessionKey);
+  const requesterKey = normalizeRequesterSessionKey(
+    params.cfg,
+    params.requesterSessionKey,
+  );
   if (!requesterKey) {
     return { stopped: 0 };
   }
@@ -231,7 +243,9 @@ export function stopSubagentsForRequester(params: {
     if (!run.endedAt) {
       const cleared = clearSessionQueues([childKey]);
       const parsed = parseAgentSessionKey(childKey);
-      const storePath = resolveStorePath(params.cfg.session?.store, { agentId: parsed?.agentId });
+      const storePath = resolveStorePath(params.cfg.session?.store, {
+        agentId: parsed?.agentId,
+      });
       let store = storeCache.get(storePath);
       if (!store) {
         store = loadSessionStore(storePath);
@@ -247,7 +261,12 @@ export function stopSubagentsForRequester(params: {
           reason: "killed",
         }) > 0;
 
-      if (markedTerminated || aborted || cleared.followupCleared > 0 || cleared.laneCleared > 0) {
+      if (
+        markedTerminated ||
+        aborted ||
+        cleared.followupCleared > 0 ||
+        cleared.laneCleared > 0
+      ) {
         stopped += 1;
       }
     }
@@ -277,7 +296,9 @@ export async function tryFastAbortFromMessage(params: {
     config: cfg,
   });
   // Use RawBody/CommandBody for abort detection (clean message without structural context).
-  const raw = stripStructuralPrefixes(ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "");
+  const raw = stripStructuralPrefixes(
+    ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "",
+  );
   const isGroup = ctx.ChatType?.trim().toLowerCase() === "group";
   const stripped = isGroup ? stripMentions(raw, ctx, cfg, agentId) : raw;
   const abortRequested = isAbortRequestText(stripped);

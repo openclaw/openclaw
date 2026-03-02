@@ -1,7 +1,16 @@
-import { type AcpRuntimeErrorCode, AcpRuntimeError, toAcpRuntimeError } from "./errors.js";
+import {
+  type AcpRuntimeErrorCode,
+  AcpRuntimeError,
+  toAcpRuntimeError,
+} from "./errors.js";
 
-function resolveAcpRuntimeErrorNextStep(error: AcpRuntimeError): string | undefined {
-  if (error.code === "ACP_BACKEND_MISSING" || error.code === "ACP_BACKEND_UNAVAILABLE") {
+function resolveAcpRuntimeErrorNextStep(
+  error: AcpRuntimeError,
+): string | undefined {
+  if (
+    error.code === "ACP_BACKEND_MISSING" ||
+    error.code === "ACP_BACKEND_UNAVAILABLE"
+  ) {
     return "Run `/acp doctor`, install/enable the backend plugin, then retry.";
   }
   if (error.code === "ACP_DISPATCH_DISABLED") {

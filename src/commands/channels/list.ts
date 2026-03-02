@@ -1,9 +1,15 @@
 import { loadAuthProfileStore } from "../../agents/auth-profiles.js";
 import { listChannelPlugins } from "../../channels/plugins/index.js";
 import { buildChannelAccountSnapshot } from "../../channels/plugins/status.js";
-import type { ChannelAccountSnapshot, ChannelPlugin } from "../../channels/plugins/types.js";
+import type {
+  ChannelAccountSnapshot,
+  ChannelPlugin,
+} from "../../channels/plugins/types.js";
 import { withProgress } from "../../cli/progress.js";
-import { formatUsageReportLines, loadProviderUsageSummary } from "../../infra/provider-usage.js";
+import {
+  formatUsageReportLines,
+  loadProviderUsageSummary,
+} from "../../infra/provider-usage.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { formatDocsLink } from "../../terminal/links.js";
 import { theme } from "../../terminal/theme.js";
@@ -66,7 +72,10 @@ function formatAccountLine(params: {
   if (snapshot.linked !== undefined) {
     bits.push(formatLinked(snapshot.linked));
   }
-  if (shouldShowConfigured(channel) && typeof snapshot.configured === "boolean") {
+  if (
+    shouldShowConfigured(channel) &&
+    typeof snapshot.configured === "boolean"
+  ) {
     bits.push(formatConfigured(snapshot.configured));
   }
   if (snapshot.tokenSource) {
@@ -113,12 +122,14 @@ export async function channelsListCommand(
   const plugins = listChannelPlugins();
 
   const authStore = loadAuthProfileStore();
-  const authProfiles = Object.entries(authStore.profiles).map(([profileId, profile]) => ({
-    id: profileId,
-    provider: profile.provider,
-    type: profile.type,
-    isExternal: false,
-  }));
+  const authProfiles = Object.entries(authStore.profiles).map(
+    ([profileId, profile]) => ({
+      id: profileId,
+      provider: profile.provider,
+      type: profile.type,
+      isExternal: false,
+    }),
+  );
   if (opts.json) {
     const usage = includeUsage ? await loadProviderUsageSummary() : undefined;
     const chat: Record<string, string[]> = {};
@@ -160,7 +171,9 @@ export async function channelsListCommand(
   } else {
     for (const profile of authProfiles) {
       const external = profile.isExternal ? theme.muted(" (synced)") : "";
-      lines.push(`- ${theme.accent(profile.id)} (${theme.success(profile.type)}${external})`);
+      lines.push(
+        `- ${theme.accent(profile.id)} (${theme.success(profile.type)}${external})`,
+      );
     }
   }
 
@@ -179,5 +192,7 @@ export async function channelsListCommand(
   }
 
   runtime.log("");
-  runtime.log(`Docs: ${formatDocsLink("/gateway/configuration", "gateway/configuration")}`);
+  runtime.log(
+    `Docs: ${formatDocsLink("/gateway/configuration", "gateway/configuration")}`,
+  );
 }

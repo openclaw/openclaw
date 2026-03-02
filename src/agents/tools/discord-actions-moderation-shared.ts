@@ -19,7 +19,9 @@ const moderationPermissions: Record<DiscordModerationAction, bigint> = {
   ban: PermissionFlagsBits.BanMembers,
 };
 
-export function isDiscordModerationAction(action: string): action is DiscordModerationAction {
+export function isDiscordModerationAction(
+  action: string,
+): action is DiscordModerationAction {
   return action === "timeout" || action === "kick" || action === "ban";
 }
 
@@ -40,9 +42,13 @@ export function readDiscordModerationCommand(
     action,
     guildId: readStringParam(params, "guildId", { required: true }),
     userId: readStringParam(params, "userId", { required: true }),
-    durationMinutes: readNumberParam(params, "durationMinutes", { integer: true }),
+    durationMinutes: readNumberParam(params, "durationMinutes", {
+      integer: true,
+    }),
     until: readStringParam(params, "until"),
     reason: readStringParam(params, "reason"),
-    deleteMessageDays: readNumberParam(params, "deleteMessageDays", { integer: true }),
+    deleteMessageDays: readNumberParam(params, "deleteMessageDays", {
+      integer: true,
+    }),
   };
 }

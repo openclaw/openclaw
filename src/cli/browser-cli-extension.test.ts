@@ -64,7 +64,9 @@ vi.mock("node:fs", async (importOriginal) => {
       const toAbs = absInMock(to);
       const entry = state.entries.get(fromAbs);
       if (!entry) {
-        throw new Error(`ENOENT: no such file or directory, rename '${from}' -> '${to}'`);
+        throw new Error(
+          `ENOENT: no such file or directory, rename '${from}' -> '${to}'`,
+        );
       }
       state.entries.delete(fromAbs);
       state.entries.set(toAbs, entry);
@@ -108,8 +110,11 @@ let installChromeExtension: typeof import("./browser-cli-extension.js").installC
 let registerBrowserExtensionCommands: typeof import("./browser-cli-extension.js").registerBrowserExtensionCommands;
 
 beforeAll(async () => {
-  ({ resolveBundledExtensionRootDir, installChromeExtension, registerBrowserExtensionCommands } =
-    await import("./browser-cli-extension.js"));
+  ({
+    resolveBundledExtensionRootDir,
+    installChromeExtension,
+    registerBrowserExtensionCommands,
+  } = await import("./browser-cli-extension.js"));
 });
 
 beforeEach(() => {
@@ -124,7 +129,10 @@ beforeEach(() => {
 
 function writeManifest(dir: string) {
   setDir(dir);
-  setFile(path.join(dir, "manifest.json"), JSON.stringify({ manifest_version: 3 }));
+  setFile(
+    path.join(dir, "manifest.json"),
+    JSON.stringify({ manifest_version: 3 }),
+  );
 }
 
 describe("bundled extension resolver (fs-mocked)", () => {
@@ -163,8 +171,12 @@ describe("browser extension install (fs-mocked)", () => {
     const result = await installChromeExtension({ stateDir: tmp, sourceDir });
 
     expect(result.path).toBe(path.join(tmp, "browser", "chrome-extension"));
-    expect(state.entries.has(abs(path.join(result.path, "manifest.json")))).toBe(true);
-    expect(state.entries.has(abs(path.join(result.path, "test.txt")))).toBe(true);
+    expect(
+      state.entries.has(abs(path.join(result.path, "manifest.json"))),
+    ).toBe(true);
+    expect(state.entries.has(abs(path.join(result.path, "test.txt")))).toBe(
+      true,
+    );
     expect(result.path.includes("node_modules")).toBe(false);
   });
 
@@ -177,13 +189,17 @@ describe("browser extension install (fs-mocked)", () => {
       writeManifest(dir);
 
       const program = new Command();
-      const browser = program.command("browser").option("--json", "JSON output", false);
+      const browser = program
+        .command("browser")
+        .option("--json", "JSON output", false);
       registerBrowserExtensionCommands(
         browser,
         (cmd) => cmd.parent?.opts?.() as { json?: boolean },
       );
 
-      await program.parseAsync(["browser", "extension", "path"], { from: "user" });
+      await program.parseAsync(["browser", "extension", "path"], {
+        from: "user",
+      });
       expect(copyToClipboard).toHaveBeenCalledWith(dir);
     });
   });

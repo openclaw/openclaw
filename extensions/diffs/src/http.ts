@@ -1,7 +1,10 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { PluginLogger } from "openclaw/plugin-sdk";
 import type { DiffArtifactStore } from "./store.js";
-import { DIFF_ARTIFACT_ID_PATTERN, DIFF_ARTIFACT_TOKEN_PATTERN } from "./types.js";
+import {
+  DIFF_ARTIFACT_ID_PATTERN,
+  DIFF_ARTIFACT_TOKEN_PATTERN,
+} from "./types.js";
 import { VIEWER_ASSET_PREFIX, getServedViewerAsset } from "./viewer-assets.js";
 
 const VIEW_PREFIX = "/plugins/diffs/view/";
@@ -28,7 +31,10 @@ export function createDiffsHttpHandler(params: {
 }) {
   const viewerFailureLimiter = new ViewerFailureLimiter();
 
-  return async (req: IncomingMessage, res: ServerResponse): Promise<boolean> => {
+  return async (
+    req: IncomingMessage,
+    res: ServerResponse,
+  ): Promise<boolean> => {
     const parsed = parseRequestUrl(req.url);
     if (!parsed) {
       return false;
@@ -59,7 +65,10 @@ export function createDiffsHttpHandler(params: {
       if (!throttled.allowed) {
         res.statusCode = 429;
         setSharedHeaders(res, "text/plain; charset=utf-8");
-        res.setHeader("Retry-After", String(Math.max(1, Math.ceil(throttled.retryAfterMs / 1000))));
+        res.setHeader(
+          "Retry-After",
+          String(Math.max(1, Math.ceil(throttled.retryAfterMs / 1000))),
+        );
         res.end("Too Many Requests");
         return true;
       }
@@ -108,7 +117,9 @@ export function createDiffsHttpHandler(params: {
       if (!localRequest) {
         viewerFailureLimiter.recordFailure(remoteKey);
       }
-      params.logger?.warn(`Failed to serve diff artifact ${id}: ${String(error)}`);
+      params.logger?.warn(
+        `Failed to serve diff artifact ${id}: ${String(error)}`,
+      );
       respondText(res, 500, "Failed to load diff");
       return true;
     }
@@ -159,7 +170,11 @@ async function serveAsset(
   }
 }
 
-function respondText(res: ServerResponse, statusCode: number, body: string): void {
+function respondText(
+  res: ServerResponse,
+  statusCode: number,
+  body: string,
+): void {
   res.statusCode = statusCode;
   setSharedHeaders(res, "text/plain; charset=utf-8");
   res.end(body);
@@ -177,7 +192,9 @@ function normalizeRemoteClientKey(remoteAddress: string | undefined): string {
   if (!normalized) {
     return "unknown";
   }
-  return normalized.startsWith("::ffff:") ? normalized.slice("::ffff:".length) : normalized;
+  return normalized.startsWith("::ffff:")
+    ? normalized.slice("::ffff:".length)
+    : normalized;
 }
 
 function isLoopbackClientIp(clientIp: string): boolean {
@@ -246,7 +263,10 @@ class ViewerFailureLimiter {
     }
     const now = Date.now();
     for (const [key, state] of this.failures) {
-      if (state.lockUntilMs <= now && now - state.windowStartMs >= VIEWER_FAILURE_WINDOW_MS) {
+      if (
+        state.lockUntilMs <= now &&
+        now - state.windowStartMs >= VIEWER_FAILURE_WINDOW_MS
+      ) {
         this.failures.delete(key);
       }
       if (this.failures.size < VIEWER_LIMITER_MAX_KEYS) {

@@ -24,7 +24,9 @@ describe("markdownTheme", () => {
 
     it("passes supported language through to the highlighter", () => {
       markdownTheme.highlightCode!("const x = 42;", "javascript");
-      expect(cliHighlightMocks.supportsLanguage).toHaveBeenCalledWith("javascript");
+      expect(cliHighlightMocks.supportsLanguage).toHaveBeenCalledWith(
+        "javascript",
+      );
       expect(cliHighlightMocks.highlight).toHaveBeenCalledWith(
         "const x = 42;",
         expect.objectContaining({ language: "javascript" }),
@@ -33,8 +35,13 @@ describe("markdownTheme", () => {
 
     it("falls back to auto-detect for unknown language and preserves lines", () => {
       cliHighlightMocks.supportsLanguage.mockReturnValue(false);
-      cliHighlightMocks.highlight.mockImplementation((code: string) => `${code}\nline-2`);
-      const result = markdownTheme.highlightCode!(`echo "hello"`, "not-a-real-language");
+      cliHighlightMocks.highlight.mockImplementation(
+        (code: string) => `${code}\nline-2`,
+      );
+      const result = markdownTheme.highlightCode!(
+        `echo "hello"`,
+        "not-a-real-language",
+      );
       expect(cliHighlightMocks.highlight).toHaveBeenCalledWith(
         `echo "hello"`,
         expect.objectContaining({ language: undefined }),
@@ -63,20 +70,32 @@ describe("theme", () => {
 
 describe("list themes", () => {
   it("reuses shared select-list styles in searchable list theme", () => {
-    expect(searchableSelectListTheme.selectedPrefix(">")).toBe(selectListTheme.selectedPrefix(">"));
+    expect(searchableSelectListTheme.selectedPrefix(">")).toBe(
+      selectListTheme.selectedPrefix(">"),
+    );
     expect(searchableSelectListTheme.selectedText("entry")).toBe(
       selectListTheme.selectedText("entry"),
     );
-    expect(searchableSelectListTheme.description("desc")).toBe(selectListTheme.description("desc"));
+    expect(searchableSelectListTheme.description("desc")).toBe(
+      selectListTheme.description("desc"),
+    );
     expect(searchableSelectListTheme.scrollInfo("scroll")).toBe(
       selectListTheme.scrollInfo("scroll"),
     );
-    expect(searchableSelectListTheme.noMatch("none")).toBe(selectListTheme.noMatch("none"));
+    expect(searchableSelectListTheme.noMatch("none")).toBe(
+      selectListTheme.noMatch("none"),
+    );
   });
 
   it("keeps searchable list specific renderers readable", () => {
-    expect(stripAnsi(searchableSelectListTheme.searchPrompt("Search:"))).toBe("Search:");
-    expect(stripAnsi(searchableSelectListTheme.searchInput("query"))).toBe("query");
-    expect(stripAnsi(searchableSelectListTheme.matchHighlight("match"))).toBe("match");
+    expect(stripAnsi(searchableSelectListTheme.searchPrompt("Search:"))).toBe(
+      "Search:",
+    );
+    expect(stripAnsi(searchableSelectListTheme.searchInput("query"))).toBe(
+      "query",
+    );
+    expect(stripAnsi(searchableSelectListTheme.matchHighlight("match"))).toBe(
+      "match",
+    );
   });
 });

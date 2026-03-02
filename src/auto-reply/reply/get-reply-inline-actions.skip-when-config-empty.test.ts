@@ -33,7 +33,9 @@ const createHandleInlineActionsInput = (params: {
   typing: TypingController;
   cleanedBody: string;
   command?: Partial<HandleInlineActionsInput["command"]>;
-  overrides?: Partial<Omit<HandleInlineActionsInput, "ctx" | "sessionCtx" | "typing" | "command">>;
+  overrides?: Partial<
+    Omit<HandleInlineActionsInput, "ctx" | "sessionCtx" | "typing" | "command">
+  >;
 }): HandleInlineActionsInput => {
   const baseCommand: HandleInlineActionsInput["command"] = {
     surface: "whatsapp",
@@ -114,7 +116,10 @@ describe("handleInlineActions", () => {
   it("forwards agentDir into handleCommands", async () => {
     const typing = createTypingController();
 
-    handleCommandsMock.mockResolvedValue({ shouldContinue: false, reply: { text: "done" } });
+    handleCommandsMock.mockResolvedValue({
+      shouldContinue: false,
+      reply: { text: "done" },
+    });
 
     const ctx = buildTestCtx({
       Body: "/status",
@@ -193,7 +198,10 @@ describe("handleInlineActions", () => {
       abortedLastRun: true,
     };
     const sessionStore = { "s:main": sessionEntry };
-    handleCommandsMock.mockResolvedValue({ shouldContinue: false, reply: { text: "ok" } });
+    handleCommandsMock.mockResolvedValue({
+      shouldContinue: false,
+      reply: { text: "ok" },
+    });
     const ctx = buildTestCtx({
       Body: "new message",
       CommandBody: "new message",

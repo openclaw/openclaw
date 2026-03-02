@@ -1,5 +1,8 @@
 import { PROVIDER_LABELS } from "./provider-usage.shared.js";
-import type { ProviderUsageSnapshot, UsageProviderId } from "./provider-usage.types.js";
+import type {
+  ProviderUsageSnapshot,
+  UsageProviderId,
+} from "./provider-usage.types.js";
 
 export async function fetchJson(
   url: string,
@@ -56,5 +59,8 @@ export function buildUsageHttpErrorSnapshot(
     return buildUsageErrorSnapshot(options.provider, "Token expired");
   }
   const suffix = options.message?.trim() ? `: ${options.message.trim()}` : "";
-  return buildUsageErrorSnapshot(options.provider, `HTTP ${options.status}${suffix}`);
+  return buildUsageErrorSnapshot(
+    options.provider,
+    `HTTP ${options.status}${suffix}`,
+  );
 }

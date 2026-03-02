@@ -5,7 +5,11 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveSecretRefString, resolveSecretRefValue } from "./resolve.js";
 
-async function writeSecureFile(filePath: string, content: string, mode = 0o600): Promise<void> {
+async function writeSecureFile(
+  filePath: string,
+  content: string,
+  mode = 0o600,
+): Promise<void> {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   await fs.writeFile(filePath, content, "utf8");
   await fs.chmod(filePath, mode);
@@ -28,7 +32,9 @@ describe("secret ref resolver", () => {
   };
 
   beforeAll(async () => {
-    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-resolve-"));
+    fixtureRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-secrets-resolve-"),
+    );
     const sharedExecDir = path.join(fixtureRoot, "shared-exec");
     await fs.mkdir(sharedExecDir, { recursive: true });
 
@@ -52,18 +58,27 @@ describe("secret ref resolver", () => {
     execProtocolV2ScriptPath = path.join(sharedExecDir, "resolver-v2.sh");
     await writeSecureFile(
       execProtocolV2ScriptPath,
-      ["#!/bin/sh", 'printf \'{"protocolVersion":2,"values":{"openai/api-key":"x"}}\''].join("\n"),
+      [
+        "#!/bin/sh",
+        'printf \'{"protocolVersion":2,"values":{"openai/api-key":"x"}}\'',
+      ].join("\n"),
       0o700,
     );
 
-    execMissingIdScriptPath = path.join(sharedExecDir, "resolver-missing-id.sh");
+    execMissingIdScriptPath = path.join(
+      sharedExecDir,
+      "resolver-missing-id.sh",
+    );
     await writeSecureFile(
       execMissingIdScriptPath,
       ["#!/bin/sh", 'printf \'{"protocolVersion":1,"values":{}}\''].join("\n"),
       0o700,
     );
 
-    execInvalidJsonScriptPath = path.join(sharedExecDir, "resolver-invalid-json.sh");
+    execInvalidJsonScriptPath = path.join(
+      sharedExecDir,
+      "resolver-invalid-json.sh",
+    );
     await writeSecureFile(
       execInvalidJsonScriptPath,
       ["#!/bin/sh", "printf 'not-json'"].join("\n"),
@@ -71,7 +86,11 @@ describe("secret ref resolver", () => {
     );
 
     execFastExitScriptPath = path.join(sharedExecDir, "resolver-fast-exit.sh");
-    await writeSecureFile(execFastExitScriptPath, ["#!/bin/sh", "exit 0"].join("\n"), 0o700);
+    await writeSecureFile(
+      execFastExitScriptPath,
+      ["#!/bin/sh", "exit 0"].join("\n"),
+      0o700,
+    );
   });
 
   afterAll(async () => {
@@ -269,7 +288,15 @@ describe("secret ref resolver", () => {
 
     const root = await createCaseDir("homebrew");
     const binDir = path.join(root, "opt", "homebrew", "bin");
-    const cellarDir = path.join(root, "opt", "homebrew", "Cellar", "node", "25.0.0", "bin");
+    const cellarDir = path.join(
+      root,
+      "opt",
+      "homebrew",
+      "Cellar",
+      "node",
+      "25.0.0",
+      "bin",
+    );
     await fs.mkdir(binDir, { recursive: true });
     await fs.mkdir(cellarDir, { recursive: true });
 
@@ -490,7 +517,11 @@ describe("secret ref resolver", () => {
     try {
       await expect(
         resolveSecretRefString(
-          { source: "file", provider: "filemain", id: "/providers/openai/apiKey" },
+          {
+            source: "file",
+            provider: "filemain",
+            id: "/providers/openai/apiKey",
+          },
           {
             config: {
               secrets: {

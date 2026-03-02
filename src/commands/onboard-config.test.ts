@@ -8,7 +8,10 @@ import {
 describe("applyOnboardingLocalWorkspaceConfig", () => {
   it("sets secure dmScope default when unset", () => {
     const baseConfig: OpenClawConfig = {};
-    const result = applyOnboardingLocalWorkspaceConfig(baseConfig, "/tmp/workspace");
+    const result = applyOnboardingLocalWorkspaceConfig(
+      baseConfig,
+      "/tmp/workspace",
+    );
 
     expect(result.session?.dmScope).toBe(ONBOARDING_DEFAULT_DM_SCOPE);
     expect(result.gateway?.mode).toBe("local");
@@ -21,7 +24,10 @@ describe("applyOnboardingLocalWorkspaceConfig", () => {
         dmScope: "main",
       },
     };
-    const result = applyOnboardingLocalWorkspaceConfig(baseConfig, "/tmp/workspace");
+    const result = applyOnboardingLocalWorkspaceConfig(
+      baseConfig,
+      "/tmp/workspace",
+    );
 
     expect(result.session?.dmScope).toBe("main");
   });
@@ -32,7 +38,10 @@ describe("applyOnboardingLocalWorkspaceConfig", () => {
         dmScope: "per-account-channel-peer",
       },
     };
-    const result = applyOnboardingLocalWorkspaceConfig(baseConfig, "/tmp/workspace");
+    const result = applyOnboardingLocalWorkspaceConfig(
+      baseConfig,
+      "/tmp/workspace",
+    );
 
     expect(result.session?.dmScope).toBe("per-account-channel-peer");
   });

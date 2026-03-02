@@ -29,7 +29,9 @@ async function invokeWebhook(params: {
   const onEventsMock = params.onEvents ?? vi.fn(async () => {});
   const middleware = createLineWebhookMiddleware({
     channelSecret: SECRET,
-    onEvents: onEventsMock as unknown as (body: WebhookRequestBody) => Promise<void>,
+    onEvents: onEventsMock as unknown as (
+      body: WebhookRequestBody,
+    ) => Promise<void>,
   });
 
   const headers = { ...params.headers };
@@ -56,11 +58,16 @@ async function invokeWebhook(params: {
 describe("createLineWebhookMiddleware", () => {
   it.each([
     ["raw string body", JSON.stringify({ events: [{ type: "message" }] })],
-    ["raw buffer body", Buffer.from(JSON.stringify({ events: [{ type: "follow" }] }), "utf-8")],
+    [
+      "raw buffer body",
+      Buffer.from(JSON.stringify({ events: [{ type: "follow" }] }), "utf-8"),
+    ],
   ])("parses JSON from %s", async (_label, body) => {
     const { res, onEvents } = await invokeWebhook({ body });
     expect(res.status).toHaveBeenCalledWith(200);
-    expect(onEvents).toHaveBeenCalledWith(expect.objectContaining({ events: expect.any(Array) }));
+    expect(onEvents).toHaveBeenCalledWith(
+      expect.objectContaining({ events: expect.any(Array) }),
+    );
   });
 
   it("rejects invalid JSON payloads", async () => {
@@ -96,7 +103,9 @@ describe("createLineWebhookMiddleware", () => {
       autoSign: false,
     });
     expect(res.status).toHaveBeenCalledWith(400);
-    expect(res.json).toHaveBeenCalledWith({ error: "Missing X-Line-Signature header" });
+    expect(res.json).toHaveBeenCalledWith({
+      error: "Missing X-Line-Signature header",
+    });
     expect(onEvents).not.toHaveBeenCalled();
   });
 

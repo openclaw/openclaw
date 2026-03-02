@@ -121,7 +121,9 @@ describe("pathForTab", () => {
 
   it("prepends base path", () => {
     expect(pathForTab("chat", "/ui")).toBe("/ui/chat");
-    expect(pathForTab("sessions", "/apps/openclaw")).toBe("/apps/openclaw/sessions");
+    expect(pathForTab("sessions", "/apps/openclaw")).toBe(
+      "/apps/openclaw/sessions",
+    );
   });
 });
 
@@ -138,7 +140,9 @@ describe("tabFromPath", () => {
 
   it("handles base paths", () => {
     expect(tabFromPath("/ui/chat", "/ui")).toBe("chat");
-    expect(tabFromPath("/apps/openclaw/sessions", "/apps/openclaw")).toBe("sessions");
+    expect(tabFromPath("/apps/openclaw/sessions", "/apps/openclaw")).toBe(
+      "sessions",
+    );
   });
 
   it("returns null for unknown path", () => {
@@ -163,7 +167,9 @@ describe("inferBasePathFromPathname", () => {
 
   it("infers base path from nested paths", () => {
     expect(inferBasePathFromPathname("/ui/chat")).toBe("/ui");
-    expect(inferBasePathFromPathname("/apps/openclaw/sessions")).toBe("/apps/openclaw");
+    expect(inferBasePathFromPathname("/apps/openclaw/sessions")).toBe(
+      "/apps/openclaw",
+    );
   });
 
   it("handles index.html suffix", () => {

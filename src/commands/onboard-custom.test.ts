@@ -60,7 +60,9 @@ async function runPromptCustomApi(
   config: object = {},
 ) {
   return promptCustomApiConfig({
-    prompter: prompter as unknown as Parameters<typeof promptCustomApiConfig>[0]["prompter"],
+    prompter: prompter as unknown as Parameters<
+      typeof promptCustomApiConfig
+    >[0]["prompter"],
     runtime: { ...defaultRuntime, log: vi.fn() },
     config,
   });
@@ -74,7 +76,9 @@ function expectOpenAiCompatResult(params: {
 }) {
   expect(params.prompter.text).toHaveBeenCalledTimes(params.textCalls);
   expect(params.prompter.select).toHaveBeenCalledTimes(params.selectCalls);
-  expect(params.result.config.models?.providers?.custom?.api).toBe("openai-completions");
+  expect(params.result.config.models?.providers?.custom?.api).toBe(
+    "openai-completions",
+  );
 }
 
 function buildCustomProviderConfig(contextWindow?: number) {
@@ -92,7 +96,8 @@ function buildCustomProviderConfig(contextWindow?: number) {
               id: "foo-large",
               name: "foo-large",
               contextWindow,
-              maxTokens: contextWindow > CONTEXT_WINDOW_HARD_MIN_TOKENS ? 4096 : 1024,
+              maxTokens:
+                contextWindow > CONTEXT_WINDOW_HARD_MIN_TOKENS ? 4096 : 1024,
               input: ["text"],
               cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
               reasoning: false,
@@ -129,13 +134,27 @@ describe("promptCustomApiConfig", () => {
     stubFetchSequence([{ ok: true }]);
     const result = await runPromptCustomApi(prompter);
 
-    expectOpenAiCompatResult({ prompter, textCalls: 5, selectCalls: 2, result });
-    expect(result.config.agents?.defaults?.models?.["custom/llama3"]?.alias).toBe("local");
+    expectOpenAiCompatResult({
+      prompter,
+      textCalls: 5,
+      selectCalls: 2,
+      result,
+    });
+    expect(
+      result.config.agents?.defaults?.models?.["custom/llama3"]?.alias,
+    ).toBe("local");
   });
 
   it("retries when verification fails", async () => {
     const prompter = createTestPrompter({
-      text: ["http://localhost:11434/v1", "", "bad-model", "good-model", "custom", ""],
+      text: [
+        "http://localhost:11434/v1",
+        "",
+        "bad-model",
+        "good-model",
+        "custom",
+        "",
+      ],
       select: ["plaintext", "openai", "model"],
     });
     stubFetchSequence([{ ok: false, status: 400 }, { ok: true }]);
@@ -147,27 +166,48 @@ describe("promptCustomApiConfig", () => {
 
   it("detects openai compatibility when unknown", async () => {
     const prompter = createTestPrompter({
-      text: ["https://example.com/v1", "test-key", "detected-model", "custom", "alias"],
+      text: [
+        "https://example.com/v1",
+        "test-key",
+        "detected-model",
+        "custom",
+        "alias",
+      ],
       select: ["plaintext", "unknown"],
     });
     stubFetchSequence([{ ok: true }]);
     const result = await runPromptCustomApi(prompter);
 
-    expectOpenAiCompatResult({ prompter, textCalls: 5, selectCalls: 2, result });
+    expectOpenAiCompatResult({
+      prompter,
+      textCalls: 5,
+      selectCalls: 2,
+      result,
+    });
   });
 
   it("uses expanded max_tokens for openai verification probes", async () => {
     const prompter = createTestPrompter({
-      text: ["https://example.com/v1", "test-key", "detected-model", "custom", "alias"],
+      text: [
+        "https://example.com/v1",
+        "test-key",
+        "detected-model",
+        "custom",
+        "alias",
+      ],
       select: ["plaintext", "openai"],
     });
     const fetchMock = stubFetchSequence([{ ok: true }]);
 
     await runPromptCustomApi(prompter);
 
-    const firstCall = fetchMock.mock.calls[0]?.[1] as { body?: string } | undefined;
+    const firstCall = fetchMock.mock.calls[0]?.[1] as
+      | { body?: string }
+      | undefined;
     expect(firstCall?.body).toBeDefined();
-    expect(JSON.parse(firstCall?.body ?? "{}")).toMatchObject({ max_tokens: 1 });
+    expect(JSON.parse(firstCall?.body ?? "{}")).toMatchObject({
+      max_tokens: 1,
+    });
   });
 
   it("uses azure-specific headers and body for openai verification probes", async () => {
@@ -211,17 +251,30 @@ describe("promptCustomApiConfig", () => {
 
   it("uses expanded max_tokens for anthropic verification probes", async () => {
     const prompter = createTestPrompter({
-      text: ["https://example.com", "test-key", "detected-model", "custom", "alias"],
+      text: [
+        "https://example.com",
+        "test-key",
+        "detected-model",
+        "custom",
+        "alias",
+      ],
       select: ["plaintext", "unknown"],
     });
-    const fetchMock = stubFetchSequence([{ ok: false, status: 404 }, { ok: true }]);
+    const fetchMock = stubFetchSequence([
+      { ok: false, status: 404 },
+      { ok: true },
+    ]);
 
     await runPromptCustomApi(prompter);
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    const secondCall = fetchMock.mock.calls[1]?.[1] as { body?: string } | undefined;
+    const secondCall = fetchMock.mock.calls[1]?.[1] as
+      | { body?: string }
+      | undefined;
     expect(secondCall?.body).toBeDefined();
-    expect(JSON.parse(secondCall?.body ?? "{}")).toMatchObject({ max_tokens: 1 });
+    expect(JSON.parse(secondCall?.body ?? "{}")).toMatchObject({
+      max_tokens: 1,
+    });
   });
 
   it("re-prompts base url when unknown detection fails", async () => {
@@ -237,7 +290,11 @@ describe("promptCustomApiConfig", () => {
       ],
       select: ["plaintext", "unknown", "baseUrl", "plaintext"],
     });
-    stubFetchSequence([{ ok: false, status: 404 }, { ok: false, status: 404 }, { ok: true }]);
+    stubFetchSequence([
+      { ok: false, status: 404 },
+      { ok: false, status: 404 },
+      { ok: true },
+    ]);
     await runPromptCustomApi(prompter);
 
     expect(prompter.note).toHaveBeenCalledWith(
@@ -282,17 +339,28 @@ describe("promptCustomApiConfig", () => {
   it("aborts verification after timeout", async () => {
     vi.useFakeTimers();
     const prompter = createTestPrompter({
-      text: ["http://localhost:11434/v1", "", "slow-model", "fast-model", "custom", ""],
+      text: [
+        "http://localhost:11434/v1",
+        "",
+        "slow-model",
+        "fast-model",
+        "custom",
+        "",
+      ],
       select: ["plaintext", "openai", "model"],
     });
 
     const fetchMock = vi
       .fn()
-      .mockImplementationOnce((_url: string, init?: { signal?: AbortSignal }) => {
-        return new Promise((_resolve, reject) => {
-          init?.signal?.addEventListener("abort", () => reject(new Error("AbortError")));
-        });
-      })
+      .mockImplementationOnce(
+        (_url: string, init?: { signal?: AbortSignal }) => {
+          return new Promise((_resolve, reject) => {
+            init?.signal?.addEventListener("abort", () =>
+              reject(new Error("AbortError")),
+            );
+          });
+        },
+      )
       .mockResolvedValueOnce({ ok: true, json: async () => ({}) });
     vi.stubGlobal("fetch", fetchMock);
 
@@ -307,7 +375,13 @@ describe("promptCustomApiConfig", () => {
   it("stores env SecretRef for custom provider when selected", async () => {
     vi.stubEnv("CUSTOM_PROVIDER_API_KEY", "test-env-key");
     const prompter = createTestPrompter({
-      text: ["https://example.com/v1", "CUSTOM_PROVIDER_API_KEY", "detected-model", "custom", ""],
+      text: [
+        "https://example.com/v1",
+        "CUSTOM_PROVIDER_API_KEY",
+        "detected-model",
+        "custom",
+        "",
+      ],
       select: ["ref", "env", "openai"],
     });
     const fetchMock = stubFetchSequence([{ ok: true }]);
@@ -382,7 +456,9 @@ describe("applyCustomApiConfig", () => {
       expectedContextWindow: 131072,
     },
   ])("$name", ({ existingContextWindow, expectedContextWindow }) => {
-    const result = applyCustomModelConfigWithContextWindow(existingContextWindow);
+    const result = applyCustomModelConfigWithContextWindow(
+      existingContextWindow,
+    );
     const model = result.config.models?.providers?.custom?.models?.find(
       (entry) => entry.id === "foo-large",
     );
@@ -398,7 +474,8 @@ describe("applyCustomApiConfig", () => {
         modelId: "foo-large",
         compatibility: "invalid" as unknown as "openai",
       },
-      expectedMessage: 'Custom provider compatibility must be "openai" or "anthropic".',
+      expectedMessage:
+        'Custom provider compatibility must be "openai" or "anthropic".',
     },
     {
       name: "explicit provider ids that normalize to empty",
@@ -409,7 +486,8 @@ describe("applyCustomApiConfig", () => {
         compatibility: "openai" as const,
         providerId: "!!!",
       },
-      expectedMessage: "Custom provider ID must include letters, numbers, or hyphens.",
+      expectedMessage:
+        "Custom provider ID must include letters, numbers, or hyphens.",
     },
   ])("rejects $name", ({ params, expectedMessage }) => {
     expect(() => applyCustomApiConfig(params)).toThrow(expectedMessage);
@@ -438,7 +516,8 @@ describe("parseNonInteractiveCustomApiFlags", () => {
     {
       name: "missing required flags",
       flags: { baseUrl: "https://llm.example.com/v1" },
-      expectedMessage: 'Auth choice "custom-api-key" requires a base URL and model ID.',
+      expectedMessage:
+        'Auth choice "custom-api-key" requires a base URL and model ID.',
     },
     {
       name: "invalid compatibility values",
@@ -447,7 +526,8 @@ describe("parseNonInteractiveCustomApiFlags", () => {
         modelId: "foo-large",
         compatibility: "xmlrpc",
       },
-      expectedMessage: 'Invalid --custom-compatibility (use "openai" or "anthropic").',
+      expectedMessage:
+        'Invalid --custom-compatibility (use "openai" or "anthropic").',
     },
     {
       name: "invalid explicit provider ids",
@@ -456,9 +536,12 @@ describe("parseNonInteractiveCustomApiFlags", () => {
         modelId: "foo-large",
         providerId: "!!!",
       },
-      expectedMessage: "Custom provider ID must include letters, numbers, or hyphens.",
+      expectedMessage:
+        "Custom provider ID must include letters, numbers, or hyphens.",
     },
   ])("rejects $name", ({ flags, expectedMessage }) => {
-    expect(() => parseNonInteractiveCustomApiFlags(flags)).toThrow(expectedMessage);
+    expect(() => parseNonInteractiveCustomApiFlags(flags)).toThrow(
+      expectedMessage,
+    );
   });
 });

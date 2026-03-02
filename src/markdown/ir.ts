@@ -356,7 +356,11 @@ function trimCell(cell: TableCell): TableCell {
     const sliceStart = Math.max(0, span.start - start);
     const sliceEnd = Math.min(trimmedLength, span.end - start);
     if (sliceEnd > sliceStart) {
-      trimmedStyles.push({ start: sliceStart, end: sliceEnd, style: span.style });
+      trimmedStyles.push({
+        start: sliceStart,
+        end: sliceEnd,
+        style: span.style,
+      });
     }
   }
   const trimmedLinks: MarkdownLinkSpan[] = [];
@@ -429,7 +433,11 @@ function renderTableAsBullets(state: RenderState) {
         appendCell(state, rowLabel);
         const labelEnd = state.text.length;
         if (labelEnd > labelStart) {
-          state.styles.push({ start: labelStart, end: labelEnd, style: "bold" });
+          state.styles.push({
+            start: labelStart,
+            end: labelEnd,
+            style: "bold",
+          });
         }
         state.text += "\n";
       }
@@ -482,7 +490,10 @@ function renderTableAsCode(state: RenderState) {
   const headers = state.table.headers.map(trimCell);
   const rows = state.table.rows.map((row) => row.map(trimCell));
 
-  const columnCount = Math.max(headers.length, ...rows.map((row) => row.length));
+  const columnCount = Math.max(
+    headers.length,
+    ...rows.map((row) => row.length),
+  );
   if (columnCount === 0) {
     return;
   }
@@ -760,7 +771,10 @@ function closeRemainingStyles(target: RenderTarget) {
   target.openStyles = [];
 }
 
-function clampStyleSpans(spans: MarkdownStyleSpan[], maxLength: number): MarkdownStyleSpan[] {
+function clampStyleSpans(
+  spans: MarkdownStyleSpan[],
+  maxLength: number,
+): MarkdownStyleSpan[] {
   const clamped: MarkdownStyleSpan[] = [];
   for (const span of spans) {
     const start = Math.max(0, Math.min(span.start, maxLength));
@@ -772,7 +786,10 @@ function clampStyleSpans(spans: MarkdownStyleSpan[], maxLength: number): Markdow
   return clamped;
 }
 
-function clampLinkSpans(spans: MarkdownLinkSpan[], maxLength: number): MarkdownLinkSpan[] {
+function clampLinkSpans(
+  spans: MarkdownLinkSpan[],
+  maxLength: number,
+): MarkdownLinkSpan[] {
   const clamped: MarkdownLinkSpan[] = [];
   for (const span of spans) {
     const start = Math.max(0, Math.min(span.start, maxLength));
@@ -803,7 +820,8 @@ function mergeStyleSpans(spans: MarkdownStyleSpan[]): MarkdownStyleSpan[] {
       prev.style === span.style &&
       // Blockquotes are container blocks. Adjacent blockquote spans should not merge or
       // consecutive blockquotes can "style bleed" across the paragraph boundary.
-      (span.start < prev.end || (span.start === prev.end && span.style !== "blockquote"))
+      (span.start < prev.end ||
+        (span.start === prev.end && span.style !== "blockquote"))
     ) {
       prev.end = Math.max(prev.end, span.end);
       continue;
@@ -836,7 +854,11 @@ function sliceStyleSpans(
   return mergeStyleSpans(sliced);
 }
 
-function sliceLinkSpans(spans: MarkdownLinkSpan[], start: number, end: number): MarkdownLinkSpan[] {
+function sliceLinkSpans(
+  spans: MarkdownLinkSpan[],
+  start: number,
+  end: number,
+): MarkdownLinkSpan[] {
   if (spans.length === 0) {
     return [];
   }
@@ -855,7 +877,10 @@ function sliceLinkSpans(spans: MarkdownLinkSpan[], start: number, end: number): 
   return sliced;
 }
 
-export function markdownToIR(markdown: string, options: MarkdownParseOptions = {}): MarkdownIR {
+export function markdownToIR(
+  markdown: string,
+  options: MarkdownParseOptions = {},
+): MarkdownIR {
   return markdownToIRWithMeta(markdown, options).ir;
 }
 
@@ -903,7 +928,9 @@ export function markdownToIRWithMeta(
   }
   const finalLength = Math.max(trimmedLength, codeBlockEnd);
   const finalText =
-    finalLength === state.text.length ? state.text : state.text.slice(0, finalLength);
+    finalLength === state.text.length
+      ? state.text
+      : state.text.slice(0, finalLength);
 
   return {
     ir: {

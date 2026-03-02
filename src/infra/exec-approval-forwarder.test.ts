@@ -57,7 +57,9 @@ function createForwarder(params: {
   return { deliver, forwarder };
 }
 
-function makeSessionCfg(options: { discordExecApprovalsEnabled?: boolean } = {}): OpenClawConfig {
+function makeSessionCfg(
+  options: { discordExecApprovalsEnabled?: boolean } = {},
+): OpenClawConfig {
   return {
     ...(options.discordExecApprovalsEnabled
       ? {
@@ -86,7 +88,9 @@ async function expectDiscordSessionTargetRequest(params: {
     resolveSessionTarget: () => ({ channel: "discord", to: "channel:123" }),
   });
 
-  await expect(forwarder.handleRequested(baseRequest)).resolves.toBe(params.expectedAccepted);
+  await expect(forwarder.handleRequested(baseRequest)).resolves.toBe(
+    params.expectedAccepted,
+  );
   if (params.expectedDeliveryCount === 0) {
     expect(deliver).not.toHaveBeenCalled();
     return;
@@ -155,7 +159,9 @@ describe("exec approval forwarder", () => {
       }),
     ).resolves.toBe(true);
 
-    expect(getFirstDeliveryText(deliver)).toContain("Command:\n```\necho `uname`\necho done\n```");
+    expect(getFirstDeliveryText(deliver)).toContain(
+      "Command:\n```\necho `uname`\necho done\n```",
+    );
   });
 
   it("returns false when forwarding is disabled", async () => {
@@ -248,7 +254,9 @@ describe("exec approval forwarder", () => {
 
   it("prefers turn-source routing over stale session last route", async () => {
     vi.useFakeTimers();
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-exec-approval-forwarder-test-"));
+    const tmpDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "openclaw-exec-approval-forwarder-test-"),
+    );
     try {
       const storePath = path.join(tmpDir, "sessions.json");
       fs.writeFileSync(
@@ -340,6 +348,8 @@ describe("exec approval forwarder", () => {
       }),
     ).resolves.toBe(true);
 
-    expect(getFirstDeliveryText(deliver)).toContain("Command:\n````\necho ```danger```\n````");
+    expect(getFirstDeliveryText(deliver)).toContain(
+      "Command:\n````\necho ```danger```\n````",
+    );
   });
 });

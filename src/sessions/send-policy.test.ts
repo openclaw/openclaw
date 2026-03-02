@@ -41,7 +41,9 @@ describe("resolveSendPolicy", () => {
       channel: "discord",
       chatType: "group",
     };
-    expect(resolveSendPolicy({ cfg, entry, sessionKey: "discord:group:dev" })).toBe("deny");
+    expect(
+      resolveSendPolicy({ cfg, entry, sessionKey: "discord:group:dev" }),
+    ).toBe("deny");
   });
 
   it("rule match by keyPrefix", () => {
@@ -61,11 +63,17 @@ describe("resolveSendPolicy", () => {
       session: {
         sendPolicy: {
           default: "allow",
-          rules: [{ action: "deny", match: { rawKeyPrefix: "agent:main:discord:" } }],
+          rules: [
+            { action: "deny", match: { rawKeyPrefix: "agent:main:discord:" } },
+          ],
         },
       },
     } as OpenClawConfig;
-    expect(resolveSendPolicy({ cfg, sessionKey: "agent:main:discord:group:dev" })).toBe("deny");
-    expect(resolveSendPolicy({ cfg, sessionKey: "agent:main:slack:group:dev" })).toBe("allow");
+    expect(
+      resolveSendPolicy({ cfg, sessionKey: "agent:main:discord:group:dev" }),
+    ).toBe("deny");
+    expect(
+      resolveSendPolicy({ cfg, sessionKey: "agent:main:slack:group:dev" }),
+    ).toBe("allow");
   });
 });

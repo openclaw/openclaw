@@ -34,7 +34,10 @@ async function waitForSessionCompletion(params: {
           action: "poll",
           sessionId: params.sessionId,
         });
-        const details = poll.details as { status?: string; aggregated?: string };
+        const details = poll.details as {
+          status?: string;
+          aggregated?: string;
+        };
         if (details.status === "running") {
           return false;
         }
@@ -61,7 +64,11 @@ test("process send-keys encodes Enter for pty sessions", async () => {
     keys: ["h", "i", "Enter"],
   });
 
-  await waitForSessionCompletion({ processTool, sessionId, expectedText: "hi" });
+  await waitForSessionCompletion({
+    processTool,
+    sessionId,
+    expectedText: "hi",
+  });
 });
 
 test("process submit sends Enter for pty sessions", async () => {
@@ -74,5 +81,9 @@ test("process submit sends Enter for pty sessions", async () => {
     sessionId,
   });
 
-  await waitForSessionCompletion({ processTool, sessionId, expectedText: "submitted" });
+  await waitForSessionCompletion({
+    processTool,
+    sessionId,
+    expectedText: "submitted",
+  });
 });

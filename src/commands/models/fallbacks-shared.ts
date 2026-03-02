@@ -1,8 +1,14 @@
-import { buildModelAliasIndex, resolveModelRefFromString } from "../../agents/model-selection.js";
+import {
+  buildModelAliasIndex,
+  resolveModelRefFromString,
+} from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
 import { logConfigUpdated } from "../../config/logging.js";
-import { resolveAgentModelFallbackValues, toAgentModelListLike } from "../../config/model-input.js";
+import {
+  resolveAgentModelFallbackValues,
+  toAgentModelListLike,
+} from "../../config/model-input.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import {
   DEFAULT_PROVIDER,
@@ -22,7 +28,11 @@ function getFallbacks(cfg: OpenClawConfig, key: DefaultsFallbackKey): string[] {
 
 function patchDefaultsFallbacks(
   cfg: OpenClawConfig,
-  params: { key: DefaultsFallbackKey; fallbacks: string[]; models?: Record<string, unknown> },
+  params: {
+    key: DefaultsFallbackKey;
+    fallbacks: string[];
+    models?: Record<string, unknown>;
+  },
 ): OpenClawConfig {
   const existing = toAgentModelListLike(cfg.agents?.defaults?.[params.key]);
   return {
@@ -31,7 +41,9 @@ function patchDefaultsFallbacks(
       ...cfg.agents,
       defaults: {
         ...cfg.agents?.defaults,
-        [params.key]: mergePrimaryFallbackConfig(existing, { fallbacks: params.fallbacks }),
+        [params.key]: mergePrimaryFallbackConfig(existing, {
+          fallbacks: params.fallbacks,
+        }),
         ...(params.models ? { models: params.models as never } : undefined),
       },
     },
@@ -80,12 +92,18 @@ export async function addFallbackCommand(
   const updated = await updateConfig((cfg) => {
     const resolved = resolveModelTarget({ raw: modelRaw, cfg });
     const targetKey = modelKey(resolved.provider, resolved.model);
-    const nextModels = { ...cfg.agents?.defaults?.models } as Record<string, unknown>;
+    const nextModels = { ...cfg.agents?.defaults?.models } as Record<
+      string,
+      unknown
+    >;
     if (!nextModels[targetKey]) {
       nextModels[targetKey] = {};
     }
     const existing = getFallbacks(cfg, params.key);
-    const existingKeys = resolveModelKeysFromEntries({ cfg, entries: existing });
+    const existingKeys = resolveModelKeysFromEntries({
+      cfg,
+      entries: existing,
+    });
     if (existingKeys.includes(targetKey)) {
       return cfg;
     }
@@ -98,7 +116,9 @@ export async function addFallbackCommand(
   });
 
   logConfigUpdated(runtime);
-  runtime.log(`${params.logPrefix}: ${getFallbacks(updated, params.key).join(", ")}`);
+  runtime.log(
+    `${params.logPrefix}: ${getFallbacks(updated, params.key).join(", ")}`,
+  );
 }
 
 export async function removeFallbackCommand(
@@ -128,18 +148,26 @@ export async function removeFallbackCommand(
       if (!resolvedEntry) {
         return true;
       }
-      return modelKey(resolvedEntry.ref.provider, resolvedEntry.ref.model) !== targetKey;
+      return (
+        modelKey(resolvedEntry.ref.provider, resolvedEntry.ref.model) !==
+        targetKey
+      );
     });
 
     if (filtered.length === existing.length) {
       throw new Error(`${params.notFoundLabel} not found: ${targetKey}`);
     }
 
-    return patchDefaultsFallbacks(cfg, { key: params.key, fallbacks: filtered });
+    return patchDefaultsFallbacks(cfg, {
+      key: params.key,
+      fallbacks: filtered,
+    });
   });
 
   logConfigUpdated(runtime);
-  runtime.log(`${params.logPrefix}: ${getFallbacks(updated, params.key).join(", ")}`);
+  runtime.log(
+    `${params.logPrefix}: ${getFallbacks(updated, params.key).join(", ")}`,
+  );
 }
 
 export async function clearFallbacksCommand(

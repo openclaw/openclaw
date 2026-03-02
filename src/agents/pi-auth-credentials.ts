@@ -1,4 +1,7 @@
-import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles.js";
+import type {
+  AuthProfileCredential,
+  AuthProfileStore,
+} from "./auth-profiles.js";
 import { normalizeProviderId } from "./model-selection.js";
 
 export type PiApiKeyCredential = { type: "api_key"; key: string };
@@ -12,7 +15,9 @@ export type PiOAuthCredential = {
 export type PiCredential = PiApiKeyCredential | PiOAuthCredential;
 export type PiCredentialMap = Record<string, PiCredential>;
 
-export function convertAuthProfileCredentialToPi(cred: AuthProfileCredential): PiCredential | null {
+export function convertAuthProfileCredentialToPi(
+  cred: AuthProfileCredential,
+): PiCredential | null {
   if (cred.type === "api_key") {
     const key = typeof cred.key === "string" ? cred.key.trim() : "";
     if (!key) {
@@ -39,7 +44,12 @@ export function convertAuthProfileCredentialToPi(cred: AuthProfileCredential): P
   if (cred.type === "oauth") {
     const access = typeof cred.access === "string" ? cred.access.trim() : "";
     const refresh = typeof cred.refresh === "string" ? cred.refresh.trim() : "";
-    if (!access || !refresh || !Number.isFinite(cred.expires) || cred.expires <= 0) {
+    if (
+      !access ||
+      !refresh ||
+      !Number.isFinite(cred.expires) ||
+      cred.expires <= 0
+    ) {
       return null;
     }
     return {
@@ -53,10 +63,14 @@ export function convertAuthProfileCredentialToPi(cred: AuthProfileCredential): P
   return null;
 }
 
-export function resolvePiCredentialMapFromStore(store: AuthProfileStore): PiCredentialMap {
+export function resolvePiCredentialMapFromStore(
+  store: AuthProfileStore,
+): PiCredentialMap {
   const credentials: PiCredentialMap = {};
   for (const credential of Object.values(store.profiles)) {
-    const provider = normalizeProviderId(String(credential.provider ?? "")).trim();
+    const provider = normalizeProviderId(
+      String(credential.provider ?? ""),
+    ).trim();
     if (!provider || credentials[provider]) {
       continue;
     }
@@ -68,7 +82,10 @@ export function resolvePiCredentialMapFromStore(store: AuthProfileStore): PiCred
   return credentials;
 }
 
-export function piCredentialsEqual(a: PiCredential | undefined, b: PiCredential): boolean {
+export function piCredentialsEqual(
+  a: PiCredential | undefined,
+  b: PiCredential,
+): boolean {
   if (!a || typeof a !== "object") {
     return false;
   }
@@ -81,7 +98,11 @@ export function piCredentialsEqual(a: PiCredential | undefined, b: PiCredential)
   }
 
   if (a.type === "oauth" && b.type === "oauth") {
-    return a.access === b.access && a.refresh === b.refresh && a.expires === b.expires;
+    return (
+      a.access === b.access &&
+      a.refresh === b.refresh &&
+      a.expires === b.expires
+    );
   }
 
   return false;

@@ -58,7 +58,10 @@ export function pathKey(path: Array<string | number>): string {
   return path.filter((segment) => typeof segment === "string").join(".");
 }
 
-export function hintForPath(path: Array<string | number>, hints: ConfigUiHints) {
+export function hintForPath(
+  path: Array<string | number>,
+  hints: ConfigUiHints,
+) {
   const key = pathKey(path);
   const direct = hints[key];
   if (direct) {

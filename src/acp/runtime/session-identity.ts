@@ -13,14 +13,18 @@ function normalizeText(value: unknown): string | undefined {
   return trimmed || undefined;
 }
 
-function normalizeIdentityState(value: unknown): SessionAcpIdentity["state"] | undefined {
+function normalizeIdentityState(
+  value: unknown,
+): SessionAcpIdentity["state"] | undefined {
   if (value !== "pending" && value !== "resolved") {
     return undefined;
   }
   return value;
 }
 
-function normalizeIdentitySource(value: unknown): SessionAcpIdentitySource | undefined {
+function normalizeIdentitySource(
+  value: unknown,
+): SessionAcpIdentitySource | undefined {
   if (value !== "ensure" && value !== "status" && value !== "event") {
     return undefined;
   }
@@ -39,7 +43,8 @@ function normalizeIdentity(
   const acpxSessionId = normalizeText(identity.acpxSessionId);
   const agentSessionId = normalizeText(identity.agentSessionId);
   const lastUpdatedAt =
-    typeof identity.lastUpdatedAt === "number" && Number.isFinite(identity.lastUpdatedAt)
+    typeof identity.lastUpdatedAt === "number" &&
+    Number.isFinite(identity.lastUpdatedAt)
       ? identity.lastUpdatedAt
       : undefined;
   const hasAnyId = Boolean(acpxRecordId || acpxSessionId || agentSessionId);
@@ -67,11 +72,15 @@ export function resolveSessionIdentityFromMeta(
   return normalizeIdentity(meta.identity);
 }
 
-export function identityHasStableSessionId(identity: SessionAcpIdentity | undefined): boolean {
+export function identityHasStableSessionId(
+  identity: SessionAcpIdentity | undefined,
+): boolean {
   return Boolean(identity?.acpxSessionId || identity?.agentSessionId);
 }
 
-export function isSessionIdentityPending(identity: SessionAcpIdentity | undefined): boolean {
+export function isSessionIdentityPending(
+  identity: SessionAcpIdentity | undefined,
+): boolean {
   if (!identity) {
     return true;
   }
@@ -120,9 +129,13 @@ export function mergeSessionIdentity(params: {
   const incomingResolved = incoming.state === "resolved";
   const allowIncomingValue = !currentResolved || incomingResolved;
   const nextRecordId =
-    allowIncomingValue && incoming.acpxRecordId ? incoming.acpxRecordId : current.acpxRecordId;
+    allowIncomingValue && incoming.acpxRecordId
+      ? incoming.acpxRecordId
+      : current.acpxRecordId;
   const nextAcpxSessionId =
-    allowIncomingValue && incoming.acpxSessionId ? incoming.acpxSessionId : current.acpxSessionId;
+    allowIncomingValue && incoming.acpxSessionId
+      ? incoming.acpxSessionId
+      : current.acpxSessionId;
   const nextAgentSessionId =
     allowIncomingValue && incoming.agentSessionId
       ? incoming.agentSessionId
@@ -150,7 +163,9 @@ export function createIdentityFromEnsure(params: {
   handle: AcpRuntimeHandle;
   now: number;
 }): SessionAcpIdentity | undefined {
-  const acpxRecordId = normalizeText((params.handle as { acpxRecordId?: unknown }).acpxRecordId);
+  const acpxRecordId = normalizeText(
+    (params.handle as { acpxRecordId?: unknown }).acpxRecordId,
+  );
   const acpxSessionId = normalizeText(params.handle.backendSessionId);
   const agentSessionId = normalizeText(params.handle.agentSessionId);
   if (!acpxRecordId && !acpxSessionId && !agentSessionId) {
@@ -182,7 +197,8 @@ export function createIdentityFromStatus(params: {
     normalizeText(details?.backendSessionId) ??
     normalizeText(details?.acpxSessionId);
   const agentSessionId =
-    normalizeText(params.status.agentSessionId) ?? normalizeText(details?.agentSessionId);
+    normalizeText(params.status.agentSessionId) ??
+    normalizeText(details?.agentSessionId);
   if (!acpxRecordId && !acpxSessionId && !agentSessionId) {
     return undefined;
   }
@@ -204,7 +220,11 @@ export function resolveRuntimeHandleIdentifiersFromIdentity(
     return {};
   }
   return {
-    ...(identity.acpxSessionId ? { backendSessionId: identity.acpxSessionId } : {}),
-    ...(identity.agentSessionId ? { agentSessionId: identity.agentSessionId } : {}),
+    ...(identity.acpxSessionId
+      ? { backendSessionId: identity.acpxSessionId }
+      : {}),
+    ...(identity.agentSessionId
+      ? { agentSessionId: identity.agentSessionId }
+      : {}),
   };
 }

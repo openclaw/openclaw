@@ -3,9 +3,12 @@ import { describe, expect, it } from "vitest";
 import { isTruthyEnvValue } from "../infra/env.js";
 
 const MOONSHOT_KEY = process.env.MOONSHOT_API_KEY ?? "";
-const MOONSHOT_BASE_URL = process.env.MOONSHOT_BASE_URL?.trim() || "https://api.moonshot.ai/v1";
+const MOONSHOT_BASE_URL =
+  process.env.MOONSHOT_BASE_URL?.trim() || "https://api.moonshot.ai/v1";
 const MOONSHOT_MODEL = process.env.MOONSHOT_MODEL?.trim() || "kimi-k2.5";
-const LIVE = isTruthyEnvValue(process.env.MOONSHOT_LIVE_TEST) || isTruthyEnvValue(process.env.LIVE);
+const LIVE =
+  isTruthyEnvValue(process.env.MOONSHOT_LIVE_TEST) ||
+  isTruthyEnvValue(process.env.LIVE);
 
 const describeLive = LIVE && MOONSHOT_KEY ? describe : describe.skip;
 

@@ -23,7 +23,9 @@ export function normalizeJsonRpcId(value: unknown): string | null {
   return String(value);
 }
 
-export function isAcpJsonRpcMessage(value: unknown): value is Record<string, unknown> {
+export function isAcpJsonRpcMessage(
+  value: unknown,
+): value is Record<string, unknown> {
   if (!isRecord(value) || value.jsonrpc !== "2.0") {
     return false;
   }

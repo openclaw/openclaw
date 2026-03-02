@@ -7,7 +7,9 @@ export function getTextContent(result?: { content?: TextResultBlock[] }) {
   return textBlock?.text ?? "";
 }
 
-export function expectReadWriteEditTools<T extends { name: string }>(tools: T[]) {
+export function expectReadWriteEditTools<T extends { name: string }>(
+  tools: T[],
+) {
   const readTool = tools.find((tool) => tool.name === "read");
   const writeTool = tools.find((tool) => tool.name === "write");
   const editTool = tools.find((tool) => tool.name === "edit");

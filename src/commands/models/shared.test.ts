@@ -7,7 +7,8 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../config/config.js", () => ({
-  readConfigFileSnapshot: (...args: unknown[]) => mocks.readConfigFileSnapshot(...args),
+  readConfigFileSnapshot: (...args: unknown[]) =>
+    mocks.readConfigFileSnapshot(...args),
   writeConfigFile: (...args: unknown[]) => mocks.writeConfigFile(...args),
 }));
 

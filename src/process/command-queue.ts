@@ -1,4 +1,8 @@
-import { diagnosticLogger as diag, logLaneDequeue, logLaneEnqueue } from "../logging/diagnostic.js";
+import {
+  diagnosticLogger as diag,
+  logLaneDequeue,
+  logLaneEnqueue,
+} from "../logging/diagnostic.js";
 import { CommandLane } from "./lanes.js";
 /**
  * Dedicated error type thrown when a queued command is rejected because
@@ -69,7 +73,11 @@ function getLaneState(lane: string): LaneState {
   return created;
 }
 
-function completeTask(state: LaneState, taskId: number, taskGeneration: number): boolean {
+function completeTask(
+  state: LaneState,
+  taskId: number,
+  taskGeneration: number,
+): boolean {
   if (taskGeneration !== state.generation) {
     return false;
   }
@@ -91,14 +99,19 @@ function drainLane(lane: string) {
 
   const pump = () => {
     try {
-      while (state.activeTaskIds.size < state.maxConcurrent && state.queue.length > 0) {
+      while (
+        state.activeTaskIds.size < state.maxConcurrent &&
+        state.queue.length > 0
+      ) {
         const entry = state.queue.shift() as QueueEntry;
         const waitedMs = Date.now() - entry.enqueuedAt;
         if (waitedMs >= entry.warnAfterMs) {
           try {
             entry.onWait?.(waitedMs, state.queue.length);
           } catch (err) {
-            diag.error(`lane onWait callback failed: lane=${lane} error="${String(err)}"`);
+            diag.error(
+              `lane onWait callback failed: lane=${lane} error="${String(err)}"`,
+            );
           }
           diag.warn(
             `lane wait exceeded: lane=${lane} waitedMs=${waitedMs} queueAhead=${state.queue.length}`,
@@ -112,7 +125,11 @@ function drainLane(lane: string) {
           const startTime = Date.now();
           try {
             const result = await entry.task();
-            const completedCurrentGeneration = completeTask(state, taskId, taskGeneration);
+            const completedCurrentGeneration = completeTask(
+              state,
+              taskId,
+              taskGeneration,
+            );
             if (completedCurrentGeneration) {
               diag.debug(
                 `lane task done: lane=${lane} durationMs=${Date.now() - startTime} active=${state.activeTaskIds.size} queued=${state.queue.length}`,
@@ -121,8 +138,14 @@ function drainLane(lane: string) {
             }
             entry.resolve(result);
           } catch (err) {
-            const completedCurrentGeneration = completeTask(state, taskId, taskGeneration);
-            const isProbeLane = lane.startsWith("auth-probe:") || lane.startsWith("session:probe-");
+            const completedCurrentGeneration = completeTask(
+              state,
+              taskId,
+              taskGeneration,
+            );
+            const isProbeLane =
+              lane.startsWith("auth-probe:") ||
+              lane.startsWith("session:probe-");
             if (!isProbeLane) {
               diag.error(
                 `lane task error: lane=${lane} durationMs=${Date.now() - startTime} error="${String(err)}"`,
@@ -278,7 +301,9 @@ export function getActiveTaskCount(): number {
  * New tasks enqueued after this call are ignored — only tasks that are
  * already executing are waited on.
  */
-export function waitForActiveTasks(timeoutMs: number): Promise<{ drained: boolean }> {
+export function waitForActiveTasks(
+  timeoutMs: number,
+): Promise<{ drained: boolean }> {
   // Keep shutdown/drain checks responsive without busy looping.
   const POLL_INTERVAL_MS = 50;
   const deadline = Date.now() + timeoutMs;

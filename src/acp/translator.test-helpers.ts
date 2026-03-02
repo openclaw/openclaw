@@ -9,7 +9,9 @@ export function createAcpConnection(): AgentSideConnection {
 }
 
 export function createAcpGateway(
-  request: GatewayClient["request"] = vi.fn(async () => ({ ok: true })) as GatewayClient["request"],
+  request: GatewayClient["request"] = vi.fn(async () => ({
+    ok: true,
+  })) as GatewayClient["request"],
 ): GatewayClient {
   return {
     request,

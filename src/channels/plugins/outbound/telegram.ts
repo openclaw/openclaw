@@ -76,7 +76,15 @@ export const telegramOutbound: ChannelOutboundAdapter = {
     });
     return { channel: "telegram", ...result };
   },
-  sendPayload: async ({ to, payload, mediaLocalRoots, accountId, deps, replyToId, threadId }) => {
+  sendPayload: async ({
+    to,
+    payload,
+    mediaLocalRoots,
+    accountId,
+    deps,
+    replyToId,
+    threadId,
+  }) => {
     const { send, baseOpts: contextOpts } = resolveTelegramSendContext({
       deps,
       accountId,
@@ -87,7 +95,9 @@ export const telegramOutbound: ChannelOutboundAdapter = {
       | { buttons?: TelegramInlineButtons; quoteText?: string }
       | undefined;
     const quoteText =
-      typeof telegramData?.quoteText === "string" ? telegramData.quoteText : undefined;
+      typeof telegramData?.quoteText === "string"
+        ? telegramData.quoteText
+        : undefined;
     const text = payload.text ?? "";
     const mediaUrls = payload.mediaUrls?.length
       ? payload.mediaUrls
@@ -119,6 +129,9 @@ export const telegramOutbound: ChannelOutboundAdapter = {
         ...(isFirst ? { buttons: telegramData?.buttons } : {}),
       });
     }
-    return { channel: "telegram", ...(finalResult ?? { messageId: "unknown", chatId: to }) };
+    return {
+      channel: "telegram",
+      ...(finalResult ?? { messageId: "unknown", chatId: to }),
+    };
   },
 };

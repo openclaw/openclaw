@@ -25,8 +25,12 @@ describe("resolveSessionStoreTargets", () => {
 
     const targets = resolveSessionStoreTargets({}, {});
 
-    expect(targets).toEqual([{ agentId: "main", storePath: "/tmp/main-sessions.json" }]);
-    expect(resolveStorePathMock).toHaveBeenCalledWith(undefined, { agentId: "main" });
+    expect(targets).toEqual([
+      { agentId: "main", storePath: "/tmp/main-sessions.json" },
+    ]);
+    expect(resolveStorePathMock).toHaveBeenCalledWith(undefined, {
+      agentId: "main",
+    });
   });
 
   it("resolves all configured agent stores", () => {
@@ -37,7 +41,9 @@ describe("resolveSessionStoreTargets", () => {
 
     const targets = resolveSessionStoreTargets(
       {
-        session: { store: "~/.openclaw/agents/{agentId}/sessions/sessions.json" },
+        session: {
+          store: "~/.openclaw/agents/{agentId}/sessions/sessions.json",
+        },
       },
       { allAgents: true },
     );
@@ -59,21 +65,28 @@ describe("resolveSessionStoreTargets", () => {
       { allAgents: true },
     );
 
-    expect(targets).toEqual([{ agentId: "main", storePath: "/tmp/shared-sessions.json" }]);
+    expect(targets).toEqual([
+      { agentId: "main", storePath: "/tmp/shared-sessions.json" },
+    ]);
     expect(resolveStorePathMock).toHaveBeenCalledTimes(2);
   });
 
   it("rejects unknown agent ids", () => {
     listAgentIdsMock.mockReturnValue(["main", "work"]);
-    expect(() => resolveSessionStoreTargets({}, { agent: "ghost" })).toThrow(/Unknown agent id/);
+    expect(() => resolveSessionStoreTargets({}, { agent: "ghost" })).toThrow(
+      /Unknown agent id/,
+    );
   });
 
   it("rejects conflicting selectors", () => {
-    expect(() => resolveSessionStoreTargets({}, { agent: "main", allAgents: true })).toThrow(
-      /cannot be used together/i,
-    );
     expect(() =>
-      resolveSessionStoreTargets({}, { store: "/tmp/sessions.json", allAgents: true }),
+      resolveSessionStoreTargets({}, { agent: "main", allAgents: true }),
+    ).toThrow(/cannot be used together/i);
+    expect(() =>
+      resolveSessionStoreTargets(
+        {},
+        { store: "/tmp/sessions.json", allAgents: true },
+      ),
     ).toThrow(/cannot be combined/i);
   });
 });

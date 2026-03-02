@@ -41,9 +41,14 @@ export function resolveConfiguredEntries(cfg: OpenClawConfig) {
 
   addEntry(resolvedDefault, "default");
 
-  const modelFallbacks = resolveAgentModelFallbackValues(cfg.agents?.defaults?.model);
-  const imageFallbacks = resolveAgentModelFallbackValues(cfg.agents?.defaults?.imageModel);
-  const imagePrimary = resolveAgentModelPrimaryValue(cfg.agents?.defaults?.imageModel) ?? "";
+  const modelFallbacks = resolveAgentModelFallbackValues(
+    cfg.agents?.defaults?.model,
+  );
+  const imageFallbacks = resolveAgentModelFallbackValues(
+    cfg.agents?.defaults?.imageModel,
+  );
+  const imagePrimary =
+    resolveAgentModelPrimaryValue(cfg.agents?.defaults?.imageModel) ?? "";
 
   modelFallbacks.forEach((raw, idx) => {
     const resolved = resolveModelRefFromString({

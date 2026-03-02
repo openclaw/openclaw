@@ -30,15 +30,33 @@ describe("resolveTelegramForumThreadId", () => {
 describe("buildTelegramThreadParams", () => {
   it.each([
     { input: { id: 1, scope: "forum" as const }, expected: undefined },
-    { input: { id: 99, scope: "forum" as const }, expected: { message_thread_id: 99 } },
-    { input: { id: 1, scope: "dm" as const }, expected: { message_thread_id: 1 } },
-    { input: { id: 2, scope: "dm" as const }, expected: { message_thread_id: 2 } },
+    {
+      input: { id: 99, scope: "forum" as const },
+      expected: { message_thread_id: 99 },
+    },
+    {
+      input: { id: 1, scope: "dm" as const },
+      expected: { message_thread_id: 1 },
+    },
+    {
+      input: { id: 2, scope: "dm" as const },
+      expected: { message_thread_id: 2 },
+    },
     { input: { id: 0, scope: "dm" as const }, expected: undefined },
     { input: { id: -1, scope: "dm" as const }, expected: undefined },
-    { input: { id: 1.9, scope: "dm" as const }, expected: { message_thread_id: 1 } },
+    {
+      input: { id: 1.9, scope: "dm" as const },
+      expected: { message_thread_id: 1 },
+    },
     // id=0 should be included for forum and none scopes (not falsy)
-    { input: { id: 0, scope: "forum" as const }, expected: { message_thread_id: 0 } },
-    { input: { id: 0, scope: "none" as const }, expected: { message_thread_id: 0 } },
+    {
+      input: { id: 0, scope: "forum" as const },
+      expected: { message_thread_id: 0 },
+    },
+    {
+      input: { id: 0, scope: "none" as const },
+      expected: { message_thread_id: 0 },
+    },
   ])("builds thread params", ({ input, expected }) => {
     expect(buildTelegramThreadParams(input)).toEqual(expected);
   });
@@ -73,7 +91,12 @@ describe("normalizeForwardedContext", () => {
     const ctx = normalizeForwardedContext({
       forward_origin: {
         type: "user",
-        sender_user: { first_name: "Ada", last_name: "Lovelace", username: "ada", id: 42 },
+        sender_user: {
+          first_name: "Ada",
+          last_name: "Lovelace",
+          username: "ada",
+          id: 42,
+        },
         date: 123,
       },
       // oxlint-disable-next-line typescript/no-explicit-any
@@ -89,7 +112,11 @@ describe("normalizeForwardedContext", () => {
 
   it("handles hidden forward_origin names", () => {
     const ctx = normalizeForwardedContext({
-      forward_origin: { type: "hidden_user", sender_user_name: "Hidden Name", date: 456 },
+      forward_origin: {
+        type: "hidden_user",
+        sender_user_name: "Hidden Name",
+        date: 456,
+      },
       // oxlint-disable-next-line typescript/no-explicit-any
     } as any);
     expect(ctx).not.toBeNull();
@@ -282,7 +309,12 @@ describe("describeReplyTarget", () => {
         text: "Channel post content here",
         forward_origin: {
           type: "channel",
-          chat: { id: -1001234567, title: "Tech News", username: "technews", type: "channel" },
+          chat: {
+            id: -1001234567,
+            title: "Tech News",
+            username: "technews",
+            type: "channel",
+          },
           date: 800,
           message_id: 456,
           author_signature: "Editor",
@@ -348,7 +380,9 @@ describe("expandTextLinks", () => {
 
   it("expands a single text_link entity", () => {
     const text = "Check this link for details";
-    const entities = [{ type: "text_link", offset: 11, length: 4, url: "https://example.com" }];
+    const entities = [
+      { type: "text_link", offset: 11, length: 4, url: "https://example.com" },
+    ];
     expect(expandTextLinks(text, entities)).toBe(
       "Check this [link](https://example.com) for details",
     );
@@ -371,12 +405,18 @@ describe("expandTextLinks", () => {
       { type: "text_link", offset: 0, length: 1, url: "https://a.example" },
       { type: "text_link", offset: 1, length: 1, url: "https://b.example" },
     ];
-    expect(expandTextLinks(text, entities)).toBe("[A](https://a.example)[B](https://b.example)");
+    expect(expandTextLinks(text, entities)).toBe(
+      "[A](https://a.example)[B](https://b.example)",
+    );
   });
 
   it("preserves offsets from the original string", () => {
     const text = " Hello world";
-    const entities = [{ type: "text_link", offset: 1, length: 5, url: "https://example.com" }];
-    expect(expandTextLinks(text, entities)).toBe(" [Hello](https://example.com) world");
+    const entities = [
+      { type: "text_link", offset: 1, length: 5, url: "https://example.com" },
+    ];
+    expect(expandTextLinks(text, entities)).toBe(
+      " [Hello](https://example.com) world",
+    );
   });
 });

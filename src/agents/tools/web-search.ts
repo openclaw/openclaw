@@ -20,7 +20,13 @@ import {
   writeCache,
 } from "./web-shared.js";
 
-const SEARCH_PROVIDERS = ["brave", "perplexity", "grok", "gemini", "kimi"] as const;
+const SEARCH_PROVIDERS = [
+  "brave",
+  "perplexity",
+  "grok",
+  "gemini",
+  "kimi",
+] as const;
 const DEFAULT_SEARCH_COUNT = 5;
 const MAX_SEARCH_COUNT = 10;
 
@@ -81,7 +87,9 @@ const WebSearchSchema = Type.Object({
   ),
 });
 
-type WebSearchConfig = NonNullable<OpenClawConfig["tools"]>["web"] extends infer Web
+type WebSearchConfig = NonNullable<
+  OpenClawConfig["tools"]
+>["web"] extends infer Web
   ? Web extends { search?: infer Search }
     ? Search
     : undefined
@@ -106,7 +114,11 @@ type PerplexityConfig = {
   model?: string;
 };
 
-type PerplexityApiKeySource = "config" | "perplexity_env" | "openrouter_env" | "none";
+type PerplexityApiKeySource =
+  | "config"
+  | "perplexity_env"
+  | "openrouter_env"
+  | "none";
 
 type GrokConfig = {
   apiKey?: string;
@@ -198,9 +210,15 @@ function extractGrokContent(data: GrokSearchResponse): {
   for (const output of data.output ?? []) {
     if (output.type === "message") {
       for (const block of output.content ?? []) {
-        if (block.type === "output_text" && typeof block.text === "string" && block.text) {
+        if (
+          block.type === "output_text" &&
+          typeof block.text === "string" &&
+          block.text
+        ) {
           const urls = (block.annotations ?? [])
-            .filter((a) => a.type === "url_citation" && typeof a.url === "string")
+            .filter(
+              (a) => a.type === "url_citation" && typeof a.url === "string",
+            )
             .map((a) => a.url as string);
           return { text: block.text, annotationCitations: [...new Set(urls)] };
         }
@@ -215,17 +233,21 @@ function extractGrokContent(data: GrokSearchResponse): {
       output.text
     ) {
       const rawAnnotations =
-        "annotations" in output && Array.isArray(output.annotations) ? output.annotations : [];
+        "annotations" in output && Array.isArray(output.annotations)
+          ? output.annotations
+          : [];
       const urls = rawAnnotations
         .filter(
-          (a: Record<string, unknown>) => a.type === "url_citation" && typeof a.url === "string",
+          (a: Record<string, unknown>) =>
+            a.type === "url_citation" && typeof a.url === "string",
         )
         .map((a: Record<string, unknown>) => a.url as string);
       return { text: output.text, annotationCitations: [...new Set(urls)] };
     }
   }
   // Fallback: deprecated output_text field
-  const text = typeof data.output_text === "string" ? data.output_text : undefined;
+  const text =
+    typeof data.output_text === "string" ? data.output_text : undefined;
   return { text, annotationCitations: [] };
 }
 
@@ -272,7 +294,10 @@ function resolveSearchConfig(cfg?: OpenClawConfig): WebSearchConfig {
   return search as WebSearchConfig;
 }
 
-function resolveSearchEnabled(params: { search?: WebSearchConfig; sandboxed?: boolean }): boolean {
+function resolveSearchEnabled(params: {
+  search?: WebSearchConfig;
+  sandboxed?: boolean;
+}): boolean {
   if (typeof params.search?.enabled === "boolean") {
     return params.search.enabled;
   }
@@ -331,7 +356,9 @@ function missingSearchKeyPayload(provider: (typeof SEARCH_PROVIDERS)[number]) {
   };
 }
 
-function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDERS)[number] {
+function resolveSearchProvider(
+  search?: WebSearchConfig,
+): (typeof SEARCH_PROVIDERS)[number] {
   const raw =
     search && "provider" in search && typeof search.provider === "string"
       ? search.provider.trim().toLowerCase()
@@ -436,7 +463,9 @@ function normalizeApiKey(key: unknown): string {
   return normalizeSecretInput(key);
 }
 
-function inferPerplexityBaseUrlFromApiKey(apiKey?: string): PerplexityBaseUrlHint | undefined {
+function inferPerplexityBaseUrlFromApiKey(
+  apiKey?: string,
+): PerplexityBaseUrlHint | undefined {
   if (!apiKey) {
     return undefined;
   }
@@ -456,7 +485,9 @@ function resolvePerplexityBaseUrl(
   apiKey?: string,
 ): string {
   const fromConfig =
-    perplexity && "baseUrl" in perplexity && typeof perplexity.baseUrl === "string"
+    perplexity &&
+    "baseUrl" in perplexity &&
+    typeof perplexity.baseUrl === "string"
       ? perplexity.baseUrl.trim()
       : "";
   if (fromConfig) {
@@ -504,7 +535,9 @@ function resolvePerplexityRequestModel(baseUrl: string, model: string): string {
   if (!isDirectPerplexityBaseUrl(baseUrl)) {
     return model;
   }
-  return model.startsWith("perplexity/") ? model.slice("perplexity/".length) : model;
+  return model.startsWith("perplexity/")
+    ? model.slice("perplexity/".length)
+    : model;
 }
 
 function resolveGrokConfig(search?: WebSearchConfig): GrokConfig {
@@ -529,7 +562,9 @@ function resolveGrokApiKey(grok?: GrokConfig): string | undefined {
 
 function resolveGrokModel(grok?: GrokConfig): string {
   const fromConfig =
-    grok && "model" in grok && typeof grok.model === "string" ? grok.model.trim() : "";
+    grok && "model" in grok && typeof grok.model === "string"
+      ? grok.model.trim()
+      : "";
   return fromConfig || DEFAULT_GROK_MODEL;
 }
 
@@ -563,13 +598,17 @@ function resolveKimiApiKey(kimi?: KimiConfig): string | undefined {
 
 function resolveKimiModel(kimi?: KimiConfig): string {
   const fromConfig =
-    kimi && "model" in kimi && typeof kimi.model === "string" ? kimi.model.trim() : "";
+    kimi && "model" in kimi && typeof kimi.model === "string"
+      ? kimi.model.trim()
+      : "";
   return fromConfig || DEFAULT_KIMI_MODEL;
 }
 
 function resolveKimiBaseUrl(kimi?: KimiConfig): string {
   const fromConfig =
-    kimi && "baseUrl" in kimi && typeof kimi.baseUrl === "string" ? kimi.baseUrl.trim() : "";
+    kimi && "baseUrl" in kimi && typeof kimi.baseUrl === "string"
+      ? kimi.baseUrl.trim()
+      : "";
   return fromConfig || DEFAULT_KIMI_BASE_URL;
 }
 
@@ -595,7 +634,9 @@ function resolveGeminiApiKey(gemini?: GeminiConfig): string | undefined {
 
 function resolveGeminiModel(gemini?: GeminiConfig): string {
   const fromConfig =
-    gemini && "model" in gemini && typeof gemini.model === "string" ? gemini.model.trim() : "";
+    gemini && "model" in gemini && typeof gemini.model === "string"
+      ? gemini.model.trim()
+      : "";
   return fromConfig || DEFAULT_GEMINI_MODEL;
 }
 
@@ -622,7 +663,10 @@ async function runGeminiSearch(params: {
   apiKey: string;
   model: string;
   timeoutSeconds: number;
-}): Promise<{ content: string; citations: Array<{ url: string; title?: string }> }> {
+}): Promise<{
+  content: string;
+  citations: Array<{ url: string; title?: string }>;
+}> {
   const endpoint = `${GEMINI_API_BASE}/models/${params.model}:generateContent`;
 
   return withTrustedWebSearchEndpoint(
@@ -661,7 +705,9 @@ async function runGeminiSearch(params: {
         data = (await res.json()) as GeminiGroundingResponse;
       } catch (err) {
         const safeError = String(err).replace(/key=[^&\s]+/gi, "key=***");
-        throw new Error(`Gemini API returned invalid JSON: ${safeError}`, { cause: err });
+        throw new Error(`Gemini API returned invalid JSON: ${safeError}`, {
+          cause: err,
+        });
       }
 
       if (data.error) {
@@ -677,7 +723,8 @@ async function runGeminiSearch(params: {
           .filter(Boolean)
           .join("\n") ?? "No response";
 
-      const groundingChunks = candidate?.groundingMetadata?.groundingChunks ?? [];
+      const groundingChunks =
+        candidate?.groundingMetadata?.groundingChunks ?? [];
       const rawCitations = groundingChunks
         .filter((chunk) => chunk.web?.uri)
         .map((chunk) => ({
@@ -706,12 +753,15 @@ async function runGeminiSearch(params: {
 }
 
 function resolveSearchCount(value: unknown, fallback: number): number {
-  const parsed = typeof value === "number" && Number.isFinite(value) ? value : fallback;
+  const parsed =
+    typeof value === "number" && Number.isFinite(value) ? value : fallback;
   const clamped = Math.max(1, Math.min(MAX_SEARCH_COUNT, Math.floor(parsed)));
   return clamped;
 }
 
-function normalizeBraveSearchLang(value: string | undefined): string | undefined {
+function normalizeBraveSearchLang(
+  value: string | undefined,
+): string | undefined {
   if (!value) {
     return undefined;
   }
@@ -738,7 +788,10 @@ function normalizeBraveUiLang(value: string | undefined): string | undefined {
   return `${language.toLowerCase()}-${region.toUpperCase()}`;
 }
 
-function normalizeBraveLanguageParams(params: { search_lang?: string; ui_lang?: string }): {
+function normalizeBraveLanguageParams(params: {
+  search_lang?: string;
+  ui_lang?: string;
+}): {
   search_lang?: string;
   ui_lang?: string;
   invalidField?: "search_lang" | "ui_lang";
@@ -749,7 +802,10 @@ function normalizeBraveLanguageParams(params: { search_lang?: string; ui_lang?: 
   let uiLangCandidate = rawUiLang;
 
   // Recover common LLM mix-up: locale in search_lang + short code in ui_lang.
-  if (normalizeBraveUiLang(rawSearchLang) && normalizeBraveSearchLang(rawUiLang)) {
+  if (
+    normalizeBraveUiLang(rawSearchLang) &&
+    normalizeBraveSearchLang(rawUiLang)
+  ) {
     searchLangCandidate = rawUiLang;
     uiLangCandidate = rawSearchLang;
   }
@@ -801,7 +857,9 @@ function normalizeFreshness(value: string | undefined): string | undefined {
  * Map normalized freshness values (pd/pw/pm/py) to Perplexity's
  * search_recency_filter values (day/week/month/year).
  */
-function freshnessToPerplexityRecency(freshness: string | undefined): string | undefined {
+function freshnessToPerplexityRecency(
+  freshness: string | undefined,
+): string | undefined {
   if (!freshness) {
     return undefined;
   }
@@ -818,14 +876,22 @@ function isValidIsoDate(value: string): boolean {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
     return false;
   }
-  const [year, month, day] = value.split("-").map((part) => Number.parseInt(part, 10));
-  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) {
+  const [year, month, day] = value
+    .split("-")
+    .map((part) => Number.parseInt(part, 10));
+  if (
+    !Number.isFinite(year) ||
+    !Number.isFinite(month) ||
+    !Number.isFinite(day)
+  ) {
     return false;
   }
 
   const date = new Date(Date.UTC(year, month - 1, day));
   return (
-    date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day
+    date.getUTCFullYear() === year &&
+    date.getUTCMonth() === month - 1 &&
+    date.getUTCDate() === day
   );
 }
 
@@ -840,10 +906,15 @@ function resolveSiteName(url: string | undefined): string | undefined {
   }
 }
 
-async function throwWebSearchApiError(res: Response, providerLabel: string): Promise<never> {
+async function throwWebSearchApiError(
+  res: Response,
+  providerLabel: string,
+): Promise<never> {
   const detailResult = await readResponseText(res, { maxBytes: 64_000 });
   const detail = detailResult.text;
-  throw new Error(`${providerLabel} API error (${res.status}): ${detail || res.statusText}`);
+  throw new Error(
+    `${providerLabel} API error (${res.status}): ${detail || res.statusText}`,
+  );
 }
 
 async function runPerplexitySearch(params: {
@@ -948,10 +1019,14 @@ async function runGrokSearch(params: {
       }
 
       const data = (await res.json()) as GrokSearchResponse;
-      const { text: extractedText, annotationCitations } = extractGrokContent(data);
+      const { text: extractedText, annotationCitations } =
+        extractGrokContent(data);
       const content = extractedText ?? "No response";
       // Prefer top-level citations; fall back to annotation-derived ones
-      const citations = (data.citations ?? []).length > 0 ? data.citations! : annotationCitations;
+      const citations =
+        (data.citations ?? []).length > 0
+          ? data.citations!
+          : annotationCitations;
       const inlineCitations = data.inline_citations;
 
       return { content, citations, inlineCitations };
@@ -959,7 +1034,9 @@ async function runGrokSearch(params: {
   );
 }
 
-function extractKimiMessageText(message: KimiMessage | undefined): string | undefined {
+function extractKimiMessageText(
+  message: KimiMessage | undefined,
+): string | undefined {
   const content = message?.content?.trim();
   if (content) {
     return content;
@@ -1047,7 +1124,9 @@ async function runKimiSearch(params: {
       },
       async (
         res,
-      ): Promise<{ done: true; content: string; citations: string[] } | { done: false }> => {
+      ): Promise<
+        { done: true; content: string; citations: string[] } | { done: false }
+      > => {
         if (!res.ok) {
           return await throwWebSearchApiError(res, "Kimi");
         }
@@ -1062,7 +1141,11 @@ async function runKimiSearch(params: {
         const toolCalls = message?.tool_calls ?? [];
 
         if (choice?.finish_reason !== "tool_calls" || toolCalls.length === 0) {
-          return { done: true, content: text ?? "No response", citations: [...collectedCitations] };
+          return {
+            done: true,
+            content: text ?? "No response",
+            citations: [...collectedCitations],
+          };
         }
 
         messages.push({
@@ -1092,7 +1175,11 @@ async function runKimiSearch(params: {
         }
 
         if (!pushedToolResult) {
-          return { done: true, content: text ?? "No response", citations: [...collectedCitations] };
+          return {
+            done: true,
+            content: text ?? "No response",
+            citations: [...collectedCitations],
+          };
         }
 
         return { done: false };
@@ -1292,11 +1379,15 @@ async function runWebSearch(params: {
       if (!res.ok) {
         const detailResult = await readResponseText(res, { maxBytes: 64_000 });
         const detail = detailResult.text;
-        throw new Error(`Brave Search API error (${res.status}): ${detail || res.statusText}`);
+        throw new Error(
+          `Brave Search API error (${res.status}): ${detail || res.statusText}`,
+        );
       }
 
       const data = (await res.json()) as BraveSearchResponse;
-      const results = Array.isArray(data.web?.results) ? (data.web?.results ?? []) : [];
+      const results = Array.isArray(data.web?.results)
+        ? (data.web?.results ?? [])
+        : [];
       return results.map((entry) => {
         const description = entry.description ?? "";
         const title = entry.title ?? "";
@@ -1305,7 +1396,9 @@ async function runWebSearch(params: {
         return {
           title: title ? wrapWebContent(title, "web_search") : "",
           url, // Keep raw for tool chaining
-          description: description ? wrapWebContent(description, "web_search") : "",
+          description: description
+            ? wrapWebContent(description, "web_search")
+            : "",
           published: entry.age || undefined,
           siteName: rawSiteName || undefined,
         };
@@ -1363,7 +1456,9 @@ export function createWebSearchTool(options?: {
     parameters: WebSearchSchema,
     execute: async (_toolCallId, args) => {
       const perplexityAuth =
-        provider === "perplexity" ? resolvePerplexityApiKey(perplexityConfig) : undefined;
+        provider === "perplexity"
+          ? resolvePerplexityApiKey(perplexityConfig)
+          : undefined;
       const apiKey =
         provider === "perplexity"
           ? perplexityAuth?.apiKey
@@ -1381,13 +1476,18 @@ export function createWebSearchTool(options?: {
       const params = args as Record<string, unknown>;
       const query = readStringParam(params, "query", { required: true });
       const count =
-        readNumberParam(params, "count", { integer: true }) ?? search?.maxResults ?? undefined;
+        readNumberParam(params, "count", { integer: true }) ??
+        search?.maxResults ??
+        undefined;
       const country = readStringParam(params, "country");
       const rawSearchLang = readStringParam(params, "search_lang");
       const rawUiLang = readStringParam(params, "ui_lang");
       const normalizedBraveLanguageParams =
         provider === "brave"
-          ? normalizeBraveLanguageParams({ search_lang: rawSearchLang, ui_lang: rawUiLang })
+          ? normalizeBraveLanguageParams({
+              search_lang: rawSearchLang,
+              ui_lang: rawUiLang,
+            })
           : { search_lang: rawSearchLang, ui_lang: rawUiLang };
       if (normalizedBraveLanguageParams.invalidField === "search_lang") {
         return jsonResult({
@@ -1410,11 +1510,14 @@ export function createWebSearchTool(options?: {
       if (rawFreshness && provider !== "brave" && provider !== "perplexity") {
         return jsonResult({
           error: "unsupported_freshness",
-          message: "freshness is only supported by the Brave and Perplexity web_search providers.",
+          message:
+            "freshness is only supported by the Brave and Perplexity web_search providers.",
           docs: "https://docs.openclaw.ai/tools/web",
         });
       }
-      const freshness = rawFreshness ? normalizeFreshness(rawFreshness) : undefined;
+      const freshness = rawFreshness
+        ? normalizeFreshness(rawFreshness)
+        : undefined;
       if (rawFreshness && !freshness) {
         return jsonResult({
           error: "invalid_freshness",
@@ -1427,8 +1530,14 @@ export function createWebSearchTool(options?: {
         query,
         count: resolveSearchCount(count, DEFAULT_SEARCH_COUNT),
         apiKey,
-        timeoutSeconds: resolveTimeoutSeconds(search?.timeoutSeconds, DEFAULT_TIMEOUT_SECONDS),
-        cacheTtlMs: resolveCacheTtlMs(search?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES),
+        timeoutSeconds: resolveTimeoutSeconds(
+          search?.timeoutSeconds,
+          DEFAULT_TIMEOUT_SECONDS,
+        ),
+        cacheTtlMs: resolveCacheTtlMs(
+          search?.cacheTtlMinutes,
+          DEFAULT_CACHE_TTL_MINUTES,
+        ),
         provider,
         country,
         search_lang,

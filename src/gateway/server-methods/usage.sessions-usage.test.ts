@@ -16,17 +16,22 @@ vi.mock("../../config/config.js", () => {
 });
 
 vi.mock("../session-utils.js", async () => {
-  const actual = await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
+  const actual = await vi.importActual<typeof import("../session-utils.js")>(
+    "../session-utils.js",
+  );
   return {
     ...actual,
-    loadCombinedSessionStoreForGateway: vi.fn(() => ({ storePath: "(multiple)", store: {} })),
+    loadCombinedSessionStoreForGateway: vi.fn(() => ({
+      storePath: "(multiple)",
+      store: {},
+    })),
   };
 });
 
 vi.mock("../../infra/session-cost-usage.js", async () => {
-  const actual = await vi.importActual<typeof import("../../infra/session-cost-usage.js")>(
-    "../../infra/session-cost-usage.js",
-  );
+  const actual = await vi.importActual<
+    typeof import("../../infra/session-cost-usage.js")
+  >("../../infra/session-cost-usage.js");
   return {
     ...actual,
     discoverAllSessions: vi.fn(async (params?: { agentId?: string }) => {
@@ -96,7 +101,9 @@ async function runSessionsUsageTimeseries(params: Record<string, unknown>) {
   await usageHandlers["sessions.usage.timeseries"]({
     respond,
     params,
-  } as unknown as Parameters<(typeof usageHandlers)["sessions.usage.timeseries"]>[0]);
+  } as unknown as Parameters<
+    (typeof usageHandlers)["sessions.usage.timeseries"]
+  >[0]);
   return respond;
 }
 
@@ -136,8 +143,12 @@ describe("sessions.usage", () => {
     const respond = await runSessionsUsage(BASE_USAGE_RANGE);
 
     expect(vi.mocked(discoverAllSessions)).toHaveBeenCalledTimes(2);
-    expect(vi.mocked(discoverAllSessions).mock.calls[0]?.[0]?.agentId).toBe("main");
-    expect(vi.mocked(discoverAllSessions).mock.calls[1]?.[0]?.agentId).toBe("opus");
+    expect(vi.mocked(discoverAllSessions).mock.calls[0]?.[0]?.agentId).toBe(
+      "main",
+    );
+    expect(vi.mocked(discoverAllSessions).mock.calls[1]?.[0]?.agentId).toBe(
+      "opus",
+    );
 
     const sessions = expectSuccessfulSessionsUsage(respond);
     expect(sessions).toHaveLength(2);
@@ -151,11 +162,18 @@ describe("sessions.usage", () => {
 
   it("resolves store entries by sessionId when queried via discovered agent-prefixed key", async () => {
     const storeKey = "agent:opus:slack:dm:u123";
-    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-usage-test-"));
+    const stateDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "openclaw-usage-test-"),
+    );
 
     try {
       await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-        const agentSessionsDir = path.join(stateDir, "agents", "opus", "sessions");
+        const agentSessionsDir = path.join(
+          stateDir,
+          "agents",
+          "opus",
+          "sessions",
+        );
         fs.mkdirSync(agentSessionsDir, { recursive: true });
         const sessionFile = path.join(agentSessionsDir, "s-opus.jsonl");
         fs.writeFileSync(sessionFile, "", "utf-8");
@@ -175,13 +193,18 @@ describe("sessions.usage", () => {
         });
 
         // Query via discovered key: agent:<id>:<sessionId>
-        const respond = await runSessionsUsage({ ...BASE_USAGE_RANGE, key: "agent:opus:s-opus" });
+        const respond = await runSessionsUsage({
+          ...BASE_USAGE_RANGE,
+          key: "agent:opus:s-opus",
+        });
         const sessions = expectSuccessfulSessionsUsage(respond);
         expect(sessions).toHaveLength(1);
         expect(sessions[0]?.key).toBe(storeKey);
         expect(vi.mocked(loadSessionCostSummary)).toHaveBeenCalled();
         expect(
-          vi.mocked(loadSessionCostSummary).mock.calls.some((call) => call[0]?.agentId === "opus"),
+          vi
+            .mocked(loadSessionCostSummary)
+            .mock.calls.some((call) => call[0]?.agentId === "opus"),
         ).toBe(true);
       });
     } finally {
@@ -197,7 +220,9 @@ describe("sessions.usage", () => {
 
     expect(respond).toHaveBeenCalledTimes(1);
     expect(respond.mock.calls[0]?.[0]).toBe(false);
-    const error = respond.mock.calls[0]?.[2] as { message?: string } | undefined;
+    const error = respond.mock.calls[0]?.[2] as
+      | { message?: string }
+      | undefined;
     expect(error?.message).toContain("Invalid session reference");
   });
 
@@ -207,7 +232,9 @@ describe("sessions.usage", () => {
     });
 
     expect(vi.mocked(loadSessionUsageTimeSeries)).toHaveBeenCalled();
-    expect(vi.mocked(loadSessionUsageTimeSeries).mock.calls[0]?.[0]?.agentId).toBe("opus");
+    expect(
+      vi.mocked(loadSessionUsageTimeSeries).mock.calls[0]?.[0]?.agentId,
+    ).toBe("opus");
   });
 
   it("passes parsed agentId into sessions.usage.logs", async () => {

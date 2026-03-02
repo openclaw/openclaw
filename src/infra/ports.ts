@@ -6,7 +6,12 @@ import { isErrno } from "./errors.js";
 import { formatPortDiagnostics } from "./ports-format.js";
 import { inspectPortUsage } from "./ports-inspect.js";
 import { tryListenOnPort } from "./ports-probe.js";
-import type { PortListener, PortListenerKind, PortUsage, PortUsageStatus } from "./ports-types.js";
+import type {
+  PortListener,
+  PortListenerKind,
+  PortUsage,
+  PortUsageStatus,
+} from "./ports-types.js";
 
 class PortInUseError extends Error {
   port: number;
@@ -20,7 +25,9 @@ class PortInUseError extends Error {
   }
 }
 
-export async function describePortOwner(port: number): Promise<string | undefined> {
+export async function describePortOwner(
+  port: number,
+): Promise<string | undefined> {
   const diagnostics = await inspectPortUsage(port);
   if (diagnostics.listeners.length === 0) {
     return undefined;
@@ -47,7 +54,10 @@ export async function handlePortError(
   runtime: RuntimeEnv = defaultRuntime,
 ): Promise<never> {
   // Uniform messaging for EADDRINUSE with optional owner details.
-  if (err instanceof PortInUseError || (isErrno(err) && err.code === "EADDRINUSE")) {
+  if (
+    err instanceof PortInUseError ||
+    (isErrno(err) && err.code === "EADDRINUSE")
+  ) {
     const details =
       err instanceof PortInUseError
         ? (err.details ?? (await describePortOwner(port)))
@@ -65,7 +75,9 @@ export async function handlePortError(
       }
     }
     runtime.error(
-      info("Resolve by stopping the process using the port or passing --port <free-port>."),
+      info(
+        "Resolve by stopping the process using the port or passing --port <free-port>.",
+      ),
     );
     runtime.exit(1);
   }
@@ -86,5 +98,9 @@ export async function handlePortError(
 
 export { PortInUseError };
 export type { PortListener, PortListenerKind, PortUsage, PortUsageStatus };
-export { buildPortHints, classifyPortListener, formatPortDiagnostics } from "./ports-format.js";
+export {
+  buildPortHints,
+  classifyPortListener,
+  formatPortDiagnostics,
+} from "./ports-format.js";
 export { inspectPortUsage } from "./ports-inspect.js";

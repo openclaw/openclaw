@@ -8,7 +8,10 @@ const BACKOFF_SCHEDULE_MS = [5000, 10000, 30000, 60000];
  * Implements exponential backoff schedule: 5s → 10s → 30s → 60s (capped).
  */
 export function calculateBackoffMs(consecutiveNoOutputPolls: number): number {
-  const index = Math.min(consecutiveNoOutputPolls, BACKOFF_SCHEDULE_MS.length - 1);
+  const index = Math.min(
+    consecutiveNoOutputPolls,
+    BACKOFF_SCHEDULE_MS.length - 1,
+  );
   return BACKOFF_SCHEDULE_MS[index] ?? 60000;
 }
 
@@ -60,7 +63,10 @@ export function getCommandPollSuggestion(
 /**
  * Reset poll count for a command (e.g., when command completes).
  */
-export function resetCommandPollCount(state: SessionState, commandId: string): void {
+export function resetCommandPollCount(
+  state: SessionState,
+  commandId: string,
+): void {
   state.commandPollCounts?.delete(commandId);
 }
 
@@ -68,7 +74,10 @@ export function resetCommandPollCount(state: SessionState, commandId: string): v
  * Prune stale command poll records (older than 1 hour).
  * Call periodically to prevent memory bloat.
  */
-export function pruneStaleCommandPolls(state: SessionState, maxAgeMs = 3600000): void {
+export function pruneStaleCommandPolls(
+  state: SessionState,
+  maxAgeMs = 3600000,
+): void {
   if (!state.commandPollCounts) {
     return;
   }

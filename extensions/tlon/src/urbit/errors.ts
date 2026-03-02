@@ -8,7 +8,11 @@ export type UrbitErrorCode =
 export class UrbitError extends Error {
   readonly code: UrbitErrorCode;
 
-  constructor(code: UrbitErrorCode, message: string, options?: { cause?: unknown }) {
+  constructor(
+    code: UrbitErrorCode,
+    message: string,
+    options?: { cause?: unknown },
+  ) {
     super(message, options);
     this.name = "UrbitError";
     this.code = code;
@@ -27,11 +31,20 @@ export class UrbitHttpError extends UrbitError {
   readonly operation: string;
   readonly bodyText?: string;
 
-  constructor(params: { operation: string; status: number; bodyText?: string; cause?: unknown }) {
+  constructor(params: {
+    operation: string;
+    status: number;
+    bodyText?: string;
+    cause?: unknown;
+  }) {
     const suffix = params.bodyText ? ` - ${params.bodyText}` : "";
-    super("http_error", `${params.operation} failed: ${params.status}${suffix}`, {
-      cause: params.cause,
-    });
+    super(
+      "http_error",
+      `${params.operation} failed: ${params.status}${suffix}`,
+      {
+        cause: params.cause,
+      },
+    );
     this.name = "UrbitHttpError";
     this.status = params.status;
     this.operation = params.operation;

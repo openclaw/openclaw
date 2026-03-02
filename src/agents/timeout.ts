@@ -4,7 +4,9 @@ const DEFAULT_AGENT_TIMEOUT_SECONDS = 600;
 const MAX_SAFE_TIMEOUT_MS = 2_147_000_000;
 
 const normalizeNumber = (value: unknown): number | undefined =>
-  typeof value === "number" && Number.isFinite(value) ? Math.floor(value) : undefined;
+  typeof value === "number" && Number.isFinite(value)
+    ? Math.floor(value)
+    : undefined;
 
 export function resolveAgentTimeoutSeconds(cfg?: OpenClawConfig): number {
   const raw = normalizeNumber(cfg?.agents?.defaults?.timeoutSeconds);

@@ -36,7 +36,9 @@ function readStore(filePath: string): DeviceAuthStore | null {
 
 function writeStore(filePath: string, store: DeviceAuthStore): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, `${JSON.stringify(store, null, 2)}\n`, { mode: 0o600 });
+  fs.writeFileSync(filePath, `${JSON.stringify(store, null, 2)}\n`, {
+    mode: 0o600,
+  });
   try {
     fs.chmodSync(filePath, 0o600);
   } catch {
@@ -51,7 +53,10 @@ export function loadDeviceAuthToken(params: {
 }): DeviceAuthEntry | null {
   const filePath = resolveDeviceAuthPath(params.env);
   return loadDeviceAuthTokenFromStore({
-    adapter: { readStore: () => readStore(filePath), writeStore: (_store) => {} },
+    adapter: {
+      readStore: () => readStore(filePath),
+      writeStore: (_store) => {},
+    },
     deviceId: params.deviceId,
     role: params.role,
   });

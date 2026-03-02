@@ -1,4 +1,7 @@
-export type ServicePrefix<TService extends string> = { prefix: string; service: TService };
+export type ServicePrefix<TService extends string> = {
+  prefix: string;
+  service: TService;
+};
 
 export type ChatTargetPrefixesParams = {
   trimmed: string;
@@ -17,7 +20,10 @@ function stripPrefix(value: string, prefix: string): string {
   return value.slice(prefix.length).trim();
 }
 
-export function resolveServicePrefixedTarget<TService extends string, TTarget>(params: {
+export function resolveServicePrefixedTarget<
+  TService extends string,
+  TTarget,
+>(params: {
   trimmed: string;
   lower: string;
   servicePrefixes: Array<ServicePrefix<TService>>;

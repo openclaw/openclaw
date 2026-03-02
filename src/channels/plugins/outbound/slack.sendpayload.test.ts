@@ -11,7 +11,11 @@ function baseCtx(payload: ReplyPayload) {
     deps: {
       sendSlack: vi
         .fn()
-        .mockResolvedValue({ messageId: "sl-1", channelId: "C12345", ts: "1234.5678" }),
+        .mockResolvedValue({
+          messageId: "sl-1",
+          channelId: "C12345",
+          ts: "1234.5678",
+        }),
     },
   };
 }
@@ -22,7 +26,11 @@ describe("slackOutbound sendPayload", () => {
     const result = await slackOutbound.sendPayload!(ctx);
 
     expect(ctx.deps.sendSlack).toHaveBeenCalledTimes(1);
-    expect(ctx.deps.sendSlack).toHaveBeenCalledWith("C12345", "hello", expect.any(Object));
+    expect(ctx.deps.sendSlack).toHaveBeenCalledWith(
+      "C12345",
+      "hello",
+      expect.any(Object),
+    );
     expect(result).toMatchObject({ channel: "slack" });
   });
 
@@ -86,7 +94,11 @@ describe("slackOutbound sendPayload", () => {
     const result = await slackOutbound.sendPayload!(ctx);
 
     expect(ctx.deps.sendSlack).toHaveBeenCalledTimes(1);
-    expect(ctx.deps.sendSlack).toHaveBeenCalledWith("C12345", "a".repeat(5000), expect.any(Object));
+    expect(ctx.deps.sendSlack).toHaveBeenCalledWith(
+      "C12345",
+      "a".repeat(5000),
+      expect.any(Object),
+    );
     expect(result).toMatchObject({ channel: "slack" });
   });
 });

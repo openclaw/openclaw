@@ -4,7 +4,11 @@ import { createWaSocket, logoutWeb, waitForWaConnection } from "./session.js";
 
 vi.mock("./session.js", () => {
   const createWaSocket = vi.fn(
-    async (_printQr: boolean, _verbose: boolean, opts?: { onQr?: (qr: string) => void }) => {
+    async (
+      _printQr: boolean,
+      _verbose: boolean,
+      opts?: { onQr?: (qr: string) => void },
+    ) => {
       const sock = { ws: { close: vi.fn() } };
       if (opts?.onQr) {
         setImmediate(() => opts.onQr?.("qr-data"));

@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { buildPayloads, expectSingleToolErrorPayload } from "./payloads.test-helpers.js";
+import {
+  buildPayloads,
+  expectSingleToolErrorPayload,
+} from "./payloads.test-helpers.js";
 
 describe("buildEmbeddedRunPayloads tool-error warnings", () => {
   it("suppresses exec tool errors when verbose mode is off", () => {

@@ -11,16 +11,23 @@ export type QmdQueryResult = {
   body?: string;
 };
 
-export function parseQmdQueryJson(stdout: string, stderr: string): QmdQueryResult[] {
+export function parseQmdQueryJson(
+  stdout: string,
+  stderr: string,
+): QmdQueryResult[] {
   const trimmedStdout = stdout.trim();
   const trimmedStderr = stderr.trim();
-  const stdoutIsMarker = trimmedStdout.length > 0 && isQmdNoResultsOutput(trimmedStdout);
-  const stderrIsMarker = trimmedStderr.length > 0 && isQmdNoResultsOutput(trimmedStderr);
+  const stdoutIsMarker =
+    trimmedStdout.length > 0 && isQmdNoResultsOutput(trimmedStdout);
+  const stderrIsMarker =
+    trimmedStderr.length > 0 && isQmdNoResultsOutput(trimmedStderr);
   if (stdoutIsMarker || (!trimmedStdout && stderrIsMarker)) {
     return [];
   }
   if (!trimmedStdout) {
-    const context = trimmedStderr ? ` (stderr: ${summarizeQmdStderr(trimmedStderr)})` : "";
+    const context = trimmedStderr
+      ? ` (stderr: ${summarizeQmdStderr(trimmedStderr)})`
+      : "";
     const message = `stdout empty${context}`;
     log.warn(`qmd query returned invalid JSON: ${message}`);
     throw new Error(`qmd query returned invalid JSON: ${message}`);
@@ -42,7 +49,9 @@ export function parseQmdQueryJson(stdout: string, stderr: string): QmdQueryResul
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     log.warn(`qmd query returned invalid JSON: ${message}`);
-    throw new Error(`qmd query returned invalid JSON: ${message}`, { cause: err });
+    throw new Error(`qmd query returned invalid JSON: ${message}`, {
+      cause: err,
+    });
   }
 }
 

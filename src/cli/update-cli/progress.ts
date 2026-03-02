@@ -40,7 +40,9 @@ export function inferUpdateFailureHints(result: UpdateRunResult): string[] {
   if (result.status !== "error" || result.mode !== "npm") {
     return [];
   }
-  const failedStep = [...result.steps].toReversed().find((step) => step.exitCode !== 0);
+  const failedStep = [...result.steps]
+    .toReversed()
+    .find((step) => step.exitCode !== 0);
   if (!failedStep) {
     return [];
   }
@@ -48,11 +50,16 @@ export function inferUpdateFailureHints(result: UpdateRunResult): string[] {
   const stderr = (failedStep.stderrTail ?? "").toLowerCase();
   const hints: string[] = [];
 
-  if (failedStep.name.startsWith("global update") && stderr.includes("eacces")) {
+  if (
+    failedStep.name.startsWith("global update") &&
+    stderr.includes("eacces")
+  ) {
     hints.push(
       "Detected permission failure (EACCES). Re-run with a writable global prefix or sudo (for system-managed Node installs).",
     );
-    hints.push("Example: npm config set prefix ~/.local && npm i -g openclaw@latest");
+    hints.push(
+      "Example: npm config set prefix ~/.local && npm i -g openclaw@latest",
+    );
   }
 
   if (
@@ -96,8 +103,11 @@ export function createUpdateProgress(enabled: boolean): ProgressController {
       }
 
       const label = getStepLabel(step);
-      const duration = theme.muted(`(${formatDurationPrecise(step.durationMs)})`);
-      const icon = step.exitCode === 0 ? theme.success("\u2713") : theme.error("\u2717");
+      const duration = theme.muted(
+        `(${formatDurationPrecise(step.durationMs)})`,
+      );
+      const icon =
+        step.exitCode === 0 ? theme.success("\u2713") : theme.error("\u2717");
 
       currentSpinner.stop(`${icon} ${label} ${duration}`);
       currentSpinner = null;
@@ -138,14 +148,21 @@ type PrintResultOptions = UpdateCommandOptions & {
   hideSteps?: boolean;
 };
 
-export function printResult(result: UpdateRunResult, opts: PrintResultOptions): void {
+export function printResult(
+  result: UpdateRunResult,
+  opts: PrintResultOptions,
+): void {
   if (opts.json) {
     defaultRuntime.log(JSON.stringify(result, null, 2));
     return;
   }
 
   const statusColor =
-    result.status === "ok" ? theme.success : result.status === "skipped" ? theme.warn : theme.error;
+    result.status === "ok"
+      ? theme.success
+      : result.status === "skipped"
+        ? theme.warn
+        : theme.error;
 
   defaultRuntime.log("");
   defaultRuntime.log(
@@ -159,7 +176,8 @@ export function printResult(result: UpdateRunResult, opts: PrintResultOptions): 
   }
 
   if (result.before?.version || result.before?.sha) {
-    const before = result.before.version ?? result.before.sha?.slice(0, 8) ?? "";
+    const before =
+      result.before.version ?? result.before.sha?.slice(0, 8) ?? "";
     defaultRuntime.log(`  Before: ${theme.muted(before)}`);
   }
   if (result.after?.version || result.after?.sha) {
@@ -172,7 +190,9 @@ export function printResult(result: UpdateRunResult, opts: PrintResultOptions): 
     defaultRuntime.log(theme.heading("Steps:"));
     for (const step of result.steps) {
       const status = formatStepStatus(step.exitCode);
-      const duration = theme.muted(`(${formatDurationPrecise(step.durationMs)})`);
+      const duration = theme.muted(
+        `(${formatDurationPrecise(step.durationMs)})`,
+      );
       defaultRuntime.log(`  ${status} ${step.name} ${duration}`);
 
       if (step.exitCode !== 0 && step.stderrTail) {
@@ -196,5 +216,7 @@ export function printResult(result: UpdateRunResult, opts: PrintResultOptions): 
   }
 
   defaultRuntime.log("");
-  defaultRuntime.log(`Total time: ${theme.muted(formatDurationPrecise(result.durationMs))}`);
+  defaultRuntime.log(
+    `Total time: ${theme.muted(formatDurationPrecise(result.durationMs))}`,
+  );
 }

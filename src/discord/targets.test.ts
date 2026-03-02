@@ -2,7 +2,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeDiscordMessagingTarget } from "../channels/plugins/normalize/discord.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { listDiscordDirectoryPeersLive } from "./directory-live.js";
-import { parseDiscordTarget, resolveDiscordChannelId, resolveDiscordTarget } from "./targets.js";
+import {
+  parseDiscordTarget,
+  resolveDiscordChannelId,
+  resolveDiscordTarget,
+} from "./targets.js";
 
 vi.mock("./directory-live.js", () => ({
   listDiscordDirectoryPeersLive: vi.fn(),
@@ -40,11 +44,13 @@ describe("parseDiscordTarget", () => {
   });
 
   it("accepts numeric ids when a default kind is provided", () => {
-    expect(parseDiscordTarget("123", { defaultKind: "channel" })).toMatchObject({
-      kind: "channel",
-      id: "123",
-      normalized: "channel:123",
-    });
+    expect(parseDiscordTarget("123", { defaultKind: "channel" })).toMatchObject(
+      {
+        kind: "channel",
+        id: "123",
+        normalized: "channel:123",
+      },
+    );
   });
 
   it("rejects invalid parse targets", () => {
@@ -67,7 +73,9 @@ describe("resolveDiscordChannelId", () => {
   });
 
   it("rejects user targets", () => {
-    expect(() => resolveDiscordChannelId("user:123")).toThrow(/channel id is required/i);
+    expect(() => resolveDiscordChannelId("user:123")).toThrow(
+      /channel id is required/i,
+    );
   });
 });
 
@@ -80,11 +88,17 @@ describe("resolveDiscordTarget", () => {
   });
 
   it("returns a resolved user for usernames", async () => {
-    listPeers.mockResolvedValueOnce([{ kind: "user", id: "user:999", name: "Jane" } as const]);
+    listPeers.mockResolvedValueOnce([
+      { kind: "user", id: "user:999", name: "Jane" } as const,
+    ]);
 
     await expect(
       resolveDiscordTarget("jane", { cfg, accountId: "default" }),
-    ).resolves.toMatchObject({ kind: "user", id: "999", normalized: "user:999" });
+    ).resolves.toMatchObject({
+      kind: "user",
+      id: "999",
+      normalized: "user:999",
+    });
   });
 
   it("falls back to parsing when lookup misses", async () => {

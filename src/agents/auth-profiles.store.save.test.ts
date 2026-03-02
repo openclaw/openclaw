@@ -8,7 +8,9 @@ import type { AuthProfileStore } from "./auth-profiles/types.js";
 
 describe("saveAuthProfileStore", () => {
   it("strips plaintext when keyRef/tokenRef are present", async () => {
-    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-save-"));
+    const agentDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-auth-save-"),
+    );
     try {
       const store: AuthProfileStore = {
         version: 1,
@@ -17,13 +19,21 @@ describe("saveAuthProfileStore", () => {
             type: "api_key",
             provider: "openai",
             key: "sk-runtime-value",
-            keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+            keyRef: {
+              source: "env",
+              provider: "default",
+              id: "OPENAI_API_KEY",
+            },
           },
           "github-copilot:default": {
             type: "token",
             provider: "github-copilot",
             token: "gh-runtime-token",
-            tokenRef: { source: "env", provider: "default", id: "GITHUB_TOKEN" },
+            tokenRef: {
+              source: "env",
+              provider: "default",
+              id: "GITHUB_TOKEN",
+            },
           },
           "anthropic:default": {
             type: "api_key",
@@ -35,7 +45,9 @@ describe("saveAuthProfileStore", () => {
 
       saveAuthProfileStore(store, agentDir);
 
-      const parsed = JSON.parse(await fs.readFile(resolveAuthStorePath(agentDir), "utf8")) as {
+      const parsed = JSON.parse(
+        await fs.readFile(resolveAuthStorePath(agentDir), "utf8"),
+      ) as {
         profiles: Record<
           string,
           { key?: string; keyRef?: unknown; token?: string; tokenRef?: unknown }
@@ -56,7 +68,9 @@ describe("saveAuthProfileStore", () => {
         id: "GITHUB_TOKEN",
       });
 
-      expect(parsed.profiles["anthropic:default"]?.key).toBe("sk-anthropic-plain");
+      expect(parsed.profiles["anthropic:default"]?.key).toBe(
+        "sk-anthropic-plain",
+      );
     } finally {
       await fs.rm(agentDir, { recursive: true, force: true });
     }

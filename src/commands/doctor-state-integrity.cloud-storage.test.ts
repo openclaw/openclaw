@@ -28,7 +28,14 @@ describe("detectMacCloudSyncedStateDir", () => {
   });
 
   it("detects state dir under Library/CloudStorage", () => {
-    const stateDir = path.join(home, "Library", "CloudStorage", "Dropbox", "OpenClaw", ".openclaw");
+    const stateDir = path.join(
+      home,
+      "Library",
+      "CloudStorage",
+      "Dropbox",
+      "OpenClaw",
+      ".openclaw",
+    );
 
     const result = detectMacCloudSyncedStateDir(stateDir, {
       platform: "darwin",
@@ -85,7 +92,13 @@ describe("detectMacCloudSyncedStateDir", () => {
   });
 
   it("anchors cloud detection to OS homedir when OPENCLAW_HOME is overridden", () => {
-    const stateDir = path.join(home, "Library", "CloudStorage", "iCloud Drive", ".openclaw");
+    const stateDir = path.join(
+      home,
+      "Library",
+      "CloudStorage",
+      "iCloud Drive",
+      ".openclaw",
+    );
     const originalOpenClawHome = process.env.OPENCLAW_HOME;
     process.env.OPENCLAW_HOME = "/tmp/openclaw-home-override";
     const homedirSpy = vi.spyOn(os, "homedir").mockReturnValue(home);

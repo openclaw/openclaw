@@ -7,7 +7,9 @@ describe("applyGoogleTurnOrderingFix", () => {
   const makeAssistantFirst = (): AgentMessage[] => [
     {
       role: "assistant",
-      content: [{ type: "toolCall", id: "call_1", name: "exec", arguments: {} }],
+      content: [
+        { type: "toolCall", id: "call_1", name: "exec", arguments: {} },
+      ],
     } as unknown as AgentMessage,
   ];
 
@@ -30,7 +32,8 @@ describe("applyGoogleTurnOrderingFix", () => {
         .getEntries()
         .some(
           (entry) =>
-            entry.type === "custom" && entry.customType === "google-turn-ordering-bootstrap",
+            entry.type === "custom" &&
+            entry.customType === "google-turn-ordering-bootstrap",
         ),
     ).toBe(true);
 

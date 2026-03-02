@@ -20,7 +20,9 @@ export type GatewayInstallPlan = {
 export function resolveGatewayDevMode(argv: string[] = process.argv): boolean {
   const entry = argv[1];
   const normalizedEntry = entry?.replaceAll("\\", "/");
-  return Boolean(normalizedEntry?.includes("/src/") && normalizedEntry.endsWith(".ts"));
+  return Boolean(
+    normalizedEntry?.includes("/src/") && normalizedEntry.endsWith(".ts"),
+  );
 }
 
 export async function buildGatewayInstallPlan(params: {
@@ -41,12 +43,13 @@ export async function buildGatewayInstallPlan(params: {
       env: params.env,
       runtime: params.runtime,
     }));
-  const { programArguments, workingDirectory } = await resolveGatewayProgramArguments({
-    port: params.port,
-    dev: devMode,
-    runtime: params.runtime,
-    nodePath,
-  });
+  const { programArguments, workingDirectory } =
+    await resolveGatewayProgramArguments({
+      port: params.port,
+      dev: devMode,
+      runtime: params.runtime,
+      nodePath,
+    });
   await emitNodeRuntimeWarning({
     env: params.env,
     runtime: params.runtime,

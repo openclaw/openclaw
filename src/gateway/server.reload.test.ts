@@ -113,11 +113,16 @@ const hoisted = vi.hoisted(() => {
   const createChannelManager = vi.fn(() => providerManager);
 
   const reloaderStop = vi.fn(async () => {});
-  let onHotReload: ((plan: unknown, nextConfig: unknown) => Promise<void>) | null = null;
+  let onHotReload:
+    | ((plan: unknown, nextConfig: unknown) => Promise<void>)
+    | null = null;
   let onRestart: ((plan: unknown, nextConfig: unknown) => void) | null = null;
 
   const startGatewayConfigReloader = vi.fn(
-    (opts: { onHotReload: typeof onHotReload; onRestart: typeof onRestart }) => {
+    (opts: {
+      onHotReload: typeof onHotReload;
+      onRestart: typeof onRestart;
+    }) => {
       onHotReload = opts.onHotReload;
       onRestart = opts.onRestart;
       return { stop: reloaderStop };
@@ -148,7 +153,8 @@ vi.mock("../cron/service.js", () => ({
 }));
 
 vi.mock("./server-browser.js", () => ({
-  startBrowserControlServerIfEnabled: hoisted.startBrowserControlServerIfEnabled,
+  startBrowserControlServerIfEnabled:
+    hoisted.startBrowserControlServerIfEnabled,
 }));
 
 vi.mock("../infra/heartbeat-runner.js", () => ({
@@ -222,7 +228,11 @@ describe("gateway hot reload", () => {
             providers: {
               openai: {
                 baseUrl: "https://api.openai.com/v1",
-                apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+                apiKey: {
+                  source: "env",
+                  provider: "default",
+                  id: "OPENAI_API_KEY",
+                },
                 models: [],
               },
             },
@@ -240,7 +250,13 @@ describe("gateway hot reload", () => {
     if (!stateDir) {
       throw new Error("OPENCLAW_STATE_DIR is not set");
     }
-    const authStorePath = path.join(stateDir, "agents", "main", "agent", "auth-profiles.json");
+    const authStorePath = path.join(
+      stateDir,
+      "agents",
+      "main",
+      "agent",
+      "auth-profiles.json",
+    );
     await fs.mkdir(path.dirname(authStorePath), { recursive: true });
     await fs.writeFile(
       authStorePath,
@@ -251,7 +267,11 @@ describe("gateway hot reload", () => {
             missing: {
               type: "api_key",
               provider: "openai",
-              keyRef: { source: "env", provider: "default", id: "MISSING_OPENCLAW_AUTH_REF" },
+              keyRef: {
+                source: "env",
+                provider: "default",
+                id: "MISSING_OPENCLAW_AUTH_REF",
+              },
             },
           },
           selectedProfileId: "missing",
@@ -270,7 +290,13 @@ describe("gateway hot reload", () => {
     if (!stateDir) {
       return;
     }
-    const authStorePath = path.join(stateDir, "agents", "main", "agent", "auth-profiles.json");
+    const authStorePath = path.join(
+      stateDir,
+      "agents",
+      "main",
+      "agent",
+      "auth-profiles.json",
+    );
     await fs.rm(authStorePath, { force: true });
   }
 
@@ -318,7 +344,13 @@ describe("gateway hot reload", () => {
           restartBrowserControl: true,
           restartCron: true,
           restartHeartbeat: true,
-          restartChannels: new Set(["whatsapp", "telegram", "discord", "signal", "imessage"]),
+          restartChannels: new Set([
+            "whatsapp",
+            "telegram",
+            "discord",
+            "signal",
+            "imessage",
+          ]),
           noopPaths: [],
         },
         nextConfig,
@@ -328,7 +360,9 @@ describe("gateway hot reload", () => {
       expect(hoisted.startGmailWatcher).toHaveBeenCalledWith(nextConfig);
 
       expect(hoisted.browserStop).toHaveBeenCalledTimes(1);
-      expect(hoisted.startBrowserControlServerIfEnabled).toHaveBeenCalledTimes(2);
+      expect(hoisted.startBrowserControlServerIfEnabled).toHaveBeenCalledTimes(
+        2,
+      );
 
       expect(hoisted.startHeartbeatRunner).toHaveBeenCalledTimes(1);
       expect(hoisted.heartbeatUpdateConfig).toHaveBeenCalledTimes(1);
@@ -340,16 +374,36 @@ describe("gateway hot reload", () => {
 
       expect(hoisted.providerManager.stopChannel).toHaveBeenCalledTimes(5);
       expect(hoisted.providerManager.startChannel).toHaveBeenCalledTimes(5);
-      expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("whatsapp");
-      expect(hoisted.providerManager.startChannel).toHaveBeenCalledWith("whatsapp");
-      expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("telegram");
-      expect(hoisted.providerManager.startChannel).toHaveBeenCalledWith("telegram");
-      expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("discord");
-      expect(hoisted.providerManager.startChannel).toHaveBeenCalledWith("discord");
-      expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("signal");
-      expect(hoisted.providerManager.startChannel).toHaveBeenCalledWith("signal");
-      expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("imessage");
-      expect(hoisted.providerManager.startChannel).toHaveBeenCalledWith("imessage");
+      expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith(
+        "whatsapp",
+      );
+      expect(hoisted.providerManager.startChannel).toHaveBeenCalledWith(
+        "whatsapp",
+      );
+      expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith(
+        "telegram",
+      );
+      expect(hoisted.providerManager.startChannel).toHaveBeenCalledWith(
+        "telegram",
+      );
+      expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith(
+        "discord",
+      );
+      expect(hoisted.providerManager.startChannel).toHaveBeenCalledWith(
+        "discord",
+      );
+      expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith(
+        "signal",
+      );
+      expect(hoisted.providerManager.startChannel).toHaveBeenCalledWith(
+        "signal",
+      );
+      expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith(
+        "imessage",
+      );
+      expect(hoisted.providerManager.startChannel).toHaveBeenCalledWith(
+        "imessage",
+      );
 
       const onRestart = hoisted.getOnRestart();
       expect(onRestart).toBeTypeOf("function");
@@ -425,7 +479,11 @@ describe("gateway hot reload", () => {
           providers: {
             openai: {
               baseUrl: "https://api.openai.com/v1",
-              apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+              apiKey: {
+                source: "env",
+                provider: "default",
+                id: "OPENAI_API_KEY",
+              },
               models: [],
             },
           },
@@ -437,9 +495,11 @@ describe("gateway hot reload", () => {
         'Environment variable "OPENAI_API_KEY" is missing or empty.',
       );
       const degradedEvents = drainSystemEvents(sessionKey);
-      expect(degradedEvents.some((event) => event.includes("[SECRETS_RELOADER_DEGRADED]"))).toBe(
-        true,
-      );
+      expect(
+        degradedEvents.some((event) =>
+          event.includes("[SECRETS_RELOADER_DEGRADED]"),
+        ),
+      ).toBe(true);
 
       await expect(onHotReload?.(plan, nextConfig)).rejects.toThrow(
         'Environment variable "OPENAI_API_KEY" is missing or empty.',
@@ -449,9 +509,11 @@ describe("gateway hot reload", () => {
       process.env.OPENAI_API_KEY = "sk-recovered";
       await expect(onHotReload?.(plan, nextConfig)).resolves.toBeUndefined();
       const recoveredEvents = drainSystemEvents(sessionKey);
-      expect(recoveredEvents.some((event) => event.includes("[SECRETS_RELOADER_RECOVERED]"))).toBe(
-        true,
-      );
+      expect(
+        recoveredEvents.some((event) =>
+          event.includes("[SECRETS_RELOADER_RECOVERED]"),
+        ),
+      ).toBe(true);
     });
   });
 
@@ -478,7 +540,11 @@ describe("gateway agents", () => {
   it("lists configured agents via agents.list RPC", async () => {
     const { server, ws } = await startServerWithClient();
     await connectOk(ws);
-    const res = await rpcReq<{ agents: Array<{ id: string }> }>(ws, "agents.list", {});
+    const res = await rpcReq<{ agents: Array<{ id: string }> }>(
+      ws,
+      "agents.list",
+      {},
+    );
     expect(res.ok).toBe(true);
     expect(res.payload?.agents.map((agent) => agent.id)).toContain("main");
     ws.close();

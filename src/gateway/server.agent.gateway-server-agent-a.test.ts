@@ -28,7 +28,9 @@ beforeAll(async () => {
   server = started.server;
   ws = started.ws;
   await connectOk(ws);
-  sharedSessionStoreDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-session-"));
+  sharedSessionStoreDir = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-gw-session-"),
+  );
   sharedSessionStorePath = path.join(sharedSessionStoreDir, "sessions.json");
 });
 
@@ -62,7 +64,9 @@ async function setTestSessionStore(params: {
 }
 
 function latestAgentCall(): AgentCommandCall {
-  const calls = vi.mocked(agentCommand).mock.calls as unknown as Array<[unknown]>;
+  const calls = vi.mocked(agentCommand).mock.calls as unknown as Array<
+    [unknown]
+  >;
   return calls.at(-1)?.[0] as AgentCommandCall;
 }
 
@@ -105,7 +109,8 @@ const createStubChannelPlugin = (params: {
     label: params.label,
     config: {
       resolveAllowFrom: params.resolveAllowFrom
-        ? ({ cfg }) => params.resolveAllowFrom?.(cfg as Record<string, unknown>) ?? []
+        ? ({ cfg }) =>
+            params.resolveAllowFrom?.(cfg as Record<string, unknown>) ?? []
         : undefined,
     },
   }),
@@ -241,7 +246,9 @@ describe("gateway server agent", () => {
       { spawnDepth?: number; spawnedBy?: string }
     >;
     expect(persisted["agent:main:subagent:depth"]?.spawnDepth).toBe(2);
-    expect(persisted["agent:main:subagent:depth"]?.spawnedBy).toBe("agent:main:main");
+    expect(persisted["agent:main:subagent:depth"]?.spawnedBy).toBe(
+      "agent:main:main",
+    );
   });
 
   test("agent derives sessionKey from agentId", async () => {

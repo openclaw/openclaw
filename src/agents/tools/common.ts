@@ -86,7 +86,12 @@ export function readStringParam(
   key: string,
   options: StringParamOptions = {},
 ) {
-  const { required = false, trim = true, label = key, allowEmpty = false } = options;
+  const {
+    required = false,
+    trim = true,
+    label = key,
+    allowEmpty = false,
+  } = options;
   const raw = readParamRaw(params, key);
   if (typeof raw !== "string") {
     if (required) {
@@ -216,7 +221,8 @@ export function readReactionParams(
 ): ReactionParams {
   const emojiKey = options.emojiKey ?? "emoji";
   const removeKey = options.removeKey ?? "remove";
-  const remove = typeof params[removeKey] === "boolean" ? params[removeKey] : false;
+  const remove =
+    typeof params[removeKey] === "boolean" ? params[removeKey] : false;
   const emoji = readStringParam(params, emojiKey, {
     required: true,
     allowEmpty: true,
@@ -278,7 +284,11 @@ export async function imageResult(params: {
     content,
     details: { path: params.path, ...params.details },
   };
-  return await sanitizeToolResultImages(result, params.label, params.imageSanitization);
+  return await sanitizeToolResultImages(
+    result,
+    params.label,
+    params.imageSanitization,
+  );
 }
 
 export async function imageResultFromFile(params: {
@@ -289,7 +299,8 @@ export async function imageResultFromFile(params: {
   imageSanitization?: ImageSanitizationLimits;
 }): Promise<AgentToolResult<unknown>> {
   const buf = await fs.readFile(params.path);
-  const mimeType = (await detectMime({ buffer: buf.slice(0, 256) })) ?? "image/png";
+  const mimeType =
+    (await detectMime({ buffer: buf.slice(0, 256) })) ?? "image/png";
   return await imageResult({
     label: params.label,
     path: params.path,
@@ -330,7 +341,9 @@ export function parseAvailableTags(raw: unknown): AvailableTag[] | undefined {
       ...(t.id !== undefined && typeof t.id === "string" ? { id: t.id } : {}),
       name: t.name as string,
       ...(typeof t.moderated === "boolean" ? { moderated: t.moderated } : {}),
-      ...(t.emoji_id === null || typeof t.emoji_id === "string" ? { emoji_id: t.emoji_id } : {}),
+      ...(t.emoji_id === null || typeof t.emoji_id === "string"
+        ? { emoji_id: t.emoji_id }
+        : {}),
       ...(t.emoji_name === null || typeof t.emoji_name === "string"
         ? { emoji_name: t.emoji_name }
         : {}),

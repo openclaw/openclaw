@@ -9,7 +9,9 @@ export function resolveUserTimezone(configured?: string): string {
   const trimmed = configured?.trim();
   if (trimmed) {
     try {
-      new Intl.DateTimeFormat("en-US", { timeZone: trimmed }).format(new Date());
+      new Intl.DateTimeFormat("en-US", { timeZone: trimmed }).format(
+        new Date(),
+      );
       return trimmed;
     } catch {
       // ignore invalid timezone
@@ -19,7 +21,9 @@ export function resolveUserTimezone(configured?: string): string {
   return host?.trim() || "UTC";
 }
 
-export function resolveUserTimeFormat(preference?: TimeFormatPreference): ResolvedTimeFormat {
+export function resolveUserTimeFormat(
+  preference?: TimeFormatPreference,
+): ResolvedTimeFormat {
   if (preference === "12" || preference === "24") {
     return preference;
   }
@@ -41,7 +45,8 @@ export function normalizeTimestamp(
   if (raw instanceof Date) {
     timestampMs = raw.getTime();
   } else if (typeof raw === "number" && Number.isFinite(raw)) {
-    timestampMs = raw < 1_000_000_000_000 ? Math.round(raw * 1000) : Math.round(raw);
+    timestampMs =
+      raw < 1_000_000_000_000 ? Math.round(raw * 1000) : Math.round(raw);
   } else if (typeof raw === "string") {
     const trimmed = raw.trim();
     if (!trimmed) {
@@ -83,7 +88,8 @@ export function withNormalizedTimestamp<T extends Record<string, unknown>>(
   return {
     ...value,
     timestampMs:
-      typeof value.timestampMs === "number" && Number.isFinite(value.timestampMs)
+      typeof value.timestampMs === "number" &&
+      Number.isFinite(value.timestampMs)
         ? value.timestampMs
         : normalized.timestampMs,
     timestampUtc:
@@ -96,11 +102,15 @@ export function withNormalizedTimestamp<T extends Record<string, unknown>>(
 function detectSystemTimeFormat(): boolean {
   if (process.platform === "darwin") {
     try {
-      const result = execFileSync("defaults", ["read", "-g", "AppleICUForce24HourTime"], {
-        encoding: "utf8",
-        timeout: 500,
-        stdio: ["pipe", "pipe", "pipe"],
-      }).trim();
+      const result = execFileSync(
+        "defaults",
+        ["read", "-g", "AppleICUForce24HourTime"],
+        {
+          encoding: "utf8",
+          timeout: 500,
+          stdio: ["pipe", "pipe", "pipe"],
+        },
+      ).trim();
       if (result === "1") {
         return true;
       }
@@ -132,7 +142,9 @@ function detectSystemTimeFormat(): boolean {
 
   try {
     const sample = new Date(2000, 0, 1, 13, 0);
-    const formatted = new Intl.DateTimeFormat(undefined, { hour: "numeric" }).format(sample);
+    const formatted = new Intl.DateTimeFormat(undefined, {
+      hour: "numeric",
+    }).format(sample);
     return formatted.includes("13");
   } catch {
     return false;
@@ -178,7 +190,14 @@ export function formatUserTime(
         map[part.type] = part.value;
       }
     }
-    if (!map.weekday || !map.year || !map.month || !map.day || !map.hour || !map.minute) {
+    if (
+      !map.weekday ||
+      !map.year ||
+      !map.month ||
+      !map.day ||
+      !map.hour ||
+      !map.minute
+    ) {
       return undefined;
     }
     const dayNum = parseInt(map.day, 10);

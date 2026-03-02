@@ -1,5 +1,9 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { ImageContent, TextContent, ToolResultMessage } from "@mariozechner/pi-ai";
+import type {
+  ImageContent,
+  TextContent,
+  ToolResultMessage,
+} from "@mariozechner/pi-ai";
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import type { EffectiveContextPruningSettings } from "./settings.js";
 import { makeToolPrunablePredicate } from "./tools.js";
@@ -13,7 +17,9 @@ function asText(text: string): TextContent {
   return { type: "text", text };
 }
 
-function collectTextSegments(content: ReadonlyArray<TextContent | ImageContent>): string[] {
+function collectTextSegments(
+  content: ReadonlyArray<TextContent | ImageContent>,
+): string[] {
   const parts: string[] = [];
   for (const block of content) {
     if (block.type === "text") {
@@ -87,7 +93,9 @@ function takeTailFromJoinedText(parts: string[], maxChars: number): string {
   return out.join("");
 }
 
-function hasImageBlocks(content: ReadonlyArray<TextContent | ImageContent>): boolean {
+function hasImageBlocks(
+  content: ReadonlyArray<TextContent | ImageContent>,
+): boolean {
   for (const block of content) {
     if (block.type === "image") {
       return true;
@@ -96,7 +104,9 @@ function hasImageBlocks(content: ReadonlyArray<TextContent | ImageContent>): boo
   return false;
 }
 
-function estimateTextAndImageChars(content: ReadonlyArray<TextContent | ImageContent>): number {
+function estimateTextAndImageChars(
+  content: ReadonlyArray<TextContent | ImageContent>,
+): number {
   let chars = 0;
   for (const block of content) {
     if (block.type === "text") {
@@ -240,7 +250,10 @@ export function pruneContextMessages(params: {
     return messages;
   }
 
-  const cutoffIndex = findAssistantCutoffIndex(messages, settings.keepLastAssistants);
+  const cutoffIndex = findAssistantCutoffIndex(
+    messages,
+    settings.keepLastAssistants,
+  );
   if (cutoffIndex === null) {
     return messages;
   }
@@ -249,9 +262,11 @@ export function pruneContextMessages(params: {
   // "identity" reads (SOUL.md, USER.md, etc.) which typically happen before the first inbound user
   // message exists in the session transcript.
   const firstUserIndex = findFirstUserIndex(messages);
-  const pruneStartIndex = firstUserIndex === null ? messages.length : firstUserIndex;
+  const pruneStartIndex =
+    firstUserIndex === null ? messages.length : firstUserIndex;
 
-  const isToolPrunable = params.isToolPrunable ?? makeToolPrunablePredicate(settings.tools);
+  const isToolPrunable =
+    params.isToolPrunable ?? makeToolPrunablePredicate(settings.tools);
 
   const totalCharsBefore = estimateContextChars(messages);
   let totalChars = totalCharsBefore;

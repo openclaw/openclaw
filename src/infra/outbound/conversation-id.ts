@@ -11,7 +11,9 @@ export function resolveConversationIdFromTargets(params: {
   targets: Array<string | undefined | null>;
 }): string | undefined {
   const threadId =
-    params.threadId != null ? normalizeConversationId(String(params.threadId)) : undefined;
+    params.threadId != null
+      ? normalizeConversationId(String(params.threadId))
+      : undefined;
   if (threadId) {
     return threadId;
   }
@@ -22,7 +24,9 @@ export function resolveConversationIdFromTargets(params: {
       continue;
     }
     if (target.startsWith("channel:")) {
-      const channelId = normalizeConversationId(target.slice("channel:".length));
+      const channelId = normalizeConversationId(
+        target.slice("channel:".length),
+      );
       if (channelId) {
         return channelId;
       }

@@ -12,7 +12,9 @@ type TestChannelRegistration = {
   source: string;
 };
 
-export const createTestRegistry = (channels: TestChannelRegistration[] = []): PluginRegistry => ({
+export const createTestRegistry = (
+  channels: TestChannelRegistration[] = [],
+): PluginRegistry => ({
   plugins: [],
   tools: [],
   hooks: [],

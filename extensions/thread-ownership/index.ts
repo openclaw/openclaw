@@ -5,7 +5,9 @@ type ThreadOwnershipConfig = {
   abTestChannels?: string[];
 };
 
-type AgentEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
+type AgentEntry = NonNullable<
+  NonNullable<OpenClawConfig["agents"]>["list"]
+>[number];
 
 // In-memory set of {channel}:{thread} keys where this agent was @-mentioned.
 // Entries expire after 5 minutes.
@@ -21,7 +23,10 @@ function cleanExpiredMentions(): void {
   }
 }
 
-function resolveOwnershipAgent(config: OpenClawConfig): { id: string; name: string } {
+function resolveOwnershipAgent(config: OpenClawConfig): {
+  id: string;
+  name: string;
+} {
   const list = Array.isArray(config.agents?.list)
     ? config.agents.list.filter((entry): entry is AgentEntry =>
         Boolean(entry && typeof entry === "object"),
@@ -30,10 +35,15 @@ function resolveOwnershipAgent(config: OpenClawConfig): { id: string; name: stri
   const selected = list.find((entry) => entry.default === true) ?? list[0];
 
   const id =
-    typeof selected?.id === "string" && selected.id.trim() ? selected.id.trim() : "unknown";
+    typeof selected?.id === "string" && selected.id.trim()
+      ? selected.id.trim()
+      : "unknown";
   const identityName =
-    typeof selected?.identity?.name === "string" ? selected.identity.name.trim() : "";
-  const fallbackName = typeof selected?.name === "string" ? selected.name.trim() : "";
+    typeof selected?.identity?.name === "string"
+      ? selected.identity.name.trim()
+      : "";
+  const fallbackName =
+    typeof selected?.name === "string" ? selected.name.trim() : "";
   const name = identityName || fallbackName;
 
   return { id, name };
@@ -65,7 +75,8 @@ export default function register(api: OpenClawPluginApi) {
 
     const text = event.content ?? "";
     const threadTs = (event.metadata?.threadTs as string) ?? "";
-    const channelId = (event.metadata?.channelId as string) ?? ctx.conversationId ?? "";
+    const channelId =
+      (event.metadata?.channelId as string) ?? ctx.conversationId ?? "";
 
     if (!threadTs || !channelId) return;
 
@@ -102,12 +113,15 @@ export default function register(api: OpenClawPluginApi) {
 
     // Try to claim ownership via the forwarder HTTP API.
     try {
-      const resp = await fetch(`${forwarderUrl}/api/v1/ownership/${channelId}/${threadTs}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ agent_id: agentId }),
-        signal: AbortSignal.timeout(3000),
-      });
+      const resp = await fetch(
+        `${forwarderUrl}/api/v1/ownership/${channelId}/${threadTs}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ agent_id: agentId }),
+          signal: AbortSignal.timeout(3000),
+        },
+      );
 
       if (resp.ok) {
         // We own it (or just claimed it), proceed.
@@ -124,10 +138,14 @@ export default function register(api: OpenClawPluginApi) {
       }
 
       // Unexpected status — fail open.
-      api.logger.warn?.(`thread-ownership: unexpected status ${resp.status}, allowing send`);
+      api.logger.warn?.(
+        `thread-ownership: unexpected status ${resp.status}, allowing send`,
+      );
     } catch (err) {
       // Network error — fail open.
-      api.logger.warn?.(`thread-ownership: ownership check failed (${String(err)}), allowing send`);
+      api.logger.warn?.(
+        `thread-ownership: ownership check failed (${String(err)}), allowing send`,
+      );
     }
   });
 }

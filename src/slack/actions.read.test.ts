@@ -20,7 +20,11 @@ describe("readSlackMessages", () => {
   it("uses conversations.replies and drops the parent message", async () => {
     const client = createClient();
     client.conversations.replies.mockResolvedValueOnce({
-      messages: [{ ts: "171234.567" }, { ts: "171234.890" }, { ts: "171235.000" }],
+      messages: [
+        { ts: "171234.567" },
+        { ts: "171234.890" },
+        { ts: "171235.000" },
+      ],
       has_more: true,
     });
 
@@ -38,7 +42,10 @@ describe("readSlackMessages", () => {
       oldest: undefined,
     });
     expect(client.conversations.history).not.toHaveBeenCalled();
-    expect(result.messages.map((message) => message.ts)).toEqual(["171234.890", "171235.000"]);
+    expect(result.messages.map((message) => message.ts)).toEqual([
+      "171234.890",
+      "171235.000",
+    ]);
   });
 
   it("uses conversations.history when threadId is missing", async () => {

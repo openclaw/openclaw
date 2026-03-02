@@ -14,7 +14,9 @@ export function resolveNodeRequireFromMeta(
       createRequire?: (id: string) => NodeJS.Require;
     };
     const createRequire =
-      typeof moduleNamespace.createRequire === "function" ? moduleNamespace.createRequire : null;
+      typeof moduleNamespace.createRequire === "function"
+        ? moduleNamespace.createRequire
+        : null;
     return createRequire ? createRequire(metaUrl) : null;
   } catch {
     return null;

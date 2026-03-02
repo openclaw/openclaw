@@ -52,9 +52,10 @@ async function runDeleteInstalledNpmPluginFixture(baseDir: string): Promise<{
   pluginDir: string;
   result: UninstallResult;
 }> {
-  const { pluginId, extensionsDir, pluginDir, config } = await createInstalledNpmPluginFixture({
-    baseDir,
-  });
+  const { pluginId, extensionsDir, pluginDir, config } =
+    await createInstalledNpmPluginFixture({
+      baseDir,
+    });
   const result = await uninstallPlugin({
     config,
     pluginId,
@@ -112,9 +113,14 @@ describe("removePluginFromConfig", () => {
       },
     };
 
-    const { config: result, actions } = removePluginFromConfig(config, "my-plugin");
+    const { config: result, actions } = removePluginFromConfig(
+      config,
+      "my-plugin",
+    );
 
-    expect(result.plugins?.entries).toEqual({ "other-plugin": { enabled: true } });
+    expect(result.plugins?.entries).toEqual({
+      "other-plugin": { enabled: true },
+    });
     expect(actions.entry).toBe(true);
   });
 
@@ -128,7 +134,10 @@ describe("removePluginFromConfig", () => {
       },
     };
 
-    const { config: result, actions } = removePluginFromConfig(config, "my-plugin");
+    const { config: result, actions } = removePluginFromConfig(
+      config,
+      "my-plugin",
+    );
 
     expect(result.plugins?.installs).toEqual({
       "other-plugin": { source: "npm", spec: "other-plugin@1.0.0" },
@@ -143,7 +152,10 @@ describe("removePluginFromConfig", () => {
       },
     };
 
-    const { config: result, actions } = removePluginFromConfig(config, "my-plugin");
+    const { config: result, actions } = removePluginFromConfig(
+      config,
+      "my-plugin",
+    );
 
     expect(result.plugins?.allow).toEqual(["other-plugin"]);
     expect(actions.allowlist).toBe(true);
@@ -165,7 +177,10 @@ describe("removePluginFromConfig", () => {
       },
     };
 
-    const { config: result, actions } = removePluginFromConfig(config, "my-plugin");
+    const { config: result, actions } = removePluginFromConfig(
+      config,
+      "my-plugin",
+    );
 
     expect(result.plugins?.load?.paths).toEqual(["/other/path"]);
     expect(actions.loadPath).toBe(true);
@@ -187,7 +202,10 @@ describe("removePluginFromConfig", () => {
       },
     };
 
-    const { config: result, actions } = removePluginFromConfig(config, "my-plugin");
+    const { config: result, actions } = removePluginFromConfig(
+      config,
+      "my-plugin",
+    );
 
     expect(result.plugins?.load).toBeUndefined();
     expect(actions.loadPath).toBe(true);
@@ -205,7 +223,10 @@ describe("removePluginFromConfig", () => {
       },
     };
 
-    const { config: result, actions } = removePluginFromConfig(config, "memory-plugin");
+    const { config: result, actions } = removePluginFromConfig(
+      config,
+      "memory-plugin",
+    );
 
     expect(result.plugins?.slots?.memory).toBe("memory-core");
     expect(actions.memorySlot).toBe(true);
@@ -223,7 +244,10 @@ describe("removePluginFromConfig", () => {
       },
     };
 
-    const { config: result, actions } = removePluginFromConfig(config, "my-plugin");
+    const { config: result, actions } = removePluginFromConfig(
+      config,
+      "my-plugin",
+    );
 
     expect(result.plugins?.slots?.memory).toBe("memory-core");
     expect(actions.memorySlot).toBe(false);
@@ -254,7 +278,10 @@ describe("removePluginFromConfig", () => {
       },
     };
 
-    const { config: result, actions } = removePluginFromConfig(config, "my-plugin");
+    const { config: result, actions } = removePluginFromConfig(
+      config,
+      "my-plugin",
+    );
 
     expect(result.plugins?.entries).toBeUndefined();
     expect(actions.entry).toBe(true);
@@ -270,7 +297,10 @@ describe("removePluginFromConfig", () => {
       },
     };
 
-    const { config: result, actions } = removePluginFromConfig(config, "my-plugin");
+    const { config: result, actions } = removePluginFromConfig(
+      config,
+      "my-plugin",
+    );
 
     expect(result.plugins?.installs).toBeUndefined();
     expect(actions.install).toBe(true);
@@ -363,7 +393,8 @@ describe("uninstallPlugin", () => {
   });
 
   it("deletes directory when deleteFiles is true", async () => {
-    const { pluginDir, result } = await runDeleteInstalledNpmPluginFixture(tempDir);
+    const { pluginDir, result } =
+      await runDeleteInstalledNpmPluginFixture(tempDir);
 
     try {
       expect(result.ok).toBe(true);
@@ -447,7 +478,9 @@ describe("uninstallPlugin", () => {
   });
 
   it("returns a warning when directory deletion fails unexpectedly", async () => {
-    const rmSpy = vi.spyOn(fs, "rm").mockRejectedValueOnce(new Error("permission denied"));
+    const rmSpy = vi
+      .spyOn(fs, "rm")
+      .mockRejectedValueOnce(new Error("permission denied"));
     try {
       const { result } = await runDeleteInstalledNpmPluginFixture(tempDir);
 
@@ -455,7 +488,9 @@ describe("uninstallPlugin", () => {
       if (result.ok) {
         expect(result.actions.directory).toBe(false);
         expect(result.warnings).toHaveLength(1);
-        expect(result.warnings[0]).toContain("Failed to remove plugin directory");
+        expect(result.warnings[0]).toContain(
+          "Failed to remove plugin directory",
+        );
       }
     } finally {
       rmSpy.mockRestore();

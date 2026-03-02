@@ -7,7 +7,9 @@ export type OpenClawVersion = {
 
 const VERSION_RE = /^v?(\d+)\.(\d+)\.(\d+)(?:-(\d+))?/;
 
-export function parseOpenClawVersion(raw: string | null | undefined): OpenClawVersion | null {
+export function parseOpenClawVersion(
+  raw: string | null | undefined,
+): OpenClawVersion | null {
   if (!raw) {
     return null;
   }

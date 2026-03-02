@@ -3,7 +3,10 @@ import {
   buildSystemRunApprovalBinding,
   buildSystemRunApprovalEnvBinding,
 } from "../infra/system-run-approval-binding.js";
-import { ExecApprovalManager, type ExecApprovalRecord } from "./exec-approval-manager.js";
+import {
+  ExecApprovalManager,
+  type ExecApprovalRecord,
+} from "./exec-approval-manager.js";
 import { sanitizeSystemRunParamsForForwarding } from "./node-invoke-system-run-approval.js";
 
 describe("sanitizeSystemRunParamsForForwarding", () => {
@@ -129,7 +132,13 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
   test("rejects env-assignment shell wrapper when approval command omits env prelude", () => {
     const result = sanitizeSystemRunParamsForForwarding({
       rawParams: {
-        command: ["/usr/bin/env", "BASH_ENV=/tmp/payload.sh", "bash", "-lc", "echo SAFE"],
+        command: [
+          "/usr/bin/env",
+          "BASH_ENV=/tmp/payload.sh",
+          "bash",
+          "-lc",
+          "echo SAFE",
+        ],
         runId: "approval-1",
         approved: true,
         approvalDecision: "allow-once",
@@ -150,7 +159,13 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
   test("accepts env-assignment shell wrapper only when approval command matches full argv text", () => {
     const result = sanitizeSystemRunParamsForForwarding({
       rawParams: {
-        command: ["/usr/bin/env", "BASH_ENV=/tmp/payload.sh", "bash", "-lc", "echo SAFE"],
+        command: [
+          "/usr/bin/env",
+          "BASH_ENV=/tmp/payload.sh",
+          "bash",
+          "-lc",
+          "echo SAFE",
+        ],
         runId: "approval-1",
         approved: true,
         approvalDecision: "allow-once",
@@ -158,13 +173,17 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
       nodeId: "node-1",
       client,
       execApprovalManager: manager(
-        makeRecord('/usr/bin/env BASH_ENV=/tmp/payload.sh bash -lc "echo SAFE"', undefined, [
-          "/usr/bin/env",
-          "BASH_ENV=/tmp/payload.sh",
-          "bash",
-          "-lc",
-          "echo SAFE",
-        ]),
+        makeRecord(
+          '/usr/bin/env BASH_ENV=/tmp/payload.sh bash -lc "echo SAFE"',
+          undefined,
+          [
+            "/usr/bin/env",
+            "BASH_ENV=/tmp/payload.sh",
+            "bash",
+            "-lc",
+            "echo SAFE",
+          ],
+        ),
       ),
       nowMs: now,
     });
@@ -326,7 +345,10 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
 
   test("accepts matching env hash with reordered keys", () => {
     const record = makeRecord("git diff", ["git", "diff"]);
-    const binding = buildSystemRunApprovalEnvBinding({ SAFE_A: "1", SAFE_B: "2" });
+    const binding = buildSystemRunApprovalEnvBinding({
+      SAFE_A: "1",
+      SAFE_B: "2",
+    });
     record.request.systemRunBinding = {
       argv: ["git", "diff"],
       cwd: null,

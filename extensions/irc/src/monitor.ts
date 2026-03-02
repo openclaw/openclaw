@@ -1,4 +1,7 @@
-import { createLoggerBackedRuntime, type RuntimeEnv } from "openclaw/plugin-sdk";
+import {
+  createLoggerBackedRuntime,
+  type RuntimeEnv,
+} from "openclaw/plugin-sdk";
 import { resolveIrcAccount } from "./accounts.js";
 import { connectIrcClient, type IrcClient } from "./client.js";
 import { buildIrcConnectOptions } from "./connect-options.js";
@@ -13,11 +16,20 @@ export type IrcMonitorOptions = {
   config?: CoreConfig;
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
-  statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
-  onMessage?: (message: IrcInboundMessage, client: IrcClient) => void | Promise<void>;
+  statusSink?: (patch: {
+    lastInboundAt?: number;
+    lastOutboundAt?: number;
+  }) => void;
+  onMessage?: (
+    message: IrcInboundMessage,
+    client: IrcClient,
+  ) => void | Promise<void>;
 };
 
-export function resolveIrcInboundTarget(params: { target: string; senderNick: string }): {
+export function resolveIrcInboundTarget(params: {
+  target: string;
+  senderNick: string;
+}): {
   isGroup: boolean;
   target: string;
   rawTarget: string;
@@ -31,7 +43,9 @@ export function resolveIrcInboundTarget(params: { target: string; senderNick: st
   return { isGroup: false, target: senderNick || rawTarget, rawTarget };
 }
 
-export async function monitorIrcProvider(opts: IrcMonitorOptions): Promise<{ stop: () => void }> {
+export async function monitorIrcProvider(
+  opts: IrcMonitorOptions,
+): Promise<{ stop: () => void }> {
   const core = getIrcRuntime();
   const cfg = opts.config ?? (core.config.loadConfig() as CoreConfig);
   const account = resolveIrcAccount({
@@ -70,7 +84,9 @@ export async function monitorIrcProvider(opts: IrcMonitorOptions): Promise<{ sto
       },
       onNotice: (text, target) => {
         if (core.logging.shouldLogVerbose()) {
-          logger.debug?.(`[${account.accountId}] notice ${target ?? ""}: ${text}`);
+          logger.debug?.(
+            `[${account.accountId}] notice ${target ?? ""}: ${text}`,
+          );
         }
       },
       onError: (error) => {

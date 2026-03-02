@@ -27,7 +27,9 @@ export async function runPluginCommandWithTimeout(
       cwd: options.cwd,
       env: options.env,
     });
-    const timedOut = result.termination === "timeout" || result.termination === "no-output-timeout";
+    const timedOut =
+      result.termination === "timeout" ||
+      result.termination === "no-output-timeout";
     return {
       code: result.code ?? 1,
       stdout: result.stdout,

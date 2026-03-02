@@ -40,7 +40,9 @@ describe("buildInboundMediaNote", () => {
         },
       ],
     });
-    expect(note).toBe("[media attached: /tmp/b.png | https://example.com/b.png]");
+    expect(note).toBe(
+      "[media attached: /tmp/b.png | https://example.com/b.png]",
+    );
   });
 
   it("only suppresses attachments when media understanding succeeded", () => {
@@ -81,17 +83,24 @@ describe("buildInboundMediaNote", () => {
       MediaUrls: ["https://example.com/a.png", "https://example.com/b.png"],
       MediaUnderstandingDecisions: [
         createSuccessfulImageMediaDecision() as unknown as NonNullable<
-          Parameters<typeof buildInboundMediaNote>[0]["MediaUnderstandingDecisions"]
+          Parameters<
+            typeof buildInboundMediaNote
+          >[0]["MediaUnderstandingDecisions"]
         >[number],
       ],
     });
-    expect(note).toBe("[media attached: /tmp/b.png | https://example.com/b.png]");
+    expect(note).toBe(
+      "[media attached: /tmp/b.png | https://example.com/b.png]",
+    );
   });
 
   it("strips audio attachments when transcription succeeded via MediaUnderstanding (issue #4197)", () => {
     const note = buildInboundMediaNote({
       MediaPaths: ["/tmp/voice.ogg", "/tmp/image.png"],
-      MediaUrls: ["https://example.com/voice.ogg", "https://example.com/image.png"],
+      MediaUrls: [
+        "https://example.com/voice.ogg",
+        "https://example.com/image.png",
+      ],
       MediaTypes: ["audio/ogg", "image/png"],
       MediaUnderstanding: [
         {
@@ -111,7 +120,10 @@ describe("buildInboundMediaNote", () => {
   it("only strips audio attachments that were transcribed", () => {
     const note = buildInboundMediaNote({
       MediaPaths: ["/tmp/voice-1.ogg", "/tmp/voice-2.ogg"],
-      MediaUrls: ["https://example.com/voice-1.ogg", "https://example.com/voice-2.ogg"],
+      MediaUrls: [
+        "https://example.com/voice-1.ogg",
+        "https://example.com/voice-2.ogg",
+      ],
       MediaTypes: ["audio/ogg", "audio/ogg"],
       MediaUnderstanding: [
         {

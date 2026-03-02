@@ -7,13 +7,15 @@ export function buildViewerUrl(params: {
   viewerPath: string;
   baseUrl?: string;
 }): string {
-  const baseUrl = params.baseUrl?.trim() || resolveGatewayBaseUrl(params.config);
+  const baseUrl =
+    params.baseUrl?.trim() || resolveGatewayBaseUrl(params.config);
   const normalizedBase = normalizeViewerBaseUrl(baseUrl);
   const viewerPath = params.viewerPath.startsWith("/")
     ? params.viewerPath
     : `/${params.viewerPath}`;
   const parsedBase = new URL(normalizedBase);
-  const basePath = parsedBase.pathname === "/" ? "" : parsedBase.pathname.replace(/\/+$/, "");
+  const basePath =
+    parsedBase.pathname === "/" ? "" : parsedBase.pathname.replace(/\/+$/, "");
   parsedBase.pathname = `${basePath}${viewerPath}`;
   parsedBase.search = "";
   parsedBase.hash = "";
@@ -43,7 +45,9 @@ export function normalizeViewerBaseUrl(raw: string): string {
 function resolveGatewayBaseUrl(config: OpenClawConfig): string {
   const scheme = config.gateway?.tls?.enabled ? "https" : "http";
   const port =
-    typeof config.gateway?.port === "number" ? config.gateway.port : DEFAULT_GATEWAY_PORT;
+    typeof config.gateway?.port === "number"
+      ? config.gateway.port
+      : DEFAULT_GATEWAY_PORT;
   const customHost = config.gateway?.customBindHost?.trim();
 
   if (config.gateway?.bind === "custom" && customHost) {

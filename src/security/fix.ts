@@ -4,11 +4,22 @@ import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createConfigIO } from "../config/config.js";
 import { collectIncludePathsRecursive } from "../config/includes-scan.js";
-import { resolveConfigPath, resolveOAuthDir, resolveStateDir } from "../config/paths.js";
+import {
+  resolveConfigPath,
+  resolveOAuthDir,
+  resolveStateDir,
+} from "../config/paths.js";
 import { readChannelAllowFromStore } from "../pairing/pairing-store.js";
 import { runExec } from "../process/exec.js";
-import { DEFAULT_ACCOUNT_ID, normalizeAgentId } from "../routing/session-key.js";
-import { createIcaclsResetCommand, formatIcaclsResetCommand, type ExecFn } from "./windows-acl.js";
+import {
+  DEFAULT_ACCOUNT_ID,
+  normalizeAgentId,
+} from "../routing/session-key.js";
+import {
+  createIcaclsResetCommand,
+  formatIcaclsResetCommand,
+  type ExecFn,
+} from "./windows-acl.js";
 
 export type SecurityFixChmodAction = {
   kind: "chmod";
@@ -28,7 +39,9 @@ export type SecurityFixIcaclsAction = {
   error?: string;
 };
 
-export type SecurityFixAction = SecurityFixChmodAction | SecurityFixIcaclsAction;
+export type SecurityFixAction =
+  | SecurityFixChmodAction
+  | SecurityFixIcaclsAction;
 
 export type SecurityFixResult = {
   ok: boolean;
@@ -161,7 +174,12 @@ async function safeAclReset(params: {
     }
     const exec = params.exec ?? runExec;
     await exec(cmd.command, cmd.args);
-    return { kind: "icacls", path: params.path, command: cmd.display, ok: true };
+    return {
+      kind: "icacls",
+      path: params.path,
+      command: cmd.display,
+      ok: true,
+    };
   } catch (err) {
     const code = (err as { code?: string }).code;
     if (code === "ENOENT") {
@@ -192,9 +210,9 @@ function setGroupPolicyAllowlist(params: {
   if (!params.cfg.channels) {
     return;
   }
-  const section = params.cfg.channels[params.channel as keyof OpenClawConfig["channels"]] as
-    | Record<string, unknown>
-    | undefined;
+  const section = params.cfg.channels[
+    params.channel as keyof OpenClawConfig["channels"]
+  ] as Record<string, unknown> | undefined;
   if (!section || typeof section !== "object") {
     return;
   }
@@ -202,7 +220,9 @@ function setGroupPolicyAllowlist(params: {
   const topPolicy = section.groupPolicy;
   if (topPolicy === "open") {
     section.groupPolicy = "allowlist";
-    params.changes.push(`channels.${params.channel}.groupPolicy=open -> allowlist`);
+    params.changes.push(
+      `channels.${params.channel}.groupPolicy=open -> allowlist`,
+    );
     params.policyFlips.add(`channels.${params.channel}.`);
   }
 
@@ -223,7 +243,9 @@ function setGroupPolicyAllowlist(params: {
       params.changes.push(
         `channels.${params.channel}.accounts.${accountId}.groupPolicy=open -> allowlist`,
       );
-      params.policyFlips.add(`channels.${params.channel}.accounts.${accountId}.`);
+      params.policyFlips.add(
+        `channels.${params.channel}.accounts.${accountId}.`,
+      );
     }
   }
 }
@@ -234,7 +256,9 @@ function setWhatsAppGroupAllowFromFromStore(params: {
   changes: string[];
   policyFlips: Set<string>;
 }): void {
-  const section = params.cfg.channels?.whatsapp as Record<string, unknown> | undefined;
+  const section = params.cfg.channels?.whatsapp as
+    | Record<string, unknown>
+    | undefined;
   if (!section || typeof section !== "object") {
     return;
   }
@@ -247,7 +271,9 @@ function setWhatsAppGroupAllowFromFromStore(params: {
       return;
     }
     const allowFrom = Array.isArray(obj.allowFrom) ? obj.allowFrom : [];
-    const groupAllowFrom = Array.isArray(obj.groupAllowFrom) ? obj.groupAllowFrom : [];
+    const groupAllowFrom = Array.isArray(obj.groupAllowFrom)
+      ? obj.groupAllowFrom
+      : [];
     if (allowFrom.length > 0) {
       return;
     }
@@ -273,7 +299,10 @@ function setWhatsAppGroupAllowFromFromStore(params: {
   }
 }
 
-function applyConfigFixes(params: { cfg: OpenClawConfig; env: NodeJS.ProcessEnv }): {
+function applyConfigFixes(params: {
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+}): {
   cfg: OpenClawConfig;
   changes: string[];
   policyFlips: Set<string>;
@@ -314,9 +343,13 @@ async function chmodCredentialsAndAgentState(params: {
   }) => Promise<SecurityFixAction>;
 }): Promise<void> {
   const credsDir = resolveOAuthDir(params.env, params.stateDir);
-  params.actions.push(await safeChmod({ path: credsDir, mode: 0o700, require: "dir" }));
+  params.actions.push(
+    await safeChmod({ path: credsDir, mode: 0o700, require: "dir" }),
+  );
 
-  const credsEntries = await fs.readdir(credsDir, { withFileTypes: true }).catch(() => []);
+  const credsEntries = await fs
+    .readdir(credsDir, { withFileTypes: true })
+    .catch(() => []);
   for (const entry of credsEntries) {
     if (!entry.isFile()) {
       continue;
@@ -326,18 +359,24 @@ async function chmodCredentialsAndAgentState(params: {
     }
     const p = path.join(credsDir, entry.name);
     // eslint-disable-next-line no-await-in-loop
-    params.actions.push(await safeChmod({ path: p, mode: 0o600, require: "file" }));
+    params.actions.push(
+      await safeChmod({ path: p, mode: 0o600, require: "file" }),
+    );
   }
 
   const ids = new Set<string>();
   ids.add(resolveDefaultAgentId(params.cfg));
-  const list = Array.isArray(params.cfg.agents?.list) ? params.cfg.agents?.list : [];
+  const list = Array.isArray(params.cfg.agents?.list)
+    ? params.cfg.agents?.list
+    : [];
   for (const agent of list ?? []) {
     if (!agent || typeof agent !== "object") {
       continue;
     }
     const id =
-      typeof (agent as { id?: unknown }).id === "string" ? (agent as { id: string }).id.trim() : "";
+      typeof (agent as { id?: unknown }).id === "string"
+        ? (agent as { id: string }).id.trim()
+        : "";
     if (id) {
       ids.add(id);
     }
@@ -350,26 +389,44 @@ async function chmodCredentialsAndAgentState(params: {
     const sessionsDir = path.join(agentRoot, "sessions");
 
     // eslint-disable-next-line no-await-in-loop
-    params.actions.push(await safeChmod({ path: agentRoot, mode: 0o700, require: "dir" }));
+    params.actions.push(
+      await safeChmod({ path: agentRoot, mode: 0o700, require: "dir" }),
+    );
     // eslint-disable-next-line no-await-in-loop
-    params.actions.push(await params.applyPerms({ path: agentDir, mode: 0o700, require: "dir" }));
+    params.actions.push(
+      await params.applyPerms({ path: agentDir, mode: 0o700, require: "dir" }),
+    );
 
     const authPath = path.join(agentDir, "auth-profiles.json");
     // eslint-disable-next-line no-await-in-loop
-    params.actions.push(await params.applyPerms({ path: authPath, mode: 0o600, require: "file" }));
+    params.actions.push(
+      await params.applyPerms({ path: authPath, mode: 0o600, require: "file" }),
+    );
 
     // eslint-disable-next-line no-await-in-loop
     params.actions.push(
-      await params.applyPerms({ path: sessionsDir, mode: 0o700, require: "dir" }),
+      await params.applyPerms({
+        path: sessionsDir,
+        mode: 0o700,
+        require: "dir",
+      }),
     );
 
     const storePath = path.join(sessionsDir, "sessions.json");
     // eslint-disable-next-line no-await-in-loop
-    params.actions.push(await params.applyPerms({ path: storePath, mode: 0o600, require: "file" }));
+    params.actions.push(
+      await params.applyPerms({
+        path: storePath,
+        mode: 0o600,
+        require: "file",
+      }),
+    );
 
     // Fix permissions on session transcript files (*.jsonl)
     // eslint-disable-next-line no-await-in-loop
-    const sessionEntries = await fs.readdir(sessionsDir, { withFileTypes: true }).catch(() => []);
+    const sessionEntries = await fs
+      .readdir(sessionsDir, { withFileTypes: true })
+      .catch(() => []);
     for (const entry of sessionEntries) {
       if (!entry.isFile()) {
         continue;
@@ -379,7 +436,9 @@ async function chmodCredentialsAndAgentState(params: {
       }
       const p = path.join(sessionsDir, entry.name);
       // eslint-disable-next-line no-await-in-loop
-      params.actions.push(await params.applyPerms({ path: p, mode: 0o600, require: "file" }));
+      params.actions.push(
+        await params.applyPerms({ path: p, mode: 0o600, require: "file" }),
+      );
     }
   }
 }
@@ -436,13 +495,25 @@ export async function fixSecurityFootguns(opts?: {
     }
   }
 
-  const applyPerms = (params: { path: string; mode: number; require: "dir" | "file" }) =>
+  const applyPerms = (params: {
+    path: string;
+    mode: number;
+    require: "dir" | "file";
+  }) =>
     isWindows
       ? safeAclReset({ path: params.path, require: params.require, env, exec })
-      : safeChmod({ path: params.path, mode: params.mode, require: params.require });
+      : safeChmod({
+          path: params.path,
+          mode: params.mode,
+          require: params.require,
+        });
 
-  actions.push(await applyPerms({ path: stateDir, mode: 0o700, require: "dir" }));
-  actions.push(await applyPerms({ path: configPath, mode: 0o600, require: "file" }));
+  actions.push(
+    await applyPerms({ path: stateDir, mode: 0o700, require: "dir" }),
+  );
+  actions.push(
+    await applyPerms({ path: configPath, mode: 0o600, require: "file" }),
+  );
 
   if (snap.exists) {
     const includePaths = await collectIncludePathsRecursive({

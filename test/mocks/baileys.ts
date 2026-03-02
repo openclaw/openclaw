@@ -3,7 +3,8 @@ import { vi } from "vitest";
 
 type BaileysExports = typeof import("@whiskeysockets/baileys");
 type FetchLatestBaileysVersionFn = BaileysExports["fetchLatestBaileysVersion"];
-type MakeCacheableSignalKeyStoreFn = BaileysExports["makeCacheableSignalKeyStore"];
+type MakeCacheableSignalKeyStoreFn =
+  BaileysExports["makeCacheableSignalKeyStore"];
 type MakeWASocketFn = BaileysExports["makeWASocket"];
 type UseMultiFileAuthStateFn = BaileysExports["useMultiFileAuthState"];
 type DownloadMediaMessageFn = BaileysExports["downloadMediaMessage"];
@@ -19,8 +20,12 @@ export type MockBaileysSocket = {
 
 export type MockBaileysModule = {
   DisconnectReason: { loggedOut: number };
-  fetchLatestBaileysVersion: ReturnType<typeof vi.fn<FetchLatestBaileysVersionFn>>;
-  makeCacheableSignalKeyStore: ReturnType<typeof vi.fn<MakeCacheableSignalKeyStoreFn>>;
+  fetchLatestBaileysVersion: ReturnType<
+    typeof vi.fn<FetchLatestBaileysVersionFn>
+  >;
+  makeCacheableSignalKeyStore: ReturnType<
+    typeof vi.fn<MakeCacheableSignalKeyStoreFn>
+  >;
   makeWASocket: ReturnType<typeof vi.fn<MakeWASocketFn>>;
   useMultiFileAuthState: ReturnType<typeof vi.fn<UseMultiFileAuthStateFn>>;
   jidToE164?: (jid: string) => string | null;
@@ -53,14 +58,20 @@ export function createMockBaileys(): {
     fetchLatestBaileysVersion: vi
       .fn<FetchLatestBaileysVersionFn>()
       .mockResolvedValue({ version: [1, 2, 3], isLatest: true }),
-    makeCacheableSignalKeyStore: vi.fn<MakeCacheableSignalKeyStoreFn>((keys) => keys),
+    makeCacheableSignalKeyStore: vi.fn<MakeCacheableSignalKeyStoreFn>(
+      (keys) => keys,
+    ),
     makeWASocket,
     useMultiFileAuthState: vi.fn<UseMultiFileAuthStateFn>(async () => ({
-      state: { creds: {}, keys: {} } as Awaited<ReturnType<UseMultiFileAuthStateFn>>["state"],
+      state: { creds: {}, keys: {} } as Awaited<
+        ReturnType<UseMultiFileAuthStateFn>
+      >["state"],
       saveCreds: vi.fn(),
     })),
     jidToE164: (jid: string) => jid.replace(/@.*$/, "").replace(/^/, "+"),
-    downloadMediaMessage: vi.fn<DownloadMediaMessageFn>().mockResolvedValue(Buffer.from("img")),
+    downloadMediaMessage: vi
+      .fn<DownloadMediaMessageFn>()
+      .mockResolvedValue(Buffer.from("img")),
   };
 
   return {

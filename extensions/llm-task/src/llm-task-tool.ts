@@ -9,7 +9,9 @@ import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk";
 // So we resolve internal imports dynamically with src-first, dist-fallback.
 import type { OpenClawPluginApi } from "../../../src/plugins/types.js";
 
-type RunEmbeddedPiAgentFn = (params: Record<string, unknown>) => Promise<unknown>;
+type RunEmbeddedPiAgentFn = (
+  params: Record<string, unknown>,
+) => Promise<unknown>;
 
 async function loadRunEmbeddedPiAgent(): Promise<RunEmbeddedPiAgentFn> {
   // Source checkout (tests/dev)
@@ -41,7 +43,9 @@ function stripCodeFences(s: string): string {
   return trimmed;
 }
 
-function collectText(payloads: Array<{ text?: string; isError?: boolean }> | undefined): string {
+function collectText(
+  payloads: Array<{ text?: string; isError?: boolean }> | undefined,
+): string {
   const texts = (payloads ?? [])
     .filter((p) => !p.isError && typeof p.text === "string")
     .map((p) => p.text ?? "");
@@ -74,18 +78,32 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
       "Run a generic JSON-only LLM task and return schema-validated JSON. Designed for orchestration from Lobster workflows via openclaw.invoke.",
     parameters: Type.Object({
       prompt: Type.String({ description: "Task instruction for the LLM." }),
-      input: Type.Optional(Type.Unknown({ description: "Optional input payload for the task." })),
+      input: Type.Optional(
+        Type.Unknown({ description: "Optional input payload for the task." }),
+      ),
       schema: Type.Optional(
-        Type.Unknown({ description: "Optional JSON Schema to validate the returned JSON." }),
+        Type.Unknown({
+          description: "Optional JSON Schema to validate the returned JSON.",
+        }),
       ),
       provider: Type.Optional(
-        Type.String({ description: "Provider override (e.g. openai-codex, anthropic)." }),
+        Type.String({
+          description: "Provider override (e.g. openai-codex, anthropic).",
+        }),
       ),
       model: Type.Optional(Type.String({ description: "Model id override." })),
-      authProfileId: Type.Optional(Type.String({ description: "Auth profile override." })),
-      temperature: Type.Optional(Type.Number({ description: "Best-effort temperature override." })),
-      maxTokens: Type.Optional(Type.Number({ description: "Best-effort maxTokens override." })),
-      timeoutMs: Type.Optional(Type.Number({ description: "Timeout for the LLM run." })),
+      authProfileId: Type.Optional(
+        Type.String({ description: "Auth profile override." }),
+      ),
+      temperature: Type.Optional(
+        Type.Number({ description: "Best-effort temperature override." }),
+      ),
+      maxTokens: Type.Optional(
+        Type.Number({ description: "Best-effort maxTokens override." }),
+      ),
+      timeoutMs: Type.Optional(
+        Type.Number({ description: "Timeout for the LLM run." }),
+      ),
     }),
 
     async execute(_id: string, params: Record<string, unknown>) {
@@ -101,19 +119,24 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
         typeof defaultsModel === "string"
           ? defaultsModel.trim()
           : (defaultsModel?.primary?.trim() ?? undefined);
-      const primaryProvider = typeof primary === "string" ? primary.split("/")[0] : undefined;
+      const primaryProvider =
+        typeof primary === "string" ? primary.split("/")[0] : undefined;
       const primaryModel =
-        typeof primary === "string" ? primary.split("/").slice(1).join("/") : undefined;
+        typeof primary === "string"
+          ? primary.split("/").slice(1).join("/")
+          : undefined;
 
       const provider =
         (typeof params.provider === "string" && params.provider.trim()) ||
-        (typeof pluginCfg.defaultProvider === "string" && pluginCfg.defaultProvider.trim()) ||
+        (typeof pluginCfg.defaultProvider === "string" &&
+          pluginCfg.defaultProvider.trim()) ||
         primaryProvider ||
         undefined;
 
       const model =
         (typeof params.model === "string" && params.model.trim()) ||
-        (typeof pluginCfg.defaultModel === "string" && pluginCfg.defaultModel.trim()) ||
+        (typeof pluginCfg.defaultModel === "string" &&
+          pluginCfg.defaultModel.trim()) ||
         primaryModel ||
         undefined;
 
@@ -133,7 +156,9 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
         );
       }
 
-      const allowed = Array.isArray(pluginCfg.allowedModels) ? pluginCfg.allowedModels : undefined;
+      const allowed = Array.isArray(pluginCfg.allowedModels)
+        ? pluginCfg.allowedModels
+        : undefined;
       if (allowed && allowed.length > 0 && !allowed.includes(modelKey)) {
         throw new Error(
           `Model not allowed by llm-task plugin config: ${modelKey}. Allowed models: ${allowed.join(", ")}`,
@@ -150,7 +175,10 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
         30_000;
 
       const streamParams = {
-        temperature: typeof params.temperature === "number" ? params.temperature : undefined,
+        temperature:
+          typeof params.temperature === "number"
+            ? params.temperature
+            : undefined,
         maxTokens:
           typeof params.maxTokens === "number"
             ? params.maxTokens
@@ -191,7 +219,8 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
         const result = await runEmbeddedPiAgent({
           sessionId,
           sessionFile,
-          workspaceDir: api.config?.agents?.defaults?.workspace ?? process.cwd(),
+          workspaceDir:
+            api.config?.agents?.defaults?.workspace ?? process.cwd(),
           config: api.config,
           prompt: fullPrompt,
           timeoutMs,

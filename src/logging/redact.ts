@@ -87,7 +87,9 @@ function redactMatch(match: string, groups: string[]): string {
     return redactPemBlock(match);
   }
   const token =
-    groups.filter((value) => typeof value === "string" && value.length > 0).at(-1) ?? match;
+    groups
+      .filter((value) => typeof value === "string" && value.length > 0)
+      .at(-1) ?? match;
   const masked = maskToken(token);
   if (token === match) {
     return masked;
@@ -123,7 +125,10 @@ function resolveConfigRedaction(): RedactOptions {
   };
 }
 
-export function redactSensitiveText(text: string, options?: RedactOptions): string {
+export function redactSensitiveText(
+  text: string,
+  options?: RedactOptions,
+): string {
   if (!text) {
     return text;
   }

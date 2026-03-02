@@ -9,7 +9,10 @@ export type SubagentAnnounceDeliveryResult = {
   phases?: SubagentAnnounceDispatchPhaseResult[];
 };
 
-export type SubagentAnnounceDispatchPhase = "queue-primary" | "direct-primary" | "queue-fallback";
+export type SubagentAnnounceDispatchPhase =
+  | "queue-primary"
+  | "direct-primary"
+  | "queue-fallback";
 
 export type SubagentAnnounceDispatchPhaseResult = {
   phase: SubagentAnnounceDispatchPhase;
@@ -57,7 +60,9 @@ export async function runSubagentAnnounceDispatch(params: {
       error: result.error,
     });
   };
-  const withPhases = (result: SubagentAnnounceDeliveryResult): SubagentAnnounceDeliveryResult => ({
+  const withPhases = (
+    result: SubagentAnnounceDeliveryResult,
+  ): SubagentAnnounceDeliveryResult => ({
     ...result,
     phases,
   });

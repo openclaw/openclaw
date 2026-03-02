@@ -24,7 +24,11 @@ describe("volcengine/byteplus auth choice", () => {
     return env.agentDir;
   }
 
-  function createTestContext(defaultSelect: string, confirmResult = true, textValue = "unused") {
+  function createTestContext(
+    defaultSelect: string,
+    confirmResult = true,
+    textValue = "unused",
+  ) {
     return {
       prompter: createWizardPrompter(
         {
@@ -43,7 +47,9 @@ describe("volcengine/byteplus auth choice", () => {
     envVar: "VOLCANO_ENGINE_API_KEY" | "BYTEPLUS_API_KEY";
     envValue: string;
     profileId: "volcengine:default" | "byteplus:default";
-    applyAuthChoice: typeof applyAuthChoiceVolcengine | typeof applyAuthChoiceBytePlus;
+    applyAuthChoice:
+      | typeof applyAuthChoiceVolcengine
+      | typeof applyAuthChoiceBytePlus;
   };
 
   async function runProviderAuthChoice(
@@ -70,7 +76,9 @@ describe("volcengine/byteplus auth choice", () => {
       prompter,
       runtime,
       setDefaultModel: true,
-      ...(options?.secretInputMode ? { opts: { secretInputMode: options.secretInputMode } } : {}),
+      ...(options?.secretInputMode
+        ? { opts: { secretInputMode: options.secretInputMode } }
+        : {}),
     });
 
     const parsed = await readAuthProfilesForAgent<{
@@ -108,34 +116,46 @@ describe("volcengine/byteplus auth choice", () => {
     async (testCase) => {
       const { result, parsed } = await runProviderAuthChoice(testCase);
       expect(result).not.toBeNull();
-      expect(result?.config.auth?.profiles?.[testCase.profileId]).toMatchObject({
-        provider: testCase.provider,
-        mode: "api_key",
-      });
-      expect(parsed.profiles?.[testCase.profileId]?.key).toBe(testCase.envValue);
+      expect(result?.config.auth?.profiles?.[testCase.profileId]).toMatchObject(
+        {
+          provider: testCase.provider,
+          mode: "api_key",
+        },
+      );
+      expect(parsed.profiles?.[testCase.profileId]?.key).toBe(
+        testCase.envValue,
+      );
       expect(parsed.profiles?.[testCase.profileId]?.keyRef).toBeUndefined();
     },
   );
 
-  it.each(providerAuthCases)("stores $provider env key as keyRef in ref mode", async (testCase) => {
-    const { result, parsed } = await runProviderAuthChoice(testCase, {
-      defaultSelect: "ref",
-    });
-    expect(result).not.toBeNull();
-    expect(parsed.profiles?.[testCase.profileId]).toMatchObject({
-      keyRef: { source: "env", provider: "default", id: testCase.envVar },
-    });
-    expect(parsed.profiles?.[testCase.profileId]?.key).toBeUndefined();
-  });
+  it.each(providerAuthCases)(
+    "stores $provider env key as keyRef in ref mode",
+    async (testCase) => {
+      const { result, parsed } = await runProviderAuthChoice(testCase, {
+        defaultSelect: "ref",
+      });
+      expect(result).not.toBeNull();
+      expect(parsed.profiles?.[testCase.profileId]).toMatchObject({
+        keyRef: { source: "env", provider: "default", id: testCase.envVar },
+      });
+      expect(parsed.profiles?.[testCase.profileId]?.key).toBeUndefined();
+    },
+  );
 
   it("stores explicit volcengine key when env is not used", async () => {
-    const { result, parsed } = await runProviderAuthChoice(providerAuthCases[0], {
-      defaultSelect: "",
-      confirmResult: false,
-      textValue: "volc-manual-key",
-    });
+    const { result, parsed } = await runProviderAuthChoice(
+      providerAuthCases[0],
+      {
+        defaultSelect: "",
+        confirmResult: false,
+        textValue: "volc-manual-key",
+      },
+    );
     expect(result).not.toBeNull();
-    expect(parsed.profiles?.["volcengine:default"]?.key).toBe("volc-manual-key");
+    expect(parsed.profiles?.["volcengine:default"]?.key).toBe(
+      "volc-manual-key",
+    );
     expect(parsed.profiles?.["volcengine:default"]?.keyRef).toBeUndefined();
   });
 });

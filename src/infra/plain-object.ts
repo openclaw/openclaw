@@ -1,7 +1,9 @@
 /**
  * Strict plain-object guard (excludes arrays and host objects).
  */
-export function isPlainObject(value: unknown): value is Record<string, unknown> {
+export function isPlainObject(
+  value: unknown,
+): value is Record<string, unknown> {
   return (
     typeof value === "object" &&
     value !== null &&

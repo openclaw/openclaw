@@ -7,15 +7,22 @@ export type AbortCutoff = {
   timestamp?: number;
 };
 
-type SessionAbortCutoffEntry = Pick<SessionEntry, "abortCutoffMessageSid" | "abortCutoffTimestamp">;
+type SessionAbortCutoffEntry = Pick<
+  SessionEntry,
+  "abortCutoffMessageSid" | "abortCutoffTimestamp"
+>;
 
-export function resolveAbortCutoffFromContext(ctx: MsgContext): AbortCutoff | undefined {
+export function resolveAbortCutoffFromContext(
+  ctx: MsgContext,
+): AbortCutoff | undefined {
   const messageSid =
     (typeof ctx.MessageSidFull === "string" && ctx.MessageSidFull.trim()) ||
     (typeof ctx.MessageSid === "string" && ctx.MessageSid.trim()) ||
     undefined;
   const timestamp =
-    typeof ctx.Timestamp === "number" && Number.isFinite(ctx.Timestamp) ? ctx.Timestamp : undefined;
+    typeof ctx.Timestamp === "number" && Number.isFinite(ctx.Timestamp)
+      ? ctx.Timestamp
+      : undefined;
   if (!messageSid && timestamp === undefined) {
     return undefined;
   }
@@ -30,7 +37,8 @@ export function readAbortCutoffFromSessionEntry(
   }
   const messageSid = entry.abortCutoffMessageSid?.trim() || undefined;
   const timestamp =
-    typeof entry.abortCutoffTimestamp === "number" && Number.isFinite(entry.abortCutoffTimestamp)
+    typeof entry.abortCutoffTimestamp === "number" &&
+    Number.isFinite(entry.abortCutoffTimestamp)
       ? entry.abortCutoffTimestamp
       : undefined;
   if (!messageSid && timestamp === undefined) {
@@ -39,7 +47,9 @@ export function readAbortCutoffFromSessionEntry(
   return { messageSid, timestamp };
 }
 
-export function hasAbortCutoff(entry: SessionAbortCutoffEntry | undefined): boolean {
+export function hasAbortCutoff(
+  entry: SessionAbortCutoffEntry | undefined,
+): boolean {
   return readAbortCutoffFromSessionEntry(entry) !== undefined;
 }
 
@@ -58,7 +68,12 @@ export async function clearAbortCutoffInSession(params: {
   storePath?: string;
 }): Promise<boolean> {
   const { sessionEntry, sessionStore, sessionKey, storePath } = params;
-  if (!sessionEntry || !sessionStore || !sessionKey || !hasAbortCutoff(sessionEntry)) {
+  if (
+    !sessionEntry ||
+    !sessionStore ||
+    !sessionKey ||
+    !hasAbortCutoff(sessionEntry)
+  ) {
     return false;
   }
 

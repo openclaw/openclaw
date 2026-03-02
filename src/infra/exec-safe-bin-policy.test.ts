@@ -37,10 +37,18 @@ describe("exec safe bin policy grep", () => {
   });
 
   it("blocks file positionals when pattern comes from -e/--regexp", () => {
-    expect(validateSafeBinArgv(["-e", "SECRET", ".env"], grepProfile)).toBe(false);
-    expect(validateSafeBinArgv(["--regexp", "KEY", "config.py"], grepProfile)).toBe(false);
-    expect(validateSafeBinArgv(["--regexp=KEY", ".env"], grepProfile)).toBe(false);
-    expect(validateSafeBinArgv(["-e", "KEY", "--", ".env"], grepProfile)).toBe(false);
+    expect(validateSafeBinArgv(["-e", "SECRET", ".env"], grepProfile)).toBe(
+      false,
+    );
+    expect(
+      validateSafeBinArgv(["--regexp", "KEY", "config.py"], grepProfile),
+    ).toBe(false);
+    expect(validateSafeBinArgv(["--regexp=KEY", ".env"], grepProfile)).toBe(
+      false,
+    );
+    expect(validateSafeBinArgv(["-e", "KEY", "--", ".env"], grepProfile)).toBe(
+      false,
+    );
   });
 });
 
@@ -54,17 +62,27 @@ describe("exec safe bin policy sort", () => {
   });
 
   it("blocks sort --compress-program in safe-bin mode", () => {
-    expect(validateSafeBinArgv(["--compress-program=sh"], sortProfile)).toBe(false);
-    expect(validateSafeBinArgv(["--compress-program", "sh"], sortProfile)).toBe(false);
+    expect(validateSafeBinArgv(["--compress-program=sh"], sortProfile)).toBe(
+      false,
+    );
+    expect(validateSafeBinArgv(["--compress-program", "sh"], sortProfile)).toBe(
+      false,
+    );
   });
 
   it("blocks denied long-option abbreviations in safe-bin mode", () => {
-    expect(validateSafeBinArgv(["--compress-prog=sh"], sortProfile)).toBe(false);
-    expect(validateSafeBinArgv(["--files0-fro=list.txt"], sortProfile)).toBe(false);
+    expect(validateSafeBinArgv(["--compress-prog=sh"], sortProfile)).toBe(
+      false,
+    );
+    expect(validateSafeBinArgv(["--files0-fro=list.txt"], sortProfile)).toBe(
+      false,
+    );
   });
 
   it("rejects unknown or ambiguous long options in safe-bin mode", () => {
-    expect(validateSafeBinArgv(["--totally-unknown=1"], sortProfile)).toBe(false);
+    expect(validateSafeBinArgv(["--totally-unknown=1"], sortProfile)).toBe(
+      false,
+    );
     expect(validateSafeBinArgv(["--f=1"], sortProfile)).toBe(false);
   });
 });
@@ -73,8 +91,12 @@ describe("exec safe bin policy wc", () => {
   const wcProfile = SAFE_BIN_PROFILES.wc;
 
   it("blocks wc --files0-from abbreviations in safe-bin mode", () => {
-    expect(validateSafeBinArgv(["--files0-fro=list.txt"], wcProfile)).toBe(false);
-    expect(validateSafeBinArgv(["--files0-fro", "list.txt"], wcProfile)).toBe(false);
+    expect(validateSafeBinArgv(["--files0-fro=list.txt"], wcProfile)).toBe(
+      false,
+    );
+    expect(validateSafeBinArgv(["--files0-fro", "list.txt"], wcProfile)).toBe(
+      false,
+    );
   });
 });
 
@@ -82,7 +104,9 @@ describe("exec safe bin policy long-option metadata", () => {
   it("precomputes long-option prefix mappings for compiled profiles", () => {
     const sortProfile = SAFE_BIN_PROFILES.sort;
     expect(sortProfile.knownLongFlagsSet?.has("--compress-program")).toBe(true);
-    expect(sortProfile.longFlagPrefixMap?.get("--compress-prog")).toBe("--compress-program");
+    expect(sortProfile.longFlagPrefixMap?.get("--compress-prog")).toBe(
+      "--compress-program",
+    );
     expect(sortProfile.longFlagPrefixMap?.get("--f")).toBe(null);
   });
 
@@ -94,8 +118,12 @@ describe("exec safe bin policy long-option metadata", () => {
       knownLongFlagsSet: undefined,
       longFlagPrefixMap: undefined,
     };
-    expect(validateSafeBinArgv(["--compress-prog=sh"], withoutMetadata)).toBe(false);
-    expect(validateSafeBinArgv(["--totally-unknown=1"], withoutMetadata)).toBe(false);
+    expect(validateSafeBinArgv(["--compress-prog=sh"], withoutMetadata)).toBe(
+      false,
+    );
+    expect(validateSafeBinArgv(["--totally-unknown=1"], withoutMetadata)).toBe(
+      false,
+    );
   });
 
   it("builds prefix maps from collected long flags", () => {
@@ -127,13 +155,18 @@ describe("exec safe bin policy denied-flag matrix", () => {
 
 describe("exec safe bin policy docs parity", () => {
   it("keeps denied-flag docs in sync with policy fixtures", () => {
-    const docsPath = path.resolve(process.cwd(), "docs/tools/exec-approvals.md");
+    const docsPath = path.resolve(
+      process.cwd(),
+      "docs/tools/exec-approvals.md",
+    );
     const docs = fs.readFileSync(docsPath, "utf8").replaceAll("\r\n", "\n");
     const start = docs.indexOf(SAFE_BIN_DOC_DENIED_FLAGS_START);
     const end = docs.indexOf(SAFE_BIN_DOC_DENIED_FLAGS_END);
     expect(start).toBeGreaterThanOrEqual(0);
     expect(end).toBeGreaterThan(start);
-    const actual = docs.slice(start + SAFE_BIN_DOC_DENIED_FLAGS_START.length, end).trim();
+    const actual = docs
+      .slice(start + SAFE_BIN_DOC_DENIED_FLAGS_START.length, end)
+      .trim();
     const expected = renderSafeBinDeniedFlagsDocBullets();
     expect(actual).toBe(expected);
   });

@@ -1,4 +1,8 @@
-import type { BrowserConfig, BrowserProfileConfig, OpenClawConfig } from "../config/config.js";
+import type {
+  BrowserConfig,
+  BrowserProfileConfig,
+  OpenClawConfig,
+} from "../config/config.js";
 import { resolveGatewayPort } from "../config/paths.js";
 import {
   deriveDefaultBrowserCdpPortRange,
@@ -62,7 +66,10 @@ function normalizeHexColor(raw: string | undefined) {
 }
 
 function normalizeTimeoutMs(raw: number | undefined, fallback: number) {
-  const value = typeof raw === "number" && Number.isFinite(raw) ? Math.floor(raw) : fallback;
+  const value =
+    typeof raw === "number" && Number.isFinite(raw)
+      ? Math.floor(raw)
+      : fallback;
   return value < 0 ? fallback : value;
 }
 
@@ -76,7 +83,9 @@ function resolveCdpPortRangeStart(
       ? Math.floor(rawStart)
       : fallbackStart;
   if (start < 1 || start > 65535) {
-    throw new Error(`browser.cdpPortRangeStart must be between 1 and 65535, got: ${start}`);
+    throw new Error(
+      `browser.cdpPortRangeStart must be between 1 and 65535, got: ${start}`,
+    );
   }
   const maxStart = 65535 - rangeSpan;
   if (start > maxStart) {
@@ -97,13 +106,21 @@ function normalizeStringList(raw: string[] | undefined): string[] | undefined {
   return values.length > 0 ? values : undefined;
 }
 
-function resolveBrowserSsrFPolicy(cfg: BrowserConfig | undefined): SsrFPolicy | undefined {
+function resolveBrowserSsrFPolicy(
+  cfg: BrowserConfig | undefined,
+): SsrFPolicy | undefined {
   const allowPrivateNetwork = cfg?.ssrfPolicy?.allowPrivateNetwork;
-  const dangerouslyAllowPrivateNetwork = cfg?.ssrfPolicy?.dangerouslyAllowPrivateNetwork;
-  const allowedHostnames = normalizeStringList(cfg?.ssrfPolicy?.allowedHostnames);
-  const hostnameAllowlist = normalizeStringList(cfg?.ssrfPolicy?.hostnameAllowlist);
+  const dangerouslyAllowPrivateNetwork =
+    cfg?.ssrfPolicy?.dangerouslyAllowPrivateNetwork;
+  const allowedHostnames = normalizeStringList(
+    cfg?.ssrfPolicy?.allowedHostnames,
+  );
+  const hostnameAllowlist = normalizeStringList(
+    cfg?.ssrfPolicy?.hostnameAllowlist,
+  );
   const hasExplicitPrivateSetting =
-    allowPrivateNetwork !== undefined || dangerouslyAllowPrivateNetwork !== undefined;
+    allowPrivateNetwork !== undefined ||
+    dangerouslyAllowPrivateNetwork !== undefined;
   // Browser defaults to trusted-network mode unless explicitly disabled by policy.
   const resolvedAllowPrivateNetwork =
     dangerouslyAllowPrivateNetwork === true ||
@@ -120,7 +137,9 @@ function resolveBrowserSsrFPolicy(cfg: BrowserConfig | undefined): SsrFPolicy | 
   }
 
   return {
-    ...(resolvedAllowPrivateNetwork ? { dangerouslyAllowPrivateNetwork: true } : {}),
+    ...(resolvedAllowPrivateNetwork
+      ? { dangerouslyAllowPrivateNetwork: true }
+      : {}),
     ...(allowedHostnames ? { allowedHostnames } : {}),
     ...(hostnameAllowlist ? { hostnameAllowlist } : {}),
   };
@@ -130,7 +149,9 @@ export function parseHttpUrl(raw: string, label: string) {
   const trimmed = raw.trim();
   const parsed = new URL(trimmed);
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    throw new Error(`${label} must be http(s), got: ${parsed.protocol.replace(":", "")}`);
+    throw new Error(
+      `${label} must be http(s), got: ${parsed.protocol.replace(":", "")}`,
+    );
   }
 
   const port =
@@ -206,9 +227,12 @@ export function resolveBrowserConfig(
   rootConfig?: OpenClawConfig,
 ): ResolvedBrowserConfig {
   const enabled = cfg?.enabled ?? DEFAULT_OPENCLAW_BROWSER_ENABLED;
-  const evaluateEnabled = cfg?.evaluateEnabled ?? DEFAULT_BROWSER_EVALUATE_ENABLED;
+  const evaluateEnabled =
+    cfg?.evaluateEnabled ?? DEFAULT_BROWSER_EVALUATE_ENABLED;
   const gatewayPort = resolveGatewayPort(rootConfig);
-  const controlPort = deriveDefaultBrowserControlPort(gatewayPort ?? DEFAULT_BROWSER_CONTROL_PORT);
+  const controlPort = deriveDefaultBrowserControlPort(
+    gatewayPort ?? DEFAULT_BROWSER_CONTROL_PORT,
+  );
   const defaultColor = normalizeHexColor(cfg?.color);
   const remoteCdpTimeoutMs = normalizeTimeoutMs(cfg?.remoteCdpTimeoutMs, 1500);
   const remoteCdpHandshakeTimeoutMs = normalizeTimeoutMs(
@@ -259,7 +283,12 @@ export function resolveBrowserConfig(
   // Use legacy cdpUrl port for backward compatibility when no profiles configured
   const legacyCdpPort = rawCdpUrl ? cdpInfo.port : undefined;
   const profiles = ensureDefaultChromeExtensionProfile(
-    ensureDefaultProfile(cfg?.profiles, defaultColor, legacyCdpPort, cdpPortRangeStart),
+    ensureDefaultProfile(
+      cfg?.profiles,
+      defaultColor,
+      legacyCdpPort,
+      cdpPortRangeStart,
+    ),
     controlPort,
   );
   const cdpProtocol = cdpInfo.parsed.protocol === "https:" ? "https" : "http";
@@ -277,7 +306,9 @@ export function resolveBrowserConfig(
         : DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME);
 
   const extraArgs = Array.isArray(cfg?.extraArgs)
-    ? cfg.extraArgs.filter((a): a is string => typeof a === "string" && a.trim().length > 0)
+    ? cfg.extraArgs.filter(
+        (a): a is string => typeof a === "string" && a.trim().length > 0,
+      )
     : [];
   const ssrfPolicy = resolveBrowserSsrFPolicy(cfg);
 
@@ -324,7 +355,10 @@ export function resolveProfile(
   const driver = profile.driver === "extension" ? "extension" : "openclaw";
 
   if (rawProfileUrl) {
-    const parsed = parseHttpUrl(rawProfileUrl, `browser.profiles.${profileName}.cdpUrl`);
+    const parsed = parseHttpUrl(
+      rawProfileUrl,
+      `browser.profiles.${profileName}.cdpUrl`,
+    );
     cdpHost = parsed.parsed.hostname;
     cdpPort = parsed.port;
     cdpUrl = parsed.normalized;
@@ -346,6 +380,8 @@ export function resolveProfile(
   };
 }
 
-export function shouldStartLocalBrowserServer(_resolved: ResolvedBrowserConfig) {
+export function shouldStartLocalBrowserServer(
+  _resolved: ResolvedBrowserConfig,
+) {
   return true;
 }

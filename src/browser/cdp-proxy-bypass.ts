@@ -21,7 +21,9 @@ const directHttpsAgent = new https.Agent();
  * when the target is a loopback address. Returns `undefined` otherwise
  * so callers fall through to their default behaviour.
  */
-export function getDirectAgentForCdp(url: string): http.Agent | https.Agent | undefined {
+export function getDirectAgentForCdp(
+  url: string,
+): http.Agent | https.Agent | undefined {
   try {
     const parsed = new URL(url);
     if (isLoopbackHost(parsed.hostname)) {
@@ -48,11 +50,15 @@ const LOOPBACK_ENTRIES = "localhost,127.0.0.1,[::1]";
 function noProxyAlreadyCoversLocalhost(): boolean {
   const current = process.env.NO_PROXY || process.env.no_proxy || "";
   return (
-    current.includes("localhost") && current.includes("127.0.0.1") && current.includes("[::1]")
+    current.includes("localhost") &&
+    current.includes("127.0.0.1") &&
+    current.includes("[::1]")
   );
 }
 
-export async function withNoProxyForLocalhost<T>(fn: () => Promise<T>): Promise<T> {
+export async function withNoProxyForLocalhost<T>(
+  fn: () => Promise<T>,
+): Promise<T> {
   return await withNoProxyForCdpUrl("http://127.0.0.1", fn);
 }
 
@@ -83,7 +89,9 @@ class NoProxyLeaseManager {
       const noProxy = process.env.NO_PROXY;
       const noProxyLower = process.env.no_proxy;
       const current = noProxy || noProxyLower || "";
-      const applied = current ? `${current},${LOOPBACK_ENTRIES}` : LOOPBACK_ENTRIES;
+      const applied = current
+        ? `${current},${LOOPBACK_ENTRIES}`
+        : LOOPBACK_ENTRIES;
       process.env.NO_PROXY = applied;
       process.env.no_proxy = applied;
       this.snapshot = { noProxy, noProxyLower, applied };
@@ -141,7 +149,10 @@ const noProxyLeaseManager = new NoProxyLeaseManager();
  * it avoids clobbering external NO_PROXY changes that happened while calls
  * were in-flight.
  */
-export async function withNoProxyForCdpUrl<T>(url: string, fn: () => Promise<T>): Promise<T> {
+export async function withNoProxyForCdpUrl<T>(
+  url: string,
+  fn: () => Promise<T>,
+): Promise<T> {
   const release = noProxyLeaseManager.acquire(url);
   try {
     return await fn();

@@ -1033,7 +1033,11 @@ pnpm add -g clawhub
    ---
    name: imsg
    description: iMessage/SMS CLI for listing chats, history, watch, and sending.
-   metadata: { "openclaw": { "os": ["darwin", "linux"], "requires": { "bins": ["imsg"] } } }
+   metadata:
+     {
+       "openclaw":
+         { "os": ["darwin", "linux"], "requires": { "bins": ["imsg"] } },
+     }
    ---
    ```
 4. 开始新会话以刷新 Skills 快照。

@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { TemplateContext } from "../templating.js";
-import { buildInboundMetaSystemPrompt, buildInboundUserContextPrefix } from "./inbound-meta.js";
+import {
+  buildInboundMetaSystemPrompt,
+  buildInboundUserContextPrefix,
+} from "./inbound-meta.js";
 
 function parseInboundMetaPayload(text: string): Record<string, unknown> {
   const match = text.match(/```json\n([\s\S]*?)\n```/);
@@ -11,7 +14,9 @@ function parseInboundMetaPayload(text: string): Record<string, unknown> {
 }
 
 function parseConversationInfoPayload(text: string): Record<string, unknown> {
-  const match = text.match(/Conversation info \(untrusted metadata\):\n```json\n([\s\S]*?)\n```/);
+  const match = text.match(
+    /Conversation info \(untrusted metadata\):\n```json\n([\s\S]*?)\n```/,
+  );
   if (!match?.[1]) {
     throw new Error("missing conversation info json block");
   }
@@ -19,7 +24,9 @@ function parseConversationInfoPayload(text: string): Record<string, unknown> {
 }
 
 function parseSenderInfoPayload(text: string): Record<string, unknown> {
-  const match = text.match(/Sender \(untrusted metadata\):\n```json\n([\s\S]*?)\n```/);
+  const match = text.match(
+    /Sender \(untrusted metadata\):\n```json\n([\s\S]*?)\n```/,
+  );
   if (!match?.[1]) {
     throw new Error("missing sender info json block");
   }

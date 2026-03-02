@@ -45,7 +45,9 @@ function setSignalAutoStartConfig(overrides: Record<string, unknown> = {}) {
   setSignalToolResultTestConfig(createSignalConfig(overrides));
 }
 
-function createSignalConfig(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+function createSignalConfig(
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
   const base = config as OpenClawConfig;
   const channels = (base.channels ?? {}) as Record<string, unknown>;
   const signal = (channels.signal ?? {}) as Record<string, unknown>;
@@ -137,7 +139,10 @@ function expectNoReplyDeliveryOrRouteUpdate() {
   expect(updateLastRouteMock).not.toHaveBeenCalled();
 }
 
-function setReactionNotificationConfig(mode: "all" | "own", extra: Record<string, unknown> = {}) {
+function setReactionNotificationConfig(
+  mode: "all" | "own",
+  extra: Record<string, unknown> = {},
+) {
   setSignalToolResultTestConfig(
     createSignalConfig({
       autoStart: false,
@@ -310,7 +315,11 @@ describe("monitorSignalProvider tool results", () => {
 
   it("replies with pairing code when dmPolicy is pairing and no allowFrom is set", async () => {
     setSignalToolResultTestConfig(
-      createSignalConfig({ autoStart: false, dmPolicy: "pairing", allowFrom: [] }),
+      createSignalConfig({
+        autoStart: false,
+        dmPolicy: "pairing",
+        allowFrom: [],
+      }),
     );
     await receiveSignalPayloads({
       payloads: [
@@ -330,8 +339,12 @@ describe("monitorSignalProvider tool results", () => {
     expect(replyMock).not.toHaveBeenCalled();
     expect(upsertPairingRequestMock).toHaveBeenCalled();
     expect(sendMock).toHaveBeenCalledTimes(1);
-    expect(String(sendMock.mock.calls[0]?.[1] ?? "")).toContain("Your Signal number: +15550001111");
-    expect(String(sendMock.mock.calls[0]?.[1] ?? "")).toContain("Pairing code: PAIRCODE");
+    expect(String(sendMock.mock.calls[0]?.[1] ?? "")).toContain(
+      "Your Signal number: +15550001111",
+    );
+    expect(String(sendMock.mock.calls[0]?.[1] ?? "")).toContain(
+      "Pairing code: PAIRCODE",
+    );
   });
 
   it("ignores reaction-only messages", async () => {
@@ -375,14 +388,19 @@ describe("monitorSignalProvider tool results", () => {
     });
 
     const events = getDirectSignalEventsFor("+15550001111");
-    expect(events.some((text) => text.includes("Signal reaction added"))).toBe(true);
+    expect(events.some((text) => text.includes("Signal reaction added"))).toBe(
+      true,
+    );
   });
 
   it.each([
     {
       name: "blocks reaction notifications from unauthorized senders when dmPolicy is allowlist",
       mode: "all" as const,
-      extra: { dmPolicy: "allowlist", allowFrom: ["+15550007777"] } as Record<string, unknown>,
+      extra: { dmPolicy: "allowlist", allowFrom: ["+15550007777"] } as Record<
+        string,
+        unknown
+      >,
       targetAuthor: "+15550002222",
       shouldEnqueue: false,
     },
@@ -400,7 +418,10 @@ describe("monitorSignalProvider tool results", () => {
     {
       name: "allows reaction notifications for allowlisted senders when dmPolicy is allowlist",
       mode: "all" as const,
-      extra: { dmPolicy: "allowlist", allowFrom: ["+15550001111"] } as Record<string, unknown>,
+      extra: { dmPolicy: "allowlist", allowFrom: ["+15550001111"] } as Record<
+        string,
+        unknown
+      >,
       targetAuthor: "+15550002222",
       shouldEnqueue: true,
     },
@@ -416,7 +437,9 @@ describe("monitorSignalProvider tool results", () => {
     });
 
     const events = getDirectSignalEventsFor("+15550001111");
-    expect(events.some((text) => text.includes("Signal reaction added"))).toBe(shouldEnqueue);
+    expect(events.some((text) => text.includes("Signal reaction added"))).toBe(
+      shouldEnqueue,
+    );
     expect(sendMock).not.toHaveBeenCalled();
     expect(upsertPairingRequestMock).not.toHaveBeenCalled();
   });
@@ -434,7 +457,9 @@ describe("monitorSignalProvider tool results", () => {
     });
 
     const events = getDirectSignalEventsFor("+15550001111");
-    expect(events.some((text) => text.includes("Signal reaction added"))).toBe(true);
+    expect(events.some((text) => text.includes("Signal reaction added"))).toBe(
+      true,
+    );
   });
 
   it("processes messages when reaction metadata is present", async () => {
@@ -466,7 +491,11 @@ describe("monitorSignalProvider tool results", () => {
 
   it("does not resend pairing code when a request is already pending", async () => {
     setSignalToolResultTestConfig(
-      createSignalConfig({ autoStart: false, dmPolicy: "pairing", allowFrom: [] }),
+      createSignalConfig({
+        autoStart: false,
+        dmPolicy: "pairing",
+        allowFrom: [],
+      }),
     );
     upsertPairingRequestMock
       .mockResolvedValueOnce({ code: "PAIRCODE", created: true })

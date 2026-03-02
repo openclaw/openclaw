@@ -1,7 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { SessionEntry as PiSessionEntry, SessionHeader } from "@mariozechner/pi-coding-agent";
+import type {
+  SessionEntry as PiSessionEntry,
+  SessionHeader,
+} from "@mariozechner/pi-coding-agent";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import {
   resolveDefaultSessionStorePath,
@@ -15,7 +18,10 @@ import { resolveCommandsSystemPromptBundle } from "./commands-system-prompt.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
 // Export HTML templates are bundled with this module
-const EXPORT_HTML_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "export-html");
+const EXPORT_HTML_DIR = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "export-html",
+);
 
 interface SessionData {
   header: SessionHeader | null;
@@ -81,7 +87,9 @@ function generateHtml(sessionData: SessionData): string {
   const infoBg = "#343541";
 
   // Base64 encode session data
-  const sessionDataBase64 = Buffer.from(JSON.stringify(sessionData)).toString("base64");
+  const sessionDataBase64 = Buffer.from(JSON.stringify(sessionData)).toString(
+    "base64",
+  );
 
   // Build CSS with theme variables
   const css = templateCss
@@ -98,7 +106,9 @@ function generateHtml(sessionData: SessionData): string {
     .replace("{{HIGHLIGHT_JS}}", hljsJs);
 }
 
-function parseExportArgs(commandBodyNormalized: string): { outputPath?: string } {
+function parseExportArgs(commandBodyNormalized: string): {
+  outputPath?: string;
+} {
   const normalized = commandBodyNormalized.trim();
   if (normalized === "/export-session" || normalized === "/export") {
     return {};
@@ -109,7 +119,9 @@ function parseExportArgs(commandBodyNormalized: string): { outputPath?: string }
   return { outputPath };
 }
 
-export async function buildExportSessionReply(params: HandleCommandsParams): Promise<ReplyPayload> {
+export async function buildExportSessionReply(
+  params: HandleCommandsParams,
+): Promise<ReplyPayload> {
   const args = parseExportArgs(params.command.commandBodyNormalized);
 
   // 1. Resolve session file
@@ -149,7 +161,8 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
   const leafId = sessionManager.getLeafId();
 
   // 3. Build full system prompt
-  const { systemPrompt, tools } = await resolveCommandsSystemPromptBundle(params);
+  const { systemPrompt, tools } =
+    await resolveCommandsSystemPromptBundle(params);
 
   // 4. Prepare session data
   const sessionData: SessionData = {

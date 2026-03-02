@@ -16,7 +16,10 @@ vi.mock("../../../pairing/pairing-store.js", () => ({
   readChannelAllowFromStore: (...args: unknown[]) => messageAllowMock(...args),
 }));
 
-type MessageHandler = (args: { event: Record<string, unknown>; body: unknown }) => Promise<void>;
+type MessageHandler = (args: {
+  event: Record<string, unknown>;
+  body: unknown;
+}) => Promise<void>;
 
 type MessageCase = {
   overrides?: SlackSystemEventTestOverrides;
@@ -33,7 +36,9 @@ function createMessageHandlers(overrides?: SlackSystemEventTestOverrides) {
   });
   return {
     handler: harness.getHandler("message") as MessageHandler | null,
-    channelHandler: harness.getHandler("message.channels") as MessageHandler | null,
+    channelHandler: harness.getHandler(
+      "message.channels",
+    ) as MessageHandler | null,
     groupHandler: harness.getHandler("message.groups") as MessageHandler | null,
     handleSlackMessage,
   };
@@ -65,7 +70,10 @@ function makeDeletedEvent(overrides?: { channel?: string; user?: string }) {
   };
 }
 
-function makeThreadBroadcastEvent(overrides?: { channel?: string; user?: string }) {
+function makeThreadBroadcastEvent(overrides?: {
+  channel?: string;
+  user?: string;
+}) {
   const user = overrides?.user ?? "U1";
   return {
     type: "message",
@@ -141,7 +149,9 @@ describe("registerSlackMessageEvents", () => {
   it("passes regular message events to the message handler", async () => {
     messageQueueMock.mockClear();
     messageAllowMock.mockReset().mockResolvedValue([]);
-    const { handler, handleSlackMessage } = createMessageHandlers({ dmPolicy: "open" });
+    const { handler, handleSlackMessage } = createMessageHandlers({
+      dmPolicy: "open",
+    });
     expect(handler).toBeTruthy();
 
     await handler!({
@@ -162,10 +172,11 @@ describe("registerSlackMessageEvents", () => {
   it("registers and forwards message.channels and message.groups events", async () => {
     messageQueueMock.mockClear();
     messageAllowMock.mockReset().mockResolvedValue([]);
-    const { channelHandler, groupHandler, handleSlackMessage } = createMessageHandlers({
-      dmPolicy: "open",
-      channelType: "channel",
-    });
+    const { channelHandler, groupHandler, handleSlackMessage } =
+      createMessageHandlers({
+        dmPolicy: "open",
+        channelType: "channel",
+      });
 
     expect(channelHandler).toBeTruthy();
     expect(groupHandler).toBeTruthy();

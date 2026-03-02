@@ -64,7 +64,8 @@ export function resolveSpawnCommand(
   const cacheKey = params.command;
   const cachedProgram = options?.cache;
 
-  const cacheHit = cachedProgram?.key === cacheKey && cachedProgram.candidate != null;
+  const cacheHit =
+    cachedProgram?.key === cacheKey && cachedProgram.candidate != null;
   let candidate =
     cachedProgram?.key === cacheKey && cachedProgram.candidate
       ? cachedProgram.candidate
@@ -139,7 +140,9 @@ export function spawnWithResolvedCommand(
   });
 }
 
-export async function waitForExit(child: ChildProcessWithoutNullStreams): Promise<SpawnExit> {
+export async function waitForExit(
+  child: ChildProcessWithoutNullStreams,
+): Promise<SpawnExit> {
   return await new Promise<SpawnExit>((resolve) => {
     let settled = false;
     const finish = (result: SpawnExit) => {

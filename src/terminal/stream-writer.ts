@@ -1,6 +1,9 @@
 export type SafeStreamWriterOptions = {
   beforeWrite?: () => void;
-  onBrokenPipe?: (err: NodeJS.ErrnoException, stream: NodeJS.WriteStream) => void;
+  onBrokenPipe?: (
+    err: NodeJS.ErrnoException,
+    stream: NodeJS.WriteStream,
+  ) => void;
 };
 
 export type SafeStreamWriter = {
@@ -15,11 +18,16 @@ function isBrokenPipeError(err: unknown): err is NodeJS.ErrnoException {
   return code === "EPIPE" || code === "EIO";
 }
 
-export function createSafeStreamWriter(options: SafeStreamWriterOptions = {}): SafeStreamWriter {
+export function createSafeStreamWriter(
+  options: SafeStreamWriterOptions = {},
+): SafeStreamWriter {
   let closed = false;
   let notified = false;
 
-  const noteBrokenPipe = (err: NodeJS.ErrnoException, stream: NodeJS.WriteStream) => {
+  const noteBrokenPipe = (
+    err: NodeJS.ErrnoException,
+    stream: NodeJS.WriteStream,
+  ) => {
     if (notified) {
       return;
     }

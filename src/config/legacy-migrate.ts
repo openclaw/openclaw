@@ -12,7 +12,9 @@ export function migrateLegacyConfig(raw: unknown): {
   }
   const validated = validateConfigObjectWithPlugins(next);
   if (!validated.ok) {
-    changes.push("Migration applied, but config still invalid; fix remaining issues manually.");
+    changes.push(
+      "Migration applied, but config still invalid; fix remaining issues manually.",
+    );
     return { config: null, changes };
   }
   return { config: validated.config, changes };

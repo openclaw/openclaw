@@ -25,11 +25,19 @@ describe("sanitizeSessionHistory openai tool id preservation", () => {
               {
                 type: "thinking",
                 thinking: "internal reasoning",
-                thinkingSignature: JSON.stringify({ id: "rs_123", type: "reasoning" }),
+                thinkingSignature: JSON.stringify({
+                  id: "rs_123",
+                  type: "reasoning",
+                }),
               },
             ]
           : []),
-        { type: "toolCall", id: "call_123|fc_123", name: "noop", arguments: {} },
+        {
+          type: "toolCall",
+          id: "call_123|fc_123",
+          name: "noop",
+          arguments: {},
+        },
       ],
     } as unknown as AgentMessage,
     {
@@ -62,8 +70,12 @@ describe("sanitizeSessionHistory openai tool id preservation", () => {
       sessionId: "test-session",
     });
 
-    const assistant = result[0] as { content?: Array<{ type?: string; id?: string }> };
-    const toolCall = assistant.content?.find((block) => block.type === "toolCall");
+    const assistant = result[0] as {
+      content?: Array<{ type?: string; id?: string }>;
+    };
+    const toolCall = assistant.content?.find(
+      (block) => block.type === "toolCall",
+    );
     expect(toolCall?.id).toBe(expectedToolId);
 
     const toolResult = result[1] as { toolCallId?: string };

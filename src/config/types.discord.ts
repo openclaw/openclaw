@@ -10,7 +10,10 @@ import type {
 } from "./types.base.js";
 import type { ChannelHeartbeatVisibilityConfig } from "./types.channels.js";
 import type { DmConfig, ProviderCommandsConfig } from "./types.messages.js";
-import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
+import type {
+  GroupToolPolicyBySenderConfig,
+  GroupToolPolicyConfig,
+} from "./types.tools.js";
 import type { TtsConfig } from "./types.tts.js";
 
 export type DiscordStreamMode = "off" | "partial" | "block" | "progress";
@@ -48,7 +51,11 @@ export type DiscordGuildChannelConfig = {
   includeThreadStarter?: boolean;
 };
 
-export type DiscordReactionNotificationMode = "off" | "own" | "all" | "allowlist";
+export type DiscordReactionNotificationMode =
+  | "off"
+  | "own"
+  | "all"
+  | "allowlist";
 
 export type DiscordGuildEntry = {
   slug?: string;
@@ -293,7 +300,13 @@ export type DiscordAccountConfig = {
    */
   ackReaction?: string;
   /** When to send ack reactions for this Discord account. Overrides messages.ackReactionScope. */
-  ackReactionScope?: "group-mentions" | "group-all" | "direct" | "all" | "off" | "none";
+  ackReactionScope?:
+    | "group-mentions"
+    | "group-all"
+    | "direct"
+    | "all"
+    | "off"
+    | "none";
   /** Bot activity status text (e.g. "Watching X"). */
   activity?: string;
   /** Bot status (online|dnd|idle|invisible). Defaults to online when presence is configured. */

@@ -66,7 +66,11 @@ export async function executeNodeHostCommand(
   if (hostSecurity === "deny") {
     throw new Error("exec denied: host=node security=deny");
   }
-  if (params.boundNode && params.requestedNode && params.boundNode !== params.requestedNode) {
+  if (
+    params.boundNode &&
+    params.requestedNode &&
+    params.boundNode !== params.requestedNode
+  ) {
     throw new Error(`exec node not allowed (bound to ${params.boundNode})`);
   }
   const nodeQuery = params.boundNode || params.requestedNode;
@@ -175,7 +179,9 @@ export async function executeNodeHostCommand(
     logInfo(
       `exec: obfuscation detected (node=${nodeQuery ?? "default"}): ${obfuscation.reasons.join(", ")}`,
     );
-    params.warnings.push(`⚠️ Obfuscated command detected: ${obfuscation.reasons.join("; ")}`);
+    params.warnings.push(
+      `⚠️ Obfuscated command detected: ${obfuscation.reasons.join("; ")}`,
+    );
   }
   const requiresAsk =
     requiresExecApproval({
@@ -186,7 +192,10 @@ export async function executeNodeHostCommand(
     }) || obfuscation.detected;
   const invokeTimeoutMs = Math.max(
     10_000,
-    (typeof params.timeoutSec === "number" ? params.timeoutSec : params.defaultTimeoutSec) * 1000 +
+    (typeof params.timeoutSec === "number"
+      ? params.timeoutSec
+      : params.defaultTimeoutSec) *
+      1000 +
       5_000,
   );
   const buildInvokeParams = (
@@ -202,7 +211,10 @@ export async function executeNodeHostCommand(
         rawCommand: runRawCommand,
         cwd: runCwd,
         env: nodeEnv,
-        timeoutMs: typeof params.timeoutSec === "number" ? params.timeoutSec * 1000 : undefined,
+        timeoutMs:
+          typeof params.timeoutSec === "number"
+            ? params.timeoutSec * 1000
+            : undefined,
         agentId: runAgentId,
         sessionKey: runSessionKey,
         approved: approvedByAsk,
@@ -216,8 +228,13 @@ export async function executeNodeHostCommand(
     const approvalId = crypto.randomUUID();
     const approvalSlug = createApprovalSlug(approvalId);
     const contextKey = `exec:${approvalId}`;
-    const noticeSeconds = Math.max(1, Math.round(params.approvalRunningNoticeMs / 1000));
-    const warningText = params.warnings.length ? `${params.warnings.join("\n")}\n\n` : "";
+    const noticeSeconds = Math.max(
+      1,
+      Math.round(params.approvalRunningNoticeMs / 1000),
+    );
+    const warningText = params.warnings.length
+      ? `${params.warnings.join("\n")}\n\n`
+      : "";
     let expiresAtMs = Date.now() + DEFAULT_APPROVAL_TIMEOUT_MS;
     let preResolvedDecision: string | null | undefined;
 
@@ -353,14 +370,21 @@ export async function executeNodeHostCommand(
     buildInvokeParams(false, null),
   );
   const payload =
-    raw && typeof raw === "object" ? (raw as { payload?: unknown }).payload : undefined;
+    raw && typeof raw === "object"
+      ? (raw as { payload?: unknown }).payload
+      : undefined;
   const payloadObj =
-    payload && typeof payload === "object" ? (payload as Record<string, unknown>) : {};
+    payload && typeof payload === "object"
+      ? (payload as Record<string, unknown>)
+      : {};
   const stdout = typeof payloadObj.stdout === "string" ? payloadObj.stdout : "";
   const stderr = typeof payloadObj.stderr === "string" ? payloadObj.stderr : "";
-  const errorText = typeof payloadObj.error === "string" ? payloadObj.error : "";
-  const success = typeof payloadObj.success === "boolean" ? payloadObj.success : false;
-  const exitCode = typeof payloadObj.exitCode === "number" ? payloadObj.exitCode : null;
+  const errorText =
+    typeof payloadObj.error === "string" ? payloadObj.error : "";
+  const success =
+    typeof payloadObj.success === "boolean" ? payloadObj.success : false;
+  const exitCode =
+    typeof payloadObj.exitCode === "number" ? payloadObj.exitCode : null;
   return {
     content: [
       {

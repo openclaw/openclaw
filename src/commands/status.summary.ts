@@ -1,5 +1,9 @@
 import { resolveContextTokensForModel } from "../agents/context.js";
-import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import {
+  DEFAULT_CONTEXT_TOKENS,
+  DEFAULT_MODEL,
+  DEFAULT_PROVIDER,
+} from "../agents/defaults.js";
 import { resolveConfiguredModelRef } from "../agents/model-selection.js";
 import { loadConfig } from "../config/config.js";
 import {
@@ -19,7 +23,11 @@ import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-runner.js";
 import { peekSystemEvents } from "../infra/system-events.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveLinkChannelContext } from "./status.link-channel.js";
-import type { HeartbeatStatus, SessionStatus, StatusSummary } from "./status.types.js";
+import type {
+  HeartbeatStatus,
+  SessionStatus,
+  StatusSummary,
+} from "./status.types.js";
 
 const buildFlags = (entry?: SessionEntry): string[] => {
   if (!entry) {
@@ -55,7 +63,9 @@ const buildFlags = (entry?: SessionEntry): string[] => {
   return flags;
 };
 
-export function redactSensitiveStatusSummary(summary: StatusSummary): StatusSummary {
+export function redactSensitiveStatusSummary(
+  summary: StatusSummary,
+): StatusSummary {
   return {
     ...summary,
     sessions: {
@@ -114,7 +124,10 @@ export async function getStatusSummary(
     }) ?? DEFAULT_CONTEXT_TOKENS;
 
   const now = Date.now();
-  const storeCache = new Map<string, Record<string, SessionEntry | undefined>>();
+  const storeCache = new Map<
+    string,
+    Record<string, SessionEntry | undefined>
+  >();
   const loadStore = (storePath: string) => {
     const cached = storeCache.get(storePath);
     if (cached) {
@@ -133,7 +146,11 @@ export async function getStatusSummary(
       .map(([key, entry]) => {
         const updatedAt = entry?.updatedAt ?? null;
         const age = updatedAt ? now - updatedAt : null;
-        const resolvedModel = resolveSessionModelRef(cfg, entry, opts.agentIdOverride);
+        const resolvedModel = resolveSessionModelRef(
+          cfg,
+          entry,
+          opts.agentIdOverride,
+        );
         const model = resolvedModel.model ?? configModel ?? null;
         const contextTokens =
           resolveContextTokensForModel({
@@ -145,9 +162,13 @@ export async function getStatusSummary(
           }) ?? null;
         const total = resolveFreshSessionTotalTokens(entry);
         const totalTokensFresh =
-          typeof entry?.totalTokens === "number" ? entry?.totalTokensFresh !== false : false;
+          typeof entry?.totalTokens === "number"
+            ? entry?.totalTokensFresh !== false
+            : false;
         const remaining =
-          contextTokens != null && total !== undefined ? Math.max(0, contextTokens - total) : null;
+          contextTokens != null && total !== undefined
+            ? Math.max(0, contextTokens - total)
+            : null;
         const pct =
           contextTokens && contextTokens > 0 && total !== undefined
             ? Math.min(999, Math.round((total / contextTokens) * 100))
@@ -185,7 +206,9 @@ export async function getStatusSummary(
 
   const paths = new Set<string>();
   const byAgent = agentList.agents.map((agent) => {
-    const storePath = resolveStorePath(cfg.session?.store, { agentId: agent.id });
+    const storePath = resolveStorePath(cfg.session?.store, {
+      agentId: agent.id,
+    });
     paths.add(storePath);
     const store = loadStore(storePath);
     const sessions = buildSessionRows(store, { agentIdOverride: agent.id });

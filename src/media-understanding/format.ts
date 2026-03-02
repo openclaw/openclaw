@@ -90,9 +90,13 @@ export function formatMediaUnderstandingBody(params: {
   return sections.join("\n\n").trim();
 }
 
-export function formatAudioTranscripts(outputs: MediaUnderstandingOutput[]): string {
+export function formatAudioTranscripts(
+  outputs: MediaUnderstandingOutput[],
+): string {
   if (outputs.length === 1) {
     return outputs[0].text;
   }
-  return outputs.map((output, index) => `Audio ${index + 1}:\n${output.text}`).join("\n\n");
+  return outputs
+    .map((output, index) => `Audio ${index + 1}:\n${output.text}`)
+    .join("\n\n");
 }

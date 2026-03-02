@@ -3,7 +3,10 @@ import { getMSTeamsRuntime } from "../runtime.js";
 import { inferPlaceholder } from "./shared.js";
 import type { MSTeamsInboundMedia } from "./types.js";
 
-type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+type FetchLike = (
+  input: RequestInfo | URL,
+  init?: RequestInit,
+) => Promise<Response>;
 
 export async function downloadAndStoreMSTeamsRemoteMedia(params: {
   url: string;
@@ -27,7 +30,9 @@ export async function downloadAndStoreMSTeamsRemoteMedia(params: {
     headerMime: fetched.contentType ?? params.contentTypeHint,
     filePath: params.filePathHint,
   });
-  const originalFilename = params.preserveFilenames ? params.filePathHint : undefined;
+  const originalFilename = params.preserveFilenames
+    ? params.filePathHint
+    : undefined;
   const saved = await getMSTeamsRuntime().channel.media.saveMediaBuffer(
     fetched.buffer,
     mime ?? params.contentTypeHint,
@@ -40,6 +45,9 @@ export async function downloadAndStoreMSTeamsRemoteMedia(params: {
     contentType: saved.contentType,
     placeholder:
       params.placeholder ??
-      inferPlaceholder({ contentType: saved.contentType, fileName: params.filePathHint }),
+      inferPlaceholder({
+        contentType: saved.contentType,
+        fileName: params.filePathHint,
+      }),
   };
 }

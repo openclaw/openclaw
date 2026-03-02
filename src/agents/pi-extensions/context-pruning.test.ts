@@ -1,5 +1,8 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type {
+  ExtensionAPI,
+  ExtensionContext,
+} from "@mariozechner/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import {
   computeEffectiveSettings,
@@ -7,7 +10,10 @@ import {
   DEFAULT_CONTEXT_PRUNING_SETTINGS,
   pruneContextMessages,
 } from "./context-pruning.js";
-import { getContextPruningRuntime, setContextPruningRuntime } from "./context-pruning/runtime.js";
+import {
+  getContextPruningRuntime,
+  setContextPruningRuntime,
+} from "./context-pruning/runtime.js";
 
 function toolText(msg: AgentMessage): string {
   if (msg.role !== "toolResult") {
@@ -20,8 +26,13 @@ function toolText(msg: AgentMessage): string {
   return first.text;
 }
 
-function findToolResult(messages: AgentMessage[], toolCallId: string): AgentMessage {
-  const msg = messages.find((m) => m.role === "toolResult" && m.toolCallId === toolCallId);
+function findToolResult(
+  messages: AgentMessage[],
+  toolCallId: string,
+): AgentMessage {
+  const msg = messages.find(
+    (m) => m.role === "toolResult" && m.toolCallId === toolCallId,
+  );
   if (!msg) {
     throw new Error(`missing toolResult: ${toolCallId}`);
   }
@@ -85,7 +96,9 @@ function makeUser(text: string): AgentMessage {
   return { role: "user", content: text, timestamp: Date.now() };
 }
 
-type ContextPruningSettings = NonNullable<ReturnType<typeof computeEffectiveSettings>>;
+type ContextPruningSettings = NonNullable<
+  ReturnType<typeof computeEffectiveSettings>
+>;
 type PruneArgs = Parameters<typeof pruneContextMessages>[0];
 type PruneOverrides = Omit<PruneArgs, "messages" | "settings" | "ctx">;
 
@@ -193,7 +206,9 @@ describe("context-pruning", () => {
       }),
     ];
 
-    const next = pruneWithAggressiveDefaults(messages, { keepLastAssistants: 3 });
+    const next = pruneWithAggressiveDefaults(messages, {
+      keepLastAssistants: 3,
+    });
 
     expect(toolText(findToolResult(next, "t2"))).toContain("y".repeat(20_000));
     expect(toolText(findToolResult(next, "t3"))).toContain("z".repeat(20_000));
@@ -295,7 +310,8 @@ describe("context-pruning", () => {
       settings: makeAggressiveSettings(),
       contextWindowTokens: 1000,
       isToolPrunable: () => true,
-      lastCacheTouchAt: Date.now() - DEFAULT_CONTEXT_PRUNING_SETTINGS.ttlMs - 1000,
+      lastCacheTouchAt:
+        Date.now() - DEFAULT_CONTEXT_PRUNING_SETTINGS.ttlMs - 1000,
     });
 
     const messages: AgentMessage[] = [
@@ -320,7 +336,8 @@ describe("context-pruning", () => {
 
   it("cache-ttl prunes once and resets the ttl window", () => {
     const sessionManager = {};
-    const lastTouch = Date.now() - DEFAULT_CONTEXT_PRUNING_SETTINGS.ttlMs - 1000;
+    const lastTouch =
+      Date.now() - DEFAULT_CONTEXT_PRUNING_SETTINGS.ttlMs - 1000;
 
     setContextPruningRuntime(sessionManager, {
       settings: makeAggressiveSettings(),

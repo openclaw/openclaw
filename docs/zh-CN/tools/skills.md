@@ -107,7 +107,12 @@ metadata:
   {
     "openclaw":
       {
-        "requires": { "bins": ["uv"], "env": ["GEMINI_API_KEY"], "config": ["browser.enabled"] },
+        "requires":
+          {
+            "bins": ["uv"],
+            "env": ["GEMINI_API_KEY"],
+            "config": ["browser.enabled"],
+          },
         "primaryEnv": "GEMINI_API_KEY",
       },
   }

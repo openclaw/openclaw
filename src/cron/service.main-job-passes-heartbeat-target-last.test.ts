@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { HeartbeatRunResult } from "../infra/heartbeat-wake.js";
 import { CronService } from "./service.js";
-import { setupCronServiceSuite, writeCronStoreSnapshot } from "./service.test-harness.js";
+import {
+  setupCronServiceSuite,
+  writeCronStoreSnapshot,
+} from "./service.test-harness.js";
 import type { CronJob } from "./types.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({

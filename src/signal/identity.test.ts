@@ -49,8 +49,15 @@ describe("signal sender identity", () => {
   });
 
   it("maps uuid senders to recipient and peer ids", () => {
-    const sender = { kind: "uuid", raw: "123e4567-e89b-12d3-a456-426614174000" } as const;
-    expect(resolveSignalRecipient(sender)).toBe("123e4567-e89b-12d3-a456-426614174000");
-    expect(resolveSignalPeerId(sender)).toBe("uuid:123e4567-e89b-12d3-a456-426614174000");
+    const sender = {
+      kind: "uuid",
+      raw: "123e4567-e89b-12d3-a456-426614174000",
+    } as const;
+    expect(resolveSignalRecipient(sender)).toBe(
+      "123e4567-e89b-12d3-a456-426614174000",
+    );
+    expect(resolveSignalPeerId(sender)).toBe(
+      "uuid:123e4567-e89b-12d3-a456-426614174000",
+    );
   });
 });

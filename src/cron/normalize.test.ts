@@ -17,7 +17,9 @@ function expectNormalizedAtSchedule(scheduleInput: Record<string, unknown>) {
 
   const schedule = normalized.schedule as Record<string, unknown>;
   expect(schedule.kind).toBe("at");
-  expect(schedule.at).toBe(new Date(Date.parse("2026-01-12T18:00:00Z")).toISOString());
+  expect(schedule.at).toBe(
+    new Date(Date.parse("2026-01-12T18:00:00Z")).toISOString(),
+  );
 }
 
 describe("normalizeCronJobCreate", () => {

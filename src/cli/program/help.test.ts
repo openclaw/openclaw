@@ -4,7 +4,9 @@ import type { ProgramContext } from "./context.js";
 
 const hasEmittedCliBannerMock = vi.fn(() => false);
 const formatCliBannerLineMock = vi.fn(() => "BANNER-LINE");
-const formatDocsLinkMock = vi.fn((_path: string, full: string) => `https://${full}`);
+const formatDocsLinkMock = vi.fn(
+  (_path: string, full: string) => `https://${full}`,
+);
 
 vi.mock("../../terminal/links.js", () => ({
   formatDocsLink: formatDocsLinkMock,
@@ -110,12 +112,16 @@ describe("configureProgramHelp", () => {
   it("prints version and exits immediately when version flags are present", () => {
     process.argv = ["node", "openclaw", "--version"];
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
-    const exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(((
+      code?: number,
+    ) => {
       throw new Error(`exit:${code ?? ""}`);
     }) as typeof process.exit);
 
     const program = makeProgramWithCommands();
-    expect(() => configureProgramHelp(program, testProgramContext)).toThrow("exit:0");
+    expect(() => configureProgramHelp(program, testProgramContext)).toThrow(
+      "exit:0",
+    );
     expect(logSpy).toHaveBeenCalledWith("9.9.9-test");
     expect(exitSpy).toHaveBeenCalledWith(0);
 

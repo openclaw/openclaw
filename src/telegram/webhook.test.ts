@@ -5,7 +5,9 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { startTelegramWebhook } from "./webhook.js";
 
-const handlerSpy = vi.hoisted(() => vi.fn((..._args: unknown[]): unknown => undefined));
+const handlerSpy = vi.hoisted(() =>
+  vi.fn((..._args: unknown[]): unknown => undefined),
+);
 const setWebhookSpy = vi.hoisted(() => vi.fn());
 const deleteWebhookSpy = vi.hoisted(() => vi.fn(async () => true));
 const initSpy = vi.hoisted(() => vi.fn(async () => undefined));
@@ -64,7 +66,9 @@ async function postWebhookJson(params: {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        ...(params.secret ? { "x-telegram-bot-api-secret-token": params.secret } : {}),
+        ...(params.secret
+          ? { "x-telegram-bot-api-secret-token": params.secret }
+          : {}),
       },
       body: params.payload,
     },
@@ -160,7 +164,10 @@ async function postWebhookPayloadWithChunkPlan(params: {
       let offset = 0;
       while (offset < payloadBuffer.length) {
         const remaining = payloadBuffer.length - offset;
-        const nextSize = Math.max(1, Math.min(remaining, 1 + Math.floor(rng() * 8_192)));
+        const nextSize = Math.max(
+          1,
+          Math.min(remaining, 1 + Math.floor(rng() * 8_192)),
+        );
         const chunk = payloadBuffer.subarray(offset, offset + nextSize);
         const canContinue = req.write(chunk);
         offset += nextSize;
@@ -185,7 +192,10 @@ async function postWebhookPayloadWithChunkPlan(params: {
   });
 }
 
-function createNearLimitTelegramPayload(): { payload: string; sizeBytes: number } {
+function createNearLimitTelegramPayload(): {
+  payload: string;
+  sizeBytes: number;
+} {
   const maxBytes = 1_024 * 1_024;
   const targetBytes = maxBytes - 4_096;
   const shell = { update_id: 77_777, message: { text: "" } };
@@ -236,7 +246,10 @@ async function withStartedWebhook<T>(
     ...options,
   });
   try {
-    return await run({ server: started.server, port: getServerPort(started.server) });
+    return await run({
+      server: started.server,
+      port: getServerPort(started.server),
+    });
   } finally {
     abort.abort();
   }
@@ -248,14 +261,19 @@ function expectSingleNearLimitUpdate(params: {
 }) {
   expect(params.seenUpdates).toHaveLength(1);
   expect(params.seenUpdates[0]?.update_id).toBe(params.expected.update_id);
-  expect(params.seenUpdates[0]?.message.text.length).toBe(params.expected.message.text.length);
+  expect(params.seenUpdates[0]?.message.text.length).toBe(
+    params.expected.message.text.length,
+  );
   expect(sha256(params.seenUpdates[0]?.message.text ?? "")).toBe(
     sha256(params.expected.message.text),
   );
 }
 
-async function runNearLimitPayloadTest(mode: "single" | "random-chunked"): Promise<void> {
-  const seenUpdates: Array<{ update_id: number; message: { text: string } }> = [];
+async function runNearLimitPayloadTest(
+  mode: "single" | "random-chunked",
+): Promise<void> {
+  const seenUpdates: Array<{ update_id: number; message: { text: string } }> =
+    [];
   webhookCallbackSpy.mockImplementationOnce(
     () =>
       vi.fn(
@@ -265,7 +283,9 @@ async function runNearLimitPayloadTest(mode: "single" | "random-chunked"): Promi
           _secretHeader: string | undefined,
           _unauthorized: () => Promise<void>,
         ) => {
-          seenUpdates.push(update as { update_id: number; message: { text: string } });
+          seenUpdates.push(
+            update as { update_id: number; message: { text: string } },
+          );
           void reply("ok");
         },
       ) as unknown as typeof handlerSpy,
@@ -274,7 +294,10 @@ async function runNearLimitPayloadTest(mode: "single" | "random-chunked"): Promi
   const { payload, sizeBytes } = createNearLimitTelegramPayload();
   expect(sizeBytes).toBeLessThan(1_024 * 1_024);
   expect(sizeBytes).toBeGreaterThan(256 * 1_024);
-  const expected = JSON.parse(payload) as { update_id: number; message: { text: string } };
+  const expected = JSON.parse(payload) as {
+    update_id: number;
+    message: { text: string };
+  };
 
   await withStartedWebhook(
     {
@@ -336,9 +359,13 @@ describe("startTelegramWebhook", () => {
           },
         );
         expect(runtimeLog).toHaveBeenCalledWith(
-          expect.stringContaining("webhook local listener on http://127.0.0.1:"),
+          expect.stringContaining(
+            "webhook local listener on http://127.0.0.1:",
+          ),
         );
-        expect(runtimeLog).toHaveBeenCalledWith(expect.stringContaining("/telegram-webhook"));
+        expect(runtimeLog).toHaveBeenCalledWith(
+          expect.stringContaining("/telegram-webhook"),
+        );
         expect(runtimeLog).toHaveBeenCalledWith(
           expect.stringContaining("webhook advertised to telegram on http://"),
         );
@@ -364,7 +391,10 @@ describe("startTelegramWebhook", () => {
             config: expect.objectContaining({ bindings: [] }),
           }),
         );
-        const payload = JSON.stringify({ update_id: 1, message: { text: "hello" } });
+        const payload = JSON.stringify({
+          update_id: 1,
+          message: { text: "hello" },
+        });
         const response = await postWebhookJson({
           url: webhookUrl(port, TELEGRAM_WEBHOOK_PATH),
           payload,
@@ -411,7 +441,10 @@ describe("startTelegramWebhook", () => {
 
   it("keeps webhook payload readable when callback delays body read", async () => {
     handlerSpy.mockImplementationOnce(async (...args: unknown[]) => {
-      const [update, reply] = args as [unknown, (json: string) => Promise<void>];
+      const [update, reply] = args as [
+        unknown,
+        (json: string) => Promise<void>,
+      ];
       await sleep(50);
       await reply(JSON.stringify(update));
     });
@@ -422,7 +455,10 @@ describe("startTelegramWebhook", () => {
         path: TELEGRAM_WEBHOOK_PATH,
       },
       async ({ port }) => {
-        const payload = JSON.stringify({ update_id: 1, message: { text: "hello" } });
+        const payload = JSON.stringify({
+          update_id: 1,
+          message: { text: "hello" },
+        });
         const res = await postWebhookJson({
           url: webhookUrl(port, TELEGRAM_WEBHOOK_PATH),
           payload,
@@ -438,12 +474,17 @@ describe("startTelegramWebhook", () => {
   it("keeps webhook payload readable across multiple delayed reads", async () => {
     const seenPayloads: string[] = [];
     const delayedHandler = async (...args: unknown[]) => {
-      const [update, reply] = args as [unknown, (json: string) => Promise<void>];
+      const [update, reply] = args as [
+        unknown,
+        (json: string) => Promise<void>,
+      ];
       await sleep(50);
       seenPayloads.push(JSON.stringify(update));
       await reply("ok");
     };
-    handlerSpy.mockImplementationOnce(delayedHandler).mockImplementationOnce(delayedHandler);
+    handlerSpy
+      .mockImplementationOnce(delayedHandler)
+      .mockImplementationOnce(delayedHandler);
 
     await withStartedWebhook(
       {
@@ -465,7 +506,9 @@ describe("startTelegramWebhook", () => {
           expect(res.status).toBe(200);
         }
 
-        expect(seenPayloads.map((x) => JSON.parse(x))).toEqual(payloads.map((x) => JSON.parse(x)));
+        expect(seenPayloads.map((x) => JSON.parse(x))).toEqual(
+          payloads.map((x) => JSON.parse(x)),
+        );
       },
     );
   });
@@ -496,8 +539,14 @@ describe("startTelegramWebhook", () => {
         path: TELEGRAM_WEBHOOK_PATH,
       },
       async ({ port }) => {
-        const firstPayload = JSON.stringify({ update_id: 100, message: { text: "first" } });
-        const secondPayload = JSON.stringify({ update_id: 101, message: { text: "second" } });
+        const firstPayload = JSON.stringify({
+          update_id: 100,
+          message: { text: "first" },
+        });
+        const secondPayload = JSON.stringify({
+          update_id: 101,
+          message: { text: "second" },
+        });
         const firstResponse = await postWebhookPayloadWithChunkPlan({
           port,
           path: TELEGRAM_WEBHOOK_PATH,
@@ -517,7 +566,10 @@ describe("startTelegramWebhook", () => {
 
         expect(firstResponse.statusCode).toBe(200);
         expect(secondResponse.statusCode).toBe(200);
-        expect(seenUpdates).toEqual([JSON.parse(firstPayload), JSON.parse(secondPayload)]);
+        expect(seenUpdates).toEqual([
+          JSON.parse(firstPayload),
+          JSON.parse(secondPayload),
+        ]);
       },
     );
   });
@@ -557,7 +609,9 @@ describe("startTelegramWebhook", () => {
             (res) => {
               const chunks: Buffer[] = [];
               res.on("data", (chunk: Buffer | string) => {
-                chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+                chunks.push(
+                  Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk),
+                );
               });
               res.on("end", () => {
                 resolve({
@@ -600,6 +654,8 @@ describe("startTelegramWebhook", () => {
     await sleep(25);
 
     expect(deleteWebhookSpy).toHaveBeenCalledTimes(1);
-    expect(deleteWebhookSpy).toHaveBeenCalledWith({ drop_pending_updates: false });
+    expect(deleteWebhookSpy).toHaveBeenCalledWith({
+      drop_pending_updates: false,
+    });
   });
 });

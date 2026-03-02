@@ -8,9 +8,13 @@ type MockResponse = {
   json: () => Promise<unknown>;
 };
 
-const buildResponse = (params: { status: number; body?: unknown }): MockResponse => {
+const buildResponse = (params: {
+  status: number;
+  body?: unknown;
+}): MockResponse => {
   const body = params.body;
-  const textPayload = typeof body === "string" ? body : body == null ? "" : JSON.stringify(body);
+  const textPayload =
+    typeof body === "string" ? body : body == null ? "" : JSON.stringify(body);
   return {
     status: params.status,
     ok: params.status >= 200 && params.status < 300,

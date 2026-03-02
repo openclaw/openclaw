@@ -2,7 +2,12 @@ import { Writable } from "node:stream";
 import type { GatewayService } from "../../daemon/service.js";
 import { defaultRuntime } from "../../runtime.js";
 
-export type DaemonAction = "install" | "uninstall" | "start" | "stop" | "restart";
+export type DaemonAction =
+  | "install"
+  | "uninstall"
+  | "start"
+  | "stop"
+  | "restart";
 
 export type DaemonActionResponse = {
   ok: boolean;
@@ -24,7 +29,10 @@ export function emitDaemonActionJson(payload: DaemonActionResponse) {
   defaultRuntime.log(JSON.stringify(payload, null, 2));
 }
 
-export function buildDaemonServiceSnapshot(service: GatewayService, loaded: boolean) {
+export function buildDaemonServiceSnapshot(
+  service: GatewayService,
+  loaded: boolean,
+) {
   return {
     label: service.label,
     loaded,
@@ -41,7 +49,10 @@ export function createNullWriter(): Writable {
   });
 }
 
-export function createDaemonActionContext(params: { action: DaemonAction; json: boolean }): {
+export function createDaemonActionContext(params: {
+  action: DaemonAction;
+  json: boolean;
+}): {
   stdout: Writable;
   warnings: string[];
   emit: (payload: Omit<DaemonActionResponse, "action">) => void;

@@ -21,7 +21,10 @@ import {
 import { locked } from "./locked.js";
 import type { CronEvent, CronServiceState } from "./state.js";
 import { ensureLoaded, persist } from "./store.js";
-import { DEFAULT_JOB_TIMEOUT_MS, resolveCronJobTimeoutMs } from "./timeout-policy.js";
+import {
+  DEFAULT_JOB_TIMEOUT_MS,
+  resolveCronJobTimeoutMs,
+} from "./timeout-policy.js";
 
 export { DEFAULT_JOB_TIMEOUT_MS } from "./timeout-policy.js";
 
@@ -116,17 +119,23 @@ function errorBackoffMs(
 const DEFAULT_MAX_TRANSIENT_RETRIES = 3;
 
 const TRANSIENT_PATTERNS: Record<string, RegExp> = {
-  rate_limit: /(rate[_ ]limit|too many requests|429|resource has been exhausted|cloudflare)/i,
+  rate_limit:
+    /(rate[_ ]limit|too many requests|429|resource has been exhausted|cloudflare)/i,
   network: /(network|econnreset|econnrefused|fetch failed|socket)/i,
   timeout: /(timeout|etimedout)/i,
   server_error: /\b5\d{2}\b/,
 };
 
-function isTransientCronError(error: string | undefined, retryOn?: CronRetryOn[]): boolean {
+function isTransientCronError(
+  error: string | undefined,
+  retryOn?: CronRetryOn[],
+): boolean {
   if (!error || typeof error !== "string") {
     return false;
   }
-  const keys = retryOn?.length ? retryOn : (Object.keys(TRANSIENT_PATTERNS) as CronRetryOn[]);
+  const keys = retryOn?.length
+    ? retryOn
+    : (Object.keys(TRANSIENT_PATTERNS) as CronRetryOn[]);
   return keys.some((k) => TRANSIENT_PATTERNS[k]?.test(error));
 }
 
@@ -134,26 +143,38 @@ function resolveRetryConfig(cronConfig?: CronConfig) {
   const retry = cronConfig?.retry;
   return {
     maxAttempts:
-      typeof retry?.maxAttempts === "number" ? retry.maxAttempts : DEFAULT_MAX_TRANSIENT_RETRIES,
+      typeof retry?.maxAttempts === "number"
+        ? retry.maxAttempts
+        : DEFAULT_MAX_TRANSIENT_RETRIES,
     backoffMs:
       Array.isArray(retry?.backoffMs) && retry.backoffMs.length > 0
         ? retry.backoffMs
         : DEFAULT_BACKOFF_SCHEDULE_MS.slice(0, 3),
-    retryOn: Array.isArray(retry?.retryOn) && retry.retryOn.length > 0 ? retry.retryOn : undefined,
+    retryOn:
+      Array.isArray(retry?.retryOn) && retry.retryOn.length > 0
+        ? retry.retryOn
+        : undefined,
   };
 }
 
-function resolveDeliveryStatus(params: { job: CronJob; delivered?: boolean }): CronDeliveryStatus {
+function resolveDeliveryStatus(params: {
+  job: CronJob;
+  delivered?: boolean;
+}): CronDeliveryStatus {
   if (params.delivered === true) {
     return "delivered";
   }
   if (params.delivered === false) {
     return "not-delivered";
   }
-  return resolveCronDeliveryPlan(params.job).requested ? "unknown" : "not-requested";
+  return resolveCronDeliveryPlan(params.job).requested
+    ? "unknown"
+    : "not-requested";
 }
 
-function normalizeCronMessageChannel(input: unknown): CronMessageChannel | undefined {
+function normalizeCronMessageChannel(
+  input: unknown,
+): CronMessageChannel | undefined {
   if (typeof input !== "string") {
     return undefined;
   }
@@ -210,7 +231,10 @@ function resolveFailureAlert(
   const explicitTo = normalizeTo(jobConfig?.to);
 
   return {
-    after: clampPositiveInt(jobConfig?.after ?? globalConfig?.after, DEFAULT_FAILURE_ALERT_AFTER),
+    after: clampPositiveInt(
+      jobConfig?.after ?? globalConfig?.after,
+      DEFAULT_FAILURE_ALERT_AFTER,
+    ),
     cooldownMs: clampNonNegativeInt(
       jobConfig?.cooldownMs ?? globalConfig?.cooldownMs,
       DEFAULT_FAILURE_ALERT_COOLDOWN_MS,
@@ -219,7 +243,10 @@ function resolveFailureAlert(
       normalizeCronMessageChannel(jobConfig?.channel) ??
       normalizeCronMessageChannel(job.delivery?.channel) ??
       "last",
-    to: mode === "webhook" ? explicitTo : (explicitTo ?? normalizeTo(job.delivery?.to)),
+    to:
+      mode === "webhook"
+        ? explicitTo
+        : (explicitTo ?? normalizeTo(job.delivery?.to)),
     mode,
     accountId: jobConfig?.accountId ?? globalConfig?.accountId,
   };
@@ -238,7 +265,10 @@ function emitFailureAlert(
   },
 ) {
   const safeJobName = params.job.name || params.job.id;
-  const truncatedError = (params.error?.trim() || "unknown error").slice(0, 200);
+  const truncatedError = (params.error?.trim() || "unknown error").slice(
+    0,
+    200,
+  );
   const text = [
     `Cron job "${safeJobName}" failed ${params.consecutiveErrors} times`,
     `Last error: ${truncatedError}`,
@@ -265,7 +295,9 @@ function emitFailureAlert(
 
   state.deps.enqueueSystemEvent(text, { agentId: params.job.agentId });
   if (params.job.wakeMode === "now") {
-    state.deps.requestHeartbeatNow({ reason: `cron:${params.job.id}:failure-alert` });
+    state.deps.requestHeartbeatNow({
+      reason: `cron:${params.job.id}:failure-alert`,
+    });
   }
 }
 
@@ -292,10 +324,15 @@ export function applyJobResult(
   job.state.lastDurationMs = Math.max(0, result.endedAt - result.startedAt);
   job.state.lastError = result.error;
   job.state.lastDelivered = result.delivered;
-  const deliveryStatus = resolveDeliveryStatus({ job, delivered: result.delivered });
+  const deliveryStatus = resolveDeliveryStatus({
+    job,
+    delivered: result.delivered,
+  });
   job.state.lastDeliveryStatus = deliveryStatus;
   job.state.lastDeliveryError =
-    deliveryStatus === "not-delivered" && result.error ? result.error : undefined;
+    deliveryStatus === "not-delivered" && result.error
+      ? result.error
+      : undefined;
   job.updatedAtMs = result.endedAt;
 
   // Track consecutive errors for backoff / auto-disable.
@@ -305,12 +342,14 @@ export function applyJobResult(
     if (alertConfig && job.state.consecutiveErrors >= alertConfig.after) {
       const isBestEffort =
         job.delivery?.bestEffort === true ||
-        (job.payload.kind === "agentTurn" && job.payload.bestEffortDeliver === true);
+        (job.payload.kind === "agentTurn" &&
+          job.payload.bestEffortDeliver === true);
       if (!isBestEffort) {
         const now = state.deps.nowMs();
         const lastAlert = job.state.lastFailureAlertAtMs;
         const inCooldown =
-          typeof lastAlert === "number" && now - lastAlert < Math.max(0, alertConfig.cooldownMs);
+          typeof lastAlert === "number" &&
+          now - lastAlert < Math.max(0, alertConfig.cooldownMs);
         if (!inCooldown) {
           emitFailureAlert(state, {
             job,
@@ -331,7 +370,9 @@ export function applyJobResult(
   }
 
   const shouldDelete =
-    job.schedule.kind === "at" && job.deleteAfterRun === true && result.status === "ok";
+    job.schedule.kind === "at" &&
+    job.deleteAfterRun === true &&
+    result.status === "ok";
 
   if (!shouldDelete) {
     if (job.schedule.kind === "at") {
@@ -341,7 +382,10 @@ export function applyJobResult(
         job.state.nextRunAtMs = undefined;
       } else if (result.status === "error") {
         const retryConfig = resolveRetryConfig(state.deps.cronConfig);
-        const transient = isTransientCronError(result.error, retryConfig.retryOn);
+        const transient = isTransientCronError(
+          result.error,
+          retryConfig.retryOn,
+        );
         // consecutiveErrors is always set to ≥1 by the increment block above.
         const consecutive = job.state.consecutiveErrors;
         if (transient && consecutive <= retryConfig.maxAttempts) {
@@ -392,7 +436,9 @@ export function applyJobResult(
       const backoffNext = result.endedAt + backoff;
       // Use whichever is later: the natural next run or the backoff delay.
       job.state.nextRunAtMs =
-        normalNext !== undefined ? Math.max(normalNext, backoffNext) : backoffNext;
+        normalNext !== undefined
+          ? Math.max(normalNext, backoffNext)
+          : backoffNext;
       state.deps.log.info(
         {
           jobId: job.id,
@@ -431,7 +477,10 @@ export function applyJobResult(
   return shouldDelete;
 }
 
-function applyOutcomeToStoredJob(state: CronServiceState, result: TimedCronRunOutcome): void {
+function applyOutcomeToStoredJob(
+  state: CronServiceState,
+  result: TimedCronRunOutcome,
+): void {
   const store = state.store;
   if (!store) {
     return;
@@ -589,7 +638,9 @@ export async function onTimer(state: CronServiceState) {
         const result = await executeJobCoreWithTimeout(state, job);
         return { jobId: id, ...result, startedAt, endedAt: state.deps.nowMs() };
       } catch (err) {
-        const errorText = isAbortError(err) ? timeoutErrorMessage() : String(err);
+        const errorText = isAbortError(err)
+          ? timeoutErrorMessage()
+          : String(err);
         state.deps.log.warn(
           { jobId: id, jobName: job.name, timeoutMs: jobTimeoutMs ?? null },
           `cron: job failed: ${errorText}`,
@@ -604,8 +655,13 @@ export async function onTimer(state: CronServiceState) {
       }
     };
 
-    const concurrency = Math.min(resolveRunConcurrency(state), Math.max(1, dueJobs.length));
-    const results: (TimedCronRunOutcome | undefined)[] = Array.from({ length: dueJobs.length });
+    const concurrency = Math.min(
+      resolveRunConcurrency(state),
+      Math.max(1, dueJobs.length),
+    );
+    const results: (TimedCronRunOutcome | undefined)[] = Array.from({
+      length: dueJobs.length,
+    });
     let cursor = 0;
     const workers = Array.from({ length: concurrency }, async () => {
       for (;;) {
@@ -650,7 +706,9 @@ export async function onTimer(state: CronServiceState) {
       if (state.store?.jobs?.length) {
         for (const job of state.store.jobs) {
           const agentId =
-            typeof job.agentId === "string" && job.agentId.trim() ? job.agentId : defaultAgentId;
+            typeof job.agentId === "string" && job.agentId.trim()
+              ? job.agentId
+              : defaultAgentId;
           storePaths.add(state.deps.resolveSessionStorePath(agentId));
         }
       } else {
@@ -671,7 +729,10 @@ export async function onTimer(state: CronServiceState) {
             log: state.deps.log,
           });
         } catch (err) {
-          state.deps.log.warn({ err: String(err), storePath }, "cron: session reaper sweep failed");
+          state.deps.log.warn(
+            { err: String(err), storePath },
+            "cron: session reaper sweep failed",
+          );
         }
       }
     }
@@ -708,7 +769,11 @@ function isRunnableJob(params: {
   if (typeof job.state.runningAtMs === "number") {
     return false;
   }
-  if (params.skipAtIfAlreadyRan && job.schedule.kind === "at" && job.state.lastStatus) {
+  if (
+    params.skipAtIfAlreadyRan &&
+    job.schedule.kind === "at" &&
+    job.state.lastStatus
+  ) {
     // One-shot with terminal status: skip unless it's a transient-error retry.
     // Retries have nextRunAtMs > lastRunAtMs (scheduled after the failed run) (#24355).
     // ok/skipped or error-without-retry always skip (#13845).
@@ -758,7 +823,10 @@ export async function runMissedJobs(
     }
     const now = state.deps.nowMs();
     const skipJobIds = opts?.skipJobIds;
-    const missed = collectRunnableJobs(state, now, { skipJobIds, skipAtIfAlreadyRan: true });
+    const missed = collectRunnableJobs(state, now, {
+      skipJobIds,
+      skipAtIfAlreadyRan: true,
+    });
     if (missed.length === 0) {
       return [] as Array<{ jobId: string; job: CronJob }>;
     }
@@ -781,7 +849,11 @@ export async function runMissedJobs(
   const outcomes: Array<TimedCronRunOutcome> = [];
   for (const candidate of startupCandidates) {
     const startedAt = state.deps.nowMs();
-    emit(state, { jobId: candidate.job.id, action: "started", runAtMs: startedAt });
+    emit(state, {
+      jobId: candidate.job.id,
+      action: "started",
+      runAtMs: startedAt,
+    });
     try {
       const result = await executeJobCoreWithTimeout(state, candidate.job);
       outcomes.push({
@@ -843,7 +915,8 @@ export async function executeJobCore(
   job: CronJob,
   abortSignal?: AbortSignal,
 ): Promise<
-  CronRunOutcome & CronRunTelemetry & { delivered?: boolean; deliveryAttempted?: boolean }
+  CronRunOutcome &
+    CronRunTelemetry & { delivered?: boolean; deliveryAttempted?: boolean }
 > {
   const resolveAbortError = () => ({
     status: "error" as const,
@@ -942,9 +1015,17 @@ export async function executeJobCore(
       if (heartbeatResult.status === "ran") {
         return { status: "ok", summary: text };
       } else if (heartbeatResult.status === "skipped") {
-        return { status: "skipped", error: heartbeatResult.reason, summary: text };
+        return {
+          status: "skipped",
+          error: heartbeatResult.reason,
+          summary: text,
+        };
       } else {
-        return { status: "error", error: heartbeatResult.reason, summary: text };
+        return {
+          status: "error",
+          error: heartbeatResult.reason,
+          summary: text,
+        };
       }
     } else {
       if (abortSignal?.aborted) {
@@ -960,7 +1041,10 @@ export async function executeJobCore(
   }
 
   if (job.payload.kind !== "agentTurn") {
-    return { status: "skipped", error: "isolated job requires payload.kind=agentTurn" };
+    return {
+      status: "skipped",
+      error: "isolated job requires payload.kind=agentTurn",
+    };
   }
   if (abortSignal?.aborted) {
     return resolveAbortError();
@@ -984,7 +1068,9 @@ export async function executeJobCore(
   const summaryText = res.summary?.trim();
   const deliveryPlan = resolveCronDeliveryPlan(job);
   const suppressMainSummary =
-    res.status === "error" && res.errorKind === "delivery-target" && deliveryPlan.requested;
+    res.status === "error" &&
+    res.errorKind === "delivery-target" &&
+    deliveryPlan.requested;
   if (
     summaryText &&
     deliveryPlan.requested &&
@@ -994,7 +1080,9 @@ export async function executeJobCore(
   ) {
     const prefix = "Cron";
     const label =
-      res.status === "error" ? `${prefix} (error): ${summaryText}` : `${prefix}: ${summaryText}`;
+      res.status === "error"
+        ? `${prefix} (error): ${summaryText}`
+        : `${prefix}: ${summaryText}`;
     state.deps.enqueueSystemEvent(label, {
       agentId: job.agentId,
       sessionKey: job.sessionKey,

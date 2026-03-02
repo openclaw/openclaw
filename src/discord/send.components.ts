@@ -28,9 +28,14 @@ import {
 } from "./send.shared.js";
 import type { DiscordSendResult } from "./send.types.js";
 
-const DISCORD_FORUM_LIKE_TYPES = new Set<number>([ChannelType.GuildForum, ChannelType.GuildMedia]);
+const DISCORD_FORUM_LIKE_TYPES = new Set<number>([
+  ChannelType.GuildForum,
+  ChannelType.GuildMedia,
+]);
 
-function extractComponentAttachmentNames(spec: DiscordComponentMessageSpec): string[] {
+function extractComponentAttachmentNames(
+  spec: DiscordComponentMessageSpec,
+): string[] {
   const names: string[] = [];
   for (const block of spec.blocks ?? []) {
     if (block.type === "file") {
@@ -67,7 +72,9 @@ export async function sendDiscordComponentMessage(
   const channelType = await resolveDiscordChannelType(rest, channelId);
 
   if (channelType && DISCORD_FORUM_LIKE_TYPES.has(channelType)) {
-    throw new Error("Discord components are not supported in forum-style channels");
+    throw new Error(
+      "Discord components are not supported in forum-style channels",
+    );
   }
 
   const buildResult = buildDiscordComponentMessage({
@@ -94,7 +101,9 @@ export async function sendDiscordComponentMessage(
   const expectedAttachmentName = uniqueAttachmentNames[0];
   let files: MessagePayloadFile[] | undefined;
   if (opts.mediaUrl) {
-    const media = await loadWebMedia(opts.mediaUrl, { localRoots: opts.mediaLocalRoots });
+    const media = await loadWebMedia(opts.mediaUrl, {
+      localRoots: opts.mediaLocalRoots,
+    });
     const filenameOverride = opts.filename?.trim();
     const fileName = filenameOverride || media.fileName || "upload";
     if (expectedAttachmentName && expectedAttachmentName !== fileName) {

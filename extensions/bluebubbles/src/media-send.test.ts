@@ -9,7 +9,9 @@ import { setBlueBubblesRuntime } from "./runtime.js";
 
 const sendBlueBubblesAttachmentMock = vi.hoisted(() => vi.fn());
 const sendMessageBlueBubblesMock = vi.hoisted(() => vi.fn());
-const resolveBlueBubblesMessageIdMock = vi.hoisted(() => vi.fn((id: string) => id));
+const resolveBlueBubblesMessageIdMock = vi.hoisted(() =>
+  vi.fn((id: string) => id),
+);
 
 vi.mock("./attachments.js", () => ({
   sendBlueBubblesAttachment: sendBlueBubblesAttachmentMock,
@@ -149,7 +151,9 @@ describe("sendBlueBubblesMedia local-path hardening", () => {
     await fs.writeFile(allowedFile, "allowed", "utf8");
 
     const result = await sendBlueBubblesMedia({
-      cfg: createConfig({ mediaLocalRoots: [pathToFileURL(allowedRoot).toString()] }),
+      cfg: createConfig({
+        mediaLocalRoots: [pathToFileURL(allowedRoot).toString()],
+      }),
       to: "chat:123",
       mediaPath: pathToFileURL(allowedFile).toString(),
     });

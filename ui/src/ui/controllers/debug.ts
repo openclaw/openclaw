@@ -33,7 +33,9 @@ export async function loadDebug(state: DebugState) {
     state.debugStatus = status as StatusSummary;
     state.debugHealth = health as HealthSnapshot;
     const modelPayload = models as { models?: unknown[] } | undefined;
-    state.debugModels = Array.isArray(modelPayload?.models) ? modelPayload?.models : [];
+    state.debugModels = Array.isArray(modelPayload?.models)
+      ? modelPayload?.models
+      : [];
     state.debugHeartbeat = heartbeat;
   } catch (err) {
     state.debugCallError = String(err);
@@ -52,7 +54,10 @@ export async function callDebugMethod(state: DebugState) {
     const params = state.debugCallParams.trim()
       ? (JSON.parse(state.debugCallParams) as unknown)
       : {};
-    const res = await state.client.request(state.debugCallMethod.trim(), params);
+    const res = await state.client.request(
+      state.debugCallMethod.trim(),
+      params,
+    );
     state.debugCallResult = JSON.stringify(res, null, 2);
   } catch (err) {
     state.debugCallError = String(err);

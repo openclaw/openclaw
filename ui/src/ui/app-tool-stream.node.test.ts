@@ -1,5 +1,9 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import { handleAgentEvent, type FallbackStatus, type ToolStreamEntry } from "./app-tool-stream.ts";
+import {
+  handleAgentEvent,
+  type FallbackStatus,
+  type ToolStreamEntry,
+} from "./app-tool-stream.ts";
 
 type ToolStreamHost = Parameters<typeof handleAgentEvent>[0];
 type MutableHost = ToolStreamHost & {
@@ -31,7 +35,8 @@ describe("app-tool-stream fallback lifecycle handling", () => {
       window?: Window & typeof globalThis;
     };
     if (!globalWithWindow.window) {
-      globalWithWindow.window = globalThis as unknown as Window & typeof globalThis;
+      globalWithWindow.window = globalThis as unknown as Window &
+        typeof globalThis;
     }
   });
 
@@ -133,7 +138,9 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     });
 
     expect(host.fallbackStatus?.phase).toBe("cleared");
-    expect(host.fallbackStatus?.previous).toBe("deepinfra/moonshotai/Kimi-K2.5");
+    expect(host.fallbackStatus?.previous).toBe(
+      "deepinfra/moonshotai/Kimi-K2.5",
+    );
     vi.useRealTimers();
   });
 });

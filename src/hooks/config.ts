@@ -17,7 +17,10 @@ const DEFAULT_CONFIG_VALUES: Record<string, boolean> = {
 
 export { hasBinary, resolveConfigPath, resolveRuntimePlatform };
 
-export function isConfigPathTruthy(config: OpenClawConfig | undefined, pathStr: string): boolean {
+export function isConfigPathTruthy(
+  config: OpenClawConfig | undefined,
+  pathStr: string,
+): boolean {
   return isConfigPathTruthyWithDefaults(config, pathStr, DEFAULT_CONFIG_VALUES);
 }
 
@@ -55,7 +58,8 @@ function evaluateHookRuntimeEligibility(params: {
   return evaluateRuntimeEligibility({
     ...base,
     hasBin: hasBinary,
-    hasEnv: (envName) => Boolean(process.env[envName] || hookConfig?.env?.[envName]),
+    hasEnv: (envName) =>
+      Boolean(process.env[envName] || hookConfig?.env?.[envName]),
     isConfigPathTruthy: (configPath) => isConfigPathTruthy(config, configPath),
   });
 }

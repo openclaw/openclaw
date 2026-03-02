@@ -24,7 +24,10 @@ export function applyChannelMatchMeta<
 export function resolveChannelMatchConfig<
   TEntry,
   TResult extends { matchKey?: string; matchSource?: ChannelMatchSource },
->(match: ChannelEntryMatch<TEntry>, resolveEntry: (entry: TEntry) => TResult): TResult | null {
+>(
+  match: ChannelEntryMatch<TEntry>,
+  resolveEntry: (entry: TEntry) => TResult,
+): TResult | null {
   if (!match.entry) {
     return null;
   }
@@ -40,7 +43,9 @@ export function normalizeChannelSlug(value: string): string {
     .replace(/^-+|-+$/g, "");
 }
 
-export function buildChannelKeyCandidates(...keys: Array<string | undefined | null>): string[] {
+export function buildChannelKeyCandidates(
+  ...keys: Array<string | undefined | null>
+): string[] {
   const seen = new Set<string>();
   const candidates: string[] = [];
   for (const key of keys) {
@@ -72,7 +77,10 @@ export function resolveChannelEntryMatch<T>(params: {
     match.key = key;
     break;
   }
-  if (params.wildcardKey && Object.prototype.hasOwnProperty.call(entries, params.wildcardKey)) {
+  if (
+    params.wildcardKey &&
+    Object.prototype.hasOwnProperty.call(entries, params.wildcardKey)
+  ) {
     match.wildcardEntry = entries[params.wildcardKey];
     match.wildcardKey = params.wildcardKey;
   }
@@ -98,7 +106,9 @@ export function resolveChannelEntryMatchWithFallback<T>(params: {
 
   const normalizeKey = params.normalizeKey;
   if (normalizeKey) {
-    const normalizedKeys = params.keys.map((key) => normalizeKey(key)).filter(Boolean);
+    const normalizedKeys = params.keys
+      .map((key) => normalizeKey(key))
+      .filter(Boolean);
     if (normalizedKeys.length > 0) {
       for (const [entryKey, entry] of Object.entries(params.entries ?? {})) {
         const normalizedEntry = normalizeKey(entryKey);
@@ -117,7 +127,10 @@ export function resolveChannelEntryMatchWithFallback<T>(params: {
 
   const parentKeys = params.parentKeys ?? [];
   if (parentKeys.length > 0) {
-    const parent = resolveChannelEntryMatch({ entries: params.entries, keys: parentKeys });
+    const parent = resolveChannelEntryMatch({
+      entries: params.entries,
+      keys: parentKeys,
+    });
     if (parent.entry && parent.key) {
       return {
         ...direct,
@@ -130,11 +143,16 @@ export function resolveChannelEntryMatchWithFallback<T>(params: {
       };
     }
     if (normalizeKey) {
-      const normalizedParentKeys = parentKeys.map((key) => normalizeKey(key)).filter(Boolean);
+      const normalizedParentKeys = parentKeys
+        .map((key) => normalizeKey(key))
+        .filter(Boolean);
       if (normalizedParentKeys.length > 0) {
         for (const [entryKey, entry] of Object.entries(params.entries ?? {})) {
           const normalizedEntry = normalizeKey(entryKey);
-          if (normalizedEntry && normalizedParentKeys.includes(normalizedEntry)) {
+          if (
+            normalizedEntry &&
+            normalizedParentKeys.includes(normalizedEntry)
+          ) {
             return {
               ...direct,
               entry,

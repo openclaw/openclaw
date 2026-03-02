@@ -3,10 +3,18 @@ import { cancel, confirm, isCancel, multiselect } from "@clack/prompts";
 import { isNixMode } from "../config/config.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { stylePromptHint, stylePromptMessage, stylePromptTitle } from "../terminal/prompt-style.js";
+import {
+  stylePromptHint,
+  stylePromptMessage,
+  stylePromptTitle,
+} from "../terminal/prompt-style.js";
 import { resolveHomeDir } from "../utils.js";
 import { resolveCleanupPlanFromDisk } from "./cleanup-plan.js";
-import { removePath, removeStateAndLinkedPaths, removeWorkspaceDirs } from "./cleanup-utils.js";
+import {
+  removePath,
+  removeStateAndLinkedPaths,
+  removeWorkspaceDirs,
+} from "./cleanup-utils.js";
 
 type UninstallScope = "service" | "state" | "workspace" | "app";
 
@@ -26,7 +34,9 @@ const multiselectStyled = <T>(params: Parameters<typeof multiselect<T>>[0]) =>
     ...params,
     message: stylePromptMessage(params.message),
     options: params.options.map((opt) =>
-      opt.hint === undefined ? opt : { ...opt, hint: stylePromptHint(opt.hint) },
+      opt.hint === undefined
+        ? opt
+        : { ...opt, hint: stylePromptHint(opt.hint) },
     ),
   });
 
@@ -34,7 +44,9 @@ function buildScopeSelection(opts: UninstallOptions): {
   scopes: Set<UninstallScope>;
   hadExplicit: boolean;
 } {
-  const hadExplicit = Boolean(opts.all || opts.service || opts.state || opts.workspace || opts.app);
+  const hadExplicit = Boolean(
+    opts.all || opts.service || opts.state || opts.workspace || opts.app,
+  );
   const scopes = new Set<UninstallScope>();
   if (opts.all || opts.service) {
     scopes.add("service");
@@ -92,7 +104,10 @@ async function removeMacApp(runtime: RuntimeEnv, dryRun?: boolean) {
   });
 }
 
-export async function uninstallCommand(runtime: RuntimeEnv, opts: UninstallOptions) {
+export async function uninstallCommand(
+  runtime: RuntimeEnv,
+  opts: UninstallOptions,
+) {
   const { scopes, hadExplicit } = buildScopeSelection(opts);
   const interactive = !opts.nonInteractive;
   if (!interactive && !opts.yes) {
@@ -103,7 +118,9 @@ export async function uninstallCommand(runtime: RuntimeEnv, opts: UninstallOptio
 
   if (!hadExplicit) {
     if (!interactive) {
-      runtime.error("Non-interactive mode requires explicit scopes (use --all).");
+      runtime.error(
+        "Non-interactive mode requires explicit scopes (use --all).",
+      );
       runtime.exit(1);
       return;
     }
@@ -126,7 +143,9 @@ export async function uninstallCommand(runtime: RuntimeEnv, opts: UninstallOptio
       initialValues: ["service", "state", "workspace"],
     });
     if (isCancel(selection)) {
-      cancel(stylePromptTitle("Uninstall cancelled.") ?? "Uninstall cancelled.");
+      cancel(
+        stylePromptTitle("Uninstall cancelled.") ?? "Uninstall cancelled.",
+      );
       runtime.exit(0);
       return;
     }
@@ -145,15 +164,23 @@ export async function uninstallCommand(runtime: RuntimeEnv, opts: UninstallOptio
       message: stylePromptMessage("Proceed with uninstall?"),
     });
     if (isCancel(ok) || !ok) {
-      cancel(stylePromptTitle("Uninstall cancelled.") ?? "Uninstall cancelled.");
+      cancel(
+        stylePromptTitle("Uninstall cancelled.") ?? "Uninstall cancelled.",
+      );
       runtime.exit(0);
       return;
     }
   }
 
   const dryRun = Boolean(opts.dryRun);
-  const { stateDir, configPath, oauthDir, configInsideState, oauthInsideState, workspaceDirs } =
-    resolveCleanupPlanFromDisk();
+  const {
+    stateDir,
+    configPath,
+    oauthDir,
+    configInsideState,
+    oauthInsideState,
+    workspaceDirs,
+  } = resolveCleanupPlanFromDisk();
 
   if (scopes.has("service")) {
     if (dryRun) {
@@ -183,8 +210,13 @@ export async function uninstallCommand(runtime: RuntimeEnv, opts: UninstallOptio
 
   if (scopes.has("state") && !scopes.has("workspace")) {
     const home = resolveHomeDir();
-    if (home && workspaceDirs.some((dir) => dir.startsWith(path.resolve(home)))) {
-      runtime.log("Tip: workspaces were preserved. Re-run with --workspace to remove them.");
+    if (
+      home &&
+      workspaceDirs.some((dir) => dir.startsWith(path.resolve(home)))
+    ) {
+      runtime.log(
+        "Tip: workspaces were preserved. Re-run with --workspace to remove them.",
+      );
     }
   }
 }

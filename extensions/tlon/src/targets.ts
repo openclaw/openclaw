@@ -13,7 +13,9 @@ export function normalizeShip(raw: string): string {
   return trimmed.startsWith("~") ? trimmed : `~${trimmed}`;
 }
 
-export function parseChannelNest(raw: string): { hostShip: string; channelName: string } | null {
+export function parseChannelNest(
+  raw: string,
+): { hostShip: string; channelName: string } | null {
   const match = NEST_RE.exec(raw.trim());
   if (!match) {
     return null;

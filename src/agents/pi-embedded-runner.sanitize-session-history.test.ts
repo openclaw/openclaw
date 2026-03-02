@@ -54,7 +54,9 @@ describe("sanitizeSessionHistory", () => {
   };
 
   const getAssistantContentTypes = (messages: AgentMessage[]) =>
-    getAssistantMessage(messages).content.map((block: { type: string }) => block.type);
+    getAssistantMessage(messages).content.map(
+      (block: { type: string }) => block.type,
+    );
 
   const makeThinkingAndTextAssistantMessages = (
     thinkingSignature: string = "some_sig",
@@ -92,11 +94,16 @@ describe("sanitizeSessionHistory", () => {
       role: "assistant",
       content: [{ type: "text", text: params.text }],
       stopReason: "stop",
-      ...(typeof params.timestamp === "number" ? { timestamp: params.timestamp } : {}),
+      ...(typeof params.timestamp === "number"
+        ? { timestamp: params.timestamp }
+        : {}),
       usage: params.usage,
     }) as unknown as AgentMessage;
 
-  const makeCompactionSummaryMessage = (tokensBefore: number, timestamp: string) =>
+  const makeCompactionSummaryMessage = (
+    tokensBefore: number,
+    timestamp: string,
+  ) =>
     ({
       role: "compactionSummary",
       summary: "compressed",
@@ -171,7 +178,10 @@ describe("sanitizeSessionHistory", () => {
     expect(helpers.sanitizeSessionMessagesImages).toHaveBeenCalledWith(
       mockMessages,
       "session:history",
-      expect.objectContaining({ sanitizeMode: "full", sanitizeToolCallIds: true }),
+      expect.objectContaining({
+        sanitizeMode: "full",
+        sanitizeToolCallIds: true,
+      }),
     );
   });
 
@@ -187,7 +197,10 @@ describe("sanitizeSessionHistory", () => {
     expect(helpers.sanitizeSessionMessagesImages).toHaveBeenCalledWith(
       mockMessages,
       "session:history",
-      expect.objectContaining({ sanitizeMode: "images-only", sanitizeToolCallIds: false }),
+      expect.objectContaining({
+        sanitizeMode: "images-only",
+        sanitizeToolCallIds: false,
+      }),
     );
   });
 
@@ -235,9 +248,9 @@ describe("sanitizeSessionHistory", () => {
 
     const result = await sanitizeOpenAIHistory(messages);
 
-    const staleAssistant = result.find((message) => message.role === "assistant") as
-      | (AgentMessage & { usage?: unknown })
-      | undefined;
+    const staleAssistant = result.find(
+      (message) => message.role === "assistant",
+    ) as (AgentMessage & { usage?: unknown }) | undefined;
     expect(staleAssistant).toBeDefined();
     expect(staleAssistant?.usage).toEqual(makeZeroUsageSnapshot());
   });
@@ -271,7 +284,10 @@ describe("sanitizeSessionHistory", () => {
 
     const compactionTs = Date.parse("2026-02-26T12:00:00.000Z");
     const messages = [
-      makeCompactionSummaryMessage(191_919, new Date(compactionTs).toISOString()),
+      makeCompactionSummaryMessage(
+        191_919,
+        new Date(compactionTs).toISOString(),
+      ),
       makeAssistantUsageMessage({
         text: "kept pre-compaction answer",
         timestamp: compactionTs - 1_000,
@@ -292,13 +308,20 @@ describe("sanitizeSessionHistory", () => {
 
     const compactionTs = Date.parse("2026-02-26T12:00:00.000Z");
     const messages = [
-      makeCompactionSummaryMessage(123_000, new Date(compactionTs).toISOString()),
+      makeCompactionSummaryMessage(
+        123_000,
+        new Date(compactionTs).toISOString(),
+      ),
       makeAssistantUsageMessage({
         text: "kept pre-compaction answer",
         timestamp: compactionTs - 2_000,
         usage: makeUsage(120_000, 3_000, 123_000),
       }),
-      { role: "user", content: "new question", timestamp: compactionTs + 1_000 },
+      {
+        role: "user",
+        content: "new question",
+        timestamp: compactionTs + 1_000,
+      },
       makeAssistantUsageMessage({
         text: "fresh answer",
         timestamp: compactionTs + 2_000,
@@ -353,7 +376,9 @@ describe("sanitizeSessionHistory", () => {
     const messages = [
       {
         role: "assistant",
-        content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
+        content: [
+          { type: "toolCall", id: "call_1", name: "read", arguments: {} },
+        ],
       },
     ] as unknown as AgentMessage[];
 
@@ -375,7 +400,9 @@ describe("sanitizeSessionHistory", () => {
       { role: "user", content: "hello" },
     ] as unknown as AgentMessage[];
 
-    const result = await sanitizeOpenAIHistory(messages, { sessionId: "test-session" });
+    const result = await sanitizeOpenAIHistory(messages, {
+      sessionId: "test-session",
+    });
 
     expect(result.map((msg) => msg.role)).toEqual(["user"]);
   });
@@ -391,7 +418,12 @@ describe("sanitizeSessionHistory", () => {
             name: 'toolu_01mvznfebfuu <|tool_call_argument_begin|> {"command"',
             arguments: {},
           },
-          { type: "toolCall", id: "call_long", name: `read_${"x".repeat(80)}`, arguments: {} },
+          {
+            type: "toolCall",
+            id: "call_long",
+            name: `read_${"x".repeat(80)}`,
+            arguments: {},
+          },
         ],
       },
       { role: "user", content: "hello" },
@@ -406,7 +438,9 @@ describe("sanitizeSessionHistory", () => {
     const messages = [
       {
         role: "assistant",
-        content: [{ type: "toolCall", id: "call_1", name: "write", arguments: {} }],
+        content: [
+          { type: "toolCall", id: "call_1", name: "write", arguments: {} },
+        ],
       },
     ] as unknown as AgentMessage[];
 
@@ -426,7 +460,9 @@ describe("sanitizeSessionHistory", () => {
       }),
     ];
     const sessionManager = makeInMemorySessionManager(sessionEntries);
-    const messages = makeReasoningAssistantMessages({ thinkingSignature: "json" });
+    const messages = makeReasoningAssistantMessages({
+      thinkingSignature: "json",
+    });
 
     const result = await sanitizeWithOpenAIResponses({
       sanitizeSessionHistory,
@@ -458,7 +494,9 @@ describe("sanitizeSessionHistory", () => {
     const messages = [
       {
         role: "assistant",
-        content: [{ type: "toolCall", id: "tool_abc123", name: "read", arguments: {} }],
+        content: [
+          { type: "toolCall", id: "tool_abc123", name: "read", arguments: {} },
+        ],
       },
       {
         role: "toolResult",
@@ -484,12 +522,17 @@ describe("sanitizeSessionHistory", () => {
       sessionId: TEST_SESSION_ID,
     });
 
-    expect(result.map((msg) => msg.role)).toEqual(["assistant", "toolResult", "user"]);
+    expect(result.map((msg) => msg.role)).toEqual([
+      "assistant",
+      "toolResult",
+      "user",
+    ]);
     expect(
       result.some(
         (msg) =>
           msg.role === "toolResult" &&
-          (msg as { toolCallId?: string }).toolCallId === "tool_01VihkDRptyLpX1ApUPe7ooU",
+          (msg as { toolCallId?: string }).toolCallId ===
+            "tool_01VihkDRptyLpX1ApUPe7ooU",
       ),
     ).toBe(false);
   });
@@ -543,7 +586,12 @@ describe("sanitizeSessionHistory", () => {
             thinking: "I should use the read tool",
             thinkingSignature: "reasoning_text",
           },
-          { type: "toolCall", id: "tool_123", name: "read", arguments: { path: "/tmp/test" } },
+          {
+            type: "toolCall",
+            id: "tool_123",
+            name: "read",
+            arguments: { path: "/tmp/test" },
+          },
           { type: "text", text: "Let me read that file." },
         ],
       },
@@ -579,7 +627,10 @@ describe("sanitizeSessionHistory", () => {
 
     const messages = makeThinkingAndTextAssistantMessages();
 
-    const result = await sanitizeGithubCopilotHistory({ messages, modelId: "gpt-5.2" });
+    const result = await sanitizeGithubCopilotHistory({
+      messages,
+      modelId: "gpt-5.2",
+    });
     const types = getAssistantContentTypes(result);
     expect(types).toContain("thinking");
   });

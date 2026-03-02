@@ -54,7 +54,10 @@ export function buildTailnetHttpsOrigin(rawHost: string): string | null {
   }
 }
 
-export function appendAllowedOrigin(existing: string[] | undefined, origin: string): string[] {
+export function appendAllowedOrigin(
+  existing: string[] | undefined,
+  origin: string,
+): string[] {
   const current = existing ?? [];
   const normalized = origin.toLowerCase();
   if (current.some((entry) => entry.toLowerCase() === normalized)) {
@@ -71,7 +74,10 @@ export async function maybeAddTailnetOriginToControlUiAllowedOrigins(params: {
   if (params.tailscaleMode !== "serve" && params.tailscaleMode !== "funnel") {
     return params.config;
   }
-  const tsOrigin = await getTailnetHostname(undefined, params.tailscaleBin ?? undefined)
+  const tsOrigin = await getTailnetHostname(
+    undefined,
+    params.tailscaleBin ?? undefined,
+  )
     .then((host) => buildTailnetHttpsOrigin(host))
     .catch(() => null);
   if (!tsOrigin) {

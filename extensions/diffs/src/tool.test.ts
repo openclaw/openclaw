@@ -38,7 +38,9 @@ describe("diffs tool", () => {
 
     const text = readTextContent(result, 0);
     expect(text).toContain("http://127.0.0.1:18789/plugins/diffs/view/");
-    expect((result?.details as Record<string, unknown>).viewerUrl).toBeDefined();
+    expect(
+      (result?.details as Record<string, unknown>).viewerUrl,
+    ).toBeDefined();
   });
 
   it("does not expose reserved format in the tool schema", async () => {
@@ -48,7 +50,9 @@ describe("diffs tool", () => {
       defaults: DEFAULT_DIFFS_TOOL_DEFAULTS,
     });
 
-    const parameters = tool.parameters as { properties?: Record<string, unknown> };
+    const parameters = tool.parameters as {
+      properties?: Record<string, unknown>;
+    };
     expect(parameters.properties).toBeDefined();
     expect(parameters.properties).not.toHaveProperty("format");
   });
@@ -82,15 +86,25 @@ describe("diffs tool", () => {
     expect(readTextContent(result, 0)).toContain("Use the `message` tool");
     expect(result?.content).toHaveLength(1);
     expect((result?.details as Record<string, unknown>).filePath).toBeDefined();
-    expect((result?.details as Record<string, unknown>).imagePath).toBeDefined();
+    expect(
+      (result?.details as Record<string, unknown>).imagePath,
+    ).toBeDefined();
     expect((result?.details as Record<string, unknown>).format).toBe("png");
-    expect((result?.details as Record<string, unknown>).fileQuality).toBe("standard");
-    expect((result?.details as Record<string, unknown>).imageQuality).toBe("standard");
+    expect((result?.details as Record<string, unknown>).fileQuality).toBe(
+      "standard",
+    );
+    expect((result?.details as Record<string, unknown>).imageQuality).toBe(
+      "standard",
+    );
     expect((result?.details as Record<string, unknown>).fileScale).toBe(2);
     expect((result?.details as Record<string, unknown>).imageScale).toBe(2);
     expect((result?.details as Record<string, unknown>).fileMaxWidth).toBe(960);
-    expect((result?.details as Record<string, unknown>).imageMaxWidth).toBe(960);
-    expect((result?.details as Record<string, unknown>).viewerUrl).toBeUndefined();
+    expect((result?.details as Record<string, unknown>).imageMaxWidth).toBe(
+      960,
+    );
+    expect(
+      (result?.details as Record<string, unknown>).viewerUrl,
+    ).toBeUndefined();
     expect(cleanupSpy).toHaveBeenCalledTimes(1);
   });
 
@@ -102,7 +116,12 @@ describe("diffs tool", () => {
           image,
         }: {
           outputPath: string;
-          image: { format: string; qualityPreset: string; scale: number; maxWidth: number };
+          image: {
+            format: string;
+            qualityPreset: string;
+            scale: number;
+            maxWidth: number;
+          };
         }) => {
           expect(image.format).toBe("pdf");
           expect(outputPath).toMatch(/preview\.pdf$/);
@@ -130,7 +149,9 @@ describe("diffs tool", () => {
     expect(screenshotter.screenshotHtml).toHaveBeenCalledTimes(1);
     expect(readTextContent(result, 0)).toContain("Diff PDF generated at:");
     expect((result?.details as Record<string, unknown>).format).toBe("pdf");
-    expect((result?.details as Record<string, unknown>).filePath).toMatch(/preview\.pdf$/);
+    expect((result?.details as Record<string, unknown>).filePath).toMatch(
+      /preview\.pdf$/,
+    );
   });
 
   it("accepts mode=file as an alias for file artifact rendering", async () => {
@@ -150,7 +171,9 @@ describe("diffs tool", () => {
 
     expect(screenshotter.screenshotHtml).toHaveBeenCalledTimes(1);
     expect((result?.details as Record<string, unknown>).mode).toBe("file");
-    expect((result?.details as Record<string, unknown>).viewerUrl).toBeUndefined();
+    expect(
+      (result?.details as Record<string, unknown>).viewerUrl,
+    ).toBeUndefined();
   });
 
   it("honors ttlSeconds for artifact-only file output", async () => {
@@ -167,7 +190,8 @@ describe("diffs tool", () => {
         mode: "file",
         ttlSeconds: 1,
       });
-      const filePath = (result?.details as Record<string, unknown>).filePath as string;
+      const filePath = (result?.details as Record<string, unknown>)
+        .filePath as string;
       await expect(fs.stat(filePath)).resolves.toBeDefined();
 
       vi.setSystemTime(new Date(now.getTime() + 2_000));
@@ -204,7 +228,9 @@ describe("diffs tool", () => {
 
     expect((result?.details as Record<string, unknown>).fileQuality).toBe("hq");
     expect((result?.details as Record<string, unknown>).fileScale).toBe(2.4);
-    expect((result?.details as Record<string, unknown>).fileMaxWidth).toBe(1100);
+    expect((result?.details as Record<string, unknown>).fileMaxWidth).toBe(
+      1100,
+    );
   });
 
   it("accepts deprecated format alias for fileFormat", async () => {
@@ -215,7 +241,12 @@ describe("diffs tool", () => {
           image,
         }: {
           outputPath: string;
-          image: { format: string; qualityPreset: string; scale: number; maxWidth: number };
+          image: {
+            format: string;
+            qualityPreset: string;
+            scale: number;
+            maxWidth: number;
+          };
         }) => {
           expect(image.format).toBe("pdf");
           await fs.mkdir(path.dirname(outputPath), { recursive: true });
@@ -240,7 +271,9 @@ describe("diffs tool", () => {
     });
 
     expect((result?.details as Record<string, unknown>).fileFormat).toBe("pdf");
-    expect((result?.details as Record<string, unknown>).filePath).toMatch(/preview\.pdf$/);
+    expect((result?.details as Record<string, unknown>).filePath).toMatch(
+      /preview\.pdf$/,
+    );
   });
 
   it("honors defaults.mode=file when mode is omitted", async () => {
@@ -257,7 +290,9 @@ describe("diffs tool", () => {
 
     expect(screenshotter.screenshotHtml).toHaveBeenCalledTimes(1);
     expect((result?.details as Record<string, unknown>).mode).toBe("file");
-    expect((result?.details as Record<string, unknown>).viewerUrl).toBeUndefined();
+    expect(
+      (result?.details as Record<string, unknown>).viewerUrl,
+    ).toBeUndefined();
   });
 
   it("falls back to view output when both mode cannot render an image", async () => {
@@ -280,8 +315,12 @@ describe("diffs tool", () => {
 
     expect(result?.content).toHaveLength(1);
     expect(readTextContent(result, 0)).toContain("File rendering failed");
-    expect((result?.details as Record<string, unknown>).fileError).toBe("browser missing");
-    expect((result?.details as Record<string, unknown>).imageError).toBe("browser missing");
+    expect((result?.details as Record<string, unknown>).fileError).toBe(
+      "browser missing",
+    );
+    expect((result?.details as Record<string, unknown>).imageError).toBe(
+      "browser missing",
+    );
   });
 
   it("rejects invalid base URLs as tool input errors", async () => {
@@ -358,7 +397,9 @@ describe("diffs tool", () => {
     expect(readTextContent(result, 0)).toContain("Diff viewer ready.");
     expect((result?.details as Record<string, unknown>).mode).toBe("view");
 
-    const viewerPath = String((result?.details as Record<string, unknown>).viewerPath);
+    const viewerPath = String(
+      (result?.details as Record<string, unknown>).viewerPath,
+    );
     const [id] = viewerPath.split("/").filter(Boolean).slice(-2);
     const html = await store.readHtml(id);
     expect(html).toContain('body data-theme="light"');
@@ -404,10 +445,16 @@ describe("diffs tool", () => {
     expect((result?.details as Record<string, unknown>).mode).toBe("both");
     expect(screenshotter.screenshotHtml).toHaveBeenCalledTimes(1);
     expect((result?.details as Record<string, unknown>).format).toBe("png");
-    expect((result?.details as Record<string, unknown>).fileQuality).toBe("print");
+    expect((result?.details as Record<string, unknown>).fileQuality).toBe(
+      "print",
+    );
     expect((result?.details as Record<string, unknown>).fileScale).toBe(2.75);
-    expect((result?.details as Record<string, unknown>).fileMaxWidth).toBe(1320);
-    const viewerPath = String((result?.details as Record<string, unknown>).viewerPath);
+    expect((result?.details as Record<string, unknown>).fileMaxWidth).toBe(
+      1320,
+    );
+    const viewerPath = String(
+      (result?.details as Record<string, unknown>).viewerPath,
+    );
     const [id] = viewerPath.split("/").filter(Boolean).slice(-2);
     const html = await store.readHtml(id);
     expect(html).toContain('body data-theme="dark"');
@@ -492,8 +539,9 @@ function createPngScreenshotter(
 }
 
 function readTextContent(result: unknown, index: number): string {
-  const content = (result as { content?: Array<{ type?: string; text?: string }> } | undefined)
-    ?.content;
+  const content = (
+    result as { content?: Array<{ type?: string; text?: string }> } | undefined
+  )?.content;
   const entry = content?.[index];
   return entry?.type === "text" ? (entry.text ?? "") : "";
 }

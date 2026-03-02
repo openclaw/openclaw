@@ -21,7 +21,12 @@ type ConfigIssue = {
   message: string;
 };
 
-const OLLAMA_API_KEY_PATH: PathSegment[] = ["models", "providers", "ollama", "apiKey"];
+const OLLAMA_API_KEY_PATH: PathSegment[] = [
+  "models",
+  "providers",
+  "ollama",
+  "apiKey",
+];
 const OLLAMA_PROVIDER_PATH: PathSegment[] = ["models", "providers", "ollama"];
 const OLLAMA_DEFAULT_BASE_URL = "http://127.0.0.1:11434";
 
@@ -87,7 +92,9 @@ function parseValue(raw: string, opts: ConfigSetParseOpts): unknown {
     try {
       return JSON5.parse(trimmed);
     } catch (err) {
-      throw new Error(`Failed to parse JSON5 value: ${String(err)}`, { cause: err });
+      throw new Error(`Failed to parse JSON5 value: ${String(err)}`, {
+        cause: err,
+      });
     }
   }
 
@@ -102,15 +109,22 @@ function hasOwnPathKey(value: Record<string, unknown>, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(value, key);
 }
 
-function normalizeConfigIssues(issues: ReadonlyArray<ConfigIssue>): ConfigIssue[] {
+function normalizeConfigIssues(
+  issues: ReadonlyArray<ConfigIssue>,
+): ConfigIssue[] {
   return issues.map((issue) => ({
     path: issue.path || "<root>",
     message: issue.message,
   }));
 }
 
-function formatConfigIssueLines(issues: ReadonlyArray<ConfigIssue>, marker: string): string[] {
-  return normalizeConfigIssues(issues).map((issue) => `${marker} ${issue.path}: ${issue.message}`);
+function formatConfigIssueLines(
+  issues: ReadonlyArray<ConfigIssue>,
+  marker: string,
+): string[] {
+  return normalizeConfigIssues(issues).map(
+    (issue) => `${marker} ${issue.path}: ${issue.message}`,
+  );
 }
 
 function formatDoctorHint(message: string): string {
@@ -125,7 +139,10 @@ function validatePathSegments(path: PathSegment[]): void {
   }
 }
 
-function getAtPath(root: unknown, path: PathSegment[]): { found: boolean; value?: unknown } {
+function getAtPath(
+  root: unknown,
+  path: PathSegment[],
+): { found: boolean; value?: unknown } {
   let current: unknown = root;
   for (const segment of path) {
     if (!current || typeof current !== "object") {
@@ -151,7 +168,11 @@ function getAtPath(root: unknown, path: PathSegment[]): { found: boolean; value?
   return { found: true, value: current };
 }
 
-function setAtPath(root: Record<string, unknown>, path: PathSegment[], value: unknown): void {
+function setAtPath(
+  root: Record<string, unknown>,
+  path: PathSegment[],
+  value: unknown,
+): void {
   let current: unknown = root;
   for (let i = 0; i < path.length - 1; i += 1) {
     const segment = path[i];
@@ -159,7 +180,9 @@ function setAtPath(root: Record<string, unknown>, path: PathSegment[], value: un
     const nextIsIndex = Boolean(next && isIndexSegment(next));
     if (Array.isArray(current)) {
       if (!isIndexSegment(segment)) {
-        throw new Error(`Expected numeric index for array segment "${segment}"`);
+        throw new Error(
+          `Expected numeric index for array segment "${segment}"`,
+        );
       }
       const index = Number.parseInt(segment, 10);
       const existing = current[index];
@@ -173,7 +196,9 @@ function setAtPath(root: Record<string, unknown>, path: PathSegment[], value: un
       throw new Error(`Cannot traverse into "${segment}" (not an object)`);
     }
     const record = current as Record<string, unknown>;
-    const existing = hasOwnPathKey(record, segment) ? record[segment] : undefined;
+    const existing = hasOwnPathKey(record, segment)
+      ? record[segment]
+      : undefined;
     if (!existing || typeof existing !== "object") {
       record[segment] = nextIsIndex ? [] : {};
     }
@@ -195,7 +220,10 @@ function setAtPath(root: Record<string, unknown>, path: PathSegment[], value: un
   (current as Record<string, unknown>)[last] = value;
 }
 
-function unsetAtPath(root: Record<string, unknown>, path: PathSegment[]): boolean {
+function unsetAtPath(
+  root: Record<string, unknown>,
+  path: PathSegment[],
+): boolean {
   let current: unknown = root;
   for (let i = 0; i < path.length - 1; i += 1) {
     const segment = path[i];
@@ -268,7 +296,8 @@ function parseRequiredPath(path: string): PathSegment[] {
 
 function pathEquals(path: PathSegment[], expected: PathSegment[]): boolean {
   return (
-    path.length === expected.length && path.every((segment, index) => segment === expected[index])
+    path.length === expected.length &&
+    path.every((segment, index) => segment === expected[index])
   );
 }
 
@@ -290,7 +319,11 @@ function ensureValidOllamaProviderForApiKeySet(
   });
 }
 
-export async function runConfigGet(opts: { path: string; json?: boolean; runtime?: RuntimeEnv }) {
+export async function runConfigGet(opts: {
+  path: string;
+  json?: boolean;
+  runtime?: RuntimeEnv;
+}) {
   const runtime = opts.runtime ?? defaultRuntime;
   try {
     const parsedPath = parseRequiredPath(opts.path);
@@ -321,7 +354,10 @@ export async function runConfigGet(opts: { path: string; json?: boolean; runtime
   }
 }
 
-export async function runConfigUnset(opts: { path: string; runtime?: RuntimeEnv }) {
+export async function runConfigUnset(opts: {
+  path: string;
+  runtime?: RuntimeEnv;
+}) {
   const runtime = opts.runtime ?? defaultRuntime;
   try {
     const parsedPath = parseRequiredPath(opts.path);
@@ -355,7 +391,9 @@ export async function runConfigFile(opts: { runtime?: RuntimeEnv }) {
   }
 }
 
-export async function runConfigValidate(opts: { json?: boolean; runtime?: RuntimeEnv } = {}) {
+export async function runConfigValidate(
+  opts: { json?: boolean; runtime?: RuntimeEnv } = {},
+) {
   const runtime = opts.runtime ?? defaultRuntime;
   let outputPath = CONFIG_PATH ?? "openclaw.json";
 
@@ -366,7 +404,13 @@ export async function runConfigValidate(opts: { json?: boolean; runtime?: Runtim
 
     if (!snapshot.exists) {
       if (opts.json) {
-        runtime.log(JSON.stringify({ valid: false, path: outputPath, error: "file not found" }));
+        runtime.log(
+          JSON.stringify({
+            valid: false,
+            path: outputPath,
+            error: "file not found",
+          }),
+        );
       } else {
         runtime.error(danger(`Config file not found: ${shortPath}`));
       }
@@ -378,14 +422,18 @@ export async function runConfigValidate(opts: { json?: boolean; runtime?: Runtim
       const issues = normalizeConfigIssues(snapshot.issues);
 
       if (opts.json) {
-        runtime.log(JSON.stringify({ valid: false, path: outputPath, issues }, null, 2));
+        runtime.log(
+          JSON.stringify({ valid: false, path: outputPath, issues }, null, 2),
+        );
       } else {
         runtime.error(danger(`Config invalid at ${shortPath}:`));
         for (const line of formatConfigIssueLines(issues, danger("×"))) {
           runtime.error(`  ${line}`);
         }
         runtime.error("");
-        runtime.error(formatDoctorHint("to repair, or fix the keys above manually."));
+        runtime.error(
+          formatDoctorHint("to repair, or fix the keys above manually."),
+        );
       }
       runtime.exit(1);
       return;
@@ -398,7 +446,9 @@ export async function runConfigValidate(opts: { json?: boolean; runtime?: Runtim
     }
   } catch (err) {
     if (opts.json) {
-      runtime.log(JSON.stringify({ valid: false, path: outputPath, error: String(err) }));
+      runtime.log(
+        JSON.stringify({ valid: false, path: outputPath, error: String(err) }),
+      );
     } else {
       runtime.error(danger(`Config validation error: ${String(err)}`));
     }
@@ -424,7 +474,8 @@ export function registerConfigCli(program: Command) {
       [] as string[],
     )
     .action(async (opts) => {
-      const { configureCommandFromSectionsArg } = await import("../commands/configure.js");
+      const { configureCommandFromSectionsArg } =
+        await import("../commands/configure.js");
       await configureCommandFromSectionsArg(opts.section, defaultRuntime);
     });
 
@@ -442,7 +493,11 @@ export function registerConfigCli(program: Command) {
     .description("Set a config value by dot path")
     .argument("<path>", "Config path (dot or bracket notation)")
     .argument("<value>", "Value (JSON5 or raw string)")
-    .option("--strict-json", "Strict JSON5 parsing (error instead of raw string fallback)", false)
+    .option(
+      "--strict-json",
+      "Strict JSON5 parsing (error instead of raw string fallback)",
+      false,
+    )
     .option("--json", "Legacy alias for --strict-json", false)
     .action(async (path: string, value: string, opts) => {
       try {
@@ -454,11 +509,16 @@ export function registerConfigCli(program: Command) {
         // Use snapshot.resolved (config after $include and ${ENV} resolution, but BEFORE runtime defaults)
         // instead of snapshot.config (runtime-merged with defaults).
         // This prevents runtime defaults from leaking into the written config file (issue #6070)
-        const next = structuredClone(snapshot.resolved) as Record<string, unknown>;
+        const next = structuredClone(snapshot.resolved) as Record<
+          string,
+          unknown
+        >;
         ensureValidOllamaProviderForApiKeySet(next, parsedPath);
         setAtPath(next, parsedPath, parsedValue);
         await writeConfigFile(next);
-        defaultRuntime.log(info(`Updated ${path}. Restart the gateway to apply.`));
+        defaultRuntime.log(
+          info(`Updated ${path}. Restart the gateway to apply.`),
+        );
       } catch (err) {
         defaultRuntime.error(danger(String(err)));
         defaultRuntime.exit(1);
@@ -482,7 +542,9 @@ export function registerConfigCli(program: Command) {
 
   cmd
     .command("validate")
-    .description("Validate the current config against the schema without starting the gateway")
+    .description(
+      "Validate the current config against the schema without starting the gateway",
+    )
     .option("--json", "Output validation result as JSON", false)
     .action(async (opts) => {
       await runConfigValidate({ json: Boolean(opts.json) });

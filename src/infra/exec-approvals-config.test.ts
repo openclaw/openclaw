@@ -60,7 +60,11 @@ describe("exec approvals node host allowlist check", () => {
 
   it("matches exact and wildcard allowlist patterns", () => {
     const cases: Array<{
-      resolution: { rawExecutable: string; resolvedPath: string; executableName: string };
+      resolution: {
+        rawExecutable: string;
+        resolvedPath: string;
+        executableName: string;
+      };
       entries: ExecAllowlistEntry[];
       expectedPattern: string | null;
     }> = [
@@ -149,9 +153,13 @@ describe("exec approvals default agent migration", () => {
       },
     };
     const resolved = resolveExecApprovalsFromFile({ file });
-    expect(resolved.allowlist.map((entry) => entry.pattern)).toEqual(["/bin/legacy"]);
+    expect(resolved.allowlist.map((entry) => entry.pattern)).toEqual([
+      "/bin/legacy",
+    ]);
     expect(resolved.file.agents?.default).toBeUndefined();
-    expect(resolved.file.agents?.main?.allowlist?.[0]?.pattern).toBe("/bin/legacy");
+    expect(resolved.file.agents?.main?.allowlist?.[0]?.pattern).toBe(
+      "/bin/legacy",
+    );
   });
 
   it("prefers main agent settings when both main and default exist", () => {
@@ -164,13 +172,18 @@ describe("exec approvals default agent migration", () => {
     };
     const resolved = resolveExecApprovalsFromFile({ file });
     expect(resolved.agent.ask).toBe("always");
-    expect(resolved.allowlist.map((entry) => entry.pattern)).toEqual(["/bin/main", "/bin/legacy"]);
+    expect(resolved.allowlist.map((entry) => entry.pattern)).toEqual([
+      "/bin/main",
+      "/bin/legacy",
+    ]);
     expect(resolved.file.agents?.default).toBeUndefined();
   });
 });
 
 describe("normalizeExecApprovals handles string allowlist entries (#9790)", () => {
-  function getMainAllowlistPatterns(file: ExecApprovalsFile): string[] | undefined {
+  function getMainAllowlistPatterns(
+    file: ExecApprovalsFile,
+  ): string[] | undefined {
     const normalized = normalizeExecApprovals(file);
     return normalized.agents?.main?.allowlist?.map((entry) => entry.pattern);
   }
@@ -192,7 +205,15 @@ describe("normalizeExecApprovals handles string allowlist entries (#9790)", () =
       agents: {
         main: {
           mode: "allowlist",
-          allowlist: ["things", "remindctl", "memo", "which", "ls", "cat", "echo"],
+          allowlist: [
+            "things",
+            "remindctl",
+            "memo",
+            "which",
+            "ls",
+            "cat",
+            "echo",
+          ],
         },
       },
     } as unknown as ExecApprovalsFile;
@@ -219,7 +240,10 @@ describe("normalizeExecApprovals handles string allowlist entries (#9790)", () =
       version: 1,
       agents: {
         main: {
-          allowlist: [{ pattern: "/usr/bin/ls" }, { pattern: "/usr/bin/cat", id: "existing-id" }],
+          allowlist: [
+            { pattern: "/usr/bin/ls" },
+            { pattern: "/usr/bin/cat", id: "existing-id" },
+          ],
         },
       },
     };
@@ -251,7 +275,13 @@ describe("normalizeExecApprovals handles string allowlist entries (#9790)", () =
       },
       {
         name: "malformed objects dropped",
-        allowlist: [{ pattern: "/usr/bin/ls" }, {}, { pattern: 123 }, { pattern: "   " }, "echo"],
+        allowlist: [
+          { pattern: "/usr/bin/ls" },
+          {},
+          { pattern: 123 },
+          { pattern: "   " },
+          "echo",
+        ],
         expectedPatterns: ["/usr/bin/ls", "echo"],
       },
       {

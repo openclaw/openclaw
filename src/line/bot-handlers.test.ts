@@ -18,29 +18,36 @@ vi.mock("../pairing/pairing-messages.js", () => ({
 
 vi.mock("./download.js", () => ({
   downloadLineMedia: async () => {
-    throw new Error("downloadLineMedia should not be called from bot-handlers tests");
+    throw new Error(
+      "downloadLineMedia should not be called from bot-handlers tests",
+    );
   },
 }));
 
 vi.mock("./send.js", () => ({
   pushMessageLine: async () => {
-    throw new Error("pushMessageLine should not be called from bot-handlers tests");
+    throw new Error(
+      "pushMessageLine should not be called from bot-handlers tests",
+    );
   },
   replyMessageLine: async () => {
-    throw new Error("replyMessageLine should not be called from bot-handlers tests");
+    throw new Error(
+      "replyMessageLine should not be called from bot-handlers tests",
+    );
   },
 }));
 
-const { buildLineMessageContextMock, buildLinePostbackContextMock } = vi.hoisted(() => ({
-  buildLineMessageContextMock: vi.fn(async () => ({
-    ctxPayload: { From: "line:group:group-1" },
-    replyToken: "reply-token",
-    route: { agentId: "default" },
-    isGroup: true,
-    accountId: "default",
-  })),
-  buildLinePostbackContextMock: vi.fn(async () => null),
-}));
+const { buildLineMessageContextMock, buildLinePostbackContextMock } =
+  vi.hoisted(() => ({
+    buildLineMessageContextMock: vi.fn(async () => ({
+      ctxPayload: { From: "line:group:group-1" },
+      replyToken: "reply-token",
+      route: { agentId: "default" },
+      isGroup: true,
+      accountId: "default",
+    })),
+    buildLinePostbackContextMock: vi.fn(async () => null),
+  }));
 
 vi.mock("./bot-message-context.js", () => ({
   buildLineMessageContext: buildLineMessageContextMock,
@@ -60,7 +67,10 @@ vi.mock("./bot-message-context.js", () => ({
 
 const { readAllowFromStoreMock, upsertPairingRequestMock } = vi.hoisted(() => ({
   readAllowFromStoreMock: vi.fn(async () => [] as string[]),
-  upsertPairingRequestMock: vi.fn(async () => ({ code: "CODE", created: true })),
+  upsertPairingRequestMock: vi.fn(async () => ({
+    code: "CODE",
+    created: true,
+  })),
 }));
 
 let handleLineWebhookEvents: typeof import("./bot-handlers.js").handleLineWebhookEvents;
@@ -163,7 +173,9 @@ describe("handleLineWebhookEvents", () => {
 
     await handleLineWebhookEvents([event], {
       cfg: {
-        channels: { line: { groupPolicy: "allowlist", groupAllowFrom: ["user-3"] } },
+        channels: {
+          line: { groupPolicy: "allowlist", groupAllowFrom: ["user-3"] },
+        },
       },
       account: {
         accountId: "default",
@@ -198,7 +210,9 @@ describe("handleLineWebhookEvents", () => {
 
     await handleLineWebhookEvents([event], {
       cfg: {
-        channels: { line: { groupPolicy: "allowlist", groupAllowFrom: ["user-owner"] } },
+        channels: {
+          line: { groupPolicy: "allowlist", groupAllowFrom: ["user-owner"] },
+        },
       },
       account: {
         accountId: "default",

@@ -34,7 +34,11 @@ import {
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { parseTtsDirectives } from "../../tts/tts-core.js";
-import { resolveTtsConfig, textToSpeech, type ResolvedTtsConfig } from "../../tts/tts.js";
+import {
+  resolveTtsConfig,
+  textToSpeech,
+  type ResolvedTtsConfig,
+} from "../../tts/tts.js";
 
 const require = createRequire(import.meta.url);
 
@@ -108,7 +112,10 @@ function mergeTtsConfig(base: TtsConfig, override?: TtsConfig): TtsConfig {
   };
 }
 
-function resolveVoiceTtsConfig(params: { cfg: OpenClawConfig; override?: TtsConfig }): {
+function resolveVoiceTtsConfig(params: {
+  cfg: OpenClawConfig;
+  override?: TtsConfig;
+}): {
   cfg: OpenClawConfig;
   resolved: ResolvedTtsConfig;
 } {
@@ -164,10 +171,18 @@ function createOpusDecoder(): { decoder: OpusDecoder; name: string } | null {
   } catch (nativeErr) {
     try {
       const OpusScript = require("opusscript") as {
-        new (sampleRate: number, channels: number, application: number): OpusDecoder;
+        new (
+          sampleRate: number,
+          channels: number,
+          application: number,
+        ): OpusDecoder;
         Application: { AUDIO: number };
       };
-      const decoder = new OpusScript(SAMPLE_RATE, CHANNELS, OpusScript.Application.AUDIO);
+      const decoder = new OpusScript(
+        SAMPLE_RATE,
+        CHANNELS,
+        OpusScript.Application.AUDIO,
+      );
       if (!warnedOpusFallback) {
         warnedOpusFallback = true;
         logger.warn(
@@ -176,8 +191,12 @@ function createOpusDecoder(): { decoder: OpusDecoder; name: string } | null {
       }
       return { decoder, name: "opusscript" };
     } catch (jsErr) {
-      logger.warn(`discord voice: opus decoder init failed: ${formatErrorMessage(nativeErr)}`);
-      logger.warn(`discord voice: opusscript init failed: ${formatErrorMessage(jsErr)}`);
+      logger.warn(
+        `discord voice: opus decoder init failed: ${formatErrorMessage(nativeErr)}`,
+      );
+      logger.warn(
+        `discord voice: opusscript init failed: ${formatErrorMessage(jsErr)}`,
+      );
     }
   }
   return null;
@@ -202,7 +221,9 @@ async function decodeOpusStream(stream: Readable): Promise<Buffer> {
     }
   } catch (err) {
     if (shouldLogVerbose()) {
-      logVerbose(`discord voice: opus decode failed: ${formatErrorMessage(err)}`);
+      logVerbose(
+        `discord voice: opus decode failed: ${formatErrorMessage(err)}`,
+      );
     }
   }
   return chunks.length > 0 ? Buffer.concat(chunks) : Buffer.alloc(0);
@@ -216,8 +237,12 @@ function estimateDurationSeconds(pcm: Buffer): number {
   return pcm.length / (bytesPerSample * SAMPLE_RATE);
 }
 
-async function writeWavFile(pcm: Buffer): Promise<{ path: string; durationSeconds: number }> {
-  const tempDir = await fs.mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "discord-voice-"));
+async function writeWavFile(
+  pcm: Buffer,
+): Promise<{ path: string; durationSeconds: number }> {
+  const tempDir = await fs.mkdtemp(
+    path.join(resolvePreferredOpenClawTmpDir(), "discord-voice-"),
+  );
   const filePath = path.join(tempDir, `segment-${randomUUID()}.wav`);
   const wav = buildWavBuffer(pcm);
   await fs.writeFile(filePath, wav);
@@ -225,11 +250,16 @@ async function writeWavFile(pcm: Buffer): Promise<{ path: string; durationSecond
   return { path: filePath, durationSeconds: estimateDurationSeconds(pcm) };
 }
 
-function scheduleTempCleanup(tempDir: string, delayMs: number = 30 * 60 * 1000): void {
+function scheduleTempCleanup(
+  tempDir: string,
+  delayMs: number = 30 * 60 * 1000,
+): void {
   const timer = setTimeout(() => {
     fs.rm(tempDir, { recursive: true, force: true }).catch((err) => {
       if (shouldLogVerbose()) {
-        logVerbose(`discord voice: temp cleanup failed for ${tempDir}: ${formatErrorMessage(err)}`);
+        logVerbose(
+          `discord voice: temp cleanup failed for ${tempDir}: ${formatErrorMessage(err)}`,
+        );
       }
     });
   }, delayMs);
@@ -262,7 +292,9 @@ async function transcribeAudio(params: {
       providerRegistry,
       config: params.cfg.tools?.media?.audio,
     });
-    const output = result.outputs.find((entry) => entry.kind === "audio.transcription");
+    const output = result.outputs.find(
+      (entry) => entry.kind === "audio.transcription",
+    );
     const text = output?.text?.trim();
     return text || undefined;
   } finally {
@@ -323,7 +355,9 @@ export class DiscordVoiceManager {
           continue;
         }
         seenGuilds.add(guildId);
-        logVoiceVerbose(`autoJoin: joining guild ${guildId} channel ${entry.channelId}`);
+        logVoiceVerbose(
+          `autoJoin: joining guild ${guildId} channel ${entry.channelId}`,
+        );
         await this.join({
           guildId: entry.guildId,
           channelId: entry.channelId,
@@ -344,7 +378,10 @@ export class DiscordVoiceManager {
     }));
   }
 
-  async join(params: { guildId: string; channelId: string }): Promise<VoiceOperationResult> {
+  async join(params: {
+    guildId: string;
+    channelId: string;
+  }): Promise<VoiceOperationResult> {
     if (!this.voiceEnabled) {
       return {
         ok: false,
@@ -360,19 +397,35 @@ export class DiscordVoiceManager {
 
     const existing = this.sessions.get(guildId);
     if (existing && existing.channelId === channelId) {
-      logVoiceVerbose(`join: already connected to guild ${guildId} channel ${channelId}`);
-      return { ok: true, message: `Already connected to <#${channelId}>.`, guildId, channelId };
+      logVoiceVerbose(
+        `join: already connected to guild ${guildId} channel ${channelId}`,
+      );
+      return {
+        ok: true,
+        message: `Already connected to <#${channelId}>.`,
+        guildId,
+        channelId,
+      };
     }
     if (existing) {
       logVoiceVerbose(`join: replacing existing session for guild ${guildId}`);
       await this.leave({ guildId });
     }
 
-    const channelInfo = await this.params.client.fetchChannel(channelId).catch(() => null);
-    if (!channelInfo || ("type" in channelInfo && !isVoiceChannel(channelInfo.type))) {
-      return { ok: false, message: `Channel ${channelId} is not a voice channel.` };
+    const channelInfo = await this.params.client
+      .fetchChannel(channelId)
+      .catch(() => null);
+    if (
+      !channelInfo ||
+      ("type" in channelInfo && !isVoiceChannel(channelInfo.type))
+    ) {
+      return {
+        ok: false,
+        message: `Channel ${channelId} is not a voice channel.`,
+      };
     }
-    const channelGuildId = "guildId" in channelInfo ? channelInfo.guildId : undefined;
+    const channelGuildId =
+      "guildId" in channelInfo ? channelInfo.guildId : undefined;
     if (channelGuildId && channelGuildId !== guildId) {
       return { ok: false, message: "Voice channel is not in this guild." };
     }
@@ -384,7 +437,8 @@ export class DiscordVoiceManager {
 
     const adapterCreator = voicePlugin.getGatewayAdapterCreator(guildId);
     const daveEncryption = this.params.discordConfig.voice?.daveEncryption;
-    const decryptionFailureTolerance = this.params.discordConfig.voice?.decryptionFailureTolerance;
+    const decryptionFailureTolerance =
+      this.params.discordConfig.voice?.decryptionFailureTolerance;
     logVoiceVerbose(
       `join: DAVE settings encryption=${daveEncryption === false ? "off" : "on"} tolerance=${
         decryptionFailureTolerance ?? "default"
@@ -401,11 +455,20 @@ export class DiscordVoiceManager {
     });
 
     try {
-      await entersState(connection, VoiceConnectionStatus.Ready, PLAYBACK_READY_TIMEOUT_MS);
-      logVoiceVerbose(`join: connected to guild ${guildId} channel ${channelId}`);
+      await entersState(
+        connection,
+        VoiceConnectionStatus.Ready,
+        PLAYBACK_READY_TIMEOUT_MS,
+      );
+      logVoiceVerbose(
+        `join: connected to guild ${guildId} channel ${channelId}`,
+      );
     } catch (err) {
       connection.destroy();
-      return { ok: false, message: `Failed to join voice channel: ${formatErrorMessage(err)}` };
+      return {
+        ok: false,
+        message: `Failed to join voice channel: ${formatErrorMessage(err)}`,
+      };
     }
 
     const sessionChannelId = channelInfo?.id ?? channelId;
@@ -456,7 +519,10 @@ export class DiscordVoiceManager {
           connection.receiver.speaking.off("start", speakingHandler);
         }
         if (disconnectedHandler) {
-          connection.off(VoiceConnectionStatus.Disconnected, disconnectedHandler);
+          connection.off(
+            VoiceConnectionStatus.Disconnected,
+            disconnectedHandler,
+          );
         }
         if (destroyedHandler) {
           connection.off(VoiceConnectionStatus.Destroyed, destroyedHandler);
@@ -471,7 +537,9 @@ export class DiscordVoiceManager {
 
     speakingHandler = (userId: string) => {
       void this.handleSpeakingStart(entry, userId).catch((err) => {
-        logger.warn(`discord voice: capture failed: ${formatErrorMessage(err)}`);
+        logger.warn(
+          `discord voice: capture failed: ${formatErrorMessage(err)}`,
+        );
       });
     };
 
@@ -507,9 +575,14 @@ export class DiscordVoiceManager {
     };
   }
 
-  async leave(params: { guildId: string; channelId?: string }): Promise<VoiceOperationResult> {
+  async leave(params: {
+    guildId: string;
+    channelId?: string;
+  }): Promise<VoiceOperationResult> {
     const guildId = params.guildId.trim();
-    logVoiceVerbose(`leave requested: guild ${guildId} channel ${params.channelId ?? "current"}`);
+    logVoiceVerbose(
+      `leave requested: guild ${guildId} channel ${params.channelId ?? "current"}`,
+    );
     const entry = this.sessions.get(guildId);
     if (!entry) {
       return { ok: false, message: "Not connected to a voice channel." };
@@ -519,7 +592,9 @@ export class DiscordVoiceManager {
     }
     entry.stop();
     this.sessions.delete(guildId);
-    logVoiceVerbose(`leave: disconnected from guild ${guildId} channel ${entry.channelId}`);
+    logVoiceVerbose(
+      `leave: disconnected from guild ${guildId} channel ${entry.channelId}`,
+    );
     return {
       ok: true,
       message: `Left <#${entry.channelId}>.`,
@@ -535,16 +610,27 @@ export class DiscordVoiceManager {
     this.sessions.clear();
   }
 
-  private enqueueProcessing(entry: VoiceSessionEntry, task: () => Promise<void>) {
+  private enqueueProcessing(
+    entry: VoiceSessionEntry,
+    task: () => Promise<void>,
+  ) {
     entry.processingQueue = entry.processingQueue
       .then(task)
-      .catch((err) => logger.warn(`discord voice: processing failed: ${formatErrorMessage(err)}`));
+      .catch((err) =>
+        logger.warn(
+          `discord voice: processing failed: ${formatErrorMessage(err)}`,
+        ),
+      );
   }
 
   private enqueuePlayback(entry: VoiceSessionEntry, task: () => Promise<void>) {
     entry.playbackQueue = entry.playbackQueue
       .then(task)
-      .catch((err) => logger.warn(`discord voice: playback failed: ${formatErrorMessage(err)}`));
+      .catch((err) =>
+        logger.warn(
+          `discord voice: playback failed: ${formatErrorMessage(err)}`,
+        ),
+      );
   }
 
   private async handleSpeakingStart(entry: VoiceSessionEntry, userId: string) {
@@ -660,7 +746,8 @@ export class DiscordVoiceManager {
       override: this.params.discordConfig.voice?.tts,
     });
     const directive = parseTtsDirectives(replyText, ttsConfig.modelOverrides);
-    const speakText = directive.overrides.ttsText ?? directive.cleanedText.trim();
+    const speakText =
+      directive.overrides.ttsText ?? directive.cleanedText.trim();
     if (!speakText) {
       logVoiceVerbose(
         `tts skipped (empty): guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
@@ -675,7 +762,9 @@ export class DiscordVoiceManager {
       overrides: directive.overrides,
     });
     if (!ttsResult.success || !ttsResult.audioPath) {
-      logger.warn(`discord voice: TTS failed: ${ttsResult.error ?? "unknown error"}`);
+      logger.warn(
+        `discord voice: TTS failed: ${ttsResult.error ?? "unknown error"}`,
+      );
       return;
     }
     const audioPath = ttsResult.audioPath;
@@ -689,13 +778,19 @@ export class DiscordVoiceManager {
       );
       const resource = createAudioResource(audioPath);
       entry.player.play(resource);
-      await entersState(entry.player, AudioPlayerStatus.Playing, PLAYBACK_READY_TIMEOUT_MS).catch(
-        () => undefined,
+      await entersState(
+        entry.player,
+        AudioPlayerStatus.Playing,
+        PLAYBACK_READY_TIMEOUT_MS,
+      ).catch(() => undefined);
+      await entersState(
+        entry.player,
+        AudioPlayerStatus.Idle,
+        SPEAKING_READY_TIMEOUT_MS,
+      ).catch(() => undefined);
+      logVoiceVerbose(
+        `playback done: guild ${entry.guildId} channel ${entry.channelId}`,
       );
-      await entersState(entry.player, AudioPlayerStatus.Idle, SPEAKING_READY_TIMEOUT_MS).catch(
-        () => undefined,
-      );
-      logVoiceVerbose(`playback done: guild ${entry.guildId} channel ${entry.channelId}`);
     });
   }
 
@@ -726,7 +821,9 @@ export class DiscordVoiceManager {
     this.resetDecryptFailureState(entry);
     void this.recoverFromDecryptFailures(entry)
       .catch((recoverErr) =>
-        logger.warn(`discord voice: decrypt recovery failed: ${formatErrorMessage(recoverErr)}`),
+        logger.warn(
+          `discord voice: decrypt recovery failed: ${formatErrorMessage(recoverErr)}`,
+        ),
       )
       .finally(() => {
         entry.decryptRecoveryInFlight = false;
@@ -748,19 +845,34 @@ export class DiscordVoiceManager {
     );
     const leaveResult = await this.leave({ guildId: entry.guildId });
     if (!leaveResult.ok) {
-      logger.warn(`discord voice: decrypt recovery leave failed: ${leaveResult.message}`);
+      logger.warn(
+        `discord voice: decrypt recovery leave failed: ${leaveResult.message}`,
+      );
       return;
     }
-    const result = await this.join({ guildId: entry.guildId, channelId: entry.channelId });
+    const result = await this.join({
+      guildId: entry.guildId,
+      channelId: entry.channelId,
+    });
     if (!result.ok) {
-      logger.warn(`discord voice: rejoin after decrypt failures failed: ${result.message}`);
+      logger.warn(
+        `discord voice: rejoin after decrypt failures failed: ${result.message}`,
+      );
     }
   }
 
-  private async resolveSpeakerLabel(guildId: string, userId: string): Promise<string | undefined> {
+  private async resolveSpeakerLabel(
+    guildId: string,
+    userId: string,
+  ): Promise<string | undefined> {
     try {
       const member = await this.params.client.fetchMember(guildId, userId);
-      return member.nickname ?? member.user?.globalName ?? member.user?.username ?? userId;
+      return (
+        member.nickname ??
+        member.user?.globalName ??
+        member.user?.username ??
+        userId
+      );
     } catch {
       try {
         const user = await this.params.client.fetchUser(userId);
@@ -783,5 +895,7 @@ export class DiscordVoiceReadyListener extends ReadyListener {
 }
 
 function isVoiceChannel(type: ChannelType) {
-  return type === ChannelType.GuildVoice || type === ChannelType.GuildStageVoice;
+  return (
+    type === ChannelType.GuildVoice || type === ChannelType.GuildStageVoice
+  );
 }

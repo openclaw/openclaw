@@ -100,7 +100,9 @@ type SearchManager = NonNullable<SearchManagerResult["manager"]>;
 function createQmdCfg(agentId: string): OpenClawConfig {
   return {
     memory: { backend: "qmd", qmd: {} },
-    agents: { list: [{ id: agentId, default: true, workspace: "/tmp/workspace" }] },
+    agents: {
+      list: [{ id: agentId, default: true, workspace: "/tmp/workspace" }],
+    },
   };
 }
 
@@ -112,7 +114,10 @@ function requireManager(result: SearchManagerResult): SearchManager {
   return result.manager;
 }
 
-async function createFailedQmdSearchHarness(params: { agentId: string; errorMessage: string }) {
+async function createFailedQmdSearchHarness(params: {
+  agentId: string;
+  errorMessage: string;
+}) {
   const cfg = createQmdCfg(params.agentId);
   mockPrimary.search.mockRejectedValueOnce(new Error(params.errorMessage));
   const first = await getMemorySearchManager({ cfg, agentId: params.agentId });
@@ -177,8 +182,16 @@ describe("getMemorySearchManager caching", () => {
     const agentId = "status-agent";
     const cfg = createQmdCfg(agentId);
 
-    const first = await getMemorySearchManager({ cfg, agentId, purpose: "status" });
-    const second = await getMemorySearchManager({ cfg, agentId, purpose: "status" });
+    const first = await getMemorySearchManager({
+      cfg,
+      agentId,
+      purpose: "status",
+    });
+    const second = await getMemorySearchManager({
+      cfg,
+      agentId,
+      purpose: "status",
+    });
 
     requireManager(first);
     requireManager(second);
@@ -224,7 +237,8 @@ describe("getMemorySearchManager caching", () => {
     const retryAgentId = "retry-agent-busy";
     const { manager: firstManager } = await createFailedQmdSearchHarness({
       agentId: retryAgentId,
-      errorMessage: "qmd index busy while reading results: SQLITE_BUSY: database is locked",
+      errorMessage:
+        "qmd index busy while reading results: SQLITE_BUSY: database is locked",
     });
 
     const results = await firstManager.search("hello");
@@ -239,8 +253,12 @@ describe("getMemorySearchManager caching", () => {
       agentId: retryAgentId,
       errorMessage: "qmd query failed",
     });
-    mockMemoryIndexGet.mockRejectedValueOnce(new Error("No API key found for provider openai"));
+    mockMemoryIndexGet.mockRejectedValueOnce(
+      new Error("No API key found for provider openai"),
+    );
 
-    await expect(firstManager.search("hello")).rejects.toThrow("qmd query failed");
+    await expect(firstManager.search("hello")).rejects.toThrow(
+      "qmd query failed",
+    );
   });
 });

@@ -8,7 +8,12 @@ import { resolveAgentOutboundIdentity } from "../infra/outbound/identity.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { getChildLogger } from "../logging.js";
 import { resolveDeliveryTarget } from "./isolated-agent/delivery-target.js";
-import type { CronDelivery, CronDeliveryMode, CronJob, CronMessageChannel } from "./types.js";
+import type {
+  CronDelivery,
+  CronDeliveryMode,
+  CronJob,
+  CronMessageChannel,
+} from "./types.js";
 
 export type CronDeliveryPlan = {
   mode: CronDeliveryMode;
@@ -51,8 +56,11 @@ export function resolveCronDeliveryPlan(job: CronJob): CronDeliveryPlan {
   const payload = job.payload.kind === "agentTurn" ? job.payload : null;
   const delivery = job.delivery;
   const hasDelivery = delivery && typeof delivery === "object";
-  const rawMode = hasDelivery ? (delivery as { mode?: unknown }).mode : undefined;
-  const normalizedMode = typeof rawMode === "string" ? rawMode.trim().toLowerCase() : rawMode;
+  const rawMode = hasDelivery
+    ? (delivery as { mode?: unknown }).mode
+    : undefined;
+  const normalizedMode =
+    typeof rawMode === "string" ? rawMode.trim().toLowerCase() : rawMode;
   const mode =
     normalizedMode === "announce"
       ? "announce"
@@ -69,7 +77,9 @@ export function resolveCronDeliveryPlan(job: CronJob): CronDeliveryPlan {
   const deliveryChannel = normalizeChannel(
     (delivery as { channel?: unknown } | undefined)?.channel,
   );
-  const deliveryTo = normalizeTo((delivery as { to?: unknown } | undefined)?.to);
+  const deliveryTo = normalizeTo(
+    (delivery as { to?: unknown } | undefined)?.to,
+  );
   const channel = deliveryChannel ?? payloadChannel ?? "last";
   const to = deliveryTo ?? payloadTo;
   const deliveryAccountId = normalizeAccountId(
@@ -88,9 +98,14 @@ export function resolveCronDeliveryPlan(job: CronJob): CronDeliveryPlan {
   }
 
   const legacyMode =
-    payload?.deliver === true ? "explicit" : payload?.deliver === false ? "off" : "auto";
+    payload?.deliver === true
+      ? "explicit"
+      : payload?.deliver === false
+        ? "off"
+        : "auto";
   const hasExplicitTarget = Boolean(to);
-  const requested = legacyMode === "explicit" || (legacyMode === "auto" && hasExplicitTarget);
+  const requested =
+    legacyMode === "explicit" || (legacyMode === "auto" && hasExplicitTarget);
 
   return {
     mode: requested ? "announce" : "none",
@@ -115,7 +130,9 @@ export type CronFailureDestinationInput = {
   mode?: "announce" | "webhook";
 };
 
-function normalizeFailureMode(value: unknown): "announce" | "webhook" | undefined {
+function normalizeFailureMode(
+  value: unknown,
+): "announce" | "webhook" | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
@@ -131,8 +148,11 @@ export function resolveFailureDestination(
   globalConfig?: CronFailureDestinationConfig,
 ): CronFailureDeliveryPlan | null {
   const delivery = job.delivery;
-  const jobFailureDest = delivery?.failureDestination as CronFailureDestinationInput | undefined;
-  const hasJobFailureDest = jobFailureDest && typeof jobFailureDest === "object";
+  const jobFailureDest = delivery?.failureDestination as
+    | CronFailureDestinationInput
+    | undefined;
+  const hasJobFailureDest =
+    jobFailureDest && typeof jobFailureDest === "object";
 
   let channel: CronMessageChannel | undefined;
   let to: string | undefined;

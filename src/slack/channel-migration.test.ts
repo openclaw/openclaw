@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { migrateSlackChannelConfig, migrateSlackChannelsInPlace } from "./channel-migration.js";
+import {
+  migrateSlackChannelConfig,
+  migrateSlackChannelsInPlace,
+} from "./channel-migration.js";
 
-function createSlackGlobalChannelConfig(channels: Record<string, Record<string, unknown>>) {
+function createSlackGlobalChannelConfig(
+  channels: Record<string, Record<string, unknown>>,
+) {
   return {
     channels: {
       slack: {

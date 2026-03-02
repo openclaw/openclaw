@@ -4,7 +4,11 @@
 
 import type { ChannelId } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { findFenceSpanAt, isSafeFenceBreak, parseFenceSpans } from "../markdown/fences.js";
+import {
+  findFenceSpanAt,
+  isSafeFenceBreak,
+  parseFenceSpans,
+} from "../markdown/fences.js";
 import { resolveAccountEntry } from "../routing/account-lookup.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 import { chunkTextByBreakResolver } from "../shared/text-chunking.js";
@@ -64,7 +68,9 @@ export function resolveTextChunkLimit(
     }
     const channelsConfig = cfg?.channels as Record<string, unknown> | undefined;
     const providerConfig = (channelsConfig?.[provider] ??
-      (cfg as Record<string, unknown> | undefined)?.[provider]) as ProviderChunkConfig | undefined;
+      (cfg as Record<string, unknown> | undefined)?.[provider]) as
+      | ProviderChunkConfig
+      | undefined;
     return resolveChunkLimitForProvider(providerConfig, accountId);
   })();
   if (typeof providerOverride === "number" && providerOverride > 0) {
@@ -101,7 +107,9 @@ export function resolveChunkMode(
   }
   const channelsConfig = cfg?.channels as Record<string, unknown> | undefined;
   const providerConfig = (channelsConfig?.[provider] ??
-    (cfg as Record<string, unknown> | undefined)?.[provider]) as ProviderChunkConfig | undefined;
+    (cfg as Record<string, unknown> | undefined)?.[provider]) as
+    | ProviderChunkConfig
+    | undefined;
   const mode = resolveChunkModeForProvider(providerConfig, accountId);
   return mode ?? DEFAULT_CHUNK_MODE;
 }
@@ -140,7 +148,8 @@ export function chunkByNewline(
     }
 
     const maxPrefix = Math.max(0, maxLineLength - 1);
-    const cappedBlankLines = pendingBlankLines > 0 ? Math.min(pendingBlankLines, maxPrefix) : 0;
+    const cappedBlankLines =
+      pendingBlankLines > 0 ? Math.min(pendingBlankLines, maxPrefix) : 0;
     const prefix = cappedBlankLines > 0 ? "\n".repeat(cappedBlankLines) : "";
     pendingBlankLines = 0;
 
@@ -244,18 +253,28 @@ export function chunkByParagraph(
 /**
  * Unified chunking function that dispatches based on mode.
  */
-export function chunkTextWithMode(text: string, limit: number, mode: ChunkMode): string[] {
+export function chunkTextWithMode(
+  text: string,
+  limit: number,
+  mode: ChunkMode,
+): string[] {
   if (mode === "newline") {
     return chunkByParagraph(text, limit);
   }
   return chunkText(text, limit);
 }
 
-export function chunkMarkdownTextWithMode(text: string, limit: number, mode: ChunkMode): string[] {
+export function chunkMarkdownTextWithMode(
+  text: string,
+  limit: number,
+  mode: ChunkMode,
+): string[] {
   if (mode === "newline") {
     // Paragraph chunking is fence-safe because we never split at arbitrary indices.
     // If a paragraph must be split by length, defer to the markdown-aware chunker.
-    const paragraphChunks = chunkByParagraph(text, limit, { splitLongParagraphs: false });
+    const paragraphChunks = chunkByParagraph(text, limit, {
+      splitLongParagraphs: false,
+    });
     const out: string[] = [];
     for (const chunk of paragraphChunks) {
       const nested = chunkMarkdownText(chunk, limit);
@@ -286,7 +305,10 @@ function splitByNewline(
   return lines;
 }
 
-function resolveChunkEarlyReturn(text: string, limit: number): string[] | undefined {
+function resolveChunkEarlyReturn(
+  text: string,
+  limit: number,
+): string[] | undefined {
   if (!text) {
     return [];
   }
@@ -348,7 +370,10 @@ export function chunkMarkdownText(text: string, limit: number): string[] {
         const maxIdxIfAlreadyNewline = limit - closeLine.length;
 
         let pickedNewline = false;
-        let lastNewline = remaining.lastIndexOf("\n", Math.max(0, maxIdxIfAlreadyNewline - 1));
+        let lastNewline = remaining.lastIndexOf(
+          "\n",
+          Math.max(0, maxIdxIfAlreadyNewline - 1),
+        );
         while (lastNewline !== -1) {
           const candidateBreak = lastNewline + 1;
           if (candidateBreak < minProgressIdx) {
@@ -375,7 +400,9 @@ export function chunkMarkdownText(text: string, limit: number): string[] {
 
       const fenceAtBreak = findFenceSpanAt(spans, breakIdx);
       fenceToSplit =
-        fenceAtBreak && fenceAtBreak.start === initialFence.start ? fenceAtBreak : undefined;
+        fenceAtBreak && fenceAtBreak.start === initialFence.start
+          ? fenceAtBreak
+          : undefined;
     }
 
     let rawChunk = remaining.slice(0, breakIdx);
@@ -383,13 +410,19 @@ export function chunkMarkdownText(text: string, limit: number): string[] {
       break;
     }
 
-    const brokeOnSeparator = breakIdx < remaining.length && /\s/.test(remaining[breakIdx]);
-    const nextStart = Math.min(remaining.length, breakIdx + (brokeOnSeparator ? 1 : 0));
+    const brokeOnSeparator =
+      breakIdx < remaining.length && /\s/.test(remaining[breakIdx]);
+    const nextStart = Math.min(
+      remaining.length,
+      breakIdx + (brokeOnSeparator ? 1 : 0),
+    );
     let next = remaining.slice(nextStart);
 
     if (fenceToSplit) {
       const closeLine = `${fenceToSplit.indent}${fenceToSplit.marker}`;
-      rawChunk = rawChunk.endsWith("\n") ? `${rawChunk}${closeLine}` : `${rawChunk}\n${closeLine}`;
+      rawChunk = rawChunk.endsWith("\n")
+        ? `${rawChunk}${closeLine}`
+        : `${rawChunk}\n${closeLine}`;
       next = `${fenceToSplit.openLine}\n${next}`;
     } else {
       next = stripLeadingNewlines(next);
@@ -413,9 +446,13 @@ function stripLeadingNewlines(value: string): string {
   return i > 0 ? value.slice(i) : value;
 }
 
-function pickSafeBreakIndex(window: string, spans: ReturnType<typeof parseFenceSpans>): number {
-  const { lastNewline, lastWhitespace } = scanParenAwareBreakpoints(window, (index) =>
-    isSafeFenceBreak(spans, index),
+function pickSafeBreakIndex(
+  window: string,
+  spans: ReturnType<typeof parseFenceSpans>,
+): number {
+  const { lastNewline, lastWhitespace } = scanParenAwareBreakpoints(
+    window,
+    (index) => isSafeFenceBreak(spans, index),
   );
 
   if (lastNewline > 0) {

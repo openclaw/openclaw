@@ -28,7 +28,13 @@
     },
     {
       "name": "shell wrapper positional argv carrier requires full argv display binding",
-      "command": ["/bin/sh", "-lc", "$0 \"$1\"", "/usr/bin/touch", "/tmp/marker"],
+      "command": [
+        "/bin/sh",
+        "-lc",
+        "$0 \"$1\"",
+        "/usr/bin/touch",
+        "/tmp/marker"
+      ],
       "rawCommand": "$0 \"$1\"",
       "expected": {
         "valid": false,
@@ -37,7 +43,13 @@
     },
     {
       "name": "shell wrapper positional argv carrier accepts canonical full argv raw command",
-      "command": ["/bin/sh", "-lc", "$0 \"$1\"", "/usr/bin/touch", "/tmp/marker"],
+      "command": [
+        "/bin/sh",
+        "-lc",
+        "$0 \"$1\"",
+        "/usr/bin/touch",
+        "/tmp/marker"
+      ],
       "rawCommand": "/bin/sh -lc \"$0 \\\"$1\\\"\" /usr/bin/touch /tmp/marker",
       "expected": {
         "valid": true,
@@ -55,7 +67,13 @@
     },
     {
       "name": "env assignment prelude requires full argv display binding",
-      "command": ["/usr/bin/env", "BASH_ENV=/tmp/payload.sh", "bash", "-lc", "echo hi"],
+      "command": [
+        "/usr/bin/env",
+        "BASH_ENV=/tmp/payload.sh",
+        "bash",
+        "-lc",
+        "echo hi"
+      ],
       "rawCommand": "echo hi",
       "expected": {
         "valid": false,
@@ -64,7 +82,13 @@
     },
     {
       "name": "env assignment prelude accepts canonical full argv raw command",
-      "command": ["/usr/bin/env", "BASH_ENV=/tmp/payload.sh", "bash", "-lc", "echo hi"],
+      "command": [
+        "/usr/bin/env",
+        "BASH_ENV=/tmp/payload.sh",
+        "bash",
+        "-lc",
+        "echo hi"
+      ],
       "rawCommand": "/usr/bin/env BASH_ENV=/tmp/payload.sh bash -lc \"echo hi\"",
       "expected": {
         "valid": true,

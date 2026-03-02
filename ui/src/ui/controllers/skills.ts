@@ -23,7 +23,11 @@ type LoadSkillsOptions = {
   clearMessages?: boolean;
 };
 
-function setSkillMessage(state: SkillsState, key: string, message?: SkillMessage) {
+function setSkillMessage(
+  state: SkillsState,
+  key: string,
+  message?: SkillMessage,
+) {
   if (!key.trim()) {
     return;
   }
@@ -43,7 +47,10 @@ function getErrorMessage(err: unknown) {
   return String(err);
 }
 
-export async function loadSkills(state: SkillsState, options?: LoadSkillsOptions) {
+export async function loadSkills(
+  state: SkillsState,
+  options?: LoadSkillsOptions,
+) {
   if (options?.clearMessages && Object.keys(state.skillMessages).length > 0) {
     state.skillMessages = {};
   }
@@ -56,7 +63,10 @@ export async function loadSkills(state: SkillsState, options?: LoadSkillsOptions
   state.skillsLoading = true;
   state.skillsError = null;
   try {
-    const res = await state.client.request<SkillStatusReport | undefined>("skills.status", {});
+    const res = await state.client.request<SkillStatusReport | undefined>(
+      "skills.status",
+      {},
+    );
     if (res) {
       state.skillsReport = res;
     }
@@ -67,11 +77,19 @@ export async function loadSkills(state: SkillsState, options?: LoadSkillsOptions
   }
 }
 
-export function updateSkillEdit(state: SkillsState, skillKey: string, value: string) {
+export function updateSkillEdit(
+  state: SkillsState,
+  skillKey: string,
+  value: string,
+) {
   state.skillEdits = { ...state.skillEdits, [skillKey]: value };
 }
 
-export async function updateSkillEnabled(state: SkillsState, skillKey: string, enabled: boolean) {
+export async function updateSkillEnabled(
+  state: SkillsState,
+  skillKey: string,
+  enabled: boolean,
+) {
   if (!state.client || !state.connected) {
     return;
   }
@@ -134,11 +152,14 @@ export async function installSkill(
   state.skillsBusyKey = skillKey;
   state.skillsError = null;
   try {
-    const result = await state.client.request<{ message?: string }>("skills.install", {
-      name,
-      installId,
-      timeoutMs: 120000,
-    });
+    const result = await state.client.request<{ message?: string }>(
+      "skills.install",
+      {
+        name,
+        installId,
+        timeoutMs: 120000,
+      },
+    );
     await loadSkills(state);
     setSkillMessage(state, skillKey, {
       kind: "success",

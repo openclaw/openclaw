@@ -1,4 +1,8 @@
-import type { SandboxContext, SandboxToolPolicy, SandboxWorkspaceAccess } from "../sandbox.js";
+import type {
+  SandboxContext,
+  SandboxToolPolicy,
+  SandboxWorkspaceAccess,
+} from "../sandbox.js";
 import type { SandboxFsBridge } from "../sandbox/fs-bridge.js";
 
 type PiToolsSandboxContextParams = {
@@ -14,7 +18,9 @@ type PiToolsSandboxContextParams = {
   dockerOverrides?: Partial<SandboxContext["docker"]>;
 };
 
-export function createPiToolsSandboxContext(params: PiToolsSandboxContextParams): SandboxContext {
+export function createPiToolsSandboxContext(
+  params: PiToolsSandboxContextParams,
+): SandboxContext {
   const workspaceDir = params.workspaceDir;
   return {
     enabled: true,

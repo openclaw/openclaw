@@ -1,10 +1,18 @@
 import { describe, expect, it } from "vitest";
-import { isWhatsAppGroupJid, isWhatsAppUserTarget, normalizeWhatsAppTarget } from "./normalize.js";
+import {
+  isWhatsAppGroupJid,
+  isWhatsAppUserTarget,
+  normalizeWhatsAppTarget,
+} from "./normalize.js";
 
 describe("normalizeWhatsAppTarget", () => {
   it("preserves group JIDs", () => {
-    expect(normalizeWhatsAppTarget("120363401234567890@g.us")).toBe("120363401234567890@g.us");
-    expect(normalizeWhatsAppTarget("123456789-987654321@g.us")).toBe("123456789-987654321@g.us");
+    expect(normalizeWhatsAppTarget("120363401234567890@g.us")).toBe(
+      "120363401234567890@g.us",
+    );
+    expect(normalizeWhatsAppTarget("123456789-987654321@g.us")).toBe(
+      "123456789-987654321@g.us",
+    );
     expect(normalizeWhatsAppTarget("whatsapp:120363401234567890@g.us")).toBe(
       "120363401234567890@g.us",
     );
@@ -17,10 +25,16 @@ describe("normalizeWhatsAppTarget", () => {
   it("normalizes user JIDs with device suffix to E.164", () => {
     // This is the bug fix: JIDs like "41796666864:0@s.whatsapp.net" should
     // normalize to "+41796666864", not "+417966668640" (extra digit from ":0")
-    expect(normalizeWhatsAppTarget("41796666864:0@s.whatsapp.net")).toBe("+41796666864");
-    expect(normalizeWhatsAppTarget("1234567890:123@s.whatsapp.net")).toBe("+1234567890");
+    expect(normalizeWhatsAppTarget("41796666864:0@s.whatsapp.net")).toBe(
+      "+41796666864",
+    );
+    expect(normalizeWhatsAppTarget("1234567890:123@s.whatsapp.net")).toBe(
+      "+1234567890",
+    );
     // Without device suffix still works
-    expect(normalizeWhatsAppTarget("41796666864@s.whatsapp.net")).toBe("+41796666864");
+    expect(normalizeWhatsAppTarget("41796666864@s.whatsapp.net")).toBe(
+      "+41796666864",
+    );
   });
 
   it("normalizes LID JIDs to E.164", () => {
@@ -33,9 +47,15 @@ describe("normalizeWhatsAppTarget", () => {
     expect(normalizeWhatsAppTarget("whatsapp:")).toBeNull();
     expect(normalizeWhatsAppTarget("@g.us")).toBeNull();
     expect(normalizeWhatsAppTarget("whatsapp:group:@g.us")).toBeNull();
-    expect(normalizeWhatsAppTarget("whatsapp:group:120363401234567890@g.us")).toBeNull();
-    expect(normalizeWhatsAppTarget("group:123456789-987654321@g.us")).toBeNull();
-    expect(normalizeWhatsAppTarget(" WhatsApp:Group:123456789-987654321@G.US ")).toBeNull();
+    expect(
+      normalizeWhatsAppTarget("whatsapp:group:120363401234567890@g.us"),
+    ).toBeNull();
+    expect(
+      normalizeWhatsAppTarget("group:123456789-987654321@g.us"),
+    ).toBeNull();
+    expect(
+      normalizeWhatsAppTarget(" WhatsApp:Group:123456789-987654321@G.US "),
+    ).toBeNull();
     expect(normalizeWhatsAppTarget("abc@s.whatsapp.net")).toBeNull();
   });
 
@@ -63,7 +83,9 @@ describe("isWhatsAppGroupJid", () => {
     expect(isWhatsAppGroupJid("120363401234567890@g.us")).toBe(true);
     expect(isWhatsAppGroupJid("123456789-987654321@g.us")).toBe(true);
     expect(isWhatsAppGroupJid("whatsapp:120363401234567890@g.us")).toBe(true);
-    expect(isWhatsAppGroupJid("whatsapp:group:120363401234567890@g.us")).toBe(false);
+    expect(isWhatsAppGroupJid("whatsapp:group:120363401234567890@g.us")).toBe(
+      false,
+    );
     expect(isWhatsAppGroupJid("x@g.us")).toBe(false);
     expect(isWhatsAppGroupJid("@g.us")).toBe(false);
     expect(isWhatsAppGroupJid("120@g.usx")).toBe(false);

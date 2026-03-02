@@ -16,7 +16,9 @@ function normalizeWindowsPathForComparison(input: string): string {
 
 export function isNodeError(value: unknown): value is NodeJS.ErrnoException {
   return Boolean(
-    value && typeof value === "object" && "code" in (value as Record<string, unknown>),
+    value &&
+    typeof value === "object" &&
+    "code" in (value as Record<string, unknown>),
   );
 }
 
@@ -25,11 +27,19 @@ export function hasNodeErrorCode(value: unknown, code: string): boolean {
 }
 
 export function isNotFoundPathError(value: unknown): boolean {
-  return isNodeError(value) && typeof value.code === "string" && NOT_FOUND_CODES.has(value.code);
+  return (
+    isNodeError(value) &&
+    typeof value.code === "string" &&
+    NOT_FOUND_CODES.has(value.code)
+  );
 }
 
 export function isSymlinkOpenError(value: unknown): boolean {
-  return isNodeError(value) && typeof value.code === "string" && SYMLINK_OPEN_CODES.has(value.code);
+  return (
+    isNodeError(value) &&
+    typeof value.code === "string" &&
+    SYMLINK_OPEN_CODES.has(value.code)
+  );
 }
 
 export function isPathInside(root: string, target: string): boolean {
@@ -40,9 +50,15 @@ export function isPathInside(root: string, target: string): boolean {
     const rootForCompare = normalizeWindowsPathForComparison(resolvedRoot);
     const targetForCompare = normalizeWindowsPathForComparison(resolvedTarget);
     const relative = path.win32.relative(rootForCompare, targetForCompare);
-    return relative === "" || (!relative.startsWith("..") && !path.win32.isAbsolute(relative));
+    return (
+      relative === "" ||
+      (!relative.startsWith("..") && !path.win32.isAbsolute(relative))
+    );
   }
 
   const relative = path.relative(resolvedRoot, resolvedTarget);
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+  return (
+    relative === "" ||
+    (!relative.startsWith("..") && !path.isAbsolute(relative))
+  );
 }

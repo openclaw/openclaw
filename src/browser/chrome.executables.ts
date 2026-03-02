@@ -112,7 +112,9 @@ function execText(
   }
 }
 
-function inferKindFromIdentifier(identifier: string): BrowserExecutable["kind"] {
+function inferKindFromIdentifier(
+  identifier: string,
+): BrowserExecutable["kind"] {
   const id = identifier.toLowerCase();
   if (id.includes("brave")) {
     return "brave";
@@ -151,13 +153,19 @@ function inferKindFromExecutableName(name: string): BrowserExecutable["kind"] {
   if (lower.includes("canary") || lower.includes("sxs")) {
     return "canary";
   }
-  if (lower.includes("opera") || lower.includes("vivaldi") || lower.includes("yandex")) {
+  if (
+    lower.includes("opera") ||
+    lower.includes("vivaldi") ||
+    lower.includes("yandex")
+  ) {
     return "chromium";
   }
   return "chrome";
 }
 
-function detectDefaultChromiumExecutable(platform: NodeJS.Platform): BrowserExecutable | null {
+function detectDefaultChromiumExecutable(
+  platform: NodeJS.Platform,
+): BrowserExecutable | null {
   if (platform === "darwin") {
     return detectDefaultChromiumExecutableMac();
   }
@@ -237,8 +245,10 @@ function detectDefaultBrowserBundleIdMac(): string | null {
         continue;
       }
       const role =
-        (typeof record.LSHandlerRoleAll === "string" && record.LSHandlerRoleAll) ||
-        (typeof record.LSHandlerRoleViewer === "string" && record.LSHandlerRoleViewer) ||
+        (typeof record.LSHandlerRoleAll === "string" &&
+          record.LSHandlerRoleAll) ||
+        (typeof record.LSHandlerRoleViewer === "string" &&
+          record.LSHandlerRoleViewer) ||
         null;
       if (role) {
         candidate = role;
@@ -287,7 +297,8 @@ function detectDefaultChromiumExecutableLinux(): BrowserExecutable | null {
 function detectDefaultChromiumExecutableWindows(): BrowserExecutable | null {
   const progId = readWindowsProgId();
   const command =
-    (progId ? readWindowsCommandForProgId(progId) : null) || readWindowsCommandForProgId("http");
+    (progId ? readWindowsCommandForProgId(progId) : null) ||
+    readWindowsCommandForProgId("http");
   if (!command) {
     return null;
   }
@@ -345,7 +356,11 @@ function extractExecutableFromExecLine(execLine: string): string | null {
     if (token === "env") {
       continue;
     }
-    if (token.includes("=") && !token.startsWith("/") && !token.includes("\\")) {
+    if (
+      token.includes("=") &&
+      !token.startsWith("/") &&
+      !token.includes("\\")
+    ) {
       continue;
     }
     return token.replace(/^["']|["']$/g, "");
@@ -443,7 +458,9 @@ function extractWindowsExecutablePath(command: string): string | null {
   return null;
 }
 
-function findFirstExecutable(candidates: Array<BrowserExecutable>): BrowserExecutable | null {
+function findFirstExecutable(
+  candidates: Array<BrowserExecutable>,
+): BrowserExecutable | null {
   for (const candidate of candidates) {
     if (exists(candidate.path)) {
       return candidate;
@@ -461,7 +478,10 @@ export function findChromeExecutableMac(): BrowserExecutable | null {
     },
     {
       kind: "chrome",
-      path: path.join(os.homedir(), "Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+      path: path.join(
+        os.homedir(),
+        "Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+      ),
     },
     {
       kind: "brave",
@@ -469,7 +489,10 @@ export function findChromeExecutableMac(): BrowserExecutable | null {
     },
     {
       kind: "brave",
-      path: path.join(os.homedir(), "Applications/Brave Browser.app/Contents/MacOS/Brave Browser"),
+      path: path.join(
+        os.homedir(),
+        "Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
+      ),
     },
     {
       kind: "edge",
@@ -488,7 +511,10 @@ export function findChromeExecutableMac(): BrowserExecutable | null {
     },
     {
       kind: "chromium",
-      path: path.join(os.homedir(), "Applications/Chromium.app/Contents/MacOS/Chromium"),
+      path: path.join(
+        os.homedir(),
+        "Applications/Chromium.app/Contents/MacOS/Chromium",
+      ),
     },
     {
       kind: "canary",
@@ -529,7 +555,8 @@ export function findChromeExecutableWindows(): BrowserExecutable | null {
   const localAppData = process.env.LOCALAPPDATA ?? "";
   const programFiles = process.env.ProgramFiles ?? "C:\\Program Files";
   // Must use bracket notation: variable name contains parentheses
-  const programFilesX86 = process.env["ProgramFiles(x86)"] ?? "C:\\Program Files (x86)";
+  const programFilesX86 =
+    process.env["ProgramFiles(x86)"] ?? "C:\\Program Files (x86)";
 
   const joinWin = path.win32.join;
   const candidates: Array<BrowserExecutable> = [];
@@ -538,17 +565,35 @@ export function findChromeExecutableWindows(): BrowserExecutable | null {
     // Chrome (user install)
     candidates.push({
       kind: "chrome",
-      path: joinWin(localAppData, "Google", "Chrome", "Application", "chrome.exe"),
+      path: joinWin(
+        localAppData,
+        "Google",
+        "Chrome",
+        "Application",
+        "chrome.exe",
+      ),
     });
     // Brave (user install)
     candidates.push({
       kind: "brave",
-      path: joinWin(localAppData, "BraveSoftware", "Brave-Browser", "Application", "brave.exe"),
+      path: joinWin(
+        localAppData,
+        "BraveSoftware",
+        "Brave-Browser",
+        "Application",
+        "brave.exe",
+      ),
     });
     // Edge (user install)
     candidates.push({
       kind: "edge",
-      path: joinWin(localAppData, "Microsoft", "Edge", "Application", "msedge.exe"),
+      path: joinWin(
+        localAppData,
+        "Microsoft",
+        "Edge",
+        "Application",
+        "msedge.exe",
+      ),
     });
     // Chromium (user install)
     candidates.push({
@@ -558,39 +603,81 @@ export function findChromeExecutableWindows(): BrowserExecutable | null {
     // Chrome Canary (user install)
     candidates.push({
       kind: "canary",
-      path: joinWin(localAppData, "Google", "Chrome SxS", "Application", "chrome.exe"),
+      path: joinWin(
+        localAppData,
+        "Google",
+        "Chrome SxS",
+        "Application",
+        "chrome.exe",
+      ),
     });
   }
 
   // Chrome (system install, 64-bit)
   candidates.push({
     kind: "chrome",
-    path: joinWin(programFiles, "Google", "Chrome", "Application", "chrome.exe"),
+    path: joinWin(
+      programFiles,
+      "Google",
+      "Chrome",
+      "Application",
+      "chrome.exe",
+    ),
   });
   // Chrome (system install, 32-bit on 64-bit Windows)
   candidates.push({
     kind: "chrome",
-    path: joinWin(programFilesX86, "Google", "Chrome", "Application", "chrome.exe"),
+    path: joinWin(
+      programFilesX86,
+      "Google",
+      "Chrome",
+      "Application",
+      "chrome.exe",
+    ),
   });
   // Brave (system install, 64-bit)
   candidates.push({
     kind: "brave",
-    path: joinWin(programFiles, "BraveSoftware", "Brave-Browser", "Application", "brave.exe"),
+    path: joinWin(
+      programFiles,
+      "BraveSoftware",
+      "Brave-Browser",
+      "Application",
+      "brave.exe",
+    ),
   });
   // Brave (system install, 32-bit on 64-bit Windows)
   candidates.push({
     kind: "brave",
-    path: joinWin(programFilesX86, "BraveSoftware", "Brave-Browser", "Application", "brave.exe"),
+    path: joinWin(
+      programFilesX86,
+      "BraveSoftware",
+      "Brave-Browser",
+      "Application",
+      "brave.exe",
+    ),
   });
   // Edge (system install, 64-bit)
   candidates.push({
     kind: "edge",
-    path: joinWin(programFiles, "Microsoft", "Edge", "Application", "msedge.exe"),
+    path: joinWin(
+      programFiles,
+      "Microsoft",
+      "Edge",
+      "Application",
+      "msedge.exe",
+    ),
   });
   // Edge (system install, 32-bit on 64-bit Windows)
   candidates.push({
     kind: "edge",
-    path: joinWin(programFilesX86, "Microsoft", "Edge", "Application", "msedge.exe"),
+    path: joinWin(
+      programFilesX86,
+      "Microsoft",
+      "Edge",
+      "Application",
+      "msedge.exe",
+    ),
   });
 
   return findFirstExecutable(candidates);
@@ -602,7 +689,9 @@ export function resolveBrowserExecutableForPlatform(
 ): BrowserExecutable | null {
   if (resolved.executablePath) {
     if (!exists(resolved.executablePath)) {
-      throw new Error(`browser.executablePath not found: ${resolved.executablePath}`);
+      throw new Error(
+        `browser.executablePath not found: ${resolved.executablePath}`,
+      );
     }
     return { kind: "custom", path: resolved.executablePath };
   }

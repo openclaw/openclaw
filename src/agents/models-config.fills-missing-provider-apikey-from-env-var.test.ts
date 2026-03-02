@@ -16,7 +16,11 @@ installModelsConfigTestHooks();
 
 const MODELS_JSON_NAME = "models.json";
 
-async function withEnvVar(name: string, value: string, run: () => Promise<void>) {
+async function withEnvVar(
+  name: string,
+  value: string,
+  run: () => Promise<void>,
+) {
   const previous = process.env[name];
   process.env[name] = value;
   try {
@@ -128,11 +132,16 @@ describe("models-config", () => {
       await ensureOpenClawModelsJson(validated.config);
 
       const parsed = await readGeneratedModelsJson<{
-        providers: Record<string, { api?: string; models?: Array<{ id: string; api?: string }> }>;
+        providers: Record<
+          string,
+          { api?: string; models?: Array<{ id: string; api?: string }> }
+        >;
       }>();
 
       expect(parsed.providers.anthropic?.api).toBe("anthropic-messages");
-      expect(parsed.providers.anthropic?.models?.[0]?.api).toBe("anthropic-messages");
+      expect(parsed.providers.anthropic?.models?.[0]?.api).toBe(
+        "anthropic-messages",
+      );
     });
   });
 
@@ -164,7 +173,10 @@ describe("models-config", () => {
         await ensureOpenClawModelsJson(cfg);
 
         const parsed = await readGeneratedModelsJson<{
-          providers: Record<string, { apiKey?: string; models?: Array<{ id: string }> }>;
+          providers: Record<
+            string,
+            { apiKey?: string; models?: Array<{ id: string }> }
+          >;
         }>();
         expect(parsed.providers.minimax?.apiKey).toBe("MINIMAX_API_KEY");
         const ids = parsed.providers.minimax?.models?.map((model) => model.id);
@@ -202,8 +214,12 @@ describe("models-config", () => {
         providers: Record<string, { baseUrl?: string }>;
       }>();
 
-      expect(parsed.providers.existing?.baseUrl).toBe("http://localhost:1234/v1");
-      expect(parsed.providers["custom-proxy"]?.baseUrl).toBe("http://localhost:4000/v1");
+      expect(parsed.providers.existing?.baseUrl).toBe(
+        "http://localhost:1234/v1",
+      );
+      expect(parsed.providers["custom-proxy"]?.baseUrl).toBe(
+        "http://localhost:4000/v1",
+      );
     });
   });
 
@@ -229,14 +245,19 @@ describe("models-config", () => {
         models: [{ id: "agent-model", name: "Agent model", input: ["text"] }],
       });
       expect(parsed.providers.custom?.apiKey).toBe("CONFIG_KEY");
-      expect(parsed.providers.custom?.baseUrl).toBe("https://config.example/v1");
+      expect(parsed.providers.custom?.baseUrl).toBe(
+        "https://config.example/v1",
+      );
     });
   });
 
   it("refreshes stale explicit moonshot model capabilities from implicit catalog", async () => {
     await withTempHome(async () => {
       await withEnvVar("MOONSHOT_API_KEY", "sk-moonshot-test", async () => {
-        const cfg = createMoonshotConfig({ contextWindow: 1024, maxTokens: 256 });
+        const cfg = createMoonshotConfig({
+          contextWindow: 1024,
+          maxTokens: 256,
+        });
 
         await ensureOpenClawModelsJson(cfg);
 
@@ -255,7 +276,9 @@ describe("models-config", () => {
             }
           >;
         }>();
-        const kimi = parsed.providers.moonshot?.models?.find((model) => model.id === "kimi-k2.5");
+        const kimi = parsed.providers.moonshot?.models?.find(
+          (model) => model.id === "kimi-k2.5",
+        );
         expect(kimi?.input).toEqual(["text", "image"]);
         expect(kimi?.reasoning).toBe(false);
         expect(kimi?.contextWindow).toBe(256000);
@@ -270,7 +293,10 @@ describe("models-config", () => {
   it("preserves explicit larger token limits when they exceed implicit catalog defaults", async () => {
     await withTempHome(async () => {
       await withEnvVar("MOONSHOT_API_KEY", "sk-moonshot-test", async () => {
-        const cfg = createMoonshotConfig({ contextWindow: 350000, maxTokens: 16384 });
+        const cfg = createMoonshotConfig({
+          contextWindow: 350000,
+          maxTokens: 16384,
+        });
 
         await ensureOpenClawModelsJson(cfg);
         const parsed = await readGeneratedModelsJson<{
@@ -285,7 +311,9 @@ describe("models-config", () => {
             }
           >;
         }>();
-        const kimi = parsed.providers.moonshot?.models?.find((model) => model.id === "kimi-k2.5");
+        const kimi = parsed.providers.moonshot?.models?.find(
+          (model) => model.id === "kimi-k2.5",
+        );
         expect(kimi?.contextWindow).toBe(350000);
         expect(kimi?.maxTokens).toBe(16384);
       });

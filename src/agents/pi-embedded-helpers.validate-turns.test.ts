@@ -201,7 +201,10 @@ describe("validateAnthropicTurns", () => {
       } as AgentMessage,
     ]);
 
-    const result = validateAnthropicTurns(msgs) as Extract<AgentMessage, { role: "user" }>[];
+    const result = validateAnthropicTurns(msgs) as Extract<
+      AgentMessage,
+      { role: "user" }
+    >[];
 
     expect(result).toHaveLength(1);
     const merged = result[0];
@@ -209,7 +212,9 @@ describe("validateAnthropicTurns", () => {
     expect((merged as { attachments?: unknown[] }).attachments).toEqual([
       { type: "image", url: "new.png" },
     ]);
-    expect((merged as { someCustomField?: string }).someCustomField).toBe("keep-me");
+    expect((merged as { someCustomField?: string }).someCustomField).toBe(
+      "keep-me",
+    );
     expect(merged.content).toEqual([
       { type: "text", text: "Old" },
       { type: "text", text: "New" },
@@ -234,7 +239,10 @@ describe("validateAnthropicTurns", () => {
       },
     ]);
 
-    const [merged] = validateAnthropicTurns(msgs) as Extract<AgentMessage, { role: "user" }>[];
+    const [merged] = validateAnthropicTurns(msgs) as Extract<
+      AgentMessage,
+      { role: "user" }
+    >[];
     expect(merged.content).toEqual([
       { type: "text", text: "first" },
       { type: "image", url: "img1" },
@@ -316,7 +324,9 @@ describe("mergeConsecutiveUserTurns", () => {
     expect((merged as { attachments?: unknown[] }).attachments).toEqual([
       { type: "image", url: "new.png" },
     ]);
-    expect((merged as { someCustomField?: string }).someCustomField).toBe("keep-me");
+    expect((merged as { someCustomField?: string }).someCustomField).toBe(
+      "keep-me",
+    );
     expect(merged.timestamp).toBe(2000);
   });
 

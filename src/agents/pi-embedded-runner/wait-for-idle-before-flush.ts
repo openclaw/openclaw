@@ -40,6 +40,9 @@ export async function flushPendingToolResultsAfterIdle(opts: {
   sessionManager: ToolResultFlushManager | null | undefined;
   timeoutMs?: number;
 }): Promise<void> {
-  await waitForAgentIdleBestEffort(opts.agent, opts.timeoutMs ?? DEFAULT_WAIT_FOR_IDLE_TIMEOUT_MS);
+  await waitForAgentIdleBestEffort(
+    opts.agent,
+    opts.timeoutMs ?? DEFAULT_WAIT_FOR_IDLE_TIMEOUT_MS,
+  );
   opts.sessionManager?.flushPendingToolResults?.();
 }

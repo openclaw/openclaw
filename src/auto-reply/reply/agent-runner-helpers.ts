@@ -9,7 +9,9 @@ const hasAudioMedia = (urls?: string[]): boolean =>
   Boolean(urls?.some((url) => isAudioFileName(url)));
 
 export const isAudioPayload = (payload: ReplyPayload): boolean =>
-  hasAudioMedia(payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : undefined));
+  hasAudioMedia(
+    payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : undefined),
+  );
 
 type VerboseGateParams = {
   sessionKey?: string;
@@ -17,7 +19,9 @@ type VerboseGateParams = {
   resolvedVerboseLevel: VerboseLevel;
 };
 
-function resolveCurrentVerboseLevel(params: VerboseGateParams): VerboseLevel | undefined {
+function resolveCurrentVerboseLevel(
+  params: VerboseGateParams,
+): VerboseLevel | undefined {
   if (!params.sessionKey || !params.storePath) {
     return undefined;
   }
@@ -36,17 +40,22 @@ function createVerboseGate(
   shouldEmit: (level: VerboseLevel) => boolean,
 ): () => boolean {
   // Normalize verbose values from session store/config so false/"false" still means off.
-  const fallbackVerbose = normalizeVerboseLevel(String(params.resolvedVerboseLevel ?? "")) ?? "off";
+  const fallbackVerbose =
+    normalizeVerboseLevel(String(params.resolvedVerboseLevel ?? "")) ?? "off";
   return () => {
     return shouldEmit(resolveCurrentVerboseLevel(params) ?? fallbackVerbose);
   };
 }
 
-export const createShouldEmitToolResult = (params: VerboseGateParams): (() => boolean) => {
+export const createShouldEmitToolResult = (
+  params: VerboseGateParams,
+): (() => boolean) => {
   return createVerboseGate(params, (level) => level !== "off");
 };
 
-export const createShouldEmitToolOutput = (params: VerboseGateParams): (() => boolean) => {
+export const createShouldEmitToolOutput = (
+  params: VerboseGateParams,
+): (() => boolean) => {
   return createVerboseGate(params, (level) => level === "full");
 };
 

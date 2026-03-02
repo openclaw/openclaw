@@ -2,9 +2,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createSlackMessageHandler } from "./message-handler.js";
 
 const enqueueMock = vi.fn(async (_entry: unknown) => {});
-const resolveThreadTsMock = vi.fn(async ({ message }: { message: Record<string, unknown> }) => ({
-  ...message,
-}));
+const resolveThreadTsMock = vi.fn(
+  async ({ message }: { message: Record<string, unknown> }) => ({
+    ...message,
+  }),
+);
 
 vi.mock("../../auto-reply/inbound-debounce.js", () => ({
   resolveInboundDebounceMs: () => 10,
@@ -15,12 +17,16 @@ vi.mock("../../auto-reply/inbound-debounce.js", () => ({
 
 vi.mock("./thread-resolution.js", () => ({
   createSlackThreadTsResolver: () => ({
-    resolve: (entry: { message: Record<string, unknown> }) => resolveThreadTsMock(entry),
+    resolve: (entry: { message: Record<string, unknown> }) =>
+      resolveThreadTsMock(entry),
   }),
 }));
 
 function createContext(overrides?: {
-  markMessageSeen?: (channel: string | undefined, ts: string | undefined) => boolean;
+  markMessageSeen?: (
+    channel: string | undefined,
+    ts: string | undefined,
+  ) => boolean;
 }) {
   return {
     cfg: {},

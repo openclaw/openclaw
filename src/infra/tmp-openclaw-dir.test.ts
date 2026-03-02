@@ -1,8 +1,13 @@
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { POSIX_OPENCLAW_TMP_DIR, resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
+import {
+  POSIX_OPENCLAW_TMP_DIR,
+  resolvePreferredOpenClawTmpDir,
+} from "./tmp-openclaw-dir.js";
 
-type TmpDirOptions = NonNullable<Parameters<typeof resolvePreferredOpenClawTmpDir>[0]>;
+type TmpDirOptions = NonNullable<
+  Parameters<typeof resolvePreferredOpenClawTmpDir>[0]
+>;
 
 function fallbackTmp(uid = 501) {
   return path.join("/var/fallback", `openclaw-${uid}`);
@@ -61,7 +66,13 @@ function resolveWithMocks(params: {
     tmpdir,
     warn,
   });
-  return { resolved, accessSync, lstatSync: wrappedLstatSync, mkdirSync, tmpdir };
+  return {
+    resolved,
+    accessSync,
+    lstatSync: wrappedLstatSync,
+    mkdirSync,
+    tmpdir,
+  };
 }
 
 describe("resolvePreferredOpenClawTmpDir", () => {
@@ -94,7 +105,10 @@ describe("resolvePreferredOpenClawTmpDir", () => {
 
     expect(resolved).toBe(POSIX_OPENCLAW_TMP_DIR);
     expect(accessSync).toHaveBeenCalledWith("/tmp", expect.any(Number));
-    expect(mkdirSync).toHaveBeenCalledWith(POSIX_OPENCLAW_TMP_DIR, expect.any(Object));
+    expect(mkdirSync).toHaveBeenCalledWith(
+      POSIX_OPENCLAW_TMP_DIR,
+      expect.any(Object),
+    );
     expect(tmpdir).not.toHaveBeenCalled();
   });
 
@@ -104,7 +118,8 @@ describe("resolvePreferredOpenClawTmpDir", () => {
       isSymbolicLink: () => false,
       uid: 501,
       mode: 0o100644,
-    })) as unknown as ReturnType<typeof vi.fn> & NonNullable<TmpDirOptions["lstatSync"]>;
+    })) as unknown as ReturnType<typeof vi.fn> &
+      NonNullable<TmpDirOptions["lstatSync"]>;
     const { resolved, tmpdir } = resolveWithMocks({ lstatSync });
 
     expect(resolved).toBe(fallbackTmp());
@@ -212,7 +227,10 @@ describe("resolvePreferredOpenClawTmpDir", () => {
     });
 
     expect(resolved).toBe(fallbackTmp());
-    expect(mkdirSync).toHaveBeenCalledWith(fallbackTmp(), { recursive: true, mode: 0o700 });
+    expect(mkdirSync).toHaveBeenCalledWith(fallbackTmp(), {
+      recursive: true,
+      mode: 0o700,
+    });
   });
 
   it("repairs fallback directory permissions after create when umask makes it group-writable", () => {
@@ -303,6 +321,8 @@ describe("resolvePreferredOpenClawTmpDir", () => {
 
     expect(resolved).toBe(fallbackPath);
     expect(chmodSync).toHaveBeenCalledWith(fallbackPath, 0o700);
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("tightened permissions on temp dir"));
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("tightened permissions on temp dir"),
+    );
   });
 });

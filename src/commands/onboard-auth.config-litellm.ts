@@ -21,7 +21,12 @@ function buildLitellmModelDefinition(): {
   name: string;
   reasoning: boolean;
   input: Array<"text" | "image">;
-  cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
+  cost: {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+  };
   contextWindow: number;
   maxTokens: number;
 } {
@@ -36,7 +41,9 @@ function buildLitellmModelDefinition(): {
   };
 }
 
-export function applyLitellmProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+export function applyLitellmProviderConfig(
+  cfg: OpenClawConfig,
+): OpenClawConfig {
   const models = { ...cfg.agents?.defaults?.models };
   models[LITELLM_DEFAULT_MODEL_REF] = {
     ...models[LITELLM_DEFAULT_MODEL_REF],
@@ -45,9 +52,13 @@ export function applyLitellmProviderConfig(cfg: OpenClawConfig): OpenClawConfig 
 
   const defaultModel = buildLitellmModelDefinition();
 
-  const existingProvider = cfg.models?.providers?.litellm as { baseUrl?: unknown } | undefined;
+  const existingProvider = cfg.models?.providers?.litellm as
+    | { baseUrl?: unknown }
+    | undefined;
   const resolvedBaseUrl =
-    typeof existingProvider?.baseUrl === "string" ? existingProvider.baseUrl.trim() : "";
+    typeof existingProvider?.baseUrl === "string"
+      ? existingProvider.baseUrl.trim()
+      : "";
 
   return applyProviderConfigWithDefaultModel(cfg, {
     agentModels: models,

@@ -20,7 +20,12 @@ import {
 import { listKnownSecretEnvVarNames } from "./provider-env-vars.js";
 import { resolveSecretRefValue } from "./resolve.js";
 import { prepareSecretsRuntimeSnapshot } from "./runtime.js";
-import { isNonEmptyString, isRecord, parseEnvValue, writeTextFileAtomic } from "./shared.js";
+import {
+  isNonEmptyString,
+  isRecord,
+  parseEnvValue,
+  writeTextFileAtomic,
+} from "./shared.js";
 
 type FileSnapshot = {
   existed: boolean;
@@ -67,11 +72,18 @@ function getByPathSegments(root: unknown, segments: string[]): unknown {
   return cursor;
 }
 
-function setByPathSegments(root: OpenClawConfig, segments: string[], value: unknown): boolean {
+function setByPathSegments(
+  root: OpenClawConfig,
+  segments: string[],
+  value: unknown,
+): boolean {
   if (segments.length === 0) {
     throw new Error("Target path is empty.");
   }
-  let cursor: Record<string, unknown> = root as unknown as Record<string, unknown>;
+  let cursor: Record<string, unknown> = root as unknown as Record<
+    string,
+    unknown
+  >;
   let changed = false;
   for (const segment of segments.slice(0, -1)) {
     const existing = cursor[segment];
@@ -90,11 +102,17 @@ function setByPathSegments(root: OpenClawConfig, segments: string[], value: unkn
   return changed;
 }
 
-function deleteByPathSegments(root: OpenClawConfig, segments: string[]): boolean {
+function deleteByPathSegments(
+  root: OpenClawConfig,
+  segments: string[],
+): boolean {
   if (segments.length === 0) {
     return false;
   }
-  let cursor: Record<string, unknown> = root as unknown as Record<string, unknown>;
+  let cursor: Record<string, unknown> = root as unknown as Record<
+    string,
+    unknown
+  >;
   for (const segment of segments.slice(0, -1)) {
     const existing = cursor[segment];
     if (!isRecord(existing)) {
@@ -113,7 +131,9 @@ function deleteByPathSegments(root: OpenClawConfig, segments: string[]): boolean
 function resolveTargetPathSegments(target: SecretsPlanTarget): string[] {
   const resolved = resolveValidatedTargetPathSegments(target);
   if (!resolved) {
-    throw new Error(`Invalid plan target path for ${target.type}: ${target.path}`);
+    throw new Error(
+      `Invalid plan target path for ${target.type}: ${target.path}`,
+    );
   }
   return resolved;
 }
@@ -133,7 +153,9 @@ function scrubEnvRaw(
   const nextLines: string[] = [];
   let removed = 0;
   for (const line of lines) {
-    const match = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
+    const match = line.match(
+      /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/,
+    );
     if (!match) {
       nextLines.push(line);
       continue;
@@ -199,14 +221,18 @@ function applyProviderPlanMutations(params: {
   let changed = false;
 
   for (const providerAlias of params.deletes ?? []) {
-    if (!Object.prototype.hasOwnProperty.call(currentProviders, providerAlias)) {
+    if (
+      !Object.prototype.hasOwnProperty.call(currentProviders, providerAlias)
+    ) {
       continue;
     }
     delete currentProviders[providerAlias];
     changed = true;
   }
 
-  for (const [providerAlias, providerConfig] of Object.entries(params.upserts ?? {})) {
+  for (const [providerAlias, providerConfig] of Object.entries(
+    params.upserts ?? {},
+  )) {
     const previous = currentProviders[providerAlias];
     if (isDeepStrictEqual(previous, providerConfig)) {
       continue;
@@ -264,9 +290,17 @@ async function projectPlanState(params: {
       if (isNonEmptyString(previous)) {
         scrubbedValues.add(previous.trim());
       }
-      const refPathSegments = resolveGoogleChatRefPathSegments(targetPathSegments);
-      const wroteRef = setByPathSegments(nextConfig, refPathSegments, target.ref);
-      const deletedLegacy = deleteByPathSegments(nextConfig, targetPathSegments);
+      const refPathSegments =
+        resolveGoogleChatRefPathSegments(targetPathSegments);
+      const wroteRef = setByPathSegments(
+        nextConfig,
+        refPathSegments,
+        target.ref,
+      );
+      const deletedLegacy = deleteByPathSegments(
+        nextConfig,
+        targetPathSegments,
+      );
       if (wroteRef || deletedLegacy) {
         changedFiles.add(configPath);
       }
@@ -277,7 +311,11 @@ async function projectPlanState(params: {
     if (isNonEmptyString(previous)) {
       scrubbedValues.add(previous.trim());
     }
-    const wroteRef = setByPathSegments(nextConfig, targetPathSegments, target.ref);
+    const wroteRef = setByPathSegments(
+      nextConfig,
+      targetPathSegments,
+      target.ref,
+    );
     if (wroteRef) {
       changedFiles.add(configPath);
     }
@@ -302,7 +340,10 @@ async function projectPlanState(params: {
       };
       let mutated = false;
       for (const profileValue of Object.values(nextStore.profiles)) {
-        if (!isRecord(profileValue) || !isNonEmptyString(profileValue.provider)) {
+        if (
+          !isRecord(profileValue) ||
+          !isNonEmptyString(profileValue.provider)
+        ) {
           continue;
         }
         const provider = normalizeProviderId(String(profileValue.provider));
@@ -381,7 +422,11 @@ async function projectPlanState(params: {
     const envPath = path.join(resolveConfigDir(params.env, os.homedir), ".env");
     if (fs.existsSync(envPath)) {
       const current = fs.readFileSync(envPath, "utf8");
-      const scrubbed = scrubEnvRaw(current, scrubbedValues, new Set(listKnownSecretEnvVarNames()));
+      const scrubbed = scrubEnvRaw(
+        current,
+        scrubbedValues,
+        new Set(listKnownSecretEnvVarNames()),
+      );
       if (scrubbed.removed > 0 && scrubbed.nextRaw !== current) {
         envRawByPath.set(envPath, scrubbed.nextRaw);
         changedFiles.add(envPath);
@@ -464,7 +509,10 @@ function restoreFileSnapshot(pathname: string, snapshot: FileSnapshot): void {
   writeTextFileAtomic(pathname, snapshot.content, snapshot.mode || 0o600);
 }
 
-function toJsonWrite(pathname: string, value: Record<string, unknown>): ApplyWrite {
+function toJsonWrite(
+  pathname: string,
+  value: Record<string, unknown>,
+): ApplyWrite {
   return {
     path: pathname,
     content: `${JSON.stringify(value, null, 2)}\n`,
@@ -527,7 +575,10 @@ export async function runSecretsApply(params: {
   }
 
   try {
-    await io.writeConfigFile(projected.nextConfig, projected.configWriteOptions);
+    await io.writeConfigFile(
+      projected.nextConfig,
+      projected.configWriteOptions,
+    );
     for (const write of writes) {
       writeTextFileAtomic(write.path, write.content, write.mode);
     }

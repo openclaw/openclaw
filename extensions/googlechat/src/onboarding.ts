@@ -56,7 +56,8 @@ async function promptAllowFrom(params: {
 }): Promise<OpenClawConfig> {
   const current = params.cfg.channels?.["googlechat"]?.dm?.allowFrom ?? [];
   const entry = await params.prompter.text({
-    message: "Google Chat allowFrom (users/<id> or raw email; avoid users/<email>)",
+    message:
+      "Google Chat allowFrom (users/<id> or raw email; avoid users/<email>)",
     placeholder: "users/123456789, name@example.com",
     initialValue: current[0] ? String(current[0]) : undefined,
     validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
@@ -137,7 +138,8 @@ async function promptCredentials(params: {
   const { cfg, prompter, accountId } = params;
   const envReady =
     accountId === DEFAULT_ACCOUNT_ID &&
-    (Boolean(process.env[ENV_SERVICE_ACCOUNT]) || Boolean(process.env[ENV_SERVICE_ACCOUNT_FILE]));
+    (Boolean(process.env[ENV_SERVICE_ACCOUNT]) ||
+      Boolean(process.env[ENV_SERVICE_ACCOUNT_FILE]));
   if (envReady) {
     const useEnv = await prompter.confirm({
       message: "Use GOOGLE_CHAT_SERVICE_ACCOUNT env vars?",
@@ -161,7 +163,8 @@ async function promptCredentials(params: {
     const path = await prompter.text({
       message: "Service account JSON path",
       placeholder: "/path/to/service-account.json",
-      validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
+      validate: (value) =>
+        String(value ?? "").trim() ? undefined : "Required",
     });
     return applyAccountConfig({
       cfg,
@@ -199,11 +202,15 @@ async function promptAudience(params: {
       { value: "app-url", label: "App URL (recommended)" },
       { value: "project-number", label: "Project number" },
     ],
-    initialValue: currentType === "project-number" ? "project-number" : "app-url",
+    initialValue:
+      currentType === "project-number" ? "project-number" : "app-url",
   });
   const audience = await params.prompter.text({
     message: audienceType === "project-number" ? "Project number" : "App URL",
-    placeholder: audienceType === "project-number" ? "1234567890" : "https://your.host/googlechat",
+    placeholder:
+      audienceType === "project-number"
+        ? "1234567890"
+        : "https://your.host/googlechat",
     initialValue: currentAudience || undefined,
     validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
   });
@@ -231,16 +238,25 @@ export const googlechatOnboardingAdapter: ChannelOnboardingAdapter = {
   dmPolicy,
   getStatus: async ({ cfg }) => {
     const configured = listGoogleChatAccountIds(cfg).some(
-      (accountId) => resolveGoogleChatAccount({ cfg, accountId }).credentialSource !== "none",
+      (accountId) =>
+        resolveGoogleChatAccount({ cfg, accountId }).credentialSource !==
+        "none",
     );
     return {
       channel,
       configured,
-      statusLines: [`Google Chat: ${configured ? "configured" : "needs service account"}`],
+      statusLines: [
+        `Google Chat: ${configured ? "configured" : "needs service account"}`,
+      ],
       selectionHint: configured ? "configured" : "needs auth",
     };
   },
-  configure: async ({ cfg, prompter, accountOverrides, shouldPromptAccountIds }) => {
+  configure: async ({
+    cfg,
+    prompter,
+    accountOverrides,
+    shouldPromptAccountIds,
+  }) => {
     const override = accountOverrides["googlechat"]?.trim();
     const defaultAccountId = resolveDefaultGoogleChatAccountId(cfg);
     let accountId = override ? normalizeAccountId(override) : defaultAccountId;

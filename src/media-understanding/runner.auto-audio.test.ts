@@ -4,7 +4,9 @@ import { buildProviderRegistry, runCapability } from "./runner.js";
 import { withAudioFixture } from "./runner.test-utils.js";
 
 function createOpenAiAudioProvider(
-  transcribeAudio: (req: { model?: string }) => Promise<{ text: string; model: string }>,
+  transcribeAudio: (req: {
+    model?: string;
+  }) => Promise<{ text: string; model: string }>,
 ) {
   return buildProviderRegistry({
     openai: {
@@ -30,22 +32,29 @@ function createOpenAiAudioCfg(extra?: Partial<OpenClawConfig>): OpenClawConfig {
 }
 
 async function runAutoAudioCase(params: {
-  transcribeAudio: (req: { model?: string }) => Promise<{ text: string; model: string }>;
+  transcribeAudio: (req: {
+    model?: string;
+  }) => Promise<{ text: string; model: string }>;
   cfgExtra?: Partial<OpenClawConfig>;
 }) {
   let runResult: Awaited<ReturnType<typeof runCapability>> | undefined;
-  await withAudioFixture("openclaw-auto-audio", async ({ ctx, media, cache }) => {
-    const providerRegistry = createOpenAiAudioProvider(params.transcribeAudio);
-    const cfg = createOpenAiAudioCfg(params.cfgExtra);
-    runResult = await runCapability({
-      capability: "audio",
-      cfg,
-      ctx,
-      attachments: cache,
-      media,
-      providerRegistry,
-    });
-  });
+  await withAudioFixture(
+    "openclaw-auto-audio",
+    async ({ ctx, media, cache }) => {
+      const providerRegistry = createOpenAiAudioProvider(
+        params.transcribeAudio,
+      );
+      const cfg = createOpenAiAudioCfg(params.cfgExtra);
+      runResult = await runCapability({
+        capability: "audio",
+        cfg,
+        ctx,
+        attachments: cache,
+        media,
+        providerRegistry,
+      });
+    },
+  );
   if (!runResult) {
     throw new Error("Expected auto audio case result");
   }
@@ -123,46 +132,55 @@ describe("runCapability auto audio entries", () => {
     process.env.MISTRAL_API_KEY = "mistral-test-key";
     let runResult: Awaited<ReturnType<typeof runCapability>> | undefined;
     try {
-      await withAudioFixture("openclaw-auto-audio-mistral", async ({ ctx, media, cache }) => {
-        const providerRegistry = buildProviderRegistry({
-          openai: {
-            id: "openai",
-            capabilities: ["audio"],
-            transcribeAudio: async () => ({ text: "openai", model: "gpt-4o-mini-transcribe" }),
-          },
-          mistral: {
-            id: "mistral",
-            capabilities: ["audio"],
-            transcribeAudio: async (req) => ({ text: "mistral", model: req.model ?? "unknown" }),
-          },
-        });
-        const cfg = {
-          models: {
-            providers: {
-              mistral: {
-                apiKey: "mistral-test-key",
-                models: [],
+      await withAudioFixture(
+        "openclaw-auto-audio-mistral",
+        async ({ ctx, media, cache }) => {
+          const providerRegistry = buildProviderRegistry({
+            openai: {
+              id: "openai",
+              capabilities: ["audio"],
+              transcribeAudio: async () => ({
+                text: "openai",
+                model: "gpt-4o-mini-transcribe",
+              }),
+            },
+            mistral: {
+              id: "mistral",
+              capabilities: ["audio"],
+              transcribeAudio: async (req) => ({
+                text: "mistral",
+                model: req.model ?? "unknown",
+              }),
+            },
+          });
+          const cfg = {
+            models: {
+              providers: {
+                mistral: {
+                  apiKey: "mistral-test-key",
+                  models: [],
+                },
               },
             },
-          },
-          tools: {
-            media: {
-              audio: {
-                enabled: true,
+            tools: {
+              media: {
+                audio: {
+                  enabled: true,
+                },
               },
             },
-          },
-        } as unknown as OpenClawConfig;
+          } as unknown as OpenClawConfig;
 
-        runResult = await runCapability({
-          capability: "audio",
-          cfg,
-          ctx,
-          attachments: cache,
-          media,
-          providerRegistry,
-        });
-      });
+          runResult = await runCapability({
+            capability: "audio",
+            cfg,
+            ctx,
+            attachments: cache,
+            media,
+            providerRegistry,
+          });
+        },
+      );
     } finally {
       for (const [key, value] of Object.entries(priorEnv)) {
         if (value === undefined) {

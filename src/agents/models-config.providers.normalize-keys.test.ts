@@ -7,9 +7,13 @@ import { normalizeProviders } from "./models-config.providers.js";
 
 describe("normalizeProviders", () => {
   it("trims provider keys so image models remain discoverable for custom providers", async () => {
-    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
+    const agentDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-agent-"),
+    );
     try {
-      const providers: NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]> = {
+      const providers: NonNullable<
+        NonNullable<OpenClawConfig["models"]>["providers"]
+      > = {
         " dashscope-vision ": {
           baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
           api: "openai-completions",
@@ -30,16 +34,22 @@ describe("normalizeProviders", () => {
 
       const normalized = normalizeProviders({ providers, agentDir });
       expect(Object.keys(normalized ?? {})).toEqual(["dashscope-vision"]);
-      expect(normalized?.["dashscope-vision"]?.models?.[0]?.id).toBe("qwen-vl-max");
+      expect(normalized?.["dashscope-vision"]?.models?.[0]?.id).toBe(
+        "qwen-vl-max",
+      );
     } finally {
       await fs.rm(agentDir, { recursive: true, force: true });
     }
   });
 
   it("keeps the latest provider config when duplicate keys only differ by whitespace", async () => {
-    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
+    const agentDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-agent-"),
+    );
     try {
-      const providers: NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]> = {
+      const providers: NonNullable<
+        NonNullable<OpenClawConfig["models"]>["providers"]
+      > = {
         openai: {
           baseUrl: "https://api.openai.com/v1",
           api: "openai-completions",

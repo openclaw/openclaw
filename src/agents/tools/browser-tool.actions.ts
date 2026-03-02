@@ -1,5 +1,8 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import { browserAct, browserConsoleMessages } from "../../browser/client-actions.js";
+import {
+  browserAct,
+  browserConsoleMessages,
+} from "../../browser/client-actions.js";
 import { browserSnapshot, browserTabs } from "../../browser/client.js";
 import { DEFAULT_AI_SNAPSHOT_MAX_CHARS } from "../../browser/constants.js";
 import { loadConfig } from "../../config/config.js";
@@ -54,7 +57,10 @@ function formatTabsToolResult(tabs: unknown[]): AgentToolResult<unknown> {
   };
 }
 
-function isChromeStaleTargetError(profile: string | undefined, err: unknown): boolean {
+function isChromeStaleTargetError(
+  profile: string | undefined,
+  err: unknown,
+): boolean {
   if (profile !== "chrome") {
     return false;
   }
@@ -65,7 +71,8 @@ function isChromeStaleTargetError(profile: string | undefined, err: unknown): bo
 function stripTargetIdFromActRequest(
   request: Parameters<typeof browserAct>[1],
 ): Parameters<typeof browserAct>[1] | null {
-  const targetId = typeof request.targetId === "string" ? request.targetId.trim() : undefined;
+  const targetId =
+    typeof request.targetId === "string" ? request.targetId.trim() : undefined;
   if (!targetId) {
     return null;
   }
@@ -102,7 +109,9 @@ export async function executeSnapshotAction(params: {
   const { input, baseUrl, profile, proxyRequest } = params;
   const snapshotDefaults = loadConfig().browser?.snapshotDefaults;
   const format =
-    input.snapshotFormat === "ai" || input.snapshotFormat === "aria" ? input.snapshotFormat : "ai";
+    input.snapshotFormat === "ai" || input.snapshotFormat === "aria"
+      ? input.snapshotFormat
+      : "ai";
   const mode =
     input.mode === "efficient"
       ? "efficient"
@@ -110,13 +119,19 @@ export async function executeSnapshotAction(params: {
         ? "efficient"
         : undefined;
   const labels = typeof input.labels === "boolean" ? input.labels : undefined;
-  const refs = input.refs === "aria" || input.refs === "role" ? input.refs : undefined;
+  const refs =
+    input.refs === "aria" || input.refs === "role" ? input.refs : undefined;
   const hasMaxChars = Object.hasOwn(input, "maxChars");
-  const targetId = typeof input.targetId === "string" ? input.targetId.trim() : undefined;
+  const targetId =
+    typeof input.targetId === "string" ? input.targetId.trim() : undefined;
   const limit =
-    typeof input.limit === "number" && Number.isFinite(input.limit) ? input.limit : undefined;
+    typeof input.limit === "number" && Number.isFinite(input.limit)
+      ? input.limit
+      : undefined;
   const maxChars =
-    typeof input.maxChars === "number" && Number.isFinite(input.maxChars) && input.maxChars > 0
+    typeof input.maxChars === "number" &&
+    Number.isFinite(input.maxChars) &&
+    input.maxChars > 0
       ? Math.floor(input.maxChars)
       : undefined;
   const resolvedMaxChars =
@@ -127,12 +142,18 @@ export async function executeSnapshotAction(params: {
           ? undefined
           : DEFAULT_AI_SNAPSHOT_MAX_CHARS
       : undefined;
-  const interactive = typeof input.interactive === "boolean" ? input.interactive : undefined;
-  const compact = typeof input.compact === "boolean" ? input.compact : undefined;
+  const interactive =
+    typeof input.interactive === "boolean" ? input.interactive : undefined;
+  const compact =
+    typeof input.compact === "boolean" ? input.compact : undefined;
   const depth =
-    typeof input.depth === "number" && Number.isFinite(input.depth) ? input.depth : undefined;
-  const selector = typeof input.selector === "string" ? input.selector.trim() : undefined;
-  const frame = typeof input.frame === "string" ? input.frame.trim() : undefined;
+    typeof input.depth === "number" && Number.isFinite(input.depth)
+      ? input.depth
+      : undefined;
+  const selector =
+    typeof input.selector === "string" ? input.selector.trim() : undefined;
+  const frame =
+    typeof input.frame === "string" ? input.frame.trim() : undefined;
   const snapshot = proxyRequest
     ? ((await proxyRequest({
         method: "GET",
@@ -142,7 +163,9 @@ export async function executeSnapshotAction(params: {
           format,
           targetId,
           limit,
-          ...(typeof resolvedMaxChars === "number" ? { maxChars: resolvedMaxChars } : {}),
+          ...(typeof resolvedMaxChars === "number"
+            ? { maxChars: resolvedMaxChars }
+            : {}),
           refs,
           interactive,
           compact,
@@ -157,7 +180,9 @@ export async function executeSnapshotAction(params: {
         format,
         targetId,
         limit,
-        ...(typeof resolvedMaxChars === "number" ? { maxChars: resolvedMaxChars } : {}),
+        ...(typeof resolvedMaxChars === "number"
+          ? { maxChars: resolvedMaxChars }
+          : {}),
         refs,
         interactive,
         compact,
@@ -240,8 +265,10 @@ export async function executeConsoleAction(params: {
   proxyRequest: BrowserProxyRequest | null;
 }): Promise<AgentToolResult<unknown>> {
   const { input, baseUrl, profile, proxyRequest } = params;
-  const level = typeof input.level === "string" ? input.level.trim() : undefined;
-  const targetId = typeof input.targetId === "string" ? input.targetId.trim() : undefined;
+  const level =
+    typeof input.level === "string" ? input.level.trim() : undefined;
+  const targetId =
+    typeof input.targetId === "string" ? input.targetId.trim() : undefined;
   if (proxyRequest) {
     const result = (await proxyRequest({
       method: "GET",
@@ -261,12 +288,19 @@ export async function executeConsoleAction(params: {
       content: [{ type: "text" as const, text: wrapped.wrappedText }],
       details: {
         ...wrapped.safeDetails,
-        targetId: typeof result.targetId === "string" ? result.targetId : undefined,
-        messageCount: Array.isArray(result.messages) ? result.messages.length : undefined,
+        targetId:
+          typeof result.targetId === "string" ? result.targetId : undefined,
+        messageCount: Array.isArray(result.messages)
+          ? result.messages.length
+          : undefined,
       },
     };
   }
-  const result = await browserConsoleMessages(baseUrl, { level, targetId, profile });
+  const result = await browserConsoleMessages(baseUrl, {
+    level,
+    targetId,
+    profile,
+  });
   const wrapped = wrapBrowserExternalJson({
     kind: "console",
     payload: result,

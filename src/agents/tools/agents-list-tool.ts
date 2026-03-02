@@ -8,7 +8,10 @@ import {
 import { resolveAgentConfig } from "../agent-scope.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult } from "./common.js";
-import { resolveInternalSessionKey, resolveMainSessionAlias } from "./sessions-helpers.js";
+import {
+  resolveInternalSessionKey,
+  resolveMainSessionAlias,
+} from "./sessions-helpers.js";
 
 const AgentsListToolSchema = Type.Object({});
 
@@ -46,7 +49,8 @@ export function createAgentsListTool(opts?: {
           DEFAULT_AGENT_ID,
       );
 
-      const allowAgents = resolveAgentConfig(cfg, requesterAgentId)?.subagents?.allowAgents ?? [];
+      const allowAgents =
+        resolveAgentConfig(cfg, requesterAgentId)?.subagents?.allowAgents ?? [];
       const allowAny = allowAgents.some((value) => value.trim() === "*");
       const allowSet = new Set(
         allowAgents
@@ -54,8 +58,12 @@ export function createAgentsListTool(opts?: {
           .map((value) => normalizeAgentId(value)),
       );
 
-      const configuredAgents = Array.isArray(cfg.agents?.list) ? cfg.agents?.list : [];
-      const configuredIds = configuredAgents.map((entry) => normalizeAgentId(entry.id));
+      const configuredAgents = Array.isArray(cfg.agents?.list)
+        ? cfg.agents?.list
+        : [];
+      const configuredIds = configuredAgents.map((entry) =>
+        normalizeAgentId(entry.id),
+      );
       const configuredNameMap = new Map<string, string>();
       for (const entry of configuredAgents) {
         const name = entry?.name?.trim() ?? "";

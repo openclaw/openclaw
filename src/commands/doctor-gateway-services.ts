@@ -10,7 +10,10 @@ import {
   renderGatewayServiceCleanupHints,
   type ExtraGatewayService,
 } from "../daemon/inspect.js";
-import { renderSystemNodeWarning, resolveSystemNodeInfo } from "../daemon/runtime-paths.js";
+import {
+  renderSystemNodeWarning,
+  resolveSystemNodeInfo,
+} from "../daemon/runtime-paths.js";
 import {
   auditGatewayServiceConfig,
   needsNodeRuntimeMigration,
@@ -21,12 +24,17 @@ import { uninstallLegacySystemdUnits } from "../daemon/systemd.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { note } from "../terminal/note.js";
 import { buildGatewayInstallPlan } from "./daemon-install-helpers.js";
-import { DEFAULT_GATEWAY_DAEMON_RUNTIME, type GatewayDaemonRuntime } from "./daemon-runtime.js";
+import {
+  DEFAULT_GATEWAY_DAEMON_RUNTIME,
+  type GatewayDaemonRuntime,
+} from "./daemon-runtime.js";
 import type { DoctorOptions, DoctorPrompter } from "./doctor-prompter.js";
 
 const execFileAsync = promisify(execFile);
 
-function detectGatewayRuntime(programArguments: string[] | undefined): GatewayDaemonRuntime {
+function detectGatewayRuntime(
+  programArguments: string[] | undefined,
+): GatewayDaemonRuntime {
   const first = programArguments?.[0];
   if (first) {
     const base = path.basename(first).toLowerCase();
@@ -55,7 +63,10 @@ function normalizeExecutablePath(value: string): string {
   return path.resolve(value);
 }
 
-function resolveGatewayAuthToken(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): string | undefined {
+function resolveGatewayAuthToken(
+  cfg: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+): string | undefined {
   const configToken = cfg.gateway?.auth?.token?.trim();
   if (configToken) {
     return configToken;
@@ -77,9 +88,16 @@ async function cleanupLegacyLaunchdService(params: {
   label: string;
   plistPath: string;
 }): Promise<string | null> {
-  const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
-  await execFileAsync("launchctl", ["bootout", domain, params.plistPath]).catch(() => undefined);
-  await execFileAsync("launchctl", ["unload", params.plistPath]).catch(() => undefined);
+  const domain =
+    typeof process.getuid === "function"
+      ? `gui/${process.getuid()}`
+      : "gui/501";
+  await execFileAsync("launchctl", ["bootout", domain, params.plistPath]).catch(
+    () => undefined,
+  );
+  await execFileAsync("launchctl", ["unload", params.plistPath]).catch(
+    () => undefined,
+  );
 
   const trashDir = path.join(os.homedir(), ".Trash");
   try {
@@ -243,21 +261,23 @@ export async function maybeRepairGatewayServiceConfig(
 
   const port = resolveGatewayPort(cfg, process.env);
   const runtimeChoice = detectGatewayRuntime(command.programArguments);
-  const { programArguments, workingDirectory, environment } = await buildGatewayInstallPlan({
-    env: process.env,
-    port,
-    token: expectedGatewayToken,
-    runtime: needsNodeRuntime && systemNodePath ? "node" : runtimeChoice,
-    nodePath: systemNodePath ?? undefined,
-    warn: (message, title) => note(message, title),
-    config: cfg,
-  });
+  const { programArguments, workingDirectory, environment } =
+    await buildGatewayInstallPlan({
+      env: process.env,
+      port,
+      token: expectedGatewayToken,
+      runtime: needsNodeRuntime && systemNodePath ? "node" : runtimeChoice,
+      nodePath: systemNodePath ?? undefined,
+      warn: (message, title) => note(message, title),
+      config: cfg,
+    });
   const expectedEntrypoint = findGatewayEntrypoint(programArguments);
   const currentEntrypoint = findGatewayEntrypoint(command.programArguments);
   if (
     expectedEntrypoint &&
     currentEntrypoint &&
-    normalizeExecutablePath(expectedEntrypoint) !== normalizeExecutablePath(currentEntrypoint)
+    normalizeExecutablePath(expectedEntrypoint) !==
+      normalizeExecutablePath(currentEntrypoint)
   ) {
     audit.issues.push({
       code: SERVICE_AUDIT_CODES.gatewayEntrypointMismatch,
@@ -274,13 +294,17 @@ export async function maybeRepairGatewayServiceConfig(
   note(
     audit.issues
       .map((issue) =>
-        issue.detail ? `- ${issue.message} (${issue.detail})` : `- ${issue.message}`,
+        issue.detail
+          ? `- ${issue.message} (${issue.detail})`
+          : `- ${issue.message}`,
       )
       .join("\n"),
     "Gateway service config",
   );
 
-  const aggressiveIssues = audit.issues.filter((issue) => issue.level === "aggressive");
+  const aggressiveIssues = audit.issues.filter(
+    (issue) => issue.level === "aggressive",
+  );
   const needsAggressive = aggressiveIssues.length > 0;
 
   if (needsAggressive && !prompter.shouldForce) {
@@ -296,7 +320,8 @@ export async function maybeRepairGatewayServiceConfig(
         initialValue: Boolean(prompter.shouldForce),
       })
     : await prompter.confirmRepair({
-        message: "Update gateway service config to the recommended defaults now?",
+        message:
+          "Update gateway service config to the recommended defaults now?",
         initialValue: true,
       });
   if (!repair) {
@@ -328,7 +353,9 @@ export async function maybeScanExtraGatewayServices(
   }
 
   note(
-    extraServices.map((svc) => `- ${svc.label} (${svc.scope}, ${svc.detail})`).join("\n"),
+    extraServices
+      .map((svc) => `- ${svc.label} (${svc.scope}, ${svc.detail})`)
+      .join("\n"),
     "Other gateway-like services detected",
   );
 
@@ -350,19 +377,30 @@ export async function maybeScanExtraGatewayServices(
       }
 
       if (linuxUserServices.length > 0) {
-        const result = await cleanupLegacyLinuxUserServices(linuxUserServices, runtime);
+        const result = await cleanupLegacyLinuxUserServices(
+          linuxUserServices,
+          runtime,
+        );
         removed.push(...result.removed);
         failed.push(...result.failed);
       }
 
       if (removed.length > 0) {
-        note(removed.map((line) => `- ${line}`).join("\n"), "Legacy gateway removed");
+        note(
+          removed.map((line) => `- ${line}`).join("\n"),
+          "Legacy gateway removed",
+        );
       }
       if (failed.length > 0) {
-        note(failed.map((line) => `- ${line}`).join("\n"), "Legacy gateway cleanup skipped");
+        note(
+          failed.map((line) => `- ${line}`).join("\n"),
+          "Legacy gateway cleanup skipped",
+        );
       }
       if (removed.length > 0) {
-        runtime.log("Legacy gateway services removed. Installing OpenClaw gateway next.");
+        runtime.log(
+          "Legacy gateway services removed. Installing OpenClaw gateway next.",
+        );
       }
     }
   }

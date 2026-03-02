@@ -23,7 +23,9 @@ describe("getDmHistoryLimitFromSessionKey", () => {
         },
       },
     } as OpenClawConfig;
-    expect(getDmHistoryLimitFromSessionKey("agent:main:telegram:dm:789", config)).toBe(3);
+    expect(
+      getDmHistoryLimitFromSessionKey("agent:main:telegram:dm:789", config),
+    ).toBe(3);
   });
   it("handles userId with colons (e.g., email)", () => {
     const config = {
@@ -34,7 +36,9 @@ describe("getDmHistoryLimitFromSessionKey", () => {
         },
       },
     } as OpenClawConfig;
-    expect(getDmHistoryLimitFromSessionKey("msteams:dm:user@example.com", config)).toBe(7);
+    expect(
+      getDmHistoryLimitFromSessionKey("msteams:dm:user@example.com", config),
+    ).toBe(7);
   });
   it("returns undefined when per-DM historyLimit is not set", () => {
     const config = {
@@ -44,7 +48,9 @@ describe("getDmHistoryLimitFromSessionKey", () => {
         },
       },
     } as OpenClawConfig;
-    expect(getDmHistoryLimitFromSessionKey("telegram:dm:123", config)).toBeUndefined();
+    expect(
+      getDmHistoryLimitFromSessionKey("telegram:dm:123", config),
+    ).toBeUndefined();
   });
   it("returns 0 when per-DM historyLimit is explicitly 0 (unlimited)", () => {
     const config = {

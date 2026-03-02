@@ -11,6 +11,8 @@ describe("readLineWebhookRequestBody", () => {
 
   it("rejects oversized body", async () => {
     const req = createMockIncomingRequest(["x".repeat(2048)]);
-    await expect(readLineWebhookRequestBody(req, 128)).rejects.toThrow("PayloadTooLarge");
+    await expect(readLineWebhookRequestBody(req, 128)).rejects.toThrow(
+      "PayloadTooLarge",
+    );
   });
 });

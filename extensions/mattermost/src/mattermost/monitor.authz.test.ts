@@ -48,7 +48,10 @@ describe("mattermost monitor authz", () => {
       useAccessGroups: true,
       authorizers: [
         { configured: resolved.effectiveAllowFrom.length > 0, allowed: false },
-        { configured: resolved.effectiveGroupAllowFrom.length > 0, allowed: false },
+        {
+          configured: resolved.effectiveGroupAllowFrom.length > 0,
+          allowed: false,
+        },
       ],
       allowTextCommands: true,
       hasControlCommand: true,

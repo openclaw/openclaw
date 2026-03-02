@@ -1,4 +1,8 @@
-import { createArgReader, createGatewayWsClient, resolveGatewayUrl } from "./gateway-ws-client.ts";
+import {
+  createArgReader,
+  createGatewayWsClient,
+  resolveGatewayUrl,
+} from "./gateway-ws-client.ts";
 
 type NodeListPayload = {
   ts?: number;
@@ -20,7 +24,8 @@ const { get: getArg, has: hasFlag } = createArgReader();
 const urlRaw = getArg("--url") ?? process.env.OPENCLAW_GATEWAY_URL;
 const token = getArg("--token") ?? process.env.OPENCLAW_GATEWAY_TOKEN;
 const nodeHint = getArg("--node");
-const dangerous = hasFlag("--dangerous") || process.env.OPENCLAW_RUN_DANGEROUS === "1";
+const dangerous =
+  hasFlag("--dangerous") || process.env.OPENCLAW_RUN_DANGEROUS === "1";
 const jsonOut = hasFlag("--json");
 
 if (!urlRaw || !token) {
@@ -62,9 +67,14 @@ function formatErr(err: unknown): string {
   }
 }
 
-function pickIosNode(list: NodeListPayload, hint?: string): NodeListNode | null {
+function pickIosNode(
+  list: NodeListPayload,
+  hint?: string,
+): NodeListNode | null {
   const nodes = (list.nodes ?? []).filter((n) => n && n.connected);
-  const ios = nodes.filter((n) => (n.platform ?? "").toLowerCase().includes("ios"));
+  const ios = nodes.filter((n) =>
+    (n.platform ?? "").toLowerCase().includes("ios"),
+  );
   if (ios.length === 0) {
     return null;
   }
@@ -82,7 +92,9 @@ function pickIosNode(list: NodeListPayload, hint?: string): NodeListNode | null 
 }
 
 async function main() {
-  const { request, waitOpen, close } = createGatewayWsClient({ url: url.toString() });
+  const { request, waitOpen, close } = createGatewayWsClient({
+    url: url.toString(),
+  });
   await waitOpen();
 
   const connectRes = await request("connect", {
@@ -143,7 +155,9 @@ async function main() {
   }
   if (!node) {
     // eslint-disable-next-line no-console
-    console.error("No connected iOS nodes found. (Is the iOS app connected to the gateway?)");
+    console.error(
+      "No connected iOS nodes found. (Is the iOS app connected to the gateway?)",
+    );
     close();
     process.exit(5);
   }
@@ -154,7 +168,11 @@ async function main() {
     {
       id: "system.notify",
       command: "system.notify",
-      params: { title: "OpenClaw E2E", body: `ios-node-e2e @ ${isoNow()}`, delivery: "system" },
+      params: {
+        title: "OpenClaw E2E",
+        body: `ios-node-e2e @ ${isoNow()}`,
+        delivery: "system",
+      },
     },
     {
       id: "contacts.search",
@@ -164,7 +182,11 @@ async function main() {
     {
       id: "calendar.events",
       command: "calendar.events",
-      params: { startISO: isoMinusMs(6 * 60 * 60 * 1000), endISO: isoNow(), limit: 10 },
+      params: {
+        startISO: isoMinusMs(6 * 60 * 60 * 1000),
+        endISO: isoNow(),
+        limit: 10,
+      },
     },
     {
       id: "reminders.list",
@@ -253,7 +275,8 @@ async function main() {
       ),
     );
   } else {
-    const pad = (s: string, n: number) => (s.length >= n ? s : s + " ".repeat(n - s.length));
+    const pad = (s: string, n: number) =>
+      s.length >= n ? s : s + " ".repeat(n - s.length);
     const rows = results.map((r) => ({
       cmd: r.id,
       ok: r.ok ? "ok" : "fail",
@@ -261,7 +284,9 @@ async function main() {
     }));
     const width = Math.min(64, Math.max(12, ...rows.map((r) => r.cmd.length)));
     // eslint-disable-next-line no-console
-    console.log(`node: ${node.displayName ?? node.nodeId} (${node.platform ?? "unknown"})`);
+    console.log(
+      `node: ${node.displayName ?? node.nodeId} (${node.platform ?? "unknown"})`,
+    );
     // eslint-disable-next-line no-console
     console.log(`dangerous: ${dangerous ? "on" : "off"}`);
     // eslint-disable-next-line no-console

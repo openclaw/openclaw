@@ -1,6 +1,7 @@
 import { clearActiveProgressLine } from "./progress-line.js";
 
-const RESET_SEQUENCE = "\x1b[0m\x1b[?25h\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?2004l";
+const RESET_SEQUENCE =
+  "\x1b[0m\x1b[?25h\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?2004l";
 
 type RestoreTerminalStateOptions = {
   /**
@@ -19,13 +20,19 @@ type RestoreTerminalStateOptions = {
   resumeStdinIfPaused?: boolean;
 };
 
-function reportRestoreFailure(scope: string, err: unknown, reason?: string): void {
+function reportRestoreFailure(
+  scope: string,
+  err: unknown,
+  reason?: string,
+): void {
   const suffix = reason ? ` (${reason})` : "";
   const message = `[terminal] restore ${scope} failed${suffix}: ${String(err)}`;
   try {
     process.stderr.write(`${message}\n`);
   } catch (writeErr) {
-    console.error(`[terminal] restore reporting failed${suffix}: ${String(writeErr)}`);
+    console.error(
+      `[terminal] restore reporting failed${suffix}: ${String(writeErr)}`,
+    );
   }
 }
 
@@ -35,7 +42,8 @@ export function restoreTerminalState(
 ): void {
   // Docker TTY note: resuming stdin can keep a container process alive even
   // after the wizard is "done" (stdin_open: true), making installers appear hung.
-  const resumeStdin = options.resumeStdinIfPaused ?? options.resumeStdin ?? false;
+  const resumeStdin =
+    options.resumeStdinIfPaused ?? options.resumeStdin ?? false;
   try {
     clearActiveProgressLine();
   } catch (err) {
@@ -49,7 +57,11 @@ export function restoreTerminalState(
     } catch (err) {
       reportRestoreFailure("raw mode", err, reason);
     }
-    if (resumeStdin && typeof stdin.isPaused === "function" && stdin.isPaused()) {
+    if (
+      resumeStdin &&
+      typeof stdin.isPaused === "function" &&
+      stdin.isPaused()
+    ) {
       try {
         stdin.resume();
       } catch (err) {

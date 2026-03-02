@@ -35,7 +35,10 @@ function resolveToken(params: {
 
   // Check account-level config first
   if (accountConfig?.channelAccessToken?.trim()) {
-    return { token: accountConfig.channelAccessToken.trim(), tokenSource: "config" };
+    return {
+      token: accountConfig.channelAccessToken.trim(),
+      tokenSource: "config",
+    };
   }
 
   // Check account-level token file
@@ -47,7 +50,10 @@ function resolveToken(params: {
   // For default account, check base config and env
   if (accountId === DEFAULT_ACCOUNT_ID) {
     if (baseConfig?.channelAccessToken?.trim()) {
-      return { token: baseConfig.channelAccessToken.trim(), tokenSource: "config" };
+      return {
+        token: baseConfig.channelAccessToken.trim(),
+        tokenSource: "config",
+      };
     }
 
     const baseFileToken = readFileIfExists(baseConfig?.tokenFile);
@@ -111,7 +117,9 @@ export function resolveLineAccount(params: {
   const lineConfig = cfg.channels?.line as LineConfig | undefined;
   const accounts = lineConfig?.accounts;
   const accountConfig =
-    accountId !== DEFAULT_ACCOUNT_ID ? resolveAccountEntry(accounts, accountId) : undefined;
+    accountId !== DEFAULT_ACCOUNT_ID
+      ? resolveAccountEntry(accounts, accountId)
+      : undefined;
 
   const { token, tokenSource } = resolveToken({
     accountId,
@@ -143,7 +151,8 @@ export function resolveLineAccount(params: {
     (accountId === DEFAULT_ACCOUNT_ID ? (lineConfig?.enabled ?? true) : false);
 
   const name =
-    accountConfig?.name ?? (accountId === DEFAULT_ACCOUNT_ID ? lineConfig?.name : undefined);
+    accountConfig?.name ??
+    (accountId === DEFAULT_ACCOUNT_ID ? lineConfig?.name : undefined);
 
   return {
     accountId,
@@ -186,7 +195,9 @@ export function resolveDefaultLineAccountId(cfg: OpenClawConfig): string {
   );
   if (
     preferred &&
-    listLineAccountIds(cfg).some((accountId) => normalizeSharedAccountId(accountId) === preferred)
+    listLineAccountIds(cfg).some(
+      (accountId) => normalizeSharedAccountId(accountId) === preferred,
+    )
   ) {
     return preferred;
   }

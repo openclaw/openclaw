@@ -44,12 +44,16 @@ export class NodeRegistry {
     const connect = client.connect;
     const nodeId = connect.device?.id ?? connect.client.id;
     const caps = Array.isArray(connect.caps) ? connect.caps : [];
-    const commands = Array.isArray((connect as { commands?: string[] }).commands)
+    const commands = Array.isArray(
+      (connect as { commands?: string[] }).commands,
+    )
       ? ((connect as { commands?: string[] }).commands ?? [])
       : [];
     const permissions =
-      typeof (connect as { permissions?: Record<string, boolean> }).permissions === "object"
-        ? ((connect as { permissions?: Record<string, boolean> }).permissions ?? undefined)
+      typeof (connect as { permissions?: Record<string, boolean> })
+        .permissions === "object"
+        ? ((connect as { permissions?: Record<string, boolean> }).permissions ??
+          undefined)
         : undefined;
     const pathEnv =
       typeof (connect as { pathEnv?: string }).pathEnv === "string"
@@ -124,7 +128,9 @@ export class NodeRegistry {
       nodeId: params.nodeId,
       command: params.command,
       paramsJSON:
-        "params" in params && params.params !== undefined ? JSON.stringify(params.params) : null,
+        "params" in params && params.params !== undefined
+          ? JSON.stringify(params.params)
+          : null,
       timeoutMs: params.timeoutMs,
       idempotencyKey: params.idempotencyKey,
     };
@@ -132,10 +138,14 @@ export class NodeRegistry {
     if (!ok) {
       return {
         ok: false,
-        error: { code: "UNAVAILABLE", message: "failed to send invoke to node" },
+        error: {
+          code: "UNAVAILABLE",
+          message: "failed to send invoke to node",
+        },
       };
     }
-    const timeoutMs = typeof params.timeoutMs === "number" ? params.timeoutMs : 30_000;
+    const timeoutMs =
+      typeof params.timeoutMs === "number" ? params.timeoutMs : 30_000;
     return await new Promise<NodeInvokeResult>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pendingInvokes.delete(requestId);
@@ -188,7 +198,11 @@ export class NodeRegistry {
     return this.sendEventToSession(node, event, payload);
   }
 
-  private sendEventInternal(node: NodeSession, event: string, payload: unknown): boolean {
+  private sendEventInternal(
+    node: NodeSession,
+    event: string,
+    payload: unknown,
+  ): boolean {
     try {
       node.client.socket.send(
         JSON.stringify({
@@ -203,7 +217,11 @@ export class NodeRegistry {
     }
   }
 
-  private sendEventToSession(node: NodeSession, event: string, payload: unknown): boolean {
+  private sendEventToSession(
+    node: NodeSession,
+    event: string,
+    payload: unknown,
+  ): boolean {
     return this.sendEventInternal(node, event, payload);
   }
 }

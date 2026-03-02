@@ -12,5 +12,8 @@ declare module "osc-progress" {
     write: (chunk: string) => void;
   }): OscProgressController;
 
-  export function supportsOscProgress(env: NodeJS.ProcessEnv, isTty: boolean): boolean;
+  export function supportsOscProgress(
+    env: NodeJS.ProcessEnv,
+    isTty: boolean,
+  ): boolean;
 }

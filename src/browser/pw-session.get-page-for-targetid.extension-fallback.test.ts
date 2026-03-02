@@ -1,10 +1,16 @@
 import { chromium } from "playwright-core";
 import { describe, expect, it, vi } from "vitest";
 import * as chromeModule from "./chrome.js";
-import { closePlaywrightBrowserConnection, getPageForTargetId } from "./pw-session.js";
+import {
+  closePlaywrightBrowserConnection,
+  getPageForTargetId,
+} from "./pw-session.js";
 
 const connectOverCdpSpy = vi.spyOn(chromium, "connectOverCDP");
-const getChromeWebSocketUrlSpy = vi.spyOn(chromeModule, "getChromeWebSocketUrl");
+const getChromeWebSocketUrlSpy = vi.spyOn(
+  chromeModule,
+  "getChromeWebSocketUrl",
+);
 
 describe("pw-session getPageForTargetId", () => {
   it("falls back to the only page when CDP session attachment is blocked (extension relays)", async () => {

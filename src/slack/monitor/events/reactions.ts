@@ -11,7 +11,10 @@ export function registerSlackReactionEvents(params: {
 }) {
   const { ctx, trackEvent } = params;
 
-  const handleReactionEvent = async (event: SlackReactionEvent, action: string) => {
+  const handleReactionEvent = async (
+    event: SlackReactionEvent,
+    action: string,
+  ) => {
     try {
       const item = event.item;
       if (!item || item.type !== "message") {
@@ -29,13 +32,18 @@ export function registerSlackReactionEvents(params: {
         return;
       }
 
-      const actorInfoPromise: Promise<{ name?: string } | undefined> = event.user
-        ? ctx.resolveUserName(event.user)
-        : Promise.resolve(undefined);
-      const authorInfoPromise: Promise<{ name?: string } | undefined> = event.item_user
-        ? ctx.resolveUserName(event.item_user)
-        : Promise.resolve(undefined);
-      const [actorInfo, authorInfo] = await Promise.all([actorInfoPromise, authorInfoPromise]);
+      const actorInfoPromise: Promise<{ name?: string } | undefined> =
+        event.user
+          ? ctx.resolveUserName(event.user)
+          : Promise.resolve(undefined);
+      const authorInfoPromise: Promise<{ name?: string } | undefined> =
+        event.item_user
+          ? ctx.resolveUserName(event.item_user)
+          : Promise.resolve(undefined);
+      const [actorInfo, authorInfo] = await Promise.all([
+        actorInfoPromise,
+        authorInfoPromise,
+      ]);
       const actorLabel = actorInfo?.name ?? event.user;
       const emojiLabel = event.reaction ?? "emoji";
       const authorLabel = authorInfo?.name ?? event.item_user;
@@ -46,7 +54,9 @@ export function registerSlackReactionEvents(params: {
         contextKey: `slack:reaction:${action}:${item.channel}:${item.ts}:${event.user}:${emojiLabel}`,
       });
     } catch (err) {
-      ctx.runtime.error?.(danger(`slack reaction handler failed: ${String(err)}`));
+      ctx.runtime.error?.(
+        danger(`slack reaction handler failed: ${String(err)}`),
+      );
     }
   };
 

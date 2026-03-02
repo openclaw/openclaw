@@ -10,7 +10,9 @@ async function withTempSkillDir(
   name: string,
   run: (params: { root: string; skillDir: string }) => Promise<void>,
 ) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skill-helper-"));
+  const root = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-skill-helper-"),
+  );
   tempDirs.push(root);
   const skillDir = path.join(root, name);
   await run({ root, skillDir });
@@ -18,7 +20,9 @@ async function withTempSkillDir(
 
 afterEach(async () => {
   await Promise.all(
-    tempDirs.splice(0, tempDirs.length).map((dir) => fs.rm(dir, { recursive: true, force: true })),
+    tempDirs
+      .splice(0, tempDirs.length)
+      .map((dir) => fs.rm(dir, { recursive: true, force: true })),
   );
 });
 
@@ -31,7 +35,10 @@ describe("writeSkill", () => {
         description: "Demo",
       });
 
-      const content = await fs.readFile(path.join(skillDir, "SKILL.md"), "utf-8");
+      const content = await fs.readFile(
+        path.join(skillDir, "SKILL.md"),
+        "utf-8",
+      );
       expect(content).toContain("name: demo-skill");
       expect(content).toContain("description: Demo");
       expect(content).toContain("# demo-skill");
@@ -49,7 +56,10 @@ describe("writeSkill", () => {
         body: "# Custom Body\n",
       });
 
-      const content = await fs.readFile(path.join(skillDir, "SKILL.md"), "utf-8");
+      const content = await fs.readFile(
+        path.join(skillDir, "SKILL.md"),
+        "utf-8",
+      );
       expect(content).toContain('metadata: {"openclaw":{"always":true}}');
       expect(content).toContain("user-invocable: false");
       expect(content).toContain("# Custom Body");
@@ -66,7 +76,10 @@ describe("writeSkill", () => {
         body: "",
       });
 
-      const content = await fs.readFile(path.join(skillDir, "SKILL.md"), "utf-8");
+      const content = await fs.readFile(
+        path.join(skillDir, "SKILL.md"),
+        "utf-8",
+      );
       expect(content).toContain("name: empty-body-skill");
       expect(content).toContain("description: Empty body");
       expect(content).not.toContain("# empty-body-skill");

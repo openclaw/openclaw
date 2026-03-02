@@ -128,12 +128,23 @@ describe("launchd bootstrap repair", () => {
     const repair = await repairLaunchAgentBootstrap({ env });
     expect(repair.ok).toBe(true);
 
-    const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
+    const domain =
+      typeof process.getuid === "function"
+        ? `gui/${process.getuid()}`
+        : "gui/501";
     const label = "ai.openclaw.gateway";
     const plistPath = resolveLaunchAgentPlistPath(env);
 
-    expect(state.launchctlCalls).toContainEqual(["bootstrap", domain, plistPath]);
-    expect(state.launchctlCalls).toContainEqual(["kickstart", "-k", `${domain}/${label}`]);
+    expect(state.launchctlCalls).toContainEqual([
+      "bootstrap",
+      domain,
+      plistPath,
+    ]);
+    expect(state.launchctlCalls).toContainEqual([
+      "kickstart",
+      "-k",
+      `${domain}/${label}`,
+    ]);
   });
 });
 
@@ -153,7 +164,10 @@ describe("launchd install", () => {
       programArguments: defaultProgramArguments,
     });
 
-    const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
+    const domain =
+      typeof process.getuid === "function"
+        ? `gui/${process.getuid()}`
+        : "gui/501";
     const label = "ai.openclaw.gateway";
     const plistPath = resolveLaunchAgentPlistPath(env);
     const serviceId = `${domain}/${label}`;
@@ -200,7 +214,9 @@ describe("launchd install", () => {
     expect(plist).toContain("<true/>");
     expect(plist).not.toContain("<key>SuccessfulExit</key>");
     expect(plist).toContain("<key>ThrottleInterval</key>");
-    expect(plist).toContain(`<integer>${LAUNCH_AGENT_THROTTLE_INTERVAL_SECONDS}</integer>`);
+    expect(plist).toContain(
+      `<integer>${LAUNCH_AGENT_THROTTLE_INTERVAL_SECONDS}</integer>`,
+    );
   });
 
   it("restarts LaunchAgent with bootout-bootstrap-kickstart order", async () => {
@@ -210,7 +226,10 @@ describe("launchd install", () => {
       stdout: new PassThrough(),
     });
 
-    const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
+    const domain =
+      typeof process.getuid === "function"
+        ? `gui/${process.getuid()}`
+        : "gui/501";
     const label = "ai.openclaw.gateway";
     const plistPath = resolveLaunchAgentPlistPath(env);
     const bootoutIndex = state.launchctlCalls.findIndex(
@@ -220,7 +239,8 @@ describe("launchd install", () => {
       (c) => c[0] === "bootstrap" && c[1] === domain && c[2] === plistPath,
     );
     const kickstartIndex = state.launchctlCalls.findIndex(
-      (c) => c[0] === "kickstart" && c[1] === "-k" && c[2] === `${domain}/${label}`,
+      (c) =>
+        c[0] === "kickstart" && c[1] === "-k" && c[2] === `${domain}/${label}`,
     );
 
     expect(bootoutIndex).toBeGreaterThanOrEqual(0);
@@ -251,12 +271,17 @@ describe("launchd install", () => {
       await vi.advanceTimersByTimeAsync(250);
       await restartPromise;
       expect(killSpy).toHaveBeenCalledWith(4242, 0);
-      const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
+      const domain =
+        typeof process.getuid === "function"
+          ? `gui/${process.getuid()}`
+          : "gui/501";
       const label = "ai.openclaw.gateway";
       const bootoutIndex = state.launchctlCalls.findIndex(
         (c) => c[0] === "bootout" && c[1] === `${domain}/${label}`,
       );
-      const bootstrapIndex = state.launchctlCalls.findIndex((c) => c[0] === "bootstrap");
+      const bootstrapIndex = state.launchctlCalls.findIndex(
+        (c) => c[0] === "bootstrap",
+      );
       expect(bootoutIndex).toBeGreaterThanOrEqual(0);
       expect(bootstrapIndex).toBeGreaterThanOrEqual(0);
       expect(bootoutIndex).toBeLessThan(bootstrapIndex);
@@ -267,7 +292,8 @@ describe("launchd install", () => {
   });
 
   it("shows actionable guidance when launchctl gui domain does not support bootstrap", async () => {
-    state.bootstrapError = "Bootstrap failed: 125: Domain does not support specified action";
+    state.bootstrapError =
+      "Bootstrap failed: 125: Domain does not support specified action";
     const env = createDefaultLaunchdEnv();
     let message = "";
     try {

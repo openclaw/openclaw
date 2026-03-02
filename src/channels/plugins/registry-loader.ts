@@ -1,4 +1,7 @@
-import type { PluginChannelRegistration, PluginRegistry } from "../../plugins/registry.js";
+import type {
+  PluginChannelRegistration,
+  PluginRegistry,
+} from "../../plugins/registry.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
 import type { ChannelId } from "./types.js";
 
@@ -22,7 +25,9 @@ export function createChannelRegistryLoader<TValue>(
     if (cached) {
       return cached;
     }
-    const pluginEntry = registry?.channels.find((entry) => entry.plugin.id === id);
+    const pluginEntry = registry?.channels.find(
+      (entry) => entry.plugin.id === id,
+    );
     if (!pluginEntry) {
       return undefined;
     }

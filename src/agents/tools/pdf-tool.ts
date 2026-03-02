@@ -1,7 +1,15 @@
-import { type Api, type Context, complete, type Model } from "@mariozechner/pi-ai";
+import {
+  type Api,
+  type Context,
+  complete,
+  type Model,
+} from "@mariozechner/pi-ai";
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
-import { extractPdfContent, type PdfExtractedContent } from "../../media/pdf-extract.js";
+import {
+  extractPdfContent,
+  type PdfExtractedContent,
+} from "../../media/pdf-extract.js";
 import { resolveUserPath } from "../../utils.js";
 import { getDefaultLocalRoots, loadWebMediaRaw } from "../../web/media.js";
 import {
@@ -9,8 +17,14 @@ import {
   type ImageModelConfig,
   resolveProviderVisionModelFromConfig,
 } from "./image-tool.helpers.js";
-import { hasAuthForProvider, resolveDefaultModelRef } from "./model-config.helpers.js";
-import { anthropicAnalyzePdf, geminiAnalyzePdf } from "./pdf-native-providers.js";
+import {
+  hasAuthForProvider,
+  resolveDefaultModelRef,
+} from "./model-config.helpers.js";
+import {
+  anthropicAnalyzePdf,
+  geminiAnalyzePdf,
+} from "./pdf-native-providers.js";
 import {
   coercePdfAssistantText,
   coercePdfModelConfig,
@@ -64,15 +78,27 @@ export function resolvePdfModelConfigForTool(params: {
 
   // Fall back to the image model config
   const explicitImage = coerceImageModelConfig(params.cfg);
-  if (explicitImage.primary?.trim() || (explicitImage.fallbacks?.length ?? 0) > 0) {
+  if (
+    explicitImage.primary?.trim() ||
+    (explicitImage.fallbacks?.length ?? 0) > 0
+  ) {
     return explicitImage;
   }
 
   // Auto-detect from available providers
   const primary = resolveDefaultModelRef(params.cfg);
-  const anthropicOk = hasAuthForProvider({ provider: "anthropic", agentDir: params.agentDir });
-  const googleOk = hasAuthForProvider({ provider: "google", agentDir: params.agentDir });
-  const openaiOk = hasAuthForProvider({ provider: "openai", agentDir: params.agentDir });
+  const anthropicOk = hasAuthForProvider({
+    provider: "anthropic",
+    agentDir: params.agentDir,
+  });
+  const googleOk = hasAuthForProvider({
+    provider: "google",
+    agentDir: params.agentDir,
+  });
+  const openaiOk = hasAuthForProvider({
+    provider: "openai",
+    agentDir: params.agentDir,
+  });
 
   const fallbacks: string[] = [];
   const addFallback = (ref: string) => {
@@ -85,7 +111,10 @@ export function resolvePdfModelConfigForTool(params: {
   // Prefer providers with native PDF support
   let preferred: string | null = null;
 
-  const providerOk = hasAuthForProvider({ provider: primary.provider, agentDir: params.agentDir });
+  const providerOk = hasAuthForProvider({
+    provider: primary.provider,
+    agentDir: params.agentDir,
+  });
   const providerVision = resolveProviderVisionModelFromConfig({
     cfg: params.cfg,
     provider: primary.provider,
@@ -116,7 +145,10 @@ export function resolvePdfModelConfigForTool(params: {
       addFallback("openai/gpt-5-mini");
     }
     const pruned = fallbacks.filter((ref) => ref !== preferred);
-    return { primary: preferred, ...(pruned.length > 0 ? { fallbacks: pruned } : {}) };
+    return {
+      primary: preferred,
+      ...(pruned.length > 0 ? { fallbacks: pruned } : {}),
+    };
   }
 
   return null;
@@ -126,16 +158,21 @@ export function resolvePdfModelConfigForTool(params: {
 // Build context for extraction fallback path
 // ---------------------------------------------------------------------------
 
-function buildPdfExtractionContext(prompt: string, extractions: PdfExtractedContent[]): Context {
+function buildPdfExtractionContext(
+  prompt: string,
+  extractions: PdfExtractedContent[],
+): Context {
   const content: Array<
-    { type: "text"; text: string } | { type: "image"; data: string; mimeType: string }
+    | { type: "text"; text: string }
+    | { type: "image"; data: string; mimeType: string }
   > = [];
 
   // Add extracted text and images
   for (let i = 0; i < extractions.length; i++) {
     const extraction = extractions[i];
     if (extraction.text.trim()) {
-      const label = extractions.length > 1 ? `[PDF ${i + 1} text]\n` : "[PDF text]\n";
+      const label =
+        extractions.length > 1 ? `[PDF ${i + 1} text]\n` : "[PDF text]\n";
       content.push({ type: "text", text: label + extraction.text });
     }
     for (const img of extraction.images) {
@@ -263,16 +300,25 @@ async function runPdfPrompt(params: {
             `Model ${provider}/${modelId} does not support images and PDF has no extractable text.`,
           );
         }
-        const textOnlyExtractions: PdfExtractedContent[] = extractions.map((e) => ({
-          text: e.text,
-          images: [],
-        }));
-        const context = buildPdfExtractionContext(params.prompt, textOnlyExtractions);
+        const textOnlyExtractions: PdfExtractedContent[] = extractions.map(
+          (e) => ({
+            text: e.text,
+            images: [],
+          }),
+        );
+        const context = buildPdfExtractionContext(
+          params.prompt,
+          textOnlyExtractions,
+        );
         const message = await complete(model, context, {
           apiKey,
           maxTokens: resolvePdfToolMaxTokens(model.maxTokens),
         });
-        const text = coercePdfAssistantText({ message, provider, model: modelId });
+        const text = coercePdfAssistantText({
+          message,
+          provider,
+          model: modelId,
+        });
         return { text, provider, model: modelId, native: false };
       }
 
@@ -281,7 +327,11 @@ async function runPdfPrompt(params: {
         apiKey,
         maxTokens: resolvePdfToolMaxTokens(model.maxTokens),
       });
-      const text = coercePdfAssistantText({ message, provider, model: modelId });
+      const text = coercePdfAssistantText({
+        message,
+        provider,
+        model: modelId,
+      });
       return { text, provider, model: modelId, native: false };
     },
   });
@@ -319,7 +369,10 @@ export function createPdfTool(options?: {
     return null;
   }
 
-  const pdfModelConfig = resolvePdfModelConfigForTool({ cfg: options?.config, agentDir });
+  const pdfModelConfig = resolvePdfModelConfigForTool({
+    cfg: options?.config,
+    agentDir,
+  });
   if (!pdfModelConfig) {
     return null;
   }
@@ -327,8 +380,9 @@ export function createPdfTool(options?: {
   const maxBytesMbDefault = (
     options?.config?.agents?.defaults as Record<string, unknown> | undefined
   )?.pdfMaxBytesMb;
-  const maxPagesDefault = (options?.config?.agents?.defaults as Record<string, unknown> | undefined)
-    ?.pdfMaxPages;
+  const maxPagesDefault = (
+    options?.config?.agents?.defaults as Record<string, unknown> | undefined
+  )?.pdfMaxPages;
   const configuredMaxBytesMb =
     typeof maxBytesMbDefault === "number" && Number.isFinite(maxBytesMbDefault)
       ? maxBytesMbDefault
@@ -356,7 +410,9 @@ export function createPdfTool(options?: {
     description,
     parameters: Type.Object({
       prompt: Type.Optional(Type.String()),
-      pdf: Type.Optional(Type.String({ description: "Single PDF path or URL." })),
+      pdf: Type.Optional(
+        Type.String({ description: "Single PDF path or URL." }),
+      ),
       pdfs: Type.Optional(
         Type.Array(Type.String(), {
           description: "Multiple PDF paths or URLs (up to 10).",
@@ -364,14 +420,18 @@ export function createPdfTool(options?: {
       ),
       pages: Type.Optional(
         Type.String({
-          description: 'Page range to process, e.g. "1-5", "1,3,5-7". Defaults to all pages.',
+          description:
+            'Page range to process, e.g. "1-5", "1,3,5-7". Defaults to all pages.',
         }),
       ),
       model: Type.Optional(Type.String()),
       maxBytesMb: Type.Optional(Type.Number()),
     }),
     execute: async (_toolCallId, args) => {
-      const record = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
+      const record =
+        args && typeof args === "object"
+          ? (args as Record<string, unknown>)
+          : {};
 
       // MARK: - Normalize pdf + pdfs input
       const pdfCandidates: string[] = [];
@@ -379,7 +439,9 @@ export function createPdfTool(options?: {
         pdfCandidates.push(record.pdf);
       }
       if (Array.isArray(record.pdfs)) {
-        pdfCandidates.push(...record.pdfs.filter((v): v is string => typeof v === "string"));
+        pdfCandidates.push(
+          ...record.pdfs.filter((v): v is string => typeof v === "string"),
+        );
       }
 
       const seenPdfs = new Set<string>();
@@ -393,7 +455,9 @@ export function createPdfTool(options?: {
         pdfInputs.push(trimmed);
       }
       if (pdfInputs.length === 0) {
-        throw new Error("pdf required: provide a path or URL to a PDF document");
+        throw new Error(
+          "pdf required: provide a path or URL to a PDF document",
+        );
       }
 
       // Enforce max PDFs cap
@@ -405,7 +469,11 @@ export function createPdfTool(options?: {
               text: `Too many PDFs: ${pdfInputs.length} provided, maximum is ${DEFAULT_MAX_PDFS}. Please reduce the number.`,
             },
           ],
-          details: { error: "too_many_pdfs", count: pdfInputs.length, max: DEFAULT_MAX_PDFS },
+          details: {
+            error: "too_many_pdfs",
+            count: pdfInputs.length,
+            max: DEFAULT_MAX_PDFS,
+          },
         };
       }
 
@@ -414,17 +482,24 @@ export function createPdfTool(options?: {
           ? record.prompt.trim()
           : DEFAULT_PROMPT;
       const modelOverride =
-        typeof record.model === "string" && record.model.trim() ? record.model.trim() : undefined;
-      const maxBytesMbRaw = typeof record.maxBytesMb === "number" ? record.maxBytesMb : undefined;
+        typeof record.model === "string" && record.model.trim()
+          ? record.model.trim()
+          : undefined;
+      const maxBytesMbRaw =
+        typeof record.maxBytesMb === "number" ? record.maxBytesMb : undefined;
       const maxBytesMb =
-        typeof maxBytesMbRaw === "number" && Number.isFinite(maxBytesMbRaw) && maxBytesMbRaw > 0
+        typeof maxBytesMbRaw === "number" &&
+        Number.isFinite(maxBytesMbRaw) &&
+        maxBytesMbRaw > 0
           ? maxBytesMbRaw
           : configuredMaxBytesMb;
       const maxBytes = Math.floor(maxBytesMb * 1024 * 1024);
 
       // Parse page range
       const pagesRaw =
-        typeof record.pages === "string" && record.pages.trim() ? record.pages.trim() : undefined;
+        typeof record.pages === "string" && record.pages.trim()
+          ? record.pages.trim()
+          : undefined;
 
       const sandboxConfig: SandboxedBridgeMediaPathConfig | null =
         options?.sandbox && options.sandbox.root.trim()
@@ -452,7 +527,13 @@ export function createPdfTool(options?: {
         const looksLikeWindowsDrive = /^[a-zA-Z]:[\\/]/.test(trimmed);
         const hasScheme = /^[a-z][a-z0-9+.-]*:/i.test(trimmed);
 
-        if (hasScheme && !looksLikeWindowsDrive && !isFileUrl && !isHttpUrl && !isDataUrl) {
+        if (
+          hasScheme &&
+          !looksLikeWindowsDrive &&
+          !isFileUrl &&
+          !isHttpUrl &&
+          !isDataUrl
+        ) {
           return {
             content: [
               {
@@ -478,17 +559,18 @@ export function createPdfTool(options?: {
           return trimmed;
         })();
 
-        const resolvedPathInfo: { resolved: string; rewrittenFrom?: string } = sandboxConfig
-          ? await resolveSandboxedBridgeMediaPath({
-              sandbox: sandboxConfig,
-              mediaPath: resolvedPdf,
-              inboundFallbackDir: "media/inbound",
-            })
-          : {
-              resolved: resolvedPdf.startsWith("file://")
-                ? resolvedPdf.slice("file://".length)
-                : resolvedPdf,
-            };
+        const resolvedPathInfo: { resolved: string; rewrittenFrom?: string } =
+          sandboxConfig
+            ? await resolveSandboxedBridgeMediaPath({
+                sandbox: sandboxConfig,
+                mediaPath: resolvedPdf,
+                inboundFallbackDir: "media/inbound",
+              })
+            : {
+                resolved: resolvedPdf.startsWith("file://")
+                  ? resolvedPdf.slice("file://".length)
+                  : resolvedPdf,
+              };
 
         const media = sandboxConfig
           ? await loadWebMediaRaw(resolvedPathInfo.resolved, {
@@ -505,7 +587,9 @@ export function createPdfTool(options?: {
           // Check MIME type more specifically
           const ct = (media.contentType ?? "").toLowerCase();
           if (!ct.includes("pdf") && !ct.includes("application/pdf")) {
-            throw new Error(`Expected PDF but got ${media.contentType ?? media.kind}: ${pdfRaw}`);
+            throw new Error(
+              `Expected PDF but got ${media.contentType ?? media.kind}: ${pdfRaw}`,
+            );
           }
         }
 
@@ -527,7 +611,9 @@ export function createPdfTool(options?: {
         });
       }
 
-      const pageNumbers = pagesRaw ? parsePageRange(pagesRaw, configuredMaxPages) : undefined;
+      const pageNumbers = pagesRaw
+        ? parsePageRange(pagesRaw, configuredMaxPages)
+        : undefined;
 
       const getExtractions = async (): Promise<PdfExtractedContent[]> => {
         const extractedAll: PdfExtractedContent[] = [];
@@ -550,7 +636,10 @@ export function createPdfTool(options?: {
         pdfModelConfig,
         modelOverride,
         prompt: promptRaw,
-        pdfBuffers: loadedPdfs.map((p) => ({ base64: p.base64, filename: p.filename })),
+        pdfBuffers: loadedPdfs.map((p) => ({
+          base64: p.base64,
+          filename: p.filename,
+        })),
         pageNumbers,
         getExtractions,
       });

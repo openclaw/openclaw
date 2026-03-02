@@ -216,10 +216,16 @@ async function probeGeminiCli(): Promise<boolean> {
       return false;
     }
     try {
-      const { stdout } = await runExec("gemini", ["--output-format", "json", "ok"], {
-        timeoutMs: 8000,
-      });
-      return Boolean(extractGeminiResponse(stdout) ?? stdout.toLowerCase().includes("ok"));
+      const { stdout } = await runExec(
+        "gemini",
+        ["--output-format", "json", "ok"],
+        {
+          timeoutMs: 8000,
+        },
+      );
+      return Boolean(
+        extractGeminiResponse(stdout) ?? stdout.toLowerCase().includes("ok"),
+      );
     } catch {
       return false;
     }
@@ -233,15 +239,26 @@ async function resolveLocalWhisperCppEntry(): Promise<MediaUnderstandingModelCon
     return null;
   }
   const envModel = process.env.WHISPER_CPP_MODEL?.trim();
-  const defaultModel = "/opt/homebrew/share/whisper-cpp/for-tests-ggml-tiny.bin";
-  const modelPath = envModel && (await fileExists(envModel)) ? envModel : defaultModel;
+  const defaultModel =
+    "/opt/homebrew/share/whisper-cpp/for-tests-ggml-tiny.bin";
+  const modelPath =
+    envModel && (await fileExists(envModel)) ? envModel : defaultModel;
   if (!(await fileExists(modelPath))) {
     return null;
   }
   return {
     type: "cli",
     command: "whisper-cli",
-    args: ["-m", modelPath, "-otxt", "-of", "{{OutputBase}}", "-np", "-nt", "{{MediaPath}}"],
+    args: [
+      "-m",
+      modelPath,
+      "-otxt",
+      "-of",
+      "{{OutputBase}}",
+      "-np",
+      "-nt",
+      "{{MediaPath}}",
+    ],
   };
 }
 
@@ -349,7 +366,10 @@ async function resolveKeyEntry(params: {
     providerId: string,
     model?: string,
   ): Promise<MediaUnderstandingModelConfig | null> => {
-    const provider = getMediaUnderstandingProvider(providerId, providerRegistry);
+    const provider = getMediaUnderstandingProvider(
+      providerId,
+      providerRegistry,
+    );
     if (!provider) {
       return null;
     }
@@ -373,7 +393,10 @@ async function resolveKeyEntry(params: {
   if (capability === "image") {
     const activeProvider = params.activeModel?.provider?.trim();
     if (activeProvider) {
-      const activeEntry = await checkProvider(activeProvider, params.activeModel?.model);
+      const activeEntry = await checkProvider(
+        activeProvider,
+        params.activeModel?.model,
+      );
       if (activeEntry) {
         return activeEntry;
       }
@@ -391,7 +414,10 @@ async function resolveKeyEntry(params: {
   if (capability === "video") {
     const activeProvider = params.activeModel?.provider?.trim();
     if (activeProvider) {
-      const activeEntry = await checkProvider(activeProvider, params.activeModel?.model);
+      const activeEntry = await checkProvider(
+        activeProvider,
+        params.activeModel?.model,
+      );
       if (activeEntry) {
         return activeEntry;
       }
@@ -407,7 +433,10 @@ async function resolveKeyEntry(params: {
 
   const activeProvider = params.activeModel?.provider?.trim();
   if (activeProvider) {
-    const activeEntry = await checkProvider(activeProvider, params.activeModel?.model);
+    const activeEntry = await checkProvider(
+      activeProvider,
+      params.activeModel?.model,
+    );
     if (activeEntry) {
       return activeEntry;
     }
@@ -421,13 +450,19 @@ async function resolveKeyEntry(params: {
   return null;
 }
 
-function resolveImageModelFromAgentDefaults(cfg: OpenClawConfig): MediaUnderstandingModelConfig[] {
+function resolveImageModelFromAgentDefaults(
+  cfg: OpenClawConfig,
+): MediaUnderstandingModelConfig[] {
   const refs: string[] = [];
-  const primary = resolveAgentModelPrimaryValue(cfg.agents?.defaults?.imageModel);
+  const primary = resolveAgentModelPrimaryValue(
+    cfg.agents?.defaults?.imageModel,
+  );
   if (primary?.trim()) {
     refs.push(primary.trim());
   }
-  for (const fb of resolveAgentModelFallbackValues(cfg.agents?.defaults?.imageModel)) {
+  for (const fb of resolveAgentModelFallbackValues(
+    cfg.agents?.defaults?.imageModel,
+  )) {
     if (fb?.trim()) {
       refs.push(fb.trim());
     }
@@ -490,7 +525,9 @@ export async function resolveAutoImageModel(params: {
   activeModel?: ActiveMediaModel;
 }): Promise<ActiveMediaModel | null> {
   const providerRegistry = buildProviderRegistry();
-  const toActive = (entry: MediaUnderstandingModelConfig | null): ActiveMediaModel | null => {
+  const toActive = (
+    entry: MediaUnderstandingModelConfig | null,
+  ): ActiveMediaModel | null => {
     if (!entry || entry.type === "cli") {
       return null;
     }
@@ -540,7 +577,10 @@ async function resolveActiveModelEntry(params: {
   if (!providerId) {
     return null;
   }
-  const provider = getMediaUnderstandingProvider(providerId, params.providerRegistry);
+  const provider = getMediaUnderstandingProvider(
+    providerId,
+    params.providerRegistry,
+  );
   if (!provider) {
     return null;
   }
@@ -611,7 +651,11 @@ async function runAttachmentEntries(params: {
               config: params.config,
             });
       if (result) {
-        const decision = buildModelDecision({ entry, entryType, outcome: "success" });
+        const decision = buildModelDecision({
+          entry,
+          entryType,
+          outcome: "success",
+        });
         if (result.provider) {
           decision.provider = result.provider;
         }
@@ -622,7 +666,12 @@ async function runAttachmentEntries(params: {
         return { output: result, attempts };
       }
       attempts.push(
-        buildModelDecision({ entry, entryType, outcome: "skipped", reason: "empty output" }),
+        buildModelDecision({
+          entry,
+          entryType,
+          outcome: "skipped",
+          reason: "empty output",
+        }),
       );
     } catch (err) {
       if (isMediaUnderstandingSkipError(err)) {
@@ -635,7 +684,9 @@ async function runAttachmentEntries(params: {
           }),
         );
         if (shouldLogVerbose()) {
-          logVerbose(`Skipping ${capability} model due to ${err.reason}: ${err.message}`);
+          logVerbose(
+            `Skipping ${capability} model due to ${err.reason}: ${err.message}`,
+          );
         }
         continue;
       }
@@ -699,7 +750,10 @@ export async function runCapability(params: {
       decision: {
         capability,
         outcome: "scope-deny",
-        attachments: selected.map((item) => ({ attachmentIndex: item.index, attempts: [] })),
+        attachments: selected.map((item) => ({
+          attachmentIndex: item.index,
+          attempts: [],
+        })),
       },
     };
   }
@@ -709,10 +763,16 @@ export async function runCapability(params: {
   const activeProvider = params.activeModel?.provider?.trim();
   if (capability === "image" && activeProvider) {
     const catalog = await loadModelCatalog({ config: cfg });
-    const entry = findModelInCatalog(catalog, activeProvider, params.activeModel?.model ?? "");
+    const entry = findModelInCatalog(
+      catalog,
+      activeProvider,
+      params.activeModel?.model ?? "",
+    );
     if (modelSupportsVision(entry)) {
       if (shouldLogVerbose()) {
-        logVerbose("Skipping image understanding: primary model supports vision natively");
+        logVerbose(
+          "Skipping image understanding: primary model supports vision natively",
+        );
       }
       const model = params.activeModel?.model?.trim();
       const reason = "primary model supports vision natively";
@@ -762,7 +822,10 @@ export async function runCapability(params: {
       decision: {
         capability,
         outcome: "skipped",
-        attachments: selected.map((item) => ({ attachmentIndex: item.index, attempts: [] })),
+        attachments: selected.map((item) => ({
+          attachmentIndex: item.index,
+          attempts: [],
+        })),
       },
     };
   }

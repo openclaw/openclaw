@@ -9,7 +9,10 @@ import type {
   GroupToolPolicyBySenderConfig,
   GroupToolPolicyConfig,
 } from "../../config/types.tools.js";
-import { normalizeAtHashSlug, normalizeHyphenSlug } from "../../shared/string-normalization.js";
+import {
+  normalizeAtHashSlug,
+  normalizeHyphenSlug,
+} from "../../shared/string-normalization.js";
 import { resolveSlackAccount } from "../../slack/accounts.js";
 import type { ChannelGroupContext } from "./types.js";
 
@@ -50,7 +53,8 @@ function resolveTelegramRequireMention(params: {
   }
   const groupConfig = cfg.channels?.telegram?.groups?.[chatId];
   const groupDefault = cfg.channels?.telegram?.groups?.["*"];
-  const topicConfig = topicId && groupConfig?.topics ? groupConfig.topics[topicId] : undefined;
+  const topicConfig =
+    topicId && groupConfig?.topics ? groupConfig.topics[topicId] : undefined;
   const defaultTopicConfig =
     topicId && groupDefault?.topics ? groupDefault.topics[topicId] : undefined;
   if (typeof topicConfig?.requireMention === "boolean") {
@@ -68,7 +72,10 @@ function resolveTelegramRequireMention(params: {
   return undefined;
 }
 
-function resolveDiscordGuildEntry(guilds: DiscordConfig["guilds"], groupSpace?: string | null) {
+function resolveDiscordGuildEntry(
+  guilds: DiscordConfig["guilds"],
+  groupSpace?: string | null,
+) {
   if (!guilds || Object.keys(guilds).length === 0) {
     return null;
   }
@@ -105,7 +112,9 @@ function resolveDiscordChannelEntry<TEntry>(
     (channelSlug
       ? (channelEntries[channelSlug] ?? channelEntries[`#${channelSlug}`])
       : undefined) ??
-    (groupChannel ? channelEntries[normalizeDiscordSlug(groupChannel)] : undefined)
+    (groupChannel
+      ? channelEntries[normalizeDiscordSlug(groupChannel)]
+      : undefined)
   );
 }
 
@@ -134,7 +143,10 @@ function resolveSlackChannelPolicyEntry(
     cfg: params.cfg,
     accountId: params.accountId,
   });
-  const channels = (account.channels ?? {}) as Record<string, SlackChannelPolicyEntry>;
+  const channels = (account.channels ?? {}) as Record<
+    string,
+    SlackChannelPolicyEntry
+  >;
   if (Object.keys(channels).length === 0) {
     return undefined;
   }
@@ -239,15 +251,21 @@ export function resolveTelegramGroupRequireMention(
   });
 }
 
-export function resolveWhatsAppGroupRequireMention(params: GroupMentionParams): boolean {
+export function resolveWhatsAppGroupRequireMention(
+  params: GroupMentionParams,
+): boolean {
   return resolveChannelRequireMention(params, "whatsapp");
 }
 
-export function resolveIMessageGroupRequireMention(params: GroupMentionParams): boolean {
+export function resolveIMessageGroupRequireMention(
+  params: GroupMentionParams,
+): boolean {
   return resolveChannelRequireMention(params, "imessage");
 }
 
-export function resolveDiscordGroupRequireMention(params: GroupMentionParams): boolean {
+export function resolveDiscordGroupRequireMention(
+  params: GroupMentionParams,
+): boolean {
   const context = resolveDiscordPolicyContext(params);
   if (typeof context.channelEntry?.requireMention === "boolean") {
     return context.channelEntry.requireMention;
@@ -258,7 +276,9 @@ export function resolveDiscordGroupRequireMention(params: GroupMentionParams): b
   return true;
 }
 
-export function resolveGoogleChatGroupRequireMention(params: GroupMentionParams): boolean {
+export function resolveGoogleChatGroupRequireMention(
+  params: GroupMentionParams,
+): boolean {
   return resolveChannelRequireMention(params, "googlechat");
 }
 
@@ -268,7 +288,9 @@ export function resolveGoogleChatGroupToolPolicy(
   return resolveChannelToolPolicyForSender(params, "googlechat");
 }
 
-export function resolveSlackGroupRequireMention(params: GroupMentionParams): boolean {
+export function resolveSlackGroupRequireMention(
+  params: GroupMentionParams,
+): boolean {
   const resolved = resolveSlackChannelPolicyEntry(params);
   if (typeof resolved?.requireMention === "boolean") {
     return resolved.requireMention;
@@ -276,7 +298,9 @@ export function resolveSlackGroupRequireMention(params: GroupMentionParams): boo
   return true;
 }
 
-export function resolveBlueBubblesGroupRequireMention(params: GroupMentionParams): boolean {
+export function resolveBlueBubblesGroupRequireMention(
+  params: GroupMentionParams,
+): boolean {
   return resolveChannelRequireMention(params, "bluebubbles");
 }
 
@@ -284,7 +308,11 @@ export function resolveTelegramGroupToolPolicy(
   params: GroupMentionParams,
 ): GroupToolPolicyConfig | undefined {
   const { chatId } = parseTelegramGroupId(params.groupId);
-  return resolveChannelToolPolicyForSender(params, "telegram", chatId ?? params.groupId);
+  return resolveChannelToolPolicyForSender(
+    params,
+    "telegram",
+    chatId ?? params.groupId,
+  );
 }
 
 export function resolveWhatsAppGroupToolPolicy(

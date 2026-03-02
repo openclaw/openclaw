@@ -59,10 +59,13 @@ function createAcpCommandSessionBindingService() {
       fn(...args);
   return {
     bind: (input: unknown) => hoisted.sessionBindingBindMock(input),
-    getCapabilities: forward((params: unknown) => hoisted.sessionBindingCapabilitiesMock(params)),
+    getCapabilities: forward((params: unknown) =>
+      hoisted.sessionBindingCapabilitiesMock(params),
+    ),
     listBySession: (targetSessionKey: string) =>
       hoisted.sessionBindingListBySessionMock(targetSessionKey),
-    resolveByConversation: (ref: unknown) => hoisted.sessionBindingResolveByConversationMock(ref),
+    resolveByConversation: (ref: unknown) =>
+      hoisted.sessionBindingResolveByConversationMock(ref),
     touch: vi.fn(),
     unbind: (input: unknown) => hoisted.sessionBindingUnbindMock(input),
   };
@@ -73,34 +76,48 @@ vi.mock("../../gateway/call.js", () => ({
 }));
 
 vi.mock("../../acp/runtime/registry.js", () => ({
-  requireAcpRuntimeBackend: (id?: string) => hoisted.requireAcpRuntimeBackendMock(id),
+  requireAcpRuntimeBackend: (id?: string) =>
+    hoisted.requireAcpRuntimeBackendMock(id),
   getAcpRuntimeBackend: (id?: string) => hoisted.getAcpRuntimeBackendMock(id),
 }));
 
 vi.mock("../../acp/runtime/session-meta.js", () => ({
-  listAcpSessionEntries: (args: unknown) => hoisted.listAcpSessionEntriesMock(args),
+  listAcpSessionEntries: (args: unknown) =>
+    hoisted.listAcpSessionEntriesMock(args),
   readAcpSessionEntry: (args: unknown) => hoisted.readAcpSessionEntryMock(args),
-  upsertAcpSessionMeta: (args: unknown) => hoisted.upsertAcpSessionMetaMock(args),
-  resolveSessionStorePathForAcp: (args: unknown) => hoisted.resolveSessionStorePathForAcpMock(args),
+  upsertAcpSessionMeta: (args: unknown) =>
+    hoisted.upsertAcpSessionMetaMock(args),
+  resolveSessionStorePathForAcp: (args: unknown) =>
+    hoisted.resolveSessionStorePathForAcpMock(args),
 }));
 
 vi.mock("../../config/sessions.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../config/sessions.js")>();
+  const actual =
+    await importOriginal<typeof import("../../config/sessions.js")>();
   return {
     ...actual,
-    loadSessionStore: (...args: unknown[]) => hoisted.loadSessionStoreMock(...args),
+    loadSessionStore: (...args: unknown[]) =>
+      hoisted.loadSessionStoreMock(...args),
   };
 });
 
-vi.mock("../../infra/outbound/session-binding-service.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../infra/outbound/session-binding-service.js")>();
-  const patched = { ...actual } as typeof actual & {
-    getSessionBindingService: () => ReturnType<typeof createAcpCommandSessionBindingService>;
-  };
-  patched.getSessionBindingService = () => createAcpCommandSessionBindingService();
-  return patched;
-});
+vi.mock(
+  "../../infra/outbound/session-binding-service.js",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("../../infra/outbound/session-binding-service.js")
+      >();
+    const patched = { ...actual } as typeof actual & {
+      getSessionBindingService: () => ReturnType<
+        typeof createAcpCommandSessionBindingService
+      >;
+    };
+    patched.getSessionBindingService = () =>
+      createAcpCommandSessionBindingService();
+    return patched;
+  },
+);
 
 // Prevent transitive import chain from reaching discord/monitor which needs https-proxy-agent.
 vi.mock("../../discord/monitor/gateway-plugin.js", () => ({
@@ -108,8 +125,10 @@ vi.mock("../../discord/monitor/gateway-plugin.js", () => ({
 }));
 
 const { handleAcpCommand } = await import("./commands-acp.js");
-const { buildCommandTestParams } = await import("./commands-spawn.test-harness.js");
-const { __testing: acpManagerTesting } = await import("../../acp/control-plane/manager.js");
+const { buildCommandTestParams } =
+  await import("./commands-spawn.test-harness.js");
+const { __testing: acpManagerTesting } =
+  await import("../../acp/control-plane/manager.js");
 
 type FakeBinding = {
   bindingId: string;
@@ -169,7 +188,10 @@ const baseCfg = {
   },
 } satisfies OpenClawConfig;
 
-function createDiscordParams(commandBody: string, cfg: OpenClawConfig = baseCfg) {
+function createDiscordParams(
+  commandBody: string,
+  cfg: OpenClawConfig = baseCfg,
+) {
   const params = buildCommandTestParams(commandBody, cfg, {
     Provider: "discord",
     Surface: "discord",
@@ -247,8 +269,13 @@ type AcpBindInput = {
 
 function createAcpThreadBinding(input: AcpBindInput): FakeBinding {
   const nextConversationId =
-    input.placement === "child" ? "thread-created" : input.conversation.conversationId;
-  const boundBy = typeof input.metadata?.boundBy === "string" ? input.metadata.boundBy : "user-1";
+    input.placement === "child"
+      ? "thread-created"
+      : input.conversation.conversationId;
+  const boundBy =
+    typeof input.metadata?.boundBy === "string"
+      ? input.metadata.boundBy
+      : "user-1";
   return createSessionBinding({
     targetSessionKey: input.targetSessionKey,
     conversation: {
@@ -289,17 +316,26 @@ function mockBoundThreadSession(options?: {
   );
 }
 
-function createThreadParams(commandBody: string, cfg: OpenClawConfig = baseCfg) {
+function createThreadParams(
+  commandBody: string,
+  cfg: OpenClawConfig = baseCfg,
+) {
   const params = createDiscordParams(commandBody, cfg);
   params.ctx.MessageThreadId = defaultThreadId;
   return params;
 }
 
-async function runDiscordAcpCommand(commandBody: string, cfg: OpenClawConfig = baseCfg) {
+async function runDiscordAcpCommand(
+  commandBody: string,
+  cfg: OpenClawConfig = baseCfg,
+) {
   return handleAcpCommand(createDiscordParams(commandBody, cfg), true);
 }
 
-async function runThreadAcpCommand(commandBody: string, cfg: OpenClawConfig = baseCfg) {
+async function runThreadAcpCommand(
+  commandBody: string,
+  cfg: OpenClawConfig = baseCfg,
+) {
   return handleAcpCommand(createThreadParams(commandBody, cfg), true);
 }
 
@@ -331,9 +367,13 @@ describe("/acp command", () => {
       .mockReturnValue(createSessionBindingCapabilities());
     hoisted.sessionBindingBindMock
       .mockReset()
-      .mockImplementation(async (input: AcpBindInput) => createAcpThreadBinding(input));
+      .mockImplementation(async (input: AcpBindInput) =>
+        createAcpThreadBinding(input),
+      );
     hoisted.sessionBindingListBySessionMock.mockReset().mockReturnValue([]);
-    hoisted.sessionBindingResolveByConversationMock.mockReset().mockReturnValue(null);
+    hoisted.sessionBindingResolveByConversationMock
+      .mockReset()
+      .mockReturnValue(null);
     hoisted.sessionBindingUnbindMock.mockReset().mockResolvedValue([]);
 
     hoisted.ensureSessionMock
@@ -349,7 +389,11 @@ describe("/acp command", () => {
     hoisted.cancelMock.mockReset().mockResolvedValue(undefined);
     hoisted.closeMock.mockReset().mockResolvedValue(undefined);
     hoisted.getCapabilitiesMock.mockReset().mockResolvedValue({
-      controls: ["session/set_mode", "session/set_config_option", "session/status"],
+      controls: [
+        "session/set_mode",
+        "session/set_config_option",
+        "session/status",
+      ],
     });
     hoisted.getStatusMock.mockReset().mockResolvedValue({
       summary: "status=alive sessionId=sid-1 pid=1234",
@@ -376,8 +420,12 @@ describe("/acp command", () => {
         close: hoisted.closeMock,
       },
     };
-    hoisted.requireAcpRuntimeBackendMock.mockReset().mockReturnValue(runtimeBackend);
-    hoisted.getAcpRuntimeBackendMock.mockReset().mockReturnValue(runtimeBackend);
+    hoisted.requireAcpRuntimeBackendMock
+      .mockReset()
+      .mockReturnValue(runtimeBackend);
+    hoisted.getAcpRuntimeBackendMock
+      .mockReset()
+      .mockReturnValue(runtimeBackend);
   });
 
   it("returns null when the message is not /acp", async () => {
@@ -400,10 +448,16 @@ describe("/acp command", () => {
       backendSessionId: "acpx-1",
     });
 
-    const result = await runDiscordAcpCommand("/acp spawn codex --cwd /home/bob/clawd");
+    const result = await runDiscordAcpCommand(
+      "/acp spawn codex --cwd /home/bob/clawd",
+    );
 
-    expect(result?.reply?.text).toContain("Spawned ACP session agent:codex:acp:");
-    expect(result?.reply?.text).toContain("Created thread thread-created and bound it");
+    expect(result?.reply?.text).toContain(
+      "Spawned ACP session agent:codex:acp:",
+    );
+    expect(result?.reply?.text).toContain(
+      "Created thread thread-created and bound it",
+    );
     expect(hoisted.requireAcpRuntimeBackendMock).toHaveBeenCalledWith("acpx");
     expect(hoisted.ensureSessionMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -421,7 +475,9 @@ describe("/acp command", () => {
         }),
       }),
     );
-    expectBoundIntroTextToExclude("session ids: pending (available after the first reply)");
+    expectBoundIntroTextToExclude(
+      "session ids: pending (available after the first reply)",
+    );
     expect(hoisted.callGatewayMock).toHaveBeenCalledWith(
       expect.objectContaining({
         method: "sessions.patch",
@@ -501,12 +557,14 @@ describe("/acp command", () => {
   });
 
   it("sends steer instructions via ACP runtime", async () => {
-    hoisted.callGatewayMock.mockImplementation(async (request: { method?: string }) => {
-      if (request.method === "sessions.resolve") {
-        return { key: defaultAcpSessionKey };
-      }
-      return { ok: true };
-    });
+    hoisted.callGatewayMock.mockImplementation(
+      async (request: { method?: string }) => {
+        if (request.method === "sessions.resolve") {
+          return { key: defaultAcpSessionKey };
+        }
+        return { ok: true };
+      },
+    );
     hoisted.readAcpSessionEntryMock.mockReturnValue(createAcpSessionEntry());
     hoisted.runTurnMock.mockImplementation(async function* () {
       yield { type: "text_delta", text: "Applied steering." };
@@ -534,7 +592,10 @@ describe("/acp command", () => {
         dispatch: { enabled: false },
       },
     } satisfies OpenClawConfig;
-    const result = await runDiscordAcpCommand("/acp steer tighten logging", cfg);
+    const result = await runDiscordAcpCommand(
+      "/acp steer tighten logging",
+      cfg,
+    );
     expect(result?.reply?.text).toContain("ACP dispatch is disabled by policy");
     expect(hoisted.runTurnMock).not.toHaveBeenCalled();
   });
@@ -560,7 +621,9 @@ describe("/acp command", () => {
 
   it("lists ACP sessions from the session store", async () => {
     hoisted.sessionBindingListBySessionMock.mockImplementation((key: string) =>
-      key === defaultAcpSessionKey ? [createBoundThreadSession(key) as SessionBindingRecord] : [],
+      key === defaultAcpSessionKey
+        ? [createBoundThreadSession(key) as SessionBindingRecord]
+        : [],
     );
     hoisted.loadSessionStoreMock.mockReturnValue({
       [defaultAcpSessionKey]: {
@@ -624,7 +687,10 @@ describe("/acp command", () => {
   it("updates ACP config options and keeps cwd local when using /acp set", async () => {
     mockBoundThreadSession();
 
-    const setModel = await runThreadAcpCommand("/acp set model gpt-5.3-codex", baseCfg);
+    const setModel = await runThreadAcpCommand(
+      "/acp set model gpt-5.3-codex",
+      baseCfg,
+    );
     expect(hoisted.setConfigOptionMock).toHaveBeenCalledWith(
       expect.objectContaining({
         key: "model",
@@ -634,7 +700,10 @@ describe("/acp command", () => {
     expect(setModel?.reply?.text).toContain("Updated ACP config option");
 
     hoisted.setConfigOptionMock.mockClear();
-    const setCwd = await runThreadAcpCommand("/acp set cwd /tmp/worktree", baseCfg);
+    const setCwd = await runThreadAcpCommand(
+      "/acp set cwd /tmp/worktree",
+      baseCfg,
+    );
     expect(hoisted.setConfigOptionMock).not.toHaveBeenCalled();
     expect(setCwd?.reply?.text).toContain("Updated ACP cwd");
   });
@@ -644,7 +713,9 @@ describe("/acp command", () => {
 
     const result = await runThreadAcpCommand("/acp cwd relative/path", baseCfg);
 
-    expect(result?.reply?.text).toContain("ACP error (ACP_INVALID_RUNTIME_OPTION)");
+    expect(result?.reply?.text).toContain(
+      "ACP error (ACP_INVALID_RUNTIME_OPTION)",
+    );
     expect(result?.reply?.text).toContain("absolute path");
   });
 
@@ -653,7 +724,9 @@ describe("/acp command", () => {
 
     const result = await runThreadAcpCommand("/acp timeout 10s", baseCfg);
 
-    expect(result?.reply?.text).toContain("ACP error (ACP_INVALID_RUNTIME_OPTION)");
+    expect(result?.reply?.text).toContain(
+      "ACP error (ACP_INVALID_RUNTIME_OPTION)",
+    );
     expect(hoisted.setConfigOptionMock).not.toHaveBeenCalled();
   });
 

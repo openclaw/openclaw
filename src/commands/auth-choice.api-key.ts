@@ -7,7 +7,9 @@ export function normalizeApiKeyInput(raw: string): string {
   }
 
   // Handle shell-style assignments: export KEY="value" or KEY=value
-  const assignmentMatch = trimmed.match(/^(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*\s*=\s*(.+)$/);
+  const assignmentMatch = trimmed.match(
+    /^(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*\s*=\s*(.+)$/,
+  );
   const valuePart = assignmentMatch ? assignmentMatch[1].trim() : trimmed;
 
   const unquoted =
@@ -18,7 +20,9 @@ export function normalizeApiKeyInput(raw: string): string {
       ? valuePart.slice(1, -1)
       : valuePart;
 
-  const withoutSemicolon = unquoted.endsWith(";") ? unquoted.slice(0, -1) : unquoted;
+  const withoutSemicolon = unquoted.endsWith(";")
+    ? unquoted.slice(0, -1)
+    : unquoted;
 
   return withoutSemicolon.trim();
 }

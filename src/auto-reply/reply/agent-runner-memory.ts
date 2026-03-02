@@ -5,7 +5,10 @@ import { estimateMessagesTokens } from "../../agents/compaction.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
-import { resolveSandboxConfigForAgent, resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
+import {
+  resolveSandboxConfigForAgent,
+  resolveSandboxRuntimeStatus,
+} from "../../agents/sandbox.js";
 import {
   derivePromptTokens,
   hasNonzeroUsage,
@@ -39,12 +42,18 @@ import {
 import type { FollowupRun } from "./queue.js";
 import { incrementCompactionCount } from "./session-updates.js";
 
-export function estimatePromptTokensForMemoryFlush(prompt?: string): number | undefined {
+export function estimatePromptTokensForMemoryFlush(
+  prompt?: string,
+): number | undefined {
   const trimmed = prompt?.trim();
   if (!trimmed) {
     return undefined;
   }
-  const message: AgentMessage = { role: "user", content: trimmed, timestamp: Date.now() };
+  const message: AgentMessage = {
+    role: "user",
+    content: trimmed,
+    timestamp: Date.now(),
+  };
   const tokens = estimateMessagesTokens([message]);
   if (!Number.isFinite(tokens) || tokens <= 0) {
     return undefined;
@@ -75,7 +84,9 @@ export type SessionTranscriptUsageSnapshot = {
 const TRANSCRIPT_OUTPUT_READ_BUFFER_TOKENS = 8192;
 const TRANSCRIPT_TAIL_CHUNK_BYTES = 64 * 1024;
 
-function parseUsageFromTranscriptLine(line: string): ReturnType<typeof normalizeUsage> | undefined {
+function parseUsageFromTranscriptLine(
+  line: string,
+): ReturnType<typeof normalizeUsage> | undefined {
   const trimmed = line.trim();
   if (!trimmed) {
     return undefined;
@@ -140,7 +151,10 @@ function deriveTranscriptUsageSnapshot(
     typeof outputRaw === "number" && Number.isFinite(outputRaw) && outputRaw > 0
       ? outputRaw
       : undefined;
-  if (!(typeof promptTokens === "number") && !(typeof outputTokens === "number")) {
+  if (
+    !(typeof promptTokens === "number") &&
+    !(typeof outputTokens === "number")
+  ) {
     return undefined;
   }
   return {
@@ -276,7 +290,10 @@ export async function runMemoryFlushIfNeeded(params: {
     if (!runtime.sandboxed) {
       return true;
     }
-    const sandboxCfg = resolveSandboxConfigForAgent(params.cfg, runtime.agentId);
+    const sandboxCfg = resolveSandboxConfigForAgent(
+      params.cfg,
+      runtime.agentId,
+    );
     return sandboxCfg.workspaceAccess === "rw";
   })();
 
@@ -301,7 +318,8 @@ export async function runMemoryFlushIfNeeded(params: {
       ? persistedPromptTokensRaw
       : undefined;
   const hasFreshPersistedPromptTokens =
-    typeof persistedPromptTokens === "number" && entry?.totalTokensFresh === true;
+    typeof persistedPromptTokens === "number" &&
+    entry?.totalTokensFresh === true;
 
   const flushThreshold =
     contextWindowTokens -
@@ -324,17 +342,21 @@ export async function runMemoryFlushIfNeeded(params: {
       flushThreshold - TRANSCRIPT_OUTPUT_READ_BUFFER_TOKENS;
 
   const shouldReadTranscript = Boolean(
-    canAttemptFlush && entry && (!hasFreshPersistedPromptTokens || shouldReadTranscriptForOutput),
+    canAttemptFlush &&
+    entry &&
+    (!hasFreshPersistedPromptTokens || shouldReadTranscriptForOutput),
   );
 
-  const forceFlushTranscriptBytes = memoryFlushSettings.forceFlushTranscriptBytes;
+  const forceFlushTranscriptBytes =
+    memoryFlushSettings.forceFlushTranscriptBytes;
   const shouldCheckTranscriptSizeForForcedFlush = Boolean(
     canAttemptFlush &&
     entry &&
     Number.isFinite(forceFlushTranscriptBytes) &&
     forceFlushTranscriptBytes > 0,
   );
-  const shouldReadSessionLog = shouldReadTranscript || shouldCheckTranscriptSizeForForcedFlush;
+  const shouldReadSessionLog =
+    shouldReadTranscript || shouldCheckTranscriptSizeForForcedFlush;
   const sessionLogSnapshot = shouldReadSessionLog
     ? await readSessionLogSnapshot({
         sessionId: params.followupRun.run.sessionId,
@@ -347,7 +369,8 @@ export async function runMemoryFlushIfNeeded(params: {
     : undefined;
   const transcriptByteSize = sessionLogSnapshot?.byteSize;
   const shouldForceFlushByTranscriptSize =
-    typeof transcriptByteSize === "number" && transcriptByteSize >= forceFlushTranscriptBytes;
+    typeof transcriptByteSize === "number" &&
+    transcriptByteSize >= forceFlushTranscriptBytes;
 
   const transcriptUsageSnapshot = sessionLogSnapshot?.usage;
   const transcriptPromptTokens = transcriptUsageSnapshot?.promptTokens;
@@ -376,7 +399,10 @@ export async function runMemoryFlushIfNeeded(params: {
         const updatedEntry = await updateSessionStoreEntry({
           storePath: params.storePath,
           sessionKey: params.sessionKey,
-          update: async () => ({ totalTokens: transcriptPromptTokens, totalTokensFresh: true }),
+          update: async () => ({
+            totalTokens: transcriptPromptTokens,
+            totalTokensFresh: true,
+          }),
         });
         if (updatedEntry) {
           entry = updatedEntry;
@@ -385,7 +411,9 @@ export async function runMemoryFlushIfNeeded(params: {
           }
         }
       } catch (err) {
-        logVerbose(`failed to persist derived prompt totalTokens: ${String(err)}`);
+        logVerbose(
+          `failed to persist derived prompt totalTokens: ${String(err)}`,
+        );
       }
     }
   }
@@ -467,12 +495,13 @@ export async function runMemoryFlushIfNeeded(params: {
     await runWithModelFallback({
       ...resolveModelFallbackOptions(params.followupRun.run),
       run: (provider, model) => {
-        const { authProfile, embeddedContext, senderContext } = buildEmbeddedRunContexts({
-          run: params.followupRun.run,
-          sessionCtx: params.sessionCtx,
-          hasRepliedRef: params.opts?.hasRepliedRef,
-          provider,
-        });
+        const { authProfile, embeddedContext, senderContext } =
+          buildEmbeddedRunContexts({
+            run: params.followupRun.run,
+            sessionCtx: params.sessionCtx,
+            hasRepliedRef: params.opts?.hasRepliedRef,
+            provider,
+          });
         const runBaseParams = buildEmbeddedRunBaseParams({
           run: params.followupRun.run,
           provider,
@@ -491,7 +520,8 @@ export async function runMemoryFlushIfNeeded(params: {
           extraSystemPrompt: flushSystemPrompt,
           onAgentEvent: (evt) => {
             if (evt.stream === "compaction") {
-              const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
+              const phase =
+                typeof evt.data.phase === "string" ? evt.data.phase : "";
               if (phase === "end") {
                 memoryCompactionCompleted = true;
               }
@@ -502,7 +532,9 @@ export async function runMemoryFlushIfNeeded(params: {
     });
     let memoryFlushCompactionCount =
       activeSessionEntry?.compactionCount ??
-      (params.sessionKey ? activeSessionStore?.[params.sessionKey]?.compactionCount : 0) ??
+      (params.sessionKey
+        ? activeSessionStore?.[params.sessionKey]?.compactionCount
+        : 0) ??
       0;
     if (memoryCompactionCompleted) {
       const nextCount = await incrementCompactionCount({

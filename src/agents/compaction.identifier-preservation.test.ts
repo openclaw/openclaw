@@ -2,7 +2,10 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import * as piCodingAgent from "@mariozechner/pi-coding-agent";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { buildCompactionSummarizationInstructions, summarizeInStages } from "./compaction.js";
+import {
+  buildCompactionSummarizationInstructions,
+  summarizeInStages,
+} from "./compaction.js";
 
 vi.mock("@mariozechner/pi-coding-agent", async (importOriginal) => {
   const actual = await importOriginal<typeof piCodingAgent>();
@@ -51,7 +54,9 @@ describe("compaction identifier-preservation instructions", () => {
       ...summarizeBase,
       ...overrides,
       signal: new AbortController().signal,
-      messages: Array.from({ length: messageCount }, (_unused, index) => makeMessage(index + 1)),
+      messages: Array.from({ length: messageCount }, (_unused, index) =>
+        makeMessage(index + 1),
+      ),
     });
   }
 
@@ -80,7 +85,9 @@ describe("compaction identifier-preservation instructions", () => {
       "Preserve all opaque identifiers exactly as written",
     );
     expect(firstSummaryInstructions()).toContain("Additional focus:");
-    expect(firstSummaryInstructions()).toContain("Focus on release-impacting bugs.");
+    expect(firstSummaryInstructions()).toContain(
+      "Focus on release-impacting bugs.",
+    );
   });
 
   it("applies identifier-preservation guidance on staged split + merge summarization", async () => {
@@ -92,7 +99,9 @@ describe("compaction identifier-preservation instructions", () => {
 
     expect(mockGenerateSummary.mock.calls.length).toBeGreaterThan(1);
     for (const call of mockGenerateSummary.mock.calls) {
-      expect(call[5]).toContain("Preserve all opaque identifiers exactly as written");
+      expect(call[5]).toContain(
+        "Preserve all opaque identifiers exactly as written",
+      );
     }
   });
 
@@ -106,7 +115,9 @@ describe("compaction identifier-preservation instructions", () => {
 
     const mergedCall = mockGenerateSummary.mock.calls.at(-1);
     const instructions = mergedCall?.[5] ?? "";
-    expect(instructions).toContain("Merge these partial summaries into a single cohesive summary.");
+    expect(instructions).toContain(
+      "Merge these partial summaries into a single cohesive summary.",
+    );
     expect(instructions).toContain("Prioritize customer-visible regressions.");
     expect((instructions.match(/Additional focus:/g) ?? []).length).toBe(1);
   });
@@ -115,13 +126,19 @@ describe("compaction identifier-preservation instructions", () => {
 describe("buildCompactionSummarizationInstructions", () => {
   it("returns base instructions when no custom text is provided", () => {
     const result = buildCompactionSummarizationInstructions();
-    expect(result).toContain("Preserve all opaque identifiers exactly as written");
+    expect(result).toContain(
+      "Preserve all opaque identifiers exactly as written",
+    );
     expect(result).not.toContain("Additional focus:");
   });
 
   it("appends custom instructions in a stable format", () => {
-    const result = buildCompactionSummarizationInstructions("Keep deployment details.");
-    expect(result).toContain("Preserve all opaque identifiers exactly as written");
+    const result = buildCompactionSummarizationInstructions(
+      "Keep deployment details.",
+    );
+    expect(result).toContain(
+      "Preserve all opaque identifiers exactly as written",
+    );
     expect(result).toContain("Additional focus:");
     expect(result).toContain("Keep deployment details.");
   });

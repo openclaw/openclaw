@@ -19,7 +19,9 @@ describe("memory search config", () => {
     });
   }
 
-  function expectDefaultRemoteBatch(resolved: ReturnType<typeof resolveMemorySearchConfig>): void {
+  function expectDefaultRemoteBatch(
+    resolved: ReturnType<typeof resolveMemorySearchConfig>,
+  ): void {
     expect(resolved?.remote?.batch).toEqual({
       enabled: false,
       wait: true,
@@ -128,7 +130,11 @@ describe("memory search config", () => {
       },
     });
     const resolved = resolveMemorySearchConfig(cfg, "main");
-    expect(resolved?.extraPaths).toEqual(["/shared/notes", "docs", "../team-notes"]);
+    expect(resolved?.extraPaths).toEqual([
+      "/shared/notes",
+      "docs",
+      "../team-notes",
+    ]);
   });
 
   it("includes batch defaults for openai without remote overrides", () => {

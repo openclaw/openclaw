@@ -60,7 +60,10 @@ describe("ws connect policy", () => {
 
     const controlUiStrict = resolveControlUiAuthPolicy({
       isControlUi: true,
-      controlUiConfig: { allowInsecureAuth: true, dangerouslyDisableDeviceAuth: false },
+      controlUiConfig: {
+        allowInsecureAuth: true,
+        dangerouslyDisableDeviceAuth: false,
+      },
       deviceRaw: null,
     });
     // Remote Control UI with allowInsecureAuth -> still rejected.

@@ -9,7 +9,10 @@ describe("logger timestamp format", () => {
   let logPath = "";
 
   beforeEach(() => {
-    logPath = path.join(os.tmpdir(), `openclaw-log-ts-${crypto.randomUUID()}.log`);
+    logPath = path.join(
+      os.tmpdir(),
+      `openclaw-log-ts-${crypto.randomUUID()}.log`,
+    );
     resetLogger();
     setLoggerOverride(null);
   });
@@ -38,7 +41,9 @@ describe("logger timestamp format", () => {
 
     // Should use local time format like "2026-02-27T15:04:00.000+08:00"
     // NOT UTC format like "2026-02-27T07:04:00.000Z"
-    expect(lastLine.time).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}[+-]\d{2}:\d{2}$/);
+    expect(lastLine.time).toMatch(
+      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}[+-]\d{2}:\d{2}$/,
+    );
     expect(lastLine.time).not.toMatch(/Z$/);
   });
 });

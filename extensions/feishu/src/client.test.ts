@@ -14,7 +14,10 @@ const httpsProxyAgentCtorMock = vi.hoisted(() =>
 
 vi.mock("@larksuiteoapi/node-sdk", () => ({
   AppType: { SelfBuild: "self" },
-  Domain: { Feishu: "https://open.feishu.cn", Lark: "https://open.larksuite.com" },
+  Domain: {
+    Feishu: "https://open.feishu.cn",
+    Lark: "https://open.larksuite.com",
+  },
   LoggerLevel: { info: "info" },
   Client: vi.fn(),
   WSClient: wsClientCtorMock,
@@ -27,7 +30,12 @@ vi.mock("https-proxy-agent", () => ({
 
 import { createFeishuWSClient } from "./client.js";
 
-const proxyEnvKeys = ["https_proxy", "HTTPS_PROXY", "http_proxy", "HTTP_PROXY"] as const;
+const proxyEnvKeys = [
+  "https_proxy",
+  "HTTPS_PROXY",
+  "http_proxy",
+  "HTTP_PROXY",
+] as const;
 type ProxyEnvKey = (typeof proxyEnvKeys)[number];
 
 let priorProxyEnv: Partial<Record<ProxyEnvKey, string | undefined>> = {};
@@ -43,7 +51,9 @@ const baseAccount: ResolvedFeishuAccount = {
 };
 
 function firstWsClientOptions(): { agent?: unknown } {
-  const calls = wsClientCtorMock.mock.calls as unknown as Array<[options: { agent?: unknown }]>;
+  const calls = wsClientCtorMock.mock.calls as unknown as Array<
+    [options: { agent?: unknown }]
+  >;
   return calls[0]?.[0] ?? {};
 }
 
@@ -100,7 +110,9 @@ describe("createFeishuWSClient proxy handling", () => {
     createFeishuWSClient(baseAccount);
 
     expect(httpsProxyAgentCtorMock).toHaveBeenCalledTimes(1);
-    expect(httpsProxyAgentCtorMock).toHaveBeenCalledWith("http://upper-http:8999");
+    expect(httpsProxyAgentCtorMock).toHaveBeenCalledWith(
+      "http://upper-http:8999",
+    );
     const options = firstWsClientOptions();
     expect(options.agent).toEqual({ proxyUrl: "http://upper-http:8999" });
   });

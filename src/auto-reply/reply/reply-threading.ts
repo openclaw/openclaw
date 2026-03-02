@@ -33,7 +33,8 @@ export function createReplyToModeFilter(
       return payload;
     }
     if (mode === "off") {
-      const isExplicit = Boolean(payload.replyToTag) || Boolean(payload.replyToCurrent);
+      const isExplicit =
+        Boolean(payload.replyToTag) || Boolean(payload.replyToCurrent);
       if (opts.allowExplicitReplyTagsWhenOff && isExplicit) {
         return payload;
       }
@@ -55,13 +56,16 @@ export function createReplyToModeFilterForChannel(
   channel?: OriginatingChannelType,
 ) {
   const provider = normalizeChannelId(channel);
-  const normalized = typeof channel === "string" ? channel.trim().toLowerCase() : undefined;
+  const normalized =
+    typeof channel === "string" ? channel.trim().toLowerCase() : undefined;
   const isWebchat = normalized === "webchat";
   // Default: allow explicit reply tags/directives even when replyToMode is "off".
   // Unknown channels fail closed; internal webchat stays allowed.
   const dock = provider ? getChannelDock(provider) : undefined;
   const allowExplicitReplyTagsWhenOff = provider
-    ? (dock?.threading?.allowExplicitReplyTagsWhenOff ?? dock?.threading?.allowTagsWhenOff ?? true)
+    ? (dock?.threading?.allowExplicitReplyTagsWhenOff ??
+      dock?.threading?.allowTagsWhenOff ??
+      true)
     : isWebchat;
   return createReplyToModeFilter(mode, {
     allowExplicitReplyTagsWhenOff,

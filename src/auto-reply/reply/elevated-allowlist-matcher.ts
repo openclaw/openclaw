@@ -2,7 +2,13 @@ import { CHAT_CHANNEL_ORDER } from "../../channels/registry.js";
 import { normalizeAtHashSlug } from "../../shared/string-normalization.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 
-export type ExplicitElevatedAllowField = "id" | "from" | "e164" | "name" | "username" | "tag";
+export type ExplicitElevatedAllowField =
+  | "id"
+  | "from"
+  | "e164"
+  | "name"
+  | "username"
+  | "tag";
 
 const EXPLICIT_ELEVATED_ALLOW_FIELDS = new Set<ExplicitElevatedAllowField>([
   "id",
@@ -40,7 +46,9 @@ export function parseExplicitElevatedAllowEntry(
     return null;
   }
   const fieldRaw = entry.slice(0, separatorIndex).trim().toLowerCase();
-  if (!EXPLICIT_ELEVATED_ALLOW_FIELDS.has(fieldRaw as ExplicitElevatedAllowField)) {
+  if (
+    !EXPLICIT_ELEVATED_ALLOW_FIELDS.has(fieldRaw as ExplicitElevatedAllowField)
+  ) {
     return null;
   }
   const value = entry.slice(separatorIndex + 1).trim();
@@ -123,7 +131,10 @@ export function buildMutableTokens(value?: string): Set<string> {
   return tokens;
 }
 
-export function matchesMutableTokens(value: string, tokens: Set<string>): boolean {
+export function matchesMutableTokens(
+  value: string,
+  tokens: Set<string>,
+): boolean {
   if (!value || tokens.size === 0) {
     return false;
   }

@@ -13,8 +13,12 @@ describe("iMessage sent-message echo cache", () => {
 
     cache.remember("acct:imessage:+1555", { text: "  Reasoning:\r\n_step_  " });
 
-    expect(cache.has("acct:imessage:+1555", { text: "Reasoning:\n_step_" })).toBe(true);
-    expect(cache.has("acct:imessage:+1666", { text: "Reasoning:\n_step_" })).toBe(false);
+    expect(
+      cache.has("acct:imessage:+1555", { text: "Reasoning:\n_step_" }),
+    ).toBe(true);
+    expect(
+      cache.has("acct:imessage:+1666", { text: "Reasoning:\n_step_" }),
+    ).toBe(false);
   });
 
   it("matches by outbound message id and ignores placeholder ids", () => {
@@ -25,7 +29,9 @@ describe("iMessage sent-message echo cache", () => {
     cache.remember("acct:imessage:+1555", { messageId: "abc-123" });
     cache.remember("acct:imessage:+1555", { messageId: "ok" });
 
-    expect(cache.has("acct:imessage:+1555", { messageId: "abc-123" })).toBe(true);
+    expect(cache.has("acct:imessage:+1555", { messageId: "abc-123" })).toBe(
+      true,
+    );
     expect(cache.has("acct:imessage:+1555", { messageId: "ok" })).toBe(false);
   });
 

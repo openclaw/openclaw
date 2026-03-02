@@ -5,7 +5,9 @@ type AgentModelListLike = {
   fallbacks?: string[];
 };
 
-export function resolveAgentModelPrimaryValue(model?: AgentModelConfig): string | undefined {
+export function resolveAgentModelPrimaryValue(
+  model?: AgentModelConfig,
+): string | undefined {
   if (typeof model === "string") {
     const trimmed = model.trim();
     return trimmed || undefined;
@@ -17,14 +19,18 @@ export function resolveAgentModelPrimaryValue(model?: AgentModelConfig): string 
   return primary || undefined;
 }
 
-export function resolveAgentModelFallbackValues(model?: AgentModelConfig): string[] {
+export function resolveAgentModelFallbackValues(
+  model?: AgentModelConfig,
+): string[] {
   if (!model || typeof model !== "object") {
     return [];
   }
   return Array.isArray(model.fallbacks) ? model.fallbacks : [];
 }
 
-export function toAgentModelListLike(model?: AgentModelConfig): AgentModelListLike | undefined {
+export function toAgentModelListLike(
+  model?: AgentModelConfig,
+): AgentModelListLike | undefined {
   if (typeof model === "string") {
     const primary = model.trim();
     return primary ? { primary } : undefined;

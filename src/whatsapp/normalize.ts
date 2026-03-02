@@ -32,7 +32,9 @@ export function isWhatsAppGroupJid(value: string): boolean {
  */
 export function isWhatsAppUserTarget(value: string): boolean {
   const candidate = stripWhatsAppTargetPrefixes(value);
-  return WHATSAPP_USER_JID_RE.test(candidate) || WHATSAPP_LID_RE.test(candidate);
+  return (
+    WHATSAPP_USER_JID_RE.test(candidate) || WHATSAPP_LID_RE.test(candidate)
+  );
 }
 
 /**

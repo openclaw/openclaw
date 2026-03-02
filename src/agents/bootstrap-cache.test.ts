@@ -24,7 +24,10 @@ function makeFile(name: string, content: string): WorkspaceBootstrapFile {
 }
 
 describe("getOrLoadBootstrapFiles", () => {
-  const files = [makeFile("AGENTS.md", "# Agent"), makeFile("SOUL.md", "# Soul")];
+  const files = [
+    makeFile("AGENTS.md", "# Agent"),
+    makeFile("SOUL.md", "# Soul"),
+  ];
 
   beforeEach(() => {
     clearAllBootstrapSnapshots();
@@ -47,8 +50,14 @@ describe("getOrLoadBootstrapFiles", () => {
   });
 
   it("returns cached result on second call", async () => {
-    await getOrLoadBootstrapFiles({ workspaceDir: "/ws", sessionKey: "session-1" });
-    const result = await getOrLoadBootstrapFiles({ workspaceDir: "/ws", sessionKey: "session-1" });
+    await getOrLoadBootstrapFiles({
+      workspaceDir: "/ws",
+      sessionKey: "session-1",
+    });
+    const result = await getOrLoadBootstrapFiles({
+      workspaceDir: "/ws",
+      sessionKey: "session-1",
+    });
 
     expect(result).toBe(files);
     expect(mockLoad).toHaveBeenCalledTimes(1);
@@ -58,8 +67,14 @@ describe("getOrLoadBootstrapFiles", () => {
     const files2 = [makeFile("AGENTS.md", "# Agent v2")];
     mockLoad.mockResolvedValueOnce(files).mockResolvedValueOnce(files2);
 
-    const r1 = await getOrLoadBootstrapFiles({ workspaceDir: "/ws", sessionKey: "session-1" });
-    const r2 = await getOrLoadBootstrapFiles({ workspaceDir: "/ws", sessionKey: "session-2" });
+    const r1 = await getOrLoadBootstrapFiles({
+      workspaceDir: "/ws",
+      sessionKey: "session-1",
+    });
+    const r2 = await getOrLoadBootstrapFiles({
+      workspaceDir: "/ws",
+      sessionKey: "session-2",
+    });
 
     expect(r1).toBe(files);
     expect(r2).toBe(files2);

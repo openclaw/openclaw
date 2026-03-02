@@ -1,7 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { DEFAULT_AGENT_MAX_CONCURRENT, DEFAULT_SUBAGENT_MAX_CONCURRENT } from "./agent-limits.js";
+import {
+  DEFAULT_AGENT_MAX_CONCURRENT,
+  DEFAULT_SUBAGENT_MAX_CONCURRENT,
+} from "./agent-limits.js";
 import { loadConfig } from "./config.js";
 import { withTempHome } from "./home-env.test-harness.js";
 
@@ -24,7 +27,10 @@ describe("config identity defaults", () => {
     messages,
   });
 
-  const writeAndLoadConfig = async (home: string, config: Record<string, unknown>) => {
+  const writeAndLoadConfig = async (
+    home: string,
+    config: Record<string, unknown>,
+  ) => {
     const configDir = path.join(home, ".openclaw");
     await fs.mkdir(configDir, { recursive: true });
     await fs.writeFile(
@@ -55,8 +61,12 @@ describe("config identity defaults", () => {
       expect(cfg.messages?.responsePrefix).toBeUndefined();
       expect(cfg.messages?.groupChat?.mentionPatterns).toBeUndefined();
       expect(cfg.agents?.list).toBeUndefined();
-      expect(cfg.agents?.defaults?.maxConcurrent).toBe(DEFAULT_AGENT_MAX_CONCURRENT);
-      expect(cfg.agents?.defaults?.subagents?.maxConcurrent).toBe(DEFAULT_SUBAGENT_MAX_CONCURRENT);
+      expect(cfg.agents?.defaults?.maxConcurrent).toBe(
+        DEFAULT_AGENT_MAX_CONCURRENT,
+      );
+      expect(cfg.agents?.defaults?.subagents?.maxConcurrent).toBe(
+        DEFAULT_SUBAGENT_MAX_CONCURRENT,
+      );
       expect(cfg.session).toBeUndefined();
     });
   });
@@ -83,7 +93,9 @@ describe("config identity defaults", () => {
       });
 
       expect(cfg.messages?.responsePrefix).toBe("✅");
-      expect(cfg.agents?.list?.[0]?.groupChat?.mentionPatterns).toEqual(["@openclaw"]);
+      expect(cfg.agents?.list?.[0]?.groupChat?.mentionPatterns).toEqual([
+        "@openclaw",
+      ]);
     });
   });
 
@@ -114,7 +126,8 @@ describe("config identity defaults", () => {
       expect(cfg.channels?.signal?.textChunkLimit).toBe(2222);
       expect(cfg.channels?.imessage?.textChunkLimit).toBe(1111);
 
-      const legacy = (cfg.messages as unknown as Record<string, unknown>).textChunkLimit;
+      const legacy = (cfg.messages as unknown as Record<string, unknown>)
+        .textChunkLimit;
       expect(legacy).toBeUndefined();
     });
   });
@@ -150,13 +163,18 @@ describe("config identity defaults", () => {
         },
       });
 
-      expect(cfg.models?.providers?.minimax?.baseUrl).toBe("https://api.minimax.io/anthropic");
+      expect(cfg.models?.providers?.minimax?.baseUrl).toBe(
+        "https://api.minimax.io/anthropic",
+      );
     });
   });
 
   it("respects empty responsePrefix to disable identity defaults", async () => {
     await withTempHome("openclaw-config-identity-", async (home) => {
-      const cfg = await writeAndLoadConfig(home, configWithDefaultIdentity({ responsePrefix: "" }));
+      const cfg = await writeAndLoadConfig(
+        home,
+        configWithDefaultIdentity({ responsePrefix: "" }),
+      );
 
       expect(cfg.messages?.responsePrefix).toBe("");
     });

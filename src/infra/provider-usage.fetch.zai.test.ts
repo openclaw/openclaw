@@ -1,10 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { createProviderUsageFetch, makeResponse } from "../test-utils/provider-usage-fetch.js";
+import {
+  createProviderUsageFetch,
+  makeResponse,
+} from "../test-utils/provider-usage-fetch.js";
 import { fetchZaiUsage } from "./provider-usage.fetch.zai.js";
 
 describe("fetchZaiUsage", () => {
   it("returns HTTP errors for failed requests", async () => {
-    const mockFetch = createProviderUsageFetch(async () => makeResponse(503, "unavailable"));
+    const mockFetch = createProviderUsageFetch(async () =>
+      makeResponse(503, "unavailable"),
+    );
     const result = await fetchZaiUsage("key", 5000, mockFetch);
 
     expect(result.error).toBe("HTTP 503");

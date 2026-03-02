@@ -56,13 +56,19 @@ describe("normalizeModelCompat — Anthropic baseUrl", () => {
     }) as Model<Api>;
 
   it("strips /v1 suffix from anthropic-messages baseUrl", () => {
-    const model = { ...anthropicBase(), baseUrl: "https://api.anthropic.com/v1" };
+    const model = {
+      ...anthropicBase(),
+      baseUrl: "https://api.anthropic.com/v1",
+    };
     const normalized = normalizeModelCompat(model);
     expect(normalized.baseUrl).toBe("https://api.anthropic.com");
   });
 
   it("strips trailing /v1/ (with slash) from anthropic-messages baseUrl", () => {
-    const model = { ...anthropicBase(), baseUrl: "https://api.anthropic.com/v1/" };
+    const model = {
+      ...anthropicBase(),
+      baseUrl: "https://api.anthropic.com/v1/",
+    };
     const normalized = normalizeModelCompat(model);
     expect(normalized.baseUrl).toBe("https://api.anthropic.com");
   });
@@ -106,7 +112,8 @@ describe("normalizeModelCompat", () => {
     delete (model as { compat?: unknown }).compat;
     const normalized = normalizeModelCompat(model);
     expect(
-      (normalized.compat as { supportsDeveloperRole?: boolean } | undefined)?.supportsDeveloperRole,
+      (normalized.compat as { supportsDeveloperRole?: boolean } | undefined)
+        ?.supportsDeveloperRole,
     ).toBe(false);
   });
 
@@ -119,7 +126,8 @@ describe("normalizeModelCompat", () => {
     delete (model as { compat?: unknown }).compat;
     const normalized = normalizeModelCompat(model);
     expect(
-      (normalized.compat as { supportsDeveloperRole?: boolean } | undefined)?.supportsDeveloperRole,
+      (normalized.compat as { supportsDeveloperRole?: boolean } | undefined)
+        ?.supportsDeveloperRole,
     ).toBe(false);
   });
 
@@ -132,7 +140,8 @@ describe("normalizeModelCompat", () => {
     delete (model as { compat?: unknown }).compat;
     const normalized = normalizeModelCompat(model);
     expect(
-      (normalized.compat as { supportsDeveloperRole?: boolean } | undefined)?.supportsDeveloperRole,
+      (normalized.compat as { supportsDeveloperRole?: boolean } | undefined)
+        ?.supportsDeveloperRole,
     ).toBe(false);
   });
 
@@ -145,7 +154,8 @@ describe("normalizeModelCompat", () => {
     delete (model as { compat?: unknown }).compat;
     const normalized = normalizeModelCompat(model);
     expect(
-      (normalized.compat as { supportsDeveloperRole?: boolean } | undefined)?.supportsDeveloperRole,
+      (normalized.compat as { supportsDeveloperRole?: boolean } | undefined)
+        ?.supportsDeveloperRole,
     ).toBe(false);
   });
 
@@ -158,7 +168,8 @@ describe("normalizeModelCompat", () => {
     delete (model as { compat?: unknown }).compat;
     const normalized = normalizeModelCompat(model);
     expect(
-      (normalized.compat as { supportsDeveloperRole?: boolean } | undefined)?.supportsDeveloperRole,
+      (normalized.compat as { supportsDeveloperRole?: boolean } | undefined)
+        ?.supportsDeveloperRole,
     ).toBe(false);
   });
 
@@ -178,29 +189,45 @@ describe("normalizeModelCompat", () => {
     model.compat = { supportsDeveloperRole: false };
     const normalized = normalizeModelCompat(model);
     expect(
-      (normalized.compat as { supportsDeveloperRole?: boolean } | undefined)?.supportsDeveloperRole,
+      (normalized.compat as { supportsDeveloperRole?: boolean } | undefined)
+        ?.supportsDeveloperRole,
     ).toBe(false);
   });
 });
 
 describe("isModernModelRef", () => {
   it("excludes opencode minimax variants from modern selection", () => {
-    expect(isModernModelRef({ provider: "opencode", id: "minimax-m2.1" })).toBe(false);
-    expect(isModernModelRef({ provider: "opencode", id: "minimax-m2.5" })).toBe(false);
+    expect(isModernModelRef({ provider: "opencode", id: "minimax-m2.1" })).toBe(
+      false,
+    );
+    expect(isModernModelRef({ provider: "opencode", id: "minimax-m2.5" })).toBe(
+      false,
+    );
   });
 
   it("keeps non-minimax opencode modern models", () => {
-    expect(isModernModelRef({ provider: "opencode", id: "claude-opus-4-6" })).toBe(true);
-    expect(isModernModelRef({ provider: "opencode", id: "gemini-3-pro" })).toBe(true);
+    expect(
+      isModernModelRef({ provider: "opencode", id: "claude-opus-4-6" }),
+    ).toBe(true);
+    expect(isModernModelRef({ provider: "opencode", id: "gemini-3-pro" })).toBe(
+      true,
+    );
   });
 });
 
 describe("resolveForwardCompatModel", () => {
   it("resolves anthropic opus 4.6 via 4.5 template", () => {
     const registry = createRegistry({
-      "anthropic/claude-opus-4-5": createTemplateModel("anthropic", "claude-opus-4-5"),
+      "anthropic/claude-opus-4-5": createTemplateModel(
+        "anthropic",
+        "claude-opus-4-5",
+      ),
     });
-    const model = resolveForwardCompatModel("anthropic", "claude-opus-4-6", registry);
+    const model = resolveForwardCompatModel(
+      "anthropic",
+      "claude-opus-4-6",
+      registry,
+    );
     expect(model?.id).toBe("claude-opus-4-6");
     expect(model?.name).toBe("claude-opus-4-6");
     expect(model?.provider).toBe("anthropic");
@@ -213,7 +240,11 @@ describe("resolveForwardCompatModel", () => {
         "claude-sonnet-4.5-20260219",
       ),
     });
-    const model = resolveForwardCompatModel("anthropic", "claude-sonnet-4.6-20260219", registry);
+    const model = resolveForwardCompatModel(
+      "anthropic",
+      "claude-sonnet-4.6-20260219",
+      registry,
+    );
     expect(model?.id).toBe("claude-sonnet-4.6-20260219");
     expect(model?.name).toBe("claude-sonnet-4.6-20260219");
     expect(model?.provider).toBe("anthropic");
@@ -221,9 +252,16 @@ describe("resolveForwardCompatModel", () => {
 
   it("does not resolve anthropic 4.6 fallback for other providers", () => {
     const registry = createRegistry({
-      "anthropic/claude-opus-4-5": createTemplateModel("anthropic", "claude-opus-4-5"),
+      "anthropic/claude-opus-4-5": createTemplateModel(
+        "anthropic",
+        "claude-opus-4-5",
+      ),
     });
-    const model = resolveForwardCompatModel("openai", "claude-opus-4-6", registry);
+    const model = resolveForwardCompatModel(
+      "openai",
+      "claude-opus-4-6",
+      registry,
+    );
     expect(model).toBeUndefined();
   });
 });

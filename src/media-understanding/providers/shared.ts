@@ -5,7 +5,10 @@ export { fetchWithTimeout } from "../../utils/fetch-timeout.js";
 
 const MAX_ERROR_CHARS = 300;
 
-export function normalizeBaseUrl(baseUrl: string | undefined, fallback: string): string {
+export function normalizeBaseUrl(
+  baseUrl: string | undefined,
+  fallback: string,
+): string {
   const raw = baseUrl?.trim() || fallback;
   return raw.replace(/\/+$/, "");
 }
@@ -49,11 +52,15 @@ export async function postTranscriptionRequest(params: {
     },
     params.timeoutMs,
     params.fetchFn,
-    params.allowPrivateNetwork ? { ssrfPolicy: { allowPrivateNetwork: true } } : undefined,
+    params.allowPrivateNetwork
+      ? { ssrfPolicy: { allowPrivateNetwork: true } }
+      : undefined,
   );
 }
 
-export async function readErrorResponse(res: Response): Promise<string | undefined> {
+export async function readErrorResponse(
+  res: Response,
+): Promise<string | undefined> {
   try {
     const text = await res.text();
     const collapsed = text.replace(/\s+/g, " ").trim();
@@ -69,7 +76,10 @@ export async function readErrorResponse(res: Response): Promise<string | undefin
   }
 }
 
-export async function assertOkOrThrowHttpError(res: Response, label: string): Promise<void> {
+export async function assertOkOrThrowHttpError(
+  res: Response,
+  label: string,
+): Promise<void> {
   if (res.ok) {
     return;
   }

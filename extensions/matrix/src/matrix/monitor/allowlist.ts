@@ -1,4 +1,7 @@
-import { resolveAllowlistMatchByCandidates, type AllowlistMatch } from "openclaw/plugin-sdk";
+import {
+  resolveAllowlistMatchByCandidates,
+  type AllowlistMatch,
+} from "openclaw/plugin-sdk";
 
 function normalizeAllowList(list?: Array<string | number>) {
   return (list ?? []).map((entry) => String(entry).trim()).filter(Boolean);
@@ -59,13 +62,18 @@ function normalizeMatrixAllowListEntry(raw: string): string {
 }
 
 export function normalizeMatrixAllowList(list?: Array<string | number>) {
-  return normalizeAllowList(list).map((entry) => normalizeMatrixAllowListEntry(entry));
+  return normalizeAllowList(list).map((entry) =>
+    normalizeMatrixAllowListEntry(entry),
+  );
 }
 
 export type MatrixAllowListMatch = AllowlistMatch<
   "wildcard" | "id" | "prefixed-id" | "prefixed-user"
 >;
-type MatrixAllowListSource = Exclude<MatrixAllowListMatch["matchSource"], undefined>;
+type MatrixAllowListSource = Exclude<
+  MatrixAllowListMatch["matchSource"],
+  undefined
+>;
 
 export function resolveMatrixAllowListMatch(params: {
   allowList: string[];
@@ -87,6 +95,9 @@ export function resolveMatrixAllowListMatch(params: {
   return resolveAllowlistMatchByCandidates({ allowList, candidates });
 }
 
-export function resolveMatrixAllowListMatches(params: { allowList: string[]; userId?: string }) {
+export function resolveMatrixAllowListMatches(params: {
+  allowList: string[];
+  userId?: string;
+}) {
   return resolveMatrixAllowListMatch(params).allowed;
 }

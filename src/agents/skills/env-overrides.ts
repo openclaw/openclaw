@@ -1,7 +1,10 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import { isDangerousHostEnvVarName } from "../../infra/host-env-security.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { sanitizeEnvVars, validateEnvVarValue } from "../sandbox/sanitize-env-vars.js";
+import {
+  sanitizeEnvVars,
+  validateEnvVarValue,
+} from "../sandbox/sanitize-env-vars.js";
 import { resolveSkillConfig } from "./config.js";
 import { resolveSkillKey } from "./frontmatter.js";
 import type { SkillEntry, SkillSnapshot } from "./types.js";
@@ -18,15 +21,21 @@ type SanitizedSkillEnvOverrides = {
 };
 
 // Always block skill env overrides that can alter runtime loading or host execution behavior.
-const SKILL_ALWAYS_BLOCKED_ENV_PATTERNS: ReadonlyArray<RegExp> = [/^OPENSSL_CONF$/i];
+const SKILL_ALWAYS_BLOCKED_ENV_PATTERNS: ReadonlyArray<RegExp> = [
+  /^OPENSSL_CONF$/i,
+];
 
-function matchesAnyPattern(value: string, patterns: readonly RegExp[]): boolean {
+function matchesAnyPattern(
+  value: string,
+  patterns: readonly RegExp[],
+): boolean {
   return patterns.some((pattern) => pattern.test(value));
 }
 
 function isAlwaysBlockedSkillEnvKey(key: string): boolean {
   return (
-    isDangerousHostEnvVarName(key) || matchesAnyPattern(key, SKILL_ALWAYS_BLOCKED_ENV_PATTERNS)
+    isDangerousHostEnvVarName(key) ||
+    matchesAnyPattern(key, SKILL_ALWAYS_BLOCKED_ENV_PATTERNS)
   );
 }
 
@@ -52,7 +61,10 @@ function sanitizeSkillEnvOverrides(params: {
   }
 
   for (const key of result.blocked) {
-    if (isAlwaysBlockedSkillEnvKey(key) || !params.allowedSensitiveKeys.has(key)) {
+    if (
+      isAlwaysBlockedSkillEnvKey(key) ||
+      !params.allowedSensitiveKeys.has(key)
+    ) {
       blocked.add(key);
       continue;
     }
@@ -105,8 +117,13 @@ function applySkillConfigEnvOverrides(params: {
     }
   }
 
-  const resolvedApiKey = typeof skillConfig.apiKey === "string" ? skillConfig.apiKey.trim() : "";
-  if (normalizedPrimaryEnv && resolvedApiKey && !process.env[normalizedPrimaryEnv]) {
+  const resolvedApiKey =
+    typeof skillConfig.apiKey === "string" ? skillConfig.apiKey.trim() : "";
+  if (
+    normalizedPrimaryEnv &&
+    resolvedApiKey &&
+    !process.env[normalizedPrimaryEnv]
+  ) {
     if (!pendingOverrides[normalizedPrimaryEnv]) {
       pendingOverrides[normalizedPrimaryEnv] = resolvedApiKey;
     }
@@ -118,10 +135,14 @@ function applySkillConfigEnvOverrides(params: {
   });
 
   if (sanitized.blocked.length > 0) {
-    log.warn(`Blocked skill env overrides for ${skillKey}: ${sanitized.blocked.join(", ")}`);
+    log.warn(
+      `Blocked skill env overrides for ${skillKey}: ${sanitized.blocked.join(", ")}`,
+    );
   }
   if (sanitized.warnings.length > 0) {
-    log.warn(`Suspicious skill env overrides for ${skillKey}: ${sanitized.warnings.join(", ")}`);
+    log.warn(
+      `Suspicious skill env overrides for ${skillKey}: ${sanitized.warnings.join(", ")}`,
+    );
   }
 
   for (const [envKey, envValue] of Object.entries(sanitized.allowed)) {
@@ -145,7 +166,10 @@ function createEnvReverter(updates: EnvUpdate[]) {
   };
 }
 
-export function applySkillEnvOverrides(params: { skills: SkillEntry[]; config?: OpenClawConfig }) {
+export function applySkillEnvOverrides(params: {
+  skills: SkillEntry[];
+  config?: OpenClawConfig;
+}) {
   const { skills, config } = params;
   const updates: EnvUpdate[] = [];
 

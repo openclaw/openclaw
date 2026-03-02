@@ -40,7 +40,8 @@ const callGateway = vi.fn(async (opts: NodeInvokeCall) => {
         ? params.command.map((entry) => String(entry))
         : [];
       const rawCommand =
-        typeof params.rawCommand === "string" && params.rawCommand.trim().length > 0
+        typeof params.rawCommand === "string" &&
+        params.rawCommand.trim().length > 0
           ? params.rawCommand
           : null;
       return {
@@ -111,7 +112,9 @@ describe("nodes-cli coverage", () => {
   const getNodeInvokeCall = () => {
     const nodeInvokeCalls = callGateway.mock.calls
       .map((call) => call[0])
-      .filter((entry): entry is NodeInvokeCall => entry?.method === "node.invoke");
+      .filter(
+        (entry): entry is NodeInvokeCall => entry?.method === "node.invoke",
+      );
     const last = nodeInvokeCalls.at(-1);
     if (!last) {
       throw new Error("expected node.invoke call");
@@ -120,7 +123,9 @@ describe("nodes-cli coverage", () => {
   };
 
   const getApprovalRequestCall = () =>
-    callGateway.mock.calls.find((call) => call[0]?.method === "exec.approval.request")?.[0] as {
+    callGateway.mock.calls.find(
+      (call) => call[0]?.method === "exec.approval.request",
+    )?.[0] as {
       params?: Record<string, unknown>;
     };
 
@@ -217,7 +222,11 @@ describe("nodes-cli coverage", () => {
       runId: expect.any(String),
     });
     const approval = getApprovalRequestCall();
-    expect(approval?.params?.["commandArgv"]).toEqual(["/bin/sh", "-lc", "echo hi"]);
+    expect(approval?.params?.["commandArgv"]).toEqual([
+      "/bin/sh",
+      "-lc",
+      "echo hi",
+    ]);
     expect(approval?.params?.["systemRunPlan"]).toEqual({
       argv: ["/bin/sh", "-lc", "echo hi"],
       cwd: null,

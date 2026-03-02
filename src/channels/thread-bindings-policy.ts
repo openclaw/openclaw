@@ -15,7 +15,10 @@ type SessionThreadBindingsConfigShape = {
 
 type ChannelThreadBindingsContainerShape = {
   threadBindings?: SessionThreadBindingsConfigShape;
-  accounts?: Record<string, { threadBindings?: SessionThreadBindingsConfigShape } | undefined>;
+  accounts?: Record<
+    string,
+    { threadBindings?: SessionThreadBindingsConfigShape } | undefined
+  >;
 };
 
 export type ThreadBindingSpawnKind = "subagent" | "acp";
@@ -77,7 +80,9 @@ export function resolveThreadBindingsEnabled(params: {
   sessionEnabledRaw: unknown;
 }): boolean {
   return (
-    normalizeBoolean(params.channelEnabledRaw) ?? normalizeBoolean(params.sessionEnabledRaw) ?? true
+    normalizeBoolean(params.channelEnabledRaw) ??
+    normalizeBoolean(params.sessionEnabledRaw) ??
+    true
   );
 }
 
@@ -126,9 +131,11 @@ export function resolveThreadBindingSpawnPolicy(params: {
     true;
   const spawnFlagKey = resolveSpawnFlagKey(params.kind);
   const spawnEnabledRaw =
-    normalizeBoolean(account?.[spawnFlagKey]) ?? normalizeBoolean(root?.[spawnFlagKey]);
+    normalizeBoolean(account?.[spawnFlagKey]) ??
+    normalizeBoolean(root?.[spawnFlagKey]);
   // Non-Discord channels currently have no dedicated spawn gate config keys.
-  const spawnEnabled = spawnEnabledRaw ?? channel !== DISCORD_THREAD_BINDING_CHANNEL;
+  const spawnEnabled =
+    spawnEnabledRaw ?? channel !== DISCORD_THREAD_BINDING_CHANNEL;
   return {
     channel,
     accountId,
@@ -191,10 +198,16 @@ export function formatThreadBindingSpawnDisabledError(params: {
   accountId: string;
   kind: ThreadBindingSpawnKind;
 }): string {
-  if (params.channel === DISCORD_THREAD_BINDING_CHANNEL && params.kind === "acp") {
+  if (
+    params.channel === DISCORD_THREAD_BINDING_CHANNEL &&
+    params.kind === "acp"
+  ) {
     return "Discord thread-bound ACP spawns are disabled for this account (set channels.discord.threadBindings.spawnAcpSessions=true to enable).";
   }
-  if (params.channel === DISCORD_THREAD_BINDING_CHANNEL && params.kind === "subagent") {
+  if (
+    params.channel === DISCORD_THREAD_BINDING_CHANNEL &&
+    params.kind === "subagent"
+  ) {
     return "Discord thread-bound subagent spawns are disabled for this account (set channels.discord.threadBindings.spawnSubagentSessions=true to enable).";
   }
   return `Thread-bound ${params.kind} spawns are disabled for ${params.channel}.`;

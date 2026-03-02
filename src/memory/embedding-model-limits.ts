@@ -13,7 +13,9 @@ const KNOWN_EMBEDDING_MAX_INPUT_TOKENS: Record<string, number> = {
   "voyage:voyage-code-3": 32000,
 };
 
-export function resolveEmbeddingMaxInputTokens(provider: EmbeddingProvider): number {
+export function resolveEmbeddingMaxInputTokens(
+  provider: EmbeddingProvider,
+): number {
   if (typeof provider.maxInputTokens === "number") {
     return provider.maxInputTokens;
   }

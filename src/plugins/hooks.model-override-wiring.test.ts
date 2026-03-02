@@ -25,7 +25,9 @@ function addBeforeModelResolveHook(
   handler: (
     event: PluginHookBeforeModelResolveEvent,
     ctx: PluginHookAgentContext,
-  ) => PluginHookBeforeModelResolveResult | Promise<PluginHookBeforeModelResolveResult>,
+  ) =>
+    | PluginHookBeforeModelResolveResult
+    | Promise<PluginHookBeforeModelResolveResult>,
   priority?: number,
 ) {
   registry.typedHooks.push({
@@ -43,7 +45,9 @@ function addBeforePromptBuildHook(
   handler: (
     event: PluginHookBeforePromptBuildEvent,
     ctx: PluginHookAgentContext,
-  ) => PluginHookBeforePromptBuildResult | Promise<PluginHookBeforePromptBuildResult>,
+  ) =>
+    | PluginHookBeforePromptBuildResult
+    | Promise<PluginHookBeforePromptBuildResult>,
   priority?: number,
 ) {
   registry.typedHooks.push({
@@ -58,7 +62,9 @@ function addBeforePromptBuildHook(
 function addLegacyBeforeAgentStartHook(
   registry: PluginRegistry,
   pluginId: string,
-  handler: () => PluginHookBeforeAgentStartResult | Promise<PluginHookBeforeAgentStartResult>,
+  handler: () =>
+    | PluginHookBeforeAgentStartResult
+    | Promise<PluginHookBeforeAgentStartResult>,
   priority?: number,
 ) {
   registry.typedHooks.push({
@@ -96,7 +102,10 @@ describe("model override pipeline wiring", () => {
 
       addBeforeModelResolveHook(registry, "router-plugin", handlerSpy);
       const runner = createHookRunner(registry);
-      const result = await runner.runBeforeModelResolve({ prompt: "PII text" }, stubCtx);
+      const result = await runner.runBeforeModelResolve(
+        { prompt: "PII text" },
+        stubCtx,
+      );
 
       expect(handlerSpy).toHaveBeenCalledTimes(1);
       expect(handlerSpy).toHaveBeenCalledWith({ prompt: "PII text" }, stubCtx);
@@ -115,10 +124,17 @@ describe("model override pipeline wiring", () => {
       }));
 
       const runner = createHookRunner(registry);
-      const explicit = await runner.runBeforeModelResolve({ prompt: "sensitive" }, stubCtx);
-      const legacy = await runner.runBeforeAgentStart({ prompt: "sensitive" }, stubCtx);
+      const explicit = await runner.runBeforeModelResolve(
+        { prompt: "sensitive" },
+        stubCtx,
+      );
+      const legacy = await runner.runBeforeAgentStart(
+        { prompt: "sensitive" },
+        stubCtx,
+      );
       const merged = {
-        providerOverride: explicit?.providerOverride ?? legacy?.providerOverride,
+        providerOverride:
+          explicit?.providerOverride ?? legacy?.providerOverride,
         modelOverride: explicit?.modelOverride ?? legacy?.modelOverride,
       };
 
@@ -157,14 +173,23 @@ describe("model override pipeline wiring", () => {
 
       const runner = createHookRunner(registry);
       const promptBuild = await runner.runBeforePromptBuild(
-        { prompt: "test", messages: [{ role: "user", content: "x" }] as unknown[] },
+        {
+          prompt: "test",
+          messages: [{ role: "user", content: "x" }] as unknown[],
+        },
         stubCtx,
       );
       const legacy = await runner.runBeforeAgentStart(
-        { prompt: "test", messages: [{ role: "user", content: "x" }] as unknown[] },
+        {
+          prompt: "test",
+          messages: [{ role: "user", content: "x" }] as unknown[],
+        },
         stubCtx,
       );
-      const prependContext = [promptBuild?.prependContext, legacy?.prependContext]
+      const prependContext = [
+        promptBuild?.prependContext,
+        legacy?.prependContext,
+      ]
         .filter((value): value is string => Boolean(value))
         .join("\n\n");
 
@@ -193,7 +218,10 @@ describe("model override pipeline wiring", () => {
       );
 
       const runner = createHookRunner(registry, { catchErrors: true });
-      const result = await runner.runBeforeModelResolve({ prompt: "PII data" }, stubCtx);
+      const result = await runner.runBeforeModelResolve(
+        { prompt: "PII data" },
+        stubCtx,
+      );
 
       expect(result?.modelOverride).toBe("llama3.3:8b");
       expect(result?.providerOverride).toBe("ollama");

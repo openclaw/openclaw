@@ -47,7 +47,9 @@ function collectScopes(value: unknown, into: string[]) {
 }
 
 function normalizeScopes(scopes: string[]) {
-  return Array.from(new Set(scopes.map((scope) => scope.trim()).filter(Boolean))).toSorted();
+  return Array.from(
+    new Set(scopes.map((scope) => scope.trim()).filter(Boolean)),
+  ).toSorted();
 }
 
 function extractScopes(payload: unknown): string[] {
@@ -60,8 +62,14 @@ function extractScopes(payload: unknown): string[] {
   if (isRecord(payload.info)) {
     collectScopes(payload.info.scopes, scopes);
     collectScopes(payload.info.scope, scopes);
-    collectScopes((payload.info as { user_scopes?: unknown }).user_scopes, scopes);
-    collectScopes((payload.info as { bot_scopes?: unknown }).bot_scopes, scopes);
+    collectScopes(
+      (payload.info as { user_scopes?: unknown }).user_scopes,
+      scopes,
+    );
+    collectScopes(
+      (payload.info as { bot_scopes?: unknown }).bot_scopes,
+      scopes,
+    );
   }
   return normalizeScopes(scopes);
 }
@@ -94,7 +102,10 @@ export async function fetchSlackScopes(
   timeoutMs: number,
 ): Promise<SlackScopesResult> {
   const client = createSlackWebClient(token, { timeout: timeoutMs });
-  const attempts: SlackScopesSource[] = ["auth.scopes", "apps.permissions.info"];
+  const attempts: SlackScopesSource[] = [
+    "auth.scopes",
+    "apps.permissions.info",
+  ];
   const errors: string[] = [];
 
   for (const method of attempts) {

@@ -26,7 +26,9 @@ export function snapshotPlatformPathEnv(): PlatformPathEnvSnapshot {
   };
 }
 
-export function restorePlatformPathEnv(snapshot: PlatformPathEnvSnapshot): void {
+export function restorePlatformPathEnv(
+  snapshot: PlatformPathEnvSnapshot,
+): void {
   if (snapshot.platformDescriptor) {
     Object.defineProperty(process, "platform", snapshot.platformDescriptor);
   }

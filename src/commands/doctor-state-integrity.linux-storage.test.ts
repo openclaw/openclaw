@@ -45,7 +45,8 @@ describe("detectLinuxSdBackedStateDir", () => {
   });
 
   it("resolves /dev/disk aliases to mmc devices", () => {
-    const mountInfo = "24 19 179:2 / / rw,relatime - ext4 /dev/disk/by-uuid/abcd-1234 rw";
+    const mountInfo =
+      "24 19 179:2 / / rw,relatime - ext4 /dev/disk/by-uuid/abcd-1234 rw";
 
     const result = detectLinuxSdBackedStateDir("/home/user/.openclaw", {
       platform: "linux",
@@ -89,10 +90,13 @@ describe("detectLinuxSdBackedStateDir", () => {
   it("returns null outside linux", () => {
     const mountInfo = "24 19 179:2 / / rw,relatime - ext4 /dev/mmcblk0p2 rw";
 
-    const result = detectLinuxSdBackedStateDir(path.join("/Users", "tester", ".openclaw"), {
-      platform: "darwin",
-      mountInfo,
-    });
+    const result = detectLinuxSdBackedStateDir(
+      path.join("/Users", "tester", ".openclaw"),
+      {
+        platform: "darwin",
+        mountInfo,
+      },
+    );
 
     expect(result).toBeNull();
   });

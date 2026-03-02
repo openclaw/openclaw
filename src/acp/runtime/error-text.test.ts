@@ -12,7 +12,9 @@ describe("formatAcpRuntimeErrorText", () => {
   });
 
   it("returns consistent ACP error envelope for runtime failures", () => {
-    const text = formatAcpRuntimeErrorText(new AcpRuntimeError("ACP_TURN_FAILED", "turn failed"));
+    const text = formatAcpRuntimeErrorText(
+      new AcpRuntimeError("ACP_TURN_FAILED", "turn failed"),
+    );
     expect(text).toContain("ACP error (ACP_TURN_FAILED): turn failed");
     expect(text).toContain("next:");
   });

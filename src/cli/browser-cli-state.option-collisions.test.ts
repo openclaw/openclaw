@@ -35,7 +35,8 @@ describe("browser state option collisions", () => {
     if (withGatewayUrl) {
       browser.option("--url <url>", "Gateway WebSocket URL");
     }
-    const parentOpts = (cmd: Command) => cmd.parent?.opts?.() as BrowserParentOpts;
+    const parentOpts = (cmd: Command) =>
+      cmd.parent?.opts?.() as BrowserParentOpts;
     registerBrowserStateCommands(browser, parentOpts);
     return program;
   };
@@ -79,7 +80,9 @@ describe("browser state option collisions", () => {
       "tab-1",
     ]);
 
-    expect((request as { body?: { targetId?: string } }).body?.targetId).toBe("tab-1");
+    expect((request as { body?: { targetId?: string } }).body?.targetId).toBe(
+      "tab-1",
+    );
   });
 
   it("resolves --url via parent when addGatewayClientOptions captures it", async () => {
@@ -107,7 +110,15 @@ describe("browser state option collisions", () => {
   it("inherits --url from parent when subcommand does not provide it", async () => {
     const program = createBrowserProgram({ withGatewayUrl: true });
     await program.parseAsync(
-      ["browser", "--url", "https://inherited.example.com", "cookies", "set", "session", "abc"],
+      [
+        "browser",
+        "--url",
+        "https://inherited.example.com",
+        "cookies",
+        "set",
+        "session",
+        "abc",
+      ],
       { from: "user" },
     );
     const call = mocks.callBrowserRequest.mock.calls.at(-1);
@@ -144,7 +155,9 @@ describe("browser state option collisions", () => {
     await runBrowserCommand(["set", "offline", "maybe"]);
 
     expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
-    expect(mocks.runtime.error).toHaveBeenCalledWith(expect.stringContaining("Expected on|off"));
+    expect(mocks.runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Expected on|off"),
+    );
     expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
   });
 

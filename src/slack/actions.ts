@@ -51,7 +51,9 @@ function resolveToken(explicit?: string, accountId?: string) {
         explicit,
       )} source=${account.botTokenSource ?? "unknown"}`,
     );
-    throw new Error("SLACK_BOT_TOKEN or channels.slack.botToken is required for Slack actions");
+    throw new Error(
+      "SLACK_BOT_TOKEN or channels.slack.botToken is required for Slack actions",
+    );
   }
   return token;
 }
@@ -180,12 +182,14 @@ export async function editSlackMessage(
   opts: SlackActionClientOpts & { blocks?: (Block | KnownBlock)[] } = {},
 ) {
   const client = await getClient(opts);
-  const blocks = opts.blocks == null ? undefined : validateSlackBlocksArray(opts.blocks);
+  const blocks =
+    opts.blocks == null ? undefined : validateSlackBlocksArray(opts.blocks);
   const trimmedContent = content.trim();
   await client.chat.update({
     channel: channelId,
     ts: messageId,
-    text: trimmedContent || (blocks ? buildSlackBlocksFallbackText(blocks) : " "),
+    text:
+      trimmedContent || (blocks ? buildSlackBlocksFallbackText(blocks) : " "),
     ...(blocks ? { blocks } : {}),
   });
 }
@@ -243,7 +247,10 @@ export async function readSlackMessages(
   };
 }
 
-export async function getSlackMemberInfo(userId: string, opts: SlackActionClientOpts = {}) {
+export async function getSlackMemberInfo(
+  userId: string,
+  opts: SlackActionClientOpts = {},
+) {
   const client = await getClient(opts);
   return await client.users.info({ user: userId });
 }
@@ -298,12 +305,16 @@ type SlackFileThreadShare = {
   threadTs?: string;
 };
 
-function normalizeSlackScopeValue(value: string | undefined): string | undefined {
+function normalizeSlackScopeValue(
+  value: string | undefined,
+): string | undefined {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;
 }
 
-function collectSlackDirectShareChannelIds(file: SlackFileInfoSummary): Set<string> {
+function collectSlackDirectShareChannelIds(
+  file: SlackFileInfoSummary,
+): Set<string> {
   const ids = new Set<string>();
   for (const group of [file.channels, file.groups, file.ims]) {
     if (!Array.isArray(group)) {
@@ -322,8 +333,14 @@ function collectSlackDirectShareChannelIds(file: SlackFileInfoSummary): Set<stri
   return ids;
 }
 
-function collectSlackShareMaps(file: SlackFileInfoSummary): Array<Record<string, unknown>> {
-  if (!file.shares || typeof file.shares !== "object" || Array.isArray(file.shares)) {
+function collectSlackShareMaps(
+  file: SlackFileInfoSummary,
+): Array<Record<string, unknown>> {
+  if (
+    !file.shares ||
+    typeof file.shares !== "object" ||
+    Array.isArray(file.shares)
+  ) {
     return [];
   }
   const shares = file.shares as Record<string, unknown>;
@@ -357,13 +374,22 @@ function collectSlackThreadShares(
       continue;
     }
     for (const rawEntry of rawEntries) {
-      if (!rawEntry || typeof rawEntry !== "object" || Array.isArray(rawEntry)) {
+      if (
+        !rawEntry ||
+        typeof rawEntry !== "object" ||
+        Array.isArray(rawEntry)
+      ) {
         continue;
       }
       const entry = rawEntry as Record<string, unknown>;
-      const ts = typeof entry.ts === "string" ? normalizeSlackScopeValue(entry.ts) : undefined;
+      const ts =
+        typeof entry.ts === "string"
+          ? normalizeSlackScopeValue(entry.ts)
+          : undefined;
       const threadTs =
-        typeof entry.thread_ts === "string" ? normalizeSlackScopeValue(entry.thread_ts) : undefined;
+        typeof entry.thread_ts === "string"
+          ? normalizeSlackScopeValue(entry.thread_ts)
+          : undefined;
       matches.push({ channelId, ts, threadTs });
     }
   }
@@ -396,11 +422,15 @@ function hasSlackScopeMismatch(params: {
   if (threadShares.length === 0) {
     return false;
   }
-  const threadEvidence = threadShares.filter((entry) => entry.threadTs || entry.ts);
+  const threadEvidence = threadShares.filter(
+    (entry) => entry.threadTs || entry.ts,
+  );
   if (threadEvidence.length === 0) {
     return false;
   }
-  return !threadEvidence.some((entry) => entry.threadTs === threadId || entry.ts === threadId);
+  return !threadEvidence.some(
+    (entry) => entry.threadTs === threadId || entry.ts === threadId,
+  );
 }
 
 /**
@@ -410,7 +440,11 @@ function hasSlackScopeMismatch(params: {
  */
 export async function downloadSlackFile(
   fileId: string,
-  opts: SlackActionClientOpts & { maxBytes: number; channelId?: string; threadId?: string },
+  opts: SlackActionClientOpts & {
+    maxBytes: number;
+    channelId?: string;
+    threadId?: string;
+  },
 ): Promise<SlackMediaResult | null> {
   const token = resolveToken(opts.token, opts.accountId);
   const client = await getClient(opts);
@@ -422,7 +456,13 @@ export async function downloadSlackFile(
   if (!file?.url_private_download && !file?.url_private) {
     return null;
   }
-  if (hasSlackScopeMismatch({ file, channelId: opts.channelId, threadId: opts.threadId })) {
+  if (
+    hasSlackScopeMismatch({
+      file,
+      channelId: opts.channelId,
+      threadId: opts.threadId,
+    })
+  ) {
     return null;
   }
 

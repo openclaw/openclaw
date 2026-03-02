@@ -2,9 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelId } from "../channels/plugins/types.js";
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.js";
 import { startChannelHealthMonitor } from "./channel-health-monitor.js";
-import type { ChannelManager, ChannelRuntimeSnapshot } from "./server-channels.js";
+import type {
+  ChannelManager,
+  ChannelRuntimeSnapshot,
+} from "./server-channels.js";
 
-function createMockChannelManager(overrides?: Partial<ChannelManager>): ChannelManager {
+function createMockChannelManager(
+  overrides?: Partial<ChannelManager>,
+): ChannelManager {
   return {
     getRuntimeSnapshot: vi.fn(() => ({ channels: {}, channelAccounts: {} })),
     startChannels: vi.fn(async () => {}),
@@ -50,7 +55,9 @@ function createSnapshotManager(
 
 function startDefaultMonitor(
   manager: ChannelManager,
-  overrides: Partial<Omit<Parameters<typeof startChannelHealthMonitor>[0], "channelManager">> = {},
+  overrides: Partial<
+    Omit<Parameters<typeof startChannelHealthMonitor>[0], "channelManager">
+  > = {},
 ) {
   return startChannelHealthMonitor({
     channelManager: manager,
@@ -62,16 +69,21 @@ function startDefaultMonitor(
 
 async function startAndRunCheck(
   manager: ChannelManager,
-  overrides: Partial<Omit<Parameters<typeof startChannelHealthMonitor>[0], "channelManager">> = {},
+  overrides: Partial<
+    Omit<Parameters<typeof startChannelHealthMonitor>[0], "channelManager">
+  > = {},
 ) {
   const monitor = startDefaultMonitor(manager, overrides);
   const startupGraceMs = overrides.startupGraceMs ?? 0;
-  const checkIntervalMs = overrides.checkIntervalMs ?? DEFAULT_CHECK_INTERVAL_MS;
+  const checkIntervalMs =
+    overrides.checkIntervalMs ?? DEFAULT_CHECK_INTERVAL_MS;
   await vi.advanceTimersByTimeAsync(startupGraceMs + checkIntervalMs + 1);
   return monitor;
 }
 
-function managedStoppedAccount(lastError: string): Partial<ChannelAccountSnapshot> {
+function managedStoppedAccount(
+  lastError: string,
+): Partial<ChannelAccountSnapshot> {
   return {
     running: false,
     enabled: true,
@@ -106,7 +118,12 @@ describe("channel-health-monitor", () => {
   it("skips healthy channels (running + connected)", async () => {
     const manager = createSnapshotManager({
       discord: {
-        default: { running: true, connected: true, enabled: true, configured: true },
+        default: {
+          running: true,
+          connected: true,
+          enabled: true,
+          configured: true,
+        },
       },
     });
     const monitor = await startAndRunCheck(manager);
@@ -170,7 +187,10 @@ describe("channel-health-monitor", () => {
     });
     const monitor = await startAndRunCheck(manager);
     expect(manager.stopChannel).toHaveBeenCalledWith("whatsapp", "default");
-    expect(manager.resetRestartAttempts).toHaveBeenCalledWith("whatsapp", "default");
+    expect(manager.resetRestartAttempts).toHaveBeenCalledWith(
+      "whatsapp",
+      "default",
+    );
     expect(manager.startChannel).toHaveBeenCalledWith("whatsapp", "default");
     monitor.stop();
   });
@@ -185,7 +205,10 @@ describe("channel-health-monitor", () => {
       },
     });
     const monitor = await startAndRunCheck(manager);
-    expect(manager.resetRestartAttempts).toHaveBeenCalledWith("discord", "default");
+    expect(manager.resetRestartAttempts).toHaveBeenCalledWith(
+      "discord",
+      "default",
+    );
     expect(manager.startChannel).toHaveBeenCalledWith("discord", "default");
     monitor.stop();
   });
@@ -197,7 +220,10 @@ describe("channel-health-monitor", () => {
       },
     });
     const monitor = await startAndRunCheck(manager);
-    expect(manager.resetRestartAttempts).toHaveBeenCalledWith("telegram", "default");
+    expect(manager.resetRestartAttempts).toHaveBeenCalledWith(
+      "telegram",
+      "default",
+    );
     expect(manager.startChannel).toHaveBeenCalledWith("telegram", "default");
     monitor.stop();
   });
@@ -268,7 +294,10 @@ describe("channel-health-monitor", () => {
         }),
       },
     );
-    const monitor = startDefaultMonitor(manager, { checkIntervalMs: 100, cooldownCycles: 0 });
+    const monitor = startDefaultMonitor(manager, {
+      checkIntervalMs: 100,
+      cooldownCycles: 0,
+    });
     await vi.advanceTimersByTimeAsync(120);
     expect(manager.startChannel).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(500);

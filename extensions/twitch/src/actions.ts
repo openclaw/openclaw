@@ -6,7 +6,10 @@
 
 import { DEFAULT_ACCOUNT_ID, getAccountConfig } from "./config.js";
 import { twitchOutbound } from "./outbound.js";
-import type { ChannelMessageActionAdapter, ChannelMessageActionContext } from "./types.js";
+import type {
+  ChannelMessageActionAdapter,
+  ChannelMessageActionContext,
+} from "./types.js";
 
 /**
  * Create a tool result with error content.
@@ -142,7 +145,9 @@ export const twitchMessageActions: ChannelMessageActionAdapter = {
     // Use the channel from account config (or override with `to` parameter)
     const targetChannel = to || account.channel;
     if (!targetChannel) {
-      return errorResponse("No channel specified and no default channel in account config");
+      return errorResponse(
+        "No channel specified and no default channel in account config",
+      );
     }
 
     if (!twitchOutbound.sendText) {

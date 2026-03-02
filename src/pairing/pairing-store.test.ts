@@ -34,7 +34,10 @@ afterAll(async () => {
 async function withTempStateDir<T>(fn: (stateDir: string) => Promise<T>) {
   const dir = path.join(fixtureRoot, `case-${caseId++}`);
   await fs.mkdir(dir, { recursive: true });
-  return await withEnvAsync({ OPENCLAW_STATE_DIR: dir }, async () => await fn(dir));
+  return await withEnvAsync(
+    { OPENCLAW_STATE_DIR: dir },
+    async () => await fn(dir),
+  );
 }
 
 async function writeJsonFixture(filePath: string, value: unknown) {
@@ -43,12 +46,22 @@ async function writeJsonFixture(filePath: string, value: unknown) {
 }
 
 function resolvePairingFilePath(stateDir: string, channel: string) {
-  return path.join(resolveOAuthDir(process.env, stateDir), `${channel}-pairing.json`);
+  return path.join(
+    resolveOAuthDir(process.env, stateDir),
+    `${channel}-pairing.json`,
+  );
 }
 
-function resolveAllowFromFilePath(stateDir: string, channel: string, accountId?: string) {
+function resolveAllowFromFilePath(
+  stateDir: string,
+  channel: string,
+  accountId?: string,
+) {
   const suffix = accountId ? `-${accountId}` : "";
-  return path.join(resolveOAuthDir(process.env, stateDir), `${channel}${suffix}-allowFrom.json`);
+  return path.join(
+    resolveOAuthDir(process.env, stateDir),
+    `${channel}${suffix}-allowFrom.json`,
+  );
 }
 
 async function writeAllowFromFixture(params: {
@@ -60,10 +73,13 @@ async function writeAllowFromFixture(params: {
   const oauthDir = resolveOAuthDir(process.env, params.stateDir);
   await fs.mkdir(oauthDir, { recursive: true });
   const suffix = params.accountId ? `-${params.accountId}` : "";
-  await writeJsonFixture(path.join(oauthDir, `${params.channel}${suffix}-allowFrom.json`), {
-    version: 1,
-    allowFrom: params.allowFrom,
-  });
+  await writeJsonFixture(
+    path.join(oauthDir, `${params.channel}${suffix}-allowFrom.json`),
+    {
+      version: 1,
+      allowFrom: params.allowFrom,
+    },
+  );
 }
 
 describe("pairing store", () => {
@@ -191,7 +207,11 @@ describe("pairing store", () => {
         entry: "12345",
       });
 
-      const accountScoped = await readChannelAllowFromStore("telegram", process.env, "yy");
+      const accountScoped = await readChannelAllowFromStore(
+        "telegram",
+        process.env,
+        "yy",
+      );
       const channelScoped = await readLegacyChannelAllowFromStore("telegram");
       expect(accountScoped).toContain("12345");
       expect(channelScoped).not.toContain("12345");
@@ -213,7 +233,11 @@ describe("pairing store", () => {
       });
       expect(approved?.id).toBe("12345");
 
-      const accountScoped = await readChannelAllowFromStore("telegram", process.env, "yy");
+      const accountScoped = await readChannelAllowFromStore(
+        "telegram",
+        process.env,
+        "yy",
+      );
       const channelScoped = await readLegacyChannelAllowFromStore("telegram");
       expect(accountScoped).toContain("12345");
       expect(channelScoped).not.toContain("12345");
@@ -288,7 +312,11 @@ describe("pairing store", () => {
         allowFrom: [" 1002 ", "1001", "1002"],
       });
 
-      const scoped = readChannelAllowFromStoreSync("telegram", process.env, "yy");
+      const scoped = readChannelAllowFromStoreSync(
+        "telegram",
+        process.env,
+        "yy",
+      );
       const channelScoped = readLegacyChannelAllowFromStoreSync("telegram");
       expect(scoped).toEqual(["1002", "1001"]);
       expect(channelScoped).toEqual(["1001"]);
@@ -309,8 +337,16 @@ describe("pairing store", () => {
         allowFrom: ["1003"],
       });
 
-      const asyncScoped = await readChannelAllowFromStore("telegram", process.env, "yy");
-      const syncScoped = readChannelAllowFromStoreSync("telegram", process.env, "yy");
+      const asyncScoped = await readChannelAllowFromStore(
+        "telegram",
+        process.env,
+        "yy",
+      );
+      const syncScoped = readChannelAllowFromStoreSync(
+        "telegram",
+        process.env,
+        "yy",
+      );
       expect(asyncScoped).toEqual(["1003"]);
       expect(syncScoped).toEqual(["1003"]);
     });
@@ -330,8 +366,16 @@ describe("pairing store", () => {
         allowFrom: [],
       });
 
-      const asyncScoped = await readChannelAllowFromStore("telegram", process.env, "yy");
-      const syncScoped = readChannelAllowFromStoreSync("telegram", process.env, "yy");
+      const asyncScoped = await readChannelAllowFromStore(
+        "telegram",
+        process.env,
+        "yy",
+      );
+      const syncScoped = readChannelAllowFromStoreSync(
+        "telegram",
+        process.env,
+        "yy",
+      );
       expect(asyncScoped).toEqual([]);
       expect(syncScoped).toEqual([]);
     });
@@ -344,12 +388,24 @@ describe("pairing store", () => {
         channel: "telegram",
         allowFrom: ["1001"],
       });
-      const malformedScopedPath = resolveAllowFromFilePath(stateDir, "telegram", "yy");
+      const malformedScopedPath = resolveAllowFromFilePath(
+        stateDir,
+        "telegram",
+        "yy",
+      );
       await fs.mkdir(path.dirname(malformedScopedPath), { recursive: true });
       await fs.writeFile(malformedScopedPath, "{ this is not json\n", "utf8");
 
-      const asyncScoped = await readChannelAllowFromStore("telegram", process.env, "yy");
-      const syncScoped = readChannelAllowFromStoreSync("telegram", process.env, "yy");
+      const asyncScoped = await readChannelAllowFromStore(
+        "telegram",
+        process.env,
+        "yy",
+      );
+      const syncScoped = readChannelAllowFromStoreSync(
+        "telegram",
+        process.env,
+        "yy",
+      );
       expect(asyncScoped).toEqual([]);
       expect(syncScoped).toEqual([]);
     });
@@ -372,8 +428,16 @@ describe("pairing store", () => {
       expect(second.created).toBe(true);
       expect(second.code).not.toBe(first.code);
 
-      const alpha = await listChannelPairingRequests("telegram", process.env, "alpha");
-      const beta = await listChannelPairingRequests("telegram", process.env, "beta");
+      const alpha = await listChannelPairingRequests(
+        "telegram",
+        process.env,
+        "alpha",
+      );
+      const beta = await listChannelPairingRequests(
+        "telegram",
+        process.env,
+        "beta",
+      );
       expect(alpha).toHaveLength(1);
       expect(beta).toHaveLength(1);
       expect(alpha[0]?.code).toBe(first.code);
@@ -383,7 +447,11 @@ describe("pairing store", () => {
 
   it("reads legacy channel-scoped allowFrom for default account", async () => {
     await withTempStateDir(async (stateDir) => {
-      await writeAllowFromFixture({ stateDir, channel: "telegram", allowFrom: ["1001"] });
+      await writeAllowFromFixture({
+        stateDir,
+        channel: "telegram",
+        allowFrom: ["1001"],
+      });
       await writeAllowFromFixture({
         stateDir,
         channel: "telegram",
@@ -391,14 +459,22 @@ describe("pairing store", () => {
         allowFrom: ["1002"],
       });
 
-      const scoped = await readChannelAllowFromStore("telegram", process.env, DEFAULT_ACCOUNT_ID);
+      const scoped = await readChannelAllowFromStore(
+        "telegram",
+        process.env,
+        DEFAULT_ACCOUNT_ID,
+      );
       expect(scoped).toEqual(["1002", "1001"]);
     });
   });
 
   it("uses default-account allowFrom when account id is omitted", async () => {
     await withTempStateDir(async (stateDir) => {
-      await writeAllowFromFixture({ stateDir, channel: "telegram", allowFrom: ["1001"] });
+      await writeAllowFromFixture({
+        stateDir,
+        channel: "telegram",
+        allowFrom: ["1001"],
+      });
       await writeAllowFromFixture({
         stateDir,
         channel: "telegram",
@@ -406,7 +482,10 @@ describe("pairing store", () => {
         allowFrom: ["1002"],
       });
 
-      const asyncScoped = await readChannelAllowFromStore("telegram", process.env);
+      const asyncScoped = await readChannelAllowFromStore(
+        "telegram",
+        process.env,
+      );
       const syncScoped = readChannelAllowFromStoreSync("telegram", process.env);
       expect(asyncScoped).toEqual(["1002", "1001"]);
       expect(syncScoped).toEqual(["1002", "1001"]);

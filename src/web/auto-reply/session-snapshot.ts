@@ -43,7 +43,11 @@ export function getSessionSnapshot(
     threadStarterBody: ctx?.threadStarterBody ?? null,
     parentSessionKey: ctx?.parentSessionKey ?? null,
   });
-  const resetType = resolveSessionResetType({ sessionKey: key, isGroup: ctx?.isGroup, isThread });
+  const resetType = resolveSessionResetType({
+    sessionKey: key,
+    isGroup: ctx?.isGroup,
+    isThread,
+  });
   const channelReset = resolveChannelResetConfig({
     sessionCfg,
     channel: entry?.lastChannel ?? entry?.channel,
@@ -55,7 +59,11 @@ export function getSessionSnapshot(
   });
   const now = Date.now();
   const freshness = entry
-    ? evaluateSessionFreshness({ updatedAt: entry.updatedAt, now, policy: resetPolicy })
+    ? evaluateSessionFreshness({
+        updatedAt: entry.updatedAt,
+        now,
+        policy: resetPolicy,
+      })
     : { fresh: false };
   return {
     key,

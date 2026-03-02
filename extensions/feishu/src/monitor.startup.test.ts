@@ -3,7 +3,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { monitorFeishuProvider, stopFeishuMonitor } from "./monitor.js";
 import { probeFeishuMock } from "./monitor.test-mocks.js";
 
-function buildMultiAccountWebsocketConfig(accountIds: string[]): ClawdbotConfig {
+function buildMultiAccountWebsocketConfig(
+  accountIds: string[],
+): ClawdbotConfig {
   return {
     channels: {
       feishu: {
@@ -37,14 +39,16 @@ describe("Feishu monitor startup preflight", () => {
     const probesReleased = new Promise<void>((resolve) => {
       releaseProbes = () => resolve();
     });
-    probeFeishuMock.mockImplementation(async (account: { accountId: string }) => {
-      started.push(account.accountId);
-      inFlight += 1;
-      maxInFlight = Math.max(maxInFlight, inFlight);
-      await probesReleased;
-      inFlight -= 1;
-      return { ok: true, botOpenId: `bot_${account.accountId}` };
-    });
+    probeFeishuMock.mockImplementation(
+      async (account: { accountId: string }) => {
+        started.push(account.accountId);
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        await probesReleased;
+        inFlight -= 1;
+        return { ok: true, botOpenId: `bot_${account.accountId}` };
+      },
+    );
 
     const abortController = new AbortController();
     const monitorPromise = monitorFeishuProvider({
@@ -72,14 +76,16 @@ describe("Feishu monitor startup preflight", () => {
       releaseBetaProbe = () => resolve();
     });
 
-    probeFeishuMock.mockImplementation(async (account: { accountId: string }) => {
-      started.push(account.accountId);
-      if (account.accountId === "alpha") {
-        return { ok: false };
-      }
-      await betaProbeReleased;
-      return { ok: true, botOpenId: `bot_${account.accountId}` };
-    });
+    probeFeishuMock.mockImplementation(
+      async (account: { accountId: string }) => {
+        started.push(account.accountId);
+        if (account.accountId === "alpha") {
+          return { ok: false };
+        }
+        await betaProbeReleased;
+        return { ok: true, botOpenId: `bot_${account.accountId}` };
+      },
+    );
 
     const abortController = new AbortController();
     const monitorPromise = monitorFeishuProvider({
@@ -93,7 +99,9 @@ describe("Feishu monitor startup preflight", () => {
       }
 
       expect(started).toEqual(["alpha", "beta"]);
-      expect(started.filter((accountId) => accountId === "alpha")).toHaveLength(1);
+      expect(started.filter((accountId) => accountId === "alpha")).toHaveLength(
+        1,
+      );
     } finally {
       releaseBetaProbe();
       abortController.abort();
@@ -111,9 +119,15 @@ describe("Feishu monitor startup preflight", () => {
     probeFeishuMock.mockImplementation((account: { accountId: string }) => {
       started.push(account.accountId);
       if (account.accountId === "alpha") {
-        return Promise.resolve({ ok: false, error: "probe timed out after 10000ms" });
+        return Promise.resolve({
+          ok: false,
+          error: "probe timed out after 10000ms",
+        });
       }
-      return betaProbeReleased.then(() => ({ ok: true, botOpenId: `bot_${account.accountId}` }));
+      return betaProbeReleased.then(() => ({
+        ok: true,
+        botOpenId: `bot_${account.accountId}`,
+      }));
     });
 
     const abortController = new AbortController();
@@ -143,7 +157,10 @@ describe("Feishu monitor startup preflight", () => {
   it("stops sequential preflight when aborted during probe", async () => {
     const started: string[] = [];
     probeFeishuMock.mockImplementation(
-      (account: { accountId: string }, options: { abortSignal?: AbortSignal }) => {
+      (
+        account: { accountId: string },
+        options: { abortSignal?: AbortSignal },
+      ) => {
         started.push(account.accountId);
         return new Promise((resolve) => {
           options.abortSignal?.addEventListener(

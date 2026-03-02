@@ -27,7 +27,8 @@ export async function stageSandboxMedia(params: {
   workspaceDir: string;
 }) {
   const { ctx, sessionCtx, cfg, sessionKey, workspaceDir } = params;
-  const hasPathsArray = Array.isArray(ctx.MediaPaths) && ctx.MediaPaths.length > 0;
+  const hasPathsArray =
+    Array.isArray(ctx.MediaPaths) && ctx.MediaPaths.length > 0;
   const rawPaths = resolveRawPaths(ctx);
   if (rawPaths.length === 0 || !sessionKey) {
     return;
@@ -74,7 +75,9 @@ export async function stageSandboxMedia(params: {
     if (!fileName) {
       continue;
     }
-    const relativeDest = sandbox ? path.join("media", "inbound", fileName) : fileName;
+    const relativeDest = sandbox
+      ? path.join("media", "inbound", fileName)
+      : fileName;
     const dest = path.join(effectiveWorkspaceDir, relativeDest);
 
     try {
@@ -100,13 +103,17 @@ export async function stageSandboxMedia(params: {
           `Blocking inbound media staging above ${STAGED_MEDIA_MAX_BYTES} bytes: ${source}`,
         );
       } else {
-        logVerbose(`Failed to stage inbound media path ${source}: ${String(err)}`);
+        logVerbose(
+          `Failed to stage inbound media path ${source}: ${String(err)}`,
+        );
       }
       continue;
     }
 
     // For sandbox use relative path, for remote cache use absolute path
-    const stagedPath = sandbox ? path.posix.join("media", "inbound", fileName) : dest;
+    const stagedPath = sandbox
+      ? path.posix.join("media", "inbound", fileName)
+      : dest;
     staged.set(source, stagedPath);
   }
 
@@ -158,7 +165,9 @@ async function stageRemoteFileIntoRoot(params: {
 }
 
 function resolveRawPaths(ctx: MsgContext): string[] {
-  const pathsFromArray = Array.isArray(ctx.MediaPaths) ? ctx.MediaPaths : undefined;
+  const pathsFromArray = Array.isArray(ctx.MediaPaths)
+    ? ctx.MediaPaths
+    : undefined;
   return pathsFromArray && pathsFromArray.length > 0
     ? pathsFromArray
     : ctx.MediaPath?.trim()
@@ -196,7 +205,9 @@ async function isAllowedSourcePath(params: {
         roots: params.remoteAttachmentRoots,
       })
     ) {
-      logVerbose(`Blocking remote media staging from disallowed attachment path: ${params.source}`);
+      logVerbose(
+        `Blocking remote media staging from disallowed attachment path: ${params.source}`,
+      );
       return false;
     }
     return true;
@@ -208,7 +219,9 @@ async function isAllowedSourcePath(params: {
       roots: [mediaDir],
     })
   ) {
-    logVerbose(`Blocking attempt to stage media from outside media directory: ${params.source}`);
+    logVerbose(
+      `Blocking attempt to stage media from outside media directory: ${params.source}`,
+    );
     return false;
   }
   try {
@@ -219,12 +232,17 @@ async function isAllowedSourcePath(params: {
     });
     return true;
   } catch {
-    logVerbose(`Blocking attempt to stage media from outside media directory: ${params.source}`);
+    logVerbose(
+      `Blocking attempt to stage media from outside media directory: ${params.source}`,
+    );
     return false;
   }
 }
 
-function allocateStagedFileName(source: string, usedNames: Set<string>): string | null {
+function allocateStagedFileName(
+  source: string,
+  usedNames: Set<string>,
+): string | null {
   const baseName = path.basename(source);
   if (!baseName) {
     return null;
@@ -288,7 +306,11 @@ function rewriteStagedMediaPaths(params: {
   }
 }
 
-async function scpFile(remoteHost: string, remotePath: string, localPath: string): Promise<void> {
+async function scpFile(
+  remoteHost: string,
+  remotePath: string,
+  localPath: string,
+): Promise<void> {
   const safeRemoteHost = normalizeScpRemoteHost(remoteHost);
   if (!safeRemoteHost) {
     throw new Error("invalid remote host for SCP");

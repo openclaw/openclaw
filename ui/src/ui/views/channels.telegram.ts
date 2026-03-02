@@ -36,17 +36,15 @@ export function renderTelegramCard(params: {
           </div>
           <div>
             <span class="label">Last inbound</span>
-            <span>${account.lastInboundAt ? formatRelativeTimestamp(account.lastInboundAt) : "n/a"}</span>
+            <span
+              >${account.lastInboundAt
+                ? formatRelativeTimestamp(account.lastInboundAt)
+                : "n/a"}</span
+            >
           </div>
-          ${
-            account.lastError
-              ? html`
-                <div class="account-card-error">
-                  ${account.lastError}
-                </div>
-              `
-              : nothing
-          }
+          ${account.lastError
+            ? html` <div class="account-card-error">${account.lastError}</div> `
+            : nothing}
         </div>
       </div>
     `;
@@ -57,15 +55,13 @@ export function renderTelegramCard(params: {
       <div class="card-title">Telegram</div>
       <div class="card-sub">Bot status and channel configuration.</div>
       ${accountCountLabel}
-
-      ${
-        hasMultipleAccounts
-          ? html`
+      ${hasMultipleAccounts
+        ? html`
             <div class="account-card-list">
               ${telegramAccounts.map((account) => renderAccountCard(account))}
             </div>
           `
-          : html`
+        : html`
             <div class="status-list" style="margin-top: 16px;">
               <div>
                 <span class="label">Configured</span>
@@ -81,39 +77,37 @@ export function renderTelegramCard(params: {
               </div>
               <div>
                 <span class="label">Last start</span>
-                <span>${telegram?.lastStartAt ? formatRelativeTimestamp(telegram.lastStartAt) : "n/a"}</span>
+                <span
+                  >${telegram?.lastStartAt
+                    ? formatRelativeTimestamp(telegram.lastStartAt)
+                    : "n/a"}</span
+                >
               </div>
               <div>
                 <span class="label">Last probe</span>
-                <span>${telegram?.lastProbeAt ? formatRelativeTimestamp(telegram.lastProbeAt) : "n/a"}</span>
+                <span
+                  >${telegram?.lastProbeAt
+                    ? formatRelativeTimestamp(telegram.lastProbeAt)
+                    : "n/a"}</span
+                >
               </div>
             </div>
-          `
-      }
-
-      ${
-        telegram?.lastError
-          ? html`<div class="callout danger" style="margin-top: 12px;">
+          `}
+      ${telegram?.lastError
+        ? html`<div class="callout danger" style="margin-top: 12px;">
             ${telegram.lastError}
           </div>`
-          : nothing
-      }
-
-      ${
-        telegram?.probe
-          ? html`<div class="callout" style="margin-top: 12px;">
+        : nothing}
+      ${telegram?.probe
+        ? html`<div class="callout" style="margin-top: 12px;">
             Probe ${telegram.probe.ok ? "ok" : "failed"} ·
             ${telegram.probe.status ?? ""} ${telegram.probe.error ?? ""}
           </div>`
-          : nothing
-      }
-
+        : nothing}
       ${renderChannelConfigSection({ channelId: "telegram", props })}
 
       <div class="row" style="margin-top: 12px;">
-        <button class="btn" @click=${() => props.onRefresh(true)}>
-          Probe
-        </button>
+        <button class="btn" @click=${() => props.onRefresh(true)}>Probe</button>
       </div>
     </div>
   `;

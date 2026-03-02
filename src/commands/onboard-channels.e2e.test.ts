@@ -8,7 +8,10 @@ import {
   setDefaultChannelPluginRegistryForTests,
 } from "./channel-test-helpers.js";
 import { setupChannels } from "./onboard-channels.js";
-import { createExitThrowingRuntime, createWizardPrompter } from "./test-wizard-helpers.js";
+import {
+  createExitThrowingRuntime,
+  createWizardPrompter,
+} from "./test-wizard-helpers.js";
 
 function createPrompter(overrides: Partial<WizardPrompter>): WizardPrompter {
   return createWizardPrompter(
@@ -71,7 +74,10 @@ function createUnexpectedQuickstartPrompter(select: WizardPrompter["select"]) {
   };
 }
 
-function createTelegramCfg(botToken: string, enabled?: boolean): OpenClawConfig {
+function createTelegramCfg(
+  botToken: string,
+  enabled?: boolean,
+): OpenClawConfig {
   return {
     channels: {
       telegram: {
@@ -82,7 +88,9 @@ function createTelegramCfg(botToken: string, enabled?: boolean): OpenClawConfig 
   } as OpenClawConfig;
 }
 
-function patchTelegramAdapter(overrides: Parameters<typeof patchChannelOnboardingAdapter>[1]) {
+function patchTelegramAdapter(
+  overrides: Parameters<typeof patchChannelOnboardingAdapter>[1],
+) {
   return patchChannelOnboardingAdapter("telegram", {
     ...overrides,
     getStatus:
@@ -186,7 +194,8 @@ describe("setupChannels", () => {
       const message = call[0];
       const title = call[1];
       return (
-        title === "Channel setup" && String(message).trim() === "telegram plugin not available."
+        title === "Channel setup" &&
+        String(message).trim() === "telegram plugin not available."
       );
     });
     expect(sawHardStop).toBe(false);
@@ -209,7 +218,9 @@ describe("setupChannels", () => {
     const sawPrimer = note.mock.calls.some(
       ([message, title]) =>
         title === "How channels work" &&
-        String(message).includes('config set session.dmScope "per-channel-peer"'),
+        String(message).includes(
+          'config set session.dmScope "per-channel-peer"',
+        ),
     );
     expect(sawPrimer).toBe(true);
     expect(multiselect).not.toHaveBeenCalled();
@@ -232,7 +243,9 @@ describe("setupChannels", () => {
       expect.objectContaining({ message: "Select channel (QuickStart)" }),
     );
     expect(select).toHaveBeenCalledWith(
-      expect.objectContaining({ message: expect.stringContaining("already configured") }),
+      expect.objectContaining({
+        message: expect.stringContaining("already configured"),
+      }),
     );
     expect(multiselect).not.toHaveBeenCalled();
     expect(text).not.toHaveBeenCalled();
@@ -240,19 +253,21 @@ describe("setupChannels", () => {
 
   it("adds disabled hint to channel selection when a channel is disabled", async () => {
     let selectionCount = 0;
-    const select = vi.fn(async ({ message, options }: { message: string; options: unknown[] }) => {
-      if (message === "Select a channel") {
-        selectionCount += 1;
-        const opts = options as Array<{ value: string; hint?: string }>;
-        const telegram = opts.find((opt) => opt.value === "telegram");
-        expect(telegram?.hint).toContain("disabled");
-        return selectionCount === 1 ? "telegram" : "__done__";
-      }
-      if (message.includes("already configured")) {
-        return "skip";
-      }
-      return "__done__";
-    });
+    const select = vi.fn(
+      async ({ message, options }: { message: string; options: unknown[] }) => {
+        if (message === "Select a channel") {
+          selectionCount += 1;
+          const opts = options as Array<{ value: string; hint?: string }>;
+          const telegram = opts.find((opt) => opt.value === "telegram");
+          expect(telegram?.hint).toContain("disabled");
+          return selectionCount === 1 ? "telegram" : "__done__";
+        }
+        if (message.includes("already configured")) {
+          return "skip";
+        }
+        return "__done__";
+      },
+    );
     const multiselect = vi.fn(async () => {
       throw new Error("unexpected multiselect");
     });
@@ -264,7 +279,9 @@ describe("setupChannels", () => {
 
     await runSetupChannels(createTelegramCfg("token", false), prompter);
 
-    expect(select).toHaveBeenCalledWith(expect.objectContaining({ message: "Select a channel" }));
+    expect(select).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "Select a channel" }),
+    );
     expect(multiselect).not.toHaveBeenCalled();
   });
 
@@ -288,7 +305,10 @@ describe("setupChannels", () => {
       });
 
       expect(configureInteractive).toHaveBeenCalledWith(
-        expect.objectContaining({ configured: false, label: expect.any(String) }),
+        expect.objectContaining({
+          configured: false,
+          label: expect.any(String),
+        }),
       );
       expect(selection).toHaveBeenCalledWith([]);
       expect(onAccountId).not.toHaveBeenCalled();
@@ -302,18 +322,22 @@ describe("setupChannels", () => {
     const select = createQuickstartTelegramSelect();
     const selection = vi.fn();
     const onAccountId = vi.fn();
-    const configureInteractive = vi.fn(async ({ cfg }: { cfg: OpenClawConfig }) => ({
-      cfg: {
-        ...cfg,
-        channels: {
-          ...cfg.channels,
-          telegram: { ...cfg.channels?.telegram, botToken: "new-token" },
-        },
-      } as OpenClawConfig,
-      accountId: "acct-1",
-    }));
+    const configureInteractive = vi.fn(
+      async ({ cfg }: { cfg: OpenClawConfig }) => ({
+        cfg: {
+          ...cfg,
+          channels: {
+            ...cfg.channels,
+            telegram: { ...cfg.channels?.telegram, botToken: "new-token" },
+          },
+        } as OpenClawConfig,
+        accountId: "acct-1",
+      }),
+    );
     const configure = vi.fn(async () => {
-      throw new Error("configure should not be called when configureInteractive is present");
+      throw new Error(
+        "configure should not be called when configureInteractive is present",
+      );
     });
     const restore = patchTelegramAdapter({
       configureInteractive,
@@ -344,16 +368,18 @@ describe("setupChannels", () => {
     const select = createQuickstartTelegramSelect();
     const selection = vi.fn();
     const onAccountId = vi.fn();
-    const configureWhenConfigured = vi.fn(async ({ cfg }: { cfg: OpenClawConfig }) => ({
-      cfg: {
-        ...cfg,
-        channels: {
-          ...cfg.channels,
-          telegram: { ...cfg.channels?.telegram, botToken: "updated-token" },
-        },
-      } as OpenClawConfig,
-      accountId: "acct-2",
-    }));
+    const configureWhenConfigured = vi.fn(
+      async ({ cfg }: { cfg: OpenClawConfig }) => ({
+        cfg: {
+          ...cfg,
+          channels: {
+            ...cfg.channels,
+            telegram: { ...cfg.channels?.telegram, botToken: "updated-token" },
+          },
+        } as OpenClawConfig,
+        accountId: "acct-2",
+      }),
+    );
     const configure = vi.fn(async () => {
       throw new Error(
         "configure should not be called when configureWhenConfigured handles updates",
@@ -369,15 +395,22 @@ describe("setupChannels", () => {
     );
 
     try {
-      const cfg = await runSetupChannels(createTelegramCfg("old-token"), prompter, {
-        quickstartDefaults: true,
-        onSelection: selection,
-        onAccountId,
-      });
+      const cfg = await runSetupChannels(
+        createTelegramCfg("old-token"),
+        prompter,
+        {
+          quickstartDefaults: true,
+          onSelection: selection,
+          onAccountId,
+        },
+      );
 
       expect(configureWhenConfigured).toHaveBeenCalledTimes(1);
       expect(configureWhenConfigured).toHaveBeenCalledWith(
-        expect.objectContaining({ configured: true, label: expect.any(String) }),
+        expect.objectContaining({
+          configured: true,
+          label: expect.any(String),
+        }),
       );
       expect(configure).not.toHaveBeenCalled();
       expect(selection).toHaveBeenCalledWith(["telegram"]);
@@ -394,7 +427,9 @@ describe("setupChannels", () => {
     const onAccountId = vi.fn();
     const configureWhenConfigured = vi.fn(async () => "skip" as const);
     const configure = vi.fn(async () => {
-      throw new Error("configure should not run when configureWhenConfigured handles skip");
+      throw new Error(
+        "configure should not run when configureWhenConfigured handles skip",
+      );
     });
     const restore = patchTelegramAdapter({
       configureInteractive: undefined,
@@ -406,14 +441,21 @@ describe("setupChannels", () => {
     );
 
     try {
-      const cfg = await runSetupChannels(createTelegramCfg("old-token"), prompter, {
-        quickstartDefaults: true,
-        onSelection: selection,
-        onAccountId,
-      });
+      const cfg = await runSetupChannels(
+        createTelegramCfg("old-token"),
+        prompter,
+        {
+          quickstartDefaults: true,
+          onSelection: selection,
+          onAccountId,
+        },
+      );
 
       expect(configureWhenConfigured).toHaveBeenCalledWith(
-        expect.objectContaining({ configured: true, label: expect.any(String) }),
+        expect.objectContaining({
+          configured: true,
+          label: expect.any(String),
+        }),
       );
       expect(configure).not.toHaveBeenCalled();
       expect(selection).toHaveBeenCalledWith([]);
@@ -430,7 +472,9 @@ describe("setupChannels", () => {
     const onAccountId = vi.fn();
     const configureInteractive = vi.fn(async () => "skip" as const);
     const configureWhenConfigured = vi.fn(async () => {
-      throw new Error("configureWhenConfigured should not run when configureInteractive exists");
+      throw new Error(
+        "configureWhenConfigured should not run when configureInteractive exists",
+      );
     });
     const restore = patchTelegramAdapter({
       configureInteractive,
@@ -448,7 +492,10 @@ describe("setupChannels", () => {
       });
 
       expect(configureInteractive).toHaveBeenCalledWith(
-        expect.objectContaining({ configured: true, label: expect.any(String) }),
+        expect.objectContaining({
+          configured: true,
+          label: expect.any(String),
+        }),
       );
       expect(configureWhenConfigured).not.toHaveBeenCalled();
       expect(selection).toHaveBeenCalledWith([]);

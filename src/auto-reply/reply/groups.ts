@@ -1,7 +1,13 @@
 import { getChannelDock } from "../../channels/dock.js";
-import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
+import {
+  getChannelPlugin,
+  normalizeChannelId,
+} from "../../channels/plugins/index.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { GroupKeyResolution, SessionEntry } from "../../config/sessions.js";
+import type {
+  GroupKeyResolution,
+  SessionEntry,
+} from "../../config/sessions.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { normalizeGroupActivation } from "../group-activation.js";
 import type { TemplateContext } from "../templating.js";
@@ -42,7 +48,9 @@ export function resolveGroupRequireMention(params: {
   const groupId = groupResolution?.id ?? extractGroupId(ctx.From);
   const groupChannel = ctx.GroupChannel?.trim() ?? ctx.GroupSubject?.trim();
   const groupSpace = ctx.GroupSpace?.trim();
-  const requireMention = getChannelDock(channel)?.groups?.resolveRequireMention?.({
+  const requireMention = getChannelDock(
+    channel,
+  )?.groups?.resolveRequireMention?.({
     cfg,
     groupId,
     groupChannel,
@@ -55,7 +63,9 @@ export function resolveGroupRequireMention(params: {
   return true;
 }
 
-export function defaultGroupActivation(requireMention: boolean): "always" | "mention" {
+export function defaultGroupActivation(
+  requireMention: boolean,
+): "always" | "mention" {
   return !requireMention ? "always" : "mention";
 }
 
@@ -84,7 +94,9 @@ function resolveProviderLabel(rawProvider: string | undefined): string {
  * Contains: group name, participants, and an explicit instruction to reply
  * directly instead of using the message tool.
  */
-export function buildGroupChatContext(params: { sessionCtx: TemplateContext }): string {
+export function buildGroupChatContext(params: {
+  sessionCtx: TemplateContext;
+}): string {
   const subject = params.sessionCtx.GroupSubject?.trim();
   const members = params.sessionCtx.GroupMembers?.trim();
   const providerLabel = resolveProviderLabel(params.sessionCtx.Provider);
@@ -112,16 +124,19 @@ export function buildGroupIntro(params: {
   silentToken: string;
 }): string {
   const activation =
-    normalizeGroupActivation(params.sessionEntry?.groupActivation) ?? params.defaultActivation;
+    normalizeGroupActivation(params.sessionEntry?.groupActivation) ??
+    params.defaultActivation;
   const rawProvider = params.sessionCtx.Provider?.trim();
   const providerId = normalizeChannelId(rawProvider);
   const activationLine =
     activation === "always"
       ? "Activation: always-on (you receive every group message)."
       : "Activation: trigger-only (you are invoked only when explicitly mentioned; recent context may be included).";
-  const groupId = params.sessionEntry?.groupId ?? extractGroupId(params.sessionCtx.From);
+  const groupId =
+    params.sessionEntry?.groupId ?? extractGroupId(params.sessionCtx.From);
   const groupChannel =
-    params.sessionCtx.GroupChannel?.trim() ?? params.sessionCtx.GroupSubject?.trim();
+    params.sessionCtx.GroupChannel?.trim() ??
+    params.sessionCtx.GroupSubject?.trim();
   const groupSpace = params.sessionCtx.GroupSpace?.trim();
   const providerIdsLine = providerId
     ? getChannelDock(providerId)?.groups?.resolveGroupIntroHint?.({
@@ -144,7 +159,14 @@ export function buildGroupIntro(params: {
     "Be a good group participant: mostly lurk and follow the conversation; reply only when directly addressed or you can add clear value. Emoji reactions are welcome when available.";
   const styleLine =
     "Write like a human. Avoid Markdown tables. Don't type literal \\n sequences; use real line breaks sparingly.";
-  return [activationLine, providerIdsLine, silenceLine, cautionLine, lurkLine, styleLine]
+  return [
+    activationLine,
+    providerIdsLine,
+    silenceLine,
+    cautionLine,
+    lurkLine,
+    styleLine,
+  ]
     .filter(Boolean)
     .join(" ")
     .concat(" Address the specific sender noted in the message context.");

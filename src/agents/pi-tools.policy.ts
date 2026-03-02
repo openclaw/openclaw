@@ -5,7 +5,10 @@ import { resolveChannelGroupToolsPolicy } from "../config/group-policy.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveThreadParentSessionKey } from "../sessions/session-key-utils.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
-import { resolveAgentConfig, resolveAgentIdFromSessionKey } from "./agent-scope.js";
+import {
+  resolveAgentConfig,
+  resolveAgentIdFromSessionKey,
+} from "./agent-scope.js";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "./glob-pattern.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import { pickSandboxToolPolicy } from "./sandbox-tool-policy.js";
@@ -63,7 +66,11 @@ const SUBAGENT_TOOL_DENY_ALWAYS = [
  * Additional tools denied for leaf sub-agents (depth >= maxSpawnDepth).
  * These are tools that only make sense for orchestrator sub-agents that can spawn children.
  */
-const SUBAGENT_TOOL_DENY_LEAF = ["sessions_list", "sessions_history", "sessions_spawn"];
+const SUBAGENT_TOOL_DENY_LEAF = [
+  "sessions_list",
+  "sessions_history",
+  "sessions_spawn",
+];
 
 /**
  * Build the deny list for a sub-agent at a given depth.
@@ -73,7 +80,10 @@ const SUBAGENT_TOOL_DENY_LEAF = ["sessions_list", "sessions_history", "sessions_
  * - Depth >= maxSpawnDepth (leaf): denied sessions_spawn and
  *   session management tools. Still allowed subagents (for list/status visibility).
  */
-function resolveSubagentDenyList(depth: number, maxSpawnDepth: number): string[] {
+function resolveSubagentDenyList(
+  depth: number,
+  maxSpawnDepth: number,
+): string[] {
   const isLeaf = depth >= Math.max(1, Math.floor(maxSpawnDepth));
   if (isLeaf) {
     return [...SUBAGENT_TOOL_DENY_ALWAYS, ...SUBAGENT_TOOL_DENY_LEAF];
@@ -83,33 +93,50 @@ function resolveSubagentDenyList(depth: number, maxSpawnDepth: number): string[]
   return [...SUBAGENT_TOOL_DENY_ALWAYS];
 }
 
-export function resolveSubagentToolPolicy(cfg?: OpenClawConfig, depth?: number): SandboxToolPolicy {
+export function resolveSubagentToolPolicy(
+  cfg?: OpenClawConfig,
+  depth?: number,
+): SandboxToolPolicy {
   const configured = cfg?.tools?.subagents?.tools;
   const maxSpawnDepth =
-    cfg?.agents?.defaults?.subagents?.maxSpawnDepth ?? DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH;
+    cfg?.agents?.defaults?.subagents?.maxSpawnDepth ??
+    DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH;
   const effectiveDepth = typeof depth === "number" && depth >= 0 ? depth : 1;
   const baseDeny = resolveSubagentDenyList(effectiveDepth, maxSpawnDepth);
   const allow = Array.isArray(configured?.allow) ? configured.allow : undefined;
-  const alsoAllow = Array.isArray(configured?.alsoAllow) ? configured.alsoAllow : undefined;
+  const alsoAllow = Array.isArray(configured?.alsoAllow)
+    ? configured.alsoAllow
+    : undefined;
   const explicitAllow = new Set(
-    [...(allow ?? []), ...(alsoAllow ?? [])].map((toolName) => normalizeToolName(toolName)),
+    [...(allow ?? []), ...(alsoAllow ?? [])].map((toolName) =>
+      normalizeToolName(toolName),
+    ),
   );
   const deny = [
-    ...baseDeny.filter((toolName) => !explicitAllow.has(normalizeToolName(toolName))),
+    ...baseDeny.filter(
+      (toolName) => !explicitAllow.has(normalizeToolName(toolName)),
+    ),
     ...(Array.isArray(configured?.deny) ? configured.deny : []),
   ];
-  const mergedAllow = allow && alsoAllow ? Array.from(new Set([...allow, ...alsoAllow])) : allow;
+  const mergedAllow =
+    allow && alsoAllow ? Array.from(new Set([...allow, ...alsoAllow])) : allow;
   return { allow: mergedAllow, deny };
 }
 
-export function isToolAllowedByPolicyName(name: string, policy?: SandboxToolPolicy): boolean {
+export function isToolAllowedByPolicyName(
+  name: string,
+  policy?: SandboxToolPolicy,
+): boolean {
   if (!policy) {
     return true;
   }
   return makeToolPolicyMatcher(policy)(name);
 }
 
-export function filterToolsByPolicy(tools: AnyAgentTool[], policy?: SandboxToolPolicy) {
+export function filterToolsByPolicy(
+  tools: AnyAgentTool[],
+  policy?: SandboxToolPolicy,
+) {
   if (!policy) {
     return tools;
   }
@@ -183,9 +210,14 @@ function resolveProviderToolPolicy(params: {
   const normalizedProvider = normalizeProviderKey(provider);
   const rawModelId = params.modelId?.trim().toLowerCase();
   const fullModelId =
-    rawModelId && !rawModelId.includes("/") ? `${normalizedProvider}/${rawModelId}` : rawModelId;
+    rawModelId && !rawModelId.includes("/")
+      ? `${normalizedProvider}/${rawModelId}`
+      : rawModelId;
 
-  const candidates = [...(fullModelId ? [fullModelId] : []), normalizedProvider];
+  const candidates = [
+    ...(fullModelId ? [fullModelId] : []),
+    normalizedProvider,
+  ];
 
   for (const key of candidates) {
     const match = lookup.get(key);
@@ -209,9 +241,13 @@ export function resolveEffectiveToolPolicy(params: {
       : undefined;
   const agentId =
     explicitAgentId ??
-    (params.sessionKey ? resolveAgentIdFromSessionKey(params.sessionKey) : undefined);
+    (params.sessionKey
+      ? resolveAgentIdFromSessionKey(params.sessionKey)
+      : undefined);
   const agentConfig =
-    params.config && agentId ? resolveAgentConfig(params.config, agentId) : undefined;
+    params.config && agentId
+      ? resolveAgentConfig(params.config, agentId)
+      : undefined;
   const agentTools = agentConfig?.tools;
   const globalTools = params.config?.tools;
 
@@ -267,11 +303,13 @@ export function resolveGroupToolPolicy(params: {
   }
   const sessionContext = resolveGroupContextFromSessionKey(params.sessionKey);
   const spawnedContext = resolveGroupContextFromSessionKey(params.spawnedBy);
-  const groupId = params.groupId ?? sessionContext.groupId ?? spawnedContext.groupId;
+  const groupId =
+    params.groupId ?? sessionContext.groupId ?? spawnedContext.groupId;
   if (!groupId) {
     return undefined;
   }
-  const channelRaw = params.messageProvider ?? sessionContext.channel ?? spawnedContext.channel;
+  const channelRaw =
+    params.messageProvider ?? sessionContext.channel ?? spawnedContext.channel;
   const channel = normalizeMessageChannel(channelRaw);
   if (!channel) {
     return undefined;

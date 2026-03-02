@@ -56,7 +56,9 @@ describe("resolveSlackMessageSubtypeHandler", () => {
     expect(handler?.resolveSenderId(event)).toBe("U1");
     expect(handler?.resolveChannelId(event)).toBe("C1");
     expect(handler?.resolveChannelType(event)).toBeUndefined();
-    expect(handler?.contextKey(event)).toBe("slack:thread:broadcast:C1:123.456");
+    expect(handler?.contextKey(event)).toBe(
+      "slack:thread:broadcast:C1:123.456",
+    );
     expect(handler?.describe("general")).toContain("broadcast");
   });
 

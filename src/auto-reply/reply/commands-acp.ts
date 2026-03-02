@@ -38,7 +38,10 @@ type AcpActionHandler = (
   tokens: string[],
 ) => Promise<CommandHandlerResult>;
 
-const ACP_ACTION_HANDLERS: Record<Exclude<AcpAction, "help">, AcpActionHandler> = {
+const ACP_ACTION_HANDLERS: Record<
+  Exclude<AcpAction, "help">,
+  AcpActionHandler
+> = {
   spawn: handleAcpSpawnAction,
   cancel: handleAcpCancelAction,
   steer: handleAcpSteerAction,
@@ -56,7 +59,10 @@ const ACP_ACTION_HANDLERS: Record<Exclude<AcpAction, "help">, AcpActionHandler> 
   sessions: async (params, tokens) => handleAcpSessionsAction(params, tokens),
 };
 
-export const handleAcpCommand: CommandHandler = async (params, allowTextCommands) => {
+export const handleAcpCommand: CommandHandler = async (
+  params,
+  allowTextCommands,
+) => {
   if (!allowTextCommands) {
     return null;
   }
@@ -67,7 +73,9 @@ export const handleAcpCommand: CommandHandler = async (params, allowTextCommands
   }
 
   if (!params.command.isAuthorizedSender) {
-    logVerbose(`Ignoring /acp from unauthorized sender: ${params.command.senderId || "<unknown>"}`);
+    logVerbose(
+      `Ignoring /acp from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
+    );
     return { shouldContinue: false };
   }
 
@@ -79,5 +87,7 @@ export const handleAcpCommand: CommandHandler = async (params, allowTextCommands
   }
 
   const handler = ACP_ACTION_HANDLERS[action];
-  return handler ? await handler(params, tokens) : stopWithText(resolveAcpHelpText());
+  return handler
+    ? await handler(params, tokens)
+    : stopWithText(resolveAcpHelpText());
 };

@@ -1,7 +1,15 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import { resolveApiKeyForProvider } from "../agents/model-auth.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -17,11 +25,16 @@ vi.mock("../agents/model-auth.js", () => ({
     source: "test",
     mode: "api-key",
   })),
-  requireApiKey: (auth: { apiKey?: string; mode?: string }, provider: string) => {
+  requireApiKey: (
+    auth: { apiKey?: string; mode?: string },
+    provider: string,
+  ) => {
     if (auth?.apiKey) {
       return auth.apiKey;
     }
-    throw new Error(`No API key resolved for provider "${provider}" (auth mode: ${auth?.mode}).`);
+    throw new Error(
+      `No API key resolved for provider "${provider}" (auth mode: ${auth?.mode}).`,
+    );
   },
 }));
 
@@ -46,7 +59,10 @@ async function createTempMediaDir() {
   if (!suiteTempMediaRootDir) {
     throw new Error("suite temp media root not initialized");
   }
-  const dir = path.join(suiteTempMediaRootDir, `case-${String(tempMediaDirCounter)}`);
+  const dir = path.join(
+    suiteTempMediaRootDir,
+    `case-${String(tempMediaDirCounter)}`,
+  );
   tempMediaDirCounter += 1;
   await fs.mkdir(dir, { recursive: true });
   return dir;
@@ -107,7 +123,9 @@ function createMediaDisabledConfig(): OpenClawConfig {
   };
 }
 
-function createMediaDisabledConfigWithAllowedMimes(allowedMimes: string[]): OpenClawConfig {
+function createMediaDisabledConfigWithAllowedMimes(
+  allowedMimes: string[],
+): OpenClawConfig {
   return {
     ...createMediaDisabledConfig(),
     gateway: {
@@ -122,10 +140,18 @@ function createMediaDisabledConfigWithAllowedMimes(allowedMimes: string[]): Open
   };
 }
 
-async function createTempMediaFile(params: { fileName: string; content: Buffer | string }) {
+async function createTempMediaFile(params: {
+  fileName: string;
+  content: Buffer | string;
+}) {
   const normalizedContent =
-    typeof params.content === "string" ? Buffer.from(params.content) : params.content;
-  const contentHash = crypto.createHash("sha1").update(normalizedContent).digest("hex");
+    typeof params.content === "string"
+      ? Buffer.from(params.content)
+      : params.content;
+  const contentHash = crypto
+    .createHash("sha1")
+    .update(normalizedContent)
+    .digest("hex");
   const cacheKey = `${params.fileName}:${contentHash}`;
   const cachedPath = tempMediaFileCache.get(cacheKey);
   if (cachedPath) {
@@ -174,7 +200,8 @@ async function createAudioCtx(params?: {
 }): Promise<MsgContext> {
   const mediaPath = await createTempMediaFile({
     fileName: params?.fileName ?? "note.ogg",
-    content: params?.content ?? Buffer.from([0, 255, 0, 1, 2, 3, 4, 5, 6, 7, 8]),
+    content:
+      params?.content ?? Buffer.from([0, 255, 0, 1, 2, 3, 4, 5, 6, 7, 8]),
   });
   return {
     Body: params?.body ?? "<media:audio>",
@@ -235,7 +262,9 @@ describe("applyMediaUnderstanding", () => {
   beforeAll(async () => {
     const baseDir = resolvePreferredOpenClawTmpDir();
     await fs.mkdir(baseDir, { recursive: true });
-    suiteTempMediaRootDir = await fs.mkdtemp(path.join(baseDir, TEMP_MEDIA_PREFIX));
+    suiteTempMediaRootDir = await fs.mkdtemp(
+      path.join(baseDir, TEMP_MEDIA_PREFIX),
+    );
     ({ applyMediaUnderstanding } = await import("./apply.js"));
   });
 
@@ -281,7 +310,9 @@ describe("applyMediaUnderstanding", () => {
       body: "[Audio]\nTranscript:\ntranscribed text",
       commandBody: "transcribed text",
     });
-    expect((ctx as unknown as { BodyForAgent?: string }).BodyForAgent).toBe(ctx.Body);
+    expect((ctx as unknown as { BodyForAgent?: string }).BodyForAgent).toBe(
+      ctx.Body,
+    );
   });
 
   it("skips file blocks for text-like audio when transcription succeeds", async () => {
@@ -429,7 +460,9 @@ describe("applyMediaUnderstanding", () => {
     });
 
     expect(result.appliedAudio).toBe(true);
-    expect((ctx as unknown as { Transcript?: string }).Transcript).toBe("cli transcript");
+    expect((ctx as unknown as { Transcript?: string }).Transcript).toBe(
+      "cli transcript",
+    );
     expect(ctx.Body).toBe("[Audio]\nTranscript:\ncli transcript");
   });
 
@@ -561,7 +594,9 @@ describe("applyMediaUnderstanding", () => {
     });
 
     expect(result.appliedImage).toBe(true);
-    expect(ctx.Body).toBe("[Image]\nUser text:\nshow Dom\nDescription:\nimage description");
+    expect(ctx.Body).toBe(
+      "[Image]\nUser text:\nshow Dom\nDescription:\nimage description",
+    );
     expect(ctx.CommandBody).toBe("show Dom");
     expect(ctx.RawBody).toBe("show Dom");
     expect(ctx.BodyForAgent).toBe(ctx.Body);
@@ -647,7 +682,9 @@ describe("applyMediaUnderstanding", () => {
 
   it("handles multiple audio attachments when attachment mode is all", async () => {
     const dir = await createTempMediaDir();
-    const audioBytes = Buffer.from([200, 201, 202, 203, 204, 205, 206, 207, 208]);
+    const audioBytes = Buffer.from([
+      200, 201, 202, 203, 204, 205, 206, 207, 208,
+    ]);
     const audioPathA = path.join(dir, "note-a.ogg");
     const audioPathB = path.join(dir, "note-b.ogg");
     await fs.writeFile(audioPathA, audioBytes);
@@ -684,7 +721,10 @@ describe("applyMediaUnderstanding", () => {
     expect(result.appliedAudio).toBe(true);
     expect(ctx.Transcript).toBe("Audio 1:\nnote-a.ogg\n\nAudio 2:\nnote-b.ogg");
     expect(ctx.Body).toBe(
-      ["[Audio 1/2]\nTranscript:\nnote-a.ogg", "[Audio 2/2]\nTranscript:\nnote-b.ogg"].join("\n\n"),
+      [
+        "[Audio 1/2]\nTranscript:\nnote-a.ogg",
+        "[Audio 2/2]\nTranscript:\nnote-b.ogg",
+      ].join("\n\n"),
     );
   });
 
@@ -694,7 +734,10 @@ describe("applyMediaUnderstanding", () => {
     const audioPath = path.join(dir, "note.ogg");
     const videoPath = path.join(dir, "clip.mp4");
     await fs.writeFile(imagePath, "image-bytes");
-    await fs.writeFile(audioPath, Buffer.from([200, 201, 202, 203, 204, 205, 206, 207, 208]));
+    await fs.writeFile(
+      audioPath,
+      Buffer.from([200, 201, 202, 203, 204, 205, 206, 207, 208]),
+    );
     await fs.writeFile(videoPath, "video-bytes");
 
     const ctx: MsgContext = {
@@ -705,9 +748,15 @@ describe("applyMediaUnderstanding", () => {
     const cfg: OpenClawConfig = {
       tools: {
         media: {
-          image: { enabled: true, models: [{ provider: "openai", model: "gpt-5.2" }] },
+          image: {
+            enabled: true,
+            models: [{ provider: "openai", model: "gpt-5.2" }],
+          },
           audio: { enabled: true, models: [{ provider: "groq" }] },
-          video: { enabled: true, models: [{ provider: "google", model: "gemini-3" }] },
+          video: {
+            enabled: true,
+            models: [{ provider: "google", model: "gemini-3" }],
+          },
         },
       },
     };
@@ -777,12 +826,16 @@ describe("applyMediaUnderstanding", () => {
     });
 
     expect(result.appliedFile).toBe(true);
-    expect(ctx.Body).toContain('<file name="report.bin" mime="text/tab-separated-values">');
+    expect(ctx.Body).toContain(
+      '<file name="report.bin" mime="text/tab-separated-values">',
+    );
     expect(ctx.Body).toContain("a\tb\tc");
   });
 
   it("treats cp1252-like attachments as text", async () => {
-    const cp1252Bytes = Buffer.from([0x93, 0x48, 0x69, 0x94, 0x20, 0x54, 0x65, 0x73, 0x74]);
+    const cp1252Bytes = Buffer.from([
+      0x93, 0x48, 0x69, 0x94, 0x20, 0x54, 0x65, 0x73, 0x74,
+    ]);
     const filePath = await createTempMediaFile({
       fileName: "legacy.bin",
       content: cp1252Bytes,
@@ -815,7 +868,10 @@ describe("applyMediaUnderstanding", () => {
   });
 
   it("does not reclassify PDF attachments as text/plain", async () => {
-    const pseudoPdf = Buffer.from("%PDF-1.7\n1 0 obj\n<< /Type /Catalog >>\nendobj\n", "utf8");
+    const pseudoPdf = Buffer.from(
+      "%PDF-1.7\n1 0 obj\n<< /Type /Catalog >>\nendobj\n",
+      "utf8",
+    );
     const filePath = await createTempMediaFile({
       fileName: "report.pdf",
       content: pseudoPdf,
@@ -968,7 +1024,10 @@ describe("applyMediaUnderstanding", () => {
 
   it("skips binary application/vnd office attachments even when bytes look printable", async () => {
     // ZIP-based Office docs can have printable-leading bytes.
-    const pseudoZip = Buffer.from("PK\u0003\u0004[Content_Types].xml xl/workbook.xml", "utf8");
+    const pseudoZip = Buffer.from(
+      "PK\u0003\u0004[Content_Types].xml xl/workbook.xml",
+      "utf8",
+    );
     const filePath = await createTempMediaFile({
       fileName: "report.xlsx",
       content: pseudoZip,
@@ -977,7 +1036,8 @@ describe("applyMediaUnderstanding", () => {
     const { ctx, result } = await applyWithDisabledMedia({
       body: "<media:file>",
       mediaPath: filePath,
-      mediaType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      mediaType:
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     });
 
     expectFileNotApplied({ ctx, result, body: "<media:file>" });

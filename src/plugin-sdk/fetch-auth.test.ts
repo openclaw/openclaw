@@ -46,14 +46,21 @@ describe("fetchWithBearerAuthScopeFallback", () => {
 
     expect(response.status).toBe(200);
     expect(fetchFn).toHaveBeenCalledTimes(2);
-    expect(tokenProvider.getAccessToken).toHaveBeenCalledWith("https://graph.microsoft.com");
-    const secondCall = fetchFn.mock.calls[1] as [string, RequestInit | undefined];
+    expect(tokenProvider.getAccessToken).toHaveBeenCalledWith(
+      "https://graph.microsoft.com",
+    );
+    const secondCall = fetchFn.mock.calls[1] as [
+      string,
+      RequestInit | undefined,
+    ];
     const secondHeaders = new Headers(secondCall[1]?.headers);
     expect(secondHeaders.get("authorization")).toBe("Bearer token-1");
   });
 
   it("does not attach auth when host predicate rejects url", async () => {
-    const fetchFn = vi.fn(async () => new Response("unauthorized", { status: 401 }));
+    const fetchFn = vi.fn(
+      async () => new Response("unauthorized", { status: 401 }),
+    );
     const tokenProvider = { getAccessToken: vi.fn(async () => "token-1") };
 
     const response = await fetchWithBearerAuthScopeFallback({
@@ -90,7 +97,13 @@ describe("fetchWithBearerAuthScopeFallback", () => {
 
     expect(response.status).toBe(200);
     expect(tokenProvider.getAccessToken).toHaveBeenCalledTimes(2);
-    expect(tokenProvider.getAccessToken).toHaveBeenNthCalledWith(1, "https://first.example");
-    expect(tokenProvider.getAccessToken).toHaveBeenNthCalledWith(2, "https://second.example");
+    expect(tokenProvider.getAccessToken).toHaveBeenNthCalledWith(
+      1,
+      "https://first.example",
+    );
+    expect(tokenProvider.getAccessToken).toHaveBeenNthCalledWith(
+      2,
+      "https://second.example",
+    );
   });
 });

@@ -1,7 +1,10 @@
 import fs from "node:fs/promises";
 import { Static, Type } from "@sinclair/typebox";
 import type { AnyAgentTool, OpenClawPluginApi } from "openclaw/plugin-sdk";
-import { PlaywrightDiffScreenshotter, type DiffScreenshotter } from "./browser.js";
+import {
+  PlaywrightDiffScreenshotter,
+  type DiffScreenshotter,
+} from "./browser.js";
 import { resolveDiffImageRenderOptions } from "./config.js";
 import { renderDiffDocument } from "./render.js";
 import type { DiffArtifactStore } from "./store.js";
@@ -27,7 +30,10 @@ const MAX_TITLE_BYTES = 1_024;
 const MAX_PATH_BYTES = 2_048;
 const MAX_LANG_BYTES = 128;
 
-function stringEnum<T extends readonly string[]>(values: T, description: string) {
+function stringEnum<T extends readonly string[]>(
+  values: T,
+  description: string,
+) {
   return Type.Unsafe<T[number]>({
     type: "string",
     enum: [...values],
@@ -37,7 +43,9 @@ function stringEnum<T extends readonly string[]>(values: T, description: string)
 
 const DiffsToolSchema = Type.Object(
   {
-    before: Type.Optional(Type.String({ description: "Original text content." })),
+    before: Type.Optional(
+      Type.String({ description: "Original text content." }),
+    ),
     after: Type.Optional(Type.String({ description: "Updated text content." })),
     patch: Type.Optional(
       Type.String({
@@ -64,32 +72,51 @@ const DiffsToolSchema = Type.Object(
       }),
     ),
     mode: Type.Optional(
-      stringEnum(DIFF_MODES, "Output mode: view, file, image, or both. Default: both."),
+      stringEnum(
+        DIFF_MODES,
+        "Output mode: view, file, image, or both. Default: both.",
+      ),
     ),
-    theme: Type.Optional(stringEnum(DIFF_THEMES, "Viewer theme. Default: dark.")),
-    layout: Type.Optional(stringEnum(DIFF_LAYOUTS, "Diff layout. Default: unified.")),
+    theme: Type.Optional(
+      stringEnum(DIFF_THEMES, "Viewer theme. Default: dark."),
+    ),
+    layout: Type.Optional(
+      stringEnum(DIFF_LAYOUTS, "Diff layout. Default: unified."),
+    ),
     fileQuality: Type.Optional(
-      stringEnum(DIFF_IMAGE_QUALITY_PRESETS, "File quality preset: standard, hq, or print."),
+      stringEnum(
+        DIFF_IMAGE_QUALITY_PRESETS,
+        "File quality preset: standard, hq, or print.",
+      ),
     ),
-    fileFormat: Type.Optional(stringEnum(DIFF_OUTPUT_FORMATS, "Rendered file format: png or pdf.")),
+    fileFormat: Type.Optional(
+      stringEnum(DIFF_OUTPUT_FORMATS, "Rendered file format: png or pdf."),
+    ),
     fileScale: Type.Optional(
       Type.Number({
-        description: "Optional rendered-file device scale factor override (1-4).",
+        description:
+          "Optional rendered-file device scale factor override (1-4).",
         minimum: 1,
         maximum: 4,
       }),
     ),
     fileMaxWidth: Type.Optional(
       Type.Number({
-        description: "Optional rendered-file max width in CSS pixels (640-2400).",
+        description:
+          "Optional rendered-file max width in CSS pixels (640-2400).",
         minimum: 640,
         maximum: 2400,
       }),
     ),
     imageQuality: Type.Optional(
-      stringEnum(DIFF_IMAGE_QUALITY_PRESETS, "Deprecated alias for fileQuality."),
+      stringEnum(
+        DIFF_IMAGE_QUALITY_PRESETS,
+        "Deprecated alias for fileQuality.",
+      ),
     ),
-    imageFormat: Type.Optional(stringEnum(DIFF_OUTPUT_FORMATS, "Deprecated alias for fileFormat.")),
+    imageFormat: Type.Optional(
+      stringEnum(DIFF_OUTPUT_FORMATS, "Deprecated alias for fileFormat."),
+    ),
     imageScale: Type.Optional(
       Type.Number({
         description: "Deprecated alias for fileScale.",
@@ -105,11 +132,14 @@ const DiffsToolSchema = Type.Object(
       }),
     ),
     expandUnchanged: Type.Optional(
-      Type.Boolean({ description: "Expand unchanged sections instead of collapsing them." }),
+      Type.Boolean({
+        description: "Expand unchanged sections instead of collapsing them.",
+      }),
     ),
     ttlSeconds: Type.Optional(
       Type.Number({
-        description: "Artifact lifetime in seconds. Default: 1800. Maximum: 21600.",
+        description:
+          "Artifact lifetime in seconds. Default: 1800. Maximum: 21600.",
         minimum: 1,
         maximum: 21_600,
       }),
@@ -155,7 +185,9 @@ export function createDiffsTool(params: {
         fileFormat: normalizeOutputFormat(
           toolParams.fileFormat ?? toolParams.imageFormat ?? toolParams.format,
         ),
-        fileQuality: normalizeFileQuality(toolParams.fileQuality ?? toolParams.imageQuality),
+        fileQuality: normalizeFileQuality(
+          toolParams.fileQuality ?? toolParams.imageQuality,
+        ),
         fileScale: toolParams.fileScale ?? toolParams.imageScale,
         fileMaxWidth: toolParams.fileMaxWidth ?? toolParams.imageMaxWidth,
       });
@@ -171,7 +203,8 @@ export function createDiffsTool(params: {
       });
 
       const screenshotter =
-        params.screenshotter ?? new PlaywrightDiffScreenshotter({ config: params.api.config });
+        params.screenshotter ??
+        new PlaywrightDiffScreenshotter({ config: params.api.config });
 
       if (isArtifactOnlyMode(mode)) {
         const artifactFile = await renderDiffArtifactFile({
@@ -285,7 +318,8 @@ export function createDiffsTool(params: {
             details: {
               ...baseDetails,
               fileError: error instanceof Error ? error.message : String(error),
-              imageError: error instanceof Error ? error.message : String(error),
+              imageError:
+                error instanceof Error ? error.message : String(error),
             },
           };
         }
@@ -298,10 +332,14 @@ export function createDiffsTool(params: {
 function normalizeFileQuality(
   fileQuality: DiffImageQualityPreset | undefined,
 ): DiffImageQualityPreset | undefined {
-  return fileQuality && DIFF_IMAGE_QUALITY_PRESETS.includes(fileQuality) ? fileQuality : undefined;
+  return fileQuality && DIFF_IMAGE_QUALITY_PRESETS.includes(fileQuality)
+    ? fileQuality
+    : undefined;
 }
 
-function normalizeOutputFormat(format: DiffOutputFormat | undefined): DiffOutputFormat | undefined {
+function normalizeOutputFormat(
+  format: DiffOutputFormat | undefined,
+): DiffOutputFormat | undefined {
   return format && DIFF_OUTPUT_FORMATS.includes(format) ? format : undefined;
 }
 
@@ -338,8 +376,12 @@ function buildFileArtifactMessage(params: {
   viewerUrl?: string;
 }): string {
   const lines = params.viewerUrl ? [`Diff viewer: ${params.viewerUrl}`] : [];
-  lines.push(`Diff ${params.format.toUpperCase()} generated at: ${params.filePath}`);
-  lines.push("Use the `message` tool with `path` or `filePath` to send this file.");
+  lines.push(
+    `Diff ${params.format.toUpperCase()} generated at: ${params.filePath}`,
+  );
+  lines.push(
+    "Use the `message` tool with `path` or `filePath` to send this file.",
+  );
   return lines.join("\n");
 }
 
@@ -383,7 +425,9 @@ function normalizeDiffInput(params: DiffsToolParams): DiffInput {
   if (patch) {
     assertMaxBytes(patch, "patch", MAX_PATCH_BYTES);
     if (before !== undefined || after !== undefined) {
-      throw new PluginToolInputError("Provide either patch or before/after input, not both.");
+      throw new PluginToolInputError(
+        "Provide either patch or before/after input, not both.",
+      );
     }
     const title = params.title?.trim();
     if (title) {
@@ -397,7 +441,9 @@ function normalizeDiffInput(params: DiffsToolParams): DiffInput {
   }
 
   if (before === undefined || after === undefined) {
-    throw new PluginToolInputError("Provide patch or both before and after text.");
+    throw new PluginToolInputError(
+      "Provide patch or both before and after text.",
+    );
   }
   assertMaxBytes(before, "before", MAX_BEFORE_AFTER_BYTES);
   assertMaxBytes(after, "after", MAX_BEFORE_AFTER_BYTES);
@@ -428,7 +474,9 @@ function assertMaxBytes(value: string, label: string, maxBytes: number): void {
   if (Buffer.byteLength(value, "utf8") <= maxBytes) {
     return;
   }
-  throw new PluginToolInputError(`${label} exceeds maximum size (${maxBytes} bytes).`);
+  throw new PluginToolInputError(
+    `${label} exceeds maximum size (${maxBytes} bytes).`,
+  );
 }
 
 function normalizeBaseUrl(baseUrl?: string): string | undefined {
@@ -443,15 +491,24 @@ function normalizeBaseUrl(baseUrl?: string): string | undefined {
   }
 }
 
-function normalizeMode(mode: DiffMode | undefined, fallback: DiffMode): DiffMode {
+function normalizeMode(
+  mode: DiffMode | undefined,
+  fallback: DiffMode,
+): DiffMode {
   return mode && DIFF_MODES.includes(mode) ? mode : fallback;
 }
 
-function normalizeTheme(theme: DiffTheme | undefined, fallback: DiffTheme): DiffTheme {
+function normalizeTheme(
+  theme: DiffTheme | undefined,
+  fallback: DiffTheme,
+): DiffTheme {
   return theme && DIFF_THEMES.includes(theme) ? theme : fallback;
 }
 
-function normalizeLayout(layout: DiffLayout | undefined, fallback: DiffLayout): DiffLayout {
+function normalizeLayout(
+  layout: DiffLayout | undefined,
+  fallback: DiffLayout,
+): DiffLayout {
   return layout && DIFF_LAYOUTS.includes(layout) ? layout : fallback;
 }
 

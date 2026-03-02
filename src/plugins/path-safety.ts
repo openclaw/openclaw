@@ -5,7 +5,10 @@ export function isPathInside(baseDir: string, targetPath: string): boolean {
   return isBoundaryPathInside(baseDir, targetPath);
 }
 
-export function safeRealpathSync(targetPath: string, cache?: Map<string, string>): string | null {
+export function safeRealpathSync(
+  targetPath: string,
+  cache?: Map<string, string>,
+): string | null {
   const cached = cache?.get(targetPath);
   if (cached) {
     return cached;

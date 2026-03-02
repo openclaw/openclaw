@@ -1,5 +1,8 @@
 import { type Bot, GrammyError, InputFile } from "grammy";
-import { chunkMarkdownTextWithMode, type ChunkMode } from "../../auto-reply/chunk.js";
+import {
+  chunkMarkdownTextWithMode,
+  type ChunkMode,
+} from "../../auto-reply/chunk.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { ReplyToMode } from "../../config/config.js";
 import type { MarkdownTableMode } from "../../config/types.base.js";
@@ -35,7 +38,9 @@ type DeliveryProgress = {
   hasDelivered: boolean;
 };
 
-type ChunkTextFn = (markdown: string) => ReturnType<typeof markdownToTelegramChunks>;
+type ChunkTextFn = (
+  markdown: string,
+) => ReturnType<typeof markdownToTelegramChunks>;
 
 function buildChunkTextResolver(params: {
   textLimit: number;
@@ -45,7 +50,11 @@ function buildChunkTextResolver(params: {
   return (markdown: string) => {
     const markdownChunks =
       params.chunkMode === "newline"
-        ? chunkMarkdownTextWithMode(markdown, params.textLimit, params.chunkMode)
+        ? chunkMarkdownTextWithMode(
+            markdown,
+            params.textLimit,
+            params.chunkMode,
+          )
         : [markdown];
     const chunks: ReturnType<typeof markdownToTelegramChunks> = [];
     for (const chunk of markdownChunks) {
@@ -55,7 +64,10 @@ function buildChunkTextResolver(params: {
       if (!nested.length && chunk) {
         chunks.push({
           html: wrapFileReferencesInHtml(
-            markdownToTelegramHtml(chunk, { tableMode: params.tableMode, wrapFileRefs: false }),
+            markdownToTelegramHtml(chunk, {
+              tableMode: params.tableMode,
+              wrapFileRefs: false,
+            }),
           ),
           text: chunk,
         });
@@ -72,12 +84,16 @@ function resolveReplyToForSend(params: {
   replyToMode: ReplyToMode;
   progress: DeliveryProgress;
 }): number | undefined {
-  return params.replyToId && (params.replyToMode === "all" || !params.progress.hasReplied)
+  return params.replyToId &&
+    (params.replyToMode === "all" || !params.progress.hasReplied)
     ? params.replyToId
     : undefined;
 }
 
-function markReplyApplied(progress: DeliveryProgress, replyToId?: number): void {
+function markReplyApplied(
+  progress: DeliveryProgress,
+  replyToId?: number,
+): void {
   if (replyToId && !progress.hasReplied) {
     progress.hasReplied = true;
   }
@@ -113,15 +129,21 @@ async function deliverTextReply(params: {
       replyToMode: params.replyToMode,
       progress: params.progress,
     });
-    await sendTelegramText(params.bot, params.chatId, chunk.html, params.runtime, {
-      replyToMessageId: replyToForChunk,
-      replyQuoteText: params.replyQuoteText,
-      thread: params.thread,
-      textMode: "html",
-      plainText: chunk.text,
-      linkPreview: params.linkPreview,
-      replyMarkup: shouldAttachButtons ? params.replyMarkup : undefined,
-    });
+    await sendTelegramText(
+      params.bot,
+      params.chatId,
+      chunk.html,
+      params.runtime,
+      {
+        replyToMessageId: replyToForChunk,
+        replyQuoteText: params.replyQuoteText,
+        thread: params.thread,
+        textMode: "html",
+        plainText: chunk.text,
+        linkPreview: params.linkPreview,
+        replyMarkup: shouldAttachButtons ? params.replyMarkup : undefined,
+      },
+    );
     markReplyApplied(params.progress, replyToForChunk);
     markDelivered(params.progress);
   }
@@ -148,14 +170,20 @@ async function sendPendingFollowUpText(params: {
       replyToMode: params.replyToMode,
       progress: params.progress,
     });
-    await sendTelegramText(params.bot, params.chatId, chunk.html, params.runtime, {
-      replyToMessageId: replyToForFollowUp,
-      thread: params.thread,
-      textMode: "html",
-      plainText: chunk.text,
-      linkPreview: params.linkPreview,
-      replyMarkup: i === 0 ? params.replyMarkup : undefined,
-    });
+    await sendTelegramText(
+      params.bot,
+      params.chatId,
+      chunk.html,
+      params.runtime,
+      {
+        replyToMessageId: replyToForFollowUp,
+        thread: params.thread,
+        textMode: "html",
+        plainText: chunk.text,
+        linkPreview: params.linkPreview,
+        replyMarkup: i === 0 ? params.replyMarkup : undefined,
+      },
+    );
     markReplyApplied(params.progress, replyToForFollowUp);
     markDelivered(params.progress);
   }
@@ -232,7 +260,9 @@ async function deliverMediaReply(params: {
     const isFirstMedia = first;
     const media = await loadWebMedia(
       mediaUrl,
-      buildOutboundMediaLoadOptions({ mediaLocalRoots: params.mediaLocalRoots }),
+      buildOutboundMediaLoadOptions({
+        mediaLocalRoots: params.mediaLocalRoots,
+      }),
     );
     const kind = mediaKindFromMime(media.contentType ?? undefined);
     const isGif = isGifMedia({
@@ -256,11 +286,14 @@ async function deliverMediaReply(params: {
       replyToMode: params.replyToMode,
       progress: params.progress,
     });
-    const shouldAttachButtonsToMedia = isFirstMedia && params.replyMarkup && !followUpText;
+    const shouldAttachButtonsToMedia =
+      isFirstMedia && params.replyMarkup && !followUpText;
     const mediaParams: Record<string, unknown> = {
       caption: htmlCaption,
       ...(htmlCaption ? { parse_mode: "HTML" } : {}),
-      ...(shouldAttachButtonsToMedia ? { reply_markup: params.replyMarkup } : {}),
+      ...(shouldAttachButtonsToMedia
+        ? { reply_markup: params.replyMarkup }
+        : {}),
       ...buildTelegramSendParams({
         replyToMessageId,
         thread: params.thread,
@@ -273,7 +306,9 @@ async function deliverMediaReply(params: {
         thread: params.thread,
         requestParams: mediaParams,
         send: (effectiveParams) =>
-          params.bot.api.sendAnimation(params.chatId, file, { ...effectiveParams }),
+          params.bot.api.sendAnimation(params.chatId, file, {
+            ...effectiveParams,
+          }),
       });
       markDelivered(params.progress);
     } else if (kind === "image") {
@@ -313,7 +348,9 @@ async function deliverMediaReply(params: {
             requestParams: mediaParams,
             shouldLog: (err) => !isVoiceMessagesForbidden(err),
             send: (effectiveParams) =>
-              params.bot.api.sendVoice(params.chatId, file, { ...effectiveParams }),
+              params.bot.api.sendVoice(params.chatId, file, {
+                ...effectiveParams,
+              }),
           });
           markDelivered(params.progress);
         } catch (voiceErr) {
@@ -359,7 +396,9 @@ async function deliverMediaReply(params: {
               thread: params.thread,
               requestParams: noCaptionParams,
               send: (effectiveParams) =>
-                params.bot.api.sendVoice(params.chatId, file, { ...effectiveParams }),
+                params.bot.api.sendVoice(params.chatId, file, {
+                  ...effectiveParams,
+                }),
             });
             markDelivered(params.progress);
             const fallbackText = params.reply.text;
@@ -388,7 +427,9 @@ async function deliverMediaReply(params: {
           thread: params.thread,
           requestParams: mediaParams,
           send: (effectiveParams) =>
-            params.bot.api.sendAudio(params.chatId, file, { ...effectiveParams }),
+            params.bot.api.sendAudio(params.chatId, file, {
+              ...effectiveParams,
+            }),
         });
         markDelivered(params.progress);
       }
@@ -399,7 +440,9 @@ async function deliverMediaReply(params: {
         thread: params.thread,
         requestParams: mediaParams,
         send: (effectiveParams) =>
-          params.bot.api.sendDocument(params.chatId, file, { ...effectiveParams }),
+          params.bot.api.sendDocument(params.chatId, file, {
+            ...effectiveParams,
+          }),
       });
       markDelivered(params.progress);
     }
@@ -452,17 +495,22 @@ export async function deliverReplies(params: {
     tableMode: params.tableMode,
   });
   for (const reply of params.replies) {
-    const hasMedia = Boolean(reply?.mediaUrl) || (reply?.mediaUrls?.length ?? 0) > 0;
+    const hasMedia =
+      Boolean(reply?.mediaUrl) || (reply?.mediaUrls?.length ?? 0) > 0;
     if (!reply?.text && !hasMedia) {
       if (reply?.audioAsVoice) {
-        logVerbose("telegram reply has audioAsVoice without media/text; skipping");
+        logVerbose(
+          "telegram reply has audioAsVoice without media/text; skipping",
+        );
         continue;
       }
       params.runtime.error?.(danger("reply missing text/media"));
       continue;
     }
     const replyToId =
-      params.replyToMode === "off" ? undefined : resolveTelegramReplyId(reply.replyToId);
+      params.replyToMode === "off"
+        ? undefined
+        : resolveTelegramReplyId(reply.replyToId);
     const mediaList = reply.mediaUrls?.length
       ? reply.mediaUrls
       : reply.mediaUrl

@@ -29,10 +29,14 @@ export async function handleSubagentsSpawnAction(
     );
   }
 
-  const commandTo = typeof params.command.to === "string" ? params.command.to.trim() : "";
+  const commandTo =
+    typeof params.command.to === "string" ? params.command.to.trim() : "";
   const originatingTo =
-    typeof params.ctx.OriginatingTo === "string" ? params.ctx.OriginatingTo.trim() : "";
-  const fallbackTo = typeof params.ctx.To === "string" ? params.ctx.To.trim() : "";
+    typeof params.ctx.OriginatingTo === "string"
+      ? params.ctx.OriginatingTo.trim()
+      : "";
+  const fallbackTo =
+    typeof params.ctx.To === "string" ? params.ctx.To.trim() : "";
   const normalizedTo = originatingTo || commandTo || fallbackTo || undefined;
 
   const result = await spawnSubagentDirect(

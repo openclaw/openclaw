@@ -14,8 +14,12 @@ describe("buildDockerExecArgs", () => {
     });
 
     const commandArg = args[args.length - 1];
-    expect(args).toContain("OPENCLAW_PREPEND_PATH=/custom/bin:/usr/local/bin:/usr/bin");
-    expect(commandArg).toContain('export PATH="${OPENCLAW_PREPEND_PATH}:$PATH"');
+    expect(args).toContain(
+      "OPENCLAW_PREPEND_PATH=/custom/bin:/usr/local/bin:/usr/bin",
+    );
+    expect(commandArg).toContain(
+      'export PATH="${OPENCLAW_PREPEND_PATH}:$PATH"',
+    );
     expect(commandArg).toContain("echo hello");
     expect(commandArg).toBe(
       'export PATH="${OPENCLAW_PREPEND_PATH}:$PATH"; unset OPENCLAW_PREPEND_PATH; echo hello',

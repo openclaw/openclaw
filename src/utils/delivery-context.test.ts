@@ -38,14 +38,24 @@ describe("delivery context helpers", () => {
   });
 
   it("builds stable keys only when channel and to are present", () => {
-    expect(deliveryContextKey({ channel: "whatsapp", to: "+1555" })).toBe("whatsapp|+1555||");
+    expect(deliveryContextKey({ channel: "whatsapp", to: "+1555" })).toBe(
+      "whatsapp|+1555||",
+    );
     expect(deliveryContextKey({ channel: "whatsapp" })).toBeUndefined();
-    expect(deliveryContextKey({ channel: "whatsapp", to: "+1555", accountId: "acct-1" })).toBe(
-      "whatsapp|+1555|acct-1|",
-    );
-    expect(deliveryContextKey({ channel: "slack", to: "channel:C1", threadId: "123.456" })).toBe(
-      "slack|channel:C1||123.456",
-    );
+    expect(
+      deliveryContextKey({
+        channel: "whatsapp",
+        to: "+1555",
+        accountId: "acct-1",
+      }),
+    ).toBe("whatsapp|+1555|acct-1|");
+    expect(
+      deliveryContextKey({
+        channel: "slack",
+        to: "channel:C1",
+        threadId: "123.456",
+      }),
+    ).toBe("slack|channel:C1||123.456");
   });
 
   it("derives delivery context from a session entry", () => {

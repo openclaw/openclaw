@@ -32,7 +32,8 @@ export function resolveHeartbeatVisibility(params: {
     return {
       showOk: channelDefaults?.showOk ?? DEFAULT_VISIBILITY.showOk,
       showAlerts: channelDefaults?.showAlerts ?? DEFAULT_VISIBILITY.showAlerts,
-      useIndicator: channelDefaults?.useIndicator ?? DEFAULT_VISIBILITY.useIndicator,
+      useIndicator:
+        channelDefaults?.useIndicator ?? DEFAULT_VISIBILITY.useIndicator,
     };
   }
 
@@ -43,7 +44,10 @@ export function resolveHeartbeatVisibility(params: {
   const channelCfg = cfg.channels?.[channel] as
     | {
         heartbeat?: ChannelHeartbeatVisibilityConfig;
-        accounts?: Record<string, { heartbeat?: ChannelHeartbeatVisibilityConfig }>;
+        accounts?: Record<
+          string,
+          { heartbeat?: ChannelHeartbeatVisibilityConfig }
+        >;
       }
     | undefined;
   const perChannel = channelCfg?.heartbeat;

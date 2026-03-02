@@ -3,7 +3,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
-import { buildKimiCodingProvider, resolveImplicitProviders } from "./models-config.providers.js";
+import {
+  buildKimiCodingProvider,
+  resolveImplicitProviders,
+} from "./models-config.providers.js";
 
 describe("kimi-coding implicit provider (#22409)", () => {
   it("should include kimi-coding when KIMI_API_KEY is configured", async () => {
@@ -15,7 +18,9 @@ describe("kimi-coding implicit provider (#22409)", () => {
       const providers = await resolveImplicitProviders({ agentDir });
       expect(providers?.["kimi-coding"]).toBeDefined();
       expect(providers?.["kimi-coding"]?.api).toBe("anthropic-messages");
-      expect(providers?.["kimi-coding"]?.baseUrl).toBe("https://api.kimi.com/coding/");
+      expect(providers?.["kimi-coding"]?.baseUrl).toBe(
+        "https://api.kimi.com/coding/",
+      );
     } finally {
       envSnapshot.restore();
     }

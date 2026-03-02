@@ -61,7 +61,10 @@ function percentile(values: number[], p: number): number {
     return 0;
   }
   const sorted = [...values].toSorted((a, b) => a - b);
-  const index = Math.min(sorted.length - 1, Math.floor((p / 100) * sorted.length));
+  const index = Math.min(
+    sorted.length - 1,
+    Math.floor((p / 100) * sorted.length),
+  );
   return sorted[index];
 }
 
@@ -74,17 +77,21 @@ function runCase(params: {
   const results: Sample[] = [];
   for (let i = 0; i < params.runs; i += 1) {
     const started = process.hrtime.bigint();
-    const proc = spawnSync(process.execPath, [params.entry, ...params.runCase.args], {
-      cwd: process.cwd(),
-      env: {
-        ...process.env,
-        OPENCLAW_HIDE_BANNER: "1",
+    const proc = spawnSync(
+      process.execPath,
+      [params.entry, ...params.runCase.args],
+      {
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          OPENCLAW_HIDE_BANNER: "1",
+        },
+        stdio: ["ignore", "ignore", "pipe"],
+        encoding: "utf8",
+        timeout: params.timeoutMs,
+        maxBuffer: 16 * 1024 * 1024,
       },
-      stdio: ["ignore", "ignore", "pipe"],
-      encoding: "utf8",
-      timeout: params.timeoutMs,
-      maxBuffer: 16 * 1024 * 1024,
-    });
+    );
     const ms = Number(process.hrtime.bigint() - started) / 1e6;
     results.push({
       ms,
@@ -123,7 +130,9 @@ function collectExitSummary(samples: Sample[]): string {
         : `code:${sample.exitCode == null ? "null" : String(sample.exitCode)}`;
     buckets.set(key, (buckets.get(key) ?? 0) + 1);
   }
-  return [...buckets.entries()].map(([key, count]) => `${key}x${count}`).join(", ");
+  return [...buckets.entries()]
+    .map(([key, count]) => `${key}x${count}`)
+    .join(", ");
 }
 
 function printSuite(params: {
@@ -155,10 +164,15 @@ function printSuite(params: {
 
 async function main(): Promise<void> {
   const entryPrimary =
-    parseFlagValue("--entry-primary") ?? parseFlagValue("--entry") ?? DEFAULT_ENTRY;
+    parseFlagValue("--entry-primary") ??
+    parseFlagValue("--entry") ??
+    DEFAULT_ENTRY;
   const entrySecondary = parseFlagValue("--entry-secondary");
   const runs = parsePositiveInt(parseFlagValue("--runs"), DEFAULT_RUNS);
-  const timeoutMs = parsePositiveInt(parseFlagValue("--timeout-ms"), DEFAULT_TIMEOUT_MS);
+  const timeoutMs = parsePositiveInt(
+    parseFlagValue("--timeout-ms"),
+    DEFAULT_TIMEOUT_MS,
+  );
 
   console.log(`Node: ${process.version}`);
   console.log(`Runs per command: ${runs}`);

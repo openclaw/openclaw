@@ -35,9 +35,13 @@ export function normalizeSandboxHostPath(raw: string): string {
  * Resolve a path through the deepest existing ancestor so parent symlinks are honored
  * even when the final source leaf does not exist yet.
  */
-export function resolveSandboxHostPathViaExistingAncestor(sourcePath: string): string {
+export function resolveSandboxHostPathViaExistingAncestor(
+  sourcePath: string,
+): string {
   if (!sourcePath.startsWith("/")) {
     return sourcePath;
   }
-  return normalizeSandboxHostPath(resolvePathViaExistingAncestorSync(sourcePath));
+  return normalizeSandboxHostPath(
+    resolvePathViaExistingAncestorSync(sourcePath),
+  );
 }

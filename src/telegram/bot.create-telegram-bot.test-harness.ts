@@ -76,7 +76,8 @@ vi.mock("../pairing/pairing-store.js", () => ({
 const skillCommandsHoisted = vi.hoisted(() => ({
   listSkillCommandsForAgents: vi.fn(() => []),
 }));
-export const listSkillCommandsForAgents = skillCommandsHoisted.listSkillCommandsForAgents;
+export const listSkillCommandsForAgents =
+  skillCommandsHoisted.listSkillCommandsForAgents;
 
 vi.mock("../auto-reply/skill-commands.js", () => ({
   listSkillCommandsForAgents,
@@ -85,7 +86,8 @@ vi.mock("../auto-reply/skill-commands.js", () => ({
 const systemEventsHoisted = vi.hoisted(() => ({
   enqueueSystemEventSpy: vi.fn(),
 }));
-export const enqueueSystemEventSpy: AnyMock = systemEventsHoisted.enqueueSystemEventSpy;
+export const enqueueSystemEventSpy: AnyMock =
+  systemEventsHoisted.enqueueSystemEventSpy;
 
 vi.mock("../infra/system-events.js", () => ({
   enqueueSystemEvent: enqueueSystemEventSpy,
@@ -108,9 +110,13 @@ export const onSpy: AnyMock = vi.fn();
 export const stopSpy: AnyMock = vi.fn();
 export const commandSpy: AnyMock = vi.fn();
 export const botCtorSpy: AnyMock = vi.fn();
-export const answerCallbackQuerySpy: AnyAsyncMock = vi.fn(async () => undefined);
+export const answerCallbackQuerySpy: AnyAsyncMock = vi.fn(
+  async () => undefined,
+);
 export const sendChatActionSpy: AnyMock = vi.fn();
-export const editMessageTextSpy: AnyAsyncMock = vi.fn(async () => ({ message_id: 88 }));
+export const editMessageTextSpy: AnyAsyncMock = vi.fn(async () => ({
+  message_id: 88,
+}));
 export const sendMessageDraftSpy: AnyAsyncMock = vi.fn(async () => true);
 export const setMessageReactionSpy: AnyAsyncMock = vi.fn(async () => undefined);
 export const setMyCommandsSpy: AnyAsyncMock = vi.fn(async () => undefined);
@@ -118,10 +124,18 @@ export const getMeSpy: AnyAsyncMock = vi.fn(async () => ({
   username: "openclaw_bot",
   has_topics_enabled: true,
 }));
-export const sendMessageSpy: AnyAsyncMock = vi.fn(async () => ({ message_id: 77 }));
-export const sendAnimationSpy: AnyAsyncMock = vi.fn(async () => ({ message_id: 78 }));
-export const sendPhotoSpy: AnyAsyncMock = vi.fn(async () => ({ message_id: 79 }));
-export const getFileSpy: AnyAsyncMock = vi.fn(async () => ({ file_path: "media/file.jpg" }));
+export const sendMessageSpy: AnyAsyncMock = vi.fn(async () => ({
+  message_id: 77,
+}));
+export const sendAnimationSpy: AnyAsyncMock = vi.fn(async () => ({
+  message_id: 78,
+}));
+export const sendPhotoSpy: AnyAsyncMock = vi.fn(async () => ({
+  message_id: 79,
+}));
+export const getFileSpy: AnyAsyncMock = vi.fn(async () => ({
+  file_path: "media/file.jpg",
+}));
 
 type ApiStub = {
   config: { use: (arg: unknown) => void };
@@ -256,7 +270,10 @@ export function makeForumGroupMessageCtx(params?: {
       title: params?.title ?? "Forum Group",
       is_forum: true,
     },
-    from: { id: params?.fromId ?? 12345, username: params?.username ?? "testuser" },
+    from: {
+      id: params?.fromId ?? 12345,
+      username: params?.username ?? "testuser",
+    },
     text: params?.text ?? "hello",
     messageThreadId: params?.threadId,
   });
@@ -279,7 +296,10 @@ beforeEach(() => {
   readChannelAllowFromStore.mockReset();
   readChannelAllowFromStore.mockResolvedValue([]);
   upsertChannelPairingRequest.mockReset();
-  upsertChannelPairingRequest.mockResolvedValue({ code: "PAIRCODE", created: true } as const);
+  upsertChannelPairingRequest.mockResolvedValue({
+    code: "PAIRCODE",
+    created: true,
+  } as const);
   onSpy.mockReset();
   commandSpy.mockReset();
   stopSpy.mockReset();

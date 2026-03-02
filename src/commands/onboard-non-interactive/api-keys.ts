@@ -11,7 +11,9 @@ import type { SecretInputMode } from "../onboard-types.js";
 
 export type NonInteractiveApiKeySource = "flag" | "env" | "profile";
 
-function parseEnvVarNameFromSourceLabel(source: string | undefined): string | undefined {
+function parseEnvVarNameFromSourceLabel(
+  source: string | undefined,
+): string | undefined {
   if (!source) {
     return undefined;
   }
@@ -60,7 +62,11 @@ export async function resolveNonInteractiveApiKey(params: {
   allowProfile?: boolean;
   required?: boolean;
   secretInputMode?: SecretInputMode;
-}): Promise<{ key: string; source: NonInteractiveApiKeySource; envVarName?: string } | null> {
+}): Promise<{
+  key: string;
+  source: NonInteractiveApiKeySource;
+  envVarName?: string;
+} | null> {
   const flagKey = normalizeOptionalSecretInput(params.flagValue);
   const envResolved = resolveEnvApiKey(params.provider);
   const explicitEnvVar = params.envVarName?.trim();
@@ -68,7 +74,8 @@ export async function resolveNonInteractiveApiKey(params: {
     ? normalizeOptionalSecretInput(process.env[explicitEnvVar])
     : undefined;
   const resolvedEnvKey = envResolved?.apiKey ?? explicitEnvKey;
-  const resolvedEnvVarName = parseEnvVarNameFromSourceLabel(envResolved?.source) ?? explicitEnvVar;
+  const resolvedEnvVarName =
+    parseEnvVarNameFromSourceLabel(envResolved?.source) ?? explicitEnvVar;
 
   if (params.secretInputMode === "ref") {
     if (!resolvedEnvKey && flagKey) {
@@ -92,7 +99,11 @@ export async function resolveNonInteractiveApiKey(params: {
         params.runtime.exit(1);
         return null;
       }
-      return { key: resolvedEnvKey, source: "env", envVarName: resolvedEnvVarName };
+      return {
+        key: resolvedEnvKey,
+        source: "env",
+        envVarName: resolvedEnvVarName,
+      };
     }
   }
 
@@ -101,7 +112,11 @@ export async function resolveNonInteractiveApiKey(params: {
   }
 
   if (resolvedEnvKey) {
-    return { key: resolvedEnvKey, source: "env", envVarName: resolvedEnvVarName };
+    return {
+      key: resolvedEnvKey,
+      source: "env",
+      envVarName: resolvedEnvVarName,
+    };
   }
 
   if (params.allowProfile ?? true) {
@@ -120,8 +135,12 @@ export async function resolveNonInteractiveApiKey(params: {
   }
 
   const profileHint =
-    params.allowProfile === false ? "" : `, or existing ${params.provider} API-key profile`;
-  params.runtime.error(`Missing ${params.flagName} (or ${params.envVar} in env${profileHint}).`);
+    params.allowProfile === false
+      ? ""
+      : `, or existing ${params.provider} API-key profile`;
+  params.runtime.error(
+    `Missing ${params.flagName} (or ${params.envVar} in env${profileHint}).`,
+  );
   params.runtime.exit(1);
   return null;
 }

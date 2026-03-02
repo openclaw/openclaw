@@ -96,7 +96,9 @@ class FallbackMemoryManager implements MemorySearchManager {
       } catch (err) {
         this.primaryFailed = true;
         this.lastError = err instanceof Error ? err.message : String(err);
-        log.warn(`qmd memory failed; switching to builtin index: ${this.lastError}`);
+        log.warn(
+          `qmd memory failed; switching to builtin index: ${this.lastError}`,
+        );
         await this.deps.primary.close?.().catch(() => {});
         // Evict the failed wrapper so the next request can retry QMD with a fresh manager.
         this.evictCacheEntry();
@@ -170,7 +172,10 @@ class FallbackMemoryManager implements MemorySearchManager {
     if (fallback) {
       return await fallback.probeEmbeddingAvailability();
     }
-    return { ok: false, error: this.lastError ?? "memory embeddings unavailable" };
+    return {
+      ok: false,
+      error: this.lastError ?? "memory embeddings unavailable",
+    };
   }
 
   async probeVectorAvailability() {

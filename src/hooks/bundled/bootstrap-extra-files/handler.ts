@@ -13,10 +13,14 @@ function normalizeStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) {
     return [];
   }
-  return value.map((v) => (typeof v === "string" ? v.trim() : "")).filter(Boolean);
+  return value
+    .map((v) => (typeof v === "string" ? v.trim() : ""))
+    .filter(Boolean);
 }
 
-function resolveExtraBootstrapPatterns(hookConfig: Record<string, unknown>): string[] {
+function resolveExtraBootstrapPatterns(
+  hookConfig: Record<string, unknown>,
+): string[] {
   const fromPaths = normalizeStringArray(hookConfig.paths);
   if (fromPaths.length > 0) {
     return fromPaths;
@@ -39,16 +43,19 @@ const bootstrapExtraFilesHook: HookHandler = async (event) => {
     return;
   }
 
-  const patterns = resolveExtraBootstrapPatterns(hookConfig as Record<string, unknown>);
+  const patterns = resolveExtraBootstrapPatterns(
+    hookConfig as Record<string, unknown>,
+  );
   if (patterns.length === 0) {
     return;
   }
 
   try {
-    const { files: extras, diagnostics } = await loadExtraBootstrapFilesWithDiagnostics(
-      context.workspaceDir,
-      patterns,
-    );
+    const { files: extras, diagnostics } =
+      await loadExtraBootstrapFilesWithDiagnostics(
+        context.workspaceDir,
+        patterns,
+      );
     if (diagnostics.length > 0) {
       log.debug("skipped extra bootstrap candidates", {
         skipped: diagnostics.length,

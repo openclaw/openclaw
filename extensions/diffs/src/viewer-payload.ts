@@ -27,7 +27,10 @@ function isDiffViewerPayload(value: unknown): value is DiffViewerPayload {
     return false;
   }
 
-  if (!Array.isArray(value.langs) || !value.langs.every((lang) => typeof lang === "string")) {
+  if (
+    !Array.isArray(value.langs) ||
+    !value.langs.every((lang) => typeof lang === "string")
+  ) {
     return false;
   }
 
@@ -36,7 +39,8 @@ function isDiffViewerPayload(value: unknown): value is DiffViewerPayload {
   }
 
   const hasFileDiff = isRecord(value.fileDiff);
-  const hasBeforeAfterFiles = isRecord(value.oldFile) && isRecord(value.newFile);
+  const hasBeforeAfterFiles =
+    isRecord(value.oldFile) && isRecord(value.newFile);
   if (!hasFileDiff && !hasBeforeAfterFiles) {
     return false;
   }
@@ -52,7 +56,10 @@ function isViewerOptions(value: unknown): boolean {
   if (!isRecord(value.theme)) {
     return false;
   }
-  if (value.theme.light !== "pierre-light" || value.theme.dark !== "pierre-dark") {
+  if (
+    value.theme.light !== "pierre-light" ||
+    value.theme.dark !== "pierre-dark"
+  ) {
     return false;
   }
 
@@ -89,6 +96,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-function includesValue<T extends readonly string[]>(values: T, value: unknown): value is T[number] {
+function includesValue<T extends readonly string[]>(
+  values: T,
+  value: unknown,
+): value is T[number] {
   return typeof value === "string" && values.includes(value as T[number]);
 }

@@ -7,7 +7,9 @@ import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { __testing, listAllChannelSupportedActions } from "./channel-tools.js";
 
 describe("channel tools", () => {
-  const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
+  const errorSpy = vi
+    .spyOn(defaultRuntime, "error")
+    .mockImplementation(() => undefined);
 
   beforeEach(() => {
     const plugin: ChannelPlugin = {
@@ -33,7 +35,9 @@ describe("channel tools", () => {
 
     __testing.resetLoggedListActionErrors();
     errorSpy.mockClear();
-    setActivePluginRegistry(createTestRegistry([{ pluginId: "test", source: "test", plugin }]));
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "test", source: "test", plugin }]),
+    );
   });
 
   afterEach(() => {

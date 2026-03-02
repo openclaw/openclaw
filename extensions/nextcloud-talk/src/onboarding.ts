@@ -19,11 +19,18 @@ import type { CoreConfig, DmPolicy } from "./types.js";
 
 const channel = "nextcloud-talk" as const;
 
-function setNextcloudTalkDmPolicy(cfg: CoreConfig, dmPolicy: DmPolicy): CoreConfig {
+function setNextcloudTalkDmPolicy(
+  cfg: CoreConfig,
+  dmPolicy: DmPolicy,
+): CoreConfig {
   const existingConfig = cfg.channels?.["nextcloud-talk"];
-  const existingAllowFrom: string[] = (existingConfig?.allowFrom ?? []).map((x) => String(x));
+  const existingAllowFrom: string[] = (existingConfig?.allowFrom ?? []).map(
+    (x) => String(x),
+  );
   const allowFrom: string[] =
-    dmPolicy === "open" ? (addWildcardAllowFrom(existingAllowFrom) as string[]) : existingAllowFrom;
+    dmPolicy === "open"
+      ? (addWildcardAllowFrom(existingAllowFrom) as string[])
+      : existingAllowFrom;
 
   const newNextcloudTalkConfig = {
     ...existingConfig,
@@ -40,7 +47,9 @@ function setNextcloudTalkDmPolicy(cfg: CoreConfig, dmPolicy: DmPolicy): CoreConf
   } as CoreConfig;
 }
 
-async function noteNextcloudTalkSecretHelp(prompter: WizardPrompter): Promise<void> {
+async function noteNextcloudTalkSecretHelp(
+  prompter: WizardPrompter,
+): Promise<void> {
   await prompter.note(
     [
       "1) SSH into your Nextcloud server",
@@ -54,7 +63,9 @@ async function noteNextcloudTalkSecretHelp(prompter: WizardPrompter): Promise<vo
   );
 }
 
-async function noteNextcloudTalkUserIdHelp(prompter: WizardPrompter): Promise<void> {
+async function noteNextcloudTalkUserIdHelp(
+  prompter: WizardPrompter,
+): Promise<void> {
   await prompter.note(
     [
       "1) Check the Nextcloud admin panel for user IDs",
@@ -87,17 +98,25 @@ async function promptNextcloudTalkAllowFrom(params: {
     const entry = await prompter.text({
       message: "Nextcloud Talk allowFrom (user id)",
       placeholder: "username",
-      initialValue: existingAllowFrom[0] ? String(existingAllowFrom[0]) : undefined,
-      validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
+      initialValue: existingAllowFrom[0]
+        ? String(existingAllowFrom[0])
+        : undefined,
+      validate: (value) =>
+        String(value ?? "").trim() ? undefined : "Required",
     });
     resolvedIds = parseInput(String(entry));
     if (resolvedIds.length === 0) {
-      await prompter.note("Please enter at least one valid user ID.", "Nextcloud Talk allowlist");
+      await prompter.note(
+        "Please enter at least one valid user ID.",
+        "Nextcloud Talk allowlist",
+      );
     }
   }
 
   const merged = [
-    ...existingAllowFrom.map((item) => String(item).trim().toLowerCase()).filter(Boolean),
+    ...existingAllowFrom
+      .map((item) => String(item).trim().toLowerCase())
+      .filter(Boolean),
     ...resolvedIds,
   ];
   const unique = mergeAllowFromEntries(undefined, merged);
@@ -128,7 +147,9 @@ async function promptNextcloudTalkAllowFrom(params: {
           ...cfg.channels?.["nextcloud-talk"]?.accounts,
           [accountId]: {
             ...cfg.channels?.["nextcloud-talk"]?.accounts?.[accountId],
-            enabled: cfg.channels?.["nextcloud-talk"]?.accounts?.[accountId]?.enabled ?? true,
+            enabled:
+              cfg.channels?.["nextcloud-talk"]?.accounts?.[accountId]
+                ?.enabled ?? true,
             dmPolicy: "allowlist",
             allowFrom: unique,
           },
@@ -160,7 +181,8 @@ const dmPolicy: ChannelOnboardingDmPolicy = {
   policyKey: "channels.nextcloud-talk.dmPolicy",
   allowFromKey: "channels.nextcloud-talk.allowFrom",
   getCurrent: (cfg) => cfg.channels?.["nextcloud-talk"]?.dmPolicy ?? "pairing",
-  setPolicy: (cfg, policy) => setNextcloudTalkDmPolicy(cfg as CoreConfig, policy as DmPolicy),
+  setPolicy: (cfg, policy) =>
+    setNextcloudTalkDmPolicy(cfg as CoreConfig, policy as DmPolicy),
   promptAllowFrom: promptNextcloudTalkAllowFromForAccount as (params: {
     cfg: OpenClawConfig;
     prompter: WizardPrompter;
@@ -171,14 +193,21 @@ const dmPolicy: ChannelOnboardingDmPolicy = {
 export const nextcloudTalkOnboardingAdapter: ChannelOnboardingAdapter = {
   channel,
   getStatus: async ({ cfg }) => {
-    const configured = listNextcloudTalkAccountIds(cfg as CoreConfig).some((accountId) => {
-      const account = resolveNextcloudTalkAccount({ cfg: cfg as CoreConfig, accountId });
-      return Boolean(account.secret && account.baseUrl);
-    });
+    const configured = listNextcloudTalkAccountIds(cfg as CoreConfig).some(
+      (accountId) => {
+        const account = resolveNextcloudTalkAccount({
+          cfg: cfg as CoreConfig,
+          accountId,
+        });
+        return Boolean(account.secret && account.baseUrl);
+      },
+    );
     return {
       channel,
       configured,
-      statusLines: [`Nextcloud Talk: ${configured ? "configured" : "needs setup"}`],
+      statusLines: [
+        `Nextcloud Talk: ${configured ? "configured" : "needs setup"}`,
+      ],
       selectionHint: configured ? "configured" : "self-hosted chat",
       quickstartScore: configured ? 1 : 5,
     };
@@ -191,7 +220,9 @@ export const nextcloudTalkOnboardingAdapter: ChannelOnboardingAdapter = {
     forceAllowFrom,
   }) => {
     const nextcloudTalkOverride = accountOverrides["nextcloud-talk"]?.trim();
-    const defaultAccountId = resolveDefaultNextcloudTalkAccountId(cfg as CoreConfig);
+    const defaultAccountId = resolveDefaultNextcloudTalkAccountId(
+      cfg as CoreConfig,
+    );
     let accountId = nextcloudTalkOverride
       ? normalizeAccountId(nextcloudTalkOverride)
       : defaultAccountId;
@@ -202,7 +233,9 @@ export const nextcloudTalkOnboardingAdapter: ChannelOnboardingAdapter = {
         prompter,
         label: "Nextcloud Talk",
         currentId: accountId,
-        listAccountIds: listNextcloudTalkAccountIds as (cfg: OpenClawConfig) => string[],
+        listAccountIds: listNextcloudTalkAccountIds as (
+          cfg: OpenClawConfig,
+        ) => string[],
         defaultAccountId,
       });
     }
@@ -212,9 +245,12 @@ export const nextcloudTalkOnboardingAdapter: ChannelOnboardingAdapter = {
       cfg: next,
       accountId,
     });
-    const accountConfigured = Boolean(resolvedAccount.secret && resolvedAccount.baseUrl);
+    const accountConfigured = Boolean(
+      resolvedAccount.secret && resolvedAccount.baseUrl,
+    );
     const allowEnv = accountId === DEFAULT_ACCOUNT_ID;
-    const canUseEnv = allowEnv && Boolean(process.env.NEXTCLOUD_TALK_BOT_SECRET?.trim());
+    const canUseEnv =
+      allowEnv && Boolean(process.env.NEXTCLOUD_TALK_BOT_SECRET?.trim());
     const hasConfigSecret = Boolean(
       resolvedAccount.config.botSecret || resolvedAccount.config.botSecretFile,
     );
@@ -223,7 +259,8 @@ export const nextcloudTalkOnboardingAdapter: ChannelOnboardingAdapter = {
     if (!baseUrl) {
       baseUrl = String(
         await prompter.text({
-          message: "Enter Nextcloud instance URL (e.g., https://cloud.example.com)",
+          message:
+            "Enter Nextcloud instance URL (e.g., https://cloud.example.com)",
           validate: (value) => {
             const v = String(value ?? "").trim();
             if (!v) {
@@ -317,7 +354,8 @@ export const nextcloudTalkOnboardingAdapter: ChannelOnboardingAdapter = {
                 [accountId]: {
                   ...next.channels?.["nextcloud-talk"]?.accounts?.[accountId],
                   enabled:
-                    next.channels?.["nextcloud-talk"]?.accounts?.[accountId]?.enabled ?? true,
+                    next.channels?.["nextcloud-talk"]?.accounts?.[accountId]
+                      ?.enabled ?? true,
                   baseUrl,
                   ...(secret ? { botSecret: secret } : {}),
                 },

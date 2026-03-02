@@ -3,7 +3,10 @@ import type { OpenClawConfig, GatewayAuthConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { promptAuthChoiceGrouped } from "./auth-choice-prompt.js";
-import { applyAuthChoice, resolvePreferredProviderForAuthChoice } from "./auth-choice.js";
+import {
+  applyAuthChoice,
+  resolvePreferredProviderForAuthChoice,
+} from "./auth-choice.js";
 import {
   applyModelAllowlist,
   applyModelFallbacksFromSelection,
@@ -64,9 +67,15 @@ export function buildGatewayAuthConfig(params: {
   }
   if (params.mode === "trusted-proxy") {
     if (!params.trustedProxy) {
-      throw new Error("trustedProxy config is required when mode is trusted-proxy");
+      throw new Error(
+        "trustedProxy config is required when mode is trusted-proxy",
+      );
     }
-    return { ...base, mode: "trusted-proxy", trustedProxy: params.trustedProxy };
+    return {
+      ...base,
+      mode: "trusted-proxy",
+      trustedProxy: params.trustedProxy,
+    };
   }
   return base;
 }
@@ -86,7 +95,11 @@ export async function promptAuthConfig(
 
   let next = cfg;
   if (authChoice === "custom-api-key") {
-    const customResult = await promptCustomApiConfig({ prompter, runtime, config: next });
+    const customResult = await promptCustomApiConfig({
+      prompter,
+      runtime,
+      config: next,
+    });
     next = customResult.config;
   } else if (authChoice !== "skip") {
     const applied = await applyAuthChoice({
@@ -114,14 +127,18 @@ export async function promptAuthConfig(
   }
 
   const anthropicOAuth =
-    authChoice === "setup-token" || authChoice === "token" || authChoice === "oauth";
+    authChoice === "setup-token" ||
+    authChoice === "token" ||
+    authChoice === "oauth";
 
   if (authChoice !== "custom-api-key") {
     const allowlistSelection = await promptModelAllowlist({
       config: next,
       prompter,
       allowedKeys: anthropicOAuth ? ANTHROPIC_OAUTH_MODEL_KEYS : undefined,
-      initialSelections: anthropicOAuth ? ["anthropic/claude-sonnet-4-6"] : undefined,
+      initialSelections: anthropicOAuth
+        ? ["anthropic/claude-sonnet-4-6"]
+        : undefined,
       message: anthropicOAuth ? "Anthropic OAuth models" : undefined,
     });
     if (allowlistSelection.models) {

@@ -19,7 +19,10 @@ export function parseSessionMeta(meta: unknown): AcpSessionMeta {
     sessionKey: readString(record, ["sessionKey", "session", "key"]),
     sessionLabel: readString(record, ["sessionLabel", "label"]),
     resetSession: readBool(record, ["resetSession", "reset"]),
-    requireExisting: readBool(record, ["requireExistingSession", "requireExisting"]),
+    requireExisting: readBool(record, [
+      "requireExistingSession",
+      "requireExisting",
+    ]),
     prefixCwd: readBool(record, ["prefixCwd"]),
   };
 }
@@ -30,17 +33,23 @@ export async function resolveSessionKey(params: {
   gateway: GatewayClient;
   opts: AcpServerOptions;
 }): Promise<string> {
-  const requestedLabel = params.meta.sessionLabel ?? params.opts.defaultSessionLabel;
+  const requestedLabel =
+    params.meta.sessionLabel ?? params.opts.defaultSessionLabel;
   const requestedKey = params.meta.sessionKey ?? params.opts.defaultSessionKey;
   const requireExisting =
     params.meta.requireExisting ?? params.opts.requireExistingSession ?? false;
 
   if (params.meta.sessionLabel) {
-    const resolved = await params.gateway.request<{ ok: true; key: string }>("sessions.resolve", {
-      label: params.meta.sessionLabel,
-    });
+    const resolved = await params.gateway.request<{ ok: true; key: string }>(
+      "sessions.resolve",
+      {
+        label: params.meta.sessionLabel,
+      },
+    );
     if (!resolved?.key) {
-      throw new Error(`Unable to resolve session label: ${params.meta.sessionLabel}`);
+      throw new Error(
+        `Unable to resolve session label: ${params.meta.sessionLabel}`,
+      );
     }
     return resolved.key;
   }
@@ -49,9 +58,12 @@ export async function resolveSessionKey(params: {
     if (!requireExisting) {
       return params.meta.sessionKey;
     }
-    const resolved = await params.gateway.request<{ ok: true; key: string }>("sessions.resolve", {
-      key: params.meta.sessionKey,
-    });
+    const resolved = await params.gateway.request<{ ok: true; key: string }>(
+      "sessions.resolve",
+      {
+        key: params.meta.sessionKey,
+      },
+    );
     if (!resolved?.key) {
       throw new Error(`Session key not found: ${params.meta.sessionKey}`);
     }
@@ -59,9 +71,12 @@ export async function resolveSessionKey(params: {
   }
 
   if (requestedLabel) {
-    const resolved = await params.gateway.request<{ ok: true; key: string }>("sessions.resolve", {
-      label: requestedLabel,
-    });
+    const resolved = await params.gateway.request<{ ok: true; key: string }>(
+      "sessions.resolve",
+      {
+        label: requestedLabel,
+      },
+    );
     if (!resolved?.key) {
       throw new Error(`Unable to resolve session label: ${requestedLabel}`);
     }
@@ -72,9 +87,12 @@ export async function resolveSessionKey(params: {
     if (!requireExisting) {
       return requestedKey;
     }
-    const resolved = await params.gateway.request<{ ok: true; key: string }>("sessions.resolve", {
-      key: requestedKey,
-    });
+    const resolved = await params.gateway.request<{ ok: true; key: string }>(
+      "sessions.resolve",
+      {
+        key: requestedKey,
+      },
+    );
     if (!resolved?.key) {
       throw new Error(`Session key not found: ${requestedKey}`);
     }
@@ -90,7 +108,8 @@ export async function resetSessionIfNeeded(params: {
   gateway: GatewayClient;
   opts: AcpServerOptions;
 }): Promise<void> {
-  const resetSession = params.meta.resetSession ?? params.opts.resetSession ?? false;
+  const resetSession =
+    params.meta.resetSession ?? params.opts.resetSession ?? false;
   if (!resetSession) {
     return;
   }

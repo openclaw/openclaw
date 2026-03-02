@@ -1,6 +1,9 @@
 import path from "node:path";
 
-export function sanitizeUntrustedFileName(fileName: string, fallbackName: string): string {
+export function sanitizeUntrustedFileName(
+  fileName: string,
+  fallbackName: string,
+): string {
   const trimmed = String(fileName ?? "").trim();
   if (!trimmed) {
     return fallbackName;

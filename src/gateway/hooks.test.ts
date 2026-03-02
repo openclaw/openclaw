@@ -2,7 +2,10 @@ import type { IncomingMessage } from "node:http";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { createMSTeamsTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
+import {
+  createMSTeamsTestPlugin,
+  createTestRegistry,
+} from "../test-utils/channel-plugins.js";
 import { createIMessageTestPlugin } from "../test-utils/imessage-test-plugin.js";
 import {
   extractHookToken,
@@ -104,7 +107,10 @@ describe("gateway hooks helpers", () => {
       expect(ok.value.deliver).toBe(true);
     }
 
-    const explicitNoDeliver = normalizeAgentPayload({ message: "hello", deliver: false });
+    const explicitNoDeliver = normalizeAgentPayload({
+      message: "hello",
+      deliver: false,
+    });
     expect(explicitNoDeliver.ok).toBe(true);
     if (explicitNoDeliver.ok) {
       expect(explicitNoDeliver.value.deliver).toBe(false);
@@ -309,7 +315,9 @@ describe("gateway hooks helpers", () => {
           allowedSessionKeyPrefixes: ["hook:"],
         },
       } as OpenClawConfig),
-    ).toThrow("hooks.defaultSessionKey must match hooks.allowedSessionKeyPrefixes");
+    ).toThrow(
+      "hooks.defaultSessionKey must match hooks.allowedSessionKeyPrefixes",
+    );
 
     expect(() =>
       resolveHooksConfig({

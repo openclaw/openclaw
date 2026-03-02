@@ -5,8 +5,10 @@ import { isWSL2Sync } from "../infra/wsl.js";
 
 export const TELEGRAM_DISABLE_AUTO_SELECT_FAMILY_ENV =
   "OPENCLAW_TELEGRAM_DISABLE_AUTO_SELECT_FAMILY";
-export const TELEGRAM_ENABLE_AUTO_SELECT_FAMILY_ENV = "OPENCLAW_TELEGRAM_ENABLE_AUTO_SELECT_FAMILY";
-export const TELEGRAM_DNS_RESULT_ORDER_ENV = "OPENCLAW_TELEGRAM_DNS_RESULT_ORDER";
+export const TELEGRAM_ENABLE_AUTO_SELECT_FAMILY_ENV =
+  "OPENCLAW_TELEGRAM_ENABLE_AUTO_SELECT_FAMILY";
+export const TELEGRAM_DNS_RESULT_ORDER_ENV =
+  "OPENCLAW_TELEGRAM_DNS_RESULT_ORDER";
 
 export type TelegramAutoSelectFamilyDecision = {
   value: boolean | null;
@@ -40,10 +42,16 @@ export function resolveTelegramAutoSelectFamilyDecision(params?: {
       : Number(process.versions.node.split(".")[0]);
 
   if (isTruthyEnvValue(env[TELEGRAM_ENABLE_AUTO_SELECT_FAMILY_ENV])) {
-    return { value: true, source: `env:${TELEGRAM_ENABLE_AUTO_SELECT_FAMILY_ENV}` };
+    return {
+      value: true,
+      source: `env:${TELEGRAM_ENABLE_AUTO_SELECT_FAMILY_ENV}`,
+    };
   }
   if (isTruthyEnvValue(env[TELEGRAM_DISABLE_AUTO_SELECT_FAMILY_ENV])) {
-    return { value: false, source: `env:${TELEGRAM_DISABLE_AUTO_SELECT_FAMILY_ENV}` };
+    return {
+      value: false,
+      source: `env:${TELEGRAM_DISABLE_AUTO_SELECT_FAMILY_ENV}`,
+    };
   }
   if (typeof params?.network?.autoSelectFamily === "boolean") {
     return { value: params.network.autoSelectFamily, source: "config" };
@@ -86,7 +94,9 @@ export function resolveTelegramDnsResultOrderDecision(params?: {
   }
 
   // Check config
-  const configValue = (params?.network as { dnsResultOrder?: string } | undefined)?.dnsResultOrder
+  const configValue = (
+    params?.network as { dnsResultOrder?: string } | undefined
+  )?.dnsResultOrder
     ?.trim()
     .toLowerCase();
   if (configValue === "ipv4first" || configValue === "verbatim") {

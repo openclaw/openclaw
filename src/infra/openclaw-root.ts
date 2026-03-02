@@ -25,7 +25,10 @@ function readPackageNameSync(dir: string): string | null {
   }
 }
 
-async function findPackageRoot(startDir: string, maxDepth = 12): Promise<string | null> {
+async function findPackageRoot(
+  startDir: string,
+  maxDepth = 12,
+): Promise<string | null> {
   for (const current of iterAncestorDirs(startDir, maxDepth)) {
     const name = await readPackageName(current);
     if (name && CORE_PACKAGE_NAMES.has(name)) {
@@ -45,7 +48,10 @@ function findPackageRootSync(startDir: string, maxDepth = 12): string | null {
   return null;
 }
 
-function* iterAncestorDirs(startDir: string, maxDepth: number): Generator<string> {
+function* iterAncestorDirs(
+  startDir: string,
+  maxDepth: number,
+): Generator<string> {
   let current = path.resolve(startDir);
   for (let i = 0; i < maxDepth; i += 1) {
     yield current;
@@ -112,7 +118,11 @@ export function resolveOpenClawPackageRootSync(opts: {
   return null;
 }
 
-function buildCandidates(opts: { cwd?: string; argv1?: string; moduleUrl?: string }): string[] {
+function buildCandidates(opts: {
+  cwd?: string;
+  argv1?: string;
+  moduleUrl?: string;
+}): string[] {
   const candidates: string[] = [];
 
   if (opts.moduleUrl) {

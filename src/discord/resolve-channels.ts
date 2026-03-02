@@ -100,7 +100,11 @@ async function fetchChannel(
   fetcher: typeof fetch,
   channelId: string,
 ): Promise<DiscordChannelSummary | null> {
-  const raw = await fetchDiscord<DiscordChannelPayload>(`/channels/${channelId}`, token, fetcher);
+  const raw = await fetchDiscord<DiscordChannelPayload>(
+    `/channels/${channelId}`,
+    token,
+    fetcher,
+  );
   if (!raw || typeof raw.guild_id !== "string" || typeof raw.id !== "string") {
     return null;
   }
@@ -112,7 +116,9 @@ async function fetchChannel(
   };
 }
 
-function preferActiveMatch(candidates: DiscordChannelSummary[]): DiscordChannelSummary | undefined {
+function preferActiveMatch(
+  candidates: DiscordChannelSummary[],
+): DiscordChannelSummary | undefined {
   if (candidates.length === 0) {
     return undefined;
   }
@@ -195,8 +201,12 @@ export async function resolveDiscordChannelAllowlist(params: {
       const channel = await fetchChannel(token, fetcher, parsed.channelId);
       if (channel?.guildId) {
         if (parsed.guildId && parsed.guildId !== channel.guildId) {
-          const expectedGuild = guilds.find((entry) => entry.id === parsed.guildId);
-          const actualGuild = guilds.find((entry) => entry.id === channel.guildId);
+          const expectedGuild = guilds.find(
+            (entry) => entry.id === parsed.guildId,
+          );
+          const actualGuild = guilds.find(
+            (entry) => entry.id === channel.guildId,
+          );
           results.push({
             input,
             resolved: false,
@@ -250,7 +260,9 @@ export async function resolveDiscordChannelAllowlist(params: {
       }
       const channels = await getChannels(guild.id);
       const matches = channels.filter(
-        (channel) => normalizeDiscordSlug(channel.name) === normalizeDiscordSlug(channelQuery),
+        (channel) =>
+          normalizeDiscordSlug(channel.name) ===
+          normalizeDiscordSlug(channelQuery),
       );
       const match = preferActiveMatch(matches);
       if (match) {
@@ -289,7 +301,10 @@ export async function resolveDiscordChannelAllowlist(params: {
     for (const guild of guilds) {
       const channels = await getChannels(guild.id);
       for (const channel of channels) {
-        if (normalizeDiscordSlug(channel.name) === normalizeDiscordSlug(channelName)) {
+        if (
+          normalizeDiscordSlug(channel.name) ===
+          normalizeDiscordSlug(channelName)
+        ) {
           candidates.push(channel);
         }
       }

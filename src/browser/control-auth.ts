@@ -18,7 +18,8 @@ export function resolveBrowserControlAuth(
     tailscaleMode: cfg?.gateway?.tailscale?.mode,
   });
   const token = typeof auth.token === "string" ? auth.token.trim() : "";
-  const password = typeof auth.password === "string" ? auth.password.trim() : "";
+  const password =
+    typeof auth.password === "string" ? auth.password.trim() : "";
   return {
     token: token || undefined,
     password: password || undefined,

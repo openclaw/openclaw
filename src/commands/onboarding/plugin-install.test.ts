@@ -9,7 +9,8 @@ vi.mock("node:fs", () => ({
 
 const installPluginFromNpmSpec = vi.fn();
 vi.mock("../../plugins/install.js", () => ({
-  installPluginFromNpmSpec: (...args: unknown[]) => installPluginFromNpmSpec(...args),
+  installPluginFromNpmSpec: (...args: unknown[]) =>
+    installPluginFromNpmSpec(...args),
 }));
 
 vi.mock("../../plugins/loader.js", () => ({
@@ -46,14 +47,21 @@ beforeEach(() => {
 function mockRepoLocalPathExists() {
   vi.mocked(fs.existsSync).mockImplementation((value) => {
     const raw = String(value);
-    return raw.endsWith(`${path.sep}.git`) || raw.endsWith(`${path.sep}extensions${path.sep}zalo`);
+    return (
+      raw.endsWith(`${path.sep}.git`) ||
+      raw.endsWith(`${path.sep}extensions${path.sep}zalo`)
+    );
   });
 }
 
 async function runInitialValueForChannel(channel: "dev" | "beta") {
   const runtime = makeRuntime();
-  const select = vi.fn((async <T extends string>() => "skip" as T) as WizardPrompter["select"]);
-  const prompter = makePrompter({ select: select as unknown as WizardPrompter["select"] });
+  const select = vi.fn(
+    (async <T extends string>() => "skip" as T) as WizardPrompter["select"],
+  );
+  const prompter = makePrompter({
+    select: select as unknown as WizardPrompter["select"],
+  });
   const cfg: OpenClawConfig = { update: { channel } };
   mockRepoLocalPathExists();
 

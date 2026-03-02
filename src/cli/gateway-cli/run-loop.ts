@@ -52,7 +52,9 @@ export async function runGatewayLoop(params: {
       lock = await acquireGatewayLock({ port: params.lockPort });
       return true;
     } catch (err) {
-      gatewayLog.error(`failed to reacquire gateway lock for in-process restart: ${String(err)}`);
+      gatewayLog.error(
+        `failed to reacquire gateway lock for in-process restart: ${String(err)}`,
+      );
       exitProcess(1);
       return false;
     }
@@ -98,10 +100,14 @@ export async function runGatewayLoop(params: {
     }
     shuttingDown = true;
     const isRestart = action === "restart";
-    gatewayLog.info(`received ${signal}; ${isRestart ? "restarting" : "shutting down"}`);
+    gatewayLog.info(
+      `received ${signal}; ${isRestart ? "restarting" : "shutting down"}`,
+    );
 
     // Allow extra time for draining active turns on restart.
-    const forceExitMs = isRestart ? DRAIN_TIMEOUT_MS + SHUTDOWN_TIMEOUT_MS : SHUTDOWN_TIMEOUT_MS;
+    const forceExitMs = isRestart
+      ? DRAIN_TIMEOUT_MS + SHUTDOWN_TIMEOUT_MS
+      : SHUTDOWN_TIMEOUT_MS;
     const forceExitTimer = setTimeout(() => {
       gatewayLog.error("shutdown timed out; exiting without full cleanup");
       exitProcess(0);

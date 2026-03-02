@@ -7,7 +7,9 @@ import { extractMessagingToolSend } from "./pi-embedded-subscribe.tools.js";
 describe("extractMessagingToolSend", () => {
   beforeEach(() => {
     setActivePluginRegistry(
-      createTestRegistry([{ pluginId: "telegram", plugin: telegramPlugin, source: "test" }]),
+      createTestRegistry([
+        { pluginId: "telegram", plugin: telegramPlugin, source: "test" },
+      ]),
     );
   });
 

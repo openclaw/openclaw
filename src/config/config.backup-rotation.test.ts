@@ -10,7 +10,9 @@ describe("config backup rotation", () => {
     await withTempHome(async () => {
       const stateDir = process.env.OPENCLAW_STATE_DIR?.trim();
       if (!stateDir) {
-        throw new Error("Expected OPENCLAW_STATE_DIR to be set by withTempHome");
+        throw new Error(
+          "Expected OPENCLAW_STATE_DIR to be set by withTempHome",
+        );
       }
       const configPath = path.join(stateDir, "openclaw.json");
       const buildConfig = (version: number): OpenClawConfig =>
@@ -19,7 +21,9 @@ describe("config backup rotation", () => {
         }) as OpenClawConfig;
 
       const writeVersion = async (version: number) => {
-        const json = JSON.stringify(buildConfig(version), null, 2).trimEnd().concat("\n");
+        const json = JSON.stringify(buildConfig(version), null, 2)
+          .trimEnd()
+          .concat("\n");
         await fs.writeFile(configPath, json, "utf-8");
       };
 
@@ -35,8 +39,8 @@ describe("config backup rotation", () => {
       const readName = async (suffix = "") => {
         const raw = await fs.readFile(`${configPath}${suffix}`, "utf-8");
         return (
-          (JSON.parse(raw) as { agents?: { list?: Array<{ id?: string }> } }).agents?.list?.[0]
-            ?.id ?? null
+          (JSON.parse(raw) as { agents?: { list?: Array<{ id?: string }> } })
+            .agents?.list?.[0]?.id ?? null
         );
       };
 

@@ -5,7 +5,10 @@ import { registerBrowserAgentSnapshotRoutes } from "./agent.snapshot.js";
 import { registerBrowserAgentStorageRoutes } from "./agent.storage.js";
 import type { BrowserRouteRegistrar } from "./types.js";
 
-export function registerBrowserAgentRoutes(app: BrowserRouteRegistrar, ctx: BrowserRouteContext) {
+export function registerBrowserAgentRoutes(
+  app: BrowserRouteRegistrar,
+  ctx: BrowserRouteContext,
+) {
   registerBrowserAgentSnapshotRoutes(app, ctx);
   registerBrowserAgentActRoutes(app, ctx);
   registerBrowserAgentDebugRoutes(app, ctx);

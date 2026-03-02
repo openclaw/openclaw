@@ -60,7 +60,10 @@ function addNonEmptyDir(dirs: string[], dir: string | undefined): void {
   }
 }
 
-function appendSubdir(base: string | undefined, subdir: string): string | undefined {
+function appendSubdir(
+  base: string | undefined,
+  subdir: string,
+): string | undefined {
   if (!base) {
     return undefined;
   }
@@ -171,7 +174,9 @@ export function resolveLinuxUserBinDirs(
   return dirs;
 }
 
-export function getMinimalServicePathParts(options: MinimalServicePathOptions = {}): string[] {
+export function getMinimalServicePathParts(
+  options: MinimalServicePathOptions = {},
+): string[] {
   const platform = options.platform ?? process.platform;
   if (platform === "win32") {
     return [];
@@ -212,7 +217,9 @@ export function getMinimalServicePathParts(options: MinimalServicePathOptions = 
   return parts;
 }
 
-export function getMinimalServicePathPartsFromEnv(options: BuildServicePathOptions = {}): string[] {
+export function getMinimalServicePathPartsFromEnv(
+  options: BuildServicePathOptions = {},
+): string[] {
   const env = options.env ?? process.env;
   return getMinimalServicePathParts({
     ...options,
@@ -221,14 +228,18 @@ export function getMinimalServicePathPartsFromEnv(options: BuildServicePathOptio
   });
 }
 
-export function buildMinimalServicePath(options: BuildServicePathOptions = {}): string {
+export function buildMinimalServicePath(
+  options: BuildServicePathOptions = {},
+): string {
   const env = options.env ?? process.env;
   const platform = options.platform ?? process.platform;
   if (platform === "win32") {
     return env.PATH ?? "";
   }
 
-  return getMinimalServicePathPartsFromEnv({ ...options, env }).join(path.posix.delimiter);
+  return getMinimalServicePathPartsFromEnv({ ...options, env }).join(
+    path.posix.delimiter,
+  );
 }
 
 export function buildServiceEnvironment(params: {
@@ -243,7 +254,10 @@ export function buildServiceEnvironment(params: {
   const sharedEnv = resolveSharedServiceEnvironmentFields(env, platform);
   const profile = env.OPENCLAW_PROFILE;
   const resolvedLaunchdLabel =
-    launchdLabel || (platform === "darwin" ? resolveGatewayLaunchAgentLabel(profile) : undefined);
+    launchdLabel ||
+    (platform === "darwin"
+      ? resolveGatewayLaunchAgentLabel(profile)
+      : undefined);
   const systemdUnit = `${resolveGatewaySystemdServiceName(profile)}.service`;
   return {
     HOME: env.HOME,
@@ -272,7 +286,9 @@ export function buildNodeServiceEnvironment(params: {
   const platform = params.platform ?? process.platform;
   const sharedEnv = resolveSharedServiceEnvironmentFields(env, platform);
   const gatewayToken =
-    env.OPENCLAW_GATEWAY_TOKEN?.trim() || env.CLAWDBOT_GATEWAY_TOKEN?.trim() || undefined;
+    env.OPENCLAW_GATEWAY_TOKEN?.trim() ||
+    env.CLAWDBOT_GATEWAY_TOKEN?.trim() ||
+    undefined;
   return {
     HOME: env.HOME,
     TMPDIR: sharedEnv.tmpDir,
@@ -313,7 +329,8 @@ function resolveSharedServiceEnvironmentFields(
   // cannot locate the system CA bundle. Default to /etc/ssl/cert.pem so TLS verification
   // works correctly when running as a LaunchAgent without extra user configuration.
   const nodeCaCerts =
-    env.NODE_EXTRA_CA_CERTS ?? (platform === "darwin" ? "/etc/ssl/cert.pem" : undefined);
+    env.NODE_EXTRA_CA_CERTS ??
+    (platform === "darwin" ? "/etc/ssl/cert.pem" : undefined);
   return {
     stateDir,
     configPath,

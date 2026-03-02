@@ -8,7 +8,8 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../channels/plugins/index.js", () => ({
-  normalizeChannelId: (channel?: string) => channel?.trim().toLowerCase() ?? undefined,
+  normalizeChannelId: (channel?: string) =>
+    channel?.trim().toLowerCase() ?? undefined,
   getChannelPlugin: mocks.getChannelPlugin,
 }));
 
@@ -18,7 +19,10 @@ vi.mock("../../agents/agent-scope.js", () => ({
 }));
 
 vi.mock("../../config/plugin-auto-enable.js", () => ({
-  applyPluginAutoEnable: ({ config }: { config: unknown }) => ({ config, changes: [] }),
+  applyPluginAutoEnable: ({ config }: { config: unknown }) => ({
+    config,
+    changes: [],
+  }),
 }));
 
 vi.mock("../../plugins/loader.js", () => ({
@@ -48,8 +52,12 @@ describe("sendMessage", () => {
     mocks.getChannelPlugin.mockReturnValue({
       outbound: { deliveryMode: "direct" },
     });
-    mocks.resolveOutboundTarget.mockImplementation(({ to }: { to: string }) => ({ ok: true, to }));
-    mocks.deliverOutboundPayloads.mockResolvedValue([{ channel: "mattermost", messageId: "m1" }]);
+    mocks.resolveOutboundTarget.mockImplementation(
+      ({ to }: { to: string }) => ({ ok: true, to }),
+    );
+    mocks.deliverOutboundPayloads.mockResolvedValue([
+      { channel: "mattermost", messageId: "m1" },
+    ]);
   });
 
   it("passes explicit agentId to outbound delivery for scoped media roots", async () => {

@@ -45,7 +45,9 @@ describe("listThinkingLevels", () => {
   it("includes xhigh for codex models", () => {
     expect(listThinkingLevels(undefined, "gpt-5.2-codex")).toContain("xhigh");
     expect(listThinkingLevels(undefined, "gpt-5.3-codex")).toContain("xhigh");
-    expect(listThinkingLevels(undefined, "gpt-5.3-codex-spark")).toContain("xhigh");
+    expect(listThinkingLevels(undefined, "gpt-5.3-codex-spark")).toContain(
+      "xhigh",
+    );
   });
 
   it("includes xhigh for openai gpt-5.2", () => {
@@ -54,16 +56,22 @@ describe("listThinkingLevels", () => {
 
   it("includes xhigh for github-copilot gpt-5.2 refs", () => {
     expect(listThinkingLevels("github-copilot", "gpt-5.2")).toContain("xhigh");
-    expect(listThinkingLevels("github-copilot", "gpt-5.2-codex")).toContain("xhigh");
+    expect(listThinkingLevels("github-copilot", "gpt-5.2-codex")).toContain(
+      "xhigh",
+    );
   });
 
   it("excludes xhigh for non-codex models", () => {
-    expect(listThinkingLevels(undefined, "gpt-4.1-mini")).not.toContain("xhigh");
+    expect(listThinkingLevels(undefined, "gpt-4.1-mini")).not.toContain(
+      "xhigh",
+    );
   });
 
   it("always includes adaptive", () => {
     expect(listThinkingLevels(undefined, "gpt-4.1-mini")).toContain("adaptive");
-    expect(listThinkingLevels("anthropic", "claude-opus-4-6")).toContain("adaptive");
+    expect(listThinkingLevels("anthropic", "claude-opus-4-6")).toContain(
+      "adaptive",
+    );
   });
 });
 
@@ -74,7 +82,9 @@ describe("listThinkingLevelLabels", () => {
 
   it("returns full levels for non-ZAI", () => {
     expect(listThinkingLevelLabels("openai", "gpt-4.1-mini")).toContain("low");
-    expect(listThinkingLevelLabels("openai", "gpt-4.1-mini")).not.toContain("on");
+    expect(listThinkingLevelLabels("openai", "gpt-4.1-mini")).not.toContain(
+      "on",
+    );
   });
 });
 

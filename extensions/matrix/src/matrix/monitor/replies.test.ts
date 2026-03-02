@@ -2,7 +2,9 @@ import type { MatrixClient } from "@vector-im/matrix-bot-sdk";
 import type { PluginRuntime, RuntimeEnv } from "openclaw/plugin-sdk";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const sendMessageMatrixMock = vi.hoisted(() => vi.fn().mockResolvedValue({ messageId: "mx-1" }));
+const sendMessageMatrixMock = vi.hoisted(() =>
+  vi.fn().mockResolvedValue({ messageId: "mx-1" }),
+);
 
 vi.mock("../send.js", () => ({
   sendMessageMatrix: (to: string, message: string, opts?: unknown) =>
@@ -26,9 +28,11 @@ describe("deliverMatrixReplies", () => {
     channel: {
       text: {
         resolveMarkdownTableMode: () => resolveMarkdownTableModeMock(),
-        convertMarkdownTables: (text: string) => convertMarkdownTablesMock(text),
+        convertMarkdownTables: (text: string) =>
+          convertMarkdownTablesMock(text),
         resolveChunkMode: () => resolveChunkModeMock(),
-        chunkMarkdownTextWithMode: (text: string) => chunkMarkdownTextWithModeMock(text),
+        chunkMarkdownTextWithMode: (text: string) =>
+          chunkMarkdownTextWithModeMock(text),
       },
     },
     logging: {
@@ -48,7 +52,9 @@ describe("deliverMatrixReplies", () => {
   });
 
   it("keeps replyToId on first reply only when replyToMode=first", async () => {
-    chunkMarkdownTextWithModeMock.mockImplementation((text: string) => text.split("|"));
+    chunkMarkdownTextWithModeMock.mockImplementation((text: string) =>
+      text.split("|"),
+    );
 
     await deliverMatrixReplies({
       replies: [
@@ -96,12 +102,18 @@ describe("deliverMatrixReplies", () => {
     expect(sendMessageMatrixMock.mock.calls[0]).toEqual([
       "room:2",
       "caption",
-      expect.objectContaining({ mediaUrl: "https://example.com/a.jpg", replyToId: "reply-media" }),
+      expect.objectContaining({
+        mediaUrl: "https://example.com/a.jpg",
+        replyToId: "reply-media",
+      }),
     ]);
     expect(sendMessageMatrixMock.mock.calls[1]).toEqual([
       "room:2",
       "",
-      expect.objectContaining({ mediaUrl: "https://example.com/b.jpg", replyToId: "reply-media" }),
+      expect.objectContaining({
+        mediaUrl: "https://example.com/b.jpg",
+        replyToId: "reply-media",
+      }),
     ]);
     expect(sendMessageMatrixMock.mock.calls[2]?.[2]).toEqual(
       expect.objectContaining({ replyToId: "reply-text" }),
@@ -122,13 +134,18 @@ describe("deliverMatrixReplies", () => {
     });
 
     expect(sendMessageMatrixMock).toHaveBeenCalledTimes(1);
-    expect(sendMessageMatrixMock.mock.calls[0]?.[1]).toBe("Here is the answer.");
+    expect(sendMessageMatrixMock.mock.calls[0]?.[1]).toBe(
+      "Here is the answer.",
+    );
   });
 
   it("skips reasoning-only replies with thinking tags", async () => {
     await deliverMatrixReplies({
       replies: [
-        { text: "<thinking>internal chain of thought</thinking>", replyToId: "r1" },
+        {
+          text: "<thinking>internal chain of thought</thinking>",
+          replyToId: "r1",
+        },
         { text: "  <think>more reasoning</think>  ", replyToId: "r2" },
         { text: "<antthinking>hidden</antthinking>", replyToId: "r3" },
         { text: "Visible reply", replyToId: "r4" },
@@ -161,7 +178,9 @@ describe("deliverMatrixReplies", () => {
   });
 
   it("suppresses replyToId when threadId is set", async () => {
-    chunkMarkdownTextWithModeMock.mockImplementation((text: string) => text.split("|"));
+    chunkMarkdownTextWithModeMock.mockImplementation((text: string) =>
+      text.split("|"),
+    );
 
     await deliverMatrixReplies({
       replies: [{ text: "hello|thread", replyToId: "reply-thread" }],

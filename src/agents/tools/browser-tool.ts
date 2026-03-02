@@ -17,8 +17,14 @@ import {
   browserStop,
 } from "../../browser/client.js";
 import { resolveBrowserConfig } from "../../browser/config.js";
-import { DEFAULT_UPLOAD_DIR, resolveExistingPathsWithinRoot } from "../../browser/paths.js";
-import { applyBrowserProxyPaths, persistBrowserProxyFiles } from "../../browser/proxy-files.js";
+import {
+  DEFAULT_UPLOAD_DIR,
+  resolveExistingPathsWithinRoot,
+} from "../../browser/paths.js";
+import {
+  applyBrowserProxyPaths,
+  persistBrowserProxyFiles,
+} from "../../browser/proxy-files.js";
 import { loadConfig } from "../../config/config.js";
 import {
   executeActAction,
@@ -27,7 +33,12 @@ import {
   executeTabsAction,
 } from "./browser-tool.actions.js";
 import { BrowserToolSchema } from "./browser-tool.schema.js";
-import { type AnyAgentTool, imageResultFromFile, jsonResult, readStringParam } from "./common.js";
+import {
+  type AnyAgentTool,
+  imageResultFromFile,
+  jsonResult,
+  readStringParam,
+} from "./common.js";
 import { callGatewayTool } from "./gateway.js";
 import {
   listNodes,
@@ -37,7 +48,8 @@ import {
 } from "./nodes-utils.js";
 
 function readOptionalTargetAndTimeout(params: Record<string, unknown>) {
-  const targetId = typeof params.targetId === "string" ? params.targetId.trim() : undefined;
+  const targetId =
+    typeof params.targetId === "string" ? params.targetId.trim() : undefined;
   const timeoutMs =
     typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
       ? params.timeoutMs
@@ -133,11 +145,17 @@ async function resolveBrowserNodeTarget(params: {
   const mode = policy?.mode ?? "auto";
   if (mode === "off") {
     if (params.target === "node" || params.requestedNode) {
-      throw new Error("Node browser proxy is disabled (gateway.nodes.browser.mode=off).");
+      throw new Error(
+        "Node browser proxy is disabled (gateway.nodes.browser.mode=off).",
+      );
     }
     return null;
   }
-  if (params.sandboxBridgeUrl?.trim() && params.target !== "node" && !params.requestedNode) {
+  if (
+    params.sandboxBridgeUrl?.trim() &&
+    params.target !== "node" &&
+    !params.requestedNode
+  ) {
     return null;
   }
   if (params.target && params.target !== "node") {
@@ -148,7 +166,9 @@ async function resolveBrowserNodeTarget(params: {
   }
 
   const nodes = await listNodes({});
-  const browserNodes = nodes.filter((node) => node.connected && isBrowserNode(node));
+  const browserNodes = nodes.filter(
+    (node) => node.connected && isBrowserNode(node),
+  );
   if (browserNodes.length === 0) {
     if (params.target === "node" || params.requestedNode) {
       throw new Error("No connected browser-capable nodes.");
@@ -206,7 +226,10 @@ async function callBrowserProxy(params: {
     typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
       ? Math.max(1, Math.floor(params.timeoutMs))
       : DEFAULT_BROWSER_PROXY_TIMEOUT_MS;
-  const payload = await callGatewayTool<{ payloadJSON?: string; payload?: string }>(
+  const payload = await callGatewayTool<{
+    payloadJSON?: string;
+    payload?: string;
+  }>(
     "node.invoke",
     { timeoutMs: gatewayTimeoutMs },
     {
@@ -278,7 +301,9 @@ export function createBrowserTool(opts?: {
 }): AnyAgentTool {
   const targetDefault = opts?.sandboxBridgeUrl ? "sandbox" : "host";
   const hostHint =
-    opts?.allowHostControl === false ? "Host target blocked by policy." : "Host target allowed.";
+    opts?.allowHostControl === false
+      ? "Host target blocked by policy."
+      : "Host target allowed.";
   return {
     label: "Browser",
     name: "browser",
@@ -300,7 +325,11 @@ export function createBrowserTool(opts?: {
       const action = readStringParam(params, "action", { required: true });
       const profile = readStringParam(params, "profile");
       const requestedNode = readStringParam(params, "node");
-      let target = readStringParam(params, "target") as "sandbox" | "host" | "node" | undefined;
+      let target = readStringParam(params, "target") as
+        | "sandbox"
+        | "host"
+        | "node"
+        | undefined;
 
       if (requestedNode && target && target !== "node") {
         throw new Error('node is only supported with target="node".');
@@ -418,7 +447,9 @@ export function createBrowserTool(opts?: {
             });
             return jsonResult(result);
           }
-          return jsonResult(await browserOpenTab(baseUrl, targetUrl, { profile }));
+          return jsonResult(
+            await browserOpenTab(baseUrl, targetUrl, { profile }),
+          );
         }
         case "focus": {
           const targetId = readStringParam(params, "targetId", {
@@ -531,7 +562,10 @@ export function createBrowserTool(opts?: {
             proxyRequest,
           });
         case "pdf": {
-          const targetId = typeof params.targetId === "string" ? params.targetId.trim() : undefined;
+          const targetId =
+            typeof params.targetId === "string"
+              ? params.targetId.trim()
+              : undefined;
           const result = proxyRequest
             ? ((await proxyRequest({
                 method: "POST",
@@ -546,7 +580,9 @@ export function createBrowserTool(opts?: {
           };
         }
         case "upload": {
-          const paths = Array.isArray(params.paths) ? params.paths.map((p) => String(p)) : [];
+          const paths = Array.isArray(params.paths)
+            ? params.paths.map((p) => String(p))
+            : [];
           if (paths.length === 0) {
             throw new Error("paths required");
           }
@@ -593,7 +629,10 @@ export function createBrowserTool(opts?: {
         }
         case "dialog": {
           const accept = Boolean(params.accept);
-          const promptText = typeof params.promptText === "string" ? params.promptText : undefined;
+          const promptText =
+            typeof params.promptText === "string"
+              ? params.promptText
+              : undefined;
           const { targetId, timeoutMs } = readOptionalTargetAndTimeout(params);
           if (proxyRequest) {
             const result = await proxyRequest({

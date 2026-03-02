@@ -3,7 +3,10 @@ import { danger } from "../globals.js";
 import { defaultRuntime } from "../runtime.js";
 import { parseBooleanValue } from "../utils/boolean.js";
 import { runBrowserResizeWithOutput } from "./browser-cli-resize.js";
-import { callBrowserRequest, type BrowserParentOpts } from "./browser-cli-shared.js";
+import {
+  callBrowserRequest,
+  type BrowserParentOpts,
+} from "./browser-cli-shared.js";
 import { registerBrowserCookiesAndStorageCommands } from "./browser-cli-state.cookies-storage.js";
 import { runCommandWithRuntime } from "./cli-utils.js";
 
@@ -51,7 +54,9 @@ export function registerBrowserStateCommands(
 ) {
   registerBrowserCookiesAndStorageCommands(browser, parentOpts);
 
-  const set = browser.command("set").description("Browser environment settings");
+  const set = browser
+    .command("set")
+    .description("Browser environment settings");
 
   set
     .command("viewport")
@@ -102,7 +107,10 @@ export function registerBrowserStateCommands(
   set
     .command("headers")
     .description("Set extra HTTP headers (JSON object)")
-    .argument("[headersJson]", "JSON object of headers (alternative to --headers-json)")
+    .argument(
+      "[headersJson]",
+      "JSON object of headers (alternative to --headers-json)",
+    )
     .option("--headers-json <json>", "JSON object of headers")
     .option("--target-id <id>", "CDP target id (or unique prefix)")
     .action(async (headersJson: string | undefined, opts, cmd) => {
@@ -112,14 +120,18 @@ export function registerBrowserStateCommands(
           (typeof opts.headersJson === "string" && opts.headersJson.trim()) ||
           (headersJson?.trim() ? headersJson.trim() : undefined);
         if (!headersJsonValue) {
-          throw new Error("Missing headers JSON (pass --headers-json or positional JSON argument)");
+          throw new Error(
+            "Missing headers JSON (pass --headers-json or positional JSON argument)",
+          );
         }
         const parsed = JSON.parse(String(headersJsonValue)) as unknown;
         if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
           throw new Error("Headers JSON must be a JSON object");
         }
         const headers: Record<string, string> = {};
-        for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+        for (const [k, v] of Object.entries(
+          parsed as Record<string, unknown>,
+        )) {
           if (typeof v === "string") {
             headers[k] = v;
           }
@@ -153,20 +165,29 @@ export function registerBrowserStateCommands(
     .argument("[username]", "Username")
     .argument("[password]", "Password")
     .option("--target-id <id>", "CDP target id (or unique prefix)")
-    .action(async (username: string | undefined, password: string | undefined, opts, cmd) => {
-      const parent = parentOpts(cmd);
-      await runBrowserSetRequest({
-        parent,
-        path: "/set/credentials",
-        body: {
-          username: username?.trim() || undefined,
-          password,
-          clear: Boolean(opts.clear),
-          targetId: opts.targetId?.trim() || undefined,
-        },
-        successMessage: opts.clear ? "credentials cleared" : "credentials set",
-      });
-    });
+    .action(
+      async (
+        username: string | undefined,
+        password: string | undefined,
+        opts,
+        cmd,
+      ) => {
+        const parent = parentOpts(cmd);
+        await runBrowserSetRequest({
+          parent,
+          path: "/set/credentials",
+          body: {
+            username: username?.trim() || undefined,
+            password,
+            clear: Boolean(opts.clear),
+            targetId: opts.targetId?.trim() || undefined,
+          },
+          successMessage: opts.clear
+            ? "credentials cleared"
+            : "credentials set",
+        });
+      },
+    );
 
   set
     .command("geo")
@@ -177,22 +198,33 @@ export function registerBrowserStateCommands(
     .option("--accuracy <m>", "Accuracy in meters", (v: string) => Number(v))
     .option("--origin <origin>", "Origin to grant permissions for")
     .option("--target-id <id>", "CDP target id (or unique prefix)")
-    .action(async (latitude: number | undefined, longitude: number | undefined, opts, cmd) => {
-      const parent = parentOpts(cmd);
-      await runBrowserSetRequest({
-        parent,
-        path: "/set/geolocation",
-        body: {
-          latitude: Number.isFinite(latitude) ? latitude : undefined,
-          longitude: Number.isFinite(longitude) ? longitude : undefined,
-          accuracy: Number.isFinite(opts.accuracy) ? opts.accuracy : undefined,
-          origin: opts.origin?.trim() || undefined,
-          clear: Boolean(opts.clear),
-          targetId: opts.targetId?.trim() || undefined,
-        },
-        successMessage: opts.clear ? "geolocation cleared" : "geolocation set",
-      });
-    });
+    .action(
+      async (
+        latitude: number | undefined,
+        longitude: number | undefined,
+        opts,
+        cmd,
+      ) => {
+        const parent = parentOpts(cmd);
+        await runBrowserSetRequest({
+          parent,
+          path: "/set/geolocation",
+          body: {
+            latitude: Number.isFinite(latitude) ? latitude : undefined,
+            longitude: Number.isFinite(longitude) ? longitude : undefined,
+            accuracy: Number.isFinite(opts.accuracy)
+              ? opts.accuracy
+              : undefined,
+            origin: opts.origin?.trim() || undefined,
+            clear: Boolean(opts.clear),
+            targetId: opts.targetId?.trim() || undefined,
+          },
+          successMessage: opts.clear
+            ? "geolocation cleared"
+            : "geolocation set",
+        });
+      },
+    );
 
   set
     .command("media")
@@ -203,7 +235,13 @@ export function registerBrowserStateCommands(
       const parent = parentOpts(cmd);
       const v = value.trim().toLowerCase();
       const colorScheme =
-        v === "dark" ? "dark" : v === "light" ? "light" : v === "none" ? "none" : null;
+        v === "dark"
+          ? "dark"
+          : v === "light"
+            ? "light"
+            : v === "none"
+              ? "none"
+              : null;
       if (!colorScheme) {
         defaultRuntime.error(danger("Expected dark|light|none"));
         defaultRuntime.exit(1);

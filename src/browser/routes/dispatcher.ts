@@ -1,7 +1,11 @@
 import { escapeRegExp } from "../../utils.js";
 import type { BrowserRouteContext } from "../server-context.js";
 import { registerBrowserRoutes } from "./index.js";
-import type { BrowserRequest, BrowserResponse, BrowserRouteRegistrar } from "./types.js";
+import type {
+  BrowserRequest,
+  BrowserResponse,
+  BrowserRouteRegistrar,
+} from "./types.js";
 
 type BrowserDispatchRequest = {
   method: "GET" | "POST" | "DELETE";
@@ -40,7 +44,8 @@ function compileRoute(path: string): { regex: RegExp; paramNames: string[] } {
 function createRegistry() {
   const routes: RouteEntry[] = [];
   const register =
-    (method: RouteEntry["method"]) => (path: string, handler: RouteEntry["handler"]) => {
+    (method: RouteEntry["method"]) =>
+    (path: string, handler: RouteEntry["handler"]) => {
       const { regex, paramNames } = compileRoute(path);
       routes.push({ method, path, regex, paramNames, handler });
     };
@@ -64,7 +69,9 @@ export function createBrowserRouteDispatcher(ctx: BrowserRouteContext) {
   registerBrowserRoutes(registry.router, ctx);
 
   return {
-    dispatch: async (req: BrowserDispatchRequest): Promise<BrowserDispatchResponse> => {
+    dispatch: async (
+      req: BrowserDispatchRequest,
+    ): Promise<BrowserDispatchResponse> => {
       const method = req.method;
       const path = normalizePath(req.path);
       const query = req.query ?? {};

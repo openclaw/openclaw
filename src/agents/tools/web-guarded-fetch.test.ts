@@ -1,6 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fetchWithSsrFGuard, GUARDED_FETCH_MODE } from "../../infra/net/fetch-guard.js";
-import { withStrictWebToolsEndpoint, withTrustedWebToolsEndpoint } from "./web-guarded-fetch.js";
+import {
+  fetchWithSsrFGuard,
+  GUARDED_FETCH_MODE,
+} from "../../infra/net/fetch-guard.js";
+import {
+  withStrictWebToolsEndpoint,
+  withTrustedWebToolsEndpoint,
+} from "./web-guarded-fetch.js";
 
 vi.mock("../../infra/net/fetch-guard.js", () => {
   const GUARDED_FETCH_MODE = {
@@ -33,7 +39,10 @@ describe("web-guarded-fetch", () => {
       release: async () => {},
     });
 
-    await withTrustedWebToolsEndpoint({ url: "https://example.com" }, async () => undefined);
+    await withTrustedWebToolsEndpoint(
+      { url: "https://example.com" },
+      async () => undefined,
+    );
 
     expect(fetchWithSsrFGuard).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -54,7 +63,10 @@ describe("web-guarded-fetch", () => {
       release: async () => {},
     });
 
-    await withStrictWebToolsEndpoint({ url: "https://example.com" }, async () => undefined);
+    await withStrictWebToolsEndpoint(
+      { url: "https://example.com" },
+      async () => undefined,
+    );
 
     expect(fetchWithSsrFGuard).toHaveBeenCalledWith(
       expect.objectContaining({

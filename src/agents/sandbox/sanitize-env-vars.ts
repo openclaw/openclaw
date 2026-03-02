@@ -55,7 +55,10 @@ export function validateEnvVarValue(value: string): string | undefined {
   return undefined;
 }
 
-function matchesAnyPattern(value: string, patterns: readonly RegExp[]): boolean {
+function matchesAnyPattern(
+  value: string,
+  patterns: readonly RegExp[],
+): boolean {
   return patterns.some((pattern) => pattern.test(value));
 }
 
@@ -67,8 +70,14 @@ export function sanitizeEnvVars(
   const blocked: string[] = [];
   const warnings: string[] = [];
 
-  const blockedPatterns = [...BLOCKED_ENV_VAR_PATTERNS, ...(options.customBlockedPatterns ?? [])];
-  const allowedPatterns = [...ALLOWED_ENV_VAR_PATTERNS, ...(options.customAllowedPatterns ?? [])];
+  const blockedPatterns = [
+    ...BLOCKED_ENV_VAR_PATTERNS,
+    ...(options.customBlockedPatterns ?? []),
+  ];
+  const allowedPatterns = [
+    ...ALLOWED_ENV_VAR_PATTERNS,
+    ...(options.customAllowedPatterns ?? []),
+  ];
 
   for (const [rawKey, value] of Object.entries(envVars)) {
     const key = rawKey.trim();

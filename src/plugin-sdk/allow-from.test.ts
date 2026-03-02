@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { isAllowedParsedChatSender, isNormalizedSenderAllowed } from "./allow-from.js";
+import {
+  isAllowedParsedChatSender,
+  isNormalizedSenderAllowed,
+} from "./allow-from.js";
 
 function parseAllowTarget(
   entry: string,
@@ -11,7 +14,10 @@ function parseAllowTarget(
   const trimmed = entry.trim();
   const lower = trimmed.toLowerCase();
   if (lower.startsWith("chat_id:")) {
-    return { kind: "chat_id", chatId: Number.parseInt(trimmed.slice("chat_id:".length), 10) };
+    return {
+      kind: "chat_id",
+      chatId: Number.parseInt(trimmed.slice("chat_id:".length), 10),
+    };
   }
   if (lower.startsWith("chat_guid:")) {
     return { kind: "chat_guid", chatGuid: trimmed.slice("chat_guid:".length) };

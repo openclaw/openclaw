@@ -42,8 +42,13 @@ describe("deliverLineAutoReply", () => {
       type: "text" as const,
       text,
     }));
-    const createQuickReplyItems = vi.fn((labels: string[]) => ({ items: labels }));
-    const pushMessagesLine = vi.fn(async () => ({ messageId: "push", chatId: "u1" }));
+    const createQuickReplyItems = vi.fn((labels: string[]) => ({
+      items: labels,
+    }));
+    const pushMessagesLine = vi.fn(async () => ({
+      messageId: "push",
+      chatId: "u1",
+    }));
 
     const deps: LineAutoReplyDeps = {
       buildTemplateMessageFromPayload: () => null,
@@ -54,9 +59,11 @@ describe("deliverLineAutoReply", () => {
       pushMessageLine,
       pushTextMessageWithQuickReplies,
       createTextMessageWithQuickReplies,
-      createQuickReplyItems: createQuickReplyItems as LineAutoReplyDeps["createQuickReplyItems"],
+      createQuickReplyItems:
+        createQuickReplyItems as LineAutoReplyDeps["createQuickReplyItems"],
       pushMessagesLine,
-      createFlexMessage: createFlexMessage as LineAutoReplyDeps["createFlexMessage"],
+      createFlexMessage:
+        createFlexMessage as LineAutoReplyDeps["createFlexMessage"],
       createImageMessage,
       createLocationMessage,
       ...overrides,
@@ -77,7 +84,8 @@ describe("deliverLineAutoReply", () => {
     const lineData = {
       flexMessage: { altText: "Card", contents: { type: "bubble" } },
     };
-    const { deps, replyMessageLine, pushMessagesLine, createQuickReplyItems } = createDeps();
+    const { deps, replyMessageLine, pushMessagesLine, createQuickReplyItems } =
+      createDeps();
 
     const result = await deliverLineAutoReply({
       ...baseDeliveryParams,
@@ -88,9 +96,13 @@ describe("deliverLineAutoReply", () => {
 
     expect(result.replyTokenUsed).toBe(true);
     expect(replyMessageLine).toHaveBeenCalledTimes(1);
-    expect(replyMessageLine).toHaveBeenCalledWith("token", [{ type: "text", text: "hello" }], {
-      accountId: "acc",
-    });
+    expect(replyMessageLine).toHaveBeenCalledWith(
+      "token",
+      [{ type: "text", text: "hello" }],
+      {
+        accountId: "acc",
+      },
+    );
     expect(pushMessagesLine).toHaveBeenCalledTimes(1);
     expect(pushMessagesLine).toHaveBeenCalledWith(
       "line:user:1",
@@ -105,11 +117,12 @@ describe("deliverLineAutoReply", () => {
       flexMessage: { altText: "Card", contents: { type: "bubble" } },
       quickReplies: ["A"],
     };
-    const { deps, replyMessageLine, pushMessagesLine, createQuickReplyItems } = createDeps({
-      processLineMessage: () => ({ text: "", flexMessages: [] }),
-      chunkMarkdownText: () => [],
-      sendLineReplyChunks: vi.fn(async () => ({ replyTokenUsed: false })),
-    });
+    const { deps, replyMessageLine, pushMessagesLine, createQuickReplyItems } =
+      createDeps({
+        processLineMessage: () => ({ text: "", flexMessages: [] }),
+        chunkMarkdownText: () => [],
+        sendLineReplyChunks: vi.fn(async () => ({ replyTokenUsed: false })),
+      });
 
     const result = await deliverLineAutoReply({
       ...baseDeliveryParams,
@@ -135,11 +148,13 @@ describe("deliverLineAutoReply", () => {
   });
 
   it("sends rich messages before quick-reply text so quick replies remain visible", async () => {
-    const createTextMessageWithQuickReplies = vi.fn((text: string, _quickReplies: string[]) => ({
-      type: "text" as const,
-      text,
-      quickReply: { items: ["A"] },
-    }));
+    const createTextMessageWithQuickReplies = vi.fn(
+      (text: string, _quickReplies: string[]) => ({
+        type: "text" as const,
+        text,
+        quickReply: { items: ["A"] },
+      }),
+    );
 
     const lineData = {
       flexMessage: { altText: "Card", contents: { type: "bubble" } },
@@ -188,7 +203,8 @@ describe("deliverLineAutoReply", () => {
     const { deps, pushMessagesLine } = createDeps({
       processLineMessage: () => ({ text: "", flexMessages: [] }),
       chunkMarkdownText: () => [],
-      replyMessageLine: failingReplyMessageLine as LineAutoReplyDeps["replyMessageLine"],
+      replyMessageLine:
+        failingReplyMessageLine as LineAutoReplyDeps["replyMessageLine"],
     });
 
     const result = await deliverLineAutoReply({

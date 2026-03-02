@@ -28,37 +28,37 @@ export function renderSlackCard(params: {
         </div>
         <div>
           <span class="label">Last start</span>
-          <span>${slack?.lastStartAt ? formatRelativeTimestamp(slack.lastStartAt) : "n/a"}</span>
+          <span
+            >${slack?.lastStartAt
+              ? formatRelativeTimestamp(slack.lastStartAt)
+              : "n/a"}</span
+          >
         </div>
         <div>
           <span class="label">Last probe</span>
-          <span>${slack?.lastProbeAt ? formatRelativeTimestamp(slack.lastProbeAt) : "n/a"}</span>
+          <span
+            >${slack?.lastProbeAt
+              ? formatRelativeTimestamp(slack.lastProbeAt)
+              : "n/a"}</span
+          >
         </div>
       </div>
 
-      ${
-        slack?.lastError
-          ? html`<div class="callout danger" style="margin-top: 12px;">
+      ${slack?.lastError
+        ? html`<div class="callout danger" style="margin-top: 12px;">
             ${slack.lastError}
           </div>`
-          : nothing
-      }
-
-      ${
-        slack?.probe
-          ? html`<div class="callout" style="margin-top: 12px;">
+        : nothing}
+      ${slack?.probe
+        ? html`<div class="callout" style="margin-top: 12px;">
             Probe ${slack.probe.ok ? "ok" : "failed"} ·
             ${slack.probe.status ?? ""} ${slack.probe.error ?? ""}
           </div>`
-          : nothing
-      }
-
+        : nothing}
       ${renderChannelConfigSection({ channelId: "slack", props })}
 
       <div class="row" style="margin-top: 12px;">
-        <button class="btn" @click=${() => props.onRefresh(true)}>
-          Probe
-        </button>
+        <button class="btn" @click=${() => props.onRefresh(true)}>Probe</button>
       </div>
     </div>
   `;

@@ -25,7 +25,9 @@ export function validateRegistryNpmSpec(rawSpec: string): string | null {
 
   const unscopedName = /^[a-z0-9][a-z0-9-._~]*$/;
   const scopedName = /^@[a-z0-9][a-z0-9-._~]*\/[a-z0-9][a-z0-9-._~]*$/;
-  const isValidName = name.startsWith("@") ? scopedName.test(name) : unscopedName.test(name);
+  const isValidName = name.startsWith("@")
+    ? scopedName.test(name)
+    : unscopedName.test(name);
   if (!isValidName) {
     return "unsupported npm spec: expected <name> or <name>@<version> from the npm registry";
   }

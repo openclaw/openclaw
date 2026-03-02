@@ -12,7 +12,10 @@ export function resolveTelegramGroupPromptSettings(params: {
   skillFilter: string[] | undefined;
   groupSystemPrompt: string | undefined;
 } {
-  const skillFilter = firstDefined(params.topicConfig?.skills, params.groupConfig?.skills);
+  const skillFilter = firstDefined(
+    params.topicConfig?.skills,
+    params.groupConfig?.skills,
+  );
   const systemPromptParts = [
     params.groupConfig?.systemPrompt?.trim() || null,
     params.topicConfig?.systemPrompt?.trim() || null,

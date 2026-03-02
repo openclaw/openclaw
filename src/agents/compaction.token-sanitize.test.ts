@@ -7,9 +7,9 @@ const piCodingAgentMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@mariozechner/pi-coding-agent", async () => {
-  const actual = await vi.importActual<typeof import("@mariozechner/pi-coding-agent")>(
-    "@mariozechner/pi-coding-agent",
-  );
+  const actual = await vi.importActual<
+    typeof import("@mariozechner/pi-coding-agent")
+  >("@mariozechner/pi-coding-agent");
   return {
     ...actual,
     estimateTokens: piCodingAgentMocks.estimateTokens,
@@ -17,7 +17,10 @@ vi.mock("@mariozechner/pi-coding-agent", async () => {
   };
 });
 
-import { chunkMessagesByMaxTokens, splitMessagesByTokenShare } from "./compaction.js";
+import {
+  chunkMessagesByMaxTokens,
+  splitMessagesByTokenShare,
+} from "./compaction.js";
 
 describe("compaction token accounting sanitization", () => {
   it("does not pass toolResult.details into per-message token estimates", () => {
@@ -42,10 +45,12 @@ describe("compaction token accounting sanitization", () => {
     splitMessagesByTokenShare(messages, 2);
     chunkMessagesByMaxTokens(messages, 16);
 
-    const calledWithDetails = piCodingAgentMocks.estimateTokens.mock.calls.some((call) => {
-      const message = call[0] as { details?: unknown } | undefined;
-      return Boolean(message?.details);
-    });
+    const calledWithDetails = piCodingAgentMocks.estimateTokens.mock.calls.some(
+      (call) => {
+        const message = call[0] as { details?: unknown } | undefined;
+        return Boolean(message?.details);
+      },
+    );
 
     expect(calledWithDetails).toBe(false);
   });

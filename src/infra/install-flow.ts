@@ -2,7 +2,12 @@ import type { Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveUserPath } from "../utils.js";
-import { type ArchiveLogger, extractArchive, fileExists, resolvePackedRootDir } from "./archive.js";
+import {
+  type ArchiveLogger,
+  extractArchive,
+  fileExists,
+  resolvePackedRootDir,
+} from "./archive.js";
 import { withTempDir } from "./install-source-utils.js";
 
 export type ExistingInstallPathResult =
@@ -27,7 +32,9 @@ export async function resolveExistingInstallPath(
   return { ok: true, resolvedPath, stat };
 }
 
-export async function withExtractedArchiveRoot<TResult extends { ok: boolean }>(params: {
+export async function withExtractedArchiveRoot<
+  TResult extends { ok: boolean },
+>(params: {
   archivePath: string;
   tempDirPrefix: string;
   timeoutMs: number;

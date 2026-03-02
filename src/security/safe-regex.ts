@@ -100,7 +100,8 @@ function readQuantifier(source: string, index: number): QuantifierRead | null {
     while (i < source.length && /\d/.test(source[i])) {
       i += 1;
     }
-    maxRepeat = i === maxStart ? null : Number.parseInt(source.slice(maxStart, i), 10);
+    maxRepeat =
+      i === maxStart ? null : Number.parseInt(source.slice(maxStart, i), 10);
   }
 
   if (source[i] !== "}") {
@@ -248,23 +249,31 @@ function analyzeTokensForNestedRepetition(tokens: PatternToken[]): boolean {
     if (previousToken.containsRepetition) {
       return true;
     }
-    if (previousToken.hasAmbiguousAlternation && token.quantifier.maxRepeat === null) {
+    if (
+      previousToken.hasAmbiguousAlternation &&
+      token.quantifier.maxRepeat === null
+    ) {
       return true;
     }
 
     const previousMinLength = previousToken.minLength;
     const previousMaxLength = previousToken.maxLength;
-    previousToken.minLength = multiplyLength(previousToken.minLength, token.quantifier.minRepeat);
+    previousToken.minLength = multiplyLength(
+      previousToken.minLength,
+      token.quantifier.minRepeat,
+    );
     previousToken.maxLength =
       token.quantifier.maxRepeat === null
         ? Number.POSITIVE_INFINITY
         : multiplyLength(previousToken.maxLength, token.quantifier.maxRepeat);
     previousToken.containsRepetition = true;
     frame.containsRepetition = true;
-    frame.branchMinLength = frame.branchMinLength - previousMinLength + previousToken.minLength;
+    frame.branchMinLength =
+      frame.branchMinLength - previousMinLength + previousToken.minLength;
 
     const branchMaxBase =
-      Number.isFinite(frame.branchMaxLength) && Number.isFinite(previousMaxLength)
+      Number.isFinite(frame.branchMaxLength) &&
+      Number.isFinite(previousMaxLength)
         ? frame.branchMaxLength - previousMaxLength
         : Number.POSITIVE_INFINITY;
     frame.branchMaxLength = addLength(branchMaxBase, previousToken.maxLength);

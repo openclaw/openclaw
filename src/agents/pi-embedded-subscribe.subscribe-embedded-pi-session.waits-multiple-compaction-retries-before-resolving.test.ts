@@ -60,7 +60,10 @@ describe("subscribeEmbeddedPiSession", () => {
       const phase = typeof evt.data?.phase === "string" ? evt.data.phase : "";
       events.push({
         phase,
-        willRetry: typeof evt.data?.willRetry === "boolean" ? evt.data.willRetry : undefined,
+        willRetry:
+          typeof evt.data?.willRetry === "boolean"
+            ? evt.data.willRetry
+            : undefined,
       });
     });
 

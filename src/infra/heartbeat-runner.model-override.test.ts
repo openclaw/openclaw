@@ -5,12 +5,18 @@ import { whatsappPlugin } from "../../extensions/whatsapp/src/channel.js";
 import { setWhatsAppRuntime } from "../../extensions/whatsapp/src/runtime.js";
 import * as replyModule from "../auto-reply/reply.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveAgentMainSessionKey, resolveMainSessionKey } from "../config/sessions.js";
+import {
+  resolveAgentMainSessionKey,
+  resolveMainSessionKey,
+} from "../config/sessions.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
-import { seedSessionStore, withTempHeartbeatSandbox } from "./heartbeat-runner.test-utils.js";
+import {
+  seedSessionStore,
+  withTempHeartbeatSandbox,
+} from "./heartbeat-runner.test-utils.js";
 
 // Avoid pulling optional runtime deps during isolated runs.
 vi.mock("jiti", () => ({ createJiti: () => () => ({}) }));
@@ -30,7 +36,10 @@ async function withHeartbeatFixture(
 ): Promise<unknown> {
   return withTempHeartbeatSandbox(
     async ({ tmpDir, storePath }) => {
-      const seedSession = async (sessionKey: string, input: SeedSessionInput) => {
+      const seedSession = async (
+        sessionKey: string,
+        input: SeedSessionInput,
+      ) => {
         await seedSessionStore(storePath, sessionKey, {
           updatedAt: input.updatedAt,
           lastChannel: input.lastChannel,
@@ -84,7 +93,10 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
         session: { store: storePath },
       };
       const sessionKey = resolveMainSessionKey(cfg);
-      await seedSession(sessionKey, { lastChannel: "whatsapp", lastTo: "+1555" });
+      await seedSession(sessionKey, {
+        lastChannel: "whatsapp",
+        lastTo: "+1555",
+      });
 
       const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
       replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
@@ -103,7 +115,9 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
   }
 
   it("passes heartbeatModelOverride from defaults heartbeat config", async () => {
-    const replyOpts = await runDefaultsHeartbeat({ model: "ollama/llama3.2:1b" });
+    const replyOpts = await runDefaultsHeartbeat({
+      model: "ollama/llama3.2:1b",
+    });
     expect(replyOpts).toEqual(
       expect.objectContaining({
         isHeartbeat: true,
@@ -114,7 +128,9 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
   });
 
   it("passes suppressToolErrorWarnings when configured", async () => {
-    const replyOpts = await runDefaultsHeartbeat({ suppressToolErrorWarnings: true });
+    const replyOpts = await runDefaultsHeartbeat({
+      suppressToolErrorWarnings: true,
+    });
     expect(replyOpts).toEqual(
       expect.objectContaining({
         isHeartbeat: true,
@@ -160,7 +176,10 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
         session: { store: storePath },
       };
       const sessionKey = resolveAgentMainSessionKey({ cfg, agentId: "ops" });
-      await seedSession(sessionKey, { lastChannel: "whatsapp", lastTo: "+1555" });
+      await seedSession(sessionKey, {
+        lastChannel: "whatsapp",
+        lastTo: "+1555",
+      });
 
       const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
       replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
@@ -195,7 +214,9 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
   });
 
   it("trims heartbeat model override before passing it downstream", async () => {
-    const replyOpts = await runDefaultsHeartbeat({ model: "  ollama/llama3.2:1b  " });
+    const replyOpts = await runDefaultsHeartbeat({
+      model: "  ollama/llama3.2:1b  ",
+    });
     expect(replyOpts).toEqual(
       expect.objectContaining({
         isHeartbeat: true,

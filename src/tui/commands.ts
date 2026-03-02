@@ -1,6 +1,12 @@
 import type { SlashCommand } from "@mariozechner/pi-tui";
-import { listChatCommands, listChatCommandsForConfig } from "../auto-reply/commands-registry.js";
-import { formatThinkingLevels, listThinkingLevelLabels } from "../auto-reply/thinking.js";
+import {
+  listChatCommands,
+  listChatCommandsForConfig,
+} from "../auto-reply/commands-registry.js";
+import {
+  formatThinkingLevels,
+  listThinkingLevelLabels,
+} from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/types.js";
 
 const VERBOSE_LEVELS = ["on", "off"];
@@ -49,7 +55,9 @@ export function parseCommand(input: string): ParsedCommand {
   };
 }
 
-export function getSlashCommands(options: SlashCommandOptions = {}): SlashCommand[] {
+export function getSlashCommands(
+  options: SlashCommandOptions = {},
+): SlashCommand[] {
   const thinkLevels = listThinkingLevelLabels(options.provider, options.model);
   const verboseCompletions = createLevelCompletion(VERBOSE_LEVELS);
   const reasoningCompletions = createLevelCompletion(REASONING_LEVELS);
@@ -115,9 +123,14 @@ export function getSlashCommands(options: SlashCommandOptions = {}): SlashComman
   ];
 
   const seen = new Set(commands.map((command) => command.name));
-  const gatewayCommands = options.cfg ? listChatCommandsForConfig(options.cfg) : listChatCommands();
+  const gatewayCommands = options.cfg
+    ? listChatCommandsForConfig(options.cfg)
+    : listChatCommands();
   for (const command of gatewayCommands) {
-    const aliases = command.textAliases.length > 0 ? command.textAliases : [`/${command.key}`];
+    const aliases =
+      command.textAliases.length > 0
+        ? command.textAliases
+        : [`/${command.key}`];
     for (const alias of aliases) {
       const name = alias.replace(/^\//, "").trim();
       if (!name || seen.has(name)) {
@@ -132,7 +145,11 @@ export function getSlashCommands(options: SlashCommandOptions = {}): SlashComman
 }
 
 export function helpText(options: SlashCommandOptions = {}): string {
-  const thinkLevels = formatThinkingLevels(options.provider, options.model, "|");
+  const thinkLevels = formatThinkingLevels(
+    options.provider,
+    options.model,
+    "|",
+  );
   return [
     "Slash commands:",
     "/help",

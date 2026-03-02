@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import { readConfigFileSnapshot, writeConfigFile } from "./doctor.e2e-harness.js";
+import {
+  readConfigFileSnapshot,
+  writeConfigFile,
+} from "./doctor.e2e-harness.js";
 
-const DOCTOR_MIGRATION_TIMEOUT_MS = process.platform === "win32" ? 60_000 : 45_000;
+const DOCTOR_MIGRATION_TIMEOUT_MS =
+  process.platform === "win32" ? 60_000 : 45_000;
 const { doctorCommand } = await import("./doctor.js");
 
 describe("doctor command", () => {
@@ -25,7 +29,9 @@ describe("doctor command", () => {
         config: {
           channels: {
             slack: { dm: { enabled: true, policy: "open", allowFrom: ["*"] } },
-            discord: { dm: { enabled: true, policy: "allowlist", allowFrom: ["123"] } },
+            discord: {
+              dm: { enabled: true, policy: "allowlist", allowFrom: ["123"] },
+            },
           },
         },
         issues: [],
@@ -37,7 +43,10 @@ describe("doctor command", () => {
       await doctorCommand(runtime, { nonInteractive: true, repair: true });
 
       expect(writeConfigFile).toHaveBeenCalledTimes(1);
-      const written = writeConfigFile.mock.calls[0]?.[0] as Record<string, unknown>;
+      const written = writeConfigFile.mock.calls[0]?.[0] as Record<
+        string,
+        unknown
+      >;
       const channels = (written.channels ?? {}) as Record<string, unknown>;
       const slack = (channels.slack ?? {}) as Record<string, unknown>;
       const discord = (channels.discord ?? {}) as Record<string, unknown>;

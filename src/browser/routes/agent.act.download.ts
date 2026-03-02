@@ -1,11 +1,22 @@
 import type { BrowserRouteContext } from "../server-context.js";
-import { readBody, resolveTargetIdFromBody, withPlaywrightRouteContext } from "./agent.shared.js";
-import { ensureOutputRootDir, resolveWritableOutputPathOrRespond } from "./output-paths.js";
+import {
+  readBody,
+  resolveTargetIdFromBody,
+  withPlaywrightRouteContext,
+} from "./agent.shared.js";
+import {
+  ensureOutputRootDir,
+  resolveWritableOutputPathOrRespond,
+} from "./output-paths.js";
 import { DEFAULT_DOWNLOAD_DIR } from "./path-output.js";
 import type { BrowserRouteRegistrar } from "./types.js";
 import { jsonError, toNumber, toStringOrEmpty } from "./utils.js";
 
-function buildDownloadRequestBase(cdpUrl: string, targetId: string, timeoutMs: number | undefined) {
+function buildDownloadRequestBase(
+  cdpUrl: string,
+  targetId: string,
+  timeoutMs: number | undefined,
+) {
   return {
     cdpUrl,
     targetId,
@@ -33,18 +44,24 @@ export function registerBrowserAgentActDownloadRoutes(
         await ensureOutputRootDir(DEFAULT_DOWNLOAD_DIR);
         let downloadPath: string | undefined;
         if (out.trim()) {
-          const resolvedDownloadPath = await resolveWritableOutputPathOrRespond({
-            res,
-            rootDir: DEFAULT_DOWNLOAD_DIR,
-            requestedPath: out,
-            scopeLabel: "downloads directory",
-          });
+          const resolvedDownloadPath = await resolveWritableOutputPathOrRespond(
+            {
+              res,
+              rootDir: DEFAULT_DOWNLOAD_DIR,
+              requestedPath: out,
+              scopeLabel: "downloads directory",
+            },
+          );
           if (!resolvedDownloadPath) {
             return;
           }
           downloadPath = resolvedDownloadPath;
         }
-        const requestBase = buildDownloadRequestBase(cdpUrl, tab.targetId, timeoutMs);
+        const requestBase = buildDownloadRequestBase(
+          cdpUrl,
+          tab.targetId,
+          timeoutMs,
+        );
         const result = await pw.waitForDownloadViaPlaywright({
           ...requestBase,
           path: downloadPath,
@@ -84,7 +101,11 @@ export function registerBrowserAgentActDownloadRoutes(
         if (!downloadPath) {
           return;
         }
-        const requestBase = buildDownloadRequestBase(cdpUrl, tab.targetId, timeoutMs);
+        const requestBase = buildDownloadRequestBase(
+          cdpUrl,
+          tab.targetId,
+          timeoutMs,
+        );
         const result = await pw.downloadViaPlaywright({
           ...requestBase,
           ref,

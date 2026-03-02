@@ -1,7 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resetDiagnosticSessionStateForTest } from "../logging/diagnostic-session-state.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
-import { toClientToolDefinitions, toToolDefinitions } from "./pi-tool-definition-adapter.js";
+import {
+  toClientToolDefinitions,
+  toToolDefinitions,
+} from "./pi-tool-definition-adapter.js";
 import { wrapToolWithAbortSignal } from "./pi-tools.abort.js";
 import { wrapToolWithBeforeToolCallHook } from "./pi-tools.before-tool-call.js";
 
@@ -42,15 +45,25 @@ describe("before_tool_call hook integration", () => {
 
   it("executes tool normally when no hook is registered", async () => {
     hookRunner.hasHooks.mockReturnValue(false);
-    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    const execute = vi
+      .fn()
+      .mockResolvedValue({ content: [], details: { ok: true } });
     // oxlint-disable-next-line typescript/no-explicit-any
-    const tool = wrapToolWithBeforeToolCallHook({ name: "Read", execute } as any, {
-      agentId: "main",
-      sessionKey: "main",
-    });
+    const tool = wrapToolWithBeforeToolCallHook(
+      { name: "Read", execute } as any,
+      {
+        agentId: "main",
+        sessionKey: "main",
+      },
+    );
     const extensionContext = {} as Parameters<typeof tool.execute>[3];
 
-    await tool.execute("call-1", { path: "/tmp/file" }, undefined, extensionContext);
+    await tool.execute(
+      "call-1",
+      { path: "/tmp/file" },
+      undefined,
+      extensionContext,
+    );
 
     expect(hookRunner.runBeforeToolCall).not.toHaveBeenCalled();
     expect(execute).toHaveBeenCalledWith(
@@ -63,10 +76,17 @@ describe("before_tool_call hook integration", () => {
 
   it("allows hook to modify parameters", async () => {
     hookRunner.hasHooks.mockReturnValue(true);
-    hookRunner.runBeforeToolCall.mockResolvedValue({ params: { mode: "safe" } });
-    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    hookRunner.runBeforeToolCall.mockResolvedValue({
+      params: { mode: "safe" },
+    });
+    const execute = vi
+      .fn()
+      .mockResolvedValue({ content: [], details: { ok: true } });
     // oxlint-disable-next-line typescript/no-explicit-any
-    const tool = wrapToolWithBeforeToolCallHook({ name: "exec", execute } as any);
+    const tool = wrapToolWithBeforeToolCallHook({
+      name: "exec",
+      execute,
+    } as any);
     const extensionContext = {} as Parameters<typeof tool.execute>[3];
 
     await tool.execute("call-2", { cmd: "ls" }, undefined, extensionContext);
@@ -85,9 +105,14 @@ describe("before_tool_call hook integration", () => {
       block: true,
       blockReason: "blocked",
     });
-    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    const execute = vi
+      .fn()
+      .mockResolvedValue({ content: [], details: { ok: true } });
     // oxlint-disable-next-line typescript/no-explicit-any
-    const tool = wrapToolWithBeforeToolCallHook({ name: "exec", execute } as any);
+    const tool = wrapToolWithBeforeToolCallHook({
+      name: "exec",
+      execute,
+    } as any);
     const extensionContext = {} as Parameters<typeof tool.execute>[3];
 
     await expect(
@@ -99,12 +124,22 @@ describe("before_tool_call hook integration", () => {
   it("continues execution when hook throws", async () => {
     hookRunner.hasHooks.mockReturnValue(true);
     hookRunner.runBeforeToolCall.mockRejectedValue(new Error("boom"));
-    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    const execute = vi
+      .fn()
+      .mockResolvedValue({ content: [], details: { ok: true } });
     // oxlint-disable-next-line typescript/no-explicit-any
-    const tool = wrapToolWithBeforeToolCallHook({ name: "read", execute } as any);
+    const tool = wrapToolWithBeforeToolCallHook({
+      name: "read",
+      execute,
+    } as any);
     const extensionContext = {} as Parameters<typeof tool.execute>[3];
 
-    await tool.execute("call-4", { path: "/tmp/file" }, undefined, extensionContext);
+    await tool.execute(
+      "call-4",
+      { path: "/tmp/file" },
+      undefined,
+      extensionContext,
+    );
 
     expect(execute).toHaveBeenCalledWith(
       "call-4",
@@ -117,12 +152,17 @@ describe("before_tool_call hook integration", () => {
   it("normalizes non-object params for hook contract", async () => {
     hookRunner.hasHooks.mockReturnValue(true);
     hookRunner.runBeforeToolCall.mockResolvedValue(undefined);
-    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    const execute = vi
+      .fn()
+      .mockResolvedValue({ content: [], details: { ok: true } });
     // oxlint-disable-next-line typescript/no-explicit-any
-    const tool = wrapToolWithBeforeToolCallHook({ name: "ReAd", execute } as any, {
-      agentId: "main",
-      sessionKey: "main",
-    });
+    const tool = wrapToolWithBeforeToolCallHook(
+      { name: "ReAd", execute } as any,
+      {
+        agentId: "main",
+        sessionKey: "main",
+      },
+    );
     const extensionContext = {} as Parameters<typeof tool.execute>[3];
 
     await tool.execute("call-5", "not-an-object", undefined, extensionContext);
@@ -153,9 +193,16 @@ describe("before_tool_call hook deduplication (#15502)", () => {
   });
 
   it("fires hook exactly once when tool goes through wrap + toToolDefinitions", async () => {
-    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    const execute = vi
+      .fn()
+      .mockResolvedValue({ content: [], details: { ok: true } });
     // oxlint-disable-next-line typescript/no-explicit-any
-    const baseTool = { name: "web_fetch", execute, description: "fetch", parameters: {} } as any;
+    const baseTool = {
+      name: "web_fetch",
+      execute,
+      description: "fetch",
+      parameters: {},
+    } as any;
 
     const wrapped = wrapToolWithBeforeToolCallHook(baseTool, {
       agentId: "main",
@@ -175,9 +222,16 @@ describe("before_tool_call hook deduplication (#15502)", () => {
   });
 
   it("fires hook exactly once when tool goes through wrap + abort + toToolDefinitions", async () => {
-    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    const execute = vi
+      .fn()
+      .mockResolvedValue({ content: [], details: { ok: true } });
     // oxlint-disable-next-line typescript/no-explicit-any
-    const baseTool = { name: "Bash", execute, description: "bash", parameters: {} } as any;
+    const baseTool = {
+      name: "Bash",
+      execute,
+      description: "bash",
+      parameters: {},
+    } as any;
 
     const abortController = new AbortController();
     const wrapped = wrapToolWithBeforeToolCallHook(baseTool, {
@@ -219,7 +273,10 @@ describe("before_tool_call hook integration for client tools", () => {
           function: {
             name: "client_tool",
             description: "Client tool",
-            parameters: { type: "object", properties: { value: { type: "string" } } },
+            parameters: {
+              type: "object",
+              properties: { value: { type: "string" } },
+            },
           },
         },
       ],
@@ -227,7 +284,13 @@ describe("before_tool_call hook integration for client tools", () => {
       { agentId: "main", sessionKey: "main" },
     );
     const extensionContext = {} as Parameters<typeof tool.execute>[4];
-    await tool.execute("client-call-1", { value: "ok" }, undefined, undefined, extensionContext);
+    await tool.execute(
+      "client-call-1",
+      { value: "ok" },
+      undefined,
+      undefined,
+      extensionContext,
+    );
 
     expect(onClientToolCall).toHaveBeenCalledWith("client_tool", {
       value: "ok",

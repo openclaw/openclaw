@@ -86,7 +86,9 @@ describe("createSlackDraftStream", () => {
   });
 
   it("stops when text exceeds max chars", async () => {
-    const { stream, send, edit, warn } = createDraftStreamHarness({ maxChars: 5 });
+    const { stream, send, edit, warn } = createDraftStreamHarness({
+      maxChars: 5,
+    });
 
     stream.update("123456");
     await stream.flush();
@@ -133,7 +135,9 @@ describe("createSlackDraftStream", () => {
     await stream.flush();
     await stream.clear();
 
-    expect(warn).toHaveBeenCalledWith("slack stream preview cleanup failed: cleanup failed");
+    expect(warn).toHaveBeenCalledWith(
+      "slack stream preview cleanup failed: cleanup failed",
+    );
     expect(stream.messageId()).toBeUndefined();
     expect(stream.channelId()).toBeUndefined();
   });

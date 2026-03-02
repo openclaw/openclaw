@@ -21,11 +21,17 @@ describe("gateway startup log", () => {
     });
 
     expect(warn).toHaveBeenCalledTimes(1);
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("dangerous config flags enabled"));
     expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining("gateway.controlUi.dangerouslyDisableDeviceAuth=true"),
+      expect.stringContaining("dangerous config flags enabled"),
     );
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("openclaw security audit"));
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "gateway.controlUi.dangerouslyDisableDeviceAuth=true",
+      ),
+    );
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("openclaw security audit"),
+    );
   });
 
   it("does not warn when dangerous config flags are disabled", () => {

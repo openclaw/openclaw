@@ -30,7 +30,8 @@ export function createAudioAsVoiceBuffer(params: {
       }
     },
     shouldBuffer: (payload) => params.isAudioPayload(payload),
-    finalize: (payload) => (seenAudioAsVoice ? { ...payload, audioAsVoice: true } : payload),
+    finalize: (payload) =>
+      seenAudioAsVoice ? { ...payload, audioAsVoice: true } : payload,
   };
 }
 
@@ -90,7 +91,10 @@ export function createBlockReplyPipeline(params: {
   let didStream = false;
   let didLogTimeout = false;
 
-  const sendPayload = (payload: ReplyPayload, bypassSeenCheck: boolean = false) => {
+  const sendPayload = (
+    payload: ReplyPayload,
+    bypassSeenCheck: boolean = false,
+  ) => {
     if (aborted) {
       return;
     }
@@ -106,7 +110,9 @@ export function createBlockReplyPipeline(params: {
     }
     pendingKeys.add(payloadKey);
 
-    const timeoutError = new Error(`block reply delivery timed out after ${timeoutMs}ms`);
+    const timeoutError = new Error(
+      `block reply delivery timed out after ${timeoutMs}ms`,
+    );
     const abortController = new AbortController();
     sendChain = sendChain
       .then(async () => {
@@ -201,7 +207,8 @@ export function createBlockReplyPipeline(params: {
     if (bufferPayload(payload)) {
       return;
     }
-    const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
+    const hasMedia =
+      Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
     if (hasMedia) {
       void coalescer?.flush({ force: true });
       sendPayload(payload, /* bypassSeenCheck */ false);
@@ -209,7 +216,11 @@ export function createBlockReplyPipeline(params: {
     }
     if (coalescer) {
       const payloadKey = createBlockReplyPayloadKey(payload);
-      if (seenKeys.has(payloadKey) || pendingKeys.has(payloadKey) || bufferedKeys.has(payloadKey)) {
+      if (
+        seenKeys.has(payloadKey) ||
+        pendingKeys.has(payloadKey) ||
+        bufferedKeys.has(payloadKey)
+      ) {
         return;
       }
       seenKeys.add(payloadKey);
@@ -234,7 +245,8 @@ export function createBlockReplyPipeline(params: {
     enqueue,
     flush,
     stop,
-    hasBuffered: () => Boolean(coalescer?.hasBuffered() || bufferedPayloads.length > 0),
+    hasBuffered: () =>
+      Boolean(coalescer?.hasBuffered() || bufferedPayloads.length > 0),
     didStream: () => didStream,
     isAborted: () => aborted,
     hasSentPayload: (payload) => {

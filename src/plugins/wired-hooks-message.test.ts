@@ -10,7 +10,9 @@ import { createMockPluginRegistry } from "./hooks.test-helpers.js";
 describe("message_sending hook runner", () => {
   it("runMessageSending invokes registered hooks and returns modified content", async () => {
     const handler = vi.fn().mockReturnValue({ content: "modified content" });
-    const registry = createMockPluginRegistry([{ hookName: "message_sending", handler }]);
+    const registry = createMockPluginRegistry([
+      { hookName: "message_sending", handler },
+    ]);
     const runner = createHookRunner(registry);
 
     const result = await runner.runMessageSending(
@@ -27,7 +29,9 @@ describe("message_sending hook runner", () => {
 
   it("runMessageSending can cancel message delivery", async () => {
     const handler = vi.fn().mockReturnValue({ cancel: true });
-    const registry = createMockPluginRegistry([{ hookName: "message_sending", handler }]);
+    const registry = createMockPluginRegistry([
+      { hookName: "message_sending", handler },
+    ]);
     const runner = createHookRunner(registry);
 
     const result = await runner.runMessageSending(
@@ -42,7 +46,9 @@ describe("message_sending hook runner", () => {
 describe("message_sent hook runner", () => {
   it("runMessageSent invokes registered hooks with success=true", async () => {
     const handler = vi.fn();
-    const registry = createMockPluginRegistry([{ hookName: "message_sent", handler }]);
+    const registry = createMockPluginRegistry([
+      { hookName: "message_sent", handler },
+    ]);
     const runner = createHookRunner(registry);
 
     await runner.runMessageSent(
@@ -58,7 +64,9 @@ describe("message_sent hook runner", () => {
 
   it("runMessageSent invokes registered hooks with error on failure", async () => {
     const handler = vi.fn();
-    const registry = createMockPluginRegistry([{ hookName: "message_sent", handler }]);
+    const registry = createMockPluginRegistry([
+      { hookName: "message_sent", handler },
+    ]);
     const runner = createHookRunner(registry);
 
     await runner.runMessageSent(

@@ -12,7 +12,9 @@ export type SlackSystemEventTestOverrides = {
   channelUsers?: string[];
 };
 
-export function createSlackSystemEventTestHarness(overrides?: SlackSystemEventTestOverrides) {
+export function createSlackSystemEventTestHarness(
+  overrides?: SlackSystemEventTestOverrides,
+) {
   const handlers: Record<string, SlackSystemEventHandler> = {};
   const channelType = overrides?.channelType ?? "im";
   const app = {

@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { createSlackEditTestClient, installSlackBlockTestMocks } from "./blocks.test-helpers.js";
+import {
+  createSlackEditTestClient,
+  installSlackBlockTestMocks,
+} from "./blocks.test-helpers.js";
 
 installSlackBlockTestMocks();
 const { editSlackMessage } = await import("./actions.js");
@@ -30,7 +33,13 @@ describe("editSlackMessage blocks", () => {
     await editSlackMessage("C123", "171234.567", "", {
       token: "xoxb-test",
       client,
-      blocks: [{ type: "image", image_url: "https://example.com/a.png", alt_text: "Chart" }],
+      blocks: [
+        {
+          type: "image",
+          image_url: "https://example.com/a.png",
+          alt_text: "Chart",
+        },
+      ],
     });
 
     expect(client.chat.update).toHaveBeenCalledWith(

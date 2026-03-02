@@ -36,7 +36,8 @@ describe("memory embedding batches", () => {
     const line = "a".repeat(4200);
     const content = [line, line].join("\n");
     await fs.writeFile(path.join(memoryDir, "2026-01-03.md"), content);
-    const updates: Array<{ completed: number; total: number; label?: string }> = [];
+    const updates: Array<{ completed: number; total: number; label?: string }> =
+      [];
     await managerLarge.sync({
       progress: (update) => {
         updates.push(update);
@@ -45,7 +46,8 @@ describe("memory embedding batches", () => {
 
     const status = managerLarge.status();
     const totalTexts = embedBatch.mock.calls.reduce(
-      (sum: number, call: unknown[]) => sum + ((call[0] as string[] | undefined)?.length ?? 0),
+      (sum: number, call: unknown[]) =>
+        sum + ((call[0] as string[] | undefined)?.length ?? 0),
       0,
     );
     expect(totalTexts).toBe(status.chunks);
@@ -53,7 +55,9 @@ describe("memory embedding batches", () => {
     const inputs: string[] = embedBatch.mock.calls.flatMap(
       (call: unknown[]) => (call[0] as string[] | undefined) ?? [],
     );
-    expect(inputs.every((text) => Buffer.byteLength(text, "utf8") <= 8000)).toBe(true);
+    expect(
+      inputs.every((text) => Buffer.byteLength(text, "utf8") <= 8000),
+    ).toBe(true);
     expect(updates.length).toBeGreaterThan(0);
     expect(updates.some((update) => update.label?.includes("/"))).toBe(true);
     const last = updates[updates.length - 1];
@@ -109,7 +113,9 @@ describe("memory embedding batches", () => {
     await fs.writeFile(path.join(memoryDir, "2026-01-07.md"), "\n\n\n");
     await managerSmall.sync({ reason: "test" });
 
-    const inputs = embedBatch.mock.calls.flatMap((call: unknown[]) => (call[0] as string[]) ?? []);
+    const inputs = embedBatch.mock.calls.flatMap(
+      (call: unknown[]) => (call[0] as string[]) ?? [],
+    );
     expect(inputs).not.toContain("");
   });
 });

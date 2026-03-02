@@ -18,7 +18,9 @@ type HandshakeConnectAuth = {
   password?: string;
 };
 
-export type DeviceTokenCandidateSource = "explicit-device-token" | "shared-token-fallback";
+export type DeviceTokenCandidateSource =
+  | "explicit-device-token"
+  | "shared-token-fallback";
 
 export type ConnectAuthState = {
   authResult: GatewayAuthResult;
@@ -57,7 +59,9 @@ function resolveSharedConnectAuth(
   return { token, password };
 }
 
-function resolveDeviceTokenCandidate(connectAuth: HandshakeConnectAuth | null | undefined): {
+function resolveDeviceTokenCandidate(
+  connectAuth: HandshakeConnectAuth | null | undefined,
+): {
   token?: string;
   source?: DeviceTokenCandidateSource;
 } {
@@ -85,7 +89,9 @@ export async function resolveConnectAuthState(params: {
   const sharedConnectAuth = resolveSharedConnectAuth(params.connectAuth);
   const sharedAuthProvided = Boolean(sharedConnectAuth);
   const { token: deviceTokenCandidate, source: deviceTokenCandidateSource } =
-    params.hasDeviceIdentity ? resolveDeviceTokenCandidate(params.connectAuth) : {};
+    params.hasDeviceIdentity
+      ? resolveDeviceTokenCandidate(params.connectAuth)
+      : {};
   const hasDeviceTokenCandidate = Boolean(deviceTokenCandidate);
 
   let authResult: GatewayAuthResult = await authorizeWsControlUiGatewayConnect({
@@ -117,7 +123,10 @@ export async function resolveConnectAuthState(params: {
         retryAfterMs: sharedRateCheck.retryAfterMs,
       };
     } else {
-      params.rateLimiter.reset(params.clientIp, AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET);
+      params.rateLimiter.reset(
+        params.clientIp,
+        AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
+      );
     }
   }
 
@@ -138,14 +147,16 @@ export async function resolveConnectAuthState(params: {
   // can skip device identity via roleCanSkipDeviceIdentity().
   const sharedAuthOk =
     (sharedAuthResult?.ok === true &&
-      (sharedAuthResult.method === "token" || sharedAuthResult.method === "password")) ||
+      (sharedAuthResult.method === "token" ||
+        sharedAuthResult.method === "password")) ||
     (authResult.ok && authResult.method === "trusted-proxy");
 
   return {
     authResult,
     authOk: authResult.ok,
     authMethod:
-      authResult.method ?? (params.resolvedAuth.mode === "password" ? "password" : "token"),
+      authResult.method ??
+      (params.resolvedAuth.mode === "password" ? "password" : "token"),
     sharedAuthOk,
     sharedAuthProvided,
     deviceTokenCandidate,
@@ -173,7 +184,12 @@ export async function resolveConnectAuthDecision(params: {
   let authMethod = params.state.authMethod;
 
   const deviceTokenCandidate = params.state.deviceTokenCandidate;
-  if (!params.hasDeviceIdentity || !params.deviceId || authOk || !deviceTokenCandidate) {
+  if (
+    !params.hasDeviceIdentity ||
+    !params.deviceId ||
+    authOk ||
+    !deviceTokenCandidate
+  ) {
     return { authResult, authOk, authMethod };
   }
 
@@ -201,7 +217,10 @@ export async function resolveConnectAuthDecision(params: {
     if (tokenCheck.ok) {
       authOk = true;
       authMethod = "device-token";
-      params.rateLimiter?.reset(params.clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
+      params.rateLimiter?.reset(
+        params.clientIp,
+        AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
+      );
     } else {
       authResult = {
         ok: false,
@@ -210,7 +229,10 @@ export async function resolveConnectAuthDecision(params: {
             ? "device_token_mismatch"
             : (authResult.reason ?? "device_token_mismatch"),
       };
-      params.rateLimiter?.recordFailure(params.clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
+      params.rateLimiter?.recordFailure(
+        params.clientIp,
+        AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
+      );
     }
   }
 

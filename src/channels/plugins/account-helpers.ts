@@ -6,10 +6,16 @@ import {
 } from "../../routing/session-key.js";
 
 export function createAccountListHelpers(channelKey: string) {
-  function resolveConfiguredDefaultAccountId(cfg: OpenClawConfig): string | undefined {
-    const channel = cfg.channels?.[channelKey] as Record<string, unknown> | undefined;
+  function resolveConfiguredDefaultAccountId(
+    cfg: OpenClawConfig,
+  ): string | undefined {
+    const channel = cfg.channels?.[channelKey] as
+      | Record<string, unknown>
+      | undefined;
     const preferred = normalizeOptionalAccountId(
-      typeof channel?.defaultAccount === "string" ? channel.defaultAccount : undefined,
+      typeof channel?.defaultAccount === "string"
+        ? channel.defaultAccount
+        : undefined,
     );
     if (!preferred) {
       return undefined;

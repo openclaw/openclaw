@@ -86,7 +86,9 @@ export function authProfilePathForAgent(agentDir: string): string {
   return path.join(agentDir, "auth-profiles.json");
 }
 
-export async function readAuthProfilesForAgent<T>(agentDir: string): Promise<T> {
+export async function readAuthProfilesForAgent<T>(
+  agentDir: string,
+): Promise<T> {
   const raw = await fs.readFile(authProfilePathForAgent(agentDir), "utf8");
   return JSON.parse(raw) as T;
 }

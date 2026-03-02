@@ -1,11 +1,20 @@
 import { upsertAuthProfile } from "../agents/auth-profiles.js";
-import { normalizeApiKeyInput, validateApiKeyInput } from "./auth-choice.api-key.js";
+import {
+  normalizeApiKeyInput,
+  validateApiKeyInput,
+} from "./auth-choice.api-key.js";
 import {
   normalizeSecretInputModeInput,
   ensureApiKeyFromOptionEnvOrPrompt,
 } from "./auth-choice.apply-helpers.js";
-import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
-import { buildTokenProfileId, validateAnthropicSetupToken } from "./auth-token.js";
+import type {
+  ApplyAuthChoiceParams,
+  ApplyAuthChoiceResult,
+} from "./auth-choice.apply.js";
+import {
+  buildTokenProfileId,
+  validateAnthropicSetupToken,
+} from "./auth-token.js";
 import { applyAgentDefaultModelPrimary } from "./onboard-auth.config-shared.js";
 import { applyAuthProfileConfig, setAnthropicApiKey } from "./onboard-auth.js";
 
@@ -14,7 +23,9 @@ const DEFAULT_ANTHROPIC_MODEL = "anthropic/claude-sonnet-4-6";
 export async function applyAuthChoiceAnthropic(
   params: ApplyAuthChoiceParams,
 ): Promise<ApplyAuthChoiceResult | null> {
-  const requestedSecretInputMode = normalizeSecretInputModeInput(params.opts?.secretInputMode);
+  const requestedSecretInputMode = normalizeSecretInputModeInput(
+    params.opts?.secretInputMode,
+  );
   if (
     params.authChoice === "setup-token" ||
     params.authChoice === "oauth" ||
@@ -22,9 +33,10 @@ export async function applyAuthChoiceAnthropic(
   ) {
     let nextConfig = params.config;
     await params.prompter.note(
-      ["Run `claude setup-token` in your terminal.", "Then paste the generated token below."].join(
-        "\n",
-      ),
+      [
+        "Run `claude setup-token` in your terminal.",
+        "Then paste the generated token below.",
+      ].join("\n"),
       "Anthropic setup-token",
     );
 
@@ -60,13 +72,19 @@ export async function applyAuthChoiceAnthropic(
       mode: "token",
     });
     if (params.setDefaultModel) {
-      nextConfig = applyAgentDefaultModelPrimary(nextConfig, DEFAULT_ANTHROPIC_MODEL);
+      nextConfig = applyAgentDefaultModelPrimary(
+        nextConfig,
+        DEFAULT_ANTHROPIC_MODEL,
+      );
     }
     return { config: nextConfig };
   }
 
   if (params.authChoice === "apiKey") {
-    if (params.opts?.tokenProvider && params.opts.tokenProvider !== "anthropic") {
+    if (
+      params.opts?.tokenProvider &&
+      params.opts.tokenProvider !== "anthropic"
+    ) {
       return null;
     }
 
@@ -92,7 +110,10 @@ export async function applyAuthChoiceAnthropic(
       mode: "api_key",
     });
     if (params.setDefaultModel) {
-      nextConfig = applyAgentDefaultModelPrimary(nextConfig, DEFAULT_ANTHROPIC_MODEL);
+      nextConfig = applyAgentDefaultModelPrimary(
+        nextConfig,
+        DEFAULT_ANTHROPIC_MODEL,
+      );
     }
     return { config: nextConfig };
   }

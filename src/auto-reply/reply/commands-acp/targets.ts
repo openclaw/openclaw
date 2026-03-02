@@ -34,7 +34,9 @@ async function resolveSessionKeyByToken(token: string): Promise<string | null> {
   return null;
 }
 
-export function resolveBoundAcpThreadSessionKey(params: HandleCommandsParams): string | undefined {
+export function resolveBoundAcpThreadSessionKey(
+  params: HandleCommandsParams,
+): string | undefined {
   const bindingContext = resolveAcpCommandBindingContext(params);
   if (!bindingContext.channel || !bindingContext.conversationId) {
     return undefined;

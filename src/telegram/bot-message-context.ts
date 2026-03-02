@@ -8,14 +8,20 @@ import {
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { hasControlCommand } from "../auto-reply/command-detection.js";
 import { normalizeCommandBody } from "../auto-reply/commands-registry.js";
-import { formatInboundEnvelope, resolveEnvelopeFormatOptions } from "../auto-reply/envelope.js";
+import {
+  formatInboundEnvelope,
+  resolveEnvelopeFormatOptions,
+} from "../auto-reply/envelope.js";
 import {
   buildPendingHistoryContextFromMap,
   recordPendingHistoryEntryIfEnabled,
   type HistoryEntry,
 } from "../auto-reply/reply/history.js";
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
-import { buildMentionRegexes, matchesMentionWithExplicit } from "../auto-reply/reply/mentions.js";
+import {
+  buildMentionRegexes,
+  matchesMentionWithExplicit,
+} from "../auto-reply/reply/mentions.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import { shouldAckReaction as shouldAckReactionGate } from "../channels/ack-reactions.js";
 import { resolveControlCommandGate } from "../channels/command-gating.js";
@@ -39,7 +45,10 @@ import type {
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
-import { DEFAULT_ACCOUNT_ID, resolveThreadSessionKeys } from "../routing/session-key.js";
+import {
+  DEFAULT_ACCOUNT_ID,
+  resolveThreadSessionKeys,
+} from "../routing/session-key.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import {
   firstDefined,
@@ -120,7 +129,13 @@ export type BuildTelegramMessageContextParams = {
   dmPolicy: DmPolicy;
   allowFrom?: Array<string | number>;
   groupAllowFrom?: Array<string | number>;
-  ackReactionScope: "off" | "none" | "group-mentions" | "group-all" | "direct" | "all";
+  ackReactionScope:
+    | "off"
+    | "none"
+    | "group-mentions"
+    | "group-all"
+    | "direct"
+    | "all";
   logger: TelegramLogger;
   resolveGroupActivation: ResolveGroupActivation;
   resolveGroupRequireMention: ResolveGroupRequireMention;
@@ -139,7 +154,11 @@ async function resolveStickerVisionSupport(params: {
       cfg: params.cfg,
       agentId: params.agentId,
     });
-    const entry = findModelInCatalog(catalog, defaultModel.provider, defaultModel.model);
+    const entry = findModelInCatalog(
+      catalog,
+      defaultModel.provider,
+      defaultModel.model,
+    );
     if (!entry) {
       return false;
     }
@@ -173,25 +192,36 @@ export const buildTelegramMessageContext = async ({
   const msg = primaryCtx.message;
   const chatId = msg.chat.id;
   const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
-  const messageThreadId = (msg as { message_thread_id?: number }).message_thread_id;
+  const messageThreadId = (msg as { message_thread_id?: number })
+    .message_thread_id;
   const isForum = (msg.chat as { is_forum?: boolean }).is_forum === true;
   const threadSpec = resolveTelegramThreadSpec({
     isGroup,
     isForum,
     messageThreadId,
   });
-  const resolvedThreadId = threadSpec.scope === "forum" ? threadSpec.id : undefined;
+  const resolvedThreadId =
+    threadSpec.scope === "forum" ? threadSpec.id : undefined;
   const replyThreadId = threadSpec.id;
   const dmThreadId = threadSpec.scope === "dm" ? threadSpec.id : undefined;
   const threadIdForConfig = resolvedThreadId ?? dmThreadId;
-  const { groupConfig, topicConfig } = resolveTelegramGroupConfig(chatId, threadIdForConfig);
+  const { groupConfig, topicConfig } = resolveTelegramGroupConfig(
+    chatId,
+    threadIdForConfig,
+  );
   // Use direct config dmPolicy override if available for DMs
   const effectiveDmPolicy =
     !isGroup && groupConfig && "dmPolicy" in groupConfig
       ? (groupConfig.dmPolicy ?? dmPolicy)
       : dmPolicy;
-  const peerId = isGroup ? buildTelegramGroupPeerId(chatId, resolvedThreadId) : String(chatId);
-  const parentPeer = buildTelegramParentPeer({ isGroup, resolvedThreadId, chatId });
+  const peerId = isGroup
+    ? buildTelegramGroupPeerId(chatId, resolvedThreadId)
+    : String(chatId);
+  const parentPeer = buildTelegramParentPeer({
+    isGroup,
+    resolvedThreadId,
+    chatId,
+  });
   // Fresh config for bindings lookup; other routing inputs are payload-derived.
   const route = resolveAgentRoute({
     cfg: loadConfig(),
@@ -218,12 +248,18 @@ export const buildTelegramMessageContext = async ({
   // DMs: use thread suffix for session isolation (works regardless of dmScope)
   const threadKeys =
     dmThreadId != null
-      ? resolveThreadSessionKeys({ baseSessionKey, threadId: `${chatId}:${dmThreadId}` })
+      ? resolveThreadSessionKeys({
+          baseSessionKey,
+          threadId: `${chatId}:${dmThreadId}`,
+        })
       : null;
   const sessionKey = threadKeys?.sessionKey ?? baseSessionKey;
   const mentionRegexes = buildMentionRegexes(cfg, route.agentId);
   // Calculate groupAllowOverride first - it's needed for both DM and group allowlist checks
-  const groupAllowOverride = firstDefined(topicConfig?.allowFrom, groupConfig?.allowFrom);
+  const groupAllowOverride = firstDefined(
+    topicConfig?.allowFrom,
+    groupConfig?.allowFrom,
+  );
   // For DMs, prefer per-DM/topic allowFrom (groupAllowOverride) over account-level allowFrom
   const dmAllowFrom = groupAllowOverride ?? allowFrom;
   const effectiveDmAllow = normalizeDmAllowFromWithStore({
@@ -232,7 +268,9 @@ export const buildTelegramMessageContext = async ({
     dmPolicy: effectiveDmPolicy,
   });
   // Group sender checks are explicit and must not inherit DM pairing-store entries.
-  const effectiveGroupAllow = normalizeAllowFrom(groupAllowOverride ?? groupAllowFrom);
+  const effectiveGroupAllow = normalizeAllowFrom(
+    groupAllowOverride ?? groupAllowFrom,
+  );
   const hasGroupAllowOverride = typeof groupAllowOverride !== "undefined";
   const senderId = msg.from?.id ? String(msg.from.id) : "";
   const senderUsername = msg.from?.username ?? "";
@@ -281,10 +319,14 @@ export const buildTelegramMessageContext = async ({
     baseRequireMention,
   );
 
-  const requireTopic = (groupConfig as TelegramDirectConfig | undefined)?.requireTopic;
-  const topicRequiredButMissing = !isGroup && requireTopic === true && dmThreadId == null;
+  const requireTopic = (groupConfig as TelegramDirectConfig | undefined)
+    ?.requireTopic;
+  const topicRequiredButMissing =
+    !isGroup && requireTopic === true && dmThreadId == null;
   if (topicRequiredButMissing) {
-    logVerbose(`Blocked telegram DM ${chatId}: requireTopic=true but no topic present`);
+    logVerbose(
+      `Blocked telegram DM ${chatId}: requireTopic=true but no topic present`,
+    );
     return null;
   }
 
@@ -312,7 +354,9 @@ export const buildTelegramMessageContext = async ({
           ),
       });
     } catch (err) {
-      logVerbose(`telegram record_voice cue failed for chat ${chatId}: ${String(err)}`);
+      logVerbose(
+        `telegram record_voice cue failed for chat ${chatId}: ${String(err)}`,
+      );
     }
   };
 
@@ -345,38 +389,58 @@ export const buildTelegramMessageContext = async ({
     senderUsername,
   });
   const useAccessGroups = cfg.commands?.useAccessGroups !== false;
-  const hasControlCommandInMessage = hasControlCommand(msg.text ?? msg.caption ?? "", cfg, {
-    botUsername,
-  });
+  const hasControlCommandInMessage = hasControlCommand(
+    msg.text ?? msg.caption ?? "",
+    cfg,
+    {
+      botUsername,
+    },
+  );
   const commandGate = resolveControlCommandGate({
     useAccessGroups,
-    authorizers: [{ configured: allowForCommands.hasEntries, allowed: senderAllowedForCommands }],
+    authorizers: [
+      {
+        configured: allowForCommands.hasEntries,
+        allowed: senderAllowedForCommands,
+      },
+    ],
     allowTextCommands: true,
     hasControlCommand: hasControlCommandInMessage,
   });
   const commandAuthorized = commandGate.commandAuthorized;
-  const historyKey = isGroup ? buildTelegramGroupPeerId(chatId, resolvedThreadId) : undefined;
+  const historyKey = isGroup
+    ? buildTelegramGroupPeerId(chatId, resolvedThreadId)
+    : undefined;
 
   let placeholder = resolveTelegramMediaPlaceholder(msg) ?? "";
 
   // Check if sticker has a cached description - if so, use it instead of sending the image
-  const cachedStickerDescription = allMedia[0]?.stickerMetadata?.cachedDescription;
+  const cachedStickerDescription =
+    allMedia[0]?.stickerMetadata?.cachedDescription;
   const stickerSupportsVision = msg.sticker
     ? await resolveStickerVisionSupport({ cfg, agentId: route.agentId })
     : false;
-  const stickerCacheHit = Boolean(cachedStickerDescription) && !stickerSupportsVision;
+  const stickerCacheHit =
+    Boolean(cachedStickerDescription) && !stickerSupportsVision;
   if (stickerCacheHit) {
     // Format cached description with sticker context
     const emoji = allMedia[0]?.stickerMetadata?.emoji;
     const setName = allMedia[0]?.stickerMetadata?.setName;
-    const stickerContext = [emoji, setName ? `from "${setName}"` : null].filter(Boolean).join(" ");
+    const stickerContext = [emoji, setName ? `from "${setName}"` : null]
+      .filter(Boolean)
+      .join(" ");
     placeholder = `[Sticker${stickerContext ? ` ${stickerContext}` : ""}] ${cachedStickerDescription}`;
   }
 
   const locationData = extractTelegramLocation(msg);
-  const locationText = locationData ? formatLocationText(locationData) : undefined;
+  const locationText = locationData
+    ? formatLocationText(locationData)
+    : undefined;
   const rawTextSource = msg.text ?? msg.caption ?? "";
-  const rawText = expandTextLinks(rawTextSource, msg.entities ?? msg.caption_entities).trim();
+  const rawText = expandTextLinks(
+    rawTextSource,
+    msg.entities ?? msg.caption_entities,
+  ).trim();
   const hasUserText = Boolean(rawText || locationText);
   let rawBody = [rawText, locationText].filter(Boolean).join("\n").trim();
   if (!rawBody) {
@@ -387,20 +451,28 @@ export const buildTelegramMessageContext = async ({
   }
 
   let bodyText = rawBody;
-  const hasAudio = allMedia.some((media) => media.contentType?.startsWith("audio/"));
+  const hasAudio = allMedia.some((media) =>
+    media.contentType?.startsWith("audio/"),
+  );
 
   // Preflight audio transcription for mention detection in groups
   // This allows voice notes to be checked for mentions before being dropped
   let preflightTranscript: string | undefined;
   const needsPreflightTranscription =
-    isGroup && requireMention && hasAudio && !hasUserText && mentionRegexes.length > 0;
+    isGroup &&
+    requireMention &&
+    hasAudio &&
+    !hasUserText &&
+    mentionRegexes.length > 0;
 
   if (needsPreflightTranscription) {
     try {
-      const { transcribeFirstAudio } = await import("../media-understanding/audio-preflight.js");
+      const { transcribeFirstAudio } =
+        await import("../media-understanding/audio-preflight.js");
       // Build a minimal context for transcription
       const tempCtx: MsgContext = {
-        MediaPaths: allMedia.length > 0 ? allMedia.map((m) => m.path) : undefined,
+        MediaPaths:
+          allMedia.length > 0 ? allMedia.map((m) => m.path) : undefined,
         MediaTypes:
           allMedia.length > 0
             ? (allMedia.map((m) => m.contentType).filter(Boolean) as string[])
@@ -412,7 +484,9 @@ export const buildTelegramMessageContext = async ({
         agentDir: undefined,
       });
     } catch (err) {
-      logVerbose(`telegram: audio preflight transcription failed: ${String(err)}`);
+      logVerbose(
+        `telegram: audio preflight transcription failed: ${String(err)}`,
+      );
     }
   }
 
@@ -433,7 +507,9 @@ export const buildTelegramMessageContext = async ({
   const hasAnyMention = (msg.entities ?? msg.caption_entities ?? []).some(
     (ent) => ent.type === "mention",
   );
-  const explicitlyMentioned = botUsername ? hasBotMention(msg, botUsername) : false;
+  const explicitlyMentioned = botUsername
+    ? hasBotMention(msg, botUsername)
+    : false;
 
   const computedWasMentioned = matchesMentionWithExplicit({
     text: msg.text ?? msg.caption ?? "",
@@ -445,7 +521,8 @@ export const buildTelegramMessageContext = async ({
     },
     transcript: preflightTranscript,
   });
-  const wasMentioned = options?.forceWasMentioned === true ? true : computedWasMentioned;
+  const wasMentioned =
+    options?.forceWasMentioned === true ? true : computedWasMentioned;
   if (isGroup && commandGate.shouldBlock) {
     logInboundDrop({
       log: logVerbose,
@@ -484,7 +561,10 @@ export const buildTelegramMessageContext = async ({
               sender: buildSenderLabel(msg, senderId || chatId),
               body: rawBody,
               timestamp: msg.date ? msg.date * 1000 : undefined,
-              messageId: typeof msg.message_id === "number" ? String(msg.message_id) : undefined,
+              messageId:
+                typeof msg.message_id === "number"
+                  ? String(msg.message_id)
+                  : undefined,
             }
           : null,
       });
@@ -521,13 +601,18 @@ export const buildTelegramMessageContext = async ({
     getChat?: (chatId: number | string) => Promise<unknown>;
   };
   const reactionApi =
-    typeof api.setMessageReaction === "function" ? api.setMessageReaction.bind(api) : null;
-  const getChatApi = typeof api.getChat === "function" ? api.getChat.bind(api) : null;
+    typeof api.setMessageReaction === "function"
+      ? api.setMessageReaction.bind(api)
+      : null;
+  const getChatApi =
+    typeof api.getChat === "function" ? api.getChat.bind(api) : null;
 
   // Status Reactions controller (lifecycle reactions)
   const statusReactionsConfig = cfg.messages?.statusReactions;
   const statusReactionsEnabled =
-    statusReactionsConfig?.enabled === true && Boolean(reactionApi) && shouldAckReaction();
+    statusReactionsConfig?.enabled === true &&
+    Boolean(reactionApi) &&
+    shouldAckReaction();
   const resolvedStatusReactionEmojis = resolveTelegramStatusReactionEmojis({
     initialEmoji: ackReaction,
     overrides: statusReactionsConfig?.emojis,
@@ -535,7 +620,8 @@ export const buildTelegramMessageContext = async ({
   const statusReactionVariantsByEmoji = buildTelegramStatusReactionVariants(
     resolvedStatusReactionEmojis,
   );
-  let allowedStatusReactionEmojisPromise: Promise<Set<string> | null> | null = null;
+  let allowedStatusReactionEmojisPromise: Promise<Set<string> | null> | null =
+    null;
   const statusReactionController: StatusReactionController | null =
     statusReactionsEnabled && msg.message_id
       ? createStatusReactionController({
@@ -544,18 +630,20 @@ export const buildTelegramMessageContext = async ({
             setReaction: async (emoji: string) => {
               if (reactionApi) {
                 if (!allowedStatusReactionEmojisPromise) {
-                  allowedStatusReactionEmojisPromise = resolveTelegramAllowedEmojiReactions({
-                    chat: msg.chat,
-                    chatId,
-                    getChat: getChatApi ?? undefined,
-                  }).catch((err) => {
-                    logVerbose(
-                      `telegram status-reaction available_reactions lookup failed for chat ${chatId}: ${String(err)}`,
-                    );
-                    return null;
-                  });
+                  allowedStatusReactionEmojisPromise =
+                    resolveTelegramAllowedEmojiReactions({
+                      chat: msg.chat,
+                      chatId,
+                      getChat: getChatApi ?? undefined,
+                    }).catch((err) => {
+                      logVerbose(
+                        `telegram status-reaction available_reactions lookup failed for chat ${chatId}: ${String(err)}`,
+                      );
+                      return null;
+                    });
                 }
-                const allowedStatusReactionEmojis = await allowedStatusReactionEmojisPromise;
+                const allowedStatusReactionEmojis =
+                  await allowedStatusReactionEmojisPromise;
                 const resolvedEmoji = resolveTelegramReactionVariant({
                   requestedEmoji: emoji,
                   variantsByRequestedEmoji: statusReactionVariantsByEmoji,
@@ -575,7 +663,9 @@ export const buildTelegramMessageContext = async ({
           emojis: resolvedStatusReactionEmojis,
           timing: statusReactionsConfig?.timing,
           onError: (err) => {
-            logVerbose(`telegram status-reaction error for chat ${chatId}: ${String(err)}`);
+            logVerbose(
+              `telegram status-reaction error for chat ${chatId}: ${String(err)}`,
+            );
           },
         })
       : null;
@@ -591,11 +681,16 @@ export const buildTelegramMessageContext = async ({
     : shouldAckReaction() && msg.message_id && reactionApi
       ? withTelegramApiErrorLogging({
           operation: "setMessageReaction",
-          fn: () => reactionApi(chatId, msg.message_id, [{ type: "emoji", emoji: ackReaction }]),
+          fn: () =>
+            reactionApi(chatId, msg.message_id, [
+              { type: "emoji", emoji: ackReaction },
+            ]),
         }).then(
           () => true,
           (err) => {
-            logVerbose(`telegram react failed for chat ${chatId}: ${String(err)}`);
+            logVerbose(
+              `telegram react failed for chat ${chatId}: ${String(err)}`,
+            );
             return false;
           },
         )
@@ -622,10 +717,14 @@ export const buildTelegramMessageContext = async ({
     : "";
   const forwardPrefix = forwardOrigin
     ? `[Forwarded from ${forwardOrigin.from}${
-        forwardOrigin.date ? ` at ${new Date(forwardOrigin.date * 1000).toISOString()}` : ""
+        forwardOrigin.date
+          ? ` at ${new Date(forwardOrigin.date * 1000).toISOString()}`
+          : ""
       }]\n`
     : "";
-  const groupLabel = isGroup ? buildGroupLabel(msg, chatId, resolvedThreadId) : undefined;
+  const groupLabel = isGroup
+    ? buildGroupLabel(msg, chatId, resolvedThreadId)
+    : undefined;
   const senderName = buildSenderName(msg);
   const conversationLabel = isGroup
     ? (groupLabel ?? `group:${chatId}`)
@@ -672,10 +771,12 @@ export const buildTelegramMessageContext = async ({
     });
   }
 
-  const { skillFilter, groupSystemPrompt } = resolveTelegramGroupPromptSettings({
-    groupConfig,
-    topicConfig,
-  });
+  const { skillFilter, groupSystemPrompt } = resolveTelegramGroupPromptSettings(
+    {
+      groupConfig,
+      topicConfig,
+    },
+  );
   const commandBody = normalizeCommandBody(rawBody, { botUsername });
   const inboundHistory =
     isGroup && historyKey && historyLimit > 0
@@ -694,14 +795,17 @@ export const buildTelegramMessageContext = async ({
     InboundHistory: inboundHistory,
     RawBody: rawBody,
     CommandBody: commandBody,
-    From: isGroup ? buildTelegramGroupFrom(chatId, resolvedThreadId) : `telegram:${chatId}`,
+    From: isGroup
+      ? buildTelegramGroupFrom(chatId, resolvedThreadId)
+      : `telegram:${chatId}`,
     To: `telegram:${chatId}`,
     SessionKey: sessionKey,
     AccountId: route.accountId,
     ChatType: isGroup ? "group" : "direct",
     ConversationLabel: conversationLabel,
     GroupSubject: isGroup ? (msg.chat.title ?? undefined) : undefined,
-    GroupSystemPrompt: isGroup || (!isGroup && groupConfig) ? groupSystemPrompt : undefined,
+    GroupSystemPrompt:
+      isGroup || (!isGroup && groupConfig) ? groupSystemPrompt : undefined,
     SenderName: senderName,
     SenderId: senderId || undefined,
     SenderUsername: senderUsername || undefined,
@@ -734,16 +838,21 @@ export const buildTelegramMessageContext = async ({
     WasMentioned: isGroup ? effectiveWasMentioned : undefined,
     // Filter out cached stickers from current-message media; reply media is still valid context.
     MediaPath: contextMedia.length > 0 ? contextMedia[0]?.path : undefined,
-    MediaType: contextMedia.length > 0 ? contextMedia[0]?.contentType : undefined,
+    MediaType:
+      contextMedia.length > 0 ? contextMedia[0]?.contentType : undefined,
     MediaUrl: contextMedia.length > 0 ? contextMedia[0]?.path : undefined,
-    MediaPaths: contextMedia.length > 0 ? contextMedia.map((m) => m.path) : undefined,
-    MediaUrls: contextMedia.length > 0 ? contextMedia.map((m) => m.path) : undefined,
+    MediaPaths:
+      contextMedia.length > 0 ? contextMedia.map((m) => m.path) : undefined,
+    MediaUrls:
+      contextMedia.length > 0 ? contextMedia.map((m) => m.path) : undefined,
     MediaTypes:
       contextMedia.length > 0
         ? (contextMedia.map((m) => m.contentType).filter(Boolean) as string[])
         : undefined,
     Sticker: allMedia[0]?.stickerMetadata,
-    StickerMediaIncluded: allMedia[0]?.stickerMetadata ? !stickerCacheHit : undefined,
+    StickerMediaIncluded: allMedia[0]?.stickerMetadata
+      ? !stickerCacheHit
+      : undefined,
     ...(locationData ? toLocationContext(locationData) : undefined),
     CommandAuthorized: commandAuthorized,
     // For groups: use resolved forum topic id; for DMs: use raw messageThreadId
@@ -788,8 +897,10 @@ export const buildTelegramMessageContext = async ({
 
   if (shouldLogVerbose()) {
     const preview = body.slice(0, 200).replace(/\n/g, "\\n");
-    const mediaInfo = allMedia.length > 1 ? ` mediaCount=${allMedia.length}` : "";
-    const topicInfo = resolvedThreadId != null ? ` topic=${resolvedThreadId}` : "";
+    const mediaInfo =
+      allMedia.length > 1 ? ` mediaCount=${allMedia.length}` : "";
+    const topicInfo =
+      resolvedThreadId != null ? ` topic=${resolvedThreadId}` : "";
     logVerbose(
       `telegram inbound: chatId=${chatId} from=${ctxPayload.From} len=${body.length}${mediaInfo}${topicInfo} preview="${preview}"`,
     );

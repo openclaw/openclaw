@@ -330,7 +330,12 @@ agents.list[].sandbox.prune.* > agents.defaults.sandbox.prune.*
 ```json
 {
   "tools": {
-    "allow": ["sessions_list", "sessions_send", "sessions_history", "session_status"],
+    "allow": [
+      "sessions_list",
+      "sessions_send",
+      "sessions_history",
+      "session_status"
+    ],
     "deny": ["exec", "write", "edit", "apply_patch", "read", "browser"]
   }
 }

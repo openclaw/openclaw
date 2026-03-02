@@ -9,10 +9,12 @@ const hoisted = vi.hoisted(() => {
 });
 
 vi.mock("../../config/sessions.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../config/sessions.js")>();
+  const actual =
+    await importOriginal<typeof import("../../config/sessions.js")>();
   return {
     ...actual,
-    loadSessionStore: (...args: unknown[]) => hoisted.loadSessionStoreMock(...args),
+    loadSessionStore: (...args: unknown[]) =>
+      hoisted.loadSessionStoreMock(...args),
   };
 });
 
@@ -20,7 +22,8 @@ vi.mock("./queue.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./queue.js")>();
   return {
     ...actual,
-    scheduleFollowupDrain: (...args: unknown[]) => hoisted.scheduleFollowupDrainMock(...args),
+    scheduleFollowupDrain: (...args: unknown[]) =>
+      hoisted.scheduleFollowupDrainMock(...args),
   };
 });
 
@@ -39,16 +42,30 @@ describe("agent runner helpers", () => {
   });
 
   it("detects audio payloads from mediaUrl/mediaUrls", () => {
-    expect(isAudioPayload({ mediaUrl: "https://example.test/audio.mp3" })).toBe(true);
-    expect(isAudioPayload({ mediaUrls: ["https://example.test/video.mp4"] })).toBe(false);
-    expect(isAudioPayload({ mediaUrls: ["https://example.test/voice.m4a"] })).toBe(true);
+    expect(isAudioPayload({ mediaUrl: "https://example.test/audio.mp3" })).toBe(
+      true,
+    );
+    expect(
+      isAudioPayload({ mediaUrls: ["https://example.test/video.mp4"] }),
+    ).toBe(false);
+    expect(
+      isAudioPayload({ mediaUrls: ["https://example.test/voice.m4a"] }),
+    ).toBe(true);
   });
 
   it("uses fallback verbose level when session context is missing", () => {
-    expect(createShouldEmitToolResult({ resolvedVerboseLevel: "off" })()).toBe(false);
-    expect(createShouldEmitToolResult({ resolvedVerboseLevel: "on" })()).toBe(true);
-    expect(createShouldEmitToolOutput({ resolvedVerboseLevel: "on" })()).toBe(false);
-    expect(createShouldEmitToolOutput({ resolvedVerboseLevel: "full" })()).toBe(true);
+    expect(createShouldEmitToolResult({ resolvedVerboseLevel: "off" })()).toBe(
+      false,
+    );
+    expect(createShouldEmitToolResult({ resolvedVerboseLevel: "on" })()).toBe(
+      true,
+    );
+    expect(createShouldEmitToolOutput({ resolvedVerboseLevel: "on" })()).toBe(
+      false,
+    );
+    expect(createShouldEmitToolOutput({ resolvedVerboseLevel: "full" })()).toBe(
+      true,
+    );
   });
 
   it("uses session verbose level when present", () => {
@@ -95,8 +112,13 @@ describe("agent runner helpers", () => {
   it("schedules followup drain and returns the original value", () => {
     const runFollowupTurn = vi.fn();
     const value = { ok: true };
-    expect(finalizeWithFollowup(value, "queue-key", runFollowupTurn)).toBe(value);
-    expect(hoisted.scheduleFollowupDrainMock).toHaveBeenCalledWith("queue-key", runFollowupTurn);
+    expect(finalizeWithFollowup(value, "queue-key", runFollowupTurn)).toBe(
+      value,
+    );
+    expect(hoisted.scheduleFollowupDrainMock).toHaveBeenCalledWith(
+      "queue-key",
+      runFollowupTurn,
+    );
   });
 
   it("signals typing only when any payload has text or media", async () => {
@@ -106,7 +128,10 @@ describe("agent runner helpers", () => {
     await signalTypingIfNeeded(emptyPayloads, typingSignals);
     expect(signalRunStart).not.toHaveBeenCalled();
 
-    await signalTypingIfNeeded([{ mediaUrl: "https://example.test/img.png" }], typingSignals);
+    await signalTypingIfNeeded(
+      [{ mediaUrl: "https://example.test/img.png" }],
+      typingSignals,
+    );
     expect(signalRunStart).toHaveBeenCalledOnce();
   });
 });

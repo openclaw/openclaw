@@ -1,6 +1,12 @@
-import { ensureAuthProfileStore, listProfilesForProvider } from "../agents/auth-profiles.js";
+import {
+  ensureAuthProfileStore,
+  listProfilesForProvider,
+} from "../agents/auth-profiles.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
-import { getCustomProviderApiKey, resolveEnvApiKey } from "../agents/model-auth.js";
+import {
+  getCustomProviderApiKey,
+  resolveEnvApiKey,
+} from "../agents/model-auth.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import {
   buildAllowedModelSet,
@@ -148,7 +154,10 @@ function addModelSelectOption(params: {
   params.seen.add(key);
 }
 
-function isAnthropicLegacyModel(entry: { provider: string; id: string }): boolean {
+function isAnthropicLegacyModel(entry: {
+  provider: string;
+  id: string;
+}): boolean {
   return (
     entry.provider === "anthropic" &&
     typeof entry.id === "string" &&
@@ -162,10 +171,14 @@ async function promptManualModel(params: {
   initialValue?: string;
 }): Promise<PromptDefaultModelResult> {
   const modelInput = await params.prompter.text({
-    message: params.allowBlank ? "Default model (blank to keep)" : "Default model",
+    message: params.allowBlank
+      ? "Default model (blank to keep)"
+      : "Default model",
     initialValue: params.initialValue,
     placeholder: "provider/model",
-    validate: params.allowBlank ? undefined : (value) => (value?.trim() ? undefined : "Required"),
+    validate: params.allowBlank
+      ? undefined
+      : (value) => (value?.trim() ? undefined : "Required"),
   });
   const model = String(modelInput ?? "").trim();
   if (!model) {
@@ -227,20 +240,26 @@ export async function promptDefaultModel(
     });
   }
 
-  const providers = Array.from(new Set(models.map((entry) => entry.provider))).toSorted((a, b) =>
-    a.localeCompare(b),
-  );
+  const providers = Array.from(
+    new Set(models.map((entry) => entry.provider)),
+  ).toSorted((a, b) => a.localeCompare(b));
 
-  const hasPreferredProvider = preferredProvider ? providers.includes(preferredProvider) : false;
+  const hasPreferredProvider = preferredProvider
+    ? providers.includes(preferredProvider)
+    : false;
   const shouldPromptProvider =
-    !hasPreferredProvider && providers.length > 1 && models.length > PROVIDER_FILTER_THRESHOLD;
+    !hasPreferredProvider &&
+    providers.length > 1 &&
+    models.length > PROVIDER_FILTER_THRESHOLD;
   if (shouldPromptProvider) {
     const selection = await params.prompter.select({
       message: "Filter models by provider",
       options: [
         { value: "*", label: "All providers" },
         ...providers.map((provider) => {
-          const count = models.filter((entry) => entry.provider === provider).length;
+          const count = models.filter(
+            (entry) => entry.provider === provider,
+          ).length;
           return {
             value: provider,
             label: provider,
@@ -257,10 +276,15 @@ export async function promptDefaultModel(
   if (hasPreferredProvider && preferredProvider) {
     models = models.filter((entry) => {
       if (preferredProvider === "volcengine") {
-        return entry.provider === "volcengine" || entry.provider === "volcengine-plan";
+        return (
+          entry.provider === "volcengine" ||
+          entry.provider === "volcengine-plan"
+        );
       }
       if (preferredProvider === "byteplus") {
-        return entry.provider === "byteplus" || entry.provider === "byteplus-plan";
+        return (
+          entry.provider === "byteplus" || entry.provider === "byteplus-plan"
+        );
       }
       return entry.provider === preferredProvider;
     });
@@ -280,7 +304,9 @@ export async function promptDefaultModel(
         ? `Keep current (${configuredRaw})`
         : `Keep current (default: ${resolvedKey})`,
       hint:
-        configuredRaw && configuredRaw !== resolvedKey ? `resolves to ${resolvedKey}` : undefined,
+        configuredRaw && configuredRaw !== resolvedKey
+          ? `resolves to ${resolvedKey}`
+          : undefined,
     });
   }
   if (includeManual) {
@@ -308,7 +334,9 @@ export async function promptDefaultModel(
     });
   }
 
-  let initialValue: string | undefined = allowKeep ? KEEP_VALUE : configuredKey || undefined;
+  let initialValue: string | undefined = allowKeep
+    ? KEEP_VALUE
+    : configuredKey || undefined;
   if (
     allowKeep &&
     hasPreferredProvider &&
@@ -412,7 +440,9 @@ export async function promptModelAllowlist(params: {
   const seen = new Set<string>();
 
   const filteredCatalog = allowedKeySet
-    ? catalog.filter((entry) => allowedKeySet.has(modelKey(entry.provider, entry.id)))
+    ? catalog.filter((entry) =>
+        allowedKeySet.has(modelKey(entry.provider, entry.id)),
+      )
     : catalog;
 
   for (const entry of filteredCatalog) {
@@ -427,7 +457,9 @@ export async function promptModelAllowlist(params: {
     options.push({
       value: key,
       label: key,
-      hint: allowedKeySet ? "allowed (not in catalog)" : "configured (not in catalog)",
+      hint: allowedKeySet
+        ? "allowed (not in catalog)"
+        : "configured (not in catalog)",
     });
     seen.add(key);
   }
@@ -459,12 +491,17 @@ export async function promptModelAllowlist(params: {
   return { models: [] };
 }
 
-export function applyPrimaryModel(cfg: OpenClawConfig, model: string): OpenClawConfig {
+export function applyPrimaryModel(
+  cfg: OpenClawConfig,
+  model: string,
+): OpenClawConfig {
   const defaults = cfg.agents?.defaults;
   const existingModel = defaults?.model;
   const existingModels = defaults?.models;
   const fallbacks =
-    typeof existingModel === "object" && existingModel !== null && "fallbacks" in existingModel
+    typeof existingModel === "object" &&
+    existingModel !== null &&
+    "fallbacks" in existingModel
       ? (existingModel as { fallbacks?: string[] }).fallbacks
       : undefined;
   return {
@@ -486,7 +523,10 @@ export function applyPrimaryModel(cfg: OpenClawConfig, model: string): OpenClawC
   };
 }
 
-export function applyModelAllowlist(cfg: OpenClawConfig, models: string[]): OpenClawConfig {
+export function applyModelAllowlist(
+  cfg: OpenClawConfig,
+  models: string[],
+): OpenClawConfig {
   const defaults = cfg.agents?.defaults;
   const normalized = normalizeModelKeys(models);
   if (normalized.length === 0) {

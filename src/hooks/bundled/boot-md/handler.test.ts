@@ -80,10 +80,18 @@ describe("boot-md handler", () => {
     expect(listAgentIds).toHaveBeenCalledWith(cfg);
     expect(runBootOnce).toHaveBeenCalledTimes(2);
     expect(runBootOnce).toHaveBeenCalledWith(
-      expect.objectContaining({ cfg, workspaceDir: MAIN_WORKSPACE_DIR, agentId: "main" }),
+      expect.objectContaining({
+        cfg,
+        workspaceDir: MAIN_WORKSPACE_DIR,
+        agentId: "main",
+      }),
     );
     expect(runBootOnce).toHaveBeenCalledWith(
-      expect.objectContaining({ cfg, workspaceDir: OPS_WORKSPACE_DIR, agentId: "ops" }),
+      expect.objectContaining({
+        cfg,
+        workspaceDir: OPS_WORKSPACE_DIR,
+        agentId: "ops",
+      }),
     );
   });
 
@@ -95,7 +103,11 @@ describe("boot-md handler", () => {
 
     expect(runBootOnce).toHaveBeenCalledTimes(1);
     expect(runBootOnce).toHaveBeenCalledWith(
-      expect.objectContaining({ cfg, workspaceDir: MAIN_WORKSPACE_DIR, agentId: "main" }),
+      expect.objectContaining({
+        cfg,
+        workspaceDir: MAIN_WORKSPACE_DIR,
+        agentId: "main",
+      }),
     );
   });
 
@@ -108,23 +120,31 @@ describe("boot-md handler", () => {
     await runBootChecklist(makeEvent({ context: { cfg } }));
 
     expect(logWarn).toHaveBeenCalledTimes(1);
-    expect(logWarn).toHaveBeenCalledWith("boot-md failed for agent startup run", {
-      agentId: "ops",
-      workspaceDir: OPS_WORKSPACE_DIR,
-      reason: "agent failed",
-    });
+    expect(logWarn).toHaveBeenCalledWith(
+      "boot-md failed for agent startup run",
+      {
+        agentId: "ops",
+        workspaceDir: OPS_WORKSPACE_DIR,
+        reason: "agent failed",
+      },
+    );
   });
 
   it("logs debug details when a per-agent boot run is skipped", async () => {
-    const cfg = setupSingleMainAgentBootConfig({ agents: { list: [{ id: "main" }] } });
+    const cfg = setupSingleMainAgentBootConfig({
+      agents: { list: [{ id: "main" }] },
+    });
     runBootOnce.mockResolvedValue({ status: "skipped", reason: "missing" });
 
     await runBootChecklist(makeEvent({ context: { cfg } }));
 
-    expect(logDebug).toHaveBeenCalledWith("boot-md skipped for agent startup run", {
-      agentId: "main",
-      workspaceDir: MAIN_WORKSPACE_DIR,
-      reason: "missing",
-    });
+    expect(logDebug).toHaveBeenCalledWith(
+      "boot-md skipped for agent startup run",
+      {
+        agentId: "main",
+        workspaceDir: MAIN_WORKSPACE_DIR,
+        reason: "missing",
+      },
+    );
   });
 });

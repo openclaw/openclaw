@@ -40,11 +40,15 @@ export function getPwToolsCoreSessionMocks() {
   return sessionMocks;
 }
 
-export function setPwToolsCoreCurrentPage(page: Record<string, unknown> | null) {
+export function setPwToolsCoreCurrentPage(
+  page: Record<string, unknown> | null,
+) {
   currentPage = page;
 }
 
-export function setPwToolsCoreCurrentRefLocator(locator: Record<string, unknown> | null) {
+export function setPwToolsCoreCurrentRefLocator(
+  locator: Record<string, unknown> | null,
+) {
   currentRefLocator = locator;
 }
 

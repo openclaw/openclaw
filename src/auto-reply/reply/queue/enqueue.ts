@@ -1,4 +1,7 @@
-import { applyQueueDropPolicy, shouldSkipQueueItem } from "../../../utils/queue-helpers.js";
+import {
+  applyQueueDropPolicy,
+  shouldSkipQueueItem,
+} from "../../../utils/queue-helpers.js";
 import { getExistingFollowupQueue, getFollowupQueue } from "./state.js";
 import type { FollowupRun, QueueDedupeMode, QueueSettings } from "./types.js";
 
@@ -15,12 +18,16 @@ function isRunAlreadyQueued(
 
   const messageId = run.messageId?.trim();
   if (messageId) {
-    return items.some((item) => item.messageId?.trim() === messageId && hasSameRouting(item));
+    return items.some(
+      (item) => item.messageId?.trim() === messageId && hasSameRouting(item),
+    );
   }
   if (!allowPromptFallback) {
     return false;
   }
-  return items.some((item) => item.prompt === run.prompt && hasSameRouting(item));
+  return items.some(
+    (item) => item.prompt === run.prompt && hasSameRouting(item),
+  );
 }
 
 export function enqueueFollowupRun(

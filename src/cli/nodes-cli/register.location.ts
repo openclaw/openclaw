@@ -6,7 +6,9 @@ import { callGatewayCli, nodesCallOpts, resolveNodeId } from "./rpc.js";
 import type { NodesRpcOpts } from "./types.js";
 
 export function registerNodesLocationCommands(nodes: Command) {
-  const location = nodes.command("location").description("Fetch location from a paired node");
+  const location = nodes
+    .command("location")
+    .description("Fetch location from a paired node");
 
   nodesCallOpts(
     location
@@ -19,13 +21,21 @@ export function registerNodesLocationCommands(nodes: Command) {
         "Desired accuracy (default: balanced/precise depending on node setting)",
       )
       .option("--location-timeout <ms>", "Location fix timeout (ms)", "10000")
-      .option("--invoke-timeout <ms>", "Node invoke timeout in ms (default 20000)", "20000")
+      .option(
+        "--invoke-timeout <ms>",
+        "Node invoke timeout in ms (default 20000)",
+        "20000",
+      )
       .action(async (opts: NodesRpcOpts) => {
         await runNodesCommand("location get", async () => {
           const nodeId = await resolveNodeId(opts, String(opts.node ?? ""));
-          const maxAgeMs = opts.maxAge ? Number.parseInt(String(opts.maxAge), 10) : undefined;
+          const maxAgeMs = opts.maxAge
+            ? Number.parseInt(String(opts.maxAge), 10)
+            : undefined;
           const desiredAccuracyRaw =
-            typeof opts.accuracy === "string" ? opts.accuracy.trim().toLowerCase() : undefined;
+            typeof opts.accuracy === "string"
+              ? opts.accuracy.trim().toLowerCase()
+              : undefined;
           const desiredAccuracy =
             desiredAccuracyRaw === "coarse" ||
             desiredAccuracyRaw === "balanced" ||
@@ -49,12 +59,18 @@ export function registerNodesLocationCommands(nodes: Command) {
             },
             idempotencyKey: randomIdempotencyKey(),
           };
-          if (typeof invokeTimeoutMs === "number" && Number.isFinite(invokeTimeoutMs)) {
+          if (
+            typeof invokeTimeoutMs === "number" &&
+            Number.isFinite(invokeTimeoutMs)
+          ) {
             invokeParams.timeoutMs = invokeTimeoutMs;
           }
 
           const raw = await callGatewayCli("node.invoke", opts, invokeParams);
-          const res = typeof raw === "object" && raw !== null ? (raw as { payload?: unknown }) : {};
+          const res =
+            typeof raw === "object" && raw !== null
+              ? (raw as { payload?: unknown })
+              : {};
           const payload =
             res.payload && typeof res.payload === "object"
               ? (res.payload as Record<string, unknown>)
@@ -69,7 +85,8 @@ export function registerNodesLocationCommands(nodes: Command) {
           const lon = payload.lon;
           const acc = payload.accuracyMeters;
           if (typeof lat === "number" && typeof lon === "number") {
-            const accText = typeof acc === "number" ? ` ±${acc.toFixed(1)}m` : "";
+            const accText =
+              typeof acc === "number" ? ` ±${acc.toFixed(1)}m` : "";
             defaultRuntime.log(`${lat},${lon}${accText}`);
             return;
           }

@@ -29,7 +29,9 @@ export function normalizeReplyPayload(
   payload: ReplyPayload,
   opts: NormalizeReplyOptions = {},
 ): ReplyPayload | null {
-  const hasMedia = Boolean(payload.mediaUrl || (payload.mediaUrls?.length ?? 0) > 0);
+  const hasMedia = Boolean(
+    payload.mediaUrl || (payload.mediaUrls?.length ?? 0) > 0,
+  );
   const hasChannelData = Boolean(
     payload.channelData && Object.keys(payload.channelData).length > 0,
   );
@@ -51,7 +53,11 @@ export function normalizeReplyPayload(
   // Strip NO_REPLY from mixed-content messages (e.g. "😄 NO_REPLY") so the
   // token never leaks to end users.  If stripping leaves nothing, treat it as
   // silent just like the exact-match path above.  (#30916, #30955)
-  if (text && text.includes(silentToken) && !isSilentReplyText(text, silentToken)) {
+  if (
+    text &&
+    text.includes(silentToken) &&
+    !isSilentReplyText(text, silentToken)
+  ) {
     text = stripSilentToken(text, silentToken);
     if (!text && !hasMedia && !hasChannelData) {
       opts.onSkip?.("silent");
@@ -77,7 +83,9 @@ export function normalizeReplyPayload(
   }
 
   if (text) {
-    text = sanitizeUserFacingText(text, { errorContext: Boolean(payload.isError) });
+    text = sanitizeUserFacingText(text, {
+      errorContext: Boolean(payload.isError),
+    });
   }
   if (!text?.trim() && !hasMedia && !hasChannelData) {
     opts.onSkip?.("empty");
@@ -93,7 +101,10 @@ export function normalizeReplyPayload(
 
   // Resolve template variables in responsePrefix if context is provided
   const effectivePrefix = opts.responsePrefixContext
-    ? resolveResponsePrefixTemplate(opts.responsePrefix, opts.responsePrefixContext)
+    ? resolveResponsePrefixTemplate(
+        opts.responsePrefix,
+        opts.responsePrefixContext,
+      )
     : opts.responsePrefix;
 
   if (

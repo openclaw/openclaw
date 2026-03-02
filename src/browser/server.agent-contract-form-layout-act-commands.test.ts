@@ -3,7 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { fetch as realFetch } from "undici";
 import { describe, expect, it } from "vitest";
-import { DEFAULT_DOWNLOAD_DIR, DEFAULT_TRACE_DIR, DEFAULT_UPLOAD_DIR } from "./paths.js";
+import {
+  DEFAULT_DOWNLOAD_DIR,
+  DEFAULT_TRACE_DIR,
+  DEFAULT_UPLOAD_DIR,
+} from "./paths.js";
 import {
   installAgentContractHooks,
   postJson,
@@ -22,7 +26,9 @@ async function withSymlinkPathEscape<T>(params: {
   rootDir: string;
   run: (relativePath: string) => Promise<T>;
 }): Promise<T> {
-  const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-route-escape-"));
+  const outsideDir = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-route-escape-"),
+  );
   const linkName = `escape-link-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const linkPath = path.join(params.rootDir, linkName);
   await fs.mkdir(params.rootDir, { recursive: true });
@@ -114,10 +120,13 @@ describe("browser control server", () => {
         textGone: undefined,
       });
 
-      const evalRes = await postJson<{ ok: boolean; result?: string }>(`${base}/act`, {
-        kind: "evaluate",
-        fn: "() => 1",
-      });
+      const evalRes = await postJson<{ ok: boolean; result?: string }>(
+        `${base}/act`,
+        {
+          kind: "evaluate",
+          fn: "() => 1",
+        },
+      );
       expect(evalRes.ok).toBe(true);
       expect(evalRes.result).toBe("ok");
       expect(pwMocks.evaluateViaPlaywright).toHaveBeenCalledWith(
@@ -216,21 +225,29 @@ describe("browser control server", () => {
     });
     expect(responseBody).toMatchObject({ ok: true });
 
-    const consoleRes = (await realFetch(`${base}/console?level=error`).then((r) => r.json())) as {
+    const consoleRes = (await realFetch(`${base}/console?level=error`).then(
+      (r) => r.json(),
+    )) as {
       ok: boolean;
       messages?: unknown[];
     };
     expect(consoleRes.ok).toBe(true);
     expect(Array.isArray(consoleRes.messages)).toBe(true);
 
-    const pdf = await postJson<{ ok: boolean; path?: string }>(`${base}/pdf`, {});
+    const pdf = await postJson<{ ok: boolean; path?: string }>(
+      `${base}/pdf`,
+      {},
+    );
     expect(pdf.ok).toBe(true);
     expect(typeof pdf.path).toBe("string");
 
-    const shot = await postJson<{ ok: boolean; path?: string }>(`${base}/screenshot`, {
-      element: "body",
-      type: "jpeg",
-    });
+    const shot = await postJson<{ ok: boolean; path?: string }>(
+      `${base}/screenshot`,
+      {
+        element: "body",
+        type: "jpeg",
+      },
+    );
     expect(shot.ok).toBe(true);
     expect(typeof shot.path).toBe("string");
   });
@@ -238,16 +255,26 @@ describe("browser control server", () => {
   it("blocks file chooser traversal / absolute paths outside uploads dir", async () => {
     const base = await startServerAndBase();
 
-    const traversal = await postJson<{ error?: string }>(`${base}/hooks/file-chooser`, {
-      paths: ["../../../../etc/passwd"],
-    });
+    const traversal = await postJson<{ error?: string }>(
+      `${base}/hooks/file-chooser`,
+      {
+        paths: ["../../../../etc/passwd"],
+      },
+    );
     expect(traversal.error).toContain("Invalid path");
     expect(pwMocks.armFileUploadViaPlaywright).not.toHaveBeenCalled();
 
-    const absOutside = path.join(path.parse(DEFAULT_UPLOAD_DIR).root, "etc", "passwd");
-    const abs = await postJson<{ error?: string }>(`${base}/hooks/file-chooser`, {
-      paths: [absOutside],
-    });
+    const absOutside = path.join(
+      path.parse(DEFAULT_UPLOAD_DIR).root,
+      "etc",
+      "passwd",
+    );
+    const abs = await postJson<{ error?: string }>(
+      `${base}/hooks/file-chooser`,
+      {
+        paths: [absOutside],
+      },
+    );
     expect(abs.error).toContain("Invalid path");
     expect(pwMocks.armFileUploadViaPlaywright).not.toHaveBeenCalled();
   });
@@ -273,9 +300,12 @@ describe("browser control server", () => {
 
   it("trace stop accepts in-root relative output path", async () => {
     const base = await startServerAndBase();
-    const res = await postJson<{ ok?: boolean; path?: string }>(`${base}/trace/stop`, {
-      path: "safe-trace.zip",
-    });
+    const res = await postJson<{ ok?: boolean; path?: string }>(
+      `${base}/trace/stop`,
+      {
+        path: "safe-trace.zip",
+      },
+    );
     expect(res.ok).toBe(true);
     expect(res.path).toContain("safe-trace.zip");
     expect(pwMocks.traceStopViaPlaywright).toHaveBeenCalledWith(
@@ -289,9 +319,12 @@ describe("browser control server", () => {
 
   it("wait/download rejects traversal path outside downloads dir", async () => {
     const base = await startServerAndBase();
-    const waitRes = await postJson<{ error?: string }>(`${base}/wait/download`, {
-      path: "../../pwned.pdf",
-    });
+    const waitRes = await postJson<{ error?: string }>(
+      `${base}/wait/download`,
+      {
+        path: "../../pwned.pdf",
+      },
+    );
     expect(waitRes.error).toContain("Invalid path");
     expect(pwMocks.waitForDownloadViaPlaywright).not.toHaveBeenCalled();
   });
@@ -330,9 +363,12 @@ describe("browser control server", () => {
       await withSymlinkPathEscape({
         rootDir: DEFAULT_DOWNLOAD_DIR,
         run: async (pathEscape) => {
-          const res = await postJson<{ error?: string }>(`${base}/wait/download`, {
-            path: pathEscape,
-          });
+          const res = await postJson<{ error?: string }>(
+            `${base}/wait/download`,
+            {
+              path: pathEscape,
+            },
+          );
           expect(res.error).toContain("Invalid path");
           expect(pwMocks.waitForDownloadViaPlaywright).not.toHaveBeenCalled();
         },
@@ -378,10 +414,13 @@ describe("browser control server", () => {
 
   it("download accepts in-root relative output path", async () => {
     const base = await startServerAndBase();
-    const res = await postJson<{ ok?: boolean; download?: { path?: string } }>(`${base}/download`, {
-      ref: "e12",
-      path: "safe-download.pdf",
-    });
+    const res = await postJson<{ ok?: boolean; download?: { path?: string } }>(
+      `${base}/download`,
+      {
+        ref: "e12",
+        path: "safe-download.pdf",
+      },
+    );
     expect(res.ok).toBe(true);
     expect(pwMocks.downloadViaPlaywright).toHaveBeenCalledWith(
       expect.objectContaining({

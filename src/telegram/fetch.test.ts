@@ -1,14 +1,24 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveFetch } from "../infra/fetch.js";
-import { resetTelegramFetchStateForTests, resolveTelegramFetch } from "./fetch.js";
+import {
+  resetTelegramFetchStateForTests,
+  resolveTelegramFetch,
+} from "./fetch.js";
 
 const setDefaultAutoSelectFamily = vi.hoisted(() => vi.fn());
 const setDefaultResultOrder = vi.hoisted(() => vi.fn());
 const setGlobalDispatcher = vi.hoisted(() => vi.fn());
-const getGlobalDispatcherState = vi.hoisted(() => ({ value: undefined as unknown }));
-const getGlobalDispatcher = vi.hoisted(() => vi.fn(() => getGlobalDispatcherState.value));
+const getGlobalDispatcherState = vi.hoisted(() => ({
+  value: undefined as unknown,
+}));
+const getGlobalDispatcher = vi.hoisted(() =>
+  vi.fn(() => getGlobalDispatcherState.value),
+);
 const EnvHttpProxyAgentCtor = vi.hoisted(() =>
-  vi.fn(function MockEnvHttpProxyAgent(this: { options: unknown }, options: unknown) {
+  vi.fn(function MockEnvHttpProxyAgent(
+    this: { options: unknown },
+    options: unknown,
+  ) {
     this.options = options;
   }),
 );
@@ -67,12 +77,16 @@ describe("resolveTelegramFetch", () => {
 
   it("wraps proxy fetches and normalizes foreign signals once", async () => {
     let seenSignal: AbortSignal | undefined;
-    const proxyFetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      seenSignal = init?.signal as AbortSignal | undefined;
-      return {} as Response;
-    });
+    const proxyFetch = vi.fn(
+      async (_input: RequestInfo | URL, init?: RequestInit) => {
+        seenSignal = init?.signal as AbortSignal | undefined;
+        return {} as Response;
+      },
+    );
 
-    const resolved = resolveTelegramFetch(proxyFetch as unknown as typeof fetch);
+    const resolved = resolveTelegramFetch(
+      proxyFetch as unknown as typeof fetch,
+    );
     expect(resolved).toBeTypeOf("function");
 
     let abortHandler: (() => void) | null = null;
@@ -105,7 +119,9 @@ describe("resolveTelegramFetch", () => {
   });
 
   it("does not double-wrap an already wrapped proxy fetch", async () => {
-    const proxyFetch = vi.fn(async () => ({ ok: true }) as Response) as unknown as typeof fetch;
+    const proxyFetch = vi.fn(
+      async () => ({ ok: true }) as Response,
+    ) as unknown as typeof fetch;
     const alreadyWrapped = resolveFetch(proxyFetch);
 
     const resolved = resolveTelegramFetch(alreadyWrapped);
@@ -136,7 +152,9 @@ describe("resolveTelegramFetch", () => {
 
   it("applies dns result order from config", async () => {
     globalThis.fetch = vi.fn(async () => ({})) as unknown as typeof fetch;
-    resolveTelegramFetch(undefined, { network: { dnsResultOrder: "verbatim" } });
+    resolveTelegramFetch(undefined, {
+      network: { dnsResultOrder: "verbatim" },
+    });
     expect(setDefaultResultOrder).toHaveBeenCalledWith("verbatim");
   });
 
@@ -146,8 +164,12 @@ describe("resolveTelegramFetch", () => {
     });
     globalThis.fetch = vi.fn(async () => ({})) as unknown as typeof fetch;
 
-    resolveTelegramFetch(undefined, { network: { dnsResultOrder: "ipv4first" } });
-    resolveTelegramFetch(undefined, { network: { dnsResultOrder: "ipv4first" } });
+    resolveTelegramFetch(undefined, {
+      network: { dnsResultOrder: "ipv4first" },
+    });
+    resolveTelegramFetch(undefined, {
+      network: { dnsResultOrder: "ipv4first" },
+    });
 
     expect(setDefaultResultOrder).toHaveBeenCalledTimes(2);
   });
@@ -219,9 +241,12 @@ describe("resolveTelegramFetch", () => {
   });
 
   it("retries once with ipv4 fallback when fetch fails with network timeout/unreachable", async () => {
-    const timeoutErr = Object.assign(new Error("connect ETIMEDOUT 149.154.166.110:443"), {
-      code: "ETIMEDOUT",
-    });
+    const timeoutErr = Object.assign(
+      new Error("connect ETIMEDOUT 149.154.166.110:443"),
+      {
+        code: "ETIMEDOUT",
+      },
+    );
     const unreachableErr = Object.assign(
       new Error("connect ENETUNREACH 2001:67c:4e8:f004::9:443"),
       {
@@ -263,9 +288,12 @@ describe("resolveTelegramFetch", () => {
   });
 
   it("retries with ipv4 fallback once per request, not once per process", async () => {
-    const timeoutErr = Object.assign(new Error("connect ETIMEDOUT 149.154.166.110:443"), {
-      code: "ETIMEDOUT",
-    });
+    const timeoutErr = Object.assign(
+      new Error("connect ETIMEDOUT 149.154.166.110:443"),
+      {
+        code: "ETIMEDOUT",
+      },
+    );
     const fetchError = Object.assign(new TypeError("fetch failed"), {
       cause: timeoutErr,
     });
@@ -302,9 +330,9 @@ describe("resolveTelegramFetch", () => {
       throw new Error("expected resolved fetch");
     }
 
-    await expect(resolved("https://api.telegram.org/file/botx/photos/file_3.jpg")).rejects.toThrow(
-      "fetch failed",
-    );
+    await expect(
+      resolved("https://api.telegram.org/file/botx/photos/file_3.jpg"),
+    ).rejects.toThrow("fetch failed");
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });

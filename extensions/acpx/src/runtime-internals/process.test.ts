@@ -98,7 +98,12 @@ describe("resolveSpawnCommand", () => {
 
     expect(resolved.command).toBe("C:\\node\\node.exe");
     expect(resolved.args[0]).toBe(scriptPath);
-    expect(resolved.args.slice(1)).toEqual(["--format", "json", "agent", "status"]);
+    expect(resolved.args.slice(1)).toEqual([
+      "--format",
+      "json",
+      "agent",
+      "status",
+    ]);
     expect(resolved.shell).toBeUndefined();
     expect(resolved.windowsHide).toBe(true);
   });
@@ -108,7 +113,11 @@ describe("resolveSpawnCommand", () => {
     const wrapperPath = path.join(dir, "acpx.cmd");
     const exePath = path.join(dir, "acpx.exe");
     await writeFile(exePath, "", "utf8");
-    await writeFile(wrapperPath, ["@ECHO off", '"%~dp0\\acpx.exe" %*', ""].join("\r\n"), "utf8");
+    await writeFile(
+      wrapperPath,
+      ["@ECHO off", '"%~dp0\\acpx.exe" %*', ""].join("\r\n"),
+      "utf8",
+    );
 
     const resolved = resolveSpawnCommand(
       {

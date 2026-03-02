@@ -145,8 +145,16 @@ Mattermost supports multiple accounts under `channels.mattermost.accounts`:
   channels: {
     mattermost: {
       accounts: {
-        default: { name: "Primary", botToken: "mm-token", baseUrl: "https://chat.example.com" },
-        alerts: { name: "Alerts", botToken: "mm-token-2", baseUrl: "https://alerts.example.com" },
+        default: {
+          name: "Primary",
+          botToken: "mm-token",
+          baseUrl: "https://chat.example.com",
+        },
+        alerts: {
+          name: "Alerts",
+          botToken: "mm-token-2",
+          baseUrl: "https://alerts.example.com",
+        },
       },
     },
   },

@@ -81,7 +81,12 @@ export type ContentPart = z.infer<typeof ContentPartSchema>;
 // Item Types (ItemParam)
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const MessageItemRoleSchema = z.enum(["system", "developer", "user", "assistant"]);
+export const MessageItemRoleSchema = z.enum([
+  "system",
+  "developer",
+  "user",
+  "assistant",
+]);
 
 export type MessageItemRole = z.infer<typeof MessageItemRoleSchema>;
 

@@ -21,7 +21,10 @@ import {
   formatTokenUsageDisplay,
   truncateLine,
 } from "../../../shared/subagents-format.js";
-import type { CommandHandler, CommandHandlerResult } from "../commands-types.js";
+import type {
+  CommandHandler,
+  CommandHandlerResult,
+} from "../commands-types.js";
 import {
   formatRunLabel,
   formatRunStatus,
@@ -56,7 +59,8 @@ export const RECENT_WINDOW_MINUTES = 30;
 const SUBAGENT_TASK_PREVIEW_MAX = 110;
 export const STEER_ABORT_SETTLE_TIMEOUT_MS = 5_000;
 
-const SESSION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const SESSION_ID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function compactLine(value: string) {
   return value.replace(/\s+/g, " ").trim();
@@ -76,13 +80,22 @@ function resolveModelDisplay(
   fallbackModel?: string,
 ) {
   const model = typeof entry?.model === "string" ? entry.model.trim() : "";
-  const provider = typeof entry?.modelProvider === "string" ? entry.modelProvider.trim() : "";
-  let combined = model.includes("/") ? model : model && provider ? `${provider}/${model}` : model;
+  const provider =
+    typeof entry?.modelProvider === "string" ? entry.modelProvider.trim() : "";
+  let combined = model.includes("/")
+    ? model
+    : model && provider
+      ? `${provider}/${model}`
+      : model;
   if (!combined) {
     const overrideModel =
-      typeof entry?.modelOverride === "string" ? entry.modelOverride.trim() : "";
+      typeof entry?.modelOverride === "string"
+        ? entry.modelOverride.trim()
+        : "";
     const overrideProvider =
-      typeof entry?.providerOverride === "string" ? entry.providerOverride.trim() : "";
+      typeof entry?.providerOverride === "string"
+        ? entry.providerOverride.trim()
+        : "";
     combined = overrideModel.includes("/")
       ? overrideModel
       : overrideModel && overrideProvider
@@ -114,7 +127,10 @@ export function formatSubagentListLine(params: {
   sessionEntry?: SessionEntry;
 }) {
   const usageText = formatTokenUsageDisplay(params.sessionEntry);
-  const label = truncateLine(formatRunLabel(params.entry, { maxLength: 48 }), 48);
+  const label = truncateLine(
+    formatRunLabel(params.entry, { maxLength: 48 }),
+    48,
+  );
   const task = formatTaskPreview(params.entry.task);
   const runtime = formatDurationCompact(params.runtimeMs);
   const status = resolveDisplayStatus(params.entry);
@@ -162,7 +178,9 @@ export function stopWithText(text: string): CommandHandlerResult {
   return { shouldContinue: false, reply: { text } };
 }
 
-export function stopWithUnknownTargetError(error?: string): CommandHandlerResult {
+export function stopWithUnknownTargetError(
+  error?: string,
+): CommandHandlerResult {
   return stopWithText(`⚠️ ${error ?? "Unknown subagent."}`);
 }
 
@@ -180,7 +198,8 @@ export function resolveSubagentTarget(
       invalidIndex: (value) => `Invalid subagent index: ${value}`,
       unknownSession: (value) => `Unknown subagent session: ${value}`,
       ambiguousLabel: (value) => `Ambiguous subagent label: ${value}`,
-      ambiguousLabelPrefix: (value) => `Ambiguous subagent label prefix: ${value}`,
+      ambiguousLabelPrefix: (value) =>
+        `Ambiguous subagent label prefix: ${value}`,
       ambiguousRunIdPrefix: (value) => `Ambiguous run id prefix: ${value}`,
       unknownTarget: (value) => `Unknown subagent id: ${value}`,
     },
@@ -280,8 +299,11 @@ export function isDiscordSurface(params: SubagentsCommandParams): boolean {
   );
 }
 
-export function resolveDiscordAccountId(params: SubagentsCommandParams): string {
-  const accountId = typeof params.ctx.AccountId === "string" ? params.ctx.AccountId.trim() : "";
+export function resolveDiscordAccountId(
+  params: SubagentsCommandParams,
+): string {
+  const accountId =
+    typeof params.ctx.AccountId === "string" ? params.ctx.AccountId.trim() : "";
   return accountId || "default";
 }
 
@@ -289,7 +311,9 @@ export function resolveDiscordChannelIdForFocus(
   params: SubagentsCommandParams,
 ): string | undefined {
   const toCandidates = [
-    typeof params.ctx.OriginatingTo === "string" ? params.ctx.OriginatingTo.trim() : "",
+    typeof params.ctx.OriginatingTo === "string"
+      ? params.ctx.OriginatingTo.trim()
+      : "",
     typeof params.command.to === "string" ? params.command.to.trim() : "",
     typeof params.ctx.To === "string" ? params.ctx.To.trim() : "",
   ].filter(Boolean);
@@ -387,7 +411,9 @@ export type ChatMessage = {
   content?: unknown;
 };
 
-export function extractMessageText(message: ChatMessage): { role: string; text: string } | null {
+export function extractMessageText(
+  message: ChatMessage,
+): { role: string; text: string } | null {
   const role = typeof message.role === "string" ? message.role : "";
   const shouldSanitize = role === "assistant";
   const text = extractTextFromChatContent(message.content, {

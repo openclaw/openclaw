@@ -6,7 +6,10 @@ import {
   resolveAuthStorePathForDisplay,
   resolveProfileUnusableUntilForDisplay,
 } from "../../agents/auth-profiles.js";
-import { getCustomProviderApiKey, resolveEnvApiKey } from "../../agents/model-auth.js";
+import {
+  getCustomProviderApiKey,
+  resolveEnvApiKey,
+} from "../../agents/model-auth.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { shortenHomePath } from "../../utils.js";
 import { maskApiKey } from "./list.format.js";
@@ -19,7 +22,9 @@ function formatProfileSecretLabel(params: {
 }): string {
   const value = typeof params.value === "string" ? params.value.trim() : "";
   if (value) {
-    return params.kind === "token" ? `token:${maskApiKey(value)}` : maskApiKey(value);
+    return params.kind === "token"
+      ? `token:${maskApiKey(value)}`
+      : maskApiKey(value);
   }
   if (params.ref) {
     const refLabel = `ref(${params.ref.source}:${params.ref.id})`;
@@ -38,7 +43,10 @@ export function resolveProviderAuthOverview(params: {
   const now = Date.now();
   const profiles = listProfilesForProvider(store, provider);
   const withUnusableSuffix = (base: string, profileId: string) => {
-    const unusableUntil = resolveProfileUnusableUntilForDisplay(store, profileId);
+    const unusableUntil = resolveProfileUnusableUntilForDisplay(
+      store,
+      profileId,
+    );
     if (!unusableUntil || now >= unusableUntil) {
       return base;
     }
@@ -85,9 +93,15 @@ export function resolveProviderAuthOverview(params: {
     const base = `${profileId}=OAuth${suffix ? ` ${suffix}` : ""}`;
     return withUnusableSuffix(base, profileId);
   });
-  const oauthCount = profiles.filter((id) => store.profiles[id]?.type === "oauth").length;
-  const tokenCount = profiles.filter((id) => store.profiles[id]?.type === "token").length;
-  const apiKeyCount = profiles.filter((id) => store.profiles[id]?.type === "api_key").length;
+  const oauthCount = profiles.filter(
+    (id) => store.profiles[id]?.type === "oauth",
+  ).length;
+  const tokenCount = profiles.filter(
+    (id) => store.profiles[id]?.type === "token",
+  ).length;
+  const apiKeyCount = profiles.filter(
+    (id) => store.profiles[id]?.type === "api_key",
+  ).length;
 
   const envKey = resolveEnvApiKey(provider);
   const customKey = getCustomProviderApiKey(cfg, provider);
@@ -101,7 +115,8 @@ export function resolveProviderAuthOverview(params: {
     }
     if (envKey) {
       const isOAuthEnv =
-        envKey.source.includes("OAUTH_TOKEN") || envKey.source.toLowerCase().includes("oauth");
+        envKey.source.includes("OAUTH_TOKEN") ||
+        envKey.source.toLowerCase().includes("oauth");
       return {
         kind: "env",
         detail: isOAuthEnv ? "OAuth (env)" : maskApiKey(envKey.apiKey),
@@ -127,7 +142,8 @@ export function resolveProviderAuthOverview(params: {
       ? {
           env: {
             value:
-              envKey.source.includes("OAUTH_TOKEN") || envKey.source.toLowerCase().includes("oauth")
+              envKey.source.includes("OAUTH_TOKEN") ||
+              envKey.source.toLowerCase().includes("oauth")
                 ? "OAuth (env)"
                 : maskApiKey(envKey.apiKey),
             source: envKey.source,

@@ -29,7 +29,10 @@ export function createSlackDraftStream(params: {
   edit?: typeof editSlackMessage;
   remove?: typeof deleteSlackMessage;
 }): SlackDraftStream {
-  const maxChars = Math.min(params.maxChars ?? SLACK_STREAM_MAX_CHARS, SLACK_STREAM_MAX_CHARS);
+  const maxChars = Math.min(
+    params.maxChars ?? SLACK_STREAM_MAX_CHARS,
+    SLACK_STREAM_MAX_CHARS,
+  );
   const throttleMs = Math.max(250, params.throttleMs ?? DEFAULT_THROTTLE_MS);
   const send = params.send ?? sendMessageSlack;
   const edit = params.edit ?? editSlackMessage;
@@ -50,7 +53,9 @@ export function createSlackDraftStream(params: {
     }
     if (trimmed.length > maxChars) {
       stopped = true;
-      params.warn?.(`slack stream preview stopped (text length ${trimmed.length} > ${maxChars})`);
+      params.warn?.(
+        `slack stream preview stopped (text length ${trimmed.length} > ${maxChars})`,
+      );
       return;
     }
     if (trimmed === lastSentText) {
@@ -74,7 +79,9 @@ export function createSlackDraftStream(params: {
       streamMessageId = sent.messageId || streamMessageId;
       if (!streamChannelId || !streamMessageId) {
         stopped = true;
-        params.warn?.("slack stream preview stopped (missing identifiers from sendMessage)");
+        params.warn?.(
+          "slack stream preview stopped (missing identifiers from sendMessage)",
+        );
         return;
       }
       params.onMessageSent?.();
@@ -126,7 +133,9 @@ export function createSlackDraftStream(params: {
     loop.resetPending();
   };
 
-  params.log?.(`slack stream preview ready (maxChars=${maxChars}, throttleMs=${throttleMs})`);
+  params.log?.(
+    `slack stream preview ready (maxChars=${maxChars}, throttleMs=${throttleMs})`,
+  );
 
   return {
     update: loop.update,

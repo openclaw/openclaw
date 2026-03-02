@@ -16,7 +16,9 @@ function baseCtx(payload: ReplyPayload) {
 }
 
 describe("zaloPlugin outbound sendPayload", () => {
-  let mockedSend: ReturnType<typeof vi.mocked<(typeof import("./send.js"))["sendMessageZalo"]>>;
+  let mockedSend: ReturnType<
+    typeof vi.mocked<(typeof import("./send.js"))["sendMessageZalo"]>
+  >;
 
   beforeEach(async () => {
     const mod = await import("./send.js");
@@ -28,9 +30,15 @@ describe("zaloPlugin outbound sendPayload", () => {
   it("text-only delegates to sendText", async () => {
     mockedSend.mockResolvedValue({ ok: true, messageId: "zl-t1" });
 
-    const result = await zaloPlugin.outbound!.sendPayload!(baseCtx({ text: "hello" }));
+    const result = await zaloPlugin.outbound!.sendPayload!(
+      baseCtx({ text: "hello" }),
+    );
 
-    expect(mockedSend).toHaveBeenCalledWith("123456789", "hello", expect.any(Object));
+    expect(mockedSend).toHaveBeenCalledWith(
+      "123456789",
+      "hello",
+      expect.any(Object),
+    );
     expect(result).toMatchObject({ channel: "zalo", messageId: "zl-t1" });
   });
 
@@ -90,7 +98,9 @@ describe("zaloPlugin outbound sendPayload", () => {
       .mockResolvedValueOnce({ ok: true, messageId: "zl-c2" });
 
     const longText = "a".repeat(3000);
-    const result = await zaloPlugin.outbound!.sendPayload!(baseCtx({ text: longText }));
+    const result = await zaloPlugin.outbound!.sendPayload!(
+      baseCtx({ text: longText }),
+    );
 
     // textChunkLimit is 2000 with chunkTextForOutbound, so it should split
     expect(mockedSend.mock.calls.length).toBeGreaterThanOrEqual(2);

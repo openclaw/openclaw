@@ -7,7 +7,10 @@ import type { RuntimeEnv } from "../runtime.js";
 const mocks = vi.hoisted(() => ({
   deliverOutboundPayloads: vi.fn(async () => []),
   getChannelPlugin: vi.fn(() => ({})),
-  resolveOutboundTarget: vi.fn(() => ({ ok: true as const, to: "+15551234567" })),
+  resolveOutboundTarget: vi.fn(() => ({
+    ok: true as const,
+    to: "+15551234567",
+  })),
 }));
 
 vi.mock("../channels/plugins/index.js", () => ({
@@ -20,9 +23,9 @@ vi.mock("../infra/outbound/deliver.js", () => ({
 }));
 
 vi.mock("../infra/outbound/targets.js", async () => {
-  const actual = await vi.importActual<typeof import("../infra/outbound/targets.js")>(
-    "../infra/outbound/targets.js",
-  );
+  const actual = await vi.importActual<
+    typeof import("../infra/outbound/targets.js")
+  >("../infra/outbound/targets.js");
   return {
     ...actual,
     resolveOutboundTarget: mocks.resolveOutboundTarget,
@@ -189,7 +192,11 @@ describe("deliverAgentCommandResult", () => {
     });
 
     expect(mocks.resolveOutboundTarget).toHaveBeenCalledWith(
-      expect.objectContaining({ channel: "slack", to: "#reports", accountId: "ops" }),
+      expect.objectContaining({
+        channel: "slack",
+        to: "#reports",
+        accountId: "ops",
+      }),
     );
   });
 
@@ -212,7 +219,11 @@ describe("deliverAgentCommandResult", () => {
     });
 
     expect(mocks.resolveOutboundTarget).toHaveBeenCalledWith(
-      expect.objectContaining({ channel: "whatsapp", to: "+15559876543", accountId: "work" }),
+      expect.objectContaining({
+        channel: "whatsapp",
+        to: "+15559876543",
+        accountId: "work",
+      }),
     );
   });
 
@@ -277,7 +288,9 @@ describe("deliverAgentCommandResult", () => {
     });
 
     expect(runtime.log).toHaveBeenCalledTimes(1);
-    const line = String((runtime.log as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]);
+    const line = String(
+      (runtime.log as ReturnType<typeof vi.fn>).mock.calls[0]?.[0],
+    );
     expect(line).toContain("[agent:nested]");
     expect(line).toContain("session=agent:main:main");
     expect(line).toContain("run=run-announce");

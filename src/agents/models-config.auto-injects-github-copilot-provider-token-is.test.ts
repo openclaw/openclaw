@@ -19,12 +19,17 @@ describe("models-config", () => {
         const agentDir = path.join(home, "agent-default-base-url");
         await ensureOpenClawModelsJson({ models: { providers: {} } }, agentDir);
 
-        const raw = await fs.readFile(path.join(agentDir, "models.json"), "utf8");
+        const raw = await fs.readFile(
+          path.join(agentDir, "models.json"),
+          "utf8",
+        );
         const parsed = JSON.parse(raw) as {
           providers: Record<string, { baseUrl?: string; models?: unknown[] }>;
         };
 
-        expect(parsed.providers["github-copilot"]?.baseUrl).toBe("https://api.copilot.example");
+        expect(parsed.providers["github-copilot"]?.baseUrl).toBe(
+          "https://api.copilot.example",
+        );
         expect(parsed.providers["github-copilot"]?.models?.length ?? 0).toBe(0);
       });
     });

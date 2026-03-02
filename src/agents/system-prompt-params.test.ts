@@ -13,7 +13,11 @@ async function makeRepoRoot(root: string): Promise<void> {
   await fs.mkdir(path.join(root, ".git"), { recursive: true });
 }
 
-function buildParams(params: { config?: OpenClawConfig; workspaceDir?: string; cwd?: string }) {
+function buildParams(params: {
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  cwd?: string;
+}) {
   return buildSystemPromptParams({
     config: params.config,
     workspaceDir: params.workspaceDir,

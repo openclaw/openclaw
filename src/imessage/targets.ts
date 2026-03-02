@@ -16,11 +16,17 @@ export type IMessageTarget =
   | { kind: "chat_identifier"; chatIdentifier: string }
   | { kind: "handle"; to: string; service: IMessageService };
 
-export type IMessageAllowTarget = ParsedChatTarget | { kind: "handle"; handle: string };
+export type IMessageAllowTarget =
+  | ParsedChatTarget
+  | { kind: "handle"; handle: string };
 
 const CHAT_ID_PREFIXES = ["chat_id:", "chatid:", "chat:"];
 const CHAT_GUID_PREFIXES = ["chat_guid:", "chatguid:", "guid:"];
-const CHAT_IDENTIFIER_PREFIXES = ["chat_identifier:", "chatidentifier:", "chatident:"];
+const CHAT_IDENTIFIER_PREFIXES = [
+  "chat_identifier:",
+  "chatidentifier:",
+  "chatident:",
+];
 const SERVICE_PREFIXES: Array<{ prefix: string; service: IMessageService }> = [
   { prefix: "imessage:", service: "imessage" },
   { prefix: "sms:", service: "sms" },

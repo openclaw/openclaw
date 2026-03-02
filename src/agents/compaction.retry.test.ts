@@ -83,7 +83,8 @@ describe("compaction retry integration", () => {
         attempts: 3,
         minDelayMs: 0,
         label: "compaction/generateSummary",
-        shouldRetry: (err: unknown) => !(err instanceof Error && err.name === "AbortError"),
+        shouldRetry: (err: unknown) =>
+          !(err instanceof Error && err.name === "AbortError"),
       }),
     ).rejects.toThrow("aborted");
 

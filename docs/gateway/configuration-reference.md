@@ -239,7 +239,11 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
       replyToMode: "off", // off | first | all
       dmPolicy: "pairing",
       allowFrom: ["1234567890", "123456789012345678"],
-      dm: { enabled: true, groupEnabled: false, groupChannels: ["openclaw-dm"] },
+      dm: {
+        enabled: true,
+        groupEnabled: false,
+        groupChannels: ["openclaw-dm"],
+      },
       guilds: {
         "123456789012345678": {
           slug: "friends-of-openclaw",
@@ -468,7 +472,10 @@ Chat modes: `oncall` (respond on @-mention, default), `onmessage` (every message
       allowFrom: ["+15551234567", "uuid:123e4567-e89b-12d3-a456-426614174000"],
       configWrites: true,
       reactionNotifications: "own", // off | own | all | allowlist
-      reactionAllowlist: ["+15551234567", "uuid:123e4567-e89b-12d3-a456-426614174000"],
+      reactionAllowlist: [
+        "+15551234567",
+        "uuid:123e4567-e89b-12d3-a456-426614174000",
+      ],
       historyLimit: 50,
     },
   },
@@ -645,7 +652,9 @@ Group messages default to **require mention** (metadata mention or regex pattern
     groupChat: { historyLimit: 50 },
   },
   agents: {
-    list: [{ id: "main", groupChat: { mentionPatterns: ["@openclaw", "openclaw"] } }],
+    list: [
+      { id: "main", groupChat: { mentionPatterns: ["@openclaw", "openclaw"] } },
+    ],
   },
 }
 ```
@@ -996,7 +1005,10 @@ Prunes **old tool results** from in-memory context before sending to the LLM. Do
         hardClearRatio: 0.5,
         minPrunableToolChars: 50000,
         softTrim: { maxChars: 4000, headChars: 1500, tailChars: 1500 },
-        hardClear: { enabled: true, placeholder: "[Old tool result content cleared]" },
+        hardClear: {
+          enabled: true,
+          placeholder: "[Old tool result content cleared]",
+        },
         tools: { deny: ["browser", "canvas"] },
       },
     },
@@ -1409,7 +1421,9 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
     mainKey: "main", // legacy (runtime always uses "main")
     agentToAgent: { maxPingPongTurns: 5 },
     sendPolicy: {
-      rules: [{ action: "deny", match: { channel: "discord", chatType: "group" } }],
+      rules: [
+        { action: "deny", match: { channel: "discord", chatType: "group" } },
+      ],
       default: "allow",
     },
   },
@@ -1754,7 +1768,11 @@ Configures inbound media understanding (image/audio/video):
         },
         models: [
           { provider: "openai", model: "gpt-4o-mini-transcribe" },
-          { type: "cli", command: "whisper", args: ["--model", "base", "{{MediaPath}}"] },
+          {
+            type: "cli",
+            command: "whisper",
+            args: ["--model", "base", "{{MediaPath}}"],
+          },
         ],
       },
       video: {
@@ -2081,7 +2099,9 @@ Anthropic-compatible, built-in provider. Shortcut: `openclaw onboard --auth-choi
   agents: {
     defaults: {
       model: { primary: "synthetic/hf:MiniMaxAI/MiniMax-M2.1" },
-      models: { "synthetic/hf:MiniMaxAI/MiniMax-M2.1": { alias: "MiniMax M2.1" } },
+      models: {
+        "synthetic/hf:MiniMaxAI/MiniMax-M2.1": { alias: "MiniMax M2.1" },
+      },
     },
   },
   models: {
@@ -2657,7 +2677,11 @@ Notes:
 {
   auth: {
     profiles: {
-      "anthropic:me@example.com": { provider: "anthropic", mode: "oauth", email: "me@example.com" },
+      "anthropic:me@example.com": {
+        provider: "anthropic",
+        mode: "oauth",
+        email: "me@example.com",
+      },
       "anthropic:work": { provider: "anthropic", mode: "api_key" },
     },
     order: {

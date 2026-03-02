@@ -19,7 +19,8 @@ const RTL_ISOLATE_END = "\u2069";
 function hasControlChars(text: string): boolean {
   for (const char of text) {
     const code = char.charCodeAt(0);
-    const isAsciiControl = code <= 0x1f && code !== 0x09 && code !== 0x0a && code !== 0x0d;
+    const isAsciiControl =
+      code <= 0x1f && code !== 0x09 && code !== 0x0a && code !== 0x0d;
     const isC1Control = code >= 0x7f && code <= 0x9f;
     if (isAsciiControl || isC1Control) {
       return true;
@@ -35,7 +36,8 @@ function stripControlChars(text: string): string {
   let sanitized = "";
   for (const char of text) {
     const code = char.charCodeAt(0);
-    const isAsciiControl = code <= 0x1f && code !== 0x09 && code !== 0x0a && code !== 0x0d;
+    const isAsciiControl =
+      code <= 0x1f && code !== 0x09 && code !== 0x0a && code !== 0x0d;
     const isC1Control = code >= 0x7f && code <= 0x9f;
     if (!isAsciiControl && !isC1Control) {
       sanitized += char;
@@ -126,7 +128,9 @@ export function sanitizeRenderableText(text: string): string {
   }
 
   const withoutAnsi = hasAnsi ? stripAnsi(text) : text;
-  const withoutControlChars = hasControls ? stripControlChars(withoutAnsi) : withoutAnsi;
+  const withoutControlChars = hasControls
+    ? stripControlChars(withoutAnsi)
+    : withoutAnsi;
   const redacted = hasReplacementChars
     ? withoutControlChars
         .split("\n")
@@ -173,7 +177,9 @@ export function composeThinkingAndContent(params: {
   return parts.join("\n\n").trim();
 }
 
-function asMessageRecord(message: unknown): Record<string, unknown> | undefined {
+function asMessageRecord(
+  message: unknown,
+): Record<string, unknown> | undefined {
   if (!message || typeof message !== "object") {
     return undefined;
   }
@@ -190,12 +196,16 @@ function resolveMessageRecord(
   return { record, content: record.content };
 }
 
-function formatAssistantErrorFromRecord(record: Record<string, unknown>): string {
-  const stopReason = typeof record.stopReason === "string" ? record.stopReason : "";
+function formatAssistantErrorFromRecord(
+  record: Record<string, unknown>,
+): string {
+  const stopReason =
+    typeof record.stopReason === "string" ? record.stopReason : "";
   if (stopReason !== "error") {
     return "";
   }
-  const errorMessage = typeof record.errorMessage === "string" ? record.errorMessage : "";
+  const errorMessage =
+    typeof record.errorMessage === "string" ? record.errorMessage : "";
   return formatRawAssistantErrorForUi(errorMessage);
 }
 
@@ -213,7 +223,10 @@ function collectSanitizedBlockStrings(params: {
       continue;
     }
     const rec = block as Record<string, unknown>;
-    if (rec.type === params.blockType && typeof rec[params.valueKey] === "string") {
+    if (
+      rec.type === params.blockType &&
+      typeof rec[params.valueKey] === "string"
+    ) {
       parts.push(sanitizeRenderableText(rec[params.valueKey] as string));
     }
   }
@@ -267,7 +280,10 @@ export function extractContentFromMessage(message: unknown): string {
   return formatAssistantErrorFromRecord(record);
 }
 
-function extractTextBlocks(content: unknown, opts?: { includeThinking?: boolean }): string {
+function extractTextBlocks(
+  content: unknown,
+  opts?: { includeThinking?: boolean },
+): string {
   if (typeof content === "string") {
     return sanitizeRenderableText(content).trim();
   }
@@ -347,11 +363,18 @@ export function formatContextUsageLine(params: {
   remaining?: number | null;
   percent?: number | null;
 }) {
-  const totalLabel = typeof params.total === "number" ? formatTokenCount(params.total) : "?";
-  const ctxLabel = typeof params.context === "number" ? formatTokenCount(params.context) : "?";
-  const pct = typeof params.percent === "number" ? Math.min(999, Math.round(params.percent)) : null;
+  const totalLabel =
+    typeof params.total === "number" ? formatTokenCount(params.total) : "?";
+  const ctxLabel =
+    typeof params.context === "number" ? formatTokenCount(params.context) : "?";
+  const pct =
+    typeof params.percent === "number"
+      ? Math.min(999, Math.round(params.percent))
+      : null;
   const remainingLabel =
-    typeof params.remaining === "number" ? `${formatTokenCount(params.remaining)} left` : null;
+    typeof params.remaining === "number"
+      ? `${formatTokenCount(params.remaining)} left`
+      : null;
   const pctLabel = pct !== null ? `${pct}%` : null;
   const extra = [remainingLabel, pctLabel].filter(Boolean).join(", ");
   return `tokens ${totalLabel}/${ctxLabel}${extra ? ` (${extra})` : ""}`;

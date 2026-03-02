@@ -26,13 +26,15 @@ describe("browser server-context remote profile tab operations", () => {
       color: "#FF4500",
     };
 
-    const reachableMock = vi.mocked(chromeModule.isChromeReachable).mockResolvedValueOnce(false);
+    const reachableMock = vi
+      .mocked(chromeModule.isChromeReachable)
+      .mockResolvedValueOnce(false);
     const launchMock = vi.mocked(chromeModule.launchOpenClawChrome);
     const ctx = createBrowserRouteContext({ getState: () => state });
 
-    await expect(ctx.forProfile("openclaw").ensureBrowserAvailable()).rejects.toThrow(
-      /attachOnly is enabled/i,
-    );
+    await expect(
+      ctx.forProfile("openclaw").ensureBrowserAvailable(),
+    ).rejects.toThrow(/attachOnly is enabled/i);
     expect(reachableMock).toHaveBeenCalled();
     expect(launchMock).not.toHaveBeenCalled();
   });
@@ -46,14 +48,18 @@ describe("browser server-context remote profile tab operations", () => {
       color: "#FF4500",
     };
 
-    const httpReachableMock = vi.mocked(chromeModule.isChromeReachable).mockResolvedValueOnce(true);
-    const wsReachableMock = vi.mocked(chromeModule.isChromeCdpReady).mockResolvedValueOnce(false);
+    const httpReachableMock = vi
+      .mocked(chromeModule.isChromeReachable)
+      .mockResolvedValueOnce(true);
+    const wsReachableMock = vi
+      .mocked(chromeModule.isChromeCdpReady)
+      .mockResolvedValueOnce(false);
     const launchMock = vi.mocked(chromeModule.launchOpenClawChrome);
     const ctx = createBrowserRouteContext({ getState: () => state });
 
-    await expect(ctx.forProfile("openclaw").ensureBrowserAvailable()).rejects.toThrow(
-      /attachOnly is enabled and CDP websocket/i,
-    );
+    await expect(
+      ctx.forProfile("openclaw").ensureBrowserAvailable(),
+    ).rejects.toThrow(/attachOnly is enabled and CDP websocket/i);
     expect(httpReachableMock).toHaveBeenCalled();
     expect(wsReachableMock).toHaveBeenCalled();
     expect(launchMock).not.toHaveBeenCalled();
@@ -61,7 +67,12 @@ describe("browser server-context remote profile tab operations", () => {
 
   it("uses Playwright tab operations when available", async () => {
     const listPagesViaPlaywright = vi.fn(async () => [
-      { targetId: "T1", title: "Tab 1", url: "https://example.com", type: "page" },
+      {
+        targetId: "T1",
+        title: "Tab 1",
+        url: "https://example.com",
+        type: "page",
+      },
     ]);
     const createPageViaPlaywright = vi.fn(async () => ({
       targetId: "T2",
@@ -103,18 +114,38 @@ describe("browser server-context remote profile tab operations", () => {
     const responses = [
       [
         { targetId: "A", title: "A", url: "https://example.com", type: "page" },
-        { targetId: "B", title: "B", url: "https://www.example.com", type: "page" },
+        {
+          targetId: "B",
+          title: "B",
+          url: "https://www.example.com",
+          type: "page",
+        },
       ],
       [
         { targetId: "A", title: "A", url: "https://example.com", type: "page" },
-        { targetId: "B", title: "B", url: "https://www.example.com", type: "page" },
+        {
+          targetId: "B",
+          title: "B",
+          url: "https://www.example.com",
+          type: "page",
+        },
       ],
       [
-        { targetId: "B", title: "B", url: "https://www.example.com", type: "page" },
+        {
+          targetId: "B",
+          title: "B",
+          url: "https://www.example.com",
+          type: "page",
+        },
         { targetId: "A", title: "A", url: "https://example.com", type: "page" },
       ],
       [
-        { targetId: "B", title: "B", url: "https://www.example.com", type: "page" },
+        {
+          targetId: "B",
+          title: "B",
+          url: "https://www.example.com",
+          type: "page",
+        },
         { targetId: "A", title: "A", url: "https://example.com", type: "page" },
       ],
     ];
@@ -141,8 +172,22 @@ describe("browser server-context remote profile tab operations", () => {
 
   it("falls back to the only tab for remote profiles when targetId is stale", async () => {
     const responses = [
-      [{ targetId: "T1", title: "Tab 1", url: "https://example.com", type: "page" }],
-      [{ targetId: "T1", title: "Tab 1", url: "https://example.com", type: "page" }],
+      [
+        {
+          targetId: "T1",
+          title: "Tab 1",
+          url: "https://example.com",
+          type: "page",
+        },
+      ],
+      [
+        {
+          targetId: "T1",
+          title: "Tab 1",
+          url: "https://example.com",
+          type: "page",
+        },
+      ],
     ];
     const listPagesViaPlaywright = vi.fn(createSequentialPageLister(responses));
 
@@ -173,12 +218,19 @@ describe("browser server-context remote profile tab operations", () => {
     } as unknown as Awaited<ReturnType<typeof pwAiModule.getPwAiModule>>);
 
     const { remote } = createRemoteRouteHarness();
-    await expect(remote.ensureTabAvailable("STALE_TARGET")).rejects.toThrow(/tab not found/i);
+    await expect(remote.ensureTabAvailable("STALE_TARGET")).rejects.toThrow(
+      /tab not found/i,
+    );
   });
 
   it("uses Playwright focus for remote profiles when available", async () => {
     const listPagesViaPlaywright = vi.fn(async () => [
-      { targetId: "T1", title: "Tab 1", url: "https://example.com", type: "page" },
+      {
+        targetId: "T1",
+        title: "Tab 1",
+        url: "https://example.com",
+        type: "page",
+      },
     ]);
     const focusPageByTargetIdViaPlaywright = vi.fn(async () => {});
 

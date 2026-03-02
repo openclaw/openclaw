@@ -10,7 +10,11 @@ export function createSecretsHandlers(params: {
         const result = await params.reloadSecrets();
         respond(true, { ok: true, warningCount: result.warningCount });
       } catch (err) {
-        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.UNAVAILABLE, String(err)),
+        );
       }
     },
   };

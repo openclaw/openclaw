@@ -2,63 +2,67 @@ import type { ChannelMessageActionName } from "../../channels/plugins/types.js";
 
 export type MessageActionTargetMode = "to" | "channelId" | "none";
 
-export const MESSAGE_ACTION_TARGET_MODE: Record<ChannelMessageActionName, MessageActionTargetMode> =
-  {
-    send: "to",
-    broadcast: "none",
-    poll: "to",
-    react: "to",
-    reactions: "to",
-    read: "to",
-    edit: "to",
-    unsend: "to",
-    reply: "to",
-    sendWithEffect: "to",
-    renameGroup: "to",
-    setGroupIcon: "to",
-    addParticipant: "to",
-    removeParticipant: "to",
-    leaveGroup: "to",
-    sendAttachment: "to",
-    delete: "to",
-    pin: "to",
-    unpin: "to",
-    "list-pins": "to",
-    permissions: "to",
-    "thread-create": "to",
-    "thread-list": "none",
-    "thread-reply": "to",
-    search: "none",
-    sticker: "to",
-    "sticker-search": "none",
-    "member-info": "none",
-    "role-info": "none",
-    "emoji-list": "none",
-    "emoji-upload": "none",
-    "sticker-upload": "none",
-    "role-add": "none",
-    "role-remove": "none",
-    "channel-info": "channelId",
-    "channel-list": "none",
-    "channel-create": "none",
-    "channel-edit": "channelId",
-    "channel-delete": "channelId",
-    "channel-move": "channelId",
-    "category-create": "none",
-    "category-edit": "none",
-    "category-delete": "none",
-    "topic-create": "to",
-    "voice-status": "none",
-    "event-list": "none",
-    "event-create": "none",
-    timeout: "none",
-    kick: "none",
-    ban: "none",
-    "set-presence": "none",
-    "download-file": "none",
-  };
+export const MESSAGE_ACTION_TARGET_MODE: Record<
+  ChannelMessageActionName,
+  MessageActionTargetMode
+> = {
+  send: "to",
+  broadcast: "none",
+  poll: "to",
+  react: "to",
+  reactions: "to",
+  read: "to",
+  edit: "to",
+  unsend: "to",
+  reply: "to",
+  sendWithEffect: "to",
+  renameGroup: "to",
+  setGroupIcon: "to",
+  addParticipant: "to",
+  removeParticipant: "to",
+  leaveGroup: "to",
+  sendAttachment: "to",
+  delete: "to",
+  pin: "to",
+  unpin: "to",
+  "list-pins": "to",
+  permissions: "to",
+  "thread-create": "to",
+  "thread-list": "none",
+  "thread-reply": "to",
+  search: "none",
+  sticker: "to",
+  "sticker-search": "none",
+  "member-info": "none",
+  "role-info": "none",
+  "emoji-list": "none",
+  "emoji-upload": "none",
+  "sticker-upload": "none",
+  "role-add": "none",
+  "role-remove": "none",
+  "channel-info": "channelId",
+  "channel-list": "none",
+  "channel-create": "none",
+  "channel-edit": "channelId",
+  "channel-delete": "channelId",
+  "channel-move": "channelId",
+  "category-create": "none",
+  "category-edit": "none",
+  "category-delete": "none",
+  "topic-create": "to",
+  "voice-status": "none",
+  "event-list": "none",
+  "event-create": "none",
+  timeout: "none",
+  kick: "none",
+  ban: "none",
+  "set-presence": "none",
+  "download-file": "none",
+};
 
-const ACTION_TARGET_ALIASES: Partial<Record<ChannelMessageActionName, string[]>> = {
+const ACTION_TARGET_ALIASES: Partial<
+  Record<ChannelMessageActionName, string[]>
+> = {
   unsend: ["messageId"],
   edit: ["messageId"],
   react: ["chatGuid", "chatIdentifier", "chatId"],
@@ -69,7 +73,9 @@ const ACTION_TARGET_ALIASES: Partial<Record<ChannelMessageActionName, string[]>>
   leaveGroup: ["chatGuid", "chatIdentifier", "chatId"],
 };
 
-export function actionRequiresTarget(action: ChannelMessageActionName): boolean {
+export function actionRequiresTarget(
+  action: ChannelMessageActionName,
+): boolean {
   return MESSAGE_ACTION_TARGET_MODE[action] !== "none";
 }
 
@@ -81,7 +87,8 @@ export function actionHasTarget(
   if (to) {
     return true;
   }
-  const channelId = typeof params.channelId === "string" ? params.channelId.trim() : "";
+  const channelId =
+    typeof params.channelId === "string" ? params.channelId.trim() : "";
   if (channelId) {
     return true;
   }

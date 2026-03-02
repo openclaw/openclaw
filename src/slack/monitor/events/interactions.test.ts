@@ -15,7 +15,11 @@ type RegisteredHandler = (args: {
     trigger_id?: string;
     response_url?: string;
     channel?: { id?: string };
-    container?: { channel_id?: string; message_ts?: string; thread_ts?: string };
+    container?: {
+      channel_id?: string;
+      message_ts?: string;
+      thread_ts?: string;
+    };
     message?: { ts?: string; text?: string; blocks?: unknown[] };
   };
   action: Record<string, unknown>;
@@ -35,7 +39,9 @@ type RegisteredViewHandler = (args: {
       previous_view_id?: string;
       external_id?: string;
       hash?: string;
-      state?: { values?: Record<string, Record<string, Record<string, unknown>>> };
+      state?: {
+        values?: Record<string, Record<string, Record<string, unknown>>>;
+      };
     };
   };
 }) => Promise<void>;
@@ -53,7 +59,9 @@ type RegisteredViewClosedHandler = (args: {
       previous_view_id?: string;
       external_id?: string;
       hash?: string;
-      state?: { values?: Record<string, Record<string, Record<string, unknown>>> };
+      state?: {
+        values?: Record<string, Record<string, Record<string, unknown>>>;
+      };
     };
     is_cleared?: boolean;
   };
@@ -97,7 +105,9 @@ function createContext(overrides?: {
     },
   };
   const runtimeLog = vi.fn();
-  const resolveSessionKey = vi.fn().mockReturnValue("agent:ops:slack:channel:C1");
+  const resolveSessionKey = vi
+    .fn()
+    .mockReturnValue("agent:ops:slack:channel:C1");
   const isChannelAllowed = vi
     .fn<
       (params: {
@@ -106,10 +116,14 @@ function createContext(overrides?: {
         channelType?: "im" | "mpim" | "channel" | "group";
       }) => boolean
     >()
-    .mockImplementation((params) => overrides?.isChannelAllowed?.(params) ?? true);
+    .mockImplementation(
+      (params) => overrides?.isChannelAllowed?.(params) ?? true,
+    );
   const resolveUserName = vi
     .fn<(userId: string) => Promise<{ name?: string }>>()
-    .mockImplementation((userId) => overrides?.resolveUserName?.(userId) ?? Promise.resolve({}));
+    .mockImplementation(
+      (userId) => overrides?.resolveUserName?.(userId) ?? Promise.resolve({}),
+    );
   const resolveChannelName = vi
     .fn<
       (channelId: string) => Promise<{
@@ -118,7 +132,8 @@ function createContext(overrides?: {
       }>
     >()
     .mockImplementation(
-      (channelId) => overrides?.resolveChannelName?.(channelId) ?? Promise.resolve({}),
+      (channelId) =>
+        overrides?.resolveChannelName?.(channelId) ?? Promise.resolve({}),
     );
   const ctx = {
     app,
@@ -170,7 +185,11 @@ describe("registerSlackInteractionEvents", () => {
         trigger_id: "123.trigger",
         response_url: "https://hooks.slack.test/response",
         channel: { id: "C1" },
-        container: { channel_id: "C1", message_ts: "100.200", thread_ts: "100.100" },
+        container: {
+          channel_id: "C1",
+          message_ts: "100.200",
+          thread_ts: "100.100",
+        },
         message: {
           ts: "100.200",
           text: "fallback",
@@ -196,7 +215,9 @@ describe("registerSlackInteractionEvents", () => {
     expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
     const [eventText] = enqueueSystemEventMock.mock.calls[0] as [string];
     expect(eventText.startsWith("Slack interaction: ")).toBe(true);
-    const payload = JSON.parse(eventText.replace("Slack interaction: ", "")) as {
+    const payload = JSON.parse(
+      eventText.replace("Slack interaction: ", ""),
+    ) as {
       actionId: string;
       actionType: string;
       value: string;
@@ -341,7 +362,9 @@ describe("registerSlackInteractionEvents", () => {
     expect(ack).toHaveBeenCalled();
     expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
     const [eventText] = enqueueSystemEventMock.mock.calls[0] as [string];
-    const payload = JSON.parse(eventText.replace("Slack interaction: ", "")) as {
+    const payload = JSON.parse(
+      eventText.replace("Slack interaction: ", ""),
+    ) as {
       actionType: string;
       selectedValues?: string[];
       selectedLabels?: string[];
@@ -357,7 +380,12 @@ describe("registerSlackInteractionEvents", () => {
         blocks: [
           {
             type: "context",
-            elements: [{ type: "mrkdwn", text: ":white_check_mark: *Canary* selected by <@U555>" }],
+            elements: [
+              {
+                type: "mrkdwn",
+                text: ":white_check_mark: *Canary* selected by <@U555>",
+              },
+            ],
           },
         ],
       }),
@@ -474,7 +502,9 @@ describe("registerSlackInteractionEvents", () => {
     expect(ack).toHaveBeenCalled();
     expect(app.client.chat.update).not.toHaveBeenCalled();
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
-    expect(runtimeLog).toHaveBeenCalledWith(expect.stringContaining("slack:interaction malformed"));
+    expect(runtimeLog).toHaveBeenCalledWith(
+      expect.stringContaining("slack:interaction malformed"),
+    );
   });
 
   it("escapes mrkdwn characters in confirmation labels", async () => {
@@ -539,7 +569,11 @@ describe("registerSlackInteractionEvents", () => {
       body: {
         user: { id: "U111" },
         team: { id: "T111" },
-        container: { channel_id: "C222", message_ts: "222.333", thread_ts: "222.111" },
+        container: {
+          channel_id: "C222",
+          message_ts: "222.333",
+          thread_ts: "222.111",
+        },
       },
       action: {
         type: "button",
@@ -557,7 +591,9 @@ describe("registerSlackInteractionEvents", () => {
     });
     expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
     const [eventText] = enqueueSystemEventMock.mock.calls[0] as [string];
-    const payload = JSON.parse(eventText.replace("Slack interaction: ", "")) as {
+    const payload = JSON.parse(
+      eventText.replace("Slack interaction: ", ""),
+    ) as {
       channelId?: string;
       messageTs?: string;
       threadTs?: string;
@@ -592,7 +628,9 @@ describe("registerSlackInteractionEvents", () => {
             {
               type: "actions",
               block_id: "multi_block",
-              elements: [{ type: "multi_static_select", action_id: "openclaw:multi" }],
+              elements: [
+                { type: "multi_static_select", action_id: "openclaw:multi" },
+              ],
             },
           ],
         },
@@ -661,7 +699,9 @@ describe("registerSlackInteractionEvents", () => {
             {
               type: "actions",
               block_id: "datetime_block",
-              elements: [{ type: "datetimepicker", action_id: "openclaw:datetime" }],
+              elements: [
+                { type: "datetimepicker", action_id: "openclaw:datetime" },
+              ],
             },
           ],
         },
@@ -711,7 +751,9 @@ describe("registerSlackInteractionEvents", () => {
             {
               type: "actions",
               block_id: "datetime_block",
-              elements: [{ type: "datetimepicker", action_id: "openclaw:datetime" }],
+              elements: [
+                { type: "datetimepicker", action_id: "openclaw:datetime" },
+              ],
             },
           ],
         },
@@ -733,7 +775,10 @@ describe("registerSlackInteractionEvents", () => {
           {
             type: "context",
             elements: [
-              { type: "mrkdwn", text: ":white_check_mark: *2026-02-16* selected by <@U333>" },
+              {
+                type: "mrkdwn",
+                text: ":white_check_mark: *2026-02-16* selected by <@U333>",
+              },
             ],
           },
           expect.anything(),
@@ -749,7 +794,12 @@ describe("registerSlackInteractionEvents", () => {
         blocks: [
           {
             type: "context",
-            elements: [{ type: "mrkdwn", text: ":white_check_mark: *14:30* selected by <@U333>" }],
+            elements: [
+              {
+                type: "mrkdwn",
+                text: ":white_check_mark: *14:30* selected by <@U333>",
+              },
+            ],
           },
         ],
       }),
@@ -814,7 +864,9 @@ describe("registerSlackInteractionEvents", () => {
     expect(ack).toHaveBeenCalled();
     expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
     const [eventText] = enqueueSystemEventMock.mock.calls[0] as [string];
-    const payload = JSON.parse(eventText.replace("Slack interaction: ", "")) as {
+    const payload = JSON.parse(
+      eventText.replace("Slack interaction: ", ""),
+    ) as {
       actionType: string;
       selectedValues?: string[];
       selectedUsers?: string[];
@@ -876,7 +928,9 @@ describe("registerSlackInteractionEvents", () => {
     expect(ack).toHaveBeenCalled();
     expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
     const [eventText] = enqueueSystemEventMock.mock.calls[0] as [string];
-    const payload = JSON.parse(eventText.replace("Slack interaction: ", "")) as {
+    const payload = JSON.parse(
+      eventText.replace("Slack interaction: ", ""),
+    ) as {
       actionType?: string;
       workflowTriggerUrl?: string;
       workflowId?: string;
@@ -955,7 +1009,9 @@ describe("registerSlackInteractionEvents", () => {
     });
     expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
     const [eventText] = enqueueSystemEventMock.mock.calls[0] as [string];
-    const payload = JSON.parse(eventText.replace("Slack interaction: ", "")) as {
+    const payload = JSON.parse(
+      eventText.replace("Slack interaction: ", ""),
+    ) as {
       interactionType: string;
       actionId: string;
       callbackId: string;
@@ -967,7 +1023,11 @@ describe("registerSlackInteractionEvents", () => {
       externalId?: string;
       viewHash?: string;
       isStackedView?: boolean;
-      inputs: Array<{ actionId: string; selectedValues?: string[]; inputValue?: string }>;
+      inputs: Array<{
+        actionId: string;
+        selectedValues?: string[];
+        inputValue?: string;
+      }>;
     };
     expect(payload).toMatchObject({
       interactionType: "view_submission",
@@ -984,8 +1044,14 @@ describe("registerSlackInteractionEvents", () => {
     });
     expect(payload.inputs).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ actionId: "env_select", selectedValues: ["prod"] }),
-        expect.objectContaining({ actionId: "notes_input", inputValue: "ship now" }),
+        expect.objectContaining({
+          actionId: "env_select",
+          selectedValues: ["prod"],
+        }),
+        expect.objectContaining({
+          actionId: "notes_input",
+          inputValue: "ship now",
+        }),
       ]),
     );
   });
@@ -1168,7 +1234,9 @@ describe("registerSlackInteractionEvents", () => {
     expect(ack).toHaveBeenCalled();
     expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
     const [eventText] = enqueueSystemEventMock.mock.calls[0] as [string];
-    const payload = JSON.parse(eventText.replace("Slack interaction: ", "")) as {
+    const payload = JSON.parse(
+      eventText.replace("Slack interaction: ", ""),
+    ) as {
       inputs: Array<{
         actionId: string;
         inputKind?: string;
@@ -1209,9 +1277,18 @@ describe("registerSlackInteractionEvents", () => {
           selectedValues: ["G900"],
           selectedConversations: ["G900"],
         }),
-        expect.objectContaining({ actionId: "date_select", selectedDate: "2026-02-16" }),
-        expect.objectContaining({ actionId: "time_select", selectedTime: "12:45" }),
-        expect.objectContaining({ actionId: "datetime_select", selectedDateTime: 1_771_632_300 }),
+        expect.objectContaining({
+          actionId: "date_select",
+          selectedDate: "2026-02-16",
+        }),
+        expect.objectContaining({
+          actionId: "time_select",
+          selectedTime: "12:45",
+        }),
+        expect.objectContaining({
+          actionId: "datetime_select",
+          selectedDateTime: 1_771_632_300,
+        }),
         expect.objectContaining({
           actionId: "radio_select",
           selectedValues: ["blue"],
@@ -1299,10 +1376,14 @@ describe("registerSlackInteractionEvents", () => {
 
     expect(ack).toHaveBeenCalled();
     const [eventText] = enqueueSystemEventMock.mock.calls[0] as [string];
-    const payload = JSON.parse(eventText.replace("Slack interaction: ", "")) as {
+    const payload = JSON.parse(
+      eventText.replace("Slack interaction: ", ""),
+    ) as {
       inputs: Array<{ actionId: string; richTextPreview?: string }>;
     };
-    const richInput = payload.inputs.find((input) => input.actionId === "richtext_input");
+    const richInput = payload.inputs.find(
+      (input) => input.actionId === "richtext_input",
+    );
     expect(richInput?.richTextPreview).toBeTruthy();
     expect((richInput?.richTextPreview ?? "").length).toBeLessThanOrEqual(120);
   });
@@ -1356,7 +1437,9 @@ describe("registerSlackInteractionEvents", () => {
       string,
       { sessionKey?: string },
     ];
-    const payload = JSON.parse(eventText.replace("Slack interaction: ", "")) as {
+    const payload = JSON.parse(
+      eventText.replace("Slack interaction: ", ""),
+    ) as {
       interactionType: string;
       actionId: string;
       callbackId: string;
@@ -1387,7 +1470,10 @@ describe("registerSlackInteractionEvents", () => {
     });
     expect(payload.inputs).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ actionId: "env_select", selectedValues: ["canary"] }),
+        expect.objectContaining({
+          actionId: "env_select",
+          selectedValues: ["canary"],
+        }),
       ]),
     );
     expect(options.sessionKey).toBe("agent:main:slack:channel:C99");
@@ -1416,7 +1502,9 @@ describe("registerSlackInteractionEvents", () => {
     expect(ack).toHaveBeenCalled();
     expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
     const [eventText] = enqueueSystemEventMock.mock.calls[0] as [string];
-    const payload = JSON.parse(eventText.replace("Slack interaction: ", "")) as {
+    const payload = JSON.parse(
+      eventText.replace("Slack interaction: ", ""),
+    ) as {
       interactionType: string;
       isCleared?: boolean;
     };
@@ -1473,13 +1561,17 @@ describe("registerSlackInteractionEvents", () => {
     expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
     const [eventText] = enqueueSystemEventMock.mock.calls[0] as [string];
     expect(eventText.length).toBeLessThanOrEqual(2400);
-    const payload = JSON.parse(eventText.replace("Slack interaction: ", "")) as {
+    const payload = JSON.parse(
+      eventText.replace("Slack interaction: ", ""),
+    ) as {
       payloadTruncated?: boolean;
       inputs?: unknown[];
       inputsOmitted?: number;
     };
     expect(payload.payloadTruncated).toBe(true);
-    expect(Array.isArray(payload.inputs) ? payload.inputs.length : 0).toBeLessThanOrEqual(3);
+    expect(
+      Array.isArray(payload.inputs) ? payload.inputs.length : 0,
+    ).toBeLessThanOrEqual(3);
     expect((payload.inputsOmitted ?? 0) >= 1).toBe(true);
   });
 });

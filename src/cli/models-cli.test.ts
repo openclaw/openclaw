@@ -67,12 +67,17 @@ describe("models cli", () => {
     const auth = models?.commands.find((cmd) => cmd.name() === "auth");
     expect(auth).toBeTruthy();
 
-    const login = auth?.commands.find((cmd) => cmd.name() === "login-github-copilot");
+    const login = auth?.commands.find(
+      (cmd) => cmd.name() === "login-github-copilot",
+    );
     expect(login).toBeTruthy();
 
-    await program.parseAsync(["models", "auth", "login-github-copilot", "--yes"], {
-      from: "user",
-    });
+    await program.parseAsync(
+      ["models", "auth", "login-github-copilot", "--yes"],
+      {
+        from: "user",
+      },
+    );
 
     expect(githubCopilotLoginCommand).toHaveBeenCalledTimes(1);
     expect(githubCopilotLoginCommand).toHaveBeenCalledWith(

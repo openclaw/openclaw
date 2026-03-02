@@ -1,5 +1,12 @@
-import type { VideoDescriptionRequest, VideoDescriptionResult } from "../../types.js";
-import { assertOkOrThrowHttpError, fetchWithTimeoutGuarded, normalizeBaseUrl } from "../shared.js";
+import type {
+  VideoDescriptionRequest,
+  VideoDescriptionResult,
+} from "../../types.js";
+import {
+  assertOkOrThrowHttpError,
+  fetchWithTimeoutGuarded,
+  normalizeBaseUrl,
+} from "../shared.js";
 
 export const DEFAULT_MOONSHOT_VIDEO_BASE_URL = "https://api.moonshot.ai/v1";
 const DEFAULT_MOONSHOT_VIDEO_MODEL = "kimi-k2.5";
@@ -42,7 +49,10 @@ function coerceMoonshotText(payload: MoonshotVideoPayload): string | null {
       return text;
     }
   }
-  if (typeof message.reasoning_content === "string" && message.reasoning_content.trim()) {
+  if (
+    typeof message.reasoning_content === "string" &&
+    message.reasoning_content.trim()
+  ) {
     return message.reasoning_content.trim();
   }
   return null;
@@ -52,7 +62,10 @@ export async function describeMoonshotVideo(
   params: VideoDescriptionRequest,
 ): Promise<VideoDescriptionResult> {
   const fetchFn = params.fetchFn ?? fetch;
-  const baseUrl = normalizeBaseUrl(params.baseUrl, DEFAULT_MOONSHOT_VIDEO_BASE_URL);
+  const baseUrl = normalizeBaseUrl(
+    params.baseUrl,
+    DEFAULT_MOONSHOT_VIDEO_BASE_URL,
+  );
   const model = resolveModel(params.model);
   const mime = params.mime ?? "video/mp4";
   const prompt = resolvePrompt(params.prompt);

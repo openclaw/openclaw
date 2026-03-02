@@ -131,10 +131,17 @@ describe("feishu_doc image fetch hardening", () => {
 
     const tool = registerTool.mock.calls
       .map((call) => call[0])
-      .map((candidate) => (typeof candidate === "function" ? candidate(context) : candidate))
+      .map((candidate) =>
+        typeof candidate === "function" ? candidate(context) : candidate,
+      )
       .find((candidate) => candidate.name === "feishu_doc");
     expect(tool).toBeDefined();
-    return tool as { execute: (callId: string, params: Record<string, unknown>) => Promise<any> };
+    return tool as {
+      execute: (
+        callId: string,
+        params: Record<string, unknown>,
+      ) => Promise<any>;
+    };
   }
 
   it("inserts blocks sequentially to preserve document order", async () => {
@@ -258,9 +265,15 @@ describe("feishu_doc image fetch hardening", () => {
       "console.log(gamma);",
       "```",
       "",
-      "Tail paragraph one with enough text to exceed API limits when combined. ".repeat(8),
-      "Tail paragraph two with enough text to exceed API limits when combined. ".repeat(8),
-      "Tail paragraph three with enough text to exceed API limits when combined. ".repeat(8),
+      "Tail paragraph one with enough text to exceed API limits when combined. ".repeat(
+        8,
+      ),
+      "Tail paragraph two with enough text to exceed API limits when combined. ".repeat(
+        8,
+      ),
+      "Tail paragraph three with enough text to exceed API limits when combined. ".repeat(
+        8,
+      ),
     ].join("\n");
 
     const result = await feishuDocTool.execute("tool-call", {
@@ -279,7 +292,9 @@ describe("feishu_doc image fetch hardening", () => {
   });
 
   it("skips image upload when markdown image URL is blocked", async () => {
-    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const consoleErrorSpy = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => {});
     fetchRemoteMediaMock.mockRejectedValueOnce(
       new Error("Blocked: resolves to private/internal IP address"),
     );
@@ -338,7 +353,9 @@ describe("feishu_doc image fetch hardening", () => {
 
     expect(permissionMemberCreateMock).not.toHaveBeenCalled();
     expect(result.details.requester_permission_added).toBe(false);
-    expect(result.details.requester_permission_skipped_reason).toContain("trusted requester");
+    expect(result.details.requester_permission_skipped_reason).toContain(
+      "trusted requester",
+    );
   });
 
   it("create never grants permissions when grant_to_requester is false", async () => {
@@ -423,7 +440,10 @@ describe("feishu_doc image fetch hardening", () => {
       data: { items: [] },
     });
 
-    const localPath = join(tmpdir(), `feishu-docx-upload-fail-${Date.now()}.txt`);
+    const localPath = join(
+      tmpdir(),
+      `feishu-docx-upload-fail-${Date.now()}.txt`,
+    );
     await fs.writeFile(localPath, "hello from local file", "utf8");
 
     try {

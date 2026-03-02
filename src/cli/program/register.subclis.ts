@@ -216,7 +216,8 @@ const entries: SubCliEntry[] = [
       // Initialize plugins before registering pairing CLI.
       // The pairing CLI calls listPairingChannels() at registration time,
       // which requires the plugin registry to be populated with channel plugins.
-      const { registerPluginCliCommands } = await import("../../plugins/cli.js");
+      const { registerPluginCliCommands } =
+        await import("../../plugins/cli.js");
       registerPluginCliCommands(program, await loadConfig());
       const mod = await import("../pairing-cli.js");
       mod.registerPairingCli(program);
@@ -229,7 +230,8 @@ const entries: SubCliEntry[] = [
     register: async (program) => {
       const mod = await import("../plugins-cli.js");
       mod.registerPluginsCli(program);
-      const { registerPluginCliCommands } = await import("../../plugins/cli.js");
+      const { registerPluginCliCommands } =
+        await import("../../plugins/cli.js");
       registerPluginCliCommands(program, await loadConfig());
     },
   },
@@ -244,7 +246,8 @@ const entries: SubCliEntry[] = [
   },
   {
     name: "directory",
-    description: "Lookup contact and group IDs (self, peers, groups) for supported chat channels",
+    description:
+      "Lookup contact and group IDs (self, peers, groups) for supported chat channels",
     hasSubcommands: true,
     register: async (program) => {
       const mod = await import("../directory-cli.js");
@@ -303,10 +306,15 @@ export function getSubCliEntries(): SubCliEntry[] {
 }
 
 export function getSubCliCommandsWithSubcommands(): string[] {
-  return entries.filter((entry) => entry.hasSubcommands).map((entry) => entry.name);
+  return entries
+    .filter((entry) => entry.hasSubcommands)
+    .map((entry) => entry.name);
 }
 
-export async function registerSubCliByName(program: Command, name: string): Promise<boolean> {
+export async function registerSubCliByName(
+  program: Command,
+  name: string,
+): Promise<boolean> {
   const entry = entries.find((candidate) => candidate.name === name);
   if (!entry) {
     return false;
@@ -317,7 +325,9 @@ export async function registerSubCliByName(program: Command, name: string): Prom
 }
 
 function registerLazyCommand(program: Command, entry: SubCliEntry) {
-  const placeholder = program.command(entry.name).description(entry.description);
+  const placeholder = program
+    .command(entry.name)
+    .description(entry.description);
   placeholder.allowUnknownOption(true);
   placeholder.allowExcessArguments(true);
   placeholder.action(async (...actionArgs) => {
@@ -327,7 +337,10 @@ function registerLazyCommand(program: Command, entry: SubCliEntry) {
   });
 }
 
-export function registerSubCliCommands(program: Command, argv: string[] = process.argv) {
+export function registerSubCliCommands(
+  program: Command,
+  argv: string[] = process.argv,
+) {
   if (shouldEagerRegisterSubcommands(argv)) {
     for (const entry of entries) {
       void entry.register(program);

@@ -35,9 +35,12 @@ describe("loadOutboundMediaFromUrl", () => {
 
     await loadOutboundMediaFromUrl("https://example.com/image.png");
 
-    expect(loadWebMediaMock).toHaveBeenCalledWith("https://example.com/image.png", {
-      maxBytes: undefined,
-      localRoots: undefined,
-    });
+    expect(loadWebMediaMock).toHaveBeenCalledWith(
+      "https://example.com/image.png",
+      {
+        maxBytes: undefined,
+        localRoots: undefined,
+      },
+    );
   });
 });

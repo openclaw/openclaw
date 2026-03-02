@@ -14,8 +14,12 @@ vi.mock("../../../logging/subsystem.js", () => ({
 }));
 
 const { default: runBootChecklist } = await import("./handler.js");
-const { clearInternalHooks, createInternalHookEvent, registerInternalHook, triggerInternalHook } =
-  await import("../../internal-hooks.js");
+const {
+  clearInternalHooks,
+  createInternalHookEvent,
+  registerInternalHook,
+  triggerInternalHook,
+} = await import("../../internal-hooks.js");
 
 describe("boot-md startup hook integration", () => {
   beforeEach(() => {
@@ -41,7 +45,12 @@ describe("boot-md startup hook integration", () => {
     runBootOnce.mockResolvedValue({ status: "ran" });
 
     registerInternalHook("gateway:startup", runBootChecklist);
-    const event = createInternalHookEvent("gateway", "startup", "gateway:startup", { cfg, deps });
+    const event = createInternalHookEvent(
+      "gateway",
+      "startup",
+      "gateway:startup",
+      { cfg, deps },
+    );
     await triggerInternalHook(event);
 
     const mainWorkspaceDir = resolveAgentWorkspaceDir(cfg, "main");
@@ -50,11 +59,21 @@ describe("boot-md startup hook integration", () => {
     expect(runBootOnce).toHaveBeenCalledTimes(2);
     expect(runBootOnce).toHaveBeenNthCalledWith(
       1,
-      expect.objectContaining({ cfg, deps, workspaceDir: mainWorkspaceDir, agentId: "main" }),
+      expect.objectContaining({
+        cfg,
+        deps,
+        workspaceDir: mainWorkspaceDir,
+        agentId: "main",
+      }),
     );
     expect(runBootOnce).toHaveBeenNthCalledWith(
       2,
-      expect.objectContaining({ cfg, deps, workspaceDir: opsWorkspaceDir, agentId: "ops" }),
+      expect.objectContaining({
+        cfg,
+        deps,
+        workspaceDir: opsWorkspaceDir,
+        agentId: "ops",
+      }),
     );
   });
 });

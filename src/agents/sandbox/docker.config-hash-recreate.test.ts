@@ -49,7 +49,11 @@ vi.mock("node:child_process", async (importOriginal) => {
       if (command !== "docker") {
         code = 1;
         stderr = `unexpected command: ${command}`;
-      } else if (args[0] === "inspect" && args[1] === "-f" && args[2] === "{{.State.Running}}") {
+      } else if (
+        args[0] === "inspect" &&
+        args[1] === "-f" &&
+        args[2] === "{{.State.Running}}"
+      ) {
         stdout = spawnState.inspectRunning ? "true\n" : "false\n";
       } else if (
         args[0] === "inspect" &&
@@ -173,11 +177,15 @@ describe("ensureSandboxContainer config-hash recreation", () => {
     });
 
     expect(containerName).toBe("oc-test-shared");
-    const dockerCalls = spawnState.calls.filter((call) => call.command === "docker");
+    const dockerCalls = spawnState.calls.filter(
+      (call) => call.command === "docker",
+    );
     expect(
       dockerCalls.some(
         (call) =>
-          call.args[0] === "rm" && call.args[1] === "-f" && call.args[2] === "oc-test-shared",
+          call.args[0] === "rm" &&
+          call.args[1] === "-f" &&
+          call.args[2] === "oc-test-shared",
       ),
     ).toBe(true);
     const createCall = dockerCalls.find((call) => call.args[0] === "create");
@@ -241,7 +249,9 @@ describe("ensureSandboxContainer config-hash recreation", () => {
       }
     }
     const workspaceMountIdx = bindArgs.indexOf("/tmp/workspace:/workspace");
-    const customMountIdx = bindArgs.indexOf("/tmp/workspace-shared/USER.md:/workspace/USER.md:ro");
+    const customMountIdx = bindArgs.indexOf(
+      "/tmp/workspace-shared/USER.md:/workspace/USER.md:ro",
+    );
     expect(workspaceMountIdx).toBeGreaterThanOrEqual(0);
     expect(customMountIdx).toBeGreaterThan(workspaceMountIdx);
   });

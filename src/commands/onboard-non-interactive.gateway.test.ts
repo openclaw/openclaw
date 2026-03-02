@@ -3,7 +3,10 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import { captureEnv } from "../test-utils/env.js";
-import { createThrowingRuntime, readJsonFile } from "./onboard-non-interactive.test-helpers.js";
+import {
+  createThrowingRuntime,
+  readJsonFile,
+} from "./onboard-non-interactive.test-helpers.js";
 
 const gatewayClientCalls: Array<{
   url?: string;
@@ -49,8 +52,10 @@ vi.mock("./onboard-helpers.js", async (importOriginal) => {
   };
 });
 
-const { runNonInteractiveOnboarding } = await import("./onboard-non-interactive.js");
-const { resolveConfigPath: resolveStateConfigPath } = await import("../config/paths.js");
+const { runNonInteractiveOnboarding } =
+  await import("./onboard-non-interactive.js");
+const { resolveConfigPath: resolveStateConfigPath } =
+  await import("../config/paths.js");
 const { resolveConfigPath } = await import("../config/config.js");
 const { callGateway } = await import("../gateway/call.js");
 

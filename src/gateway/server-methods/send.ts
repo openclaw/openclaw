@@ -58,8 +58,12 @@ async function resolveRequestedChannel(params: {
     }
 > {
   const channelInput =
-    typeof params.requestChannel === "string" ? params.requestChannel : undefined;
-  const normalizedChannel = channelInput ? normalizeChannelId(channelInput) : null;
+    typeof params.requestChannel === "string"
+      ? params.requestChannel
+      : undefined;
+  const normalizedChannel = channelInput
+    ? normalizeChannelId(channelInput)
+    : null;
   if (channelInput && !normalizedChannel) {
     const normalizedInput = channelInput.trim().toLowerCase();
     if (params.rejectWebchatAsInternalOnly && normalizedInput === "webchat") {
@@ -71,7 +75,10 @@ async function resolveRequestedChannel(params: {
       };
     }
     return {
-      error: errorShape(ErrorCodes.INVALID_REQUEST, params.unsupportedMessage(channelInput)),
+      error: errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        params.unsupportedMessage(channelInput),
+      ),
     };
   }
   const cfg = loadConfig();
@@ -126,12 +133,15 @@ export const sendHandlers: GatewayRequestHandlers = {
     const inflight = inflightMap.get(dedupeKey);
     if (inflight) {
       const result = await inflight;
-      const meta = result.meta ? { ...result.meta, cached: true } : { cached: true };
+      const meta = result.meta
+        ? { ...result.meta, cached: true }
+        : { cached: true };
       respond(result.ok, result.payload, result.error, meta);
       return;
     }
     const to = request.to.trim();
-    const message = typeof request.message === "string" ? request.message.trim() : "";
+    const message =
+      typeof request.message === "string" ? request.message.trim() : "";
     const mediaUrl =
       typeof request.mediaUrl === "string" && request.mediaUrl.trim().length > 0
         ? request.mediaUrl.trim()
@@ -145,7 +155,10 @@ export const sendHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "invalid send params: text or media is required"),
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "invalid send params: text or media is required",
+        ),
       );
       return;
     }
@@ -173,7 +186,10 @@ export const sendHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, `unsupported channel: ${channel}`),
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `unsupported channel: ${channel}`,
+        ),
       );
       return;
     }
@@ -190,11 +206,16 @@ export const sendHandlers: GatewayRequestHandlers = {
         if (!resolved.ok) {
           return {
             ok: false,
-            error: errorShape(ErrorCodes.INVALID_REQUEST, String(resolved.error)),
+            error: errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              String(resolved.error),
+            ),
             meta: { channel },
           };
         }
-        const outboundDeps = context.deps ? createOutboundSendDeps(context.deps) : undefined;
+        const outboundDeps = context.deps
+          ? createOutboundSendDeps(context.deps)
+          : undefined;
         const mirrorPayloads = normalizeReplyPayloadsForDelivery([
           { text: message, mediaUrl, mediaUrls },
         ]);
@@ -203,7 +224,8 @@ export const sendHandlers: GatewayRequestHandlers = {
           .filter(Boolean)
           .join("\n");
         const mirrorMediaUrls = mirrorPayloads.flatMap(
-          (payload) => payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []),
+          (payload) =>
+            payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []),
         );
         const providedSessionKey =
           typeof request.sessionKey === "string" && request.sessionKey.trim()
@@ -214,10 +236,14 @@ export const sendHandlers: GatewayRequestHandlers = {
             ? request.agentId.trim()
             : undefined;
         const sessionAgentId = providedSessionKey
-          ? resolveSessionAgentId({ sessionKey: providedSessionKey, config: cfg })
+          ? resolveSessionAgentId({
+              sessionKey: providedSessionKey,
+              config: cfg,
+            })
           : undefined;
         const defaultAgentId = resolveSessionAgentId({ config: cfg });
-        const effectiveAgentId = explicitAgentId ?? sessionAgentId ?? defaultAgentId;
+        const effectiveAgentId =
+          explicitAgentId ?? sessionAgentId ?? defaultAgentId;
         // If callers omit sessionKey, derive a target session key from the outbound route.
         const derivedRoute = !providedSessionKey
           ? await resolveOutboundSessionRoute({
@@ -258,14 +284,16 @@ export const sendHandlers: GatewayRequestHandlers = {
                 sessionKey: providedSessionKey,
                 agentId: effectiveAgentId,
                 text: mirrorText || message,
-                mediaUrls: mirrorMediaUrls.length > 0 ? mirrorMediaUrls : undefined,
+                mediaUrls:
+                  mirrorMediaUrls.length > 0 ? mirrorMediaUrls : undefined,
               }
             : derivedRoute
               ? {
                   sessionKey: derivedRoute.sessionKey,
                   agentId: effectiveAgentId,
                   text: mirrorText || message,
-                  mediaUrls: mirrorMediaUrls.length > 0 ? mirrorMediaUrls : undefined,
+                  mediaUrls:
+                    mirrorMediaUrls.length > 0 ? mirrorMediaUrls : undefined,
                 }
               : undefined,
         });
@@ -308,7 +336,11 @@ export const sendHandlers: GatewayRequestHandlers = {
           ok: false,
           error,
         });
-        return { ok: false, error, meta: { channel, error: formatForLog(err) } };
+        return {
+          ok: false,
+          error,
+          meta: { channel, error: formatForLog(err) },
+        };
       }
     })();
 
@@ -380,7 +412,10 @@ export const sendHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "isAnonymous is only supported for Telegram polls"),
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "isAnonymous is only supported for Telegram polls",
+        ),
       );
       return;
     }
@@ -406,7 +441,10 @@ export const sendHandlers: GatewayRequestHandlers = {
         respond(
           false,
           undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, `unsupported poll channel: ${channel}`),
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `unsupported poll channel: ${channel}`,
+          ),
         );
         return;
       }
@@ -418,7 +456,11 @@ export const sendHandlers: GatewayRequestHandlers = {
         mode: "explicit",
       });
       if (!resolved.ok) {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, String(resolved.error)));
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, String(resolved.error)),
+        );
         return;
       }
       const normalized = outbound.pollMaxOptions

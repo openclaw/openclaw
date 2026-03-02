@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { extractBatchErrorMessage, formatUnavailableBatchError } from "./batch-error-utils.js";
+import {
+  extractBatchErrorMessage,
+  formatUnavailableBatchError,
+} from "./batch-error-utils.js";
 
 describe("extractBatchErrorMessage", () => {
   it("returns the first top-level error message", () => {
@@ -13,20 +16,29 @@ describe("extractBatchErrorMessage", () => {
 
   it("falls back to nested response error message", () => {
     expect(
-      extractBatchErrorMessage([{ response: { body: { error: { message: "nested-only" } } } }, {}]),
+      extractBatchErrorMessage([
+        { response: { body: { error: { message: "nested-only" } } } },
+        {},
+      ]),
     ).toBe("nested-only");
   });
 
   it("accepts plain string response bodies", () => {
-    expect(extractBatchErrorMessage([{ response: { body: "provider plain-text error" } }])).toBe(
-      "provider plain-text error",
-    );
+    expect(
+      extractBatchErrorMessage([
+        { response: { body: "provider plain-text error" } },
+      ]),
+    ).toBe("provider plain-text error");
   });
 });
 
 describe("formatUnavailableBatchError", () => {
   it("formats errors and non-error values", () => {
-    expect(formatUnavailableBatchError(new Error("boom"))).toBe("error file unavailable: boom");
-    expect(formatUnavailableBatchError("unreachable")).toBe("error file unavailable: unreachable");
+    expect(formatUnavailableBatchError(new Error("boom"))).toBe(
+      "error file unavailable: boom",
+    );
+    expect(formatUnavailableBatchError("unreachable")).toBe(
+      "error file unavailable: unreachable",
+    );
   });
 });

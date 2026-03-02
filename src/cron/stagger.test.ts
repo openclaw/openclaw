@@ -27,19 +27,31 @@ describe("cron stagger helpers", () => {
     expect(resolveCronStaggerMs({ kind: "cron", expr: "0 * * * *" })).toBe(
       DEFAULT_TOP_OF_HOUR_STAGGER_MS,
     );
-    expect(resolveCronStaggerMs({ kind: "cron", expr: "0 * * * *", staggerMs: 30_000 })).toBe(
-      30_000,
-    );
-    expect(resolveCronStaggerMs({ kind: "cron", expr: "0 * * * *", staggerMs: 0 })).toBe(0);
+    expect(
+      resolveCronStaggerMs({
+        kind: "cron",
+        expr: "0 * * * *",
+        staggerMs: 30_000,
+      }),
+    ).toBe(30_000);
+    expect(
+      resolveCronStaggerMs({ kind: "cron", expr: "0 * * * *", staggerMs: 0 }),
+    ).toBe(0);
     expect(resolveCronStaggerMs({ kind: "cron", expr: "15 * * * *" })).toBe(0);
   });
 
   it("handles missing runtime expr values without throwing", () => {
     expect(() =>
-      resolveCronStaggerMs({ kind: "cron" } as unknown as { kind: "cron"; expr: string }),
+      resolveCronStaggerMs({ kind: "cron" } as unknown as {
+        kind: "cron";
+        expr: string;
+      }),
     ).not.toThrow();
     expect(
-      resolveCronStaggerMs({ kind: "cron" } as unknown as { kind: "cron"; expr: string }),
+      resolveCronStaggerMs({ kind: "cron" } as unknown as {
+        kind: "cron";
+        expr: string;
+      }),
     ).toBe(0);
   });
 });

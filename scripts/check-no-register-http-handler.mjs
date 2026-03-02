@@ -2,20 +2,38 @@
 
 import ts from "typescript";
 import { runCallsiteGuard } from "./lib/callsite-guard.mjs";
-import { runAsScript, toLine, unwrapExpression } from "./lib/ts-guard-utils.mjs";
+import {
+  runAsScript,
+  toLine,
+  unwrapExpression,
+} from "./lib/ts-guard-utils.mjs";
 
 const sourceRoots = ["src", "extensions"];
 
 function isDeprecatedRegisterHttpHandlerCall(expression) {
   const callee = unwrapExpression(expression);
-  return ts.isPropertyAccessExpression(callee) && callee.name.text === "registerHttpHandler";
+  return (
+    ts.isPropertyAccessExpression(callee) &&
+    callee.name.text === "registerHttpHandler"
+  );
 }
 
-export function findDeprecatedRegisterHttpHandlerLines(content, fileName = "source.ts") {
-  const sourceFile = ts.createSourceFile(fileName, content, ts.ScriptTarget.Latest, true);
+export function findDeprecatedRegisterHttpHandlerLines(
+  content,
+  fileName = "source.ts",
+) {
+  const sourceFile = ts.createSourceFile(
+    fileName,
+    content,
+    ts.ScriptTarget.Latest,
+    true,
+  );
   const lines = [];
   const visit = (node) => {
-    if (ts.isCallExpression(node) && isDeprecatedRegisterHttpHandlerCall(node.expression)) {
+    if (
+      ts.isCallExpression(node) &&
+      isDeprecatedRegisterHttpHandlerCall(node.expression)
+    ) {
       lines.push(toLine(sourceFile, node.expression));
     }
     ts.forEachChild(node, visit);

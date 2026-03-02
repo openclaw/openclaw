@@ -1,4 +1,5 @@
-export const MODEL_AVAILABILITY_UNAVAILABLE_CODE = "MODEL_AVAILABILITY_UNAVAILABLE";
+export const MODEL_AVAILABILITY_UNAVAILABLE_CODE =
+  "MODEL_AVAILABILITY_UNAVAILABLE";
 
 export function formatErrorWithStack(err: unknown): string {
   if (err instanceof Error) {

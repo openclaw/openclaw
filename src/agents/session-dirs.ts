@@ -2,7 +2,9 @@ import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 
-export async function resolveAgentSessionDirs(stateDir: string): Promise<string[]> {
+export async function resolveAgentSessionDirs(
+  stateDir: string,
+): Promise<string[]> {
   const agentsDir = path.join(stateDir, "agents");
   let entries: Dirent[] = [];
   try {

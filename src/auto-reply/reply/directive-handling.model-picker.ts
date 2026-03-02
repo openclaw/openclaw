@@ -1,4 +1,7 @@
-import { type ModelRef, normalizeProviderId } from "../../agents/model-selection.js";
+import {
+  type ModelRef,
+  normalizeProviderId,
+} from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
 
 export type ModelPickerCatalogEntry = {
@@ -46,7 +49,9 @@ function compareProvidersForPicker(a: string, b: string): number {
   return a.localeCompare(b);
 }
 
-export function buildModelPickerItems(catalog: ModelPickerCatalogEntry[]): ModelPickerItem[] {
+export function buildModelPickerItems(
+  catalog: ModelPickerCatalogEntry[],
+): ModelPickerItem[] {
   const seen = new Set<string>();
   const out: ModelPickerItem[] = [];
 

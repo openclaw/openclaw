@@ -67,7 +67,10 @@ export function createMSTeamsReplyDispatcher(params: {
   const { dispatcher, replyOptions, markDispatchIdle } =
     core.channel.reply.createReplyDispatcherWithTyping({
       ...prefixOptions,
-      humanDelay: core.channel.reply.resolveHumanDelayConfig(params.cfg, params.agentId),
+      humanDelay: core.channel.reply.resolveHumanDelayConfig(
+        params.cfg,
+        params.agentId,
+      ),
       typingCallbacks,
       deliver: async (payload) => {
         const tableMode = core.channel.text.resolveMarkdownTableMode({

@@ -31,9 +31,11 @@ import {
 import { getSignalRuntime } from "./runtime.js";
 
 const signalMessageActions: ChannelMessageActionAdapter = {
-  listActions: (ctx) => getSignalRuntime().channel.signal.messageActions?.listActions?.(ctx) ?? [],
+  listActions: (ctx) =>
+    getSignalRuntime().channel.signal.messageActions?.listActions?.(ctx) ?? [],
   supportsAction: (ctx) =>
-    getSignalRuntime().channel.signal.messageActions?.supportsAction?.(ctx) ?? false,
+    getSignalRuntime().channel.signal.messageActions?.supportsAction?.(ctx) ??
+    false,
   handleAction: async (ctx) => {
     const ma = getSignalRuntime().channel.signal.messageActions;
     if (!ma?.handleAction) {
@@ -61,7 +63,9 @@ function buildSignalSetupPatch(input: {
   };
 }
 
-type SignalSendFn = ReturnType<typeof getSignalRuntime>["channel"]["signal"]["sendMessageSignal"];
+type SignalSendFn = ReturnType<
+  typeof getSignalRuntime
+>["channel"]["signal"]["sendMessageSignal"];
 
 async function sendSignalOutbound(params: {
   cfg: Parameters<typeof resolveSignalAccount>[0]["cfg"];
@@ -71,11 +75,14 @@ async function sendSignalOutbound(params: {
   accountId?: string;
   deps?: { sendSignal?: SignalSendFn };
 }) {
-  const send = params.deps?.sendSignal ?? getSignalRuntime().channel.signal.sendMessageSignal;
+  const send =
+    params.deps?.sendSignal ??
+    getSignalRuntime().channel.signal.sendMessageSignal;
   const maxBytes = resolveChannelMediaMaxBytes({
     cfg: params.cfg,
     resolveChannelLimitMb: ({ cfg, accountId }) =>
-      cfg.channels?.signal?.accounts?.[accountId]?.mediaMaxMb ?? cfg.channels?.signal?.mediaMaxMb,
+      cfg.channels?.signal?.accounts?.[accountId]?.mediaMaxMb ??
+      cfg.channels?.signal?.mediaMaxMb,
     accountId: params.accountId,
   });
   return await send(params.to, params.text, {
@@ -95,7 +102,10 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
     idLabel: "signalNumber",
     normalizeAllowEntry: (entry) => entry.replace(/^signal:/i, ""),
     notifyApproval: async ({ id }) => {
-      await getSignalRuntime().channel.signal.sendMessageSignal(id, PAIRING_APPROVED_MESSAGE);
+      await getSignalRuntime().channel.signal.sendMessageSignal(
+        id,
+        PAIRING_APPROVED_MESSAGE,
+      );
     },
   },
   capabilities: {
@@ -111,7 +121,8 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
   configSchema: buildChannelConfigSchema(SignalConfigSchema),
   config: {
     listAccountIds: (cfg) => listSignalAccountIds(cfg),
-    resolveAccount: (cfg, accountId) => resolveSignalAccount({ cfg, accountId }),
+    resolveAccount: (cfg, accountId) =>
+      resolveSignalAccount({ cfg, accountId }),
     defaultAccountId: (cfg) => resolveDefaultSignalAccountId(cfg),
     setAccountEnabled: ({ cfg, accountId, enabled }) =>
       setAccountEnabledInConfigSection({
@@ -126,7 +137,14 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
         cfg,
         sectionKey: "signal",
         accountId,
-        clearBaseFields: ["account", "httpUrl", "httpHost", "httpPort", "cliPath", "name"],
+        clearBaseFields: [
+          "account",
+          "httpUrl",
+          "httpHost",
+          "httpPort",
+          "cliPath",
+          "name",
+        ],
       }),
     isConfigured: (account) => account.configured,
     describeAccount: (account) => ({
@@ -137,22 +155,28 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
       baseUrl: account.baseUrl,
     }),
     resolveAllowFrom: ({ cfg, accountId }) =>
-      (resolveSignalAccount({ cfg, accountId }).config.allowFrom ?? []).map((entry) =>
-        String(entry),
+      (resolveSignalAccount({ cfg, accountId }).config.allowFrom ?? []).map(
+        (entry) => String(entry),
       ),
     formatAllowFrom: ({ allowFrom }) =>
       allowFrom
         .map((entry) => String(entry).trim())
         .filter(Boolean)
-        .map((entry) => (entry === "*" ? "*" : normalizeE164(entry.replace(/^signal:/i, ""))))
+        .map((entry) =>
+          entry === "*" ? "*" : normalizeE164(entry.replace(/^signal:/i, "")),
+        )
         .filter(Boolean),
     resolveDefaultTo: ({ cfg, accountId }) =>
-      resolveSignalAccount({ cfg, accountId }).config.defaultTo?.trim() || undefined,
+      resolveSignalAccount({ cfg, accountId }).config.defaultTo?.trim() ||
+      undefined,
   },
   security: {
     resolveDmPolicy: ({ cfg, accountId, account }) => {
-      const resolvedAccountId = accountId ?? account.accountId ?? DEFAULT_ACCOUNT_ID;
-      const useAccountPath = Boolean(cfg.channels?.signal?.accounts?.[resolvedAccountId]);
+      const resolvedAccountId =
+        accountId ?? account.accountId ?? DEFAULT_ACCOUNT_ID;
+      const useAccountPath = Boolean(
+        cfg.channels?.signal?.accounts?.[resolvedAccountId],
+      );
       const basePath = useAccountPath
         ? `channels.signal.accounts.${resolvedAccountId}.`
         : "channels.signal.";
@@ -162,7 +186,8 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
         policyPath: `${basePath}dmPolicy`,
         allowFromPath: basePath,
         approveHint: formatPairingApproveHint("signal"),
-        normalizeEntry: (raw) => normalizeE164(raw.replace(/^signal:/i, "").trim()),
+        normalizeEntry: (raw) =>
+          normalizeE164(raw.replace(/^signal:/i, "").trim()),
       };
     },
     collectWarnings: ({ account, cfg }) => {
@@ -257,7 +282,8 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
   },
   outbound: {
     deliveryMode: "direct",
-    chunker: (text, limit) => getSignalRuntime().channel.text.chunkText(text, limit),
+    chunker: (text, limit) =>
+      getSignalRuntime().channel.text.chunkText(text, limit),
     chunkerMode: "text",
     textChunkLimit: 4000,
     sendText: async ({ cfg, to, text, accountId, deps }) => {
@@ -284,7 +310,8 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
   },
   status: {
     defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
-    collectStatusIssues: (accounts) => collectStatusIssuesFromLastError("signal", accounts),
+    collectStatusIssues: (accounts) =>
+      collectStatusIssuesFromLastError("signal", accounts),
     buildChannelSummary: ({ snapshot }) => ({
       ...buildBaseChannelStatusSummary(snapshot),
       baseUrl: snapshot.baseUrl ?? null,
@@ -293,7 +320,10 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
     }),
     probeAccount: async ({ account, timeoutMs }) => {
       const baseUrl = account.baseUrl;
-      return await getSignalRuntime().channel.signal.probeSignal(baseUrl, timeoutMs);
+      return await getSignalRuntime().channel.signal.probeSignal(
+        baseUrl,
+        timeoutMs,
+      );
     },
     buildAccountSnapshot: ({ account, runtime, probe }) => ({
       ...buildBaseAccountStatusSnapshot({ account, runtime, probe }),
@@ -307,7 +337,9 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
         accountId: account.accountId,
         baseUrl: account.baseUrl,
       });
-      ctx.log?.info(`[${account.accountId}] starting provider (${account.baseUrl})`);
+      ctx.log?.info(
+        `[${account.accountId}] starting provider (${account.baseUrl})`,
+      );
       // Lazy import: the monitor pulls the reply pipeline; avoid ESM init cycles.
       return getSignalRuntime().channel.signal.monitorSignalProvider({
         accountId: account.accountId,

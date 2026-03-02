@@ -19,7 +19,9 @@ declare module "pdfjs-dist/legacy/build/pdf.mjs" {
   export type PDFPageProxy = {
     getTextContent(): Promise<TextContent>;
     getViewport(params: { scale: number }): Viewport;
-    render(params: { canvas: unknown; viewport: Viewport }): { promise: Promise<void> };
+    render(params: { canvas: unknown; viewport: Viewport }): {
+      promise: Promise<void>;
+    };
   };
 
   export type PDFDocumentProxy = {
@@ -27,7 +29,10 @@ declare module "pdfjs-dist/legacy/build/pdf.mjs" {
     getPage(pageNumber: number): Promise<PDFPageProxy>;
   };
 
-  export function getDocument(params: { data: Uint8Array; disableWorker?: boolean }): {
+  export function getDocument(params: {
+    data: Uint8Array;
+    disableWorker?: boolean;
+  }): {
     promise: Promise<PDFDocumentProxy>;
   };
 }

@@ -1,4 +1,7 @@
-import { type ChannelId, getChannelPlugin } from "../../channels/plugins/index.js";
+import {
+  type ChannelId,
+  getChannelPlugin,
+} from "../../channels/plugins/index.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
@@ -12,7 +15,10 @@ export async function requireValidConfig(
   return await requireValidConfigSnapshot(runtime);
 }
 
-export function formatAccountLabel(params: { accountId: string; name?: string }) {
+export function formatAccountLabel(params: {
+  accountId: string;
+  name?: string;
+}) {
   const base = params.accountId || DEFAULT_ACCOUNT_ID;
   if (params.name?.trim()) {
     return `${base} (${params.name.trim()})`;
@@ -37,8 +43,12 @@ export function formatChannelAccountLabel(params: {
     accountId: params.accountId,
     name: params.name,
   });
-  const styledChannel = params.channelStyle ? params.channelStyle(channelText) : channelText;
-  const styledAccount = params.accountStyle ? params.accountStyle(accountText) : accountText;
+  const styledChannel = params.channelStyle
+    ? params.channelStyle(channelText)
+    : channelText;
+  const styledAccount = params.accountStyle
+    ? params.accountStyle(accountText)
+    : accountText;
   return `${styledChannel} ${styledAccount}`;
 }
 

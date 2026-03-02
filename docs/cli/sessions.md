@@ -32,8 +32,14 @@ JSON examples:
 {
   "path": null,
   "stores": [
-    { "agentId": "main", "path": "/home/user/.openclaw/agents/main/sessions/sessions.json" },
-    { "agentId": "work", "path": "/home/user/.openclaw/agents/work/sessions/sessions.json" }
+    {
+      "agentId": "main",
+      "path": "/home/user/.openclaw/agents/main/sessions/sessions.json"
+    },
+    {
+      "agentId": "work",
+      "path": "/home/user/.openclaw/agents/work/sessions/sessions.json"
+    }
   ],
   "allAgents": true,
   "count": 2,

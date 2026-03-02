@@ -24,7 +24,9 @@ function normalizeString(value: unknown): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-function normalizeVoiceAliases(value: unknown): Record<string, string> | undefined {
+function normalizeVoiceAliases(
+  value: unknown,
+): Record<string, string> | undefined {
   if (!isPlainObject(value)) {
     return undefined;
   }
@@ -38,7 +40,9 @@ function normalizeVoiceAliases(value: unknown): Record<string, string> | undefin
   return Object.keys(aliases).length > 0 ? aliases : undefined;
 }
 
-function normalizeTalkProviderConfig(value: unknown): TalkProviderConfig | undefined {
+function normalizeTalkProviderConfig(
+  value: unknown,
+): TalkProviderConfig | undefined {
   if (!isPlainObject(value)) {
     return undefined;
   }
@@ -55,7 +59,12 @@ function normalizeTalkProviderConfig(value: unknown): TalkProviderConfig | undef
       }
       continue;
     }
-    if (key === "voiceId" || key === "modelId" || key === "outputFormat" || key === "apiKey") {
+    if (
+      key === "voiceId" ||
+      key === "modelId" ||
+      key === "outputFormat" ||
+      key === "apiKey"
+    ) {
       const normalized = normalizeString(raw);
       if (normalized) {
         provider[key] = normalized;
@@ -68,7 +77,9 @@ function normalizeTalkProviderConfig(value: unknown): TalkProviderConfig | undef
   return Object.keys(provider).length > 0 ? provider : undefined;
 }
 
-function normalizeTalkProviders(value: unknown): Record<string, TalkProviderConfig> | undefined {
+function normalizeTalkProviders(
+  value: unknown,
+): Record<string, TalkProviderConfig> | undefined {
   if (!isPlainObject(value)) {
     return undefined;
   }
@@ -87,7 +98,9 @@ function normalizeTalkProviders(value: unknown): Record<string, TalkProviderConf
   return Object.keys(providers).length > 0 ? providers : undefined;
 }
 
-function normalizedLegacyTalkFields(source: Record<string, unknown>): Partial<TalkConfig> {
+function normalizedLegacyTalkFields(
+  source: Record<string, unknown>,
+): Partial<TalkConfig> {
   const legacy: Partial<TalkConfig> = {};
   const voiceId = normalizeString(source.voiceId);
   if (voiceId) {
@@ -165,13 +178,16 @@ function legacyTalkFieldsFromProviderConfig(
   return legacy;
 }
 
-export function normalizeTalkSection(value: TalkConfig | undefined): TalkConfig | undefined {
+export function normalizeTalkSection(
+  value: TalkConfig | undefined,
+): TalkConfig | undefined {
   if (!isPlainObject(value)) {
     return undefined;
   }
 
   const source = value as Record<string, unknown>;
-  const hasNormalizedShape = typeof source.provider === "string" || isPlainObject(source.providers);
+  const hasNormalizedShape =
+    typeof source.provider === "string" || isPlainObject(source.providers);
   const normalized: TalkConfig = {};
   const legacy = normalizedLegacyTalkFields(source);
   if (Object.keys(legacy).length > 0) {
@@ -238,7 +254,9 @@ export function resolveActiveTalkProviderConfig(talk: TalkConfig | undefined): {
   };
 }
 
-export function buildTalkConfigResponse(value: unknown): TalkConfig | undefined {
+export function buildTalkConfigResponse(
+  value: unknown,
+): TalkConfig | undefined {
   if (!isPlainObject(value)) {
     return undefined;
   }
@@ -259,25 +277,32 @@ export function buildTalkConfigResponse(value: unknown): TalkConfig | undefined 
   }
 
   const activeProvider = activeProviderFromTalk(normalized);
-  const providerConfig = activeProvider ? normalized.providers?.[activeProvider] : undefined;
-  const providerCompatibilityLegacy = legacyTalkFieldsFromProviderConfig(providerConfig);
+  const providerConfig = activeProvider
+    ? normalized.providers?.[activeProvider]
+    : undefined;
+  const providerCompatibilityLegacy =
+    legacyTalkFieldsFromProviderConfig(providerConfig);
   const compatibilityLegacy =
     Object.keys(providerCompatibilityLegacy).length > 0
       ? providerCompatibilityLegacy
-      : normalizedLegacyTalkFields(normalized as unknown as Record<string, unknown>);
+      : normalizedLegacyTalkFields(
+          normalized as unknown as Record<string, unknown>,
+        );
   Object.assign(payload, compatibilityLegacy);
 
   return Object.keys(payload).length > 0 ? payload : undefined;
 }
 
-export function readTalkApiKeyFromProfile(deps: TalkApiKeyDeps = {}): string | null {
+export function readTalkApiKeyFromProfile(
+  deps: TalkApiKeyDeps = {},
+): string | null {
   const fsImpl = deps.fs ?? fs;
   const osImpl = deps.os ?? os;
   const pathImpl = deps.path ?? path;
 
   const home = osImpl.homedir();
-  const candidates = [".profile", ".zprofile", ".zshrc", ".bashrc"].map((name) =>
-    pathImpl.join(home, name),
+  const candidates = [".profile", ".zprofile", ".zshrc", ".bashrc"].map(
+    (name) => pathImpl.join(home, name),
   );
   for (const candidate of candidates) {
     if (!fsImpl.existsSync(candidate)) {

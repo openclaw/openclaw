@@ -26,7 +26,9 @@ export function createCliStatusTextStyles() {
   };
 }
 
-export function resolveRuntimeStatusColor(status: string | undefined): (value: string) => string {
+export function resolveRuntimeStatusColor(
+  status: string | undefined,
+): (value: string) => string {
   const runtimeStatus = status ?? "unknown";
   return runtimeStatus === "running"
     ? theme.success
@@ -37,7 +39,9 @@ export function resolveRuntimeStatusColor(status: string | undefined): (value: s
         : theme.warn;
 }
 
-export function parsePortFromArgs(programArguments: string[] | undefined): number | null {
+export function parsePortFromArgs(
+  programArguments: string[] | undefined,
+): number | null {
   if (!programArguments?.length) {
     return null;
   }
@@ -88,7 +92,9 @@ const SAFE_DAEMON_ENV_KEYS = [
   "OPENCLAW_NIX_MODE",
 ];
 
-export function filterDaemonEnv(env: Record<string, string> | undefined): Record<string, string> {
+export function filterDaemonEnv(
+  env: Record<string, string> | undefined,
+): Record<string, string> {
   if (!env) {
     return {};
   }
@@ -103,7 +109,9 @@ export function filterDaemonEnv(env: Record<string, string> | undefined): Record
   return filtered;
 }
 
-export function safeDaemonEnv(env: Record<string, string> | undefined): string[] {
+export function safeDaemonEnv(
+  env: Record<string, string> | undefined,
+): string[] {
   const filtered = filterDaemonEnv(env);
   return Object.entries(filtered).map(([key, value]) => `${key}=${value}`);
 }
@@ -134,7 +142,9 @@ export function renderRuntimeHints(
     }
   })();
   if (runtime.missingUnit) {
-    hints.push(`Service not installed. Run: ${formatCliCommand("openclaw gateway install", env)}`);
+    hints.push(
+      `Service not installed. Run: ${formatCliCommand("openclaw gateway install", env)}`,
+    );
     if (fileLog) {
       hints.push(`File logs: ${fileLog}`);
     }
@@ -150,7 +160,9 @@ export function renderRuntimeHints(
       hints.push(`Launchd stderr (if installed): ${logs.stderrPath}`);
     } else if (process.platform === "linux") {
       const unit = resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE);
-      hints.push(`Logs: journalctl --user -u ${unit}.service -n 200 --no-pager`);
+      hints.push(
+        `Logs: journalctl --user -u ${unit}.service -n 200 --no-pager`,
+      );
     } else if (process.platform === "win32") {
       const task = resolveGatewayWindowsTaskName(env.OPENCLAW_PROFILE);
       hints.push(`Logs: schtasks /Query /TN "${task}" /V /FO LIST`);
@@ -159,7 +171,9 @@ export function renderRuntimeHints(
   return hints;
 }
 
-export function renderGatewayServiceStartHints(env: NodeJS.ProcessEnv = process.env): string[] {
+export function renderGatewayServiceStartHints(
+  env: NodeJS.ProcessEnv = process.env,
+): string[] {
   const base = [
     formatCliCommand("openclaw gateway install", env),
     formatCliCommand("openclaw gateway", env),
@@ -168,7 +182,10 @@ export function renderGatewayServiceStartHints(env: NodeJS.ProcessEnv = process.
   switch (process.platform) {
     case "darwin": {
       const label = resolveGatewayLaunchAgentLabel(profile);
-      return [...base, `launchctl bootstrap gui/$UID ~/Library/LaunchAgents/${label}.plist`];
+      return [
+        ...base,
+        `launchctl bootstrap gui/$UID ~/Library/LaunchAgents/${label}.plist`,
+      ];
     }
     case "linux": {
       const unit = resolveGatewaySystemdServiceName(profile);

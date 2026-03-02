@@ -36,7 +36,11 @@ describe("BlueBubblesConfigSchema", () => {
     if (parsed.success) {
       return;
     }
-    expect(parsed.error.issues[0]?.path).toEqual(["accounts", "work", "password"]);
+    expect(parsed.error.issues[0]?.path).toEqual([
+      "accounts",
+      "work",
+      "password",
+    ]);
     expect(parsed.error.issues[0]?.message).toBe(
       "password is required when serverUrl is configured",
     );

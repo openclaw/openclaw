@@ -84,7 +84,8 @@ export function resolveMSTeamsRouteConfig(params: {
     channelKey: channelMatch.matchKey ?? channelMatch.key,
     channelMatchKey: channelMatch.matchKey,
     channelMatchSource:
-      channelMatch.matchSource === "direct" || channelMatch.matchSource === "wildcard"
+      channelMatch.matchSource === "direct" ||
+      channelMatch.matchSource === "wildcard"
         ? channelMatch.matchSource
         : undefined,
   };

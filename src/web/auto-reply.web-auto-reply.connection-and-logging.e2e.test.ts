@@ -2,7 +2,10 @@ import "./test-helpers.js";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import { escapeRegExp, formatEnvelopeTimestamp } from "../../test/helpers/envelope-timestamp.js";
+import {
+  escapeRegExp,
+  formatEnvelopeTimestamp,
+} from "../../test/helpers/envelope-timestamp.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { setLoggerOverride } from "../logging.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -35,7 +38,12 @@ function startMonitorWebChannel(params: {
   heartbeatSeconds?: number;
   messageTimeoutMs?: number;
   watchdogCheckMs?: number;
-  reconnect?: { initialMs: number; maxMs: number; maxAttempts: number; factor: number };
+  reconnect?: {
+    initialMs: number;
+    maxMs: number;
+    maxAttempts: number;
+    factor: number;
+  };
 }) {
   const runtime = createRuntime();
   const controller = new AbortController();
@@ -50,7 +58,12 @@ function startMonitorWebChannel(params: {
       heartbeatSeconds: params.heartbeatSeconds ?? 1,
       messageTimeoutMs: params.messageTimeoutMs,
       watchdogCheckMs: params.watchdogCheckMs,
-      reconnect: params.reconnect ?? { initialMs: 10, maxMs: 10, maxAttempts: 3, factor: 1.1 },
+      reconnect: params.reconnect ?? {
+        initialMs: 10,
+        maxMs: 10,
+        maxAttempts: 3,
+        factor: 1.1,
+      },
       sleep: params.sleep,
     },
   );
@@ -78,7 +91,8 @@ function makeInboundMessage(params: {
     accountId: "default",
     chatType: "direct",
     chatId: params.from,
-    sendComposing: params.sendComposing as unknown as WebInboundMessage["sendComposing"],
+    sendComposing:
+      params.sendComposing as unknown as WebInboundMessage["sendComposing"],
     reply: params.reply as unknown as WebInboundMessage["reply"],
     sendMedia: params.sendMedia as unknown as WebInboundMessage["sendMedia"],
   };
@@ -94,7 +108,9 @@ describe("web auto-reply connection", () => {
 
   it("handles helper envelope timestamps with trimmed timezones (regression)", () => {
     const d = new Date("2025-01-01T00:00:00.000Z");
-    expect(() => formatEnvelopeTimestamp(d, " America/Los_Angeles ")).not.toThrow();
+    expect(() =>
+      formatEnvelopeTimestamp(d, " America/Los_Angeles "),
+    ).not.toThrow();
   });
 
   it("handles reconnect progress and max-attempt stop behavior", async () => {
@@ -133,7 +149,9 @@ describe("web auto-reply connection", () => {
       closeResolvers.shift()?.();
       await vi.waitFor(
         () => {
-          expect(listenerFactory).toHaveBeenCalledTimes(scenario.expectedCallsAfterFirstClose);
+          expect(listenerFactory).toHaveBeenCalledTimes(
+            scenario.expectedCallsAfterFirstClose,
+          );
         },
         { timeout: 250, interval: 2 },
       );
@@ -148,7 +166,9 @@ describe("web auto-reply connection", () => {
         await run;
       }
 
-      expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining(scenario.expectedError));
+      expect(runtime.error).toHaveBeenCalledWith(
+        expect.stringContaining(scenario.expectedError),
+      );
     }
   });
 
@@ -189,16 +209,26 @@ describe("web auto-reply connection", () => {
         { timeout: 250, interval: 2 },
       );
       controller.abort();
-      closeResolvers[1]?.({ status: 499, isLoggedOut: false, error: "aborted" });
+      closeResolvers[1]?.({
+        status: 499,
+        isLoggedOut: false,
+        error: "aborted",
+      });
       await run;
     }
 
     expect(completedQuickly).toBe(true);
     expect(listenerFactory).toHaveBeenCalledTimes(1);
     expect(sleep).not.toHaveBeenCalled();
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("status 440"));
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("session conflict"));
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("Stopping web monitoring"));
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("status 440"),
+    );
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("session conflict"),
+    );
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Stopping web monitoring"),
+    );
   });
 
   it("forces reconnect when watchdog closes without onClose", async () => {
@@ -211,7 +241,9 @@ describe("web auto-reply connection", () => {
         | undefined;
       const listenerFactory = vi.fn(
         async (opts: {
-          onMessage: (msg: import("./inbound.js").WebInboundMessage) => Promise<void>;
+          onMessage: (
+            msg: import("./inbound.js").WebInboundMessage,
+          ) => Promise<void>;
         }) => {
           capturedOnMessage = opts.onMessage;
           let resolveClose: (reason: unknown) => void = () => {};
@@ -304,7 +336,12 @@ describe("web auto-reply connection", () => {
           session: { store: store.storePath },
         }));
 
-        await monitorWebChannel(false, capture.listenerFactory as never, false, resolver);
+        await monitorWebChannel(
+          false,
+          capture.listenerFactory as never,
+          false,
+          resolver,
+        );
         const capturedOnMessage = capture.getOnMessage();
         expect(capturedOnMessage).toBeDefined();
 
@@ -336,16 +373,24 @@ describe("web auto-reply connection", () => {
         expect(resolver).toHaveBeenCalledTimes(2);
         const firstArgs = resolver.mock.calls[0][0];
         const secondArgs = resolver.mock.calls[1][0];
-        const firstTimestamp = formatEnvelopeTimestamp(new Date("2025-01-01T00:00:00Z"));
-        const secondTimestamp = formatEnvelopeTimestamp(new Date("2025-01-01T01:00:00Z"));
+        const firstTimestamp = formatEnvelopeTimestamp(
+          new Date("2025-01-01T00:00:00Z"),
+        );
+        const secondTimestamp = formatEnvelopeTimestamp(
+          new Date("2025-01-01T01:00:00Z"),
+        );
         const firstPattern = escapeRegExp(firstTimestamp);
         const secondPattern = escapeRegExp(secondTimestamp);
         expect(firstArgs.Body).toMatch(
-          new RegExp(`\\[WhatsApp \\+1 (\\+\\d+[smhd] )?${firstPattern}\\] \\[openclaw\\] first`),
+          new RegExp(
+            `\\[WhatsApp \\+1 (\\+\\d+[smhd] )?${firstPattern}\\] \\[openclaw\\] first`,
+          ),
         );
         expect(firstArgs.Body).not.toContain("second");
         expect(secondArgs.Body).toMatch(
-          new RegExp(`\\[WhatsApp \\+1 (\\+\\d+[smhd] )?${secondPattern}\\] \\[openclaw\\] second`),
+          new RegExp(
+            `\\[WhatsApp \\+1 (\\+\\d+[smhd] )?${secondPattern}\\] \\[openclaw\\] second`,
+          ),
         );
         expect(secondArgs.Body).not.toContain("first");
         expect(process.getMaxListeners?.()).toBeGreaterThanOrEqual(50);
@@ -407,7 +452,12 @@ describe("web auto-reply connection", () => {
     const capture = createWebListenerFactoryCapture();
 
     const resolver = vi.fn().mockResolvedValue({ text: "auto" });
-    await monitorWebChannel(false, capture.listenerFactory as never, false, resolver as never);
+    await monitorWebChannel(
+      false,
+      capture.listenerFactory as never,
+      false,
+      resolver as never,
+    );
     const capturedOnMessage = capture.getOnMessage();
     expect(capturedOnMessage).toBeDefined();
 

@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { listSystemPresence, updateSystemPresence, upsertPresence } from "./system-presence.js";
+import {
+  listSystemPresence,
+  updateSystemPresence,
+  upsertPresence,
+} from "./system-presence.js";
 
 describe("system-presence", () => {
   afterEach(() => {
@@ -58,7 +62,9 @@ describe("system-presence", () => {
 
     const entry = listSystemPresence().find((e) => e.deviceId === deviceId);
     expect(entry?.roles).toEqual(expect.arrayContaining(["operator", "node"]));
-    expect(entry?.scopes).toEqual(expect.arrayContaining(["operator.admin", "system.run"]));
+    expect(entry?.scopes).toEqual(
+      expect.arrayContaining(["operator.admin", "system.run"]),
+    );
   });
 
   it("prunes stale non-self entries after TTL", () => {
@@ -73,7 +79,9 @@ describe("system-presence", () => {
       reason: "connect",
     });
 
-    expect(listSystemPresence().some((entry) => entry.deviceId === deviceId)).toBe(true);
+    expect(
+      listSystemPresence().some((entry) => entry.deviceId === deviceId),
+    ).toBe(true);
 
     vi.advanceTimersByTime(5 * 60 * 1000 + 1);
 

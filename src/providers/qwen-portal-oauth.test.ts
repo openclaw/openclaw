@@ -15,7 +15,8 @@ describe("refreshQwenPortalCredentials", () => {
     expires: Date.now() - 1000,
   });
 
-  const runRefresh = async () => await refreshQwenPortalCredentials(expiredCredentials());
+  const runRefresh = async () =>
+    await refreshQwenPortalCredentials(expiredCredentials());
 
   const stubFetchResponse = (response: unknown) => {
     const fetchSpy = vi.fn().mockResolvedValue(response);
@@ -101,7 +102,9 @@ describe("refreshQwenPortalCredentials", () => {
       text: async () => "invalid_grant",
     });
 
-    await expect(runRefresh()).rejects.toThrow("Qwen OAuth refresh token expired or invalid");
+    await expect(runRefresh()).rejects.toThrow(
+      "Qwen OAuth refresh token expired or invalid",
+    );
   });
 
   it("errors when refresh token is missing before any request", async () => {
@@ -124,7 +127,9 @@ describe("refreshQwenPortalCredentials", () => {
       }),
     });
 
-    await expect(runRefresh()).rejects.toThrow("Qwen OAuth refresh response missing access token");
+    await expect(runRefresh()).rejects.toThrow(
+      "Qwen OAuth refresh response missing access token",
+    );
   });
 
   it("errors with server payload text for non-400 status", async () => {
@@ -135,6 +140,8 @@ describe("refreshQwenPortalCredentials", () => {
       text: async () => "gateway down",
     });
 
-    await expect(runRefresh()).rejects.toThrow("Qwen OAuth refresh failed: gateway down");
+    await expect(runRefresh()).rejects.toThrow(
+      "Qwen OAuth refresh failed: gateway down",
+    );
   });
 });

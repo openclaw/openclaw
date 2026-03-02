@@ -10,9 +10,12 @@ export function readSecretFromFile(filePath: string, label: string): string {
   try {
     raw = fs.readFileSync(resolvedPath, "utf8");
   } catch (err) {
-    throw new Error(`Failed to read ${label} file at ${resolvedPath}: ${String(err)}`, {
-      cause: err,
-    });
+    throw new Error(
+      `Failed to read ${label} file at ${resolvedPath}: ${String(err)}`,
+      {
+        cause: err,
+      },
+    );
   }
   const secret = raw.trim();
   if (!secret) {

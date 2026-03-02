@@ -24,7 +24,9 @@ export const DEFAULT_WEB_INBOX_CONFIG = {
   },
 } as const;
 
-export const mockLoadConfig: AnyMockFn = vi.fn().mockReturnValue(DEFAULT_WEB_INBOX_CONFIG);
+export const mockLoadConfig: AnyMockFn = vi
+  .fn()
+  .mockReturnValue(DEFAULT_WEB_INBOX_CONFIG);
 
 export const readAllowFromStoreMock: AnyMockFn = vi.fn().mockResolvedValue([]);
 export const upsertPairingRequestMock: AnyMockFn = vi
@@ -86,8 +88,10 @@ vi.mock("../config/config.js", async (importOriginal) => {
 });
 
 vi.mock("../pairing/pairing-store.js", () => ({
-  readChannelAllowFromStore: (...args: unknown[]) => readAllowFromStoreMock(...args),
-  upsertChannelPairingRequest: (...args: unknown[]) => upsertPairingRequestMock(...args),
+  readChannelAllowFromStore: (...args: unknown[]) =>
+    readAllowFromStoreMock(...args),
+  upsertChannelPairingRequest: (...args: unknown[]) =>
+    upsertPairingRequestMock(...args),
 }));
 
 vi.mock("./session.js", () => ({
@@ -104,12 +108,16 @@ let authDir: string | undefined;
 
 export function getAuthDir(): string {
   if (!authDir) {
-    throw new Error("authDir not initialized; call installWebMonitorInboxUnitTestHooks()");
+    throw new Error(
+      "authDir not initialized; call installWebMonitorInboxUnitTestHooks()",
+    );
   }
   return authDir;
 }
 
-export function installWebMonitorInboxUnitTestHooks(opts?: { authDir?: boolean }) {
+export function installWebMonitorInboxUnitTestHooks(opts?: {
+  authDir?: boolean;
+}) {
   const createAuthDir = opts?.authDir ?? true;
 
   beforeEach(async () => {

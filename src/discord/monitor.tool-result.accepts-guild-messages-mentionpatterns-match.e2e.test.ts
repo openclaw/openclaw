@@ -46,7 +46,9 @@ beforeEach(() => {
       params.dispatcherOptions
     ) {
       const { dispatcher, markDispatchIdle } = createReplyDispatcherWithTyping(
-        params.dispatcherOptions as Parameters<typeof createReplyDispatcherWithTyping>[0],
+        params.dispatcherOptions as Parameters<
+          typeof createReplyDispatcherWithTyping
+        >[0],
       );
       dispatcher.sendFinalReply({ text: "final reply" });
       await dispatcher.waitForIdle();
@@ -56,19 +58,25 @@ beforeEach(() => {
     return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
   });
   readAllowFromStoreMock.mockClear().mockResolvedValue([]);
-  upsertPairingRequestMock.mockClear().mockResolvedValue({ code: "PAIRCODE", created: true });
+  upsertPairingRequestMock
+    .mockClear()
+    .mockResolvedValue({ code: "PAIRCODE", created: true });
   loadConfigMock.mockClear().mockReturnValue({});
   __resetDiscordChannelInfoCacheForTest();
 });
 
-const MENTION_PATTERNS_TEST_TIMEOUT_MS = process.platform === "win32" ? 90_000 : 60_000;
+const MENTION_PATTERNS_TEST_TIMEOUT_MS =
+  process.platform === "win32" ? 90_000 : 60_000;
 
-type LoadedConfig = ReturnType<(typeof import("../config/config.js"))["loadConfig"]>;
+type LoadedConfig = ReturnType<
+  (typeof import("../config/config.js"))["loadConfig"]
+>;
 let createDiscordMessageHandler: typeof import("./monitor.js").createDiscordMessageHandler;
 let createDiscordNativeCommand: typeof import("./monitor.js").createDiscordNativeCommand;
 
 beforeAll(async () => {
-  ({ createDiscordMessageHandler, createDiscordNativeCommand } = await import("./monitor.js"));
+  ({ createDiscordMessageHandler, createDiscordNativeCommand } =
+    await import("./monitor.js"));
 });
 
 function makeRuntime() {
@@ -282,7 +290,10 @@ describe("discord tool result dispatch", () => {
       const client = createGuildTextClient();
 
       await handler(
-        createGuildMessageEvent({ messageId: "m2", content: "openclaw: hello" }),
+        createGuildMessageEvent({
+          messageId: "m2",
+          content: "openclaw: hello",
+        }),
         client,
       );
 
@@ -388,7 +399,10 @@ describe("discord tool result dispatch", () => {
     );
 
     expect(dispatchMock).toHaveBeenCalledTimes(1);
-    const payload = dispatchMock.mock.calls[0]?.[0]?.ctx as Record<string, unknown>;
+    const payload = dispatchMock.mock.calls[0]?.[0]?.ctx as Record<
+      string,
+      unknown
+    >;
     expect(payload.WasMentioned).toBe(true);
   });
 
@@ -413,7 +427,9 @@ describe("discord tool result dispatch", () => {
   });
 
   it("skips thread starter context when disabled", async () => {
-    const getCapturedCtx = captureNextDispatchCtx<{ ThreadStarterBody?: string }>();
+    const getCapturedCtx = captureNextDispatchCtx<{
+      ThreadStarterBody?: string;
+    }>();
     const cfg = {
       ...createDefaultThreadConfig(),
       channels: {
@@ -484,7 +500,9 @@ describe("discord tool result dispatch", () => {
 
     const capturedCtx = getCapturedCtx();
     expect(capturedCtx?.SessionKey).toBe("agent:main:discord:channel:t1");
-    expect(capturedCtx?.ParentSessionKey).toBe("agent:main:discord:channel:forum-1");
+    expect(capturedCtx?.ParentSessionKey).toBe(
+      "agent:main:discord:channel:forum-1",
+    );
     expect(capturedCtx?.ThreadStarterBody).toContain("starter message");
     expect(capturedCtx?.ThreadLabel).toContain("Discord thread #support");
     expect(restGet).toHaveBeenCalledWith(Routes.channelMessage("t1", "t1"));
@@ -498,7 +516,9 @@ describe("discord tool result dispatch", () => {
 
     const cfg = {
       ...createDefaultThreadConfig(),
-      bindings: [{ agentId: "support", match: { channel: "discord", guildId: "g1" } }],
+      bindings: [
+        { agentId: "support", match: { channel: "discord", guildId: "g1" } },
+      ],
     } as LoadedConfig;
     loadConfigMock.mockReturnValue(cfg);
 
@@ -510,6 +530,8 @@ describe("discord tool result dispatch", () => {
 
     const capturedCtx = getCapturedCtx();
     expect(capturedCtx?.SessionKey).toBe("agent:support:discord:channel:t1");
-    expect(capturedCtx?.ParentSessionKey).toBe("agent:support:discord:channel:p1");
+    expect(capturedCtx?.ParentSessionKey).toBe(
+      "agent:support:discord:channel:p1",
+    );
   });
 });

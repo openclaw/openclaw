@@ -16,7 +16,11 @@ describe("auth rate limiter", () => {
   // ---------- basic sliding window ----------
 
   it("allows requests when no failures have been recorded", () => {
-    limiter = createAuthRateLimiter({ maxAttempts: 5, windowMs: 60_000, lockoutMs: 300_000 });
+    limiter = createAuthRateLimiter({
+      maxAttempts: 5,
+      windowMs: 60_000,
+      lockoutMs: 300_000,
+    });
     const result = limiter.check("192.168.1.1");
     expect(result.allowed).toBe(true);
     expect(result.remaining).toBe(5);
@@ -24,7 +28,11 @@ describe("auth rate limiter", () => {
   });
 
   it("decrements remaining count after each failure", () => {
-    limiter = createAuthRateLimiter({ maxAttempts: 3, windowMs: 60_000, lockoutMs: 300_000 });
+    limiter = createAuthRateLimiter({
+      maxAttempts: 3,
+      windowMs: 60_000,
+      lockoutMs: 300_000,
+    });
     limiter.recordFailure("10.0.0.1");
     expect(limiter.check("10.0.0.1").remaining).toBe(2);
     limiter.recordFailure("10.0.0.1");
@@ -32,7 +40,11 @@ describe("auth rate limiter", () => {
   });
 
   it("blocks the IP once maxAttempts is reached", () => {
-    limiter = createAuthRateLimiter({ maxAttempts: 2, windowMs: 60_000, lockoutMs: 10_000 });
+    limiter = createAuthRateLimiter({
+      maxAttempts: 2,
+      windowMs: 60_000,
+      lockoutMs: 10_000,
+    });
     limiter.recordFailure("10.0.0.2");
     limiter.recordFailure("10.0.0.2");
     const result = limiter.check("10.0.0.2");
@@ -47,7 +59,11 @@ describe("auth rate limiter", () => {
   it("unblocks after the lockout period expires", () => {
     vi.useFakeTimers();
     try {
-      limiter = createAuthRateLimiter({ maxAttempts: 2, windowMs: 60_000, lockoutMs: 5_000 });
+      limiter = createAuthRateLimiter({
+        maxAttempts: 2,
+        windowMs: 60_000,
+        lockoutMs: 5_000,
+      });
       limiter.recordFailure("10.0.0.3");
       limiter.recordFailure("10.0.0.3");
       expect(limiter.check("10.0.0.3").allowed).toBe(false);
@@ -67,7 +83,11 @@ describe("auth rate limiter", () => {
   it("expires old failures outside the window", () => {
     vi.useFakeTimers();
     try {
-      limiter = createAuthRateLimiter({ maxAttempts: 3, windowMs: 10_000, lockoutMs: 60_000 });
+      limiter = createAuthRateLimiter({
+        maxAttempts: 3,
+        windowMs: 10_000,
+        lockoutMs: 60_000,
+      });
       limiter.recordFailure("10.0.0.4");
       limiter.recordFailure("10.0.0.4");
       expect(limiter.check("10.0.0.4").remaining).toBe(1);
@@ -83,7 +103,11 @@ describe("auth rate limiter", () => {
   // ---------- per-IP isolation ----------
 
   it("tracks IPs independently", () => {
-    limiter = createAuthRateLimiter({ maxAttempts: 2, windowMs: 60_000, lockoutMs: 60_000 });
+    limiter = createAuthRateLimiter({
+      maxAttempts: 2,
+      windowMs: 60_000,
+      lockoutMs: 60_000,
+    });
     limiter.recordFailure("10.0.0.10");
     limiter.recordFailure("10.0.0.10");
     expect(limiter.check("10.0.0.10").allowed).toBe(false);
@@ -94,29 +118,49 @@ describe("auth rate limiter", () => {
   });
 
   it("treats ipv4 and ipv4-mapped ipv6 forms as the same client", () => {
-    limiter = createAuthRateLimiter({ maxAttempts: 1, windowMs: 60_000, lockoutMs: 60_000 });
+    limiter = createAuthRateLimiter({
+      maxAttempts: 1,
+      windowMs: 60_000,
+      lockoutMs: 60_000,
+    });
     limiter.recordFailure("1.2.3.4");
     expect(limiter.check("::ffff:1.2.3.4").allowed).toBe(false);
   });
 
   it("tracks scopes independently for the same IP", () => {
-    limiter = createAuthRateLimiter({ maxAttempts: 1, windowMs: 60_000, lockoutMs: 60_000 });
+    limiter = createAuthRateLimiter({
+      maxAttempts: 1,
+      windowMs: 60_000,
+      lockoutMs: 60_000,
+    });
     limiter.recordFailure("10.0.0.12", AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET);
-    expect(limiter.check("10.0.0.12", AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET).allowed).toBe(false);
-    expect(limiter.check("10.0.0.12", AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN).allowed).toBe(true);
+    expect(
+      limiter.check("10.0.0.12", AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET).allowed,
+    ).toBe(false);
+    expect(
+      limiter.check("10.0.0.12", AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN).allowed,
+    ).toBe(true);
   });
 
   // ---------- loopback exemption ----------
 
   it("exempts loopback addresses by default", () => {
-    limiter = createAuthRateLimiter({ maxAttempts: 1, windowMs: 60_000, lockoutMs: 60_000 });
+    limiter = createAuthRateLimiter({
+      maxAttempts: 1,
+      windowMs: 60_000,
+      lockoutMs: 60_000,
+    });
     limiter.recordFailure("127.0.0.1");
     // Should still be allowed even though maxAttempts is 1.
     expect(limiter.check("127.0.0.1").allowed).toBe(true);
   });
 
   it("exempts IPv6 loopback by default", () => {
-    limiter = createAuthRateLimiter({ maxAttempts: 1, windowMs: 60_000, lockoutMs: 60_000 });
+    limiter = createAuthRateLimiter({
+      maxAttempts: 1,
+      windowMs: 60_000,
+      lockoutMs: 60_000,
+    });
     limiter.recordFailure("::1");
     expect(limiter.check("::1").allowed).toBe(true);
   });
@@ -135,7 +179,11 @@ describe("auth rate limiter", () => {
   // ---------- reset ----------
 
   it("clears tracking state when reset is called", () => {
-    limiter = createAuthRateLimiter({ maxAttempts: 2, windowMs: 60_000, lockoutMs: 60_000 });
+    limiter = createAuthRateLimiter({
+      maxAttempts: 2,
+      windowMs: 60_000,
+      lockoutMs: 60_000,
+    });
     limiter.recordFailure("10.0.0.20");
     limiter.recordFailure("10.0.0.20");
     expect(limiter.check("10.0.0.20").allowed).toBe(false);
@@ -146,15 +194,27 @@ describe("auth rate limiter", () => {
   });
 
   it("reset only clears the requested scope for an IP", () => {
-    limiter = createAuthRateLimiter({ maxAttempts: 1, windowMs: 60_000, lockoutMs: 60_000 });
+    limiter = createAuthRateLimiter({
+      maxAttempts: 1,
+      windowMs: 60_000,
+      lockoutMs: 60_000,
+    });
     limiter.recordFailure("10.0.0.21", AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET);
     limiter.recordFailure("10.0.0.21", AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
-    expect(limiter.check("10.0.0.21", AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET).allowed).toBe(false);
-    expect(limiter.check("10.0.0.21", AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN).allowed).toBe(false);
+    expect(
+      limiter.check("10.0.0.21", AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET).allowed,
+    ).toBe(false);
+    expect(
+      limiter.check("10.0.0.21", AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN).allowed,
+    ).toBe(false);
 
     limiter.reset("10.0.0.21", AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET);
-    expect(limiter.check("10.0.0.21", AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET).allowed).toBe(true);
-    expect(limiter.check("10.0.0.21", AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN).allowed).toBe(false);
+    expect(
+      limiter.check("10.0.0.21", AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET).allowed,
+    ).toBe(true);
+    expect(
+      limiter.check("10.0.0.21", AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN).allowed,
+    ).toBe(false);
   });
 
   // ---------- prune ----------
@@ -162,7 +222,11 @@ describe("auth rate limiter", () => {
   it("prune removes stale entries", () => {
     vi.useFakeTimers();
     try {
-      limiter = createAuthRateLimiter({ maxAttempts: 5, windowMs: 5_000, lockoutMs: 5_000 });
+      limiter = createAuthRateLimiter({
+        maxAttempts: 5,
+        windowMs: 5_000,
+        lockoutMs: 5_000,
+      });
       limiter.recordFailure("10.0.0.30");
       expect(limiter.size()).toBe(1);
 
@@ -177,7 +241,11 @@ describe("auth rate limiter", () => {
   it("prune keeps entries that are still locked out", () => {
     vi.useFakeTimers();
     try {
-      limiter = createAuthRateLimiter({ maxAttempts: 1, windowMs: 5_000, lockoutMs: 30_000 });
+      limiter = createAuthRateLimiter({
+        maxAttempts: 1,
+        windowMs: 5_000,
+        lockoutMs: 30_000,
+      });
       limiter.recordFailure("10.0.0.31");
       expect(limiter.check("10.0.0.31").allowed).toBe(false);
 
@@ -193,7 +261,11 @@ describe("auth rate limiter", () => {
   // ---------- undefined / empty IP ----------
 
   it("normalizes undefined IP to 'unknown'", () => {
-    limiter = createAuthRateLimiter({ maxAttempts: 2, windowMs: 60_000, lockoutMs: 60_000 });
+    limiter = createAuthRateLimiter({
+      maxAttempts: 2,
+      windowMs: 60_000,
+      lockoutMs: 60_000,
+    });
     limiter.recordFailure(undefined);
     limiter.recordFailure(undefined);
     expect(limiter.check(undefined).allowed).toBe(false);
@@ -201,7 +273,11 @@ describe("auth rate limiter", () => {
   });
 
   it("normalizes empty-string IP to 'unknown'", () => {
-    limiter = createAuthRateLimiter({ maxAttempts: 2, windowMs: 60_000, lockoutMs: 60_000 });
+    limiter = createAuthRateLimiter({
+      maxAttempts: 2,
+      windowMs: 60_000,
+      lockoutMs: 60_000,
+    });
     limiter.recordFailure("");
     limiter.recordFailure("");
     expect(limiter.check("").allowed).toBe(false);

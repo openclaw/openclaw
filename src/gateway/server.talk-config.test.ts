@@ -93,7 +93,9 @@ describe("gateway talk.config", () => {
       }>(ws, "talk.config", {});
       expect(res.ok).toBe(true);
       expect(res.payload?.config?.talk?.provider).toBe("elevenlabs");
-      expect(res.payload?.config?.talk?.providers?.elevenlabs?.voiceId).toBe("voice-123");
+      expect(res.payload?.config?.talk?.providers?.elevenlabs?.voiceId).toBe(
+        "voice-123",
+      );
       expect(res.payload?.config?.talk?.providers?.elevenlabs?.apiKey).toBe(
         "__OPENCLAW_REDACTED__",
       );
@@ -109,7 +111,9 @@ describe("gateway talk.config", () => {
       await connectOperator(ws, ["operator.read"]);
       const res = await rpcReq(ws, "talk.config", { includeSecrets: true });
       expect(res.ok).toBe(false);
-      expect(res.error?.message).toContain("missing scope: operator.talk.secrets");
+      expect(res.error?.message).toContain(
+        "missing scope: operator.talk.secrets",
+      );
     });
   });
 
@@ -117,10 +121,18 @@ describe("gateway talk.config", () => {
     await writeTalkConfig({ apiKey: "secret-key-abc" });
 
     await withServer(async (ws) => {
-      await connectOperator(ws, ["operator.read", "operator.write", "operator.talk.secrets"]);
-      const res = await rpcReq<{ config?: { talk?: { apiKey?: string } } }>(ws, "talk.config", {
-        includeSecrets: true,
-      });
+      await connectOperator(ws, [
+        "operator.read",
+        "operator.write",
+        "operator.talk.secrets",
+      ]);
+      const res = await rpcReq<{ config?: { talk?: { apiKey?: string } } }>(
+        ws,
+        "talk.config",
+        {
+          includeSecrets: true,
+        },
+      );
       expect(res.ok).toBe(true);
       expect(res.payload?.config?.talk?.apiKey).toBe("secret-key-abc");
     });
@@ -155,7 +167,9 @@ describe("gateway talk.config", () => {
       }>(ws, "talk.config", {});
       expect(res.ok).toBe(true);
       expect(res.payload?.config?.talk?.provider).toBe("elevenlabs");
-      expect(res.payload?.config?.talk?.providers?.elevenlabs?.voiceId).toBe("voice-normalized");
+      expect(res.payload?.config?.talk?.providers?.elevenlabs?.voiceId).toBe(
+        "voice-normalized",
+      );
       expect(res.payload?.config?.talk?.voiceId).toBe("voice-normalized");
     });
   });

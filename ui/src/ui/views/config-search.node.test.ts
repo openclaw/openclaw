@@ -18,7 +18,9 @@ describe("config search tag helper", () => {
   });
 
   it("deduplicates existing tag filters case-insensitively", () => {
-    expect(appendTagFilter("token tag:Security", "security")).toBe("token tag:Security");
+    expect(appendTagFilter("token tag:Security", "security")).toBe(
+      "token tag:Security",
+    );
   });
 
   it("detects exact tag terms", () => {
@@ -27,7 +29,9 @@ describe("config search tag helper", () => {
   });
 
   it("removes only the selected active tag", () => {
-    expect(removeTagFilter("token tag:security tag:auth", "security")).toBe("token tag:auth");
+    expect(removeTagFilter("token tag:security tag:auth", "security")).toBe(
+      "token tag:auth",
+    );
   });
 
   it("toggle removes active tag and keeps text", () => {
@@ -39,12 +43,15 @@ describe("config search tag helper", () => {
   });
 
   it("extracts unique normalized tags from query", () => {
-    expect(getTagFilters("token tag:Security tag:auth tag:security")).toEqual(["security", "auth"]);
+    expect(getTagFilters("token tag:Security tag:auth tag:security")).toEqual([
+      "security",
+      "auth",
+    ]);
   });
 
   it("replaces only tag filters and preserves free text", () => {
-    expect(replaceTagFilters("token tag:security mode", ["auth", "channels"])).toBe(
-      "token mode tag:auth tag:channels",
-    );
+    expect(
+      replaceTagFilters("token tag:security mode", ["auth", "channels"]),
+    ).toBe("token mode tag:auth tag:channels");
   });
 });

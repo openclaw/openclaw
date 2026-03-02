@@ -40,7 +40,8 @@ vi.mock("../../runtime.js", () => ({
 let registerStatusHealthSessionsCommands: typeof import("./register.status-health-sessions.js").registerStatusHealthSessionsCommands;
 
 beforeAll(async () => {
-  ({ registerStatusHealthSessionsCommands } = await import("./register.status-health-sessions.js"));
+  ({ registerStatusHealthSessionsCommands } =
+    await import("./register.status-health-sessions.js"));
 });
 
 describe("registerStatusHealthSessionsCommands", () => {

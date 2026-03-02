@@ -5,7 +5,11 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildWorkspaceSkillStatus } from "../agents/skills-status.js";
 import type { SkillEntry } from "../agents/skills.js";
 import { captureEnv } from "../test-utils/env.js";
-import { formatSkillInfo, formatSkillsCheck, formatSkillsList } from "./skills-cli.format.js";
+import {
+  formatSkillInfo,
+  formatSkillsCheck,
+  formatSkillsList,
+} from "./skills-cli.format.js";
 
 describe("skills-cli (e2e)", () => {
   let tempWorkspaceDir = "";
@@ -14,8 +18,12 @@ describe("skills-cli (e2e)", () => {
 
   beforeAll(() => {
     envSnapshot = captureEnv(["OPENCLAW_BUNDLED_SKILLS_DIR"]);
-    tempWorkspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-skills-test-"));
-    tempBundledDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bundled-skills-test-"));
+    tempWorkspaceDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "openclaw-skills-test-"),
+    );
+    tempBundledDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "openclaw-bundled-skills-test-"),
+    );
     process.env.OPENCLAW_BUNDLED_SKILLS_DIR = tempBundledDir;
   });
 

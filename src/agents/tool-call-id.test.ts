@@ -68,7 +68,9 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
       const input = [
         {
           role: "assistant",
-          content: [{ type: "toolCall", id: "call1", name: "read", arguments: {} }],
+          content: [
+            { type: "toolCall", id: "call1", name: "read", arguments: {} },
+          ],
         },
         {
           role: "toolResult",
@@ -86,7 +88,14 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
       const input = [
         {
           role: "assistant",
-          content: [{ type: "toolCall", id: "call|item:123", name: "read", arguments: {} }],
+          content: [
+            {
+              type: "toolCall",
+              id: "call|item:123",
+              name: "read",
+              arguments: {},
+            },
+          ],
         },
         {
           role: "toolResult",
@@ -187,7 +196,9 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
       const input = [
         {
           role: "assistant",
-          content: [{ type: "toolCall", id: "abc123XYZ", name: "read", arguments: {} }],
+          content: [
+            { type: "toolCall", id: "abc123XYZ", name: "read", arguments: {} },
+          ],
         },
         {
           role: "toolResult",
@@ -206,8 +217,18 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
         {
           role: "assistant",
           content: [
-            { type: "toolCall", id: "call_abc|item:123", name: "read", arguments: {} },
-            { type: "toolCall", id: "call_abc|item:456", name: "read", arguments: {} },
+            {
+              type: "toolCall",
+              id: "call_abc|item:123",
+              name: "read",
+              arguments: {},
+            },
+            {
+              type: "toolCall",
+              id: "call_abc|item:456",
+              name: "read",
+              arguments: {},
+            },
           ],
         },
         {

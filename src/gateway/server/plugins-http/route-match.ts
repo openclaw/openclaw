@@ -14,9 +14,13 @@ export function doesPluginRouteMatchPath(
 ): boolean {
   const routeCanonicalPath = canonicalizePathVariant(route.path);
   if (route.match === "prefix") {
-    return context.candidates.some((candidate) => prefixMatchPath(candidate, routeCanonicalPath));
+    return context.candidates.some((candidate) =>
+      prefixMatchPath(candidate, routeCanonicalPath),
+    );
   }
-  return context.candidates.some((candidate) => candidate === routeCanonicalPath);
+  return context.candidates.some(
+    (candidate) => candidate === routeCanonicalPath,
+  );
 }
 
 export function findMatchingPluginHttpRoutes(

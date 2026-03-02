@@ -5,8 +5,14 @@ import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import type { UpdateChannel } from "../infra/update-channels.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveBundledPluginSources } from "./bundled-sources.js";
-import { installPluginFromNpmSpec, resolvePluginInstallDir } from "./install.js";
-import { buildNpmResolutionInstallFields, recordPluginInstall } from "./installs.js";
+import {
+  installPluginFromNpmSpec,
+  resolvePluginInstallDir,
+} from "./install.js";
+import {
+  buildNpmResolutionInstallFields,
+  recordPluginInstall,
+} from "./installs.js";
 
 export type PluginUpdateLogger = {
   info?: (message: string) => void;
@@ -63,7 +69,9 @@ type InstallIntegrityDrift = {
   };
 };
 
-async function readInstalledPackageVersion(dir: string): Promise<string | undefined> {
+async function readInstalledPackageVersion(
+  dir: string,
+): Promise<string | undefined> {
   const manifestPath = path.join(dir, "package.json");
   const opened = openBoundaryFileSync({
     absolutePath: manifestPath,
@@ -93,7 +101,8 @@ function pathsEqual(left?: string, right?: string): boolean {
 
 function buildLoadPathHelpers(existing: string[]) {
   let paths = [...existing];
-  const resolveSet = () => new Set(paths.map((entry) => resolveUserPath(entry)));
+  const resolveSet = () =>
+    new Set(paths.map((entry) => resolveUserPath(entry)));
   let resolved = resolveSet();
   let changed = false;
 
@@ -133,7 +142,9 @@ function createPluginUpdateIntegrityDriftHandler(params: {
   pluginId: string;
   dryRun: boolean;
   logger: PluginUpdateLogger;
-  onIntegrityDrift?: (params: PluginUpdateIntegrityDriftParams) => boolean | Promise<boolean>;
+  onIntegrityDrift?: (
+    params: PluginUpdateIntegrityDriftParams,
+  ) => boolean | Promise<boolean>;
 }) {
   return async (drift: InstallIntegrityDrift) => {
     const payload: PluginUpdateIntegrityDriftParams = {
@@ -161,11 +172,15 @@ export async function updateNpmInstalledPlugins(params: {
   pluginIds?: string[];
   skipIds?: Set<string>;
   dryRun?: boolean;
-  onIntegrityDrift?: (params: PluginUpdateIntegrityDriftParams) => boolean | Promise<boolean>;
+  onIntegrityDrift?: (
+    params: PluginUpdateIntegrityDriftParams,
+  ) => boolean | Promise<boolean>;
 }): Promise<PluginUpdateSummary> {
   const logger = params.logger ?? {};
   const installs = params.config.plugins?.installs ?? {};
-  const targets = params.pluginIds?.length ? params.pluginIds : Object.keys(installs);
+  const targets = params.pluginIds?.length
+    ? params.pluginIds
+    : Object.keys(installs);
   const outcomes: PluginUpdateOutcome[] = [];
   let next = params.config;
   let changed = false;
@@ -309,7 +324,8 @@ export async function updateNpmInstalledPlugins(params: {
       continue;
     }
 
-    const nextVersion = result.version ?? (await readInstalledPackageVersion(result.targetDir));
+    const nextVersion =
+      result.version ?? (await readInstalledPackageVersion(result.targetDir));
     next = recordPluginInstall(next, {
       pluginId,
       source: "npm",
@@ -356,7 +372,9 @@ export async function syncPluginsForUpdateChannel(params: {
     warnings: [],
     errors: [],
   };
-  const bundled = resolveBundledPluginSources({ workspaceDir: params.workspaceDir });
+  const bundled = resolveBundledPluginSources({
+    workspaceDir: params.workspaceDir,
+  });
   if (bundled.size === 0) {
     return { config: params.config, changed: false, summary };
   }
@@ -376,7 +394,8 @@ export async function syncPluginsForUpdateChannel(params: {
       loadHelpers.addPath(bundledInfo.localPath);
 
       const alreadyBundled =
-        record.source === "path" && pathsEqual(record.sourcePath, bundledInfo.localPath);
+        record.source === "path" &&
+        pathsEqual(record.sourcePath, bundledInfo.localPath);
       if (alreadyBundled) {
         continue;
       }
@@ -413,7 +432,9 @@ export async function syncPluginsForUpdateChannel(params: {
 
       const spec = record.spec ?? bundledInfo.npmSpec;
       if (!spec) {
-        summary.warnings.push(`Missing npm spec for ${pluginId}; keeping local path.`);
+        summary.warnings.push(
+          `Missing npm spec for ${pluginId}; keeping local path.`,
+        );
         continue;
       }
 

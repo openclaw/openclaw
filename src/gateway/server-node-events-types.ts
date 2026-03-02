@@ -7,8 +7,16 @@ import type { DedupeEntry } from "./server-shared.js";
 
 export type NodeEventContext = {
   deps: CliDeps;
-  broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
-  nodeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
+  broadcast: (
+    event: string,
+    payload: unknown,
+    opts?: { dropIfSlow?: boolean },
+  ) => void;
+  nodeSendToSession: (
+    sessionKey: string,
+    event: string,
+    payload: unknown,
+  ) => void;
   nodeSubscribe: (nodeId: string, sessionKey: string) => void;
   nodeUnsubscribe: (nodeId: string, sessionKey: string) => void;
   broadcastVoiceWakeChanged: (triggers: string[]) => void;

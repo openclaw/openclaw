@@ -42,7 +42,10 @@ type ResolveAuthResult = {
   error?: string;
 };
 
-function normalizeUrl(raw: string, schemeFallback: "ws" | "wss"): string | null {
+function normalizeUrl(
+  raw: string,
+  schemeFallback: "ws" | "wss",
+): string | null {
   const candidate = raw.trim();
   if (!candidate) {
     return null;
@@ -59,7 +62,8 @@ function parseNormalizedGatewayUrl(raw: string): string | null {
   try {
     const parsed = new URL(raw);
     const scheme = parsed.protocol.slice(0, -1);
-    const normalizedScheme = scheme === "http" ? "ws" : scheme === "https" ? "wss" : scheme;
+    const normalizedScheme =
+      scheme === "http" ? "ws" : scheme === "https" ? "wss" : scheme;
     if (!(normalizedScheme === "ws" || normalizedScheme === "wss")) {
       return null;
     }
@@ -88,7 +92,11 @@ function resolveGatewayPort(cfg: OpenClawPluginApi["config"]): number {
     return envPort;
   }
   const configPort = cfg.gateway?.port;
-  if (typeof configPort === "number" && Number.isFinite(configPort) && configPort > 0) {
+  if (
+    typeof configPort === "number" &&
+    Number.isFinite(configPort) &&
+    configPort > 0
+  ) {
     return configPort;
   }
   return DEFAULT_GATEWAY_PORT;
@@ -110,7 +118,9 @@ function isPrivateIPv4(address: string): boolean {
     return false;
   }
   const octets = parts.map((part) => Number.parseInt(part, 10));
-  if (octets.some((value) => !Number.isFinite(value) || value < 0 || value > 255)) {
+  if (
+    octets.some((value) => !Number.isFinite(value) || value < 0 || value > 255)
+  ) {
     return false;
   }
   const [a, b] = octets;
@@ -132,14 +142,18 @@ function isTailnetIPv4(address: string): boolean {
     return false;
   }
   const octets = parts.map((part) => Number.parseInt(part, 10));
-  if (octets.some((value) => !Number.isFinite(value) || value < 0 || value > 255)) {
+  if (
+    octets.some((value) => !Number.isFinite(value) || value < 0 || value > 255)
+  ) {
     return false;
   }
   const [a, b] = octets;
   return a === 100 && b >= 64 && b <= 127;
 }
 
-function pickMatchingIPv4(predicate: (address: string) => boolean): string | null {
+function pickMatchingIPv4(
+  predicate: (address: string) => boolean,
+): string | null {
   const nets = os.networkInterfaces();
   for (const entries of Object.values(nets)) {
     if (!entries) {
@@ -208,7 +222,9 @@ function resolveAuth(cfg: OpenClawPluginApi["config"]): ResolveAuthResult {
   return { error: "Gateway auth is not configured (no token or password)." };
 }
 
-function pickFirstDefined(candidates: Array<string | undefined>): string | null {
+function pickFirstDefined(
+  candidates: Array<string | undefined>,
+): string | null {
   for (const value of candidates) {
     const trimmed = value?.trim();
     if (trimmed) {
@@ -229,10 +245,15 @@ function resolveRequiredAuth(
   }
   return values.password
     ? { password: values.password, label: "password" }
-    : { error: "Gateway auth is set to password, but no password is configured." };
+    : {
+        error:
+          "Gateway auth is set to password, but no password is configured.",
+      };
 }
 
-async function resolveGatewayUrl(api: OpenClawPluginApi): Promise<ResolveUrlResult> {
+async function resolveGatewayUrl(
+  api: OpenClawPluginApi,
+): Promise<ResolveUrlResult> {
   const cfg = api.config;
   const pluginCfg = (api.pluginConfig ?? {}) as DevicePairPluginConfig;
   const scheme = resolveScheme(cfg);
@@ -250,9 +271,15 @@ async function resolveGatewayUrl(api: OpenClawPluginApi): Promise<ResolveUrlResu
   if (tailscaleMode === "serve" || tailscaleMode === "funnel") {
     const host = await resolveTailnetHost();
     if (!host) {
-      return { error: "Tailscale Serve is enabled, but MagicDNS could not be resolved." };
+      return {
+        error:
+          "Tailscale Serve is enabled, but MagicDNS could not be resolved.",
+      };
     }
-    return { url: `wss://${host}`, source: `gateway.tailscale.mode=${tailscaleMode}` };
+    return {
+      url: `wss://${host}`,
+      source: `gateway.tailscale.mode=${tailscaleMode}`,
+    };
   }
 
   const remoteUrl = cfg.gateway?.remote?.url;
@@ -373,9 +400,13 @@ export default function register(api: OpenClawPluginApi) {
         let pending: (typeof list.pending)[number] | undefined;
         if (requested) {
           if (requested.toLowerCase() === "latest") {
-            pending = [...list.pending].toSorted((a, b) => (b.ts ?? 0) - (a.ts ?? 0))[0];
+            pending = [...list.pending].toSorted(
+              (a, b) => (b.ts ?? 0) - (a.ts ?? 0),
+            )[0];
           } else {
-            pending = list.pending.find((entry) => entry.requestId === requested);
+            pending = list.pending.find(
+              (entry) => entry.requestId === requested,
+            );
           }
         } else if (list.pending.length === 1) {
           pending = list.pending[0];
@@ -396,7 +427,8 @@ export default function register(api: OpenClawPluginApi) {
         if (!approved) {
           return { text: "Pairing request not found." };
         }
-        const label = approved.device.displayName?.trim() || approved.device.deviceId;
+        const label =
+          approved.device.displayName?.trim() || approved.device.deviceId;
         const platform = approved.device.platform?.trim();
         const platformLabel = platform ? ` (${platform})` : "";
         return { text: `✅ Paired ${label}${platformLabel}.` };
@@ -409,7 +441,9 @@ export default function register(api: OpenClawPluginApi) {
 
       const urlResult = await resolveGatewayUrl(api);
       if (!urlResult.url) {
-        return { text: `Error: ${urlResult.error ?? "Gateway URL unavailable."}` };
+        return {
+          text: `Error: ${urlResult.error ?? "Gateway URL unavailable."}`,
+        };
       }
 
       const payload: SetupPayload = {
@@ -424,7 +458,8 @@ export default function register(api: OpenClawPluginApi) {
         const authLabel = auth.label ?? "auth";
 
         const channel = ctx.channel;
-        const target = ctx.senderId?.trim() || ctx.from?.trim() || ctx.to?.trim() || "";
+        const target =
+          ctx.senderId?.trim() || ctx.from?.trim() || ctx.to?.trim() || "";
 
         if (channel === "telegram" && target) {
           try {
@@ -432,11 +467,17 @@ export default function register(api: OpenClawPluginApi) {
             if (send) {
               await send(
                 target,
-                ["Scan this QR code with the OpenClaw iOS app:", "", "```", qrAscii, "```"].join(
-                  "\n",
-                ),
+                [
+                  "Scan this QR code with the OpenClaw iOS app:",
+                  "",
+                  "```",
+                  qrAscii,
+                  "```",
+                ].join("\n"),
                 {
-                  ...(ctx.messageThreadId != null ? { messageThreadId: ctx.messageThreadId } : {}),
+                  ...(ctx.messageThreadId != null
+                    ? { messageThreadId: ctx.messageThreadId }
+                    : {}),
                   ...(ctx.accountId ? { accountId: ctx.accountId } : {}),
                 },
               );
@@ -459,7 +500,9 @@ export default function register(api: OpenClawPluginApi) {
         }
 
         // Render based on channel capability
-        api.logger.info?.(`device-pair: QR fallback channel=${channel} target=${target}`);
+        api.logger.info?.(
+          `device-pair: QR fallback channel=${channel} target=${target}`,
+        );
         const infoLines = [
           `Gateway: ${payload.url}`,
           `Auth: ${authLabel}`,
@@ -482,7 +525,8 @@ export default function register(api: OpenClawPluginApi) {
       }
 
       const channel = ctx.channel;
-      const target = ctx.senderId?.trim() || ctx.from?.trim() || ctx.to?.trim() || "";
+      const target =
+        ctx.senderId?.trim() || ctx.from?.trim() || ctx.to?.trim() || "";
       const authLabel = auth.label ?? "auth";
 
       if (channel === "telegram" && target) {
@@ -503,7 +547,9 @@ export default function register(api: OpenClawPluginApi) {
             );
           }
           await send(target, formatSetupInstructions(), {
-            ...(ctx.messageThreadId != null ? { messageThreadId: ctx.messageThreadId } : {}),
+            ...(ctx.messageThreadId != null
+              ? { messageThreadId: ctx.messageThreadId }
+              : {}),
             ...(ctx.accountId ? { accountId: ctx.accountId } : {}),
           });
           api.logger.info?.(

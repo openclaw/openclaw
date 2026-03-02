@@ -18,7 +18,9 @@ export function extractModelDirective(
     /(?:^|\s)\/model(?=$|\s|:)\s*:?\s*([A-Za-z0-9_.:@-]+(?:\/[A-Za-z0-9_.:@-]+)*)?/i,
   );
 
-  const aliases = (options?.aliases ?? []).map((alias) => alias.trim()).filter(Boolean);
+  const aliases = (options?.aliases ?? [])
+    .map((alias) => alias.trim())
+    .filter(Boolean);
   const aliasMatch =
     modelMatch || aliases.length === 0
       ? null
@@ -40,7 +42,9 @@ export function extractModelDirective(
     rawProfile = split.profile;
   }
 
-  const cleaned = match ? body.replace(match[0], " ").replace(/\s+/g, " ").trim() : body.trim();
+  const cleaned = match
+    ? body.replace(match[0], " ").replace(/\s+/g, " ").trim()
+    : body.trim();
 
   return {
     cleaned,

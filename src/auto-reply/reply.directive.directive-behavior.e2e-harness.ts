@@ -22,14 +22,18 @@ export const DEFAULT_TEST_MODEL_CATALOG: Array<{
 
 export type ReplyPayloadText = { text?: string | null } | null | undefined;
 
-export function replyText(res: ReplyPayloadText | ReplyPayloadText[]): string | undefined {
+export function replyText(
+  res: ReplyPayloadText | ReplyPayloadText[],
+): string | undefined {
   if (Array.isArray(res)) {
     return typeof res[0]?.text === "string" ? res[0]?.text : undefined;
   }
   return typeof res?.text === "string" ? res.text : undefined;
 }
 
-export function replyTexts(res: ReplyPayloadText | ReplyPayloadText[]): string[] {
+export function replyTexts(
+  res: ReplyPayloadText | ReplyPayloadText[],
+): string[] {
   const payloads = Array.isArray(res) ? res : [res];
   return payloads
     .map((entry) => (typeof entry?.text === "string" ? entry.text : undefined))
@@ -50,7 +54,9 @@ export function mockEmbeddedTextResult(text = "done") {
   vi.mocked(runEmbeddedPiAgent).mockResolvedValue(makeEmbeddedTextResult(text));
 }
 
-export async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
+export async function withTempHome<T>(
+  fn: (home: string) => Promise<T>,
+): Promise<T> {
   return withTempHomeBase(
     async (home) => {
       return await fn(home);
@@ -127,7 +133,9 @@ export function assertModelSelection(
 
 export function assertElevatedOffStatusReply(text: string | undefined) {
   expect(text).toContain("Elevated mode disabled.");
-  const optionsLine = text?.split("\n").find((line) => line.trim().startsWith("⚙️"));
+  const optionsLine = text
+    ?.split("\n")
+    .find((line) => line.trim().startsWith("⚙️"));
   expect(optionsLine).toBeTruthy();
   expect(optionsLine).not.toContain("elevated");
 }

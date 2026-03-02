@@ -1,5 +1,8 @@
 import type { Command } from "commander";
-import { resolveAgentConfig, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import {
+  resolveAgentConfig,
+  resolveDefaultAgentId,
+} from "../../agents/agent-scope.js";
 import { loadConfig } from "../../config/config.js";
 import { randomIdempotencyKey } from "../../gateway/call.js";
 import {
@@ -18,7 +21,12 @@ import { defaultRuntime } from "../../runtime.js";
 import { parseEnvPairs, parseTimeoutMs } from "../nodes-run.js";
 import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
 import { parseNodeList } from "./format.js";
-import { callGatewayCli, nodesCallOpts, resolveNodeId, unauthorizedHintForMessage } from "./rpc.js";
+import {
+  callGatewayCli,
+  nodesCallOpts,
+  resolveNodeId,
+  unauthorizedHintForMessage,
+} from "./rpc.js";
 import type { NodesRpcOpts } from "./types.js";
 
 type NodesRunOpts = NodesRpcOpts & {
@@ -45,7 +53,11 @@ type ExecDefaults = {
 
 function normalizeExecSecurity(value?: string | null): ExecSecurity | null {
   const normalized = value?.trim().toLowerCase();
-  if (normalized === "deny" || normalized === "allowlist" || normalized === "full") {
+  if (
+    normalized === "deny" ||
+    normalized === "allowlist" ||
+    normalized === "full"
+  ) {
     return normalized;
   }
   return null;
@@ -53,7 +65,11 @@ function normalizeExecSecurity(value?: string | null): ExecSecurity | null {
 
 function normalizeExecAsk(value?: string | null): ExecAsk | null {
   const normalized = value?.trim().toLowerCase();
-  if (normalized === "off" || normalized === "on-miss" || normalized === "always") {
+  if (
+    normalized === "off" ||
+    normalized === "on-miss" ||
+    normalized === "always"
+  ) {
     return normalized as ExecAsk;
   }
   return null;
@@ -85,7 +101,10 @@ function resolveExecDefaults(
   };
 }
 
-async function resolveNodePlatform(opts: NodesRpcOpts, nodeId: string): Promise<string | null> {
+async function resolveNodePlatform(
+  opts: NodesRpcOpts,
+  nodeId: string,
+): Promise<string | null> {
   try {
     const res = await callGatewayCli("node.list", opts, {});
     const nodes = parseNodeList(res);
@@ -104,8 +123,12 @@ function requirePreparedRunPayload(payload: unknown) {
   return prepared;
 }
 
-function resolveNodesRunPolicy(opts: NodesRunOpts, execDefaults: ExecDefaults | undefined) {
-  const configuredSecurity = normalizeExecSecurity(execDefaults?.security) ?? "allowlist";
+function resolveNodesRunPolicy(
+  opts: NodesRunOpts,
+  execDefaults: ExecDefaults | undefined,
+) {
+  const configuredSecurity =
+    normalizeExecSecurity(execDefaults?.security) ?? "allowlist";
   const requestedSecurity = normalizeExecSecurity(opts.security);
   if (opts.security && !requestedSecurity) {
     throw new Error("invalid --security (use deny|allowlist|full)");
@@ -116,7 +139,10 @@ function resolveNodesRunPolicy(opts: NodesRunOpts, execDefaults: ExecDefaults | 
     throw new Error("invalid --ask (use off|on-miss|always)");
   }
   return {
-    security: minSecurity(configuredSecurity, requestedSecurity ?? configuredSecurity),
+    security: minSecurity(
+      configuredSecurity,
+      requestedSecurity ?? configuredSecurity,
+    ),
     ask: maxAsk(configuredAsk, requestedAsk ?? configuredAsk),
   };
 }
@@ -143,7 +169,9 @@ async function prepareNodesRunContext(params: {
 
   const nodeEnv = env ? { ...env } : undefined;
   if (nodeEnv) {
-    applyPathPrepend(nodeEnv, params.execDefaults?.pathPrepend, { requireExisting: true });
+    applyPathPrepend(nodeEnv, params.execDefaults?.pathPrepend, {
+      requireExisting: true,
+    });
   }
 
   const prepareResponse = (await callGatewayCli("node.invoke", params.opts, {
@@ -173,13 +201,19 @@ async function resolveNodeApprovals(params: {
   security: ExecSecurity;
   ask: ExecAsk;
 }) {
-  const approvalsSnapshot = (await callGatewayCli("exec.approvals.node.get", params.opts, {
-    nodeId: params.nodeId,
-  })) as {
+  const approvalsSnapshot = (await callGatewayCli(
+    "exec.approvals.node.get",
+    params.opts,
+    {
+      nodeId: params.nodeId,
+    },
+  )) as {
     file?: unknown;
   } | null;
   const approvalsFile =
-    approvalsSnapshot && typeof approvalsSnapshot === "object" ? approvalsSnapshot.file : undefined;
+    approvalsSnapshot && typeof approvalsSnapshot === "object"
+      ? approvalsSnapshot.file
+      : undefined;
   if (!approvalsFile || typeof approvalsFile !== "object") {
     throw new Error("exec approvals unavailable");
   }
@@ -209,7 +243,8 @@ async function maybeRequestNodesRunApproval(params: {
   let approvedByAsk = false;
   let approvalDecision: "allow-once" | "allow-always" | null = null;
   let approvalId: string | null = null;
-  const requiresAsk = params.hostAsk === "always" || params.hostAsk === "on-miss";
+  const requiresAsk =
+    params.hostAsk === "always" || params.hostAsk === "on-miss";
   if (!requiresAsk) {
     return { approvedByAsk, approvalDecision, approvalId };
   }
@@ -242,7 +277,9 @@ async function maybeRequestNodesRunApproval(params: {
     { transportTimeoutMs },
   )) as { decision?: string } | null;
   const decision =
-    decisionResult && typeof decisionResult === "object" ? (decisionResult.decision ?? null) : null;
+    decisionResult && typeof decisionResult === "object"
+      ? (decisionResult.decision ?? null)
+      : null;
   if (decision === "deny") {
     throw new Error("exec denied: user denied");
   }
@@ -251,7 +288,9 @@ async function maybeRequestNodesRunApproval(params: {
       approvedByAsk = true;
       approvalDecision = "allow-once";
     } else if (params.askFallback !== "allowlist") {
-      throw new Error("exec denied: approval required (approval UI not available)");
+      throw new Error(
+        "exec denied: approval required (approval UI not available)",
+      );
     }
   }
   if (decision === "allow-once") {
@@ -296,11 +335,14 @@ function buildSystemRunInvokeParams(params: {
       params.approvalPlan.agentId ?? params.fallbackAgentId;
   }
   if (params.approvalPlan.sessionKey) {
-    (invokeParams.params as Record<string, unknown>).sessionKey = params.approvalPlan.sessionKey;
+    (invokeParams.params as Record<string, unknown>).sessionKey =
+      params.approvalPlan.sessionKey;
   }
-  (invokeParams.params as Record<string, unknown>).approved = params.approvedByAsk;
+  (invokeParams.params as Record<string, unknown>).approved =
+    params.approvedByAsk;
   if (params.approvalDecision) {
-    (invokeParams.params as Record<string, unknown>).approvalDecision = params.approvalDecision;
+    (invokeParams.params as Record<string, unknown>).approvalDecision =
+      params.approvalDecision;
   }
   if (params.approvedByAsk && params.approvalId) {
     (invokeParams.params as Record<string, unknown>).runId = params.approvalId;
@@ -319,7 +361,11 @@ export function registerNodesInvokeCommands(nodes: Command) {
       .requiredOption("--node <idOrNameOrIp>", "Node id, name, or IP")
       .requiredOption("--command <command>", "Command (e.g. canvas.eval)")
       .option("--params <json>", "JSON object string for params", "{}")
-      .option("--invoke-timeout <ms>", "Node invoke timeout in ms (default 15000)", "15000")
+      .option(
+        "--invoke-timeout <ms>",
+        "Node invoke timeout in ms (default 15000)",
+        "15000",
+      )
       .option("--idempotency-key <key>", "Idempotency key (optional)")
       .action(async (opts: NodesRpcOpts) => {
         await runNodesCommand("invoke", async () => {
@@ -340,13 +386,19 @@ export function registerNodesInvokeCommands(nodes: Command) {
             nodeId,
             command,
             params,
-            idempotencyKey: String(opts.idempotencyKey ?? randomIdempotencyKey()),
+            idempotencyKey: String(
+              opts.idempotencyKey ?? randomIdempotencyKey(),
+            ),
           };
           if (typeof timeoutMs === "number" && Number.isFinite(timeoutMs)) {
             invokeParams.timeoutMs = timeoutMs;
           }
 
-          const result = await callGatewayCli("node.invoke", opts, invokeParams);
+          const result = await callGatewayCli(
+            "node.invoke",
+            opts,
+            invokeParams,
+          );
           defaultRuntime.log(JSON.stringify(result, null, 2));
         });
       }),
@@ -364,13 +416,20 @@ export function registerNodesInvokeCommands(nodes: Command) {
         "Environment override (repeatable)",
         (value: string, prev: string[] = []) => [...prev, value],
       )
-      .option("--raw <command>", "Run a raw shell command string (sh -lc / cmd.exe /c)")
+      .option(
+        "--raw <command>",
+        "Run a raw shell command string (sh -lc / cmd.exe /c)",
+      )
       .option("--agent <id>", "Agent id (default: configured default agent)")
       .option("--ask <mode>", "Exec ask mode (off|on-miss|always)")
       .option("--security <mode>", "Exec security mode (deny|allowlist|full)")
       .option("--command-timeout <ms>", "Command timeout (ms)")
       .option("--needs-screen-recording", "Require screen recording permission")
-      .option("--invoke-timeout <ms>", "Node invoke timeout in ms (default 30000)", "30000")
+      .option(
+        "--invoke-timeout <ms>",
+        "Node invoke timeout in ms (default 30000)",
+        "30000",
+      )
       .argument("[command...]", "Command and args")
       .action(async (command: string[], opts: NodesRunOpts) => {
         await runNodesCommand("run", async () => {
@@ -385,7 +444,8 @@ export function registerNodesInvokeCommands(nodes: Command) {
             throw new Error("command required");
           }
 
-          const nodeQuery = String(opts.node ?? "").trim() || execDefaults?.node?.trim() || "";
+          const nodeQuery =
+            String(opts.node ?? "").trim() || execDefaults?.node?.trim() || "";
           if (!nodeQuery) {
             throw new Error("node required (set --node or tools.exec.node)");
           }
@@ -434,7 +494,11 @@ export function registerNodesInvokeCommands(nodes: Command) {
             needsScreenRecording: opts.needsScreenRecording === true,
           });
 
-          const result = await callGatewayCli("node.invoke", opts, invokeParams);
+          const result = await callGatewayCli(
+            "node.invoke",
+            opts,
+            invokeParams,
+          );
           if (opts.json) {
             defaultRuntime.log(JSON.stringify(result, null, 2));
             return;
@@ -445,9 +509,12 @@ export function registerNodesInvokeCommands(nodes: Command) {
               ? (result as { payload?: Record<string, unknown> }).payload
               : undefined;
 
-          const stdout = typeof payload?.stdout === "string" ? payload.stdout : "";
-          const stderr = typeof payload?.stderr === "string" ? payload.stderr : "";
-          const exitCode = typeof payload?.exitCode === "number" ? payload.exitCode : null;
+          const stdout =
+            typeof payload?.stdout === "string" ? payload.stdout : "";
+          const stderr =
+            typeof payload?.stderr === "string" ? payload.stderr : "";
+          const exitCode =
+            typeof payload?.exitCode === "number" ? payload.exitCode : null;
           const timedOut = payload?.timedOut === true;
           const success = payload?.success === true;
 

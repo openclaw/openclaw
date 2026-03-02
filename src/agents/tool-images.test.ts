@@ -1,11 +1,18 @@
 import sharp from "sharp";
 import { describe, expect, it } from "vitest";
-import { sanitizeContentBlocksImages, sanitizeImageBlocks } from "./tool-images.js";
+import {
+  sanitizeContentBlocksImages,
+  sanitizeImageBlocks,
+} from "./tool-images.js";
 
 describe("tool image sanitizing", () => {
   const getImageBlock = (
     blocks: Awaited<ReturnType<typeof sanitizeContentBlocksImages>>,
-  ): (typeof blocks)[number] & { type: "image"; data: string; mimeType?: string } => {
+  ): (typeof blocks)[number] & {
+    type: "image";
+    data: string;
+    mimeType?: string;
+  } => {
     const image = blocks.find((block) => block.type === "image");
     if (!image || image.type !== "image") {
       throw new Error("expected image block");
@@ -54,7 +61,11 @@ describe("tool image sanitizing", () => {
     const png = await createWidePng();
 
     const images = [
-      { type: "image" as const, data: png.toString("base64"), mimeType: "image/png" },
+      {
+        type: "image" as const,
+        data: png.toString("base64"),
+        mimeType: "image/png",
+      },
     ];
     const { images: out, dropped } = await sanitizeImageBlocks(images, "test");
     expect(dropped).toBe(0);

@@ -81,7 +81,11 @@ export function resolveMissingOs(params: {
   if (params.required.includes(params.localPlatform)) {
     return [];
   }
-  if (params.remotePlatforms?.some((platform) => params.required.includes(platform))) {
+  if (
+    params.remotePlatforms?.some((platform) =>
+      params.required.includes(platform),
+    )
+  ) {
     return [];
   }
   return params.required;
@@ -116,7 +120,11 @@ export function evaluateRequirements(
     RequirementsEvaluationRemoteContext & {
       required: Requirements;
     },
-): { missing: Requirements; eligible: boolean; configChecks: RequirementConfigCheck[] } {
+): {
+  missing: Requirements;
+  eligible: boolean;
+  configChecks: RequirementConfigCheck[];
+} {
   const missingBins = resolveMissingBins({
     required: params.required.bins,
     hasLocalBin: params.hasLocalBin,
@@ -140,7 +148,9 @@ export function evaluateRequirements(
     required: params.required.config,
     isSatisfied: params.isConfigSatisfied,
   });
-  const missingConfig = configChecks.filter((check) => !check.satisfied).map((check) => check.path);
+  const missingConfig = configChecks
+    .filter((check) => !check.satisfied)
+    .map((check) => check.path);
 
   const missing = params.always
     ? { bins: [], anyBins: [], env: [], config: [], os: [] }

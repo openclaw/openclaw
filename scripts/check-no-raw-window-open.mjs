@@ -13,13 +13,18 @@ import {
 
 const repoRoot = resolveRepoRoot(import.meta.url);
 const uiSourceDir = path.join(repoRoot, "ui", "src", "ui");
-const allowedCallsites = new Set([path.join(uiSourceDir, "open-external-url.ts")]);
+const allowedCallsites = new Set([
+  path.join(uiSourceDir, "open-external-url.ts"),
+]);
 
 function asPropertyAccess(expression) {
   if (ts.isPropertyAccessExpression(expression)) {
     return expression;
   }
-  if (typeof ts.isPropertyAccessChain === "function" && ts.isPropertyAccessChain(expression)) {
+  if (
+    typeof ts.isPropertyAccessChain === "function" &&
+    ts.isPropertyAccessChain(expression)
+  ) {
     return expression;
   }
   return null;
@@ -33,12 +38,18 @@ function isRawWindowOpenCall(expression) {
 
   const receiver = unwrapExpression(propertyAccess.expression);
   return (
-    ts.isIdentifier(receiver) && (receiver.text === "window" || receiver.text === "globalThis")
+    ts.isIdentifier(receiver) &&
+    (receiver.text === "window" || receiver.text === "globalThis")
   );
 }
 
 export function findRawWindowOpenLines(content, fileName = "source.ts") {
-  const sourceFile = ts.createSourceFile(fileName, content, ts.ScriptTarget.Latest, true);
+  const sourceFile = ts.createSourceFile(
+    fileName,
+    content,
+    ts.ScriptTarget.Latest,
+    true,
+  );
   const lines = [];
 
   const visit = (node) => {
@@ -79,7 +90,9 @@ export async function main() {
   for (const violation of violations) {
     console.error(`- ${violation}`);
   }
-  console.error("Use openExternalUrlSafe(...) from ui/src/ui/open-external-url.ts instead.");
+  console.error(
+    "Use openExternalUrlSafe(...) from ui/src/ui/open-external-url.ts instead.",
+  );
   process.exit(1);
 }
 

@@ -1,23 +1,31 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureEnv } from "../../test-utils/env.js";
 
-const callGatewayStatusProbe = vi.fn(async (_opts?: unknown) => ({ ok: true as const }));
+const callGatewayStatusProbe = vi.fn(async (_opts?: unknown) => ({
+  ok: true as const,
+}));
 const loadGatewayTlsRuntime = vi.fn(async (_cfg?: unknown) => ({
   enabled: true,
   required: true,
   fingerprintSha256: "sha256:11:22:33:44",
 }));
-const findExtraGatewayServices = vi.fn(async (_env?: unknown, _opts?: unknown) => []);
+const findExtraGatewayServices = vi.fn(
+  async (_env?: unknown, _opts?: unknown) => [],
+);
 const inspectPortUsage = vi.fn(async (port: number) => ({
   port,
   status: "free" as const,
   listeners: [],
   hints: [],
 }));
-const readLastGatewayErrorLine = vi.fn(async (_env?: NodeJS.ProcessEnv) => null);
+const readLastGatewayErrorLine = vi.fn(
+  async (_env?: NodeJS.ProcessEnv) => null,
+);
 const auditGatewayServiceConfig = vi.fn(async (_opts?: unknown) => undefined);
 const serviceIsLoaded = vi.fn(async (_opts?: unknown) => true);
-const serviceReadRuntime = vi.fn(async (_env?: NodeJS.ProcessEnv) => ({ status: "running" }));
+const serviceReadRuntime = vi.fn(async (_env?: NodeJS.ProcessEnv) => ({
+  status: "running",
+}));
 const serviceReadCommand = vi.fn(async (_env?: NodeJS.ProcessEnv) => ({
   programArguments: ["/bin/node", "cli", "gateway", "--port", "19001"],
   environment: {
@@ -63,17 +71,21 @@ vi.mock("../../config/config.js", () => ({
             },
     };
   },
-  resolveConfigPath: (env: NodeJS.ProcessEnv, stateDir: string) => resolveConfigPath(env, stateDir),
-  resolveGatewayPort: (cfg?: unknown, env?: unknown) => resolveGatewayPort(cfg, env),
+  resolveConfigPath: (env: NodeJS.ProcessEnv, stateDir: string) =>
+    resolveConfigPath(env, stateDir),
+  resolveGatewayPort: (cfg?: unknown, env?: unknown) =>
+    resolveGatewayPort(cfg, env),
   resolveStateDir: (env: NodeJS.ProcessEnv) => resolveStateDir(env),
 }));
 
 vi.mock("../../daemon/diagnostics.js", () => ({
-  readLastGatewayErrorLine: (env: NodeJS.ProcessEnv) => readLastGatewayErrorLine(env),
+  readLastGatewayErrorLine: (env: NodeJS.ProcessEnv) =>
+    readLastGatewayErrorLine(env),
 }));
 
 vi.mock("../../daemon/inspect.js", () => ({
-  findExtraGatewayServices: (env: unknown, opts?: unknown) => findExtraGatewayServices(env, opts),
+  findExtraGatewayServices: (env: unknown, opts?: unknown) =>
+    findExtraGatewayServices(env, opts),
 }));
 
 vi.mock("../../daemon/service-audit.js", () => ({

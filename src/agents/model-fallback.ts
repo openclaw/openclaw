@@ -61,7 +61,9 @@ function shouldRethrowAbort(err: unknown): boolean {
   return isFallbackAbortError(err) && !isTimeoutError(err);
 }
 
-function createModelCandidateCollector(allowlist: Set<string> | null | undefined): {
+function createModelCandidateCollector(
+  allowlist: Set<string> | null | undefined,
+): {
   candidates: ModelCandidate[];
   addExplicitCandidate: (candidate: ModelCandidate) => void;
   addAllowlistedCandidate: (candidate: ModelCandidate) => void;
@@ -69,7 +71,10 @@ function createModelCandidateCollector(allowlist: Set<string> | null | undefined
   const seen = new Set<string>();
   const candidates: ModelCandidate[] = [];
 
-  const addCandidate = (candidate: ModelCandidate, enforceAllowlist: boolean) => {
+  const addCandidate = (
+    candidate: ModelCandidate,
+    enforceAllowlist: boolean,
+  ) => {
     if (!candidate.provider || !candidate.model) {
       return;
     }
@@ -124,7 +129,9 @@ function throwFallbackFailureSummary(params: {
     throw params.lastError;
   }
   const summary =
-    params.attempts.length > 0 ? params.attempts.map(params.formatAttempt).join(" | ") : "unknown";
+    params.attempts.length > 0
+      ? params.attempts.map(params.formatAttempt).join(" | ")
+      : "unknown";
   throw new Error(
     `All ${params.label} failed (${params.attempts.length || params.candidates.length}): ${summary}`,
     {
@@ -168,13 +175,17 @@ function resolveImageFallbackCandidates(params: {
   if (params.modelOverride?.trim()) {
     addRaw(params.modelOverride);
   } else {
-    const primary = resolveAgentModelPrimaryValue(params.cfg?.agents?.defaults?.imageModel);
+    const primary = resolveAgentModelPrimaryValue(
+      params.cfg?.agents?.defaults?.imageModel,
+    );
     if (primary?.trim()) {
       addRaw(primary);
     }
   }
 
-  const imageFallbacks = resolveAgentModelFallbackValues(params.cfg?.agents?.defaults?.imageModel);
+  const imageFallbacks = resolveAgentModelFallbackValues(
+    params.cfg?.agents?.defaults?.imageModel,
+  );
 
   for (const raw of imageFallbacks) {
     // Explicitly configured image fallbacks should remain reachable even when a
@@ -213,7 +224,8 @@ function resolveFallbackCandidates(params: {
     cfg: params.cfg,
     defaultProvider,
   });
-  const { candidates, addExplicitCandidate } = createModelCandidateCollector(allowlist);
+  const { candidates, addExplicitCandidate } =
+    createModelCandidateCollector(allowlist);
 
   addExplicitCandidate(normalizedPrimary);
 
@@ -233,7 +245,9 @@ function resolveFallbackCandidates(params: {
           defaultProvider,
           aliasIndex,
         });
-        return resolved ? sameModelCandidate(resolved.ref, normalizedPrimary) : false;
+        return resolved
+          ? sameModelCandidate(resolved.ref, normalizedPrimary)
+          : false;
       });
       return isConfiguredFallback ? configuredFallbacks : [];
     }
@@ -255,7 +269,11 @@ function resolveFallbackCandidates(params: {
     addExplicitCandidate(resolved.ref);
   }
 
-  if (params.fallbacksOverride === undefined && primary?.provider && primary.model) {
+  if (
+    params.fallbacksOverride === undefined &&
+    primary?.provider &&
+    primary.model
+  ) {
     addExplicitCandidate({ provider: primary.provider, model: primary.model });
   }
 
@@ -408,15 +426,21 @@ export async function runWithModelFallback<T>(params: {
         store: authStore,
         provider: candidate.provider,
       });
-      const isAnyProfileAvailable = profileIds.some((id) => !isProfileInCooldown(authStore, id));
+      const isAnyProfileAvailable = profileIds.some(
+        (id) => !isProfileInCooldown(authStore, id),
+      );
 
       if (profileIds.length > 0 && !isAnyProfileAvailable) {
         // All profiles for this provider are in cooldown.
         const isPrimary = i === 0;
         const requestedModel =
-          params.provider === candidate.provider && params.model === candidate.model;
+          params.provider === candidate.provider &&
+          params.model === candidate.model;
         const now = Date.now();
-        const probeThrottleKey = resolveProbeThrottleKey(candidate.provider, params.agentDir);
+        const probeThrottleKey = resolveProbeThrottleKey(
+          candidate.provider,
+          params.agentDir,
+        );
         const decision = resolveCooldownDecision({
           candidate,
           isPrimary,
@@ -565,6 +589,7 @@ export async function runWithImageModelFallback<T>(params: {
     candidates,
     lastError,
     label: "image models",
-    formatAttempt: (attempt) => `${attempt.provider}/${attempt.model}: ${attempt.error}`,
+    formatAttempt: (attempt) =>
+      `${attempt.provider}/${attempt.model}: ${attempt.error}`,
   });
 }

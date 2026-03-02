@@ -3,7 +3,11 @@ import path from "node:path";
 import { saveJsonFile } from "../../infra/json-file.js";
 import { resolveUserPath } from "../../utils.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
-import { AUTH_PROFILE_FILENAME, AUTH_STORE_VERSION, LEGACY_AUTH_FILENAME } from "./constants.js";
+import {
+  AUTH_PROFILE_FILENAME,
+  AUTH_STORE_VERSION,
+  LEGACY_AUTH_FILENAME,
+} from "./constants.js";
 import type { AuthProfileStore } from "./types.js";
 
 export function resolveAuthStorePath(agentDir?: string): string {

@@ -8,7 +8,9 @@ export function buildModelAliasLines(cfg?: OpenClawConfig) {
     if (!model) {
       continue;
     }
-    const alias = String((entryRaw as { alias?: string } | undefined)?.alias ?? "").trim();
+    const alias = String(
+      (entryRaw as { alias?: string } | undefined)?.alias ?? "",
+    ).trim();
     if (!alias) {
       continue;
     }

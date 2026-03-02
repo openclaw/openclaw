@@ -14,7 +14,9 @@ export function validateSenderIdentity(ctx: MsgContext): string[] {
 
   if (!isDirect) {
     if (!senderId && !senderName && !senderUsername && !senderE164) {
-      issues.push("missing sender identity (SenderId/SenderName/SenderUsername/SenderE164)");
+      issues.push(
+        "missing sender identity (SenderId/SenderName/SenderUsername/SenderE164)",
+      );
     }
   }
 
@@ -29,7 +31,9 @@ export function validateSenderIdentity(ctx: MsgContext): string[] {
       issues.push(`SenderUsername should not include "@": ${senderUsername}`);
     }
     if (/\s/.test(senderUsername)) {
-      issues.push(`SenderUsername should not include whitespace: ${senderUsername}`);
+      issues.push(
+        `SenderUsername should not include whitespace: ${senderUsername}`,
+      );
     }
   }
 

@@ -18,9 +18,15 @@ describe("resolveEffectiveBlockStreamingConfig", () => {
 
     expect(baseChunking.maxChars).toBeGreaterThanOrEqual(64);
     expect(resolved.chunking.maxChars).toBe(64);
-    expect(resolved.chunking.minChars).toBeLessThanOrEqual(resolved.chunking.maxChars);
-    expect(resolved.coalescing.maxChars).toBeLessThanOrEqual(resolved.chunking.maxChars);
-    expect(resolved.coalescing.minChars).toBeLessThanOrEqual(resolved.coalescing.maxChars);
+    expect(resolved.chunking.minChars).toBeLessThanOrEqual(
+      resolved.chunking.maxChars,
+    );
+    expect(resolved.coalescing.maxChars).toBeLessThanOrEqual(
+      resolved.chunking.maxChars,
+    );
+    expect(resolved.coalescing.minChars).toBeLessThanOrEqual(
+      resolved.coalescing.maxChars,
+    );
     expect(resolved.coalescing.idleMs).toBe(25);
   });
 
@@ -63,6 +69,8 @@ describe("resolveEffectiveBlockStreamingConfig", () => {
     });
 
     expect(resolved.chunking.maxChars).toBe(1800);
-    expect(resolved.chunking.minChars).toBeLessThanOrEqual(resolved.chunking.maxChars);
+    expect(resolved.chunking.minChars).toBeLessThanOrEqual(
+      resolved.chunking.maxChars,
+    );
   });
 });

@@ -1,4 +1,7 @@
-import type { GroupPolicy, SenderGroupAccessDecision } from "openclaw/plugin-sdk";
+import type {
+  GroupPolicy,
+  SenderGroupAccessDecision,
+} from "openclaw/plugin-sdk";
 import {
   evaluateSenderGroupAccess,
   isNormalizedSenderAllowed,
@@ -7,7 +10,10 @@ import {
 
 const ZALO_ALLOW_FROM_PREFIX_RE = /^(zalo|zl):/i;
 
-export function isZaloSenderAllowed(senderId: string, allowFrom: string[]): boolean {
+export function isZaloSenderAllowed(
+  senderId: string,
+  allowFrom: string[],
+): boolean {
   return isNormalizedSenderAllowed({
     senderId,
     allowFrom,

@@ -10,18 +10,21 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
   });
 
   it("strips embedded CR/LF before sending Authorization header", async () => {
-    const fetchSpy = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      const auth = (init?.headers as Record<string, string> | undefined)?.Authorization;
-      expect(auth).toBe("Bearer minimax-test-key");
+    const fetchSpy = vi.fn(
+      async (_input: RequestInfo | URL, init?: RequestInit) => {
+        const auth = (init?.headers as Record<string, string> | undefined)
+          ?.Authorization;
+        expect(auth).toBe("Bearer minimax-test-key");
 
-      return new Response(
-        JSON.stringify({
-          base_resp: { status_code: 0, status_msg: "ok" },
-          content: "ok",
-        }),
-        { status: 200, headers: { "Content-Type": "application/json" } },
-      );
-    });
+        return new Response(
+          JSON.stringify({
+            base_resp: { status_code: 0, status_msg: "ok" },
+            content: "ok",
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      },
+    );
     global.fetch = withFetchPreconnect(fetchSpy);
 
     const { minimaxUnderstandImage } = await import("./minimax-vlm.js");

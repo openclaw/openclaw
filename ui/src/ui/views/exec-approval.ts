@@ -19,7 +19,9 @@ function renderMetaRow(label: string, value?: string | null) {
   if (!value) {
     return nothing;
   }
-  return html`<div class="exec-approval-meta-row"><span>${label}</span><span>${value}</span></div>`;
+  return html`<div class="exec-approval-meta-row">
+    <span>${label}</span><span>${value}</span>
+  </div>`;
 }
 
 export function renderExecApprovalPrompt(state: AppViewState) {
@@ -29,7 +31,8 @@ export function renderExecApprovalPrompt(state: AppViewState) {
   }
   const request = active.request;
   const remainingMs = active.expiresAtMs - Date.now();
-  const remaining = remainingMs > 0 ? `expires in ${formatRemaining(remainingMs)}` : "expired";
+  const remaining =
+    remainingMs > 0 ? `expires in ${formatRemaining(remainingMs)}` : "expired";
   const queueCount = state.execApprovalQueue.length;
   return html`
     <div class="exec-approval-overlay" role="dialog" aria-live="polite">
@@ -39,11 +42,9 @@ export function renderExecApprovalPrompt(state: AppViewState) {
             <div class="exec-approval-title">Exec approval needed</div>
             <div class="exec-approval-sub">${remaining}</div>
           </div>
-          ${
-            queueCount > 1
-              ? html`<div class="exec-approval-queue">${queueCount} pending</div>`
-              : nothing
-          }
+          ${queueCount > 1
+            ? html`<div class="exec-approval-queue">${queueCount} pending</div>`
+            : nothing}
         </div>
         <div class="exec-approval-command mono">${request.command}</div>
         <div class="exec-approval-meta">
@@ -55,11 +56,11 @@ export function renderExecApprovalPrompt(state: AppViewState) {
           ${renderMetaRow("Security", request.security)}
           ${renderMetaRow("Ask", request.ask)}
         </div>
-        ${
-          state.execApprovalError
-            ? html`<div class="exec-approval-error">${state.execApprovalError}</div>`
-            : nothing
-        }
+        ${state.execApprovalError
+          ? html`<div class="exec-approval-error">
+              ${state.execApprovalError}
+            </div>`
+          : nothing}
         <div class="exec-approval-actions">
           <button
             class="btn primary"

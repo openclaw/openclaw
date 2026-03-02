@@ -127,7 +127,8 @@ describe("blockquote spacing", () => {
 
   describe("blockquote with multi-paragraph content", () => {
     it("should handle multi-paragraph blockquote followed by paragraph", () => {
-      const input = "> first paragraph\n>\n> second paragraph\n\nfollowing paragraph";
+      const input =
+        "> first paragraph\n>\n> second paragraph\n\nfollowing paragraph";
       const result = markdownToIR(input);
 
       // Multi-paragraph blockquote should have proper internal spacing

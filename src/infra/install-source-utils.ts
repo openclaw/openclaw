@@ -27,7 +27,9 @@ export async function withTempDir<T>(
   try {
     return await fn(tmpDir);
   } finally {
-    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => undefined);
+    await fs
+      .rm(tmpDir, { recursive: true, force: true })
+      .catch(() => undefined);
   }
 }
 
@@ -123,7 +125,8 @@ function parseNpmPackJsonOutput(
     }
 
     const entries = Array.isArray(parsed) ? parsed : [parsed];
-    let fallback: { filename?: string; metadata: NpmSpecResolution } | null = null;
+    let fallback: { filename?: string; metadata: NpmSpecResolution } | null =
+      null;
     for (let i = entries.length - 1; i >= 0; i -= 1) {
       const normalized = normalizeNpmPackEntry(entries[i]);
       if (!normalized) {
@@ -160,9 +163,15 @@ function parsePackedArchiveFromStdout(stdout: string): string | undefined {
   return undefined;
 }
 
-async function findPackedArchiveInDir(cwd: string): Promise<string | undefined> {
-  const entries = await fs.readdir(cwd, { withFileTypes: true }).catch(() => []);
-  const archives = entries.filter((entry) => entry.isFile() && entry.name.endsWith(".tgz"));
+async function findPackedArchiveInDir(
+  cwd: string,
+): Promise<string | undefined> {
+  const entries = await fs
+    .readdir(cwd, { withFileTypes: true })
+    .catch(() => []);
+  const archives = entries.filter(
+    (entry) => entry.isFile() && entry.name.endsWith(".tgz"),
+  );
   if (archives.length === 0) {
     return undefined;
   }
@@ -219,7 +228,8 @@ export async function packNpmSpecToArchive(params: {
 
   const parsedJson = parseNpmPackJsonOutput(res.stdout || "");
 
-  let packed = parsedJson?.filename ?? parsePackedArchiveFromStdout(res.stdout || "");
+  let packed =
+    parsedJson?.filename ?? parsePackedArchiveFromStdout(res.stdout || "");
   if (!packed) {
     packed = await findPackedArchiveInDir(params.cwd);
   }
@@ -227,7 +237,9 @@ export async function packNpmSpecToArchive(params: {
     return { ok: false, error: "npm pack produced no archive" };
   }
 
-  let archivePath = path.isAbsolute(packed) ? packed : path.join(params.cwd, packed);
+  let archivePath = path.isAbsolute(packed)
+    ? packed
+    : path.join(params.cwd, packed);
   if (!(await fileExists(archivePath))) {
     const fallbackPacked = await findPackedArchiveInDir(params.cwd);
     if (!fallbackPacked) {

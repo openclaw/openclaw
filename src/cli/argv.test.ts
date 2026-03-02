@@ -223,11 +223,17 @@ describe("argv helpers", () => {
   });
 
   it("parses verbose flags", () => {
-    expect(getVerboseFlag(["node", "openclaw", "status", "--verbose"])).toBe(true);
-    expect(getVerboseFlag(["node", "openclaw", "status", "--debug"])).toBe(false);
-    expect(getVerboseFlag(["node", "openclaw", "status", "--debug"], { includeDebug: true })).toBe(
+    expect(getVerboseFlag(["node", "openclaw", "status", "--verbose"])).toBe(
       true,
     );
+    expect(getVerboseFlag(["node", "openclaw", "status", "--debug"])).toBe(
+      false,
+    );
+    expect(
+      getVerboseFlag(["node", "openclaw", "status", "--debug"], {
+        includeDebug: true,
+      }),
+    ).toBe(true);
   });
 
   it.each([
@@ -358,7 +364,10 @@ describe("argv helpers", () => {
     { path: ["config", "get"], expected: false },
     { path: ["models", "status"], expected: false },
     { path: ["agents", "list"], expected: true },
-  ])("reuses command path for migrate state decisions: $path", ({ path, expected }) => {
-    expect(shouldMigrateStateFromPath(path)).toBe(expected);
-  });
+  ])(
+    "reuses command path for migrate state decisions: $path",
+    ({ path, expected }) => {
+      expect(shouldMigrateStateFromPath(path)).toBe(expected);
+    },
+  );
 });

@@ -33,7 +33,11 @@ function isImageBlock(block: unknown): block is ImageContentBlock {
     return false;
   }
   const rec = block as Record<string, unknown>;
-  return rec.type === "image" && typeof rec.data === "string" && typeof rec.mimeType === "string";
+  return (
+    rec.type === "image" &&
+    typeof rec.data === "string" &&
+    typeof rec.mimeType === "string"
+  );
 }
 
 function isTextBlock(block: unknown): block is TextContentBlock {
@@ -166,7 +170,8 @@ async function resizeImageBase64IfNeeded(params: {
   const overBytes = buf.byteLength > params.maxBytes;
   const hasDimensions = typeof width === "number" && typeof height === "number";
   const overDimensions =
-    hasDimensions && (width > params.maxDimensionPx || height > params.maxDimensionPx);
+    hasDimensions &&
+    (width > params.maxDimensionPx || height > params.maxDimensionPx);
   if (
     hasDimensions &&
     !overBytes &&
@@ -182,8 +187,13 @@ async function resizeImageBase64IfNeeded(params: {
     };
   }
 
-  const maxDim = hasDimensions ? Math.max(width ?? 0, height ?? 0) : params.maxDimensionPx;
-  const sideStart = maxDim > 0 ? Math.min(params.maxDimensionPx, maxDim) : params.maxDimensionPx;
+  const maxDim = hasDimensions
+    ? Math.max(width ?? 0, height ?? 0)
+    : params.maxDimensionPx;
+  const sideStart =
+    maxDim > 0
+      ? Math.min(params.maxDimensionPx, maxDim)
+      : params.maxDimensionPx;
   const sideGrid = buildImageResizeSideGrid(params.maxDimensionPx, sideStart);
 
   let smallest: { buffer: Buffer; size: number } | null = null;
@@ -208,7 +218,12 @@ async function resizeImageBase64IfNeeded(params: {
           : sourcePixels;
         const byteReductionPct =
           buf.byteLength > 0
-            ? Number((((buf.byteLength - out.byteLength) / buf.byteLength) * 100).toFixed(1))
+            ? Number(
+                (
+                  ((buf.byteLength - out.byteLength) / buf.byteLength) *
+                  100
+                ).toFixed(1),
+              )
             : 0;
         log.info(
           `Image resized to fit limits: ${sourceWithFile} ${formatBytesShort(buf.byteLength)} -> ${formatBytesShort(out.byteLength)} (-${byteReductionPct}%)`,
@@ -245,8 +260,12 @@ async function resizeImageBase64IfNeeded(params: {
   const maxMb = (params.maxBytes / (1024 * 1024)).toFixed(0);
   const gotMb = (best.byteLength / (1024 * 1024)).toFixed(2);
   const sourcePixels =
-    typeof width === "number" && typeof height === "number" ? `${width}x${height}px` : "unknown";
-  const sourceWithFile = params.fileName ? `${params.fileName} ${sourcePixels}` : sourcePixels;
+    typeof width === "number" && typeof height === "number"
+      ? `${width}x${height}px`
+      : "unknown";
+  const sourceWithFile = params.fileName
+    ? `${params.fileName} ${sourcePixels}`
+    : sourcePixels;
   log.warn(
     `Image resize failed to fit limits: ${sourceWithFile} best=${formatBytesShort(best.byteLength)} limit=${formatBytesShort(params.maxBytes)}`,
     {
@@ -263,7 +282,9 @@ async function resizeImageBase64IfNeeded(params: {
       triggerOverDimensions: overDimensions,
     },
   );
-  throw new Error(`Image could not be reduced below ${maxMb}MB (got ${gotMb}MB)`);
+  throw new Error(
+    `Image could not be reduced below ${maxMb}MB (got ${gotMb}MB)`,
+  );
 }
 
 export async function sanitizeContentBlocksImages(
@@ -271,7 +292,10 @@ export async function sanitizeContentBlocksImages(
   label: string,
   opts: ImageSanitizationLimits = {},
 ): Promise<ToolContentBlock[]> {
-  const maxDimensionPx = Math.max(opts.maxDimensionPx ?? MAX_IMAGE_DIMENSION_PX, 1);
+  const maxDimensionPx = Math.max(
+    opts.maxDimensionPx ?? MAX_IMAGE_DIMENSION_PX,
+    1,
+  );
   const maxBytes = Math.max(opts.maxBytes ?? MAX_IMAGE_BYTES, 1);
   const out: ToolContentBlock[] = [];
   let mediaPathHint: string | undefined;
@@ -342,7 +366,11 @@ export async function sanitizeImageBlocks(
   if (images.length === 0) {
     return { images, dropped: 0 };
   }
-  const sanitized = await sanitizeContentBlocksImages(images as ToolContentBlock[], label, opts);
+  const sanitized = await sanitizeContentBlocksImages(
+    images as ToolContentBlock[],
+    label,
+    opts,
+  );
   const next = sanitized.filter(isImageBlock);
   return { images: next, dropped: Math.max(0, images.length - next.length) };
 }

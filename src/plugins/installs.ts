@@ -8,7 +8,12 @@ export function buildNpmResolutionInstallFields(
   resolution?: NpmSpecResolution,
 ): Pick<
   PluginInstallRecord,
-  "resolvedName" | "resolvedVersion" | "resolvedSpec" | "integrity" | "shasum" | "resolvedAt"
+  | "resolvedName"
+  | "resolvedVersion"
+  | "resolvedSpec"
+  | "integrity"
+  | "shasum"
+  | "resolvedAt"
 > {
   return {
     resolvedName: resolution?.name,
