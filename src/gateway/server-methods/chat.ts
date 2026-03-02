@@ -64,7 +64,9 @@ type AbortedPartialSnapshot = {
   abortOrigin: AbortOrigin;
 };
 
-const CHAT_HISTORY_TEXT_MAX_CHARS = 50_000;
+// Keep well under the 128 KiB per-message byte budget even for 4-byte UTF-8
+// content (CJK / emoji): 30 000 chars × 4 bytes = 120 000 bytes < 131 072.
+const CHAT_HISTORY_TEXT_MAX_CHARS = 30_000;
 const CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES = 128 * 1024;
 const CHAT_HISTORY_OVERSIZED_PLACEHOLDER = "[chat.history omitted: message too large]";
 let chatHistoryPlaceholderEmitCount = 0;

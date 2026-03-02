@@ -178,8 +178,13 @@ export function connectGateway(host: GatewayHost) {
       void refreshActiveTab(host as unknown as Parameters<typeof refreshActiveTab>[0]);
       // If a run was active during disconnect its final event was lost; reload
       // history so the completed response (already saved to transcript) is shown.
+      // Defer 2 s so any delayed chat.final event from the previous run can
+      // arrive and be appended by handleChatEvent before we overwrite
+      // chatMessages with the transcript snapshot from the server.
       if (hadOrphanedChatActivity) {
-        void loadChatHistory(host as unknown as OpenClawApp);
+        setTimeout(() => {
+          void loadChatHistory(host as unknown as OpenClawApp);
+        }, 2_000);
       }
     },
     onClose: ({ code, reason, error }) => {
