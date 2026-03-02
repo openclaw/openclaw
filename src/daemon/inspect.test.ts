@@ -269,6 +269,22 @@ describe("findExtraGatewayServices (linux)", () => {
     expect(result).toEqual([]);
   });
 
+  it("skips browser services when single-quoted env value with spaces wraps chromium", async () => {
+    vi.spyOn(fs, "readdir").mockResolvedValue([
+      "chromium-env-quoted-space.service",
+    ] as unknown as Awaited<ReturnType<typeof fs.readdir>>);
+    vi.spyOn(fs, "readFile").mockResolvedValue(
+      [
+        "[Service]",
+        "ExecStart=/usr/bin/env 'CHROME_USER_DATA=/home/user/My Data/openclaw' /snap/bin/chromium --headless",
+      ].join("\n"),
+    );
+
+    const result = await findExtraGatewayServices({ HOME: "/home/test" });
+
+    expect(result).toEqual([]);
+  });
+
   it("skips browser services when env uses optional signal options", async () => {
     vi.spyOn(fs, "readdir").mockResolvedValue([
       "chromium-default-signal.service",

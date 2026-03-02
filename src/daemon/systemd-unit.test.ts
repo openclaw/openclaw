@@ -141,4 +141,12 @@ describe("extractSystemdExecStartCommandToken", () => {
       ),
     ).toBe("/snap/bin/chromium");
   });
+
+  it("extracts executable token when single-quoted env value contains spaces", () => {
+    expect(
+      extractSystemdExecStartCommandToken(
+        "/usr/bin/env 'CHROME_USER_DATA=/home/user/My Data/openclaw' /snap/bin/chromium --headless",
+      ),
+    ).toBe("/snap/bin/chromium");
+  });
 });

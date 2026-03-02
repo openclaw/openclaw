@@ -231,7 +231,8 @@ export function resolveExecStartCommand(execStartValue: string): ResolvedExecSta
   // Env wrapper path: walk past env options/assignments to find the real command.
   const pending = tokens.slice(1);
   while (pending.length > 0) {
-    const envToken = stripSurroundingQuotes(pending.shift() ?? "");
+    const rawToken = consumePossiblyQuotedValue(pending.shift() ?? "", pending);
+    const envToken = stripSurroundingQuotes(rawToken);
     if (!envToken) {
       continue;
     }
