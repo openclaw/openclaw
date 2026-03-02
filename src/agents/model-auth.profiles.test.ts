@@ -187,6 +187,50 @@ describe("getApiKeyForModel", () => {
     );
   });
 
+  it("includes provider login and env guidance when Google API key is missing", async () => {
+    await withEnvAsync(
+      {
+        GEMINI_API_KEY: undefined,
+      },
+      async () => {
+        let error: unknown = null;
+        try {
+          await resolveApiKeyForProvider({
+            provider: "google",
+            store: { version: 1, profiles: {} },
+            agentDir: "/tmp/openclaw-agent-abc",
+          });
+        } catch (err) {
+          error = err;
+        }
+
+        const message = String(error);
+        expect(message).toContain('No API key found for provider "google".');
+        expect(message).toContain("openclaw models auth login --provider google");
+        expect(message).toContain("GEMINI_API_KEY");
+      },
+    );
+  });
+
+  it("includes provider login guidance when env var mapping is unknown", async () => {
+    let error: unknown = null;
+    try {
+      await resolveApiKeyForProvider({
+        provider: "provider-without-env",
+        store: { version: 1, profiles: {} },
+        agentDir: "/tmp/openclaw-agent-abc",
+      });
+    } catch (err) {
+      error = err;
+    }
+
+    const message = String(error);
+    expect(message).toContain('No API key found for provider "provider-without-env".');
+    expect(message).toContain("Quick setup: run");
+    expect(message).toContain("openclaw models auth login --provider provider-without-env");
+    expect(message).not.toContain("or set ");
+  });
+
   it("accepts legacy Z_AI_API_KEY for zai", async () => {
     await withEnvAsync(
       {
