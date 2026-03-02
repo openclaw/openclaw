@@ -166,6 +166,13 @@ async def call_tool(name: str, params: dict) -> dict:
 # Convenience wrappers for common tools
 from typing import Optional, List, Dict, Any
 
+async def exec_bash(command: str, cwd: Optional[str] = None, timeout: int = 60) -> Dict[str, Any]:
+    """Execute a bash command"""
+    params: Dict[str, Any] = { "command": command, "timeout": timeout }
+    if cwd:
+        params["cwd"] = cwd
+    return await call_tool("exec", params)
+
 async def read_file(path: str, limit: Optional[int] = None) -> str:
     """Read a file"""
     params: Dict[str, Any] = { "path": path }
@@ -179,26 +186,33 @@ async def write_file(path: str, content: str) -> None:
     await call_tool("write", { "path": path, "content": content })
 
 async def list_files(path: str = ".", recursive: bool = False) -> List[str]:
-    """List files in a directory"""
-    result = await call_tool("list", { "path": path, "recursive": recursive })
-    return result.get("files", [])
+    """List files in a directory using exec"""
+    cmd = f"ls -1 {'-R' if recursive else ''} {path}"
+    result = await exec_bash(cmd)
+    if result.get("success"):
+        stdout = result.get("stdout", "")
+        return [f for f in stdout.strip().split("\\n") if f]
+    return []
 
 async def search_files(pattern: str, path: str = ".") -> List[str]:
-    """Search for files matching a pattern"""
-    result = await call_tool("search", { "pattern": pattern, "path": path })
-    return result.get("matches", [])
-
-async def exec_bash(command: str, cwd: Optional[str] = None, timeout: int = 60) -> Dict[str, Any]:
-    """Execute a bash command"""
-    params: Dict[str, Any] = { "command": command, "timeout": timeout }
-    if cwd:
-        params["cwd"] = cwd
-    return await call_tool("bash", params)
+    """Search for files matching a pattern using find"""
+    cmd = f"find {path} -name '{pattern}' -type f"
+    result = await exec_bash(cmd)
+    if result.get("success"):
+        stdout = result.get("stdout", "")
+        return [f for f in stdout.strip().split("\\n") if f]
+    return []
 
 async def glob_files(pattern: str, path: str = ".") -> List[str]:
     """Find files matching a glob pattern"""
-    result = await call_tool("glob", { "pattern": pattern, "path": path })
-    return result.get("matches", [])
+    # Use bash glob expansion
+    cmd = f"ls -1 {path}/{pattern} 2>/dev/null || echo ''"
+    result = await exec_bash(cmd)
+    if result.get("success"):
+        stdout = result.get("stdout", "")
+        files = [f for f in stdout.strip().split("\\n") if f]
+        return files
+    return []
 
 # User code wrapper
 async def main():
@@ -226,31 +240,42 @@ export function createPythonOrchestratorTool(opts?: {
   return {
     label: "Python Orchestrator",
     name: "python_orchestrator",
-    description: `Execute Python code that can orchestrate multiple tool calls efficiently.
+    description: `**PREFERRED TOOL**: Use this tool whenever you need to perform multiple operations (read files, list directories, search, execute commands) or process data programmatically.
 
-This tool allows Claude to write Python code that calls other OpenClaw tools programmatically,
-reducing latency for multi-step workflows.
+**WHEN TO USE:**
+- Reading/analyzing more than 2-3 files → Use python_orchestrator
+- Searching for files and processing them → Use python_orchestrator
+- Any multi-step workflow → Use python_orchestrator
+- Batch processing → Use python_orchestrator
+- Data transformation or filtering → Use python_orchestrator
 
-Available functions in the Python environment:
-- await read_file(path, limit?) -> str
+**DO NOT** call individual tools (read, list, search) separately when you can batch them with python_orchestrator.
+
+This tool executes Python code with async/await support and provides access to OpenClaw tools via the openclaw_tools module.
+
+Available async functions:
+- await read_file(path, limit=None) -> str
 - await write_file(path, content) -> None
-- await list_files(path=".", recursive=False) -> list
-- await search_files(pattern, path=".") -> list
-- await glob_files(pattern, path=".") -> list
+- await list_files(path=".", recursive=False) -> List[str]
+- await search_files(pattern, path=".") -> List[str]
+- await glob_files(pattern, path=".") -> List[str]
 - await exec_bash(command, cwd=None, timeout=60) -> dict
-- await call_tool(name, params) -> dict (generic tool caller)
+- await call_tool(name, params) -> dict
 
-Example usage:
+**Example - processing multiple files efficiently:**
 \`\`\`python
-# Read multiple files in parallel
-files = await list_files("/logs", recursive=True)
-error_logs = [f for f in files if "error" in f.lower()]
+# List all files
+files = await list_files("/path/to/dir", recursive=True)
 
-# Process each file
-for log_file in error_logs[:5]:
-    content = await read_file(log_file, limit=100)
-    print(f"=== {log_file} ===")
-    print(content)
+# Filter and process in batch
+results = []
+for f in files:
+    if f.endswith(".log"):
+        content = await read_file(f, limit=50)
+        results.append(f"{f}: {len(content)} chars")
+
+print("\\n".join(results))
+print(f"\\nTotal files processed: {len(results)}")
 \`\`\``,
     parameters: PythonOrchestratorSchema,
     execute: async (_toolCallId, args): Promise<AgentToolResult<unknown>> => {
