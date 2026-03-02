@@ -157,15 +157,20 @@ export function isCompactionFailureError(errorMessage?: string): boolean {
 }
 
 export function isDeveloperRoleUnsupportedErrorMessage(raw?: string): boolean {
-  if (!raw) return false;
+  if (!raw) {
+    return false;
+  }
   const trimmed = raw.trim();
-  if (!trimmed) return false;
+  if (!trimmed) {
+    return false;
+  }
 
   const lower = trimmed.toLowerCase();
 
   // Bedrock-style validation when a request includes the "developer" role.
   // Example:
-  //   ValidationException: messages: Unexpected role "developer". Allowed roles are "user" or "assistant"
+  //   ValidationException: messages: Unexpected role "developer".
+  //   Allowed roles are "user" or "assistant"
   if (lower.includes("unexpected role") && lower.includes("developer")) {
     if (
       lower.includes("allowed roles") &&
@@ -179,7 +184,9 @@ export function isDeveloperRoleUnsupportedErrorMessage(raw?: string): boolean {
   }
 
   // Some gateways collapse this into a generic role error but still mention developer.
-  if (lower.includes("incorrect role information") && lower.includes("developer")) return true;
+  if (lower.includes("incorrect role information") && lower.includes("developer")) {
+    return true;
+  }
 
   return false;
 }
