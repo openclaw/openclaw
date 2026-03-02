@@ -352,7 +352,7 @@ export LLAMA_CPP_MODEL_PATH="/path/to/qwen2.5-coder-32b-instruct-q6_k.gguf"
 - **GGUF model files** (download from Hugging Face)
 - **GPU**: CUDA 11.8+, Metal (macOS), or Vulkan (optional)
 
-CPU-only inference works but is slower. Set `gpuLayers: 0` for CPU mode.
+CPU-only inference works but is slower (GPU layer control not currently exposed in config schema).
 
 ## Security
 

@@ -26,7 +26,6 @@
         "api": "llama-cpp",
         "baseUrl": "/models/qwen2.5-coder-32b-instruct-q6_k.gguf",
         "apiKey": "local",
-        "gpuLayers": "max",
         "models": [
           {
             "id": "qwen-32b",

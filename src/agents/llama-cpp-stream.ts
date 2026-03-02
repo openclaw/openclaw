@@ -14,19 +14,17 @@ import { importNodeLlamaCpp } from "../memory/node-llama.js";
 
 const log = createSubsystemLogger("llama-cpp-stream");
 
-type LlamaInstance = Awaited<ReturnType<typeof import("node-llama-cpp").getLlama>>;
-type LlamaModel = Awaited<
-  ReturnType<Awaited<ReturnType<typeof import("node-llama-cpp").getLlama>>["loadModel"]>
->;
+type NodeLlamaCpp = Awaited<ReturnType<typeof importNodeLlamaCpp>>;
+type Llama = Awaited<ReturnType<NodeLlamaCpp["getLlama"]>>;
+type LlamaModel = Awaited<ReturnType<Llama["loadModel"]>>;
 type LlamaContext = Awaited<ReturnType<LlamaModel["createContext"]>>;
-type LlamaChat = InstanceType<Awaited<ReturnType<typeof import("node-llama-cpp")>>["LlamaChat"]>;
-type ChatModelFunctions = Record<string, { description: string; params: Record<string, unknown> }>;
+type LlamaChatSession = InstanceType<NodeLlamaCpp["LlamaChatSession"]>;
 
 interface LoadedModel {
-  llama: LlamaInstance;
+  llama: Llama;
   model: LlamaModel;
   context: LlamaContext;
-  chat: LlamaChat;
+  session: LlamaChatSession;
 }
 
 const modelCache = new Map<string, Promise<LoadedModel>>();
@@ -43,22 +41,31 @@ async function loadModel(modelPath: string, gpuLayers?: number | "max"): Promise
   log.info(`loading llama.cpp model from ${modelPath}`);
   const startTime = Date.now();
 
-  const { getLlama, LlamaChat } = await importNodeLlamaCpp();
+  const { getLlama, LlamaChatSession } = await importNodeLlamaCpp();
 
   const llama = await getLlama();
+
+  log.info(`loading model with gpuLayers: ${gpuLayers ?? "default"}`);
   const model = await llama.loadModel({
     modelPath,
-    gpuLayers: gpuLayers ?? "max",
+    gpuLayers: 0,
   });
 
+  log.info(`creating context...`);
   const context = await model.createContext();
-  const sequence = await context.getSequence();
-  const chat = new LlamaChat({ contextSequence: sequence });
+
+  log.info(`getting sequence...`);
+  const sequence = context.getSequence();
+
+  log.info(`creating chat session...`);
+  const session = new LlamaChatSession({
+    contextSequence: sequence,
+  });
 
   const elapsed = Date.now() - startTime;
   log.info(`llama.cpp model loaded in ${elapsed}ms`);
 
-  return { llama, model, context, chat };
+  return { llama, model, context, session };
 }
 
 type InputContentPart =
@@ -80,142 +87,14 @@ function extractTextContent(content: unknown): string {
     .join("");
 }
 
-function extractToolCalls(content: unknown): Array<{
-  id: string;
-  name: string;
-  arguments: Record<string, unknown>;
-}> {
-  if (!Array.isArray(content)) {
-    return [];
-  }
-  const parts = content as InputContentPart[];
-  const result: Array<{ id: string; name: string; arguments: Record<string, unknown> }> = [];
-  for (const part of parts) {
-    if (part.type === "toolCall") {
-      result.push({ id: part.id, name: part.name, arguments: part.arguments });
-    } else if (part.type === "tool_use") {
-      result.push({ id: part.id, name: part.name, arguments: part.input });
-    }
-  }
-  return result;
-}
-
-function extractToolResultContent(msg: { role: string; content: unknown; toolCallId?: string }): {
-  toolCallId?: string;
-  result: string;
-} {
-  return {
-    toolCallId: msg.toolCallId,
-    result: extractTextContent(msg.content),
-  };
-}
-
-type FunctionCallResponse = {
-  type: "functionCall";
-  name: string;
-  params: Record<string, unknown>;
-  result?: unknown;
-};
-
-type ChatHistoryItem =
-  | { type: "system"; text: string }
-  | { type: "user"; text: string }
-  | {
-      type: "model";
-      response: Array<string | FunctionCallResponse>;
-    };
-
-interface InputMessage {
-  role: string;
-  content: unknown;
-  toolCallId?: string;
-  toolName?: string;
-}
-
-export function convertToChatHistory(messages: InputMessage[]): {
-  chatHistory: ChatHistoryItem[];
-  pendingToolCalls: Map<string, string>;
-} {
-  const chatHistory: ChatHistoryItem[] = [];
-  const pendingToolCalls = new Map<string, string>();
-
-  for (const msg of messages) {
-    const { role } = msg;
-
-    if (role === "system") {
-      chatHistory.push({
-        type: "system",
-        text: extractTextContent(msg.content),
-      });
-    } else if (role === "user") {
-      chatHistory.push({
-        type: "user",
-        text: extractTextContent(msg.content),
-      });
-    } else if (role === "assistant") {
-      const text = extractTextContent(msg.content);
-      const toolCalls = extractToolCalls(msg.content);
-
-      const response: Array<string | FunctionCallResponse> = [];
-
-      if (text) {
-        response.push(text);
-      }
-
-      for (const tc of toolCalls) {
-        pendingToolCalls.set(tc.id, tc.name);
-        response.push({
-          type: "functionCall",
-          name: tc.name,
-          params: tc.arguments,
-        });
-      }
-
-      if (response.length > 0) {
-        chatHistory.push({
-          type: "model",
-          response,
-        });
-      }
-    } else if (role === "tool" || role === "toolResult") {
-      const { toolCallId, result } = extractToolResultContent(msg);
-      const toolName = pendingToolCalls.get(toolCallId ?? "");
-
-      if (toolName && chatHistory.length > 0) {
-        const lastItem = chatHistory[chatHistory.length - 1];
-        if (lastItem?.type === "model") {
-          for (const resp of lastItem.response) {
-            if (
-              typeof resp === "object" &&
-              resp !== null &&
-              "type" in resp &&
-              resp.type === "functionCall" &&
-              "name" in resp &&
-              resp.name === toolName &&
-              resp.result === undefined
-            ) {
-              try {
-                resp.result = JSON.parse(result);
-              } catch {
-                resp.result = result;
-              }
-              break;
-            }
-          }
-        }
-      }
-    }
-  }
-
-  return { chatHistory, pendingToolCalls };
-}
-
-function convertToFunctions(tools: Tool[] | undefined): ChatModelFunctions | undefined {
+function convertToFunctions(
+  tools: Tool[] | undefined,
+): Record<string, { description: string; params: Record<string, unknown> }> | undefined {
   if (!tools || !Array.isArray(tools) || tools.length === 0) {
     return undefined;
   }
 
-  const functions: ChatModelFunctions = {};
+  const functions: Record<string, { description: string; params: Record<string, unknown> }> = {};
   for (const tool of tools) {
     if (typeof tool.name !== "string" || !tool.name) {
       continue;
@@ -285,9 +164,8 @@ export function createLlamaCppStreamFn(modelPath: string, gpuLayers?: number | "
 
     const run = async () => {
       try {
-        const { chat } = await getOrLoadModel(modelPath, gpuLayers);
+        const { session } = await getOrLoadModel(modelPath, gpuLayers);
 
-        const { chatHistory } = convertToChatHistory(context.messages ?? []);
         const functions = convertToFunctions(context.tools);
 
         let accumulatedText = "";
@@ -296,22 +174,20 @@ export function createLlamaCppStreamFn(modelPath: string, gpuLayers?: number | "
           params: Record<string, unknown>;
         }> = [];
 
-        const response = await chat.generateResponse(chatHistory, {
+        const userMessage = context.messages
+          ?.filter((msg) => msg.role === "user")
+          .map((msg) => extractTextContent(msg.content))
+          .join("\n");
+
+        const response = await session.prompt(userMessage || "", {
           systemPrompt: context.systemPrompt,
-          functions,
+          ...(functions ? { functions } : {}),
           signal: options?.signal,
           maxTokens: options?.maxTokens,
           temperature: options?.temperature ?? 0.8,
 
           onTextChunk: (text) => {
             accumulatedText += text;
-          },
-
-          onFunctionCall: (functionCallResult) => {
-            functionCalls.push({
-              functionName: functionCallResult.functionName,
-              params: functionCallResult.params ?? {},
-            });
           },
         });
 
@@ -323,7 +199,7 @@ export function createLlamaCppStreamFn(modelPath: string, gpuLayers?: number | "
           for (const fc of response.functionCalls) {
             functionCalls.push({
               functionName: fc.functionName,
-              params: fc.params ?? {},
+              params: (fc.params ?? {}) as Record<string, unknown>,
             });
           }
         }
@@ -385,7 +261,6 @@ export async function disposeLlamaCppModels(): Promise<void> {
     if (result.status === "fulfilled") {
       try {
         await result.value.context.dispose();
-        await result.value.model.dispose();
       } catch (err) {
         const errorMessage = err instanceof Error ? err.message : String(err);
         log.warn(`error disposing llama.cpp model: ${errorMessage}`);
