@@ -17,8 +17,8 @@ export type SandboxDockerSettings = {
   capDrop?: string[];
   /** Extra environment variables for sandbox exec. */
   env?: Record<string, string>;
-  /** Optional setup command run once after container creation. */
-  setupCommand?: string;
+  /** Optional setup command run once after container creation. Accepts a single string or an array of commands (joined with newlines). */
+  setupCommand?: string | string[];
   /** Limit container PIDs (0 = Docker default). */
   pidsLimit?: number;
   /** Limit container memory (e.g. 512m, 2g, or bytes as number). */
