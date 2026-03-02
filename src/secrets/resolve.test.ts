@@ -533,4 +533,48 @@ describe("secret ref resolver", () => {
       ),
     ).rejects.toThrow('has source "env" but ref requests "exec"');
   });
+
+  it("uses timeoutMs as default for noOutputTimeoutMs when not explicitly set", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-resolve-exec-timeout-"));
+    cleanupRoots.push(root);
+    const scriptPath = path.join(root, "slow-resolver.mjs");
+    // Script that takes >2000ms (old hardcoded default) but <5000ms to produce output
+    await writeSecureFile(
+      scriptPath,
+      [
+        "#!/usr/bin/env node",
+        "import fs from 'node:fs';",
+        "const req = JSON.parse(fs.readFileSync(0, 'utf8'));",
+        "// Delay 3 seconds (> old 2000ms default, < configured 5000ms timeout)",
+        "await new Promise(r => setTimeout(r, 3000));",
+        "const values = Object.fromEntries((req.ids ?? []).map((id) => [id, `value:${id}`]));",
+        "process.stdout.write(JSON.stringify({ protocolVersion: 1, values }));",
+      ].join("\n"),
+      0o700,
+    );
+
+    // This would fail before the fix with "produced no output for 2000ms"
+    // because noOutputTimeoutMs defaulted to 2000ms regardless of timeoutMs
+    const value = await resolveSecretRefString(
+      { source: "exec", provider: "execmain", id: "openai/api-key" },
+      {
+        config: {
+          secrets: {
+            providers: {
+              execmain: {
+                source: "exec",
+                command: scriptPath,
+                passEnv: ["PATH"],
+                timeoutMs: 5000, // Only set timeoutMs, not noOutputTimeoutMs
+              },
+            },
+          },
+        },
+      },
+    );
+    expect(value).toBe("value:openai/api-key");
+  });
 });
