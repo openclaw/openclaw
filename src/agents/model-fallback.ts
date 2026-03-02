@@ -77,7 +77,22 @@ const TRANSPORT_ERROR_CODES = new Set([
   "UND_ERR_SOCKET",
 ]);
 const TRANSPORT_ERROR_MESSAGE_RE =
-  /\b(getaddrinfo|dns|ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ECONNRESET|ETIMEDOUT|ESOCKETTIMEDOUT|EHOSTUNREACH|ENETUNREACH|UND_ERR_DNS_RESOLVE_FAILED|UND_ERR_CONNECT_TIMEOUT|UND_ERR_CONNECT|UND_ERR_SOCKET)\b/i;
+  /\b(getaddrinfo|ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ECONNRESET|ETIMEDOUT|ESOCKETTIMEDOUT|EHOSTUNREACH|ENETUNREACH|UND_ERR_DNS_RESOLVE_FAILED|UND_ERR_CONNECT_TIMEOUT|UND_ERR_CONNECT|UND_ERR_SOCKET)\b/i;
+
+function hasDnsTransportPhrase(message: string): boolean {
+  const lower = message.toLowerCase();
+  if (!lower.includes("dns")) {
+    return false;
+  }
+  return (
+    lower.includes("dns resolution failed") ||
+    lower.includes("dns lookup failed") ||
+    lower.includes("dns resolve failed") ||
+    lower.includes("dns error") ||
+    ((lower.includes("dns lookup") || lower.includes("dns resolution")) &&
+      (lower.includes("failed") || lower.includes("failure")))
+  );
+}
 
 function hasTransportFailureHint(err: unknown): boolean {
   const queue: unknown[] = [err];
@@ -89,7 +104,7 @@ function hasTransportFailureHint(err: unknown): boolean {
       continue;
     }
     if (typeof current === "string") {
-      if (TRANSPORT_ERROR_MESSAGE_RE.test(current)) {
+      if (TRANSPORT_ERROR_MESSAGE_RE.test(current) || hasDnsTransportPhrase(current)) {
         return true;
       }
       continue;
@@ -118,7 +133,8 @@ function hasTransportFailureHint(err: unknown): boolean {
     }
     if (
       typeof candidate.message === "string" &&
-      TRANSPORT_ERROR_MESSAGE_RE.test(candidate.message)
+      (TRANSPORT_ERROR_MESSAGE_RE.test(candidate.message) ||
+        hasDnsTransportPhrase(candidate.message))
     ) {
       return true;
     }

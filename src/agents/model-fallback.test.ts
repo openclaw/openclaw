@@ -832,6 +832,27 @@ describe("runWithModelFallback", () => {
     expect(run.mock.calls[1]?.[0]).not.toBe("ollama");
   });
 
+  it("does not treat standalone DNS text as transport failure for true overflow errors", async () => {
+    const cfg = makeCfg();
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new Error("Request size exceeds model context window. Debug dump includes DNS records."),
+      )
+      .mockResolvedValueOnce("ok");
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        run,
+      }),
+    ).rejects.toThrow("Request size exceeds model context window");
+
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
   it("does not fall back on user aborts", async () => {
     const cfg = makeCfg();
     const run = vi
