@@ -4,6 +4,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { createSafeAudioFixtureBuffer } from "./runner.test-utils.js";
 
 // ---------------------------------------------------------------------------
 // Module mocks
@@ -30,14 +31,17 @@ vi.mock("../agents/model-auth.js", () => ({
   resolveAuthProfileOrder: vi.fn(() => []),
 }));
 
-class MediaFetchErrorMock extends Error {
-  code: string;
-  constructor(message: string, code: string) {
-    super(message);
-    this.name = "MediaFetchError";
-    this.code = code;
+const { MediaFetchErrorMock } = vi.hoisted(() => {
+  class MediaFetchErrorMock extends Error {
+    code: string;
+    constructor(message: string, code: string) {
+      super(message);
+      this.name = "MediaFetchError";
+      this.code = code;
+    }
   }
-}
+  return { MediaFetchErrorMock };
+});
 
 vi.mock("../media/fetch.js", () => ({
   fetchRemoteMedia: vi.fn(),
@@ -68,7 +72,7 @@ let suiteTempMediaRootDir = "";
 async function createTempAudioFile(): Promise<string> {
   const dir = await fs.mkdtemp(path.join(suiteTempMediaRootDir, "case-"));
   const filePath = path.join(dir, "note.ogg");
-  await fs.writeFile(filePath, Buffer.alloc(2048, 0xab));
+  await fs.writeFile(filePath, createSafeAudioFixtureBuffer(2048));
   return filePath;
 }
 
