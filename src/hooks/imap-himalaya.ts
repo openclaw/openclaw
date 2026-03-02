@@ -20,20 +20,18 @@ export type HimalayaMessage = {
   body: string;
 };
 
-type HimalayaBaseParams = {
-  account?: string;
-  config?: string;
-};
-
-function baseArgs(params: HimalayaBaseParams): string[] {
+/** Global args that go BEFORE the subcommand (config, output format, quiet). */
+function globalArgs(params: { config?: string }): string[] {
   const args: string[] = ["-o", "json", "--quiet"];
-  if (params.account) {
-    args.push("-a", params.account);
-  }
   if (params.config) {
     args.push("-c", params.config);
   }
   return args;
+}
+
+/** Per-subcommand args that go AFTER the subcommand name (-a account, -f folder, etc). */
+function accountArgs(account?: string): string[] {
+  return account ? ["-a", account] : [];
 }
 
 /**
@@ -49,9 +47,10 @@ export async function listEnvelopes(params: {
 }): Promise<HimalayaEnvelope[]> {
   const args = [
     "himalaya",
-    ...baseArgs(params),
+    ...globalArgs(params),
     "envelope",
     "list",
+    ...accountArgs(params.account),
     "-f",
     params.folder,
     "-s",
@@ -95,7 +94,15 @@ export async function readMessage(params: {
   /** When true, read without marking as seen. */
   preview?: boolean;
 }): Promise<HimalayaMessage> {
-  const args = ["himalaya", ...baseArgs(params), "message", "read", "-f", params.folder];
+  const args = [
+    "himalaya",
+    ...globalArgs(params),
+    "message",
+    "read",
+    ...accountArgs(params.account),
+    "-f",
+    params.folder,
+  ];
   if (params.preview) {
     args.push("-p");
   }
@@ -133,9 +140,10 @@ export async function markEnvelopeSeen(params: {
 }): Promise<void> {
   const args = [
     "himalaya",
-    ...baseArgs(params),
+    ...globalArgs(params),
     "flag",
     "add",
+    ...accountArgs(params.account),
     "-f",
     params.folder,
     params.id,
@@ -157,7 +165,7 @@ export async function checkAccount(params: {
   config?: string;
 }): Promise<{ ok: boolean; error?: string }> {
   // account doctor takes the account as a positional arg, not via -a
-  const args = ["himalaya", ...baseArgs({ config: params.config }), "account", "doctor"];
+  const args = ["himalaya", ...globalArgs(params), "account", "doctor"];
   if (params.account) {
     args.push(params.account);
   }
