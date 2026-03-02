@@ -223,7 +223,6 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
     expect(details.error).toContain('sandbox="require"');
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
-
   // ---------------------------------------------------------------------------
   // agentId format validation (#31311)
   // ---------------------------------------------------------------------------
