@@ -579,6 +579,9 @@ function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch): CronP
   if (typeof patch.bestEffortDeliver === "boolean") {
     next.bestEffortDeliver = patch.bestEffortDeliver;
   }
+  if (typeof patch.lightContext === "boolean") {
+    next.lightContext = patch.lightContext;
+  }
   return next;
 }
 
@@ -642,6 +645,7 @@ function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
     thinking: patch.thinking,
     timeoutSeconds: patch.timeoutSeconds,
     allowUnsafeExternalContent: patch.allowUnsafeExternalContent,
+    lightContext: patch.lightContext,
     deliver: patch.deliver,
     channel: patch.channel,
     to: patch.to,

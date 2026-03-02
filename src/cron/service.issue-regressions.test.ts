@@ -242,6 +242,43 @@ describe("Cron issue regressions", () => {
     cron.stop();
   });
 
+  it("persists lightContext on cron update when patch only has lightContext (no message)", async () => {
+    const store = await makeStorePath();
+    const cron = await startCronForStore({ storePath: store.storePath });
+
+    const created = await cron.add({
+      name: "light-context-edit",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000, anchorMs: Date.now() },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "test" },
+    });
+    expect(created.payload.kind).toBe("agentTurn");
+    if (created.payload.kind === "agentTurn") {
+      expect(created.payload.lightContext).toBeUndefined();
+    }
+
+    const patched = await cron.update(created.id, {
+      payload: { kind: "agentTurn", lightContext: true },
+    });
+    expect(patched.payload.kind).toBe("agentTurn");
+    if (patched.payload.kind === "agentTurn") {
+      expect(patched.payload.lightContext).toBe(true);
+      expect(patched.payload.message).toBe("test");
+    }
+
+    const cleared = await cron.update(created.id, {
+      payload: { kind: "agentTurn", lightContext: false },
+    });
+    expect(cleared.payload.kind).toBe("agentTurn");
+    if (cleared.payload.kind === "agentTurn") {
+      expect(cleared.payload.lightContext).toBe(false);
+    }
+
+    cron.stop();
+  });
+
   it("repairs isolated every jobs missing createdAtMs and sets nextWakeAtMs", async () => {
     const store = await makeStorePath();
     await fs.writeFile(
