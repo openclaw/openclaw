@@ -211,7 +211,7 @@ function createBedrockContext1mWrapper(
             | Record<string, unknown>
             | undefined;
           const existingBetas = Array.isArray(existing?.anthropic_beta)
-            ? (existing!.anthropic_beta as string[])
+            ? (existing.anthropic_beta as string[])
             : [];
           const merged = [...new Set([...existingBetas, ...betas])];
           payloadObj.additionalModelRequestFields = {
@@ -380,7 +380,10 @@ function createOpenAIDefaultTransportWrapper(baseStreamFn: StreamFn | undefined)
 
 function isAnthropic1MModel(modelId: string): boolean {
   const normalized = modelId.trim().toLowerCase();
-  return ANTHROPIC_1M_MODEL_PREFIXES.some((prefix) => normalized.startsWith(prefix));
+  // Strip Bedrock provider prefixes (e.g. "anthropic.", "us.anthropic.")
+  // to match bare model names like "claude-opus-4-6-v1"
+  const bare = normalized.replace(/^(?:[a-z]{2}\.)?anthropic\./, "");
+  return ANTHROPIC_1M_MODEL_PREFIXES.some((prefix) => bare.startsWith(prefix));
 }
 
 function parseHeaderList(value: unknown): string[] {
@@ -398,7 +401,10 @@ function resolveAnthropicBetas(
   provider: string,
   modelId: string,
 ): string[] | undefined {
-  if (provider !== "anthropic" && !(provider === "amazon-bedrock" && isAnthropicBedrockModel(modelId))) {
+  if (
+    provider !== "anthropic" &&
+    !(provider === "amazon-bedrock" && isAnthropicBedrockModel(modelId))
+  ) {
     return undefined;
   }
 
