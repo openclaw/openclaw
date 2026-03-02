@@ -1,4 +1,5 @@
 export type UpdateAvailable = import("../../../src/infra/update-startup.js").UpdateAvailable;
+import type { ConfigUiHints } from "../../../src/shared/config-ui-hints-types.js";
 
 export type ChannelsStatusSnapshot = {
   ts: number;
@@ -282,20 +283,6 @@ export type ConfigSnapshot = {
   config?: Record<string, unknown> | null;
   issues?: ConfigSnapshotIssue[] | null;
 };
-
-export type ConfigUiHint = {
-  label?: string;
-  help?: string;
-  tags?: string[];
-  group?: string;
-  order?: number;
-  advanced?: boolean;
-  sensitive?: boolean;
-  placeholder?: string;
-  itemTemplate?: unknown;
-};
-
-export type ConfigUiHints = Record<string, ConfigUiHint>;
 
 export type ConfigSchemaResponse = {
   schema: unknown;
