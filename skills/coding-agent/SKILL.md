@@ -1,6 +1,6 @@
 ---
 name: coding-agent
-description: 'Delegate coding tasks to Codex, Claude Code, or Pi agents via background process. Use when: (1) building/creating new features or apps, (2) reviewing PRs (spawn in temp dir), (3) refactoring large codebases, (4) iterative coding that needs file exploration. NOT for: simple one-liner fixes (just edit), reading code (use read tool), thread-bound ACP harness requests in chat (for example spawn/run Codex or Claude Code in a Discord thread; use sessions_spawn with runtime:"acp"), or any work in ~/clawd workspace (never spawn agents here). Requires a bash tool that supports pty:true.'
+description: 'Delegate coding tasks to Codex, Claude Code, or Pi agents via background process. Use when: (1) building/creating new features or apps, (2) reviewing PRs (spawn in temp dir), (3) refactoring large codebases, (4) iterative coding that needs file exploration. NOT for: simple one-liner fixes (just edit), reading code (use read tool), thread-bound ACP harness requests in chat (for example spawn/run Codex or Claude Code in a Discord thread; use sessions_spawn with runtime:"acp"), or any work in ~/clawd workspace (never spawn agents here). Claude Code: use --print --permission-mode bypassPermissions (no PTY). Codex/Pi: pty:true required.'
 metadata:
   {
     "openclaw": { "emoji": "🧩", "requires": { "anyBins": ["claude", "codex", "opencode", "pi"] } },
@@ -11,18 +11,27 @@ metadata:
 
 Use **bash** (with optional background mode) for all coding agent work. Simple and effective.
 
-## ⚠️ PTY Mode Required!
+## ⚠️ PTY Mode: Codex/Pi yes, Claude Code no
 
-Coding agents (Codex, Claude Code, Pi) are **interactive terminal applications** that need a pseudo-terminal (PTY) to work correctly. Without PTY, you'll get broken output, missing colors, or the agent may hang.
-
-**Always use `pty:true`** when running coding agents:
+For **Codex, Pi, and OpenCode**, PTY is still required (interactive terminal apps):
 
 ```bash
-# ✅ Correct - with PTY
+# ✅ Correct for Codex/Pi/OpenCode
 bash pty:true command:"codex exec 'Your prompt'"
+```
 
-# ❌ Wrong - no PTY, agent may break
-bash command:"codex exec 'Your prompt'"
+For **Claude Code** (`claude` CLI), use `--print --permission-mode bypassPermissions` instead.
+`--dangerously-skip-permissions` with PTY exits with code 1 after the confirmation dialog.
+`--print` mode has full tool access (read/write files, shell commands) and skips the dialog:
+
+```bash
+# ✅ Correct for Claude Code (no PTY needed)
+cd /path/to/project && claude --permission-mode bypassPermissions --print 'Your task'
+
+# For background execution: use background:true on the exec tool — no pty:true needed
+
+# ❌ Wrong — crashes after bypass permissions dialog
+bash pty:true command:"claude --dangerously-skip-permissions 'task'"
 ```
 
 ### Bash Tool Parameters
