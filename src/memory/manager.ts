@@ -15,6 +15,7 @@ import {
   type MistralEmbeddingClient,
   type OllamaEmbeddingClient,
   type OpenAiEmbeddingClient,
+  type OpenrouterEmbeddingClient,
   type VoyageEmbeddingClient,
 } from "./embeddings.js";
 import { isFileMissingError, statRegularFile } from "./fs-utils.js";
@@ -56,8 +57,9 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     | "voyage"
     | "mistral"
     | "ollama"
+    | "openrouter"
     | "auto";
-  protected fallbackFrom?: "openai" | "local" | "gemini" | "voyage" | "mistral" | "ollama";
+  protected fallbackFrom?: "openai" | "local" | "gemini" | "voyage" | "mistral" | "ollama" | "openrouter";
   protected fallbackReason?: string;
   private readonly providerUnavailableReason?: string;
   protected openAi?: OpenAiEmbeddingClient;
@@ -65,6 +67,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   protected voyage?: VoyageEmbeddingClient;
   protected mistral?: MistralEmbeddingClient;
   protected ollama?: OllamaEmbeddingClient;
+  protected openrouter?: OpenrouterEmbeddingClient;
   protected batch: {
     enabled: boolean;
     wait: boolean;
@@ -195,6 +198,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     this.voyage = params.providerResult.voyage;
     this.mistral = params.providerResult.mistral;
     this.ollama = params.providerResult.ollama;
+    this.openrouter = params.providerResult.openrouter;
     this.sources = new Set(params.settings.sources);
     this.db = this.openDatabase();
     this.providerKey = this.computeProviderKey();
