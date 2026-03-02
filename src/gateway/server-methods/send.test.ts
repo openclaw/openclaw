@@ -30,6 +30,22 @@ vi.mock("../../channels/plugins/index.js", () => ({
   normalizeChannelId: (value: string) => (value === "webchat" ? null : value),
 }));
 
+const TEST_AGENT_WORKSPACE = "/tmp/openclaw-test-workspace";
+
+function resolveAgentIdFromSessionKeyForTests(params: { sessionKey?: string }): string {
+  if (typeof params.sessionKey === "string") {
+    const match = params.sessionKey.match(/^agent:([^:]+)/i);
+    if (match?.[1]) {
+      return match[1];
+    }
+  }
+  return "main";
+}
+
+function passthroughPluginAutoEnable(config: unknown) {
+  return { config, changes: [] as unknown[] };
+}
+
 vi.mock("../../agents/agent-scope.js", () => ({
   resolveSessionAgentId: ({
     sessionKey,
@@ -37,21 +53,13 @@ vi.mock("../../agents/agent-scope.js", () => ({
     sessionKey?: string;
     config?: unknown;
     agentId?: string;
-  }) => {
-    if (typeof sessionKey === "string") {
-      const match = sessionKey.match(/^agent:([^:]+)/i);
-      if (match?.[1]) {
-        return match[1];
-      }
-    }
-    return "main";
-  },
+  }) => resolveAgentIdFromSessionKeyForTests({ sessionKey }),
   resolveDefaultAgentId: () => "main",
-  resolveAgentWorkspaceDir: () => "/tmp/openclaw-test-workspace",
+  resolveAgentWorkspaceDir: () => TEST_AGENT_WORKSPACE,
 }));
 
 vi.mock("../../config/plugin-auto-enable.js", () => ({
-  applyPluginAutoEnable: ({ config }: { config: unknown }) => ({ config, changes: [] }),
+  applyPluginAutoEnable: ({ config }: { config: unknown }) => passthroughPluginAutoEnable(config),
 }));
 
 vi.mock("../../plugins/loader.js", () => ({

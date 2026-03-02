@@ -5,6 +5,10 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 const TEST_GATEWAY_TOKEN = "test-gateway-token-1234567890";
 
 let cfg: Record<string, unknown> = {};
+const alwaysAuthorized = async () => ({ ok: true as const });
+const disableDefaultMemorySlot = () => false;
+const noPluginToolMeta = () => undefined;
+const noWarnLog = () => {};
 
 vi.mock("../config/config.js", () => ({
   loadConfig: () => cfg,
@@ -15,19 +19,19 @@ vi.mock("../config/sessions.js", () => ({
 }));
 
 vi.mock("./auth.js", () => ({
-  authorizeHttpGatewayConnect: async () => ({ ok: true }),
+  authorizeHttpGatewayConnect: alwaysAuthorized,
 }));
 
 vi.mock("../logger.js", () => ({
-  logWarn: () => {},
+  logWarn: noWarnLog,
 }));
 
 vi.mock("../plugins/config-state.js", () => ({
-  isTestDefaultMemorySlotDisabled: () => false,
+  isTestDefaultMemorySlotDisabled: disableDefaultMemorySlot,
 }));
 
 vi.mock("../plugins/tools.js", () => ({
-  getPluginToolMeta: () => undefined,
+  getPluginToolMeta: noPluginToolMeta,
 }));
 
 vi.mock("../agents/openclaw-tools.js", () => {

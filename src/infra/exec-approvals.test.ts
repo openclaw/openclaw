@@ -32,6 +32,21 @@ function buildNestedEnvShellCommand(params: {
   return [...Array(params.depth).fill(params.envExecutable), "/bin/sh", "-c", params.payload];
 }
 
+function analyzeEnvWrapperAllowlist(params: { argv: string[]; envPath: string; cwd: string }) {
+  const analysis = analyzeArgvCommand({
+    argv: params.argv,
+    cwd: params.cwd,
+    env: makePathEnv(params.envPath),
+  });
+  const allowlistEval = evaluateExecAllowlist({
+    analysis,
+    allowlist: [{ pattern: params.envPath }],
+    safeBins: normalizeSafeBins([]),
+    cwd: params.cwd,
+  });
+  return { analysis, allowlistEval };
+}
+
 describe("exec approvals allowlist matching", () => {
   const baseResolution = {
     rawExecutable: "rg",
@@ -288,16 +303,9 @@ describe("exec approvals command resolution", () => {
     if (process.platform !== "win32") {
       fs.chmodSync(envPath, 0o755);
     }
-
-    const analysis = analyzeArgvCommand({
+    const { analysis, allowlistEval } = analyzeEnvWrapperAllowlist({
       argv: [envPath, "-S", 'sh -c "echo pwned"'],
-      cwd: dir,
-      env: makePathEnv(binDir),
-    });
-    const allowlistEval = evaluateExecAllowlist({
-      analysis,
-      allowlist: [{ pattern: envPath }],
-      safeBins: normalizeSafeBins([]),
+      envPath: envPath,
       cwd: dir,
     });
 
@@ -317,20 +325,13 @@ describe("exec approvals command resolution", () => {
     const envPath = path.join(binDir, "env");
     fs.writeFileSync(envPath, "#!/bin/sh\n");
     fs.chmodSync(envPath, 0o755);
-
-    const analysis = analyzeArgvCommand({
+    const { analysis, allowlistEval } = analyzeEnvWrapperAllowlist({
       argv: buildNestedEnvShellCommand({
         envExecutable: envPath,
         depth: 5,
         payload: "echo pwned",
       }),
-      cwd: dir,
-      env: makePathEnv(binDir),
-    });
-    const allowlistEval = evaluateExecAllowlist({
-      analysis,
-      allowlist: [{ pattern: envPath }],
-      safeBins: normalizeSafeBins([]),
+      envPath,
       cwd: dir,
     });
 
