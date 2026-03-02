@@ -729,7 +729,8 @@ export class Neo4jMemoryClient {
           `UNWIND $ids AS memId
            MATCH (m:Memory {id: memId})
            SET m.retrievalCount = coalesce(m.retrievalCount, 0) + 1,
-               m.lastRetrievedAt = $now`,
+               m.lastRetrievedAt = $now,
+               m.importance = CASE WHEN coalesce(m.importance, 0.5) + 0.05 > 1.0 THEN 1.0 ELSE coalesce(m.importance, 0.5) + 0.05 END`,
           { ids: memoryIds, now: new Date().toISOString() },
         );
       } finally {

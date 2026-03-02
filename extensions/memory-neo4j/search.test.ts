@@ -250,11 +250,11 @@ describe("hybridSearch", () => {
     );
 
     expect(results.length).toBe(2);
-    // Results should have scores normalized to 0-1
+    // Results should have scores in 0-1 range (blended: 0.6×rrfNorm + 0.25×recency + 0.15×importance)
     expect(results[0].score).toBeLessThanOrEqual(1);
     expect(results[0].score).toBeGreaterThanOrEqual(0);
-    // First result should have the highest score (normalized to 1)
-    expect(results[0].score).toBe(1);
+    // First result should have the highest blended score
+    expect(results[0].score).toBeGreaterThan(results[1].score);
   });
 
   it("should deduplicate across signals (same memory in multiple signals)", async () => {
@@ -275,8 +275,9 @@ describe("hybridSearch", () => {
     // Should only have one result (deduplicated by ID)
     expect(results.length).toBe(1);
     expect(results[0].id).toBe("mem-shared");
-    // Score should be higher than either individual signal (boosted by appearing in both)
-    expect(results[0].score).toBe(1); // It's the only result, so normalized to 1
+    // Score should be in 0-1 range (blended: 0.6×rrfNorm + 0.25×recency + 0.15×importance)
+    expect(results[0].score).toBeLessThanOrEqual(1);
+    expect(results[0].score).toBeGreaterThan(0);
   });
 
   it("should include graph signal when graphEnabled is true", async () => {

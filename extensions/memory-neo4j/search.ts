@@ -284,16 +284,36 @@ export async function hybridSearch(
   const MIN_RRF_FOR_NORMALIZATION = 0.01;
   const normalizer = maxRrf >= MIN_RRF_FOR_NORMALIZATION ? 1 / maxRrf : 1;
 
-  const results = fused.slice(0, limit).map((r) => ({
-    id: r.id,
-    text: r.text,
-    category: r.category,
-    importance: r.importance,
-    createdAt: r.createdAt,
-    score: Math.min(1, r.rrfScore * normalizer), // Normalize to 0-1
-    taskId: r.taskId,
-    signals: r.signals,
-  }));
+  const now = Date.now();
+  const results = fused.slice(0, limit).map((r) => {
+    const rrfNorm = Math.min(1, r.rrfScore * normalizer);
+
+    // Recency score: exponential decay with 30-day half-life
+    const ageDays = r.createdAt
+      ? (now - new Date(r.createdAt).getTime()) / (1000 * 60 * 60 * 24)
+      : 30; // default to 30 days if no createdAt
+    const recencyScore = Math.exp(-ageDays / 30);
+
+    // Importance score (already 0-1)
+    const importanceScore = r.importance ?? 0.5;
+
+    // Blended final score (tribe.ai formula adapted for RRF)
+    const blendedScore = 0.6 * rrfNorm + 0.25 * recencyScore + 0.15 * importanceScore;
+
+    return {
+      id: r.id,
+      text: r.text,
+      category: r.category,
+      importance: r.importance,
+      createdAt: r.createdAt,
+      score: blendedScore,
+      taskId: r.taskId,
+      signals: r.signals,
+    };
+  });
+
+  // Re-sort by blended score (recency/importance may reorder vs pure RRF)
+  results.sort((a, b) => b.score - a.score);
 
   // 6. Record retrieval events (fire-and-forget for latency)
   // This tracks which memories are actually being used, enabling
