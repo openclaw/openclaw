@@ -164,6 +164,35 @@ describe("delivery-queue", () => {
         | undefined;
       expect(row?.status).toBe("failed_terminal");
     });
+
+    it("does not overwrite already-acked rows", async () => {
+      const id = await enqueueDelivery(
+        {
+          channel: "slack",
+          to: "#general",
+          payloads: [{ text: "hi" }],
+        },
+        tmpDir,
+      );
+
+      // Simulate the live delivery path acking the row first
+      await ackDelivery(id, tmpDir);
+      const db = getLifecycleDb(tmpDir);
+      const beforeRow = db
+        .prepare("SELECT status, completed_at FROM message_outbox WHERE id=?")
+        .get(id) as { status: string; completed_at: number } | undefined;
+      expect(beforeRow?.status).toBe("delivered");
+      const ackTimestamp = beforeRow?.completed_at;
+
+      // Recovery worker tries to move to failed — should be a no-op
+      await moveToFailed(id, tmpDir);
+
+      const afterRow = db
+        .prepare("SELECT status, completed_at FROM message_outbox WHERE id=?")
+        .get(id) as { status: string; completed_at: number } | undefined;
+      expect(afterRow?.status).toBe("delivered");
+      expect(afterRow?.completed_at).toBe(ackTimestamp);
+    });
   });
 
   describe("isPermanentDeliveryError", () => {

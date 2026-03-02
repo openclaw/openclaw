@@ -297,7 +297,9 @@ export async function loadPendingDeliveries(stateDir?: string): Promise<QueuedDe
   }
 }
 
-/** Mark an entry as terminal failed. */
+/** Mark an entry as terminal failed.
+ * Only acts on non-terminal rows so we never overwrite an already-acked or
+ * already-failed entry (mirrors the guard in failDelivery). */
 export async function moveToFailed(id: string, stateDir?: string): Promise<void> {
   const db = getLifecycleDb(stateDir);
   try {
@@ -307,7 +309,7 @@ export async function moveToFailed(id: string, stateDir?: string): Promise<void>
              error_class='terminal',
              terminal_reason=COALESCE(terminal_reason,'moved to failed'),
              completed_at=?
-       WHERE id=?`,
+       WHERE id=? AND status IN ('queued','failed_retryable')`,
     ).run(Date.now(), id);
   } catch (err) {
     logVerbose(`delivery-queue: moveToFailed failed: ${String(err)}`);
