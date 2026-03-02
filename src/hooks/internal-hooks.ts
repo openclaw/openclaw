@@ -19,6 +19,8 @@ export type AgentBootstrapHookContext = {
   sessionKey?: string;
   sessionId?: string;
   agentId?: string;
+  /** Resolved model (provider and model name) for this session */
+  resolvedModel?: { provider: string; model: string };
 };
 
 export type AgentBootstrapHookEvent = InternalHookEvent & {

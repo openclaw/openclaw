@@ -539,6 +539,7 @@ export async function runEmbeddedAttempt(
         config: params.config,
         sessionKey: params.sessionKey,
         sessionId: params.sessionId,
+        resolvedModel: { provider: params.provider, model: params.modelId },
         warn: makeBootstrapWarn({ sessionLabel, warn: (message) => log.warn(message) }),
         contextMode: params.bootstrapContextMode,
         runKind: params.bootstrapContextRunKind,

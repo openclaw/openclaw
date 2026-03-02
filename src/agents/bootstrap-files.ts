@@ -67,6 +67,7 @@ export async function resolveBootstrapFilesForRun(params: {
   sessionKey?: string;
   sessionId?: string;
   agentId?: string;
+  resolvedModel?: { provider: string; model: string };
   warn?: (message: string) => void;
   contextMode?: BootstrapContextMode;
   runKind?: BootstrapContextRunKind;
@@ -91,6 +92,7 @@ export async function resolveBootstrapFilesForRun(params: {
     sessionKey: params.sessionKey,
     sessionId: params.sessionId,
     agentId: params.agentId,
+    resolvedModel: params.resolvedModel,
   });
   return sanitizeBootstrapFiles(updated, params.warn);
 }
@@ -101,6 +103,7 @@ export async function resolveBootstrapContextForRun(params: {
   sessionKey?: string;
   sessionId?: string;
   agentId?: string;
+  resolvedModel?: { provider: string; model: string };
   warn?: (message: string) => void;
   contextMode?: BootstrapContextMode;
   runKind?: BootstrapContextRunKind;
