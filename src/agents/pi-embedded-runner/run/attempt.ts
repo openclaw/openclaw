@@ -1186,6 +1186,7 @@ export async function runEmbeddedAttempt(
         enforceFinalTag: params.enforceFinalTag,
         config: params.config,
         sessionKey: sandboxSessionKey,
+        agentId: sessionAgentId,
       });
 
       const {
