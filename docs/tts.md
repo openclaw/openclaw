@@ -23,12 +23,12 @@ It works anywhere OpenClaw can send audio; Telegram gets a round voice-note bubb
 Edge TTS uses Microsoft Edge's online neural TTS service via the `node-edge-tts`
 library. It's a hosted service (not local), uses Microsoft’s endpoints, and does
 not require an API key. `node-edge-tts` exposes speech configuration options and
-output formats, but not all options are supported by the Edge service. citeturn2search0
+output formats, but not all options are supported by the Edge service.
 
 Because Edge TTS is a public web service without a published SLA or quota, treat it
 as best-effort. If you need guaranteed limits and support, use OpenAI or ElevenLabs.
-Microsoft's Speech REST API documents a 10‑minute audio limit per request; Edge TTS
-does not publish limits, so assume similar or lower limits. citeturn0search3
+Microsoft's Speech REST API documents a 10-minute audio limit per request; Edge TTS
+does not publish limits, so assume similar or lower limits.
 
 ## Optional keys
 
@@ -65,6 +65,7 @@ when no OpenAI or ElevenLabs API keys are available.
 
 TTS config lives under `messages.tts` in `openclaw.json`.
 Full schema is in [Gateway configuration](/gateway/configuration).
+Discord voice can override the same shape at `channels.discord.voice.tts` (merged over `messages.tts` for Discord voice playback).
 
 ### Minimal config (enable + provider)
 
@@ -93,8 +94,14 @@ Full schema is in [Gateway configuration](/gateway/configuration).
       },
       openai: {
         apiKey: "openai_api_key",
+        baseUrl: "https://api.openai.com/v1", // optional; also supports custom OpenAI-compatible endpoints
         model: "gpt-4o-mini-tts",
         voice: "alloy",
+        responseFormat: "mp3", // mp3 | opus | aac | flac | wav | pcm
+        speed: 1.0, // 0.25..4.0
+        instructions: "Speak in a calm and concise tone.",
+        stream: false,
+        streamFormat: "audio", // audio | sse
       },
       elevenlabs: {
         apiKey: "elevenlabs_api_key",
@@ -215,6 +222,21 @@ Then run:
 - `timeoutMs`: request timeout (ms).
 - `prefsPath`: override the local prefs JSON path (provider/limit/summary).
 - `apiKey` values fall back to env vars (`ELEVENLABS_API_KEY`/`XI_API_KEY`, `OPENAI_API_KEY`).
+- `openai.baseUrl`: optional OpenAI-compatible TTS base URL (defaults to `https://api.openai.com/v1`).
+  - When the effective base URL is the default OpenAI endpoint, model/voice/feature validation remains strict.
+  - When using a custom OpenAI-compatible endpoint, model/voice validation is relaxed to support local/custom providers.
+- `openai.instructions`: optional `/audio/speech` instructions string (supported by `gpt-4o-mini-tts` on the default OpenAI endpoint).
+- `openai.stream`: request stream mode from OpenAI.
+  - Default is `false` to keep buffered/file behavior unchanged.
+  - On stream request failures, OpenClaw falls back to buffered requests.
+- `openai.responseFormat`: OpenAI audio output format (`mp3`, `opus`, `aac`, `flac`, `wav`, `pcm`).
+  - For message playback, prefer `mp3|opus|aac|flac|wav`.
+  - `pcm` is reserved for telephony output paths.
+  - If upstream returns a different known format than requested, OpenClaw fails with an actionable error instead of writing ambiguous output.
+- `openai.speed`: OpenAI speech speed multiplier (`0.25..4.0`, default `1.0`).
+- `openai.streamFormat`: OpenAI stream payload mode (`audio|sse`).
+  - OpenClaw playback supports `audio`.
+  - `sse` is exposed for compatibility but currently rejected by playback/runtime paths with a clear error.
 - `elevenlabs.baseUrl`: override ElevenLabs API base URL.
 - `elevenlabs.voiceSettings`:
   - `stability`, `similarityBoost`, `style`: `0..1`
@@ -259,6 +281,11 @@ Available directive keys (when enabled):
 - `provider` (`openai` | `elevenlabs` | `edge`, requires `allowProvider: true`)
 - `voice` (OpenAI voice) or `voiceId` (ElevenLabs)
 - `model` (OpenAI TTS model or ElevenLabs model id)
+- `instructions` (OpenAI only; requires `modelOverrides.allowInstructions`)
+- `stream` (`true|false`, OpenAI only; requires `modelOverrides.allowStream`)
+- `responseFormat` (`mp3|opus|aac|flac|wav|pcm`, OpenAI only; requires `modelOverrides.allowResponseFormat`)
+- `openai_speed` (`0.25..4.0`, OpenAI only; requires `modelOverrides.allowSpeed`)
+- `streamFormat` (`audio|sse`, OpenAI only; requires `modelOverrides.allowStreamFormat`)
 - `stability`, `similarityBoost`, `style`, `speed`, `useSpeakerBoost`
 - `applyTextNormalization` (`auto|on|off`)
 - `languageCode` (ISO 639-1)
@@ -317,10 +344,10 @@ These override `messages.tts.*` for that host.
   - 44.1kHz / 128kbps is the default balance for speech clarity.
 - **Edge TTS**: uses `edge.outputFormat` (default `audio-24khz-48kbitrate-mono-mp3`).
   - `node-edge-tts` accepts an `outputFormat`, but not all formats are available
-    from the Edge service. citeturn2search0
-  - Output format values follow Microsoft Speech output formats (including Ogg/WebM Opus). citeturn1search0
+    from the Edge service.
+  - Output format values follow Microsoft Speech output formats (including Ogg/WebM Opus).
   - Telegram `sendVoice` accepts OGG/MP3/M4A; use OpenAI/ElevenLabs if you need
-    guaranteed Opus voice notes. citeturn1search1
+    guaranteed Opus voice notes.
   - If the configured Edge output format fails, OpenClaw retries with MP3.
 
 OpenAI/ElevenLabs formats are fixed; Telegram expects Opus for voice-note UX.
@@ -387,6 +414,15 @@ The `tts` tool converts text to speech and returns a `MEDIA:` path. When the
 result is Telegram-compatible, the tool includes `[[audio_as_voice]]` so
 Telegram sends a voice bubble.
 
+Tool params also accept OpenAI one-off overrides:
+
+- `instructions` (string)
+- `stream` (boolean; buffered fallback stays enabled)
+- Safety checks:
+  - empty `instructions` values are ignored
+  - non-OpenAI providers ignore OpenAI-specific overrides
+  - if stream mode fails, OpenClaw automatically retries buffered output
+
 ## Gateway RPC
 
 Gateway methods:
@@ -397,3 +433,12 @@ Gateway methods:
 - `tts.convert`
 - `tts.setProvider`
 - `tts.providers`
+
+`tts.convert` supports OpenAI runtime overrides:
+
+- `instructions` (string): one-off OpenAI speech instructions.
+- `stream` (boolean): one-off OpenAI stream request (still returns buffered file output; failed stream attempts automatically retry buffered).
+- Safety checks:
+  - blank `text` is rejected
+  - blank `channel` / `instructions` are treated as unset
+  - invalid `stream` types are ignored (must be boolean)

@@ -1569,8 +1569,14 @@ Batches rapid text-only messages from the same sender into a single agent turn. 
       },
       openai: {
         apiKey: "openai_api_key",
+        baseUrl: "https://api.openai.com/v1", // optional OpenAI-compatible endpoint
         model: "gpt-4o-mini-tts",
         voice: "alloy",
+        responseFormat: "mp3", // mp3 | opus | aac | flac | wav | pcm
+        speed: 1.0, // 0.25..4.0
+        instructions: "Speak in a calm and concise tone.",
+        stream: false,
+        streamFormat: "audio", // audio | sse
       },
     },
   },
@@ -1580,6 +1586,13 @@ Batches rapid text-only messages from the same sender into a single agent turn. 
 - `auto` controls auto-TTS. `/tts off|always|inbound|tagged` overrides per session.
 - `summaryModel` overrides `agents.defaults.model.primary` for auto-summary.
 - `modelOverrides` is enabled by default; `modelOverrides.allowProvider` defaults to `false` (opt-in).
+- `openai.baseUrl` sets an optional OpenAI-compatible API base URL (default: `https://api.openai.com/v1`).
+- `openai.instructions` passes optional style instructions to OpenAI `/audio/speech` (supported by `gpt-4o-mini-tts` on the default OpenAI endpoint).
+- `openai.stream` requests OpenAI stream mode; buffered workflows remain the default unless stream handling is explicitly enabled.
+- `openai.responseFormat` sets OpenAI output format (`mp3|opus|aac|flac|wav|pcm`). For message playback, use compressed/container formats; `pcm` is intended for telephony-oriented outputs.
+- `openai.speed` sets OpenAI speech speed (`0.25..4.0`, default `1.0`).
+- `openai.streamFormat` sets stream payload mode (`audio|sse`) when stream mode is enabled. OpenClaw playback currently supports `audio` and rejects `sse` with an actionable error.
+- OpenAI model/voice/feature validation stays strict on `https://api.openai.com/v1` and relaxes model/voice checks when `openai.baseUrl` points to a custom OpenAI-compatible endpoint.
 - API keys fall back to `ELEVENLABS_API_KEY`/`XI_API_KEY` and `OPENAI_API_KEY`.
 
 ---

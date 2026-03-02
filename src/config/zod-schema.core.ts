@@ -373,6 +373,11 @@ export const TtsConfigSchema = z
         allowVoiceSettings: z.boolean().optional(),
         allowNormalization: z.boolean().optional(),
         allowSeed: z.boolean().optional(),
+        allowInstructions: z.boolean().optional(),
+        allowStream: z.boolean().optional(),
+        allowResponseFormat: z.boolean().optional(),
+        allowSpeed: z.boolean().optional(),
+        allowStreamFormat: z.boolean().optional(),
       })
       .strict()
       .optional(),
@@ -401,8 +406,14 @@ export const TtsConfigSchema = z
     openai: z
       .object({
         apiKey: z.string().optional().register(sensitive),
+        baseUrl: z.string().optional(),
         model: z.string().optional(),
         voice: z.string().optional(),
+        instructions: z.string().optional(),
+        stream: z.boolean().optional(),
+        responseFormat: z.enum(["mp3", "opus", "aac", "flac", "wav", "pcm"]).optional(),
+        speed: z.number().min(0.25).max(4).optional(),
+        streamFormat: z.enum(["audio", "sse"]).optional(),
       })
       .strict()
       .optional(),

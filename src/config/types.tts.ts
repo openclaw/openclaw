@@ -3,6 +3,8 @@ export type TtsProvider = "elevenlabs" | "openai" | "edge";
 export type TtsMode = "final" | "all";
 
 export type TtsAutoMode = "off" | "always" | "inbound" | "tagged";
+export type OpenAiTtsResponseFormat = "mp3" | "opus" | "aac" | "flac" | "wav" | "pcm";
+export type OpenAiTtsStreamFormat = "audio" | "sse";
 
 export type TtsModelOverrideConfig = {
   /** Enable model-provided overrides for TTS. */
@@ -21,6 +23,16 @@ export type TtsModelOverrideConfig = {
   allowNormalization?: boolean;
   /** Allow model-provided seed override. */
   allowSeed?: boolean;
+  /** Allow model-provided OpenAI instructions override. */
+  allowInstructions?: boolean;
+  /** Allow model-provided OpenAI streaming-mode override. */
+  allowStream?: boolean;
+  /** Allow model-provided OpenAI response format override. */
+  allowResponseFormat?: boolean;
+  /** Allow model-provided OpenAI speed override. */
+  allowSpeed?: boolean;
+  /** Allow model-provided OpenAI stream format override. */
+  allowStreamFormat?: boolean;
 };
 
 export type TtsConfig = {
@@ -56,8 +68,20 @@ export type TtsConfig = {
   /** OpenAI configuration. */
   openai?: {
     apiKey?: string;
+    /** Optional OpenAI-compatible base URL (e.g. https://api.openai.com/v1). */
+    baseUrl?: string;
     model?: string;
     voice?: string;
+    /** Optional style instructions passed to OpenAI /audio/speech. */
+    instructions?: string;
+    /** Request stream-mode responses from OpenAI /audio/speech when supported. */
+    stream?: boolean;
+    /** OpenAI output format. */
+    responseFormat?: OpenAiTtsResponseFormat;
+    /** OpenAI playback speed multiplier (0.25..4.0). */
+    speed?: number;
+    /** OpenAI streaming payload format when stream=true. */
+    streamFormat?: OpenAiTtsStreamFormat;
   };
   /** Microsoft Edge (node-edge-tts) configuration. */
   edge?: {

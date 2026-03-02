@@ -1258,6 +1258,28 @@ export const FIELD_HELP: Record<string, string> = {
     "Removes the acknowledgment reaction after final reply delivery when enabled. Keep enabled for cleaner UX in channels where persistent ack reactions create clutter.",
   "messages.tts":
     "Text-to-speech policy for reading agent replies aloud on supported voice or audio surfaces. Keep disabled unless voice playback is part of your operator/user workflow.",
+  "messages.tts.openai.baseUrl":
+    "Optional OpenAI-compatible base URL for TTS requests. Default is https://api.openai.com/v1. Model/voice/feature validation stays strict on the default endpoint and relaxes for custom endpoints.",
+  "messages.tts.openai.instructions":
+    "Optional OpenAI /audio/speech instructions string to shape delivery style. This is supported by gpt-4o-mini-tts on the default OpenAI endpoint.",
+  "messages.tts.openai.stream":
+    "Enable OpenAI /audio/speech stream mode for TTS requests when supported. Buffered workflows remain default unless stream handling is explicitly requested.",
+  "messages.tts.openai.responseFormat":
+    'OpenAI /audio/speech output format: "mp3", "opus", "aac", "flac", "wav", or "pcm". For chat/audio playback paths, use compressed formats (mp3/opus/aac/flac/wav); raw pcm is reserved for telephony-oriented pipelines.',
+  "messages.tts.openai.speed":
+    "OpenAI /audio/speech speed multiplier (0.25 to 4.0). Keep near 1.0 for natural delivery and adjust cautiously for intelligibility.",
+  "messages.tts.openai.streamFormat":
+    'OpenAI stream payload format when stream mode is enabled: "audio" or "sse". OpenClaw streaming playback currently supports audio streams; use sse only if your consumer handles SSE audio events.',
+  "messages.tts.modelOverrides.allowInstructions":
+    "Allow model-emitted [[tts:instructions=...]] overrides for one reply when directive overrides are enabled.",
+  "messages.tts.modelOverrides.allowStream":
+    "Allow model-emitted [[tts:stream=true|false]] overrides for one reply when directive overrides are enabled.",
+  "messages.tts.modelOverrides.allowResponseFormat":
+    "Allow model-emitted [[tts:responseFormat=...]] overrides for one reply when directive overrides are enabled.",
+  "messages.tts.modelOverrides.allowSpeed":
+    "Allow model-emitted [[tts:speed=...]] overrides for one reply when directive overrides are enabled.",
+  "messages.tts.modelOverrides.allowStreamFormat":
+    "Allow model-emitted [[tts:streamFormat=audio|sse]] overrides for one reply when directive overrides are enabled.",
   channels:
     "Channel provider configurations plus shared defaults that control access policies, heartbeat visibility, and per-surface behavior. Keep defaults centralized and override per provider only where required.",
   "channels.telegram":
@@ -1440,6 +1462,12 @@ export const FIELD_HELP: Record<string, string> = {
     "Consecutive decrypt failures before DAVE attempts session recovery (passed to @discordjs/voice; default: 24).",
   "channels.discord.voice.tts":
     "Optional TTS overrides for Discord voice playback (merged with messages.tts).",
+  "channels.discord.voice.tts.openai.responseFormat":
+    'Discord voice OpenAI output format override. Accepts "mp3", "opus", "aac", "flac", "wav", or "pcm" and merges over messages.tts.openai.responseFormat.',
+  "channels.discord.voice.tts.openai.speed":
+    "Discord voice OpenAI speed override (0.25 to 4.0), merged over messages.tts.openai.speed.",
+  "channels.discord.voice.tts.openai.streamFormat":
+    'Discord voice OpenAI stream payload format override ("audio" or "sse"), merged over messages.tts.openai.streamFormat.',
   "channels.discord.intents.presence":
     "Enable the Guild Presences privileged intent. Must also be enabled in the Discord Developer Portal. Allows tracking user activities (e.g. Spotify). Default: false.",
   "channels.discord.intents.guildMembers":

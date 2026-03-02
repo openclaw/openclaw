@@ -1,7 +1,10 @@
 import { loadConfig } from "../../config/config.js";
 import {
   OPENAI_TTS_MODELS,
+  OPENAI_TTS_RESPONSE_FORMATS,
+  OPENAI_TTS_STREAM_FORMATS,
   OPENAI_TTS_VOICES,
+  type TtsDirectiveOverrides,
   getTtsProvider,
   isTtsEnabled,
   isTtsProviderConfigured,
@@ -78,8 +81,93 @@ export const ttsHandlers: GatewayRequestHandlers = {
     }
     try {
       const cfg = loadConfig();
-      const channel = typeof params.channel === "string" ? params.channel.trim() : undefined;
-      const result = await textToSpeech({ text, cfg, channel });
+      const channel =
+        typeof params.channel === "string" ? params.channel.trim() || undefined : undefined;
+      const instructions =
+        typeof params.instructions === "string"
+          ? params.instructions.trim() || undefined
+          : undefined;
+      const stream = typeof params.stream === "boolean" ? params.stream : undefined;
+      const responseFormatRaw =
+        typeof params.responseFormat === "string"
+          ? params.responseFormat.trim().toLowerCase()
+          : undefined;
+      if (
+        responseFormatRaw != null &&
+        !OPENAI_TTS_RESPONSE_FORMATS.includes(
+          responseFormatRaw as (typeof OPENAI_TTS_RESPONSE_FORMATS)[number],
+        )
+      ) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `Invalid responseFormat. Use one of: ${OPENAI_TTS_RESPONSE_FORMATS.join(", ")}.`,
+          ),
+        );
+        return;
+      }
+      const responseFormat = responseFormatRaw as
+        | (typeof OPENAI_TTS_RESPONSE_FORMATS)[number]
+        | undefined;
+      const streamFormatRaw =
+        typeof params.streamFormat === "string"
+          ? params.streamFormat.trim().toLowerCase()
+          : undefined;
+      if (
+        streamFormatRaw != null &&
+        !OPENAI_TTS_STREAM_FORMATS.includes(
+          streamFormatRaw as (typeof OPENAI_TTS_STREAM_FORMATS)[number],
+        )
+      ) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `Invalid streamFormat. Use one of: ${OPENAI_TTS_STREAM_FORMATS.join(", ")}.`,
+          ),
+        );
+        return;
+      }
+      const streamFormat = streamFormatRaw as
+        | (typeof OPENAI_TTS_STREAM_FORMATS)[number]
+        | undefined;
+      const speedRaw =
+        typeof params.speed === "number"
+          ? params.speed
+          : typeof params.speed === "string"
+            ? Number.parseFloat(params.speed)
+            : undefined;
+      if (speedRaw != null && (!Number.isFinite(speedRaw) || speedRaw < 0.25 || speedRaw > 4)) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "Invalid speed. Use a number between 0.25 and 4.0.",
+          ),
+        );
+        return;
+      }
+      const overrides: TtsDirectiveOverrides | undefined =
+        instructions != null ||
+        stream !== undefined ||
+        responseFormat != null ||
+        streamFormat != null ||
+        speedRaw != null
+          ? {
+              openai: {
+                ...(instructions != null ? { instructions } : {}),
+                ...(stream !== undefined ? { stream } : {}),
+                ...(responseFormat != null ? { responseFormat } : {}),
+                ...(streamFormat != null ? { streamFormat } : {}),
+                ...(speedRaw != null ? { speed: speedRaw } : {}),
+              },
+            }
+          : undefined;
+      const result = await textToSpeech({ text, cfg, channel, overrides });
       if (result.success && result.audioPath) {
         respond(true, {
           audioPath: result.audioPath,

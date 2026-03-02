@@ -235,6 +235,81 @@ describe("broadcast", () => {
   });
 });
 
+describe("messages.tts OpenAI fields", () => {
+  it("accepts full openai speech options and modelOverrides gates", () => {
+    const res = validateConfigObject({
+      messages: {
+        tts: {
+          openai: {
+            model: "gpt-4o-mini-tts",
+            voice: "alloy",
+            instructions: "calm",
+            stream: true,
+            responseFormat: "flac",
+            speed: 1.25,
+            streamFormat: "audio",
+          },
+          modelOverrides: {
+            allowInstructions: true,
+            allowStream: true,
+            allowResponseFormat: true,
+            allowSpeed: true,
+            allowStreamFormat: true,
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects non-boolean openai stream", () => {
+    const res = validateConfigObject({
+      messages: {
+        tts: {
+          openai: {
+            stream: "yes",
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(false);
+  });
+
+  it("rejects invalid openai responseFormat/speed/streamFormat", () => {
+    const responseFormat = validateConfigObject({
+      messages: {
+        tts: {
+          openai: {
+            responseFormat: "ogg",
+          },
+        },
+      },
+    });
+    const speed = validateConfigObject({
+      messages: {
+        tts: {
+          openai: {
+            speed: 8,
+          },
+        },
+      },
+    });
+    const streamFormat = validateConfigObject({
+      messages: {
+        tts: {
+          openai: {
+            streamFormat: "chunked",
+          },
+        },
+      },
+    });
+
+    expect(responseFormat.ok).toBe(false);
+    expect(speed.ok).toBe(false);
+    expect(streamFormat.ok).toBe(false);
+  });
+});
+
 describe("model compat config schema", () => {
   it("accepts full openai-completions compat fields", () => {
     const res = validateConfigObject({
