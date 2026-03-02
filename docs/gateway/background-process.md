@@ -19,6 +19,7 @@ Key parameters:
 - `background` (bool): background immediately
 - `timeout` (seconds, default 1800): kill the process after this timeout
 - `elevated` (bool): run on host if elevated mode is enabled/allowed
+- `wakeOnExit` (bool, default false): trigger an immediate session event run after enqueueing a background exec completion event
 - Need a real TTY? Set `pty: true`.
 - `workdir`, `env`
 
@@ -46,7 +47,7 @@ Config (preferred):
 - `tools.exec.backgroundMs` (default 10000)
 - `tools.exec.timeoutSec` (default 1800)
 - `tools.exec.cleanupMs` (default 1800000)
-- `tools.exec.notifyOnExit` (default true): enqueue a system event + request heartbeat when a backgrounded exec exits.
+- `tools.exec.notifyOnExit` (default true): enqueue a system event when a backgrounded exec exits.
 - `tools.exec.notifyOnExitEmptySuccess` (default false): when true, also enqueue completion events for successful backgrounded runs that produced no output.
 
 ## process tool

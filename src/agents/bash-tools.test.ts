@@ -517,6 +517,22 @@ describe("exec notifyOnExit", () => {
     expect(hasEvent).toBe(true);
   });
 
+  it("coerces notifyOnExit to true when wakeOnExit is requested", async () => {
+    const tool = createNotifyOnExitExecTool({ notifyOnExit: false });
+    const result = await executeExecCommand(tool, echoAfterDelay("notify"), {
+      background: true,
+      wakeOnExit: true,
+    });
+    expect(readTextContent(result.content) ?? "").toContain(
+      "wakeOnExit=true requires notifyOnExit=true",
+    );
+
+    const sessionId = requireRunningSessionId(result);
+    const { finished, hasEvent } = await waitForNotifyEvent(sessionId);
+    expect(finished).toBeTruthy();
+    expect(hasEvent).toBe(true);
+  });
+
   it.each<NotifyNoopCase>(NOOP_NOTIFY_CASES)("$label", runNotifyNoopCase);
 });
 
