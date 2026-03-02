@@ -42,10 +42,12 @@ export type SafeLocalReadResult = {
 
 const SUPPORTS_NOFOLLOW = process.platform !== "win32" && "O_NOFOLLOW" in fsConstants;
 const OPEN_READ_FLAGS = fsConstants.O_RDONLY | (SUPPORTS_NOFOLLOW ? fsConstants.O_NOFOLLOW : 0);
-const OPEN_WRITE_FLAGS =
+const OPEN_WRITE_EXISTING_FLAGS =
+  fsConstants.O_WRONLY | (SUPPORTS_NOFOLLOW ? fsConstants.O_NOFOLLOW : 0);
+const OPEN_WRITE_CREATE_FLAGS =
   fsConstants.O_WRONLY |
   fsConstants.O_CREAT |
-  fsConstants.O_TRUNC |
+  fsConstants.O_EXCL |
   (SUPPORTS_NOFOLLOW ? fsConstants.O_NOFOLLOW : 0);
 
 const ensureTrailingSep = (value: string) => (value.endsWith(path.sep) ? value : value + path.sep);
@@ -301,8 +303,17 @@ export async function writeFileWithinRoot(params: {
   }
 
   let handle: FileHandle;
+  let createdForWrite = false;
   try {
-    handle = await fs.open(ioPath, OPEN_WRITE_FLAGS, 0o600);
+    try {
+      handle = await fs.open(ioPath, OPEN_WRITE_EXISTING_FLAGS, 0o600);
+    } catch (err) {
+      if (!isNotFoundPathError(err)) {
+        throw err;
+      }
+      handle = await fs.open(ioPath, OPEN_WRITE_CREATE_FLAGS, 0o600);
+      createdForWrite = true;
+    }
   } catch (err) {
     if (isNotFoundPathError(err)) {
       throw new SafeOpenError("not-found", "file not found");
@@ -313,6 +324,7 @@ export async function writeFileWithinRoot(params: {
     throw err;
   }
 
+  let openedRealPath: string | null = null;
   try {
     const [stat, lstat] = await Promise.all([handle.stat(), fs.lstat(ioPath)]);
     if (lstat.isSymbolicLink() || !stat.isFile()) {
@@ -326,6 +338,7 @@ export async function writeFileWithinRoot(params: {
     }
 
     const realPath = await fs.realpath(ioPath);
+    openedRealPath = realPath;
     const realStat = await fs.stat(realPath);
     if (!sameFileIdentity(stat, realStat)) {
       throw new SafeOpenError("path-mismatch", "path mismatch");
@@ -337,11 +350,21 @@ export async function writeFileWithinRoot(params: {
       throw new SafeOpenError("outside-workspace", "file is outside workspace root");
     }
 
+    // Truncate only after boundary and identity checks complete. This avoids
+    // irreversible side effects if a symlink target changes before validation.
+    if (!createdForWrite) {
+      await handle.truncate(0);
+    }
     if (typeof params.data === "string") {
       await handle.writeFile(params.data, params.encoding ?? "utf8");
     } else {
       await handle.writeFile(params.data);
     }
+  } catch (err) {
+    if (createdForWrite && err instanceof SafeOpenError && openedRealPath) {
+      await fs.rm(openedRealPath, { force: true }).catch(() => {});
+    }
+    throw err;
   } finally {
     await handle.close().catch(() => {});
   }
