@@ -289,6 +289,7 @@ export async function monitorLineProvider(
   const unregisterHttp = registerPluginHttpRoute({
     path: normalizedPath,
     auth: "plugin",
+    replaceExisting: true,
     pluginId: "line",
     accountId: resolvedAccountId,
     log: (msg) => logVerbose(msg),

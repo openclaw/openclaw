@@ -3,7 +3,6 @@ import type { MarkdownTableMode, OpenClawConfig, OutboundReplyPayload } from "op
 import {
   createScopedPairingAccess,
   createReplyPrefixOptions,
-  registerPluginHttpRoute,
   resolveDirectDmAuthorizationOutcome,
   resolveSenderCommandAuthorizationWithRuntime,
   resolveOutboundMediaUrls,
@@ -77,22 +76,22 @@ function logVerbose(core: ZaloCoreRuntime, runtime: ZaloRuntimeEnv, message: str
 
 export function registerZaloWebhookTarget(target: ZaloWebhookTarget): () => void {
   return registerZaloWebhookTargetInternal(target, {
-    onFirstPathTarget: ({ path }) =>
-      registerPluginHttpRoute({
-        path,
-        pluginId: "zalo",
-        source: "zalo-webhook",
-        accountId: target.account.accountId,
-        log: target.runtime.log,
-        handler: async (req, res) => {
-          const handled = await handleZaloWebhookRequest(req, res);
-          if (!handled && !res.headersSent) {
-            res.statusCode = 404;
-            res.setHeader("Content-Type", "text/plain; charset=utf-8");
-            res.end("Not Found");
-          }
-        },
-      }),
+    route: {
+      auth: "plugin",
+      match: "exact",
+      pluginId: "zalo",
+      source: "zalo-webhook",
+      accountId: target.account.accountId,
+      log: target.runtime.log,
+      handler: async (req, res) => {
+        const handled = await handleZaloWebhookRequest(req, res);
+        if (!handled && !res.headersSent) {
+          res.statusCode = 404;
+          res.setHeader("Content-Type", "text/plain; charset=utf-8");
+          res.end("Not Found");
+        }
+      },
+    },
   });
 }
 
@@ -653,17 +652,7 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
       mediaMaxMb: effectiveMediaMaxMb,
       fetcher,
     });
-    const unregisterRoute = registerPluginHttpRoute({
-      path,
-      auth: "plugin",
-      match: "exact",
-      pluginId: "zalo",
-      accountId: account.accountId,
-      log: (message) => logVerbose(core, runtime, message),
-      handler: handleZaloWebhookRequest,
-    });
     stopHandlers.push(unregister);
-    stopHandlers.push(unregisterRoute);
     abortSignal.addEventListener(
       "abort",
       () => {

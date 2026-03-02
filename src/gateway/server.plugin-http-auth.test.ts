@@ -418,11 +418,36 @@ describe("gateway plugin HTTP auth boundary", () => {
       run: async (server) => {
         for (const variant of buildChannelPathFuzzCorpus()) {
           const response = await sendRequest(server, { path: variant.path });
-          expect(response.res.statusCode, variant.label).not.toBe(200);
-          expect(response.getBody(), variant.label).not.toContain(
-            '"route":"channel-canonicalized"',
-          );
+          expect(response.res.statusCode, variant.label).toBe(401);
+          expect(response.getBody(), variant.label).toContain("Unauthorized");
         }
+        expect(handlePluginRequest).not.toHaveBeenCalled();
+      },
+    });
+  });
+
+  test("enforces auth before plugin handlers on encoded protected-path variants", async () => {
+    const encodedVariants = buildChannelPathFuzzCorpus().filter((variant) =>
+      variant.path.includes("%"),
+    );
+    const handlePluginRequest = vi.fn(async (_req: IncomingMessage, res: ServerResponse) => {
+      res.statusCode = 200;
+      res.setHeader("Content-Type", "application/json; charset=utf-8");
+      res.end(JSON.stringify({ ok: true, route: "should-not-run" }));
+      return true;
+    });
+
+    await withGatewayServer({
+      prefix: "openclaw-plugin-http-auth-encoded-order-test-",
+      resolvedAuth: AUTH_TOKEN,
+      overrides: { handlePluginRequest },
+      run: async (server) => {
+        for (const variant of encodedVariants) {
+          const response = await sendRequest(server, { path: variant.path });
+          expect(response.res.statusCode, variant.label).toBe(401);
+          expect(response.getBody(), variant.label).toContain("Unauthorized");
+        }
+        expect(handlePluginRequest).not.toHaveBeenCalled();
       },
     });
   });

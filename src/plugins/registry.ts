@@ -284,6 +284,12 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     record.gatewayMethods.push(trimmed);
   };
 
+  const describeHttpRouteOwner = (entry: PluginHttpRouteRegistration): string => {
+    const plugin = entry.pluginId?.trim() || "unknown-plugin";
+    const source = entry.source?.trim() || "unknown-source";
+    return `${plugin} (${source})`;
+  };
+
   const registerHttpRoute = (record: PluginRecord, params: OpenClawPluginHttpRouteParams) => {
     const normalizedPath = normalizePluginHttpPath(params.path);
     if (!normalizedPath) {
@@ -295,16 +301,50 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
-    const match = params.match ?? "exact";
-    if (
-      registry.httpRoutes.some((entry) => entry.path === normalizedPath && entry.match === match)
-    ) {
+    if (params.auth !== "gateway" && params.auth !== "plugin") {
       pushDiagnostic({
         level: "error",
         pluginId: record.id,
         source: record.source,
-        message: `http route already registered: ${normalizedPath} (${match})`,
+        message: `http route registration missing or invalid auth: ${normalizedPath}`,
       });
+      return;
+    }
+    const match = params.match ?? "exact";
+    const existingIndex = registry.httpRoutes.findIndex(
+      (entry) => entry.path === normalizedPath && entry.match === match,
+    );
+    if (existingIndex >= 0) {
+      const existing = registry.httpRoutes[existingIndex];
+      if (!existing) {
+        return;
+      }
+      if (!params.replaceExisting) {
+        pushDiagnostic({
+          level: "error",
+          pluginId: record.id,
+          source: record.source,
+          message: `http route already registered: ${normalizedPath} (${match}) by ${describeHttpRouteOwner(existing)}`,
+        });
+        return;
+      }
+      if (existing.pluginId && existing.pluginId !== record.id) {
+        pushDiagnostic({
+          level: "error",
+          pluginId: record.id,
+          source: record.source,
+          message: `http route replacement rejected: ${normalizedPath} (${match}) owned by ${describeHttpRouteOwner(existing)}`,
+        });
+        return;
+      }
+      registry.httpRoutes[existingIndex] = {
+        pluginId: record.id,
+        path: normalizedPath,
+        handler: params.handler,
+        auth: params.auth,
+        match,
+        source: record.source,
+      };
       return;
     }
     record.httpRoutes += 1;
@@ -312,7 +352,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       pluginId: record.id,
       path: normalizedPath,
       handler: params.handler,
-      auth: params.auth ?? "gateway",
+      auth: params.auth,
       match,
       source: record.source,
     });
