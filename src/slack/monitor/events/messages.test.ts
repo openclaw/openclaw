@@ -32,6 +32,7 @@ function createMessageHandlers(overrides?: SlackSystemEventTestOverrides) {
     handleSlackMessage,
   });
   return {
+    harness,
     handler: harness.getHandler("message") as MessageHandler | null,
     handleSlackMessage,
   };
@@ -155,5 +156,46 @@ describe("registerSlackMessageEvents", () => {
 
     expect(handleSlackMessage).toHaveBeenCalledTimes(1);
     expect(messageQueueMock).not.toHaveBeenCalled();
+  });
+
+  it("passes message.channels and message.groups events to the message handler", async () => {
+    messageQueueMock.mockClear();
+    messageAllowMock.mockReset().mockResolvedValue([]);
+    const { harness, handleSlackMessage } = createMessageHandlers({ dmPolicy: "open" });
+    const channelsHandler = harness.getHandler("message.channels") as MessageHandler | null;
+    const groupsHandler = harness.getHandler("message.groups") as MessageHandler | null;
+    expect(channelsHandler).toBeTruthy();
+    expect(groupsHandler).toBeTruthy();
+
+    const channelMessage = {
+      type: "message",
+      channel: "C123",
+      channel_type: "channel",
+      user: "U1",
+      text: "hello from public channel",
+      ts: "123.456",
+    };
+    await channelsHandler!({ event: channelMessage, body: {} });
+    expect(handleSlackMessage).toHaveBeenCalledTimes(1);
+    expect(handleSlackMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ channel: "C123", text: "hello from public channel" }),
+      { source: "message" },
+    );
+
+    handleSlackMessage.mockClear();
+    const groupMessage = {
+      type: "message",
+      channel: "G456",
+      channel_type: "group",
+      user: "U2",
+      text: "hello from private channel",
+      ts: "123.789",
+    };
+    await groupsHandler!({ event: groupMessage, body: {} });
+    expect(handleSlackMessage).toHaveBeenCalledTimes(1);
+    expect(handleSlackMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ channel: "G456", text: "hello from private channel" }),
+      { source: "message" },
+    );
   });
 });

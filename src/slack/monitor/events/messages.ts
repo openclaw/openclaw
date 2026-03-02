@@ -27,75 +27,95 @@ export function registerSlackMessageEvents(params: {
   const resolveThreadBroadcastSenderId = (thread: SlackThreadBroadcastEvent): string | undefined =>
     thread.user ?? thread.message?.user ?? thread.message?.bot_id;
 
-  ctx.app.event("message", async ({ event, body }: SlackEventMiddlewareArgs<"message">) => {
-    try {
-      if (ctx.shouldDropMismatchedSlackEvent(body)) {
-        return;
-      }
-
-      const message = event as SlackMessageEvent;
-      if (message.subtype === "message_changed") {
-        const changed = event as SlackMessageChangedEvent;
-        const channelId = changed.channel;
-        const ingressContext = await authorizeAndResolveSlackSystemEventContext({
-          ctx,
-          senderId: resolveChangedSenderId(changed),
-          channelId,
-          eventKind: "message_changed",
-        });
-        if (!ingressContext) {
-          return;
-        }
-        const messageId = changed.message?.ts ?? changed.previous_message?.ts;
-        enqueueSystemEvent(`Slack message edited in ${ingressContext.channelLabel}.`, {
-          sessionKey: ingressContext.sessionKey,
-          contextKey: `slack:message:changed:${channelId ?? "unknown"}:${messageId ?? changed.event_ts ?? "unknown"}`,
-        });
-        return;
-      }
-      if (message.subtype === "message_deleted") {
-        const deleted = event as SlackMessageDeletedEvent;
-        const channelId = deleted.channel;
-        const ingressContext = await authorizeAndResolveSlackSystemEventContext({
-          ctx,
-          senderId: resolveDeletedSenderId(deleted),
-          channelId,
-          eventKind: "message_deleted",
-        });
-        if (!ingressContext) {
-          return;
-        }
-        enqueueSystemEvent(`Slack message deleted in ${ingressContext.channelLabel}.`, {
-          sessionKey: ingressContext.sessionKey,
-          contextKey: `slack:message:deleted:${channelId ?? "unknown"}:${deleted.deleted_ts ?? deleted.event_ts ?? "unknown"}`,
-        });
-        return;
-      }
-      if (message.subtype === "thread_broadcast") {
-        const thread = event as SlackThreadBroadcastEvent;
-        const channelId = thread.channel;
-        const ingressContext = await authorizeAndResolveSlackSystemEventContext({
-          ctx,
-          senderId: resolveThreadBroadcastSenderId(thread),
-          channelId,
-          eventKind: "thread_broadcast",
-        });
-        if (!ingressContext) {
-          return;
-        }
-        const messageId = thread.message?.ts ?? thread.event_ts;
-        enqueueSystemEvent(`Slack thread reply broadcast in ${ingressContext.channelLabel}.`, {
-          sessionKey: ingressContext.sessionKey,
-          contextKey: `slack:thread:broadcast:${channelId ?? "unknown"}:${messageId ?? "unknown"}`,
-        });
-        return;
-      }
-
-      await handleSlackMessage(message, { source: "message" });
-    } catch (err) {
-      ctx.runtime.error?.(danger(`slack handler failed: ${String(err)}`));
+  const handleMessageEvent = async (
+    event:
+      | SlackMessageEvent
+      | SlackMessageChangedEvent
+      | SlackMessageDeletedEvent
+      | SlackThreadBroadcastEvent,
+    body: unknown,
+  ) => {
+    if (ctx.shouldDropMismatchedSlackEvent(body)) {
+      return;
     }
-  });
+
+    const message = event as SlackMessageEvent;
+    if (message.subtype === "message_changed") {
+      const changed = event as SlackMessageChangedEvent;
+      const channelId = changed.channel;
+      const ingressContext = await authorizeAndResolveSlackSystemEventContext({
+        ctx,
+        senderId: resolveChangedSenderId(changed),
+        channelId,
+        eventKind: "message_changed",
+      });
+      if (!ingressContext) {
+        return;
+      }
+      const messageId = changed.message?.ts ?? changed.previous_message?.ts;
+      enqueueSystemEvent(`Slack message edited in ${ingressContext.channelLabel}.`, {
+        sessionKey: ingressContext.sessionKey,
+        contextKey: `slack:message:changed:${channelId ?? "unknown"}:${messageId ?? changed.event_ts ?? "unknown"}`,
+      });
+      return;
+    }
+    if (message.subtype === "message_deleted") {
+      const deleted = event as SlackMessageDeletedEvent;
+      const channelId = deleted.channel;
+      const ingressContext = await authorizeAndResolveSlackSystemEventContext({
+        ctx,
+        senderId: resolveDeletedSenderId(deleted),
+        channelId,
+        eventKind: "message_deleted",
+      });
+      if (!ingressContext) {
+        return;
+      }
+      enqueueSystemEvent(`Slack message deleted in ${ingressContext.channelLabel}.`, {
+        sessionKey: ingressContext.sessionKey,
+        contextKey: `slack:message:deleted:${channelId ?? "unknown"}:${deleted.deleted_ts ?? deleted.event_ts ?? "unknown"}`,
+      });
+      return;
+    }
+    if (message.subtype === "thread_broadcast") {
+      const thread = event as SlackThreadBroadcastEvent;
+      const channelId = thread.channel;
+      const ingressContext = await authorizeAndResolveSlackSystemEventContext({
+        ctx,
+        senderId: resolveThreadBroadcastSenderId(thread),
+        channelId,
+        eventKind: "thread_broadcast",
+      });
+      if (!ingressContext) {
+        return;
+      }
+      const messageId = thread.message?.ts ?? thread.event_ts;
+      enqueueSystemEvent(`Slack thread reply broadcast in ${ingressContext.channelLabel}.`, {
+        sessionKey: ingressContext.sessionKey,
+        contextKey: `slack:thread:broadcast:${channelId ?? "unknown"}:${messageId ?? "unknown"}`,
+      });
+      return;
+    }
+
+    await handleSlackMessage(message, { source: "message" });
+  };
+
+  const messageEventTypes = [
+    "message",
+    "message.channels",
+    "message.groups",
+    "message.im",
+    "message.mpim",
+  ] as const;
+  for (const eventType of messageEventTypes) {
+    ctx.app.event(eventType, async ({ event, body }: { event: unknown; body: unknown }) => {
+      try {
+        await handleMessageEvent(event as SlackMessageEvent, body);
+      } catch (err) {
+        ctx.runtime.error?.(danger(`slack handler failed: ${String(err)}`));
+      }
+    });
+  }
 
   ctx.app.event("app_mention", async ({ event, body }: SlackEventMiddlewareArgs<"app_mention">) => {
     try {
