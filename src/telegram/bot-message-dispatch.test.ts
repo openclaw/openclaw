@@ -53,11 +53,15 @@ describe("dispatchTelegramMessage draft streaming", () => {
   });
 
   function createDraftStream(messageId?: number) {
+    let previewRevision = 0;
     return {
-      update: vi.fn(),
-      flush: vi.fn().mockResolvedValue(undefined),
+      update: vi.fn().mockImplementation(() => {
+        previewRevision += 1;
+      }),
+      flush: vi.fn().mockResolvedValue(true),
       messageId: vi.fn().mockReturnValue(messageId),
       previewMode: vi.fn().mockReturnValue("message"),
+      previewRevision: vi.fn().mockImplementation(() => previewRevision),
       clear: vi.fn().mockResolvedValue(undefined),
       stop: vi.fn().mockResolvedValue(undefined),
       forceNewMessage: vi.fn(),
@@ -67,15 +71,18 @@ describe("dispatchTelegramMessage draft streaming", () => {
   function createSequencedDraftStream(startMessageId = 1001) {
     let activeMessageId: number | undefined;
     let nextMessageId = startMessageId;
+    let previewRevision = 0;
     return {
       update: vi.fn().mockImplementation(() => {
         if (activeMessageId == null) {
           activeMessageId = nextMessageId++;
         }
+        previewRevision += 1;
       }),
-      flush: vi.fn().mockResolvedValue(undefined),
+      flush: vi.fn().mockResolvedValue(true),
       messageId: vi.fn().mockImplementation(() => activeMessageId),
       previewMode: vi.fn().mockReturnValue("message"),
+      previewRevision: vi.fn().mockImplementation(() => previewRevision),
       clear: vi.fn().mockResolvedValue(undefined),
       stop: vi.fn().mockResolvedValue(undefined),
       forceNewMessage: vi.fn().mockImplementation(() => {
@@ -1252,15 +1259,20 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
   it("keeps DM draft reasoning block updates in preview flow without sending duplicates", async () => {
     const answerDraftStream = createDraftStream(999);
+    let previewRevision = 0;
     const reasoningDraftStream = {
       update: vi.fn(),
-      flush: vi.fn().mockResolvedValue(undefined),
+      flush: vi.fn().mockResolvedValue(true),
       messageId: vi.fn().mockReturnValue(undefined),
       previewMode: vi.fn().mockReturnValue("draft"),
+      previewRevision: vi.fn().mockImplementation(() => previewRevision),
       clear: vi.fn().mockResolvedValue(undefined),
       stop: vi.fn().mockResolvedValue(undefined),
       forceNewMessage: vi.fn(),
     };
+    reasoningDraftStream.update.mockImplementation(() => {
+      previewRevision += 1;
+    });
     createTelegramDraftStream
       .mockImplementationOnce(() => answerDraftStream)
       .mockImplementationOnce(() => reasoningDraftStream);
@@ -1294,6 +1306,45 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(deliverReplies).not.toHaveBeenCalledWith(
       expect.objectContaining({
         replies: [expect.objectContaining({ text: expect.stringContaining("Reasoning:\nI am") })],
+      }),
+    );
+  });
+
+  it("falls back to normal send when DM draft reasoning flush emits no preview update", async () => {
+    const answerDraftStream = createDraftStream(999);
+    const previewRevision = 0;
+    const reasoningDraftStream = {
+      update: vi.fn(),
+      flush: vi.fn().mockResolvedValue(false),
+      messageId: vi.fn().mockReturnValue(undefined),
+      previewMode: vi.fn().mockReturnValue("draft"),
+      previewRevision: vi.fn().mockReturnValue(previewRevision),
+      clear: vi.fn().mockResolvedValue(undefined),
+      stop: vi.fn().mockResolvedValue(undefined),
+      forceNewMessage: vi.fn(),
+    };
+    createTelegramDraftStream
+      .mockImplementationOnce(() => answerDraftStream)
+      .mockImplementationOnce(() => reasoningDraftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onReasoningStream?.({ text: "Reasoning:\n_step one_" });
+        await replyOptions?.onReasoningEnd?.();
+        await dispatcherOptions.deliver(
+          { text: "Reasoning:\n_step one expanded_" },
+          { kind: "block" },
+        );
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({ context: createReasoningStreamContext(), streamMode: "partial" });
+
+    expect(reasoningDraftStream.flush).toHaveBeenCalled();
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [expect.objectContaining({ text: "Reasoning:\n_step one expanded_" })],
       }),
     );
   });

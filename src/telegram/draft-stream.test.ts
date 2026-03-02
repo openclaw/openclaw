@@ -135,9 +135,51 @@ describe("createTelegramDraftStream", () => {
     stream.update("Hello");
     await stream.flush();
 
-    expect(api.sendMessage).toHaveBeenCalledWith(123, "Hello", undefined);
+    expect(api.sendMessage).toHaveBeenCalledWith(123, "Hello", { message_thread_id: 42 });
     expect(api.sendMessageDraft).not.toHaveBeenCalled();
     expect(api.editMessageText).not.toHaveBeenCalled();
+  });
+
+  it("falls back to message transport when sendMessageDraft is unavailable", async () => {
+    const api = createMockDraftApi();
+    delete (api as { sendMessageDraft?: unknown }).sendMessageDraft;
+    const warn = vi.fn();
+    const stream = createDraftStream(api, {
+      thread: { id: 42, scope: "dm" },
+      previewTransport: "draft",
+      warn,
+    });
+
+    stream.update("Hello");
+    await stream.flush();
+
+    expect(api.sendMessage).toHaveBeenCalledWith(123, "Hello", { message_thread_id: 42 });
+    expect(api.editMessageText).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(
+      "telegram stream preview: sendMessageDraft unavailable; falling back to sendMessage/editMessageText",
+    );
+  });
+
+  it("retries DM message preview send without thread when thread is not found", async () => {
+    const api = createMockDraftApi();
+    api.sendMessage
+      .mockRejectedValueOnce(new Error("400: Bad Request: message thread not found"))
+      .mockResolvedValueOnce({ message_id: 17 });
+    const warn = vi.fn();
+    const stream = createDraftStream(api, {
+      thread: { id: 42, scope: "dm" },
+      previewTransport: "message",
+      warn,
+    });
+
+    stream.update("Hello");
+    await stream.flush();
+
+    expect(api.sendMessage).toHaveBeenNthCalledWith(1, 123, "Hello", { message_thread_id: 42 });
+    expect(api.sendMessage).toHaveBeenNthCalledWith(2, 123, "Hello", undefined);
+    expect(warn).toHaveBeenCalledWith(
+      "telegram stream preview send failed with message_thread_id, retrying without thread",
+    );
   });
 
   it("does not edit or delete messages after DM draft stream finalization", async () => {

@@ -340,9 +340,18 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     if (allowPreviewUpdateForNonFinal && canEditViaPreview) {
       if (isDraftPreviewLane(lane)) {
         // DM draft flow has no message_id to edit; updates are sent via sendMessageDraft.
-        // Treat non-final reasoning blocks as preview updates to avoid duplicate sends.
+        // Only mark as updated when the draft flush actually emits an update.
+        const previewRevisionBeforeFlush = lane.stream?.previewRevision?.() ?? 0;
         lane.stream?.update(text);
         await params.flushDraftLane(lane);
+        const previewUpdated = (lane.stream?.previewRevision?.() ?? 0) > previewRevisionBeforeFlush;
+        if (!previewUpdated) {
+          params.log(
+            `telegram: ${laneName} draft preview update not emitted; falling back to standard send`,
+          );
+          const delivered = await params.sendPayload(params.applyTextToPayload(payload, text));
+          return delivered ? "sent" : "skipped";
+        }
         lane.lastPartialText = text;
         params.markDelivered();
         return "preview-updated";
