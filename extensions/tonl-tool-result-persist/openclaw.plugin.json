@@ -1,0 +1,8 @@
+{
+  "id": "tonl-tool-result-persist",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

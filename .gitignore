@@ -93,6 +93,9 @@ USER.md
 .agent/*.json
 !.agent/workflows/
 /local/
+qdrant-setup/qdrant-memory.env
+qdrant-setup/projects.json
+memory/cron-qdrant-memory.log
 package-lock.json
 .claude/settings.local.json
 .agents/
