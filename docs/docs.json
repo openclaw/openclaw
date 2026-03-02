@@ -184,6 +184,10 @@
       "destination": "/channels/whatsapp"
     },
     {
+      "source": "/providers/models",
+      "destination": "/providers"
+    },
+    {
       "source": "/sandbox",
       "destination": "/cli/sandbox"
     },
@@ -1081,7 +1085,7 @@
             "groups": [
               {
                 "group": "Overview",
-                "pages": ["providers/index", "providers/models"]
+                "pages": ["providers/index"]
               },
               {
                 "group": "Model concepts",
