@@ -194,6 +194,34 @@ describe("exec approval forwarder", () => {
     expect(deliver).not.toHaveBeenCalled();
   });
 
+  it("matches long session keys with tail-bounded regex checks", async () => {
+    const cfg = {
+      approvals: {
+        exec: {
+          enabled: true,
+          mode: "session",
+          sessionFilter: ["discord:tail$"],
+        },
+      },
+    } as OpenClawConfig;
+
+    const { deliver, forwarder } = createForwarder({
+      cfg,
+      resolveSessionTarget: () => ({ channel: "slack", to: "U1" }),
+    });
+
+    const request = {
+      ...baseRequest,
+      request: {
+        ...baseRequest.request,
+        sessionKey: `${"x".repeat(5000)}discord:tail`,
+      },
+    };
+
+    await expect(forwarder.handleRequested(request)).resolves.toBe(true);
+    expect(deliver).toHaveBeenCalledTimes(1);
+  });
+
   it("returns false when all targets are skipped", async () => {
     await expectDiscordSessionTargetRequest({
       cfg: makeSessionCfg({ discordExecApprovalsEnabled: true }),

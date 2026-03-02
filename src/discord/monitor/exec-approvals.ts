@@ -34,6 +34,7 @@ import { createDiscordClient, stripUndefinedFields } from "../send.shared.js";
 import { DiscordUiContainer } from "../ui.js";
 
 const EXEC_APPROVAL_KEY = "execapproval";
+const SESSION_FILTER_REGEX_MAX_INPUT = 2048;
 
 export type { ExecApprovalRequest, ExecApprovalResolved };
 
@@ -367,12 +368,28 @@ export class DiscordExecApprovalHandler {
       if (!session) {
         return false;
       }
+      const head = session.slice(0, SESSION_FILTER_REGEX_MAX_INPUT);
+      const tail =
+        session.length > SESSION_FILTER_REGEX_MAX_INPUT
+          ? session.slice(-SESSION_FILTER_REGEX_MAX_INPUT)
+          : "";
       const matches = config.sessionFilter.some((p) => {
         if (session.includes(p)) {
           return true;
         }
         const regex = compileSafeRegex(p);
-        return regex ? regex.test(session) : false;
+        if (!regex) {
+          return false;
+        }
+        regex.lastIndex = 0;
+        if (regex.test(head)) {
+          return true;
+        }
+        if (tail) {
+          regex.lastIndex = 0;
+          return regex.test(tail);
+        }
+        return false;
       });
       if (!matches) {
         return false;
