@@ -23,6 +23,11 @@ let didRunDoctorConfigFlow = false;
 let configSnapshotPromise: Promise<Awaited<ReturnType<typeof readConfigFileSnapshot>>> | null =
   null;
 
+function resetConfigGuardStateForTests() {
+  didRunDoctorConfigFlow = false;
+  configSnapshotPromise = null;
+}
+
 function formatConfigIssues(issues: Array<{ path: string; message: string }>): string[] {
   return issues.map((issue) => `- ${issue.path || "<root>"}: ${issue.message}`);
 }
@@ -113,3 +118,7 @@ export async function ensureConfigReady(params: {
     params.runtime.exit(1);
   }
 }
+
+export const __test__ = {
+  resetConfigGuardStateForTests,
+};
