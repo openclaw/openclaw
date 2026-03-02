@@ -618,6 +618,7 @@ Run multiple accounts per channel (each with its own `accountId`):
 
 - `default` is used when `accountId` is omitted (CLI + routing).
 - Env tokens only apply to the **default** account.
+- In multi-account setups, `channels.<channel>.botToken` is treated as the default-account token. Define `channels.<channel>.accounts.default` explicitly so default routing stays predictable.
 - Base channel settings apply to all accounts unless overridden per account.
 - Use `bindings[].match.accountId` to route each account to a different agent.
 - If you add a non-default account via `openclaw channels add` (or channel onboarding) while still on a single-account top-level channel config, OpenClaw moves account-scoped top-level single-account values into `channels.<channel>.accounts.default` first so the original account keeps working.

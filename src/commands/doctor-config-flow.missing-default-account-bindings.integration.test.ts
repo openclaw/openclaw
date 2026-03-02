@@ -52,5 +52,9 @@ describe("doctor missing default account binding warning", () => {
       expect.stringContaining("channels.telegram: accounts.default is missing"),
       "Doctor warnings",
     );
+    expect(noteSpy).toHaveBeenCalledWith(
+      expect.stringContaining("channels.telegram.botToken only maps to the default account"),
+      "Doctor warnings",
+    );
   });
 });

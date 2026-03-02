@@ -20,6 +20,7 @@ describe("collectMissingDefaultAccountBindingWarnings", () => {
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain("channels.telegram");
     expect(warnings[0]).toContain("alerts, work");
+    expect(warnings[0]).toContain("channels.telegram.botToken only maps to the default account");
   });
 
   it("does not warn when an explicit account binding exists", () => {
@@ -85,5 +86,22 @@ describe("collectMissingDefaultAccountBindingWarnings", () => {
     };
 
     expect(collectMissingDefaultAccountBindingWarnings(cfg)).toEqual([]);
+  });
+
+  it("does not append telegram-specific guidance for non-telegram channels", () => {
+    const cfg = {
+      channels: {
+        discord: {
+          accounts: {
+            alerts: {},
+          },
+        },
+      },
+      bindings: [{ agentId: "ops", match: { channel: "discord" } }],
+    } as OpenClawConfig;
+
+    const warnings = collectMissingDefaultAccountBindingWarnings(cfg);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).not.toContain("channels.telegram.botToken");
   });
 });
