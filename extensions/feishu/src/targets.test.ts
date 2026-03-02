@@ -17,6 +17,10 @@ describe("resolveReceiveIdType", () => {
   it("treats explicit group targets as chat_id", () => {
     expect(resolveReceiveIdType("group:oc_123")).toBe("chat_id");
   });
+
+  it("treats dm-prefixed open IDs as open_id", () => {
+    expect(resolveReceiveIdType("dm:ou_123")).toBe("open_id");
+  });
 });
 
 describe("normalizeFeishuTarget", () => {
