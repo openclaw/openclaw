@@ -283,15 +283,45 @@ async function readOpenedFileSafely(params: {
   };
 }
 
-async function openWritableFileWithinRoot(params: {
-  rootDir: string;
-  relativePath: string;
-  mkdir?: boolean;
-}): Promise<{
+export type SafeWritableOpenResult = {
   handle: FileHandle;
   createdForWrite: boolean;
   openedRealPath: string;
-}> {
+};
+
+export async function resolveOpenedFileRealPathForHandle(
+  handle: FileHandle,
+  ioPath: string,
+): Promise<string> {
+  try {
+    return await fs.realpath(ioPath);
+  } catch (err) {
+    if (!isNotFoundPathError(err)) {
+      throw err;
+    }
+  }
+
+  const fdCandidates =
+    process.platform === "linux"
+      ? [`/proc/self/fd/${handle.fd}`, `/dev/fd/${handle.fd}`]
+      : process.platform === "win32"
+        ? []
+        : [`/dev/fd/${handle.fd}`];
+  for (const fdPath of fdCandidates) {
+    try {
+      return await fs.realpath(fdPath);
+    } catch {
+      // try next fd path
+    }
+  }
+  throw new SafeOpenError("path-mismatch", "unable to resolve opened file path");
+}
+
+export async function openWritableFileWithinRoot(params: {
+  rootDir: string;
+  relativePath: string;
+  mkdir?: boolean;
+}): Promise<SafeWritableOpenResult> {
   const { rootReal, rootWithSep, resolved } = await resolvePathWithinRoot(params);
   try {
     await assertNoPathAliasEscape({
@@ -346,18 +376,29 @@ async function openWritableFileWithinRoot(params: {
 
   let openedRealPath: string | null = null;
   try {
-    const [stat, lstat] = await Promise.all([handle.stat(), fs.lstat(ioPath)]);
-    if (lstat.isSymbolicLink() || !stat.isFile()) {
+    const stat = await handle.stat();
+    if (!stat.isFile()) {
       throw new SafeOpenError("invalid-path", "path is not a regular file under root");
     }
     if (stat.nlink > 1) {
       throw new SafeOpenError("invalid-path", "hardlinked path not allowed");
     }
-    if (!sameFileIdentity(stat, lstat)) {
-      throw new SafeOpenError("path-mismatch", "path changed during write");
+
+    try {
+      const lstat = await fs.lstat(ioPath);
+      if (lstat.isSymbolicLink() || !lstat.isFile()) {
+        throw new SafeOpenError("invalid-path", "path is not a regular file under root");
+      }
+      if (!sameFileIdentity(stat, lstat)) {
+        throw new SafeOpenError("path-mismatch", "path changed during write");
+      }
+    } catch (err) {
+      if (!isNotFoundPathError(err)) {
+        throw err;
+      }
     }
 
-    const realPath = await fs.realpath(ioPath);
+    const realPath = await resolveOpenedFileRealPathForHandle(handle, ioPath);
     openedRealPath = realPath;
     const realStat = await fs.stat(realPath);
     if (!sameFileIdentity(stat, realStat)) {
@@ -381,10 +422,12 @@ async function openWritableFileWithinRoot(params: {
       openedRealPath: realPath,
     };
   } catch (err) {
-    if (createdForWrite && err instanceof SafeOpenError && openedRealPath) {
-      await fs.rm(openedRealPath, { force: true }).catch(() => {});
-    }
+    const cleanupCreatedPath = createdForWrite && err instanceof SafeOpenError;
+    const cleanupPath = openedRealPath ?? ioPath;
     await handle.close().catch(() => {});
+    if (cleanupCreatedPath) {
+      await fs.rm(cleanupPath, { force: true }).catch(() => {});
+    }
     throw err;
   }
 }
