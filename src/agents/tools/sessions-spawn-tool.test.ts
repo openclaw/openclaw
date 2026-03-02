@@ -116,6 +116,31 @@ describe("sessions_spawn tool", () => {
     expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
   });
 
+  it("forwards ACP sandbox options and requester sandbox context", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:subagent:parent",
+      sandboxed: true,
+    });
+
+    await tool.execute("call-2b", {
+      runtime: "acp",
+      task: "investigate",
+      agentId: "codex",
+      sandbox: "require",
+    });
+
+    expect(hoisted.spawnAcpDirectMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        task: "investigate",
+        sandbox: "require",
+      }),
+      expect.objectContaining({
+        agentSessionKey: "agent:main:subagent:parent",
+        sandboxed: true,
+      }),
+    );
+  });
+
   it("rejects attachments for ACP runtime", async () => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
