@@ -144,7 +144,21 @@ jobs:
               -f head="$SYNC_BRANCH" \
               -f base="main" 2>&1); then
               PR_URL=$(echo "$PR_RESPONSE" | jq -r '.html_url')
+              PR_NODE_ID=$(echo "$PR_RESPONSE" | jq -r '.node_id')
               echo "PR created successfully on attempt $attempt: $PR_URL"
+
+              # Enable auto-merge (waits for required status checks to pass)
+              gh api graphql -f query='
+                mutation($prId: ID!) {
+                  enablePullRequestAutoMerge(input: {
+                    pullRequestId: $prId,
+                    mergeMethod: SQUASH
+                  }) { clientMutationId }
+                }
+              ' -f prId="$PR_NODE_ID" \
+                && echo "Auto-merge enabled on PR" \
+                || echo "Warning: could not enable auto-merge"
+
               exit 0
             fi
 
