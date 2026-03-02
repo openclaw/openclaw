@@ -82,6 +82,22 @@ function normalizeFingerprintValue(value: unknown): string | undefined {
   return undefined;
 }
 
+function resolveFingerprintField(
+  record: Record<string, unknown> | undefined,
+  aliases: readonly string[],
+): string | undefined {
+  if (!record) {
+    return undefined;
+  }
+  for (const key of aliases) {
+    const value = normalizeFingerprintValue(record[key]);
+    if (value) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
 export function isLikelyMutatingToolName(toolName: string): boolean {
   const normalized = toolName.trim().toLowerCase();
   if (!normalized) {
@@ -151,23 +167,23 @@ export function buildToolActionFingerprint(
   if (action) {
     parts.push(`action=${action}`);
   }
+  const stableTargetFields: ReadonlyArray<{ key: string; aliases: readonly string[] }> = [
+    { key: "path", aliases: ["path", "filePath", "file_path"] },
+    { key: "oldpath", aliases: ["oldPath", "old_path"] },
+    { key: "newpath", aliases: ["newPath", "new_path"] },
+    { key: "to", aliases: ["to"] },
+    { key: "target", aliases: ["target"] },
+    { key: "messageid", aliases: ["messageId", "message_id"] },
+    { key: "sessionkey", aliases: ["sessionKey", "session_key"] },
+    { key: "jobid", aliases: ["jobId", "job_id"] },
+    { key: "id", aliases: ["id"] },
+    { key: "model", aliases: ["model"] },
+  ];
   let hasStableTarget = false;
-  for (const key of [
-    "path",
-    "filePath",
-    "oldPath",
-    "newPath",
-    "to",
-    "target",
-    "messageId",
-    "sessionKey",
-    "jobId",
-    "id",
-    "model",
-  ]) {
-    const value = normalizeFingerprintValue(record?.[key]);
+  for (const field of stableTargetFields) {
+    const value = resolveFingerprintField(record, field.aliases);
     if (value) {
-      parts.push(`${key.toLowerCase()}=${value}`);
+      parts.push(`${field.key}=${value}`);
       hasStableTarget = true;
     }
   }

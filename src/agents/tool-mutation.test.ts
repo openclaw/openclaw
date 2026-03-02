@@ -37,6 +37,21 @@ describe("tool mutation helpers", () => {
     expect(readFingerprint).toBeUndefined();
   });
 
+  it("normalizes snake_case aliases into stable fingerprint targets", () => {
+    const editFingerprint = buildToolActionFingerprint(
+      "edit",
+      {
+        file_path: "/tmp/demo.txt",
+        old_string: "hello",
+        new_string: "hi",
+      },
+      "edit /tmp/demo.txt",
+    );
+    expect(editFingerprint).toContain("tool=edit");
+    expect(editFingerprint).toContain("path=/tmp/demo.txt");
+    expect(editFingerprint).not.toContain("meta=edit /tmp/demo.txt");
+  });
+
   it("exposes mutation state for downstream payload rendering", () => {
     expect(
       buildToolMutationState("message", { action: "send", to: "telegram:1" }).mutatingAction,
