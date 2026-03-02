@@ -171,7 +171,9 @@ export function resolveFailureDestination(
       // Mode was explicitly overridden - clear inherited 'to' since URL semantics differ
       // between announce (channel recipient) and webhook (HTTP endpoint)
       // But preserve explicit 'to' that was set at job level
-      if (!jobToExplicit && globalConfig?.mode !== jobMode) {
+      // Treat undefined global mode as "announce" for comparison
+      const globalMode = globalConfig?.mode ?? "announce";
+      if (!jobToExplicit && globalMode !== jobMode) {
         to = undefined;
       }
       mode = jobMode;

@@ -606,12 +606,13 @@ function buildFailureAlert(form: CronFormState) {
     channel: form.failureAlertChannel.trim() || CRON_CHANNEL_LAST,
     to: form.failureAlertTo.trim() || undefined,
     ...(cooldownMs !== undefined ? { cooldownMs } : {}),
-    ...(accountId ? { accountId } : {}),
   };
-  // Always include mode so users can switch between webhook/announce
+  // Always include mode and accountId so users can switch/clear them
   if (deliveryMode) {
     patch.mode = deliveryMode;
   }
+  // Include accountId if explicitly set, or send undefined to allow clearing
+  patch.accountId = accountId || undefined;
   return patch;
 }
 
