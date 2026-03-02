@@ -85,6 +85,33 @@ describe("signal createSignalEventHandler inbound contract", () => {
     expect(String(contextWithBody.Body ?? "")).not.toContain("[from:");
   });
 
+  it("ignores non-deliver Signal group update events", async () => {
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        // oxlint-disable-next-line typescript/no-explicit-any
+        cfg: { messages: { inbound: { debounceMs: 0 } } } as any,
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        dataMessage: {
+          message: "Alice changed group settings",
+          attachments: [],
+          groupInfo: {
+            groupId: "g1",
+            groupName: "Test Group",
+            type: "UPDATE",
+          },
+        },
+      }),
+    );
+
+    expect(capture.ctx).toBeUndefined();
+    expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+  });
+
   it("normalizes direct chat To/OriginatingTo targets to canonical Signal ids", async () => {
     const handler = createSignalEventHandler(
       createBaseSignalEventHandlerDeps({

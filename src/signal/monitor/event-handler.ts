@@ -54,6 +54,10 @@ import type {
 import { renderSignalMentions } from "./mentions.js";
 export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
   const inboundDebounceMs = resolveInboundDebounceMs({ cfg: deps.cfg, channel: "signal" });
+  const isDeliverGroupMessageType = (value: string | null | undefined): boolean => {
+    const normalized = value?.trim().toLowerCase();
+    return !normalized || normalized === "deliver";
+  };
 
   type SignalInboundEntry = {
     senderName: string;
@@ -500,6 +504,14 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const groupId = dataMessage.groupInfo?.groupId ?? undefined;
     const groupName = dataMessage.groupInfo?.groupName ?? undefined;
     const isGroup = Boolean(groupId);
+    const groupMessageType = dataMessage.groupInfo?.type ?? undefined;
+
+    if (isGroup && !isDeliverGroupMessageType(groupMessageType)) {
+      logVerbose(
+        `signal: ignoring non-deliver group event type=${String(groupMessageType)} groupId=${groupId}`,
+      );
+      return;
+    }
 
     if (!isGroup) {
       const allowedDirectMessage = await handleSignalDirectMessageAccess({
