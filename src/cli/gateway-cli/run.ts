@@ -160,6 +160,31 @@ function resolveDevResetPaths(env: NodeJS.ProcessEnv = process.env): {
   };
 }
 
+function canonicalizePathForCompare(rawPath: string): string {
+  const resolvedPath = path.resolve(rawPath);
+  try {
+    return fs.realpathSync(resolvedPath);
+  } catch {
+    return resolvedPath;
+  }
+}
+
+function resolveProfileDefaultPaths(
+  profile: string,
+  env: NodeJS.ProcessEnv = process.env,
+): {
+  stateDir: string;
+  configPath: string;
+} {
+  const home = resolveRequiredHomeDir(env, os.homedir);
+  const suffix = profile.toLowerCase() === "default" ? "" : `-${profile}`;
+  const stateDir = path.join(home, `.openclaw${suffix}`);
+  return {
+    stateDir,
+    configPath: path.join(stateDir, "openclaw.json"),
+  };
+}
+
 async function runGatewayCommand(opts: GatewayRunOpts) {
   const envProfile = process.env.OPENCLAW_PROFILE?.trim();
   if (envProfile && !isValidProfileName(envProfile)) {
@@ -180,16 +205,32 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
 
   if (opts.reset && devMode) {
     const paths = resolveDevResetPaths(process.env);
-    const resolvedStateDir = path.resolve(paths.stateDir);
-    const resolvedConfigPath = path.resolve(paths.configPath);
-    const stateIsDefault = resolvedStateDir === path.resolve(paths.defaultStateDir);
-    const configIsDefault = resolvedConfigPath === path.resolve(paths.defaultConfigPath);
-    const stateMatchesDev = resolvedStateDir === path.resolve(paths.expectedDevStateDir);
-    const configMatchesDev = resolvedConfigPath === path.resolve(paths.expectedDevConfigPath);
+    const resolvedStateDir = canonicalizePathForCompare(paths.stateDir);
+    const resolvedConfigPath = canonicalizePathForCompare(paths.configPath);
+    const stateIsDefault = resolvedStateDir === canonicalizePathForCompare(paths.defaultStateDir);
+    const configIsDefault =
+      resolvedConfigPath === canonicalizePathForCompare(paths.defaultConfigPath);
+    const stateMatchesDev =
+      resolvedStateDir === canonicalizePathForCompare(paths.expectedDevStateDir);
+    const configMatchesDev =
+      resolvedConfigPath === canonicalizePathForCompare(paths.expectedDevConfigPath);
+    const profileDefaultPaths = envProfile
+      ? resolveProfileDefaultPaths(envProfile, process.env)
+      : null;
+    const stateMatchesProfileDefault = profileDefaultPaths
+      ? resolvedStateDir === canonicalizePathForCompare(profileDefaultPaths.stateDir)
+      : false;
+    const configMatchesProfileDefault = profileDefaultPaths
+      ? resolvedConfigPath === canonicalizePathForCompare(profileDefaultPaths.configPath)
+      : false;
+    const targetMatchesProfileDefaults = stateMatchesProfileDefault && configMatchesProfileDefault;
     const hasStateOverride = Boolean(process.env.OPENCLAW_STATE_DIR?.trim());
     const hasConfigOverride = Boolean(process.env.OPENCLAW_CONFIG_PATH?.trim());
     const hasExplicitCustomTarget =
-      (hasStateOverride || hasConfigOverride) && !stateIsDefault && !configIsDefault;
+      (hasStateOverride || hasConfigOverride) &&
+      !stateIsDefault &&
+      !configIsDefault &&
+      !targetMatchesProfileDefaults;
 
     if (!hasExplicitCustomTarget && (!stateMatchesDev || !configMatchesDev)) {
       defaultRuntime.error(

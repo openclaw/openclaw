@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createCliRuntimeCapture } from "../test-runtime-capture.js";
@@ -248,5 +250,56 @@ describe("gateway run option collisions", () => {
     await runGatewayCli(["gateway", "run", "--dev", "--reset", "--allow-unconfigured"]);
 
     expect(ensureDevGatewayConfig).toHaveBeenCalledWith({ reset: true });
+  });
+
+  it("hard-stops --dev --reset when state/config match non-dev profile defaults", async () => {
+    vi.stubEnv("HOME", "/Users/test");
+    vi.stubEnv("OPENCLAW_PROFILE", "work");
+    vi.stubEnv("OPENCLAW_STATE_DIR", "/Users/test/.openclaw-work");
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", "/Users/test/.openclaw-work/openclaw.json");
+    resolveStateDir.mockReturnValue("/Users/test/.openclaw-work");
+    resolveConfigPath.mockReturnValue("/Users/test/.openclaw-work/openclaw.json");
+
+    await expectGatewayExit(["gateway", "run", "--dev", "--reset"]);
+
+    expect(ensureDevGatewayConfig).not.toHaveBeenCalled();
+    expect(runtimeErrors.join("\n")).toContain(
+      "Refusing to run `gateway --dev --reset` because the reset target is not dev-isolated.",
+    );
+  });
+
+  it("treats symlinked default paths as default reset targets", async () => {
+    const home = "/Users/test";
+    const defaultStateDir = path.join(home, ".openclaw");
+    const defaultConfigPath = path.join(defaultStateDir, "openclaw.json");
+    const aliasStateDir = path.join(home, ".openclaw-alias");
+    const aliasConfigPath = path.join(aliasStateDir, "openclaw.json");
+    const realpathSpy = vi.spyOn(fs, "realpathSync").mockImplementation((candidate) => {
+      const resolved = path.resolve(String(candidate));
+      if (resolved === path.resolve(aliasStateDir)) {
+        return path.resolve(defaultStateDir);
+      }
+      if (resolved === path.resolve(aliasConfigPath)) {
+        return path.resolve(defaultConfigPath);
+      }
+      return resolved;
+    });
+
+    vi.stubEnv("HOME", home);
+    vi.stubEnv("OPENCLAW_STATE_DIR", aliasStateDir);
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", aliasConfigPath);
+    resolveStateDir.mockReturnValue(aliasStateDir);
+    resolveConfigPath.mockReturnValue(aliasConfigPath);
+
+    try {
+      await expectGatewayExit(["gateway", "run", "--dev", "--reset"]);
+    } finally {
+      realpathSpy.mockRestore();
+    }
+
+    expect(ensureDevGatewayConfig).not.toHaveBeenCalled();
+    expect(runtimeErrors.join("\n")).toContain(
+      "Refusing to run `gateway --dev --reset` because the reset target is not dev-isolated.",
+    );
   });
 });
