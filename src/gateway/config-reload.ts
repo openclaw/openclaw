@@ -59,6 +59,16 @@ const BASE_RELOAD_RULES: ReloadRule[] = [
     kind: "hot",
     actions: ["restart-heartbeat"],
   },
+  {
+    prefix: "agents.defaults.model",
+    kind: "hot",
+    actions: ["restart-heartbeat"],
+  },
+  {
+    prefix: "models",
+    kind: "hot",
+    actions: ["restart-heartbeat"],
+  },
   { prefix: "agent.heartbeat", kind: "hot", actions: ["restart-heartbeat"] },
   { prefix: "cron", kind: "hot", actions: ["restart-cron"] },
   {
@@ -73,7 +83,6 @@ const BASE_RELOAD_RULES_TAIL: ReloadRule[] = [
   { prefix: "identity", kind: "none" },
   { prefix: "wizard", kind: "none" },
   { prefix: "logging", kind: "none" },
-  { prefix: "models", kind: "none" },
   { prefix: "agents", kind: "none" },
   { prefix: "tools", kind: "none" },
   { prefix: "bindings", kind: "none" },
