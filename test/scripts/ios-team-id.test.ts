@@ -70,6 +70,24 @@ exit 0`,
     await writeExecutable(
       path.join(sharedBinDir, "security"),
       `#!/usr/bin/env bash
+if [[ "$1" == "cms" && "$2" == "-D" ]]; then
+  if [[ "$4" == *"one.mobileprovision" ]]; then
+    cat <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict><key>TeamIdentifier</key><array><string>AAAAA11111</string></array></dict></plist>
+PLIST
+    exit 0
+  fi
+  if [[ "$4" == *"two.mobileprovision" ]]; then
+    cat <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict><key>TeamIdentifier</key><array><string>BBBBB22222</string></array></dict></plist>
+PLIST
+    exit 0
+  fi
+fi
 exit 1`,
     );
   });
@@ -92,7 +110,7 @@ exit 1`,
   }
 
   it("falls back to Xcode-managed provisioning profiles when preference teams are empty", async () => {
-    const { homeDir, binDir } = await createHomeDir();
+    const { homeDir } = await createHomeDir();
     await mkdir(path.join(homeDir, "Library", "MobileDevice", "Provisioning Profiles"), {
       recursive: true,
     });
@@ -101,30 +119,9 @@ exit 1`,
       "stub",
     );
 
-    await writeExecutable(
-      path.join(binDir, "security"),
-      `#!/usr/bin/env bash
-if [[ "$1" == "cms" && "$2" == "-D" ]]; then
-  cat <<'PLIST'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>TeamIdentifier</key>
-  <array>
-    <string>ABCDE12345</string>
-  </array>
-</dict>
-</plist>
-PLIST
-  exit 0
-fi
-exit 0`,
-    );
-
     const result = runScript(homeDir);
     expect(result.ok).toBe(true);
-    expect(result.stdout).toBe("ABCDE12345");
+    expect(result.stdout).toBe("AAAAA11111");
   });
 
   it("prints actionable guidance when Xcode account exists but no Team ID is resolvable", async () => {
@@ -152,7 +149,7 @@ exit 1`,
   });
 
   it("honors IOS_PREFERRED_TEAM_ID when multiple profile teams are available", async () => {
-    const { homeDir, binDir } = await createHomeDir();
+    const { homeDir } = await createHomeDir();
     await mkdir(path.join(homeDir, "Library", "MobileDevice", "Provisioning Profiles"), {
       recursive: true,
     });
@@ -163,28 +160,6 @@ exit 1`,
     await writeFile(
       path.join(homeDir, "Library", "MobileDevice", "Provisioning Profiles", "two.mobileprovision"),
       "stub2",
-    );
-
-    await writeExecutable(
-      path.join(binDir, "security"),
-      `#!/usr/bin/env bash
-if [[ "$1" == "cms" && "$2" == "-D" ]]; then
-  if [[ "$4" == *"one.mobileprovision" ]]; then
-    cat <<'PLIST'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict><key>TeamIdentifier</key><array><string>AAAAA11111</string></array></dict></plist>
-PLIST
-    exit 0
-  fi
-  cat <<'PLIST'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict><key>TeamIdentifier</key><array><string>BBBBB22222</string></array></dict></plist>
-PLIST
-  exit 0
-fi
-exit 0`,
     );
 
     const result = runScript(homeDir, { IOS_PREFERRED_TEAM_ID: "BBBBB22222" });
