@@ -135,6 +135,73 @@ describe("memory plugin e2e", () => {
     expect(config?.autoRecall).toBe(true);
   });
 
+  test("registers memory_search and memory_get compatibility tools", async () => {
+    const { default: memoryPlugin } = await import("./index.js");
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const registeredTools: Array<{ tool: any; opts: any }> = [];
+    const mockSearchTool = { name: "memory_search" };
+    const mockGetTool = { name: "memory_get" };
+
+    const mockApi = {
+      id: "memory-lancedb",
+      name: "Memory (LanceDB)",
+      source: "test",
+      config: {},
+      pluginConfig: {
+        embedding: {
+          apiKey: OPENAI_API_KEY,
+          model: "text-embedding-3-small",
+        },
+        dbPath,
+        autoCapture: false,
+        autoRecall: false,
+      },
+      runtime: {
+        tools: {
+          createMemorySearchTool: () => mockSearchTool,
+          createMemoryGetTool: () => mockGetTool,
+          registerMemoryCli: () => {},
+        },
+      },
+      logger: {
+        info: () => {},
+        warn: () => {},
+        error: () => {},
+        debug: () => {},
+      },
+      // oxlint-disable-next-line typescript/no-explicit-any
+      registerTool: (tool: any, opts: any) => {
+        registeredTools.push({ tool, opts });
+      },
+      // oxlint-disable-next-line typescript/no-explicit-any
+      registerCli: () => {},
+      // oxlint-disable-next-line typescript/no-explicit-any
+      registerService: () => {},
+      // oxlint-disable-next-line typescript/no-explicit-any
+      on: () => {},
+      resolvePath: (p: string) => p,
+    };
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    memoryPlugin.register(mockApi as any);
+
+    const compatibilityRegistration = registeredTools.find(
+      (entry) =>
+        Array.isArray(entry.opts?.names) &&
+        entry.opts.names.includes("memory_search") &&
+        entry.opts.names.includes("memory_get"),
+    );
+    expect(compatibilityRegistration).toBeDefined();
+    expect(typeof compatibilityRegistration?.tool).toBe("function");
+
+    const created = compatibilityRegistration?.tool({
+      config: {},
+      sessionKey: "session-test",
+    });
+    expect(created).toEqual([mockSearchTool, mockGetTool]);
+  });
+
   test("shouldCapture applies real capture rules", async () => {
     const { shouldCapture } = await import("./index.js");
 
@@ -273,7 +340,7 @@ describeLive("memory plugin live tests", () => {
     memoryPlugin.register(mockApi as any);
 
     // Check registration
-    expect(registeredTools.length).toBe(3);
+    expect(registeredTools.length).toBe(4);
     expect(registeredTools.map((t) => t.opts?.name)).toContain("memory_recall");
     expect(registeredTools.map((t) => t.opts?.name)).toContain("memory_store");
     expect(registeredTools.map((t) => t.opts?.name)).toContain("memory_forget");
