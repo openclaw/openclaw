@@ -27,7 +27,7 @@ If you want "OpenClaw 24/7 for ~17 EUR/month in Europe", this is a fully automat
 
 ## Quick path (experienced operators)
 
-1. Fork [this deployment repo](https://github.com/Destynova2/fmj)
+1. Fork [this deployment repo](https://github.com/Destynova2/openclaw-scaleway)
 2. Create Scaleway API key (Organization scope) + GitHub OAuth App
 3. `cp terraform/terraform.tfvars.example terraform/terraform.tfvars` — fill in variables
 4. `cd terraform/bootstrap && tofu init && tofu apply -var-file=../terraform.tfvars`
@@ -46,8 +46,8 @@ If you want "OpenClaw 24/7 for ~17 EUR/month in Europe", this is a fully automat
 ## 1) Fork the deployment repo
 
 ```bash
-gh repo fork Destynova2/fmj --clone
-cd fmj
+gh repo fork Destynova2/openclaw-scaleway --clone
+cd openclaw-scaleway
 ```
 
 ## 2) Configure variables
@@ -69,6 +69,7 @@ Edit `terraform/terraform.tfvars` and fill in:
 Create `terraform/backend.conf`:
 
 ```hcl
+bucket     = "your-unique-bucket-name"
 access_key = "SCWXXXXXXXXXXXXXXXXX"
 secret_key = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 ```
