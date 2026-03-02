@@ -33,4 +33,15 @@ describe("parseIdentityMarkdown", () => {
       avatar: "avatars/openclaw.png",
     });
   });
+
+  it("parses avatar with full-width separators and localized labels", () => {
+    const content = `
+- **Avatar：** avatars/openclaw-en.png
+- **头像：**avatars/openclaw-zh.webp
+`;
+    const parsed = parseIdentityMarkdown(content);
+    expect(parsed).toEqual({
+      avatar: "avatars/openclaw-zh.webp",
+    });
+  });
 });
