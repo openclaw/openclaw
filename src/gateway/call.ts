@@ -258,6 +258,34 @@ function resolveGatewayCredentials(context: ResolvedGatewayCallContext): {
   });
 }
 
+function resolveGatewayCredentialsFallback(
+  context: ResolvedGatewayCallContext,
+  used: { token?: string; password?: string },
+): { token?: string; password?: string } | undefined {
+  if (context.isRemoteMode || context.urlOverride) {
+    return undefined;
+  }
+  if (context.explicitAuth.token || context.explicitAuth.password) {
+    return undefined;
+  }
+
+  const fallbackToken = trimToUndefined(context.config.gateway?.auth?.token);
+  const fallbackPassword = trimToUndefined(context.config.gateway?.auth?.password);
+  if (!fallbackToken && !fallbackPassword) {
+    return undefined;
+  }
+  if (used.token === fallbackToken && used.password === fallbackPassword) {
+    return undefined;
+  }
+  return { token: fallbackToken, password: fallbackPassword };
+}
+
+function isGatewayTokenMismatchError(error: unknown): boolean {
+  const message =
+    error instanceof Error ? error.message : typeof error === "string" ? error : String(error);
+  return message.toLowerCase().includes("gateway token mismatch");
+}
+
 async function resolveGatewayTlsFingerprint(params: {
   opts: CallGatewayBaseOptions;
   context: ResolvedGatewayCallContext;
@@ -402,18 +430,35 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
   });
   const url = connectionDetails.url;
   const tlsFingerprint = await resolveGatewayTlsFingerprint({ opts, context, url });
-  const { token, password } = resolveGatewayCredentials(context);
-  return await executeGatewayRequestWithScopes<T>({
-    opts,
-    scopes,
-    url,
-    token,
-    password,
-    tlsFingerprint,
-    timeoutMs,
-    safeTimerTimeoutMs,
-    connectionDetails,
-  });
+  const resolved = resolveGatewayCredentials(context);
+  const attempt = (credentials: { token?: string; password?: string }) =>
+    executeGatewayRequestWithScopes<T>({
+      opts,
+      scopes,
+      url,
+      token: credentials.token,
+      password: credentials.password,
+      tlsFingerprint,
+      timeoutMs,
+      safeTimerTimeoutMs,
+      connectionDetails,
+    });
+
+  try {
+    return await attempt(resolved);
+  } catch (error) {
+    if (!isGatewayTokenMismatchError(error)) {
+      throw error;
+    }
+    const fallback = resolveGatewayCredentialsFallback(context, resolved);
+    if (
+      !fallback ||
+      (fallback.token === resolved.token && fallback.password === resolved.password)
+    ) {
+      throw error;
+    }
+    return await attempt(fallback);
+  }
 }
 
 export async function callGatewayScoped<T = Record<string, unknown>>(
