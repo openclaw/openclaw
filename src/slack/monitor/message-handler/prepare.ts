@@ -51,6 +51,27 @@ import {
 import { resolveSlackRoomContextHints } from "../room-context.js";
 import type { PreparedSlackMessage } from "./types.js";
 
+const mentionRegexCache = new WeakMap<SlackMonitorContext, Map<string, RegExp[]>>();
+
+function resolveCachedMentionRegexes(
+  ctx: SlackMonitorContext,
+  agentId: string | undefined,
+): RegExp[] {
+  const key = agentId?.trim() || "__default__";
+  let byAgent = mentionRegexCache.get(ctx);
+  if (!byAgent) {
+    byAgent = new Map<string, RegExp[]>();
+    mentionRegexCache.set(ctx, byAgent);
+  }
+  const cached = byAgent.get(key);
+  if (cached) {
+    return cached;
+  }
+  const built = buildMentionRegexes(ctx.cfg, agentId);
+  byAgent.set(key, built);
+  return built;
+}
+
 export async function prepareSlackMessage(params: {
   ctx: SlackMonitorContext;
   account: ResolvedSlackAccount;
@@ -205,7 +226,7 @@ export async function prepareSlackMessage(params: {
   const historyKey =
     isThreadReply && ctx.threadHistoryScope === "thread" ? sessionKey : message.channel;
 
-  const mentionRegexes = buildMentionRegexes(cfg, route.agentId);
+  const mentionRegexes = resolveCachedMentionRegexes(ctx, route.agentId);
   const hasAnyMention = /<@[^>]+>/.test(message.text ?? "");
   const explicitlyMentioned = Boolean(
     ctx.botUserId && message.text?.includes(`<@${ctx.botUserId}>`),
