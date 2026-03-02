@@ -188,6 +188,43 @@ function createBedrockNoCacheWrapper(baseStreamFn: StreamFn | undefined): Stream
     });
 }
 
+/**
+ * Create a streamFn wrapper that injects the Anthropic context-1m beta
+ * into Bedrock's additionalModelRequestFields.anthropic_beta.
+ *
+ * Bedrock Converse API does not use HTTP headers for betas — they must be
+ * passed via additionalModelRequestFields in the request body.
+ */
+function createBedrockContext1mWrapper(
+  baseStreamFn: StreamFn | undefined,
+  betas: string[],
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    const originalOnPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      onPayload: (payload) => {
+        if (payload && typeof payload === "object") {
+          const payloadObj = payload as Record<string, unknown>;
+          const existing = payloadObj.additionalModelRequestFields as
+            | Record<string, unknown>
+            | undefined;
+          const existingBetas = Array.isArray(existing?.anthropic_beta)
+            ? (existing!.anthropic_beta as string[])
+            : [];
+          const merged = [...new Set([...existingBetas, ...betas])];
+          payloadObj.additionalModelRequestFields = {
+            ...existing,
+            anthropic_beta: merged,
+          };
+        }
+        originalOnPayload?.(payload);
+      },
+    });
+  };
+}
+
 function isDirectOpenAIBaseUrl(baseUrl: unknown): boolean {
   if (typeof baseUrl !== "string" || !baseUrl.trim()) {
     return false;
@@ -361,7 +398,7 @@ function resolveAnthropicBetas(
   provider: string,
   modelId: string,
 ): string[] | undefined {
-  if (provider !== "anthropic") {
+  if (provider !== "anthropic" && !(provider === "amazon-bedrock" && isAnthropicBedrockModel(modelId))) {
     return undefined;
   }
 
@@ -786,10 +823,17 @@ export function applyExtraParamsToAgent(
 
   const anthropicBetas = resolveAnthropicBetas(merged, provider, modelId);
   if (anthropicBetas?.length) {
-    log.debug(
-      `applying Anthropic beta header for ${provider}/${modelId}: ${anthropicBetas.join(",")}`,
-    );
-    agent.streamFn = createAnthropicBetaHeadersWrapper(agent.streamFn, anthropicBetas);
+    if (provider === "amazon-bedrock") {
+      log.debug(
+        `applying Bedrock additionalModelRequestFields beta for ${provider}/${modelId}: ${anthropicBetas.join(",")}`,
+      );
+      agent.streamFn = createBedrockContext1mWrapper(agent.streamFn, anthropicBetas);
+    } else {
+      log.debug(
+        `applying Anthropic beta header for ${provider}/${modelId}: ${anthropicBetas.join(",")}`,
+      );
+      agent.streamFn = createAnthropicBetaHeadersWrapper(agent.streamFn, anthropicBetas);
+    }
   }
 
   if (shouldApplySiliconFlowThinkingOffCompat({ provider, modelId, thinkingLevel })) {

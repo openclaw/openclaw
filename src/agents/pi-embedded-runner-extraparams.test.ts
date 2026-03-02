@@ -913,6 +913,80 @@ describe("applyExtraParamsToAgent", () => {
     expect(headers).toEqual({ "X-Custom": "1" });
   });
 
+  it("injects context-1m beta via additionalModelRequestFields for Bedrock Anthropic models", () => {
+    const calls: Array<SimpleStreamOptions | undefined> = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      calls.push(options);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "amazon-bedrock/anthropic.claude-opus-4-6-v1": {
+              params: { context1m: true },
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    applyExtraParamsToAgent(agent, cfg, "amazon-bedrock", "anthropic.claude-opus-4-6-v1");
+
+    const model = {
+      api: "amazon-bedrock",
+      provider: "amazon-bedrock",
+      id: "anthropic.claude-opus-4-6-v1",
+    } as Model<"amazon-bedrock">;
+    const context: Context = { messages: [] };
+
+    const payload: Record<string, unknown> = { messages: [] };
+    void agent.streamFn?.(model, context, {
+      onPayload: (p) => Object.assign(payload, p as Record<string, unknown>),
+    });
+
+    expect(payload.additionalModelRequestFields).toEqual({
+      anthropic_beta: ["context-1m-2025-08-07"],
+    });
+  });
+
+  it("does not inject context-1m for non-Anthropic Bedrock models", () => {
+    const calls: Array<SimpleStreamOptions | undefined> = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      calls.push(options);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "amazon-bedrock/amazon.titan-text-express-v1": {
+              params: { context1m: true },
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    applyExtraParamsToAgent(agent, cfg, "amazon-bedrock", "amazon.titan-text-express-v1");
+
+    const model = {
+      api: "amazon-bedrock",
+      provider: "amazon-bedrock",
+      id: "amazon.titan-text-express-v1",
+    } as Model<"amazon-bedrock">;
+    const context: Context = { messages: [] };
+
+    const payload: Record<string, unknown> = { messages: [] };
+    void agent.streamFn?.(model, context, {
+      onPayload: (p) => Object.assign(payload, p as Record<string, unknown>),
+    });
+
+    expect(payload.additionalModelRequestFields).toBeUndefined();
+  });
+
   it("forces store=true for direct OpenAI Responses payloads", () => {
     const payload = runResponsesPayloadMutationCase({
       applyProvider: "openai",
