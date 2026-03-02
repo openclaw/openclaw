@@ -1108,7 +1108,7 @@ describe("runReplyAgent messaging tool suppression", () => {
 });
 
 describe("runReplyAgent reminder commitment guard", () => {
-  function createRun() {
+  function createRun(params?: { sessionKey?: string; omitSessionKey?: boolean }) {
     const typing = createMockTypingController();
     const sessionCtx = {
       Provider: "telegram",
@@ -1156,7 +1156,7 @@ describe("runReplyAgent reminder commitment guard", () => {
       isStreaming: false,
       typing,
       sessionCtx,
-      sessionKey: "main",
+      ...(params?.omitSessionKey ? {} : { sessionKey: params?.sessionKey ?? "main" }),
       defaultModel: "anthropic/claude-opus-4-5",
       resolvedVerboseLevel: "off",
       isNewSession: false,
@@ -1271,6 +1271,48 @@ describe("runReplyAgent reminder commitment guard", () => {
     const result = await createRun();
     expect(result).toMatchObject({
       text: "I'll check back in an hour.\n\nNote: I did not schedule a reminder in this turn, so this will not trigger automatically.",
+    });
+  });
+
+  it("still appends guard note when sessionKey is missing", async () => {
+    loadCronStoreMock.mockResolvedValueOnce({
+      version: 1,
+      jobs: [
+        {
+          id: "existing-job",
+          name: "monitor-task",
+          enabled: true,
+          sessionKey: "main",
+          createdAtMs: Date.now() - 60_000,
+          updatedAtMs: Date.now() - 60_000,
+        },
+      ],
+    });
+
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "I'll ping you later." }],
+      meta: {},
+      successfulCronAdds: 0,
+    });
+
+    const result = await createRun({ omitSessionKey: true });
+    expect(result).toMatchObject({
+      text: "I'll ping you later.\n\nNote: I did not schedule a reminder in this turn, so this will not trigger automatically.",
+    });
+  });
+
+  it("still appends guard note when cron store read fails", async () => {
+    loadCronStoreMock.mockRejectedValueOnce(new Error("store read failed"));
+
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "I'll remind you after lunch." }],
+      meta: {},
+      successfulCronAdds: 0,
+    });
+
+    const result = await createRun({ sessionKey: "main" });
+    expect(result).toMatchObject({
+      text: "I'll remind you after lunch.\n\nNote: I did not schedule a reminder in this turn, so this will not trigger automatically.",
     });
   });
 });
