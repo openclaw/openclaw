@@ -184,6 +184,48 @@ Optional per-id errors:
 }
 ```
 
+### 1Password Environments
+
+This example uses a small wrapper script that implements the exec provider protocol and calls `op environment read` once per batch.
+
+- Script: `scripts/secrets/openclaw-op-environments-resolver`
+- `op` is resolved from `PATH` by default (set `OP_BIN` for an absolute override)
+- Requires 1Password CLI `2.33-beta.02` or newer (`op environment read`)
+- Required: `OP_ENVIRONMENT_ID`
+- Auth: prefers `OP_SERVICE_ACCOUNT_TOKEN`; falls back to desktop auth via `OP_ACCOUNT_NAME`
+
+```json5
+{
+  secrets: {
+    providers: {
+      onepassword_environment: {
+        source: "exec",
+        // Point this at wherever you install the resolver.
+        command: "/usr/local/bin/openclaw-op-environments-resolver",
+        args: [],
+        passEnv: [
+          "OP_ENVIRONMENT_ID",
+          "OP_SERVICE_ACCOUNT_TOKEN",
+          "OP_ACCOUNT_NAME",
+          "PATH",
+          "OP_BIN",
+        ],
+        jsonOnly: true,
+      },
+    },
+  },
+  models: {
+    providers: {
+      openai: {
+        baseUrl: "https://api.openai.com/v1",
+        models: [{ id: "gpt-5", name: "gpt-5" }],
+        apiKey: { source: "exec", provider: "onepassword_environment", id: "OPENAI_API_KEY" },
+      },
+    },
+  },
+}
+```
+
 ### HashiCorp Vault CLI
 
 ```json5
