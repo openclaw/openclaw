@@ -12,17 +12,18 @@ export const whatsappOutbound: ChannelOutboundAdapter = {
   pollMaxOptions: 12,
   resolveTarget: ({ to, allowFrom, mode }) =>
     resolveWhatsAppOutboundTarget({ to, allowFrom, mode }),
-  sendText: async ({ to, text, accountId, deps, gifPlayback }) => {
+  sendText: async ({ to, text, accountId, deps, gifPlayback, sendAsSticker }) => {
     const send =
       deps?.sendWhatsApp ?? (await import("../../../web/outbound.js")).sendMessageWhatsApp;
     const result = await send(to, text, {
       verbose: false,
       accountId: accountId ?? undefined,
       gifPlayback,
+      sendAsSticker,
     });
     return { channel: "whatsapp", ...result };
   },
-  sendMedia: async ({ to, text, mediaUrl, mediaLocalRoots, accountId, deps, gifPlayback }) => {
+  sendMedia: async ({ to, text, mediaUrl, mediaLocalRoots, accountId, deps, gifPlayback, sendAsSticker }) => {
     const send =
       deps?.sendWhatsApp ?? (await import("../../../web/outbound.js")).sendMessageWhatsApp;
     const result = await send(to, text, {
@@ -31,6 +32,7 @@ export const whatsappOutbound: ChannelOutboundAdapter = {
       mediaLocalRoots,
       accountId: accountId ?? undefined,
       gifPlayback,
+      sendAsSticker,
     });
     return { channel: "whatsapp", ...result };
   },
