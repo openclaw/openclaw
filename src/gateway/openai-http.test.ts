@@ -166,6 +166,21 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       }
 
       {
+        mockAgentOnce([{ text: "hello" }]);
+        const res = await postChatCompletions(
+          port,
+          { model: "openclaw", messages: [{ role: "user", content: "hi" }] },
+          { "x-openclaw-message-channel": "custom-client-channel" },
+        );
+        expect(res.status).toBe(200);
+        const opts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
+        expect((opts as { messageChannel?: string } | undefined)?.messageChannel).toBe(
+          "custom-client-channel",
+        );
+        await res.text();
+      }
+
+      {
         await expectAgentSessionKeyMatch({
           body: {
             model: "openclaw:beta",
