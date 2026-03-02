@@ -17,6 +17,35 @@ function hasLegacyThreadBindingTtlInAccounts(value: unknown): boolean {
   );
 }
 
+function isLegacyGatewayBindHostAlias(value: unknown): boolean {
+  if (typeof value !== "string") {
+    return false;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  if (
+    normalized === "auto" ||
+    normalized === "loopback" ||
+    normalized === "lan" ||
+    normalized === "tailnet" ||
+    normalized === "custom"
+  ) {
+    return false;
+  }
+  return (
+    normalized === "0.0.0.0" ||
+    normalized === "::" ||
+    normalized === "[::]" ||
+    normalized === "*" ||
+    normalized === "127.0.0.1" ||
+    normalized === "localhost" ||
+    normalized === "::1" ||
+    normalized === "[::1]"
+  );
+}
+
 export const LEGACY_CONFIG_RULES: LegacyConfigRule[] = [
   {
     path: ["whatsapp"],
@@ -167,5 +196,12 @@ export const LEGACY_CONFIG_RULES: LegacyConfigRule[] = [
   {
     path: ["gateway", "token"],
     message: "gateway.token is ignored; use gateway.auth.token instead (auto-migrated on load).",
+  },
+  {
+    path: ["gateway", "bind"],
+    message:
+      "gateway.bind host aliases (for example 0.0.0.0/localhost) are legacy; use bind modes (lan/loopback/custom/tailnet/auto) instead (auto-migrated on load).",
+    match: (value) => isLegacyGatewayBindHostAlias(value),
+    requireSourceLiteral: true,
   },
 ];
