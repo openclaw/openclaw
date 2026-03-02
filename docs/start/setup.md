@@ -1,5 +1,5 @@
 ---
-summary: "Setup guide: keep your OpenClaw setup tailored while staying up-to-date"
+summary: "Advanced setup and development workflows for OpenClaw"
 read_when:
   - Setting up a new machine
   - You want “latest + greatest” without breaking your personal setup
@@ -7,6 +7,11 @@ title: "Setup"
 ---
 
 # Setup
+
+<Note>
+If you are setting up for the first time, start with [Getting Started](/start/getting-started).
+For wizard details, see [Onboarding Wizard](/start/wizard).
+</Note>
 
 Last updated: 2026-01-01
 
@@ -42,6 +47,14 @@ openclaw setup
 ```
 
 If you don’t have a global install yet, run it via `pnpm openclaw setup`.
+
+## Run the Gateway from this repo
+
+After `pnpm build`, you can run the packaged CLI directly:
+
+```bash
+node openclaw.mjs gateway --port 18789 --verbose
+```
 
 ## Stable workflow (macOS app first)
 
@@ -117,8 +130,11 @@ Use this when debugging auth or deciding what to back up:
 - **Telegram bot token**: config/env or `channels.telegram.tokenFile`
 - **Discord bot token**: config/env (token file not yet supported)
 - **Slack tokens**: config/env (`channels.slack.*`)
-- **Pairing allowlists**: `~/.openclaw/credentials/<channel>-allowFrom.json`
+- **Pairing allowlists**:
+  - `~/.openclaw/credentials/<channel>-allowFrom.json` (default account)
+  - `~/.openclaw/credentials/<channel>-<accountId>-allowFrom.json` (non-default accounts)
 - **Model auth profiles**: `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`
+- **File-backed secrets payload (optional)**: `~/.openclaw/secrets.json`
 - **Legacy OAuth import**: `~/.openclaw/credentials/oauth.json`
   More detail: [Security](/gateway/security#credential-storage-map).
 

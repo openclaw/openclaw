@@ -29,27 +29,35 @@ See [Venice AI](/providers/venice).
 
 ```json5
 {
-  agents: { defaults: { model: { primary: "anthropic/claude-opus-4-5" } } },
+  agents: { defaults: { model: { primary: "anthropic/claude-opus-4-6" } } },
 }
 ```
 
 ## Provider docs
 
-- [OpenAI (API + Codex)](/providers/openai)
+- [Amazon Bedrock](/providers/bedrock)
 - [Anthropic (API + Claude Code CLI)](/providers/anthropic)
-- [Qwen (OAuth)](/providers/qwen)
-- [OpenRouter](/providers/openrouter)
-- [Vercel AI Gateway](/providers/vercel-ai-gateway)
 - [Cloudflare AI Gateway](/providers/cloudflare-ai-gateway)
-- [Moonshot AI (Kimi + Kimi Coding)](/providers/moonshot)
-- [OpenCode Zen](/providers/opencode)
-- [Amazon Bedrock](/bedrock)
-- [Z.AI](/providers/zai)
-- [Xiaomi](/providers/xiaomi)
 - [GLM models](/providers/glm)
+- [Hugging Face (Inference)](/providers/huggingface)
+- [Kilocode](/providers/kilocode)
+- [LiteLLM (unified gateway)](/providers/litellm)
 - [MiniMax](/providers/minimax)
-- [Venice (Venice AI, privacy-focused)](/providers/venice)
+- [Mistral](/providers/mistral)
+- [Moonshot AI (Kimi + Kimi Coding)](/providers/moonshot)
+- [NVIDIA](/providers/nvidia)
 - [Ollama (local models)](/providers/ollama)
+- [OpenAI (API + Codex)](/providers/openai)
+- [OpenCode Zen](/providers/opencode)
+- [OpenRouter](/providers/openrouter)
+- [Qianfan](/providers/qianfan)
+- [Qwen (OAuth)](/providers/qwen)
+- [Together AI](/providers/together)
+- [Vercel AI Gateway](/providers/vercel-ai-gateway)
+- [Venice (Venice AI, privacy-focused)](/providers/venice)
+- [vLLM (local models)](/providers/vllm)
+- [Xiaomi](/providers/xiaomi)
+- [Z.AI](/providers/zai)
 
 ## Transcription providers
 

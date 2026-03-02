@@ -1,14 +1,24 @@
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { buildConfigSchema } from "./schema.js";
+import { applyDerivedTags, CONFIG_TAGS, deriveTagsForPath } from "./schema.tags.js";
 
 describe("config schema", () => {
+  let baseSchema: ReturnType<typeof buildConfigSchema>;
+
+  beforeAll(() => {
+    baseSchema = buildConfigSchema();
+  });
+
   it("exports schema + hints", () => {
-    const res = buildConfigSchema();
+    const res = baseSchema;
     const schema = res.schema as { properties?: Record<string, unknown> };
     expect(schema.properties?.gateway).toBeTruthy();
     expect(schema.properties?.agents).toBeTruthy();
+    expect(schema.properties?.acp).toBeTruthy();
+    expect(schema.properties?.$schema).toBeUndefined();
     expect(res.uiHints.gateway?.label).toBe("Gateway");
     expect(res.uiHints["gateway.auth.token"]?.sensitive).toBe(true);
+    expect(res.uiHints["channels.discord.threadBindings.spawnAcpSessions"]?.label).toBeTruthy();
     expect(res.version).toBeTruthy();
     expect(res.generatedAt).toBeTruthy();
   });
@@ -34,6 +44,21 @@ describe("config schema", () => {
       "Auth Token",
     );
     expect(res.uiHints["plugins.entries.voice-call.config.twilio.authToken"]?.sensitive).toBe(true);
+  });
+
+  it("does not re-mark existing non-sensitive token-like fields", () => {
+    const res = buildConfigSchema({
+      plugins: [
+        {
+          id: "voice-call",
+          configUiHints: {
+            tokens: { label: "Tokens", sensitive: false },
+          },
+        },
+      ],
+    });
+
+    expect(res.uiHints["plugins.entries.voice-call.config.tokens"]?.sensitive).toBe(false);
   });
 
   it("merges plugin + channel schemas", () => {
@@ -100,5 +125,46 @@ describe("config schema", () => {
     expect(defaultsHint?.help).toContain("bluebubbles");
     expect(defaultsHint?.help).toContain("last");
     expect(listHint?.help).toContain("bluebubbles");
+  });
+
+  it("derives security/auth tags for credential paths", () => {
+    const tags = deriveTagsForPath("gateway.auth.token");
+    expect(tags).toContain("security");
+    expect(tags).toContain("auth");
+  });
+
+  it("derives tools/performance tags for web fetch timeout paths", () => {
+    const tags = deriveTagsForPath("tools.web.fetch.timeoutSeconds");
+    expect(tags).toContain("tools");
+    expect(tags).toContain("performance");
+  });
+
+  it("keeps tags in the allowed taxonomy", () => {
+    const withTags = applyDerivedTags({
+      "gateway.auth.token": {},
+      "tools.web.fetch.timeoutSeconds": {},
+      "channels.slack.accounts.*.token": {},
+    });
+    const allowed = new Set<string>(CONFIG_TAGS);
+    for (const hint of Object.values(withTags)) {
+      for (const tag of hint.tags ?? []) {
+        expect(allowed.has(tag)).toBe(true);
+      }
+    }
+  });
+
+  it("covers core/built-in config paths with tags", () => {
+    const schema = baseSchema;
+    const allowed = new Set<string>(CONFIG_TAGS);
+    for (const [key, hint] of Object.entries(schema.uiHints)) {
+      if (!key.includes(".")) {
+        continue;
+      }
+      const tags = hint.tags ?? [];
+      expect(tags.length, `expected tags for ${key}`).toBeGreaterThan(0);
+      for (const tag of tags) {
+        expect(allowed.has(tag), `unexpected tag ${tag} on ${key}`).toBe(true);
+      }
+    }
   });
 });

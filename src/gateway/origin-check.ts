@@ -1,23 +1,6 @@
+import { isLoopbackHost, normalizeHostHeader, resolveHostName } from "./net.js";
+
 type OriginCheckResult = { ok: true } | { ok: false; reason: string };
-
-function normalizeHostHeader(hostHeader?: string): string {
-  return (hostHeader ?? "").trim().toLowerCase();
-}
-
-function resolveHostName(hostHeader?: string): string {
-  const host = normalizeHostHeader(hostHeader);
-  if (!host) {
-    return "";
-  }
-  if (host.startsWith("[")) {
-    const end = host.indexOf("]");
-    if (end !== -1) {
-      return host.slice(1, end);
-    }
-  }
-  const [name] = host.split(":");
-  return name ?? "";
-}
 
 function parseOrigin(
   originRaw?: string,
@@ -38,41 +21,30 @@ function parseOrigin(
   }
 }
 
-function isLoopbackHost(hostname: string): boolean {
-  if (!hostname) {
-    return false;
-  }
-  if (hostname === "localhost") {
-    return true;
-  }
-  if (hostname === "::1") {
-    return true;
-  }
-  if (hostname === "127.0.0.1" || hostname.startsWith("127.")) {
-    return true;
-  }
-  return false;
-}
-
 export function checkBrowserOrigin(params: {
   requestHost?: string;
   origin?: string;
   allowedOrigins?: string[];
+  allowHostHeaderOriginFallback?: boolean;
 }): OriginCheckResult {
   const parsedOrigin = parseOrigin(params.origin);
   if (!parsedOrigin) {
     return { ok: false, reason: "origin missing or invalid" };
   }
 
-  const allowlist = (params.allowedOrigins ?? [])
-    .map((value) => value.trim().toLowerCase())
-    .filter(Boolean);
-  if (allowlist.includes(parsedOrigin.origin)) {
+  const allowlist = new Set(
+    (params.allowedOrigins ?? []).map((value) => value.trim().toLowerCase()).filter(Boolean),
+  );
+  if (allowlist.has("*") || allowlist.has(parsedOrigin.origin)) {
     return { ok: true };
   }
 
   const requestHost = normalizeHostHeader(params.requestHost);
-  if (requestHost && parsedOrigin.host === requestHost) {
+  if (
+    params.allowHostHeaderOriginFallback === true &&
+    requestHost &&
+    parsedOrigin.host === requestHost
+  ) {
     return { ok: true };
   }
 

@@ -12,12 +12,14 @@ import {
 import { isWSLEnv } from "../../infra/wsl.js";
 import { getResolvedLoggerSettings } from "../../logging.js";
 import { defaultRuntime } from "../../runtime.js";
-import { colorize, isRich, theme } from "../../terminal/theme.js";
+import { colorize } from "../../terminal/theme.js";
 import { shortenHomePath } from "../../utils.js";
 import { formatCliCommand } from "../command-format.js";
 import {
+  createCliStatusTextStyles,
   filterDaemonEnv,
   formatRuntimeStatus,
+  resolveRuntimeStatusColor,
   renderRuntimeHints,
   safeDaemonEnv,
 } from "./shared.js";
@@ -53,13 +55,8 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
     return;
   }
 
-  const rich = isRich();
-  const label = (value: string) => colorize(rich, theme.muted, value);
-  const accent = (value: string) => colorize(rich, theme.accent, value);
-  const infoText = (value: string) => colorize(rich, theme.info, value);
-  const okText = (value: string) => colorize(rich, theme.success, value);
-  const warnText = (value: string) => colorize(rich, theme.warn, value);
-  const errorText = (value: string) => colorize(rich, theme.error, value);
+  const { rich, label, accent, infoText, okText, warnText, errorText } =
+    createCliStatusTextStyles();
   const spacer = () => defaultRuntime.log("");
 
   const { service, rpc, extraServices } = status;
@@ -169,15 +166,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
 
   const runtimeLine = formatRuntimeStatus(service.runtime);
   if (runtimeLine) {
-    const runtimeStatus = service.runtime?.status ?? "unknown";
-    const runtimeColor =
-      runtimeStatus === "running"
-        ? theme.success
-        : runtimeStatus === "stopped"
-          ? theme.error
-          : runtimeStatus === "unknown"
-            ? theme.muted
-            : theme.warn;
+    const runtimeColor = resolveRuntimeStatusColor(service.runtime?.status);
     defaultRuntime.log(`${label("Runtime:")} ${colorize(rich, runtimeColor, runtimeLine)}`);
   }
 
@@ -225,7 +214,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
     );
     for (const hint of renderRuntimeHints(
       service.runtime,
-      (service.command?.environment ?? process.env) as NodeJS.ProcessEnv,
+      service.command?.environment ?? process.env,
     )) {
       defaultRuntime.error(errorText(hint));
     }
@@ -233,7 +222,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
   }
 
   if (service.runtime?.cachedLabel) {
-    const env = (service.command?.environment ?? process.env) as NodeJS.ProcessEnv;
+    const env = service.command?.environment ?? process.env;
     const labelValue = resolveGatewayLaunchAgentLabel(env.OPENCLAW_PROFILE);
     defaultRuntime.error(
       errorText(
@@ -276,15 +265,13 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
       defaultRuntime.error(`${errorText("Last gateway error:")} ${status.lastError}`);
     }
     if (process.platform === "linux") {
-      const env = (service.command?.environment ?? process.env) as NodeJS.ProcessEnv;
+      const env = service.command?.environment ?? process.env;
       const unit = resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE);
       defaultRuntime.error(
         errorText(`Logs: journalctl --user -u ${unit}.service -n 200 --no-pager`),
       );
     } else if (process.platform === "darwin") {
-      const logs = resolveGatewayLogPaths(
-        (service.command?.environment ?? process.env) as NodeJS.ProcessEnv,
-      );
+      const logs = resolveGatewayLogPaths(service.command?.environment ?? process.env);
       defaultRuntime.error(`${errorText("Logs:")} ${shortenHomePath(logs.stdoutPath)}`);
       defaultRuntime.error(`${errorText("Errors:")} ${shortenHomePath(logs.stderrPath)}`);
     }

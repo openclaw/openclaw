@@ -1,17 +1,17 @@
 import type { ConsoleLoggerSettings, ConsoleStyle } from "./logging/console.js";
-import type { LogLevel } from "./logging/levels.js";
-import type { LoggerResolvedSettings, LoggerSettings, PinoLikeLogger } from "./logging/logger.js";
-import type { SubsystemLogger } from "./logging/subsystem.js";
 import {
   enableConsoleCapture,
   getConsoleSettings,
   getResolvedConsoleSettings,
   routeLogsToStderr,
   setConsoleSubsystemFilter,
+  setConsoleConfigLoaderForTests,
   setConsoleTimestampPrefix,
   shouldLogSubsystemToConsole,
 } from "./logging/console.js";
+import type { LogLevel } from "./logging/levels.js";
 import { ALLOWED_LOG_LEVELS, levelToMinLevel, normalizeLogLevel } from "./logging/levels.js";
+import type { LoggerResolvedSettings, LoggerSettings, PinoLikeLogger } from "./logging/logger.js";
 import {
   DEFAULT_LOG_DIR,
   DEFAULT_LOG_FILE,
@@ -23,6 +23,7 @@ import {
   setLoggerOverride,
   toPinoLikeLogger,
 } from "./logging/logger.js";
+import type { SubsystemLogger } from "./logging/subsystem.js";
 import {
   createSubsystemLogger,
   createSubsystemRuntime,
@@ -36,6 +37,7 @@ export {
   getResolvedConsoleSettings,
   routeLogsToStderr,
   setConsoleSubsystemFilter,
+  setConsoleConfigLoaderForTests,
   setConsoleTimestampPrefix,
   shouldLogSubsystemToConsole,
   ALLOWED_LOG_LEVELS,

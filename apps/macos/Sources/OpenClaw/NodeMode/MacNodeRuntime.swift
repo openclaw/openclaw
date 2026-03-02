@@ -1,7 +1,7 @@
 import AppKit
+import Foundation
 import OpenClawIPC
 import OpenClawKit
-import Foundation
 
 actor MacNodeRuntime {
     private let cameraCapture = CameraCaptureService()
@@ -441,43 +441,25 @@ actor MacNodeRuntime {
         guard !command.isEmpty else {
             return Self.errorResponse(req, code: .invalidRequest, message: "INVALID_REQUEST: command required")
         }
-        let displayCommand = ExecCommandFormatter.displayString(for: command, rawCommand: params.rawCommand)
-
-        let trimmedAgent = params.agentId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let agentId = trimmedAgent.isEmpty ? nil : trimmedAgent
-        let approvals = ExecApprovalsStore.resolve(agentId: agentId)
-        let security = approvals.agent.security
-        let ask = approvals.agent.ask
-        let autoAllowSkills = approvals.agent.autoAllowSkills
         let sessionKey = (params.sessionKey?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
             ? params.sessionKey!.trimmingCharacters(in: .whitespacesAndNewlines)
             : self.mainSessionKey
         let runId = UUID().uuidString
-        let env = Self.sanitizedEnv(params.env)
-        let resolution = ExecCommandResolution.resolve(
+        let evaluation = await ExecApprovalEvaluator.evaluate(
             command: command,
             rawCommand: params.rawCommand,
             cwd: params.cwd,
-            env: env)
-        let allowlistMatch = security == .allowlist
-            ? ExecAllowlistMatcher.match(entries: approvals.allowlist, resolution: resolution)
-            : nil
-        let skillAllow: Bool
-        if autoAllowSkills, let name = resolution?.executableName {
-            let bins = await SkillBinsCache.shared.currentBins()
-            skillAllow = bins.contains(name)
-        } else {
-            skillAllow = false
-        }
+            envOverrides: params.env,
+            agentId: params.agentId)
 
-        if security == .deny {
+        if evaluation.security == .deny {
             await self.emitExecEvent(
                 "exec.denied",
                 payload: ExecEventPayload(
                     sessionKey: sessionKey,
                     runId: runId,
                     host: "node",
-                    command: displayCommand,
+                    command: evaluation.displayCommand,
                     reason: "security=deny"))
             return Self.errorResponse(
                 req,
@@ -489,32 +471,33 @@ actor MacNodeRuntime {
             req: req,
             params: params,
             context: ExecRunContext(
-                displayCommand: displayCommand,
-                security: security,
-                ask: ask,
-                agentId: agentId,
-                resolution: resolution,
-                allowlistMatch: allowlistMatch,
-                skillAllow: skillAllow,
+                displayCommand: evaluation.displayCommand,
+                security: evaluation.security,
+                ask: evaluation.ask,
+                agentId: evaluation.agentId,
+                resolution: evaluation.resolution,
+                allowlistMatch: evaluation.allowlistMatch,
+                skillAllow: evaluation.skillAllow,
                 sessionKey: sessionKey,
                 runId: runId))
         if let response = approval.response { return response }
         let approvedByAsk = approval.approvedByAsk
         let persistAllowlist = approval.persistAllowlist
-        if persistAllowlist, security == .allowlist,
-           let pattern = ExecApprovalHelpers.allowlistPattern(command: command, resolution: resolution)
-        {
-            ExecApprovalsStore.addAllowlistEntry(agentId: agentId, pattern: pattern)
-        }
+        self.persistAllowlistPatterns(
+            persistAllowlist: persistAllowlist,
+            security: evaluation.security,
+            agentId: evaluation.agentId,
+            command: command,
+            allowlistResolutions: evaluation.allowlistResolutions)
 
-        if security == .allowlist, allowlistMatch == nil, !skillAllow, !approvedByAsk {
+        if evaluation.security == .allowlist, !evaluation.allowlistSatisfied, !evaluation.skillAllow, !approvedByAsk {
             await self.emitExecEvent(
                 "exec.denied",
                 payload: ExecEventPayload(
                     sessionKey: sessionKey,
                     runId: runId,
                     host: "node",
-                    command: displayCommand,
+                    command: evaluation.displayCommand,
                     reason: "allowlist-miss"))
             return Self.errorResponse(
                 req,
@@ -522,79 +505,32 @@ actor MacNodeRuntime {
                 message: "SYSTEM_RUN_DENIED: allowlist miss")
         }
 
-        if let match = allowlistMatch {
-            ExecApprovalsStore.recordAllowlistUse(
-                agentId: agentId,
-                pattern: match.pattern,
-                command: displayCommand,
-                resolvedPath: resolution?.resolvedPath)
+        self.recordAllowlistMatches(
+            security: evaluation.security,
+            allowlistSatisfied: evaluation.allowlistSatisfied,
+            agentId: evaluation.agentId,
+            allowlistMatches: evaluation.allowlistMatches,
+            allowlistResolutions: evaluation.allowlistResolutions,
+            displayCommand: evaluation.displayCommand)
+
+        if let permissionResponse = await self.validateScreenRecordingIfNeeded(
+            req: req,
+            needsScreenRecording: params.needsScreenRecording,
+            sessionKey: sessionKey,
+            runId: runId,
+            displayCommand: evaluation.displayCommand)
+        {
+            return permissionResponse
         }
 
-        if params.needsScreenRecording == true {
-            let authorized = await PermissionManager
-                .status([.screenRecording])[.screenRecording] ?? false
-            if !authorized {
-                await self.emitExecEvent(
-                    "exec.denied",
-                    payload: ExecEventPayload(
-                        sessionKey: sessionKey,
-                        runId: runId,
-                        host: "node",
-                        command: displayCommand,
-                        reason: "permission:screenRecording"))
-                return Self.errorResponse(
-                    req,
-                    code: .unavailable,
-                    message: "PERMISSION_MISSING: screenRecording")
-            }
-        }
-
-        let timeoutSec = params.timeoutMs.flatMap { Double($0) / 1000.0 }
-        await self.emitExecEvent(
-            "exec.started",
-            payload: ExecEventPayload(
-                sessionKey: sessionKey,
-                runId: runId,
-                host: "node",
-                command: displayCommand))
-        let result = await ShellExecutor.runDetailed(
+        return try await self.executeSystemRun(
+            req: req,
+            params: params,
             command: command,
-            cwd: params.cwd,
-            env: env,
-            timeout: timeoutSec)
-        let combined = [result.stdout, result.stderr, result.errorMessage]
-            .compactMap(\.self)
-            .filter { !$0.isEmpty }
-            .joined(separator: "\n")
-        await self.emitExecEvent(
-            "exec.finished",
-            payload: ExecEventPayload(
-                sessionKey: sessionKey,
-                runId: runId,
-                host: "node",
-                command: displayCommand,
-                exitCode: result.exitCode,
-                timedOut: result.timedOut,
-                success: result.success,
-                output: ExecEventPayload.truncateOutput(combined)))
-
-        struct RunPayload: Encodable {
-            var exitCode: Int?
-            var timedOut: Bool
-            var success: Bool
-            var stdout: String
-            var stderr: String
-            var error: String?
-        }
-
-        let payload = try Self.encodePayload(RunPayload(
-            exitCode: result.exitCode,
-            timedOut: result.timedOut,
-            success: result.success,
-            stdout: result.stdout,
-            stderr: result.stderr,
-            error: result.errorMessage))
-        return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
+            env: evaluation.env,
+            sessionKey: sessionKey,
+            runId: runId,
+            displayCommand: evaluation.displayCommand)
     }
 
     private func handleSystemWhich(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
@@ -835,6 +771,132 @@ actor MacNodeRuntime {
 }
 
 extension MacNodeRuntime {
+    private func persistAllowlistPatterns(
+        persistAllowlist: Bool,
+        security: ExecSecurity,
+        agentId: String?,
+        command: [String],
+        allowlistResolutions: [ExecCommandResolution])
+    {
+        guard persistAllowlist, security == .allowlist else { return }
+        var seenPatterns = Set<String>()
+        for candidate in allowlistResolutions {
+            guard let pattern = ExecApprovalHelpers.allowlistPattern(command: command, resolution: candidate) else {
+                continue
+            }
+            if seenPatterns.insert(pattern).inserted {
+                ExecApprovalsStore.addAllowlistEntry(agentId: agentId, pattern: pattern)
+            }
+        }
+    }
+
+    private func recordAllowlistMatches(
+        security: ExecSecurity,
+        allowlistSatisfied: Bool,
+        agentId: String?,
+        allowlistMatches: [ExecAllowlistEntry],
+        allowlistResolutions: [ExecCommandResolution],
+        displayCommand: String)
+    {
+        guard security == .allowlist, allowlistSatisfied else { return }
+        var seenPatterns = Set<String>()
+        for (idx, match) in allowlistMatches.enumerated() {
+            if !seenPatterns.insert(match.pattern).inserted {
+                continue
+            }
+            let resolvedPath = idx < allowlistResolutions.count ? allowlistResolutions[idx].resolvedPath : nil
+            ExecApprovalsStore.recordAllowlistUse(
+                agentId: agentId,
+                pattern: match.pattern,
+                command: displayCommand,
+                resolvedPath: resolvedPath)
+        }
+    }
+
+    private func validateScreenRecordingIfNeeded(
+        req: BridgeInvokeRequest,
+        needsScreenRecording: Bool?,
+        sessionKey: String,
+        runId: String,
+        displayCommand: String) async -> BridgeInvokeResponse?
+    {
+        guard needsScreenRecording == true else { return nil }
+        let authorized = await PermissionManager
+            .status([.screenRecording])[.screenRecording] ?? false
+        if authorized {
+            return nil
+        }
+        await self.emitExecEvent(
+            "exec.denied",
+            payload: ExecEventPayload(
+                sessionKey: sessionKey,
+                runId: runId,
+                host: "node",
+                command: displayCommand,
+                reason: "permission:screenRecording"))
+        return Self.errorResponse(
+            req,
+            code: .unavailable,
+            message: "PERMISSION_MISSING: screenRecording")
+    }
+
+    private func executeSystemRun(
+        req: BridgeInvokeRequest,
+        params: OpenClawSystemRunParams,
+        command: [String],
+        env: [String: String],
+        sessionKey: String,
+        runId: String,
+        displayCommand: String) async throws -> BridgeInvokeResponse
+    {
+        let timeoutSec = params.timeoutMs.flatMap { Double($0) / 1000.0 }
+        await self.emitExecEvent(
+            "exec.started",
+            payload: ExecEventPayload(
+                sessionKey: sessionKey,
+                runId: runId,
+                host: "node",
+                command: displayCommand))
+        let result = await ShellExecutor.runDetailed(
+            command: command,
+            cwd: params.cwd,
+            env: env,
+            timeout: timeoutSec)
+        let combined = [result.stdout, result.stderr, result.errorMessage]
+            .compactMap(\.self)
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n")
+        await self.emitExecEvent(
+            "exec.finished",
+            payload: ExecEventPayload(
+                sessionKey: sessionKey,
+                runId: runId,
+                host: "node",
+                command: displayCommand,
+                exitCode: result.exitCode,
+                timedOut: result.timedOut,
+                success: result.success,
+                output: ExecEventPayload.truncateOutput(combined)))
+
+        struct RunPayload: Encodable {
+            var exitCode: Int?
+            var timedOut: Bool
+            var success: Bool
+            var stdout: String
+            var stderr: String
+            var error: String?
+        }
+        let runPayload = RunPayload(
+            exitCode: result.exitCode,
+            timedOut: result.timedOut,
+            success: result.success,
+            stdout: result.stdout,
+            stderr: result.stderr,
+            error: result.errorMessage)
+        let payload = try Self.encodePayload(runPayload)
+        return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
+    }
+
     private static func decodeParams<T: Decodable>(_ type: T.Type, from json: String?) throws -> T {
         guard let json, let data = json.data(using: .utf8) else {
             throw NSError(domain: "Gateway", code: 20, userInfo: [
@@ -860,35 +922,6 @@ extension MacNodeRuntime {
 
     private nonisolated static func cameraEnabled() -> Bool {
         UserDefaults.standard.object(forKey: cameraEnabledKey) as? Bool ?? false
-    }
-
-    private static let blockedEnvKeys: Set<String> = [
-        "PATH",
-        "NODE_OPTIONS",
-        "PYTHONHOME",
-        "PYTHONPATH",
-        "PERL5LIB",
-        "PERL5OPT",
-        "RUBYOPT",
-    ]
-
-    private static let blockedEnvPrefixes: [String] = [
-        "DYLD_",
-        "LD_",
-    ]
-
-    private static func sanitizedEnv(_ overrides: [String: String]?) -> [String: String]? {
-        guard let overrides else { return nil }
-        var merged = ProcessInfo.processInfo.environment
-        for (rawKey, value) in overrides {
-            let key = rawKey.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !key.isEmpty else { continue }
-            let upper = key.uppercased()
-            if self.blockedEnvKeys.contains(upper) { continue }
-            if self.blockedEnvPrefixes.contains(where: { upper.hasPrefix($0) }) { continue }
-            merged[key] = value
-        }
-        return merged
     }
 
     private nonisolated static func locationMode() -> OpenClawLocationMode {

@@ -1,8 +1,7 @@
-import { messagingApi } from "@line/bot-sdk";
 import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
+import { messagingApi } from "@line/bot-sdk";
 import { logVerbose } from "../globals.js";
+import { buildRandomTempFilePath } from "../plugin-sdk/temp-path.js";
 
 interface DownloadResult {
   path: string;
@@ -39,10 +38,8 @@ export async function downloadLineMedia(
   const contentType = detectContentType(buffer);
   const ext = getExtensionForContentType(contentType);
 
-  // Write to temp file
-  const tempDir = os.tmpdir();
-  const fileName = `line-media-${messageId}-${Date.now()}${ext}`;
-  const filePath = path.join(tempDir, fileName);
+  // Use random temp names; never derive paths from external message identifiers.
+  const filePath = buildRandomTempFilePath({ prefix: "line-media", extension: ext });
 
   await fs.promises.writeFile(filePath, buffer);
 
@@ -83,15 +80,20 @@ function detectContentType(buffer: Buffer): string {
     ) {
       return "image/webp";
     }
-    // MP4
-    if (buffer[4] === 0x66 && buffer[5] === 0x74 && buffer[6] === 0x79 && buffer[7] === 0x70) {
-      return "video/mp4";
-    }
-    // M4A/AAC
-    if (buffer[0] === 0x00 && buffer[1] === 0x00 && buffer[2] === 0x00) {
-      if (buffer[4] === 0x66 && buffer[5] === 0x74 && buffer[6] === 0x79 && buffer[7] === 0x70) {
+    // MPEG-4 container (ftyp box) — distinguish audio (M4A) from video (MP4)
+    // by checking the major brand at bytes 8-11.
+    if (
+      buffer.length >= 12 &&
+      buffer[4] === 0x66 &&
+      buffer[5] === 0x74 &&
+      buffer[6] === 0x79 &&
+      buffer[7] === 0x70
+    ) {
+      const brand = String.fromCharCode(buffer[8], buffer[9], buffer[10], buffer[11]);
+      if (brand === "M4A " || brand === "M4B ") {
         return "audio/mp4";
       }
+      return "video/mp4";
     }
   }
 

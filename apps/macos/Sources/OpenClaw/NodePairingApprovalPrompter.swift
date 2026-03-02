@@ -1,10 +1,10 @@
 import AppKit
+import Foundation
+import Observation
 import OpenClawDiscovery
 import OpenClawIPC
 import OpenClawKit
 import OpenClawProtocol
-import Foundation
-import Observation
 import OSLog
 import UserNotifications
 
@@ -38,11 +38,6 @@ final class NodePairingApprovalPrompter {
     private var remoteResolutionsByRequestId: [String: PairingResolution] = [:]
     private var autoApproveAttempts: Set<String> = []
 
-    private final class AlertHostWindow: NSWindow {
-        override var canBecomeKey: Bool { true }
-        override var canBecomeMain: Bool { true }
-    }
-
     private struct PairingList: Codable {
         let pending: [PendingRequest]
         let paired: [PairedNode]?
@@ -68,56 +63,48 @@ final class NodePairingApprovalPrompter {
         let silent: Bool?
         let ts: Double
 
-        var id: String { self.requestId }
-    }
-
-    private struct PairingResolvedEvent: Codable {
-        let requestId: String
-        let nodeId: String
-        let decision: String
-        let ts: Double
-    }
-
-    private enum PairingResolution: String {
-        case approved
-        case rejected
-    }
-
-    func start() {
-        guard self.task == nil else { return }
-        self.isStopping = false
-        self.reconcileTask?.cancel()
-        self.reconcileTask = nil
-        self.task = Task { [weak self] in
-            guard let self else { return }
-            _ = try? await GatewayConnection.shared.refresh()
-            await self.loadPendingRequestsFromGateway()
-            let stream = await GatewayConnection.shared.subscribe(bufferingNewest: 200)
-            for await push in stream {
-                if Task.isCancelled { return }
-                await MainActor.run { [weak self] in self?.handle(push: push) }
-            }
+        var id: String {
+            self.requestId
         }
     }
 
+    private typealias PairingResolvedEvent = PairingAlertSupport.PairingResolvedEvent
+    private typealias PairingResolution = PairingAlertSupport.PairingResolution
+
+    func start() {
+        self.reconcileTask?.cancel()
+        self.reconcileTask = nil
+        self.startPushTask()
+    }
+
+    private func startPushTask() {
+        PairingAlertSupport.startPairingPushTask(
+            task: &self.task,
+            isStopping: &self.isStopping,
+            loadPending: self.loadPendingRequestsFromGateway,
+            handlePush: self.handle(push:))
+    }
+
     func stop() {
-        self.isStopping = true
-        self.endActiveAlert()
-        self.task?.cancel()
-        self.task = nil
+        self.stopPushTask()
         self.reconcileTask?.cancel()
         self.reconcileTask = nil
         self.reconcileOnceTask?.cancel()
         self.reconcileOnceTask = nil
-        self.queue.removeAll(keepingCapacity: false)
         self.updatePendingCounts()
-        self.isPresenting = false
-        self.activeRequestId = nil
-        self.alertHostWindow?.orderOut(nil)
-        self.alertHostWindow?.close()
-        self.alertHostWindow = nil
         self.remoteResolutionsByRequestId.removeAll(keepingCapacity: false)
         self.autoApproveAttempts.removeAll(keepingCapacity: false)
+    }
+
+    private func stopPushTask() {
+        PairingAlertSupport.stopPairingPrompter(
+            isStopping: &self.isStopping,
+            activeAlert: &self.activeAlert,
+            activeRequestId: &self.activeRequestId,
+            task: &self.task,
+            queue: &self.queue,
+            isPresenting: &self.isPresenting,
+            alertHostWindow: &self.alertHostWindow)
     }
 
     private func loadPendingRequestsFromGateway() async {
@@ -235,35 +222,7 @@ final class NodePairingApprovalPrompter {
     }
 
     private func endActiveAlert() {
-        guard let alert = self.activeAlert else { return }
-        if let parent = alert.window.sheetParent {
-            parent.endSheet(alert.window, returnCode: .abort)
-        }
-        self.activeAlert = nil
-        self.activeRequestId = nil
-    }
-
-    private func requireAlertHostWindow() -> NSWindow {
-        if let alertHostWindow {
-            return alertHostWindow
-        }
-
-        let window = AlertHostWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 520, height: 1),
-            styleMask: [.borderless],
-            backing: .buffered,
-            defer: false)
-        window.title = ""
-        window.isReleasedWhenClosed = false
-        window.level = .floating
-        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        window.isOpaque = false
-        window.hasShadow = false
-        window.backgroundColor = .clear
-        window.ignoresMouseEvents = true
-
-        self.alertHostWindow = window
-        return window
+        PairingAlertSupport.endActiveAlert(activeAlert: &self.activeAlert, activeRequestId: &self.activeRequestId)
     }
 
     private func handle(push: GatewayPush) {
@@ -320,47 +279,23 @@ final class NodePairingApprovalPrompter {
 
     private func presentAlert(for req: PendingRequest) {
         self.logger.info("presenting node pairing alert requestId=\(req.requestId, privacy: .public)")
-        NSApp.activate(ignoringOtherApps: true)
+        PairingAlertSupport.presentPairingAlert(
+            request: req,
+            requestId: req.requestId,
+            messageText: "Allow node to connect?",
+            informativeText: Self.describe(req),
+            activeAlert: &self.activeAlert,
+            activeRequestId: &self.activeRequestId,
+            alertHostWindow: &self.alertHostWindow,
+            clearActive: self.clearActiveAlert(hostWindow:),
+            onResponse: self.handleAlertResponse)
+    }
 
-        let alert = NSAlert()
-        alert.alertStyle = .warning
-        alert.messageText = "Allow node to connect?"
-        alert.informativeText = Self.describe(req)
-        // Fail-safe ordering: if the dialog can't be presented, default to "Later".
-        alert.addButton(withTitle: "Later")
-        alert.addButton(withTitle: "Approve")
-        alert.addButton(withTitle: "Reject")
-        if #available(macOS 11.0, *), alert.buttons.indices.contains(2) {
-            alert.buttons[2].hasDestructiveAction = true
-        }
-
-        self.activeAlert = alert
-        self.activeRequestId = req.requestId
-        let hostWindow = self.requireAlertHostWindow()
-
-        // Position the hidden host window so the sheet appears centered on screen.
-        // (Sheets attach to the top edge of their parent window; if the parent is tiny, it looks "anchored".)
-        let sheetSize = alert.window.frame.size
-        if let screen = hostWindow.screen ?? NSScreen.main {
-            let bounds = screen.visibleFrame
-            let x = bounds.midX - (sheetSize.width / 2)
-            let sheetOriginY = bounds.midY - (sheetSize.height / 2)
-            let hostY = sheetOriginY + sheetSize.height - hostWindow.frame.height
-            hostWindow.setFrameOrigin(NSPoint(x: x, y: hostY))
-        } else {
-            hostWindow.center()
-        }
-
-        hostWindow.makeKeyAndOrderFront(nil)
-        alert.beginSheetModal(for: hostWindow) { [weak self] response in
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                self.activeRequestId = nil
-                self.activeAlert = nil
-                await self.handleAlertResponse(response, request: req)
-                hostWindow.orderOut(nil)
-            }
-        }
+    private func clearActiveAlert(hostWindow: NSWindow) {
+        PairingAlertSupport.clearActivePairingAlert(
+            activeAlert: &self.activeAlert,
+            activeRequestId: &self.activeRequestId,
+            hostWindow: hostWindow)
     }
 
     private func handleAlertResponse(_ response: NSApplication.ModalResponse, request: PendingRequest) async {
@@ -400,24 +335,22 @@ final class NodePairingApprovalPrompter {
     }
 
     private func approve(requestId: String) async -> Bool {
-        do {
+        await PairingAlertSupport.approveRequest(
+            requestId: requestId,
+            kind: "node",
+            logger: self.logger)
+        {
             try await GatewayConnection.shared.nodePairApprove(requestId: requestId)
-            self.logger.info("approved node pairing requestId=\(requestId, privacy: .public)")
-            return true
-        } catch {
-            self.logger.error("approve failed requestId=\(requestId, privacy: .public)")
-            self.logger.error("approve failed: \(error.localizedDescription, privacy: .public)")
-            return false
         }
     }
 
     private func reject(requestId: String) async {
-        do {
+        await PairingAlertSupport.rejectRequest(
+            requestId: requestId,
+            kind: "node",
+            logger: self.logger)
+        {
             try await GatewayConnection.shared.nodePairReject(requestId: requestId)
-            self.logger.info("rejected node pairing requestId=\(requestId, privacy: .public)")
-        } catch {
-            self.logger.error("reject failed requestId=\(requestId, privacy: .public)")
-            self.logger.error("reject failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 
@@ -446,8 +379,7 @@ final class NodePairingApprovalPrompter {
     private static func prettyPlatform(_ platform: String?) -> String? {
         let raw = platform?.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let raw, !raw.isEmpty else { return nil }
-        if raw.lowercased() == "ios" { return "iOS" }
-        if raw.lowercased() == "macos" { return "macOS" }
+        if let pretty = PlatformLabelFormatter.pretty(raw) { return pretty }
         return raw
     }
 
@@ -547,11 +479,12 @@ final class NodePairingApprovalPrompter {
         let preferred = GatewayDiscoveryPreferences.preferredStableID()
         let gateway = model.gateways.first { $0.stableID == preferred } ?? model.gateways.first
         guard let gateway else { return nil }
-        let host = (gateway.tailnetDns?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty ??
-            gateway.lanHost?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty)
-        guard let host, !host.isEmpty else { return nil }
-        let port = gateway.sshPort > 0 ? gateway.sshPort : 22
-        return SSHTarget(host: host, port: port)
+        guard let target = GatewayDiscoveryHelpers.sshTarget(for: gateway),
+              let parsed = CommandResolver.parseSSHTarget(target)
+        else {
+            return nil
+        }
+        return SSHTarget(host: parsed.host, port: parsed.port)
     }
 
     private static func probeSSH(user: String, host: String, port: Int) async -> Bool {

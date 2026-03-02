@@ -1,43 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
-import { buildTelegramMessageContext } from "./bot-message-context.js";
+import { describe, expect, it } from "vitest";
+import { buildTelegramMessageContextForTest } from "./bot-message-context.test-harness.js";
 
 describe("buildTelegramMessageContext dm thread sessions", () => {
-  const baseConfig = {
-    agents: { defaults: { model: "anthropic/claude-opus-4-5", workspace: "/tmp/openclaw" } },
-    channels: { telegram: {} },
-    messages: { groupChat: { mentionPatterns: [] } },
-  } as never;
-
   const buildContext = async (message: Record<string, unknown>) =>
-    await buildTelegramMessageContext({
-      primaryCtx: {
-        message,
-        me: { id: 7, username: "bot" },
-      } as never,
-      allMedia: [],
-      storeAllowFrom: [],
-      options: {},
-      bot: {
-        api: {
-          sendChatAction: vi.fn(),
-          setMessageReaction: vi.fn(),
-        },
-      } as never,
-      cfg: baseConfig,
-      account: { accountId: "default" } as never,
-      historyLimit: 0,
-      groupHistories: new Map(),
-      dmPolicy: "open",
-      allowFrom: [],
-      groupAllowFrom: [],
-      ackReactionScope: "off",
-      logger: { info: vi.fn() },
-      resolveGroupActivation: () => undefined,
-      resolveGroupRequireMention: () => false,
-      resolveTelegramGroupConfig: () => ({
-        groupConfig: { requireMention: false },
-        topicConfig: undefined,
-      }),
+    await buildTelegramMessageContextForTest({
+      message,
     });
 
   it("uses thread session key for dm topics", async () => {
@@ -52,7 +19,7 @@ describe("buildTelegramMessageContext dm thread sessions", () => {
 
     expect(ctx).not.toBeNull();
     expect(ctx?.ctxPayload?.MessageThreadId).toBe(42);
-    expect(ctx?.ctxPayload?.SessionKey).toBe("agent:main:main:thread:42");
+    expect(ctx?.ctxPayload?.SessionKey).toBe("agent:main:main:thread:1234:42");
   });
 
   it("keeps legacy dm session key when no thread id", async () => {
@@ -71,42 +38,11 @@ describe("buildTelegramMessageContext dm thread sessions", () => {
 });
 
 describe("buildTelegramMessageContext group sessions without forum", () => {
-  const baseConfig = {
-    agents: { defaults: { model: "anthropic/claude-opus-4-5", workspace: "/tmp/openclaw" } },
-    channels: { telegram: {} },
-    messages: { groupChat: { mentionPatterns: [] } },
-  } as never;
-
   const buildContext = async (message: Record<string, unknown>) =>
-    await buildTelegramMessageContext({
-      primaryCtx: {
-        message,
-        me: { id: 7, username: "bot" },
-      } as never,
-      allMedia: [],
-      storeAllowFrom: [],
+    await buildTelegramMessageContextForTest({
+      message,
       options: { forceWasMentioned: true },
-      bot: {
-        api: {
-          sendChatAction: vi.fn(),
-          setMessageReaction: vi.fn(),
-        },
-      } as never,
-      cfg: baseConfig,
-      account: { accountId: "default" } as never,
-      historyLimit: 0,
-      groupHistories: new Map(),
-      dmPolicy: "open",
-      allowFrom: [],
-      groupAllowFrom: [],
-      ackReactionScope: "off",
-      logger: { info: vi.fn() },
       resolveGroupActivation: () => true,
-      resolveGroupRequireMention: () => false,
-      resolveTelegramGroupConfig: () => ({
-        groupConfig: { requireMention: false },
-        topicConfig: undefined,
-      }),
     });
 
   it("ignores message_thread_id for regular groups (not forums)", async () => {

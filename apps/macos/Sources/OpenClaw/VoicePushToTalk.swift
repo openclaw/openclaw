@@ -122,7 +122,7 @@ actor VoicePushToTalk {
     private var recognitionTask: SFSpeechRecognitionTask?
     private var tapInstalled = false
 
-    // Session token used to drop stale callbacks when a new capture starts.
+    /// Session token used to drop stale callbacks when a new capture starts.
     private var sessionID = UUID()
 
     private var committed: String = ""
@@ -170,7 +170,8 @@ actor VoicePushToTalk {
         // Pause the always-on wake word recognizer so both pipelines don't fight over the mic tap.
         await VoiceWakeRuntime.shared.pauseForPushToTalk()
         let adoptedPrefix = self.adoptedPrefix
-        let adoptedAttributed: NSAttributedString? = adoptedPrefix.isEmpty ? nil : Self.makeAttributed(
+        let adoptedAttributed: NSAttributedString? = adoptedPrefix.isEmpty ? nil : VoiceOverlayTextFormatting
+            .makeAttributed(
             committed: adoptedPrefix,
             volatile: "",
             isFinal: false)
@@ -244,6 +245,14 @@ actor VoicePushToTalk {
         }
         guard let audioEngine = self.audioEngine else { return }
 
+        guard AudioInputDeviceObserver.hasUsableDefaultInputDevice() else {
+            self.audioEngine = nil
+            throw NSError(
+                domain: "VoicePushToTalk",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "No usable audio input device available"])
+        }
+
         let input = audioEngine.inputNode
         let format = input.outputFormat(forBus: 0)
         if self.tapInstalled {
@@ -284,12 +293,15 @@ actor VoicePushToTalk {
             self.committed = transcript
             self.volatile = ""
         } else {
-            self.volatile = Self.delta(after: self.committed, current: transcript)
+            self.volatile = VoiceOverlayTextFormatting.delta(after: self.committed, current: transcript)
         }
 
         let committedWithPrefix = Self.join(self.adoptedPrefix, self.committed)
         let snapshot = Self.join(committedWithPrefix, self.volatile)
-        let attributed = Self.makeAttributed(committed: committedWithPrefix, volatile: self.volatile, isFinal: isFinal)
+        let attributed = VoiceOverlayTextFormatting.makeAttributed(
+            committed: committedWithPrefix,
+            volatile: self.volatile,
+            isFinal: isFinal)
         if let token = self.overlayToken {
             await MainActor.run {
                 VoiceSessionCoordinator.shared.updatePartial(
@@ -379,11 +391,11 @@ actor VoicePushToTalk {
     // MARK: - Test helpers
 
     static func _testDelta(committed: String, current: String) -> String {
-        self.delta(after: committed, current: current)
+        VoiceOverlayTextFormatting.delta(after: committed, current: current)
     }
 
     static func _testAttributedColors(isFinal: Bool) -> (NSColor, NSColor) {
-        let sample = self.makeAttributed(committed: "a", volatile: "b", isFinal: isFinal)
+        let sample = VoiceOverlayTextFormatting.makeAttributed(committed: "a", volatile: "b", isFinal: isFinal)
         let committedColor = sample.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor ?? .clear
         let volatileColor = sample.attribute(.foregroundColor, at: 1, effectiveRange: nil) as? NSColor ?? .clear
         return (committedColor, volatileColor)
@@ -395,27 +407,4 @@ actor VoicePushToTalk {
         return "\(prefix) \(suffix)"
     }
 
-    private static func delta(after committed: String, current: String) -> String {
-        if current.hasPrefix(committed) {
-            let start = current.index(current.startIndex, offsetBy: committed.count)
-            return String(current[start...])
-        }
-        return current
-    }
-
-    private static func makeAttributed(committed: String, volatile: String, isFinal: Bool) -> NSAttributedString {
-        let full = NSMutableAttributedString()
-        let committedAttr: [NSAttributedString.Key: Any] = [
-            .foregroundColor: NSColor.labelColor,
-            .font: NSFont.systemFont(ofSize: 13, weight: .regular),
-        ]
-        full.append(NSAttributedString(string: committed, attributes: committedAttr))
-        let volatileColor: NSColor = isFinal ? .labelColor : NSColor.tertiaryLabelColor
-        let volatileAttr: [NSAttributedString.Key: Any] = [
-            .foregroundColor: volatileColor,
-            .font: NSFont.systemFont(ofSize: 13, weight: .regular),
-        ]
-        full.append(NSAttributedString(string: volatile, attributes: volatileAttr))
-        return full
-    }
 }

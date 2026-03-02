@@ -1,13 +1,13 @@
-import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
-import {
-  buildWorkspaceSkillStatus,
-  type SkillStatusEntry,
-  type SkillStatusReport,
-} from "../agents/skills-status.js";
-import { formatSkillInfo, formatSkillsCheck, formatSkillsList } from "./skills-cli.js";
+import { describe, expect, it, vi } from "vitest";
+import type { SkillStatusEntry, SkillStatusReport } from "../agents/skills-status.js";
+import { createEmptyInstallChecks } from "./requirements-test-fixtures.js";
+import { formatSkillInfo, formatSkillsCheck, formatSkillsList } from "./skills-cli.format.js";
+
+// Unit tests: don't pay the runtime cost of loading/parsing the real skills loader.
+vi.mock("@mariozechner/pi-coding-agent", () => ({
+  loadSkillsFromDir: () => ({ skills: [] }),
+  formatSkillsForPrompt: () => "",
+}));
 
 function createMockSkill(overrides: Partial<SkillStatusEntry> = {}): SkillStatusEntry {
   return {
@@ -24,22 +24,7 @@ function createMockSkill(overrides: Partial<SkillStatusEntry> = {}): SkillStatus
     disabled: false,
     blockedByAllowlist: false,
     eligible: true,
-    requirements: {
-      bins: [],
-      anyBins: [],
-      env: [],
-      config: [],
-      os: [],
-    },
-    missing: {
-      bins: [],
-      anyBins: [],
-      env: [],
-      config: [],
-      os: [],
-    },
-    configChecks: [],
-    install: [],
+    ...createEmptyInstallChecks(),
     ...overrides,
   };
 }
@@ -123,14 +108,6 @@ describe("skills-cli", () => {
       expect(output).toContain("eligible-one");
       expect(output).not.toContain("not-eligible");
     });
-
-    it("outputs JSON with --json flag", () => {
-      const report = createMockReport([createMockSkill({ name: "json-skill" })]);
-      const output = formatSkillsList(report, { json: true });
-      const parsed = JSON.parse(output);
-      expect(parsed.skills).toHaveLength(1);
-      expect(parsed.skills[0].name).toBe("json-skill");
-    });
   });
 
   describe("formatSkillInfo", () => {
@@ -171,13 +148,6 @@ describe("skills-cli", () => {
       expect(output).toContain("Any binaries");
       expect(output).toContain("API_KEY");
     });
-
-    it("outputs JSON with --json flag", () => {
-      const report = createMockReport([createMockSkill({ name: "info-skill" })]);
-      const output = formatSkillInfo(report, "info-skill", { json: true });
-      const parsed = JSON.parse(output);
-      expect(parsed.name).toBe("info-skill");
-    });
   });
 
   describe("formatSkillsCheck", () => {
@@ -200,77 +170,50 @@ describe("skills-cli", () => {
       expect(output).toContain("go"); // missing binary
       expect(output).toContain("npx clawhub");
     });
-
-    it("outputs JSON with --json flag", () => {
-      const report = createMockReport([
-        createMockSkill({ name: "skill-1", eligible: true }),
-        createMockSkill({ name: "skill-2", eligible: false }),
-      ]);
-      const output = formatSkillsCheck(report, { json: true });
-      const parsed = JSON.parse(output);
-      expect(parsed.summary.eligible).toBe(1);
-      expect(parsed.summary.total).toBe(2);
-    });
   });
 
-  describe("integration: loads real skills from bundled directory", () => {
-    function resolveBundledSkillsDir(): string | undefined {
-      const moduleDir = path.dirname(fileURLToPath(import.meta.url));
-      const root = path.resolve(moduleDir, "..", "..");
-      const candidate = path.join(root, "skills");
-      if (fs.existsSync(candidate)) {
-        return candidate;
-      }
-      return undefined;
-    }
-
-    it("loads bundled skills and formats them", () => {
-      const bundledDir = resolveBundledSkillsDir();
-      if (!bundledDir) {
-        // Skip if skills dir not found (e.g., in CI without skills)
-        return;
-      }
-
-      const report = buildWorkspaceSkillStatus("/tmp", {
-        managedSkillsDir: "/nonexistent",
-      });
-
-      // Should have loaded some skills
-      expect(report.skills.length).toBeGreaterThan(0);
-
-      // Format should work without errors
-      const listOutput = formatSkillsList(report, {});
-      expect(listOutput).toContain("Skills");
-
-      const checkOutput = formatSkillsCheck(report, {});
-      expect(checkOutput).toContain("Total:");
-
-      // JSON output should be valid
-      const jsonOutput = formatSkillsList(report, { json: true });
-      const parsed = JSON.parse(jsonOutput);
-      expect(parsed.skills).toBeInstanceOf(Array);
-    });
-
-    it("formats info for a real bundled skill (peekaboo)", () => {
-      const bundledDir = resolveBundledSkillsDir();
-      if (!bundledDir) {
-        return;
-      }
-
-      const report = buildWorkspaceSkillStatus("/tmp", {
-        managedSkillsDir: "/nonexistent",
-      });
-
-      // peekaboo is a bundled skill that should always exist
-      const peekaboo = report.skills.find((s) => s.name === "peekaboo");
-      if (!peekaboo) {
-        // Skip if peekaboo not found
-        return;
-      }
-
-      const output = formatSkillInfo(report, "peekaboo", {});
-      expect(output).toContain("peekaboo");
-      expect(output).toContain("Details:");
+  describe("JSON output", () => {
+    it.each([
+      {
+        formatter: "list",
+        output: formatSkillsList(createMockReport([createMockSkill({ name: "json-skill" })]), {
+          json: true,
+        }),
+        assert: (parsed: Record<string, unknown>) => {
+          const skills = parsed.skills as Array<Record<string, unknown>>;
+          expect(skills).toHaveLength(1);
+          expect(skills[0]?.name).toBe("json-skill");
+        },
+      },
+      {
+        formatter: "info",
+        output: formatSkillInfo(
+          createMockReport([createMockSkill({ name: "info-skill" })]),
+          "info-skill",
+          { json: true },
+        ),
+        assert: (parsed: Record<string, unknown>) => {
+          expect(parsed.name).toBe("info-skill");
+        },
+      },
+      {
+        formatter: "check",
+        output: formatSkillsCheck(
+          createMockReport([
+            createMockSkill({ name: "skill-1", eligible: true }),
+            createMockSkill({ name: "skill-2", eligible: false }),
+          ]),
+          { json: true },
+        ),
+        assert: (parsed: Record<string, unknown>) => {
+          const summary = parsed.summary as Record<string, unknown>;
+          expect(summary.eligible).toBe(1);
+          expect(summary.total).toBe(2);
+        },
+      },
+    ])("outputs JSON with --json flag for $formatter", ({ output, assert }) => {
+      const parsed = JSON.parse(output) as Record<string, unknown>;
+      assert(parsed);
     });
   });
 });

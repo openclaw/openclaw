@@ -8,6 +8,7 @@ type DeliveryPayload = {
   text?: string;
   mediaUrl?: string;
   mediaUrls?: string[];
+  channelData?: Record<string, unknown>;
 };
 
 export function pickSummaryFromOutput(text: string | undefined) {
@@ -34,6 +35,19 @@ export function pickLastNonEmptyTextFromPayloads(payloads: Array<{ text?: string
     const clean = (payloads[i]?.text ?? "").trim();
     if (clean) {
       return clean;
+    }
+  }
+  return undefined;
+}
+
+export function pickLastDeliverablePayload(payloads: DeliveryPayload[]) {
+  for (let i = payloads.length - 1; i >= 0; i--) {
+    const payload = payloads[i];
+    const text = (payload?.text ?? "").trim();
+    const hasMedia = Boolean(payload?.mediaUrl) || (payload?.mediaUrls?.length ?? 0) > 0;
+    const hasChannelData = Object.keys(payload?.channelData ?? {}).length > 0;
+    if (text || hasMedia || hasChannelData) {
+      return payload;
     }
   }
   return undefined;

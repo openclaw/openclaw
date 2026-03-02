@@ -18,7 +18,7 @@ Status: bundled plugin that talks to the BlueBubbles macOS server over HTTP. **R
 - OpenClaw talks to it through its REST API (`GET /api/v1/ping`, `POST /message/text`, `POST /chat/:id/*`).
 - Incoming messages arrive via webhooks; outgoing replies, typing indicators, read receipts, and tapbacks are REST calls.
 - Attachments and stickers are ingested as inbound media (and surfaced to the agent when possible).
-- Pairing/allowlist works the same way as other channels (`/start/pairing` etc) with `channels.bluebubbles.allowFrom` + pairing codes.
+- Pairing/allowlist works the same way as other channels (`/channels/pairing` etc) with `channels.bluebubbles.allowFrom` + pairing codes.
 - Reactions are surfaced as system events just like Slack/Telegram so agents can "mention" them before replying.
 - Advanced features: edit, unsend, reply threading, message effects, group management.
 
@@ -27,6 +27,7 @@ Status: bundled plugin that talks to the BlueBubbles macOS server over HTTP. **R
 1. Install the BlueBubbles server on your Mac (follow the instructions at [bluebubbles.app/install](https://bluebubbles.app/install)).
 2. In the BlueBubbles config, enable the web API and set a password.
 3. Run `openclaw onboard` and select BlueBubbles, or configure manually:
+
    ```json5
    {
      channels: {
@@ -39,8 +40,14 @@ Status: bundled plugin that talks to the BlueBubbles macOS server over HTTP. **R
      },
    }
    ```
+
 4. Point BlueBubbles webhooks to your gateway (example: `https://your-gateway-host:3000/bluebubbles-webhook?password=<password>`).
 5. Start the gateway; it will register the webhook handler and start pairing.
+
+Security note:
+
+- Always set a webhook password.
+- Webhook authentication is always required. OpenClaw rejects BlueBubbles webhook requests unless they include a password/guid that matches `channels.bluebubbles.password` (for example `?password=<password>` or `x-password`), regardless of loopback/proxy topology.
 
 ## Keeping Messages.app alive (VM / headless setups)
 
@@ -147,7 +154,7 @@ DMs:
 - Approve via:
   - `openclaw pairing list bluebubbles`
   - `openclaw pairing approve bluebubbles <CODE>`
-- Pairing is the default token exchange. Details: [Pairing](/start/pairing)
+- Pairing is the default token exchange. Details: [Pairing](/channels/pairing)
 
 Groups:
 
@@ -298,6 +305,7 @@ Provider options:
 - `channels.bluebubbles.textChunkLimit`: Outbound chunk size in chars (default: 4000).
 - `channels.bluebubbles.chunkMode`: `length` (default) splits only when exceeding `textChunkLimit`; `newline` splits on blank lines (paragraph boundaries) before length chunking.
 - `channels.bluebubbles.mediaMaxMb`: Inbound media cap in MB (default: 8).
+- `channels.bluebubbles.mediaLocalRoots`: Explicit allowlist of absolute local directories permitted for outbound local media paths. Local path sends are denied by default unless this is configured. Per-account override: `channels.bluebubbles.accounts.<accountId>.mediaLocalRoots`.
 - `channels.bluebubbles.historyLimit`: Max group messages for context (0 disables).
 - `channels.bluebubbles.dmHistoryLimit`: DM history limit.
 - `channels.bluebubbles.actions`: Enable/disable specific actions.
@@ -335,4 +343,4 @@ Prefer `chat_guid` for stable routing:
 - OpenClaw auto-hides known-broken actions based on the BlueBubbles server's macOS version. If edit still appears on macOS 26 (Tahoe), disable it manually with `channels.bluebubbles.actions.edit=false`.
 - For status/health info: `openclaw status --all` or `openclaw status --deep`.
 
-For general channel workflow reference, see [Channels](/channels) and the [Plugins](/plugins) guide.
+For general channel workflow reference, see [Channels](/channels) and the [Plugins](/tools/plugin) guide.

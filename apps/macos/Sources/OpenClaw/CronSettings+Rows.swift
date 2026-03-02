@@ -207,7 +207,7 @@ extension CronSettings {
 
     func payloadSummary(_ job: CronJob) -> some View {
         let payload = job.payload
-        VStack(alignment: .leading, spacing: 6) {
+        return VStack(alignment: .leading, spacing: 6) {
             Text("Payload")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)

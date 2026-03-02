@@ -4,21 +4,28 @@ enum CronSessionTarget: String, CaseIterable, Identifiable, Codable {
     case main
     case isolated
 
-    var id: String { self.rawValue }
+    var id: String {
+        self.rawValue
+    }
 }
 
 enum CronWakeMode: String, CaseIterable, Identifiable, Codable {
     case now
     case nextHeartbeat = "next-heartbeat"
 
-    var id: String { self.rawValue }
+    var id: String {
+        self.rawValue
+    }
 }
 
 enum CronDeliveryMode: String, CaseIterable, Identifiable, Codable {
     case none
     case announce
+    case webhook
 
-    var id: String { self.rawValue }
+    var id: String {
+        self.rawValue
+    }
 }
 
 struct CronDelivery: Codable, Equatable {
@@ -97,25 +104,21 @@ enum CronSchedule: Codable, Equatable {
     static func parseAtDate(_ value: String) -> Date? {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty { return nil }
-        if let date = isoFormatterWithFractional.date(from: trimmed) { return date }
-        return isoFormatter.date(from: trimmed)
+        if let date = makeIsoFormatter(withFractional: true).date(from: trimmed) { return date }
+        return self.makeIsoFormatter(withFractional: false).date(from: trimmed)
     }
 
     static func formatIsoDate(_ date: Date) -> String {
-        isoFormatter.string(from: date)
+        self.makeIsoFormatter(withFractional: false).string(from: date)
     }
 
-    private static let isoFormatter: ISO8601DateFormatter = {
+    private static func makeIsoFormatter(withFractional: Bool) -> ISO8601DateFormatter {
         let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime]
+        formatter.formatOptions = withFractional
+            ? [.withInternetDateTime, .withFractionalSeconds]
+            : [.withInternetDateTime]
         return formatter
-    }()
-
-    private static let isoFormatterWithFractional: ISO8601DateFormatter = {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return formatter
-    }()
+    }
 }
 
 enum CronPayload: Codable, Equatable {
@@ -235,7 +238,9 @@ struct CronEvent: Codable, Sendable {
 }
 
 struct CronRunLogEntry: Codable, Identifiable, Sendable {
-    var id: String { "\(self.jobId)-\(self.ts)" }
+    var id: String {
+        "\(self.jobId)-\(self.ts)"
+    }
 
     let ts: Int
     let jobId: String
@@ -247,7 +252,10 @@ struct CronRunLogEntry: Codable, Identifiable, Sendable {
     let durationMs: Int?
     let nextRunAtMs: Int?
 
-    var date: Date { Date(timeIntervalSince1970: TimeInterval(self.ts) / 1000) }
+    var date: Date {
+        Date(timeIntervalSince1970: TimeInterval(self.ts) / 1000)
+    }
+
     var runDate: Date? {
         guard let runAtMs else { return nil }
         return Date(timeIntervalSince1970: TimeInterval(runAtMs) / 1000)

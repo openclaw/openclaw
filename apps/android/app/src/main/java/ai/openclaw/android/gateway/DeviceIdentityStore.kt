@@ -3,11 +3,7 @@ package ai.openclaw.android.gateway
 import android.content.Context
 import android.util.Base64
 import java.io.File
-import java.security.KeyFactory
-import java.security.KeyPairGenerator
 import java.security.MessageDigest
-import java.security.Signature
-import java.security.spec.PKCS8EncodedKeySpec
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
@@ -22,37 +18,68 @@ data class DeviceIdentity(
 class DeviceIdentityStore(context: Context) {
   private val json = Json { ignoreUnknownKeys = true }
   private val identityFile = File(context.filesDir, "openclaw/identity/device.json")
+  @Volatile private var cachedIdentity: DeviceIdentity? = null
 
   @Synchronized
   fun loadOrCreate(): DeviceIdentity {
+    cachedIdentity?.let { return it }
     val existing = load()
     if (existing != null) {
       val derived = deriveDeviceId(existing.publicKeyRawBase64)
       if (derived != null && derived != existing.deviceId) {
         val updated = existing.copy(deviceId = derived)
         save(updated)
+        cachedIdentity = updated
         return updated
       }
+      cachedIdentity = existing
       return existing
     }
     val fresh = generate()
     save(fresh)
+    cachedIdentity = fresh
     return fresh
   }
 
   fun signPayload(payload: String, identity: DeviceIdentity): String? {
     return try {
+      // Use BC lightweight API directly — JCA provider registration is broken by R8
       val privateKeyBytes = Base64.decode(identity.privateKeyPkcs8Base64, Base64.DEFAULT)
-      val keySpec = PKCS8EncodedKeySpec(privateKeyBytes)
-      val keyFactory = KeyFactory.getInstance("Ed25519")
-      val privateKey = keyFactory.generatePrivate(keySpec)
-      val signature = Signature.getInstance("Ed25519")
-      signature.initSign(privateKey)
-      signature.update(payload.toByteArray(Charsets.UTF_8))
-      base64UrlEncode(signature.sign())
-    } catch (_: Throwable) {
+      val pkInfo = org.bouncycastle.asn1.pkcs.PrivateKeyInfo.getInstance(privateKeyBytes)
+      val parsed = pkInfo.parsePrivateKey()
+      val rawPrivate = org.bouncycastle.asn1.DEROctetString.getInstance(parsed).octets
+      val privateKey = org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters(rawPrivate, 0)
+      val signer = org.bouncycastle.crypto.signers.Ed25519Signer()
+      signer.init(true, privateKey)
+      val payloadBytes = payload.toByteArray(Charsets.UTF_8)
+      signer.update(payloadBytes, 0, payloadBytes.size)
+      base64UrlEncode(signer.generateSignature())
+    } catch (e: Throwable) {
+      android.util.Log.e("DeviceAuth", "signPayload FAILED: ${e.javaClass.simpleName}: ${e.message}", e)
       null
     }
+  }
+
+  fun verifySelfSignature(payload: String, signatureBase64Url: String, identity: DeviceIdentity): Boolean {
+    return try {
+      val rawPublicKey = Base64.decode(identity.publicKeyRawBase64, Base64.DEFAULT)
+      val pubKey = org.bouncycastle.crypto.params.Ed25519PublicKeyParameters(rawPublicKey, 0)
+      val sigBytes = base64UrlDecode(signatureBase64Url)
+      val verifier = org.bouncycastle.crypto.signers.Ed25519Signer()
+      verifier.init(false, pubKey)
+      val payloadBytes = payload.toByteArray(Charsets.UTF_8)
+      verifier.update(payloadBytes, 0, payloadBytes.size)
+      verifier.verifySignature(sigBytes)
+    } catch (e: Throwable) {
+      android.util.Log.e("DeviceAuth", "self-verify exception: ${e.message}", e)
+      false
+    }
+  }
+
+  private fun base64UrlDecode(input: String): ByteArray {
+    val normalized = input.replace('-', '+').replace('_', '/')
+    val padded = normalized + "=".repeat((4 - normalized.length % 4) % 4)
+    return Base64.decode(padded, Base64.DEFAULT)
   }
 
   fun publicKeyBase64Url(identity: DeviceIdentity): String? {
@@ -97,15 +124,21 @@ class DeviceIdentityStore(context: Context) {
   }
 
   private fun generate(): DeviceIdentity {
-    val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
-    val spki = keyPair.public.encoded
-    val rawPublic = stripSpkiPrefix(spki)
+    // Use BC lightweight API directly to avoid JCA provider issues with R8
+    val kpGen = org.bouncycastle.crypto.generators.Ed25519KeyPairGenerator()
+    kpGen.init(org.bouncycastle.crypto.params.Ed25519KeyGenerationParameters(java.security.SecureRandom()))
+    val kp = kpGen.generateKeyPair()
+    val pubKey = kp.public as org.bouncycastle.crypto.params.Ed25519PublicKeyParameters
+    val privKey = kp.private as org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters
+    val rawPublic = pubKey.encoded  // 32 bytes
     val deviceId = sha256Hex(rawPublic)
-    val privateKey = keyPair.private.encoded
+    // Encode private key as PKCS8 for storage
+    val privKeyInfo = org.bouncycastle.crypto.util.PrivateKeyInfoFactory.createPrivateKeyInfo(privKey)
+    val pkcs8Bytes = privKeyInfo.encoded
     return DeviceIdentity(
       deviceId = deviceId,
       publicKeyRawBase64 = Base64.encodeToString(rawPublic, Base64.NO_WRAP),
-      privateKeyPkcs8Base64 = Base64.encodeToString(privateKey, Base64.NO_WRAP),
+      privateKeyPkcs8Base64 = Base64.encodeToString(pkcs8Bytes, Base64.NO_WRAP),
       createdAtMs = System.currentTimeMillis(),
     )
   }
@@ -119,22 +152,16 @@ class DeviceIdentityStore(context: Context) {
     }
   }
 
-  private fun stripSpkiPrefix(spki: ByteArray): ByteArray {
-    if (spki.size == ED25519_SPKI_PREFIX.size + 32 &&
-      spki.copyOfRange(0, ED25519_SPKI_PREFIX.size).contentEquals(ED25519_SPKI_PREFIX)
-    ) {
-      return spki.copyOfRange(ED25519_SPKI_PREFIX.size, spki.size)
-    }
-    return spki
-  }
-
   private fun sha256Hex(data: ByteArray): String {
     val digest = MessageDigest.getInstance("SHA-256").digest(data)
-    val out = StringBuilder(digest.size * 2)
+    val out = CharArray(digest.size * 2)
+    var i = 0
     for (byte in digest) {
-      out.append(String.format("%02x", byte))
+      val v = byte.toInt() and 0xff
+      out[i++] = HEX[v ushr 4]
+      out[i++] = HEX[v and 0x0f]
     }
-    return out.toString()
+    return String(out)
   }
 
   private fun base64UrlEncode(data: ByteArray): String {
@@ -142,9 +169,6 @@ class DeviceIdentityStore(context: Context) {
   }
 
   companion object {
-    private val ED25519_SPKI_PREFIX =
-      byteArrayOf(
-        0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00,
-      )
+    private val HEX = "0123456789abcdef".toCharArray()
   }
 }

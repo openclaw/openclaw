@@ -83,7 +83,7 @@ Example allowlist config:
     model: { primary: "anthropic/claude-sonnet-4-5" },
     models: {
       "anthropic/claude-sonnet-4-5": { alias: "Sonnet" },
-      "anthropic/claude-opus-4-5": { alias: "Opus" },
+      "anthropic/claude-opus-4-6": { alias: "Opus" },
     },
   },
 }
@@ -104,6 +104,7 @@ You can switch models for the current session without restarting:
 Notes:
 
 - `/model` (and `/model list`) is a compact, numbered picker (model family + available providers).
+- On Discord, `/model` and `/models` open an interactive picker with provider and model dropdowns plus a Submit step.
 - `/model <#>` selects from that picker.
 - `/model status` is the detailed view (auth candidates and, when configured, provider endpoint `baseUrl` + `api` mode).
 - Model refs are parsed by splitting on the **first** `/`. Use `provider/model` when typing `/model <ref>`.
@@ -194,7 +195,7 @@ Scan results are ranked by:
 Input
 
 - OpenRouter `/models` list (filter `:free`)
-- Requires OpenRouter API key from auth profiles or `OPENROUTER_API_KEY` (see [/environment](/environment))
+- Requires OpenRouter API key from auth profiles or `OPENROUTER_API_KEY` (see [/environment](/help/environment))
 - Optional filters: `--max-age-days`, `--min-params`, `--provider`, `--max-candidates`
 - Probe controls: `--timeout`, `--concurrency`
 
@@ -206,3 +207,9 @@ mode, pass `--yes` to accept defaults.
 Custom providers in `models.providers` are written into `models.json` under the
 agent directory (default `~/.openclaw/agents/<agentId>/models.json`). This file
 is merged by default unless `models.mode` is set to `replace`.
+
+Merge mode precedence for matching provider IDs:
+
+- Non-empty `apiKey`/`baseUrl` already present in the agent `models.json` win.
+- Empty or missing agent `apiKey`/`baseUrl` fall back to config `models.providers`.
+- Other provider fields are refreshed from config and normalized catalog data.

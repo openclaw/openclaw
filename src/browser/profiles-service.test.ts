@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import type { BrowserRouteContext, BrowserServerState } from "./server-context.js";
 import { resolveBrowserConfig } from "./config.js";
 import { createBrowserProfilesService } from "./profiles-service.js";
+import type { BrowserRouteContext, BrowserServerState } from "./server-context.js";
 
 vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/config.js")>();
@@ -58,6 +58,46 @@ describe("BrowserProfilesService", () => {
     expect(result.cdpPort).toBe(18801);
     expect(result.isRemote).toBe(false);
     expect(state.resolved.profiles.work?.cdpPort).toBe(18801);
+    expect(writeConfigFile).toHaveBeenCalled();
+  });
+
+  it("falls back to derived CDP range when resolved CDP range is missing", async () => {
+    const base = resolveBrowserConfig({});
+    const baseWithoutRange = { ...base } as {
+      [key: string]: unknown;
+      cdpPortRangeStart?: unknown;
+      cdpPortRangeEnd?: unknown;
+    };
+    delete baseWithoutRange.cdpPortRangeStart;
+    delete baseWithoutRange.cdpPortRangeEnd;
+    const resolved = {
+      ...baseWithoutRange,
+      controlPort: 30000,
+    } as BrowserServerState["resolved"];
+    const { ctx, state } = createCtx(resolved);
+
+    vi.mocked(loadConfig).mockReturnValue({ browser: { profiles: {} } });
+
+    const service = createBrowserProfilesService(ctx);
+    const result = await service.createProfile({ name: "work" });
+
+    expect(result.cdpPort).toBe(30009);
+    expect(state.resolved.profiles.work?.cdpPort).toBe(30009);
+    expect(writeConfigFile).toHaveBeenCalled();
+  });
+
+  it("allocates from configured cdpPortRangeStart for new local profiles", async () => {
+    const resolved = resolveBrowserConfig({ cdpPortRangeStart: 19000 });
+    const { ctx, state } = createCtx(resolved);
+
+    vi.mocked(loadConfig).mockReturnValue({ browser: { cdpPortRangeStart: 19000, profiles: {} } });
+
+    const service = createBrowserProfilesService(ctx);
+    const result = await service.createProfile({ name: "work" });
+
+    expect(result.cdpPort).toBe(19001);
+    expect(result.isRemote).toBe(false);
+    expect(state.resolved.profiles.work?.cdpPort).toBe(19001);
     expect(writeConfigFile).toHaveBeenCalled();
   });
 

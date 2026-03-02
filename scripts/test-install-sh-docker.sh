@@ -14,12 +14,13 @@ echo "==> Build smoke image (upgrade, root): $SMOKE_IMAGE"
 docker build \
   -t "$SMOKE_IMAGE" \
   -f "$ROOT_DIR/scripts/docker/install-sh-smoke/Dockerfile" \
-  "$ROOT_DIR/scripts/docker/install-sh-smoke"
+  "$ROOT_DIR/scripts/docker"
 
 echo "==> Run installer smoke test (root): $INSTALL_URL"
 docker run --rm -t \
   -v "${LATEST_DIR}:/out" \
   -e OPENCLAW_INSTALL_URL="$INSTALL_URL" \
+  -e OPENCLAW_INSTALL_METHOD=npm \
   -e OPENCLAW_INSTALL_LATEST_OUT="/out/latest" \
   -e OPENCLAW_INSTALL_SMOKE_PREVIOUS="${OPENCLAW_INSTALL_SMOKE_PREVIOUS:-${CLAWDBOT_INSTALL_SMOKE_PREVIOUS:-}}" \
   -e OPENCLAW_INSTALL_SMOKE_SKIP_PREVIOUS="${OPENCLAW_INSTALL_SMOKE_SKIP_PREVIOUS:-${CLAWDBOT_INSTALL_SMOKE_SKIP_PREVIOUS:-0}}" \
@@ -39,11 +40,12 @@ else
   docker build \
     -t "$NONROOT_IMAGE" \
     -f "$ROOT_DIR/scripts/docker/install-sh-nonroot/Dockerfile" \
-    "$ROOT_DIR/scripts/docker/install-sh-nonroot"
+    "$ROOT_DIR/scripts/docker"
 
   echo "==> Run installer non-root test: $INSTALL_URL"
   docker run --rm -t \
     -e OPENCLAW_INSTALL_URL="$INSTALL_URL" \
+    -e OPENCLAW_INSTALL_METHOD=npm \
     -e OPENCLAW_INSTALL_EXPECT_VERSION="$LATEST_VERSION" \
     -e OPENCLAW_NO_ONBOARD=1 \
     -e DEBIAN_FRONTEND=noninteractive \
