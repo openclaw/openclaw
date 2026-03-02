@@ -291,6 +291,9 @@ const RECALL_MAX_CHUNKS = 10;
 
 /**
  * Split text into chunks that fit within the embedding model's input limit.
+ * Chunks from the END of the text first (most recent conversation turns are
+ * the most relevant for recall), then works backwards. If the chunk cap is
+ * hit, the oldest content at the start is what gets dropped.
  * Prefers splitting at paragraph, line, or word boundaries.
  */
 function splitForRecall(text: string, maxBytes = RECALL_MAX_BYTES): string[] {
@@ -298,49 +301,52 @@ function splitForRecall(text: string, maxBytes = RECALL_MAX_BYTES): string[] {
     return [text];
   }
 
+  // Work backwards from the end so the most recent content is always included
   const chunks: string[] = [];
-  let start = 0;
+  let end = text.length;
 
-  while (start < text.length && chunks.length < RECALL_MAX_CHUNKS) {
-    // Binary search for the rightmost position within byte limit
-    let lo = start + 1;
-    let hi = Math.min(text.length, start + maxBytes);
-    let best = start + 1;
+  while (end > 0 && chunks.length < RECALL_MAX_CHUNKS) {
+    // Binary search for the leftmost start position within byte limit
+    let lo = Math.max(0, end - maxBytes);
+    let hi = end - 1;
+    let best = hi;
 
     while (lo <= hi) {
       const mid = Math.floor((lo + hi) / 2);
-      if (Buffer.byteLength(text.slice(start, mid), "utf8") <= maxBytes) {
+      if (Buffer.byteLength(text.slice(mid, end), "utf8") <= maxBytes) {
         best = mid;
-        lo = mid + 1;
-      } else {
         hi = mid - 1;
+      } else {
+        lo = mid + 1;
       }
     }
 
     // Try to break at a natural boundary (paragraph > line > space)
-    if (best < text.length) {
-      const slice = text.slice(start, best);
+    if (best > 0) {
+      const slice = text.slice(best, end);
       const halfLen = slice.length * 0.5;
-      const paraBrk = slice.lastIndexOf("\n\n");
-      const lineBrk = slice.lastIndexOf("\n");
-      const spaceBrk = slice.lastIndexOf(" ");
+      const paraBrk = slice.indexOf("\n\n");
+      const lineBrk = slice.indexOf("\n");
+      const spaceBrk = slice.indexOf(" ");
 
-      if (paraBrk > halfLen) {
-        best = start + paraBrk + 2;
-      } else if (lineBrk > halfLen) {
-        best = start + lineBrk + 1;
-      } else if (spaceBrk > halfLen) {
-        best = start + spaceBrk + 1;
+      if (paraBrk >= 0 && paraBrk < halfLen) {
+        best = best + paraBrk + 2;
+      } else if (lineBrk >= 0 && lineBrk < halfLen) {
+        best = best + lineBrk + 1;
+      } else if (spaceBrk >= 0 && spaceBrk < halfLen) {
+        best = best + spaceBrk + 1;
       }
     }
 
-    const chunk = text.slice(start, best).trim();
+    const chunk = text.slice(best, end).trim();
     if (chunk) {
       chunks.push(chunk);
     }
-    start = best;
+    end = best;
   }
 
+  // Reverse so chunks are in chronological order (oldest first)
+  chunks.reverse();
   return chunks;
 }
 
