@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { SsrFBlockedError, type LookupFn } from "../infra/net/ssrf.js";
 import {
   assertBrowserNavigationAllowed,
@@ -12,6 +12,10 @@ function createLookupFn(address: string): LookupFn {
 }
 
 describe("browser navigation guard", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it("blocks private loopback URLs by default", async () => {
     await expect(
       assertBrowserNavigationAllowed({
@@ -93,6 +97,29 @@ describe("browser navigation guard", () => {
       }),
     ).resolves.toBeUndefined();
     expect(lookupFn).toHaveBeenCalledWith("example.com", { all: true });
+  });
+
+  it("blocks strict policy navigation when env proxy is configured", async () => {
+    vi.stubEnv("HTTP_PROXY", "http://127.0.0.1:7890");
+    const lookupFn = createLookupFn("93.184.216.34");
+    await expect(
+      assertBrowserNavigationAllowed({
+        url: "https://example.com",
+        lookupFn,
+      }),
+    ).rejects.toBeInstanceOf(InvalidBrowserNavigationUrlError);
+  });
+
+  it("allows env proxy navigation when private-network mode is explicitly enabled", async () => {
+    vi.stubEnv("HTTP_PROXY", "http://127.0.0.1:7890");
+    const lookupFn = createLookupFn("93.184.216.34");
+    await expect(
+      assertBrowserNavigationAllowed({
+        url: "https://example.com",
+        lookupFn,
+        ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
+      }),
+    ).resolves.toBeUndefined();
   });
 
   it("rejects invalid URLs", async () => {
