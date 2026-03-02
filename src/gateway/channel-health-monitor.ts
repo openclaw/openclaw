@@ -7,7 +7,7 @@ const log = createSubsystemLogger("gateway/health-monitor");
 const DEFAULT_CHECK_INTERVAL_MS = 5 * 60_000;
 const DEFAULT_STARTUP_GRACE_MS = 60_000;
 const DEFAULT_COOLDOWN_CYCLES = 2;
-const DEFAULT_MAX_RESTARTS_PER_HOUR = 3;
+const DEFAULT_MAX_RESTARTS_PER_HOUR = 10;
 const ONE_HOUR_MS = 60 * 60_000;
 
 /**
