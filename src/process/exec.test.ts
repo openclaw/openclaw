@@ -25,7 +25,7 @@ describe("runCommandWithTimeout", () => {
           'process.stdout.write((process.env.OPENCLAW_BASE_ENV ?? "") + "|" + (process.env.OPENCLAW_TEST_ENV ?? ""))',
         ],
         {
-          timeoutMs: 400,
+          timeoutMs: 120,
           env: { OPENCLAW_TEST_ENV: "ok" },
         },
       );
@@ -40,7 +40,7 @@ describe("runCommandWithTimeout", () => {
     const result = await runCommandWithTimeout(
       [process.execPath, "-e", "setTimeout(() => {}, 20)"],
       {
-        timeoutMs: 180,
+        timeoutMs: 80,
         noOutputTimeoutMs: 8,
       },
     );
@@ -68,7 +68,7 @@ describe("runCommandWithTimeout", () => {
         ].join(" "),
       ],
       {
-        timeoutMs: 500,
+        timeoutMs: 180,
         // Keep a healthy margin above the emit interval while avoiding long idle waits.
         noOutputTimeoutMs: 120,
       },
@@ -84,7 +84,7 @@ describe("runCommandWithTimeout", () => {
     const result = await runCommandWithTimeout(
       [process.execPath, "-e", "setTimeout(() => {}, 12)"],
       {
-        timeoutMs: 8,
+        timeoutMs: 6,
       },
     );
 
