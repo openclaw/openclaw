@@ -18,6 +18,9 @@ enum KeychainStore {
     }
 
     static func saveString(_ value: String, service: String, account: String) -> Bool {
+        // Delete-then-add ensures kSecAttrAccessible is always applied.
+        // SecItemUpdate cannot change the accessibility level of an existing item,
+        // so a stale item created with a weaker policy would retain it on update.
         let data = Data(value.utf8)
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -25,10 +28,7 @@ enum KeychainStore {
             kSecAttrAccount as String: account,
         ]
 
-        let update: [String: Any] = [kSecValueData as String: data]
-        let status = SecItemUpdate(query as CFDictionary, update as CFDictionary)
-        if status == errSecSuccess { return true }
-        if status != errSecItemNotFound { return false }
+        SecItemDelete(query as CFDictionary)
 
         var insert = query
         insert[kSecValueData as String] = data
