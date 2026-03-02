@@ -128,6 +128,10 @@ export function markdownToSlackMrkdwn(
   return renderMarkdownWithMarkers(ir, buildSlackRenderOptions());
 }
 
+export function normalizeSlackOutboundText(markdown: string): string {
+  return markdownToSlackMrkdwn(markdown ?? "");
+}
+
 export function markdownToSlackMrkdwnChunks(
   markdown: string,
   limit: number,
