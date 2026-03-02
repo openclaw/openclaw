@@ -9,6 +9,15 @@ const OPENROUTER_APP_HEADERS: Record<string, string> = {
   "HTTP-Referer": "https://openclaw.ai",
   "X-Title": "OpenClaw",
 };
+const KILOCODE_FEATURE_HEADER = "X-KILOCODE-FEATURE";
+const KILOCODE_FEATURE_DEFAULT = "openclaw";
+const KILOCODE_FEATURE_ENV_VAR = "KILOCODE_FEATURE";
+
+function resolveKilocodeAppHeaders(): Record<string, string> {
+  const feature = process.env[KILOCODE_FEATURE_ENV_VAR]?.trim() || KILOCODE_FEATURE_DEFAULT;
+  return { [KILOCODE_FEATURE_HEADER]: feature };
+}
+
 const ANTHROPIC_CONTEXT_1M_BETA = "context-1m-2025-08-07";
 const ANTHROPIC_1M_MODEL_PREFIXES = ["claude-opus-4", "claude-sonnet-4"] as const;
 // NOTE: We only force `store=true` for *direct* OpenAI Responses.
@@ -911,6 +920,58 @@ function isOpenRouterReasoningUnsupported(modelId: string): boolean {
   return id.startsWith("x-ai/");
 }
 
+/**
+ * Create a streamFn wrapper that adds the Kilocode feature attribution header
+ * and injects reasoning.effort based on the configured thinking level.
+ *
+ * The Kilocode provider gateway manages provider-specific quirks (e.g. cache
+ * control) server-side, so we only handle header injection and reasoning here.
+ */
+function createKilocodeWrapper(
+  baseStreamFn: StreamFn | undefined,
+  thinkingLevel?: ThinkLevel,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    const onPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      headers: {
+        ...options?.headers,
+        ...resolveKilocodeAppHeaders(),
+      },
+      onPayload: (payload) => {
+        if (thinkingLevel && payload && typeof payload === "object") {
+          const payloadObj = payload as Record<string, unknown>;
+
+          // Remove flat reasoning_effort — the gateway expects the nested
+          // reasoning.effort format (same as OpenRouter).
+          delete payloadObj.reasoning_effort;
+
+          if (thinkingLevel !== "off") {
+            const existingReasoning = payloadObj.reasoning;
+            if (
+              existingReasoning &&
+              typeof existingReasoning === "object" &&
+              !Array.isArray(existingReasoning)
+            ) {
+              const reasoningObj = existingReasoning as Record<string, unknown>;
+              if (!("max_tokens" in reasoningObj) && !("effort" in reasoningObj)) {
+                reasoningObj.effort = mapThinkingLevelToOpenRouterReasoningEffort(thinkingLevel);
+              }
+            } else if (!existingReasoning) {
+              payloadObj.reasoning = {
+                effort: mapThinkingLevelToOpenRouterReasoningEffort(thinkingLevel),
+              };
+            }
+          }
+        }
+        onPayload?.(payload);
+      },
+    });
+  };
+}
+
 function isGemini31Model(modelId: string): boolean {
   const normalized = modelId.toLowerCase();
   return normalized.includes("gemini-3.1-pro") || normalized.includes("gemini-3.1-flash");
@@ -1122,6 +1183,14 @@ export function applyExtraParamsToAgent(
     const openRouterThinkingLevel = skipReasoningInjection ? undefined : thinkingLevel;
     agent.streamFn = createOpenRouterWrapper(agent.streamFn, openRouterThinkingLevel);
     agent.streamFn = createOpenRouterSystemCacheWrapper(agent.streamFn);
+  }
+
+  if (provider === "kilocode") {
+    log.debug(`applying Kilocode feature header for ${provider}/${modelId}`);
+    // kilo/auto is a dynamic routing model — skip reasoning injection
+    // (same rationale as OpenRouter "auto"). See: openclaw/openclaw#24851
+    const kilocodeThinkingLevel = modelId === "kilo/auto" ? undefined : thinkingLevel;
+    agent.streamFn = createKilocodeWrapper(agent.streamFn, kilocodeThinkingLevel);
   }
 
   if (provider === "amazon-bedrock" && !isAnthropicBedrockModel(modelId)) {
