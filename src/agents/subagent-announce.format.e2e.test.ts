@@ -34,6 +34,8 @@ const embeddedRunMock = {
 const subagentRegistryMock = {
   isSubagentSessionRunActive: vi.fn(() => true),
   countActiveDescendantRuns: vi.fn((_sessionKey: string) => 0),
+  countPendingDescendantRuns: vi.fn((_sessionKey: string) => 0),
+  countPendingDescendantRunsExcludingRun: vi.fn((_sessionKey: string, _runId: string) => 0),
   resolveRequesterForChildSession: vi.fn((_sessionKey: string): RequesterResolution => null),
 };
 const subagentDeliveryTargetHookMock = vi.fn(
@@ -172,6 +174,16 @@ describe("subagent announce formatting", () => {
     embeddedRunMock.waitForEmbeddedPiRunEnd.mockClear().mockResolvedValue(true);
     subagentRegistryMock.isSubagentSessionRunActive.mockClear().mockReturnValue(true);
     subagentRegistryMock.countActiveDescendantRuns.mockClear().mockReturnValue(0);
+    subagentRegistryMock.countPendingDescendantRuns
+      .mockClear()
+      .mockImplementation((sessionKey: string) =>
+        subagentRegistryMock.countActiveDescendantRuns(sessionKey),
+      );
+    subagentRegistryMock.countPendingDescendantRunsExcludingRun
+      .mockClear()
+      .mockImplementation((sessionKey: string, _runId: string) =>
+        subagentRegistryMock.countPendingDescendantRuns(sessionKey),
+      );
     subagentRegistryMock.resolveRequesterForChildSession.mockClear().mockReturnValue(null);
     hasSubagentDeliveryTargetHook = false;
     hookRunnerMock.hasHooks.mockClear();
@@ -406,6 +418,45 @@ describe("subagent announce formatting", () => {
     expect(msg).toContain("✅ Subagent main finished");
     expect(msg).toContain("final answer: 2");
     expect(msg).not.toContain("Convert the result above into your normal assistant voice");
+  });
+
+  it("keeps direct completion send when only the announcing run itself is pending", async () => {
+    sessionStore = {
+      "agent:main:subagent:test": {
+        sessionId: "child-session-self-pending",
+      },
+      "agent:main:main": {
+        sessionId: "requester-session-self-pending",
+      },
+    };
+    chatHistoryMock.mockResolvedValueOnce({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "final answer: done" }] }],
+    });
+    subagentRegistryMock.countPendingDescendantRuns.mockImplementation((sessionKey: string) =>
+      sessionKey === "agent:main:main" ? 1 : 0,
+    );
+    subagentRegistryMock.countPendingDescendantRunsExcludingRun.mockImplementation(
+      (sessionKey: string, runId: string) =>
+        sessionKey === "agent:main:main" && runId === "run-direct-self-pending" ? 0 : 1,
+    );
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-direct-self-pending",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterOrigin: { channel: "discord", to: "channel:12345", accountId: "acct-1" },
+      ...defaultOutcomeAnnounce,
+      expectsCompletionMessage: true,
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(subagentRegistryMock.countPendingDescendantRunsExcludingRun).toHaveBeenCalledWith(
+      "agent:main:main",
+      "run-direct-self-pending",
+    );
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+    expect(agentSpy).not.toHaveBeenCalled();
   });
 
   it("suppresses completion delivery when subagent reply is ANNOUNCE_SKIP", async () => {
