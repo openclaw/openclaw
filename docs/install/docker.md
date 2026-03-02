@@ -673,13 +673,25 @@ Notes:
 - Optional `agents.defaults.sandbox.browser.cdpSourceRange` restricts container-edge CDP ingress by CIDR (for example `172.21.0.1/32`).
 - noVNC observer access is password-protected by default; OpenClaw provides a short-lived observer token URL that serves a local bootstrap page and keeps the password in URL fragment (instead of URL query).
 - Browser container startup defaults are conservative for shared/container workloads, including:
+  - `--remote-debugging-address=127.0.0.1`
+  - `--remote-debugging-port=<derived from OPENCLAW_BROWSER_CDP_PORT>`
+  - `--user-data-dir=${HOME}/.chrome`
+  - `--no-first-run`
+  - `--no-default-browser-check`
   - `--disable-3d-apis`
   - `--disable-software-rasterizer`
   - `--disable-gpu`
   - `--disable-dev-shm-usage`
+  - `--disable-background-networking`
+  - `--disable-features=TranslateUI`
+  - `--disable-breakpad`
+  - `--disable-crash-reporter`
+  - `--metrics-recording-only`
   - `--renderer-process-limit=2`
   - `--no-zygote`
   - `--disable-extensions`
+  - If `agents.defaults.sandbox.browser.noSandbox` is set, `--no-sandbox` and
+    `--disable-setuid-sandbox` are also appended.
 
 Use config:
 

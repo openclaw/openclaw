@@ -148,10 +148,30 @@ scripts/sandbox-browser-setup.sh
 By default, sandbox containers run with **no network**.
 Override with `agents.defaults.sandbox.docker.network`.
 
-The bundled sandbox browser image also applies conservative Chromium defaults for
-containerized workloads (for example renderer process limits, software rasterizer
-disabling, and no-sandbox compatibility flags). If you need a different runtime
-profile, use a custom browser image and provide your own entrypoint.
+The bundled sandbox browser image also applies conservative Chromium startup defaults
+for containerized workloads. Current container defaults include:
+
+- `--remote-debugging-address=127.0.0.1`
+- `--remote-debugging-port=<derived from OPENCLAW_BROWSER_CDP_PORT>`
+- `--user-data-dir=${HOME}/.chrome`
+- `--no-first-run`
+- `--no-default-browser-check`
+- `--disable-3d-apis`
+- `--disable-gpu`
+- `--disable-dev-shm-usage`
+- `--disable-background-networking`
+- `--disable-extensions`
+- `--disable-features=TranslateUI`
+- `--disable-breakpad`
+- `--disable-crash-reporter`
+- `--disable-software-rasterizer`
+- `--no-zygote`
+- `--metrics-recording-only`
+- `--renderer-process-limit=2`
+- `--no-sandbox` and `--disable-setuid-sandbox` when `noSandbox` is enabled.
+
+If you need a different runtime profile, use a custom browser image and provide
+your own entrypoint.
 
 Security defaults:
 
