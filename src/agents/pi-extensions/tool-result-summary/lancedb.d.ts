@@ -17,9 +17,15 @@ declare module "@lancedb/lancedb" {
     vectorSearch(vector: number[]): {
       limit(n: number): { toArray(): Promise<LanceDBSearchRow[]> };
     };
-    query(): { where(condition: string): { toArray(): Promise<unknown[]> } };
+    query(): QueryBuilder;
     delete(condition: string): Promise<void>;
     countRows(): Promise<number>;
+  }
+
+  export interface QueryBuilder {
+    select(columns: string[]): QueryBuilder;
+    where(condition: string): QueryBuilder;
+    toArray(): Promise<unknown[]>;
   }
 
   export interface Connection {

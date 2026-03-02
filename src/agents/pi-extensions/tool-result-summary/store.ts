@@ -5,16 +5,11 @@
  */
 
 import { randomUUID } from "node:crypto";
+import type { Connection, Table } from "@lancedb/lancedb";
 import type { TextContent, ImageContent } from "@mariozechner/pi-ai";
 import type { EmbeddingProvider } from "../../../memory/embeddings.js";
 import { truncateContent } from "./tools.js";
 import type { ToolResultEntry, ToolResultSearchResult, StorageConfig } from "./types.js";
-
-/**
- * LanceDB types (loaded dynamically).
- */
-type LanceDBConnection = Awaited<ReturnType<typeof import("@lancedb/lancedb").connect>>;
-type LanceDBTable = Awaited<ReturnType<LanceDBConnection["openTable"]>>;
 
 const TABLE_NAME = "tool_results";
 
@@ -22,8 +17,8 @@ const TABLE_NAME = "tool_results";
  * Vector store for tool result summaries.
  */
 export class ToolResultSummaryStore {
-  private db: LanceDBConnection | null = null;
-  private table: LanceDBTable | null = null;
+  private db: Connection | null = null;
+  private table: Table | null = null;
   private initPromise: Promise<void> | null = null;
   private entryCount: number = 0;
 
@@ -53,12 +48,20 @@ export class ToolResultSummaryStore {
     this.db = await lancedb.connect(this.resolvedDbPath);
 
     const tables = await this.db.tableNames();
-    // Default dimensions for common embedding models
-    const dimensions = 1536; // OpenAI text-embedding-3-small
 
     if (tables.includes(TABLE_NAME)) {
       this.table = await this.db.openTable(TABLE_NAME);
     } else {
+      // Detect dimensions from embedding provider by generating a test embedding
+      let dimensions: number;
+      try {
+        const testEmbedding = await this.embeddings.embedQuery("__schema__");
+        dimensions = testEmbedding.length;
+      } catch {
+        // Fallback to common default if detection fails
+        dimensions = 1536; // OpenAI text-embedding-3-small
+      }
+
       // Create table with schema
       const schemaEntry = this.createSchemaEntry(dimensions);
       this.table = await this.db.createTable(TABLE_NAME, [schemaEntry]);
@@ -69,7 +72,7 @@ export class ToolResultSummaryStore {
     this.entryCount = await this.table.countRows();
   }
 
-  private async loadLanceDB(): Promise<typeof import("@lancedb/lancedb")> {
+  private async loadLanceDB(): Promise<{ connect: typeof import("@lancedb/lancedb").connect }> {
     try {
       return await import("@lancedb/lancedb");
     } catch (err) {
@@ -143,6 +146,10 @@ export class ToolResultSummaryStore {
     await this.table!.add([row]);
 
     this.entryCount++;
+
+    // Enforce maxResults limit by removing oldest entries
+    await this.pruneIfNeeded();
+
     return entry;
   }
 
@@ -215,14 +222,31 @@ export class ToolResultSummaryStore {
   }
 
   /**
+   * Escape a string for use in LanceDB filter expressions.
+   * Prevents injection by escaping single quotes.
+   */
+  private escapeFilterValue(value: string): string {
+    // Escape single quotes by doubling them (SQL-style escaping)
+    return value.replace(/'/g, "''");
+  }
+
+  /**
    * Get a tool result entry by tool call ID.
    * Returns the most recent entry for the given toolCallId.
    */
   async getByToolCallId(toolCallId: string): Promise<ToolResultEntry | null> {
     await this.ensureInitialized();
 
+    // Validate toolCallId format (alphanumeric, dashes, underscores, colons)
+    // This prevents injection while allowing common toolCallId formats
+    const safeIdRegex = /^[a-zA-Z0-9_\-:]+$/;
+    if (!safeIdRegex.test(toolCallId)) {
+      return null;
+    }
+
     try {
-      const results = await this.table!.query().where(`toolCallId = '${toolCallId}'`).toArray();
+      const escapedId = this.escapeFilterValue(toolCallId);
+      const results = await this.table!.query().where(`toolCallId = '${escapedId}'`).toArray();
 
       if (results.length === 0) {
         return null;
@@ -261,6 +285,48 @@ export class ToolResultSummaryStore {
       }
     } catch {
       // Ignore errors on touch
+    }
+  }
+
+  /**
+   * Prune old entries if we exceed maxResults limit.
+   * Removes oldest entries (by createdAt) to stay within limit.
+   */
+  private async pruneIfNeeded(): Promise<void> {
+    if (this.config.maxResults <= 0) {
+      return;
+    }
+
+    if (this.entryCount <= this.config.maxResults) {
+      return;
+    }
+
+    try {
+      // Query all entries to find the cutoff timestamp
+      const results = await this.table!.query().select(["createdAt"]).toArray();
+
+      if (results.length <= this.config.maxResults) {
+        return;
+      }
+
+      // Sort by createdAt descending
+      const timestamps = results
+        .map((r: unknown) => (r as Record<string, unknown>).createdAt as number)
+        .toSorted((a: number, b: number) => b - a);
+
+      // Find cutoff timestamp (keep newest maxResults entries)
+      const cutoffTimestamp = timestamps[this.config.maxResults - 1];
+
+      if (!cutoffTimestamp) {
+        return;
+      }
+
+      // Delete all entries older than or equal to cutoff (except newest)
+      await this.table!.delete(`createdAt < ${cutoffTimestamp}`);
+
+      this.entryCount = await this.table!.countRows();
+    } catch {
+      // Ignore pruning errors - non-critical
     }
   }
 
