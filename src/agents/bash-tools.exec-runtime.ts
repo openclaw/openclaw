@@ -31,17 +31,24 @@ import { getShellConfig, sanitizeBinaryOutput } from "./shell-utils.js";
 
 // Sanitize inherited host env before merge so dangerous variables from process.env
 // are not propagated into non-sandboxed executions.
-export function sanitizeHostBaseEnv(env: Record<string, string>): Record<string, string> {
+// Optionally preserve specific keys (e.g., skill env vars injected via applySkillEnvOverrides).
+export function sanitizeHostBaseEnv(
+  env: Record<string, string>,
+  preservedKeys?: Set<string>,
+): Record<string, string> {
   const sanitized: Record<string, string> = {};
   for (const [key, value] of Object.entries(env)) {
     const upperKey = key.toUpperCase();
-    if (upperKey === "PATH") {
+    // Preserve explicitly allowed keys (e.g., skill env vars)
+    if (preservedKeys?.has(key)) {
       sanitized[key] = value;
       continue;
     }
+    // Block dangerous env vars (security fix)
     if (isDangerousHostEnvVarName(upperKey)) {
       continue;
     }
+    // Preserve all other non-dangerous env vars
     sanitized[key] = value;
   }
   return sanitized;

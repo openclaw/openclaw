@@ -203,6 +203,29 @@ describe("exec host env validation", () => {
     }
   });
 
+  it("preserves skill env vars in host execution", async () => {
+    if (isWin) {
+      return;
+    }
+    const original = process.env.GOG_ACCOUNT;
+    process.env.GOG_ACCOUNT = "test@example.com";
+    try {
+      const { createExecTool } = await import("./bash-tools.exec.js");
+      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+      const result = await tool.execute("call1", {
+        command: "printf '%s' \"${GOG_ACCOUNT:-}\"",
+      });
+      const output = normalizeText(result.content.find((c) => c.type === "text")?.text);
+      expect(output).toContain("test@example.com");
+    } finally {
+      if (original === undefined) {
+        delete process.env.GOG_ACCOUNT;
+      } else {
+        process.env.GOG_ACCOUNT = original;
+      }
+    }
+  });
+
   it("defaults to sandbox when sandbox runtime is unavailable", async () => {
     const tool = createExecTool({ security: "full", ask: "off" });
 
