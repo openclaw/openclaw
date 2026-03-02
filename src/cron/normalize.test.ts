@@ -212,6 +212,51 @@ describe("normalizeCronJobCreate", () => {
     expect(delivery.to).toBe("7200373102");
   });
 
+  it("normalizes delivery accountId and strips blanks", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "delivery account",
+      enabled: true,
+      schedule: { kind: "cron", expr: "* * * * *" },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: {
+        kind: "agentTurn",
+        message: "hi",
+      },
+      delivery: {
+        mode: "announce",
+        channel: "telegram",
+        to: "-1003816714067",
+        accountId: " coordinator ",
+      },
+    }) as unknown as Record<string, unknown>;
+
+    const delivery = normalized.delivery as Record<string, unknown>;
+    expect(delivery.accountId).toBe("coordinator");
+  });
+
+  it("strips empty accountId from delivery", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "empty account",
+      enabled: true,
+      schedule: { kind: "cron", expr: "* * * * *" },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: {
+        kind: "agentTurn",
+        message: "hi",
+      },
+      delivery: {
+        mode: "announce",
+        channel: "telegram",
+        accountId: "   ",
+      },
+    }) as unknown as Record<string, unknown>;
+
+    const delivery = normalized.delivery as Record<string, unknown>;
+    expect("accountId" in delivery).toBe(false);
+  });
+
   it("normalizes webhook delivery mode and target URL", () => {
     const normalized = normalizeCronJobCreate({
       name: "webhook delivery",

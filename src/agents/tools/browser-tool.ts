@@ -22,14 +22,19 @@ import {
 } from "../../browser/client.js";
 import { resolveBrowserConfig } from "../../browser/config.js";
 import { DEFAULT_AI_SNAPSHOT_MAX_CHARS } from "../../browser/constants.js";
-import { DEFAULT_UPLOAD_DIR, resolvePathsWithinRoot } from "../../browser/paths.js";
+import { DEFAULT_UPLOAD_DIR, resolveExistingPathsWithinRoot } from "../../browser/paths.js";
 import { applyBrowserProxyPaths, persistBrowserProxyFiles } from "../../browser/proxy-files.js";
 import { loadConfig } from "../../config/config.js";
 import { wrapExternalContent } from "../../security/external-content.js";
 import { BrowserToolSchema } from "./browser-tool.schema.js";
 import { type AnyAgentTool, imageResultFromFile, jsonResult, readStringParam } from "./common.js";
 import { callGatewayTool } from "./gateway.js";
-import { listNodes, resolveNodeIdFromList, type NodeListNode } from "./nodes-utils.js";
+import {
+  listNodes,
+  resolveNodeIdFromList,
+  selectDefaultNodeFromList,
+  type NodeListNode,
+} from "./nodes-utils.js";
 
 function wrapBrowserExternalJson(params: {
   kind: "snapshot" | "console" | "tabs";
@@ -53,6 +58,37 @@ function wrapBrowserExternalJson(params: {
       },
     },
   };
+}
+
+function formatTabsToolResult(tabs: unknown[]): AgentToolResult<unknown> {
+  const wrapped = wrapBrowserExternalJson({
+    kind: "tabs",
+    payload: { tabs },
+    includeWarning: false,
+  });
+  const content: AgentToolResult<unknown>["content"] = [
+    { type: "text", text: wrapped.wrappedText },
+  ];
+  return {
+    content,
+    details: { ...wrapped.safeDetails, tabCount: tabs.length },
+  };
+}
+
+function readOptionalTargetAndTimeout(params: Record<string, unknown>) {
+  const targetId = typeof params.targetId === "string" ? params.targetId.trim() : undefined;
+  const timeoutMs =
+    typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
+      ? params.timeoutMs
+      : undefined;
+  return { targetId, timeoutMs };
+}
+
+function readTargetUrlParam(params: Record<string, unknown>) {
+  return (
+    readStringParam(params, "targetUrl") ??
+    readStringParam(params, "url", { required: true, label: "targetUrl" })
+  );
 }
 
 type BrowserProxyFile = {
@@ -119,10 +155,17 @@ async function resolveBrowserNodeTarget(params: {
     return { nodeId, label: node?.displayName ?? node?.remoteIp ?? nodeId };
   }
 
+  const selected = selectDefaultNodeFromList(browserNodes, {
+    preferLocalMac: false,
+    fallback: "none",
+  });
+
   if (params.target === "node") {
-    if (browserNodes.length === 1) {
-      const node = browserNodes[0];
-      return { nodeId: node.nodeId, label: node.displayName ?? node.remoteIp ?? node.nodeId };
+    if (selected) {
+      return {
+        nodeId: selected.nodeId,
+        label: selected.displayName ?? selected.remoteIp ?? selected.nodeId,
+      };
     }
     throw new Error(
       `Multiple browser-capable nodes connected (${browserNodes.length}). Set gateway.nodes.browser.node or pass node=<id>.`,
@@ -133,9 +176,11 @@ async function resolveBrowserNodeTarget(params: {
     return null;
   }
 
-  if (browserNodes.length === 1) {
-    const node = browserNodes[0];
-    return { nodeId: node.nodeId, label: node.displayName ?? node.remoteIp ?? node.nodeId };
+  if (selected) {
+    return {
+      nodeId: selected.nodeId,
+      label: selected.displayName ?? selected.remoteIp ?? selected.nodeId,
+    };
   }
   return null;
 }
@@ -414,45 +459,24 @@ export function createBrowserTool(opts?: {
               profile,
             });
             const tabs = (result as { tabs?: unknown[] }).tabs ?? [];
-            const wrapped = wrapBrowserExternalJson({
-              kind: "tabs",
-              payload: { tabs },
-              includeWarning: false,
-            });
-            return {
-              content: [{ type: "text", text: wrapped.wrappedText }],
-              details: { ...wrapped.safeDetails, tabCount: tabs.length },
-            };
+            return formatTabsToolResult(tabs);
           }
           {
             const tabs = await browserTabs(baseUrl, { profile });
-            const wrapped = wrapBrowserExternalJson({
-              kind: "tabs",
-              payload: { tabs },
-              includeWarning: false,
-            });
-            return {
-              content: [{ type: "text", text: wrapped.wrappedText }],
-              details: { ...wrapped.safeDetails, tabCount: tabs.length },
-            };
+            return formatTabsToolResult(tabs);
           }
         case "open": {
-          const targetUrl = readStringParam(params, "targetUrl") || readStringParam(params, "url");
-          if (!targetUrl) {
-            throw new Error("targetUrl (or url) required for open action");
+          const targetUrl = readTargetUrlParam(params);
+          if (proxyRequest) {
+            const result = await proxyRequest({
+              method: "POST",
+              path: "/tabs/open",
+              profile,
+              body: { url: targetUrl },
+            });
+            return jsonResult(result);
           }
-          return await withProfileFailover(profile, async (p) => {
-            if (proxyRequest) {
-              const result = await proxyRequest({
-                method: "POST",
-                path: "/tabs/open",
-                profile: p,
-                body: { url: targetUrl },
-              });
-              return jsonResult(result);
-            }
-            return jsonResult(await browserOpenTab(baseUrl, targetUrl, { profile: p }));
-          });
+          return jsonResult(await browserOpenTab(baseUrl, targetUrl, { profile }));
         }
         case "focus": {
           const targetId = readStringParam(params, "targetId", {
@@ -537,28 +561,12 @@ export function createBrowserTool(opts?: {
               : undefined;
           const selector = typeof params.selector === "string" ? params.selector.trim() : undefined;
           const frame = typeof params.frame === "string" ? params.frame.trim() : undefined;
-          return await withProfileFailover(profile, async (p) => {
-            const snapshot = proxyRequest
-              ? ((await proxyRequest({
-                  method: "GET",
-                  path: "/snapshot",
-                  profile: p,
-                  query: {
-                    format,
-                    targetId,
-                    limit,
-                    ...(typeof resolvedMaxChars === "number" ? { maxChars: resolvedMaxChars } : {}),
-                    refs,
-                    interactive,
-                    compact,
-                    depth,
-                    selector,
-                    frame,
-                    labels,
-                    mode,
-                  },
-                })) as Awaited<ReturnType<typeof browserSnapshot>>)
-              : await browserSnapshot(baseUrl, {
+          const snapshot = proxyRequest
+            ? ((await proxyRequest({
+                method: "GET",
+                path: "/snapshot",
+                profile,
+                query: {
                   format,
                   targetId,
                   limit,
@@ -571,72 +579,86 @@ export function createBrowserTool(opts?: {
                   frame,
                   labels,
                   mode,
-                  profile: p,
-                });
-            if (snapshot.format === "ai") {
-              const extractedText = snapshot.snapshot ?? "";
-              const wrappedSnapshot = wrapExternalContent(extractedText, {
-                source: "browser",
-                includeWarning: true,
+                },
+              })) as Awaited<ReturnType<typeof browserSnapshot>>)
+            : await browserSnapshot(baseUrl, {
+                format,
+                targetId,
+                limit,
+                ...(typeof resolvedMaxChars === "number" ? { maxChars: resolvedMaxChars } : {}),
+                refs,
+                interactive,
+                compact,
+                depth,
+                selector,
+                frame,
+                labels,
+                mode,
+                profile,
               });
-              const safeDetails = {
-                ok: true,
-                format: snapshot.format,
+          if (snapshot.format === "ai") {
+            const extractedText = snapshot.snapshot ?? "";
+            const wrappedSnapshot = wrapExternalContent(extractedText, {
+              source: "browser",
+              includeWarning: true,
+            });
+            const safeDetails = {
+              ok: true,
+              format: snapshot.format,
+              targetId: snapshot.targetId,
+              url: snapshot.url,
+              truncated: snapshot.truncated,
+              stats: snapshot.stats,
+              refs: snapshot.refs ? Object.keys(snapshot.refs).length : undefined,
+              labels: snapshot.labels,
+              labelsCount: snapshot.labelsCount,
+              labelsSkipped: snapshot.labelsSkipped,
+              imagePath: snapshot.imagePath,
+              imageType: snapshot.imageType,
+              externalContent: {
+                untrusted: true,
+                source: "browser",
+                kind: "snapshot",
+                format: "ai",
+                wrapped: true,
+              },
+            };
+            if (labels && snapshot.imagePath) {
+              return await imageResultFromFile({
+                label: "browser:snapshot",
+                path: snapshot.imagePath,
+                extraText: wrappedSnapshot,
+                details: safeDetails,
+              });
+            }
+            return {
+              content: [{ type: "text", text: wrappedSnapshot }],
+              details: safeDetails,
+            };
+          }
+          {
+            const wrapped = wrapBrowserExternalJson({
+              kind: "snapshot",
+              payload: snapshot,
+            });
+            return {
+              content: [{ type: "text", text: wrapped.wrappedText }],
+              details: {
+                ...wrapped.safeDetails,
+                format: "aria",
                 targetId: snapshot.targetId,
                 url: snapshot.url,
-                truncated: snapshot.truncated,
-                stats: snapshot.stats,
-                refs: snapshot.refs ? Object.keys(snapshot.refs).length : undefined,
-                labels: snapshot.labels,
-                labelsCount: snapshot.labelsCount,
-                labelsSkipped: snapshot.labelsSkipped,
-                imagePath: snapshot.imagePath,
-                imageType: snapshot.imageType,
+                nodeCount: snapshot.nodes.length,
                 externalContent: {
                   untrusted: true,
                   source: "browser",
                   kind: "snapshot",
-                  format: "ai",
+                  format: "aria",
                   wrapped: true,
                 },
-              };
-              if (labels && snapshot.imagePath) {
-                return await imageResultFromFile({
-                  label: "browser:snapshot",
-                  path: snapshot.imagePath,
-                  extraText: wrappedSnapshot,
-                  details: safeDetails,
-                });
-              }
-              return {
-                content: [{ type: "text", text: wrappedSnapshot }],
-                details: safeDetails,
-              };
-            }
-            {
-              const wrapped = wrapBrowserExternalJson({
-                kind: "snapshot",
-                payload: snapshot,
-              });
-              return {
-                content: [{ type: "text", text: wrapped.wrappedText }],
-                details: {
-                  ...wrapped.safeDetails,
-                  format: "aria",
-                  targetId: snapshot.targetId,
-                  url: snapshot.url,
-                  nodeCount: snapshot.nodes.length,
-                  externalContent: {
-                    untrusted: true,
-                    source: "browser",
-                    kind: "snapshot",
-                    format: "aria",
-                    wrapped: true,
-                  },
-                },
-              };
-            }
-          });
+              },
+            };
+          }
         }
         case "screenshot": {
           const targetId = readStringParam(params, "targetId");
@@ -674,10 +696,9 @@ export function createBrowserTool(opts?: {
           });
         }
         case "navigate": {
-          const targetUrl = readStringParam(params, "targetUrl") || readStringParam(params, "url");
-          if (!targetUrl) {
-            throw new Error("targetUrl (or url) required for navigate action");
-          }
+          const targetUrl = readStringParam(params, "targetUrl", {
+            required: true,
+          });
           const targetId = readStringParam(params, "targetId");
           return await withProfileFailover(profile, async (p) => {
             if (proxyRequest) {
@@ -704,72 +725,68 @@ export function createBrowserTool(opts?: {
         case "console": {
           const level = typeof params.level === "string" ? params.level.trim() : undefined;
           const targetId = typeof params.targetId === "string" ? params.targetId.trim() : undefined;
-          return await withProfileFailover(profile, async (p) => {
-            if (proxyRequest) {
-              const result = (await proxyRequest({
-                method: "GET",
-                path: "/console",
-                profile: p,
-                query: {
-                  level,
-                  targetId,
-                },
-              })) as { ok?: boolean; targetId?: string; messages?: unknown[] };
-              const wrapped = wrapBrowserExternalJson({
-                kind: "console",
-                payload: result,
-                includeWarning: false,
-              });
-              return {
-                content: [{ type: "text", text: wrapped.wrappedText }],
-                details: {
-                  ...wrapped.safeDetails,
-                  targetId: typeof result.targetId === "string" ? result.targetId : undefined,
-                  messageCount: Array.isArray(result.messages) ? result.messages.length : undefined,
-                },
-              };
-            }
-            {
-              const result = await browserConsoleMessages(baseUrl, { level, targetId, profile: p });
-              const wrapped = wrapBrowserExternalJson({
-                kind: "console",
-                payload: result,
-                includeWarning: false,
-              });
-              return {
-                content: [{ type: "text", text: wrapped.wrappedText }],
-                details: {
-                  ...wrapped.safeDetails,
-                  targetId: result.targetId,
-                  messageCount: result.messages.length,
-                },
-              };
-            }
-          });
+          if (proxyRequest) {
+            const result = (await proxyRequest({
+              method: "GET",
+              path: "/console",
+              profile,
+              query: {
+                level,
+                targetId,
+              },
+            })) as { ok?: boolean; targetId?: string; messages?: unknown[] };
+            const wrapped = wrapBrowserExternalJson({
+              kind: "console",
+              payload: result,
+              includeWarning: false,
+            });
+            return {
+              content: [{ type: "text", text: wrapped.wrappedText }],
+              details: {
+                ...wrapped.safeDetails,
+                targetId: typeof result.targetId === "string" ? result.targetId : undefined,
+                messageCount: Array.isArray(result.messages) ? result.messages.length : undefined,
+              },
+            };
+          }
+          {
+            const result = await browserConsoleMessages(baseUrl, { level, targetId, profile });
+            const wrapped = wrapBrowserExternalJson({
+              kind: "console",
+              payload: result,
+              includeWarning: false,
+            });
+            return {
+              content: [{ type: "text", text: wrapped.wrappedText }],
+              details: {
+                ...wrapped.safeDetails,
+                targetId: result.targetId,
+                messageCount: result.messages.length,
+              },
+            };
+          }
         }
         case "pdf": {
           const targetId = typeof params.targetId === "string" ? params.targetId.trim() : undefined;
-          return await withProfileFailover(profile, async (p) => {
-            const result = proxyRequest
-              ? ((await proxyRequest({
-                  method: "POST",
-                  path: "/pdf",
-                  profile: p,
-                  body: { targetId },
-                })) as Awaited<ReturnType<typeof browserPdfSave>>)
-              : await browserPdfSave(baseUrl, { targetId, profile: p });
-            return {
-              content: [{ type: "text", text: `FILE:${result.path}` }],
-              details: result,
-            };
-          });
+          const result = proxyRequest
+            ? ((await proxyRequest({
+                method: "POST",
+                path: "/pdf",
+                profile,
+                body: { targetId },
+              })) as Awaited<ReturnType<typeof browserPdfSave>>)
+            : await browserPdfSave(baseUrl, { targetId, profile });
+          return {
+            content: [{ type: "text", text: `FILE:${result.path}` }],
+            details: result,
+          };
         }
         case "upload": {
           const paths = Array.isArray(params.paths) ? params.paths.map((p) => String(p)) : [];
           if (paths.length === 0) {
             throw new Error("paths required");
           }
-          const uploadPathsResult = resolvePathsWithinRoot({
+          const uploadPathsResult = await resolveExistingPathsWithinRoot({
             rootDir: DEFAULT_UPLOAD_DIR,
             requestedPaths: paths,
             scopeLabel: `uploads directory (${DEFAULT_UPLOAD_DIR})`,
@@ -781,11 +798,7 @@ export function createBrowserTool(opts?: {
           const ref = readStringParam(params, "ref");
           const inputRef = readStringParam(params, "inputRef");
           const element = readStringParam(params, "element");
-          const targetId = typeof params.targetId === "string" ? params.targetId.trim() : undefined;
-          const timeoutMs =
-            typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
-              ? params.timeoutMs
-              : undefined;
+          const { targetId, timeoutMs } = readOptionalTargetAndTimeout(params);
 
           return await withProfileFailover(profile, async (p) => {
             if (proxyRequest) {
@@ -820,11 +833,7 @@ export function createBrowserTool(opts?: {
         case "dialog": {
           const accept = Boolean(params.accept);
           const promptText = typeof params.promptText === "string" ? params.promptText : undefined;
-          const targetId = typeof params.targetId === "string" ? params.targetId.trim() : undefined;
-          const timeoutMs =
-            typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
-              ? params.timeoutMs
-              : undefined;
+          const { targetId, timeoutMs } = readOptionalTargetAndTimeout(params);
 
           return await withProfileFailover(profile, async (p) => {
             if (proxyRequest) {

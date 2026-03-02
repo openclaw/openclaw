@@ -77,12 +77,11 @@ export async function applyAuthChoiceDeepseekWeb(
         "DeepSeek Login",
       );
 
-      const rawInput = (await prompter.text({
+      const rawInput = await prompter.text({
         message: "Paste Cookie / Headers",
-        hint: "Paste the 'Cookie:' value or multiple headers. I'll try to parse them.",
         placeholder: "lpk3-app-session-id=...; ds_session_id=...",
         validate: (value) => (value.trim().length > 0 ? undefined : "Required"),
-      }));
+      });
 
       // Smart-ish parsing
       const lines = rawInput.split("\n");
@@ -114,11 +113,10 @@ export async function applyAuthChoiceDeepseekWeb(
       }
 
       if (!bearer) {
-        bearer = (await prompter.text({
+        bearer = await prompter.text({
           message: "Authorization Bearer (Optional)",
-          hint: "If you have a 'Bearer ...' token from the headers, paste it here.",
           placeholder: "Optional",
-        }));
+        });
       }
 
       await setDeepseekWebCookie({ cookie, bearer: bearer.trim() || undefined }, agentDir);

@@ -1,6 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { markdownToSignalTextChunks } from "./format.js";
 
+function expectChunkStyleRangesInBounds(chunks: ReturnType<typeof markdownToSignalTextChunks>) {
+  for (const chunk of chunks) {
+    for (const style of chunk.styles) {
+      expect(style.start).toBeGreaterThanOrEqual(0);
+      expect(style.start + style.length).toBeLessThanOrEqual(chunk.text.length);
+      expect(style.length).toBeGreaterThan(0);
+    }
+  }
+}
+
 describe("splitSignalFormattedText", () => {
   // We test the internal chunking behavior via markdownToSignalTextChunks with
   // pre-rendered SignalFormattedText. The helper is not exported, so we test
@@ -145,13 +155,7 @@ describe("splitSignalFormattedText", () => {
       expect(chunks.length).toBeGreaterThan(1);
 
       // Verify all style ranges are valid within their respective chunks
-      for (const chunk of chunks) {
-        for (const style of chunk.styles) {
-          expect(style.start).toBeGreaterThanOrEqual(0);
-          expect(style.start + style.length).toBeLessThanOrEqual(chunk.text.length);
-          expect(style.length).toBeGreaterThan(0);
-        }
-      }
+      expectChunkStyleRangesInBounds(chunks);
 
       // Collect all styles across chunks
       const allStyles = chunks.flatMap((c) => c.styles.map((s) => s.style));
@@ -330,13 +334,7 @@ describe("markdownToSignalTextChunks", () => {
       expect(chunks.length).toBeGreaterThan(1);
 
       // All style ranges should be valid within their chunks
-      for (const chunk of chunks) {
-        for (const style of chunk.styles) {
-          expect(style.start).toBeGreaterThanOrEqual(0);
-          expect(style.start + style.length).toBeLessThanOrEqual(chunk.text.length);
-          expect(style.length).toBeGreaterThan(0);
-        }
-      }
+      expectChunkStyleRangesInBounds(chunks);
 
       // Verify styles exist somewhere
       const allStyles = chunks.flatMap((c) => c.styles.map((s) => s.style));

@@ -24,7 +24,7 @@ import type { GatewayRequestHandlers } from "./types.js";
 function redactPairedDevice(
   device: { tokens?: Record<string, DeviceAuthToken> } & Record<string, unknown>,
 ) {
-  const { tokens, ...rest } = device;
+  const { tokens, approvedScopes: _approvedScopes, ...rest } = device;
   return {
     ...rest,
     tokens: summarizeDeviceTokens(tokens),

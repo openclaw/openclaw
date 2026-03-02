@@ -4,6 +4,17 @@ import { defaultRuntime } from "../runtime.js";
 import { callBrowserRequest, type BrowserParentOpts } from "./browser-cli-shared.js";
 import { inheritOptionFromParent } from "./command-options.js";
 
+function resolveUrl(opts: { url?: string }, command: Command): string | undefined {
+  if (typeof opts.url === "string" && opts.url.trim()) {
+    return opts.url.trim();
+  }
+  const inherited = inheritOptionFromParent<string>(command, "url");
+  if (typeof inherited === "string" && inherited.trim()) {
+    return inherited.trim();
+  }
+  return undefined;
+}
+
 function resolveTargetId(rawTargetId: unknown, command: Command): string | undefined {
   const local = typeof rawTargetId === "string" ? rawTargetId.trim() : "";
   if (local) {
@@ -58,12 +69,18 @@ export function registerBrowserCookiesAndStorageCommands(
     .description("Set a cookie (requires --url or domain+path)")
     .argument("<name>", "Cookie name")
     .argument("<value>", "Cookie value")
-    .requiredOption("--url <url>", "Cookie URL scope (recommended)")
+    .option("--url <url>", "Cookie URL scope (recommended)")
     .option("--target-id <id>", "CDP target id (or unique prefix)")
     .action(async (name: string, value: string, opts, cmd) => {
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;
       const targetId = resolveTargetId(opts.targetId, cmd);
+      const url = resolveUrl(opts, cmd);
+      if (!url) {
+        defaultRuntime.error(danger("Missing required --url option for cookies set"));
+        defaultRuntime.exit(1);
+        return;
+      }
       try {
         const result = await callBrowserRequest(
           parent,
@@ -73,7 +90,7 @@ export function registerBrowserCookiesAndStorageCommands(
             query: profile ? { profile } : undefined,
             body: {
               targetId,
-              cookie: { name, value, url: opts.url },
+              cookie: { name, value, url },
             },
           },
           { timeoutMs: 20000 },

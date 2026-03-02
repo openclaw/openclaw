@@ -88,6 +88,7 @@ struct RootCanvas: View {
             }
         }
         .gatewayTrustPromptAlert()
+        .deepLinkAgentPromptAlert()
         .sheet(item: self.$presentedSheet) { sheet in
             switch sheet {
             case .settings:

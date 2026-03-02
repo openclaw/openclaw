@@ -131,7 +131,7 @@ export type SlackMediaResult = {
   placeholder: string;
 };
 
-const MAX_SLACK_MEDIA_FILES = 8;
+export const MAX_SLACK_MEDIA_FILES = 8;
 const MAX_SLACK_MEDIA_CONCURRENCY = 3;
 const MAX_SLACK_FORWARDED_ATTACHMENTS = 8;
 

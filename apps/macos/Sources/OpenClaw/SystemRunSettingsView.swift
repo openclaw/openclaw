@@ -105,16 +105,24 @@ struct SystemRunSettingsView: View {
                     .foregroundStyle(.secondary)
             } else {
                 HStack(spacing: 8) {
-                    TextField("Add allowlist pattern (case-insensitive globs)", text: self.$newPattern)
+                    TextField("添加白名单路径模式（不区分大小写的 glob 通配符）", text: self.$newPattern)
                         .textFieldStyle(.roundedBorder)
                     Button("添加") {
-                        let pattern = self.newPattern.trimmingCharacters(in: .whitespacesAndNewlines)
-                        guard !pattern.isEmpty else { return }
-                        self.model.addEntry(pattern)
-                        self.newPattern = ""
+                        if self.model.addEntry(self.newPattern) == nil {
+                            self.newPattern = ""
+                        }
                     }
                     .buttonStyle(.bordered)
-                    .disabled(self.newPattern.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(!self.model.isPathPattern(self.newPattern))
+                }
+
+                Text("仅支持路径模式。像 \"echo\" 这样的基本名称条目将被忽略。")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                if let validationMessage = self.model.allowlistValidationMessage {
+                    Text(validationMessage)
+                        .font(.footnote)
+                        .foregroundStyle(.orange)
                 }
 
                 if self.model.entries.isEmpty {
@@ -138,11 +146,9 @@ struct SystemRunSettingsView: View {
 
     private var scopeMessage: String {
         if self.model.isDefaultsScope {
-            return "Defaults apply when an agent has no overrides. " +
-                "Ask controls prompt behavior; fallback is used when no companion UI is reachable."
+            return "当智能体没有覆盖设置时应用默认值。「询问」控制提示行为；当无法连接到配套 UI 时将使用「降级」设置。"
         }
-        return "Security controls whether system.run can execute on this Mac when paired as a node. " +
-            "Ask controls prompt behavior; fallback is used when no companion UI is reachable."
+        return "「安全性」控制当此 Mac 作为节点配对时，是否允许执行 system.run。「询问」控制提示行为；当无法连接到配套 UI 时将使用「降级」设置。"
     }
 }
 
@@ -156,8 +162,8 @@ private enum ExecApprovalsSettingsTab: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .policy: "Access"
-        case .allowlist: "Allowlist"
+        case .policy: "访问策略"
+        case .allowlist: "白名单"
         }
     }
 }
@@ -176,7 +182,7 @@ struct ExecAllowlistRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
-                TextField("Pattern", text: self.patternBinding)
+                TextField("模式", text: self.patternBinding)
                     .textFieldStyle(.roundedBorder)
 
                 Button(role: .destructive) {
@@ -234,6 +240,7 @@ final class ExecApprovalsSettingsModel {
     var autoAllowSkills = false
     var entries: [ExecAllowlistEntry] = []
     var skillBins: [String] = []
+    var allowlistValidationMessage: String?
 
     var agentPickerIds: [String] {
         [Self.defaultsScopeId] + self.agentIds
@@ -289,6 +296,7 @@ final class ExecApprovalsSettingsModel {
 
     func selectAgent(_ id: String) {
         self.selectedAgentId = id
+        self.allowlistValidationMessage = nil
         self.loadSettings(for: id)
         Task { await self.refreshSkillBins() }
     }
@@ -301,6 +309,7 @@ final class ExecApprovalsSettingsModel {
             self.askFallback = defaults.askFallback
             self.autoAllowSkills = defaults.autoAllowSkills
             self.entries = []
+            self.allowlistValidationMessage = nil
             return
         }
         let resolved = ExecApprovalsStore.resolve(agentId: agentId)
@@ -310,6 +319,7 @@ final class ExecApprovalsSettingsModel {
         self.autoAllowSkills = resolved.agent.autoAllowSkills
         self.entries = resolved.allowlist
             .sorted { $0.pattern.localizedCaseInsensitiveCompare($1.pattern) == .orderedAscending }
+        self.allowlistValidationMessage = nil
     }
 
     func setSecurity(_ security: ExecSecurity) {
@@ -367,30 +377,53 @@ final class ExecApprovalsSettingsModel {
         Task { await self.refreshSkillBins(force: enabled) }
     }
 
-    func addEntry(_ pattern: String) {
-        guard !self.isDefaultsScope else { return }
-        let trimmed = pattern.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        self.entries.append(ExecAllowlistEntry(pattern: trimmed, lastUsedAt: nil))
-        ExecApprovalsStore.updateAllowlist(agentId: self.selectedAgentId, allowlist: self.entries)
+    @discardableResult
+    func addEntry(_ pattern: String) -> ExecAllowlistPatternValidationReason? {
+        guard !self.isDefaultsScope else { return nil }
+        switch ExecApprovalHelpers.validateAllowlistPattern(pattern) {
+        case let .valid(normalizedPattern):
+            self.entries.append(ExecAllowlistEntry(pattern: normalizedPattern, lastUsedAt: nil))
+            let rejected = ExecApprovalsStore.updateAllowlist(agentId: self.selectedAgentId, allowlist: self.entries)
+            self.allowlistValidationMessage = rejected.first?.reason.message
+            return rejected.first?.reason
+        case let .invalid(reason):
+            self.allowlistValidationMessage = reason.message
+            return reason
+        }
     }
 
-    func updateEntry(_ entry: ExecAllowlistEntry, id: UUID) {
-        guard !self.isDefaultsScope else { return }
-        guard let index = self.entries.firstIndex(where: { $0.id == id }) else { return }
-        self.entries[index] = entry
-        ExecApprovalsStore.updateAllowlist(agentId: self.selectedAgentId, allowlist: self.entries)
+    @discardableResult
+    func updateEntry(_ entry: ExecAllowlistEntry, id: UUID) -> ExecAllowlistPatternValidationReason? {
+        guard !self.isDefaultsScope else { return nil }
+        guard let index = self.entries.firstIndex(where: { $0.id == id }) else { return nil }
+        var next = entry
+        switch ExecApprovalHelpers.validateAllowlistPattern(next.pattern) {
+        case let .valid(normalizedPattern):
+            next.pattern = normalizedPattern
+        case let .invalid(reason):
+            self.allowlistValidationMessage = reason.message
+            return reason
+        }
+        self.entries[index] = next
+        let rejected = ExecApprovalsStore.updateAllowlist(agentId: self.selectedAgentId, allowlist: self.entries)
+        self.allowlistValidationMessage = rejected.first?.reason.message
+        return rejected.first?.reason
     }
 
     func removeEntry(id: UUID) {
         guard !self.isDefaultsScope else { return }
         guard let index = self.entries.firstIndex(where: { $0.id == id }) else { return }
         self.entries.remove(at: index)
-        ExecApprovalsStore.updateAllowlist(agentId: self.selectedAgentId, allowlist: self.entries)
+        let rejected = ExecApprovalsStore.updateAllowlist(agentId: self.selectedAgentId, allowlist: self.entries)
+        self.allowlistValidationMessage = rejected.first?.reason.message
     }
 
     func entry(for id: UUID) -> ExecAllowlistEntry? {
         self.entries.first(where: { $0.id == id })
+    }
+
+    func isPathPattern(_ pattern: String) -> Bool {
+        ExecApprovalHelpers.isPathPattern(pattern)
     }
 
     func refreshSkillBins(force: Bool = false) async {

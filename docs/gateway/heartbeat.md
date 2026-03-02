@@ -19,7 +19,7 @@ Troubleshooting: [/automation/troubleshooting](/automation/troubleshooting)
 
 1. Leave heartbeats enabled (default is `30m`, or `1h` for Anthropic OAuth/setup-token) or set your own cadence.
 2. Create a tiny `HEARTBEAT.md` checklist in the agent workspace (optional but recommended).
-3. Decide where heartbeat messages should go (`target: "last"` is the default).
+3. Decide where heartbeat messages should go (`target: "none"` is the default; set `target: "last"` to route to the last contact).
 4. Optional: enable heartbeat reasoning delivery for transparency.
 5. Optional: restrict heartbeats to active hours (local time).
 
@@ -31,7 +31,8 @@ Example config:
     defaults: {
       heartbeat: {
         every: "30m",
-        target: "last",
+        target: "last", // explicit delivery to last contact (default is "none")
+        directPolicy: "allow", // default: allow direct/DM targets; set "block" to suppress
         // activeHours: { start: "08:00", end: "24:00" },
         // includeReasoning: true, // optional: send separate `Reasoning:` message too
       },
@@ -87,7 +88,7 @@ and logged; a message that is only `HEARTBEAT_OK` is dropped.
         every: "30m", // default: 30m (0m disables)
         model: "anthropic/claude-opus-4-6",
         includeReasoning: false, // default: false (deliver separate Reasoning: message when available)
-        target: "last", // last | none | <channel id> (core or plugin, e.g. "bluebubbles")
+        target: "last", // default: none | options: last | none | <channel id> (core or plugin, e.g. "bluebubbles")
         to: "+15551234567", // optional channel-specific override
         accountId: "ops-bot", // optional multi-account channel id
         prompt: "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.",
@@ -120,7 +121,7 @@ Example: two agents, only the second agent runs heartbeats.
     defaults: {
       heartbeat: {
         every: "30m",
-        target: "last",
+        target: "last", // explicit delivery to last contact (default is "none")
       },
     },
     list: [
@@ -149,7 +150,7 @@ Restrict heartbeats to business hours in a specific timezone:
     defaults: {
       heartbeat: {
         every: "30m",
-        target: "last",
+        target: "last", // explicit delivery to last contact (default is "none")
         activeHours: {
           start: "09:00",
           end: "22:00",
@@ -162,6 +163,16 @@ Restrict heartbeats to business hours in a specific timezone:
 ```
 
 Outside this window (before 9am or after 10pm Eastern), heartbeats are skipped. The next scheduled tick inside the window will run normally.
+
+### 24/7 setup
+
+If you want heartbeats to run all day, use one of these patterns:
+
+- Omit `activeHours` entirely (no time-window restriction; this is the default behavior).
+- Set a full-day window: `activeHours: { start: "00:00", end: "24:00" }`.
+
+Do not set the same `start` and `end` time (for example `08:00` to `08:00`).
+That is treated as a zero-width window, so heartbeats are always skipped.
 
 ### Multi account example
 
@@ -202,18 +213,22 @@ Use `accountId` to target a specific account on multi-account channels like Tele
   - Explicit session key (copy from `openclaw sessions --json` or the [sessions CLI](/cli/sessions)).
   - Session key formats: see [Sessions](/concepts/session) and [Groups](/channels/groups).
 - `target`:
-  - `last` (default): deliver to the last used external channel.
+  - `last`: deliver to the last used external channel.
   - explicit channel: `whatsapp` / `telegram` / `discord` / `googlechat` / `slack` / `msteams` / `signal` / `imessage`.
-  - `none`: run the heartbeat but **do not deliver** externally.
+  - `none` (default): run the heartbeat but **do not deliver** externally.
+- `directPolicy`: controls direct/DM delivery behavior:
+  - `allow` (default): allow direct/DM heartbeat delivery.
+  - `block`: suppress direct/DM delivery (`reason=dm-blocked`).
 - `to`: optional recipient override (channel-specific id, e.g. E.164 for WhatsApp or a Telegram chat id). For Telegram topics/threads, use `<chatId>:topic:<messageThreadId>`.
 - `accountId`: optional account id for multi-account channels. When `target: "last"`, the account id applies to the resolved last channel if it supports accounts; otherwise it is ignored. If the account id does not match a configured account for the resolved channel, delivery is skipped.
 - `prompt`: overrides the default prompt body (not merged).
 - `ackMaxChars`: max chars allowed after `HEARTBEAT_OK` before delivery.
 - `suppressToolErrorWarnings`: when true, suppresses tool error warning payloads during heartbeat runs.
-- `activeHours`: restricts heartbeat runs to a time window. Object with `start` (HH:MM, inclusive), `end` (HH:MM exclusive; `24:00` allowed for end-of-day), and optional `timezone`.
+- `activeHours`: restricts heartbeat runs to a time window. Object with `start` (HH:MM, inclusive; use `00:00` for start-of-day), `end` (HH:MM exclusive; `24:00` allowed for end-of-day), and optional `timezone`.
   - Omitted or `"user"`: uses your `agents.defaults.userTimezone` if set, otherwise falls back to the host system timezone.
   - `"local"`: always uses the host system timezone.
   - Any IANA identifier (e.g. `America/New_York`): used directly; if invalid, falls back to the `"user"` behavior above.
+  - `start` and `end` must not be equal for an active window; equal values are treated as zero-width (always outside the window).
   - Outside the active window, heartbeats are skipped until the next tick inside the window.
 
 ## Delivery behavior
@@ -224,6 +239,7 @@ Use `accountId` to target a specific account on multi-account channels like Tele
 - `session` only affects the run context; delivery is controlled by `target` and `to`.
 - To deliver to a specific channel/recipient, set `target` + `to`. With
   `target: "last"`, delivery uses the last external channel for that session.
+- Heartbeat deliveries allow direct/DM targets by default. Set `directPolicy: "block"` to suppress direct-target sends while still running the heartbeat turn.
 - If the main queue is busy, the heartbeat is skipped and retried later.
 - If `target` resolves to no external destination, the run still happens but no
   outbound message is sent.

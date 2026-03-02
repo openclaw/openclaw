@@ -3,6 +3,8 @@ name: Auto response
 on:
   issues:
     types: [opened, edited, labeled]
+  issue_comment:
+    types: [created]
   pull_request_target:
     types: [labeled]
 
@@ -17,13 +19,20 @@ jobs:
     steps:
       - uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
         id: app-token
+        continue-on-error: true
         with:
           app-id: "2729701"
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+      - uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
+        id: app-token-fallback
+        if: steps.app-token.outcome == 'failure'
+        with:
+          app-id: "2971289"
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
       - name: Handle labeled items
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
-          github-token: ${{ steps.app-token.outputs.token }}
+          github-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
           script: |
             // Labels prefixed with "r:" are auto-response triggers.
             const rules = [
@@ -42,6 +51,7 @@ jobs:
               {
                 label: "r: testflight",
                 close: true,
+                commentTriggers: ["testflight"],
                 message: "Not available, build from source.",
               },
               {
@@ -55,10 +65,75 @@ jobs:
                 close: true,
                 lock: true,
                 lockReason: "off-topic",
+                commentTriggers: ["moltbook"],
                 message:
                   "OpenClaw is not affiliated with Moltbook, and issues related to Moltbook should not be submitted here.",
               },
             ];
+
+            const maintainerTeam = "maintainer";
+            const pingWarningMessage =
+              "Please don’t spam-ping multiple maintainers at once. Be patient, or join our community Discord for help: https://discord.gg/clawd";
+            const mentionRegex = /@([A-Za-z0-9-]+)/g;
+            const maintainerCache = new Map();
+            const normalizeLogin = (login) => login.toLowerCase();
+
+            const isMaintainer = async (login) => {
+              if (!login) {
+                return false;
+              }
+              const normalized = normalizeLogin(login);
+              if (maintainerCache.has(normalized)) {
+                return maintainerCache.get(normalized);
+              }
+              let isMember = false;
+              try {
+                const membership = await github.rest.teams.getMembershipForUserInOrg({
+                  org: context.repo.owner,
+                  team_slug: maintainerTeam,
+                  username: normalized,
+                });
+                isMember = membership?.data?.state === "active";
+              } catch (error) {
+                if (error?.status !== 404) {
+                  throw error;
+                }
+              }
+              maintainerCache.set(normalized, isMember);
+              return isMember;
+            };
+
+            const countMaintainerMentions = async (body, authorLogin) => {
+              if (!body) {
+                return 0;
+              }
+              const normalizedAuthor = authorLogin ? normalizeLogin(authorLogin) : "";
+              if (normalizedAuthor && (await isMaintainer(normalizedAuthor))) {
+                return 0;
+              }
+
+              const haystack = body.toLowerCase();
+              const teamMention = `@${context.repo.owner.toLowerCase()}/${maintainerTeam}`;
+              if (haystack.includes(teamMention)) {
+                return 3;
+              }
+
+              const mentions = new Set();
+              for (const match of body.matchAll(mentionRegex)) {
+                mentions.add(normalizeLogin(match[1]));
+              }
+              if (normalizedAuthor) {
+                mentions.delete(normalizedAuthor);
+              }
+
+              let count = 0;
+              for (const login of mentions) {
+                if (await isMaintainer(login)) {
+                  count += 1;
+                }
+              }
+              return count;
+            };
 
             const triggerLabel = "trigger-response";
             const target = context.payload.issue ?? context.payload.pull_request;
@@ -71,6 +146,63 @@ jobs:
                 .map((label) => (typeof label === "string" ? label : label?.name))
                 .filter((name) => typeof name === "string"),
             );
+
+            const issue = context.payload.issue;
+            const pullRequest = context.payload.pull_request;
+            const comment = context.payload.comment;
+            if (comment) {
+              const authorLogin = comment.user?.login ?? "";
+              if (comment.user?.type === "Bot" || authorLogin.endsWith("[bot]")) {
+                return;
+              }
+
+              const commentBody = comment.body ?? "";
+              const responses = [];
+              const mentionCount = await countMaintainerMentions(commentBody, authorLogin);
+              if (mentionCount >= 3) {
+                responses.push(pingWarningMessage);
+              }
+
+              const commentHaystack = commentBody.toLowerCase();
+              const commentRule = rules.find((item) =>
+                (item.commentTriggers ?? []).some((trigger) =>
+                  commentHaystack.includes(trigger),
+                ),
+              );
+              if (commentRule) {
+                responses.push(commentRule.message);
+              }
+
+              if (responses.length > 0) {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: target.number,
+                  body: responses.join("\n\n"),
+                });
+              }
+              return;
+            }
+
+            if (issue) {
+              const action = context.payload.action;
+              if (action === "opened" || action === "edited") {
+                const issueText = `${issue.title ?? ""}\n${issue.body ?? ""}`.trim();
+                const authorLogin = issue.user?.login ?? "";
+                const mentionCount = await countMaintainerMentions(
+                  issueText,
+                  authorLogin,
+                );
+                if (mentionCount >= 3) {
+                  await github.rest.issues.createComment({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: issue.number,
+                    body: pingWarningMessage,
+                  });
+                }
+              }
+            }
 
             const hasTriggerLabel = labelSet.has(triggerLabel);
             if (hasTriggerLabel) {
@@ -94,7 +226,6 @@ jobs:
               return;
             }
 
-            const issue = context.payload.issue;
             if (issue) {
               const title = issue.title ?? "";
               const body = issue.body ?? "";
@@ -134,9 +265,8 @@ jobs:
             const invalidLabel = "invalid";
             const dirtyLabel = "dirty";
             const noisyPrMessage =
-              "Closing this PR because it looks dirty (too many unrelated commits). Please recreate the PR from a clean branch.";
+              "Closing this PR because it looks dirty (too many unrelated or unexpected changes). This usually happens when a branch picks up unrelated commits or a merge went sideways. Please recreate the PR from a clean branch.";
 
-            const pullRequest = context.payload.pull_request;
             if (pullRequest) {
               if (labelSet.has(dirtyLabel)) {
                 await github.rest.issues.createComment({

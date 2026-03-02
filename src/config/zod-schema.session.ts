@@ -8,8 +8,10 @@ import {
   InboundDebounceSchema,
   NativeCommandsSettingSchema,
   QueueSchema,
+  TypingModeSchema,
   TtsConfigSchema,
 } from "./zod-schema.core.js";
+import { sensitive } from "./zod-schema.sensitive.js";
 
 const SessionResetConfigSchema = z
   .object({
@@ -49,19 +51,21 @@ export const SessionSchema = z
     resetByChannel: z.record(z.string(), SessionResetConfigSchema).optional(),
     store: z.string().optional(),
     typingIntervalSeconds: z.number().int().positive().optional(),
-    typingMode: z
-      .union([
-        z.literal("never"),
-        z.literal("instant"),
-        z.literal("thinking"),
-        z.literal("message"),
-      ])
-      .optional(),
+    typingMode: TypingModeSchema.optional(),
+    parentForkMaxTokens: z.number().int().nonnegative().optional(),
     mainKey: z.string().optional(),
     sendPolicy: SessionSendPolicySchema.optional(),
     agentToAgent: z
       .object({
         maxPingPongTurns: z.number().int().min(0).max(5).optional(),
+      })
+      .strict()
+      .optional(),
+    threadBindings: z
+      .object({
+        enabled: z.boolean().optional(),
+        idleHours: z.number().nonnegative().optional(),
+        maxAgeHours: z.number().nonnegative().optional(),
       })
       .strict()
       .optional(),
@@ -73,6 +77,9 @@ export const SessionSchema = z
         pruneDays: z.number().int().positive().optional(),
         maxEntries: z.number().int().positive().optional(),
         rotateBytes: z.union([z.string(), z.number()]).optional(),
+        resetArchiveRetention: z.union([z.string(), z.number(), z.literal(false)]).optional(),
+        maxDiskBytes: z.union([z.string(), z.number()]).optional(),
+        highWaterBytes: z.union([z.string(), z.number()]).optional(),
       })
       .strict()
       .superRefine((val, ctx) => {
@@ -98,6 +105,39 @@ export const SessionSchema = z
             });
           }
         }
+        if (val.resetArchiveRetention !== undefined && val.resetArchiveRetention !== false) {
+          try {
+            parseDurationMs(String(val.resetArchiveRetention).trim(), { defaultUnit: "d" });
+          } catch {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ["resetArchiveRetention"],
+              message: "invalid duration (use ms, s, m, h, d)",
+            });
+          }
+        }
+        if (val.maxDiskBytes !== undefined) {
+          try {
+            parseByteSize(String(val.maxDiskBytes).trim(), { defaultUnit: "b" });
+          } catch {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ["maxDiskBytes"],
+              message: "invalid size (use b, kb, mb, gb, tb)",
+            });
+          }
+        }
+        if (val.highWaterBytes !== undefined) {
+          try {
+            parseByteSize(String(val.highWaterBytes).trim(), { defaultUnit: "b" });
+          } catch {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ["highWaterBytes"],
+              message: "invalid size (use b, kb, mb, gb, tb)",
+            });
+          }
+        }
       })
       .optional(),
   })
@@ -114,6 +154,35 @@ export const MessagesSchema = z
     ackReaction: z.string().optional(),
     ackReactionScope: z.enum(["group-mentions", "group-all", "direct", "all"]).optional(),
     removeAckAfterReply: z.boolean().optional(),
+    statusReactions: z
+      .object({
+        enabled: z.boolean().optional(),
+        emojis: z
+          .object({
+            thinking: z.string().optional(),
+            tool: z.string().optional(),
+            coding: z.string().optional(),
+            web: z.string().optional(),
+            done: z.string().optional(),
+            error: z.string().optional(),
+            stallSoft: z.string().optional(),
+            stallHard: z.string().optional(),
+          })
+          .strict()
+          .optional(),
+        timing: z
+          .object({
+            debounceMs: z.number().int().min(0).optional(),
+            stallSoftMs: z.number().int().min(0).optional(),
+            stallHardMs: z.number().int().min(0).optional(),
+            doneHoldMs: z.number().int().min(0).optional(),
+            errorHoldMs: z.number().int().min(0).optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
     suppressToolErrors: z.boolean().optional(),
     tts: TtsConfigSchema,
   })
@@ -132,8 +201,12 @@ export const CommandsSchema = z
     restart: z.boolean().optional().default(true),
     useAccessGroups: z.boolean().optional(),
     ownerAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+    ownerDisplay: z.enum(["raw", "hash"]).optional().default("raw"),
+    ownerDisplaySecret: z.string().optional().register(sensitive),
     allowFrom: ElevatedAllowFromSchema.optional(),
   })
   .strict()
   .optional()
-  .default({ native: "auto", nativeSkills: "auto", restart: true });
+  .default(
+    () => ({ native: "auto", nativeSkills: "auto", restart: true, ownerDisplay: "raw" }) as const,
+  );

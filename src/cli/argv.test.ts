@@ -29,6 +29,36 @@ describe("argv helpers", () => {
       argv: ["node", "openclaw", "status"],
       expected: false,
     },
+    {
+      name: "root -v alias",
+      argv: ["node", "openclaw", "-v"],
+      expected: true,
+    },
+    {
+      name: "root -v alias with profile",
+      argv: ["node", "openclaw", "--profile", "work", "-v"],
+      expected: true,
+    },
+    {
+      name: "root -v alias with log-level",
+      argv: ["node", "openclaw", "--log-level", "debug", "-v"],
+      expected: true,
+    },
+    {
+      name: "subcommand -v should not be treated as version",
+      argv: ["node", "openclaw", "acp", "-v"],
+      expected: false,
+    },
+    {
+      name: "root -v alias with equals profile",
+      argv: ["node", "openclaw", "--profile=work", "-v"],
+      expected: true,
+    },
+    {
+      name: "subcommand path after global root flags should not be treated as version",
+      argv: ["node", "openclaw", "--dev", "skills", "list", "-v"],
+      expected: false,
+    },
   ])("detects help/version flags: $name", ({ argv, expected }) => {
     expect(hasHelpOrVersion(argv)).toBe(expected);
   });
@@ -173,6 +203,18 @@ describe("argv helpers", () => {
       {
         rawArgs: ["/usr/bin/node-22.2.0", "openclaw", "status"],
         expected: ["/usr/bin/node-22.2.0", "openclaw", "status"],
+      },
+      {
+        rawArgs: ["node24", "openclaw", "status"],
+        expected: ["node24", "openclaw", "status"],
+      },
+      {
+        rawArgs: ["/usr/bin/node24", "openclaw", "status"],
+        expected: ["/usr/bin/node24", "openclaw", "status"],
+      },
+      {
+        rawArgs: ["node24.exe", "openclaw", "status"],
+        expected: ["node24.exe", "openclaw", "status"],
       },
       {
         rawArgs: ["nodejs", "openclaw", "status"],

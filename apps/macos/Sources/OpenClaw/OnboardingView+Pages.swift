@@ -12,8 +12,6 @@ extension OnboardingView {
             self.welcomePage()
         case 1:
             self.connectionPage()
-        case 2:
-            self.anthropicAuthPage()
         case 3:
             self.wizardPage()
         case 5:
@@ -87,19 +85,9 @@ extension OnboardingView {
 
             self.onboardingCard(spacing: 12, padding: 14) {
                 VStack(alignment: .leading, spacing: 10) {
-                    let localSubtitle: String = {
-                        guard let probe = self.localGatewayProbe else {
-                            return "初次使用？我们将自动为您下载安装并在后台启动网关。"
-                        }
-                        let base = probe.expected
-                            ? "已检测到运行中的本地网关"
-                            : "端口 \(probe.port) 已被占用"
-                        let command = probe.command.isEmpty ? "" : " (\(probe.command) pid \(probe.pid))"
-                        return "\(base)\(command)。即将连接。"
-                    }()
                     self.connectionChoiceButton(
                         title: "在这台电脑上运行 (推荐新用户)",
-                        subtitle: localSubtitle,
+                        subtitle: self.localGatewaySubtitle,
                         selected: self.state.connectionMode == .local)
                     {
                         self.selectLocalGateway()
@@ -107,50 +95,7 @@ extension OnboardingView {
 
                     Divider().padding(.vertical, 4)
 
-                    HStack(spacing: 8) {
-                        Image(systemName: "dot.radiowaves.left.and.right")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Text(self.gatewayDiscovery.statusText)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        if self.gatewayDiscovery.gateways.isEmpty {
-                            ProgressView().controlSize(.small)
-                            Button("强制加载刷新") {
-                                self.gatewayDiscovery.refreshWideAreaFallbackNow(timeoutSeconds: 5.0)
-                            }
-                            .buttonStyle(.link)
-                            .help("Retry Tailscale discovery (DNS-SD).")
-                        }
-                        Spacer(minLength: 0)
-                    }
-
-                    if self.gatewayDiscovery.gateways.isEmpty {
-                        Text("正在搜索附近的网关…")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .padding(.leading, 4)
-                    } else {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("附近的网关")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .padding(.leading, 4)
-                            ForEach(self.gatewayDiscovery.gateways.prefix(6)) { gateway in
-                                self.connectionChoiceButton(
-                                    title: gateway.displayName,
-                                    subtitle: self.gatewaySubtitle(for: gateway),
-                                    selected: self.isSelectedGateway(gateway))
-                                {
-                                    self.selectRemoteGateway(gateway)
-                                }
-                            }
-                        }
-                        .padding(8)
-                        .background(
-                            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                .fill(Color(NSColor.controlBackgroundColor)))
-                    }
+                    self.gatewayDiscoverySection()
 
                     self.connectionChoiceButton(
                         title: "稍后配置",
@@ -160,104 +105,168 @@ extension OnboardingView {
                         self.selectUnconfiguredGateway()
                     }
 
-                    Button(self.showAdvancedConnection ? "隐藏高级选项" : "高级选项…") {
-                        withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
-                            self.showAdvancedConnection.toggle()
-                        }
-                        if self.showAdvancedConnection, self.state.connectionMode != .remote {
-                            self.state.connectionMode = .remote
-                        }
-                    }
-                    .buttonStyle(.link)
+                    self.advancedConnectionSection()
+                }
+            }
+        }
+    }
 
-                    if self.showAdvancedConnection {
-                        let labelWidth: CGFloat = 110
-                        let fieldWidth: CGFloat = 320
+    private var localGatewaySubtitle: String {
+        guard let probe = self.localGatewayProbe else {
+            return "初次使用？我们将自动为您下载安装并在后台启动网关。"
+        }
+        let base = probe.expected
+            ? "已检测到运行中的本地网关"
+            : "端口 \(probe.port) 已被占用"
+        let command = probe.command.isEmpty ? "" : " (\(probe.command) pid \(probe.pid))"
+        return "\(base)\(command)。即将连接。"
+    }
 
-                        VStack(alignment: .leading, spacing: 10) {
-                            Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 8) {
-                                GridRow {
-                                    Text("Transport")
-                                        .font(.callout.weight(.semibold))
-                                        .frame(width: labelWidth, alignment: .leading)
-                                    Picker("Transport", selection: self.$state.remoteTransport) {
-                                        Text("SSH tunnel").tag(AppState.RemoteTransport.ssh)
-                                        Text("直连 (ws/wss)").tag(AppState.RemoteTransport.direct)
-                                    }
-                                    .pickerStyle(.segmented)
-                                    .frame(width: fieldWidth)
-                                }
-                                if self.state.remoteTransport == .direct {
-                                    GridRow {
-                                        Text("网关 URL")
-                                            .font(.callout.weight(.semibold))
-                                            .frame(width: labelWidth, alignment: .leading)
-                                        TextField("wss://gateway.example.ts.net", text: self.$state.remoteUrl)
-                                            .textFieldStyle(.roundedBorder)
-                                            .frame(width: fieldWidth)
-                                    }
-                                }
-                                if self.state.remoteTransport == .ssh {
-                                    GridRow {
-                                        Text("SSH 目标地址")
-                                            .font(.callout.weight(.semibold))
-                                            .frame(width: labelWidth, alignment: .leading)
-                                        TextField("user@host[:port]", text: self.$state.remoteTarget)
-                                            .textFieldStyle(.roundedBorder)
-                                            .frame(width: fieldWidth)
-                                    }
-                                    if let message = CommandResolver
-                                        .sshTargetValidationMessage(self.state.remoteTarget)
-                                    {
-                                        GridRow {
-                                            Text("")
-                                                .frame(width: labelWidth, alignment: .leading)
-                                            Text(message)
-                                                .font(.caption)
-                                                .foregroundStyle(.red)
-                                                .frame(width: fieldWidth, alignment: .leading)
-                                        }
-                                    }
-                                    GridRow {
-                                        Text("密钥文件")
-                                            .font(.callout.weight(.semibold))
-                                            .frame(width: labelWidth, alignment: .leading)
-                                        TextField("/Users/you/.ssh/id_ed25519", text: self.$state.remoteIdentity)
-                                            .textFieldStyle(.roundedBorder)
-                                            .frame(width: fieldWidth)
-                                    }
-                                    GridRow {
-                                        Text("开发部署工程目录")
-                                            .font(.callout.weight(.semibold))
-                                            .frame(width: labelWidth, alignment: .leading)
-                                        TextField("/home/you/Projects/openclaw", text: self.$state.remoteProjectRoot)
-                                            .textFieldStyle(.roundedBorder)
-                                            .frame(width: fieldWidth)
-                                    }
-                                    GridRow {
-                                        Text("命令行路径")
-                                            .font(.callout.weight(.semibold))
-                                            .frame(width: labelWidth, alignment: .leading)
-                                        TextField(
-                                            "/Applications/OpenClaw.app/.../openclaw",
-                                            text: self.$state.remoteCliPath)
-                                            .textFieldStyle(.roundedBorder)
-                                            .frame(width: fieldWidth)
-                                    }
-                                }
-                            }
+    @ViewBuilder
+    private func gatewayDiscoverySection() -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "dot.radiowaves.left.and.right")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text(self.gatewayDiscovery.statusText)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            if self.gatewayDiscovery.gateways.isEmpty {
+                ProgressView().controlSize(.small)
+                Button("刷新") {
+                    self.gatewayDiscovery.refreshWideAreaFallbackNow(timeoutSeconds: 5.0)
+                }
+                .buttonStyle(.link)
+                .help("重试 Tailscale 发现 (DNS-SD)。")
+            }
+            Spacer(minLength: 0)
+        }
 
-                            Text(self.state.remoteTransport == .direct
-                                ? "提示：推荐使用 Tailscale Serve 服务，以确保网关具备有效的 HTTPS 证书。"
-                                : "提示：请保持 Tailscale 开启以确保您的网关可随时访问。")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                        }
-                        .transition(.opacity.combined(with: .move(edge: .top)))
+        if self.gatewayDiscovery.gateways.isEmpty {
+            Text("正在搜索附近的网关…")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.leading, 4)
+        } else {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("附近的网关")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.leading, 4)
+                ForEach(self.gatewayDiscovery.gateways.prefix(6)) { gateway in
+                    self.connectionChoiceButton(
+                        title: gateway.displayName,
+                        subtitle: self.gatewaySubtitle(for: gateway),
+                        selected: self.isSelectedGateway(gateway))
+                    {
+                        self.selectRemoteGateway(gateway)
                     }
                 }
             }
+            .padding(8)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color(NSColor.controlBackgroundColor)))
+        }
+    }
+
+    @ViewBuilder
+    private func advancedConnectionSection() -> some View {
+        Button(self.showAdvancedConnection ? "隐藏高级选项" : "高级选项…") {
+            withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
+                self.showAdvancedConnection.toggle()
+            }
+            if self.showAdvancedConnection, self.state.connectionMode != .remote {
+                self.state.connectionMode = .remote
+            }
+        }
+        .buttonStyle(.link)
+
+        if self.showAdvancedConnection {
+            let labelWidth: CGFloat = 110
+            let fieldWidth: CGFloat = 320
+
+            VStack(alignment: .leading, spacing: 10) {
+                Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 8) {
+                    GridRow {
+                        Text("通信方式")
+                            .font(.callout.weight(.semibold))
+                            .frame(width: labelWidth, alignment: .leading)
+                        Picker("Transport", selection: self.$state.remoteTransport) {
+                            Text("SSH tunnel").tag(AppState.RemoteTransport.ssh)
+                            Text("直连 (ws/wss)").tag(AppState.RemoteTransport.direct)
+                        }
+                        .pickerStyle(.segmented)
+                        .frame(width: fieldWidth)
+                    }
+                    if self.state.remoteTransport == .direct {
+                        GridRow {
+                            Text("网关 URL")
+                                .font(.callout.weight(.semibold))
+                                .frame(width: labelWidth, alignment: .leading)
+                            TextField("wss://gateway.example.ts.net", text: self.$state.remoteUrl)
+                                .textFieldStyle(.roundedBorder)
+                                .frame(width: fieldWidth)
+                        }
+                    }
+                    if self.state.remoteTransport == .ssh {
+                        GridRow {
+                            Text("SSH 目标地址")
+                                .font(.callout.weight(.semibold))
+                                .frame(width: labelWidth, alignment: .leading)
+                            TextField("user@host[:port]", text: self.$state.remoteTarget)
+                                .textFieldStyle(.roundedBorder)
+                                .frame(width: fieldWidth)
+                        }
+                        if let message = CommandResolver
+                            .sshTargetValidationMessage(self.state.remoteTarget)
+                        {
+                            GridRow {
+                                Text("")
+                                    .frame(width: labelWidth, alignment: .leading)
+                                Text(message)
+                                    .font(.caption)
+                                    .foregroundStyle(.red)
+                                    .frame(width: fieldWidth, alignment: .leading)
+                            }
+                        }
+                        GridRow {
+                            Text("私钥文件")
+                                .font(.callout.weight(.semibold))
+                                .frame(width: labelWidth, alignment: .leading)
+                            TextField("/Users/you/.ssh/id_ed25519", text: self.$state.remoteIdentity)
+                                .textFieldStyle(.roundedBorder)
+                                .frame(width: fieldWidth)
+                        }
+                        GridRow {
+                            Text("项目根目录")
+                                .font(.callout.weight(.semibold))
+                                .frame(width: labelWidth, alignment: .leading)
+                            TextField("/home/you/Projects/openclaw", text: self.$state.remoteProjectRoot)
+                                .textFieldStyle(.roundedBorder)
+                                .frame(width: fieldWidth)
+                        }
+                        GridRow {
+                            Text("CLI 路径")
+                                .font(.callout.weight(.semibold))
+                                .frame(width: labelWidth, alignment: .leading)
+                            TextField(
+                                "/Applications/OpenClaw.app/.../openclaw",
+                                text: self.$state.remoteCliPath)
+                                .textFieldStyle(.roundedBorder)
+                                .frame(width: fieldWidth)
+                        }
+                    }
+                }
+
+                Text(self.state.remoteTransport == .direct
+                    ? "提示：使用 Tailscale Serve 以确保网关拥有有效的 HTTPS 证书。"
+                    : "提示：保持 Tailscale 开启以确保网关始终可达。")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            .transition(.opacity.combined(with: .move(edge: .top)))
         }
     }
 
@@ -265,9 +274,11 @@ extension OnboardingView {
         if self.state.remoteTransport == .direct {
             return GatewayDiscoveryHelpers.directUrl(for: gateway) ?? "仅进行网关配对"
         }
-        if let host = GatewayDiscoveryHelpers.sanitizedTailnetHost(gateway.tailnetDns) ?? gateway.lanHost {
-            let portSuffix = gateway.sshPort != 22 ? " · ssh \(gateway.sshPort)" : ""
-            return "\(host)\(portSuffix)"
+        if let target = GatewayDiscoveryHelpers.sshTarget(for: gateway),
+           let parsed = CommandResolver.parseSSHTarget(target)
+        {
+            let portSuffix = parsed.port != 22 ? " · ssh \(parsed.port)" : ""
+            return "\(parsed.host)\(portSuffix)"
         }
         return "仅进行网关配对"
     }
@@ -327,175 +338,11 @@ extension OnboardingView {
         .buttonStyle(.plain)
     }
 
-    func anthropicAuthPage() -> some View {
-        self.onboardingPage {
-            Text("连接 Claude")
-                .font(.largeTitle.weight(.semibold))
-            Text("配置模型所需的 Token API！")
-                .font(.body)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 540)
-                .fixedSize(horizontal: false, vertical: true)
-            Text("它支持对接任意大模型，并强烈推荐 Opus 获取极佳体验。")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 540)
-                .fixedSize(horizontal: false, vertical: true)
-
-            self.onboardingCard(spacing: 12, padding: 16) {
-                HStack(alignment: .center, spacing: 10) {
-                    Circle()
-                        .fill(self.anthropicAuthVerified ? Color.green : Color.orange)
-                        .frame(width: 10, height: 10)
-                    Text(
-                        self.anthropicAuthConnected
-                            ? (self.anthropicAuthVerified
-                                ? "Claude connected (OAuth) — verified"
-                                : "Claude connected (OAuth)")
-                            : "Not connected yet")
-                        .font(.headline)
-                    Spacer()
-                }
-
-                if self.anthropicAuthConnected, self.anthropicAuthVerifying {
-                    Text("Verifying OAuth…")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                } else if !self.anthropicAuthConnected {
-                    Text(self.anthropicAuthDetectedStatus.shortDescription)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                } else if self.anthropicAuthVerified, let date = self.anthropicAuthVerifiedAt {
-                    Text("检测到有效的 OAuth 授权。")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                Text(
-                    "This lets OpenClaw use Claude immediately. Credentials are stored at " +
-                        "`~/.openclaw/credentials/oauth.json` (owner-only).")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                HStack(spacing: 12) {
-                    Text(OpenClawOAuthStore.oauthURL().path)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-
-                    Spacer()
-
-                    Button("Reveal") {
-                        NSWorkspace.shared.activateFileViewerSelecting([OpenClawOAuthStore.oauthURL()])
-                    }
-                    .buttonStyle(.bordered)
-
-                    Button("强制加载刷新") {
-                        self.refreshAnthropicOAuthStatus()
-                    }
-                    .buttonStyle(.bordered)
-                }
-
-                Divider().padding(.vertical, 2)
-
-                HStack(spacing: 12) {
-                    if !self.anthropicAuthVerified {
-                        if self.anthropicAuthConnected {
-                            Button("Verify") {
-                                Task { await self.verifyAnthropicOAuthIfNeeded(force: true) }
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .disabled(self.anthropicAuthBusy || self.anthropicAuthVerifying)
-
-                            if self.anthropicAuthVerificationFailed {
-                                Button("请求二次验证 (OAuth)") {
-                                    self.startAnthropicOAuth()
-                                }
-                                .buttonStyle(.bordered)
-                                .disabled(self.anthropicAuthBusy || self.anthropicAuthVerifying)
-                            }
-                        } else {
-                            Button {
-                                self.startAnthropicOAuth()
-                            } label: {
-                                if self.anthropicAuthBusy {
-                                    ProgressView()
-                                } else {
-                                    Text("打开 Claude 登录授权 (OAuth)")
-                                }
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .disabled(self.anthropicAuthBusy)
-                        }
-                    }
-                }
-
-                if !self.anthropicAuthVerified, self.anthropicAuthPKCE != nil {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("输入同步验证口令")
-                            .font(.headline)
-                        TextField("code#state", text: self.$anthropicAuthCode)
-                            .textFieldStyle(.roundedBorder)
-
-                        Toggle("从剪贴板自动检测", isOn: self.$anthropicAuthAutoDetectClipboard)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .disabled(self.anthropicAuthBusy)
-
-                        Toggle("检测到时自动连接", isOn: self.$anthropicAuthAutoConnectClipboard)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .disabled(self.anthropicAuthBusy)
-
-                        Button("连接") {
-                            Task { await self.finishAnthropicOAuth() }
-                        }
-                        .buttonStyle(.bordered)
-                        .disabled(
-                            self.anthropicAuthBusy ||
-                                self.anthropicAuthCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    }
-                    .onReceive(Self.clipboardPoll) { _ in
-                        self.pollAnthropicClipboardIfNeeded()
-                    }
-                }
-
-                self.onboardingCard(spacing: 8, padding: 12) {
-                    Text("API Key (高级)")
-                        .font(.headline)
-                    Text(
-                        "You can also use an Anthropic API key, but this UI is instructions-only for now " +
-                            "(GUI apps don’t automatically inherit your shell env vars like `ANTHROPIC_API_KEY`).")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .shadow(color: .clear, radius: 0)
-                .background(Color.clear)
-
-                if let status = self.anthropicAuthStatus {
-                    Text(status)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-        }
-        .task { await self.verifyAnthropicOAuthIfNeeded() }
-    }
-
     func permissionsPage() -> some View {
         self.onboardingPage {
             Text("授予权限")
                 .font(.largeTitle.weight(.semibold))
-            Text("These macOS permissions let OpenClaw automate apps and capture context on this Mac.")
+            Text("这些 macOS 权限允许 OpenClaw 在此 Mac 上自动执行操作并获取上下文。")
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -581,8 +428,8 @@ extension OnboardingView {
                 } else if !self.cliInstalled, self.cliInstallLocation == nil {
                     Text(
                         """
-                        Installs a user-space Node 22+ runtime and the CLI (no Homebrew).
-                        Rerun anytime to reinstall or update.
+                        为 OpenClaw 安装用户空间 Node 22+ 运行环境和 CLI（不依赖 Homebrew）。
+                        随时可以重新运行以重新安装或更新。
                         """)
                         .font(.footnote)
                         .foregroundStyle(.secondary)
@@ -711,49 +558,47 @@ extension OnboardingView {
             self.onboardingCard {
                 if self.state.connectionMode == .unconfigured {
                     self.featureRow(
-                        title: "Configure later",
-                        subtitle: "Pick Local or Remote in Settings → General whenever you’re ready.",
+                        title: "稍后配置",
+                        subtitle: "准备就绪后，随时在 设置 → 常规 中选择本地或远程模式。",
                         systemImage: "gearshape")
                     Divider()
                         .padding(.vertical, 6)
                 }
                 if self.state.connectionMode == .remote {
                     self.featureRow(
-                        title: "Remote gateway checklist",
+                        title: "远程网关检查清单",
                         subtitle: """
-                        On your gateway host: install/update the `openclaw` package and make sure credentials exist
-                        (typically `~/.openclaw/credentials/oauth.json`). Then connect again if needed.
+                        在您的网关主机上：安装/更新 `openclaw` 软件包并确保凭据存在（通常位于 `~/.openclaw/credentials/oauth.json`）。然后根据需要重新连接。
                         """,
                         systemImage: "network")
                     Divider()
                         .padding(.vertical, 6)
                 }
                 self.featureRow(
-                    title: "Open the menu bar panel",
-                    subtitle: "Click the OpenClaw menu bar icon for quick chat and status.",
+                    title: "打开菜单栏面板",
+                    subtitle: "点击 OpenClaw 菜单栏图标即可进行快速对话和查看状态。",
                     systemImage: "bubble.left.and.bubble.right")
                 self.featureActionRow(
-                    title: "Connect WhatsApp or Telegram",
-                    subtitle: "Open Settings → Channels to link channels and monitor status.",
+                    title: "连接 WhatsApp 或 Telegram",
+                    subtitle: "打开 设置 → 频道 以连接频道并监控状态。",
                     systemImage: "link",
-                    buttonTitle: "Open Settings → Channels")
+                    buttonTitle: "打开 设置 → 频道")
                 {
                     self.openSettings(tab: .channels)
                 }
                 self.featureRow(
-                    title: "Try Voice Wake",
-                    subtitle: "Enable Voice Wake in Settings for hands-free commands with a live transcript overlay.",
+                    title: "尝试语音唤醒",
+                    subtitle: "在设置中启用语音唤醒，即可通过实时转录叠加层进行免提命令。",
                     systemImage: "waveform.circle")
                 self.featureRow(
-                    title: "Use the panel + Canvas",
-                    subtitle: "Open the menu bar panel for quick chat; the agent can show previews " +
-                        "and richer visuals in Canvas.",
+                    title: "使用面板 + 画板 (Canvas)",
+                    subtitle: "打开菜单栏面板进行快速对话；助手可以在画板中显示预览和更丰富的视觉效果。",
                     systemImage: "rectangle.inset.filled.and.person.filled")
                 self.featureActionRow(
-                    title: "Give your agent more powers",
-                    subtitle: "Enable optional skills (Peekaboo, oracle, camsnap, …) from Settings → Skills.",
+                    title: "为您的助手赋予更多能力",
+                    subtitle: "从 设置 → 技能 中启用可选技能（Peekaboo、oracle、camsnap 等）。",
                     systemImage: "sparkles",
-                    buttonTitle: "Open Settings → Skills")
+                    buttonTitle: "打开 设置 → 技能")
                 {
                     self.openSettings(tab: .skills)
                 }
@@ -779,7 +624,7 @@ extension OnboardingView {
                 .padding(.vertical, 6)
 
             HStack(spacing: 10) {
-                Text("Skills included")
+                Text("已包含的技能")
                     .font(.headline)
                 Spacer(minLength: 0)
                 if self.onboardingSkillsModel.isLoading {
@@ -799,8 +644,7 @@ extension OnboardingView {
                         .font(.footnote.weight(.semibold))
                         .foregroundStyle(.orange)
                     Text(
-                        "Make sure the Gateway is running and connected, " +
-                            "then hit Refresh (or open Settings → Skills).")
+                        "请确保网关正在运行且已连接，然后点击刷新（或打开 设置 → 技能）。")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)

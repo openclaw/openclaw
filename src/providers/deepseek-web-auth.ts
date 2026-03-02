@@ -40,7 +40,7 @@ export async function loginDeepseekWeb(params: {
 
     params.onProgress("Connecting to browser...");
     const browser = await chromium.connectOverCDP(wsUrl, {
-      wsHeaders: getHeadersWithAuth(wsUrl),
+      headers: getHeadersWithAuth(wsUrl),
     });
     const context = browser.contexts()[0];
     const page = context.pages()[0] || (await context.newPage());

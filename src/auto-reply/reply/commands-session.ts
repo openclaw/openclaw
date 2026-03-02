@@ -1,82 +1,73 @@
-import { abortEmbeddedPiRun } from "../../agents/pi-embedded.js";
+import { parseDurationMs } from "../../cli/parse-duration.js";
 import { isRestartEnabled } from "../../config/commands.js";
-import type { SessionEntry } from "../../config/sessions.js";
-import { updateSessionStore } from "../../config/sessions.js";
+import {
+  formatThreadBindingDurationLabel,
+  getThreadBindingManager,
+  resolveThreadBindingIdleTimeoutMs,
+  resolveThreadBindingInactivityExpiresAt,
+  resolveThreadBindingMaxAgeExpiresAt,
+  resolveThreadBindingMaxAgeMs,
+  setThreadBindingIdleTimeoutBySessionKey,
+  setThreadBindingMaxAgeBySessionKey,
+} from "../../discord/monitor/thread-bindings.js";
 import { logVerbose } from "../../globals.js";
-import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { scheduleGatewaySigusr1Restart, triggerOpenClawRestart } from "../../infra/restart.js";
 import { loadCostUsageSummary, loadSessionCostSummary } from "../../infra/session-cost-usage.js";
 import { formatTokenCount, formatUsd } from "../../utils/usage-format.js";
 import { parseActivationCommand } from "../group-activation.js";
 import { parseSendPolicyCommand } from "../send-policy.js";
 import { normalizeUsageDisplay, resolveResponseUsageMode } from "../thinking.js";
-import {
-  formatAbortReplyText,
-  isAbortTrigger,
-  resolveSessionEntryForKey,
-  setAbortMemory,
-  stopSubagentsForRequester,
-} from "./abort.js";
+import { handleAbortTrigger, handleStopCommand } from "./commands-session-abort.js";
+import { persistSessionEntry } from "./commands-session-store.js";
 import type { CommandHandler } from "./commands-types.js";
-import { clearSessionQueues } from "./queue.js";
 
-function resolveAbortTarget(params: {
-  ctx: { CommandTargetSessionKey?: string | null };
-  sessionKey?: string;
-  sessionEntry?: SessionEntry;
-  sessionStore?: Record<string, SessionEntry>;
-}) {
-  const targetSessionKey = params.ctx.CommandTargetSessionKey?.trim() || params.sessionKey;
-  const { entry, key } = resolveSessionEntryForKey(params.sessionStore, targetSessionKey);
-  if (entry && key) {
-    return { entry, key, sessionId: entry.sessionId };
-  }
-  if (params.sessionEntry && params.sessionKey) {
-    return {
-      entry: params.sessionEntry,
-      key: params.sessionKey,
-      sessionId: params.sessionEntry.sessionId,
-    };
-  }
-  return { entry: undefined, key: targetSessionKey, sessionId: undefined };
+const SESSION_COMMAND_PREFIX = "/session";
+const SESSION_DURATION_OFF_VALUES = new Set(["off", "disable", "disabled", "none", "0"]);
+const SESSION_ACTION_IDLE = "idle";
+const SESSION_ACTION_MAX_AGE = "max-age";
+
+function isDiscordSurface(params: Parameters<CommandHandler>[0]): boolean {
+  const channel =
+    params.ctx.OriginatingChannel ??
+    params.command.channel ??
+    params.ctx.Surface ??
+    params.ctx.Provider;
+  return (
+    String(channel ?? "")
+      .trim()
+      .toLowerCase() === "discord"
+  );
 }
 
-async function applyAbortTarget(params: {
-  abortTarget: ReturnType<typeof resolveAbortTarget>;
-  sessionStore?: Record<string, SessionEntry>;
-  storePath?: string;
-  abortKey?: string;
-}) {
-  const { abortTarget } = params;
-  if (abortTarget.sessionId) {
-    abortEmbeddedPiRun(abortTarget.sessionId);
+function resolveDiscordAccountId(params: Parameters<CommandHandler>[0]): string {
+  const accountId = typeof params.ctx.AccountId === "string" ? params.ctx.AccountId.trim() : "";
+  return accountId || "default";
+}
+
+function resolveSessionCommandUsage() {
+  return "Usage: /session idle <duration|off> | /session max-age <duration|off> (example: /session idle 24h)";
+}
+
+function parseSessionDurationMs(raw: string): number {
+  const normalized = raw.trim().toLowerCase();
+  if (!normalized) {
+    throw new Error("missing duration");
   }
-  if (abortTarget.entry && params.sessionStore && abortTarget.key) {
-    abortTarget.entry.abortedLastRun = true;
-    abortTarget.entry.updatedAt = Date.now();
-    params.sessionStore[abortTarget.key] = abortTarget.entry;
-    if (params.storePath) {
-      await updateSessionStore(params.storePath, (store) => {
-        store[abortTarget.key] = abortTarget.entry;
-      });
+  if (SESSION_DURATION_OFF_VALUES.has(normalized)) {
+    return 0;
+  }
+  if (/^\d+(?:\.\d+)?$/.test(normalized)) {
+    const hours = Number(normalized);
+    if (!Number.isFinite(hours) || hours < 0) {
+      throw new Error("invalid duration");
     }
-  } else if (params.abortKey) {
-    setAbortMemory(params.abortKey, true);
+    return Math.round(hours * 60 * 60 * 1000);
   }
+  return parseDurationMs(normalized, { defaultUnit: "h" });
 }
 
-async function persistSessionEntry(params: Parameters<CommandHandler>[0]): Promise<boolean> {
-  if (!params.sessionEntry || !params.sessionStore || !params.sessionKey) {
-    return false;
-  }
-  params.sessionEntry.updatedAt = Date.now();
-  params.sessionStore[params.sessionKey] = params.sessionEntry;
-  if (params.storePath) {
-    await updateSessionStore(params.storePath, (store) => {
-      store[params.sessionKey] = params.sessionEntry as SessionEntry;
-    });
-  }
-  return true;
+function formatSessionExpiry(expiresAt: number) {
+  return new Date(expiresAt).toISOString();
 }
 
 export const handleActivationCommand: CommandHandler = async (params, allowTextCommands) => {
@@ -244,6 +235,206 @@ export const handleUsageCommand: CommandHandler = async (params, allowTextComman
   };
 };
 
+export const handleSessionCommand: CommandHandler = async (params, allowTextCommands) => {
+  if (!allowTextCommands) {
+    return null;
+  }
+  const normalized = params.command.commandBodyNormalized;
+  if (!/^\/session(?:\s|$)/.test(normalized)) {
+    return null;
+  }
+  if (!params.command.isAuthorizedSender) {
+    logVerbose(
+      `Ignoring /session from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
+    );
+    return { shouldContinue: false };
+  }
+
+  const rest = normalized.slice(SESSION_COMMAND_PREFIX.length).trim();
+  const tokens = rest.split(/\s+/).filter(Boolean);
+  const action = tokens[0]?.toLowerCase();
+  if (action !== SESSION_ACTION_IDLE && action !== SESSION_ACTION_MAX_AGE) {
+    return {
+      shouldContinue: false,
+      reply: { text: resolveSessionCommandUsage() },
+    };
+  }
+
+  if (!isDiscordSurface(params)) {
+    return {
+      shouldContinue: false,
+      reply: {
+        text: "⚠️ /session idle and /session max-age are currently available for Discord thread-bound sessions.",
+      },
+    };
+  }
+
+  const threadId =
+    params.ctx.MessageThreadId != null ? String(params.ctx.MessageThreadId).trim() : "";
+  if (!threadId) {
+    return {
+      shouldContinue: false,
+      reply: {
+        text: "⚠️ /session idle and /session max-age must be run inside a focused Discord thread.",
+      },
+    };
+  }
+
+  const accountId = resolveDiscordAccountId(params);
+  const threadBindings = getThreadBindingManager(accountId);
+  if (!threadBindings) {
+    return {
+      shouldContinue: false,
+      reply: { text: "⚠️ Discord thread bindings are unavailable for this account." },
+    };
+  }
+
+  const binding = threadBindings.getByThreadId(threadId);
+  if (!binding) {
+    return {
+      shouldContinue: false,
+      reply: { text: "ℹ️ This thread is not currently focused." },
+    };
+  }
+
+  const idleTimeoutMs = resolveThreadBindingIdleTimeoutMs({
+    record: binding,
+    defaultIdleTimeoutMs: threadBindings.getIdleTimeoutMs(),
+  });
+  const idleExpiresAt = resolveThreadBindingInactivityExpiresAt({
+    record: binding,
+    defaultIdleTimeoutMs: threadBindings.getIdleTimeoutMs(),
+  });
+  const maxAgeMs = resolveThreadBindingMaxAgeMs({
+    record: binding,
+    defaultMaxAgeMs: threadBindings.getMaxAgeMs(),
+  });
+  const maxAgeExpiresAt = resolveThreadBindingMaxAgeExpiresAt({
+    record: binding,
+    defaultMaxAgeMs: threadBindings.getMaxAgeMs(),
+  });
+
+  const durationArgRaw = tokens.slice(1).join("");
+  if (!durationArgRaw) {
+    if (action === SESSION_ACTION_IDLE) {
+      if (
+        typeof idleExpiresAt === "number" &&
+        Number.isFinite(idleExpiresAt) &&
+        idleExpiresAt > Date.now()
+      ) {
+        return {
+          shouldContinue: false,
+          reply: {
+            text: `ℹ️ Idle timeout active (${formatThreadBindingDurationLabel(idleTimeoutMs)}, next auto-unfocus at ${formatSessionExpiry(idleExpiresAt)}).`,
+          },
+        };
+      }
+      return {
+        shouldContinue: false,
+        reply: { text: "ℹ️ Idle timeout is currently disabled for this focused session." },
+      };
+    }
+
+    if (
+      typeof maxAgeExpiresAt === "number" &&
+      Number.isFinite(maxAgeExpiresAt) &&
+      maxAgeExpiresAt > Date.now()
+    ) {
+      return {
+        shouldContinue: false,
+        reply: {
+          text: `ℹ️ Max age active (${formatThreadBindingDurationLabel(maxAgeMs)}, hard auto-unfocus at ${formatSessionExpiry(maxAgeExpiresAt)}).`,
+        },
+      };
+    }
+    return {
+      shouldContinue: false,
+      reply: { text: "ℹ️ Max age is currently disabled for this focused session." },
+    };
+  }
+
+  const senderId = params.command.senderId?.trim() || "";
+  if (binding.boundBy && binding.boundBy !== "system" && senderId && senderId !== binding.boundBy) {
+    return {
+      shouldContinue: false,
+      reply: {
+        text: `⚠️ Only ${binding.boundBy} can update session lifecycle settings for this thread.`,
+      },
+    };
+  }
+
+  let durationMs: number;
+  try {
+    durationMs = parseSessionDurationMs(durationArgRaw);
+  } catch {
+    return {
+      shouldContinue: false,
+      reply: { text: resolveSessionCommandUsage() },
+    };
+  }
+
+  const updatedBindings =
+    action === SESSION_ACTION_IDLE
+      ? setThreadBindingIdleTimeoutBySessionKey({
+          targetSessionKey: binding.targetSessionKey,
+          accountId,
+          idleTimeoutMs: durationMs,
+        })
+      : setThreadBindingMaxAgeBySessionKey({
+          targetSessionKey: binding.targetSessionKey,
+          accountId,
+          maxAgeMs: durationMs,
+        });
+  if (updatedBindings.length === 0) {
+    return {
+      shouldContinue: false,
+      reply: {
+        text:
+          action === SESSION_ACTION_IDLE
+            ? "⚠️ Failed to update idle timeout for the current binding."
+            : "⚠️ Failed to update max age for the current binding.",
+      },
+    };
+  }
+
+  if (durationMs <= 0) {
+    return {
+      shouldContinue: false,
+      reply: {
+        text:
+          action === SESSION_ACTION_IDLE
+            ? `✅ Idle timeout disabled for ${updatedBindings.length} binding${updatedBindings.length === 1 ? "" : "s"}.`
+            : `✅ Max age disabled for ${updatedBindings.length} binding${updatedBindings.length === 1 ? "" : "s"}.`,
+      },
+    };
+  }
+
+  const nextBinding = updatedBindings[0];
+  const nextExpiry =
+    action === SESSION_ACTION_IDLE
+      ? resolveThreadBindingInactivityExpiresAt({
+          record: nextBinding,
+          defaultIdleTimeoutMs: threadBindings.getIdleTimeoutMs(),
+        })
+      : resolveThreadBindingMaxAgeExpiresAt({
+          record: nextBinding,
+          defaultMaxAgeMs: threadBindings.getMaxAgeMs(),
+        });
+  const expiryLabel =
+    typeof nextExpiry === "number" && Number.isFinite(nextExpiry)
+      ? formatSessionExpiry(nextExpiry)
+      : "n/a";
+
+  return {
+    shouldContinue: false,
+    reply: {
+      text:
+        action === SESSION_ACTION_IDLE
+          ? `✅ Idle timeout set to ${formatThreadBindingDurationLabel(durationMs)} for ${updatedBindings.length} binding${updatedBindings.length === 1 ? "" : "s"} (next auto-unfocus at ${expiryLabel}).`
+          : `✅ Max age set to ${formatThreadBindingDurationLabel(durationMs)} for ${updatedBindings.length} binding${updatedBindings.length === 1 ? "" : "s"} (hard auto-unfocus at ${expiryLabel}).`,
+    },
+  };
+};
 export const handleRestartCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {
     return null;
@@ -293,78 +484,4 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
   };
 };
 
-export const handleStopCommand: CommandHandler = async (params, allowTextCommands) => {
-  if (!allowTextCommands) {
-    return null;
-  }
-  if (params.command.commandBodyNormalized !== "/stop") {
-    return null;
-  }
-  if (!params.command.isAuthorizedSender) {
-    logVerbose(
-      `Ignoring /stop from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
-    );
-    return { shouldContinue: false };
-  }
-  const abortTarget = resolveAbortTarget({
-    ctx: params.ctx,
-    sessionKey: params.sessionKey,
-    sessionEntry: params.sessionEntry,
-    sessionStore: params.sessionStore,
-  });
-  const cleared = clearSessionQueues([abortTarget.key, abortTarget.sessionId]);
-  if (cleared.followupCleared > 0 || cleared.laneCleared > 0) {
-    logVerbose(
-      `stop: cleared followups=${cleared.followupCleared} lane=${cleared.laneCleared} keys=${cleared.keys.join(",")}`,
-    );
-  }
-  await applyAbortTarget({
-    abortTarget,
-    sessionStore: params.sessionStore,
-    storePath: params.storePath,
-    abortKey: params.command.abortKey,
-  });
-
-  // Trigger internal hook for stop command
-  const hookEvent = createInternalHookEvent(
-    "command",
-    "stop",
-    abortTarget.key ?? params.sessionKey ?? "",
-    {
-      sessionEntry: abortTarget.entry ?? params.sessionEntry,
-      sessionId: abortTarget.sessionId,
-      commandSource: params.command.surface,
-      senderId: params.command.senderId,
-    },
-  );
-  await triggerInternalHook(hookEvent);
-
-  const { stopped } = stopSubagentsForRequester({
-    cfg: params.cfg,
-    requesterSessionKey: abortTarget.key ?? params.sessionKey,
-  });
-
-  return { shouldContinue: false, reply: { text: formatAbortReplyText(stopped) } };
-};
-
-export const handleAbortTrigger: CommandHandler = async (params, allowTextCommands) => {
-  if (!allowTextCommands) {
-    return null;
-  }
-  if (!isAbortTrigger(params.command.rawBodyNormalized)) {
-    return null;
-  }
-  const abortTarget = resolveAbortTarget({
-    ctx: params.ctx,
-    sessionKey: params.sessionKey,
-    sessionEntry: params.sessionEntry,
-    sessionStore: params.sessionStore,
-  });
-  await applyAbortTarget({
-    abortTarget,
-    sessionStore: params.sessionStore,
-    storePath: params.storePath,
-    abortKey: params.command.abortKey,
-  });
-  return { shouldContinue: false, reply: { text: "⚙️ Agent was aborted." } };
-};
+export { handleAbortTrigger, handleStopCommand };

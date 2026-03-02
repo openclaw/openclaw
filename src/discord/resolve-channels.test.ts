@@ -1,17 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import { resolveDiscordChannelAllowlist } from "./resolve-channels.js";
-
-function jsonResponse(body: unknown) {
-  return new Response(JSON.stringify(body), { status: 200 });
-}
-
-const urlToString = (url: Request | URL | string): string => {
-  if (typeof url === "string") {
-    return url;
-  }
-  return "url" in url ? url.url : String(url);
-};
+import { jsonResponse, urlToString } from "./test-http-helpers.js";
 
 describe("resolveDiscordChannelAllowlist", () => {
   it("resolves guild/channel by name", async () => {

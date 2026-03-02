@@ -1,3 +1,4 @@
+import { findCodeRegions, isInsideCode } from "./code-regions.js";
 export type ReasoningTagMode = "strict" | "preserve";
 export type ReasoningTagTrim = "none" | "start" | "both";
 
@@ -6,38 +7,6 @@ const QUICK_TAG_RE =
 const FINAL_TAG_RE = /(?:<\s*\/?\s*final\b[^<>]*>|\[\[reply_to_current\]\])/gi;
 const THINKING_TAG_RE =
   /(?:<\s*(\/?)\s*(?:think(?:ing)?|thought|antthinking)\b[^<>]*>)|(?:\n?think\s*>)|(?:\[\(\s*(\/?)\s*(?:deep_)?think\s*\)\])/gi;
-
-interface CodeRegion {
-  start: number;
-  end: number;
-}
-
-function findCodeRegions(text: string): CodeRegion[] {
-  const regions: CodeRegion[] = [];
-
-  const fencedRe = /(^|\n)(```|~~~)[^\n]*\n[\s\S]*?(?:\n\2(?:\n|$)|$)/g;
-  for (const match of text.matchAll(fencedRe)) {
-    const start = (match.index ?? 0) + match[1].length;
-    regions.push({ start, end: start + match[0].length - match[1].length });
-  }
-
-  const inlineRe = /`+[^`]+`+/g;
-  for (const match of text.matchAll(inlineRe)) {
-    const start = match.index ?? 0;
-    const end = start + match[0].length;
-    const insideFenced = regions.some((r) => start >= r.start && end <= r.end);
-    if (!insideFenced) {
-      regions.push({ start, end });
-    }
-  }
-
-  regions.sort((a, b) => a.start - b.start);
-  return regions;
-}
-
-function isInsideCode(pos: number, regions: CodeRegion[]): boolean {
-  return regions.some((r) => pos >= r.start && pos < r.end);
-}
 
 function applyTrim(value: string, mode: ReasoningTagTrim): string {
   if (mode === "none") {

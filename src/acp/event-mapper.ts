@@ -6,6 +6,56 @@ export type GatewayAttachment = {
   content: string;
 };
 
+const INLINE_CONTROL_ESCAPE_MAP: Readonly<Record<string, string>> = {
+  "\0": "\\0",
+  "\r": "\\r",
+  "\n": "\\n",
+  "\t": "\\t",
+  "\v": "\\v",
+  "\f": "\\f",
+  "\u2028": "\\u2028",
+  "\u2029": "\\u2029",
+};
+
+function escapeInlineControlChars(value: string): string {
+  let escaped = "";
+  for (const char of value) {
+    const codePoint = char.codePointAt(0);
+    if (codePoint === undefined) {
+      escaped += char;
+      continue;
+    }
+
+    const isInlineControl =
+      codePoint <= 0x1f ||
+      (codePoint >= 0x7f && codePoint <= 0x9f) ||
+      codePoint === 0x2028 ||
+      codePoint === 0x2029;
+    if (!isInlineControl) {
+      escaped += char;
+      continue;
+    }
+
+    const mapped = INLINE_CONTROL_ESCAPE_MAP[char];
+    if (mapped) {
+      escaped += mapped;
+      continue;
+    }
+
+    // Keep escaped control bytes readable and stable in logs/prompts.
+    escaped +=
+      codePoint <= 0xff
+        ? `\\x${codePoint.toString(16).padStart(2, "0")}`
+        : `\\u${codePoint.toString(16).padStart(4, "0")}`;
+  }
+  return escaped;
+}
+
+function escapeResourceTitle(value: string): string {
+  // Keep title content, but escape characters that can break the resource-link annotation shape.
+  return escapeInlineControlChars(value).replace(/[()[\]]/g, (char) => `\\${char}`);
+}
+
 export function extractTextFromPrompt(prompt: ContentBlock[], maxBytes?: number): string {
   const parts: string[] = [];
   // Track accumulated byte count per block to catch oversized prompts before full concatenation
@@ -20,8 +70,8 @@ export function extractTextFromPrompt(prompt: ContentBlock[], maxBytes?: number)
         blockText = resource.text;
       }
     } else if (block.type === "resource_link") {
-      const title = block.title ? ` (${block.title})` : "";
-      const uri = block.uri ?? "";
+      const title = block.title ? ` (${escapeResourceTitle(block.title)})` : "";
+      const uri = block.uri ? escapeInlineControlChars(block.uri) : "";
       blockText = uri ? `[Resource link${title}] ${uri}` : `[Resource link${title}]`;
     }
     if (blockText !== undefined) {

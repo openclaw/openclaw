@@ -103,7 +103,7 @@ export const SYNTHETIC_MODEL_CATALOG = [
     id: "hf:moonshotai/Kimi-K2.5",
     name: "Kimi K2.5",
     reasoning: true,
-    input: ["text"],
+    input: ["text", "image"],
     contextWindow: 256000,
     maxTokens: 8192,
   },
