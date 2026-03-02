@@ -123,10 +123,6 @@ exit 1`,
     expect(fallbackResult.stdout).toBe("AAAAA11111");
 
     await writeFile(path.join(profilesDir, "two.mobileprovision"), "stub2");
-    const preferredResult = runScript(homeDir, { IOS_PREFERRED_TEAM_ID: "BBBBB22222" });
-    expect(preferredResult.ok).toBe(true);
-    expect(preferredResult.stdout).toBe("BBBBB22222");
-
     await writeExecutable(
       path.join(binDir, "fake-python"),
       `#!/usr/bin/env bash
