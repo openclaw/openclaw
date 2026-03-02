@@ -33,6 +33,12 @@ Sandboxing details: [Sandboxing](/gateway/sandboxing)
 
 ### Quick start (recommended)
 
+<Note>
+Docker defaults here assume bind modes (`lan`/`loopback`), not host aliases. Use bind
+mode values in `gateway.bind` (for example `lan` or `loopback`), not host aliases like
+`0.0.0.0` or `localhost`.
+</Note>
+
 From repo root:
 
 ```bash
@@ -53,6 +59,8 @@ Optional env vars:
 - `OPENCLAW_DOCKER_APT_PACKAGES` — install extra apt packages during build
 - `OPENCLAW_EXTRA_MOUNTS` — add extra host bind mounts
 - `OPENCLAW_HOME_VOLUME` — persist `/home/node` in a named volume
+- `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1` — break-glass: allow trusted private-network
+  `ws://` targets for CLI/onboarding client paths (default is loopback-only)
 
 After it finishes:
 
@@ -386,7 +394,24 @@ to capture a callback on `http://127.0.0.1:1455/auth/callback`. In Docker or
 headless setups that callback can show a browser error. Copy the full redirect
 URL you land on and paste it back into the wizard to finish auth.
 
-### Health check
+### Health checks
+
+Container probe endpoints (no auth required):
+
+```bash
+curl -fsS http://127.0.0.1:18789/healthz
+curl -fsS http://127.0.0.1:18789/readyz
+```
+
+Aliases: `/health` and `/ready`.
+
+The Docker image includes a built-in `HEALTHCHECK` that pings `/healthz` in the
+background. In plain terms: Docker keeps checking if OpenClaw is still
+responsive. If checks keep failing, Docker marks the container as `unhealthy`,
+and orchestration systems (Docker Compose restart policy, Swarm, Kubernetes,
+etc.) can automatically restart or replace it.
+
+Authenticated deep health snapshot (gateway + channels):
 
 ```bash
 docker compose exec openclaw-gateway node dist/index.js health --token "$OPENCLAW_GATEWAY_TOKEN"
@@ -415,6 +440,10 @@ pnpm test:docker:qr
 
 The setup script also pins `gateway.mode=local` after onboarding so Docker CLI
 commands default to local loopback targeting.
+
+Legacy config note: use bind mode values in `gateway.bind` (`lan` / `loopback` /
+`custom` / `tailnet` / `auto`), not host aliases (`0.0.0.0`, `127.0.0.1`,
+`localhost`, `::`, `::1`).
 
 If you see `Gateway target: ws://172.x.x.x:18789` or repeated `pairing required`
 errors from Docker CLI commands, run:

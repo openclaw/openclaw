@@ -174,7 +174,7 @@ async function expectSkippedUnavailableProvider(params: {
 }
 
 describe("runWithModelFallback", () => {
-  it("normalizes openai gpt-5.3 codex to openai-codex before running", async () => {
+  it("keeps openai gpt-5.3 codex on the openai provider before running", async () => {
     const cfg = makeCfg();
     const run = vi.fn().mockResolvedValueOnce("ok");
 
@@ -187,7 +187,7 @@ describe("runWithModelFallback", () => {
 
     expect(result.result).toBe("ok");
     expect(run).toHaveBeenCalledTimes(1);
-    expect(run).toHaveBeenCalledWith("openai-codex", "gpt-5.3-codex");
+    expect(run).toHaveBeenCalledWith("openai", "gpt-5.3-codex");
   });
 
   it("falls back on unrecognized errors when candidates remain", async () => {

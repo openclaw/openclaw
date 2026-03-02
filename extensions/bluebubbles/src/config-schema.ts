@@ -61,5 +61,6 @@ const bluebubblesAccountSchema = z
 
 export const BlueBubblesConfigSchema = bluebubblesAccountSchema.extend({
   accounts: z.object({}).catchall(bluebubblesAccountSchema).optional(),
+  defaultAccount: z.string().optional(),
   actions: bluebubblesActionSchema,
 });

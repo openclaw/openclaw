@@ -1,5 +1,9 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import {
+  DEFAULT_ACCOUNT_ID,
+  normalizeAccountId,
+  normalizeOptionalAccountId,
+} from "openclaw/plugin-sdk/account-id";
 import type { MattermostAccountConfig, MattermostChatMode } from "../types.js";
 import { normalizeMattermostBaseUrl } from "./client.js";
 
@@ -40,6 +44,13 @@ export function listMattermostAccountIds(cfg: OpenClawConfig): string[] {
 }
 
 export function resolveDefaultMattermostAccountId(cfg: OpenClawConfig): string {
+  const preferred = normalizeOptionalAccountId(cfg.channels?.mattermost?.defaultAccount);
+  if (
+    preferred &&
+    listMattermostAccountIds(cfg).some((accountId) => normalizeAccountId(accountId) === preferred)
+  ) {
+    return preferred;
+  }
   const ids = listMattermostAccountIds(cfg);
   if (ids.includes(DEFAULT_ACCOUNT_ID)) {
     return DEFAULT_ACCOUNT_ID;
@@ -62,8 +73,14 @@ function mergeMattermostAccountConfig(
   cfg: OpenClawConfig,
   accountId: string,
 ): MattermostAccountConfig {
-  const { accounts: _ignored, ...base } = (cfg.channels?.mattermost ??
-    {}) as MattermostAccountConfig & { accounts?: unknown };
+  const {
+    accounts: _ignored,
+    defaultAccount: _ignoredDefaultAccount,
+    ...base
+  } = (cfg.channels?.mattermost ?? {}) as MattermostAccountConfig & {
+    accounts?: unknown;
+    defaultAccount?: unknown;
+  };
   const account = resolveAccountConfig(cfg, accountId) ?? {};
   return { ...base, ...account };
 }
