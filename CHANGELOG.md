@@ -18,6 +18,7 @@ Docs: https://docs.openclaw.ai
 - Feishu/Chat tooling: add `feishu_chat` tool actions for chat info and member queries, with configurable enablement under `channels.feishu.tools.chat`. (#14674) Thanks @liuweifly.
 - Feishu/Doc permissions: support optional owner permission grant fields on `feishu_doc` create and report permission metadata only when the grant call succeeds, with regression coverage for success/failure/omitted-owner paths. (#28295) Thanks @zhoulongchao77.
 - Memory/LanceDB: support custom OpenAI `baseUrl` and embedding dimensions for LanceDB memory. (#17874) Thanks @rish2jain and @vincentkoc.
+- Web Search: raise the maximum results limit (`MAX_SEARCH_COUNT`) from 10 to 20 to align with Brave Search's native pagination capacity, and update associated documentation and UI hints. (#19379) Thanks @liyishuai.
 
 ### Fixes
 
