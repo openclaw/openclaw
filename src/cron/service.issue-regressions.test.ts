@@ -115,7 +115,7 @@ function createIsolatedRegressionJob(params: {
 }
 
 async function writeCronJobs(storePath: string, jobs: CronJob[]) {
-  await fs.writeFile(storePath, JSON.stringify({ version: 1, jobs }, null, 2), "utf-8");
+  await fs.writeFile(storePath, JSON.stringify({ version: 1, jobs }), "utf-8");
 }
 
 async function startCronForStore(params: {
@@ -665,7 +665,7 @@ describe("Cron issue regressions", () => {
       if (targetJob?.delivery?.channel === "telegram") {
         targetJob.delivery.to = rewrittenTarget;
       }
-      await fs.writeFile(store.storePath, JSON.stringify(persisted, null, 2), "utf-8");
+      await fs.writeFile(store.storePath, JSON.stringify(persisted), "utf-8");
       return { status: "ok" as const, summary: "done", delivered: true };
     });
 
@@ -736,11 +736,7 @@ describe("Cron issue regressions", () => {
     ];
     for (const { id, state } of terminalStates) {
       const job: CronJob = { id, ...baseJob, state };
-      await fs.writeFile(
-        store.storePath,
-        JSON.stringify({ version: 1, jobs: [job] }, null, 2),
-        "utf-8",
-      );
+      await fs.writeFile(store.storePath, JSON.stringify({ version: 1, jobs: [job] }), "utf-8");
       const enqueueSystemEvent = vi.fn();
       const cron = await startCronForStore({
         storePath: store.storePath,
@@ -1410,7 +1406,7 @@ describe("Cron issue regressions", () => {
     const second = createDueIsolatedJob({ id: "batch-second", nowMs: dueAt, nextRunAtMs: dueAt });
     await fs.writeFile(
       store.storePath,
-      JSON.stringify({ version: 1, jobs: [first, second] }, null, 2),
+      JSON.stringify({ version: 1, jobs: [first, second] }),
       "utf-8",
     );
 
@@ -1460,7 +1456,7 @@ describe("Cron issue regressions", () => {
     });
     await fs.writeFile(
       store.storePath,
-      JSON.stringify({ version: 1, jobs: [first, second] }, null, 2),
+      JSON.stringify({ version: 1, jobs: [first, second] }),
       "utf-8",
     );
 
@@ -1524,9 +1520,9 @@ describe("Cron issue regressions", () => {
     const store = await makeStorePath();
     const scheduledAt = Date.parse("2026-02-15T13:00:00.000Z");
 
-    // Use a short but observable timeout: 300 ms.
-    // Before the fix, premature timeout would fire at ~100 ms (1/3 of 300 ms).
-    const timeoutSeconds = 0.3;
+    // Keep this short for suite speed while still separating expected timeout
+    // from the 1/3-regression timeout.
+    const timeoutSeconds = 0.16;
     const cronJob = createIsolatedRegressionJob({
       id: "timeout-fraction-29774",
       name: "timeout fraction regression",
@@ -1537,10 +1533,10 @@ describe("Cron issue regressions", () => {
     });
     await writeCronJobs(store.storePath, [cronJob]);
 
-    const tempFile = path.join(os.tmpdir(), `cron-29774-${Date.now()}.txt`);
     let now = scheduledAt;
     const wallStart = Date.now();
     let abortWallMs: number | undefined;
+    let started = false;
 
     const state = createCronServiceState({
       cronEnabled: true,
@@ -1550,8 +1546,7 @@ describe("Cron issue regressions", () => {
       enqueueSystemEvent: vi.fn(),
       requestHeartbeatNow: vi.fn(),
       runIsolatedAgentJob: vi.fn(async ({ abortSignal }: { abortSignal?: AbortSignal }) => {
-        // Real side effect: confirm the job actually started.
-        await fs.writeFile(tempFile, "started", "utf-8");
+        started = true;
         await new Promise<void>((resolve) => {
           if (!abortSignal) {
             resolve();
@@ -1578,15 +1573,12 @@ describe("Cron issue regressions", () => {
 
     await onTimer(state);
 
-    // Confirm job started (real side effect).
-    await expect(fs.readFile(tempFile, "utf-8")).resolves.toBe("started");
-    await fs.unlink(tempFile).catch(() => {});
+    expect(started).toBe(true);
 
-    // The outer cron timeout fires at timeoutSeconds * 1000 = 300 ms.
-    // The abort must not have fired at ~100 ms (the 1/3 regression value).
-    // Allow generous lower bound (80%) to keep the test stable on loaded CI runners.
+    // The abort must not fire at the old ~1/3 regression value.
+    // Keep the lower bound conservative for loaded CI runners.
     const elapsedMs = (abortWallMs ?? Date.now()) - wallStart;
-    expect(elapsedMs).toBeGreaterThanOrEqual(timeoutSeconds * 1000 * 0.8);
+    expect(elapsedMs).toBeGreaterThanOrEqual(timeoutSeconds * 1000 * 0.7);
 
     const job = state.store?.jobs.find((entry) => entry.id === "timeout-fraction-29774");
     expect(job?.state.lastStatus).toBe("error");

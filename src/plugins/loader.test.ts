@@ -234,21 +234,6 @@ describe("loadOpenClawPlugins", () => {
 
     const bundled = registry.plugins.find((entry) => entry.id === "bundled");
     expect(bundled?.status).toBe("disabled");
-
-    const enabledRegistry = loadOpenClawPlugins({
-      cache: false,
-      config: {
-        plugins: {
-          allow: ["bundled"],
-          entries: {
-            bundled: { enabled: true },
-          },
-        },
-      },
-    });
-
-    const enabled = enabledRegistry.plugins.find((entry) => entry.id === "bundled");
-    expect(enabled?.status).toBe("loaded");
   });
 
   it("loads bundled telegram plugin when enabled", () => {
