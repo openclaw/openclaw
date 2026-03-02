@@ -913,7 +913,8 @@ export async function runTui(opts: TuiOptions) {
     if (!sessionInfoRefreshTimer) {
       sessionInfoRefreshTimer = setInterval(() => {
         if (isConnected && activityStatus === "idle") {
-          void refreshSessionInfo();
+          void refreshSessionInfo().catch(() => {
+          });
         }
       }, 30_000);
     }
