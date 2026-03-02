@@ -22,7 +22,12 @@ curl -fsSL https://openclaw.ai/install.sh | bash
 
 Notes:
 
-- Add `--no-onboard` if you don’t want the onboarding wizard to run again.
+- To skip the onboarding wizard with `--no-onboard`, use:
+
+  ```bash
+  curl -fsSL https://openclaw.ai/install.sh | bash -s -- --no-onboard
+  ```
+
 - For **source installs**, use:
 
   ```bash
