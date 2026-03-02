@@ -182,8 +182,7 @@ describe("secret ref resolver", () => {
     if (process.platform === "win32") {
       return;
     }
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-resolve-exec-delay-"));
-    cleanupRoots.push(root);
+    const root = await createCaseDir("exec-delay");
     const scriptPath = path.join(root, "resolver-delay.mjs");
     await writeSecureFile(
       scriptPath,
