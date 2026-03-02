@@ -31,15 +31,33 @@ import {
   ShieldCheck,
   Clock,
   Settings,
+  Network,
   type LucideIcon,
 } from "lucide-react";
 import { humanize } from "./config-form-utils";
+
+export type ConfigValidationIssue = {
+  path: string;
+  message: string;
+};
+
+export type SectionIssuesMap = Map<string, ConfigValidationIssue[]>;
 
 export type ConfigSection = {
   key: string;
   label: string;
   description: string;
   icon: LucideIcon;
+};
+
+/** A collapsible group of related sections in the sidebar. */
+export type ConfigSectionGroup = {
+  key: string;
+  label: string;
+  description: string;
+  icon: LucideIcon;
+  /** Section keys that belong to this group */
+  children: string[];
 };
 
 export const CONFIG_SECTIONS: ConfigSection[] = [
@@ -251,7 +269,9 @@ export function getSectionMeta(key: string): ConfigSection | undefined {
 // Get section metadata, falling back to dynamic generation for unknown sections
 export function getSectionMetaOrDefault(key: string): ConfigSection {
   const found = getSectionMeta(key);
-  if (found) return found;
+  if (found) {
+    return found;
+  }
 
   return {
     key,
@@ -259,4 +279,50 @@ export function getSectionMetaOrDefault(key: string): ConfigSection {
     description: "",
     icon: DEFAULT_SECTION_ICON,
   };
+}
+
+/**
+ * Groups of related sections shown as collapsible sub-menus in the sidebar.
+ * Sections listed as children are pulled out of the flat list and nested under the group.
+ */
+export const CONFIG_SECTION_GROUPS: ConfigSectionGroup[] = [
+  {
+    key: "matrix",
+    label: "Matrix",
+    description: "Multi-agent hierarchy, teams, and orchestration",
+    icon: Network,
+    children: ["agents", "session"],
+  },
+];
+
+/** Set of all section keys that belong to a group (for fast lookup). */
+const GROUPED_SECTION_KEYS = new Set(CONFIG_SECTION_GROUPS.flatMap((g) => g.children));
+
+/** Check if a section key is grouped under a parent. */
+export function isSectionGrouped(key: string): boolean {
+  return GROUPED_SECTION_KEYS.has(key);
+}
+
+/** Find the group a section belongs to, if any. */
+export function getGroupForSection(key: string): ConfigSectionGroup | undefined {
+  return CONFIG_SECTION_GROUPS.find((g) => g.children.includes(key));
+}
+
+/**
+ * Map an array of validation issues to the config sections they belong to.
+ * The first segment of the dotted `path` (e.g. "agents" from "agents.list.0.id")
+ * is used as the section key.
+ */
+export function mapIssuesToSections(issues: ConfigValidationIssue[]): SectionIssuesMap {
+  const map: SectionIssuesMap = new Map();
+  for (const issue of issues) {
+    const sectionKey = issue.path.split(".")[0] || "_root";
+    const existing = map.get(sectionKey);
+    if (existing) {
+      existing.push(issue);
+    } else {
+      map.set(sectionKey, [issue]);
+    }
+  }
+  return map;
 }

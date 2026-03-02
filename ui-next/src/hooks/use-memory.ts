@@ -187,14 +187,25 @@ export function useMemory() {
   );
 
   const loadActivityLog = useCallback(
-    async (sessionLimit = 5) => {
+    async (sessionLimit = 5, append = false) => {
       const store = useMemoryStore.getState();
       store.setActivityLoading(true);
       try {
-        const sessionsResult = await sendRpc<SessionsListResult>("sessions.list", { limit: 50 });
-        const sessions = (sessionsResult.sessions ?? [])
-          .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
-          .slice(0, sessionLimit);
+        // Fetch a large pool so Load More can reach older sessions.
+        // sessionLimit controls how many get scanned; pool must be >= sessionLimit.
+        const sessionsResult = await sendRpc<SessionsListResult>("sessions.list", {
+          limit: Math.max(sessionLimit * 4, 200),
+        });
+        const allSessions = (sessionsResult.sessions ?? []).toSorted(
+          (a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0),
+        );
+
+        // When appending, only scan the newly added window (matches Load More step of 10).
+        // This avoids re-scanning sessions already processed on previous loads.
+        const LOAD_BATCH = 10;
+        const sessions = append
+          ? allSessions.slice(Math.max(0, sessionLimit - LOAD_BATCH), sessionLimit)
+          : allSessions.slice(0, sessionLimit);
 
         const entries: ActivityEntry[] = [];
 
@@ -263,8 +274,10 @@ export function useMemory() {
           }
         }
 
-        entries.sort((a, b) => b.timestamp - a.timestamp);
-        store.setActivityLog(entries);
+        // Merge with existing entries when appending, then re-sort
+        const merged = append ? [...store.activityLog, ...entries] : entries;
+        merged.sort((a, b) => b.timestamp - a.timestamp);
+        store.setActivityLog(merged);
       } catch (err) {
         console.error("[memory] failed to load activity:", err);
       } finally {

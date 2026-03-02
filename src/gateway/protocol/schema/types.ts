@@ -129,6 +129,21 @@ import type {
 } from "./sessions.js";
 import type { PresenceEntrySchema, SnapshotSchema, StateVersionSchema } from "./snapshot.js";
 import type {
+  TeamRunsCreateParamsSchema,
+  TeamRunsListParamsSchema,
+  TeamRunsGetParamsSchema,
+  TeamRunsCompleteParamsSchema,
+  TeamRunsAddMemberParamsSchema,
+  TeamRunsUpdateMemberParamsSchema,
+  TeamTasksCreateParamsSchema,
+  TeamTasksListParamsSchema,
+  TeamTasksUpdateParamsSchema,
+  TeamTasksDeleteParamsSchema,
+  TeamMessagesSendParamsSchema,
+  TeamMessagesMarkReadParamsSchema,
+  TeamMessagesListParamsSchema,
+} from "./teams.js";
+import type {
   WizardCancelParamsSchema,
   WizardNextParamsSchema,
   WizardNextResultSchema,
@@ -257,3 +272,16 @@ export type ChatEvent = Static<typeof ChatEventSchema>;
 export type UpdateRunParams = Static<typeof UpdateRunParamsSchema>;
 export type TickEvent = Static<typeof TickEventSchema>;
 export type ShutdownEvent = Static<typeof ShutdownEventSchema>;
+export type TeamRunsCreateParams = Static<typeof TeamRunsCreateParamsSchema>;
+export type TeamRunsListParams = Static<typeof TeamRunsListParamsSchema>;
+export type TeamRunsGetParams = Static<typeof TeamRunsGetParamsSchema>;
+export type TeamRunsCompleteParams = Static<typeof TeamRunsCompleteParamsSchema>;
+export type TeamRunsAddMemberParams = Static<typeof TeamRunsAddMemberParamsSchema>;
+export type TeamRunsUpdateMemberParams = Static<typeof TeamRunsUpdateMemberParamsSchema>;
+export type TeamTasksCreateParams = Static<typeof TeamTasksCreateParamsSchema>;
+export type TeamTasksListParams = Static<typeof TeamTasksListParamsSchema>;
+export type TeamTasksUpdateParams = Static<typeof TeamTasksUpdateParamsSchema>;
+export type TeamTasksDeleteParams = Static<typeof TeamTasksDeleteParamsSchema>;
+export type TeamMessagesSendParams = Static<typeof TeamMessagesSendParamsSchema>;
+export type TeamMessagesMarkReadParams = Static<typeof TeamMessagesMarkReadParamsSchema>;
+export type TeamMessagesListParams = Static<typeof TeamMessagesListParamsSchema>;

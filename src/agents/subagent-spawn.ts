@@ -9,6 +9,7 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
+import { addTeamMember } from "../teams/team-store.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 import { AGENT_LANE_SUBAGENT } from "./lanes.js";
@@ -37,6 +38,7 @@ export type SpawnSubagentParams = {
   mode?: SpawnSubagentMode;
   cleanup?: "delete" | "keep";
   expectsCompletionMessage?: boolean;
+  teamRunId?: string;
 };
 
 export type SpawnSubagentContext = {
@@ -299,7 +301,11 @@ export async function spawnSubagentDirect(
   try {
     await callGateway({
       method: "sessions.patch",
-      params: { key: childSessionKey, spawnDepth: childDepth },
+      params: {
+        key: childSessionKey,
+        spawnDepth: childDepth,
+        ...(params.teamRunId ? { teamRunId: params.teamRunId } : {}),
+      },
       timeoutMs: 10_000,
     });
   } catch (err) {
@@ -392,6 +398,7 @@ export async function spawnSubagentDirect(
     acpEnabled: cfg.acp?.enabled !== false,
     childDepth,
     maxSpawnDepth,
+    teamRunId: params.teamRunId,
   });
   const childTaskMessage = [
     `[Subagent Context] You are running as a subagent (depth ${childDepth}/${maxSpawnDepth}). Results auto-announce to your requester; do not busy-poll for status.`,
@@ -498,7 +505,15 @@ export async function spawnSubagentDirect(
     runTimeoutSeconds,
     expectsCompletionMessage,
     spawnMode,
+    teamRunId: params.teamRunId,
   });
+
+  if (params.teamRunId) {
+    addTeamMember(params.teamRunId, {
+      agentId: targetAgentId,
+      sessionKey: childSessionKey,
+    });
+  }
 
   if (hookRunner?.hasHooks("subagent_spawned")) {
     try {

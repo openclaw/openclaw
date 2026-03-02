@@ -1,4 +1,5 @@
 import {
+  Eye,
   FolderOpen,
   FileText,
   Save,
@@ -16,7 +17,10 @@ import {
   AlertCircle,
   Info,
 } from "lucide-react";
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
+import { useNavigate } from "react-router-dom";
+import { OrgChart } from "@/components/agents/org-chart";
+import { PersonaTab } from "@/components/agents/persona-tab";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ConfigEditor } from "@/components/ui/custom/form";
@@ -24,6 +28,11 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useAgents } from "@/hooks/use-agents";
+import {
+  buildAgentHierarchy,
+  flattenHierarchy,
+  KNOWN_AGENT_META,
+} from "@/lib/build-agent-hierarchy";
 import { loadSettings, saveSettings } from "@/lib/storage";
 import { cn } from "@/lib/utils";
 import { useGatewayStore } from "@/store/gateway-store";
@@ -31,6 +40,7 @@ import {
   AgentRow,
   AgentFile,
   AgentListResult,
+  AgentHierarchy,
   SkillStatusEntry,
   SkillStatusReport,
   ChannelsStatusResult,
@@ -133,7 +143,6 @@ const TOOL_PROFILES = ["minimal", "coding", "messaging", "full", "inherit"] as c
 export function AgentsPage() {
   const {
     listAgents,
-    getAgentIdentity,
     listAgentFiles,
     getAgentFile,
     setAgentFile,
@@ -143,9 +152,9 @@ export function AgentsPage() {
     getCronStatus,
     getCronList,
     getConfig,
-    listModels,
   } = useAgents();
   const isConnected = useGatewayStore((s) => s.connectionStatus === "connected");
+  const navigate = useNavigate();
 
   // Core state
   const [agentListResult, setAgentListResult] = useState<AgentListResult | null>(null);
@@ -163,12 +172,14 @@ export function AgentsPage() {
     saveSettings(s);
   }, []);
 
+  // Hierarchy state
+  const [agentHierarchy, setAgentHierarchy] = useState<AgentHierarchy | null>(null);
+
   // Overview state
   const [workspace, setWorkspace] = useState("");
   const [primaryModel, setPrimaryModel] = useState("");
   const [fallbackModels, setFallbackModels] = useState("");
-  const [skillsFilter, setSkillsFilter] = useState("all skills");
-  const [configHash, setConfigHash] = useState<string | undefined>();
+  const [skillsFilter] = useState("all skills");
 
   // Files state
   const [files, setFiles] = useState<AgentFile[]>([]);
@@ -223,7 +234,7 @@ export function AgentsPage() {
 
   useEffect(() => {
     if (isConnected) {
-      loadAgents();
+      void loadAgents();
     }
   }, [isConnected]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -233,7 +244,7 @@ export function AgentsPage() {
       return;
     }
     try {
-      const [configResult] = await Promise.all([getConfig()]);
+      const configResult = await getConfig();
       if (configResult) {
         const cfg = configResult.config || {};
         const llm = cfg.llm as Record<string, unknown> | undefined;
@@ -241,12 +252,62 @@ export function AgentsPage() {
         setFallbackModels(
           Array.isArray(llm?.fallbacks) ? (llm.fallbacks as string[]).join(", ") : "",
         );
-        setConfigHash(configResult.hash);
+
+        // Build agent hierarchy from config agents.list if available,
+        // otherwise fall back to the agents from agents.list RPC
+        const agentsCfg = cfg.agents as Record<string, unknown> | undefined;
+        const agentList = agentsCfg?.list as Array<Record<string, unknown>> | undefined;
+
+        // Use config agents.list if available (has subagents info), else build from RPC agents
+        const hierarchySource: Array<Record<string, unknown>> = Array.isArray(agentList)
+          ? agentList
+          : agents.map((a) => ({
+              id: a.id,
+              name: a.name,
+              identity: a.identity,
+            }));
+
+        if (hierarchySource.length > 1) {
+          // Build a files map: agentId → Set of file names (for SOUL.md / IDENTITY.md detection)
+          const filesMap = new Map<string, Set<string>>();
+          try {
+            const fileResults = await Promise.all(
+              hierarchySource.map((a) => listAgentFiles(a.id as string).catch(() => null)),
+            );
+            for (let i = 0; i < hierarchySource.length; i++) {
+              const result = fileResults[i];
+              if (result?.files) {
+                filesMap.set(
+                  hierarchySource[i].id as string,
+                  new Set(result.files.filter((f) => !f.missing).map((f) => f.name)),
+                );
+              }
+            }
+          } catch {
+            // Files detection is best-effort
+          }
+
+          const hierarchy = buildAgentHierarchy(
+            hierarchySource.map((a) => ({
+              id: a.id as string,
+              name: a.name as string | undefined,
+              identity: a.identity as { emoji?: string } | undefined,
+              model: a.model as string | { primary?: string } | undefined,
+              role: a.role as string | undefined,
+              department: a.department as string | undefined,
+              subagents: a.subagents as { allowAgents?: string[] } | undefined,
+            })),
+            filesMap,
+          );
+          setAgentHierarchy(hierarchy);
+        } else {
+          setAgentHierarchy(null);
+        }
       }
     } catch (e) {
       console.error("Failed to load config", e);
     }
-  }, [selectedAgentId, getConfig]);
+  }, [selectedAgentId, getConfig, listAgentFiles]);
 
   // Load files
   const loadFiles = useCallback(async () => {
@@ -360,8 +421,8 @@ export function AgentsPage() {
   // Load data on agent select
   useEffect(() => {
     if (selectedAgentId && isConnected) {
-      loadFiles();
-      loadOverview();
+      void loadFiles();
+      void loadOverview();
     }
   }, [selectedAgentId, isConnected]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -371,16 +432,16 @@ export function AgentsPage() {
       return;
     }
     if (activeTab === "tools") {
-      loadToolsConfig();
+      void loadToolsConfig();
     }
     if (activeTab === "skills") {
-      loadSkills();
+      void loadSkills();
     }
     if (activeTab === "channels") {
-      loadChannels();
+      void loadChannels();
     }
     if (activeTab === "cron") {
-      loadCron();
+      void loadCron();
     }
   }, [activeTab, selectedAgentId, isConnected]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -533,6 +594,19 @@ export function AgentsPage() {
   const selectedAgent = agents.find((a) => a.id === selectedAgentId);
   const isDefault = agentListResult?.defaultId === selectedAgentId;
 
+  // Build a hierarchy-ordered sidebar list (depth-first) with indentation depth
+  const sidebarAgents = useMemo(() => {
+    if (!agentHierarchy || agentHierarchy.nodeCount <= 1) {
+      // No hierarchy — fall back to flat list
+      return agents.map((a) => ({ agent: a, depth: 0 }));
+    }
+    const ordered = flattenHierarchy(agentHierarchy);
+    const agentMap = new Map(agents.map((a) => [a.id, a]));
+    return ordered
+      .map((entry) => ({ agent: agentMap.get(entry.agentId), depth: entry.depth }))
+      .filter((e): e is { agent: AgentRow; depth: number } => e.agent != null);
+  }, [agents, agentHierarchy]);
+
   const enabledToolCount = Object.values(toolOverrides).filter(Boolean).length;
   const totalToolCount = Object.values(TOOL_CATEGORIES).reduce((sum, c) => sum + c.tools.length, 0);
 
@@ -569,10 +643,15 @@ export function AgentsPage() {
             <span className="text-sm text-muted-foreground ml-1">{agents.length} configured.</span>
           )}
         </div>
-        <Button variant="outline" size="sm" onClick={loadAgents} disabled={loading}>
-          <RefreshCw className={cn("mr-2 h-4 w-4", loading && "animate-spin")} />
-          Refresh
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" onClick={() => navigate("/visualize")}>
+            <Eye className="mr-1 h-4 w-4" /> Visualize
+          </Button>
+          <Button variant="outline" size="sm" onClick={loadAgents} disabled={loading}>
+            <RefreshCw className={cn("mr-2 h-4 w-4", loading && "animate-spin")} />
+            Refresh
+          </Button>
+        </div>
       </div>
 
       <div className="flex flex-1 overflow-hidden">
@@ -610,8 +689,8 @@ export function AgentsPage() {
 
           {/* Agent list */}
           <ScrollArea className="flex-1">
-            <div className={cn("space-y-1", sidebarCollapsed ? "p-1.5" : "p-2")}>
-              {agents.map((agent) => (
+            <div className={cn("space-y-0.5", sidebarCollapsed ? "p-1.5" : "p-2")}>
+              {sidebarAgents.map(({ agent, depth }) => (
                 <div key={agent.id} className="relative group">
                   <button
                     onClick={() => {
@@ -622,29 +701,35 @@ export function AgentsPage() {
                     }}
                     className={cn(
                       "flex w-full items-center rounded-md transition-colors hover:bg-muted",
-                      sidebarCollapsed ? "justify-center px-0 py-2" : "gap-3 px-3 py-2 text-sm",
+                      sidebarCollapsed ? "justify-center px-0 py-2" : "gap-2.5 py-1.5 text-sm",
                       selectedAgentId === agent.id
                         ? "bg-primary/10 text-primary font-medium"
                         : "text-muted-foreground",
                     )}
+                    style={
+                      !sidebarCollapsed
+                        ? { paddingLeft: `${12 + depth * 16}px`, paddingRight: 12 }
+                        : undefined
+                    }
                   >
                     <div
                       className={cn(
                         "flex items-center justify-center rounded-full bg-background border shadow-sm shrink-0",
-                        sidebarCollapsed ? "h-9 w-9" : "h-8 w-8",
+                        sidebarCollapsed ? "h-9 w-9" : "h-7 w-7",
                       )}
                     >
                       {agent.identity?.emoji ? (
-                        <span>{agent.identity.emoji}</span>
+                        <span className={sidebarCollapsed ? "text-base" : "text-xs"}>
+                          {agent.identity.emoji}
+                        </span>
                       ) : (
-                        <Box className="h-4 w-4" />
+                        <Box className="h-3.5 w-3.5" />
                       )}
                     </div>
                     {!sidebarCollapsed && (
                       <>
                         <div className="flex-1 text-left min-w-0">
-                          <div className="truncate">{agent.name || agent.id}</div>
-                          <div className="text-xs text-muted-foreground truncate">{agent.id}</div>
+                          <div className="truncate text-xs">{agent.name || agent.id}</div>
                         </div>
                         {agentListResult?.defaultId === agent.id && (
                           <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 shrink-0">
@@ -696,14 +781,54 @@ export function AgentsPage() {
                         </Badge>
                       )}
                     </div>
-                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                      <span className="font-mono">{selectedAgent.id}</span>
-                      <span className="h-1 w-1 rounded-full bg-muted-foreground" />
-                      <span>Agent workspace and routing.</span>
-                    </div>
+                    {(() => {
+                      const meta = KNOWN_AGENT_META[selectedAgent.id];
+                      const role = selectedAgent.role ?? meta?.role;
+                      const dept = selectedAgent.department ?? meta?.department;
+                      return (
+                        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                          <span className="font-mono">{selectedAgent.id}</span>
+                          {role && (
+                            <>
+                              <span className="h-1 w-1 rounded-full bg-muted-foreground" />
+                              <span className="font-medium text-primary/80">{role}</span>
+                            </>
+                          )}
+                          {dept && (
+                            <>
+                              <span className="h-1 w-1 rounded-full bg-muted-foreground" />
+                              <span className="capitalize">{dept}</span>
+                            </>
+                          )}
+                        </div>
+                      );
+                    })()}
                   </div>
                 </div>
               </div>
+
+              {/* Org Chart */}
+              {agentHierarchy && (
+                <div className="px-6 pt-4">
+                  <OrgChart
+                    hierarchy={agentHierarchy}
+                    selectedAgentId={selectedAgentId}
+                    onSelect={(agentId) => {
+                      setSelectedAgentId(agentId);
+                      setSelectedFile(null);
+                      setFileContent("");
+                      setOriginalFileContent("");
+                    }}
+                    onEdit={(agentId) => {
+                      setSelectedAgentId(agentId);
+                      setSelectedFile(null);
+                      setFileContent("");
+                      setOriginalFileContent("");
+                      setActiveTab("persona");
+                    }}
+                  />
+                </div>
+              )}
 
               {/* Tabs */}
               <Tabs
@@ -718,6 +843,12 @@ export function AgentsPage() {
                       className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary rounded-none px-4 h-full"
                     >
                       Overview
+                    </TabsTrigger>
+                    <TabsTrigger
+                      value="persona"
+                      className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary rounded-none px-4 h-full"
+                    >
+                      Persona
                     </TabsTrigger>
                     <TabsTrigger
                       value="files"
@@ -780,6 +911,23 @@ export function AgentsPage() {
                             <span>{selectedAgent.identity?.name || "Assistant"}</span>
                           </div>
                           <div>
+                            <span className="text-muted-foreground block mb-1">Role</span>
+                            {(() => {
+                              const r =
+                                selectedAgent.role ?? KNOWN_AGENT_META[selectedAgent.id]?.role;
+                              return <span className={r ? "font-medium" : ""}>{r || "-"}</span>;
+                            })()}
+                          </div>
+                          <div>
+                            <span className="text-muted-foreground block mb-1">Department</span>
+                            {(() => {
+                              const d =
+                                selectedAgent.department ??
+                                KNOWN_AGENT_META[selectedAgent.id]?.department;
+                              return <span className="capitalize">{d || "-"}</span>;
+                            })()}
+                          </div>
+                          <div>
                             <span className="text-muted-foreground block mb-1">Default</span>
                             <span>{isDefault ? "yes" : "no"}</span>
                           </div>
@@ -834,6 +982,17 @@ export function AgentsPage() {
                         </div>
                       </div>
                     </div>
+                  </TabsContent>
+
+                  {/* ========== PERSONA TAB ========== */}
+                  <TabsContent value="persona" className="m-0 border-none">
+                    {selectedAgentId && (
+                      <PersonaTab
+                        agentId={selectedAgentId}
+                        getAgentFile={getAgentFile}
+                        setAgentFile={setAgentFile}
+                      />
+                    )}
                   </TabsContent>
 
                   {/* ========== FILES TAB ========== */}
@@ -1034,7 +1193,7 @@ export function AgentsPage() {
                                     </div>
                                   </div>
                                   <Switch
-                                    checked={toolOverrides[tool] !== false}
+                                    checked={toolOverrides[tool]}
                                     onCheckedChange={(checked) => handleToolToggle(tool, checked)}
                                   />
                                 </div>
@@ -1468,7 +1627,7 @@ function SkillSourceGroup({
 }
 
 function ChannelCard({
-  channelId,
+  channelId: _channelId,
   label,
   accounts,
 }: {

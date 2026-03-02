@@ -8,6 +8,7 @@ import {
 import { callGateway } from "../gateway/call.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { defaultRuntime } from "../runtime.js";
+import { updateMemberState } from "../teams/team-store.js";
 import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { resetAnnounceQueuesForTests } from "./subagent-announce-queue.js";
 import { runSubagentAnnounceFlow, type SubagentRunOutcome } from "./subagent-announce.js";
@@ -72,6 +73,22 @@ type SubagentRunOrphanReason = "missing-session-entry" | "missing-session-id";
  * subsequent lifecycle `start` / `end` can cancel premature failure announces.
  */
 const LIFECYCLE_ERROR_RETRY_GRACE_MS = 15_000;
+
+/**
+ * Update the team member state for a subagent run, if the run belongs to a team.
+ * Best-effort: failures are logged but never propagate.
+ */
+function tryUpdateTeamMemberState(entry: SubagentRunRecord, state: "idle" | "running" | "done") {
+  if (!entry.teamRunId) {
+    return;
+  }
+  try {
+    const agentId = resolveAgentIdFromSessionKey(entry.childSessionKey);
+    updateMemberState(entry.teamRunId, agentId, state);
+  } catch {
+    // Best-effort: team state updates must not break subagent lifecycle.
+  }
+}
 
 function resolveAnnounceRetryDelayMs(retryCount: number) {
   const boundedRetryCount = Math.max(0, Math.min(retryCount, 10));
@@ -203,6 +220,44 @@ function reconcileOrphanedRestoredRuns() {
       })
     ) {
       changed = true;
+    }
+  }
+  return changed;
+}
+
+/**
+ * Hydrate `teamRunId` on restored SubagentRunRecords from their persisted
+ * session entries.  This covers the case where the subagent registry file
+ * was lost or corrupted but the session store survived, ensuring team
+ * lifecycle hooks keep firing after a gateway restart.
+ */
+function hydrateTeamRunIdFromSessionEntries() {
+  const storeCache = new Map<string, Record<string, SessionEntry>>();
+  let changed = false;
+  for (const [, entry] of subagentRuns.entries()) {
+    if (entry.teamRunId) {
+      continue;
+    }
+    const childSessionKey = entry.childSessionKey?.trim();
+    if (!childSessionKey) {
+      continue;
+    }
+    try {
+      const cfg = loadConfig();
+      const agentId = resolveAgentIdFromSessionKey(childSessionKey);
+      const storePath = resolveStorePath(cfg.session?.store, { agentId });
+      let store = storeCache.get(storePath);
+      if (!store) {
+        store = loadSessionStore(storePath);
+        storeCache.set(storePath, store);
+      }
+      const sessionEntry = findSessionEntryByKey(store, childSessionKey);
+      if (sessionEntry?.teamRunId) {
+        entry.teamRunId = sessionEntry.teamRunId;
+        changed = true;
+      }
+    } catch {
+      // Best-effort: skip on config/read failures.
     }
   }
   return changed;
@@ -346,6 +401,8 @@ async function completeSubagentRun(params: {
   if (mutated) {
     persistSubagentRuns();
   }
+
+  tryUpdateTeamMemberState(entry, "done");
 
   const suppressedForSteerRestart = suppressAnnounceForSteerRestart(entry);
   const shouldEmitEndedHook =
@@ -498,7 +555,9 @@ function restoreSubagentRunsOnce() {
     if (restoredCount === 0) {
       return;
     }
-    if (reconcileOrphanedRestoredRuns()) {
+    const orphansChanged = reconcileOrphanedRestoredRuns();
+    const teamRunIdChanged = hydrateTeamRunIdFromSessionEntries();
+    if (orphansChanged || teamRunIdChanged) {
       persistSubagentRuns();
     }
     if (subagentRuns.size === 0) {
@@ -605,6 +664,7 @@ function ensureListener() {
           entry.startedAt = startedAt;
           persistSubagentRuns();
         }
+        tryUpdateTeamMemberState(entry, "running");
         return;
       }
       if (phase !== "end" && phase !== "error") {
@@ -885,6 +945,7 @@ export function replaceSubagentRunAfterSteer(params: {
   subagentRuns.set(nextRunId, next);
   ensureListener();
   persistSubagentRuns();
+  tryUpdateTeamMemberState(next, "running");
   if (archiveAtMs) {
     startSweeper();
   }
@@ -905,6 +966,7 @@ export function registerSubagentRun(params: {
   runTimeoutSeconds?: number;
   expectsCompletionMessage?: boolean;
   spawnMode?: "run" | "session";
+  teamRunId?: string;
 }) {
   const now = Date.now();
   const cfg = loadConfig();
@@ -932,6 +994,7 @@ export function registerSubagentRun(params: {
     startedAt: now,
     archiveAtMs,
     cleanupHandled: false,
+    teamRunId: params.teamRunId,
   });
   ensureListener();
   persistSubagentRuns();
@@ -1113,6 +1176,7 @@ export function markSubagentRunTerminated(params: {
     entry.cleanupHandled = true;
     entry.cleanupCompletedAt = now;
     entry.suppressAnnounceReason = "killed";
+    tryUpdateTeamMemberState(entry, "done");
     if (!entriesByChildSessionKey.has(entry.childSessionKey)) {
       entriesByChildSessionKey.set(entry.childSessionKey, entry);
     }

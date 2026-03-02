@@ -3,6 +3,7 @@ import { GatewayBrowserClient, type GatewayEventFrame } from "@/lib/gateway-clie
 import { loadSettings, saveSettings } from "@/lib/storage";
 import { useChatStore } from "@/store/chat-store";
 import { useGatewayStore } from "@/store/gateway-store";
+import { useVisualizeStore } from "@/store/visualize-store";
 
 /** Extract token/session/gatewayUrl/password from query string or hash fragment, save to settings, strip from URL. */
 function applyUrlParams() {
@@ -177,6 +178,24 @@ function handleEvent(evt: GatewayEventFrame) {
   if (evt.event === "chat") {
     handleChatEvent(evt.payload);
   }
+
+  if (evt.event === "team") {
+    notifyTeamEventListeners(evt.payload);
+  }
+
+  // Forward events to visualize store when active
+  const vizState = useVisualizeStore.getState();
+  if (vizState.isActive) {
+    if (evt.event === "agent") {
+      vizState.handleAgentEvent(evt.payload);
+    }
+    if (evt.event === "presence") {
+      vizState.handlePresenceEvent(evt.payload);
+    }
+    if (evt.event === "chat") {
+      vizState.handleChatEvent(evt.payload);
+    }
+  }
 }
 
 type ChatEventPayload = {
@@ -190,6 +209,29 @@ type ChatEventPayload = {
   };
   errorMessage?: string;
 };
+
+// ─── Team event push listener registry ───────────────────────────────
+// Allows use-teams hooks to subscribe to real-time team events pushed
+// over WebSocket, triggering immediate data refreshes instead of polling.
+
+type TeamEventListener = (payload: unknown) => void;
+const teamEventListeners = new Set<TeamEventListener>();
+
+function notifyTeamEventListeners(payload: unknown) {
+  for (const listener of teamEventListeners) {
+    try {
+      listener(payload);
+    } catch {
+      /* ignore listener errors */
+    }
+  }
+}
+
+/** Subscribe to team events pushed via WebSocket. Returns an unsubscribe function. */
+export function onTeamPushEvent(listener: TeamEventListener): () => void {
+  teamEventListeners.add(listener);
+  return () => teamEventListeners.delete(listener);
+}
 
 function handleChatEvent(payload: unknown) {
   const chatStore = useChatStore.getState();

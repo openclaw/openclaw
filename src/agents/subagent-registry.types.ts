@@ -32,4 +32,6 @@ export type SubagentRunRecord = {
   endedReason?: SubagentLifecycleEndedReason;
   /** Set after the subagent_ended hook has been emitted successfully once. */
   endedHookEmittedAt?: number;
+  /** Team run ID this subagent belongs to (for auto-updating member state). */
+  teamRunId?: string;
 };

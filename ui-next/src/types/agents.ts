@@ -9,6 +9,8 @@ export type AgentIdentity = {
 export type AgentRow = {
   id: string;
   name?: string;
+  role?: string;
+  department?: string;
   identity?: AgentIdentity;
 };
 
@@ -292,4 +294,27 @@ export type ConfigSchemaResponse = {
   uiHints: ConfigUiHints;
   version: string;
   generatedAt: string;
+};
+
+// Org chart / hierarchy types
+export type OrgChartNode = {
+  agentId: string;
+  name: string;
+  emoji?: string;
+  model?: string;
+  role?: string;
+  department?: string;
+  hasSoul: boolean;
+  hasIdentity: boolean;
+  children: OrgChartNode[];
+};
+
+export type AgentHierarchy = {
+  roots: OrgChartNode[];
+  nodeCount: number;
+};
+
+export type SidebarAgentEntry = {
+  agentId: string;
+  depth: number;
 };

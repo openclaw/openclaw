@@ -16,6 +16,8 @@ export const AgentSummarySchema = Type.Object(
   {
     id: NonEmptyString,
     name: Type.Optional(NonEmptyString),
+    role: Type.Optional(NonEmptyString),
+    department: Type.Optional(NonEmptyString),
     identity: Type.Optional(
       Type.Object(
         {

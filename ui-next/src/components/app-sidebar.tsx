@@ -2,6 +2,7 @@ import {
   BarChart3,
   Brain,
   Bug,
+  Eye,
   FileText,
   FolderOpen,
   Link2,
@@ -82,6 +83,12 @@ const navData = {
       url: "/agents",
       icon: FolderOpen,
       subtitle: "Agent workspaces and identities",
+    },
+    {
+      title: "Visualize",
+      url: "/visualize",
+      icon: Eye,
+      subtitle: "Matrix agent visualization",
     },
     {
       title: "Memory",

@@ -55,6 +55,7 @@ import {
   getActiveSecretsRuntimeSnapshot,
   prepareSecretsRuntimeSnapshot,
 } from "../secrets/runtime.js";
+import { onTeamEvent } from "../teams/team-events.js";
 import { runOnboardingWizard } from "../wizard/onboarding.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import { startChannelHealthMonitor } from "./channel-health-monitor.js";
@@ -650,6 +651,12 @@ export async function startGatewayServer(
         broadcast("heartbeat", evt, { dropIfSlow: true });
       });
 
+  const teamEventUnsub = minimalTestGateway
+    ? null
+    : onTeamEvent((evt) => {
+        broadcast("team", evt, { dropIfSlow: true });
+      });
+
   let heartbeatRunner: HeartbeatRunner = minimalTestGateway
     ? {
         stop: () => {},
@@ -912,6 +919,7 @@ export async function startGatewayServer(
     dedupeCleanup,
     agentUnsub,
     heartbeatUnsub,
+    teamEventUnsub,
     chatRunState,
     clients,
     configReloader,

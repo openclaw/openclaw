@@ -37,17 +37,43 @@ export default defineConfig({
     sourcemap: true,
     rollupOptions: {
       output: {
-        manualChunks: {
+        manualChunks(id) {
+          // Pixel-engine — lazy-loaded with Visualize page
+          if (id.includes("lib/pixel-engine")) {
+            return "pixel-engine";
+          }
           // Core React + router — shared by all pages
-          "vendor-react": ["react", "react-dom", "react-router-dom"],
+          if (
+            id.includes("node_modules/react/") ||
+            id.includes("node_modules/react-dom/") ||
+            id.includes("node_modules/react-router-dom/")
+          ) {
+            return "vendor-react";
+          }
           // Zustand state management
-          "vendor-zustand": ["zustand"],
+          if (id.includes("node_modules/zustand/")) {
+            return "vendor-zustand";
+          }
           // Radix UI primitives — shared by all shadcn components
-          "vendor-radix": ["radix-ui", "class-variance-authority", "clsx", "tailwind-merge"],
+          if (
+            id.includes("node_modules/radix-ui/") ||
+            id.includes("node_modules/class-variance-authority/") ||
+            id.includes("node_modules/clsx/") ||
+            id.includes("node_modules/tailwind-merge/")
+          ) {
+            return "vendor-radix";
+          }
           // Markdown rendering — only loaded by chat page
-          "vendor-markdown": ["react-markdown", "remark-gfm"],
+          if (
+            id.includes("node_modules/react-markdown/") ||
+            id.includes("node_modules/remark-gfm/")
+          ) {
+            return "vendor-markdown";
+          }
           // Shiki syntax highlighting — heavy, only loaded by chat page
-          "vendor-shiki": ["shiki"],
+          if (id.includes("node_modules/shiki/")) {
+            return "vendor-shiki";
+          }
         },
       },
     },

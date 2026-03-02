@@ -4,7 +4,6 @@ import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import {
   buildModelAliasIndex,
   modelKey,
-  resolveAllowedModelRef,
   resolveModelRefFromString,
   resolveDefaultModelForAgent,
   resolveSubagentConfiguredModelSelection,
@@ -367,6 +366,19 @@ export async function applySessionsPatchToStore(params: {
         return invalid('invalid groupActivation (use "mention"|"always")');
       }
       next.groupActivation = normalized;
+    }
+  }
+
+  if ("teamRunId" in patch) {
+    const raw = patch.teamRunId;
+    if (raw === null) {
+      delete next.teamRunId;
+    } else if (raw !== undefined) {
+      const trimmed = String(raw).trim();
+      if (!trimmed) {
+        return invalid("invalid teamRunId: empty");
+      }
+      next.teamRunId = trimmed;
     }
   }
 

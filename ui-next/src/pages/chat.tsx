@@ -87,8 +87,8 @@ let attachmentIdCounter = 0;
 function readFileAsDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onload = () => resolve(reader.result as string);
-    reader.onerror = () => reject(reader.error);
+    reader.addEventListener("load", () => resolve(reader.result as string));
+    reader.addEventListener("error", () => reject(reader.error));
     reader.readAsDataURL(file);
   });
 }
@@ -194,7 +194,7 @@ function groupSessionsByTime(sessions: SessionEntry[]): Record<string, SessionEn
 function useCopyToClipboard() {
   const [copied, setCopied] = useState(false);
   const copy = (text: string) => {
-    navigator.clipboard.writeText(text);
+    void navigator.clipboard.writeText(text);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
@@ -703,6 +703,10 @@ function AnimatedPlaceholder({ text, isStreaming }: { text: string; isStreaming:
 
 // ─── Streaming Bubble ───
 
+// Minimum content length before rendering the full assistant bubble.
+// Prevents showing a bubble with just a word fragment like "Let".
+const STREAM_BUBBLE_MIN_CHARS = 20;
+
 function StreamingBubble({
   content,
   isGroupFirst = true,
@@ -712,6 +716,24 @@ function StreamingBubble({
   isGroupFirst?: boolean;
   paused?: boolean;
 }) {
+  const hasEnoughContent = content.length >= STREAM_BUBBLE_MIN_CHARS;
+
+  // Option B: Show minimal standalone bouncing dots while waiting for enough content.
+  // No avatar, no bubble border, no timestamp — just a subtle typing indicator.
+  if (!hasEnoughContent) {
+    return (
+      <div className="flex gap-3 px-4 py-2 animate-fade-in">
+        <div className="w-8 shrink-0" />
+        <div className="flex items-center gap-1.5 px-4 py-3">
+          <div className="h-1.5 w-1.5 bg-primary/50 rounded-full animate-bounce [animation-delay:-0.3s]"></div>
+          <div className="h-1.5 w-1.5 bg-primary/50 rounded-full animate-bounce [animation-delay:-0.15s]"></div>
+          <div className="h-1.5 w-1.5 bg-primary/50 rounded-full animate-bounce"></div>
+        </div>
+      </div>
+    );
+  }
+
+  // Option A: Full assistant bubble only renders once meaningful content has arrived.
   return (
     <div className={cn("animate-slide-in-left flex gap-3 px-4", isGroupFirst ? "py-2" : "py-1")}>
       {isGroupFirst ? (
@@ -722,30 +744,22 @@ function StreamingBubble({
         <div className="w-8 shrink-0" />
       )}
       <div className="max-w-[90%] md:max-w-[85%]">
-        {content ? (
-          <div
-            className={cn(
-              "bg-card/40 text-foreground border border-border/60 rounded-2xl rounded-bl-sm px-6 py-5 shadow-sm backdrop-blur-md",
-              paused && "border-chart-5/40",
-            )}
-          >
-            <div className="prose prose-sm prose-chat max-w-none break-words leading-relaxed font-sans">
-              <Markdown>{content}</Markdown>
+        <div
+          className={cn(
+            "bg-card/40 text-foreground border border-border/60 rounded-2xl rounded-bl-sm px-6 py-5 shadow-sm backdrop-blur-md",
+            paused && "border-chart-5/40",
+          )}
+        >
+          <div className="prose prose-sm prose-chat max-w-none break-words leading-relaxed font-sans">
+            <Markdown>{content}</Markdown>
+          </div>
+          {paused && (
+            <div className="flex items-center gap-1.5 mt-3 pt-2 border-t border-border/40 text-[10px] text-chart-5/80 font-mono">
+              <Pause className="h-2.5 w-2.5" />
+              Paused
             </div>
-            {paused && (
-              <div className="flex items-center gap-1.5 mt-3 pt-2 border-t border-border/40 text-[10px] text-chart-5/80 font-mono">
-                <Pause className="h-2.5 w-2.5" />
-                Paused
-              </div>
-            )}
-          </div>
-        ) : (
-          <div className="bg-card/40 border border-border/60 rounded-2xl rounded-bl-sm px-6 py-6 shadow-sm flex items-center gap-2">
-            <div className="h-2 w-2 bg-primary/50 rounded-full animate-bounce [animation-delay:-0.3s]"></div>
-            <div className="h-2 w-2 bg-primary/50 rounded-full animate-bounce [animation-delay:-0.15s]"></div>
-            <div className="h-2 w-2 bg-primary/50 rounded-full animate-bounce"></div>
-          </div>
-        )}
+          )}
+        </div>
       </div>
     </div>
   );
@@ -1255,7 +1269,7 @@ export function ChatPage() {
   const [sttMode, setSttMode] = useState<SttMode>("none");
   const [sttState, setSttState] = useState<SttState>("idle");
   const [interimTranscript, setInterimTranscript] = useState("");
-  const recognitionRef = useRef<any>(null);
+  const recognitionRef = useRef<unknown>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const mediaChunksRef = useRef<Blob[]>([]);
 
@@ -1285,11 +1299,15 @@ export function ChatPage() {
           setSttMode("server");
           return;
         }
-        const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+        const SR =
+          (window as Record<string, unknown>).SpeechRecognition ||
+          (window as Record<string, unknown>).webkitSpeechRecognition;
         setSttMode(SR ? "browser" : "none");
       })
       .catch(() => {
-        const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+        const SR =
+          (window as Record<string, unknown>).SpeechRecognition ||
+          (window as Record<string, unknown>).webkitSpeechRecognition;
         setSttMode(SR ? "browser" : "none");
       });
   }, [isConnected, sendRpc]);
@@ -1297,7 +1315,7 @@ export function ChatPage() {
   // Cleanup STT on unmount
   useEffect(() => {
     return () => {
-      recognitionRef.current?.stop();
+      (recognitionRef.current as { stop(): void } | null)?.stop();
       mediaRecorderRef.current?.stop();
     };
   }, []);
@@ -1309,7 +1327,7 @@ export function ChatPage() {
 
     if (sttState === "listening") {
       // Stop: browser recognition or server MediaRecorder
-      recognitionRef.current?.stop();
+      (recognitionRef.current as { stop(): void } | null)?.stop();
       if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
         mediaRecorderRef.current.stop();
       }
@@ -1319,12 +1337,22 @@ export function ChatPage() {
     }
 
     if (sttMode === "browser") {
-      const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+      const SR =
+        (window as Record<string, unknown>).SpeechRecognition ||
+        (window as Record<string, unknown>).webkitSpeechRecognition;
       if (!SR) {
         return;
       }
 
-      const recognition = new SR();
+      const recognition = new (SR as new () => EventTarget & {
+        continuous: boolean;
+        interimResults: boolean;
+        lang: string;
+        onstart: (() => void) | null;
+        onend: (() => void) | null;
+        start(): void;
+        stop(): void;
+      })();
       recognition.continuous = true;
       recognition.interimResults = true;
       recognition.lang = navigator.language || "en-US";
@@ -1333,12 +1361,13 @@ export function ChatPage() {
         setSttState("listening");
       };
 
-      recognition.onresult = (event: any) => {
+      recognition.addEventListener("result", (event: Event) => {
+        const e = event as SpeechRecognitionEvent;
         let interim = "";
         let finalText = "";
 
-        for (let i = event.resultIndex; i < event.results.length; i++) {
-          const result = event.results[i];
+        for (let i = e.resultIndex; i < e.results.length; i++) {
+          const result = e.results[i];
           if (result.isFinal) {
             finalText += result[0].transcript;
           } else {
@@ -1355,14 +1384,15 @@ export function ChatPage() {
         } else {
           setInterimTranscript(interim);
         }
-      };
+      });
 
-      recognition.onerror = (event: any) => {
-        console.error("Speech recognition error:", event.error);
+      recognition.addEventListener("error", (event: Event) => {
+        const e = event as SpeechRecognitionErrorEvent;
+        console.error("Speech recognition error:", e.error);
         setSttState("idle");
         setInterimTranscript("");
         recognitionRef.current = null;
-        switch (event.error) {
+        switch (e.error) {
           case "not-allowed":
             toast("Microphone access denied", "error");
             break;
@@ -1398,7 +1428,7 @@ export function ChatPage() {
           default:
             toast("Speech recognition failed", "error");
         }
-      };
+      });
 
       recognition.onend = () => {
         setSttState("idle");
@@ -1464,13 +1494,13 @@ export function ChatPage() {
             }
           };
 
-          recorder.onerror = () => {
+          recorder.addEventListener("error", () => {
             stream.getTracks().forEach((t) => t.stop());
             setSttState("idle");
             setInterimTranscript("");
             mediaRecorderRef.current = null;
             toast("Recording failed", "error");
-          };
+          });
 
           mediaRecorderRef.current = recorder;
           recorder.start();
@@ -1657,7 +1687,7 @@ export function ChatPage() {
       }
       if (imageFiles.length > 0) {
         e.preventDefault();
-        addAttachments(imageFiles);
+        void addAttachments(imageFiles);
       }
     },
     [addAttachments],
@@ -1670,7 +1700,7 @@ export function ChatPage() {
       if (!files) {
         return;
       }
-      addAttachments(Array.from(files));
+      void addAttachments(Array.from(files));
       // Reset the input so the same file can be re-selected
       e.target.value = "";
     },
@@ -1765,7 +1795,7 @@ export function ChatPage() {
       if (messages[i].role === "user") {
         const lastUserText = getMessageText(messages[i]);
         if (lastUserText.trim()) {
-          sendMessage(lastUserText);
+          void sendMessage(lastUserText);
           return;
         }
       }
@@ -1784,7 +1814,7 @@ export function ChatPage() {
 
   useEffect(() => {
     if (isConnected) {
-      loadModels();
+      void loadModels();
     }
   }, [isConnected, loadModels]);
 

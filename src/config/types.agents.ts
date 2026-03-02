@@ -9,6 +9,10 @@ export type AgentConfig = {
   id: string;
   default?: boolean;
   name?: string;
+  /** Optional department this agent belongs to (e.g. "engineering", "marketing"). */
+  department?: string;
+  /** Optional role for this agent (e.g. "CTO", "CMO"). */
+  role?: string;
   workspace?: string;
   agentDir?: string;
   model?: AgentModelConfig;

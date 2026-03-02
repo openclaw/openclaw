@@ -5,11 +5,18 @@ import {
   Search,
   MessageSquare,
   SlidersHorizontal,
+  ChevronRight,
+  ChevronDown,
+  Users,
 } from "lucide-react";
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
+import { useSearchParams } from "react-router-dom";
+import { TeamsPanel } from "@/components/teams/teams-panel";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { DataTable, type Column } from "@/components/ui/custom/data";
 import { useGateway } from "@/hooks/use-gateway";
+import { useTeamRuns } from "@/hooks/use-teams";
 import { useGatewayStore } from "@/store/gateway-store";
 
 type SessionKind = "direct" | "group" | "global" | "unknown";
@@ -113,16 +120,39 @@ const SEL =
 export function SessionsPage() {
   const { sendRpc } = useGateway();
   const isConnected = useGatewayStore((s) => s.connectionStatus === "connected");
+  const [searchParams, setSearchParams] = useSearchParams();
   const [sessions, setSessions] = useState<SessionEntry[]>([]);
   const [storePath, setStorePath] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [search, setSearch] = useState("");
+  const [search, setSearch] = useState(() => searchParams.get("search") ?? "");
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [activeMinutes, setActiveMinutes] = useState("");
   const [limit, setLimit] = useState("");
+  const [teamsOpen, setTeamsOpen] = useState(true);
   const [includeGlobal, setIncludeGlobal] = useState(false);
   const [includeUnknown, setIncludeUnknown] = useState(false);
+
+  // Build a sessionKey -> teamName map from active team runs for O(1) lookups
+  const { teamRuns } = useTeamRuns({ state: "active" });
+  const sessionTeamMap = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const run of teamRuns) {
+      for (const member of run.members) {
+        map.set(member.sessionKey, run.name);
+      }
+    }
+    return map;
+  }, [teamRuns]);
+
+  // Clear the URL ?search= param once consumed so it doesn't persist on refresh
+  useEffect(() => {
+    if (searchParams.has("search")) {
+      setSearchParams({}, { replace: true });
+    }
+    // Only run on mount
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const loadSessions = useCallback(async () => {
     setLoading(true);
@@ -154,7 +184,7 @@ export function SessionsPage() {
 
   useEffect(() => {
     if (isConnected) {
-      loadSessions();
+      void loadSessions();
     }
   }, [isConnected, loadSessions]);
 
@@ -256,9 +286,18 @@ export function SessionsPage() {
       render: (row) => {
         const showDisplayName =
           row.displayName && row.displayName !== row.key && row.displayName !== row.label;
+        const teamName = sessionTeamMap.get(row.key);
         return (
           <div className="flex flex-col gap-0.5">
-            <span className="font-mono text-sm text-primary">{row.key}</span>
+            <div className="flex items-center gap-1.5">
+              <span className="font-mono text-sm text-primary">{row.key}</span>
+              {teamName && (
+                <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
+                  <Users className="h-3 w-3 mr-0.5" />
+                  {teamName}
+                </Badge>
+              )}
+            </div>
             {showDisplayName && (
               <span className="text-[11px] text-muted-foreground">{row.displayName}</span>
             )}
@@ -279,7 +318,7 @@ export function SessionsPage() {
           onBlur={(e) => {
             const v = e.target.value.trim();
             if (v !== (row.label ?? "")) {
-              handlePatch(row.key, { label: v || null });
+              void handlePatch(row.key, { label: v || null });
             }
           }}
           onKeyDown={(e) => {
@@ -336,7 +375,7 @@ export function SessionsPage() {
               if (isBinary && v === "on") {
                 patch = "low";
               }
-              handlePatch(row.key, { thinkingLevel: patch });
+              void handlePatch(row.key, { thinkingLevel: patch });
             }}
           >
             {opts.map((level) => (
@@ -405,7 +444,7 @@ export function SessionsPage() {
             size="icon-xs"
             onClick={(e) => {
               e.stopPropagation();
-              handleReset(row.key);
+              void handleReset(row.key);
             }}
             disabled={actionLoading === row.key}
             title="Reset session"
@@ -417,7 +456,7 @@ export function SessionsPage() {
             size="icon-xs"
             onClick={(e) => {
               e.stopPropagation();
-              handleCompact(row.key);
+              void handleCompact(row.key);
             }}
             disabled={actionLoading === row.key}
             title="Compact transcript"
@@ -430,7 +469,7 @@ export function SessionsPage() {
             className="h-6 px-2 text-[11px] text-destructive border-destructive/30 hover:bg-destructive/10"
             onClick={(e) => {
               e.stopPropagation();
-              handleDelete(row.key);
+              void handleDelete(row.key);
             }}
             disabled={actionLoading === row.key}
           >
@@ -454,6 +493,31 @@ export function SessionsPage() {
           Refresh
         </Button>
       </div>
+
+      {/* Teams section (collapsible) */}
+      {isConnected && (
+        <div className="rounded-lg border bg-card">
+          <button
+            onClick={() => setTeamsOpen(!teamsOpen)}
+            className="flex w-full items-center justify-between p-3 hover:bg-muted/30 transition-colors"
+          >
+            <div className="flex items-center gap-2">
+              {teamsOpen ? (
+                <ChevronDown className="h-4 w-4 text-muted-foreground" />
+              ) : (
+                <ChevronRight className="h-4 w-4 text-muted-foreground" />
+              )}
+              <Users className="h-4 w-4 text-primary" />
+              <span className="text-sm font-semibold">Teams</span>
+            </div>
+          </button>
+          {teamsOpen && (
+            <div className="border-t px-3 pb-3 pt-2">
+              <TeamsPanel />
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="flex flex-wrap items-end gap-4">
         <div className="relative">

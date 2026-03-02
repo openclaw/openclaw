@@ -137,6 +137,15 @@ const entries: SubCliEntry[] = [
     },
   },
   {
+    name: "teams",
+    description: "Manage team runs from the terminal",
+    hasSubcommands: true,
+    register: async (program) => {
+      const mod = await import("../teams-cli.js");
+      mod.registerTeamsCli(program);
+    },
+  },
+  {
     name: "tui",
     description: "Open a terminal UI connected to the Gateway",
     hasSubcommands: false,

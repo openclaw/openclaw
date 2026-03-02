@@ -1,5 +1,5 @@
 import { Settings, RotateCcw, Save, Loader2, AlertTriangle, CheckCircle2 } from "lucide-react";
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { ConfigDiffBanner } from "@/components/config/config-diff-banner";
 import { ConfigFormView } from "@/components/config/config-form-view";
 import { ConfigSidebar } from "@/components/config/config-sidebar";
@@ -8,10 +8,16 @@ import { ConfigEditor } from "@/components/ui/custom/form";
 import { useGateway } from "@/hooks/use-gateway";
 import { setPathValue, removePathValue } from "@/lib/config-form-utils";
 import { normalizeSchemaNode } from "@/lib/config-schema";
+import { mapIssuesToSections } from "@/lib/config-sections";
 import { loadSettings, saveSettings } from "@/lib/storage";
 import { cn } from "@/lib/utils";
 import { useGatewayStore } from "@/store/gateway-store";
 import type { JsonSchema, ConfigUiHints, ConfigSchemaResponse } from "@/types/agents";
+
+type ConfigValidationIssue = {
+  path: string;
+  message: string;
+};
 
 type ConfigResult = {
   config?: Record<string, unknown>;
@@ -19,6 +25,8 @@ type ConfigResult = {
   hash?: string;
   path?: string;
   valid?: boolean;
+  issues?: ConfigValidationIssue[];
+  warnings?: ConfigValidationIssue[];
 };
 
 export function ConfigPage() {
@@ -30,6 +38,8 @@ export function ConfigPage() {
   const [baseHash, setBaseHash] = useState("");
   const [configPath, setConfigPath] = useState("");
   const [configValid, setConfigValid] = useState<boolean | null>(null);
+  const [configIssues, setConfigIssues] = useState<ConfigValidationIssue[]>([]);
+  const [configWarnings, setConfigWarnings] = useState<ConfigValidationIssue[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveResult, setSaveResult] = useState<{
@@ -75,6 +85,8 @@ export function ConfigPage() {
       setBaseHash(result?.hash ?? "");
       setConfigPath(result?.path ?? "");
       setConfigValid(result?.valid ?? null);
+      setConfigIssues(result?.issues ?? []);
+      setConfigWarnings(result?.warnings ?? []);
 
       // Parse into form value
       const parsed = result?.config ?? (result?.raw ? JSON.parse(result.raw) : {});
@@ -224,6 +236,12 @@ export function ConfigPage() {
     }
   }
 
+  // Map validation issues to their config sections
+  const sectionIssues = useMemo(
+    () => mapIssuesToSections([...configIssues, ...configWarnings]),
+    [configIssues, configWarnings],
+  );
+
   // Available sections: union of config data keys + schema property keys
   const availableSections = (() => {
     const keys = new Set<string>();
@@ -316,6 +334,7 @@ export function ConfigPage() {
               formMode={canShowForm ? formMode : "raw"}
               onFormModeChange={canShowForm ? handleFormModeChange : () => {}}
               isValid={configValid}
+              sectionIssues={sectionIssues}
               availableSections={availableSections}
               collapsed={sidebarCollapsed}
               onCollapse={setSidebarCollapsed}
@@ -345,6 +364,7 @@ export function ConfigPage() {
                 hints={hints}
                 activeSection={activeSection}
                 searchQuery={searchQuery}
+                sectionIssues={sectionIssues}
                 onPatch={handlePatch}
                 onRemove={handleRemove}
               />

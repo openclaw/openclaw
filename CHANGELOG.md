@@ -4,6 +4,48 @@ Docs: https://docs.openclaw.ai
 
 ---
 
+## [Operator1] 2026.3.2
+
+> Fork-specific changes. Upstream sync base: `v2026.2.26`.
+
+### Teams & Multi-Agent Coordination (backend)
+
+- **feat(teams)**: new `src/teams/` module — team store, message store, and task store for coordinating multi-agent swarms.
+- **feat(teams)**: gateway RPC methods for team lifecycle (create, join, leave, broadcast, direct message, task CRUD).
+- **feat(teams)**: `src/cli/teams-cli.ts` — command-line interface for team management.
+- **feat(agents)**: subagent announce system — idle/status notifications emitted when an agent turn ends.
+- **feat(agents)**: subagent registry and spawn improvements for team-aware agent lifecycle tracking.
+
+### Visualize Page (ui-next)
+
+- **feat(visualize)**: new `/visualize` page — pixel-art Matrix-themed office layout with department zones.
+- **feat(visualize)**: pixel engine with sprite system, zone layouts, furniture catalog, and Matrix rain overlay.
+- **feat(visualize)**: agent avatars populate their department zones; clicking opens an agent detail panel.
+- **feat(visualize)**: team activity overlay showing live team coordination status.
+- **feat(visualize)**: `use-visualize` hook connecting agent and team state to the canvas renderer.
+
+### Agents Page — Org Chart & Persona (ui-next)
+
+- **feat(agents)**: collapsible org chart above the tabs — tree built client-side from `subagents.allowAgents` config with connector lines and agent cards.
+- **feat(agents)**: `KNOWN_AGENT_META` static fallback so Role/Department display correctly without a binary update.
+- **feat(agents)**: new Persona tab for viewing and editing `SOUL.md` and `IDENTITY.md` per agent with inline markdown editor.
+
+### Memory Dashboard Improvements (ui-next)
+
+- **feat(memory)**: Files tab — agent selector dropdown to browse any agent's memory files, not just the default agent.
+- **fix(memory)**: Activity log Load More now appends correctly instead of replacing the entire log.
+- **fix(memory)**: Activity log session pool increased from 50 to `max(sessionLimit × 4, 200)` — Load More now reaches sessions from previous days.
+- **fix(memory)**: Search empty state is now context-aware — short QMD queries suggest a descriptive phrase; no-results state explains semantic vs keyword matching.
+- **fix(memory)**: Health badge replaced gateway's `healthy` flag (which only means "manager initialized") with client-side `detectMemoryIssues()` that surfaces real issues: embedding failures, fallback active, batch errors, vector/FTS unavailable, 0 files indexed.
+
+### Gateway Protocol
+
+- **feat(gateway)**: extended session, agent, and types protocol schemas.
+- **feat(gateway)**: teams schema and RPC handler registration.
+- **feat(gateway)**: session utils — improved session patching and typing.
+
+---
+
 ## [Operator1] 2026.3.1
 
 > Fork-specific changes. Upstream sync base: `v2026.2.26`.

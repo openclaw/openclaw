@@ -18,6 +18,7 @@ const PAGE_TITLES: Record<string, string> = {
   "/sessions": "Sessions",
   "/cron": "Cron Jobs",
   "/agents": "Agents",
+  "/visualize": "Visualize",
   "/memory": "Memory",
   "/skills": "Skills",
   "/nodes": "Nodes",
@@ -27,7 +28,7 @@ const PAGE_TITLES: Record<string, string> = {
 };
 
 // Full-height pages get no padding and overflow-hidden
-const FULL_HEIGHT_PAGES = new Set(["/chat", "/logs", "/config"]);
+const FULL_HEIGHT_PAGES = new Set(["/chat", "/logs", "/config", "/visualize"]);
 
 export function Shell() {
   const location = useLocation();

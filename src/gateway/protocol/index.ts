@@ -185,6 +185,32 @@ import {
   type SessionsUsageParams,
   SessionsUsageParamsSchema,
   type ShutdownEvent,
+  type TeamRunsCreateParams,
+  TeamRunsCreateParamsSchema,
+  type TeamRunsListParams,
+  TeamRunsListParamsSchema,
+  type TeamRunsGetParams,
+  TeamRunsGetParamsSchema,
+  type TeamRunsCompleteParams,
+  TeamRunsCompleteParamsSchema,
+  type TeamRunsAddMemberParams,
+  TeamRunsAddMemberParamsSchema,
+  type TeamRunsUpdateMemberParams,
+  TeamRunsUpdateMemberParamsSchema,
+  type TeamTasksCreateParams,
+  TeamTasksCreateParamsSchema,
+  type TeamTasksListParams,
+  TeamTasksListParamsSchema,
+  type TeamTasksUpdateParams,
+  TeamTasksUpdateParamsSchema,
+  type TeamTasksDeleteParams,
+  TeamTasksDeleteParamsSchema,
+  type TeamMessagesSendParams,
+  TeamMessagesSendParamsSchema,
+  type TeamMessagesMarkReadParams,
+  TeamMessagesMarkReadParamsSchema,
+  type TeamMessagesListParams,
+  TeamMessagesListParamsSchema,
   ShutdownEventSchema,
   type SkillsBinsParams,
   SkillsBinsParamsSchema,
@@ -380,6 +406,40 @@ export const validateUpdateRunParams = ajv.compile<UpdateRunParams>(UpdateRunPar
 export const validateWebLoginStartParams =
   ajv.compile<WebLoginStartParams>(WebLoginStartParamsSchema);
 export const validateWebLoginWaitParams = ajv.compile<WebLoginWaitParams>(WebLoginWaitParamsSchema);
+export const validateTeamRunsCreateParams = ajv.compile<TeamRunsCreateParams>(
+  TeamRunsCreateParamsSchema,
+);
+export const validateTeamRunsListParams = ajv.compile<TeamRunsListParams>(TeamRunsListParamsSchema);
+export const validateTeamRunsGetParams = ajv.compile<TeamRunsGetParams>(TeamRunsGetParamsSchema);
+export const validateTeamRunsCompleteParams = ajv.compile<TeamRunsCompleteParams>(
+  TeamRunsCompleteParamsSchema,
+);
+export const validateTeamRunsAddMemberParams = ajv.compile<TeamRunsAddMemberParams>(
+  TeamRunsAddMemberParamsSchema,
+);
+export const validateTeamRunsUpdateMemberParams = ajv.compile<TeamRunsUpdateMemberParams>(
+  TeamRunsUpdateMemberParamsSchema,
+);
+export const validateTeamTasksCreateParams = ajv.compile<TeamTasksCreateParams>(
+  TeamTasksCreateParamsSchema,
+);
+export const validateTeamTasksListParams =
+  ajv.compile<TeamTasksListParams>(TeamTasksListParamsSchema);
+export const validateTeamTasksUpdateParams = ajv.compile<TeamTasksUpdateParams>(
+  TeamTasksUpdateParamsSchema,
+);
+export const validateTeamTasksDeleteParams = ajv.compile<TeamTasksDeleteParams>(
+  TeamTasksDeleteParamsSchema,
+);
+export const validateTeamMessagesSendParams = ajv.compile<TeamMessagesSendParams>(
+  TeamMessagesSendParamsSchema,
+);
+export const validateTeamMessagesMarkReadParams = ajv.compile<TeamMessagesMarkReadParams>(
+  TeamMessagesMarkReadParamsSchema,
+);
+export const validateTeamMessagesListParams = ajv.compile<TeamMessagesListParams>(
+  TeamMessagesListParamsSchema,
+);
 
 export function formatValidationErrors(errors: ErrorObject[] | null | undefined) {
   if (!errors?.length) {
@@ -618,4 +678,17 @@ export type {
   PollParams,
   UpdateRunParams,
   ChatInjectParams,
+  TeamRunsCreateParams,
+  TeamRunsListParams,
+  TeamRunsGetParams,
+  TeamRunsCompleteParams,
+  TeamRunsAddMemberParams,
+  TeamRunsUpdateMemberParams,
+  TeamTasksCreateParams,
+  TeamTasksListParams,
+  TeamTasksUpdateParams,
+  TeamTasksDeleteParams,
+  TeamMessagesSendParams,
+  TeamMessagesMarkReadParams,
+  TeamMessagesListParams,
 };

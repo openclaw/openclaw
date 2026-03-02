@@ -29,6 +29,7 @@ import { DataTable, type Column } from "@/components/ui/custom/data/data-table";
 import { StatCard } from "@/components/ui/custom/status/stat-card";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useAgents } from "@/hooks/use-agents";
 import { useMemory } from "@/hooks/use-memory";
 import { cn } from "@/lib/utils";
 import { useGatewayStore } from "@/store/gateway-store";
@@ -143,6 +144,81 @@ function DisconnectedMessage() {
   );
 }
 
+// --- Health detection ---
+
+type HealthIssue = { level: "warning" | "error"; message: string };
+
+function detectMemoryIssues(
+  indexStatus: import("@/store/memory-store").MemoryProviderStatusUI | null,
+  embeddingOk: boolean,
+  embeddingError: string | null,
+  healthy: boolean,
+): HealthIssue[] {
+  const issues: HealthIssue[] = [];
+
+  if (!indexStatus) {
+    return issues;
+  }
+
+  const isQmd = indexStatus.backend === "qmd";
+
+  // Embedding probe failure — hard error
+  if (!embeddingOk || embeddingError) {
+    issues.push({
+      level: "error",
+      message: embeddingError
+        ? `Embedding probe failed: ${embeddingError}`
+        : "Embedding probe returned unhealthy",
+    });
+  }
+
+  // Fallback active — warning
+  if (indexStatus.fallback) {
+    const reason = indexStatus.fallback.reason ? `: ${indexStatus.fallback.reason}` : "";
+    issues.push({
+      level: "warning",
+      message: `Fell back from ${indexStatus.fallback.from}${reason}`,
+    });
+  }
+
+  // Batch failures — warning
+  if ((indexStatus.batch?.failures ?? 0) > 0) {
+    issues.push({
+      level: "warning",
+      message: `Batch indexing had ${indexStatus.batch!.failures} failure(s)`,
+    });
+  }
+
+  // Vector unavailable (non-QMD) — warning
+  if (!isQmd && indexStatus.vector && !indexStatus.vector.available) {
+    const err = indexStatus.vector.loadError ? `: ${indexStatus.vector.loadError}` : "";
+    issues.push({ level: "warning", message: `Vector search unavailable${err}` });
+  }
+
+  // FTS unavailable (non-QMD) — info-level warning
+  if (!isQmd && indexStatus.fts && !indexStatus.fts.available) {
+    const err = indexStatus.fts.error ? `: ${indexStatus.fts.error}` : "";
+    issues.push({ level: "warning", message: `Full-text search unavailable${err}` });
+  }
+
+  // No indexed files — warning (not error; may just be empty workspace)
+  const fileCount = indexStatus.files ?? 0;
+  if (fileCount === 0) {
+    issues.push({
+      level: "warning",
+      message: isQmd
+        ? "No documents indexed (stats may be unavailable — try Re-index)"
+        : "No memory files indexed yet",
+    });
+  }
+
+  // Gateway says healthy but we found issues → suppress "healthy" from gateway as the sole signal
+  // (gateway healthy flag = manager initialized, not "all subsystems ok")
+  void healthy; // intentionally unused — we compute state from issues array
+
+  return issues;
+}
+
 // --- Index Status Tab ---
 
 function IndexStatusTab() {
@@ -156,32 +232,37 @@ function IndexStatusTab() {
   };
 
   const isQmd = indexStatus?.backend === "qmd";
-  const hasContent = isQmd
-    ? (indexStatus?.files ?? 0) > 0
-    : (indexStatus?.files ?? 0) > 0 && (indexStatus?.chunks ?? 0) > 0;
 
-  // 4-state health badge: Healthy / Degraded / Empty / Unavailable
+  const issues = detectMemoryIssues(indexStatus, embeddingOk, embeddingError, healthy);
+  const hasErrors = issues.some((i) => i.level === "error");
+  const hasWarnings = issues.some((i) => i.level === "warning");
+  const fileCount = indexStatus?.files ?? 0;
+
+  // Derive health badge from issues (not from gateway's `healthy` flag alone)
   let healthColor: string;
   let healthLabel: string;
   let healthIcon: React.ReactNode;
 
-  if (healthy) {
-    healthColor = "bg-emerald-500/20 text-emerald-400 border-emerald-500/30";
-    healthLabel = "Healthy";
-    healthIcon = <CheckCircle2 className="size-3.5" />;
-  } else if (embeddingOk && hasContent) {
-    // Embeddings work and content exists but not healthy — fallback or other issue
-    healthColor = "bg-yellow-500/20 text-yellow-400 border-yellow-500/30";
-    healthLabel = "Degraded";
-    healthIcon = <AlertTriangle className="size-3.5" />;
-  } else if (embeddingOk && !hasContent) {
-    healthColor = "bg-yellow-500/20 text-yellow-400 border-yellow-500/30";
-    healthLabel = "Empty";
-    healthIcon = <AlertTriangle className="size-3.5" />;
-  } else {
+  if (!indexStatus) {
+    healthColor = "bg-muted/50 text-muted-foreground border-border";
+    healthLabel = "Unknown";
+    healthIcon = <AlertCircle className="size-3.5" />;
+  } else if (hasErrors) {
     healthColor = "bg-red-500/20 text-red-400 border-red-500/30";
     healthLabel = "Unavailable";
     healthIcon = <AlertCircle className="size-3.5" />;
+  } else if (fileCount === 0) {
+    healthColor = "bg-yellow-500/20 text-yellow-400 border-yellow-500/30";
+    healthLabel = "Empty";
+    healthIcon = <AlertTriangle className="size-3.5" />;
+  } else if (hasWarnings) {
+    healthColor = "bg-yellow-500/20 text-yellow-400 border-yellow-500/30";
+    healthLabel = "Degraded";
+    healthIcon = <AlertTriangle className="size-3.5" />;
+  } else {
+    healthColor = "bg-emerald-500/20 text-emerald-400 border-emerald-500/30";
+    healthLabel = "Healthy";
+    healthIcon = <CheckCircle2 className="size-3.5" />;
   }
 
   if (indexLoading && !indexStatus) {
@@ -384,38 +465,27 @@ function IndexStatusTab() {
         )}
       </div>
 
-      {/* Alerts */}
-      {indexStatus?.fallback && (
-        <div className="flex items-start gap-2 rounded-lg border border-yellow-500/30 bg-yellow-500/10 p-3 text-xs text-yellow-400">
-          <AlertTriangle className="size-4 shrink-0 mt-0.5" />
-          <div>
-            <p className="font-medium">Fallback active</p>
-            <p className="text-yellow-400/70 mt-0.5">
-              Fell back from {indexStatus.fallback.from}
-              {indexStatus.fallback.reason ? `: ${indexStatus.fallback.reason}` : ""}
-            </p>
-          </div>
-        </div>
-      )}
-
-      {embeddingError && (
-        <div className="flex items-start gap-2 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-400">
-          <AlertCircle className="size-4 shrink-0 mt-0.5" />
-          <div>
-            <p className="font-medium">Embedding probe failed</p>
-            <p className="text-red-400/70 mt-0.5">{embeddingError}</p>
-          </div>
-        </div>
-      )}
-
-      {indexStatus && (indexStatus.files ?? 0) === 0 && (
-        <div className="flex items-start gap-2 rounded-lg border border-border bg-secondary/30 p-3 text-xs text-muted-foreground">
-          <AlertCircle className="size-4 shrink-0 mt-0.5" />
-          <p>
-            {isQmd
-              ? "No documents indexed yet. Try re-indexing or ensure the qmd process has run."
-              : "No memory files found. The agent will create memory files during conversations."}
-          </p>
+      {/* Issues panel — driven by detectMemoryIssues() */}
+      {issues.length > 0 && (
+        <div className="space-y-2">
+          {issues.map((issue, i) => (
+            <div
+              key={i}
+              className={cn(
+                "flex items-start gap-2 rounded-lg border p-3 text-xs",
+                issue.level === "error"
+                  ? "border-red-500/30 bg-red-500/10 text-red-400"
+                  : "border-yellow-500/30 bg-yellow-500/10 text-yellow-400",
+              )}
+            >
+              {issue.level === "error" ? (
+                <AlertCircle className="size-3.5 shrink-0 mt-0.5" />
+              ) : (
+                <AlertTriangle className="size-3.5 shrink-0 mt-0.5" />
+              )}
+              <p>{issue.message}</p>
+            </div>
+          ))}
         </div>
       )}
     </div>
@@ -423,6 +493,8 @@ function IndexStatusTab() {
 }
 
 // --- Files Tab ---
+
+type AgentOption = { id: string; name?: string; emoji?: string };
 
 function FilesTab() {
   const {
@@ -436,6 +508,47 @@ function FilesTab() {
     agentId,
   } = useMemoryStore();
   const { listMemoryFiles, getMemoryFile, setMemoryFile } = useMemory();
+  const { listAgents } = useAgents();
+
+  // Agent selector
+  const [agentOptions, setAgentOptions] = useState<AgentOption[]>([]);
+  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(agentId);
+
+  // Sync selectedAgentId when the store's agentId is first populated (e.g. after memory.status)
+  useEffect(() => {
+    if (agentId && !selectedAgentId) {
+      setSelectedAgentId(agentId);
+    }
+  }, [agentId, selectedAgentId]);
+
+  // Load agent list once on mount
+  useEffect(() => {
+    listAgents()
+      .then((result) => {
+        const opts: AgentOption[] = (result.agents ?? []).map((a) => ({
+          id: a.id,
+          name: a.name,
+          emoji: a.identity?.emoji,
+        }));
+        setAgentOptions(opts);
+      })
+      .catch(() => {
+        /* ignore */
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const handleAgentChange = async (newId: string) => {
+    setSelectedAgentId(newId);
+    useMemoryStore.getState().setAgentId(newId);
+    useMemoryStore.getState().setSelectedFile(null);
+    useMemoryStore.getState().setFileContent("");
+    useMemoryStore.getState().setOriginalFileContent("");
+    await listMemoryFiles(newId);
+  };
+
+  // Use selectedAgentId locally; fall back to store agentId
+  const effectiveAgentId = selectedAgentId ?? agentId;
 
   // Local UI state
   const [identityCollapsed, setIdentityCollapsed] = useState(() => {
@@ -457,7 +570,7 @@ function FilesTab() {
   const hasChanges = fileContent !== originalFileContent;
 
   const handleSelectFile = async (name: string, isMissing?: boolean) => {
-    if (!agentId) {
+    if (!effectiveAgentId) {
       return;
     }
     useMemoryStore.getState().setSelectedFile(name);
@@ -466,17 +579,17 @@ function FilesTab() {
       useMemoryStore.getState().setFileContent("");
       useMemoryStore.getState().setOriginalFileContent("");
     } else {
-      await getMemoryFile(agentId, name);
+      await getMemoryFile(effectiveAgentId, name);
     }
   };
 
   const handleSave = async () => {
-    if (!agentId || !selectedFile) {
+    if (!effectiveAgentId || !selectedFile) {
       return;
     }
-    await setMemoryFile(agentId, selectedFile, fileContent);
+    await setMemoryFile(effectiveAgentId, selectedFile, fileContent);
     // Refresh file list in case a new file was created
-    await listMemoryFiles(agentId);
+    await listMemoryFiles(effectiveAgentId);
   };
 
   const handleRevert = () => {
@@ -484,12 +597,12 @@ function FilesTab() {
   };
 
   const handleRefresh = async () => {
-    if (!agentId) {
+    if (!effectiveAgentId) {
       return;
     }
-    await listMemoryFiles(agentId);
+    await listMemoryFiles(effectiveAgentId);
     if (selectedFile) {
-      await getMemoryFile(agentId, selectedFile);
+      await getMemoryFile(effectiveAgentId, selectedFile);
     }
   };
 
@@ -617,6 +730,24 @@ function FilesTab() {
             <RefreshCw className={cn("size-3", filesLoading && "animate-spin")} />
           </Button>
         </div>
+
+        {/* Agent selector */}
+        {agentOptions.length > 1 && (
+          <div className="mb-2">
+            <select
+              value={effectiveAgentId ?? ""}
+              onChange={(e) => void handleAgentChange(e.target.value)}
+              className="w-full rounded-md border border-border bg-card px-2 py-1.5 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary/50"
+            >
+              {agentOptions.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.emoji ? `${a.emoji} ` : ""}
+                  {a.name ?? a.id}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
 
         {/* Filter input */}
         <div className="relative mb-2">
@@ -922,6 +1053,23 @@ function SearchTab() {
                   : "The index may be empty. Check Index Status for details."}
               </p>
             </>
+          ) : searchBackend === "qmd" && searchQuery.trim().length < 4 ? (
+            <>
+              <p className="text-sm">Query too short for semantic search</p>
+              <p className="text-xs text-center max-w-xs">
+                QMD uses vector embeddings — short abbreviations like &quot;{searchQuery.trim()}
+                &quot; won&apos;t match. Try a descriptive phrase, e.g. &quot;project
+                management&quot; or &quot;authentication flow&quot;.
+              </p>
+            </>
+          ) : searchBackend === "qmd" ? (
+            <>
+              <p className="text-sm">No semantic matches found</p>
+              <p className="text-xs text-center max-w-xs">
+                QMD ranks by meaning, not keywords. Try rephrasing with more context, or use a full
+                sentence describing what you&apos;re looking for.
+              </p>
+            </>
           ) : (
             <>
               <p className="text-sm">No results matched your query</p>
@@ -942,12 +1090,13 @@ function ActivityLogTab() {
   const [sessionLimit, setSessionLimit] = useState(5);
   const loadedRef = useRef(false);
 
+  // Initial load only — Load More calls loadActivityLog directly with append=true
   useEffect(() => {
     if (!loadedRef.current) {
       loadedRef.current = true;
-      void loadActivityLog(sessionLimit);
+      void loadActivityLog(5);
     }
-  }, [loadActivityLog, sessionLimit]);
+  }, [loadActivityLog]);
 
   const filteredLog = activityLog.filter((entry) => {
     if (activityFilter === "all") {
@@ -965,7 +1114,7 @@ function ActivityLogTab() {
   const handleLoadMore = () => {
     const newLimit = sessionLimit + 10;
     setSessionLimit(newLimit);
-    loadedRef.current = false;
+    void loadActivityLog(newLimit, true);
   };
 
   return (
@@ -987,7 +1136,6 @@ function ActivityLogTab() {
           variant="ghost"
           size="sm"
           onClick={() => {
-            loadedRef.current = false;
             void loadActivityLog(sessionLimit);
           }}
           disabled={activityLoading}

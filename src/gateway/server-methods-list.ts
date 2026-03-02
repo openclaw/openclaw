@@ -126,5 +126,6 @@ export const GATEWAY_EVENTS = [
   "voicewake.changed",
   "exec.approval.requested",
   "exec.approval.resolved",
+  "team",
   GATEWAY_EVENT_UPDATE_AVAILABLE,
 ];

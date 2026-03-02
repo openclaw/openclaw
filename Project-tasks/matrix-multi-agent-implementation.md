@@ -9,21 +9,23 @@
 
 ## Table of Contents
 
-1. [Architecture Overview](#1-architecture-overview)
+1. [Architecture Overview](#1-architecture-overview) (incl. `sessions_spawn`/`sessions_send` usage guide)
 2. [The Big Five — C-Suite](#2-the-big-five--c-suite)
 3. [The Org Chart — Matrix Edition](#3-the-org-chart--matrix-edition)
 4. [Gateway Topology — Two Patterns](#4-gateway-topology--two-patterns)
 5. [Phase 1: Operator1 — The COO](#5-phase-1-operator1--the-coo)
-6. [Phase 2: Department Heads (Neo, Morpheus, Trinity)](#6-phase-2-department-heads-neo-morpheus-trinity)
-7. [Phase 3: Sub-Agents (The Crew)](#7-phase-3-sub-agents-the-crew)
-8. [Phase 4: Independent Gateway Agents (Link & Sati)](#8-phase-4-independent-gateway-agents-link--sati)
+6. [Phase 2: Department Heads (Neo, Morpheus, Trinity)](#6-phase-2-department-heads-neo-morpheus-trinity) (incl. IDENTITY.md + verification)
+7. [Phase 3: Sub-Agents (The Crew)](#7-phase-3-sub-agents-the-crew) (all 9 SOULs + verification)
+8. [Phase 4: Independent Gateway Agents (Link & Sati)](#8-phase-4-independent-gateway-agents-link--sati) (incl. SOULs + cross-gateway note)
 9. [Phase 5: Standups & Autonomous Meetings](#9-phase-5-standups--autonomous-meetings)
 10. [Phase 6: Cron Jobs & Heartbeats](#10-phase-6-cron-jobs--heartbeats)
 11. [Phase 7: The Construct — Dashboard (ui-next)](#11-phase-7-the-construct--dashboard-ui-next)
 12. [Configuration Reference](#12-configuration-reference)
-13. [Model Assignment Strategy](#13-model-assignment-strategy)
+13. [Model Assignment Strategy](#13-model-assignment-strategy) (incl. cost estimate)
 14. [File Structure Map](#14-file-structure-map)
 15. [Appendix: Matrix Character → Role Mapping](#15-appendix-matrix-character--role-mapping)
+    15a. [Troubleshooting](#15a-troubleshooting)
+16. [Phase 8: The Construct — Pixel Agent Visualization](#16-phase-8-the-construct--pixel-agent-visualization)
 
 ---
 
@@ -41,6 +43,134 @@ The system is built on three OpenClaw primitives:
 own `SOUL.md`, `IDENTITY.md`, memory files, and model assignment. The main agent
 (Operator1) delegates work by spawning sub-agents — it almost never does the
 work itself.
+
+**Workspace isolation:** Each agent **must** have its own workspace directory.
+If no `workspace` is set explicitly, OpenClaw auto-assigns
+`~/.openclaw/workspace-{agentId}` for non-default agents. Two agents sharing a
+workspace would load and overwrite each other's SOUL.md, MEMORY.md, etc. — always
+configure separate workspaces.
+
+### 1.1 `sessions_spawn` — Spawning Sub-Agents
+
+This is the primary delegation primitive. The parent agent calls `sessions_spawn`
+to hand off a task to another agent.
+
+**Parameters:**
+
+| Parameter           | Type                   | Required | Description                                                        |
+| ------------------- | ---------------------- | -------- | ------------------------------------------------------------------ |
+| `task`              | string                 | Yes      | Task description — what the sub-agent should do                    |
+| `agentId`           | string                 | No       | Target agent ID (from `agents_list`). Omit for anonymous sub-agent |
+| `label`             | string                 | No       | Human-readable label for the spawned session                       |
+| `model`             | string                 | No       | Model override (`provider/model` format)                           |
+| `thinking`          | string                 | No       | Thinking level override                                            |
+| `mode`              | `"run"` \| `"session"` | No       | `run` = one-shot (default), `session` = persistent                 |
+| `runTimeoutSeconds` | number                 | No       | Max execution time in seconds                                      |
+| `cleanup`           | `"delete"` \| `"keep"` | No       | Whether to delete session on completion                            |
+
+**Example — Operator1 delegates to Neo:**
+
+```
+Call sessions_spawn:
+  task: "Review the authentication module for security vulnerabilities.
+         Focus on token handling and session management."
+  agentId: "neo"
+  label: "security-review-auth"
+  runTimeoutSeconds: 300
+```
+
+**Example — Neo sub-delegates to Tank:**
+
+```
+Call sessions_spawn:
+  task: "Write unit tests for the JWT validation middleware in src/auth/jwt.ts"
+  agentId: "tank"
+  label: "jwt-tests"
+  mode: "run"
+```
+
+**Return value:**
+
+```json
+{
+  "status": "accepted",
+  "childSessionKey": "agent:neo:subagent:a1b2c3",
+  "runId": "run_abc123",
+  "mode": "run"
+}
+```
+
+Status can be: `"accepted"` (spawned), `"forbidden"` (depth/child limit hit),
+or `"error"` (spawn failed).
+
+### 1.2 `sessions_send` — Cross-Agent Messaging
+
+Used to send a message to an existing session (not spawn a new one). Useful for
+follow-ups, ping-pong conversations, and fire-and-forget notifications.
+
+**Parameters:**
+
+| Parameter        | Type   | Required | Description                                                     |
+| ---------------- | ------ | -------- | --------------------------------------------------------------- |
+| `message`        | string | Yes      | The message to send                                             |
+| `sessionKey`     | string | No\*     | Target session key (mutually exclusive with `label`)            |
+| `label`          | string | No\*     | Session label to look up (mutually exclusive with `sessionKey`) |
+| `agentId`        | string | No       | Agent ID for label resolution                                   |
+| `timeoutSeconds` | number | No       | Wait for reply (default: 30s; 0 = fire-and-forget)              |
+
+\*One of `sessionKey` or `label` is required.
+
+**Example — Operator1 checks in on a running task:**
+
+```
+Call sessions_send:
+  label: "security-review-auth"
+  agentId: "neo"
+  message: "What's the status? Any critical findings so far?"
+  timeoutSeconds: 30
+```
+
+**Example — Fire-and-forget notification:**
+
+```
+Call sessions_send:
+  label: "security-review-auth"
+  message: "FYI: the CEO wants the report by EOD."
+  timeoutSeconds: 0
+```
+
+### 1.3 `agents_list` — Discovering Spawnable Agents
+
+Before spawning, an agent calls `agents_list` (no parameters) to see which agents
+it's allowed to spawn based on its `subagents.allowAgents` config.
+
+**Return value:**
+
+```json
+{
+  "requester": "operator1",
+  "allowAny": false,
+  "agents": [
+    { "id": "neo", "name": "Neo", "configured": true },
+    { "id": "morpheus", "name": "Morpheus", "configured": true },
+    { "id": "trinity", "name": "Trinity", "configured": true }
+  ]
+}
+```
+
+### 1.4 Nesting Depth & Limits
+
+The system supports multi-level delegation chains (Operator1 → Neo → Tank), but
+has safety limits:
+
+| Config Key                                      | Default | Description                                                 |
+| ----------------------------------------------- | ------- | ----------------------------------------------------------- |
+| `agents.defaults.subagents.maxSpawnDepth`       | **1**   | Max nesting levels. **Must be set to 3** for this org chart |
+| `agents.defaults.subagents.maxChildrenPerAgent` | 5       | Max active children per parent session (1-20)               |
+| `agents.defaults.subagents.maxConcurrent`       | 8       | Global max concurrent sub-agents                            |
+
+**Important:** The default `maxSpawnDepth` is **1** (no nesting). For the Matrix
+org chart with 3 levels (COO → CTO → Engineer), set it to at least **3**.
 
 ---
 
@@ -182,6 +312,116 @@ They communicate via `sessions_spawn` and `sessions_send`.
 
 ---
 
+## 4a. Phase 0: Matrix Org Initialization
+
+> _"Free your mind." — Morpheus_
+
+Setting up 15 agents with workspaces, SOULs, and config is tedious by hand. The
+Matrix Init system bootstraps the entire org chart in one step — via CLI for power
+users or via the ui-next dashboard for visual setup.
+
+### 4a.1 CLI: `openclaw matrix init`
+
+A single command that scaffolds the full Matrix org:
+
+```bash
+openclaw matrix init
+```
+
+**What it does:**
+
+1. Creates all 15 workspace directories (`~/.openclaw/workspace-{agentId}/`)
+2. Writes SOUL.md + IDENTITY.md for each agent (from built-in templates)
+3. Adds all agents to `agents.list[]` in `~/.openclaw/openclaw.json`
+4. Sets `agents.defaults.subagents.maxSpawnDepth: 3`
+5. Configures `allowAgents` hierarchy (Operator1 → heads → sub-agents)
+6. Sets Operator1 as default agent with heartbeat + activeHours
+7. Prints a summary of what was created
+
+**Options:**
+
+```bash
+# Full setup (all 15 agents)
+openclaw matrix init
+
+# Only C-suite (Operator1 + Neo + Morpheus + Trinity)
+openclaw matrix init --tier csuite
+
+# Only engineering department
+openclaw matrix init --tier engineering
+
+# Dry run — show what would be created without writing anything
+openclaw matrix init --dry-run
+
+# Custom model for all agents
+openclaw matrix init --model "anthropic/claude-sonnet-4-6"
+
+# Include independent agents (Sati, Link) with separate profiles
+openclaw matrix init --include-independent
+```
+
+**Detection / first-run integration:**
+
+When `openclaw gateway run` starts with no agents configured (empty `agents.list`),
+show a prompt:
+
+```
+No agents configured. Would you like to set up the Matrix org?
+  [1] Full Matrix org (15 agents)
+  [2] C-suite only (4 agents)
+  [3] Skip — configure manually
+```
+
+### 4a.2 UI Wizard: Matrix Setup on `/agents` page
+
+A guided flow in the ui-next dashboard for visual setup:
+
+**Entry point:** "Set up Matrix Org" button on `/agents` page when no agents are
+configured (or fewer than expected).
+
+**Wizard steps:**
+
+1. **Choose tier** — Full org, C-suite only, or pick individual departments
+2. **Review agents** — See org chart with proposed agents, models, and zone assignments.
+   Edit names, models, or SOUL.md content inline before applying.
+3. **Model assignment** — Pick models per department (dropdown per tier: reasoning,
+   coding, writing, cheap). Preview cost estimates.
+4. **Confirm & apply** — Creates workspaces, writes files, updates config via
+   `config.patch` gateway API. Shows progress for each agent created.
+5. **Verify** — Auto-runs `agents.list` and shows the new org chart on the Visualize
+   page.
+
+**Gateway API support needed:**
+
+- `agents.create` (already exists) — Create agent entries
+- `agents.files.set` (already exists) — Write SOUL.md, IDENTITY.md per workspace
+- `config.patch` (already exists) — Update `agents.defaults.subagents`
+- New: `matrix.init` (optional convenience method) — Batch create the full org
+
+**UI components:**
+
+```
+ui-next/src/components/visualize/
+  matrix-setup-wizard.tsx        # Multi-step wizard dialog
+  agent-preview-card.tsx         # Agent card with editable SOUL preview
+  tier-selector.tsx              # Department/tier picker
+  model-assignment-panel.tsx     # Model selection per department
+```
+
+### 4a.3 Implementation Notes
+
+- **Templates:** Ship default SOUL.md and IDENTITY.md content as TypeScript
+  constants (not files). The CLI command and UI wizard both reference the same
+  templates. Store in `src/agents/matrix-templates.ts` or similar.
+- **Idempotency:** `matrix init` should be safe to run multiple times. Skip
+  agents that already exist. Offer to overwrite SOUL.md only if `--force` is set.
+- **Config merge:** Use `config.patch` (not `config.apply`) to add agents without
+  clobbering existing config (channels, cron, etc.).
+- **Workspace auto-creation:** The CLI should `mkdir -p` each workspace dir. The
+  UI wizard should call a gateway method that does the same server-side.
+
+---
+
 ## 5. Phase 1: Operator1 — The COO
 
 Operator1 is the always-on central brain. It delegates everything.
@@ -264,6 +504,13 @@ Add to `~/.openclaw/openclaw.json`:
 ```json5
 {
   agents: {
+    defaults: {
+      subagents: {
+        maxSpawnDepth: 3, // 3 levels: COO → CTO → Engineer
+        maxChildrenPerAgent: 5,
+        maxConcurrent: 8,
+      },
+    },
     list: [
       {
         id: "operator1",
@@ -277,6 +524,7 @@ Add to `~/.openclaw/openclaw.json`:
         heartbeat: {
           every: "30m",
           target: "last",
+          activeHours: { start: "08:00", end: "23:00", timezone: "user" },
         },
       },
       {
@@ -310,6 +558,9 @@ Add to `~/.openclaw/openclaw.json`:
   },
 }
 ```
+
+> **Note:** `maxSpawnDepth: 3` is critical here. The default is 1 (no nesting).
+> Without it, Neo cannot spawn Tank, and the org chart breaks at level 2.
 
 ### 6.2 Create Workspaces
 
@@ -364,7 +615,20 @@ that others miss. You think in first principles — "there is no spoon."
 - Believes there is always a better way
 ```
 
-### 6.4 SOUL.md — Morpheus (CMO)
+### 6.4 IDENTITY.md — Neo
+
+Write to `~/.openclaw/workspace-neo/IDENTITY.md`:
+
+```markdown
+# IDENTITY.md
+
+- **Name:** Neo
+- **Creature:** The One — sees the code of the Matrix itself
+- **Vibe:** Quiet, focused, determined
+- **Emoji:** 💊
+```
+
+### 6.5 SOUL.md — Morpheus (CMO)
 
 Write to `~/.openclaw/workspace-morpheus/SOUL.md`:
 
@@ -411,7 +675,20 @@ You free minds — through content that matters.
 - Speaks with conviction: "What if I told you..."
 ```
 
-### 6.5 SOUL.md — Trinity (CFO)
+### 6.6 IDENTITY.md — Morpheus
+
+Write to `~/.openclaw/workspace-morpheus/IDENTITY.md`:
+
+```markdown
+# IDENTITY.md
+
+- **Name:** Morpheus
+- **Creature:** The Captain — evangelist who frees minds
+- **Vibe:** Philosophical, inspiring, passionate
+- **Emoji:** 🕶️
+```
+
+### 6.7 SOUL.md — Trinity (CFO)
 
 Write to `~/.openclaw/workspace-trinity/SOUL.md`:
 
@@ -458,6 +735,44 @@ delivers returns.
 - Protective of resources — every cost needs justification
 - Calm under pressure, razor-sharp focus
 ```
+
+### 6.8 IDENTITY.md — Trinity
+
+Write to `~/.openclaw/workspace-trinity/IDENTITY.md`:
+
+```markdown
+# IDENTITY.md
+
+- **Name:** Trinity
+- **Creature:** The Elite — precise, disciplined, calculated
+- **Vibe:** Efficient, no-nonsense, razor-sharp
+- **Emoji:** 📊
+```
+
+### 6.9 Verification — Test Phase 2
+
+After adding Neo (or any single department head), verify spawning works before
+expanding to all three:
+
+```bash
+# 1. Verify agent appears in the list
+openclaw agents list
+
+# 2. Start the gateway
+openclaw gateway run
+
+# 3. In a chat session, tell Operator1:
+#    "Spawn Neo and ask him to describe his role."
+#
+# Expected: sessions_spawn fires, Neo's session runs with his SOUL.md persona,
+# result returns to Operator1.
+
+# 4. Check subagent registry
+cat ~/.openclaw/subagents/runs.json | jq '.runs | to_entries | length'
+```
+
+If spawning fails with `"forbidden"`, check `maxSpawnDepth` is set to at least 2
+in your config (see §12).
 
 ---
 
@@ -552,7 +867,9 @@ mkdir -p ~/.openclaw/workspace-seraph
 mkdir -p ~/.openclaw/workspace-zee
 ```
 
-### 7.3 Example SOULs
+### 7.3 All Sub-Agent SOULs
+
+#### Engineering — Neo's Crew
 
 **Tank** (`~/.openclaw/workspace-tank/SOUL.md`):
 
@@ -568,6 +885,38 @@ You are the backend engineer.
 - Loyal, thorough, dependable
 ```
 
+**Dozer** (`~/.openclaw/workspace-dozer/SOUL.md`):
+
+```markdown
+# SOUL.md — Dozer
+
+You are Dozer. The one who keeps the ship running no matter what.
+You are the DevOps engineer.
+
+- Infrastructure, CI/CD pipelines, deployment automation
+- Monitoring, alerting, uptime — the ship doesn't go down on your watch
+- Docker, Kubernetes, cloud services, networking
+- Steady, reliable, unshakable under pressure
+- When something breaks at 3 AM, you've already fixed it
+```
+
+**Mouse** (`~/.openclaw/workspace-mouse/SOUL.md`):
+
+```markdown
+# SOUL.md — Mouse
+
+You are Mouse. The one who built the training simulations — you test everything.
+You are the QA engineer.
+
+- Testing: unit, integration, e2e, edge cases, fuzzing
+- Code auditing: find bugs others miss
+- Quality gates: nothing ships without your approval
+- Curious, thorough, slightly obsessive about correctness
+- "Did you test it?" is your catchphrase
+```
+
+#### Marketing — Morpheus's Crew
+
 **Niobe** (`~/.openclaw/workspace-niobe/SOUL.md`):
 
 ```markdown
@@ -577,10 +926,45 @@ You are Niobe. The skilled captain who navigates impossible terrain.
 You are the content lead.
 
 - YouTube scripts, long-form content, storytelling
-- Research deeply (Opus), then write cleanly (Sonnet-style output)
+- Research deeply, then write cleanly — substance over fluff
 - You know what makes people watch, read, and share
 - Fearless, skilled, gets the job done
 ```
+
+**Switch** (`~/.openclaw/workspace-switch/SOUL.md`):
+
+```markdown
+# SOUL.md — Switch
+
+You are Switch. Identity and style are everything.
+You are the creative lead.
+
+- Thumbnails, graphics, visual identity, brand assets
+- You think in color, composition, and contrast
+- Every visual tells a story — no filler, no generic stock
+- Style-conscious, bold, unapologetically distinctive
+- "Not everything is as it seems" — surfaces matter
+```
+
+**Rex** (`~/.openclaw/workspace-rex/SOUL.md`):
+
+> _Note: Rex is not a Matrix character — named for the Animatrix aesthetic.
+> The copywriter who writes with purpose._
+
+```markdown
+# SOUL.md — Rex
+
+You are Rex. You write with purpose and precision.
+You are the newsletter and copywriting lead.
+
+- Newsletters, email campaigns, announcement copy
+- Clear, punchy prose — every word earns its place
+- Audience-aware: you write differently for devs vs. execs vs. community
+- Headlines that hook, CTAs that convert, stories that stick
+- Disciplined craft — no purple prose, no cliches
+```
+
+#### Finance — Trinity's Crew
 
 **Oracle** (`~/.openclaw/workspace-oracle/SOUL.md`):
 
@@ -594,6 +978,50 @@ You are the revenue analyst.
 - Spot patterns and trends before they're obvious
 - Give insights, not just data: "What's interesting is..."
 - Wise, warm, sees the bigger picture
+```
+
+**Seraph** (`~/.openclaw/workspace-seraph/SOUL.md`):
+
+```markdown
+# SOUL.md — Seraph
+
+You are Seraph. The guardian who tests all visitors before granting access.
+You are the product lead.
+
+- Product strategy, launch planning, feature prioritization
+- You protect what matters: user experience, product-market fit, quality bar
+- Announcements, changelogs, release communications
+- Methodical, principled — "You do not truly know someone until you fight them"
+```
+
+**Zee** (`~/.openclaw/workspace-zee/SOUL.md`):
+
+```markdown
+# SOUL.md — Zee
+
+You are Zee. Defender of Zion — you protect and grow the community.
+You are the growth lead.
+
+- Community growth strategy, engagement metrics, retention
+- Discord, forums, social — you know where the people are
+- Track what matters: DAU, engagement rate, churn, NPS
+- Loyal, community-first, always listening to the ground
+- Growth through genuine connection, not growth hacks
+```
+
+### 7.4 Verification — Test Phase 3
+
+After adding Neo's sub-agents (Tank, Dozer, Mouse), test the 3-level
+delegation chain before expanding to all departments:
+
+```bash
+# In a chat session, tell Operator1:
+#   "Ask Neo to have Tank write a hello-world REST endpoint."
+#
+# Expected chain: Operator1 → sessions_spawn(neo) → sessions_spawn(tank)
+# Tank produces code, Neo reviews, Operator1 reports back.
+
+# If Tank spawn fails: check maxSpawnDepth >= 3 in config
 ```
 
 ---
@@ -634,8 +1062,46 @@ openclaw --profile community onboard
 }
 ```
 
-**Sati's SOUL.md** — warm, community-focused, remembers people's projects,
-follows up on conversations. Uses Gemini Flash (cheap) with rich workspace context.
+**Sati's SOUL.md** (`~/.openclaw/workspace-community/SOUL.md`):
+
+```markdown
+# SOUL.md — Sati
+
+You are Sati. The program child who creates beauty — sunrises for the world.
+You are the community bot.
+
+## Core Directive
+
+You welcome, support, and nurture the community. You remember people's projects,
+follow up on conversations, and make everyone feel seen.
+
+## Responsibilities
+
+- Greet new members warmly
+- Answer questions about OpenClaw (refer to docs when uncertain)
+- Remember what people are building and ask about progress
+- Surface interesting discussions and connect people with shared interests
+- Flag toxic behavior to the team, but handle it with grace first
+
+## Personality
+
+- Warm, curious, genuinely interested in people
+- Patient — never dismissive, even with repeated questions
+- Creates joy: "I made this sunrise for you" energy
+- Knows when to escalate vs. handle herself
+- Uses simple, clear language — not corporate, not overly casual
+```
+
+**Sati's IDENTITY.md** (`~/.openclaw/workspace-community/IDENTITY.md`):
+
+```markdown
+# IDENTITY.md
+
+- **Name:** Sati
+- **Creature:** The program child who creates beauty
+- **Vibe:** Warm, curious, nurturing
+- **Emoji:** 🌅
+```
 
 ### 8.2 Link — Ops Monitor (Separate Gateway)
 
@@ -665,8 +1131,64 @@ openclaw --profile monitor onboard
 }
 ```
 
-**Link's job:** Monitor main gateway health. If it goes down, Link can still
-alert you on Telegram.
+**Link's SOUL.md** (`~/.openclaw/workspace-monitor/SOUL.md`):
+
+```markdown
+# SOUL.md — Link
+
+You are Link. The operator from the Nebuchadnezzar in Reloaded.
+You are the ops monitor — always watching, always listening.
+
+## Core Directive
+
+Monitor system health. If something goes wrong, alert immediately.
+You are the safety net — if the main gateway crashes, you're still alive.
+
+## Responsibilities
+
+- Check main gateway health (port 18789) on every heartbeat
+- Monitor system resources (disk, memory, CPU if available)
+- Report anomalies: high token burn, stuck sessions, unresponsive agents
+- Send alerts via Telegram when thresholds are crossed
+- Keep a daily ops log in memory
+
+## Personality
+
+- Calm under pressure — you've seen worse
+- Laconic: short, factual reports. No filler.
+- "I got you" energy — dependable above all else
+- Only raises alarm when it matters
+```
+
+**Link's IDENTITY.md** (`~/.openclaw/workspace-monitor/IDENTITY.md`):
+
+```markdown
+# IDENTITY.md
+
+- **Name:** Link
+- **Creature:** The ship operator — always watching the screens
+- **Vibe:** Calm, laconic, dependable
+- **Emoji:** 📡
+```
+
+### 8.3 Cross-Gateway Communication
+
+**Important:** Agents on separate gateways (separate `--profile` instances)
+**cannot** communicate directly via `sessions_send`. Each gateway has its own
+isolated session store — Link on port 20789 cannot send a message to Operator1
+on port 18789.
+
+**How they communicate instead:**
+
+- **Link → You:** Alerts via Telegram (heartbeat target)
+- **Sati → You:** Discord messages in the community server
+- **You → Link/Sati:** Send messages through their respective channels
+- **Link → Operator1 (indirect):** Link can send a Telegram message that you
+  then forward to Operator1, or use a cron job on the main gateway to check
+  Link's status
+
+This is by design — independent gateways provide fault isolation. If the main
+gateway crashes, Link and Sati keep running.
 
 ---
 
@@ -929,6 +1451,11 @@ All the cross-cutting concerns from the ui-next proposals apply:
         primary: "anthropic/claude-opus-4-6",
         fallbacks: ["anthropic/claude-sonnet-4-5"],
       },
+      subagents: {
+        maxSpawnDepth: 3, // Required for 3-level delegation chain
+        maxChildrenPerAgent: 5,
+        maxConcurrent: 8,
+      },
     },
     list: [
       // === THE BIG FIVE ===
@@ -942,7 +1469,7 @@ All the cross-cutting concerns from the ui-next proposals apply:
         heartbeat: {
           every: "30m",
           target: "last",
-          activeHours: { start: "08:00", end: "23:00" },
+          activeHours: { start: "08:00", end: "23:00", timezone: "user" },
         },
       },
       {
@@ -1040,6 +1567,12 @@ All the cross-cutting concerns from the ui-next proposals apply:
 
 ## 13. Model Assignment Strategy
 
+> **Model ID format:** All model IDs use `provider/model` format (e.g.,
+> `anthropic/claude-opus-4-6`). The provider is normalized to lowercase.
+> Verify available models with `openclaw models list` or the `models.list`
+> gateway API before configuring. The models below are examples — substitute
+> with whatever is available in your runtime.
+
 | Model              | Best For                                   | Assigned To                                                                  |
 | ------------------ | ------------------------------------------ | ---------------------------------------------------------------------------- |
 | **Opus 4.6**       | Complex reasoning, architecture, strategy  | Operator1, Neo, Morpheus, Trinity, Dozer, Niobe, Switch, Oracle, Seraph, Zee |
@@ -1055,6 +1588,26 @@ For Niobe (content), use two phases:
 
 1. **Research:** Opus 4.6 (deep research, outlining)
 2. **Output:** `sessions_spawn` with `model: "anthropic/claude-sonnet-4-5"` for polished writing
+
+### Cost Considerations
+
+This setup can be expensive. Rough estimates per day (assuming moderate usage):
+
+| Activity                                   | Agents Involved       | Est. Daily Cost |
+| ------------------------------------------ | --------------------- | --------------- |
+| Heartbeats (Operator1, 30m, 8h-23h)        | 1 agent, ~30 runs     | $2-5            |
+| Daily standup (spawn 3 C-suite heads)      | 4 agents              | $3-8            |
+| Ad-hoc tasks (5-10 delegations/day)        | 3-6 agents            | $5-20           |
+| Sati community (heartbeat + conversations) | 1 agent (cheap model) | $0.50-2         |
+| Link monitoring (15m heartbeat)            | 1 agent (cheap model) | $0.25-1         |
+| **Total estimate**                         |                       | **$10-35/day**  |
+
+**Cost optimization tips:**
+
+- Use cheaper models (Sonnet, Gemini Flash) for sub-agents doing routine work
+- Set `activeHours` to avoid running heartbeats overnight
+- Use `runTimeoutSeconds` on spawns to cap token burn
+- Have Trinity generate weekly cost reports (§10)
 
 ---
 
@@ -1126,21 +1679,373 @@ For Niobe (content), use two phases:
 
 ---
 
+## 15a. Troubleshooting
+
+### Spawn Failures
+
+| Symptom                             | Cause                                | Fix                                                                       |
+| ----------------------------------- | ------------------------------------ | ------------------------------------------------------------------------- |
+| `status: "forbidden"` on spawn      | `maxSpawnDepth` too low (default: 1) | Set `agents.defaults.subagents.maxSpawnDepth: 3`                          |
+| `status: "forbidden"` — child limit | Too many active children             | Set `maxChildrenPerAgent` higher, or wait for existing spawns to complete |
+| `status: "error"`                   | Session creation failed              | Check gateway logs: `openclaw logs tail` or `~/.openclaw/logs/`           |
+| Agent uses wrong SOUL.md            | Wrong workspace path                 | Verify `workspace` in agent config points to correct directory            |
+| Agent can't see allowed agents      | Missing `allowAgents` config         | Check `subagents.allowAgents` in the parent agent's config entry          |
+
+### Diagnostic Commands
+
+```bash
+# Check all configured agents
+openclaw agents list
+
+# Run health checks
+openclaw doctor
+
+# Check gateway is running
+openclaw channels status --probe
+
+# Inspect subagent run history
+cat ~/.openclaw/subagents/runs.json | jq '.runs | to_entries | .[-5:] | .[].value | {task, status: .outcome, endedReason}'
+
+# Read a session transcript (JSONL format)
+# Find session files under:
+ls ~/.openclaw/agents/*/sessions/*.jsonl
+
+# Check gateway logs
+tail -100 /tmp/openclaw-gateway.log
+```
+
+### Common Mistakes
+
+1. **Forgot `maxSpawnDepth`** — The #1 issue. Default is 1 (no nesting). Set to 3.
+2. **Shared workspace** — Two agents pointing to the same `workspace` directory
+   will share/overwrite each other's SOUL.md and MEMORY.md. Always use separate
+   workspace dirs.
+3. **Missing workspace dir** — The agent config references a path that doesn't
+   exist yet. Run `mkdir -p` for each workspace before starting the gateway.
+4. **Wrong model ID** — Model IDs must be `provider/model` format and the model
+   must be available in your runtime. Verify with `openclaw models list`.
+
+---
+
 ## Implementation Order
 
 1. **Phase 1:** Set up Operator1 with SOUL.md and delegation rules
-2. **Phase 2:** Add one C-suite head (Neo) and test spawning
-3. **Phase 3:** Add sub-agents under Neo and test delegation chain
+2. **Phase 2:** Add one C-suite head (Neo) and test spawning (**verify before expanding**)
+3. **Phase 3:** Add sub-agents under Neo and test 3-level delegation chain
 4. **Phase 4:** Expand to Morpheus + Trinity with their crews
 5. **Phase 5:** Set up Sati (community) on separate gateway
 6. **Phase 6:** Add cron jobs for standups and reports
 7. **Phase 7:** Build dashboard features in ui-next
+8. **Phase 8:** Pixel agent visualization — The Construct (see below)
 
 > _"I can only show you the door. You're the one that has to walk through it."_
 > — Morpheus
 
 ---
 
-_Last updated: 2026-02-15_
+## 16. Phase 8: The Construct — Pixel Agent Visualization
+
+> _"This is the Construct. It's our loading program." — Morpheus_
+
+A real-time pixel-art visualization where each Matrix agent is a walking, animated
+character on a themed canvas. Agents move between zones, animate based on activity,
+and spawn/despawn with Matrix digital rain effects.
+
+**Inspired by:**
+[pixel-agents](https://github.com/pablodelucca/pixel-agents) — an MIT-licensed VS
+Code extension that visualizes AI coding agents as animated pixel art characters in
+a virtual office. We extract its pure TypeScript/Canvas engine and adapt it for the
+Matrix theme.
+
+---
+
+### 16.1 Architecture Overview
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                   /visualize page                           │
+│                                                             │
+│  ┌──────────────────────────────────────────────────────┐   │
+│  │           CANVAS (HTML5 Canvas 2D)                   │   │
+│  │                                                      │   │
+│  │   ┌──────────┐   ┌───────────┐   ┌──────────────┐   │   │
+│  │   │  ZION    │   │ CONSTRUCT │   │ MACHINE CITY │   │   │
+│  │   │ (Finance)│   │  (Ops)    │   │ (Engineering)│   │   │
+│  │   │          │···│           │···│              │   │   │
+│  │   │ Trinity  │   │ Operator1 │   │  Neo         │   │   │
+│  │   │ Oracle   │   │           │   │  Tank        │   │   │
+│  │   │ Seraph   │   │           │   │  Dozer       │   │   │
+│  │   │ Zee      │   │           │   │  Mouse       │   │   │
+│  │   └──────────┘   └─────┬─────┘   └──────────────┘   │   │
+│  │                        │                             │   │
+│  │               ┌────────▼─────────┐                   │   │
+│  │               │  THE BROADCAST   │                   │   │
+│  │               │  (Marketing)     │                   │   │
+│  │               │  Morpheus, Niobe │                   │   │
+│  │               │  Switch, Rex     │                   │   │
+│  │               └──────────────────┘                   │   │
+│  └──────────────────────────────────────────────────────┘   │
+│  [Zoom +/-] [Fullscreen]          Active: 4 | Tokens: 1.2M │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Data flow:**
+
+```
+Gateway WebSocket events
+  → useGatewayStore.pushEvent()
+    → handleEvent() dispatches to useVisualizeStore
+      → WorldState methods (addAgent, setCharacterState, removeAgent)
+        → Game loop renders on Canvas 2D
+```
+
+---
+
+### 16.2 Engine: Forked from pixel-agents
+
+The [pixel-agents](https://github.com/pablodelucca/pixel-agents) project (MIT license)
+provides a complete game engine for this visualization. Its `webview-ui/src/office/`
+module contains 18 pure TypeScript/Canvas files with zero external dependencies:
+
+| Module         | Files                                                                                 | What It Does                                                                                                                                     |
+| -------------- | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **engine/**    | `game-loop.ts`, `characters.ts`, `office-state.ts`, `renderer.ts`, `matrix-effect.ts` | Core: requestAnimationFrame loop, character FSM (IDLE/WALK/TYPE), BFS pathfinding, Z-sorted layered rendering, Matrix digital rain spawn/despawn |
+| **sprites/**   | `sprite-data.ts`, `sprite-cache.ts`                                                   | 6-palette character sprites with hue shifting and zoom-level canvas caching                                                                      |
+| **layout/**    | `tile-map.ts`, `furniture-catalog.ts`, `layout-serializer.ts`                         | BFS pathfinding grid, furniture metadata, JSON layout serialization                                                                              |
+| **rendering**  | `colorize.ts`, `floor-tiles.ts`, `wall-tiles.ts`                                      | HSL tile colorization, auto-tiling walls with bitmask system                                                                                     |
+| **foundation** | `types.ts`, `constants.ts`                                                            | Core types and tunable constants                                                                                                                 |
+
+**What we extract:** All 18 files above (framework-agnostic, no React/VS Code deps).
+
+**What we don't copy:** `OfficeCanvas.tsx`, `ToolOverlay.tsx`, `EditorToolbar.tsx`,
+`vscodeApi.ts` — all VS Code webview–coupled. We write our own React wrapper.
+
+**Key modifications:**
+
+- Rename `OfficeState` → `WorldState`
+- Remove all `vscode.postMessage()` calls
+- Remove editor-specific rendering (ghost preview, grid overlay)
+- Add character click callback to render loop
+- Tune constants for Matrix theme (darker palette, green tints)
+
+---
+
+### 16.3 Matrix Zone Layout
+
+The world is a ~32×20 tile grid with 4 themed zones connected by walkable corridors:
+
+| Zone              | Position               | Floor Color        | Department Hue | Agents                       |
+| ----------------- | ---------------------- | ------------------ | -------------- | ---------------------------- |
+| **The Construct** | Center (col 12, row 3) | Neutral white/grey | 0 (no shift)   | Operator1                    |
+| **Machine City**  | Right (col 22, row 2)  | Dark green tint    | 120 (green)    | Neo, Tank, Dozer, Mouse      |
+| **Zion**          | Left (col 1, row 2)    | Dark blue tint     | 220 (blue)     | Trinity, Oracle, Seraph, Zee |
+| **The Broadcast** | Bottom (col 8, row 13) | Dark purple tint   | 280 (purple)   | Morpheus, Niobe, Switch, Rex |
+
+**Character sprites:** Use existing 6-palette system from pixel-agents. Each department
+gets a distinct `hueShift` value applied via the `colorize.ts` HSL functions. Agent-to-palette
+assignment is deterministic (hash of agentId % palette count).
+
+**Furniture:** Reuse existing catalog entries (DESK, PC, BOOKSHELF, CHAIR) with
+zone-specific color shifts. No external image assets needed — all sprites are inline
+2D hex-color arrays.
+
+**Pathfinding:** Characters use BFS on the walkable tile grid. Corridors between zones
+allow characters to walk from one zone to another during delegation events.
+
+---
+
+### 16.4 Character State Machine
+
+Each agent character runs the same FSM from pixel-agents:
+
+```
+        ┌──────────────────────────────┐
+        │                              │
+        ▼                              │
+    ┌───────┐   agent event    ┌───────────┐
+    │ IDLE  │ ──────────────▶  │  TYPING   │
+    │(wander│  "chat:started"  │(2-frame   │
+    │ or sit│                  │ animation)│
+    │ down) │  ◀──────────────  │           │
+    └───┬───┘   "chat:final"   └───────────┘
+        │
+        │  delegation / zone change
+        ▼
+    ┌───────┐
+    │ WALK  │  BFS pathfinding to target tile
+    │(4-frame│  at WALK_SPEED_PX_PER_SEC
+    │ cycle) │
+    └───────┘
+```
+
+**Matrix effects (from pixel-agents `matrixEffect.ts`):**
+
+- **Spawn:** Green digital rain sweeps downward, revealing the character pixel-by-pixel.
+  Each column starts at a slightly different time for a cascading wave effect.
+- **Despawn:** Reverse — character dissolves into falling green code trails.
+- Triggered when agents become active/inactive via gateway presence events.
+
+---
+
+### 16.5 Real-Time Data Wiring
+
+**Gateway events consumed:**
+
+| Event                             | Character Effect                                     |
+| --------------------------------- | ---------------------------------------------------- |
+| `"presence"` (agent appearing)    | Matrix spawn effect → character materializes at seat |
+| `"presence"` (agent disappearing) | Matrix despawn effect → character dissolves          |
+| `"chat"` `state=started`          | Character switches to TYPING animation               |
+| `"chat"` `state=delta`            | Continue typing, update speech bubble text           |
+| `"chat"` `state=final`            | Character returns to IDLE                            |
+| `"chat"` `state=error`            | Show error speech bubble                             |
+| `"agent"` (lifecycle)             | Update speech bubble with tool/phase info            |
+| `"health"` (heartbeat)            | Pulse animation on agent character                   |
+
+**Polling fallback:** Since subagent spawn/complete events aren't broadcast on
+WebSocket, poll `sessions.list` every 5 seconds to detect new/ended sessions and
+map them to character spawn/despawn.
+
+**Config-driven zone mapping:** `config.get` → parse `agents.list[].subagents.allowAgents`
+to determine hierarchy → map each agent to its zone based on who they report to.
+
+---
+
+### 16.6 UI Components
+
+```
+ui-next/src/
+  pages/
+    visualize.tsx                    # Full-height page, dark background
+  store/
+    visualize-store.ts               # Zustand store (agent-character state)
+  hooks/
+    use-visualize.ts                 # Bridges gateway events to engine
+  components/
+    visualize/
+      matrix-canvas.tsx              # Canvas wrapper + game loop lifecycle
+      agent-detail-panel.tsx         # Slide-in panel (shadcn Sheet)
+      status-bar.tsx                 # Bottom bar: active count, tokens
+      controls.tsx                   # Zoom +/-, fullscreen toggle
+      zone-labels.tsx                # Floating zone name labels
+  lib/
+    pixel-engine/                    # Extracted + adapted engine (18 files)
+      types.ts
+      constants.ts
+      colorize.ts
+      floor-tiles.ts
+      wall-tiles.ts
+      asset-loader.ts              # Inline wall/floor sprites + initializeAssets()
+      engine/
+        game-loop.ts
+        characters.ts
+        world-state.ts               # Renamed from OfficeState → WorldState
+        renderer.ts
+        matrix-effect.ts
+        index.ts
+      sprites/
+        sprite-data.ts
+        sprite-cache.ts
+        index.ts
+      layout/
+        tile-map.ts
+        furniture-catalog.ts
+        layout-serializer.ts
+        zone-layouts.ts              # NEW: Matrix zone definitions
+        index.ts
+```
+
+---
+
+### 16.7 Integration Points (Existing Files)
+
+| File                                      | Change                                                                           |
+| ----------------------------------------- | -------------------------------------------------------------------------------- |
+| `ui-next/src/app.tsx`                     | Add lazy import + route for `/visualize`                                         |
+| `ui-next/src/components/layout/shell.tsx` | Add to `PAGE_TITLES` and `FULL_HEIGHT_PAGES`                                     |
+| `ui-next/src/components/app-sidebar.tsx`  | Add "Visualize" nav item under Agent section (Eye icon)                          |
+| `ui-next/src/hooks/use-gateway.ts`        | Extend `handleEvent()` (line 167) to forward `"agent"` events to visualize store |
+| `ui-next/src/pages/agents.tsx`            | Add "Visualize" button in header that navigates to `/visualize`                  |
+
+---
+
+### 16.8 Interaction Features
+
+- **Click character** → slide-in panel shows agent name, identity, role, model,
+  status, token usage, last active time. Link to `/agents` for full config.
+- **Hover character** → tooltip with agent name and current state.
+- **Zoom** → mouse wheel / pinch / +/- buttons. Canvas scales at integer zoom levels
+  for pixel-perfect rendering.
+- **Speech bubbles** → show truncated current task text above active characters.
+- **Status bar** → active agent count, total tokens, gateway connection indicator.
+
+---
+
+### 16.9 Implementation Sub-Phases
+
+| Sub-Phase | Description                                                                                   | Dependencies | Status |
+| --------- | --------------------------------------------------------------------------------------------- | ------------ | ------ |
+| **8a**    | Extract pixel-engine (18 files), strip VS Code deps, verify compilation                       | None         | Done   |
+| **8b**    | Create `zone-layouts.ts` with Matrix world layout (32×20 grid, 4 zones)                       | 8a           | Done   |
+| **8c**    | Create `visualize-store.ts` + `use-visualize.ts` (Zustand + event wiring)                     | 8a           | Done   |
+| **8d**    | Create `matrix-canvas.tsx` React wrapper + all visualize components                           | 8a, 8b       | Done   |
+| **8e**    | Create `visualize.tsx` page, add route + nav + shell integration                              | 8c, 8d       | Done   |
+| **8f**    | Polish: chunk splitting, keyboard shortcuts, resize handling, loading states                  | 8e           | Done   |
+| **8g**    | Replace procedural sprites with original hand-painted pixel art                               | 8a           | Done   |
+| **8h**    | Create inline wall tile sprites (16 auto-tiling variants) + floor tile patterns (7 grayscale) | 8a           | Done   |
+| **8i**    | Zone-aware seat assignment (agents sit in their assigned zone, not random seats)              | 8b           | Done   |
+
+### 16.9a Implementation Notes
+
+**Sprite data quality:** The initial extraction generated procedural placeholder sprites
+via for-loops (rectangular blocks of color). These were replaced with the original
+pixel-agents hand-painted 2D hex-color arrays — 21 character templates (16×24 each),
+8 furniture sprites (plant, desk, bookshelf, cooler, whiteboard, chair, PC, lamp),
+and 2 speech bubble sprites. This is the single biggest quality improvement.
+
+**Asset loading (wall/floor tiles):** The original pixel-agents loads `walls.png` and
+`floors.png` via VS Code extension message passing. Since we're a web app, we created
+`asset-loader.ts` with inline sprite data:
+
+- 16 wall tile sprites generated per 4-bit bitmask (N/E/S/W neighbor combinations)
+  with dark blue-gray brick texture, edge highlights, and shadow detail.
+- 7 floor tile patterns (plain, checkered, diamond, horizontal lines, cross-hatch,
+  brick, diagonal stripes) in grayscale, colorized per-zone via the existing
+  `getColorizedFloorSprite()` pipeline.
+- `initializeAssets()` is called once before `WorldState` initialization.
+
+**Zone-aware seating:** `WorldState.findFreeSeat(zone?)` checks the zone's bounding
+box (from `ZONE_DEFINITIONS`) before falling back to any free seat. This ensures
+agents in "Zion" sit at Zion desks, not random seats elsewhere.
+
+**Build output:** The pixel-engine is a separate Vite chunk (~57 KB / 13 KB gzip),
+lazy-loaded only when navigating to `/visualize`. The visualize page chunk is ~14 KB.
+
+**Multi-agent build:** The implementation was executed by a 4-agent team:
+
+- `engine-extractor`: Tasks 1–6, 10 (pixel-agents extraction + zone layout + canvas)
+- `ui-builder`: Tasks 11–12 (AgentDetailPanel, StatusBar, Controls, ZoneLabels)
+- `state-hooks`: Tasks 7–9 (Zustand store, hook, gateway event wiring)
+- `integrator`: Tasks 13–18 (page assembly, routing, Vite config, accessibility, build verification)
+
+---
+
+### 16.10 Asset Sources
+
+| Asset Type                           | Source                                                                                                                                                         | License         |
+| ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------- |
+| Game engine                          | [pixel-agents](https://github.com/pablodelucca/pixel-agents)                                                                                                   | MIT             |
+| Character sprites                    | pixel-agents hand-painted inline data (6 palettes, 21 templates, hue-shiftable)                                                                                | MIT             |
+| Furniture sprites                    | pixel-agents hand-painted inline data (desk, plant, bookshelf, cooler, whiteboard, chair, PC, lamp)                                                            | MIT             |
+| Floor tile patterns                  | Custom inline data (7 grayscale patterns, colorized per-zone via HSL pipeline)                                                                                 | Original        |
+| Wall tile sprites                    | Custom inline data (16 auto-tiling variants, dark brick with edge/shadow detail)                                                                               | Original        |
+| Matrix rain effect                   | pixel-agents `matrixEffect.ts` (column-staggered green rain, spawn/despawn)                                                                                    | MIT             |
+| Future character upgrade             | [MetroCity Free Top Down Character Pack](https://jik-a-4.itch.io/metrocity-free-topdown-character-pack) (3 base models, accessories)                           | CC0             |
+| Cyberpunk ambience (optional future) | [OpenGameArt CC0](https://opengameart.org/content/cc0-resources), [itch.io free cyberpunk tiles](https://itch.io/game-assets/free/tag-cyberpunk/tag-pixel-art) | CC0 / per-asset |
+
+---
+
+_Last updated: 2026-03-02_
 _Inspired by: Clear Mud / Marcelo's 25-agent OpenClaw setup_
+_Visualization inspired by: [pixel-agents](https://github.com/pablodelucca/pixel-agents) by Pablo De Lucca_
 _Theme: The Matrix (1999)_

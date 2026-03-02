@@ -15,6 +15,7 @@ import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { normalizeAccountId, normalizeMainKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
+import { getTeamRun } from "../teams/team-store.js";
 import {
   type DeliveryContext,
   deliveryContextFromSession,
@@ -930,6 +931,8 @@ export function buildSubagentSystemPrompt(params: {
   childDepth?: number;
   /** Config value: max allowed spawn depth. */
   maxSpawnDepth?: number;
+  /** When set, injects team context (members, role, RPCs) into the prompt. */
+  teamRunId?: string;
 }) {
   const taskText =
     typeof params.task === "string" && params.task.trim()
@@ -1021,6 +1024,45 @@ export function buildSubagentSystemPrompt(params: {
     ].filter((line): line is string => line !== undefined),
     "",
   );
+
+  // Inject team context when spawned as part of a team run.
+  if (params.teamRunId) {
+    const teamRun = getTeamRun(params.teamRunId);
+    if (teamRun) {
+      const selfMember = teamRun.members.find((m) => m.sessionKey === params.childSessionKey);
+      const otherMembers = teamRun.members.filter((m) => m.sessionKey !== params.childSessionKey);
+
+      lines.push(
+        "## Team Context",
+        `You are part of team **${teamRun.name}** (ID: \`${teamRun.id}\`).`,
+        "",
+      );
+
+      if (selfMember) {
+        lines.push(
+          `**Your role:** ${selfMember.role || selfMember.agentId} (agent: ${selfMember.agentId})`,
+          "",
+        );
+      }
+
+      if (otherMembers.length > 0) {
+        lines.push("**Other team members:**");
+        for (const m of otherMembers) {
+          const roleLabel = m.role ? ` (${m.role})` : "";
+          lines.push(`- ${m.agentId}${roleLabel} — state: ${m.state}`);
+        }
+        lines.push("");
+      }
+
+      lines.push(
+        `**Team leader:** ${teamRun.leader}`,
+        "",
+        "Use `teamTasks.list` and `teamMessages.list` RPCs to check assigned tasks and messages from your team.",
+        "",
+      );
+    }
+  }
+
   return lines.join("\n");
 }
 

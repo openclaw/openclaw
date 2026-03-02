@@ -164,6 +164,8 @@ export type SessionEntry = {
   skillsSnapshot?: SessionSkillSnapshot;
   systemPromptReport?: SessionSystemPromptReport;
   acp?: SessionAcpMeta;
+  /** Team run ID this session belongs to (persisted for gateway restart resilience). */
+  teamRunId?: string;
 };
 
 function normalizeRuntimeField(value: string | undefined): string | undefined {

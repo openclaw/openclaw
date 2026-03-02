@@ -47,6 +47,8 @@ export type GatewaySessionRow = {
 export type GatewayAgentRow = {
   id: string;
   name?: string;
+  role?: string;
+  department?: string;
   identity?: {
     name?: string;
     theme?: string;
