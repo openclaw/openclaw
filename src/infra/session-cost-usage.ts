@@ -214,6 +214,90 @@ const applyCostTotal = (totals: CostUsageTotals, costTotal: number | undefined) 
   totals.totalCost += costTotal;
 };
 
+/**
+ * Canonical cost accumulation for session cost/usage queries.
+ * USE THIS — do not write inline cost application blocks.
+ * @see CLAUDE.md for project-level guidance.
+ */
+function applyEntryCost(
+  totals: CostUsageTotals,
+  entry: { usage?: NormalizedUsage; costBreakdown?: CostBreakdown; costTotal?: number },
+) {
+  if (!entry.usage) {
+    return;
+  }
+  applyUsageTotals(totals, entry.usage);
+  if (entry.costBreakdown?.total !== undefined) {
+    applyCostBreakdown(totals, entry.costBreakdown);
+  } else {
+    applyCostTotal(totals, entry.costTotal);
+  }
+}
+
+/**
+ * Canonical session file resolution for session cost/usage queries.
+ * USE THIS — do not write inline session file resolution preambles.
+ * @see CLAUDE.md for project-level guidance.
+ */
+function resolveSessionFileForQuery(params: {
+  sessionFile?: string;
+  sessionId?: string;
+  sessionEntry?: SessionEntry;
+  agentId?: string;
+}): string | null {
+  const sessionFile =
+    params.sessionFile ??
+    (params.sessionId
+      ? resolveSessionFilePath(params.sessionId, params.sessionEntry, {
+          agentId: params.agentId,
+        })
+      : undefined);
+  if (!sessionFile || !fs.existsSync(sessionFile)) {
+    return null;
+  }
+  return sessionFile;
+}
+
+/**
+ * Canonical content extraction for session transcript messages.
+ * USE THIS — do not write inline content extraction logic.
+ * @see CLAUDE.md for project-level guidance.
+ */
+function extractTextContent(message: Record<string, unknown>): string | undefined {
+  const content = message.content;
+  if (typeof content === "string") {
+    return content;
+  }
+  if (!Array.isArray(content)) {
+    return undefined;
+  }
+  return (
+    content
+      .map((block: unknown) => {
+        if (typeof block === "string") {
+          return block;
+        }
+        // Guard against null and non-object blocks (typeof null === "object")
+        if (!block || typeof block !== "object") {
+          return "";
+        }
+        const b = block as Record<string, unknown>;
+        if (b.type === "text" && typeof b.text === "string") {
+          return b.text;
+        }
+        if (b.type === "tool_use") {
+          return `[Tool: ${typeof b.name === "string" ? b.name : "unknown"}]`;
+        }
+        if (b.type === "tool_result") {
+          return "[Tool Result]";
+        }
+        return "";
+      })
+      .filter(Boolean)
+      .join("\n") || undefined
+  );
+}
+
 async function* readJsonlRecords(filePath: string): AsyncGenerator<Record<string, unknown>> {
   const fileStream = fs.createReadStream(filePath, { encoding: "utf-8" });
   const rl = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
@@ -287,6 +371,169 @@ async function scanUsageFile(params: {
   });
 }
 
+// --- Accumulator helpers for loadSessionCostSummary ---
+
+/**
+ * Accumulates user/assistant/tool message counts and error detection from a transcript entry.
+ */
+function accumulateMessageCounts(
+  entry: ParsedTranscriptEntry,
+  messageCounts: SessionMessageCounts,
+  errorStopReasons: Set<string>,
+) {
+  if (entry.role === "user") {
+    messageCounts.user += 1;
+    messageCounts.total += 1;
+  }
+  if (entry.role === "assistant") {
+    messageCounts.assistant += 1;
+    messageCounts.total += 1;
+  }
+
+  if (entry.toolNames.length > 0) {
+    messageCounts.toolCalls += entry.toolNames.length;
+  }
+
+  if (entry.toolResultCounts.total > 0) {
+    messageCounts.toolResults += entry.toolResultCounts.total;
+    messageCounts.errors += entry.toolResultCounts.errors;
+  }
+
+  if (entry.stopReason && errorStopReasons.has(entry.stopReason)) {
+    messageCounts.errors += 1;
+  }
+}
+
+/**
+ * Accumulates latency measurements from an assistant transcript entry.
+ * Requires lastUserTimestamp to compute request-to-response latency.
+ */
+function accumulateLatency(
+  entry: ParsedTranscriptEntry,
+  ctx: {
+    latencyValues: number[];
+    dailyLatencyMap: Map<string, number[]>;
+    MAX_LATENCY_MS: number;
+    lastUserTimestamp: number | undefined;
+  },
+) {
+  if (entry.role !== "assistant") {
+    return;
+  }
+  const ts = entry.timestamp?.getTime();
+  if (ts === undefined) {
+    return;
+  }
+
+  const latencyMs =
+    entry.durationMs ??
+    (ctx.lastUserTimestamp !== undefined ? Math.max(0, ts - ctx.lastUserTimestamp) : undefined);
+  if (latencyMs !== undefined && Number.isFinite(latencyMs) && latencyMs <= ctx.MAX_LATENCY_MS) {
+    ctx.latencyValues.push(latencyMs);
+    const dayKey = formatDayKey(entry.timestamp ?? new Date(ts));
+    const dailyLatencies = ctx.dailyLatencyMap.get(dayKey) ?? [];
+    dailyLatencies.push(latencyMs);
+    ctx.dailyLatencyMap.set(dayKey, dailyLatencies);
+  }
+}
+
+/**
+ * Accumulates per-day token and cost buckets from a usage-bearing transcript entry.
+ */
+function accumulateDailyUsage(
+  entry: ParsedTranscriptEntry,
+  dailyMap: Map<string, { tokens: number; cost: number }>,
+) {
+  if (!entry.usage || !entry.timestamp) {
+    return;
+  }
+
+  const dayKey = formatDayKey(entry.timestamp);
+  const entryTokens =
+    (entry.usage.input ?? 0) +
+    (entry.usage.output ?? 0) +
+    (entry.usage.cacheRead ?? 0) +
+    (entry.usage.cacheWrite ?? 0);
+  const entryCost =
+    entry.costBreakdown?.total ??
+    (entry.costBreakdown
+      ? (entry.costBreakdown.input ?? 0) +
+        (entry.costBreakdown.output ?? 0) +
+        (entry.costBreakdown.cacheRead ?? 0) +
+        (entry.costBreakdown.cacheWrite ?? 0)
+      : (entry.costTotal ?? 0));
+
+  const existing = dailyMap.get(dayKey) ?? { tokens: 0, cost: 0 };
+  dailyMap.set(dayKey, {
+    tokens: existing.tokens + entryTokens,
+    cost: existing.cost + entryCost,
+  });
+}
+
+/**
+ * Accumulates per-model (and per-day-per-model) usage totals from a usage-bearing transcript entry.
+ */
+function accumulateModelUsage(
+  entry: ParsedTranscriptEntry,
+  modelUsageMap: Map<string, SessionModelUsage>,
+  dailyModelUsageMap: Map<string, SessionDailyModelUsage>,
+) {
+  if (!entry.usage) {
+    return;
+  }
+  if (!entry.provider && !entry.model) {
+    return;
+  }
+
+  const entryTokens =
+    (entry.usage.input ?? 0) +
+    (entry.usage.output ?? 0) +
+    (entry.usage.cacheRead ?? 0) +
+    (entry.usage.cacheWrite ?? 0);
+  const entryCost =
+    entry.costBreakdown?.total ??
+    (entry.costBreakdown
+      ? (entry.costBreakdown.input ?? 0) +
+        (entry.costBreakdown.output ?? 0) +
+        (entry.costBreakdown.cacheRead ?? 0) +
+        (entry.costBreakdown.cacheWrite ?? 0)
+      : (entry.costTotal ?? 0));
+
+  // Per-model aggregate
+  const key = `${entry.provider ?? "unknown"}::${entry.model ?? "unknown"}`;
+  const existing =
+    modelUsageMap.get(key) ??
+    ({
+      provider: entry.provider,
+      model: entry.model,
+      count: 0,
+      totals: emptyTotals(),
+    } as SessionModelUsage);
+  existing.count += 1;
+  applyEntryCost(existing.totals, entry);
+  modelUsageMap.set(key, existing);
+
+  // Per-day-per-model aggregate
+  if (entry.timestamp) {
+    const dayKey = formatDayKey(entry.timestamp);
+    const modelKey = `${dayKey}::${entry.provider ?? "unknown"}::${entry.model ?? "unknown"}`;
+    const dailyModel =
+      dailyModelUsageMap.get(modelKey) ??
+      ({
+        date: dayKey,
+        provider: entry.provider,
+        model: entry.model,
+        tokens: 0,
+        cost: 0,
+        count: 0,
+      } as SessionDailyModelUsage);
+    dailyModel.tokens += entryTokens;
+    dailyModel.cost += entryCost;
+    dailyModel.count += 1;
+    dailyModelUsageMap.set(modelKey, dailyModel);
+  }
+}
+
 export async function loadCostUsageSummary(params?: {
   startMs?: number;
   endMs?: number;
@@ -345,20 +592,10 @@ export async function loadCostUsageSummary(params?: {
         }
         const dayKey = formatDayKey(entry.timestamp ?? now);
         const bucket = dailyMap.get(dayKey) ?? emptyTotals();
-        applyUsageTotals(bucket, entry.usage);
-        if (entry.costBreakdown?.total !== undefined) {
-          applyCostBreakdown(bucket, entry.costBreakdown);
-        } else {
-          applyCostTotal(bucket, entry.costTotal);
-        }
+        applyEntryCost(bucket, entry);
         dailyMap.set(dayKey, bucket);
 
-        applyUsageTotals(totals, entry.usage);
-        if (entry.costBreakdown?.total !== undefined) {
-          applyCostBreakdown(totals, entry.costBreakdown);
-        } else {
-          applyCostTotal(totals, entry.costTotal);
-        }
+        applyEntryCost(totals, entry);
       },
     });
   }
@@ -419,23 +656,9 @@ export async function discoverAllSessions(params?: {
         try {
           const message = parsed.message as Record<string, unknown> | undefined;
           if (message?.role === "user") {
-            const content = message.content;
-            if (typeof content === "string") {
-              firstUserMessage = content.slice(0, 100);
-            } else if (Array.isArray(content)) {
-              for (const block of content) {
-                if (
-                  typeof block === "object" &&
-                  block &&
-                  (block as Record<string, unknown>).type === "text"
-                ) {
-                  const text = (block as Record<string, unknown>).text;
-                  if (typeof text === "string") {
-                    firstUserMessage = text.slice(0, 100);
-                  }
-                  break;
-                }
-              }
+            const text = extractTextContent(message);
+            if (text) {
+              firstUserMessage = text.slice(0, 100);
             }
             break; // Found first user message
           }
@@ -468,14 +691,8 @@ export async function loadSessionCostSummary(params: {
   startMs?: number;
   endMs?: number;
 }): Promise<SessionCostSummary | null> {
-  const sessionFile =
-    params.sessionFile ??
-    (params.sessionId
-      ? resolveSessionFilePath(params.sessionId, params.sessionEntry, {
-          agentId: params.agentId,
-        })
-      : undefined);
-  if (!sessionFile || !fs.existsSync(sessionFile)) {
+  const sessionFile = resolveSessionFileForQuery(params);
+  if (!sessionFile) {
     return null;
   }
 
@@ -525,51 +742,27 @@ export async function loadSessionCostSummary(params: {
         }
       }
 
-      if (entry.role === "user") {
-        messageCounts.user += 1;
-        messageCounts.total += 1;
-        if (entry.timestamp) {
-          lastUserTimestamp = entry.timestamp.getTime();
-        }
-      }
-      if (entry.role === "assistant") {
-        messageCounts.assistant += 1;
-        messageCounts.total += 1;
-        const ts = entry.timestamp?.getTime();
-        if (ts !== undefined) {
-          const latencyMs =
-            entry.durationMs ??
-            (lastUserTimestamp !== undefined ? Math.max(0, ts - lastUserTimestamp) : undefined);
-          if (
-            latencyMs !== undefined &&
-            Number.isFinite(latencyMs) &&
-            latencyMs <= MAX_LATENCY_MS
-          ) {
-            latencyValues.push(latencyMs);
-            const dayKey = formatDayKey(entry.timestamp ?? new Date(ts));
-            const dailyLatencies = dailyLatencyMap.get(dayKey) ?? [];
-            dailyLatencies.push(latencyMs);
-            dailyLatencyMap.set(dayKey, dailyLatencies);
-          }
-        }
+      // Track lastUserTimestamp before accumulating latency (used by accumulateLatency)
+      if (entry.role === "user" && entry.timestamp) {
+        lastUserTimestamp = entry.timestamp.getTime();
       }
 
+      accumulateMessageCounts(entry, messageCounts, errorStopReasons);
+      accumulateLatency(entry, {
+        latencyValues,
+        dailyLatencyMap,
+        MAX_LATENCY_MS,
+        lastUserTimestamp,
+      });
+
+      // Track per-tool call counts
       if (entry.toolNames.length > 0) {
-        messageCounts.toolCalls += entry.toolNames.length;
         for (const name of entry.toolNames) {
           toolUsageMap.set(name, (toolUsageMap.get(name) ?? 0) + 1);
         }
       }
 
-      if (entry.toolResultCounts.total > 0) {
-        messageCounts.toolResults += entry.toolResultCounts.total;
-        messageCounts.errors += entry.toolResultCounts.errors;
-      }
-
-      if (entry.stopReason && errorStopReasons.has(entry.stopReason)) {
-        messageCounts.errors += 1;
-      }
-
+      // Track daily message counts
       if (entry.timestamp) {
         const dayKey = formatDayKey(entry.timestamp);
         activityDatesSet.add(dayKey);
@@ -601,73 +794,9 @@ export async function loadSessionCostSummary(params: {
         return;
       }
 
-      applyUsageTotals(totals, entry.usage);
-      if (entry.costBreakdown?.total !== undefined) {
-        applyCostBreakdown(totals, entry.costBreakdown);
-      } else {
-        applyCostTotal(totals, entry.costTotal);
-      }
-
-      if (entry.timestamp) {
-        const dayKey = formatDayKey(entry.timestamp);
-        const entryTokens =
-          (entry.usage.input ?? 0) +
-          (entry.usage.output ?? 0) +
-          (entry.usage.cacheRead ?? 0) +
-          (entry.usage.cacheWrite ?? 0);
-        const entryCost =
-          entry.costBreakdown?.total ??
-          (entry.costBreakdown
-            ? (entry.costBreakdown.input ?? 0) +
-              (entry.costBreakdown.output ?? 0) +
-              (entry.costBreakdown.cacheRead ?? 0) +
-              (entry.costBreakdown.cacheWrite ?? 0)
-            : (entry.costTotal ?? 0));
-
-        const existing = dailyMap.get(dayKey) ?? { tokens: 0, cost: 0 };
-        dailyMap.set(dayKey, {
-          tokens: existing.tokens + entryTokens,
-          cost: existing.cost + entryCost,
-        });
-
-        if (entry.provider || entry.model) {
-          const modelKey = `${dayKey}::${entry.provider ?? "unknown"}::${entry.model ?? "unknown"}`;
-          const dailyModel =
-            dailyModelUsageMap.get(modelKey) ??
-            ({
-              date: dayKey,
-              provider: entry.provider,
-              model: entry.model,
-              tokens: 0,
-              cost: 0,
-              count: 0,
-            } as SessionDailyModelUsage);
-          dailyModel.tokens += entryTokens;
-          dailyModel.cost += entryCost;
-          dailyModel.count += 1;
-          dailyModelUsageMap.set(modelKey, dailyModel);
-        }
-      }
-
-      if (entry.provider || entry.model) {
-        const key = `${entry.provider ?? "unknown"}::${entry.model ?? "unknown"}`;
-        const existing =
-          modelUsageMap.get(key) ??
-          ({
-            provider: entry.provider,
-            model: entry.model,
-            count: 0,
-            totals: emptyTotals(),
-          } as SessionModelUsage);
-        existing.count += 1;
-        applyUsageTotals(existing.totals, entry.usage);
-        if (entry.costBreakdown?.total !== undefined) {
-          applyCostBreakdown(existing.totals, entry.costBreakdown);
-        } else {
-          applyCostTotal(existing.totals, entry.costTotal);
-        }
-        modelUsageMap.set(key, existing);
-      }
+      applyEntryCost(totals, entry);
+      accumulateDailyUsage(entry, dailyMap);
+      accumulateModelUsage(entry, modelUsageMap, dailyModelUsageMap);
     },
   });
 
@@ -745,14 +874,8 @@ export async function loadSessionUsageTimeSeries(params: {
   agentId?: string;
   maxPoints?: number;
 }): Promise<SessionUsageTimeSeries | null> {
-  const sessionFile =
-    params.sessionFile ??
-    (params.sessionId
-      ? resolveSessionFilePath(params.sessionId, params.sessionEntry, {
-          agentId: params.agentId,
-        })
-      : undefined);
-  if (!sessionFile || !fs.existsSync(sessionFile)) {
+  const sessionFile = resolveSessionFileForQuery(params);
+  if (!sessionFile) {
     return null;
   }
 
@@ -854,14 +977,8 @@ export async function loadSessionLogs(params: {
   agentId?: string;
   limit?: number;
 }): Promise<SessionLogEntry[] | null> {
-  const sessionFile =
-    params.sessionFile ??
-    (params.sessionId
-      ? resolveSessionFilePath(params.sessionId, params.sessionEntry, {
-          agentId: params.agentId,
-        })
-      : undefined);
-  if (!sessionFile || !fs.existsSync(sessionFile)) {
+  const sessionFile = resolveSessionFileForQuery(params);
+  if (!sessionFile) {
     return null;
   }
 
@@ -889,35 +1006,10 @@ export async function loadSessionLogs(params: {
         contentParts.push("[Tool Result]");
       }
 
-      // Extract content
-      const rawContent = message.content;
-      if (typeof rawContent === "string") {
-        contentParts.push(rawContent);
-      } else if (Array.isArray(rawContent)) {
-        // Handle content blocks (text, tool_use, etc.)
-        const contentText = rawContent
-          .map((block: unknown) => {
-            if (typeof block === "string") {
-              return block;
-            }
-            const b = block as Record<string, unknown>;
-            if (b.type === "text" && typeof b.text === "string") {
-              return b.text;
-            }
-            if (b.type === "tool_use") {
-              const name = typeof b.name === "string" ? b.name : "unknown";
-              return `[Tool: ${name}]`;
-            }
-            if (b.type === "tool_result") {
-              return `[Tool Result]`;
-            }
-            return "";
-          })
-          .filter(Boolean)
-          .join("\n");
-        if (contentText) {
-          contentParts.push(contentText);
-        }
+      // Extract content using shared helper
+      const extracted = extractTextContent(message);
+      if (extracted) {
+        contentParts.push(extracted);
       }
 
       // OpenAI-style tool calls stored outside the content array.
