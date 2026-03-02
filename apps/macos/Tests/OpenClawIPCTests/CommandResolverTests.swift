@@ -9,9 +9,22 @@ import Testing
         UserDefaults(suiteName: "CommandResolverTests.\(UUID().uuidString)")!
     }
 
-    @Test func prefersOpenClawBinary() throws {
+    private func makeLocalDefaults() -> UserDefaults {
         let defaults = self.makeDefaults()
         defaults.set(AppState.ConnectionMode.local.rawValue, forKey: connectionModeKey)
+        return defaults
+    }
+
+    private func makeProjectRootWithPnpm() throws -> (tmp: URL, pnpmPath: URL) {
+        let tmp = try makeTempDirForTests()
+        CommandResolver.setProjectRoot(tmp.path)
+        let pnpmPath = tmp.appendingPathComponent("node_modules/.bin/pnpm")
+        try makeExecutableForTests(at: pnpmPath)
+        return (tmp, pnpmPath)
+    }
+
+    @Test func prefersOpenClawBinary() throws {
+        let defaults = self.makeLocalDefaults()
 
         let tmp = try makeTempDirForTests()
         CommandResolver.setProjectRoot(tmp.path)
@@ -24,8 +37,7 @@ import Testing
     }
 
     @Test func fallsBackToNodeAndScript() throws {
-        let defaults = self.makeDefaults()
-        defaults.set(AppState.ConnectionMode.local.rawValue, forKey: connectionModeKey)
+        let defaults = self.makeLocalDefaults()
 
         let tmp = try makeTempDirForTests()
         CommandResolver.setProjectRoot(tmp.path)
@@ -52,8 +64,7 @@ import Testing
     }
 
     @Test func prefersOpenClawBinaryOverPnpm() throws {
-        let defaults = self.makeDefaults()
-        defaults.set(AppState.ConnectionMode.local.rawValue, forKey: connectionModeKey)
+        let defaults = self.makeLocalDefaults()
 
         let tmp = try makeTempDirForTests()
         CommandResolver.setProjectRoot(tmp.path)
@@ -74,8 +85,7 @@ import Testing
     }
 
     @Test func usesOpenClawBinaryWithoutNodeRuntime() throws {
-        let defaults = self.makeDefaults()
-        defaults.set(AppState.ConnectionMode.local.rawValue, forKey: connectionModeKey)
+        let defaults = self.makeLocalDefaults()
 
         let tmp = try makeTempDirForTests()
         CommandResolver.setProjectRoot(tmp.path)
@@ -94,14 +104,8 @@ import Testing
     }
 
     @Test func fallsBackToPnpm() throws {
-        let defaults = self.makeDefaults()
-        defaults.set(AppState.ConnectionMode.local.rawValue, forKey: connectionModeKey)
-
-        let tmp = try makeTempDirForTests()
-        CommandResolver.setProjectRoot(tmp.path)
-
-        let pnpmPath = tmp.appendingPathComponent("node_modules/.bin/pnpm")
-        try makeExecutableForTests(at: pnpmPath)
+        let defaults = self.makeLocalDefaults()
+        let (tmp, pnpmPath) = try self.makeProjectRootWithPnpm()
 
         let cmd = CommandResolver.openclawCommand(
             subcommand: "rpc",
@@ -113,14 +117,8 @@ import Testing
     }
 
     @Test func pnpmKeepsExtraArgsAfterSubcommand() throws {
-        let defaults = self.makeDefaults()
-        defaults.set(AppState.ConnectionMode.local.rawValue, forKey: connectionModeKey)
-
-        let tmp = try makeTempDirForTests()
-        CommandResolver.setProjectRoot(tmp.path)
-
-        let pnpmPath = tmp.appendingPathComponent("node_modules/.bin/pnpm")
-        try makeExecutableForTests(at: pnpmPath)
+        let defaults = self.makeLocalDefaults()
+        let (tmp, pnpmPath) = try self.makeProjectRootWithPnpm()
 
         let cmd = CommandResolver.openclawCommand(
             subcommand: "health",

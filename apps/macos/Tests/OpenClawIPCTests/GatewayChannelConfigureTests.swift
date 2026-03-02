@@ -5,6 +5,18 @@ import Testing
 @testable import OpenClaw
 
 @Suite struct GatewayConnectionTests {
+    private func makeConnection(
+        session: GatewayTestWebSocketSession,
+        token: String? = nil) throws -> (GatewayConnection, ConfigSource)
+    {
+        let url = try #require(URL(string: "ws://example.invalid"))
+        let cfg = ConfigSource(token: token)
+        let conn = GatewayConnection(
+            configProvider: { (url: url, token: cfg.snapshotToken(), password: nil) },
+            sessionBox: WebSocketSessionBox(session: session))
+        return (conn, cfg)
+    }
+
     private func makeSession(helloDelayMs: Int = 0) -> GatewayTestWebSocketSession {
         GatewayTestWebSocketSession(
             taskFactory: {
@@ -46,11 +58,7 @@ import Testing
 
     @Test func requestReusesSingleWebSocketForSameConfig() async throws {
         let session = self.makeSession()
-        let url = try #require(URL(string: "ws://example.invalid"))
-        let cfg = ConfigSource(token: nil)
-        let conn = GatewayConnection(
-            configProvider: { (url: url, token: cfg.snapshotToken(), password: nil) },
-            sessionBox: WebSocketSessionBox(session: session))
+        let (conn, _) = try self.makeConnection(session: session)
 
         _ = try await conn.request(method: "status", params: nil)
         #expect(session.snapshotMakeCount() == 1)
@@ -62,11 +70,7 @@ import Testing
 
     @Test func requestReconfiguresAndCancelsOnTokenChange() async throws {
         let session = self.makeSession()
-        let url = try #require(URL(string: "ws://example.invalid"))
-        let cfg = ConfigSource(token: "a")
-        let conn = GatewayConnection(
-            configProvider: { (url: url, token: cfg.snapshotToken(), password: nil) },
-            sessionBox: WebSocketSessionBox(session: session))
+        let (conn, cfg) = try self.makeConnection(session: session, token: "a")
 
         _ = try await conn.request(method: "status", params: nil)
         #expect(session.snapshotMakeCount() == 1)
@@ -79,11 +83,7 @@ import Testing
 
     @Test func concurrentRequestsStillUseSingleWebSocket() async throws {
         let session = self.makeSession(helloDelayMs: 150)
-        let url = try #require(URL(string: "ws://example.invalid"))
-        let cfg = ConfigSource(token: nil)
-        let conn = GatewayConnection(
-            configProvider: { (url: url, token: cfg.snapshotToken(), password: nil) },
-            sessionBox: WebSocketSessionBox(session: session))
+        let (conn, _) = try self.makeConnection(session: session)
 
         async let r1: Data = conn.request(method: "status", params: nil)
         async let r2: Data = conn.request(method: "status", params: nil)
@@ -94,11 +94,7 @@ import Testing
 
     @Test func subscribeReplaysLatestSnapshot() async throws {
         let session = self.makeSession()
-        let url = try #require(URL(string: "ws://example.invalid"))
-        let cfg = ConfigSource(token: nil)
-        let conn = GatewayConnection(
-            configProvider: { (url: url, token: cfg.snapshotToken(), password: nil) },
-            sessionBox: WebSocketSessionBox(session: session))
+        let (conn, _) = try self.makeConnection(session: session)
 
         _ = try await conn.request(method: "status", params: nil)
 
@@ -115,11 +111,7 @@ import Testing
 
     @Test func subscribeEmitsSeqGapBeforeEvent() async throws {
         let session = self.makeSession()
-        let url = try #require(URL(string: "ws://example.invalid"))
-        let cfg = ConfigSource(token: nil)
-        let conn = GatewayConnection(
-            configProvider: { (url: url, token: cfg.snapshotToken(), password: nil) },
-            sessionBox: WebSocketSessionBox(session: session))
+        let (conn, _) = try self.makeConnection(session: session)
 
         let stream = await conn.subscribe(bufferingNewest: 10)
         var iterator = stream.makeAsyncIterator()
