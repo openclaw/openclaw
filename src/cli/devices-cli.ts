@@ -1,6 +1,6 @@
 import type { Command } from "commander";
 import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
-import { isLoopbackHost } from "../gateway/net.js";
+import { isLoopbackHost, isPrivateOrLoopbackAddress } from "../gateway/net.js";
 import {
   approveDevicePairing,
   listDevicePairing,
@@ -108,11 +108,18 @@ function shouldUseLocalPairingFallback(opts: DevicesRpcOpts, error: unknown): bo
     return false;
   }
   const connection = buildGatewayConnectionDetails();
-  if (connection.urlSource !== "local loopback") {
+  // Allow fallback for local connections (loopback, LAN, or private network)
+  // This enables CLI tools on the same machine to use local pairing files
+  // even when connecting via LAN IP (e.g., 172.16.x.x, 192.168.x.x)
+  const isLocalConnection =
+    connection.urlSource === "local loopback" || connection.urlSource === "local lan";
+  if (!isLocalConnection) {
     return false;
   }
   try {
-    return isLoopbackHost(new URL(connection.url).hostname);
+    const hostname = new URL(connection.url).hostname;
+    // Use broader check for private networks (RFC1918, link-local, etc.)
+    return isLoopbackHost(hostname) || isPrivateOrLoopbackAddress(hostname);
   } catch {
     return false;
   }
