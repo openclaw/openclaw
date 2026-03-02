@@ -133,36 +133,37 @@ async function runAnnounceFlowResult(bestEffort: boolean) {
   return outcome;
 }
 
-async function expectExplicitTelegramTargetAnnounce(params: {
+async function assertExplicitTelegramTargetAnnounce(params: {
+  home: string;
+  storePath: string;
+  deps: CliDeps;
   payloads: Array<Record<string, unknown>>;
   expectedText: string;
 }): Promise<void> {
-  await withTelegramAnnounceFixture(async ({ home, storePath, deps }) => {
-    mockAgentPayloads(params.payloads);
-    const res = await runExplicitTelegramAnnounceTurn({
-      home,
-      storePath,
-      deps,
-    });
-
-    expectDeliveredOk(res);
-    expect(runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
-    const announceArgs = vi.mocked(runSubagentAnnounceFlow).mock.calls[0]?.[0] as
-      | {
-          requesterOrigin?: { channel?: string; to?: string };
-          roundOneReply?: string;
-          bestEffortDeliver?: boolean;
-        }
-      | undefined;
-    expect(announceArgs?.requesterOrigin?.channel).toBe("telegram");
-    expect(announceArgs?.requesterOrigin?.to).toBe("123");
-    expect(announceArgs?.roundOneReply).toBe(params.expectedText);
-    expect(announceArgs?.bestEffortDeliver).toBe(false);
-    expect((announceArgs as { expectsCompletionMessage?: boolean })?.expectsCompletionMessage).toBe(
-      true,
-    );
-    expect(deps.sendMessageTelegram).not.toHaveBeenCalled();
+  mockAgentPayloads(params.payloads);
+  const res = await runExplicitTelegramAnnounceTurn({
+    home: params.home,
+    storePath: params.storePath,
+    deps: params.deps,
   });
+
+  expectDeliveredOk(res);
+  expect(runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+  const announceArgs = vi.mocked(runSubagentAnnounceFlow).mock.calls[0]?.[0] as
+    | {
+        requesterOrigin?: { channel?: string; to?: string };
+        roundOneReply?: string;
+        bestEffortDeliver?: boolean;
+      }
+    | undefined;
+  expect(announceArgs?.requesterOrigin?.channel).toBe("telegram");
+  expect(announceArgs?.requesterOrigin?.to).toBe("123");
+  expect(announceArgs?.roundOneReply).toBe(params.expectedText);
+  expect(announceArgs?.bestEffortDeliver).toBe(false);
+  expect((announceArgs as { expectsCompletionMessage?: boolean })?.expectsCompletionMessage).toBe(
+    true,
+  );
+  expect(params.deps.sendMessageTelegram).not.toHaveBeenCalled();
 }
 
 describe("runCronIsolatedAgentTurn", () => {
@@ -170,17 +171,23 @@ describe("runCronIsolatedAgentTurn", () => {
     setupIsolatedAgentTurnMocks();
   });
 
-  it("routes text-only explicit target delivery through announce flow", async () => {
-    await expectExplicitTelegramTargetAnnounce({
-      payloads: [{ text: "hello from cron" }],
-      expectedText: "hello from cron",
-    });
-  });
-
-  it("announces the final payload text when delivery has an explicit target", async () => {
-    await expectExplicitTelegramTargetAnnounce({
-      payloads: [{ text: "Working on it..." }, { text: "Final weather summary" }],
-      expectedText: "Final weather summary",
+  it("announces explicit targets with direct and final-payload text", async () => {
+    await withTelegramAnnounceFixture(async ({ home, storePath, deps }) => {
+      await assertExplicitTelegramTargetAnnounce({
+        home,
+        storePath,
+        deps,
+        payloads: [{ text: "hello from cron" }],
+        expectedText: "hello from cron",
+      });
+      vi.clearAllMocks();
+      await assertExplicitTelegramTargetAnnounce({
+        home,
+        storePath,
+        deps,
+        payloads: [{ text: "Working on it..." }, { text: "Final weather summary" }],
+        expectedText: "Final weather summary",
+      });
     });
   });
 
