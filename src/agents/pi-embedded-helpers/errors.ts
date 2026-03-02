@@ -892,12 +892,32 @@ function isContentPolicyErrorMessage(raw: string): boolean {
   // - "Request rejected by content policy"
   // - stop reasons like "sensitive" / "refusal" are handled elsewhere, but those
   //   may also bubble up as generic error text.
+  // "policy violation" by itself is too broad — some auth failures (401/403) use that wording.
+  // Only treat it as a content-policy signal when paired with stronger safety/content keywords.
+  const hasPolicyViolation = lower.includes("policy violation");
+  if (hasPolicyViolation) {
+    const looksLikeAuth =
+      /\b(401|403)\b/.test(lower) ||
+      lower.includes("unauthorized") ||
+      lower.includes("forbidden") ||
+      lower.includes("authentication") ||
+      lower.includes("auth");
+    const hasSafetyContext =
+      lower.includes("content") ||
+      lower.includes("safety") ||
+      lower.includes("output blocked") ||
+      lower.includes("content filter") ||
+      lower.includes("content filtering");
+    if (!looksLikeAuth && hasSafetyContext) {
+      return true;
+    }
+  }
+
   if (
     lower.includes("content filtering") ||
     lower.includes("content filter") ||
     lower.includes("content_policy") ||
     lower.includes("content policy") ||
-    lower.includes("policy violation") ||
     lower.includes("output blocked") ||
     (lower.includes("blocked by") && lower.includes("policy")) ||
     (lower.includes("violates") && lower.includes("policy")) ||
