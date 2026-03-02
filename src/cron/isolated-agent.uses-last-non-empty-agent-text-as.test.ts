@@ -1,7 +1,8 @@
 import "./isolated-agent.mocks.js";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import type { CliDeps } from "../cli/deps.js";
@@ -9,12 +10,62 @@ import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
 import {
   makeCfg,
   makeJob,
-  withTempCronHome,
   writeSessionStore,
   writeSessionStoreEntries,
 } from "./isolated-agent.test-harness.js";
 import type { CronJob } from "./types.js";
-const withTempHome = withTempCronHome;
+
+let tempRoot = "";
+let tempHomeId = 0;
+
+async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
+  if (!tempRoot) {
+    throw new Error("temp root not initialized");
+  }
+  const home = path.join(tempRoot, `case-${tempHomeId++}`);
+  await fs.mkdir(path.join(home, ".openclaw", "agents", "main", "sessions"), {
+    recursive: true,
+  });
+  const snapshot = {
+    HOME: process.env.HOME,
+    USERPROFILE: process.env.USERPROFILE,
+    HOMEDRIVE: process.env.HOMEDRIVE,
+    HOMEPATH: process.env.HOMEPATH,
+    OPENCLAW_HOME: process.env.OPENCLAW_HOME,
+    OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR,
+  };
+  process.env.HOME = home;
+  process.env.USERPROFILE = home;
+  delete process.env.OPENCLAW_HOME;
+  process.env.OPENCLAW_STATE_DIR = path.join(home, ".openclaw");
+
+  if (process.platform === "win32") {
+    const driveMatch = home.match(/^([A-Za-z]:)(.*)$/);
+    if (driveMatch) {
+      process.env.HOMEDRIVE = driveMatch[1];
+      process.env.HOMEPATH = driveMatch[2] || "\\";
+    }
+  }
+
+  try {
+    return await fn(home);
+  } finally {
+    const restoreKey = (key: keyof typeof snapshot) => {
+      const value = snapshot[key];
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    };
+    restoreKey("HOME");
+    restoreKey("USERPROFILE");
+    restoreKey("HOMEDRIVE");
+    restoreKey("HOMEPATH");
+    restoreKey("OPENCLAW_HOME");
+    restoreKey("OPENCLAW_STATE_DIR");
+  }
+}
 
 function makeDeps(): CliDeps {
   return {
@@ -150,6 +201,17 @@ async function runTurnWithStoredModelOverride(
 }
 
 describe("runCronIsolatedAgentTurn", () => {
+  beforeAll(async () => {
+    tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-turn-suite-"));
+  });
+
+  afterAll(async () => {
+    if (!tempRoot) {
+      return;
+    }
+    await fs.rm(tempRoot, { recursive: true, force: true });
+  });
+
   beforeEach(() => {
     vi.mocked(runEmbeddedPiAgent).mockClear();
     vi.mocked(loadModelCatalog).mockResolvedValue([]);
