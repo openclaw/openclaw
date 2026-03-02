@@ -1148,6 +1148,83 @@ describe("handleFeishuMessage command authorization", () => {
     );
   });
 
+  it("keeps root_id as topic key when root_id and thread_id both exist", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          groups: {
+            "oc-group": {
+              requireMention: false,
+              groupSessionScope: "group_topic_sender",
+            },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou-topic-user" } },
+      message: {
+        message_id: "msg-scope-topic-thread-id",
+        chat_id: "oc-group",
+        chat_type: "group",
+        root_id: "om_root_topic",
+        thread_id: "omt_topic_1",
+        message_type: "text",
+        content: JSON.stringify({ text: "topic sender scope" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockResolveAgentRoute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        peer: { kind: "group", id: "oc-group:topic:om_root_topic:sender:ou-topic-user" },
+        parentPeer: { kind: "group", id: "oc-group" },
+      }),
+    );
+  });
+
+  it("uses thread_id as topic key when root_id is missing", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          groups: {
+            "oc-group": {
+              requireMention: false,
+              groupSessionScope: "group_topic_sender",
+            },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou-topic-user" } },
+      message: {
+        message_id: "msg-scope-topic-thread-only",
+        chat_id: "oc-group",
+        chat_type: "group",
+        thread_id: "omt_topic_1",
+        message_type: "text",
+        content: JSON.stringify({ text: "topic sender scope" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockResolveAgentRoute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        peer: { kind: "group", id: "oc-group:topic:omt_topic_1:sender:ou-topic-user" },
+        parentPeer: { kind: "group", id: "oc-group" },
+      }),
+    );
+  });
+
   it("maps legacy topicSessionMode=enabled to group_topic routing", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
 
@@ -1171,6 +1248,45 @@ describe("handleFeishuMessage command authorization", () => {
         chat_id: "oc-group",
         chat_type: "group",
         root_id: "om_root_legacy",
+        message_type: "text",
+        content: JSON.stringify({ text: "legacy topic mode" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockResolveAgentRoute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        peer: { kind: "group", id: "oc-group:topic:om_root_legacy" },
+        parentPeer: { kind: "group", id: "oc-group" },
+      }),
+    );
+  });
+
+  it("maps legacy topicSessionMode=enabled to root_id when both root_id and thread_id exist", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          topicSessionMode: "enabled",
+          groups: {
+            "oc-group": {
+              requireMention: false,
+            },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou-legacy-thread-id" } },
+      message: {
+        message_id: "msg-legacy-topic-thread-id",
+        chat_id: "oc-group",
+        chat_type: "group",
+        root_id: "om_root_legacy",
+        thread_id: "omt_topic_legacy",
         message_type: "text",
         content: JSON.stringify({ text: "legacy topic mode" }),
       },
@@ -1220,6 +1336,102 @@ describe("handleFeishuMessage command authorization", () => {
       expect.objectContaining({
         peer: { kind: "group", id: "oc-group:topic:msg-new-topic-root" },
         parentPeer: { kind: "group", id: "oc-group" },
+      }),
+    );
+  });
+
+  it("keeps topic session key stable after first turn creates a thread", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          groups: {
+            "oc-group": {
+              requireMention: false,
+              groupSessionScope: "group_topic",
+              replyInThread: "enabled",
+            },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const firstTurn: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou-topic-init" } },
+      message: {
+        message_id: "msg-topic-first",
+        chat_id: "oc-group",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({ text: "create topic" }),
+      },
+    };
+    const secondTurn: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou-topic-init" } },
+      message: {
+        message_id: "msg-topic-second",
+        chat_id: "oc-group",
+        chat_type: "group",
+        root_id: "msg-topic-first",
+        thread_id: "omt_topic_created",
+        message_type: "text",
+        content: JSON.stringify({ text: "follow up in same topic" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event: firstTurn });
+    await dispatchMessage({ cfg, event: secondTurn });
+
+    expect(mockResolveAgentRoute).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        peer: { kind: "group", id: "oc-group:topic:msg-topic-first" },
+      }),
+    );
+    expect(mockResolveAgentRoute).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        peer: { kind: "group", id: "oc-group:topic:msg-topic-first" },
+      }),
+    );
+  });
+
+  it("forces thread replies when inbound message contains thread_id", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          groups: {
+            "oc-group": {
+              requireMention: false,
+              groupSessionScope: "group",
+              replyInThread: "disabled",
+            },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou-thread-reply" } },
+      message: {
+        message_id: "msg-thread-reply",
+        chat_id: "oc-group",
+        chat_type: "group",
+        thread_id: "omt_topic_thread_reply",
+        message_type: "text",
+        content: JSON.stringify({ text: "thread content" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyInThread: true,
+        threadReply: true,
       }),
     );
   });
