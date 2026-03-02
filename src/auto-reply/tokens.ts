@@ -16,6 +16,9 @@ export function isSilentReplyText(
   if (prefix.test(text)) {
     return true;
   }
-  const suffix = new RegExp(`${UNICODE_WORD_START}${escaped}${UNICODE_WORD_END}${UNICODE_NON_WORD}*$`, "u");
+  const suffix = new RegExp(
+    `${UNICODE_WORD_START}${escaped}${UNICODE_WORD_END}${UNICODE_NON_WORD}*$`,
+    "u",
+  );
   return suffix.test(text);
 }

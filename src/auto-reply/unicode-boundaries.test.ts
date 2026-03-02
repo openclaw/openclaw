@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { wrapWordBoundary, UNICODE_WORD_START, UNICODE_WORD_END, UNICODE_NON_WORD } from "./unicode-boundaries.js";
+import {
+  wrapWordBoundary,
+  UNICODE_WORD_START,
+  UNICODE_WORD_END,
+  UNICODE_NON_WORD,
+} from "./unicode-boundaries.js";
 
 function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
