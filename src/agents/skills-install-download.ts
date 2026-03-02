@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { Readable } from "node:stream";
@@ -9,6 +9,8 @@ import {
   createTarEntrySafetyChecker,
   extractArchive as extractArchiveSafe,
 } from "../infra/archive.js";
+import { writeFileFromPathWithinRoot } from "../infra/fs-safe.js";
+import { assertCanonicalPathWithinBase } from "../infra/install-safe-path.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { isWithinDir } from "../infra/path-safety.js";
 import { runCommandWithTimeout } from "../process/exec.js";
@@ -157,29 +159,44 @@ async function hashFileSha256(filePath: string): Promise<string> {
   });
 }
 
-async function downloadFile(
-  url: string,
-  destPath: string,
-  timeoutMs: number,
-): Promise<{ bytes: number }> {
+async function downloadFile(params: {
+  url: string;
+  rootDir: string;
+  relativePath: string;
+  timeoutMs: number;
+}): Promise<{ bytes: number }> {
+  const destPath = path.resolve(params.rootDir, params.relativePath);
+  const stagingDir = path.join(params.rootDir, ".openclaw-download-staging");
+  await ensureDir(stagingDir);
+  await assertCanonicalPathWithinBase({
+    baseDir: params.rootDir,
+    candidatePath: stagingDir,
+    boundaryLabel: "skill tools directory",
+  });
+  const tempPath = path.join(stagingDir, `${randomUUID()}.tmp`);
   const { response, release } = await fetchWithSsrFGuard({
-    url,
-    timeoutMs: Math.max(1_000, timeoutMs),
+    url: params.url,
+    timeoutMs: Math.max(1_000, params.timeoutMs),
   });
   try {
     if (!response.ok || !response.body) {
       throw new Error(`Download failed (${response.status} ${response.statusText})`);
     }
-    await ensureDir(path.dirname(destPath));
-    const file = fs.createWriteStream(destPath);
+    const file = fs.createWriteStream(tempPath);
     const body = response.body as unknown;
     const readable = isNodeReadableStream(body)
       ? body
       : Readable.fromWeb(body as NodeReadableStream);
     await pipeline(readable, file);
+    await writeFileFromPathWithinRoot({
+      rootDir: params.rootDir,
+      relativePath: params.relativePath,
+      sourcePath: tempPath,
+    });
     const stat = await fs.promises.stat(destPath);
     return { bytes: stat.size };
   } finally {
+    await fs.promises.rm(tempPath, { force: true }).catch(() => undefined);
     await release();
   }
 }
@@ -309,6 +326,7 @@ export async function installDownloadSpec(params: {
   timeoutMs: number;
 }): Promise<SkillInstallResult> {
   const { entry, spec, timeoutMs } = params;
+  const safeRoot = resolveSkillToolsRootDir(entry);
   const url = spec.url?.trim();
   if (!url) {
     return {
@@ -335,22 +353,40 @@ export async function installDownloadSpec(params: {
   try {
     targetDir = resolveDownloadTargetDir(entry, spec);
     await ensureDir(targetDir);
-    const stat = await fs.promises.lstat(targetDir);
-    if (stat.isSymbolicLink()) {
-      throw new Error(`targetDir is a symlink: ${targetDir}`);
-    }
-    if (!stat.isDirectory()) {
-      throw new Error(`targetDir is not a directory: ${targetDir}`);
-    }
+    await assertCanonicalPathWithinBase({
+      baseDir: safeRoot,
+      candidatePath: targetDir,
+      boundaryLabel: "skill tools directory",
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return { ok: false, message, stdout: "", stderr: message, code: null };
   }
 
   const archivePath = path.join(targetDir, filename);
+  const archiveRelativePath = path.relative(safeRoot, archivePath);
+  if (
+    !archiveRelativePath ||
+    archiveRelativePath === ".." ||
+    archiveRelativePath.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(archiveRelativePath)
+  ) {
+    return {
+      ok: false,
+      message: "invalid download archive path",
+      stdout: "",
+      stderr: "invalid download archive path",
+      code: null,
+    };
+  }
   let downloaded = 0;
   try {
-    const result = await downloadFile(url, archivePath, timeoutMs);
+    const result = await downloadFile({
+      url,
+      rootDir: safeRoot,
+      relativePath: archiveRelativePath,
+      timeoutMs,
+    });
     downloaded = result.bytes;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -377,6 +413,17 @@ export async function installDownloadSpec(params: {
       stderr: "",
       code: null,
     };
+  }
+
+  try {
+    await assertCanonicalPathWithinBase({
+      baseDir: safeRoot,
+      candidatePath: targetDir,
+      boundaryLabel: "skill tools directory",
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return { ok: false, message, stdout: "", stderr: message, code: null };
   }
 
   const extractResult = await extractArchive({
