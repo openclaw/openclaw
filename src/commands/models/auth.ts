@@ -249,6 +249,14 @@ type LoginOptions = {
 
 export function resolveRequestedLoginProviderOrThrow(
   providers: ProviderPlugin[],
+  rawProvider: string,
+): ProviderPlugin;
+export function resolveRequestedLoginProviderOrThrow(
+  providers: ProviderPlugin[],
+  rawProvider?: string,
+): ProviderPlugin | null;
+export function resolveRequestedLoginProviderOrThrow(
+  providers: ProviderPlugin[],
   rawProvider?: string,
 ): ProviderPlugin | null {
   const requested = rawProvider?.trim();
@@ -302,10 +310,7 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
     ? { kind: "openai-codex" as const }
     : requestedProviderRaw
       ? (() => {
-          const provider = resolveRequestedLoginProviderOrThrow(providers, opts.provider);
-          if (!provider) {
-            throw new Error("Unknown provider. Use --provider <id> to pick a provider.");
-          }
+          const provider = resolveRequestedLoginProviderOrThrow(providers, requestedProviderRaw);
           return { kind: "plugin" as const, provider };
         })()
       : await prompter
