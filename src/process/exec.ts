@@ -174,16 +174,13 @@ export type CommandOptions = {
   noOutputTimeoutMs?: number;
 };
 
-export async function runCommandWithTimeout(
-  argv: string[],
-  optionsOrTimeout: number | CommandOptions,
-): Promise<SpawnResult> {
-  const options: CommandOptions =
-    typeof optionsOrTimeout === "number" ? { timeoutMs: optionsOrTimeout } : optionsOrTimeout;
-  const { timeoutMs, cwd, input, env, noOutputTimeoutMs } = options;
-  const { windowsVerbatimArguments } = options;
-  const hasInput = input !== undefined;
-
+export function resolveCommandEnv(params: {
+  argv: string[];
+  env?: NodeJS.ProcessEnv;
+  baseEnv?: NodeJS.ProcessEnv;
+}): NodeJS.ProcessEnv {
+  const baseEnv = params.baseEnv ?? process.env;
+  const argv = params.argv;
   const shouldSuppressNpmFund = (() => {
     const cmd = path.basename(argv[0] ?? "");
     if (cmd === "npm" || cmd === "npm.cmd" || cmd === "npm.exe") {
@@ -196,7 +193,7 @@ export async function runCommandWithTimeout(
     return false;
   })();
 
-  const mergedEnv = env ? { ...process.env, ...env } : { ...process.env };
+  const mergedEnv = params.env ? { ...baseEnv, ...params.env } : { ...baseEnv };
   const resolvedEnv = Object.fromEntries(
     Object.entries(mergedEnv)
       .filter(([, value]) => value !== undefined)
@@ -210,6 +207,19 @@ export async function runCommandWithTimeout(
       resolvedEnv.npm_config_fund = "false";
     }
   }
+  return resolvedEnv;
+}
+
+export async function runCommandWithTimeout(
+  argv: string[],
+  optionsOrTimeout: number | CommandOptions,
+): Promise<SpawnResult> {
+  const options: CommandOptions =
+    typeof optionsOrTimeout === "number" ? { timeoutMs: optionsOrTimeout } : optionsOrTimeout;
+  const { timeoutMs, cwd, input, env, noOutputTimeoutMs } = options;
+  const { windowsVerbatimArguments } = options;
+  const hasInput = input !== undefined;
+  const resolvedEnv = resolveCommandEnv({ argv, env });
 
   const stdio = resolveCommandStdio({ hasInput, preferInherit: true });
   const finalArgv = process.platform === "win32" ? (resolveNpmArgvForWindows(argv) ?? argv) : argv;
