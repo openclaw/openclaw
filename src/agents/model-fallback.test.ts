@@ -832,6 +832,33 @@ describe("runWithModelFallback", () => {
     expect(run.mock.calls[1]?.[0]).not.toBe("ollama");
   });
 
+  it("falls back when context-overflow text wraps an ENETRESET transport failure", async () => {
+    const resetCause = Object.assign(new Error("socket ENETRESET"), {
+      code: "ENETRESET",
+    });
+    const cfg = makeCfg();
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(
+        Object.assign(new Error("Ollama API error 400: context window exceeds limit"), {
+          cause: resetCause,
+        }),
+      )
+      .mockResolvedValueOnce("ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "ollama",
+      model: "minimax-m2.5:cloud",
+      run,
+    });
+
+    expect(result.result).toBe("ok");
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(run.mock.calls[0]).toEqual(["ollama", "minimax-m2.5:cloud"]);
+    expect(run.mock.calls[1]?.[0]).not.toBe("ollama");
+  });
+
   it("does not treat standalone DNS text as transport failure for true overflow errors", async () => {
     const cfg = makeCfg();
     const run = vi
