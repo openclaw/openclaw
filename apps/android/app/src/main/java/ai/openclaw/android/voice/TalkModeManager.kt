@@ -24,7 +24,6 @@ import androidx.core.content.ContextCompat
 import ai.openclaw.android.gateway.GatewaySession
 import ai.openclaw.android.isCanonicalMainSessionKey
 import ai.openclaw.android.normalizeMainKey
-import android.os.Build
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
@@ -1316,43 +1315,28 @@ private const val defaultTalkProvider = "elevenlabs"
 
   private fun requestAudioFocusForTts(): Boolean {
     val am = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return true
-    return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-      val req = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
-        .setAudioAttributes(
-          AudioAttributes.Builder()
-            .setUsage(AudioAttributes.USAGE_MEDIA)
-            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-            .build()
-        )
-        .setOnAudioFocusChangeListener(audioFocusListener)
-        .build()
-      audioFocusRequest = req
-      val result = am.requestAudioFocus(req)
-      Log.d(tag, "audio focus request result=$result")
-      result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED || result == AudioManager.AUDIOFOCUS_REQUEST_DELAYED
-    } else {
-      @Suppress("DEPRECATION")
-      val result = am.requestAudioFocus(
-        audioFocusListener,
-        AudioManager.STREAM_MUSIC,
-        AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK,
+    val req = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
+      .setAudioAttributes(
+        AudioAttributes.Builder()
+          .setUsage(AudioAttributes.USAGE_MEDIA)
+          .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+          .build()
       )
-      result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
-    }
+      .setOnAudioFocusChangeListener(audioFocusListener)
+      .build()
+    audioFocusRequest = req
+    val result = am.requestAudioFocus(req)
+    Log.d(tag, "audio focus request result=$result")
+    return result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED || result == AudioManager.AUDIOFOCUS_REQUEST_DELAYED
   }
 
   private fun abandonAudioFocus() {
     val am = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-      audioFocusRequest?.let {
-        am.abandonAudioFocusRequest(it)
-        Log.d(tag, "audio focus abandoned")
-      }
-      audioFocusRequest = null
-    } else {
-      @Suppress("DEPRECATION")
-      am.abandonAudioFocus(audioFocusListener)
+    audioFocusRequest?.let {
+      am.abandonAudioFocusRequest(it)
+      Log.d(tag, "audio focus abandoned")
     }
+    audioFocusRequest = null
   }
 
   private fun cleanupPlayer() {

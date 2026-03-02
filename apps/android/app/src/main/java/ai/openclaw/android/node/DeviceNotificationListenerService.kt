@@ -6,7 +6,6 @@ import android.app.RemoteInput
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
-import android.os.Build
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import kotlinx.serialization.json.JsonPrimitive
@@ -234,9 +233,6 @@ class DeviceNotificationListenerService : NotificationListenerService() {
     }
 
     fun requestServiceRebind(context: Context) {
-      if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) {
-        return
-      }
       runCatching {
         NotificationListenerService.requestRebind(serviceComponent(context))
       }

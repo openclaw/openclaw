@@ -66,6 +66,7 @@ android {
     lint {
         disable +=
             setOf(
+                "AndroidGradlePluginVersion",
                 "GradleDependency",
                 "IconLauncherShape",
                 "NewerVersionAvailable",

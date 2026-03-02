@@ -6,7 +6,6 @@ import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
-import android.os.Build
 import android.os.SystemClock
 import androidx.core.content.ContextCompat
 import ai.openclaw.android.gateway.GatewaySession
@@ -85,7 +84,6 @@ private object SystemMotionDataSource : MotionDataSource {
   }
 
   override fun hasPermission(context: Context): Boolean {
-    if (Build.VERSION.SDK_INT < 29) return true
     return ContextCompat.checkSelfPermission(context, Manifest.permission.ACTIVITY_RECOGNITION) ==
       android.content.pm.PackageManager.PERMISSION_GRANTED
   }

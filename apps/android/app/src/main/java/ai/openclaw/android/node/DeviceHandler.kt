@@ -136,12 +136,7 @@ class DeviceHandler(
       } else {
         hasPermission(Manifest.permission.READ_EXTERNAL_STORAGE)
       }
-    val motionGranted =
-      if (Build.VERSION.SDK_INT >= 29) {
-        hasPermission(Manifest.permission.ACTIVITY_RECOGNITION)
-      } else {
-        true
-      }
+    val motionGranted = hasPermission(Manifest.permission.ACTIVITY_RECOGNITION)
     val notificationsGranted =
       if (Build.VERSION.SDK_INT >= 33) {
         hasPermission(Manifest.permission.POST_NOTIFICATIONS)
@@ -228,7 +223,7 @@ class DeviceHandler(
             "motion",
             permissionStateJson(
               granted = motionGranted,
-              promptableWhenDenied = Build.VERSION.SDK_INT >= 29,
+              promptableWhenDenied = true,
             ),
           )
           // Screen capture on Android is interactive per-capture consent, not a sticky app permission.
