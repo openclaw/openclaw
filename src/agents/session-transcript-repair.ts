@@ -427,7 +427,9 @@ export function repairToolUseResultPairing(messages: AgentMessage[]): ToolUseRep
         break;
       }
 
-      if (nextRole === "toolResult") {
+      // Accept both "toolResult" (Pi/Anthropic) and "tool" (OpenAI-style) as tool result messages.
+      const isToolResult = nextRole === "toolResult" || nextRole === "tool";
+      if (isToolResult) {
         const toolResult = next as Extract<AgentMessage, { role: "toolResult" }>;
         const id = extractToolResultId(toolResult);
         if (id && toolCallIds.has(id)) {
@@ -451,7 +453,7 @@ export function repairToolUseResultPairing(messages: AgentMessage[]): ToolUseRep
       }
 
       // Drop tool results that don't match the current assistant tool calls.
-      if (nextRole !== "toolResult") {
+      if (!isToolResult) {
         remainder.push(next);
       } else {
         droppedOrphanCount += 1;

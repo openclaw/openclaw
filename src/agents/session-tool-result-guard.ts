@@ -179,8 +179,10 @@ export function installSessionToolResultGuard(
       nextMessage = sanitized[0];
     }
     const nextRole = (nextMessage as { role?: unknown }).role;
+    // Accept both "toolResult" (Pi/Anthropic) and "tool" (OpenAI-style) so pending is cleared and we don't insert synthetic.
+    const isToolResult = nextRole === "toolResult" || nextRole === "tool";
 
-    if (nextRole === "toolResult") {
+    if (isToolResult) {
       const id = extractToolResultId(nextMessage as Extract<AgentMessage, { role: "toolResult" }>);
       const toolName = id ? pending.get(id) : undefined;
       if (id) {

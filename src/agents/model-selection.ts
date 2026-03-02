@@ -14,7 +14,7 @@ export type ModelRef = {
   model: string;
 };
 
-export type ThinkLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive";
+export type ThinkLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive" | "auto";
 
 export type ModelAliasIndex = {
   byAlias: Map<string, { alias: string; ref: ModelRef }>;
@@ -520,6 +520,18 @@ export function resolveAllowedModelRef(params: {
   return { ref: resolved.ref, key: status.key };
 }
 
+/**
+ * Pass-through routing models that don't perform reasoning themselves — they
+ * forward the request to a downstream model chosen at runtime.  We must NOT
+ * auto-promote thinking for these: the downstream model decides its own
+ * reasoning budget, and forcing reasoning_effort on the router causes it to
+ * pick reasoning-capable models even for trivial queries.
+ *
+ * When thinkingDefault is explicitly configured, that value is used as-is
+ * (e.g. "auto" → OpenRouter applies per-query complexity routing).
+ */
+const PASSTHROUGH_ROUTER_MODELS = new Set(["openrouter/auto"]);
+
 export function resolveThinkingDefault(params: {
   cfg: OpenClawConfig;
   provider: string;
@@ -557,7 +569,10 @@ export function resolveThinkingDefault(params: {
   const candidate = params.catalog?.find(
     (entry) => entry.provider === params.provider && entry.id === params.model,
   );
-  if (candidate?.reasoning) {
+  // Don't auto-promote thinking for pass-through routing models.
+  // These models route to a downstream model; forcing reasoning_effort here
+  // overrides the router's own complexity-based model selection.
+  if (candidate?.reasoning && !PASSTHROUGH_ROUTER_MODELS.has(params.model)) {
     return "low";
   }
   return "off";

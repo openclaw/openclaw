@@ -1,4 +1,4 @@
-export type ThinkLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive";
+export type ThinkLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive" | "auto";
 export type VerboseLevel = "off" | "on" | "full";
 export type NoticeLevel = "off" | "on" | "full";
 export type ElevatedLevel = "off" | "on" | "ask" | "full";
@@ -73,6 +73,10 @@ export function normalizeThinkLevel(raw?: string | null): ThinkLevel | undefined
   }
   if (["think"].includes(key)) {
     return "minimal";
+  }
+  // "auto" = let the provider decide; don't force reasoning_effort
+  if (["auto", "automatic"].includes(key)) {
+    return "auto";
   }
   return undefined;
 }
