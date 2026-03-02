@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+NODE_ID="eb5dc35848953cad45eb7a47b18e3ede90b266f9d22b45111d515b938913e730"
+TOKEN="$(jq -r ".gateway.auth.token" /home/spryguy/.openclaw/openclaw.json)"
+
+run() {
+  local label="$1"; shift
+  local cmd="$*"
+  echo "== $label =="
+  openclaw nodes invoke \
+    --token "$TOKEN" \
+    --node "$NODE_ID" \
+    --command system.run \
+    --invoke-timeout 240000 \
+    --timeout 240000 \
+    --params "$(jq -nc --arg c "$cmd" "{command:[\"/usr/bin/bash\",\"-lc\",\$c]}")" \
+    --json | jq "{ok,nodeId,command,payload:{exitCode:.payload.exitCode,success:.payload.success,timedOut:.payload.timedOut,stdout:.payload.stdout,stderr:.payload.stderr,error:.payload.error}}"
+  echo
+}
+
+case "${1:-}" in
+  ping-a)
+    run "president-a ping" "cd ~/openclaw-workspace/repos/openclaw && timeout 90 ~/bin/openclaw-safe agent --agent president-a --session-id \"presA-ping-$(date +%s)\" --timeout 60 --thinking off --message \"Reply with EXACTLY: PRES_A_OK\" --json | jq -r \".result.payloads[0].text\""
+    ;;
+  ping-b)
+    run "president-b ping" "cd ~/openclaw-workspace/repos/openclaw && timeout 90 ~/bin/openclaw-safe agent --agent president-b --session-id \"presB-ping-$(date +%s)\" --timeout 60 --thinking off --message \"Reply with EXACTLY: PRES_B_OK\" --json | jq -r \".result.payloads[0].text\""
+    ;;
+  health)
+    run "pwd" "pwd"
+    run "strike_echo" "cd ~/openclaw-workspace/repos/openclaw && ./scripts/strike_echo.sh | tee /tmp/strike_echo_last.txt"
+    run "assert pinned codex" "grep -q \"provider/model pinned to openai-codex/gpt-5.3-codex\" /tmp/strike_echo_last.txt && echo PIN_OK || (echo PIN_FAIL; exit 42)"
+    ;;
+  *)
+    echo "Usage: cyborg-run health | ping-a | ping-b"
+    exit 2
+    ;;
+esac
