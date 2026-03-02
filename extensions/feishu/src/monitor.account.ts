@@ -11,6 +11,7 @@ import {
 } from "./bot.js";
 import { handleFeishuCardAction, type FeishuCardActionEvent } from "./card-action.js";
 import { createEventDispatcher } from "./client.js";
+import { tryRecordMessage, tryRecordMessagePersistent } from "./dedup.js";
 import { fetchBotOpenIdForMonitor } from "./monitor.startup.js";
 import { botOpenIds } from "./monitor.state.js";
 import { monitorWebhook, monitorWebSocket } from "./monitor.transport.js";
@@ -126,6 +127,30 @@ type RegisterEventHandlersContext = {
   fireAndForget?: boolean;
 };
 
+function mergeFeishuDebounceMentions(
+  entries: FeishuMessageEvent[],
+): FeishuMessageEvent["message"]["mentions"] | undefined {
+  const merged = new Map<string, NonNullable<FeishuMessageEvent["message"]["mentions"]>[number]>();
+  for (const entry of entries) {
+    for (const mention of entry.message.mentions ?? []) {
+      const key =
+        mention.key?.trim() ||
+        mention.id.open_id?.trim() ||
+        mention.id.user_id?.trim() ||
+        mention.id.union_id?.trim() ||
+        mention.name?.trim();
+      if (!key || merged.has(key)) {
+        continue;
+      }
+      merged.set(key, mention);
+    }
+  }
+  if (merged.size === 0) {
+    return undefined;
+  }
+  return Array.from(merged.values());
+}
+
 function registerEventHandlers(
   eventDispatcher: Lark.EventDispatcher,
   context: RegisterEventHandlersContext,
@@ -158,6 +183,28 @@ function registerEventHandlers(
     const parsed = parseFeishuMessageEvent(event, botOpenId);
     return parsed.content.trim();
   };
+  const recordSuppressedMessageIds = async (entries: FeishuMessageEvent[]) => {
+    const suppressedIds = new Set(
+      entries
+        .slice(0, -1)
+        .map((entry) => entry.message.message_id?.trim())
+        .filter((id): id is string => Boolean(id)),
+    );
+    if (suppressedIds.size === 0) {
+      return;
+    }
+    for (const messageId of suppressedIds) {
+      // Keep in-memory dedupe in sync with handleFeishuMessage's keying.
+      tryRecordMessage(`${accountId}:${messageId}`);
+      try {
+        await tryRecordMessagePersistent(messageId, accountId, log);
+      } catch (err) {
+        error(
+          `feishu[${accountId}]: failed to record merged dedupe id ${messageId}: ${String(err)}`,
+        );
+      }
+    }
+  };
   const inboundDebouncer = core.channel.debounce.createInboundDebouncer<FeishuMessageEvent>({
     debounceMs: inboundDebounceMs,
     buildKey: (event) => {
@@ -189,12 +236,20 @@ function registerEventHandlers(
         await dispatchFeishuMessage(last);
         return;
       }
+      await recordSuppressedMessageIds(entries);
       const combinedText = entries
         .map((entry) => resolveDebounceText(entry))
         .filter(Boolean)
         .join("\n");
+      const mergedMentions = mergeFeishuDebounceMentions(entries);
       if (!combinedText.trim()) {
-        await dispatchFeishuMessage(last);
+        await dispatchFeishuMessage({
+          ...last,
+          message: {
+            ...last.message,
+            mentions: mergedMentions ?? last.message.mentions,
+          },
+        });
         return;
       }
       await dispatchFeishuMessage({
@@ -203,7 +258,7 @@ function registerEventHandlers(
           ...last.message,
           message_type: "text",
           content: JSON.stringify({ text: combinedText }),
-          mentions: undefined,
+          mentions: mergedMentions ?? last.message.mentions,
         },
       });
     },
