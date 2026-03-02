@@ -1,5 +1,8 @@
-import * as fs from "node:fs/promises";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  readFileUtf8AndCleanup,
+  stubFetchTextResponse,
+} from "../test-utils/camera-url-test-helpers.js";
 
 const { callGateway } = vi.hoisted(() => ({
   callGateway: vi.fn(),
@@ -206,10 +209,7 @@ describe("nodes camera_snap", () => {
   });
 
   it("downloads camera_snap url payloads when node remoteIp is available", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => new Response("url-image", { status: 200 })),
-    );
+    stubFetchTextResponse("url-image");
     setupNodeInvokeMock({
       remoteIp: "198.51.100.42",
       invokePayload: {
@@ -230,18 +230,11 @@ describe("nodes camera_snap", () => {
     const mediaPath = String((result.content?.[0] as { text?: string } | undefined)?.text ?? "")
       .replace(/^MEDIA:/, "")
       .trim();
-    try {
-      await expect(fs.readFile(mediaPath, "utf8")).resolves.toBe("url-image");
-    } finally {
-      await fs.unlink(mediaPath).catch(() => {});
-    }
+    await expect(readFileUtf8AndCleanup(mediaPath)).resolves.toBe("url-image");
   });
 
   it("rejects camera_snap url payloads when node remoteIp is missing", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => new Response("url-image", { status: 200 })),
-    );
+    stubFetchTextResponse("url-image");
     setupNodeInvokeMock({
       invokePayload: {
         format: "jpg",
@@ -263,10 +256,7 @@ describe("nodes camera_snap", () => {
 
 describe("nodes camera_clip", () => {
   it("downloads camera_clip url payloads when node remoteIp is available", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => new Response("url-clip", { status: 200 })),
-    );
+    stubFetchTextResponse("url-clip");
     setupNodeInvokeMock({
       remoteIp: "198.51.100.42",
       invokePayload: {
@@ -285,18 +275,11 @@ describe("nodes camera_clip", () => {
     const filePath = String((result.content?.[0] as { text?: string } | undefined)?.text ?? "")
       .replace(/^FILE:/, "")
       .trim();
-    try {
-      await expect(fs.readFile(filePath, "utf8")).resolves.toBe("url-clip");
-    } finally {
-      await fs.unlink(filePath).catch(() => {});
-    }
+    await expect(readFileUtf8AndCleanup(filePath)).resolves.toBe("url-clip");
   });
 
   it("rejects camera_clip url payloads when node remoteIp is missing", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => new Response("url-clip", { status: 200 })),
-    );
+    stubFetchTextResponse("url-clip");
     setupNodeInvokeMock({
       invokePayload: {
         format: "mp4",
