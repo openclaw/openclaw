@@ -95,6 +95,8 @@ export function ensureExplicitGatewayAuth(params: {
   if (!params.urlOverride) {
     return;
   }
+  // URL overrides are untrusted redirects and can move WebSocket traffic off the intended host.
+  // Never allow an override to silently reuse implicit credentials or device token fallback.
   const explicitToken = params.explicitAuth?.token;
   const explicitPassword = params.explicitAuth?.password;
   if (params.urlOverrideSource === "cli" && (explicitToken || explicitPassword)) {
@@ -105,6 +107,8 @@ export function ensureExplicitGatewayAuth(params: {
     params.resolvedAuth?.password ||
     explicitToken ||
     explicitPassword;
+  // Env overrides are supported for deployment ergonomics, but only when explicit auth is available.
+  // This avoids implicit device-token fallback against attacker-controlled WSS endpoints.
   if (params.urlOverrideSource === "env" && hasResolvedAuth) {
     return;
   }
@@ -317,6 +321,9 @@ async function resolveGatewayTlsFingerprint(params: {
     : undefined;
   const overrideTlsFingerprint = trimToUndefined(opts.tlsFingerprint);
   const remoteTlsFingerprint =
+    // Env overrides may still inherit configured remote TLS pinning for private cert deployments.
+    // CLI overrides remain explicit-only and intentionally skip config remote TLS to avoid
+    // accidentally pinning against caller-supplied target URLs.
     context.isRemoteMode && context.urlOverrideSource !== "cli"
       ? trimToUndefined(context.remote?.tlsFingerprint)
       : undefined;
