@@ -9,7 +9,6 @@ import {
   renameSync,
   unlinkSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import { normalizeChannelId } from "../channels/plugins/index.js";
@@ -23,6 +22,7 @@ import type {
   TtsModelOverrideConfig,
 } from "../config/types.tts.js";
 import { logVerbose } from "../globals.js";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { stripMarkdown } from "../line/markdown-to-line.js";
 import { isVoiceCompatibleAudio } from "../media/audio.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
@@ -238,11 +238,12 @@ function resolveModelOverridePolicy(
       allowSeed: false,
     };
   }
-  const allow = (value?: boolean) => value ?? true;
+  const allow = (value: boolean | undefined, defaultValue = true) => value ?? defaultValue;
   return {
     enabled: true,
     allowText: allow(overrides?.allowText),
-    allowProvider: allow(overrides?.allowProvider),
+    // Provider switching is higher-impact than voice/style tweaks; keep opt-in.
+    allowProvider: allow(overrides?.allowProvider, false),
     allowVoice: allow(overrides?.allowVoice),
     allowModelId: allow(overrides?.allowModelId),
     allowVoiceSettings: allow(overrides?.allowVoiceSettings),
@@ -479,8 +480,11 @@ export function setLastTtsAttempt(entry: TtsStatusEntry | undefined): void {
   lastTtsAttempt = entry;
 }
 
+/** Channels that require opus audio and support voice-bubble playback */
+const VOICE_BUBBLE_CHANNELS = new Set(["telegram", "feishu", "whatsapp"]);
+
 function resolveOutputFormat(channelId?: string | null) {
-  if (channelId === "telegram") {
+  if (channelId && VOICE_BUBBLE_CHANNELS.has(channelId)) {
     return TELEGRAM_OUTPUT;
   }
   return DEFAULT_OUTPUT;
@@ -563,7 +567,9 @@ export async function textToSpeech(params: {
           continue;
         }
 
-        const tempDir = mkdtempSync(path.join(tmpdir(), "tts-"));
+        const tempRoot = resolvePreferredOpenClawTmpDir();
+        mkdirSync(tempRoot, { recursive: true, mode: 0o700 });
+        const tempDir = mkdtempSync(path.join(tempRoot, "tts-"));
         let edgeOutputFormat = resolveEdgeOutputFormat(config);
         const fallbackEdgeOutputFormat =
           edgeOutputFormat !== DEFAULT_EDGE_OUTPUT_FORMAT ? DEFAULT_EDGE_OUTPUT_FORMAT : undefined;
@@ -670,7 +676,9 @@ export async function textToSpeech(params: {
 
       const latencyMs = Date.now() - providerStart;
 
-      const tempDir = mkdtempSync(path.join(tmpdir(), "tts-"));
+      const tempRoot = resolvePreferredOpenClawTmpDir();
+      mkdirSync(tempRoot, { recursive: true, mode: 0o700 });
+      const tempDir = mkdtempSync(path.join(tempRoot, "tts-"));
       const audioPath = path.join(tempDir, `voice-${Date.now()}${output.extension}`);
       writeFileSync(audioPath, audioBuffer);
       scheduleCleanup(tempDir);
@@ -906,7 +914,8 @@ export async function maybeApplyTtsToPayload(params: {
     };
 
     const channelId = resolveChannelId(params.channel);
-    const shouldVoice = channelId === "telegram" && result.voiceCompatible === true;
+    const shouldVoice =
+      channelId !== null && VOICE_BUBBLE_CHANNELS.has(channelId) && result.voiceCompatible === true;
     const finalPayload = {
       ...nextPayload,
       mediaUrl: result.audioPath,

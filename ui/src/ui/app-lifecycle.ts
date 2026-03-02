@@ -21,6 +21,8 @@ import type { Tab } from "./navigation.ts";
 
 type LifecycleHost = {
   basePath: string;
+  client?: { stop: () => void } | null;
+  connected?: boolean;
   tab: Tab;
   assistantName: string;
   assistantAvatar: string | null;
@@ -65,6 +67,9 @@ export function handleDisconnected(host: LifecycleHost) {
   stopNodesPolling(host as unknown as Parameters<typeof stopNodesPolling>[0]);
   stopLogsPolling(host as unknown as Parameters<typeof stopLogsPolling>[0]);
   stopDebugPolling(host as unknown as Parameters<typeof stopDebugPolling>[0]);
+  host.client?.stop();
+  host.client = null;
+  host.connected = false;
   detachThemeListener(host as unknown as Parameters<typeof detachThemeListener>[0]);
   host.topbarObserver?.disconnect();
   host.topbarObserver = null;

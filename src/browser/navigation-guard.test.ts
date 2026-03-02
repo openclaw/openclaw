@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { SsrFBlockedError, type LookupFn } from "../infra/net/ssrf.js";
 import {
   assertBrowserNavigationAllowed,
+  assertBrowserNavigationResultAllowed,
   InvalidBrowserNavigationUrlError,
 } from "./navigation-guard.js";
 
@@ -19,12 +20,44 @@ describe("browser navigation guard", () => {
     ).rejects.toBeInstanceOf(SsrFBlockedError);
   });
 
-  it("allows non-network schemes", async () => {
+  it("allows about:blank", async () => {
     await expect(
       assertBrowserNavigationAllowed({
         url: "about:blank",
       }),
     ).resolves.toBeUndefined();
+  });
+
+  it("blocks file URLs", async () => {
+    await expect(
+      assertBrowserNavigationAllowed({
+        url: "file:///etc/passwd",
+      }),
+    ).rejects.toBeInstanceOf(InvalidBrowserNavigationUrlError);
+  });
+
+  it("blocks data URLs", async () => {
+    await expect(
+      assertBrowserNavigationAllowed({
+        url: "data:text/html,<h1>owned</h1>",
+      }),
+    ).rejects.toBeInstanceOf(InvalidBrowserNavigationUrlError);
+  });
+
+  it("blocks javascript URLs", async () => {
+    await expect(
+      assertBrowserNavigationAllowed({
+        url: "javascript:alert(1)",
+      }),
+    ).rejects.toBeInstanceOf(InvalidBrowserNavigationUrlError);
+  });
+
+  it("blocks non-blank about URLs", async () => {
+    await expect(
+      assertBrowserNavigationAllowed({
+        url: "about:srcdoc",
+      }),
+    ).rejects.toBeInstanceOf(InvalidBrowserNavigationUrlError);
   });
 
   it("allows blocked hostnames when explicitly allowed", async () => {
@@ -68,5 +101,23 @@ describe("browser navigation guard", () => {
         url: "not a url",
       }),
     ).rejects.toBeInstanceOf(InvalidBrowserNavigationUrlError);
+  });
+
+  it("validates final network URLs after navigation", async () => {
+    const lookupFn = createLookupFn("127.0.0.1");
+    await expect(
+      assertBrowserNavigationResultAllowed({
+        url: "http://private.test",
+        lookupFn,
+      }),
+    ).rejects.toBeInstanceOf(SsrFBlockedError);
+  });
+
+  it("ignores non-network browser-internal final URLs", async () => {
+    await expect(
+      assertBrowserNavigationResultAllowed({
+        url: "chrome-error://chromewebdata/",
+      }),
+    ).resolves.toBeUndefined();
   });
 });

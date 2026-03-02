@@ -1,6 +1,52 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { fileExists } from "./archive.js";
+
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+async function sanitizeManifestForNpmInstall(targetDir: string): Promise<void> {
+  const manifestPath = path.join(targetDir, "package.json");
+  let manifestRaw = "";
+  try {
+    manifestRaw = await fs.readFile(manifestPath, "utf-8");
+  } catch {
+    return;
+  }
+
+  let manifest: Record<string, unknown>;
+  try {
+    const parsed = JSON.parse(manifestRaw) as unknown;
+    if (!isObjectRecord(parsed)) {
+      return;
+    }
+    manifest = parsed;
+  } catch {
+    return;
+  }
+
+  const devDependencies = manifest.devDependencies;
+  if (!isObjectRecord(devDependencies)) {
+    return;
+  }
+
+  const filteredEntries = Object.entries(devDependencies).filter(([, rawSpec]) => {
+    const spec = typeof rawSpec === "string" ? rawSpec.trim() : "";
+    return !spec.startsWith("workspace:");
+  });
+  if (filteredEntries.length === Object.keys(devDependencies).length) {
+    return;
+  }
+
+  if (filteredEntries.length === 0) {
+    delete manifest.devDependencies;
+  } else {
+    manifest.devDependencies = Object.fromEntries(filteredEntries);
+  }
+  await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf-8");
+}
 
 export async function installPackageDir(params: {
   sourceDir: string;
@@ -16,7 +62,9 @@ export async function installPackageDir(params: {
   params.logger?.info?.(`Installing to ${params.targetDir}…`);
   let backupDir: string | null = null;
   if (params.mode === "update" && (await fileExists(params.targetDir))) {
-    backupDir = `${params.targetDir}.backup-${Date.now()}`;
+    const backupRoot = path.join(path.dirname(params.targetDir), ".openclaw-install-backups");
+    backupDir = path.join(backupRoot, `${path.basename(params.targetDir)}-${Date.now()}`);
+    await fs.mkdir(backupRoot, { recursive: true });
     await fs.rename(params.targetDir, backupDir);
   }
 
@@ -43,6 +91,7 @@ export async function installPackageDir(params: {
   }
 
   if (params.hasDeps) {
+    await sanitizeManifestForNpmInstall(params.targetDir);
     params.logger?.info?.(params.depsLogMessage);
     const npmRes = await runCommandWithTimeout(
       ["npm", "install", "--omit=dev", "--silent", "--ignore-scripts"],

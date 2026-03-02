@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import {
   browserAct,
   browserArmDialog,
@@ -21,14 +22,19 @@ import {
 } from "../../browser/client.js";
 import { resolveBrowserConfig } from "../../browser/config.js";
 import { DEFAULT_AI_SNAPSHOT_MAX_CHARS } from "../../browser/constants.js";
-import { DEFAULT_UPLOAD_DIR, resolvePathsWithinRoot } from "../../browser/paths.js";
+import { DEFAULT_UPLOAD_DIR, resolveExistingPathsWithinRoot } from "../../browser/paths.js";
 import { applyBrowserProxyPaths, persistBrowserProxyFiles } from "../../browser/proxy-files.js";
 import { loadConfig } from "../../config/config.js";
 import { wrapExternalContent } from "../../security/external-content.js";
 import { BrowserToolSchema } from "./browser-tool.schema.js";
 import { type AnyAgentTool, imageResultFromFile, jsonResult, readStringParam } from "./common.js";
 import { callGatewayTool } from "./gateway.js";
-import { listNodes, resolveNodeIdFromList, type NodeListNode } from "./nodes-utils.js";
+import {
+  listNodes,
+  resolveNodeIdFromList,
+  selectDefaultNodeFromList,
+  type NodeListNode,
+} from "./nodes-utils.js";
 
 function wrapBrowserExternalJson(params: {
   kind: "snapshot" | "console" | "tabs";
@@ -52,6 +58,84 @@ function wrapBrowserExternalJson(params: {
       },
     },
   };
+}
+
+function formatTabsToolResult(tabs: unknown[]): AgentToolResult<unknown> {
+  const wrapped = wrapBrowserExternalJson({
+    kind: "tabs",
+    payload: { tabs },
+    includeWarning: false,
+  });
+  const content: AgentToolResult<unknown>["content"] = [
+    { type: "text", text: wrapped.wrappedText },
+  ];
+  return {
+    content,
+    details: { ...wrapped.safeDetails, tabCount: tabs.length },
+  };
+}
+
+function readOptionalTargetAndTimeout(params: Record<string, unknown>) {
+  const targetId = typeof params.targetId === "string" ? params.targetId.trim() : undefined;
+  const timeoutMs =
+    typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
+      ? params.timeoutMs
+      : undefined;
+  return { targetId, timeoutMs };
+}
+
+function readTargetUrlParam(params: Record<string, unknown>) {
+  return (
+    readStringParam(params, "targetUrl") ??
+    readStringParam(params, "url", { required: true, label: "targetUrl" })
+  );
+}
+
+const LEGACY_BROWSER_ACT_REQUEST_KEYS = [
+  "targetId",
+  "ref",
+  "doubleClick",
+  "button",
+  "modifiers",
+  "text",
+  "submit",
+  "slowly",
+  "key",
+  "delayMs",
+  "startRef",
+  "endRef",
+  "values",
+  "fields",
+  "width",
+  "height",
+  "timeMs",
+  "textGone",
+  "selector",
+  "url",
+  "loadState",
+  "fn",
+  "timeoutMs",
+] as const;
+
+function readActRequestParam(params: Record<string, unknown>) {
+  const requestParam = params.request;
+  if (requestParam && typeof requestParam === "object") {
+    return requestParam as Parameters<typeof browserAct>[1];
+  }
+
+  const kind = readStringParam(params, "kind");
+  if (!kind) {
+    return undefined;
+  }
+
+  const request: Record<string, unknown> = { kind };
+  for (const key of LEGACY_BROWSER_ACT_REQUEST_KEYS) {
+    if (!Object.hasOwn(params, key)) {
+      continue;
+    }
+    request[key] = params[key];
+  }
+  return request as Parameters<typeof browserAct>[1];
 }
 
 type BrowserProxyFile = {
@@ -118,10 +202,17 @@ async function resolveBrowserNodeTarget(params: {
     return { nodeId, label: node?.displayName ?? node?.remoteIp ?? nodeId };
   }
 
+  const selected = selectDefaultNodeFromList(browserNodes, {
+    preferLocalMac: false,
+    fallback: "none",
+  });
+
   if (params.target === "node") {
-    if (browserNodes.length === 1) {
-      const node = browserNodes[0];
-      return { nodeId: node.nodeId, label: node.displayName ?? node.remoteIp ?? node.nodeId };
+    if (selected) {
+      return {
+        nodeId: selected.nodeId,
+        label: selected.displayName ?? selected.remoteIp ?? selected.nodeId,
+      };
     }
     throw new Error(
       `Multiple browser-capable nodes connected (${browserNodes.length}). Set gateway.nodes.browser.node or pass node=<id>.`,
@@ -132,9 +223,11 @@ async function resolveBrowserNodeTarget(params: {
     return null;
   }
 
-  if (browserNodes.length === 1) {
-    const node = browserNodes[0];
-    return { nodeId: node.nodeId, label: node.displayName ?? node.remoteIp ?? node.nodeId };
+  if (selected) {
+    return {
+      nodeId: selected.nodeId,
+      label: selected.displayName ?? selected.remoteIp ?? selected.nodeId,
+    };
   }
   return null;
 }
@@ -359,32 +452,14 @@ export function createBrowserTool(opts?: {
               profile,
             });
             const tabs = (result as { tabs?: unknown[] }).tabs ?? [];
-            const wrapped = wrapBrowserExternalJson({
-              kind: "tabs",
-              payload: { tabs },
-              includeWarning: false,
-            });
-            return {
-              content: [{ type: "text", text: wrapped.wrappedText }],
-              details: { ...wrapped.safeDetails, tabCount: tabs.length },
-            };
+            return formatTabsToolResult(tabs);
           }
           {
             const tabs = await browserTabs(baseUrl, { profile });
-            const wrapped = wrapBrowserExternalJson({
-              kind: "tabs",
-              payload: { tabs },
-              includeWarning: false,
-            });
-            return {
-              content: [{ type: "text", text: wrapped.wrappedText }],
-              details: { ...wrapped.safeDetails, tabCount: tabs.length },
-            };
+            return formatTabsToolResult(tabs);
           }
         case "open": {
-          const targetUrl = readStringParam(params, "targetUrl", {
-            required: true,
-          });
+          const targetUrl = readTargetUrlParam(params);
           if (proxyRequest) {
             const result = await proxyRequest({
               method: "POST",
@@ -550,7 +625,7 @@ export function createBrowserTool(opts?: {
               });
             }
             return {
-              content: [{ type: "text", text: wrappedSnapshot }],
+              content: [{ type: "text" as const, text: wrappedSnapshot }],
               details: safeDetails,
             };
           }
@@ -560,7 +635,7 @@ export function createBrowserTool(opts?: {
               payload: snapshot,
             });
             return {
-              content: [{ type: "text", text: wrapped.wrappedText }],
+              content: [{ type: "text" as const, text: wrapped.wrappedText }],
               details: {
                 ...wrapped.safeDetails,
                 format: "aria",
@@ -612,9 +687,7 @@ export function createBrowserTool(opts?: {
           });
         }
         case "navigate": {
-          const targetUrl = readStringParam(params, "targetUrl", {
-            required: true,
-          });
+          const targetUrl = readTargetUrlParam(params);
           const targetId = readStringParam(params, "targetId");
           if (proxyRequest) {
             const result = await proxyRequest({
@@ -655,7 +728,7 @@ export function createBrowserTool(opts?: {
               includeWarning: false,
             });
             return {
-              content: [{ type: "text", text: wrapped.wrappedText }],
+              content: [{ type: "text" as const, text: wrapped.wrappedText }],
               details: {
                 ...wrapped.safeDetails,
                 targetId: typeof result.targetId === "string" ? result.targetId : undefined,
@@ -671,7 +744,7 @@ export function createBrowserTool(opts?: {
               includeWarning: false,
             });
             return {
-              content: [{ type: "text", text: wrapped.wrappedText }],
+              content: [{ type: "text" as const, text: wrapped.wrappedText }],
               details: {
                 ...wrapped.safeDetails,
                 targetId: result.targetId,
@@ -691,7 +764,7 @@ export function createBrowserTool(opts?: {
               })) as Awaited<ReturnType<typeof browserPdfSave>>)
             : await browserPdfSave(baseUrl, { targetId, profile });
           return {
-            content: [{ type: "text", text: `FILE:${result.path}` }],
+            content: [{ type: "text" as const, text: `FILE:${result.path}` }],
             details: result,
           };
         }
@@ -700,7 +773,7 @@ export function createBrowserTool(opts?: {
           if (paths.length === 0) {
             throw new Error("paths required");
           }
-          const uploadPathsResult = resolvePathsWithinRoot({
+          const uploadPathsResult = await resolveExistingPathsWithinRoot({
             rootDir: DEFAULT_UPLOAD_DIR,
             requestedPaths: paths,
             scopeLabel: `uploads directory (${DEFAULT_UPLOAD_DIR})`,
@@ -712,11 +785,7 @@ export function createBrowserTool(opts?: {
           const ref = readStringParam(params, "ref");
           const inputRef = readStringParam(params, "inputRef");
           const element = readStringParam(params, "element");
-          const targetId = typeof params.targetId === "string" ? params.targetId.trim() : undefined;
-          const timeoutMs =
-            typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
-              ? params.timeoutMs
-              : undefined;
+          const { targetId, timeoutMs } = readOptionalTargetAndTimeout(params);
           if (proxyRequest) {
             const result = await proxyRequest({
               method: "POST",
@@ -748,11 +817,7 @@ export function createBrowserTool(opts?: {
         case "dialog": {
           const accept = Boolean(params.accept);
           const promptText = typeof params.promptText === "string" ? params.promptText : undefined;
-          const targetId = typeof params.targetId === "string" ? params.targetId.trim() : undefined;
-          const timeoutMs =
-            typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
-              ? params.timeoutMs
-              : undefined;
+          const { targetId, timeoutMs } = readOptionalTargetAndTimeout(params);
           if (proxyRequest) {
             const result = await proxyRequest({
               method: "POST",
@@ -778,8 +843,8 @@ export function createBrowserTool(opts?: {
           );
         }
         case "act": {
-          const request = params.request as Record<string, unknown> | undefined;
-          if (!request || typeof request !== "object") {
+          const request = readActRequestParam(params);
+          if (!request) {
             throw new Error("request required");
           }
           try {
@@ -790,7 +855,7 @@ export function createBrowserTool(opts?: {
                   profile,
                   body: request,
                 })
-              : await browserAct(baseUrl, request as Parameters<typeof browserAct>[1], {
+              : await browserAct(baseUrl, request, {
                   profile,
                 });
             return jsonResult(result);

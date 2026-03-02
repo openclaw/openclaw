@@ -3,10 +3,12 @@ import path from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ExtensionAPI, FileOperations } from "@mariozechner/pi-coding-agent";
 import { extractSections } from "../../auto-reply/reply/post-compaction-context.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   BASE_CHUNK_RATIO,
   MIN_CHUNK_RATIO,
   SAFETY_MARGIN,
+  SUMMARIZATION_OVERHEAD_TOKENS,
   computeAdaptiveChunkRatio,
   estimateMessagesTokens,
   isOversizedForSummary,
@@ -16,8 +18,11 @@ import {
 } from "../compaction.js";
 import { collectTextContentBlocks } from "../content-blocks.js";
 import { getCompactionSafeguardRuntime } from "./compaction-safeguard-runtime.js";
-const FALLBACK_SUMMARY =
-  "Summary unavailable due to context limits. Older messages were truncated.";
+
+const log = createSubsystemLogger("compaction-safeguard");
+
+// Track session managers that have already logged the missing-model warning to avoid log spam.
+const missedModelWarningSessions = new WeakSet<object>();
 const TURN_PREFIX_INSTRUCTIONS =
   "This summary covers the prefix of a split turn. Focus on the original request," +
   " early progress, and any details needed to understand the retained suffix.";
@@ -125,6 +130,10 @@ function formatToolFailuresSection(failures: ToolFailure[]): string {
   return `\n\n## Tool Failures\n${lines.join("\n")}`;
 }
 
+function isRealConversationMessage(message: AgentMessage): boolean {
+  return message.role === "user" || message.role === "assistant" || message.role === "toolResult";
+}
+
 function computeFileLists(fileOps: FileOperations): {
   readFiles: string[];
   modifiedFiles: string[];
@@ -186,6 +195,12 @@ async function readWorkspaceContextForSummary(): Promise<string> {
 export default function compactionSafeguardExtension(api: ExtensionAPI): void {
   api.on("session_before_compact", async (event, ctx) => {
     const { preparation, customInstructions, signal } = event;
+    if (!preparation.messagesToSummarize.some(isRealConversationMessage)) {
+      log.warn(
+        "Compaction safeguard: cancelling compaction with no real conversation messages to summarize.",
+      );
+      return { cancel: true };
+    }
     const { readFiles, modifiedFiles } = computeFileLists(preparation.fileOps);
     const fileOpsSummary = formatFileOperations(readFiles, modifiedFiles);
     const toolFailures = collectToolFailures([
@@ -193,34 +208,38 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       ...preparation.turnPrefixMessages,
     ]);
     const toolFailureSection = formatToolFailuresSection(toolFailures);
-    const fallbackSummary = `${FALLBACK_SUMMARY}${toolFailureSection}${fileOpsSummary}`;
 
-    const model = ctx.model;
+    // Model resolution: ctx.model is undefined in compact.ts workflow (extensionRunner.initialize() is never called).
+    // Fall back to runtime.model which is explicitly passed when building extension paths.
+    const runtime = getCompactionSafeguardRuntime(ctx.sessionManager);
+    const summarizationInstructions = {
+      identifierPolicy: runtime?.identifierPolicy,
+      identifierInstructions: runtime?.identifierInstructions,
+    };
+    const model = ctx.model ?? runtime?.model;
     if (!model) {
-      return {
-        compaction: {
-          summary: fallbackSummary,
-          firstKeptEntryId: preparation.firstKeptEntryId,
-          tokensBefore: preparation.tokensBefore,
-          details: { readFiles, modifiedFiles },
-        },
-      };
+      // Log warning once per session when both models are missing (diagnostic for future issues).
+      // Use a WeakSet to track which session managers have already logged the warning.
+      if (!ctx.model && !runtime?.model && !missedModelWarningSessions.has(ctx.sessionManager)) {
+        missedModelWarningSessions.add(ctx.sessionManager);
+        console.warn(
+          "[compaction-safeguard] Both ctx.model and runtime.model are undefined. " +
+            "Compaction summarization will not run. This indicates extensionRunner.initialize() " +
+            "was not called and model was not passed through runtime registry.",
+        );
+      }
+      return { cancel: true };
     }
 
     const apiKey = await ctx.modelRegistry.getApiKey(model);
     if (!apiKey) {
-      return {
-        compaction: {
-          summary: fallbackSummary,
-          firstKeptEntryId: preparation.firstKeptEntryId,
-          tokensBefore: preparation.tokensBefore,
-          details: { readFiles, modifiedFiles },
-        },
-      };
+      console.warn(
+        "Compaction safeguard: no API key available; cancelling compaction to preserve history.",
+      );
+      return { cancel: true };
     }
 
     try {
-      const runtime = getCompactionSafeguardRuntime(ctx.sessionManager);
       const modelContextWindow = resolveContextWindowTokens(model);
       const contextWindowTokens = runtime?.contextWindowTokens ?? modelContextWindow;
       const turnPrefixMessages = preparation.turnPrefixMessages ?? [];
@@ -251,7 +270,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           });
           if (pruned.droppedChunks > 0) {
             const newContentRatio = (newContentTokens / contextWindowTokens) * 100;
-            console.warn(
+            log.warn(
               `Compaction safeguard: new content uses ${newContentRatio.toFixed(
                 1,
               )}% of context; dropped ${pruned.droppedChunks} older chunk(s) ` +
@@ -268,7 +287,8 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                 );
                 const droppedMaxChunkTokens = Math.max(
                   1,
-                  Math.floor(contextWindowTokens * droppedChunkRatio),
+                  Math.floor(contextWindowTokens * droppedChunkRatio) -
+                    SUMMARIZATION_OVERHEAD_TOKENS,
                 );
                 droppedSummary = await summarizeInStages({
                   messages: pruned.droppedMessagesList,
@@ -279,10 +299,11 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                   maxChunkTokens: droppedMaxChunkTokens,
                   contextWindow: contextWindowTokens,
                   customInstructions,
+                  summarizationInstructions,
                   previousSummary: preparation.previousSummary,
                 });
               } catch (droppedError) {
-                console.warn(
+                log.warn(
                   `Compaction safeguard: failed to summarize dropped messages, continuing without: ${
                     droppedError instanceof Error ? droppedError.message : String(droppedError)
                   }`,
@@ -293,10 +314,15 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         }
       }
 
-      // Use adaptive chunk ratio based on message sizes
+      // Use adaptive chunk ratio based on message sizes, reserving headroom for
+      // the summarization prompt, system prompt, previous summary, and reasoning budget
+      // that generateSummary adds on top of the serialized conversation chunk.
       const allMessages = [...messagesToSummarize, ...turnPrefixMessages];
       const adaptiveRatio = computeAdaptiveChunkRatio(allMessages, contextWindowTokens);
-      const maxChunkTokens = Math.max(1, Math.floor(contextWindowTokens * adaptiveRatio));
+      const maxChunkTokens = Math.max(
+        1,
+        Math.floor(contextWindowTokens * adaptiveRatio) - SUMMARIZATION_OVERHEAD_TOKENS,
+      );
       const reserveTokens = Math.max(1, Math.floor(preparation.settings.reserveTokens));
 
       // Feed dropped-messages summary as previousSummary so the main summarization
@@ -312,6 +338,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         maxChunkTokens,
         contextWindow: contextWindowTokens,
         customInstructions,
+        summarizationInstructions,
         previousSummary: effectivePreviousSummary,
       });
 
@@ -326,6 +353,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           maxChunkTokens,
           contextWindow: contextWindowTokens,
           customInstructions: TURN_PREFIX_INSTRUCTIONS,
+          summarizationInstructions,
           previousSummary: undefined,
         });
         summary = `${historySummary}\n\n---\n\n**Turn Context (split turn):**\n\n${prefixSummary}`;
@@ -349,19 +377,12 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         },
       };
     } catch (error) {
-      console.warn(
-        `Compaction summarization failed; truncating history: ${
+      log.warn(
+        `Compaction summarization failed; cancelling compaction to preserve history: ${
           error instanceof Error ? error.message : String(error)
         }`,
       );
-      return {
-        compaction: {
-          summary: fallbackSummary,
-          firstKeptEntryId: preparation.firstKeptEntryId,
-          tokensBefore: preparation.tokensBefore,
-          details: { readFiles, modifiedFiles },
-        },
-      };
+      return { cancel: true };
     }
   });
 }

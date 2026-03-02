@@ -28,11 +28,41 @@ function makeRuntime() {
   };
 }
 
+async function withCapturedStdout(run: () => Promise<void>): Promise<string> {
+  const writes: string[] = [];
+  const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(((chunk: unknown) => {
+    writes.push(String(chunk));
+    return true;
+  }) as typeof process.stdout.write);
+  try {
+    await run();
+    return writes.join("");
+  } finally {
+    writeSpy.mockRestore();
+  }
+}
+
 describe("ensureConfigReady", () => {
-  async function runEnsureConfigReady(commandPath: string[]) {
+  async function loadEnsureConfigReady() {
     vi.resetModules();
-    const { ensureConfigReady } = await import("./config-guard.js");
-    await ensureConfigReady({ runtime: makeRuntime() as never, commandPath });
+    return await import("./config-guard.js");
+  }
+
+  async function runEnsureConfigReady(commandPath: string[], suppressDoctorStdout = false) {
+    const runtime = makeRuntime();
+    const { ensureConfigReady } = await loadEnsureConfigReady();
+    await ensureConfigReady({ runtime: runtime as never, commandPath, suppressDoctorStdout });
+    return runtime;
+  }
+
+  function setInvalidSnapshot(overrides?: Partial<ReturnType<typeof makeSnapshot>>) {
+    readConfigFileSnapshotMock.mockResolvedValue({
+      ...makeSnapshot(),
+      exists: true,
+      valid: false,
+      issues: [{ path: "channels.whatsapp", message: "invalid" }],
+      ...overrides,
+    });
   }
 
   beforeEach(() => {
@@ -54,5 +84,59 @@ describe("ensureConfigReady", () => {
   ])("$name", async ({ commandPath, expectedDoctorCalls }) => {
     await runEnsureConfigReady(commandPath);
     expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledTimes(expectedDoctorCalls);
+  });
+
+  it("exits for invalid config on non-allowlisted commands", async () => {
+    setInvalidSnapshot();
+    const runtime = await runEnsureConfigReady(["message"]);
+
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("Config invalid"));
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("doctor --fix"));
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("does not exit for invalid config on allowlisted commands", async () => {
+    setInvalidSnapshot();
+    const statusRuntime = await runEnsureConfigReady(["status"]);
+    expect(statusRuntime.exit).not.toHaveBeenCalled();
+
+    const gatewayRuntime = await runEnsureConfigReady(["gateway", "health"]);
+    expect(gatewayRuntime.exit).not.toHaveBeenCalled();
+  });
+
+  it("runs doctor migration flow only once per module instance", async () => {
+    const runtimeA = makeRuntime();
+    const runtimeB = makeRuntime();
+    const { ensureConfigReady } = await loadEnsureConfigReady();
+
+    await ensureConfigReady({ runtime: runtimeA as never, commandPath: ["message"] });
+    await ensureConfigReady({ runtime: runtimeB as never, commandPath: ["message"] });
+
+    expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("still runs doctor flow when stdout suppression is enabled", async () => {
+    await runEnsureConfigReady(["message"], true);
+    expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("prevents preflight stdout noise when suppression is enabled", async () => {
+    loadAndMaybeMigrateDoctorConfigMock.mockImplementation(async () => {
+      process.stdout.write("Doctor warnings\n");
+    });
+    const output = await withCapturedStdout(async () => {
+      await runEnsureConfigReady(["message"], true);
+    });
+    expect(output).not.toContain("Doctor warnings");
+  });
+
+  it("allows preflight stdout noise when suppression is not enabled", async () => {
+    loadAndMaybeMigrateDoctorConfigMock.mockImplementation(async () => {
+      process.stdout.write("Doctor warnings\n");
+    });
+    const output = await withCapturedStdout(async () => {
+      await runEnsureConfigReady(["message"], false);
+    });
+    expect(output).toContain("Doctor warnings");
   });
 });

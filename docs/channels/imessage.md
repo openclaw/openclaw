@@ -158,6 +158,7 @@ imsg send <handle> "test"
     Group sender allowlist: `channels.imessage.groupAllowFrom`.
 
     Runtime fallback: if `groupAllowFrom` is unset, iMessage group sender checks fall back to `allowFrom` when available.
+    Runtime note: if `channels.imessage` is completely missing, runtime falls back to `groupPolicy="allowlist"` and logs a warning (even if `channels.defaults.groupPolicy` is set).
 
     Mention gating for groups:
 

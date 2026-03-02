@@ -69,6 +69,27 @@ jobs:
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Resolve OCI labels (amd64)
+        id: labels
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_SHA}"
+          if [[ "${GITHUB_REF}" == "refs/heads/main" ]]; then
+            version="main"
+          fi
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            version="${GITHUB_REF#refs/tags/v}"
+          fi
+          created="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          {
+            echo "value<<EOF"
+            echo "org.opencontainers.image.revision=${GITHUB_SHA}"
+            echo "org.opencontainers.image.version=${version}"
+            echo "org.opencontainers.image.created=${created}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Build and push amd64 image
         id: build
         uses: docker/build-push-action@v6
@@ -76,6 +97,7 @@ jobs:
           context: .
           platforms: linux/amd64
           tags: ${{ steps.tags.outputs.value }}
+          labels: ${{ steps.labels.outputs.value }}
           cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-cache:amd64
           cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-cache:amd64,mode=max
           provenance: false
@@ -128,6 +150,27 @@ jobs:
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Resolve OCI labels (arm64)
+        id: labels
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_SHA}"
+          if [[ "${GITHUB_REF}" == "refs/heads/main" ]]; then
+            version="main"
+          fi
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            version="${GITHUB_REF#refs/tags/v}"
+          fi
+          created="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          {
+            echo "value<<EOF"
+            echo "org.opencontainers.image.revision=${GITHUB_SHA}"
+            echo "org.opencontainers.image.version=${version}"
+            echo "org.opencontainers.image.created=${created}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Build and push arm64 image
         id: build
         uses: docker/build-push-action@v6
@@ -135,6 +178,7 @@ jobs:
           context: .
           platforms: linux/arm64
           tags: ${{ steps.tags.outputs.value }}
+          labels: ${{ steps.labels.outputs.value }}
           cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-cache:arm64
           cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-cache:arm64,mode=max
           provenance: false
@@ -172,6 +216,9 @@ jobs:
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             version="${GITHUB_REF#refs/tags/v}"
             tags+=("${IMAGE}:${version}")
+            if [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?$ ]]; then
+              tags+=("${IMAGE}:latest")
+            fi
           fi
           if [[ ${#tags[@]} -eq 0 ]]; then
             echo "::error::No manifest tags resolved for ref ${GITHUB_REF}"

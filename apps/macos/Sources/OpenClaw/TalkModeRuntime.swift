@@ -11,6 +11,7 @@ actor TalkModeRuntime {
     private let logger = Logger(subsystem: "ai.openclaw", category: "talk.runtime")
     private let ttsLogger = Logger(subsystem: "ai.openclaw", category: "talk.tts")
     private static let defaultModelIdFallback = "eleven_v3"
+    private static let defaultTalkProvider = "elevenlabs"
 
     private final class RMSMeter: @unchecked Sendable {
         private let lock = NSLock()
@@ -183,6 +184,12 @@ actor TalkModeRuntime {
             self.audioEngine = AVAudioEngine()
         }
         guard let audioEngine = self.audioEngine else { return }
+
+        guard AudioInputDeviceObserver.hasUsableDefaultInputDevice() else {
+            self.audioEngine = nil
+            self.logger.error("talk mode: no usable audio input device")
+            return
+        }
 
         let input = audioEngine.inputNode
         let format = input.outputFormat(forBus: 0)
@@ -792,6 +799,82 @@ extension TalkModeRuntime {
         let apiKey: String?
     }
 
+    struct TalkProviderConfigSelection {
+        let provider: String
+        let config: [String: AnyCodable]
+        let normalizedPayload: Bool
+    }
+
+    private static func normalizedTalkProviderID(_ raw: String?) -> String? {
+        let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private static func normalizedTalkProviderConfig(_ value: AnyCodable) -> [String: AnyCodable]? {
+        if let typed = value.value as? [String: AnyCodable] {
+            return typed
+        }
+        if let foundation = value.value as? [String: Any] {
+            return foundation.mapValues(AnyCodable.init)
+        }
+        if let nsDict = value.value as? NSDictionary {
+            var converted: [String: AnyCodable] = [:]
+            for case let (key as String, raw) in nsDict {
+                converted[key] = AnyCodable(raw)
+            }
+            return converted
+        }
+        return nil
+    }
+
+    private static func normalizedTalkProviders(_ raw: AnyCodable?) -> [String: [String: AnyCodable]] {
+        guard let raw else { return [:] }
+        var providerMap: [String: AnyCodable] = [:]
+        if let typed = raw.value as? [String: AnyCodable] {
+            providerMap = typed
+        } else if let foundation = raw.value as? [String: Any] {
+            providerMap = foundation.mapValues(AnyCodable.init)
+        } else if let nsDict = raw.value as? NSDictionary {
+            for case let (key as String, value) in nsDict {
+                providerMap[key] = AnyCodable(value)
+            }
+        } else {
+            return [:]
+        }
+
+        return providerMap.reduce(into: [String: [String: AnyCodable]]()) { acc, entry in
+            guard
+                let providerID = Self.normalizedTalkProviderID(entry.key),
+                let providerConfig = Self.normalizedTalkProviderConfig(entry.value)
+            else { return }
+            acc[providerID] = providerConfig
+        }
+    }
+
+    static func selectTalkProviderConfig(
+        _ talk: [String: AnyCodable]?) -> TalkProviderConfigSelection?
+    {
+        guard let talk else { return nil }
+        let rawProvider = talk["provider"]?.stringValue
+        let rawProviders = talk["providers"]
+        let hasNormalizedPayload = rawProvider != nil || rawProviders != nil
+        if hasNormalizedPayload {
+            let normalizedProviders = Self.normalizedTalkProviders(rawProviders)
+            let providerID =
+                Self.normalizedTalkProviderID(rawProvider) ??
+                normalizedProviders.keys.min() ??
+                Self.defaultTalkProvider
+            return TalkProviderConfigSelection(
+                provider: providerID,
+                config: normalizedProviders[providerID] ?? [:],
+                normalizedPayload: true)
+        }
+        return TalkProviderConfigSelection(
+            provider: Self.defaultTalkProvider,
+            config: talk,
+            normalizedPayload: false)
+    }
+
     private func fetchTalkConfig() async -> TalkRuntimeConfig {
         let env = ProcessInfo.processInfo.environment
         let envVoice = env["ELEVENLABS_VOICE_ID"]?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -804,13 +887,16 @@ extension TalkModeRuntime {
                 params: ["includeSecrets": AnyCodable(true)],
                 timeoutMs: 8000)
             let talk = snap.config?["talk"]?.dictionaryValue
+            let selection = Self.selectTalkProviderConfig(talk)
+            let activeProvider = selection?.provider ?? Self.defaultTalkProvider
+            let activeConfig = selection?.config
             let ui = snap.config?["ui"]?.dictionaryValue
             let rawSeam = ui?["seamColor"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             await MainActor.run {
                 AppStateStore.shared.seamColorHex = rawSeam.isEmpty ? nil : rawSeam
             }
-            let voice = talk?["voiceId"]?.stringValue
-            let rawAliases = talk?["voiceAliases"]?.dictionaryValue
+            let voice = activeConfig?["voiceId"]?.stringValue
+            let rawAliases = activeConfig?["voiceAliases"]?.dictionaryValue
             let resolvedAliases: [String: String] =
                 rawAliases?.reduce(into: [:]) { acc, entry in
                     let key = entry.key.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -818,18 +904,30 @@ extension TalkModeRuntime {
                     guard !key.isEmpty, !value.isEmpty else { return }
                     acc[key] = value
                 } ?? [:]
-            let model = talk?["modelId"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let model = activeConfig?["modelId"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
             let resolvedModel = (model?.isEmpty == false) ? model! : Self.defaultModelIdFallback
-            let outputFormat = talk?["outputFormat"]?.stringValue
+            let outputFormat = activeConfig?["outputFormat"]?.stringValue
             let interrupt = talk?["interruptOnSpeech"]?.boolValue
-            let apiKey = talk?["apiKey"]?.stringValue
-            let resolvedVoice =
+            let apiKey = activeConfig?["apiKey"]?.stringValue
+            let resolvedVoice: String? = if activeProvider == Self.defaultTalkProvider {
                 (voice?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? voice : nil) ??
-                (envVoice?.isEmpty == false ? envVoice : nil) ??
-                (sagVoice?.isEmpty == false ? sagVoice : nil)
-            let resolvedApiKey =
+                    (envVoice?.isEmpty == false ? envVoice : nil) ??
+                    (sagVoice?.isEmpty == false ? sagVoice : nil)
+            } else {
+                (voice?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? voice : nil)
+            }
+            let resolvedApiKey: String? = if activeProvider == Self.defaultTalkProvider {
                 (envApiKey?.isEmpty == false ? envApiKey : nil) ??
-                (apiKey?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? apiKey : nil)
+                    (apiKey?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? apiKey : nil)
+            } else {
+                nil
+            }
+            if activeProvider != Self.defaultTalkProvider {
+                self.ttsLogger
+                    .info("talk provider \(activeProvider, privacy: .public) unsupported; using system voice")
+            } else if selection?.normalizedPayload == true {
+                self.ttsLogger.info("talk config provider elevenlabs")
+            }
             return TalkRuntimeConfig(
                 voiceId: resolvedVoice,
                 voiceAliases: resolvedAliases,

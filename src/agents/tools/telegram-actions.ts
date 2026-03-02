@@ -85,48 +85,78 @@ export function readTelegramButtons(
 export async function handleTelegramAction(
   params: Record<string, unknown>,
   cfg: OpenClawConfig,
+  options?: {
+    mediaLocalRoots?: readonly string[];
+  },
 ): Promise<AgentToolResult<unknown>> {
   const action = readStringParam(params, "action", { required: true });
   const accountId = readStringParam(params, "accountId");
   const isActionEnabled = createTelegramActionGate({ cfg, accountId });
 
   if (action === "react") {
-    // Check reaction level first
+    // All react failures return soft results (jsonResult with ok:false) instead
+    // of throwing, because hard tool errors can trigger model re-generation
+    // loops and duplicate content.
     const reactionLevelInfo = resolveTelegramReactionLevel({
       cfg,
       accountId: accountId ?? undefined,
     });
     if (!reactionLevelInfo.agentReactionsEnabled) {
-      throw new Error(
-        `Telegram agent reactions disabled (reactionLevel="${reactionLevelInfo.level}"). ` +
-          `Set channels.telegram.reactionLevel to "minimal" or "extensive" to enable.`,
-      );
+      return jsonResult({
+        ok: false,
+        reason: "disabled",
+        hint: `Telegram agent reactions disabled (reactionLevel="${reactionLevelInfo.level}"). Do not retry.`,
+      });
     }
-    // Also check the existing action gate for backward compatibility
     if (!isActionEnabled("reactions")) {
-      throw new Error("Telegram reactions are disabled via actions.reactions.");
+      return jsonResult({
+        ok: false,
+        reason: "disabled",
+        hint: "Telegram reactions are disabled via actions.reactions. Do not retry.",
+      });
     }
     const chatId = readStringOrNumberParam(params, "chatId", {
       required: true,
     });
     const messageId = readNumberParam(params, "messageId", {
-      required: true,
       integer: true,
     });
+    if (typeof messageId !== "number" || !Number.isFinite(messageId) || messageId <= 0) {
+      return jsonResult({
+        ok: false,
+        reason: "missing_message_id",
+        hint: "Telegram reaction requires a valid messageId (or inbound context fallback). Do not retry.",
+      });
+    }
     const { emoji, remove, isEmpty } = readReactionParams(params, {
       removeErrorMessage: "Emoji is required to remove a Telegram reaction.",
     });
     const token = resolveTelegramToken(cfg, { accountId }).token;
     if (!token) {
-      throw new Error(
-        "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
-      );
+      return jsonResult({
+        ok: false,
+        reason: "missing_token",
+        hint: "Telegram bot token missing. Do not retry.",
+      });
     }
-    const reactionResult = await reactMessageTelegram(chatId ?? "", messageId ?? 0, emoji ?? "", {
-      token,
-      remove,
-      accountId: accountId ?? undefined,
-    });
+    let reactionResult: Awaited<ReturnType<typeof reactMessageTelegram>>;
+    try {
+      reactionResult = await reactMessageTelegram(chatId ?? "", messageId ?? 0, emoji ?? "", {
+        token,
+        remove,
+        accountId: accountId ?? undefined,
+      });
+    } catch (err) {
+      const isInvalid = String(err).includes("REACTION_INVALID");
+      return jsonResult({
+        ok: false,
+        reason: isInvalid ? "REACTION_INVALID" : "error",
+        emoji,
+        hint: isInvalid
+          ? "This emoji is not supported for Telegram reactions. Add it to your reaction disallow list so you do not try it again."
+          : "Reaction failed. Do not retry.",
+      });
+    }
     if (!reactionResult.ok) {
       return jsonResult({
         ok: false,
@@ -198,6 +228,7 @@ export async function handleTelegramAction(
       token,
       accountId: accountId ?? undefined,
       mediaUrl: mediaUrl || undefined,
+      mediaLocalRoots: options?.mediaLocalRoots,
       buttons,
       replyToMessageId: replyToMessageId ?? undefined,
       messageThreadId: messageThreadId ?? undefined,

@@ -29,10 +29,11 @@ export function registerPluginHttpRoute(params: {
     return () => {};
   }
 
-  if (routes.some((entry) => entry.path === normalizedPath)) {
+  const existingIndex = routes.findIndex((entry) => entry.path === normalizedPath);
+  if (existingIndex >= 0) {
     const pluginHint = params.pluginId ? ` (${params.pluginId})` : "";
-    params.log?.(`plugin: webhook path ${normalizedPath} already registered${suffix}${pluginHint}`);
-    return () => {};
+    params.log?.(`plugin: replacing stale webhook path ${normalizedPath}${suffix}${pluginHint}`);
+    routes.splice(existingIndex, 1);
   }
 
   const entry: PluginHttpRouteRegistration = {

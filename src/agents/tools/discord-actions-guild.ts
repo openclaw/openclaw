@@ -24,6 +24,7 @@ import {
 import {
   type ActionGate,
   jsonResult,
+  parseAvailableTags,
   readNumberParam,
   readStringArrayParam,
   readStringParam,
@@ -334,6 +335,7 @@ export async function handleDiscordGuildAction(
       const autoArchiveDuration = readNumberParam(params, "autoArchiveDuration", {
         integer: true,
       });
+      const availableTags = parseAvailableTags(params.availableTags);
       const channel = accountId
         ? await editChannelDiscord(
             {
@@ -347,6 +349,7 @@ export async function handleDiscordGuildAction(
               archived,
               locked,
               autoArchiveDuration: autoArchiveDuration ?? undefined,
+              availableTags,
             },
             { accountId },
           )
@@ -361,6 +364,7 @@ export async function handleDiscordGuildAction(
             archived,
             locked,
             autoArchiveDuration: autoArchiveDuration ?? undefined,
+            availableTags,
           });
       return jsonResult({ ok: true, channel });
     }

@@ -22,6 +22,34 @@ function makeEvent(
   };
 }
 
+function makePostEvent(content: unknown) {
+  return {
+    sender: { sender_id: { user_id: "u1", open_id: "ou_sender" } },
+    message: {
+      message_id: "msg_1",
+      chat_id: "oc_chat1",
+      chat_type: "group",
+      message_type: "post",
+      content: JSON.stringify(content),
+      mentions: [],
+    },
+  };
+}
+
+function makeShareChatEvent(content: unknown) {
+  return {
+    sender: { sender_id: { user_id: "u1", open_id: "ou_sender" } },
+    message: {
+      message_id: "msg_1",
+      chat_id: "oc_chat1",
+      chat_type: "group",
+      message_type: "share_chat",
+      content: JSON.stringify(content),
+      mentions: [],
+    },
+  };
+}
+
 describe("parseFeishuMessageEvent – mentionedBot", () => {
   const BOT_OPEN_ID = "ou_bot_123";
 
@@ -29,6 +57,15 @@ describe("parseFeishuMessageEvent – mentionedBot", () => {
     const event = makeEvent("group", []);
     const ctx = parseFeishuMessageEvent(event as any, BOT_OPEN_ID);
     expect(ctx.mentionedBot).toBe(false);
+  });
+
+  it("falls back to sender user_id when open_id is missing", () => {
+    const event = makeEvent("p2p", []);
+    (event as any).sender.sender_id = { user_id: "u_mobile_only" };
+
+    const ctx = parseFeishuMessageEvent(event as any, BOT_OPEN_ID);
+    expect(ctx.senderOpenId).toBe("u_mobile_only");
+    expect(ctx.senderId).toBe("u_mobile_only");
   });
 
   it("returns mentionedBot=true when bot is mentioned", () => {
@@ -85,65 +122,64 @@ describe("parseFeishuMessageEvent – mentionedBot", () => {
 
   it("returns mentionedBot=true for post message with at (no top-level mentions)", () => {
     const BOT_OPEN_ID = "ou_bot_123";
-    const postContent = JSON.stringify({
+    const event = makePostEvent({
       content: [
         [{ tag: "at", user_id: BOT_OPEN_ID, user_name: "claw" }],
         [{ tag: "text", text: "What does this document say" }],
       ],
     });
-    const event = {
-      sender: { sender_id: { user_id: "u1", open_id: "ou_sender" } },
-      message: {
-        message_id: "msg_1",
-        chat_id: "oc_chat1",
-        chat_type: "group",
-        message_type: "post",
-        content: postContent,
-        mentions: [],
-      },
-    };
     const ctx = parseFeishuMessageEvent(event as any, BOT_OPEN_ID);
     expect(ctx.mentionedBot).toBe(true);
   });
 
   it("returns mentionedBot=false for post message with no at", () => {
-    const postContent = JSON.stringify({
+    const event = makePostEvent({
       content: [[{ tag: "text", text: "hello" }]],
     });
-    const event = {
-      sender: { sender_id: { user_id: "u1", open_id: "ou_sender" } },
-      message: {
-        message_id: "msg_1",
-        chat_id: "oc_chat1",
-        chat_type: "group",
-        message_type: "post",
-        content: postContent,
-        mentions: [],
-      },
-    };
     const ctx = parseFeishuMessageEvent(event as any, "ou_bot_123");
     expect(ctx.mentionedBot).toBe(false);
   });
 
   it("returns mentionedBot=false for post message with at for another user", () => {
-    const postContent = JSON.stringify({
+    const event = makePostEvent({
       content: [
         [{ tag: "at", user_id: "ou_other", user_name: "other" }],
         [{ tag: "text", text: "hello" }],
       ],
     });
-    const event = {
-      sender: { sender_id: { user_id: "u1", open_id: "ou_sender" } },
-      message: {
-        message_id: "msg_1",
-        chat_id: "oc_chat1",
-        chat_type: "group",
-        message_type: "post",
-        content: postContent,
-        mentions: [],
-      },
-    };
     const ctx = parseFeishuMessageEvent(event as any, "ou_bot_123");
     expect(ctx.mentionedBot).toBe(false);
+  });
+
+  it("preserves post code and code_block content", () => {
+    const event = makePostEvent({
+      content: [
+        [
+          { tag: "text", text: "before " },
+          { tag: "code", text: "inline()" },
+        ],
+        [{ tag: "code_block", language: "ts", text: "const x = 1;" }],
+      ],
+    });
+    const ctx = parseFeishuMessageEvent(event as any, "ou_bot_123");
+    expect(ctx.content).toContain("before `inline()`");
+    expect(ctx.content).toContain("```ts\nconst x = 1;\n```");
+  });
+
+  it("uses share_chat body when available", () => {
+    const event = makeShareChatEvent({
+      body: "Merged and Forwarded Message",
+      share_chat_id: "sc_abc123",
+    });
+    const ctx = parseFeishuMessageEvent(event as any, "ou_bot_123");
+    expect(ctx.content).toBe("Merged and Forwarded Message");
+  });
+
+  it("falls back to share_chat identifier when body is unavailable", () => {
+    const event = makeShareChatEvent({
+      share_chat_id: "sc_abc123",
+    });
+    const ctx = parseFeishuMessageEvent(event as any, "ou_bot_123");
+    expect(ctx.content).toBe("[Forwarded message: sc_abc123]");
   });
 });

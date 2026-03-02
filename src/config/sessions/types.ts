@@ -22,6 +22,49 @@ export type SessionOrigin = {
   threadId?: string | number;
 };
 
+export type SessionAcpIdentitySource = "ensure" | "status" | "event";
+
+export type SessionAcpIdentityState = "pending" | "resolved";
+
+export type SessionAcpIdentity = {
+  state: SessionAcpIdentityState;
+  acpxRecordId?: string;
+  acpxSessionId?: string;
+  agentSessionId?: string;
+  source: SessionAcpIdentitySource;
+  lastUpdatedAt: number;
+};
+
+export type SessionAcpMeta = {
+  backend: string;
+  agent: string;
+  runtimeSessionName: string;
+  identity?: SessionAcpIdentity;
+  mode: "persistent" | "oneshot";
+  runtimeOptions?: AcpSessionRuntimeOptions;
+  cwd?: string;
+  state: "idle" | "running" | "error";
+  lastActivityAt: number;
+  lastError?: string;
+};
+
+export type AcpSessionRuntimeOptions = {
+  /**
+   * ACP runtime mode set via session/set_mode (for example: "plan", "normal", "auto").
+   */
+  runtimeMode?: string;
+  /** ACP runtime config option: model id. */
+  model?: string;
+  /** Working directory override for ACP session turns. */
+  cwd?: string;
+  /** ACP runtime config option: permission profile id. */
+  permissionProfile?: string;
+  /** ACP runtime config option: per-turn timeout in seconds. */
+  timeoutSeconds?: number;
+  /** Backend-specific option bag mapped through session/set_config_option. */
+  backendExtras?: Record<string, string>;
+};
+
 export type SessionEntry = {
   /**
    * Last delivered heartbeat payload (used to suppress duplicate heartbeat notifications).
@@ -35,10 +78,20 @@ export type SessionEntry = {
   sessionFile?: string;
   /** Parent session key that spawned this session (used for sandbox session-tool scoping). */
   spawnedBy?: string;
+  /** True after a thread/topic session has been forked from its parent transcript once. */
+  forkedFromParent?: boolean;
   /** Subagent spawn depth (0 = main, 1 = sub-agent, 2 = sub-sub-agent). */
   spawnDepth?: number;
   systemSent?: boolean;
   abortedLastRun?: boolean;
+  /**
+   * Session-level stop cutoff captured when /stop is received.
+   * Messages at/before this boundary are skipped to avoid replaying
+   * queued pre-stop backlog.
+   */
+  abortCutoffMessageSid?: string;
+  /** Epoch ms cutoff paired with abortCutoffMessageSid when available. */
+  abortCutoffTimestamp?: number;
   chatType?: SessionChatType;
   thinkingLevel?: string;
   verboseLevel?: string;
@@ -110,7 +163,67 @@ export type SessionEntry = {
   lastThreadId?: string | number;
   skillsSnapshot?: SessionSkillSnapshot;
   systemPromptReport?: SessionSystemPromptReport;
+  acp?: SessionAcpMeta;
 };
+
+function normalizeRuntimeField(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+export function normalizeSessionRuntimeModelFields(entry: SessionEntry): SessionEntry {
+  const normalizedModel = normalizeRuntimeField(entry.model);
+  const normalizedProvider = normalizeRuntimeField(entry.modelProvider);
+  let next = entry;
+
+  if (!normalizedModel) {
+    if (entry.model !== undefined || entry.modelProvider !== undefined) {
+      next = { ...next };
+      delete next.model;
+      delete next.modelProvider;
+    }
+    return next;
+  }
+
+  if (entry.model !== normalizedModel) {
+    if (next === entry) {
+      next = { ...next };
+    }
+    next.model = normalizedModel;
+  }
+
+  if (!normalizedProvider) {
+    if (entry.modelProvider !== undefined) {
+      if (next === entry) {
+        next = { ...next };
+      }
+      delete next.modelProvider;
+    }
+    return next;
+  }
+
+  if (entry.modelProvider !== normalizedProvider) {
+    if (next === entry) {
+      next = { ...next };
+    }
+    next.modelProvider = normalizedProvider;
+  }
+  return next;
+}
+
+export function setSessionRuntimeModel(
+  entry: SessionEntry,
+  runtime: { provider: string; model: string },
+): boolean {
+  const provider = runtime.provider.trim();
+  const model = runtime.model.trim();
+  if (!provider || !model) {
+    return false;
+  }
+  entry.modelProvider = provider;
+  entry.model = model;
+  return true;
+}
 
 export function mergeSessionEntry(
   existing: SessionEntry | undefined,
@@ -119,9 +232,20 @@ export function mergeSessionEntry(
   const sessionId = patch.sessionId ?? existing?.sessionId ?? crypto.randomUUID();
   const updatedAt = Math.max(existing?.updatedAt ?? 0, patch.updatedAt ?? 0, Date.now());
   if (!existing) {
-    return { ...patch, sessionId, updatedAt };
+    return normalizeSessionRuntimeModelFields({ ...patch, sessionId, updatedAt });
   }
-  return { ...existing, ...patch, sessionId, updatedAt };
+  const next = { ...existing, ...patch, sessionId, updatedAt };
+
+  // Guard against stale provider carry-over when callers patch runtime model
+  // without also patching runtime provider.
+  if (Object.hasOwn(patch, "model") && !Object.hasOwn(patch, "modelProvider")) {
+    const patchedModel = normalizeRuntimeField(patch.model);
+    const existingModel = normalizeRuntimeField(existing.model);
+    if (patchedModel && patchedModel !== existingModel) {
+      delete next.modelProvider;
+    }
+  }
+  return normalizeSessionRuntimeModelFields(next);
 }
 
 export function resolveFreshSessionTotalTokens(
@@ -152,7 +276,7 @@ export type GroupKeyResolution = {
 
 export type SessionSkillSnapshot = {
   prompt: string;
-  skills: Array<{ name: string; primaryEnv?: string }>;
+  skills: Array<{ name: string; primaryEnv?: string; requiredEnv?: string[] }>;
   /** Normalized agent-level filter used to build this snapshot; undefined means unrestricted. */
   skillFilter?: string[];
   resolvedSkills?: Skill[];

@@ -34,6 +34,27 @@ type WebMediaOptions = {
   readFile?: (filePath: string) => Promise<Buffer>;
 };
 
+function resolveWebMediaOptions(params: {
+  maxBytesOrOptions?: number | WebMediaOptions;
+  options?: { ssrfPolicy?: SsrFPolicy; localRoots?: readonly string[] | "any" };
+  optimizeImages: boolean;
+}): WebMediaOptions {
+  if (typeof params.maxBytesOrOptions === "number" || params.maxBytesOrOptions === undefined) {
+    return {
+      maxBytes: params.maxBytesOrOptions,
+      optimizeImages: params.optimizeImages,
+      ssrfPolicy: params.options?.ssrfPolicy,
+      localRoots: params.options?.localRoots,
+    };
+  }
+  return {
+    ...params.maxBytesOrOptions,
+    optimizeImages: params.optimizeImages
+      ? (params.maxBytesOrOptions.optimizeImages ?? true)
+      : false,
+  };
+}
+
 export type LocalMediaAccessErrorCode =
   | "path-not-allowed"
   | "invalid-root"
@@ -73,9 +94,9 @@ async function assertLocalMediaAllowed(
     resolved = path.resolve(mediaPath);
   }
 
-  // Hardening: the default allowlist includes `os.tmpdir()`, and tests/CI may
+  // Hardening: the default allowlist includes the OpenClaw temp dir, and tests/CI may
   // override the state dir into tmp. Avoid accidentally allowing per-agent
-  // `workspace-*` state roots via the tmpdir prefix match; require explicit
+  // `workspace-*` state roots via the temp-root prefix match; require explicit
   // localRoots for those.
   if (localRoots === undefined) {
     const workspaceRoot = roots.find((root) => path.basename(root) === "workspace");
@@ -385,18 +406,10 @@ export async function loadWebMedia(
   maxBytesOrOptions?: number | WebMediaOptions,
   options?: { ssrfPolicy?: SsrFPolicy; localRoots?: readonly string[] | "any" },
 ): Promise<WebMediaResult> {
-  if (typeof maxBytesOrOptions === "number" || maxBytesOrOptions === undefined) {
-    return await loadWebMediaInternal(mediaUrl, {
-      maxBytes: maxBytesOrOptions,
-      optimizeImages: true,
-      ssrfPolicy: options?.ssrfPolicy,
-      localRoots: options?.localRoots,
-    });
-  }
-  return await loadWebMediaInternal(mediaUrl, {
-    ...maxBytesOrOptions,
-    optimizeImages: maxBytesOrOptions.optimizeImages ?? true,
-  });
+  return await loadWebMediaInternal(
+    mediaUrl,
+    resolveWebMediaOptions({ maxBytesOrOptions, options, optimizeImages: true }),
+  );
 }
 
 export async function loadWebMediaRaw(
@@ -404,18 +417,10 @@ export async function loadWebMediaRaw(
   maxBytesOrOptions?: number | WebMediaOptions,
   options?: { ssrfPolicy?: SsrFPolicy; localRoots?: readonly string[] | "any" },
 ): Promise<WebMediaResult> {
-  if (typeof maxBytesOrOptions === "number" || maxBytesOrOptions === undefined) {
-    return await loadWebMediaInternal(mediaUrl, {
-      maxBytes: maxBytesOrOptions,
-      optimizeImages: false,
-      ssrfPolicy: options?.ssrfPolicy,
-      localRoots: options?.localRoots,
-    });
-  }
-  return await loadWebMediaInternal(mediaUrl, {
-    ...maxBytesOrOptions,
-    optimizeImages: false,
-  });
+  return await loadWebMediaInternal(
+    mediaUrl,
+    resolveWebMediaOptions({ maxBytesOrOptions, options, optimizeImages: false }),
+  );
 }
 
 export async function optimizeImageToJpeg(

@@ -1,5 +1,5 @@
-import OpenClawKit
 import Foundation
+import OpenClawKit
 import os
 import Testing
 @testable import OpenClaw
@@ -38,17 +38,7 @@ import Testing
         }
 
         func send(_ message: URLSessionWebSocketTask.Message) async throws {
-            let data: Data? = switch message {
-            case let .data(d): d
-            case let .string(s): s.data(using: .utf8)
-            @unknown default: nil
-            }
-            guard let data else { return }
-            if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               obj["type"] as? String == "req",
-               obj["method"] as? String == "connect",
-               let id = obj["id"] as? String
-            {
+            if let id = GatewayWebSocketTestSupport.connectRequestID(from: message) {
                 self.connectRequestID.withLock { $0 = id }
             }
         }
@@ -60,7 +50,7 @@ import Testing
             case let .helloOk(ms):
                 delayMs = ms
                 let id = self.connectRequestID.withLock { $0 } ?? "connect"
-                msg = .data(Self.connectOkData(id: id))
+                msg = .data(GatewayWebSocketTestSupport.connectOkData(id: id))
             case let .invalid(ms):
                 delayMs = ms
                 msg = .string("not json")
@@ -76,30 +66,6 @@ import Testing
             // Tests only need the handshake receive; keep the loop idle.
             self.pendingReceiveHandler.withLock { $0 = completionHandler }
         }
-
-        private static func connectOkData(id: String) -> Data {
-            let json = """
-            {
-              "type": "res",
-              "id": "\(id)",
-              "ok": true,
-              "payload": {
-                "type": "hello-ok",
-                "protocol": 2,
-                "server": { "version": "test", "connId": "test" },
-                "features": { "methods": [], "events": [] },
-                "snapshot": {
-                  "presence": [ { "ts": 1 } ],
-                  "health": {},
-                  "stateVersion": { "presence": 0, "health": 0 },
-                  "uptimeMs": 0
-                },
-                "policy": { "maxPayload": 1, "maxBufferedBytes": 1, "tickIntervalMs": 30000 }
-              }
-            }
-            """
-            return Data(json.utf8)
-        }
     }
 
     private final class FakeWebSocketSession: WebSocketSessioning, @unchecked Sendable {
@@ -110,7 +76,9 @@ import Testing
             self.response = response
         }
 
-        func snapshotMakeCount() -> Int { self.makeCount.withLock { $0 } }
+        func snapshotMakeCount() -> Int {
+            self.makeCount.withLock { $0 }
+        }
 
         func makeWebSocketTask(url: URL) -> WebSocketTaskBox {
             _ = url
@@ -122,8 +90,8 @@ import Testing
 
     @Test func concurrentConnectIsSingleFlightOnSuccess() async throws {
         let session = FakeWebSocketSession(response: .helloOk(delayMs: 200))
-        let channel = GatewayChannelActor(
-            url: URL(string: "ws://example.invalid")!,
+        let channel = try GatewayChannelActor(
+            url: #require(URL(string: "ws://example.invalid")),
             token: nil,
             session: WebSocketSessionBox(session: session))
 
@@ -136,10 +104,10 @@ import Testing
         #expect(session.snapshotMakeCount() == 1)
     }
 
-    @Test func concurrentConnectSharesFailure() async {
+    @Test func concurrentConnectSharesFailure() async throws {
         let session = FakeWebSocketSession(response: .invalid(delayMs: 200))
-        let channel = GatewayChannelActor(
-            url: URL(string: "ws://example.invalid")!,
+        let channel = try GatewayChannelActor(
+            url: #require(URL(string: "ws://example.invalid")),
             token: nil,
             session: WebSocketSessionBox(session: session))
 

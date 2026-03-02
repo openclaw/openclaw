@@ -2,6 +2,7 @@ import { z } from "zod";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { FIELD_HELP } from "./schema.help.js";
 import { FIELD_LABELS } from "./schema.labels.js";
+import { applyDerivedTags } from "./schema.tags.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
 const log = createSubsystemLogger("config/schema");
@@ -9,6 +10,7 @@ const log = createSubsystemLogger("config/schema");
 export type ConfigUiHint = {
   label?: string;
   help?: string;
+  tags?: string[];
   group?: string;
   order?: number;
   advanced?: boolean;
@@ -107,7 +109,13 @@ const NORMALIZED_SENSITIVE_KEY_WHITELIST_SUFFIXES = SENSITIVE_KEY_WHITELIST_SUFF
   suffix.toLowerCase(),
 );
 
-const SENSITIVE_PATTERNS = [/token$/i, /password/i, /secret/i, /api.?key/i];
+const SENSITIVE_PATTERNS = [
+  /token$/i,
+  /password/i,
+  /secret/i,
+  /api.?key/i,
+  /serviceaccount(?:ref)?$/i,
+];
 
 function isWhitelistedSensitivePath(path: string): boolean {
   const lowerPath = path.toLowerCase();
@@ -143,7 +151,7 @@ export function buildBaseHints(): ConfigUiHints {
     const current = hints[path];
     hints[path] = current ? { ...current, placeholder } : { placeholder };
   }
-  return hints;
+  return applyDerivedTags(hints);
 }
 
 export function applySensitiveHints(
@@ -206,6 +214,11 @@ export function mapSensitivePaths(
     for (const key in shape) {
       const nextPath = path ? `${path}.${key}` : key;
       next = mapSensitivePaths(shape[key], nextPath, next);
+    }
+    const catchallSchema = currentSchema._def.catchall as z.ZodType | undefined;
+    if (catchallSchema && !(catchallSchema instanceof z.ZodNever)) {
+      const nextPath = path ? `${path}.*` : "*";
+      next = mapSensitivePaths(catchallSchema, nextPath, next);
     }
   } else if (currentSchema instanceof z.ZodArray) {
     const nextPath = path ? `${path}[]` : "[]";

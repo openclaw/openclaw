@@ -1,17 +1,186 @@
+import path from "node:path";
 import { z } from "zod";
 import { isSafeExecutableValue } from "../infra/exec-safety.js";
+import { isValidFileSecretRefId } from "../secrets/ref-contract.js";
+import { MODEL_APIS } from "./types.models.js";
 import { createAllowDenyChannelRulesSchema } from "./zod-schema.allowdeny.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
-export const ModelApiSchema = z.union([
-  z.literal("openai-completions"),
-  z.literal("openai-responses"),
-  z.literal("anthropic-messages"),
-  z.literal("google-generative-ai"),
-  z.literal("github-copilot"),
-  z.literal("bedrock-converse-stream"),
-  z.literal("ollama"),
+const ENV_SECRET_REF_ID_PATTERN = /^[A-Z][A-Z0-9_]{0,127}$/;
+const SECRET_PROVIDER_ALIAS_PATTERN = /^[a-z][a-z0-9_-]{0,63}$/;
+const EXEC_SECRET_REF_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$/;
+const WINDOWS_ABS_PATH_PATTERN = /^[A-Za-z]:[\\/]/;
+const WINDOWS_UNC_PATH_PATTERN = /^\\\\[^\\]+\\[^\\]+/;
+
+function isAbsolutePath(value: string): boolean {
+  return (
+    path.isAbsolute(value) ||
+    WINDOWS_ABS_PATH_PATTERN.test(value) ||
+    WINDOWS_UNC_PATH_PATTERN.test(value)
+  );
+}
+
+const EnvSecretRefSchema = z
+  .object({
+    source: z.literal("env"),
+    provider: z
+      .string()
+      .regex(
+        SECRET_PROVIDER_ALIAS_PATTERN,
+        'Secret reference provider must match /^[a-z][a-z0-9_-]{0,63}$/ (example: "default").',
+      ),
+    id: z
+      .string()
+      .regex(
+        ENV_SECRET_REF_ID_PATTERN,
+        'Env secret reference id must match /^[A-Z][A-Z0-9_]{0,127}$/ (example: "OPENAI_API_KEY").',
+      ),
+  })
+  .strict();
+
+const FileSecretRefSchema = z
+  .object({
+    source: z.literal("file"),
+    provider: z
+      .string()
+      .regex(
+        SECRET_PROVIDER_ALIAS_PATTERN,
+        'Secret reference provider must match /^[a-z][a-z0-9_-]{0,63}$/ (example: "default").',
+      ),
+    id: z
+      .string()
+      .refine(
+        isValidFileSecretRefId,
+        'File secret reference id must be an absolute JSON pointer (example: "/providers/openai/apiKey"), or "value" for singleValue mode.',
+      ),
+  })
+  .strict();
+
+const ExecSecretRefSchema = z
+  .object({
+    source: z.literal("exec"),
+    provider: z
+      .string()
+      .regex(
+        SECRET_PROVIDER_ALIAS_PATTERN,
+        'Secret reference provider must match /^[a-z][a-z0-9_-]{0,63}$/ (example: "default").',
+      ),
+    id: z
+      .string()
+      .regex(
+        EXEC_SECRET_REF_ID_PATTERN,
+        'Exec secret reference id must match /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$/ (example: "vault/openai/api-key").',
+      ),
+  })
+  .strict();
+
+export const SecretRefSchema = z.discriminatedUnion("source", [
+  EnvSecretRefSchema,
+  FileSecretRefSchema,
+  ExecSecretRefSchema,
 ]);
+
+export const SecretInputSchema = z.union([z.string(), SecretRefSchema]);
+
+const SecretsEnvProviderSchema = z
+  .object({
+    source: z.literal("env"),
+    allowlist: z.array(z.string().regex(ENV_SECRET_REF_ID_PATTERN)).max(256).optional(),
+  })
+  .strict();
+
+const SecretsFileProviderSchema = z
+  .object({
+    source: z.literal("file"),
+    path: z.string().min(1),
+    mode: z.union([z.literal("singleValue"), z.literal("json")]).optional(),
+    timeoutMs: z.number().int().positive().max(120000).optional(),
+    maxBytes: z
+      .number()
+      .int()
+      .positive()
+      .max(20 * 1024 * 1024)
+      .optional(),
+  })
+  .strict();
+
+const SecretsExecProviderSchema = z
+  .object({
+    source: z.literal("exec"),
+    command: z
+      .string()
+      .min(1)
+      .refine((value) => isSafeExecutableValue(value), "secrets.providers.*.command is unsafe.")
+      .refine(
+        (value) => isAbsolutePath(value),
+        "secrets.providers.*.command must be an absolute path.",
+      ),
+    args: z.array(z.string().max(1024)).max(128).optional(),
+    timeoutMs: z.number().int().positive().max(120000).optional(),
+    noOutputTimeoutMs: z.number().int().positive().max(120000).optional(),
+    maxOutputBytes: z
+      .number()
+      .int()
+      .positive()
+      .max(20 * 1024 * 1024)
+      .optional(),
+    jsonOnly: z.boolean().optional(),
+    env: z.record(z.string(), z.string()).optional(),
+    passEnv: z.array(z.string().regex(ENV_SECRET_REF_ID_PATTERN)).max(128).optional(),
+    trustedDirs: z
+      .array(
+        z
+          .string()
+          .min(1)
+          .refine((value) => isAbsolutePath(value), "trustedDirs entries must be absolute paths."),
+      )
+      .max(64)
+      .optional(),
+    allowInsecurePath: z.boolean().optional(),
+    allowSymlinkCommand: z.boolean().optional(),
+  })
+  .strict();
+
+export const SecretProviderSchema = z.discriminatedUnion("source", [
+  SecretsEnvProviderSchema,
+  SecretsFileProviderSchema,
+  SecretsExecProviderSchema,
+]);
+
+export const SecretsConfigSchema = z
+  .object({
+    providers: z
+      .object({
+        // Keep this as a record so users can define multiple providers per source.
+      })
+      .catchall(SecretProviderSchema)
+      .optional(),
+    defaults: z
+      .object({
+        env: z.string().regex(SECRET_PROVIDER_ALIAS_PATTERN).optional(),
+        file: z.string().regex(SECRET_PROVIDER_ALIAS_PATTERN).optional(),
+        exec: z.string().regex(SECRET_PROVIDER_ALIAS_PATTERN).optional(),
+      })
+      .strict()
+      .optional(),
+    resolution: z
+      .object({
+        maxProviderConcurrency: z.number().int().positive().max(16).optional(),
+        maxRefsPerProvider: z.number().int().positive().max(4096).optional(),
+        maxBatchBytes: z
+          .number()
+          .int()
+          .positive()
+          .max(5 * 1024 * 1024)
+          .optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict()
+  .optional();
+
+export const ModelApiSchema = z.enum(MODEL_APIS);
 
 export const ModelCompatSchema = z
   .object({
@@ -58,11 +227,12 @@ export const ModelDefinitionSchema = z
 export const ModelProviderSchema = z
   .object({
     baseUrl: z.string().min(1),
-    apiKey: z.string().optional().register(sensitive),
+    apiKey: SecretInputSchema.optional().register(sensitive),
     auth: z
       .union([z.literal("api-key"), z.literal("aws-sdk"), z.literal("oauth"), z.literal("token")])
       .optional(),
     api: ModelApiSchema.optional(),
+    injectNumCtxForOpenAICompat: z.boolean().optional(),
     headers: z.record(z.string(), z.string()).optional(),
     authHeader: z.boolean().optional(),
     models: z.array(ModelDefinitionSchema),
@@ -129,6 +299,12 @@ export const QueueDropSchema = z.union([
   z.literal("summarize"),
 ]);
 export const ReplyToModeSchema = z.union([z.literal("off"), z.literal("first"), z.literal("all")]);
+export const TypingModeSchema = z.union([
+  z.literal("never"),
+  z.literal("instant"),
+  z.literal("thinking"),
+  z.literal("message"),
+]);
 
 // GroupPolicySchema: controls how group messages are handled
 // Used with .default("allowlist").optional() pattern:
@@ -145,6 +321,18 @@ export const BlockStreamingCoalesceSchema = z
     idleMs: z.number().int().nonnegative().optional(),
   })
   .strict();
+
+export const ReplyRuntimeConfigSchemaShape = {
+  historyLimit: z.number().int().min(0).optional(),
+  dmHistoryLimit: z.number().int().min(0).optional(),
+  dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
+  textChunkLimit: z.number().int().positive().optional(),
+  chunkMode: z.enum(["length", "newline"]).optional(),
+  blockStreaming: z.boolean().optional(),
+  blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
+  responsePrefix: z.string().optional(),
+  mediaMaxMb: z.number().positive().optional(),
+};
 
 export const BlockStreamingChunkSchema = z
   .object({
@@ -324,6 +512,32 @@ export const requireOpenAllowFrom = (params: {
   });
 };
 
+/**
+ * Validate that dmPolicy="allowlist" has a non-empty allowFrom array.
+ * Without this, all DMs are silently dropped because the allowlist is empty
+ * and no senders can match.
+ */
+export const requireAllowlistAllowFrom = (params: {
+  policy?: string;
+  allowFrom?: Array<string | number>;
+  ctx: z.RefinementCtx;
+  path: Array<string | number>;
+  message: string;
+}) => {
+  if (params.policy !== "allowlist") {
+    return;
+  }
+  const allow = normalizeAllowFrom(params.allowFrom);
+  if (allow.length > 0) {
+    return;
+  }
+  params.ctx.addIssue({
+    code: z.ZodIssueCode.custom,
+    path: params.path,
+    message: params.message,
+  });
+};
+
 export const MSTeamsReplyStyleSchema = z.enum(["thread", "top-level"]);
 
 export const RetryConfigSchema = z
@@ -430,6 +644,16 @@ const ProviderOptionsSchema = z
   .record(z.string(), z.record(z.string(), ProviderOptionValueSchema))
   .optional();
 
+const MediaUnderstandingRuntimeFields = {
+  prompt: z.string().optional(),
+  timeoutSeconds: z.number().int().positive().optional(),
+  language: z.string().optional(),
+  providerOptions: ProviderOptionsSchema,
+  deepgram: DeepgramAudioSchema,
+  baseUrl: z.string().optional(),
+  headers: z.record(z.string(), z.string()).optional(),
+};
+
 export const MediaUnderstandingModelSchema = z
   .object({
     provider: z.string().optional(),
@@ -438,15 +662,9 @@ export const MediaUnderstandingModelSchema = z
     type: z.union([z.literal("provider"), z.literal("cli")]).optional(),
     command: z.string().optional(),
     args: z.array(z.string()).optional(),
-    prompt: z.string().optional(),
     maxChars: z.number().int().positive().optional(),
     maxBytes: z.number().int().positive().optional(),
-    timeoutSeconds: z.number().int().positive().optional(),
-    language: z.string().optional(),
-    providerOptions: ProviderOptionsSchema,
-    deepgram: DeepgramAudioSchema,
-    baseUrl: z.string().optional(),
-    headers: z.record(z.string(), z.string()).optional(),
+    ...MediaUnderstandingRuntimeFields,
     profile: z.string().optional(),
     preferredProfile: z.string().optional(),
   })
@@ -459,13 +677,7 @@ export const ToolsMediaUnderstandingSchema = z
     scope: MediaUnderstandingScopeSchema,
     maxBytes: z.number().int().positive().optional(),
     maxChars: z.number().int().positive().optional(),
-    prompt: z.string().optional(),
-    timeoutSeconds: z.number().int().positive().optional(),
-    language: z.string().optional(),
-    providerOptions: ProviderOptionsSchema,
-    deepgram: DeepgramAudioSchema,
-    baseUrl: z.string().optional(),
-    headers: z.record(z.string(), z.string()).optional(),
+    ...MediaUnderstandingRuntimeFields,
     attachments: MediaUnderstandingAttachmentsSchema,
     models: z.array(MediaUnderstandingModelSchema).optional(),
   })
