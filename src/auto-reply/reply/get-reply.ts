@@ -9,8 +9,6 @@ import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/workspace.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { type OpenClawConfig, loadConfig } from "../../config/config.js";
-import { logVerbose } from "../../globals.js";
-import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { applyLinkUnderstanding } from "../../link-understanding/apply.js";
 import { applyMediaUnderstanding } from "../../media-understanding/apply.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -24,6 +22,7 @@ import { resolveReplyDirectives } from "./get-reply-directives.js";
 import { handleInlineActions } from "./get-reply-inline-actions.js";
 import { runPreparedReply } from "./get-reply-run.js";
 import { finalizeInboundContext } from "./inbound-context.js";
+import { emitPreAgentMessageHooks } from "./message-preprocess-hooks.js";
 import { applyResetModelOverride } from "./session-reset-model.js";
 import { initSessionState } from "./session.js";
 import { stageSandboxMedia } from "./stage-sandbox-media.js";
@@ -137,76 +136,11 @@ export async function getReplyFromConfig(
       cfg,
     });
   }
-
-  const channelId = (
-    finalized.OriginatingChannel ??
-    finalized.Surface ??
-    finalized.Provider ??
-    ""
-  ).toLowerCase();
-  const hookSessionKey = finalized.SessionKey?.trim();
-  const conversationId = finalized.OriginatingTo ?? finalized.To ?? finalized.From ?? undefined;
-  const isGroupConversation = Boolean(finalized.GroupSubject || finalized.GroupChannel);
-  const groupId = isGroupConversation ? conversationId : undefined;
-
-  // Trigger message:transcribed hook after media understanding completes
-  // Only fire if transcription actually occurred (skip in fast test mode or non-audio)
-  if (!isFastTestEnv && hookSessionKey && finalized.Transcript) {
-    void triggerInternalHook(
-      createInternalHookEvent("message", "transcribed", hookSessionKey, {
-        from: finalized.From,
-        to: finalized.To,
-        body: finalized.Body,
-        bodyForAgent: finalized.BodyForAgent,
-        transcript: finalized.Transcript,
-        timestamp: finalized.Timestamp,
-        channelId,
-        conversationId,
-        messageId: finalized.MessageSid,
-        senderId: finalized.SenderId,
-        senderName: finalized.SenderName,
-        senderUsername: finalized.SenderUsername,
-        provider: finalized.Provider,
-        surface: finalized.Surface,
-        mediaPath: finalized.MediaPath,
-        mediaType: finalized.MediaType,
-        cfg,
-      }),
-    ).catch((err) => {
-      logVerbose(`get-reply: message:transcribed internal hook failed: ${String(err)}`);
-    });
-  }
-
-  // Trigger message:preprocessed hook after all media + link understanding.
-  // Fires for every message, giving hooks access to the fully enriched body
-  // (transcripts, image descriptions, link summaries) before the agent sees it.
-  if (!isFastTestEnv && hookSessionKey) {
-    void triggerInternalHook(
-      createInternalHookEvent("message", "preprocessed", hookSessionKey, {
-        from: finalized.From,
-        to: finalized.To,
-        body: finalized.Body,
-        bodyForAgent: finalized.BodyForAgent,
-        transcript: finalized.Transcript,
-        timestamp: finalized.Timestamp,
-        channelId,
-        conversationId,
-        messageId: finalized.MessageSid,
-        senderId: finalized.SenderId,
-        senderName: finalized.SenderName,
-        senderUsername: finalized.SenderUsername,
-        provider: finalized.Provider,
-        surface: finalized.Surface,
-        mediaPath: finalized.MediaPath,
-        mediaType: finalized.MediaType,
-        isGroup: isGroupConversation,
-        groupId,
-        cfg,
-      }),
-    ).catch((err) => {
-      logVerbose(`get-reply: message:preprocessed internal hook failed: ${String(err)}`);
-    });
-  }
+  emitPreAgentMessageHooks({
+    ctx: finalized,
+    cfg,
+    isFastTestEnv,
+  });
 
   const commandAuthorized = finalized.CommandAuthorized;
   resolveCommandAuthorization({
