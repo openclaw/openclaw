@@ -19,6 +19,14 @@ const mocks = vi.hoisted(() => {
       writeOptions,
     })),
     writeConfigFile: vi.fn(async () => {}),
+    enablePluginInConfig: vi.fn(
+      (
+        cfg: Record<string, unknown>,
+      ): { config: Record<string, unknown>; enabled: boolean; reason?: string } => ({
+        config: cfg,
+        enabled: true,
+      }),
+    ),
     setPluginEnabledInConfig: vi.fn(
       (cfg: Record<string, unknown>, id: string, enabled: boolean) => ({
         ...cfg,
@@ -77,7 +85,7 @@ vi.mock("../terminal/table.js", () => ({
 }));
 
 vi.mock("../plugins/enable.js", () => ({
-  enablePluginInConfig: (cfg: Record<string, unknown>) => ({ config: cfg, enabled: true }),
+  enablePluginInConfig: mocks.enablePluginInConfig,
 }));
 
 vi.mock("../plugins/install.js", () => ({
@@ -152,6 +160,37 @@ describe("plugins-cli config writes", () => {
         plugins: { entries: { demo: { enabled: false } } },
       }),
       mocks.writeOptions,
+    );
+  });
+
+  it("preserves enable guard behavior and logs warning when enable is denied", async () => {
+    mocks.enablePluginInConfig.mockReturnValueOnce({
+      config: { channels: { telegram: { dmPolicy: "open" } }, plugins: {} },
+      enabled: false,
+      reason: "blocked by denylist",
+    });
+    const program = new Command();
+    registerPluginsCli(program);
+
+    await program.parseAsync(["plugins", "enable", "demo"], {
+      from: "user",
+    });
+
+    expect(mocks.readConfigFileSnapshotForWrite).toHaveBeenCalledTimes(1);
+    expect(mocks.enablePluginInConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channels: { telegram: { dmPolicy: "open" } },
+      }),
+      "demo",
+    );
+    expect(mocks.writeConfigFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channels: { telegram: { dmPolicy: "open" } },
+      }),
+      mocks.writeOptions,
+    );
+    expect(mocks.runtime.log).toHaveBeenCalledWith(
+      'Plugin "demo" could not be enabled (blocked by denylist).',
     );
   });
 });
