@@ -74,4 +74,31 @@ describe("resolveTranscriptPolicy", () => {
     });
     expect(policy.validateAnthropicTurns).toBe(false);
   });
+
+  it("enables sanitizeToolCallIds for Minimax via OpenRouter", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "openrouter",
+      modelId: "minimax/minimax-m2.5",
+      modelApi: "openai-completions",
+    });
+    expect(policy.sanitizeToolCallIds).toBe(true);
+    expect(policy.toolCallIdMode).toBe("strict");
+  });
+
+  it("enables sanitizeToolCallIds for direct Minimax provider", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "minimax",
+      modelId: "minimax-m2.5",
+    });
+    expect(policy.sanitizeToolCallIds).toBe(true);
+    expect(policy.toolCallIdMode).toBe("strict");
+  });
+
+  it("enables sanitizeToolCallIds for minimax-cn provider", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "minimax-cn",
+      modelId: "minimax-m2.5",
+    });
+    expect(policy.sanitizeToolCallIds).toBe(true);
+  });
 });

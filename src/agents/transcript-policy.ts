@@ -75,6 +75,19 @@ function isMistralModel(params: { provider?: string | null; modelId?: string | n
   return MISTRAL_MODEL_HINTS.some((hint) => modelId.includes(hint));
 }
 
+const MINIMAX_MODEL_HINTS = ["minimax"];
+
+// Minimax via OpenRouter generates tool-call IDs with underscores that cause
+// mismatches after the OpenRouter proxy translates between formats.
+function isMinimaxModel(params: { provider?: string | null; modelId?: string | null }): boolean {
+  const provider = normalizeProviderId(params.provider ?? "");
+  if (provider === "minimax" || provider === "minimax-cn") {
+    return true;
+  }
+  const modelId = (params.modelId ?? "").toLowerCase();
+  return modelId ? MINIMAX_MODEL_HINTS.some((h) => modelId.includes(h)) : false;
+}
+
 export function resolveTranscriptPolicy(params: {
   modelApi?: string | null;
   provider?: string | null;
@@ -90,6 +103,7 @@ export function resolveTranscriptPolicy(params: {
     !isOpenAi &&
     !OPENAI_COMPAT_TURN_MERGE_EXCLUDED_PROVIDERS.has(provider);
   const isMistral = isMistralModel({ provider, modelId });
+  const isMinimax = isMinimaxModel({ provider, modelId });
   const isOpenRouterGemini =
     (provider === "openrouter" || provider === "opencode" || provider === "kilocode") &&
     modelId.toLowerCase().includes("gemini");
@@ -102,7 +116,7 @@ export function resolveTranscriptPolicy(params: {
 
   const needsNonImageSanitize = isGoogle || isAnthropic || isMistral || isOpenRouterGemini;
 
-  const sanitizeToolCallIds = isGoogle || isMistral || isAnthropic;
+  const sanitizeToolCallIds = isGoogle || isMistral || isAnthropic || isMinimax;
   const toolCallIdMode: ToolCallIdMode | undefined = isMistral
     ? "strict9"
     : sanitizeToolCallIds
