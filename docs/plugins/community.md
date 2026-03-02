@@ -45,6 +45,11 @@ Use this format when adding entries:
 
 ## Listed plugins
 
+- **SimpleX** — Connect OpenClaw to SimpleX Chat via the official `simplex-chat` CLI WebSocket API; supports text/media, pairing, and invite workflows.
+  npm: `@dangoldbj/openclaw-simplex`
+  repo: `https://github.com/dangoldbj/openclaw-simplex`
+  install: `openclaw plugins install @dangoldbj/openclaw-simplex`
+
 - **WeChat** — Connect OpenClaw to WeChat personal accounts via WeChatPadPro (iPad protocol). Supports text, image, and file exchange with keyword-triggered conversations.
   npm: `@icesword760/openclaw-wechat`
   repo: `https://github.com/icesword0760/openclaw-wechat`
