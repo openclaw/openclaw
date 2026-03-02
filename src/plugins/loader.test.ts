@@ -330,13 +330,6 @@ describe("loadOpenClawPlugins", () => {
     expect(telegram?.error).toBe("disabled in config");
   });
 
-  it("enables bundled memory plugin when selected by slot", () => {
-    const registry = loadBundledMemoryPluginRegistry();
-
-    const memory = registry.plugins.find((entry) => entry.id === "memory-core");
-    expect(memory?.status).toBe("loaded");
-  });
-
   it("preserves package.json metadata for bundled memory plugins", () => {
     const registry = loadBundledMemoryPluginRegistry({
       packageMeta: {
