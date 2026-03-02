@@ -2,7 +2,12 @@ import type { ChannelId } from "../channels/plugins/types.js";
 import { resolveAccountEntry } from "../routing/account-lookup.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 import type { OpenClawConfig } from "./config.js";
-import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
+import {
+  parseToolsBySenderTypedKey,
+  type GroupToolPolicyBySenderConfig,
+  type GroupToolPolicyConfig,
+  type ToolsBySenderKeyType,
+} from "./types.tools.js";
 
 export type GroupPolicyChannel = ChannelId;
 

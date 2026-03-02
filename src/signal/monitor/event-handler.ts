@@ -34,11 +34,6 @@ import { readSessionUpdatedAt, resolveStorePath } from "../../config/sessions.js
 import { danger, logVerbose, shouldLogVerbose } from "../../globals.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { mediaKindFromMime } from "../../media/constants.js";
-import { buildPairingReply } from "../../pairing/pairing-messages.js";
-import {
-  readChannelAllowFromStore,
-  upsertChannelPairingRequest,
-} from "../../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import { DM_GROUP_ACCESS_REASON } from "../../security/dm-policy-shared.js";
 import { normalizeE164 } from "../../utils.js";
@@ -53,7 +48,13 @@ import {
   type SignalSender,
 } from "../identity.js";
 import { sendMessageSignal, sendReadReceiptSignal, sendTypingSignal } from "../send.js";
-import type { SignalEventHandlerDeps, SignalReceivePayload } from "./event-handler.types.js";
+import { handleSignalDirectMessageAccess, resolveSignalAccessState } from "./access-policy.js";
+import type {
+  SignalEnvelope,
+  SignalEventHandlerDeps,
+  SignalReactionMessage,
+  SignalReceivePayload,
+} from "./event-handler.types.js";
 import { renderSignalMentions } from "./mentions.js";
 export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
   const inboundDebounceMs = resolveInboundDebounceMs({ cfg: deps.cfg, channel: "signal" });
