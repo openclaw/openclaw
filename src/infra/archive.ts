@@ -1,4 +1,5 @@
 import { constants as fsConstants } from "node:fs";
+import type { FileHandle } from "node:fs/promises";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Readable, Transform } from "node:stream";
@@ -10,6 +11,8 @@ import {
   stripArchivePath,
   validateArchiveEntryPath,
 } from "./archive-path.js";
+import { sameFileIdentity } from "./file-identity.js";
+import { resolveOpenedFileRealPathForHandle } from "./fs-safe.js";
 import { isNotFoundPathError, isPathInside, isSymlinkOpenError } from "./path-guards.js";
 
 export type ArchiveKind = "tar" | "zip";
@@ -64,11 +67,14 @@ const ERROR_ARCHIVE_EXTRACTED_SIZE_EXCEEDS_LIMIT = "archive extracted size excee
 const ERROR_ARCHIVE_ENTRY_TRAVERSES_SYMLINK = "archive entry traverses symlink in destination";
 
 const TAR_SUFFIXES = [".tgz", ".tar.gz", ".tar"];
-const OPEN_WRITE_FLAGS =
+const SUPPORTS_NOFOLLOW = process.platform !== "win32" && "O_NOFOLLOW" in fsConstants;
+const OPEN_WRITE_EXISTING_FLAGS =
+  fsConstants.O_WRONLY | (SUPPORTS_NOFOLLOW ? fsConstants.O_NOFOLLOW : 0);
+const OPEN_WRITE_CREATE_FLAGS =
   fsConstants.O_WRONLY |
   fsConstants.O_CREAT |
-  fsConstants.O_TRUNC |
-  (process.platform !== "win32" && "O_NOFOLLOW" in fsConstants ? fsConstants.O_NOFOLLOW : 0);
+  fsConstants.O_EXCL |
+  (SUPPORTS_NOFOLLOW ? fsConstants.O_NOFOLLOW : 0);
 
 export function resolveArchiveKind(filePath: string): ArchiveKind | null {
   const lower = filePath.toLowerCase();
@@ -275,13 +281,98 @@ async function assertResolvedInsideDestination(params: {
   }
 }
 
-async function openZipOutputFile(outPath: string, originalPath: string) {
+type OpenZipOutputFileResult = {
+  handle: FileHandle;
+  createdForWrite: boolean;
+  openedRealPath: string;
+};
+
+async function openZipOutputFile(params: {
+  outPath: string;
+  originalPath: string;
+  destinationRealDir: string;
+}): Promise<OpenZipOutputFileResult> {
+  let ioPath = params.outPath;
   try {
-    return await fs.open(outPath, OPEN_WRITE_FLAGS, 0o666);
+    const resolvedRealPath = await fs.realpath(params.outPath);
+    if (!isPathInside(params.destinationRealDir, resolvedRealPath)) {
+      throw symlinkTraversalError(params.originalPath);
+    }
+    ioPath = resolvedRealPath;
+  } catch (err) {
+    if (err instanceof ArchiveSecurityError) {
+      throw err;
+    }
+    if (!isNotFoundPathError(err)) {
+      throw err;
+    }
+  }
+
+  let handle: FileHandle;
+  let createdForWrite = false;
+  try {
+    try {
+      handle = await fs.open(ioPath, OPEN_WRITE_EXISTING_FLAGS, 0o666);
+    } catch (err) {
+      if (!isNotFoundPathError(err)) {
+        throw err;
+      }
+      handle = await fs.open(ioPath, OPEN_WRITE_CREATE_FLAGS, 0o666);
+      createdForWrite = true;
+    }
   } catch (err) {
     if (isSymlinkOpenError(err)) {
-      throw symlinkTraversalError(originalPath);
+      throw symlinkTraversalError(params.originalPath);
     }
+    throw err;
+  }
+
+  let openedRealPath: string | null = null;
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile()) {
+      throw symlinkTraversalError(params.originalPath);
+    }
+
+    try {
+      const lstat = await fs.lstat(ioPath);
+      if (lstat.isSymbolicLink() || !lstat.isFile()) {
+        throw symlinkTraversalError(params.originalPath);
+      }
+      if (!sameFileIdentity(stat, lstat)) {
+        throw symlinkTraversalError(params.originalPath);
+      }
+    } catch (err) {
+      if (!isNotFoundPathError(err)) {
+        throw err;
+      }
+    }
+
+    const realPath = await resolveOpenedFileRealPathForHandle(handle, ioPath);
+    openedRealPath = realPath;
+    const realStat = await fs.stat(realPath);
+    if (!sameFileIdentity(stat, realStat)) {
+      throw symlinkTraversalError(params.originalPath);
+    }
+    if (!isPathInside(params.destinationRealDir, realPath)) {
+      throw symlinkTraversalError(params.originalPath);
+    }
+
+    // Truncate only after identity + boundary checks complete.
+    if (!createdForWrite) {
+      await handle.truncate(0);
+    }
+
+    return {
+      handle,
+      createdForWrite,
+      openedRealPath: realPath,
+    };
+  } catch (err) {
+    if (createdForWrite && openedRealPath) {
+      await fs.rm(openedRealPath, { force: true }).catch(() => undefined);
+    }
+    await handle.close().catch(() => undefined);
     throw err;
   }
 }
@@ -377,12 +468,21 @@ async function prepareZipOutputPath(params: {
 async function writeZipFileEntry(params: {
   entry: ZipEntry;
   outPath: string;
+  destinationRealDir: string;
   budget: ZipExtractBudget;
 }): Promise<void> {
-  const handle = await openZipOutputFile(params.outPath, params.entry.name);
+  const opened = await openZipOutputFile({
+    outPath: params.outPath,
+    originalPath: params.entry.name,
+    destinationRealDir: params.destinationRealDir,
+  });
   params.budget.startEntry();
   const readable = await readZipEntryStream(params.entry);
-  const writable = handle.createWriteStream();
+  const writable = opened.handle.createWriteStream();
+  let handleClosedByStream = false;
+  writable.once("close", () => {
+    handleClosedByStream = true;
+  });
 
   try {
     await pipeline(
@@ -391,15 +491,23 @@ async function writeZipFileEntry(params: {
       writable,
     );
   } catch (err) {
-    await cleanupPartialRegularFile(params.outPath).catch(() => undefined);
+    if (opened.createdForWrite) {
+      await fs.rm(opened.openedRealPath, { force: true }).catch(() => undefined);
+    } else {
+      await cleanupPartialRegularFile(opened.openedRealPath).catch(() => undefined);
+    }
     throw err;
+  } finally {
+    if (!handleClosedByStream) {
+      await opened.handle.close().catch(() => undefined);
+    }
   }
 
   // Best-effort permission restore for zip entries created on unix.
   if (typeof params.entry.unixPermissions === "number") {
     const mode = params.entry.unixPermissions & 0o777;
     if (mode !== 0) {
-      await fs.chmod(params.outPath, mode).catch(() => undefined);
+      await fs.chmod(opened.openedRealPath, mode).catch(() => undefined);
     }
   }
 }
@@ -451,6 +559,7 @@ async function extractZip(params: {
     await writeZipFileEntry({
       entry,
       outPath: output.outPath,
+      destinationRealDir,
       budget,
     });
   }
