@@ -121,7 +121,7 @@ Docs: https://docs.openclaw.ai
 - Web UI/Control UI WebSocket defaults: include normalized `gateway.controlUi.basePath` (or inferred nested route base path) in the default `gatewayUrl` so first-load dashboard connections work behind path-based reverse proxies. (#30228) Thanks @gittb.
 - Gateway/Control UI API routing: when `gateway.controlUi.basePath` is unset (default), stop serving Control UI SPA HTML for `/api` and `/api/*` so API paths fall through to normal gateway handlers/404 responses instead of `index.html`. (#30333) Fixes #30295. thanks @Sid-Qin.
 - Cron/One-shot reliability: retry transient one-shot failures with bounded backoff and configurable retry policy before disabling. (#24435) Thanks @hugenshen.
-- Gateway/Cron auditability: add gateway info logs for successful cron create, update, and remove operations. (#25090) Thanks .
+- Gateway/Cron auditability: add gateway info logs for successful cron create, update, and remove operations. (#25090) Thanks @MoerAI.
 - Cron/Schedule errors: notify users when a job is auto-disabled after repeated schedule computation failures. (#29098) Thanks .
 - Cron/Schedule errors: notify users when a job is auto-disabled after repeated schedule computation failures. (#29098) Thanks .
 - File tools/tilde paths: expand `~/...` against the user home directory before workspace-root checks in host file read/write/edit paths, while preserving root-boundary enforcement so outside-root targets remain blocked. (#29779) Thanks @Glucksberg.
