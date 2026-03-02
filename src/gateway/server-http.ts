@@ -587,6 +587,24 @@ export function createGatewayHttpServer(opts: {
           run: () => canvasHost.handleHttpRequest(req, res),
         });
       }
+      // Plugin routes run before the Control UI SPA catch-all so explicitly
+      // registered plugin endpoints stay reachable. Core built-in gateway
+      // routes above still keep precedence on overlapping paths.
+      requestStages.push(
+        ...buildPluginRequestStages({
+          req,
+          res,
+          requestPath,
+          pluginPathContext,
+          handlePluginRequest,
+          shouldEnforcePluginGatewayAuth,
+          resolvedAuth,
+          trustedProxies,
+          allowRealIpFallback,
+          rateLimiter,
+        }),
+      );
+
       if (controlUiEnabled) {
         requestStages.push({
           name: "control-ui-avatar",
@@ -606,22 +624,6 @@ export function createGatewayHttpServer(opts: {
             }),
         });
       }
-      // Plugins run after built-in gateway routes so core surfaces keep
-      // precedence on overlapping paths.
-      requestStages.push(
-        ...buildPluginRequestStages({
-          req,
-          res,
-          requestPath,
-          pluginPathContext,
-          handlePluginRequest,
-          shouldEnforcePluginGatewayAuth,
-          resolvedAuth,
-          trustedProxies,
-          allowRealIpFallback,
-          rateLimiter,
-        }),
-      );
 
       requestStages.push({
         name: "gateway-probes",
