@@ -146,8 +146,9 @@ function isOsTmpdirExpression(argument: string): boolean {
 function mightContainDynamicTmpdirJoin(source: string): boolean {
   return (
     source.includes("path") &&
-    source.includes("join") &&
-    source.includes("tmpdir") &&
+    source.includes("path.join") &&
+    source.includes("os.tmpdir") &&
+    source.includes("`") &&
     source.includes("${")
   );
 }
