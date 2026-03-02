@@ -101,6 +101,30 @@ describe("web session", () => {
     expect(passed.fetchAgent).toBeUndefined();
   });
 
+  it("throws error for SOCKS proxy URLs", async () => {
+    await expect(createWaSocket(false, false, { proxy: "socks5://proxy.example.com:1080" })).rejects.toThrow(
+      "SOCKS proxies are not supported",
+    );
+  });
+
+  it("throws error for invalid proxy protocol", async () => {
+    await expect(createWaSocket(false, false, { proxy: "ftp://proxy.example.com:8080" })).rejects.toThrow(
+      "Invalid proxy protocol",
+    );
+  });
+
+  it("accepts HTTP proxy URLs", async () => {
+    await createWaSocket(false, false, { proxy: "http://proxy.example.com:8080" });
+    const makeWASocket = baileys.makeWASocket as ReturnType<typeof vi.fn>;
+    expect(makeWASocket).toHaveBeenCalled();
+  });
+
+  it("accepts HTTPS proxy URLs", async () => {
+    await createWaSocket(false, false, { proxy: "https://proxy.example.com:8080" });
+    const makeWASocket = baileys.makeWASocket as ReturnType<typeof vi.fn>;
+    expect(makeWASocket).toHaveBeenCalled();
+  });
+
   it("waits for connection open", async () => {
     const ev = new EventEmitter();
     const promise = waitForWaConnection({ ev } as unknown as ReturnType<

@@ -22,6 +22,23 @@ import {
   resolveWebCredsPath,
 } from "./auth-store.js";
 
+function createProxyAgent(proxyUrl: string): InstanceType<typeof HttpsProxyAgent> {
+  const url = new URL(proxyUrl);
+  if (url.protocol === "socks:" || url.protocol === "socks4:" || url.protocol === "socks5:") {
+    throw new Error(
+      `SOCKS proxies are not supported. Please use an HTTP(S) proxy instead. ` +
+      `Received: ${proxyUrl}`,
+    );
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error(
+      `Invalid proxy protocol: ${url.protocol}. Only http:// and https:// proxies are supported. ` +
+      `Received: ${proxyUrl}`,
+    );
+  }
+  return new HttpsProxyAgent(proxyUrl);
+}
+
 export {
   getWebAuthAgeMs,
   logoutWeb,
@@ -108,7 +125,7 @@ export async function createWaSocket(
   const { version } = await fetchLatestBaileysVersion();
   
   // Create proxy agent if proxy URL is provided
-  const agent = opts.proxy ? new HttpsProxyAgent(opts.proxy) : undefined;
+  const agent = opts.proxy ? createProxyAgent(opts.proxy) : undefined;
   
   const sock = makeWASocket({
     auth: {
