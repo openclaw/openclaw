@@ -29,6 +29,14 @@ export function pickFallbackThinkingLevel(params: {
   }
   const supported = extractSupportedValues(raw);
   if (supported.length === 0) {
+    // When the error clearly indicates the thinking level is unsupported but doesn't
+    // list supported values (e.g. OpenAI's "think value \"low\" is not supported for
+    // this model"), fall back to "off" to allow the request to succeed.
+    // This commonly happens during model fallback when switching from Anthropic
+    // (which supports thinking levels) to providers that don't.
+    if (/not supported/i.test(raw) && !params.attempted.has("off")) {
+      return "off";
+    }
     return undefined;
   }
   for (const entry of supported) {
