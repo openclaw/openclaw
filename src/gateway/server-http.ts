@@ -37,6 +37,7 @@ import {
   handleControlUiHttpRequest,
   type ControlUiRootState,
 } from "./control-ui.js";
+import { handleDevicesHttpRequest } from "./devices-http.js";
 import { applyHookMappings } from "./hooks-mapping.js";
 import {
   extractHookToken,
@@ -512,6 +513,16 @@ export function createGatewayHttpServer(opts: {
       }
       const requestPath = new URL(req.url ?? "/", "http://localhost").pathname;
       if (await handleHooksRequest(req, res)) {
+        return;
+      }
+      if (
+        await handleDevicesHttpRequest(req, res, {
+          auth: resolvedAuth,
+          trustedProxies,
+          allowRealIpFallback,
+          rateLimiter,
+        })
+      ) {
         return;
       }
       if (
