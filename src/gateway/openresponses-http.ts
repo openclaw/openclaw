@@ -32,6 +32,8 @@ import { defaultRuntime } from "../runtime.js";
 import { resolveAssistantStreamDeltaText } from "./agent-event-assistant-text.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
+import type { ChatAbortControllerEntry } from "./chat-abort.js";
+import { resolveChatRunExpiresAtMs } from "./chat-abort.js";
 import { sendJson, setSseHeaders, writeDone } from "./http-common.js";
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
 import { resolveAgentIdForRequest, resolveSessionKey } from "./http-utils.js";
@@ -52,6 +54,7 @@ type OpenResponsesHttpOptions = {
   trustedProxies?: string[];
   allowRealIpFallback?: boolean;
   rateLimiter?: AuthRateLimiter;
+  chatAbortControllers?: Map<string, ChatAbortControllerEntry>;
 };
 
 const DEFAULT_BODY_BYTES = 20 * 1024 * 1024;
@@ -242,6 +245,7 @@ async function runResponsesAgentCommand(params: {
   sessionKey: string;
   runId: string;
   deps: ReturnType<typeof createDefaultDeps>;
+  abortSignal?: AbortSignal;
 }) {
   return agentCommand(
     {
@@ -252,6 +256,7 @@ async function runResponsesAgentCommand(params: {
       streamParams: params.streamParams ?? undefined,
       sessionKey: params.sessionKey,
       runId: params.runId,
+      abortSignal: params.abortSignal,
       deliver: false,
       messageChannel: "webchat",
       bestEffortDeliver: false,
@@ -444,6 +449,18 @@ export async function handleOpenResponsesHttpRequest(
   const responseId = `resp_${randomUUID()}`;
   const outputItemId = `msg_${randomUUID()}`;
   const deps = createDefaultDeps();
+  const runAbortController = new AbortController();
+  const runStartedAtMs = Date.now();
+  opts.chatAbortControllers?.set(responseId, {
+    controller: runAbortController,
+    sessionId: responseId,
+    sessionKey,
+    startedAtMs: runStartedAtMs,
+    expiresAtMs: resolveChatRunExpiresAtMs({
+      now: runStartedAtMs,
+      timeoutMs: 30_000,
+    }),
+  });
   const streamParams =
     typeof payload.max_output_tokens === "number"
       ? { maxTokens: payload.max_output_tokens }
@@ -460,6 +477,7 @@ export async function handleOpenResponsesHttpRequest(
         sessionKey,
         runId: responseId,
         deps,
+        abortSignal: runAbortController.signal,
       });
 
       const payloads = (result as { payloads?: Array<{ text?: string }> } | null)?.payloads;
@@ -525,6 +543,8 @@ export async function handleOpenResponsesHttpRequest(
         error: { code: "api_error", message: "internal error" },
       });
       sendJson(res, 500, response);
+    } finally {
+      opts.chatAbortControllers?.delete(responseId);
     }
     return true;
   }
@@ -692,6 +712,7 @@ export async function handleOpenResponsesHttpRequest(
         sessionKey,
         runId: responseId,
         deps,
+        abortSignal: runAbortController.signal,
       });
 
       finalUsage = extractUsageFromResult(result);
@@ -834,6 +855,7 @@ export async function handleOpenResponsesHttpRequest(
           data: { phase: "end" },
         });
       }
+      opts.chatAbortControllers?.delete(responseId);
     }
   })();
 

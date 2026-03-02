@@ -22,6 +22,7 @@ import {
 } from "./auth-rate-limit.js";
 import { type GatewayAuthResult, type ResolvedGatewayAuth } from "./auth.js";
 import { normalizeCanvasScopedUrl } from "./canvas-capability.js";
+import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import {
   handleControlUiAvatarRequest,
   handleControlUiHttpRequest,
@@ -331,6 +332,7 @@ export function createGatewayHttpServer(opts: {
   openAiChatCompletionsEnabled: boolean;
   openResponsesEnabled: boolean;
   openResponsesConfig?: import("../config/types.gateway.js").GatewayHttpResponsesConfig;
+  chatAbortControllers?: Map<string, ChatAbortControllerEntry>;
   strictTransportSecurityHeader?: string;
   handleHooksRequest: HooksRequestHandler;
   handlePluginRequest?: HooksRequestHandler;
@@ -349,6 +351,7 @@ export function createGatewayHttpServer(opts: {
     openAiChatCompletionsEnabled,
     openResponsesEnabled,
     openResponsesConfig,
+    chatAbortControllers,
     strictTransportSecurityHeader,
     handleHooksRequest,
     handlePluginRequest,
@@ -411,6 +414,7 @@ export function createGatewayHttpServer(opts: {
             trustedProxies,
             allowRealIpFallback,
             rateLimiter,
+            chatAbortControllers,
           })
         ) {
           return;

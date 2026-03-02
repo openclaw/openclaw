@@ -118,6 +118,7 @@ export async function createGatewayRuntimeState(params: {
     registry: params.pluginRegistry,
     log: params.logPlugins,
   });
+  const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
   const shouldEnforcePluginGatewayAuth = (requestPath: string): boolean => {
     return shouldEnforceGatewayAuthForPluginPath(params.pluginRegistry, requestPath);
   };
@@ -141,6 +142,7 @@ export async function createGatewayRuntimeState(params: {
       openAiChatCompletionsEnabled: params.openAiChatCompletionsEnabled,
       openResponsesEnabled: params.openResponsesEnabled,
       openResponsesConfig: params.openResponsesConfig,
+      chatAbortControllers,
       strictTransportSecurityHeader: params.strictTransportSecurityHeader,
       handleHooksRequest,
       handlePluginRequest,
@@ -194,7 +196,6 @@ export async function createGatewayRuntimeState(params: {
   const chatDeltaSentAt = chatRunState.deltaSentAt;
   const addChatRun = chatRunRegistry.add;
   const removeChatRun = chatRunRegistry.remove;
-  const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
   const toolEventRecipients = createToolEventRecipientRegistry();
 
   return {

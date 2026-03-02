@@ -5,7 +5,13 @@ import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
 import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { buildAssistantDeltaResult } from "./test-helpers.agent-results.js";
-import { agentCommand, getFreePort, installGatewayTestHooks } from "./test-helpers.js";
+import {
+  agentCommand,
+  getFreePort,
+  installGatewayTestHooks,
+  rpcReq,
+  startConnectedServerWithClient,
+} from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -77,6 +83,46 @@ function parseSseEvents(text: string): Array<{ event?: string; data: string }> {
   }
 
   return events;
+}
+
+async function readFirstResponseId(res: Response): Promise<string> {
+  const reader = res.body?.getReader();
+  if (!reader) {
+    throw new Error("missing response body reader");
+  }
+  const decoder = new TextDecoder();
+  let buffer = "";
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+    buffer += decoder.decode(value, { stream: true });
+    const blocks = buffer.split("\n\n");
+    for (const block of blocks) {
+      if (!block.includes("event: response.created")) {
+        continue;
+      }
+      const dataLine = block
+        .split("\n")
+        .map((line) => line.trim())
+        .find((line) => line.startsWith("data: "));
+      if (!dataLine) {
+        continue;
+      }
+      const payload = JSON.parse(dataLine.slice("data: ".length)) as {
+        response?: { id?: string };
+      };
+      const runId = payload.response?.id;
+      if (typeof runId === "string" && runId.trim()) {
+        await reader.cancel().catch(() => {});
+        return runId;
+      }
+    }
+  }
+  await reader.cancel().catch(() => {});
+  throw new Error(`failed to read response.created event:\n${buffer}`);
 }
 
 async function ensureResponseConsumed(res: Response) {
@@ -511,6 +557,69 @@ describe("OpenResponses HTTP API (e2e)", () => {
       }
     } finally {
       // shared server
+    }
+  });
+
+  it("allows chat.abort to cancel in-flight OpenResponses runs", async () => {
+    let resolveAgent: ((value: unknown) => void) | undefined;
+    agentCommand.mockImplementationOnce(
+      ((opts: unknown) =>
+        new Promise((resolve, reject) => {
+          resolveAgent = resolve;
+          const abortSignal = (opts as { abortSignal?: AbortSignal } | undefined)?.abortSignal;
+          const onAbort = () => {
+            const abortErr = Object.assign(new Error("aborted"), { name: "AbortError" });
+            reject(abortErr);
+          };
+          if (abortSignal?.aborted) {
+            onAbort();
+            return;
+          }
+          abortSignal?.addEventListener("abort", onAbort, { once: true });
+        })) as never,
+    );
+
+    const started = await startConnectedServerWithClient("secret", {
+      host: "127.0.0.1",
+      auth: { mode: "token", token: "secret" },
+      controlUiEnabled: false,
+      openResponsesEnabled: true,
+    });
+
+    const sessionKey = "agent:main:openresponses:abort-test";
+
+    try {
+      const res = await fetch(`http://127.0.0.1:${started.port}/v1/responses`, {
+        method: "POST",
+        headers: {
+          authorization: "Bearer secret",
+          "content-type": "application/json",
+          "x-openclaw-session-key": sessionKey,
+        },
+        body: JSON.stringify({ model: "openclaw", input: "wait", stream: true }),
+      });
+
+      expect(res.status).toBe(200);
+      const runId = await readFirstResponseId(res);
+      expect(runId.startsWith("resp_")).toBe(true);
+
+      const abortRes = await rpcReq<{ aborted?: boolean; runIds?: string[] }>(
+        started.ws,
+        "chat.abort",
+        { sessionKey, runId },
+      );
+      expect(abortRes.ok).toBe(true);
+      expect(abortRes.payload?.aborted).toBe(true);
+      expect(abortRes.payload?.runIds ?? []).toEqual([runId]);
+    } finally {
+      resolveAgent?.({ payloads: [{ text: "done" }] });
+      try {
+        started.ws.close();
+      } catch {
+        // ignore
+      }
+      await started.server.close({ reason: "openresponses abort test done" });
+      started.envSnapshot.restore();
     }
   });
 
