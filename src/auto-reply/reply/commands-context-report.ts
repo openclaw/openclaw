@@ -181,6 +181,20 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
     session.totalTokens != null
       ? `Session tokens (cached): ${formatInt(session.totalTokens)} total / ctx=${session.contextTokens ?? "?"}`
       : `Session tokens (cached): unknown / ctx=${session.contextTokens ?? "?"}`;
+  const sharedContextLines = [
+    `Workspace: ${workspaceLabel}`,
+    `Bootstrap max/file: ${bootstrapMaxLabel}`,
+    `Bootstrap max/total: ${bootstrapTotalLabel}`,
+    sandboxLine,
+    systemPromptLine,
+    ...(bootstrapWarningLines.length ? ["", ...bootstrapWarningLines] : []),
+    "",
+    "Injected workspace files:",
+    ...fileLines,
+    "",
+    skillsLine,
+    skillsNamesLine,
+  ];
 
   if (sub === "detail" || sub === "deep") {
     const perSkill = formatListTop(
@@ -204,18 +218,7 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
     return {
       text: [
         "🧠 Context breakdown (detailed)",
-        `Workspace: ${workspaceLabel}`,
-        `Bootstrap max/file: ${bootstrapMaxLabel}`,
-        `Bootstrap max/total: ${bootstrapTotalLabel}`,
-        sandboxLine,
-        systemPromptLine,
-        ...(bootstrapWarningLines.length ? ["", ...bootstrapWarningLines] : []),
-        "",
-        "Injected workspace files:",
-        ...fileLines,
-        "",
-        skillsLine,
-        skillsNamesLine,
+        ...sharedContextLines,
         ...(perSkill.lines.length ? ["Top skills (prompt entry size):", ...perSkill.lines] : []),
         ...(perSkill.omitted ? [`… (+${perSkill.omitted} more skills)`] : []),
         "",
@@ -243,18 +246,7 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
   return {
     text: [
       "🧠 Context breakdown",
-      `Workspace: ${workspaceLabel}`,
-      `Bootstrap max/file: ${bootstrapMaxLabel}`,
-      `Bootstrap max/total: ${bootstrapTotalLabel}`,
-      sandboxLine,
-      systemPromptLine,
-      ...(bootstrapWarningLines.length ? ["", ...bootstrapWarningLines] : []),
-      "",
-      "Injected workspace files:",
-      ...fileLines,
-      "",
-      skillsLine,
-      skillsNamesLine,
+      ...sharedContextLines,
       toolListLine,
       toolSchemaLine,
       toolsNamesLine,

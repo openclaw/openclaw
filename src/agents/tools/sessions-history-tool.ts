@@ -10,10 +10,10 @@ import { jsonResult, readStringParam } from "./common.js";
 import {
   createSessionVisibilityGuard,
   createAgentToAgentPolicy,
-  isResolvedSessionVisibleToRequester,
   resolveEffectiveSessionToolsVisibility,
   resolveSessionReference,
   resolveSandboxedSessionToolContext,
+  resolveVisibleSessionReference,
   stripToolMessages,
 } from "./sessions-helpers.js";
 
@@ -197,23 +197,21 @@ export function createSessionsHistoryTool(opts?: {
       if (!resolvedSession.ok) {
         return jsonResult({ status: resolvedSession.status, error: resolvedSession.error });
       }
-      // From here on, use the canonical key (sessionId inputs already resolved).
-      const resolvedKey = resolvedSession.key;
-      const displayKey = resolvedSession.displayKey;
-      const resolvedViaSessionId = resolvedSession.resolvedViaSessionId;
-
-      const visible = await isResolvedSessionVisibleToRequester({
+      const visibleSession = await resolveVisibleSessionReference({
+        resolvedSession,
         requesterSessionKey: effectiveRequesterKey,
-        targetSessionKey: resolvedKey,
         restrictToSpawned,
-        resolvedViaSessionId,
+        visibilitySessionKey: sessionKeyParam,
       });
-      if (!visible) {
+      if (!visibleSession.ok) {
         return jsonResult({
-          status: "forbidden",
-          error: `Session not visible from this sandboxed agent session: ${sessionKeyParam}`,
+          status: visibleSession.status,
+          error: visibleSession.error,
         });
       }
+      // From here on, use the canonical key (sessionId inputs already resolved).
+      const resolvedKey = visibleSession.key;
+      const displayKey = visibleSession.displayKey;
 
       const a2aPolicy = createAgentToAgentPolicy(cfg);
       const visibility = resolveEffectiveSessionToolsVisibility({

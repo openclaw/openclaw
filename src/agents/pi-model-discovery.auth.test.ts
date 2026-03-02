@@ -9,6 +9,15 @@ async function createAgentDir(): Promise<string> {
   return await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pi-auth-storage-"));
 }
 
+async function withAgentDir(run: (agentDir: string) => Promise<void>): Promise<void> {
+  const agentDir = await createAgentDir();
+  try {
+    await run(agentDir);
+  } finally {
+    await fs.rm(agentDir, { recursive: true, force: true });
+  }
+}
+
 async function pathExists(pathname: string): Promise<boolean> {
   try {
     await fs.stat(pathname);
@@ -18,10 +27,25 @@ async function pathExists(pathname: string): Promise<boolean> {
   }
 }
 
+function writeRuntimeOpenRouterProfile(agentDir: string): void {
+  saveAuthProfileStore(
+    {
+      version: 1,
+      profiles: {
+        "openrouter:default": {
+          type: "api_key",
+          provider: "openrouter",
+          key: "sk-or-v1-runtime",
+        },
+      },
+    },
+    agentDir,
+  );
+}
+
 describe("discoverAuthStorage", () => {
   it("loads runtime credentials from auth-profiles without writing auth.json", async () => {
-    const agentDir = await createAgentDir();
-    try {
+    await withAgentDir(async (agentDir) => {
       saveAuthProfileStore(
         {
           version: 1,
@@ -61,27 +85,12 @@ describe("discoverAuthStorage", () => {
       });
 
       expect(await pathExists(path.join(agentDir, "auth.json"))).toBe(false);
-    } finally {
-      await fs.rm(agentDir, { recursive: true, force: true });
-    }
+    });
   });
 
   it("scrubs static api_key entries from legacy auth.json and keeps oauth entries", async () => {
-    const agentDir = await createAgentDir();
-    try {
-      saveAuthProfileStore(
-        {
-          version: 1,
-          profiles: {
-            "openrouter:default": {
-              type: "api_key",
-              provider: "openrouter",
-              key: "sk-or-v1-runtime",
-            },
-          },
-        },
-        agentDir,
-      );
+    await withAgentDir(async (agentDir) => {
+      writeRuntimeOpenRouterProfile(agentDir);
       await fs.writeFile(
         path.join(agentDir, "auth.json"),
         JSON.stringify(
@@ -109,53 +118,39 @@ describe("discoverAuthStorage", () => {
         type: "oauth",
         access: "oauth-access",
       });
-    } finally {
-      await fs.rm(agentDir, { recursive: true, force: true });
-    }
+    });
   });
 
   it("preserves legacy auth.json when auth store is forced read-only", async () => {
-    const agentDir = await createAgentDir();
-    const previous = process.env.OPENCLAW_AUTH_STORE_READONLY;
-    process.env.OPENCLAW_AUTH_STORE_READONLY = "1";
-    try {
-      saveAuthProfileStore(
-        {
-          version: 1,
-          profiles: {
-            "openrouter:default": {
-              type: "api_key",
-              provider: "openrouter",
-              key: "sk-or-v1-runtime",
+    await withAgentDir(async (agentDir) => {
+      const previous = process.env.OPENCLAW_AUTH_STORE_READONLY;
+      process.env.OPENCLAW_AUTH_STORE_READONLY = "1";
+      try {
+        writeRuntimeOpenRouterProfile(agentDir);
+        await fs.writeFile(
+          path.join(agentDir, "auth.json"),
+          JSON.stringify(
+            {
+              openrouter: { type: "api_key", key: "legacy-static-key" },
             },
-          },
-        },
-        agentDir,
-      );
-      await fs.writeFile(
-        path.join(agentDir, "auth.json"),
-        JSON.stringify(
-          {
-            openrouter: { type: "api_key", key: "legacy-static-key" },
-          },
-          null,
-          2,
-        ),
-      );
+            null,
+            2,
+          ),
+        );
 
-      discoverAuthStorage(agentDir);
+        discoverAuthStorage(agentDir);
 
-      const parsed = JSON.parse(await fs.readFile(path.join(agentDir, "auth.json"), "utf8")) as {
-        [key: string]: unknown;
-      };
-      expect(parsed.openrouter).toMatchObject({ type: "api_key", key: "legacy-static-key" });
-    } finally {
-      if (previous === undefined) {
-        delete process.env.OPENCLAW_AUTH_STORE_READONLY;
-      } else {
-        process.env.OPENCLAW_AUTH_STORE_READONLY = previous;
+        const parsed = JSON.parse(await fs.readFile(path.join(agentDir, "auth.json"), "utf8")) as {
+          [key: string]: unknown;
+        };
+        expect(parsed.openrouter).toMatchObject({ type: "api_key", key: "legacy-static-key" });
+      } finally {
+        if (previous === undefined) {
+          delete process.env.OPENCLAW_AUTH_STORE_READONLY;
+        } else {
+          process.env.OPENCLAW_AUTH_STORE_READONLY = previous;
+        }
       }
-      await fs.rm(agentDir, { recursive: true, force: true });
-    }
+    });
   });
 });

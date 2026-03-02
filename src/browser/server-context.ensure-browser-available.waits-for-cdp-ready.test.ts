@@ -13,6 +13,7 @@ vi.mock("./chrome.js", () => ({
 }));
 
 import * as chromeModule from "./chrome.js";
+import type { RunningChrome } from "./chrome.js";
 import type { BrowserServerState } from "./server-context.js";
 import { createBrowserRouteContext } from "./server-context.js";
 
@@ -47,6 +48,21 @@ function makeBrowserState(): BrowserServerState {
   };
 }
 
+function mockLaunchedChrome(
+  launchOpenClawChrome: { mockResolvedValue: (value: RunningChrome) => unknown },
+  pid: number,
+) {
+  const proc = new EventEmitter() as unknown as ChildProcessWithoutNullStreams;
+  launchOpenClawChrome.mockResolvedValue({
+    pid,
+    exe: { kind: "chromium", path: "/usr/bin/chromium" },
+    userDataDir: "/tmp/openclaw-test",
+    cdpPort: 18800,
+    startedAt: Date.now(),
+    proc,
+  });
+}
+
 afterEach(() => {
   vi.useRealTimers();
   vi.clearAllMocks();
@@ -64,16 +80,7 @@ describe("browser server-context ensureBrowserAvailable", () => {
 
     isChromeReachable.mockResolvedValue(false);
     isChromeCdpReady.mockResolvedValueOnce(false).mockResolvedValue(true);
-
-    const proc = new EventEmitter() as unknown as ChildProcessWithoutNullStreams;
-    launchOpenClawChrome.mockResolvedValue({
-      pid: 123,
-      exe: { kind: "chromium", path: "/usr/bin/chromium" },
-      userDataDir: "/tmp/openclaw-test",
-      cdpPort: 18800,
-      startedAt: Date.now(),
-      proc,
-    });
+    mockLaunchedChrome(launchOpenClawChrome, 123);
 
     const state = makeBrowserState();
     const ctx = createBrowserRouteContext({ getState: () => state });
@@ -98,16 +105,7 @@ describe("browser server-context ensureBrowserAvailable", () => {
 
     isChromeReachable.mockResolvedValue(false);
     isChromeCdpReady.mockResolvedValue(false);
-
-    const proc = new EventEmitter() as unknown as ChildProcessWithoutNullStreams;
-    launchOpenClawChrome.mockResolvedValue({
-      pid: 321,
-      exe: { kind: "chromium", path: "/usr/bin/chromium" },
-      userDataDir: "/tmp/openclaw-test",
-      cdpPort: 18800,
-      startedAt: Date.now(),
-      proc,
-    });
+    mockLaunchedChrome(launchOpenClawChrome, 321);
 
     const state = makeBrowserState();
     const ctx = createBrowserRouteContext({ getState: () => state });

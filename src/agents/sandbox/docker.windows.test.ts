@@ -1,25 +1,14 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 import { resolveDockerSpawnInvocation } from "./docker.js";
 
-const tempDirs: string[] = [];
-
-async function createTempDir(): Promise<string> {
-  const dir = await mkdtemp(path.join(tmpdir(), "openclaw-docker-spawn-test-"));
-  tempDirs.push(dir);
-  return dir;
-}
+const tempDirs = createTrackedTempDirs();
+const createTempDir = () => tempDirs.make("openclaw-docker-spawn-test-");
 
 afterEach(async () => {
-  while (tempDirs.length > 0) {
-    const dir = tempDirs.pop();
-    if (!dir) {
-      continue;
-    }
-    await rm(dir, { recursive: true, force: true });
-  }
+  await tempDirs.cleanup();
 });
 
 describe("resolveDockerSpawnInvocation", () => {

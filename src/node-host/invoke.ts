@@ -23,6 +23,7 @@ import { runBrowserProxyCommand } from "./invoke-browser.js";
 import { buildSystemRunApprovalPlan, handleSystemRunInvoke } from "./invoke-system-run.js";
 import type {
   ExecEventPayload,
+  ExecFinishedEventParams,
   RunResult,
   SkillBinsProvider,
   SystemRunParams,
@@ -334,20 +335,11 @@ function buildExecEventPayload(payload: ExecEventPayload): ExecEventPayload {
   return { ...payload, output: text };
 }
 
-async function sendExecFinishedEvent(params: {
-  client: GatewayClient;
-  sessionKey: string;
-  runId: string;
-  cmdText: string;
-  result: {
-    stdout?: string;
-    stderr?: string;
-    error?: string | null;
-    exitCode?: number | null;
-    timedOut?: boolean;
-    success?: boolean;
-  };
-}) {
+async function sendExecFinishedEvent(
+  params: ExecFinishedEventParams & {
+    client: GatewayClient;
+  },
+) {
   const combined = [params.result.stdout, params.result.stderr, params.result.error]
     .filter(Boolean)
     .join("\n");

@@ -346,6 +346,33 @@ export function handleMessageEnd(
     maybeEmitReasoning();
   }
 
+  const emitSplitResultAsBlockReply = (
+    splitResult: ReturnType<typeof ctx.consumeReplyDirectives> | null | undefined,
+  ) => {
+    if (!splitResult || !onBlockReply) {
+      return;
+    }
+    const {
+      text: cleanedText,
+      mediaUrls,
+      audioAsVoice,
+      replyToId,
+      replyToTag,
+      replyToCurrent,
+    } = splitResult;
+    // Emit if there's content OR audioAsVoice flag (to propagate the flag).
+    if (cleanedText || (mediaUrls && mediaUrls.length > 0) || audioAsVoice) {
+      void onBlockReply({
+        text: cleanedText,
+        mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
+        audioAsVoice,
+        replyToId,
+        replyToTag,
+        replyToCurrent,
+      });
+    }
+  };
+
   if (
     (ctx.state.blockReplyBreak === "message_end" ||
       (ctx.blockChunker ? ctx.blockChunker.hasBuffered() : ctx.state.blockBuffer.length > 0)) &&
@@ -369,28 +396,7 @@ export function handleMessageEnd(
         );
       } else {
         ctx.state.lastBlockReplyText = text;
-        const splitResult = ctx.consumeReplyDirectives(text, { final: true });
-        if (splitResult) {
-          const {
-            text: cleanedText,
-            mediaUrls,
-            audioAsVoice,
-            replyToId,
-            replyToTag,
-            replyToCurrent,
-          } = splitResult;
-          // Emit if there's content OR audioAsVoice flag (to propagate the flag).
-          if (cleanedText || (mediaUrls && mediaUrls.length > 0) || audioAsVoice) {
-            void onBlockReply({
-              text: cleanedText,
-              mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
-              audioAsVoice,
-              replyToId,
-              replyToTag,
-              replyToCurrent,
-            });
-          }
-        }
+        emitSplitResultAsBlockReply(ctx.consumeReplyDirectives(text, { final: true }));
       }
     }
   }
@@ -403,27 +409,7 @@ export function handleMessageEnd(
   }
 
   if (ctx.state.blockReplyBreak === "text_end" && onBlockReply) {
-    const tailResult = ctx.consumeReplyDirectives("", { final: true });
-    if (tailResult) {
-      const {
-        text: cleanedText,
-        mediaUrls,
-        audioAsVoice,
-        replyToId,
-        replyToTag,
-        replyToCurrent,
-      } = tailResult;
-      if (cleanedText || (mediaUrls && mediaUrls.length > 0) || audioAsVoice) {
-        void onBlockReply({
-          text: cleanedText,
-          mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
-          audioAsVoice,
-          replyToId,
-          replyToTag,
-          replyToCurrent,
-        });
-      }
-    }
+    emitSplitResultAsBlockReply(ctx.consumeReplyDirectives("", { final: true }));
   }
 
   ctx.state.deltaBuffer = "";
