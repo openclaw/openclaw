@@ -117,22 +117,6 @@ async function writeCronJobs(storePath: string, jobs: CronJob[]) {
   await fs.writeFile(storePath, JSON.stringify({ version: 1, jobs }), "utf-8");
 }
 
-async function removeDirWithRetries(dir: string, attempts = 3) {
-  let lastError: unknown;
-  for (let i = 0; i < attempts; i += 1) {
-    try {
-      await fs.rm(dir, { recursive: true, force: true });
-      return;
-    } catch (err) {
-      lastError = err;
-      await new Promise((resolve) => setTimeout(resolve, 25 * (i + 1)));
-    }
-  }
-  if (lastError) {
-    throw lastError;
-  }
-}
-
 async function startCronForStore(params: {
   storePath: string;
   cronEnabled?: boolean;
@@ -171,7 +155,7 @@ describe("Cron issue regressions", () => {
   });
 
   afterAll(async () => {
-    await removeDirWithRetries(fixtureRoot);
+    await fs.rm(fixtureRoot, { recursive: true, force: true });
   });
 
   afterEach(() => {
@@ -1478,7 +1462,6 @@ describe("Cron issue regressions", () => {
     let now = dueAt;
     let activeRuns = 0;
     let peakActiveRuns = 0;
-    const startedRunIds = new Set<string>();
     const bothRunsStarted = createDeferred<void>();
     const firstRun = createDeferred<{ status: "ok"; summary: string }>();
     const secondRun = createDeferred<{ status: "ok"; summary: string }>();
@@ -1493,8 +1476,7 @@ describe("Cron issue regressions", () => {
       runIsolatedAgentJob: vi.fn(async (params: { job: { id: string } }) => {
         activeRuns += 1;
         peakActiveRuns = Math.max(peakActiveRuns, activeRuns);
-        startedRunIds.add(params.job.id);
-        if (startedRunIds.size === 2) {
+        if (peakActiveRuns >= 2) {
           bothRunsStarted.resolve();
         }
         try {
@@ -1509,12 +1491,14 @@ describe("Cron issue regressions", () => {
     });
 
     const timerPromise = onTimer(state);
-    await Promise.race([
-      bothRunsStarted.promise,
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("timed out waiting for concurrent cron runs")), 1_000),
-      ),
-    ]);
+    const startTimeout = setTimeout(() => {
+      bothRunsStarted.reject(new Error("timed out waiting for concurrent job starts"));
+    }, 250);
+    try {
+      await bothRunsStarted.promise;
+    } finally {
+      clearTimeout(startTimeout);
+    }
 
     expect(peakActiveRuns).toBe(2);
 
