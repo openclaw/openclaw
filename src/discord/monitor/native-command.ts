@@ -1623,6 +1623,17 @@ async function dispatchDiscordCommandInteraction(params: {
       onModelSelected,
     },
   });
+  // Resolve deferred slash interactions even when no reply payload was emitted
+  // (for example when message tool handled channel delivery directly).
+  if (!didReply && !suppressReplies) {
+    await safeDiscordInteractionCall("interaction ack", async () => {
+      if (preferFollowUp) {
+        await interaction.followUp({ content: "✓" });
+        return;
+      }
+      await interaction.reply({ content: "✓" });
+    });
+  }
 }
 
 async function deliverDiscordInteractionReply(params: {

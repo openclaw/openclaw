@@ -14,6 +14,7 @@ import * as modelPickerPreferencesModule from "./model-picker-preferences.js";
 import * as modelPickerModule from "./model-picker.js";
 import { createModelsProviderData as createBaseModelsProviderData } from "./model-picker.test-utils.js";
 import {
+  createDiscordNativeCommand,
   createDiscordModelPickerFallbackButton,
   createDiscordModelPickerFallbackSelect,
 } from "./native-command.js";
@@ -451,5 +452,64 @@ describe("Discord model picker interactions", () => {
       String(call[0] ?? "").includes("model picker override mismatch"),
     )?.[0];
     expect(mismatchLog).toContain("session key agent:worker:subagent:bound");
+  });
+
+  it("acknowledges deferred slash interactions when dispatcher emits no reply payload", async () => {
+    const cfg = {
+      channels: {
+        discord: {
+          dm: {
+            enabled: true,
+            policy: "open",
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const discordConfig = cfg.channels?.discord ?? {};
+    const nativeCommand = createDiscordNativeCommand({
+      command: {
+        name: "ztest",
+        description: "ztest",
+        acceptsArgs: false,
+      },
+      cfg,
+      discordConfig,
+      accountId: "default",
+      sessionPrefix: "discord:slash",
+      ephemeralDefault: true,
+      threadBindings: createNoopThreadBindingManager("default"),
+    });
+
+    vi.spyOn(dispatcherModule, "dispatchReplyWithDispatcher").mockResolvedValue({} as never);
+
+    const interaction = {
+      user: {
+        id: "owner",
+        username: "tester",
+        globalName: "Tester",
+      },
+      channel: {
+        type: ChannelType.DM,
+        id: "dm-1",
+      },
+      guild: null,
+      rawData: {
+        id: "interaction-ztest-1",
+        member: { roles: [] },
+      },
+      options: {
+        getString: vi.fn().mockReturnValue(null),
+        getNumber: vi.fn().mockReturnValue(null),
+        getBoolean: vi.fn().mockReturnValue(null),
+      },
+      reply: vi.fn().mockResolvedValue({ ok: true }),
+      followUp: vi.fn().mockResolvedValue({ ok: true }),
+      client: {},
+    };
+
+    await nativeCommand.run(interaction as never);
+
+    expect(interaction.reply).toHaveBeenCalledWith({ content: "✓" });
+    expect(interaction.followUp).not.toHaveBeenCalled();
   });
 });
