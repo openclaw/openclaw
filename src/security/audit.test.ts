@@ -1266,7 +1266,7 @@ describe("security audit", () => {
     );
   });
 
-  it("warns when Feishu doc tool is enabled because create supports owner_open_id", async () => {
+  it("warns when Feishu doc tool is enabled because create can grant requester access", async () => {
     const cfg: OpenClawConfig = {
       channels: {
         feishu: {
@@ -1280,7 +1280,7 @@ describe("security audit", () => {
     expectFinding(res, "channels.feishu.doc_owner_open_id", "warn");
   });
 
-  it("does not warn for Feishu owner_open_id when doc tools are disabled", async () => {
+  it("does not warn for Feishu doc grant risk when doc tools are disabled", async () => {
     const cfg: OpenClawConfig = {
       channels: {
         feishu: {
