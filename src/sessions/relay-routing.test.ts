@@ -88,11 +88,11 @@ describe("resolveSessionRelayRoute", () => {
     expect(resolveSessionRelayRoute({ cfg, chatType: "mystery-type" }).mode).toBe("read-write");
   });
 
-  it('falls back to read-write when defaultMode is "read-only" and targets are ambiguous', () => {
+  it('fails closed when defaultMode is "read-only" and targets are ambiguous', () => {
     const noTargets = {
       session: { relayRouting: { defaultMode: "read-only" } },
     } as OpenClawConfig;
-    expect(resolveSessionRelayRoute({ cfg: noTargets }).mode).toBe("read-write");
+    expect(resolveSessionRelayRoute({ cfg: noTargets }).mode).toBe("read-only-blocked");
 
     const multipleTargets = {
       session: {
@@ -105,7 +105,22 @@ describe("resolveSessionRelayRoute", () => {
         },
       },
     } as OpenClawConfig;
-    expect(resolveSessionRelayRoute({ cfg: multipleTargets }).mode).toBe("read-write");
+    expect(resolveSessionRelayRoute({ cfg: multipleTargets }).mode).toBe("read-only-blocked");
+  });
+
+  it("fails closed when read-only rule matches but relayTo target is unresolvable", () => {
+    const cfg = {
+      session: {
+        relayRouting: {
+          targets: {
+            ops: { channel: "slack", to: "C123" },
+          },
+          rules: [{ mode: "read-only", relayTo: "nonexistent", match: { channel: "discord" } }],
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(resolveSessionRelayRoute({ cfg, channel: "discord" }).mode).toBe("read-only-blocked");
   });
 
   it('uses the lone target when defaultMode is "read-only" and exactly one target exists', () => {

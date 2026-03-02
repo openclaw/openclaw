@@ -2,7 +2,7 @@ import { normalizeChatType, type ChatType } from "../channels/chat-type.js";
 import type { OpenClawConfig, SessionRelayRoutingConfig } from "../config/config.js";
 import { parseAgentSessionKey } from "./session-key-utils.js";
 
-export type RelayRoutingMode = "read-write" | "read-only";
+export type RelayRoutingMode = "read-write" | "read-only" | "read-only-blocked";
 
 export type RelayRouteSource = {
   channel?: string;
@@ -28,6 +28,11 @@ export type RelayRouteResolution =
   | {
       mode: "read-only";
       target: RelayRouteTarget;
+      source: RelayRouteSource;
+    }
+  | {
+      /** Config says read-only but target resolution failed. Fail closed — drop all delivery. */
+      mode: "read-only-blocked";
       source: RelayRouteSource;
     };
 
@@ -162,7 +167,8 @@ export function resolveSessionRelayRoute(params: {
       if (target) {
         return { mode: "read-only", target, source };
       }
-      return { mode: "read-write", source };
+      // Fail closed: config says read-only but target is unresolvable. Block all delivery.
+      return { mode: "read-only-blocked", source };
     }
     return { mode: "read-write", source };
   }
@@ -173,6 +179,8 @@ export function resolveSessionRelayRoute(params: {
     if (target) {
       return { mode: "read-only", target, source };
     }
+    // Fail closed: defaultMode says read-only but target is ambiguous/missing. Block all delivery.
+    return { mode: "read-only-blocked", source };
   }
   return { mode: "read-write", source };
 }

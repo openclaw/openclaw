@@ -474,6 +474,17 @@ export async function runPreparedReply(
       threadId: ctx.MessageThreadId,
     },
   });
+
+  // Fail closed: config says read-only but relay target is unresolvable/ambiguous.
+  // Drop all delivery — never fall back to source channel.
+  if (relayRoute.mode === "read-only-blocked") {
+    logVerbose(
+      `get-reply-run: read-only relay target unresolvable for session ${sessionKey}; dropping message (fail-closed)`,
+    );
+    typing.cleanup();
+    return undefined;
+  }
+
   const followupRun = {
     prompt: queuedBody,
     messageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,

@@ -242,6 +242,17 @@ export async function dispatchReplyFromConfig(params: {
       threadId: ctx.MessageThreadId,
     },
   });
+  // Fail closed: config says read-only but relay target is unresolvable/ambiguous.
+  // Drop all delivery — never fall back to source channel.
+  if (relayRoute.mode === "read-only-blocked") {
+    logVerbose(
+      `dispatch-from-config: read-only relay target unresolvable for session ${sessionKey}; dropping message (fail-closed)`,
+    );
+    recordProcessed("skipped", { reason: "read_only_blocked" });
+    markIdle("message_completed");
+    return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
+  }
+
   const relayMode: RelayRoutingMode = relayRoute.mode;
   const shouldSwallowRelaySkipToken = relayMode === "read-only";
   const relayRouteTarget: RelayRouteTarget | undefined =
