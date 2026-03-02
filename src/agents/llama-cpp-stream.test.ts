@@ -148,8 +148,11 @@ describe("buildAssistantMessage", () => {
     const result = buildAssistantMessage("Processing...", functionCalls, modelInfo);
     expect(result.content).toHaveLength(3);
     expect(result.content[0]).toEqual({ type: "text", text: "Processing..." });
-    const toolCall1 = result.content[1] as { type: string; name?: string };
-    const toolCall2 = result.content[2] as { type: string; name?: string };
+    const toolCall1 = result.content[1];
+    const toolCall2 = result.content[2];
+    if (toolCall1.type !== "toolCall" || toolCall2.type !== "toolCall") {
+      throw new Error("Expected toolCall content blocks");
+    }
     expect(toolCall1.name).toBe("read");
     expect(toolCall2.name).toBe("bash");
   });

@@ -15,10 +15,10 @@ describeLive("llama-cpp live", () => {
     const stream = streamFn(
       {
         id: "test-model",
-        api: "llama-cpp",
+        api: "llama-cpp" as const,
         provider: "llama-cpp",
         contextWindow: 32768,
-      } as unknown as Parameters<typeof streamFn>[0],
+      },
       {
         messages: [{ role: "user", content: "Reply with just the word 'ok'." }],
         systemPrompt: "You are a helpful assistant.",
@@ -64,10 +64,10 @@ describeLive("llama-cpp live", () => {
     const stream = streamFn(
       {
         id: "test-model",
-        api: "llama-cpp",
+        api: "llama-cpp" as const,
         provider: "llama-cpp",
         contextWindow: 32768,
-      } as unknown as Parameters<typeof streamFn>[0],
+      },
       {
         messages: [{ role: "user", content: "What time is it? Use the get_time tool." }],
         tools: [
@@ -113,10 +113,10 @@ describeLive("llama-cpp live", () => {
     const stream = streamFn(
       {
         id: "test-model",
-        api: "llama-cpp",
+        api: "llama-cpp" as const,
         provider: "llama-cpp",
         contextWindow: 32768,
-      } as unknown as Parameters<typeof streamFn>[0],
+      },
       {
         messages: [
           { role: "user", content: "My name is Alice." },

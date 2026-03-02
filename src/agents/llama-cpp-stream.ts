@@ -110,19 +110,32 @@ function extractToolResultContent(msg: { role: string; content: unknown; toolCal
   };
 }
 
+type FunctionCallResponse = {
+  type: "functionCall";
+  name: string;
+  params: Record<string, unknown>;
+  result?: unknown;
+};
+
 type ChatHistoryItem =
   | { type: "system"; text: string }
   | { type: "user"; text: string }
   | {
       type: "model";
-      response: Array<
-        string | { type: "functionCall"; name: string; params: unknown; result?: unknown }
-      >;
+      response: Array<string | FunctionCallResponse>;
     };
 
-export function convertToChatHistory(
-  messages: Array<{ role: string; content: unknown; toolCallId?: string; toolName?: string }>,
-): { chatHistory: ChatHistoryItem[]; pendingToolCalls: Map<string, string> } {
+interface InputMessage {
+  role: string;
+  content: unknown;
+  toolCallId?: string;
+  toolName?: string;
+}
+
+export function convertToChatHistory(messages: InputMessage[]): {
+  chatHistory: ChatHistoryItem[];
+  pendingToolCalls: Map<string, string>;
+} {
   const chatHistory: ChatHistoryItem[] = [];
   const pendingToolCalls = new Map<string, string>();
 
@@ -143,9 +156,7 @@ export function convertToChatHistory(
       const text = extractTextContent(msg.content);
       const toolCalls = extractToolCalls(msg.content);
 
-      const response: Array<
-        string | { type: "functionCall"; name: string; params: unknown; result?: unknown }
-      > = [];
+      const response: Array<string | FunctionCallResponse> = [];
 
       if (text) {
         response.push(text);
@@ -167,18 +178,19 @@ export function convertToChatHistory(
         });
       }
     } else if (role === "tool" || role === "toolResult") {
-      const { toolCallId, result } = extractToolResultContent(
-        msg as { role: string; content: unknown; toolCallId?: string },
-      );
+      const { toolCallId, result } = extractToolResultContent(msg);
       const toolName = pendingToolCalls.get(toolCallId ?? "");
 
       if (toolName && chatHistory.length > 0) {
         const lastItem = chatHistory[chatHistory.length - 1];
-        if (lastItem?.type === "model" && Array.isArray(lastItem.response)) {
+        if (lastItem?.type === "model") {
           for (const resp of lastItem.response) {
             if (
               typeof resp === "object" &&
+              resp !== null &&
+              "type" in resp &&
               resp.type === "functionCall" &&
+              "name" in resp &&
               resp.name === toolName &&
               resp.result === undefined
             ) {
