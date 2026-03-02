@@ -17,7 +17,7 @@ const FEISHU_REACTION_VERIFY_TIMEOUT_MS = 1_500;
 export type FeishuReactionCreatedEvent = {
   message_id: string;
   chat_id?: string;
-  chat_type?: "p2p" | "group";
+  chat_type?: "p2p" | "group" | "private";
   reaction_type?: { emoji_type?: string };
   operator_type?: string;
   user_id?: { open_id?: string };
@@ -93,7 +93,8 @@ export async function resolveReactionSyntheticEvent(
 
   const syntheticChatIdRaw = event.chat_id ?? reactedMsg.chatId;
   const syntheticChatId = syntheticChatIdRaw?.trim() ? syntheticChatIdRaw : `p2p:${senderId}`;
-  const syntheticChatType: "p2p" | "group" = event.chat_type ?? "p2p";
+  const syntheticChatType: "p2p" | "group" | "private" =
+    event.chat_type === "group" ? "group" : "p2p";
   return {
     sender: {
       sender_id: { open_id: senderId },
