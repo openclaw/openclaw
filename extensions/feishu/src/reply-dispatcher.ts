@@ -120,7 +120,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         return;
       }
 
-      const throttleMs = account.config?.streamingThrottleMs ?? 1000;
+      const throttleMs = account.config?.streamingThrottleMs ?? 100;
 
       streaming = new FeishuStreamingSession(createFeishuClient(account), creds, (message) =>
         params.runtime.log?.(`feishu[${account.accountId}] ${message}`),

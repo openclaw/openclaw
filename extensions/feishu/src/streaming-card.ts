@@ -97,7 +97,7 @@ export class FeishuStreamingSession {
   private pendingText: string | null = null;
   private updateThrottleMs: number; // Throttle updates (ms between updates)
 
-  constructor(client: Client, creds: Credentials, log?: (msg: string) => void, throttleMs: number = 1000) {
+  constructor(client: Client, creds: Credentials, log?: (msg: string) => void, throttleMs: number = 100) {
     this.client = client;
     this.creds = creds;
     this.log = log;
