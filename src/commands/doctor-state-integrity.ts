@@ -163,7 +163,47 @@ function decodeMountInfoPath(value: string): string {
   );
 }
 
+function escapeControlCharsForTerminal(value: string): string {
+  let escaped = "";
+  for (const char of value) {
+    if (char === "\u001b") {
+      escaped += "\\x1b";
+      continue;
+    }
+    if (char === "\r") {
+      escaped += "\\r";
+      continue;
+    }
+    if (char === "\n") {
+      escaped += "\\n";
+      continue;
+    }
+    if (char === "\t") {
+      escaped += "\\t";
+      continue;
+    }
+    const code = char.charCodeAt(0);
+    if ((code >= 0 && code <= 8) || code === 11 || code === 12 || (code >= 14 && code <= 31)) {
+      escaped += `\\x${code.toString(16).padStart(2, "0")}`;
+      continue;
+    }
+    if (code === 127) {
+      escaped += "\\x7f";
+      continue;
+    }
+    escaped += char;
+  }
+  return escaped;
+}
+
 type LinuxMountInfoEntry = {
+  mountPoint: string;
+  fsType: string;
+  source: string;
+};
+
+export type LinuxSdBackedStateDir = {
+  path: string;
   mountPoint: string;
   fsType: string;
   source: string;
@@ -239,12 +279,7 @@ export function detectLinuxSdBackedStateDir(
     resolveRealPath?: (targetPath: string) => string | null;
     resolveDeviceRealPath?: (targetPath: string) => string | null;
   },
-): {
-  path: string;
-  mountPoint: string;
-  fsType: string;
-  source: string;
-} | null {
+): LinuxSdBackedStateDir | null {
   const platform = deps?.platform ?? process.platform;
   if (platform !== "linux") {
     return null;
@@ -284,6 +319,24 @@ export function detectLinuxSdBackedStateDir(
     fsType: mountEntry.fsType,
     source: mountEntry.source,
   };
+}
+
+export function formatLinuxSdBackedStateDirWarning(
+  displayStateDir: string,
+  linuxSdBackedStateDir: LinuxSdBackedStateDir,
+): string {
+  const displayMountPoint =
+    linuxSdBackedStateDir.mountPoint === "/"
+      ? "/"
+      : shortenHomePath(linuxSdBackedStateDir.mountPoint);
+  const safeSource = escapeControlCharsForTerminal(linuxSdBackedStateDir.source);
+  const safeFsType = escapeControlCharsForTerminal(linuxSdBackedStateDir.fsType);
+  const safeMountPoint = escapeControlCharsForTerminal(displayMountPoint);
+  return [
+    `- State directory appears to be on SD/eMMC storage (${displayStateDir}; device ${safeSource}, fs ${safeFsType}, mount ${safeMountPoint}).`,
+    "- SD/eMMC media can be slower for random I/O and wear faster under session/log churn.",
+    "- For better startup and state durability, prefer SSD/NVMe (or USB SSD on Raspberry Pi) for OPENCLAW_STATE_DIR.",
+  ].join("\n");
 }
 
 export function detectMacCloudSyncedStateDir(
@@ -430,17 +483,7 @@ export async function noteStateIntegrity(
     );
   }
   if (linuxSdBackedStateDir) {
-    const displayMountPoint =
-      linuxSdBackedStateDir.mountPoint === "/"
-        ? "/"
-        : shortenHomePath(linuxSdBackedStateDir.mountPoint);
-    warnings.push(
-      [
-        `- State directory appears to be on SD/eMMC storage (${displayStateDir}; device ${linuxSdBackedStateDir.source}, fs ${linuxSdBackedStateDir.fsType}, mount ${displayMountPoint}).`,
-        "- SD/eMMC media can be slower for random I/O and wear faster under session/log churn.",
-        "- For better startup and state durability, prefer SSD/NVMe (or USB SSD on Raspberry Pi) for OPENCLAW_STATE_DIR.",
-      ].join("\n"),
-    );
+    warnings.push(formatLinuxSdBackedStateDirWarning(displayStateDir, linuxSdBackedStateDir));
   }
 
   let stateDirExists = existsDir(stateDir);
