@@ -135,6 +135,27 @@ function resolveZalouserGroupToolPolicy(
   return undefined;
 }
 
+function resolveZalouserRequireMention(params: ChannelGroupContext): boolean {
+  const account = resolveZalouserAccountSync({
+    cfg: params.cfg,
+    accountId: params.accountId ?? undefined,
+  });
+  const groups = account.config.groups ?? {};
+  const candidates = [params.groupId?.trim(), params.groupChannel?.trim()].filter(
+    (value): value is string => Boolean(value),
+  );
+  for (const candidate of candidates) {
+    const entry = groups[candidate];
+    if (typeof entry?.requireMention === "boolean") {
+      return entry.requireMention;
+    }
+  }
+  if (typeof groups["*"]?.requireMention === "boolean") {
+    return groups["*"].requireMention;
+  }
+  return true;
+}
+
 export const zalouserDock: ChannelDock = {
   id: "zalouser",
   capabilities: {
@@ -152,7 +173,7 @@ export const zalouserDock: ChannelDock = {
       formatAllowFromLowercase({ allowFrom, stripPrefixRe: /^(zalouser|zlu):/i }),
   },
   groups: {
-    resolveRequireMention: () => true,
+    resolveRequireMention: resolveZalouserRequireMention,
     resolveToolPolicy: resolveZalouserGroupToolPolicy,
   },
   threading: {
@@ -235,7 +256,7 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount> = {
     },
   },
   groups: {
-    resolveRequireMention: () => true,
+    resolveRequireMention: resolveZalouserRequireMention,
     resolveToolPolicy: resolveZalouserGroupToolPolicy,
   },
   threading: {

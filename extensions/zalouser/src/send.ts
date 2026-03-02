@@ -1,5 +1,5 @@
 import type { ZaloSendOptions, ZaloSendResult } from "./types.js";
-import { sendZaloLink, sendZaloTextMessage } from "./zalo-js.js";
+import { sendZaloLink, sendZaloTextMessage, sendZaloTypingEvent } from "./zalo-js.js";
 
 export type ZalouserSendOptions = ZaloSendOptions;
 export type ZalouserSendResult = ZaloSendResult;
@@ -29,4 +29,11 @@ export async function sendLinkZalouser(
   options: ZalouserSendOptions = {},
 ): Promise<ZalouserSendResult> {
   return await sendZaloLink(threadId, url, options);
+}
+
+export async function sendTypingZalouser(
+  threadId: string,
+  options: Pick<ZalouserSendOptions, "profile" | "isGroup"> = {},
+): Promise<void> {
+  await sendZaloTypingEvent(threadId, options);
 }
