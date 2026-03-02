@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
+import { isSdkProvider } from "../../agents/cli-backends.js";
 import { runCliAgent } from "../../agents/cli-runner.js";
 import { getCliSessionId } from "../../agents/cli-session.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
@@ -12,6 +13,7 @@ import {
   sanitizeUserFacingText,
 } from "../../agents/pi-embedded-helpers.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
+import { runSdkAgent } from "../../agents/sdk-runner.js";
 import {
   resolveGroupSessionKey,
   resolveSessionTranscriptPath,
@@ -206,28 +208,47 @@ export async function runAgentTurnWithFallback(params: {
             return (async () => {
               let lifecycleTerminalEmitted = false;
               try {
-                const result = await runCliAgent({
-                  sessionId: params.followupRun.run.sessionId,
-                  sessionKey: params.sessionKey,
-                  agentId: params.followupRun.run.agentId,
-                  sessionFile: params.followupRun.run.sessionFile,
-                  workspaceDir: params.followupRun.run.workspaceDir,
-                  config: params.followupRun.run.config,
-                  prompt: params.commandBody,
-                  provider,
-                  model,
-                  thinkLevel: params.followupRun.run.thinkLevel,
-                  timeoutMs: params.followupRun.run.timeoutMs,
-                  runId,
-                  extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
-                  ownerNumbers: params.followupRun.run.ownerNumbers,
-                  cliSessionId,
-                  images: params.opts?.images,
-                });
+                // SDK provider: uses Claude Agent SDK with native streaming
+                const result = isSdkProvider(provider)
+                  ? await runSdkAgent({
+                      sessionId: params.followupRun.run.sessionId,
+                      prompt: params.commandBody,
+                      model,
+                      workspaceDir: params.followupRun.run.workspaceDir,
+                      config: params.followupRun.run.config,
+                      timeoutMs: params.followupRun.run.timeoutMs,
+                      runId,
+                      systemPrompt: params.followupRun.run.extraSystemPrompt,
+                      onStreamText: (text) => {
+                        emitAgentEvent({
+                          runId,
+                          stream: "assistant",
+                          data: { text, delta: true },
+                        });
+                      },
+                      cliSessionId,
+                    })
+                  : await runCliAgent({
+                      sessionId: params.followupRun.run.sessionId,
+                      sessionKey: params.sessionKey,
+                      agentId: params.followupRun.run.agentId,
+                      sessionFile: params.followupRun.run.sessionFile,
+                      workspaceDir: params.followupRun.run.workspaceDir,
+                      config: params.followupRun.run.config,
+                      prompt: params.commandBody,
+                      provider,
+                      model,
+                      thinkLevel: params.followupRun.run.thinkLevel,
+                      timeoutMs: params.followupRun.run.timeoutMs,
+                      runId,
+                      extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
+                      ownerNumbers: params.followupRun.run.ownerNumbers,
+                      cliSessionId,
+                      images: params.opts?.images,
+                    });
 
-                // CLI backends don't emit streaming assistant events, so we need to
-                // emit one with the final text so server-chat can populate its buffer
-                // and send the response to TUI/WebSocket clients.
+                // Emit final assistant text event for server-chat to populate its
+                // buffer and send the response to TUI/WebSocket clients.
                 const cliText = result.payloads?.[0]?.text?.trim();
                 if (cliText) {
                   emitAgentEvent({

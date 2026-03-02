@@ -102,6 +102,27 @@ Optional ops scripts (systemd/Termux) are documented here:
 
 > `claude setup-token` requires an interactive TTY.
 
+## Claude Code SDK (no API key)
+
+If you have a Claude Max subscription and the `claude` CLI installed, you can
+skip API keys entirely. The Claude Code SDK provider reuses the local CLI
+authentication session.
+
+```bash
+openclaw onboard --auth-choice claude-sdk
+```
+
+Or set the model directly:
+
+```bash
+openclaw models set claude-sdk/opus
+```
+
+Requirements:
+
+- `claude` CLI installed and signed in (`claude --version` should work)
+- Active Claude Max subscription on the signed-in account
+
 ## Checking model auth status
 
 ```bash

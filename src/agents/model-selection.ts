@@ -90,10 +90,7 @@ export function findNormalizedProviderKey(
 
 export function isCliProvider(provider: string, cfg?: OpenClawConfig): boolean {
   const normalized = normalizeProviderId(provider);
-  if (normalized === "claude-cli") {
-    return true;
-  }
-  if (normalized === "codex-cli") {
+  if (normalized === "claude-cli" || normalized === "claude-sdk" || normalized === "codex-cli") {
     return true;
   }
   const backends = cfg?.agents?.defaults?.cliBackends ?? {};

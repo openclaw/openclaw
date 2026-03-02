@@ -7,6 +7,7 @@ export type AuthChoice =
   | "oauth"
   | "setup-token"
   | "claude-cli"
+  | "claude-sdk"
   | "token"
   | "chutes"
   | "vllm"
@@ -54,6 +55,7 @@ export type AuthChoice =
 export type AuthChoiceGroupId =
   | "openai"
   | "anthropic"
+  | "claude-sdk"
   | "chutes"
   | "vllm"
   | "google"
