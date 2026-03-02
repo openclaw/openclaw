@@ -83,6 +83,16 @@ Notes:
 - For multi-account setups, `commands` can be set at the top level or under
   `channels.mattermost.accounts.<id>.commands` (account values override top-level fields).
 - Command callbacks are validated with per-command tokens and fail closed when token checks fail.
+- Reachability requirement: the callback endpoint must be reachable from the Mattermost server.
+  - Do not set `callbackUrl` to `localhost` unless Mattermost runs on the same host/network namespace as OpenClaw.
+  - Do not set `callbackUrl` to your Mattermost base URL unless that URL reverse-proxies `/api/channels/mattermost/command` to OpenClaw.
+  - A quick check is `curl https://<gateway-host>/api/channels/mattermost/command`; a GET should return `405 Method Not Allowed` from OpenClaw, not `404`.
+- Mattermost egress allowlist requirement:
+  - If your callback targets private/tailnet/internal addresses, set Mattermost
+    `ServiceSettings.AllowedUntrustedInternalConnections` to include the callback host/domain.
+  - Use host/domain entries, not full URLs.
+    - Good: `gateway.tailnet-name.ts.net`
+    - Bad: `https://gateway.tailnet-name.ts.net`
 
 ## Environment variables (default account)
 
