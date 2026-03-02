@@ -1,4 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { RuntimeEnv } from "../../runtime.js";
 
 const loadAndMaybeMigrateDoctorConfigMock = vi.hoisted(() => vi.fn());
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
@@ -44,8 +45,8 @@ async function withCapturedStdout(run: () => Promise<void>): Promise<string> {
 
 describe("ensureConfigReady", () => {
   let ensureConfigReady: (params: {
-    runtime: unknown;
-    commandPath: string[];
+    runtime: RuntimeEnv;
+    commandPath?: string[];
     suppressDoctorStdout?: boolean;
   }) => Promise<void>;
   let resetConfigGuardStateForTests: () => void;
