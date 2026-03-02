@@ -87,6 +87,26 @@ describe("failover-error", () => {
     );
   });
 
+  // Issue #30484: HTTP 402 from Anthropic Max plan can indicate rate limit, not billing error
+  it("HTTP 402 with rate limit message returns rate_limit (not billing)", () => {
+    expect(resolveFailoverReasonFromError({ status: 402, message: "rate limit exceeded" })).toBe(
+      "rate_limit",
+    );
+    expect(resolveFailoverReasonFromError({ status: 402, message: "too many requests" })).toBe(
+      "rate_limit",
+    );
+    expect(resolveFailoverReasonFromError({ status: 402, message: "429 rate limit" })).toBe(
+      "rate_limit",
+    );
+    expect(resolveFailoverReasonFromError({ status: 402, message: "quota exceeded" })).toBe(
+      "rate_limit",
+    );
+    // Pure billing 402 should still return billing
+    expect(resolveFailoverReasonFromError({ status: 402, message: "payment required" })).toBe(
+      "billing",
+    );
+  });
+
   it("resolveFailoverStatus maps auth_permanent to 403", () => {
     expect(resolveFailoverStatus("auth_permanent")).toBe(403);
   });

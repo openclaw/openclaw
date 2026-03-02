@@ -1,6 +1,7 @@
 import {
   classifyFailoverReason,
   isAuthPermanentErrorMessage,
+  isRateLimitErrorMessage,
   type FailoverReason,
 } from "./pi-embedded-helpers.js";
 
@@ -160,6 +161,12 @@ export function resolveFailoverReasonFromError(err: unknown): FailoverReason | n
 
   const status = getStatusCode(err);
   if (status === 402) {
+    // HTTP 402 can mean either billing error OR rate limit (e.g., Anthropic Max plan).
+    // Check the error message to differentiate.
+    const msg = getErrorMessage(err);
+    if (msg && isRateLimitErrorMessage(msg)) {
+      return "rate_limit";
+    }
     return "billing";
   }
   if (status === 429) {
