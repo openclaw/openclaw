@@ -34,15 +34,15 @@ export function isSilentReplyPrefixText(
   if (!text) {
     return false;
   }
-  const normalized = text.trimStart().toUpperCase();
-  if (!normalized) {
+  const trimmed = text.trimStart();
+  if (!trimmed || trimmed.length < 2) {
     return false;
   }
-  if (!normalized.includes("_")) {
+  // Only match text that is already uppercase + underscores (as tokens are emitted).
+  // This prevents natural-language words like "No" or "Heart" from matching.
+  if (/[^A-Z_]/.test(trimmed)) {
     return false;
   }
-  if (/[^A-Z_]/.test(normalized)) {
-    return false;
-  }
-  return token.toUpperCase().startsWith(normalized);
+  // Must be a strict prefix (shorter than the full token).
+  return trimmed.length < token.length && token.toUpperCase().startsWith(trimmed);
 }
