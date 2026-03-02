@@ -67,6 +67,7 @@ SLACK_BOT_TOKEN=xoxb-...
         - `member_joined_channel`, `member_left_channel`
         - `channel_rename`
         - `pin_added`, `pin_removed`
+        - `assistant_thread_started`, `assistant_thread_context_changed` (optional, for AI Assistant features)
 
         Also enable App Home **Messages Tab** for DMs.
       </Step>

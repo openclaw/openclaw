@@ -36,8 +36,10 @@ import { hasSlackThreadParticipation } from "../../sent-thread-cache.js";
 import { resolveSlackThreadContext } from "../../threading.js";
 import type { SlackMessageEvent } from "../../types.js";
 import { resolveSlackAllowListMatch, resolveSlackUserAllowed } from "../allow-list.js";
+import { getThreadContext } from "../assistant-context.js";
 import { resolveSlackEffectiveAllowFrom } from "../auth.js";
 import { resolveSlackChannelConfig } from "../channel-config.js";
+import { fetchChannelContext } from "../channel-context.js";
 import { stripSlackMentionsForCommandDetection } from "../commands.js";
 import { normalizeSlackChannelType, type SlackMonitorContext } from "../context.js";
 import { authorizeSlackDirectMessage } from "../dm-auth.js";
@@ -506,6 +508,28 @@ export async function prepareSlackMessage(params: {
     channelConfig,
   });
 
+  let assistantChannelContext: string | undefined;
+  const assistantConfig = account.config.assistant;
+  const assistantContextEnabled =
+    assistantConfig?.enabled && (assistantConfig.channelContext ?? true);
+  if (assistantContextEnabled && threadTs) {
+    const threadContext2 = getThreadContext(message.channel, threadTs);
+    if (threadContext2?.channelId && threadContext2.channelId !== message.channel) {
+      const channelCtx = await fetchChannelContext({
+        channelId: threadContext2.channelId,
+        clientOpts: { client: ctx.app.client },
+        client: ctx.app.client,
+        messageLimit: assistantConfig?.channelContextMessageLimit,
+      });
+      if (channelCtx) {
+        assistantChannelContext = channelCtx.contextBlock;
+        logVerbose(
+          `slack assistant context: injected ${channelCtx.messageCount} messages from ${channelCtx.channelName ?? threadContext2.channelId}`,
+        );
+      }
+    }
+  }
+
   let threadStarterBody: string | undefined;
   let threadHistoryBody: string | undefined;
   let threadSessionPreviousTimestamp: number | undefined;
@@ -613,6 +637,10 @@ export async function prepareSlackMessage(params: {
       : undefined;
   const commandBody = textForCommandDetection.trim();
 
+  const untrustedEntries = [untrustedChannelMetadata, assistantChannelContext].filter(
+    (entry): entry is string => Boolean(entry),
+  );
+
   const ctxPayload = finalizeInboundContext({
     Body: combinedBody,
     BodyForAgent: rawBody,
@@ -628,7 +656,7 @@ export async function prepareSlackMessage(params: {
     ConversationLabel: envelopeFrom,
     GroupSubject: isRoomish ? roomLabel : undefined,
     GroupSystemPrompt: isRoomish ? groupSystemPrompt : undefined,
-    UntrustedContext: untrustedChannelMetadata ? [untrustedChannelMetadata] : undefined,
+    UntrustedContext: untrustedEntries.length > 0 ? untrustedEntries : undefined,
     SenderName: senderName,
     SenderId: senderId,
     Provider: "slack" as const,

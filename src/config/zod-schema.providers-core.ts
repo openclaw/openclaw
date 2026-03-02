@@ -798,6 +798,15 @@ export const SlackAccountSchema = z
     replyToMode: ReplyToModeSchema.optional(),
     replyToModeByChatType: SlackReplyToModeByChatTypeSchema.optional(),
     thread: SlackThreadSchema.optional(),
+    assistant: z
+      .object({
+        enabled: z.boolean().optional(),
+        statusMessage: z.string().optional(),
+        channelContext: z.boolean().optional(),
+        channelContextMessageLimit: z.number().int().positive().optional(),
+      })
+      .strict()
+      .optional(),
     actions: z
       .object({
         reactions: z.boolean().optional(),

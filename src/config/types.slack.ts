@@ -79,6 +79,24 @@ export type SlackThreadConfig = {
   initialHistoryLimit?: number;
 };
 
+export type SlackAssistantConfig = {
+  /** Enable Slack AI Assistant features (loading states, suggested prompts). Default: false. */
+  enabled?: boolean;
+  /** Loading status message shown while processing. Default: "is thinking...". */
+  statusMessage?: string;
+  /**
+   * Inject recent messages from the channel the user is viewing into assistant
+   * thread context. Enables channel-aware responses ("summarize this channel").
+   * Default: true (when assistant is enabled).
+   */
+  channelContext?: boolean;
+  /**
+   * Maximum number of recent channel messages to include as context.
+   * Default: 20.
+   */
+  channelContextMessageLimit?: number;
+};
+
 export type SlackAccountConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
   name?: string;
@@ -182,6 +200,8 @@ export type SlackAccountConfig = {
   heartbeat?: ChannelHeartbeatVisibilityConfig;
   /** Outbound response prefix override for this channel/account. */
   responsePrefix?: string;
+  /** Slack AI Assistant features (loading states, suggested prompts, channel context). */
+  assistant?: SlackAssistantConfig;
   /**
    * Per-channel ack reaction override.
    * Slack uses shortcodes (e.g., "eyes") rather than unicode emoji.
