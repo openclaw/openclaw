@@ -2,6 +2,15 @@ import { describe, expect, it } from "vitest";
 import { buildTelegramMessageContextForTest } from "./bot-message-context.test-harness.js";
 
 describe("buildTelegramMessageContext implicitMention forum service messages", () => {
+  const TELEGRAM_FORUM_SERVICE_FIELDS = [
+    "forum_topic_created",
+    "forum_topic_edited",
+    "forum_topic_closed",
+    "forum_topic_reopened",
+    "general_forum_topic_hidden",
+    "general_forum_topic_unhidden",
+  ] as const;
+
   /**
    * Build a group message context where the user sends a message inside a
    * forum topic that has `reply_to_message` pointing to a message from the
@@ -61,6 +70,19 @@ describe("buildTelegramMessageContext implicitMention forum service messages", (
     // skipped (null) because implicitMention should NOT fire.
     expect(ctx).toBeNull();
   });
+
+  it.each(TELEGRAM_FORUM_SERVICE_FIELDS)(
+    "does NOT trigger implicitMention for %s service message",
+    async (field) => {
+      const ctx = await buildGroupReplyCtx({
+        replyToMessageText: undefined,
+        replyFromIsBot: true,
+        replyToMessageExtra: { [field]: {} },
+      });
+
+      expect(ctx).toBeNull();
+    },
+  );
 
   it("does NOT trigger implicitMention for forum_topic_closed service message", async () => {
     const ctx = await buildGroupReplyCtx({
