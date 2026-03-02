@@ -898,6 +898,15 @@ Also consider agent workspace access inside the sandbox:
 
 Important: `tools.elevated` is the global baseline escape hatch that runs exec on the host. Keep `tools.elevated.allowFrom` tight and don’t enable it for strangers. You can further restrict elevated per agent via `agents.list[].tools.elevated`. See [Elevated Mode](/tools/elevated).
 
+### Sub-agent delegation guardrail
+
+If you allow session tools, treat delegated sub-agent runs as another boundary decision:
+
+- Deny `sessions_spawn` unless the agent truly needs delegation.
+- Keep `agents.list[].subagents.allowAgents` restricted to known-safe target agents.
+- For any workflow that must remain sandboxed, call `sessions_spawn` with `sandbox: "require"` (default is `inherit`).
+- `sandbox: "require"` fails fast when the target child runtime is not sandboxed.
+
 ## Browser control risks
 
 Enabling browser control gives the model the ability to drive a real browser.
