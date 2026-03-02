@@ -198,7 +198,7 @@ function buildMsgContext(params: {
     Body: prompt.message,
     BodyForAgent: stampedMessage,
     BodyForCommands: prompt.commandText,
-    RawBody: prompt.commandText,
+    RawBody: prompt.message,
     CommandBody: prompt.commandText,
     SessionKey: sessionKey,
     Provider: INTERNAL_MESSAGE_CHANNEL,
