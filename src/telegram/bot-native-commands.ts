@@ -11,7 +11,7 @@ import {
 } from "../auto-reply/commands-registry.js";
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.js";
-import { listSkillCommandsForAgentIds } from "../auto-reply/skill-commands.js";
+import { listSkillCommandsForAgents } from "../auto-reply/skill-commands.js";
 import { resolveCommandAuthorizedFromAuthorizers } from "../channels/command-gating.js";
 import { createReplyPrefixOptions } from "../channels/reply-prefix.js";
 import { recordInboundSessionMetaSafe } from "../channels/session-meta.js";
@@ -326,7 +326,7 @@ export const registerTelegramNativeCommands = ({
       : null;
   const skillCommands =
     nativeEnabled && nativeSkillsEnabled && boundRoute
-      ? listSkillCommandsForAgentIds({ cfg, agentIds: [boundRoute.agentId] })
+      ? listSkillCommandsForAgents({ cfg, agentIds: [boundRoute.agentId] })
       : [];
   const nativeCommands = nativeEnabled
     ? listNativeCommandSpecsForConfig(cfg, {

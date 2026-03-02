@@ -13,7 +13,7 @@ const {
   reconcileAcpThreadBindingsOnStartupMock,
   createdBindingManagers,
   listNativeCommandSpecsForConfigMock,
-  listSkillCommandsForAllAgentsMock,
+  listSkillCommandsForAgentsMock,
   monitorLifecycleMock,
   resolveDiscordAccountMock,
   resolveDiscordAllowlistConfigMock,
@@ -43,7 +43,7 @@ const {
     })),
     createdBindingManagers,
     listNativeCommandSpecsForConfigMock: vi.fn(() => [{ name: "cmd" }]),
-    listSkillCommandsForAllAgentsMock: vi.fn(() => []),
+    listSkillCommandsForAgentsMock: vi.fn(() => []),
     monitorLifecycleMock: vi.fn(async (params: { threadBindings: { stop: () => void } }) => {
       params.threadBindings.stop();
     }),
@@ -108,7 +108,7 @@ vi.mock("../../auto-reply/commands-registry.js", () => ({
 }));
 
 vi.mock("../../auto-reply/skill-commands.js", () => ({
-  listSkillCommandsForAllAgents: listSkillCommandsForAllAgentsMock,
+  listSkillCommandsForAgents: listSkillCommandsForAgentsMock,
 }));
 
 vi.mock("../../config/commands.js", () => ({
@@ -272,7 +272,7 @@ describe("monitorDiscordProvider", () => {
     });
     createdBindingManagers.length = 0;
     listNativeCommandSpecsForConfigMock.mockClear().mockReturnValue([{ name: "cmd" }]);
-    listSkillCommandsForAllAgentsMock.mockClear().mockReturnValue([]);
+    listSkillCommandsForAgentsMock.mockClear().mockReturnValue([]);
     monitorLifecycleMock.mockClear().mockImplementation(async (params) => {
       params.threadBindings.stop();
     });

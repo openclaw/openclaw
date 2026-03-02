@@ -45,9 +45,9 @@ export function listSkillCommandsForWorkspace(params: {
   });
 }
 
-export function listSkillCommandsForAgentIds(params: {
+export function listSkillCommandsForAgents(params: {
   cfg: OpenClawConfig;
-  agentIds: string[];
+  agentIds?: string[];
 }): SkillCommandSpec[] {
   const mergeSkillFilters = (existing?: string[], incoming?: string[]): string[] | undefined => {
     // undefined = no allowlist (unrestricted); [] = explicit empty allowlist (no skills).
@@ -65,12 +65,13 @@ export function listSkillCommandsForAgentIds(params: {
     return Array.from(new Set([...existing, ...incoming]));
   };
 
+  const agentIds = params.agentIds ?? listAgentIds(params.cfg);
   const used = listReservedChatSlashCommandNames();
   const entries: SkillCommandSpec[] = [];
   // Group by canonical workspace to avoid duplicate registration when multiple
   // agents share the same directory (#5717), while still honoring per-agent filters.
   const workspaceFilters = new Map<string, { workspaceDir: string; skillFilter?: string[] }>();
-  for (const agentId of params.agentIds) {
+  for (const agentId of agentIds) {
     const workspaceDir = resolveAgentWorkspaceDir(params.cfg, agentId);
     if (!fs.existsSync(workspaceDir)) {
       continue;
@@ -101,23 +102,6 @@ export function listSkillCommandsForAgentIds(params: {
     }
   }
   return entries;
-}
-
-export function listSkillCommandsForAllAgents(params: { cfg: OpenClawConfig }): SkillCommandSpec[] {
-  return listSkillCommandsForAgentIds({
-    cfg: params.cfg,
-    agentIds: listAgentIds(params.cfg),
-  });
-}
-
-/** @deprecated Use listSkillCommandsForAllAgents or listSkillCommandsForAgentIds. */
-export function listSkillCommandsForAgents(params: {
-  cfg: OpenClawConfig;
-  agentIds?: string[];
-}): SkillCommandSpec[] {
-  return params.agentIds
-    ? listSkillCommandsForAgentIds({ cfg: params.cfg, agentIds: params.agentIds })
-    : listSkillCommandsForAllAgents({ cfg: params.cfg });
 }
 
 function normalizeSkillCommandLookup(value: string): string {

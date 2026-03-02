@@ -13,7 +13,7 @@ import { Routes } from "discord-api-types/v10";
 import { resolveTextChunkLimit } from "../../auto-reply/chunk.js";
 import { listNativeCommandSpecsForConfig } from "../../auto-reply/commands-registry.js";
 import type { HistoryEntry } from "../../auto-reply/reply/history.js";
-import { listSkillCommandsForAllAgents } from "../../auto-reply/skill-commands.js";
+import { listSkillCommandsForAgents } from "../../auto-reply/skill-commands.js";
 import {
   resolveThreadBindingIdleTimeoutMs,
   resolveThreadBindingMaxAgeMs,
@@ -121,10 +121,10 @@ function formatThreadBindingDurationForConfigLabel(durationMs: number): string {
 }
 
 function dedupeSkillCommandsForDiscord(
-  skillCommands: ReturnType<typeof listSkillCommandsForAllAgents>,
+  skillCommands: ReturnType<typeof listSkillCommandsForAgents>,
 ) {
   const seen = new Set<string>();
-  const deduped: ReturnType<typeof listSkillCommandsForAllAgents> = [];
+  const deduped: ReturnType<typeof listSkillCommandsForAgents> = [];
   for (const command of skillCommands) {
     const key = command.skillName.trim().toLowerCase();
     if (!key) {
@@ -310,7 +310,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   const maxDiscordCommands = 100;
   let skillCommands =
     nativeEnabled && nativeSkillsEnabled
-      ? dedupeSkillCommandsForDiscord(listSkillCommandsForAllAgents({ cfg }))
+      ? dedupeSkillCommandsForDiscord(listSkillCommandsForAgents({ cfg }))
       : [];
   let commandSpecs = nativeEnabled
     ? listNativeCommandSpecsForConfig(cfg, { skillCommands, provider: "discord" })

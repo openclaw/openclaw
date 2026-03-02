@@ -67,12 +67,11 @@ vi.mock("../agents/skills.js", () => {
   };
 });
 
-let listSkillCommandsForAllAgents: typeof import("./skill-commands.js").listSkillCommandsForAllAgents;
-let listSkillCommandsForAgentIds: typeof import("./skill-commands.js").listSkillCommandsForAgentIds;
+let listSkillCommandsForAgents: typeof import("./skill-commands.js").listSkillCommandsForAgents;
 let resolveSkillCommandInvocation: typeof import("./skill-commands.js").resolveSkillCommandInvocation;
 
 beforeAll(async () => {
-  ({ listSkillCommandsForAllAgents, listSkillCommandsForAgentIds, resolveSkillCommandInvocation } =
+  ({ listSkillCommandsForAgents, resolveSkillCommandInvocation } =
     await import("./skill-commands.js"));
 });
 
@@ -113,15 +112,15 @@ describe("resolveSkillCommandInvocation", () => {
   });
 });
 
-describe("listSkillCommandsForAllAgents/listSkillCommandsForAgentIds", () => {
-  it("merges command names across agents and de-duplicates", async () => {
+describe("listSkillCommandsForAgents", () => {
+  it("lists all agents when agentIds is omitted", async () => {
     const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skills-"));
     const mainWorkspace = path.join(baseDir, "main");
     const researchWorkspace = path.join(baseDir, "research");
     await fs.mkdir(mainWorkspace, { recursive: true });
     await fs.mkdir(researchWorkspace, { recursive: true });
 
-    const commands = listSkillCommandsForAllAgents({
+    const commands = listSkillCommandsForAgents({
       cfg: {
         agents: {
           list: [
@@ -137,12 +136,12 @@ describe("listSkillCommandsForAllAgents/listSkillCommandsForAgentIds", () => {
     expect(names).toContain("extra_skill");
   });
 
-  it("applies per-agent skills allowlist when listing commands", async () => {
+  it("scopes to specific agents when agentIds is provided", async () => {
     const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skills-filter-"));
     const researchWorkspace = path.join(baseDir, "research");
     await fs.mkdir(researchWorkspace, { recursive: true });
 
-    const commands = listSkillCommandsForAgentIds({
+    const commands = listSkillCommandsForAgents({
       cfg: {
         agents: {
           list: [{ id: "research", workspace: researchWorkspace, skills: ["extra-skill"] }],
@@ -155,14 +154,14 @@ describe("listSkillCommandsForAllAgents/listSkillCommandsForAgentIds", () => {
     expect(commands.map((entry) => entry.skillName)).toEqual(["extra-skill"]);
   });
 
-  it("prevents cross-agent skill leakage when each agent has a skills allowlist", async () => {
+  it("prevents cross-agent skill leakage when each agent has an allowlist", async () => {
     const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skills-leak-"));
     const mainWorkspace = path.join(baseDir, "main");
     const researchWorkspace = path.join(baseDir, "research");
     await fs.mkdir(mainWorkspace, { recursive: true });
     await fs.mkdir(researchWorkspace, { recursive: true });
 
-    const commands = listSkillCommandsForAgentIds({
+    const commands = listSkillCommandsForAgents({
       cfg: {
         agents: {
           list: [
@@ -183,7 +182,7 @@ describe("listSkillCommandsForAllAgents/listSkillCommandsForAgentIds", () => {
     const sharedWorkspace = path.join(baseDir, "research");
     await fs.mkdir(sharedWorkspace, { recursive: true });
 
-    const commands = listSkillCommandsForAgentIds({
+    const commands = listSkillCommandsForAgents({
       cfg: {
         agents: {
           list: [
@@ -204,7 +203,7 @@ describe("listSkillCommandsForAllAgents/listSkillCommandsForAgentIds", () => {
     const sharedWorkspace = path.join(baseDir, "research");
     await fs.mkdir(sharedWorkspace, { recursive: true });
 
-    const commands = listSkillCommandsForAgentIds({
+    const commands = listSkillCommandsForAgents({
       cfg: {
         agents: {
           list: [
@@ -226,7 +225,7 @@ describe("listSkillCommandsForAllAgents/listSkillCommandsForAgentIds", () => {
     const sharedWorkspace = path.join(baseDir, "research");
     await fs.mkdir(sharedWorkspace, { recursive: true });
 
-    const commands = listSkillCommandsForAgentIds({
+    const commands = listSkillCommandsForAgents({
       cfg: {
         agents: {
           list: [

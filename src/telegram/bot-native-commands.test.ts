@@ -8,8 +8,8 @@ import type { RuntimeEnv } from "../runtime.js";
 import { registerTelegramNativeCommands } from "./bot-native-commands.js";
 import { createNativeCommandTestParams } from "./bot-native-commands.test-helpers.js";
 
-const { listSkillCommandsForAgentIds } = vi.hoisted(() => ({
-  listSkillCommandsForAgentIds: vi.fn(() => []),
+const { listSkillCommandsForAgents } = vi.hoisted(() => ({
+  listSkillCommandsForAgents: vi.fn(() => []),
 }));
 const pluginCommandMocks = vi.hoisted(() => ({
   getPluginCommandSpecs: vi.fn(() => []),
@@ -24,7 +24,7 @@ vi.mock("../auto-reply/skill-commands.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../auto-reply/skill-commands.js")>();
   return {
     ...actual,
-    listSkillCommandsForAgentIds,
+    listSkillCommandsForAgents,
   };
 });
 vi.mock("../plugins/commands.js", () => ({
@@ -52,8 +52,8 @@ describe("registerTelegramNativeCommands", () => {
   }
 
   beforeEach(() => {
-    listSkillCommandsForAgentIds.mockClear();
-    listSkillCommandsForAgentIds.mockReturnValue([]);
+    listSkillCommandsForAgents.mockClear();
+    listSkillCommandsForAgents.mockReturnValue([]);
     pluginCommandMocks.getPluginCommandSpecs.mockClear();
     pluginCommandMocks.getPluginCommandSpecs.mockReturnValue([]);
     pluginCommandMocks.matchPluginCommand.mockClear();
@@ -94,7 +94,7 @@ describe("registerTelegramNativeCommands", () => {
 
     registerTelegramNativeCommands(buildParams(cfg, "bot-a"));
 
-    expect(listSkillCommandsForAgentIds).toHaveBeenCalledWith({
+    expect(listSkillCommandsForAgents).toHaveBeenCalledWith({
       cfg,
       agentIds: ["butler"],
     });
@@ -109,7 +109,7 @@ describe("registerTelegramNativeCommands", () => {
 
     registerTelegramNativeCommands(buildParams(cfg, "bot-a"));
 
-    expect(listSkillCommandsForAgentIds).toHaveBeenCalledWith({
+    expect(listSkillCommandsForAgents).toHaveBeenCalledWith({
       cfg,
       agentIds: ["main"],
     });

@@ -15,8 +15,7 @@ import {
   getLoadConfigMock,
   getReadChannelAllowFromStoreMock,
   getOnHandler,
-  listSkillCommandsForAgentIds,
-  listSkillCommandsForAllAgents,
+  listSkillCommandsForAgents,
   onSpy,
   replySpy,
   sendMessageSpy,
@@ -30,7 +29,7 @@ const readChannelAllowFromStore = getReadChannelAllowFromStoreMock();
 
 function resolveSkillCommands(config: Parameters<typeof listNativeCommandSpecsForConfig>[0]) {
   void config;
-  return listSkillCommandsForAllAgents() as NonNullable<
+  return listSkillCommandsForAgents() as NonNullable<
     Parameters<typeof listNativeCommandSpecsForConfig>[1]
   >["skillCommands"];
 }
@@ -213,7 +212,7 @@ describe("createTelegramBot", () => {
   it("allows callback_query in groups when group policy authorizes the sender", async () => {
     onSpy.mockClear();
     editMessageTextSpy.mockClear();
-    listSkillCommandsForAgentIds.mockClear();
+    listSkillCommandsForAgents.mockClear();
 
     createTelegramBot({
       token: "tok",
@@ -256,7 +255,7 @@ describe("createTelegramBot", () => {
 
   it("edits commands list for pagination callbacks", async () => {
     onSpy.mockClear();
-    listSkillCommandsForAgentIds.mockClear();
+    listSkillCommandsForAgents.mockClear();
 
     createTelegramBot({ token: "tok" });
     const callbackHandler = onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as (
@@ -279,7 +278,7 @@ describe("createTelegramBot", () => {
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
-    expect(listSkillCommandsForAgentIds).toHaveBeenCalledWith({
+    expect(listSkillCommandsForAgents).toHaveBeenCalledWith({
       cfg: expect.any(Object),
       agentIds: ["main"],
     });
