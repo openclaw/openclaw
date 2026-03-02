@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { MarkdownTableMode, OpenClawConfig, OutboundReplyPayload } from "openclaw/plugin-sdk";
 import {
+  createInboundEnvelopeBuilder,
   createScopedPairingAccess,
   createReplyPrefixOptions,
   resolveSenderCommandAuthorization,
@@ -28,6 +29,9 @@ import {
   resolveZaloRuntimeGroupPolicy,
 } from "./group-access.js";
 import {
+  clearZaloWebhookSecurityStateForTest,
+  getZaloWebhookRateLimitStateSizeForTest,
+  getZaloWebhookStatusCounterSizeForTest,
   handleZaloWebhookRequest as handleZaloWebhookRequestInternal,
   registerZaloWebhookTarget as registerZaloWebhookTargetInternal,
   type ZaloWebhookTarget,
@@ -72,6 +76,12 @@ function logVerbose(core: ZaloCoreRuntime, runtime: ZaloRuntimeEnv, message: str
 export function registerZaloWebhookTarget(target: ZaloWebhookTarget): () => void {
   return registerZaloWebhookTargetInternal(target);
 }
+
+export {
+  clearZaloWebhookSecurityStateForTest,
+  getZaloWebhookRateLimitStateSizeForTest,
+  getZaloWebhookStatusCounterSizeForTest,
+};
 
 export async function handleZaloWebhookRequest(
   req: IncomingMessage,
@@ -434,6 +444,15 @@ async function processMessageWithPipeline(params: {
       id: chatId,
     },
   });
+  const buildEnvelope = createInboundEnvelopeBuilder({
+    cfg: config,
+    route,
+    sessionStore: config.session?.store,
+    resolveStorePath: core.channel.session.resolveStorePath,
+    readSessionUpdatedAt: core.channel.session.readSessionUpdatedAt,
+    resolveEnvelopeFormatOptions: core.channel.reply.resolveEnvelopeFormatOptions,
+    formatAgentEnvelope: core.channel.reply.formatAgentEnvelope,
+  });
 
   if (
     isGroup &&
@@ -445,20 +464,10 @@ async function processMessageWithPipeline(params: {
   }
 
   const fromLabel = isGroup ? `group:${chatId}` : senderName || `user:${senderId}`;
-  const storePath = core.channel.session.resolveStorePath(config.session?.store, {
-    agentId: route.agentId,
-  });
-  const envelopeOptions = core.channel.reply.resolveEnvelopeFormatOptions(config);
-  const previousTimestamp = core.channel.session.readSessionUpdatedAt({
-    storePath,
-    sessionKey: route.sessionKey,
-  });
-  const body = core.channel.reply.formatAgentEnvelope({
+  const { storePath, body } = buildEnvelope({
     channel: "Zalo",
     from: fromLabel,
     timestamp: date ? date * 1000 : undefined,
-    previousTimestamp,
-    envelope: envelopeOptions,
     body: rawBody,
   });
 

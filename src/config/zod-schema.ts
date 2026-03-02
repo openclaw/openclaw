@@ -179,6 +179,7 @@ export const OpenClawSchema = z
       .object({
         enabled: z.boolean().optional(),
         flags: z.array(z.string()).optional(),
+        stuckSessionWarnMs: z.number().int().positive().optional(),
         otel: z
           .object({
             enabled: z.boolean().optional(),
@@ -249,6 +250,7 @@ export const OpenClawSchema = z
         headless: z.boolean().optional(),
         noSandbox: z.boolean().optional(),
         attachOnly: z.boolean().optional(),
+        cdpPortRangeStart: z.number().int().min(1).max(65535).optional(),
         defaultProfile: z.string().optional(),
         snapshotDefaults: BrowserSnapshotDefaultsSchema,
         ssrfPolicy: z
@@ -270,6 +272,7 @@ export const OpenClawSchema = z
                 cdpPort: z.number().int().min(1).max(65535).optional(),
                 cdpUrl: z.string().optional(),
                 driver: z.union([z.literal("clawd"), z.literal("extension")]).optional(),
+                attachOnly: z.boolean().optional(),
                 color: HexColorSchema,
               })
               .strict()
@@ -278,6 +281,7 @@ export const OpenClawSchema = z
               }),
           )
           .optional(),
+        extraArgs: z.array(z.string()).optional(),
       })
       .strict()
       .optional(),
@@ -339,6 +343,19 @@ export const OpenClawSchema = z
           .object({
             coalesceIdleMs: z.number().int().nonnegative().optional(),
             maxChunkChars: z.number().int().positive().optional(),
+            repeatSuppression: z.boolean().optional(),
+            deliveryMode: z.union([z.literal("live"), z.literal("final_only")]).optional(),
+            hiddenBoundarySeparator: z
+              .union([
+                z.literal("none"),
+                z.literal("space"),
+                z.literal("newline"),
+                z.literal("paragraph"),
+              ])
+              .optional(),
+            maxOutputChars: z.number().int().positive().optional(),
+            maxSessionUpdateChars: z.number().int().positive().optional(),
+            tagVisibility: z.record(z.string(), z.boolean()).optional(),
           })
           .strict()
           .optional(),
