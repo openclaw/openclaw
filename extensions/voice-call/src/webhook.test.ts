@@ -134,7 +134,7 @@ describe("VoiceCallWebhookServer stale call reaper", () => {
   });
 });
 
-describe("VoiceCallWebhookServer replay handling", () => {
+describe("VoiceCallWebhookServer path matching", () => {
   it("rejects lookalike webhook paths that only match by prefix", async () => {
     const verifyWebhook = vi.fn(() => ({ ok: true, verifiedRequestKey: "verified:req:prefix" }));
     const parseWebhookEvent = vi.fn(() => ({ events: [], statusCode: 200 }));
@@ -171,7 +171,9 @@ describe("VoiceCallWebhookServer replay handling", () => {
       await server.stop();
     }
   });
+});
 
+describe("VoiceCallWebhookServer replay handling", () => {
   it("acknowledges replayed webhook requests and skips event side effects", async () => {
     const replayProvider: VoiceCallProvider = {
       ...provider,
