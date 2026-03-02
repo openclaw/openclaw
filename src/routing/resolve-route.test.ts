@@ -547,6 +547,74 @@ describe("backward compatibility: peer.kind dm → direct", () => {
   });
 });
 
+describe("backward compatibility: peer.kind group ↔ channel", () => {
+  test("config group binding matches runtime channel scope", () => {
+    const cfg: OpenClawConfig = {
+      bindings: [
+        {
+          agentId: "slack-group-agent",
+          match: {
+            channel: "slack",
+            peer: { kind: "group", id: "C123456" },
+          },
+        },
+      ],
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "slack",
+      accountId: null,
+      peer: { kind: "channel", id: "C123456" },
+    });
+    expect(route.agentId).toBe("slack-group-agent");
+    expect(route.matchedBy).toBe("binding.peer");
+  });
+
+  test("config channel binding matches runtime group scope", () => {
+    const cfg: OpenClawConfig = {
+      bindings: [
+        {
+          agentId: "slack-channel-agent",
+          match: {
+            channel: "slack",
+            peer: { kind: "channel", id: "C123456" },
+          },
+        },
+      ],
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "slack",
+      accountId: null,
+      peer: { kind: "group", id: "C123456" },
+    });
+    expect(route.agentId).toBe("slack-channel-agent");
+    expect(route.matchedBy).toBe("binding.peer");
+  });
+
+  test("group/channel compatibility does not match direct peer kind", () => {
+    const cfg: OpenClawConfig = {
+      bindings: [
+        {
+          agentId: "group-only-agent",
+          match: {
+            channel: "slack",
+            peer: { kind: "group", id: "C123456" },
+          },
+        },
+      ],
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "slack",
+      accountId: null,
+      peer: { kind: "direct", id: "C123456" },
+    });
+    expect(route.agentId).toBe("main");
+    expect(route.matchedBy).toBe("default");
+  });
+});
+
 describe("role-based agent routing", () => {
   type DiscordBinding = NonNullable<OpenClawConfig["bindings"]>[number];
 
