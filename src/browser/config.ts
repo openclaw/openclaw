@@ -25,6 +25,8 @@ export type ResolvedBrowserConfig = {
   cdpProtocol: "http" | "https";
   cdpHost: string;
   cdpIsLoopback: boolean;
+  cdpPortRangeStart?: number;
+  cdpPortRangeEnd?: number;
   remoteCdpTimeoutMs: number;
   remoteCdpHandshakeTimeoutMs: number;
   color: string;
@@ -289,6 +291,8 @@ export function resolveBrowserConfig(
     cdpProtocol,
     cdpHost: cdpInfo.parsed.hostname,
     cdpIsLoopback: isLoopbackHost(cdpInfo.parsed.hostname),
+    cdpPortRangeStart: derivedCdpRange.start,
+    cdpPortRangeEnd: derivedCdpRange.end,
     remoteCdpTimeoutMs,
     remoteCdpHandshakeTimeoutMs,
     color: defaultColor,
