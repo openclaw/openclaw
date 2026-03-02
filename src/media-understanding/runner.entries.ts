@@ -368,6 +368,16 @@ export function formatDecisionSummary(decision: MediaUnderstandingDecision): str
   return `${decision.capability}: ${decision.outcome}${countLabel}${viaLabel}${reasonLabel}`;
 }
 
+function assertMinAudioSize(params: { size: number; attachmentIndex: number }): void {
+  if (params.size >= MIN_AUDIO_FILE_BYTES) {
+    return;
+  }
+  throw new MediaUnderstandingSkipError(
+    "tooSmall",
+    `Audio attachment ${params.attachmentIndex + 1} is too small (${params.size} bytes, minimum ${MIN_AUDIO_FILE_BYTES})`,
+  );
+}
+
 export async function runProviderEntry(params: {
   capability: MediaUnderstandingCapability;
   entry: MediaUnderstandingModelConfig;
@@ -449,12 +459,7 @@ export async function runProviderEntry(params: {
       maxBytes,
       timeoutMs,
     });
-    if (media.size < MIN_AUDIO_FILE_BYTES) {
-      throw new MediaUnderstandingSkipError(
-        "tooSmall",
-        `Audio attachment ${params.attachmentIndex + 1} is too small (${media.size} bytes, minimum ${MIN_AUDIO_FILE_BYTES})`,
-      );
-    }
+    assertMinAudioSize({ size: media.size, attachmentIndex: params.attachmentIndex });
     const { apiKeys, baseUrl, headers } = await resolveProviderExecutionContext({
       providerId,
       cfg,
@@ -574,12 +579,7 @@ export async function runCliEntry(params: {
   });
   if (capability === "audio") {
     const stat = await fs.stat(pathResult.path);
-    if (stat.size < MIN_AUDIO_FILE_BYTES) {
-      throw new MediaUnderstandingSkipError(
-        "tooSmall",
-        `Audio attachment ${params.attachmentIndex + 1} is too small (${stat.size} bytes, minimum ${MIN_AUDIO_FILE_BYTES})`,
-      );
-    }
+    assertMinAudioSize({ size: stat.size, attachmentIndex: params.attachmentIndex });
   }
   const outputDir = await fs.mkdtemp(
     path.join(resolvePreferredOpenClawTmpDir(), "openclaw-media-cli-"),

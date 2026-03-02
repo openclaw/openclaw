@@ -10,6 +10,7 @@ import { fetchRemoteMedia } from "../media/fetch.js";
 import { runExec } from "../process/exec.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { clearMediaUnderstandingBinaryCacheForTests } from "./runner.js";
+import { createSafeAudioFixtureBuffer } from "./runner.test-utils.js";
 
 vi.mock("../agents/model-auth.js", () => ({
   resolveApiKeyForProvider: vi.fn(async () => ({
@@ -174,7 +175,7 @@ async function createAudioCtx(params?: {
 }): Promise<MsgContext> {
   const mediaPath = await createTempMediaFile({
     fileName: params?.fileName ?? "note.ogg",
-    content: params?.content ?? Buffer.alloc(2048, 0xab),
+    content: params?.content ?? createSafeAudioFixtureBuffer(2048),
   });
   return {
     Body: params?.body ?? "<media:audio>",
@@ -190,7 +191,7 @@ async function setupAudioAutoDetectCase(stdout: string): Promise<{
   const ctx = await createAudioCtx({
     fileName: "sample.wav",
     mediaType: "audio/wav",
-    content: Buffer.alloc(2048, 0xab),
+    content: createSafeAudioFixtureBuffer(2048),
   });
   const cfg: OpenClawConfig = { tools: { media: { audio: {} } } };
   mockedRunExec.mockResolvedValueOnce({
@@ -249,7 +250,7 @@ describe("applyMediaUnderstanding", () => {
     mockedFetchRemoteMedia.mockClear();
     mockedRunExec.mockReset();
     mockedFetchRemoteMedia.mockResolvedValue({
-      buffer: Buffer.alloc(2048, 0xab),
+      buffer: createSafeAudioFixtureBuffer(2048),
       contentType: "audio/ogg",
       fileName: "note.ogg",
     });
@@ -540,7 +541,7 @@ describe("applyMediaUnderstanding", () => {
     const ctx = await createAudioCtx({
       fileName: "sample.wav",
       mediaType: "audio/wav",
-      content: Buffer.alloc(2048, 0xab),
+      content: createSafeAudioFixtureBuffer(2048),
     });
     const cfg: OpenClawConfig = { tools: { media: { audio: {} } } };
     mockedResolveApiKey.mockResolvedValue({
@@ -654,7 +655,7 @@ describe("applyMediaUnderstanding", () => {
   it("uses active model when enabled and models are missing", async () => {
     const audioPath = await createTempMediaFile({
       fileName: "fallback.ogg",
-      content: Buffer.alloc(2048, 0xab),
+      content: createSafeAudioFixtureBuffer(2048),
     });
 
     const ctx: MsgContext = {
@@ -690,7 +691,7 @@ describe("applyMediaUnderstanding", () => {
 
   it("handles multiple audio attachments when attachment mode is all", async () => {
     const dir = await createTempMediaDir();
-    const audioBytes = Buffer.alloc(2048, 0xab);
+    const audioBytes = createSafeAudioFixtureBuffer(2048);
     const audioPathA = path.join(dir, "note-a.ogg");
     const audioPathB = path.join(dir, "note-b.ogg");
     await fs.writeFile(audioPathA, audioBytes);
@@ -737,7 +738,7 @@ describe("applyMediaUnderstanding", () => {
     const audioPath = path.join(dir, "note.ogg");
     const videoPath = path.join(dir, "clip.mp4");
     await fs.writeFile(imagePath, "image-bytes");
-    await fs.writeFile(audioPath, Buffer.alloc(2048, 0xab));
+    await fs.writeFile(audioPath, createSafeAudioFixtureBuffer(2048));
     await fs.writeFile(videoPath, "video-bytes");
 
     const ctx: MsgContext = {
