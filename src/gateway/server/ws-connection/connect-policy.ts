@@ -43,6 +43,22 @@ export function shouldSkipControlUiPairing(
   return policy.allowBypass && sharedAuthOk;
 }
 
+export function isTrustedProxyControlUiOperatorAuth(params: {
+  isControlUi: boolean;
+  role: GatewayRole;
+  authMode: string;
+  authOk: boolean;
+  authMethod: string | undefined;
+}): boolean {
+  return (
+    params.isControlUi &&
+    params.role === "operator" &&
+    params.authMode === "trusted-proxy" &&
+    params.authOk &&
+    params.authMethod === "trusted-proxy"
+  );
+}
+
 export type MissingDeviceIdentityDecision =
   | { kind: "allow" }
   | { kind: "reject-control-ui-insecure-auth" }

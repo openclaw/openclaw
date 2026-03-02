@@ -1,7 +1,6 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
-import path from "node:path";
 
 // On Windows, `.cmd` launchers can fail with `spawn EINVAL` when invoked without a shell
 // (especially under GitHub Actions + Git Bash). Use `shell: true` and let the shell resolve pnpm.
@@ -88,14 +87,20 @@ const isCI = process.env.CI === "true" || process.env.GITHUB_ACTIONS === "true";
 const isMacOS = process.platform === "darwin" || process.env.RUNNER_OS === "macOS";
 const isWindows = process.platform === "win32" || process.env.RUNNER_OS === "Windows";
 const isWindowsCi = isCI && isWindows;
+const hostCpuCount = os.cpus().length;
+const hostMemoryGiB = Math.floor(os.totalmem() / 1024 ** 3);
+// Keep aggressive local defaults for high-memory workstations (Mac Studio class).
+const highMemLocalHost = !isCI && hostMemoryGiB >= 96;
+const lowMemLocalHost = !isCI && hostMemoryGiB < 64;
 const nodeMajor = Number.parseInt(process.versions.node.split(".")[0] ?? "", 10);
 // vmForks is a big win for transform/import heavy suites, but Node 24 had
-// regressions with Vitest's vm runtime in this repo. Keep it opt-out via
+// regressions with Vitest's vm runtime in this repo, and low-memory local hosts
+// are more likely to hit per-worker V8 heap ceilings. Keep it opt-out via
 // OPENCLAW_TEST_VM_FORKS=0, and let users force-enable with =1.
 const supportsVmForks = Number.isFinite(nodeMajor) ? nodeMajor !== 24 : true;
 const useVmForks =
   process.env.OPENCLAW_TEST_VM_FORKS === "1" ||
-  (process.env.OPENCLAW_TEST_VM_FORKS !== "0" && !isWindows && supportsVmForks);
+  (process.env.OPENCLAW_TEST_VM_FORKS !== "0" && !isWindows && supportsVmForks && !lowMemLocalHost);
 const disableIsolation = process.env.OPENCLAW_TEST_NO_ISOLATE === "1";
 const runs = [
   ...(useVmForks
@@ -154,11 +159,31 @@ const runs = [
   },
 ];
 const shardOverride = Number.parseInt(process.env.OPENCLAW_TEST_SHARDS ?? "", 10);
-const shardCount = isWindowsCi
-  ? Number.isFinite(shardOverride) && shardOverride > 1
-    ? shardOverride
-    : 2
-  : 1;
+const configuredShardCount =
+  Number.isFinite(shardOverride) && shardOverride > 1 ? shardOverride : null;
+const shardCount = configuredShardCount ?? (isWindowsCi ? 2 : 1);
+const shardIndexOverride = (() => {
+  const parsed = Number.parseInt(process.env.OPENCLAW_TEST_SHARD_INDEX ?? "", 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+})();
+
+if (shardIndexOverride !== null && shardCount <= 1) {
+  console.error(
+    `[test-parallel] OPENCLAW_TEST_SHARD_INDEX=${String(
+      shardIndexOverride,
+    )} requires OPENCLAW_TEST_SHARDS>1.`,
+  );
+  process.exit(2);
+}
+
+if (shardIndexOverride !== null && shardIndexOverride > shardCount) {
+  console.error(
+    `[test-parallel] OPENCLAW_TEST_SHARD_INDEX=${String(
+      shardIndexOverride,
+    )} exceeds OPENCLAW_TEST_SHARDS=${String(shardCount)}.`,
+  );
+  process.exit(2);
+}
 const windowsCiArgs = isWindowsCi ? ["--dangerouslyIgnoreUnhandledErrors"] : [];
 const silentArgs =
   process.env.OPENCLAW_TEST_SHOW_PASSED_LOGS === "1" ? [] : ["--silent=passed-only"];
@@ -176,11 +201,6 @@ const testProfile =
 const overrideWorkers = Number.parseInt(process.env.OPENCLAW_TEST_WORKERS ?? "", 10);
 const resolvedOverride =
   Number.isFinite(overrideWorkers) && overrideWorkers > 0 ? overrideWorkers : null;
-const hostCpuCount = os.cpus().length;
-const hostMemoryGiB = Math.floor(os.totalmem() / 1024 ** 3);
-// Keep aggressive local defaults for high-memory workstations (Mac Studio class).
-const highMemLocalHost = !isCI && hostMemoryGiB >= 96;
-const lowMemLocalHost = !isCI && hostMemoryGiB < 64;
 const parallelGatewayEnabled =
   process.env.OPENCLAW_TEST_PARALLEL_GATEWAY === "1" || (!isCI && highMemLocalHost);
 // Keep gateway serial by default except when explicitly requested or on high-memory local hosts.
@@ -206,7 +226,7 @@ const defaultWorkerBudget =
     ? {
         unit: 2,
         unitIsolated: 1,
-        extensions: 1,
+        extensions: 4,
         gateway: 1,
       }
     : testProfile === "serial"
@@ -236,7 +256,7 @@ const defaultWorkerBudget =
                 // Sub-64 GiB local hosts are prone to OOM with large vmFork runs.
                 unit: 2,
                 unitIsolated: 1,
-                extensions: 1,
+                extensions: 4,
                 gateway: 1,
               }
             : {
@@ -292,60 +312,25 @@ const maxOldSpaceSizeMb = (() => {
   return null;
 })();
 
-function resolveReportDir() {
-  const raw = process.env.OPENCLAW_VITEST_REPORT_DIR?.trim();
-  if (!raw) {
-    return null;
-  }
-  try {
-    fs.mkdirSync(raw, { recursive: true });
-  } catch {
-    return null;
-  }
-  return raw;
-}
-
-function buildReporterArgs(entry, extraArgs) {
-  const reportDir = resolveReportDir();
-  if (!reportDir) {
-    return [];
-  }
-
-  // Vitest supports both `--shard 1/2` and `--shard=1/2`. We use it in the
-  // split-arg form, so we need to read the next arg to avoid overwriting reports.
-  const shardIndex = extraArgs.findIndex((arg) => arg === "--shard");
-  const inlineShardArg = extraArgs.find(
-    (arg) => typeof arg === "string" && arg.startsWith("--shard="),
-  );
-  const shardValue =
-    shardIndex >= 0 && typeof extraArgs[shardIndex + 1] === "string"
-      ? extraArgs[shardIndex + 1]
-      : typeof inlineShardArg === "string"
-        ? inlineShardArg.slice("--shard=".length)
-        : "";
-  const shardSuffix = shardValue
-    ? `-shard${String(shardValue).replaceAll("/", "of").replaceAll(" ", "")}`
-    : "";
-
-  const outputFile = path.join(reportDir, `vitest-${entry.name}${shardSuffix}.json`);
-  return ["--reporter=default", "--reporter=json", "--outputFile", outputFile];
-}
-
 const runOnce = (entry, extraArgs = []) =>
   new Promise((resolve) => {
     const maxWorkers = maxWorkersForRun(entry.name);
-    const reporterArgs = buildReporterArgs(entry, extraArgs);
+    // vmForks with a single worker has shown cross-file leakage in extension suites.
+    // Fall back to process forks when we intentionally clamp that lane to one worker.
+    const entryArgs =
+      entry.name === "extensions" && maxWorkers === 1 && entry.args.includes("--pool=vmForks")
+        ? entry.args.map((arg) => (arg === "--pool=vmForks" ? "--pool=forks" : arg))
+        : entry.args;
     const args = maxWorkers
       ? [
-          ...entry.args,
+          ...entryArgs,
           "--maxWorkers",
           String(maxWorkers),
           ...silentArgs,
-          ...reporterArgs,
           ...windowsCiArgs,
           ...extraArgs,
         ]
-      : [...entry.args, ...silentArgs, ...reporterArgs, ...windowsCiArgs, ...extraArgs];
+      : [...entryArgs, ...silentArgs, ...windowsCiArgs, ...extraArgs];
     const nodeOptions = process.env.NODE_OPTIONS ?? "";
     const nextNodeOptions = WARNING_SUPPRESSION_FLAGS.reduce(
       (acc, flag) => (acc.includes(flag) ? acc : `${acc} ${flag}`.trim()),
@@ -383,6 +368,9 @@ const runOnce = (entry, extraArgs = []) =>
 const run = async (entry) => {
   if (shardCount <= 1) {
     return runOnce(entry);
+  }
+  if (shardIndexOverride !== null) {
+    return runOnce(entry, ["--shard", `${shardIndexOverride}/${shardCount}`]);
   }
   for (let shardIndex = 1; shardIndex <= shardCount; shardIndex += 1) {
     // eslint-disable-next-line no-await-in-loop

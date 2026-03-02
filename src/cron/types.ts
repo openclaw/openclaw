@@ -22,6 +22,8 @@ export type CronDelivery = {
   mode: CronDeliveryMode;
   channel?: CronMessageChannel;
   to?: string;
+  /** Explicit channel account id for multi-account setups (e.g. multiple Telegram bots). */
+  accountId?: string;
   bestEffort?: boolean;
 };
 
@@ -54,6 +56,13 @@ export type CronRunOutcome = {
   sessionKey?: string;
 };
 
+export type CronFailureAlert = {
+  after?: number;
+  channel?: CronMessageChannel;
+  to?: string;
+  cooldownMs?: number;
+};
+
 export type CronPayload =
   | { kind: "systemEvent"; text: string }
   | {
@@ -61,9 +70,13 @@ export type CronPayload =
       message: string;
       /** Optional model override (provider/model or alias). */
       model?: string;
+      /** Optional per-job fallback models; overrides agent/global fallbacks when defined. */
+      fallbacks?: string[];
       thinking?: string;
       timeoutSeconds?: number;
       allowUnsafeExternalContent?: boolean;
+      /** If true, run with lightweight bootstrap context. */
+      lightContext?: boolean;
       deliver?: boolean;
       channel?: CronMessageChannel;
       to?: string;
@@ -76,9 +89,12 @@ export type CronPayloadPatch =
       kind: "agentTurn";
       message?: string;
       model?: string;
+      fallbacks?: string[];
       thinking?: string;
       timeoutSeconds?: number;
       allowUnsafeExternalContent?: boolean;
+      /** If true, run with lightweight bootstrap context. */
+      lightContext?: boolean;
       deliver?: boolean;
       channel?: CronMessageChannel;
       to?: string;
@@ -97,6 +113,8 @@ export type CronJobState = {
   lastDurationMs?: number;
   /** Number of consecutive execution errors (reset on success). Used for backoff. */
   consecutiveErrors?: number;
+  /** Last failure alert timestamp (ms since epoch) for cooldown gating. */
+  lastFailureAlertAtMs?: number;
   /** Number of consecutive schedule computation errors. Auto-disables job after threshold. */
   scheduleErrorCount?: number;
   /** Explicit delivery outcome, separate from execution outcome. */
@@ -123,6 +141,7 @@ export type CronJob = {
   wakeMode: CronWakeMode;
   payload: CronPayload;
   delivery?: CronDelivery;
+  failureAlert?: CronFailureAlert | false;
   state: CronJobState;
 };
 

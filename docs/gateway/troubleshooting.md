@@ -29,6 +29,35 @@ Expected healthy signals:
 - `openclaw doctor` reports no blocking config/service issues.
 - `openclaw channels status --probe` shows connected/ready channels.
 
+## Anthropic 429 extra usage required for long context
+
+Use this when logs/errors include:
+`HTTP 429: rate_limit_error: Extra usage is required for long context requests`.
+
+```bash
+openclaw logs --follow
+openclaw models status
+openclaw config get agents.defaults.models
+```
+
+Look for:
+
+- Selected Anthropic Opus/Sonnet model has `params.context1m: true`.
+- Current Anthropic credential is not eligible for long-context usage.
+- Requests fail only on long sessions/model runs that need the 1M beta path.
+
+Fix options:
+
+1. Disable `context1m` for that model to fall back to the normal context window.
+2. Use an Anthropic API key with billing, or enable Anthropic Extra Usage on the subscription account.
+3. Configure fallback models so runs continue when Anthropic long-context requests are rejected.
+
+Related:
+
+- [/providers/anthropic](/providers/anthropic)
+- [/reference/token-use](/reference/token-use)
+- [/help/faq#why-am-i-seeing-http-429-ratelimiterror-from-anthropic](/help/faq#why-am-i-seeing-http-429-ratelimiterror-from-anthropic)
+
 ## No replies
 
 If channels are up but nothing answers, check routing and policy before reconnecting anything.
@@ -80,8 +109,26 @@ Look for:
 Common signatures:
 
 - `device identity required` → non-secure context or missing device auth.
+- `device nonce required` / `device nonce mismatch` → client is not completing the
+  challenge-based device auth flow (`connect.challenge` + `device.nonce`).
+- `device signature invalid` / `device signature expired` → client signed the wrong
+  payload (or stale timestamp) for the current handshake.
 - `unauthorized` / reconnect loop → token/password mismatch.
 - `gateway connect failed:` → wrong host/port/url target.
+
+Device auth v2 migration check:
+
+```bash
+openclaw --version
+openclaw doctor
+openclaw gateway status
+```
+
+If logs show nonce/signature errors, update the connecting client and verify it:
+
+1. waits for `connect.challenge`
+2. signs the challenge-bound payload
+3. sends `connect.params.device.nonce` with the same challenge nonce
 
 Related:
 
@@ -174,7 +221,7 @@ Common signatures:
 - `cron: timer tick failed` → scheduler tick failed; check file/log/runtime errors.
 - `heartbeat skipped` with `reason=quiet-hours` → outside active hours window.
 - `heartbeat: unknown accountId` → invalid account id for heartbeat delivery target.
-- `heartbeat skipped` with `reason=dm-blocked` → heartbeat target resolved to a DM-style `user:<id>` destination (blocked by design).
+- `heartbeat skipped` with `reason=dm-blocked` → heartbeat target resolved to a DM-style destination while `agents.defaults.heartbeat.directPolicy` (or per-agent override) is set to `block`.
 
 Related:
 

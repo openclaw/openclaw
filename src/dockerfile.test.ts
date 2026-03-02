@@ -9,7 +9,7 @@ const dockerfilePath = join(repoRoot, "Dockerfile");
 describe("Dockerfile", () => {
   it("installs optional browser dependencies after pnpm install", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
-    const installIndex = dockerfile.indexOf("RUN pnpm install --frozen-lockfile");
+    const installIndex = dockerfile.indexOf("pnpm install --frozen-lockfile");
     const browserArgIndex = dockerfile.indexOf("ARG OPENCLAW_INSTALL_BROWSER");
 
     expect(installIndex).toBeGreaterThan(-1);
@@ -19,5 +19,12 @@ describe("Dockerfile", () => {
       "node /app/node_modules/playwright-core/cli.js install --with-deps chromium",
     );
     expect(dockerfile).toContain("apt-get install -y --no-install-recommends xvfb");
+  });
+
+  it("normalizes plugin and agent paths permissions in image layers", async () => {
+    const dockerfile = await readFile(dockerfilePath, "utf8");
+    expect(dockerfile).toContain("for dir in /app/extensions /app/.agent /app/.agents");
+    expect(dockerfile).toContain('find "$dir" -type d -exec chmod 755 {} +');
+    expect(dockerfile).toContain('find "$dir" -type f -exec chmod 644 {} +');
   });
 });
