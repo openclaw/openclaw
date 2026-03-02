@@ -3,6 +3,7 @@ import { listEnabledSignalAccounts, resolveSignalAccount } from "../../../signal
 import { resolveSignalReactionLevel } from "../../../signal/reaction-level.js";
 import { sendReactionSignal, removeReactionSignal } from "../../../signal/send-reactions.js";
 import type { ChannelMessageActionAdapter, ChannelMessageActionName } from "../types.js";
+import { resolveReactionMessageId } from "./reaction-message-id.js";
 
 const providerId = "signal";
 const GROUP_PREFIX = "group:";
@@ -126,9 +127,8 @@ export const signalMessageActions: ChannelMessageActionAdapter = {
         throw new Error("recipient or group required");
       }
 
-      const messageId =
-        readStringParam(params, "messageId") ??
-        (toolContext?.currentMessageId != null ? String(toolContext.currentMessageId) : undefined);
+      const messageIdRaw = resolveReactionMessageId({ args: params, toolContext });
+      const messageId = messageIdRaw != null ? String(messageIdRaw) : undefined;
       if (!messageId) {
         throw new Error(
           "messageId (timestamp) required. Provide messageId explicitly or react to the current inbound message.",

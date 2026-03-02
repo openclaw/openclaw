@@ -22,8 +22,13 @@ let installPluginFromPath: typeof import("./install.js").installPluginFromPath;
 let PLUGIN_INSTALL_ERROR_CODE: typeof import("./install.js").PLUGIN_INSTALL_ERROR_CODE;
 let runCommandWithTimeout: typeof import("../process/exec.js").runCommandWithTimeout;
 let suiteTempRoot = "";
+let suiteFixtureRoot = "";
 let tempDirCounter = 0;
 const pluginFixturesDir = path.resolve(process.cwd(), "test", "fixtures", "plugins-install");
+const archiveFixturePathCache = new Map<string, string>();
+const dynamicArchiveTemplatePathCache = new Map<string, string>();
+let installPluginFromDirTemplateDir = "";
+let manifestInstallTemplateDir = "";
 
 function ensureSuiteTempRoot() {
   if (suiteTempRoot) {
@@ -38,6 +43,15 @@ function makeTempDir() {
   tempDirCounter += 1;
   fs.mkdirSync(dir, { recursive: true });
   return dir;
+}
+
+function ensureSuiteFixtureRoot() {
+  if (suiteFixtureRoot) {
+    return suiteFixtureRoot;
+  }
+  suiteFixtureRoot = path.join(ensureSuiteTempRoot(), "_fixtures");
+  fs.mkdirSync(suiteFixtureRoot, { recursive: true });
+  return suiteFixtureRoot;
 }
 
 async function packToArchive({
@@ -66,10 +80,18 @@ async function createVoiceCallArchiveBuffer(version: string): Promise<Buffer> {
   return fs.readFileSync(path.join(pluginFixturesDir, `voice-call-${version}.tgz`));
 }
 
-function writeArchiveBuffer(params: { outName: string; buffer: Buffer }): string {
-  const workDir = makeTempDir();
-  const archivePath = path.join(workDir, params.outName);
+function getArchiveFixturePath(params: {
+  cacheKey: string;
+  outName: string;
+  buffer: Buffer;
+}): string {
+  const hit = archiveFixturePathCache.get(params.cacheKey);
+  if (hit) {
+    return hit;
+  }
+  const archivePath = path.join(ensureSuiteFixtureRoot(), params.outName);
   fs.writeFileSync(archivePath, params.buffer);
+  archiveFixturePathCache.set(params.cacheKey, archivePath);
   return archivePath;
 }
 
@@ -94,7 +116,11 @@ async function getVoiceCallArchiveBuffer(version: string): Promise<Buffer> {
 async function setupVoiceCallArchiveInstall(params: { outName: string; version: string }) {
   const stateDir = makeTempDir();
   const archiveBuffer = await getVoiceCallArchiveBuffer(params.version);
-  const archivePath = writeArchiveBuffer({ outName: params.outName, buffer: archiveBuffer });
+  const archivePath = getArchiveFixturePath({
+    cacheKey: `voice-call:${params.version}`,
+    outName: params.outName,
+    buffer: archiveBuffer,
+  });
   return {
     stateDir,
     archivePath,
@@ -131,22 +157,17 @@ function setupPluginInstallDirs() {
 }
 
 function setupInstallPluginFromDirFixture(params?: { devDependencies?: Record<string, string> }) {
-  const workDir = makeTempDir();
   const stateDir = makeTempDir();
-  const pluginDir = path.join(workDir, "plugin");
-  fs.mkdirSync(path.join(pluginDir, "dist"), { recursive: true });
-  fs.writeFileSync(
-    path.join(pluginDir, "package.json"),
-    JSON.stringify({
-      name: "@openclaw/test-plugin",
-      version: "0.0.1",
-      openclaw: { extensions: ["./dist/index.js"] },
-      dependencies: { "left-pad": "1.3.0" },
-      ...(params?.devDependencies ? { devDependencies: params.devDependencies } : {}),
-    }),
-    "utf-8",
-  );
-  fs.writeFileSync(path.join(pluginDir, "dist", "index.js"), "export {};", "utf-8");
+  const pluginDir = path.join(makeTempDir(), "plugin");
+  fs.cpSync(installPluginFromDirTemplateDir, pluginDir, { recursive: true });
+  if (params?.devDependencies) {
+    const packageJsonPath = path.join(pluginDir, "package.json");
+    const manifest = JSON.parse(fs.readFileSync(packageJsonPath, "utf-8")) as {
+      devDependencies?: Record<string, string>;
+    };
+    manifest.devDependencies = params.devDependencies;
+    fs.writeFileSync(packageJsonPath, JSON.stringify(manifest), "utf-8");
+  }
   return { pluginDir, extensionsDir: path.join(stateDir, "extensions") };
 }
 
@@ -164,18 +185,9 @@ async function installFromDirWithWarnings(params: { pluginDir: string; extension
 }
 
 function setupManifestInstallFixture(params: { manifestId: string }) {
-  const { pluginDir, extensionsDir } = setupPluginInstallDirs();
-  fs.mkdirSync(path.join(pluginDir, "dist"), { recursive: true });
-  fs.writeFileSync(
-    path.join(pluginDir, "package.json"),
-    JSON.stringify({
-      name: "@openclaw/cognee-openclaw",
-      version: "0.0.1",
-      openclaw: { extensions: ["./dist/index.js"] },
-    }),
-    "utf-8",
-  );
-  fs.writeFileSync(path.join(pluginDir, "dist", "index.js"), "export {};", "utf-8");
+  const stateDir = makeTempDir();
+  const pluginDir = path.join(makeTempDir(), "plugin-src");
+  fs.cpSync(manifestInstallTemplateDir, pluginDir, { recursive: true });
   fs.writeFileSync(
     path.join(pluginDir, "openclaw.plugin.json"),
     JSON.stringify({
@@ -184,7 +196,7 @@ function setupManifestInstallFixture(params: { manifestId: string }) {
     }),
     "utf-8",
   );
-  return { pluginDir, extensionsDir };
+  return { pluginDir, extensionsDir: path.join(stateDir, "extensions") };
 }
 
 async function expectArchiveInstallReservedSegmentRejection(params: {
@@ -214,20 +226,31 @@ async function installArchivePackageAndReturnResult(params: {
   withDistIndex?: boolean;
 }) {
   const stateDir = makeTempDir();
-  const workDir = makeTempDir();
-  const pkgDir = path.join(workDir, "package");
-  fs.mkdirSync(pkgDir, { recursive: true });
-  if (params.withDistIndex) {
-    fs.mkdirSync(path.join(pkgDir, "dist"), { recursive: true });
-    fs.writeFileSync(path.join(pkgDir, "dist", "index.js"), "export {};", "utf-8");
-  }
-  fs.writeFileSync(path.join(pkgDir, "package.json"), JSON.stringify(params.packageJson), "utf-8");
-
-  const archivePath = await packToArchive({
-    pkgDir,
-    outDir: workDir,
-    outName: params.outName,
+  const templateKey = JSON.stringify({
+    packageJson: params.packageJson,
+    withDistIndex: params.withDistIndex === true,
   });
+  let archivePath = dynamicArchiveTemplatePathCache.get(templateKey);
+  if (!archivePath) {
+    const templateDir = makeTempDir();
+    const pkgDir = path.join(templateDir, "package");
+    fs.mkdirSync(pkgDir, { recursive: true });
+    if (params.withDistIndex) {
+      fs.mkdirSync(path.join(pkgDir, "dist"), { recursive: true });
+      fs.writeFileSync(path.join(pkgDir, "dist", "index.js"), "export {};", "utf-8");
+    }
+    fs.writeFileSync(
+      path.join(pkgDir, "package.json"),
+      JSON.stringify(params.packageJson),
+      "utf-8",
+    );
+    archivePath = await packToArchive({
+      pkgDir,
+      outDir: ensureSuiteFixtureRoot(),
+      outName: params.outName,
+    });
+    dynamicArchiveTemplatePathCache.set(templateKey, archivePath);
+  }
 
   const extensionsDir = path.join(stateDir, "extensions");
   const result = await installPluginFromArchive({
@@ -258,6 +281,52 @@ beforeAll(async () => {
     PLUGIN_INSTALL_ERROR_CODE,
   } = await import("./install.js"));
   ({ runCommandWithTimeout } = await import("../process/exec.js"));
+
+  installPluginFromDirTemplateDir = path.join(
+    ensureSuiteFixtureRoot(),
+    "install-from-dir-template",
+  );
+  fs.mkdirSync(path.join(installPluginFromDirTemplateDir, "dist"), { recursive: true });
+  fs.writeFileSync(
+    path.join(installPluginFromDirTemplateDir, "package.json"),
+    JSON.stringify({
+      name: "@openclaw/test-plugin",
+      version: "0.0.1",
+      openclaw: { extensions: ["./dist/index.js"] },
+      dependencies: { "left-pad": "1.3.0" },
+    }),
+    "utf-8",
+  );
+  fs.writeFileSync(
+    path.join(installPluginFromDirTemplateDir, "dist", "index.js"),
+    "export {};",
+    "utf-8",
+  );
+
+  manifestInstallTemplateDir = path.join(ensureSuiteFixtureRoot(), "manifest-install-template");
+  fs.mkdirSync(path.join(manifestInstallTemplateDir, "dist"), { recursive: true });
+  fs.writeFileSync(
+    path.join(manifestInstallTemplateDir, "package.json"),
+    JSON.stringify({
+      name: "@openclaw/cognee-openclaw",
+      version: "0.0.1",
+      openclaw: { extensions: ["./dist/index.js"] },
+    }),
+    "utf-8",
+  );
+  fs.writeFileSync(
+    path.join(manifestInstallTemplateDir, "dist", "index.js"),
+    "export {};",
+    "utf-8",
+  );
+  fs.writeFileSync(
+    path.join(manifestInstallTemplateDir, "openclaw.plugin.json"),
+    JSON.stringify({
+      id: "manifest-template",
+      configSchema: { type: "object", properties: {} },
+    }),
+    "utf-8",
+  );
 });
 
 beforeEach(() => {
@@ -303,8 +372,9 @@ describe("installPluginFromArchive", () => {
 
   it("installs from a zip archive", async () => {
     const stateDir = makeTempDir();
-    const archivePath = writeArchiveBuffer({
-      outName: "plugin.zip",
+    const archivePath = getArchiveFixturePath({
+      cacheKey: "zipper:0.0.1",
+      outName: "zipper-0.0.1.zip",
       buffer: await ZIPPER_ARCHIVE_BUFFER_PROMISE,
     });
 
@@ -318,12 +388,14 @@ describe("installPluginFromArchive", () => {
 
   it("allows updates when mode is update", async () => {
     const stateDir = makeTempDir();
-    const archiveV1 = writeArchiveBuffer({
-      outName: "plugin-v1.tgz",
+    const archiveV1 = getArchiveFixturePath({
+      cacheKey: "voice-call:0.0.1",
+      outName: "voice-call-0.0.1.tgz",
       buffer: await VOICE_CALL_ARCHIVE_V1_BUFFER_PROMISE,
     });
-    const archiveV2 = writeArchiveBuffer({
-      outName: "plugin-v2.tgz",
+    const archiveV2 = getArchiveFixturePath({
+      cacheKey: "voice-call:0.0.2",
+      outName: "voice-call-0.0.2.tgz",
       buffer: await VOICE_CALL_ARCHIVE_V2_BUFFER_PROMISE,
     });
 

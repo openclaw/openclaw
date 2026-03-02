@@ -473,7 +473,7 @@ describe("legacy config detection", () => {
         expect(channel?.dmPolicy, provider).toBe("pairing");
         expect(channel?.groupPolicy, provider).toBe("allowlist");
         if (provider === "telegram") {
-          expect(channel?.streaming, provider).toBe(resolveTelegramPreviewStreamMode({}));
+          expect(channel?.streaming, provider).toBe("partial");
           expect(channel?.streamMode, provider).toBeUndefined();
         }
       }

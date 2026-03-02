@@ -471,9 +471,18 @@ export const buildTelegramMessageContext = async ({
     return null;
   }
   // Reply-chain detection: replying to a bot message acts like an implicit mention.
+  // Exclude forum-topic service messages (auto-generated "Topic created" etc. messages
+  // by the bot) so that every message inside a bot-created topic does not incorrectly
+  // bypass requireMention (#32256).
+  // We detect service messages by the presence of Telegram's forum_topic_* fields
+  // rather than by the absence of text/caption, because legitimate bot media messages
+  // (stickers, voice notes, captionless photos) also lack text/caption.
   const botId = primaryCtx.me?.id;
   const replyFromId = msg.reply_to_message?.from?.id;
-  const implicitMention = botId != null && replyFromId === botId;
+  const replyToBotMessage = botId != null && replyFromId === botId;
+  const isReplyToServiceMessage =
+    replyToBotMessage && isTelegramForumServiceMessage(msg.reply_to_message);
+  const implicitMention = replyToBotMessage && !isReplyToServiceMessage;
   const canDetectMention = Boolean(botUsername) || mentionRegexes.length > 0;
   const mentionGate = resolveMentionGatingWithBypass({
     isGroup,
@@ -858,3 +867,31 @@ export const buildTelegramMessageContext = async ({
 export type TelegramMessageContext = NonNullable<
   Awaited<ReturnType<typeof buildTelegramMessageContext>>
 >;
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/** Telegram forum-topic service-message fields (Bot API). */
+const FORUM_SERVICE_FIELDS = [
+  "forum_topic_created",
+  "forum_topic_edited",
+  "forum_topic_closed",
+  "forum_topic_reopened",
+  "general_forum_topic_hidden",
+  "general_forum_topic_unhidden",
+] as const;
+
+/**
+ * Returns `true` when the message is a Telegram forum service message (e.g.
+ * "Topic created").  These auto-generated messages carry one of the
+ * `forum_topic_*` / `general_forum_topic_*` fields and should not count as
+ * regular bot replies for implicit-mention purposes.
+ */
+function isTelegramForumServiceMessage(msg: unknown): boolean {
+  if (!msg || typeof msg !== "object") {
+    return false;
+  }
+  const record = msg as Record<string, unknown>;
+  return FORUM_SERVICE_FIELDS.some((f) => record[f] != null);
+}
