@@ -1,10 +1,5 @@
-import { beforeAll, describe, expect, it } from "vitest";
-
-let validateConfigObject: typeof import("./config.js").validateConfigObject;
-
-beforeAll(async () => {
-  ({ validateConfigObject } = await import("./config.js"));
-});
+import { describe, expect, it } from "vitest";
+import { validateConfigObject } from "./config.js";
 
 describe("meta.lastTouchedAt numeric timestamp coercion", () => {
   it("accepts a numeric Unix timestamp and coerces it to an ISO string", () => {
