@@ -226,14 +226,13 @@ export class OpenfortClient {
     // Bug Fix: Validate that the contract has the transfer function in its ABI
     // If it doesn't, it means the proxy ABI was fetched instead of the implementation ABI
     if (existingContract) {
-      const hasTransfer = existingContract.abi?.some(
-        (item: any) => item.type === "function" && item.name === "transfer",
-      );
+      const abi = existingContract.abi as Array<{ type: string; name: string }> | undefined;
+      const hasTransfer = abi?.some((item) => item.type === "function" && item.name === "transfer");
 
       if (!hasTransfer) {
         // Contract exists but with wrong ABI (proxy instead of implementation)
         // Delete it and recreate with correct ABI
-        await this.openfort.contracts.delete({ id: existingContract.id });
+        await this.openfort.contracts.delete(existingContract.id);
         existingContract = undefined;
       } else {
         return existingContract.id;

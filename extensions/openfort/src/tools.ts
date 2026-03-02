@@ -105,6 +105,7 @@ export function createTools(
           account: walletClient.account!,
           to: toAddress(input.to),
           value: parseEther(input.amount),
+          chain: client.chain,
         });
         return jsonResult({
           hash,
