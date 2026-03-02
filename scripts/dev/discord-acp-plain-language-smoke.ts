@@ -340,39 +340,17 @@ async function discordApi<T>(params: {
   body?: unknown;
   retries?: number;
 }): Promise<T> {
-  const retries = params.retries ?? 6;
-  for (let attempt = 0; attempt <= retries; attempt += 1) {
-    const response = await fetch(`${DISCORD_API_BASE}${params.path}`, {
-      method: params.method,
-      headers: {
-        Authorization: params.authHeader,
-        "Content-Type": "application/json",
-      },
-      body: params.body === undefined ? undefined : JSON.stringify(params.body),
-    });
-
-    if (response.status === 429) {
-      const body = (await response.json().catch(() => ({}))) as { retry_after?: number };
-      const waitSeconds = typeof body.retry_after === "number" ? body.retry_after : 1;
-      await sleep(Math.ceil(waitSeconds * 1000));
-      continue;
-    }
-
-    if (!response.ok) {
-      const text = await response.text().catch(() => "");
-      throw new Error(
-        `Discord API ${params.method} ${params.path} failed: ${response.status} ${response.statusText}${text ? ` :: ${text}` : ""}`,
-      );
-    }
-
-    if (response.status === 204) {
-      return undefined as T;
-    }
-
-    return (await response.json()) as T;
-  }
-
-  throw new Error(`Discord API ${params.method} ${params.path} exceeded retry budget.`);
+  return requestDiscordJson<T>({
+    method: params.method,
+    path: params.path,
+    headers: {
+      Authorization: params.authHeader,
+      "Content-Type": "application/json",
+    },
+    body: params.body,
+    retries: params.retries,
+    errorPrefix: "Discord API",
+  });
 }
 
 async function discordWebhookApi<T>(params: {
@@ -383,15 +361,33 @@ async function discordWebhookApi<T>(params: {
   query?: string;
   retries?: number;
 }): Promise<T> {
-  const retries = params.retries ?? 6;
   const suffix = params.query ? `?${params.query}` : "";
   const path = `/webhooks/${encodeURIComponent(params.webhookId)}/${encodeURIComponent(params.webhookToken)}${suffix}`;
+  return requestDiscordJson<T>({
+    method: params.method,
+    path,
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: params.body,
+    retries: params.retries,
+    errorPrefix: "Discord webhook API",
+  });
+}
+
+async function requestDiscordJson<T>(params: {
+  method: string;
+  path: string;
+  headers: Record<string, string>;
+  body?: unknown;
+  retries?: number;
+  errorPrefix: string;
+}): Promise<T> {
+  const retries = params.retries ?? 6;
   for (let attempt = 0; attempt <= retries; attempt += 1) {
-    const response = await fetch(`${DISCORD_API_BASE}${path}`, {
+    const response = await fetch(`${DISCORD_API_BASE}${params.path}`, {
       method: params.method,
-      headers: {
-        "Content-Type": "application/json",
-      },
+      headers: params.headers,
       body: params.body === undefined ? undefined : JSON.stringify(params.body),
     });
 
@@ -405,7 +401,7 @@ async function discordWebhookApi<T>(params: {
     if (!response.ok) {
       const text = await response.text().catch(() => "");
       throw new Error(
-        `Discord webhook API ${params.method} ${path} failed: ${response.status} ${response.statusText}${text ? ` :: ${text}` : ""}`,
+        `${params.errorPrefix} ${params.method} ${params.path} failed: ${response.status} ${response.statusText}${text ? ` :: ${text}` : ""}`,
       );
     }
 
@@ -416,7 +412,7 @@ async function discordWebhookApi<T>(params: {
     return (await response.json()) as T;
   }
 
-  throw new Error(`Discord webhook API ${params.method} ${path} exceeded retry budget.`);
+  throw new Error(`${params.errorPrefix} ${params.method} ${params.path} exceeded retry budget.`);
 }
 
 async function readThreadBindings(filePath: string): Promise<ThreadBindingRecord[]> {
@@ -485,6 +481,24 @@ function toRecentMessageRow(message: DiscordMessage) {
     bot: Boolean(message.author?.bot),
     content: (message.content || "").slice(0, 500),
   };
+}
+
+async function loadParentRecentMessages(params: {
+  args: Args;
+  readAuthHeader: string;
+}): Promise<DiscordMessage[]> {
+  if (params.args.driverMode === "openclaw") {
+    return await readMessagesWithOpenclaw({
+      openclawBin: params.args.openclawBin,
+      target: params.args.channelId,
+      limit: 20,
+    });
+  }
+  return await discordApi<DiscordMessage[]>({
+    method: "GET",
+    path: `/channels/${encodeURIComponent(params.args.channelId)}/messages?limit=20`,
+    authHeader: params.readAuthHeader,
+  });
 }
 
 function printOutput(params: { json: boolean; payload: SuccessResult | FailureResult }) {
@@ -714,18 +728,7 @@ async function run(): Promise<SuccessResult | FailureResult> {
     if (!winningBinding?.threadId || !winningBinding?.targetSessionKey) {
       let parentRecent: DiscordMessage[] = [];
       try {
-        parentRecent =
-          args.driverMode === "openclaw"
-            ? await readMessagesWithOpenclaw({
-                openclawBin: args.openclawBin,
-                target: args.channelId,
-                limit: 20,
-              })
-            : await discordApi<DiscordMessage[]>({
-                method: "GET",
-                path: `/channels/${encodeURIComponent(args.channelId)}/messages?limit=20`,
-                authHeader: readAuthHeader,
-              });
+        parentRecent = await loadParentRecentMessages({ args, readAuthHeader });
       } catch {
         // Best effort diagnostics only.
       }
@@ -782,18 +785,7 @@ async function run(): Promise<SuccessResult | FailureResult> {
     if (!ackMessage) {
       let parentRecent: DiscordMessage[] = [];
       try {
-        parentRecent =
-          args.driverMode === "openclaw"
-            ? await readMessagesWithOpenclaw({
-                openclawBin: args.openclawBin,
-                target: args.channelId,
-                limit: 20,
-              })
-            : await discordApi<DiscordMessage[]>({
-                method: "GET",
-                path: `/channels/${encodeURIComponent(args.channelId)}/messages?limit=20`,
-                authHeader: readAuthHeader,
-              });
+        parentRecent = await loadParentRecentMessages({ args, readAuthHeader });
       } catch {
         // Best effort diagnostics only.
       }

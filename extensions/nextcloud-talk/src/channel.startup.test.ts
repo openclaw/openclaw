@@ -1,10 +1,5 @@
-import type {
-  ChannelAccountSnapshot,
-  ChannelGatewayContext,
-  OpenClawConfig,
-} from "openclaw/plugin-sdk";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createRuntimeEnv } from "../../test-utils/runtime-env.js";
+import { createStartAccountContext } from "../../test-utils/start-account-context.js";
 import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
 
 const hoisted = vi.hoisted(() => ({
@@ -20,30 +15,6 @@ vi.mock("./monitor.js", async () => {
 });
 
 import { nextcloudTalkPlugin } from "./channel.js";
-
-function createStartAccountCtx(params: {
-  account: ResolvedNextcloudTalkAccount;
-  abortSignal: AbortSignal;
-}): ChannelGatewayContext<ResolvedNextcloudTalkAccount> {
-  const snapshot: ChannelAccountSnapshot = {
-    accountId: params.account.accountId,
-    configured: true,
-    enabled: true,
-    running: false,
-  };
-  return {
-    accountId: params.account.accountId,
-    account: params.account,
-    cfg: {} as OpenClawConfig,
-    runtime: createRuntimeEnv(),
-    abortSignal: params.abortSignal,
-    log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
-    getStatus: () => snapshot,
-    setStatus: (next) => {
-      Object.assign(snapshot, next);
-    },
-  };
-}
 
 function buildAccount(): ResolvedNextcloudTalkAccount {
   return {
@@ -72,7 +43,7 @@ describe("nextcloudTalkPlugin gateway.startAccount", () => {
     const abort = new AbortController();
 
     const task = nextcloudTalkPlugin.gateway!.startAccount!(
-      createStartAccountCtx({
+      createStartAccountContext({
         account: buildAccount(),
         abortSignal: abort.signal,
       }),
@@ -103,7 +74,7 @@ describe("nextcloudTalkPlugin gateway.startAccount", () => {
     abort.abort();
 
     await nextcloudTalkPlugin.gateway!.startAccount!(
-      createStartAccountCtx({
+      createStartAccountContext({
         account: buildAccount(),
         abortSignal: abort.signal,
       }),

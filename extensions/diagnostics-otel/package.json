@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/diagnostics-otel",
-  "version": "2026.3.1",
+  "version": "2026.3.2",
   "description": "OpenClaw diagnostics OpenTelemetry exporter",
   "type": "module",
   "dependencies": {
@@ -14,7 +14,7 @@
     "@opentelemetry/sdk-metrics": "^2.5.1",
     "@opentelemetry/sdk-node": "^0.212.0",
     "@opentelemetry/sdk-trace-base": "^2.5.1",
-    "@opentelemetry/semantic-conventions": "^1.39.0"
+    "@opentelemetry/semantic-conventions": "^1.40.0"
   },
   "openclaw": {
     "extensions": [
