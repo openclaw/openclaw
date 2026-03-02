@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  downgradeOpenAIFunctionCallReasoningPairs,
   downgradeOpenAIReasoningBlocks,
   isMessagingToolDuplicate,
   normalizeTextForComparison,
@@ -315,6 +316,125 @@ describe("downgradeOpenAIReasoningBlocks", () => {
     // oxlint-disable-next-line typescript/no-explicit-any
     const twice = downgradeOpenAIReasoningBlocks(once as any);
     expect(twice).toEqual(once);
+  });
+});
+
+describe("downgradeOpenAIFunctionCallReasoningPairs", () => {
+  it("strips fc ids when reasoning cannot be replayed", () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_123|fc_123", name: "read", arguments: {} }],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_123|fc_123",
+        toolName: "read",
+        content: [{ type: "text", text: "ok" }],
+      },
+    ];
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    expect(downgradeOpenAIFunctionCallReasoningPairs(input as any)).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_123", name: "read", arguments: {} }],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_123",
+        toolName: "read",
+        content: [{ type: "text", text: "ok" }],
+      },
+    ]);
+  });
+
+  it("keeps fc ids when replayable reasoning is present", () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "internal",
+            thinkingSignature: JSON.stringify({ id: "rs_123", type: "reasoning" }),
+          },
+          { type: "toolCall", id: "call_123|fc_123", name: "read", arguments: {} },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_123|fc_123",
+        toolName: "read",
+        content: [{ type: "text", text: "ok" }],
+      },
+    ];
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    expect(downgradeOpenAIFunctionCallReasoningPairs(input as any)).toEqual(input);
+  });
+
+  it("only rewrites tool results paired to the downgraded assistant turn", () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_123|fc_123", name: "read", arguments: {} }],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_123|fc_123",
+        toolName: "read",
+        content: [{ type: "text", text: "turn1" }],
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "internal",
+            thinkingSignature: JSON.stringify({ id: "rs_123", type: "reasoning" }),
+          },
+          { type: "toolCall", id: "call_123|fc_123", name: "read", arguments: {} },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_123|fc_123",
+        toolName: "read",
+        content: [{ type: "text", text: "turn2" }],
+      },
+    ];
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    expect(downgradeOpenAIFunctionCallReasoningPairs(input as any)).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_123", name: "read", arguments: {} }],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_123",
+        toolName: "read",
+        content: [{ type: "text", text: "turn1" }],
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "internal",
+            thinkingSignature: JSON.stringify({ id: "rs_123", type: "reasoning" }),
+          },
+          { type: "toolCall", id: "call_123|fc_123", name: "read", arguments: {} },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_123|fc_123",
+        toolName: "read",
+        content: [{ type: "text", text: "turn2" }],
+      },
+    ]);
   });
 });
 
