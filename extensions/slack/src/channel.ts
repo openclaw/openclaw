@@ -69,8 +69,8 @@ function resolveSlackSendContext(params: {
   cfg: Parameters<typeof resolveSlackAccount>[0]["cfg"];
   accountId?: string;
   deps?: { sendSlack?: SlackSendFn };
-  replyToId?: string | null;
-  threadId?: string | null;
+  replyToId?: string | number | null;
+  threadId?: string | number | null;
 }) {
   const send = params.deps?.sendSlack ?? getSlackRuntime().channel.slack.sendMessageSlack;
   const account = resolveSlackAccount({ cfg: params.cfg, accountId: params.accountId });
@@ -359,7 +359,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
     sendText: async ({ to, text, accountId, deps, replyToId, threadId, cfg }) => {
       const { send, threadTsValue, tokenOverride } = resolveSlackSendContext({
         cfg,
-        accountId,
+        accountId: accountId ?? undefined,
         deps,
         replyToId,
         threadId,
@@ -374,7 +374,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
     sendMedia: async ({ to, text, mediaUrl, accountId, deps, replyToId, threadId, cfg }) => {
       const { send, threadTsValue, tokenOverride } = resolveSlackSendContext({
         cfg,
-        accountId,
+        accountId: accountId ?? undefined,
         deps,
         replyToId,
         threadId,

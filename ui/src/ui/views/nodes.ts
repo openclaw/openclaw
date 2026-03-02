@@ -218,10 +218,10 @@ function renderTokenRow(deviceId: string, token: DeviceTokenSummary, props: Node
 
 type BindingAgent = {
   id: string;
-  name?: string;
+  name: string | undefined;
   index: number;
   isDefault: boolean;
-  binding?: string | null;
+  binding: string | null;
 };
 
 type BindingNode = NodeTargetOption;
