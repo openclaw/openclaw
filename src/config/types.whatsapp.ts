@@ -44,6 +44,8 @@ type WhatsAppSharedConfig = {
   selfChatMode?: boolean;
   /** Optional allowlist for WhatsApp direct chats (E.164). */
   allowFrom?: string[];
+  /** Optional allowlist for outbound WhatsApp sends (E.164). If set, only these numbers can be messaged. If empty/unset, falls back to allowFrom for outbound gating. */
+  allowSendTo?: string[];
   /** Default delivery target for CLI `--deliver` when no explicit `--reply-to` is provided (E.164 or group JID). */
   defaultTo?: string;
   /** Optional allowlist for WhatsApp group senders (E.164). */
