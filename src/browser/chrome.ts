@@ -192,6 +192,31 @@ function enableFetchAuthOnSession(
   });
 }
 
+type CdpAuthChallengeResponse =
+  | {
+      response: "ProvideCredentials";
+      username: string;
+      password: string;
+    }
+  | {
+      response: "Default";
+    };
+
+export function resolveProxyAuthChallengeResponse(
+  challengeSource: unknown,
+  proxyCredentials: { username: string; password: string },
+): CdpAuthChallengeResponse {
+  const source = typeof challengeSource === "string" ? challengeSource.toLowerCase() : "";
+  if (source !== "proxy") {
+    return { response: "Default" };
+  }
+  return {
+    response: "ProvideCredentials",
+    username: proxyCredentials.username,
+    password: proxyCredentials.password,
+  };
+}
+
 /**
  * Set up CDP Fetch-based proxy authentication for all page targets.
  *
@@ -221,7 +246,7 @@ async function setupCdpProxyAuth(
     throw new Error("no browser WebSocket URL for proxy auth setup");
   }
 
-  const ws = new WebSocket(browserWsUrl);
+  const ws = openCdpWebSocket(browserWsUrl);
   await new Promise<void>((resolve, reject) => {
     ws.once("open", resolve);
     ws.once("error", reject);
@@ -409,13 +434,13 @@ async function setupCdpProxyAuth(
 
     if (msg.method === "Fetch.authRequired") {
       const requestId = msg.params?.requestId as string;
+      const challengeSource = (msg.params?.authChallenge as { source?: string } | undefined)
+        ?.source;
+      // Only answer proxy (407) challenges with proxy credentials.
+      // For origin server auth (401), fall back to browser default handling.
       sendSession(sessionId, "Fetch.continueWithAuth", {
         requestId,
-        authChallengeResponse: {
-          response: "ProvideCredentials",
-          username: proxyCredentials.username,
-          password: proxyCredentials.password,
-        },
+        authChallengeResponse: resolveProxyAuthChallengeResponse(challengeSource, proxyCredentials),
       });
     } else if (msg.method === "Fetch.requestPaused") {
       const requestId = msg.params?.requestId as string;

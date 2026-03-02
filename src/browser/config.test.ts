@@ -448,6 +448,7 @@ describe("browser config", () => {
         work: {
           proxy: "socks5://work-proxy:1080",
           cdpPort: 9223,
+          color: "#0066CC",
         },
       },
     });
