@@ -817,7 +817,8 @@ class VoiceSession {
       });
     } catch (err) {
       this.isProcessing = false;
-      console.error("  ❌ respond dispatch error:", err.message);
+      const message = err instanceof Error ? err.message : String(err);
+      console.error("  ❌ respond dispatch error:", message);
       void this.speak(
         "I'm sorry, I'm having a little trouble thinking right now. Could you say that again?",
       );
@@ -855,10 +856,11 @@ class VoiceSession {
         ) {
           return;
         }
-        if (err.message.includes("Cancelled")) {
+        const message = err instanceof Error ? err.message : String(err);
+        if (message.includes("Cancelled")) {
           return;
         }
-        console.error("  ❌ respond error:", err.message);
+        console.error("  ❌ respond error:", message);
         await this.speak(
           "I'm sorry, I'm having a little trouble thinking right now. Could you say that again?",
         );
