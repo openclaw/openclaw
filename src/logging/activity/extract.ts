@@ -183,11 +183,25 @@ function parseInboundOrReply(message: string): ActivityMeta | undefined {
 }
 
 function parsePolicy(message: string): ActivityMeta | undefined {
-  if (/\bblocked\b/i.test(message) || /\bskipping\b/i.test(message)) {
+  const blocked = /\bblocked\b/i.test(message);
+  const skipping = /\bskipping\b/i.test(message);
+  if (!blocked && !skipping) {
+    return undefined;
+  }
+
+  // Only map fallback policy activity for known policy-shaped logs.
+  // Generic "blocked"/"skipping" warnings should retain native warn/error rendering.
+  const policyLike =
+    /\bpolicy\b/i.test(message) || /\bdmPolicy\b/i.test(message) || /\ballowlist\b/i.test(message);
+  if (!policyLike) {
+    return undefined;
+  }
+
+  if (blocked || skipping) {
     return buildActivityMeta({
       kind: "policy",
       summary: "policy decision",
-      status: /\bblocked\b/i.test(message) ? "blocked" : "skip",
+      status: blocked ? "blocked" : "skip",
       preview: message,
     });
   }
