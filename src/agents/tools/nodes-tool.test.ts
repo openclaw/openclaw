@@ -25,20 +25,20 @@ const screenMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("./gateway.js", () => ({
-  callGatewayTool: (...args: unknown[]) => gatewayMocks.callGatewayTool(...args),
-  readGatewayCallOptions: (...args: unknown[]) => gatewayMocks.readGatewayCallOptions(...args),
+  callGatewayTool: gatewayMocks.callGatewayTool,
+  readGatewayCallOptions: gatewayMocks.readGatewayCallOptions,
 }));
 
 vi.mock("./nodes-utils.js", () => ({
-  resolveNodeId: (...args: unknown[]) => nodeUtilsMocks.resolveNodeId(...args),
-  listNodes: (...args: unknown[]) => nodeUtilsMocks.listNodes(...args),
-  resolveNodeIdFromList: (...args: unknown[]) => nodeUtilsMocks.resolveNodeIdFromList(...args),
+  resolveNodeId: nodeUtilsMocks.resolveNodeId,
+  listNodes: nodeUtilsMocks.listNodes,
+  resolveNodeIdFromList: nodeUtilsMocks.resolveNodeIdFromList,
 }));
 
 vi.mock("../../cli/nodes-screen.js", () => ({
-  parseScreenRecordPayload: (...args: unknown[]) => screenMocks.parseScreenRecordPayload(...args),
-  screenRecordTempPath: (...args: unknown[]) => screenMocks.screenRecordTempPath(...args),
-  writeScreenRecordToFile: (...args: unknown[]) => screenMocks.writeScreenRecordToFile(...args),
+  parseScreenRecordPayload: screenMocks.parseScreenRecordPayload,
+  screenRecordTempPath: screenMocks.screenRecordTempPath,
+  writeScreenRecordToFile: screenMocks.writeScreenRecordToFile,
 }));
 
 import { createNodesTool } from "./nodes-tool.js";
