@@ -58,6 +58,19 @@ function normalizeConsoleStyle(style?: string): ConsoleStyle {
 }
 
 function resolveConsoleSettings(): ConsoleSettings {
+  const envLevel = resolveEnvLogLevelOverride();
+  // Test runs default to silent console logging unless explicitly overridden.
+  // Skip config-file and full config fallback reads in this fast path.
+  if (
+    process.env.VITEST === "true" &&
+    process.env.OPENCLAW_TEST_CONSOLE !== "1" &&
+    !isVerbose() &&
+    !envLevel &&
+    !loggingState.overrideSettings
+  ) {
+    return { level: "silent", style: normalizeConsoleStyle(undefined) };
+  }
+
   let cfg: OpenClawConfig["logging"] | undefined =
     (loggingState.overrideSettings as LoggerSettings | null) ?? readLoggingConfig();
   if (!cfg) {
@@ -72,7 +85,6 @@ function resolveConsoleSettings(): ConsoleSettings {
       }
     }
   }
-  const envLevel = resolveEnvLogLevelOverride();
   const level = envLevel ?? normalizeConsoleLevel(cfg?.consoleLevel);
   const style = normalizeConsoleStyle(cfg?.consoleStyle);
   return { level, style };
