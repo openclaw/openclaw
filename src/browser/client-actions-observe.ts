@@ -1,6 +1,7 @@
 import type { BrowserActionPathResult, BrowserActionTargetOk } from "./client-actions-types.js";
 import { buildProfileQuery, withBaseUrl } from "./client-actions-url.js";
 import { fetchBrowserJson } from "./client-fetch.js";
+import { DEFAULT_BROWSER_CONTROL_REQUEST_TIMEOUT_MS } from "./constants.js";
 import type {
   BrowserConsoleMessage,
   BrowserNetworkRequest,
@@ -35,7 +36,9 @@ export async function browserConsoleMessages(
     ok: true;
     messages: BrowserConsoleMessage[];
     targetId: string;
-  }>(withBaseUrl(baseUrl, `/console${suffix}`), { timeoutMs: 20000 });
+  }>(withBaseUrl(baseUrl, `/console${suffix}`), {
+    timeoutMs: DEFAULT_BROWSER_CONTROL_REQUEST_TIMEOUT_MS,
+  });
 }
 
 export async function browserPdfSave(
@@ -47,7 +50,7 @@ export async function browserPdfSave(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ targetId: opts.targetId }),
-    timeoutMs: 20000,
+    timeoutMs: DEFAULT_BROWSER_CONTROL_REQUEST_TIMEOUT_MS,
   });
 }
 
@@ -64,7 +67,9 @@ export async function browserPageErrors(
     ok: true;
     targetId: string;
     errors: BrowserPageError[];
-  }>(withBaseUrl(baseUrl, `/errors${suffix}`), { timeoutMs: 20000 });
+  }>(withBaseUrl(baseUrl, `/errors${suffix}`), {
+    timeoutMs: DEFAULT_BROWSER_CONTROL_REQUEST_TIMEOUT_MS,
+  });
 }
 
 export async function browserRequests(
@@ -86,7 +91,9 @@ export async function browserRequests(
     ok: true;
     targetId: string;
     requests: BrowserNetworkRequest[];
-  }>(withBaseUrl(baseUrl, `/requests${suffix}`), { timeoutMs: 20000 });
+  }>(withBaseUrl(baseUrl, `/requests${suffix}`), {
+    timeoutMs: DEFAULT_BROWSER_CONTROL_REQUEST_TIMEOUT_MS,
+  });
 }
 
 export async function browserTraceStart(
@@ -109,7 +116,7 @@ export async function browserTraceStart(
       snapshots: opts.snapshots,
       sources: opts.sources,
     }),
-    timeoutMs: 20000,
+    timeoutMs: DEFAULT_BROWSER_CONTROL_REQUEST_TIMEOUT_MS,
   });
 }
 
@@ -122,7 +129,7 @@ export async function browserTraceStop(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ targetId: opts.targetId, path: opts.path }),
-    timeoutMs: 20000,
+    timeoutMs: DEFAULT_BROWSER_CONTROL_REQUEST_TIMEOUT_MS,
   });
 }
 
@@ -135,7 +142,7 @@ export async function browserHighlight(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ targetId: opts.targetId, ref: opts.ref }),
-    timeoutMs: 20000,
+    timeoutMs: DEFAULT_BROWSER_CONTROL_REQUEST_TIMEOUT_MS,
   });
 }
 
@@ -179,6 +186,6 @@ export async function browserResponseBody(
       timeoutMs: opts.timeoutMs,
       maxChars: opts.maxChars,
     }),
-    timeoutMs: 20000,
+    timeoutMs: DEFAULT_BROWSER_CONTROL_REQUEST_TIMEOUT_MS,
   });
 }

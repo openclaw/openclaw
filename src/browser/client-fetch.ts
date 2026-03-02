@@ -2,6 +2,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { loadConfig } from "../config/config.js";
 import { isLoopbackHost } from "../gateway/net.js";
 import { getBridgeAuthForPort } from "./bridge-auth-registry.js";
+import { DEFAULT_BROWSER_CONTROL_REQUEST_TIMEOUT_MS } from "./constants.js";
 import { resolveBrowserControlAuth } from "./control-auth.js";
 import {
   createBrowserControlContext,
@@ -164,7 +165,7 @@ export async function fetchBrowserJson<T>(
   url: string,
   init?: RequestInit & { timeoutMs?: number },
 ): Promise<T> {
-  const timeoutMs = init?.timeoutMs ?? 5000;
+  const timeoutMs = init?.timeoutMs ?? DEFAULT_BROWSER_CONTROL_REQUEST_TIMEOUT_MS;
   try {
     if (isAbsoluteHttp(url)) {
       const httpInit = withLoopbackBrowserAuth(url, init);
