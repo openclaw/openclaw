@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.js";
-import { buildSystemRunApprovalBindingV1 } from "../../infra/system-run-approval-binding.js";
+import { buildSystemRunApprovalBinding } from "../../infra/system-run-approval-binding.js";
 import { resetLogger, setLoggerOverride } from "../../logging.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
 import { validateExecApprovalRequestParams } from "../protocol/index.js";
@@ -249,6 +249,13 @@ describe("exec approval handlers", () => {
   const defaultExecApprovalRequestParams = {
     command: "echo ok",
     commandArgv: ["echo", "ok"],
+    systemRunPlan: {
+      argv: ["/usr/bin/echo", "ok"],
+      cwd: "/tmp",
+      rawCommand: "/usr/bin/echo ok",
+      agentId: "main",
+      sessionKey: "agent:main:main",
+    },
     cwd: "/tmp",
     nodeId: "node-1",
     host: "node",
@@ -278,6 +285,37 @@ describe("exec approval handlers", () => {
       ...defaultExecApprovalRequestParams,
       ...params.params,
     } as unknown as ExecApprovalRequestArgs["params"];
+    const hasExplicitPlan = !!params.params && Object.hasOwn(params.params, "systemRunPlan");
+    if (
+      !hasExplicitPlan &&
+      (requestParams as { host?: string }).host === "node" &&
+      Array.isArray((requestParams as { commandArgv?: unknown }).commandArgv)
+    ) {
+      const commandArgv = (requestParams as { commandArgv: unknown[] }).commandArgv.map((entry) =>
+        String(entry),
+      );
+      const cwdValue =
+        typeof (requestParams as { cwd?: unknown }).cwd === "string"
+          ? ((requestParams as { cwd: string }).cwd ?? null)
+          : null;
+      const commandText =
+        typeof (requestParams as { command?: unknown }).command === "string"
+          ? ((requestParams as { command: string }).command ?? null)
+          : null;
+      requestParams.systemRunPlan = {
+        argv: commandArgv,
+        cwd: cwdValue,
+        rawCommand: commandText,
+        agentId:
+          typeof (requestParams as { agentId?: unknown }).agentId === "string"
+            ? ((requestParams as { agentId: string }).agentId ?? null)
+            : null,
+        sessionKey:
+          typeof (requestParams as { sessionKey?: unknown }).sessionKey === "string"
+            ? ((requestParams as { sessionKey: string }).sessionKey ?? null)
+            : null,
+      };
+    }
     return params.handlers["exec.approval.request"]({
       params: requestParams,
       respond: params.respond as unknown as ExecApprovalRequestArgs["respond"],
@@ -385,21 +423,21 @@ describe("exec approval handlers", () => {
     );
   });
 
-  it("rejects host=node approval requests without commandArgv", async () => {
+  it("rejects host=node approval requests without systemRunPlan", async () => {
     const { handlers, respond, context } = createExecApprovalFixture();
     await requestExecApproval({
       handlers,
       respond,
       context,
       params: {
-        commandArgv: undefined,
+        systemRunPlan: undefined,
       },
     });
     expect(respond).toHaveBeenCalledWith(
       false,
       undefined,
       expect.objectContaining({
-        message: "commandArgv is required for host=node",
+        message: "systemRunPlan is required for host=node",
       }),
     );
   });
@@ -462,8 +500,8 @@ describe("exec approval handlers", () => {
     expect(requested).toBeTruthy();
     const request = (requested?.payload as { request?: Record<string, unknown> })?.request ?? {};
     expect(request["envKeys"]).toEqual(["A_VAR", "Z_VAR"]);
-    expect(request["systemRunBindingV1"]).toEqual(
-      buildSystemRunApprovalBindingV1({
+    expect(request["systemRunBinding"]).toEqual(
+      buildSystemRunApprovalBinding({
         argv: ["echo", "ok"],
         cwd: "/tmp",
         env: { A_VAR: "a", Z_VAR: "z" },
@@ -471,7 +509,7 @@ describe("exec approval handlers", () => {
     );
   });
 
-  it("prefers systemRunPlanV2 canonical command/cwd when present", async () => {
+  it("prefers systemRunPlan canonical command/cwd when present", async () => {
     const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
     await requestExecApproval({
       handlers,
@@ -481,8 +519,7 @@ describe("exec approval handlers", () => {
         command: "echo stale",
         commandArgv: ["echo", "stale"],
         cwd: "/tmp/link/sub",
-        systemRunPlanV2: {
-          version: 2,
+        systemRunPlan: {
           argv: ["/usr/bin/echo", "ok"],
           cwd: "/real/cwd",
           rawCommand: "/usr/bin/echo ok",
@@ -499,8 +536,7 @@ describe("exec approval handlers", () => {
     expect(request["cwd"]).toBe("/real/cwd");
     expect(request["agentId"]).toBe("main");
     expect(request["sessionKey"]).toBe("agent:main:main");
-    expect(request["systemRunPlanV2"]).toEqual({
-      version: 2,
+    expect(request["systemRunPlan"]).toEqual({
       argv: ["/usr/bin/echo", "ok"],
       cwd: "/real/cwd",
       rawCommand: "/usr/bin/echo ok",

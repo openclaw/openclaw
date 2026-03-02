@@ -5,8 +5,10 @@ import { resetTelegramFetchStateForTests, resolveTelegramFetch } from "./fetch.j
 const setDefaultAutoSelectFamily = vi.hoisted(() => vi.fn());
 const setDefaultResultOrder = vi.hoisted(() => vi.fn());
 const setGlobalDispatcher = vi.hoisted(() => vi.fn());
-const AgentCtor = vi.hoisted(() =>
-  vi.fn(function MockAgent(this: { options: unknown }, options: unknown) {
+const getGlobalDispatcherState = vi.hoisted(() => ({ value: undefined as unknown }));
+const getGlobalDispatcher = vi.hoisted(() => vi.fn(() => getGlobalDispatcherState.value));
+const EnvHttpProxyAgentCtor = vi.hoisted(() =>
+  vi.fn(function MockEnvHttpProxyAgent(this: { options: unknown }, options: unknown) {
     this.options = options;
   }),
 );
@@ -28,7 +30,8 @@ vi.mock("node:dns", async () => {
 });
 
 vi.mock("undici", () => ({
-  Agent: AgentCtor,
+  EnvHttpProxyAgent: EnvHttpProxyAgentCtor,
+  getGlobalDispatcher,
   setGlobalDispatcher,
 }));
 
@@ -39,7 +42,9 @@ afterEach(() => {
   setDefaultAutoSelectFamily.mockReset();
   setDefaultResultOrder.mockReset();
   setGlobalDispatcher.mockReset();
-  AgentCtor.mockClear();
+  getGlobalDispatcher.mockClear();
+  getGlobalDispatcherState.value = undefined;
+  EnvHttpProxyAgentCtor.mockClear();
   vi.unstubAllEnvs();
   vi.clearAllMocks();
   if (originalFetch) {
@@ -147,17 +152,42 @@ describe("resolveTelegramFetch", () => {
     expect(setDefaultResultOrder).toHaveBeenCalledTimes(2);
   });
 
-  it("replaces global undici dispatcher with autoSelectFamily-enabled agent", async () => {
+  it("replaces global undici dispatcher with proxy-aware EnvHttpProxyAgent", async () => {
     globalThis.fetch = vi.fn(async () => ({})) as unknown as typeof fetch;
     resolveTelegramFetch(undefined, { network: { autoSelectFamily: true } });
 
     expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
-    expect(AgentCtor).toHaveBeenCalledWith({
+    expect(EnvHttpProxyAgentCtor).toHaveBeenCalledWith({
       connect: {
         autoSelectFamily: true,
         autoSelectFamilyAttemptTimeout: 300,
       },
     });
+  });
+
+  it("keeps an existing proxy-like global dispatcher", async () => {
+    getGlobalDispatcherState.value = {
+      constructor: { name: "ProxyAgent" },
+    };
+    globalThis.fetch = vi.fn(async () => ({})) as unknown as typeof fetch;
+
+    resolveTelegramFetch(undefined, { network: { autoSelectFamily: true } });
+
+    expect(setGlobalDispatcher).not.toHaveBeenCalled();
+    expect(EnvHttpProxyAgentCtor).not.toHaveBeenCalled();
+  });
+
+  it("updates proxy-like dispatcher when proxy env is configured", async () => {
+    vi.stubEnv("HTTPS_PROXY", "http://127.0.0.1:7890");
+    getGlobalDispatcherState.value = {
+      constructor: { name: "ProxyAgent" },
+    };
+    globalThis.fetch = vi.fn(async () => ({})) as unknown as typeof fetch;
+
+    resolveTelegramFetch(undefined, { network: { autoSelectFamily: true } });
+
+    expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
+    expect(EnvHttpProxyAgentCtor).toHaveBeenCalledTimes(1);
   });
 
   it("sets global dispatcher only once across repeated equal decisions", async () => {
@@ -174,17 +204,108 @@ describe("resolveTelegramFetch", () => {
     resolveTelegramFetch(undefined, { network: { autoSelectFamily: false } });
 
     expect(setGlobalDispatcher).toHaveBeenCalledTimes(2);
-    expect(AgentCtor).toHaveBeenNthCalledWith(1, {
+    expect(EnvHttpProxyAgentCtor).toHaveBeenNthCalledWith(1, {
       connect: {
         autoSelectFamily: true,
         autoSelectFamilyAttemptTimeout: 300,
       },
     });
-    expect(AgentCtor).toHaveBeenNthCalledWith(2, {
+    expect(EnvHttpProxyAgentCtor).toHaveBeenNthCalledWith(2, {
       connect: {
         autoSelectFamily: false,
         autoSelectFamilyAttemptTimeout: 300,
       },
     });
+  });
+
+  it("retries once with ipv4 fallback when fetch fails with network timeout/unreachable", async () => {
+    const timeoutErr = Object.assign(new Error("connect ETIMEDOUT 149.154.166.110:443"), {
+      code: "ETIMEDOUT",
+    });
+    const unreachableErr = Object.assign(
+      new Error("connect ENETUNREACH 2001:67c:4e8:f004::9:443"),
+      {
+        code: "ENETUNREACH",
+      },
+    );
+    const fetchError = Object.assign(new TypeError("fetch failed"), {
+      cause: Object.assign(new Error("aggregate"), {
+        errors: [timeoutErr, unreachableErr],
+      }),
+    });
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(fetchError)
+      .mockResolvedValueOnce({ ok: true } as Response);
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const resolved = resolveTelegramFetch();
+    if (!resolved) {
+      throw new Error("expected resolved fetch");
+    }
+
+    await resolved("https://api.telegram.org/file/botx/photos/file_1.jpg");
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(setGlobalDispatcher).toHaveBeenCalledTimes(2);
+    expect(EnvHttpProxyAgentCtor).toHaveBeenNthCalledWith(1, {
+      connect: {
+        autoSelectFamily: true,
+        autoSelectFamilyAttemptTimeout: 300,
+      },
+    });
+    expect(EnvHttpProxyAgentCtor).toHaveBeenNthCalledWith(2, {
+      connect: {
+        autoSelectFamily: false,
+        autoSelectFamilyAttemptTimeout: 300,
+      },
+    });
+  });
+
+  it("retries with ipv4 fallback once per request, not once per process", async () => {
+    const timeoutErr = Object.assign(new Error("connect ETIMEDOUT 149.154.166.110:443"), {
+      code: "ETIMEDOUT",
+    });
+    const fetchError = Object.assign(new TypeError("fetch failed"), {
+      cause: timeoutErr,
+    });
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(fetchError)
+      .mockResolvedValueOnce({ ok: true } as Response)
+      .mockRejectedValueOnce(fetchError)
+      .mockResolvedValueOnce({ ok: true } as Response);
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const resolved = resolveTelegramFetch();
+    if (!resolved) {
+      throw new Error("expected resolved fetch");
+    }
+
+    await resolved("https://api.telegram.org/file/botx/photos/file_1.jpg");
+    await resolved("https://api.telegram.org/file/botx/photos/file_2.jpg");
+
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+  });
+
+  it("does not retry when fetch fails without fallback network error codes", async () => {
+    const fetchError = Object.assign(new TypeError("fetch failed"), {
+      cause: Object.assign(new Error("connect ECONNRESET"), {
+        code: "ECONNRESET",
+      }),
+    });
+    const fetchMock = vi.fn().mockRejectedValue(fetchError);
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const resolved = resolveTelegramFetch();
+    if (!resolved) {
+      throw new Error("expected resolved fetch");
+    }
+
+    await expect(resolved("https://api.telegram.org/file/botx/photos/file_3.jpg")).rejects.toThrow(
+      "fetch failed",
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

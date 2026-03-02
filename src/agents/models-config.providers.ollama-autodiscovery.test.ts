@@ -44,7 +44,7 @@ describe("Ollama auto-discovery", () => {
         };
       }
       throw new Error(`Unexpected fetch: ${url}`);
-    }) as typeof fetch;
+    }) as unknown as typeof fetch;
 
     const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
     const providers = await resolveImplicitProviders({ agentDir });
@@ -64,7 +64,9 @@ describe("Ollama auto-discovery", () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     globalThis.fetch = vi
       .fn()
-      .mockRejectedValue(new Error("connect ECONNREFUSED 127.0.0.1:11434")) as typeof fetch;
+      .mockRejectedValue(
+        new Error("connect ECONNREFUSED 127.0.0.1:11434"),
+      ) as unknown as typeof fetch;
 
     const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
     const providers = await resolveImplicitProviders({ agentDir });
@@ -82,7 +84,9 @@ describe("Ollama auto-discovery", () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     globalThis.fetch = vi
       .fn()
-      .mockRejectedValue(new Error("connect ECONNREFUSED 127.0.0.1:11434")) as typeof fetch;
+      .mockRejectedValue(
+        new Error("connect ECONNREFUSED 127.0.0.1:11434"),
+      ) as unknown as typeof fetch;
 
     const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
     await resolveImplicitProviders({

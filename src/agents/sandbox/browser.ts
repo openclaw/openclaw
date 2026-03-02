@@ -24,7 +24,6 @@ import {
   readDockerPort,
 } from "./docker.js";
 import {
-  buildNoVncDirectUrl,
   buildNoVncObserverTokenUrl,
   consumeNoVncObserverToken,
   generateNoVncPassword,
@@ -390,8 +389,10 @@ export async function ensureSandboxBrowser(params: {
   const noVncUrl =
     mappedNoVnc && noVncEnabled
       ? (() => {
-          const directUrl = buildNoVncDirectUrl(mappedNoVnc, noVncPassword);
-          const token = issueNoVncObserverToken({ url: directUrl });
+          const token = issueNoVncObserverToken({
+            noVncPort: mappedNoVnc,
+            password: noVncPassword,
+          });
           return buildNoVncObserverTokenUrl(resolvedBridge.baseUrl, token);
         })()
       : undefined;
