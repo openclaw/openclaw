@@ -395,4 +395,21 @@ describe("pairing store", () => {
       expect(scoped).toEqual(["1002", "1001"]);
     });
   });
+
+  it("uses default-account allowFrom when account id is omitted", async () => {
+    await withTempStateDir(async (stateDir) => {
+      await writeAllowFromFixture({ stateDir, channel: "telegram", allowFrom: ["1001"] });
+      await writeAllowFromFixture({
+        stateDir,
+        channel: "telegram",
+        accountId: DEFAULT_ACCOUNT_ID,
+        allowFrom: ["1002"],
+      });
+
+      const asyncScoped = await readChannelAllowFromStore("telegram", process.env);
+      const syncScoped = readChannelAllowFromStoreSync("telegram", process.env);
+      expect(asyncScoped).toEqual(["1002", "1001"]);
+      expect(syncScoped).toEqual(["1002", "1001"]);
+    });
+  });
 });
