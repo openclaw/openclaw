@@ -67,6 +67,7 @@ export { telegramUserbotStatusAdapter } from "./adapters/status.js";
 export type { TelegramUserbotProbe } from "./adapters/status.js";
 export { telegramUserbotSecurityAdapter } from "./adapters/security.js";
 export { telegramUserbotOutboundAdapter } from "./adapters/outbound.js";
+export { telegramUserbotMessageActions } from "./adapters/message-actions.js";
 
 // Outbound helpers
 export { chunkMessage, sendText, sendMedia, TELEGRAM_TEXT_LIMIT } from "./outbound.js";

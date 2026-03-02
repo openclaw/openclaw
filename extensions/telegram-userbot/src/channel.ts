@@ -13,6 +13,7 @@ import {
   resolveTelegramUserbotAccount,
   type ResolvedTelegramUserbotAccount,
 } from "./adapters/config.js";
+import { telegramUserbotMessageActions } from "./adapters/message-actions.js";
 import { telegramUserbotOutboundAdapter } from "./adapters/outbound.js";
 import { telegramUserbotSecurityAdapter } from "./adapters/security.js";
 import { telegramUserbotSetupAdapter } from "./adapters/setup.js";
@@ -60,6 +61,7 @@ export const telegramUserbotPlugin: ChannelPlugin<
   status: telegramUserbotStatusAdapter,
   security: telegramUserbotSecurityAdapter,
   outbound: telegramUserbotOutboundAdapter,
+  actions: telegramUserbotMessageActions,
 
   // -------------------------------------------------------------------------
   // Gateway — manages the MTProto connection lifecycle
