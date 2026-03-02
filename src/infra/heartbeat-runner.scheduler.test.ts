@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as configModule from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { startHeartbeatRunner } from "./heartbeat-runner.js";
 import { requestHeartbeatNow, resetHeartbeatWakeStateForTests } from "./heartbeat-wake.js";
@@ -10,6 +11,7 @@ describe("startHeartbeatRunner", () => {
         agents: { defaults: { heartbeat: { every: "30m" } } },
       } as OpenClawConfig,
       runOnce,
+      reloadConfigOnRun: false,
     });
   }
 
@@ -100,10 +102,10 @@ describe("startHeartbeatRunner", () => {
     } as OpenClawConfig;
 
     // Start runner A
-    const runnerA = startHeartbeatRunner({ cfg, runOnce: runSpy1 });
+    const runnerA = startHeartbeatRunner({ cfg, runOnce: runSpy1, reloadConfigOnRun: false });
 
     // Start runner B (simulates lifecycle reload)
-    const runnerB = startHeartbeatRunner({ cfg, runOnce: runSpy2 });
+    const runnerB = startHeartbeatRunner({ cfg, runOnce: runSpy2, reloadConfigOnRun: false });
 
     // Stop runner A (stale cleanup) — should NOT kill runner B's handler
     runnerA.stop();
@@ -152,6 +154,7 @@ describe("startHeartbeatRunner", () => {
         agents: { defaults: { heartbeat: { every: "30m" } } },
       } as OpenClawConfig,
       runOnce: runSpy,
+      reloadConfigOnRun: false,
     });
 
     // First heartbeat returns requests-in-flight
@@ -181,6 +184,7 @@ describe("startHeartbeatRunner", () => {
         },
       } as OpenClawConfig,
       runOnce: runSpy,
+      reloadConfigOnRun: false,
     });
 
     requestHeartbeatNow({
@@ -197,6 +201,45 @@ describe("startHeartbeatRunner", () => {
         agentId: "ops",
         reason: "cron:job-123",
         sessionKey: "agent:ops:discord:channel:alerts",
+      }),
+    );
+
+    runner.stop();
+  });
+
+  it("reloads config before wake runs so heartbeat uses updated model/interval config", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(0));
+
+    const initialCfg = {
+      agents: {
+        defaults: { heartbeat: { every: "30m" } },
+      },
+    } as OpenClawConfig;
+    const reloadedCfg = {
+      agents: {
+        defaults: { heartbeat: { every: "30m" } },
+        list: [{ id: "main", heartbeat: { every: "5m" } }],
+      },
+    } as OpenClawConfig;
+    const loadSpy = vi.spyOn(configModule, "loadConfig").mockReturnValue(reloadedCfg);
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = startHeartbeatRunner({
+      cfg: initialCfg,
+      runOnce: runSpy,
+      reloadConfigOnRun: true,
+    });
+
+    requestHeartbeatNow({ reason: "manual", coalesceMs: 0 });
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(loadSpy).toHaveBeenCalled();
+    expect(runSpy).toHaveBeenCalledTimes(1);
+    expect(runSpy.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        cfg: reloadedCfg,
+        agentId: "main",
+        heartbeat: { every: "5m" },
       }),
     );
 

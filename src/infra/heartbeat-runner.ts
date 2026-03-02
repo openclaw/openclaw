@@ -988,6 +988,8 @@ export function startHeartbeatRunner(opts: {
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
   runOnce?: typeof runHeartbeatOnce;
+  /** Reload config from disk before each wake (default: true). */
+  reloadConfigOnRun?: boolean;
 }): HeartbeatRunner {
   const runtime = opts.runtime ?? defaultRuntime;
   const runOnce = opts.runOnce ?? runHeartbeatOnce;
@@ -1109,6 +1111,21 @@ export function startHeartbeatRunner(opts: {
         status: "skipped",
         reason: "disabled",
       } satisfies HeartbeatRunResult;
+    }
+
+    if (opts.reloadConfigOnRun !== false) {
+      // Keep heartbeat model/interval selection in sync with external `openclaw models set`
+      // and other config edits that may occur outside the running gateway process.
+      try {
+        updateConfig(loadConfig());
+      } catch {}
+      if (state.agents.size === 0) {
+        scheduleNext();
+        return {
+          status: "skipped",
+          reason: "disabled",
+        } satisfies HeartbeatRunResult;
+      }
     }
 
     const reason = params?.reason;
