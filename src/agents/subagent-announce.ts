@@ -1432,7 +1432,11 @@ export async function runSubagentAnnounceFlow(params: {
       ? `${findings.slice(0, 1_500)}
 …
 
-_Full output saved: \`${savedFilePath.replace(/.*\.openclaw\/workspace\//, "")}\`_`
+_Full output saved: \`${
+          savedFilePath.includes("/.openclaw/workspace/")
+            ? savedFilePath.replace(/.*\.openclaw\/workspace\//, "")
+            : savedFilePath
+        }\`_`
       : findings;
     const internalEvents: AgentInternalEvent[] = [
       {
