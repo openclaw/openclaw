@@ -577,6 +577,7 @@ export function createGatewayHttpServer(opts: {
         const proto = getHeader(req, "x-forwarded-proto") ?? (opts.tlsOptions ? "https" : "http");
         const origin = host ? `${proto}://${host}` : (opts.gatewayOrigin ?? "http://localhost");
         const nodeId = requestUrl.searchParams.get("nodeId") ?? undefined;
+        const vncPw = requestUrl.searchParams.get("vncpw") ?? undefined;
         // Generate a per-request CSP nonce for inline script/style.
         const cspNonce = randomBytes(16).toString("base64");
         res.statusCode = 200;
@@ -596,7 +597,7 @@ export function createGatewayHttpServer(opts: {
             "frame-ancestors 'self' https://app.hanzo.bot https://gw.hanzo.bot https://bot.hanzo.ai https://hanzo.app",
           ].join("; "),
         );
-        res.end(vncViewerHtml(origin, nodeId, token, cspNonce));
+        res.end(vncViewerHtml(origin, nodeId, token, cspNonce, vncPw));
         return;
       }
 

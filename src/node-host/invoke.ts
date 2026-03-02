@@ -121,7 +121,14 @@ export type SkillBinsProvider = {
 };
 
 function resolveExecSecurity(value?: string): ExecSecurity {
-  return value === "deny" || value === "allowlist" || value === "full" ? value : "allowlist";
+  if (value === "deny" || value === "allowlist" || value === "full") {
+    return value;
+  }
+  // Cloud nodes are behind IAM auth — default to full exec access for terminal
+  if (process.env.BOT_CLOUD_NODE === "true") {
+    return "full";
+  }
+  return "allowlist";
 }
 
 function isCmdExeInvocation(argv: string[]): boolean {

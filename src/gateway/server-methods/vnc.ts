@@ -309,6 +309,7 @@ export function vncViewerHtml(
   nodeId?: string,
   token?: string,
   nonce?: string,
+  _vncPassword?: string,
 ): string {
   const base = gatewayOrigin.replace(/^http/, "ws") + "/vnc";
   const params = new URLSearchParams();
@@ -343,12 +344,18 @@ export function vncViewerHtml(
   <script type="module"${nonceAttr}>
     import RFB from "https://esm.sh/@novnc/novnc@1.5.0/lib/rfb.js";
     const status = document.getElementById("status");
+    const autoPassword = new URLSearchParams(location.search).get("vncpw");
     const rfb = new RFB(document.getElementById("screen"), "${wsUrl}");
     rfb.scaleViewport = true;
     rfb.resizeSession = true;
     rfb.addEventListener("connect", () => { status.textContent = "Connected"; setTimeout(() => status.style.opacity = "0", 2000); });
     rfb.addEventListener("disconnect", (e) => { status.style.opacity = "1"; status.textContent = e.detail.clean ? "Disconnected" : "Connection lost"; });
-    rfb.addEventListener("credentialsrequired", () => { status.textContent = "VNC password required"; const pw = prompt("VNC password:"); if (pw) rfb.sendCredentials({ password: pw }); });
+    rfb.addEventListener("credentialsrequired", () => {
+      if (autoPassword) { rfb.sendCredentials({ password: autoPassword }); return; }
+      status.textContent = "VNC password required";
+      const pw = prompt("VNC password:");
+      if (pw) rfb.sendCredentials({ password: pw });
+    });
   </script>
 </body>
 </html>`;
