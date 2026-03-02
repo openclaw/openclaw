@@ -21,6 +21,13 @@ type ReplyDispatchDeliverer = (
   info: { kind: ReplyDispatchKind },
 ) => Promise<void>;
 
+type ReplyDispatchDeliveredHandler = (params: {
+  payload: ReplyPayload;
+  info: { kind: ReplyDispatchKind };
+  success: boolean;
+  error?: string;
+}) => void;
+
 const DEFAULT_HUMAN_DELAY_MIN_MS = 800;
 const DEFAULT_HUMAN_DELAY_MAX_MS = 2500;
 
@@ -51,6 +58,7 @@ export type ReplyDispatcherOptions = {
   onHeartbeatStrip?: () => void;
   onIdle?: () => void;
   onError?: ReplyDispatchErrorHandler;
+  onDelivered?: ReplyDispatchDeliveredHandler;
   // AIDEV-NOTE: onSkip lets channels detect silent/empty drops (e.g. Telegram empty-response fallback).
   onSkip?: ReplyDispatchSkipHandler;
   /** Human-like delay between block replies for natural rhythm. */
@@ -156,8 +164,19 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
         // Safe: deliver is called inside an async .then() callback, so even a synchronous
         // throw becomes a rejection that flows through .catch()/.finally(), ensuring cleanup.
         await options.deliver(normalized, { kind });
+        options.onDelivered?.({
+          payload: normalized,
+          info: { kind },
+          success: true,
+        });
       })
       .catch((err) => {
+        options.onDelivered?.({
+          payload: normalized,
+          info: { kind },
+          success: false,
+          error: err instanceof Error ? err.message : String(err),
+        });
         options.onError?.(err, { kind });
       })
       .finally(() => {

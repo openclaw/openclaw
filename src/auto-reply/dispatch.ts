@@ -1,4 +1,7 @@
+import { normalizeChannelId } from "../channels/plugins/index.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
+import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { DispatchFromConfigResult } from "./reply/dispatch-from-config.js";
 import { dispatchReplyFromConfig } from "./reply/dispatch-from-config.js";
 import { finalizeInboundContext } from "./reply/inbound-context.js";
@@ -13,6 +16,109 @@ import type { FinalizedMsgContext, MsgContext } from "./templating.js";
 import type { GetReplyOptions } from "./types.js";
 
 export type DispatchInboundResult = DispatchFromConfigResult;
+
+type DispatcherDeliveredParams = Parameters<NonNullable<ReplyDispatcherOptions["onDelivered"]>>[0];
+
+function resolveDispatcherMessageSentContext(ctx: FinalizedMsgContext): {
+  channelId: string;
+  to: string;
+  accountId?: string;
+  sessionKey?: string;
+} | null {
+  const rawChannel = ctx.OriginatingChannel ?? ctx.Surface ?? ctx.Provider;
+  const channelId =
+    typeof rawChannel === "string" && rawChannel.trim()
+      ? (normalizeChannelId(rawChannel) ?? rawChannel.trim())
+      : undefined;
+  const toRaw =
+    (typeof ctx.OriginatingTo === "string" && ctx.OriginatingTo.trim()) ||
+    (typeof ctx.To === "string" && ctx.To.trim()) ||
+    undefined;
+  if (!channelId || !toRaw) {
+    return null;
+  }
+  const accountId =
+    typeof ctx.AccountId === "string" && ctx.AccountId.trim() ? ctx.AccountId.trim() : undefined;
+  const sessionKey =
+    (typeof ctx.SessionKey === "string" && ctx.SessionKey.trim()) ||
+    (typeof ctx.CommandTargetSessionKey === "string" && ctx.CommandTargetSessionKey.trim()) ||
+    undefined;
+  return {
+    channelId,
+    to: toRaw,
+    accountId,
+    sessionKey,
+  };
+}
+
+function emitDispatcherMessageSentHook(params: {
+  context: {
+    channelId: string;
+    to: string;
+    accountId?: string;
+    sessionKey?: string;
+  };
+  delivered: DispatcherDeliveredParams;
+}) {
+  if (params.delivered.payload.isReasoning) {
+    return;
+  }
+  const content =
+    typeof params.delivered.payload.text === "string" ? params.delivered.payload.text : "";
+  const hookRunner = getGlobalHookRunner();
+  if (hookRunner?.hasHooks("message_sent")) {
+    void hookRunner
+      .runMessageSent(
+        {
+          to: params.context.to,
+          content,
+          success: params.delivered.success,
+          ...(params.delivered.error ? { error: params.delivered.error } : {}),
+        },
+        {
+          channelId: params.context.channelId,
+          accountId: params.context.accountId,
+          conversationId: params.context.to,
+        },
+      )
+      .catch(() => {});
+  }
+
+  if (!params.context.sessionKey) {
+    return;
+  }
+  void triggerInternalHook(
+    createInternalHookEvent("message", "sent", params.context.sessionKey, {
+      to: params.context.to,
+      content,
+      success: params.delivered.success,
+      ...(params.delivered.error ? { error: params.delivered.error } : {}),
+      channelId: params.context.channelId,
+      accountId: params.context.accountId,
+      conversationId: params.context.to,
+    }),
+  ).catch(() => {});
+}
+
+function withDispatcherMessageSentHook<
+  T extends { onDelivered?: (params: DispatcherDeliveredParams) => void },
+>(options: T, ctx: FinalizedMsgContext): T {
+  const messageSentContext = resolveDispatcherMessageSentContext(ctx);
+  if (!messageSentContext) {
+    return options;
+  }
+  const existingOnDelivered = options.onDelivered;
+  return {
+    ...options,
+    onDelivered: (params) => {
+      existingOnDelivered?.(params);
+      emitDispatcherMessageSentHook({
+        context: messageSentContext,
+        delivered: params,
+      });
+    },
+  };
+}
 
 export async function withReplyDispatcher<T>(params: {
   dispatcher: ReplyDispatcher;
@@ -60,12 +166,13 @@ export async function dispatchInboundMessageWithBufferedDispatcher(params: {
   replyOptions?: Omit<GetReplyOptions, "onToolResult" | "onBlockReply">;
   replyResolver?: typeof import("./reply.js").getReplyFromConfig;
 }): Promise<DispatchInboundResult> {
-  const { dispatcher, replyOptions, markDispatchIdle } = createReplyDispatcherWithTyping(
-    params.dispatcherOptions,
-  );
+  const finalized = finalizeInboundContext(params.ctx);
+  const dispatcherOptions = withDispatcherMessageSentHook(params.dispatcherOptions, finalized);
+  const { dispatcher, replyOptions, markDispatchIdle } =
+    createReplyDispatcherWithTyping(dispatcherOptions);
   try {
     return await dispatchInboundMessage({
-      ctx: params.ctx,
+      ctx: finalized,
       cfg: params.cfg,
       dispatcher,
       replyResolver: params.replyResolver,
@@ -86,9 +193,12 @@ export async function dispatchInboundMessageWithDispatcher(params: {
   replyOptions?: Omit<GetReplyOptions, "onToolResult" | "onBlockReply">;
   replyResolver?: typeof import("./reply.js").getReplyFromConfig;
 }): Promise<DispatchInboundResult> {
-  const dispatcher = createReplyDispatcher(params.dispatcherOptions);
+  const finalized = finalizeInboundContext(params.ctx);
+  const dispatcher = createReplyDispatcher(
+    withDispatcherMessageSentHook(params.dispatcherOptions, finalized),
+  );
   return await dispatchInboundMessage({
-    ctx: params.ctx,
+    ctx: finalized,
     cfg: params.cfg,
     dispatcher,
     replyResolver: params.replyResolver,
