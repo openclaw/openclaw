@@ -55,6 +55,32 @@ function resolveWebhookBodyReadLimits(params: {
   return { maxBytes, timeoutMs };
 }
 
+function respondWebhookBodyReadError(params: {
+  res: ServerResponse;
+  code: string;
+  invalidMessage?: string;
+}): { ok: false } {
+  const { res, code, invalidMessage } = params;
+  if (code === "PAYLOAD_TOO_LARGE") {
+    res.statusCode = 413;
+    res.end(requestBodyErrorToText("PAYLOAD_TOO_LARGE"));
+    return { ok: false };
+  }
+  if (code === "REQUEST_BODY_TIMEOUT") {
+    res.statusCode = 408;
+    res.end(requestBodyErrorToText("REQUEST_BODY_TIMEOUT"));
+    return { ok: false };
+  }
+  if (code === "CONNECTION_CLOSED") {
+    res.statusCode = 400;
+    res.end(requestBodyErrorToText("CONNECTION_CLOSED"));
+    return { ok: false };
+  }
+  res.statusCode = 400;
+  res.end(invalidMessage ?? "Bad Request");
+  return { ok: false };
+}
+
 export function createWebhookInFlightLimiter(options?: {
   maxInFlightPerKey?: number;
   maxTrackedKeys?: number;
@@ -219,20 +245,18 @@ export async function readWebhookBodyOrReject(params: {
     return { ok: true, value: raw };
   } catch (error) {
     if (isRequestBodyLimitError(error)) {
-      params.res.statusCode =
-        error.code === "PAYLOAD_TOO_LARGE"
-          ? 413
-          : error.code === "REQUEST_BODY_TIMEOUT"
-            ? 408
-            : 400;
-      params.res.end(requestBodyErrorToText(error.code));
-      return { ok: false };
+      return respondWebhookBodyReadError({
+        res: params.res,
+        code: error.code,
+        invalidMessage: params.invalidBodyMessage,
+      });
     }
-    params.res.statusCode = 400;
-    params.res.end(
-      params.invalidBodyMessage ?? (error instanceof Error ? error.message : String(error)),
-    );
-    return { ok: false };
+    return respondWebhookBodyReadError({
+      res: params.res,
+      code: "INVALID_BODY",
+      invalidMessage:
+        params.invalidBodyMessage ?? (error instanceof Error ? error.message : String(error)),
+    });
   }
 }
 
@@ -258,15 +282,9 @@ export async function readJsonWebhookBodyOrReject(params: {
   if (body.ok) {
     return { ok: true, value: body.value };
   }
-
-  params.res.statusCode =
-    body.code === "PAYLOAD_TOO_LARGE" ? 413 : body.code === "REQUEST_BODY_TIMEOUT" ? 408 : 400;
-  const message =
-    body.code === "PAYLOAD_TOO_LARGE"
-      ? requestBodyErrorToText("PAYLOAD_TOO_LARGE")
-      : body.code === "REQUEST_BODY_TIMEOUT"
-        ? requestBodyErrorToText("REQUEST_BODY_TIMEOUT")
-        : (params.invalidJsonMessage ?? "Bad Request");
-  params.res.end(message);
-  return { ok: false };
+  return respondWebhookBodyReadError({
+    res: params.res,
+    code: body.code,
+    invalidMessage: params.invalidJsonMessage,
+  });
 }

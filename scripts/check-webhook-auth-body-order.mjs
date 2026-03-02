@@ -9,6 +9,7 @@ const sourceRoots = ["extensions"];
 const enforcedFiles = new Set([
   "extensions/bluebubbles/src/monitor.ts",
   "extensions/googlechat/src/monitor.ts",
+  "extensions/zalo/src/monitor.webhook.ts",
 ]);
 const blockedCallees = new Set(["readJsonBodyWithLimit", "readRequestBodyWithLimit"]);
 
