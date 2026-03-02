@@ -342,6 +342,12 @@ function buildServerArgs(opts: AcpClientOptions): string[] {
   return args;
 }
 
+export function resolveAcpClientSpawnEnv(
+  baseEnv: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  return { ...baseEnv, OPENCLAW_SHELL: "acp-client" };
+}
+
 function resolveSelfEntryPath(): string | null {
   // Prefer a path relative to the built module location (dist/acp/client.js -> dist/entry.js).
   try {
@@ -413,6 +419,7 @@ export async function createAcpClient(opts: AcpClientOptions = {}): Promise<AcpC
   const agent = spawn(serverCommand, effectiveArgs, {
     stdio: ["pipe", "pipe", "inherit"],
     cwd,
+    env: resolveAcpClientSpawnEnv(),
   });
 
   if (!agent.stdin || !agent.stdout) {
