@@ -47,7 +47,21 @@ export class CronService {
   }
 
   getJob(id: string): CronJob | undefined {
-    return this.state.store?.jobs.find((job) => job.id === id);
+    const jobs = this.state.store?.jobs ?? [];
+    // Try exact match first
+    const exact = jobs.find((job) => job.id === id);
+    if (exact) {
+      return exact;
+    }
+    // Try prefix match (e.g., "0ed3cd30" matches "0ed3cd30-00a1-...")
+    const matches = jobs.filter((job) => job.id.startsWith(id));
+    if (matches.length === 1) {
+      return matches[0];
+    }
+    if (matches.length > 1) {
+      throw new Error(`Ambiguous cron job ID "${id}": ${matches.map((j) => j.id).join(", ")}`);
+    }
+    return undefined;
   }
 
   wake(opts: { mode: "now" | "next-heartbeat"; text: string }) {
