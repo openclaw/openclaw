@@ -837,6 +837,7 @@ description: test skill
       includeChannelSecurity: false,
       stateDir,
       configPath,
+      execDockerRawFn: execDockerRawUnavailable,
     });
 
     expect(res.findings).toEqual(
@@ -2381,6 +2382,7 @@ description: test skill
         ? { ...process.env, USERNAME: "Tester", USERDOMAIN: "DESKTOP-TEST" }
         : undefined,
       execIcacls,
+      execDockerRawFn: execDockerRawUnavailable,
     });
 
     const expectedCheckId = isWindows
@@ -2413,6 +2415,7 @@ description: test skill
         includeChannelSecurity: false,
         stateDir,
         configPath: path.join(stateDir, "openclaw.json"),
+        execDockerRawFn: execDockerRawUnavailable,
       });
 
       expect(res.findings).toEqual(
@@ -2472,6 +2475,7 @@ description: test skill
       includeChannelSecurity: false,
       stateDir: sharedInstallMetadataStateDir,
       configPath: path.join(sharedInstallMetadataStateDir, "openclaw.json"),
+      execDockerRawFn: execDockerRawUnavailable,
     });
 
     expect(hasFinding(res, "plugins.installs_unpinned_npm_specs", "warn")).toBe(true);
@@ -2510,6 +2514,7 @@ description: test skill
       includeChannelSecurity: false,
       stateDir: sharedInstallMetadataStateDir,
       configPath: path.join(sharedInstallMetadataStateDir, "openclaw.json"),
+      execDockerRawFn: execDockerRawUnavailable,
     });
 
     expect(hasFinding(res, "plugins.installs_unpinned_npm_specs")).toBe(false);
@@ -2567,6 +2572,7 @@ description: test skill
       includeChannelSecurity: false,
       stateDir,
       configPath: path.join(stateDir, "openclaw.json"),
+      execDockerRawFn: execDockerRawUnavailable,
     });
 
     expect(hasFinding(res, "plugins.installs_version_drift", "warn")).toBe(true);
@@ -2585,6 +2591,7 @@ description: test skill
       includeChannelSecurity: false,
       stateDir,
       configPath: path.join(stateDir, "openclaw.json"),
+      execDockerRawFn: execDockerRawUnavailable,
     });
 
     expect(res.findings).toEqual(
@@ -2610,6 +2617,7 @@ description: test skill
       includeChannelSecurity: false,
       stateDir,
       configPath: path.join(stateDir, "openclaw.json"),
+      execDockerRawFn: execDockerRawUnavailable,
     });
 
     expect(
@@ -2634,6 +2642,7 @@ description: test skill
         includeChannelSecurity: false,
         stateDir,
         configPath: path.join(stateDir, "openclaw.json"),
+        execDockerRawFn: execDockerRawUnavailable,
       });
 
       expect(res.findings).toEqual(
