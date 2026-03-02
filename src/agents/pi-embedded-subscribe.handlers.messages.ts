@@ -56,6 +56,23 @@ export function resolveSilentReplyFallbackText(params: {
   return fallback;
 }
 
+export function resolveThinkingOnlyFallbackText(params: {
+  text: string;
+  hasMedia: boolean;
+  extractedThinking: string;
+  includeReasoning: boolean;
+  streamReasoning: boolean;
+}): string {
+  if (params.text || params.hasMedia) {
+    return params.text;
+  }
+  if (params.includeReasoning || params.streamReasoning) {
+    return params.text;
+  }
+  const thinking = params.extractedThinking.trim();
+  return thinking || params.text;
+}
+
 export function handleMessageStart(
   ctx: EmbeddedPiSubscribeContext,
   evt: AgentEvent & { message: AgentMessage },
@@ -277,10 +294,10 @@ export function handleMessageEnd(
     text: ctx.stripBlockTags(rawText, { thinking: false, final: false }),
     messagingToolSentTexts: ctx.state.messagingToolSentTexts,
   });
+  const extractedThinking =
+    extractAssistantThinking(assistantMessage) || extractThinkingFromTaggedText(rawText);
   const rawThinking =
-    ctx.state.includeReasoning || ctx.state.streamReasoning
-      ? extractAssistantThinking(assistantMessage) || extractThinkingFromTaggedText(rawText)
-      : "";
+    ctx.state.includeReasoning || ctx.state.streamReasoning ? extractedThinking : "";
   const formattedReasoning = rawThinking ? formatReasoningMessage(rawThinking) : "";
   const trimmedText = text.trim();
   const parsedText = trimmedText ? parseReplyDirectives(stripTrailingDirective(trimmedText)) : null;
@@ -299,6 +316,14 @@ export function handleMessageEnd(
       hasMedia = Boolean(mediaUrls && mediaUrls.length > 0);
     }
   }
+
+  cleanedText = resolveThinkingOnlyFallbackText({
+    text: cleanedText,
+    hasMedia,
+    extractedThinking,
+    includeReasoning: ctx.state.includeReasoning,
+    streamReasoning: ctx.state.streamReasoning,
+  });
 
   if (!ctx.state.emittedAssistantUpdate && (cleanedText || hasMedia)) {
     emitAgentEvent({

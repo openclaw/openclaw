@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { resolveSilentReplyFallbackText } from "./pi-embedded-subscribe.handlers.messages.js";
+import {
+  resolveSilentReplyFallbackText,
+  resolveThinkingOnlyFallbackText,
+} from "./pi-embedded-subscribe.handlers.messages.js";
 
 describe("resolveSilentReplyFallbackText", () => {
   it("replaces NO_REPLY with latest messaging tool text when available", () => {
@@ -27,5 +30,43 @@ describe("resolveSilentReplyFallbackText", () => {
         messagingToolSentTexts: [],
       }),
     ).toBe("NO_REPLY");
+  });
+});
+
+describe("resolveThinkingOnlyFallbackText", () => {
+  it("falls back to extracted thinking when assistant text is empty", () => {
+    expect(
+      resolveThinkingOnlyFallbackText({
+        text: "",
+        hasMedia: false,
+        extractedThinking: "final answer text",
+        includeReasoning: false,
+        streamReasoning: false,
+      }),
+    ).toBe("final answer text");
+  });
+
+  it("does not replace existing assistant text", () => {
+    expect(
+      resolveThinkingOnlyFallbackText({
+        text: "assistant reply",
+        hasMedia: false,
+        extractedThinking: "thinking text",
+        includeReasoning: false,
+        streamReasoning: false,
+      }),
+    ).toBe("assistant reply");
+  });
+
+  it("does not fallback when reasoning output is explicitly enabled", () => {
+    expect(
+      resolveThinkingOnlyFallbackText({
+        text: "",
+        hasMedia: false,
+        extractedThinking: "thinking text",
+        includeReasoning: true,
+        streamReasoning: false,
+      }),
+    ).toBe("");
   });
 });
