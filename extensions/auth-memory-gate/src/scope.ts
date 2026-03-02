@@ -171,3 +171,44 @@ export function formatGatedMessage(config: ScopeConfig): string {
 
   return lines.join("\n");
 }
+
+// ---------------------------------------------------------------------------
+// Hard gate — blocks agent conversation until user is identified
+// ---------------------------------------------------------------------------
+
+/**
+ * System prompt injected via prependContext when hard gate is active
+ * and user is unregistered. Forces the agent to only discuss verification.
+ */
+export function formatHardGateSystemPrompt(channel: string, peerId: string): string {
+  return [
+    "[IDENTITY_GATE]",
+    "status: LOCKED",
+    `channel: ${channel}`,
+    `channel_peer_id: ${peerId}`,
+    "[/IDENTITY_GATE]",
+    "",
+    "IMPORTANT: This user has NOT been identified. You MUST NOT proceed with any request",
+    "until they verify their identity. Your ONLY allowed actions are:",
+    "",
+    "1. Greet the user warmly",
+    "2. Explain they need to verify their identity to use this service",
+    "3. Tell them to type: /verify <token>  (where <token> is their authorization token from the app)",
+    "4. If they don't have a token, they can register with: /register <first_name> <last_name>",
+    "5. Answer questions ONLY about the verification process",
+    "",
+    "Do NOT answer any other questions, provide information, or engage in conversation",
+    "beyond identity verification guidance. Politely redirect all other requests to verification.",
+  ].join("\n");
+}
+
+/**
+ * Short CTA appended to outgoing messages as a safety net
+ * when the message_sending hook detects an unregistered user.
+ */
+export function formatHardGateReplyAppend(): string {
+  return (
+    "\n\n---\nTo get started, please verify your identity with " +
+    "`/verify <token>` or register with `/register <first_name> <last_name>`."
+  );
+}

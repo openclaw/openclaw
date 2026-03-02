@@ -103,6 +103,7 @@ function formatUnknownUserContext(channel: string, peerId: string): string {
     `channel_peer_id: ${peerId}`,
     "verified: false",
     "status: unregistered",
+    "gate_eligible: true",
     "[/USER_IDENTITY]",
     "",
     "This user is not registered. You may ask for their name.",

@@ -201,3 +201,109 @@ describe("auth-memory-gate before_agent_start hook", () => {
     );
   });
 });
+
+describe("auth-memory-gate hardGate registration", () => {
+  const originalEnv = process.env.DATABASE_URL;
+
+  beforeEach(() => {
+    delete process.env.DATABASE_URL;
+  });
+
+  afterEach(() => {
+    if (originalEnv !== undefined) {
+      process.env.DATABASE_URL = originalEnv;
+    } else {
+      delete process.env.DATABASE_URL;
+    }
+  });
+
+  test("registers 3 hooks when hardGate is true (before_agent_start + message_sending + gateway_stop)", async () => {
+    const { default: plugin } = await import("./index.js");
+    const api = createMockApi({
+      pluginConfig: { databaseUrl: "postgresql://localhost:5432/test", hardGate: true },
+    });
+
+    plugin.register(api);
+
+    expect(api.on).toHaveBeenCalledTimes(3);
+    const hookNames = api._hooks.map((h) => h.name);
+    expect(hookNames).toContain("before_agent_start");
+    expect(hookNames).toContain("message_sending");
+    expect(hookNames).toContain("gateway_stop");
+  });
+
+  test("message_sending hook registered at priority 30", async () => {
+    const { default: plugin } = await import("./index.js");
+    const api = createMockApi({
+      pluginConfig: { databaseUrl: "postgresql://localhost:5432/test", hardGate: true },
+    });
+
+    plugin.register(api);
+
+    const hook = api._hooks.find((h) => h.name === "message_sending");
+    expect(hook).toBeDefined();
+    expect(hook!.opts).toEqual({ priority: 30 });
+  });
+
+  test("does not register message_sending hook when hardGate is false", async () => {
+    const { default: plugin } = await import("./index.js");
+    const api = createMockApi({
+      pluginConfig: { databaseUrl: "postgresql://localhost:5432/test", hardGate: false },
+    });
+
+    plugin.register(api);
+
+    expect(api.on).toHaveBeenCalledTimes(2);
+    const hookNames = api._hooks.map((h) => h.name);
+    expect(hookNames).not.toContain("message_sending");
+  });
+
+  test("before_agent_start returns IDENTITY_GATE prompt on DB init failure when hardGate is true", async () => {
+    const { default: plugin } = await import("./index.js");
+    const api = createMockApi({
+      pluginConfig: {
+        databaseUrl: "postgresql://invalid:invalid@127.0.0.1:1/nope",
+        hardGate: true,
+      },
+    });
+
+    plugin.register(api);
+
+    const hook = api._hooks.find((h) => h.name === "before_agent_start");
+    // DB unreachable → error → returns {}
+    const result = await hook!.handler(
+      { prompt: "hello" },
+      { sessionKey: "agent:main:telegram:user123" },
+    );
+    expect(result).toEqual({});
+    expect(api.logger.error).toHaveBeenCalled();
+  });
+
+  test("message_sending hook returns empty for non-gated peer", async () => {
+    const { default: plugin } = await import("./index.js");
+    const api = createMockApi({
+      pluginConfig: { databaseUrl: "postgresql://localhost:5432/test", hardGate: true },
+    });
+
+    plugin.register(api);
+
+    const hook = api._hooks.find((h) => h.name === "message_sending");
+    // No peers in gated set — should return empty
+    const result = await hook!.handler(
+      { to: "user123", content: "Hello there" },
+      { channelId: "telegram" },
+    );
+    expect(result).toEqual({});
+  });
+
+  test("logs hardGate config on startup", async () => {
+    const { default: plugin } = await import("./index.js");
+    const api = createMockApi({
+      pluginConfig: { databaseUrl: "postgresql://localhost:5432/test", hardGate: true },
+    });
+
+    plugin.register(api);
+
+    expect(api.logger.info).toHaveBeenCalledWith(expect.stringContaining("hardGate=true"));
+  });
+});

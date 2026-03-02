@@ -6,6 +6,8 @@ import {
   findUserByChannelPeer,
   resolveScope,
   formatScopeBlock,
+  formatHardGateSystemPrompt,
+  formatHardGateReplyAppend,
   type ScopeConfig,
 } from "./scope.js";
 
@@ -18,7 +20,8 @@ const authMemoryGatePlugin = {
   name: "Memory Scope Gate",
   description:
     "Identity-scoped memory retrieval gate. Reads user identity from persist-user-identity's " +
-    "database and injects a [MEMORY_SCOPE] block for downstream memory plugins.",
+    "database and injects a [MEMORY_SCOPE] block for downstream memory plugins. " +
+    "Optionally enforces a hard gate that locks the agent to verification-only mode.",
 
   register(api: OpenClawPluginApi) {
     const databaseUrl =
@@ -32,8 +35,11 @@ const authMemoryGatePlugin = {
       requireVerified: (api.pluginConfig?.requireVerified as boolean | undefined) ?? false,
       gateMessage: (api.pluginConfig?.gateMessage as string | undefined) ?? undefined,
     };
+    const hardGate = (api.pluginConfig?.hardGate as boolean | undefined) ?? false;
 
-    api.logger.info("auth-memory-gate: connecting to PostgreSQL");
+    api.logger.info(
+      `auth-memory-gate: connecting to PostgreSQL (hardGate=${hardGate}, requireVerified=${scopeConfig.requireVerified})`,
+    );
     const sql = postgres(databaseUrl, { max: 10 });
 
     // Lazy init: verify DB connectivity on first hook call, cache errors
@@ -58,6 +64,10 @@ const authMemoryGatePlugin = {
       }
     }
 
+    // Track gated peers in memory for the message_sending safety net.
+    // Keyed by "channel:peerId" — rebuilt on each before_agent_start call.
+    const gatedPeers = new Set<string>();
+
     // -------------------------------------------------------------------
     // Hook: before_agent_start — resolve identity and inject scope
     // Priority 40 — runs after identity (60) and persistence (50),
@@ -77,13 +87,31 @@ const authMemoryGatePlugin = {
             return {};
           }
 
+          const gateKey = `${channel}:${peerId}`;
           const identity = await findUserByChannelPeer(sql, channel, peerId);
+
           if (!identity) {
-            // User not registered — persist-user-identity handles this case
+            // User not registered
+            if (hardGate) {
+              gatedPeers.add(gateKey);
+              api.logger.info(`auth-memory-gate: hard gate active for ${gateKey}`);
+              return { prependContext: formatHardGateSystemPrompt(channel, peerId) };
+            }
             return {};
           }
 
+          // User exists — clear gate
+          gatedPeers.delete(gateKey);
+
           const scope = resolveScope(identity, channel, peerId);
+
+          // Gate unverified users when requireVerified + hardGate are both on
+          if (scopeConfig.requireVerified && !scope.verified && hardGate) {
+            gatedPeers.add(gateKey);
+            api.logger.info(`auth-memory-gate: hard gate (unverified) for ${gateKey}`);
+            return { prependContext: formatHardGateSystemPrompt(channel, peerId) };
+          }
+
           const prependContext = formatScopeBlock(scope, scopeConfig);
 
           api.logger.info(
@@ -99,6 +127,34 @@ const authMemoryGatePlugin = {
       },
       { priority: 40 },
     );
+
+    // -------------------------------------------------------------------
+    // Hook: message_sending — safety net for hard gate
+    // Priority 30 — appends a verification CTA to outgoing messages
+    // when the recipient peer is in the gated set.
+    // -------------------------------------------------------------------
+
+    if (hardGate) {
+      api.on(
+        "message_sending",
+        async (event, ctx) => {
+          try {
+            const channel = ctx?.channelId ?? "unknown";
+            const to = event.to ?? "";
+            const peerGateKey = `${channel}:${to}`;
+
+            if (gatedPeers.has(peerGateKey)) {
+              return { content: (event.content ?? "") + formatHardGateReplyAppend() };
+            }
+            return {};
+          } catch (err) {
+            api.logger.error(`auth-memory-gate: message_sending error: ${err}`);
+            return {};
+          }
+        },
+        { priority: 30 },
+      );
+    }
 
     // -------------------------------------------------------------------
     // Shutdown: close DB pool

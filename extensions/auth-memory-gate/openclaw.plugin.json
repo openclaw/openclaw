@@ -6,6 +6,10 @@
       "sensitive": true,
       "placeholder": "postgresql://user:pass@host:5432/dbname",
       "help": "PostgreSQL connection string (or use ${DATABASE_URL}). Must point to the same database as persist-user-identity."
+    },
+    "hardGate": {
+      "label": "Hard Identity Gate",
+      "help": "Lock agent to verification-only mode for unidentified users. Requires persist-user-identity plugin."
     }
   },
   "configSchema": {
@@ -24,6 +28,11 @@
       "gateMessage": {
         "type": "string",
         "description": "Custom message shown to unverified users when requireVerified is true."
+      },
+      "hardGate": {
+        "type": "boolean",
+        "description": "When true, the agent is locked to identity verification until the user runs /verify or /register. Combines system prompt override with message_sending safety net.",
+        "default": false
       }
     },
     "required": []

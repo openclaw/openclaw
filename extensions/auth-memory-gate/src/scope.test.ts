@@ -5,6 +5,8 @@ import {
   resolveScope,
   formatScopeBlock,
   formatGatedMessage,
+  formatHardGateSystemPrompt,
+  formatHardGateReplyAppend,
 } from "./scope.js";
 
 describe("deriveChannel", () => {
@@ -160,5 +162,42 @@ describe("formatGatedMessage", () => {
   test("trims whitespace from custom message", () => {
     const result = formatGatedMessage({ gateMessage: "  Custom message  " });
     expect(result).toContain("Custom message");
+  });
+});
+
+describe("formatHardGateSystemPrompt", () => {
+  test("includes IDENTITY_GATE block with channel and peerId", () => {
+    const result = formatHardGateSystemPrompt("telegram", "tg-user-123");
+    expect(result).toContain("[IDENTITY_GATE]");
+    expect(result).toContain("status: LOCKED");
+    expect(result).toContain("channel: telegram");
+    expect(result).toContain("channel_peer_id: tg-user-123");
+    expect(result).toContain("[/IDENTITY_GATE]");
+  });
+
+  test("instructs agent to only discuss verification", () => {
+    const result = formatHardGateSystemPrompt("whatsapp", "+1234567890");
+    expect(result).toContain("MUST NOT proceed");
+    expect(result).toContain("/verify <token>");
+    expect(result).toContain("/register <first_name> <last_name>");
+  });
+
+  test("forbids answering unrelated questions", () => {
+    const result = formatHardGateSystemPrompt("slack", "U12345");
+    expect(result).toContain("Do NOT answer any other questions");
+    expect(result).toContain("Politely redirect");
+  });
+});
+
+describe("formatHardGateReplyAppend", () => {
+  test("includes verification CTA with both commands", () => {
+    const result = formatHardGateReplyAppend();
+    expect(result).toContain("/verify <token>");
+    expect(result).toContain("/register <first_name> <last_name>");
+  });
+
+  test("starts with separator", () => {
+    const result = formatHardGateReplyAppend();
+    expect(result).toContain("---");
   });
 });
