@@ -217,6 +217,9 @@ printf 'BBBBB22222\\t0\\tBeta Team\\r\\n'`,
   });
 
   it("prints actionable guidance when Xcode account exists but no Team ID is resolvable", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
     const result = runScript(sharedHomeDir);
     expect(result.ok).toBe(false);
     expect(
