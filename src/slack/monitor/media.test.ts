@@ -739,9 +739,10 @@ describe("resolveSlackThreadHistory", () => {
       limit: 10,
     });
 
-    expect(result).toHaveLength(2);
-    expect(result[0]?.text).toBe("[attached: screenshot.png]");
-    expect(result[1]?.text).toBe("hello");
+    // Thread starter (ts === threadTs "1.000") is now excluded — it is
+    // provided separately via ThreadStarterBody to avoid duplication.
+    expect(result).toHaveLength(1);
+    expect(result[0]?.text).toBe("hello");
   });
 
   it("returns empty when limit is zero without calling Slack API", async () => {

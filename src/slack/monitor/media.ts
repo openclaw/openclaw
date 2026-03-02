@@ -493,6 +493,11 @@ export async function resolveSlackThreadHistory(params: {
         if (params.currentMessageTs && msg.ts === params.currentMessageTs) {
           continue;
         }
+        // Skip the thread starter — it is provided separately via ThreadStarterBody
+        // to avoid duplicating it in the context window.
+        if (msg.ts === params.threadTs) {
+          continue;
+        }
         retained.push(msg);
         if (retained.length > maxMessages) {
           retained.shift();
