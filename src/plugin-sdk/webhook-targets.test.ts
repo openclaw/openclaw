@@ -1,8 +1,11 @@
 import { EventEmitter } from "node:events";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createEmptyPluginRegistry } from "../plugins/registry.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 import {
   registerWebhookTarget,
+  registerWebhookTargetWithPluginRoute,
   rejectNonPostWebhookRequest,
   resolveSingleWebhookTarget,
   resolveSingleWebhookTargetAsync,
@@ -16,6 +19,10 @@ function createRequest(method: string, url: string): IncomingMessage {
   req.headers = {};
   return req;
 }
+
+afterEach(() => {
+  setActivePluginRegistry(createEmptyPluginRegistry());
+});
 
 describe("registerWebhookTarget", () => {
   it("normalizes the path and unregisters cleanly", () => {
@@ -83,6 +90,49 @@ describe("registerWebhookTarget", () => {
       ),
     ).toThrow("boom");
     expect(targets.has("/hook")).toBe(false);
+  });
+});
+
+describe("registerWebhookTargetWithPluginRoute", () => {
+  it("registers plugin route on first target and removes it on last target", () => {
+    const registry = createEmptyPluginRegistry();
+    setActivePluginRegistry(registry);
+    const targets = new Map<string, Array<{ path: string; id: string }>>();
+
+    const registeredA = registerWebhookTargetWithPluginRoute({
+      targetsByPath: targets,
+      target: { path: "/hook", id: "A" },
+      route: {
+        auth: "plugin",
+        pluginId: "demo",
+        source: "demo-webhook",
+        handler: () => {},
+      },
+    });
+    const registeredB = registerWebhookTargetWithPluginRoute({
+      targetsByPath: targets,
+      target: { path: "/hook", id: "B" },
+      route: {
+        auth: "plugin",
+        pluginId: "demo",
+        source: "demo-webhook",
+        handler: () => {},
+      },
+    });
+
+    expect(registry.httpRoutes).toHaveLength(1);
+    expect(registry.httpRoutes[0]).toEqual(
+      expect.objectContaining({
+        pluginId: "demo",
+        path: "/hook",
+        source: "demo-webhook",
+      }),
+    );
+
+    registeredA.unregister();
+    expect(registry.httpRoutes).toHaveLength(1);
+    registeredB.unregister();
+    expect(registry.httpRoutes).toHaveLength(0);
   });
 });
 

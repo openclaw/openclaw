@@ -170,6 +170,59 @@ async function runGatewayHttpRequestStages(
   return false;
 }
 
+function buildPluginRequestStages(params: {
+  req: IncomingMessage;
+  res: ServerResponse;
+  requestPath: string;
+  pluginPathContext: PluginRoutePathContext | null;
+  handlePluginRequest?: PluginHttpRequestHandler;
+  shouldEnforcePluginGatewayAuth?: (pathContext: PluginRoutePathContext) => boolean;
+  resolvedAuth: ResolvedGatewayAuth;
+  trustedProxies: string[];
+  allowRealIpFallback: boolean;
+  rateLimiter?: AuthRateLimiter;
+}): GatewayHttpRequestStage[] {
+  if (!params.handlePluginRequest) {
+    return [];
+  }
+  return [
+    {
+      name: "plugin-auth",
+      run: async () => {
+        const pathContext =
+          params.pluginPathContext ?? resolvePluginRoutePathContext(params.requestPath);
+        if (
+          !(params.shouldEnforcePluginGatewayAuth ?? shouldEnforceDefaultPluginGatewayAuth)(
+            pathContext,
+          )
+        ) {
+          return false;
+        }
+        const pluginAuthOk = await enforcePluginRouteGatewayAuth({
+          req: params.req,
+          res: params.res,
+          auth: params.resolvedAuth,
+          trustedProxies: params.trustedProxies,
+          allowRealIpFallback: params.allowRealIpFallback,
+          rateLimiter: params.rateLimiter,
+        });
+        if (!pluginAuthOk) {
+          return true;
+        }
+        return false;
+      },
+    },
+    {
+      name: "plugin-http",
+      run: () => {
+        const pathContext =
+          params.pluginPathContext ?? resolvePluginRoutePathContext(params.requestPath);
+        return params.handlePluginRequest?.(params.req, params.res, pathContext) ?? false;
+      },
+    },
+  ];
+}
+
 export function createHooksRequestHandler(
   opts: {
     getHooksConfig: () => HooksConfigResolved | null;
@@ -555,40 +608,20 @@ export function createGatewayHttpServer(opts: {
       }
       // Plugins run after built-in gateway routes so core surfaces keep
       // precedence on overlapping paths.
-      if (handlePluginRequest) {
-        requestStages.push({
-          name: "plugin-auth",
-          run: async () => {
-            const pathContext = pluginPathContext ?? resolvePluginRoutePathContext(requestPath);
-            if (
-              !(shouldEnforcePluginGatewayAuth ?? shouldEnforceDefaultPluginGatewayAuth)(
-                pathContext,
-              )
-            ) {
-              return false;
-            }
-            const pluginAuthOk = await enforcePluginRouteGatewayAuth({
-              req,
-              res,
-              auth: resolvedAuth,
-              trustedProxies,
-              allowRealIpFallback,
-              rateLimiter,
-            });
-            if (!pluginAuthOk) {
-              return true;
-            }
-            return false;
-          },
-        });
-        requestStages.push({
-          name: "plugin-http",
-          run: () => {
-            const pathContext = pluginPathContext ?? resolvePluginRoutePathContext(requestPath);
-            return handlePluginRequest(req, res, pathContext);
-          },
-        });
-      }
+      requestStages.push(
+        ...buildPluginRequestStages({
+          req,
+          res,
+          requestPath,
+          pluginPathContext,
+          handlePluginRequest,
+          shouldEnforcePluginGatewayAuth,
+          resolvedAuth,
+          trustedProxies,
+          allowRealIpFallback,
+          rateLimiter,
+        }),
+      );
 
       requestStages.push({
         name: "gateway-probes",
