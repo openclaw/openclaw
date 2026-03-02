@@ -365,27 +365,22 @@ export async function runCliAgent(params: {
         // We'll need to modify the caller to handle this case
 
         // For now, retry without the session ID to create a new session
-        try {
-          const output = await executeCliWithSession(undefined);
-          const text = output.text?.trim();
-          const payloads = text ? [{ text }] : undefined;
+        const output = await executeCliWithSession(undefined);
+        const text = output.text?.trim();
+        const payloads = text ? [{ text }] : undefined;
 
-          return {
-            payloads,
-            meta: {
-              durationMs: Date.now() - started,
-              agentMeta: {
-                sessionId: output.sessionId ?? params.sessionId ?? "",
-                provider: params.provider,
-                model: modelId,
-                usage: output.usage,
-              },
+        return {
+          payloads,
+          meta: {
+            durationMs: Date.now() - started,
+            agentMeta: {
+              sessionId: output.sessionId ?? params.sessionId ?? "",
+              provider: params.provider,
+              model: modelId,
+              usage: output.usage,
             },
-          };
-        } catch {
-          // If retry also fails, throw the original error
-          throw err;
-        }
+          },
+        };
       }
       throw err;
     }
