@@ -1,0 +1,124 @@
+import { describe, test, expect, beforeEach } from "vitest";
+import { WorkingMemoryBuffer } from "./buffer.js";
+
+describe("WorkingMemoryBuffer", () => {
+  let buffer: WorkingMemoryBuffer;
+
+  beforeEach(() => {
+    buffer = new WorkingMemoryBuffer(5, 0.7, 3); // small buffer for testing
+  });
+
+  test("should add entry to buffer", () => {
+    buffer.add("test fact", 0.5, "other");
+    expect(buffer.size).toBe(1);
+  });
+
+  test("should promote high importance facts immediately", () => {
+    const result = buffer.add("User's email is test@example.com", 0.9, "entity");
+    expect(result.promoted).toBe(true);
+    expect(result.reason).toContain("high importance");
+  });
+
+  test("should promote entity category immediately", () => {
+    const result = buffer.add("User's phone is 555-1234", 0.5, "entity");
+    expect(result.promoted).toBe(true);
+    expect(result.reason).toContain("entity");
+  });
+
+  test("should promote decision category immediately", () => {
+    const result = buffer.add("We decided to use Python", 0.5, "decision");
+    expect(result.promoted).toBe(true);
+    expect(result.reason).toContain("decision");
+  });
+
+  test("should NOT promote low importance non-entity facts", () => {
+    const result = buffer.add("I had coffee today", 0.3, "other");
+    expect(result.promoted).toBe(false);
+    expect(result.reason).toContain("below threshold");
+  });
+
+  test("should promote after mention threshold reached", () => {
+    buffer.add("Python is great", 0.4, "preference");
+    buffer.add("Python is great", 0.5, "preference"); // mention 2
+    const result = buffer.add("Python is great", 0.5, "preference"); // mention 3
+    expect(result.promoted).toBe(true);
+    expect(result.reason).toContain("frequency threshold");
+  });
+
+  test("should increment mention count for similar entries", () => {
+    buffer.add("I like TypeScript", 0.4, "preference");
+    const result = buffer.add("I like TypeScript", 0.5, "preference");
+    expect(result.promoted).toBe(false);
+    expect(result.reason).toContain("count incremented");
+  });
+
+  test("forcePromote should always promote", () => {
+    const result = buffer.forcePromote("Random unimportant thing");
+    expect(result.promoted).toBe(true);
+    expect(result.reason).toContain("explicit user request");
+  });
+
+  test("forcePromote should promote existing entry in buffer", () => {
+    buffer.add("I live in Kyiv", 0.3, "other");
+    const result = buffer.forcePromote("I live in Kyiv");
+    expect(result.promoted).toBe(true);
+    expect(buffer.size).toBe(1); // should not duplicate
+  });
+
+  test("should evict oldest non-promoted when full", () => {
+    // Fill buffer (max 5)
+    buffer.add("fact 1", 0.3, "other"); // non-promoted
+    buffer.add("fact 2", 0.3, "other"); // non-promoted  
+    buffer.add("fact 3", 0.3, "other"); // non-promoted
+    buffer.add("important thing", 0.9, "entity"); // promoted
+    buffer.add("another important", 0.8, "decision"); // promoted
+    expect(buffer.size).toBe(5);
+
+    // Add 6th — should evict "fact 1" (oldest non-promoted)
+    buffer.add("fact 6", 0.3, "other");
+    expect(buffer.size).toBe(5);
+
+    // "fact 1" should be gone
+    const texts = buffer.entries.map((e) => e.text);
+    expect(texts).not.toContain("fact 1");
+    expect(texts).toContain("important thing"); // promoted stays
+  });
+
+  test("stats should return correct values", () => {
+    buffer.add("low", 0.3, "other");
+    buffer.add("high", 0.9, "entity");
+    buffer.add("decision", 0.5, "decision");
+
+    const stats = buffer.stats();
+    expect(stats.total).toBe(3);
+    expect(stats.promoted).toBe(2); // high importance + decision
+    expect(stats.pending).toBe(1);
+    expect(stats.avgImportance).toBeGreaterThan(0);
+  });
+
+  test("clear should empty the buffer", () => {
+    buffer.add("test", 0.5, "other");
+    buffer.add("test2", 0.5, "other");
+    buffer.clear();
+    expect(buffer.size).toBe(0);
+  });
+
+  test("findSimilar should match subsets", () => {
+    buffer.add("User lives in Kyiv, Ukraine", 0.5, "other");
+    const result = buffer.add("User lives in Kyiv, Ukraine and works remotely", 0.6, "other");
+    // Should find the existing entry since one contains the other
+    expect(result.reason).toContain("count incremented");
+  });
+
+  test("should handle empty buffer stats", () => {
+    const stats = buffer.stats();
+    expect(stats.total).toBe(0);
+    expect(stats.avgImportance).toBe(0);
+  });
+
+  test("promotedCount getter should work", () => {
+    buffer.add("low", 0.3, "other");
+    buffer.add("entity", 0.5, "entity");
+    expect(buffer.promotedCount).toBe(1);
+  });
+});
