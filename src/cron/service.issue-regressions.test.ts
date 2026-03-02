@@ -1491,12 +1491,14 @@ describe("Cron issue regressions", () => {
     });
 
     const timerPromise = onTimer(state);
-    await Promise.race([
-      bothRunsStarted.promise,
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("timed out waiting for concurrent job starts")), 1_000),
-      ),
-    ]);
+    const startTimeout = setTimeout(() => {
+      bothRunsStarted.reject(new Error("timed out waiting for concurrent job starts"));
+    }, 250);
+    try {
+      await bothRunsStarted.promise;
+    } finally {
+      clearTimeout(startTimeout);
+    }
 
     expect(peakActiveRuns).toBe(2);
 
