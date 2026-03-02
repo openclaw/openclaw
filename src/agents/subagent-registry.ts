@@ -1,3 +1,5 @@
+import { promises as fs } from "node:fs";
+import path from "node:path";
 import { loadConfig } from "../config/config.js";
 import {
   loadSessionStore,
@@ -30,6 +32,8 @@ import {
 import {
   countActiveDescendantRunsFromRuns,
   countActiveRunsForSessionFromRuns,
+  countPendingDescendantRunsExcludingRunFromRuns,
+  countPendingDescendantRunsFromRuns,
   findRunIdsByChildSessionKeyFromRuns,
   listDescendantRunsForRequesterFromRuns,
   listRunsForRequesterFromRuns,
@@ -61,11 +65,22 @@ const MAX_ANNOUNCE_RETRY_DELAY_MS = 8_000;
  */
 const MAX_ANNOUNCE_RETRY_COUNT = 3;
 /**
- * Announce entries older than this are force-expired even if delivery never
- * succeeded. Guards against stale registry entries surviving gateway restarts.
+ * Non-completion announce entries older than this are force-expired even if
+ * delivery never succeeded.
  */
 const ANNOUNCE_EXPIRY_MS = 5 * 60_000; // 5 minutes
+/**
+ * Completion-message flows can wait for descendants to finish, but this hard
+ * cap prevents indefinite pending state when descendants never fully settle.
+ */
+const ANNOUNCE_COMPLETION_HARD_EXPIRY_MS = 30 * 60_000; // 30 minutes
 type SubagentRunOrphanReason = "missing-session-entry" | "missing-session-id";
+/**
+ * Embedded runs can emit transient lifecycle `error` events while provider/model
+ * retry is still in progress. Defer terminal error cleanup briefly so a
+ * subsequent lifecycle `start` / `end` can cancel premature failure announces.
+ */
+const LIFECYCLE_ERROR_RETRY_GRACE_MS = 15_000;
 
 function resolveAnnounceRetryDelayMs(retryCount: number) {
   const boundedRetryCount = Math.max(0, Math.min(retryCount, 10));
@@ -204,6 +219,66 @@ function reconcileOrphanedRestoredRuns() {
 
 const resumedRuns = new Set<string>();
 const endedHookInFlightRunIds = new Set<string>();
+const pendingLifecycleErrorByRunId = new Map<
+  string,
+  {
+    timer: NodeJS.Timeout;
+    endedAt: number;
+    error?: string;
+  }
+>();
+
+function clearPendingLifecycleError(runId: string) {
+  const pending = pendingLifecycleErrorByRunId.get(runId);
+  if (!pending) {
+    return;
+  }
+  clearTimeout(pending.timer);
+  pendingLifecycleErrorByRunId.delete(runId);
+}
+
+function clearAllPendingLifecycleErrors() {
+  for (const pending of pendingLifecycleErrorByRunId.values()) {
+    clearTimeout(pending.timer);
+  }
+  pendingLifecycleErrorByRunId.clear();
+}
+
+function schedulePendingLifecycleError(params: { runId: string; endedAt: number; error?: string }) {
+  clearPendingLifecycleError(params.runId);
+  const timer = setTimeout(() => {
+    const pending = pendingLifecycleErrorByRunId.get(params.runId);
+    if (!pending || pending.timer !== timer) {
+      return;
+    }
+    pendingLifecycleErrorByRunId.delete(params.runId);
+    const entry = subagentRuns.get(params.runId);
+    if (!entry) {
+      return;
+    }
+    if (entry.endedReason === SUBAGENT_ENDED_REASON_COMPLETE || entry.outcome?.status === "ok") {
+      return;
+    }
+    void completeSubagentRun({
+      runId: params.runId,
+      endedAt: pending.endedAt,
+      outcome: {
+        status: "error",
+        error: pending.error,
+      },
+      reason: SUBAGENT_ENDED_REASON_ERROR,
+      sendFarewell: true,
+      accountId: entry.requesterOrigin?.accountId,
+      triggerCleanup: true,
+    });
+  }, LIFECYCLE_ERROR_RETRY_GRACE_MS);
+  timer.unref?.();
+  pendingLifecycleErrorByRunId.set(params.runId, {
+    timer,
+    endedAt: params.endedAt,
+    error: params.error,
+  });
+}
 
 function suppressAnnounceForSteerRestart(entry?: SubagentRunRecord) {
   return entry?.suppressAnnounceReason === "steer-restart";
@@ -256,6 +331,7 @@ async function completeSubagentRun(params: {
   accountId?: string;
   triggerCleanup: boolean;
 }) {
+  clearPendingLifecycleError(params.runId);
   const entry = subagentRuns.get(params.runId);
   if (!entry) {
     return;
@@ -376,7 +452,11 @@ function resumeSubagentRun(runId: string) {
     persistSubagentRuns();
     return;
   }
-  if (typeof entry.endedAt === "number" && Date.now() - entry.endedAt > ANNOUNCE_EXPIRY_MS) {
+  if (
+    entry.expectsCompletionMessage !== true &&
+    typeof entry.endedAt === "number" &&
+    Date.now() - entry.endedAt > ANNOUNCE_EXPIRY_MS
+  ) {
     logAnnounceGiveUp(entry, "expiry");
     entry.cleanupCompletedAt = Date.now();
     persistSubagentRuns();
@@ -393,6 +473,7 @@ function resumeSubagentRun(runId: string) {
   ) {
     const waitMs = Math.max(1, earliestRetryAt - now);
     setTimeout(() => {
+      resumedRuns.delete(runId);
       resumeSubagentRun(runId);
     }, waitMs).unref?.();
     resumedRuns.add(runId);
@@ -491,8 +572,11 @@ async function sweepSubagentRuns() {
     if (!entry.archiveAtMs || entry.archiveAtMs > now) {
       continue;
     }
+    clearPendingLifecycleError(runId);
     subagentRuns.delete(runId);
     mutated = true;
+    // Archive/purge is terminal for the run record; remove any retained attachments too.
+    await safeRemoveAttachmentsDir(entry);
     try {
       await callGateway({
         method: "sessions.delete",
@@ -531,6 +615,7 @@ function ensureListener() {
       }
       const phase = evt.data?.phase;
       if (phase === "start") {
+        clearPendingLifecycleError(evt.runId);
         const startedAt = typeof evt.data?.startedAt === "number" ? evt.data.startedAt : undefined;
         if (startedAt) {
           entry.startedAt = startedAt;
@@ -543,23 +628,67 @@ function ensureListener() {
       }
       const endedAt = typeof evt.data?.endedAt === "number" ? evt.data.endedAt : Date.now();
       const error = typeof evt.data?.error === "string" ? evt.data.error : undefined;
-      const outcome: SubagentRunOutcome =
-        phase === "error"
-          ? { status: "error", error }
-          : evt.data?.aborted
-            ? { status: "timeout" }
-            : { status: "ok" };
+      if (phase === "error") {
+        schedulePendingLifecycleError({
+          runId: evt.runId,
+          endedAt,
+          error,
+        });
+        return;
+      }
+      clearPendingLifecycleError(evt.runId);
+      const outcome: SubagentRunOutcome = evt.data?.aborted
+        ? { status: "timeout" }
+        : { status: "ok" };
       await completeSubagentRun({
         runId: evt.runId,
         endedAt,
         outcome,
-        reason: phase === "error" ? SUBAGENT_ENDED_REASON_ERROR : SUBAGENT_ENDED_REASON_COMPLETE,
+        reason: SUBAGENT_ENDED_REASON_COMPLETE,
         sendFarewell: true,
         accountId: entry.requesterOrigin?.accountId,
         triggerCleanup: true,
       });
     })();
   });
+}
+
+async function safeRemoveAttachmentsDir(entry: SubagentRunRecord): Promise<void> {
+  if (!entry.attachmentsDir || !entry.attachmentsRootDir) {
+    return;
+  }
+
+  const resolveReal = async (targetPath: string): Promise<string | null> => {
+    try {
+      return await fs.realpath(targetPath);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
+        return null;
+      }
+      throw err;
+    }
+  };
+
+  try {
+    const [rootReal, dirReal] = await Promise.all([
+      resolveReal(entry.attachmentsRootDir),
+      resolveReal(entry.attachmentsDir),
+    ]);
+    if (!dirReal) {
+      return;
+    }
+
+    const rootBase = rootReal ?? path.resolve(entry.attachmentsRootDir);
+    // dirReal is guaranteed non-null here (early return above handles null case).
+    const dirBase = dirReal;
+    const rootWithSep = rootBase.endsWith(path.sep) ? rootBase : `${rootBase}${path.sep}`;
+    if (!dirBase.startsWith(rootWithSep)) {
+      return;
+    }
+    await fs.rm(dirBase, { recursive: true, force: true });
+  } catch {
+    // best effort
+  }
 }
 
 async function finalizeSubagentCleanup(
@@ -574,6 +703,11 @@ async function finalizeSubagentCleanup(
   if (didAnnounce) {
     const completionReason = resolveCleanupCompletionReason(entry);
     await emitCompletionEndedHookIfNeeded(entry, completionReason);
+    // Clean up attachments before the run record is removed.
+    const shouldDeleteAttachments = cleanup === "delete" || !entry.retainAttachmentsOnKeep;
+    if (shouldDeleteAttachments) {
+      await safeRemoveAttachmentsDir(entry);
+    }
     completeCleanupBookkeeping({
       runId,
       entry,
@@ -587,8 +721,10 @@ async function finalizeSubagentCleanup(
   const deferredDecision = resolveDeferredCleanupDecision({
     entry,
     now,
-    activeDescendantRuns: Math.max(0, countActiveDescendantRuns(entry.childSessionKey)),
+    // Defer until descendants are fully settled, including post-end cleanup.
+    activeDescendantRuns: Math.max(0, countPendingDescendantRuns(entry.childSessionKey)),
     announceExpiryMs: ANNOUNCE_EXPIRY_MS,
+    announceCompletionHardExpiryMs: ANNOUNCE_COMPLETION_HARD_EXPIRY_MS,
     maxAnnounceRetryCount: MAX_ANNOUNCE_RETRY_COUNT,
     deferDescendantDelayMs: MIN_ANNOUNCE_RETRY_DELAY_MS,
     resolveAnnounceRetryDelayMs,
@@ -611,6 +747,10 @@ async function finalizeSubagentCleanup(
   }
 
   if (deferredDecision.kind === "give-up") {
+    const shouldDeleteAttachments = cleanup === "delete" || !entry.retainAttachmentsOnKeep;
+    if (shouldDeleteAttachments) {
+      await safeRemoveAttachmentsDir(entry);
+    }
     const completionReason = resolveCleanupCompletionReason(entry);
     await emitCompletionEndedHookIfNeeded(entry, completionReason);
     logAnnounceGiveUp(entry, deferredDecision.reason);
@@ -624,7 +764,10 @@ async function finalizeSubagentCleanup(
   }
 
   // Allow retry on the next wake if announce was deferred or failed.
+  // Applies to both keep/delete cleanup modes so delete-runs are only removed
+  // after a successful announce (or terminal give-up).
   entry.cleanupHandled = false;
+  // Clear the in-flight resume marker so the scheduled retry can run again.
   resumedRuns.delete(runId);
   persistSubagentRuns();
   if (deferredDecision.resumeDelayMs == null) {
@@ -661,6 +804,7 @@ function completeCleanupBookkeeping(params: {
   completedAt: number;
 }) {
   if (params.cleanup === "delete") {
+    clearPendingLifecycleError(params.runId);
     subagentRuns.delete(params.runId);
     persistSubagentRuns();
     retryDeferredCompletedAnnounces(params.runId);
@@ -686,9 +830,10 @@ function retryDeferredCompletedAnnounces(excludeRunId?: string) {
     if (suppressAnnounceForSteerRestart(entry)) {
       continue;
     }
-    // Force-expire announces that have been pending too long (#18264).
+    // Force-expire stale non-completion announces; completion-message flows can
+    // stay pending while descendants run for a long time.
     const endedAgo = now - (entry.endedAt ?? now);
-    if (endedAgo > ANNOUNCE_EXPIRY_MS) {
+    if (entry.expectsCompletionMessage !== true && endedAgo > ANNOUNCE_EXPIRY_MS) {
       logAnnounceGiveUp(entry, "expiry");
       entry.cleanupCompletedAt = now;
       persistSubagentRuns();
@@ -774,6 +919,7 @@ export function replaceSubagentRunAfterSteer(params: {
   }
 
   if (previousRunId !== nextRunId) {
+    clearPendingLifecycleError(previousRunId);
     subagentRuns.delete(previousRunId);
     resumedRuns.delete(previousRunId);
   }
@@ -828,6 +974,9 @@ export function registerSubagentRun(params: {
   runTimeoutSeconds?: number;
   expectsCompletionMessage?: boolean;
   spawnMode?: "run" | "session";
+  attachmentsDir?: string;
+  attachmentsRootDir?: string;
+  retainAttachmentsOnKeep?: boolean;
 }) {
   const now = Date.now();
   const cfg = loadConfig();
@@ -855,6 +1004,9 @@ export function registerSubagentRun(params: {
     startedAt: now,
     archiveAtMs,
     cleanupHandled: false,
+    attachmentsDir: params.attachmentsDir,
+    attachmentsRootDir: params.attachmentsRootDir,
+    retainAttachmentsOnKeep: params.retainAttachmentsOnKeep,
   });
   ensureListener();
   persistSubagentRuns();
@@ -935,6 +1087,7 @@ export function resetSubagentRegistryForTests(opts?: { persist?: boolean }) {
   subagentRuns.clear();
   resumedRuns.clear();
   endedHookInFlightRunIds.clear();
+  clearAllPendingLifecycleErrors();
   resetAnnounceQueuesForTests();
   stopSweeper();
   restoreAttempted = false;
@@ -953,6 +1106,7 @@ export function addSubagentRunForTests(entry: SubagentRunRecord) {
 }
 
 export function releaseSubagentRun(runId: string) {
+  clearPendingLifecycleError(runId);
   const didDelete = subagentRuns.delete(runId);
   if (didDelete) {
     persistSubagentRuns();
@@ -1020,6 +1174,7 @@ export function markSubagentRunTerminated(params: {
   let updated = 0;
   const entriesByChildSessionKey = new Map<string, SubagentRunRecord>();
   for (const runId of runIds) {
+    clearPendingLifecycleError(runId);
     const entry = subagentRuns.get(runId);
     if (!entry) {
       continue;
@@ -1072,6 +1227,24 @@ export function countActiveDescendantRuns(rootSessionKey: string): number {
   return countActiveDescendantRunsFromRuns(
     getSubagentRunsSnapshotForRead(subagentRuns),
     rootSessionKey,
+  );
+}
+
+export function countPendingDescendantRuns(rootSessionKey: string): number {
+  return countPendingDescendantRunsFromRuns(
+    getSubagentRunsSnapshotForRead(subagentRuns),
+    rootSessionKey,
+  );
+}
+
+export function countPendingDescendantRunsExcludingRun(
+  rootSessionKey: string,
+  excludeRunId: string,
+): number {
+  return countPendingDescendantRunsExcludingRunFromRuns(
+    getSubagentRunsSnapshotForRead(subagentRuns),
+    rootSessionKey,
+    excludeRunId,
   );
 }
 

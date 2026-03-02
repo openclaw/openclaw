@@ -66,7 +66,7 @@ async function expectThinkStatusForReasoningModel(params: {
 
   const text = replyText(res);
   expect(text).toContain(`Current thinking level: ${params.expectedLevel}`);
-  expect(text).toContain("Options: off, minimal, low, medium, high.");
+  expect(text).toContain("Options: off, minimal, low, medium, high, adaptive.");
 }
 
 function mockReasoningCapableCatalog() {

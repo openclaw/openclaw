@@ -1,7 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { withEnv } from "../test-utils/env.js";
-import { listTelegramAccountIds, resolveTelegramAccount } from "./accounts.js";
+import {
+  listTelegramAccountIds,
+  resolveDefaultTelegramAccountId,
+  resolveTelegramAccount,
+} from "./accounts.js";
 
 const { warnMock } = vi.hoisted(() => ({
   warnMock: vi.fn(),
@@ -97,5 +101,216 @@ describe("resolveTelegramAccount", () => {
     const lines = warnMock.mock.calls.map(([line]) => String(line));
     expect(lines).toContain("listTelegramAccountIds [ 'work' ]");
     expect(lines).toContain("resolve { accountId: 'work', enabled: true, tokenSource: 'config' }");
+  });
+});
+
+describe("resolveDefaultTelegramAccountId", () => {
+  it("prefers channels.telegram.defaultAccount when it matches a configured account", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          defaultAccount: "work",
+          accounts: { default: { botToken: "tok-default" }, work: { botToken: "tok-work" } },
+        },
+      },
+    };
+
+    expect(resolveDefaultTelegramAccountId(cfg)).toBe("work");
+  });
+
+  it("normalizes channels.telegram.defaultAccount before lookup", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          defaultAccount: "Router D",
+          accounts: { "router-d": { botToken: "tok-work" } },
+        },
+      },
+    };
+
+    expect(resolveDefaultTelegramAccountId(cfg)).toBe("router-d");
+  });
+
+  it("falls back when channels.telegram.defaultAccount is not configured", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          defaultAccount: "missing",
+          accounts: { default: { botToken: "tok-default" }, work: { botToken: "tok-work" } },
+        },
+      },
+    };
+
+    expect(resolveDefaultTelegramAccountId(cfg)).toBe("default");
+  });
+});
+
+describe("resolveTelegramAccount allowFrom precedence", () => {
+  it("prefers accounts.default allowlists over top-level for default account", () => {
+    const resolved = resolveTelegramAccount({
+      cfg: {
+        channels: {
+          telegram: {
+            allowFrom: ["top"],
+            groupAllowFrom: ["top-group"],
+            accounts: {
+              default: {
+                botToken: "123:default",
+                allowFrom: ["default"],
+                groupAllowFrom: ["default-group"],
+              },
+            },
+          },
+        },
+      },
+      accountId: "default",
+    });
+
+    expect(resolved.config.allowFrom).toEqual(["default"]);
+    expect(resolved.config.groupAllowFrom).toEqual(["default-group"]);
+  });
+
+  it("falls back to top-level allowlists for named account without overrides", () => {
+    const resolved = resolveTelegramAccount({
+      cfg: {
+        channels: {
+          telegram: {
+            allowFrom: ["top"],
+            groupAllowFrom: ["top-group"],
+            accounts: {
+              work: { botToken: "123:work" },
+            },
+          },
+        },
+      },
+      accountId: "work",
+    });
+
+    expect(resolved.config.allowFrom).toEqual(["top"]);
+    expect(resolved.config.groupAllowFrom).toEqual(["top-group"]);
+  });
+
+  it("does not inherit default account allowlists for named account when top-level is absent", () => {
+    const resolved = resolveTelegramAccount({
+      cfg: {
+        channels: {
+          telegram: {
+            accounts: {
+              default: {
+                botToken: "123:default",
+                allowFrom: ["default"],
+                groupAllowFrom: ["default-group"],
+              },
+              work: { botToken: "123:work" },
+            },
+          },
+        },
+      },
+      accountId: "work",
+    });
+
+    expect(resolved.config.allowFrom).toBeUndefined();
+    expect(resolved.config.groupAllowFrom).toBeUndefined();
+  });
+});
+
+describe("resolveTelegramAccount groups inheritance (#30673)", () => {
+  it("inherits channel-level groups in single-account setup", () => {
+    const resolved = resolveTelegramAccount({
+      cfg: {
+        channels: {
+          telegram: {
+            groups: { "-100123": { requireMention: false } },
+            accounts: {
+              default: { botToken: "123:default" },
+            },
+          },
+        },
+      },
+      accountId: "default",
+    });
+
+    expect(resolved.config.groups).toEqual({ "-100123": { requireMention: false } });
+  });
+
+  it("does NOT inherit channel-level groups to secondary account in multi-account setup", () => {
+    const resolved = resolveTelegramAccount({
+      cfg: {
+        channels: {
+          telegram: {
+            groups: { "-100123": { requireMention: false } },
+            accounts: {
+              default: { botToken: "123:default" },
+              dev: { botToken: "456:dev" },
+            },
+          },
+        },
+      },
+      accountId: "dev",
+    });
+
+    expect(resolved.config.groups).toBeUndefined();
+  });
+
+  it("does NOT inherit channel-level groups to default account in multi-account setup", () => {
+    const resolved = resolveTelegramAccount({
+      cfg: {
+        channels: {
+          telegram: {
+            groups: { "-100123": { requireMention: false } },
+            accounts: {
+              default: { botToken: "123:default" },
+              dev: { botToken: "456:dev" },
+            },
+          },
+        },
+      },
+      accountId: "default",
+    });
+
+    expect(resolved.config.groups).toBeUndefined();
+  });
+
+  it("uses account-level groups even in multi-account setup", () => {
+    const resolved = resolveTelegramAccount({
+      cfg: {
+        channels: {
+          telegram: {
+            groups: { "-100999": { requireMention: true } },
+            accounts: {
+              default: {
+                botToken: "123:default",
+                groups: { "-100123": { requireMention: false } },
+              },
+              dev: { botToken: "456:dev" },
+            },
+          },
+        },
+      },
+      accountId: "default",
+    });
+
+    expect(resolved.config.groups).toEqual({ "-100123": { requireMention: false } });
+  });
+
+  it("account-level groups takes priority over channel-level in single-account setup", () => {
+    const resolved = resolveTelegramAccount({
+      cfg: {
+        channels: {
+          telegram: {
+            groups: { "-100999": { requireMention: true } },
+            accounts: {
+              default: {
+                botToken: "123:default",
+                groups: { "-100123": { requireMention: false } },
+              },
+            },
+          },
+        },
+      },
+      accountId: "default",
+    });
+
+    expect(resolved.config.groups).toEqual({ "-100123": { requireMention: false } });
   });
 });

@@ -20,6 +20,8 @@ export type ResolvedBrowserConfig = {
   enabled: boolean;
   evaluateEnabled: boolean;
   controlPort: number;
+  cdpPortRangeStart: number;
+  cdpPortRangeEnd: number;
   cdpProtocol: "http" | "https";
   cdpHost: string;
   cdpIsLoopback: boolean;
@@ -44,6 +46,7 @@ export type ResolvedBrowserProfile = {
   cdpIsLoopback: boolean;
   color: string;
   driver: "openclaw" | "extension";
+  attachOnly: boolean;
 };
 
 function normalizeHexColor(raw: string | undefined) {
@@ -61,6 +64,27 @@ function normalizeHexColor(raw: string | undefined) {
 function normalizeTimeoutMs(raw: number | undefined, fallback: number) {
   const value = typeof raw === "number" && Number.isFinite(raw) ? Math.floor(raw) : fallback;
   return value < 0 ? fallback : value;
+}
+
+function resolveCdpPortRangeStart(
+  rawStart: number | undefined,
+  fallbackStart: number,
+  rangeSpan: number,
+) {
+  const start =
+    typeof rawStart === "number" && Number.isFinite(rawStart)
+      ? Math.floor(rawStart)
+      : fallbackStart;
+  if (start < 1 || start > 65535) {
+    throw new Error(`browser.cdpPortRangeStart must be between 1 and 65535, got: ${start}`);
+  }
+  const maxStart = 65535 - rangeSpan;
+  if (start > maxStart) {
+    throw new Error(
+      `browser.cdpPortRangeStart (${start}) is too high for a ${rangeSpan + 1}-port range; max is ${maxStart}.`,
+    );
+  }
+  return start;
 }
 
 function normalizeStringList(raw: string[] | undefined): string[] | undefined {
@@ -193,6 +217,13 @@ export function resolveBrowserConfig(
   );
 
   const derivedCdpRange = deriveDefaultBrowserCdpPortRange(controlPort);
+  const cdpRangeSpan = derivedCdpRange.end - derivedCdpRange.start;
+  const cdpPortRangeStart = resolveCdpPortRangeStart(
+    cfg?.cdpPortRangeStart,
+    derivedCdpRange.start,
+    cdpRangeSpan,
+  );
+  const cdpPortRangeEnd = cdpPortRangeStart + cdpRangeSpan;
 
   const rawCdpUrl = (cfg?.cdpUrl ?? "").trim();
   let cdpInfo:
@@ -228,15 +259,22 @@ export function resolveBrowserConfig(
   // Use legacy cdpUrl port for backward compatibility when no profiles configured
   const legacyCdpPort = rawCdpUrl ? cdpInfo.port : undefined;
   const profiles = ensureDefaultChromeExtensionProfile(
-    ensureDefaultProfile(cfg?.profiles, defaultColor, legacyCdpPort, derivedCdpRange.start),
+    ensureDefaultProfile(cfg?.profiles, defaultColor, legacyCdpPort, cdpPortRangeStart),
     controlPort,
   );
   const cdpProtocol = cdpInfo.parsed.protocol === "https:" ? "https" : "http";
+
+  // In headless/noSandbox environments (servers), prefer "openclaw" profile over "chrome"
+  // because Chrome extension relay requires a GUI browser which isn't available headless.
+  // Issue: https://github.com/openclaw/openclaw/issues/14895
+  const preferOpenClawProfile = headless || noSandbox;
   const defaultProfile =
     defaultProfileFromConfig ??
-    (profiles[DEFAULT_BROWSER_DEFAULT_PROFILE_NAME]
-      ? DEFAULT_BROWSER_DEFAULT_PROFILE_NAME
-      : DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME);
+    (preferOpenClawProfile && profiles[DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME]
+      ? DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME
+      : profiles[DEFAULT_BROWSER_DEFAULT_PROFILE_NAME]
+        ? DEFAULT_BROWSER_DEFAULT_PROFILE_NAME
+        : DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME);
 
   const extraArgs = Array.isArray(cfg?.extraArgs)
     ? cfg.extraArgs.filter((a): a is string => typeof a === "string" && a.trim().length > 0)
@@ -247,6 +285,8 @@ export function resolveBrowserConfig(
     enabled,
     evaluateEnabled,
     controlPort,
+    cdpPortRangeStart,
+    cdpPortRangeEnd,
     cdpProtocol,
     cdpHost: cdpInfo.parsed.hostname,
     cdpIsLoopback: isLoopbackHost(cdpInfo.parsed.hostname),
@@ -302,6 +342,7 @@ export function resolveProfile(
     cdpIsLoopback: isLoopbackHost(cdpHost),
     color: profile.color,
     driver,
+    attachOnly: profile.attachOnly ?? resolved.attachOnly,
   };
 }
 

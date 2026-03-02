@@ -240,6 +240,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/device-pair/**"
+"extensions: acpx":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/acpx/**"
 "extensions: minimax-portal-auth":
   - changed-files:
       - any-glob-to-any-file:

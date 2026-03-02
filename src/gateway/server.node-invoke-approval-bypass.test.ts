@@ -75,9 +75,18 @@ async function requestAllowOnceApproval(
   nodeId: string,
 ): Promise<string> {
   const approvalId = crypto.randomUUID();
+  const commandArgv = command.split(/\s+/).filter((part) => part.length > 0);
   const requestP = rpcReq(ws, "exec.approval.request", {
     id: approvalId,
     command,
+    commandArgv,
+    systemRunPlan: {
+      argv: commandArgv,
+      cwd: null,
+      rawCommand: command,
+      agentId: null,
+      sessionKey: null,
+    },
     nodeId,
     cwd: null,
     host: "node",
@@ -202,6 +211,7 @@ describe("node.invoke approval bypass", () => {
       readyResolve = resolve;
     });
 
+    const resolvedDeviceIdentity = deviceIdentity ?? createDeviceIdentity();
     const client = new GatewayClient({
       url: `ws://127.0.0.1:${port}`,
       // Keep challenge timeout realistic in tests; 0 maps to a 250ms timeout and can
@@ -215,7 +225,7 @@ describe("node.invoke approval bypass", () => {
       mode: GATEWAY_CLIENT_MODES.NODE,
       scopes: [],
       commands: ["system.run"],
-      deviceIdentity,
+      deviceIdentity: resolvedDeviceIdentity,
       onHelloOk: () => readyResolve?.(),
       onEvent: (evt) => {
         if (evt.event !== "node.invoke.request") {
