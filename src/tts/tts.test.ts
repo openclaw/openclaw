@@ -450,6 +450,22 @@ describe("tts", () => {
       expect(result.overrides.provider).toBe("edge");
     });
 
+    it("parses provider overrides case-insensitively", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true, allowProvider: true });
+      const cases = [
+        { token: "OpenAI", expected: "openai" },
+        { token: "ElevenLabs", expected: "elevenlabs" },
+        { token: "EDGE", expected: "edge" },
+      ] as const;
+
+      for (const testCase of cases) {
+        const input = `Hello [[tts:provider=${testCase.token}]] world`;
+        const result = parseTtsDirectives(input, policy, {});
+        expect(result.overrides.provider, testCase.token).toBe(testCase.expected);
+        expect(result.warnings, testCase.token).toEqual([]);
+      }
+    });
+
     it("rejects provider override by default while keeping voice overrides enabled", () => {
       const policy = resolveModelOverridePolicy({ enabled: true });
       const input = "Hello [[tts:provider=edge voice=alloy]] world";
@@ -1048,6 +1064,62 @@ describe("tts", () => {
         throw new Error("Expected stream cancel reason to be an Error");
       }
       expect(reason.message).toContain("returned wav but opus was requested");
+    });
+
+    it("tears down upstream body when consumer closes stream early", async () => {
+      const cancelSpy = vi.fn(async (_reason?: unknown) => {});
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new Uint8Array([0x4f, 0x67, 0x67, 0x53]));
+        },
+        cancel: cancelSpy,
+      });
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        headers: { get: () => "application/octet-stream" },
+        body,
+      });
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+      const result = await openaiTTSReadable({
+        text: "hello",
+        apiKey: "k",
+        model: "gpt-4o-mini-tts",
+        voice: "alloy",
+        responseFormat: "opus",
+        timeoutMs: 10_000,
+      });
+
+      result.stream.destroy();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(cancelSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it("sniffs output format when responseFormat is omitted and content-type is generic", async () => {
+      const oggBytes = new Uint8Array([0x4f, 0x67, 0x67, 0x53, 0x10, 0x20, 0x30, 0x40]);
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(oggBytes);
+          controller.close();
+        },
+      });
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        headers: { get: () => "application/octet-stream" },
+        body,
+      });
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+      const result = await openaiTTSReadable({
+        text: "hello",
+        apiKey: "k",
+        model: "gpt-4o-mini-tts",
+        voice: "alloy",
+        timeoutMs: 10_000,
+      });
+
+      await expect(readReadable(result.stream)).resolves.toEqual(Buffer.from(oggBytes));
+      expect(result.outputFormat).toBe("opus");
     });
   });
 

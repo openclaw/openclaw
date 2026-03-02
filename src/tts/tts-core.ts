@@ -153,10 +153,17 @@ export function parseTtsDirectives(
             if (!policy.allowProvider) {
               break;
             }
-            if (rawValue === "openai" || rawValue === "elevenlabs" || rawValue === "edge") {
-              overrides.provider = rawValue;
-            } else {
-              warnings.push(`unsupported provider "${rawValue}"`);
+            {
+              const normalizedProvider = rawValue.toLowerCase();
+              if (
+                normalizedProvider === "openai" ||
+                normalizedProvider === "elevenlabs" ||
+                normalizedProvider === "edge"
+              ) {
+                overrides.provider = normalizedProvider;
+              } else {
+                warnings.push(`unsupported provider "${rawValue}"`);
+              }
             }
             break;
           case "voice":
@@ -1124,7 +1131,7 @@ export async function openaiTTSReadable(params: {
       throw new Error("OpenAI TTS API returned no response body");
     }
 
-    const outputFormat = resolveOpenAiReturnedFormat({
+    let outputFormat = resolveOpenAiReturnedFormat({
       requested: responseFormat,
       contentType: response.headers?.get?.("content-type") ?? null,
     });
@@ -1132,8 +1139,13 @@ export async function openaiTTSReadable(params: {
     const webBody = response.body as import("node:stream/web").ReadableStream;
     const source = Readable.fromWeb(webBody);
     let sniffed = Buffer.alloc(0);
-    let validated = responseFormat == null;
+    let validated = false;
     let upstreamTornDown = false;
+    let endedNaturally = false;
+    let streamErrored = false;
+    let streamResultRef:
+      | { stream: Readable; progressive: boolean; outputFormat: OpenAiTtsResponseFormat }
+      | undefined;
     const tearDownUpstream = (reason?: Error) => {
       if (upstreamTornDown) {
         return;
@@ -1153,7 +1165,13 @@ export async function openaiTTSReadable(params: {
           const detected = inferOpenAiFormatFromBytes(sniffed);
           if (detected) {
             validated = true;
-            if (detected !== responseFormat) {
+            if (responseFormat == null) {
+              outputFormat = detected;
+              if (streamResultRef) {
+                streamResultRef.outputFormat = detected;
+              }
+            }
+            if (responseFormat != null && detected !== responseFormat) {
               const mismatchError = new Error(
                 `OpenAI TTS returned ${detected} but ${responseFormat} was requested. ` +
                   `Align messages.tts.openai.responseFormat with upstream output or fix the upstream endpoint.`,
@@ -1173,15 +1191,28 @@ export async function openaiTTSReadable(params: {
       transform.destroy(error);
     });
     const stream = source.pipe(transform);
-    stream.once("end", clearAbortTimer);
-    stream.once("error", clearAbortTimer);
-    stream.once("close", clearAbortTimer);
+    stream.once("end", () => {
+      endedNaturally = true;
+      clearAbortTimer();
+    });
+    stream.once("error", () => {
+      streamErrored = true;
+      clearAbortTimer();
+    });
+    stream.once("close", () => {
+      clearAbortTimer();
+      if (!endedNaturally && !streamErrored) {
+        tearDownUpstream(new Error("OpenAI TTS stream closed before completion"));
+      }
+    });
 
-    return {
+    const streamResult = {
       stream,
       progressive: true,
       outputFormat,
     };
+    streamResultRef = streamResult;
+    return streamResult;
   } catch (err) {
     clearAbortTimer();
     throw err;
