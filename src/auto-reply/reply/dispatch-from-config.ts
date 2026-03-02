@@ -12,7 +12,7 @@ import {
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { maybeApplyTtsToPayload, normalizeTtsAutoMode, resolveTtsConfig } from "../../tts/tts.js";
-import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
+import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import { getReplyFromConfig } from "../reply.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
@@ -249,9 +249,12 @@ export async function dispatchReplyFromConfig(params: {
   // flow when the provider handles its own messages.
   //
   // Debug: `pnpm test src/auto-reply/reply/dispatch-from-config.test.ts`
-  const originatingChannel = ctx.OriginatingChannel;
+  const originatingChannel = normalizeMessageChannel(ctx.OriginatingChannel);
   const originatingTo = ctx.OriginatingTo;
-  const currentSurface = (ctx.Surface ?? ctx.Provider)?.toLowerCase();
+  const providerChannel = normalizeMessageChannel(ctx.Provider);
+  const surfaceChannel = normalizeMessageChannel(ctx.Surface);
+  // Prefer provider channel because surface may carry origin metadata in relayed flows.
+  const currentSurface = providerChannel ?? surfaceChannel;
   const shouldRouteToOriginating = Boolean(
     isRoutableChannel(originatingChannel) && originatingTo && originatingChannel !== currentSurface,
   );
