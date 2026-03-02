@@ -1,9 +1,5 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  resetHeartbeatWakeStateForTests,
-  setHeartbeatWakeHandler,
-} from "../infra/heartbeat-wake.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-events.js";
 import { captureEnv } from "../test-utils/env.js";
 import { getFinishedSession, resetProcessRegistryForTests } from "./bash-process-registry.js";
@@ -410,7 +406,6 @@ beforeEach(() => {
   callIdCounter = 0;
   resetProcessRegistryForTests();
   resetSystemEventsForTest();
-  resetHeartbeatWakeStateForTests();
 });
 
 describe("exec tool backgrounding", () => {
@@ -520,80 +515,6 @@ describe("exec notifyOnExit", () => {
 
     expect(finished).toBeTruthy();
     expect(hasEvent).toBe(true);
-  });
-
-  it("falls back to unscoped wake for non-agent session keys", async () => {
-    const wakeCalls: Array<{ reason?: string; agentId?: string; sessionKey?: string }> = [];
-    const disposeWakeHandler = setHeartbeatWakeHandler(async (opts) => {
-      wakeCalls.push(opts);
-      return { status: "skipped", reason: "disabled" };
-    });
-
-    try {
-      const notifySessionKey = "global";
-      const tool = createNotifyOnExitExecTool({
-        sessionKey: notifySessionKey,
-        agentId: "ops",
-      });
-
-      const sessionId = await startBackgroundCommand(tool, echoAfterDelay("notify-agent"));
-      const status = await waitForCompletion(sessionId);
-      expect(status).toBe(PROCESS_STATUS_COMPLETED);
-      await waitForNotifyEvent(sessionId, notifySessionKey);
-
-      await expect
-        .poll(
-          () =>
-            wakeCalls.some(
-              (call) =>
-                call.reason === "exec-event" &&
-                call.sessionKey === undefined &&
-                call.agentId === undefined,
-            ),
-          NOTIFY_POLL_OPTIONS,
-        )
-        .toBe(true);
-    } finally {
-      disposeWakeHandler();
-      resetHeartbeatWakeStateForTests();
-    }
-  });
-
-  it("keeps session-scoped wake for agent session keys", async () => {
-    const wakeCalls: Array<{ reason?: string; agentId?: string; sessionKey?: string }> = [];
-    const disposeWakeHandler = setHeartbeatWakeHandler(async (opts) => {
-      wakeCalls.push(opts);
-      return { status: "skipped", reason: "disabled" };
-    });
-
-    try {
-      const notifySessionKey = "agent:ops:main";
-      const tool = createNotifyOnExitExecTool({
-        sessionKey: notifySessionKey,
-        agentId: "ops",
-      });
-
-      const sessionId = await startBackgroundCommand(tool, echoAfterDelay("notify-agent-scoped"));
-      const status = await waitForCompletion(sessionId);
-      expect(status).toBe(PROCESS_STATUS_COMPLETED);
-      await waitForNotifyEvent(sessionId, notifySessionKey);
-
-      await expect
-        .poll(
-          () =>
-            wakeCalls.some(
-              (call) =>
-                call.reason === "exec-event" &&
-                call.sessionKey === notifySessionKey &&
-                call.agentId === "ops",
-            ),
-          NOTIFY_POLL_OPTIONS,
-        )
-        .toBe(true);
-    } finally {
-      disposeWakeHandler();
-      resetHeartbeatWakeStateForTests();
-    }
   });
 
   it.each<NotifyNoopCase>(NOOP_NOTIFY_CASES)("$label", runNotifyNoopCase);

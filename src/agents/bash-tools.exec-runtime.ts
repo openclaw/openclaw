@@ -2,10 +2,9 @@ import path from "node:path";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
 import type { ExecAsk, ExecHost, ExecSecurity } from "../infra/exec-approvals.js";
-import { shouldUseSessionScopedHeartbeatWake } from "../infra/heartbeat-reason.js";
-import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { isDangerousHostEnvVarName } from "../infra/host-env-security.js";
 import { mergePathPrepend } from "../infra/path-prepend.js";
+import { requestSessionEventRun } from "../infra/session-event-run.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import type { ProcessSession } from "./bash-process-registry.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
@@ -201,12 +200,8 @@ function compactNotifyOutput(value: string, maxChars = DEFAULT_NOTIFY_SNIPPET_CH
 }
 
 function requestExecEventWake(opts: { sessionKey: string; agentId?: string }) {
-  if (!shouldUseSessionScopedHeartbeatWake(opts.sessionKey)) {
-    requestHeartbeatNow({ reason: "exec-event" });
-    return;
-  }
-  requestHeartbeatNow({
-    reason: "exec-event",
+  requestSessionEventRun({
+    source: "exec-event",
     sessionKey: opts.sessionKey,
     agentId: opts.agentId,
   });

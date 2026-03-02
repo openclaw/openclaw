@@ -4,12 +4,12 @@ import { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
 import { agentCommand } from "../commands/agent.js";
 import { loadConfig } from "../config/config.js";
 import { updateSessionStore } from "../config/sessions.js";
-import { shouldUseSessionScopedHeartbeatWake } from "../infra/heartbeat-reason.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { resolveOutboundTarget } from "../infra/outbound/targets.js";
 import { registerApnsToken } from "../infra/push-apns.js";
+import { requestSessionEventRun } from "../infra/session-event-run.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { normalizeMainKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
@@ -529,7 +529,6 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       if (!sessionKeyRaw) {
         return;
       }
-      const shouldUseScopedWake = shouldUseSessionScopedHeartbeatWake(sessionKeyRaw);
       const { canonicalKey: sessionKey } = loadSessionEntry(sessionKeyRaw);
 
       // Respect tools.exec.notifyOnExit setting (default: true)
@@ -579,11 +578,7 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
         contextKey: runId ? `exec:${runId}` : "exec",
       });
       if (queued) {
-        if (shouldUseScopedWake) {
-          requestHeartbeatNow({ reason: "exec-event", sessionKey });
-        } else {
-          requestHeartbeatNow({ reason: "exec-event" });
-        }
+        requestSessionEventRun({ source: "exec-event", sessionKey });
       }
       return;
     }
