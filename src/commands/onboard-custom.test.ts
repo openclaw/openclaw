@@ -85,42 +85,67 @@ describe("promptCustomApiConfig", () => {
 
   it("handles openai flow and saves alias", async () => {
     const prompter = createTestPrompter({
-      text: ["http://localhost:11434/v1", "", "llama3", "custom", "local"],
+      text: ["http://localhost:11434/v1", "", "llama3", "custom", "local", "128000", "4096"],
       select: ["plaintext", "openai"],
     });
     stubFetchSequence([{ ok: true }]);
     const result = await runPromptCustomApi(prompter);
 
-    expectOpenAiCompatResult({ prompter, textCalls: 5, selectCalls: 2, result });
+    expectOpenAiCompatResult({ prompter, textCalls: 7, selectCalls: 2, result });
     expect(result.config.agents?.defaults?.models?.["custom/llama3"]?.alias).toBe("local");
   });
 
   it("retries when verification fails", async () => {
     const prompter = createTestPrompter({
-      text: ["http://localhost:11434/v1", "", "bad-model", "good-model", "custom", ""],
+      text: [
+        "http://localhost:11434/v1",
+        "",
+        "bad-model",
+        "good-model",
+        "custom",
+        "",
+        "128000",
+        "4096",
+      ],
       select: ["plaintext", "openai", "model"],
     });
     stubFetchSequence([{ ok: false, status: 400 }, { ok: true }]);
     await runPromptCustomApi(prompter);
 
-    expect(prompter.text).toHaveBeenCalledTimes(6);
+    expect(prompter.text).toHaveBeenCalledTimes(8);
     expect(prompter.select).toHaveBeenCalledTimes(3);
   });
 
   it("detects openai compatibility when unknown", async () => {
     const prompter = createTestPrompter({
-      text: ["https://example.com/v1", "test-key", "detected-model", "custom", "alias"],
+      text: [
+        "https://example.com/v1",
+        "test-key",
+        "detected-model",
+        "custom",
+        "alias",
+        "128000",
+        "4096",
+      ],
       select: ["plaintext", "unknown"],
     });
     stubFetchSequence([{ ok: true }]);
     const result = await runPromptCustomApi(prompter);
 
-    expectOpenAiCompatResult({ prompter, textCalls: 5, selectCalls: 2, result });
+    expectOpenAiCompatResult({ prompter, textCalls: 7, selectCalls: 2, result });
   });
 
   it("uses expanded max_tokens for openai verification probes", async () => {
     const prompter = createTestPrompter({
-      text: ["https://example.com/v1", "test-key", "detected-model", "custom", "alias"],
+      text: [
+        "https://example.com/v1",
+        "test-key",
+        "detected-model",
+        "custom",
+        "alias",
+        "128000",
+        "4096",
+      ],
       select: ["plaintext", "openai"],
     });
     const fetchMock = stubFetchSequence([{ ok: true }]);
@@ -140,6 +165,8 @@ describe("promptCustomApiConfig", () => {
         "gpt-4.1",
         "custom",
         "alias",
+        "128000",
+        "4096",
       ],
       select: ["plaintext", "openai"],
     });
@@ -173,7 +200,15 @@ describe("promptCustomApiConfig", () => {
 
   it("uses expanded max_tokens for anthropic verification probes", async () => {
     const prompter = createTestPrompter({
-      text: ["https://example.com", "test-key", "detected-model", "custom", "alias"],
+      text: [
+        "https://example.com",
+        "test-key",
+        "detected-model",
+        "custom",
+        "alias",
+        "128000",
+        "4096",
+      ],
       select: ["plaintext", "unknown"],
     });
     const fetchMock = stubFetchSequence([{ ok: false, status: 404 }, { ok: true }]);
@@ -196,6 +231,8 @@ describe("promptCustomApiConfig", () => {
         "ok-key",
         "custom",
         "",
+        "128000",
+        "4096",
       ],
       select: ["plaintext", "unknown", "baseUrl", "plaintext"],
     });
@@ -210,7 +247,7 @@ describe("promptCustomApiConfig", () => {
 
   it("renames provider id when baseUrl differs", async () => {
     const prompter = createTestPrompter({
-      text: ["http://localhost:11434/v1", "", "llama3", "custom", ""],
+      text: ["http://localhost:11434/v1", "", "llama3", "custom", "", "128000", "4096"],
       select: ["plaintext", "openai"],
     });
     stubFetchSequence([{ ok: true }]);
@@ -244,7 +281,16 @@ describe("promptCustomApiConfig", () => {
   it("aborts verification after timeout", async () => {
     vi.useFakeTimers();
     const prompter = createTestPrompter({
-      text: ["http://localhost:11434/v1", "", "slow-model", "fast-model", "custom", ""],
+      text: [
+        "http://localhost:11434/v1",
+        "",
+        "slow-model",
+        "fast-model",
+        "custom",
+        "",
+        "128000",
+        "4096",
+      ],
       select: ["plaintext", "openai", "model"],
     });
 
@@ -263,13 +309,21 @@ describe("promptCustomApiConfig", () => {
     await vi.advanceTimersByTimeAsync(30_000);
     await promise;
 
-    expect(prompter.text).toHaveBeenCalledTimes(6);
+    expect(prompter.text).toHaveBeenCalledTimes(8);
   });
 
   it("stores env SecretRef for custom provider when selected", async () => {
     vi.stubEnv("CUSTOM_PROVIDER_API_KEY", "test-env-key");
     const prompter = createTestPrompter({
-      text: ["https://example.com/v1", "CUSTOM_PROVIDER_API_KEY", "detected-model", "custom", ""],
+      text: [
+        "https://example.com/v1",
+        "CUSTOM_PROVIDER_API_KEY",
+        "detected-model",
+        "custom",
+        "",
+        "128000",
+        "4096",
+      ],
       select: ["ref", "env", "openai"],
     });
     const fetchMock = stubFetchSequence([{ ok: true }]);
@@ -297,6 +351,8 @@ describe("promptCustomApiConfig", () => {
         "detected-model",
         "custom",
         "",
+        "128000",
+        "4096",
       ],
       select: ["ref", "provider", "filemain", "env", "openai"],
     });

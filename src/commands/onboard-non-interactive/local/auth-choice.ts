@@ -930,6 +930,8 @@ export async function applyNonInteractiveAuthChoice(params: {
         compatibility: opts.customCompatibility,
         apiKey: opts.customApiKey,
         providerId: opts.customProviderId,
+        contextWindow: opts.customContextWindow ? Number(opts.customContextWindow) : undefined,
+        maxTokens: opts.customMaxTokens ? Number(opts.customMaxTokens) : undefined,
       });
       const resolvedProviderId = resolveCustomProviderId({
         config: nextConfig,

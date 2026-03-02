@@ -17,7 +17,6 @@ import { normalizeAlias } from "./models/shared.js";
 import type { SecretInputMode } from "./onboard-types.js";
 
 const DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434/v1";
-const DEFAULT_CONTEXT_WINDOW = CONTEXT_WINDOW_HARD_MIN_TOKENS;
 const DEFAULT_MAX_TOKENS = 4096;
 const VERIFY_TIMEOUT_MS = 30_000;
 
@@ -78,6 +77,8 @@ export type ApplyCustomApiConfigParams = {
   apiKey?: SecretInput;
   providerId?: string;
   alias?: string;
+  contextWindow?: number;
+  maxTokens?: number;
 };
 
 export type ParseNonInteractiveCustomApiFlagsParams = {
@@ -86,6 +87,8 @@ export type ParseNonInteractiveCustomApiFlagsParams = {
   compatibility?: string;
   apiKey?: string;
   providerId?: string;
+  contextWindow?: number;
+  maxTokens?: number;
 };
 
 export type ParsedNonInteractiveCustomApiFlags = {
@@ -94,6 +97,8 @@ export type ParsedNonInteractiveCustomApiFlags = {
   compatibility: CustomApiCompatibility;
   apiKey?: string;
   providerId?: string;
+  contextWindow?: number;
+  maxTokens?: number;
 };
 
 export type CustomApiErrorCode =
@@ -102,7 +107,8 @@ export type CustomApiErrorCode =
   | "invalid_base_url"
   | "invalid_model_id"
   | "invalid_provider_id"
-  | "invalid_alias";
+  | "invalid_alias"
+  | "invalid_context_window";
 
 export class CustomApiError extends Error {
   readonly code: CustomApiErrorCode;
@@ -549,6 +555,8 @@ export function parseNonInteractiveCustomApiFlags(
     compatibility: parseCustomApiCompatibility(params.compatibility),
     ...(apiKey ? { apiKey } : {}),
     ...(providerId ? { providerId } : {}),
+    ...(params.contextWindow !== undefined ? { contextWindow: params.contextWindow } : {}),
+    ...(params.maxTokens !== undefined ? { maxTokens: params.maxTokens } : {}),
   };
 }
 
@@ -571,6 +579,12 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
   if (!modelId) {
     throw new CustomApiError("invalid_model_id", "Custom provider model ID is required.");
   }
+
+  const contextWindow = params.contextWindow !== undefined ? params.contextWindow : 128000;
+  if (contextWindow < 16000) {
+    throw new CustomApiError("invalid_context_window", "Context window must be at least 16000.");
+  }
+  const maxTokens = params.maxTokens !== undefined ? params.maxTokens : DEFAULT_MAX_TOKENS;
 
   // Transform Azure URLs to include the deployment path for API calls
   const resolvedBaseUrl = isAzureUrl(baseUrl) ? transformAzureUrl(baseUrl, modelId) : baseUrl;
@@ -600,8 +614,8 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
   const nextModel = {
     id: modelId,
     name: `${modelId} (Custom Provider)`,
-    contextWindow: DEFAULT_CONTEXT_WINDOW,
-    maxTokens: DEFAULT_MAX_TOKENS,
+    contextWindow,
+    maxTokens,
     input: ["text"] as ["text"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     reasoning: false,
@@ -802,6 +816,37 @@ export async function promptCustomApiConfig(params: {
       return resolveAliasError({ raw: value, cfg: config, modelRef });
     },
   });
+  const contextWindowInput = await prompter.text({
+    message: "Context window size",
+    initialValue: "128000",
+    placeholder: "e.g. 128000",
+    validate: (value) => {
+      const num = parseInt(value, 10);
+      if (isNaN(num)) {
+        return "Must be a valid number.";
+      }
+      if (num < 16000) {
+        return "Context window must be at least 16000.";
+      }
+      return undefined;
+    },
+  });
+  const contextWindow = parseInt(contextWindowInput, 10);
+
+  const maxTokensInput = await prompter.text({
+    message: "Max output tokens",
+    initialValue: "4096",
+    placeholder: "e.g. 4096",
+    validate: (value) => {
+      const num = parseInt(value, 10);
+      if (isNaN(num) || num <= 0) {
+        return "Must be a positive number.";
+      }
+      return undefined;
+    },
+  });
+  const maxTokens = parseInt(maxTokensInput, 10);
+
   const resolvedCompatibility = compatibility ?? "openai";
   const result = applyCustomApiConfig({
     config,
@@ -811,6 +856,8 @@ export async function promptCustomApiConfig(params: {
     apiKey,
     providerId: providerIdInput,
     alias: aliasInput,
+    contextWindow,
+    maxTokens,
   });
 
   if (result.providerIdRenamedFrom && result.providerId) {
