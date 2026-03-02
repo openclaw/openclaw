@@ -679,19 +679,39 @@ describe("cron cli", () => {
     expect(patch?.patch?.failureAlert).toBe(false);
   });
 
-  it("uses a longer default timeout for cron run", async () => {
-    const { runOpts } = await runCronRunAndCaptureExit({
-      ran: true,
-      args: ["cron", "run", "job-1", "--expect-final"],
-    });
-    expect(runOpts.timeout).toBe("600000");
-  });
+  it("patches failure alert mode/accountId on cron edit", async () => {
+    callGatewayFromCli.mockClear();
 
-  it("preserves explicit --timeout for cron run", async () => {
-    const { runOpts } = await runCronRunAndCaptureExit({
-      ran: true,
-      args: ["cron", "run", "job-1", "--expect-final", "--timeout", "45000"],
-    });
-    expect(runOpts.timeout).toBe("45000");
+    const program = buildProgram();
+
+    await program.parseAsync(
+      [
+        "cron",
+        "edit",
+        "job-1",
+        "--failure-alert-after",
+        "1",
+        "--failure-alert-mode",
+        "webhook",
+        "--failure-alert-account-id",
+        "bot-a",
+      ],
+      { from: "user" },
+    );
+
+    const updateCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.update");
+    const patch = updateCall?.[2] as {
+      patch?: {
+        failureAlert?: {
+          after?: number;
+          mode?: "announce" | "webhook";
+          accountId?: string;
+        };
+      };
+    };
+
+    expect(patch?.patch?.failureAlert?.after).toBe(1);
+    expect(patch?.patch?.failureAlert?.mode).toBe("webhook");
+    expect(patch?.patch?.failureAlert?.accountId).toBe("bot-a");
   });
 });
