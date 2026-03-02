@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { expectSingleNpmPackIgnoreScriptsCall } from "../test-utils/exec-assertions.js";
 import {
   expectInstallUsesIgnoreScripts,
@@ -29,7 +29,6 @@ vi.mock("../process/exec.js", () => ({
 }));
 
 function makeTempDir() {
-  fs.mkdirSync(fixtureRoot, { recursive: true });
   const dir = path.join(fixtureRoot, `case-${tempDirIndex++}`);
   fs.mkdirSync(dir, { recursive: true });
   return dir;
@@ -49,6 +48,10 @@ afterAll(() => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+});
+
+beforeAll(() => {
+  fs.mkdirSync(fixtureRoot, { recursive: true });
 });
 
 function writeArchiveFixture(params: { fileName: string; contents: Buffer }) {
