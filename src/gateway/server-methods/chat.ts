@@ -208,8 +208,8 @@ function isSilentAssistantHistoryMessage(message: unknown): boolean {
   if ((entry.role ?? "") !== "assistant") {
     return false;
   }
-  if (typeof entry.text === "string" && isSilentReplyText(entry.text, SILENT_REPLY_TOKEN)) {
-    return true;
+  if (typeof entry.text === "string") {
+    return isSilentReplyText(entry.text, SILENT_REPLY_TOKEN);
   }
   if (typeof entry.content === "string") {
     return isSilentReplyText(entry.content, SILENT_REPLY_TOKEN);

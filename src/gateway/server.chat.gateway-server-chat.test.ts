@@ -333,6 +333,12 @@ describe("gateway server chat", () => {
           content: [{ type: "text", text: "real reply" }],
           timestamp: 3,
         },
+        {
+          role: "assistant",
+          text: "real text field reply",
+          content: "NO_REPLY",
+          timestamp: 4,
+        },
       ];
       const lines = messages.map((message) => JSON.stringify({ message }));
       await fs.writeFile(path.join(dir, "sess-main.jsonl"), lines.join("\n"), "utf-8");
@@ -343,9 +349,17 @@ describe("gateway server chat", () => {
       expect(res.ok).toBe(true);
       const historyMessages = res.payload?.messages ?? [];
       const textValues = historyMessages
-        .map((message) => extractFirstTextBlock(message))
+        .map((message) => {
+          if (message && typeof message === "object") {
+            const entry = message as { text?: unknown };
+            if (typeof entry.text === "string") {
+              return entry.text;
+            }
+          }
+          return extractFirstTextBlock(message);
+        })
         .filter((value): value is string => typeof value === "string");
-      expect(textValues).toEqual(["hello", "real reply"]);
+      expect(textValues).toEqual(["hello", "real reply", "real text field reply"]);
     } finally {
       testState.sessionStorePath = undefined;
       await fs.rm(dir, { recursive: true, force: true });
