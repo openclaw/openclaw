@@ -81,7 +81,7 @@ describe("runCronIsolatedAgentTurn — cron model override (#21057)", () => {
   // Hold onto the cron session *object* — the code may reassign its
   // `sessionEntry` property (e.g. during skills snapshot refresh), so
   // checking a stale reference would give a false negative.
-  let cronSession: { sessionEntry: ReturnType<typeof makeFreshSessionEntry>; [k: string]: unknown };
+  let cronSession: ReturnType<typeof makeCronSession>;
 
   beforeEach(() => {
     previousFastTestEnv = clearFastTestEnv();
@@ -103,7 +103,7 @@ describe("runCronIsolatedAgentTurn — cron model override (#21057)", () => {
 
     cronSession = makeCronSession({
       sessionEntry: makeFreshSessionEntry(),
-    }) as { sessionEntry: ReturnType<typeof makeFreshSessionEntry>; [k: string]: unknown };
+    });
     resolveCronSessionMock.mockReturnValue(cronSession);
   });
 
