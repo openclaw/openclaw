@@ -652,6 +652,8 @@ const ERROR_PATTERNS = {
     "credit balance",
     "plans & billing",
     "insufficient balance",
+    /not (?:yet )?available (?:for|on) (?:this|your) (?:subscription|plan|tier)/i,
+    /(?:feature|model|beta) (?:is )?not (?:yet )?(?:available|enabled|supported) (?:for|on)/i,
   ],
   authPermanent: [
     /api[_ ]?key[_ ]?(?:revoked|invalid|deactivated|deleted)/i,

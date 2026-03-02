@@ -100,6 +100,19 @@ describe("failover-error", () => {
     expect(err?.provider).toBe("anthropic");
   });
 
+  it("classifies subscription/feature-unavailability as billing failover", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        message: "The long context beta is not yet available for this subscription",
+      }),
+    ).toBe("billing");
+    expect(
+      resolveFailoverReasonFromError({
+        message: "This feature is not available for your plan",
+      }),
+    ).toBe("billing");
+  });
+
   it("describes non-Error values consistently", () => {
     const described = describeFailoverError(123);
     expect(described.message).toBe("123");
