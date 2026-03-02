@@ -24,6 +24,7 @@ import { telegramUserbotStreamingAdapter } from "./adapters/streaming.js";
 import { telegramUserbotThreadingAdapter } from "./adapters/threading.js";
 import { telegramUserbotMeta, TELEGRAM_USERBOT_CHANNEL_ID } from "./config-schema.js";
 import { ConnectionManager } from "./connection.js";
+import { telegramUserbotOnboardingAdapter } from "./onboarding.js";
 
 // ---------------------------------------------------------------------------
 // Per-account ConnectionManager instances
@@ -60,6 +61,7 @@ export const telegramUserbotPlugin: ChannelPlugin<
   // Adapters
   // -------------------------------------------------------------------------
 
+  onboarding: telegramUserbotOnboardingAdapter,
   config: telegramUserbotConfigAdapter,
   setup: telegramUserbotSetupAdapter,
   auth: telegramUserbotAuthAdapter,
