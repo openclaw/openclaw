@@ -724,6 +724,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     if (typeof envelope.timestamp === "number") {
       maybeSendSignalAckReaction({
         cfg: deps.cfg,
+        agentId: route.agentId,
         senderRecipient,
         targetTimestamp: envelope.timestamp,
         isGroup,
