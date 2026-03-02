@@ -166,6 +166,18 @@ Related:
 - [/gateway/configuration](/gateway/configuration)
 - [/gateway/doctor](/gateway/doctor)
 
+## Duplicate plugin id warning after gateway restart
+
+Use this when logs show `duplicate plugin id detected; later plugin may be overridden` during startup/restart.
+
+What it means:
+
+- OpenClaw discovered the same plugin id from multiple plugin roots.
+- For auto-discovered duplicates, bundled plugins take precedence over global plugins (`~/.openclaw/extensions`).
+- The lower-precedence duplicate is kept as disabled and can appear as `overridden by bundled plugin`.
+
+If you are hitting the restart warning tracked in #30908, upgrade to a release that includes [#30931](https://github.com/openclaw/openclaw/pull/30931), which addresses duplicate-id warning noise from restart discovery.
+
 ## Channel connected messages not flowing
 
 If channel state is connected but message flow is dead, focus on policy, permissions, and channel specific delivery rules.
