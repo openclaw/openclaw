@@ -53,7 +53,11 @@ export async function resolveMedia(
   stickerMetadata?: StickerMetadata;
 } | null> {
   const msg = ctx.message;
-  const downloadAndSaveTelegramFile = async (filePath: string, fetchImpl: typeof fetch) => {
+  const downloadAndSaveTelegramFile = async (
+    filePath: string,
+    fetchImpl: typeof fetch,
+    telegramFileName?: string,
+  ) => {
     const url = `https://api.telegram.org/file/bot${token}/${filePath}`;
     const fetched = await fetchRemoteMedia({
       url,
@@ -62,7 +66,9 @@ export async function resolveMedia(
       maxBytes,
       ssrfPolicy: TELEGRAM_MEDIA_SSRF_POLICY,
     });
-    const originalName = fetched.fileName ?? filePath;
+    // Prefer the original filename from the Telegram Bot API (e.g. msg.document.file_name)
+    // over the server-side path derived name (e.g. "file_<server-id>.pdf").
+    const originalName = telegramFileName ?? fetched.fileName ?? filePath;
     return saveMediaBuffer(fetched.buffer, fetched.contentType, "inbound", maxBytes, originalName);
   };
 
@@ -184,7 +190,11 @@ export async function resolveMedia(
   if (!fetchImpl) {
     throw new Error("fetch is not available; set channels.telegram.proxy in config");
   }
-  const saved = await downloadAndSaveTelegramFile(file.file_path, fetchImpl);
+  // Extract original filename from Telegram Bot API metadata before it is lost.
+  // document/audio/video carry file_name; photo/voice/video_note do not.
+  const telegramFileName =
+    msg.document?.file_name ?? msg.audio?.file_name ?? msg.video?.file_name ?? undefined;
+  const saved = await downloadAndSaveTelegramFile(file.file_path, fetchImpl, telegramFileName);
   const placeholder = resolveTelegramMediaPlaceholder(msg) ?? "<media:document>";
   return { path: saved.path, contentType: saved.contentType, placeholder };
 }

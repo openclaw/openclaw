@@ -31,8 +31,9 @@ const MAX_MEDIA_BYTES = 10_000_000;
 const BOT_TOKEN = "tok123";
 
 function makeCtx(
-  mediaField: "voice" | "audio" | "photo" | "video",
+  mediaField: "voice" | "audio" | "photo" | "video" | "document",
   getFile: TelegramContext["getFile"],
+  fileNameOverride?: string,
 ): TelegramContext {
   const msg: Record<string, unknown> = {
     message_id: 1,
@@ -43,13 +44,21 @@ function makeCtx(
     msg.voice = { file_id: "v1", duration: 5, file_unique_id: "u1" };
   }
   if (mediaField === "audio") {
-    msg.audio = { file_id: "a1", duration: 5, file_unique_id: "u2" };
+    msg.audio = { file_id: "a1", duration: 5, file_unique_id: "u2", file_name: fileNameOverride };
   }
   if (mediaField === "photo") {
     msg.photo = [{ file_id: "p1", width: 100, height: 100 }];
   }
   if (mediaField === "video") {
-    msg.video = { file_id: "vid1", duration: 10, file_unique_id: "u3" };
+    msg.video = {
+      file_id: "vid1",
+      duration: 10,
+      file_unique_id: "u3",
+      file_name: fileNameOverride,
+    };
+  }
+  if (mediaField === "document") {
+    msg.document = { file_id: "d1", file_unique_id: "u4", file_name: fileNameOverride };
   }
   return {
     message: msg as unknown as Message,
@@ -202,5 +211,68 @@ describe("resolveMedia getFile retry", () => {
     const result = await expectTransientGetFileRetrySuccess();
     // Should retry transient errors.
     expect(result).not.toBeNull();
+  });
+});
+
+describe("resolveMedia original filename preservation", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    fetchRemoteMedia.mockClear();
+    saveMediaBuffer.mockClear();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it.each([
+    ["document", "business-plan.docx"],
+    ["audio", "meeting-recording.mp3"],
+    ["video", "demo.mp4"],
+  ] as const)(
+    "passes msg.%s.file_name to saveMediaBuffer instead of server-side path",
+    async (mediaField, originalName) => {
+      const getFile = vi.fn().mockResolvedValue({ file_path: `documents/file_abc123xyz.pdf` });
+      fetchRemoteMedia.mockResolvedValue({
+        buffer: Buffer.from("data"),
+        contentType: "application/octet-stream",
+        // Simulates what fetchRemoteMedia derives from the server-side URL path —
+        // NOT the original user filename.
+        fileName: "file_abc123xyz.pdf",
+      });
+      saveMediaBuffer.mockResolvedValue({ path: "/tmp/saved", contentType: "application/pdf" });
+
+      await resolveMedia(makeCtx(mediaField, getFile, originalName), MAX_MEDIA_BYTES, BOT_TOKEN);
+
+      // saveMediaBuffer must receive the original Telegram filename, not the server-side path.
+      expect(saveMediaBuffer).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        "inbound",
+        MAX_MEDIA_BYTES,
+        originalName,
+      );
+    },
+  );
+
+  it("falls back to server-derived name when file_name is absent (e.g. voice)", async () => {
+    const getFile = vi.fn().mockResolvedValue({ file_path: "voice/file_0.oga" });
+    fetchRemoteMedia.mockResolvedValue({
+      buffer: Buffer.from("audio"),
+      contentType: "audio/ogg",
+      fileName: "file_0.oga",
+    });
+    saveMediaBuffer.mockResolvedValue({ path: "/tmp/file_0.oga", contentType: "audio/ogg" });
+
+    await resolveMedia(makeCtx("voice", getFile), MAX_MEDIA_BYTES, BOT_TOKEN);
+
+    // Voice has no file_name; falls back to fetched.fileName from the server path.
+    expect(saveMediaBuffer).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      "inbound",
+      MAX_MEDIA_BYTES,
+      "file_0.oga",
+    );
   });
 });
