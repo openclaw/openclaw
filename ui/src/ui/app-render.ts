@@ -138,6 +138,17 @@ function resolveAssistantAvatarUrl(state: AppViewState): string | undefined {
   return identity?.avatarUrl;
 }
 
+function sortStringsCompat(values: Iterable<string>): string[] {
+  const entries = Array.from(values);
+  const maybeToSorted = (
+    entries as string[] & { toSorted?: (compareFn: (a: string, b: string) => number) => string[] }
+  ).toSorted;
+  if (typeof maybeToSorted === "function") {
+    return maybeToSorted.call(entries, (a, b) => a.localeCompare(b));
+  }
+  return entries.slice().toSorted((a, b) => a.localeCompare(b));
+}
+
 export function renderApp(state: AppViewState) {
   const openClawVersion =
     (typeof state.hello?.server?.version === "string" && state.hello.server.version.trim()) ||
@@ -166,9 +177,7 @@ export function renderApp(state: AppViewState) {
     state.agentsList?.defaultId ??
     state.agentsList?.agents?.[0]?.id ??
     null;
-  // Keep compat with older Chromium versions (for example legacy Windows 7 builds)
-  // where Array.prototype.toSorted is unavailable.
-  const cronAgentSuggestions = Array.from(
+  const cronAgentSuggestions = sortStringsCompat(
     new Set(
       [
         ...(state.agentsList?.agents?.map((entry) => entry.id.trim()) ?? []),
@@ -177,8 +186,8 @@ export function renderApp(state: AppViewState) {
           .filter(Boolean),
       ].filter(Boolean),
     ),
-  ).toSorted((a, b) => a.localeCompare(b));
-  const cronModelSuggestions = Array.from(
+  );
+  const cronModelSuggestions = sortStringsCompat(
     new Set(
       [
         ...state.cronModelSuggestions,
@@ -193,7 +202,7 @@ export function renderApp(state: AppViewState) {
           .filter(Boolean),
       ].filter(Boolean),
     ),
-  ).toSorted((a, b) => a.localeCompare(b));
+  );
   const visibleCronJobs = getVisibleCronJobs(state);
   const selectedDeliveryChannel =
     state.cronForm.deliveryChannel && state.cronForm.deliveryChannel.trim()
