@@ -243,6 +243,32 @@ describe("browser chrome helpers", () => {
     await expect(isChromeReachable("http://127.0.0.1:12345", 50)).resolves.toBe(false);
   });
 
+  it("bypasses proxy dispatcher for loopback CDP probes", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ webSocketDebuggerUrl: "ws://127.0.0.1/devtools" }),
+    } as unknown as Response);
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(isChromeReachable("http://127.0.0.1:12345", 50)).resolves.toBe(true);
+
+    const init = fetchMock.mock.calls[0]?.[1] as { dispatcher?: unknown } | undefined;
+    expect(init?.dispatcher).toBeDefined();
+  });
+
+  it("does not force loopback dispatcher for remote CDP probes", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ webSocketDebuggerUrl: "ws://example.com/devtools" }),
+    } as unknown as Response);
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(isChromeReachable("http://example.com:12345", 50)).resolves.toBe(true);
+
+    const init = fetchMock.mock.calls[0]?.[1] as { dispatcher?: unknown } | undefined;
+    expect(init?.dispatcher).toBeUndefined();
+  });
+
   it("stopOpenClawChrome no-ops when process is already killed", async () => {
     const proc = makeProc({ killed: true });
     await stopOpenClawChrome(

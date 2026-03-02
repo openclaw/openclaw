@@ -2,11 +2,12 @@ import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { Agent } from "undici";
 import WebSocket from "ws";
 import { ensurePortAvailable } from "../infra/ports.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { CONFIG_DIR } from "../utils.js";
-import { appendCdpPath } from "./cdp.helpers.js";
+import { appendCdpPath, isLoopbackHost } from "./cdp.helpers.js";
 import { getHeadersWithAuth, normalizeCdpWsUrl } from "./cdp.js";
 import {
   type BrowserExecutable,
@@ -67,6 +68,22 @@ function cdpUrlForPort(cdpPort: number) {
   return `http://127.0.0.1:${cdpPort}`;
 }
 
+function shouldBypassProxyForCdp(cdpUrl: string): boolean {
+  try {
+    const url = new URL(cdpUrl);
+    return isLoopbackHost(url.hostname);
+  } catch {
+    return false;
+  }
+}
+
+function createLocalCdpDispatcher(cdpUrl: string): Agent | undefined {
+  if (!shouldBypassProxyForCdp(cdpUrl)) {
+    return undefined;
+  }
+  return new Agent({ connect: { proxy: undefined } });
+}
+
 export async function isChromeReachable(cdpUrl: string, timeoutMs = 500): Promise<boolean> {
   const version = await fetchChromeVersion(cdpUrl, timeoutMs);
   return Boolean(version);
@@ -83,10 +100,13 @@ async function fetchChromeVersion(cdpUrl: string, timeoutMs = 500): Promise<Chro
   const t = setTimeout(ctrl.abort.bind(ctrl), timeoutMs);
   try {
     const versionUrl = appendCdpPath(cdpUrl, "/json/version");
-    const res = await fetch(versionUrl, {
+    const dispatcher = createLocalCdpDispatcher(cdpUrl);
+    const init: RequestInit & { dispatcher?: Agent } = {
       signal: ctrl.signal,
       headers: getHeadersWithAuth(versionUrl),
-    });
+      ...(dispatcher ? { dispatcher } : {}),
+    };
+    const res = await fetch(versionUrl, init);
     if (!res.ok) {
       return null;
     }
