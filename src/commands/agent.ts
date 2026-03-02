@@ -163,6 +163,7 @@ function runAgentAttempt(params: {
   onAgentEvent: (evt: { stream: string; data?: Record<string, unknown> }) => void;
   primaryProvider: string;
 }) {
+  const senderIsOwner = params.opts.senderIsOwner ?? true;
   const effectivePrompt = resolveFallbackRetryPrompt({
     body: params.body,
     isFallbackRetry: params.isFallbackRetry,
@@ -209,7 +210,7 @@ function runAgentAttempt(params: {
     currentThreadTs: params.runContext.currentThreadTs,
     replyToMode: params.runContext.replyToMode,
     hasRepliedRef: params.runContext.hasRepliedRef,
-    senderIsOwner: true,
+    senderIsOwner,
     sessionFile: params.sessionFile,
     workspaceDir: params.workspaceDir,
     config: params.cfg,
