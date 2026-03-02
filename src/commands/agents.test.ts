@@ -58,6 +58,94 @@ describe("agents helpers", () => {
     expect(work?.agentDir).toBe(path.resolve("/state/agents/work/agent"));
     expect(work?.bindings).toBe(1);
     expect(work?.isDefault).toBe(true);
+
+    // New fields: sandbox defaults to off, exec not blocked
+    expect(main?.execBlocked).toBe(false);
+    expect(main?.sandbox).toEqual({ mode: "off" });
+    expect(main?.toolDeny).toBeUndefined();
+  });
+
+  it("buildAgentSummaries exposes toolDeny and execBlocked from global deny", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [{ id: "main" }],
+      },
+      tools: {
+        deny: ["group:runtime"],
+      },
+    };
+
+    const summaries = buildAgentSummaries(cfg);
+    const main = summaries.find((summary) => summary.id === "main");
+    expect(main?.toolDeny).toEqual(["group:runtime"]);
+    expect(main?.execBlocked).toBe(true);
+  });
+
+  it("buildAgentSummaries exposes toolDeny and execBlocked from per-agent deny", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [{ id: "main", tools: { deny: ["exec"] } }],
+      },
+    };
+
+    const summaries = buildAgentSummaries(cfg);
+    const main = summaries.find((summary) => summary.id === "main");
+    expect(main?.toolDeny).toEqual(["exec"]);
+    expect(main?.execBlocked).toBe(true);
+  });
+
+  it("buildAgentSummaries merges global and per-agent deny lists", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [{ id: "main", tools: { deny: ["web_search"] } }],
+      },
+      tools: {
+        deny: ["exec"],
+      },
+    };
+
+    const summaries = buildAgentSummaries(cfg);
+    const main = summaries.find((summary) => summary.id === "main");
+    expect(main?.toolDeny).toEqual(["exec", "web_search"]);
+    expect(main?.execBlocked).toBe(true);
+  });
+
+  it("buildAgentSummaries exposes sandbox mode from agent config", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [{ id: "main", sandbox: { mode: "all" } }],
+      },
+    };
+
+    const summaries = buildAgentSummaries(cfg);
+    const main = summaries.find((summary) => summary.id === "main");
+    expect(main?.sandbox).toEqual({ mode: "all" });
+  });
+
+  it("buildAgentSummaries exposes sandbox mode from agent defaults", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: { sandbox: { mode: "non-main" } },
+        list: [{ id: "main" }],
+      },
+    };
+
+    const summaries = buildAgentSummaries(cfg);
+    const main = summaries.find((summary) => summary.id === "main");
+    expect(main?.sandbox).toEqual({ mode: "non-main" });
+  });
+
+  it("buildAgentSummaries per-agent sandbox overrides defaults", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: { sandbox: { mode: "non-main" } },
+        list: [{ id: "main", sandbox: { mode: "all" } }],
+      },
+    };
+
+    const summaries = buildAgentSummaries(cfg);
+    const main = summaries.find((summary) => summary.id === "main");
+    expect(main?.sandbox).toEqual({ mode: "all" });
   });
 
   it("applyAgentConfig merges updates", () => {

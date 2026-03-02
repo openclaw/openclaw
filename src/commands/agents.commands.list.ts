@@ -51,6 +51,13 @@ function formatSummary(summary: AgentSummary) {
     lines.push(`  Model: ${summary.model}`);
   }
   lines.push(`  Routing rules: ${summary.bindings}`);
+  if (summary.execBlocked) {
+    const denyDetail = summary.toolDeny?.length ? ` (${summary.toolDeny.join(", ")} denied)` : "";
+    lines.push(`  Tools: exec blocked${denyDetail}`);
+  }
+  if (summary.sandbox.mode !== "off") {
+    lines.push(`  Sandbox: ${summary.sandbox.mode}`);
+  }
 
   if (summary.routes?.length) {
     lines.push(`  Routing: ${summary.routes.join(", ")}`);

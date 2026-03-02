@@ -1,5 +1,6 @@
 import {
   listAgentEntries,
+  resolveAgentConfig,
   resolveAgentDir,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
@@ -10,6 +11,7 @@ import {
   loadAgentIdentityFromWorkspace,
   parseIdentityMarkdown as parseIdentityMarkdownFile,
 } from "../agents/identity-file.js";
+import { expandToolGroups } from "../agents/tool-policy-shared.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 
@@ -27,6 +29,12 @@ export type AgentSummary = {
   routes?: string[];
   providers?: string[];
   isDefault: boolean;
+  /** Effective deny list for this agent (merged global + per-agent). */
+  toolDeny?: string[];
+  /** True when exec is blocked via the effective deny list. */
+  execBlocked: boolean;
+  /** Sandbox configuration for this agent. */
+  sandbox: { mode: string };
 };
 
 type AgentEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
@@ -80,6 +88,36 @@ export function loadAgentIdentity(workspace: string): AgentIdentity | null {
   return identityHasValues(parsed) ? parsed : null;
 }
 
+/** Resolve effective deny list by merging global tools.deny with per-agent tools.deny. */
+function resolveEffectiveDeny(cfg: OpenClawConfig, agentId: string): string[] {
+  const globalDeny = cfg.tools?.deny ?? [];
+  const agentConfig = resolveAgentConfig(cfg, agentId);
+  const agentDeny = agentConfig?.tools?.deny ?? [];
+  const merged = [...globalDeny, ...agentDeny];
+  if (merged.length === 0) {
+    return [];
+  }
+  return Array.from(new Set(merged));
+}
+
+/** Check whether exec is blocked by the effective deny list (supports group expansion). */
+function isExecBlocked(denyList: string[]): boolean {
+  if (denyList.length === 0) {
+    return false;
+  }
+  const expanded = expandToolGroups(denyList);
+  return expanded.includes("exec");
+}
+
+/** Resolve sandbox mode for an agent (per-agent overrides global defaults.sandbox.mode). */
+function resolveAgentSandboxMode(cfg: OpenClawConfig, agentId: string): string {
+  const agentConfig = resolveAgentConfig(cfg, agentId);
+  if (agentConfig?.sandbox?.mode) {
+    return agentConfig.sandbox.mode;
+  }
+  return cfg.agents?.defaults?.sandbox?.mode ?? "off";
+}
+
 export function buildAgentSummaries(cfg: OpenClawConfig): AgentSummary[] {
   const defaultAgentId = normalizeAgentId(resolveDefaultAgentId(cfg));
   const configuredAgents = listAgentEntries(cfg);
@@ -108,6 +146,7 @@ export function buildAgentSummaries(cfg: OpenClawConfig): AgentSummary[] {
       : configIdentity && (identityName || identityEmoji)
         ? "config"
         : undefined;
+    const toolDeny = resolveEffectiveDeny(cfg, id);
     return {
       id,
       name: resolveAgentName(cfg, id),
@@ -119,6 +158,9 @@ export function buildAgentSummaries(cfg: OpenClawConfig): AgentSummary[] {
       model: resolveAgentModel(cfg, id),
       bindings: bindingCounts.get(id) ?? 0,
       isDefault: id === defaultAgentId,
+      toolDeny: toolDeny.length > 0 ? toolDeny : undefined,
+      execBlocked: isExecBlocked(toolDeny),
+      sandbox: { mode: resolveAgentSandboxMode(cfg, id) },
     };
   });
 }
