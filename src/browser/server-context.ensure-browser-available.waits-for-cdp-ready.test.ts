@@ -27,6 +27,8 @@ function makeBrowserState(): BrowserServerState {
       cdpProtocol: "http",
       cdpHost: "127.0.0.1",
       cdpIsLoopback: true,
+      cdpPortRangeStart: null,
+      cdpPortRangeEnd: null,
       evaluateEnabled: false,
       remoteCdpTimeoutMs: 1500,
       remoteCdpHandshakeTimeoutMs: 3000,
@@ -47,6 +49,7 @@ function makeBrowserState(): BrowserServerState {
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.clearAllMocks();
   vi.restoreAllMocks();
 });
 
@@ -83,5 +86,39 @@ describe("browser server-context ensureBrowserAvailable", () => {
     expect(launchOpenClawChrome).toHaveBeenCalledTimes(1);
     expect(isChromeCdpReady).toHaveBeenCalled();
     expect(stopOpenClawChrome).not.toHaveBeenCalled();
+  });
+
+  it("stops launched chrome when CDP readiness never arrives", async () => {
+    vi.useFakeTimers();
+
+    const launchOpenClawChrome = vi.mocked(chromeModule.launchOpenClawChrome);
+    const stopOpenClawChrome = vi.mocked(chromeModule.stopOpenClawChrome);
+    const isChromeReachable = vi.mocked(chromeModule.isChromeReachable);
+    const isChromeCdpReady = vi.mocked(chromeModule.isChromeCdpReady);
+
+    isChromeReachable.mockResolvedValue(false);
+    isChromeCdpReady.mockResolvedValue(false);
+
+    const proc = new EventEmitter() as unknown as ChildProcessWithoutNullStreams;
+    launchOpenClawChrome.mockResolvedValue({
+      pid: 321,
+      exe: { kind: "chromium", path: "/usr/bin/chromium" },
+      userDataDir: "/tmp/openclaw-test",
+      cdpPort: 18800,
+      startedAt: Date.now(),
+      proc,
+    });
+
+    const state = makeBrowserState();
+    const ctx = createBrowserRouteContext({ getState: () => state });
+    const profile = ctx.forProfile("openclaw");
+
+    const promise = profile.ensureBrowserAvailable();
+    const rejected = expect(promise).rejects.toThrow("not reachable after start");
+    await vi.advanceTimersByTimeAsync(8100);
+    await rejected;
+
+    expect(launchOpenClawChrome).toHaveBeenCalledTimes(1);
+    expect(stopOpenClawChrome).toHaveBeenCalledTimes(1);
   });
 });
