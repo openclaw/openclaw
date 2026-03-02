@@ -143,6 +143,8 @@ function resolveSkillEnvVars(cfg?: OpenClawConfig): Record<string, string> {
   return skillEnv;
 }
 
+// Trigger CI re-run
+
 function resolveExecConfig(params: { cfg?: OpenClawConfig; agentId?: string }) {
   const cfg = params.cfg;
   const globalExec = cfg?.tools?.exec;
