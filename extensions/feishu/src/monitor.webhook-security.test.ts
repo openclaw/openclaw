@@ -84,6 +84,27 @@ function buildConfig(params: {
   } as ClawdbotConfig;
 }
 
+function buildMultiAccountWebsocketConfig(accountIds: string[]): ClawdbotConfig {
+  return {
+    channels: {
+      feishu: {
+        enabled: true,
+        accounts: Object.fromEntries(
+          accountIds.map((accountId) => [
+            accountId,
+            {
+              enabled: true,
+              appId: `cli_${accountId}`,
+              appSecret: `secret_${accountId}`,
+              connectionMode: "websocket",
+            },
+          ]),
+        ),
+      },
+    },
+  } as ClawdbotConfig;
+}
+
 async function withRunningWebhookMonitor(
   params: {
     accountId: string;
@@ -205,5 +226,146 @@ describe("Feishu webhook security hardening", () => {
 
     isWebhookRateLimitedForTest("/feishu-rate-limit-stale:fresh", now + 60_001);
     expect(getFeishuWebhookRateLimitStateSizeForTest()).toBe(1);
+  });
+
+  it("starts account probes sequentially to avoid startup bursts", async () => {
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const started: string[] = [];
+    let releaseProbes!: () => void;
+    const probesReleased = new Promise<void>((resolve) => {
+      releaseProbes = () => resolve();
+    });
+    probeFeishuMock.mockImplementation(async (account: { accountId: string }) => {
+      started.push(account.accountId);
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await probesReleased;
+      inFlight -= 1;
+      return { ok: true, botOpenId: `bot_${account.accountId}` };
+    });
+
+    const abortController = new AbortController();
+    const monitorPromise = monitorFeishuProvider({
+      config: buildMultiAccountWebsocketConfig(["alpha", "beta", "gamma"]),
+      abortSignal: abortController.signal,
+    });
+
+    try {
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(started).toEqual(["alpha"]);
+      expect(maxInFlight).toBe(1);
+    } finally {
+      releaseProbes();
+      abortController.abort();
+      await monitorPromise;
+    }
+  });
+
+  it("does not refetch bot info after a failed sequential preflight", async () => {
+    const started: string[] = [];
+    let releaseBetaProbe!: () => void;
+    const betaProbeReleased = new Promise<void>((resolve) => {
+      releaseBetaProbe = () => resolve();
+    });
+
+    probeFeishuMock.mockImplementation(async (account: { accountId: string }) => {
+      started.push(account.accountId);
+      if (account.accountId === "alpha") {
+        return { ok: false };
+      }
+      await betaProbeReleased;
+      return { ok: true, botOpenId: `bot_${account.accountId}` };
+    });
+
+    const abortController = new AbortController();
+    const monitorPromise = monitorFeishuProvider({
+      config: buildMultiAccountWebsocketConfig(["alpha", "beta"]),
+      abortSignal: abortController.signal,
+    });
+
+    try {
+      for (let i = 0; i < 10 && !started.includes("beta"); i += 1) {
+        await Promise.resolve();
+      }
+
+      expect(started).toEqual(["alpha", "beta"]);
+      expect(started.filter((accountId) => accountId === "alpha")).toHaveLength(1);
+    } finally {
+      releaseBetaProbe();
+      abortController.abort();
+      await monitorPromise;
+    }
+  });
+
+  it("continues startup when a sequential preflight probe times out", async () => {
+    vi.useFakeTimers();
+    const started: string[] = [];
+    let releaseBetaProbe!: () => void;
+    const betaProbeReleased = new Promise<void>((resolve) => {
+      releaseBetaProbe = () => resolve();
+    });
+
+    probeFeishuMock.mockImplementation((account: { accountId: string }) => {
+      started.push(account.accountId);
+      if (account.accountId === "alpha") {
+        return new Promise<never>(() => {});
+      }
+      return betaProbeReleased.then(() => ({ ok: true, botOpenId: `bot_${account.accountId}` }));
+    });
+
+    const abortController = new AbortController();
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    const monitorPromise = monitorFeishuProvider({
+      config: buildMultiAccountWebsocketConfig(["alpha", "beta"]),
+      runtime,
+      abortSignal: abortController.signal,
+    });
+
+    try {
+      await Promise.resolve();
+      expect(started).toEqual(["alpha"]);
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      await Promise.resolve();
+
+      expect(started).toEqual(["alpha", "beta"]);
+      expect(runtime.error).toHaveBeenCalledWith(
+        expect.stringContaining("bot info probe timed out"),
+      );
+    } finally {
+      releaseBetaProbe();
+      abortController.abort();
+      await monitorPromise;
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops sequential preflight when aborted during a stuck probe", async () => {
+    const started: string[] = [];
+    probeFeishuMock.mockImplementation((account: { accountId: string }) => {
+      started.push(account.accountId);
+      return new Promise<never>(() => {});
+    });
+
+    const abortController = new AbortController();
+    const monitorPromise = monitorFeishuProvider({
+      config: buildMultiAccountWebsocketConfig(["alpha", "beta"]),
+      abortSignal: abortController.signal,
+    });
+
+    try {
+      await Promise.resolve();
+      expect(started).toEqual(["alpha"]);
+
+      abortController.abort();
+      await monitorPromise;
+
+      expect(started).toEqual(["alpha"]);
+    } finally {
+      abortController.abort();
+    }
   });
 });
