@@ -1,4 +1,6 @@
 import { spawn } from "node:child_process";
+import fs from "node:fs/promises";
+import path from "node:path";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { sanitizeEnvVars } from "./sanitize-env-vars.js";
 
@@ -391,6 +393,72 @@ function appendCustomBinds(args: string[], cfg: SandboxDockerConfig): void {
   }
 }
 
+function splitBindSpec(bind: string): { source: string; target: string } | null {
+  const trimmed = bind.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const first = trimmed.indexOf(":");
+  if (first <= 0) {
+    return null;
+  }
+  const second = trimmed.indexOf(":", first + 1);
+  const source = trimmed.slice(0, first).trim();
+  const target =
+    second === -1 ? trimmed.slice(first + 1).trim() : trimmed.slice(first + 1, second).trim();
+  if (!source || !target) {
+    return null;
+  }
+  return { source, target };
+}
+
+function isAbsoluteHostPath(input: string): boolean {
+  if (input.startsWith("/")) {
+    return true;
+  }
+  return /^[a-zA-Z]:[\\/]/.test(input);
+}
+
+async function resolveHostPathForNestedDockerMount(params: {
+  hostWorkspaceHint?: string;
+  containerWorkspacePath: string;
+  fallbackPath: string;
+}): Promise<string> {
+  const hint = params.hostWorkspaceHint?.trim();
+  if (hint && isAbsoluteHostPath(hint)) {
+    return path.resolve(hint);
+  }
+
+  try {
+    const mountJson = await fs.readFile("/proc/self/mountinfo", "utf8");
+    const containerPath = path.resolve(params.containerWorkspacePath);
+    for (const rawLine of mountJson.split(/\r?\n/)) {
+      const line = rawLine.trim();
+      if (!line) {
+        continue;
+      }
+      const separator = line.indexOf(" - ");
+      if (separator === -1) {
+        continue;
+      }
+      const mountFields = line.slice(0, separator).split(" ");
+      const mountPoint = mountFields[4];
+      if (!mountPoint || path.resolve(mountPoint) !== containerPath) {
+        continue;
+      }
+      const sourceFields = line.slice(separator + 3).split(" ");
+      const source = sourceFields[1]?.trim();
+      if (source && isAbsoluteHostPath(source)) {
+        return path.resolve(source);
+      }
+    }
+  } catch {
+    // Best-effort fallback below.
+  }
+
+  return path.resolve(params.fallbackPath);
+}
+
 async function createSandboxContainer(params: {
   name: string;
   cfg: SandboxDockerConfig;
@@ -403,26 +471,56 @@ async function createSandboxContainer(params: {
   const { name, cfg, workspaceDir, scopeKey } = params;
   await ensureDockerImage(cfg.image);
 
+  const hostWorkspaceHint = await readDockerContainerEnvVar(
+    process.env.HOSTNAME ?? "",
+    "OPENCLAW_SANDBOX_HOST_WORKSPACE",
+  );
+  const workspaceMountSource = await resolveHostPathForNestedDockerMount({
+    hostWorkspaceHint,
+    containerWorkspacePath: workspaceDir,
+    fallbackPath: workspaceDir,
+  });
+  const hostAgentWorkspaceSource =
+    workspaceDir === params.agentWorkspaceDir
+      ? workspaceMountSource
+      : await resolveHostPathForNestedDockerMount({
+          hostWorkspaceHint: undefined,
+          containerWorkspacePath: params.agentWorkspaceDir,
+          fallbackPath: params.agentWorkspaceDir,
+        });
+
+  const bindSourceRoots = [workspaceMountSource, hostAgentWorkspaceSource];
   const args = buildSandboxCreateArgs({
     name,
     cfg,
     scopeKey,
     configHash: params.configHash,
     includeBinds: false,
-    bindSourceRoots: [workspaceDir, params.agentWorkspaceDir],
+    bindSourceRoots,
   });
   args.push("--workdir", cfg.workdir);
   const mainMountSuffix =
     params.workspaceAccess === "ro" && workspaceDir === params.agentWorkspaceDir ? ":ro" : "";
-  args.push("-v", `${workspaceDir}:${cfg.workdir}${mainMountSuffix}`);
+  args.push("-v", `${workspaceMountSource}:${cfg.workdir}${mainMountSuffix}`);
   if (params.workspaceAccess !== "none" && workspaceDir !== params.agentWorkspaceDir) {
     const agentMountSuffix = params.workspaceAccess === "ro" ? ":ro" : "";
     args.push(
       "-v",
-      `${params.agentWorkspaceDir}:${SANDBOX_AGENT_WORKSPACE_MOUNT}${agentMountSuffix}`,
+      `${hostAgentWorkspaceSource}:${SANDBOX_AGENT_WORKSPACE_MOUNT}${agentMountSuffix}`,
     );
   }
-  appendCustomBinds(args, cfg);
+
+  const remappedCustomBinds = (cfg.binds ?? []).map((bind) => {
+    const parsed = splitBindSpec(bind);
+    if (!parsed) {
+      return bind;
+    }
+    if (path.resolve(parsed.source) !== path.resolve(workspaceDir)) {
+      return bind;
+    }
+    return bind.replace(parsed.source, workspaceMountSource);
+  });
+  appendCustomBinds(args, { ...cfg, binds: remappedCustomBinds });
   args.push(cfg.image, "sleep", "infinity");
 
   await execDocker(args);
