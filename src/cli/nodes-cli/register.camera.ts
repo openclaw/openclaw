@@ -7,9 +7,8 @@ import {
   cameraTempPath,
   parseCameraClipPayload,
   parseCameraSnapPayload,
-  writeBase64ToFile,
+  writeCameraPayloadToFile,
   writeCameraClipPayloadToFile,
-  writeUrlToFile,
 } from "../nodes-camera.js";
 import { parseDurationMs } from "../parse-duration.js";
 import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
@@ -166,14 +165,12 @@ export function registerNodesCameraCommands(nodes: Command) {
               facing,
               ext: payload.format === "jpeg" ? "jpg" : payload.format,
             });
-            if (payload.url) {
-              if (!node.remoteIp) {
-                throw new Error("camera URL payload requires node remoteIp");
-              }
-              await writeUrlToFile(filePath, payload.url, { expectedHost: node.remoteIp });
-            } else if (payload.base64) {
-              await writeBase64ToFile(filePath, payload.base64);
-            }
+            await writeCameraPayloadToFile({
+              filePath,
+              payload,
+              expectedHost: node.remoteIp,
+              invalidPayloadMessage: "invalid camera.snap payload",
+            });
             results.push({
               facing,
               path: filePath,
