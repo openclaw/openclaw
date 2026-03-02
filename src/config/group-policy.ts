@@ -71,7 +71,7 @@ function resolveChannelGroupConfig(
   const target = groupId.toLowerCase();
   const parentTarget = parentId?.toLowerCase();
   const matchedKey = Object.keys(groups).find((key) => {
-    if (key === "*") {return false;}
+    if (key === "*") return false;
     const lower = key.toLowerCase();
     return lower === target || (parentTarget != null && lower === parentTarget);
   });
@@ -375,7 +375,7 @@ export function resolveChannelGroupPolicy(params: {
   const defaultConfig = groups?.["*"];
   const allowAll = allowlistEnabled && Boolean(groups && Object.hasOwn(groups, "*"));
   // When groupPolicy is "allowlist" with groupAllowFrom but no explicit groups,
-  // allow the group through — sender-level filtering handles access control.
+  // allow the group through â sender-level filtering handles access control.
   const senderFilterBypass =
     groupPolicy === "allowlist" && !hasGroups && Boolean(params.hasGroupAllowFrom);
   const allowed =
