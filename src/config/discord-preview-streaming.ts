@@ -83,7 +83,7 @@ export function resolveTelegramPreviewStreamMode(
   if (typeof params.streaming === "boolean") {
     return params.streaming ? "partial" : "off";
   }
-  return "off";
+  return "partial";
 }
 
 export function resolveDiscordPreviewStreamMode(

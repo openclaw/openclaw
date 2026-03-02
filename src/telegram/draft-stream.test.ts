@@ -160,6 +160,36 @@ describe("createTelegramDraftStream", () => {
     );
   });
 
+  it("falls back to message transport when sendMessageDraft is rejected at runtime", async () => {
+    const api = createMockDraftApi();
+    api.sendMessageDraft.mockRejectedValueOnce(
+      new Error(
+        "Call to 'sendMessageDraft' failed! (400: Bad Request: method sendMessageDraft can be used only in private chats)",
+      ),
+    );
+    const warn = vi.fn();
+    const stream = createDraftStream(api, {
+      thread: { id: 42, scope: "dm" },
+      previewTransport: "draft",
+      warn,
+    });
+
+    stream.update("Hello");
+    await stream.flush();
+
+    expect(api.sendMessageDraft).toHaveBeenCalledTimes(1);
+    expect(api.sendMessage).toHaveBeenCalledWith(123, "Hello", { message_thread_id: 42 });
+    expect(stream.previewMode?.()).toBe("message");
+    expect(warn).toHaveBeenCalledWith(
+      "telegram stream preview: sendMessageDraft rejected by API; falling back to sendMessage/editMessageText",
+    );
+
+    stream.update("Hello again");
+    await stream.flush();
+
+    expect(api.editMessageText).toHaveBeenCalledWith(123, 17, "Hello again");
+  });
+
   it("retries DM message preview send without thread when thread is not found", async () => {
     const api = createMockDraftApi();
     api.sendMessage
