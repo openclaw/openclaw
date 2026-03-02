@@ -307,7 +307,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
         }
         return lastResult;
       }
-      return whatsappPlugin.outbound!.sendText!({ ...ctx });
+      return whatsappPlugin.outbound!.sendText!({ ...ctx, text: ctx.payload.text ?? "" });
     },
     sendText: async ({ cfg, to, text, accountId, deps, gifPlayback }) => {
       const send = deps?.sendWhatsApp ?? getWhatsAppRuntime().channel.whatsapp.sendMessageWhatsApp;

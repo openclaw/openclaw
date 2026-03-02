@@ -252,7 +252,7 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount> = {
         }
         return lastResult;
       }
-      return imessagePlugin.outbound!.sendText!({ ...ctx });
+      return imessagePlugin.outbound!.sendText!({ ...ctx, text: ctx.payload.text ?? "" });
     },
     sendText: async ({ cfg, to, text, accountId, deps, replyToId }) => {
       const result = await sendIMessageOutbound({

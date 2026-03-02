@@ -334,7 +334,7 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount> = {
         }
         return lastResult;
       }
-      return bluebubblesPlugin.outbound!.sendText!({ ...ctx });
+      return bluebubblesPlugin.outbound!.sendText!({ ...ctx, text: ctx.payload.text ?? "" });
     },
     sendText: async ({ cfg, to, text, accountId, replyToId }) => {
       const rawReplyToId = typeof replyToId === "string" ? replyToId.trim() : "";

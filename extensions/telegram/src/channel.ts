@@ -341,7 +341,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
         }
         return lastResult;
       }
-      return telegramPlugin.outbound!.sendText!({ ...ctx });
+      return telegramPlugin.outbound!.sendText!({ ...ctx, text: ctx.payload.text ?? "" });
     },
     sendText: async ({ cfg, to, text, accountId, deps, replyToId, threadId, silent }) => {
       const send = deps?.sendTelegram ?? getTelegramRuntime().channel.telegram.sendMessageTelegram;

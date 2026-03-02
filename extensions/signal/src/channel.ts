@@ -284,7 +284,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
         }
         return lastResult;
       }
-      return signalPlugin.outbound!.sendText!({ ...ctx });
+      return signalPlugin.outbound!.sendText!({ ...ctx, text: ctx.payload.text ?? "" });
     },
     sendText: async ({ cfg, to, text, accountId, deps }) => {
       const result = await sendSignalOutbound({
