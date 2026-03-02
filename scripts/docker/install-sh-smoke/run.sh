@@ -6,10 +6,8 @@ SMOKE_PREVIOUS_VERSION="${OPENCLAW_INSTALL_SMOKE_PREVIOUS:-}"
 SKIP_PREVIOUS="${OPENCLAW_INSTALL_SMOKE_SKIP_PREVIOUS:-0}"
 DEFAULT_PACKAGE="openclaw"
 PACKAGE_NAME="${OPENCLAW_INSTALL_PACKAGE:-$DEFAULT_PACKAGE}"
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-
 # shellcheck source=../install-sh-common/cli-verify.sh
-source "$SCRIPT_DIR/../install-sh-common/cli-verify.sh"
+source "/usr/local/install-sh-common/cli-verify.sh"
 
 echo "==> Resolve npm versions"
 LATEST_VERSION="$(npm view "$PACKAGE_NAME" version)"
