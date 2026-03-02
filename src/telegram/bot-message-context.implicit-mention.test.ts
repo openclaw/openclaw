@@ -1,18 +1,20 @@
 import { describe, expect, it } from "vitest";
 import { buildTelegramMessageContextForTest } from "./bot-message-context.test-harness.js";
 
-describe("buildTelegramMessageContext implicitMention forum system messages", () => {
+describe("buildTelegramMessageContext implicitMention forum service messages", () => {
   /**
    * Build a group message context where the user sends a message inside a
    * forum topic that has `reply_to_message` pointing to a message from the
-   * bot.  Callers control whether the reply target looks like a system
-   * message (empty text) or a real bot reply (non-empty text).
+   * bot.  Callers control whether the reply target looks like a forum service
+   * message (carries `forum_topic_created` etc.) or a real bot reply.
    */
   async function buildGroupReplyCtx(params: {
     replyToMessageText?: string;
     replyToMessageCaption?: string;
     replyFromIsBot?: boolean;
     replyFromId?: number;
+    /** Extra fields on reply_to_message (e.g. forum_topic_created). */
+    replyToMessageExtra?: Record<string, unknown>;
   }) {
     const BOT_ID = 7; // matches test harness primaryCtx.me.id
     return await buildTelegramMessageContextForTest({
@@ -33,6 +35,7 @@ describe("buildTelegramMessageContext implicitMention forum system messages", ()
             first_name: "OpenClaw",
             is_bot: params.replyFromIsBot ?? true,
           },
+          ...params.replyToMessageExtra,
         },
       },
       resolveGroupActivation: () => true,
@@ -44,11 +47,14 @@ describe("buildTelegramMessageContext implicitMention forum system messages", ()
     });
   }
 
-  it("does NOT trigger implicitMention for forum topic system messages (empty-text bot message)", async () => {
-    // System message: bot created the topic → text is empty, from.is_bot = true
+  it("does NOT trigger implicitMention for forum_topic_created service message", async () => {
+    // Bot auto-generated "Topic created" message carries forum_topic_created.
     const ctx = await buildGroupReplyCtx({
       replyToMessageText: undefined,
       replyFromIsBot: true,
+      replyToMessageExtra: {
+        forum_topic_created: { name: "New Topic", icon_color: 0x6fb9f0 },
+      },
     });
 
     // With requireMention and no explicit @mention, the message should be
@@ -56,10 +62,21 @@ describe("buildTelegramMessageContext implicitMention forum system messages", ()
     expect(ctx).toBeNull();
   });
 
-  it("does NOT trigger implicitMention for empty-string text system messages", async () => {
+  it("does NOT trigger implicitMention for forum_topic_closed service message", async () => {
     const ctx = await buildGroupReplyCtx({
-      replyToMessageText: "",
+      replyToMessageText: undefined,
       replyFromIsBot: true,
+      replyToMessageExtra: { forum_topic_closed: {} },
+    });
+
+    expect(ctx).toBeNull();
+  });
+
+  it("does NOT trigger implicitMention for general_forum_topic_hidden service message", async () => {
+    const ctx = await buildGroupReplyCtx({
+      replyToMessageText: undefined,
+      replyFromIsBot: true,
+      replyToMessageExtra: { general_forum_topic_hidden: {} },
     });
 
     expect(ctx).toBeNull();
@@ -76,12 +93,12 @@ describe("buildTelegramMessageContext implicitMention forum system messages", ()
     expect(ctx?.ctxPayload?.WasMentioned).toBe(true);
   });
 
-  it("DOES trigger implicitMention for bot reply with whitespace-only text", async () => {
-    // A bot message that has actual whitespace text is NOT a system message,
-    // so it should still count as an implicit mention.  (Telegram's forum
-    // system messages have undefined / empty text, not whitespace.)
+  it("DOES trigger implicitMention for bot media messages with caption", async () => {
+    // Media messages from the bot have caption but no text — they should
+    // still count as real bot replies, not service messages.
     const ctx = await buildGroupReplyCtx({
-      replyToMessageText: " ",
+      replyToMessageText: undefined,
+      replyToMessageCaption: "Check out this image",
       replyFromIsBot: true,
     });
 
@@ -89,13 +106,14 @@ describe("buildTelegramMessageContext implicitMention forum system messages", ()
     expect(ctx?.ctxPayload?.WasMentioned).toBe(true);
   });
 
-  it("DOES trigger implicitMention for bot media messages with caption (not a system message)", async () => {
-    // Media messages from the bot have caption but no text — they should
-    // still count as real bot replies, not system messages.
+  it("DOES trigger implicitMention for bot sticker/voice (no text, no caption, no service field)", async () => {
+    // Stickers, voice notes, and captionless photos have neither text nor
+    // caption, but they are NOT service messages — they are legitimate bot
+    // replies that should trigger implicitMention.
     const ctx = await buildGroupReplyCtx({
       replyToMessageText: undefined,
-      replyToMessageCaption: "Check out this image",
       replyFromIsBot: true,
+      // No forum_topic_* fields → not a service message
     });
 
     expect(ctx).not.toBeNull();
