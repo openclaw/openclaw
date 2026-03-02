@@ -220,6 +220,10 @@ type DeliverOutboundPayloadsCoreParams = {
     agentId?: string;
     text?: string;
     mediaUrls?: string[];
+    /** Whether this message is being sent in a group/channel context */
+    isGroup?: boolean;
+    /** Group or channel identifier for correlation with received events */
+    groupId?: string;
   };
   silent?: boolean;
 };
@@ -478,6 +482,8 @@ async function deliverOutboundPayloadsCore(
     });
   const hookRunner = getGlobalHookRunner();
   const sessionKeyForInternalHooks = params.mirror?.sessionKey ?? params.session?.key;
+  const mirrorIsGroup = params.mirror?.isGroup;
+  const mirrorGroupId = params.mirror?.groupId;
   if (
     hookRunner?.hasHooks("message_sent") &&
     params.session?.agentId &&
@@ -534,6 +540,8 @@ async function deliverOutboundPayloadsCore(
           accountId: accountId ?? undefined,
           conversationId: to,
           messageId: params.messageId,
+          ...(mirrorIsGroup != null ? { isGroup: mirrorIsGroup } : {}),
+          ...(mirrorGroupId ? { groupId: mirrorGroupId } : {}),
         }),
       ).catch(() => {});
     };
