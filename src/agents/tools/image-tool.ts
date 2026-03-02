@@ -2,7 +2,7 @@ import { type Context, complete } from "@mariozechner/pi-ai";
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveUserPath } from "../../utils.js";
-import { getDefaultLocalRoots, loadWebMedia } from "../../web/media.js";
+import { loadWebMedia } from "../../web/media.js";
 import { minimaxUnderstandImage } from "../minimax-vlm.js";
 import {
   coerceImageAssistantText,
@@ -15,6 +15,7 @@ import {
   applyImageModelConfigDefaults,
   buildTextToolResult,
   resolveModelFromRegistry,
+  resolveMediaToolLocalRoots,
   resolveModelRuntimeApiKey,
   resolvePromptAndModelOverride,
 } from "./media-tool-shared.js";
@@ -24,7 +25,6 @@ import {
   discoverAuthStorage,
   discoverModels,
   ensureOpenClawModelsJson,
-  normalizeWorkspaceDir,
   resolveSandboxedBridgeMediaPath,
   runWithImageModelFallback,
   type AnyAgentTool,
@@ -298,17 +298,9 @@ export function createImageTool(options?: {
     ? "Analyze one or more images with a vision model. Use image for a single path/URL, or images for multiple (up to 20). Only use this tool when images were NOT already provided in the user's message. Images mentioned in the prompt are automatically visible to you."
     : "Analyze one or more images with the configured image model (agents.defaults.imageModel). Use image for a single path/URL, or images for multiple (up to 20). Provide a prompt describing what to analyze.";
 
-  const localRoots = (() => {
-    const workspaceDir = normalizeWorkspaceDir(options?.workspaceDir);
-    if (options?.fsPolicy?.workspaceOnly) {
-      return workspaceDir ? [workspaceDir] : [];
-    }
-    const roots = getDefaultLocalRoots();
-    if (!workspaceDir) {
-      return roots;
-    }
-    return Array.from(new Set([...roots, workspaceDir]));
-  })();
+  const localRoots = resolveMediaToolLocalRoots(options?.workspaceDir, {
+    workspaceOnly: options?.fsPolicy?.workspaceOnly === true,
+  });
 
   return {
     label: "Image",

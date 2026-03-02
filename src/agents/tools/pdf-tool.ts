@@ -3,7 +3,7 @@ import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
 import { extractPdfContent, type PdfExtractedContent } from "../../media/pdf-extract.js";
 import { resolveUserPath } from "../../utils.js";
-import { getDefaultLocalRoots, loadWebMediaRaw } from "../../web/media.js";
+import { loadWebMediaRaw } from "../../web/media.js";
 import {
   coerceImageModelConfig,
   type ImageModelConfig,
@@ -13,6 +13,7 @@ import {
   applyImageModelConfigDefaults,
   buildTextToolResult,
   resolveModelFromRegistry,
+  resolveMediaToolLocalRoots,
   resolveModelRuntimeApiKey,
   resolvePromptAndModelOverride,
 } from "./media-tool-shared.js";
@@ -30,7 +31,6 @@ import {
   discoverAuthStorage,
   discoverModels,
   ensureOpenClawModelsJson,
-  normalizeWorkspaceDir,
   resolveSandboxedBridgeMediaPath,
   runWithImageModelFallback,
   type AnyAgentTool,
@@ -327,17 +327,9 @@ export function createPdfTool(options?: {
       ? Math.floor(maxPagesDefault)
       : DEFAULT_MAX_PAGES;
 
-  const localRoots = (() => {
-    const workspaceDir = normalizeWorkspaceDir(options?.workspaceDir);
-    if (options?.fsPolicy?.workspaceOnly) {
-      return workspaceDir ? [workspaceDir] : [];
-    }
-    const roots = getDefaultLocalRoots();
-    if (!workspaceDir) {
-      return roots;
-    }
-    return Array.from(new Set([...roots, workspaceDir]));
-  })();
+  const localRoots = resolveMediaToolLocalRoots(options?.workspaceDir, {
+    workspaceOnly: options?.fsPolicy?.workspaceOnly === true,
+  });
 
   const description =
     "Analyze one or more PDF documents with a model. Supports native PDF analysis for Anthropic and Google models, with text/image extraction fallback for other providers. Use pdf for a single path/URL, or pdfs for multiple (up to 10). Provide a prompt describing what to analyze.";

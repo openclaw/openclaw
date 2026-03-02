@@ -47,6 +47,34 @@ async function expectCurrentPidOwnsLock(params: {
   await lock.release();
 }
 
+async function expectActiveInProcessLockIsNotReclaimed(params?: {
+  legacyStarttime?: unknown;
+}): Promise<void> {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-"));
+  try {
+    const sessionFile = path.join(root, "sessions.json");
+    const lockPath = `${sessionFile}.lock`;
+    const lock = await acquireSessionWriteLock({ sessionFile, timeoutMs: 500 });
+    const lockPayload = {
+      pid: process.pid,
+      createdAt: new Date().toISOString(),
+      ...(params && "legacyStarttime" in params ? { starttime: params.legacyStarttime } : {}),
+    };
+    await fs.writeFile(lockPath, JSON.stringify(lockPayload), "utf8");
+
+    await expect(
+      acquireSessionWriteLock({
+        sessionFile,
+        timeoutMs: 50,
+        allowReentrant: false,
+      }),
+    ).rejects.toThrow(/session file locked/);
+    await lock.release();
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+}
+
 describe("acquireSessionWriteLock", () => {
   it("reuses locks across symlinked session paths", async () => {
     if (process.platform === "win32") {
@@ -323,60 +351,11 @@ describe("acquireSessionWriteLock", () => {
   });
 
   it("does not reclaim active in-process lock files without starttime", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-"));
-    try {
-      const sessionFile = path.join(root, "sessions.json");
-      const lockPath = `${sessionFile}.lock`;
-      const lock = await acquireSessionWriteLock({ sessionFile, timeoutMs: 500 });
-      await fs.writeFile(
-        lockPath,
-        JSON.stringify({
-          pid: process.pid,
-          createdAt: new Date().toISOString(),
-        }),
-        "utf8",
-      );
-
-      await expect(
-        acquireSessionWriteLock({
-          sessionFile,
-          timeoutMs: 50,
-          allowReentrant: false,
-        }),
-      ).rejects.toThrow(/session file locked/);
-      await lock.release();
-    } finally {
-      await fs.rm(root, { recursive: true, force: true });
-    }
+    await expectActiveInProcessLockIsNotReclaimed();
   });
 
   it("does not reclaim active in-process lock files with malformed starttime", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-"));
-    try {
-      const sessionFile = path.join(root, "sessions.json");
-      const lockPath = `${sessionFile}.lock`;
-      const lock = await acquireSessionWriteLock({ sessionFile, timeoutMs: 500 });
-      await fs.writeFile(
-        lockPath,
-        JSON.stringify({
-          pid: process.pid,
-          createdAt: new Date().toISOString(),
-          starttime: 123.5,
-        }),
-        "utf8",
-      );
-
-      await expect(
-        acquireSessionWriteLock({
-          sessionFile,
-          timeoutMs: 50,
-          allowReentrant: false,
-        }),
-      ).rejects.toThrow(/session file locked/);
-      await lock.release();
-    } finally {
-      await fs.rm(root, { recursive: true, force: true });
-    }
+    await expectActiveInProcessLockIsNotReclaimed({ legacyStarttime: 123.5 });
   });
 
   it("registers cleanup for SIGQUIT and SIGABRT", () => {
