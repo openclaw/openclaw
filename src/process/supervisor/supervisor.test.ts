@@ -4,7 +4,7 @@ import { createProcessSupervisor } from "./supervisor.js";
 type ProcessSupervisor = ReturnType<typeof createProcessSupervisor>;
 type SpawnOptions = Parameters<ProcessSupervisor["spawn"]>[0];
 type ChildSpawnOptions = Omit<Extract<SpawnOptions, { mode: "child" }>, "backendId" | "mode">;
-const OUTPUT_DELAY_MS = 6;
+const OUTPUT_DELAY_MS = 3;
 
 async function spawnChild(supervisor: ProcessSupervisor, options: ChildSpawnOptions) {
   return supervisor.spawn({
@@ -38,9 +38,9 @@ describe("process supervisor", () => {
     const supervisor = createProcessSupervisor();
     const run = await spawnChild(supervisor, {
       sessionId: "s1",
-      argv: [process.execPath, "-e", "setTimeout(() => {}, 18)"],
+      argv: [process.execPath, "-e", "setTimeout(() => {}, 14)"],
       timeoutMs: 300,
-      noOutputTimeoutMs: 6,
+      noOutputTimeoutMs: 5,
       stdinMode: "pipe-closed",
     });
     const exit = await run.wait();
@@ -54,7 +54,7 @@ describe("process supervisor", () => {
     const first = await spawnChild(supervisor, {
       sessionId: "s1",
       scopeKey: "scope:a",
-      argv: [process.execPath, "-e", "setTimeout(() => {}, 120)"],
+      argv: [process.execPath, "-e", "setTimeout(() => {}, 80)"],
       timeoutMs: 1_000,
       stdinMode: "pipe-open",
     });
@@ -84,7 +84,7 @@ describe("process supervisor", () => {
     const supervisor = createProcessSupervisor();
     const run = await spawnChild(supervisor, {
       sessionId: "s-timeout",
-      argv: [process.execPath, "-e", "setTimeout(() => {}, 20)"],
+      argv: [process.execPath, "-e", "setTimeout(() => {}, 12)"],
       timeoutMs: 1,
       stdinMode: "pipe-closed",
     });
