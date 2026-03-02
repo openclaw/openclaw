@@ -16,12 +16,12 @@ import { normalizePollInput } from "../../polls.js";
 import {
   ErrorCodes,
   errorShape,
-  formatValidationErrors,
   validatePollParams,
   validateSendParams,
 } from "../protocol/index.js";
 import { formatForLog } from "../ws-log.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 type InflightResult = {
   ok: boolean;
@@ -89,15 +89,7 @@ async function resolveRequestedChannel(params: {
 export const sendHandlers: GatewayRequestHandlers = {
   send: async ({ params, respond, context }) => {
     const p = params;
-    if (!validateSendParams(p)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid send params: ${formatValidationErrors(validateSendParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(p, validateSendParams, "send", respond)) {
       return;
     }
     const request = p as {
@@ -322,15 +314,7 @@ export const sendHandlers: GatewayRequestHandlers = {
   },
   poll: async ({ params, respond, context }) => {
     const p = params;
-    if (!validatePollParams(p)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid poll params: ${formatValidationErrors(validatePollParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(p, validatePollParams, "poll", respond)) {
       return;
     }
     const request = p as {

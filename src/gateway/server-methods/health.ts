@@ -1,7 +1,6 @@
 import { getStatusSummary } from "../../commands/status.js";
 import { ErrorCodes, errorShape } from "../protocol/index.js";
 import { HEALTH_REFRESH_INTERVAL_MS } from "../server-constants.js";
-import { formatError } from "../server-utils.js";
 import { formatForLog } from "../ws-log.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
@@ -16,7 +15,7 @@ export const healthHandlers: GatewayRequestHandlers = {
     if (!wantsProbe && cached && now - cached.ts < HEALTH_REFRESH_INTERVAL_MS) {
       respond(true, cached, undefined, { cached: true });
       void refreshHealthSnapshot({ probe: false }).catch((err) =>
-        logHealth.error(`background health refresh failed: ${formatError(err)}`),
+        logHealth.error(`background health refresh failed: ${formatForLog(err)}`),
       );
       return;
     }

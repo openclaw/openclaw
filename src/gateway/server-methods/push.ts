@@ -5,8 +5,9 @@ import {
   sendApnsAlert,
 } from "../../infra/push-apns.js";
 import { ErrorCodes, errorShape, validatePushTestParams } from "../protocol/index.js";
-import { respondInvalidParams, respondUnavailableOnThrow } from "./nodes.helpers.js";
+import { respondUnavailableOnThrow } from "./nodes.helpers.js";
 import type { GatewayRequestHandlers } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 function normalizeOptionalString(value: unknown): string | undefined {
   if (typeof value !== "string") {
@@ -18,12 +19,7 @@ function normalizeOptionalString(value: unknown): string | undefined {
 
 export const pushHandlers: GatewayRequestHandlers = {
   "push.test": async ({ params, respond }) => {
-    if (!validatePushTestParams(params)) {
-      respondInvalidParams({
-        respond,
-        method: "push.test",
-        validator: validatePushTestParams,
-      });
+    if (!assertValidParams(params, validatePushTestParams, "push.test", respond)) {
       return;
     }
 

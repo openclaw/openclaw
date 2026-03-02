@@ -37,7 +37,6 @@ import { GATEWAY_CLIENT_CAPS, hasGatewayClientCap } from "../protocol/client-inf
 import {
   ErrorCodes,
   errorShape,
-  formatValidationErrors,
   validateAgentIdentityParams,
   validateAgentParams,
   validateAgentWaitParams,
@@ -54,6 +53,7 @@ import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
 import { sessionsHandlers } from "./sessions.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 const RESET_COMMAND_RE = /^\/(new|reset)(?:\s+([\s\S]*))?$/i;
 
@@ -162,15 +162,7 @@ async function runSessionResetFromAgent(params: {
 export const agentHandlers: GatewayRequestHandlers = {
   agent: async ({ params, respond, context, client, isWebchatConnect }) => {
     const p = params;
-    if (!validateAgentParams(p)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid agent params: ${formatValidationErrors(validateAgentParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(p, validateAgentParams, "agent", respond)) {
       return;
     }
     const request = p as {
@@ -674,17 +666,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       });
   },
   "agent.identity.get": ({ params, respond }) => {
-    if (!validateAgentIdentityParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid agent.identity.get params: ${formatValidationErrors(
-            validateAgentIdentityParams.errors,
-          )}`,
-        ),
-      );
+    if (!assertValidParams(params, validateAgentIdentityParams, "agent.identity.get", respond)) {
       return;
     }
     const p = params;
@@ -728,15 +710,7 @@ export const agentHandlers: GatewayRequestHandlers = {
     respond(true, { ...identity, avatar: avatarValue }, undefined);
   },
   "agent.wait": async ({ params, respond }) => {
-    if (!validateAgentWaitParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid agent.wait params: ${formatValidationErrors(validateAgentWaitParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateAgentWaitParams, "agent.wait", respond)) {
       return;
     }
     const p = params;

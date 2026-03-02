@@ -2,12 +2,12 @@ import { listChannelPlugins } from "../../channels/plugins/index.js";
 import {
   ErrorCodes,
   errorShape,
-  formatValidationErrors,
   validateWebLoginStartParams,
   validateWebLoginWaitParams,
 } from "../protocol/index.js";
 import { formatForLog } from "../ws-log.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 const WEB_LOGIN_METHODS = new Set(["web.login.start", "web.login.wait"]);
 
@@ -40,15 +40,7 @@ function respondProviderUnsupported(respond: RespondFn, providerId: string) {
 
 export const webHandlers: GatewayRequestHandlers = {
   "web.login.start": async ({ params, respond, context }) => {
-    if (!validateWebLoginStartParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid web.login.start params: ${formatValidationErrors(validateWebLoginStartParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateWebLoginStartParams, "web.login.start", respond)) {
       return;
     }
     try {
@@ -78,15 +70,7 @@ export const webHandlers: GatewayRequestHandlers = {
     }
   },
   "web.login.wait": async ({ params, respond, context }) => {
-    if (!validateWebLoginWaitParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid web.login.wait params: ${formatValidationErrors(validateWebLoginWaitParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateWebLoginWaitParams, "web.login.wait", respond)) {
       return;
     }
     try {

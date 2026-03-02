@@ -11,13 +11,9 @@ import {
 } from "../../agents/tool-catalog.js";
 import { loadConfig } from "../../config/config.js";
 import { getPluginToolMeta, resolvePluginTools } from "../../plugins/tools.js";
-import {
-  ErrorCodes,
-  errorShape,
-  formatValidationErrors,
-  validateToolsCatalogParams,
-} from "../protocol/index.js";
+import { ErrorCodes, errorShape, validateToolsCatalogParams } from "../protocol/index.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 type ToolCatalogEntry = {
   id: string;
@@ -124,15 +120,7 @@ function buildPluginGroups(params: {
 
 export const toolsCatalogHandlers: GatewayRequestHandlers = {
   "tools.catalog": ({ params, respond }) => {
-    if (!validateToolsCatalogParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid tools.catalog params: ${formatValidationErrors(validateToolsCatalogParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateToolsCatalogParams, "tools.catalog", respond)) {
       return;
     }
     const resolved = resolveAgentIdOrRespondError(params.agentId, respond);

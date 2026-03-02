@@ -2,13 +2,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { getResolvedLoggerSettings } from "../../logging.js";
 import { clamp } from "../../utils.js";
-import {
-  ErrorCodes,
-  errorShape,
-  formatValidationErrors,
-  validateLogsTailParams,
-} from "../protocol/index.js";
+import { ErrorCodes, errorShape, validateLogsTailParams } from "../protocol/index.js";
 import type { GatewayRequestHandlers } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 const DEFAULT_LIMIT = 500;
 const DEFAULT_MAX_BYTES = 250_000;
@@ -146,15 +142,7 @@ async function readLogSlice(params: {
 
 export const logsHandlers: GatewayRequestHandlers = {
   "logs.tail": async ({ params, respond }) => {
-    if (!validateLogsTailParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid logs.tail params: ${formatValidationErrors(validateLogsTailParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateLogsTailParams, "logs.tail", respond)) {
       return;
     }
 
