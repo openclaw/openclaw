@@ -40,6 +40,7 @@ If understanding fails or is disabled, **the reply flow continues** with the ori
   - defaults (`prompt`, `maxChars`, `maxBytes`, `timeoutSeconds`, `language`)
   - provider overrides (`baseUrl`, `headers`, `providerOptions`)
   - Deepgram audio options via `tools.media.audio.providerOptions.deepgram`
+  - audio transcript echo controls (`echoTranscript`, default `false`; `echoFormat`)
   - optional **per‑capability `models` list** (preferred before shared models)
   - `attachments` policy (`mode`, `maxAttachments`, `prefer`)
   - `scope` (optional gating by channel/chatType/session key)
@@ -57,6 +58,8 @@ If understanding fails or is disabled, **the reply flow continues** with the ori
       },
       audio: {
         /* optional overrides */
+        echoTranscript: true,
+        echoFormat: '📝 "{transcript}"',
       },
       video: {
         /* optional overrides */
@@ -123,6 +126,7 @@ Recommended defaults:
 Rules:
 
 - If media exceeds `maxBytes`, that model is skipped and the **next model is tried**.
+- Audio files smaller than **1024 bytes** are treated as empty/corrupt and skipped before provider/CLI transcription.
 - If the model returns more than `maxChars`, output is trimmed.
 - `prompt` defaults to simple “Describe the {media}.” plus the `maxChars` guidance (image/video only).
 - If `<capability>.enabled: true` but no models are configured, OpenClaw tries the
@@ -159,6 +163,20 @@ To disable auto-detection, set:
 ```
 
 Note: Binary detection is best-effort across macOS/Linux/Windows; ensure the CLI is on `PATH` (we expand `~`), or set an explicit CLI model with a full command path.
+
+### Proxy environment support (provider models)
+
+When provider-based **audio** and **video** media understanding is enabled, OpenClaw
+honors standard outbound proxy environment variables for provider HTTP calls:
+
+- `HTTPS_PROXY`
+- `HTTP_PROXY`
+- `https_proxy`
+- `http_proxy`
+
+If no proxy env vars are set, media understanding uses direct egress.
+If the proxy value is malformed, OpenClaw logs a warning and falls back to direct
+fetch.
 
 ## Capabilities (optional)
 

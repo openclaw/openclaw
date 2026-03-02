@@ -192,4 +192,6 @@ export type SlackAccountConfig = {
 export type SlackConfig = {
   /** Optional per-account Slack configuration (multi-account). */
   accounts?: Record<string, SlackAccountConfig>;
+  /** Optional default account id when multiple accounts are configured. */
+  defaultAccount?: string;
 } & SlackAccountConfig;

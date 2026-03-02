@@ -93,6 +93,39 @@ export const slackOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
   chunker: null,
   textChunkLimit: 4000,
+  sendPayload: async (ctx) => {
+    const text = ctx.payload.text ?? "";
+    const urls = ctx.payload.mediaUrls?.length
+      ? ctx.payload.mediaUrls
+      : ctx.payload.mediaUrl
+        ? [ctx.payload.mediaUrl]
+        : [];
+    if (!text && urls.length === 0) {
+      return { channel: "slack", messageId: "" };
+    }
+    if (urls.length > 0) {
+      let lastResult = await slackOutbound.sendMedia!({
+        ...ctx,
+        text,
+        mediaUrl: urls[0],
+      });
+      for (let i = 1; i < urls.length; i++) {
+        lastResult = await slackOutbound.sendMedia!({
+          ...ctx,
+          text: "",
+          mediaUrl: urls[i],
+        });
+      }
+      return lastResult;
+    }
+    const limit = slackOutbound.textChunkLimit;
+    const chunks = limit && slackOutbound.chunker ? slackOutbound.chunker(text, limit) : [text];
+    let lastResult: Awaited<ReturnType<NonNullable<typeof slackOutbound.sendText>>>;
+    for (const chunk of chunks) {
+      lastResult = await slackOutbound.sendText!({ ...ctx, text: chunk });
+    }
+    return lastResult!;
+  },
   sendText: async ({ to, text, accountId, deps, replyToId, threadId, identity }) => {
     return await sendSlackOutboundMessage({
       to,

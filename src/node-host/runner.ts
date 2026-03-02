@@ -1,10 +1,9 @@
-import fs from "node:fs";
-import path from "node:path";
 import { resolveBrowserConfig } from "../browser/config.js";
 import { loadConfig } from "../config/config.js";
 import { GatewayClient } from "../gateway/client.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import type { SkillBinTrustEntry } from "../infra/exec-approvals.js";
+import { resolveExecutableFromPathEnv } from "../infra/executable-path.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
 import {
   NODE_BROWSER_PROXY_COMMAND,
@@ -35,43 +34,11 @@ type NodeHostRunOptions = {
 
 const DEFAULT_NODE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 
-function isExecutableFile(filePath: string): boolean {
-  try {
-    const stat = fs.statSync(filePath);
-    if (!stat.isFile()) {
-      return false;
-    }
-    if (process.platform !== "win32") {
-      fs.accessSync(filePath, fs.constants.X_OK);
-    }
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 function resolveExecutablePathFromEnv(bin: string, pathEnv: string): string | null {
   if (bin.includes("/") || bin.includes("\\")) {
     return null;
   }
-  const hasExtension = process.platform === "win32" && path.extname(bin).length > 0;
-  const extensions =
-    process.platform === "win32"
-      ? hasExtension
-        ? [""]
-        : (process.env.PATHEXT ?? process.env.PathExt ?? ".EXE;.CMD;.BAT;.COM")
-            .split(";")
-            .map((ext) => ext.toLowerCase())
-      : [""];
-  for (const dir of pathEnv.split(path.delimiter).filter(Boolean)) {
-    for (const ext of extensions) {
-      const candidate = path.join(dir, bin + ext);
-      if (isExecutableFile(candidate)) {
-        return candidate;
-      }
-    }
-  }
-  return null;
+  return resolveExecutableFromPathEnv(bin, pathEnv) ?? null;
 }
 
 function resolveSkillBinTrustEntries(bins: string[], pathEnv: string): SkillBinTrustEntry[] {

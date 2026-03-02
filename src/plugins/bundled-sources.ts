@@ -7,6 +7,10 @@ export type BundledPluginSource = {
   npmSpec?: string;
 };
 
+export type BundledPluginLookup =
+  | { kind: "npmSpec"; value: string }
+  | { kind: "pluginId"; value: string };
+
 export function resolveBundledPluginSources(params: {
   workspaceDir?: string;
 }): Map<string, BundledPluginSource> {
@@ -41,17 +45,20 @@ export function resolveBundledPluginSources(params: {
   return bundled;
 }
 
-export function findBundledPluginByNpmSpec(params: {
-  spec: string;
+export function findBundledPluginSource(params: {
+  lookup: BundledPluginLookup;
   workspaceDir?: string;
 }): BundledPluginSource | undefined {
-  const targetSpec = params.spec.trim();
-  if (!targetSpec) {
+  const targetValue = params.lookup.value.trim();
+  if (!targetValue) {
     return undefined;
   }
   const bundled = resolveBundledPluginSources({ workspaceDir: params.workspaceDir });
+  if (params.lookup.kind === "pluginId") {
+    return bundled.get(targetValue);
+  }
   for (const source of bundled.values()) {
-    if (source.npmSpec === targetSpec) {
+    if (source.npmSpec === targetValue) {
       return source;
     }
   }
