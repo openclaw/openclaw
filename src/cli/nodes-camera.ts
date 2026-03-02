@@ -182,6 +182,33 @@ export async function writeBase64ToFile(filePath: string, base64: string) {
   return { path: filePath, bytes: buf.length };
 }
 
+export function requireNodeRemoteIp(remoteIp?: string): string {
+  const normalized = remoteIp?.trim();
+  if (!normalized) {
+    throw new Error("camera URL payload requires node remoteIp");
+  }
+  return normalized;
+}
+
+export async function writeCameraPayloadToFile(params: {
+  filePath: string;
+  payload: { url?: string; base64?: string };
+  expectedHost?: string;
+  invalidPayloadMessage?: string;
+}) {
+  if (params.payload.url) {
+    await writeUrlToFile(params.filePath, params.payload.url, {
+      expectedHost: requireNodeRemoteIp(params.expectedHost),
+    });
+    return;
+  }
+  if (params.payload.base64) {
+    await writeBase64ToFile(params.filePath, params.payload.base64);
+    return;
+  }
+  throw new Error(params.invalidPayloadMessage ?? "invalid camera payload");
+}
+
 export async function writeCameraClipPayloadToFile(params: {
   payload: CameraClipPayload;
   facing: CameraFacing;
@@ -196,15 +223,11 @@ export async function writeCameraClipPayloadToFile(params: {
     tmpDir: params.tmpDir,
     id: params.id,
   });
-  if (params.payload.url) {
-    if (!params.expectedHost) {
-      throw new Error("camera URL payload requires node remoteIp");
-    }
-    await writeUrlToFile(filePath, params.payload.url, { expectedHost: params.expectedHost });
-  } else if (params.payload.base64) {
-    await writeBase64ToFile(filePath, params.payload.base64);
-  } else {
-    throw new Error("invalid camera.clip payload");
-  }
+  await writeCameraPayloadToFile({
+    filePath,
+    payload: params.payload,
+    expectedHost: params.expectedHost,
+    invalidPayloadMessage: "invalid camera.clip payload",
+  });
   return filePath;
 }
