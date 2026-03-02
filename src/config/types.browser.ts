@@ -5,6 +5,8 @@ export type BrowserProfileConfig = {
   cdpUrl?: string;
   /** Profile driver (default: openclaw). */
   driver?: "openclaw" | "extension";
+  /** If true, never launch a browser for this profile; only attach. Falls back to browser.attachOnly. */
+  attachOnly?: boolean;
   /** Profile color (hex). Auto-assigned at creation. */
   color: string;
 };
