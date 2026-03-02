@@ -1,6 +1,7 @@
 import WebSocket from "ws";
 import { isLoopbackHost } from "../gateway/net.js";
 import { rawDataToString } from "../infra/ws.js";
+import { getDirectAgentForCdp, withNoProxyForLocalhost } from "./cdp-proxy-bypass.js";
 import { getChromeExtensionRelayAuthHeaders } from "./extension-relay.js";
 
 export { isLoopbackHost };
@@ -122,7 +123,10 @@ async function fetchChecked(url: string, timeoutMs = 1500, init?: RequestInit): 
   const t = setTimeout(ctrl.abort.bind(ctrl), timeoutMs);
   try {
     const headers = getHeadersWithAuth(url, (init?.headers as Record<string, string>) || {});
-    const res = await fetch(url, { ...init, headers, signal: ctrl.signal });
+    // Bypass proxy for loopback CDP connections (#31219)
+    const res = await withNoProxyForLocalhost(() =>
+      fetch(url, { ...init, headers, signal: ctrl.signal }),
+    );
     if (!res.ok) {
       throw new Error(`HTTP ${res.status}`);
     }
@@ -146,9 +150,12 @@ export async function withCdpSocket<T>(
     typeof opts?.handshakeTimeoutMs === "number" && Number.isFinite(opts.handshakeTimeoutMs)
       ? Math.max(1, Math.floor(opts.handshakeTimeoutMs))
       : 5000;
+  // Bypass proxy for loopback CDP connections (#31219)
+  const agent = getDirectAgentForCdp(wsUrl);
   const ws = new WebSocket(wsUrl, {
     handshakeTimeout: handshakeTimeoutMs,
     ...(Object.keys(headers).length ? { headers } : {}),
+    ...(agent ? { agent } : {}),
   });
   const { send, closeWithError } = createCdpSender(ws);
 
