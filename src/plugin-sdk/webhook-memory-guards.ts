@@ -22,6 +22,32 @@ export type BoundedCounter = {
   clear: () => void;
 };
 
+export const WEBHOOK_RATE_LIMIT_DEFAULTS = Object.freeze({
+  windowMs: 60_000,
+  maxRequests: 120,
+  maxTrackedKeys: 4_096,
+});
+
+export const WEBHOOK_ANOMALY_COUNTER_DEFAULTS = Object.freeze({
+  maxTrackedKeys: 4_096,
+  ttlMs: 6 * 60 * 60_000,
+  logEvery: 25,
+});
+
+export const WEBHOOK_ANOMALY_STATUS_CODES = Object.freeze([400, 401, 408, 413, 415, 429]);
+
+export type WebhookAnomalyTracker = {
+  record: (params: {
+    key: string;
+    statusCode: number;
+    message: (count: number) => string;
+    log?: (message: string) => void;
+    nowMs?: number;
+  }) => number;
+  size: () => number;
+  clear: () => void;
+};
+
 export function createFixedWindowRateLimiter(options: {
   windowMs: number;
   maxRequests: number;
@@ -132,5 +158,39 @@ export function createBoundedCounter(options: {
       counters.clear();
       lastPruneMs = 0;
     },
+  };
+}
+
+export function createWebhookAnomalyTracker(options?: {
+  maxTrackedKeys?: number;
+  ttlMs?: number;
+  logEvery?: number;
+  trackedStatusCodes?: readonly number[];
+}): WebhookAnomalyTracker {
+  const maxTrackedKeys = Math.max(
+    1,
+    Math.floor(options?.maxTrackedKeys ?? WEBHOOK_ANOMALY_COUNTER_DEFAULTS.maxTrackedKeys),
+  );
+  const ttlMs = Math.max(0, Math.floor(options?.ttlMs ?? WEBHOOK_ANOMALY_COUNTER_DEFAULTS.ttlMs));
+  const logEvery = Math.max(
+    1,
+    Math.floor(options?.logEvery ?? WEBHOOK_ANOMALY_COUNTER_DEFAULTS.logEvery),
+  );
+  const trackedStatusCodes = new Set(options?.trackedStatusCodes ?? WEBHOOK_ANOMALY_STATUS_CODES);
+  const counter = createBoundedCounter({ maxTrackedKeys, ttlMs });
+
+  return {
+    record: ({ key, statusCode, message, log, nowMs }) => {
+      if (!trackedStatusCodes.has(statusCode)) {
+        return 0;
+      }
+      const next = counter.increment(key, nowMs);
+      if (log && (next === 1 || next % logEvery === 0)) {
+        log(message(next));
+      }
+      return next;
+    },
+    size: () => counter.size(),
+    clear: () => counter.clear(),
   };
 }
