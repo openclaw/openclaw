@@ -4,6 +4,33 @@ import { buildTelegramThreadParams, type TelegramThreadSpec } from "./bot/helper
 
 const TELEGRAM_STREAM_MAX_CHARS = 4096;
 const DEFAULT_THROTTLE_MS = 1000;
+const TELEGRAM_DRAFT_ID_MAX = 2_147_483_647;
+
+type TelegramSendMessageDraft = (
+  chatId: number,
+  draftId: number,
+  text: string,
+  params?: {
+    message_thread_id?: number;
+    parse_mode?: "HTML";
+  },
+) => Promise<unknown>;
+
+let nextDraftId = 0;
+
+function allocateTelegramDraftId(): number {
+  nextDraftId = nextDraftId >= TELEGRAM_DRAFT_ID_MAX ? 1 : nextDraftId + 1;
+  return nextDraftId;
+}
+
+function resolveSendMessageDraftApi(api: Bot["api"]): TelegramSendMessageDraft | undefined {
+  const sendMessageDraft = (api as Bot["api"] & { sendMessageDraft?: TelegramSendMessageDraft })
+    .sendMessageDraft;
+  if (typeof sendMessageDraft !== "function") {
+    return undefined;
+  }
+  return sendMessageDraft.bind(api as object);
+}
 
 export type TelegramDraftStream = {
   update: (text: string) => void;
@@ -49,17 +76,92 @@ export function createTelegramDraftStream(params: {
   const throttleMs = Math.max(250, params.throttleMs ?? DEFAULT_THROTTLE_MS);
   const minInitialChars = params.minInitialChars;
   const chatId = params.chatId;
+  const isDirectStream = params.thread?.scope === "dm";
   const threadParams = buildTelegramThreadParams(params.thread);
   const replyParams =
     params.replyToMessageId != null
       ? { ...threadParams, reply_to_message_id: params.replyToMessageId }
       : threadParams;
+  const sendMessageDraft = isDirectStream ? resolveSendMessageDraftApi(params.api) : undefined;
+  if (isDirectStream && !sendMessageDraft) {
+    throw new Error("telegram stream preview failed: bot API missing sendMessageDraft");
+  }
 
   const streamState = { stopped: false, final: false };
   let streamMessageId: number | undefined;
+  let streamDraftId = isDirectStream ? allocateTelegramDraftId() : undefined;
   let lastSentText = "";
   let lastSentParseMode: "HTML" | undefined;
   let generation = 0;
+  const sendStreamPreview = isDirectStream
+    ? async ({
+        renderedText,
+        renderedParseMode,
+      }: {
+        renderedText: string;
+        renderedParseMode: "HTML" | undefined;
+        sendGeneration: number;
+      }): Promise<boolean> => {
+        const draftId = streamDraftId ?? allocateTelegramDraftId();
+        streamDraftId = draftId;
+        const draftParams = {
+          ...(threadParams?.message_thread_id != null
+            ? { message_thread_id: threadParams.message_thread_id }
+            : {}),
+          ...(renderedParseMode ? { parse_mode: renderedParseMode } : {}),
+        };
+        await sendMessageDraft!(
+          chatId,
+          draftId,
+          renderedText,
+          Object.keys(draftParams).length > 0 ? draftParams : undefined,
+        );
+        return true;
+      }
+    : async ({
+        renderedText,
+        renderedParseMode,
+        sendGeneration,
+      }: {
+        renderedText: string;
+        renderedParseMode: "HTML" | undefined;
+        sendGeneration: number;
+      }): Promise<boolean> => {
+        if (typeof streamMessageId === "number") {
+          if (renderedParseMode) {
+            await params.api.editMessageText(chatId, streamMessageId, renderedText, {
+              parse_mode: renderedParseMode,
+            });
+          } else {
+            await params.api.editMessageText(chatId, streamMessageId, renderedText);
+          }
+          return true;
+        }
+        const sendParams = renderedParseMode
+          ? {
+              ...replyParams,
+              parse_mode: renderedParseMode,
+            }
+          : replyParams;
+        const sent = await params.api.sendMessage(chatId, renderedText, sendParams);
+        const sentMessageId = sent?.message_id;
+        if (typeof sentMessageId !== "number" || !Number.isFinite(sentMessageId)) {
+          streamState.stopped = true;
+          params.warn?.("telegram stream preview stopped (missing message id from sendMessage)");
+          return false;
+        }
+        const normalizedMessageId = Math.trunc(sentMessageId);
+        if (sendGeneration !== generation) {
+          params.onSupersededPreview?.({
+            messageId: normalizedMessageId,
+            textSnapshot: renderedText,
+            parseMode: renderedParseMode,
+          });
+          return true;
+        }
+        streamMessageId = normalizedMessageId;
+        return true;
+      };
 
   const sendOrEditStreamMessage = async (text: string): Promise<boolean> => {
     // Allow final flush even if stopped (e.g., after clear()).
@@ -100,40 +202,11 @@ export function createTelegramDraftStream(params: {
     lastSentText = renderedText;
     lastSentParseMode = renderedParseMode;
     try {
-      if (typeof streamMessageId === "number") {
-        if (renderedParseMode) {
-          await params.api.editMessageText(chatId, streamMessageId, renderedText, {
-            parse_mode: renderedParseMode,
-          });
-        } else {
-          await params.api.editMessageText(chatId, streamMessageId, renderedText);
-        }
-        return true;
-      }
-      const sendParams = renderedParseMode
-        ? {
-            ...replyParams,
-            parse_mode: renderedParseMode,
-          }
-        : replyParams;
-      const sent = await params.api.sendMessage(chatId, renderedText, sendParams);
-      const sentMessageId = sent?.message_id;
-      if (typeof sentMessageId !== "number" || !Number.isFinite(sentMessageId)) {
-        streamState.stopped = true;
-        params.warn?.("telegram stream preview stopped (missing message id from sendMessage)");
-        return false;
-      }
-      const normalizedMessageId = Math.trunc(sentMessageId);
-      if (sendGeneration !== generation) {
-        params.onSupersededPreview?.({
-          messageId: normalizedMessageId,
-          textSnapshot: renderedText,
-          parseMode: renderedParseMode,
-        });
-        return true;
-      }
-      streamMessageId = normalizedMessageId;
-      return true;
+      return await sendStreamPreview({
+        renderedText,
+        renderedParseMode,
+        sendGeneration,
+      });
     } catch (err) {
       streamState.stopped = true;
       params.warn?.(
@@ -166,6 +239,9 @@ export function createTelegramDraftStream(params: {
   const forceNewMessage = () => {
     generation += 1;
     streamMessageId = undefined;
+    if (isDirectStream) {
+      streamDraftId = allocateTelegramDraftId();
+    }
     lastSentText = "";
     lastSentParseMode = undefined;
     loop.resetPending();

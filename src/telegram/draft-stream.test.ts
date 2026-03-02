@@ -7,6 +7,7 @@ type TelegramDraftStreamParams = Parameters<typeof createTelegramDraftStream>[0]
 function createMockDraftApi(sendMessageImpl?: () => Promise<{ message_id: number }>) {
   return {
     sendMessage: vi.fn(sendMessageImpl ?? (async () => ({ message_id: 17 }))),
+    sendMessageDraft: vi.fn().mockResolvedValue(true),
     editMessageText: vi.fn().mockResolvedValue(true),
     deleteMessage: vi.fn().mockResolvedValue(true),
   };
@@ -107,17 +108,37 @@ describe("createTelegramDraftStream", () => {
     await vi.waitFor(() => expect(api.sendMessage).toHaveBeenCalledWith(123, "Hello", undefined));
   });
 
-  it("includes message_thread_id for dm threads and clears preview on cleanup", async () => {
+  it("uses sendMessageDraft for dm threads and does not create a preview message", async () => {
     const api = createMockDraftApi();
     const stream = createThreadedDraftStream(api, { id: 42, scope: "dm" });
 
     stream.update("Hello");
     await vi.waitFor(() =>
-      expect(api.sendMessage).toHaveBeenCalledWith(123, "Hello", { message_thread_id: 42 }),
+      expect(api.sendMessageDraft).toHaveBeenCalledWith(123, expect.any(Number), "Hello", {
+        message_thread_id: 42,
+      }),
     );
+    expect(api.sendMessage).not.toHaveBeenCalled();
+    expect(api.editMessageText).not.toHaveBeenCalled();
     await stream.clear();
 
-    expect(api.deleteMessage).toHaveBeenCalledWith(123, 17);
+    expect(api.deleteMessage).not.toHaveBeenCalled();
+  });
+
+  it("does not edit or delete messages after DM draft stream finalization", async () => {
+    const api = createMockDraftApi();
+    const stream = createThreadedDraftStream(api, { id: 42, scope: "dm" });
+
+    stream.update("Hello");
+    await stream.flush();
+    stream.update("Hello again");
+    await stream.stop();
+    await stream.clear();
+
+    expect(api.sendMessageDraft).toHaveBeenCalled();
+    expect(api.sendMessage).not.toHaveBeenCalled();
+    expect(api.editMessageText).not.toHaveBeenCalled();
+    expect(api.deleteMessage).not.toHaveBeenCalled();
   });
 
   it("creates new message after forceNewMessage is called", async () => {
