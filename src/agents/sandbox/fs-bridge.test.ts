@@ -7,12 +7,22 @@ vi.mock("./docker.js", () => ({
   execDockerRaw: vi.fn(),
 }));
 
+vi.mock("../../infra/boundary-file-read.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../infra/boundary-file-read.js")>();
+  return {
+    ...actual,
+    openBoundaryFile: vi.fn(actual.openBoundaryFile),
+  };
+});
+
+import { openBoundaryFile } from "../../infra/boundary-file-read.js";
 import { execDockerRaw } from "./docker.js";
 import { createSandboxFsBridge } from "./fs-bridge.js";
 import { createSandboxTestContext } from "./test-fixtures.js";
 import type { SandboxContext } from "./types.js";
 
 const mockedExecDockerRaw = vi.mocked(execDockerRaw);
+const mockedOpenBoundaryFile = vi.mocked(openBoundaryFile);
 const DOCKER_SCRIPT_INDEX = 5;
 const DOCKER_FIRST_SCRIPT_ARG_INDEX = 7;
 
@@ -96,6 +106,7 @@ async function createHostEscapeFixture(stateDir: string) {
 describe("sandbox fs bridge shell compatibility", () => {
   beforeEach(() => {
     mockedExecDockerRaw.mockClear();
+    mockedOpenBoundaryFile.mockClear();
     installDockerReadMock();
   });
 
@@ -194,6 +205,34 @@ describe("sandbox fs bridge shell compatibility", () => {
       const workspaceDir = path.join(stateDir, "workspace");
       const nestedDir = path.join(workspaceDir, "memory", "kemik");
       await fs.mkdir(nestedDir, { recursive: true });
+
+      const bridge = createSandboxFsBridge({
+        sandbox: createSandbox({
+          workspaceDir,
+          agentWorkspaceDir: workspaceDir,
+        }),
+      });
+
+      await expect(bridge.mkdirp({ filePath: "memory/kemik" })).resolves.toBeUndefined();
+
+      const mkdirCall = findCallByScriptFragment('mkdir -p -- "$1"');
+      expect(mkdirCall).toBeDefined();
+      const mkdirPath = mkdirCall ? getDockerPathArg(mkdirCall[0]) : "";
+      expect(mkdirPath).toBe("/workspace/memory/kemik");
+    });
+  });
+
+  it("allows mkdirp when boundary open reports io for an existing directory", async () => {
+    await withTempDir("openclaw-fs-bridge-mkdirp-io-", async (stateDir) => {
+      const workspaceDir = path.join(stateDir, "workspace");
+      const nestedDir = path.join(workspaceDir, "memory", "kemik");
+      await fs.mkdir(nestedDir, { recursive: true });
+
+      mockedOpenBoundaryFile.mockImplementationOnce(async () => ({
+        ok: false,
+        reason: "io",
+        error: Object.assign(new Error("EISDIR"), { code: "EISDIR" }),
+      }));
 
       const bridge = createSandboxFsBridge({
         sandbox: createSandbox({
