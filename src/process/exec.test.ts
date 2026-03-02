@@ -25,7 +25,7 @@ describe("runCommandWithTimeout", () => {
           'process.stdout.write((process.env.OPENCLAW_BASE_ENV ?? "") + "|" + (process.env.OPENCLAW_TEST_ENV ?? ""))',
         ],
         {
-          timeoutMs: 120,
+          timeoutMs: 80,
           env: { OPENCLAW_TEST_ENV: "ok" },
         },
       );
@@ -38,10 +38,10 @@ describe("runCommandWithTimeout", () => {
 
   it("kills command when no output timeout elapses", async () => {
     const result = await runCommandWithTimeout(
-      [process.execPath, "-e", "setTimeout(() => {}, 20)"],
+      [process.execPath, "-e", "setTimeout(() => {}, 10)"],
       {
-        timeoutMs: 80,
-        noOutputTimeoutMs: 8,
+        timeoutMs: 30,
+        noOutputTimeoutMs: 4,
       },
     );
 
@@ -82,9 +82,9 @@ describe("runCommandWithTimeout", () => {
 
   it("reports global timeout termination when overall timeout elapses", async () => {
     const result = await runCommandWithTimeout(
-      [process.execPath, "-e", "setTimeout(() => {}, 12)"],
+      [process.execPath, "-e", "setTimeout(() => {}, 10)"],
       {
-        timeoutMs: 6,
+        timeoutMs: 4,
       },
     );
 
