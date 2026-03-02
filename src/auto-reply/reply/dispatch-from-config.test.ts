@@ -1435,7 +1435,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(internalHookMocks.triggerInternalHook).toHaveBeenCalledTimes(1);
   });
 
-  it("skips internal message:received hook when session key is unavailable", async () => {
+  it("still emits internal message:received hook when session key is unavailable", async () => {
     setNoAbort();
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
@@ -1449,8 +1449,17 @@ describe("dispatchReplyFromConfig", () => {
     const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
-    expect(internalHookMocks.createInternalHookEvent).not.toHaveBeenCalled();
-    expect(internalHookMocks.triggerInternalHook).not.toHaveBeenCalled();
+    expect(internalHookMocks.createInternalHookEvent).toHaveBeenCalledWith(
+      "message",
+      "received",
+      "",
+      expect.objectContaining({
+        from: ctx.From,
+        content: "/help",
+        channelId: "telegram",
+      }),
+    );
+    expect(internalHookMocks.triggerInternalHook).toHaveBeenCalledTimes(1);
   });
 
   it("emits diagnostics when enabled", async () => {
