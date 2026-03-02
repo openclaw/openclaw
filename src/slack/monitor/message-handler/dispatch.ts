@@ -9,6 +9,7 @@ import { createReplyPrefixOptions } from "../../../channels/reply-prefix.js";
 import { createTypingCallbacks } from "../../../channels/typing.js";
 import { resolveStorePath, updateLastRoute } from "../../../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../../globals.js";
+import { emitMessageSentHooks } from "../../../hooks/message-sent.js";
 import { resolveAgentOutboundIdentity } from "../../../infra/outbound/identity.js";
 import { removeSlackReaction } from "../../actions.js";
 import { createSlackDraftStream } from "../../draft-stream.js";
@@ -266,7 +267,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     deliver: async (payload) => {
       if (useStreaming) {
         await deliverWithStreaming(payload);
-        return;
+        return { delivered: true };
       }
 
       const mediaCount = payload.mediaUrls?.length ?? (payload.mediaUrl ? 1 : 0);
@@ -292,7 +293,10 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
             ts: draftMessageId,
             text: finalText.trim(),
           });
-          return;
+          return {
+            delivered: true,
+            messageId: draftMessageId,
+          };
         } catch (err) {
           logVerbose(
             `slack: preview final edit failed; falling back to standard send (${String(err)})`,
@@ -319,6 +323,36 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       }
 
       await deliverNormally(payload);
+      return { delivered: true };
+    },
+    onDelivery: (payload, info) => {
+      const target = prepared.ctxPayload.To ?? message.channel;
+      if (info.success) {
+        if (!info.delivered) {
+          return;
+        }
+        emitMessageSentHooks({
+          to: target,
+          content: payload.text ?? "",
+          success: true,
+          channelId: "slack",
+          accountId: route.accountId,
+          conversationId: target,
+          sessionKey: prepared.ctxPayload.SessionKey,
+          messageId: info.messageId,
+        });
+        return;
+      }
+      emitMessageSentHooks({
+        to: target,
+        content: payload.text ?? "",
+        success: false,
+        error: info.error instanceof Error ? info.error.message : String(info.error),
+        channelId: "slack",
+        accountId: route.accountId,
+        conversationId: target,
+        sessionKey: prepared.ctxPayload.SessionKey,
+      });
     },
     onError: (err, info) => {
       runtime.error?.(danger(`slack ${info.kind} reply failed: ${String(err)}`));

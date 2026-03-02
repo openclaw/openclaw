@@ -23,6 +23,7 @@ import {
 } from "../../config/runtime-group-policy.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose, warn } from "../../globals.js";
+import { emitMessageSentHooks } from "../../hooks/message-sent.js";
 import { normalizeScpRemoteHost } from "../../infra/scp-host.js";
 import { waitForTransportReady } from "../../infra/transport-ready.js";
 import { mediaKindFromMime } from "../../media/constants.js";
@@ -361,7 +362,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         const target = ctxPayload.To;
         if (!target) {
           runtime.error?.(danger("imessage: missing delivery target"));
-          return;
+          return { delivered: false };
         }
         await deliverReplies({
           replies: [payload],
@@ -372,6 +373,39 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
           maxBytes: mediaMaxBytes,
           textLimit,
           sentMessageCache,
+        });
+        return { delivered: true };
+      },
+      onDelivery: (payload, info) => {
+        const target = ctxPayload.To;
+        if (!target) {
+          return;
+        }
+        if (info.success) {
+          if (!info.delivered) {
+            return;
+          }
+          emitMessageSentHooks({
+            to: target,
+            content: payload.text ?? "",
+            success: true,
+            channelId: "imessage",
+            accountId: accountInfo.accountId,
+            conversationId: target,
+            sessionKey: ctxPayload.SessionKey,
+            messageId: info.messageId,
+          });
+          return;
+        }
+        emitMessageSentHooks({
+          to: target,
+          content: payload.text ?? "",
+          success: false,
+          error: info.error instanceof Error ? info.error.message : String(info.error),
+          channelId: "imessage",
+          accountId: accountInfo.accountId,
+          conversationId: target,
+          sessionKey: ctxPayload.SessionKey,
         });
       },
       onError: (err, info) => {

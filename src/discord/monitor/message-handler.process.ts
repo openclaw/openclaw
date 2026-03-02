@@ -26,6 +26,7 @@ import { resolveDiscordPreviewStreamMode } from "../../config/discord-preview-st
 import { resolveMarkdownTableMode } from "../../config/markdown-tables.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../globals.js";
+import { emitMessageSentHooks } from "../../hooks/message-sent.js";
 import { convertMarkdownTables } from "../../markdown/tables.js";
 import { buildAgentSessionKey } from "../../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../../routing/session-key.js";
@@ -579,7 +580,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
       const isFinal = info.kind === "final";
       if (payload.isReasoning) {
         // Reasoning/thinking payloads should not be delivered to Discord.
-        return;
+        return { delivered: false };
       }
       if (draftStream && isFinal) {
         await flushDraft();
@@ -607,7 +608,10 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
             );
             finalizedViaPreviewMessage = true;
             replyReference.markSent();
-            return;
+            return {
+              delivered: true,
+              messageId: previewMessageId,
+            };
           } catch (err) {
             logVerbose(
               `discord: preview final edit failed; falling back to standard send (${String(err)})`,
@@ -634,7 +638,10 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
               );
               finalizedViaPreviewMessage = true;
               replyReference.markSent();
-              return;
+              return {
+                delivered: true,
+                messageId: messageIdAfterStop,
+              };
             } catch (err) {
               logVerbose(
                 `discord: post-stop preview edit failed; falling back to standard send (${String(err)})`,
@@ -667,6 +674,38 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
         threadBindings,
       });
       replyReference.markSent();
+      return { delivered: true };
+    },
+    onDelivery: (payload, deliveryInfo) => {
+      if (deliveryInfo.success) {
+        if (!deliveryInfo.delivered) {
+          return;
+        }
+        emitMessageSentHooks({
+          to: deliverChannelId,
+          content: payload.text ?? "",
+          success: true,
+          channelId: "discord",
+          accountId,
+          conversationId: deliverChannelId,
+          sessionKey: ctxPayload.SessionKey,
+          messageId: deliveryInfo.messageId,
+        });
+        return;
+      }
+      emitMessageSentHooks({
+        to: deliverChannelId,
+        content: payload.text ?? "",
+        success: false,
+        error:
+          deliveryInfo.error instanceof Error
+            ? deliveryInfo.error.message
+            : String(deliveryInfo.error),
+        channelId: "discord",
+        accountId,
+        conversationId: deliverChannelId,
+        sessionKey: ctxPayload.SessionKey,
+      });
     },
     onError: (err, info) => {
       runtime.error?.(danger(`discord ${info.kind} reply failed: ${String(err)}`));

@@ -16,10 +16,32 @@ type ReplyDispatchSkipHandler = (
   info: { kind: ReplyDispatchKind; reason: NormalizeReplySkipReason },
 ) => void;
 
+type ReplyDispatchDeliverResult = {
+  delivered: boolean;
+  messageId?: string;
+};
+
 type ReplyDispatchDeliverer = (
   payload: ReplyPayload,
   info: { kind: ReplyDispatchKind },
-) => Promise<void>;
+) => Promise<ReplyDispatchDeliverResult | void>;
+
+type ReplyDispatchDeliveryHandler = (
+  payload: ReplyPayload,
+  info:
+    | {
+        kind: ReplyDispatchKind;
+        success: true;
+        delivered: boolean;
+        messageId?: string;
+      }
+    | {
+        kind: ReplyDispatchKind;
+        success: false;
+        delivered: false;
+        error: unknown;
+      },
+) => void;
 
 const DEFAULT_HUMAN_DELAY_MIN_MS = 800;
 const DEFAULT_HUMAN_DELAY_MAX_MS = 2500;
@@ -51,6 +73,7 @@ export type ReplyDispatcherOptions = {
   onHeartbeatStrip?: () => void;
   onIdle?: () => void;
   onError?: ReplyDispatchErrorHandler;
+  onDelivery?: ReplyDispatchDeliveryHandler;
   // AIDEV-NOTE: onSkip lets channels detect silent/empty drops (e.g. Telegram empty-response fallback).
   onSkip?: ReplyDispatchSkipHandler;
   /** Human-like delay between block replies for natural rhythm. */
@@ -155,9 +178,21 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
         }
         // Safe: deliver is called inside an async .then() callback, so even a synchronous
         // throw becomes a rejection that flows through .catch()/.finally(), ensuring cleanup.
-        await options.deliver(normalized, { kind });
+        const deliveryResult = await options.deliver(normalized, { kind });
+        options.onDelivery?.(normalized, {
+          kind,
+          success: true,
+          delivered: deliveryResult?.delivered ?? true,
+          messageId: deliveryResult?.messageId,
+        });
       })
       .catch((err) => {
+        options.onDelivery?.(normalized, {
+          kind,
+          success: false,
+          delivered: false,
+          error: err,
+        });
         options.onError?.(err, { kind });
       })
       .finally(() => {

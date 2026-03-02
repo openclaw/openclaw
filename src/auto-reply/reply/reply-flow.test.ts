@@ -1200,6 +1200,54 @@ describe("createReplyDispatcher", () => {
     expect(onIdle).toHaveBeenCalledTimes(1);
   });
 
+  it("reports delivery outcomes via onDelivery", async () => {
+    const deliver = vi
+      .fn()
+      .mockResolvedValueOnce({ delivered: false })
+      .mockResolvedValueOnce({ delivered: true, messageId: "msg-1" });
+    const onDelivery = vi.fn();
+    const dispatcher = createReplyDispatcher({ deliver, onDelivery });
+
+    dispatcher.sendToolResult({ text: "tool" });
+    dispatcher.sendFinalReply({ text: "final" });
+
+    await dispatcher.waitForIdle();
+
+    expect(onDelivery).toHaveBeenCalledTimes(2);
+    expect(onDelivery.mock.calls[0]?.[1]).toMatchObject({
+      kind: "tool",
+      success: true,
+      delivered: false,
+    });
+    expect(onDelivery.mock.calls[1]?.[1]).toMatchObject({
+      kind: "final",
+      success: true,
+      delivered: true,
+      messageId: "msg-1",
+    });
+  });
+
+  it("reports delivery failures via onDelivery", async () => {
+    const err = new Error("boom");
+    const onError = vi.fn();
+    const onDelivery = vi.fn();
+    const deliver = vi.fn().mockRejectedValue(err);
+    const dispatcher = createReplyDispatcher({ deliver, onDelivery, onError });
+
+    dispatcher.sendFinalReply({ text: "final" });
+    await dispatcher.waitForIdle();
+
+    expect(onDelivery).toHaveBeenCalledTimes(1);
+    expect(onDelivery.mock.calls[0]?.[1]).toMatchObject({
+      kind: "final",
+      success: false,
+      delivered: false,
+      error: err,
+    });
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onError).toHaveBeenCalledWith(err, { kind: "final" });
+  });
+
   it("delays block replies after the first when humanDelay is natural", async () => {
     vi.useFakeTimers();
     const randomSpy = vi.spyOn(Math, "random").mockReturnValue(0);
