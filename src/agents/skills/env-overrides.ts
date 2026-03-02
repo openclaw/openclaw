@@ -30,7 +30,7 @@ function isAlwaysBlockedSkillEnvKey(key: string): boolean {
   );
 }
 
-function sanitizeSkillEnvOverrides(params: {
+export function sanitizeSkillEnvOverrides(params: {
   overrides: Record<string, string>;
   allowedSensitiveKeys: Set<string>;
   /** Keys from user-configured skill.env that should bypass pattern blocking */
@@ -47,7 +47,7 @@ function sanitizeSkillEnvOverrides(params: {
   const userConfiguredKeys = params.userConfiguredKeys ?? new Set<string>();
 
   for (const [key, value] of Object.entries(result.allowed)) {
-    if (isAlwaysBlockedSkillEnvKey(key)) {
+    if (isAlwaysBlockedSkillEnvKey(key) && !userConfiguredKeys.has(key)) {
       blocked.add(key);
       continue;
     }
