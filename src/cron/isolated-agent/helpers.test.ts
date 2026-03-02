@@ -101,4 +101,14 @@ describe("isHeartbeatOnlyResponse", () => {
     const payloads = [{ text: "HEARTBEAT_OK" }, { mediaUrl: "https://example.com/report.png" }];
     expect(isHeartbeatOnlyResponse(payloads, 300)).toBe(false);
   });
+
+  it("does not suppress when payload includes channelData", () => {
+    const payloads = [{ text: "HEARTBEAT_OK" }, { channelData: { buttons: [{ text: "Open" }] } }];
+    expect(isHeartbeatOnlyResponse(payloads, 300)).toBe(false);
+  });
+
+  it("does not suppress when HEARTBEAT_OK is attached to meaningful text", () => {
+    const payloads = [{ text: "ALERT: disk usage 99% HEARTBEAT_OK" }];
+    expect(isHeartbeatOnlyResponse(payloads, 300)).toBe(false);
+  });
 });

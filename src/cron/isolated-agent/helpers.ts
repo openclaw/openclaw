@@ -97,20 +97,26 @@ export function isHeartbeatOnlyResponse(payloads: DeliveryPayload[], ackMaxChars
     return true;
   }
 
-  // If there's media, we should deliver regardless of text content.
+  // If there's media or structured channel payload, we should deliver.
   if (
-    payloads.some((payload) => (payload.mediaUrls?.length ?? 0) > 0 || Boolean(payload.mediaUrl))
+    payloads.some(
+      (payload) =>
+        (payload.mediaUrls?.length ?? 0) > 0 ||
+        Boolean(payload.mediaUrl) ||
+        Object.keys(payload.channelData ?? {}).length > 0,
+    )
   ) {
     return false;
   }
 
   let hasHeartbeatAck = false;
   for (const payload of payloads) {
+    // Treat only pure HEARTBEAT_OK acknowledgements as suppressors.
     const result = stripHeartbeatToken(payload.text, {
-      mode: "heartbeat",
+      mode: "message",
       maxAckChars: ackMaxChars,
     });
-    if (result.didStrip && result.shouldSkip) {
+    if (result.didStrip && result.text === "") {
       hasHeartbeatAck = true;
       break;
     }
@@ -120,13 +126,7 @@ export function isHeartbeatOnlyResponse(payloads: DeliveryPayload[], ackMaxChars
   }
 
   // Preserve existing behavior for empty/whitespace-only payload batches.
-  return payloads.every(
-    (payload) =>
-      stripHeartbeatToken(payload.text, {
-        mode: "heartbeat",
-        maxAckChars: ackMaxChars,
-      }).shouldSkip,
-  );
+  return payloads.every((payload) => !(payload.text ?? "").trim());
 }
 
 export function resolveHeartbeatAckMaxChars(agentCfg?: { heartbeat?: { ackMaxChars?: number } }) {
