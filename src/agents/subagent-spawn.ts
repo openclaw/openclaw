@@ -7,6 +7,7 @@ import { loadConfig } from "../config/config.js";
 import { callGateway } from "../gateway/call.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import {
+  isValidAgentId,
   isCronSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
@@ -30,16 +31,6 @@ export const SUBAGENT_SPAWN_MODES = ["run", "session"] as const;
 export type SpawnSubagentMode = (typeof SUBAGENT_SPAWN_MODES)[number];
 export const SUBAGENT_SPAWN_SANDBOX_MODES = ["inherit", "require"] as const;
 export type SpawnSubagentSandboxMode = (typeof SUBAGENT_SPAWN_SANDBOX_MODES)[number];
-
-/**
- * Strict format gate for user-supplied agentId values.
- * Rejects error-message-like strings, path traversals, and other
- * values that would be silently mangled by {@link normalizeAgentId}
- * and could create ghost workspace directories.
- *
- * Must stay in sync with the canonical `VALID_ID_RE` in session-key.ts.
- */
-const STRICT_AGENT_ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
 
 export function decodeStrictBase64(value: string, maxDecodedBytes: number): Buffer | null {
   const maxEncodedBytes = Math.ceil(maxDecodedBytes / 3) * 4;
@@ -264,13 +255,12 @@ export async function spawnSubagentDirect(
   // Without this gate, error-message strings like "Agent not found: xyz" pass
   // through normalizeAgentId and become "agent-not-found--xyz", which later
   // creates ghost workspace directories and triggers cascading cron loops (#31311).
-  if (requestedAgentId && !STRICT_AGENT_ID_RE.test(requestedAgentId)) {
+  if (requestedAgentId && !isValidAgentId(requestedAgentId)) {
     return {
       status: "error",
       error: `Invalid agentId "${requestedAgentId}". Agent IDs must match [a-z0-9][a-z0-9_-]{0,63}. Use agents_list to discover valid targets.`,
     };
   }
-
   const modelOverride = params.model;
   const thinkingOverrideRaw = params.thinking;
   const requestThreadBinding = params.thread === true;
