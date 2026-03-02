@@ -996,9 +996,17 @@ export function startHeartbeatRunner(opts: {
     runtime,
     agents: new Map<string, HeartbeatAgentState>(),
     timer: null as NodeJS.Timeout | null,
+    watchdog: null as NodeJS.Timeout | null,
     stopped: false,
   };
   let initialized = false;
+  /**
+   * Minimum heartbeat interval across all configured agents (milliseconds).
+   * Updated on every config change and used by the watchdog to derive a
+   * reasonable polling cadence without hard-coding a fixed interval.
+   */
+  let minIntervalMs = Number.POSITIVE_INFINITY;
+  const WATCHDOG_POLL_DIVISOR = 4;
 
   const resolveNextDue = (now: number, intervalMs: number, prevState?: HeartbeatAgentState) => {
     if (typeof prevState?.lastRunMs === "number") {
@@ -1013,6 +1021,45 @@ export function startHeartbeatRunner(opts: {
   const advanceAgentSchedule = (agent: HeartbeatAgentState, now: number) => {
     agent.lastRunMs = now;
     agent.nextDueMs = now + agent.intervalMs;
+  };
+
+  /**
+   * Arm a periodic watchdog that acts as a safety net for the primary
+   * `setTimeout` in `scheduleNext()`.  In rare cases the primary timer
+   * fails to re-fire after a batch completes (see #31139).  The watchdog
+   * checks at `minIntervalMs / WATCHDOG_POLL_DIVISOR` (clamped to
+   * [15 s, 5 min]) whether any agent is overdue and, if so, re-triggers
+   * a heartbeat wake with a non-zero coalesce window so it cannot spin
+   * into a tight loop while a run is already in flight.
+   */
+  const armWatchdog = () => {
+    if (state.watchdog) {
+      clearInterval(state.watchdog);
+      state.watchdog = null;
+    }
+    if (state.stopped || state.agents.size === 0) {
+      return;
+    }
+    const pollMs = Math.max(
+      15_000,
+      Math.min(5 * 60_000, Math.floor(minIntervalMs / WATCHDOG_POLL_DIVISOR)),
+    );
+    state.watchdog = setInterval(() => {
+      if (state.stopped || state.agents.size === 0) {
+        return;
+      }
+      const now = Date.now();
+      for (const agent of state.agents.values()) {
+        if (now >= agent.nextDueMs) {
+          // Use a non-zero coalesce window (half the poll interval) so that
+          // the wake layer can de-duplicate with any in-flight run and avoid
+          // the tight-reschedule loop described in the Codex review of #31161.
+          requestHeartbeatNow({ reason: "interval", coalesceMs: Math.floor(pollMs / 2) });
+          return;
+        }
+      }
+    }, pollMs);
+    state.watchdog.unref?.();
   };
 
   const scheduleNext = () => {
@@ -1041,7 +1088,6 @@ export function startHeartbeatRunner(opts: {
       state.timer = null;
       requestHeartbeatNow({ reason: "interval", coalesceMs: 0 });
     }, delay);
-    state.timer.unref?.();
   };
 
   const updateConfig = (cfg: OpenClawConfig) => {
@@ -1072,6 +1118,7 @@ export function startHeartbeatRunner(opts: {
 
     state.cfg = cfg;
     state.agents = nextAgents;
+    minIntervalMs = intervals.length > 0 ? Math.min(...intervals) : Number.POSITIVE_INFINITY;
     const nextEnabled = nextAgents.size > 0;
     if (!initialized) {
       if (!nextEnabled) {
@@ -1089,6 +1136,7 @@ export function startHeartbeatRunner(opts: {
     }
 
     scheduleNext();
+    armWatchdog();
   };
 
   const run: HeartbeatWakeHandler = async (params) => {
@@ -1212,6 +1260,10 @@ export function startHeartbeatRunner(opts: {
       clearTimeout(state.timer);
     }
     state.timer = null;
+    if (state.watchdog) {
+      clearInterval(state.watchdog);
+    }
+    state.watchdog = null;
   };
 
   opts.abortSignal?.addEventListener("abort", cleanup, { once: true });

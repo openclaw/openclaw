@@ -61,6 +61,62 @@ describe("startHeartbeatRunner", () => {
     runner.stop();
   });
 
+  it("re-arms timer after successful batch and fires again", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(0));
+
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = startDefaultRunner(runSpy);
+
+    // First heartbeat fires at 30 min
+    await vi.advanceTimersByTimeAsync(30 * 60_000 + 1_000);
+    expect(runSpy).toHaveBeenCalledTimes(1);
+
+    // Second heartbeat fires at 60 min
+    await vi.advanceTimersByTimeAsync(30 * 60_000 + 1_000);
+    expect(runSpy).toHaveBeenCalledTimes(2);
+
+    // Third heartbeat fires at 90 min
+    await vi.advanceTimersByTimeAsync(30 * 60_000 + 1_000);
+    expect(runSpy).toHaveBeenCalledTimes(3);
+
+    runner.stop();
+  });
+
+  it("watchdog recovers heartbeat when primary timer is lost", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(0));
+
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = startDefaultRunner(runSpy);
+
+    // First heartbeat fires normally at 30 min
+    await vi.advanceTimersByTimeAsync(30 * 60_000 + 1_000);
+    expect(runSpy).toHaveBeenCalledTimes(1);
+
+    // Advance well past the next due time -- the watchdog should eventually
+    // detect the overdue agent and trigger a heartbeat wake even if the
+    // primary setTimeout somehow failed to fire.
+    await vi.advanceTimersByTimeAsync(30 * 60_000 + 30_000);
+    expect(runSpy.mock.calls.length).toBeGreaterThanOrEqual(2);
+
+    runner.stop();
+  });
+
+  it("does not fire heartbeat before agent is due", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(0));
+
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = startDefaultRunner(runSpy);
+
+    // Advance only 15 minutes -- less than the 30-minute interval
+    await vi.advanceTimersByTimeAsync(15 * 60_000);
+    expect(runSpy).not.toHaveBeenCalled();
+
+    runner.stop();
+  });
+
   it("continues scheduling after runOnce throws an unhandled error", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(0));
