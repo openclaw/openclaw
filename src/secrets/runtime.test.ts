@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
+import { ensureAuthProfileStore, type AuthProfileStore } from "../agents/auth-profiles.js";
 import { loadConfig, type OpenClawConfig } from "../config/config.js";
 import {
   activateSecretsRuntimeSnapshot,
@@ -83,6 +83,102 @@ describe("secrets runtime snapshot", () => {
       type: "api_key",
       key: "sk-env-openai",
     });
+    // After normalization, inline SecretRef string should be promoted to keyRef
+    expect(
+      (snapshot.authStores[0].store.profiles["openai:inline"] as Record<string, unknown>).keyRef,
+    ).toEqual({ source: "env", provider: "default", id: "OPENAI_API_KEY" });
+  });
+
+  it("normalizes inline SecretRef object on token to tokenRef", async () => {
+    const config: OpenClawConfig = { models: {}, secrets: {} };
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config,
+      env: { MY_TOKEN: "resolved-token-value" },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: ((_agentDir?: string) =>
+        ({
+          version: 1,
+          profiles: {
+            "custom:inline-token": {
+              type: "token",
+              provider: "custom",
+              token: { source: "env", provider: "default", id: "MY_TOKEN" },
+            },
+          },
+        }) as unknown as AuthProfileStore) as (agentDir?: string) => AuthProfileStore,
+    });
+
+    const profile = snapshot.authStores[0]?.store.profiles["custom:inline-token"] as Record<
+      string,
+      unknown
+    >;
+    // tokenRef should be set from the inline SecretRef
+    expect(profile.tokenRef).toEqual({ source: "env", provider: "default", id: "MY_TOKEN" });
+    // token should be resolved to the actual value after activation
+    activateSecretsRuntimeSnapshot(snapshot);
+    expect(profile.token).toBe("resolved-token-value");
+  });
+
+  it("normalizes inline SecretRef object on key to keyRef", async () => {
+    const config: OpenClawConfig = { models: {}, secrets: {} };
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config,
+      env: { MY_KEY: "resolved-key-value" },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: ((_agentDir?: string) =>
+        ({
+          version: 1,
+          profiles: {
+            "custom:inline-key": {
+              type: "api_key",
+              provider: "custom",
+              key: { source: "env", provider: "default", id: "MY_KEY" },
+            },
+          },
+        }) as unknown as AuthProfileStore) as (agentDir?: string) => AuthProfileStore,
+    });
+
+    const profile = snapshot.authStores[0]?.store.profiles["custom:inline-key"] as Record<
+      string,
+      unknown
+    >;
+    // keyRef should be set from the inline SecretRef
+    expect(profile.keyRef).toEqual({ source: "env", provider: "default", id: "MY_KEY" });
+    // key should be resolved to the actual value after activation
+    activateSecretsRuntimeSnapshot(snapshot);
+    expect(profile.key).toBe("resolved-key-value");
+  });
+
+  it("keeps explicit keyRef when inline key SecretRef is also present", async () => {
+    const config: OpenClawConfig = { models: {}, secrets: {} };
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config,
+      env: {
+        PRIMARY_KEY: "primary-key-value",
+        SHADOW_KEY: "shadow-key-value",
+      },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () =>
+        ({
+          version: 1,
+          profiles: {
+            "custom:explicit-keyref": {
+              type: "api_key",
+              provider: "custom",
+              keyRef: { source: "env", provider: "default", id: "PRIMARY_KEY" },
+              key: { source: "env", provider: "default", id: "SHADOW_KEY" },
+            },
+          },
+        }) as unknown as AuthProfileStore,
+    });
+
+    const profile = snapshot.authStores[0]?.store.profiles["custom:explicit-keyref"] as Record<
+      string,
+      unknown
+    >;
+    expect(profile.keyRef).toEqual({ source: "env", provider: "default", id: "PRIMARY_KEY" });
+    activateSecretsRuntimeSnapshot(snapshot);
+    expect(profile.key).toBe("primary-key-value");
   });
 
   it("resolves file refs via configured file provider", async () => {

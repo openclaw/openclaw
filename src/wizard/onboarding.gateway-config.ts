@@ -161,12 +161,18 @@ export async function configureGatewayForOnboarding(
   let gatewayToken: string | undefined;
   if (authMode === "token") {
     if (flow === "quickstart") {
-      gatewayToken = quickstartGateway.token ?? randomToken();
+      gatewayToken =
+        (quickstartGateway.token ??
+          normalizeGatewayTokenInput(process.env.OPENCLAW_GATEWAY_TOKEN)) ||
+        randomToken();
     } else {
       const tokenInput = await prompter.text({
         message: "Gateway token (blank to generate)",
         placeholder: "Needed for multi-machine or non-loopback access",
-        initialValue: quickstartGateway.token ?? "",
+        initialValue:
+          quickstartGateway.token ??
+          normalizeGatewayTokenInput(process.env.OPENCLAW_GATEWAY_TOKEN) ??
+          "",
       });
       gatewayToken = normalizeGatewayTokenInput(tokenInput) || randomToken();
     }

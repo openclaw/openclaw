@@ -9,7 +9,7 @@ import { saveSessionStore } from "../../config/sessions.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.ts";
 import { enqueueSystemEvent, resetSystemEventsForTest } from "../../infra/system-events.js";
 import { applyResetModelOverride } from "./session-reset-model.js";
-import { prependSystemEvents } from "./session-updates.js";
+import { buildQueuedSystemPrompt } from "./session-updates.js";
 import { persistSessionUsageUpdate } from "./session-usage.js";
 import { initSessionState } from "./session.js";
 
@@ -74,9 +74,16 @@ describe("initSessionState thread forking", () => {
       timestamp: new Date().toISOString(),
       message: { role: "user", content: "Parent prompt" },
     };
+    const assistantMessage = {
+      type: "message",
+      id: "m2",
+      parentId: "m1",
+      timestamp: new Date().toISOString(),
+      message: { role: "assistant", content: "Parent reply" },
+    };
     await fs.writeFile(
       parentSessionFile,
-      `${JSON.stringify(header)}\n${JSON.stringify(message)}\n`,
+      `${JSON.stringify(header)}\n${JSON.stringify(message)}\n${JSON.stringify(assistantMessage)}\n`,
       "utf-8",
     );
 
@@ -152,9 +159,16 @@ describe("initSessionState thread forking", () => {
       timestamp: new Date().toISOString(),
       message: { role: "user", content: "Parent prompt" },
     };
+    const assistantMessage = {
+      type: "message",
+      id: "m2",
+      parentId: "m1",
+      timestamp: new Date().toISOString(),
+      message: { role: "assistant", content: "Parent reply" },
+    };
     await fs.writeFile(
       parentSessionFile,
-      `${JSON.stringify(header)}\n${JSON.stringify(message)}\n`,
+      `${JSON.stringify(header)}\n${JSON.stringify(message)}\n${JSON.stringify(assistantMessage)}\n`,
       "utf-8",
     );
 
@@ -226,9 +240,16 @@ describe("initSessionState thread forking", () => {
       timestamp: new Date().toISOString(),
       message: { role: "user", content: "Parent prompt" },
     };
+    const assistantMessage = {
+      type: "message",
+      id: "m2",
+      parentId: "m1",
+      timestamp: new Date().toISOString(),
+      message: { role: "assistant", content: "Parent reply" },
+    };
     await fs.writeFile(
       parentSessionFile,
-      `${JSON.stringify(header)}\n${JSON.stringify(message)}\n`,
+      `${JSON.stringify(header)}\n${JSON.stringify(message)}\n${JSON.stringify(assistantMessage)}\n`,
       "utf-8",
     );
 
@@ -288,9 +309,16 @@ describe("initSessionState thread forking", () => {
       timestamp: new Date().toISOString(),
       message: { role: "user", content: "Parent prompt" },
     };
+    const assistantMessage = {
+      type: "message",
+      id: "m2",
+      parentId: "m1",
+      timestamp: new Date().toISOString(),
+      message: { role: "assistant", content: "Parent reply" },
+    };
     await fs.writeFile(
       parentSessionFile,
-      `${JSON.stringify(header)}\n${JSON.stringify(message)}\n`,
+      `${JSON.stringify(header)}\n${JSON.stringify(message)}\n${JSON.stringify(assistantMessage)}\n`,
       "utf-8",
     );
 
@@ -1102,7 +1130,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
   });
 });
 
-describe("prependSystemEvents", () => {
+describe("buildQueuedSystemPrompt", () => {
   it("adds a local timestamp to queued system events by default", async () => {
     vi.useFakeTimers();
     try {
@@ -1112,16 +1140,16 @@ describe("prependSystemEvents", () => {
 
       enqueueSystemEvent("Model switched.", { sessionKey: "agent:main:main" });
 
-      const result = await prependSystemEvents({
+      const result = await buildQueuedSystemPrompt({
         cfg: {} as OpenClawConfig,
         sessionKey: "agent:main:main",
         isMainSession: false,
         isNewSession: false,
-        prefixedBodyBase: "User: hi",
       });
 
       expect(expectedTimestamp).toBeDefined();
-      expect(result).toContain(`System: [${expectedTimestamp}] Model switched.`);
+      expect(result).toContain("Runtime System Events (gateway-generated)");
+      expect(result).toContain(`- [${expectedTimestamp}] Model switched.`);
     } finally {
       resetSystemEventsForTest();
       vi.useRealTimers();
@@ -1474,13 +1502,50 @@ describe("initSessionState internal channel routing preservation", () => {
         Body: "internal follow-up",
         SessionKey: sessionKey,
         OriginatingChannel: "webchat",
+        OriginatingTo: "session:dashboard",
       },
       cfg,
       commandAuthorized: true,
     });
 
     expect(result.sessionEntry.lastChannel).toBe("telegram");
+    expect(result.sessionEntry.lastTo).toBe("group:12345");
     expect(result.sessionEntry.deliveryContext?.channel).toBe("telegram");
+    expect(result.sessionEntry.deliveryContext?.to).toBe("group:12345");
+  });
+
+  it("keeps persisted external route when OriginatingChannel is non-deliverable", async () => {
+    const storePath = await createStorePath("preserve-nondeliverable-route-");
+    const sessionKey = "agent:main:discord:channel:24680";
+    await saveSessionStore(storePath, {
+      [sessionKey]: {
+        sessionId: "sess-2",
+        updatedAt: Date.now(),
+        lastChannel: "discord",
+        lastTo: "channel:24680",
+        deliveryContext: {
+          channel: "discord",
+          to: "channel:24680",
+        },
+      },
+    });
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "internal handoff",
+        SessionKey: sessionKey,
+        OriginatingChannel: "sessions_send",
+        OriginatingTo: "session:handoff",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.sessionEntry.lastChannel).toBe("discord");
+    expect(result.sessionEntry.lastTo).toBe("channel:24680");
+    expect(result.sessionEntry.deliveryContext?.channel).toBe("discord");
+    expect(result.sessionEntry.deliveryContext?.to).toBe("channel:24680");
   });
 
   it("uses session key channel hint when first turn is internal webchat", async () => {
@@ -1500,6 +1565,25 @@ describe("initSessionState internal channel routing preservation", () => {
 
     expect(result.sessionEntry.lastChannel).toBe("telegram");
     expect(result.sessionEntry.deliveryContext?.channel).toBe("telegram");
+  });
+
+  it("keeps internal route when there is no persisted external fallback", async () => {
+    const storePath = await createStorePath("no-external-fallback-");
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "handoff only",
+        SessionKey: "agent:main:main",
+        OriginatingChannel: "sessions_send",
+        OriginatingTo: "session:handoff",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.sessionEntry.lastChannel).toBe("sessions_send");
+    expect(result.sessionEntry.lastTo).toBe("session:handoff");
   });
 
   it("keeps webchat channel for webchat/main sessions", async () => {

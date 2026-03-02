@@ -549,6 +549,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     const logger = createSubsystemLogger("discord/monitor");
     const guildHistories = new Map<string, HistoryEntry[]>();
     let botUserId: string | undefined;
+    let botUserName: string | undefined;
     let voiceManager: DiscordVoiceManager | null = null;
 
     if (nativeDisabledExplicit) {
@@ -562,6 +563,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     try {
       const botUser = await client.fetchUser("@me");
       botUserId = botUser?.id;
+      botUserName = botUser?.username?.trim() || botUser?.globalName?.trim() || undefined;
     } catch (err) {
       runtime.error?.(danger(`discord: failed to fetch bot identity: ${String(err)}`));
     }
@@ -657,7 +659,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       runtime.log?.("discord: GuildPresences intent enabled — presence listener registered");
     }
 
-    runtime.log?.(`logged in to discord${botUserId ? ` as ${botUserId}` : ""}`);
+    const botIdentity =
+      botUserId && botUserName ? `${botUserId} (${botUserName})` : (botUserId ?? botUserName ?? "");
+    runtime.log?.(`logged in to discord${botIdentity ? ` as ${botIdentity}` : ""}`);
 
     lifecycleStarted = true;
     await runDiscordGatewayLifecycle({

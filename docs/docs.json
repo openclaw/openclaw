@@ -597,7 +597,7 @@
     },
     {
       "source": "/sessions",
-      "destination": "/concepts/sessions"
+      "destination": "/concepts/session"
     },
     {
       "source": "/setup",
@@ -832,7 +832,6 @@
                 "group": "First steps",
                 "pages": [
                   "start/getting-started",
-                  "start/quickstart",
                   "start/onboarding-overview",
                   "start/wizard",
                   "start/onboarding"
@@ -899,25 +898,25 @@
               {
                 "group": "Messaging platforms",
                 "pages": [
-                  "channels/whatsapp",
-                  "channels/telegram",
+                  "channels/bluebubbles",
                   "channels/discord",
-                  "channels/irc",
-                  "channels/slack",
                   "channels/feishu",
                   "channels/googlechat",
-                  "channels/mattermost",
-                  "channels/signal",
                   "channels/imessage",
-                  "channels/bluebubbles",
-                  "channels/msteams",
-                  "channels/synology-chat",
+                  "channels/irc",
                   "channels/line",
                   "channels/matrix",
+                  "channels/mattermost",
+                  "channels/msteams",
                   "channels/nextcloud-talk",
                   "channels/nostr",
+                  "channels/signal",
+                  "channels/synology-chat",
+                  "channels/slack",
+                  "channels/telegram",
                   "channels/tlon",
                   "channels/twitch",
+                  "channels/whatsapp",
                   "channels/zalo",
                   "channels/zalouser"
                 ]
@@ -960,7 +959,6 @@
                 "group": "Sessions and memory",
                 "pages": [
                   "concepts/session",
-                  "concepts/sessions",
                   "concepts/session-pruning",
                   "concepts/session-tool",
                   "concepts/memory",
@@ -992,20 +990,20 @@
               {
                 "group": "Built-in tools",
                 "pages": [
+                  "tools/apply-patch",
                   "brave-search",
                   "perplexity",
-                  "tools/lobster",
-                  "tools/llm-task",
                   "tools/diffs",
+                  "tools/elevated",
                   "tools/exec",
                   "tools/exec-approvals",
                   "tools/firecrawl",
+                  "tools/llm-task",
+                  "tools/lobster",
                   "tools/loop-detection",
-                  "tools/web",
-                  "tools/apply-patch",
-                  "tools/elevated",
+                  "tools/reactions",
                   "tools/thinking",
-                  "tools/reactions"
+                  "tools/web"
                 ]
               },
               {
@@ -1097,8 +1095,7 @@
                 "group": "Providers",
                 "pages": [
                   "providers/anthropic",
-                  "providers/openai",
-                  "providers/openrouter",
+                  "providers/bedrock",
                   "providers/cloudflare-ai-gateway",
                   "providers/claude-max-api-proxy",
                   "providers/deepgram",
@@ -1106,23 +1103,24 @@
                   "providers/huggingface",
                   "providers/kilocode",
                   "providers/litellm",
-                  "providers/bedrock",
-                  "providers/vercel-ai-gateway",
+                  "providers/glm",
+                  "providers/minimax",
                   "providers/moonshot",
                   "providers/mistral",
-                  "providers/minimax",
                   "providers/nvidia",
                   "providers/ollama",
+                  "providers/openai",
                   "providers/opencode",
+                  "providers/openrouter",
+                  "providers/qianfan",
                   "providers/qwen",
+                  "providers/synthetic",
                   "providers/together",
+                  "providers/vercel-ai-gateway",
                   "providers/venice",
                   "providers/vllm",
                   "providers/xiaomi",
-                  "providers/glm",
-                  "providers/zai",
-                  "providers/synthetic",
-                  "providers/qianfan"
+                  "providers/zai"
                 ]
               }
             ]
@@ -1432,7 +1430,6 @@
                 "group": "第一步",
                 "pages": [
                   "zh-CN/start/getting-started",
-                  "zh-CN/start/quickstart",
                   "zh-CN/start/wizard",
                   "zh-CN/start/onboarding"
                 ]
@@ -1497,24 +1494,24 @@
               {
                 "group": "消息平台",
                 "pages": [
-                  "zh-CN/channels/whatsapp",
-                  "zh-CN/channels/telegram",
-                  "zh-CN/channels/grammy",
-                  "zh-CN/channels/discord",
-                  "zh-CN/channels/slack",
-                  "zh-CN/channels/feishu",
-                  "zh-CN/channels/googlechat",
-                  "zh-CN/channels/mattermost",
-                  "zh-CN/channels/signal",
-                  "zh-CN/channels/imessage",
                   "zh-CN/channels/bluebubbles",
-                  "zh-CN/channels/nextcloud-talk",
-                  "zh-CN/channels/msteams",
+                  "zh-CN/channels/discord",
+                  "zh-CN/channels/feishu",
+                  "zh-CN/channels/grammy",
+                  "zh-CN/channels/googlechat",
+                  "zh-CN/channels/imessage",
                   "zh-CN/channels/line",
                   "zh-CN/channels/matrix",
+                  "zh-CN/channels/mattermost",
+                  "zh-CN/channels/msteams",
+                  "zh-CN/channels/nextcloud-talk",
                   "zh-CN/channels/nostr",
+                  "zh-CN/channels/signal",
+                  "zh-CN/channels/slack",
+                  "zh-CN/channels/telegram",
                   "zh-CN/channels/tlon",
                   "zh-CN/channels/twitch",
+                  "zh-CN/channels/whatsapp",
                   "zh-CN/channels/zalo",
                   "zh-CN/channels/zalouser"
                 ]
@@ -1557,7 +1554,6 @@
                 "group": "会话与记忆",
                 "pages": [
                   "zh-CN/concepts/session",
-                  "zh-CN/concepts/sessions",
                   "zh-CN/concepts/session-pruning",
                   "zh-CN/concepts/session-tool",
                   "zh-CN/concepts/memory",
@@ -1589,18 +1585,19 @@
               {
                 "group": "内置工具",
                 "pages": [
+                  "zh-CN/tools/apply-patch",
                   "zh-CN/brave-search",
                   "zh-CN/perplexity",
-                  "zh-CN/tools/lobster",
-                  "zh-CN/tools/llm-task",
+                  "zh-CN/tools/diffs",
+                  "zh-CN/tools/elevated",
                   "zh-CN/tools/exec",
                   "zh-CN/tools/exec-approvals",
                   "zh-CN/tools/firecrawl",
-                  "zh-CN/tools/web",
-                  "zh-CN/tools/apply-patch",
-                  "zh-CN/tools/elevated",
+                  "zh-CN/tools/llm-task",
+                  "zh-CN/tools/lobster",
+                  "zh-CN/tools/reactions",
                   "zh-CN/tools/thinking",
-                  "zh-CN/tools/reactions"
+                  "zh-CN/tools/web"
                 ]
               },
               {
@@ -1690,24 +1687,24 @@
                 "group": "提供商",
                 "pages": [
                   "zh-CN/providers/anthropic",
-                  "zh-CN/providers/openai",
-                  "zh-CN/providers/openrouter",
                   "zh-CN/providers/bedrock",
-                  "zh-CN/providers/vercel-ai-gateway",
                   "zh-CN/providers/claude-max-api-proxy",
                   "zh-CN/providers/deepgram",
                   "zh-CN/providers/github-copilot",
+                  "zh-CN/providers/glm",
                   "zh-CN/providers/moonshot",
                   "zh-CN/providers/minimax",
-                  "zh-CN/providers/ollama",
                   "zh-CN/providers/opencode",
+                  "zh-CN/providers/ollama",
+                  "zh-CN/providers/openai",
+                  "zh-CN/providers/openrouter",
+                  "zh-CN/providers/qianfan",
                   "zh-CN/providers/qwen",
-                  "zh-CN/providers/venice",
-                  "zh-CN/providers/xiaomi",
-                  "zh-CN/providers/glm",
-                  "zh-CN/providers/zai",
                   "zh-CN/providers/synthetic",
-                  "zh-CN/providers/qianfan"
+                  "zh-CN/providers/venice",
+                  "zh-CN/providers/vercel-ai-gateway",
+                  "zh-CN/providers/xiaomi",
+                  "zh-CN/providers/zai"
                 ]
               }
             ]
