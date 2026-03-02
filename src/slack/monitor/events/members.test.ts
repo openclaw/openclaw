@@ -72,7 +72,7 @@ async function runMemberCase(args: MemberCaseArgs = {}): Promise<void> {
 }
 
 describe("registerSlackMemberEvents", () => {
-  it.each([
+  const cases: Array<{ name: string; args: MemberCaseArgs; calls: number }> = [
     {
       name: "enqueues DM member events when dmPolicy is open",
       args: { overrides: { dmPolicy: "open" } },
@@ -112,7 +112,8 @@ describe("registerSlackMemberEvents", () => {
       },
       calls: 0,
     },
-  ])("$name", async ({ args, calls }) => {
+  ];
+  it.each(cases)("$name", async ({ args, calls }) => {
     await runMemberCase(args);
     expect(memberMocks.enqueue).toHaveBeenCalledTimes(calls);
   });

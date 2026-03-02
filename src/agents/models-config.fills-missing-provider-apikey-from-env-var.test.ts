@@ -56,7 +56,7 @@ function createMergeConfigProvider() {
         maxTokens: 2048,
       },
     ],
-  } as const;
+  };
 }
 
 async function runCustomProviderMergeTest(seedProvider: {

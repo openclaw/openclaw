@@ -78,13 +78,13 @@ function expectOpenAiCompatResult(params: {
 
 function buildCustomProviderConfig(contextWindow?: number) {
   if (contextWindow === undefined) {
-    return {};
+    return {} as OpenClawConfig;
   }
   return {
     models: {
       providers: {
         custom: {
-          api: "openai-completions",
+          api: "openai-completions" as const,
           baseUrl: "https://llm.example.com/v1",
           models: [
             {
@@ -100,7 +100,7 @@ function buildCustomProviderConfig(contextWindow?: number) {
         },
       },
     },
-  };
+  } as OpenClawConfig;
 }
 
 function applyCustomModelConfigWithContextWindow(contextWindow?: number) {

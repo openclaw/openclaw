@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { MockInstance } from "vitest";
 import { createTypingCallbacks } from "./typing.js";
 
 const flushMicrotasks = async () => {
@@ -16,15 +17,21 @@ async function withFakeTimers(run: () => Promise<void>) {
 }
 
 function createTypingHarness(overrides: Partial<Parameters<typeof createTypingCallbacks>[0]> = {}) {
-  const start = overrides.start ?? vi.fn().mockResolvedValue(undefined);
-  const stop = overrides.stop ?? vi.fn().mockResolvedValue(undefined);
-  const onStartError = overrides.onStartError ?? vi.fn();
-  const onStopError = overrides.onStopError ?? vi.fn();
+  const start = (overrides.start ?? vi.fn().mockResolvedValue(undefined)) as MockInstance<
+    [],
+    Promise<void>
+  >;
+  const stop = (overrides.stop ?? vi.fn().mockResolvedValue(undefined)) as MockInstance<
+    [],
+    Promise<void>
+  >;
+  const onStartError = (overrides.onStartError ?? vi.fn()) as MockInstance<[unknown], void>;
+  const onStopError = (overrides.onStopError ?? vi.fn()) as MockInstance<[unknown], void>;
   const callbacks = createTypingCallbacks({
     start,
     stop,
     onStartError,
-    ...(onStopError ? { onStopError } : {}),
+    onStopError,
     ...(overrides.maxConsecutiveFailures !== undefined
       ? { maxConsecutiveFailures: overrides.maxConsecutiveFailures }
       : {}),
