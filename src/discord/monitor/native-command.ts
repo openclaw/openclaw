@@ -1623,6 +1623,10 @@ async function dispatchDiscordCommandInteraction(params: {
       onModelSelected,
     },
   });
+
+  if (!didReply && !suppressReplies) {
+    await respond("✓", { ephemeral: true });
+  }
 }
 
 async function deliverDiscordInteractionReply(params: {

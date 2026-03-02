@@ -14,6 +14,7 @@ import * as modelPickerPreferencesModule from "./model-picker-preferences.js";
 import * as modelPickerModule from "./model-picker.js";
 import { createModelsProviderData as createBaseModelsProviderData } from "./model-picker.test-utils.js";
 import {
+  createDiscordNativeCommand,
   createDiscordModelPickerFallbackButton,
   createDiscordModelPickerFallbackSelect,
 } from "./native-command.js";
@@ -453,5 +454,58 @@ describe("Discord model picker interactions", () => {
       String(call[0] ?? "").includes("model picker override mismatch"),
     )?.[0];
     expect(mismatchLog).toContain("session key agent:worker:subagent:bound");
+  });
+
+  it("acknowledges slash interaction when dispatch queues no final reply", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: "anthropic/claude-opus-4-5",
+          humanDelay: { mode: "off" },
+          workspace: "/tmp/openclaw",
+        },
+      },
+      session: { store: "/tmp/openclaw-sessions.json" },
+      channels: {
+        discord: { dm: { enabled: true, policy: "open" } },
+      },
+    } as unknown as OpenClawConfig;
+
+    vi.spyOn(dispatcherModule, "dispatchReplyWithDispatcher").mockResolvedValue({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+    });
+
+    const command = createDiscordNativeCommand({
+      command: {
+        name: "verbose",
+        description: "Toggle verbose mode.",
+        acceptsArgs: true,
+      },
+      cfg,
+      discordConfig: cfg.channels?.discord ?? {},
+      accountId: "default",
+      sessionPrefix: "discord:slash",
+      ephemeralDefault: true,
+      threadBindings: createNoopThreadBindingManager("default"),
+    });
+
+    const reply = vi.fn().mockResolvedValue(undefined);
+    const followUp = vi.fn().mockResolvedValue(undefined);
+    const interaction = {
+      user: { id: "u1", username: "Ada", globalName: "Ada" },
+      channel: { type: ChannelType.DM, id: "dm-1" },
+      guild: null,
+      rawData: { id: "i-native-empty", member: { roles: [] } },
+      options: { getString: vi.fn().mockReturnValue("on") },
+      reply,
+      followUp,
+    } as unknown as Parameters<typeof command.run>[0];
+
+    await command.run(interaction);
+
+    expect(reply).toHaveBeenCalledTimes(1);
+    expect(followUp).toHaveBeenCalledTimes(0);
+    expect(reply.mock.calls[0]?.[0]?.content).toBe("✓");
   });
 });
